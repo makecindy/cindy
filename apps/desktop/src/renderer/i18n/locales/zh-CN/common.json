@@ -9336,6 +9336,7 @@
     "backToLogin": "返回登录方式"
   },
   "login": {
+    "networkResponseHint": "登录服务返回了异常响应，请求可能被中间网络或 Proxy 拦截。请检查网络和 Proxy 设置。",
     "title": "欢迎使用 Cindy",
     "subtitle": "选择一种方式安全登录",
     "savedLoginPreserved": "恢复操作会保留已保存的登录信息",

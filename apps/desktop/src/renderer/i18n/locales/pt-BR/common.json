@@ -9451,6 +9451,7 @@
     "backToLogin": "Voltar ao login"
   },
   "login": {
+    "networkResponseHint": "O serviço de login retornou uma resposta inesperada. Um intermediário de rede ou proxy pode estar bloqueando a solicitação. Verifique as configurações de rede e proxy.",
     "title": "Boas-vindas ao Cindy",
     "subtitle": "Escolha uma forma segura de entrar",
     "savedLoginPreserved": "A recuperação mantém seus dados de login salvos",

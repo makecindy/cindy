@@ -9451,6 +9451,7 @@
     "backToLogin": "Retour à la connexion"
   },
   "login": {
+    "networkResponseHint": "Le service de connexion a renvoyé une réponse inattendue. Un intermédiaire réseau ou un proxy bloque peut-être la requête. Vérifiez les paramètres réseau et proxy.",
     "title": "Bienvenue dans Cindy",
     "subtitle": "Choisissez un moyen sécurisé de vous connecter",
     "savedLoginPreserved": "La récupération conserve vos informations de connexion enregistrées",

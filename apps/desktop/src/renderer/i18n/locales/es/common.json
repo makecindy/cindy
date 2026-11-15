@@ -9451,6 +9451,7 @@
     "backToLogin": "Volver al inicio de sesión"
   },
   "login": {
+    "networkResponseHint": "El servicio de inicio de sesión devolvió una respuesta inesperada. Un intermediario de red o proxy podría estar bloqueando la solicitud. Revisa la configuración de red y proxy.",
     "title": "Te damos la bienvenida a Cindy",
     "subtitle": "Elige cómo iniciar sesión de forma segura",
     "savedLoginPreserved": "La recuperación conserva tus datos de inicio de sesión guardados",
