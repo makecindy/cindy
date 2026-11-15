@@ -1406,7 +1406,7 @@ export function MessageRenderer({
   }, []);
 
   const scheduleHistoryAnchorRestore = useCallback((generation: number) => {
-    if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
+    if (!historyPositioningRef.current || !MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
     const transaction = historyPrependTransactionRef.current;
     if (
       !transaction
@@ -1430,7 +1430,8 @@ export function MessageRenderer({
     ) => {
       const currentTransaction = historyPrependTransactionRef.current;
       if (
-        !currentTransaction
+        !historyPositioningRef.current
+        || !currentTransaction
         || currentTransaction.generation !== generation
         || currentTransaction.userControlledAfterCommit
       ) return;
@@ -1540,7 +1541,7 @@ export function MessageRenderer({
   ]);
 
   const restoreHistoryAnchorOnce = useCallback((generation: number) => {
-    if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
+    if (!historyPositioningRef.current || !MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
     const transaction = historyPrependTransactionRef.current;
     if (
       !transaction
@@ -1564,7 +1565,7 @@ export function MessageRenderer({
   }, [getCurrentHistoryTopOffsetAdjustment, scrollToOffsetProgrammatically]);
 
   const scheduleHistoryPrependUserHandoffSettle = useCallback(() => {
-    if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
+    if (!historyPositioningRef.current || !MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
     const transaction = historyPrependTransactionRef.current;
     if (!transaction || !transaction.userHandoffPending) return;
     if (historyAnchorVerifyFrameRef.current !== null) return;
@@ -1575,7 +1576,8 @@ export function MessageRenderer({
       historyAnchorVerifyFrameRef.current = null;
       const currentTransaction = historyPrependTransactionRef.current;
       if (
-        !currentTransaction
+        !historyPositioningRef.current
+        || !currentTransaction
         || currentTransaction.generation !== generation
         || isDraggingRef.current
         || isMomentumScrollingRef.current
@@ -2174,7 +2176,7 @@ export function MessageRenderer({
   }, [getCurrentHistoryTopOffsetAdjustment, historyProgressKey, onLoadEarlier]);
 
   const flushQueuedLoadEarlier = useCallback(() => {
-    if (!queuedLoadEarlierRef.current) return;
+    if (!historyActiveRef.current || !historyPositioningRef.current || !queuedLoadEarlierRef.current) return;
     // Native MVCP can prepend while iOS is scrolling. Only the app-owned Android anchor
     // needs a quiet gesture boundary; delaying both platforms defeats near-start prefetch.
     if (MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR && (
@@ -2623,10 +2625,25 @@ export function MessageRenderer({
       historyTouchStartYRef.current = null;
       historyTouchTriggeredRef.current = false;
       clearProgrammaticScroll();
+      if (historyAnchorVerifyFrameRef.current !== null) {
+        cancelAnimationFrame(historyAnchorVerifyFrameRef.current);
+        historyAnchorVerifyFrameRef.current = null;
+      }
       return;
     }
+    // Returning substitutes for a native gesture-end that never arrived. Keep
+    // the existing transaction owner and resume the same handoff/verification,
+    // including a page committed while hidden or a request queued before blur.
+    const transaction = historyPrependTransactionRef.current;
+    if (transaction?.userHandoffPending) scheduleHistoryPrependUserHandoffSettle();
+    else if (transaction?.pageCommitted && !transaction.anchorStable) {
+      transaction.verifyDeadlineAt = 0;
+      scheduleHistoryAnchorRestore(transaction.generation);
+    }
+    if (queuedLoadEarlierRef.current) scheduleQueuedLoadEarlierFlush();
     getTailFollower().reconcile();
-  }, [historyPositioning, getTailFollower, clearProgrammaticScroll]);
+  }, [historyPositioning, getTailFollower, clearProgrammaticScroll,
+    scheduleHistoryPrependUserHandoffSettle, scheduleHistoryAnchorRestore, scheduleQueuedLoadEarlierFlush]);
 
   const handleStartReached = useCallback(() => {
     attemptAutoLoadEarlier();
