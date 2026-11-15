@@ -283,7 +283,8 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { extractIpcError } from '@/utils/ipcError';
-import { rememberRemoteDraftDefaults, forgetRemoteDraftDefaults } from './remoteDraftDefaultsCache';
+import { rememberRemoteDraftDefaults, forgetRemoteDraftDefaults, getRemoteDraftDefaults } from './remoteDraftDefaultsCache';
+import { nextRemoteDraftEngine } from './remoteDraftEngineFollow';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import {
   useAgentCapabilities,
@@ -1820,6 +1821,29 @@ export function NewMakerDraftRoute() {
     skipDefaultsRefetchRef,
     remoteDraftRevisionRef,
   } = remoteDefaults;
+
+  // 到另一台电脑新建任务：引擎跟随那台电脑自己的新建任务；回到本机再还原(见 remoteDraftEngineFollow)。
+  // 被控端默认值按「设备:引擎」读缓存而不是 remoteDraftState：换设备的那一轮渲染里
+  // remoteDraftState 还是上一台的值，拿它会按上一台电脑的引擎切换。
+  useEffect(() => {
+    const deviceId = isDeviceLinkDraft ? effectiveDeviceLinkDeviceId ?? null : null;
+    const defaults = deviceId ? getRemoteDraftDefaults(deviceId, capabilityAgentKind) : undefined;
+    const next = nextRemoteDraftEngine({
+      ownerId: dataOwnerId,
+      deviceId,
+      currentVendor: draft.vendor,
+      defaultsReady: defaults !== undefined,
+      selectedAgentKind: defaults?.selectedAgentKind,
+    });
+    if (next) switchVendor(next);
+  }, [
+    dataOwnerId,
+    isDeviceLinkDraft,
+    effectiveDeviceLinkDeviceId,
+    capabilityAgentKind,
+    draft.vendor,
+    remoteDraftState.value,
+  ]);
 
   // 运行 Agent 的电脑只提供模型目录：没有它的草稿默认值，改用本次运行内对这台电脑的上一次
   // 选择 + 本机为这台电脑记的每模型档位(见 agentDeviceDraftMemory)。任务建到被控电脑时，权限
