@@ -84,7 +84,7 @@ describe('pickSlot · 授权 = 用户亲选', () => {
   // Unit, §21: a previous pick never implies autonomous filesystem authority.
   // Existing cases only cover paths/deposits. An approved install declaring
   // files needs a fresh directory selection, without separate group approval.
-  it('files 选择由整体安装批准覆盖，未声明或取消不签发引用', async () => {
+  it('files 选择由整体安装批准覆盖，未声明、停用或取消不签发引用', async () => {
     const ghost = pickGhost({ node: false });
     ghost.approval = { state: 'approved', revision: 'r1' };
     ghost.manifest.agent = { hostTools: ['files'] };
@@ -100,6 +100,12 @@ describe('pickSlot · 授权 = 用户亲选', () => {
     });
     expect(issueDirectory).toHaveBeenCalledTimes(1);
     ghost.manifest.agent.hostTools = ['files'];
+    ghost.enabled = false;
+    expect(await slot.handleRequest('pick-ghost', { mode: 'directory', access: 'files' })).toMatchObject({
+      ok: false, errorCode: 'PERMISSION_DENIED',
+    });
+    expect(issueDirectory).toHaveBeenCalledTimes(1);
+    ghost.enabled = true;
     const cancelled = makeSlot({ getGhost: () => ghost, issueDirectory, showDirectoryDialog: async () => null });
     expect(await cancelled.slot.handleRequest('pick-ghost', { mode: 'directory', access: 'files' })).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
     expect(issueDirectory).toHaveBeenCalledTimes(1);

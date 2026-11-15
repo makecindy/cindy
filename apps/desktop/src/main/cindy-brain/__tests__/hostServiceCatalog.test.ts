@@ -73,12 +73,13 @@ describe('Host service discovery', () => {
     expect(catalog.list(context).every(service => !service.available)).toBe(true);
   });
 
-  it('projects attested declarations without a second per-group approval state', async () => {
+  it('projects the attested plugin’s declarations under its installation approval', async () => {
     const catalog = new HostServiceCatalog();
     catalog.replace([provider('cindy_browser', [{ name: 'browser', category: 'browser' }]).value]);
     const caller = { kind: 'plugin' as const, pluginId: 'discovery', dataOwnerId: 'owner', ownerGeneration: 1 };
-    const ghost = { enabled: true, approval: { state: 'approved', revision: 'r1' },
-      manifest: { agent: { hostTools: ['discovery', 'browser', 'ssh'] } } } as InstalledGhost;
+    const ghost: InstalledGhost = { enabled: true, dir: '/fixture/discovery', approval: { state: 'approved', revision: 'r1' },
+      manifest: { schemaVersion: 3, id: 'discovery', name: 'Discovery', version: '1.0.0', kind: 'chip', entry: 'main.js',
+        agent: { hostTools: ['discovery', 'browser', 'ssh'] } } };
     let active = true;
     const execute = createHostServiceToolExecutor(catalog, { getGhost: () => ghost,
       pluginCall: () => active ? { caller, server: 'cindy_helper', tool: 'host_services', argsJson: '{}', assertCurrent() {} } : undefined });
