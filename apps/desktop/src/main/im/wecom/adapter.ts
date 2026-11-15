@@ -174,6 +174,9 @@ export function buildWecomAdapter(
           chatId,
           threadId: '',
           triggerMessageId: event.messageId,
+          replyMessageId: replyContext?.messageId,
+          reservedChars: replyBlock.length,
+          reservedMessages: replyContext ? 1 : 0,
         });
       })().catch((err: unknown) => {
         log.warn(`wecom group window context failed (degraded): ${String(err)}`);

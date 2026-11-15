@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { createEnvironmentRedactor, importedProcessEnvironment, redactEnvironmentData, redactEnvironmentValues } from '../process.js';
+import { createStreamingEnvironmentRedactor, createEnvironmentRedactor, importedProcessEnvironment, redactEnvironmentData, redactEnvironmentValues } from '../process.js';
 import { previewImportRedactions } from '../environmentSelection.js';
 import { connectionRedactions, importedContentRedactions, redactImportedResult } from '../connectionCatalog.js';
 
@@ -192,4 +192,19 @@ it('only exempts explicit routing paths, not arbitrary local or remote path shap
   expect(redactEnvironmentValues('mcp', encodedRoute)).not.toBe('mcp');
   const explicit = connectionRedactions({ name: 'fixture', url: 'http://localhost:9000/native-mcp', headers: { Authorization: 'Bearer native-mcp' } }, {});
   expect(redactEnvironmentValues('native-mcp', explicit)).not.toBe('native-mcp');
+});
+
+// Unit regression: split credentials must use the same boundaries as whole-file
+// projection, including astral Unicode and replacement labels containing secrets.
+it('matches whole-file redaction at every chunk boundary without corrupting Unicode', () => {
+  const env = { FIRST: 'overlap-secret', LONG: 'overlap-secret-extended', SHORT: 'us', UNICODE: '密钥', ASTRAL: '𐐀x', COLLISION: 'FIRST' };
+  const text = 'overlap-secret-extended overlap-secret status us 密钥库 密钥 𐐀x 𐐀us FIRST 尾😀';
+  const expected = createEnvironmentRedactor(env)(text);
+  for (let size = 1; size <= text.length; size++) {
+    const redact = createStreamingEnvironmentRedactor(env);
+    let output = '';
+    for (let offset = 0; offset < text.length; offset += size) output += redact(text.slice(offset, offset + size));
+    output += redact('', true);
+    expect(output, `chunk size ${size}`).toBe(expected);
+  }
 });

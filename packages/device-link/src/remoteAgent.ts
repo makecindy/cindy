@@ -165,13 +165,14 @@ export type RemoteAgentRequest =
   /** G releases only the exact allocation whose direct open failed; a later generation is untouched. */
   | { op: 'direct-release'; sessionId: string; generation: string }
   /** A direct guest asks O for its one-use group failover token after a machine-scoped failure. */
-  | { op: 'direct-switch'; sessionId: string }
+  | { op: 'direct-switch'; sessionId: string; generation?: string }
   /** Executor reports content-free metering to the group owner with an idempotency key. */
   | { op: 'direct-usage'; shareId: string; memberId: string; guestDeviceId: string;
       sessionId: string; generation: string; usageId: string; agentKind: RemoteAgentKind; samples: RemoteAgentUsageSample[] }
   /** Authenticated same-account group owner installs or removes a guest grant on the executor. */
   | { op: 'delegate'; action: 'grant' | 'revoke'; shareId: string; memberId: string; guestDeviceId: string;
-      providerId: string; model: string; sessionId: string; generation?: string; cleanupEpoch?: number }
+      providerId: string; model: string; sessionId: string; generation?: string; cleanupEpoch?: number;
+      fastPolicy?: Pick<RemoteAgentFastPolicy, 'group' | 'revision' | 'allowFast'> }
   /** Authenticated group owner updates only its own task speed constraints, never model grants. */
   | ({ op: 'fast-policy' } & RemoteAgentFastPolicy)
   | ({ op: 'fork' } & RemoteAgentForkRequest)
@@ -299,7 +300,11 @@ export interface RemoteAgentCaps {
   nativeHistoryTransfer?: boolean;
   /** Executor accepts bounded same-account group-owner delegation for a shared guest. */
   directGuestExecution?: boolean;
+  /** Same-account M supports an explicit bounded group routing context. */
+  groupContinuity?: true;
   subscriptionFastPolicy?: true;
+  /** Bounded speed-policy caching; delegated grants can carry the authenticated O policy. */
+  subscriptionFastPolicyCache?: true;
   nativeFork?: boolean;
   imageRecovery?: boolean;
   imageRecoveryRelay?: boolean;
@@ -528,8 +533,10 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
         || typeof v.generation !== 'string' || !ID.test(v.generation)) invalid();
       return { op: 'direct-release', sessionId: v.sessionId, generation: v.generation };
     case 'direct-switch':
-      if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)) invalid();
-      return { op: 'direct-switch', sessionId: v.sessionId };
+      if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)
+        || (v.generation !== undefined && (typeof v.generation !== 'string' || !ID.test(v.generation)))) invalid();
+      return { op: 'direct-switch', sessionId: v.sessionId,
+        ...(typeof v.generation === 'string' ? { generation: v.generation } : {}) };
     case 'direct-usage': {
       if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)
         || typeof v.generation !== 'string' || !ID.test(v.generation)
@@ -559,10 +566,19 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
       if (v.action === 'grant' && (typeof v.generation !== 'string' || !ID.test(v.generation))) invalid();
       if (v.generation !== undefined && (typeof v.generation !== 'string' || !ID.test(v.generation))) invalid();
       if (v.cleanupEpoch !== undefined) count(v.cleanupEpoch, Number.MAX_SAFE_INTEGER);
+      let fastPolicy: Extract<RemoteAgentRequest, { op: 'delegate' }>['fastPolicy'];
+      if (v.fastPolicy !== undefined) {
+        const p = record(v.fastPolicy);
+        if (typeof p.group !== 'string' || !/^[A-Za-z0-9_.:-]{1,256}$/.test(p.group)
+          || typeof p.allowFast !== 'boolean') invalid();
+        fastPolicy = { group: p.group as string, allowFast: p.allowFast as boolean,
+          revision: count(p.revision, Number.MAX_SAFE_INTEGER) };
+      }
       return { op: 'delegate', action: oneOf(v.action, ['grant', 'revoke'] as const), shareId, memberId, guestDeviceId,
         providerId: v.providerId, model: v.model, sessionId: v.sessionId,
         ...(typeof v.generation === 'string' ? { generation: v.generation } : {}),
-        ...(v.cleanupEpoch !== undefined ? { cleanupEpoch: v.cleanupEpoch as number } : {}) };
+        ...(v.cleanupEpoch !== undefined ? { cleanupEpoch: v.cleanupEpoch as number } : {}),
+        ...(fastPolicy ? { fastPolicy } : {}) };
     }
     case 'fast-policy': {
       if (typeof v.group !== 'string' || !/^[A-Za-z0-9_.:-]{1,256}$/.test(v.group)
@@ -766,6 +782,19 @@ export function isRemoteAgentReadInvoke(channel: string, args: unknown[] | undef
   return !!request && typeof request === 'object' && (request as { op?: unknown }).op === 'poll';
 }
 
+/**
+ * 远程 Agent poll 是长轮询：没有新数据时被控端会刻意挂起至多 waitMs。返回这次调用
+ * 预期的挂起上限(非 poll 为 0)，只供诊断把它从「慢」的判定里扣除，不改超时与重试。
+ */
+export function remoteAgentInvokeHoldMs(channel: string, args: unknown[] | undefined): number {
+  if (!isRemoteAgentReadInvoke(channel, args)) return 0;
+  const waitMs = (args![0] as { waitMs?: unknown }).waitMs;
+  if (waitMs === undefined) return REMOTE_AGENT_READ_WAIT_MS;
+  return Number.isSafeInteger(waitMs) && (waitMs as number) >= 0
+    ? Math.min(waitMs as number, REMOTE_AGENT_READ_WAIT_MS)
+    : 0;
+}
+
 // ─── 控制端解析被控端回包(对端可能是不同版本，按最小合同防御)───────────────
 
 /** 控制端接受的单次 read 数据上限：高于本版本的 READ_MAX_BYTES，给新版被控端留余量。 */
@@ -811,6 +840,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     ...(v.imageRecoveryRelay === true ? { imageRecoveryRelay: true } : {}),
     ...(v.guestRelay === true ? { guestRelay: true } : {}),
     ...(v.directGuestExecution === true ? { directGuestExecution: true } : {}),
+    ...(v.groupContinuity === true ? { groupContinuity: true as const } : {}),
     ...(v.relayModelAccess === true ? { relayModelAccess: true } : {}),
     ...(v.reshareConsent === true ? { reshareConsent: true } : {}),
     ...(v.reshareBatch === true ? { reshareBatch: true } : {}),
@@ -819,6 +849,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
       && (v.idleReclaimMinutes as number) <= REMOTE_AGENT_IDLE_RECLAIM_MAX_MINUTES
       ? { idleReclaimMinutes: v.idleReclaimMinutes as number } : {}),
     ...(v.subscriptionFastPolicy === true ? { subscriptionFastPolicy: true as const } : {}),
+    ...(v.subscriptionFastPolicyCache === true ? { subscriptionFastPolicyCache: true as const } : {}),
     ...parseManagedSkillCaps(v.managedSkills),
   };
   if (caps.version < 1 || caps.maxRuns < 1 || caps.uploadChunkBytes < 1) invalid();

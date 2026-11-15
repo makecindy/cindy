@@ -2,10 +2,17 @@ import { sanitizeXaiTools } from '@cindy/model-compat';
 import WebSocket, { WebSocketServer } from 'ws';
 import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
+import { Agent, fetch as undiciFetch, type RequestInit } from 'undici';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createAnthropicCompatProxy, type ProxyHandle } from '@cindy/anthropic-compat-proxy';
 import { clearCodexTextOnlyPolicies, codexTextOnlyRequestGuard, codexTextOnlyWebSocketTransforms, createCodexTextOnlyResponseGuard, isCodexTextOnly, registerCodexTextOnlyPolicy, validateCodexTextOnlyResponse } from '../codex-text-only-policy';
 
+// Every proxy binds a random port in 49152-65535, so a new proxy can land on the
+// port of one disposed by the previous test. A keep-alive pool such as global
+// fetch's would then send the POST over the old, closed socket before reading its
+// FIN (Windows CI: `fetch failed`, read ECONNRESET). One connection per request.
+const freshConnections = new Agent({ pipelining: 0 });
+const fetch = (url: string, init: RequestInit) => undiciFetch(url, { ...init, dispatcher: freshConnections });
 const closers: Array<() => Promise<unknown> | void> = [];
 afterEach(async () => { for (const close of closers.splice(0).reverse()) await close(); clearCodexTextOnlyPolicies(); });
 async function listen(server: Server): Promise<string> {

@@ -40,3 +40,9 @@ describe('wide session drawer navigation', () => {
     expect(replaceParams).toHaveBeenCalledWith(target);
   });
 });
+
+it('preserves sidebar presentation while replacing every old conversation parameter', () => {
+  const replaceParams = vi.fn();
+  switchDrawerSessionInPlace({ replaceParams }, { deviceId: 'mac', deviceName: 'Mac', sessionId: 'next', taskListEntry: 'sidebar' });
+  expect(replaceParams).toHaveBeenCalledExactlyOnceWith({ deviceId: 'mac', deviceName: 'Mac', sessionId: 'next', taskListEntry: 'sidebar' });
+});

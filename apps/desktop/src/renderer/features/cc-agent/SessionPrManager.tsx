@@ -1,3 +1,5 @@
+import { prNumberLabel } from '@cindy/maker-shared';
+import { remotePrStatuses, prStatusQuery } from '@cindy/maker-shared';
 import { useEffect, useRef, useState, type RefObject, type SyntheticEvent } from 'react';
 import { GitPullRequest, Menu, Pin, PinOff, RotateCcw, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -10,7 +12,7 @@ import {
 } from '@cindy/maker-shared';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
-import { PR_STATUS_ICON, PR_STATUS_COLOR } from './gitContextPrVisuals';
+import { PR_STATUS_ICON, prStatusColor } from './gitContextPrVisuals';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -134,12 +136,12 @@ export function SessionPrManager({
           .slice(offset, offset + PR_STATUS_BATCH_SIZE)
           .filter((row) => requestedStatusIds.current.get(row.id) === sequence);
         if (batch.length === 0) continue;
-        const queries = batch.map(({ owner, repo, prNumber }) => ({ owner, repo, prNumber }));
+        const queries = batch.map(prStatusQuery);
         try {
           const fetched = deviceId
-            ? ((await window.electronAPI.deviceLink.invoke(deviceId, 'git-context:pr-status', [
-                { sessionId: session.id, queries },
-              ])) as PrStatusResult[])
+            ? await remotePrStatuses(queries, session.id, (channel, args) =>
+                window.electronAPI.deviceLink.invoke(deviceId, channel, args),
+              )
             : await window.electronAPI.gitContext.getPrStatuses(queries);
           if (gen !== generation.current) return;
           setStatuses((previous) => {
@@ -214,7 +216,25 @@ export function SessionPrManager({
                     : code === 'PRECONDITION_FAILED'
                       ? 'errors.verifyFailed'
                       : 'errors.failed';
-      setError(t(`ccAgent.gitContext.pr.manage.${key}`));
+      const detail = extractIpcError(err)?.message;
+      const glabReason = detail?.includes('glab-missing')
+        ? 'missing'
+        : detail?.includes('glab-not-logged-in')
+          ? 'notLoggedIn'
+          : null;
+      let host = '';
+      if (operation.action === 'add') {
+        try {
+          host = new URL(operation.url).hostname;
+        } catch {
+          /* Validation error uses the existing invalid URL message. */
+        }
+      }
+      setError(
+        glabReason && !deviceId && !session.remoteHostId && !readOnly
+          ? t(`ccAgent.gitContext.pr.gitlab.${glabReason}`, { host })
+          : t(`ccAgent.gitContext.pr.manage.${key}`),
+      );
       if (operation.action === 'reorder') {
         try {
           const refreshed = await invokeManage({ action: 'list' });
@@ -263,7 +283,7 @@ export function SessionPrManager({
             <Icon
               size={12}
               className="shrink-0"
-              style={{ color: kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)' }}
+              style={{ color: prStatusColor(kind, status?.ok ? status.conflicts : null) }}
             />
           )}
           <div className="min-w-0">
@@ -274,16 +294,16 @@ export function SessionPrManager({
                 void window.electronAPI.openExternal(sessionPrUrl(ref));
               }}
               className={`block truncate rounded-md hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] ${title ? 'text-13 text-[var(--text-primary)]' : 'text-12 text-[var(--text-secondary)]'}`}
-              title={title || `${ref.owner}/${ref.repo} #${ref.prNumber}`}
+              title={title || `${ref.owner}/${ref.repo} ${prNumberLabel(ref)}`}
             >
-              {title || `${ref.repo} #${ref.prNumber}`}
+              {title || `${ref.repo} ${prNumberLabel(ref)}`}
             </a>
             {title && (
               <div
                 className="truncate text-12 text-[var(--text-secondary)]"
-                title={`${ref.owner}/${ref.repo} #${ref.prNumber}`}
+                title={`${ref.owner}/${ref.repo} ${prNumberLabel(ref)}`}
               >
-                {ref.repo} #{ref.prNumber}
+                {ref.repo} {prNumberLabel(ref)}
                 {kind && <> · {t(`ccAgent.gitContext.pr.status.${kind}`)}</>}
               </div>
             )}
@@ -326,7 +346,7 @@ export function SessionPrManager({
                   disabled={busy}
                   aria-label={t('ccAgent.gitContext.pr.manage.dragHandle', {
                     repo: ref.repo,
-                    number: ref.prNumber,
+                    numberLabel: prNumberLabel(ref),
                   })}
                   aria-description={t('ccAgent.gitContext.pr.manage.reorderHint')}
                   tooltip={t('ccAgent.gitContext.pr.manage.reorderHint')}
@@ -466,7 +486,7 @@ export function SessionPrManager({
                       event.preventDefault();
                   }}
                   disabled={busy || rows === null}
-                  placeholder="https://github.com/…/pull/…"
+                  placeholder={t('ccAgent.gitContext.pr.gitlab.urlPlaceholder')}
                   maxLength={2048}
                   className="min-w-0 text-xs"
                 />

@@ -15,7 +15,7 @@ import { familyLogo, MENUBAR_CINDY_LOGO } from '../menubar/logos.js';
 import type { MenubarFamily, MenubarModelSeries } from '../menubar/snapshot.js';
 
 const WIDGET_DAYS = 30;
-const FAMILIES: MenubarFamily[] = ['claude', 'codex', 'grok', 'kimi'];
+const FAMILIES = ['claude', 'codex', 'grok', 'kimi'] as const satisfies readonly MenubarFamily[];
 
 /** Panel strings the widget needs, plus the duration templates for live countdowns. */
 const UI_KEYS = [

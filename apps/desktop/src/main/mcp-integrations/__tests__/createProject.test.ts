@@ -195,6 +195,48 @@ describe('createProject', () => {
     },
   );
 
+  // Unit regression (teammate tasks landing outside projects): a projectless source
+  // has no membership to inherit, so before this rule every task it started was
+  // projectless even when it ran inside a registered project. Only visible catalog
+  // entries may match, and an explicit or inherited choice always wins over cwd.
+  it.each([
+    { name: 'a subdirectory of the project', workingDir: ['packages', 'app'], expected: 'project' },
+    { name: 'a managed worktree of the project', workingDir: ['.cindy-worktrees', 'task'], expected: 'project' },
+    { name: 'the nearer of two nested projects', workingDir: ['inner', 'src'], expected: 'inner' },
+    { name: 'the repository, not a sibling registered worktree', workingDir: ['.worktrees', 'b'], siblingFirst: true, expected: 'project' },
+    { name: 'the visible ancestor of a removed project', workingDir: ['inner', 'src'], hideInner: true, expected: 'project' },
+    { name: 'the available ancestor of a missing project', workingDir: ['gone', 'src'], expected: 'project' },
+    { name: 'no project for a directory outside the catalog', workingDir: ['..'], expected: null },
+    { name: 'no project when the caller passes null', workingDir: ['packages', 'app'], explicit: null, expected: null },
+    { name: 'the inherited project over the execution directory', workingDir: ['inner', 'src'], source: 'project', expected: 'project' },
+  ] as const)('places a projectless source task by execution directory: $name', async row => {
+    const project = h.registered[0].path;
+    const inner = `${project}/inner`;
+    await mkdir(path.join(directory, 'inner', 'src'), { recursive: true });
+    await mkdir(path.join(directory, 'packages', 'app'), { recursive: true });
+    await mkdir(path.join(directory, '.worktrees', 'a'), { recursive: true });
+    await mkdir(path.join(directory, '.worktrees', 'b'), { recursive: true });
+    const catalog = [{ path: project }, { path: inner }, { path: `${project}/gone` }];
+    // Listed first, the sibling worktree is what grouping identity would match before the repository.
+    h.registered = 'siblingFirst' in row
+      ? [{ path: `${project}/.worktrees/a` }, ...catalog] : [...catalog, { path: `${project}/.worktrees/a` }];
+    if ('hideInner' in row) h.hiddenKeys = [`local:${inner}`];
+    h.query.mockResolvedValue([{
+      id: 'caller', remoteHostId: null, workingDir: '/dialogue',
+      ...('source' in row ? { workspaceKind: 'project', projectDir: project } : { workspaceKind: 'dialogue', projectDir: null }),
+    }]);
+    const expected = row.expected === null ? null : row.expected === 'inner' ? inner : project;
+    expect(await resolveSessionProject({
+      callerSessionId: 'caller', workingDir: path.join(directory, ...row.workingDir),
+      ...('explicit' in row ? { projectDir: row.explicit } : {}),
+    })).toEqual({
+      ok: true, projectDir: expected,
+      ...(expected !== null && !('source' in row) ? { projectFromWorkingDir: true } : {}),
+    });
+    expect(h.upsert).not.toHaveBeenCalled();
+    expect(h.restore).not.toHaveBeenCalled();
+  });
+
   it('rejects unknown inherited membership instead of using an execution directory', async () => {
     h.query.mockResolvedValue([{ id: 'caller', remoteHostId: null, workspaceKind: null,
       projectDir: null, workingDir: directory }]);

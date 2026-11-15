@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
@@ -133,21 +133,4 @@ export function SkillhubDetailRoute() {
   </>;
 }
 
-/** Preserve existing bookmarks, command-palette links, and older market URLs. */
-export function LegacySkillDetailRedirect({ market = false }: { market?: boolean }) {
-  const params = useParams();
-  const location = useLocation();
-  const search = new URLSearchParams(location.search);
-  search.set('view', market ? 'market' : 'local');
-  if (market) {
-    search.set('remote', params.name ?? '');
-    if (!search.has('catalog')) search.set('catalog', location.pathname.startsWith('/skillhub/market/manage/') ? 'native' : 'market');
-    if (!search.has('returnTo')) search.set('returnTo', '/skillhub/market');
-  } else {
-    if (params.kind) search.set('kind', params.kind);
-    if (params.name) search.set('name', params.name);
-    if (params.projectHash) search.set('project', params.projectHash);
-    if (!search.has('scope') && params.kind) search.set('scope', params.projectHash ? 'project' : 'global');
-  }
-  return <Navigate to={`/skillhub/detail?${search}`} replace state={location.state} />;
-}
+export { LegacySkillDetailRedirect } from './LegacySkillDetailRedirect';

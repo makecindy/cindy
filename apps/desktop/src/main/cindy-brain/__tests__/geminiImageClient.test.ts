@@ -23,6 +23,31 @@ function fetchMock(status = 200, body = okBody()) {
 }
 
 describe('geminiImageClient', () => {
+  // #8673 / unit: generationConfig and other native fields must survive both
+  // serializers; prior coverage only reached Cindy's convenience aliases.
+  it('keeps native nested configuration alongside generated prompt and image parts', async () => {
+    const doFetch = fetchMock();
+    const channel = createGeminiImageChannel({ getApiKey: () => 'invalid-test-key', fetchImplementation: doFetch as typeof fetch });
+    const nativeParameters = { generationConfig: { seed: 0, imageConfig: { imageSize: '2K' } }, future_option: { enabled: false } };
+    const params = { model: 'gemini/gemini-3-pro-image', prompt: 'p', aspectRatio: '16:9', nativeParameters };
+    await channel.generateImage(params);
+    const readFile = vi.spyOn(fs, 'readFile').mockResolvedValue(Buffer.from('reference'));
+    try {
+      await channel.editImage({ ...params, imagePaths: ['/test/reference.png'] });
+    } finally {
+      readFile.mockRestore();
+    }
+    for (const [, init] of doFetch.mock.calls) {
+      const body = JSON.parse(String(init?.body));
+      expect(body).toMatchObject({
+        ...nativeParameters,
+        generationConfig: { seed: 0, responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio: '16:9', imageSize: '2K' } },
+      });
+      expect(body.contents[0].parts[0]).toEqual({ text: 'p' });
+    }
+    expect(JSON.parse(String(doFetch.mock.calls[1]?.[1]?.body)).contents[0].parts[1].inlineData).toMatchObject({ mimeType: 'image/png' });
+  });
+
   it('剥 gemini/ 前缀拼 upstream 端点;x-goog-api-key 鉴权;inlineData 适配成统一响应形状', async () => {
     const doFetch = fetchMock();
     const channel = createGeminiImageChannel({

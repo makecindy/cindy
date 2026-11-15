@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RemoteHost } from '@cindy/maker-remote-ssh';
 
-import type { CodexHttpBridge } from '../../mcp-integrations/codexHttpBridge.js';
+import type { CodexHttpBridge } from '../../mcp-integrations/codexHttpBridge.desktop.js';
 import {
   CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
   CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { RICH_ANSWER_GUIDE } from '@cindy/maker-shared/rich-answer-guide';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
@@ -126,6 +127,17 @@ describe('capabilities data source', () => {
 });
 
 describe('get_capabilities tool', () => {
+  // Pi uses this route for advanced syntax beyond its resident basic protocol.
+  // Verify the real public envelope returns the complete protocol.
+  it('serves the complete rich answer protocol through call_tool for Pi', async () => {
+    const h = await connect(createXdtHelperMcpServer({ logger: makeLogger() }, { ...sessionCtx, agentKind: 'pi' }));
+    try {
+      const payload = parsePayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_capabilities', args: { key: 'rich-answers' },
+      } }));
+      expect(payload).toMatchObject({ ok: true, capability: { key: 'rich-answers', detail: RICH_ANSWER_GUIDE } });
+    } finally { await h.cleanup(); }
+  });
   // Unit protocol regression: the public MCP schema must forward the page/filter
   // rather than silently stripping them and returning the same oversized page.
   it('forwards runtime tool search and pagination through the actual MCP entry', async () => {

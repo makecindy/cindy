@@ -12,6 +12,28 @@ export function isOpenRouterModelsUrl(value: string): boolean {
   } catch { return false; }
 }
 
+/** Only the official, unfiltered OpenHubs endpoint is a complete account inventory. */
+export function isOpenHubsModelsUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.origin === 'https://openhubs.zhidemai.com'
+      && url.pathname.replace(/\/+$/, '') === '/v1/models'
+      && !url.search && !url.hash && !url.username && !url.password;
+  } catch { return false; }
+}
+
+/** Token strings are decimal counts, not abbreviations, units or JS numeric expressions. */
+function contextTokens(value: unknown, truncate = false): number | undefined {
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!/^\d+$/.test(text)) return undefined;
+    value = Number(text);
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  const tokens = truncate ? Math.floor(value) : value;
+  return Number.isSafeInteger(tokens) && tokens > 0 ? tokens : undefined;
+}
+
 /** Codex manifests use { effort, description }; Sub2API's Grok list uses { value, label }.
  * Missing/malformed lists remain unknown; an explicit empty or none-only list stays empty.
  */
@@ -30,7 +52,7 @@ function declaredReasoningEfforts(value: unknown, key: "effort" | "value") {
  * 字符串数组）为去重后的 `{id, name, contextWindow?}[]`；无法识别返回 null。显示名优先取
  * 条目的 `display_name`（Anthropic 形状）/ `name` 字段，缺省回退 id。
  * contextWindow 尽力从常见字段读取（OpenRouter `context_length` / 通用 `context_window` /
- * Moonshot 等 `max_context_length` / Anthropic 兼容端点 `max_input_tokens`,与
+ * Moonshot 等 `max_context_length` / Anthropic 兼容端点 `max_input_tokens`，以及十进制整数字符串；与
  * model-discovery/anthropic.ts 认的字段对齐），无或非法时缺省——缺省的模型仍会
  * 回落保守默认(#386)。
  * 纯函数——OAuth 自动发现（本模块）与 API key 表单「获取模型列表」（provider-model-fetch）共用。
@@ -39,6 +61,16 @@ export function parseModelsListResponse(
   json: unknown,
   sourceUrl?: string,
 ): DiscoveredModel[] | null {
+  // OpenHubs can return HTTP 200 with a business error and an empty data array.
+  // Such a failure must never clear the wizard's offline recommendations.
+  if (sourceUrl && isOpenHubsModelsUrl(sourceUrl)) {
+    if (!json || typeof json !== 'object' || Array.isArray(json)) return null;
+    const response = json as { data?: unknown; error?: unknown; error_code?: unknown };
+    if (!Array.isArray(response.data) || response.error != null
+      || (response.error_code !== undefined && response.error_code !== 0)) return null;
+    if (response.data.some(model => !model || typeof model !== 'object'
+      || typeof model.id !== 'string' || !model.id.trim())) return null;
+  }
   const list = (() => {
     if (Array.isArray(json)) return json;
     if (!json || typeof json !== "object") return null;
@@ -90,6 +122,7 @@ export function parseModelsListResponse(
             max_context_length?: unknown;
             max_input_tokens?: unknown;
             max_context_window?: unknown;
+            limit?: { context?: unknown; output?: unknown };
           })
         : null;
     const name = google && typeof google.displayName === 'string' ? google.displayName :
@@ -98,6 +131,12 @@ export function parseModelsListResponse(
         : rec && typeof rec.name === "string" && rec.name.length > 0
           ? rec.name
           : id;
+    // OpenCode-compatible catalogs report token limits in a nested object (#8867).
+    // Validate each field before using it as a fallback for existing flat formats.
+    const nestedLimits = pickModelMetadata({
+      contextWindow: contextTokens(rec?.limit?.context),
+      maxOutputTokens: rec?.limit?.output,
+    });
     const rawWindow = rec
       ? [
           rec.context_length,
@@ -105,19 +144,7 @@ export function parseModelsListResponse(
           rec.max_context_length,
           rec.max_input_tokens,
           google?.inputTokenLimit,
-        ].find(
-          // Math.floor(v) > 0 而非 v > 0:0 < v < 1(如 context_length: 0.5)会通过
-          // v > 0 但取整成 contextWindow: 0——按取整后的值校验才不会漏这个区间
-          // (review P2)。Number.isSafeInteger(Math.floor(v)) 拒绝超出安全整数范围的
-          // 异常值(如 context_length: 1e20)——这类值会通过取整后为正的校验,但落盘后
-          // Main 的正数校验反而会因为超界而拒绝整份供应商配置,内置 OAuth 发现分支则会
-          // 把这个失真值当真实窗口注入目录(review P2)。
-          (v) =>
-            typeof v === "number" &&
-            Number.isFinite(v) &&
-            Math.floor(v) > 0 &&
-            Number.isSafeInteger(Math.floor(v)),
-        )
+        ].map(value => contextTokens(value, true)).find(value => value !== undefined)
       : undefined;
     const record =
       item && typeof item === "object" ? (item as Record<string, unknown>) : {};
@@ -151,7 +178,7 @@ export function parseModelsListResponse(
       (Array.isArray(architecture?.input_modalities) && Array.isArray(architecture?.output_modalities)
         ? { input: architecture.input_modalities, output: architecture.output_modalities } : undefined);
     const inputModalities = (modalities as { input?: unknown } | undefined)?.input ?? record.input_modalities;
-    const contextWindowMax = pickModelMetadata({ contextWindowMax: record.max_context_window ?? record.contextWindowMax }).contextWindowMax;
+    const contextWindowMax = contextTokens(record.max_context_window ?? record.contextWindowMax);
     const serviceTiers = record.service_tiers;
     const additionalSpeedTiers = record.additional_speed_tiers;
     const declaredSpeedTiers = [
@@ -176,7 +203,7 @@ export function parseModelsListResponse(
     const openRouterSpeech = sourceUrl !== undefined && isOpenRouterModelsUrl(sourceUrl)
       && Array.isArray(architecture?.output_modalities)
       && architecture.output_modalities.includes('speech');
-    const discoveredMetadata = { ...pickModelMetadata(record), ...pickModelMetadata({
+    const discoveredMetadata = { ...nestedLimits, ...pickModelMetadata(record), ...pickModelMetadata({
       nativeApi: record.nativeApi !== undefined ? record.nativeApi : record.native_api,
       ...([rec?.display_name, rec?.name, google?.displayName].some(
         (value) => typeof value === "string" && value.trim().length > 0,
@@ -190,7 +217,7 @@ export function parseModelsListResponse(
       description: record.description,
       group: record.group,
       contextWindow:
-        typeof rawWindow === "number" ? Math.floor(rawWindow) : info.max_input_tokens,
+        rawWindow ?? contextTokens(info.max_input_tokens) ?? contextTokens(record.contextWindow),
       contextWindowMax,
       maxOutputTokens:
         record.max_output_tokens ?? info.max_output_tokens ?? google?.outputTokenLimit ??
@@ -276,8 +303,8 @@ export function parseModelsListResponse(
       discoveredMetadata,
       ...(Object.keys(discoveredCost).length ? { discoveredCost } : {}),
       name,
-      ...(typeof rawWindow === "number"
-        ? { contextWindow: Math.floor(rawWindow) }
+      ...(discoveredMetadata.contextWindow !== undefined
+        ? { contextWindow: discoveredMetadata.contextWindow }
         : {}),
     });
   }

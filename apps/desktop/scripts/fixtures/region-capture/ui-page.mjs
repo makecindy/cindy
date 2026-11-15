@@ -15,6 +15,8 @@ export default {
     inactive: { about: 'Only the display under the pointer shows capture controls' },
     drag: { about: 'Move the top toolbar horizontally without selecting pixels or leaving screen bounds' },
     video: { about: 'Record, annotate, pause/resume, save and decode a WebM' },
+    'audio-options': { about: 'Speaker and microphone default off and toggle independently by mouse and keyboard, in every UI language' },
+    'silent-video': { about: 'Start with default options and verify no audio is sampled or included in playback' },
     gif: { about: 'Record, annotate, pause/resume, save and decode an animated GIF' },
   },
   async ready(page) { await page.locator('canvas').first().waitFor(); },
@@ -194,13 +196,45 @@ export default {
       await page.mouse.move(100, 80); await page.mouse.down();
       await page.mouse.move(580, 320, { steps: 8 }); await page.mouse.up();
       if (ui.case === 'gif') await page.getByRole('button', { name: 'GIF', exact: true }).click();
+      else {
+        assert.equal(await (await button('regionScreenshot.live.systemAudio')).getAttribute('aria-pressed'), 'false');
+        assert.equal(await (await button('regionScreenshot.live.microphone')).getAttribute('aria-pressed'), 'false');
+        if (ui.case === 'video') {
+          await (await button('regionScreenshot.live.systemAudio')).click();
+          await (await button('regionScreenshot.live.microphone')).click();
+        }
+      }
       assert.equal(await page.getByRole('checkbox').count(), 0, 'recording needs no pointer or keystroke settings');
       assert.equal(await page.evaluate(() => window.captureQa.frames), 0);
       await ui.capture('prepare');
+      if (ui.case === 'audio-options') {
+        // User regression: a muted speaker looked unavailable. Exercise the real
+        // button, retain separate microphone state and capture both visual states.
+        const speaker = await button('regionScreenshot.live.systemAudio');
+        const microphone = await button('regionScreenshot.live.microphone');
+        assert.equal(await speaker.isEnabled(), true);
+        const mutedColor = await speaker.evaluate(el => getComputedStyle(el).color);
+        await speaker.click();
+        assert.equal(await speaker.getAttribute('aria-pressed'), 'true');
+        assert.equal(await microphone.getAttribute('aria-pressed'), 'false');
+        assert.notEqual(await speaker.evaluate(el => getComputedStyle(el).color), mutedColor, 'enabling speaker visibly changes its state');
+        await ui.capture('speaker-on');
+        await speaker.click();
+        await microphone.focus(); await page.keyboard.press('Space');
+        assert.equal(await speaker.getAttribute('aria-pressed'), 'false');
+        assert.equal(await microphone.getAttribute('aria-pressed'), 'true');
+        assert.equal(await page.evaluate(() => window.captureAudioQa.options), null, 'selecting sources never starts recording');
+        await ui.capture('microphone-on');
+        await page.keyboard.press('Space');
+        assert.equal(await microphone.getAttribute('aria-pressed'), 'false');
+        return;
+      }
       await (await button('regionScreenshot.live.start')).click();
       await ui.capture('countdown');
       assert.equal(await page.evaluate(() => window.captureQa.frames), 0, 'countdown is not recorded');
       await page.waitForFunction(() => window.captureQa.frames >= 3);
+      assert.deepEqual(await page.evaluate(() => window.captureAudioQa.options), ui.case === 'gif' ? null : { system: ui.case === 'video', microphone: ui.case === 'video' });
+      if (ui.case === 'silent-video') assert.equal(await page.evaluate(() => window.captureAudioQa.reads), 0, 'default recording never reads audio');
       assert.equal(await page.evaluate(() => window.captureQa.keysRequested), false, 'recording does not request keyboard input');
       assert.equal(await page.locator('canvas').count(), 0, 'recording has no permanent thumbnail');
       await ui.capture('compact-controls');
@@ -339,9 +373,12 @@ export default {
     pausedAt = await page.evaluate(() => performance.now());
     await (await button('regionScreenshot.live.pause')).click();
     const frames = await page.evaluate(() => window.captureQa.frames);
+    if (ui.case === 'video') await page.waitForFunction(() => window.captureAudioQa.stopped);
+    const audioReads = await page.evaluate(() => window.captureAudioQa.reads);
     // e2e: cross a real capture tick to prove that the user-visible pause stops sampling.
     await page.waitForTimeout(ui.case === 'video' ? 1600 : 400);
     assert.equal(await page.evaluate(() => window.captureQa.frames), frames);
+    assert.equal(await page.evaluate(() => window.captureAudioQa.reads), audioReads, 'pause stops PCM polling as well as video sampling');
     await ui.capture('paused');
     if (!isScroll) {
       await (await button('regionScreenshot.live.annotate')).click();
@@ -355,6 +392,10 @@ export default {
     await (await button('regionScreenshot.live.resume')).click();
     resumedAt = await page.evaluate(() => performance.now());
     await page.waitForFunction((previous) => window.captureQa.frames >= previous + 3, frames);
+    if (ui.case === 'video') {
+      assert.equal(await page.evaluate(() => window.captureAudioQa.starts), 2, 'resume reacquires the selected audio sources once');
+      assert.ok(await page.evaluate(previous => !window.captureAudioQa.stopped && window.captureAudioQa.reads > previous, audioReads), 'audio resumes with video');
+    }
     await ui.capture('capturing');
     }
     const sampledDuration = await page.evaluate(() => performance.now() - window.captureQa.firstFrameAt) - (resumedAt - pausedAt);
@@ -401,7 +442,7 @@ export default {
       await (await button('regionScreenshot.copy')).click();
       await page.waitForFunction(() => window.captureQa.copied);
       await page.getByRole('status').filter({ hasText: await ui.t('regionScreenshot.live.copied') }).waitFor();
-      if (ui.case === 'video') {
+      if (ui.case === 'video' || ui.case === 'silent-video') {
         await page.waitForFunction(() => document.querySelector('video')?.readyState >= 2);
         assert.ok(await page.locator('video').evaluate(video => Number.isFinite(video.duration) && video.duration > 0), 'finished WebM has a usable timeline');
         const initial = await page.locator('video').evaluate(video => ({ time: video.currentTime, duration: video.duration, paused: video.paused }));
@@ -410,6 +451,15 @@ export default {
         assert.ok(Math.abs(initial.duration * 1000 - sampledDuration) < 750, 'duration excludes countdown and paused time');
         await page.locator('video').evaluate(video => video.play());
         await page.waitForFunction(() => document.querySelector('video').currentTime > 0);
+        if (ui.case === 'silent-video') {
+          const tracks = await page.locator('video').evaluate(video => {
+            const stream = video.captureStream();
+            const count = stream.getAudioTracks().length;
+            stream.getTracks().forEach(track => track.stop());
+            return count;
+          });
+          assert.equal(tracks, 0, 'default recording contains no audio track');
+        }
         await page.locator('video').evaluate(video => { video.pause(); video.currentTime = video.duration / 2; });
         await page.waitForFunction(() => { const video = document.querySelector('video'); return !video.seeking && Math.abs(video.currentTime - video.duration / 2) < 0.05; });
         await page.locator('video').evaluate(video => { video.currentTime = 0; });
@@ -430,6 +480,27 @@ export default {
       await (await button('regionScreenshot.save')).click();
       await page.waitForFunction(() => window.captureQa.saved?.length > 0);
       const clip = await page.evaluate(() => ({ saved: Array.from(window.captureQa.saved), format: window.captureQa.format }));
+      if (ui.case === 'video') {
+        // E2E: exercise the production PCM stream, MediaRecorder, pause and saved
+        // bytes. Previously videos had no audio; recorder fakes cannot prove muxing.
+        const sound = await page.evaluate(async saved => {
+          const context = new AudioContext();
+          try {
+            const decoded = await context.decodeAudioData(new Uint8Array(saved).buffer);
+            const samples = decoded.getChannelData(0);
+            let energy = 0;
+            for (const sample of samples) energy += sample * sample;
+            const tail = samples.subarray(Math.max(0, samples.length - Math.round(decoded.sampleRate * 0.2)));
+            let tailEnergy = 0;
+            for (const sample of tail) tailEnergy += sample * sample;
+            return { rms: Math.sqrt(energy / samples.length), tailRms: Math.sqrt(tailEnergy / tail.length), duration: decoded.duration, stopped: window.captureAudioQa.stopped };
+          } finally { await context.close(); }
+        }, clip.saved);
+        assert.ok(sound.rms > 0.02, 'saved video contains audible PCM');
+        assert.ok(sound.tailRms > 0.02, 'audio captured after resume reaches the saved video');
+        assert.ok(Math.abs(sound.duration * 1000 - sampledDuration) < 750, 'audio excludes countdown and paused time');
+        assert.equal(sound.stopped, true, 'playback releases audio capture');
+      }
       // Decode the saved bytes with a fresh image/video element and Blob URL,
       // independently of the preview's URL, element and decoded state. Electron
       // contexts cannot create browser tabs through Target.createTarget.

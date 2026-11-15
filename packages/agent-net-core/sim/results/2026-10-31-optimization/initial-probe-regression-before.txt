@@ -1,0 +1,20 @@
+
+running 1 test
+test initial_timeout_keeps_the_first_flight_available_for_measurement ... FAILED
+
+failures:
+
+failures:
+    initial_timeout_keeps_the_first_flight_available_for_measurement
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 36 filtered out; finished in 0.00s
+
+   Compiling agent-net-sim v0.0.0 (/private/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/regression/sim)
+    Finished `sim` profile [optimized] target(s) in 0.72s
+     Running tests/reliability.rs (/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/regression-target/sim/deps/reliability-2b52743125a82e3e)
+FIRSTFLIGHT finish=398042 wire=272053 stats=Some(Stats { packets_sent: 194, packets_received: 33, wire_bytes_sent: 270016, wire_bytes_received: 693, retransmitted_segments: 4, bundled_segments: 0, parity_packets: 0, recovered_segments: 0, timeout_losses: 4, fast_losses: 0, spurious_losses: 4, duplicate_packets: 0, rejected_packets: 0, srtt_us: 250114, min_rtt_us: 250112, bandwidth: 3863534, random_loss_ppm: 0, rate_cap: 0, pacing_rate: 11146295 })
+
+thread 'initial_timeout_keeps_the_first_flight_available_for_measurement' (9009992) panicked at sim/tests/reliability.rs:740:5:
+272053 wire bytes for 262144 payload bytes
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: test failed, to rerun pass `-p agent-net-sim --test reliability`

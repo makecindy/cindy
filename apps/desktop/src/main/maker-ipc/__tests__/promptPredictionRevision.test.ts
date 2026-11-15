@@ -30,7 +30,7 @@ vi.mock('../../appSessionState.js', () => ({
   isAppSessionBoundaryPending: () => h.boundaryPending,
 }));
 
-vi.mock('../../i18n.js', () => ({
+vi.mock('../../i18n.desktop.js', () => ({
   getResolvedMainLocale: () => 'zh-CN',
 }));
 

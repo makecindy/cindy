@@ -14,8 +14,19 @@ import ja from '../../../i18n/locales/ja/common.json';
 import ko from '../../../i18n/locales/ko/common.json';
 import zhCN from '../../../i18n/locales/zh-CN/common.json';
 import zhTW from '../../../i18n/locales/zh-TW/common.json';
+import de from '../../../i18n/locales/de/common.json';
+import es from '../../../i18n/locales/es/common.json';
+import fr from '../../../i18n/locales/fr/common.json';
+import ptBR from '../../../i18n/locales/pt-BR/common.json';
+import ptPT from '../../../i18n/locales/pt-PT/common.json';
+import zhHansLzh from '../../../i18n/locales/zh-Hans-x-lzh/common.json';
+import zhHantLzh from '../../../i18n/locales/zh-Hant-x-lzh/common.json';
 
 const invoiceLocales = { en, ja, ko, 'zh-CN': zhCN, 'zh-TW': zhTW };
+const billingLocales = {
+  ...invoiceLocales, de, es, fr, 'pt-BR': ptBR, 'pt-PT': ptPT,
+  'zh-Hans-x-lzh': zhHansLzh, 'zh-Hant-x-lzh': zhHantLzh,
+};
 // The page formats period ends in the machine's local time zone. Build the instants that
 // tests read back as a calendar date from local noon, so the date holds in every zone.
 const localNoon = (year: number, month: number, day: number) => new Date(year, month - 1, day, 12).toISOString();
@@ -26,7 +37,7 @@ void i18n.init({
   initAsync: false,
   interpolation: { escapeValue: false },
   resources: Object.fromEntries(
-    Object.entries(invoiceLocales).map(([locale, resource]) => [locale, { translation: resource }]),
+    Object.entries(billingLocales).map(([locale, resource]) => [locale, { translation: resource }]),
   ),
 });
 
@@ -82,10 +93,13 @@ vi.mock('react-i18next', async (importOriginal) => ({
       if (providerLabels[key]) return providerLabels[key];
       if (
         [
+          'billing.settings.supportHint',
           'billing.orders.invoice.personalInvoicePolicy',
           'billing.orders.invoice.invoiceTitleHint',
           'billing.orders.invoice.emailSubject',
           'billing.orders.invoice.emailBody',
+          'billing.orders.refund.emailSubject',
+          'billing.orders.refund.emailBody',
         ].includes(key)
       ) {
         return i18n.t(key, params);
@@ -424,6 +438,7 @@ describe('BillingPage remote catalog rendering', () => {
           })),
           getCurrentSubscription: vi.fn(async () => ({ subscription: null })),
           listOrders: vi.fn(async () => ({ orders: [], nextCursor: null })),
+          listPaymentHistory: vi.fn(async () => ({ records: [], nextCursor: null })),
           openPaymentRedirect: vi.fn(async () => ({ success: true })),
         },
         maker: {
@@ -2114,6 +2129,7 @@ describe('BillingPage plan change', () => {
       }),
     ),
     listOrders: vi.fn(async () => ({ orders: [], nextCursor: null })),
+    listPaymentHistory: vi.fn(async () => ({ records: [], nextCursor: null })),
     cancelCurrentSubscription: vi.fn(),
     resumeCurrentSubscription: vi.fn(),
     quotePlanChange: vi.fn(),
@@ -3187,9 +3203,9 @@ describe('BillingPage plan change', () => {
 });
 
 /**
- * 订单记录组。回归的是「页面只讲现在还有多少，不讲钱是怎么来的」——用户查不到上次充了多少、
- * 那笔没付成的还在不在。三条判据在这里各有用例:空态整组不渲染(不加空壳)、状态文案与支付
- * 弹窗同一判据(phaseForOrder)、服务端还有下一页时只出提示条不出分页器。
+ * 生产入口 BillingPage：全部已付订阅/充值沿用原行结构并可翻页，读取失败可重试。
+ * 用户 2026-11-05 要求不改布局；无订单仍不显示整组，不新增商品名/账期行。
+ * 新增回归的最小输入是已结束订阅账单、第二页失败及退款/零元账单；tier: unit/jsdom。
  */
 describe('BillingPage order history', () => {
   const order = (over: Partial<BillingPaymentOrder> = {}): BillingPaymentOrder => ({
@@ -3211,6 +3227,15 @@ describe('BillingPage order history', () => {
     nextCursor: string | null = null,
   ): ReturnType<typeof vi.fn> => {
     const listOrders = vi.fn(async () => ({ orders, nextCursor }));
+    const listPaymentHistory = vi.fn(async () => ({
+      records: orders.filter((order) => order.status === 'SUCCEEDED').map((order) => ({
+        recordId: `CREDIT_TOPUP:${order.orderId}`, sourceType: 'CREDIT_TOPUP' as const, sourceId: order.orderId,
+        subscriptionId: null, productName: null, billingReason: null, amountPaidMinor: Number(order.amount) * 100,
+        amount: order.amount, currency: order.currency, provider: null, providerTransactionId: null, paidAt: order.createdAt,
+        createdAt: order.createdAt, periodStartAt: null, periodEndAt: null,
+        refundSummary: { status: 'UNREFUNDED' as const, refundedMinor: 0, refundedAmount: '0' },
+      })), nextCursor,
+    }));
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -3231,6 +3256,7 @@ describe('BillingPage order history', () => {
           getCatalog: vi.fn(async () => ({ products: [] })),
           getCurrentSubscription: vi.fn(async () => ({ subscription: null })),
           listOrders,
+          listPaymentHistory,
           openPaymentRedirect: vi.fn(async () => ({ success: true })),
         },
         maker: {
@@ -3239,8 +3265,234 @@ describe('BillingPage order history', () => {
         openExternal: vi.fn(async () => ({ success: true })),
       },
     });
-    return listOrders;
+    return listPaymentHistory;
   };
+
+  const openBillingRequest = async (kind: 'invoice' | 'refund') => {
+    fireEvent.click(await screen.findByRole('button', { name: `billing.orders.${kind}.action` }));
+  };
+
+  // 用户要求帮助入口位于内容末尾且能打开反馈邮件；原用例只覆盖纯文本。
+  // 最小输入：无订单/一笔成功订单；unit/jsdom 验证真实页面，不启动邮件应用。
+  it.each([false, true])('opens feedback email from the page footer (has orders: %s)', async (hasOrders) => {
+    await i18n.changeLanguage('zh-CN');
+    install(hasOrders ? [order()] : []);
+
+    await act(async () => { render(<BillingPage />); });
+
+    const link = screen.getByRole('link', { name: 'feedback@cindy.app' });
+    expect(link.getAttribute('href')).toBe('mailto:feedback@cindy.app');
+    expect(link.parentElement?.textContent).toBe('遇到问题？可通过 feedback@cindy.app 寻求帮助。');
+    if (hasOrders) {
+      const lastOrder = screen.getAllByRole('listitem').at(-1)!;
+      expect(lastOrder.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    fireEvent.click(link);
+    await waitFor(() => expect(window.electronAPI.openExternal).toHaveBeenCalledWith('mailto:feedback@cindy.app'));
+  });
+
+  it.each(['unsuccessful', 'rejected'])('keeps the feedback address available when the email app cannot open (%s)', async (failure) => {
+    install([]);
+    if (failure === 'rejected') {
+      vi.mocked(window.electronAPI.openExternal).mockRejectedValueOnce(new Error('mail app unavailable'));
+    } else {
+      vi.mocked(window.electronAPI.openExternal).mockResolvedValueOnce({ success: false });
+    }
+    await act(async () => { render(<BillingPage />); });
+
+    fireEvent.click(screen.getByRole('link', { name: 'feedback@cindy.app' }));
+
+    await waitFor(() => expect(uiMocks.toastError).toHaveBeenCalledWith(
+      'billing.orders.invoice.sendFailed:{"email":"feedback@cindy.app"}',
+    ));
+  });
+
+  // 用户确认的退款入口必须生成反馈邮箱草稿；原开票测试未覆盖该收件人和友好问题提示。
+  // 最小输入：一笔成功充值，直接点击该行退款按钮；tier: unit/jsdom，无真实发信。
+  it('opens a refund draft for the feedback inbox with the friendly issue prompt', async () => {
+    await i18n.changeLanguage('zh-CN');
+    const history = install([order()]);
+    const fixture = (await history()).records[0]!;
+    history.mockResolvedValue({ records: [{ ...fixture, provider: 'alipay', providerTransactionId: 'alipay_refund_fixture' }], nextCursor: null });
+
+    render(<BillingPage />);
+    await openBillingRequest('refund');
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('alipay_refund_fixture')).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'feedback@cindy.app' })).toBeTruthy();
+    expect(within(dialog).queryByText('遇到的问题：请在邮件中简单描述您遇到的情况。')).toBeNull();
+    expect(within(dialog).queryByText('billing.orders.invoice.fields.invoiceTitle')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'billing.orders.refund.sendAction' }));
+
+    await waitFor(() => expect(window.electronAPI.openExternal).toHaveBeenCalledTimes(1));
+    const mailto = new URL(vi.mocked(window.electronAPI.openExternal).mock.calls[0][0] as string);
+    expect(mailto.pathname).toBe('feedback@cindy.app');
+    expect(mailto.searchParams.get('subject')).toBe(`Cindy 退款申请 - ${fixture.sourceId}`);
+    const body = mailto.searchParams.get('body');
+    expect(body).toContain(`订单号：${fixture.sourceId}`);
+    expect(body).toContain('渠道交易号：alipay_refund_fixture');
+    expect(body).toContain('支付金额：¥33.00');
+    expect(body).toContain('遇到的问题：\n（请简单描述您遇到的情况）');
+    expect(body).not.toContain('退款原因');
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  });
+
+  it.each(Object.entries(billingLocales).map(([locale, resources], index) => ({
+    locale, resources,
+    provider: index % 3 === 0 ? 'alipay' : 'stripe',
+    providerTransactionId: index % 3 === 0 ? '2026110522001400000000123456'
+      : index % 3 === 1 ? 'pi_refund_fixture' : 'ch_refund_fixture',
+    sourceType: index % 2 === 0 ? 'CREDIT_TOPUP' : 'SUBSCRIPTION_INVOICE',
+  })))(
+    '$locale: includes the paid $sourceType and $provider transaction in both refund drafts',
+    async ({ locale, resources, provider, providerTransactionId, sourceType }) => {
+      await i18n.changeLanguage(locale);
+      const history = install([order({ currency: 'usd' })]);
+      const fixture = (await history()).records[0]!;
+      history.mockResolvedValue({ records: [{ ...fixture, sourceType, provider, providerTransactionId }], nextCursor: null });
+      const openExternal = vi.mocked(window.electronAPI.openExternal);
+      openExternal.mockResolvedValueOnce({ success: false }).mockResolvedValueOnce({ success: true });
+      uiMocks.confirm.mockResolvedValueOnce(true);
+
+      render(<BillingPage />);
+      await openBillingRequest('refund');
+      const dialog = await screen.findByRole('alertdialog');
+      expect(within(dialog).getByText(providerTransactionId)).toBeTruthy();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'feedback@cindy.app' }));
+      await waitFor(() => expect(uiMocks.clipboardWriteText).toHaveBeenCalledWith('feedback@cindy.app'));
+      fireEvent.click(screen.getByRole('button', { name: 'billing.orders.refund.sendAction' }));
+
+      await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
+      const mailto = new URL(openExternal.mock.calls[0][0] as string);
+      const gmail = new URL(openExternal.mock.calls[1][0] as string);
+      expect(mailto.pathname).toBe('feedback@cindy.app');
+      expect(gmail.origin + gmail.pathname).toBe('https://mail.google.com/mail/');
+      expect(gmail.searchParams.get('to')).toBe('feedback@cindy.app');
+      const body = mailto.searchParams.get('body')!;
+      const { fields } = resources.billing.orders.invoice;
+      expect(body.split('\n').find((line) => line.startsWith(fields.orderId))).toContain(fixture.sourceId);
+      expect(body.split('\n').find((line) => line.startsWith(fields.providerTransactionId))).toContain(providerTransactionId);
+      expect(body.split('\n').find((line) => line.startsWith(fields.application))).toContain('Cindy');
+      expect(body.split('\n').find((line) => line.startsWith(fields.paymentMethod))).toContain(provider);
+      expect(body.split('\n').find((line) => line.startsWith(resources.billing.orders.refund.fields.amount)))
+        .toContain(new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol' }).format(33));
+      expect(body).not.toMatch(/\{\{|billing\.orders\.|退款原因|Refund reason/);
+      expect(body.split('\n').some((line) => line.startsWith(fields.invoiceTitle))).toBe(false);
+      expect(mailto.searchParams.get('subject')).toContain(fixture.sourceId);
+      expect(gmail.searchParams.get('su')).toBe(mailto.searchParams.get('subject'));
+      expect(gmail.searchParams.get('body')).toBe(body);
+      expect(uiMocks.confirm).toHaveBeenCalledWith(expect.objectContaining({
+        description: 'billing.orders.refund.gmailFallbackDescription',
+      }));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    },
+  );
+
+  it('shows a paid invoice from an ended subscription even with no current subscription', async () => {
+    const history = install([order()]);
+    const fixture = (await history()).records[0]!;
+    history.mockResolvedValue({ records: [{
+      ...fixture, recordId: 'SUBSCRIPTION_INVOICE:old-invoice', sourceType: 'SUBSCRIPTION_INVOICE',
+      sourceId: 'old-invoice', subscriptionId: 'ended-subscription', productName: 'Historical Plus',
+      billingReason: 'subscription_cycle', periodStartAt: '2026-07-01T00:00:00.000Z',
+      periodEndAt: '2026-08-01T00:00:00.000Z', paidAt: '2026-06-29T08:00:00.000Z',
+    }], nextCursor: null });
+    render(<BillingPage />);
+    expect(await screen.findByRole('button', { name: 'billing.orders.copy.action:{"id":"old-i****voice"}' })).toBeTruthy();
+    expect(history).toHaveBeenCalledWith({ limit: 10 });
+    expect(screen.getAllByRole('listitem')).toHaveLength(1);
+    expect(screen.queryByText(/Historical Plus/)).toBeNull();
+    expect(screen.queryByText(/^billing.orders.history.period/)).toBeNull();
+  });
+
+  it('loads older successful records and can return to the preceding page', async () => {
+    const history = install([order()], 'page_two');
+    const first = (await history()).records[0]!;
+    history.mockImplementation(async (payload: { cursor?: string }) => ({
+      records: [{ ...first, amount: payload.cursor ? '11' : '33', amountPaidMinor: payload.cursor ? 1100 : 3300 }],
+      nextCursor: payload.cursor ? null : 'page_two',
+    }));
+    render(<BillingPage />);
+    await screen.findByText('CN¥33.00');
+    fireEvent.click(screen.getByRole('button', { name: 'billing.orders.history.next' }));
+    await screen.findByText('CN¥11.00');
+    expect(history).toHaveBeenLastCalledWith({ limit: 10, cursor: 'page_two' });
+    fireEvent.click(screen.getByRole('button', { name: 'billing.orders.history.previous' }));
+    await screen.findByText('CN¥33.00');
+    expect(history).toHaveBeenLastCalledWith({ limit: 10 });
+  });
+
+  it('retains the visible page when the next page fails and retries that request', async () => {
+    const history = install([order()], 'page_two');
+    const first = (await history()).records[0]!;
+    history.mockResolvedValueOnce({ records: [first], nextCursor: 'page_two' })
+      .mockRejectedValueOnce(new Error('UNAVAILABLE'))
+      .mockResolvedValue({ records: [{ ...first, amount: '44', amountPaidMinor: 4400 }], nextCursor: null });
+    render(<BillingPage />);
+    await screen.findByText('CN¥33.00');
+    fireEvent.click(screen.getByRole('button', { name: 'billing.orders.history.next' }));
+    await screen.findByText('billing.orders.history.loadFailed');
+    expect(screen.getByText('CN¥33.00')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'billing.orders.history.retry' }));
+    await screen.findByText('CN¥44.00');
+    expect(history).toHaveBeenLastCalledWith({ limit: 10, cursor: 'page_two' });
+  });
+
+  it('keeps refreshed history when an earlier pagination request finishes later', async () => {
+    const history = install([order()], 'page_two');
+    const first = (await history()).records[0]!;
+    let finishEarlier!: (value: unknown) => void;
+    history.mockResolvedValueOnce({ records: [first], nextCursor: 'page_two' })
+      .mockImplementationOnce(() => new Promise((resolve) => { finishEarlier = resolve; }))
+      .mockResolvedValue({ records: [{ ...first, amount: '44', amountPaidMinor: 4400 }], nextCursor: null });
+    render(<BillingPage />);
+    await screen.findByText('CN¥33.00');
+    fireEvent.click(screen.getByRole('button', { name: 'billing.orders.history.next' }));
+    await waitFor(() => expect(finishEarlier).toBeTypeOf('function'));
+    fireEvent.click(screen.getByRole('button', { name: 'billing.actions.refreshCatalog' }));
+    await screen.findByText('CN¥44.00');
+    await act(async () => {
+      finishEarlier({ records: [{ ...first, amount: '55', amountPaidMinor: 5500 }], nextCursor: null });
+    });
+    expect(screen.queryByText('CN¥55.00')).toBeNull();
+    expect(screen.getByText('CN¥44.00')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'billing.orders.history.previous' })).toBeNull();
+    expect(history).toHaveBeenLastCalledWith({ limit: 10 });
+  });
+
+  it('ignores a previous account’s late history response after switching accounts', async () => {
+    const history = install([order()]);
+    const first = (await history()).records[0]!;
+    let finishOld!: (value: unknown) => void;
+    history.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockResolvedValue({ records: [{ ...first, amount: '44', amountPaidMinor: 4400 }], nextCursor: null });
+    const { rerender } = render(<BillingPage />);
+    await waitFor(() => expect(finishOld).toBeTypeOf('function'));
+    authState.dataOwnerId = 'another-account';
+    rerender(<BillingPage />);
+    await screen.findByText('CN¥44.00');
+    await act(async () => {
+      finishOld({ records: [{ ...first, amount: '55', amountPaidMinor: 5500 }], nextCursor: null });
+    });
+    expect(screen.queryByText('CN¥55.00')).toBeNull();
+    expect(screen.getByText('CN¥44.00')).toBeTruthy();
+  });
+
+  it('keeps unknown historical money and payment time explicit without offering an incorrect invoice amount', async () => {
+    const history = install([order()]);
+    const first = (await history()).records[0]!;
+    history.mockResolvedValue({ records: [{
+      ...first, amount: null, amountPaidMinor: null, paidAt: null,
+      refundSummary: { status: null, refundedMinor: 100, refundedAmount: '1.00' },
+    }], nextCursor: null });
+    render(<BillingPage />);
+    await screen.findByText('billing.orders.history.unknownPaidAt');
+    expect(screen.getByText('billing.orders.history.unknownAmount')).toBeTruthy();
+    expect(screen.getByText('billing.orders.history.unknownAmount').getAttribute('title')).toBe('billing.orders.history.refundedAmount:{"amount":"CN¥1.00"}');
+    expect(screen.queryByText('billing.orders.history.partiallyRefunded')).toBeNull();
+    expect(screen.queryByText('billing.orders.history.refunded')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'billing.orders.invoice.action' })).toBeNull();
+  });
 
   it('lists the most recent orders with amount, masked id and status', async () => {
     const fullOrderId = 'c2309a98-d776-4ad9-99b3-418951f13c7f';
@@ -3295,11 +3547,7 @@ describe('BillingPage order history', () => {
     const supportEmailButton = screen.getByRole('button', { name: 'xd-billing@xd.com' });
     expect(supportEmailButton.getAttribute('href')).toBeNull();
     expect(screen.getByText(fullOrderId)).toBeTruthy();
-    expect(
-      within(await screen.findByRole('alertdialog')).getByText(
-        'billing.orders.invoice.notAvailable',
-      ),
-    ).toBeTruthy();
+    expect(within(await screen.findByRole('alertdialog')).getAllByText('billing.orders.invoice.notAvailable')).toHaveLength(2);
     expect(screen.getByText('billing.orders.invoice.fields.invoiceTitle')).toBeTruthy();
     expect(screen.getByText('billing.orders.invoice.fields.contact')).toBeTruthy();
     expect(screen.getByText('billing.orders.invoice.fields.phone')).toBeTruthy();
@@ -3323,6 +3571,39 @@ describe('BillingPage order history', () => {
     expect(mailBody).toContain('\n\n');
     expect(mailBody).toContain('Invoice title: ');
   });
+
+  it.each(Object.entries(invoiceLocales).flatMap(([locale, resources]) => [
+    { provider: 'alipay', sourceType: 'CREDIT_TOPUP', providerTransactionId: '2026110522001400000000123456' },
+    { provider: 'alipay', sourceType: 'SUBSCRIPTION_INVOICE', providerTransactionId: '2026110522001400000000654321' },
+    { provider: 'stripe', sourceType: 'CREDIT_TOPUP', providerTransactionId: 'pi_topup_fixture' },
+    { provider: 'stripe', sourceType: 'SUBSCRIPTION_INVOICE', providerTransactionId: 'pi_subscription_fixture' },
+    { provider: 'stripe', sourceType: 'SUBSCRIPTION_INVOICE', providerTransactionId: 'ch_subscription_fixture' },
+  ].map((record) => ({ ...record, locale, fields: resources.billing.orders.invoice.fields }))))(
+    '$locale: includes $provider transaction $providerTransactionId for $sourceType in the dialog and both email drafts',
+    async ({ locale, fields, provider, sourceType, providerTransactionId }) => {
+      await i18n.changeLanguage(locale);
+      const history = install([order()]);
+      const fixture = (await history()).records[0]!;
+      history.mockResolvedValue({ records: [{ ...fixture, recordId: `${sourceType}:${fixture.sourceId}`, provider, sourceType, providerTransactionId }], nextCursor: null });
+      const openExternal = vi.mocked(window.electronAPI.openExternal);
+      openExternal.mockResolvedValueOnce({ success: false }).mockResolvedValueOnce({ success: true });
+      uiMocks.confirm.mockResolvedValueOnce(true);
+
+      render(<BillingPage />);
+      fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+      const dialog = await screen.findByRole('alertdialog');
+      expect(within(dialog).getByText('billing.orders.invoice.fields.providerTransactionId')).toBeTruthy();
+      expect(within(dialog).getByText(providerTransactionId)).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'billing.orders.invoice.sendAction' }));
+      await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
+      const mailto = new URL(openExternal.mock.calls[0][0] as string);
+      const gmail = new URL(openExternal.mock.calls[1][0] as string);
+      const body = mailto.searchParams.get('body');
+      expect(body?.split('\n').find((line) => line.startsWith(fields.orderId))).toContain(fixture.sourceId);
+      expect(body?.split('\n').find((line) => line.startsWith(fields.providerTransactionId))).toContain(providerTransactionId);
+      expect(gmail.searchParams.get('body')).toBe(body);
+    },
+  );
 
   it.each(Object.entries(invoiceLocales))(
     'shows the policy in the dialog and places title instructions beside the email field for %s',
@@ -3435,28 +3716,28 @@ describe('BillingPage order history', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
-  it('does not open Gmail without explicit consent after the mail app fails', async () => {
+  it.each(['invoice', 'refund'] as const)('%s: does not open Gmail without explicit consent after the mail app fails', async (kind) => {
     install([order({ orderId: 'o-gmail-no-consent' })]);
     const openExternal = vi.mocked(window.electronAPI.openExternal);
     openExternal.mockResolvedValueOnce({ success: false });
     uiMocks.confirm.mockResolvedValueOnce(false);
 
     render(<BillingPage />);
-    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+    await openBillingRequest(kind);
     fireEvent.click(
-      await screen.findByRole('button', { name: 'billing.orders.invoice.sendAction' }),
+      await screen.findByRole('button', { name: `billing.orders.${kind}.sendAction` }),
     );
 
     await waitFor(() => expect(uiMocks.confirm).toHaveBeenCalledTimes(1));
     expect(openExternal).toHaveBeenCalledTimes(1);
     expect(uiMocks.toastError).toHaveBeenCalledWith(
-      'billing.orders.invoice.sendFailed:{"email":"xd-billing@xd.com"}',
+      `billing.orders.invoice.sendFailed:{"email":"${kind === 'invoice' ? 'xd-billing@xd.com' : 'feedback@cindy.app'}"}`,
     );
     expect(screen.getByRole('alertdialog')).toBeTruthy();
     expect(screen.getByText('o-gmail-no-consent')).toBeTruthy();
   });
 
-  it('ignores repeated send activations while the mail request is pending', async () => {
+  it.each(['invoice', 'refund'] as const)('%s: ignores repeated send activations while the mail request is pending', async (kind) => {
     install([order({ orderId: 'o-gmail-double-click' })]);
     const openExternal = vi.mocked(window.electronAPI.openExternal);
     let resolveOpenExternal: ((result: { success: boolean }) => void) | undefined;
@@ -3468,9 +3749,9 @@ describe('BillingPage order history', () => {
     );
 
     render(<BillingPage />);
-    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+    await openBillingRequest(kind);
     const sendButton = await screen.findByRole('button', {
-      name: 'billing.orders.invoice.sendAction',
+      name: `billing.orders.${kind}.sendAction`,
     });
     fireEvent.click(sendButton);
     fireEvent.click(sendButton);
@@ -3521,7 +3802,7 @@ describe('BillingPage order history', () => {
     await waitFor(() => expect(uiMocks.clipboardWriteText).toHaveBeenCalledWith(fullOrderId));
   });
 
-  it('masks short ids, distinguishes copy targets and keeps the control shrinkable', async () => {
+  it('masks short ids, distinguishes copy targets and keeps the truncated hint masked', async () => {
     const shortOrderId = 'ord_8f21c4de9a';
     const otherOrderId = '1234567890abcdefghi';
     install([order({ orderId: shortOrderId }), order({ orderId: otherOrderId })]);
@@ -3540,7 +3821,10 @@ describe('BillingPage order history', () => {
       }),
     ).toBeTruthy();
     expect(shortOrderButton.className).toContain('max-w-full');
-    expect(shortOrderButton.querySelector('span')?.className).toContain('break-all');
+    // 长订单号为同行的两个操作按钮让出空间；行高由真实 UI 场景核对，悬停提示继续脱敏。
+    expect(shortOrderButton.querySelector('span')?.getAttribute('title')).toBe(
+      'billing.orders.orderId:{"id":"ord_8f****c4de9a"}',
+    );
   });
 
   it('explains how to recover when copying an order id fails', async () => {
@@ -3567,24 +3851,25 @@ describe('BillingPage order history', () => {
     expect(listOrders).toHaveBeenCalledWith({ limit: 10 });
   });
 
-  it('renders no group at all when there are no orders — the page keeps its current shape', async () => {
-    install([]);
+  it('keeps the existing page layout without an empty order group', async () => {
+    const history = install([]);
 
-    render(<BillingPage />);
-    // 等页面其余部分落地,再断言这一组确实没渲染(不是还没到)。
-    await screen.findByText('billing.usage.promotionalDetails.title');
+    await act(async () => { render(<BillingPage />); });
+    expect(history).toHaveBeenCalledWith({ limit: 10 });
     expect(screen.queryByText('billing.orders.title')).toBeNull();
+    expect(screen.queryByText('billing.orders.history.loadFailed')).toBeNull();
   });
 
-  it('renders no group when the order list cannot be fetched', async () => {
+  it('shows a retryable error when history cannot be fetched', async () => {
     install([]);
-    window.electronAPI.billing.listOrders = vi.fn(async () => {
+    window.electronAPI.billing.listPaymentHistory = vi.fn(async () => {
       throw new Error('UNAVAILABLE');
     });
 
     render(<BillingPage />);
-    await screen.findByText('billing.usage.promotionalDetails.title');
-    expect(screen.queryByText('billing.orders.title')).toBeNull();
+    await screen.findByText('billing.orders.history.loadFailed');
+    expect(screen.getByText('billing.orders.title')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'billing.orders.history.retry' })).toBeTruthy();
   });
 
   it('reloads the order history on every checkout phase landing, not only COMPLETED', async () => {
@@ -3595,7 +3880,7 @@ describe('BillingPage order history', () => {
     await screen.findByText('billing.orders.title');
     const baseline = listOrders.mock.calls.length;
 
-    // 订单一创建(AWAITING_PAYMENT)就已经是一条「待支付」记录,列表必须立刻能看到。
+    // 支付阶段变化仍读取服务端已确认历史，未付款的本次尝试不进入记录。
     checkout.state = {
       ...initialState,
       open: true,
@@ -3605,7 +3890,7 @@ describe('BillingPage order history', () => {
     rerender(<BillingPage />);
     await waitFor(() => expect(listOrders.mock.calls.length).toBe(baseline + 1));
 
-    // 轮询落到失败终态时,那一行的状态 chip 也变了 —— 不能等用户手动刷新。
+    // 失败落位后仍只读取成功历史，错误提示由支付弹窗承接。
     checkout.state = { ...checkout.state, phase: 'FAILED' };
     rerender(<BillingPage />);
     await waitFor(() => expect(listOrders.mock.calls.length).toBe(baseline + 2));
@@ -3618,29 +3903,28 @@ describe('BillingPage order history', () => {
     checkout.state = initialState;
   });
 
-  it('maps every payment status onto the checkout wording, not a second vocabulary', async () => {
-    install([
-      order({ orderId: 'o-succeeded', status: 'SUCCEEDED' }),
-      order({ orderId: 'o-created', status: 'CREATED' }),
-      order({ orderId: 'o-pending', status: 'PENDING' }),
-      order({ orderId: 'o-canceled', status: 'CANCELED' }),
-      order({ orderId: 'o-expired', status: 'EXPIRED' }),
-      order({ orderId: 'o-failed', status: 'FAILED' }),
-    ]);
-
+  it('retains original payments after refunds and labels settled zero invoices without a charge', async () => {
+    const history = install([order()]);
+    const first = (await history()).records[0]!;
+    history.mockResolvedValue({ records: [
+      first,
+      { ...first, recordId: 'CREDIT_TOPUP:refunded', sourceId: 'refunded', refundSummary: {
+        status: 'REFUNDED', refundedMinor: 3300, refundedAmount: '33',
+      } },
+      { ...first, recordId: 'SUBSCRIPTION_INVOICE:zero', sourceType: 'SUBSCRIPTION_INVOICE', sourceId: 'zero',
+        subscriptionId: 'ended-subscription', amount: '0', amountPaidMinor: 0 },
+    ], nextCursor: null });
     render(<BillingPage />);
     await screen.findByText('billing.orders.title');
 
     expect(screen.getByText('billing.orders.states.completed')).toBeTruthy();
-    // CREATED 与 PENDING 都是「还没付成」,与 checkout 的 phaseForOrder 同一判据。
-    expect(screen.getAllByText('billing.orders.states.awaitingPayment')).toHaveLength(2);
-    expect(screen.getByText('billing.orders.states.canceled')).toBeTruthy();
-    expect(screen.getByText('billing.orders.states.expired')).toBeTruthy();
-    expect(screen.getByText('billing.orders.states.failed')).toBeTruthy();
+    expect(screen.getByText('billing.orders.history.refunded')).toBeTruthy();
+    expect(screen.getByText('billing.orders.history.noPayment')).toBeTruthy();
+    expect(screen.getByTitle('billing.orders.history.refundedAmount:{"amount":"CN¥33.00"}').textContent).toBe('CN¥33.00');
+    expect(screen.getAllByText('CN¥33.00')).toHaveLength(2);
   });
 
-  it('drops the payment-method column when no order still carries a payment action', async () => {
-    // 终态订单通常不再带 paymentAction;整批都没有时留一列破折号比不留更糟。
+  it('omits the channel column when historical provider facts are unavailable', async () => {
     install([order({ paymentAction: null })]);
 
     render(<BillingPage />);
@@ -3649,39 +3933,34 @@ describe('BillingPage order history', () => {
     expect(screen.queryByText('—')).toBeNull();
   });
 
-  it('keeps the payment-method column when at least one order carries a payment action', async () => {
-    install([
-      order({
-        orderId: 'o-open',
-        status: 'CREATED',
-        paymentAction: {
-          type: 'QR_CODE',
-          value: 'https://example.invalid/qr',
-          expiresAt: '2026-08-01T14:07:00.000Z',
-        },
-      }),
-      order({ orderId: 'o-done' }),
-    ]);
+  it('shows the persisted provider rather than inferring a channel from payment actions', async () => {
+    const history = install([order(), order({ orderId: 'another' })]);
+    const records = (await history()).records;
+    history.mockResolvedValue({ records: [{ ...records[0], provider: 'alipay' }, records[1]], nextCursor: null });
 
     render(<BillingPage />);
     await screen.findByText('billing.orders.title');
-    expect(screen.getByText('billing.paymentActions.QR_CODE')).toBeTruthy();
+    expect(screen.getByText('alipay')).toBeTruthy();
+    expect(screen.queryByText('billing.paymentActions.QR_CODE')).toBeNull();
     // 缺支付方式的那一单占位,不把列整掉。
     expect(screen.getByText('—')).toBeTruthy();
   });
 
-  it('explains truncation instead of offering a pager when the server has older records', async () => {
+  it('offers paging when earlier records exist and disables previous on the first page', async () => {
     install([order()], 'cursor-2');
 
     render(<BillingPage />);
-    expect(await screen.findByText('billing.orders.incomplete:{"count":1}')).toBeTruthy();
+    const next = await screen.findByRole('button', { name: 'billing.orders.history.next' });
+    expect((next as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: 'billing.orders.history.previous' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('does not explain truncation when the server has nothing older', async () => {
+  it('omits paging when the whole history fits on one page', async () => {
     install([order()]);
 
     render(<BillingPage />);
     await screen.findByText('billing.orders.title');
-    expect(screen.queryByText('billing.orders.incomplete:{"count":1}')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'billing.orders.history.next' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'billing.orders.history.previous' })).toBeNull();
   });
 });

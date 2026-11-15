@@ -156,7 +156,7 @@ export const ConversationShareSvg = forwardRef<
   } | null>(null);
   useEffect(() => () => exportJob.current?.cancel(), []);
   const logoSource = NativeImage.resolveAssetSource(logoAsset);
-  const logoWidth = (SHARE_LOGO_HEIGHT * logoSource.width) / logoSource.height;
+  const logoWidth = (SHARE_LOGO_HEIGHT * (logoSource?.width ?? 1)) / (logoSource?.height || 1);
   const lockupWidth = SHARE_CHARACTER_SIZE + SHARE_LOCKUP_GAP + logoWidth;
   const lockupX = (layout.width - lockupWidth) / 2;
 
@@ -276,9 +276,9 @@ export const ConversationShareSvg = forwardRef<
                 // Android SVG cache hits do not emit onLoad. This mounted Image
                 // holds the same unresized Fresco bitmap; encoded/disk cache alone
                 // is insufficient, including when Fresco refuses a large bitmap.
-                const uri = NativeImage.resolveAssetSource(source).uri;
-                const cached = NativeImage.queryCache?.([uri]);
-                if (!cached) {
+                const uri = NativeImage.resolveAssetSource(source)?.uri;
+                const cached = uri ? NativeImage.queryCache?.([uri]) : undefined;
+                if (!uri || !cached) {
                   keys.forEach(assetGate.markFailed);
                   return;
                 }

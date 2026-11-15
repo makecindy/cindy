@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { getVoiceInputSettings } from './useVoiceInputSettings';
 import { findComposerVoiceInputConflict } from '@/voice-input/composerVoiceInputConflict';
-import { hasComposerModifier } from '@/voice-input/composerShortcut';
+import { getComposerModifierShortcutLabel, hasComposerModifier } from '@/voice-input/composerShortcut';
 
-export { hasComposerModifier } from '@/voice-input/composerShortcut';
+export { getComposerModifierShortcutLabel, hasComposerModifier } from '@/voice-input/composerShortcut';
 
 export type ComposerSendShortcutPreference = 'enter' | 'modifier-enter';
 
@@ -21,10 +21,6 @@ export type ComposerSendShortcutUpdateResult =
 
 export const COMPOSER_SEND_SHORTCUT_STORAGE_KEY = 'chat.sendShortcutPreference';
 export const DEFAULT_COMPOSER_SEND_SHORTCUT: ComposerSendShortcutPreference = 'enter';
-
-export function getComposerModifierShortcutLabel(platform: string | undefined): string {
-  return platform === 'darwin' ? '⌘+Enter' : 'Ctrl+Enter';
-}
 
 export function getComposerSendShortcutLabel(
   preference: ComposerSendShortcutPreference,

@@ -10,7 +10,7 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
 vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => state.snapshot }));
-vi.mock('../../cindy-media/refCompensationJournal.js', () => ({
+vi.mock('../../cindy-media/refCompensationJournal.desktop.js', () => ({
   captureMediaRefCompensationScope: () => ({ assertStillValid: () => { if (state.invalidOwner) throw new Error('owner changed'); } }),
   withMediaRefCompensation: async ({ perform, compensate, refIds }: any) => {
     try { return await perform(); }
@@ -19,7 +19,7 @@ vi.mock('../../cindy-media/refCompensationJournal.js', () => ({
 }));
 vi.mock('../../cindy-media/ledger.js', () => ({ addRef: (...args: unknown[]) => state.addRef(...args), removeRefById: (...args: unknown[]) => state.removeRef(...args) }));
 vi.mock('../../cindy-media/ingest.js', () => ({ ingestMedia: (...args: unknown[]) => state.ingest(...args) }));
-vi.mock('../../cindy-media/blobStore.js', () => ({ blobUrl: () => 'cindy-media://blobs/test.png', extForMime: () => '.png', resolveSafe: () => ({ absPath: path.join(state.root, 'saved.png') }) }));
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ blobUrl: () => 'cindy-media://blobs/test.png', extForMime: () => '.png', resolveSafe: () => ({ absPath: path.join(state.root, 'saved.png') }) }));
 import { createAttachmentRecovery } from '../oversized-attachment-recovery.js';
 import { sessions } from '../../localDb/schema.js';
 

@@ -38,6 +38,8 @@ export {
 } from './instructions-injection.js';
 export {
   createActiveStripTransform,
+  createToolReferenceRecoveryRule,
+  lowerToolReferencesFromBody,
   createDuplicateToolUseIdRecoveryRule,
   createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
@@ -96,6 +98,8 @@ export type {
 export type {
   ForwardLifecycleObserver,
   ForwardLifecycleFailure,
+  InboundAdmissionCtx,
+  InboundRejection,
   LocalRequestHandler,
   OversizedRequestCompactor,
   ProxyHandle,

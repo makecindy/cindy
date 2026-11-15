@@ -14,6 +14,7 @@
 | [design-rules/README.md](./design-rules/README.md) | 设计规则索引 | authoritative | Cindy UI 视觉、交互与内容设计 | — |
 | [design-rules/DESIGN.md](design-rules/DESIGN.md) | 设计规范 | authoritative | Desktop 与 Mobile 的视觉语言、Token、组件和交互约定 | — |
 | [dev-rules/README.md](./dev-rules/README.md) | 开发规则索引 | authoritative | Cindy 客户端工程规则 | — |
+| [DSH harness 接入计划](./plans/dsh-harness-integration.md) | 接入提案与证据入口 | 参考 | 第四种 Agent 的现状、F0–F11 依赖与验收条件；尚未实现 | — |
 | [environment-setup.md](./dev-rules/environment-setup.md) | 开发环境 | authoritative | 公共依赖、submodule 与首次安装 | — |
 | [model-catalog-maintenance.md](./dev-rules/model-catalog-maintenance.md) | 模型配置与下发入口 | authoritative | 架构、配置层级、修改位置、代码导航与发布验收 | — |
 | [model-metadata-precedence.md](./product-rules/model-metadata-precedence.md) | 模型资料合同 | authoritative | 继承、用户覆盖、多账号与成员语义 | — |

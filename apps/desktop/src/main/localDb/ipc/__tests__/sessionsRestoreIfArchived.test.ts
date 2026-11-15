@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
   sqlite: null as InstanceType<typeof import('better-sqlite3')> | null,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   tapWindowBroadcast: vi.fn(),
+  captureOwner: false,
+  ownerCurrent: true,
   resourceLock: vi.fn(async (_resources: readonly string[], task: () => Promise<unknown>) => task()),
   routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
     task(),
@@ -49,14 +51,18 @@ vi.mock('../../dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() 
 vi.mock('../../../git-context/prRefsStore', () => ({
   recomputePrRefsForSession: vi.fn(async () => undefined),
 }));
-vi.mock('../../../imageCacheStore', () => ({ removeSession: vi.fn(async () => undefined) }));
+vi.mock('../../../imageCacheStore.desktop', () => ({ removeSession: vi.fn(async () => undefined) }));
 vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn(async () => undefined) }));
 vi.mock('../../../device-link/broadcast-tap.js', () => ({
+  captureDataOwnerBroadcastScope: () => h.captureOwner
+    ? { ownerStamp: { dataOwnerId: 'test-user', generation: 1 } }
+    : null,
+  isDataOwnerBroadcastScopeCurrent: () => h.ownerCurrent,
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: h.tapWindowBroadcast,
 }));
 vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
-vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
+vi.mock('../../../messagePersistBroadcaster.desktop', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
 vi.mock('../../../worktree/resourceLock', () => ({
   physicalWorktreeKey: async (value: string) => value,
@@ -66,6 +72,7 @@ vi.mock('../../../worktree/recycleEvents', () => ({ notifyWorktreeRecycleOpportu
 
 import { registerSessionIpc } from '../sessions';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
+import { setSessionRestoreObserver } from '../../sessionRestoreRetention';
 import { getDbClient } from '../../client/current';
 import { selectSessionsByIds, selectSessionWithCount, selectSessionListRows, flattenSessionReadRow } from '../../sessionQueries';
 import { createDrizzleProxy } from '../../client/drizzleProxy';
@@ -95,6 +102,7 @@ function createDb(): void {
       id TEXT PRIMARY KEY NOT NULL,
       title TEXT NOT NULL DEFAULT 'New CCS',
       working_dir TEXT,
+      project_dir TEXT,
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
       scheduled_model_baseline TEXT,
       effort TEXT NOT NULL DEFAULT 'high',
@@ -187,6 +195,8 @@ function readStatus(): string {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.captureOwner = false;
+  h.ownerCurrent = true;
   h.routeLock.mockImplementation(async (_sessionId, task) => task());
   h.resourceLock.mockImplementation(async (_resources, task) => task());
   h.handlers.clear();
@@ -196,10 +206,59 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setSessionRestoreObserver(null);
   setSessionRouteLockImplementation(null);
 });
 
 describe('local-db:sessions:restore-if-archived', () => {
+  // #10310, db tier: one old archived task restored through the bulk-restore IPC.
+  // Existing CAS tests cover status/project races, but not retention persistence.
+  // Activation must wait for retention; a failed save or owner change must leave
+  // the task archived and must not publish a successful restore.
+  it('waits for restore retention to be saved before making the task active', async () => {
+    let entered!: () => void;
+    const saving = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    setSessionRestoreObserver(async (ids, db) => {
+      expect(ids).toEqual(['target']);
+      expect(db).toBe(h.db);
+      entered();
+      await gate;
+    });
+    const restoring = restore();
+    try {
+      expect(await Promise.race([
+        saving.then(() => 'saving'),
+        restoring.then(() => 'restored'),
+      ])).toBe('saving');
+      expect(readStatus()).toBe('archived');
+      expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await restoring;
+    }
+    expect(readStatus()).toBe('active');
+  });
+
+  it('keeps the task archived if saving restore retention fails', async () => {
+    setSessionRestoreObserver(async () => { throw new Error('RETENTION_WRITE_FAILED'); });
+
+    // The existing lifecycle wrapper maps persistence failures to this IPC code.
+    await expect(restore()).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(readStatus()).toBe('archived');
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('keeps the task archived if the owner changes while saving restore retention', async () => {
+    h.captureOwner = true;
+    setSessionRestoreObserver(async () => { h.ownerCurrent = false; });
+
+    await expect(restore()).resolves.toBeNull();
+    expect(readStatus()).toBe('archived');
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
   function managedIdentity(): ExpectedIdentity {
     const root = path.join(os.tmpdir(), 'cindy-restore-lock-fixture', '.cindy-worktrees', 'work');
     const workingDir = path.join(root, 'src');

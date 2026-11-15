@@ -278,6 +278,10 @@ describe("real plugin information", () => {
     );
     expect(empty.tools).toEqual([]);
     expect(empty.permissions).toEqual([]);
+    // The introduction entry needs the explicit new-Host flag; old Hosts never get the action.
+    expect(pluginDetailModel(row(), withFacts({ readme: true }), true, false, false).readme).toBe(true);
+    for (const data of [{}, { readme: "yes" }])
+      expect(pluginDetailModel(row(), withFacts(data), true, false, false).readme).toBe(false);
     for (const data of [
       {},
       {

@@ -961,9 +961,9 @@ function RemoteFileBrowserContent() {
             </Text>
           }
           ListFooterComponent={
-            contentMatches.length > 0 && contentSummary ? (
+            (contentMatches.length > 0 && contentSummary ? (
               <Text style={styles.footerText}>{contentSummary}</Text>
-            ) : null
+            ) : null) ?? undefined
           }
           renderItem={({ item }) => (
             <ContentMatchRow
@@ -989,9 +989,9 @@ function RemoteFileBrowserContent() {
             </Text>
           }
           ListFooterComponent={
-            searchMatches.length > 0 ? (
+            (searchMatches.length > 0 ? (
               <Text style={styles.footerText}>{t('files.browser.nameResultSummary', { n: searchMatches.length })}</Text>
-            ) : null
+            ) : null) ?? undefined
           }
           renderItem={({ item }) => (
             <SearchResultRow match={item} onPress={() => openSearchResult(item)} />
@@ -1009,7 +1009,7 @@ function RemoteFileBrowserContent() {
           data={items}
           key={`grid-${gridColumns}`}
           keyExtractor={(item) => item.key}
-          ListEmptyComponent={!loading ? <Text style={styles.searchHint}>{t('files.browser.folderEmpty')}</Text> : null}
+          ListEmptyComponent={(!loading ? <Text style={styles.searchHint}>{t('files.browser.folderEmpty')}</Text> : null) ?? undefined}
           numColumns={gridColumns}
           refreshControl={
             <RefreshControl
@@ -1027,7 +1027,7 @@ function RemoteFileBrowserContent() {
           ItemSeparatorComponent={ListSeparator}
           key="list"
           keyExtractor={(item) => item.key}
-          ListEmptyComponent={!loading ? <Text style={styles.searchHint}>{t('files.browser.folderEmpty')}</Text> : null}
+          ListEmptyComponent={(!loading ? <Text style={styles.searchHint}>{t('files.browser.folderEmpty')}</Text> : null) ?? undefined}
           refreshControl={
             <RefreshControl
               onRefresh={() => void loadDirectory({ refreshing: true })}

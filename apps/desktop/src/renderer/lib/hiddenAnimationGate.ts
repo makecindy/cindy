@@ -52,6 +52,12 @@ export const HIDDEN_ANIMATION_ATTR = 'data-app-hidden';
 
 const HIDDEN_ATTR = HIDDEN_ANIMATION_ATTR;
 
+/** Read the latest window-hidden state already cached by the renderer gate. */
+export function isWindowHidden(): boolean {
+  const target = window as Window & GateWindow;
+  return target.__xdtHiddenAnimationGateLastHidden ?? document.documentElement.hasAttribute(HIDDEN_ATTR);
+}
+
 /** 存放 disposer 的槽位:本模块自有的私有约定,不在 lib.dom 的 Window 声明里。 */
 interface GateWindow {
   __xdtHiddenAnimationGateDisposer?: () => void;

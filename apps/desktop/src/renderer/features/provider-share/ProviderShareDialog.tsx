@@ -108,7 +108,7 @@ export function ProviderShareDialogTitle({
   );
 }
 
-/** 弹窗底部按钮行：右对齐、可换行；主操作在前，取消在后(DESIGN §4)。 */
+/** 弹窗底部按钮行：右对齐、可换行；取消（或拒绝、关闭）在左，主操作在右(DESIGN §4 Button order)。 */
 export function ProviderShareDialogFooter({ children, className }: { children: ReactNode; className?: string }) {
   return <div className={cn('mt-6 flex shrink-0 flex-wrap justify-end gap-2.5', className)}>{children}</div>;
 }

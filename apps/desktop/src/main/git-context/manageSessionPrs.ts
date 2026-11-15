@@ -33,7 +33,8 @@ export async function manageSessionPrs(
     offset = Number(args.after);
     if (!Number.isSafeInteger(offset)) throw new Error('INVALID_CURSOR');
   }
-  const rows = await managePrRefs(sessionId, { action: 'list' }, verify, origin);
+  const allRows = await managePrRefs(sessionId, { action: 'list' }, verify, origin);
+  const rows = allRows.filter((row) => row.provider !== 'gitlab');
   const find = (selector: unknown) => {
     const pr = parseGithubPr(selector);
     return rows.find(
@@ -46,6 +47,8 @@ export async function manageSessionPrs(
   let result: SessionPrRef[] = rows;
   let operation: SessionPrRefAction | undefined;
   if (args.action === 'reorder') {
+    if (allRows.some((row) => row.provider === 'gitlab' && row.removedAt == null))
+      throw new Error('UNSUPPORTED_PROVIDER');
     if (!Array.isArray(args.prs) || args.prs.length > 2000) throw new Error('INVALID_ORDER');
     operation = {
       action: 'reorder',
@@ -70,6 +73,7 @@ export async function manageSessionPrs(
     }
   }
   if (operation) result = await managePrRefs(sessionId, operation, verify, origin);
+  result = result.filter((row) => row.provider !== 'gitlab');
   if (offset > result.length) throw new Error('INVALID_CURSOR');
   const end = Math.min(result.length, offset + limit);
   return {

@@ -7,12 +7,30 @@ import zhCN from '../../../i18n/locales/zh-CN/common.json';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, { name }: { name: string }) => {
   const code = key.split('.').at(-1)!;
-  const values = key.includes('.capability.') ? zhCN.bots.groupChat.notice.capability : zhCN.bots.groupChat.notice.runtimeFailure;
+  const values = key.includes('.capability.') ? zhCN.bots.groupChat.notice.capability
+    : key.includes('.runtimeFailureReason.') ? zhCN.bots.groupChat.notice.runtimeFailureReason
+    : zhCN.bots.groupChat.notice.runtimeFailure;
   return (values[code as keyof typeof values] as string).replace('{{name}}', name);
 } }) }));
 afterEach(cleanup);
 
 describe('group failure notice', () => {
+  it('explains an unclaimed attempt without claiming the computer is offline or suggesting another model', () => {
+    const { container } = render(<BotGroupRuntimeFailureNotice name="A" code="RUNTIME_TIMEOUT" reason="unclaimed_timeout" />);
+    expect(container.textContent).toContain('未能在等待期限内开始处理');
+    expect(container.textContent).toContain('本次请求已结束');
+    expect(container.textContent).toContain('伙伴的主人');
+    expect(container.textContent).toContain('网络是否连接');
+    expect(container.textContent).not.toMatch(/已离线|已关机|其他可用模型/);
+  });
+  it.each([undefined, 'future-reason'])('keeps the generic timeout for older or unknown reasons: %s', reason => {
+    const { container } = render(<BotGroupRuntimeFailureNotice name="A" code="RUNTIME_TIMEOUT" reason={reason} />);
+    expect(container.textContent).toContain('本次回复超时');
+  });
+  it('does not override another error with an inapplicable timeout reason', () => {
+    const { container } = render(<BotGroupRuntimeFailureNotice name="A" code="AUTH_REQUIRED" reason="unclaimed_timeout" />);
+    expect(container.textContent).toContain('重新认证');
+  });
   it('shows the image failure and the actual recovery settings', () => {
     render(<BotGroupRuntimeFailureNotice name="m" code="IMAGE_INPUT_UNSUPPORTED" />);
     expect(screen.getByText(/当前模型不支持图片/).textContent).toContain('设置 → 个性化 → 视觉桥');

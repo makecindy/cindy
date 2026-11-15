@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemoteAgentPoller } from '../controller/poller';
 import { RemoteAgentRunClient } from '../controller/runClient';
 import { createRemoteAgentHost, hostSessionIdFor, type HostedStartInput } from '../host/runHost';
+import * as runTunnel from '../host/tunnel';
 
 /** 协议层 id 是 36 位 UUID 形态。 */
 const RUN_1 = '11111111-1111-4111-8111-111111111111';
@@ -119,6 +120,42 @@ function sessionRoot(controller: string, sessionId: string): string {
 }
 
 describe('hosted shadow workspace cleanup', () => {
+  // Unit regression: a cancelled open can finish before createRunTunnel returns.
+  // Existing disposal tests wait for startHosted, after the tunnel is installed.
+  // The real loopback endpoint must stop listening even when it arrives late.
+  it('closes a tunnel created after its run was already closed', async () => {
+    const created = whenStarted();
+    const releaseTunnel = whenStarted();
+    const create = runTunnel.createRunTunnel;
+    let tunnel: runTunnel.RunTunnel | undefined;
+    const creation = vi.spyOn(runTunnel, 'createRunTunnel').mockImplementation(async handlers => {
+      tunnel = await create(handlers);
+      created.resolve();
+      await releaseTunnel.promise;
+      return tunnel;
+    });
+    const startHosted = vi.fn(async (input: HostedStartInput) => idleHandle(input));
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true, startHosted,
+      isControllerAuthorized: () => true, captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot,
+    });
+    try {
+      await host.handle('controller-1', { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('task-1') } });
+      await created.promise;
+      expect((await fetch(tunnel!.url)).status).toBe(401);
+      await host.handle('controller-1', { op: 'close', runId: RUN_1, mode: 'close', reason: 'navigation' });
+      releaseTunnel.resolve();
+      await host.dispose();
+      expect(startHosted).not.toHaveBeenCalled();
+      await expect(fetch(tunnel!.url)).rejects.toThrow();
+    } finally {
+      releaseTunnel.resolve();
+      await host.dispose();
+      await tunnel?.close();
+      creation.mockRestore();
+    }
+  });
+
   it('authorizes policy updates before persistence and waits for native confirmation', async () => {
     let allowed = false;
     let confirm!: () => void;
@@ -127,13 +164,15 @@ describe('hosted shadow workspace cleanup', () => {
       return { revision: command.revision, allowFast: command.allowFast };
     });
     const host = createRemoteAgentHost({ isAgentAvailable: () => true, startHosted: async input => idleHandle(input),
-      isControllerAuthorized: () => allowed, captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot, fastPolicy });
+      isControllerAuthorized: () => allowed, captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot, fastPolicy,
+      groupContinuity: () => allowed });
     try {
       const command = { op: 'fast-policy', group: 'openai', revision: 2, allowFast: false };
       await expect(host.handle('controller-1', command)).rejects.toThrow();
       expect(fastPolicy).not.toHaveBeenCalled();
       allowed = true;
       expect(await host.handle('controller-1', { op: 'caps' })).toHaveProperty('subscriptionFastPolicy', true);
+      expect(await host.handle('controller-1', { op: 'caps' })).toHaveProperty('groupContinuity', true);
       let acknowledged = false;
       const pending = host.handle('controller-1', command).then(value => { acknowledged = true; return value; });
       await vi.waitFor(() => expect(fastPolicy).toHaveBeenCalledOnce());
@@ -604,5 +643,20 @@ it.each(['authorization', 'owner'])('scopes image recovery to the caller and rej
     allowed = false;
     await expect(host.handle('other', { op: 'images', sessionId: RUN_1, action: 'list' })).rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
     expect(imageArtifacts).toHaveBeenCalledTimes(1);
+  } finally { host.dispose(); }
+});
+
+// 关了「用本机模型」的电脑看到的是「没有开放供应商」，而不是「和那台电脑断开了 / 不能远程控制」。
+it('tells a computer whose model use was turned off that the provider is not open to it', async () => {
+  const host = createRemoteAgentHost({
+    isAgentAvailable: () => true, startHosted: async (input) => idleHandle(input),
+    isControllerAuthorized: () => false, isControllerModelUseRevoked: (controller) => controller === 'laptop',
+    captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot,
+  });
+  try {
+    await expect(host.handle('laptop', { op: 'images', sessionId: RUN_1, action: 'list' }))
+      .rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
+    await expect(host.handle('stranger', { op: 'images', sessionId: RUN_1, action: 'list' }))
+      .rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
   } finally { host.dispose(); }
 });

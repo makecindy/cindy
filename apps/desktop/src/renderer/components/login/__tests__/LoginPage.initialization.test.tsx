@@ -23,6 +23,9 @@ const auth = vi.hoisted(() => ({
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => auth.value }));
+vi.mock('@/contexts/EnvCheckContext', () => ({
+  useEnvCheck: () => ({ status: 'passed' }),
+}));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));

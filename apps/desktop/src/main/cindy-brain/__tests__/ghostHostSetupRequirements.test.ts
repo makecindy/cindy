@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { GhostManifest } from '../../../shared/ghost';
 import { validateGhostManifest } from '../../../shared/ghost';
-import { setMainLocale } from '../../i18n';
+import { setMainLocale } from '../../i18n.desktop';
 import { assessGhostHostSetupRequirements } from '../ghostHostSetupRequirements';
 
 function manifest(id: string, cindy = false): GhostManifest {

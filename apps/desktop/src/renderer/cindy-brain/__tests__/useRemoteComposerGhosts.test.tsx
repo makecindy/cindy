@@ -6,6 +6,8 @@ import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 
 const invoke = vi.fn();
+// The hook installs one module-level push listener for the cache's lifetime.
+let pushListener: ((push: unknown, stamp?: unknown) => void) | undefined;
 const catalog = (id: string) => [{ manifest: { id, name: id, command: id }, enabled: true }];
 function deferred() {
   let resolve!: (value: unknown) => void;
@@ -17,7 +19,17 @@ function deferred() {
 beforeEach(() => {
   invoke.mockReset();
   setDataOwnerGeneration('owner');
-  Object.assign(window, { electronAPI: { deviceLink: { invoke } } });
+  Object.assign(window, {
+    electronAPI: {
+      deviceLink: {
+        invoke,
+        onRemotePush: (listener: typeof pushListener) => {
+          pushListener = listener;
+          return () => {};
+        },
+      },
+    },
+  });
 });
 afterEach(cleanup);
 
@@ -56,7 +68,9 @@ describe('remote composer plugins', () => {
     expect(invoke).toHaveBeenLastCalledWith('b', 'ghosts:composer-list', ['/project']);
   });
 
-  it('retries failed/old-host responses, refreshes on open/reconnect, and does not fetch on close', async () => {
+  it('retries failed/old-host responses, refreshes a minute-old catalog on open/reconnect, and does not fetch on close', async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
     invoke
       .mockRejectedValueOnce(new Error('CHANNEL_NOT_ALLOWED'))
       .mockResolvedValue(catalog('remote'));
@@ -68,12 +82,92 @@ describe('remote composer plugins', () => {
     expect(result.current.ghosts).toEqual([]);
     act(() => result.current.reload());
     await waitFor(() => expect(result.current.ghosts[0]?.manifest.id).toBe('remote'));
+    // A fresh catalog is reused when the menu opens or the link reconnects.
     rerender({ open: true, epoch: 0 });
-    await waitFor(() => expect(invoke).toHaveBeenCalledTimes(3));
-    rerender({ open: false, epoch: 0 });
-    expect(invoke).toHaveBeenCalledTimes(3);
     rerender({ open: false, epoch: 1 });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    now += 60_000;
+    rerender({ open: true, epoch: 1 });
+    await waitFor(() => expect(invoke).toHaveBeenCalledTimes(3));
+    rerender({ open: false, epoch: 1 });
+    expect(invoke).toHaveBeenCalledTimes(3);
+    now += 60_000;
+    rerender({ open: false, epoch: 2 });
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(4));
+    vi.restoreAllMocks();
+  });
+
+  // 2026-11-04: the ~1 MB catalog was read again on every remote composer mount (twice:
+  // mount and its first connected epoch), and the transfer cache rarely held it. Mounts
+  // share one read; a host "plugins" change re-reads at once.
+  it('shares one catalog read across composer mounts and re-reads when the host plugins change', async () => {
+    invoke.mockResolvedValue(catalog('remote'));
+    const first = renderHook(({ epoch }) => useRemoteComposerGhosts('a', '/a', false, epoch), {
+      initialProps: { epoch: 0 },
+    });
+    first.rerender({ epoch: 1 });
+    await waitFor(() => expect(first.result.current.ghosts[0]?.manifest.id).toBe('remote'));
+    first.unmount();
+    const second = renderHook(() => useRemoteComposerGhosts('a', '/a', false, 1));
+    expect(second.result.current.ghosts[0]?.manifest.id).toBe('remote');
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    invoke.mockResolvedValue(catalog('updated'));
+    act(() =>
+      pushListener?.({
+        deviceId: 'b',
+        channel: 'maker:remote-resources:changed',
+        payload: { collectionId: 'plugins' },
+      }),
+    );
+    act(() =>
+      pushListener?.({
+        deviceId: 'a',
+        channel: 'maker:remote-resources:changed',
+        payload: { collectionId: 'teammates' },
+      }),
+    );
+    expect(invoke).toHaveBeenCalledTimes(1);
+    act(() =>
+      pushListener?.({
+        deviceId: 'a',
+        channel: 'maker:remote-resources:changed',
+        payload: { collectionId: 'plugins' },
+      }),
+    );
+    await waitFor(() => expect(second.result.current.ghosts[0]?.manifest.id).toBe('updated'));
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  // PR #8808 review: a read started before a plugin change must not be cached as the
+  // new list, and a copy kept after its composer unmounted must still be dropped.
+  it('drops a pre-change read and an unmounted copy when the host plugins change', async () => {
+    const pluginsChanged = () =>
+      act(() =>
+        pushListener?.({
+          deviceId: 'c',
+          channel: 'maker:remote-resources:changed',
+          payload: { collectionId: 'plugins' },
+        }),
+      );
+    const before = deferred();
+    invoke.mockReturnValueOnce(before.promise).mockResolvedValue(catalog('after'));
+    const first = renderHook(() => useRemoteComposerGhosts('c', '/c', false, 0));
+    pluginsChanged();
+    await waitFor(() => expect(first.result.current.ghosts[0]?.manifest.id).toBe('after'));
+    await act(async () => {
+      before.resolve(catalog('before'));
+    });
+    expect(first.result.current.ghosts[0]?.manifest.id).toBe('after');
+    expect(first.result.current.failed).toBe(false);
+    first.unmount();
+
+    // Changed while no composer for this computer is mounted.
+    invoke.mockResolvedValue(catalog('later'));
+    pluginsChanged();
+    const second = renderHook(() => useRemoteComposerGhosts('c', '/c', false, 0));
+    await waitFor(() => expect(second.result.current.ghosts[0]?.manifest.id).toBe('later'));
+    expect(invoke).toHaveBeenCalledTimes(3);
   });
 
   it('rejects malformed payloads and does not fall back to local plugins', async () => {

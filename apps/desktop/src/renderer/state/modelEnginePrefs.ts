@@ -371,6 +371,26 @@ export function clearModelEngineOverride(providerId: string, modelId: string): v
   commitOp({ kind: 'clear', key: keyOf(providerId, modelId) });
 }
 
+/** Alias edits are one storage write; a failed write must not leave half a group in memory. */
+export function editModelEngineOverrides(
+  providerId: string,
+  changes: readonly { modelId: string; agent?: ModelEngine }[],
+): boolean {
+  if (!isUsableProviderId(providerId) || changes.some((c) => !c.modelId ||
+    (c.agent !== undefined && !isSelectableVendor(c.agent)))) return false;
+  const ops: EnginePrefsOp[] = changes.map((change) => change.agent === undefined
+    ? { kind: 'clear', key: keyOf(providerId, change.modelId) }
+    : { kind: 'set', key: keyOf(providerId, change.modelId), agent: change.agent });
+  const next = ops.reduce(applyOp, freshMap());
+  const key = storageKey();
+  try { window.localStorage.setItem(key, JSON.stringify(next)); } catch { return false; }
+  cache = next;
+  for (const op of ops) reconciler.record(key, op);
+  reconciler.schedule(key);
+  emit();
+  return true;
+}
+
 /** 该 (来源, 模型) 是否被用户自定义过 —— 行内三元组提亮 / 底栏「已自定义 · 恢复推荐」用。 */
 export function hasModelEngineOverride(providerId: string, modelId: string): boolean {
   return getModelEngineOverride(providerId, modelId) !== undefined;
@@ -425,3 +445,6 @@ export function __resetForTest(): void {
 }
 
 export const __STORAGE_KEY = STORAGE_KEY;
+
+/** Owner token for async alias edits; never carry a pending write into another account. */
+export function getModelEnginePrefsOwner(): string | null { return activeDataOwnerId; }

@@ -360,13 +360,16 @@ export async function resolveRouteCopyCapabilities(
 
 /**
  * agent one-shot 不带 model 时各 agent 的内部默认模型(与 maker-core base-agent
- * OneShotOptions 文档口径一致:Claude → haiku,Codex → mini)。裁决要落到具体
- * 默认模型上:只查来源级 suspended 会漏掉「恰好停用了这一个模型」的 override
- * (PR #744 review 第十五轮)。
+ * OneShotOptions 文档口径一致)。裁决要落到具体默认模型上:只查来源级 suspended
+ * 会漏掉「恰好停用了这一个模型」的 override(PR #744 review 第十五轮)。
+ *
+ * Codex 不在表里:它的 one-shot 不写死型号,默认模型由 app-server 按账号与配置
+ * 现选,派发前拿不到。Codex 在 thread/start 之后、turn/start 之前把实际选中的模型
+ * 经 `beforeDispatch(route)` 交回,调用方用 `route.model` 再调一次本函数,模型级
+ * 停用仍在 prompt 发出前拦住。
  */
-const DEFAULT_ONESHOT_MODEL: Record<AgentKind, string> = {
+const DEFAULT_ONESHOT_MODEL: Partial<Record<AgentKind, string>> = {
   'claude-code': 'claude-haiku-4-5',
-  codex: 'gpt-5.4-mini',
   // pi oneShot 未实现(BaseAgent 默认抛 NotSupported);占位与 claude 同款网关小模型。
   pi: 'claude-haiku-4-5',
 };
@@ -374,8 +377,8 @@ const DEFAULT_ONESHOT_MODEL: Record<AgentKind, string> = {
 /**
  * agent one-shot 兜底(help / 会话摘要 / 快照标签)是否被停用轴挡住。
  * 带具体模型时走完整裁决;不带模型(agent 默认一击)按**该 agent 的内部默认模型**
- * 走同一裁决,再叠加原生默认来源 suspended 检查(默认模型不在目录时裁决 pass,
- * 来源级停用仍要拦)。
+ * 走同一裁决(没有固定默认模型的 agent 跳过这一步),再叠加原生默认来源 suspended
+ * 检查(默认模型不在目录时裁决 pass,来源级停用仍要拦)。
  */
 export async function isAgentOneShotRouteDisabled(
   agent: AgentKind,
@@ -386,7 +389,8 @@ export async function isAgentOneShotRouteDisabled(
     // 被停用的隐式默认来源上 —— 只有 pass 才允许(PR #744 review 第五轮)。
     return (await verdictForModelRoute(agent, model, null)).kind !== 'pass';
   }
-  if ((await verdictForModelRoute(agent, DEFAULT_ONESHOT_MODEL[agent], null)).kind !== 'pass') {
+  const defaultModel = DEFAULT_ONESHOT_MODEL[agent];
+  if (defaultModel && (await verdictForModelRoute(agent, defaultModel, null)).kind !== 'pass') {
     return true;
   }
   let views: ProviderView[];

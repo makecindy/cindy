@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT,
   createWorkLouderCodexDefaultSettings,
   type WorkLouderCodexSettings,
 } from '../../../shared/workLouderCodex.js';
@@ -187,7 +188,7 @@ describe('WorkLouderCodexLightingController', () => {
     expect(sink.rebindCreatorKeymap).toHaveBeenCalled();
   });
 
-  it('routes Codex HID by factory key names, not Creator remapped codes', async () => {
+  it('routes Codex HID by the AG codes Cindy writes, like Creator', async () => {
     const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
       current: null,
     };
@@ -230,14 +231,16 @@ describe('WorkLouderCodexLightingController', () => {
       inputMonitoringPermission: 'granted',
     });
 
-    hidRef.current?.({ key: 'ACT06', act: 1 });
+    const keymap = sink.rebindCreatorKeymap.mock.calls.at(-1)?.[0] as string[][];
+    expect(keymap[2]?.[0]).toBe('KV_OAI_AG00');
+    hidRef.current?.({ key: 'AG00', act: 1 });
     expect(activateSession).toHaveBeenCalledWith('newer', true);
     activateSession.mockClear();
-    hidRef.current?.({ key: 'AG00', act: 1 });
+    hidRef.current?.({ key: 'ACT06', act: 1 });
     expect(activateSession).not.toHaveBeenCalled();
   });
 
-  it('switches a seventh Creator task key from ACT HID, not AG06', async () => {
+  it('switches a seventh Creator task key from AG06', async () => {
     const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
       current: null,
     };
@@ -271,10 +274,7 @@ describe('WorkLouderCodexLightingController', () => {
     await controller.resumeTaskSlots();
 
     const keymap = sink.rebindCreatorKeymap.mock.calls.at(-1)?.[0] as string[][];
-    expect(keymap[2]?.[0]).toBe('KV_OAI_ACT06');
-    hidRef.current?.({ key: 'ACT06', act: 1 });
-    expect(activateSession).toHaveBeenCalledWith('task-6', true);
-    activateSession.mockClear();
+    expect(keymap[2]?.[0]).toBe('KV_OAI_AG06');
     hidRef.current?.({ key: 'AG06', act: 1 });
     expect(activateSession).toHaveBeenCalledWith('task-6', true);
   });
@@ -321,14 +321,14 @@ describe('WorkLouderCodexLightingController', () => {
     controller.applySettings(creator);
     await controller.resumeTaskSlots();
 
-    hidRef.current?.({ key: 'ACT06', act: 1 });
+    hidRef.current?.({ key: 'AG06', act: 1 });
     expect(activateSession).toHaveBeenCalledWith('task-6', true);
     activateSession.mockClear();
-    hidRef.current?.({ key: 'ACT07', act: 1 });
+    hidRef.current?.({ key: 'AG07', act: 1 });
     expect(activateSession).toHaveBeenCalledWith('task-7', true);
   });
 
-  it('keeps Creator status LEDs on the first six task keys and does not wash extra keys green', async () => {
+  it('lights a seventh Creator task key on its own thread and clears unused ones', async () => {
     const sink = {
       update: vi.fn(),
       setAgentKeyPressHandler: vi.fn(),
@@ -365,20 +365,21 @@ describe('WorkLouderCodexLightingController', () => {
     sink.update.mockClear();
     controller.updateSessionActivity([
       {
-        sessionId: 'task-0',
+        sessionId: 'task-6',
         phase: 'completed',
         compactDetail: '',
         attention: true,
       },
     ]);
     const frame = sink.update.mock.lastCall?.[0];
-    expect(frame?.threads).toHaveLength(6);
-    expect(frame?.threads[0]?.brightness).toBeGreaterThan(0);
-    expect(frame?.threads[1]?.brightness).toBe(0);
+    expect(frame?.threads).toHaveLength(WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT);
+    expect(frame?.threads[6]?.brightness).toBeGreaterThan(0);
+    expect(frame?.threads[0]?.brightness).toBe(0);
+    expect(frame?.threads[12]?.brightness).toBe(0);
     expect(frame?.keys.brightness).toBe(0);
   });
 
-  it('moves Codex thread 0 with the remapped first task key and does not wash a demoted AG key', async () => {
+  it('lights the first Codex task key on thread 0 after AG00 is demoted, without the key wash', async () => {
     const sink = {
       update: vi.fn(),
       setAgentKeyPressHandler: vi.fn(),
@@ -424,8 +425,127 @@ describe('WorkLouderCodexLightingController', () => {
     ]);
     const frame = sink.update.mock.lastCall?.[0];
     expect(frame?.keys.brightness).toBe(0);
-    expect(frame?.threads[0]?.brightness).toBe(0);
+    expect(frame?.threads[0]?.brightness).toBeGreaterThan(0);
+    expect(frame?.threads[1]?.brightness).toBe(0);
+  });
+
+  it('lights and switches a seventh Codex task key from its own AG code', async () => {
+    const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
+      current: null,
+    };
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setDeviceStateHandler: vi.fn(),
+      setHidInputHandler: vi.fn((handler: typeof hidRef.current) => {
+        hidRef.current = handler;
+      }),
+      rebindCreatorKeymap: vi.fn(),
+      dispose: vi.fn(async () => undefined),
+    };
+    const activateSession = vi.fn();
+    const settings = createWorkLouderCodexDefaultSettings('codex-micro');
+    settings.agentSource = 'sidebar';
+    settings.deviceEnabled = true;
+    settings.layout.taskKeys = [...settings.layout.taskKeys!, 'ACT07'];
+    const options = Array.from({ length: 7 }, (_, index) => ({
+      id: `task-${index}`,
+      title: `Task ${index}`,
+      pinned: false,
+    }));
+    const controller = new WorkLouderCodexLightingController(sink, activateSession, async () => ({
+      sidebar: options,
+      lastSent: options,
+      options,
+    }));
+    controller.applySettings(settings);
+    await controller.resumeTaskSlots();
+    sink.setDeviceStateHandler.mock.calls.at(-1)?.[0]?.({
+      deviceType: 'codex-micro',
+      isUsbConnection: true,
+      firmwareVersion: null,
+      batteryPercentage: null,
+      isCharging: false,
+      inputMonitoringPermission: 'granted',
+    });
+    sink.update.mockClear();
+    controller.updateSessionActivity([
+      {
+        sessionId: 'task-6',
+        phase: 'completed',
+        compactDetail: '',
+        attention: true,
+      },
+    ]);
+
+    const keymap = sink.rebindCreatorKeymap.mock.calls.at(-1)?.[0] as string[][];
+    expect(keymap[2]?.[1]).toBe('KV_OAI_AG06');
+    const frame = sink.update.mock.lastCall?.[0];
+    expect(frame?.threads).toHaveLength(WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT);
+    expect(frame?.threads[6]?.brightness).toBeGreaterThan(0);
+    hidRef.current?.({ key: 'AG06', act: 1 });
+    expect(activateSession).toHaveBeenCalledWith('task-6', true);
+  });
+
+  it('keeps factory routing and six lights when the host could not rewrite the keymap', async () => {
+    const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
+      current: null,
+    };
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setDeviceStateHandler: vi.fn(),
+      setHidInputHandler: vi.fn((handler: typeof hidRef.current) => {
+        hidRef.current = handler;
+      }),
+      rebindCreatorKeymap: vi.fn(),
+      dispose: vi.fn(async () => undefined),
+    };
+    const activateSession = vi.fn();
+    const settings = createWorkLouderCodexDefaultSettings('codex-micro');
+    settings.agentSource = 'sidebar';
+    settings.deviceEnabled = true;
+    settings.layout.taskKeys = ['AG01', 'AG02', 'AG03', 'AG04', 'AG05', 'ACT07'];
+    const options = Array.from({ length: 6 }, (_, index) => ({
+      id: `task-${index}`,
+      title: `Task ${index}`,
+      pinned: false,
+    }));
+    const controller = new WorkLouderCodexLightingController(sink, activateSession, async () => ({
+      sidebar: options,
+      lastSent: options,
+      options,
+    }));
+    controller.applySettings(settings);
+    await controller.resumeTaskSlots();
+    sink.setDeviceStateHandler.mock.calls.at(-1)?.[0]?.({
+      deviceType: 'codex-micro',
+      isUsbConnection: true,
+      firmwareVersion: null,
+      batteryPercentage: null,
+      isCharging: false,
+      inputMonitoringPermission: 'granted',
+      factoryKeymap: true,
+    });
+    sink.update.mockClear();
+    controller.updateSessionActivity([
+      { sessionId: 'task-0', phase: 'completed', compactDetail: '', attention: true },
+    ]);
+
+    // The board still sends its physical key names: AG01 is the first task key, AG00 is a command.
+    const frame = sink.update.mock.lastCall?.[0];
+    expect(frame?.threads).toHaveLength(6);
     expect(frame?.threads[1]?.brightness).toBeGreaterThan(0);
+    expect(frame?.threads[0]?.brightness).toBe(0);
+    hidRef.current?.({ key: 'AG01', act: 1 });
+    expect(activateSession).toHaveBeenCalledWith('task-0', true);
+    activateSession.mockClear();
+    hidRef.current?.({ key: 'AG00', act: 1 });
+    expect(activateSession).not.toHaveBeenCalled();
   });
 
   it('uses the published assignment for the current press and refreshes only later presses', async () => {

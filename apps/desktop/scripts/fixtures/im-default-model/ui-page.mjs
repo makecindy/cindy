@@ -5,7 +5,11 @@ export default {
   entry: './fixture.tsx',
   viewport: { width: 660, height: 520 },
   real: 'IM defaults settings, real model selector, automatic model resolution and restore action',
-  notCovered: 'Live credentials and model discovery; host supplies a catalog and settings writes',
+  notCovered: 'Account sign-in, live credentials and model discovery; host supplies a catalog and settings writes',
+  stubs: {
+    // Account sign-in is outside this settings fixture; keep the real selectors.
+    'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: 'local', dataOwnerId: 'fixture-account', user: null });` },
+  },
   cases: {
     default: { about: 'Automatic selection shows the actual model' },
     'im-automatic': { about: 'Automatic selection shows the actual model' },

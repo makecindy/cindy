@@ -123,6 +123,13 @@ async function runMigrationStatement(target: DbClient, statement: string): Promi
 }
 
 function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
+  if (fileName === '0138_talented_blacklash.sql') {
+    ensureColumnSync(db, 'session_pr_refs', 'pinned', 'integer DEFAULT false NOT NULL');
+    ensureColumnSync(db, 'session_pr_refs', 'priority', 'integer DEFAULT 0 NOT NULL');
+    ensureColumnSync(db, 'session_pr_refs', 'manually_added', 'integer DEFAULT false NOT NULL');
+    ensureColumnSync(db, 'session_pr_refs', 'removed_at', 'integer');
+    return;
+  }
   if (fileName === '0125_magical_night_thrasher.sql') {
     ensureColumnSync(db, 'orca_workers', 'pending_remote_report', 'text');
     ensureColumnSync(db, 'orca_workers', 'remote_stop_confirmed_at', 'integer');
@@ -233,6 +240,13 @@ function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
 }
 
 async function applyMigrationScript(target: DbClient, fileName: string): Promise<void> {
+  if (fileName === '0138_talented_blacklash.sql') {
+    await ensureColumn(target, 'session_pr_refs', 'pinned', 'integer DEFAULT false NOT NULL');
+    await ensureColumn(target, 'session_pr_refs', 'priority', 'integer DEFAULT 0 NOT NULL');
+    await ensureColumn(target, 'session_pr_refs', 'manually_added', 'integer DEFAULT false NOT NULL');
+    await ensureColumn(target, 'session_pr_refs', 'removed_at', 'integer');
+    return;
+  }
   if (fileName === '0125_magical_night_thrasher.sql') {
     await ensureColumn(target, 'orca_workers', 'pending_remote_report', 'text');
     await ensureColumn(target, 'orca_workers', 'remote_stop_confirmed_at', 'integer');

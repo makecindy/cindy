@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import { FontSettingsProvider } from '@/hooks/useFontSettings';
 import { AppearanceSection } from '../AppearanceSection';
 import zhCN from '@/i18n/locales/zh-CN/common.json';
@@ -37,12 +38,14 @@ vi.mock('@/hooks/useTheme', () => ({
 
 vi.mock('@/hooks/useWallpaperSettings', () => ({
   useWallpaperSettings: () => ({
+    customizedKeys: window.electronAPI?.appearanceSettings?.getSync?.()?.customizedKeys,
     wallpaperId: 'none',
     wallpaperOverlay: 0.2,
     wallpaperMotion: 'static',
     visibility: 0.37,
     setWallpaper: vi.fn(),
     setVisibility: vi.fn(),
+    previewVisibility: vi.fn(),
     setBlur: vi.fn(),
     previewBlur: vi.fn(),
     setMotion: vi.fn(),
@@ -82,22 +85,44 @@ afterEach(() => {
 
 function renderSettings() {
   render(
-    <FontSettingsProvider>
-      <AppearanceSection />
-    </FontSettingsProvider>,
+    <MemoryRouter>
+      <FontSettingsProvider>
+        <AppearanceSection />
+      </FontSettingsProvider>
+    </MemoryRouter>,
   );
 }
 
 describe('AppearanceSection terminal fonts', () => {
-  it('registers search targets for the terminal font and size rows', () => {
+  // Theme priority regression, unit with real settings rows: explicit built-in
+  // values can mask a theme. Value comparisons hid their only reset controls.
+  it('offers reset for explicit built-in font values that mask a theme', () => {
+    vi.stubGlobal('electronAPI', { appearanceSettings: {
+      getSync: () => ({ uiFamily: '', uiSize: 14, terminalFamily: '', terminalSize: 13,
+        customizedKeys: ['uiFamily', 'uiSize', 'terminalFamily', 'terminalSize', 'wallpaperId'] }),
+      onChanged: () => () => {},
+    } });
     renderSettings();
-    for (const key of ['terminalFamily', 'terminalSize']) {
+    const ui = screen.getByRole('button', { name: '选择界面字体' });
+    expect(within(ui.parentElement!).getByRole('button', { name: '恢复默认' }).hasAttribute('disabled')).toBe(false);
+    const terminal = screen.getByRole('button', { name: '选择终端字体' });
+    expect(within(terminal.parentElement!).getByRole('button', { name: '恢复默认' }).hasAttribute('disabled')).toBe(false);
+    const size = screen.getByRole('spinbutton', { name: '终端字号' });
+    expect(within(size.parentElement!.parentElement!.parentElement!).getByRole('button', { name: '恢复默认' }).hasAttribute('disabled')).toBe(false);
+    expect(within(screen.getByRole('region', { name: '壁纸' })).getByRole('button', { name: '恢复默认' }).hasAttribute('disabled')).toBe(false);
+  });
+  // Replaces the catalog's JSX-text anchor scan (engineering-conventions §3.2):
+  // a source match cannot prove a search result has a rendered destination.
+  // Unit: each font search result must resolve to its real row.
+  it('registers rendered search targets for all font and size rows', () => {
+    renderSettings();
+    for (const key of ['uiFamily', 'uiSize', 'codeFamily', 'codeSize', 'terminalFamily', 'terminalSize'] as const) {
       const entry = appearanceSearch.entries.find(
         (item) => item.id === `settings.appearance.font.${key}.label`,
       );
       expect(entry).toBeDefined();
       expect(document.getElementById(entry!.targetId)?.textContent).toContain(
-        key === 'terminalFamily' ? '终端字体' : '终端字号',
+        zhCN.settings.appearance.font[key].label,
       );
     }
   });
@@ -106,6 +131,8 @@ describe('AppearanceSection terminal fonts', () => {
     renderSettings();
     const terminalPicker = screen.getByRole('button', { name: '选择终端字体' });
     const codePicker = screen.getByRole('button', { name: '选择代码字体' });
+    expect(terminalPicker.getAttribute('data-setting-id')).toBe('settings.appearance.font.terminalFamily.label');
+    expect(codePicker.getAttribute('data-setting-id')).toBe('settings.appearance.font.codeFamily.label');
 
     fireEvent.click(terminalPicker);
     fireEvent.change(screen.getByPlaceholderText(zhCN.settings.appearance.font.customPlaceholder), {
@@ -172,7 +199,8 @@ describe('AppearanceSection terminal fonts', () => {
     expect(size.value).toBe('11');
 
     fireEvent.click(
-      within(size.parentElement!.parentElement!).getByRole('button', { name: '恢复默认' }),
+      // SettingsTextInput wrapper → slider row → the terminal-size SettingsField.
+      within(size.parentElement!.parentElement!.parentElement!).getByRole('button', { name: '恢复默认' }),
     );
     expect(size.value).toBe('13');
     expect((screen.getByRole('spinbutton', { name: '代码字号' }) as HTMLInputElement).value).toBe(

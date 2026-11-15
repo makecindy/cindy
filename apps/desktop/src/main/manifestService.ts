@@ -23,7 +23,8 @@ import { supportsBetaUpdateChannel } from '../shared/updateChannelCapability';
 import { createLogger } from './logger';
 import { getClientEndpoint } from './clientEndpointsService';
 import { isBetaChannelEnabled } from './updateChannelStore';
-import { parseAppUpdateVersion } from './updateVersionPolicy';
+import { compareAppUpdateVersions, parseAppUpdateVersion } from './updateVersionPolicy';
+import { isRunningUnderArm64Translation } from './arm64Translation';
 
 const log = createLogger('manifestService');
 
@@ -173,13 +174,68 @@ export async function fetchManifest(
   timeoutMs?: number,
   signal?: AbortSignal,
 ): Promise<Manifest | null> {
+  return requestManifest(getPlatformKey(), true, timeoutMs, signal);
+}
+
+/** 只用于应用更新判断的原生架构清单：不写缓存、不通知监听者。 */
+const nativeAppUpdateTargetArch = new WeakMap<Manifest, 'arm64'>();
+
+/**
+ * 应用更新专用的清单。
+ *
+ * Apple 芯片上经 Rosetta 运行的 darwin-x64 包，按 process.arch 只会一直拿到 x64 清单，
+ * 永远留在转译状态。此时额外读取 darwin-arm64 同渠道清单：它不低于 x64 清单的版本就用它，
+ * 下一次更新即换成原生包（同版本也算，见 updateService.appUpdateRelation）。
+ * x64 清单照常经 fetchManifest 读取并写缓存——Claude Code / Codex 等引擎安装仍按
+ * 当前进程架构取资产，不能被 arm64 清单污染。arm64 清单读不到时退回 x64 清单。
+ */
+export async function fetchAppUpdateManifest(
+  timeoutMs?: number,
+  signal?: AbortSignal,
+): Promise<Manifest | null> {
+  const channel = currentUpdateChannel();
+  const epochAtStart = manifestEpoch;
+  const manifest = await fetchManifest(timeoutMs, signal);
+  if (process.platform !== 'darwin' || process.arch !== 'x64' || !isRunningUnderArm64Translation()) {
+    return manifest;
+  }
+  const native = await requestManifest('darwin-arm64', false, timeoutMs, signal);
+  // 两次读取之间切了渠道：已取到的 x64 清单也属旧渠道，整次作废，不能回退去装旧渠道包。
+  if (epochAtStart !== manifestEpoch || currentUpdateChannel() !== channel) {
+    log.info('manifest channel changed during app update lookup — discarding both responses');
+    return null;
+  }
+  // 只在 arm64 清单本身可安装（版本合法、带 hotfix）时替换，否则不能挡住已取到的 x64 更新。
+  const hotfix = native?.app?.hotfix;
+  if (!native || !parseAppUpdateVersion(native.app?.version) || !hotfix?.file || !hotfix.sha256) {
+    return manifest;
+  }
+  if (manifest && compareAppUpdateVersions(native.app.version, manifest.app?.version) === 'older') {
+    log.info('arm64 manifest %s is behind x64 %s — keeping x64 update', native.app?.version, manifest.app?.version);
+    return manifest;
+  }
+  nativeAppUpdateTargetArch.set(native, 'arm64');
+  return native;
+}
+
+/** fetchAppUpdateManifest 选中原生架构清单时返回 'arm64'，其余返回 undefined。 */
+export function getAppUpdateTargetArch(manifest: Manifest): 'arm64' | undefined {
+  return nativeAppUpdateTargetArch.get(manifest);
+}
+
+async function requestManifest(
+  platformKey: string,
+  publish: boolean,
+  timeoutMs?: number,
+  signal?: AbortSignal,
+): Promise<Manifest | null> {
   if (isDev()) return null;
   if (signal?.aborted) return null;
 
   const channel = currentUpdateChannel();
   const channelSuffix = channel === 'release' ? '' : `-${channel}`;
   // Cache-bust: append timestamp to prevent Chromium / CDN serving stale manifest
-  const url = `${getBaseUrl()}/manifest-${getPlatformKey()}${channelSuffix}.json?t=${Date.now()}`;
+  const url = `${getBaseUrl()}/manifest-${platformKey}${channelSuffix}.json?t=${Date.now()}`;
   // 快照发起时的代际:响应完成写 cached 前核对,期间切渠道则作废本次结果。
   const epochAtStart = manifestEpoch;
   log.info('Fetching (%s channel): %s', channel, url);
@@ -246,9 +302,13 @@ export async function fetchManifest(
               finish(null);
               return;
             }
+            log.info('Fetched OK: app.version=%s, hotfix=%s', json.app?.version, json.app?.hotfix?.file ?? 'none');
+            if (!publish) {
+              finish(json);
+              return;
+            }
             cached = json;
             cachedChannel = channel;
-            log.info('Fetched OK: app.version=%s, hotfix=%s', json.app?.version, json.app?.hotfix?.file ?? 'none');
             finish(json);
             for (const listener of manifestListeners) {
               try { listener(json); } catch { /* an optional observer cannot fail the update */ }

@@ -5,6 +5,8 @@ import type {
   BillingCurrentSubscription,
   BillingFulfillmentStatus,
   BillingOrderList,
+  BillingPaymentHistory,
+  BillingPaymentHistoryRecord,
   BillingPaymentAction,
   BillingPaymentOrder,
   BillingPaymentOrderStatus,
@@ -660,6 +662,52 @@ export function projectBillingOrderList(value: unknown): BillingOrderList {
     }
   }
   return { orders, nextCursor };
+}
+
+export function projectBillingPaymentHistory(value: unknown): BillingPaymentHistory {
+  if (!isRecord(value) || !Array.isArray(value.records) || value.records.length > 100) invalidResponse();
+  const nextCursor = value.nextCursor === null ? null : boundedString(value.nextCursor, 1024);
+  if (value.nextCursor !== null && (!nextCursor || !/^[A-Za-z0-9_-]+$/.test(nextCursor))) invalidResponse();
+  const records = value.records.map((raw): BillingPaymentHistoryRecord => {
+    if (!isRecord(raw) || !isRecord(raw.refundSummary)) invalidResponse();
+    const sourceType = raw.sourceType === 'CREDIT_TOPUP' || raw.sourceType === 'SUBSCRIPTION_INVOICE'
+      ? raw.sourceType : null;
+    const sourceId = boundedString(raw.sourceId, 191);
+    const subscriptionId = nullable(raw.subscriptionId, (input) => boundedString(input, 191));
+    const productName = nullable(raw.productName, (input) => boundedString(input, 256));
+    const billingReason = nullable(raw.billingReason, (input) => boundedString(input, 64));
+    const provider = nullable(raw.provider, (input) => boundedString(input, 32));
+    const providerTransactionId = raw.providerTransactionId === undefined ? null
+      : nullable(raw.providerTransactionId, (input) => boundedString(input, 255));
+    const amount = nullable(raw.amount, decimal);
+    const recordCurrency = currency(raw.currency);
+    const paidAt = nullable(raw.paidAt, isoTime);
+    const createdAt = isoTime(raw.createdAt);
+    const periodStartAt = nullable(raw.periodStartAt, isoTime);
+    const periodEndAt = nullable(raw.periodEndAt, isoTime);
+    const refund = raw.refundSummary;
+    const refundStatus = nullable(refund.status, (input) => input === 'UNREFUNDED' || input === 'PARTIALLY_REFUNDED' || input === 'REFUNDED'
+      ? input : null);
+    const refundedAmount = decimal(refund.refundedAmount);
+    if (!sourceType || !sourceId || raw.recordId !== `${sourceType}:${sourceId}`
+      || subscriptionId === undefined || productName === undefined || billingReason === undefined || provider === undefined
+      || providerTransactionId === undefined
+      || amount === undefined || !recordCurrency || paidAt === undefined || !createdAt
+      || periodStartAt === undefined || periodEndAt === undefined || refundStatus === undefined || !refundedAmount
+      || typeof refund.refundedMinor !== 'number' || !Number.isSafeInteger(refund.refundedMinor) || refund.refundedMinor < 0
+      || (raw.amountPaidMinor !== null && (typeof raw.amountPaidMinor !== 'number'
+        || !Number.isSafeInteger(raw.amountPaidMinor) || raw.amountPaidMinor < 0))
+      || (amount === null) !== (raw.amountPaidMinor === null)) invalidResponse();
+    return {
+      recordId: raw.recordId, sourceType, sourceId, subscriptionId, productName, billingReason, provider,
+      providerTransactionId,
+      amount, amountPaidMinor: raw.amountPaidMinor, currency: recordCurrency,
+      paidAt, createdAt, periodStartAt, periodEndAt,
+      refundSummary: { status: refundStatus, refundedMinor: refund.refundedMinor, refundedAmount },
+    };
+  });
+  // A malformed paid record is a failed page, never a silently incomplete history.
+  return { records, nextCursor };
 }
 
 function projectEffectivePlan(value: unknown): BillingSubscription['effectivePlan'] {

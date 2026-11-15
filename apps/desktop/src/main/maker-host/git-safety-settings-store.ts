@@ -9,12 +9,13 @@
  * changes can flow to users who never changed the setting.
  */
 
-import { app } from 'electron';
+import { getUserDataDir } from '../userDataPath.js';
 import path from 'node:path';
 
 import { desktopMakerLogger } from './logger-adapter.js';
 import {
   createOverrideSettingsFile,
+  portableOverrideSettings,
   type OverrideSettingsState,
 } from './override-settings-file.js';
 
@@ -39,7 +40,7 @@ const DEFAULTS: PersistedGitSafetySettings = {
 };
 
 function settingsFilePath(): string {
-  return path.join(app.getPath('userData'), 'git-safety-settings.json');
+  return path.join(getUserDataDir(), 'git-safety-settings.json');
 }
 
 function normalize(raw: unknown): PersistedGitSafetySettings {
@@ -131,3 +132,6 @@ export function resetGitSafetySettings(): GitSafetySettings {
 }
 
 export const __testing = { mergeOverrides, normalize };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const gitSafetyPortableSettings = portableOverrideSettings(store);

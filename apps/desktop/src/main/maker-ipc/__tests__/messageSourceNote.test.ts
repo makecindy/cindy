@@ -45,6 +45,34 @@ describe('buildWireMessageSourceNote', () => {
       .toBe(buildWireMessageSourceNote({ origin }));
   });
 
+  // 2026-11-05: the body is the sender's own text. Only a hand-off the sending host checked
+  // speaks for the owner; a plain relay without that check is an ordinary task message.
+  it('speaks for the owner only for a checked plain hand-off', () => {
+    const origin = { ...taskOrigin, senderBotId: 'filo' };
+    const request = { sessionId: 's-1', clientId: 'u1', plainBody: true };
+    const checked = buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request',
+      request: { ...request, delegatedText: 'Fix #12 and merge it.' } } });
+    expect(checked).toContain('代表用户对本任务的请求');
+    expect(checked).not.toContain('用户原话');
+    expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request } }))
+      .toBe(buildWireMessageSourceNote({ origin }));
+    // The older owner mark alone does not make a plain relay speak for the owner.
+    expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request: { ...request, ownerVerified: true } } }))
+      .toBe(buildWireMessageSourceNote({ origin }));
+  });
+
+  // bot-group-chat.md「群里的 Cindy」: its note already says the speaker is this owner; the review
+  // receipt that carries the owner's words must not add a second, differently worded owner clause.
+  it('states a request to the group Cindy once, without the relay clause', () => {
+    const origin = { kind: 'session', senderSessionId: '', displayText: 'Fix it',
+      groupRequest: { groupId: 'g-1', groupName: 'Launch', speakerId: 'm-1', speakerName: 'Chris' } };
+    const note = buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request',
+      request: { sessionId: 's-1', clientId: 'group-cindy:e:1', plainBody: true, delegatedText: 'Fix it' } } });
+    expect(note).toBe(buildWireMessageSourceNote({ origin }));
+    expect(note).toContain('发言人就是本机主人');
+    expect(note).not.toContain('代表用户对本任务的请求');
+  });
+
   it('describes task, partner, plugin and shared-member senders with ids', () => {
     expect(buildWireMessageSourceNote({ origin: taskOrigin })).toBe(
       '[消息来源] 本条由任务「周报」(session_id: s-1) 发送，不是用户本人输入。',
@@ -123,6 +151,7 @@ describe('delivery-path wiring (source contract)', () => {
   const register = read('src/main/maker-ipc/register.ts');
   const coordinator = read('src/main/maker-ipc/agent-input-coordinator.ts');
   const transaction = read('src/main/maker-ipc/makerSendTransaction.ts');
+  const steer = read('src/main/maker-ipc/makerSteerTransaction.ts');
   const queue = read('src/shared/agentInputQueue.ts');
 
   const between = (source: string, start: string, end: string) => {
@@ -135,8 +164,8 @@ describe('delivery-path wiring (source contract)', () => {
 
   it('builds the note at exactly three final dispatch points, never in the queue', () => {
     expect(transaction.match(/buildWireMessageSourceNote\(/g)).toHaveLength(1);
-    // steerToAgentAccepted + sendUserMessageWithAwaitedGitBaseline.
-    expect(register.match(/buildWireMessageSourceNote\(/g)).toHaveLength(2);
+    expect(steer.match(/buildWireMessageSourceNote\(/g)).toHaveLength(1);
+    expect(register.match(/buildWireMessageSourceNote\(/g)).toHaveLength(1);
     expect(coordinator).not.toContain('buildWireMessageSourceNote');
     expect(queue).not.toMatch(/build(Wire)?MessageSourceNote|buildClientDeviceNote/);
     expect(between(queue, 'export function getAgentFacingText', '\n}\n')).not.toContain('source');
@@ -166,11 +195,7 @@ describe('delivery-path wiring (source contract)', () => {
   });
 
   it('steer prepends the source note from coordinator-transmitted fields', () => {
-    const steer = between(
-      register,
-      'const steerToAgentAccepted = async',
-      'const trustedDesktopSteerText',
-    );
+    expect(register).toContain('const steerToAgentAccepted = createMakerSteerTransaction(');
     expect(steer).toContain('origin: so.sourceOrigin');
     expect(steer).toContain('sourcePlugin: so.sourcePlugin');
     expect(steer).toContain('sharedTaskAuthor: so.sharedTaskAuthor');

@@ -217,7 +217,9 @@ export function RemoteKeySurface({
   renderOverlay,
   testID = "remoteDesktop.keys",
   resyncRef,
+  onKeyDown,
 }: {
+  onKeyDown?: (code: string) => void;
   platform: HostPlatform;
   enabled: boolean;
   allowInput(): boolean;
@@ -364,8 +366,14 @@ export function RemoteKeySurface({
   };
   const begin = (touch: string | number, rect: KeyRect) => {
     if (touches.current.has(touch)) return;
+    const alreadyPressed = [...touches.current.values()].some(
+      (held) => held.code === rect.code,
+    );
     touches.current.set(touch, rect);
-    if (rect.code && allowInput()) emit(input.press(touch, rect.code));
+    if (rect.code && allowInput()) {
+      emit(input.press(touch, rect.code));
+      if (!alreadyPressed) onKeyDown?.(rect.code);
+    }
     showPressed();
   };
   const finish = (touch: string | number, cancelled: boolean) => {

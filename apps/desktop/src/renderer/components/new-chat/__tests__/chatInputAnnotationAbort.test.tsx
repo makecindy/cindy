@@ -462,6 +462,40 @@ it.each(['recommendation', 'preview'] as const)('keeps %s visible while hovering
   }
 });
 
+// Remote recommendation regression (unit/jsdom): a late busy prop used to consume
+// an already received result. The store tests do not mount ChatInput's layout effect.
+it('shows the received recommendation again after a delayed busy projection clears', async () => {
+  const sessionId = 'remote-recommendation-delayed-busy';
+  const prompt = 'Continue with the remote result';
+  const view = renderComposer({ sessionId });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  vi.spyOn(makerChatStore, 'getPromptRecommendationCompletionStatus').mockReturnValue({
+    turnStoppedByUser: false, hasTerminalError: false, sideTask: false,
+    hasBackgroundAgentWork: false, hasAutoDrainingQueue: false,
+  });
+  try {
+    await act(async () => {
+      promptRecommendations.applyRunningSnapshot(new Map([[sessionId, { isRunning: true }]]));
+      promptRecommendations.noteTurnEnded(sessionId, 200);
+      promptRecommendations.applyRunningSnapshot(new Map());
+      promptRecommendations.settleCompletion(sessionId);
+      const seq = beginPromptRecommendationPrediction(sessionId, 200)!;
+      resolvePromptRecommendationPrediction(sessionId, 200, seq, prompt);
+    });
+    expect(screen.getByText(prompt)).toBeTruthy();
+    view.rerender(<ChatInput {...view.props} isAgentBusy />);
+    expect(screen.queryByText(prompt)).toBeNull();
+    view.rerender(<ChatInput {...view.props} isAgentBusy={false} />);
+    expect(screen.getByText(prompt)).toBeTruthy();
+    supplyRangeGeometry();
+    await act(async () => { fireEvent.keyDown(h.editor!.view.dom, { key: 'Tab' }); });
+    expect(h.editor!.getText()).toBe(prompt);
+    expect(promptRecommendations.getSessionSnapshot(sessionId)).toBeUndefined();
+  } finally {
+    clearPromptRecommendationSession(sessionId);
+  }
+});
+
 // #374 / voiceInputButtonAnchor: the real toolbar must keep the voice control
 // immediately beside the main action while listening, submitting, refining,
 // and returning to idle. A source-text guard could miss a misplaced rendered

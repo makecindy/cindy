@@ -243,7 +243,7 @@ export interface NormalizeContext {
  */
 export function replyContextOf(
   m: TgMessage,
-): { messageId: string; author: string; text: string; isBot?: boolean } | null {
+): { messageId: string; sentAt?: number; author: string; text: string; isBot?: boolean } | null {
   const replied = m.reply_to_message;
   if (!replied) return null;
   // 受保护群里被引用的原消息不进 prompt: 引用块会把原文原样带进模型上下文,
@@ -261,6 +261,7 @@ export function replyContextOf(
   }
   return {
     messageId: String(replied.message_id),
+    ...(replied.date ? { sentAt: replied.date * 1000 } : {}),
     author: displayNameOf(replied.from),
     text,
     ...(replied.from?.is_bot ? { isBot: true } : {}),
@@ -481,12 +482,12 @@ export const GROUP_HISTORY_FILE_MAX = 4;
  */
 export async function collectGroupHistoryMedia(
   messages: TgMessage[],
-  ctx: Pick<NormalizeContext, 'api' | 'media' | 'files' | 'stagedDiscards'>,
+  ctx: Pick<NormalizeContext, 'api' | 'media' | 'files' | 'stagedDiscards'> & { provided?: readonly IMAttachment[] },
 ): Promise<{ attachments: Array<IMAttachment & { author: string }>; unavailable: string[] }> {
   const picked: Array<IMAttachment & { author: string }> = [];
   const unavailable: string[] = [];
-  let images = 0;
-  let files = 0;
+  let images = ctx.provided?.filter((a) => a.kind === 'image').length ?? 0;
+  let files = ctx.provided?.filter((a) => a.kind !== 'image').length ?? 0;
   let overQuota = 0;
   for (const m of [...messages].reverse()) {
     const isImage = expectedAttachmentKind(m) === 'image';
@@ -496,7 +497,7 @@ export async function collectGroupHistoryMedia(
     }
     if (isImage) images++;
     else files++;
-    const author = displayNameOf(m.from);
+    const author = `${displayNameOf(m.from)} · 消息 ${m.message_id}`;
     const sink: IMAttachment[] = [];
     const failed: IMUnsupportedEntry[] = [];
     await collectMedia(m, { ...ctx, contextId: '', history: true }, sink, failed);

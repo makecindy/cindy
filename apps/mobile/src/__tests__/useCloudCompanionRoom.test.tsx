@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement } from 'react';
+import { act, createElement, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
@@ -34,7 +34,8 @@ const ROOM = '00000000-0000-4000-8000-0000000000aa';
 const MEDIA = '00000000-0000-4000-8000-0000000000bb';
 let root: Root;
 let result: ReturnType<typeof useCloudCompanionRoom>;
-function Probe() { result = useCloudCompanionRoom('actor', 'Writer', true); return null; }
+const messageChanges = vi.fn();
+function Probe() { result = useCloudCompanionRoom('actor', 'Writer', true); useEffect(() => { messageChanges(); }, [result.messages]); return null; }
 const render = () => act(async () => root.render(createElement(Probe)));
 beforeEach(async () => {
   setMobileAuthOwner(null); peekCloudConversation('actor'); await clearHistoryDisk(); setMobileAuthOwner('owner');
@@ -43,6 +44,31 @@ beforeEach(async () => {
   root = createRoot(document.createElement('div'));
 });
 afterEach(() => act(() => root.unmount()));
+
+// Unit: unchanged HTTP refreshes used to replace message arrays after every reopen.
+// Existing paging/reset cases asserted content, but did not protect stable layout inputs.
+it('reuses unchanged cloud messages and still applies edited content and history resets', async () => {
+  let text = 'original';
+  let revision = 'A';
+  h.history.mockImplementation(async () => ({ messages: [{ id: '1', seq: '1', content: [{ type: 'text', text }] }], before: null, historyRevision: revision }));
+  await render();
+  const first = result.messages;
+  messageChanges.mockClear();
+  for (let i = 0; i < 10; i++) await act(async () => { await result.reload(); });
+  expect(h.history).toHaveBeenCalledTimes(11);
+  expect(messageChanges).not.toHaveBeenCalled();
+  expect(result.messages).toBe(first);
+  text = 'edited';
+  await act(async () => { await result.reload(); });
+  expect(result.messages[0]?.content[0]?.text).toBe('edited');
+  revision = 'B';
+  await act(async () => { await result.reload(); });
+  expect(result.historyRevision).toBe('B');
+  h.history.mockRejectedValue({ status: 403 });
+  await act(async () => { await result.reload(); });
+  expect(result.status).toBe('error');
+  expect(result.messages).toEqual([]);
+});
 
 // Tier: behavior. An attachment address is signed per room, so it must be asked of the room this
 // hook resolved, and an answer that arrives after the account changed must not be shown.

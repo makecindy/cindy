@@ -198,6 +198,34 @@ describe('sessionActiveTurn', () => {
     expect(row!.last_turn_ended_at!).toBeGreaterThanOrEqual(row!.active_turn_started_at!);
   });
 
+  // Two real owner databases with the same task id expose late getDbClient()
+  // lookups. Neither a queued start nor a deferred completion may write B.
+  it('queued turn markers retain their database across an owner switch', async () => {
+    const { markSessionTurnStarted, markSessionTurnEndedAfterBarrier, drainSessionActiveTurnWrites } =
+      await import('../sessionActiveTurn.js');
+    const first = createTestDbClient();
+    const firstHandle = rawDb!;
+    await seedSession(first, 'same-id');
+    const second = createTestDbClient();
+    await seedSession(second, 'same-id');
+    let release!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    try {
+      setCurrentDbClient(first, 'first-user');
+      markSessionTurnStarted('same-id');
+      markSessionTurnEndedAfterBarrier('same-id', barrier);
+      setCurrentDbClient(second, 'second-user');
+      release();
+      await barrier;
+      await drainSessionActiveTurnWrites('same-id');
+      const other = await readMarks(second, 'same-id');
+      expect(other?.active_turn_started_at).toBeNull();
+      expect(other?.last_turn_ended_at).toBeNull();
+      expect((await readMarks(first, 'same-id'))?.active_turn_started_at).toBeTypeOf('number');
+      expect((await readMarks(first, 'same-id'))?.last_turn_ended_at).toBeTypeOf('number');
+    } finally { firstHandle.close(); }
+  });
+
   it('drains the queued turn markers before a completion reader uses them', async () => {
     const { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWrites } =
       await import('../sessionActiveTurn.js');

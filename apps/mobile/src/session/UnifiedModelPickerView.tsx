@@ -1,3 +1,4 @@
+import type { TextInputInstance } from 'react-native';
 import { ModelSpeedIcon } from "./ModelSpeedIcon";
 import { ModelQuotaBar } from "./ModelQuotaBar";
 import { ErrorNotice } from "@/components/ErrorNotice";
@@ -24,15 +25,7 @@ import {
   X,
   Zap,
 } from "lucide-react-native";
-import {
-  Pressable,
-  FlatList,
-  Platform,
-  StyleSheet,
-  View,
-  useWindowDimensions,
-  type TextInput as RNTextInput,
-} from "react-native";
+import { Pressable, FlatList, Platform, StyleSheet, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import { Text, TextInput } from "@/components/AppText";
@@ -74,10 +67,12 @@ type Page = "sources" | "harness" | null;
 /** 分组:可选小标题 + 行间 hairline(与 ContextSheetGroup 的安卓分组行同一套节奏)。 */
 function Group({
   title,
+  heading,
   children,
   testID,
 }: {
   title?: string;
+  heading?: ReactNode;
   children: ReactNode;
   testID?: string;
 }) {
@@ -85,7 +80,7 @@ function Group({
   const rows = flatten(children);
   return (
     <View style={styles.group} testID={testID}>
-      {title ? <Text style={styles.groupLabel}>{title}</Text> : null}
+      {heading ?? (title ? <Text style={styles.groupLabel}>{title}</Text> : null)}
       {rows.map((row, index) => (
         <View key={index}>
           {index > 0 ? <View style={styles.separator} /> : null}
@@ -111,6 +106,7 @@ function flatten(children: ReactNode): ReactNode[] {
 function Row({
   title,
   subtitle,
+  subtitleLines = 1,
   value,
   leading,
   trailing,
@@ -122,6 +118,7 @@ function Row({
 }: {
   title: string;
   subtitle?: string | null;
+  subtitleLines?: number;
   value?: string | null;
   leading?: ReactNode;
   trailing?: ReactNode;
@@ -156,7 +153,7 @@ function Row({
           {title}
         </Text>
         {subtitle ? (
-          <Text numberOfLines={1} style={styles.rowSubtitle}>
+          <Text numberOfLines={subtitleLines} style={styles.rowSubtitle}>
             {subtitle}
           </Text>
         ) : null}
@@ -195,7 +192,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   const [snap, setSnap] = useState<ContextSheetSnap>("half");
   const [page, setPage] = useState<Page>(null);
   const [effortExpanded, setEffortExpanded] = useState(false);
-  const searchRef = useRef<RNTextInput>(null);
+  const searchRef = useRef<TextInputInstance>(null);
   const modelListRef = useRef<FlatList>(null);
   const modelItems = useMemo(
     () =>
@@ -213,6 +210,34 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   useEffect(() => {
     modelListRef.current?.scrollToOffset({ offset: 0, animated: false });
   }, [p.query, p.filter]);
+  const initialScrollPending = useRef(true);
+  const initialScrollAttempts = useRef(0);
+  const initialScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selectedIndex = modelItems.findIndex(item => item.kind === "model" && item.row.selected);
+  const cancelInitialScroll = () => {
+    initialScrollPending.current = false;
+    if (initialScrollTimer.current !== null) clearTimeout(initialScrollTimer.current);
+    initialScrollTimer.current = null;
+  };
+  const scrollToSelected = () => {
+    if (!p.visible || !initialScrollPending.current || selectedIndex < 0 || !modelListRef.current) return;
+    initialScrollPending.current = false;
+    modelListRef.current.scrollToIndex({ index: selectedIndex, viewPosition: 0.5, animated: false });
+  };
+  useEffect(() => {
+    initialScrollPending.current = true;
+    initialScrollAttempts.current = 0;
+    return cancelInitialScroll;
+  }, [p.visible]);
+  useEffect(() => {
+    // The first frame lets the sheet and any freshly loaded model rows mount.
+    const frame = requestAnimationFrame(scrollToSelected);
+    return () => {
+      cancelAnimationFrame(frame);
+      if (initialScrollTimer.current !== null) clearTimeout(initialScrollTimer.current);
+      initialScrollTimer.current = null;
+    };
+  }, [p.visible, selectedIndex, p.filter]);
   // 与 iOS 同口径:重新打开或切换设置对象都回到主页。
   useEffect(() => {
     setPage(null);
@@ -274,7 +299,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
           accessibilityLabel={t("models.picker.searchAccessibility")}
           autoCapitalize="none"
           autoCorrect={false}
-          onChangeText={p.onQuery}
+          onChangeText={(value) => { cancelInitialScroll(); p.onQuery(value); }}
           // Android adjustResize:聚焦搜索时吸到 full,边输边看列表(与旧版模型浮窗同口径)。
           onFocus={() => setSnap("full")}
           placeholder={t("models.picker.searchPlaceholder")}
@@ -337,21 +362,26 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             item,
             item.id === "favorites" && p.filter === "favorites",
           )}
-          {item.quota ? (
+          {typeof item.quota?.remaining === 'number' ? (
             <ModelQuotaBar
               label={item.quota.label}
               remaining={item.quota.remaining}
               testID={`${p.testID}.source.${item.id}.quota`}
             />
           ) : null}
+          {item.quota?.members?.map((member, index) => typeof member.remaining === 'number' ?
+            <ModelQuotaBar key={index} label={member.label} remaining={member.remaining}
+              testID={`${p.testID}.source.${item.id}.quota.${index}`} /> : null)}
         </View>
       }
       onPress={() => {
+        cancelInitialScroll();
         p.onFilter(item.id);
         setPage(null);
       }}
       selected={p.filter === item.id}
       subtitle={item.quota?.label}
+      subtitleLines={item.quota?.members?.length ? 0 : 1}
       testID={`${p.testID}.source.${item.id}`}
       title={item.remote?.providerLabel ?? item.label}
     />
@@ -755,6 +785,23 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
     );
   };
 
+  const groupHeading = (group: UnifiedMobilePickerViewProps['groups'][number]) => (
+    <View style={styles.quotaHeading}>
+      <Text style={styles.groupLabel}>{group.title}</Text>
+      {group.quota?.summary && <Pressable hitSlop={8} accessibilityRole="button"
+        accessibilityLabel={[group.quota.summary, group.quota.resetSoon ? t('models.unified.quotaResetSoon') : null, group.quota.resetDescription].filter(Boolean).join(' · ')}
+        testID={`${p.testID}.group.${group.key}.quota`} onPress={() => setPage('sources')}
+        style={{flexShrink:1,flexDirection:'row',flexWrap:'wrap',justifyContent:'flex-end',alignItems:'center',gap:4}}>
+        <Text style={styles.quotaText}>{typeof group.quota.remaining === 'number' ? `${group.quota.remaining}%` : group.quota.summary}</Text>
+        {group.quota.reset && <View style={{flexDirection:'row',flexWrap:'wrap',alignItems:'center',gap:4}}>
+          <Text style={styles.quotaText}>· {group.quota.reset.remaining}%</Text>
+          {!!group.quota.resetParts?.[0] && <Text style={styles.quotaText}>{group.quota.resetParts[0]}</Text>}
+          <Text style={[styles.quotaText,group.quota.reset.level === 'crit' ? styles.quotaResetCrit : group.quota.reset.level === 'warn' ? styles.quotaResetWarn : null]}>{group.quota.reset.time}</Text>
+          {!!group.quota.resetParts?.[1] && <Text style={styles.quotaText}>{group.quota.resetParts[1]}</Text>}
+        </View>}
+      </Pressable>}
+    </View>
+  );
   const listPage =
     Platform.OS === "android" ? null : (
       <>
@@ -762,7 +809,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
           <Group
             key={group.key}
             testID={`${p.testID}.group.${group.key}`}
-            title={group.title}
+            heading={groupHeading(group)}
           >
             {group.rows.map(modelRow)}
           </Group>
@@ -810,13 +857,22 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                     {...scrollProps}
                     ref={modelListRef}
                     data={modelItems}
+                    onScrollBeginDrag={cancelInitialScroll}
+                    onContentSizeChange={scrollToSelected}
+                    onScrollToIndexFailed={({ index, averageItemLength }) => {
+                      if (++initialScrollAttempts.current > 5) return;
+                      initialScrollPending.current = true;
+                      modelListRef.current?.scrollToOffset({ offset: averageItemLength * index, animated: false });
+                      if (initialScrollTimer.current !== null) clearTimeout(initialScrollTimer.current);
+                      initialScrollTimer.current = setTimeout(scrollToSelected, 50);
+                    }}
                     keyExtractor={(item) => item.key}
                     initialNumToRender={8}
                     maxToRenderPerBatch={4}
                     windowSize={3}
                     removeClippedSubviews={false}
                     ListHeaderComponent={
-                      p.error ? <ErrorNotice message={p.error} /> : null
+                      (p.error ? <ErrorNotice message={p.error} /> : null) ?? undefined
                     }
                     ListEmptyComponent={
                       <Text style={styles.empty} testID={`${p.testID}.empty`}>
@@ -831,9 +887,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                           style={styles.group}
                           testID={`${p.testID}.group.${item.group.key}`}
                         >
-                          <Text style={styles.groupLabel}>
-                            {item.group.title}
-                          </Text>
+                          {groupHeading(item.group)}
                         </View>
                       ) : (
                         <View>
@@ -952,6 +1006,9 @@ function makeStyles(colors: ThemeColors) {
     group: {
       paddingTop: spacing.lg,
     },
+    quotaHeading: {
+      flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm,
+    },
     groupLabel: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
@@ -1037,6 +1094,8 @@ function makeStyles(colors: ThemeColors) {
       fontWeight: fontWeight.regular,
       lineHeight: lineHeight.caption,
     },
+    quotaResetWarn: { color: colors.quotaBarWarn },
+    quotaResetCrit: { color: colors.quotaBarCrit },
     quotaText: {
       color: colors.textTertiary,
       fontSize: typeScale.caption,

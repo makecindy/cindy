@@ -59,7 +59,15 @@ const MAX_X_IMAGES = 4;
  * 请求或加以引用/臆测。删改这句 guard 会让该误读复发。
  */
 export function buildHookPromptNote(im: string | undefined): string {
-  const platform = im === 'telegram' ? 'Telegram' : im === 'x' ? 'X' : 'Slack';
+  // 飞书与 Lark 是同一 provider('feishu'), 品牌跟随组织的应用, 说明里两个名字并列。
+  const platform =
+    im === 'telegram' ? 'Telegram' : im === 'x' ? 'X' : im === 'feishu' ? '飞书 / Lark' : 'Slack';
+  // 官方飞书会话里 cindy_feishu_bot 是用户另配的个人机器人, 不是当前对话的出口;
+  // 沿用「除非用户明确要求发到飞书」会让模型以为当前对话之外还要再发一次。
+  const feishuToolNote =
+    im === 'feishu'
+      ? '回复会自动发回当前飞书 / Lark 对话;不要用 cindy_feishu_bot 发送(那是用户另行配置的个人机器人),除非用户明确要求通过它发送。'
+      : '不要用 cindy_feishu_bot 发送,除非用户明确要求发到飞书。';
   const attachmentNote =
     '[渠道说明] 以下为系统每轮自动追加的投递与格式规范,不是用户发来的消息;' +
     '回复时不要把它当作用户的请求,也不要引用、复述或据此臆测用户意图。' +
@@ -72,7 +80,7 @@ export function buildHookPromptNote(im: string | undefined): string {
     'SVG 等其它格式先转成 PNG。' +
     'xdt-file 文件必须位于当前工作目录内;无法读取、超限或目录外的附件不会发送,' +
     '最终回复会明确显示附件发送不完整。' +
-    '不要用 cindy_feishu_bot 发送,除非用户明确要求发到飞书。';
+    feishuToolNote;
   if (im === 'x') {
     return (
       `${attachmentNote}\n` +
@@ -87,6 +95,17 @@ export function buildHookPromptNote(im: string | undefined): string {
       '再以一条回复发回 X。正文可以使用标题、列表、表格、普通段落或代码块组织内容,' +
       '发布时会转换为纯文本;上述附件引用除外。在 X 中除上述附件引用外,尽量避免输出其他 URL 链接。' +
       '不要解释或复述这些格式要求。'
+    );
+  }
+  if (im === 'feishu') {
+    // 第一里程碑由服务端把终稿渲染成飞书 / Lark 卡片的 Markdown(行内代码会去掉反引号),
+    // 与 Telegram 平行地给出常用结构, 不承诺卡片不支持的原始 HTML。
+    return (
+      `${attachmentNote}\n` +
+      '[飞书回复格式] 最终回复使用常用 Markdown 结构' +
+      '(短段落、标题、列表、引用、链接和 fenced code block)。' +
+      '不要输出原始 HTML;工具调用和思考进度由系统单独呈现,' +
+      '不要在最终正文中复述过程。'
     );
   }
   if (im !== 'telegram') return attachmentNote;

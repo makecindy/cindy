@@ -127,6 +127,8 @@ export function createGeminiImageChannel(opts: CreateGeminiImageChannelOptions):
     signal?: AbortSignal;
   }): Promise<ImageChannelResult> {
     const options = normalizeImageParameters('gemini', params.model, params);
+    const config = options.nativeParameters?.generationConfig as Record<string, unknown> | undefined;
+    const nativeImageConfig = config?.imageConfig as Record<string, unknown> | undefined;
     const apiKey = requireApiKey();
     const upstream = upstreamModelId(params.model);
     const parts: Array<Record<string, unknown>> = [{ text: params.prompt }];
@@ -137,12 +139,15 @@ export function createGeminiImageChannel(opts: CreateGeminiImageChannelOptions):
       parts.push({ inlineData: { mimeType: mime, data: bytes.toString('base64') } });
     }
     const body: Record<string, unknown> = {
+      ...options.nativeParameters,
       contents: [{ parts }],
       generationConfig: {
         responseModalities: ['TEXT', 'IMAGE'],
-        ...(options.aspectRatio || options.resolution ? { imageConfig: {
+        ...config,
+        ...(options.aspectRatio || options.resolution || nativeImageConfig ? { imageConfig: {
           ...(options.aspectRatio ? { aspectRatio: options.aspectRatio } : {}),
           ...(options.resolution ? { imageSize: options.resolution } : {}),
+          ...nativeImageConfig,
         } } : {}),
       },
     };

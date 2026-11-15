@@ -162,7 +162,7 @@ export function TaskListCell({
   } else if (s.status === 'paused') {
     subtitle = t('scheduler.cell.subtitlePaused');
   } else if (s.manual) {
-    subtitle = lastText ?? t('scheduler.cell.subtitleManual');
+    subtitle = lastText ?? (s.webhookTrigger ? t('scheduler.webhook.title') : t('scheduler.cell.subtitleManual'));
   } else if (!s.recurring) {
     subtitle = lastText ?? t('scheduler.cell.subtitleOnce');
   } else if (lastText && nextText) {
@@ -374,14 +374,14 @@ export function TaskListCell({
             {t('scheduler.projectAutomation.cell.tag')}
           </span>
         )}
-        {!isEditing && (s.manual || !s.recurring) && (
+        {!isEditing && (s.webhookTrigger || s.manual || !s.recurring) && (
           <span
             className={cn(
               'shrink-0 translate-x-[2px] rounded-full border px-2 py-[2px] text-11 font-medium leading-none',
               'border-[var(--cmd-palette-border)] text-[var(--cmd-palette-item-meta)]',
             )}
           >
-            {s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
+            {s.webhookTrigger ? t('scheduler.cell.tagWebhook') : s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
           </span>
         )}
       </div>

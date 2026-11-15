@@ -12,6 +12,7 @@ import {
   type WorkerProjectProbe,
 } from '../git-context/sessionDirResolver';
 import { gitExec } from '../worktree/gitExec';
+import { checkWorktreeSourceRef } from '../worktree/sourceRef';
 import * as WorktreeManager from '../worktree/WorktreeManager';
 import type {
   WorkerProjectContext,
@@ -250,14 +251,8 @@ export async function readWorkerProjectContext(
 }
 
 function validateWorktreeSource(sourceBranch: string | undefined): void {
-  if (
-    sourceBranch !== undefined &&
-    (typeof sourceBranch !== 'string' ||
-      !sourceBranch.trim() ||
-      sourceBranch.length > 1024 ||
-      sourceBranch.startsWith('-') ||
-      Array.from(sourceBranch).some((character) => character.charCodeAt(0) < 32))
-  ) {
+  if (sourceBranch === undefined) return;
+  if (!checkWorktreeSourceRef(sourceBranch).ok) {
     throw new Error('Worktree source_branch must be a valid branch or commit');
   }
 }

@@ -27,7 +27,7 @@ vi.mock('../../../shared/brandRegion.js', () => ({
     return mocks.region;
   },
 }));
-vi.mock('../../serverApiClient.js', () => ({
+vi.mock('../../serverApiClient.desktop.js', () => ({
   serverApiFetch: mocks.fetch,
   ServerApiError: class extends Error {
     constructor(public readonly code: string, public readonly statusCode: number, message: string) {
@@ -43,7 +43,7 @@ vi.mock('../../utils/ipcValidate.js', () => ({
 import { preparePluginShare } from '../sharing';
 import { isIpcErrorCode } from '../../../shared/ipc-errors';
 import { extractIpcError } from '../../../shared/ipcError';
-import { ServerApiError } from '../../serverApiClient';
+import { ServerApiError } from '../../serverApiClient.desktop';
 const pluginId = 'c123456789012345678901234';
 const shareId = 's'.repeat(32);
 const expiredError = new ServerApiError('TOKEN_EXPIRED', 401, 'Fixture token expired');

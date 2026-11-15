@@ -1,0 +1,10 @@
+   Compiling agent-net-sim v0.0.0 (<repo>\packages\agent-net-core\sim)
+    Finished `sim` profile [optimized] target(s) in 3.52s
+     Running unittests src\lib.rs (target\sim\deps\agent_net_sim-28fc3b8d8d11551d.exe)
+
+running 2 tests
+test link_tests::burst_calendar_is_independent_of_packet_count ... ok
+test fec::tests::any_three_losses_recover ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -7,9 +7,10 @@ import { Button } from '@/components/ui/button';
  * SessionCard — sidebar-card-mode 下的单条会话卡片（SessionItem 的瀑布流形态）
  * ---------------------------------------------------------------------------
  * 设计来源：用户 Claude design 稿（XDT-sidebar-redesign，xdtsb-card 系）。
- * 视觉：白底 Card + 1px Board 圆角 12；标题最多 2 行且保持纯文字，摘要 / 最近消息
- *   随内容最多 1~3 行；SessionStatusIcon（agent 标识 + running 呼吸 + attention
- *   状态点 + 草稿铅笔）、自动化 / 远程 / worktree 标识与时间统一放在底部 metadata 槽。
+ * 视觉：白底 Card + 1px Board 圆角 12；卡片等高：标题 1 行且保持纯文字（悬停跑马灯
+ *   展示全名，同列表行），摘要 / 最近消息固定占 2 行位（不足留空）；SessionStatusIcon
+ *   （agent 标识 + running 呼吸 + attention 状态点 + 草稿铅笔）、自动化 / 远程 / worktree
+ *   标识与时间统一放在底部 metadata 槽。
  *
  * 交互 100% 对齐 SessionItem（props 签名完全一致，sections 内按 cardMode 二选一渲染）：
  *   - 单击导航 / 双击重命名（标题原位变 input）
@@ -93,6 +94,7 @@ import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMar
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
 import { useCindyMakeActivity } from './useCindyMakeActivity';
+import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from './listRowStyle';
 import { CINDY_MAKE_SESSION_SOURCE } from '../../../../shared/cindyMakeSession';
 import {
   finishSessionDrag,
@@ -281,14 +283,6 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     : null;
   const listPreview = awaitingText ?? preparationText ?? runningDetail ?? bodyPreview;
   const cardPreview = awaitingText ?? preparationText ?? bodyPreview;
-  const usesPinnedCardSummary = variant === 'card' && isPinned && Boolean(session.summary);
-  const cardPreviewLineClamp = usesPinnedCardSummary
-    ? 3
-    : isRunning
-      ? 2
-      : isAutomationGenerated
-        ? 1
-        : 2;
   // 任务信息复选(C / C' 期):卡片右下角信息槽内容,与整理菜单同源共享状态。
   const { fields: taskInfoFields } = useTaskInfoFields();
   const cardPrRefs = usePrRefsForSession(session.id);
@@ -719,7 +713,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               // 把下方所有行整体推移,选中/取消时列表跳动(2026-08-12 用户反馈)。
               // inset shadow 画在盒内、不参与布局,行高与未选中时逐像素一致。
               isActive
-                ? 'bg-sidebar-item-active [--task-tag-ring-bg:hsl(var(--sidebar-item-active))] text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
+                ? cn(SIDEBAR_LIST_ROW_ACTIVE_CLASS, '[--task-tag-ring-bg:hsl(var(--sidebar-item-active))]')
                 : cn(
                     // 标签色球描边不随 hover 换色(同 SessionItem):半透明 hover 底
                     // 用作描边会透出色球本色,描边消失。
@@ -730,7 +724,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             )
           : cn(
               // 卡片:白底 + 描边 + 圆角。多列瀑布由 CardMasonry/DraggableCardColumns
-              // 负责分配列;卡片高度随标题/摘要自然变化。
+              // 负责分配列;卡片等高:标题 1 行 + 正文固定 2 行位 + meta 行。
               'rounded-xl bg-[var(--surface-elevated)] border',
               isActive
                 ? 'border-[var(--sidebar-item-active-border)] !bg-sidebar-item-active [--task-tag-ring-bg:hsl(var(--sidebar-item-active))] text-sidebar-item-active-foreground'
@@ -746,7 +740,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       {variant === 'list' ? (
         // ── list 变体:扁平 Telegram 风行 ── 第 1 行标题 + 右上角时间(hover 让位
         // 给 More/Archive 操作钮,逻辑同对话列表);下方最多 2 行预览。无卡片描边底色。
-        <div className="relative px-2.5 py-2">
+        <div className={cn('relative px-2.5 py-2', SIDEBAR_LIST_ROW_HEIGHT_CLASS)}>
           {/* 浅分割线:左右内缩(inset-x-2.5,短于圆角高亮方块、不触其圆角)。每行底部
               一条 → 覆盖"行间分割 + 列表底";首行额外补一条顶线 → 列表顶。本行高亮
               (active/选中/hover)时整条隐藏——不在圆角方块上/下方露出横线。 */}
@@ -973,7 +967,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
           )}
 
           {/* 卡片标题始终保留原来的流式盒子；编辑时只把原标题隐藏，并以绝对定位的
-            24px 输入框覆盖。这样一行 / 两行标题都维持原高度，也不会凭空多出状态图标。 */}
+            24px 输入框覆盖。这样标题行维持原高度，也不会凭空多出状态图标。 */}
           <div
             data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
             data-no-drag={splitDragHandleActive ? 'true' : undefined}
@@ -981,40 +975,52 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             className={cn(
               'relative flex items-start',
               // 右上操作钮浮在内容上方:浮出时标题行右侧让出操作钮宽度(两枚固定
-              // 24px 图标钮),标题让位、紧跟标题的标签色球不被盖住。让位条件与操作钮
+              // 24px 图标钮),标题让位:跑马灯在让出的宽度内带完全名,紧跟标题的
+              // 标签色球也不被盖住。让位条件与操作钮
               // 显隐同源(卡片 hover / 操作钮自身 focus-within / 菜单);卡片本身获得
               // 焦点时操作钮不显示,也不让位。确认胶囊宽度随语言变化,另由下方同款
               // 隐形占位按实际宽度让位。
               !navigationOnly &&
                 !isEditing &&
                 !archivePending &&
-                hasTitleMarks &&
                 (menuPos !== null
                   ? 'pr-14'
                   : 'group-hover/card:pr-14 peer-focus-within/card-actions:pr-14'),
             )}
           >
+            {/* 标题单行:与列表行同一个跑马灯,平时省略号,悬停卡片且溢出时横向带过全名。 */}
             <div
-              className={cn(
-                'min-w-0 text-12 font-semibold leading-[1.22] tracking-[-0.005em]',
-                '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden',
-                isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
-                isEditing && 'invisible',
-              )}
+              className={cn('min-w-0', isEditing && 'invisible')}
               style={{ textIndent: 0, paddingLeft: 0 }}
             >
-              {matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
-                ? highlightSegments(session.title, matchIndices, {
-                    highlightClassName: cn(
-                      'bg-transparent font-semibold',
-                      isActive
-                        ? 'text-[var(--sidebar-item-active-foreground)]'
-                        : 'text-[var(--msg-assistant-text)]',
-                    ),
-                  })
-                : displayTitle}
+              {/* 编辑时换成同字号的纯文本占位:跑马灯轨道自带 visibility:visible,
+                会穿透外层 invisible,从透明输入框下透出旧标题。 */}
+              {isEditing ? (
+                <span className="block truncate text-12 font-semibold leading-[1.22] tracking-[-0.005em]">
+                  {displayTitle}
+                </span>
+              ) : (
+                <SidebarTitleMarquee
+                  title={displayTitle}
+                  className={cn(
+                    'text-12 font-semibold leading-[1.22] tracking-[-0.005em]',
+                    isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
+                  )}
+                >
+                  {matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
+                    ? highlightSegments(session.title, matchIndices, {
+                        highlightClassName: cn(
+                          'bg-transparent font-semibold',
+                          isActive
+                            ? 'text-[var(--sidebar-item-active-foreground)]'
+                            : 'text-[var(--msg-assistant-text)]',
+                        ),
+                      })
+                    : displayTitle}
+                </SidebarTitleMarquee>
+              )}
             </div>
-            {/* 任务标签与「伙伴在跟进」常显、紧跟标题首行；标题两行截断时不被裁掉。 */}
+            {/* 任务标签与「伙伴在跟进」常显、紧跟标题；标题单行截断时不被裁掉。 */}
             {!isEditing && hasTitleMarks ? (
               <span className="flex h-[1.22em] shrink-0 items-center gap-1.5 text-12">
                 <TaskTagDots tags={session.tags} />
@@ -1023,7 +1029,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             ) : null}
             {/* 归档确认胶囊的隐形同款占位:与胶囊同文案同样式,按实际宽度让位。
                 外包零高度容器只取宽度,不撑高单行标题,确认态卡片高度与瀑布流不动。 */}
-            {!isEditing && canQuickArchive && archivePending && hasTitleMarks ? (
+            {!isEditing && canQuickArchive && archivePending ? (
               <span aria-hidden className="h-0 shrink-0 overflow-hidden">
                 <Button
                   variant="secondary"
@@ -1060,24 +1066,21 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
           </div>
 
           {/* 预览:等待交互文案优先,否则显示稳定任务总结 / 最近消息。图标全部下沉到底部 meta 行,
-            此处只放正文文字。 */}
-          {cardPreview && (
-            <p
-              data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
-              data-no-drag={splitDragHandleActive ? 'true' : undefined}
-              draggable={splitDragHandleActive}
-              className={cn(
-                'mt-[4px] text-11 leading-[1.4]',
-                '[display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden',
-                isActive
-                  ? 'text-[color-mix(in_srgb,currentColor_80%,transparent)]'
-                  : 'text-[var(--text-secondary)]',
-              )}
-              style={{ WebkitLineClamp: cardPreviewLineClamp }}
-            >
-              {cardPreview}
-            </p>
-          )}
+            此处只放正文文字。固定占 2 行高度(2 × leading 1.4 = 2.8em),不足 2 行或无正文时留空。 */}
+          <p
+            data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
+            data-no-drag={splitDragHandleActive ? 'true' : undefined}
+            draggable={splitDragHandleActive}
+            className={cn(
+              'mt-[4px] h-[2.8em] text-11 leading-[1.4]',
+              '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden',
+              isActive
+                ? 'text-[color-mix(in_srgb,currentColor_80%,transparent)]'
+                : 'text-[var(--text-secondary)]',
+            )}
+          >
+            {cardPreview}
+          </p>
 
           {/* 底部 meta 行(评审定稿):标题 / 正文之后另起整整一行。
             左侧图标簇——状态/agent 图标(含运行呼吸 + 需关注红点 + 草稿)、定时任务标识、

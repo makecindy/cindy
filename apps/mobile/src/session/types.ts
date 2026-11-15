@@ -1,3 +1,4 @@
+import type { OutputLimitDetails } from '@cindy/maker-shared';
 import type { MobileSessionAgentSwitchIntent } from '@cindy/maker-shared/device-link-contract';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import type { RemoteMoney } from '@/session/remoteMoney';
@@ -246,7 +247,7 @@ export interface QueuedRemoteMessage {
   userName?: string;
   /** Interface language of this phone. The desktop stamps it only for a remote turn. */
   uiLanguage?: string;
-  /** Classical output style chosen next to the language; used only with a classical uiLanguage. */
+  /** Classical output style chosen next to the language; used only with a Chinese uiLanguage. */
   classicalStyle?: string;
   createOpts: {
     agentKind: 'claude-code' | 'codex' | 'pi';
@@ -299,6 +300,7 @@ export interface InputProjection {
   errorReason?: string | null;
   /** Bounded details for tool-loop errors; older projections may omit them. */
   toolLoop?: MobileToolLoopErrorDetails | null;
+  outputLimit?: OutputLimitDetails | null;
   recovery?: unknown;
   errorRetryText: string | null;
   /** Explicit failed-turn continuation eligibility; absent on older hosts. */

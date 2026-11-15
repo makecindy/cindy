@@ -28,6 +28,8 @@ export interface TurnTokenDeltas {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreateTokens: number;
+  /** cacheCreateTokens 中按 1h TTL 写入的部分；缺省视为全部 5m 写入。 */
+  cacheCreate1hTokens?: number;
 }
 
 export interface TurnUsageSegment extends TurnTokenDeltas {
@@ -73,6 +75,11 @@ export function normalizeTurnUsageSegments(value: unknown): TurnUsageSegment[] {
     ) {
       segment.priceVariant = raw.priceVariant;
     }
+    const cacheCreate1hTokens = Math.min(
+      finiteNonNegative(raw.cacheCreate1hTokens),
+      segment.cacheCreateTokens,
+    );
+    if (cacheCreate1hTokens > 0) segment.cacheCreate1hTokens = cacheCreate1hTokens;
     if (costUsd > 0) segment.costUsd = costUsd;
     if (raw.complete === true || raw.complete === false) segment.complete = raw.complete;
     segments.push(segment);
@@ -181,6 +188,12 @@ export function computeGatewayTurnCost(
     band?.cacheCreatePerMtok ??
     tariff.cacheCreatePerMtok ??
     (priority && price.source === 'gateway' ? price.cacheCreatePerMtok : undefined);
+  // 1h TTL 写入有独立且更高的单价。报价未声明 1h 单价时
+  // （如 Gateway）沿用 5m 单价，不让本来可计价的轮次变成无价。
+  const cacheCreate1hPrice =
+    band?.cacheCreate1hPerMtok ?? tariff.cacheCreate1hPerMtok ?? cacheCreatePrice;
+  const cacheCreate1hTokens = Math.min(tokens.cacheCreate1hTokens ?? 0, tokens.cacheCreateTokens);
+  const cacheCreate5mTokens = tokens.cacheCreateTokens - cacheCreate1hTokens;
   if (
     (tokens.inputTokens > 0 && inputPrice === undefined) ||
     (tokens.outputTokens > 0 && outputPrice === undefined) ||
@@ -193,7 +206,8 @@ export function computeGatewayTurnCost(
     (tokens.inputTokens * (inputPrice ?? 0) +
       tokens.outputTokens * (outputPrice ?? 0) +
       tokens.cacheReadTokens * (cacheReadPrice ?? 0) +
-      tokens.cacheCreateTokens * (cacheCreatePrice ?? 0)) /
+      cacheCreate5mTokens * (cacheCreatePrice ?? 0) +
+      cacheCreate1hTokens * (cacheCreate1hPrice ?? 0)) /
     1_000_000
   );
 }

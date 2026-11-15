@@ -110,6 +110,7 @@ function makeHarness(
   recoveryStabilityMs = 30_000,
   platform: NodeJS.Platform = 'linux',
   leaveTimeoutMs = 2000,
+  prewarmWork?: boolean,
 ) {
   const windows: FakeWindow[] = [];
   const mainSender = { id: 100 } as WebContents;
@@ -125,6 +126,7 @@ function makeHarness(
     recoveryStabilityMs,
     leaveTimeoutMs,
     platform,
+    prewarmWork,
   });
   return { controller, windows, mainSender };
 }
@@ -138,16 +140,21 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe('ResourceUsageWindowController', () => {
-  it('keeps Windows prewarm sampling paused until the user explicitly opens the window', () => {
-    const { controller, windows, mainSender } = makeHarness(5000, 10_000, 30_000, 'win32');
+  it.each([
+    ['win32', undefined],
+    ['darwin', false],
+  ] as const)('keeps shell-only prewarm idle on %s until the user opens it', (platform, prewarmWork) => {
+    const { controller, windows, mainSender } = makeHarness(5000, 10_000, 30_000, platform, 2000, prewarmWork);
 
     controller.prewarm();
     expect(controller.allowsProcessMonitorSampling(windows[0]!.webContents)).toBe(false);
+    vi.advanceTimersByTime(10_000);
     expect(controller.markRendererReady(windows[0]!.webContents)).toBe(true);
     expect(windows[0]?.send).toHaveBeenLastCalledWith(
       RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
       false,
     );
+    expect(vi.getTimerCount()).toBe(0);
 
     windows[0]?.emitWebContents('did-start-loading');
     expect(windows[0]?.send).toHaveBeenLastCalledWith(
@@ -441,6 +448,7 @@ describe('ResourceUsageWindowController', () => {
   it('stops a hidden prewarm that cannot produce a presentation', () => {
     const { controller, windows } = makeHarness(5000, 1000);
     controller.prewarm();
+    controller.markRendererReady(windows[0]!.webContents);
 
     vi.advanceTimersByTime(999);
     expect(windows[0]?.send).not.toHaveBeenCalledWith(
@@ -459,6 +467,85 @@ describe('ResourceUsageWindowController', () => {
       RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
       false,
     );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Regression: a slow renderer used up the snapshot budget before subscribing, so
+  // its late ready handshake left prewarm paused until an explicit open. Existing coverage
+  // only exercised a timeout followed by an idle renderer. Unit tier: real controller
+  // entrypoints + fake time/windows; no Electron process, OS scans or user data.
+  // Single-file Vitest run: 1.65s (2026-11-10).
+  it.each([500, 1500])('gives the first renderer ready at %d ms one bounded snapshot attempt', (readyAt) => {
+    const { controller, windows, mainSender } = makeHarness(5000, 1000);
+    controller.prewarm();
+    const win = windows[0]!;
+    vi.advanceTimersByTime(readyAt);
+    controller.prewarm();
+    expect(windows).toHaveLength(1);
+
+    controller.markRendererReady(win.webContents);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(true);
+    vi.advanceTimersByTime(999);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(true);
+    expect(win.show).not.toHaveBeenCalled();
+    expect(win.focus).not.toHaveBeenCalled();
+
+    // A repeated ready must not extend the snapshot budget.
+    controller.markRendererReady(win.webContents);
+    vi.advanceTimersByTime(1);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(false);
+    controller.markRendererReady(win.webContents);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+
+    // A delayed snapshot may still populate the cache, but cannot show the window.
+    controller.markPresentationReady(win.webContents);
+    expect(win.show).not.toHaveBeenCalled();
+    controller.open(mainSender);
+    expect(win.show).toHaveBeenCalledOnce();
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(true);
+    controller.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['darwin', 'win32'] as const)('opens after prewarm timeout and reuses the window on %s', (platform) => {
+    const { controller, windows, mainSender } = makeHarness(5000, 1000, 30_000, platform);
+    controller.prewarm();
+    const win = windows[0]!;
+    vi.advanceTimersByTime(1000);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(false);
+
+    controller.open(mainSender);
+    controller.markRendererReady(win.webContents);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(true);
+    expect(win.show).not.toHaveBeenCalled();
+    controller.markPresentationReady(win.webContents);
+    expect(win.show).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+
+    controller.close(win.webContents);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(false);
+    controller.open(mainSender);
+    expect(windows).toHaveLength(1);
+    expect(win.show).toHaveBeenCalledTimes(2);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(true);
+    controller.dispose();
+    expect(win.destroy).toHaveBeenCalledOnce();
+    expect(controller.markRendererReady(win.webContents)).toBe(false);
+    expect(controller.markPresentationReady(win.webContents)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['close', 'hideWithOwner', 'minimize'] as const)('does not restart hidden work after %s cancels prewarm', (cancel) => {
+    const { controller, windows } = makeHarness(5000, 1000);
+    controller.prewarm();
+    const win = windows[0]!;
+    if (cancel === 'minimize') win.emitWindow('minimize');
+    else controller[cancel](win.webContents);
+    controller.markRendererReady(win.webContents);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    controller.dispose();
   });
 
   it('invalidates readiness across a renderer reload', () => {
@@ -927,6 +1014,8 @@ describe('ResourceUsageWindowController', () => {
     controller.prewarm();
 
     controller.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(10_000);
     controller.prewarm();
     controller.open(mainSender);
 

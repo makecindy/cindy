@@ -44,6 +44,8 @@ export interface DeviceLinkSettings {
   controlledBy: ActiveController[];
   /** 被撤销访问权限的控制端 deviceId 列表(逐设备黑名单)。 */
   revokedControllers: string[];
+  /** 单独关掉「用本机模型」的同账号电脑 deviceId 列表。 */
+  modelUseRevokedControllers: string[];
   /** 本机主动关闭控制的目标设备 deviceId 列表(控制端本地偏好)。 */
   disabledControlDeviceIds: string[];
   listError: string | null;
@@ -61,9 +63,13 @@ export interface DeviceLinkSettings {
   restore: (deviceId: string) => Promise<void>;
   /** 控制端本地偏好:是否允许本机主动控制某个目标设备。 */
   setDeviceControlEnabled: (deviceId: string, enabled: boolean) => Promise<void>;
+  /** 单独开关某台电脑的「用本机模型」。 */
+  setModelUse: (deviceId: string, allowed: boolean) => Promise<void>;
 }
 
 const POLL_INTERVAL_MS = 30_000;
+/** 删除被拒后补拉列表的最长等待:列表请求没有截止时间,不能让删除弹窗一直停在「删除中」。 */
+const REJECTED_DELETE_REFRESH_TIMEOUT_MS = 5_000;
 
 export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const { t } = useTranslation();
@@ -76,14 +82,24 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const [devices, setDevices] = useState<DeviceLinkDeviceView[] | null>(null);
   const [controlledBy, setControlledBy] = useState<ActiveController[]>([]);
   const [revokedControllers, setRevokedControllers] = useState<string[]>([]);
+  const [modelUseRevokedControllers, setModelUseRevokedControllers] = useState<string[]>([]);
   const [disabledControlDeviceIds, setDisabledControlDeviceIds] = useState<string[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const mounted = useRef(true);
   const refreshGeneration = useRef(0);
+  // 最近一次已返回（成功或失败）的刷新代次；与 refreshGeneration 不同说明还有刷新在途。
+  const settledRefreshGeneration = useRef(0);
   const disabledControlDeviceIdsRef = useRef<string[]>([]);
   // getState() 与 ownership push 可能乱序返回;事件版本推进后,旧快照不得覆盖新事实。
   const ownershipEventVersion = useRef(0);
+  const enabledEventVersion = useRef(0);
+  // 界面此刻展示的列表。删除被拒时要按它选提示:异步调用里读闭包的 devices 会拿到发起删除
+  // 那一刻的旧列表;ok 记录最近一次拉取是否成功(失败时界面显示错误块,不再显示设备行)。
+  const latestList = useRef<{ devices: DeviceLinkDeviceView[] | null; ok: boolean }>({
+    devices: null,
+    ok: false,
+  });
 
   const applyDisabledControlDeviceIds = useCallback((ids: string[]) => {
     disabledControlDeviceIdsRef.current = ids;
@@ -106,11 +122,15 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
       try {
         const { devices: list } = await window.electronAPI.deviceLink.listDevices();
         if (!mounted.current || generation !== refreshGeneration.current) return;
+        settledRefreshGeneration.current = generation;
+        latestList.current = { devices: list, ok: true };
         setDevices(list);
         setListError(null);
       } catch (err) {
         log.warn('listDevices failed', err);
         if (!mounted.current || generation !== refreshGeneration.current) return;
+        settledRefreshGeneration.current = generation;
+        latestList.current = { ...latestList.current, ok: false };
         const ipcErr = extractIpcError(err);
         setListError(
           ipcErr?.code === 'DEVICE_LINK_UNAVAILABLE'
@@ -137,6 +157,11 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
       setStandby(p.standby === true);
     });
     const ownershipVersionAtGetState = ownershipEventVersion.current;
+    const enabledVersionAtGetState = enabledEventVersion.current;
+    const offEnabled = window.electronAPI.deviceLink.onControlEnabledChanged?.((p) => {
+      enabledEventVersion.current++;
+      setEnabledState(p.remoteControlEnabled);
+    });
     let controllerRevision = 0;
     let disposed = false;
     const offControlled = window.electronAPI.deviceLink.onControlledState((p) => {
@@ -147,7 +172,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
       .getState()
       .then((s) => {
         if (disposed || !mounted.current) return;
-        setEnabledState(s.remoteControlEnabled);
+        if (enabledEventVersion.current === enabledVersionAtGetState) setEnabledState(s.remoteControlEnabled);
         setLinkStatus(s.linkStatus);
         setConnectionIssue(s.connectionIssue ?? null);
         if (ownershipEventVersion.current === ownershipVersionAtGetState) {
@@ -155,6 +180,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
         }
         if (controllerRevision === 0) setControlledBy(s.controlledBy ?? []);
         setRevokedControllers(s.revokedControllers ?? []);
+        setModelUseRevokedControllers(s.modelUseRevokedControllers ?? []);
         applyDisabledControlDeviceIds(s.disabledControlDeviceIds ?? []);
       })
       .catch((err) => log.warn('getState failed', err));
@@ -181,6 +207,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
       offStatus();
       offIssue();
       offOwnership();
+      offEnabled?.();
       offControlled();
       offControlTarget();
       clearInterval(timer);
@@ -190,6 +217,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const setEnabled = useCallback(
     async (next: boolean) => {
       const prev = enabled;
+      const version = ++enabledEventVersion.current;
       setEnabledState(next);
       try {
         await window.electronAPI.deviceLink.setEnabled(next);
@@ -198,7 +226,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
         );
       } catch (err) {
         log.warn('setEnabled failed', err);
-        setEnabledState(prev);
+        if (version === enabledEventVersion.current) setEnabledState(prev);
         toast.error(t('settings.devices.toast.toggleFailed'));
       }
     },
@@ -244,10 +272,49 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
       } catch (err) {
         log.warn('deleteDevice failed', err);
         const ipcErr = extractIpcError(err);
+        if (ipcErr?.code !== 'ALREADY_EXISTS') {
+          toast.error(t('settings.devices.toast.deleteFailed'));
+          return false;
+        }
+        // 服务端以「设备在线」拒绝删除，删除没有发生。先刷新一次列表与服务端对齐(最多等一会儿)，
+        // 再按此刻界面上的列表选提示：仍显示离线(含刷新超时、界面仍是原列表)说明两边的在线判断
+        // 不一致，不能再提示「尚不支持移除在线设备」让用户误以为设备真在线；显示在线或刷新失败
+        // (界面换成错误块、看不到设备行)时沿用原提示；列表里暂时没有这台设备时只报删除失败——
+        // 在线设备可能被单次列表偶发漏掉，没有服务端的删除确认就不能推断已删除。
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let timedOut = false;
+        const refreshing = refresh();
+        const rejectedRefreshGeneration = refreshGeneration.current;
+        await Promise.race([
+          refreshing,
+          new Promise<void>((resolve) => {
+            timer = setTimeout(() => {
+              timedOut = true;
+              resolve();
+            }, REJECTED_DELETE_REFRESH_TIMEOUT_MS);
+          }),
+        ]);
+        clearTimeout(timer);
+        // 超时后才返回的这次补拉作废：提示与返回值按此刻的列表给出，迟到结果不能再改动设备行，
+        // 否则保持打开的确认框会指向一个已经消失的设备。期间若已有更新的刷新发起，它不受影响；
+        // 它还没返回时列表的在线状态未定，提示不引用在线状态。
+        const newerPending =
+          timedOut &&
+          refreshGeneration.current !== rejectedRefreshGeneration &&
+          refreshGeneration.current !== settledRefreshGeneration.current;
+        if (timedOut && refreshGeneration.current === rejectedRefreshGeneration) {
+          refreshGeneration.current += 1;
+        }
+        const { devices: listed, ok } = latestList.current;
+        const target = ok ? listed?.find((device) => device.deviceId === deviceId) : undefined;
         toast.error(
-          ipcErr?.code === 'ALREADY_EXISTS'
-            ? t('settings.devices.toast.deleteOnline')
-            : t('settings.devices.toast.deleteFailed'),
+          t(
+            newerPending || (ok && listed && !target)
+              ? 'settings.devices.toast.deleteFailed'
+              : target && !target.online
+                ? 'settings.devices.toast.deleteRejectedWhileOffline'
+                : 'settings.devices.toast.deleteOnline',
+          ),
         );
         return false;
       }
@@ -297,6 +364,22 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     [revokedControllers, t],
   );
 
+  const setModelUse = useCallback(
+    async (deviceId: string, allowed: boolean) => {
+      const prev = modelUseRevokedControllers;
+      setModelUseRevokedControllers((r) => allowed ? r.filter((id) => id !== deviceId) : r.includes(deviceId) ? r : [...r, deviceId]);
+      try {
+        await window.electronAPI.deviceLink.setModelUse(deviceId, allowed);
+        toast.success(t(allowed ? 'settings.remoteControl.toast.modelUseRestored' : 'settings.remoteControl.toast.modelUseRevoked'));
+      } catch (err) {
+        log.warn('setModelUse failed', err);
+        setModelUseRevokedControllers(prev);
+        toast.error(t('settings.remoteControl.toast.modelUseFailed'));
+      }
+    },
+    [modelUseRevokedControllers, t],
+  );
+
   const setDeviceControlEnabled = useCallback(
     async (deviceId: string, next: boolean) => {
       const prev = disabledControlDeviceIdsRef.current;
@@ -341,6 +424,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     devices,
     controlledBy,
     revokedControllers,
+    modelUseRevokedControllers,
     disabledControlDeviceIds,
     listError,
     refreshing,
@@ -352,5 +436,6 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     revoke,
     restore,
     setDeviceControlEnabled,
+    setModelUse,
   };
 }

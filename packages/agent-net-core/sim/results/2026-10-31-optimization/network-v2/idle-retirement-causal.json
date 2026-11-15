@@ -1,0 +1,14 @@
+{
+  "model": "independent-burst-calendar-v2",
+  "removed_in_before": "self.retire_repaired_idle_packets(now_us);",
+  "records": [
+    {
+      "stage": "before",
+      "exit": 0
+    },
+    {
+      "stage": "after",
+      "exit": 0
+    }
+  ]
+}

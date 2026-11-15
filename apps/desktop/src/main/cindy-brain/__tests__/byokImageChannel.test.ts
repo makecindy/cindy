@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import fs from 'node:fs/promises';
 
 import { describe, expect, it, vi } from 'vitest';
 import { isOrganizationManagedProvider, type Provider } from '@cindy/model-providers';
@@ -123,6 +124,28 @@ describe('registerByokImageChannels', () => {
 });
 
 describe('createByokImageChannel', () => {
+  // #8673 / unit: organization adapters must not discard native fields before
+  // the shared serializer; previous coverage only checked size/quality.
+  it('carries native options through organization generation and editing', async () => {
+    const doFetch = fetchMock();
+    const channel = createByokImageChannel({ getApiKey: () => 'invalid-test-key', getBaseUrl: () => ORIGIN,
+      getSupportsEdit: () => true, fetchImplementation: doFetch as typeof fetch });
+    const nativeParameters = { seed: 0, background: 'transparent' };
+    const params = { model: MODEL, prompt: 'p', nativeParameters };
+    await channel.generateImage(params);
+    const readFile = vi.spyOn(fs, 'readFile').mockResolvedValue(Buffer.from('reference'));
+    try {
+      await channel.editImage({ ...params, imagePaths: ['/test/reference.png'] });
+    } finally {
+      readFile.mockRestore();
+    }
+    expect(JSON.parse(String(doFetch.mock.calls[0]?.[1]?.body))).toMatchObject(nativeParameters);
+    const form = doFetch.mock.calls[1]?.[1]?.body as FormData;
+    expect(form.get('seed')).toBe('0');
+    expect(form.get('background')).toBe('transparent');
+    expect(form.get('model')).toBe(MODEL);
+  });
+
   it('does not dispatch through a captured channel after its member key is revoked', async () => {
     const doFetch = fetchMock();
     let key: string | null = 'invalid-test-member-key';
@@ -333,7 +356,8 @@ describe('Art BYOK image channel host wiring', () => {
     expect(body).toContain('registerByokImageChannels');
     expect(body).toContain("readByokCredential(providerId, 'image')");
     expect(body).toContain('readByokInferenceBase(providerId)');
-    expect(body).toContain("registry.register('xd'");
+    // XD requests now use the Server operation through Core, without a second channel.
+    expect(body).not.toContain("registry.register('xd'");
     expect(body).toContain("registry.register('openai'");
     expect(body).toMatch(/registry\.register\(\s*'gemini'/);
     expect(body).toMatch(/registry\.register\(\s*'xai'/);

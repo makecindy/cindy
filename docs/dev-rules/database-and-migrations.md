@@ -81,6 +81,17 @@ pnpm --filter desktop test:migration-replay
 companion CommonJS 格式和历史 runtime identity 冻结；不能用单独 typecheck 代替。回放测试
 验证空库与历史 fixture 能实际升级到 HEAD；高风险历史兼容改动应补对应 fixture。
 
+CI 在 `windows-runner-checks` 中按相关路径运行完整 `migration` tier 与核心 DB 回归
+（迁移兼容、schema 租约与漂移、连接初始化），复用 Windows 的原生 SQLite、LFS
+sqlite-vec 与依赖准备。普通数据库源码变化（含 `db` tier 测试直接 import 的 localDb 外源码，如
+`git-context/prRefsStore.ts`）再按 Vitest import graph 选择既有 `db`
+tier 中的相关测试；删除源码、fixture 变化或无法确定事件基准时回退完整 DB 层。
+无关改动不执行这两层，严格性能计时仍留在 `db-perf`。路径和事件基准判定见
+`scripts/ci-database-tests.mjs`，涵盖 PR、merge queue 与 main push。执行入口拒绝
+不支持的平台，并校验 migration replay 报告确有通过用例、没有跳过。
+该步骤沿用 `Windows unit tests` 汇总门禁，静态 `db:validate`、既有伴侣 DB 回归
+与 guard 保持各自覆盖。回放只使用临时数据库，不读取用户 profile。
+
 ## Companion script
 
 - 路径和 basename 必须与 SQL 对齐：`drizzle/scripts/NNNN_name.ts` 对应
@@ -155,6 +166,20 @@ WAL 或聊天数据。生产入口、发布中断与竞争回归见 `schemaMigra
   worker、migration runner、漂移修复都经由 `createBetterSqliteDatabase` /
   `createWorkerDatabase` 注册。分词规格冻结在 `cjkSeg.ts`（只收
   `\p{Script=Han}`）；改这个函数必须配新的重建 migration。
+
+### 启动时的依赖就绪
+
+认证可用不代表 `DbClient` 已接管。主窗常驻角标与项目自动化通知桥跟随
+`LocalDbGate` 的账号代次就绪状态挂载／查询；自动化 IPC 提前注册，项目加载器和目标
+控制器尚未可用时分别等待 scheduler 和 Goal 的 30 秒 readiness 信号，等待期间切账号的请求拒绝继续。
+自定义 MCP 的首轮读取在无 DB 时延后，由已有 account-provider readiness 流程补刷。
+
+历史插件卡片的改名修复在 `localDb.onReady` 取得当前 owner 的 client 后等待完成，
+再放行历史读取；成功写入才记录完成日志。更新仅命中旧 id、可重复执行，失败进入已有
+ensure-ready 重试流程，不凭插件播种完成或之后没有警告推断数据已迁移。
+保存点清理随已有 worktree maintenance 就绪点执行，避免启动时查询失败后整轮丢失。
+实现见 `bootstrap-electron.ts`、`cindy-brain/cardStoreDb.ts`；回归见
+`cardStoreDb.test.ts`、`scheduleReadiness.test.ts`、`AppWindowSync.test.tsx`。
 
 ## SQLite 语义避坑清单
 

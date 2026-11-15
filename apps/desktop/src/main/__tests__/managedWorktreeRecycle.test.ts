@@ -13,6 +13,7 @@ const query = vi.hoisted(() => vi.fn());
 const git = vi.hoisted(() => vi.fn());
 
 vi.mock('electron', () => ({ app: { getPath: (name: string) => name === 'appData' ? path.join(state.root, 'app-data') : (state.userData || state.root) } }));
+vi.mock('../userDataPath', () => ({ getUserDataDir: () => state.userData || state.root, getAppDataDir: () => path.join(state.root, 'app-data') }));
 vi.mock('../worktree/worktreeStore', () => ({
   get: (id: string) => state.registry.get(id) ?? null,
   getAll: () => [...state.registry.values()], getAllPaths: () => [...state.registry.values()].map((m) => m.path),

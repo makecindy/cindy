@@ -7,7 +7,7 @@ import {
   type Rectangle,
 } from 'electron';
 import { createLogger } from '../logger';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 import { resolveAppThemeIsDark } from '../resolved-app-theme';
 import { readWindowThemeSnapshot } from '../window-theme-mode-store';
 import { escapeHtml } from './privacyScreenHtml';

@@ -6,11 +6,11 @@
  * 只服务图片时留下的欠账(本文件头注释当年写着"视频 Range 待补")。
  *
  * 模式与 xdt-video / xdt-audio 的手动 206 同款(scheme privilege 保持
- * stream:false);Range 解析复用 audioFileProtocol.parseRangeHeader(纯函数,
+ * stream:false);Range 解析复用 httpRange.parseRangeHeader(纯函数,
  * 已有测试),不再抄第三份。图片请求不带 Range 头 → 原样走 200 分支,行为不变。
  */
 
-import { parseRangeHeader } from '../audioFileProtocol.js';
+import { parseRangeHeader } from '../httpRange.js';
 import type { FileHandle } from 'node:fs/promises';
 import { addAbortSignal, Readable } from 'node:stream';
 

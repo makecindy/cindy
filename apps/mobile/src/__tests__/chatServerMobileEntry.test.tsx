@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement } from 'react';
+import { act, createElement, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
@@ -34,7 +34,7 @@ vi.mock('expo-router', async () => { const { useEffect } = await import('react')
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
 vi.mock('@/i18n', () => ({ default: { t: (key: string) => key } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
-vi.mock('@/config/env', () => ({ getActiveMobileSessionRealm: () => 'global', getMobileEndpointForRealm: () => 'https://chat.example.invalid', loadMobileEndpointsForRealm: vi.fn() }));
+vi.mock('@/config/env', () => ({ BUILD_AUTH_REGION: 'global', getActiveMobileSessionRealm: () => 'global', getMobileEndpointForRealm: () => 'https://chat.example.invalid', loadMobileEndpointsForRealm: vi.fn() }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
 vi.mock('@/device-link/revokedDevicesStore', () => ({ useRevokedDevices: () => new Set() }));
 vi.mock('@/session/useRemoteResourceList', () => ({ useRemoteResourceList: () => h.legacy }));
@@ -63,7 +63,8 @@ let roster: ReturnType<typeof useBotGroupRoster>;
 let chat: ReturnType<typeof useBotGroupChat>;
 let showChat = false;
 let threadRootId: string | undefined;
-function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useBotGroupChat(host, showChat ? id : '', threadRootId); return null; }
+const timelineChanges = vi.fn();
+function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useBotGroupChat(host, showChat ? id : '', threadRootId); useEffect(() => { timelineChanges(); }, [chat.state]); return null; }
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
 async function send(input: Record<string, unknown>) {
   await chat.act('send', input);
@@ -97,6 +98,21 @@ beforeEach(async () => {
   });
 });
 // Regression: entering a saved group must not depend on Chat Server latency.
+// Unit: exercise the direct Chat Server path too; the remote-computer hook alone
+// cannot protect against identical load + thread-hydration snapshots rebuilding rows.
+it('keeps an unchanged direct group timeline stable across refresh and thread hydration', async () => {
+  showChat = true; await render();
+  const first = chat.state;
+  timelineChanges.mockClear();
+  for (let i = 0; i < 10; i++) await act(async () => { chat.reload(); });
+  expect(timelineChanges).not.toHaveBeenCalled();
+  expect(chat.state).toBe(first);
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Fixture message' }] } });
+  h.auth.apiFetch.mockRejectedValue({ status: 403 });
+  await act(async () => { chat.reload(); });
+  expect(chat.state.kind).toBe('missing');
+});
+
 // Integration tier: real hook, real disk store, controlled native IO / HTTP.
 it('reopens saved history offline from memory and disk, and purges it after membership loss', async () => {
   setMobileAuthOwner('owner'); showChat = true; await render();
@@ -134,6 +150,25 @@ afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllGlob
 // #5759, unit: exercise the actual direct hook/client, not the remote-resource
 // mock. A human-signed proposal previously rendered as text and rejected plan-start.
 // The blur cases retain the original group in the navigation stack while its snapshot is pending.
+it('sends a future skip from the mobile hook without requiring a nonexistent execution', async () => {
+  const planId = '00000000-0000-4000-8000-000000000040';
+  const plan = { id: planId, revision: 2, creator_id: self, organizer_id: self, source_message_id: self,
+    request_text: 'Talk', kind: 'talk', status: 'running', current_step: 0, supportsPendingSkip: true,
+    activeExecution: { id: self, status: 'running' }, created_at: '2026-10-09', updated_at: '2026-10-09',
+    steps: [0, 1].map(position => ({ position, botId: self, botName: 'Bot', task: '', status: position === 0 ? 'running' : 'pending' })) };
+  const writes: unknown[] = [];
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.includes('/plans') && options.method === 'POST') { writes.push(options.body); return { ok: true }; }
+    if (path.includes('/plans')) return [plan];
+    return original(path, options);
+  });
+  showChat = true; await render();
+  await act(async () => { await chat.act('plan-edit', { planId, expectedRevision: 2, action: 'skip', position: 1 }); });
+  expect(writes).toEqual([expect.objectContaining({ expectedRevision: 2, action: 'skip', position: 1 })]);
+  expect(writes[0]).not.toHaveProperty('executionId');
+});
+
 it.each(['receipt', 'leave', 'unmount', 'blur', 'refocus', 'blur-before-submit'])('handles a direct plan action across %s without a duplicate or stale write', async transition => {
   const planId = '00000000-0000-4000-8000-000000000040';
   let plan = { id: planId, revision: 2, creator_id: self, organizer_id: self, source_message_id: self,
@@ -356,15 +391,22 @@ it('keeps the account owner label when quoting from a direct phone entry', async
     mentions: [botId], content: [expect.objectContaining({ data: expect.objectContaining({ authorName: 'Companion X (Account B)' }) }), { type: 'text', text: 'Agreed' }],
   }) }));
 });
-it.each(['', 'look at this'])('uploads and sends direct media with all computers offline, text=%s', async text => {
+// Integration: useBotGroupChat -> upload -> durable outbox -> real HTTP serializer.
+// Topic attachment parity: existing media cases only covered the main timeline;
+// an attachment-only topic reply must retain its root in the eventual POST.
+it.each([
+  { text: '', topic: false }, { text: 'look at this', topic: false },
+  { text: '', topic: true }, { text: 'look at this', topic: true },
+])('uploads and sends direct media with all computers offline, text=$text topic=$topic', async ({ text, topic }) => {
   const mediaId = '00000000-0000-4000-8000-000000000003';
   const original = h.auth.apiFetch.getMockImplementation()!;
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     if (path.endsWith('/media')) return { id: mediaId, uploadUrl: 'https://upload.example.invalid/signed' };
     if (path.endsWith('/complete')) return {};
+    if (path.endsWith(`/messages/${self}`)) return (await original(`/v1/conversations/${id}/messages?limit=100`, options))[0];
     return original(path, options);
   });
-  showChat = true; await render();
+  showChat = true; threadRootId = topic ? self : undefined; await render();
   expect(chat.state).toMatchObject({ kind: 'ready', group: { supportsAttachments: true } });
   const attachment = await chat.uploadAttachment!({ name: 'photo.jpg', mimeType: 'image/jpeg', size: 42 }, 'file:///photo', { token: 'fixture' });
   const input = { clientId: 'same-media-send', text, mentions: { all: false, botIds: [] }, attachments: [attachment] };
@@ -372,6 +414,7 @@ it.each(['', 'look at this'])('uploads and sends direct media with all computers
   const posts = h.auth.apiFetch.mock.calls.filter(([path]) => path.endsWith('/messages'));
   expect(posts).toHaveLength(1);
   expect(posts[0][1].body).toEqual({ operationId: 'same-media-send', mentions: [],
+    ...(topic ? { threadRootId: self } : {}),
     content: [...(text ? [{ type: 'text', text }] : []), { type: 'media', mediaId, caption: 'photo.jpg' }] });
   expect(h.put).toHaveBeenCalledWith('https://upload.example.invalid/signed', 'file:///photo', 'image/jpeg', {},
     { signal: undefined, signedHeaders: { 'Content-Type': 'image/jpeg' } });
@@ -909,13 +952,16 @@ it.each(['missing', 'empty', 'read-error'] as const)('keeps initial loading corr
 
 // Integration: the actual ledger and HTTP adapter survive a process restart after
 // a committed POST loses its response. Existing direct-send tests cannot cover it.
-it.each([false, true])('persists the exact uncertain send across restart and never rebuilds its recipients (media=%s)', async withMedia => {
+it.each([
+  { withMedia: false, topic: false }, { withMedia: true, topic: false }, { withMedia: true, topic: true },
+])('persists the exact uncertain send across restart and never rebuilds its recipients (media=$withMedia topic=$topic)', async ({ withMedia, topic }) => {
   const storage = { getAllKeys: async () => [...h.disk.keys()], getItem: async (key: string) => h.disk.get(key) ?? null,
     setItem: async (key: string, value: string) => { h.disk.set(key, value); }, removeItem: async (key: string) => { h.disk.delete(key); } };
   const account = getMobileAuthOwner().accountKey;
   let store = createDurableOutbox(storage); await store.activate(account);
   const attachments = withMedia ? [{ id, name: 'report.pdf', path: '', ext: 'pdf', size: 42, mimeType: 'application/pdf', category: 'file' as const }] : [];
-  await enqueueChatMessage(store, account, id, { clientId: 'lost-response', text: 'saved offline', mentions: { all: true, botIds: [] }, attachments }, 1);
+  await enqueueChatMessage(store, account, id, { clientId: 'lost-response', text: 'saved offline', mentions: { all: true, botIds: [] }, attachments,
+    ...(topic ? { threadRootId: self } : {}) }, 1);
   expect(store.getSnapshot()[0]).toMatchObject({ state: 'queued', item: { text: 'saved offline' } });
   const posted: unknown[] = [];
   let memberReads = 0;
@@ -929,6 +975,7 @@ it.each([false, true])('persists the exact uncertain send across restart and nev
   await delivery().run();
   expect(store.getSnapshot()[0]).toMatchObject({ state: 'queued', enqueueStarted: true, chat: { body: { operationId: 'lost-response', mentions: [id] } } });
   expect(posted[0]).toMatchObject({ content: [{ type: 'text', text: 'saved offline' }, ...(withMedia ? [{ type: 'media', mediaId: id, caption: 'report.pdf' }] : [])] });
+  expect((posted[0] as { threadRootId?: string }).threadRootId).toBe(topic ? self : undefined);
   store = createDurableOutbox(storage); await store.activate(account);
   expect(store.getSnapshot()[0].chat?.input.attachments).toEqual(attachments);
   await delivery().run();

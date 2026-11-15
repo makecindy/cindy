@@ -8,9 +8,10 @@
 import type { ModelAccessBalance, ModelAccessCreditUsage } from './modelAccess';
 
 export const BILLING_SUPPORT_EMAIL = 'xd-billing@xd.com';
+export const BILLING_FEEDBACK_EMAIL = 'feedback@cindy.app';
 
 /**
- * Validates the only mailto URL that Desktop may hand to the system shell.
+ * Validates mailto URLs for the fixed billing and feedback inboxes.
  * Subject/body are display data from the renderer; recipient-affecting headers
  * must stay outside this capability boundary.
  */
@@ -18,6 +19,7 @@ export function isAllowedBillingMailto(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   try {
     const parsed = new URL(value);
+    const recipient = decodeURIComponent(parsed.pathname).toLowerCase();
     const queryKeys = [...parsed.searchParams.keys()];
     const hasDuplicateQueryKey = new Set(queryKeys).size !== queryKeys.length;
     const subject = parsed.searchParams.get('subject');
@@ -25,7 +27,7 @@ export function isAllowedBillingMailto(value: unknown): value is string {
       subject !== null && /[\u0000-\u001f\u007f-\u009f]/u.test(subject);
     return (
       parsed.protocol === 'mailto:' &&
-      decodeURIComponent(parsed.pathname).toLowerCase() === BILLING_SUPPORT_EMAIL &&
+      (recipient === BILLING_SUPPORT_EMAIL || recipient === BILLING_FEEDBACK_EMAIL) &&
       !parsed.username &&
       !parsed.password &&
       !parsed.host &&
@@ -55,6 +57,7 @@ export const BILLING_INVOKE = {
   GET_CREDIT_USAGE: 'billing:get-credit-usage',
   GET_CATALOG: 'billing:get-catalog',
   LIST_ORDERS: 'billing:list-orders',
+  LIST_PAYMENT_HISTORY: 'billing:list-payment-history',
   GET_ORDER: 'billing:get-order',
   CREATE_TOPUP: 'billing:create-topup',
   REFRESH_TOPUP: 'billing:refresh-topup',
@@ -252,6 +255,35 @@ export type BillingOrderList = {
   nextCursor: string | null;
 };
 
+/** Settled payment facts; independent of checkout, contract and fulfillment state. */
+export type BillingPaymentHistoryRecord = {
+  recordId: string;
+  sourceType: 'CREDIT_TOPUP' | 'SUBSCRIPTION_INVOICE';
+  sourceId: string;
+  subscriptionId: string | null;
+  productName: string | null;
+  billingReason: string | null;
+  amountPaidMinor: number | null;
+  amount: string | null;
+  currency: string;
+  provider: string | null;
+  providerTransactionId: string | null;
+  paidAt: string | null;
+  createdAt: string;
+  periodStartAt: string | null;
+  periodEndAt: string | null;
+  refundSummary: {
+    status: 'UNREFUNDED' | 'PARTIALLY_REFUNDED' | 'REFUNDED' | null;
+    refundedMinor: number;
+    refundedAmount: string;
+  };
+};
+
+export type BillingPaymentHistory = {
+  records: BillingPaymentHistoryRecord[];
+  nextCursor: string | null;
+};
+
 export type BillingCurrentSubscription = {
   subscription: BillingSubscription | null;
 };
@@ -272,6 +304,7 @@ export interface BillingRendererApi {
   getCreditUsage: () => Promise<ModelAccessCreditUsage>;
   getCatalog: () => Promise<BillingCatalog>;
   listOrders: (payload: { limit: number }) => Promise<BillingOrderList>;
+  listPaymentHistory: (payload: { limit: number; cursor?: string }) => Promise<BillingPaymentHistory>;
   getOrder: (payload: { orderId: string }) => Promise<BillingPaymentOrder>;
   createTopup: (payload: {
     request: CreateBillingTopupRequest;

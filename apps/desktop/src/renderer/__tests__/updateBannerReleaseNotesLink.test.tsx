@@ -139,6 +139,19 @@ describe('UpdateBanner release-notes link', () => {
     expect(fetchReleaseNotes).toHaveBeenCalledTimes(1);
   });
 
+  // 同版本补丁只会是 Rosetta 下的 Intel 包换装 Apple 芯片包：标题不能说「已更新到当前版本」，
+  // 也没有新的更新公告可看。
+  it('describes a same-version patch as the Apple silicon switch without probing notes', async () => {
+    Object.assign(window.electronAPI, { appVersion: '1.4.2' });
+    render(<UpdateBanner isCollapsed={false} onOpenVersionNotice={vi.fn()} />);
+
+    expect(await screen.findByText('update.banner.nativeBuildTitle')).toBeTruthy();
+    expect(screen.getByText('update.banner.nativeBuildSubtitle')).toBeTruthy();
+    expect(screen.queryByText('update.banner.title:1.4.2')).toBeNull();
+    expect(fetchReleaseNotes).not.toHaveBeenCalled();
+    expect(screen.queryByText(LINK)).toBeNull();
+  });
+
   it('renders no link when the host provides no open-notice callback', async () => {
     render(<UpdateBanner isCollapsed={false} />);
 

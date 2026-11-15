@@ -101,6 +101,7 @@ export async function startAskCardDictation(input: {
     connectionProvider: (providerId) => voiceContext.createAsrConnection(providerId),
     refinerTargetProvider: (providerId, options) => voiceContext.createRefinerTarget(providerId, options),
     warmRefiner: (request) => voiceContext.warmRefiner(request),
+    refineRequestBudget: () => voiceContext.refineRequestBudget(),
     initialDraft,
     initialSelection: input.getSelection(),
     readCurrentDraft: input.getText,

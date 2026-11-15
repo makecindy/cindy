@@ -7,6 +7,7 @@ import {
   BotModelSelectionRequiredError,
   duplicateBotProfile,
   getBotProfiles,
+  ensureBotProfilesLoaded,
   removeBotProfile,
   setCanonicalBotSession,
   setBotHidden,
@@ -19,6 +20,8 @@ import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataO
 import { getPersistedVendorModel } from '@/state/newMakerDraft';
 import { readCachedBotWelcomeContext } from '../botWelcomeContext';
 import { createIpcError } from '../../../../shared/ipc-errors';
+import { getBotLastReadAt, markBotRead, resetBotReadStateForTests, startBotReadStateSync, getBotReadStateSyncStatus } from '../botReadState';
+import { botReadStateFixture } from './botReadStateFixture';
 vi.mock('../botWelcomeContext', () => ({ readCachedBotWelcomeContext: vi.fn() }));
 
 vi.mock('@/state/newMakerDraft', async (importOriginal) => ({
@@ -119,6 +122,38 @@ describe('bot profile store', () => {
 
   afterEach(() => {
     for (const id of createdIds.splice(0)) removeBotProfile(id);
+  });
+
+  // R3 / unit: the real profile hydration must not prune another window's read
+  // based on a stale/visibility-filtered list. Existing CRUD tests never hydrated that list.
+  it('keeps a newer companion read position when an older profile list finally resolves', async () => {
+    const previousOwner = getDataOwnerGeneration();
+    setDataOwnerGeneration('read-projection-owner');
+    const reads = botReadStateFixture();
+    let finish!: (rows: unknown[]) => void;
+    const list = vi.fn(() => new Promise<unknown[]>(resolve => { finish = resolve; }));
+    const target = new EventTarget();
+    vi.stubGlobal('window', {
+      addEventListener: target.addEventListener.bind(target), removeEventListener: target.removeEventListener.bind(target),
+      electronAPI: { maker: reads.bridge, localDb: { bots: { list } } },
+      localStorage: { getItem: () => null, length: 0, key: () => null },
+    });
+    resetBotReadStateForTests();
+    const stop = startBotReadStateSync();
+    try {
+      await vi.waitFor(() => expect(getBotReadStateSyncStatus().phase).toBe('ready'));
+      const pending = ensureBotProfilesLoaded(true);
+      await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
+      markBotRead('new-companion', 300);
+      finish([]); await pending;
+      expect(getBotProfiles()).toEqual([]);
+      expect(getBotLastReadAt('new-companion')).toBe(300);
+    } finally {
+      stop(); resetBotReadStateForTests();
+      const owner = getDataOwnerGeneration();
+      await reads.bridge.botReadState({ owner: { ...owner, dataOwnerId: owner.dataOwnerId! }, action: 'snapshot' });
+      reads.dispose(); vi.unstubAllGlobals(); setDataOwnerGeneration(previousOwner.dataOwnerId, previousOwner.generation);
+    }
   });
 
   it('creates a Bot profile without a fake Session projection', () => {

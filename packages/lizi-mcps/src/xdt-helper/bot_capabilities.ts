@@ -50,8 +50,7 @@ export interface BotCapabilityCallbacks {
 }
 
 /**
- * `feature` covers this teammate's own switches: `memory` and the system Skills
- * (`todo`, `routine`, `follow`). The others reference shared installations.
+ * `feature` covers this teammate's own `memory` switch. The others reference shared installations.
  */
 export type TeammateCapabilityKind = "skill" | "mcp" | "toolset" | "feature";
 
@@ -72,22 +71,20 @@ export interface BotControlState {
   session: { id: string; workingDir: string | null; remoteHostId: string | null };
   model: { source: "override" | "default"; candidates: { harness: string; providerId?: string | null; model: string }[] };
   memory: { enabled: boolean; scope: "self" };
-  /** System Skills this teammate turned off; the rest are on. */
-  systemSkillsOff?: string[];
   references: { skills: string[]; mcpServers: string[]; toolsets: string[] };
 }
 
 /** Shared by the core prompt's self-knowledge and the profile tools' descriptions; details live in read_teammate_skill. */
 export const TEAMMATE_CONTROL_GUIDANCE = [
-  'Use `get_teammate_state` to inspect your profile, stable chat, configured model candidates, memory switch, turned-off system Skills and capability references. Candidates and references are not proof of the model or tools running this turn; the live runtime and registered tools are authoritative. Empty references do not mean you have no Skills: the shared core and your personal shelf are separate.',
-  'Use `update_teammate_profile` when the user asks to change your name, introduction, identity or your own model selection. Read the current version first and patch only the requested fields; for modelChain read `get_app_default_model` first and supply the complete ordered chain (1–5 routes), or null to follow the application default. Saves apply next turn and never change the application default, other teammates, Skills, memory or chat history. Details: `read_teammate_skill` name=models.',
+  'Use `get_teammate_state` to inspect your profile, stable chat, configured model candidates, memory switch and capability references. Candidates and references are not proof of the model or tools running this turn; the live runtime and registered tools are authoritative. Empty references do not mean you have no Skills: the shared core and your personal shelf are separate.',
+  'Use `update_teammate_profile` when the user asks to change your name, introduction, identity or your own model selection. Read the current version first and patch only the requested fields; for modelChain read `get_app_default_model` first and supply the complete ordered chain (1–5 routes), or null to follow the application default. Saves apply next turn and never change the application default, other buddies, Skills, memory or chat history. Details: `read_teammate_skill` name=models.',
 ].join('\n');
 
 /** @deprecated Internal compatibility export; new teammate guidance uses the product name. */
 export const BOT_CONTROL_GUIDANCE = TEAMMATE_CONTROL_GUIDANCE;
 
 const FIND_BOT_CAPABILITIES_CORE =
-  "按需查找应用已有的 Skill、MCP 连接或内置工具集，返回可用性和当前伙伴是否已加入；kind=feature 列出自己的记忆与系统技能开关。";
+  "按需查找应用已有的 Skill、MCP 连接或内置工具集，返回可用性和当前伙伴是否已加入；kind=feature 列出自己的记忆开关。";
 const FIND_BOT_CAPABILITIES_PLUGIN_SENTENCE =
   "插件用已安装插件网关的 ghost_list / ghost_info 发现并直接按现有授权调用。";
 
@@ -149,7 +146,7 @@ export function registerBotCapabilityTools(
         id: z.string().min(1).max(2048).describe('Enabled route id from get_app_default_model.'),
         effort: z.string().max(64).optional(),
         fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional(),
-      })).min(1).max(5).nullable().optional().describe('Complete model chain for this teammate; null removes its override and follows the application default.'),
+      })).min(1).max(5).nullable().optional().describe('Complete model chain for this buddy; null removes its override and follows the application default.'),
     },
     handler: async (input) => {
       const callerSessionId = deps.getSessionContext().sessionId;
@@ -180,7 +177,7 @@ export function registerBotCapabilityTools(
     name: "set_teammate_capability",
     category: "bots",
     description:
-      "把查到的已有能力加入当前伙伴，或从当前伙伴移除。复用应用已有安装和连接，不修改共享源、凭证或全局开关。kind=feature 开关自己的记忆（memory）与系统技能（todo、routine、follow），只在主人要求时使用。新挂载在下一轮生效；当前轮不要声称已有尚未挂载的工具。",
+      "把查到的已有能力加入当前伙伴，或从当前伙伴移除。复用应用已有安装和连接，不修改共享源、凭证或全局开关。kind=feature 开关自己的记忆（memory），只在主人要求时使用。新挂载在下一轮生效；当前轮不要声称已有尚未挂载的工具。",
     inputShape: { kind, id: z.string().min(1).max(512), joined: z.boolean() },
     handler: async (input) => {
       const callerSessionId = deps.getSessionContext().sessionId;
@@ -209,7 +206,7 @@ export function registerAppDefaultModelTools(
 ): void {
   if (deps.callbacks.models) registry.register({
     name: 'get_app_default_model', category: deps.category ?? 'bots',
-    description: '读取当前用户在应用中选择的默认模型，以及已连接、已启用且引擎可用的型号。修改默认模型或为 start_session_task 单独选模前先读此表；查询不会更改设置。将 available 中的 id 用于 model_selection，它同时绑定型号、来源账号与引擎；不要猜型号或启用用户关闭的型号。伙伴显式配置的模型链可能与此默认值不同。',
+    description: '读取当前用户在应用中选择的默认模型，以及已连接、已启用且引擎可用的型号。修改默认模型前先读此表；查询不会更改设置。available 中的 id 同时绑定型号、来源账号与引擎；不要猜型号或启用用户关闭的型号。伙伴显式配置的模型链可能与此默认值不同。',
     inputShape: {},
     handler: async () => {
       const callerSessionId = deps.getSessionContext().sessionId;

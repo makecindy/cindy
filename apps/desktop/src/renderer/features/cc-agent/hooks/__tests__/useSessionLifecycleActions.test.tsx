@@ -157,7 +157,7 @@ describe('archive uses current state after asynchronous checks', () => {
       let reject!: (error: Error) => void;
       const preparation = new Promise<boolean>((done, fail) => { resolve = done; reject = fail; });
       const { result } = renderHook(() => useSessionLifecycleActions());
-      let action!: Promise<void>;
+      let action!: Promise<unknown>;
       await act(async () => {
         action = result.current.runSessionAction('session-1', 'archive', {
           activeSessionId: 'session-1', prepareArchive: () => preparation,
@@ -176,7 +176,9 @@ describe('archive uses current state after asynchronous checks', () => {
       });
       if (outcome === 'confirm') {
         expect(mocks.setStatus).toHaveBeenCalledOnce();
-        expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new');
+        expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new', {
+          state: { workspacePrompt: 'generic' },
+        });
         expect(mocks.completePendingStatus).toHaveBeenCalledOnce();
       } else {
         expect(mocks.setStatus).not.toHaveBeenCalled();
@@ -205,7 +207,7 @@ describe('archive uses current state after asynchronous checks', () => {
       finishTarget = resolve;
     }));
     const { result } = renderHook(() => useSessionLifecycleActions());
-    let pending!: Promise<void>;
+    let pending!: Promise<unknown>;
     await act(async () => {
       pending = result.current.runSessionAction('session-1', 'archive', { activeSessionId: 'session-1' });
     });
@@ -311,7 +313,9 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
     expect(mocks.beginStatusTransition.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.navigate.mock.invocationCallOrder[0],
     );
-    expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new');
+    expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new', {
+      state: { workspacePrompt: 'generic' },
+    });
     expect(mocks.completeStatusTransition).toHaveBeenCalledWith(
       { sessionId: 'session-1', token: 1 },
       expect.objectContaining({ id: 'session-1', status: 'archived' }),
@@ -492,7 +496,9 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
     expect(mocks.beginPendingStatus.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.setStatus.mock.invocationCallOrder[0],
     );
-    expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new');
+    expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new', {
+      state: { workspacePrompt: 'generic' },
+    });
     expect(mocks.setStatus).toHaveBeenCalledWith('remote-session', 'archived', {
       kind: 'device-link',
       deviceId: 'device-1',
@@ -521,7 +527,7 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
     );
     const { result } = renderHook(() => useSessionLifecycleActions({ includeArchived: 'all' }));
 
-    let archiving!: Promise<void>;
+    let archiving!: Promise<unknown>;
     let unarchiving!: Promise<void>;
     await act(async () => {
       archiving = result.current.runSessionAction('remote-session', 'archive', {
@@ -609,6 +615,24 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
 });
 
 describe('useSessionLifecycleActions delete cache invalidation', () => {
+  // Unit: deleting the last visible task enters the real generic new-task route.
+  // Existing delete tests have no active route and cannot catch a missing default-directory marker.
+  it('marks the new-task redirect as generic after deleting the last visible task', async () => {
+    window.history.replaceState(null, '', '#/cc-agent/session-1');
+    const { result } = renderHook(() => useSessionLifecycleActions({ includeArchived: 'active' }));
+
+    await act(async () => {
+      await result.current.runSessionAction('session-1', 'delete', {
+        activeSessionId: 'session-1',
+        deleteRedirectRoute: '/cc-agent/new',
+      });
+    });
+
+    expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new', {
+      state: { workspacePrompt: 'generic' },
+    });
+  });
+
   it('patches every loaded status bucket only after the delete write succeeds', async () => {
     const { result } = renderHook(() => useSessionLifecycleActions({ includeArchived: 'all' }));
 

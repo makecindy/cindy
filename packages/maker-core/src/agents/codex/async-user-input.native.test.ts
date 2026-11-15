@@ -7,6 +7,7 @@ import { expect, it, vi } from 'vitest';
 import { AppServerHost } from './app-server/host.js';
 import { createStdioTransport } from './app-server/stdioTransport.js';
 import { Method, type ItemEnvelope, type ThreadStartResponse, type TurnStartResponse } from './app-server/protocol.js';
+import { formatAskUserContinuationMessage } from './request-user-input.js';
 import { asyncUserInputQuestions } from './async-user-input.js';
 import type { Logger } from '../../interfaces/logger.js';
 
@@ -99,7 +100,7 @@ stream_max_retries = 0
     expect(question).toMatchObject({ type: 'agentMessage', id: 'ask-async-1',
       questions: [{ title: 'Which bot?', options: ['Personal', 'Both'] }] });
     expect(asyncUserInputQuestions(question!)?.[0]?.question).toBe('Which bot?');
-    const answerInput = [{ type: 'text', text: 'Q: Which bot?\nA: Both' }];
+    const answerInput = [{ type: 'text', text: formatAskUserContinuationMessage(asyncUserInputQuestions(question!)!, { 'Which bot?': 'Both' }) }];
     if (answerTiming === 'during') {
       await host.request(Method.TurnSteer, { threadId: thread.thread.id, expectedTurnId: turn.turn.id,
         input: answerInput,
@@ -123,7 +124,7 @@ stream_max_retries = 0
     expect(blockingQuestions).not.toHaveBeenCalled();
     expect(completedStatuses).toEqual(answerTiming === 'after' ? ['completed', 'completed'] : ['completed']);
     expect(requests).toHaveLength(answerTiming === 'unanswered' ? 2 : 3);
-    if (answerTiming !== 'unanswered') expect(JSON.stringify(requests[2].input)).toContain('A: Both');
+    if (answerTiming !== 'unanswered') expect(requests[2].input).toContainEqual(expect.objectContaining({ role: 'user', content: expect.arrayContaining([expect.objectContaining({ text: answerInput[0].text })]) }));
     // The event bridge and answer must not change the stable prompt prefix.
     expect(requests.at(-1)?.instructions).toEqual(requests[0].instructions);
     const prefix = (request: typeof requests[number]) => request.input

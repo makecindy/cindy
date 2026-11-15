@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { useTranslation } from 'react-i18next';
 import { Minus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Tip } from '@/components/ui/tooltip';
 import type { RegionSize } from '../../../shared/regionScreenshot';
 import { isPreciseWheel, pinchZoomFactor } from './trackpad';
 
@@ -74,8 +75,8 @@ export function ScreenshotEditorViewport({ image, tools, children, aiMenu, onMin
         <div className="ml-auto flex shrink-0 items-center gap-1">
         <span className="text-12 tabular-nums text-[var(--text-secondary)]">{image && `${image.width} × ${image.height}`}</span>
         {aiMenu}
-        <Button size="xs" variant="secondary" tone="quiet" className="w-7 px-0" aria-label={t('titleBar.minimize')} onClick={onMinimize}><Minus size={14} /></Button>
-        <Button size="xs" variant="secondary" tone="quiet" className="w-7 px-0" aria-label={t('titleBar.close')} onClick={onClose}><X size={14} /></Button>
+        <Tip text={t('titleBar.minimize')} side="bottom"><Button size="sm" variant="secondary" tone="quiet" className="w-7 px-0" aria-label={t('titleBar.minimize')} onClick={onMinimize}><Minus size={14} /></Button></Tip>
+        <Tip text={t('titleBar.close')} side="bottom"><Button size="sm" variant="secondary" tone="quiet" className="w-7 px-0" aria-label={t('titleBar.close')} onClick={onClose}><X size={14} /></Button></Tip>
         </div>
       </div>
       {image && tools}

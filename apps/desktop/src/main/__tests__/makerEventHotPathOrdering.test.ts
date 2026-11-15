@@ -11,6 +11,11 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { ScriptTarget, transpileModule } from 'typescript';
 import type { AgentEvent } from '@cindy/maker-core';
+import {
+  rehydrateCloseSuppression,
+  withRehydrateCloseSuppressed,
+} from '../maker-host/rehydrateCloseSuppression.js';
+import { redactEventForRenderer } from '../maker-ipc/rendererEventRedaction.js';
 
 const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
@@ -88,14 +93,10 @@ describe('maker:event hot path ordering', () => {
   it.each([undefined, null, { text: 'Restart Cindy before using Pi again.', isFinal: true }])(
     'strips Host recovery metadata from the boundary copy with data %j',
     (data) => {
-      // Execute the actual boundary function without booting Desktop/register side effects.
-      const start = source.indexOf('function redactEventForRenderer');
-      const code = source.slice(start, source.indexOf('\nfunction ', start + 1));
-      const js = transpileModule(code, {
-        compilerOptions: { target: ScriptTarget.ES2022 },
-      }).outputText;
-      const redact = new Function(`${js}; return redactEventForRenderer;`)() as
-        (event: AgentEvent) => AgentEvent;
+      // Execute the actual boundary function (rendererEventRedaction.ts, the one register.ts
+      // imports) without booting Desktop/register side effects.
+      expect(source).toContain("import { redactEventForRenderer } from './rendererEventRedaction.js';");
+      const redact = redactEventForRenderer;
       const original: AgentEvent = {
         type: 'text', source: 'pi', data, runtimeRecovery: true,
         sessionInstanceId: 'runtime', sessionTurnGeneration: 7,
@@ -110,20 +111,22 @@ describe('maker:event hot path ordering', () => {
   );
 
   it('keeps complete PI Subagent returns on the host side of the event boundary', () => {
-    const redactor = source.slice(
-      source.indexOf('function redactEventForRenderer'),
-      source.indexOf('\nfunction ', source.indexOf('function redactEventForRenderer') + 1),
-    );
-    expect(redactor).toContain('delete rendererEvent.sessionTurnGeneration;');
-    expect(redactor).toContain('delete rendererEvent.sessionInstanceId;');
-    for (const key of [
-      'subagentObservation',
-      'returnedResult',
-      'returnedResultEmpty',
-      'returnedResultTruncated',
-    ]) {
-      expect(redactor).toContain(`'${key}'`);
-    }
+    const hostOnly = {
+      subagentObservation: { kind: 'returned' },
+      subagentParentContext: { parentSessionId: 'parent' },
+      returnedResult: 'complete subagent output',
+      returnedResultEmpty: false,
+      returnedResultTruncated: false,
+    };
+    const original = {
+      type: 'agent_task_update', source: 'pi', sessionInstanceId: 'runtime', sessionTurnGeneration: 7,
+      data: { taskId: 'subagent-1', status: 'completed', ...hostOnly },
+    } as unknown as AgentEvent;
+    const boundary = redactEventForRenderer(original);
+    expect(boundary).toEqual({ type: 'agent_task_update', source: 'pi', data: { taskId: 'subagent-1', status: 'completed' } });
+    // The Host keeps the full return for its own bookkeeping.
+    expect(original.data).toMatchObject(hostOnly);
+    expect(original.sessionTurnGeneration).toBe(7);
   });
 
   it('rewires a replacement Session instance that retains the same business id', () => {
@@ -953,115 +956,8 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
-  it('keeps Codex subscription value out of real session cost totals', () => {
-    const wireSessionSource = readEventModule('sessionCodexTurnUsage');
-    const codexDoneIndex = wireSessionSource.indexOf(
-      "event.type === 'done' && event.source === 'codex'",
-    );
-    expect(codexDoneIndex).toBeGreaterThanOrEqual(0);
-
-    const codexDoneSource = wireSessionSource.slice(codexDoneIndex);
-    expect(codexDoneSource).toContain('const sessionProvider = turnContext.providerId;');
-    expect(codexDoneSource).toContain(
-      'const isRemoteCodexSession = Boolean(session.remoteHostId);',
-    );
-    expect(codexDoneSource).toContain(
-      'const codexAuthInjection = isRemoteCodexSession ? null : getCodexProxyAuthInjection();',
-    );
-    expect(readEventModule('sessionEventPreparation')).toContain(
-      '!turnModelPromiseBySession.has(session.id)',
-    );
-    expect(readEventModule('sessionEventPreparation')).toContain(
-      'turnModelPromiseBySession.set(session.id, readSessionModelForUsage(session.id));',
-    );
-    expect(codexDoneSource).toMatch(
-      /const modelPromise\s*=\s*turnModelPromiseBySession\.get\(session\.id\)\s*\?\?\s*readSessionModelForUsage\(session\.id\);/,
-    );
-    expect(codexDoneSource).toContain('turnModelPromiseBySession.delete(session.id);');
-    expect(codexDoneSource).not.toContain('hasCodexOAuthLogin()');
-    expect(codexDoneSource).toContain('promptTokens + completionTokens + cachedTokens');
-    expect(codexDoneSource).not.toContain(
-      'promptTokens + completionTokens + reasoningTokens + cachedTokens',
-    );
-    expect(codexDoneSource).toContain('const isCustomProviderRoute =');
-    expect(codexDoneSource).toContain('turnContext.isUserProviderRoute');
-    expect(codexDoneSource).toMatch(/&&\s*isCodexGatewayWireModel\(pricingModel\);/);
-    expect(codexDoneSource).toMatch(/&&\s*isExclusiveXaiModelId\(pricingModel\);/);
-    expect(codexDoneSource).toContain('const hasGatewayKey = Boolean(readClaudeApiKey());');
-    expect(codexDoneSource).toContain('const hasEffectiveGatewayRoute =');
-    expect(codexDoneSource).toContain('!isCustomProviderRoute');
-    expect(codexDoneSource).toContain("(sessionProvider === 'xd' && hasGatewayKey)");
-    expect(codexDoneSource).toMatch(/const isSubscriptionValue\s*=\s*isRemoteCodexSession\s*\|\|/);
-    expect(codexDoneSource).toContain('isCodexXaiProviderRoute ||');
-    // 用正则而非整串匹配:这段条件已按多行排版,单行字面量会因换行/缩进调整而假失败。
-    // 要守的语义是——订阅计价只在「OpenAI 供应商 + oauth-bearer 注入 + 无生效网关路由」时成立。
-    expect(codexDoneSource).toMatch(
-      /isCodexOpenAiProviderRoute\s*&&\s*codexAuthInjection === 'oauth-bearer'\s*&&\s*!hasEffectiveGatewayRoute/,
-    );
-    expect(codexDoneSource).toContain('const modelUsageKey = isSubscriptionValue');
-    expect(codexDoneSource).toContain('? codexSubscriptionUsageModelKey(pricingModel)');
-    expect(codexDoneSource).toContain(': codexApiUsageModelKey(pricingModel)');
-    expect(codexDoneSource).toContain('const price = isCodexXaiProviderRoute');
-    expect(codexDoneSource).toContain(
-      "? getSubscriptionDirectValuePrice(pricingModel, 'codex', pricing)",
-    );
-    // 订阅估值按显式来源取各自 registry 日期定价:内置 anthropic(access.kind=subscription)
-    // 不再被记成 #billing=api;默认/openai 仍走 OpenAI 价表。
-    expect(codexDoneSource).toContain("sessionProviderAccessKind === 'subscription'");
-    expect(codexDoneSource).toContain('isCodexSubscriptionAccessRoute ||');
-    expect(codexDoneSource).toMatch(
-      /\? getCodexProviderSubscriptionValuePrice\(\s*subscriptionValueProviderId,\s*pricingModel,\s*pricing,\s*\)/,
-    );
-    expect(codexDoneSource).toContain("? getModelPriceQuote(pricing, 'xd', pricingModel)");
-    expect(codexDoneSource).toContain(
-      "? getModelPriceQuote(pricing, sessionProvider, pricingModel, 'codex')",
-    );
-    expect(codexDoneSource).toContain('const pricing = isSubscriptionValue');
-    expect(codexDoneSource).not.toContain('isSubscriptionValue && !isCodexXaiProviderRoute');
-    expect(codexDoneSource).toContain('? getReferenceModelPricing()');
-    expect(codexDoneSource).toContain('? await getGatewayModelPricingForModel()');
-    expect(codexDoneSource).toContain('price ?? undefined');
-    expect(codexDoneSource).toMatch(
-      /u\.segments !== undefined && codexSegmentsReliable\s*\? codexUsageSegments\s*:\s*\[\]/,
-    );
-    expect(codexDoneSource).toContain(
-      "if (money && (isSubscriptionValue || price?.source === 'gateway'))",
-    );
-    expect(codexDoneSource).toContain(
-      "const isActualApiCost = !isSubscriptionValue && price?.source === 'gateway';",
-    );
-    expect(codexDoneSource).toContain('if (isActualApiCost)');
-    expect(codexDoneSource).toContain('void recordTurnSpend(money);');
-    expect(codexDoneSource).toContain('void recordSessionTurnSpend(session.id, money);');
-    expect(codexDoneSource).toMatch(
-      /await recordModelTurnUsage\(\{\s*sessionId: session\.id,\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money: isSubscriptionValue \? unpricedSubscriptionValueMarker\(\) : undefined,\s*inputTokensDelta: promptTokens,\s*outputTokensDelta: completionTokens,\s*cacheReadTokensDelta: cachedTokens,\s*cacheCreateTokensDelta: cacheCreationTokens,\s*\}\)\.finally\(\(\) => rebroadcastCodexTodayUsage\(\)\);[\s\S]*?const pricing = isSubscriptionValue/,
-    );
-    expect(codexDoneSource).toMatch(
-      /await recordModelTurnUsage\(\{\s*sessionId: session\.id,\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money,\s*inputTokensDelta: 0,\s*outputTokensDelta: 0,\s*cacheReadTokensDelta: 0,\s*cacheCreateTokensDelta: 0,\s*\}\);/,
-    );
-    const costRecordIndex = codexDoneSource.indexOf('void recordTurnSpend(money);');
-    const modelCostRecordIndex = codexDoneSource.indexOf(
-      "if (money && (isSubscriptionValue || price?.source === 'gateway'))",
-    );
-    const schedulerCostRecordIndex = codexDoneSource.indexOf('await recordSchedulerTurnCost({');
-    expect(costRecordIndex).toBeGreaterThanOrEqual(0);
-    expect(modelCostRecordIndex).toBeGreaterThanOrEqual(0);
-    expect(modelCostRecordIndex).toBeGreaterThan(
-      codexDoneSource.indexOf('const pricing = isSubscriptionValue'),
-    );
-    expect(schedulerCostRecordIndex).toBeGreaterThan(costRecordIndex);
-    expect(codexDoneSource).toContain('clientId: turnAssistantPersistId');
-    expect(codexDoneSource).toContain('money,');
-    expect(codexDoneSource).toMatch(
-      /const hasEffectiveGatewayRoute\s*=\s*!isRemoteCodexSession\s*&&\s*!isCustomProviderRoute\s*&&/,
-    );
-    expect(codexDoneSource).toContain('const isCodexXaiProviderRoute =');
-    expect(codexDoneSource).toMatch(
-      /codexAuthInjection === 'env-key'\s*\|\|\s*isCodexBudgetRoute\s*\|\|\s*\(sessionProvider === 'xd' && hasGatewayKey\)/,
-    );
-    expect(codexDoneSource).not.toContain("sessionProvider !== 'xai'");
-    expect(codexDoneSource).not.toContain('isEstimate: true');
-  });
+  // Codex billing is exercised through the production event pipeline in
+  // sessionEventPipeline.test.ts, including remote isolation and deferred pricing.
 
   it('claude-code 费用按完整请求段定价，累计 cost 首帧只建基线', () => {
     const wireSessionSource = readEventModule('sessionClaudeTurnUsage');
@@ -1128,7 +1024,7 @@ describe('maker:event hot path ordering', () => {
 
   it('pi subscription turns estimate value from the shared reference-price helper', () => {
     const wireSessionSource = readEventModule('sessionPiTurnUsage');
-    const piDoneIndex = wireSessionSource.indexOf("event.type === 'done' && event.source === 'pi'");
+    const piDoneIndex = wireSessionSource.indexOf("if ((event.type === 'done' || (identified && isTerminalAgentErrorEvent(event))) && event.source === 'pi')");
     expect(piDoneIndex).toBeGreaterThanOrEqual(0);
     const piDoneSource = wireSessionSource.slice(piDoneIndex);
     expect(piDoneSource).toContain(
@@ -1142,7 +1038,7 @@ describe('maker:event hot path ordering', () => {
     expect(piDoneSource).toContain(': getReferenceModelPricing();');
     expect(piDoneSource).toContain("getSubscriptionValuePriceFor('pi', model, pricing)");
     expect(piDoneSource).toContain(
-      'const pricingSegments = piSegmentsReliable ? group.segments : [];',
+      "? group.segments.filter(segment => !segment.id?.startsWith('pi-unattributed:')) : [];",
     );
     expect(piDoneSource).toContain('money = resolveTurnCost({');
     expect(piDoneSource).toContain('segments: pricingSegments,');
@@ -1151,19 +1047,19 @@ describe('maker:event hot path ordering', () => {
     );
     expect(piDoneSource).toContain('money ?? unpricedSubscriptionValueMarker()');
     expect(piDoneSource).toContain('money: modelRowMoney,');
-    expect(piDoneSource).toContain('if (actualMoney)');
+    expect(piDoneSource).toContain('if (actualMoney && !identified)');
     expect(piDoneSource).toContain('await recordSchedulerTurnCost({');
     // 消息 / 调度落库失败同样落进 catch:兜底只补写正常分支尚未发起的模型组,
     // 不重放已写过的用量(否则任务与模型用量翻倍)。
-    expectOrder(piDoneSource, 'recordedModels.add(model);', 'modelWrites.push(');
+    expectOrder(piDoneSource, 'recordedModels.add(model);', 'if (!identified) modelWrites.push(');
     expect(piDoneSource).toMatch(
-      /\[\.\.\.groupedSegments\]\s*\.filter\(\(\[model\]\) => !recordedModels\.has\(model\)\)\s*\.map\(/,
+      /\(identified \? \[\] : \[\.\.\.groupedSegments\]\)\s*\.filter\(\(\[model\]\) => !recordedModels\.has\(model\)\)\s*\.map\(/,
     );
   });
 
   it('records Claude subscription quota events only while the native login is connected', () => {
     const listenerSource = usageSource.match(
-      /setClaudeRateLimitInfoListener\(\(info\) => \{[\s\S]*?\n {2}\}\);/,
+      /setClaudeRateLimitInfoListener\(\(info, account\) => \{[\s\S]*?\n {2}\}\);/,
     )?.[0];
     expect(listenerSource).toBeTruthy();
     if (!listenerSource) return;
@@ -1423,5 +1319,63 @@ describe('session context window budget reconciler', () => {
     );
     expect(desktopSend).toContain('applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId)');
     expect(desktopSend).toContain('replayPendingSessionContextWindowBudgetUnderLock(sessionId)');
+  });
+
+  it('runs drift-recycle closes inside the rehydrate suppression window so the in-flight send survives (cancelled-before-dispatch regression)', async () => {
+    // 2026-11-08 实报:openspec init 后每个存量会话首条消息必失败一次 —— 漂移回收的
+    // close 在抑制窗口外执行,onSessionClosed abort 了正在驱动这次回收的发送边界,
+    // session.send 拿到已 abort 的 signal 直接 cancelled-before-dispatch,手动重试
+    // 才过。回归锚点:发送事务的 closeSessionIfCurrent 依赖必须包在
+    // withRehydrateCloseSuppressed 里,且 close adapters 的 preserve 读数仍来自
+    // 同一个抑制表(机制层契约见 agent-input-coordinator #1930 用例)。
+    const start = source.indexOf('    closeSessionIfCurrent: async (sessionId) => {');
+    const end = source.indexOf('    getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId),', start);
+    if (start < 0 || end < 0) throw new Error('send-transaction closeSessionIfCurrent source changed');
+    // 整条语句切片转译(loadBudgetReconciler 同型):直接转译表达式会带语句分号,截断 return 包装。
+    const js = transpileModule(
+      `const closeSessionIfCurrent = { ${source.slice(start, end)} };`,
+      { compilerOptions: { target: ScriptTarget.ES2022 } },
+    ).outputText;
+    const closeCalls: Array<[{ id: string }, string]> = [];
+    let suppressedDuringClose: boolean | null = null;
+    const maker = {
+      getSession: (sessionId: string) => ({ id: sessionId }),
+      closeSessionIfCurrent: async (session: { id: string }, reason: string) => {
+        suppressedDuringClose = rehydrateCloseSuppression.isSuppressed(session.id);
+        closeCalls.push([session, reason]);
+      },
+    };
+    const closeSessionIfCurrent = new Function(
+      'maker',
+      'withRehydrateCloseSuppressed',
+      `${js}; return closeSessionIfCurrent.closeSessionIfCurrent;`,
+    )(maker, withRehydrateCloseSuppressed) as (sessionId: string) => Promise<void>;
+
+    await closeSessionIfCurrent('drift-task');
+    expect(closeCalls).toEqual([[{ id: 'drift-task' }, 'runtime-refresh']]);
+    // close await 期间抑制窗口开着:close adapters 的 shouldPreserveInputBoundary
+    // 读到 true → 在途发送边界不被 abort,事务继续 lazy bootstrap 投递。
+    expect(suppressedDuringClose).toBe(true);
+    expect(rehydrateCloseSuppression.isSuppressed('drift-task')).toBe(false);
+
+    // send_to_session 通道的同型直发点(独立于发送事务 deps)也必须包在抑制窗口内。
+    const laneStart = source.indexOf('async function sendToSessionInternal');
+    const driftStart = source.indexOf(
+      "if (live?.agentKind === 'pi' && live.hasRecyclableProjectResourceDrift()) {",
+      laneStart,
+    );
+    const driftEnd = source.indexOf('live = undefined;', driftStart);
+    expect(driftStart).toBeGreaterThan(laneStart);
+    const driftBlock = source.slice(driftStart, driftEnd);
+    expect(driftBlock).toContain('withRehydrateCloseSuppressed(targetSessionId');
+
+    // 消费端:close adapters 的边界保留读数必须仍指向抑制表(两条直发点共用)。
+    const adaptersStart = source.indexOf(
+      'const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSessionCloseContext>({',
+    );
+    const adaptersEnd = source.indexOf('beforeCloseTeardown:', adaptersStart);
+    expect(source.slice(adaptersStart, adaptersEnd)).toContain(
+      'shouldPreserveInputBoundary: () => rehydrateCloseSuppression.isSuppressed(session.id)',
+    );
   });
 });

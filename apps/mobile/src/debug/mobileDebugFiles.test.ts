@@ -25,7 +25,7 @@ vi.mock("expo-file-system", () => {
       if (this.exists) throw new Error("exists");
       disk.files.set(this.uri, "");
     }
-    write(value: string | Uint8Array, options?: { append: boolean }) {
+    writeSync(value: string | Uint8Array, options?: { append: boolean }) {
       const text =
         typeof value === "string" ? value : new TextDecoder().decode(value);
       disk.files.set(
@@ -42,7 +42,7 @@ vi.mock("expo-file-system", () => {
         offset: 0,
         size: bytes.length,
         close: disk.closed,
-        readBytes(length: number) {
+        readBytesSync(length: number) {
           const chunk = bytes.slice(this.offset, this.offset + length);
           this.offset += chunk.length;
           return chunk;

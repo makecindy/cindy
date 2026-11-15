@@ -24,11 +24,14 @@ import {
   getCachedDeviceProviders,
   subscribeDeviceProviders,
   subscribeDeviceProvidersError,
+  subscribeDeviceProvidersGen,
   type DeviceProvidersPayload,
 } from '@/device-link/deviceProvidersCache';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import {
   getCachedProviderShareCatalogs,
+  evictProviderShareCatalogs,
+  isProviderShareCatalogComplete,
   refreshProviderShareCatalogs,
   subscribeProviderShareCatalogs,
   type ProviderShareCatalogEntry,
@@ -51,7 +54,8 @@ const NO_CATALOGS: RemoteAgentCatalog[] = [];
 
 function cachedShareState(controlledDeviceId: string): ShareState {
   const cached = controlledDeviceId ? getCachedProviderShareCatalogs(controlledDeviceId) : undefined;
-  return { controlledDeviceId, shares: cached ?? [], loaded: !!cached };
+  return { controlledDeviceId, shares: cached ?? [],
+    loaded: !!cached && isProviderShareCatalogComplete(controlledDeviceId) !== false };
 }
 
 export function useRemoteAgentCatalogs(input: RemoteAgentCatalogsInput): RemoteAgentCatalog[] {
@@ -73,8 +77,9 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
   catalogs: RemoteAgentCatalog[];
   settled: boolean;
 } {
-  const { readDeviceList, invoke, openLink, connectionEpoch, status, presenceVersion, getPresenceAvailability } =
-    useDeviceLink();
+  const { readDeviceList, invoke, openLink, connectionEpoch, status, presenceVersion,
+    getPresenceAvailability, rosterVersion = 0, providerShareCatalogVersions = {} } =
+    useDeviceLink(input.controlledDeviceId);
   const { accountGeneration } = useAuth();
   const { t } = useTranslation();
   const revoked = useRevokedDevices();
@@ -83,6 +88,8 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
   const [devicesLoaded, setDevicesLoaded] = useState(false);
   const [shareState, setShareState] = useState<ShareState>(() => cachedShareState(input.controlledDeviceId));
   const ownerRef = useRef({ accountGeneration, controlledDeviceId: input.controlledDeviceId });
+  const shareCatalogVersion = providerShareCatalogVersions[input.controlledDeviceId] ?? 0;
+  const shareCatalogVersionRef = useRef({ deviceId: input.controlledDeviceId, version: shareCatalogVersion });
   const keepKey = input.keepDeviceIds.join('\n');
   const keepOnly = input.keepOnly === true;
   // 选择器没打开时只为药丸取目录:Agent 不在某个分享上就不必去读分享。
@@ -94,11 +101,24 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
     if (owner.accountGeneration === accountGeneration
       && owner.controlledDeviceId === input.controlledDeviceId) return;
     ownerRef.current = { accountGeneration, controlledDeviceId: input.controlledDeviceId };
+    shareCatalogVersionRef.current = { deviceId: input.controlledDeviceId, version: shareCatalogVersion };
     setDevices([]);
     setDevicesLoaded(false);
     setCatalogs(new Map());
     setShareState(cachedShareState(input.controlledDeviceId));
-  }, [accountGeneration, input.controlledDeviceId]);
+  }, [accountGeneration, input.controlledDeviceId, shareCatalogVersion]);
+
+  // A late roster denial retires same-account directory rows; share catalogs are a
+  // separate authority and stay untouched. The read effect deliberately does not
+  // depend on rosterVersion: retrying from the denial itself would recreate the
+  // 403 -> notification -> read feedback loop. Reconnect/focus/picker triggers
+  // may read again later.
+  useEffect(() => {
+    if (!input.enabled) return;
+    setDevices([]);
+    setDevicesLoaded(false);
+    setCatalogs(new Map());
+  }, [input.enabled, rosterVersion]);
 
   // 供应商分享:被控电脑代读它收到的分享与各自的目录。有缓存先显示,再在后台刷新;
   // 读不到(离线 / 旧版桌面)保留上一份,绝不影响被控电脑自己与同账号电脑的列表。
@@ -106,9 +126,20 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
     const controlledDeviceId = input.controlledDeviceId;
     if (!input.enabled || !controlledDeviceId || status !== 'online' || !readShares) return;
     let cancelled = false;
+    const previousVersion = shareCatalogVersionRef.current;
+    if (previousVersion.deviceId !== controlledDeviceId) {
+      shareCatalogVersionRef.current = { deviceId: controlledDeviceId, version: shareCatalogVersion };
+    } else if (previousVersion.version !== shareCatalogVersion) {
+      // The controlled host reported a received-share catalog/list change. Retire
+      // only this target's cached share rows; the live re-read below supplies the
+      // new authoritative list. Presence/push is not an authorization result.
+      evictProviderShareCatalogs(controlledDeviceId);
+      shareCatalogVersionRef.current = { deviceId: controlledDeviceId, version: shareCatalogVersion };
+    }
     setShareState(cachedShareState(controlledDeviceId));
     const unsubscribe = subscribeProviderShareCatalogs(controlledDeviceId, (shares) => {
-      if (!cancelled) setShareState({ controlledDeviceId, shares, loaded: true });
+      if (!cancelled) setShareState({ controlledDeviceId, shares,
+        loaded: isProviderShareCatalogComplete(controlledDeviceId) !== false });
     });
     void refreshProviderShareCatalogs(controlledDeviceId, () => invoke(
       controlledDeviceId,
@@ -122,7 +153,8 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
       unsubscribe();
     };
     // keepOnly 也在依赖里:打开选择器时即使分享列表已在显示,也在后台再读一次。
-  }, [connectionEpoch, input.controlledDeviceId, input.enabled, invoke, keepOnly, readShares, status]);
+  }, [connectionEpoch, input.controlledDeviceId, input.enabled, invoke, keepOnly,
+    readShares, shareCatalogVersion, status]);
 
   useEffect(() => {
     if (!input.enabled || !input.controlledDeviceId || status !== 'online') return;
@@ -160,6 +192,9 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
             // 有缓存继续显示缓存;从未读到过才标成读不到。
             const fallback = getCachedDeviceProviders(device.deviceId);
             patch(device.deviceId, fallback ? { status: 'ready', payload: fallback } : { status: 'error' });
+          }));
+          cleanups.push(subscribeDeviceProvidersGen(device.deviceId, reason => {
+            patch(device.deviceId, { status: reason === 'fresh-invalidate' ? 'loading' : 'error' });
           }));
           if (!device.canOpen) continue;
           const transport = createMobileMakerTransport({

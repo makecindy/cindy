@@ -76,7 +76,8 @@ describe('session queue control service', () => {
       remove: vi.fn(),
     };
     const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
-    const start = source.indexOf('    removeQueuedMessage:', source.indexOf('  const orcaTeamService ='));
+    // The adapter is shared by the Lead-side and Worker-side queue controls (orcaQueueHostDeps).
+    const start = source.indexOf('    removeQueuedMessage:', source.indexOf('  const orcaQueueHostDeps ='));
     const adapter = source.slice(start, source.indexOf('    mergeQueuedMessages:', start));
     const mutations = new Function('inputCoordinator', ts.transpileModule(`return ({${adapter}});`, {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText)(inputCoordinator);
     const service = createSessionQueueControlService({

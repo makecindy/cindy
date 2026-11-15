@@ -16,7 +16,7 @@ vi.mock('electron', () => ({
   },
 }));
 
-const imageCacheStore = await import('../imageCacheStore');
+const imageCacheStore = await import('../imageCacheStore.desktop');
 
 async function exists(filePath: string): Promise<boolean> {
   try {

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN" data-mode="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HTML 预览 · 远程操作时协同任务换电脑（非实机）</title>
+<!--
+  HTML 模拟界面，非实机截图。对应 makecindy/cindy#8840（桌面）与 #8841（手机）。
+  取值出处：
+  - 配色变量：沿用 docs/design-previews/model-picker-harness-lock/index.html 的 :root / dark 变量。
+  - 「搜索模型…」：apps/desktop/src/renderer/i18n/locales/zh-CN/common.json:3750
+  - 确认框标题 / 说明 / 按钮：同文件 12458–12464（newChat.chatInput.agentRelocation.*）
+  - 显示规则：apps/desktop/src/renderer/components/new-chat/ChatInput.tsx 的 sessionRemoteAgentOptions
+    （被控电脑上的协同任务要被控端声明 supportsOrcaAgentRelocation 才列其他电脑；运行设备 Worker 始终不列）。
+  - 手机：确认框文案同 apps/mobile/src/i18n/locales/zh-CN/models.json:67–75（agentRelocation.*），
+    判据见 apps/mobile/app/sessions/[sessionId].tsx 的 orcaAgentLocationLocked / agentLocationMovable。
+  电脑与来源名称是示例数据。
+-->
+<style>
+  :root {
+    --bg: #e8e8ea; --surface: #f6f6f7; --surface-elevated: #ffffff; --surface-chip: #f0f0f2;
+    --text-primary: #3c3f43; --text-secondary: #6b6e74; --text-tertiary: #8c8e94;
+    --border: #d5d7db; --chip-border: #c6c9ce; --accent: #3b82f6; --warn: #b45309;
+    --shadow: 0 8px 28px rgba(0,0,0,.12);
+  }
+  html[data-mode="dark"] {
+    --bg: #1f1e1e; --surface: #2a2828; --surface-elevated: #312f2f; --surface-chip: #3a3838;
+    --text-primary: #d4d4d4; --text-secondary: #9a9a9a; --text-tertiary: #6f6f6f;
+    --border: #434343; --chip-border: #555; --accent: #60a5fa; --warn: #fbbf24;
+    --shadow: 0 12px 32px rgba(0,0,0,.45);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { min-height: 100vh; background: var(--bg); color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+  .banner { margin: 16px 20px 8px; padding: 10px 14px; border: 1px dashed var(--warn); border-radius: 10px;
+    color: var(--warn); font-size: 13px; line-height: 1.5; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px 20px; padding: 8px 20px 12px; font-size: 13px; }
+  .group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .group > span { color: var(--text-secondary); margin-right: 2px; }
+  .controls button { border: 1px solid var(--chip-border); background: var(--surface-chip); color: var(--text-primary);
+    border-radius: 999px; padding: 5px 11px; font-size: 12px; cursor: pointer; }
+  .controls button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  .stage { padding: 4px 20px 24px; }
+  html[data-client="phone"] .panel { width: min(360px, 100%); border-radius: 18px 18px 0 0; }
+  html[data-client="phone"] .body { flex-direction: column; }
+  html[data-client="phone"] .rail { width: auto; flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--border); }
+  html[data-client="phone"] .rail .sep { width: 1px; height: auto; margin: 4px 6px; }
+  .panel { width: min(560px, 100%); background: var(--surface-elevated); border: 1px solid var(--border);
+    border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
+  .search { padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--text-tertiary); font-size: 13px; }
+  .body { display: flex; min-height: 300px; }
+  .rail { width: 112px; border-right: 1px solid var(--border); padding: 8px 6px; display: flex; flex-direction: column; gap: 2px; }
+  .rail .sep { height: 1px; background: var(--border); margin: 6px 4px; }
+  .rail .item { font-size: 12px; padding: 6px 8px; border-radius: 8px; color: var(--text-secondary); }
+  .rail .item.on { background: var(--surface-chip); color: var(--text-primary); }
+  .list { flex: 1; padding: 8px 10px; }
+  .head { font-size: 11px; color: var(--text-tertiary); margin: 8px 6px 4px; }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 7px 8px; border-radius: 8px;
+    font-size: 13px; cursor: pointer; }
+  .row:hover { background: var(--surface-chip); }
+  .row small { display: block; color: var(--text-tertiary); font-size: 11px; margin-top: 1px; }
+  .row .tag { font-size: 11px; color: var(--text-tertiary); }
+  .note { margin-top: 12px; font-size: 12px; color: var(--text-secondary); line-height: 1.6; width: min(560px, 100%); }
+  .note b { color: var(--text-primary); }
+  .mask { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none; align-items: center; justify-content: center; padding: 16px; }
+  .mask.open { display: flex; }
+  .dialog { width: min(400px, 100%); background: var(--surface-elevated); border: 1px solid var(--border); border-radius: 14px;
+    padding: 18px; box-shadow: var(--shadow); }
+  .dialog h3 { margin: 0 0 8px; font-size: 15px; }
+  .dialog p { margin: 0 0 16px; font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+  .actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .actions button { border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; border: 1px solid var(--chip-border);
+    background: var(--surface-chip); color: var(--text-primary); }
+  .actions .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .toast { margin-top: 10px; font-size: 12px; color: var(--accent); min-height: 18px; }
+</style>
+</head>
+<body>
+<div class="banner">HTML 模拟界面，非实机截图（makecindy/cindy#8840 桌面、#8841 手机）。场景：在电脑 A 或手机上远程操作被控电脑，打开被控电脑上的任务，展开模型列表。实机截图见两个 issue 的实机验收项。</div>
+
+<div class="controls">
+  <div class="group" data-key="client"><span>控制端</span>
+    <button data-v="desktop" aria-pressed="true">桌面</button>
+    <button data-v="phone" aria-pressed="false">手机</button>
+  </div>
+  <div class="group" data-key="host"><span>被控电脑</span>
+    <button data-v="new" aria-pressed="true">新版本（声明 supportsOrcaAgentRelocation）</button>
+    <button data-v="old" aria-pressed="false">旧版本（未声明）</button>
+  </div>
+  <div class="group" data-key="task"><span>任务</span>
+    <button data-v="normal" aria-pressed="false">普通任务</button>
+    <button data-v="lead" aria-pressed="true">协同 Lead</button>
+    <button data-v="worker" aria-pressed="false">本机 Worker</button>
+    <button data-v="device-worker" aria-pressed="false">运行设备 Worker</button>
+  </div>
+  <div class="group" data-key="mode"><span>主题</span>
+    <button data-v="light" aria-pressed="true">浅色</button>
+    <button data-v="dark" aria-pressed="false">深色</button>
+  </div>
+</div>
+
+<div class="stage">
+  <div class="panel" role="listbox" aria-label="模型列表">
+    <div class="search">搜索模型…</div>
+    <div class="body">
+      <div class="rail" id="rail"></div>
+      <div class="list" id="list"></div>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+  <div class="note" id="note"></div>
+</div>
+
+<div class="mask" id="mask">
+  <div class="dialog" role="dialog" aria-modal="true">
+    <h3 id="dlgTitle"></h3>
+    <p>原来那台电脑上的对话记录带不过来，会整理成交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。</p>
+    <div class="actions">
+      <button id="cancel">保持不变</button>
+      <button class="primary" id="confirm">换电脑运行</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const state = { client: 'desktop', host: 'new', task: 'lead', mode: 'light' };
+  const local = { name: '被控电脑', sources: [
+    { source: 'Cindy AI', models: ['Claude Sonnet 5.5', 'DeepSeek V4.1 Flash'] },
+    { source: 'Art Cindy', models: ['gpt-6.1-sol'] },
+  ] };
+  const remotes = [
+    { name: '电脑 C', sources: [{ source: 'Anthropic', models: ['Claude Opus 5.5', 'Claude Sonnet 5.5'] }] },
+    { name: '电脑 D', sources: [{ source: 'Anthropic', models: ['Claude Opus 5.5'] }] },
+    { name: '分享来的来源', share: true, sources: [{ source: 'OpenAI', models: ['gpt-6.1'] }] },
+  ];
+
+  // 与 ChatInput.tsx sessionRemoteAgentOptions 同一判据（示意）。
+  function showsRemote() {
+    if (state.task === 'device-worker') return false;
+    if (state.task === 'normal') return true;
+    return state.host === 'new';
+  }
+
+  function render() {
+    document.documentElement.dataset.mode = state.mode;
+    document.documentElement.dataset.client = state.client;
+    document.querySelectorAll('.group').forEach((g) => {
+      g.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(state[g.dataset.key] === b.dataset.v)));
+    });
+    const groups = [local, ...(showsRemote() ? remotes : [])];
+    const rail = document.getElementById('rail');
+    rail.innerHTML = '<div class="item">最近</div><div class="item">收藏</div><div class="item on">推荐</div><div class="sep"></div>' +
+      groups.map((g) => `<div class="item">${g.name}</div>`).join('');
+    const list = document.getElementById('list');
+    list.innerHTML = groups.map((g, i) => g.sources.map((s) =>
+      `<div class="head">${s.source}${i === 0 ? '' : ' · ' + g.name}</div>` +
+      s.models.map((m) => `<div class="row" data-device="${i === 0 ? '' : g.name}"><span>${m}<small>${s.source}</small></span>` +
+        `<span class="tag">${i === 0 ? '' : (g.share ? '分享' : '其他电脑')}</span></div>`).join('')
+    ).join('')).join('');
+    list.querySelectorAll('.row').forEach((r) => r.addEventListener('click', () => pick(r.dataset.device)));
+    const note = document.getElementById('note');
+    if (state.task === 'device-worker') note.innerHTML = '<b>运行设备 Worker：</b>任务本身就在另一台电脑上，用户不能给它换 Agent 位置，只列被控电脑自己的来源（与改动前相同）。';
+    else if (state.task === 'normal') note.innerHTML = '<b>普通任务：</b>改动前后都列出其他电脑与分享。';
+    else if (state.host === 'new') note.innerHTML = (state.client === 'phone' ? '<b>手机（#8841）：</b>' : '<b>改动后：</b>') + '被控电脑声明了 supportsOrcaAgentRelocation，协同任务和普通任务一样列出其他电脑与分享；选中后弹确认，下一条消息发出时生效，任务仍是协同成员。';
+    else note.innerHTML = '<b>旧被控电脑：</b>没有声明这一位（v0.1.104–v0.1.110 会拒绝换位置），协同任务只列被控电脑自己的来源，和改动前一样，不出现能点却必失败的选项。' +
+      (state.client === 'phone' ? '手机上如果 Agent 已经在别的电脑，只在那台原地选模。' : '');
+    document.getElementById('toast').textContent = '';
+  }
+
+  function pick(device) {
+    const toast = document.getElementById('toast');
+    if (!device) { toast.textContent = '同一台电脑内换模型：直接生效。'; return; }
+    document.getElementById('dlgTitle').textContent = `改到「${device}」上运行 Agent？`;
+    document.getElementById('mask').classList.add('open');
+  }
+
+  document.getElementById('cancel').onclick = () => document.getElementById('mask').classList.remove('open');
+  document.getElementById('confirm').onclick = () => {
+    document.getElementById('mask').classList.remove('open');
+    document.getElementById('toast').textContent = '已登记换电脑：下一条消息发出时生效。';
+  };
+  document.querySelectorAll('.group').forEach((g) => g.addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    state[g.dataset.key] = b.dataset.v; render();
+  }));
+  render();
+</script>
+</body>
+</html>

@@ -39,7 +39,7 @@ vi.mock('@/components/ui/select', () => ({
       disabled={disabled}
       onChange={(event) => onValueChange(event.target.value)}
     >
-      {options.map((option) => (
+      {(options ?? []).map((option) => (
         <option key={option.value} value={option.value}>
           {option.label}
         </option>

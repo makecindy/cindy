@@ -3,6 +3,7 @@ import path from 'node:path';
 
 const mocks = vi.hoisted(() => ({ watch: vi.fn(), mkdir: vi.fn(), open: vi.fn(), rename: vi.fn(), rm: vi.fn(), close: vi.fn(), on: vi.fn() }));
 vi.mock('electron', () => ({ app: { getPath: () => path.resolve('test-user-data') } }));
+vi.mock('../userDataPath', () => ({ getUserDataDir: () => path.resolve('test-user-data'), getAppDataDir: () => path.resolve('test-app-data') }));
 vi.mock('node:fs', async (original) => ({ ...await original<typeof import('node:fs')>(), watch: mocks.watch }));
 vi.mock('node:fs/promises', async (original) => {
   const fs = await original<typeof import('node:fs/promises')>();

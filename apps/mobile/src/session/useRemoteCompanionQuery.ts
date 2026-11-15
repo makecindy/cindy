@@ -1,10 +1,11 @@
 import { useCallback, useRef, useState } from 'react';
-import { prStatusKey, type PrStatusResult } from '@cindy/maker-shared';
+import { remotePrStatuses, prStatusKey, type PrStatusResult } from '@cindy/maker-shared';
 import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useAuth } from '@/auth/AuthContext';
 import { subscribeRemoteBotChanges, useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { readCompanionTask, subscribeCompanionTaskRefresh } from './companionTaskReads';
+import { reuseJsonSnapshot } from '@/utils/reuseJsonSnapshot';
 
 const pending = new Map<string, { promise: Promise<unknown>; invalidated: boolean; consumers: Set<() => boolean> }>();
 
@@ -15,6 +16,8 @@ export function useRemoteCompanionQuery<T>(
   args: unknown[],
   options: {
     enabled?: boolean;
+    /** Pause requests/subscriptions while retaining the known presentation value. */
+    active?: boolean;
     refreshIntervalMs?: number;
     refreshKey?: number;
   } = {},
@@ -52,7 +55,7 @@ export function useRemoteCompanionQuery<T>(
         const entry = pending.get(binding);
         if (entry) entry.invalidated = true;
       }
-      if (!deviceId || !online || options.enabled === false) return;
+      if (!deviceId || !online || options.enabled === false || options.active === false) return;
       let disposed = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       let generation = 0;
@@ -72,10 +75,22 @@ export function useRemoteCompanionQuery<T>(
         if (!entry) {
           const consumers = new Set<() => boolean>();
           entry = {
-            promise: channel === 'local-db:sessions:get'
-              ? readCompanionTask(taskReadScope, deviceId, JSON.parse(argsKey)[0], link.invoke,
-                () => [...consumers].some((current) => current()))
-              : link.invoke(deviceId, channel, JSON.parse(argsKey)),
+            promise:
+              channel === 'local-db:sessions:get'
+                ? readCompanionTask(
+                    taskReadScope,
+                    deviceId,
+                    JSON.parse(argsKey)[0],
+                    link.invoke,
+                    () => [...consumers].some((current) => current()),
+                  )
+                : channel === 'git-context:pr-status'
+                  ? remotePrStatuses(
+                      JSON.parse(argsKey)[0].queries,
+                      JSON.parse(argsKey)[0].sessionId,
+                      (name, params) => link.invoke(deviceId, name, params),
+                    )
+                  : link.invoke(deviceId, channel, JSON.parse(argsKey)),
             invalidated: false,
             consumers,
           };
@@ -96,6 +111,12 @@ export function useRemoteCompanionQuery<T>(
                 value && typeof value === 'object' && 'ok' in value && value.ok === false;
               setState((previous) => {
                 const prior = previous.identity === identity ? previous.value : null;
+                const publish = (next: T | null, error: boolean) => {
+                  const shared = reuseJsonSnapshot(prior, next);
+                  return previous.identity === identity && previous.binding === binding
+                    && previous.value === shared && previous.error === error && previous.cause === undefined
+                    ? previous : { identity, binding, value: shared, error };
+                };
                 if (channel === 'git-context:pr-status' && Array.isArray(value)) {
                   const oldStatuses = new Map(
                     (Array.isArray(prior) ? (prior as PrStatusResult[]) : [])
@@ -103,23 +124,13 @@ export function useRemoteCompanionQuery<T>(
                       .map((status) => [prStatusKey(status), status]),
                   );
                   const statuses = value as PrStatusResult[];
-                  return {
-                    identity,
-                    binding,
-                    value: statuses.map((status) =>
+                  return publish(statuses.map((status) =>
                       status.ok || status.reason === 'not-found'
                         ? status
                         : (oldStatuses.get(prStatusKey(status)) ?? status),
-                    ) as T,
-                    error: statuses.some((status) => !status.ok),
-                  };
+                    ) as T, statuses.some((status) => !status.ok));
                 }
-                return {
-                  identity,
-                  binding,
-                  value: failed ? prior : (value as T),
-                  error: Boolean(failed),
-                };
+                return publish(failed ? prior : (value as T), Boolean(failed));
               });
             }
           })
@@ -186,6 +197,7 @@ export function useRemoteCompanionQuery<T>(
       online,
       revision,
       options.enabled,
+      options.active,
       options.refreshIntervalMs,
       options.refreshKey,
     ]),

@@ -6,7 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   Eye,
-  RotateCw,
+  Fullscreen,
   Volume2,
   PictureInPicture2,
   LogOut,
@@ -88,11 +88,9 @@ export function RemoteDesktopControls({
   onShowMouseButtons(value: boolean): void;
   onDisplay(id: string): void;
   presentation: {
-    canRotate: boolean;
     canPip: boolean;
     canAudio: boolean;
     enabled?: boolean;
-    onRotate(): void;
     onPip(): void;
   };
   video: {
@@ -102,7 +100,7 @@ export function RemoteDesktopControls({
     modesSupported: boolean;
     displayGeometry?: string;
     viewerDisplaySupported?: boolean;
-    viewerDisplayMatched?: boolean;
+    autoFitEnabled?: boolean;
     onFitDisplay?(): void;
     notice: string | null;
     onChange(settings: Partial<RemoteDesktopVideoSettings>): void;
@@ -143,10 +141,15 @@ export function RemoteDesktopControls({
       label: button.label,
     })),
     {
-      key: "rotate",
-      icon: RotateCw,
-      onPress: presentation.onRotate,
-      disabled: !presentation.canRotate,
+      key: "fitViewerDisplay",
+      icon: Fullscreen,
+      onPress: () => video.onFitDisplay?.(),
+      disabled:
+        !video.viewerDisplaySupported ||
+        !connected ||
+        !controlling ||
+        video.busy,
+      selected: video.autoFitEnabled,
     },
     {
       key: "sound",
@@ -346,7 +349,11 @@ export function RemoteDesktopControls({
                 </Text>
               )}
             </View>
-            <ChevronRight size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.textTertiary} />
+            <ChevronRight
+              size={iconSize.lg}
+              strokeWidth={iconStroke.regular}
+              color={colors.textTertiary}
+            />
           </Pressable>
           {security && (
             <>
@@ -366,7 +373,11 @@ export function RemoteDesktopControls({
                 <Text style={[styles.rowTitle, styles.expand]}>
                   {t("remoteDesktop.security")}
                 </Text>
-                <ChevronRight size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.textTertiary} />
+                <ChevronRight
+                  size={iconSize.lg}
+                  strokeWidth={iconStroke.regular}
+                  color={colors.textTertiary}
+                />
               </Pressable>
             </>
           )}
@@ -571,7 +582,11 @@ const makeStyles = (colors: ThemeColors) =>
       borderRadius: radius.pill,
     },
     segment: { flex: 1, minHeight: 44, borderRadius: radius.pill },
-    hint: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+    hint: {
+      color: colors.textSecondary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+    },
     group: {
       backgroundColor: colors.surfaceTranslucent,
       borderRadius: radius.container,
@@ -587,7 +602,11 @@ const makeStyles = (colors: ThemeColors) =>
       alignItems: "center",
       gap: spacing.sm,
     },
-    rowTitle: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
+    rowTitle: {
+      color: colors.textPrimary,
+      fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
+    },
     expand: { flex: 1 },
     divider: {
       height: StyleSheet.hairlineWidth,
@@ -612,7 +631,11 @@ const makeStyles = (colors: ThemeColors) =>
       gap: spacing.sm,
       borderRadius: radius.control,
     },
-    disconnectLabel: { color: colors.destructive, fontSize: typeScale.body, lineHeight: lineHeight.body },
+    disconnectLabel: {
+      color: colors.destructive,
+      fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
+    },
     disabled: { opacity: 0.4 },
     pressed: { opacity: 0.72 },
   });

@@ -72,7 +72,6 @@ beforeEach(() => {
     media: noOp,
     cards: noOp,
     unread: unread.relocateGhostUnread,
-    routines: noOp,
     recommendations: noOp,
     recentUsage: noOp,
   };
@@ -273,12 +272,9 @@ it('moves downloads, recent usage and recommendations with the archived instance
   recs.markGhostRecommendationInstalled(from);
   resources.recentUsage = recent.relocateGhostRecentUsage;
   resources.recommendations = recs.relocateGhostRecommendations;
-  const routines = vi.fn();
-  resources.routines = routines;
   await relocateGhostUserDataResources(from, archive, resources);
   expect(fs.readFileSync(path.join(scope.dir, 'plugin-downloads', archive, 'pkg.bin'), 'utf8')).toBe('bytes');
   expect(fs.existsSync(path.join(scope.dir, 'plugin-downloads', from))).toBe(false);
   expect(recent.loadGhostRecentIds()).toEqual(['other-plugin', archive]);
   expect(recs.readGhostRecommendationEntries().map((entry) => entry.id)).toEqual([archive]);
-  expect(routines).toHaveBeenCalledWith(from, archive);
 });

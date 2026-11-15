@@ -185,6 +185,8 @@ describe('desktop send outcome helper', () => {
     });
   });
 
+  // Protocol contract: selected-plugin skip/block failures must survive the
+  // same sanitizer as other host failures, without exposing their raw message.
   it('exports the host failure code list used for sanitizer allow-listing', async () => {
     expect(HOST_SEND_FAILURE_CODES).toEqual([
       'WORKDIR_MISSING',
@@ -195,6 +197,8 @@ describe('desktop send outcome helper', () => {
       'SESSION_RUNNING',
       'CREDENTIAL_SWITCH_BUSY',
       'SEND_FAILED',
+      'PLUGIN_TURN_SKIPPED',
+      'PLUGIN_TURN_BLOCKED',
     ]);
     for (const code of HOST_SEND_FAILURE_CODES) {
       const err = new Error(code) as Error & { code?: string };

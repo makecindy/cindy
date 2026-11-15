@@ -28,6 +28,7 @@ import {
 } from '@/auth/authOwnerGeneration';
 import { deleteSecureItem, getSecureItem, setSecureItem } from '@/auth/secureStorage';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
+import { parseMobileAgentNetMembership, type MobileAgentNetMembership } from './agentNetMembership';
 
 import {
   getActiveSelfHostedRelay,
@@ -58,12 +59,18 @@ interface StoredRelayConfig {
   deviceId: string;
   /** 加入链接里的主人公钥。 */
   ownerPublicKey: string;
+  /** 别人分享给本账号的中转(§5.5);`ownerName` 是分享者的名字。 */
+  shared?: { ownerName: string | null };
 }
 
-/** 安全存储里的一条:凭证与签名种子同存同删,不会只剩一半。 */
+/**
+ * 安全存储里的一条:凭证与签名种子同存同删,不会只剩一半。
+ * 只走 V2 的网络(别人分享来的中转)没有旧版凭证(空字符串),但一定带着已签发的 V2 证书。
+ */
 interface StoredRelaySecrets {
   credential: string;
   seed: string;
+  agentNet?: MobileAgentNetMembership;
 }
 
 function accountHash(accountKey: string): string {
@@ -94,6 +101,7 @@ function parseStoredConfig(raw: string | null): StoredRelayConfig | null {
     ) {
       return null;
     }
+    const shared = value.shared && typeof value.shared === 'object' ? value.shared : null;
     return {
       version: 2,
       mode: 'self-hosted',
@@ -103,6 +111,7 @@ function parseStoredConfig(raw: string | null): StoredRelayConfig | null {
       role: 'member',
       deviceId: value.deviceId,
       ownerPublicKey: value.ownerPublicKey,
+      ...(shared ? { shared: { ownerName: typeof shared.ownerName === 'string' ? shared.ownerName.slice(0, 64) : null } } : {}),
     };
   } catch {
     return null;
@@ -113,9 +122,12 @@ function parseStoredSecrets(raw: string | null): StoredRelaySecrets | null {
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as Partial<StoredRelaySecrets>;
-    if (typeof value.credential !== 'string' || !value.credential) return null;
+    if (typeof value.credential !== 'string') return null;
     if (typeof value.seed !== 'string' || !SEED_PATTERN.test(value.seed)) return null;
-    return { credential: value.credential, seed: value.seed };
+    const agentNet = parseMobileAgentNetMembership(value.agentNet);
+    // 没有旧版凭证时只能靠已签发的 V2 证书连接。
+    if (!value.credential && !agentNet?.certificate) return null;
+    return { credential: value.credential, seed: value.seed, ...(agentNet ? { agentNet } : {}) };
   } catch {
     return null;
   }
@@ -183,10 +195,14 @@ function routeFromConfig(config: StoredRelayConfig, secrets: StoredRelaySecrets 
     relayId: config.relayId,
     name: config.name,
     baseUrl: config.baseUrl,
-    credential: secrets?.credential ?? null,
+    credential: secrets?.credential || null,
     signing: secrets
-      ? { deviceId: config.deviceId, ownerPublicKey: config.ownerPublicKey, seed: secrets.seed }
+      ? { deviceId: config.deviceId, ownerPublicKey: config.ownerPublicKey, seed: secrets.seed,
+          ...(secrets.agentNet?.networkId === 'private:' + config.relayId && secrets.agentNet.rootPublicKey === config.ownerPublicKey
+            ? { agentNet: secrets.agentNet } : {}) }
       : null,
+    ...(secrets && !secrets.credential ? { agentNetOnly: true } : {}),
+    ...(config.shared ? { shared: config.shared } : {}),
   };
 }
 
@@ -203,20 +219,31 @@ function assertOwnerCurrent(owner: MobileAuthOwnerGeneration): void {
  * 加入成功(且证书已核对)后保存并切换到这个中转。凭证只返回一次,先写安全存储再写设置;
  * 设置写失败时把安全存储恢复成原来的,避免设置与凭证、签名密钥对不上。
  */
-export async function saveSelfHostedRelay(input: {
+let relayMutationTail: Promise<void> = Promise.resolve();
+function mutateRelay<T>(owner: MobileAuthOwnerGeneration, run: () => Promise<T>): Promise<T> {
+  const work = relayMutationTail.then(() => { assertOwnerCurrent(owner); return run(); });
+  relayMutationTail = work.then(() => undefined, () => undefined);
+  return work;
+}
+
+async function saveSelfHostedRelayNow(input: {
   owner: MobileAuthOwnerGeneration;
   relayId: string;
   name: string;
   baseUrl: string;
   deviceId: string;
   ownerPublicKey: string;
+  /** 旧版凭证;只走 V2 的网络传空字符串,此时 `agentNet` 必须带着证书。 */
   credential: string;
   /** 本机签名私钥种子(base64url),见 `createRelayJoinIdentity`。 */
   seed: string;
+  agentNet?: MobileAgentNetMembership;
+  shared?: { ownerName: string | null };
 }): Promise<void> {
   assertOwnerCurrent(input.owner);
   const baseUrl = normalizeRelayBaseUrl(input.baseUrl);
-  if (!baseUrl || !input.credential || !SEED_PATTERN.test(input.seed) || !isRelayPublicKey(input.ownerPublicKey)) {
+  if (!baseUrl || (!input.credential && !input.agentNet?.certificate) || !SEED_PATTERN.test(input.seed)
+    || !isRelayPublicKey(input.ownerPublicKey)) {
     throw new Error('INVALID_RELAY');
   }
   const accountKey = input.owner.accountKey;
@@ -231,14 +258,23 @@ export async function saveSelfHostedRelay(input: {
     role: 'member',
     deviceId: input.deviceId,
     ownerPublicKey: input.ownerPublicKey,
+    ...(input.shared ? { shared: { ownerName: input.shared.ownerName?.slice(0, 64) ?? null } } : {}),
   };
-  const secrets: StoredRelaySecrets = { credential: input.credential, seed: input.seed };
+  const agentNet = parseMobileAgentNetMembership(input.agentNet);
+  if (!input.credential && !agentNet?.certificate) throw new Error('AGENT_NET_IDENTITY_MISMATCH');
+  if (input.agentNet && (!agentNet || agentNet.networkId !== 'private:' + input.relayId
+    || agentNet.rootPublicKey !== input.ownerPublicKey || (agentNet.certificate
+      && (agentNet.certificate.deviceId !== input.deviceId || agentNet.certificate.subject !== input.owner.accountId)))) {
+    throw new Error('AGENT_NET_IDENTITY_MISMATCH');
+  }
+  const secrets: StoredRelaySecrets = { credential: input.credential, seed: input.seed, ...(agentNet ? { agentNet } : {}) };
   await setSecureItem(secretsKey(accountKey), JSON.stringify(secrets), { thisDeviceOnly: true });
   try {
     await AsyncStorage.setItem(configKey(accountKey), JSON.stringify(config));
   } catch (error) {
     const previousSecrets: StoredRelaySecrets | null = previousRoute?.credential && previousRoute.signing
-      ? { credential: previousRoute.credential, seed: previousRoute.signing.seed }
+      ? { credential: previousRoute.credential, seed: previousRoute.signing.seed,
+          ...(previousRoute.signing.agentNet ? { agentNet: previousRoute.signing.agentNet } : {}) }
       : null;
     const restore = previousSecrets
       ? setSecureItem(secretsKey(accountKey), JSON.stringify(previousSecrets), { thisDeviceOnly: true })
@@ -256,9 +292,39 @@ export async function saveSelfHostedRelay(input: {
   }
 }
 
+export function saveSelfHostedRelay(input: Parameters<typeof saveSelfHostedRelayNow>[0]): Promise<void> {
+  return mutateRelay(input.owner, () => saveSelfHostedRelayNow(input));
+}
+
+/** Upgrade the already paired device; never replace another relay's credential. */
+export function completeSelfHostedAgentNetMembership(input: {
+  owner: MobileAuthOwnerGeneration; relayId: string; seed: string;
+  expectedTransportKey: string; expectedSigningKey: string; membership: MobileAgentNetMembership;
+}): Promise<void> {
+  return mutateRelay(input.owner, async () => {
+    const config = currentConfig, route = getActiveSelfHostedRelay();
+    const agentNet = parseMobileAgentNetMembership(input.membership);
+    if (!config || config.relayId !== input.relayId || !route?.credential || route.signing?.seed !== input.seed
+      || !agentNet?.certificate || agentNet.networkId !== 'private:' + config.relayId || agentNet.rootPublicKey !== config.ownerPublicKey
+      || agentNet.certificate.deviceId !== config.deviceId || agentNet.certificate.subject !== input.owner.accountId
+      || agentNet.certificate.transportKey !== input.expectedTransportKey
+      || agentNet.certificate.signingKey !== input.expectedSigningKey) throw new Error('AGENT_NET_IDENTITY_MISMATCH');
+    const raw = await getSecureItem(secretsKey(input.owner.accountKey));
+    assertOwnerCurrent(input.owner);
+    const secrets = parseStoredSecrets(raw);
+    if (!secrets || secrets.seed !== input.seed || secrets.credential !== route.credential) throw new Error('AGENT_NET_OWNER_CHANGED');
+    const next = { ...secrets, agentNet };
+    await setSecureItem(secretsKey(input.owner.accountKey), JSON.stringify(next), { thisDeviceOnly: true });
+    if (isMobileAuthOwnerCurrent(input.owner)) setActiveSelfHostedRelay(routeFromConfig(config, next));
+  });
+}
+
 /** 切回官方中转:删掉设置与凭证,立即恢复官方路由;再尽力让中转删掉这台手机。 */
-export async function clearSelfHostedRelay(): Promise<void> {
+export function clearSelfHostedRelay(): Promise<void> {
   const owner = getMobileAuthOwner();
+  return mutateRelay(owner, () => clearSelfHostedRelayNow(owner));
+}
+async function clearSelfHostedRelayNow(owner: MobileAuthOwnerGeneration): Promise<void> {
   assertOwnerCurrent(owner);
   const leavingConfig = currentConfig;
   const leavingCredential = getActiveSelfHostedRelay()?.credential ?? null;

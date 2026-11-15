@@ -88,6 +88,7 @@ export function useDeviceLinkConnectionIssue(
 
 export function useRemoteSessionConnection(deviceId: string | undefined): RemoteConnectionStatus {
   const [linkStatus, setLinkStatus] = useState<LinkStatus>('online');
+  const [directReadyFor, setDirectReadyFor] = useState<string | undefined>();
 
   useEffect(() => {
     if (!deviceId) return;
@@ -101,7 +102,10 @@ export function useRemoteSessionConnection(deviceId: string | undefined): Remote
     void window.electronAPI.deviceLink
       .getState()
       .then((s) => {
-        if (!cancelled && !pushSeen) setLinkStatus(s.linkStatus);
+        if (!cancelled && !pushSeen) {
+          setLinkStatus(s.linkStatus);
+          setDirectReadyFor(s.directDataDeviceIds?.includes(deviceId) ? deviceId : undefined);
+        }
       })
       .catch(() => {
         /* 取不到状态 → 保守按 online,避免误报 banner */
@@ -110,6 +114,7 @@ export function useRemoteSessionConnection(deviceId: string | undefined): Remote
       if (cancelled) return;
       pushSeen = true;
       setLinkStatus(p.status);
+      setDirectReadyFor(p.directDataDeviceIds?.includes(deviceId) ? deviceId : undefined);
     });
 
     return () => {
@@ -134,5 +139,7 @@ export function useRemoteSessionConnection(deviceId: string | undefined): Remote
   );
 
   if (!deviceId) return 'local';
-  return deriveRemoteConnectionStatus(isSharedTaskPeer(deviceId) ? 'online' : linkStatus, hostOnline, hostUnresponsive);
+  const directReady = directReadyFor === deviceId;
+  return deriveRemoteConnectionStatus(isSharedTaskPeer(deviceId) || directReady ? 'online' : linkStatus,
+    hostOnline || directReady, hostUnresponsive);
 }

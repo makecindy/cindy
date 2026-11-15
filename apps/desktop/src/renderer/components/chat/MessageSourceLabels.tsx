@@ -133,7 +133,7 @@ export function MessageSourcePluginBadge({
   const remote = Boolean(getStickySessionDeviceId(hostSessionId));
   const isApp = plugin.pluginId.startsWith('mcp-app:');
   const isLocalApp = plugin.pluginId.startsWith('local-app:');
-  const interactive = navigationMode !== 'sidebar-embedded' && !remote && !isApp && !isLocalApp;
+  const interactive = navigationMode !== 'sidebar-embedded' && !remote && !plugin.pluginId.includes('::') && !isApp && !isLocalApp;
   return (
     <MessageSourceLabelShell
       kind="plugin"
@@ -182,6 +182,7 @@ export function MessageSourceLabels({
     <div
       {...{ [SHARE_SOURCE_ATTR]: '' }}
       data-message-source-labels=""
+      data-selection-quote-scope=""
       className={cn(
         'flex max-w-full flex-wrap items-center gap-x-3 gap-y-0.5 empty:hidden',
         align === 'start' ? 'justify-start' : 'justify-end',

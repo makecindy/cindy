@@ -110,7 +110,7 @@ describe('live screen leases', () => {
   it('starts as the screen it was asked for, with control and no desktop permission or input helper', async () => {
     const h = harness('missing');
     const lease = await h.start({ control: true });
-    expect(h.liveScreens.open).toHaveBeenCalledWith('sim', 'UDID-1', expect.any(Function));
+    expect(h.liveScreens.open).toHaveBeenCalledWith('sim', 'UDID-1', expect.any(Function), undefined);
     expect(lease).toMatchObject({
       controlling: true,
       screen,

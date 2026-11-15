@@ -43,6 +43,9 @@ const history = (): ProviderUsageHistoryView => ({
   members: [{ shareId: 's', memberId: 'm1', lastUsedAt: 1, days: [day({ day: '2026-10-16', memberKey: 'share:kai-1:xd' })] }],
 });
 
+// 测试价值：生产入口 summarizeUsageRows / keysByTokens / usageRowsByDay 的展示总量（provider-groups.md §7）。
+// 原覆盖只加 input/output，cache-only 记录在总量、排名和热力图中消失；最小输入 cacheRead=200、其余三类为 0。
+// tier: unit；本文件单独运行实测 462ms。
 describe('provider usage rows', () => {
   it('flattens daily usage by party and merges accounts on one physical computer', () => {
     const rows = rowsFromHistory(history(), new Map([['share:kai-1:xd', 'share-host:kai-pc']]));
@@ -68,19 +71,23 @@ describe('provider usage rows', () => {
     expect(filterUsageRows(rows, filter, { range: true })).toHaveLength(3);
   });
 
-  it('sums tokens as input plus output, keeps cache hit rate and never adds amounts in different currencies', () => {
+  it('includes cache reads and writes without changing the input breakdown, hit rate or amount', () => {
     const rows = rowsFromHistory(history());
     const totals = summarizeUsageRows([
       ...rows.slice(0, 2),
-      { ...rows[0]!, cacheReadTokens: 30, inputTokens: 10, outputTokens: 0, amount: null },
+      { ...rows[0]!, cacheReadTokens: 30, cacheCreateTokens: 7, inputTokens: 10, outputTokens: 0, amount: null },
     ]);
-    expect(totals).toMatchObject({ tokens: 121, inputTokens: 120, turns: 3, amount: { amount: 2, currency: 'USD' } });
-    expect(totals.cacheHitRate).toBeCloseTo(30 / 150);
+    expect(totals).toMatchObject({
+      tokens: 158, inputTokens: 120, outputTokens: 1, cacheReadTokens: 30, cacheCreateTokens: 7,
+      turns: 3, amount: { amount: 2, currency: 'USD' },
+    });
+    expect(totals.cacheHitRate).toBeCloseTo(30 / 157);
     expect(summarizeUsageRows([rows[0]!, { ...rows[1]!, amount: { amount: 7, currency: 'CNY' } }]).amount).toBeNull();
+    expect(summarizeUsageRows([]).amount).toBeNull();
     expect(summarizeUsageRows([]).cacheHitRate).toBeNull();
   });
 
-  it('orders computers as the group lists them, then removed ones by usage, then earlier unattributed usage', () => {
+  it('orders current computers as the group lists them and merges removed or unattributed history into one earlier bucket', () => {
     const rows = rowsFromHistory({
       ...history(),
       self: {
@@ -95,16 +102,19 @@ describe('provider usage rows', () => {
       members: [],
     });
     expect(computerOrder(['local', 'device:studio:xd'], rows)).toEqual([
-      'local', 'device:studio:xd', 'device:old:xd', 'device:gone:xd', null,
+      'local', 'device:studio:xd', null,
     ]);
   });
 
-  it('ranks models by tokens across the whole history and totals each day for the heatmap', () => {
-    const rows = rowsFromHistory(history());
-    expect(keysByTokens(rows, modelKeyOf)).toEqual(['claude-code opus', 'claude-code sonnet']);
+  it('ranks cache-only models by total tokens and includes them in the heatmap', () => {
+    const rows = rowsFromHistory(history()).map((row) => row.model === 'sonnet'
+      ? { ...row, inputTokens: 0, outputTokens: 0, cacheReadTokens: 200 }
+      : row);
+    expect(keysByTokens(rows, modelKeyOf)).toEqual(['claude-code sonnet', 'claude-code opus']);
     expect(usageRowsByDay(rows)).toEqual(expect.arrayContaining([
       { day: '2026-10-17', tokens: 15 },
       { day: '2026-10-12', tokens: 100 },
+      { day: '2026-09-01', tokens: 200 },
     ]));
   });
 

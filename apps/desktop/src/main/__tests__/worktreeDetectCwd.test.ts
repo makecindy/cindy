@@ -11,7 +11,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { detectCwd } from '../worktree/WorktreeManager';
+import { detectCwd } from '../worktree/detectCwd';
 import { GitExecError, type GitExecOpts } from '../worktree/gitExec';
 import { OperationBudget, currentOperationBudget } from '../utils/operationBudget';
 
@@ -77,6 +77,31 @@ function setupGitMock(opts: {
 }
 
 describe('detectCwd → isInsideWorktree (I-1 fix)', () => {
+  // PR #10251, unit tier: a read-only status probe must not inherit the result of
+  // a same-directory probe that repairs global trust. Existing tests share one policy.
+  it('keeps read-only ownership failures separate from pending repairing probes', async () => {
+    let releaseRepair!: () => void;
+    let enteredRepair!: () => void;
+    const entered = new Promise<void>((resolve) => { enteredRepair = resolve; });
+    gitExecMock.mockImplementation((args: readonly string[], _cwd: string, opts: GitExecOpts) => {
+      if (args[0] === '--version') return Promise.resolve({ stdout: 'git version 2.45.0\n', stderr: '' });
+      if (opts.repairSafeDirectory === false) {
+        throw new GitExecError({ args, exitCode: 128, stdout: '', stderr: 'fatal: detected dubious ownership' });
+      }
+      enteredRepair();
+      return new Promise((resolve) => {
+        releaseRepair = () => resolve({ stdout: '/probe-repo\nmain\n.git\n.git\n', stderr: '' });
+      });
+    });
+    const repairing = detectCwd('/probe-repo');
+    await entered;
+    const readOnly = detectCwd('/probe-repo', { repairSafeDirectory: false });
+    releaseRepair();
+    const [repaired, untrusted] = await Promise.all([repairing, readOnly]);
+    expect(repaired.isGitRepo).toBe(true);
+    expect(untrusted).toMatchObject({ isGitRepo: false, gitInstalled: true });
+  });
+
   // #7259, unit tier: a cancellable snapshot probe must not share a pending UI
   // probe. The two callers own different lifetimes even for the same directory.
   it('isolates a cancelled snapshot probe from a pending UI probe of the same directory', async () => {

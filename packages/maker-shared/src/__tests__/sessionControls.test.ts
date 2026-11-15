@@ -64,6 +64,21 @@ describe('shared session usage summaries', () => {
       detail: '90,000 / 200,000 tokens · 45%',
     });
   });
+
+  // Cross-device contract: a diagnostic text estimate must not alter native totals
+  // or masquerade as exact category usage, including payloads from newer hosts.
+  it('labels estimated sources independently and ignores unknown estimate methods', () => {
+    const base = { totalTokens: 100, maxTokens: 1000 };
+    const textEstimate = { method: 'text-heuristic', items: [{ source: 'tools', tokens: 300 }] };
+    const result = summarizeContextUsage({ ...base, textEstimate });
+    expect(result.detail).toBe('100 / 1,000 tokens · 10%');
+    expect(result.rows).toContainEqual({ label: 'Tool definitions', value: '≈ 300 tokens' });
+    expect(summarizeContextUsage({ ...base, textEstimate: { ...textEstimate, method: 'future' } }).rows).toEqual([]);
+    const translated = summarizeContextUsage({ ...base, textEstimate }, {
+      translate: (key, fallback) => key.endsWith('.tools') ? '工具定义' : fallback,
+    });
+    expect(translated.rows).toContainEqual({ label: '工具定义', value: '≈ 300 tokens' });
+  });
 });
 
 describe('summarizeCodexRateLimitReset', () => {

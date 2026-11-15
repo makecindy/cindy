@@ -6,7 +6,7 @@
  * 成功 / 失败分类(超时计失败、控制帧成功不定论、探测通道回包关熔断)。
  */
 import { describe, expect, it, vi } from 'vitest';
-import { DeviceLinkError } from '@cindy/device-link';
+import { DeviceLinkError, providerShareHostPeer, REMOTE_AGENT_CHANNEL } from '@cindy/device-link';
 import {
   BREAKER_FAILURE_THRESHOLD,
   BREAKER_PROBE_BACKOFF_BASE_MS,
@@ -71,6 +71,16 @@ async function openBreaker(
 }
 
 describe('responsivenessTracker', () => {
+  // Unit: the screenshot's provider-share target never authorizes local-db:sessions:list.
+  // This exercises half-open recovery itself, not just the channel selector.
+  it.each(['group-owner', 'executor-m'])('probes the actual scoped Agent service for %s without reading its task database', async device => {
+    const target = providerShareHostPeer('shared', device);
+    const h = harness(); await openBreaker(h, target);
+    h.advance(BREAKER_PROBE_BACKOFF_BASE_MS); h.tracker.probeTick();
+    await Promise.resolve(); await Promise.resolve();
+    expect(h.probeInvoke).toHaveBeenCalledWith(target, REMOTE_AGENT_CHANNEL, [{ op: 'caps' }]);
+    expect(h.tracker.isUnresponsive(target)).toBe(false);
+  });
   // Oct 30 multi-device outage: shared silence is not independent peer failure.
   // Existing tests supplied only peer timeout codes, never relay health evidence.
   it('does not open peer breakers or reopen links during an unconfirmed shared outage', async () => {

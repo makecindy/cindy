@@ -41,7 +41,7 @@ vi.mock('../../maker-host/codex-local-sessions.js', () => ({ importSharedCodexTh
 vi.mock('../../worktree/WorktreeManager.js', () => ({ createWorktree: vi.fn(), detectCwd: vi.fn(), removeWorktreeForSession: vi.fn(), suggestName: vi.fn() }));
 vi.mock('../../cindy-media/ingest.js', () => ({ ingestMedia: vi.fn() }));
 vi.mock('../../cindy-media/ledger.js', () => ({ removeSessionRefs: vi.fn(), removeSessionRefsIfDeleted: vi.fn() }));
-vi.mock('../../imageCacheStore.js', () => ({ getCacheRoot: vi.fn(), getSessionDir: vi.fn(), removeSession: vi.fn(), resolveSafe: vi.fn() }));
+vi.mock('../../imageCacheStore.desktop.js', () => ({ getCacheRoot: vi.fn(), getSessionDir: vi.fn(), removeSession: vi.fn(), resolveSafe: vi.fn() }));
 vi.mock('../../videoCacheStore.js', () => ({ resolveSafe: vi.fn() }));
 vi.mock('../../modelCacheStore.js', () => ({ resolveSafe: vi.fn() }));
 vi.mock('../dialogueWorkspace.js', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
@@ -53,7 +53,9 @@ for (const table of [sessions, messages, sessionPrRefs, migrationMeta, orcaTeams
   const config = getTableConfig(table);
   sqlite.exec(`CREATE TABLE "${config.name}" (${config.columns.map(c => `"${c.name}" ${c.getSQLType()}${c.primary ? ' PRIMARY KEY' : ''}`).join(', ')})`);
 }
-sqlite.exec('CREATE UNIQUE INDEX pr_identity ON session_pr_refs(session_id,owner,repo,pr_number)');
+sqlite.exec(
+  'CREATE UNIQUE INDEX pr_identity ON session_pr_refs(session_id,provider,host,owner,repo,pr_number)',
+);
 sqlite.exec('CREATE UNIQUE INDEX message_identity ON messages(session_id,client_id)');
 const client = {
   drizzle: db,

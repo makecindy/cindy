@@ -64,7 +64,7 @@ import { useChatSessionFile } from './ChatSessionFileContext';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 import { activateInlineLinkFromKeyboard } from './linkInteraction';
 import { ImageLightbox } from './ImageLightbox';
-import { TextLightbox } from './TextLightbox';
+import { TextLightbox } from './lazyPreviewLightboxes';
 import { ModelLightbox } from './ModelLightbox';
 import { isHtmlFilePath, openHtmlFileByPreference } from './useOpenWithMenu';
 
@@ -354,6 +354,7 @@ function GeneratedFileChip({
   return (
     <>
       <button
+        data-chat-copy-content
         type="button"
         title={file.path}
         disabled={pending}

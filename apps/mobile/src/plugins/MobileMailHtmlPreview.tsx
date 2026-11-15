@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Keyboard, View } from 'react-native';
 import { applyMailInlineEdits, mailInlineDocument, mailReadingDocument, mailReadingThemeScript, mailInlineBindingScript, mailInlineRefreshScript, type MailInlineImage } from '@cindy/maker-shared/mail-text-edit';
@@ -110,7 +111,7 @@ export function MobileMailHtmlPreview({ html, images = [], deviceId, disabled, o
 function MobileMailFrame({ html, images, disabled, onChange }: {
   html: string; images: MailInlineImage[]; disabled?: boolean; onChange?: (html: string, text: string) => void;
 }) {
-  const web = useRef<WebView>(null), frame = useRef<View>(null);
+  const web = useRef<WebView>(null), frame = useRef<ViewInstance>(null);
   const [height, setHeight] = useState<number>();
   const reveal = useContext(MessageListRevealContext);
   const caret = useRef<{ top: number; bottom: number } | undefined>(undefined);

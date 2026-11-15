@@ -55,7 +55,15 @@ const request = {
   ghostName: '示例插件',
   expiresAt: Date.now() + 90_000,
 };
+let guest: HTMLElement;
 beforeEach(() => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} unobserve() {} });
+  guest = document.createElement('webview');
+  Object.assign(guest, {
+    getWebContentsId: () => 42,
+    getBoundingClientRect: () => new DOMRect(100, 50, 800, 600),
+  });
+  document.body.appendChild(guest);
   selectedLocation = undefined;
   resolve.mockReset().mockResolvedValue({ handled: true, accepted: true });
   remote.mockReset().mockResolvedValue({ handled: true, accepted: true });
@@ -77,7 +85,7 @@ beforeEach(() => {
     },
   });
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); guest.remove(); vi.unstubAllGlobals(); });
 
 it('keeps the full configuration as a draft until the user confirms, then returns it to Host', async () => {
   render(<PluginModelPickerHost />);
@@ -163,4 +171,58 @@ it('returns the selected share location with the confirmed model', async () => {
   await waitFor(() => expect(resolve).toHaveBeenCalledWith('request', expect.objectContaining({
     agentDeviceId: 'share:fixture', providerId: 'chosen-provider', model: 'chosen-model',
   })));
+});
+
+// Test value: page-local button requests must reuse the Host popover and return a route
+// immediately without a second confirmation. Minimal input: one guest and anchor; an absent
+// guest must cancel. Dialog tests do not cover this branch. User request: panel parity; tier: unit.
+it('opens the shared selector at the plugin button and returns the full choice without a dialog', async () => {
+  selectedLocation = 'share:fixture';
+  render(<PluginModelPickerHost />);
+  act(() => push({ ...request, allowRemote: true, pageAnchor: {
+    guestId: 42, rect: { x: 20, y: 30, width: 160, height: 32 },
+  } }));
+  expect(screen.queryByRole('button', { name: zh.settings.ghosts.modelPicker.useConfiguration })).toBeNull();
+  fireEvent.click(screen.getByText('Choose model'));
+  await waitFor(() => expect(resolve).toHaveBeenCalledWith('request', {
+    agentDeviceId: 'share:fixture', providerId: 'chosen-provider', model: 'chosen-model',
+    agentKind: 'codex', effort: 'high', fastMode: 'ultrafast',
+  }));
+});
+
+it('retains the popover when the Host rejects the selected route', async () => {
+  resolve.mockResolvedValue({ handled: true, accepted: false });
+  render(<PluginModelPickerHost />);
+  act(() => push({ ...request, pageAnchor: { guestId: 42, rect: { x: 20, y: 30, width: 160, height: 32 } } }));
+  fireEvent.click(screen.getByText('Choose model'));
+  await screen.findByText(zh.settings.ghosts.modelPicker.unavailable);
+  expect(screen.getByText('Choose model')).toBeTruthy();
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+  await waitFor(() => expect(resolve).toHaveBeenLastCalledWith('request', null));
+});
+
+// Greptile #8964: Escape was swallowed by the selection lock during remote validation.
+// Existing rejection coverage only presses Escape after validation completes. Minimal input:
+// one unresolved route response followed by Escape; late responses must stay ignored. Tier: unit.
+it('cancels during remote validation and ignores the superseded response', async () => {
+  let finishValidation!: (value: { handled: boolean; accepted: boolean }) => void;
+  resolve.mockImplementationOnce(() => new Promise((done) => { finishValidation = done; }));
+  selectedLocation = 'share:fixture';
+  render(<PluginModelPickerHost />);
+  act(() => push({ ...request, allowRemote: true, pageAnchor: {
+    guestId: 42, rect: { x: 20, y: 30, width: 160, height: 32 },
+  } }));
+  fireEvent.click(screen.getByText('Choose model'));
+  expect(resolve).toHaveBeenCalledWith('request', expect.objectContaining({ agentDeviceId: 'share:fixture' }));
+  await act(async () => { fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' }); });
+  expect(resolve).toHaveBeenLastCalledWith('request', null);
+  await act(async () => { finishValidation({ handled: false, accepted: false }); });
+  expect(screen.queryByText(zh.settings.ghosts.modelPicker.unavailable)).toBeNull();
+});
+
+it('cancels when the originating plugin page is gone instead of opening on a different page', async () => {
+  render(<PluginModelPickerHost />);
+  act(() => push({ ...request, pageAnchor: { guestId: 99, rect: { x: 20, y: 30, width: 160, height: 32 } } }));
+  await waitFor(() => expect(resolve).toHaveBeenCalledWith('request', null));
+  expect(screen.queryByText('Choose model')).toBeNull();
 });

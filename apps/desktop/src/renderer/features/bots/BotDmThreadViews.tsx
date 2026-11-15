@@ -12,7 +12,9 @@ import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import type { ComposerBotMention } from '@/lib/fileTypes';
 import type { BotChatIdentity } from './BotSessionContentHeader';
 import { ThreadPanel, ThreadPanelRoot } from './ThreadPanel';
+import type { ThreadPanelResize } from './useThreadPanelResize';
 import { BotGroupTimelineItem } from './BotGroupTimelineItem';
+import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { botDmThreadReadKey, markBotRead } from './botReadState';
 
 /** The root message as the main chat has it loaded; null while it is not among the loaded rows. */
@@ -35,7 +37,7 @@ export type BotDmThreadPanelState =
  * The topic beside the private chat: its root message on top, then the topic's own task view.
  * Read while open — the newest companion reply in it counts as seen.
  */
-export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, mentions, lastAssistantAt, replyCount, onRetry, onClose }: {
+export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, mentions, lastAssistantAt, replyCount, onRetry, onClose, resize }: {
   bot: BotChatIdentity;
   rootSessionId: string;
   rootClientId: string;
@@ -46,8 +48,11 @@ export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, ment
   replyCount?: number;
   onRetry: () => void;
   onClose: () => void;
+  /** Drag and arrow-key sizing supplied by the host, shared with group topics. */
+  resize?: ThreadPanelResize;
 }) {
   const { t, i18n } = useTranslation();
+  const pluginUi = usePluginUiMessageCandidates();
   const root = useRootMessage(rootSessionId, rootClientId);
   const panelRef = useRef<HTMLElement>(null);
   const threadSessionId = state.kind === 'ready' ? state.sessionId : null;
@@ -85,6 +90,7 @@ export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, ment
       {root ? (
         <section data-dm-thread-root="">
           <BotGroupTimelineItem
+            pluginUi={pluginUi}
             message={{
               id: root.clientId, sequence: 0, kind: 'message',
               authorKind: isBot ? 'bot' : 'user', authorBotId: isBot ? bot.id : null,
@@ -111,7 +117,7 @@ export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, ment
       )}
   </ThreadPanelRoot>;
   return (
-    <ThreadPanel panelRef={panelRef} rootClientId={rootClientId} onClose={onClose}>
+    <ThreadPanel panelRef={panelRef} rootClientId={rootClientId} onClose={onClose} resize={resize}>
       <div className="flex min-h-0 flex-1 flex-col">
         {state.kind === 'ready' ? (
           <CCAgentSessionView

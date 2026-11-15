@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  formatScheduleDeadline,
+  parseScheduleDeadline,
   applyMobileTemplateParams,
   applyScheduleWireCompat,
   ScheduleModelSelectionUnsupportedError,
@@ -45,6 +47,23 @@ function schedule(patch: Partial<RemoteSchedule> = {}): RemoteSchedule {
 }
 
 describe('mobile schedule form model', () => {
+  // #8886 / unit: desktop form conversion must preserve an absolute deadline,
+  // reject impossible local dates and explicitly clear empty input.
+  it('round-trips and clears the deadline without losing timestamp precision', () => {
+    const expireAt = new Date(2027, 2, 4, 15, 6, 27, 123).getTime();
+    expect(formatScheduleDeadline(expireAt)).toBe('2027-03-04T15:06');
+    expect(parseScheduleDeadline('2027-03-04T15:06', expireAt)).toBe(expireAt);
+    expect(parseScheduleDeadline('', expireAt)).toBeNull();
+    expect(parseScheduleDeadline('2027-03-05 16:07', expireAt))
+      .toBe(new Date(2027, 2, 5, 16, 7).getTime());
+    expect(formatScheduleDeadline(new Date(expireAt).toISOString())).toBe('2027-03-04T15:06');
+  });
+
+  it.each(['2027-02-30T10:00', '2027-03-04T25:00', '2027-03-04', 'invalid'])(
+    'rejects an invalid deadline before submission: %s', (deadline) => {
+      expect(parseScheduleDeadline(deadline)).toBeNaN();
+    },
+  );
   // PR #6830, unit: apply/serialize is the shared production entry point. Existing
   // template cases had no remote location and missed an unchanged route becoming local.
   it('preserves the shared route when a template keeps the same Harness', () => {

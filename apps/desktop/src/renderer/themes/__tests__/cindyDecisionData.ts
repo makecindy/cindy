@@ -2,10 +2,12 @@
 // 设计期工作文件,不随仓维护,生成器亦未入仓——见 DESIGN.md §15 对权威载体的说明)。
 // E1D 红色体系重构(用户批准 2026-07-17):B 类 11 项改反相中性,C 类按 8 项裁决。
 // D2T 八组断言 + 零残留脚本共享的决策基线;手改 cindy 主题值时此处不变 → 测试抓漂移。
-// 2026-08 色阶改版(用户逐项批准 2026-08-11~14,正本 token-decision-table.md §9):
+// 2026-08 色阶改版(用户逐项批准 2026-08-11~14,决策记录见 token-decision-table.md §9):
 // light 暖象牙阶梯 + dark 中性近黑,受影响条目值已按新阶梯更新。
-// 2026-10-22 墨水改版(用户裁决,正本 token-decision-table.md §9.2/§9.4):文字、悬停/标签底、
+// 2026-10-22 墨水改版(用户裁决,决策记录见 token-decision-table.md §9.2/§9.4):文字、悬停/标签底、
 // 选中/按下与边框改为浅色黑 / 深色白的墨水加透明度,受影响条目已逐项更新。
+// 数值源是 packages/design-tokens(DTCG),规则在 DESIGN.md §15;决策表只是决策记录。
+// 本文件是独立冻结预期,不从生成物或决策表自动刷新。
 // 修订契约:改值必须先过用户关卡,然后直接更新本文件对应条目,并以「用户裁决/调参/
 // 改稿 + 日期」行尾注释记录依据(先例:caret-accent 2026-07-18、text-secondary
 // 2026-07-20、switch-track-off 2026-08-05);没有带日期用户裁决的手编仍然禁止。
@@ -146,8 +148,6 @@ export const CINDY_REQUIRED_COLOR_IDS = [
   // E1D send-btn 族纳入值表(lead 裁决反相中性四态 + disabled #444242 系):
   'send-btn-bg',
   'send-btn-icon',
-  'send-btn-hover-bg', // E1D 新增(反相中性 hover)
-  'send-btn-pressed-bg', // E1D 新增(反相中性 pressed)
   'send-btn-disabled-bg',
   'send-btn-disabled-icon', // 120→126
 ] as const;
@@ -284,8 +284,6 @@ export const CINDY_EXPECTED_VALUES: Record<string, { light: string; dark: string
   // E1D send-btn 族(lead 反相中性四态 + disabled #444242 系;default send-btn-bg aliases accent-cta-bg,CINDY override 全族)
   'send-btn-bg': { light: '#3C3F43', dark: '#EEEEEE' },
   'send-btn-icon': { light: '#FCFCFC', dark: '#151515' },
-  'send-btn-hover-bg': { light: '#2E3237', dark: '#E2E2E2' },
-  'send-btn-pressed-bg': { light: '#25282C', dark: '#D4D4D4' },
   'send-btn-disabled-bg': { light: '#444242', dark: '#323232' },
   'send-btn-disabled-icon': { light: '#585555', dark: '#464646' },
   'perm-allow-kbd-bg': { light: 'rgba(255, 255, 255, 0.16)', dark: 'rgba(0, 0, 0, 0.08)' }, // 2026-07-19 修复:kbd 随按钮反相
@@ -337,7 +335,7 @@ export const CINDY_EXPECTED_VALUES: Record<string, { light: string; dark: string
   'titlebar-control-hover': { light: '0.0 0.0% 0.0% / 0.05', dark: '0.0 0.0% 100.0% / 0.06' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)
   sidebar: { light: '60.0 12.8% 92.4%', dark: '0 0% 9.4%' },
   'sidebar-border': { light: '0.0 0.0% 0.0% / 0.08', dark: '0.0 0.0% 100.0% / 0.10' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)
-  'sidebar-item-hover': { light: '0.0 0.0% 0.0% / 0.05', dark: '0.0 0.0% 100.0% / 0.09' }, // 用户裁决 2026-07-21:玻璃面 hover 半透明化(黑 5% / 白 9% 叠加替代实色,壁纸可透过)
+  'sidebar-item-hover': { light: '0.0 0.0% 0.0% / 0.05', dark: '0.0 0.0% 100.0% / 0.06' }, // 用户裁决 2026-07-21 玻璃面 hover 半透明化(黑 5% 叠加,壁纸可透过);维护者裁决 2026-11-11(E-02):Dark 由白 9% 并入墨水阶梯白 6%
   'sidebar-search-bg': { light: '60.0 12.8% 92.4%', dark: '0 0% 9.4%' },
   'sidebar-muted': { light: '0.0 0.0% 0.0% / 0.56', dark: '0.0 0.0% 100.0% / 0.55' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9);沿革: 2026-08 §9 更新、E1D 侧栏层级 #9A9DA3/#6F6F6F
   'status-badge-fg': { light: '#1F1F1F', dark: '#121212' }, // 2026-08 §9 更新;沿革: §7 必炸点(lead 裁决)
@@ -367,7 +365,7 @@ export const CINDY_EXPECTED_VALUES: Record<string, { light: string; dark: string
   'completion-badge-fg': { light: '#1f1f1e', dark: '#121212' },
   'create-agent-control-bg': { light: '#FFFFFA', dark: '#272727' },
   'create-agent-control-bg-hover': { light: 'var(--surface-hover)', dark: 'rgba(255, 255, 255, 0.06)' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)
-  'create-agent-control-bg-pressed': { light: 'var(--surface-hover-soft)', dark: 'rgba(255, 255, 255, 0.10)' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)
+  'create-agent-control-bg-pressed': { light: 'rgba(0, 0, 0, 0.08)', dark: 'rgba(255, 255, 255, 0.10)' }, // 用户裁决 2026-11-07 墨水透明度:按下不比悬停浅
   'create-agent-control-border': { light: 'rgba(0, 0, 0, 0.08)', dark: 'rgba(255, 255, 255, 0.10)' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)
   'create-agent-control-icon': { light: 'rgba(0, 0, 0, 0.88)', dark: 'rgba(255, 255, 255, 0.82)' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)
   'create-agent-control-text': { light: 'rgba(0, 0, 0, 0.88)', dark: 'rgba(255, 255, 255, 0.82)' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)

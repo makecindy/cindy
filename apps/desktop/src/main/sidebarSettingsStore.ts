@@ -14,6 +14,7 @@ import path from 'node:path';
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../shared/dataOwnerPush.js';
 import { isIpcError } from '../shared/ipc-errors.js';
 import { normalizeProjectKey, projectKeyComparisonKey } from '../shared/projectKeys.js';
+import { emitProjectCatalogChanged } from './projectCatalogEvents.js';
 import {
   normalizeSidebarPinnedOrder,
   sidebarPinnedEntryComparisonKey,
@@ -426,6 +427,7 @@ function broadcastHiddenProjectKeysChanged(
   projectKeys: readonly string[],
   ownerStamp: DataOwnerPushStamp,
 ): void {
+  emitProjectCatalogChanged();
   for (const window of BrowserWindow.getAllWindows()) {
     if (!isTrustedAppRendererWindow(window)) continue;
     window.webContents.send(

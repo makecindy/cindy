@@ -154,6 +154,8 @@ export interface UseFileTreeReturn {
 
 const ROOT_KEY = '';
 const EVENT_COALESCE_MS = 50;
+// Bound restore bursts before they reach local filesystem IPC or a remote host.
+const RESTORE_CONCURRENCY = 8;
 
 /**
  * 结构等价判定 —— name/type/relPath 完全相同(顺序也相同, listDir 是稳定排序),
@@ -236,7 +238,18 @@ interface FileTreeStore {
   watcherOff: (() => void) | null;
   /** ref count + listeners 用来驱动 lifecycle 和重渲订阅。 */
   refCount: number;
+  /** Invalidates queued restoration work when the final consumer leaves. */
+  restoreGeneration: number;
+  /** Full refreshes during restoration share its workers and pending paths. */
+  restoreQueue: DirectoryRestoreQueue | null;
   listeners: Set<() => void>;
+}
+
+interface DirectoryRestoreQueue {
+  /** Refresh retries precede untouched restoration paths without adding workers. */
+  priority: string[];
+  pending: Set<string>;
+  promise: Promise<void>;
 }
 
 interface DirectoryRefresh {
@@ -483,6 +496,8 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
     eventFlushTimer: null,
     watcherOff: null,
     refCount: 0,
+    restoreGeneration: 0,
+    restoreQueue: null,
     listeners: new Set(),
   };
   // 继承来的展开集合要按**（可能已过滤的）**树剪一次：剪枝那条路径挂在 fetch
@@ -671,6 +686,7 @@ function queueEventRefresh(store: FileTreeStore, eventRelPath: string): void {
 /** 首次挂载触发:initial fetch + 恢复 localStorage expanded + 启动 watcher。
  *  幂等:重复调用直接 no-op(refCount 已 >0)。 */
 async function initStore(store: FileTreeStore): Promise<void> {
+  const generation = ++store.restoreGeneration;
   // 恢复 localStorage 持久化的 expanded 集合(workdir × 视图模式共享,见
   // expandedStore 的 scope 说明)。seed 带来的展开集合是过渡态(见
   // findRevealSiblingSnapshot):先一并留着让整树平滑替换,root 数据回来时
@@ -698,8 +714,8 @@ async function initStore(store: FileTreeStore): Promise<void> {
     });
   }
 
-  // Initial root fetch + 已 restore expanded 目录的并行 lazy fetch。每个 listDir
-  // <12ms,即使 50 个 restored 也能在 <1s 内 warm 完。
+  // Root is first in a bounded restore queue. Starting every persisted directory
+  // at once floods main with readdir/lstat completions and delays the root reply.
   //
   // seed 带来的展开父目录(不在 restored 里的那些)按**方向**分别处理:
   //  - 切到 reveal:hidden 态的数据缺了被忽略目录,不重拉就永远看不到
@@ -717,11 +733,27 @@ async function initStore(store: FileTreeStore): Promise<void> {
     ? inheritedExpanded
     : inheritedExpanded.filter((p) => !store.snapshot.entries.has(p));
   invalidateBorrowedCollapsedEntries(store);
-  await Promise.all([
-    fetchDir(store, ROOT_KEY),
-    ...[...restored].map((p) => fetchDir(store, p)),
-    ...refetchInherited.map((p) => fetchDir(store, p)),
-  ]);
+  const paths = [...new Set([ROOT_KEY, ...restored, ...refetchInherited])];
+  const queue: DirectoryRestoreQueue = { priority: [], pending: new Set(paths), promise: Promise.resolve() };
+  store.restoreQueue = queue;
+  // Publish queued loading paths together. Otherwise every newly freed slot
+  // introduces another synchronous store notification/render during restoration.
+  store.snapshot = {
+    ...store.snapshot,
+    loadingPaths: new Set([...store.snapshot.loadingPaths, ...paths]),
+  };
+  emit(store);
+  let next = 0;
+  queue.promise = Promise.all(Array.from({ length: Math.min(RESTORE_CONCURRENCY, paths.length) }, async () => {
+    while ((queue.priority.length > 0 || next < paths.length) && store.restoreGeneration === generation) {
+      const path = queue.priority.shift() ?? paths[next++];
+      queue.pending.delete(path);
+      await fetchDir(store, path);
+    }
+  })).then(() => undefined);
+  await queue.promise;
+  if (store.restoreGeneration !== generation) return;
+  store.restoreQueue = null;
   store.snapshot = { ...store.snapshot, initialLoading: false };
   emit(store);
 }
@@ -753,6 +785,8 @@ function invalidateBorrowedCollapsedEntries(store: FileTreeStore): void {
 
 /** 最后一个订阅者离开:停 watcher、从 stores 表移除。store 对象被回收。 */
 function disposeStore(store: FileTreeStore): void {
+  store.restoreGeneration++;
+  store.restoreQueue = null;
   if (store.eventFlushTimer) clearTimeout(store.eventFlushTimer);
   store.eventFlushTimer = null;
   store.pendingEventParents.clear();
@@ -812,6 +846,34 @@ async function refresh(store: FileTreeStore): Promise<void> {
     ...store.snapshot.entries.keys(),
     ...store.snapshot.expanded,
   ]);
+  const queue = store.restoreQueue;
+  if (queue) {
+    const running: Promise<void>[] = [];
+    const added: string[] = [];
+    for (const path of targets) {
+      // A queued read has not observed the filesystem yet; it already covers
+      // this refresh. In-flight reads still need the normal trailing scan.
+      if (queue.pending.has(path)) continue;
+      if (store.inFlight.has(path)) {
+        running.push(fetchDir(store, path));
+      } else {
+        // targets starts with root: retry it at the next free slot rather than
+        // leaving a stale/error root behind many remote restoration round trips.
+        queue.priority.push(path);
+        queue.pending.add(path);
+        added.push(path);
+      }
+    }
+    if (added.length > 0) {
+      store.snapshot = {
+        ...store.snapshot,
+        loadingPaths: new Set([...store.snapshot.loadingPaths, ...added]),
+      };
+      emit(store);
+    }
+    await Promise.all([queue.promise, ...running]);
+    return;
+  }
   await Promise.all([...targets].map((p) => fetchDir(store, p)));
 }
 

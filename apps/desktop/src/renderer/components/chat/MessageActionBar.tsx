@@ -49,6 +49,7 @@ import { cn } from '@/lib/utils';
 import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import { CHAT_COLOR_TRANSITION_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { MessageReadAloudContext } from './MessageReadAloudContext';
+import { PluginUiSlot, PluginUiMessageMenuItem, runPluginUiEntry, type PluginUiEntry, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { ChatReplyIcon } from './ChatReplyIcon';
 import { Spinner } from '@/components/ui/spinner';
 import type { ForkAtMessageRunOptions } from './useForkAtMessage';
@@ -76,6 +77,7 @@ import {
 } from '../../../shared/regionalMoney';
 
 interface MessageActionBarProps {
+  pluginUi: PluginUiMessageCandidates;
   sessionId?: string;
   clientId?: string;
   createdAt?: string;
@@ -127,6 +129,9 @@ interface MessageActionBarProps {
   /** When provided, render an Edit (Pencil) button (last user message only).
    *  Click is fire-and-forget — the parent owns the inline edit lifecycle. */
   onEdit?: () => void;
+  /** Move Edit from the bar into the More menu (the task is running: editing
+   *  does not stop it, and the visible button returns once it stops). */
+  editInMenu?: boolean;
   /** When provided, render a Rewind (Undo2) button (user messages only).
    *  Click is fire-and-forget — the parent owns the dialog lifecycle and
    *  signals the loading state via `rewindInFlight`. */
@@ -163,6 +168,7 @@ const actionIconClass = cn(
 );
 
 export function MessageActionBar({
+  pluginUi,
   createdAt,
   copyText,
   copyLinkText,
@@ -181,6 +187,7 @@ export function MessageActionBar({
   reactionAction,
   onDelete,
   onEdit,
+  editInMenu = false,
   onRewind,
   rewindInFlight = false,
   turnMoney,
@@ -195,13 +202,14 @@ export function MessageActionBar({
 }: MessageActionBarProps) {
   const { t } = useTranslation();
   const readAloud = useContext(MessageReadAloudContext);
+  const pluginMenuEntries = align === 'right' ? pluginUi.userMenu : pluginUi.assistantMenu;
   const [copied, setCopied] = useState(false);
   const [forking, setForking] = useState(false);
   // 用户确认开启新任务后，到创建结束前提示与操作栏常驻，不随鼠标移开消失；
   // 确认框打开期间仍按普通 hover 驱动，避免提示压在确认框背后。
   const [forkConfirmed, setForkConfirmed] = useState(false);
   const [forkTipHovered, setForkTipHovered] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const [menuActionPending, setMenuActionPending] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   // Radix restores focus to the trigger when a menu closes. Programmatic
   // focus restoration is treated as `:focus-visible` by Chromium even when
@@ -211,8 +219,8 @@ export function MessageActionBar({
   const menuInteractionFromPointerRef = useRef(false);
   // Fork has its own visible button. Menu-owned actions still dim and block
   // the whole bar; Fork keeps the More trigger available while it runs.
-  const inFlight = forking || deleting || rewindInFlight;
-  const moreInFlight = deleting || rewindInFlight;
+  const inFlight = forking || menuActionPending || rewindInFlight;
+  const moreInFlight = menuActionPending || rewindInFlight;
   // `visible` is the actual opacity driver. It tracks `hovered` with a
   // trailing debounce so the bar fades out smoothly (CSS handles the
   // opacity interpolation from current value, not from 1).
@@ -314,16 +322,24 @@ export function MessageActionBar({
   }, [copyText, t]);
 
   const handleDelete = useCallback(async () => {
-    if (!onDelete || deleting) return;
-    setDeleting(true);
+    if (!onDelete || menuActionPending) return;
+    setMenuActionPending(true);
     try {
       await onDelete();
     } catch {
       // useDeleteMessage already maps persistence failures to a user-facing toast.
     } finally {
-      setDeleting(false);
+      setMenuActionPending(false);
     }
-  }, [deleting, onDelete]);
+  }, [menuActionPending, onDelete]);
+
+  const handlePluginMenuAction = async (entry: PluginUiEntry) => {
+    if (inFlight) return;
+    setMenuActionPending(true);
+    try { await runPluginUiEntry(entry, sessionId ?? null); }
+    catch { toast.error(t('pluginUi.actionFailed')); }
+    finally { setMenuActionPending(false); }
+  };
 
   const relText = useRelativeTime(createdAt, { hovered });
   const absText = formatAbsolute(createdAt);
@@ -601,7 +617,7 @@ export function MessageActionBar({
   // Edit (Pencil) button — last user message only. Enters the inline edit
   // state owned by UserMessage; keep it disabled while any message action is
   // in flight so editing cannot race with Fork's history read or a menu action.
-  const editBtn = onEdit && (
+  const editBtn = onEdit && !editInMenu && (
     <Tooltip.Root key="edit">
       <Tooltip.Trigger asChild>
         <button
@@ -629,10 +645,11 @@ export function MessageActionBar({
   // “添加到对话”，伙伴对话则将同一动作外显成“回复”。
   // 面板/行几何遵守 12px container + 8px inner-control 两档圆角。
   const canRewind = Boolean(onRewind);
+  const onEditInMenu = editInMenu ? onEdit : undefined;
   const addToChatInMenu = simplifiedBotConversation ? undefined : onAddToChat;
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const pendingTopicRef = useRef(false);
-  const moreMenu = (compact || companionFooter || addToChatInMenu || menuActions?.length || copyLinkText || canRewind || onDelete) && (
+  const moreMenu = (compact || companionFooter || addToChatInMenu || menuActions?.length || copyLinkText || onEditInMenu || canRewind || onDelete || pluginMenuEntries.length > 0) && (
     <DropdownMenu key="more" open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
         <Tip text={t('chat.messageActionBar.moreActions')}>
@@ -755,6 +772,19 @@ export function MessageActionBar({
             {t('chat.messageActionBar.copyLink')}
           </DropdownMenuItem>
         )}
+        {onEditInMenu && (
+          <DropdownMenuItem
+            disabled={inFlight}
+            onSelect={(event) => {
+              event.stopPropagation();
+              onEditInMenu();
+            }}
+            className={MENU_ITEM_CLASS}
+          >
+            <Pencil size={14} strokeWidth={2} className="shrink-0" />
+            {t('chat.messageActionBar.edit')}
+          </DropdownMenuItem>
+        )}
         {canRewind && (
           <DropdownMenuItem
             disabled={rewindInFlight}
@@ -768,13 +798,21 @@ export function MessageActionBar({
             {t('chat.messageActionBar.rewind')}
           </DropdownMenuItem>
         )}
+        {pluginMenuEntries.length > 0 && (
+          <>
+            {(compact || companionFooter && (onShareAsImage || replyAction) || addToChatInMenu || menuActions?.length || copyLinkText || onEditInMenu || canRewind) && <DropdownMenuSeparator />}
+            {pluginMenuEntries.map(entry => <PluginUiMessageMenuItem key={`${entry.instanceId}:${entry.contribution.id}`}
+              entry={entry} sessionId={sessionId ?? null} clientId={clientId} disabled={inFlight} className={MENU_ITEM_CLASS}
+              onSelect={() => void handlePluginMenuAction(entry)} />)}
+          </>
+        )}
         {onDelete && (
           <>
-            {(addToChatInMenu || menuActions?.length || copyLinkText || canRewind) && (
+            {(addToChatInMenu || menuActions?.length || copyLinkText || onEditInMenu || canRewind || pluginMenuEntries.length > 0) && (
               <DropdownMenuSeparator />
             )}
             <DropdownMenuItem
-              disabled={deleting}
+              disabled={menuActionPending}
               onSelect={(event) => {
                 event.stopPropagation();
                 void handleDelete();
@@ -862,6 +900,7 @@ export function MessageActionBar({
     <div
       // 操作栏是纯交互件:分享图片的光栅化会按这个标记整条剔除,不进产物。
       {...{ [SHARE_EXCLUDE_ATTR]: '' }}
+      data-chat-copy-exclude
       className={cn(
         'flex flex-wrap items-center gap-0.5',
         companionFooter && 'gap-1 [&>button]:h-8 [&>button]:w-8',
@@ -879,7 +918,7 @@ export function MessageActionBar({
         moreInFlight && 'opacity-60 pointer-events-none',
       )}
     >
-      {items}
+      {pluginUi.messageActions ? <>{items}<PluginUiSlot position="message.actions" sessionId={sessionId} clientId={clientId} role={align === 'right' ? 'user' : 'assistant'} /></> : items}
     </div>
   );
 }
@@ -901,7 +940,7 @@ export function BubbleHoverToolbar({ side, open = false, besideReactions = false
 }) {
   const left = side === 'left';
   return (
-    <div {...{ [SHARE_EXCLUDE_ATTR]: '' }} {...(marker ? { [marker]: '' } : {})} data-open={open ? '' : undefined}
+    <div data-chat-copy-exclude {...{ [SHARE_EXCLUDE_ATTR]: '' }} {...(marker ? { [marker]: '' } : {})} data-open={open ? '' : undefined}
       className={cn('chat-bubble-toolbar pointer-events-none absolute top-0 z-10 w-max rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-0.5 opacity-0 transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] focus-within:pointer-events-auto focus-within:opacity-100 group-hover/message:pointer-events-auto group-hover/message:opacity-100 data-[open]:pointer-events-auto data-[open]:opacity-100 motion-reduce:transition-none [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100',
         left ? 'right-full' : 'left-full', besideReactions ? (left ? 'mr-6' : 'ml-6') : (left ? 'mr-1.5' : 'ml-1.5'))}>
       {children}

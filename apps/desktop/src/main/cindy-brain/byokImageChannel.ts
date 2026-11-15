@@ -82,17 +82,18 @@ export function createByokImageChannel(opts: CreateByokImageChannelOptions): Ima
     get supportsEdit() {
       return opts.getSupportsEdit();
     },
-    generateImage: ({ model, prompt, aspectRatio, size: requestedSize, quality, signal }) =>
+    generateImage: ({ model, prompt, aspectRatio, size: requestedSize, quality, nativeParameters, signal }) =>
       client().generateImage(
         {
           model,
           prompt,
           ...(requestedSize ? { size: requestedSize } : size(aspectRatio)),
           ...(quality ? { quality } : {}),
+          ...(nativeParameters ? { nativeParameters } : {}),
         },
         signal,
       ),
-    editImage: ({ model, prompt, imagePaths, aspectRatio, size: requestedSize, quality, signal }) =>
+    editImage: ({ model, prompt, imagePaths, aspectRatio, size: requestedSize, quality, nativeParameters, signal }) =>
       client().editImage(
         {
           model,
@@ -100,6 +101,7 @@ export function createByokImageChannel(opts: CreateByokImageChannelOptions): Ima
           imagePaths,
           ...(requestedSize ? { size: requestedSize } : size(aspectRatio)),
           ...(quality ? { quality } : {}),
+          ...(nativeParameters ? { nativeParameters } : {}),
         },
         signal,
       ),

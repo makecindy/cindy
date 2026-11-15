@@ -106,6 +106,12 @@ interface MorphPopoverProps {
    */
   panelWidth?: number;
   /**
+   * 内容高度上限(px)。量高时与视口可用高度取较小值：内容比它矮就贴内容，比它高就停在这里，
+   * 多出的部分由内层自己滚。新建任务页的「+」要 240，避免建议框盖住 logo 和 worktree chips；
+   * 不传则只受视口限制。
+   */
+  maxContentHeight?: number;
+  /**
    * 'trigger' = 面板宽度**严格等于** trigger 的实测宽度(忽略 panelWidth
    * 与内容宽)。设置页的字段形态必须用它 —— DESIGN.md §4 Select & Dropdown:
    * 「Panel width must bind to the trigger width — never narrower or wider than the
@@ -174,14 +180,67 @@ function prefersReducedMotion(): boolean {
   );
 }
 
+/** 子面板声明自己滚（data-morph-scroll="inner"）时，外壳不再出第二条滚动条。 */
+function contentLocksShellScroll(content: HTMLElement): boolean {
+  return content.querySelector('[data-morph-scroll="inner"]') !== null;
+}
+
+/**
+ * 外壳被锁成不滚时，把外壳刚量到的高度写到声明了内滚的那一层上。
+ * 只有 max-h-full 时父层高度仍是 auto，列表会按全部条目撑高、底部被裁掉 (#9536)。
+ * 内容变矮时外壳高度已经跟着变小，这里写成同一个数，内层不会再把外壳撑回去。
+ */
+function pinInnerScrollHeight(content: HTMLDivElement, shellHeightPx: number | null): void {
+  const pinned = content.querySelectorAll<HTMLElement>('[data-morph-scroll="inner"]');
+  if (pinned.length === 0) return;
+  // null = 解除锁定,回到自然高度。不能写成 0:开场 / 收合时外壳是 hidden,
+  // 此刻若还挂着内滚页,0px 会把内容整块压没。
+  const height = shellHeightPx === null ? '' : `${Math.max(0, Math.round(shellHeightPx))}px`;
+  for (const node of pinned) node.style.height = height;
+}
+
+/** 量自然高度前必须先松掉上一次的定高,否则 scrollHeight 会带着旧高度再叠一次边框。 */
+function releasePinnedScrollHeights(root: HTMLElement): void {
+  for (const node of root.querySelectorAll<HTMLElement>('[data-morph-scroll="inner"]')) {
+    node.style.height = '';
+  }
+}
+
+/**
+ * 松掉定高会让内滚列表临时展开到完整内容高度,浏览器随即把 scrollTop 夹回 0。
+ * 量高前后把偏移存下来再写回,删除目录 / 扫描结果更新时列表才不会跳回顶部。
+ */
+function captureInnerScrollOffsets(root: HTMLElement): Array<[HTMLElement, number]> {
+  return Array.from(root.querySelectorAll<HTMLElement>('[data-morph-scroll="inner"]'))
+    .filter(node => node.scrollTop > 0)
+    .map(node => [node, node.scrollTop] as [HTMLElement, number]);
+}
+
+function restoreInnerScrollOffsets(offsets: Array<[HTMLElement, number]>): void {
+  for (const [node, top] of offsets) node.scrollTop = top;
+}
+
+/** 面板写入的 height 是 border-box,内容区可用高度必须扣掉上下边框。 */
+function panelBorderY(panel: HTMLElement): number {
+  const style = getComputedStyle(panel);
+  return (Number.parseFloat(style.borderTopWidth) || 0) + (Number.parseFloat(style.borderBottomWidth) || 0);
+}
+
 /** overflow-y:auto/hidden 会把 visible 的 overflow-x 算成 auto;横轴必须显式 hidden。 */
 function setContentOverflowY(
   content: HTMLDivElement | null,
   overflowY: 'auto' | 'hidden',
+  shellHeightPx?: number,
 ): void {
   if (!content) return;
-  content.style.overflowY = overflowY;
+  // 子面板自己声明「外壳不要滚」(data-morph-scroll="inner")时，外壳始终 hidden。
+  // 「+」的建议列表和添加目录页自己是唯一滚动区；外壳再 auto 会并排两条滚动条 (#9536)。
+  // 切页后标记会出现或消失，调用方必须在内容重新测量时再跑一次，不能只在打开后判一次。
+  const locked = overflowY === 'auto' && contentLocksShellScroll(content);
+  content.style.overflowY = locked ? 'hidden' : overflowY;
   content.style.overflowX = 'hidden';
+  if (shellHeightPx !== undefined) pinInnerScrollHeight(content, shellHeightPx);
+  else if (!locked) pinInnerScrollHeight(content, null);
 }
 
 export function MorphPopover({
@@ -192,6 +251,7 @@ export function MorphPopover({
   side = 'top',
   align = 'start',
   panelWidth,
+  maxContentHeight,
   panelWidthMode = 'content',
   stickyWidth = false,
   stickyWidthKey,
@@ -214,14 +274,16 @@ export function MorphPopover({
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 收合焦点快照的 setTimeout(0) id:见收合分支注释(快照必须晚于浏览器默认聚焦)。
   const focusSnapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 开场双 rAF 的 id:关闭打断时必须取消,否则已排队的回调会在 open 已翻 false 后
+  // 开场 rAF 的 id:关闭打断时必须取消,否则已排队的回调会在 open 已翻 false 后
   // 仍套用"打开几何 + opacity 1",菜单闪回一下(codex P2)。
-  const openRaf1Ref = useRef<number | null>(null);
-  const openRaf2Ref = useRef<number | null>(null);
+  const openRafRef = useRef<number | null>(null);
   // 收合的回归几何 = 打开瞬间的 chip rect(开合期间 chip 布局不变,可安全复用)
   const chipRectRef = useRef<DOMRect | null>(null);
   // 初始形变是否已完成(ResizeObserver 只在其后接管,避免和开场动画打架)
   const settledRef = useRef(false);
+  // 开场动画期间到达的显式重测不能当场改几何（会把过渡中的宽高跳到终态）。
+  // 只登记一次，settle 完成后补跑。
+  const pendingResyncRef = useRef(false);
   // stickyWidth 的本次打开宽度水位(见 prop 注释);开场重置。
   const stickyWidthRef = useRef(0);
   // stickyWidthKey 换代 → 水位清零(render 期 ref 比对:重置必须发生在切换引发的
@@ -245,6 +307,11 @@ export function MorphPopover({
       const prevW = panel.style.width;
       const prevH = panel.style.height;
       panel.style.height = 'auto';
+      // 内滚层的定高会算进 scrollHeight;不松掉就会把上一轮的整段高度当成内容高度量出来,
+      // 再加边框 → 短列表在内容没变时也会一路长到上限 (codex P2, #9536)。
+      // 松掉定高时列表会临时展开、scrollTop 被夹回 0,所以先把偏移存下来。
+      const scrollOffsets = captureInnerScrollOffsets(panel);
+      releasePinnedScrollHeights(panel);
       let desiredW: number;
       if (panelWidthMode === 'trigger') {
         // 字段形态: 面板与 trigger 逐像素同宽(不取 max —— 内容再宽也不得溢出
@@ -273,6 +340,15 @@ export function MorphPopover({
       );
       if (stickyWidth && targetW > stickyWidthRef.current) stickyWidthRef.current = targetW;
       panel.style.width = `${targetW}px`;
+      // 定宽后再量高（上面已把 height 设成 auto）。scrollHeight 是内容自然高度：搜索过滤后
+      // 列表变矮，这里跟着变小，外壳才能从打开时的高度收缩。offsetHeight 在 height:auto 时
+      // 本应一样，但内容包装若被百分比高度拉满，它会停在外壳旧高度，收缩就测不出来。
+      // scrollHeight 不含上下边框，而写入的 height 是 border-box：少这 2px 时内容区被 max-h-full
+      // 压短，没有内滚标记的面板（权限 / Agent）就会多出一条竖向滚动条。
+      const border = getComputedStyle(panel);
+      const borderY =
+        (Number.parseFloat(border.borderTopWidth) || 0) +
+        (Number.parseFloat(border.borderBottomWidth) || 0);
       // 可视高度钳制:停靠位到视口边缘的可用空间(内容区自滚)。avail 夹到 ≥0——
       // chip 极靠近视口边(如 side='top' 且距顶 <14px)时 avail 会为负,负 height
       // 被浏览器静默忽略→面板停在 chip 高度"打不开"(greptile P1)。
@@ -280,12 +356,19 @@ export function MorphPopover({
         side === 'top'
           ? chipRect.top - SIDE_GAP - VIEWPORT_PADDING
           : window.innerHeight - chipRect.bottom - SIDE_GAP - VIEWPORT_PADDING;
-      const targetH = Math.min(panel.offsetHeight, Math.max(0, avail));
+      // 调用方上限（如新建任务页 240）与视口可用高度取较小值。内容更矮时仍贴内容。
+      const contentCap =
+        maxContentHeight !== undefined && Number.isFinite(maxContentHeight)
+          ? Math.max(0, maxContentHeight)
+          : Number.POSITIVE_INFINITY;
+      const targetH = Math.min(panel.scrollHeight + borderY, Math.max(0, avail), contentCap);
+      // 偏移在定高重新写回后再恢复:此时列表已回到真实可见高度,位置不会再被夹。
+      restoreInnerScrollOffsets(scrollOffsets);
       panel.style.width = prevW;
       panel.style.height = prevH;
       return { w: targetW, h: targetH };
     },
-    [align, panelWidth, panelWidthMode, side, stickyWidth],
+    [align, maxContentHeight, panelWidth, panelWidthMode, side, stickyWidth],
   );
 
   /**
@@ -300,20 +383,65 @@ export function MorphPopover({
     const panel = panelRef.current;
     const rect = chipRectRef.current;
     if (!panel || !rect) return;
+    // 内容换代（「+」↔添加目录）不会重跑开场 settle，滚动归属必须在这里重新判定。
+    // 量高之前先写：内滚页把外壳锁成 hidden，否则量高会把内层滚动区的内容一并量进去。
+    // 确定高度等量完再写：此时外壳高度还是上一页的。
+    if (settledRef.current) setContentOverflowY(contentRef.current, 'auto');
     const prevT = panel.style.transition;
     panel.style.transition = 'none';
     const m = measure(panel, rect);
-    const curW = panel.offsetWidth;
-    const curH = panel.offsetHeight;
+    const curW = Number.parseFloat(panel.style.width);
+    const curH = Number.parseFloat(panel.style.height);
+    const unchanged = Math.abs(m.w - curW) <= 1 && Math.abs(m.h - curH) <= 1;
     panel.style.width = `${curW}px`;
     panel.style.height = `${curH}px`;
     void panel.offsetHeight;
     panel.style.transition = prevT;
-    // 差 1px 内不动,防 ResizeObserver 观察回环
-    if (Math.abs(m.w - curW) <= 1 && Math.abs(m.h - curH) <= 1) return;
-    panel.style.width = `${m.w}px`;
-    panel.style.height = `${m.h}px`;
+    // 差 1px 内不动,防 ResizeObserver 观察回环。style 还没写上（NaN）时不算匹配，继续写目标尺寸。
+    if (!unchanged) {
+      panel.style.width = `${m.w}px`;
+      panel.style.height = `${m.h}px`;
+    }
+    // 高度没变也要重算内滚约束：切到二级页后外壳被锁住，列表必须接过这个确定高度。
+    if (settledRef.current && contentRef.current) {
+      // m.h 是 border-box,内滚层只能用内容区那一块。
+      pinInnerScrollHeight(contentRef.current, m.h - panelBorderY(panel));
+    }
   }, [measure]);
+
+  const cancelPendingResync = useCallback(() => {
+    pendingResyncRef.current = false;
+  }, []);
+
+  /**
+   * 显式重测。开场未 settle 时只登记，不改面板几何：扫描结果 / 模型列表可能在 220ms
+   * 开场动画内到达，当场改宽高会和形变抢。settle 时补量一次兑现登记；settle 之后的请求当场量，
+   * 切页 / 搜索的滚动归属仍会更新。同一次打开里重复登记合并成 settle 那一次补跑。
+   */
+  const requestContentResync = useCallback(() => {
+    if (!settledRef.current) {
+      pendingResyncRef.current = true;
+      return;
+    }
+    syncPanelToContent();
+  }, [syncPanelToContent]);
+
+  // 重量请求由内容的 useLayoutEffect 发出，早于任何 useEffect。监听挂在渲染期的 ref 回调上：
+  // 子节点先提交，回调再跑，因此请求到达时监听已经在。开场布局 effect 每次重跑都会拆 effect
+  // 监听，切页请求正好落在空窗里，所以不能挂在那里。
+  const bindContent = useCallback(
+    (node: HTMLDivElement | null) => {
+      const previous = contentRef.current;
+      if (previous && previous !== node) {
+        previous.removeEventListener(MORPH_CONTENT_RESIZE_EVENT, requestContentResync);
+      }
+      contentRef.current = node;
+      if (node && node !== previous) {
+        node.addEventListener(MORPH_CONTENT_RESIZE_EVENT, requestContentResync);
+      }
+    },
+    [requestContentResync],
+  );
 
   /** 面板锚到 chip 的形变起点几何(closed 视觉态:与 chip 重合的胶囊) */
   const applyChipGeometry = useCallback(
@@ -352,6 +480,7 @@ export function MorphPopover({
 
     if (open) {
       settledRef.current = false;
+      cancelPendingResync();
       pointerInteractionRef.current = false;
       stickyWidthRef.current = 0; // stickyWidth 水位按「一次打开」起算
       const rect = wrap.getBoundingClientRect();
@@ -376,34 +505,36 @@ export function MorphPopover({
       panel.style.height = `${rect.height}px`;
       void panel.offsetHeight;
       panel.style.transition = reduced ? 'none' : MORPH_TRANSITION;
-      // 4) 双 rAF 过渡:生长 + 脱身位移到停靠位(reduced-motion 时等效直切)。
-      //    id 存起来,关闭打断时取消(见 else 分支 + cleanup),防菜单闪回。
-      openRaf1Ref.current = requestAnimationFrame(() => {
-        openRaf2Ref.current = requestAnimationFrame(() => {
-          openRaf1Ref.current = null;
-          openRaf2Ref.current = null;
-          if (!panelRef.current) return;
-          const dock = dockedAnchor(rect);
-          panel.dataset.state = 'open';
-          panel.style.width = `${m.w}px`;
-          panel.style.height = `${m.h}px`;
-          panel.style[dock.prop] = `${dock.value}px`;
-          panel.style.borderRadius = '12px';
-          panel.style.backgroundColor = endBg;
-          panel.style.borderColor = endBorderColor;
-          panel.style.boxShadow = 'var(--shadow-menu)';
-          panel.style.opacity = '1';
-        });
-      });
+      // 4) The flush above already commits the starting geometry. One rAF is enough
+      // to start the transition; a second would add a frame of input latency.
+      // Reduced motion applies the final geometry immediately, without frame waits.
+      const reveal = () => {
+        openRafRef.current = null;
+        if (!panelRef.current) return;
+        const dock = dockedAnchor(rect);
+        panel.dataset.state = 'open';
+        panel.style.width = `${m.w}px`;
+        panel.style.height = `${m.h}px`;
+        panel.style[dock.prop] = `${dock.value}px`;
+        panel.style.borderRadius = '12px';
+        panel.style.backgroundColor = endBg;
+        panel.style.borderColor = endBorderColor;
+        panel.style.boxShadow = 'var(--shadow-menu)';
+        panel.style.opacity = '1';
+      };
+      if (reduced) reveal();
+      else openRafRef.current = requestAnimationFrame(reveal);
       // 5) §14.2 焦点:autofocus 标记 → 首个 input → 首个可交互项(按钮/选项)→ 面板容器。
       //    无 input 的菜单(权限 / +)必须落到首个可交互项,否则键盘落在 role=group 容器上
       //    无法直接方向键/回车操作,可达性回退(codex P2)。
       const focusDelay = reduced ? 0 : MORPH_MS;
       closeTimerRef.current = setTimeout(() => {
         settledRef.current = true;
-        setContentOverflowY(contentRef.current, 'auto');
+        setContentOverflowY(contentRef.current, 'auto', m.h - panelBorderY(panel));
         // RO 在 opening 期间收到的尺寸变化不会在 settled 后自动重发,这里补量一次
         // (异步 capability / provider 列表在开场动画内返回时防面板卡旧尺寸)。
+        // 开场期间的显式重测只登记、不改几何；这次补量读的是此刻的内容，等于把登记兑现。
+        pendingResyncRef.current = false;
         syncPanelToContent();
         const target =
           autoFocusTarget?.() ??
@@ -419,11 +550,10 @@ export function MorphPopover({
       // 收合:缩回 chip 几何并整体淡出(与位移耦合的溶解,防末帧空胶囊盖住
       // chip 文字),动画完卸载并归还焦点。先取消可能仍在排队的开场 rAF,
       // 否则它会在 open 已 false 后套用"打开几何 + opacity 1",菜单闪回。
-      if (openRaf1Ref.current !== null) cancelAnimationFrame(openRaf1Ref.current);
-      if (openRaf2Ref.current !== null) cancelAnimationFrame(openRaf2Ref.current);
-      openRaf1Ref.current = null;
-      openRaf2Ref.current = null;
+      if (openRafRef.current !== null) cancelAnimationFrame(openRafRef.current);
+      openRafRef.current = null;
       settledRef.current = false;
+      cancelPendingResync();
       // 收合目标几何 = trigger chip 的**当前**位置/尺寸(脱身上浮下 chip 全程可见,可实测)。
       // 不能复用打开瞬间的 chipRectRef:开着期间 trigger 可能变(换模型/权限、±引用目录改 ×N
       // chip 宽),复用旧 rect 会让面板往错位置/旧尺寸缩(codex P2)。0 宽兜底回旧 rect。
@@ -475,8 +605,7 @@ export function MorphPopover({
     return () => {
       if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
       if (focusSnapTimerRef.current) clearTimeout(focusSnapTimerRef.current);
-      if (openRaf1Ref.current !== null) cancelAnimationFrame(openRaf1Ref.current);
-      if (openRaf2Ref.current !== null) cancelAnimationFrame(openRaf2Ref.current);
+      if (openRafRef.current !== null) cancelAnimationFrame(openRafRef.current);
     };
   }, [
     mounted,
@@ -487,6 +616,7 @@ export function MorphPopover({
     endBg,
     endBorderColor,
     syncPanelToContent,
+    cancelPendingResync,
     autoFocusTarget,
     restoreFocusTarget,
   ]);
@@ -497,21 +627,10 @@ export function MorphPopover({
     const content = contentRef.current;
     if (!mounted || !open || !panel || !content || typeof ResizeObserver === 'undefined') return;
     let roRaf = 0;
-    const ro = new ResizeObserver(() => {
+    const syncAfterFrame = () => {
       // RO 回调内直接写布局会触发 "ResizeObserver loop completed with
-      // undelivered notifications" 告警 —— 推迟到下一帧,合并同帧通知
-      if (roRaf) return;
-      roRaf = requestAnimationFrame(() => {
-        roRaf = 0;
-        // settle 前不跟随(和开场动画抢几何);settle 后走同一条补量逻辑
-        if (!settledRef.current) return;
-        syncPanelToContent();
-      });
-    });
-    ro.observe(content);
-    // 内容侧的显式重量请求(MORPH_CONTENT_RESIZE_EVENT):内容增长被钳制链挡住时
-    // RO 无事件,由内容自己吱声;与 RO 走同一条 settle 门 + rAF 合并。
-    const onResizeRequest = () => {
+      // undelivered notifications" 告警 —— 推迟到下一帧,合并同帧通知。
+      // settle 前不跟随(和开场动画抢几何);settle 后走同一条补量逻辑。
       if (roRaf) return;
       roRaf = requestAnimationFrame(() => {
         roRaf = 0;
@@ -519,11 +638,13 @@ export function MorphPopover({
         syncPanelToContent();
       });
     };
-    content.addEventListener(MORPH_CONTENT_RESIZE_EVENT, onResizeRequest);
+    const ro = new ResizeObserver(() => {
+      syncAfterFrame();
+    });
+    ro.observe(content);
     return () => {
       if (roRaf) cancelAnimationFrame(roRaf);
       ro.disconnect();
-      content.removeEventListener(MORPH_CONTENT_RESIZE_EVENT, onResizeRequest);
     };
   }, [mounted, open, syncPanelToContent]);
 
@@ -628,12 +749,17 @@ export function MorphPopover({
             {/* 面板内容: 随生长淡入(50ms 延迟 + 5px 浮入);形变期禁滚(防滚动条
                 闪现挤压行宽),settle 后由 JS 切回自滚 */}
             <div
-              ref={contentRef}
+              ref={bindContent}
               className={cn(
                 // overflow-x must stay hidden: overflow-y:auto/hidden otherwise
                 // computes overflow-x to auto (CSS overflow pairing), and a 1px
                 // border-box mismatch flashes a 2s horizontal scrollbar thumb.
-                'max-h-full overflow-x-hidden overflow-y-hidden',
+                // max-h-full 把外壳的确定高度传给内层作为上限：条目多时内层自己滚，不会把整页撑出视口。
+                // 不用 h-full：高度 100% 会让这一层恒等于外壳，ResizeObserver 看不到搜索后列表变矮，
+                // 弹层会留下打开时的高度和大块空白。自然高度（h-auto + max-h-full）变矮时外壳跟着收缩。
+                // 内滚页的确定高度由 pinInnerScrollHeight 写到 [data-morph-scroll=inner] 上，
+                // 不写在这一层：这一层保持自然高度，搜索后变矮才能被量到 (#9536)。
+                'flex h-auto min-h-0 max-h-full flex-col overflow-x-hidden overflow-y-hidden',
                 side === 'top' ? 'translate-y-[5px]' : 'translate-y-[-5px]',
                 'opacity-0 transition-[opacity,transform] delay-[50ms] duration-[140ms] ease-out',
                 'group-data-[state=open]:translate-y-0 group-data-[state=open]:opacity-100',

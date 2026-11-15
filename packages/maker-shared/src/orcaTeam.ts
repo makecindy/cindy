@@ -5,8 +5,47 @@
  * 预设角色、新建任务的首个 Worker 任务拼接,以及被控端 wire 记录的防御性解析。
  */
 
-/** 创建 Worker 面板的预设角色(与桌面 CreateWorkerPopover 同一份)。 */
-export const ORCA_PREDEFINED_WORKER_ROLES = ['developer', 'designer', 'reviewer', 'tester', 'merger'] as const;
+/**
+ * 创建 Worker 面板的预设角色(桌面创建 / 编辑弹窗与手机协同面板同一份)。
+ * 只留主流分工里最常用的三类：审查、实现、测试(2026-11-10 用户要求精简，审查排第一)；
+ * 拆解与规划由 Lead 承担，其余分工用自定义角色名。
+ */
+export const ORCA_PREDEFINED_WORKER_ROLES = ['reviewer', 'developer', 'tester'] as const;
+
+/**
+ * 带现成首条任务的内置角色：它们检查的对象就是 Lead 已有的工作，不需要用户再描述。
+ * 其余角色要做的事因人而异，任务留空由用户填写或交给 Lead 分派。文字由各端自己的文案提供。
+ */
+export const ORCA_STARTER_TASK_WORKER_ROLES: readonly string[] = ['reviewer', 'tester'];
+
+/**
+ * 添加角色时输入的名字对应的角色：输入的是某个内置角色的角色名或它在当前语言下的显示名时
+ * (不分大小写)，就是那个内置角色 —— 移除过的内置角色这样找回来；其余按输入的名字。
+ */
+export function resolveOrcaWorkerRoleName(
+  name: string,
+  builtinDisplayName: (role: string) => string,
+): string {
+  const typed = name.trim();
+  const lower = typed.toLowerCase();
+  return (
+    ORCA_PREDEFINED_WORKER_ROLES.find(
+      (role) => role === lower || builtinDisplayName(role).trim().toLowerCase() === lower,
+    ) ?? typed
+  );
+}
+
+/**
+ * 换角色后任务框里应有的内容：只有任务框为空，或仍是上一个角色原样带出的任务时才替换；
+ * 用户自己写过或改过的内容保持不动。
+ */
+export function orcaWorkerTaskAfterRoleChange(
+  current: string,
+  previousDefault: string,
+  nextDefault: string,
+): string {
+  return current.trim() === '' || current === previousDefault ? nextDefault : current;
+}
 
 /** 自定义角色名的长度上限(被控端 `maker:worker:create` 同口径校验)。 */
 export const ORCA_WORKER_ROLE_MAX_LENGTH = 32;

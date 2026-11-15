@@ -53,6 +53,7 @@ describe('IssueConfirmBridge', () => {
       sessionId: 'sess-1',
       request: {
         kind: 'issue_confirm',
+        remoteConfirmSupported: true,
         draft: DRAFT,
         env: ENV,
         submissionIdentity: PLATFORM_IDENTITY,
@@ -60,7 +61,7 @@ describe('IssueConfirmBridge', () => {
       },
     });
     expect((payload as { request: { requestId: string } }).request.requestId).toMatch(
-      /^desktop-confirm-source-/,
+      /^issue-confirm-/,
     );
     expect(bridge.pendingSnapshots('other-session')).toEqual([]);
     expect(bridge.pendingSnapshots('sess-1')).toEqual([

@@ -83,6 +83,22 @@ describe('tool result diagnostics', () => {
     },
   );
 
+  // CU-008 weekly audit: real fixed codes were reduced to {ok:false} on archive.
+  // Unit: exercise extraction and persisted-marker reads, including a second pass.
+  it.each(['element_outside_target_window', 'type_text_incomplete', 'select_menu_would_raise_window'])(
+    'retains the audited input failure without retaining its private message: %s', errorCode => {
+      const diagnostics = extractToolResultDiagnostics({
+        ok: false, errorCode, data: { message: 'PRIVATE', outcome_unknown: true },
+      });
+      expect(diagnostics).toEqual({ ok: false, errorCode, outcomeUnknown: true });
+      const persisted = JSON.stringify({ type: 'tool_result_compacted', version: 1,
+        originalBytes: 100, compactedAt: 1, diagnostics });
+      const first = parseToolResultCompactionMarker(persisted);
+      expect(first?.diagnostics).toEqual(diagnostics);
+      expect(parseToolResultCompactionMarker(JSON.stringify(first))?.diagnostics).toEqual(diagnostics);
+    },
+  );
+
   it('drops private and unrecognized fields when reading a marker', () => {
     const marker = { type: 'tool_result_compacted', version: 1, originalBytes: 200, compactedAt: 1 };
     expect(parseToolResultCompactionMarker({ ...marker, diagnostics: {

@@ -1870,6 +1870,46 @@ describe('OrcaTeamService', () => {
     expect(onLeadWorkerReportsSettled).toHaveBeenCalledExactlyOnceWith('lead-1');
   });
 
+  // Rule: orca-team-architecture.md「消息派发与 auto-bridge」#12. Accepting a report, even into
+  // the Lead's queue, settles the assignment's duty to report, so withdrawing the assignment's
+  // only report would leave the Lead uninformed with nothing auto-bridged later. Review case:
+  // an earlier assignment's report still queued must not make the current one look covered.
+  // Unit tier, public service calls.
+  it('scopes report withdrawal to the Worker\'s current assignment', async () => {
+    const h = createDeps();
+    const sid = 'worker-session-1';
+    const send = () => h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: sid, message: 'A' });
+    const report = (receipt: { delivered: boolean; queuedMessageId?: string }, accepted = true) =>
+      h.service.captureLocalWorkerReport(sid)(accepted, receipt);
+    const standing = (id: string) => h.service.workerReportWithdrawalStanding(sid, id);
+
+    expect(standing('r1')).toBe('untracked'); // no Lead assignment is running
+    await send();
+    await report({ delivered: false, queuedMessageId: 'rejected' }, false);
+    await report({ delivered: false, queuedMessageId: 'r1' });
+    expect(standing('rejected')).toBe('other-assignment'); // a refused send is not a report
+    expect(standing('r1')).toBe('last');
+    await report({ delivered: false, queuedMessageId: 'r2' });
+    expect(standing('r1')).toBe('covered');
+    // r2 left the Lead's queue undelivered (withdrawn, merged away, Stop): r1 is the only one again.
+    h.service.forgetWorkerQueuedReports(sid, ['r2']);
+    expect(standing('r1')).toBe('last');
+    await report({ delivered: true });
+    expect(standing('r1')).toBe('covered');
+
+    // Next assignment: its own single queued report is not covered by the previous one's.
+    await send();
+    await report({ delivered: false, queuedMessageId: 'r3' });
+    expect(standing('r3')).toBe('last');
+    expect(standing('r1')).toBe('other-assignment');
+
+    // Review finding (#9594): merging r1 (earlier assignment) with r3 keeps r1 and drops r3. The
+    // survivor takes over this assignment's report, so it can no longer be withdrawn.
+    h.service.forgetWorkerQueuedReports(sid, ['r3']);
+    h.service.adoptWorkerQueuedReport(sid, 'r1');
+    expect(standing('r1')).toBe('last');
+  });
+
   it.each([true, false])('waits outside the transition lock for an in-flight manual report: accepted=%s', async accepted => {
     let generation = 1;
     const runtime = { isTurnRunning: () => true, getTurnGeneration: () => generation };
@@ -2582,9 +2622,17 @@ describe('OrcaTeamService', () => {
         `updateWorkerStatus:${status}`,
         'broadcastOrcaWorkerChanged',
       ]);
-      expect(leadMessages).toEqual([
-        `${status === 'error' ? '[Auto-bridged: worker 异常终止]' : '[Auto-bridged: worker 已完成，系统自动回传结果]'}\n\n完成了`,
-      ]);
+      expect(leadMessages).toHaveLength(1);
+      if (status === 'done') {
+        expect(leadMessages[0]).toBe('[Auto-bridged: worker 已完成，系统自动回传结果]\n\n完成了');
+      } else {
+        // 出错的 Worker 原样保留：回报末尾告诉 Lead 如何原地继续，而不是归档重建
+        // （2026-11-10 现场：五个撞上用量上限的 Worker 被全部归档重建）。
+        expect(leadMessages[0]).toMatch(/^\[Auto-bridged: worker 异常终止\]\n\n完成了\n\n\(Host note: /);
+        expect(leadMessages[0]).toContain('session_id: worker-session-1');
+        expect(leadMessages[0]).toContain('send_to_worker');
+        expect(leadMessages[0]).toContain('set_session_runtime');
+      }
     },
   );
 
@@ -2691,9 +2739,10 @@ describe('OrcaTeamService', () => {
       diagnostic: 'Claude session exited before producing a result',
     });
 
-    expect(leadMessages).toEqual([
-      '[Auto-bridged: worker 异常终止]\n\nClaude session exited before producing a result',
-    ]);
+    expect(leadMessages).toHaveLength(1);
+    expect(leadMessages[0]).toMatch(
+      /^\[Auto-bridged: worker 异常终止\]\n\nClaude session exited before producing a result\n\n\(Host note: /,
+    );
   });
 
   it('marks worker idle and clears bridge state before closing its session', async () => {
@@ -3442,6 +3491,147 @@ describe('OrcaTeamService', () => {
       sessionId: 'worker-session-1',
       err: 'close failed',
     });
+  });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：OrcaTeamService.archiveWorker / sendToWorker；Lead 队列里该 Worker 的
+ *   异常终止回报是否被撤下，回执是否带回正文。
+ * - Bug 依据：2026-11-10 协同任务里，五个撞上用量上限的 Worker 已被处理，剩余四条异常终止回报仍
+ *   逐条唤醒 Lead，各跑一轮只为确认「旧通知，忽略」。
+ * - 现有覆盖缺口：此前没有任何路径会在 Lead 采取行动后清理它自己队列里的过期回报。
+ * - 最小失败输入：Lead 队列里排着 worker-session-1 的一条异常终止回报时归档或重新派活。
+ * - tier：unit（内存 fake 的队列快照与 remove）。
+ */
+describe('OrcaTeamService superseded worker failure notices', () => {
+  const failureText = '[Auto-bridged: worker 异常终止]\n\nYou have reached your usage limit.';
+  function leadQueueItem(clientId: string, senderSessionId: string, displayText: string): AgentInputQueuedMessage {
+    return {
+      clientId,
+      text: `[From Orca Worker dev]\n${displayText}`,
+      persistedContent: displayText,
+      model: 'gpt-5.4',
+      effort: 'medium',
+      permissionMode: 'bypassPermissions',
+      workingDir: '/repo',
+      chatMessage: { clientId, role: 'user', content: displayText, createdAt: '2026-11-10T00:00:00.000Z' },
+      createOpts: { agentKind: 'codex', workingDir: '/repo', model: 'gpt-5.4' },
+      origin: { kind: 'orca', senderLabel: 'dev', displayText, senderSessionId },
+    } as AgentInputQueuedMessage;
+  }
+  function leadQueue(items: AgentInputQueuedMessage[], consumingClientIds: string[] = []) {
+    const queue = [...items];
+    return {
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: [...queue],
+        steeringClientIds: [],
+        consumingClientIds,
+        isWorking: true,
+        willQueue: true,
+        queuePaused: false,
+      })),
+      removeQueuedMessage: vi.fn((_sessionId: string, clientId: string) => {
+        const index = queue.findIndex((item) => item.clientId === clientId);
+        if (index < 0) return false;
+        queue.splice(index, 1);
+        return true;
+      }),
+      push: (item: AgentInputQueuedMessage) => { queue.push(item); },
+      ids: () => queue.map((item) => item.clientId),
+    };
+  }
+
+  it('withdraws only the archived worker\'s unread failure notices and keeps every other report', async () => {
+    const queue = leadQueue([
+      leadQueueItem('own-failure', 'worker-session-1', failureText),
+      leadQueueItem('own-result', 'worker-session-1', '基准测量完成，结果见下。'),
+      leadQueueItem('other-failure', 'worker-session-2', failureText),
+      leadQueueItem('own-failure-delivering', 'worker-session-1', failureText),
+    ], ['own-failure-delivering']);
+    const { deps, service, setWorker } = createDeps(queue);
+    setWorker(createWorker({ status: 'error' }));
+
+    await expect(
+      service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' }),
+    ).resolves.toEqual({ ok: true, workerId: 'worker-1', withdrawnFailureNotices: 1 });
+
+    // 成果、其他 Worker 的回报与正在投递的条目都必须留下。
+    expect(queue.ids()).toEqual(['own-result', 'other-failure', 'own-failure-delivering']);
+    expect(deps.removeQueuedMessage).toHaveBeenCalledWith('lead-1', 'own-failure', expect.objectContaining({ clientId: 'own-failure' }));
+  });
+
+  it('still archives when the lead queue cannot be read', async () => {
+    const { service, setWorker, getWorker } = createDeps({
+      getSessionQueueSnapshot: vi.fn(async () => { throw new Error('queue unavailable'); }),
+    });
+    setWorker(createWorker({ status: 'error' }));
+
+    await expect(
+      service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' }),
+    ).resolves.toEqual({ ok: true, workerId: 'worker-1' });
+    expect(getWorker().status).toBe('done');
+  });
+
+  it('hands the stale failure notice back in the receipt when the lead re-dispatches an errored worker', async () => {
+    const queue = leadQueue([leadQueueItem('stale-failure', 'worker-session-1', failureText)]);
+    const { service, setWorker } = createDeps({
+      ...queue,
+      dispatchWorkerMessage: vi.fn(async (params) => {
+        // 新派发的这一轮立刻又失败：它的回报在派发之后才进队列，属于新一轮，不能被当成旧回报撤下。
+        queue.push(leadQueueItem('fresh-failure', 'worker-session-1', failureText));
+        return {
+          ok: true,
+          mode: 'dispatched',
+          clientId: 'dispatch-1',
+          dispatchOutcome: { kind: 'session-dispatch', source: params.dispatchMeta.source, dispatched: true },
+          targetTitle: 'Worker',
+          targetLastUserSendAt: null,
+        } satisfies DispatchWorkerMessageResult;
+      }),
+    });
+    setWorker(createWorker({ status: 'error' }));
+
+    const result = await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '换了模型，请从上次停下的地方继续。',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      supersededFailureNotices: [{ queuedMessageId: 'stale-failure', text: failureText }],
+    });
+    expect(queue.ids()).toEqual(['fresh-failure']);
+  });
+
+  it('leaves the queue alone when the dispatch fails or the worker was not in error', async () => {
+    const queue = leadQueue([leadQueueItem('stale-failure', 'worker-session-1', failureText)]);
+    const { deps, service, setWorker } = createDeps({
+      ...queue,
+      dispatchWorkerMessage: vi.fn(async (params) => ({
+        ok: false,
+        dispatchOutcome: {
+          kind: 'session-dispatch', source: params.dispatchMeta.source, dispatched: false,
+          reason: 'cancelled-before-dispatch', message: 'not ready', context: params.dispatchMeta.context,
+        },
+      } satisfies DispatchWorkerMessageResult)),
+    });
+    setWorker(createWorker({ status: 'error' }));
+    await expect(service.sendToWorker({
+      callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '继续',
+    })).resolves.toMatchObject({ ok: false });
+    expect(queue.ids()).toEqual(['stale-failure']);
+
+    const healthy = createDeps(queue);
+    healthy.setWorker(createWorker({ status: 'idle' }));
+    const sent = await healthy.service.sendToWorker({
+      callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '新任务',
+    });
+    expect(sent).toMatchObject({ ok: true });
+    expect(sent).not.toHaveProperty('supersededFailureNotices');
+    expect(queue.ids()).toEqual(['stale-failure']);
+    expect(deps.removeQueuedMessage).not.toHaveBeenCalled();
   });
 });
 

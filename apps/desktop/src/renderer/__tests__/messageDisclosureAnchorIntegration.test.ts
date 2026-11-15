@@ -35,14 +35,17 @@ function setup({ header = false, nearBottom = false } = {}) {
   button.getBoundingClientRect = () => ({ top: documentTop - container.scrollTop }) as DOMRect;
   let resize!: () => void;
   let now = 0;
+  const isNearBottomRef = { current: nearBottom };
   const bindings = {
     useEffect: (callback: () => () => void) => cleanups.push(callback()),
     contentRef: { current: content },
+    itemsRef: { current: null },
     scrollRef: { current: container },
     restoringRef: { current: true },
     suppressHeightCompensationUntilRef: { current: 0 },
     disclosureAnchorRef: { current: null },
-    isNearBottomRef: { current: nearBottom },
+    isNearBottomRef,
+    unpinAutoFollowForUserUpIntent: vi.fn(() => { isNearBottomRef.current = false; }),
     CARD_EXPAND_PIN_SUPPRESS_MS: 500,
     CARD_EXPAND_TOGGLE_EVENT: 'xdt-card-expand-toggle',
     Element: window.Element,

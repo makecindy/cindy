@@ -1,0 +1,868 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>远程连接 · 设计稿</title>
+<style>
+/* 视觉语言对齐 Cindy 菜单栏卡片：一句话说清状态，设备是有分量的实物，黑白为主、只有要你处理的东西才带颜色。
+   拓扑按业内的画法：从这台电脑出发，从左到右，每台设备一条路线；经过的中转是路线上真实的一站，每一段都写着延迟
+   （UniFi 的左右树 + 游戏加速器「本机 → 节点 → 服务器」的分段路线）。先只做电脑版。系统字体，不引外部字体。 */
+:root {
+  color-scheme: light;
+  --bg: #f2f2f4; --card: #ffffff; --edge: rgba(0,0,0,.06);
+  --ink: #1d1d1f; --ink-2: rgba(60,60,67,.6); --ink-3: rgba(60,60,67,.3); --sep: rgba(60,60,67,.12); --fill: rgba(120,120,128,.1);
+  --trough: rgba(0,0,0,.045); --trough-edge: rgba(0,0,0,.07); --trough-in: inset 0 2px 4px rgba(0,0,0,.06);
+  --bar: linear-gradient(180deg, #4a4a4e 0%, #2a2a2d 30%, #1d1d1f 100%); --bar-top: rgba(255,255,255,.35);
+  --hub: radial-gradient(circle at 36% 24%, #58585c 0%, #2b2b2e 48%, #111113 100%); --hub-ink: #fff; --hub-halo: rgba(52,199,89,.18);
+  --tile-shadow: 0 1px 2px rgba(0,0,0,.22), 0 8px 20px rgba(0,0,0,.18);
+  --line: rgba(29,29,31,.22); --line-on: rgba(29,29,31,.5); --dot: #1d1d1f;
+  --glass: rgba(255,255,255,.9); --glass-line: rgba(0,0,0,.06);
+  --blue: #007aff; --orange: #ff9500; --red: #ff3b30; --green: #34c759;
+  --pop-shadow: 0 0 0 .5px rgba(0,0,0,.08), 0 14px 36px rgba(0,0,0,.16), 0 2px 6px rgba(0,0,0,.06);
+  --cta-bg: #1d1d1f; --cta-ink: #fff;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Helvetica Neue", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #000; --card: #141416; --edge: rgba(255,255,255,.09);
+  --ink: #f5f5f7; --ink-2: rgba(235,235,245,.58); --ink-3: rgba(235,235,245,.3); --sep: rgba(84,84,88,.5); --fill: rgba(120,120,128,.22);
+  --trough: rgba(255,255,255,.05); --trough-edge: rgba(255,255,255,.12); --trough-in: inset 0 2px 6px rgba(0,0,0,.5);
+  --bar: linear-gradient(180deg, #ffffff 0%, #f1f1f4 40%, #dcdce2 100%); --bar-top: rgba(255,255,255,1);
+  --hub: radial-gradient(circle at 36% 24%, #ffffff 0%, #ececf0 46%, #c9c9d0 100%); --hub-ink: #111; --hub-halo: rgba(48,209,88,.2);
+  --tile-shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 26px rgba(0,0,0,.45), 0 0 22px rgba(255,255,255,.07);
+  --line: rgba(245,245,247,.2); --line-on: rgba(245,245,247,.5); --dot: #fff;
+  --glass: rgba(44,44,46,.86); --glass-line: rgba(255,255,255,.1);
+  --blue: #0a84ff; --orange: #ff9f0a; --red: #ff453a; --green: #30d158;
+  --pop-shadow: 0 0 0 .5px rgba(255,255,255,.1), 0 18px 48px rgba(0,0,0,.6);
+  --cta-bg: #fff; --cta-ink: #111;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 14px; line-height: 1.4; -webkit-font-smoothing: antialiased; }
+button, input { font: inherit; color: inherit; }
+.num { font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+svg.g { stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* 原型控制：不属于界面 */
+.proto { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 80; display: flex; gap: 4px; align-items: center; padding: 4px; white-space: nowrap;
+  border-radius: 999px; background: var(--glass); backdrop-filter: blur(24px) saturate(1.8); -webkit-backdrop-filter: blur(24px) saturate(1.8); box-shadow: var(--pop-shadow); font-size: 12px; }
+.proto select, .proto button { height: 28px; padding: 0 12px; border: 0; border-radius: 999px; background: transparent; color: var(--ink); font-size: 12px; cursor: pointer; }
+.proto select { appearance: none; background: var(--fill); padding-right: 28px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ink-2) 50%), linear-gradient(135deg, var(--ink-2) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 12px, calc(100% - 11px) 12px; background-size: 4px 4px; background-repeat: no-repeat; }
+.proto button:hover { background: var(--fill); }
+.proto .tag { color: var(--ink-3); padding: 0 8px 0 10px; }
+
+/* 一整张卡 */
+.page { max-width: 1000px; margin: 0 auto; padding: 40px 24px 130px; }
+.card { position: relative; background: var(--card); border-radius: 26px; box-shadow: 0 0 0 .5px var(--edge), 0 1px 2px rgba(0,0,0,.04), 0 24px 60px rgba(0,0,0,.08); padding: 22px 26px 22px; }
+:root[data-theme="dark"] .card { box-shadow: 0 0 0 .5px var(--edge), inset 0 1px 0 rgba(255,255,255,.05), 0 30px 80px rgba(0,0,0,.6); }
+
+.bar { display: flex; align-items: center; gap: 12px; min-height: 28px; }
+.bar .brand { font-family: var(--display); font-weight: 800; letter-spacing: -.02em; font-size: 15px; }
+.bar .when { color: var(--ink-2); font-size: 13px; flex: 1; }
+.bar .vlabel { font-size: 12px; color: var(--ink-2); }
+.ib { width: 28px; height: 28px; border-radius: 50%; border: 0; background: transparent; display: grid; place-items: center; cursor: pointer; color: var(--ink-2); }
+.ib:hover { background: var(--fill); color: var(--ink); }
+.ib svg { width: 17px; height: 17px; }
+.toggle { position: relative; width: 38px; height: 23px; border-radius: 999px; border: 0; padding: 0; cursor: pointer; background: var(--fill); flex-shrink: 0; transition: background .2s; }
+.toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 19px; height: 19px; border-radius: 50%; background: #fff; box-shadow: 0 3px 8px rgba(0,0,0,.15), 0 1px 1px rgba(0,0,0,.16); transition: transform .25s cubic-bezier(.3,1.3,.5,1); }
+.toggle[aria-checked="true"] { background: var(--green); }
+.toggle[aria-checked="true"]::after { transform: translateX(15px); }
+
+/* 顶上一行数字，不写句子：图本身已经在说话 */
+.stats { margin-top: 14px; display: flex; gap: 18px; align-items: center; font-size: 13px; color: var(--ink-2); flex-wrap: wrap; }
+.stats span { display: inline-flex; align-items: center; gap: 6px; }
+.stats b { font-weight: 600; color: var(--ink); font-size: 15px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.stats i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
+
+/* 拓扑：这台电脑在中间，两边各一列路线（UniFi 的左右树 + 加速器的分段延迟，两侧都用上）。
+   每台设备一行；经过的中转是路线上真实的一站，每一段线上写着这一段的延迟；一组设备多了就共用一条干线。 */
+.stage { position: relative; margin: 18px -8px 0; }
+.stage svg.links { position: absolute; inset: 0; width: 100%; height: 100%; display: block; overflow: visible; }
+.nodes { position: absolute; inset: 0; }
+.node { position: absolute; left: 0; top: 0; width: 0; height: 0; outline: none; }
+.node.hub .disc { position: absolute; left: -28px; top: -28px; width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; color: var(--hub-ink); background: var(--hub); cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0,0,0,.25), 0 10px 28px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.7), inset 0 -6px 12px rgba(0,0,0,.1), 0 0 0 8px var(--hub-halo);
+  transition: transform .35s cubic-bezier(.2,.9,.25,1.25); }
+.node.hub .disc svg { width: 26px; height: 26px; stroke-width: 1.7; }
+.node.hub:hover .disc, .node.hub:focus-visible .disc { transform: scale(1.04); }
+.node.hub .cap { position: absolute; top: 40px; left: 50%; transform: translateX(-50%); text-align: center; white-space: nowrap; pointer-events: none; }
+.node.hub .cap .n1 { font-size: 13px; font-weight: 600; }
+.node.hub .cap .n2 { font-size: 11.5px; color: var(--ink-2); }
+.hubring { position: absolute; left: -28px; top: -28px; width: 56px; height: 56px; border-radius: 50%; pointer-events: none; animation: breath 4.6s ease-in-out infinite; }
+/* 一行 = 一台设备；R 在右边，L 在左边（名字写在远离中间的一侧） */
+.row { position: absolute; left: 0; top: 0; width: 0; height: 0; cursor: pointer; outline: none; }
+.row .tile { position: absolute; left: -18px; top: -18px; width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; color: var(--hub-ink); background: var(--bar);
+  box-shadow: var(--tile-shadow), inset 0 1px 0 var(--bar-top); transition: transform .35s cubic-bezier(.2,.9,.25,1.25), background .4s, box-shadow .4s, color .4s; }
+.row .tile svg { width: 19px; height: 19px; stroke-width: 1.9; }
+.row:hover .tile, .row:focus-visible .tile { transform: translateY(-2px) scale(1.05); }
+.row.active .tile::after { content: ""; position: absolute; inset: -5px; border-radius: 16px; border: 1.5px solid var(--dot); opacity: 0; animation: pulse 2.4s ease-out infinite; }
+.row.low .tile { background: linear-gradient(180deg, #ffbe52, var(--orange)); color: #fff;
+  box-shadow: var(--tile-shadow), inset 0 1px 0 rgba(255,255,255,.55), 0 0 14px 2px color-mix(in srgb, var(--orange) 55%, transparent), 0 0 36px 8px color-mix(in srgb, var(--orange) 22%, transparent); }
+.row.low .tile::after { border-color: var(--orange); }
+.row.off .tile, .row.fold .tile { background: var(--trough); color: var(--ink-3); box-shadow: var(--trough-in), 0 0 0 1px var(--trough-edge); }
+.row.off .txt { opacity: .55; }
+.row.sel .tile { box-shadow: var(--tile-shadow), inset 0 1px 0 var(--bar-top), 0 0 0 3px color-mix(in srgb, var(--blue) 55%, transparent); }
+.row:focus-visible .tile { box-shadow: var(--tile-shadow), 0 0 0 3px var(--blue); }
+.row .txt { position: absolute; top: -17px; white-space: nowrap; pointer-events: none; }
+.row.R .txt { left: 30px; text-align: left; }
+.row.L .txt { right: 30px; text-align: right; }
+.row .n1 { font-size: 13.5px; font-weight: 600; line-height: 17px; }
+.row .n2 { font-size: 12px; color: var(--ink-2); line-height: 16px; margin-top: 1px; }
+.row .n2 b { font-weight: 600; color: var(--ink); }
+.row.low .n2 b { color: var(--orange); }
+.row.fold .n2 { color: var(--blue); }
+.row.dim { opacity: .35; }
+/* 颜色只用来说状态：绿 在线，橙 要处理，红 离线；蓝 是中转这种基础设施。其余照旧黑白。 */
+.row .st { position: absolute; right: -3px; top: -3px; width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 2px var(--card), 0 0 8px color-mix(in srgb, var(--green) 75%, transparent); }
+.row.low .st { background: var(--orange); box-shadow: 0 0 0 2px var(--card), 0 0 8px color-mix(in srgb, var(--orange) 75%, transparent); }
+.row.off .st, .row.fold .st { background: var(--red); box-shadow: 0 0 0 2px var(--card), 0 0 8px color-mix(in srgb, var(--red) 65%, transparent); }
+.row.off .n2 { color: color-mix(in srgb, var(--red) 70%, var(--ink-2)); }
+.row.fold .n2 { color: var(--blue); }
+.relay .tile { color: var(--blue); }
+.peer .mini.r { color: var(--blue); }
+/* 线框：不要实心块，机器图标和它的框都是线，线的颜色就是状态（绿 在线 / 橙 要处理 / 红 离线 / 蓝 中转）。 */
+.st-line .row .st { display: none; }
+.st-line .row .tile { --c: var(--green); background: color-mix(in srgb, var(--c) 6%, transparent); color: color-mix(in srgb, var(--c) 78%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--c) 55%, transparent), 0 0 12px color-mix(in srgb, var(--c) 14%, transparent); }
+.st-line .row .tile svg { stroke-width: 1.7; }
+.st-line .row.low .tile { --c: var(--orange); }
+.st-line .row.off .tile, .st-line .row.fold .tile { --c: var(--red); background: transparent; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--c) 45%, transparent); color: color-mix(in srgb, var(--c) 65%, transparent); }
+.st-line .row.sel .tile { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--c) 55%, transparent), 0 0 0 3px color-mix(in srgb, var(--blue) 55%, transparent); }
+.st-line .row:hover .tile { color: var(--c); box-shadow: inset 0 0 0 1.5px var(--c), 0 0 14px color-mix(in srgb, var(--c) 28%, transparent); }
+.st-line .row.active .tile::after { border-color: var(--c); }
+.st-line .relay .tile { background: color-mix(in srgb, var(--blue) 6%, transparent); color: color-mix(in srgb, var(--blue) 80%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--blue) 55%, transparent), 0 0 12px color-mix(in srgb, var(--blue) 14%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.st-line .peer .mini { background: color-mix(in srgb, var(--green) 6%, transparent); color: color-mix(in srgb, var(--green) 78%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--green) 55%, transparent); }
+.st-line .peer .mini.r { background: color-mix(in srgb, var(--blue) 6%, transparent); color: color-mix(in srgb, var(--blue) 80%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--blue) 55%, transparent); }
+/* 状态的另外两种画法（原型里切换）：图标换色 / 整块换色 */
+.st-icon .row .st, .st-tile .row .st { display: none; }
+.st-icon .row .tile { color: var(--green); }
+.st-icon .row.low .tile { background: var(--bar); color: var(--orange); box-shadow: var(--tile-shadow), inset 0 1px 0 var(--bar-top); }
+.st-icon .row.off .tile, .st-icon .row.fold .tile { background: var(--trough); color: var(--red); box-shadow: var(--trough-in), 0 0 0 1px var(--trough-edge); }
+.st-tile .row .tile { background: linear-gradient(180deg, #5ee08a 0%, #34c759 55%, #28a745 100%); color: #fff;
+  box-shadow: var(--tile-shadow), inset 0 1px 0 rgba(255,255,255,.5), 0 0 14px 2px color-mix(in srgb, var(--green) 35%, transparent); }
+.st-tile .row.off .tile, .st-tile .row.fold .tile { background: color-mix(in srgb, var(--red) 18%, var(--trough)); color: color-mix(in srgb, var(--red) 75%, var(--ink-3)); box-shadow: var(--trough-in), 0 0 0 1px color-mix(in srgb, var(--red) 35%, transparent); }
+.st-tile .row.active .tile::after { border-color: var(--green); }
+.elabel.fast .chip { color: var(--green); }
+.elabel.slow .chip { color: var(--orange); }
+/* 中转：路线上真实的一站 */
+.relay { position: absolute; left: 0; top: 0; width: 0; height: 0; cursor: pointer; outline: none; }
+.relay .tile { position: absolute; left: -18px; top: -18px; width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; color: var(--ink);
+  background: var(--glass); backdrop-filter: blur(16px) saturate(1.6); -webkit-backdrop-filter: blur(16px) saturate(1.6);
+  box-shadow: 0 1px 2px rgba(0,0,0,.1), 0 6px 16px rgba(0,0,0,.14), inset 0 0 0 .5px var(--glass-line), inset 0 1px 0 rgba(255,255,255,.35); transition: transform .3s cubic-bezier(.2,.9,.25,1.25); }
+.relay .tile svg { width: 19px; height: 19px; }
+.relay:hover .tile { transform: scale(1.06); }
+.relay .cap { position: absolute; bottom: 23px; left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: 11.5px; color: var(--ink-2); text-align: center; pointer-events: none; }
+.relay .cap b { color: var(--ink); font-weight: 600; }
+/* 线上的延迟 */
+.labels { position: absolute; inset: 0; pointer-events: none; }
+.elabel { position: absolute; left: 0; top: 0; }
+.elabel .chip { position: absolute; transform: translate(-50%, -50%); height: 19px; padding: 0 7px; border-radius: 999px; white-space: nowrap; display: flex; align-items: center;
+  background: var(--card); box-shadow: 0 0 0 .5px var(--glass-line), 0 2px 8px rgba(0,0,0,.08); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.elabel.low .chip { color: var(--orange); }
+/* 分组名：设备多的时候，每条干线上方写一行 */
+.gcap { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
+.gcap span { position: absolute; top: -17px; font-size: 11.5px; line-height: 14px; color: var(--ink-2); white-space: nowrap; }
+.gcap.R span { left: 8px; }
+.gcap.L span { right: 8px; }
+.gcap i { font-style: normal; color: var(--ink-3); }
+/* 设备之间 */
+.peers { margin: 10px 0 0; }
+.peers .h { font-size: 12px; color: var(--ink-2); margin: 0 0 6px; letter-spacing: .02em; }
+.peer { display: flex; align-items: center; gap: 10px; height: 44px; }
+.peer .mini { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; color: var(--hub-ink); background: var(--bar); box-shadow: var(--tile-shadow), inset 0 1px 0 var(--bar-top); flex-shrink: 0; }
+.peer .mini svg { width: 14px; height: 14px; stroke-width: 2; }
+.peer .mini.r { background: var(--glass); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.1), 0 4px 12px rgba(0,0,0,.12), inset 0 0 0 .5px var(--glass-line); }
+.peer .seg { position: relative; width: 74px; height: 2px; background: var(--line-on); border-radius: 2px; flex-shrink: 0; }
+.peer .seg.dash { background: repeating-linear-gradient(90deg, var(--line-on) 0 6px, transparent 6px 11px); }
+.peer .seg .chip { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); height: 18px; padding: 0 7px; border-radius: 999px; background: var(--card); font-size: 11px; font-weight: 600; white-space: nowrap; box-shadow: 0 0 0 .5px var(--glass-line); }
+.peer .t { margin-left: 8px; font-size: 13px; }
+.peer .t b { font-weight: 600; }
+.peer .t span { color: var(--ink-2); }
+
+/* 下半张：标签页 + 30 天 */
+.tabs { display: flex; gap: 22px; margin-top: 16px; border-bottom: .5px solid var(--sep); }
+.tabs button { position: relative; background: none; border: 0; padding: 8px 0 10px; font-size: 14px; color: var(--ink-2); cursor: pointer; font-weight: 500; }
+.tabs button[aria-selected="true"] { color: var(--ink); font-weight: 600; }
+.tabs button[aria-selected="true"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; border-radius: 2px; background: var(--ink); }
+.tabs button b { font-weight: 600; color: var(--orange); margin-left: 3px; }
+.panel { padding: 8px 2px 4px; min-height: 68px; }
+.panel .ttl { display: flex; align-items: baseline; justify-content: space-between; font-size: 15px; font-weight: 600; }
+.panel .ttl .r { font-size: 14px; font-weight: 400; color: var(--ink-2); }
+.panel .empty { color: var(--ink-2); margin-top: 8px; font-size: 14px; }
+.item2 { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.item2 i { width: 8px; height: 8px; border-radius: 50%; background: var(--c, var(--ink-3)); flex-shrink: 0; }
+.item2 .l { flex: 1; min-width: 0; }
+.item2 .l b { font-weight: 600; }
+.item2 .l span { color: var(--ink-2); }
+.item2 .act { background: none; border: 0; padding: 0; color: var(--blue); font-weight: 500; cursor: pointer; white-space: nowrap; }
+.bigs { display: flex; gap: 28px; margin-top: 10px; }
+.bigs .v { font-size: 26px; font-weight: 600; letter-spacing: -.02em; }
+.bigs .v small { font-size: 14px; font-weight: 500; color: var(--ink-2); margin-left: 2px; letter-spacing: 0; }
+.bigs .k { font-size: 12px; color: var(--ink-2); }
+.month { margin-top: 10px; border-radius: 18px; background: var(--fill); padding: 14px 18px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 18px; }
+.month .k { font-size: 13px; color: var(--ink-2); }
+.month .v { font-size: 30px; font-weight: 700; letter-spacing: -.03em; line-height: 1.1; margin-top: 4px; }
+.month svg { width: 100%; height: 56px; display: block; }
+.month .x { background: none; border: 0; padding: 0; font-size: 14px; font-weight: 600; color: var(--ink); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.month .x svg { width: 12px; height: 12px; }
+.bottom { display: flex; align-items: center; justify-content: space-between; margin-top: 18px; }
+.cta { height: 40px; padding: 0 18px 0 14px; border-radius: 999px; border: 0; background: var(--cta-bg); color: var(--cta-ink); font-size: 15px; font-weight: 600; display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0,0,0,.2), 0 6px 16px rgba(0,0,0,.14); }
+.cta:active { transform: scale(.97); }
+.cta svg { width: 16px; height: 16px; stroke-width: 2.4; }
+.cta kbd { font-family: inherit; font-weight: 500; opacity: .55; margin-left: 2px; }
+.foot { margin-top: 22px; text-align: center; font-size: 13px; color: var(--ink-2); }
+.foot button { background: none; border: 0; color: var(--blue); cursor: pointer; font-size: 13px; }
+
+/* 弹出卡片（macOS popover） */
+.pop { position: absolute; z-index: 50; width: 340px; max-height: calc(100% - 8px); overflow-y: auto; overscroll-behavior: contain; border-radius: 18px; background: var(--glass); backdrop-filter: blur(40px) saturate(1.8); -webkit-backdrop-filter: blur(40px) saturate(1.8);
+  box-shadow: var(--pop-shadow); padding: 16px; opacity: 0; transform: scale(.94); transform-origin: var(--ox, 0) var(--oy, 0); pointer-events: none; transition: opacity .18s ease, transform .32s cubic-bezier(.2,.9,.25,1.15); }
+.pop.open { opacity: 1; transform: none; pointer-events: auto; }
+.note { font-size: 12px; color: var(--ink-2); margin: 6px 4px 0; }
+.ph { display: flex; align-items: center; gap: 12px; }
+.ph .ptile { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--fill); flex-shrink: 0; color: var(--ink); }
+.ph .ptile svg { width: 24px; height: 24px; stroke-width: 1.5; }
+.ph input { width: 100%; border: 0; background: transparent; font-size: 17px; font-weight: 600; letter-spacing: -.01em; padding: 2px 6px; margin-left: -6px; border-radius: 8px; }
+.ph input:focus { outline: none; background: var(--fill); }
+.ph .s { font-size: 13px; color: var(--ink-2); }
+.ph .x { width: 28px; height: 28px; border-radius: 50%; border: 0; background: var(--fill); color: var(--ink-2); cursor: pointer; font-size: 15px; line-height: 1; flex-shrink: 0; }
+.big { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 16px; }
+.big > div + div { border-left: .5px solid var(--sep); padding-left: 12px; }
+.big .v { font-size: 26px; font-weight: 600; }
+.big .v small { font-size: 13px; color: var(--ink-2); font-weight: 500; margin-left: 2px; }
+.big .k { font-size: 12px; color: var(--ink-2); }
+.area { width: 100%; height: 64px; display: block; margin-top: 10px; }
+.group { margin-top: 14px; background: var(--fill); border-radius: 12px; }
+.item { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px; font-size: 14px; }
+.item + .item { box-shadow: inset 0 .5px 0 var(--sep); }
+.item .l { flex: 1; min-width: 0; }
+.item .r { color: var(--ink-2); font-size: 14px; text-align: right; }
+.item .r.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; letter-spacing: .06em; color: var(--ink); }
+.item .chev { color: var(--ink-3); }
+.acts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+.act { height: 58px; border-radius: 12px; border: 0; background: var(--fill); cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: 12px; }
+.act svg { width: 20px; height: 20px; color: var(--blue); stroke-width: 1.7; }
+.danger { margin-top: 10px; width: 100%; height: 40px; border: 0; border-radius: 12px; background: transparent; color: var(--red); font-size: 14px; cursor: pointer; }
+.banner { margin-top: 14px; border-radius: 12px; padding: 10px 12px; background: color-mix(in srgb, var(--orange) 14%, transparent); font-size: 13px; display: flex; gap: 10px; align-items: flex-start; }
+.banner svg { width: 18px; height: 18px; color: var(--orange); flex-shrink: 0; margin-top: 1px; }
+.seg2 { display: grid; grid-template-columns: 1fr 1fr; padding: 2px; border-radius: 9px; background: var(--fill); margin-top: 14px; }
+.seg2 button { height: 30px; border: 0; border-radius: 7px; background: transparent; font-size: 13px; cursor: pointer; }
+.seg2 button[aria-pressed="true"] { background: var(--card); box-shadow: 0 3px 8px rgba(0,0,0,.12), 0 0 0 .5px rgba(0,0,0,.04); font-weight: 600; }
+.toggle.sm { width: 38px; height: 23px; }
+.toast { position: fixed; left: 50%; top: 18px; transform: translate(-50%, -140%); z-index: 90; padding: 10px 18px; border-radius: 999px; font-size: 13px; font-weight: 500;
+  background: var(--glass); backdrop-filter: blur(30px) saturate(1.8); -webkit-backdrop-filter: blur(30px) saturate(1.8); box-shadow: var(--pop-shadow);
+  transition: transform .45s cubic-bezier(.2,.9,.25,1.2), opacity .2s; opacity: 0; display: flex; gap: 8px; align-items: center; white-space: nowrap; }
+.toast.open { transform: translate(-50%, 0); opacity: 1; }
+.toast i { width: 8px; height: 8px; border-radius: 50%; background: var(--c, var(--blue)); }
+
+@keyframes breath { 0%, 100% { box-shadow: 0 0 0 0 var(--hub-halo); } 50% { box-shadow: 0 0 0 14px transparent; } }
+@keyframes pulse { 0% { transform: scale(.9); opacity: .45; } 70%, 100% { transform: scale(1.25); opacity: 0; } }
+.reduced *, .reduced *::before, .reduced *::after { animation: none !important; transition: none !important; }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <section class="card" id="card">
+    <div class="bar">
+      <span class="brand">远程连接</span>
+      <span class="when" id="when">刚刚更新</span>
+      <span class="vlabel">新版</span>
+      <button class="toggle" role="switch" aria-checked="true" aria-label="新版连接" id="v2"></button>
+      <button class="ib" type="button" data-act="refresh" aria-label="刷新"><svg class="g" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg></button>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="stage" id="stage" aria-label="设备网络">
+      <svg class="links" id="links" aria-hidden="true"></svg>
+      <div class="nodes" id="nodes"></div>
+      <div class="pop" id="pop" role="dialog" aria-modal="false" aria-label="详情"></div>
+    </div>
+    <div class="peers" id="peers"></div>
+
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <div class="panel" id="panel"></div>
+    <div class="month" id="month"></div>
+
+    <div class="bottom">
+      <button class="cta" type="button" data-open="add"><svg class="g" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加设备<kbd>⌘N</kbd></button>
+      <button class="ib" type="button" data-key="hub" aria-label="这台电脑的设置"><svg class="g" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+    </div>
+  </section>
+  <div class="foot">新版和旧版可以随时切换。<button type="button" data-act="v1">使用旧版远程连接</button></div>
+</div>
+
+
+
+<div class="proto" role="toolbar" aria-label="原型控制">
+  <span class="tag">原型</span>
+  <select id="scenario" aria-label="场景">
+    <option value="daily">日常</option>
+    <option value="cellular">MacBook Pro 换成直连</option>
+    <option value="bigfile">在传大文件</option>
+    <option value="offline">外网断了</option>
+    <option value="mine">只用我的中转</option>
+    <option value="many">20 台设备</option>
+    <option value="flat">20 台都直连</option>
+  </select>
+  <select id="stmode" aria-label="状态画法"><option value="line">状态：线框</option><option value="dot">状态：点</option><option value="icon">状态：图标换色</option><option value="tile">状态：整块换色</option></select>
+  <button id="theme" type="button">深色</button>
+  <button id="motion" type="button">减弱动效</button>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const GLYPH = {
+  laptop: '<path d="M5 6.5A1.5 1.5 0 0 1 6.5 5h11A1.5 1.5 0 0 1 19 6.5V15H5z"/><path d="M2.5 15h19l-.8 2.2a1.5 1.5 0 0 1-1.4 1H4.7a1.5 1.5 0 0 1-1.4-1z"/>',
+  desktop: '<rect x="3" y="4" width="18" height="12.5" rx="2"/><path d="M9.5 20.5h5M12 16.5v4"/>',
+  mini: '<rect x="3.5" y="8.5" width="17" height="7" rx="2.2"/><path d="M7 12h.01"/>',
+  studio: '<rect x="4.5" y="7" width="15" height="10" rx="2.5"/><path d="M7.5 14.2h3M15.5 14.2h.01"/>',
+  phone: '<rect x="7" y="2.8" width="10" height="18.4" rx="2.6"/><path d="M10.8 5.4h2.4"/>',
+  relay: '<path d="M4 15.5a4 4 0 0 1 1.3-7.8A6 6 0 0 1 17 9a3.5 3.5 0 0 1 2.5 6.5"/><path d="M8 19l4-4 4 4"/>',
+  wave: '<path d="M2 12h3l2.5-6 4 12 3-9 2 3h5.5"/>',
+  screen: '<rect x="3" y="4" width="18" height="12.5" rx="2"/><path d="M9.5 20.5h5M12 16.5v4"/><path d="M10 8.2l4 2-4 2z"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>', send: '<path d="M4 12l16-8-6 16-2.5-6.5z"/>',
+  warn: '<path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5M12 17.4h.01"/>', arrow: '<path d="M7 17 17 7M9 7h8v8"/>',
+};
+const glyph = k => `<svg class="g" viewBox="0 0 24 24" aria-hidden="true">${GLYPH[k]}</svg>`;
+
+// 连得好坏的等级：0 同一个网络，1 互联网直连，2 经中转，3 旧版，4 离线。
+const PATHS = {
+  lan:      { name: '同一个网络', short: '同一个网络', rank: 0 },
+  direct:   { name: '互联网直连', short: '直连', rank: 1 },
+  official: { name: '经 Cindy 中转', short: '经 Cindy 中转', rank: 2, relay: 'official' },
+  mine:     { name: '经我的中转', short: '经我的中转', rank: 2, relay: 'mine' },
+  v1:       { name: '旧版连接', short: '旧版', rank: 3, low: true },
+  offline:  { name: '离线', short: '离线', rank: 4 },
+};
+const RELAYS = { official: { name: 'Cindy 中转', where: '上海', ms: 18 }, mine: { name: '我的中转', where: 'tap-fp', ms: 25 } };
+const DEVICES = Object.assign(Object.create(null), {
+  mini:   { name: 'LiziXDMini', glyph: 'mini', model: 'Mac mini' },
+  mbp:    { name: 'MacBook Pro', glyph: 'laptop', model: 'MacBook Pro · macOS 15' },
+  iphone: { name: 'iPhone', glyph: 'phone', model: 'iPhone 17 Pro' },
+  home:   { name: '家里的 Mac mini', glyph: 'mini', model: 'Mac mini · Cindy 0.1.121' },
+  studio: { name: 'Mac Studio', glyph: 'studio', model: 'Mac Studio' },
+});
+// 经中转的设备，ms 是「中转 → 设备」这一段；到这台电脑的总延迟 = 中转那一段 + 这一段。
+const SCENARIOS = {
+  daily: { mini: { path: 'lan', ms: 1, down: .4, up: .1 }, mbp: { path: 'official', ms: 16, down: 1.6, up: .3, why: '公司网络不支持跨网络直连，自动走中转' },
+    iphone: { path: 'direct', ms: 31, down: .3, up: .05 }, home: { path: 'v1', ms: 38, down: .1, up: 0 }, studio: { path: 'offline', seen: '3 小时前在线' } },
+  cellular: { mini: { path: 'lan', ms: 1, down: .4, up: .1 }, mbp: { path: 'direct', ms: 14, down: 8.6, up: 1.2, why: '换到了允许直连的网络' },
+    iphone: { path: 'direct', ms: 31, down: .3, up: .05 }, home: { path: 'v1', ms: 38, down: .1, up: 0 }, studio: { path: 'offline', seen: '3 小时前在线' } },
+  bigfile: { mini: { path: 'lan', ms: 1, down: 92, up: 2.1, task: '正在接收 design-assets.zip' }, mbp: { path: 'official', ms: 16, down: 1.6, up: .3, why: '公司网络不支持跨网络直连，自动走中转' },
+    iphone: { path: 'direct', ms: 31, down: 0, up: 0 }, home: { path: 'v1', ms: 38, down: 0, up: 0 }, studio: { path: 'offline', seen: '3 小时前在线' } },
+  offline: { mini: { path: 'lan', ms: 1, down: .4, up: .1, why: '外网断了，同一个网络里照常直连' }, mbp: { path: 'offline', seen: '外网断了，恢复后自动连回' },
+    iphone: { path: 'offline', seen: '外网断了，恢复后自动连回' }, home: { path: 'offline', seen: '外网断了' }, studio: { path: 'offline', seen: '3 小时前在线' } },
+  mine: { mini: { path: 'lan', ms: 1, down: .4, up: .1 }, mbp: { path: 'mine', ms: 12, down: 1.4, up: .3, why: '只用我的中转' },
+    iphone: { path: 'mine', ms: 20, down: .3, up: .05, why: '只用我的中转：连不上时不再走 Cindy 中转' }, home: { path: 'v1', ms: 38, down: .1, up: 0 }, studio: { path: 'offline', seen: '3 小时前在线' } },
+};
+// 设备之间的连接（不经过这台电脑）：a 和 b 之间，via 是经过的中转；down 是 a 收到的速度。
+const PEERS = {
+  daily: [{ a: 'mbp', b: 'mini', via: 'official', ms: 21, down: 4.2, up: .4, task: 'MacBook Pro 正在从 LiziXDMini 取文件' }, { a: 'mbp', b: 'iphone', ms: 12, down: .2, up: .02 }],
+  cellular: [{ a: 'mbp', b: 'mini', via: 'official', ms: 21, down: 4.2, up: .4, task: 'MacBook Pro 正在从 LiziXDMini 取文件' }, { a: 'mbp', b: 'iphone', ms: 9, down: .2, up: .02 }],
+  bigfile: [{ a: 'mbp', b: 'iphone', ms: 12, down: 0, up: 0 }],
+  offline: [],
+  mine: [{ a: 'mbp', b: 'mini', via: 'mine', ms: 30, down: 3.1, up: .4, task: 'MacBook Pro 正在从 LiziXDMini 取文件' }, { a: 'mbp', b: 'iphone', ms: 12, down: .2, up: .02 }],
+};
+const RECENT = {
+  daily: [['MacBook Pro 换了网络，改走 Cindy 中转', '2 分钟前'], ['iPhone 回到了直连', '1 小时前'], ['Mac Studio 离线', '3 小时前']],
+  cellular: [['MacBook Pro 从中转换到直连，用时 0.2 秒', '刚刚'], ['MacBook Pro 换了网络，改走 Cindy 中转', '2 分钟前']],
+  bigfile: [['LiziXDMini 开始接收 design-assets.zip（3.2 GB）', '40 秒前'], ['MacBook Pro 换了网络，改走 Cindy 中转', '2 分钟前']],
+  offline: [['外网断了，同一个网络里的设备照常连着', '刚刚'], ['MacBook Pro 换了网络，改走 Cindy 中转', '2 分钟前']],
+  mine: [['改成只用我的中转，2 台设备改走 tap-fp', '刚刚'], ['MacBook Pro 换了网络，改走 Cindy 中转', '2 分钟前']],
+};
+const TODAY = { daily: [1.3, .21], cellular: [1.9, .34], bigfile: [4.6, .25], offline: [.6, .08], mine: [1.2, .2], many: [6.8, 1.1] };
+
+// 「20 台设备」场景：多出来的 15 台，只在这个场景里出现。
+Object.assign(DEVICES, {
+  x1: { name: 'Lizi 的 MacBook Air', glyph: 'laptop', model: 'MacBook Air · macOS 15' }, x2: { name: '公司 iMac', glyph: 'desktop', model: 'iMac' },
+  x3: { name: 'iPad Pro', glyph: 'phone', model: 'iPad Pro' }, x4: { name: 'Mac mini 2', glyph: 'mini', model: 'Mac mini' }, x5: { name: 'Windows 台式机', glyph: 'desktop', model: 'Windows 11' },
+  x6: { name: '测试机 A', glyph: 'laptop', model: 'MacBook Pro' }, x7: { name: '测试机 B', glyph: 'laptop', model: 'MacBook Pro' }, x8: { name: '测试机 C', glyph: 'mini', model: 'Mac mini' },
+  x9: { name: '客厅的 Mac mini', glyph: 'mini', model: 'Mac mini' }, x10: { name: '老 MacBook', glyph: 'laptop', model: 'MacBook · Cindy 0.1.118' }, x11: { name: '家里的 iPad', glyph: 'phone', model: 'iPad' },
+  x12: { name: '工作室 Mac Studio', glyph: 'studio', model: 'Mac Studio' }, x13: { name: '备用机', glyph: 'laptop', model: 'MacBook Air' }, x14: { name: 'Intel Mac mini', glyph: 'mini', model: 'Mac mini 2018' },
+  x15: { name: '同事借的 MacBook', glyph: 'laptop', model: 'MacBook Pro' },
+});
+SCENARIOS.many = {
+  mini: { path: 'lan', ms: 1, down: .4, up: .1 }, x2: { path: 'lan', ms: 2, down: 0, up: 0 }, x5: { path: 'lan', ms: 1, down: 12, up: .6, task: '正在接收 build-cache' }, x4: { path: 'lan', ms: 3, down: 0, up: 0 },
+  iphone: { path: 'direct', ms: 31, down: .3, up: .05 }, x1: { path: 'direct', ms: 22, down: 0, up: 0 }, x3: { path: 'direct', ms: 40, down: 0, up: 0 }, x6: { path: 'direct', ms: 55, down: .8, up: .1 },
+  x9: { path: 'direct', ms: 28, down: 0, up: 0 }, x11: { path: 'direct', ms: 47, down: 0, up: 0 },
+  mbp: { path: 'official', ms: 16, down: 1.6, up: .3, why: '公司网络不支持跨网络直连，自动走中转' }, x7: { path: 'official', ms: 24, down: 0, up: 0 }, x8: { path: 'official', ms: 31, down: .2, up: 0 },
+  x12: { path: 'official', ms: 19, down: 0, up: 0 }, x13: { path: 'official', ms: 40, down: 0, up: 0 }, x14: { path: 'mine', ms: 14, down: 0, up: 0 },
+  home: { path: 'v1', ms: 38, down: .1, up: 0 }, x10: { path: 'v1', ms: 52, down: 0, up: 0 },
+  studio: { path: 'offline', seen: '3 小时前在线' }, x15: { path: 'offline', seen: '2 天前在线' },
+};
+PEERS.many = [{ a: 'mbp', b: 'mini', via: 'official', ms: 21, down: 4.2, up: .4, task: 'MacBook Pro 正在从 LiziXDMini 取文件' }, { a: 'x6', b: 'x9', ms: 4, down: .6, up: .1 }, { a: 'mbp', b: 'iphone', ms: 12, down: .2, up: .02 }];
+RECENT.many = [['Windows 台式机 开始接收 build-cache（1.8 GB）', '刚刚'], ['MacBook Pro 换了网络，改走 Cindy 中转', '2 分钟前'], ['同事借的 MacBook 离线', '2 天前']];
+// 「20 台都直连」：一个组里 18 台，看两列小卡的排法。
+SCENARIOS.flat = Object.fromEntries(Object.entries(SCENARIOS.many).map(([id, v]) => [id, v.path === 'offline' ? v : { path: 'direct', ms: Math.max(4, (v.ms || 10) + 7), down: v.down || 0, up: v.up || 0, task: v.task }]));
+SCENARIOS.flat.mini = { path: 'direct', ms: 5, down: .4, up: .1 };
+PEERS.flat = []; RECENT.flat = RECENT.many; TODAY.flat = TODAY.many;
+
+const state = { scenario: 'daily', selected: null, theme: 'light', tab: 'todo', reduced: matchMedia('(prefers-reduced-motion: reduce)').matches };
+const live = {}, pos = {}, vel = {};
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmt = v => v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v >= .05 ? v.toFixed(2) : '0';
+const dev = id => ({ id, ...DEVICES[id], ...SCENARIOS[state.scenario][id], ...(live[id] || {}) });
+const isOn = d => d.path !== 'offline';
+const ids = () => Object.keys(DEVICES).filter(id => SCENARIOS[state.scenario][id]);
+const rank = d => PATHS[d.path].rank * 1000 + (SCENARIOS[state.scenario][d.id].ms || 0);
+const order = () => ids().map(dev).sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id)).map(d => d.id);
+const relayUsed = r => ids().some(id => PATHS[dev(id).path].relay === r);
+// 设备按「怎么连」分组。
+const GROUPS = { lan: '同一个网络', direct: '直连', 'relay-official': '经 Cindy 中转', 'relay-mine': '经我的中转', v1: '旧版', offline: '离线' };
+const groupOf = d => !isOn(d) ? 'offline' : PATHS[d.path].relay ? 'relay-' + PATHS[d.path].relay : d.path;
+
+// ---------- 几何：这台电脑在中间，两边各一列路线 ----------
+const ORDER = ['lan', 'direct', 'relay-official', 'relay-mine', 'v1', 'offline'];
+function groups() {
+  const by = {};
+  for (const id of order()) (by[groupOf(dev(id))] ||= []).push(id);
+  const gs = [];
+  for (const k of ORDER.filter(k => by[k])) {
+    const collapsed = k === 'offline' && by[k].length > 1 && !state.showOffline;
+    // 一组太多、又不经中转：对半分到两边
+    if (!collapsed && !k.startsWith('relay-') && by[k].length > 6) {
+      const h = Math.ceil(by[k].length / 2);
+      gs.push({ key: k, id: k, ids: by[k].slice(0, h), rows: by[k].slice(0, h) }, { key: k, id: k + '#2', ids: by[k].slice(h), rows: by[k].slice(h) });
+    } else gs.push({ key: k, id: k, ids: by[k], rows: collapsed ? ['offgroup'] : by[k], collapsed });
+  }
+  // 分到两边：哪边行少放哪边，右边优先
+  const n = { 1: 0, '-1': 0 };
+  for (const g of gs) { g.side = n[1] <= n['-1'] ? 1 : -1; n[g.side] += g.rows.length; }
+  return gs;
+}
+const dense = () => ids().length > 8;
+let G = {};
+function layout() {
+  const w = $('stage').clientWidth, gs = groups();
+  G = { w, cx: w / 2, rowH: dense() ? 46 : 56, gap: 14, top: 14, R: 28, half: 18, bend: 104, relay: 140, trunkR: 194, tile: 266, text: 296 };
+  const hgt = side => { const list = gs.filter(g => g.side === side); return list.reduce((s, g) => s + g.rows.length * G.rowH, 0) + Math.max(0, list.length - 1) * G.gap + (dense() ? list.length * 10 : 0); };
+  G.hL = hgt(-1); G.hR = hgt(1);
+  G.h = G.top * 2 + Math.max(G.hL, G.hR, 130);
+  $('stage').style.height = G.h + 'px';
+}
+function targets() {
+  const gs = groups(), t = { hub: { x: G.cx, y: G.h / 2 } };
+  for (const side of [1, -1]) {
+    const list = gs.filter(g => g.side === side);
+    let y = G.top + (G.h - G.top * 2 - (side === 1 ? G.hR : G.hL)) / 2;
+    for (const g of list) {
+      if (dense()) y += 10;
+      t['g-' + g.id] = { x: G.cx + side * (g.key.startsWith('relay-') ? G.trunkR : G.bend), y: y - 4 };
+      g.rows.forEach(id => { t[id] = { x: G.cx + side * G.tile, y: y + G.rowH / 2 }; y += G.rowH; });
+      if (g.collapsed) g.ids.forEach(id => t[id] = t.offgroup);
+      g.top = t[g.rows[0]].y; g.bottom = t[g.rows[g.rows.length - 1]].y; g.mid = (g.top + g.bottom) / 2;
+      y += G.gap;
+    }
+  }
+  for (const r in RELAYS) { const g = gs.find(g => g.key === 'relay-' + r); t['relay-' + r] = g ? { x: G.cx + g.side * G.relay, y: g.mid } : { x: G.cx, y: t.hub.y }; }
+  t._groups = gs;
+  return t;
+}
+
+// ---------- 节点 ----------
+function buildNodes() {
+  const html = ['<div class="labels" id="labels"></div>', `<div class="node hub" id="n-hub" tabindex="0" role="button" aria-label="这台电脑，打开设置" data-key="hub">
+      <span class="hubring"></span><span class="disc">${glyph('desktop')}</span>
+      <div class="cap"><div class="n1">这台电脑</div><div class="n2">Windows · 公司网络</div></div></div>`];
+  for (const r in RELAYS) html.push(`<div class="relay" id="n-relay-${r}" data-key="relay-${r}" tabindex="0" role="button">
+      <span class="tile">${glyph('relay')}</span><div class="cap"><b>${RELAYS[r].name}</b> · ${RELAYS[r].where}</div></div>`);
+  for (const id in DEVICES) html.push(`<div class="row" id="n-${id}" data-key="${id}" tabindex="0" role="button">
+      <span class="tile">${glyph(DEVICES[id].glyph)}<i class="st"></i></span><div class="txt"><div class="n1"></div><div class="n2"></div></div></div>`);
+  html.push(`<div class="row off fold" id="n-offgroup" data-key="offgroup" tabindex="0" role="button" aria-label="离线设备，展开">
+      <span class="tile">${glyph('studio')}<i class="st"></i></span><div class="txt"><div class="n1"></div><div class="n2">点击展开</div></div></div>`);
+  for (const k in GROUPS) for (const gid of [k, k + '#2']) html.push(`<div class="gcap" id="n-g-${gid}"><span>${GROUPS[k]}<i></i></span></div>`);
+  $('nodes').innerHTML = html.join('');
+}
+function paintNodes() {
+  const gs = groups(), shown = new Map(), off = gs.find(g => g.key === 'offline');
+  for (const g of gs) for (const id of g.rows) shown.set(id, g);
+  const setSide = (el, side) => { el.classList.toggle('R', side === 1); el.classList.toggle('L', side === -1); };
+  const fold = $('n-offgroup');
+  fold.style.display = shown.has('offgroup') ? '' : 'none';
+  if (off && off.collapsed) { fold.querySelector('.n1').textContent = `${off.ids.length} 台离线`; setSide(fold, off.side); }
+  for (const el of document.querySelectorAll('.gcap')) el.style.display = 'none';
+  if (dense()) for (const g of gs) { const el = $('n-g-' + g.id); if (!el) continue; el.style.display = ''; setSide(el, g.side); el.querySelector('i').textContent = ` · ${g.ids.length} 台`; }
+  for (const id in DEVICES) {
+    const el = $('n-' + id);
+    el.style.display = shown.has(id) ? '' : 'none';
+    if (!shown.has(id)) continue;
+    const d = dev(id), P = PATHS[d.path], on = isOn(d), active = on && (d.down + d.up) >= .05;
+    setSide(el, shown.get(id).side);
+    el.classList.toggle('off', !on);
+    el.classList.toggle('low', !!P.low);
+    el.classList.toggle('active', active);
+    el.classList.toggle('sel', state.selected === id);
+    el.classList.toggle('dim', !!state.selected && state.selected !== id && state.selected !== 'hub' && !state.selected.startsWith('relay-'));
+    el.querySelector('.n1').textContent = d.name;
+    const how = !on ? (d.seen || '离线') : P.low ? '<b>旧版 · 没加密</b>' : P.short;
+    el.querySelector('.n2').innerHTML = how + (active ? ` <span class="num">· ↓ ${fmt(d.down)}${d.up >= .05 ? ` ↑ ${fmt(d.up)}` : ''} MB/s</span>` : d.task ? ` · ${d.task}` : '');
+    el.setAttribute('aria-label', `${d.name}，${on ? P.name : '离线'}。打开详情`);
+  }
+  for (const r in RELAYS) {
+    const el = $('n-relay-' + r), used = relayUsed(r);
+    el.style.display = used ? '' : 'none';
+    el.setAttribute('aria-label', `${RELAYS[r].name}，${used ? '正在用' : '备用'}。打开中转设置`);
+  }
+}
+
+// ---------- 连线、延迟标签、光点 ----------
+const packets = {};
+// S 形短接（相邻两站之间）；「先拐到这一行、再直着走」的长线（这台电脑直接到设备）。标签放在直的那一段中间。
+const scurve = (a, b) => ({ d: `M ${a.x} ${a.y} C ${(a.x + b.x) / 2} ${a.y}, ${(a.x + b.x) / 2} ${b.y}, ${b.x} ${b.y}`, at: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } });
+const lane = (a, b, k, s) => { const w = Math.abs(k - a.x) * .55; return { d: `M ${a.x} ${a.y} C ${a.x + s * w} ${a.y}, ${k - s * w} ${b.y}, ${k} ${b.y} L ${b.x} ${b.y}`, at: { x: (k + b.x) / 2, y: b.y } }; };
+function drawLinks(dt) {
+  const svg = $('links'), lines = [], glows = [], segs = [];
+  const line = (d, stroke, w, dash = '', extra = '') => lines.push(`<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" ${dash ? `stroke-dasharray="${dash}"` : ''} ${extra}/>`);
+  for (const g of targets()._groups) {
+    const s = g.side, hub = { x: pos.hub.x + s * (G.R + 2), y: pos.hub.y };
+    const rowsY = g.rows.map(id => pos[id].y), top = Math.min(...rowsY), bottom = Math.max(...rowsY), mid = (top + bottom) / 2;
+    const relay = g.key.startsWith('relay-') ? g.key.slice(6) : null, low = g.key === 'v1', offline = g.key === 'offline';
+    const stroke = low ? css('--orange') : offline ? css('--line') : css('--line-on'), dash = low ? '1 6' : relay ? '7 6' : offline ? '2 6' : '';
+    // 不用干线和直角：每台设备一条自己的曲线，从这台电脑（或中转站）拐到这一行，再直着走。
+    let head = '';
+    if (relay) {
+      const v = pos['relay-' + relay], c = scurve(hub, { x: v.x - s * (G.half + 3), y: v.y });
+      line(c.d, css('--line-on'), 2.2, '7 6');
+      segs.push({ id: 'relay-' + relay, ms: RELAYS[relay].ms, at: c.at });
+      head = c.d;
+    }
+    for (const id of g.rows) {
+      const p = pos[id], end = { x: p.x - s * (G.half + 3), y: p.y }, d = id === 'offgroup' ? null : dev(id);
+      const rate = d ? d.down + d.up : 0, on = rate >= .05;
+      const width = offline ? 1.5 : (2 + Math.min(2.5, Math.log2(1 + rate) * .6)).toFixed(2);
+      const rowStroke = low ? css('--orange') : offline ? css('--red') : on ? css('--line-on') : css('--line');
+      // 离这台电脑越远的行，拐弯放得越宽，曲线才不会陡得像直角
+      let c;
+      if (relay) { const v = pos['relay-' + relay], a = { x: v.x + s * (G.half + 3), y: v.y }; c = g.rows.length > 1 ? lane(a, end, a.x + s * 40, s) : scurve(a, end); }
+      else c = lane(hub, end, G.cx + s * (G.bend + Math.min(56, Math.abs(end.y - hub.y) * .3)), s);
+      line(c.d, rowStroke, width, dash, offline ? 'opacity=".4"' : '');
+      if (offline) continue;
+      const full = relay ? `${head} ${c.d}` : c.d;
+      lines.push(`<path id="f-${id}" d="${full}" fill="none" stroke="none"/>`);
+      if (state.selected === id) glows.push(`<path d="${full}" fill="none" stroke="${css('--blue')}" stroke-width="${+width + 8}" stroke-linecap="round" opacity=".18"/>`);
+      segs.push({ id, ms: d.ms, low, at: c.at });
+    }
+  }
+  svg.setAttribute('viewBox', `0 0 ${G.w} ${G.h}`);
+  svg.innerHTML = glows.join('') + lines.join('') + '<g id="packets"></g>';
+  placeLabels(segs);
+  drawPackets(dt);
+}
+function placeLabels(segs) {
+  const layer = $('labels'), keep = new Set();
+  for (const sg of segs) {
+    keep.add('l-' + sg.id);
+    let el = $('l-' + sg.id);
+    if (!el) { el = document.createElement('div'); el.id = 'l-' + sg.id; el.className = 'elabel'; el.innerHTML = '<div class="chip num"></div>'; layer.appendChild(el); }
+    el.classList.toggle('low', !!sg.low);
+    el.classList.toggle('fast', !sg.low && sg.ms <= 15);
+    el.classList.toggle('slow', !sg.low && sg.ms >= 80);
+    const text = `${sg.ms} ms`;
+    if (el.firstChild.textContent !== text) el.firstChild.textContent = text;
+    el.style.transform = `translate(${sg.at.x}px, ${sg.at.y}px)`;
+    el.style.display = '';
+  }
+  for (const el of layer.children) if (!keep.has(el.id)) el.style.display = 'none';
+}
+function drawPackets(dt) {
+  if (state.reduced) return;
+  const g = $('packets'), parts = [], dot = css('--dot');
+  for (const id of ids()) {
+    const d = dev(id), path = $('f-' + id);
+    if (!path || !isOn(d)) continue;
+    const len = path.getTotalLength(), color = PATHS[d.path].low ? css('--orange') : dot;
+    for (const [rate, inbound] of [[d.down, true], [d.up, false]]) {
+      if (rate < .05) continue;
+      const key = id + (inbound ? 'd' : 'u');
+      const count = Math.min(5, 1 + Math.floor(Math.log2(1 + rate * 3)));
+      const speed = 60 + 40 * Math.log2(1 + rate);
+      const list = packets[key] ||= [];
+      while (list.length < count) list.push(Math.random());
+      list.length = count;
+      for (let k = 0; k < list.length; k++) {
+        list[k] = (list[k] + dt * speed / len) % 1;
+        const t = inbound ? 1 - list[k] : list[k];
+        const head = path.getPointAtLength(t * len);
+        const tail = path.getPointAtLength(Math.max(0, Math.min(len, (inbound ? t + .05 : t - .05) * len)));
+        const fade = Math.min(1, Math.min(t, 1 - t) * 10);
+        parts.push(`<line x1="${tail.x}" y1="${tail.y}" x2="${head.x}" y2="${head.y}" stroke="${color}" stroke-width="${inbound ? 3 : 2.2}" stroke-linecap="round" opacity="${.35 * fade}"/>
+          <circle cx="${head.x}" cy="${head.y}" r="${inbound ? 2.6 : 2}" fill="${color}" opacity="${fade}" style="filter: drop-shadow(0 0 5px ${color})"/>`);
+      }
+    }
+  }
+  g.innerHTML = parts.join('');
+}
+
+// ---------- 弹簧动画：行换位置时滑过去 ----------
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(.05, (now - last) / 1000);
+  last = now;
+  const t = targets();
+  for (const key in t) {
+    if (key === '_groups') continue;
+    const goal = t[key];
+    if (!pos[key] || state.reduced) { pos[key] = { x: goal.x, y: goal.y }; vel[key] = { x: 0, y: 0 }; }
+    else {
+      const k = 120, c = 19, v = vel[key];
+      v.x += ((goal.x - pos[key].x) * k - v.x * c) * dt;
+      v.y += ((goal.y - pos[key].y) * k - v.y * c) * dt;
+      pos[key].x += v.x * dt; pos[key].y += v.y * dt;
+    }
+    const el = $('n-' + key);
+    if (el) el.style.transform = `translate(${pos[key].x}px, ${pos[key].y}px)`;
+  }
+  drawLinks(dt);
+  requestAnimationFrame(frame);
+}
+
+// ---------- 实时数据（模拟） ----------
+function tick() {
+  const j = () => .8 + Math.random() * .4;
+  for (const id of ids()) {
+    const b = SCENARIOS[state.scenario][id], prev = live[id] || {};
+    const next = { down: (b.down || 0) * j(), up: (b.up || 0) * j(), ms: b.ms ? Math.max(1, Math.round(b.ms * (.92 + Math.random() * .2))) : 0 };
+    // 曲线用平滑过的值，不然每秒一个随机数看起来像噪音。
+    const hist = prev.history || Array.from({ length: 30 }, () => (b.down || 0) * (.9 + Math.random() * .2));
+    next.history = [...hist, hist[hist.length - 1] * .6 + next.down * .4].slice(-30);
+    live[id] = next;
+  }
+  for (const p of PEERS[state.scenario]) live[p.a + '-' + p.b] = { down: p.down * j(), up: p.up * j(), ms: Math.max(1, Math.round(p.ms * (.92 + Math.random() * .2))) };
+  paintNodes();
+  paintPeers();
+  paintSummary();
+  if (state.selected) refreshPop();
+}
+function paintPeers() {
+  const list = PEERS[state.scenario].filter(p => isOn(dev(p.a)) && isOn(dev(p.b)));
+  $('peers').innerHTML = !list.length ? '' : `<div class="h">设备之间</div>` + list.map(p => {
+    const l = live[p.a + '-' + p.b] || p, rate = l.down + l.up, R = p.via ? RELAYS[p.via] : null;
+    const seg = (ms, dash) => `<span class="seg${dash ? ' dash' : ''}"><span class="chip num">${ms} ms</span></span>`;
+    return `<div class="peer">
+      <span class="mini">${glyph(DEVICES[p.a].glyph)}</span>
+      ${R ? seg(R.ms, true) + `<span class="mini r" title="${R.name}">${glyph('relay')}</span>` + seg(l.ms, true) : seg(l.ms, false)}
+      <span class="mini">${glyph(DEVICES[p.b].glyph)}</span>
+      <span class="t"><b>${DEVICES[p.a].name}</b> <span>↔</span> <b>${DEVICES[p.b].name}</b> <span>· ${R ? '经 ' + R.name : '直连'}${rate >= .05 ? ` · ${fmt(rate)} MB/s` : ''}${p.task ? ' · ' + p.task.replace(/^.*?正在/, '正在') : ''}</span></span></div>`;
+  }).join('');
+}
+function issues() {
+  const all = ids().map(dev), out = [];
+  for (const d of all.filter(d => d.path === 'v1')) out.push({ c: '--orange', text: `<b>${d.name}</b> <span>还在用旧版，没有端到端加密</span>`, act: ['remind', '提醒更新'] });
+  if (state.scenario === 'offline') out.push({ c: '--orange', text: `<b>外网断了</b> <span>3 台设备等网络恢复后自动连回</span>`, act: ['recheck', '重新检查'] });
+  return out;
+}
+function paintSummary() {
+  const all = ids().map(dev), on = all.filter(isOn), sorted = order();
+  const names = list => list.length > 2 ? `${list.length} 台设备` : list.map(d => d.name).join('、');
+  const direct = on.filter(d => PATHS[d.path].rank <= 1).length, relayed = on.filter(d => PATHS[d.path].relay).length, v1 = on.filter(d => d.path === 'v1').length;
+  const down = on.reduce((x, d) => x + d.down, 0), up = on.reduce((x, d) => x + d.up, 0);
+  $('stats').innerHTML = [
+    `<span><i style="--c:var(--green)"></i><b>${on.length}</b>/ ${all.length} 在线</span>`,
+    `<span><b>${direct}</b>直连</span>`,
+    relayed ? `<span><i style="--c:var(--blue)"></i><b>${relayed}</b>经中转</span>` : '',
+    v1 ? `<span><i style="--c:var(--orange)"></i><b>${v1}</b>旧版</span>` : '',
+    all.length - on.length ? `<span><i style="--c:var(--red)"></i><b>${all.length - on.length}</b>离线</span>` : '',
+    `<span class="num" style="margin-left:auto">↓ <b>${fmt(down)}</b> ↑ <b>${fmt(up)}</b> MB/s</span>`,
+  ].join('');
+  const todo = issues();
+  $('tabs').innerHTML = [['todo', `需要处理${todo.length ? `<b>${todo.length}</b>` : ''}`], ['recent', '最近'], ['today', '今天']]
+    .map(([k, t]) => `<button type="button" role="tab" data-tab="${k}" aria-selected="${state.tab === k}">${t}</button>`).join('');
+  const panel = $('panel');
+  if (state.tab === 'todo') {
+    panel.innerHTML = todo.length ? todo.map(i => `<div class="item2" style="--c:var(${i.c})"><i></i><div class="l">${i.text}</div><button class="act" type="button" data-act="${i.act[0]}">${i.act[1]}</button></div>`).join('')
+      : `<div class="ttl">没有需要处理的</div><div class="empty">${on.length} 台设备全部端到端加密，中转看不到内容。</div>`;
+  } else if (state.tab === 'recent') {
+    panel.innerHTML = RECENT[state.scenario].map(([t, w]) => `<div class="item2"><i></i><div class="l"><b>${t}</b></div><span style="color:var(--ink-2);white-space:nowrap">${w}</span></div>`).join('');
+  } else {
+    const [dn, up] = TODAY[state.scenario], avg = Math.round(on.reduce((s, d) => s + d.ms, 0) / Math.max(1, on.length));
+    panel.innerHTML = `<div class="ttl">今天 <span class="r">${on.length} 台设备</span></div>
+      <div class="bigs"><div><div class="v num">${dn}<small>GB</small></div><div class="k">接收</div></div><div><div class="v num">${Math.round(up * 1000)}<small>MB</small></div><div class="k">发送</div></div><div><div class="v num">${avg}<small>ms</small></div><div class="k">平均延迟</div></div></div>`;
+  }
+  const series = month30(), max = Math.max(...series.map(([a, b]) => a + b));
+  const pt = (k, v) => `${(k / 29 * 300).toFixed(1)} ${(54 - v / max * 50).toFixed(1)}`;
+  const top = series.map(([a, b], k) => `${k ? 'L' : 'M'} ${pt(k, a + b)}`).join(' '), mid = series.map(([a], k) => `${k ? 'L' : 'M'} ${pt(k, a)}`).join(' ');
+  $('month').innerHTML = `<div><div class="k">过去 30 天 · 所有设备</div><div class="v num">46.2<span style="font-size:15px;font-weight:600;color:var(--ink-2);margin-left:3px">GB</span></div></div>
+    <svg class="sp" viewBox="0 0 300 56" preserveAspectRatio="none" aria-label="过去 30 天每天的流量"><path d="${top} L 300 56 L 0 56 Z" fill="var(--ink)" opacity=".22"/><path d="${mid} L 300 56 L 0 56 Z" fill="var(--blue)" opacity=".85"/></svg>
+    <button class="x" type="button" data-act="history">展开${glyph('arrow')}</button>`;
+}
+let MONTH;
+function month30() {
+  if (MONTH) return MONTH;
+  let s = 7;
+  const r = () => (s = (s * 9301 + 49297) % 233280) / 233280;
+  MONTH = Array.from({ length: 30 }, (_, k) => { const base = .6 + r() * 1.4 + (k % 7 === 2 ? 2.5 : 0) + (k === 23 ? 3.2 : 0); return [base * .78, base * .22]; });
+  return MONTH;
+}
+
+// ---------- 弹出卡片 ----------
+function openPop(key) {
+  if (typeof key !== 'string' || !Object.hasOwn(DEVICES, key) && key !== 'hub' && key !== 'add' && key !== 'checkup'
+    && !(key.startsWith('relay-') && Object.hasOwn(RELAYS, key.slice(6)))) return;
+  state.selected = key;
+  paintNodes();
+  const pop = $('pop');
+  pop.innerHTML = key === 'hub' ? hubPop() : key.startsWith('relay-') ? relayPop(key.slice(6)) : key === 'add' ? addPop() : key === 'checkup' ? checkPop() : devicePop(key);
+  placePop(key);
+  requestAnimationFrame(() => pop.classList.add('open'));
+  refreshPop();
+  const input = pop.querySelector('input[data-name]');
+  if (input && Object.hasOwn(DEVICES, key)) input.addEventListener('input', e => { if (e.target.value.trim()) { DEVICES[key].name = e.target.value.trim(); paintNodes(); } });
+}
+function closePop() {
+  const was = state.selected;
+  state.selected = null;
+  $('pop').classList.remove('open');
+  paintNodes();
+  if (was) document.querySelector(`[data-key="${was}"]`)?.focus();
+}
+function placePop(key) {
+  const pop = $('pop'), anchor = pos[key] || pos.hub, w = 340, h = Math.min(pop.scrollHeight || 520, G.h - 8);
+  pop.scrollTop = 0;
+  const right = key === 'add' || key === 'checkup' || anchor.x < G.w / 2;
+  const x = key === 'add' || key === 'checkup' ? G.w - w - 8 : right ? anchor.x + 40 : anchor.x - 40 - w;
+  const y = key === 'add' || key === 'checkup' ? 4 : Math.max(4, Math.min(G.h - h - 4, anchor.y - 120));
+  pop.style.left = x + 'px'; pop.style.top = y + 'px';
+  pop.style.setProperty('--ox', (right ? 0 : w) + 'px'); pop.style.setProperty('--oy', (anchor.y - y) + 'px');
+}
+const header = (g, title, sub, editable) => `<div class="ph"><span class="ptile">${glyph(g)}</span>
+  <div style="flex:1;min-width:0">${editable ? `<input data-name value="${title}" aria-label="设备名字">` : `<div style="font-size:17px;font-weight:600">${title}</div>`}<div class="s">${sub}</div></div>
+  <button class="x" type="button" data-close aria-label="关闭">✕</button></div>`;
+const row = (l, r, extra = '') => `<div class="item"><span class="l">${l}</span><span class="r ${extra}">${r}</span></div>`;
+const sw = (l, on) => `<div class="item"><span class="l">${l}</span><button class="toggle sm" role="switch" aria-checked="${on}" aria-label="${l}"></button></div>`;
+function devicePop(id) {
+  const d = dev(id), P = PATHS[d.path], on = isOn(d), R = P.relay ? RELAYS[P.relay] : null;
+  return `${header(d.glyph, d.name, on ? d.model : `${d.model} · ${d.seen}`, true)}
+    ${d.path === 'v1' ? `<div class="banner">${glyph('warn')}<div><b>没有端到端加密。</b>这台还在用旧版 Cindy，更新以后自动换成新版连接。</div></div>` : ''}
+    ${on ? `<div class="big"><div><div class="v num" data-p="down"></div><div class="k">接收</div></div><div><div class="v num" data-p="up"></div><div class="k">发送</div></div><div><div class="v num" data-p="ms"></div><div class="k">延迟</div></div></div>
+      <svg class="area" data-p="area" viewBox="0 0 300 64" preserveAspectRatio="none" role="img" aria-label="最近 30 秒的接收速度"></svg>` : ''}
+    <div class="group">${row('连接方式', on ? P.name : '离线')}${R ? row('路线', `<span class="num">这台电脑 → ${R.name}（${R.where}）${R.ms} ms → ${d.name} ${d.ms} ms</span>`) : ''}${on ? row('加密', d.path === 'v1' ? '<span style="color:var(--orange)">无</span>' : '端到端') : ''}
+      ${on && d.path !== 'v1' ? row('安全码', '4821 0937 5512', 'mono') : ''}${d.task ? row('正在做', d.task) : ''}</div>${d.why ? `<div class="note">${d.why}</div>` : ''}
+    ${on ? `<div class="acts">${d.glyph === 'phone' ? `<button class="act" type="button" data-act="file">${glyph('send')}发送文件</button>`
+      : `<button class="act" type="button" data-act="desktop">${glyph('screen')}屏幕共享</button><button class="act" type="button" data-act="task">${glyph('plus')}新建任务</button><button class="act" type="button" data-act="file">${glyph('send')}发送文件</button>`}</div>` : ''}
+    <div class="group">${sw('允许它控制这台电脑', true)}${sw('允许远程桌面', true)}${sw('允许用摄像头和麦克风', false)}</div>
+    ${d.path === 'v1' ? '<button class="danger" type="button" data-act="remind" style="color:var(--blue)">提醒那台电脑更新</button>' : ''}
+    <button class="danger" type="button" data-act="remove">移除此设备</button>`;
+}
+function hubPop() {
+  return `${header('desktop', '这台电脑', 'Windows · 公司网络 · 新版连接')}
+    <div class="group">${sw('允许别的设备控制', true)}${sw('允许远程桌面', true)}${sw('允许用摄像头和麦克风', false)}</div>
+    <div class="group">${sw('没网也能连', true)}${sw('只允许加密连接', false)}</div>
+    <div class="group"><div class="item" data-key="relay-official" style="cursor:pointer"><span class="l">Cindy 中转</span><span class="r num">18 ms</span><span class="chev">›</span></div>
+      <div class="item" data-key="relay-mine" style="cursor:pointer"><span class="l">我的中转</span><span class="r num">25 ms</span><span class="chev">›</span></div></div>
+    <div class="group">${row('跨网络直连', '多半经中转')}${row('IPv6', '没有')}${row('同一个网络', '1 台设备')}</div>
+    <button class="danger" type="button" data-open="checkup" style="color:var(--blue)">网络体检</button>`;
+}
+function relayPop(r) {
+  const R = RELAYS[r], users = Object.keys(DEVICES).map(dev).filter(d => PATHS[d.path].relay === r), mine = state.scenario === 'mine';
+  return `${header('relay', R.name, `${R.where} · ${R.ms} ms · ${users.length ? '正在用' : '备用'}`)}
+    <div class="seg2" role="group" aria-label="设备之间怎么连"><button type="button" data-route="auto" aria-pressed="${!mine}">自动</button><button type="button" data-route="mine" aria-pressed="${mine}">只用我的中转</button></div>
+    <div class="s" style="font-size:13px;color:var(--ink-2);margin-top:8px">${mine ? '设备之间的数据只经过你自己的中转。' : '能直连就直连，连不上时走最快的中转。'}中转只转发，看不到内容。</div>
+    <div class="group">${users.length ? users.map(u => row(u.name, `<span class="num">${R.ms + u.ms} ms · ↓ ${fmt(u.down)} MB/s</span>`)).join('') : row('现在没有设备经过它', '')}</div>
+    <div class="group">${row('tap-fp.fpfp.cc', '<span class="num">25 ms</span>')}<div class="item"><span class="l" style="color:var(--blue)">添加我的中转…</span></div><div class="item"><span class="l" style="color:var(--blue)">让这台电脑当中转…</span></div></div>`;
+}
+function addPop() {
+  return `${header('plus', '添加设备', '不用记任何密码或密钥')}
+    <div class="group">${row('在新设备上用同一个账号登录 Cindy', '')}<div class="item"><span class="l" style="color:var(--ink-2);font-size:13px">它会自动出现在这里，连接方式也自动选好。</span></div></div>
+    <div class="group">${row('没网时用配对码', '<span style="font-family:ui-monospace,Menlo,monospace;letter-spacing:.12em;color:var(--ink)">382 615</span>')}<div class="item"><span class="l" style="color:var(--ink-2);font-size:13px">规划中 · 只能用一次，5 分钟后失效</span></div></div>`;
+}
+function checkPop() {
+  const off = state.scenario === 'offline';
+  return `${header('wave', '网络体检', off ? '外网断了，局域网照常' : '能用，跨网络时多半经中转')}
+    <div class="group">${off ? row('外网', '<span style="color:var(--orange)">连不上</span>') + row('同一个网络', '1 台设备')
+      : row('跨网络直连', '<span style="color:var(--orange)">公司网络较严格</span>') + row('UDP', '正常') + row('IPv6', '没有') + row('同一个网络', '1 台设备') + row('Cindy 中转', '<span class="num">18 ms</span>')}</div>
+    <button class="danger" type="button" data-act="recheck" style="color:var(--blue)">重新检查</button>`;
+}
+function refreshPop() {
+  const id = state.selected;
+  if (!DEVICES[id] || !live[id]) return;
+  const d = dev(id), P = PATHS[d.path], pop = $('pop'), c = P.low ? css('--orange') : css('--blue');
+  const set = (k, v) => { const el = pop.querySelector(`[data-p="${k}"]`); if (el) el.innerHTML = v; };
+  const total = (P.relay ? RELAYS[P.relay].ms : 0) + d.ms;
+  set('down', `${fmt(d.down)}<small>MB/s</small>`); set('up', `${fmt(d.up)}<small>MB/s</small>`); set('ms', `${total}<small>ms</small>`);
+  const area = pop.querySelector('[data-p="area"]');
+  if (area) {
+    const h = d.history, max = Math.max(...h, .05);
+    const pts = h.map((v, k) => [(k / (h.length - 1)) * 300, 60 - (v / max) * 50]);
+    const line = pts.map(([x, y], k) => `${k ? 'L' : 'M'} ${x.toFixed(1)} ${y.toFixed(1)}`).join(' ');
+    area.innerHTML = `<defs><linearGradient id="af" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${c}" stop-opacity=".35"/><stop offset="1" stop-color="${c}" stop-opacity="0"/></linearGradient></defs>
+      <path d="${line} L 300 64 L 0 64 Z" fill="url(#af)"/><path d="${line}" fill="none" stroke="${c}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`;
+  }
+}
+
+// ---------- 交互 ----------
+let toastTimer;
+function toast(text, c) {
+  const t = $('toast');
+  t.style.setProperty('--c', c ? `var(${c})` : 'var(--blue)');
+  t.innerHTML = `<i></i>${text}`;
+  t.classList.add('open');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('open'), 2800);
+}
+document.addEventListener('click', e => {
+  const t = e.target.closest('button, [data-key]');
+  if (!t) { if (state.selected && !e.target.closest('#pop')) closePop(); return; }
+  if (t.matches('.toggle')) { t.setAttribute('aria-checked', String(t.getAttribute('aria-checked') !== 'true')); if (t.id === 'v2') toast('已切回旧版，这里会显示旧版页面'); return; }
+  if (t.dataset.close !== undefined) { closePop(); return; }
+  if (t.dataset.tab) { state.tab = t.dataset.tab; paintSummary(); return; }
+  if (t.dataset.route) { setScenario(t.dataset.route === 'mine' ? 'mine' : 'daily'); openPop('relay-' + (t.dataset.route === 'mine' ? 'mine' : 'official')); return; }
+  if (t.dataset.open) { openPop(t.dataset.open); return; }
+  if (t.dataset.act) {
+    const acts = { remind: '已在家里的 Mac mini 上提醒更新', desktop: '正在打开屏幕共享…', task: '在这台设备上新建任务…', file: '选择要发送的文件…', remove: '移除前会先请你确认',
+      v1: '已切回旧版，这里会显示旧版页面', recheck: '检查完了', history: '过去 30 天的明细…', refresh: '已刷新' };
+    toast(acts[t.dataset.act] || '…');
+    return;
+  }
+  if (t.dataset.key === 'offgroup') { state.showOffline = true; layout(); tick(); return; }
+  if (t.dataset.key) { state.selected === t.dataset.key ? closePop() : openPop(t.dataset.key); }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && state.selected) closePop();
+  const k = e.target.closest && e.target.closest('[data-key]');
+  if (k && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); k.click(); }
+});
+function setScenario(s) {
+  const was = state.scenario;
+  state.scenario = s;
+  $('scenario').value = s;
+  layout();
+  tick();
+  if (was !== s) {
+    const msg = { cellular: ['MacBook Pro 换成了直连 · 0.2 秒', '--blue'], offline: ['外网断了，同一个网络里的设备照常连着', '--orange'], mine: ['只用我的中转', '--blue'],
+      bigfile: ['LiziXDMini 开始接收 3.2 GB', '--green'], daily: ['回到日常'] }[s];
+    if (msg) toast(...msg);
+  }
+}
+$('scenario').addEventListener('change', e => setScenario(e.target.value));
+const setSt = m => { document.body.classList.remove('st-icon', 'st-tile', 'st-line'); if (m !== 'dot') document.body.classList.add('st-' + m); $('stmode').value = m; };
+$('stmode').addEventListener('change', e => setSt(e.target.value));
+$('theme').addEventListener('click', () => {
+  state.theme = state.theme === 'light' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = state.theme;
+  $('theme').textContent = state.theme === 'light' ? '深色' : '浅色';
+});
+$('motion').addEventListener('click', () => { state.reduced = !state.reduced; document.body.classList.toggle('reduced', state.reduced); $('motion').textContent = state.reduced ? '恢复动效' : '减弱动效'; });
+addEventListener('resize', () => { layout(); buildNodes(); paintNodes(); for (const k in pos) delete pos[k]; if (state.selected) placePop(state.selected); });
+
+// 地址后面加 #dark、#still、#s=cellular、#tab=today、#open=mbp，直接打开对应的预览。
+const hash = new URLSearchParams(location.hash.slice(1).replace(/,/g, '&'));
+if (hash.has('dark') || (!hash.has('light') && matchMedia('(prefers-color-scheme: dark)').matches)) $('theme').click();
+if (hash.has('still')) { state.reduced = true; document.body.classList.add('reduced'); $('motion').textContent = '恢复动效'; }
+if (SCENARIOS[hash.get('s')]) state.scenario = hash.get('s');
+if (['todo', 'recent', 'today'].includes(hash.get('tab'))) state.tab = hash.get('tab');
+setSt(['icon', 'tile', 'dot'].includes(hash.get('st')) ? hash.get('st') : 'line');
+$('scenario').value = state.scenario;
+layout();
+buildNodes();
+tick();
+setInterval(tick, 1000);
+requestAnimationFrame(frame);
+if (hash.get('open')) setTimeout(() => openPop(hash.get('open')), 120);
+</script>
+</body>
+</html>

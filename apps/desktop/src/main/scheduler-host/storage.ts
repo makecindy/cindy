@@ -17,7 +17,7 @@
 import { eq, desc, and, isNull, isNotNull, inArray, notInArray, or, sql } from 'drizzle-orm';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { broadcastSessionPatched } from '../localDb/ipc/sessions.js';
+import type { broadcastSessionPatched as BroadcastSessionPatched } from '../localDb/ipc/sessions.js';
 
 import type { Schedule, ScheduleRun, ScheduleStorage, ListFilter } from '@cindy/maker-scheduler';
 
@@ -29,6 +29,7 @@ import {
   scheduleSessionLatestRuns,
   sessions,
 } from '../localDb/schema';
+import { scheduleRunMissingPlugin, type ScheduleMissingPlugin } from '@cindy/maker-shared/schedule-model';
 import {
   scheduleToCamel,
   scheduleCreateToRow,
@@ -60,6 +61,17 @@ function failureKindSql(alias: 'failed' | 'schedule_runs') {
           THEN 'rate-limit' ELSE 'precheck' END
     WHEN substr(${row}.error_msg, 1, 12) = 'pre-run hook' THEN 'precheck'
     ELSE 'execution' END`;
+}
+
+/** pre_run_hook_result.missingPlugin is stored JSON; malformed rows simply omit it. */
+function missingPluginField(raw: string | null): { missingPlugin?: ScheduleMissingPlugin } {
+  if (!raw) return {};
+  try {
+    const missingPlugin = scheduleRunMissingPlugin({ missingPlugin: JSON.parse(raw) });
+    return missingPlugin ? { missingPlugin } : {};
+  } catch {
+    return {};
+  }
 }
 
 /** A success only recovers failures belonging to the same automation. */
@@ -96,6 +108,7 @@ export interface ScheduleSidebarIndexRun {
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
   errorMsg?: string;
   failureRecovered?: boolean;
+  missingPlugin?: ScheduleMissingPlugin;
 }
 
 export interface ScheduleCostSummary {
@@ -368,7 +381,10 @@ function publicScheduleRunWhere() {
 }
 
 export class DrizzleScheduleStorage implements ScheduleStorage {
-  constructor(private readonly getDb: () => SchedulerDrizzleDb) {}
+  constructor(
+    private readonly getDb: () => SchedulerDrizzleDb,
+    private readonly broadcastSessionPatched: typeof BroadcastSessionPatched,
+  ) {}
 
   private sidebarIndexGeneration = 0;
   private sidebarIndexCache: {
@@ -477,6 +493,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         eq(schedules.cronExpr, expected.cronExpr),
         eq(schedules.timezone, expected.timezone),
         sql`${schedules.intervalMs} IS ${expected.intervalMs ?? null}`,
+        sql`${schedules.expireAt} IS ${expected.expireAt ?? null}`,
       ) : undefined,
     );
     if (Object.keys(setObj).length === 0) {
@@ -569,7 +586,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         .where(eq(sessions.id, row.sessionId));
       // 双路广播（webContents.send + device-link tap）让本机和远端 renderer
       // sessionsStore.patchLocal 就地更新 updatedAt，侧栏时间立即跳到"刚跑完"。
-      broadcastSessionPatched(row.sessionId, {
+      this.broadcastSessionPatched(row.sessionId, {
         updatedAt: new Date(patch.finishedAt).toISOString(),
       });
     }
@@ -779,7 +796,18 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       failureRecovered: failureRecoveredSql('schedule_runs'),
       failureKind: failureKindSql('schedule_runs'),
       errorMsg: scheduleRuns.errorMsg,
+      missingPlugin: sql<string | null>`CASE WHEN json_valid(schedule_runs.pre_run_hook_result)
+        THEN json_extract(schedule_runs.pre_run_hook_result, '$.missingPlugin') END`,
     };
+    // LIMIT on the full projection can still parse every unread hook before
+    // SQLite sorts. Bound eligible IDs first, then evaluate only those rows.
+    const recentUnreadRunIds = db
+      .select({ id: scheduleRuns.id })
+      .from(scheduleRuns)
+      .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
+      .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere()))
+      .orderBy(desc(scheduleRuns.firedAt), desc(scheduleRuns.id))
+      .limit(SIDEBAR_UNREAD_RUN_LIMIT);
     const [latestSessionRows, unreadRows, runningRows, latestFailedRows] = await Promise.all([
       db
         .select(projection)
@@ -791,9 +819,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         .select(projection)
         .from(scheduleRuns)
         .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
-        .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere()))
-        .orderBy(desc(scheduleRuns.firedAt), desc(scheduleRuns.id))
-        .limit(SIDEBAR_UNREAD_RUN_LIMIT),
+        .where(inArray(scheduleRuns.id, recentUnreadRunIds))
+        .orderBy(desc(scheduleRuns.firedAt), desc(scheduleRuns.id)),
       db
         .select(projection)
         .from(scheduleRuns)
@@ -850,6 +877,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         failureRecovered: Boolean(row.failureRecovered),
         failureKind: row.failureKind,
         errorMsg: row.errorMsg ?? undefined,
+        ...missingPluginField(row.missingPlugin),
       } : {}),
     }));
 

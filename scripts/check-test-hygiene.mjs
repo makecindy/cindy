@@ -53,6 +53,8 @@ const ROOT_SOURCE_CONTRACTS = new Map([
   ['scripts/__tests__/ensure-agent-binaries.test.mjs', 'runtime preparation startup wiring'],
   // Restart scripts and app bootstrap must agree on isolation/process boundaries.
   ['scripts/__tests__/restart-desktop-remote.test.mjs', 'restart and bootstrap isolation contracts'],
+  // Host hands maker-core engines only dependency keys maker-core reads (spreads escape tsc's excess-key check).
+  ['scripts/__tests__/host-agent-deps-contract.test.mjs', 'Host engine wiring and maker-core dependency keys'],
   // Packaged notice generation and both application entry points must stay wired.
   ['scripts/__tests__/third-party-notices.test.mjs', 'cross-platform bundled license contracts'],
 ]);
@@ -1413,7 +1415,7 @@ export async function main(args = process.argv.slice(2)) {
   const baseline = readBaseline();
   if (!hasBaseline && (trusted.files !== null || !args.includes('--update'))) throw new Error('baseline is missing: ' + BASELINE_REL);
   if (trusted.files === null) console.log('[test-hygiene] bootstrap: trusted base ' + trusted.commit + ' has no baseline yet');
-  else {
+  else if (!args.includes('--update')) {
     const raised = compareWithBaseline(baseline, trusted.files).violations;
     if (raised.length > 0) {
       for (const item of raised) console.error('[test-hygiene] baseline cannot increase ' + item.file + ' ' + item.rule + ': ' + item.limit + ' -> ' + item.current);
@@ -1433,6 +1435,15 @@ export async function main(args = process.argv.slice(2)) {
     for (const [file, current] of Object.entries(counts)) {
       const entry = Object.fromEntries(RULES.filter((rule) => current[rule] > 0).map((rule) => [rule, current[rule]]));
       if (Object.keys(entry).length > 0) next[file] = entry;
+    }
+    // Repair a stale raised baseline only after the source debt has been fixed.
+    // The generated replacement must still fit the trusted Git baseline.
+    if (trusted.files !== null) {
+      const raised = compareWithBaseline(next, trusted.files).violations;
+      if (raised.length > 0) {
+        for (const item of raised) console.error('[test-hygiene] baseline cannot increase ' + item.file + ' ' + item.rule + ': ' + item.limit + ' -> ' + item.current);
+        return 1;
+      }
     }
     writeBaseline(next);
     console.log(`[test-hygiene] baseline updated: ${Object.keys(next).length} files`);

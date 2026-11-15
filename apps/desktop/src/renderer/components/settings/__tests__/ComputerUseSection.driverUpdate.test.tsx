@@ -115,6 +115,16 @@ afterEach(() => {
 });
 
 describe('ComputerUseSection driver update completion', () => {
+  // Unit: replace the brittle JSX text scan with actual platform visibility.
+  // The settings-definition migration changes t() syntax, not the permission UI.
+  it.each([false, true])('shows macOS permission guidance only on macOS (%s)', async (macos) => {
+    installApi(macos);
+    render(<ComputerUseSection />);
+    await screen.findByText(`${updateKey}.available: ${newVersion}`);
+    expect(screen.queryByText('settings.computerUse.directControl.permissions.title') !== null).toBe(macos);
+    expect(screen.queryByText('settings.computerUse.directControl.permissions.accessibilityLabel') !== null).toBe(macos);
+    expect(screen.queryByText('settings.computerUse.directControl.permissions.screenRecordingLabel') !== null).toBe(macos);
+  });
   // PR #7584: independent loading makes driver updates available before opt-in
   // resolves. The switch must only become off after the backend confirms it;
   // earlier update tests always started with the opt-in already loaded (unit).
@@ -247,6 +257,21 @@ describe('ComputerUseSection driver update completion', () => {
       expect(screen.queryByText(`${updateKey}.checkFailed`)).toBeNull();
     },
   );
+
+  it('explains a rate-limited check instead of a generic failure', async () => {
+    const { computer } = installApi();
+    computer.checkUpdate.mockReset().mockResolvedValueOnce({
+      ...offer,
+      latestVersion: null,
+      updateAvailable: false,
+      checkStatus: 'error',
+      checkError: { kind: 'rate_limited' },
+    });
+    render(<ComputerUseSection />);
+    await screen.findByText(`${updateKey}.rateLimited`);
+    expect(screen.queryByText(`${updateKey}.checkFailed`)).toBeNull();
+    expect(screen.getByRole('button', { name: `${updateKey}.retry` })).toBeTruthy();
+  });
 
   it('keeps manual checking available when up to date and displays a newly found update', async () => {
     const { computer } = installApi();

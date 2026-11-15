@@ -27,6 +27,88 @@ const fixture = () => {
 const current = () => {};
 
 describe('durable subscription Fast constraints', () => {
+  // Review F1: a live executor's own decision is not a remote cache entry.
+  it('keeps the local executor policy live while the remote group refreshes during a long task', async () => {
+    const time = { wall: Date.now(), mono: 0 };
+    const store = createGroupFastPolicyStore({ ...fixture(), clock: { wall: () => time.wall, mono: () => time.mono } });
+    const binding = { sessionId: 'task' };
+    await store.receive('M', { group: 'local', revision: 1, allowFast: true, binding }, 'M', current, 'task', false, true);
+    expect(store.allows('task')).toBe(true);
+    expect(store.allows('task', true)).toBe(false);
+    store.requireOrigin('task', 'O');
+    await store.receive('G', { group: 'self-asserted', revision: 1, allowFast: true, binding }, 'M', current, 'task');
+    expect(store.allows('task', true)).toBe(false);
+    await store.receive('O', { group: 'remote', revision: 1, allowFast: true, binding }, 'M', current, 'task');
+    expect(store.allows('task', true)).toBe(true);
+    time.wall += 29 * 60_000; time.mono += 29 * 60_000;
+    await store.receive('G', { group: 'self-asserted', revision: 1, allowFast: true }, 'M', current);
+    await store.receive('O', { group: 'remote', revision: 1, allowFast: true }, 'M', current);
+    time.wall += 2 * 60_000; time.mono += 2 * 60_000;
+    expect(store.allows('task', true)).toBe(true);
+    await store.receive('M', { group: 'local', revision: 2, allowFast: false }, 'M', current, undefined, false, true);
+    expect(store.allows('task', true)).toBe(false);
+  });
+
+  it('keeps a failed task ordinary until its own source is durably rebound, not merely reread', async () => {
+    const store = createGroupFastPolicyStore(fixture());
+    const command = { group: 'group', revision: 1, allowFast: true, binding: { sessionId: 'task' } };
+    await store.receive('O', command, 'M', current, 'task');
+    store.suppress('task', 'O', 'group');
+    expect(store.allows('task', true)).toBe(false);
+    await store.receive('O', command, 'M', current, 'task', true);
+    expect(store.allows('task', true)).toBe(false);
+    await store.receive('O', command, 'M', current, 'task');
+    expect(store.allows('task', true)).toBe(true);
+  });
+  // 2026-11-05 product decision, unit: real durable store; a cached binding
+  // must not renew speed permission, and expiration must keep ordinary use viable.
+  it('trusts received speed policy for thirty minutes without renewing it on cached task binding', async () => {
+    const time = { wall: Date.now(), mono: 0 };
+    const clock = { wall: () => time.wall, mono: () => time.mono };
+    {
+      const config = { ...fixture(), clock }, store = createGroupFastPolicyStore(config);
+      expect(store.allows('plain')).toBe(true);
+      expect(store.allows('unconfirmed-group-task', true)).toBe(false);
+      const command = { group: 'group', revision: 1, allowFast: true,
+        binding: { sessionId: 'first' } };
+      await store.receive('owner', command, 'executor', current, 'first');
+      expect(store.allows('first', true)).toBe(true);
+      time.wall += 29 * 60_000; time.mono += 29 * 60_000;
+      const cached = store.received('owner', 'group')!;
+      await store.receive('owner', { group: 'group', ...cached, binding: { sessionId: 'second' } },
+        'executor', current, 'second', true);
+      expect(store.allows('second', true)).toBe(true);
+      const reloaded = createGroupFastPolicyStore(config);
+      expect(reloaded.allows('second', true)).toBe(true);
+      time.wall += 60_000; time.mono += 60_000;
+      expect(store.received('owner', 'group')).toBeNull();
+      expect(store.allows('first', true)).toBe(false);
+      expect(store.allows('second', true)).toBe(false);
+      expect(reloaded.allows('second', true)).toBe(false);
+      await store.receive('owner', command, 'executor', current, 'first');
+      expect(store.allows('first', true)).toBe(true);
+      await store.receive('owner', { ...command, revision: 2, allowFast: false }, 'executor', current, 'first');
+      expect(store.allows('first', true)).toBe(false);
+    }
+  });
+
+  it('expires cached speed policy on monotonic time even when the wall clock moves backwards', async () => {
+    const time = { wall: Date.now(), mono: 0 };
+    {
+      const store = createGroupFastPolicyStore({ ...fixture(),
+        clock: { wall: () => time.wall, mono: () => time.mono } });
+      await store.receive('owner', { group: 'group', revision: 1, allowFast: true,
+        binding: { sessionId: 'task' } }, 'executor', current, 'task');
+      expect(store.allows('task', true)).toBe(true);
+      time.wall += 10 * 60_000; time.mono += 10 * 60_000;
+      time.wall -= 5 * 60_000;
+      time.wall += 20 * 60_000; time.mono += 20 * 60_000;
+      expect(store.allows('task', true)).toBe(false);
+      time.wall -= 60 * 60_000;
+      expect(store.received('owner', 'group')).toBeNull();
+    }
+  });
+
   // #7848, unit: prepare() must preserve the file and its read cache when an
   // unacknowledged target is retried. Existing revision tests do not observe IO.
   it('does not rewrite or reload an unchanged outgoing policy with pending targets', async () => {
@@ -127,6 +209,13 @@ describe('durable subscription Fast constraints', () => {
     expect(store.allows(hostSessionIdFor('consumer', 'task-1'))).toBe(false);
     expect(store.allows('task-1')).toBe(true);
     expect(store.allows(hostSessionIdFor('other', 'task-1'))).toBe(true);
+    const received = store.received('group-owner', 'openai');
+    expect(received).toEqual({ revision: 1, allowFast: false });
+    expect(store.received('unrelated-owner', 'openai')).toBeNull();
+    await store.receive('group-owner', { group: 'openai', ...received!,
+      binding: { sessionId: 'new-offline-task', controllerDeviceId: 'consumer' } }, 'executor', current);
+    expect(store.allows(hostSessionIdFor('consumer', 'new-offline-task'))).toBe(false);
+    expect(store.allows(hostSessionIdFor('other', 'new-offline-task'))).toBe(true);
     await store.receive(
       'owner',
       {
@@ -198,6 +287,25 @@ describe('durable subscription Fast constraints', () => {
       current,
     );
     expect(store.allows(task)).toBe(true);
+  });
+
+  // R3 relay finding: knowing G's relay/session hashes does not authenticate O.
+  // Exercise the real binding producer, including a forged controllerDeviceId.
+  it('cannot satisfy an owner relayed task with a guest self-binding even when the relay key is known', async () => {
+    const store = createGroupFastPolicyStore(fixture());
+    const guest = providerShareGuestPeer('share-a', 'member-a', 'guest-device');
+    const relay = 'abcdefghijklmnop';
+    const task = hostSessionIdFor(`owner\0relay:${relay}`, 'task');
+    await store.receive('M', { group: 'local', revision: 1, allowFast: true,
+      binding: { sessionId: 'task' } }, 'M', current, task, false, true);
+    for (const controllerDeviceId of [undefined, 'owner']) {
+      await store.receive(guest, { group: 'self-asserted', revision: 1, allowFast: true,
+        binding: { sessionId: 'task', relay, ...(controllerDeviceId ? { controllerDeviceId } : {}) } }, 'M', current);
+      expect(store.allows(task, true)).toBe(false);
+    }
+    await store.receive('owner', { group: 'group', revision: 1, allowFast: true,
+      binding: { sessionId: 'task', relay } }, 'M', current);
+    expect(store.allows(task, true)).toBe(true);
   });
 
   it('invalidates acknowledgements on membership changes and rejects stale acknowledgements', async () => {

@@ -1,7 +1,7 @@
 import { createRoot } from 'react-dom/client';
 
 import '@fontsource-variable/inter';
-import 'harmonyos-sans-sc-webfont-splitted';
+import './styles/cjk-webfont.css';
 
 import '@/i18n';
 import './themes/colors';
@@ -11,7 +11,7 @@ import { ScreenshotErrorBoundary } from './features/region-screenshot/Screenshot
 import { RegionScreenshotOverlay } from './features/region-screenshot/RegionScreenshotOverlay';
 import type { RegionScreenshotOverlayBridge } from './features/region-screenshot/bridge';
 import { applyFontSettings, getInitialFontSettings } from './hooks/useFontSettings';
-import { getInitialThemeVariant } from './hooks/useTheme';
+import { followLocalThemeChanges, getInitialThemeVariant } from './hooks/useTheme';
 import { bootstrapLocalThemesSync } from './themes/local-themes';
 import { themeService } from './themes/theme-service';
 
@@ -26,6 +26,7 @@ if (!imageEditor) {
 }
 bootstrapLocalThemesSync();
 themeService.applyTheme(getInitialThemeVariant().theme);
+followLocalThemeChanges();
 applyFontSettings(getInitialFontSettings());
 
 const rootElement = document.getElementById('root');
@@ -41,6 +42,7 @@ const bridge: RegionScreenshotOverlayBridge | undefined = editor ? {
   elementsAt: async () => null, autoScroll: async () => false, restoreEditor: async () => false,
   holdCapture: async () => {}, startLive: async () => null, liveFrame: async () => null, saveRecording: async () => false,
   recordingControls: async () => null, previewRecording: async () => false,
+  startAudio: async () => 'audioFailed', readAudio: async () => new Uint8Array(0), stopAudio: async () => {},
 } : window.regionScreenshot;
 if (!rootElement || !bridge) throw new Error('Missing region screenshot root or bridge');
 

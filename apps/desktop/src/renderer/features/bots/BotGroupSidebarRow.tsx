@@ -1,5 +1,5 @@
-import { teammateSelectionStyle } from './teammateSelection';
-import { TeammateStatusDot } from './TeammateStatusDot';
+import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
+import { TeammateRowStatus } from './TeammateStatusDot';
 import { groupTeammateStatus } from './teammateRosterStatus';
 /**
  * 统一伙伴列表里的群聊行，和伙伴私聊共同按最新消息排序。
@@ -37,7 +37,6 @@ import {
 } from './botGroupPresentation';
 import { botGroupMemberDisplayName } from './BotGroupTimelineModel';
 import { botGroupUnreadCount } from './botReadState';
-import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
 import { formatBotListTimestamp } from './botListDisplay';
 import type { BotProfile } from './botStore';
 
@@ -199,40 +198,40 @@ export function BotGroupSidebarRow({
       key={group.id}
       type="button"
       data-bot-group-id={group.id}
-      style={teammateSelectionStyle}
       aria-current={selected ? 'page' : undefined}
       onClick={() => onOpenGroup(group.id)}
       onContextMenu={onContextMenu}
       onKeyDown={onKeyDown}
       aria-haspopup={onContextMenu ? 'menu' : undefined}
       className={cn(
-        'group flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        'group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        SIDEBAR_LIST_ROW_HEIGHT_CLASS,
         selected
-          ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
+          ? SIDEBAR_LIST_ROW_ACTIVE_CLASS
           : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover',
       )}
     >
-      <span className="relative shrink-0"><BotGroupSidebarAvatar members={group.members} selected={selected} />
-        <TeammateStatusDot status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} />
+      <span className="relative flex shrink-0"><BotGroupSidebarAvatar members={group.members} selected={selected} />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="min-w-0 truncate text-14 leading-5" title={group.name}>{group.name}</span>
           {group.archived && <span className={cn('shrink-0 text-11 leading-4', mutedClass)}>{t('bots.archived')}</span>}
         </span>
-        <span className="flex min-w-0 items-center gap-2">{renderSubtitle(group, mutedClass)}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          {renderSubtitle(group, mutedClass)}
+          <TeammateRowStatus status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} groupUnread={unread} mentioned={unread > 0 && group.serverUnread?.mentioned === true} />
+        </span>
       </span>
       <span
+        data-teammate-timestamp
         className={cn(
           'min-w-10 shrink-0 self-start whitespace-nowrap pt-0.5 text-right text-11 tabular-nums',
           mutedClass,
         )}
       >
         {timestamp}
-        <span className="mt-1 flex items-center justify-end gap-1">
-          {unread > 0 && group.serverUnread?.mentioned && <span className="text-[var(--text-primary)]" title={t('bots.groupChat.server.thread.hintMentioned')}>@</span>}
-          <NavigationCountBadge count={unread} label={t('sidebar.teammateUnreadCount', { count: unread })} className="w-fit" />
-        </span>
+        <span aria-hidden className="mt-1 flex items-center justify-end gap-1" />
       </span>
     </button>
     {children}

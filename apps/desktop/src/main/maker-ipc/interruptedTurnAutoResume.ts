@@ -1,3 +1,4 @@
+import { type OutputLimitDetails } from '@cindy/maker-shared';
 /**
  * interrupted-turn 自动续跑 —— 「上游把一个已经干到一半的 turn 打断了」这类
  * terminal error 的识别与重连决策。
@@ -46,6 +47,7 @@ export interface InterruptedTurnErrorSignals {
   errorStatus?: number;
   /** Bounded details for the live error projection; never contains raw provider data. */
   toolLoop?: AgentInputToolLoopDetails;
+  outputLimit?: OutputLimitDetails;
   /** translator 判定的账号用量 / 限流错误。 */
   usageLimit?: boolean;
   /** 上游给出的限额重置时刻(unix ms)。 */
@@ -416,6 +418,10 @@ export interface InterruptedTurnAutoResumeGuardDeps {
   random?: () => number;
 }
 
+export type ExternalAutomaticRecoveryDecision =
+  | { action: 'allow'; attempt: number; maxAttempts: number; episodeAttempt: number; maxEpisodeAttempts: number }
+  | { action: 'exhausted'; reason: 'consecutive' | 'episode'; consecutiveAttempts: number; episodeAttempts: number };
+
 /**
  * 中断自动续跑的决策器。
  *
@@ -429,6 +435,45 @@ export class InterruptedTurnAutoResumeGuard {
   private readonly sessions = new Map<string, SessionGuardState>();
 
   constructor(private readonly deps: InterruptedTurnAutoResumeGuardDeps) {}
+
+  /**
+   * Consume the same bounded budget for recovery paths that do not create a
+   * normal interrupted-turn attempt token (for example provider-group
+   * failover). Progress and real user input still reset the same counters.
+   */
+  claimExternalAutomaticRecovery(sessionId: string): ExternalAutomaticRecoveryDecision {
+    const s = this.state(sessionId);
+    const exhaustedReason = s.episodeAttempts >= INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS
+      ? 'episode' : s.consecutiveAttempts >= INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS
+        ? 'consecutive' : null;
+    if (exhaustedReason) {
+      if (!s.exhaustedWarned) {
+        s.exhaustedWarned = true;
+        this.deps.log.warn('automatic recovery budget exhausted', {
+          sessionId, reason: exhaustedReason,
+          consecutiveAttempts: s.consecutiveAttempts,
+          episodeAttempts: s.episodeAttempts,
+        });
+      }
+      return { action: 'exhausted', reason: exhaustedReason,
+        consecutiveAttempts: s.consecutiveAttempts, episodeAttempts: s.episodeAttempts };
+    }
+    s.consecutiveAttempts += 1;
+    s.episodeAttempts += 1;
+    s.sessionTotalResumes += 1;
+    return { action: 'allow', attempt: s.consecutiveAttempts,
+      maxAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+      episodeAttempt: s.episodeAttempts,
+      maxEpisodeAttempts: INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS };
+  }
+
+  isBudgetExhausted(sessionId: string): boolean {
+    const s = this.sessions.get(sessionId);
+    return Boolean(s?.exhaustedWarned && (
+      s.episodeAttempts >= INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS ||
+      s.consecutiveAttempts >= INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS
+    ));
+  }
 
   private now(): number {
     return this.deps.now ? this.deps.now() : Date.now();

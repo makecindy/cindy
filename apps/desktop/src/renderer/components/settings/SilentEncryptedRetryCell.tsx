@@ -1,7 +1,10 @@
+import { additionalSettings } from './AdditionalSettings.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShieldAlert } from 'lucide-react';
 
+import { SettingsRow } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
 import { createLogger } from '@/lib/logger';
@@ -12,6 +15,7 @@ import { DefaultOverrideControls } from './DefaultOverrideControls';
 const log = createLogger('SilentEncryptedRetryCell');
 
 export function SilentEncryptedRetryCell() {
+  const setting = useSettingDefinition(additionalSettings.silentRetry);
   const { t } = useTranslation();
   const { enabled, isCustomized, setEnabled, setIsCustomized } = useSilentEncryptedRetry();
   const [pending, setPending] = useState(false);
@@ -61,38 +65,36 @@ export function SilentEncryptedRetryCell() {
   }, [setEnabled, setIsCustomized, t]);
 
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-[14px]">
-      <div className="flex items-center gap-3">
-        <div
+    <SettingsRow
+      {...setting.anchorProps}
+      lead={
+        <span
           className={cn(
             'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
             'bg-[var(--settings-input-bg)]',
           )}
         >
           <ShieldAlert size={18} className="text-[var(--settings-section-title)]" />
+        </span>
+      }
+      title={setting.title}
+      hint={setting.description}
+      trailing={
+        <div className="flex items-center gap-2">
+          <DefaultOverrideControls
+            isCustomized={isCustomized}
+            disabled={pending}
+            onReset={() => void handleReset()}
+          />
+          <Switch
+            {...setting.controlProps}
+            checked={enabled}
+            disabled={pending}
+            onCheckedChange={(v) => void handleToggle(v)}
+            aria-label={t('settings.silentEncryptedRetry.toggleAria')}
+          />
         </div>
-        <div className="flex flex-col gap-[8px]">
-          <p className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
-            {t('settings.silentEncryptedRetry.cell.label')}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-desc)]">
-            {t('settings.silentEncryptedRetry.cell.description')}
-          </p>
-        </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <DefaultOverrideControls
-          isCustomized={isCustomized}
-          disabled={pending}
-          onReset={() => void handleReset()}
-        />
-        <Switch
-          checked={enabled}
-          disabled={pending}
-          onCheckedChange={(v) => void handleToggle(v)}
-          aria-label={t('settings.silentEncryptedRetry.toggleAria')}
-        />
-      </div>
-    </div>
+      }
+    />
   );
 }

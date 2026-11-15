@@ -39,6 +39,8 @@ export interface ProviderGroupRemoteClient {
     model: string;
     exclude: readonly string[];
     quotaRebalance?: string;
+    /** Existing tasks must keep the owner's live answer; new tasks may use a prepared context. */
+    allowOffline?: boolean;
   }): Promise<ProviderGroupRemotePick>;
   cool(ownerDeviceId: string, input: {
     providerId: string;

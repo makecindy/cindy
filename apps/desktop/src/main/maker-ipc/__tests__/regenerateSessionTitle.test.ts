@@ -28,7 +28,7 @@ vi.mock('../../maker-host/auxiliary-title-one-shot.js', () => ({
   generateTitleWithAuxiliaryModel: vi.fn(),
   generateTitleWithAuxiliaryModelResult: vi.fn(),
 }));
-vi.mock('../../i18n.js', () => ({
+vi.mock('../../i18n.desktop.js', () => ({
   getResolvedMainLocale: vi.fn(() => 'en'),
 }));
 // title.ts imports promptPrediction statically; this suite covers the
@@ -44,7 +44,7 @@ import {
 } from '../title.js';
 import { generateTitleWithAuxiliaryModel } from '../../maker-host/auxiliary-title-one-shot.js';
 import type { TitleOneShotResult } from '../../maker-host/title-one-shot.js';
-import { getResolvedMainLocale } from '../../i18n.js';
+import { getResolvedMainLocale } from '../../i18n.desktop.js';
 import type { RegenerateTitleMaterial } from '../../localDb/latestMessageText.js';
 
 beforeEach(() => {

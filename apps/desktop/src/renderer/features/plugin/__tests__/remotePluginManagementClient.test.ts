@@ -5,6 +5,8 @@ import {
   parsePluginManagementSnapshot,
   readLegacyManagedPlugin,
   readLegacyManagedPlugins,
+  hasPluginCatalogPaging,
+  parsePluginManagementMarketPage,
 } from '../remotePluginManagementClient';
 
 const snapshot = {
@@ -12,6 +14,26 @@ const snapshot = {
   ghosts: [],
   market: { items: [], customSourceNames: [], unavailableCustomSourceNames: [] },
 };
+describe('paged Host reads', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it('uses only an explicit old-Host parameter rejection as legacy capability discovery', async () => {
+    const invoke = vi.fn().mockRejectedValueOnce(Object.assign(new Error('old Host'), { code: 'INVALID_PARAMS' }))
+      .mockRejectedValueOnce(Object.assign(new Error('offline'), { code: 'UNAVAILABLE' }))
+      .mockResolvedValueOnce({ result: { catalogPaging: true } });
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    expect(await hasPluginCatalogPaging('target')).toBe(false);
+    await expect(hasPluginCatalogPaging('target')).rejects.toThrow('offline');
+    expect(await hasPluginCatalogPaging('target')).toBe(true);
+    expect(invoke.mock.calls.every(call => JSON.stringify(call).includes('capabilities'))).toBe(true);
+  });
+  it('rejects invalid source counts while preserving bounded custom grouping metadata', () => {
+    const page = { ...snapshot.market, nextCursor: null, counts: { all: 1, public: 0, organization: 0, personal: 0, custom: 1 },
+      customSourceNames: ['team'], customSourceCounts: [{ name: 'team', count: 1 }] };
+    expect(parsePluginManagementMarketPage(page).customSourceCounts).toEqual(page.customSourceCounts);
+    expect(() => parsePluginManagementMarketPage({ ...page, customSourceCounts: [{ name: 'other', count: 1 }] })).toThrow('INVALID_RESPONSE');
+    expect(() => parsePluginManagementMarketPage({ ...page, counts: { ...page.counts, all: 12 } })).toThrow('INVALID_RESPONSE');
+  });
+});
 describe('remote project response boundaries', () => {
   it('requires an explicit fixed-share installation capability from the selected Host', () => {
     expect(parsePluginManagementSnapshot(snapshot).localShares).toBeUndefined();

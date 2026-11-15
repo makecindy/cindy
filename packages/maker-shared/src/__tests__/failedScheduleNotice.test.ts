@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeScheduleFailures, compareFailedScheduleRuns, shouldShowFailedScheduleNotice } from '../scheduleModel';
+import { activeScheduleFailures, compareFailedScheduleRuns, scheduleFailureMessageKey, shouldShowFailedScheduleNotice } from '../scheduleModel';
 import { buildSessionScheduleIndex } from '../sessionList';
 import type { RemoteScheduleRun } from '../scheduleTypes';
 const run = { runId: 'b', firedAt: 10 };
@@ -66,4 +66,17 @@ describe('historical schedule failure notice', () => {
       expect(shouldShowFailedScheduleNotice({ ...visible, [field]: true })).toBe(false);
     });
   it('requires a failed run', () => expect(shouldShowFailedScheduleNotice({ ...visible, latestFailedRun: null })).toBe(false));
+  // A check blocked because its plugin was uninstalled used to show only the generic
+  // "checks blocked" line; the stored diagnosis must reach the notice (mobile reads full runs).
+  it.each([
+    [{ ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' }, 'pluginMissing'],
+    [{ ghostId: 'cindy-github' }, 'pluginMissingUnnamed'],
+    [{ ghostId: 'cindy-github', name: 'GitHub', installed: true }, 'pluginDisabled'],
+    [{ name: 'no id' }, 'precheck'],
+  ])('names the missing plugin of a blocked check: %j', (missingPlugin, key) => {
+    const rows: RemoteScheduleRun[] = [{ id: 'blocked', scheduleId: 'a', sessionId: 's', status: 'failed', firedAt: 1,
+      errorMsg: 'pre-run hook failed', preRunHookResult: { decision: 'block', missingPlugin } }];
+    const failed = buildSessionScheduleIndex([], new Map([['a', rows]])).get('s')?.latestFailedRun;
+    expect(failed && scheduleFailureMessageKey(failed)).toBe(key);
+  });
 });

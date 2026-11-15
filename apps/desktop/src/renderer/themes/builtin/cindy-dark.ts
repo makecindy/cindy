@@ -1,12 +1,14 @@
 import type { Theme } from '../types';
 import cindyLogoDark from '../../assets/cindy-logo-dark.png';
 import { CINDY_ACRYLIC_WINDOW_BACKING } from '../../../shared/windowBackdrop';
+import { filledButtonHover, filledButtonPressed } from '../filledButtonStates';
 
 /*
- * CINDY Dark — 品牌红 CTA + 中性近黑底(#181818)+ AA 正文;U2 二级信息色忠于 Figma 原值。
- * 值的唯一权威: token-decision-table.md §3(2026-07-17 U8 批准) + §9(2026-08 色阶改版,用户批准)。
- * §9 要点: 整体平移变暗且归零暖差、三级色等亮度转中性;已知债(层次保留率 ~65%)见 issue #2559。
- * 每个 override 注释来源;零自由裁量。
+ * CINDY Dark — 中性近黑底(#181818)+ 墨水文字档位;普通主按钮为反相中性,不用品牌红。
+ * 数值源: packages/design-tokens(DTCG,生成下方 GENERATED 区,不要手改);规则: DESIGN.md §15
+ * (§15.16 色阶与墨水、§15.10 红色边界)。token-decision-table.md 只是决策记录,不是数值源。
+ * 要点: 各层 R=G=B 零暖差;文字、悬停/标签底、选中/按下与边框都是白色墨水加透明度
+ * (2026-10-22 用户裁决);已知债(层次保留率 ~65%)见 issue #2559。每个 override 注释来源;零自由裁量。
  */
 
 // 既有分组/对比度/否决依据：docs/design-rules/design-decision-log.md
@@ -67,7 +69,6 @@ const GENERATED_OVERRIDES = {
   "chat-input-border-focus": "rgba(193, 193, 193, 0.30)", // 聚焦描边: 三级色 30% 派生
   "chat-input-chip-border": "rgba(255, 255, 255, 0.10)", // 墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)
   "chat-input-text": "rgba(255, 255, 255, 0.82)", // 墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)
-  "chat-input-placeholder-subtle": "var(--text-placeholder)", // 聊天输入框占位文字直接用占位档,不再叠 40% 透明度(2026-10-22 用户裁决随附:占位文字统一用占位档)
   "thinking-body-text": "var(--text-secondary)", // 思考过程正文用次要档(2026-10-23 用户裁决:三级在墨水阶梯里过淡,浅色 3.2、深色 3.8;次要浅色与改前持平 4.8、深色 6.1)
   "color-primary": "rgba(255, 255, 255, 0.82)", // 墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)
   "caret-accent": "#417CDD", // 用户改稿 2026-07-18:光标撤红改回蓝(对齐 focus 蓝 #417CDD)
@@ -125,7 +126,6 @@ const GENERATED_OVERRIDES = {
   "update-btn-border": "#EEEEEE", // E1D 中性底(实心胶囊,与 bg 同色)
   "update-btn-bg": "#EEEEEE", // E1D §15.10 反相中性:dark 浅底,承载深字
   "update-btn-text": "#151515", // 反相深字(浅钮上)
-  "update-btn-hover": "#E2E2E2", // E1D §15.10 四态 hover(实心,非 alpha 叠加)
   "accent-foreground": "0.0 0.0% 100.0% / 0.82", // 墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)
   "panel-bg": "#181818", // 直映: 页底(纯中性)
   "primary": "0.0 0.0% 93.3%", // E1D C 类裁决 3:反相中性 HSL
@@ -142,9 +142,9 @@ const GENERATED_OVERRIDES = {
   "titlebar-control-hover": "0.0 0.0% 100.0% / 0.06", // 墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
   "sidebar": "0 0% 9.4%", // 页底 -> HSL
   "sidebar-border": "0.0 0.0% 100.0% / 0.10", // 墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)
-  "sidebar-item-hover": "0.0 0.0% 100.0% / 0.09", // 玻璃面 hover 半透明化 2026-07-21:白 9% 叠加(原实色 hsl(0 2.2% 18%) 在暗玻璃底上的等价叠加量),壁纸可继续透过
+  "sidebar-item-hover": "0.0 0.0% 100.0% / 0.06", // 墨水 白 6%: 菜单/侧栏悬停并入墨水阶梯(2026-11-11 维护者裁决 E-02,取代 2026-07-21 玻璃面白 9%),壁纸可继续透过
   "sidebar-search-bg": "0 0% 9.4%", // 页底 -> HSL
-  "sidebar-search-input-bg": "rgba(0, 0, 0, 0.25)", // 玻璃面搜索输入框 2026-07-21:黑 25% 下陷字段感(与 hover 白 9% 方向相反,可区分"可输入")
+  "sidebar-search-input-bg": "rgba(0, 0, 0, 0.25)", // 玻璃面搜索输入框 2026-07-21:黑 25% 下陷字段感(与 hover 白 6% 方向相反,可区分"可输入")
   "sidebar-muted": "0.0 0.0% 100.0% / 0.55", // 墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)
   "surface-translucent-main": "#181818", // 直映: 页底(纯中性)
   "surface-translucent-overlay": "rgba(21, 21, 21, 0.80)", // 浮层玻璃: 平移
@@ -154,8 +154,6 @@ const GENERATED_OVERRIDES = {
   "send-btn-icon": "#151515", // 反相深字(浅钮上)
   "send-btn-disabled-bg": "#323232", // 禁用底/option hover 档
   "send-btn-disabled-icon": "#464646", // 禁用图标
-  "send-btn-hover-bg": "#E2E2E2", // E1D 反相中性 hover(lead 四态)
-  "send-btn-pressed-bg": "#D4D4D4", // E1D 反相中性 pressed(lead 四态)
   "completion-badge-fg": "#121212", // 反相深字: 平移
   "create-agent-control-bg": "#272727", // composer pill
   "create-agent-control-bg-hover": "rgba(255, 255, 255, 0.06)", // 墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
@@ -202,6 +200,8 @@ export const cindyDark: Theme = {
   colors: {
     ...GENERATED_OVERRIDES,
     "surface-translucent-sidebar": CINDY_ACRYLIC_WINDOW_BACKING.dark,
+    "update-btn-hover": filledButtonHover('var(--update-btn-bg)'),
+    "update-btn-pressed": filledButtonPressed('var(--update-btn-bg)'),
   },
   // U5 品牌版横向 logo：白字+红箭头，深底可见。
   brand: { logo: { src: cindyLogoDark } },

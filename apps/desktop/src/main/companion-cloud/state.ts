@@ -10,6 +10,8 @@ import type { CompanionLog } from './types.js';
 const pref = z.object({
   hash: z.string(),
   revision: z.number().int().nonnegative(),
+  /** Store entries only: the preference revision the stored value supersedes. */
+  prefRevision: z.number().int().nonnegative().optional(),
   /**
    * This device had exactly this value locally (uploaded it, or applied it while taking over).
    * Only such keys may be tombstoned by the uploader or deleted locally by a cloud tombstone;
@@ -35,12 +37,23 @@ const bot = z.object({
   prefs: z.record(z.string(), pref).default({}),
   /** Revisions were read back from the server once (after a fresh or lost state file). */
   prefsSeeded: z.boolean().optional(),
+  /** The same per value for the companion store (store.ts), whose revisions are its own. */
+  stored: z.record(z.string(), pref).optional(),
+  storeSeeded: z.boolean().optional(),
   /** This computer gave the companion away; never re-register it as home here. */
   demoted: z.boolean().optional(),
   /** Cloud history was added while the canonical Session was busy; rebuild at the next idle point. */
   pendingRebuild: z.boolean().optional(),
   /** The never-synced local copy was backed up before a take-over; retries do not back it up again. */
   backedUp: z.boolean().optional(),
+  /** Owner-approved correction for an unfinished restore; local/account scoped, never sent on the wire. */
+  profileCorrection: z.object({
+    homeDeviceId: z.string(), version: z.string(),
+    values: z.object({ identitySource: z.string().max(12000).optional(), userContextSource: z.string().max(12000).optional() }),
+    backedUp: z.boolean().optional(),
+    /** Once restored, the uploader owns retries. Drop this only after its profile revision advances. */
+    restored: z.object({ preference: z.number(), store: z.number() }).optional(),
+  }).optional(),
   /**
    * What the last take-over could not keep of the old setup (cloud-companions.md §2): shown once
    * after the move, then cleared by the owner.

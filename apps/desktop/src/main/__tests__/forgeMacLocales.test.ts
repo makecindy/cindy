@@ -39,10 +39,13 @@ it('stages ten native locales for the app and helpers without losing existing st
   expect(fs.readFileSync(compiledStrings)).toEqual(firstCompiled);
   const text = first.toString('utf16le');
   expect(text).toContain('"CFBundleDisplayName" = "Cindy";');
-  expect(text).toContain('"NSMicrophoneUsageDescription" = "Cindy a besoin');
+  // Recording audio must reach the native permission prompt, including the
+  // existing UTF-16 resource and Electron's regional locale aliases below.
+  expect(text).toContain('"NSMicrophoneUsageDescription" = "Cindy utilise le microphone pour la saisie vocale et les enregistrements d’écran.";');
+  expect(text).toContain('"NSAudioCaptureUsageDescription" = "Cindy capture le son de l’ordinateur pour les enregistrements d’écran et le bureau à distance connecté.";');
   expect(text).toContain('"NSContactsUsageDescription"');
   expect(fs.readFileSync(compiledStrings, 'utf8')).toContain('"CFBundleDisplayName" = "Cindy Helper";');
-  expect(fs.readFileSync(path.join(regional, 'InfoPlist.strings'), 'utf8')).toContain('Cindy necesita acceso al micrófono');
+  expect(fs.readFileSync(path.join(regional, 'InfoPlist.strings'), 'utf8')).toContain('"NSMicrophoneUsageDescription" = "Cindy usa el micrófono para la entrada de voz y las grabaciones de pantalla.";');
   for (const dir of [resources, helper]) {
     expect(fs.readdirSync(dir).filter(name => name.endsWith('.lproj') && name !== 'es_419.lproj').sort()).toEqual([
       'de.lproj', 'en.lproj', 'es.lproj', 'fr.lproj', 'ja.lproj', 'ko.lproj', 'pt-BR.lproj', 'pt-PT.lproj', 'zh-Hans.lproj', 'zh-Hant.lproj',

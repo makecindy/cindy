@@ -38,6 +38,40 @@ it('rejects a recording when the browser stops without encoded frames', async ()
   expect(track.stop).toHaveBeenCalled();
 });
 
+// Unit: selected audio must reach the actual MediaRecorder together with the
+// canvas, pause with video, and be released. The prior pixel-only tests could
+// pass while every saved WebM was silent. Minimal input: one audio track.
+it('encodes audio with video and releases both tracks after pause/resume and finish', async () => {
+  const video = { stop: vi.fn(), requestFrame: vi.fn() };
+  const audio = { stop: vi.fn() } as unknown as MediaStreamTrack;
+  const tracks = [video];
+  const stream = { getTracks: () => tracks, getVideoTracks: () => [video], addTrack: (track: any) => tracks.push(track) };
+  const instances: any[] = [];
+  class Recorder {
+    static isTypeSupported = (type: string) => type === 'video/webm;codecs=vp8,opus';
+    state = 'inactive';
+    ondataavailable!: (event: { data: Blob }) => void;
+    onstop!: () => void;
+    constructor(readonly stream: unknown, readonly options: unknown) { instances.push(this); }
+    start() { this.state = 'recording'; }
+    pause() { this.state = 'paused'; }
+    resume() { this.state = 'recording'; }
+    stop() {
+      this.state = 'inactive';
+      this.ondataavailable({ data: new Blob([new Uint8Array([0x18, 0x53, 0x80, 0x67, 0xff, 0x15, 0x49, 0xa9, 0x66, 0x87, 0x2a, 0xd7, 0xb1, 0x83, 0x0f, 0x42, 0x40, 0x1f, 0x43, 0xb6, 0x75, 0x83, 1, 2, 3])]) });
+      queueMicrotask(() => this.onstop?.());
+    }
+  }
+  vi.stubGlobal('MediaRecorder', Recorder);
+  const recorder = new CaptureRecorder({ captureStream: () => stream } as unknown as HTMLCanvasElement, 'webm', () => {}, undefined, audio);
+  expect(instances[0].stream.getTracks()).toEqual([video, audio]);
+  expect(instances[0].options.mimeType).toContain('opus');
+  recorder.pause(100); expect(instances[0].state).toBe('paused');
+  recorder.resume(); expect(instances[0].state).toBe('recording');
+  expect((await recorder.finish(200)).length).toBeGreaterThan(0);
+  expect(audio.stop).toHaveBeenCalled(); expect(video.stop).toHaveBeenCalled();
+});
+
 // Unit: consecutive identical GIF frames may coalesce, but their display time
 // and a one-pixel change must survive pause/resume. WebM tests miss this path.
 // Read standard GIF block metadata independently of the encoder's state.

@@ -1,6 +1,6 @@
 import type { Session } from '@cindy/maker-core';
 import { createChannelTurnObserver } from './channelTurnSignal';
-import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../shared/llamaCpp.js';
+import { isManagedSidecarProviderId } from '../../shared/localModelRuntime.js';
 import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -12,6 +12,7 @@ import { SilentStopTurnLeaseGate, SessionTurnLeaseTracker } from './sessionTurnL
 import { prepareBotPermissionDispatch } from './botPermissionDispatch.js';
 
 export interface InstallSessionTurnObserverDeps {
+  readonly onProviderInitiatedTurn?: (session: Session, generation: number) => void;
   readonly beforeLocalProviderStart?: (session: Session) => Promise<void>;
   readonly silentStopTurnLeaseGate: Pick<
     SilentStopTurnLeaseGate,
@@ -33,7 +34,7 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
       assertPermissionDispatch?.();
       channelTurn.onDispatching();
     },
-    beforeProviderStart: async (turnGeneration) => {
+    beforeProviderStart: async (turnGeneration, signal) => {
       assertPermissionDispatch = undefined;
       if (session.remoteHostId) {
         await channelTurn.beforeProviderStart();
@@ -88,12 +89,19 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
           throwIpcError('INVALID_PARAMS', describeModelRouteRejection(verdict.reason, model, getSessionProvider(session.id)));
         }
       }
-      // Existing tasks must restore the managed service after a manual stop too.
-      // Reuse the common send boundary so IM/Goal/Scheduler get the same behavior.
+      // 既有任务在手动停止托管 sidecar（llama.cpp / Ollama）后也要恢复服务。
+      // 复用公共发送边界，IM/Goal/Scheduler 与 renderer 拿到同一行为；新会话已由
+      // create-session 的 admitLocalRoute 做同一次就绪探测。托管 sidecar 是每台电脑
+      // 一份的本机服务，Agent 在另一台电脑上运行时不代远端启动（见上方注释）。
       const providerId = getSessionProvider(session.id);
-      if (!providerOnOtherDevice && providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
-        await ensureManagedOllamaReadyForSession({ providerId, onlyIfStopped: true });
+      if (
+        !providerOnOtherDevice
+        && providerId !== null
+        && isManagedSidecarProviderId(providerId)
+      ) {
+        await ensureManagedOllamaReadyForSession({ providerId, onlyIfStopped: true, signal });
       }
+      signal?.throwIfAborted();
       deps.silentStopTurnLeaseGate.supersede(session.id);
       // Keep Review's exact-instance liveness listener lazy. PID-only turn
       // leases remain fail-closed until this process actually starts Review.
@@ -111,7 +119,8 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
         deps.providerTurnLeaseId(session.instanceId, turnGeneration),
       );
     },
-    onProviderInitiatedTurn: () => {
+    onProviderInitiatedTurn: (generation) => {
+      deps.onProviderInitiatedTurn?.(session, generation);
       // Harness wake-ups (Claude Code background task notifications) skip beforeProviderStart.
       // IM relay decides synchronously inside this call, before the first event fans out.
       channelTurn.onProviderInitiatedTurn();

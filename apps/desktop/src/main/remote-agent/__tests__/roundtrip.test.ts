@@ -1,3 +1,4 @@
+import * as availability from '../../device-link/providerShareAvailability.js';
 import { runSessionCreationAttempt, captureSessionCreationCancellation } from '../../localDb/sessionRuntimeCleanup';
 /**
  * 远程 Agent 端到端往返(两端同进程，经 JSON 序列化模拟设备互联)：
@@ -16,11 +17,12 @@ import type {
   InteractionRequest,
   InteractionResolver,
   SendOptions,
+  StartSessionOptions,
   UserMessage,
 } from '@cindy/maker-core';
-import { LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Session } from '@cindy/maker-core';
+import { AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Session } from '@cindy/maker-core';
 import { createServer } from 'node:http';
-import { providerShareHostPeer } from '@cindy/device-link';
+import { isProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteAgentPoller } from '../controller/poller';
@@ -32,10 +34,16 @@ import { credentialGrantFor, forgetCredentialGrants } from '../executor/credenti
 import { cancelPendingRemoteStart, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
 import { hostedStartOptions } from '../host/service';
+import { createProviderGroupService, type ProviderGroupServiceDeps } from '../../provider-group/service';
+import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch';
+import { relocateForFreshStart } from '../../maker-ipc/sessionAgentSwitchHandler';
+import { createGroupFastPolicyStore } from '../../provider-group/fastPolicyStore';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
 import { installDesktopInteractionHandler } from '../../maker-ipc/interactionRouter';
-import { authorizeSharedTaskExecutor, authorizeSharedTaskHistory, liveSharedTaskTarget } from '../controller/providerShareTaskLocation';
+import { authorizeSharedTaskExecutor, authorizeSharedTaskHistory, liveSharedTaskTarget,
+  forgetSharedTaskAuthorization } from '../controller/providerShareTaskLocation';
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://continuity.test.invalid' }));
 
 const payloadCompression = vi.hoisted(() => ({ enabled: false, paused: false, calls: 0, finish: undefined as (() => void) | undefined }));
 // Controlled gzip completion exercises production payload cancellation without compression load or sockets.
@@ -67,9 +75,12 @@ vi.mock('../../device-link/providerShareCrossRegion.js', () => ({
   isCrossRegionProviderShareTarget: () => historyCrossRegion(),
   renewCrossRegionProviderShareLink: (...args: unknown[]) => historyOpenLink(...args),
 }));
+const guestPermission = vi.hoisted(() => ({ epoch: 0, status: 'active', listeners: new Set<() => void>() }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({
   parseProviderShareAgentDeviceId: (device: string) => device.startsWith('share:') ? device.slice(6) : null,
-  findReceivedShare: () => ({ status: 'active' }),
+  findReceivedShare: () => ({ status: guestPermission.status }),
+  providerShareAccessEpoch: () => guestPermission.epoch,
+  onProviderShareReceivedChanged: (listener: () => void) => { guestPermission.listeners.add(listener); return () => { guestPermission.listeners.delete(listener); }; },
 }));
 vi.mock('../../logger.js', () => ({ createLogger: () => historyLogger }));
 // The production starter collects only this fixture's supplied project, never the user's home.
@@ -79,6 +90,15 @@ vi.mock('../controller/projectFiles', () => ({
   collectInstructionImports: async () => [], collectPersonalConfig,
   collectProjectInstructionFiles: async () => [],
 }));
+
+/** 伙伴运行配置：`projectContext` 为 V2 伙伴在自己项目里的对话，否则为隔离运行(群、IM 专线)。授权均为空。 */
+function teammateProfile(projectContext: boolean): NonNullable<StartSessionOptions['botRuntimeProfile']> {
+  const empty = { mode: 'allowlist' as const, configured: [], catalog: [] };
+  return {
+    botId: 'teammate', profileVersion: 1, skillPolicy: empty, mcpPolicy: empty, toolsetPolicy: empty,
+    ...(projectContext ? { projectContext: true } : {}),
+  };
+}
 
 const RG = path.resolve(__dirname, '../../../../../ripgrep-bin', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'rg.exe' : 'rg');
 const CONTROLLER = 'controller-device-1';
@@ -221,6 +241,7 @@ function makeDeps(host: ReturnType<typeof createRemoteAgentHost>, controller = C
 }
 
 beforeEach(() => {
+  guestPermission.epoch++; guestPermission.status = 'active'; guestPermission.listeners.clear();
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-ra-')));
   project = path.join(root, 'project');
   hostRoot = path.join(root, 'host');
@@ -240,7 +261,7 @@ afterEach(() => {
 function createHost(
   readLimits: () => RemoteAgentLimits = () => DEFAULT_REMOTE_AGENT_LIMITS,
   log?: StartRemoteAgentDeps['log'],
-  start = fakeHostedAgent,
+  start: (input: HostedStartInput) => AgentSessionHandle | Promise<AgentSessionHandle> = fakeHostedAgent,
 ) {
   return createRemoteAgentHost({
     readLimits,
@@ -258,6 +279,80 @@ function createHost(
 }
 
 describe('remote agent round trip', () => {
+  // #9263 integration: the real starter, host advertisement, JSON wire and
+  // dispatch must preserve guest iMessage permissions through send and steer.
+  it('delivers iMessage policy and identity to the remote execution handle', async () => {
+    const received: SendOptions[] = [];
+    const host = createHost(undefined, undefined, input => ({
+      ...fakeHostedAgent(input),
+      send: async (_message, opts) => { received.push(opts ?? {}); },
+      steer: async (_message, opts) => { received.push(opts ?? {}); },
+    }));
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await startRemoteAgentSession('pi', { sessionId: 'imessage-guest', workingDir: project, model: 'm' }, makeDeps(host));
+      const origin = { kind: 'im', channel: 'imessage', taskId: 'guest-task' } as const;
+      const opts: SendOptions = {
+        turnPermissionPolicy: { origin, confirmationSurface: 'desktop', forceConfirmToolCall: () => true },
+        [MAIN_OWNED_SEND_CONTEXT]: { origin, rawChannelText: 'work' },
+      };
+      await handle.send({ type: 'user', content: 'work' }, opts);
+      await handle.steer!({ type: 'user', content: 'followup' }, opts);
+      expect(received).toHaveLength(2);
+      for (const sent of received) {
+        expect(sent.turnPermissionPolicy?.origin).toEqual(origin);
+        expect(sent.turnPermissionPolicy?.forceConfirmToolCall('Bash', {})).toBe(true);
+        expect(sent[MAIN_OWNED_SEND_CONTEXT]).toEqual(opts[MAIN_OWNED_SEND_CONTEXT]);
+      }
+    } finally { await handle?.close(); host.dispose(); }
+  });
+
+  // R3 routing observation: target starts as input.deviceId for an ordinary
+  // same-account remote task; crossing computers alone is not groupAssigned.
+  it('keeps an ordinary cross-computer task outside the group speed-policy requirement', async () => {
+    const host = createHost(undefined, undefined, input => {
+      expect(input.requireGroupFastPolicy).toBe(false);
+      return fakeHostedAgent(input);
+    });
+    const invoke = makeDeps(host).invoke;
+    const log = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    const start = createDeviceAgentStarter({
+      remoteInvoke: async (deviceId, _channel, args) => {
+        expect(deviceId).toBe('ordinary-peer');
+        if ((args[0] as { op: string }).op === 'open')
+          expect((args[0] as { payload: { json: object } }).payload.json).not.toHaveProperty('groupAssigned');
+        return { ok: true, result: await invoke(args) };
+      },
+      rgPath: () => RG, mcpProviders: () => [], prepareMcpBridge: vi.fn(async () => null), makerMemory: () => undefined,
+      captureKnownFileBefore: async () => {}, noteOpaqueTurnChange: () => {}, logger: log,
+    });
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await start({ agentKind: 'codex', deviceId: 'ordinary-peer', options: {
+        sessionId: 'ordinary-remote', workingDir: project, model: 'gpt-5', providerId: 'openai',
+      } });
+      expect(hostInputs).toHaveLength(1);
+    } finally { await handle?.close(); host.dispose(); }
+  });
+  // R2-F1: check after the real controller/host open has added M's local
+  // policy; allocate-only assertions miss that local=true source entirely.
+  it('opens an assigned task at ordinary speed when only the executor local policy exists', async () => {
+    const policy = createGroupFastPolicyStore({ filePath: () => path.join(root, 'speed.json'), scopeKey: () => 'test' });
+    const host = createHost(undefined, undefined, async input => {
+      await policy.receive('executor', { group: 'openai', revision: 1, allowFast: true,
+        binding: { sessionId: input.hostSessionId } }, 'executor', () => {}, input.hostSessionId, false, true);
+      expect(input.requireGroupFastPolicy).toBe(true);
+      expect(policy.allows(input.hostSessionId)).toBe(true);
+      expect(policy.allows(input.hostSessionId, input.requireGroupFastPolicy)).toBe(false);
+      return fakeHostedAgent(input);
+    });
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await startRemoteAgentSession('codex', { sessionId: 'missing-owner-policy',
+        workingDir: project, model: 'gpt-5', providerId: 'openai' }, { ...makeDeps(host), groupAssigned: true });
+      expect(hostInputs).toHaveLength(1);
+    } finally { await handle?.close(); host.dispose(); }
+  });
   // External application's only MCP traverses the real controller/router/tunnel;
   // host-only access must reject native tools even if a peer forges a request.
   it.each(['codex', 'pi', 'claude-code'] as const)('preserves application tools and isolation through %s remote execution', async kind => {
@@ -273,6 +368,7 @@ describe('remote agent round trip', () => {
     const host = createHost(undefined, undefined, input => {
       expect(input.options.localApplication).toMatchObject({ mcpName: 'hhh', hostToolsOnly: true });
       expect(input.localApplicationStorage).toContain('local-applications');
+      expect(input.requireGroupFastPolicy).toBe(true);
       expect(input.localApplicationStorage).not.toContain(local.storageDirectory);
       return fakeHostedAgent(input);
     });
@@ -323,11 +419,11 @@ describe('remote agent round trip', () => {
   // Unit: #7783 keeps M's grant only in memory. Restart recovery must regain
   // that task's grant through O, never use O's health as M's readiness. Existing
   // lease tests do not lose M's in-memory authorization during a poll outage.
-  it.each(['idle', 'busy', 'revoked', 'expired'] as const)('recovers the pinned direct executor after restart: %s', async mode => {
+  it.each(['idle', 'busy', 'revoked', 'expired', 'o-offline-recovery', 'reissued-open-transient', 'unconfirmed-no-renew'] as const)('recovers the pinned direct executor after restart: %s', async mode => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
     const ownerRoute = 'share:restart-share';
-    let offline = false, granted = false, allowed = true;
-    let allocations = 0, sends = 0, offlineReads = 0;
+    let offline = false, ownerOffline = false, granted = false, allowed = true;
+    let allocations = 0, sends = 0, offlineReads = 0, failNextOpenAfterGrant = 0;
     const disposed: string[] = [];
     const seen: AgentEvent[] = [];
     const nativeIds: Array<string | undefined> = [];
@@ -348,15 +444,27 @@ describe('remote agent round trip', () => {
       controllerTrust: () => 'guest', isControllerAuthorized: () => true,
       providerAccess: { resolve: async () => 'shared-provider', isAllowed: () => granted },
       bindGuestProviderRoute: async () => ({ providerId: 'shared-provider', routeToken: 'fixture', modelIds: ['m'], release() {} }),
+      // The restarted host is alive and answers caps, but its in-memory task
+      // grant is gone. Only a task-scoped open can prove that.
+      directGuestExecution: {
+        ownerScope: () => 'account', locate: async () => null, allocate: async () => null,
+        status: () => undefined, release: async () => undefined, switch: async () => ({}),
+        usage: () => undefined, sessionAllowed: () => granted, sessionDelegated: () => granted,
+        delegate: async () => { granted = true; return true; }, forget: () => true,
+      },
       captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot: hostRoot,
     });
     let member = makeMember();
     historyInvoke.mockImplementation(async (device, _channel, [request]) => {
       if (device === ownerRoute) {
+        if (ownerOffline) throw Object.assign(new Error('owner offline'), { code: 'NOT_CONNECTED' });
         if (request.op === 'allocate') {
           allocations++;
           if (!allowed) return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'share revoked' } };
           granted = true;
+          if ((mode === 'reissued-open-transient' || mode === 'unconfirmed-no-renew') && allocations === 2) {
+            failNextOpenAfterGrant = 1;
+          }
           return { ok: true, result: { deviceId: 'executor-m', generation: '11111111-1111-4111-8111-111111111111',
             leaseDurationMs: mode === 'expired' ? 3_000 : 30 * 60_000 } };
         }
@@ -364,9 +472,12 @@ describe('remote agent round trip', () => {
       }
       const requireAccess = () => {
         if (offline) { offlineReads++; throw Object.assign(new Error('device offline'), { code: 'DEVICE_OFFLINE' }); }
-        if (!granted) throw Object.assign(new Error('share unavailable'), { code: 'ACCESS_REVOKED' });
       };
       requireAccess();
+      if (request.op === 'open' && failNextOpenAfterGrant > 0) {
+        failNextOpenAfterGrant -= 1;
+        return { ok: false, error: { code: 'TIMEOUT', message: 'temporary open failure' } };
+      }
       const result = await member.handle(CONTROLLER, JSON.parse(JSON.stringify(request)));
       requireAccess();
       return { ok: true, result: request.op === 'caps' ? { ...result as object, directGuestExecution: true } : result };
@@ -403,9 +514,51 @@ describe('remote agent round trip', () => {
         await expect(handle.send({ type: 'user', content: 'must not run' })).rejects.toThrow();
         expect(nativeIds).toEqual([undefined]);
         if (mode === 'expired') expect(allocations).toBe(1);
-      } else {
+      } else if (mode === 'reissued-open-transient') {
         await vi.advanceTimersByTimeAsync(10_000);
-        expect(seen.filter(event => event.type === 'error')).toEqual(mode === 'busy'
+        // O issues a replacement, but the next M open fails transiently. The
+        // grant is already real, so the next ordinary open must confirm it
+        // without asking O again.
+        await expect(handle.send({ type: 'user', content: 'reissued attempt' })).rejects.toThrow();
+        expect(allocations).toBe(2);
+        expect(nativeIds).toEqual([undefined]);
+        await handle.send({ type: 'user', content: 'continue' });
+        expect(nativeIds).toEqual([undefined, 'native-original']);
+        expect(allocations).toBe(2);
+        // Confirming the replacement clears the one-reissue state; a second
+        // independent M restart may ask O for another grant.
+        const beforeSecondRestart = offlineReads;
+        offline = true;
+        member.dispose();
+        await vi.waitFor(() => expect(offlineReads).toBeGreaterThan(beforeSecondRestart));
+        await vi.advanceTimersByTimeAsync(1_000);
+        granted = false;
+        member = makeMember();
+        offline = false;
+        await vi.advanceTimersByTimeAsync(10_000);
+        await handle.send({ type: 'user', content: 'after second restart' });
+        expect(nativeIds).toEqual([undefined, 'native-original', 'native-original']);
+        expect(allocations).toBe(3);
+        expect(sends).toBe(4);
+      } else if (mode === 'unconfirmed-no-renew') {
+        await vi.advanceTimersByTimeAsync(10_000);
+        await expect(handle.send({ type: 'user', content: 'reissued attempt' })).rejects.toThrow();
+        expect(allocations).toBe(2);
+        // No background renewal while M has not confirmed the replacement.
+        await vi.advanceTimersByTimeAsync(20 * 60_000);
+        expect(allocations).toBe(2);
+        expect(nativeIds).toEqual([undefined]);
+      } else {
+        if (mode === 'o-offline-recovery') ownerOffline = true;
+        await vi.advanceTimersByTimeAsync(10_000);
+        if (mode === 'o-offline-recovery') {
+          await expect(handle.send({ type: 'user', content: 'must not run' }))
+            .rejects.toThrow(/NOT_CONNECTED|owner offline/);
+          expect(allocations).toBe(1);
+          expect(nativeIds).toEqual([undefined]);
+          ownerOffline = false;
+        }
+        expect(seen.filter(event => event.type === 'error')).toEqual(mode === 'busy' || mode === 'o-offline-recovery'
           ? [expect.objectContaining({ data: expect.objectContaining({ reason: 'remote_agent_restarted' }) })] : []);
         expect(await liveDirectGuestSession('restart-task')!.probeReconnect!()).toBe('ok');
         await handle.send({ type: 'user', content: 'continue' });
@@ -414,7 +567,7 @@ describe('remote agent round trip', () => {
         expect(sends).toBe(mode === 'idle' ? 2 : 3);
       }
     } finally {
-      offline = false; granted = true;
+      offline = false; ownerOffline = false; granted = true;
       const closing = handle?.close({ reason: 'account-boundary' });
       await vi.advanceTimersByTimeAsync(5_000);
       await closing;
@@ -1228,9 +1381,12 @@ describe('remote agent round trip', () => {
       expect(host.limitUsage().total).toBe(1);
       cancelPendingRemoteStart(sessionId);
       await expect(starting).rejects.toThrow('[REMOTE_AGENT_EXPIRED]');
-      await vi.waitFor(() => expect(host.limitUsage().total).toBe(0), { interval: 1, timeout: 1000 });
+      // Cancellation ends the controller's wait, but the native startup still
+      // owns its slot until the late handle has actually been closed.
+      expect(host.limitUsage().total).toBe(1);
       finishStart();
       await vi.waitFor(() => expect(closed).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(host.limitUsage().total).toBe(0), { interval: 1, timeout: 1000 });
       expect(hostSends).toEqual([]);
     } finally {
       finishStart();
@@ -1240,24 +1396,31 @@ describe('remote agent round trip', () => {
 
   // #6420: a new remote run carries the task Host clear epoch, independent of source clocks.
   // 插件工具经隧道回到本机：花名册按本机真实工作目录现算，经 open 带到 Agent 的启动选项。
-  // 空花名册也要带到，否则对方会回退到它自己的插件。
+  // 空花名册也要带到，否则对方会回退到它自己的插件。伙伴与本机引擎同一判断：V2 伙伴在自己项目里的
+  // 对话按普通任务带本机花名册；隔离运行的伙伴(群、IM 专线)带空花名册，不能让对方用它自己装的插件。
   it('brings this computer\'s plugin roster, even an empty one, to the agent computer', async () => {
     const host = createHost();
     const invoke = makeDeps(host).invoke;
     const log = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    const roster = 'TASK COMPUTER GHOST ROSTER';
     try {
-      for (const roster of ['TASK COMPUTER GHOST ROSTER', '']) {
-        const ghostRosterPrompt = vi.fn(() => roster);
+      for (const [name, local, botRuntimeProfile, expected, readsRoster] of [
+        ['ordinary', roster, undefined, roster, true],
+        ['empty', '', undefined, '', true],
+        ['v2-project', roster, teammateProfile(true), roster, true],
+        ['isolated-teammate', roster, teammateProfile(false), '', false],
+      ] as const) {
+        const ghostRosterPrompt = vi.fn(() => local);
         const start = createDeviceAgentStarter({
           remoteInvoke: async (_deviceId, _channel, args) => ({ ok: true, result: await invoke(args) }),
           rgPath: () => RG, mcpProviders: () => [], prepareMcpBridge: async () => null, makerMemory: () => undefined,
           ghostRosterPrompt, captureKnownFileBefore: async () => {}, noteOpaqueTurnChange: () => {}, logger: log,
         });
         const handle = await start({ agentKind: 'claude-code', deviceId: 'agent-computer', options: {
-          sessionId: `roster-${roster.length}`, workingDir: project, model: 'm',
+          sessionId: `roster-${name}`, workingDir: project, model: 'm', ...(botRuntimeProfile ? { botRuntimeProfile } : {}),
         } });
-        expect(ghostRosterPrompt).toHaveBeenCalledWith(project);
-        expect(hostedStartOptions(hostInputs.at(-1)!).ghostRosterSnapshot).toBe(roster);
+        expect(ghostRosterPrompt, name).toHaveBeenCalledTimes(readsRoster ? 1 : 0);
+        expect(hostedStartOptions(hostInputs.at(-1)!).ghostRosterSnapshot, name).toBe(expected);
         await handle.close({ reason: 'navigation' });
       }
     } finally { await host.dispose(); }
@@ -1277,8 +1440,8 @@ describe('remote agent round trip', () => {
     };
     const pr = skill('pr');
     const learn = skill('learn');
-    // 收集器本身见 mirror.test.ts：这里按收到的托管 Skill 原样产出同步内容。
-    collectPersonalConfig.mockImplementationOnce(async (...args: unknown[]) => {
+    // 收集器本身见 mirror.test.ts：这里按收到的托管 Skill 原样产出同步内容(两个伙伴任务 + 一个普通任务)。
+    const syncReceived = async (...args: unknown[]) => {
       const { managedSkills = [] } = args[2] as { managedSkills?: Array<{ command: string; dir: string }> };
       return {
         personal: {
@@ -1289,7 +1452,8 @@ describe('remote agent round trip', () => {
         },
         roots: [],
       };
-    });
+    };
+    for (let run = 0; run < 3; run += 1) collectPersonalConfig.mockImplementationOnce(syncReceived);
     try {
       const start = createDeviceAgentStarter({
         remoteInvoke: async (_deviceId, _channel, args) => ({ ok: true, result: await invoke(args) }),
@@ -1297,6 +1461,21 @@ describe('remote agent round trip', () => {
         managedSkills: async () => [pr, learn], disabledSkillPaths: () => [learn.path],
         captureKnownFileBefore: async () => {}, noteOpaqueTurnChange: () => {}, logger: log,
       });
+      // V2 伙伴在自己项目里的对话与普通任务一样带全部启用的托管 Skill：它的伙伴授权为空，本机引擎也不套用。
+      // 隔离运行的伙伴仍只带授权过的(这里没有)。
+      for (const [name, botRuntimeProfile, expected] of [
+        ['v2-project', teammateProfile(true), ['cindy:pr']],
+        ['isolated-teammate', teammateProfile(false), []],
+      ] as const) {
+        const teammate = await start({ agentKind: 'claude-code', deviceId: 'agent-computer', options: {
+          sessionId: `managed-skills-${name}`, workingDir: project, model: 'm', botRuntimeProfile,
+        } });
+        const collected = collectPersonalConfig.mock.calls.at(-1)?.[2] as
+          { managedSkills?: Array<{ command: string }>; disabledSkillPaths?: string[] } | undefined;
+        expect(collected?.managedSkills?.map((skill) => skill.command), name).toEqual(expected);
+        expect(collected?.disabledSkillPaths, name).toEqual(name === 'v2-project' ? [learn.path] : undefined);
+        await teammate.close({ reason: 'navigation' });
+      }
       const handle = await start({ agentKind: 'claude-code', deviceId: 'agent-computer', options: {
         sessionId: 'managed-skills', workingDir: project, model: 'm',
       } });
@@ -1386,7 +1565,7 @@ describe('shared startup lease budget', () => {
     const owner = 'share:startup-budget';
     const target = providerShareHostPeer('startup-budget', 'executor-m');
     const generation = '11111111-1111-4111-8111-111111111111';
-    const calls: Array<{ device: string; op: string; sessionId?: string; generation?: string; runId?: string }> = [];
+    const calls: Array<{ device: string; op: string; method?: string; model?: string; callId?: string; sessionId?: string; generation?: string; runId?: string }> = [];
     const runs = new Map<string, Run>();
     const sessions = new Map<string, string>();
     const disposed: string[] = [];
@@ -1394,18 +1573,34 @@ describe('shared startup lease budget', () => {
     const prepare = deferred();
     const allocation = deferred();
     let allocations = 0;
-    const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, blockClose: false, blockPrepare: false, blockAllocation: false };
+    const guestSwitch = createProviderGroupGuestSwitch(() => Date.now());
+    const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, holdSend: false, holdModel: false,
+      startFailure: '', startFailureName: 'AgentStartupStoppedError', localFailure: '',
+      switchAvailable: true, pauseSwitch: false, legacySwitch: false, closeLinkOnFailure: false,
+      blockClose: false, blockPrepare: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
     const started = (run: Run) => emit(run, { t: 'started', handle: { id: 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } });
     vi.spyOn(RemoteAgentPoller.prototype, 'register').mockImplementation(run => {
       runs.set(run.runId, run);
-      if (state.ready || sessions.get(run.runId) === 'sibling') started(run);
+      if (state.startFailure) {
+        if (state.closeLinkOnFailure) historyCloseEpoch.mockReturnValue(1);
+        emit(run, { t: 'start-failed', error: { code: 'AGENT_ERROR', message: state.startFailure, name: state.startFailureName } });
+      }
+      else if (state.ready || sessions.get(run.runId) === 'sibling') started(run);
     });
     vi.spyOn(RemoteAgentPoller.prototype, 'unregister').mockImplementation(() => {});
     const remoteInvoke = vi.fn(async (device: string, _channel: string, args: unknown[]) => {
-      const request = args[0] as { op: string; sessionId?: string; generation?: string; runId?: string; callId?: string; payload?: { json?: { sessionId: string } } };
+      const request = args[0] as { op: string; method?: string; sessionId?: string; generation?: string; runId?: string; callId?: string; payload?: { json?: { sessionId: string } } };
       calls.push({ device, ...request });
+      if (device === owner && state.ownerOffline) throw Object.assign(new Error('owner offline'), { code: 'NOT_CONNECTED' });
+      // remoteBackgroundInvoke resolves `share:` before any transport and throws the share's own state.
+      if (device === owner && state.ownerPaused) throw new Error('[REMOTE_AGENT_SHARE_PAUSED] the owner has paused this share');
       if (request.op === 'direct-locate') return { ok: true, result: { deviceId: 'executor-m', agentKind: 'codex' } };
+      if (request.op === 'direct-switch') {
+        if (state.pauseSwitch) await allocation.promise;
+        return { ok: true, result: state.switchAvailable ? { token: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          ...(!state.legacySwitch ? { generation: request.generation } : {}) } : {} };
+      }
       if (request.op === 'allocate') {
         const grant = ++allocations === 1 ? generation : '22222222-2222-4222-8222-222222222222';
         if (state.blockAllocation) await allocation.promise;
@@ -1417,7 +1612,14 @@ describe('shared startup lease budget', () => {
         return { ok: true, result: { version: 1, maxRuns: 10, uploadChunkBytes: 65536, maxPayloadBytes: 1000000,
           virtualWorkspace: true, directGuestExecution: true, agents: [{ kind: 'codex', available: true }] } };
       }
-      if (request.op === 'open') sessions.set(request.runId!, request.payload!.json!.sessionId);
+      if (request.op === 'open') {
+        if (state.loseGrantOnOpen) {
+          state.loseGrantOnOpen = false;
+          return { ok: false, error: { code: 'IPC_ERROR',
+            message: '[REMOTE_AGENT_INVALID] this shared task is not authorized on this computer' } };
+        }
+        sessions.set(request.runId!, request.payload!.json!.sessionId);
+      }
       if (request.op === 'close') {
         if (state.blockClose) await pendingClose.promise;
         const run = runs.get(request.runId!);
@@ -1425,7 +1627,9 @@ describe('shared startup lease budget', () => {
       }
       if (request.op === 'call') {
         const run = runs.get(request.runId!);
-        if (run) emit(run, { t: 'result', callId: request.callId, ok: true, value: null });
+        if (run && !(state.holdSend && request.method === 'send') && !(state.holdModel && request.method === 'setModel')) {
+          emit(run, { t: 'result', callId: request.callId, ok: true, value: null });
+        }
       }
       return { ok: true, result: {} };
     });
@@ -1433,28 +1637,536 @@ describe('shared startup lease budget', () => {
       remoteInvoke, renewSharedProviderLink: async () => undefined,
       rgPath: () => RG, codexPath: () => 'fixture-never-spawned', mcpProviders: () => [],
       prepareMcpBridge: async (_providers, _logger, ctx) => {
+        if (state.localFailure) throw new Error(state.localFailure);
         if (state.blockPrepare) await prepare.promise;
         return { mcpBridge: { servers: [{ name: 'fixture', url: 'http://fixture.invalid/' }] },
           disposeSessionCtx: () => { disposed.push(ctx.sessionId!); } } as never;
       },
       makerMemory: () => undefined, captureKnownFileBefore: async () => undefined, noteOpaqueTurnChange() {},
+      groupSwitch: guestSwitch,
       logger: historyLogger,
     });
     historyInvoke.mockImplementation(remoteInvoke);
     historyOpenLink.mockResolvedValue(undefined);
     historyCloseEpoch.mockReturnValue(0);
     historyCrossRegion.mockReturnValue(false);
-    return { owner, target, generation, state, calls, runs, disposed, pendingClose, prepare, allocation, emit, started,
+    return { owner, target, generation, state, calls, runs, disposed, pendingClose, prepare, allocation, emit, started, guestSwitch,
       open: (sessionId = 'pending', deviceId = owner, model = 'm', resumeSessionId?: string) => start({ agentKind: 'codex', deviceId,
         options: { sessionId, workingDir: project, model, ...(resumeSessionId ? { resumeSessionId } : {}) } }) };
   }
   beforeEach(() => {
+    for (const id of ['pending', 'history', 'legacy', 'historical', 'sibling', 'history-renew', 'history-transient',
+      'history-renew-model', 'history-send-old', 'history-lost']) {
+      forgetSharedTaskAuthorization('share:startup-budget', id);
+    }
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
   });
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); historyInvoke.mockReset(); historyOpenLink.mockReset(); });
 
+  // Unit, direct-execution authorization contract: prompt preparation can keep
+  // a send pending. Existing renewal cases returned its RPC result immediately,
+  // hiding the shared send/authorization queue that let an online task expire.
+  // A 90s grant puts renewal at the first 60s tick without real-time waiting.
+  it.each([false, true])('renews during an unsettled send without extending an offline grant: ownerOffline=%s', async ownerOffline => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 90_000; f.state.holdSend = true;
+    const handle = await f.open();
+    let sendSettled = false;
+    const sending = handle.send({ type: 'user', content: 'long running turn' }).finally(() => { sendSettled = true; });
+    // Closing/expiry rejects a pending RPC; retain the result for cleanup.
+    const outcome = sending.catch(() => undefined);
+    try {
+      await flush();
+      expect(f.calls.filter(call => call.op === 'call')).toHaveLength(1);
+      f.state.ownerOffline = ownerOffline;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(sendSettled).toBe(false);
+      expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(31_000);
+      if (ownerOffline) {
+        expect(f.disposed).toContain('pending');
+        expect(liveSharedTaskTarget('pending', f.owner)).toBeNull();
+      } else {
+        expect(f.disposed).toEqual([]);
+        expect(liveSharedTaskTarget('pending', f.owner)).toBe(f.target);
+        expect(sendSettled).toBe(false);
+      }
+      // Renewal never replays the send or reopens the executor.
+      expect(f.calls.filter(call => call.op === 'call')).toHaveLength(1);
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
+    } finally {
+      f.state.ownerOffline = false;
+      await handle.close({ reason: 'account-boundary' });
+      await outcome;
+    }
+  });
+
+  it('keeps the changing model grant until its RPC settles before renewing again', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 360_000; f.state.holdModel = true;
+    const handle = await f.open();
+    await vi.advanceTimersByTimeAsync(30_000);
+    const changing = handle.setModel!('m2');
+    const outcome = changing.catch(() => undefined);
+    try {
+      await flush();
+      expect(f.calls.filter(call => call.op === 'allocate').map(call => call.model)).toEqual(['m', 'm2']);
+      await vi.advanceTimersByTimeAsync(270_000);
+      // The model grant is already m2, but the local handle still reports m.
+      // A renewal here must not replace M's m2 grant with that old snapshot.
+      expect(f.calls.filter(call => call.op === 'allocate').map(call => call.model)).toEqual(['m', 'm2']);
+      const call = f.calls.find(call => call.op === 'call' && call.method === 'setModel')!;
+      f.emit(f.runs.get(call.runId!)!, { t: 'result', callId: call.callId, ok: true, value: null });
+      await changing;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(f.calls.filter(call => call.op === 'allocate').map(call => call.model)).toEqual(['m', 'm2', 'm2']);
+      expect(f.disposed).toEqual([]);
+    } finally {
+      await handle.close({ reason: 'account-boundary' });
+      await outcome;
+    }
+  });
+
+  // Unit: real starter -> remote start-failed -> group startup recovery -> fresh
+  // open. Previously only running handles were covered; a pinned native resume
+  // released its grant before O could authorize the handoff (direct-execution §7).
+  it.each(['quota', 'auth', 'legacy-message', 'legacy-owner', 'no-spare', 'revoked', 'cancelled', 'takeover'] as const)(
+    'recovers a confirmed native startup failure without replaying its native ID: %s', async mode => {
+      const f = fixture(); f.state.duration = 60_000;
+      f.state.startFailure = mode === 'auth' ? '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] login required'
+        : mode === 'legacy-message' ? 'The task subscription account requires login or quota reset'
+          : '[SUBSCRIPTION_ACCOUNT_LIMITED] usage window exhausted; resets_at: 2000000000000';
+      const row = { agentKind: 'codex', model: 'm', providerId: 'openai', agentDeviceId: f.owner,
+        sdkSessionId: 'native-only-on-m' as string | null, remoteHostId: null, status: 'active', workingDir: project };
+      const service = createProviderGroupService({
+        guestSwitch: f.guestSwitch, directGuestSession: liveDirectGuestSession,
+        readSessionRow: async () => row, readBinding: () => null, now: () => Date.now(), log: historyLogger,
+        router: { resetTurn() {} },
+      } as unknown as ProviderGroupServiceDeps);
+      const failure = await f.open('historical', f.owner, 'm', row.sdkSessionId!).catch(error => error);
+      expect(failure).toBeInstanceOf(AgentStartupStoppedError);
+      expect(failure.message).toBe(f.state.startFailure);
+      expect(f.calls.some(call => call.op === 'direct-release')).toBe(false);
+      expect(service.mayHandleTurnError('historical', { message: f.state.startFailure })).toBe(true);
+      f.state.switchAvailable = mode !== 'no-spare';
+      f.state.legacySwitch = mode === 'legacy-owner';
+      f.state.pauseSwitch = ['revoked', 'cancelled', 'takeover'].includes(mode);
+      const pending = service.prepareGuestStartSwitch('historical');
+      await flush();
+      if (mode === 'revoked') guestPermission.epoch++;
+      if (mode === 'cancelled') cancelPendingRemoteStart('historical');
+      if (mode === 'takeover') service.noteUserAction('historical');
+      f.allocation.resolve();
+      const recovery = await pending;
+      const canRecover = ['quota', 'auth', 'legacy-message'].includes(mode);
+      expect(!!recovery).toBe(canRecover);
+      const switches = f.calls.filter(call => call.op === 'direct-switch');
+      expect(switches).toEqual([expect.objectContaining({ device: f.owner, sessionId: 'historical', generation: f.generation })]);
+      if (recovery) {
+        expect(recovery.isCurrent()).toBe(true);
+        expect(f.guestSwitch.takeForOpen('historical')).toBeTruthy();
+        let handoff = '';
+        const boundary = vi.fn(async () => 'boundary');
+        await relocateForFreshStart({
+          getSessionRow: async () => ({ ...row }) as never,
+          listMessagesForHandoff: async () => [{ role: 'user', content: 'keep the completed diagnosis', createdAt: 1 }],
+          applyAgentSwitchToDb: async (_id, patch) => { Object.assign(row, patch); },
+          setSessionProvider() {}, insertBoundaryMessage: boundary,
+          setPendingHandoff: (_id, text) => { handoff = text; },
+          applyResumeFallbackAtomically: async () => {}, log: historyLogger,
+        }, { sessionId: 'historical', agentDeviceId: f.owner, providerId: 'openai', sharedRelocation: true,
+          assertCurrent: () => { if (!recovery.isCurrent()) throw new Error('recovery superseded'); } });
+        expect(row.sdkSessionId).toBeNull();
+        expect(handoff).toContain('keep the completed diagnosis');
+        expect(boundary).toHaveBeenCalledWith('historical', expect.objectContaining({
+          fromSdkSessionId: 'native-only-on-m', nativeHistory: 'fallback', handoff,
+        }));
+        recovery.dispose();
+        f.state.startFailure = ''; f.state.ready = true;
+        const handle = await f.open('historical');
+        expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.target, f.owner]);
+        expect(f.calls.filter(call => call.op === 'open').at(-1)).toMatchObject({ payload: { json: {
+          groupSwitchToken: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', options: { model: 'm' },
+        } } });
+        await handle.close();
+      } else {
+        expect(f.guestSwitch.takeForOpen('historical')).toBeUndefined();
+        expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
+      }
+      expect(f.calls.filter(call => call.op === 'direct-release')).toEqual([
+        expect.objectContaining({ generation: f.generation, sessionId: 'historical' }),
+      ]);
+      expect(liveDirectGuestSession('historical')).toBeNull();
+    },
+  );
+
+  it('does not turn a local preparation error into executor failure evidence', async () => {
+    const f = fixture();
+    f.state.localFailure = 'The task subscription account requires login or quota reset';
+    await expect(f.open('historical', f.owner, 'm', 'native-only-on-m')).rejects.toThrow(f.state.localFailure);
+    expect(liveDirectGuestSession('historical')).toBeNull();
+    expect(f.calls.some(call => call.op === 'open' || call.op === 'direct-switch')).toBe(false);
+    expect(f.calls.filter(call => call.op === 'direct-release')).toEqual([
+      expect.objectContaining({ generation: f.generation }),
+    ]);
+  });
+
+  it.each(['AgentStartupCleanupPendingError', 'Error'])(
+    'does not relocate an unconfirmed native process after %s', async name => {
+      const f = fixture();
+      f.state.startFailure = '[SUBSCRIPTION_ACCOUNT_LIMITED] usage window exhausted';
+      f.state.startFailureName = name;
+      await expect(f.open('historical', f.owner, 'm', 'native-only-on-m')).rejects.toThrow('usage window');
+      expect(liveDirectGuestSession('historical')).toBeNull();
+      expect(f.calls.some(call => call.op === 'direct-switch')).toBe(false);
+    },
+  );
+
+  it('does not recreate a recovery grant after explicit link close during M startup', async () => {
+    const f = fixture();
+    f.state.startFailure = '[SUBSCRIPTION_ACCOUNT_LIMITED] usage window exhausted';
+    f.state.closeLinkOnFailure = true;
+    await expect(f.open('historical', f.owner, 'm', 'native-only-on-m')).rejects.toThrow('usage window');
+    expect(liveDirectGuestSession('historical')).toBeNull();
+    expect(f.calls.some(call => call.op === 'direct-switch')).toBe(false);
+    expect(f.calls.filter(call => call.op === 'direct-release')).toEqual([
+      expect.objectContaining({ generation: f.generation }),
+    ]);
+  });
+
+  it('retires only the failed startup generation when a new open takes over', async () => {
+    const f = fixture(); f.state.duration = 60_000;
+    f.state.startFailure = '[SUBSCRIPTION_ACCOUNT_LIMITED] usage window exhausted';
+    await expect(f.open('historical', f.owner, 'm', 'native-only-on-m')).rejects.toThrow('usage window');
+    const old = liveDirectGuestSession('historical')!.captureRecovery!()!;
+    f.state.startFailure = ''; f.state.ready = true;
+    const handle = await f.open('historical', f.owner, 'm', 'native-only-on-m');
+    try {
+      expect(old.isCurrent()).toBe(false);
+      expect(await old.requestSwitch()).toBeUndefined();
+      old.dispose!();
+      expect(f.calls.filter(call => call.op === 'direct-release')).toEqual([
+        expect.objectContaining({ generation: f.generation }),
+      ]);
+      expect(f.calls.some(call => call.op === 'direct-switch')).toBe(false);
+      expect(liveDirectGuestSession('historical')?.captureRecovery?.()?.isCurrent()).toBe(true);
+    } finally { await handle.close({ reason: 'account-boundary' }); }
+  });
+
   // Unit, F6: terminal cancellation must cross the create -> starter composition boundary.
   // Real starter + startRemote + runClient; native and transport IO use the existing fixture.
+  it('reopens native history on its original M during an O outage without renewing the original grant', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 10 * 60_000;
+    const first = await f.open('historical');
+    await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    f.state.ownerOffline = true;
+    const before = f.calls.length;
+    const resumed = await f.open('historical', f.owner, 'm', 'native-only-on-m');
+    expect(f.calls.slice(before).some(call => call.device === f.owner)).toBe(false);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.target, f.target]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+    expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+    expect(f.disposed).toEqual(['historical', 'historical']);
+    await resumed.close();
+  });
+
+  // Unit, direct group quota recovery: capture through the real starter, then
+  // close its handle. Existing history cases tested reopen, not the recovery
+  // capability which must survive runtime drain without surviving user/grant boundaries.
+  it.each(['runtime-close', 'explicit-close', 'revoked', 'link-closed', 'expired', 'replaced'] as const)(
+    'retains the original direct recovery grant only across runtime close: %s', async mode => {
+      const f = fixture(); f.state.ready = true; f.state.duration = 60_000;
+      const handle = await f.open('historical');
+      const recovery = liveDirectGuestSession('historical')?.captureRecovery?.();
+      expect(recovery?.isCurrent()).toBe(true);
+      await handle.close({ reason: mode === 'explicit-close' ? 'account-boundary' : 'navigation' });
+      expect(liveDirectGuestSession('historical')).toBeNull();
+      let replacement: AgentSessionHandle | undefined;
+      try {
+        if (mode === 'revoked') guestPermission.epoch++;
+        if (mode === 'link-closed') historyCloseEpoch.mockReturnValue(1);
+        if (mode === 'expired') await vi.advanceTimersByTimeAsync(60_001);
+        if (mode === 'replaced') replacement = await f.open('historical');
+        expect(recovery?.isCurrent()).toBe(mode === 'runtime-close');
+        if (mode !== 'runtime-close') {
+          const before = f.calls.length;
+          expect(await recovery?.requestSwitch()).toBeUndefined();
+          expect(f.calls).toHaveLength(before);
+        }
+      } finally { await replacement?.close({ reason: 'account-boundary' }); }
+    },
+  );
+
+  it('does not renew a reused historical grant after its original renewal window', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('history-renew'); await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(25 * 60_000);
+    const resumed = await f.open('history-renew', f.owner, 'm', 'native-only-on-m');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    await resumed.close();
+  });
+
+  it('does not fall back to the online owner when the cloud assignment lookup times out', async () => {
+    const f = fixture(); f.state.ready = true;
+    vi.spyOn(availability, 'lookupShareAvailability').mockRejectedValueOnce(new Error('lookup timeout'));
+    await expect(f.open('cloud-pinned-no-local-cache')).rejects.toThrow('lookup timeout');
+    expect(f.calls.filter(call => call.op === 'allocate' || call.op === 'open')).toEqual([]);
+  });
+
+  // Unit: a failed O lookup is a known stage, not an unspecified M failure.
+  it('reports a failed owner lookup without allocating or opening another executor', async () => {
+    const f = fixture();
+    historyInvoke.mockRejectedValueOnce(Object.assign(new Error('owner unavailable'), { code: 'DEVICE_OFFLINE' }));
+    await expect(authorizeSharedTaskHistory(f.owner, 'missing-owner', 'codex', 'm'))
+      .rejects.toThrow('[SHARED_TASK_RECOVERY_offline] [SHARED_TASK_STAGE_owner]');
+    expect(f.calls.filter(call => call.op === 'allocate' || call.op === 'open')).toHaveLength(0);
+  });
+
+  it('keeps a historical grant through a transient M probe failure', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('history-transient'); await first.close({ reason: 'navigation' });
+    historyInvoke.mockRejectedValueOnce(Object.assign(new Error('offline'), { code: 'DEVICE_OFFLINE' }));
+    await expect(f.open('history-transient', f.owner, 'm', 'native-only-on-m'))
+      .rejects.toThrow('[SHARED_TASK_RECOVERY_offline] [SHARED_TASK_STAGE_capability] [SHARED_TASK_CODE_DEVICE_OFFLINE]');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    f.state.ownerOffline = true;
+    const resumed = await f.open('history-transient', f.owner, 'm', 'native-only-on-m');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    await resumed.close();
+  });
+
+  // Unit: a real restarted M rejects the scoped link before it can answer caps.
+  // The old fixture only lost the task grant after caps had already succeeded.
+  it.each(['INVOKE_TIMEOUT', 'TIMEOUT', 'DEVICE_UNRESPONSIVE'])(
+    'reauthorizes the original historical executor after a %s caps failure without extending retention', async code => {
+      const f = fixture(); f.state.ready = true; f.state.duration = 10 * 60_000;
+      const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      f.state.duration = 30 * 60_000;
+      historyInvoke.mockRejectedValueOnce(Object.assign(new Error('no link-accept within 30000ms'), { code }));
+      // The failed caps RPC already started recovery before O installed the
+      // new grant. The first explicit open joins that pre-grant flight.
+      const opensBefore = historyOpenLink.mock.calls.length;
+      historyOpenLink.mockRejectedValueOnce(Object.assign(new Error('pre-grant handshake timed out'), { code: 'TIMEOUT' }));
+      const resumed = await f.open('historical', f.owner, 'm', 'native-only-on-m');
+      expect(historyOpenLink.mock.calls.length - opensBefore).toBe(2);
+      expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+      expect(f.calls.filter(call => call.op === 'allocate').at(-1)).toMatchObject({
+        device: f.owner, preferredExecutorDeviceId: 'executor-m', sessionId: 'historical', model: 'm',
+      });
+      expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.target, f.target]);
+      expect(f.calls.filter(call => call.op === 'open').at(-1)).toMatchObject({
+        payload: { json: { options: { resumeSessionId: 'native-only-on-m' } } },
+      });
+      await vi.advanceTimersByTimeAsync(8 * 60_000 + 1);
+      expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+      expect(f.disposed).toEqual(['historical', 'historical']);
+      await resumed.close();
+    },
+  );
+
+  it.each(['ACCESS_REVOKED', 'REMOTE_DISABLED'])('does not reauthorize historical caps denial %s', async code => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 10 * 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    historyInvoke.mockRejectedValueOnce(Object.assign(new Error('explicit permission denial'), { code }));
+    await expect(f.open('historical', f.owner, 'm', 'native-only-on-m'))
+      .rejects.toThrow(`[SHARED_TASK_RECOVERY_denied] [SHARED_TASK_STAGE_capability] [SHARED_TASK_CODE_${code}]`);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
+  });
+
+  it('re-arms renewal after an online model change on a reused history route', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('history-renew-model'); await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(25 * 60_000);
+    const resumed = await f.open('history-renew-model', f.owner, 'm', 'native-only-on-m');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    await resumed.setModel!('m2');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(3);
+    await resumed.close();
+  });
+
+  it('does not extend a reused history grant through a send at its old boundary', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('history-send-old'); await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(28 * 60_000);
+    const resumed = await f.open('history-send-old', f.owner, 'm', 'native-only-on-m');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await resumed.send({ type: 'user', content: 'must not renew' });
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(60_000 + 1);
+    expect(liveSharedTaskTarget('history-send-old', f.owner)).toBeNull();
+    await resumed.close();
+  });
+
+  // Unit: caps can succeed through another task's grant while this history's
+  // task-scoped open is denied. Both restart paths must keep the original window.
+  it('does not re-arm renewal when O restores a reused historical grant to the original executor', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('history-lost'); await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    f.state.loseGrantOnOpen = true;
+    const resumed = await f.open('history-lost', f.owner, 'm', 'native-only-on-m');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(8 * 60_000 + 1);
+    expect(liveSharedTaskTarget('history-lost', f.owner)).toBeNull();
+    await resumed.close();
+  });
+
+  // Unit: a second M restart after a history handle is live must not turn
+  // recovery into renewal; exercise the real released -> ensure -> open path.
+  it('keeps the original history window when its live handle reconnects after another M restart', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    const resumed = await f.open('historical', f.owner, 'm', 'native-only-on-m');
+    const liveRun = [...f.runs.values()].at(-1)!;
+    f.emit(liveRun, { t: 'closed', reason: 'provider-restarting' });
+    f.state.loseGrantOnOpen = true;
+    await resumed.send({ type: 'user', content: 'resume on the original executor' });
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+    const disposedBeforeExpiry = f.disposed.length;
+    await vi.advanceTimersByTimeAsync(28 * 60_000 + 1);
+    expect(f.disposed).toHaveLength(disposedBeforeExpiry + 1);
+    expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+    await resumed.close();
+  });
+
+  it('reconnects after a queued done and idle reclaim arrive in one poll', async () => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    const session = new Session({ id: 'historical', agentKind: 'codex', workDir: project,
+      handle, capabilities: {} as never, logger: historyLogger as never, turnStallMs: 0 });
+    try {
+      expect(await session.send('first')).toMatchObject({ accepted: true });
+      const run = [...f.runs.values()].at(-1)!;
+      run.onData(Buffer.from([
+        JSON.stringify({ t: 'event', event: { type: 'done', source: 'codex', data: {} } }),
+        JSON.stringify({ t: 'closed', reason: 'closed', idleReclaimed: true }), '',
+      ].join('\n')), false);
+      await flush();
+      expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 1 });
+      expect(f.disposed).toEqual([]);
+      expect(await session.send('second')).toMatchObject({ accepted: true });
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+      expect(f.disposed).toEqual([]);
+    } finally { await session.close(); }
+  });
+
+  it.each([false, true])('preserves a live run close receipt through the real starter (idle reclaim=%s)', async idleReclaimed => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    try {
+      await handle.send({ type: 'user', content: 'work' });
+      const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'state', state: { turnRunning: false } });
+      f.emit(run, { t: 'closed', reason: idleReclaimed ? 'closed' : 'ended', idleReclaimed });
+      const events: AgentEvent[] = [];
+      for await (const event of handle.events()) events.push(event);
+      expect(events.filter(event => event.type === 'error')).toEqual([
+        expect.objectContaining({ data: expect.objectContaining({ reason: 'remote_agent_closed',
+          remoteCloseReason: idleReclaimed ? 'closed' : 'ended', remoteRunId: run.runId,
+          sdkError: expect.stringContaining(run.runId) }) }),
+      ]);
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
+    } finally { await handle.close(); }
+  });
+
+  it('ends an already running direct task on a known pause and requires fresh authorization after resume', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const handle = await f.open('historical');
+    guestPermission.status = 'paused'; guestPermission.epoch++;
+    for (const listener of guestPermission.listeners) listener();
+    await flush();
+    expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+    expect(f.disposed).toEqual(['historical']);
+    guestPermission.status = 'active'; guestPermission.epoch++; f.state.ownerOffline = true;
+    await expect(f.open('historical', f.owner, 'm', 'native-original')).rejects.toThrow('[SHARED_TASK_RECOVERY_relay] [SHARED_TASK_STAGE_owner] [SHARED_TASK_CODE_NOT_CONNECTED]');
+    expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
+    await handle.close();
+  });
+
+  // Real guest (2026-11-10): after the owner paused the share, the next send wrapped the guest's
+  // own [REMOTE_AGENT_SHARE_PAUSED] as an unknown owner-stage recovery ("pick another computer").
+  it('reports an owner pause as the share state, not as a machine recovery failure', async () => {
+    const f = fixture(); f.state.ready = true; f.state.ownerPaused = true;
+    // Resuming native history asks O where the task lives; that lookup is where the pause surfaces.
+    const opening = f.open('historical', f.owner, 'm', 'native-original');
+    await expect(opening).rejects.toThrow(/^\[REMOTE_AGENT_SHARE_PAUSED\]/);
+    await expect(opening).rejects.not.toThrow('SHARED_TASK_RECOVERY');
+    expect(f.calls.filter(call => call.op === 'open' || call.op === 'allocate')).toHaveLength(0);
+  });
+
+  it.each(['send', 'setModel'] as const)('ends the original grant on wall-clock expiry before %s even if the monotonic clock did not advance', async action => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    vi.setSystemTime(Date.now() + 2001);
+    await expect(action === 'send' ? handle.send({ type: 'user', content: 'must not run' })
+      : handle.setModel!('other-model')).rejects.toThrow('REMOTE_AGENT_EXPIRED');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+    await handle.close();
+  });
+
+  it('re-authorizes only the original executor when its cached task grant was lost in an M restart', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(20_000);
+    f.state.duration = 30 * 60_000;
+    f.state.loseGrantOnOpen = true;
+    const resumed = await f.open('historical', f.owner, 'm', 'native-only-on-m');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+    expect(f.calls.filter(call => call.op === 'direct-locate')).toHaveLength(0);
+    expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.target, f.target, f.target]);
+    expect(liveSharedTaskTarget('historical', f.owner)).toBe(f.target);
+    const disposedBeforeExpiry = f.disposed.length;
+    await vi.advanceTimersByTimeAsync(40_000 + 1);
+    expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+    expect(f.disposed).toHaveLength(disposedBeforeExpiry + 1);
+    await resumed.close();
+  });
+
+  it('cannot return a cached grant after it was explicitly released while the live M probe was in flight', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    const gate = deferred(), invoke = historyInvoke.getMockImplementation()!;
+    historyInvoke.mockImplementationOnce(async (...args: unknown[]) => { await gate.promise; return invoke(...args); });
+    const pending = authorizeSharedTaskHistory(f.owner, 'historical', 'codex', 'm'); void pending.catch(() => undefined);
+    await flush(); forgetSharedTaskAuthorization(f.owner, 'historical'); gate.resolve();
+    await expect(pending).rejects.toThrow('[SHARED_TASK_RECOVERY_history] [SHARED_TASK_STAGE_authorization]');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+  });
+
+  it('does not reopen historical M after its retained window is released during O reauthorization', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 10 * 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    f.state.loseGrantOnOpen = true; f.state.blockAllocation = true;
+    const pending = f.open('historical', f.owner, 'm', 'native-only-on-m'); void pending.catch(() => undefined);
+    try {
+      await vi.waitFor(() => expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2));
+      forgetSharedTaskAuthorization(f.owner, 'historical');
+    } finally { f.allocation.resolve(); }
+    await expect(pending).rejects.toThrow('[SHARED_TASK_RECOVERY_history] [SHARED_TASK_STAGE_authorization]');
+    expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+  });
+
+  it.each(['model', 'task', 'explicit-link-close', 'wall-expiry'] as const)('never reuses a historical grant across %s during O outage', async boundary => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    f.state.ownerOffline = true;
+    if (boundary === 'explicit-link-close') historyCloseEpoch.mockReturnValue(1);
+    if (boundary === 'wall-expiry') vi.setSystemTime(Date.now() + 30 * 60_000);
+    const before = f.calls.filter(call => call.op === 'open').length;
+    await expect(f.open(boundary === 'task' ? 'unrelated' : 'historical', f.owner,
+      boundary === 'model' ? 'other-model' : 'm', 'native-only-on-m')).rejects.toThrow('[SHARED_TASK_RECOVERY_relay] [SHARED_TASK_STAGE_owner] [SHARED_TASK_CODE_NOT_CONNECTED]');
+    expect(f.calls.filter(call => call.op === 'open')).toHaveLength(before);
+  });
+
   it.each(['allocate', 'MCP', 'started', 'ordinary'] as const)('cancels the exact creation during %s without late fallback/open', async stage => {
     const f = fixture(), owner = {};
     f.state.blockAllocation = stage === 'allocate';
@@ -1708,7 +2420,26 @@ describe('shared startup lease budget', () => {
     f.state.duration = undefined;
     await expect(authorizeSharedTaskExecutor(f.owner, 'legacy', 'codex', 'm', 'executor-m')).resolves.toMatchObject({ target: f.target, direct: true });
     historyInvoke.mockResolvedValueOnce({ ok: true, result: { deviceId: 'different-m', generation: f.generation, leaseDurationMs: 2000 } });
-    await expect(authorizeSharedTaskExecutor(f.owner, 'history', 'codex', 'm', 'executor-m')).rejects.toThrow('holding this shared task');
+    await expect(authorizeSharedTaskExecutor(f.owner, 'history', 'codex', 'm', 'executor-m')).rejects.toThrow('[SHARED_TASK_RECOVERY_history]');
+  });
+
+  // Unit: restored history may probe its original link once more after a
+  // transient handshake failure, but never after an explicit denial. Previous
+  // tests covered retained-only retry and lost the failure's public reason.
+  it.each(['TIMEOUT', 'ACCESS_REVOKED'] as const)('bounds pinned history handshake recovery for %s', async code => {
+    const f = fixture();
+    historyOpenLink.mockRejectedValueOnce(Object.assign(new Error(code === 'ACCESS_REVOKED'
+      ? '[SHARED_TASK_RECOVERY_timeout] old diagnostic' : 'private transport details'), { code }));
+    const opening = authorizeSharedTaskExecutor(f.owner, 'history', 'codex', 'm', 'executor-m');
+    if (code === 'TIMEOUT') {
+      await expect(opening).resolves.toMatchObject({ target: f.target, direct: true });
+      expect(historyOpenLink).toHaveBeenCalledTimes(2);
+    } else {
+      await expect(opening).rejects.toThrow('[SHARED_TASK_RECOVERY_denied]');
+      expect(historyOpenLink).toHaveBeenCalledTimes(1);
+    }
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.some(call => call.op === 'open' || call.op === 'call')).toBe(false);
   });
 
   it('keeps ordinary archive cancellation attempt-local when a replacement with the same session is starting', async () => {
@@ -1725,6 +2456,179 @@ describe('shared startup lease budget', () => {
     expect(f.disposed).toEqual(['ordinary']);
     await next.close();
     expect(f.disposed).toEqual(['ordinary', 'ordinary']);
+  });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：createDeviceAgentStarter → 真实 createRemoteAgentHost/runHost；M 重启丢许可后同一任务经 O 重授权并在原 M 恢复。
+ * - Bug／规则依据：provider-sharing-direct-execution「M 重启丢失许可时，必须经 O 为同一 M 重新授权」。
+ * - 现有覆盖缺口：旧 roundtrip 把 caps 失败当成丢许可，真实 caps 不读任务 grant。
+ * - 最小失败输入／tier：M 持原 grant 打开一次 → 清空 M 内存 grant 并重启 host → 同任务 resume；unit（真实 host.handle）。
+ */
+describe('shared direct task lost-grant recovery', () => {
+  const OWNER = 'group-owner-mac';
+  const SHARE_ID = 'share-lost-grant';
+  const OWNER_ROUTE = `share:${SHARE_ID}`;
+  const MEMBER_ID = 'member-lost-grant';
+  const GUEST_DEVICE = 'guest-lost-grant';
+  const SESSION = 'lost-grant-task';
+  const NATIVE_ID = 'native-lost-grant';
+  const TARGET = providerShareHostPeer(SHARE_ID, 'executor-m');
+  const generation = (n: number) => `11111111-1111-4111-8111-${String(n).padStart(12, '0')}`;
+
+  function directHost(granted: Set<string>) {
+    const started: HostedStartInput[] = [];
+    const host = createRemoteAgentHost({
+      readLimits: () => DEFAULT_REMOTE_AGENT_LIMITS,
+      isAgentAvailable: () => true,
+      startHosted: async (input) => {
+        started.push(input);
+        const events = queue();
+        return {
+          id: NATIVE_ID,
+          agentKind: input.kind,
+          model: input.options.model,
+          async send() {},
+          async steer() {},
+          async setModel() {},
+          async abort() {},
+          async close() { events.end(); },
+          events: () => events,
+          getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
+          setInteractionResolver() {},
+          isTurnRunning: () => false,
+        } satisfies AgentSessionHandle;
+      },
+      isControllerAuthorized: (controller) => controller === OWNER || isProviderSharePeer(controller),
+      controllerTrust: (controller) => isProviderSharePeer(controller) ? 'guest' : 'owner',
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: path.join(root, 'lost-grant-m'),
+      providerAccess: {
+        resolve: async () => 'shared-provider',
+        isAllowed: () => true,
+      },
+      bindGuestProviderRoute: async () => ({ routeToken: 'route', modelIds: ['m'], release() {} }),
+      directGuestExecution: {
+        ownerScope: () => 'account',
+        locate: async () => null,
+        allocate: async () => null,
+        status: () => undefined,
+        release: async () => undefined,
+        switch: async () => ({}),
+        usage: () => undefined,
+        sessionAllowed: (_controller, sessionId) => granted.has(sessionId),
+        sessionDelegated: (_controller, sessionId) => granted.has(sessionId),
+        delegate: async (_owner, request) => {
+          if (request.action == 'grant') granted.add(request.sessionId);
+          else granted.delete(request.sessionId);
+          return true;
+        },
+        forget: () => true,
+      },
+    });
+    return { host, started };
+  }
+
+  function harness() {
+    let ownerOffline = false;
+    let allocationCount = 0;
+    let locateCount = 0;
+    let openCount = 0;
+    let host = directHost(new Set([SESSION]));
+    const remoteInvoke = vi.fn(async (device: string, _channel: string, args: unknown[]) => {
+      const request = JSON.parse(JSON.stringify(args[0])) as {
+        op?: string; sessionId?: string; model?: string;
+      };
+      if (device === OWNER_ROUTE) {
+        if (ownerOffline) throw Object.assign(new Error('owner offline'), { code: 'NOT_CONNECTED' });
+        if (request.op === 'direct-locate') {
+          locateCount += 1;
+          return { ok: true, result: { deviceId: 'executor-m', agentKind: 'codex' } };
+        }
+        if (request.op === 'allocate') {
+          allocationCount += 1;
+          const next = generation(allocationCount);
+          try {
+            await host.host.handle(OWNER, { op: 'delegate', action: 'grant', shareId: SHARE_ID,
+              memberId: MEMBER_ID, guestDeviceId: GUEST_DEVICE, sessionId: request.sessionId,
+              providerId: 'shared-provider', model: request.model, generation: next, cleanupEpoch: 1 });
+          } catch (error) {
+            return { ok: false, error: { code: 'IPC_ERROR', message: error instanceof Error ? error.message : String(error) } };
+          }
+          return { ok: true, result: { deviceId: 'executor-m', generation: next, leaseDurationMs: 30 * 60_000 } };
+        }
+        return { ok: true, result: {} };
+      }
+      if (device === TARGET) {
+        if (request.op === 'open') openCount += 1;
+        try {
+          const result = await host.host.handle(device, request);
+          return { ok: true, result: result === undefined ? null : JSON.parse(JSON.stringify(result)) };
+        } catch (error) {
+          return { ok: false, error: { code: 'IPC_ERROR', message: error instanceof Error ? error.message : String(error) } };
+        }
+      }
+      throw new Error(`unexpected device ${device}`);
+    });
+    historyInvoke.mockImplementation(remoteInvoke);
+    historyOpenLink.mockResolvedValue(undefined);
+    historyCrossRegion.mockReturnValue(false);
+    historyCloseEpoch.mockReturnValue(0);
+    const start = createDeviceAgentStarter({
+      remoteInvoke,
+      renewSharedProviderLink: async () => undefined,
+      rgPath: () => RG,
+      codexPath: () => 'fixture-never-spawned',
+      mcpProviders: () => [],
+      prepareMcpBridge: async () => ({ mcpBridge: { servers: [] }, disposeSessionCtx: () => undefined } as never),
+      makerMemory: () => undefined,
+      captureKnownFileBefore: async () => undefined,
+      noteOpaqueTurnChange() {},
+      logger: historyLogger,
+    });
+    const open = (resumeSessionId?: string) => start({ agentKind: 'codex', deviceId: OWNER_ROUTE,
+      options: { sessionId: SESSION, workingDir: project, model: 'm',
+        ...(resumeSessionId ? { resumeSessionId } : {}) } });
+    return { start, open, remoteInvoke,
+      get host() { return host; },
+      restart() { host = directHost(new Set()); },
+      set ownerOffline(value: boolean) { ownerOffline = value; },
+      get counts() { return { allocations: allocationCount, locates: locateCount, opens: openCount }; },
+    };
+  }
+
+  beforeEach(() => forgetSharedTaskAuthorization(OWNER_ROUTE, SESSION));
+  afterEach(() => forgetSharedTaskAuthorization(OWNER_ROUTE, SESSION));
+
+  it('reauthorizes only the original M when caps succeeds but the task grant was lost', async () => {
+    const f = harness();
+    const first = await f.open();
+    expect(f.counts).toMatchObject({ allocations: 1, locates: 0, opens: 1 });
+    await first.close({ reason: 'navigation' });
+    await f.host.host.dispose();
+    f.restart();
+    const resumed = await f.open(NATIVE_ID);
+    expect(f.counts).toMatchObject({ allocations: 2, locates: 0, opens: 3 });
+    expect(f.host.started).toHaveLength(1);
+    expect(f.host.started[0].options.resumeSessionId).toBe(NATIVE_ID);
+    await resumed.close({ reason: 'navigation' });
+  });
+
+  it('keeps the original M affinity when O is unreachable during lost-grant recovery', async () => {
+    const f = harness();
+    const first = await f.open();
+    await first.close({ reason: 'navigation' });
+    await f.host.host.dispose();
+    f.restart();
+    f.ownerOffline = true;
+    await expect(f.open(NATIVE_ID)).rejects.toThrow(/NOT_CONNECTED|owner offline/);
+    expect(f.counts).toMatchObject({ allocations: 1, locates: 0 });
+    f.ownerOffline = false;
+    const resumed = await f.open(NATIVE_ID);
+    expect(f.counts).toMatchObject({ allocations: 2, locates: 0 });
+    await resumed.close({ reason: 'navigation' });
   });
 });
 
@@ -1747,7 +2651,7 @@ describe('shared startup lease budget upload cancellation', () => {
       onEvent() {}, onState() {}, onWs() {}, onClosed() {},
       onRequest: async () => ({ type: 'error', error: { code: 'UNUSED', message: 'fixture' } }),
     }, randomUUID);
-    // Just crosses the inline threshold; gzip is a bounded two-chunk fixture above.
+    // Large payload; gzip completion and its bounded output are controlled above.
     const payload = { sessionId: 'upload-task', text: 'x'.repeat(1024 * 1024) };
     return { client, payload, requests, reply, hold: () => { hold = true; } };
   }
@@ -1773,13 +2677,15 @@ describe('shared startup lease budget upload cancellation', () => {
     expect(f.requests).toEqual([]);
   });
 
-  it('completes both chunks when not cancelled and rejects an already-closed payload before compression', async () => {
+  it('completes the upload when not cancelled and rejects an already-closed payload before compression', async () => {
     const f = fixture();
-    await expect(f.client.payload(f.payload)).resolves.toMatchObject({ chunks: 2, bytes: 512 * 1024 + 1 });
-    expect(f.requests.map(request => request.index)).toEqual([0, 1]);
+    const payload = await f.client.payload(f.payload);
+    expect(payload).toMatchObject({ bytes: 512 * 1024 + 1 });
+    if ('json' in payload) throw new Error('Expected an uploaded payload');
+    expect(f.requests.map(request => request.index)).toEqual(Array.from({ length: payload.chunks }, (_, index) => index));
     f.client.abandon('closed');
     await expect(f.client.payload(f.payload)).rejects.toThrow('REMOTE_AGENT_EXPIRED');
     expect(payloadCompression.calls).toBe(1);
-    expect(f.requests).toHaveLength(2);
+    expect(f.requests).toHaveLength(payload.chunks);
   });
 });

@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { mountPage, subscription } from '../../ui-page/harness';
+import { forbid, mountPage, subscription } from '../../ui-page/harness';
 import { BotDmThreadPanel } from '../../../src/renderer/features/bots/BotDmThreadViews';
 import { ChatThreadPanel } from '../../../src/renderer/features/bots/ChatThreadPanel';
 import { BotGroupComposer } from '../../../src/renderer/features/bots/BotGroupComposer';
 import { useWallpaperBackground } from '../../../src/renderer/hooks/useWallpaperBackground';
 import wallpaper from '../../../src/renderer/assets/wallpapers/cindy-window.webp';
 import type { BotGroupDetail } from '../../../src/shared/botGroupChat';
+import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 import fixturePhoto from '../../../src/renderer/assets/bot-presets/cindy.png';
 
 const sends: unknown[] = [];
@@ -50,10 +51,10 @@ function Scenario({ kind }: { kind: string }) {
   });
   return <div className="flex h-screen" data-ui-page-subject>
     <div className="min-w-0 flex-1 p-4">
-      <button type="button" aria-pressed={wallpaperEnabled}
+      <button type="button" aria-pressed={wallpaperEnabled} data-ui-page-control
         onClick={() => setWallpaperEnabled(enabled => !enabled)}>Wallpaper</button>
       {kind === 'group-cache-pending' && closed ?
-        <button type="button" onClick={() => setClosed(false)}>Reopen thread</button> : null}
+        <button type="button" onClick={() => setClosed(false)} data-ui-page-control>Reopen thread</button> : null}
     </div>
     {closed ? <span data-closed="" /> : kind.startsWith('group') ? <ChatThreadPanel
       group={{ id: 'fixture-group', members: [], messages: [kind === 'group-narrow' ? reportRoot : root] } as unknown as BotGroupDetail}
@@ -69,6 +70,15 @@ void mountPage({
   host: ctx => {
     let following = false;
     return {
+      voiceInput: {
+        getDataSnapshot: () => ({ settings: { ...getDefaultVoiceInputSettings('win32'), fastActivationEnabled: false }, history: [] }),
+        onDataChanged: subscription('voiceDataChanged'),
+        onEvent: subscription('voiceEvent'),
+        onGlobalShortcutTrigger: subscription('voiceShortcut'),
+        setGlobalShortcut: async () => ({ ok: true }),
+        prewarm: async () => ({ ok: true }),
+        start: forbid('voiceInput.start'),
+      },
       getFilePath: (file: File) => `/fixture/${file.name}`,
       cacheImageFromPath: async () => ctx.case === 'group-cache-pending'
         ? new Promise<{ url: string }>(resolve => { imageCacheControl.finish = () => resolve({ url: photoUrl }); })

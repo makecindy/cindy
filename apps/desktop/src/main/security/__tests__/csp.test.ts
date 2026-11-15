@@ -188,7 +188,9 @@ describe('installContentSecurityPolicy', () => {
     };
   }
 
-  it.each(['', '?mode=files'])('protects the packaged capture document %s', (query) => {
+  // Recording uses the same isolated-page contract; omitting its query would
+  // leave the packaged audio host without the deny-network CSP (unit).
+  it.each(['', '?mode=files', '?mode=recording'])('protects the packaged capture document %s', (query) => {
     const s = fakeSession();
     const ctx = { ...PROD_CTX, desktopCapture: true };
     installContentSecurityPolicy(s as never, ctx);

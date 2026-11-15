@@ -10,9 +10,9 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentDeps, DeviceHostedSession } from '../../base-agent.js';
+import type { AgentDeps, DeviceHostedSession, StartSessionOptions } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
-import { AppServerClient, type RequestProgressDeadline } from '../app-server/client.js';
+import { AppServerClient, AppServerRequestTimeoutError, type RequestProgressDeadline } from '../app-server/client.js';
 import { Method } from '../app-server/protocol.js';
 import type { CloseHandler, LineHandler, Transport } from '../app-server/transport.js';
 import { withoutCodexSpawnModelOverrides } from '../device-hosted-guest.js';
@@ -113,6 +113,9 @@ async function makeTempDir(prefix: string): Promise<string> {
 
 interface Fixture {
   guest: boolean;
+  permissionMode?: StartSessionOptions['permissionMode'];
+  extraDirs?: string[];
+  writableDirs?: string[];
   codexHomeInstructions?: string;
   resume?: boolean;
   /**
@@ -124,12 +127,16 @@ interface Fixture {
   providerId?: string;
   /** app-server 不给功能清单(旧版本或出错)。 */
   noFeatureList?: boolean;
+  /** Process-level MCP isolation must still fail closed after local provisioning is removed. */
+  mcpStatusFailure?: Error;
   /** 宿主提供的任务隧道往来记录。 */
   linkActivity?: DeviceHostedSession['linkActivity'];
   /** 任务所在电脑带来的插件花名册快照。 */
   ghostRosterSnapshot?: string;
   /** 经隧道的 Cindy MCP；默认只有通讯录。 */
   mcpServers?: string[];
+  mcpProviders?: AgentDeps['mcpProviders'];
+  makerMemoryEnabled?: boolean;
   /** 任务所在电脑带来了自己的托管 Skill。 */
   controllerManagedSkills?: boolean;
 }
@@ -197,6 +204,7 @@ async function startHosted(fixture: Fixture) {
     },
     binaryPath: process.execPath,
     logger: noopLogger(),
+    mcpProviders: fixture.mcpProviders,
     getGhostRosterPrompt,
     getDisabledSkillPaths,
     getManagedSkills: async () => [{
@@ -243,6 +251,7 @@ async function startHosted(fixture: Fixture) {
           },
         };
       case Method.McpServerStatusList:
+        if (fixture.mcpStatusFailure) throw fixture.mcpStatusFailure;
         return {
           data: [
             { name: 'codex_apps', tools: {} },
@@ -312,8 +321,8 @@ async function startHosted(fixture: Fixture) {
 
   const deviceHosted: DeviceHostedSession = {
     workingDir,
-    extraDirs: [],
-    writableDirs: [],
+    extraDirs: fixture.extraDirs ?? [],
+    writableDirs: fixture.writableDirs ?? [],
     platform: 'darwin',
     shell: 'zsh',
     isGitRepo: false,
@@ -331,13 +340,16 @@ async function startHosted(fixture: Fixture) {
     model: 'gpt-5.5',
     ...(fixture.guest ? { providerId: fixture.providerId ?? SHARED_PROVIDER.providerId } : {}),
     workingDir,
-    permissionMode: 'acceptEdits',
+    permissionMode: fixture.permissionMode ?? 'acceptEdits',
+    makerMemoryEnabled: fixture.makerMemoryEnabled,
+    extraDirs: fixture.extraDirs,
+    writableDirs: fixture.writableDirs,
     deviceHosted,
     ...(fixture.ghostRosterSnapshot !== undefined ? { ghostRosterSnapshot: fixture.ghostRosterSnapshot } : {}),
     ...(fixture.resume ? { resumeSessionId: '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000' } : {}),
   });
   return {
-    started, request, getHost, getGhostRosterPrompt, getDisabledSkillPaths,
+    started, request, getHost, host, getGhostRosterPrompt, getDisabledSkillPaths,
     prepareCodexSkills, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation,
     hostSkill, systemSkill, pluginSkill, guestSkill, hostManagedSkill, guestHome, codexHome, agent, workingDir,
   };
@@ -361,6 +373,45 @@ afterEach(async () => {
 });
 
 describe('Codex device-hosted guest sessions', () => {
+  // 测试价值：startSession / setWritableDirs / send 生成的 exec-server 环境必须带齐模型可见的目录。
+  // 依据：本 PR 修复了 Claude hosted 遗漏附加目录；Codex 原有 runtimeWorkspaceRoots 用例只覆盖本机路径。
+  // 最小失败输入：hosted 初始只读、可写目录各一个，追加可写目录后发送；完全访问也不能省略目录。
+  // tier：unit，复用内存 app-server fake，断言 thread/start 和 turn/start 的真实协议参数。
+  it.each(['acceptEdits', 'bypassPermissions'] as const)('routes hosted workspace roots through the execution environment in %s mode', async (permissionMode) => {
+    const root = await makeTempDir('maker-core-codex-hosted-roots-');
+    const referenceDir = path.join(root, 'reference');
+    const writableDir = path.join(root, 'output');
+    const addedDir = path.join(root, 'additional-output');
+    const fixture = await startHosted({
+      guest: false,
+      permissionMode,
+      extraDirs: [referenceDir],
+      writableDirs: [writableDir],
+    });
+    const handle = await fixture.started;
+    try {
+      const initial = threadParams(fixture.request, Method.ThreadStart);
+      expect(initial).not.toHaveProperty('runtimeWorkspaceRoots');
+      expect.soft(initial.environments).toEqual([{
+        environmentId: expect.any(String),
+        cwd: fixture.workingDir,
+        runtimeWorkspaceRoots: [fixture.workingDir, referenceDir, writableDir],
+      }]);
+
+      await handle.setWritableDirs?.([writableDir, addedDir]);
+      await handle.send({ type: 'user', content: 'use the added output directory' });
+      const turn = threadParams(fixture.request, Method.TurnStart);
+      expect(turn).not.toHaveProperty('runtimeWorkspaceRoots');
+      expect(turn.environments).toEqual([{
+        environmentId: expect.any(String),
+        cwd: fixture.workingDir,
+        runtimeWorkspaceRoots: [fixture.workingDir, referenceDir, writableDir, addedDir],
+      }]);
+    } finally {
+      await handle.close();
+    }
+  });
+
   // Provider sharing §9.5: even a history-only native fork initializes MCP and
   // connectors. Existing fork tests covered proxy/history ownership only.
   // Minimal input: one guest source and a native turn anchor; tier: unit.
@@ -506,6 +557,32 @@ describe('Codex device-hosted guest sessions', () => {
     await handle.close();
   });
 
+  // #10533 review: an executor memory provider does not mean the guest host has
+  // its transport. A bare enabled override makes native thread/start fail.
+  // Unit: real startSession projection; old fixtures had no executor providers.
+  it.each([
+    { resume: false, tunnelMemory: false },
+    { resume: true, tunnelMemory: false },
+    { resume: false, tunnelMemory: true },
+  ])('uses only the guest memory transport (resume: $resume, tunnel: $tunnelMemory)', async ({ resume, tunnelMemory }) => {
+    const fixture = await startHosted({
+      guest: true,
+      resume,
+      mcpProviders: [{ name: 'cindy_memory' }],
+      makerMemoryEnabled: false,
+      mcpServers: tunnelMemory ? ['cindy_memory'] : [],
+    });
+    const handle = await fixture.started;
+    const config = threadParams(fixture.request, resume ? Method.ThreadResume : Method.ThreadStart).config as Record<string, unknown>;
+    const memoryConfig = Object.fromEntries(Object.entries(config)
+      .filter(([key]) => key.startsWith('mcp_servers.cindy_memory.')));
+    expect(memoryConfig).toEqual(tunnelMemory ? {
+      'mcp_servers.cindy_memory.url': 'http://127.0.0.1:4000/t/tok/mcp/cindy_memory',
+      'mcp_servers.cindy_memory.enabled': true,
+    } : {});
+    await handle.close();
+  });
+
   // 插件工具经隧道回到受邀者电脑：花名册用它带来的快照，本机的仍不读。
   it('gives a shared user the roster from its own computer', async () => {
     const ownerRoster = 'TASK COMPUTER GHOST ROSTER';
@@ -568,6 +645,28 @@ describe('Codex device-hosted guest sessions', () => {
     const fixture = await startHosted({ guest: true, noFeatureList: true });
     await expect(fixture.started).rejects.toThrow(/Cannot start Codex for a shared user safely/);
     expect(fixture.request.mock.calls.some(([method]) => method === Method.ThreadStart)).toBe(false);
+  });
+
+  // Unit: the existing fixture bypasses the Desktop spawn factory. Verify that
+  // removing local MCP provisioning never makes a failed runtime inventory safe,
+  // and that failure before thread/start still retires its isolated host.
+  it('keeps MCP status timeouts fail-closed and cleans up before reporting stopped', async () => {
+    const fixture = await startHosted({
+      guest: true,
+      mcpStatusFailure: new AppServerRequestTimeoutError(Method.McpServerStatusList, 60_000),
+    });
+    await expect(fixture.started).rejects.toMatchObject({
+      name: 'AgentStartupStoppedError',
+      cause: expect.objectContaining({ message: expect.stringContaining('mcpServerStatus/list timed out') }),
+    });
+    expect(fixture.request.mock.calls.some(([method]) => method === Method.ThreadStart)).toBe(false);
+    expect(fixture.host.subscribeThread).not.toHaveBeenCalled();
+    expect(fixture.host.retire).toHaveBeenCalled();
+    expect((fixture.agent as unknown as { hosts: Map<string, unknown> }).hosts.size).toBe(0);
+    const retireCalls = fixture.host.retire.mock.calls.length;
+    await fixture.agent.dispose();
+    await fixture.agent.dispose();
+    expect(fixture.host.retire).toHaveBeenCalledTimes(retireCalls);
   });
 
   it('refuses a shared user without its own Codex home', async () => {

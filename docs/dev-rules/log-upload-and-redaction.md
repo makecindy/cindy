@@ -32,6 +32,13 @@ override 语义见 [`configuration-and-overrides.md`](configuration-and-override
 | 待补传标记 | `apps/desktop/src/main/log-upload/pendingMarkers.ts` |
 | 崩溃判定 | `apps/desktop/src/main/lifecycle.ts`（`isFatalShutdownReason` / `onFatalShutdown`） |
 
+远程卡顿诊断新增精确来源 `device-link:ipc-diagnostics`、
+`device-link:execution-diagnostics`、`device-link-transfer`，仅含固定操作类别、短请求标识、
+计数、字节数和时长；其子 scope 继续默认拒绝。`device-link diagnostic` 将较大的现场拆成
+低于 2,000 字符的 JSON 记录，用 `instance + event + part` 关联，避免单条截断丢掉队头证据。
+采样省略数由 `suppressed` 明示；总量裁剪仍遵守现有上限，不放宽来源、记录边界或脱敏规则。
+新增诊断须验证默认 INFO → 正式 writer → collectLogs 后的内容，不能只断言 logger 被调用。
+
 ## 1. 三条不变量
 
 这套东西的正确性依赖三条不变量。破坏任一条的后果都不是「功能不好用」，而是隐私事故或崩溃
@@ -190,6 +197,12 @@ proxy 根下的记录**（双闸）。同一文件里还有 `maker` 源的日志
 - 不做「上传前逐次弹窗确认」：手动路径本身就是用户点的；崩溃路径弹窗在崩溃时刻不可能可靠展示。
 
 ## 4. 上报目标与区域
+
+上传编号统一采用 `CN-XXXX-XXXX` / `GLOBAL-XXXX-XXXX`，内部 Dev 构建使用
+`DEV-XXXX-XXXX`。前缀来自当前构建区域，随机部分仍保留 8 位；前缀只保证不同区域的
+新编号不重号，同一区域内仍是随机编号，不承诺严格全局唯一。用户看到和复制的编号、
+SLS `__tags__.uploadCode` 与每条记录的 `uploadCode` 使用同一个完整值。历史无前缀
+`XXXX-XXXX` 编号继续被格式校验器接受，既有日志不改写。
 
 目标 = 日志服务的 project + logstore + 服务区域接入域名，**构建期注入、运行期只读**。
 

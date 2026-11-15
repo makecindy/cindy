@@ -21,7 +21,8 @@
  *     cwd's separator style.
  */
 
-import { stripTrailingPathSeparators } from '../../shared/pathText';
+import { stripTrailingPathSeparators, stripWindowsDriveUriSlash } from '../../shared/pathText';
+import { isWindowsPathLike } from '../../shared/workingDir';
 
 /** Image extension whitelist. Case-insensitive. Allows `?v=2`-style suffix. */
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico)(\?.*)?$/i;
@@ -236,6 +237,7 @@ export function resolveKnownLocalFileHref(
  *
  * Behavior:
  *   - `file://...`                    → decode + strip leading slash on Win
+ *   - `/C:/...` + Windows cwd         → strip the extra leading slash
  *   - POSIX absolute (`^/`)           → return as-is
  *   - Windows absolute (`^[A-Za-z]:`) → return as-is
  *   - relative                        → joinPath(cwd, href)
@@ -257,9 +259,10 @@ export function resolveLocalPath(href: string, cwd: string): string {
     let p = safeDecodeURIComponent(href.slice(7));
     // Windows file URL: 'file:///C:/x.png' → after slice(7): '/C:/x.png'
     // → strip leading '/' → 'C:/x.png'
-    if (/^\/[A-Za-z]:[\\/]/.test(p)) p = p.slice(1);
+    p = stripWindowsDriveUriSlash(p);
     return p;
   }
+  href = normalizeWindowsDriveHref(href, cwd);
   if (href.startsWith('/')) return href;
   if (WIN_ABS_RE.test(href)) return href;
   // UNC share (`\\server\share\...`) is already absolute on Windows — joining
@@ -294,6 +297,8 @@ export function resolveLocalPath(href: string, cwd: string): string {
  */
 export function resolveToolFilePath(rawPath: string, workingDir: string): string {
   if (!rawPath || !workingDir) return rawPath;
+  // Tool paths are literal runtime results, not model-authored Markdown hrefs.
+  if (rawPath.startsWith('/')) return rawPath;
   return resolveLocalPath(rawPath, workingDir);
 }
 
@@ -323,8 +328,18 @@ export type SmartResolveResult =
   | { status: 'multiple'; candidates: string[] }
   | { status: 'none'; fallbackAbsPath: string };
 
+/** Model-authored /C:/ links name a drive only for a Windows file owner.
+ * Use the task's cwd, never the viewing device's OS: /C: is legal on POSIX. */
+function normalizeWindowsDriveHref(href: string, workingDir: string): string {
+  if (!isWindowsPathLike(workingDir)) return href;
+  // Directory classification strips /C:/ to /C:. Keep the drive-root slash:
+  // C: alone names the drive's current directory, not its root. The shared
+  // recognizer also maps bare /C: to C:/ for the same reason.
+  return stripWindowsDriveUriSlash(href);
+}
+
 function toMainLookupHref(href: string, workingDir: string): string {
-  if (!href.startsWith('file://')) return href;
+  if (!href.startsWith('file://')) return normalizeWindowsDriveHref(href, workingDir);
   // File URL conversion yields literal text; main still decodes its href input.
   return resolveLocalPath(href, workingDir).replace(/%/g, '%25');
 }
@@ -725,7 +740,7 @@ export function normalizeXdtFileUrlForRenderer(url: string): string {
   const rawPath = url.slice('xdt-file://'.length, queryOrHash >= 0 ? queryOrHash : undefined);
   let absPath = safeDecodeURIComponent(rawPath);
   // URL syntax adds a leading slash before a Windows drive letter.
-  if (/^\/[A-Za-z]:[\\/]/.test(absPath)) absPath = absPath.slice(1);
+  absPath = stripWindowsDriveUriSlash(absPath);
   if (!(absPath.startsWith('/') || WIN_ABS_RE.test(absPath))) return url;
 
   // Preserve the optional cache-busting revision used by renderer-created
@@ -780,6 +795,6 @@ export function normalizeMarkdownImageSrc(
   }
   // file:///C:/x.png -> /C:/x.png after stripping the scheme. Drop the
   // URL-only leading slash before handing the native Windows path onward.
-  if (/^\/[A-Za-z]:[\\/]/.test(localPath)) localPath = localPath.slice(1);
+  localPath = stripWindowsDriveUriSlash(localPath);
   return toLocalFileUrl(resolveLocalPath(localPath, workingDir));
 }

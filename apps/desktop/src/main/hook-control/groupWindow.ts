@@ -102,7 +102,7 @@ function providerOf(principalId: string): string {
  * provider 命名空间 1 GiB 正文 + 500 万行安全阀（`GROUP_WINDOW_RETENTION`，
  * 数值来自共享核心的 `DEFAULT_GROUP_WINDOW_RETENTION`），碰不到才是常态。
  * 旧注释写的「每个群/topic 只保留最近 500 条」已不是现行策略——按条数在活跃群
- * 里几天就把去年的内容挤没了（理由见 `groupWindowCore.ts`）。那个 500 是
+ * 里几天就把去年的内容挤没了（理由见 `groupWindowCore.ts`）。读取上限与存储上限无关；当前采用共享的
  * `CONTEXT_READ_LIMIT`，拼上下文时的**读取**窗口，不是存储上限。
  * 引用与 prompt 仍只从本机窗口读取。
  */
@@ -171,13 +171,16 @@ export async function buildGroupContextPrefix(
     cursors: contextCursors,
     cursorKey: cursorKeyOf(payload.externalKey),
     triggerMessageId: payload.source?.triggerMessageId ?? null,
+    replyMessageId: payload.source?.threadContext?.[0]?.messageId,
+    reservedMessages: payload.source?.threadContext?.length ?? 0,
+    reservedChars: payload.source?.threadContext?.reduce((n, entry) => n + `[${entry.author}] ${entry.text}\n`.length, 0) ?? 0,
     // 主群流额外兜一层非空 threadId 的行: server 曾把普通群里 reply 链的
     // message_thread_id 当成 topic 下发(Telegram 对非 forum 群的 reply 链也给这个字段,
     // 值 = reply root), 那些发言因此进了一个个 reply-root 桶 —— 2026-08-03 实机: 172 条在
     // 主群流、另有若干 reply-root 桶(如 52449 桶 7 条), agent 在群里答"我看不到群里的历史
     // 消息"。判据只能在 server 修(客户端拿不到 is_forum / is_topic_message), 这里按"宁可多
     // 读同群发言、不可漏读"兜住存量与老 server。兜底读取排在主群流之后, 但两者共享同一个
-    // 4000 字预算和单值游标; commit 会推进本次两集合读取到的最大行 id, 因而保持既有行为而
+    // 共享字数预算和单值游标; commit 会推进本次两集合读取到的最大行 id, 因而保持既有行为而
     // 不把兜底误认为独立预算/游标。forum 群的 General 也走 group lane, 否则该群其它 topic
     // 的突发流量会把 General 的发言挤出窗口并被游标永久跳过(bot 复审 P1)。server 修复部署后新数据不再分桶,
     // 这条兜底最终只服务存量行。topic lane 不读兜底集(topic 之间严格隔离)。

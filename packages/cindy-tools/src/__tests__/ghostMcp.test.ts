@@ -1284,6 +1284,8 @@ describe("cindy_ghosts · server 构建", () => {
       "ghost_manual",
       "ghost_my_plugins",
       "media",
+      "model_decisions",
+      "model_rerank",
     ]);
     const infoDescription = server._registeredTools.ghost_info?.description ?? "";
     expect(infoDescription).toContain("精准查询单个当前可用插件");
@@ -2145,11 +2147,15 @@ describe('connect_account transport', () => {
       expect(connectAccount).toHaveBeenCalledWith({ kind: 'host', id: 'grok', reauthorize: undefined }, expect.any(AbortSignal));
       await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'im-telegram' } });
       expect(connectAccount).toHaveBeenLastCalledWith({ kind: 'host', id: 'im-telegram', reauthorize: undefined }, expect.any(AbortSignal));
+      // #9250: the settings adapter existed, but the real MCP whitelist rejected iMessage.
+      expect(tools.tools.find(tool => tool.name === 'connect_account')?.description).toContain('im-imessage');
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'im-imessage' } });
+      expect(connectAccount).toHaveBeenLastCalledWith({ kind: 'host', id: 'im-imessage', reauthorize: undefined }, expect.any(AbortSignal));
       for (const id of ['invented', 'im-unknown']) {
         const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id } });
         expect(rejected.isError).toBe(true);
       }
-      expect(connectAccount).toHaveBeenCalledTimes(2);
+      expect(connectAccount).toHaveBeenCalledTimes(3);
     } finally { await client.close(); await server.close(); }
   });
 
@@ -2327,4 +2333,23 @@ describe('personal community author MCP transport', () => {
       expect(JSON.stringify(failed)).not.toContain('private-transport-token');
     } finally { await transport.close(); }
   });
+});
+
+// Unit: exercise the real MCP transport so the model_decisions/model_rerank schemas, their mapping onto
+// the shared Host request and the cancellation handle reach the Host; media did not cover this API.
+it('routes model_decisions and model_rerank through MCP and returns their structured answer', async () => {
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+  const callEvaluate = vi.fn(async () => ({ ok: true, answers: { q: true }, estimated_cost: null }));
+  const server = createCindyGhostsMcpServer(fakeDeps({ callEvaluate }));
+  const client = new Client({ name: 'evaluation-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair(); await server.connect(st); await client.connect(ct);
+  try {
+    const args = { model_id: 'example-decision', questions: { q: { type: 'noul', instructions: 'Check' } }, state: 'text' };
+    const result = await client.callTool({ name: 'model_decisions', arguments: { action: 'request', ...args } });
+    expect(callEvaluate).toHaveBeenCalledWith({ action: 'decisions', ...args }, expect.any(AbortSignal));
+    expect(result).toMatchObject({ content: [{ type: 'text', text: expect.stringContaining('"q":true') }] });
+    await client.callTool({ name: 'model_rerank', arguments: { action: 'list_models', model_id: 'ignored' } });
+    expect(callEvaluate).toHaveBeenLastCalledWith({ action: 'list_models', api: 'rerank' }, expect.any(AbortSignal));
+  } finally { await client.close(); await server.close(); }
 });

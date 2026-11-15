@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { afterEach, expect, it, vi } from 'vitest';
-import { watchPrivacyInput } from '../privacyInput';
+import { watchAwayGuardInput, watchPrivacyInput } from '../privacyInput';
 
 vi.mock('../inputHost', () => ({ resolveDesktopInputBinary: vi.fn() }));
 afterEach(() => vi.useRealTimers());
@@ -96,3 +96,53 @@ it('waits for actual process close after EOF or fallback kill, including repeate
   expect(closed).toBe(true);
   expect(f.failed).not.toHaveBeenCalled();
 });
+
+// Away guard (Settings → Keep working while away): Main may remove the masks only
+// after the helper itself confirmed the OS lock; a release never claims a lock.
+it.each([
+  ['lock', 'locked', true],
+  ['lock', 'lock-failed', false],
+  ['release', 'released', false],
+] as const)('away guard %s reports %s as locked=%s', async (command, reply, locked) => {
+  const f = fixture();
+  Object.assign(f.child.stdin, { writable: true });
+  const ended = vi.fn();
+  const starting = watchAwayGuardInput(ended, undefined, f.runtime);
+  await Promise.resolve();
+  f.line('ready\n');
+  const monitor = await starting;
+  const finishing = command === 'lock' ? monitor.lock() : monitor.stop().then(() => false);
+  expect(f.child.stdin.write).toHaveBeenLastCalledWith(`${command}\n`);
+  f.line(`${reply}\n`);
+  // A confirmed lock is reported at once: the helper is already exiting by itself, and
+  // Main must not wait for (or kill) it before removing masks.
+  if (!locked) f.child.emit('close');
+  await expect(finishing).resolves.toBe(locked);
+  expect(ended).toHaveBeenCalledExactlyOnceWith(locked);
+  await monitor.stop();
+  f.child.emit('close');
+  expect(f.child.kill).not.toHaveBeenCalled();
+  expect(ended).toHaveBeenCalledOnce();
+});
+
+// A stalled Main can receive startup and termination in one pipe delivery.
+// The service has not assigned its awaited monitor yet: notifying it here can
+// access that binding before initialization, or publish an already-dead shield.
+// Unit regression through the real watcher; existing tests awaited ready first.
+it.each(['locked', 'lock-failed', 'released', ''])(
+  'does not publish an away guard that reports %s during startup',
+  async (reply) => {
+    const f = fixture();
+    const ended = vi.fn();
+    const starting = watchAwayGuardInput(ended, undefined, f.runtime);
+    const rejected = expect(starting).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
+    await Promise.resolve();
+    f.line(`ready\n${reply}\n`);
+    // Let startup observe the terminal status before close can mark it finished.
+    // The empty reply separately covers ready and close arriving together.
+    if (reply) await Promise.resolve();
+    f.child.emit('close');
+    await rejected;
+    expect(ended).not.toHaveBeenCalled();
+  },
+);

@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import React, { act } from "react";
+import React, { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 
 const modal = vi.hoisted(() => ({ props: null as any }));
+const surface = vi.hoisted(() => ({ props: null as any, mounts: 0 }));
 const driveMenu = vi.hoisted(() => ({ props: null as any }));
 vi.mock("react-native", () => ({
   View: ({ children }: any) => <div>{children}</div>,
@@ -63,12 +64,11 @@ vi.mock("@/session/SheetModal", () => ({
   },
 }));
 vi.mock("@/session/SheetSurface", () => ({
-  SheetSurface: ({ children, footer }: any) => (
-    <>
-      {children}
-      {footer}
-    </>
-  ),
+  SheetSurface: (p: any) => {
+    surface.props = p;
+    useEffect(() => { surface.mounts++; }, []);
+    return <>{p.children}{p.footer}</>;
+  },
 }));
 vi.mock("@/session/ContextSheet", () => ({
   ContextSheetFooterButton: ({ label, testID, disabled, onPress }: any) => (
@@ -224,4 +224,46 @@ it.each([
   expect(props.onProject).toHaveBeenCalledExactlyOnceWith(base);
   render({ workingDir: base });
   expect(row.getAttribute("aria-pressed")).toBe("true");
+});
+
+// PR #9826 / unit: a failed move is visible but does not invalidate a loaded folder.
+it("keeps a loaded folder selectable while displaying a move error", () => {
+  render({ page: "directory", actionError: "Move failed" });
+  expect(container.textContent).toContain("Move failed");
+  click("remoteBrowseSelectCurrent");
+  expect(props.onChoose).toHaveBeenCalledExactlyOnceWith("D:/project");
+});
+
+// PR #9826 / unit: project moving may mark the existing membership unavailable.
+it("shows the current project but does not dispatch its disabled selection", () => {
+  render({ page: "workspace", workspaces: [{ title: "Project", workingDir: "D:/project", disabled: true }] });
+  const row = container.querySelector('[data-testid="newSession.workspaceProjectOption"]') as HTMLButtonElement;
+  expect(row.getAttribute("aria-pressed")).toBe("true");
+  expect(row.disabled).toBe(true);
+  click("workspaceProjectOption");
+  expect(props.onProject).not.toHaveBeenCalled();
+});
+
+// PR #9826: returning from a pending browse must not gate the new-task workspace page.
+it.each([false, true])("separates directory reads from workspace loading (%s)", workspaceLoading => {
+  render({ page: "workspace", loading: true, workspaceLoading });
+  click("workspaceDialogueOption"); click("workspaceProjectOption"); click("workspaceBrowseOption");
+  expect(props.onDialogue).toHaveBeenCalledTimes(workspaceLoading ? 0 : 1);
+  expect(props.onProject).toHaveBeenCalledTimes(workspaceLoading ? 0 : 1);
+  expect(props.onBrowse).toHaveBeenCalledTimes(workspaceLoading ? 0 : 1);
+});
+
+// A blocked drag has already collapsed SheetSurface before it calls onClose.
+it("restores the surface after a busy drag-dismiss and retains the failure retry", () => {
+  render({ page: "directory", busy: true });
+  const mounts = surface.mounts;
+  act(() => { modal.props.onBackdropPress(); modal.props.onRequestClose(); surface.props.onClose(); });
+  expect(props.onClose).not.toHaveBeenCalled(); expect(props.onBack).not.toHaveBeenCalled();
+  expect(surface.mounts).toBe(mounts + 1);
+  render({ busy: false, actionError: "Move failed" });
+  expect(container.textContent).toContain("Move failed");
+  click("remoteBrowseSelectCurrent");
+  expect(props.onChoose).toHaveBeenCalledExactlyOnceWith("D:/project");
+  act(() => surface.props.onClose());
+  expect(props.onClose).toHaveBeenCalledOnce();
 });

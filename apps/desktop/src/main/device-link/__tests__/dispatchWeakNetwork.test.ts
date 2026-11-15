@@ -1,4 +1,4 @@
-import { sharedTaskGuestPeer } from '@cindy/device-link';
+import { providerShareHostPeer, sharedTaskGuestPeer } from '@cindy/device-link';
 /**
  * dispatchWeakNetwork.test.ts — 被控端弱网收尾行为契约。
  * -------------------------------------------------------------------------
@@ -58,11 +58,11 @@ vi.mock('../../logger', async (importOriginal) => ({
   createLogger: () => diagnosticLog,
 }));
 
-vi.mock('../settings-store', () => ({
+vi.mock('../settings-store.desktop', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 // Observe dispatch's teardown calls without loading the unrelated desktop runtime.
-vi.mock('../../remote-desktop', () => ({ remoteDesktop: { stop: vi.fn(), signalingLost: vi.fn() } }));
+vi.mock('../../remote-desktop', () => ({ remoteDesktop: { stop: vi.fn(), signalingLost: vi.fn() }, requestRemoteDesktop: vi.fn() }));
 const sharedTask = vi.hoisted(() => ({ refresh: vi.fn(), capture: vi.fn() }));
 vi.mock('../sharedTaskDispatch.js', async (original) => ({
   ...await original<typeof import('../sharedTaskDispatch.js')>(),
@@ -77,17 +77,17 @@ import {
   setControllerDisplayName,
   setControllerFallbackDisplayName,
   deactivateAllControllers,
-  deactivateController,
   flushRemoteInvokeResultOutboxOnReconnect,
   handleControllerOffline,
   setControllersChangedListener,
+  setRemoteInvokeBusyChangedListener,
   setOrdinaryPeerLinkAcceptedListener,
   setDispatchPresenceOfflineCheck,
   setSessionTextSnapshotReader,
   pushSessionActivityToController,
   wireInboundDispatch,
   hasRemoteInvokeWorkForPeer,
-} from '../dispatch';
+} from '../dispatch.desktop';
 import { __testing as invokeRegistry } from '../invoke-registry';
 import * as subscriptions from '../subscriptions';
 import { tapWindowBroadcast, tapRemoteModelCatalogChange } from '../broadcast-tap';
@@ -112,6 +112,7 @@ function mkClient(
     sendLinkAccept: over.sendLinkAccept ?? vi.fn(),
     closeLink: vi.fn(),
     onFrame: vi.fn(),
+    onInboundPeerReleased: vi.fn(() => () => {}),
     sendPush: vi.fn(),
   };
 }
@@ -327,6 +328,14 @@ describe('[1] link-accept 发送失败的有限重试', () => {
     tapRemoteModelCatalogChange('source-c', 'maker:agents:changed', true);
     tapRemoteModelCatalogChange(sharedTaskGuestPeer('task', 'guest', 'pc'), 'maker:agents:changed', false);
     expect(client.sendPush).not.toHaveBeenCalled();
+    // PR #8814 review: once the minute-by-minute received poll stopped re-announcing
+    // catalogs, a same-region share host's real catalog change must reach controllers
+    // that read it through B; an inactive or unknown share still does not.
+    const shareHost = providerShareHostPeer('share-1', 'owner-pc');
+    tapRemoteModelCatalogChange(shareHost, 'maker:provider:changed', false);
+    expect(client.sendPush).not.toHaveBeenCalled();
+    tapRemoteModelCatalogChange(shareHost, 'maker:provider:changed', false, true);
+    expect(client.sendPush.mock.calls).toEqual([['controller-a', 'maker:model-catalog:changed', {}]]);
   });
 
   it('notifies only the successfully accepted ordinary peer after a failed inbound open', () => {
@@ -788,6 +797,51 @@ describe('[3] outbox 保留时长按 channel 收窄', () => {
 });
 
 describe('[5] orphan 截止时间按 channel 收窄', () => {
+  // Unit, PR #9153: the orphan result can finish while the actual handler is
+  // still running. Existing deadline tests only checked budgets, not diagnostics.
+  it('records execution completion only when the handler settles after the orphan deadline', async () => {
+    const client = mkClient();
+    const busy = vi.fn();
+    setRemoteInvokeBusyChangedListener(busy);
+    let finish!: (value: unknown) => void;
+    const handler = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    invokeRegistry.register('maker:compact-session', handler);
+    const requestId = 'abcdef12-0000-0000-0000-000000000000';
+    const handling = __testing.handleInvoke(client as never, 'ctrl-a', requestId,
+      { channel: 'maker:compact-session', args: ['s1'] });
+    const executionLogs = () => diagnosticLog.info.mock.calls
+      .filter(([message]) => typeof message === 'string' && message.startsWith('device-link diagnostic '))
+      .map(([message]) => JSON.parse(message.slice('device-link diagnostic '.length)))
+      .filter(record => record.stage === 'execution' && record.request === 'abcdef12');
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handler).toHaveBeenCalledOnce();
+      expect(busy).toHaveBeenLastCalledWith(true);
+      const deadline = __testing.remoteInvokeOrphanTimeoutForChannelMs('maker:compact-session');
+      await vi.advanceTimersByTimeAsync(deadline);
+      await handling;
+      expect(client.sendInvokeResult).toHaveBeenCalledOnce();
+      expect(client.sendInvokeResult.mock.calls[0][2]).toMatchObject({ ok: false,
+        error: { code: 'IPC_ERROR', message: expect.stringContaining('[TIMEOUT]') } });
+      expect(busy).toHaveBeenLastCalledWith(false);
+      expect(executionLogs()).toContainEqual(expect.objectContaining({ outcome: 'waiting', activeStage: 'handler' }));
+      expect(executionLogs().some(record => record.outcome === 'settled')).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      finish({});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(executionLogs()).toContainEqual(expect.objectContaining({ outcome: 'settled',
+        executionMs: deadline + 1_000, activeStage: null,
+        stagesMs: expect.objectContaining({ handler: deadline + 1_000 }) }));
+      expect(client.sendInvokeResult).toHaveBeenCalledOnce();
+      expect(busy.mock.calls).toEqual([[true], [false]]);
+    } finally {
+      finish?.({});
+      await vi.advanceTimersByTimeAsync(0);
+      setRemoteInvokeBusyChangedListener(null);
+    }
+  });
+
   it('默认 invoke 保持 60s，只有 compact 使用 22min 长预算', () => {
     const compactBudget = INVOKE_TIMEOUT_OVERRIDES_MS['maker:compact-session'];
     expect(compactBudget).toBe(11 * 60_000);
@@ -1201,5 +1255,65 @@ describe('被控浮窗读取控制端展示名', () => {
     setControllerFallbackDisplayName('ctrl-legacy', 'Legacy Mac');
     setControllerDisplayName('ctrl-legacy', '');
     expect(getControllerDisplayName('ctrl-legacy')).toBeUndefined();
+  });
+});
+
+describe('[7] 账号级状态快照不占满卡住对端的可靠窗口', () => {
+  // Bug(2026-11-10~14 Mac Studio 日志):手机网络一卡,每帧 ~1 KB 的调度运行诊断与
+  // 同账号用量快照逐帧灌进 64 帧可靠窗口,控制端在等的 invoke-result 被拒为
+  // `reliable transport buffer is full`(iPhone 345 次)。状态快照只需最新值:卡住时
+  // 不再入窗,恢复后每个键只发最新一帧;驱动刷新的调度事件仍逐帧即时转发。
+  it('stages runtime-state and usage snapshots latest-wins for the busy peer only', async () => {
+    let phoneDepth = 40;
+    const sent: Array<{ dst: string; channel: string; payload: unknown }> = [];
+    const client = {
+      ...mkClient(),
+      getReliableSendQueueDepth: vi.fn((dst: string) => (dst === 'phone' ? phoneDepth : 0)),
+      sendPush: vi.fn((dst: string, channel: string, payload: unknown) => { sent.push({ dst, channel, payload }); }),
+    };
+    __testing.setActiveClient(client as never);
+    subscriptions.subscribe('phone', ['sessions'], 'phone');
+    subscriptions.subscribe('desk', ['sessions'], 'desk');
+    const to = (dst: string) => sent.filter((push) => push.dst === dst).map(({ channel, payload }) => ({ channel, payload }));
+
+    for (let i = 0; i < 40; i++) {
+      __testing.forwardPush('maker:schedule:event', { type: 'runtime-state', snapshot: { slotsInUse: i } });
+    }
+    for (let i = 0; i < 13; i++) {
+      __testing.forwardPush('usage:codex-provider-account-changed', { providerId: 'p1', snapshot: { used: i } });
+    }
+    __testing.forwardPush('usage:codex-provider-account-changed', { providerId: 'p2', snapshot: null });
+    __testing.forwardPush('maker:schedule:event', { type: 'fired', scheduleId: 's1', runId: 'r1' });
+
+    const fired = { channel: 'maker:schedule:event', payload: { type: 'fired', scheduleId: 's1', runId: 'r1' } };
+    const latest = [
+      { channel: 'maker:schedule:event', payload: { type: 'runtime-state', snapshot: { slotsInUse: 39 } } },
+      { channel: 'usage:codex-provider-account-changed', payload: { providerId: 'p1', snapshot: { used: 12 } } },
+      { channel: 'usage:codex-provider-account-changed', payload: { providerId: 'p2', snapshot: null } },
+    ];
+    // Refresh-driving schedule events stay immediate and ordered for every peer.
+    expect(to('phone')).toEqual([fired]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    // The healthy peer receives one latest frame per key; the busy peer admits none.
+    expect(to('desk')).toEqual([fired, ...latest]);
+    expect(to('phone')).toEqual([fired]);
+    expect(__testing.latestStatePushStageSize('phone')).toBe(3);
+
+    phoneDepth = 0;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(to('phone')).toEqual([fired, ...latest]);
+    expect(__testing.latestStatePushStageSize('phone')).toBe(0);
+  });
+
+  it('drops staged snapshots once the controller unsubscribes from sessions', async () => {
+    const client = { ...mkClient(), getReliableSendQueueDepth: vi.fn(() => 0) };
+    __testing.setActiveClient(client as never);
+    subscriptions.subscribe('phone', ['sessions'], 'phone');
+    __testing.forwardPush('usage:claude-account-changed', { daily: 1 });
+    expect(__testing.latestStatePushStageSize('phone')).toBe(1);
+    subscriptions.unsubscribe('phone', ['sessions']);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(client.sendPush).not.toHaveBeenCalled();
+    expect(__testing.latestStatePushStageSize('phone')).toBe(0);
   });
 });

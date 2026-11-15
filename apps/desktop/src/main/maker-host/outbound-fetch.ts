@@ -52,11 +52,25 @@ import {
 } from '@cindy/anthropic-compat-proxy';
 import { fetchSingleHopWithSsrFGuard } from '@cindy/browser-control-runtime/ssrf-runtime';
 
-import { createMakerLogger } from './logger-adapter.js';
-import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
 
-const log = createMakerLogger('outbound-fetch');
 
+export interface ResolveOutboundDispatcherOptions {
+  /** 直连(或代理不可用)时返回的 dispatcher —— 调用方已有的连接池。 */
+  fallback?: Dispatcher;
+  /** 代理 dispatcher 的连接池调优(keepAlive / connections 等),参与缓存 key。 */
+  agentOptions?: UndiciAgent.Options;
+  /**
+   * 调用方的取消信号。选路发生在请求出发之前,不传的话它就落在调用方的超时预算之外
+   * (见 PROXY_RESOLVE_TIMEOUT_MS 的注释);传了则 abort 时立刻抛,与 fetch 语义一致。
+   */
+  signal?: AbortSignal;
+}
+
+/** Shared transport; the launcher owns proxy discovery, not the request rules. */
+export function createOutboundTransport(
+  resolveDesktopOutboundProxy: (url: string) => Promise<string | null | undefined> | string | null | undefined,
+  log: { warn(message: string, fields?: Record<string, unknown>): void; debug(message: string, fields?: Record<string, unknown>): void },
+) {
 /**
  * Happy Eyeballs 单地址握手超时。与 `main/index.ts` 的进程级默认值、
  * `voice-input/refinerHttpDispatcher.ts` 的 per-pool 值同为 2500ms:代理软件背后可能
@@ -89,17 +103,6 @@ const WARNED_ORIGINS_MAX_ENTRIES = 256;
  */
 const PROXY_DECISION_TTL_MS = 30 * 1000;
 
-export interface ResolveOutboundDispatcherOptions {
-  /** 直连(或代理不可用)时返回的 dispatcher —— 调用方已有的连接池。 */
-  fallback?: Dispatcher;
-  /** 代理 dispatcher 的连接池调优(keepAlive / connections 等),参与缓存 key。 */
-  agentOptions?: UndiciAgent.Options;
-  /**
-   * 调用方的取消信号。选路发生在请求出发之前,不传的话它就落在调用方的超时预算之外
-   * (见 PROXY_RESOLVE_TIMEOUT_MS 的注释);传了则 abort 时立刻抛,与 fetch 语义一致。
-   */
-  signal?: AbortSignal;
-}
 
 const dispatcherPool = new Map<string, Dispatcher>();
 const routingPool = new Map<string, Dispatcher>();
@@ -399,7 +402,7 @@ function createSocks5Connector(
  *
  * @internal 导出仅供单测断言合并规则。
  */
-export function resolveConnectOptions(
+function resolveConnectOptions(
   agentOptions: UndiciAgent.Options | undefined,
 ): Record<string, unknown> | UndiciAgent.Options['connect'] {
   const callerConnect = agentOptions?.connect;
@@ -473,7 +476,7 @@ function withOriginalHost(
 }
 
 /** @internal 导出供安全回归测试断言代理实际拨号目标与 Host 分离。 */
-export function rewritePinnedProxyDispatchOptions(
+function rewritePinnedProxyDispatchOptions(
   options: Dispatcher.DispatchOptions,
   upstream: URL,
   address: string,
@@ -491,7 +494,7 @@ export function rewritePinnedProxyDispatchOptions(
  * dispatcher 为单次请求所有，响应消费完由 SSRF shell 统一关闭。
  */
 /** @internal 导出供安全回归测试断言多地址故障转移只发生在请求发出前。 */
-export function createPinnedProxyDispatcher(
+function createPinnedProxyDispatcher(
   proxy: OutboundProxyTarget,
   upstream: URL,
   addresses: readonly string[],
@@ -599,7 +602,7 @@ export function createPinnedProxyDispatcher(
  * 但无论直连还是代理都只连接 SSRF 守门已确认的地址。beforeDispatch 在代理解析与
  * DNS await 之后执行，避免已经结束的 callId 继续真正发包。
  */
-export async function guardedOutboundFetch(
+async function guardedOutboundFetch(
   url: string,
   init: RequestInit,
   beforeDispatch: () => void | Promise<void>,
@@ -749,7 +752,7 @@ function routingDispatcherCtor(): OriginRoutingDispatcherCtor {
  * 取该上游当前该用的 undici dispatcher。直连 → `opts.fallback`(默认 undefined,
  * 即 undici 全局 dispatcher,行为与改造前逐字节一致)。
  */
-export async function resolveOutboundDispatcher(
+async function resolveOutboundDispatcher(
   url: string,
   opts: ResolveOutboundDispatcherOptions = {},
 ): Promise<Dispatcher | undefined> {
@@ -780,7 +783,7 @@ export async function resolveOutboundDispatcher(
  * 校验照旧;宿主与单测对全局 fetch 的替换也照旧生效)。只有代理生效时才切到 npm
  * undici 的 fetch —— 那是唯一能挂 dispatcher 的入口。类型断言收口在这一处。
  */
-export const outboundFetch = (async (
+const outboundFetch = (async (
   input: Parameters<typeof globalThis.fetch>[0],
   init?: Parameters<typeof globalThis.fetch>[1],
 ) => {
@@ -949,7 +952,7 @@ async function normalizeForUndici(
  * 且消费 undici 的 Response(如 `response.body?.cancel()`)时用这个,避免为了换通道
  * 顺带改一圈类型。语义与 `outboundFetch` 完全一致。
  */
-export const outboundUndiciFetch: typeof undiciFetch = async (input, init) => {
+const outboundUndiciFetch: typeof undiciFetch = async (input, init) => {
   const target =
     typeof input === 'string'
       ? input
@@ -986,7 +989,7 @@ export const outboundUndiciFetch: typeof undiciFetch = async (input, init) => {
  * 绝对形式请求,而 WebSocket 的 upgrade 握手必须是隧道。实际用到的外网 WS 端点都是
  * `wss://`;真遇到就记一次告警并直连,不静默。
  */
-export async function createOutboundHttpAgent(url: string): Promise<NodeHttpAgent | undefined> {
+async function createOutboundHttpAgent(url: string): Promise<NodeHttpAgent | undefined> {
   const upstream = parseUpstream(url);
   if (!upstream) return undefined;
   const proxy = await resolveProxyTarget(upstream);
@@ -1006,7 +1009,7 @@ export async function createOutboundHttpAgent(url: string): Promise<NodeHttpAgen
 }
 
 /** @internal 单测用:清空 dispatcher 池与告警去重状态。 */
-export function resetOutboundFetchStateForTest(): void {
+function resetOutboundFetchStateForTest(): void {
   for (const dispatcher of dispatcherPool.values()) {
     void dispatcher.close().catch(() => {
       /* no-op */
@@ -1024,4 +1027,7 @@ export function resetOutboundFetchStateForTest(): void {
       /* no-op */
     });
   }
+}
+
+return { resolveConnectOptions, rewritePinnedProxyDispatchOptions, createPinnedProxyDispatcher, guardedOutboundFetch, resolveOutboundDispatcher, outboundFetch, outboundUndiciFetch, createOutboundHttpAgent, resetOutboundFetchStateForTest };
 }

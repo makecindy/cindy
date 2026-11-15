@@ -10,7 +10,7 @@
  */
 
 import { createId } from '@paralleldrive/cuid2';
-import { and, asc, desc, eq, gt, inArray, isNull, like, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, like, or, sql } from 'drizzle-orm';
 
 import { getDbClient, getCurrentDbClientUserId } from '../localDb/client/current';
 import type { DbClient } from '../localDb/client/DbClient';
@@ -19,7 +19,7 @@ import { messageToCamel } from '../localDb/mapper';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn';
 import { createLogger } from '../logger.js';
 import { extractPrRefs, messageContentToText, type PrRef } from './prRefExtractor.js';
-import type { SessionPrRefAction } from '@cindy/maker-shared';
+import { prStatusKey, type SessionPrRefAction } from '@cindy/maker-shared';
 import { throwIpcError } from '../utils/ipcValidate';
 
 const log = createLogger('git-context/pr-refs');
@@ -41,6 +41,21 @@ export interface SessionPrRef extends PrRef {
 /** 只有这两类角色的文本参与提取——tool_result 里的 PR 列表是噪音(详见 prRefExtractor)。 */
 const SCANNED_ROLES = new Set(['user', 'assistant']);
 
+/**
+ * Reorder writes small positive ordinals; older add paths wrote Unix milliseconds.
+ * Those automatic timestamps must not outrank later message mentions. Interpret
+ * them as the default priority on read so existing records recover without a
+ * data migration. A trillion entries is outside any supported reorder group.
+ */
+function manualPrPriority() {
+  return sql<number>`case when ${sessionPrRefs.priority} >= 1000000000000 then 0 else ${sessionPrRefs.priority} end`;
+}
+
+/** Export the same effective priority used by SQL ordering for clients that re-sort. */
+function prRefColumns() {
+  return { ...getTableColumns(sessionPrRefs), priority: manualPrPriority().as('priority') };
+}
+
 /** PR 引用有变化时广播 renderer 的回调,由 ipc.ts 注入(解耦 Electron)。 */
 let onRefsChanged: ((sessionId: string) => void) | null = null;
 
@@ -56,7 +71,11 @@ export async function recordPrRefsForMessage(msg: {
   content: unknown;
   createdAt: string | number;
 }): Promise<void> {
-  if (!SCANNED_ROLES.has(msg.role) || !messageContentToText(msg.content).includes('/pull/')) return;
+  if (
+    !SCANNED_ROLES.has(msg.role) ||
+    !/(?:\/pull\/|\/-\/merge_requests\/)/.test(messageContentToText(msg.content))
+  )
+    return;
   try {
     const dbClient = getDbClient();
     await reconcilePrRefsForSession(msg.sessionId,
@@ -137,6 +156,8 @@ async function upsertPrRefsWithinWrite(
       .values({
         id: createId(),
         sessionId,
+        provider: ref.provider ?? 'github',
+        host: ref.host ?? 'github.com',
         owner: ref.owner,
         repo: ref.repo,
         prNumber: ref.prNumber,
@@ -149,6 +170,8 @@ async function upsertPrRefsWithinWrite(
       .onConflictDoUpdate({
         target: [
           sessionPrRefs.sessionId,
+          sessionPrRefs.provider,
+          sessionPrRefs.host,
           sessionPrRefs.owner,
           sessionPrRefs.repo,
           sessionPrRefs.prNumber,
@@ -165,7 +188,7 @@ async function upsertPrRefsWithinWrite(
 }
 
 /** 回填完成标记(migrationMeta kv,先例:codex_history_has_product_prompt_initialized_v1)。 */
-const BACKFILL_META_KEY = 'git_context_pr_refs_backfill_v2';
+const BACKFILL_META_KEY = 'git_context_pr_refs_backfill_v3';
 
 /**
  * 进程内防重入,按 DbClient 实例记账:同进程登出再登入另一账号时
@@ -214,7 +237,10 @@ export async function ensurePrRefsBackfill(): Promise<void> {
           inArray(messages.role, ['user', 'assistant']),
           isNull(messages.rewindAt),
           or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
-          like(messages.content, '%github.com%/pull/%'),
+          or(
+            like(messages.content, '%github.com%/pull/%'),
+            like(messages.content, '%/-/merge_requests/%'),
+          ),
         ),
       )
       .orderBy(asc(messages.createdAt));
@@ -288,7 +314,7 @@ async function reconcilePrRefsForSession(
       eq(messages.sessionId, sessionId),
       isNull(messages.rewindAt),
       inArray(messages.role, ['user', 'assistant']),
-      like(messages.content, '%/pull/%'),
+      or(like(messages.content, '%/pull/%'), like(messages.content, '%/-/merge_requests/%')),
     ];
     if (clearedAt !== null) conds.push(gt(messages.createdAt, clearedAt));
     if (messageId !== undefined) conds.push(eq(messages.id, messageId));
@@ -318,7 +344,7 @@ async function reconcilePrRefsForSession(
       }
       const refs = extractPrRefs(messageContentToText(message.content));
       if (refs.length === 0) continue;
-      for (const ref of refs) keep.add(`${ref.owner}/${ref.repo}#${ref.prNumber}`);
+      for (const ref of refs) keep.add(prStatusKey(ref));
       await upsertPrRefsWithinWrite(dbClient, sessionId, refs, row.createdAt, {
         authoritative: prune,
         scope,
@@ -333,6 +359,8 @@ async function reconcilePrRefsForSession(
     const existing = await db
       .select({
         id: sessionPrRefs.id,
+        provider: sessionPrRefs.provider,
+        host: sessionPrRefs.host,
         owner: sessionPrRefs.owner,
         repo: sessionPrRefs.repo,
         prNumber: sessionPrRefs.prNumber,
@@ -343,12 +371,7 @@ async function reconcilePrRefsForSession(
       .where(eq(sessionPrRefs.sessionId, sessionId));
     if (scope && !scope.isCurrent()) return;
     const staleIds = existing
-      .filter(
-        (r) =>
-          !r.manuallyAdded &&
-          r.removedAt === null &&
-          !keep.has(`${r.owner}/${r.repo}#${r.prNumber}`),
-      )
+      .filter((r) => !r.manuallyAdded && r.removedAt === null && !keep.has(prStatusKey(r)))
       .map((r) => r.id);
     if (staleIds.length > 0) {
       await db.delete(sessionPrRefs).where(inArray(sessionPrRefs.id, staleIds));
@@ -368,12 +391,12 @@ async function reconcilePrRefsForSession(
 export async function listAllPrRefs(): Promise<SessionPrRef[]> {
   const db = getDbClient().drizzle;
   const rows = await db
-    .select()
+    .select(prRefColumns())
     .from(sessionPrRefs)
     .where(and(isNull(sessionPrRefs.removedAt), eq(sessionPrRefs.associationSource, 'explicit')))
     .orderBy(
       desc(sessionPrRefs.pinned),
-      desc(sessionPrRefs.priority),
+      desc(manualPrPriority()),
       desc(sessionPrRefs.lastSeenAt),
     )
     .limit(2000);
@@ -384,7 +407,7 @@ export async function listAllPrRefs(): Promise<SessionPrRef[]> {
 export async function listPrRefs(sessionId: string): Promise<SessionPrRef[]> {
   const db = getDbClient().drizzle;
   const rows = await db
-    .select()
+    .select(prRefColumns())
     .from(sessionPrRefs)
     .where(
       and(
@@ -395,7 +418,7 @@ export async function listPrRefs(sessionId: string): Promise<SessionPrRef[]> {
     )
     .orderBy(
       desc(sessionPrRefs.pinned),
-      desc(sessionPrRefs.priority),
+      desc(manualPrPriority()),
       desc(sessionPrRefs.lastSeenAt),
     );
   return rows.map(rowToSessionPrRef);
@@ -406,6 +429,8 @@ function rowToSessionPrRef(r: typeof sessionPrRefs.$inferSelect): SessionPrRef {
   return {
     id: r.id,
     sessionId: r.sessionId,
+    provider: r.provider,
+    host: r.host,
     owner: r.owner,
     repo: r.repo,
     prNumber: r.prNumber,
@@ -459,8 +484,8 @@ async function managePrRefsWithinWrite(
   origin: string,
   verified: PrRef | undefined,
 ): Promise<SessionPrRef[] | { verify: PrRef }> {
-  const isVerified = (ref: PrRef) => verified?.owner.toLowerCase() === ref.owner.toLowerCase()
-    && verified?.repo.toLowerCase() === ref.repo.toLowerCase() && verified?.prNumber === ref.prNumber;
+  const isVerified = (ref: PrRef) =>
+    verified !== undefined && prStatusKey(verified) === prStatusKey(ref);
   const db = dbClient.drizzle;
   const [session] = await db
     .select({ source: sessions.source })
@@ -474,7 +499,6 @@ async function managePrRefsWithinWrite(
     .select()
     .from(sessionPrRefs)
     .where(eq(sessionPrRefs.sessionId, sessionId));
-  const nextPriority = rows.reduce((value, row) => Math.max(value, row.priority + 1), Date.now());
   if (action.action === 'add') {
     if (action.url.length > 2048) throwIpcError('INVALID_PARAMS', 'PR URL too long');
     let url: URL;
@@ -485,24 +509,22 @@ async function managePrRefsWithinWrite(
     }
     if (
       url.protocol !== 'https:' ||
-      url.hostname !== 'github.com' ||
       url.username ||
       url.password ||
       url.port ||
-      !/^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9]\d*(?:\/(?:files|commits|checks))?\/?$/.test(
-        url.pathname,
+      !(
+        (url.hostname === 'github.com' &&
+          /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9]\d*(?:\/(?:files|commits|checks))?\/?$/.test(
+            url.pathname,
+          )) ||
+        /^(?:\/[A-Za-z0-9_.-]+){2,}\/-\/merge_requests\/[1-9]\d*\/?$/.test(url.pathname)
       )
     ) {
       throwIpcError('INVALID_PARAMS', 'Invalid GitHub PR URL');
     }
     const ref = extractPrRefs(url.href)[0];
     if (!ref) throwIpcError('INVALID_PARAMS', 'Invalid GitHub PR number');
-    const existing = rows.find(
-      (r) =>
-        r.owner.toLowerCase() === ref.owner &&
-        r.repo.toLowerCase() === ref.repo &&
-        r.prNumber === ref.prNumber,
-    );
+    const existing = rows.find((r) => prStatusKey(r) === prStatusKey(ref));
     if (existing?.removedAt != null)
       throwIpcError('ALREADY_EXISTS', 'Restore the removed PR first');
     if (!existing || existing.associationSource === 'legacy' || !existing.manuallyAdded) {
@@ -524,7 +546,7 @@ async function managePrRefsWithinWrite(
           manuallyAdded: true,
           associationSource: 'explicit',
           associationOrigin: origin,
-          priority: nextPriority,
+          priority: 0,
         });
     }
   } else if (action.action === 'reorder') {
@@ -595,12 +617,12 @@ async function managePrRefsWithinWrite(
     await db.update(sessionPrRefs).set(patch).where(eq(sessionPrRefs.id, row.id));
   }
   const result = await db
-    .select()
+    .select(prRefColumns())
     .from(sessionPrRefs)
     .where(eq(sessionPrRefs.sessionId, sessionId))
     .orderBy(
       desc(sessionPrRefs.pinned),
-      desc(sessionPrRefs.priority),
+      desc(manualPrPriority()),
       desc(sessionPrRefs.lastSeenAt),
     );
   if (getDbClient() !== dbClient) throwIpcError('PERMISSION_DENIED', 'Account changed');

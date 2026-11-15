@@ -3,8 +3,11 @@ import { VideoSitePreview } from '../VideoSitePreview';
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'test-owner' } }) }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, values?: Record<string, string>) =>
+  key === 'richAnswer.requestImageAgainMessage' ? `Show the existing image ${values?.name} (${values?.source}) again without generating a new image.` : key,
+}) }));
 import { RichAnswer } from '../RichAnswer';
+import type { RichNode } from '@cindy/maker-shared/rich-answer';
 afterEach(cleanup);
 vi.stubGlobal(
   'ResizeObserver',
@@ -67,6 +70,56 @@ it('routes image media through the host renderer without evaluating generated ma
   expect(renderMarkdown).toHaveBeenCalledWith('![Preview](<library:assets/a.png>)', 'image');
   expect(view.container.querySelector('script')).toBeNull();
   expect(screen.getByText('<script>throw 1</script>')).toBeTruthy();
+});
+
+// Unit, #9158: completed image nodes contained placeholders despite intact files.
+// Exercise the production component and send boundary, not a copied URL validator.
+it.each(['cindy-media://__SCALE__', 'cindy-media://__A2__', `cindy-media://blobs/${'a'.repeat(51)}.png`])(
+  'explains the invalid image reference and requests redelivery only on a click: %s', async (src) => {
+    const { SessionQuickSendProvider } = await import('../SessionQuickSendContext');
+    const { waitFor } = await import('@testing-library/react');
+    const send = vi.fn().mockResolvedValue(true);
+    const renderMedia = vi.fn((node: RichNode) => <span data-image-source={String(node.props.src)}>Loaded image</span>);
+    const source = line(1, { op: 'create', id: 'image', kind: 'image', props: { src, alt: 'Comparison' } })
+      + line(2, { op: 'create', id: 'note', kind: 'text', props: { text: 'Other results' } });
+    const props = { source, stateKey: src, renderMedia, renderMarkdown: (text: string) => <span>{text}</span> };
+    const element = (complete: boolean) => <SessionQuickSendProvider value={{ send }}><RichAnswer {...props} complete={complete} /></SessionQuickSendProvider>;
+    const view = render(element(false));
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(renderMedia).not.toHaveBeenCalled();
+    view.rerender(element(true));
+    expect(screen.getByRole('status').textContent).toBe('richAnswer.invalidImageReference');
+    expect(screen.getByText('Other results')).toBeTruthy();
+    const visibleText = `Show the existing image "Comparison" (${JSON.stringify(src)}) again without generating a new image.`;
+    expect(screen.getByText(visibleText)).toBeTruthy();
+    expect(send).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'richAnswer.requestImageAgain' }));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(send).toHaveBeenCalledWith(visibleText, { literalText: true, independent: true });
+    await waitFor(() => expect((screen.getByRole('button', { name: 'richAnswer.sent' }) as HTMLButtonElement).disabled).toBe(true));
+    view.unmount();
+    render(element(true));
+    expect((screen.getByRole('button', { name: 'richAnswer.sent' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(send).toHaveBeenCalledTimes(1);
+  },
+);
+
+// #9164 review: client-wallpaper is also served by the Desktop media protocol.
+it.each([
+  `cindy-media://blobs/${'a'.repeat(64)}.png`,
+  `cindy-media://client-wallpaper/${'a'.repeat(64)}.webp`,
+  `cindy-media://client-wallpaper/${'a'.repeat(64)}.mp4`,
+])('keeps invalid-image recovery read-only and routes a corrected supported source: %s', (src) => {
+  const source = line(1, { op: 'create', id: 'image', kind: 'image', props: { src: 'cindy-media://__IMAGE__', alt: 'Preview' } });
+  const renderMedia = vi.fn((node: RichNode) => <span data-image-source={String(node.props.src)}>Loaded image</span>);
+  const props = { stateKey: 'invalid-image-readonly', renderMedia, renderMarkdown: (text: string) => <span>{text}</span>, complete: true };
+  const view = render(<RichAnswer {...props} source={source} />);
+  expect((screen.getByRole('button', { name: 'richAnswer.requestImageAgain' }) as HTMLButtonElement).disabled).toBe(true);
+  view.rerender(<RichAnswer {...props} source={source + line(2, { op: 'patch', id: 'image', props: { src } })} />);
+  expect(screen.queryByRole('status')).toBeNull();
+  expect(screen.queryByRole('button')).toBeNull();
+  expect(screen.getByText('Loaded image')).toBeTruthy();
+  expect(renderMedia.mock.calls[0][0].props.src).toBe(src);
 });
 // Tier 1: a referenced result may arrive after its consumer in a live answer.
 // Pending/error states must not erase readable content or misrepresent a total.

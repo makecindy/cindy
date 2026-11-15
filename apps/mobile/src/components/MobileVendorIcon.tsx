@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Animated, Easing } from 'react-native';
-import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { useLoopingAnimation } from '@/hooks/useLoopingAnimation';
 import { RemoteSourceMark } from '@/session/RemoteSourceMark';
 import { useTheme } from '@/theme';
 
@@ -46,8 +46,7 @@ export function MobileVendorIcon({
   remote = false,
 }: MobileVendorIconProps) {
   const { colors } = useTheme();
-  const reduceMotion = useReduceMotionEnabled();
-  const animate = running && reduceMotion === false;
+  const animate = useLoopingAnimation(running);
   const opacity = useRef(new Animated.Value(animate ? RUNNING_BREATH_MIN_OPACITY : 1)).current;
   const color = colorOverride ?? (running ? colors.statusAccent : colors.textTertiary);
 

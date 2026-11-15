@@ -396,7 +396,7 @@ describe('UserMessageEditBox — 运行中发送(停止时机在发送时刻)', 
 });
 
 describe('UserMessageEditBox — 取消与键盘', () => {
-  it('取消不产生额外副作用:onCancel 触发,不再 stop、不提交(点铅笔时的中断由 UserMessage 负责,取消后 AI 不恢复是既定语义)', () => {
+  it('运行中取消不中断任务:onCancel 触发,不 stop、不提交(中断只发生在发送时刻)', () => {
     const { props, cancelBtn } = renderBox({ sessionRunning: true });
     fireEvent.click(cancelBtn);
     expect(props.onCancel).toHaveBeenCalledTimes(1);

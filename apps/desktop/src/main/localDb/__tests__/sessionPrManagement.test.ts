@@ -15,6 +15,7 @@ import { messages, migrationMeta, sessionPrRefs, sessions } from '../schema';
 import {
   managePrRefs,
   listPrRefs,
+  listAllPrRefs,
   recordPrRefsForMessage,
   recordPrRefsForImportedMessages,
   recomputePrRefsForSession,
@@ -36,7 +37,9 @@ for (const table of [sessions, messages, sessionPrRefs, migrationMeta] as SQLite
     `CREATE TABLE "${config.name}" (${config.columns.map((c) => `"${c.name}" ${c.getSQLType()}${c.primary ? ' PRIMARY KEY' : ''}`).join(', ')})`,
   );
 }
-sqlite.exec('CREATE UNIQUE INDEX pr_identity ON session_pr_refs(session_id,owner,repo,pr_number)');
+sqlite.exec(
+  'CREATE UNIQUE INDEX pr_identity ON session_pr_refs(session_id,provider,host,owner,repo,pr_number)',
+);
 const verify = vi.fn(async () => undefined);
 const add = (number: number) =>
   managePrRefs(
@@ -62,6 +65,91 @@ beforeEach(() => {
 afterAll(() => sqlite.close());
 
 describe('manual PR management', () => {
+  // DB: MR imports and manual adds share identity across namespace/host/provider.
+  // Prior GitHub fixtures cannot detect cross-host collisions or dropped MR messages.
+  it('imports multi-group MRs and adds the same number on another host without collision', async () => {
+    const url = 'https://git.example.com/group/sub/project/-/merge_requests/7';
+    db.insert(messages)
+      .values({
+        id: 'mr',
+        clientId: 'mr',
+        sessionId: 's',
+        role: 'assistant',
+        content: JSON.stringify(url),
+        createdAt: 10,
+      })
+      .run();
+    await recordPrRefsForImportedMessages('s');
+    expect(await listPrRefs('s')).toMatchObject([
+      {
+        provider: 'gitlab',
+        host: 'git.example.com',
+        owner: 'group/sub',
+        repo: 'project',
+        prNumber: 7,
+      },
+    ]);
+    const refs = await managePrRefs(
+      's',
+      { action: 'add', url: url.replace('git.example.com', 'other.example.com') },
+      verify,
+    );
+    expect(refs).toHaveLength(2);
+    await recomputePrRefsForSession('s');
+    expect(await listPrRefs('s')).toHaveLength(2);
+    db.update(messages)
+      .set({ content: JSON.stringify('no MR remains') })
+      .where(eq(messages.id, 'mr'))
+      .run();
+    await recomputePrRefsForSession('s');
+    expect(await listPrRefs('s')).toMatchObject([{ host: 'other.example.com' }]);
+    await expect(
+      managePrRefs('s', { action: 'add', url: url.replace('https:', 'http:') }, verify),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(await manageSessionPrs('s', { action: 'list' }, verify, 'ui')).toMatchObject({ associations: [] });
+    expect(await manageSessionPrs('s', { action: 'attach', pr: { repo: 'example/repo', number: 1 } }, verify, 'ui')).toMatchObject({ associations: [{ provider: 'github', prNumber: 1 }] });
+    await expect(manageSessionPrs('s', { action: 'reorder', prs: [{ repo: 'example/repo', number: 1 }] }, verify, 'ui')).rejects.toThrow('UNSUPPORTED_PROVIDER');
+  });
+
+  // DB regression: old add priorities (wall-clock ms) hid newer message refs.
+  // Existing tests cover manual ordering, but never mix adds with later messages.
+  // All three public read paths must expose the latest three without losing pins/reorder.
+  // Exported priority must also match SQL order: Mobile re-sorts these returned rows.
+  it('replaces older added PRs with recent mentions, including legacy add priorities', async () => {
+    const start = 1_800_000_000_000;
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      for (const n of [1, 2, 3]) {
+        clock.mockReturnValue(start + n);
+        await add(n);
+      }
+      // Persisted values from versions that assigned timestamps on add.
+      db.update(sessionPrRefs).set({ priority: start }).where(eq(sessionPrRefs.prNumber, 1)).run();
+      db.insert(messages).values({ id: 'recent', clientId: 'recent', sessionId: 's',
+        role: 'assistant', content: JSON.stringify('https://github.com/example/repo/pull/4'),
+        createdAt: start + 10 }).run();
+      await recordPrRefsForImportedMessages('s');
+      const reads = [() => listPrRefs('s'), listAllPrRefs,
+        () => managePrRefs('s', { action: 'list' }, verify)];
+      for (const read of reads) {
+        const rows = await read();
+        expect(rows.slice(0, 3).map(r => r.prNumber)).toEqual([4, 3, 2]);
+        expect(rows.map(r => r.priority)).toEqual([0, 0, 0, 0]);
+      }
+      const refs = await listPrRefs('s');
+      const oldest = refs.find(r => r.prNumber === 1)!;
+      await managePrRefs('s', { action: 'pin', id: oldest.id }, verify);
+      expect((await listPrRefs('s'))[0].prNumber).toBe(1);
+      const unpinned = refs.filter(r => r.id !== oldest.id).reverse();
+      await managePrRefs('s', { action: 'reorder', ids: unpinned.map(r => r.id) }, verify);
+      for (const read of reads) {
+        const rows = await read();
+        expect(rows.map(r => r.prNumber)).toEqual([1, 2, 3, 4]);
+        expect(rows.map(r => r.priority)).toEqual([0, 3, 2, 1]);
+      }
+    } finally { clock.mockRestore(); }
+  });
+
   it('keeps removed links out of active reads until explicit restore', async () => {
     const [ref] = await add(1);
     await managePrRefs('s', { action: 'remove', id: ref.id }, verify);

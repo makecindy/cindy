@@ -243,6 +243,8 @@ export interface UseAvailableAgentsResult {
   availableVendors: ReadonlySet<MakerVendor>;
   /** 首次结果是否已返回。未加载完成时消费方不应据此隐藏任何入口。 */
   loaded: boolean;
+  /** 当前查询是否仍在进行；查询失败后为 false，loaded 仍可为 false。 */
+  loading: boolean;
 }
 
 /**
@@ -256,6 +258,7 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
     () => cached?.vendors ?? new Set(),
   );
   const [loaded, setLoaded] = useState(() => cached !== undefined);
+  const [loading, setLoading] = useState(() => cached === undefined);
 
   useEffect(() => {
     let cancelled = false;
@@ -265,6 +268,7 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
     const key = cacheKeyOf(deviceId);
     const run = (): void => {
       const requestGeneration = currentAgentsCacheGeneration(key);
+      setLoading(true);
       loadAvailableAgents(deviceId)
         .then((vendors) => {
           if (cancelled || currentAgentsCacheGeneration(key) !== requestGeneration) return;
@@ -278,6 +282,10 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
           log.warn('listAvailableAgents failed; not gating agent entries this cycle', {
             error: err instanceof Error ? err.message : String(err),
           });
+        })
+        .finally(() => {
+          if (cancelled || currentAgentsCacheGeneration(key) !== requestGeneration) return;
+          setLoading(false);
         });
     };
     run();
@@ -304,7 +312,7 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
     };
   }, [deviceId]);
 
-  return { availableVendors, loaded };
+  return { availableVendors, loaded, loading };
 }
 
 /** 测试用 —— 清进程内缓存与在途请求(其它代码不应调用)。 */

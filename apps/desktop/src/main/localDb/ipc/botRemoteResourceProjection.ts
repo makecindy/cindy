@@ -18,13 +18,13 @@ export const BOT_REMOTE_RESOURCE_KIND = 'bot';
 export const BOT_FOLLOWING_LINK_REL = 'following';
 
 export const TEAMMATES_TITLE: RemoteLocalizedText = {
-  fallback: 'Teammates',
+  fallback: 'Buddies',
   translations: {
     'zh-CN': '所有伙伴',
     'zh-TW': '所有夥伴',
-    ja: 'すべてのチームメイト',
-    ko: '모든 팀원',
-    "es":"Compañeros","fr":"Coéquipiers","de":"Teammitglieder","pt-PT":"Colegas de equipa","pt-BR":"Colegas de equipe","zh-Hant-x-lzh":"諸同僚","zh-Hans-x-lzh":"诸同僚"},
+    ja: 'すべての仲間',
+    ko: '모든 동반자',
+    "es":"Amigos","fr":"Amis","de":"Freunde","pt-PT":"Amigos","pt-BR":"Amigos","zh-Hant-x-lzh":"諸同伴","zh-Hans-x-lzh":"诸同伴"},
 };
 
 const STATUS_COPY: Readonly<Record<string, RemoteResourceStatus>> = {
@@ -90,6 +90,7 @@ function sourceRevision(source: BotRemoteResourceSource): string {
     source.updatedAt,
     source.lastMessageAt ?? 0,
     source.lastReplyAt ?? 0,
+    source.lastReadAt ?? 0,
     source.hiddenAt ?? 0,
     source.pinnedAt ?? 0,
     source.activityAt,
@@ -119,6 +120,8 @@ export function botRemoteCollectionItemFromSource(
       teammateActivity: { phase: source.needsAttention ? 'error'
         : source.lastMessageRole === 'assistant' && source.lastMessageAt === source.lastReplyAt ? 'completed' : 'idle' },
       lastReplyAt: source.lastReplyAt ?? 0,
+      // Read position kept on this computer; also tells controllers the `read` action exists.
+      lastReadAt: source.lastReadAt ?? 0,
       ...(source.description ? { subtitle: source.description } : {}),
       ...(source.lastMessagePreview ? { preview: source.lastMessagePreview } : {}),
       ...(source.activityAt ? { timestamp: source.activityAt } : {}),

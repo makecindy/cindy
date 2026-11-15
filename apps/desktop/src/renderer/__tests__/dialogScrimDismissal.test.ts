@@ -17,6 +17,8 @@ const EXEMPT_FILES = new Set([
   'components/cindy-make/CindyMakePreflightDialog.tsx',
   // DESIGN.md §4 的侧边抽屉例外；真实点击和保存保护由 botSettingsDrawer.test.tsx 覆盖。
   'features/bots/BotSettingsDrawer.tsx',
+  // 同一侧边抽屉例外；遮罩关闭、路由清理由 BotGroupSettingsDrawer.test.tsx 覆盖。
+  'features/bots/BotGroupSettingsDrawer.tsx',
 ]);
 
 const OUTSIDE_HANDLERS = ['onPointerDownOutside', 'onInteractOutside'];

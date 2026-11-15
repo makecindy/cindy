@@ -18,6 +18,7 @@ import {
   View,
 } from 'react-native';
 import { Text } from '@/components/AppText';
+import { useContextSheetDismissAction } from '@/session/ContextSheet';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import {
   useContextSheetMediaAssets,
@@ -29,7 +30,7 @@ const GRID_COLUMNS = 3;
 
 export interface ContextSheetMediaCallbacks {
   /** 单张点按即加入附件，由页面同步入队并关闭面板。 */
-  onToggleAsset: (asset: ContextSheetMediaAsset) => void;
+  onToggleAsset: (asset: ContextSheetMediaAsset, dismiss?: (afterClose: () => void) => void) => void;
   /** 已附加为附件的 assetId 集(展示勾选角标)。 */
   selectedAssetIds: ReadonlySet<string>;
   /** 正在上传中的 assetId 集(对应格子显示 spinner 并禁点;其余照常可选——上传已后台并发,不再整面板锁定)。 */
@@ -46,6 +47,7 @@ export function RecentPhotosStrip({
   disabled,
   testID,
 }: ContextSheetMediaCallbacks & { enabled: boolean; testID?: string }) {
+  const dismiss = useContextSheetDismissAction();
   const styles = useThemedStyles(makeMediaStyles);
   const media = useContextSheetMediaAssets({ enabled, kind: 'recent' });
 
@@ -76,7 +78,8 @@ export function RecentPhotosStrip({
           busy={busyAssetIds?.has(asset.id) ?? false}
           disabled={disabled || selectedAssetIds.has(asset.id) || busyAssetIds?.has(asset.id)}
           key={asset.id}
-          onPress={() => onToggleAsset(asset)}
+          // Validate/enqueue immediately; the caller can defer focus until dismissal.
+          onPress={() => onToggleAsset(asset, dismiss)}
           selected={selectedAssetIds.has(asset.id)}
           size={STRIP_THUMB_SIZE}
         />

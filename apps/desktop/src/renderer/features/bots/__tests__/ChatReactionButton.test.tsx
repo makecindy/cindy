@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContributions";
 import { act, cleanup, fireEvent, render as renderUI, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -38,7 +39,7 @@ const members = [
 const message = (reactions: BotGroupMessageView['reactions']) =>
   ({ id: 'root', authorName: 'Human', content: 'Root', reactions }) as BotGroupMessageView;
 const actions = (reactions: BotGroupMessageView['reactions']) =>
-  <ChatMessageActions shareScope="group:room" groupId="room" message={message(reactions)} members={members} onChanged={vi.fn()} />;
+  <ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={message(reactions)} members={members} onChanged={vi.fn()} />;
 // The message toolbar expects the app-level tooltip provider.
 const render = (ui: ReactNode) => {
   const view = renderUI(<Tooltip.Provider>{ui}</Tooltip.Provider>);
@@ -141,11 +142,11 @@ describe('reaction avatars', () => {
   it('re-reads when who reacted changes but the count does not', async () => {
     mocks.reactors.mockResolvedValueOnce({ ok: true, reactors: [reactor('z', 'Zoe')] })
       .mockResolvedValueOnce({ ok: true, reactors: [reactor('c1', 'Cindy (Chris)')] });
-    const view = render(<ChatMessageActions shareScope="group:room" groupId="room" members={members} onChanged={vi.fn()}
+    const view = render(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" members={members} onChanged={vi.fn()}
       reactionRevision={3} message={message([{ emoji: '👍', count: 1, me: false }])} />);
     await waitFor(() => expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Zoe'));
     // Zoe removed 👍 and Chris's companion added it: same count and `me`, a new room reaction revision.
-    view.rerender(<ChatMessageActions shareScope="group:room" groupId="room" members={members} onChanged={vi.fn()}
+    view.rerender(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" members={members} onChanged={vi.fn()}
       reactionRevision={4} message={message([{ emoji: '👍', count: 1, me: false }])} />);
     await waitFor(() => expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Cindy (Chris)'));
     expect(images()).toEqual(['https://example.test/cindy-chris.png']);
@@ -156,7 +157,7 @@ describe('reaction avatars', () => {
     const view = render(actions([{ emoji: '👍', count: 1, me: false }]));
     await waitFor(() => expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Zoe'));
     // Zoe leaves; her reaction stays and the member list no longer has her.
-    view.rerender(<ChatMessageActions shareScope="group:room" groupId="room" members={members.filter(m => m.actorId !== 'z')}
+    view.rerender(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" members={members.filter(m => m.actorId !== 'z')}
       onChanged={vi.fn()} message={message([{ emoji: '👍', count: 1, me: false }])} />);
     expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Zoe (left)');
     expect(mocks.reactors).toHaveBeenCalledTimes(1);
@@ -167,7 +168,7 @@ describe('reaction avatars', () => {
     const view = render(actions([{ emoji: '👍', count: 1, me: false }]));
     await waitFor(() => expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Zoe'));
     const renamed = members.map(m => m.actorId === 'z' ? { ...m, name: 'Zoey' } : m);
-    view.rerender(<ChatMessageActions shareScope="group:room" groupId="room" members={renamed} onChanged={vi.fn()}
+    view.rerender(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" members={renamed} onChanged={vi.fn()}
       message={message([{ emoji: '👍', count: 1, me: false }])} />);
     expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Zoey');
     expect(mocks.reactors).toHaveBeenCalledTimes(1);

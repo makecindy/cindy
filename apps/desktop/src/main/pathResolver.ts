@@ -26,6 +26,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { stripWindowsDriveUriSlash } from '../shared/pathText';
+import { isWindowsPathLike } from '../shared/workingDir';
+
 export type ResolvePathStatus = 'unique' | 'multiple' | 'none';
 
 export interface ResolvePathResult {
@@ -239,8 +242,14 @@ export async function resolveWorkspacePath(
   const decodedHref = safeDecodeHrefForLookup(href);
   if (decodedHref === null) return { status: 'none', candidates: [] };
   // Expand a leading `~` first; for any non-`~` input `probe === href`, so the
-  // path below is unchanged for every existing case.
-  const probe = expandTilde(decodedHref, options.homeDir ?? os.homedir());
+  // path below is unchanged for every existing case. `/D:/x` — a Windows drive
+  // path in URI-pathname form (#8726) — is normalized before the absolute
+  // check: on Windows the raw form stats as a broken `\D:\x` drive-relative
+  // path and silently falls through to 'none'. The drive-letter spelling only
+  // names a drive for a Windows file owner (same gate as the renderer's
+  // normalizeWindowsDriveHref) — on POSIX `/D:` is a legal path of its own.
+  let probe = expandTilde(decodedHref, options.homeDir ?? os.homedir());
+  if (isWindowsPathLike(workingDir)) probe = stripWindowsDriveUriSlash(probe);
 
   // Path 1: probe is absolute (incl. an expanded `~`) — just stat it. A `~`
   // path that misses returns 'none' here rather than falling through to the
@@ -448,6 +457,9 @@ export async function resolveWorkspacePathBatch(
   }
   const isPathAllowed = options.isPathAllowed ?? (() => true);
   const homeDir = options.homeDir ?? os.homedir();
+  // `/D:/x` URI-pathname drive form is normalized like in the single resolver —
+  // and likewise only when the workspace is Windows-owned.
+  const driveUriEnabled = isWindowsPathLike(workingDir);
 
   const needBfs: string[] = [];
   const decodedNeedBfs = new Map<string, string>();
@@ -467,7 +479,8 @@ export async function resolveWorkspacePathBatch(
     }
     // Expand a leading `~`; non-`~` hrefs are unchanged (probe === href). The
     // result key stays the original href so the renderer cache lines up.
-    const probe = expandTilde(decodedHref, homeDir);
+    let probe = expandTilde(decodedHref, homeDir);
+    if (driveUriEnabled) probe = stripWindowsDriveUriSlash(probe);
     if (path.isAbsolute(probe)) {
       try {
         const s = await fs.promises.stat(probe);

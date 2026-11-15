@@ -94,7 +94,7 @@ Agent、模型和已有订阅放在一起，培养一个懂你工作方式的伙
 
 Linux 用户可参考 [Ubuntu、Arch Linux 与 Omarchy 安装指南](docs/linux.md)。
 
-<h3 align="center">好吧，是有一点受欢迎。</h3>
+<h3 align="center">好像，被一些人发现了。</h3>
 
 <p align="center">
   <a href="https://github.com/makecindy/cindy/stargazers">

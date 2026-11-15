@@ -37,6 +37,14 @@ test("Mobile 文字规范与其它现行设计文档按确切文件名算设计�
 	assert.equal(passes("design-governance.md §8 门禁接线"), true);
 });
 
+test("从 DESIGN.md 拆出的专题按带 .md 的确切文件名算设计依据", () => {
+	assert.equal(passes("login-flow.md §16.3 区域徽标"), true);
+	assert.equal(passes("wallpaper.md 壁纸透明度"), true);
+	assert.equal(passes("container-transform.md 工具栏分档"), true);
+	assert.equal(passes("wallpaper 相关"), false);
+	assert.equal(passes("my-wallpaper.md"), false);
+});
+
 test("任意 *-design.md 或小写 design.md 不再误算设计依据", () => {
 	assert.equal(passes("feature-design.md"), false);
 	assert.equal(passes("见 design.md"), false);
