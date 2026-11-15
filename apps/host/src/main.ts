@@ -135,6 +135,7 @@ import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring
 import { lockSessionRoute } from './agent/session-route-lock.mjs';
 import { createHostSessionUpdate } from './agent/session-update.ts';
 import { createHostTaskRestore } from './agent/task-restore.ts';
+import { resolveSessionReferencesWithPorts } from '../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
 import { setSessionRouteLockImplementation } from '../../desktop/src/main/localDb/sessionRouteLock.ts';
 import { withSendToSessionLock } from '../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
@@ -965,6 +966,13 @@ const contextRecovery = createHostContextRecoveryWiring({
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,
   restoreArchivedSessionForSend: taskRestore.restoreArchivedSessionForSend,
+  // Another device's task is read over Device Link, which the Host does not have: it answers as the
+  // desktop does when no link is connected (the reference is reported unavailable).
+  resolveSessionReferences: (refs: Parameters<typeof resolveSessionReferencesWithPorts>[1], options: Parameters<typeof resolveSessionReferencesWithPorts>[2]) =>
+    resolveSessionReferencesWithPorts({
+      getSelfDeviceId: () => currentDeviceId ?? '',
+      invokeRemote: async () => ({ ok: false, error: { code: 'NOT_CONNECTED', message: 'Host has no Device Link' } }),
+    } as Parameters<typeof resolveSessionReferencesWithPorts>[0], refs, options),
   // The profile root's claude-idle-release.json, which the desktop window reads too (read-only here).
   readClaudeIdleMinutes: () => readClaudeIdleMinutesFrom(profileDir),
   pendingHandoff,

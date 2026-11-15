@@ -36,7 +36,8 @@ import { openOwnerDatabase } from '../../../desktop/src/main/localDb/startupCore
 import { createDbClientForHandle } from '../../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.ts';
 import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionStorageAdapter.ts';
-import { createHostMessageStore } from '../message-store.ts';
+import { createHostMessageStore, createHostMessageRecovery } from '../message-store.ts';
+import { resolveSessionReferencesWithPorts } from '../../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
 import { listErrorTailPendingRows } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
 import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { createEventHub } from '../events.mjs';
@@ -3292,4 +3293,101 @@ test('a dispatched user turn records its model, and a changed model adds one mod
   assert.equal(meta('second').executionModel.model, 'model-b');
   assert.deepEqual(Object.keys(meta('model-change:second')), ['modelChange']);
   assert.equal(db.db.prepare("SELECT count(*) AS n FROM messages WHERE session_id = 'model-task' AND client_id LIKE 'model-change:%'").get().n, 1);
+});
+
+// Unit, over a migrated profile database: a user turn stored but not dispatched (the coordinator's
+// persistTerminalSendError and onPersistedSendRejected, register.ts).
+// - Rule: the task gets a retryable error row with the failure, as on the desktop; a Pi prompt
+//   timeout also closes the stuck native process, without a replay.
+// - Gap: the Host kept only the projection's error: after a restart the task showed the user's
+//   message with no error and no retry.
+async function undispatchedFixture(t, failure) {
+  const db = await recoveryDatabase(t);
+  const h = createHarness({ persistMessage: db.persistMessage, getOwner: getCurrentDbClientSnapshot,
+    readSession: async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'm', workingDir: db.root,
+      providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }) });
+  t.after(() => h.queue.dispose());
+  const create = h.maker.createSession.bind(h.maker);
+  h.maker.createSession = async opts => {
+    const session = await create(opts);
+    // The vendor fails after the transaction accepted the turn (its user row is stored).
+    session.send = async (_text, sendOpts = {}) => {
+      sendOpts.onTurnReserved?.(++session.generation);
+      await sendOpts.beforeProviderStart?.();
+      await sendOpts.onAccepted?.(sendOpts.signal);
+      throw new Error(failure);
+    };
+    return session;
+  };
+  return { db, h };
+}
+
+test('a stored user turn that fails to dispatch leaves a retryable error row', { timeout: 30_000 }, async t => {
+  const { db, h } = await undispatchedFixture(t, 'vendor failed');
+  await db.createTask('undispatched');
+  await h.queue.enqueue('undispatched', { clientId: 'lost', text: 'hello' });
+  await waitFor(() => db.errorRows('undispatched').length > 0);
+  const rows = db.db.prepare("SELECT role, content FROM messages WHERE session_id = 'undispatched' ORDER BY rowid").all();
+  assert.deepEqual(rows.map(row => row.role), ['user', 'error']);
+  assert.match(rows[1].content, /vendor failed/);
+  assert.match(h.queue.projection('undispatched').error, /vendor failed/);
+  assert.ok(h.maker.getSession('undispatched'), 'an ordinary failure keeps the runtime');
+});
+
+test('a Pi prompt timeout after the user turn is stored also closes the stuck runtime', { timeout: 30_000 }, async t => {
+  const { db, h } = await undispatchedFixture(t, 'Pi RPC timeout after 30000ms: prompt');
+  await db.createTask('pi-timeout');
+  await h.queue.enqueue('pi-timeout', { clientId: 'stuck', text: 'hello' });
+  await waitFor(() => db.errorRows('pi-timeout').length > 0);
+  await waitFor(() => !h.maker.getSession('pi-timeout'));
+  const [error] = db.db.prepare("SELECT agent_meta FROM messages WHERE session_id = 'pi-timeout' AND role = 'error'").all();
+  assert.ok(error);
+});
+
+// Unit, over a migrated profile database: a zero-output retry replaces the failed turn
+// (supersedeRetriedUserTurn, retriedUserTurnSupersede.ts): the old user row and its error row are
+// hidden and clients are told they were deleted. Gap: the Host kept both turns.
+test('a retried turn hides the user row and error row it replaces', { timeout: 30_000 }, async t => {
+  const db = await recoveryDatabase(t);
+  await db.createTask('retry-task');
+  await db.persistMessage('retry-task', { clientId: 'old-user', role: 'user', content: 'hello' });
+  await db.persistMessage('retry-task', { clientId: 'old-error', role: 'error', content: 'failed' });
+  await db.persistMessage('retry-task', { clientId: 'retry-user', role: 'user', content: 'hello' });
+  const events = [];
+  const recovery = createHostMessageRecovery({ getOwner: getCurrentDbClientSnapshot, publish: event => events.push(event) });
+  const hidden = await recovery.supersedeRetriedUserTurn('retry-task', { supersededUserClientId: 'old-user', retryUserClientId: 'retry-user' });
+  assert.deepEqual(hidden.sort(), ['old-error', 'old-user']);
+  const visible = db.db.prepare("SELECT client_id FROM messages WHERE session_id = 'retry-task' AND rewind_at IS NULL").all();
+  assert.deepEqual(visible.map(row => row.client_id), ['retry-user']);
+  assert.equal(events.filter(event => event.type === 'message_deleted').length, 1);
+});
+
+// Unit, over a migrated profile database: session references from the composer
+// (resolveSessionReferences, sessionReferenceResolverCore.ts). Rule: a referenced task's messages
+// reach the Agent with the input; another device's task needs Device Link, which the Host lacks, so
+// it is unavailable as on a desktop with no link, and the message goes without it. Gap: the Host
+// dropped every reference.
+test('a send carries a referenced task\'s messages; another device\'s task is left out', { timeout: 30_000 }, async t => {
+  const db = await recoveryDatabase(t);
+  const h = createHarness({ persistMessage: db.persistMessage, getOwner: getCurrentDbClientSnapshot,
+    resolveSessionReferences: (refs, options) => resolveSessionReferencesWithPorts({
+      getSelfDeviceId: () => 'host-device',
+      invokeRemote: async () => ({ ok: false, error: { code: 'NOT_CONNECTED', message: 'Host has no Device Link' } }),
+    }, refs, options),
+    readSession: async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'm', workingDir: db.root,
+      providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }) });
+  t.after(() => h.queue.dispose());
+  await db.createTask('quoted');
+  await db.persistMessage('quoted', { clientId: 'q-user', role: 'user', content: 'the quoted question' });
+  await db.persistMessage('quoted', { clientId: 'q-reply', role: 'assistant', content: 'the quoted answer' });
+  await db.createTask('quoting');
+  await enqueue(h, 'quoting', { clientId: 'with-ref', text: 'look at this', sessionRefs: [{ sessionId: 'quoted' }] });
+  const wire = JSON.stringify(h.maker.getSession('quoting').sent[0]);
+  assert.match(wire, /the quoted answer/);
+
+  // Unavailable references are an optional enrichment on the desktop: the message is still sent,
+  // without quoted history (agent-input-coordinator.ts resolveReferenceContexts).
+  await db.createTask('remote-quoting');
+  await enqueue(h, 'remote-quoting', { clientId: 'remote-ref', text: 'and this', sessionRefs: [{ sessionId: 'elsewhere', deviceId: 'other-device' }] });
+  assert.equal(JSON.stringify(h.maker.getSession('remote-quoting').sent[0]), JSON.stringify('and this'));
 });

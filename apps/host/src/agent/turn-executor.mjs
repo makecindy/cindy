@@ -22,6 +22,7 @@ import { peekGoalInactiveNote } from '../../../desktop/src/main/goal-host/inacti
 import { createTurnModelAttribution } from '../../../desktop/src/main/maker-ipc/turnModelAttribution.ts';
 import { patchMessageAgentMetaWithResultRow } from '../../../desktop/src/main/localDb/messageMutations.ts';
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
+import { isPiPromptRpcTimeoutError } from '../../../desktop/src/shared/inputError.ts';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
 import { noteClaudeSessionTurnState } from '../../../desktop/src/main/maker-host/claude-session-background-activity.ts';
@@ -750,6 +751,20 @@ export function createTurnExecutor(deps) {
       return session;
     },
     enqueueDurableWrite(id, label, fn) { return historyFor(id).enqueueDurableWrite(label, fn); },
+    // The coordinator's hooks for a user turn stored but not dispatched, as register.ts passes them:
+    // a retryable error row (the desktop's onTurnErrorEvent with the Pi prompt-timeout reason), and
+    // for a Pi prompt timeout, closing the stuck native process (no replay; the user retries).
+    persistTerminalSendError(id, message) {
+      historyFor(id).onTurnErrorEvent(id, {
+        message, ...(isPiPromptRpcTimeoutError({ message }) ? { reason: 'pi-prompt-timeout' } : {}),
+      }, null);
+    },
+    onPersistedSendRejected(id, message) {
+      if (!isPiPromptRpcTimeoutError({ message })) return;
+      void closeRuntime(id).catch(error => {
+        log.warn('failed to close unhealthy PI session after prompt timeout', { sessionId: id, error: errorText(error) });
+      });
+    },
     isRunning(id) { return turns.get(id)?.running === true; },
     isInputRunning(id, clientId) { const turn = turns.get(id); return turn?.clientId === clientId && turn.running; },
     reconcileIdle(id) {

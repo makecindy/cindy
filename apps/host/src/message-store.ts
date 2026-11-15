@@ -1,4 +1,5 @@
 import { createMessageClearRecovery } from '../../desktop/src/main/localDb/messageClearRecovery.js';
+import { supersedeRetriedUserTurnWithPorts } from '../../desktop/src/main/localDb/retriedUserTurnSupersede.js';
 import { readVisiblePiUserEntry, patchMessageAgentMetaWithResultRow } from '../../desktop/src/main/localDb/messageMutations.js';
 import { removeRefs as removeMediaRefs, removeSessionAttachmentRefIfUnreferencedByLiveMessage } from '../../desktop/src/main/cindy-media/ledger.js';
 import { createLogger } from '../../desktop/src/main/logger.js';
@@ -124,6 +125,16 @@ export function createHostMessageRecovery(deps: {
   });
   return {
     rewindPersistedUserMessageAfterClear,
+    /** A zero-output retry replaced its failed turn: hide the old user row and its error row, as the
+     * desktop does (localDb/retriedUserTurnSupersede.ts), and tell clients they were deleted. */
+    supersedeRetriedUserTurn: (sessionId: string, args: { supersededUserClientId: string; retryUserClientId: string }) =>
+      supersedeRetriedUserTurnWithPorts(sessionId, args, {
+        captureOwnerBroadcastScope: capture,
+        isOwnerBroadcastScopeCurrent: owner => !!owner && isCurrent(owner),
+        broadcastMessageDeleted: (payload, owner) => {
+          if (owner && isCurrent(owner)) deps.publish({ type: 'message_deleted', ...payload });
+        },
+      }),
     async readPiUserEntry(sessionId: string, clientId: string) {
       const owner = capture();
       const id = await readVisiblePiUserEntry(owner.client, sessionId, clientId);

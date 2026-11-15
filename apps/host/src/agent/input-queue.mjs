@@ -1,4 +1,5 @@
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
+import { hydrateQueuedAgentReferences } from '../../../desktop/src/main/maker-ipc/agentInputReferences.ts';
 import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
 import { createTurnExecutor } from './turn-executor.mjs';
@@ -229,6 +230,19 @@ export function createInputQueue(deps) {
       beforeDispatchUserTurn: executor.beforeDispatchUserTurn,
       // A durable turn that never reached the vendor: drop the record, then the baseline.
       onUndispatchedUserTurn: executor.onUndispatchedUserTurn,
+      // Session references in the composer (register.ts resolveSessionReferences, with the Host's
+      // device identity; reading another device's task needs Device Link, which the Host lacks).
+      resolveSessionReferences: deps.resolveSessionReferences,
+      refreshAgentReferencesBeforeDispatch: async item => {
+        const refreshed = await hydrateQueuedAgentReferences(item, {
+          isSessionTurnRunning: target => deps.getMaker()?.getSession(target)?.isTurnRunning() ?? false,
+        });
+        Object.assign(item, refreshed);
+        if (refreshed.agentReferences === undefined) delete item.agentReferences;
+      },
+      supersedeRetriedUserTurn: deps.supersedeRetriedUserTurn,
+      persistTerminalSendError: (id, message) => executor.persistTerminalSendError(id, message),
+      onPersistedSendRejected: (id, message) => executor.onPersistedSendRejected(id, message),
       onAcceptedQueuedMessage: async (id, item) => {
         schedulePreparations.delete(item.clientId);
         scheduleDiscardWatchers.delete(item.clientId);
