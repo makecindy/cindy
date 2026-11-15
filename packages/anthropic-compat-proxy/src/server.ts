@@ -2605,7 +2605,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     }
 
     if (requestGuard) {
-      try { rawBody = requestGuard.transformBody(rawBody); headers['content-length'] = String(rawBody.length); }
+      try {
+        rawBody = requestGuard.transformBody(rawBody);
+        // The ingress controller parsed the pre-guard bytes. Never let a local
+        // bridge reuse that object and reintroduce tools removed by the guard.
+        ingressParsedBody = undefined;
+        headers['content-length'] = String(rawBody.length);
+      }
       catch { res.destroy(); return; }
     }
 

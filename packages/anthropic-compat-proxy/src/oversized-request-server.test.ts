@@ -1,5 +1,6 @@
 import { Agent, createServer, request } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { PassThrough } from 'node:stream';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createAnthropicCompatProxy } from './server.js';
 import type { LocalRequestHandler, ProxyOptions } from './types.js';
@@ -11,6 +12,46 @@ const recoverInlineAttachments = (body: Parameters<typeof recover>[0], limit: nu
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); await closeTestConnections(); });
+
+// PR #10663: ingress recovery caches a parsed body before the text-only guard.
+// Existing ingress tests did not combine a guard with a local parsed-body bridge.
+// Unit tier; one image crossing an 8 KiB window must not reintroduce tools upstream.
+it('invalidates the spooled parsed body after a text-only guard before local bridging', async () => {
+  const received: unknown[] = [];
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(chunk);
+    received.push(JSON.parse(Buffer.concat(chunks).toString())); res.end('ok');
+  });
+  const port = await listenOnAvailableLoopbackPort(upstream);
+  cleanup.push(() => new Promise(resolve => upstream.close(() => resolve())));
+  const control = vi.fn<NonNullable<ProxyOptions['requestSizeController']>['control']>((body, format, policy) =>
+    controlRequestSize(body, format, { ...policy, triggerBytes: 8192, targetBytes: 4096 }, async () => '/tmp/image.png'));
+  const proxy = await createAnthropicCompatProxy({
+    upstream: `http://127.0.0.1:${port}`, maxRequestBodyBytes: 8192,
+    requestSizeController: { format: () => 'responses', control },
+    requestGuard: () => ({
+      transformBody: body => {
+        const parsed = JSON.parse(body.toString()); delete parsed.tools;
+        return Buffer.from(JSON.stringify(parsed));
+      },
+      response: () => new PassThrough(),
+    }),
+    routingTransform: () => ({ localHandler: async ({ parsedBody, res }) => {
+      const upstreamResponse = await fetch(`http://127.0.0.1:${port}`, { method: 'POST', body: JSON.stringify(parsedBody) });
+      res.end(await upstreamResponse.text());
+    } }),
+  });
+  cleanup.push(() => proxy.dispose());
+  const response = await fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ tools: [{ type: 'function', name: 'execute' }], input: [{ role: 'user', content: [
+      { type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(9000).toString('base64')}` },
+    ] }] }),
+  });
+  expect(response.status).toBe(200); expect(await response.text()).toBe('ok');
+  expect(control).toHaveBeenCalledOnce();
+  expect(received).toHaveLength(1);
+  expect(received[0]).not.toHaveProperty('tools');
+});
 
 it.each(['recover', 'still-413', 'storage-failure', 'text', 'not-smaller'] as const)(
   'handles upstream 413 below the local limit without an unbounded retry: %s', async mode => {
