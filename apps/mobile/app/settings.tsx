@@ -81,6 +81,7 @@ import {
   subscribeMobileVoiceDictionaryCache,
 } from '@/session/mobileVoiceDictionaryCache';
 import { buildMobileVoiceDictionaryEntryViews } from '@/session/mobileVoiceDictionaryView';
+import { AppIconSettings, useAppIconChoice } from '@/settings/AppIconSettings';
 import { UserBubbleSettings } from '@/settings/UserBubbleSettings';
 import { PromptRecommendationSettings } from '@/settings/PromptRecommendationSettings';
 import { shouldCheckBundleUpdate } from '@/update/bundleUpdate';
@@ -151,6 +152,7 @@ function hasRunningRemoteTasks(): boolean {
 export default function SettingsScreen() {
   const styles = useThemedStyles(makeStyles);
   const rowStyles = useSettingsRowStyles();
+  const appIconChoice = useAppIconChoice();
   const { preference: themePreference, setPreference: setThemePreference } = useTheme();
   const router = useRouter();
   const push = useGuardedPush();
@@ -960,6 +962,7 @@ export default function SettingsScreen() {
             />
           </NativePullDownMenu>
           <UserBubbleSettings />
+          {appIconChoice ? <AppIconSettings choice={appIconChoice} /> : null}
         </SettingsGroup>
 
         {/* 显示语言:默认跟随系统,手动选择即持久化 override(恢复跟随系统 = 清除 override) */}
