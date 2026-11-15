@@ -309,7 +309,6 @@ export function ProviderShareManagePage({
   const removeMember = useCallback(
     async (member: ProviderShareMemberView) => {
       const ok = await confirm({
-        presentation: 'standard',
         title: t('providerShare.manage.removeConfirm.title', { name: providerShareMemberName(member) }),
         description: t('providerShare.manage.removeConfirm.description', {
           name: providerShareMemberName(member),

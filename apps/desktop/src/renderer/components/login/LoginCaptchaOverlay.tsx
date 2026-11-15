@@ -233,7 +233,7 @@ export function LoginCaptchaOverlay({
       >
         <p
           id="login-captcha-title"
-          className="font-semibold"
+          className="font-medium"
           style={{ fontSize: 16, lineHeight: '24px', color: LOGIN_COLORS.titleText }}
         >
           {t('login.captcha.title')}

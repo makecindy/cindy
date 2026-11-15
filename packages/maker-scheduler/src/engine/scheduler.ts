@@ -192,6 +192,8 @@ function validateScheduleExecutionShape(
 export interface SchedulerOptions {
   storage: ScheduleStorage;
   runner: ScheduleRunner;
+  /** Capture host state before asynchronous fire preparation. */
+  captureFireContext?: () => () => void;
   clock?: Clock;
   logger?: Logger;
   tickIntervalMs?: number;
@@ -408,6 +410,7 @@ interface InflightRunDiagnostic extends SchedulerInflightRun {
 export class Scheduler extends EventEmitter {
   private readonly storage: ScheduleStorage;
   private readonly runner: ScheduleRunner;
+  private readonly captureFireContext?: () => () => void;
   private readonly clock: Clock;
   private readonly logger?: Logger;
   private readonly tickIntervalMs: number;
@@ -501,6 +504,7 @@ export class Scheduler extends EventEmitter {
     super();
     this.storage = opts.storage;
     this.runner = opts.runner;
+    this.captureFireContext = opts.captureFireContext;
     this.clock = opts.clock ?? { now: () => Date.now() };
     this.logger = opts.logger;
     this.tickIntervalMs = opts.tickIntervalMs ?? DEFAULT_TICK_MS;
@@ -875,14 +879,14 @@ export class Scheduler extends EventEmitter {
     // Track edits across claim/persistence awaits, before runner.fire exists.
     this.automaticDispatchSchedules.set(runId, schedule);
     try {
-      await this.fireOneInner(schedule, runId);
+      await this.fireOneInner(schedule, runId, this.captureFireContext?.());
     } finally {
       this.automaticDispatchSchedules.delete(runId);
       this.finishInflightAttempt(runId);
     }
   }
 
-  private async fireOneInner(schedule: Schedule, runId: string): Promise<void> {
+  private async fireOneInner(schedule: Schedule, runId: string, assertFireContext?: () => void): Promise<void> {
     // 跨进程互斥:先在 DB 对这次触发做原子认领(CAS:nextFireAt 必须仍等于本进程
     // 内存里看到的值)。dev / release 双开共用同一 DB 时两边引擎会同时判定"到点
     // 了",只有认领成功的一方真正执行;失败方刷新内存副本后放弃,保证同一次到点
@@ -994,13 +998,17 @@ export class Scheduler extends EventEmitter {
     // unregisterInflight 会清掉 session 映射,终态 emit 必须用 finally 之前捕获的值。
     let knownSessionId: string | undefined;
     this.updateInflightAttempt(runId, 'running');
+    const assertAgentContext = schedule.executionMode === 'script' ? undefined : assertFireContext;
     try {
+      assertAgentContext?.();
       if (schedule.targetSessionId) {
         await this.validateTargetSession?.(schedule.targetSessionId, 'fire', schedule);
       }
+      assertAgentContext?.();
       const result = await this.runner.fire(schedule, {
         runId,
         firedAt,
+        assertFireContext: assertAgentContext,
         signal: controller.signal,
         canDispatch: () => !hasExpired(this.automaticDispatchSchedules.get(runId) ?? schedule, this.clock.now()),
         onSessionBound: this.buildOnSessionBound(schedule.id, runId),
@@ -1281,6 +1289,7 @@ export class Scheduler extends EventEmitter {
     }
     this.manualContinuations.add(sessionId);
     try {
+      const assertFireContext = this.captureFireContext?.();
       const run = await this.storage.claimInterruptedRun(sessionId, this.clock.now());
       if (!run) {
         this.manualContinuations.delete(sessionId);
@@ -1294,7 +1303,7 @@ export class Scheduler extends EventEmitter {
       // The claim proved this original turn was already accepted before exit.
       // Restore its ownership even while the new Continue waits to dispatch.
       this.buildOnTurnActive(run.id)(sessionId);
-      const completion = this.runNowInner(run.scheduleId, run.id, undefined, run, runner)
+      const completion = this.runNowInner(run.scheduleId, run.id, undefined, run, runner, assertFireContext)
         .finally(() => {
           this.finishInflightAttempt(run.id);
           this.manualContinuations.delete(sessionId);
@@ -1306,7 +1315,7 @@ export class Scheduler extends EventEmitter {
     }
   }
 
-  private async runNowInner(id: string, runId: string, options?: RunNowOptions, recovery?: ScheduleRun, runner: ScheduleRunner = this.runner): Promise<{ runId: string; deferred?: boolean; silenced?: boolean }> {
+  private async runNowInner(id: string, runId: string, options?: RunNowOptions, recovery?: ScheduleRun, runner: ScheduleRunner = this.runner, assertFireContext = this.captureFireContext?.()): Promise<{ runId: string; deferred?: boolean; silenced?: boolean }> {
     // The original turn's restored mapping is not acceptance of this Continue.
     // One owner covers both engine setup and host/queue preparation failures.
     let continuationAccepted = false;
@@ -1315,6 +1324,7 @@ export class Scheduler extends EventEmitter {
     if (!schedule || (schedule.source === 'bot' && !options?.internalRoutine))
       throw new Error(`Schedule not found: ${id}`);
     assertScheduleMutationGuard(options?.expectedSchedule, schedule);
+    const assertAgentContext = schedule.executionMode === 'script' ? undefined : assertFireContext;
     if (recovery && schedule.status !== 'active') {
       await this.storage.updateRun(runId, { status: 'interrupted', errorMsg: 'app restarted' });
       return { runId, deferred: true };
@@ -1386,13 +1396,16 @@ export class Scheduler extends EventEmitter {
     let knownSessionId: string | undefined;
     this.updateInflightAttempt(runId, 'running');
     try {
+      assertAgentContext?.();
       const targetSessionId = recovery?.sessionId ?? schedule.targetSessionId;
       if (targetSessionId) {
         await this.validateTargetSession?.(targetSessionId, 'fire', schedule);
       }
+      assertAgentContext?.();
       const result = await runner.fire(schedule, {
         runId,
         firedAt,
+        assertFireContext: assertAgentContext,
         deferToCaller: options?.deferToCaller,
         webhook: options?.webhook,
         resumeSessionId: recovery?.sessionId,

@@ -88,6 +88,7 @@ vi.mock('../../../../main/device-link/providerShareHost.js', () => ({
   startProviderShareHost: vi.fn(),
   stopProviderShareHost: vi.fn(),
   getProviderShareHostLoadedSnapshot: () => null,
+  getProviderShareHostCompleteSnapshot: () => null,
   onProviderShareHostChanged: () => () => {},
   providerShareAccessRevision: () => 1,
   ownedProviderShareGuestAccess: () =>

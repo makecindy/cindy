@@ -265,7 +265,7 @@ export function AgentSelect({
               // 字段形态用设置页输入框底色; 工具条形态用 composer pill 底色。
               isField
                 ? 'bg-[var(--settings-input-bg)]'
-                : 'bg-[var(--composer-pill-bg,#FCFCFC)] dark:bg-[var(--composer-pill-bg,#393838)]',
+                : 'bg-[var(--composer-pill-bg)]',
               'text-[var(--text-primary)]',
             ],
         // 交互态按变体取:create-agent 有自己的 hover/pressed token(某些主题下
@@ -308,7 +308,7 @@ export function AgentSelect({
               'shrink-0',
               isCreateAgent
                 ? 'text-[var(--create-agent-control-icon)]'
-                : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
+                : 'text-[var(--composer-pill-icon)]',
             )}
           />
         </>
@@ -377,7 +377,7 @@ export function AgentSelect({
         panelClassName="p-2"
         panelAriaLabel={t('newChat.agentSelect.label')}
         startBg={
-          isCreateAgent ? 'var(--create-agent-control-bg)' : 'var(--composer-pill-bg, #FCFCFC)'
+          isCreateAgent ? 'var(--create-agent-control-bg)' : 'var(--composer-pill-bg)'
         }
         startBorderColor={
           isCreateAgent ? 'var(--create-agent-control-border)' : 'var(--border-default)'

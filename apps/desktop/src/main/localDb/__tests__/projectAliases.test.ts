@@ -11,6 +11,7 @@ import { upsertProjectAlias, listProjectAliases } from '../ipc/projectAliases.js
 const { send, owner } = vi.hoisted(() => ({ send: vi.fn(), owner: { generation: 1 } }));
 
 vi.mock('../../appSessionState.js', () => ({
+  getActiveAppSession: () => null,
   activeOwnerScopeKey: () => `test-owner:${owner.generation}`,
   getActiveDataOwnerPushStamp: () => ({ dataOwnerId: 'test-user', ownerGeneration: owner.generation }),
   isAppSessionBoundaryPending: () => false,

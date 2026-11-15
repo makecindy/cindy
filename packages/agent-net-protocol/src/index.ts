@@ -11,6 +11,29 @@ export const MAX_MEDIA_OBJECT_BYTES = 2 * 1024 * 1024 * 1024 + MAX_FRAME_BYTES;
 export const MAX_MEDIA_BINARY_CHUNK_BYTES = 8 * 1024 * 1024;
 export const MEDIA_PLAINTEXT_CHUNK_BYTES = 1024 * 1024;
 export const MEDIA_ENCRYPTED_HEADER_BYTES = 221;
+/**
+ * Direct media transfer: the relay authorizes every storage request and the ciphertext goes to the storage itself.
+ * A client offers it when it creates an upload (`transfer` in the request body) and when it reads (request header);
+ * a relay that stores the object where clients can reach it answers with presigned storage requests, any other
+ * relay ignores both and moves the bytes itself, as before.
+ */
+export const MEDIA_TRANSFER_DIRECT = 'direct-v1';
+export const MEDIA_TRANSFER_HEADER = 'x-agent-net-media-transfer';
+/** One presigned storage request. `headers` are part of the signature and must be sent exactly as given. */
+export interface DirectMediaRequest { method: 'GET' | 'PUT' | 'POST'; url: string; headers: Record<string, string>; expiresAt: number }
+export function directMediaRequestValid(value: unknown): value is DirectMediaRequest {
+  if (!value || typeof value !== 'object') return false;
+  const request = value as Record<string, unknown>;
+  if (!['GET', 'PUT', 'POST'].includes(request.method as string) || typeof request.url !== 'string' || request.url.length > 4096
+    || !Number.isSafeInteger(request.expiresAt) || !request.headers || typeof request.headers !== 'object' || Array.isArray(request.headers)) return false;
+  const headers = Object.entries(request.headers as Record<string, unknown>);
+  if (headers.length > 16 || !headers.every(([name, header]) => /^[A-Za-z0-9-]{1,64}$/.test(name) && typeof header === 'string' && header.length <= 1024
+    && !/[\r\n]/.test(header) && !['authorization', 'cookie', 'host'].includes(name.toLowerCase()))) return false;
+  try {
+    const url = new URL(request.url);
+    return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password && !url.hash;
+  } catch { return false; }
+}
 export interface AgentNetMediaKey { slot: string; networkId: string; grantId?: string; id: string; headerSha256: string; contentType: string;
   sharedTask?: { sharedTaskId: string; deviceId: string } }
 export function agentNetMediaBinding(slot: string): string {
@@ -192,7 +215,8 @@ export interface TransportModeProof {
 export function transportModePayload(p: Omit<TransportModeProof, 'signature'>): string {
   return JSON.stringify(['cindy-agent-net/transport-mode/2', p.v, p.deviceId, p.to, p.requestId, p.enabled, p.at]);
 }
-export interface DeviceMetadata { platform?: string; appVersion?: string; busy?: boolean; deviceName?: string; }
+/** Self-reported App/platform labels are for presentation and routing, never authorization. */
+export interface DeviceMetadata { platform?: string; app?: string; appVersion?: string; busy?: boolean; deviceName?: string; }
 export interface DeviceView extends DeviceMetadata {
   certificate: DeviceCertificate;
   name: string;

@@ -66,7 +66,9 @@ interface FakeEndpoint {
 /** 与 webhook-server 合同相同的最小实现。 */
 class FakeServer {
   github: { available: boolean; login: string; endpointId: string; repositories: string[]; unavailable?: string[];
-    prSubscriptions?: boolean; dailyQuotaExempt?: boolean; automationSubscriptions?: boolean; deliveryHealthy?: boolean } | null = null;
+    installUrl?: string; prSubscriptions?: boolean; dailyQuotaExempt?: boolean; automationSubscriptions?: boolean; deliveryHealthy?: boolean } | null = null;
+  githubAllowedRepositories: string[] | undefined;
+  githubConnect: { state: string; redirectUri: string } | undefined;
   githubUnavailable = false;
   githubSubscriptionBodies: Record<string, unknown>[] = [];
   readonly releases = new Map<string, string>();
@@ -81,6 +83,7 @@ class FakeServer {
   suspended = false;
   unavailable = false;
   rejectDeletes = false;
+  rejectUpsert = false;
   dropNextUpsertResponse = false;
   private readonly created = new Map<string, number>();
   validToken = 'token-1';
@@ -158,14 +161,25 @@ class FakeServer {
         }
       }
       if (this.github && route === 'GET /api/v1/github') return reply(this.githubUnavailable ? 500 : 200, this.githubUnavailable ? {} : this.github);
+      if (this.github && route === 'POST /api/v1/github/connect') {
+        this.githubConnect = body() as { state: string; redirectUri: string };
+        return reply(200, { url: `https://github.com/login/oauth/authorize?state=${this.githubConnect.state}&code_challenge_method=S256` });
+      }
+      if (this.github && route === 'POST /api/v1/github/connect/complete') return reply(200, { url: this.github.installUrl });
       if (this.github && route === 'PUT /api/v1/github/repositories') {
-        this.githubSubscriptionBodies.push(body()); this.github.repositories = body().repositories as string[]; return reply(200, this.github);
+        this.githubSubscriptionBodies.push(body());
+        const requested = body().repositories as string[];
+        const accepted = requested.filter(repo => !this.githubAllowedRepositories || this.githubAllowedRepositories.includes(repo));
+        this.github.repositories = accepted;
+        this.github.unavailable = requested.filter(repo => !accepted.includes(repo));
+        return reply(200, this.github);
       }
       if (route === 'GET /api/v1/endpoints') return reply(200, { endpoints: [...this.endpoints.values()] });
       if (upsert?.[1]) {
         const scheduleId = upsert[1];
         if (this.releases.has(scheduleId)) return reply(409, { error: { code: 'WEBHOOK_ENDPOINT_RELEASED' } });
         const { events, format } = body() as { events: string[]; format: unknown };
+        if (this.rejectUpsert) return reply(400, { error: { code: 'BAD_REQUEST' } });
         const existing = this.endpoints.get(scheduleId);
         if (!existing && this.endpoints.size >= this.endpointLimit) return reply(409, { error: { code: 'WEBHOOK_ENDPOINT_LIMIT' } });
         const serial = this.created.get(scheduleId) ?? 0;
@@ -706,8 +720,15 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     await start([schedule('s1', ['push'], future), schedule('s2', [], future)]);
     await vi.waitFor(() => expect(server.endpoints.get('s1')?.events).toEqual(['push']));
     expect(server.endpoints.get('s1')?.format).toEqual(custom);
-    await vi.waitFor(() => expect(host.status(schedule('s2'))?.problem).toBe('failed'));
+    await vi.waitFor(() => expect(host.status(schedule('s2'))?.problem).toBe('unsupported'));
     expect(server.endpoints.has('s2')).toBe(false);
+  });
+
+  // 服务器版本落后于客户端时，它拒绝的是格式本身：这不是暂时性的，不能显示成“暂时不可用”。
+  it('服务器不认发送方格式时不显示成暂时不可用', async () => {
+    server.rejectUpsert = true;
+    await start([schedule('s1', ['push'])]);
+    await vi.waitFor(() => expect(host.status(schedule('s1'))?.problem).toBe('unsupported'));
   });
 
   it('没有任务需要接收时不保持连接', async () => {
@@ -1002,6 +1023,60 @@ it('keeps the acknowledged subscription across refresh and connection checks', a
     expect(server.githubSubscriptionBodies).toHaveLength(count);
     await remote.sync([follow(2)]);
     expect(server.githubSubscriptionBodies).toHaveLength(count + 1);
+  } finally { remote.stop(); await server.close(); }
+});
+
+// Installing the App changes permissions without changing the followed PRs.
+// Only the explicit browser round trip may bypass subscription deduplication.
+it.each(['installation', 'oauth', 'retry', 'early-installation', 'early-oauth'])('rechecks repositories after installation (%s) without repeated background writes', async (outcome) => {
+  const server = new FakeServer();
+  const installUrl = 'https://github.com/apps/example-app/installations/new';
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [], installUrl };
+  server.githubAllowedRepositories = [];
+  const baseUrl = await server.listen();
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {},
+    onBatch: async () => {}, onGithubPrs: async () => {} });
+  const follow = { ...schedule('follow'), webhookTrigger: undefined, recurring: true,
+    preRunHook: { command: 'node gate.mjs https://github.com/example/project/pull/1' } } as Schedule;
+  try {
+    await remote.sync([follow]);
+    await expect(remote.githubStatus()).resolves.toMatchObject({ repositories: [], unavailable: ['example/project'] });
+    if (outcome.endsWith('oauth')) {
+      await remote.connectGithub();
+      const { redirectUri, state } = server.githubConnect!;
+      // Only the ephemeral port comes from the captured request. Keep the test
+      // request on loopback even if a broken callback advertises another host.
+      const port = Number(new URL(redirectUri).port);
+      const callback = await fetch(`http://127.0.0.1:${port}/github/callback?state=${encodeURIComponent(state)}&code=synthetic`, { redirect: 'manual' });
+      expect(callback.headers.get('location')).toBe(installUrl);
+    } else {
+      await expect(remote.installGithub()).resolves.toBe(installUrl);
+    }
+    // Regular task refreshes while the browser is open must not consume the pending recheck.
+    await remote.refresh();
+    let registrations = outcome.endsWith('oauth') ? 2 : 1;
+    expect(server.githubSubscriptionBodies).toHaveLength(registrations);
+    if (outcome.startsWith('early-')) {
+      // PR #10508: a successful status read is not installation completion.
+      // The user returns once before granting access, then returns after granting it.
+      await expect(remote.githubStatus()).resolves.toMatchObject({ repositories: [], unavailable: ['example/project'] });
+      registrations++;
+      expect(server.githubSubscriptionBodies).toHaveLength(registrations);
+      await remote.refresh();
+      expect(server.githubSubscriptionBodies).toHaveLength(registrations);
+    }
+    server.githubAllowedRepositories = ['example/project'];
+    if (outcome === 'retry') {
+      server.githubUnavailable = true;
+      await expect(remote.githubStatus()).rejects.toThrow();
+      server.githubUnavailable = false;
+    }
+    await expect(remote.githubStatus()).resolves.toMatchObject({ repositories: ['example/project'], unavailable: [] });
+    expect(server.githubSubscriptionBodies).toHaveLength(registrations + 1);
+    await remote.refresh();
+    await remote.githubStatus();
+    expect(server.githubSubscriptionBodies).toHaveLength(registrations + 1);
   } finally { remote.stop(); await server.close(); }
 });
 

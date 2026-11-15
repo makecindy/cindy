@@ -23,7 +23,7 @@ export interface RemoteSessionHandoffRequest {
   action?: 'create';
   create?: RemoteSessionCreation;
   message: string;
-  sender: { sessionId: string; title?: string };
+  sender: { sessionId: string; title?: string } | { kind: 'plugin'; pluginId: string; name?: string };
   requestSource?: ForwardedRequestSource;
   taskActionReceipt?: string;
 }
@@ -162,7 +162,7 @@ export function createRemoteSessionHandoff(deps: {
       assertCurrent = deps.captureAccess();
       sender = await request.sender();
       if (request.create) creation = remoteSessionCreationSchema.parse(await request.create());
-      captured = await deps.captureRequest?.(sender.sessionId, request.message, { sessionId: target.sessionId });
+      if ('sessionId' in sender) captured = await deps.captureRequest?.(sender.sessionId, request.message, { sessionId: target.sessionId });
       assertCurrent();
     } catch {
       return notSent();
@@ -191,17 +191,21 @@ export function createRemoteSessionHandoff(deps: {
       const support = await deps.invoke(target.deviceId, DL_SESSION_HANDOFF_CHANNEL,
         [{ action: 'task-action-capability', sessionId: target.sessionId }], { preSend: assertCurrent });
       if (!support.ok) return capabilityProbeFailure(support.error.code, support.error.message);
-      const capability = support.result as { taskActionVersion?: unknown; plainRequestBody?: unknown; ordinaryCreateVersion?: unknown } | null;
+      const capability = support.result as { taskActionVersion?: unknown; plainRequestBody?: unknown; ordinaryCreateVersion?: unknown; pluginCaller?: unknown } | null;
       if (capability?.taskActionVersion !== 1)
         return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'The other computer must support task-action authorization before a message can be sent.' };
       if (creation && capability.ordinaryCreateVersion !== 1)
         return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'Update the destination computer to support ordinary task creation. No task was created.' };
+      if ('pluginId' in sender && capability.pluginCaller !== 1)
+        return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'The other computer does not support Plugin callers; no message was sent.' };
       assertCurrent();
       // Older hosts verify the quoted 用户原话 / Agent补充 envelope; keep it for them unchanged.
       const delivered = capability.plainRequestBody === 1 || !captured?.legacy ? captured : { ...captured, ...captured.legacy };
       const body = delivered?.message ?? request.message;
       const source = delivered?.autoReviewUserText.request;
-      taskActionReceipt = issueRemoteTaskActionReceipt({ ...target, senderSessionId: sender.sessionId, message: body, ...(creation ? { operation: creationOperation(creation) } : {}) }, assertCurrent);
+      taskActionReceipt = issueRemoteTaskActionReceipt({ ...target, ...('pluginId' in sender
+        ? { senderPluginId: sender.pluginId } : { senderSessionId: sender.sessionId }), message: body,
+        ...(creation ? { operation: creationOperation(creation) } : {}) }, assertCurrent);
       const wire: RemoteSessionHandoffRequest = {
         sessionId: target.sessionId,
         ...(creation ? { action: 'create' as const, create: creation } : {}),

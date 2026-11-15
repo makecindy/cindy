@@ -56,7 +56,7 @@ export interface RemoteWebhookBatch {
   omitted: number;
 }
 
-export type RemoteEndpointProblem = 'limit' | 'failed' | 'released';
+export type RemoteEndpointProblem = 'limit' | 'failed' | 'unsupported' | 'released';
 
 /** 账号今天的 Webhook 接收次数已用完。 */
 export interface RemoteWebhookQuota {
@@ -145,6 +145,7 @@ export class ScheduleWebhookRemote {
   private githubPrs: string[] = [];
   private github: GithubAppStatus = { available: false };
   private githubSynced = '';
+  private githubInstallPending = false;
   private githubError: unknown = null;
   private readonly githubVerified = new Set<string>();
   private githubBatchFailed = false;
@@ -231,6 +232,7 @@ export class ScheduleWebhookRemote {
     this.github = { available: false };
     this.githubError = null;
     this.githubSynced = '';
+    this.githubInstallPending = false;
     this.problems.clear();
     this.releases.clear();
     this.clearTimers();
@@ -299,14 +301,33 @@ export class ScheduleWebhookRemote {
     if (!this.deps.baseUrl() || !(await this.deps.getAccessToken())) return { available: false };
     if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
     return this.enqueue(async () => {
-      this.loaded = false;
-      await this.reconcile();
-      if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
-      if (this.githubError) throw this.githubError;
-      if (this.running && !this.loaded) throw new Error('GITHUB_CONNECTION_UNAVAILABLE');
-      // Capture this refresh's result before the next queued refresh resets loaded.
-      return this.github;
+      // Complete the explicit installation flow when its UI returns. Background
+      // refreshes must not consume this invalidation before installation finishes.
+      const installation = this.githubInstallPending;
+      this.githubInstallPending = false;
+      if (installation) this.githubSynced = '';
+      try {
+        this.loaded = false;
+        await this.reconcile();
+        if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+        if (this.githubError) throw this.githubError;
+        if (this.running && !this.loaded) throw new Error('GITHUB_CONNECTION_UNAVAILABLE');
+        // A successful read can still precede the user's GitHub grant. Keep the
+        // explicit recheck until the requested repositories are accessible.
+        if (installation && this.github.unavailable?.length) this.githubInstallPending = true;
+        // Capture this refresh's result before the next queued refresh resets loaded.
+        return this.github;
+      } catch (error) {
+        if (installation && generation === this.generation) this.githubInstallPending = true;
+        throw error;
+      }
     });
+  }
+
+  async installGithub(): Promise<string | undefined> {
+    const { installUrl } = await this.githubStatus();
+    if (installUrl) this.githubInstallPending = true;
+    return installUrl;
   }
 
   async connectGithub(): Promise<string> {
@@ -317,7 +338,12 @@ export class ScheduleWebhookRemote {
       start: input => this.request('POST', '/github/connect', input),
       complete: input => this.request('POST', '/github/connect/complete', input),
       isCurrent: () => generation === this.generation && attemptId === this.githubConnectAttempt && this.running,
-      onConnected: () => { this.githubSynced = ''; void this.refresh().catch(() => undefined); },
+      onConnected: () => {
+        // OAuth completes before the browser proceeds to repository installation.
+        this.githubInstallPending = true;
+        this.githubSynced = '';
+        void this.refresh().catch(() => undefined);
+      },
     });
     this.closeGithubConnect = attempt.close;
     return attempt.url;
@@ -330,6 +356,7 @@ export class ScheduleWebhookRemote {
     await this.request('DELETE', '/github');
     this.github = { available: true, login: null };
     this.githubSynced = '';
+    this.githubInstallPending = false;
     this.githubVerified.clear();
     this.updateConnection();
   }
@@ -596,7 +623,7 @@ export class ScheduleWebhookRemote {
     // 本机认不出发送方时沿用服务器上的格式；新建时没有可沿用的，只能报错。
     const effective = format ?? this.views.get(scheduleId)?.format ?? null;
     if (!effective) {
-      this.problems.set(scheduleId, 'failed');
+      this.problems.set(scheduleId, 'unsupported');
       return;
     }
     try {
@@ -612,7 +639,9 @@ export class ScheduleWebhookRemote {
       if (!(error instanceof RemoteRequestError) || error.status >= 500 || error.status === 403) throw error;
       // 这一个任务的问题，不挡住其他任务。
       this.problems.set(scheduleId, error.code === 'WEBHOOK_ENDPOINT_LIMIT' ? 'limit'
-        : error.code === 'WEBHOOK_ENDPOINT_RELEASED' ? 'released' : 'failed');
+        : error.code === 'WEBHOOK_ENDPOINT_RELEASED' ? 'released'
+          // 400／422 是服务器不认这份端点定义，实际只有格式版本不一致这一种；重试不会变。
+          : error.status === 400 || error.status === 422 ? 'unsupported' : 'failed');
     }
   }
 

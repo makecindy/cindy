@@ -64,7 +64,7 @@ export function createAgentNetSharingAuth(config: SharingAuthConfig, testKeys?: 
           || authority.region !== undefined && authority.region !== payload.region
           || !verifyRequestProof(signingKey, proof, req.method ?? 'GET', req.url ?? '/', bytes, Date.now()))
           throw new Error('Invalid scoped account proof');
-        context.remember('identity:' + payload.sub, deviceId, proof.nonce);
+        await context.remember('identity:' + payload.sub, deviceId, proof.nonce);
         return { accountId: authority.peer ? 'x:' + authority.region + ':' + payload.sub : payload.sub, deviceId, networkId };
       } catch (error) {
         if (error instanceof AppError) throw error;

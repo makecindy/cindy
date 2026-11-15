@@ -26,6 +26,15 @@ export interface ActivityPushRegistration {
   supportsInputPushToken: boolean;
   /** Local observation only; never added to the registration wire payload. */
   isStale?: boolean;
+  confirmedAt?: number | null;
+  staleAt?: number | null;
+}
+/** In-memory continuity owned by the bridge, never persisted or sent. */
+export interface ActivityRecoveryState {
+  identity?: string;
+  lastRefreshAt?: number;
+  wasStale?: boolean;
+  contentKey?: string;
 }
 export interface AgentActivityNative extends AgentActivitySink {
   configureAccount?(accountScope: string | null): Promise<void>;
@@ -101,6 +110,7 @@ export function startActivityPushSync(options: {
   /** The service already owns this account's activity (known from an earlier
    * syncer before a reconnect); a failed later attempt must not hand it back. */
   initiallyRegistered?: boolean;
+  recovery?: ActivityRecoveryState;
 }) {
   const native = agentActivityNative;
   if (!native?.getPushRegistration || getActiveSelfHostedRelay()) {
@@ -116,8 +126,7 @@ export function startActivityPushSync(options: {
   let last: string | undefined;
   let accepted = options.initiallyRegistered === true;
   let unsupported = false;
-  let lastRefreshAt = -Infinity;
-  let wasStale = false;
+  const recovery = options.recovery ?? {};
   const assertCurrent = () => {
     if (
       controller.signal.aborted ||
@@ -147,12 +156,32 @@ export function startActivityPushSync(options: {
         }
         // A native token is not evidence that the service received it. The
         // bridge keeps its initial discovery pending until this attempt settles.
-        const { isStale, ...wireRegistration } = registration;
-        const becameStale = isStale === true && !wasStale;
-        wasStale = isStale === true;
+        const { isStale, confirmedAt, staleAt, ...wireRegistration } = registration;
+        const identity = JSON.stringify([captured, owner.generation, options.accountScope,
+          registration.activityId, registration.updateToken]);
+        if (recovery.identity !== identity) {
+          recovery.identity = identity;
+          recovery.lastRefreshAt = -Infinity;
+          recovery.wasStale = false;
+          recovery.contentKey = undefined;
+        }
+        const becameStale = isStale === true && !recovery.wasStale;
         if (becameStale) mobileDebugLog("info", "lifecycle", "activity-stale");
+        if (isStale === false && recovery.wasStale)
+          mobileDebugLog("info", "lifecycle", "activity-recovered");
+        recovery.wasStale = isStale === true;
+        const times = {
+          confirmedAt: typeof confirmedAt === "number" && Number.isFinite(confirmedAt) ? confirmedAt : null,
+          staleAt: typeof staleAt === "number" && Number.isFinite(staleAt) ? staleAt : null,
+        };
+        const contentKey = JSON.stringify([isStale, times]);
+        if (contentKey !== recovery.contentKey) {
+          recovery.contentKey = contentKey;
+          mobileDebugLog("debug", "lifecycle", "activity-content", { ...times, stale: isStale === true });
+        }
         const shouldRefresh = (refresh || becameStale) && isStale !== false &&
-          AppState.currentState === "active" && Date.now() - lastRefreshAt >= 30_000;
+          registration.enabled && !registration.dismissed && !!registration.updateToken &&
+          AppState.currentState === "active" && Date.now() - (recovery.lastRefreshAt ?? -Infinity) >= 30_000;
         const body = {
           ...wireRegistration,
           schemaVersion: 1,
@@ -177,18 +206,22 @@ export function startActivityPushSync(options: {
           if (!accepted) options.onRegistered(false);
           return;
         }
-        if (shouldRefresh) lastRefreshAt = Date.now();
+        // Auth acquisition may span backgrounding; don't send a recovery that
+        // was only eligible while foreground. Token changes still register normally.
+        const refreshStale = shouldRefresh && AppState.currentState === "active";
+        if (key === last && !refreshStale) return;
+        if (refreshStale) recovery.lastRefreshAt = Date.now();
         await sendRegistration(
           baseUrl,
           token,
           registration.enabled ? "PUT" : "DELETE",
-          registration.enabled ? body : undefined,
+          registration.enabled ? { ...body, ...(refreshStale ? { refreshStale: true } : {}) } : undefined,
         );
         assertCurrent();
         last = key;
         accepted = true;
         mobileDebugLog("info", "lifecycle", "activity-registration", {
-          outcome: "accepted", refresh: shouldRefresh, hasUpdateToken: !!registration.updateToken,
+          outcome: "accepted", refresh: refreshStale, hasActivity: !!registration.updateToken,
         });
         // A start token is permission to try, not proof that APNs created an
         // activity. Keep foreground creation until an actual update token exists.
@@ -210,6 +243,7 @@ export function startActivityPushSync(options: {
           assertCurrent();
           mobileDebugLog("warn", "lifecycle", "activity-registration", {
             outcome: "failed",
+            category: error instanceof TypeError ? "network" : error instanceof Error && error.name === "AbortError" ? "timeout" : "request",
             status: error && typeof error === "object" && "status" in error && typeof error.status === "number"
               ? error.status : undefined,
           });
@@ -223,7 +257,7 @@ export function startActivityPushSync(options: {
     return tail;
   };
   const listener = native.addListener?.("pushRegistrationChanged", () => { void sync(); });
-  sync();
+  sync(true);
   return {
     sync,
     dispose() {

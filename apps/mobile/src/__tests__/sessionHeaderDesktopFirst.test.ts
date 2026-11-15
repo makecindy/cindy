@@ -23,20 +23,8 @@ describe('mobile session header desktop-first surface', () => {
     expect(native).toContain('flexShrink: 1');
   });
 
-  it('shows task tags right after the title in every header branch', () => {
-    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
-    const titles = source.split('<SessionHeaderNativeTitle').slice(1)
-      .map((branch) => branch.slice(0, branch.indexOf('/>')));
-    // 竖屏原生标题栏与横屏／折叠屏系统标题栏都要带标签,不能只有一条分支显示。
-    expect(titles).toHaveLength(2);
-    for (const title of titles) {
-      expect(title).toContain('tags={isDeviceAccessRevoked ? undefined : currentSession?.tags}');
-      expect(title).toContain('onTagsPress={onOpenSettings}');
-    }
-    const native = readTextLf(resolve(process.cwd(), 'src/session/SessionHeaderNativeControls.ios.tsx'), 'utf8');
-    const titleRow = native.slice(native.indexOf('{label}'), native.indexOf('<QuietSyncIndicator'));
-    expect(titleRow).toContain('<TaskTagDots');
-  });
+  // Tag forwarding/access revocation now runs through both page branches in
+  // sideChatsSheet.test.tsx; SessionStackHeader.test.tsx renders the real iOS title.
 
   it('releases the new-session handoff heavy topic when the session screen unmounts', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
@@ -102,7 +90,6 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('<View onLayout={handleKeyboardAreaLayout} pointerEvents="none" style={StyleSheet.absoluteFill} />');
     expect(source).toContain('testID="session.composerFrost"');
     expect(source).toContain('<View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
-    expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: horizontalSystemHeader ? nativeHeaderHeight : insets.top + (paneLayout.persistent ? spacing.lg : 0) }, companionChat && Platform.OS !== \'ios\' && { backgroundColor: colors.surface }]}>');
     // iOS 临时任务列表抽屉放进独立窗口盖住系统栏;系统栏不随抽屉开合收起。
     expect(source).toContain("aboveSystemBar={Platform.OS === 'ios'}");
     expect(source).not.toContain('systemBarHidden');
@@ -135,7 +122,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('setSessionListDrawerOverlayMounted(true);');
     expect(source).toContain('setSessionListDrawerOpen(true);');
     expect(source).toContain('session.sessionListButton');
-    expect(source).toContain('{sessionListButton ? <Stack.Toolbar.View hidesSharedBackground>{sessionListButton}</Stack.Toolbar.View> : null}');
+    // System-toolbar drawer visibility/presses are exercised in SessionStackHeader.test.tsx.
     expect(source).toContain("import { buildWideSessionNavLayout } from '@/session/wideSessionNav';");
     expect(source).toContain("import { useConversationTaskDrawer } from '@/session/useConversationTaskDrawer';");
     expect(source).toContain('switchDrawerSessionInPlace,');

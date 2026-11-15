@@ -1,3 +1,6 @@
+import { ProjectSettingsSheet } from './ProjectSettingsSheet';
+import { Settings as ProjectSettingsIcon } from 'lucide-react-native';
+import { useStableHomeSections, type HomeDisplayOrder } from './homeStableOrder';
 import { playHaptic } from '@/platform/haptics';
 import { taskListSessionTarget } from './sessionDrawerNavigation';
 import type { ViewInstance } from 'react-native';
@@ -147,6 +150,7 @@ import { isAccessRevokedError } from '@/device-link/accessRevoked';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import {
   discoverRemoteHomeCollections,
+  remoteResourceDiscoveryKey,
   remoteResourceDiscoveryTargets,
   type RemoteHomeCollection,
 } from '@/device-link/remoteResources';
@@ -227,6 +231,7 @@ import {
   fetchHostProjectOrder,
   rememberRemoteProjectOrderStamp,
   subscribeRemoteProjectOrderChanged,
+  startHostProjectOrderLoad,
 } from '@/session/remoteProjectOrder';
 import {
   createProjectOrderFetchFence,
@@ -256,7 +261,8 @@ import {
 } from '@/session/homeViewPreferenceStore';
 import { homeNavigationOwner, useHomeMode } from '@/session/useHomeMode';
 import {
-  getCachedHomeListSnapshot,
+  getCachedHomeListState,
+  rememberHomeDisplayOrder,
   scheduleHomeListSnapshotPersist,
 } from '@/session/mobileHomeListCache';
 import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
@@ -662,6 +668,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   // 首次网络同步必须等设备筛选偏好恢复，否则单机用户会先按默认“全部”拉一轮所有电脑。
   const [homeViewPreferencesHydrated, setHomeViewPreferencesHydrated] = useState(restoredView);
   const [refreshing, setRefreshing] = useState(false);
+  const [homeAppActive, setHomeAppActive] = useState(AppState.currentState === 'active');
+  const displayOrderScopeRef = useRef('');
+  const [displayOrderSeed, setDisplayOrderSeed] = useState<HomeDisplayOrder | null>(null);
+  const [displayOrderRevision, setDisplayOrderRevision] = useRetainedHomeState(viewSession, 'displayOrderRevision', 0);
+  const resetDisplayOrder = useCallback(() => setDisplayOrderRevision(value => value + 1), [setDisplayOrderRevision]);
   const [error, setError] = useState<HomeConnectionError>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const clearDirectoryBudget = useCallback(() => {
@@ -774,6 +785,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [viewMode, setViewMode] = useRetainedHomeState<HomeListViewMode>(viewSession, 'viewMode', 'list');
   const [taskInfoFields, setTaskInfoFields] = useRetainedHomeState<readonly HomeTaskInfoField[]>(viewSession, 'taskInfoFields', DEFAULT_HOME_TASK_INFO_FIELDS);
   const [hostProjectOrders, setHostProjectOrders] = useState<ReadonlyMap<string, SyncedProjectOrderSnapshot>>(() => new Map());
+  const hostProjectOrderLoadRef = useRef<Promise<void> | null>(null);
   const projectOrderFetchFenceRef = useRef(createProjectOrderFetchFence());
   const visualProjectKeysRef = useRef<string[]>([]);
   const homeRootRef = useRef<ViewInstance>(null);
@@ -854,6 +866,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
 
     setDevices([]);
     setHomeListCacheHydrated(false);
+    setDisplayOrderSeed(null);
     setRefreshing(false);
     setError(null);
     setLastSyncedAt(null);
@@ -1462,12 +1475,24 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   // A manual refresh also recovers the teammate section: roster, group chats and cloud companions.
   const homeRoster = teammatesSectionContext.shared;
   const refreshHome = useCallback(() => {
-    void loadHome({ visible: true });
+    const owner = accountGeneration;
+    const scope = displayOrderScopeRef.current;
+    void loadHome({ visible: true }).then(async () => {
+      // A refresh queued behind startup must wait for that queued batch too.
+      while (syncInFlightRef.current) await syncInFlightRef.current;
+      // Scope reconciliation can replace a cancelled load while refresh is waiting.
+      while (hostProjectOrderLoadRef.current) {
+        const pending = hostProjectOrderLoadRef.current;
+        await pending;
+        if (hostProjectOrderLoadRef.current === pending) break;
+      }
+      if (homeAccountGenerationRef.current === owner && displayOrderScopeRef.current === scope) resetDisplayOrder();
+    });
     if (!homeRoster) return;
     void homeRoster.roster.refresh();
     if (homeRoster.groups.supported) void homeRoster.groups.refresh();
     setTeammatesRefreshKey(key => key + 1);
-  }, [homeRoster, loadHome]);
+  }, [accountGeneration, homeRoster, loadHome, resetDisplayOrder]);
   loadHomeRef.current = loadHome;
 
   // 冷启动先画缓存:上次 loadHome 成功的设备+会话快照种入 store,先把列表画出来(消除首屏强制
@@ -1483,23 +1508,24 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     }
     let cancelled = false;
     const read = startBoundedStartupRead(
-      getCachedHomeListSnapshot(homeCacheUserId),
-      [],
+      getCachedHomeListState(homeCacheUserId),
+      { devices: [], displayOrder: null },
     );
-    const applySnapshot = async (snapshot: Awaited<ReturnType<typeof getCachedHomeListSnapshot>>) => {
+    const applySnapshot = async (snapshot: Awaited<ReturnType<typeof getCachedHomeListState>>) => {
       await syncInFlightRef.current;
       if (
         cancelled
         || homeAccountGenerationRef.current !== expectedAccountGeneration
         || lastSyncedAtRef.current !== null
       ) return;
-      for (const device of snapshot) {
+      setDisplayOrderSeed(snapshot.displayOrder);
+      for (const device of snapshot.devices) {
         remoteSessionStore.hydrateDeviceSessionsIfEmpty(device.deviceId, device.deviceName, device.sessions);
       }
     };
     void read.initial
-      .then((initial) => {
-        void applySnapshot(initial.value);
+      .then(async (initial) => {
+        await applySnapshot(initial.value);
         if (initial.timedOut) void read.completion.then((late) => {
           if (late.ok) void applySnapshot(late.value);
         });
@@ -1786,6 +1812,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   useEffect(() => {
     startSilentHomeSync();
     const subscription = AppState.addEventListener('change', (nextState) => {
+      setHomeAppActive(nextState === 'active');
       // 退后台后连接会在宽限期后停掉，期间的推送无从补齐：回前台一律按需重拉。
       if (nextState === 'background') homeListFreshnessRef.current.invalidateAll();
       if (nextState === 'active') startSilentHomeSync();
@@ -1990,47 +2017,71 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     });
     return () => { cancelled = true; };
   }, [accountGeneration, homeCacheUserId]);
+  // Busy state and last-seen time arrive with every presence message and do not change
+  // which computers are asked; rerun discovery only for what it actually reads.
+  const discoveryDevicesRef = useRef(deviceModels);
+  discoveryDevicesRef.current = deviceModels;
+  const discoveryDevicesKey = remoteResourceDiscoveryKey(deviceModels);
   useEffect(() => {
-    if (resourceCacheAccount !== accountGeneration || !homeListCacheHydrated || (deviceModels.length === 0 && lastSyncedAt === null)) return;
-    let cancelled = false;
-    const targets = remoteResourceDiscoveryTargets(deviceModels, remoteHomeCollectionsRef.current);
+    const discoveryDevices = discoveryDevicesRef.current;
+    if (resourceCacheAccount !== accountGeneration || !homeListCacheHydrated || (discoveryDevices.length === 0 && lastSyncedAt === null)) return;
+    if (!screenFocused || !active) return;
+    const targets = remoteResourceDiscoveryTargets(discoveryDevices, remoteHomeCollectionsRef.current);
     if (targets.length === 0) {
       remoteHomeCollectionsRef.current = [];
       setRemoteHomeCollections([]);
-      return () => { cancelled = true; };
+      return;
     }
-    void discoverRemoteHomeCollections(
-      (deviceId, channel, args) => invoke(deviceId, channel, args, {
-        background: true,
-        preSend: () => {
-          if (cancelled || homeAccountGenerationRef.current !== accountGeneration)
-            throw new Error('Remote discovery superseded');
-        },
-      }),
-      targets,
-      i18nInstance.language,
-      remoteHomeCollectionsRef.current,
-    )
-      .then((collections) => {
-        if (!cancelled && homeAccountGenerationRef.current === accountGeneration) {
-          remoteHomeCollectionsRef.current = collections;
-          setRemoteHomeCollections(collections);
-          void cacheRemoteResourceHome(homeCacheUserId, collections);
-        }
-      })
-      .catch(() => {
-        // Optional capability discovery must not turn a healthy Sessions home into an error page.
-        // Keep the last same-account manifest during transient link failures.
+    let controller: AbortController | undefined;
+    const discover = () => {
+      if (AppState.currentState !== 'active' || (controller && !controller.signal.aborted)) return;
+      const current = new AbortController();
+      controller = current;
+      const isCurrent = () => !current.signal.aborted && homeAccountGenerationRef.current === accountGeneration;
+      const publish = (collections: RemoteHomeCollection[]) => {
+        if (!isCurrent()) return;
+        remoteHomeCollectionsRef.current = collections;
+        setRemoteHomeCollections(collections);
+        void cacheRemoteResourceHome(homeCacheUserId, collections);
+      };
+      void discoverRemoteHomeCollections(
+        (deviceId, channel, args) => invoke(deviceId, channel, args, {
+          background: true,
+          preSend: () => {
+            if (!isCurrent() || !screenFocusedRef.current || AppState.currentState !== 'active'
+              || !discoveryDevicesRef.current.some((device) => device.deviceId === deviceId && device.canOpen))
+              throw new Error('Remote discovery superseded');
+          },
+        }),
+        targets,
+        i18nInstance.language,
+        remoteHomeCollectionsRef.current,
+        publish,
+        current.signal,
+      ).catch(() => {
+        // Optional discovery keeps the same-account snapshot on failure; healthy
+        // hosts publish immediately while only failed hosts consume the retry budget.
       });
-    return () => { cancelled = true; };
+    };
+    discover();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') discover();
+      else controller?.abort();
+    });
+    return () => {
+      controller?.abort();
+      subscription.remove();
+    };
   }, [
+    screenFocused,
+    active,
     accountGeneration,
     connectionEpoch,
     resourceCacheAccount,
     lastSyncedAt,
     homeListCacheHydrated,
     homeCacheUserId,
-    deviceModels,
+    discoveryDevicesKey,
     i18nInstance.language,
     invoke,
   ]);
@@ -2098,16 +2149,15 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     const ids = homeSyncDeviceIds;
     if (ids.length === 0) return undefined;
     let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const fence = createProjectOrderFetchFence();
     projectOrderFetchFenceRef.current = fence;
-    const load = async (attempt: number) => {
+    const loadAttempt = async () => {
       // Project ordering is secondary Home metadata. Let the bounded sessions-list batch
       // finish first so cold start/reconnect does not create a second overlapping six-device
       // fan-out. A queued refresh is included as well; live pushes remain fenced below.
       while (syncInFlightRef.current) {
         await syncInFlightRef.current;
-        if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return;
+        if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return false;
       }
       const tokens = new Map(ids.map((deviceId) => [deviceId, fence.begin(deviceId)]));
       const entries = await runHomeDeviceSyncBatch(ids, async (deviceId) => {
@@ -2121,7 +2171,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         });
         return [deviceId, result] as const;
       });
-      if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return;
+      if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return false;
       for (const [deviceId, result] of entries) {
         if (!fence.shouldApplyFetch(deviceId, tokens.get(deviceId) ?? 0)) continue;
         if (result.kind === 'ok') rememberRemoteProjectOrderStamp(deviceId, result.snapshot.ownerStamp);
@@ -2135,13 +2185,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         }
         return next;
       });
-      if (attempt < 3 && entries.some(([, result]) => result.kind === 'transient')) {
-        retryTimer = setTimeout(() => {
-          void load(attempt + 1);
-        }, 2000);
-      }
+      return entries.some(([, result]) => result.kind === 'transient');
     };
-    void load(1);
+    const load = startHostProjectOrderLoad(loadAttempt);
+    hostProjectOrderLoadRef.current = load.completion;
     const unsubscribe = subscribeRemoteProjectOrderChanged((deviceId, snapshot) => {
       if (
         cancelled
@@ -2157,7 +2204,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     });
     return () => {
       cancelled = true;
-      if (retryTimer) clearTimeout(retryTimer);
+      load.cancel();
+      if (hostProjectOrderLoadRef.current === load.completion) hostProjectOrderLoadRef.current = null;
       unsubscribe();
     };
   }, [accountGeneration, homeSyncDeviceIds, invoke]);
@@ -2248,11 +2296,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   );
   const projectMachineIdentities = useMemo(
     () => buildHomeProjectMachineIdentities(home, {
-      status, getPresenceAvailability, unresponsiveDevices, revokedDevices,
+      getPresenceAvailability, unresponsiveDevices, revokedDevices,
     }),
     // Presence is read through a stable getter; its version/connection epoch must
     // refresh icons even when the page-local device list has not changed.
-    [home, status, getPresenceAvailability, presenceVersion, connectionEpoch, unresponsiveDevices, revokedDevices],
+    [home, getPresenceAvailability, presenceVersion, connectionEpoch, unresponsiveDevices, revokedDevices],
   );
   const runningSessionIds = useMemo(() => {
     const ids = new Set<string>();
@@ -2337,7 +2385,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     () => applyHomeContentFilters(sharedGroup.home, contentFilters, filterTick || Date.now()),
     [contentFilters, filterTick, sharedGroup.home],
   );
-  const homeSections = useMemo(
+  const sortedHomeSections = useMemo(
     () => buildHomeSections(filteredHome, groupByProject, pinnedCollapsed, {
       dialogueTitle: t('devices.list.menu.dialogueFolder'),
       groupDialogue,
@@ -2348,8 +2396,31 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     }),
     [displayedManualProjectOrder, displayedProjectOrder, filteredHome, groupByProject, groupDialogue, pinnedCollapsed, sortPriorityContext, sortBy, t],
   );
+  // Sorting metadata may arrive after rows. Only user actions or a new visit release
+  // the displayed order; live activity, priority and host-order pushes update content.
+  const displayOrderScope = JSON.stringify([preferenceOwner, selectedDeviceId, groupByProject, groupDialogue,
+    sortBy, statusFilter, projectFilter, teammateFilter, vendorFilter, lastActivityFilter, searchQuery]);
+  displayOrderScopeRef.current = displayOrderScope;
+  const commitDisplayOrder = useCallback((order: HomeDisplayOrder) => {
+    rememberHomeDisplayOrder(homeCacheUserId, order);
+    scheduleHomeListSnapshotPersist(homeCacheUserId, () => remoteSessionStore.getSessions());
+  }, [homeCacheUserId]);
+  const homeSections = useStableHomeSections({
+    sections: sortedHomeSections,
+    scope: displayOrderScope,
+    revision: displayOrderRevision,
+    ready: homeListCacheHydrated && homeViewPreferencesHydrated && deviceIdentityCacheReady,
+    settled: lastSyncedAt !== null,
+    visible: screenFocused && active && homeAppActive,
+    session: viewSession,
+    seed: displayOrderSeed,
+    onCommit: commitDisplayOrder,
+  });
   const sections = useMemo(() => {
     if (!shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status)) return homeSections;
+    // SectionList counts section headers/footers even with no rows, suppressing
+    // ListEmptyComponent. Leave the list truly empty while searching or on no hits.
+    if (indexedSearch.results.length === 0) return [];
     return [{
       data: indexedSearch.results.map((item) => ({
         item,
@@ -2648,6 +2719,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const applyDisplayView = useCallback((patch: HomeDisplayPatch & { manualProjectOrder?: string[] }) => {
     const expectedAccountGeneration = accountGeneration;
     viewPrefsTouchedRef.current = true;
+    resetDisplayOrder();
     let nextPatch = patch;
     if (
       !selectedDeviceId
@@ -2693,6 +2765,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       }).then((result) => {
         if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
         if (result.kind === 'unavailable') {
+          resetDisplayOrder();
           projectOrderFetchFenceRef.current.noteLiveUpdate(selectedDeviceId);
           setHostProjectOrders((current) => {
             const next = new Map(current);
@@ -2707,6 +2780,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           return;
         }
         if (result.kind !== 'ok') return;
+        resetDisplayOrder();
         projectOrderFetchFenceRef.current.noteLiveUpdate(selectedDeviceId);
         setHostProjectOrders((current) => {
           const next = new Map(current);
@@ -2721,7 +2795,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     if (nextPatch.projectOrder !== undefined) setProjectOrder(nextPatch.projectOrder);
     if (nextPatch.manualProjectOrder !== undefined) setManualProjectOrder(nextPatch.manualProjectOrder);
     void saveHomeViewPreferences(nextPatch);
-  }, [accountGeneration, home.projects, hostManualProjectOrder, hostProjectOrders, invoke, manualProjectOrder.length, projectOrder, selectedDeviceId]);
+  }, [accountGeneration, home.projects, hostManualProjectOrder, hostProjectOrders, invoke, manualProjectOrder.length, projectOrder, selectedDeviceId, resetDisplayOrder]);
 
   const beginProjectDrag = useCallback((input: {
     absoluteY: number;
@@ -2819,6 +2893,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     const persistViewer = (next: string[]) => {
       if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
       viewPrefsTouchedRef.current = true;
+      resetDisplayOrder();
       setProjectOrder('custom');
       setManualProjectOrder(next);
       void saveHomeViewPreferences({ projectOrder: 'custom', manualProjectOrder: next });
@@ -2869,6 +2944,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           return;
         }
         if (result.kind !== 'ok') return;
+        resetDisplayOrder();
         projectOrderFetchFenceRef.current.noteLiveUpdate(selectedDeviceId);
         setHostProjectOrders((current) => {
           const nextOrders = new Map(current);
@@ -2893,7 +2969,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     );
     if (!next) return;
     persistViewer(next);
-  }, [accountGeneration, home.projects, hostProjectOrders, invoke, manualProjectOrder, selectedDeviceId, visibleProjectKeys]);
+  }, [accountGeneration, home.projects, hostProjectOrders, invoke, manualProjectOrder, selectedDeviceId, visibleProjectKeys, resetDisplayOrder]);
   useEffect(() => {
     if (!groupDialogue) setDialogueShowAll(false);
   }, [groupDialogue]);
@@ -3319,8 +3395,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
                 padding: windowLayout.emptyPadding,
               }}
             />
-          ) : filteredHome.pinned.length > 0 ? (
+          ) : !shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) && filteredHome.pinned.length > 0 ? (
             // 仅剩置顶且被收起时 item 数为 0,但用户并非"无对话",不显示空状态插画。
+            // 搜索列表的空态只认搜索结果,不能被普通列表里的置顶任务遮掉。
             null
           ) : showRemoteGuide && home.emptyNoDevice ? (
             // 无可控制电脑是「首次使用 / 产品模式说明」级空态:按 reason 渲染远程访问引导
@@ -3434,7 +3511,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       ) : null}
       <View
         onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
-        style={[styles.homeChrome, nativeHomeHeader && { top: nativeHeaderHeight }, headerFrosted && !nativeHomeHeader && styles.homeChromeFrosted]}
+        style={[styles.homeChrome, {
+          // Absolute positioning ignores the root's padding. Keep the search and
+          // connection controls inside the same safe edges as the task list.
+          left: embedded ? 0 : edgePadding.paddingLeft,
+          right: embedded ? 0 : edgePadding.paddingRight,
+        }, nativeHomeHeader && { top: nativeHeaderHeight }, headerFrosted && !nativeHomeHeader && styles.homeChromeFrosted]}
       >
         <HomeChromeFrost disabled={nativeHomeHeader} visible={headerFrosted}>
         <View style={{ paddingTop: nativeHomeHeader ? 0 : embedded ? spacing.lg : edgePadding.paddingTop }}>
@@ -4068,6 +4150,10 @@ function ProjectRow({
   /** 项目标题与子任务共用同一滑动互斥注册表。 */
   swipe?: SessionSwipeControls;
 }) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const hostKeys = new Set(project.sessions.map(item => item.session.remoteHostId
+    ? `remote:${encodeURIComponent(item.session.remoteHostId)}:${project.workingDir}` : `local:${project.workingDir}`));
+  const hostKey = hostKeys.size === 1 ? Array.from(hostKeys)[0]! : null;
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
@@ -4167,7 +4253,8 @@ function ProjectRow({
     // fields here so registering a drag never copies all project task data.
     const { key: projectKey, sessionCount } = project;
     return Gesture.Pan()
-      .activateAfterLongPress(600)
+      // Require a deliberate hold so pauses while scrolling do not start reordering.
+      .activateAfterLongPress(1000)
       .activeOffsetY([-8, 8])
       .failOffsetX([-12, 12])
       .onStart((event) => {
@@ -4196,6 +4283,7 @@ function ProjectRow({
         { name: 'newTask', label: t('devices.list.projectActions.newTask') },
         { name: 'allTasks', label: t('devices.list.projectActions.allTasks') },
         { name: 'search', label: t('devices.list.projectActions.search') },
+        ...(hostKey ? [{name:'settings', label:t('settings.projectInfo.title')}] : []),
       ] : undefined}
       onAccessibilityAction={actionable ? (event) => {
         swipe?.registry.closeOpenRow();
@@ -4203,6 +4291,7 @@ function ProjectRow({
           case 'newTask': onNewTask(); break;
           case 'allTasks': onOpenProject(); break;
           case 'search': onSearchProject(); break;
+          case 'settings': if (hostKey) setSettingsOpen(true); break;
         }
       } : undefined}
       accessibilityState={{ expanded: !collapsed }}
@@ -4245,6 +4334,10 @@ function ProjectRow({
         <Text style={[styles.projectTitle, styles.projectFolderTitle]} numberOfLines={1}>{project.title}</Text>
         {machineIdentity ? <HomeProjectMachineLabel identity={machineIdentity} /> : null}
       </View>
+      {kind === 'project' && hostKey && project.deviceId && <Pressable accessibilityRole="button" accessibilityLabel={t('settings.projectInfo.title')}
+        hitSlop={8} onPress={event => {event.stopPropagation(); setSettingsOpen(true);}} style={{padding:8}}>
+        <ProjectSettingsIcon size={iconSize.lg} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
+      </Pressable>}
       <Text style={styles.projectCount} numberOfLines={1}>{project.sessionCount}</Text>
       {collapsedStatus?.dot ? (
         // 与任务行右槽同一 18×18 槽、同一右边缘,点色与任务行同表。
@@ -4274,6 +4367,8 @@ function ProjectRow({
       style={[styles.projectGroup, suppressTopBorder && styles.projectGroupNoTop]}
       testID={groupTestID}
     >
+      {settingsOpen && hostKey && project.deviceId && <ProjectSettingsSheet deviceId={project.deviceId} projectKey={hostKey}
+        title={project.title} deviceName={project.deviceName} directory={project.workingDir} visible={settingsOpen} onClose={() => setSettingsOpen(false)} />}
       {windowingEnabled && scrollY ? (
         <HomeProjectWindowAnchorTracker
           childOffsets={estimatedChildOffsets}

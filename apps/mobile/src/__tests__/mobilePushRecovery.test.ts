@@ -25,13 +25,22 @@ describe('background push recovery', () => {
     const connect = vi.fn();
     const report = vi.fn();
     const releaseTopics = vi.fn(() => [release.promise]);
+    let holds = 0;
     const lifecycle = createBackgroundConnection({
       isBackground: () => background,
+      isHeld: () => holds > 0,
       releaseTopics, stop, connect, report,
       pendingTransitions,
       graceMs: 2500, releaseWaitMs: 1000, suspendMs: 10_000,
     });
-    return { lifecycle, release, stop, connect, releaseTopics, report, active: () => { background = false; lifecycle.active(); } };
+    // The provider's counting: holds outlive a replaced connection, so they are not kept inside it.
+    const hold = () => {
+      holds += 1;
+      lifecycle.held();
+      let released = false;
+      return () => { if (released) return; released = true; holds -= 1; if (holds === 0) lifecycle.unheld(); };
+    };
+    return { lifecycle, hold, release, stop, connect, releaseTopics, report, active: () => { background = false; lifecycle.active(); } };
   }
 
   it('keeps stopping and reconnecting when a diagnostic sink throws', async () => {
@@ -58,6 +67,49 @@ describe('background push recovery', () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(f.report).toHaveBeenCalledTimes(count);
     expect(f.stop).not.toHaveBeenCalled();
+  });
+
+  // 通知按钮：用户在后台点了「批准／回复」，连接要为这一次操作保留或恢复，做完即断。
+  // 规则依据 docs/product-rules/notification-actions.md；此前后台只有「宽限后必断」一条路径。
+  it('a hold defers the grace stop and its release stops the connection in the background', async () => {
+    const f = fixture();
+    f.lifecycle.background();
+    const release = f.hold();
+    expect(f.connect).toHaveBeenLastCalledWith('hold');
+    f.release.resolve();
+    await vi.advanceTimersByTimeAsync(3500);
+    expect(f.stop).not.toHaveBeenCalled();
+    release();
+    release();
+    expect(f.stop).toHaveBeenCalledTimes(1);
+    expect(f.report).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'stop', reason: 'hold-released' }));
+  });
+
+  it('a hold released before the grace period leaves the stop to the grace period', async () => {
+    const f = fixture();
+    f.lifecycle.background();
+    f.hold()();
+    expect(f.stop).not.toHaveBeenCalled();
+    f.release.resolve();
+    await vi.advanceTimersByTimeAsync(3500);
+    expect(f.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('a hold restarts a stopped connection, keeps it for overlapping work, and never stops a foreground one', async () => {
+    const f = fixture();
+    f.lifecycle.background();
+    f.release.resolve();
+    await vi.advanceTimersByTimeAsync(3500);
+    expect(f.stop).toHaveBeenCalledTimes(1);
+    const first = f.hold();
+    const second = f.hold();
+    expect(f.connect).toHaveBeenCalledTimes(2);
+    first();
+    expect(f.stop).toHaveBeenCalledTimes(1);
+    f.active();
+    second();
+    expect(f.stop).toHaveBeenCalledTimes(1);
+    expect(f.connect).toHaveBeenLastCalledWith('active');
   });
 
   it('replaces a half-open socket immediately when JS was suspended during the final unsubscribe', async () => {

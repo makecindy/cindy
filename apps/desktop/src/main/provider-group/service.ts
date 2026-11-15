@@ -319,6 +319,8 @@ export interface ProviderGroupService {
    * (§6.1)：取走凭证、登记给下一次打开，返回 true，调用方带交接后在同一个分享位置重新打开，由组换一台。
    */
   claimGuestStartSwitch(sessionId: string): boolean;
+  /** Startup counterpart of guestFailover, fenced through the history handoff. */
+  prepareGuestStartSwitch(sessionId: string): Promise<{ isCurrent(): boolean; dispose(): void } | null>;
   /** 用户亲自接手：这一轮重新从头试。 */
   noteUserAction(sessionId: string): void;
   /**
@@ -837,14 +839,15 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       const state = resolved?.find((r) => r.member.key === memberKey);
       if (!state) return null;
       const cooling = router.coolingUntil(providerId, memberKey, model) !== null
-        || providerGroupMemberUsageState(state, model, deps.now(), agentKind).limited;
+        || (!state.providerContinuity?.stale && providerGroupMemberUsageState(state, model, deps.now(), agentKind).limited);
       if (state.state === 'ok' && !cooling) return false;
       return { reason: cooling ? 'cooling' : state.state };
     },
     async rebalanceTarget(providerId, config, memberKey, model, agentKind, exclude) {
       const resolved = await withTimeout(deps.directory.resolveMembers(providerId, config), PROVIDER_GROUP_BEFORE_SEND_TIMEOUT_MS);
       const current = resolved?.find((r) => r.member.key === memberKey);
-      if (!resolved || current?.state !== 'ok' || router.coolingUntil(providerId, memberKey, model) !== null) return null;
+      if (!resolved || current?.state !== 'ok' || current.providerContinuity?.stale
+        || router.coolingUntil(providerId, memberKey, model) !== null) return null;
       const now = deps.now();
       const state = providerGroupMemberUsageState(current, model, now, agentKind);
       if (state.limited || !state.quota) return null;
@@ -1340,6 +1343,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       }
       return await failoverRun(sessionId, signals, token, hooks, decision, lease, run, directRecovery);
     } finally {
+      directRecovery?.dispose?.();
       done();
     }
   }
@@ -1717,7 +1721,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         await restoreBindingAfterFailedSwitch(sessionId, source, binding.providerId, config);
         // 与失败本身同一个判定：目标电脑的问题(连不上、分享暂停、Agent 起不来等)换下一台；任务在运行、
         // 已删除、用户已接手等与目标无关的失败直接结束，不冷却任何电脑。
-        const target = decide(sessionId, providerGroupFailureSignals(error), 'target', pick.member.key);
+        const targetSignals = providerGroupFailureSignals(error);
+        const target = decide(sessionId, targetSignals, 'target', pick.member.key);
         if (target.action !== 'switch' || !isCurrent()) {
           deps.log.info('provider group: switching computer stopped', { sessionId, error: errorText(error) });
           handBack();
@@ -1729,7 +1734,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
           error: errorText(error),
         });
         router.markTried(sessionId, pick.member.key);
-        if (target.cool) source.cool(binding.providerId, pick.member.key, target.cause, null, row.model);
+        if (target.cool) source.cool(binding.providerId, pick.member.key, target.cause, deps.readResetAt(targetSignals), row.model);
         skipped.failed(pick.member, isUnreachableTarget(target));
         continue;
       }
@@ -1889,6 +1894,12 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         }
         if (config === undefined) {
           if (!mayReopenElsewhere(sessionId)) return null;
+          // A committed user move can leave the old binding until the group is
+          // reachable again. Without its config we cannot verify the new member;
+          // let the persisted route start normally, never reconstruct the old
+          // location from that binding ("local" is relative to the group owner).
+          const located = await locatedMemberKey(source, existingBinding.providerId, row);
+          if (located !== existingBinding.memberKey) return null;
           const member = pendingMember(
             existingBinding.memberKey,
             row.providerId ?? existingBinding.providerId,
@@ -1986,7 +1997,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     },
 
     async nextAfterStartFailure(context, error) {
-      const decision = decide(context.sessionId, providerGroupFailureSignals(error), 'start', context.member.key);
+      const signals = providerGroupFailureSignals(error);
+      const decision = decide(context.sessionId, signals, 'start', context.member.key);
       const source = sourceFor(context.groupDeviceId);
       if (decision.action !== 'switch' || !source) return null;
       const { cause } = decision;
@@ -2009,7 +2021,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         return null;
       }
       if (!config?.autoSwitch) return null;
-      if (decision.cool) source.cool(context.groupProviderId, context.member.key, cause, null, context.model);
+      if (decision.cool) source.cool(context.groupProviderId, context.member.key, cause, deps.readResetAt(signals), context.model);
       source.invalidate(context.member);
       const tried = router.markTried(context.sessionId, context.member.key);
       const pick = await source.pick({
@@ -2237,7 +2249,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
           } catch (error) {
             await restoreBindingAfterFailedSwitch(sessionId, source, binding.providerId, config);
             // 与失败本身同一个判定：目标电脑的问题换下一台；与目标无关的失败(任务在运行、已删除等)照常发到原电脑。
-            const target = decide(sessionId, providerGroupFailureSignals(error), 'target', pick.member.key);
+            const targetSignals = providerGroupFailureSignals(error);
+            const target = decide(sessionId, targetSignals, 'target', pick.member.key);
             if (target.action !== 'switch' || !isCurrent()) {
               deps.log.warn('provider group: moving a task before sending failed', { sessionId, error: errorText(error) });
               if (failedTargets.length > 0 && isCurrent()) preSendFailed.set(sessionId, { keys: failedTargets, at: deps.now() });
@@ -2250,7 +2263,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
             });
             if (!failedTargets.includes(pick.member.key)) failedTargets.push(pick.member.key);
             router.markTried(sessionId, pick.member.key);
-            if (target.cool) source.cool(binding.providerId, pick.member.key, target.cause, null, row.model);
+            if (target.cool) source.cool(binding.providerId, pick.member.key, target.cause, deps.readResetAt(targetSignals), row.model);
             skipped.failed(pick.member, isUnreachableTarget(target));
           }
         }
@@ -2312,6 +2325,29 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       const claimed = deps.guestSwitch?.claim(sessionId) === true;
       if (claimed) deps.log.info('provider group: reopening a shared task through the sharer’s group after it did not start', { sessionId });
       return claimed;
+    },
+
+    async prepareGuestStartSwitch(sessionId) {
+      const recovery = deps.directGuestSession?.(sessionId)?.captureRecovery?.();
+      const { run, done } = trackRun(sessionId);
+      let claimed = false;
+      const isCurrent = () => !run.superseded && (recovery === undefined || (recovery !== null && recovery.isCurrent()));
+      const dispose = () => { recovery?.dispose?.(); done(); };
+      try {
+        if (!isCurrent()) return null;
+        if (!deps.guestSwitch?.hasOffer(sessionId) && recovery) {
+          const row = await deps.readSessionRow(sessionId);
+          if (!isCurrent() || row?.agentDeviceId !== recovery.ownerRoute) return null;
+          const token = await recovery.requestSwitch().catch(() => undefined);
+          if (!token || !isCurrent()) return null;
+          deps.guestSwitch?.offer(sessionId, token);
+        }
+        if (!isCurrent() || !deps.guestSwitch?.claim(sessionId)) return null;
+        claimed = true;
+        return { isCurrent, dispose };
+      } finally {
+        if (!claimed) dispose();
+      }
     },
 
     noteUserAction(sessionId) {

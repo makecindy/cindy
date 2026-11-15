@@ -36,7 +36,9 @@ describe('provider import wiring', () => {
     expect(bootstrap).toMatch(/redactConsumedDeepLinkInArgv\(process.argv\);\s*const args = process.argv.slice\(1\);\s*spawn\(exe, args,/);
   });
   it('redacts received argv before dispatch for cold-start and second-instance delivery', () => {
-    expect(bootstrap).toMatch(/redactConsumedDeepLinkInArgv\(argv, url\);\s*handleIncomingDeepLink\(url, 'second-instance'\)/);
+    // Both the shared handoff and the ordinary Electron path must see argv
+    // already redacted; accepting either branch alone would miss the other.
+    expect(bootstrap).toMatch(/redactConsumedDeepLinkInArgv\(argv, url\);\s*if \(windowsHandoff\) windowsHandoff.dispatch\(url, additionalData, 'second-instance'\);\s*else handleIncomingDeepLink\(url, 'second-instance'\)/);
     expect(bootstrap).toMatch(/redactConsumedDeepLinkInArgv\(process.argv, coldStartUrl\);\s*handleIncomingDeepLink\(coldStartUrl, 'cold-start-argv'\)/);
   });
   it('reuses the settings built-in key bridge and its OpenAI media invalidation', () => {

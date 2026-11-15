@@ -202,11 +202,41 @@ it('routes the executor SDK in the App origin and cleans it up with the View', a
   await view.close();
   expect(state.removed).toContain(root);
 });
+it('routes both optional Cindy state modules through the existing native asset list', async () => {
+  const sdk = { source: 'export class App {}', addons: { 'cindy/view-state': { source: 'export function createViewState(){}', reactSource: 'export function createViewStateHooks(){}' } } };
+  let manifest: string[][] = [];
+  state.start.mockImplementationOnce(async (_root, _entry, token, _csp, entries: string[][]) => {
+    // Capture at the native call, not the mutable array retained by the mock.
+    manifest = entries.map(row => [...row]);
+    const root = 'file:///cache/mcp-apps/' + '01'.repeat(24);
+    expect(state.files.get(root + '/4')).toBe(sdk.addons['cindy/view-state'].source);
+    expect(state.files.get(root + '/5')).toBe(sdk.addons['cindy/view-state'].reactSource);
+    return `http://127.0.0.1:5001/__cindy/${token}`;
+  });
+  const view = await prepareMcpAppNativeDocument({ ...document, sdk }, 'native-key');
+  expect(manifest).toContainEqual(['__cindy/sdk/cindy/view-state.js', '4', 'text/javascript']);
+  expect(manifest).toContainEqual(['__cindy/sdk/cindy/view-state-react.js', '5', 'text/javascript']);
+  const root = 'file:///cache/mcp-apps/' + '01'.repeat(24);
+  expect(state.files.get(root + '/4')).toBe(sdk.addons['cindy/view-state'].source);
+  expect(state.files.get(root + '/5')).toBe(sdk.addons['cindy/view-state'].reactSource);
+  expect(state.files.get(root + '/0')).toContain('http://127.0.0.1:5001/__cindy/sdk/cindy/view-state.js');
+  await view.close();
+});
 
 // Lead R6 cross-end compatibility: invalid optional SDK bytes must not add a broken route.
 it('ignores malformed optional SDK metadata on the phone', async () => {
   const view = await prepareMcpAppNativeDocument({ ...document, sdk: { source: 7 } } as never, 'native-key');
   expect(state.start.mock.calls[0][4]).toEqual([['initialize.html', '2', 'text/html'], ['resource.html', '0', 'text/html']]);
   expect(state.files.get('file:///cache/mcp-apps/' + '01'.repeat(24) + '/0')?.replace(/<script data-cindy-runtime>[\s\S]*?<\/script>/, '').replace(/<script type="importmap">[\s\S]*?<\/script>/, '')).toBe(document.html);
+  await view.close();
+});
+
+it('ignores malformed addons while keeping the official SDK on an older payload', async () => {
+  const sdk = { source: 'export class App {}', addons: { 'cindy/view-state': { source: 7 } } };
+  const view = await prepareMcpAppNativeDocument({ ...document, sdk } as never, 'native-key');
+  const root = 'file:///cache/mcp-apps/' + '01'.repeat(24);
+  expect(state.files.get(root + '/3')).toBe(sdk.source);
+  expect(state.files.has(root + '/4')).toBe(false);
+  expect(state.files.get(root + '/0')).not.toContain('@cindy/ext-apps');
   await view.close();
 });

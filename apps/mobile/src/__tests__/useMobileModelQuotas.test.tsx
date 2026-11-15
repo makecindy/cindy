@@ -240,3 +240,14 @@ it("updates the pool summary at the six-hour boundary without a network poll", a
   expect(view.now).toBe(2000);
   expect(h.invoke).toHaveBeenCalledTimes(1);
 });
+
+it("reads an independent subscription's account pool, not the default login", async () => {
+  h.invoke.mockResolvedValue({ providerId: 'openai-sub-second', kind: 'openai', configured: true, accounts: [{
+    identity: 'second@example.test', status: 'ready', paused: false, running: 0, limit: 4,
+    usage: { codex: { buckets: { codex: { secondary: window(4 * 86400) } } } },
+  }] });
+  await mount([{ ...providers[0], id: 'openai-sub-second', subscriptionAccountPool: 'openai' }]);
+  expect(h.invoke).toHaveBeenCalledWith('host', 'maker:subscription-accounts', [{ action: 'read', providerId: 'openai-sub-second' }]);
+  expect(h.invoke).toHaveBeenCalledTimes(1);
+  expect(view.quotas['openai-sub-second']).toMatchObject({ accountIdentity: 'second@example.test', remaining: 80 });
+});
