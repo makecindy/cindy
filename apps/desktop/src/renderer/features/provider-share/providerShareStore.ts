@@ -16,8 +16,8 @@ import { useSyncExternalStore } from 'react';
 
 import { PROVIDER_METADATA_TRUST_MS, readProviderMetadataContinuity, type ProviderShareReceived } from '@cindy/device-link';
 
-import { getCachedDeviceProviders, hasDeviceProvidersInterest, hasSubscriptionShareCatalog, isSubscriptionShareCatalogStale } from '@/hooks/useDeviceProviders';
-import { getCachedCapabilities, hasDeviceCapabilitiesInterest } from '@/hooks/useAgentCapabilities';
+import { hasDeviceProvidersInterest, hasSubscriptionShareCatalog, isSubscriptionShareCatalogStale } from '@/hooks/useDeviceProviders';
+import { hasDeviceCapabilitiesInterest } from '@/hooks/useAgentCapabilities';
 import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
 import { createLogger } from '@/lib/logger';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
@@ -285,8 +285,9 @@ function invalidateShareCatalogs(
       && options?.refreshShareIds?.has(share.shareId) && !changed.includes(share.shareId)) {
       if (hasDeviceProvidersInterest(deviceId) || hasDeviceCapabilitiesInterest(deviceId)) {
         void refreshRemoteCatalogSnapshot(deviceId).catch(() => undefined);
-      } else if (getCachedDeviceProviders(deviceId)
-        || (['claude-code', 'codex', 'pi'] as const).some(agent => getCachedCapabilities(agent, deviceId))) {
+      } else {
+        // Cached copies may exist only under task-host route keys. Retirement
+        // is read-free even when this source has never been opened directly.
         void refreshRemoteCatalogSnapshot(deviceId, undefined, { retireOnly: true }).catch(() => undefined);
       }
       continue;

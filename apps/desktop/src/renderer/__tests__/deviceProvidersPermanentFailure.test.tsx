@@ -1158,6 +1158,37 @@ describe('agent capability cache hits', () => {
 // Existing lifecycle cases changed permission/presence, missing unchanged-share
 // metadata with a successful empty directory followed by restored models.
 describe('received-share model catalog freshness', () => {
+  // #10711 review / unit: direct details can leave a cache while the only live
+  // consumer uses a task-host route. Previously its eviction had no replacement.
+  it.each(['providers', 'capabilities'] as const)('refreshes routed %s after direct details close', async (consumer) => {
+    const f = await mountSharePicker();
+    await f.unmountCatalog();
+    const original = f.invoke.getMockImplementation()!;
+    const routedReads: string[] = [];
+    f.invoke.mockImplementation(async (device, channel, ...args: unknown[]) => {
+      if (channel === CONTROLLED_MODEL_CATALOG_CHANNEL) {
+        const request = (args[0] as { channel: string; agentDeviceId: string }[])[0];
+        routedReads.push(request.agentDeviceId);
+        return original(device, request.channel);
+      }
+      return original(device, channel);
+    });
+    const target = modelCatalogKey('share:a', 'task-host')!;
+    const hook = await renderHookFixture(() => consumer === 'providers'
+      ? providers.useDeviceProviders(target) : useAgentCapabilities('claude-code', target));
+    await flushMounted();
+    const reads = routedReads.length;
+    f.setProviders([provider('updated-route')]);
+    f.setCapabilities({ ...capabilities, availableModels: [{ ...capabilities.availableModels[0], id: 'updated-route' }] });
+    await act(async () => { f.push([receivedShare()]); });
+    await flushMounted();
+    expect(hook.result.current.loading).toBe(false);
+    expect(providers.getCachedDeviceProviders(target)?.providers[0]?.id).toBe('updated-route');
+    expect(getCachedCapabilities('claude-code', target)?.availableModels[0]?.id).toBe('updated-route');
+    expect(routedReads.length).toBeGreaterThan(reads);
+    expect(routedReads.every(source => source === 'share:a')).toBe(true);
+  });
+
   it('updates mounted and cached catalogs on unchanged membership, including empty → restored', async () => {
     const f = await mountSharePicker();
     const reads = f.providerReads();
@@ -1222,7 +1253,7 @@ describe('received-share model catalog freshness', () => {
     expect(f.latest().providers[0]?.id).toBe('last');
   });
 
-  it('invalidates a loaded but unused empty catalog without polling it in the background', async () => {
+  it.each(['direct', 'routed'])('invalidates a loaded but unused empty %s catalog without background polling', async (route) => {
     const f = await mountSharePicker();
     const cached = receivedShare({ shareId: 'cached' });
     const snapshot = receivedSnapshot([receivedShare(), cached]);
@@ -1230,14 +1261,16 @@ describe('received-share model catalog freshness', () => {
     await act(async () => { f.push([...snapshot.received]); });
     await flushMounted();
     const original = f.invoke.getMockImplementation()!;
-    f.invoke.mockImplementation(async (device, channel) => device === 'share:cached' && channel === 'maker:provider:list'
+    f.invoke.mockImplementation(async (device, channel) => channel === CONTROLLED_MODEL_CATALOG_CHANNEL
+      || (device === 'share:cached' && channel === 'maker:provider:list')
       ? { providers: [] } : original(device, channel));
-    await providers.prefetchDeviceProviders('share:cached');
-    expect(providers.getCachedDeviceProviders('share:cached')?.providers).toEqual([]);
+    const target = route === 'routed' ? modelCatalogKey('share:cached', 'task-host')! : 'share:cached';
+    await providers.prefetchDeviceProviders(target);
+    expect(providers.getCachedDeviceProviders(target)?.providers).toEqual([]);
     const reads = f.providerReads();
     await act(async () => { f.push([...snapshot.received]); });
     await flushMounted();
-    expect(providers.getCachedDeviceProviders('share:cached')).toBeNull();
+    expect(providers.getCachedDeviceProviders(target)).toBeNull();
     expect(f.providerReads()).toBe(reads + 1); // Only the mounted share is reread.
   });
 
