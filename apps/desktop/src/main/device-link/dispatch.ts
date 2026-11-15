@@ -462,8 +462,8 @@ export interface InboundDispatchPorts {
   syncRemoteControlAccessGeneration: typeof syncRemoteControlAccessGeneration;
   remoteControlAccessGeneration: () => number;
   deviceAccessGeneration: (deviceId: string) => number;
-  executeRemoteSessionArchive: typeof import('../task-management/remoteArchive.js').executeRemoteSessionArchive;
-  revalidateRemoteArchiveReply: (channel: string, reply: unknown) => Promise<unknown>;
+  executeRemoteSessionArchive?: typeof import('../task-management/remoteArchive.js').executeRemoteSessionArchive;
+  revalidateRemoteArchiveReply?: (channel: string, reply: unknown) => Promise<unknown>;
   requestPluginOauth?: typeof requestPluginOauth;
   invalidatePluginOauth?: typeof invalidatePluginOauth;
   dispatchLocalInvoke: typeof dispatchLocalInvoke;
@@ -524,8 +524,8 @@ export function createInboundDispatch(ports: InboundDispatchPorts) {
     syncRemoteControlAccessGeneration,
     remoteControlAccessGeneration,
     deviceAccessGeneration,
-    executeRemoteSessionArchive,
-    revalidateRemoteArchiveReply,
+    executeRemoteSessionArchive = unavailable('Remote session archive'),
+    revalidateRemoteArchiveReply = unavailable('Remote session archive'),
     requestPluginOauth = unavailable('requestPluginOauth'),
     invalidatePluginOauth,
     dispatchLocalInvoke,
@@ -5084,6 +5084,11 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       ok: false,
       error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed remotely` },
     };
+  }
+
+  if (isRemoteArchiveInvoke(payload.channel) &&
+      (!ports.executeRemoteSessionArchive || !ports.revalidateRemoteArchiveReply)) {
+    return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'Remote session archive is not supported by this Host' } };
   }
 
   if (payload.channel === FILE_PEER_CHANNEL) {
