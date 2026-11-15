@@ -322,6 +322,8 @@ OAuth 代码、App 密钥或任务签名密钥。`schedule_get.webhookStatus` �
 
 ### 项目资料（2026-11-13）
 
+项目创建（2026-11-16）：`create_project` 与桌面／手机共用创建入口，省略 `working_dir` 按名称或仓库名自动分配目录，`repository_url` 克隆 GitHub／GitLab／Git HTTPS 或 SSH 地址，`device` 指定同账号电脑。第一层 `projects.management` 索引可发现这些用法。远端自动创建／克隆要求 settingsVersion >= 7，旧端保留已有目录注册；失败不回落到本机。现有共享访客与 SSH 任务边界保持不变。
+
 `update_project_info` 与桌面／手机共用项目名称和图标保存入口，支持 `device` 指定同账号电脑。
 `projects.management` 第一层索引可发现；共享任务访客沿用既有拒绝规则，未升级的目标明确返回不支持。
 不移动主目录。2026-11-15：`get_project_info` 读回项目资料和目录权限；`update_project_info` 的 profile 支持项目目录完整列表（path/access）；界面统一称目录，不提供权限切换，新目录使用 write，既有授权保留，新建表单与设置共用保存入口，任务从下一轮继承，旧任务单独授权保留。两项工具均在 projects.management 首层索引可发现；远端要求 settingsVersion >= 6。

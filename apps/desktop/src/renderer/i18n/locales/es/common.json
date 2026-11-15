@@ -21896,7 +21896,15 @@
     "browseDirectory": "Explorar directorios",
     "mainDirectory": "Directorio principal",
     "createTitle": "Nuevo proyecto",
-    "createAction": "Crear proyecto"
+    "createAction": "Crear proyecto",
+    "repository": "URL del repositorio (opcional)",
+    "repositoryHint": "Pega una URL de GitHub, GitLab o Git; déjala vacía para crear un proyecto vacío.",
+    "autoDirectory": "Sin elegir directorio, se crea en {{path}}. Si el nombre existe, se añade un número.",
+    "cloning": "Clonando repositorio…",
+    "invalidRepository": "Introduce una URL válida de GitHub, GitLab o Git.",
+    "createFailed": "No se pudo crear el proyecto. Revisa los permisos de escritura, la URL y el acceso a Git de este equipo. El destino de clonación debe estar vacío.",
+    "createNamePlaceholder": "Nombre del proyecto o URL del repositorio",
+    "createNameHint": "Escribe un nombre o pega la URL del repositorio."
   },
   "taskManagement": {
     "scope": "Solo se aplica a esta cuenta en este ordenador.",

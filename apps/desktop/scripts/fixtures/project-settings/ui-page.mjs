@@ -11,6 +11,12 @@ export default {
   real: 'ProjectSettingsDialog and ProjectIcon',
   notCovered: 'Real persistence, device-link transport and phone native presentation.',
   cases: {
+    'create-legacy': { about: 'Version 6 still requires an existing directory and hides clone fields', data: { create: true, version: 6 } },
+    'create-auto': { about: 'Create by name without choosing a directory', data: { create: true } },
+    'create-repository': {
+      about: 'Paste a GitLab URL as the name and clone into the automatically allocated directory',
+      data: { create: true },
+    },
     'create-primary': {
       about:
         'The first directory becomes primary; removing it promotes the next directory before creation',
@@ -78,6 +84,25 @@ export default {
       .waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'create-auto' || ui.case === 'create-repository') {
+      const repository = ui.case === 'create-repository';
+      await page
+        .getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true })
+        .fill(repository ? 'https://gitlab.example.com/engineering/platform/client/applications/project-management/demo' : 'Demo');
+      await ui.capture('automatic-location');
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true })
+        .click();
+      const writes = await page.evaluate(() => window.projectSettingsWrites);
+      if (writes.length !== 1 || writes[0].projectKey !== 'local:' || !writes[0].create)
+        throw new Error('Missing automatic creation');
+      if (repository && writes[0].repositoryUrl !== 'https://gitlab.example.com/engineering/platform/client/applications/project-management/demo')
+        throw new Error('Repository paste was lost');
+      const opened = await page.evaluate(() => window.projectCreatedPath);
+      if (opened !== (repository ? '/Projects/demo' : '/Projects/Demo'))
+        throw new Error('Did not use host-assigned directory');
+      return;
+    }
     if (ui.case === 'create-primary') {
       for (const path of ['/Projects/First', '/Projects/Second']) {
         await page.evaluate((path) => {
@@ -155,8 +180,13 @@ export default {
       return;
     }
 
-    if (ui.case === 'directories' || ui.case === 'create') {
-      if (ui.case === 'create') {
+    if (ui.case === 'directories' || ['create', 'create-legacy'].includes(ui.case)) {
+      if (['create', 'create-legacy'].includes(ui.case)) {
+        if (ui.case === 'create-legacy') {
+          if (await page.getByRole('textbox', { name: await ui.t('projectSettings.repository'), exact: true }).count()) throw new Error('Old host exposed cloning');
+          await page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true }).fill('Demo');
+          if (!(await page.getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true }).isDisabled())) throw new Error('Old host accepted automatic allocation');
+        }
         await page
           .getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true })
           .fill('Example');
@@ -188,7 +218,7 @@ export default {
       await page
         .getByRole('button', {
           name: await ui.t(
-            ui.case === 'create' ? 'projectSettings.createAction' : 'projectSettings.save',
+            ['create', 'create-legacy'].includes(ui.case) ? 'projectSettings.createAction' : 'projectSettings.save',
           ),
           exact: true,
         })
@@ -199,7 +229,7 @@ export default {
       if (ui.case === 'directories' && writes[0].value.directories[0].access !== 'read')
         throw new Error('Changed a pre-existing directory permission');
       if (
-        ui.case === 'create' &&
+        ['create', 'create-legacy'].includes(ui.case) &&
         (!writes[0].create || writes[0].projectKey !== 'local:/Projects/Example')
       )
         throw new Error('Wrong creation identity');

@@ -1,3 +1,4 @@
+import { prepareNewProject, projectCreationRoot } from './projectCreation.js';
 import {
   validateLocalProjectDirectory,
   validateExistingLocalProjectDirectory,
@@ -43,6 +44,7 @@ export async function readProjectInfo(): Promise<HostProjectAliasesSnapshot> {
   if (!ownerStamp.dataOwnerId || isAppSessionBoundaryPending())
     throwIpcError('PRECONDITION_FAILED', 'No active account');
   const aliases = await core.listProjectAliases();
+  const creationRoot = await projectCreationRoot();
   const current = getActiveDataOwnerPushStamp();
   if (
     isAppSessionBoundaryPending() ||
@@ -58,7 +60,8 @@ export async function readProjectInfo(): Promise<HostProjectAliasesSnapshot> {
       Object.entries(readProjectIcons()).filter(([key]) => !key.startsWith('device:')),
     ),
     settingsSupported: true,
-    settingsVersion: 6,
+    settingsVersion: 7,
+    creationRoot,
     directories: readProjectDirectories(),
     platform: process.platform,
     ownerStamp,
@@ -79,9 +82,13 @@ export async function updateProjectInfo(input: unknown): Promise<HostProjectAlia
       throwIpcError('PRECONDITION_FAILED', 'Project account changed');
   };
   assertCurrent();
+  const automaticCreation =
+    body.create === true && (body.projectKey === 'local:' || !!body.repositoryUrl);
   const projectKey =
     typeof body.projectKey === 'string' && body.projectKey.length <= 4096
-      ? normalizeProjectKey(body.projectKey)
+      ? automaticCreation && body.projectKey === 'local:'
+        ? 'local:'
+        : normalizeProjectKey(body.projectKey)
       : null;
   if (!projectKey || (!projectKey.startsWith('local:') && !projectKey.startsWith('remote:')))
     throwIpcError('INVALID_PARAMS', 'Invalid host project identity');
@@ -114,6 +121,42 @@ export async function updateProjectInfo(input: unknown): Promise<HostProjectAlia
       'UNSUPPORTED_CAPABILITY',
       'New projects require a directory on the selected computer',
     );
+  if (
+    body.repositoryUrl !== undefined &&
+    (typeof body.repositoryUrl !== 'string' || body.repositoryUrl.length > 4096 || !body.create)
+  )
+    throwIpcError('INVALID_PARAMS', 'Invalid repository URL');
+  if ('directories' in changes && parseProjectDirectories(changes.directories) === null)
+    throwIpcError('INVALID_PARAMS', 'Invalid project directories');
+  if (automaticCreation) {
+    if (body.projectKey !== 'local:') {
+      const lexical = validateLocalProjectDirectory((body.projectKey as string).slice(6));
+      if (!lexical.ok || projectKey !== `local:${lexical.workingDir}`)
+        throwIpcError('INVALID_PARAMS', 'Use the project main directory, not a managed task worktree');
+    }
+    const prepared = await prepareNewProject(
+      {
+        directory: projectKey.slice(6),
+        name: changes.name as string | undefined,
+        repositoryUrl: body.repositoryUrl as string | undefined,
+      },
+      assertCurrent,
+    );
+    try {
+      assertCurrent();
+      if ('directories' in changes)
+        await validateProjectDirectories(
+          `local:${prepared.directory}`,
+          parseProjectDirectories(changes.directories)!,
+        );
+    } catch (error) {
+      await prepared.cleanup();
+      throw error;
+    }
+    // A metadata failure can have an uncertain commit. Preserve the completed folder for recovery.
+    const { repositoryUrl: _url, ...rest } = body;
+    return updateProjectInfo({ ...rest, projectKey: `local:${prepared.directory}` });
+  }
   if (body.create) {
     const requestedDirectory = (body.projectKey as string).slice(6);
     const lexical = validateLocalProjectDirectory(requestedDirectory);
@@ -222,7 +265,10 @@ export async function updateProjectInfo(input: unknown): Promise<HostProjectAlia
     },
   );
   assertCurrent();
-  return readProjectInfo();
+  return {
+    ...(await readProjectInfo()),
+    ...(body.create ? { createdProjectKey: projectKey } : {}),
+  };
 }
 
 export async function readProjectIconImage(input: unknown): Promise<string | null> {

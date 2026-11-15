@@ -1,3 +1,7 @@
+import {
+  parseProjectRepository,
+  projectCreationFolderName,
+} from "@cindy/maker-shared/project-alias-sync";
 import { createMobileMakerTransport } from "@/device-link/mobileMakerTransport";
 import { useOrcaWorkerDirectoryPicker } from "./useOrcaWorkerDirectoryPicker";
 import { OrcaWorkerDirectoryPicker } from "./OrcaWorkerDirectoryPicker";
@@ -113,6 +117,22 @@ export function ProjectSettingsSheet({
   );
   const defaultName = projectDirectoryName(directory);
   const [name, setName] = useState(title);
+  const [repositoryUrl, setRepositoryUrl] = useState("");
+  const repositoryCreation = create && (snapshot?.settingsVersion ?? 0) >= 7;
+  const changeRepository = (value: string) => {
+    const previous = parseProjectRepository(repositoryUrl);
+    const next = parseProjectRepository(value);
+    setRepositoryUrl(value);
+    if (next && (!name.trim() || name === previous?.name)) setName(next.name.slice(0, 80));
+  };
+  const changeName = (value: string) => {
+    const repository = repositoryCreation ? parseProjectRepository(value) : null;
+    if (repository) {
+      setRepositoryUrl(value.trim());
+      setName(repository.name.slice(0, 80));
+    } else setName(value.slice(0, 80));
+  };
+
   const [editingName, setEditingName] = useState(create);
   const [directories, setDirectories] = useState<readonly ProjectDirectory[]>(
     [],
@@ -216,7 +236,7 @@ export function ProjectSettingsSheet({
     !!initial && (snapshot?.settingsVersion ?? 0) >= (create ? 6 : 2);
   const dirty =
     !!initial &&
-    ((create && !!directory.trim()) ||
+    ((create && (!!directory.trim() || !!repositoryUrl.trim())) ||
       name.trim() !== initial.name ||
       icon !== initial.icon ||
       JSON.stringify(directories) !== JSON.stringify(initialDirectories));
@@ -243,12 +263,20 @@ export function ProjectSettingsSheet({
       lock.current ||
       !available ||
       !dirty ||
-      (create && !directory.trim()) ||
+      (create && (snapshot?.settingsVersion ?? 0) < 7 && !directory.trim()) ||
       !snapshot?.ownerStamp ||
       !isMobileAuthOwnerCurrent(owner)
     )
       return;
     Keyboard.dismiss();
+    if (
+      create &&
+      repositoryUrl.trim() &&
+      !parseProjectRepository(repositoryUrl)
+    ) {
+      setError(label("invalidRepository"));
+      return;
+    }
     lock.current = true;
     setBusy(true);
     setError(null);
@@ -259,6 +287,7 @@ export function ProjectSettingsSheet({
     } = {};
     if (name.trim() !== initial!.name)
       value.name = name.trim() === defaultName ? "" : name.trim();
+    if (create && !directory && name.trim()) value.name = name.trim();
     if (icon !== initial!.icon) value.icon = icon;
     if (
       (create &&
@@ -267,9 +296,21 @@ export function ProjectSettingsSheet({
     )
       value.directories = directories;
     try {
-      await invoke(deviceId, PROJECT_SETTINGS_SET_CHANNEL, [
-        { create, projectKey, field: "profile", value, ...snapshot.ownerStamp },
-      ]);
+      const result = (await invoke(deviceId, PROJECT_SETTINGS_SET_CHANNEL, [
+        {
+          create,
+          projectKey,
+          ...(create && repositoryUrl.trim()
+            ? { repositoryUrl: repositoryUrl.trim() }
+            : {}),
+          field: "profile",
+          value,
+          ...snapshot.ownerStamp,
+        },
+      ])) as { createdProjectKey?: string };
+      const createdDirectory = result?.createdProjectKey?.startsWith("local:")
+        ? result.createdProjectKey.slice(6)
+        : directory;
       if (!isMobileAuthOwnerCurrent(owner)) return;
       await refreshRemoteProjectAliases(
         deviceId,
@@ -277,10 +318,10 @@ export function ProjectSettingsSheet({
         () => isMobileAuthOwnerCurrent(owner),
         true,
       );
-      if (create) onCreated?.(directory);
+      if (create) onCreated?.(createdDirectory);
       onClose();
     } catch {
-      if (mounted.current) setError(label("failed"));
+      if (mounted.current) setError(label(create ? "createFailed" : "failed"));
     } finally {
       lock.current = false;
       if (mounted.current) setBusy(false);
@@ -436,7 +477,10 @@ export function ProjectSettingsSheet({
           disabled:
             disabled ||
             (stage === "profile"
-              ? !dirty || (create && !directory.trim())
+              ? !dirty ||
+                (create &&
+                  (snapshot?.settingsVersion ?? 0) < 7 &&
+                  !directory.trim())
               : pickerInvalid),
           onPress: () => {
             if (stage === "icon") {
@@ -511,10 +555,14 @@ export function ProjectSettingsSheet({
                     <TextInput
                       accessibilityLabel={label("name")}
                       value={name}
-                      onChangeText={setName}
-                      maxLength={80}
+                      onChangeText={changeName}
+                      maxLength={repositoryCreation ? 4096 : 80}
                       editable={!disabled}
-                      placeholder={defaultName || label("name")}
+                      placeholder={
+                        repositoryCreation
+                          ? label("createNamePlaceholder")
+                          : defaultName || label("name")
+                      }
                       placeholderTextColor={colors.textPlaceholder}
                       autoFocus
                       selectTextOnFocus
@@ -548,7 +596,7 @@ export function ProjectSettingsSheet({
                       <Pencil size={iconSize.sm} color={colors.textSecondary} />
                     </Pressable>
                   )}
-                  {name !== defaultName && (
+                  {(!create || !!directory) && name !== defaultName && (
                     <Pressable
                       disabled={disabled}
                       onPress={() => setName(defaultName)}
@@ -562,8 +610,10 @@ export function ProjectSettingsSheet({
                   )}
                 </View>
               </View>
-              <Text style={[styles.note, noteColor]}>{label("nameHint")}</Text>
-              {(snapshot?.settingsVersion ?? 0) >= 4 &&
+              <Text style={[styles.note, noteColor]}>
+                {label(repositoryCreation ? "createNameHint" : "nameHint")}
+              </Text>
+              {!!directory && (snapshot?.settingsVersion ?? 0) >= 4 &&
                 (icon === null || automatic.result?.candidate) && (
                   <View style={{ gap: spacing.sm }}>
                     {icon === null && (
@@ -591,6 +641,36 @@ export function ProjectSettingsSheet({
                     )}
                   </View>
                 )}
+              {create && (snapshot?.settingsVersion ?? 0) >= 7 && (
+                <View style={{ gap: spacing.sm }}>
+                  <Text style={[styles.note, noteColor]}>
+                    {label("repository")}
+                  </Text>
+                  <TextInput
+                    value={repositoryUrl}
+                    onChangeText={changeRepository}
+                    editable={!disabled}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    accessibilityLabel={label("repository")}
+                    placeholder={label("repositoryHint")}
+                    placeholderTextColor={colors.textPlaceholder}
+                    style={inputStyle}
+                  />
+                  {!directory && (
+                    <Text selectable style={[styles.note, noteColor]}>
+                      {t("settings.projectInfo.autoDirectory", {
+                        path: `${snapshot?.creationRoot ?? ""}/${projectCreationFolderName(name || parseProjectRepository(repositoryUrl)?.name || "Project")}`,
+                      })}
+                    </Text>
+                  )}
+                  {busy && repositoryUrl && (
+                    <Text style={[styles.note, noteColor]}>
+                      {label("cloning")}
+                    </Text>
+                  )}
+                </View>
+              )}
               <View style={styles.location}>
                 <View style={styles.computer}>
                   <Monitor size={iconSize.md} color={colors.textSecondary} />
@@ -600,6 +680,7 @@ export function ProjectSettingsSheet({
                 </View>
                 <ProjectDirectoriesEditor
                   mainDirectory={directory}
+                  showHint={!create}
                   copied={copied}
                   onMainDirectoryChange={create ? setDirectory : undefined}
                   onCopy={() =>

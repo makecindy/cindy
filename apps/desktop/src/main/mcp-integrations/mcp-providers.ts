@@ -1,3 +1,4 @@
+import { PROJECT_SETTINGS_SET_CHANNEL } from '@cindy/maker-shared/project-alias-sync';
 import {
   parseHostProjectAliasesSnapshot,
   resolveProjectDirectories,
@@ -840,7 +841,34 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         const result = await executeTaskTags(request, callerSessionId);
         return ['update', 'delete'].includes(request.action) ? { ...result, sessions: [] } : result;
       },
-      createProject,
+      createProject: async ({ device, ...params }) => {
+        if (isSessionSharedTaskActive(params.callerSessionId))
+          return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Not available in a shared task' };
+        if (!device || device === 'local' || device === getDeviceId())
+          return createProject(params);
+        return withAccountDataAccess(params.callerSessionId, async (assertCurrent) => {
+          const read = await deps.invokeRemote(device, 'sidebar-settings:get-project-aliases', [], {
+            preSend: assertCurrent,
+          });
+          if (!read.ok) return { ok: false as const, errorCode: read.error.code, message: read.error.message };
+          const snapshot = parseHostProjectAliasesSnapshot(read.result);
+          if (!snapshot?.ownerStamp || (snapshot.settingsVersion ?? 0) < (params.repositoryUrl || !params.workingDir ? 7 : 6))
+            return { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Update the selected computer to create this project.' };
+          const result = await deps.invokeRemote(device, PROJECT_SETTINGS_SET_CHANNEL, [{
+            ...snapshot.ownerStamp,
+            create: true,
+            projectKey: `local:${params.workingDir ?? ''}`,
+            repositoryUrl: params.repositoryUrl,
+            field: 'profile',
+            value: params.name !== undefined ? { name: params.name } : {},
+          }], { preSend: assertCurrent });
+          await assertCurrent();
+          if (!result.ok) return { ok: false as const, errorCode: result.error.code, message: result.error.message };
+          const created = (result.result as { createdProjectKey?: string })?.createdProjectKey;
+          const workingDir = created?.startsWith('local:') ? created.slice(6) : params.workingDir;
+          return workingDir ? { ok: true as const, workingDir } : { ok: false as const, errorCode: 'INTERNAL', message: 'Project creation result unavailable.' };
+        });
+      },
       moveSession: createMoveSession(isSessionInTurn),
       createTaskWorktree: createTaskWorktreeHost(),
       projectManagement: {

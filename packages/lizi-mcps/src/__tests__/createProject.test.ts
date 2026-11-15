@@ -62,6 +62,10 @@ describe("create_project MCP", () => {
       expect(
         parse(await call({ working_dir: "/project", create_directory: true })),
       ).toMatchObject({ errorCode: "INVALID_ARGS" });
+      expect(parse(await call({ name: "Demo", repository_url: "https://gitlab.com/team/demo", device: "studio" }))).toMatchObject({ ok: true, project_path: "/project" });
+      expect(createProject).toHaveBeenLastCalledWith({ callerSessionId: "caller", workingDir: undefined, name: "Demo", repositoryUrl: "https://gitlab.com/team/demo", device: "studio" });
+      expect(parse(await call({ name: "Blank" }))).toMatchObject({ ok: true });
+      expect(createProject).toHaveBeenLastCalledWith({ callerSessionId: "caller", workingDir: undefined, name: "Blank" });
       remoteHostId = "ssh";
       expect(parse(await call({ working_dir: "/project" }))).toMatchObject({
         errorCode: "UNSUPPORTED_CAPABILITY",
@@ -83,7 +87,7 @@ describe("create_project MCP", () => {
         ok: true,
         working_dir: "/project",
       });
-      expect(createProject).toHaveBeenCalledTimes(2);
+      expect(createProject).toHaveBeenCalledTimes(4);
       for (const restricted of ["restricted"] as const) {
         surface = restricted;
         const categories = parse(
@@ -96,7 +100,7 @@ describe("create_project MCP", () => {
         );
         expect((await call({ working_dir: "/project" })).isError).toBe(true);
       }
-      expect(createProject).toHaveBeenCalledTimes(2);
+      expect(createProject).toHaveBeenCalledTimes(4);
     } finally {
       await client.close();
       await server.close();

@@ -43,7 +43,9 @@ Emoji 支持肤色、旗帜、键帽与 ZWJ 序列，校验不依赖 Hermes 尚�
 
 桌面侧栏「新建项目」与新建任务的项目选择器、手机新建任务的项目选择器，都先打开项目表单。
 目录列表只保留一个「添加目录」按钮，主表单不再常驻路径输入框或「浏览目录」按钮。本机使用系统目录选择器（路径输入沿用系统能力），手机与远端选择器内支持输入路径；SSH 无目录浏览适配时，点击添加后显示路径输入选择步骤。
-主目录使用已存在的目录；桌面本机走原生目录选择器、其它电脑走固定目标的远端浏览，手机浏览选中的电脑。
+项目目录可以留空：按名称创建空白目录，或粘贴 GitHub、GitLab（含自建实例）的 HTTPS / SSH 仓库链接克隆；名称输入处也支持直接粘贴链接并提取仓库名。
+主表单提前显示自动分配位置，优先使用项目存放位置设置，其次是可见项目最常见的父目录，最后为 `~/Projects`。
+同名目录以 `-2`、`-3` 递增，使用独占创建，不覆盖已有目录。也可以选择已存在的目录：桌面本机走原生目录选择器、其它电脑走固定目标的远端浏览，手机浏览选中的电脑。手选目录用于克隆时必须为空。
 名称留空时使用目录名；可以同时设置图标和目录；界面只有一个「项目目录」列表，第一项标记为「主目录」，其余依次排列，不提供只读或读写切换。新建时首次添加的目录成为主目录，删除第一项后下一项自动成为主目录；已有项目的首项保持固定，避免改变项目身份。点击创建后才注册项目，
 进入该项目的新任务草稿；不会替用户发送消息。已有目录若已经是项目，先读回其保存的资料，不用空表单覆盖。
 保存与取消遵守同一个草稿流程；新建验证复用项目注册的主目录检查，托管对话目录和任务 worktree 不能另注册为项目。
@@ -64,6 +66,12 @@ SSH 界面用手动绝对路径，不打开本机或 Device Link 电脑的选择
 
 ## 归属与兼容
 
+`settingsVersion >= 7` 支持默认目录与仓库克隆，快照的 `creationRoot` 用于预览，创建回执的 `createdProjectKey` 决定实际打开位置（包括重名编号）。v6 主机保留手选已有目录的新建流程。
+仓库克隆复用目标电脑现有 Git 凭证与 SSH 配置，GitHub HTTPS 额外使用已有 gh 登录；不收集或保存 token，不弹终端交互，不执行仓库钩子。
+克隆期间显示忙碌状态并禁止重复提交，失败保留表单。克隆预算五分钟，跨电脑调用预算六分钟且不自动重试写入。
+失败仅清理本次独占分配且身份未改变的目录，不删除手选目录。资料保存出现不确定失败时保留已完成目录供恢复，不能宣称跨文件与数据库原子创建。
+`create_project` 与界面共用创建入口，支持可选 `working_dir`、`name`、`repository_url` 与同账号电脑 `device`；不额外发送任务消息或发布仓库。
+
 设置归属项目所在电脑和当前账号，不同电脑、SSH 主机及目录不互相覆盖。
 只编辑身份唯一的项目，混合身份的分组不提供设置入口。
 `settingsVersion >= 6` 支持目录与统一新建表单，旧主机不发送新字段、不显示目录编辑；`>= 2` 支持组合保存、图片与选择器；`>= 3` 额外支持线性图标颜色，`>= 4` 支持自动图标查询，`>= 5` 支持字母颜色（`text:CY:blue`）；默认色仍用无后缀的 `text:CY`。连接 v2–v4 主机时字母仅使用默认色。连接 v2 主机保留资料编辑但不提供选色；缺少 v2 能力的主机禁用编辑并提示升级。
@@ -78,6 +86,8 @@ Agent 的 `get_project_info` 读取指定项目已保存的名称、图标与目
 支持同样的图标表示、图片上传与 `profile.directories` 完整列表更新（`[]` 撤销项目目录）；共享任务访客沿用已有拒绝规则。
 
 ## 参考与验证入口
+
+新建参考 T3 的 [useNewProject](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/hooks/useNewProject.ts)、[cloneUrl](https://github.com/pingdotgg/t3code/blob/main/packages/shared/src/cloneUrl.ts) 和 [ManagedProjectFolders](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/project/ManagedProjectFolders.ts) 的链接解析、位置预览和目录冲突处理。
 
 参考 [T3 项目设置](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/components/settings/ProjectSettingsPanel.tsx)
 和[图标选择器](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/components/settings/ProjectIconPickerDialog.tsx)

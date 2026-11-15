@@ -1,3 +1,7 @@
+import {
+  parseProjectRepository,
+  projectCreationFolderName,
+} from '@cindy/maker-shared/project-alias-sync';
 import { deviceLinkProjectKey } from '../../../../shared/projectKeys';
 import { AddRemoteProjectDialog } from '@/components/new-chat/AddRemoteProjectDialog';
 import { ProjectDirectoriesEditor } from './ProjectDirectoriesEditor';
@@ -94,6 +98,22 @@ export function ProjectSettingsDialog({
   );
   const defaultName = projectDirectoryName(directory);
   const [name, setName] = useState(project.displayName);
+  const [repositoryUrl, setRepositoryUrl] = useState('');
+  const repositoryCreation = create && (snapshot?.settingsVersion ?? 0) >= 7;
+  const changeRepository = (value: string) => {
+    const previous = parseProjectRepository(repositoryUrl);
+    const next = parseProjectRepository(value);
+    setRepositoryUrl(value);
+    if (next && (!name.trim() || name === previous?.name)) setName(next.name.slice(0, 80));
+  };
+  const changeName = (value: string) => {
+    const repository = repositoryCreation ? parseProjectRepository(value) : null;
+    if (repository) {
+      setRepositoryUrl(value.trim());
+      setName(repository.name.slice(0, 80));
+    } else setName(value.slice(0, 80));
+  };
+
   const [editingName, setEditingName] = useState(create);
   const nameBeforeEdit = useRef(name);
   const nameButton = useRef<HTMLButtonElement>(null);
@@ -155,7 +175,7 @@ export function ProjectSettingsDialog({
   const available = !!initial && (snapshot?.settingsVersion ?? 0) >= (create ? 6 : 2);
   const dirty =
     !!initial &&
-    ((create && !!directory.trim()) ||
+    ((create && (!!directory.trim() || !!repositoryUrl.trim())) ||
       name.trim() !== initial.name ||
       icon !== initial.icon ||
       JSON.stringify(directories) !== JSON.stringify(initialDirectories));
@@ -174,11 +194,15 @@ export function ProjectSettingsDialog({
       lock.current ||
       !available ||
       !dirty ||
-      (create && !directory.trim()) ||
+      (create && (snapshot?.settingsVersion ?? 0) < 7 && !directory.trim()) ||
       !snapshot?.ownerStamp ||
       !isDataOwnerGenerationCurrent(owner)
     )
       return;
+    if (create && repositoryUrl.trim() && !parseProjectRepository(repositoryUrl)) {
+      setError(label('invalidRepository'));
+      return;
+    }
     lock.current = true;
     setBusy(true);
     setError(null);
@@ -188,6 +212,7 @@ export function ProjectSettingsDialog({
       directories?: readonly ProjectDirectory[];
     } = {};
     if (name.trim() !== initial!.name) value.name = name.trim() === defaultName ? '' : name.trim();
+    if (create && !directory && name.trim()) value.name = name.trim();
     if (icon !== initial!.icon) value.icon = icon;
     if (
       (create && resolveProjectDirectories(snapshot, key) === undefined) ||
@@ -197,28 +222,33 @@ export function ProjectSettingsDialog({
     try {
       const request = {
         create,
+        ...(create && repositoryUrl.trim() ? { repositoryUrl: repositoryUrl.trim() } : {}),
         projectKey: key,
         field: 'profile' as const,
         value,
         ...snapshot.ownerStamp,
       };
+      let result: { createdProjectKey?: string };
       if (project.deviceLinkDeviceId) {
-        await window.electronAPI.deviceLink.invoke(
+        result = (await window.electronAPI.deviceLink.invoke(
           project.deviceLinkDeviceId,
           PROJECT_SETTINGS_SET_CHANNEL,
           [request],
-        );
-        if ('name' in value && isDataOwnerGenerationCurrent(owner))
+        )) as { createdProjectKey?: string };
+        if ('name' in value && directory && isDataOwnerGenerationCurrent(owner))
           await window.electronAPI.localDb.projectAliases.delete(
             deviceLinkProjectKey(project.deviceLinkDeviceId, directory),
           );
-      } else await window.electronAPI.localDb.projectAliases.updateInfo(request);
+      } else result = await window.electronAPI.localDb.projectAliases.updateInfo(request);
+      const createdDirectory = result?.createdProjectKey?.startsWith('local:')
+        ? result.createdProjectKey.slice(6)
+        : directory;
       if (isDataOwnerGenerationCurrent(owner)) {
-        if (create) onCreated?.(directory);
+        if (create) onCreated?.(createdDirectory);
         onClose();
       }
     } catch {
-      setError(label('failed'));
+      setError(label(create ? 'createFailed' : 'failed'));
     } finally {
       lock.current = false;
       setBusy(false);
@@ -363,7 +393,9 @@ export function ProjectSettingsDialog({
                 <X size={16} />
               </Button>
             </div>
-            <Dialog.Description className="sr-only">{label('nameHint')}</Dialog.Description>
+            <Dialog.Description className="sr-only">
+              {label(repositoryCreation ? 'createNameHint' : 'nameHint')}
+            </Dialog.Description>
             <div className="min-h-0 overflow-y-auto px-4 pb-6">
               {discard ? (
                 <div className="flex flex-col gap-4 py-4">
@@ -398,10 +430,14 @@ export function ProjectSettingsDialog({
                         <Input
                           aria-label={label('name')}
                           value={name}
-                          placeholder={defaultName || label('name')}
-                          maxLength={80}
+                          placeholder={
+                            repositoryCreation
+                              ? label('createNamePlaceholder')
+                              : defaultName || label('name')
+                          }
+                          maxLength={repositoryCreation ? 4096 : 80}
                           disabled={busy || !available}
-                          onChange={setName}
+                          onChange={changeName}
                           autoFocus
                           onFocus={(event) => event.currentTarget.select()}
                           onBlur={() => setEditingName(false)}
@@ -425,7 +461,9 @@ export function ProjectSettingsDialog({
                           }}
                           className="group flex min-h-9 max-w-full items-center gap-2 rounded-md text-left text-20 font-medium text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                         >
-                          <span className="truncate">{name.trim() || defaultName}</span>
+                          <span className="truncate">
+                            {name.trim() || defaultName || label('createNamePlaceholder')}
+                          </span>
                           <Pencil
                             size={14}
                             aria-hidden="true"
@@ -433,7 +471,7 @@ export function ProjectSettingsDialog({
                           />
                         </button>
                       )}
-                      {name !== defaultName && (
+                      {(!create || !!directory) && name !== defaultName && (
                         <Button
                           variant="secondary"
                           tone="quiet"
@@ -448,8 +486,11 @@ export function ProjectSettingsDialog({
                       )}
                     </div>
                   </div>
-                  <p className="text-12 text-[var(--text-secondary)]">{label('nameHint')}</p>
-                  {(snapshot?.settingsVersion ?? 0) >= 4 &&
+                  <p className="text-12 text-[var(--text-secondary)]">
+                    {label(repositoryCreation ? 'createNameHint' : 'nameHint')}
+                  </p>
+                  {!!directory &&
+                    (snapshot?.settingsVersion ?? 0) >= 4 &&
                     (icon === null || automatic.result?.candidate) && (
                       <div className="flex flex-col gap-2">
                         {icon === null && (
@@ -475,6 +516,33 @@ export function ProjectSettingsDialog({
                         )}
                       </div>
                     )}
+                  {create && (snapshot?.settingsVersion ?? 0) >= 7 && (
+                    <div className="flex flex-col gap-2">
+                      <FormField label={label('repository')} hint={label('repositoryHint')}>
+                        {(control) => (
+                          <Input
+                            {...control}
+                            value={repositoryUrl}
+                            onChange={changeRepository}
+                            disabled={busy}
+                            placeholder="https://github.com/owner/repository"
+                          />
+                        )}
+                      </FormField>
+                      {!directory && (
+                        <p className="select-text break-all text-12 text-[var(--text-secondary)]">
+                          {t('projectSettings.autoDirectory', {
+                            path: `${snapshot?.creationRoot ?? ''}/${projectCreationFolderName(name || parseProjectRepository(repositoryUrl)?.name || 'Project')}`,
+                          })}
+                        </p>
+                      )}
+                      {busy && repositoryUrl && (
+                        <p role="status" className="text-13 text-[var(--text-secondary)]">
+                          {label('cloning')}
+                        </p>
+                      )}
+                    </div>
+                  )}
                   <div className="flex flex-col gap-3 border-t border-[var(--border-default)] pt-5">
                     <div className="flex items-center gap-2 text-13 text-[var(--text-secondary)]">
                       <Monitor size={15} />
@@ -482,6 +550,7 @@ export function ProjectSettingsDialog({
                     </div>
                     <ProjectDirectoriesEditor
                       mainDirectory={directory}
+                      showHint={!create}
                       copied={copied}
                       onMainDirectoryChange={create ? setDirectory : undefined}
                       onCopy={() =>
@@ -757,7 +826,10 @@ export function ProjectSettingsDialog({
                   loading={busy || imageBusy}
                   disabled={
                     !available ||
-                    (stage === 'profile' ? !dirty || (create && !directory.trim()) : pickerInvalid)
+                    (stage === 'profile'
+                      ? !dirty ||
+                        (create && (snapshot?.settingsVersion ?? 0) < 7 && !directory.trim())
+                      : pickerInvalid)
                   }
                   onClick={() => {
                     if (stage === 'icon') {

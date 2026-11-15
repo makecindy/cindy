@@ -166,6 +166,7 @@ export const MCP_APP_OPEN_TIMEOUT_MS = 120_000;
  * so a host never gives up before the controller stops waiting.
  */
 export const ACTION_INVOKE_TIMEOUTS_MS: readonly number[] = [
+  6 * 60_000, // Project cloning (five-minute Git budget plus profile persistence).
   BOT_GROUP_SEND_TIMEOUT_MS,
   MCP_APP_OPEN_TIMEOUT_MS,
   TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
@@ -177,6 +178,8 @@ export function resolveRemoteInvokeTimeoutMs(
   args?: unknown[],
   platform: 'desktop' | 'mobile' = 'desktop',
 ): number | undefined {
+  const projectRequest = args?.[0] as { create?: unknown; repositoryUrl?: unknown } | undefined;
+  if (channel === 'sidebar-settings:set-project-info' && projectRequest?.create === true && projectRequest.repositoryUrl) return 6 * 60_000;
   const appRequest = args?.[1] as { op?: unknown } | undefined;
   if (channel === 'maker:mcp-apps:v1' && appRequest?.op === 'open') return MCP_APP_OPEN_TIMEOUT_MS;
   // Group sends can materialize phone attachments, upload media and then submit the message.

@@ -487,6 +487,14 @@
     "browseDirectory": "Procurar diretórios",
     "mainDirectory": "Diretório principal",
     "createTitle": "Novo projeto",
-    "createAction": "Criar projeto"
+    "createAction": "Criar projeto",
+    "repository": "URL do repositório (opcional)",
+    "repositoryHint": "Cole uma URL do GitHub, GitLab ou Git; deixe em branco para um projeto vazio.",
+    "autoDirectory": "Sem selecionar diretório, será criado em {{path}}. Nomes repetidos recebem um número.",
+    "cloning": "A clonar repositório…",
+    "invalidRepository": "Introduza uma URL válida de repositório GitHub, GitLab ou Git.",
+    "createFailed": "Não foi possível criar o projeto. Verifique a permissão de escrita, a URL e o acesso Git deste computador. O destino da clonagem deve estar vazio.",
+    "createNamePlaceholder": "Nome do projeto ou URL do repositório",
+    "createNameHint": "Introduza um nome de projeto ou cole uma URL de repositório."
   }
 }

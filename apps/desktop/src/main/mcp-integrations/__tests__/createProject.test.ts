@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   registered: [] as Array<{ path: string }>,
   list: vi.fn(),
   aliases: vi.fn(),
+  updateInfo: vi.fn(),
   rename: vi.fn(),
   visibility: vi.fn(),
   hiddenKeys: [] as string[],
@@ -80,6 +81,7 @@ vi.mock('../../localDb/ipc/recentWorkdirs.js', async (importOriginal) => {
 });
 vi.mock('../../localDb/ipc/projectAliases.js', () => ({
   listProjectAliases: h.aliases,
+  updateProjectInfo: h.updateInfo,
   upsertProjectAlias: h.rename,
 }));
 vi.mock('../../sidebarSettingsStore.js', () => ({
@@ -123,6 +125,14 @@ describe('createProject', () => {
     await rm(directory, { recursive: true, force: true });
   });
   const run = (workingDir: string) => createProject({ callerSessionId: 'caller', workingDir });
+
+  it('creates by name or repository through the form entry and preserves existing settings when naming a selected folder', async () => {
+    h.updateInfo.mockResolvedValue({ createdProjectKey: 'local:/Projects/Demo-2' });
+    expect(await createProject({ callerSessionId: 'caller', name: 'Demo', repositoryUrl: 'https://gitlab.com/g/demo' })).toEqual({ ok: true, workingDir: '/Projects/Demo-2' });
+    expect(h.updateInfo).toHaveBeenLastCalledWith({ ...h.owner, create: true, projectKey: 'local:', repositoryUrl: 'https://gitlab.com/g/demo', field: 'profile', value: { name: 'Demo' } });
+    await createProject({ callerSessionId: 'caller', workingDir: directory, name: 'Renamed' });
+    expect(h.updateInfo).toHaveBeenLastCalledWith({ ...h.owner, create: true, projectKey: `local:${directory}`, repositoryUrl: undefined, field: 'profile', value: { name: 'Renamed' } });
+  });
 
   // Unit: project self-inspection must agree with sidebar membership, including
   // old managed worktrees, and must never leak across an account switch.

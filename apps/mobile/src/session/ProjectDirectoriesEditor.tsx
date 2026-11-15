@@ -20,6 +20,7 @@ export function ProjectDirectoriesEditor({
   copied,
   onCopy,
   allowAdd = true,
+  showHint = true,
   value,
   onChange,
   disabled,
@@ -30,6 +31,7 @@ export function ProjectDirectoriesEditor({
   copied: boolean;
   onCopy: () => void;
   allowAdd?: boolean;
+  showHint?: boolean;
   value: readonly ProjectDirectory[];
   onChange(value: ProjectDirectory[]): void;
   disabled: boolean;
@@ -178,9 +180,9 @@ export function ProjectDirectoriesEditor({
             }}
           />
         ))}
-      <Text style={[styles.note, { color: colors.textSecondary }]}>
+      {showHint && <Text style={[styles.note, { color: colors.textSecondary }]}>
         {label("directoriesHint")}
-      </Text>
+      </Text>}
     </View>
   );
 }

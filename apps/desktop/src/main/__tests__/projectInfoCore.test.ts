@@ -1,6 +1,7 @@
 // Unit tier: project settings mutations must reject stale accounts and controller identities;
 // the old alias tests did not cover icon writes or the new remote entry point.
 import { beforeEach, expect, it, vi } from 'vitest';
+vi.mock('../projectCreation.js', () => ({ projectCreationRoot: async () => '/Projects', prepareNewProject: vi.fn(async () => ({ directory: '/Projects/Created', cleanup: vi.fn() })) }));
 const h = vi.hoisted(() => ({
   stamp: { dataOwnerId: 'a', ownerGeneration: 1 },
   pending: false,
@@ -313,4 +314,10 @@ it('does not silently collapse a selected task worktree into a new project regis
   ).rejects.toThrow('main directory');
   expect(h.register).not.toHaveBeenCalled();
   expect(h.setDirectories).not.toHaveBeenCalled();
+});
+
+it('allocates an automatic project and returns its real identity', async () => {
+  const result = await updateProjectInfo({ ...h.stamp, create: true, projectKey: 'local:', field: 'profile', value: { name: 'Created', directories: [] } });
+  expect(result.createdProjectKey).toBe('local:/Projects/Created');
+  expect(h.register).toHaveBeenCalled();
 });

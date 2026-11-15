@@ -21609,7 +21609,15 @@
     "browseDirectory": "浏览目录",
     "mainDirectory": "主目录",
     "createTitle": "新建项目",
-    "createAction": "创建项目"
+    "createAction": "创建项目",
+    "repository": "仓库链接（可选）",
+    "repositoryHint": "粘贴 GitHub、GitLab 或 Git 地址；留空创建空白项目。",
+    "autoDirectory": "不选目录时创建到 {{path}}，重名会自动编号。",
+    "cloning": "正在克隆仓库…",
+    "invalidRepository": "请输入有效的 GitHub、GitLab 或 Git 仓库地址。",
+    "createFailed": "创建失败。请检查目录是否可写、仓库地址和此电脑的 Git 访问权限；克隆目录必须为空。",
+    "createNamePlaceholder": "项目名称或仓库链接",
+    "createNameHint": "填写项目名称，或直接粘贴仓库链接。"
   },
   "taskManagement": {
     "scope": "仅应用于当前账号在这台电脑上的任务。",

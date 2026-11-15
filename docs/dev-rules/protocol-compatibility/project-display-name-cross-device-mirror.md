@@ -1,5 +1,14 @@
 # 项目显示名的跨设备镜像
 
+## 项目目录与创建（settingsVersion 6 / 7）
+
+v6 的快照增加 `directories`，组合保存支持 `profile.directories`（省略保留，空数组撤销）与 `create: true` 注册已有目录。
+v7 在同一保存通道增加可选 `repositoryUrl`，`create: true` 且 `projectKey: local:` 表示由目标主机分配目录；指定已有 `local:<path>` 时克隆要求目录为空。
+读取快照的 `creationRoot` 只供位置预览；创建成功返回 `createdProjectKey`，控制端必须使用实际主目录打开项目，不能假定预览路径未发生重名编号。
+新控制端面对 v6 继续要求手选已有目录，隐藏仓库字段；v7 主机继续接受旧的已有目录注册请求。Agent 跨电脑遵守相同能力检查。
+克隆五分钟预算，Desktop / Mobile 共享 invoke policy 给该类写入六分钟，不自动重试或合并写入。失败不切换执行电脑。没有新增 channel、relay kind 或数据库 migration；自建中转继续透明转发已有加密 invoke，无需部署服务端变更。
+回归见 `projectCreation.test.ts`、`projectInfoCore.test.ts`、`projectAliasSync.test.ts`、`invokePolicy.test.ts` 和项目设置真实组件检查。
+
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
 
 `sidebar-settings:get-project-aliases` 是只读的主机别名快照；返回主机平台、账号代次和

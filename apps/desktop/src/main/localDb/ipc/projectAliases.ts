@@ -1,3 +1,4 @@
+import { projectCreationRoot } from '../../projectCreation.js';
 import '../../projectDirectories.desktop.js';
 import { readProjectDirectories } from '../../projectDirectoryStore.js';
 import { resolveAutomaticProjectIcon } from '../../projectAutomaticIcon.desktop.js';
@@ -56,13 +57,16 @@ export async function readHostProjectAliasesSnapshot(): Promise<HostProjectAlias
   if (!isDataOwnerBroadcastScopeCurrent(scope)) {
     throwIpcError('PRECONDITION_FAILED', 'active account changed during project alias read');
   }
+  const creationRoot = await projectCreationRoot();
+  if (!isDataOwnerBroadcastScopeCurrent(scope)) throwIpcError('PRECONDITION_FAILED', 'Project account changed');
   return {
     aliases: rows
       .filter((row) => row.projectKey.startsWith('local:') || row.projectKey.startsWith('remote:'))
       .map(({ projectKey, alias }) => ({ projectKey, alias })),
     icons: Object.fromEntries(Object.entries(readProjectIcons()).filter(([key]) => !key.startsWith('device:'))),
     settingsSupported: true,
-    settingsVersion: 6,
+    settingsVersion: 7,
+    creationRoot,
     directories: readProjectDirectories(),
     platform: process.platform,
     ...(scope.ownerStamp ? { ownerStamp: scope.ownerStamp } : {}),

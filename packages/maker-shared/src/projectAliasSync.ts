@@ -1,3 +1,4 @@
+export * from './projectCreation.js';
 import {
   parseProjectDirectories,
   type ProjectDirectory,
@@ -26,6 +27,8 @@ export interface HostProjectAliasesSnapshot {
   directories?: Readonly<Record<string, readonly ProjectDirectory[]>>;
   settingsSupported?: boolean;
   settingsVersion?: number;
+  creationRoot?: string;
+  createdProjectKey?: string;
   platform: string;
   ownerStamp?: SyncedProjectOrderOwnerStamp;
 }
@@ -116,6 +119,8 @@ export function parseHostProjectAliasesSnapshot(raw: unknown): HostProjectAliase
   }
   return {
     aliases,
+    ...(typeof value.creationRoot === 'string' ? { creationRoot: value.creationRoot } : {}),
+    ...(typeof value.createdProjectKey === 'string' && projectAliasComparisonKey(value.createdProjectKey, value.platform) ? { createdProjectKey: value.createdProjectKey } : {}),
     ...(value.directories !== undefined ? { directories } : {}),
     platform: value.platform,
     ...(ownerStamp ? { ownerStamp } : {}),
@@ -221,6 +226,7 @@ function snapshotsEqual(
     a.ownerStamp?.ownerGeneration === b.ownerStamp?.ownerGeneration &&
     a.settingsSupported === b.settingsSupported &&
     a.settingsVersion === b.settingsVersion &&
+    a.creationRoot === b.creationRoot &&
     JSON.stringify(a.directories ?? {}) ===
       JSON.stringify(b.directories ?? {}) &&
     JSON.stringify(a.icons ?? {}) === JSON.stringify(b.icons ?? {}) &&

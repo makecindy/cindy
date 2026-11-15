@@ -92,14 +92,35 @@ export async function withLocalProjectContext<T extends object>(
   }
 }
 
-/** Register only: filesystem creation and task execution remain separate agent actions. */
+/** Register an existing folder or use the same allocation/clone flow as the project form. */
 export async function createProject({
   callerSessionId,
   workingDir,
+  name,
+  repositoryUrl,
 }: {
   callerSessionId: string;
-  workingDir: string;
+  workingDir?: string;
+  name?: string;
+  repositoryUrl?: string;
 }) {
+  if (!workingDir || repositoryUrl || name !== undefined) {
+    return withLocalProjectContext(callerSessionId, async ({ owner, assertCurrent }) => {
+      const { updateProjectInfo } = await import('../localDb/ipc/projectAliases.js');
+      assertCurrent();
+      const result = await updateProjectInfo({
+        ...owner,
+        create: true,
+        projectKey: `local:${workingDir ?? ''}`,
+        repositoryUrl,
+        field: 'profile',
+        value: name !== undefined ? { name } : {},
+      });
+      if (!result.createdProjectKey?.startsWith('local:'))
+        return fail('INTERNAL', 'Project creation result unavailable.');
+      return { ok: true as const, workingDir: result.createdProjectKey.slice(6) };
+    });
+  }
   const directory = validateLocalProjectDirectory(workingDir);
   if (!directory.ok) return directory;
   return withLocalProjectContext(callerSessionId, async ({ client, owner, assertCurrent }) => {

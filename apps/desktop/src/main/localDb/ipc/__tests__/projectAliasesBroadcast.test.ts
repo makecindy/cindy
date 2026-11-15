@@ -1,3 +1,4 @@
+vi.mock('../../../projectCreation.js', () => ({ projectCreationRoot: async () => '/Projects' }));
 /**
  * Test value: real snapshot/mutation handlers expose only host-owned names and scoped invalidations.
  * Regression: project renames never reached device-link; existing SQLite tests did not exercise
@@ -93,7 +94,8 @@ describe('project alias remote snapshot and owner boundary', () => {
       ],
       icons: {},
       settingsSupported: true,
-      settingsVersion: 6,
+      settingsVersion: 7,
+      creationRoot: '/Projects',
       directories: {},
       platform: process.platform,
       ownerStamp: h.ownerStamp,

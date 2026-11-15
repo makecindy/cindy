@@ -21,7 +21,8 @@ mountPage({
           icons: ctx.data.automatic ? {} : { 'local:/Projects/Cindy': '🚀' },
           platform: 'darwin',
           settingsSupported: true,
-          settingsVersion: ctx.data.version ?? 6,
+          creationRoot: '/Projects',
+          settingsVersion: ctx.data.version ?? 7,
           directories: ctx.data.directories
             ? { 'local:/Projects/Cindy': [{ path: '/Projects/Reference', access: 'read' }] }
             : {},
@@ -37,7 +38,8 @@ mountPage({
         onChanged: subscription('projectInfoChanged'),
         updateInfo: async (request: unknown) => {
           writes.push(request);
-          return {};
+          const body = request as { projectKey: string; create?: boolean; value?: { name?: string } };
+          return { createdProjectKey: body.create ? (body.projectKey === 'local:' ? `local:/Projects/${body.value?.name || 'Project'}` : body.projectKey) : undefined };
         },
       },
     },
@@ -62,6 +64,7 @@ mountPage({
       <ProjectSettingsDialog
         create={!!ctx.data.create}
         onClose={() => {}}
+        onCreated={(path) => Object.assign(window, { projectCreatedPath: path })}
         project={{
           projectKey: 'local:/Projects/Cindy',
           workingDir: ctx.data.create ? '' : '/Projects/Cindy',

@@ -13,6 +13,7 @@ export function ProjectDirectoriesEditor({
   copied,
   onCopy,
   allowAdd = true,
+  showHint = true,
   value,
   onChange,
   disabled,
@@ -24,6 +25,7 @@ export function ProjectDirectoriesEditor({
   copied: boolean;
   onCopy: () => void;
   allowAdd?: boolean;
+  showHint?: boolean;
   value: readonly ProjectDirectory[];
   onChange(value: ProjectDirectory[]): void;
   disabled: boolean;
@@ -44,7 +46,7 @@ export function ProjectDirectoriesEditor({
     setEnteringPath(false);
   };
   return (
-    <FormField label={label('directories')} hint={label('directoriesHint')}>
+    <FormField label={label('directories')} hint={showHint ? label('directoriesHint') : undefined}>
       {() => (
         <div className="flex flex-col gap-3">
           {mainDirectory && (

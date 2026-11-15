@@ -487,6 +487,14 @@
     "browseDirectory": "ディレクトリを参照",
     "mainDirectory": "メインディレクトリ",
     "createTitle": "新規プロジェクト",
-    "createAction": "プロジェクトを作成"
+    "createAction": "プロジェクトを作成",
+    "repository": "リポジトリURL（任意）",
+    "repositoryHint": "GitHub、GitLab、GitのURLを貼り付けます。空欄なら空のプロジェクトを作成します。",
+    "autoDirectory": "ディレクトリ未選択時は {{path}} に作成します。同名の場合は番号を付けます。",
+    "cloning": "リポジトリをクローン中…",
+    "invalidRepository": "有効なGitHub、GitLab、GitリポジトリのURLを入力してください。",
+    "createFailed": "作成できませんでした。書き込み権限、URL、このコンピュータのGitアクセス権を確認してください。クローン先は空の必要があります。",
+    "createNamePlaceholder": "プロジェクト名またはリポジトリURL",
+    "createNameHint": "プロジェクト名を入力するか、リポジトリURLを貼り付けてください。"
   }
 }

@@ -21609,7 +21609,15 @@
     "browseDirectory": "瀏覽目錄",
     "mainDirectory": "主目錄",
     "createTitle": "新增專案",
-    "createAction": "建立專案"
+    "createAction": "建立專案",
+    "repository": "儲存庫連結（選填）",
+    "repositoryHint": "貼上 GitHub、GitLab 或 Git 網址；留空建立空白專案。",
+    "autoDirectory": "未選目錄時建立於 {{path}}，重名會自動編號。",
+    "cloning": "正在複製儲存庫…",
+    "invalidRepository": "請輸入有效的 GitHub、GitLab 或 Git 儲存庫網址。",
+    "createFailed": "建立失敗。請檢查目錄寫入權限、儲存庫網址與這台電腦的 Git 存取權限；複製目錄必須為空。",
+    "createNamePlaceholder": "專案名稱或儲存庫連結",
+    "createNameHint": "填寫專案名稱，或直接貼上儲存庫連結。"
   },
   "taskManagement": {
     "scope": "僅套用於目前帳號在這台電腦上的任務。",
