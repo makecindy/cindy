@@ -5,13 +5,36 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+type AlternateIcon = {
+  name: string;
+  files: Record<string, string>;
+};
+
+type IconContents = {
+  images: Array<{
+    appearances?: Array<{ appearance: string; value: string }>;
+    filename: string;
+    idiom: string;
+    platform: string;
+    size: string;
+  }>;
+};
+
+type AlternateIconPlugin = {
+  ALTERNATE_APP_ICONS: AlternateIcon[];
+  buildContentsJson(icon: AlternateIcon): IconContents;
+};
+
 const require = createRequire(import.meta.url);
-const plugin = require('../../plugins/with-ios-alternate-app-icons');
+const plugin = require('../../plugins/with-ios-alternate-app-icons') as AlternateIconPlugin;
 
 const mobileRoot = path.resolve(__dirname, '..', '..');
 
-const iconBySuffix = (suffix) =>
-  plugin.ALTERNATE_APP_ICONS.find((icon) => icon.name.endsWith(suffix));
+const iconBySuffix = (suffix: string): AlternateIcon => {
+  const icon = plugin.ALTERNATE_APP_ICONS.find((candidate) => candidate.name.endsWith(suffix));
+  if (!icon) throw new Error(`missing alternate icon: ${suffix}`);
+  return icon;
+};
 
 describe('with-ios-alternate-app-icons', () => {
   it('登记桌面版的三个备选图标集，名称与运行时一致', () => {
