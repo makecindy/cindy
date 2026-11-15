@@ -1,6 +1,6 @@
 import type { ViewInstance } from 'react-native';
-import { createContext, useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { createContext, useCallback, useContext, useId, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { AppState, StyleSheet, View } from 'react-native';
 import { useGlobalSearchParams, useSegments } from 'expo-router';
 import { NavigationContext, NavigationRouteContext, useIsFocused } from 'expo-router/react-navigation';
 import { PaneViewportProvider, usePaneViewport } from '@/platform/AdaptiveWindowContext';
@@ -19,6 +19,7 @@ type Entry = { key: string; owner: string; children: ReactNode; frame: Frame;
 const Context = createContext<{
   host: React.RefObject<ViewInstance | null>;
   namespace: string;
+  foreground: boolean;
   publish(entry: Entry): void;
   release(owner: string): void;
   setOverlay(owner: string, children: ReactNode): void;
@@ -31,6 +32,11 @@ export function RecentMessageHistoriesProvider({ children }: { children: ReactNo
   const { colors } = useTheme();
   const host = useRef<ViewInstance>(null);
   const namespace = useId();
+  const [foreground, setForeground] = useState(AppState.currentState === 'active');
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => setForeground(state === 'active'));
+    return () => subscription.remove();
+  }, []);
   const [overlays, setOverlays] = useState<Map<string, ReactNode>>(() => new Map());
   const setOverlay = useCallback((owner: string, content: ReactNode) => {
     setOverlays(previous => {
@@ -82,7 +88,7 @@ export function RecentMessageHistoriesProvider({ children }: { children: ReactNo
       return next.size === previous.size ? previous : next;
     });
   }, [allowed]);
-  const context = useMemo(() => ({ host, namespace, publish, release, setOverlay }), [namespace, publish, release, setOverlay]);
+  const context = useMemo(() => ({ host, namespace, foreground, publish, release, setOverlay }), [namespace, foreground, publish, release, setOverlay]);
   return <Context.Provider value={context}>
     <View ref={host} collapsable={false} style={styles.container}>
       {children}
@@ -91,8 +97,10 @@ export function RecentMessageHistoriesProvider({ children }: { children: ReactNo
         // Retained histories outlive their route, so no route-level gate covers
         // them. Pause their store subscriptions while hidden; otherwise every
         // task-list change re-renders all retained message trees.
-        const content = <RemoteSessionStoreSubscriptionGate enabled={active}>
-          <MessageHistoryPositioning.Provider value={active && entry.ready}>
+        // App inactivity suspends positioning, not route identity or presentation:
+        // native pickers/menus may make the app inactive without dismissing the task.
+        const content = <RemoteSessionStoreSubscriptionGate enabled={active && foreground}>
+          <MessageHistoryPositioning.Provider value={active && entry.ready && foreground}>
             <MessageHistoryActive.Provider value={active && entry.ready}>{entry.children}</MessageHistoryActive.Provider>
           </MessageHistoryPositioning.Provider>
         </RemoteSessionStoreSubscriptionGate>;
@@ -170,7 +178,9 @@ export function RecentMessageHistories({ activeKey, children, topInset = 0, bott
       </NavigationContext.Provider> });
   }, [publish, activeKey, owner, frame, focused, ready, topInset, bottomInset, interactive, navigation, route, viewport.width, viewport.height, children]);
   if (needsResidentHistoryUpgrade) return <View style={styles.container}>
-    <MessageHistoryActive.Provider value={focused}>{children}</MessageHistoryActive.Provider>
+    <MessageHistoryPositioning.Provider value={focused && context.foreground}>
+      <MessageHistoryActive.Provider value={focused}>{children}</MessageHistoryActive.Provider>
+    </MessageHistoryPositioning.Provider>
   </View>;
   return <View ref={anchor} collapsable={false} pointerEvents={NativeHistorySlot ? 'auto' : 'none'} onLayout={measure} style={styles.container}>
     {/* Dock retained content immediately. `ready` gates new props and positioning,
