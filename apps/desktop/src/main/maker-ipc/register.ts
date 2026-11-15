@@ -53,7 +53,7 @@ import { setSessionHidden } from '../localDb/ipc/sessionHidden.js';
 import { isSessionHiddenSync, isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry.js';
 import { notifyAgentIslandBotGroupChanged } from '../localDb/agentIslandSessionPatch.js';
 import { ghostDeclaresHiddenTasks } from '../../shared/ghost.js';
-import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
+import { controlOwnedSessionExecution, isSameSessionExecution, stopOwnedSessionInput, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
 import {
   showMobilePluginTaskPermission,
   setPluginTaskHandler,
@@ -2376,7 +2376,8 @@ export function noteSilentStopSessionReset(sessionId: string): void {
 }
 
 /** 统一明确停止的实现(coordinator 就绪后由注册流程装上)。 */
-let explicitStopImpl: ((sessionId: string) => Promise<void>) | null = null;
+type ExplicitStopOptions = { keepQueue?: boolean; stillOwned?: () => boolean };
+let explicitStopImpl: ((sessionId: string, options?: ExplicitStopOptions) => Promise<void>) | null = null;
 
 /**
  * 用户明确喊停的统一入口 —— 与桌面 Stop 同一套清理, 顺序固定:
@@ -2394,11 +2395,12 @@ let explicitStopImpl: ((sessionId: string) => Promise<void>) | null = null;
  *
  * 注册前(启动早期 / 单测)退回最小语义: 撤自动续跑 + 暂停 Goal + 中止当前一轮。
  */
-export async function stopSessionTurnExplicitly(sessionId: string): Promise<void> {
+export async function stopSessionTurnExplicitly(sessionId: string, options?: ExplicitStopOptions): Promise<void> {
   if (explicitStopImpl) {
-    await explicitStopImpl(sessionId);
+    await explicitStopImpl(sessionId, options);
     return;
   }
+  if (options?.stillOwned && !options.stillOwned()) return;
   resetAutomaticRecoveryForExplicitStop(sessionId);
   const goalPause = pauseGoalBeforeExplicitStop(sessionId);
   await Promise.all([goalPause, getMaker().getSession(sessionId)?.abort()]);
@@ -13875,7 +13877,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         onAccepted,
       }),
     prepareAttachments: botGroupAttachments.prepare,
-    abortLane: (sessionId) => stopSessionTurnExplicitly(sessionId),
+    abortLane: async (sessionId, inputClientId) => {
+      if (!inputClientId) return stopSessionTurnExplicitly(sessionId);
+      const scope = captureDataOwnerBroadcastScope();
+      await stopOwnedSessionInput({ sessionId,
+        owns: id => isDataOwnerBroadcastScopeCurrent(scope) && id === inputClientId,
+        queue: {
+          ensureQueueRestored: async id => {
+            await inputCoordinator.ensureQueueRestored(id);
+            if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new Error('OWNER_CHANGED');
+          },
+          getQueueControlSnapshot: id => inputCoordinator.getQueueControlSnapshot(id),
+          remove: (id, clientId) => inputCoordinator.remove(id, clientId),
+        },
+        activeInput: () => inputCoordinator.getAcceptedInputProvenance(sessionId),
+        withSessionLock: withSessionRestartLock,
+        flush: awaitAgentInputQueueSnapshotPersistence,
+        stopTurn: stillOwned => stopSessionTurnExplicitly(sessionId, { keepQueue: true, stillOwned }),
+      });
+    },
     closeLanes: async (sessionIds) => {
       await Promise.all(sessionIds.map((id) => maker.closeSession(id).catch(() => undefined)));
     },
@@ -20930,13 +20950,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       !inputCoordinator.isPausedForUncertainDelivery(session.id)) inputCoordinator.resume(session.id);
   };
 
-  explicitStopImpl = async (sessionId) => {
+  explicitStopImpl = async (sessionId, options) => {
     await inputCoordinator.ensureQueueRestored(sessionId);
+    if (options?.stillOwned && !options.stillOwned()) return;
     resetAutomaticRecoveryForExplicitStop(sessionId);
     contextOverflowRolloverHolder?.cancelRecovery(sessionId);
     // 与桌面 Stop 同序: Goal 暂停同步摘掉续跑源后, 中止先发出, 再等落盘(失败此时才抛)。
     const goalPause = pauseGoalBeforeExplicitStop(sessionId);
-    inputCoordinator.stop(sessionId);
+    inputCoordinator.stop(sessionId, options?.keepQueue ? { keepQueue: true, pauseQueue: true, resumeOnUserInput: true } : undefined);
     await Promise.all([goalPause, awaitAgentInputQueueSnapshotPersistence(sessionId)]);
   };
   setSharedTaskQueueReader((sessionId, clientId) => {
