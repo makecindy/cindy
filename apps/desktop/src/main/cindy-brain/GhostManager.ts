@@ -62,7 +62,6 @@ import {
   type InstalledGhost,
   declaredAutoApproveTools,
   declaredGhostControlPoints,
-  ghostHostUiApprovalTokens,
 } from '../../shared/ghost.js';
 import { verifyGhostZipSignatures, type GhostTrustRegistry } from './ghostSignature.js';
 import { isPathInsideDir } from './dirDeposit.js';
@@ -3089,7 +3088,6 @@ export class GhostManager {
           ...(receipt.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
           ...(receipt.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
           ...approvedControlPointsProjection(receipt),
-          ...(receipt.approvedHostUi?.length ? { approvedHostUi: receipt.approvedHostUi } : {}),
           ...approvedAutoToolsProjection(receipt),
           ...(receipt.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
           ...(receipt.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
@@ -3330,7 +3328,7 @@ export class GhostManager {
   }
 
   /** Explicit interactive-page confirmation, bound to the same owner and installed revision. */
-  async approveUiCapability(id: string, revision: string, isCurrent: () => boolean, approveHost = false): Promise<boolean> {
+  async approveUiCapability(id: string, revision: string, isCurrent: () => boolean): Promise<boolean> {
     return this.runExclusiveMutation(async () => {
       const relId = this.approvalRelIdFor(id);
       if (!relId) return false;
@@ -3338,8 +3336,7 @@ export class GhostManager {
       const installed = findInstalledGhostByInstanceId(this.list(), id);
       if (!isCurrent() || approval.state !== 'approved' || approval.receipt.revision !== revision ||
         !installed?.enabled || !pluginHasToolUi(installed.manifest)) return false;
-      await this.receiptStore.write({ ...approval.receipt, uiCapabilityApproved: true,
-        ...(approveHost ? { approvedHostUi: ghostHostUiApprovalTokens(installed.manifest) } : {}) }, {
+      await this.receiptStore.write({ ...approval.receipt, uiCapabilityApproved: true }, {
         relId, assertCurrent: () => { if (!isCurrent()) throw new Error('Page capability approval expired'); },
       });
       return isCurrent();
@@ -4042,7 +4039,6 @@ export class GhostManager {
       taskCapabilityApproved?: true;
       targetCapabilityApproved?: true;
       uiCapabilityApproved?: boolean;
-      approvedHostUi?: readonly string[];
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
@@ -4079,7 +4075,6 @@ export class GhostManager {
       taskCapabilityApproved?: true;
       targetCapabilityApproved?: true;
       uiCapabilityApproved?: boolean;
-      approvedHostUi?: readonly string[];
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
@@ -4267,7 +4262,6 @@ export class GhostManager {
           ...(opts?.targetCapabilityApproved === true && approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true ? {targetCapabilityApproved:true as const} : {}),
           ...(opts?.delegationCapabilityApproved === true && approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? {delegationCapabilityApproved:true as const} : {}),
           ...(opts?.approvedControlPoints?.length ? { approvedControlPoints: opts.approvedControlPoints } : {}),
-          ...(opts?.approvedHostUi?.length ? { approvedHostUi: opts.approvedHostUi } : {}),
           ...(opts?.approvedAutoTools?.length ? { approvedAutoTools: opts.approvedAutoTools } : {}),
           approvedCindyModelActions: opts?.approvedCindyModelActions,
           ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
@@ -4396,7 +4390,6 @@ export class GhostManager {
       taskCapabilityApproved?: true;
       targetCapabilityApproved?: true;
       uiCapabilityApproved?: boolean;
-      approvedHostUi?: readonly string[];
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
@@ -4432,7 +4425,6 @@ export class GhostManager {
       taskCapabilityApproved?: true;
       targetCapabilityApproved?: true;
       uiCapabilityApproved?: boolean;
-      approvedHostUi?: readonly string[];
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
@@ -4752,10 +4744,6 @@ export class GhostManager {
         approvedControlPoints: [
           ...(opts.approvedControlPoints ?? []),
           ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedControlPoints ?? [] : []),
-        ],
-        approvedHostUi: [
-          ...(opts.approvedHostUi ?? []),
-          ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedHostUi ?? [] : []),
         ],
         // 免确认工具同口径：同实例延续已批准项，本次确认新显示的并入，换源不继承。
         approvedAutoTools: [
@@ -5186,7 +5174,6 @@ export class GhostManager {
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? { delegationCapabilityApproved: true as const } : {}),
         // 随包种子由 Cindy 自己发布，声明的控制节点与免确认工具视为已随版本批准。
         approvedControlPoints: [...new Set([...(approvedManifest.subscribe?.hooks ?? []), ...declaredGhostControlPoints(approvedManifest)])],
-        approvedHostUi: current.state === 'approved' ? current.receipt.approvedHostUi : undefined,
         approvedAutoTools: declaredAutoApproveTools(approvedManifest),
         approvedCindyModelActions: current.state === 'approved' ? current.receipt.approvedCindyModelActions : undefined,
         ...(current.state === 'approved' && current.receipt.observeCapabilityApproved === true &&
