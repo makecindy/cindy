@@ -93,7 +93,7 @@ const errorCode = (error: unknown): string =>
  * 任务详情里的接收地址与密钥。生成的密钥明文只留在这个组件的内存里，切换任务即消失；
  * 粘贴的密钥保存后立即清空输入框，不回显。
  */
-export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
+export function WebhookTriggerPanel({ schedule, connectionSetupVisible = true }: { schedule: Schedule; connectionSetupVisible?: boolean }) {
   const { t } = useTranslation();
   const confirmDialog = useOptionalConfirmDialog();
   const [status, setStatus] = useState<WebhookStatus>(null);
@@ -266,7 +266,7 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
     return <section className="mt-4 space-y-2 border-y border-[var(--border-default)] py-4 text-12 leading-relaxed text-[var(--text-secondary)]">
       <h3 className="text-13 font-medium text-[var(--text-primary)]">{t('scheduler.editor.webhook.cindyConnectionTitle')}</h3>
       <p role="status">{t(state)}</p>
-      {status && !status.connected && status.receiver !== 'signed-out' && schedule.status === 'active' && <GithubAppCard automation repositories={source.repositories} />}
+      {connectionSetupVisible && status && !status.connected && status.receiver !== 'signed-out' && schedule.status === 'active' && <GithubAppCard automation repositories={source.repositories} />}
       <p className="break-words">{source.repositories.join(', ')}</p>
       <p>{schedule.webhookTrigger?.events?.map(event => eventLabels.get(event) ?? event).join(', ')
         || t('scheduler.editor.webhook.eventPicker.all')}</p>

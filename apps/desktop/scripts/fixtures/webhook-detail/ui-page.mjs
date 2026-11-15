@@ -12,6 +12,7 @@ export default {
     'src/renderer/lib/errorDiagnosisPrompt': 'export const buildErrorDiagnosisPrompt = () => ""; export const prefillErrorDiagnosisDraft = () => {};',
   },
   cases: {
+    'app-editing': { about: '编辑时背景详情停止账号读取：返回窗口仅一次读取', data: {} },
     'app-source': { about: 'GitHub App 仓库和事件选择：无需独立地址或密钥', data: {} },
     'app-connected': { about: 'GitHub App 已连接的自动任务', data: {} },
     'app-unauthorized': { about: '账号已连接但仓库未授权：展示缺少权限及授权入口', data: {} },
@@ -26,6 +27,17 @@ export default {
     await page.locator('[role="status"], textarea').first().waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'app-editing') {
+      await page.getByRole('button', { name: await ui.t('scheduler.editor.webhook.authorizeRepositories'), exact: true }).waitFor();
+      await page.getByRole('button', { name: await ui.t('scheduler.button.edit'), exact: true }).click();
+      await page.getByRole('textbox', { name: await ui.t('scheduler.editor.webhook.repositoriesLabel'), exact: true }).waitFor();
+      await page.waitForFunction(() => window.__githubAccountReads === 2);
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await page.waitForFunction(() => window.__githubAccountReads === 3);
+      if (await page.getByRole('button', { name: await ui.t('scheduler.editor.webhook.authorizeRepositories'), exact: true }).count() !== 1) throw new Error('Only the editor may show account controls');
+      await ui.capture('editor-owns-connection');
+      return;
+    }
     if (ui.case === 'app-source') {
       const repositories = page.getByRole('textbox', { name: await ui.t('scheduler.editor.webhook.repositoriesLabel'), exact: true });
       await repositories.fill('https://github.com/example/project');
