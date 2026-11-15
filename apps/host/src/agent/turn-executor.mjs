@@ -18,6 +18,8 @@ import { createHostEventPersistence } from './event-persistence.ts';
 import { createHostContextRecovery } from './context-recovery.ts';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
+import { noteClaudeSessionTurnState } from '../../../desktop/src/main/maker-host/claude-session-background-activity.ts';
+import { syncBackgroundCommandWork } from '../../../desktop/src/main/maker-host/claude-background-command-work-sync.ts';
 import { clearPendingTurnChangeSets, finalizeTurnChangeSet, noteTurnDiffEvent } from '../../../desktop/src/main/turn-change-set/store.ts';
 import { beginTurnChangeSetAtDispatch } from '../../../desktop/src/main/turn-change-set/dispatchBoundary.ts';
 import { setSessionProvider, clearSessionProvider, getSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
@@ -156,6 +158,25 @@ export function createTurnExecutor(deps) {
     clearPendingTurnChangeSets(sessionId);
   }
 
+  // Claude's background-activity detection (claude-session-background-activity.ts) reads the logical
+  // turn's start and end at the desktop's points: a running status of the foreground turn starts it
+  // (sessionEventPreparation.ts); a done, a terminal error or a foreground running=false status ends
+  // it, refreshing the background command work (sessionEventDelivery.ts); a task update refreshes
+  // that work. Idle release reads the result (idle-release.ts). A silent-stop done ends the turn
+  // here: the Host has no silent-stop resume yet, so nothing continues it.
+  function noteBackgroundActivity(session, event) {
+    const continuation = isTurnContinuationBoundaryEvent(event);
+    if (event.type === 'status' && event.data?.isRunning === true && event.turnScope !== 'background') {
+      noteClaudeSessionTurnState(session.id, true);
+    } else if ((event.type === 'done' && !continuation) || isTerminalTurnErrorEvent(event)
+      || (event.type === 'status' && event.data?.isRunning === false && !continuation && event.turnScope !== 'background')) {
+      syncBackgroundCommandWork(session);
+      noteClaudeSessionTurnState(session.id, false);
+    } else if (event.type === 'agent_task_update') {
+      syncBackgroundCommandWork(session);
+    }
+  }
+
   function listen(sessionId, session) {
     if (bindings.get(sessionId)?.session === session) return;
     if (bindings.has(sessionId)) clearPendingTurnChangeSets(sessionId);
@@ -171,6 +192,7 @@ export function createTurnExecutor(deps) {
         if (event.hostProjection) return;
         if (typeof event.sessionTurnGeneration === 'number' && (typeof turn.generation === 'number'
           ? event.sessionTurnGeneration !== turn.generation : event.sessionTurnGeneration === turn.previousGeneration)) return;
+        noteBackgroundActivity(session, event);
         if (turn.terminal) {
           // The turn has ended for the Host; only its Git baseline still listens.
           if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) settleGitBaseline(sessionId, turn, 'end');
@@ -178,6 +200,7 @@ export function createTurnExecutor(deps) {
           return;
         }
       }
+      if (event.turnScope === 'background') noteBackgroundActivity(session, event);
       if (event.type === 'compact_boundary') wireNotes.reset(sessionId);
       // Desktop records Codex's native turn diff from the event stream (register.ts)
       // and closes the turn change record at the turn's end (sessionEventPreparation.ts).
