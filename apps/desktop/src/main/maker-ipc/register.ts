@@ -1454,7 +1454,6 @@ import {
   recordUserSessionRuntimeMutation,
   remapSessionRuntimeProvider,
   resolveCompatibleSessionRuntimeEffort,
-  resolveCompatibleSessionRuntimeAxisPatch,
   resolveSessionRuntimeAxes,
   sessionRuntimeGenerationMatches,
   sessionRuntimeControlOwnerEpochMatches,
@@ -1468,6 +1467,7 @@ import {
   type InternalRuntimeSelectionOptions,
 } from './sessionRuntimeSelectionApply.js';
 import { createSessionRuntimeProjection, createUpdateScheduledPreference } from './sessionRuntimeProjection.js';
+import { createResolvePendingRuntimeAxisPatch } from './pendingRuntimeAxisPatch.js';
 import { PendingCredentialSwitchService, type PendingCredentialSwitchDeps } from './pendingCredentialSwitch.js';
 import {
   DeferredCodexRestartService,
@@ -17320,45 +17320,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     };
   };
 
-  const resolvePendingRuntimeAxisPatch = async (
-    sessionId: string,
-    patch: SessionRuntimeAxisPatch,
-  ): Promise<SessionRuntimeAxisPatch> => {
-    const pending = getPendingSessionRuntimeMutation(sessionId);
-    if (!pending) return patch;
-    try {
-      const providers = await getDesktopProviderService().listProviders({
-        allowSideEffects: false,
-        catalog: getActiveCatalog(),
-      });
-      const pendingProviderId =
-        pending.profile.providerId ??
-        effectiveSourceIdForModel(
-          providers,
-          null,
-          pending.profile.model,
-          pending.profile.agentKind,
-        );
-      const provider = providers.find((candidate) => candidate.id === pendingProviderId);
-      const model = findCatalogModel(provider, pending.profile.model, pending.profile.agentKind, {
-        exact: true,
-      });
-      if (!model) return {};
-      return resolveCompatibleSessionRuntimeAxisPatch({
-        model,
-        profile: pending.profile,
-        patch,
-      });
-    } catch (error) {
-      log.debug('pending runtime axis capability lookup failed', {
-        sessionId,
-        model: pending.profile.model,
-        providerId: pending.profile.providerId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return {};
-    }
-  };
+  const resolvePendingRuntimeAxisPatch = createResolvePendingRuntimeAxisPatch({ getDesktopProviderService, log });
 
   // Assembled before the runtime selection and the other helpers below; each is read when a fallback runs.
   const maybeApplySessionRuntimeFallback = createSessionRuntimeFallback<Session>({
