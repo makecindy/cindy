@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
-import { applyScheduledModelSelection, assertScheduledHarnessSupported, createScheduledModelScope, createScheduledModelSelectionResolver, resolveScheduledModelSelection, ScheduledModelSelectionBusyError, type ScheduledModelSelection } from '../scheduledModelSelection';
+import { applyScheduledModelSelection, assertScheduledHarnessSupported, createScheduledModelScope, createScheduledModelSelectionResolver, reconcileScheduledModelRouteBeforeBaseline, resolveScheduledModelSelection, ScheduledModelSelectionBusyError, type ScheduledModelSelection } from '../scheduledModelSelection';
 
 const selection: ScheduledModelSelection = {
   agentKind: 'pi', model: 'test-model', providerId: 'custom', effort: null, fastMode: false,
@@ -125,6 +125,43 @@ describe('one-run automation model preferences', () => {
     // away from the automation just to capture it again.
     expect(await scope.begin('task')).toBe('scope-1');
     expect(prepareBaseline).toHaveBeenCalledTimes(1);
+  });
+  // #9642 regression: a pending route that finishes during preparation is applied
+  // before the automation snapshots it; an unresolved route remains retryable.
+  it('applies an idle pending companion route before capturing the restore baseline', async () => {
+    const h = scopeFixture();
+    let pending = true;
+    const applyPendingSwitch = vi.fn(async () => { pending = false; });
+    const scope = createScheduledModelScope({ ...h.deps,
+      prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
+        reconcile: async () => {},
+        hasPendingRoute: () => pending,
+        hasPendingSwitch: () => pending,
+        isIdle: () => true,
+        applyPendingSwitch,
+      }),
+    });
+
+    await expect(scope.begin('task')).resolves.toBe('scope-1');
+    expect(applyPendingSwitch).toHaveBeenCalledTimes(1);
+    expect(h.state().baseline).not.toBeNull();
+  });
+  it('defers baseline capture when applying a pending companion route does not settle it', async () => {
+    const h = scopeFixture();
+    const applyPendingSwitch = vi.fn(async () => {});
+    const scope = createScheduledModelScope({ ...h.deps,
+      prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
+        reconcile: async () => {},
+        hasPendingRoute: () => true,
+        hasPendingSwitch: () => true,
+        isIdle: () => true,
+        applyPendingSwitch,
+      }),
+    });
+
+    await expect(scope.begin('task')).rejects.toBeInstanceOf(ScheduledModelSelectionBusyError);
+    expect(applyPendingSwitch).toHaveBeenCalledTimes(1);
+    expect(h.state().baseline).toBeNull();
   });
   // #6895 unit regression: a lane outside the save's lock snapshot can see
   // Profile B after preparation applied A. Do not stamp A with B's revision.
