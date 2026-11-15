@@ -74,8 +74,8 @@ vi.mock("react-native", () => {
     },
     Alert: { alert: vi.fn() },
     Linking: { openURL: vi.fn(async () => true) },
-    Switch: ({ value, onValueChange, accessibilityLabel }: { value: boolean; onValueChange(): void; accessibilityLabel?: string }) =>
-      createElement("input", { type: "checkbox", checked: value, onChange: onValueChange, "aria-label": accessibilityLabel }),
+    Switch: ({ value, onValueChange, accessibilityLabel, accessibilityState, disabled }: { value: boolean; onValueChange(): void; accessibilityLabel?: string; accessibilityState?: { busy?: boolean }; disabled?: boolean }) =>
+      createElement("input", { type: "checkbox", checked: value, onChange: onValueChange, disabled, "aria-label": accessibilityLabel, "aria-busy": accessibilityState?.busy }),
     AccessibilityInfo: { isReduceMotionEnabled: async () => true },
     Animated: {
       Value: class { interpolate() { return 0; } },
@@ -147,6 +147,38 @@ it('shows desktop card text as plain text without its Markdown escapes', () => {
 });
 
 describe("rich plugin card hints", () => {
+  // Unit: settings use separate renderers from footer actions. A pending host action must
+  // be visible for the disclosure, toggle, model choice, and model picker, without faking success.
+  it.each(['Settings', 'Auto follow', 'Follow task', 'Pick model'])('shows pending feedback for %s', async (label) => {
+    let finish!: (value: unknown) => void;
+    const pending = new Promise(resolve => { finish = resolve; });
+    h.invoke.mockImplementation((_d: string, _c: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return pending;
+      return Promise.resolve({ result: { pageId: 'page', confirms: [] } });
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    await act(async () => root.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 's', callId: 'c', text: 'PR summary\nSettings\nModel',
+      data: { pluginId: 'cindy-github', revision: '1', items: [
+        { id: 'prui:settings', label: 'Settings', disabled: false },
+        { id: 'prset:follow', label: 'Auto follow', disabled: false, toggle: { on: false, title: 'Auto follow' } },
+        { id: 'prset:modelTask', label: 'Follow task', disabled: false },
+        { id: 'prset:model', label: 'Custom', disabled: false },
+        { id: 'prset:modelPick', label: 'Pick model', disabled: false },
+      ] },
+    })));
+    const control = container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+    await act(async () => control.click());
+    expect(control.getAttribute('aria-busy')).toBe('true');
+    expect(control.disabled).toBe(true);
+    expect(container.querySelector('[role=progressbar]')).not.toBeNull();
+    await act(async () => finish({ effects: [] }));
+    expect(control.getAttribute('aria-busy')).toBe('false');
+    expect(control.disabled).toBe(false);
+    expect(container.querySelector('[role=progressbar]')).toBeNull();
+  });
+
   // Unit regression: PR publish disabled clicks but gave no visible feedback during remote delivery.
   // Existing rich-card tests resolve immediately; hold both remote steps to cover the waiting UI.
   it.each(['success', 'failure', 'revision'] as const)('shows immediate publish feedback and clears on %s', async (outcome) => {
