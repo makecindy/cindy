@@ -22,6 +22,7 @@ export function resolveRouteModelEfforts(
 ): readonly Effort[] | null {
   const source = resolveContextProviderId(catalog, agent, providerId, modelId);
   if (!source) return null;
-  return catalog.providers.find((provider) => provider.id === source)
-    ?.models[agent]?.find((model) => model.id === modelId)?.efforts ?? null;
+  const model = catalog.providers.find((provider) => provider.id === source)
+    ?.models[agent]?.find((model) => model.id === modelId);
+  return model?.effortsUnknown === true ? null : model?.efforts ?? null;
 }
