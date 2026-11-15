@@ -21,6 +21,7 @@ export default {
     'provider-auth': { about: 'Codex provider-managed authentication explains the independent-account recovery action' },
     'provider-auth-preview': { about: 'Provider-managed authentication offers a separate account directory at 320px', viewport: { width: 320, height: 600 } },
     empty: { about: 'Nothing signed in: no placeholder account, strategy or count, only Add account' },
+    loading: { about: 'First read still pending: one static account-row placeholder instead of a spinner' },
   },
   async check(page, ui) {
     if (ui.case === 'provider-auth-preview') {
@@ -51,9 +52,20 @@ export default {
       await page.getByRole('alert').waitFor();
       return;
     }
+    if (ui.case === 'loading') {
+      await page.getByTestId('subscription-accounts-loading').waitFor();
+      // Revealed after the short delay that keeps a quick read from flashing it.
+      await page.waitForFunction(() => {
+        const shapes = document.querySelector('[data-testid="subscription-accounts-loading"] > [aria-hidden="true"]');
+        return !!shapes && getComputedStyle(shapes).visibility === 'visible';
+      });
+      assert.equal(await page.locator('.animate-spinner').count(), 0);
+      await ui.capture('loading');
+      return;
+    }
     if (ui.case === 'empty') {
       await page.getByRole('button', { name: await ui.t('subscriptionAccounts.add'), exact: true }).waitFor();
-      await page.waitForFunction(() => !document.querySelector('.animate-spinner'));
+      await page.getByTestId('subscription-accounts-loading').waitFor({ state: 'detached' });
       assert.equal(await page.getByTestId('subscription-account').count(), 0);
       assert.equal(await page.getByRole('radiogroup').count(), 0);
       assert.equal(await page.getByRole('switch').count(), 0);

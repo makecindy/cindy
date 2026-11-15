@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   remoteSessions: [] as Array<{ id: string; title: string; deviceLinkDeviceId: string; orcaRole: 'lead' | 'worker' | null }>,
   pinSessionOrigin: vi.fn(),
+  getSessionDeviceId: vi.fn<(sessionId: string) => string | undefined>(() => undefined),
   resolveSessionRoute: vi.fn(async (sessionId: string) => `/cc-agent/${sessionId}`),
   getSession: vi.fn(async (sessionId: string) => ({
     id: sessionId,
@@ -43,9 +44,9 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   useRemoteProjectSessions: () => mocks.remoteSessions,
   useRemoteSessionTitle: () => null,
-  getSessionDeviceId: () => undefined,
+  getSessionDeviceId: mocks.getSessionDeviceId,
   remoteProjectsStore: {
-    getSessionDeviceId: () => undefined,
+    getSessionDeviceId: mocks.getSessionDeviceId,
     getVisibleMergedRemoteSessions: () => mocks.remoteSessions,
     pinSessionOrigin: mocks.pinSessionOrigin,
   },
@@ -72,11 +73,13 @@ import {
   SessionNavigationModeProvider,
   useSidebarTargetSessionId,
 } from '@/features/cc-agent/embeddedSessionNavigation';
+import { __resetStickySessionOriginForTest } from '@/features/device-link/stickySessionOrigin';
 import { tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { AutomationOriginBadge } from '../AutomationOriginBadge';
 import { MessageSourceLabels } from '../MessageSourceLabels';
 import { SessionHandoffCard } from '../SessionHandoffCard';
 import { SessionLinkChip } from '../SessionLinkChip';
+import { BotStartedTasks, BotStartedTasksFooter, BotTaskLetterOpen } from '../BotStartedTasks';
 
 function embedded(children: ReactNode, sidebarTargetSessionId?: string) {
   return (
@@ -108,12 +111,59 @@ describe('sidebar-embedded session navigation boundary', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.remoteSessions = [];
+    mocks.getSessionDeviceId.mockReset();
+    __resetStickySessionOriginForTest();
     Object.defineProperty(window, 'electronAPI', {
       configurable: true, value: { maker: { openSessionInNewWindow: mocks.openSessionInNewWindow } },
     });
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true, value: { writeText: mocks.writeText },
     });
+  });
+
+  // Regression: a device::task receipt used to render inert text. Existing link tests
+  // did not exercise the teammate receipt consumers. Unit tier: click production UI.
+  it.each(['footer', 'chip', 'letter'] as const)('opens a cross-device %s task reference', async (kind) => {
+    const task = { sessionId: 'remote-mac::remote-task', title: 'Remote work', created: true };
+    render(kind === 'footer' ? <BotStartedTasksFooter tasks={[task]} />
+      : kind === 'chip' ? <BotStartedTasks tasks={[task]} />
+      : <BotTaskLetterOpen senderSessionId={task.sessionId} />);
+    fireEvent.click(screen.getByRole('button'));
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/remote-task', undefined));
+    expect(mocks.pinSessionOrigin).toHaveBeenCalledWith('remote-mac', 'remote-task');
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('remote-task', null, { remote: true });
+  });
+
+  // Device priority is observable through the routed transport origin: a wrong
+  // fallback sends the owner to another computer's task. Existing cases had no host.
+  it.each([
+    { receipt: 'task-a', expectedDevice: 'chat-mac', remote: true },
+    { receipt: 'receipt-mac::task-a', expectedDevice: 'receipt-mac', remote: true },
+    { receipt: 'this-mac::task-a', expectedDevice: undefined, remote: false },
+  ])('resolves $receipt from a remote chat to $expectedDevice', async ({ receipt, expectedDevice, remote }) => {
+    mocks.getSessionDeviceId.mockImplementation((id) => id === 'host-chat' ? 'chat-mac' : undefined);
+    render(<BotStartedTasksFooter
+      hostSessionId="host-chat"
+      tasks={[{ sessionId: receipt, title: 'Task A', created: true }]}
+    />);
+    fireEvent.click(screen.getByRole('button'));
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/task-a', undefined));
+    if (expectedDevice) {
+      expect(mocks.pinSessionOrigin).toHaveBeenCalledExactlyOnceWith(expectedDevice, 'task-a');
+    } else {
+      expect(mocks.pinSessionOrigin).not.toHaveBeenCalled();
+    }
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('task-a', null, { remote });
+  });
+
+  it('keeps same-device qualified receipts local and preserves embedded navigation boundaries', async () => {
+    const task = { sessionId: 'this-mac::local-task', title: 'Local work', created: true };
+    const view = render(<BotStartedTasksFooter tasks={[task]} />);
+    fireEvent.click(screen.getByRole('button'));
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/local-task', undefined));
+    expect(mocks.pinSessionOrigin).not.toHaveBeenCalled();
+    view.rerender(embedded(<BotStartedTasksFooter tasks={[task]} />));
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('keeps worker content identity while targeting the visible Lead sidebar bucket', () => {

@@ -33,6 +33,8 @@ const h = vi.hoisted(() => ({
   codexLoginReadOnly: vi.fn(() => false),
   readClaudeStatus: vi.fn(),
   readNativeLogin: vi.fn(),
+  codexIdentity: undefined as string | undefined,
+  codexWorkspace: 'workspace-a',
 }));
 
 vi.mock('electron', () => ({
@@ -126,9 +128,14 @@ vi.mock('../auth-adapters.js', () => ({
   desktopCodexAuthAdapter: {
     hasCodexOAuthLogin: h.codexLoginWithSideEffects,
     hasCodexOAuthLoginReadOnly: h.codexLoginReadOnly,
-    readAccountPresentationState: async () => ({ authenticated: h.codexLoginReadOnly() }),
+    readAccountPresentationState: async () => ({ authenticated: h.codexLoginReadOnly(), identity: h.codexIdentity }),
     hasCodexOAuthLoginUnbound: () => false,
   },
+}));
+
+vi.mock('../../subscription-accounts/nativeCli.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../../subscription-accounts/nativeCli.js')>(),
+  readNativeCodexTokens: async () => ({ chatgptAccountId: h.codexWorkspace, canDispatch: () => true }),
 }));
 
 vi.mock('../../authManager.js', () => ({
@@ -199,7 +206,9 @@ beforeEach(() => {
   h.hasAnthropicModels = true;
   h.refreshAnthropicModelsFromProbe.mockClear();
   h.codexLoginWithSideEffects.mockClear();
-  h.codexLoginReadOnly.mockClear();
+  h.codexLoginReadOnly.mockReset().mockReturnValue(false);
+  h.codexIdentity = undefined;
+  h.codexWorkspace = 'workspace-a';
   h.readClaudeStatus.mockClear();
   h.readNativeLogin.mockClear();
 });
@@ -209,6 +218,18 @@ afterEach(() => {
 });
 
 describe('native provider connection claim on read', () => {
+  it('projects verified workspace identity for a native login without creating an account pool', async () => {
+    h.codexLoginReadOnly.mockReturnValue(true);
+    h.codexIdentity = 'same@example.test';
+    const first = (await listProviders(false)).find(provider => provider.id === 'openai')!;
+    expect(first.subscriptionAccountKeys).toHaveLength(1);
+    expect(first.subscriptionAccountPool).toBeUndefined();
+    h.codexWorkspace = 'workspace-b';
+    const second = (await listProviders(false)).find(provider => provider.id === 'openai')!;
+    expect(second.subscriptionAccountKeys).not.toEqual(first.subscriptionAccountKeys);
+    expect(second.subscriptionAccountKeys?.[0]).not.toContain('workspace');
+  });
+
   it('snapshot reads never probe CLI or account identity, while normal reads still refresh', async () => {
     const service = getDesktopProviderService({ allowSideEffects: false });
     for (const present of [false, true]) {

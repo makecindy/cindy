@@ -50,9 +50,19 @@ interface Entry {
   /** 本次运行里有一次查询成功返回(含「没有 PR」)。查询失败留下的空值不算,读回仍可补上。 */
   confirmed?: boolean;
   persist?: HomeSessionPrPersistTarget;
+  /** When this row last asked the computer for PR statuses (not just the reference list). */
+  statusAt?: number;
 }
 
 const MIN_REFETCH_MS = 10_000;
+/**
+ * The computer answers status reads from a 60-second cache (PrStatusService default TTL).
+ * A running task changes its updatedAt every few seconds, so status reads inside this window
+ * only return the same cached value while costing a ~10 KB round trip each. Task updates
+ * still re-read the reference list every MIN_REFETCH_MS, so a newly mentioned PR shows up
+ * as before; only repeat status reads for unchanged references are skipped.
+ */
+const HOST_STATUS_CACHE_MS = 60_000;
 /** 在途请求通常很快结束;任务有变化时至少隔这么久再补查一次。 */
 const IN_FLIGHT_RETRY_MS = 1_000;
 const MAX_ENTRIES = 300;
@@ -99,10 +109,14 @@ export function subscribeHomeSessionPr(key: string, listener: () => void): () =>
  */
 export function refreshHomeSessionPr(
   key: string,
-  load: (previous: HomeSessionPrInfo | null) => Promise<HomeSessionPrInfo | null> & { cancel?: () => void },
+  load: (
+    previous: HomeSessionPrInfo | null,
+    options?: { reuseStatuses: boolean },
+  ) => Promise<HomeSessionPrInfo | null> & { cancel?: () => void },
   options: { now: number; refreshKey?: string; eventful?: boolean; persist?: HomeSessionPrPersistTarget },
 ): number {
   const entry = entries.get(key);
+  let reuseStatuses = false;
   if (entry) {
     const age = options.now - entry.fetchedAt;
     const eventful = options.eventful === true || entry.refreshKey !== options.refreshKey;
@@ -110,6 +124,12 @@ export function refreshHomeSessionPr(
     if (age < (eventful ? MIN_REFETCH_MS : PR_STATUS_REFRESH_INTERVAL_MS)) {
       return eventful ? MIN_REFETCH_MS - age : 0;
     }
+    // Only a task update qualifies: returning to the list or the app is the user looking
+    // again, and routine polls are already longer than the computer's cache.
+    reuseStatuses = options.eventful !== true
+      && entry.refreshKey !== options.refreshKey
+      && entry.statusAt !== undefined
+      && options.now - entry.statusAt < HOST_STATUS_CACHE_MS;
   }
   const next: Entry = {
     fetchedAt: options.now,
@@ -118,11 +138,12 @@ export function refreshHomeSessionPr(
     value: entry?.value ?? null,
     persist: options.persist ?? entry?.persist,
     confirmed: entry?.confirmed,
+    statusAt: reuseStatuses ? entry?.statusAt : options.now,
   };
   entries.delete(key);
   entries.set(key, next);
   trimEntries();
-  const pending = load(next.value);
+  const pending = load(next.value, { reuseStatuses });
   next.cancelLoad = pending.cancel;
   void pending
     .then((value) => {
@@ -163,9 +184,10 @@ export function loadHomeSessionPr(
   sessionId: string,
   previous: HomeSessionPrInfo | null = null,
   includeRelated = false,
+  reuseStatuses = false,
 ): Promise<HomeSessionPrInfo | null> & { cancel: () => void } {
   const controller = new AbortController();
-  return Object.assign(loadHomeSessionPrData(invoke, deviceId, sessionId, previous, includeRelated, controller.signal), {
+  return Object.assign(loadHomeSessionPrData(invoke, deviceId, sessionId, previous, includeRelated, reuseStatuses, controller.signal), {
     cancel: () => controller.abort(),
   });
 }
@@ -176,6 +198,7 @@ async function loadHomeSessionPrData(
   sessionId: string,
   previous: HomeSessionPrInfo | null,
   includeRelated: boolean,
+  reuseStatuses: boolean,
   signal: AbortSignal,
 ): Promise<HomeSessionPrInfo | null> {
   const refs = await invoke<unknown>(deviceId, 'git-context:pr-refs:list', [sessionId]);
@@ -200,6 +223,11 @@ async function loadHomeSessionPrData(
     });
     return { ...rows[0], ...(includeRelated ? { additional: rows.slice(1) } : {}) };
   };
+  // Same references as last time and every one already has a status: the computer would
+  // answer from its cache, so keep what we have. Any new or changed reference reads again.
+  if (reuseStatuses && selected.every(item => previousRows.some(row => row.status?.ok && prStatusKey(row.ref) === prStatusKey(item)))) {
+    return build(null);
+  }
   let statuses: unknown;
   try {
     statuses = await remotePrStatuses(selected.map(prStatusQuery), sessionId, async (channel, args) => {

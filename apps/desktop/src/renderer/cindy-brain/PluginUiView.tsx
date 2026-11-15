@@ -64,7 +64,7 @@ export function PluginUiView({ ghost, viewId, sessionId: requestedSessionId, inp
       return () => { clearTimeout(timer); listeners.current.delete(update); document.removeEventListener('selectionchange', selection); };
     },
   }), [sessionId, hasContext]);
-  if (!ghost.enabled || !view || ghost.uiCapabilityApproved !== true) return null;
+  if (!view) return null;
   return <McpAppCard key={`${instanceId}:${viewId}:${ghost.approval.state === 'approved' ? ghost.approval.revision : ''}`}
     source={{ instanceId, viewId }} contextSource={contextSource} onUnavailable={onUnavailable}
     sessionId={view.scope === 'task' ? sessionId : null} clientId={`${instanceId}:${viewId}`}

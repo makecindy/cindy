@@ -1,3 +1,8 @@
+import { ProjectSettingsSheet } from '@/session/ProjectSettingsSheet';
+import { useRemoteProjectAliases } from '@/session/remoteProjectAliases';
+import { projectAliasComparisonKey, projectDirectoryName } from '@cindy/maker-shared/project-alias-sync';
+import { ProjectPickerIcon } from '@/session/ProjectPickerIcon';
+import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { playHaptic } from '@/platform/haptics';
 import { parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
 import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
@@ -512,7 +517,7 @@ import { ComposerFrame, nativeComposerFrameAvailable } from '@/session/ComposerF
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
 import { VoicePillWidthFrame } from '@/session/voicePillWidthMotion';
 import { useMobileVoiceProcessingIndicator } from '@/session/useMobileVoiceProcessingIndicator';
-import { useHandheldVoiceKey } from '@/handheld/handheldMode';
+import { useHandheldSessionControls, useHandheldVoiceKey } from '@/handheld/handheldMode';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
 import { useComposerResize } from '@/session/useComposerResize';
@@ -7484,6 +7489,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     sendLatestRef.current = send;
   });
 
+  const handheldSendTarget = useHandheldSessionControls(sessionId, () => {
+    if (!navigation.isFocused() || !canUseComposer || !composerSendTargetEnabledRef.current
+      || !draftRef.current.trim() || !composerDraftHydrated
+      || sendInFlightRef.current || messageEditSubmittingRef.current
+      || voiceRecordingActiveRef.current || voiceStartupInFlightRef.current
+      || voiceStopInFlightRef.current || voiceState === 'listening' || voiceIsProcessing) return;
+    playHaptic('commit');
+    void sendLatestRef.current?.();
+  }, !(contextSheetOpen || modelSheetOpen || permissionSheetOpen || settingsOpen || sideChatsOpen
+    || searchOpen || extraDirBrowseOpen || sessionListDrawerOverlayMounted || shareSelectionActive));
+
   const applyProjectionIfCurrent = useCallback((projection: InputProjection, expectedEpoch: number) => {
     remoteSessionStore.setInputProjectionIfCurrent(sessionId, projection, expectedEpoch);
   }, [sessionId]);
@@ -7879,6 +7895,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ) : composerShowSendButton ? (
         <RouteActionButton
           ref={sendButtonRef}
+          nativeID={handheldSendTarget}
           accessibilityLabel={voiceIsListening ? t('session.screen.voiceStopAndSend') : t('session.screen.sendMessage')}
           accessibilityHint={composerLayout.send.disabledReason ?? composerLayout.guidanceText}
           disabled={composerSendDisabled}
@@ -10364,6 +10381,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     </>
       ) : (
         <SessionHeaderBar
+              deviceId={deviceId}
               horizontalSystemHeader={horizontalSystemHeader}
               currentSession={currentSession}
               diffCount={diffCount}
@@ -11805,6 +11823,7 @@ function SessionChromeLayer({
 type SessionHeaderIcon = typeof Folder;
 
 function SessionHeaderBar({
+  deviceId,
   horizontalSystemHeader,
   noticeOverride,
   currentSession,
@@ -11834,6 +11853,7 @@ function SessionHeaderBar({
   searchOpen,
   title,
 }: {
+  deviceId: string;
   horizontalSystemHeader: boolean;
   noticeOverride?: string;
   currentSession: RemoteSession | null;
@@ -11874,6 +11894,39 @@ function SessionHeaderBar({
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
+  const projectDirectory = currentSession && sessionProjectDirectory(currentSession);
+  const hostProjectKey = projectDirectory
+    ? currentSession?.remoteHostId
+      ? `remote:${encodeURIComponent(currentSession.remoteHostId)}:${projectDirectory}`
+      : `local:${projectDirectory}`
+    : null;
+  const projectInfo = useRemoteProjectAliases().get(deviceId);
+  const projectComparison = projectInfo && hostProjectKey && projectAliasComparisonKey(hostProjectKey, projectInfo.platform);
+  const projectName = projectInfo?.aliases.find(row => projectAliasComparisonKey(row.projectKey, projectInfo.platform) === projectComparison)?.alias
+    || (projectDirectory ? projectDirectoryName(projectDirectory) : '');
+  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
+  useEffect(() => setProjectSettingsOpen(false), [deviceId, hostProjectKey]);
+  const canShowProject = !messageOnly && !isDeviceAccessRevoked && !sharedTaskEnded
+    && !isSharedTaskPeer(deviceId) && currentSession?.workspaceKind !== 'dialogue' && !!projectDirectory;
+  const projectSettings = projectSettingsOpen && canShowProject && hostProjectKey && projectDirectory ? (
+    <ProjectSettingsSheet key={`${deviceId}:${hostProjectKey}`} deviceId={deviceId}
+      projectKey={hostProjectKey} directory={projectDirectory} title={projectName} deviceName={deviceDisplayName(deviceId)}
+      visible onClose={() => setProjectSettingsOpen(false)} />
+  ) : null;
+  const projectIcon = useMemo(() => !messageOnly && !isDeviceAccessRevoked && !sharedTaskEnded
+    ? currentSession?.workspaceKind === 'dialogue'
+      ? <View style={{ width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}>
+          <MessagesSquare size={iconSize.md} strokeWidth={iconStroke.thin} color={colors.textSecondary} />
+        </View>
+      : canShowProject && projectDirectory
+        ? <Pressable accessibilityRole="button" accessibilityLabel={t('settings.projectInfo.title')}
+            onPress={() => setProjectSettingsOpen(true)} hitSlop={12}
+            style={{ width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}>
+            <ProjectPickerIcon deviceId={deviceId} workingDir={projectDirectory}
+              remoteHostId={currentSession?.remoteHostId} size={iconSize.action} />
+          </Pressable>
+        : null
+    : null, [messageOnly, isDeviceAccessRevoked, sharedTaskEnded, currentSession?.workspaceKind, currentSession?.remoteHostId, canShowProject, projectDirectory, colors.textSecondary, deviceId, t]);
   const overview = currentSession
     ? summarizeSessionOverview({
         diffCount,
@@ -11930,14 +11983,14 @@ function SessionHeaderBar({
   // Let UINavigationBar align controls with the system status area, including Duo portrait.
   if (horizontalSystemHeader) {
     const files = overview?.actions.find((action) => action.id === 'files');
-    return <SessionStackHeader titleMaxWidth={nativeTitleMaxWidth}
+    return <>{projectSettings}<SessionStackHeader projectIcon={projectIcon} titleMaxWidth={nativeTitleMaxWidth}
       title={title} pinned={!messageOnly && !!currentSession?.pinnedAt}
       tags={isDeviceAccessRevoked ? undefined : currentSession?.tags} onTagsPress={onOpenSettings}
       onTitleDoubleTap={titleDoubleTap} syncing={syncing} syncingImmediately={syncingImmediately} notice={notice}
       available={!!currentSession} detailsOnly={workerHeader}
       filesDisabled={!files || files.disabled} filesDisabledReason={files?.disabledReason}
       onFiles={onOpenFiles} onDetails={onOpenSettings} onDesktop={onOpenRemoteDesktop}
-      screen={liveScreen} onBack={onBack} onOpenSessionList={onOpenSessionList} />;
+      screen={liveScreen} onBack={onBack} onOpenSessionList={onOpenSessionList} /></>;
   }
 
   // 分享选择模式只保留全选；底部关闭按钮负责退出。
@@ -11958,6 +12011,7 @@ function SessionHeaderBar({
   }
   return (
     <View style={[styles.sessionHeaderBar, nativeHeader && styles.sessionHeaderBarNative]} testID="session.summary">
+      {projectSettings}
       <SystemNavigationBack label={t('shared.back')} onPress={onBack} />
       {sessionListButton}
       {systemBack ? (
@@ -11978,6 +12032,7 @@ function SessionHeaderBar({
 
       {nativeHeader ? <SessionHeaderNativeTitle
         title={sharedTaskEnded ? t('sharedTask.ended') : title}
+        projectIcon={projectIcon}
           tags={isDeviceAccessRevoked ? undefined : currentSession?.tags}
           onTagsPress={onOpenSettings}
           onTitleDoubleTap={titleDoubleTap}
@@ -11987,8 +12042,7 @@ function SessionHeaderBar({
         notice={notice}
       /> : (
       // 双击标题改名;不参与读屏焦点,读屏用户从「任务详情」进入重命名。
-      <Pressable accessible={false} disabled={!titleDoubleTap} onPress={handleTitlePress}
-        style={styles.sessionHeaderTextBlock} testID="session.titleArea">
+      <View style={styles.sessionHeaderTextBlock}>
         <View style={styles.sessionHeaderTitleRow}>
           {!messageOnly && currentSession?.pinnedAt ? (
             <Pin
@@ -11997,9 +12051,13 @@ function SessionHeaderBar({
               strokeWidth={iconStroke.regular}
             />
           ) : null}
+          {projectIcon}
+          <Pressable accessible={false} disabled={!titleDoubleTap} onPress={handleTitlePress}
+            style={{ flexShrink: 1, minWidth: 0, minHeight: 44, justifyContent: 'center' }} testID="session.titleArea">
           <Text numberOfLines={1} style={styles.sessionHeaderTitle} testID="session.title">
             {sharedTaskEnded ? t('sharedTask.ended') : title}
           </Text>
+          </Pressable>
           <TaskTagDots
               tags={isDeviceAccessRevoked ? undefined : currentSession?.tags}
               maxVisible={7}
@@ -12012,7 +12070,7 @@ function SessionHeaderBar({
             {notice}
           </Text>
         ) : null}
-      </Pressable>
+      </View>
       )}
 
       {sharedTaskEnded || systemBack ? null : nativeHeader ? (
@@ -13339,6 +13397,7 @@ interface RouteActionButtonProps {
   disabled?: boolean;
   disabledStyle?: StyleProp<ViewStyle>;
   hitSlop?: PressableProps['hitSlop'];
+  nativeID?: string;
   onLayout?: PressableProps['onLayout'];
   onLongPress?: () => void;
   onPress?: () => void;
@@ -13367,6 +13426,7 @@ const RouteActionButton = forwardRef<ViewInstance, RouteActionButtonProps>(funct
   disabled = false,
   disabledStyle,
   hitSlop,
+  nativeID,
   onLayout,
   onLongPress,
   onPress,
@@ -13418,6 +13478,7 @@ const RouteActionButton = forwardRef<ViewInstance, RouteActionButtonProps>(funct
       delayLongPress={delayLongPress}
       disabled={interactionDisabled}
       hitSlop={hitSlop}
+      nativeID={nativeID}
       onLayout={onLayout}
       onLongPress={interactionDisabled ? undefined : onLongPress}
       onPress={interactionDisabled ? undefined : handlePress}

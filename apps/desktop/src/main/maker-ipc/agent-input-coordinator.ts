@@ -468,6 +468,8 @@ export interface AgentInputCoordinatorDeps {
     signals: InterruptedTurnErrorSignals,
     item: AgentInputQueuedMessage,
   ) => AutoResumeAgentSwitchCause | null;
+  /** Shared bounded budget for provider-group recovery, which has no normal auto-resume token. */
+  claimExternalAutomaticRecovery?: (sessionId: string) => boolean;
   /**
    * **纯判定**：这条 terminal error 有没有可能被自愈接管（`isInterruptedTurnError`）。
    * 不消耗额度、不排期、无副作用。
@@ -765,6 +767,8 @@ type AgentInputSendFailure = Extract<
 interface SessionInputState {
   /** Runtime courtesy clock; never persisted or used for list ordering. */
   lastUserActionAt: number | null;
+  /** Last committed route while a crash snapshot may still be loading. */
+  queuedRoute: Pick<AgentInputCreateOpts, 'model' | 'providerId' | 'effort' | 'fastMode'> | null;
   pendingQueue: AgentInputQueuedMessage[];
   pendingCompacts: PendingCompactRequest[];
   steeringQueueClientIds: string[];
@@ -925,6 +929,7 @@ function createInitialInputState(
 ): SessionInputState {
   return {
     lastUserActionAt: null,
+    queuedRoute: null,
     pendingQueue: [],
     pendingCompacts: [],
     steeringQueueClientIds: [],
@@ -1295,6 +1300,20 @@ function isHostGeneratedSteerItem(item: AgentInputQueuedMessage): boolean {
   if (item.autoResume === true || item.agentOmitsTriggerPrefix === true) return true;
   return isSyntheticTriggerText(item.text.trimStart())
     || isSyntheticTriggerText((item.persistedContent ?? '').trimStart());
+}
+
+function rebaseQueuedItemRoute(
+  item: AgentInputQueuedMessage,
+  route: Pick<AgentInputCreateOpts, 'model' | 'providerId' | 'effort' | 'fastMode'>,
+): void {
+  // A scheduled run can select its own route for this one execution.
+  if (item.origin?.kind === 'scheduler') return;
+  item.model = route.model;
+  item.createOpts.model = route.model;
+  item.createOpts.providerId = route.providerId;
+  item.createOpts.effort = route.effort;
+  item.createOpts.fastMode = route.fastMode;
+  if (route.effort) item.effort = route.effort;
 }
 
 export class AgentInputCoordinator {
@@ -1760,6 +1779,11 @@ export class AgentInputCoordinator {
       item.origin?.kind !== 'scheduler' && !isBotGroupClientId(item.clientId) && isUnrestorableMcpAppMessage(item));
     const restored = restorable.filter((item) =>
       item.origin?.kind !== 'scheduler' && !isBotGroupClientId(item.clientId) && !isUnrestorableMcpAppMessage(item));
+    // set-model can finish while loadQueueSnapshot is still awaiting storage.
+    // Apply that committed route before publishing or persisting restored rows.
+    if (state.queuedRoute) {
+      for (const item of restored) rebaseQueuedItemRoute(item, state.queuedRoute);
+    }
     for (const item of staleAppItems) {
       this.deps.onDiscardedQueuedMessage?.(sessionId, item);
     }
@@ -3146,7 +3170,7 @@ export class AgentInputCoordinator {
 
   stop(
     sessionId: string,
-    opts?: { keepQueue?: boolean; pauseQueue?: boolean; resumeOnUserInput?: boolean },
+    opts?: { keepQueue?: boolean; pauseQueue?: boolean; resumeOnUserInput?: boolean; discardActiveInput?: boolean },
   ): AgentInputProjection {
     const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
     assertSharedTaskQueueMutation(sharedTask, sessionId, 'agent.stop');
@@ -3192,7 +3216,8 @@ export class AgentInputCoordinator {
     clearErrorProjectionSignals(state);
     state.stickyError = null;
     state.recovery = null;
-    this.cancelPreSendActiveTurn(sessionId, state, preserveQueue);
+    // A scoped group stop preserves unrelated queued inputs, never the cancelled active input.
+    this.cancelPreSendActiveTurn(sessionId, state, preserveQueue && !opts?.discardActiveInput);
     // 用户显式 Stop 立即结束续跑行的 vendor-turn 归属。已跨过 vendor dispatch
     // 的 activeTurn 仍需保留到 abort/terminal 收口，以维持队列边界；这里只清 owner，
     // 让本次 stop projection 不再把「重新连接中」误判为仍在飞。
@@ -5958,6 +5983,28 @@ export class AgentInputCoordinator {
     }
   }
 
+  /** Rebase unsent inputs after a committed user route selection, including the crash snapshot. */
+  refreshQueuedRoute(
+    sessionId: string,
+    route: Pick<AgentInputCreateOpts, 'model' | 'providerId' | 'effort' | 'fastMode'>,
+  ): void {
+    const state = this.getState(sessionId);
+    state.queuedRoute = { ...route };
+    for (const item of state.pendingQueue) rebaseQueuedItemRoute(item, route);
+    // A head may already have left pendingQueue while pre-dispatch checks run.
+    const active = state.activeTurn;
+    // sendStarted may already be true while sendToAgent waits for the same
+    // session lock held by set-model; no vendor dispatch has happened yet.
+    if (active?.item && !active.persisted) rebaseQueuedItemRoute(active.item, route);
+    for (const compact of state.pendingCompacts) {
+      compact.createOpts.model = route.model;
+      compact.createOpts.providerId = route.providerId;
+      compact.createOpts.effort = route.effort;
+      compact.createOpts.fastMode = route.fastMode;
+    }
+    this.emit(sessionId);
+  }
+
   /** host 侧异步边界(pending 凭证切换 apply 完成等)后恢复该会话的队列派发。 */
   wakeSession(sessionId: string, reason: string): void {
     this.scheduleDrain(sessionId, reason);
@@ -6946,7 +6993,7 @@ export class AgentInputCoordinator {
     // resumeAfterProviderGroupDeclined 以 preferProviderGroup=false 回到原有恢复。
     // 其他中断仍先走自愈(如断线后在原电脑恢复)；不能交给组的输入也保持原有处理。
     if (preferProviderGroup) {
-      const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals);
+      const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals, false);
       if (cause === 'overload' || cause === 'usage-limit') return null;
     }
     try {
@@ -7179,7 +7226,7 @@ export class AgentInputCoordinator {
     // a provider-group takeover that this scheduled path does not start.
     if (isSchedulerOriginItem(item)) return;
     if (!this.willNotifyUsageLimitedTurnError(state, item)) return;
-    const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals);
+    const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals, true);
     if (!cause) return;
     state.providerGroupSwitchHold = {
       id: ++this.providerGroupSwitchHoldSeq,
@@ -7195,10 +7242,14 @@ export class AgentInputCoordinator {
     item: AgentInputQueuedMessage,
     message?: string,
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
+    consumeBudget = false,
   ): AutoResumeAgentSwitchCause | null {
     if (!this.deps.onUsageLimitedTurnError || isSchedulerOriginItem(item) || item.sharedTaskAuthor) return null;
     try {
-      return this.deps.providerGroupSwitchCandidate?.(sessionId, { ...(signals ?? {}), message }, item) ?? null;
+      const cause = this.deps.providerGroupSwitchCandidate?.(sessionId, { ...(signals ?? {}), message }, item) ?? null;
+      if (!cause) return null;
+      if (consumeBudget && this.deps.claimExternalAutomaticRecovery?.(sessionId) === false) return null;
+      return cause;
     } catch (err) {
       log.warn('providerGroupSwitchCandidate failed', { sessionId, error: errorMessage(err) });
       return null;
@@ -7252,6 +7303,12 @@ export class AgentInputCoordinator {
   getProviderGroupSwitchHoldId(sessionId: string): number | null {
     const state = this.states.get(sessionId);
     return state && isProviderGroupSwitchHoldLive(state) ? state.providerGroupSwitchHold!.id : null;
+  }
+
+  /** Whether an automatic provider-group relocation currently owns the recovery hold. */
+  hasProviderGroupSwitchHold(sessionId: string): boolean {
+    const state = this.states.get(sessionId);
+    return Boolean(state && isProviderGroupSwitchHoldLive(state));
   }
 
   /** A synchronous group candidate was declined by its async configuration/eligibility check. */

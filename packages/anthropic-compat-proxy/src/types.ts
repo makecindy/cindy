@@ -209,6 +209,21 @@ export interface ProxyLogger {
   isDebugEnabled?: () => boolean;
 }
 
+/** What the inbound admission check sees: the request line and its flattened headers. */
+export interface InboundAdmissionCtx {
+  method: string;
+  url: string;
+  /** Mutable: an admitted request may have its credential headers rewritten here. */
+  headers: Record<string, string>;
+}
+
+/** A local refusal of an inbound request. */
+export interface InboundRejection {
+  status: 401 | 403;
+  code: string;
+  message: string;
+}
+
 /**
  * createAnthropicCompatProxy 入参。
  */
@@ -226,6 +241,14 @@ export interface ProxyOptions {
    * 传空数组 [] = 显式禁用所有 transform,纯透传。
    */
   transformRequest?: RequestTransform[];
+  /**
+   * Optional inbound admission, checked first for every HTTP request and WebSocket
+   * upgrade: before oversized-request recovery, the request guard, routing and every
+   * transform. Return null to admit. A rejection is answered locally and nothing is sent
+   * upstream; a throw rejects with 401. The check may rewrite credential headers in
+   * `ctx.headers` before routing (the same object the proxy forwards). Not set = no check.
+   */
+  authorizeInbound?: (ctx: InboundAdmissionCtx) => InboundRejection | null;
   /** Host-owned, request-frozen enforcement before routing, including opaque/local-handler paths.
    * Throws fail closed. Ordinary requests return null and retain their zero-copy response path. */
   requestGuard?: (ctx: RequestTransformCtx) => {

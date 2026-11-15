@@ -1639,7 +1639,25 @@ describe('Session per-turn origin 打标', () => {
     });
   });
 
-  it('preserves a non-secret auth status and redacts nested Codex error details', async () => {
+  // #10119: normalization must not promote a text-only control denial into provider status.
+  it.each([undefined, 403])('preserves permission-denial status provenance (%s)', async (errorStatus) => {
+    const { handle, emit } = createControllableHandle();
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push(event));
+    await session.send('go');
+    await emit({
+      type: 'error',
+      data: { message: 'Permission denied: HTTP 403', isTerminal: true,
+        ...(errorStatus === undefined ? {} : { errorStatus }) },
+    });
+    const errors = seen.filter(event => event.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.data).toMatchObject({ message: 'Permission denied: HTTP 403', isTerminal: true });
+    expect((errors[0]!.data as { errorStatus?: number }).errorStatus).toBe(errorStatus);
+  });
+
+  it.each([401, 403])('preserves non-secret auth status %s and redacts nested Codex error details', async (status) => {
     const { handle, emit } = createControllableHandle();
     const session = makeSession(handle);
     const seen: AgentEvent[] = [];
@@ -1648,7 +1666,7 @@ describe('Session per-turn origin 打标', () => {
     await session.send('go');
     await emit({
       type: 'error',
-      data: { message: 'Authorization: Bearer secret-token, status=401', isTerminal: true },
+      data: { message: `Authorization: Bearer secret-token, status=${status}`, isTerminal: true },
     });
     await emit({
       type: 'done',
@@ -1667,7 +1685,7 @@ describe('Session per-turn origin 打标', () => {
     expect((seen[0]!.data as { message: string; errorStatus: number }).message).toBe(
       'Authorization: [REDACTED]',
     );
-    expect((seen[0]!.data as { errorStatus: number }).errorStatus).toBe(401);
+    expect((seen[0]!.data as { errorStatus: number }).errorStatus).toBe(status);
     expect(JSON.stringify(seen[1])).not.toMatch(/nested-secret|oauth-secret/);
     expect(
       (seen[1]!.data as { raw: { error: { codexErrorInfo: { message: string } } } }).raw.error.codexErrorInfo

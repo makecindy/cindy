@@ -92,23 +92,79 @@ afterEach(() => {
 });
 
 describe('provider weekly quota identity and windows', () => {
+  // User report / unit: created OpenAI providers lost rail and summary quotas
+  // when the connection ID was treated as the account kind. Existing pool
+  // fixtures carry both Claude and Codex windows, hiding that mismatch;
+  // single-kind payloads and remote refresh were not covered.
+  it.each([
+    { kind: 'openai', poolField: 'subscriptionPool', deviceId: null },
+    { kind: 'openai', poolField: 'subscriptionAccountPool', deviceId: 'other-device' },
+    { kind: 'anthropic', poolField: 'subscriptionPool', deviceId: 'other-device' },
+    { kind: 'anthropic', poolField: 'subscriptionAccountPool', deviceId: null },
+  ] as const)('shows $kind quota for a $poolField provider on $deviceId', async ({ kind, poolField, deviceId }) => {
+    reads.codex.mockReturnValue({ snapshot: null });
+    reads.claude.mockReturnValue(null);
+    const providerId = 'created-subscription';
+    const account = (id: string, used: number) => ({
+      id, identity: `${id}@example.test`, paused: false, status: 'ready', running: 0, limit: 4,
+      usage: kind === 'openai'
+        ? { codex: { buckets: { codex: { secondary: { windowMinutes: 10080, usedPercent: used } } } } }
+        : { claude: { sevenDay: { utilization: used } } },
+    });
+    const pool = { providerId, kind, configured: true, accounts: [account('a', 99)] };
+    const command = vi.fn().mockResolvedValue(pool);
+    const invoke = vi.fn().mockResolvedValue(pool);
+    let refresh!: () => void;
+    Object.assign(window, { electronAPI: {
+      subscriptionAccounts: { command, onChanged: (listener: (event: { providerId: string }) => void) => {
+        refresh = () => listener({ providerId: kind });
+        return () => {};
+      } },
+      deviceLink: { invoke, onRemotePush: () => () => {} },
+    } });
+    const providers = [provider(providerId, {
+      auth: { method: 'oauth', native: kind === 'openai' ? 'codex' : 'claude' },
+      [poolField]: kind,
+    })];
+    const view = render(<ModelSourceUsageProvider providers={providers} scope={{ deviceId }}>
+      <UnifiedModelRail items={[{ kind: 'provider', providerId }]} active={{ kind: 'all' }}
+        providers={providers} providerLabel={() => 'Provider'} onSelect={() => {}} providerUsage={{ deviceId }} />
+      <ModelPoolQuotaSummary providerId={providerId} />
+    </ModelSourceUsageProvider>);
+    await act(async () => {});
+    const rail = screen.getByRole('button', { name: 'Provider · a@example.test' });
+    expect(rail.querySelector('[data-weekly-remaining="1"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-pool-quota-summary]')?.textContent).toBe('1%');
+
+    // The same created provider can gain another account; aggregate its own
+    // snapshots without falling back to a built-in subscription's quota.
+    const updated = { ...pool, accounts: [account('a', 99), account('b', 23)] };
+    command.mockResolvedValue(updated);
+    invoke.mockResolvedValue(updated);
+    act(() => { if (deviceId) window.dispatchEvent(new Event('focus')); else refresh(); });
+    await act(async () => {});
+    expect(rail.querySelector('[data-weekly-remaining="39"]')).not.toBeNull();
+    expect(rail.getAttribute('aria-description')).toContain('b@example.test · 每周 · 剩余 77%');
+    expect(view.container.querySelector('[data-pool-quota-summary]')?.textContent).toBe('39%');
+  });
+
   // User report: an unallocated pool still has known per-account quota. Busy
   // accounts remain visible; no pooled percentage or paused default is invented.
-  it.each(['anthropic', 'openai'] as const)('shows each %s account quota before allocation in both rail and model row', async providerId => {
+  it.each(['anthropic', 'openai', 'openai-sub-account'] as const)('shows each %s account quota before allocation in both rail and model row', async providerId => {
     reads.codex.mockReturnValue({ snapshot: null });
     reads.claude.mockReturnValue(null);
     const account = (id: string, used: number, paused = false) => ({
       id, identity: `${id}@example.test`, paused, status: 'ready', running: id === 'a' ? 4 : 0, limit: 4,
       usage: { claude: { sevenDay: { utilization: used } }, codex: { buckets: { codex: { secondary: { windowMinutes: 10080, usedPercent: used } } } } },
     });
-    const pool = { providerId, configured: true,
+    const pool = { providerId, kind: providerId === 'anthropic' ? 'anthropic' : 'openai', configured: true,
       accounts: [account('a', 66), account('b', 20), account('paused', 1, true)] };
     const command = vi.fn().mockResolvedValue(pool);
     let changed!: (event: { providerId: string }) => void;
     Object.assign(window, { electronAPI: { subscriptionAccounts: { command,
       onChanged: (listener: typeof changed) => { changed = listener; return () => {}; },
     } } });
-    const providers = [provider(providerId, { auth: { method: 'oauth', native: providerId === 'anthropic' ? 'claude' : 'codex' } })];
+    const providers = [provider(providerId, { subscriptionAccountPool: providerId === 'anthropic' ? 'anthropic' : 'openai', auth: { method: 'oauth', native: providerId === 'anthropic' ? 'claude' : 'codex' } })];
     const view = render(<ModelSourceUsageProvider providers={providers} scope={{ deviceId: null }}>
       <UnifiedModelRail items={[{ kind: 'provider', providerId }]} active={{ kind: 'all' }}
         providers={providers} providerLabel={() => 'Provider'} onSelect={() => {}} providerUsage={{ deviceId: null }} />

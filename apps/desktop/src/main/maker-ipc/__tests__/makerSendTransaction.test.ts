@@ -1,3 +1,5 @@
+import { withSharedSessionResumeRecovery, type SharedSessionResumeRecoveryDeps } from '../sharedSessionResumeRecovery.js';
+import { createAgentHandoffPendingRegistry } from '../agentHandoff.js';
 import { ROUTINE_TRIGGER_DATA_LEAD } from '../../../shared/botAutonomy.js';
 import {
   CodexResumePreparationBlockedError,
@@ -5003,5 +5005,65 @@ describe('Agent prewarm', () => {
     expect(deps.bootstrapSession).toHaveBeenCalledOnce();
     expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ userPrompt: 'mine', workingDir: '/repo' }));
     expect(live?.send).toHaveBeenCalledOnce();
+  });
+});
+
+// #10187 / unit: exercise lazy creation and the real wire/persist split together.
+// The old path restored the same rejected resume ID to the queue indefinitely.
+describe('shared ownership rejection during lazy send', () => {
+  it.each([false, true])('sends once with durable history after fresh open (restart=%s)', async restart => {
+    const { session } = createDeps();
+    const row = { sdkSessionId: 'old-native' as string | null, status: 'active' as const, agentKind: 'codex' as const,
+      model: 'shared-model', providerId: 'provider', agentDeviceId: 'share:provider',
+      clearedAt: null, effort: null, fastMode: false };
+    let durableHandoff: string | null = null;
+    let pending = createAgentHandoffPendingRegistry(async () => durableHandoff, async () => { durableHandoff = null; });
+    const recovery: SharedSessionResumeRecoveryDeps = {
+      assertCurrent: () => {}, readGeneration: id => pending.readGeneration(id),
+      getSessionRow: async () => ({ ...row }),
+      listMessages: async () => [{ role: 'user', content: 'Original task requirements', createdAt: 1 }],
+      commit: vi.fn(async (_id, handoff, meta) => {
+        expect(row.sdkSessionId).toBe(meta.expectedSdkSessionId);
+        row.sdkSessionId = null;
+        durableHandoff = handoff;
+        return { updatedAt: 2 };
+      }),
+      setPending: (id, handoff, generation) => pending.set(id, handoff, generation), publish: vi.fn(),
+    };
+    const open = vi.fn(async (opts: MakerSessionCreateOpts) => {
+      if (opts.resumeSessionId) throw new Error('[REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer');
+      expect(durableHandoff).toContain('Original task requirements');
+      if (restart && open.mock.calls.length === 2) throw new Error('interrupted after durable rebuild');
+      return session;
+    });
+    const { deps } = createDeps({
+      getSession: () => undefined,
+      reconcileCreateOptsWithDb: async (_id, opts) => { opts.resumeSessionId = row.sdkSessionId ?? undefined; },
+      bootstrapSession: async opts => ({
+        session: await withSharedSessionResumeRecovery(opts, () => open(opts), recovery),
+        didInjectOrcaInstructions: false, didInjectProjectContext: false,
+      }),
+      peekPendingHandoff: id => pending.peek(id), consumePendingHandoff: id => pending.consume(id),
+    });
+    const send = () => createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Continue now', {
+      agentKind: 'codex', workingDir: '/repo', model: row.model, providerId: row.providerId,
+      agentDeviceId: row.agentDeviceId, resumeSessionId: 'old-native',
+    }, { persistUserMessage: { clientId: 'one-input', content: 'Continue now', delivery: 'turn' } });
+    if (restart) {
+      await expect(send()).resolves.toMatchObject({ accepted: false, reason: 'LAZY_CREATE_FAILED' });
+      expect(session.send).not.toHaveBeenCalled();
+      pending = createAgentHandoffPendingRegistry(async () => durableHandoff, async () => { durableHandoff = null; });
+    }
+    await send();
+    expect(open).toHaveBeenCalledTimes(restart ? 3 : 2);
+    expect(recovery.commit).toHaveBeenCalledOnce();
+    expect(session.send).toHaveBeenCalledOnce();
+    const sent = vi.mocked(session.send).mock.calls[0][0];
+    const sentText = typeof sent === 'string' ? sent : sent.content;
+    expect(sentText).toContain('Original task requirements');
+    expect(sentText).toContain('Continue now');
+    expect(deps.createDbMessage).toHaveBeenCalledOnce();
+    expect(deps.createDbMessage).toHaveBeenCalledWith('session-1', expect.objectContaining({ content: 'Continue now' }), undefined);
+    expect(await pending.peek('session-1')).toBeNull();
   });
 });

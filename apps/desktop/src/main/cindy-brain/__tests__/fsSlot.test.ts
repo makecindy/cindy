@@ -170,6 +170,71 @@ describe('GhostFsSlot', () => {
     await fs.promises.rm(tmpRoot, { recursive: true, force: true });
   });
 
+  // §21 unit: existing workdir tests require a live Agent call. A fresh Host
+  // picker reference instead enables autonomous IO, but never a different
+  // plugin, revoked group, stale inode or escaped symlink. The production slot
+  // and shared file-browser core perform the actual operations.
+  it('亲选引用可自主读写列删监听，撤权与根替换立即失效', async () => {
+    const ghost = makeGhost(false);
+    ghost.manifest.agent = { hostTools: ['files'] };
+    ghost.approvedHostToolGroups = ['files'];
+    const stat = await fs.promises.stat(workdir, { bigint: true });
+    const directory = { ref: 'picked', path: await fs.promises.realpath(workdir), dev: stat.dev.toString(), ino: stat.ino.toString() };
+    const { deps } = makeHarness(dataRoot);
+    let notify!: (event: { path: string; type: 'create' | 'update' | 'delete' }) => void;
+    const release = vi.fn(async () => {});
+    const slot = new GhostFsSlot({ ...deps, getGhost: () => ghost,
+      resolvePickedDirectory: (id, ref) => id === GHOST_ID && ref === directory.ref ? directory : null,
+      watchDirectory: async (_root, changed) => { notify = changed; return release; },
+    });
+    const call = (op: string, args = {}) => slot.handleFsRequest(GHOST_ID, { root: 'picked', directoryRef: 'picked', op, ...args });
+    expect(await call('write', { path: 'folder/a.txt', content: 'selected' })).toMatchObject({ ok: true, bytes: 8 });
+    expect(await call('read', { path: 'folder/a.txt' })).toMatchObject({ ok: true, content: 'selected' });
+    expect(await call('list', { path: 'folder' })).toMatchObject({ ok: true, entries: [{ path: 'folder/a.txt', type: 'file' }] });
+    const watch = await call('watch');
+    expect(watch.ok).toBe(true);
+    if (!watch.ok || watch.op !== 'watch') throw new Error('watch unavailable');
+    notify({ path: 'folder/a.txt', type: 'update' });
+    expect(await call('changes', { watchId: watch.watchId, cursor: 0 })).toMatchObject({ ok: true, events: [{ sequence: 1, path: 'folder/a.txt' }] });
+    const outside = path.join(tmpRoot, 'outside');
+    await fs.promises.mkdir(outside);
+    await fs.promises.symlink(outside, path.join(workdir, 'escape'), 'junction');
+    expect(await call('write', { path: 'escape/secret.txt', content: 'never' })).toMatchObject({ ok: false });
+    expect(fs.existsSync(path.join(outside, 'secret.txt'))).toBe(false);
+    expect(await slot.handleFsRequest('other', { root: 'picked', directoryRef: 'picked', op: 'list' })).toMatchObject({ ok: false });
+    expect(await call('delete', { path: 'folder/a.txt' })).toMatchObject({ ok: true, existed: true });
+    ghost.approvedHostToolGroups = [];
+    notify({ path: 'folder/b.txt', type: 'create' });
+    expect(await call('changes', { watchId: watch.watchId })).toMatchObject({ ok: false });
+    expect(release).toHaveBeenCalledOnce();
+    ghost.approvedHostToolGroups = ['files'];
+    await fs.promises.rename(workdir, `${workdir}-previous`);
+    await fs.promises.mkdir(workdir);
+    expect(await call('write', { path: 'new.txt', content: 'never' })).toMatchObject({ ok: false });
+    expect(fs.existsSync(path.join(workdir, 'new.txt'))).toBe(false);
+    slot.disposeAll();
+  });
+
+  // §21: the additional MCP surface must use a real task snapshot rather than
+  // borrow a plugin picker reference, and must retain the live Plan boundary.
+  it('同一文件服务读取真实任务目录，并拒绝计划模式写入或借用插件目录引用', async () => {
+    const session = { workingDir: workdir, permissionMode: 'ask', planModeEnabled: false, remoteHostId: null };
+    const { slot, deps } = makeHarness(dataRoot, { session });
+    const call = (request: Record<string, unknown>) => slot.handleTaskFsRequest('sess-1', 'instance-1', request, () => true);
+    expect(await call({ op: 'write', path: 'mcp.txt', content: 'ordinary-task' })).toMatchObject({ ok: true });
+    expect(await call({ op: 'read', path: 'mcp.txt' })).toMatchObject({ ok: true, content: 'ordinary-task' });
+    session.planModeEnabled = true;
+    expect(await call({ op: 'write', path: 'mcp.txt', content: 'forbidden' })).toMatchObject({ ok: false });
+    expect(await call({ op: 'read', path: 'mcp.txt', directoryRef: 'plugin-reference' })).toMatchObject({ ok: false });
+    expect(await fs.promises.readFile(path.join(workdir, 'mcp.txt'), 'utf8')).toBe('ordinary-task');
+    session.planModeEnabled = false;
+    let owner = 'old';
+    deps.ownerKey = () => owner;
+    slot.setSessionSnapshotResolver(async () => { owner = 'new'; return session; });
+    expect(await call({ op: 'write', path: 'cross-owner.txt', content: 'forbidden' })).toMatchObject({ ok: false });
+    expect(fs.existsSync(path.join(workdir, 'cross-owner.txt'))).toBe(false);
+  });
+
   describe('in-flight requests', () => {
     it.each(['data', 'session-workdir', 'script-workdir'] as const)(
       '%s blocks relocation through the final native write and cleans up on success or failure',
@@ -714,15 +779,149 @@ describe('GhostFsSlot', () => {
     }
   });
 
-  it('workdir:read/list/delete 一律拒(仅 write)', async () => {
+  // 测试价值：第21项经真实 fs-request 读取、列举、删除已授权工作目录。
+  // 原覆盖只验证拒绝三种操作；最小输入为在途 call-1 与一个普通文件，tier=unit。
+  it('workdir:read/list/delete 共用已授权工作目录，列表不暴露隐藏文件与链接', async () => {
+    await fs.promises.writeFile(path.join(workdir, 'x.md'), 'hello');
+    await fs.promises.writeFile(path.join(workdir, '.env'), 'private');
+    const { slot } = makeHarness(dataRoot, {
+      fs: false,
+      session: { workingDir: workdir, permissionMode: 'bypassPermissions', planModeEnabled: false, remoteHostId: null },
+    });
+    expect(await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'read', root: 'workdir', path: 'x.md', callId: 'call-1',
+    })).toMatchObject({ ok: true, op: 'read', content: 'hello', bytes: 5 });
+    expect(await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'list', root: 'workdir', callId: 'call-1',
+    })).toMatchObject({ ok: true, op: 'list', entries: [{ path: 'x.md', bytes: 5 }] });
+    expect(await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'delete', root: 'workdir', path: 'x.md', callId: 'call-1',
+    })).toMatchObject({ ok: true, op: 'delete', existed: true });
+    expect(fs.existsSync(path.join(workdir, 'x.md'))).toBe(false);
+    expect(fs.existsSync(path.join(workdir, '.env'))).toBe(true);
+  });
+
+  it('workdir:计划模式允许读取，但拒绝删除；结束的调用不能借用读权限', async () => {
+    await fs.promises.writeFile(path.join(workdir, 'x.md'), 'hello');
+    let live = true;
+    const { slot } = makeHarness(dataRoot, {
+      inFlight: () => live,
+      session: { workingDir: workdir, permissionMode: 'ask', planModeEnabled: true, remoteHostId: null },
+    });
+    const request = { type: 'fs-request', root: 'workdir', path: 'x.md', callId: 'call-1' };
+    expect(await slot.handleFsRequest(GHOST_ID, { ...request, op: 'read' })).toMatchObject({ ok: true, content: 'hello' });
+    expect(await slot.handleFsRequest(GHOST_ID, { ...request, op: 'delete' })).toMatchObject({ ok: false });
+    live = false;
+    expect(await slot.handleFsRequest(GHOST_ID, { ...request, op: 'read' })).toMatchObject({ ok: false });
+    expect(fs.existsSync(path.join(workdir, 'x.md'))).toBe(true);
+  });
+
+  it('workdir:二进制跨分块读取不截断，超过单次限额明确拒绝', async () => {
+    const bytes = Buffer.alloc(1024 * 1024 + 7, 0x83);
+    await fs.promises.writeFile(path.join(workdir, 'data.bin'), bytes);
+    const { slot } = makeHarness(dataRoot, {
+      session: { workingDir: workdir, permissionMode: 'ask', planModeEnabled: false, remoteHostId: null },
+    });
+    const request = { type: 'fs-request', root: 'workdir', op: 'read', path: 'data.bin', encoding: 'base64', callId: 'call-1' };
+    expect(await slot.handleFsRequest(GHOST_ID, request)).toMatchObject({ ok: true, bytes: bytes.length, content: bytes.toString('base64') });
+    await fs.promises.truncate(path.join(workdir, 'data.bin'), GHOST_FS_WRITE_MAX_BYTES + 1);
+    expect(await slot.handleFsRequest(GHOST_ID, request)).toMatchObject({ ok: false });
+  });
+
+  it.each(['allow', 'block', 'ask'] as const)('workdir:Auto 删除遵循当前宿主审核的 %s 裁决', async verdict => {
+    await fs.promises.writeFile(path.join(workdir, 'x.md'), 'hello');
+    const reviewAction = vi.fn(async () => ({ verdict }));
+    const { slot, confirmCalls } = makeHarness(dataRoot, {
+      session: { workingDir: workdir, permissionMode: 'auto', planModeEnabled: false, remoteHostId: null, reviewAction },
+    });
+    expect(await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', root: 'workdir', op: 'delete', path: 'x.md', callId: 'call-1',
+    })).toMatchObject({ ok: verdict !== 'block' });
+    expect(fs.existsSync(path.join(workdir, 'x.md'))).toBe(verdict === 'block');
+    expect(reviewAction).toHaveBeenCalledOnce();
+    expect(confirmCalls).toHaveLength(verdict === 'ask' ? 1 : 0);
+  });
+
+  it('workdir:删除确认明确标识删除且不沿用写入记忆，确认期间交卷不执行', async () => {
+    await fs.promises.writeFile(path.join(workdir, 'x.md'), 'hello');
+    let live = true;
+    const { slot, deps } = makeHarness(dataRoot, {
+      inFlight: () => live,
+      session: { workingDir: workdir, permissionMode: 'ask', planModeEnabled: false, remoteHostId: null },
+    });
+    deps.requestWriteConfirm = vi.fn(async (_sessionId, payload) => {
+      expect(payload.lane).toBe('fs_delete');
+      live = false;
+      return { confirmed: true as const };
+    });
+    expect(await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'delete', root: 'workdir', path: 'x.md', callId: 'call-1',
+    })).toMatchObject({ ok: false });
+    expect(deps.requestWriteConfirm).toHaveBeenCalledOnce();
+    expect(fs.existsSync(path.join(workdir, 'x.md'))).toBe(true);
+  });
+
+  it.each(['read', 'list', 'delete'])('workdir:%s 拒绝逃到授权根外的目录链接', async op => {
+    const outside = path.join(dataRoot, 'outside');
+    await fs.promises.mkdir(outside, { recursive: true });
+    await fs.promises.writeFile(path.join(outside, 'x.md'), 'private');
+    await fs.promises.symlink(outside, path.join(workdir, 'link'), 'junction');
     const { slot } = makeHarness(dataRoot, {
       session: { workingDir: workdir, permissionMode: 'bypassPermissions', planModeEnabled: false, remoteHostId: null },
     });
-    for (const op of ['read', 'list', 'delete']) {
-      expect(await slot.handleFsRequest(GHOST_ID, {
-        type: 'fs-request', op, root: 'workdir', path: 'x.md', callId: 'call-1',
-      })).toMatchObject({ ok: false });
-    }
+    expect(await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op, root: 'workdir', path: op === 'list' ? 'link' : 'link/x.md', callId: 'call-1',
+    })).toMatchObject({ ok: false });
+    expect(await fs.promises.readFile(path.join(outside, 'x.md'), 'utf8')).toBe('private');
+  });
+
+  it('workdir:监听通过游标续读，拒绝他插件，交卷立即释放宿主 watcher', async () => {
+    const { slot, deps } = makeHarness(dataRoot, {
+      session: { workingDir: workdir, permissionMode: 'ask', planModeEnabled: false, remoteHostId: null },
+    });
+    const lifetime = new AbortController();
+    const close = vi.fn(async () => {});
+    let changed!: (event: { path: string; type: 'create' | 'update' | 'delete' }) => void;
+    deps.getCallSignal = () => lifetime.signal;
+    deps.watchDirectory = async (_root, emit) => { changed = emit; return close; };
+    const request = { type: 'fs-request', root: 'workdir', callId: 'call-1' };
+    const started = await slot.handleFsRequest(GHOST_ID, { ...request, op: 'watch' });
+    expect(started).toMatchObject({ ok: true, op: 'watch', cursor: 0 });
+    expect(await slot.handleFsRequest(GHOST_ID, { ...request, op: 'watch' })).toEqual(started);
+    if (!started.ok || started.op !== 'watch') return;
+    changed({ path: 'x.md', type: 'update' });
+    changed({ path: '.env', type: 'update' });
+    const pull = { ...request, op: 'changes', watchId: started.watchId, cursor: 0 };
+    expect(await slot.handleFsRequest('other-plugin', pull)).toMatchObject({ ok: false });
+    expect(await slot.handleFsRequest(GHOST_ID, pull)).toMatchObject({ ok: true, op: 'changes', cursor: 1,
+      events: [{ sequence: 1, path: 'x.md', type: 'update' }], resetRequired: false });
+    expect(await slot.handleFsRequest(GHOST_ID, { ...pull, cursor: 1 })).toMatchObject({ ok: true, events: [] });
+    lifetime.abort();
+    expect(close).toHaveBeenCalledOnce();
+    expect(await slot.handleFsRequest(GHOST_ID, pull)).toMatchObject({ ok: false });
+  });
+
+  it('workdir:监听缓冲缺口明确要求重读，且取消建订阅不会留下 watcher', async () => {
+    const { slot, deps } = makeHarness(dataRoot, {
+      session: { workingDir: workdir, permissionMode: 'ask', planModeEnabled: false, remoteHostId: null },
+    });
+    const lifetime = new AbortController(), close = vi.fn(async () => {});
+    deps.getCallSignal = () => lifetime.signal;
+    deps.watchDirectory = async (_root, emit) => {
+      for (let n = 0; n < 300; n++) emit({ path: 'x.md', type: 'update' });
+      return close;
+    };
+    const request = { type: 'fs-request', root: 'workdir', callId: 'call-1' };
+    const started = await slot.handleFsRequest(GHOST_ID, { ...request, op: 'watch' });
+    expect(started.ok).toBe(true);
+    if (!started.ok || started.op !== 'watch') return;
+    expect(await slot.handleFsRequest(GHOST_ID, { ...request, op: 'changes', watchId: started.watchId, cursor: 0 }))
+      .toMatchObject({ ok: true, cursor: 300, resetRequired: true });
+    await slot.handleFsRequest(GHOST_ID, { ...request, op: 'unwatch', watchId: started.watchId });
+    expect(close).toHaveBeenCalledOnce();
+    deps.watchDirectory = async () => { lifetime.abort(); return close; };
+    expect(await slot.handleFsRequest(GHOST_ID, { ...request, op: 'watch' })).toMatchObject({ ok: false });
+    expect(close).toHaveBeenCalledTimes(2);
   });
 
   it('save:凭票写入,文件名取 basename 语义;缺 token 拒;票据无效拒', async () => {
