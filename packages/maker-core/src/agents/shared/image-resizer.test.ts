@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ImageResizer } from "./image-resizer.js";
 
@@ -28,6 +28,58 @@ afterEach(async () => {
 });
 
 describe("ImageResizer private cache", () => {
+  // PR #10664: queued attachments used to retain full source buffers before
+  // acquiring an encoding slot. Unit: real process(), three >500KB PNGs and
+  // one duplicate; a read barrier exposes eager reads without timing assertions.
+  it("reads sources only inside the concurrency limit and coalesces duplicate paths", async () => {
+    const root = await tempDir();
+    const sources = [0, 1, 2].map(i => path.join(root, `source-${i}.png`));
+    await Promise.all(sources.map((file, i) => sharp({
+      create: { width: 512, height: 384, channels: 3, background: { r: i * 60, g: 80, b: 120 } },
+    }).png({ compressionLevel: 0 }).toFile(file)));
+    for (const file of sources) expect((await fs.stat(file)).size).toBeGreaterThan(500_000);
+    const resizer = new ImageResizer({ cacheDir: path.join(root, "cache"), concurrency: 1 });
+    await resizer.process(""); // Finish cache initialization before observing IO.
+    const originalRead = fs.readFile;
+    const originalStat = fs.stat;
+    let release!: () => void;
+    let statDone!: () => void;
+    const readBarrier = new Promise<void>(resolve => { release = resolve; });
+    const allStats = new Promise<void>(resolve => { statDone = resolve; });
+    const reads: string[] = [];
+    let stats = 0;
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const result = await originalStat(...args);
+      if (sources.includes(String(args[0])) && ++stats === 4) statDone();
+      return result;
+    });
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+      if (sources.includes(String(args[0]))) {
+        reads.push(String(args[0]));
+        await readBarrier;
+      }
+      return originalRead(...args);
+    });
+    const jobs = [sources[0], ...sources].map(file => resizer.process(file));
+    let results: string[] = [];
+    try {
+      await allStats;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(reads).toHaveLength(1);
+    } finally {
+      release();
+      try { results = await Promise.all(jobs); }
+      finally { readSpy.mockRestore(); statSpy.mockRestore(); }
+    }
+    expect(reads).toHaveLength(3);
+    expect(new Set(reads)).toEqual(new Set(sources));
+    expect(results[0]).toBe(results[1]);
+    for (const result of results) {
+      expect(path.dirname(result)).toBe(resizer.cacheDir);
+      expect((await sharp(result).metadata()).format).toBe("png");
+    }
+  });
+
   it("keeps PNG/JPEG output formats while applying the existing size rule", async () => {
     const root = await tempDir();
     const cacheDir = path.join(root, "cache");

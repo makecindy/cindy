@@ -165,6 +165,18 @@ export class ImageResizer {
       return absPath;
     }
 
+    // Coalesce the same file version before reading it. The disk cache still
+    // uses the source content hash, computed only after acquiring a slot.
+    const inflightKey = JSON.stringify([absPath, stat.mtimeMs, stat.size]);
+    const existing = this.inflight.get(inflightKey);
+    if (existing) return existing;
+
+    const task = this.runResize(absPath, inflightKey);
+    this.inflight.set(inflightKey, task);
+    return task;
+  }
+
+  private async readAndResize(absPath: string): Promise<string> {
     let source: Buffer;
     try {
       source = await fs.readFile(absPath);
@@ -192,15 +204,7 @@ export class ImageResizer {
       }
     }
 
-    // 同一张图并发请求合并
-    const existing = this.inflight.get(key);
-    if (existing) return existing;
-
-    const task = this.runResize(absPath, source, key).finally(() => {
-      this.inflight.delete(key);
-    });
-    this.inflight.set(key, task);
-    return task;
+    return this.doResize(absPath, source, key);
   }
 
   /**
@@ -267,12 +271,13 @@ export class ImageResizer {
   /** 内部: 跑实际的 resize, 含并发闸门 + 超时 + 错误降级。 */
   private async runResize(
     absPath: string,
-    source: Buffer,
-    key: string,
+    inflightKey: string,
   ): Promise<string> {
-    // Keep the encoding slot until native work finishes, even if the caller
-    // has already timed out and returned its original path.
-    const work = this.acquireSlot(() => this.doResize(absPath, source, key));
+    // Queued tasks retain paths, not source buffers. Keep the slot and inflight
+    // entry until all work finishes, even after the caller has timed out.
+    const work = this.acquireSlot(() => this.readAndResize(absPath)).finally(() => {
+      this.inflight.delete(inflightKey);
+    });
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const timeout = new Promise<'timeout'>((resolve) => {
