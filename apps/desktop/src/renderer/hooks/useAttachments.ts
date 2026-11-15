@@ -110,6 +110,9 @@ interface AttachmentDraftScope {
   discardToken: ComposerDraftDiscardToken | undefined;
 }
 
+/** Only this add event retains File objects; draft/history never stores them. */
+type AddedAttachmentSources = Uint8Array | ReadonlyMap<string, Blob>;
+
 interface AttachmentOperationScope extends AttachmentDraftScope {
   sessionId: string | undefined;
 }
@@ -299,7 +302,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
     [appendAttachments, isAttachmentOperationScopeCurrent],
   );
 
-  const processAddedFiles = useCallback(async (scope: AttachmentOperationScope, files: readonly AttachedFile[]) => {
+  const processAddedFiles = useCallback(async (scope: AttachmentOperationScope, files: readonly AttachedFile[], sources: AddedAttachmentSources) => {
     for (const file of files) {
       const currentFiles = () => isAttachmentOperationScopeCurrent(scope)
         ? attachmentsRef.current : scope.storageKey ? getComposerDraft(scope.storageKey)?.attachments ?? [] : [];
@@ -309,8 +312,16 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
       const controller = new AbortController();
       const stop = scope.storageKey ? subscribeDraftContent(scope.storageKey, () => { if (!current()) controller.abort(); }) : () => {};
       let output: Awaited<ReturnType<typeof processPluginUiAttachment>> = null;
+      let bytes: Uint8Array | undefined;
       try {
-        output = await processPluginUiAttachment(file, scope.sessionId ?? null, controller.signal);
+        output = await processPluginUiAttachment(file, scope.sessionId ?? null, controller.signal, async () => {
+          if (!bytes) {
+            const source = sources instanceof Uint8Array ? sources : sources.get(file.path);
+            if (!source) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
+            bytes = source instanceof Uint8Array ? source : new Uint8Array(await source.arrayBuffer());
+          }
+          return bytes;
+        }, current);
         if (!output?.handled || !current()) continue;
         const replacements = (output.files ?? []).map(item => {
           const ext = extractExt(item.name);
@@ -338,9 +349,9 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
     }
   }, [isAttachmentOperationScopeCurrent, pushScopedRejections, t]);
 
-  const settleUserAddedAttachments = useCallback((scope: AttachmentOperationScope, files: readonly AttachedFile[]) => {
+  const settleUserAddedAttachments = useCallback((scope: AttachmentOperationScope, files: readonly AttachedFile[], sources?: AddedAttachmentSources) => {
     settleAttachmentsForScope(scope, files);
-    if (readPluginUiEntries('composer.attachment').length) void processAddedFiles(scope, files);
+    if (sources && readPluginUiEntries('composer.attachment').length) void processAddedFiles(scope, files, sources);
   }, [settleAttachmentsForScope, processAddedFiles]);
 
   // ── Per-session draft (composer-draft-per-session) ──
@@ -643,10 +654,13 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
 
       // IPC read for each valid file
       const newAttachments: AttachedFile[] = [];
+      const pluginSources = readPluginUiEntries('composer.attachment').length
+        ? new Map<string, Blob>(rawFiles.map(raw => [raw.path, raw.file])) : undefined;
       const currentSessionId = operationScope.sessionId;
 
       for (const item of valid) {
         if (!isDataOwnerGenerationCurrent(operationScope.dataOwner)) break;
+        const previousCount = pluginSources ? newAttachments.length : 0;
         let stagedAttachmentPath: string | null = null;
         try {
           let attachmentPath = item.path;
@@ -769,9 +783,13 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
             }),
           ]);
         }
+        if (pluginSources && newAttachments.length > previousCount) {
+          const source = pluginSources.get(item.path);
+          if (source) pluginSources.set(newAttachments[newAttachments.length - 1]!.path, source);
+        }
       }
 
-      settleUserAddedAttachments(operationScope, newAttachments);
+      settleUserAddedAttachments(operationScope, newAttachments, pluginSources);
     },
     [isAttachmentOperationScopeCurrent, pushScopedRejections, settleUserAddedAttachments, t],
   );
@@ -832,7 +850,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
               url: cached.url,
               originalName: name,
             },
-          ]);
+          ], buffer);
         } else {
           if (!isDataOwnerGenerationCurrent(operationScope.dataOwner)) return;
           // F6 fallback
@@ -853,7 +871,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
               base64,
               originalName: name,
             },
-          ]);
+          ], buffer);
         }
       } catch (err) {
         pushScopedRejections(operationScope, [
