@@ -174,6 +174,19 @@ Codex 的回退上限为 **42 MiB**，不会恢复到原来的 128 MiB，Claude 
 [模型请求超限时的附件恢复](media-storage-and-protocols.md#模型请求超限时的附件恢复)为正本；
 实现入口为 `oversizedAttachmentRecoveryCore.ts` 的 `createRequestSizeController`。
 
+### 代理图片压缩
+
+`XDT_IMAGE_COMPRESSION_DISABLE` 是 Desktop 与 Node Host 的隐藏进程环境开关，不进入设置页或
+持久化配置。未设置时默认开启；仅字符串 `1` 关闭，其他值不关闭。移除该环境变量恢复默认。
+
+开关只控制本地代理的图片预处理（`prepare`）及单张图片超限后的进一步压缩（`tighten`）；
+关闭时保留输入图片，不调用编码器，也不复用已缓存的压缩结果。它不控制附件的
+`image-resizer` 缩图，与 `XDT_REQUEST_SIZE_CONTROL_DISABLE` 控制的请求体积恢复互不替代。
+每次调用都读取宿主进程当前的环境值；从外部修改启动环境后，需要重新启动宿主才能带入新值。
+
+实现与回归见 `apps/desktop/src/main/maker-host/inlineImagePreprocessor.ts` 及
+`__tests__/inlineImagePreprocessor.test.ts`。
+
 ## 6. 设置搜索与页面定义
 
 设置页新增、改写设置控件时，使用 `defineSettings` 声明稳定 ID、分类、定位锚点、
