@@ -267,7 +267,7 @@ export function recordSessionCodexTurnUsage(
         }
       })();
     }
-    // 走 gateway/API 口径(同一把 XD key 的 LiteLLM 计费)的 codex turn,done 后刷新账号配额
+    // 走 Cindy AI gateway/API 口径的 codex turn，done 后通过 Model Access 刷新账号配额
     // (与 cc 同口径, chip 显示 daily/monthly/key cost)。命中:会话显式选了 XD 网关、无 OAuth
     // token 的 env-key fallback、或 codex/ 预算模型。普通 oauth 订阅没有 $ 配额,不刷。
     void modelPromise
