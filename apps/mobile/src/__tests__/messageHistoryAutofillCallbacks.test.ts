@@ -192,7 +192,7 @@ return { requestLoadEarlier, flushQueuedLoadEarlier };`)(...Object.values(bindin
 // gesture but never releases the committed-page handoff or restarts its queued request.
 describe('history pagination across interrupted gestures', () => {
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
-  function fixture(pageCommitted: boolean, promiseSettled = true) {
+  function fixture(pageCommitted: boolean, promiseSettled = true, eol = '\n') {
     vi.useFakeTimers();
     vi.stubGlobal('requestAnimationFrame', (fn: () => void) => setTimeout(fn, 16));
     vi.stubGlobal('cancelAnimationFrame', (id: ReturnType<typeof setTimeout>) => clearTimeout(id));
@@ -214,13 +214,21 @@ describe('history pagination across interrupted gestures', () => {
       queuedLoadEarlierRef: { current: false }, queuedLoadEarlierFlushFrameRef: { current: null },
       historyPrependNativeMvcpDisabledRef: { current: true }, onLoadEarlier: vi.fn(), beginLoadEarlier: vi.fn(),
     };
+    // Exercise Windows checkouts on every platform, without depending on the
+    // host Git core.autocrlf setting. Match the effect independently of whitespace.
+    const visibilitySource = ts.createSourceFile('renderer.tsx', source.text.replace(/\r?\n/g, eol),
+      ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     let visibility = '';
     function visit(node: ts.Node) {
-      if (ts.isCallExpression(node) && node.expression.getText(source) === 'useEffect'
-        && node.arguments[0]?.getText(source).includes('if (!historyPositioning) {\n      tailFollowerRef')) visibility = node.arguments[0].getText(source);
+      if (ts.isCallExpression(node) && node.expression.getText(visibilitySource) === 'useEffect'
+        && node.arguments[0]?.getText(visibilitySource).includes('if (!historyPositioning)')
+        && node.arguments[0].getText(visibilitySource).includes('tailFollowerRef.current?.reset()')) {
+        visibility = node.arguments[0].getText(visibilitySource);
+      }
       ts.forEachChild(node, visit);
     }
-    visit(source);
+    visit(visibilitySource);
+    if (!visibility) throw new Error('Missing production visibility effect');
     const compile = ts.transpileModule([...pagingCallbacks].filter(([name]) => name !== 'requestLoadEarlier')
       .map(([name, body]) => `const ${name} = ${body};`).join('\n')
       + `\nreturn { ${[...pagingCallbacks.keys()].filter(name => name !== 'requestLoadEarlier').join(', ')}, visibility: ${visibility} };`,
@@ -233,8 +241,9 @@ describe('history pagination across interrupted gestures', () => {
     };
     return { bindings, transaction, callbacks, setVisible };
   }
-  it.each([true, false])('resumes a handed-off page after hiding without native end events (committed=%s)', (committed) => {
-    const h = fixture(committed);
+  it.each([true, false].flatMap(committed => ['\n', '\r\n'].map(eol => ({ committed, eol }))))(
+    'resumes a handed-off page after hiding (committed=$committed, eol=$eol)', ({ committed, eol }) => {
+    const h = fixture(committed, true, eol);
     h.callbacks().handoffHistoryPrependToUser();
     h.setVisible(false);
     h.callbacks().scheduleHistoryPrependUserHandoffSettle();
