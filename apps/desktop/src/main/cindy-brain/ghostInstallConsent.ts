@@ -14,6 +14,8 @@ import { declaredGhostHostToolGroups, pluginHasToolUi, type GhostHostToolGroup }
 import {
   declaredAutoApproveTools,
   declaredGhostTaskEventTopics,
+  declaredGhostCindyModelActions,
+  type GhostCindyModelsAction,
   type GhostTaskEventTopic,
   declaredGhostControlPoints,
   ghostHostUiApprovalTokens,
@@ -75,6 +77,15 @@ export function confirmedHostToolGroups(decision: GhostInstallConsentDecision, i
   const facts = evaluateGhostInstallConsent(installed, next);
   const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
   return declaredGhostHostToolGroups(next).filter(group => shown?.some(item => item.key === `agent:host-tools:${group}`));
+}
+/** Follow the control-point consent path: unknown declarations never become grants on upgrade. */
+export function confirmedCindyModelActions(decision: GhostInstallConsentDecision, installed: InstalledGhost | null | undefined, next: GhostManifest): GhostCindyModelsAction[] {
+  const declared = declaredGhostCindyModelActions(next);
+  if (decision.mode === 'exempt') return declared;
+  if (decision.mode !== 'confirmed') return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return declared.filter(action => shown?.some(item => item.key === `cindy:models.${action}`));
 }
 export function confirmedEventTopics(decision: GhostInstallConsentDecision, installed: InstalledGhost | null | undefined, next: GhostManifest): GhostTaskEventTopic[] {
   if (decision.mode !== 'confirmed') return [];

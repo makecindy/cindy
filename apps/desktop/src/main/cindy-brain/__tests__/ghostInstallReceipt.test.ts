@@ -457,6 +457,27 @@ describe('GhostInstallReceiptStore cleanup', () => {
     expect(await fs.promises.readFile(file, 'utf8')).toBe(previousBytes);
   });
 
+  // Unit: old persisted manifests remain enabled, without converting previously unknown data into authority.
+  it('keeps legacy model declarations inert and round trips only explicit model grants', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.cindy = { image: ['generate'] };
+    await store.write(receipt);
+    const file = path.join(stateRoot, 'hello.json');
+    const historical = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+    historical.manifest.cindy.models = {};
+    await fs.promises.writeFile(file, JSON.stringify(historical));
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { enabled: true,
+      manifest: { cindy: { image: ['generate'] } } } });
+    receipt.manifest.cindy.models = ['rerank'];
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('legacy receipt rejected');
+    expect(old.receipt.approvedCindyModelActions).toBeUndefined();
+    await store.write({ ...old.receipt, approvedCindyModelActions: ['rerank', 'decisions'] });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { enabled: true,
+      approvedCindyModelActions: ['rerank'], revision: receipt.revision } });
+  });
+
   it('round trips approved control points and keeps older receipts approved without them', async () => {
     const receipt = createSetupReceipt();
     receipt.manifest.subscribe = { hooks: ['will-routine-run', 'will-later-point'] as never };

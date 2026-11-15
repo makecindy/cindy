@@ -3728,7 +3728,7 @@ function ModelSelectorContentView({
               pinnedTopHasRows: (pluginModels ? matchPluginModels(pluginModels.models, query).length > 0 : false)
                 || (!!modelGroups && matchModelGroupRows(modelGroupRows, query) > 0),
             } : {})}
-            {...(modelGroups ? {
+            {...(modelGroups && modelGroupRows.length > 0 ? {
               modelGroupsView: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} />,
               favoritesPinned: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} variant="favorites" />,
               favoritesPinnedHasRows: favoriteModelGroupCount > 0,

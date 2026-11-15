@@ -8265,6 +8265,8 @@
         "cindyTextOneshot": "Peut poser une question à la voie rapide de Cindy et recevoir une réponse texte",
         "cindyTextOneshotDetail": "Utilise la chaîne de modèles utilitaires légers du système (la même voie que les titres automatiques). Aucun Agent impliqué et aucun accès aux fichiers. Des frais de modèle peuvent s'appliquer.",
         "cindyEmbedText": "Peut envoyer du texte à convertir en vecteurs (pour la recherche sémantique)",
+        "cindyModelsDecisions": "Peut utiliser les modèles de décision (consomme votre quota de modèles)",
+        "cindyModelsRerank": "Peut utiliser les modèles de reclassement (consomme votre quota de modèles)",
         "cindyEmbedTextDetail": "Le texte est envoyé au modèle d'embedding du système et converti en nombres, jusqu'à {{max}} éléments par appel. Des frais de modèle peuvent s'appliquer. Les vecteurs sont transmis uniquement au plugin : rien n'est écrit dans votre propre bibliothèque.",
         "cindySearchWeb": "Peut effectuer des recherches sur le Web public avec Cindy AI",
         "cindySearchWebDetail": "Les requêtes de recherche accèdent au Web public et peuvent consommer du quota Cindy AI.",
@@ -9449,6 +9451,7 @@
     "backToLogin": "Retour à la connexion"
   },
   "login": {
+    "networkResponseHint": "Le service de connexion a renvoyé une réponse inattendue. Un intermédiaire réseau ou un proxy bloque peut-être la requête. Vérifiez les paramètres réseau et proxy.",
     "title": "Bienvenue dans Cindy",
     "subtitle": "Choisissez un moyen sécurisé de vous connecter",
     "savedLoginPreserved": "La récupération conserve vos informations de connexion enregistrées",
@@ -9795,6 +9798,7 @@
     "tokenLine": "Jetons : {{total}} au total · entrée {{input}} · sortie {{output}}",
     "cacheLine": "Détail du cache : lecture {{read}} · écriture {{create}} · taux de succès {{rate}}",
     "cacheLineNoRate": "Détail du cache : lecture {{read}} · écriture {{create}}",
+    "stepsLine": "Requêtes ce tour : {{steps}} · env. {{context}} de contexte chacune",
     "modelLine": "Modèle : {{model}}",
     "multipleModels": "{{count}} modèles",
     "costBreakdownHeader": "Par modèle :",
@@ -14050,6 +14054,7 @@
         "realtime": "Audio en temps réel",
         "embedding": "Embeddings",
         "decision": "Décision",
+        "rerank": "Reclassement",
         "compression": "Compression",
         "ungrouped": "Non groupés",
         "other": "Autres"
@@ -17382,9 +17387,8 @@
         "automatic": "Automatique",
         "manually": "Manuellement",
         "session": "Session",
-        "silentRun": "Rester silencieux quand les vérifications ne trouvent rien",
-        "silentRunTooltip": "Signaler uniquement les changements ou les problèmes. Désactivez cette option pour les rappels et les messages planifiés.",
-        "silentRunInfoAria": "Voir les règles d'exécution silencieuse",
+        "silentRun": "Exécution silencieuse",
+        "silentRunTooltip": "Lorsque cette option est activée, les exécutions réussies ne notifient pas par défaut. Si le prompt de la tâche demande une notification dans certaines conditions, l'IA la signalera lorsqu'elles sont remplies. Les échecs et les erreurs sont toujours notifiés.",
         "finishSendToFeishu": "Envoyer le résultat à FeishuBot",
         "finishSendToWecomGroup": "Envoyer le résultat au groupe WeCom",
         "configWecomGroup": "Configurer les notifications du groupe WeCom",
@@ -17494,10 +17498,7 @@
       },
       "layout": {
         "content": "Contenu à exécuter",
-        "notifications": "Notifications et exécution silencieuse",
-        "contentTab": "Contenu et déclenchement",
-        "optionsTab": "Options d’exécution",
-        "sections": "Paramètres de l’automatisation"
+        "notifications": "Notifications et exécution silencieuse"
       },
       "webhook": {
         "quotaHint": "Les réceptions Webhook sont limitées par jour et le filtrage ici ne réduit pas ce nombre. Chez l'expéditeur, comme GitHub, sélectionnez uniquement les événements utiles.",

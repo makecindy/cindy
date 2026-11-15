@@ -47,6 +47,11 @@ Mobile 另外保留双端一致性测试用的 `session-primary` 与 Orca 两条
 
 ## Desktop
 
+登录服务的非 JSON 网络错误用 `XDT_LOGIN_SCENARIO=providers:non-json-418` 验证：
+它只在开发构建将登录方式 GET 替换为合成的 418 HTML 响应（`server` / `via` 为
+`scenario-proxy`），经过真实 auth client、诊断脱敏与登录页；不代表复现了报告人的网络。
+此场景属于登录流程测试，不加会跳过登录页的 `--mock`。正式构建仍由同一 fixture stub 排除。
+
 ```bash
 pnpm restart:desktop:remote -- --mock
 pnpm restart:desktop:remote -- --mock --isolated=<名字>   # 另开一份模拟沙箱，可与别的 worktree 并行
