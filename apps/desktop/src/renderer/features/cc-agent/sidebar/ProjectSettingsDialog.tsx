@@ -260,6 +260,7 @@ export function ProjectSettingsDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="modal-scrim fixed inset-0 z-50" />
         <Dialog.Content
+          onInteractOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => {
             if (editingName) {
               event.preventDefault();
@@ -318,7 +319,7 @@ export function ProjectSettingsDialog({
                     disabled={!available || busy}
                     onClick={openPicker}
                     aria-label={label('changeIcon')}
-                    className="group relative flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-hover-soft)] text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
+                    className="group relative flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-hover-soft)] text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                   >
                     {draw(icon, isProjectImage(icon) || isProjectImageDraft(icon) ? 64 : 36)}
                     <span
@@ -358,7 +359,7 @@ export function ProjectSettingsDialog({
                           nameBeforeEdit.current = name;
                           setEditingName(true);
                         }}
-                        className="group flex min-h-9 max-w-full items-center gap-2 rounded-md text-left text-20 font-medium text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
+                        className="group flex min-h-9 max-w-full items-center gap-2 rounded-md text-left text-20 font-medium text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                       >
                         <span className="truncate">{name.trim() || defaultName}</span>
                         <Pencil

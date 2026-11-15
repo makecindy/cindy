@@ -84,12 +84,13 @@ const EMPTY: AutomaticProjectIcon = { image: null, source: '', kind: 'none', can
 
 export async function resolveAutomaticProjectIcon(input: unknown): Promise<AutomaticProjectIcon> {
   const body = requireObject(input, 'input');
-  const key =
+  const parsedKey =
     typeof body.projectKey === 'string' && body.projectKey.length <= 4096
       ? normalizeProjectKey(body.projectKey)
       : null;
-  if (!key || (!key.startsWith('local:') && !key.startsWith('remote:')))
+  if (!parsedKey || (!parsedKey.startsWith('local:') && !parsedKey.startsWith('remote:')))
     throwIpcError('INVALID_PARAMS', 'Invalid project identity');
+  const key = projectKeyComparisonKey(parsedKey, process.platform) ?? parsedKey;
   const owner = getActiveDataOwnerPushStamp();
   const assertCurrent = () => {
     const next = getActiveDataOwnerPushStamp();
@@ -107,12 +108,33 @@ export async function resolveAutomaticProjectIcon(input: unknown): Promise<Autom
   if (pending.size >= 128) return EMPTY;
   const run = async () => {
     // Only projects already belonging to this account can cause file or network reads.
+    const separator = key.startsWith('remote:') ? key.indexOf(':', 7) : -1;
+    const host = separator >= 0 ? decodeURIComponent(key.slice(7, separator)) : null;
+    const directory = host ? key.slice(separator + 1) : key.slice(6);
+    const collation = !host && process.platform === 'win32' ? 'NOCASE' : 'BINARY';
+    // Filter in SQL before materializing history; JS below retains the exact grouping check.
+    const directorySql = "replace(rtrim(coalesce(project_dir, working_dir), '/\\'), char(92), '/')";
+    const prefix = directory.replace(/[\\%_]/g, '\\$&').replace(/\/$/, '') + '/%';
     const rows = await getDbClient().query<{
       workingDir: string | null;
       projectDir: string | null;
       remoteHostId: string | null;
     }>(
-      'SELECT DISTINCT working_dir AS workingDir, project_dir AS projectDir, remote_host_id AS remoteHostId FROM sessions UNION SELECT path AS workingDir, NULL AS projectDir, NULL AS remoteHostId FROM recent_workdirs',
+      `SELECT DISTINCT working_dir AS workingDir, project_dir AS projectDir, remote_host_id AS remoteHostId
+       FROM sessions WHERE coalesce(remote_host_id, '') = ? AND
+       (${directorySql} = ? COLLATE ${collation} OR ${directorySql} LIKE ? ESCAPE char(92))
+       UNION SELECT path AS workingDir, NULL AS projectDir, NULL AS remoteHostId
+       FROM recent_workdirs WHERE ? = '' AND
+       (replace(rtrim(path, '/\\'), char(92), '/') = ? COLLATE ${collation}
+        OR replace(path, char(92), '/') LIKE ? ESCAPE char(92))`,
+      [
+        host ?? '',
+        directory.replace(/[\\/]+$/, ''),
+        prefix,
+        host ?? '',
+        directory.replace(/[\\/]+$/, ''),
+        prefix,
+      ],
     );
     assertCurrent();
     const known = rows.some((row) => {

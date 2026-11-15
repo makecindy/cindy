@@ -1,3 +1,4 @@
+import Database from 'better-sqlite3';
 // Unit: host cache ownership and manual/automatic separation are new boundaries.
 import { beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
@@ -121,4 +122,34 @@ it('refuses insecure redirects and bounds response bytes through the guarded tra
     return null;
   });
   await resolveAutomaticProjectIcon({ projectKey: 'local:/repo' });
+});
+
+// Review #10636: validate SQL filtering with real SQLite; the original fake returned all history.
+// Unit tier: in-memory tables, no migration or external IO. Minimal history includes membership,
+// a grouped worktree, an unrelated nested directory and a recent directory with SQL wildcards.
+it('filters history by project while preserving worktrees, explicit membership and literal paths', async () => {
+  const db = new Database(':memory:');
+  try {
+    db.exec(`CREATE TABLE sessions (working_dir TEXT, project_dir TEXT, remote_host_id TEXT);
+      CREATE TABLE recent_workdirs (path TEXT);
+      INSERT INTO sessions VALUES ('/repo/.cindy-worktrees/task', NULL, NULL),
+        ('/elsewhere', '/member', NULL), ('/repo/nested', NULL, NULL);
+      INSERT INTO recent_workdirs VALUES ('/with_%/');`);
+    h.query.mockImplementation(async (sql: string, params: any[]) =>
+      db.prepare(sql).all(...params),
+    );
+    for (const directory of ['/repo', '/member', '/with_%']) {
+      h.entries = {};
+      expect(await resolveAutomaticProjectIcon({ projectKey: `local:${directory}` })).toEqual(
+        artwork,
+      );
+    }
+    h.discover.mockClear();
+    expect(await resolveAutomaticProjectIcon({ projectKey: 'local:/with_X' })).toMatchObject({
+      image: null,
+    });
+    expect(h.discover).not.toHaveBeenCalled();
+  } finally {
+    db.close();
+  }
 });

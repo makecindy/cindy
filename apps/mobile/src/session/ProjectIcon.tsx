@@ -29,6 +29,8 @@ import {
   lineHeight,
   type ThemeColors,
   radius,
+  fontWeight,
+  iconStroke,
 } from "@/theme";
 import { projectSymbolIcons } from "./projectSymbolIcons";
 export function ProjectIcon({
@@ -53,34 +55,45 @@ export function ProjectIcon({
     deviceId,
     value === null && automaticEnabled && !!projectKey,
   );
-  const [loaded, setLoaded] = useState<{ value: string; data: string } | null>(
-    null,
-  );
+  const imageIdentity = JSON.stringify([
+    getMobileAuthOwner(),
+    deviceId ?? null,
+    projectKey,
+    value,
+  ]);
+  const [loaded, setLoaded] = useState<{
+    identity: string;
+    data: string;
+  } | null>(null);
   useEffect(() => {
     if (!isProjectImage(value) || !deviceId) return;
     let active = true;
     const owner = getMobileAuthOwner();
-    void invoke(deviceId, PROJECT_ICON_IMAGE_CHANNEL, [{ projectKey }])
-      .then((data) => {
+    void sharedIconRequest(imageIdentity, () =>
+      invoke(deviceId, PROJECT_ICON_IMAGE_CHANNEL, [{ projectKey }]).then(
+        (data) => (typeof data === "string" ? data : null),
+      ),
+    )
+      .promise.then((data) => {
         if (
           active &&
           typeof data === "string" &&
           isMobileAuthOwnerCurrent(owner)
         )
-          setLoaded({ value, data });
+          setLoaded({ identity: imageIdentity, data });
       })
       .catch(() => {});
     return () => {
       active = false;
     };
-  }, [value, projectKey, deviceId, invoke]);
+  }, [imageIdentity, invoke]);
   const [failedSource, setFailedSource] = useState<string | null>(null);
   const source =
     value === null && !automatic.result?.candidate
       ? automatic.result?.image
       : isProjectImageDraft(value)
         ? value
-        : loaded?.value === value
+        : loaded?.identity === imageIdentity
           ? loaded.data
           : null;
   if (source && source !== failedSource)
@@ -95,11 +108,20 @@ export function ProjectIcon({
   const letters =
     parseProjectLetters(value) ??
     (!value || isProjectImage(value) || isProjectImageDraft(value)
-      ? { text: defaultProjectLetters(projectName), color: defaultProjectColor(projectName) }
+      ? {
+          text: defaultProjectLetters(projectName),
+          color: defaultProjectColor(projectName),
+        }
       : null);
   if (letters) {
     const white = letters.color === "white";
-    const ink = letters.color === "default" ? colors.textPrimary : projectIconInk(projectIconColor(colors, letters.color), mode === "dark");
+    const ink =
+      letters.color === "default"
+        ? colors.textPrimary
+        : projectIconInk(
+            projectIconColor(colors, letters.color),
+            mode === "dark",
+          );
     return (
       <View
         style={{
@@ -118,11 +140,9 @@ export function ProjectIcon({
           allowFontScaling={false}
           adjustsFontSizeToFit
           style={{
-            color: white
-              ? colors.taskTagWhiteCheck
-              : ink,
+            color: white ? colors.taskTagWhiteCheck : ink,
             textAlign: "center",
-            fontWeight: "600",
+            fontWeight: fontWeight.semibold,
             fontSize: size >= 32 ? typeScale.title : typeScale.micro,
             lineHeight: size >= 32 ? lineHeight.title : lineHeight.micro,
           }}
@@ -132,6 +152,7 @@ export function ProjectIcon({
       </View>
     );
   }
+  const compactSymbolSize = size * 0.75;
   const Icon = symbol ? projectSymbolIcons[symbol.name] : Folder;
   if (symbol?.color === "white")
     return (
@@ -148,9 +169,9 @@ export function ProjectIcon({
         }}
       >
         <Icon
-          size={size * 0.75}
+          size={compactSymbolSize}
           color={colors.taskTagWhiteCheck}
-          strokeWidth={1.6}
+          strokeWidth={iconStroke.project}
         />
       </View>
     );
@@ -159,7 +180,7 @@ export function ProjectIcon({
       <Icon
         size={size}
         color={projectIconColor(colors, symbol?.color ?? "default")}
-        strokeWidth={1.6}
+        strokeWidth={iconStroke.project}
       />
     );
   return (
@@ -199,9 +220,9 @@ export function projectIconColor(
 }
 
 // Shared by list and settings previews: one host request per account/device/project.
-const automaticCache = new Map<
+const iconCache = new Map<
   string,
-  { until: number; promise: Promise<AutomaticProjectIcon | null> }
+  { until: number; promise: Promise<AutomaticProjectIcon | string | null> }
 >();
 export function useAutomaticProjectIcon(
   projectKey: string,
@@ -220,21 +241,18 @@ export function useAutomaticProjectIcon(
     if (!enabled || !deviceId) return;
     let live = true;
     setState({ identity, result: null, loading: true });
-    let item = automaticCache.get(identity);
-    if (!item || item.until < Date.now()) {
-      if (automaticCache.size >= 256) automaticCache.clear();
-      const promise = Promise.resolve()
-        .then(() =>
-          invoke(deviceId, PROJECT_AUTO_ICON_CHANNEL, [{ projectKey }]),
-        )
-        .then(parseAutomaticProjectIcon)
-        .catch(() => null);
-      item = { until: Date.now() + 60_000, promise };
-      automaticCache.set(identity, item);
-    }
+    const item = sharedIconRequest(identity, () =>
+      Promise.resolve(
+        invoke(deviceId!, PROJECT_AUTO_ICON_CHANNEL, [{ projectKey }]),
+      ).then(parseAutomaticProjectIcon),
+    );
     void item.promise.then((result) => {
       if (live && isMobileAuthOwnerCurrent(owner))
-        setState({ identity, result, loading: false });
+        setState({
+          identity,
+          result: typeof result === "string" ? null : result,
+          loading: false,
+        });
     });
     return () => {
       live = false;
@@ -243,4 +261,22 @@ export function useAutomaticProjectIcon(
   return state?.identity === identity
     ? state
     : { result: null, loading: enabled && !!deviceId };
+}
+
+function sharedIconRequest(
+  identity: string,
+  read: () => Promise<AutomaticProjectIcon | string | null>,
+) {
+  let item = iconCache.get(identity);
+  if (!item || item.until < Date.now()) {
+    if (iconCache.size >= 256) iconCache.clear();
+    item = {
+      until: Date.now() + 60_000,
+      promise: Promise.resolve()
+        .then(read)
+        .catch(() => null),
+    };
+    iconCache.set(identity, item);
+  }
+  return item;
 }

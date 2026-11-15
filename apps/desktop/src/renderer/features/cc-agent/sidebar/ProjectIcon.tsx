@@ -39,31 +39,46 @@ export function ProjectIcon({
     deviceId,
     value === null && automaticEnabled && !!projectKey,
   );
-  const [loaded, setLoaded] = useState<{ value: string; data: string } | null>(null);
+  const imageIdentity = JSON.stringify([
+    getDataOwnerGeneration(),
+    deviceId ?? null,
+    projectKey,
+    value,
+  ]);
+  const [loaded, setLoaded] = useState<{ identity: string; data: string } | null>(null);
   useEffect(() => {
     if (!isProjectImage(value)) return;
     let active = true;
     const owner = getDataOwnerGeneration();
-    const read = deviceId
-      ? window.electronAPI.deviceLink.invoke(deviceId, PROJECT_ICON_IMAGE_CHANNEL, [{ projectKey }])
-      : window.electronAPI.localDb.projectAliases.iconImage({ projectKey });
-    void read
+    const read = sharedIconRequest(imageIdentity, () =>
+      Promise.resolve(
+        deviceId
+          ? window.electronAPI.deviceLink.invoke(
+              deviceId,
+              PROJECT_ICON_IMAGE_CHANNEL,
+              [{ projectKey }],
+              { background: true },
+            )
+          : window.electronAPI.localDb.projectAliases.iconImage({ projectKey }),
+      ).then((data) => (typeof data === 'string' ? data : null)),
+    );
+    void read.promise
       .then((data) => {
         if (active && typeof data === 'string' && isDataOwnerGenerationCurrent(owner))
-          setLoaded({ value, data });
+          setLoaded({ identity: imageIdentity, data });
       })
       .catch(() => {});
     return () => {
       active = false;
     };
-  }, [value, projectKey, deviceId]);
+  }, [imageIdentity]);
   const [failedSource, setFailedSource] = useState<string | null>(null);
   const source =
     value === null && !automatic.result?.candidate
       ? automatic.result?.image
       : isProjectImageDraft(value)
         ? value
-        : loaded?.value === value
+        : loaded?.identity === imageIdentity
           ? loaded.data
           : null;
   if (source && source !== failedSource)
@@ -124,16 +139,16 @@ export function ProjectIcon({
         }}
         aria-hidden
       >
-        <svg viewBox="0 0 16 16" className="size-full" focusable="false">
+        <svg viewBox="0 0 32 32" className="size-full" focusable="false">
           <text
-            x="8"
-            y="8"
+            x="16"
+            y="16"
             dominantBaseline="central"
             textAnchor="middle"
             fill="currentColor"
-            fontSize="8"
+            fontSize="16"
             fontWeight="600"
-            textLength={Array.from(letters.text).length > 1 ? 11 : 6}
+            textLength={Array.from(letters.text).length > 1 ? 22 : 12}
             lengthAdjust="spacingAndGlyphs"
           >
             {letters.text}
@@ -156,9 +171,9 @@ export function ProjectIcon({
 }
 
 // Shared by list and settings previews: one host request per account/device/project.
-const automaticCache = new Map<
+const iconCache = new Map<
   string,
-  { until: number; promise: Promise<AutomaticProjectIcon | null> }
+  { until: number; promise: Promise<AutomaticProjectIcon | string | null> }
 >();
 export function useAutomaticProjectIcon(
   projectKey: string,
@@ -176,32 +191,43 @@ export function useAutomaticProjectIcon(
     if (!enabled) return;
     let live = true;
     setState({ identity, result: null, loading: true });
-    let item = automaticCache.get(identity);
-    if (!item || item.until < Date.now()) {
-      if (automaticCache.size >= 256) automaticCache.clear();
-      const promise = Promise.resolve()
-        .then(() =>
-          deviceId
-            ? window.electronAPI.deviceLink.invoke(
-                deviceId,
-                PROJECT_AUTO_ICON_CHANNEL,
-                [{ projectKey }],
-                { background: true },
-              )
-            : window.electronAPI.localDb.projectAliases.autoIcon({ projectKey }),
-        )
-        .then(parseAutomaticProjectIcon)
-        .catch(() => null);
-      item = { until: Date.now() + 60_000, promise };
-      automaticCache.set(identity, item);
-    }
+    const item = sharedIconRequest(identity, () =>
+      Promise.resolve(
+        deviceId
+          ? window.electronAPI.deviceLink.invoke(
+              deviceId,
+              PROJECT_AUTO_ICON_CHANNEL,
+              [{ projectKey }],
+              { background: true },
+            )
+          : window.electronAPI.localDb.projectAliases.autoIcon({ projectKey }),
+      ).then(parseAutomaticProjectIcon),
+    );
     void item.promise.then((result) => {
       if (live && isDataOwnerGenerationCurrent(owner))
-        setState({ identity, result, loading: false });
+        setState({ identity, result: typeof result === 'string' ? null : result, loading: false });
     });
     return () => {
       live = false;
     };
   }, [identity, enabled]);
   return state?.identity === identity ? state : { result: null, loading: enabled };
+}
+
+function sharedIconRequest(
+  identity: string,
+  read: () => Promise<AutomaticProjectIcon | string | null>,
+) {
+  let item = iconCache.get(identity);
+  if (!item || item.until < Date.now()) {
+    if (iconCache.size >= 256) iconCache.clear();
+    item = {
+      until: Date.now() + 60_000,
+      promise: Promise.resolve()
+        .then(read)
+        .catch(() => null),
+    };
+    iconCache.set(identity, item);
+  }
+  return item;
 }

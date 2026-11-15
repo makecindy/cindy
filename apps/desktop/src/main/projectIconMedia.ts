@@ -1,3 +1,4 @@
+import { projectKeyComparisonKey } from '../shared/projectKeys.js';
 import sharp from 'sharp';
 import { createBlobStore } from './cindy-media/blobStore.js';
 import { createMediaIngest } from './cindy-media/ingestCore.js';
@@ -12,6 +13,11 @@ import {
 import { getDbClient } from './localDb/client/current.js';
 import { isProjectImageDraft, isProjectImage } from '@cindy/maker-shared/project-alias-sync';
 import { throwIpcError } from './utils/ipcValidate.js';
+function mediaProjectKey(key: string): string {
+  return key.startsWith('auto:')
+    ? `auto:${projectKeyComparisonKey(key.slice(5), process.platform) ?? key.slice(5)}`
+    : (projectKeyComparisonKey(key, process.platform) ?? key);
+}
 const blobs = createBlobStore({ getUserDataDir });
 const journal = createMediaRefCompensationJournal({
   getUserDataDir,
@@ -48,7 +54,9 @@ export async function importProjectIcon(
       buffer,
       mimeType: 'image/png',
       isCache: false,
-      refs: [{ refKind: 'integration-cache', refId: `project-icon:${projectKey}` }],
+      refs: [
+        { refKind: 'integration-cache', refId: `project-icon:${mediaProjectKey(projectKey)}` },
+      ],
       assertStillValid: assertCurrent,
       refCompensationScope: scope,
     },
@@ -64,7 +72,10 @@ export async function releasePreviousProjectImages(
 ) {
   assertCurrent();
   const db = getDbClient().drizzle;
-  const params = { refKind: 'integration-cache' as const, refId: `project-icon:${projectKey}` };
+  const params = {
+    refKind: 'integration-cache' as const,
+    refId: `project-icon:${mediaProjectKey(projectKey)}`,
+  };
   if (isProjectImage(icon))
     await removeRefsExceptHash({ ...params, keepHash: blobs.parseBlobUrl(icon)!.hash }, db);
   else await removeRefs(params, db);

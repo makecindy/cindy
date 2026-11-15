@@ -1,3 +1,4 @@
+import { Tip } from '@/components/ui/tooltip';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -45,22 +46,23 @@ export function SessionProjectSettingsButton({
     )?.alias || project.displayName;
   return (
     <>
-      <button
-        type="button"
-        aria-label={t('projectSettings.title')}
-        title={t('projectSettings.title')}
-        disabled={disabled}
-        onClick={() => setOpen(true)}
-        style={WINDOW_NO_DRAG_STYLE}
-        className="mr-1 inline-flex size-5 shrink-0 items-center justify-center rounded-md hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] disabled:opacity-50"
-      >
-        <ResolvedProjectIcon
-          directory={identity.workingDir}
-          remoteHostId={session.remoteHostId}
-          deviceId={session.deviceLinkDeviceId}
-          size={20}
-        />
-      </button>
+      <Tip text={t('projectSettings.title')}>
+        <button
+          type="button"
+          aria-label={t('projectSettings.title')}
+          disabled={disabled}
+          onClick={() => setOpen(true)}
+          style={WINDOW_NO_DRAG_STYLE}
+          className="mr-1 inline-flex size-5 shrink-0 items-center justify-center rounded-md hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
+        >
+          <ResolvedProjectIcon
+            directory={identity.workingDir}
+            remoteHostId={session.remoteHostId}
+            deviceId={session.deviceLinkDeviceId}
+            size={20}
+          />
+        </button>
+      </Tip>
       {open && <ProjectSettingsDialog project={project} onClose={() => setOpen(false)} />}
     </>
   );

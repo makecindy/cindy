@@ -97,3 +97,25 @@ it('removes only superseded references and bounds the image read response', asyn
   h.read.mockResolvedValue({ buffer: Buffer.alloc(300001) });
   await expect(readProjectIconBytes(uri)).rejects.toThrow('INVALID_PARAMS');
 });
+
+// Review #10636: Windows case aliases must own the same media reference on import and reset.
+// Existing coverage only used POSIX paths. Unit tier; two spellings are the minimal regression.
+it('uses the same Windows media owner for import, replacement and automatic images', async () => {
+  vi.stubGlobal('process', { ...process, platform: 'win32' });
+  try {
+    const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#336699' } })
+      .png()
+      .toBuffer();
+    for (const prefix of ['', 'auto:']) {
+      await importProjectIcon(
+        `data:image/png;base64,${png.toString('base64')}`,
+        `${prefix}local:C:/Repo`,
+        () => {},
+      );
+      await releasePreviousProjectImages(`${prefix}local:c:/repo`, null, () => {});
+      expect(h.ingest.mock.lastCall![0].refs[0]).toEqual(h.remove.mock.lastCall![0]);
+    }
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

@@ -32,7 +32,7 @@ import {
   MainWindowActionButton,
   MainWindowOptionButton,
 } from "@/components/MobilePrimitives";
-import { useTheme, radius, spacing, typeScale, lineHeight } from "@/theme";
+import { useTheme, radius, spacing, typeScale, lineHeight, fontWeight, iconSize } from "@/theme";
 import { FormSheet } from "./FormSheet";
 import {
   useRemoteProjectAliases,
@@ -357,7 +357,7 @@ export function ProjectSettingsSheet({
                       { backgroundColor: colors.surfaceChip },
                     ]}
                   >
-                    <Pencil size={14} color={colors.textSecondary} />
+                    <Pencil size={iconSize.sm} color={colors.textSecondary} />
                   </View>
                 </View>
               </Pressable>
@@ -400,7 +400,7 @@ export function ProjectSettingsSheet({
                     >
                       {name.trim() || defaultName}
                     </Text>
-                    <Pencil size={14} color={colors.textSecondary} />
+                    <Pencil size={iconSize.sm} color={colors.textSecondary} />
                   </Pressable>
                 )}
                 {name !== defaultName && (
@@ -447,7 +447,7 @@ export function ProjectSettingsSheet({
               )}
             <View style={styles.location}>
               <View style={styles.computer}>
-                <Monitor size={16} color={colors.textSecondary} />
+                <Monitor size={iconSize.md} color={colors.textSecondary} />
                 <Text style={[styles.note, noteColor]}>
                   {deviceName || label("thisComputer")}
                 </Text>
@@ -472,9 +472,9 @@ export function ProjectSettingsSheet({
                   }
                 >
                   {copied ? (
-                    <Check size={18} color={colors.textSecondary} />
+                    <Check size={iconSize.lg} color={colors.textSecondary} />
                   ) : (
-                    <Copy size={18} color={colors.textSecondary} />
+                    <Copy size={iconSize.lg} color={colors.textSecondary} />
                   )}
                 </Pressable>
               </View>
@@ -576,7 +576,7 @@ export function ProjectSettingsSheet({
                       {colorLabel(pickerColor)}
                     </Text>
                     <ChevronDown
-                      size={16}
+                      size={iconSize.md}
                       color={colors.textSecondary}
                       style={{
                         transform: [{ rotate: colorOpen ? "180deg" : "0deg" }],
@@ -630,7 +630,7 @@ export function ProjectSettingsSheet({
                         {colorLabel("default")}
                       </Text>
                       {pickerColor === "default" && (
-                        <Check size={14} color={colors.textPrimary} />
+                        <Check size={iconSize.sm} color={colors.textPrimary} />
                       )}
                     </Pressable>
                     <View
@@ -876,7 +876,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: typeScale.title,
     lineHeight: lineHeight.title,
-    fontWeight: "600",
+    fontWeight: fontWeight.semibold,
   },
   note: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   path: { fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },

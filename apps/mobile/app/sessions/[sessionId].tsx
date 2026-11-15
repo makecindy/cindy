@@ -11923,7 +11923,7 @@ function SessionHeaderBar({
             onPress={() => setProjectSettingsOpen(true)} hitSlop={12}
             style={{ width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}>
             <ProjectPickerIcon deviceId={deviceId} workingDir={projectDirectory}
-              remoteHostId={currentSession?.remoteHostId} size={20} />
+              remoteHostId={currentSession?.remoteHostId} size={iconSize.action} />
           </Pressable>
         : null
     : null, [messageOnly, isDeviceAccessRevoked, sharedTaskEnded, currentSession?.workspaceKind, currentSession?.remoteHostId, canShowProject, projectDirectory, colors.textSecondary, deviceId, t]);
@@ -12030,8 +12030,9 @@ function SessionHeaderBar({
         />
       )}
 
-      {nativeHeader ? <SessionHeaderNativeTitle projectIcon={projectIcon}
+      {nativeHeader ? <SessionHeaderNativeTitle
         title={sharedTaskEnded ? t('sharedTask.ended') : title}
+        projectIcon={projectIcon}
           tags={isDeviceAccessRevoked ? undefined : currentSession?.tags}
           onTagsPress={onOpenSettings}
           onTitleDoubleTap={titleDoubleTap}

@@ -5281,7 +5281,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   style={({ pressed }) => [styles.selectorRow, pressed && styles.pressed]}
                   testID="newSession.workspaceSelector"
                 >
-                  {draft.workspaceKind === 'project' && draft.workingDir && selectedDeviceId ? <ProjectPickerIcon deviceId={selectedDeviceId} workingDir={draft.workingDir} title={workspaceLabel} size={20} /> : <WorkspaceIcon color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />}
+                  {draft.workspaceKind === 'project' && draft.workingDir && selectedDeviceId ? <ProjectPickerIcon deviceId={selectedDeviceId} workingDir={draft.workingDir} title={workspaceLabel} size={iconSize.action} /> : <WorkspaceIcon color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />}
                   <Text style={styles.selectorText} numberOfLines={1}>{workspaceLabel}</Text>
                   <ChevronsUpDown color={colors.borderStrong} size={iconSize.sm} strokeWidth={iconStroke.regular} />
                 </Pressable>
