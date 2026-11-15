@@ -328,6 +328,7 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
 - **间距 `spacing`**:`xs 4 · sm 8 · md 12 · lg 16 · xl 24 · xxl 32`(基数 4)。避免 `2 / 6 / 13 / 17` 这类裸数字;1-2pt 的微调若实在需要,集中、少量、写注释。
 - **圆角 `radius`**:四档阶梯——`micro 4` / `control 8` / `container 12` / `pill 9999`(定义与各档用途见 `src/theme/tokens.ts`,守护测试 `designTokenDiscipline.test.ts` 拦截字面量与 token 算术)。**禁止**阶梯外值。
 - **触控目标**:主操作命中区 ≥ 44×44(iOS HIG)。可见图标可小(14–18),用 `hitSlop` 或不可见外层把热区补到 44。
+- **任务页侧边系统栏**：系统导航移到左／右侧时，紧凑任务页标题行在顶部安全区之外至少保留 `spacing.md`（12pt）留白；常驻任务列表布局保留已有 `spacing.lg`（16pt）。输入框下沿继续使用系统底部安全区 + `composerGeometry.restingGap`（8pt），不因系统手势条隐藏而扣除安全区。
 - **安全区**:屏幕根用 `SafeAreaView`(react-native-safe-area-context);需要精确 inset 用 `useSafeAreaInsets()`。键盘遮挡用 `KeyboardAvoidingView` + inset,务必开软键盘实测。
 
 ---
