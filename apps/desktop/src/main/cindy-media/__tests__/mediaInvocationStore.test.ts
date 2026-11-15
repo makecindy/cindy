@@ -8,6 +8,31 @@ import { countMediaInvocations, createMediaInvocation, getMediaInvocation, prune
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: vi.fn() }));
 
 describe('saved generation responses', () => {
+  // Unit, #4577782309: the existing capacity query must include saved pending
+  // rows when admitting a receipt copy; ordinary generation keeps its old slots.
+  it.each([
+    ['legacy result', '{"image":"saved"}', 0],
+    ['result receipt', '{"__cindyMediaReceipt":"result","result":{"movie":"saved"}}', 0],
+    ['submission receipt', '{"__cindyMediaReceipt":"submission","submission":{"job":"paid"}}', 128],
+  ] as const)('bounds copies of a %s without changing generation slots', async (_kind, responseJson, active) => {
+    const raw = new Database(':memory:');
+    try {
+      raw.exec(readFileSync(path.resolve(__dirname, '../../../../drizzle/0092_fixed_zeigeist.sql'), 'utf8'));
+      const insert = raw.prepare(`INSERT INTO media_invocations
+        (id, owner, model_id, capability, guide_revision, guide_json, state, response_json, created_at, updated_at)
+        VALUES (?, ?, 'model', 'image.generate', 'v1', '{}', 'pending', ?, 1, 1)`);
+      for (let index = 0; index < 128; index += 1) insert.run(`saved-${index}`, 'owner', responseJson);
+      insert.run('other-owner', 'other', responseJson);
+      const db = { exec: async (sql: string, args: unknown[]) => raw.prepare(sql).run(...args),
+        queryOne: async (sql: string, args: unknown[]) => raw.prepare(sql).get(...args) } as unknown as DbClient;
+      expect(await countMediaInvocations('owner', db)).toBe(active);
+      expect(await countMediaInvocations('owner', db, true)).toBe(128);
+      expect(await transitionMediaInvocation({ id: 'saved-0', owner: 'owner', from: 'pending', to: 'complete' }, db)).toBe(true);
+      expect(await countMediaInvocations('owner', db, true)).toBe(127);
+      expect(raw.prepare('SELECT COUNT(*) AS count FROM media_invocations').get()).toEqual({ count: 129 });
+    } finally { raw.close(); }
+  });
+
   it('saves an upstream task ID and its paid receipt in the same state transition', async () => {
     const raw = new Database(':memory:');
     try {

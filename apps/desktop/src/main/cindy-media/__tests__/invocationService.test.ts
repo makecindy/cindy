@@ -161,9 +161,11 @@ vi.mock('../mediaInvocationStore.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../mediaInvocationStore.js')>(),
   recoverInterruptedMediaInvocations: mocks.recover,
   pruneMediaInvocations: mocks.prune,
-  countMediaInvocations: async () =>
+  countMediaInvocations: async (owner: string, _db: unknown, includeSavedResults = false) =>
     [...mocks.rows.values()].filter((row) =>
-      ['prepared', 'submitting', 'pending'].includes(String(row.state)),
+      row.owner === owner && (['prepared', 'submitting'].includes(String(row.state)) ||
+        (row.state === 'pending' && (includeSavedResults || !row.responseJson ||
+          JSON.parse(String(row.responseJson)).__cindyMediaReceipt === 'submission'))),
     ).length,
   createMediaInvocation: async ({
     id,
@@ -552,6 +554,37 @@ describe('Cindy Core media invocation state and security boundary', () => {
 
   // Unit integration: repair the Guide through a new prepare and resume the
   // original paid receipt; neither recovery nor a repeated request may pay again.
+  // #4577782309: the old fake counted every pending row, masking the real SQL
+  // exemption for saved results. Exercise admission through prepare at capacity.
+  it.each(['sync', 'async'] as const)('bounds repeated %s receipt copies without submitting again', async mode => {
+    const capability = mode === 'sync' ? 'image.generate' : 'video.generate';
+    const op = mode === 'sync'
+      ? operation({ mode: 'sync', media: [{ path: ['wrong'], encoding: 'base64', kind: 'image' }] })
+      : recoveryVideoOperation(['job'], ['phase'], ['wrong']);
+    const { model } = setupGuideDriven(op);
+    const first = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json(mode === 'sync' ? { image: PNG.toString('base64') } : { job: 'paid-task' }));
+    await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } });
+    if (mode === 'async') {
+      mocks.outboundFetch.mockResolvedValueOnce(Response.json({ phase: 'ready', movie: MP4.toString('base64') }));
+      await callCindyMedia({ action: 'poll', invocationId: String(first.invocation_id) });
+    }
+    const source = structuredClone(mocks.rows.get(String(first.invocation_id))!);
+    expect(source).toMatchObject({ state: 'pending', responseJson: expect.any(String) });
+    for (let index = 0; index < 126; index += 1) mocks.rows.set(`copy-${index}`, { ...source, id: `copy-${index}` });
+    mocks.rows.set('other-owner', { ...source, id: 'other-owner', owner: 'other' });
+    const input = { action: 'prepare', providerId: model.providerId, modelId: model.id, capability,
+      sourceInvocationId: String(first.invocation_id) } as const;
+    expect(await callCindyMedia(input)).toMatchObject({ ok: true, status: 'pending' });
+    expect(await callCindyMedia(input)).toMatchObject({ ok: false, errorCode: 'TOO_MANY_INVOCATIONS' });
+    expect([...mocks.rows.values()].filter(row => row.owner === source.owner)).toHaveLength(128);
+    expect(mocks.rows.get(String(first.invocation_id))).toEqual(source);
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(mode === 'sync' ? 1 : 2);
+    expect(await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability }))
+      .toMatchObject({ ok: true, status: 'prepared' });
+    expect(mocks.outboundFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+  });
+
   it('recovers a paid image response with a newly prepared Guide and leaves the original snapshot fixed', async () => {
     const { model, value } = setupGuideDriven(operation({ mode: 'sync', media: [{ path: ['wrong'], encoding: 'base64', kind: 'image' }] }));
     const first = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });

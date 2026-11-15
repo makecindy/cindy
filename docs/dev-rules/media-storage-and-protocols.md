@@ -265,6 +265,8 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 - 声明式 HTTP 的提交回执和最近轮询回执保存在账号数据库已有的 `response_json`，以
   `__cindyMediaReceipt` 区分未完成回执与已生成结果；旧的直接结果 JSON 继续可读，不改物理 schema。
   未完成回执仍占在途名额并按原 TTL 清理；待交付结果沿用原恢复保留规则。
+  复制回执的 prepare 在既有 128 条名额检查中计入本账号所有 pending 记录，避免带结果的
+  回执副本绕过限制；回执内的上游响应沿用原字节上限，普通生成仍按原在途规则统计。
   回执不进入 Guide、日志或 Agent 输出。每次 poll 至多更新一份回执，内容未变不重复写入。
 - 升级时只解码旧快照的 `connection` 和旧视频 revision，不请求时重写历史记录，不改数据库
   物理 schema。旧 Guide ID 仅用于解码既有记录，不参与新调用选择。复用 Server 已有的公开协议读取接口，

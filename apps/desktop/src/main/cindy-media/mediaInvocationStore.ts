@@ -129,14 +129,15 @@ export async function pruneMediaInvocations(
 export async function countMediaInvocations(
   owner: string,
   db: DbClient = getDbClient(),
+  includeSavedResults = false,
 ): Promise<number> {
   const row = await db.queryOne<{ count: number }>(
     `SELECT COUNT(*) AS count
      FROM media_invocations
      WHERE owner = ? AND (state IN ('prepared', 'submitting')
-       OR (state = 'pending' AND (response_json IS NULL
+       OR (state = 'pending' AND (? = 1 OR response_json IS NULL
          OR substr(response_json, 1, ?) = ?)))`,
-    [owner, SUBMISSION_RECEIPT_PREFIX.length, SUBMISSION_RECEIPT_PREFIX],
+    [owner, includeSavedResults ? 1 : 0, SUBMISSION_RECEIPT_PREFIX.length, SUBMISSION_RECEIPT_PREFIX],
   );
   return Number(row?.count ?? 0);
 }

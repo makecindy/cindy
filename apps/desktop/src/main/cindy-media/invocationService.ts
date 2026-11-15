@@ -1391,7 +1391,8 @@ async function prepareInvocation(
   await pruneInvocations(owner, db);
   assertAuthScope(scope);
   const receipt = sourceInvocationId ? await preparePaidReceipt(preparedGuide, sourceInvocationId, scope, db) : undefined;
-  if ((await countMediaInvocations(owner, db)) >= MAX_INVOCATIONS) {
+  // Copying a saved result consumes storage even though it needs no generation.
+  if ((await countMediaInvocations(owner, db, receipt !== undefined)) >= MAX_INVOCATIONS) {
     return failure('TOO_MANY_INVOCATIONS', '媒体任务数量已达上限，请等待现有任务完成后重试');
   }
   assertAuthScope(scope);
