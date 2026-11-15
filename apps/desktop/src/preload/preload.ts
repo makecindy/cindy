@@ -5932,6 +5932,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // Sidebar identity state is owner-scoped in main and every mutation/push is generation-fenced.
+  taskManagement: {
+    read: () => ipcRenderer.invoke('task-management:request', { operation: 'read' }),
+    update: (patch: Partial<import('../shared/taskManagement').TaskArchiveSettings>, owner: import('../shared/taskManagement').TaskArchiveOwner) => ipcRenderer.invoke('task-management:request', { operation: 'update', patch, owner }),
+    reset: (owner: import('../shared/taskManagement').TaskArchiveOwner) => ipcRenderer.invoke('task-management:request', { operation: 'reset', owner }),
+    preview: (days?: number) => ipcRenderer.invoke('task-management:request', { operation: 'preview', days }),
+    undo: (batchId: string, owner: import('../shared/taskManagement').TaskArchiveOwner) => ipcRenderer.invoke('task-management:request', { operation: 'undo', batchId, owner }),
+    protect: (value: import('../shared/taskManagement').TaskArchiveProtection) => ipcRenderer.invoke('task-management:request', { operation: 'protect', value }),
+    onChanged: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on('task-management:changed', listener);
+      return () => ipcRenderer.removeListener('task-management:changed', listener);
+    },
+    onArchived: (callback: (notice: import('../shared/taskManagement').TaskArchiveNotice) => void) => {
+      const listener = (_event: unknown, notice: import('../shared/taskManagement').TaskArchiveNotice) => callback(notice);
+      ipcRenderer.on('task-management:archived', listener);
+      return () => ipcRenderer.removeListener('task-management:archived', listener);
+    },
+  },
   sidebarSettings: {
     claimLegacyRendererOwner: (): SidebarLegacyRendererOwnerClaim => {
       const value: unknown = ipcRenderer.sendSync(

@@ -21846,5 +21846,31 @@
     "switchOffer": {
       "action": "Continuer avec {{model}}"
     }
+  },
+  "taskManagement": {
+    "scope": "Uniquement pour ce compte sur cet ordinateur.",
+    "archive": "Archivage automatique",
+    "enabled": "Archiver les tâches inactives",
+    "description": "Archive automatiquement les tâches inactives. Leur historique reste accessible.",
+    "days": "Jours d’inactivité",
+    "daysHint": "Depuis le dernier message envoyé ou reçu, ou la fin d’une exécution.",
+    "days7": "7 jours",
+    "days14": "14 jours",
+    "days30": "30 jours",
+    "customDays": "Nombre de jours",
+    "invalidDays": "Saisissez un entier de 1 à 365.",
+    "reset": "Valeurs par défaut",
+    "archiveHint": "Les tâches utilisées sont conservées. Vous pouvez restaurer les tâches archivées à tout moment.",
+    "preview": "Aperçu de l’archivage",
+    "loadFailed": "Impossible de charger les paramètres.",
+    "loading": "Chargement des paramètres…",
+    "candidateCount": "Tâches éligibles : {{count}}",
+    "keptCount": "Conservées : {{count}}",
+    "lastCheck": "Dernière vérification : {{date}}",
+    "notChecked": "Aucune vérification automatique effectuée",
+    "saveFailed": "Réglages non enregistrés. Réessayez.",
+    "archivedNotice": "Tâches inactives archivées automatiquement : {{count}}",
+    "undo": "Annuler",
+    "undoFailed": "Annulation impossible. Restaurez les tâches depuis les archives."
   }
 }
