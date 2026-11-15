@@ -1,6 +1,7 @@
 import { mkdtemp, writeFile, readFile, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
 import path from 'node:path';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
@@ -29,6 +30,7 @@ vi.mock('../../cindy-media/ingest.js', () => ({ ingestMedia: (...args: unknown[]
 vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ blobUrl: () => 'cindy-media://blobs/test.png', extForMime: () => '.png', resolveSafe: () => ({ absPath: path.join(state.root, 'saved.png') }) }));
 import { createAttachmentRecovery, createRequestSizeController } from '../oversized-attachment-recovery.js';
 import { sessions } from '../../localDb/schema.js';
+import * as ingest from '../../cindy-media/ingest.js';
 
 beforeEach(async () => {
   state.root = await mkdtemp(path.join(tmpdir(), 'host-recovery-test-'));
@@ -128,6 +130,52 @@ async function multiBody(blocks: unknown[], text = '') {
 }
 const pdfBlock = (byte: number) => ({ type: 'input_file', file_data: `data:application/pdf;base64,${Buffer.concat([Buffer.from('%PDF-1.7'), Buffer.alloc(3000, byte)]).toString('base64')}` });
 const pngBlock = () => ({ type: 'input_image', image_url: `data:image/png;base64,${Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.alloc(3000)]).toString('base64')}` });
+
+// PR #10663: the new controller sent PDFs to media ingestion, unlike legacy recovery.
+// Unit tier: a PDF + PNG exceeding a 4 KiB ingress window exercises the actual proxy,
+// controller and file persistence; existing PDF coverage used only legacy recovery.
+it('recovers a spooled PDF to hook-attachments while preserving images in the media store', async () => {
+  const input = await multiBody([pdfBlock(1), pngBlock()]);
+  const raw = await readFile(input.filePath);
+  const pdf = Buffer.from(pdfBlock(1).file_data.split(',')[1], 'base64');
+  const png = Buffer.from(pngBlock().image_url.split(',')[1], 'base64');
+  const pdfPath = path.join(state.root, 'hook-attachments', 'test-session', `${createHash('sha256').update(pdf).digest('hex')}-recovered.pdf`);
+  const received: Buffer[] = [];
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(chunk);
+    received.push(Buffer.concat(chunks)); res.end('ok');
+  });
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  const address = upstream.address();
+  if (!address || typeof address === 'string') throw new Error('test server address unavailable');
+  state.ingest.mockImplementation(async (params: Parameters<typeof ingest.ingestMedia>[0]) => {
+    if (params.mimeType !== 'image/png') throw new Error('unsupported media MIME');
+    params.assertStillValid?.();
+    await writeFile(path.join(state.root, 'saved.png'), await readFile(params.filePath!));
+    return { url: 'cindy-media://blobs/test.png' };
+  });
+  const controller = createRequestSizeController(() => state.resolved);
+  const proxy = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${address.port}`, transformRequest: [], maxRequestBodyBytes: 4096,
+    requestSizeController: { ...controller, control: (body, format, policy) => controller.control(body, format, { ...policy, triggerBytes: 3500, targetBytes: 1600 }) },
+  });
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: raw });
+      expect(response.status).toBe(200); await response.text();
+    }
+    expect(received).toHaveLength(2); expect(received[0]).toEqual(received[1]);
+    const content = JSON.parse(received[0].toString()).input[0].content as Array<{ text: string }>;
+    expect(preservedLocalPath(content[0].text)).toBe(pdfPath);
+    expect(preservedLocalPath(content[1].text)).toBe(path.join(state.root, 'saved.png'));
+    expect(await readFile(pdfPath)).toEqual(pdf);
+    expect(await readFile(path.join(state.root, 'saved.png'))).toEqual(png);
+    expect(state.ingest.mock.calls.every(([params]) => params.mimeType === 'image/png')).toBe(true);
+    expect(state.addRef).toHaveBeenCalled();
+  } finally {
+    await proxy.dispose(); upstream.closeAllConnections();
+    await new Promise<void>(resolve => upstream.close(() => resolve()));
+  }
+});
 
 it('publishes nothing if text still cannot fit after removing every attachment', async () => {
   const input = await multiBody([pdfBlock(1), pngBlock()], 'x'.repeat(100_000));

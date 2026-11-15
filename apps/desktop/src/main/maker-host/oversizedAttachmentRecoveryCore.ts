@@ -30,6 +30,30 @@ async function hashFile(file: string): Promise<string> {
   return hash.digest('hex');
 }
 
+// Non-media attachments retain the legacy hook-attachments path, validation and
+// no-overwrite semantics. Only files created by this recovery may be rolled back.
+async function persistNonMediaAttachment(
+  item: { source: string; file: string; hash: string },
+  createdFiles: string[],
+  assertCurrent: () => void,
+): Promise<void> {
+  const dir = path.dirname(item.file);
+  const root = path.dirname(dir);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  assertCurrent();
+  if ((await lstat(root)).isSymbolicLink() || (await lstat(dir)).isSymbolicLink() || path.dirname(await realpath(dir)) !== await realpath(root)) {
+    throw new Error('Invalid attachment directory');
+  }
+  try {
+    await copyFile(item.source, item.file, constants.COPYFILE_EXCL);
+    createdFiles.push(item.file);
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+  const stat = await lstat(item.file);
+  if (!stat.isFile() || stat.isSymbolicLink() || await hashFile(item.file) !== item.hash) {
+    throw new Error('Recovered attachment verification failed');
+  }
+}
+
 // A retry must not reuse another recovery's uncommitted file or reference.
 const recoveryLocks = new Map<string, Promise<unknown>>();
 const deniedRouteMimes = new Map<string, Set<string>>();
@@ -104,21 +128,7 @@ async function serializeRecovery<T>(key: string, run: () => Promise<T>): Promise
                   originSessionId: sessionId, originKind: 'user' }, db);
               }
             } else {
-              const dir = path.dirname(item.file);
-              const root = path.dirname(dir);
-              await mkdir(dir, { recursive: true, mode: 0o700 });
-              assertCurrent();
-              if ((await lstat(root)).isSymbolicLink() || (await lstat(dir)).isSymbolicLink() || path.dirname(await realpath(dir)) !== await realpath(root)) {
-                throw new Error('Invalid attachment directory');
-              }
-              try {
-                await copyFile(item.source, item.file, constants.COPYFILE_EXCL);
-                createdFiles.push(item.file);
-              } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-              const stat = await lstat(item.file);
-              if (!stat.isFile() || stat.isSymbolicLink() || await hashFile(item.file) !== item.hash) {
-                throw new Error('Recovered attachment verification failed');
-              }
+              await persistNonMediaAttachment(item, createdFiles, assertCurrent);
             }
             body.signal.throwIfAborted();
             assertCurrent();
@@ -250,36 +260,45 @@ function createRequestSizeController(
           }
         };
         let directory: string | undefined;
-        const staged = new Map<string, { source: string; hash: string; mimeType: string; refId?: string }>();
+        const staged = new Map<string, { source: string; hash: string; mimeType: string | null; refId?: string }>();
+        const createdFiles: string[] = [];
         try {
           const route = policy.route as ImageRouteInfo;
           const modelFamily = requestSizeModelFamily(route.modelId);
           const result = await serializeRecovery(`${scope.ownerStorageKey}/${sessionId}`, async () => controlRequestSize(
             body, format, { route, modelFamily, signal: policy.signal, preprocessor: countingPreprocessor, singleImageMaxBytes: policy.singleImageMaxBytes, triggerBytes: policy.triggerBytes, targetBytes: policy.targetBytes, triggerImages: policy.triggerImages, targetImages: policy.targetImages, reason: policy.reason, allowRemoval: policy.allowRemoval },
-            async (bytes, mimeType, index) => {
+            async (bytes, declaredMime, index) => {
               const hash = createHash('sha256').update(bytes).digest('hex');
-              const ext = extForMime(mimeType) ?? '.bin';
-              const destination = resolveSafe(blobUrl(hash, ext)).absPath;
+              const mimeType = sniffMediaMime(bytes.subarray(0, 64 * 1024), declaredMime);
+              const ext = mimeType ? extForMime(mimeType)! : bytes.subarray(0, 5).toString() === '%PDF-' ? '.pdf' : '.bin';
+              const destination = mimeType
+                ? resolveSafe(blobUrl(hash, ext)).absPath
+                : path.join(getUserDataDir(), 'hook-attachments', sessionId, `${hash}-recovered${ext}`);
               directory ??= await mkdtemp(path.join(tmpdir(), 'cindy-request-size-'));
               const source = path.join(directory, `${index}-${hash}${ext}`);
               await writeFile(source, bytes, { flag: 'wx', mode: 0o600 });
               if (!staged.has(destination)) {
-                const existing = await db.select({ id: mediaRefs.id }).from(mediaRefs)
-                  .where(and(eq(mediaRefs.hash, hash), eq(mediaRefs.refKind, 'session-attachment'), eq(mediaRefs.refId, sessionId))).get();
-                staged.set(destination, { source, hash, mimeType, refId: existing ? undefined : randomUUID() });
+                const existing = mimeType ? await db.select({ id: mediaRefs.id }).from(mediaRefs)
+                  .where(and(eq(mediaRefs.hash, hash), eq(mediaRefs.refKind, 'session-attachment'), eq(mediaRefs.refId, sessionId))).get() : null;
+                staged.set(destination, { source, hash, mimeType, refId: mimeType && !existing ? randomUUID() : undefined });
               }
               return destination;
             },
           ));
           if (!result) return null;
           for (const [destination, item] of staged) {
-            const media = await ingestMedia({ filePath: item.source, mimeType: item.mimeType, isCache: false,
-              refs: [], assertStillValid: assertCurrent, refCompensationScope: scope }, db);
-            if (resolveSafe(media.url).absPath !== destination) throw new Error('Recovered attachment path changed');
-            if (item.refId) await addRef({ id: item.refId, hash: item.hash, refKind: 'session-attachment', refId: sessionId,
-              originSessionId: sessionId, originKind: 'user' }, db);
+            if (item.mimeType) {
+              const media = await ingestMedia({ filePath: item.source, mimeType: item.mimeType, isCache: false,
+                refs: [], assertStillValid: assertCurrent, refCompensationScope: scope }, db);
+              if (resolveSafe(media.url).absPath !== destination) throw new Error('Recovered attachment path changed');
+              if (item.refId) await addRef({ id: item.refId, hash: item.hash, refKind: 'session-attachment', refId: sessionId,
+                originSessionId: sessionId, originKind: 'user' }, db);
+            } else await persistNonMediaAttachment({ ...item, file: destination }, createdFiles, assertCurrent);
           }
           return result;
+        } catch (error) {
+          await Promise.all(createdFiles.map(file => rm(file, { force: true })));
+          throw error;
         } finally { if (directory) await rm(directory, { recursive: true, force: true }); }
       } catch (error) {
         if (error instanceof Error && error.message === 'REQUEST_TEXT_TOO_LARGE') throw error;
