@@ -23,6 +23,7 @@ import { sql } from 'drizzle-orm';
 
 import { sessions } from './localDb/schema';
 import { getDbClient } from './localDb/client/current';
+import { recordSessionContextSnapshotWith } from './localDb/sessionContextSnapshotPersistence.js';
 import { createLogger } from './logger';
 import * as broadcastTap from './device-link/broadcast-tap.js';
 import {
@@ -239,48 +240,10 @@ export async function recordSessionContextSnapshot(
   contextTokens: number,
   contextWindow: number,
 ): Promise<void> {
-  if (!sessionId) return;
-  if (!Number.isFinite(contextTokens) || contextTokens < 0) return;
-  if (contextTokens === 0 && (!Number.isFinite(contextWindow) || contextWindow <= 0)) return;
-  const ownerScope = captureOwnerScope();
-  try {
-    const db = getDbClient().drizzle;
-    const updates: { contextTokens: number; contextWindow?: number; contextWindowRuntime?: number } = {
-      contextTokens: Math.floor(contextTokens),
-    };
-    if (Number.isFinite(contextWindow) && contextWindow > 0) {
-      updates.contextWindow = Math.floor(contextWindow);
-      updates.contextWindowRuntime = updates.contextWindow;
-    }
-    await db
-      .update(sessions)
-      .set(updates)
-      .where(sql`${sessions.id} = ${sessionId}`)
-      .run();
-    // 回读保证广播的是 DB 最终值 (而非入参 —— contextWindow 可能没改)
-    const row = await db
-      .select({
-        contextTokens: sessions.contextTokens,
-        contextWindow: sessions.contextWindow,
-      })
-      .from(sessions)
-      .where(sql`${sessions.id} = ${sessionId}`)
-      .get();
-    if (!isOwnerScopeCurrent(ownerScope)) return;
-    broadcastContext(
-      {
-        sessionId,
-        contextTokens: row?.contextTokens ?? 0,
-        contextWindow: row?.contextWindow ?? 0,
-      },
-      ownerScope,
-    );
-  } catch (err) {
-    log.warn(
-      'recordSessionContextSnapshot failed:',
-      err instanceof Error ? err.message : String(err),
-    );
-  }
+  return recordSessionContextSnapshotWith(
+    { captureOwnerScope, isOwnerScopeCurrent, broadcastContext, log },
+    sessionId, contextTokens, contextWindow,
+  );
 }
 
 function broadcastContext(payload: SessionContextPayload, ownerScope: OwnerScope | null = null): void {

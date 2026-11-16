@@ -257,7 +257,7 @@ describe('waitForModelsSyncRefresh', () => {
         baseUrl: 'https://model-access.example.com',
         timeoutMs: 20_000,
         cache: 'no-store',
-        headers: { 'X-Cindy-Model-Capabilities': 'audio_speech,display_pricing' },
+        headers: { 'X-Cindy-Model-Capabilities': 'audio_speech,display_pricing,evaluation,rerank' },
       },
     });
     expect(Number.isFinite(XD_MODELS_SYNC_TIMEOUT_MS)).toBe(true);

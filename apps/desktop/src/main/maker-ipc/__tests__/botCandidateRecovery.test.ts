@@ -1,17 +1,13 @@
-import { readFileSync } from 'node:fs';
-import { ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable } from '../botCandidateRecovery';
 import { isInterruptedTurnError, isContinuationOnlyAutoResumeReason } from '../interruptedTurnAutoResume';
+import { createInterruptedTurnAutoResumeHooks } from '../interruptedTurnAutoResumeHooks';
 
-const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
 
-/** Execute the production registration callbacks without starting Electron or touching accounts. */
+/** Execute the production auto-resume hooks (interruptedTurnAutoResumeHooks.ts) without starting Electron or touching accounts. */
 function harness(bot = true) {
   const item = { clientId: 'input', createOpts: {} };
-  const hints = source.slice(source.indexOf('  const botFallbackInputs ='), source.indexOf('  const sendToAgentAccepted:'));
-  const callbacks = source.slice(source.indexOf('    isResumableTurnErrorCandidate: canRecoverTurn,'), source.indexOf('    steerToAgent: (sessionId, message, sendOpts) =>'));
   let current = true;
   let scheduled: (() => Promise<void>) | undefined;
   const resume = vi.fn(async () => 'resumed');
@@ -41,11 +37,20 @@ function harness(bot = true) {
     pendingContinuationOnlyAutoResumeRebuilds: rebuildLeases,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
   };
-  const js = transpileModule(`${hints}\nreturn { callbacks: { ${callbacks} }, botFallbackInputs };`, {
-    compilerOptions: { target: ScriptTarget.ES2022 },
-  }).outputText;
-  const runtime = new Function(...Object.keys(deps), js)(...Object.values(deps));
-  if (bot) runtime.botFallbackInputs.add(item.createOpts);
+  const botFallbackInputs = new WeakSet<object>();
+  const hooks = createInterruptedTurnAutoResumeHooks({
+    ...deps, botFallbackInputs,
+    providerGroupHeldErrors: { stash: vi.fn() }, providerGroupHeldTerminals: { stash: vi.fn() },
+    pendingSchedulerAutoResumeRunBySession: new Map(), notifySchedulerAutoResumeFailed: vi.fn(),
+    autoResumeAttemptToken: () => null,
+  } as never);
+  // The harness feeds minimal inputs; the hooks are typed for the coordinator's full queue items.
+  const callbacks = {
+    isResumableTurnErrorCandidate: hooks.canRecoverTurn as (...args: unknown[]) => boolean,
+    onResumableTurnError: hooks.onResumableTurnError as (...args: unknown[]) => unknown,
+  };
+  const runtime = { callbacks };
+  if (bot) botFallbackInputs.add(item.createOpts);
   return { item, ...runtime.callbacks, resume, fallback, finalize, guard, groupMayHandle, liveSession, rebuildLeases,
     run: () => scheduled!(), cancel: () => { current = false; } };
 }

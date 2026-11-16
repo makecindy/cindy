@@ -1,5 +1,6 @@
 import { appendPendingQueueItems } from './pendingQueueItems';
 import { AttachmentCollectionContext, type AttachmentCollectionItem } from './AttachmentCollection';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { TeammateProcessStatus } from '@/features/bots/TeammateProcessStatus';
 import { usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
@@ -140,6 +141,7 @@ import { basename, cn } from '@/lib/utils';
 import {
   readSessionScroll,
   saveSessionScroll,
+  updateRenderWindowFloor,
   type SessionScrollSnapshot,
 } from '@/lib/sessionScrollStore';
 import {
@@ -362,6 +364,8 @@ import {
 import { CARD_EXPAND_TOGGLE_EVENT, GhostToolCard } from './GhostToolCard';
 import {
   ensureCard,
+  ensureRemoteCard,
+  retainRemoteCardSession,
   ensureSessionCards,
   getGhostCardSnapshot,
   subscribeGhostCards,
@@ -1115,6 +1119,20 @@ export function collectDeleteAnchorClientIds(items: readonly RenderItem[]): stri
     }
   }
   return ids;
+}
+
+/**
+ * 渲染窗口覆盖的最老原始消息 —— 窗口首 item 起第一个有源行的 item 的首个源行。
+ * 首 item 可能是无源行的横幅(fork_origin 等)，向后走到第一个有源行为止。
+ * 纯数据派生，不做 DOM 量测：store 的活动视图裁剪地板用它，自动跟随的
+ * 窗口推进同步也用它（滚动事件拿不到程序化 pinToBottom）。
+ */
+export function renderWindowFloorClientId(items: readonly RenderItem[]): string | undefined {
+  for (let index = 0; index < items.length; index += 1) {
+    const anchors = collectDeleteAnchorClientIds([items[index]]);
+    if (anchors.length > 0) return anchors[0];
+  }
+  return undefined;
 }
 
 function queryMessageElement(root: ParentNode, clientId: string): HTMLElement | null {
@@ -3229,17 +3247,25 @@ export function MessageStream({
   // 出口钩子的 turn 级自绘卡,后者 callId = assistant 消息 clientId),让"该气泡
   // 被自绘替换"的判定在重启/回放后成立;再对 settled 消息里的 xdt_card_id 逐个
   // ensureCard 兜底(幂等,批量已 ready 者直接跳过)。
+  // A task on another computer reads its cards from there (shared-task guests have no card access).
+  const remoteCardDeviceId = ownerDeviceId && !isSharedTaskPeer(ownerDeviceId) ? ownerDeviceId : null;
   useEffect(() => {
-    if (sessionId) ensureSessionCards(sessionId);
-  }, [sessionId]);
+    if (remoteCardDeviceId && sessionId) return retainRemoteCardSession(remoteCardDeviceId, sessionId);
+  }, [remoteCardDeviceId, sessionId]);
+  useEffect(() => {
+    if (sessionId && !ownerDeviceId) ensureSessionCards(sessionId);
+  }, [sessionId, ownerDeviceId]);
   useEffect(() => {
     for (const m of messages) {
       if (m.role === 'tool_result') {
         const cardId = extractGhostCardId(m.content);
-        if (cardId) ensureCard(cardId);
+        if (!cardId) continue;
+        // Anything else (local tasks, shared-task guests) resolves here; a missing card keeps the tool row.
+        if (remoteCardDeviceId && sessionId) ensureRemoteCard(remoteCardDeviceId, sessionId, cardId);
+        else ensureCard(cardId);
       }
     }
-  }, [messages]);
+  }, [messages, remoteCardDeviceId, sessionId]);
 
   const turnChangeSets = useTurnChangeSets(sessionId, remoteHostId);
 
@@ -3525,6 +3551,16 @@ export function MessageStream({
     () => botUnreadBoundaryItemKey(visibleRenderItems, botUnreadBoundaryClientId, botContinuationKeys),
     [visibleRenderItems, botUnreadBoundaryClientId, botContinuationKeys],
   );
+
+  // 渲染窗口推进时同步裁剪地板 —— 新消息到达 / 窗口扩张都会改 visibleRenderItems。
+  // 自动跟随(pinToBottom)的程序化滚动不走滚动保存分支，只靠 saveSessionScroll
+  // 会让一直跟随的挂载面板没有地板快照，维护拍永远裁不动(Greptile P1)。
+  // 只 merge 地板字段，不碰阅读位置，上翻读者不受影响。
+  useEffect(() => {
+    if (!sessionId) return;
+    const floor = renderWindowFloorClientId(visibleRenderItems);
+    if (floor) updateRenderWindowFloor(sessionId, floor);
+  }, [sessionId, visibleRenderItems]);
   const visibleMetadataItems = visibleMetadataProjection(visibleRenderItems);
 
   // 镜像 ref：unmount cleanup / ResizeObserver / 落定回调里读最新值（闭包会 stale）。
@@ -4441,6 +4477,8 @@ export function MessageStream({
         }
         itemHeights = { width: items.getBoundingClientRect().width, byKey };
       }
+      // 渲染窗口覆盖地板:窗口首 item 覆盖的最老原始行(纯数据,无量测)。
+      const windowFloorClientId = renderWindowFloorClientId(visible);
       saveSessionScroll(sessionId, {
         windowAnchorKey: firstVisibleItemKeyRef.current,
         viewportTopKey: measured.viewportTopKey,
@@ -4455,6 +4493,7 @@ export function MessageStream({
         messageOffset: measured.messageOffset,
         itemHeights,
         isNearBottom: isNearBottomRef.current,
+        windowFloorClientId,
         anchoredForwardCount:
           firstVisibleItemKeyRef.current !== null ? anchoredForwardItemsRef.current : undefined,
       });

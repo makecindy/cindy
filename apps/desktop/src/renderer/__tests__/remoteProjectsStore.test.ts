@@ -1075,9 +1075,10 @@ describe('remoteProjectsStore pending first send', () => {
     remoteProjectsStore.applyPatch('dev-B', 's1', { userSendAt: hostSentAt });
     expect(remoteProjectsStore.getMergedRemoteSessions()[0]?.userSendAt).toBe(hostSentAt);
 
-    // 已回收:之后即使有一份陈旧快照把它报回空,也不会再被叠加层补上。
+    // 首条受理前就发出的列表读取晚于 patch 落地:叠加层已回收,但 userSendAt 只会前进,
+    // 陈旧快照不能把它退回空(否则任务掉出项目、等下一次回流才回来)。
     remoteProjectsStore.setDeviceSessions('dev-B', 'B', [unsent('s1')]);
-    expect(remoteProjectsStore.getMergedRemoteSessions()[0]?.userSendAt).toBeNull();
+    expect(remoteProjectsStore.getMergedRemoteSessions()[0]?.userSendAt).toBe(hostSentAt);
   });
 
   it('lets an undelivered first message fall back to the honest empty state', () => {

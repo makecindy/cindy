@@ -30,6 +30,8 @@ vi.mock('../../ownerContext.js', () => ({
 
 import {
   __testing,
+  readCodexCompactionState,
+  writeCodexServerCompaction,
   readCompactionState,
   readPiCompactionPct,
   readPiCompactionState,
@@ -44,6 +46,7 @@ describe('compaction settings store', () => {
     __testing.resetStores();
     for (const name of [
       'compaction-settings.json',
+      'codex-compaction-settings.json',
       'pi-compaction-settings.json',
       'pi-compaction-migrated.json',
     ]) {
@@ -55,6 +58,23 @@ describe('compaction settings store', () => {
     __testing.resetStores();
     fs.rmSync(tempRoot, { recursive: true, force: true });
     fs.mkdirSync(tempRoot, { recursive: true });
+  });
+
+  // Unit: production store read/write/reset, not previously covered for Codex.
+  // Minimal regression: save false, clear cache, reread; explicit true differs from
+  // native-default null so enabling can restore a saved summary thread.
+  it('persists explicit Codex on/off separately from the native default and other harnesses', () => {
+    expect(readCodexCompactionState()).toMatchObject({ isCustomized: false, value: { serverEnabled: null } });
+    writeCompactionPct(75);
+    for (const enabled of [false, true]) {
+      writeCodexServerCompaction(enabled);
+      __testing.resetStores();
+      expect(readCodexCompactionState()).toMatchObject({ isCustomized: true, value: { serverEnabled: enabled } });
+    }
+    writeCodexServerCompaction(null);
+    __testing.resetStores();
+    expect(readCodexCompactionState()).toMatchObject({ isCustomized: false, value: { serverEnabled: null } });
+    expect(readCompactionState().value.claudeCodeAutoCompactPct).toBe(75);
   });
 
   it('does not migrate Pi when Claude still follows the default', () => {

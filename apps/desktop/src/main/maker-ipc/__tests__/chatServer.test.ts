@@ -2075,7 +2075,24 @@ describe('Chat Server result delivery and refresh', () => {
 
     // Claimed as the group's Cindy, never through AI reply mode; the requester's own words become one
     // ordinary visible message in the group's task with its label and the group's recent messages; only
-    // that input's turn end answers the group, and the group never stops the task.
+    // that input's turn end answers the group.
+    it('stops the exact public Cindy task input when another device requests a stop', async () => {
+      await ask(5, 'Wait until stopped');
+      const [input] = dispatched();
+      expect(input!.assertDispatchCurrent).toBeTypeOf('function');
+      expect(() => input!.assertDispatchCurrent!()).not.toThrow();
+      const original = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => body?.action === 'heartbeat'
+        ? { status: 409, body: { error: { code: 'STOP_REQUESTED' } } }
+        : original(route, method, body));
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(deps.abortLane).toHaveBeenCalledExactlyOnceWith('group-task-1', input!.clientId);
+      expect(() => input!.assertDispatchCurrent!()).toThrow('STALE_EXECUTOR');
+      expect(fixture.handle.mock.calls.some(([, , body]) => body?.action === 'cancel')).toBe(true);
+      expect(await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: input!.clientId, resultText: 'Late result' })).toBe(false);
+      expect(deliveries()).toHaveLength(0);
+    });
+
     it('delivers your request into the group task and answers with that turn', async () => {
       history.push(message(2, peerId, 'The build is red\nagain'));
       await ask(5, '@Cindy please fix it');
@@ -2421,10 +2438,18 @@ describe('Chat Server result delivery and refresh', () => {
     // The member list shows the group's Cindy as plain Cindy with Cindy's artwork, nobody's teammate;
     // group management sees the switch, and an older server none of it.
     it('projects the group Cindy and its switch', async () => {
+      queue = [request(1), request(2, peerId)];
+      const serve = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route === `/conversations/${roomId}/executions`
+        ? { body: queue.map(work => ({ ...work, status: 'running' })) } : serve(route, method, body));
       const result = await service.getGroup(roomId);
       if (!result.ok) throw new Error(result.errorCode);
       expect(result.group).toMatchObject({ supportsGroupAssistant: true, assistantEnabled: true, organizerBotId: null });
       expect(result.group.members.find(m => m.actorId === cindyId)).toMatchObject({ assistant: true, name: 'Cindy', avatar: 'cindy://avatar/preset/cindy', isOwned: false });
+      expect(result.group.round.speakers).toEqual(expect.arrayContaining([
+        expect.objectContaining({ requesterName: 'Chris', isSelfRequested: true }),
+        expect.objectContaining({ requesterName: 'Ann', isSelfRequested: false }),
+      ]));
       expect((await service.chatServer!.manage({ groupId: roomId, action: { type: 'update', name: 'Room', topic: '', description: '', expectedRevision: 1, assistant: false } })).ok).toBe(true);
       expect(fixture.handle.mock.calls.find(([route, method]) => route === `/conversations/${roomId}` && method === 'PATCH')?.[2]).toMatchObject({ assistant: false, expectedRevision: 1 });
     });
@@ -3709,9 +3734,9 @@ describe('Chat Server result delivery and refresh', () => {
     });
 
     it.each([
-      ['a member stops only their own requests and teammates', 'member', undefined, [['own', undefined], ['bot', otherBot]]],
+      ['a member stops only their own requests', 'member', undefined, [['own', undefined]]],
       ['an owner may stop everyone', 'owner', 'all', [['own', undefined], ['bot', undefined], ['foreign', undefined]]],
-      ['an owner who did not ask for all stops only their own', 'owner', undefined, [['own', undefined], ['bot', otherBot]]],
+      ['an owner who did not ask for all stops only their own', 'owner', undefined, [['own', undefined]]],
       ['a member whose own teammate is admin stops everyone as that teammate', 'member', 'all', [['own', undefined], ['bot', otherBot], ['foreign', otherBot]], 'admin'],
     ] as const)('%s', async (_label, role, scope, expected, botRole?: string) => {
       const ids = { own: '40000000-0000-4000-8000-00000000000a', bot: '40000000-0000-4000-8000-00000000000b', foreign: '40000000-0000-4000-8000-00000000000c' };
@@ -4896,7 +4921,7 @@ describe('Chat Server result delivery and refresh', () => {
       const planningAt = Date.now();
       const deciding = await service.getGroup(roomId);
       expect(deciding).toMatchObject({ ok: true, group: { planningBotId: botId, speakingBotIds: [botId],
-        round: { status: 'running', speakers: [{ botId, sessionId: null, activity: 'planning', timelineAt: planningAt }] } } });
+        round: { status: 'running', speakers: [{ botId, sessionId: null, activity: 'planning', threadRootId: null, timelineAt: planningAt }] } } });
       // Unit / #10345: refreshing a slow arrangement must not move its timeline position.
       await vi.advanceTimersByTimeAsync(1000);
       expect(await service.getGroup(roomId)).toMatchObject({ ok: true, group: {

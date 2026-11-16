@@ -18,8 +18,9 @@ const refreshCallbacks = createGhostProductionCallbacks<{
 }>({ functions: ['refreshGhostLocalization', 'broadcastGhostsChanged', 'setGhostWorkdirDisabledAndNotify'] });
 
 function routing(activeComputer = true) {
-  const ghosts = [{ manifest: { id: 'plugin-a', agent: { hostTools: ['computer'] } }, enabled: true,
-    approval: { state: 'approved', revision: 'fixture' }, approvedHostToolGroups: ['computer'] }] as InstalledGhost[];
+  const ghosts: InstalledGhost[] = [{ dir: '/fixture/plugin-a',
+    manifest: { schemaVersion: 3, id: 'plugin-a', name: 'Plugin A', version: '1.0.0', kind: 'chip', entry: 'main.js',
+      agent: { hostTools: ['computer'] } }, enabled: true, approval: { state: 'approved', revision: 'fixture' } }];
   const taskEventIndex = new GhostTaskEventIndex();
   const installation = {
     apps: vi.fn(), manifest: vi.fn(), unread: vi.fn(), browser: vi.fn(), computer: vi.fn(), skills: vi.fn(), index: vi.fn(),

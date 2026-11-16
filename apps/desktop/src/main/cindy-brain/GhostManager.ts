@@ -3,6 +3,7 @@ import { MCP_APPS_MAX_BYTES } from '../mcp-apps/protocol.js';
 import { findFeatureRetirement } from '../../shared/featureRetirements.js';
 import { FeatureRetirementStore } from './featureRetirementStore.js';
 import { GhostNotificationIndex } from './ghostNotificationIndex.js';
+import { ghostDeclaredNetworkTransportRejection } from './networkOriginPolicy.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -62,7 +63,7 @@ import {
   type InstalledGhost,
   declaredAutoApproveTools,
   declaredGhostControlPoints,
-  ghostHostUiApprovalTokens,
+  isGhostRuntimeControlPoint,
 } from '../../shared/ghost.js';
 import { verifyGhostZipSignatures, type GhostTrustRegistry } from './ghostSignature.js';
 import { isPathInsideDir } from './dirDeposit.js';
@@ -112,8 +113,7 @@ import {
 } from './pluginInstanceRegistryService.js';
 import {
   assertManagedPluginParentSync,
-  approvedHostToolGroupsField,
-  approvedEventTopicsField,
+  approvedCindyModelActionsField,
   createGhostInstallReceipt,
   effectiveInstallOrigin,
   legacyFirstPartyEligibilityAfterUpdate,
@@ -126,7 +126,7 @@ import {
 } from './ghostInstallReceipt.js';
 import { parseInstalledGhostManifest } from '../installedGhostManifest.js';
 import { validSimulatorMigration } from '../../shared/simulatorIdentityMigration.js';
-import { pluginDeclaresCapability, pluginHostToolGroup, type PluginTaskCapability } from './taskCapability.js';
+import { pluginDeclaresCapability, type PluginTaskCapability } from './taskCapability.js';
 import {
   decodeGhostManualMarkdown,
   ghostManualLogicalPathForEntry,
@@ -143,7 +143,7 @@ function approvedAutoToolsProjection(receipt: Pick<GhostInstallReceipt, 'approve
 /** receipt 里批准过、manifest 仍声明、当前 Host 也认识的控制节点。 */
 function approvedControlPointsProjection(receipt: Pick<GhostInstallReceipt, 'approvedControlPoints' | 'manifest'>) {
   const approved = new Set(receipt.approvedControlPoints ?? []);
-  const points = declaredGhostControlPoints(receipt.manifest).filter((point) => approved.has(point));
+  const points = declaredGhostControlPoints(receipt.manifest).filter((point) => !isGhostRuntimeControlPoint(point) && approved.has(point));
   return points.length > 0 ? { approvedControlPoints: points } : {};
 }
 
@@ -383,6 +383,8 @@ export interface GhostManagerOptions {
   onNamespaceCommitted?: (ghostId: string, namespace: string | null) => void;
   beforeNamespaceCommit?: (ghostId: string, namespace: string | null) => void;
   onArchiveSourceState?: (fromPart: string, archivePart: string) => Promise<void>;
+  /** Revoke incoming account references while the existing uninstall journal isolates the source. */
+  onUninstallSourceState?: (fromPart: string) => Promise<void>;
   /** sourceDir 是否就是该 id 的随包只读种子目录，而非任意本机可变目录。 */
   isTrustedBundledSource?: (id: string, sourceDir: string) => boolean;
   /** Persist the user's builtin-uninstall intent before approval/content removal. */
@@ -1449,6 +1451,11 @@ export class GhostManager {
     return retry;
   }
 
+  hasPendingMutationRecovery(): boolean {
+    return this.untrustedApprovals.size > 0 || this.recoveryBlockedApprovalNamespaces.size > 0 ||
+      this.pendingRecoverySideEffects.size > 0;
+  }
+
   private currentOwnerContextKey(): string {
     return `${this.options.getOwnerContextKey?.() ?? ''}\u0000${this.resolveContentRoot()}\u0000${this.resolveStateRoot()}`;
   }
@@ -1561,7 +1568,35 @@ export class GhostManager {
             }
             this.options.recordBuiltinTombstone(parsePluginInstallRelId(id)!.ghostId);
           }
+          const fromPart = this.options.onUninstallSourceState ? this.storageKeyForContent(id) : '';
           this.receiptStore.removeSync(id);
+          if (this.options.onUninstallSourceState) {
+            const recoveryKey = this.isolationKey(id);
+            if (!this.pendingMutationRecoveries.has(recoveryKey)) {
+              const recoveryOwner = this.currentOwnerContextKey();
+              this.pendingMutationRecoveries.add(recoveryKey);
+              const recovery = this.runExclusiveMutation(async () => {
+                if (this.currentOwnerContextKey() !== recoveryOwner ||
+                    JSON.stringify(this.receiptStore.readPendingMutationSync(id)) !== JSON.stringify(markerResult)) {
+                  throw new Error('uninstall recovery transaction superseded');
+                }
+                await this.cleanupUninstallSourceState(id, fromPart);
+                if (this.recoveryEntryKind(finalDir) === 'directory') fs.rmSync(finalDir, { recursive: true, force: true });
+                this.forgetPendingNamespaceMigration(id);
+                this.receiptStore.clearPendingMutationSync(id);
+                this.untrustedApprovals.delete(recoveryKey);
+              }).catch(error => this.options.log?.warn('ghost uninstall reference cleanup failed; journal retained', {
+                id, error: error instanceof Error ? error.message : String(error),
+              }));
+              this.pendingRecoverySideEffects.add(recovery);
+              const clearRecovery = () => {
+                this.pendingRecoverySideEffects.delete(recovery);
+                this.pendingMutationRecoveries.delete(recoveryKey);
+              };
+              void recovery.then(clearRecovery, clearRecovery);
+            }
+            continue;
+          }
           if (this.recoveryEntryKind(finalDir) === 'directory') {
             fs.rmSync(finalDir, { recursive: true, force: true });
           }
@@ -3090,12 +3125,10 @@ export class GhostManager {
           ...(receipt.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
           ...(receipt.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
           ...approvedControlPointsProjection(receipt),
-          ...(receipt.approvedHostUi?.length ? { approvedHostUi: receipt.approvedHostUi } : {}),
           ...approvedAutoToolsProjection(receipt),
           ...(receipt.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
           ...(receipt.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
-          ...approvedHostToolGroupsField(receipt.approvedHostToolGroups, receipt.manifest),
-          ...approvedEventTopicsField(receipt.approvedEventTopics, receipt.manifest),
+          ...approvedCindyModelActionsField(receipt.approvedCindyModelActions, receipt.manifest),
           trust: receipt.trust,
           ...(!retired && receipt.manifest.skill?.items.length
             ? {
@@ -3315,16 +3348,10 @@ export class GhostManager {
           (capability === 'delegation' && (approval.receipt.manifest.agent?.delegation !== true || approval.receipt.manifest.agent?.targets !== true || approval.receipt.targetCapabilityApproved !== true || approval.receipt.taskCapabilityApproved !== true)) ||
           !findInstalledGhostByInstanceId(this.list(), id)?.enabled) return false;
       const field = capability === 'companions' ? 'companionsCapabilityApproved' : capability === 'observe' ? 'observeCapabilityApproved' : capability === 'delegation' ? 'delegationCapabilityApproved' : capability === 'targets' ? 'targetCapabilityApproved' : 'taskCapabilityApproved';
-      const group = pluginHostToolGroup(capability);
-      const topic = capability === 'event:message' ? 'message' : capability === 'event:task-state' ? 'task-state' : undefined;
-      if (topic ? !approval.receipt.approvedEventTopics?.includes(topic) : group ? !approval.receipt.approvedHostToolGroups?.includes(group) : approval.receipt[field] !== true) {
+      if (approval.receipt[field] !== true) {
         const expired = new Error('Task capability approval owner changed');
         try {
-          await this.receiptStore.write({ ...approval.receipt, ...(topic
-            ? { approvedEventTopics: [...approval.receipt.approvedEventTopics ?? [], topic] }
-            : group
-            ? { approvedHostToolGroups: [...approval.receipt.approvedHostToolGroups ?? [], group] }
-            : { [field]: true }) }, {
+          await this.receiptStore.write({ ...approval.receipt, [field]: true }, {
             relId,
             assertCurrent: () => { if (!isCurrent()) throw expired; },
           });
@@ -3338,7 +3365,7 @@ export class GhostManager {
   }
 
   /** Explicit interactive-page confirmation, bound to the same owner and installed revision. */
-  async approveUiCapability(id: string, revision: string, isCurrent: () => boolean, approveHost = false): Promise<boolean> {
+  async approveUiCapability(id: string, revision: string, isCurrent: () => boolean): Promise<boolean> {
     return this.runExclusiveMutation(async () => {
       const relId = this.approvalRelIdFor(id);
       if (!relId) return false;
@@ -3346,8 +3373,7 @@ export class GhostManager {
       const installed = findInstalledGhostByInstanceId(this.list(), id);
       if (!isCurrent() || approval.state !== 'approved' || approval.receipt.revision !== revision ||
         !installed?.enabled || !pluginHasToolUi(installed.manifest)) return false;
-      await this.receiptStore.write({ ...approval.receipt, uiCapabilityApproved: true,
-        ...(approveHost ? { approvedHostUi: ghostHostUiApprovalTokens(installed.manifest) } : {}) }, {
+      await this.receiptStore.write({ ...approval.receipt, uiCapabilityApproved: true }, {
         relId, assertCurrent: () => { if (!isCurrent()) throw new Error('Page capability approval expired'); },
       });
       return isCurrent();
@@ -3722,6 +3748,8 @@ export class GhostManager {
     if (!v.ok) {
       return { rejection: { code: 'file-invalid', reason: `清单不合格:${v.reason}` } };
     }
+    const transportError = ghostDeclaredNetworkTransportRejection(v.manifest);
+    if (transportError) return { rejection: { code: 'file-invalid', reason: `NETWORK_INSECURE_ORIGIN: ${transportError}` } };
     if (findFeatureRetirement(v.manifest)) {
       return {
         rejection: {
@@ -4050,7 +4078,6 @@ export class GhostManager {
       taskCapabilityApproved?: true;
       targetCapabilityApproved?: true;
       uiCapabilityApproved?: boolean;
-      approvedHostUi?: readonly string[];
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
@@ -4058,8 +4085,7 @@ export class GhostManager {
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
-      approvedHostToolGroups?: readonly string[];
-      approvedEventTopics?: readonly string[];
+      approvedCindyModelActions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
@@ -4088,7 +4114,6 @@ export class GhostManager {
       taskCapabilityApproved?: true;
       targetCapabilityApproved?: true;
       uiCapabilityApproved?: boolean;
-      approvedHostUi?: readonly string[];
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
@@ -4096,8 +4121,7 @@ export class GhostManager {
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
-      approvedHostToolGroups?: readonly string[];
-      approvedEventTopics?: readonly string[];
+      approvedCindyModelActions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
@@ -4277,10 +4301,8 @@ export class GhostManager {
           ...(opts?.targetCapabilityApproved === true && approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true ? {targetCapabilityApproved:true as const} : {}),
           ...(opts?.delegationCapabilityApproved === true && approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? {delegationCapabilityApproved:true as const} : {}),
           ...(opts?.approvedControlPoints?.length ? { approvedControlPoints: opts.approvedControlPoints } : {}),
-          ...(opts?.approvedHostUi?.length ? { approvedHostUi: opts.approvedHostUi } : {}),
           ...(opts?.approvedAutoTools?.length ? { approvedAutoTools: opts.approvedAutoTools } : {}),
-          approvedHostToolGroups: opts?.approvedHostToolGroups,
-          approvedEventTopics: opts?.approvedEventTopics,
+          approvedCindyModelActions: opts?.approvedCindyModelActions,
           ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
           ...(opts?.companionsCapabilityApproved === true && approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
           trust,
@@ -4407,7 +4429,6 @@ export class GhostManager {
       taskCapabilityApproved?: true;
       targetCapabilityApproved?: true;
       uiCapabilityApproved?: boolean;
-      approvedHostUi?: readonly string[];
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
@@ -4415,8 +4436,7 @@ export class GhostManager {
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
-      approvedHostToolGroups?: readonly string[];
-      approvedEventTopics?: readonly string[];
+      approvedCindyModelActions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
@@ -4427,6 +4447,8 @@ export class GhostManager {
       installOrigin?: 'manual' | 'agent-forge';
       namespace?: string | null;
       sourceStateArchiveId?: string;
+      /** Acquire the existing credential lock only after entering the mutation lane. */
+      withCredentialMutation?: <T>(operation: () => Promise<T>) => Promise<T>;
       /** Host-only official market transition; package authors cannot request this. */
       simulatorPreviousRelId?: string;
       simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
@@ -4435,7 +4457,9 @@ export class GhostManager {
       onPackagePlaced?: () => void;
     },
   ) {
-    return this.runExclusiveMutation(() => this.updateUnlocked(lizFilePath, opts));
+    return this.runExclusiveMutation(() => opts.withCredentialMutation
+      ? opts.withCredentialMutation(() => this.updateUnlocked(lizFilePath, opts))
+      : this.updateUnlocked(lizFilePath, opts));
   }
 
   private async updateUnlocked(
@@ -4444,7 +4468,6 @@ export class GhostManager {
       taskCapabilityApproved?: true;
       targetCapabilityApproved?: true;
       uiCapabilityApproved?: boolean;
-      approvedHostUi?: readonly string[];
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
@@ -4452,8 +4475,7 @@ export class GhostManager {
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
-      approvedHostToolGroups?: readonly string[];
-      approvedEventTopics?: readonly string[];
+      approvedCindyModelActions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
@@ -4766,22 +4788,14 @@ export class GhostManager {
           ...(opts.approvedControlPoints ?? []),
           ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedControlPoints ?? [] : []),
         ],
-        approvedHostUi: [
-          ...(opts.approvedHostUi ?? []),
-          ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedHostUi ?? [] : []),
-        ],
         // 免确认工具同口径：同实例延续已批准项，本次确认新显示的并入，换源不继承。
         approvedAutoTools: [
           ...(opts.approvedAutoTools ?? []),
           ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedAutoTools ?? [] : []),
         ],
-        approvedHostToolGroups: [
-          ...(opts.approvedHostToolGroups ?? []),
-          ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedHostToolGroups ?? [] : []),
-        ],
-        approvedEventTopics: [
-          ...(opts.approvedEventTopics ?? []),
-          ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedEventTopics ?? [] : []),
+        approvedCindyModelActions: [
+          ...(opts.approvedCindyModelActions ?? []),
+          ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedCindyModelActions ?? [] : []),
         ],
         ...((opts.observeCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.observeCapabilityApproved === true)) &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
@@ -5090,6 +5104,8 @@ export class GhostManager {
     // v2 作者清单仍带 slots，进入运行时后则会被投影成直接能力字段。批准链只比较、
     // 持久化规范化结果，避免同一份 v2 清单因作者格式和运行时格式不同而被误判为扩权。
     const approvedManifest = expectedManifest.manifest;
+    const transportError = ghostDeclaredNetworkTransportRejection(approvedManifest);
+    if (transportError) throw Object.assign(new Error(transportError), { code: 'NETWORK_INSECURE_ORIGIN' });
     const localeResources = this.readApprovedLocaleResources(sourceDir, approvedManifest);
     const iconDataUrl = this.readInstalledIconDataUrl(sourceDir, approvedManifest) ?? undefined;
     const packageSha256 = await hashApprovedDirectory(sourceDir);
@@ -5202,11 +5218,9 @@ export class GhostManager {
         ...(current.state === 'approved' && current.receipt.delegationCapabilityApproved === true &&
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? { delegationCapabilityApproved: true as const } : {}),
         // 随包种子由 Cindy 自己发布，声明的控制节点与免确认工具视为已随版本批准。
-        approvedControlPoints: [...new Set([...(approvedManifest.subscribe?.hooks ?? []), ...declaredGhostControlPoints(approvedManifest)])],
-        approvedHostUi: current.state === 'approved' ? current.receipt.approvedHostUi : undefined,
+        approvedControlPoints: approvedManifest.subscribe?.hooks?.filter(point => !isGhostRuntimeControlPoint(point)) ?? [],
         approvedAutoTools: declaredAutoApproveTools(approvedManifest),
-        approvedHostToolGroups: current.state === 'approved' ? current.receipt.approvedHostToolGroups : undefined,
-        approvedEventTopics: current.state === 'approved' ? current.receipt.approvedEventTopics : undefined,
+        approvedCindyModelActions: current.state === 'approved' ? current.receipt.approvedCindyModelActions : undefined,
         ...(current.state === 'approved' && current.receipt.observeCapabilityApproved === true &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         ...(current.state === 'approved' && current.receipt.companionsCapabilityApproved === true &&
@@ -5365,6 +5379,19 @@ export class GhostManager {
     this.instanceRegistryService.release(relId);
   }
 
+  private async cleanupUninstallSourceState(relId: string, fromPart: string): Promise<void> {
+    const owner = this.currentOwnerContextKey();
+    const pending = this.receiptStore.readPendingMutationSync(relId);
+    const approval = this.receiptStore.readForRecovery(relId);
+    if (pending.state !== 'valid' || pending.mutation.kind !== 'uninstall') throw new Error('uninstall journal changed');
+    await this.options.onUninstallSourceState!(fromPart);
+    if (this.currentOwnerContextKey() !== owner ||
+        JSON.stringify(this.receiptStore.readPendingMutationSync(relId)) !== JSON.stringify(pending) ||
+        JSON.stringify(this.receiptStore.readForRecovery(relId)) !== JSON.stringify(approval)) {
+      throw new Error('uninstall recovery transaction superseded');
+    }
+  }
+
   private async uninstallUnlocked(
     id: string,
     options: GhostUninstallOptions = {},
@@ -5422,8 +5449,11 @@ export class GhostManager {
     }
     // 走同一个撤销入口:成功即清掉隔离记录,失败由该入口转进程内隔离并记日志。撤批准
     // 在删目录之前 —— 即便随后删目录失败/崩溃,也不会留下"目录在 + 旧 receipt 授权"。
+    const fromPart = this.options.onUninstallSourceState ? this.storageKeyForContent(relId) : '';
     const approvalRemoved = await this.removeInstallApprovalUnlocked(relId);
+    if (this.options.onUninstallSourceState) this.untrustedApprovals.add(this.isolationKey(relId));
     try {
+      if (this.options.onUninstallSourceState) await this.cleanupUninstallSourceState(relId, fromPart);
       await fs.promises.rm(dir, { recursive: true, force: true });
     } catch (err) {
       // 批准已撤、标记还在:插件此刻已 fail closed(list 无 receipt → legacy-unapproved),

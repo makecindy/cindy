@@ -1,3 +1,4 @@
+import { ProjectPickerIcon } from '@/session/ProjectPickerIcon';
 import { playHaptic } from '@/platform/haptics';
 import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
 import { useComposerDragOpen } from '@/session/useComposerDragOpen';
@@ -161,7 +162,6 @@ import { discardMobileUploadedAttachment } from '@/session/mobileAttachmentUploa
 import { clearNewSessionAttachmentsForDeviceChange, discardNewSessionUploadedAttachments } from '@/session/newSessionAttachmentCleanup';
 import { useAutoResumeNewSessionDraft, useNewSessionDurableEdit } from '@/session/useNewSessionDraftRecovery';
 import { goBackGuarded } from '@/utils/backGuard';
-import { buildMobileImageAttachmentCandidate } from '@/session/mobileImageAttachment';
 import { useMobileLocalAttachments } from '@/session/useMobileLocalAttachments';
 import {
   useIncomingShareBatch,
@@ -210,6 +210,8 @@ import {
   type OrcaWorkerFormValue,
 } from '@/session/orcaTeam';
 import { buildDraftWorkerInitialTask } from '@cindy/maker-shared/orca-team';
+import { ContextSheetMediaAddButton, useContextSheetMediaSelection } from '@/session/ContextSheetMediaSelection';
+import { contextSheetMediaUploadCandidates } from '@/session/contextSheetMediaUpload';
 import { RecentPhotosStrip } from '@/session/ContextSheetMediaViews';
 import { ContextSheetGoalCreateForm } from '@/session/ContextSheetGoalView';
 import type { MobileGoalLimitsInput } from '@cindy/maker-shared/device-link-contract';
@@ -226,7 +228,6 @@ import { buildMediaPayload } from '@/session/messagePayload';
 import type { MobileMessageGalleryImage } from '@/session/messageGallery';
 import {
   prefetchContextSheetMediaAssets,
-  resolveContextSheetMediaAssetForUpload,
   type ContextSheetMediaAsset,
 } from '@/session/useContextSheetMediaAssets';
 import { canBrowsePhotoLibraryDirectly } from '@/session/photoLibraryPolicy';
@@ -3777,40 +3778,33 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     }
     return ids;
   }, [pendingUploads]);
-  // 单张点按即同步入队，再关闭面板；不等待鉴权或上传才占用附件槽位。
-  const toggleMediaAssetAttachment = useCallback((asset: ContextSheetMediaAsset) => {
-    if (mediaTapAcceptedRef.current || mediaAssetAttachments[asset.id] || uploadingMediaAssetIds.has(asset.id)) return;
-    if (attachments.length + getPendingUploadCount() >= MOBILE_MAX_ATTACHMENTS) {
+  // 点照片是一张、底部「加入对话」是选择圈选中的多张：都同步入队，再关闭面板；
+  // 不等待鉴权或上传才占用附件槽位。
+  const addMediaAssetAttachments = useCallback((assets: readonly ContextSheetMediaAsset[]) => {
+    if (mediaTapAcceptedRef.current) return;
+    const fresh = assets.filter((asset) => !mediaAssetAttachments[asset.id] && !uploadingMediaAssetIds.has(asset.id));
+    if (fresh.length === 0) return;
+    if (attachments.length + getPendingUploadCount() + fresh.length > MOBILE_MAX_ATTACHMENTS) {
       setAttachmentError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS }));
       return;
     }
     mediaTapAcceptedRef.current = true;
     setAttachmentError(null);
-    enqueueUploads([{
-      kind: 'image' as const,
-      uri: asset.uri,
-      name: asset.filename,
-      size: 0,
-      sourceId: asset.id,
-      resolve: async () => {
-        const resolved = await resolveContextSheetMediaAssetForUpload(asset);
-        const candidate = buildMobileImageAttachmentCandidate({
-          fileName: resolved.filename,
-          uri: resolved.uri,
-        }, 0);
-        return {
-          uri: candidate.uri,
-          name: candidate.name,
-          mimeType: candidate.mimeType,
-          width: resolved.width,
-          height: resolved.height,
-          // HEIC 已在 resolve 阶段一次性转码 + 缩边,跳过 preprocess 防二次有损。
-          skipPreprocess: resolved.optimized === true,
-        };
-      },
-    }], { token: auth.getAccessToken() });
+    // 候选带上选中序号:并发上传谁先传完都按选中顺序进托盘。
+    enqueueUploads(contextSheetMediaUploadCandidates(fresh), { token: auth.getAccessToken() });
     setContextSheetOpen(false);
   }, [auth, enqueueUploads, attachments.length, getPendingUploadCount, mediaAssetAttachments, uploadingMediaAssetIds, t]);
+  const toggleMediaAssetAttachment = useCallback(
+    (asset: ContextSheetMediaAsset) => addMediaAssetAttachments([asset]),
+    [addMediaAssetAttachments],
+  );
+  // 选择圈多选的待选集：留在面板里，点底部按钮才一起加入；没提交就关掉面板即放弃。
+  const mediaSelection = useContextSheetMediaSelection({
+    open: contextSheetOpen,
+    getRemainingSlots: () => MOBILE_MAX_ATTACHMENTS - attachments.length - getPendingUploadCount(),
+    onLimitReached: () => setAttachmentError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS })),
+    onChanged: () => setAttachmentError(null),
+  });
   const selectedMediaAssetIds = useMemo(() => {
     const attachmentIds = new Set(attachments.map((item) => item.id));
     return new Set(
@@ -5280,7 +5274,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   style={({ pressed }) => [styles.selectorRow, pressed && styles.pressed]}
                   testID="newSession.workspaceSelector"
                 >
-                  <WorkspaceIcon color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />
+                  {draft.workspaceKind === 'project' && draft.workingDir && selectedDeviceId ? <ProjectPickerIcon deviceId={selectedDeviceId} workingDir={draft.workingDir} title={workspaceLabel} size={iconSize.action} /> : <WorkspaceIcon color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />}
                   <Text style={styles.selectorText} numberOfLines={1}>{workspaceLabel}</Text>
                   <ChevronsUpDown color={colors.borderStrong} size={iconSize.sm} strokeWidth={iconStroke.regular} />
                 </Pressable>
@@ -5753,7 +5747,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               disabled={creating}
               enabled={contextSheetOpen}
               onToggleAsset={toggleMediaAssetAttachment}
-
+              selection={mediaSelection}
               selectedAssetIds={selectedMediaAssetIds}
               testID="newSession.contextSheetPhotos"
             />
@@ -5775,6 +5769,13 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               setContextSheetOpen(false);
             }}
             testID="newSession.collabDraftSubmit"
+          />
+        ) : contextSheetView === 'main' && contextSheetMediaLibraryEnabled && mediaSelection.assets.length > 0 ? (
+          <ContextSheetMediaAddButton
+            disabled={creating}
+            onAddAssets={addMediaAssetAttachments}
+            selection={mediaSelection}
+            testID="newSession.contextSheetAddPhotosButton"
           />
         ) : undefined}
         testID="newSession.contextSheet"

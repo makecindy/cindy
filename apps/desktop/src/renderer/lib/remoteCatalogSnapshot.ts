@@ -3,10 +3,12 @@
  */
 import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
 import { readProviderMetadataContinuity } from '@cindy/device-link';
-import { evictAllRemoteCapabilities, evictDeviceCapabilities, prefetchDeviceCapabilities } from '@/hooks/useAgentCapabilities';
+import { evictAllRemoteCapabilities, evictDeviceCapabilities, getDeviceCapabilitiesGeneration, getInterestedDeviceCapabilityTargets, prefetchDeviceCapabilities } from '@/hooks/useAgentCapabilities';
 import {
   evictAllDeviceProviders,
   evictDeviceProviders,
+  getDeviceProvidersGeneration,
+  getInterestedDeviceProviderTargets,
   isDeviceProvidersGenerationCurrent,
   prefetchDeviceProviders,
 } from '@/hooks/useDeviceProviders';
@@ -34,8 +36,20 @@ export async function refreshRemoteCatalogSnapshot(deviceId: string, notificatio
   const retainDisplaySnapshot = !options?.retireOnly
     && readProviderMetadataContinuity(notification)?.remainingMs !== 0;
   const retireOnly = options?.retireOnly === true;
+  // Capture in-flight-only consumers before eviction removes their request keys.
+  // The direct source and every affected task-host route retain separate caches
+  // and refresh generations; never reopen aliases for a denial/retirement.
+  const routedTargets = retireOnly ? [] : [...new Set([
+    ...getInterestedDeviceProviderTargets(deviceId),
+    ...getInterestedDeviceCapabilityTargets(deviceId),
+  ])].filter(key => key !== deviceId);
   const generation = evictDeviceProviders(deviceId, { retainDisplaySnapshot });
   evictDeviceCapabilities(deviceId, { retainDisplaySnapshot });
+  const routedGenerations = routedTargets.map(key => ({
+    key,
+    providers: getDeviceProvidersGeneration(key),
+    capabilities: getDeviceCapabilitiesGeneration(key),
+  }));
   if (retireOnly) {
     // Invalidate any queued refresh for this exact target. Its callback still
     // checks the device generation, and deleting the entry prevents it from
@@ -56,7 +70,16 @@ export async function refreshRemoteCatalogSnapshot(deviceId: string, notificatio
     await refresh.schedule(async () => {
       // A queued refresh must not reopen reads after disconnect or account change.
       if (!isDeviceProvidersGenerationCurrent(deviceId, generation)) return;
-      await Promise.all([prefetchDeviceProviders(deviceId), prefetchDeviceCapabilities(deviceId)]);
+      await Promise.all([
+        prefetchDeviceProviders(deviceId), prefetchDeviceCapabilities(deviceId),
+        ...routedGenerations.map(target => {
+          // The task host can disconnect independently while its source refresh
+          // is queued. Never reopen a route retired after this invalidation.
+          if (!isDeviceProvidersGenerationCurrent(target.key, target.providers)
+            || getDeviceCapabilitiesGeneration(target.key) !== target.capabilities) return;
+          return refreshRemoteCatalogSnapshot(target.key, notification);
+        }),
+      ]);
     });
   } finally {
     if (refreshes.get(deviceId) === refresh) refreshes.delete(deviceId);

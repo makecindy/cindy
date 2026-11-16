@@ -498,8 +498,9 @@ describe('HostTerminalService caller ownership', () => {
   it('requires gateway-attested plugin identity and keeps reconnected clients on the same installation jobs', async () => {
     const host = service();
     const caller = { kind: 'plugin' as const, pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1 };
-    const ghost = { enabled: true, dir: '/fixture/p', approval: { state: 'approved', revision: 'r1' },
-      approvedHostToolGroups: ['terminal'], manifest: { agent: { hostTools: ['terminal'] } } } as InstalledGhost;
+    const ghost: InstalledGhost = { enabled: true, dir: '/fixture/p', approval: { state: 'approved', revision: 'r1' },
+      manifest: { schemaVersion: 3, id: 'p', name: 'Plugin P', version: '1.0.0', kind: 'chip', entry: 'main.js',
+        agent: { hostTools: ['terminal'] } } };
     let attested = false;
     const call = createTerminalToolExecutor({ service: host, owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), pending: () => false,
       getGhost: () => ghost, getSession: () => undefined, pluginDirectory: () => terminalCwd,

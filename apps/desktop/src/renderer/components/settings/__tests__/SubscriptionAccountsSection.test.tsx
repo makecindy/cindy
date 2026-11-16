@@ -15,7 +15,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
-  useConfirmDialog: () => ({ confirm: vi.fn() }),
+  useConfirmDialog: () => ({ confirm: vi.fn(async () => true) }),
 }));
 
 import { SubscriptionAccountsSection, SubscriptionPoolViewCache } from '../SubscriptionAccountsSection';
@@ -29,7 +29,9 @@ const view: SubscriptionPoolView = {
   configured: true,
   strategy: 'least',
   accounts: [
-    { id: 'default', paused: false, limit: 4, weight: 1, directory: '/home/.claude', status: 'ready', running: 0, identity: 'first@example.test' },
+    { id: 'default', paused: false, limit: 4, weight: 1, directory: '/home/.claude', status: 'ready', running: 0, identity: 'first@example.test',
+      plan: 'max', planTier: 'max_20x', usage: { claude: { source: 'oauth-endpoint', updatedAt: Date.now(),
+        fiveHour: { utilization: 10, resetsAt }, sevenDay: { utilization: 20, resetsAt }, scoped: [] } } },
     {
       id: 'cindy-owner-second',
       paused: false,
@@ -65,6 +67,17 @@ beforeEach(() => {
 });
 
 describe('SubscriptionAccountsSection usage', () => {
+  // Unit: the CLI-origin row hid Remove even though it must be an ordinary pool member.
+  it('allows removing the first CLI-origin account through the same menu and command', async () => {
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    const rows = await screen.findAllByTestId('subscription-account');
+    fireEvent.pointerDown(within(rows[0]).getByRole('button', { name: 'providerGroup.member.moreAria' }),
+      { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'subscriptionAccounts.remove' }));
+    await waitFor(() => expect(window.electronAPI.subscriptionAccounts.command).toHaveBeenCalledWith({
+      action: 'remove', providerId: 'anthropic', accountId: 'default',
+    }));
+  });
   // Unit regression: the real second-account row must expose the shared reset UI
   // and send its own scope/key. Previously only the supplied default card had it.
   it.each([true, false])('shows and saves second-account reset preferences with quota present=%s', async hasQuota => {
@@ -86,9 +99,9 @@ describe('SubscriptionAccountsSection usage', () => {
       } } } : undefined },
     ] });
     render(<SubscriptionAccountsSection providerId="openai" defaultUsage={<div>Default quota</div>} />);
-    const toggle = await screen.findByRole('switch', { name: 'codexResets.autoUse.label' });
-    const rows = screen.getAllByTestId('subscription-account');
-    expect(within(rows[0]).getByText('Default quota')).toBeTruthy();
+    const rows = await screen.findAllByTestId('subscription-account');
+    const toggle = await within(rows[1]).findByRole('switch', { name: 'codexResets.autoUse.label' });
+    expect(screen.queryByText('Default quota')).toBeNull();
     expect(within(rows[1]).getByText('codexResets.title')).toBeTruthy();
     expect(getCodexRateLimits).toHaveBeenCalledWith(scope);
     await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
@@ -153,36 +166,37 @@ describe('SubscriptionAccountsSection usage', () => {
     await waitFor(() => expect(error).toHaveBeenCalledWith('subscriptionAccounts.providerManagedAuth'));
   });
 
-  it('keeps the provider card on the default account and shows every window of added accounts', async () => {
+  it('shows each account quota and tier without a privileged default card', async () => {
     render(
       <SubscriptionAccountsSection
         providerId="anthropic"
         defaultUsage={<div data-testid="original-card">original</div>}
       />,
     );
-    const original = await screen.findByTestId('original-card');
-    const rows = screen.getAllByTestId('subscription-account');
+    const rows = await screen.findAllByTestId('subscription-account');
     expect(rows).toHaveLength(2);
-    expect(within(rows[0] as HTMLElement).getByTestId('original-card')).toBe(original);
-    expect(screen.getAllByTestId('original-card')).toHaveLength(1);
+    expect(screen.queryByTestId('original-card')).toBeNull();
+    expect(within(rows[0]).getByText('Max 20×')).toBeTruthy();
+    expect(screen.queryByText('subscriptionAccounts.defaultTag')).toBeNull();
     const added = within(rows[1] as HTMLElement);
     for (const name of ['quotaCard.fiveHourLabel', 'quotaCard.weeklyLabel', 'Fable weekly'])
       expect(added.getByRole('progressbar', { name })).toBeTruthy();
-    expect(within(rows[0] as HTMLElement).queryByRole('progressbar')).toBeNull();
+    expect(within(rows[0]).getByRole('progressbar', { name: 'quotaCard.fiveHourLabel' })).toBeTruthy();
   });
   // Regression: a failed refresh kept the list and also showed the provider card below it.
-  it('shows the provider card once when a refresh fails after the list loaded', async () => {
+  it('keeps account quotas without adding a legacy card when refresh fails', async () => {
     render(
       <SubscriptionAccountsSection
         providerId="anthropic"
         defaultUsage={<div data-testid="original-card">original</div>}
       />,
     );
-    await screen.findByTestId('original-card');
+    await screen.findAllByTestId('subscription-account');
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockRejectedValueOnce(new Error('offline'));
     fireEvent.focus(window);
     expect(await screen.findByRole('alert')).toBeTruthy();
-    expect(screen.getAllByTestId('original-card')).toHaveLength(1);
+    expect(screen.queryByTestId('original-card')).toBeNull();
+    expect(screen.getAllByTestId('subscription-account-usage')).toHaveLength(2);
   });
   // Regression: a connected account's menu offered plain "Sign in", reading as if it were signed out.
   it.each([

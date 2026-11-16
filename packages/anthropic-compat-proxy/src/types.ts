@@ -17,6 +17,8 @@ import type { Transform } from "node:stream";
 
 import type { OutboundProxyResolver } from "./outbound-proxy.js";
 import type { OversizedBody } from './oversized-attachments.js';
+import type { ImageRouteInfo, InlineImagePreprocessor, RequestSizeResult, WireFormat } from './request-size-control.js';
+import type { RequestSizeError } from './request-size-errors.js';
 
 /** Capture request ownership synchronously; only overflow invokes the returned recovery. */
 export type OversizedRequestRecovery = (ctx: RequestTransformCtx) =>
@@ -35,6 +37,27 @@ export interface OversizedRequestCompactor {
     ctx: RequestTransformCtx,
     targetBytes: number,
   ): unknown | null | Promise<unknown | null>;
+}
+
+/** Request-size policy injected by the host. It runs before compatibility transforms. */
+export interface RequestSizeController {
+  enabled?: () => boolean;
+  format?: (ctx: RequestTransformCtx, body: unknown) => WireFormat | null;
+  route?: (ctx: RequestTransformCtx, body: unknown) => ImageRouteInfo;
+  preprocessor?: InlineImagePreprocessor;
+  retry?: (body: Buffer, error: RequestSizeError, ctx: RequestTransformCtx, signal: AbortSignal) => Promise<Buffer | null>;
+  control: (body: Buffer, format: WireFormat, policy: {
+    route: ImageRouteInfo;
+    signal: AbortSignal;
+    reason?: string;
+    context?: RequestTransformCtx;
+    singleImageMaxBytes?: number;
+    triggerBytes?: number;
+    targetBytes?: number;
+    triggerImages?: number;
+    targetImages?: number;
+    allowRemoval?: boolean;
+  }) => Promise<RequestSizeResult | null>;
 }
 
 /**
@@ -333,6 +356,10 @@ export interface ProxyOptions {
    * check.
    */
   oversizedRequestCompactor?: OversizedRequestCompactor;
+  /** Deterministic image/history budget controller. Disabled with the host kill switch. */
+  requestSizeController?: RequestSizeController;
+  /** Optional one-shot retry for upstream image/request size errors after decoded 400 text. */
+  requestSizeRetry?: (body: Buffer, error: RequestSizeError, signal: AbortSignal) => Promise<Buffer | null>;
   /** Maximum bytes accepted for an oversized request before compaction. */
   oversizedRequestIngressBytes?: number;
   /**

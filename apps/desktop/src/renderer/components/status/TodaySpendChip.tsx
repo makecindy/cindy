@@ -933,7 +933,7 @@ export function TodaySpendChip({
   });
   // cc 订阅判定对齐 main 的 isClaudeSubscriptionSession(register.ts)+ proxy 实际路由:
   //   - 显式选 Anthropic 供应商 → 订阅直连(Claude 模型直连 api.anthropic.com,
-  //     LiteLLM 看不到, gateway quota 不代表真实花费, 抑制 daily/monthly 展示);
+  //     这类消费不计入 Cindy AI 账号额度, gateway quota 不代表真实花费, 抑制 daily/monthly 展示);
   //   - 默认路由(providerId=null)→ **优先用 proxy 观察到的会话生效路由**
   //     (claude-session-route-registry, 每请求真值):cc 子进程凭证在 spawn 时冻结,
   //     用全局活性凭证状态重算会与实际路由发散(典型:gateway-spawn 会话跑着时
@@ -1086,7 +1086,7 @@ export function TodaySpendChip({
   const providerAccountSnapshot =
     providerAccountUsage.result?.status === 'ready' ? providerAccountUsage.result.snapshot : null;
   // Model Access 配额只属于实际走 XD/Cindy AI Gateway 的本地会话。显式自定义供应商即使
-  // 复用了 env-key / oauth-bearer host，也不能据 host 的启动凭证把 /v2/user/info 串进来。
+  // 复用了 env-key / oauth-bearer host，也不能据 host 的启动凭证读取企业账号额度。
   const isClaudeGateway =
     vendorKey === 'cc' &&
     !isAnyRemoteSession &&
@@ -1108,7 +1108,7 @@ export function TodaySpendChip({
           (codexAuthInjection === 'provider-oauth' && hasGatewayKey))));
   const usesGatewayQuota = isClaudeGateway || isCodexGateway || isPiGateway;
   // device-link 远程网关形态:显式 XD / codex 折扣模型 / pi 默认(provider 创建时固化,
-  // 空即 XD)直接判;cc 默认路由用被控端路由观察镜像。数据走被控端 LiteLLM 配额镜像,
+  // 空即 XD)直接判;cc 默认路由用被控端路由观察镜像。数据走被控端 Cindy AI 企业账号配额镜像,
   // 本机 quota hook(usesGatewayQuota)对远程保持关闭;credit 三池 handler 绑定主窗口
   // sender 不镜像 —— 按本机「拿不到就隐藏」的既有降级语义,credit 行远程不显示。
   const isDeviceLinkRemoteGateway =
@@ -1843,7 +1843,7 @@ export function TodaySpendChip({
       );
     }
     // Account quota is separate from lifetime task cost. API and SSH-remote routes never borrow it;
-    // device-link 网关形态用被控端 LiteLLM 配额镜像(claudeQuota 已切换),credit 三池不镜像。
+    // device-link 网关形态用被控端 Cindy AI 企业账号配额镜像(claudeQuota 已切换),credit 三池不镜像。
     if (usesGatewayQuota || isDeviceLinkRemoteGateway) {
       account.title = providerDisplayNameById('xd', quotaProviders, t);
       if (creditTotals) {

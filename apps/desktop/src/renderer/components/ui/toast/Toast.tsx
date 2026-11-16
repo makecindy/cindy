@@ -1,3 +1,4 @@
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { ConfettiBurst } from '@/components/ui/ConfettiBurst';
 import { Button } from '@/components/ui/button';
 import { Star, X, CircleCheck, CircleX, Info, LoaderCircle, TriangleAlert, type LucideIcon } from 'lucide-react';
@@ -103,6 +104,7 @@ export function Toast({ item, message }: ToastProps) {
   return (
     <div
       ref={panelRef}
+      style={WINDOW_NO_DRAG_STYLE}
       role={meta.role}
       aria-live={meta.ariaLive}
       data-state={item.exiting ? 'exiting' : 'entering'}

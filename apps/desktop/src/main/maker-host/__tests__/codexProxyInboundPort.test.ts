@@ -9,6 +9,14 @@
  *   其它选项。
  * - tier：unit（代理包的创建函数换成记录选项的桩，不起端口）。
  */
+import sharp from 'sharp';
+import { once } from 'node:events';
+import type { Transform } from 'node:stream';
+import { createWebSocketMessageTransform } from '@cindy/anthropic-compat-proxy';
+import type { RequestSizeController } from '@cindy/anthropic-compat-proxy';
+import { createAttachmentRecoveryService } from '../oversizedAttachmentRecoveryCore.js';
+import { createAnthropicCompatProxyHost, type AnthropicCompatProxyHostPorts } from '../anthropicCompatProxyHostCore.js';
+import { setSessionProvider, clearSessionProvider } from '../session-provider-store.js';
 import { describe, expect, it, vi } from 'vitest';
 
 const captured = vi.hoisted(() => [] as Array<{ kind: string; options: Record<string, unknown> }>);
@@ -27,6 +35,7 @@ const ports = (): CodexProxyHostPorts => ({
   bearerKeyFromHeaders: () => null,
   reportCindyGatewayKeyRejected: () => {},
   createAttachmentRecovery: () => null,
+  createRequestSizeController: (_resolve: unknown, preprocessor: import('@cindy/anthropic-compat-proxy').InlineImagePreprocessor): ReturnType<CodexProxyHostPorts['createRequestSizeController']> => ({ preprocessor, control: async () => null }),
   restrictSubscriptionRequest: (decision: unknown) => decision,
   withSubscriptionFastRequestPolicy: (decision: unknown) => decision,
   peekGrokAccessToken: () => null,
@@ -74,10 +83,119 @@ describe('the optional inbound check port of the Codex proxy core', () => {
       expect(without[index], kind).toHaveLength(1);
       expect(withGate[index], kind).toHaveLength(1);
       const a = without[index]![0]!.options;
+      // PR 2: every proxy kind forwards a real prepare/tighten adapter.
+      expect(a.requestSizeController).toMatchObject({ preprocessor: { prepare: expect.any(Function), tighten: expect.any(Function) } });
       const b = withGate[index]![0]!.options;
       expect('authorizeInbound' in a, kind).toBe(false);
       expect(b.authorizeInbound, kind).toBe(gate);
       expect(Object.keys(b).filter(key => key !== 'authorizeInbound'), kind).toEqual(Object.keys(a));
     }
   });
+});
+
+
+// Unit, PR 2 provider handoff: real shared host factory -> real controller.route
+// -> real image encoder. Proxy socket creation and storage are stubbed; this
+// does not claim account authentication or outbound routing/HTTP coverage.
+it.each(['codex', 'claude-code'] as const)('passes the selected provider to image compression for %s without Pi headers', async engine => {
+  const recovery = createAttachmentRecoveryService({
+    getUserDataDir: () => { throw new Error('Provider-only test must not touch storage'); },
+    media: {} as never, // route() uses no media ports; any accidental storage call fails.
+  });
+  const factoryPorts = { ...ports(), createRequestSizeController: recovery.createRequestSizeController };
+  const codex = engine === 'codex' ? createCodexProxyHost(factoryPorts) : undefined;
+  const claude = engine === 'claude-code' ? createAnthropicCompatProxyHost({
+    ...factoryPorts,
+    createPiWebSocketRequestPreparer: () => undefined,
+    resolvePiWebSocketUpstream: () => undefined,
+    piWebSocketTransforms: () => [],
+    getPiNativeSubscriptionHandler: () => undefined,
+    getResponsesBridgeHandler: () => undefined,
+    subscriptionRequestAllowsFast: () => true,
+  } as unknown as AnthropicCompatProxyHostPorts) : undefined;
+  const sessionId = `image-provider-${engine}`;
+  const threadId = `image-thread-${engine}`;
+  current.kind = `image-provider:${engine}`;
+  codex?.registerComposed(sessionId, threadId, '');
+  claude?.setClaudeProxySessionIdResolver(id => id);
+  try {
+    if (codex) await codex.ensureCodexProxyReady();
+    else await claude!.ensureAnthropicCompatProxyReady();
+    const controller = captured.find(entry => entry.kind === current.kind)!.options.requestSizeController as RequestSizeController;
+    const png = await sharp({ create: { width: 64, height: 48, channels: 3, background: '#245681' } }).png({ compressionLevel: 0 }).toBuffer();
+    const headers: Record<string, string> = codex ? { 'thread-id': threadId } : { 'x-claude-code-session-id': sessionId };
+    for (const [providerId, modelId, expectedMime] of [
+      ['openai', 'gpt-6-astra', 'image/webp'],
+      ['xai', 'grok-4', 'image/png'],
+      ['zhipu', 'glm-5', 'image/png'],
+    ]) {
+      setSessionProvider(sessionId, providerId);
+      const route = controller.route!({ reqId: 1, method: 'POST', url: codex ? '/v1/responses' : '/v1/messages', headers }, { model: modelId });
+      expect(route.providerId).toBe(providerId);
+      const image = await controller.preprocessor!.prepare({ bytes: png, mimeType: 'image/png', route, signal: new AbortController().signal });
+      expect(image?.mimeType).toBe(expectedMime);
+      expect(image).toMatchObject({ width: 64, height: 48, changed: true });
+      expect(await sharp(image!.bytes).raw().toBuffer()).toEqual(await sharp(png).raw().toBuffer());
+    }
+  } finally {
+    clearSessionProvider(sessionId);
+    codex?.unregister(sessionId);
+    await codex?.disposeCodexProxy();
+    await claude?.disposeAnthropicCompatProxy();
+  }
+});
+
+// Unit: exercise the real host WebSocket frame transform and real encoder, not
+// just prepare(). Fifty-two images would cross the count limit in a full replay.
+it('compresses PNGs in an incremental Codex WebSocket frame without removing images', async () => {
+  const recovery = createAttachmentRecoveryService({
+    getUserDataDir: () => { throw new Error('Incremental frames must not use storage'); },
+    media: {} as never,
+  });
+  const controllers: RequestSizeController[] = [];
+  const host = createCodexProxyHost({ ...ports(),
+    createRequestSizeController: (...args) => {
+      const controller = recovery.createRequestSizeController(...args);
+      vi.spyOn(controller, 'control');
+      controllers.push(controller);
+      return controller;
+    },
+  });
+  current.kind = 'image-websocket-incremental';
+  host.registerComposed('image-ws-session', 'image-ws-thread', '');
+  setSessionProvider('image-ws-session', 'openai');
+  try {
+    await host.ensureCodexProxyReady();
+    const options = captured.find(entry => entry.kind === current.kind)!.options as unknown as {
+      webSocketTransforms: (context: { url: string; headers: Record<string, string> }) => { outbound: Transform };
+    };
+    const png = await sharp({ create: { width: 64, height: 48, channels: 3, background: '#456789' } }).png({ compressionLevel: 0 }).toBuffer();
+    const image = { type: 'input_image', image_url: `data:image/png;base64,${png.toString('base64')}` };
+    const payload = Buffer.from(JSON.stringify({ type: 'response.create', model: 'gpt-6-astra', previous_response_id: 'prior-response', input: Array(52).fill(image) }));
+    const header = Buffer.alloc(14);
+    header[0] = 129; header[1] = 128 | 127; header.writeBigUInt64BE(BigInt(payload.length), 2);
+    const { outbound } = options.webSocketTransforms({ url: '/backend-api/codex/responses', headers: { 'thread-id': 'image-ws-thread' } });
+    const forwarded: Buffer[] = [];
+    outbound.on('data', chunk => forwarded.push(Buffer.from(chunk)));
+    const ended = once(outbound, 'end');
+    outbound.end(Buffer.concat([header, payload]));
+    await ended;
+    let message: Buffer = Buffer.alloc(0);
+    const reader = createWebSocketMessageTransform(true, decoded => { message = decoded; return decoded; });
+    reader.resume();
+    const read = once(reader, 'end');
+    reader.end(Buffer.concat(forwarded));
+    await read;
+    expect(controllers[0].control).toHaveBeenCalledWith(expect.any(Buffer), 'responses', expect.objectContaining({ allowRemoval: false }));
+    const body = JSON.parse(message.toString());
+    expect(body.previous_response_id).toBe('prior-response');
+    expect(body.input).toHaveLength(52);
+    for (const item of body.input) expect(item.image_url).toMatch(/^data:image\/webp;base64,/);
+    expect(await sharp(Buffer.from(body.input[0].image_url.split(',')[1], 'base64')).raw().toBuffer()).toEqual(await sharp(png).raw().toBuffer());
+    expect(message.length).toBeLessThan(payload.length * 0.85);
+  } finally {
+    clearSessionProvider('image-ws-session');
+    host.unregister('image-ws-session');
+    await host.disposeCodexProxy();
+  }
 });

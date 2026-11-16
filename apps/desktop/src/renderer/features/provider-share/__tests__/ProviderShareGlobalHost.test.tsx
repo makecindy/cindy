@@ -28,6 +28,7 @@ vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn(), error: vi.fn(), info:
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => bus.auth }));
 vi.mock('@/lib/remoteCatalogSnapshot', () => ({ refreshRemoteCatalogSnapshot: vi.fn(async () => undefined) }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
+  hasDeviceProvidersInterest: () => false,
   getCachedDeviceProviders: () => null,
   isSubscriptionShareCatalogStale: () => false,
   hasSubscriptionShareCatalog: () => false,

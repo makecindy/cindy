@@ -1,3 +1,5 @@
+import { SessionProjectSettingsButton } from './sidebar/SessionProjectSettingsButton';
+import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { SessionTaskMenu } from './sidebar/SessionTaskMenu';
 import { PluginUiSlot, PluginUiMenu } from '@/cindy-brain/PluginUiContributions';
@@ -25,7 +27,7 @@ import { TaskMigrationStatus } from './TaskMigrationStatus';
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Ellipsis, Pin } from 'lucide-react';
+import { ArrowLeft, Ellipsis, MessagesSquare, Pin } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -650,6 +652,16 @@ export function SessionContentHeader({
         <AgentDeviceIndicator deviceId={session.agentDeviceId} agentKind={session.agentKind} />
       )}
 
+      {session.workspaceKind === 'dialogue' ? (
+        <span className="mr-1 inline-flex size-5 shrink-0 items-center justify-center text-[var(--text-secondary)]" aria-hidden="true">
+          <MessagesSquare size={16} strokeWidth={1.75} />
+        </span>
+      ) : !sharedGuest && sessionProjectDirectory(session) ? (
+        <SessionProjectSettingsButton
+          key={`${session.deviceLinkDeviceId ?? ''}:${session.remoteHostId ?? ''}:${sessionProjectDirectory(session)}`}
+          session={session} disabled={remoteWritesBlocked}
+        />
+      ) : null}
       {isEditing ? (
         <div style={WINDOW_NO_DRAG_STYLE}>
           <SessionRenameInput
