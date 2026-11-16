@@ -96,6 +96,13 @@ export function replyFileLinks(text: string) {
   return { links: positionedLinks, text: deliveredText };
 }
 
+/** Detect rendered Markdown images before a file-only fallback is published. */
+export function hasMarkdownImages(text: string): boolean {
+  let found = false;
+  visit(parser.parse(text), ['image', 'imageReference'], () => { found = true; });
+  return found;
+}
+
 function localPath(url: string, workDir: string): string {
   url = withoutLineLocator(url);
   let value = url;
