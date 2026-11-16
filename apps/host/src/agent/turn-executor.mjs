@@ -874,8 +874,10 @@ export function createTurnExecutor(deps) {
     reconcileIdle(id) {
       const turn = turns.get(id);
       if (!turn?.abortRequested || turn.terminal || turn.session?.isTurnRunning?.() !== false) return false;
-      // finish owns the durable terminal. Its asynchronous settlement releases
-      // the coordinator; returning true here would let the next input overtake it.
+      // finish owns the durable terminal and its asynchronous settlement wakes the coordinator. What
+      // holds the next input until the rows settle is isRunning (the coordinator rechecks it before any
+      // dispatch; input-queue.test.mjs 'the next input is not dispatched before the reply rows settle');
+      // this only reports that the turn has not been reconciled, so no idle is claimed while it writes.
       void finish(id, turn);
       return false;
     },

@@ -1483,6 +1483,61 @@ test('each terminal reaches the coordinator once: a done, a stop that only goes 
   await h.queue.dispose();
 });
 
+// Checkpoint 4a. Rule: the coordinator now gets a terminal on arrival, while the Host still counts the
+// turn as running until its rows settle and the Session is already idle; that pair must not read as a
+// stale boundary. (1) The next input waits for the reply rows however long they take, past the
+// coordinator's stale-boundary confirmation (250 ms). (2) Once the rows settle nothing keeps re-checking
+// the boundary: the Host's live-turn probe answers "unavailable" while the rows settle, so no
+// stale-boundary retry starts; before it, a failed stop left the queue retrying every 250 ms forever.
+// Tier: unit, Host queue with the shared coordinator, mocked clock.
+const settle = async (rounds = 50) => { for (let i = 0; i < rounds; i += 1) await new Promise(resolve => setImmediate(resolve)); };
+
+test('the next input is not dispatched before the reply rows settle, even past the stale-boundary confirmation', async t => {
+  let releaseWrite;
+  const write = new Promise(resolve => { releaseWrite = resolve; });
+  const h = createHarness({ persistMessage: async (_id, row) => { if (row.role === 'assistant') await write; } });
+  await enqueue(h, 'held-write', { clientId: 'a', text: 'first' });
+  const session = h.maker.sessions.get('held-write');
+  await h.queue.enqueue('held-write', { clientId: 'b', text: 'second' });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  session.emit({ type: 'text', data: { text: 'the reply', isFinal: true } });
+  session.emit({ type: 'done' });
+  for (let i = 0; i < 8; i += 1) { await settle(); t.mock.timers.tick(250); }
+  await settle();
+  assert.deepEqual(h.queue.projection('held-write').pendingQueue.map(item => item.clientId), ['b'],
+    'the coordinator keeps the next input queued');
+  assert.equal(h.queue.projection('held-write').turnInProgress, true);
+  assert.deepEqual(session.sent, ['first'], 'the next input waits for the reply row');
+  assert.equal(h.maker.sessions.size, 1, 'no other runtime is started');
+  releaseWrite();
+  for (let i = 0; i < 20 && session.sent.length < 2; i += 1) { await settle(); t.mock.timers.tick(250); }
+  assert.deepEqual(session.sent, ['first', 'second']);
+  t.mock.timers.reset();
+  await h.queue.dispose();
+});
+
+test('once the rows settle no stale-boundary retry is left running, even with input held by a failed stop', async t => {
+  const retries = t.mock.method(AgentInputCoordinator.prototype, 'scheduleSessionRunningRetry');
+  const retriesFor = id => retries.mock.calls.filter(call => call.arguments[0] === id).length;
+  const h = createHarness();
+  await enqueue(h, 'no-poll', { clientId: 'a', text: 'long' });
+  const session = h.maker.sessions.get('no-poll');
+  session.abort = async () => { throw new Error('abort failed'); };
+  await h.queue.enqueue('no-poll', { clientId: 'b', text: 'later' });
+  await assert.rejects(h.queue.stop('no-poll'), /abort failed/);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  session.emit({ type: 'text', data: { text: 'finished after failed abort', isFinal: true } });
+  session.emit({ type: 'done' });
+  for (let i = 0; i < 20 && h.queue.projection('no-poll').turnInProgress; i += 1) { await settle(); t.mock.timers.tick(250); }
+  assert.equal(h.queue.projection('no-poll').turnInProgress, false);
+  const settled = retriesFor('no-poll');
+  for (let i = 0; i < 8; i += 1) { t.mock.timers.tick(250); await settle(); }
+  assert.equal(retriesFor('no-poll'), settled, 'nothing re-checks the boundary after the rows settle');
+  assert.deepEqual(session.sent, ['long']);
+  t.mock.timers.reset();
+  // No dispose: its stop would meet the same failing abort (as in the failed abort test above).
+});
+
 // A provider may acknowledge abort before it is idle, without a later done.
 // Reconciliation must release that boundary only after the partial reply saves.
 test('late provider idle after stop saves the partial reply before draining', async t => {
