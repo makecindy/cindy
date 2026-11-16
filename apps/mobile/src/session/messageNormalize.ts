@@ -762,6 +762,9 @@ function toolResultContentToPreview(content: unknown): string {
 }
 
 function uncachedToolResultContentToPreview(content: unknown): string {
+  // History and durable row pushes carry decoded JSON. Unwrapping only `text`
+  // would discard the managed media needed by tool previews and their viewer.
+  if (Array.isArray(readRecord(content)?.cindy_process_media)) return JSON.stringify(content);
   const compacted = parseToolResultCompactionMarker(content);
   if (!compacted) return contentToPreview(content);
   return i18n.t('message.renderer.toolResultCompacted', {
