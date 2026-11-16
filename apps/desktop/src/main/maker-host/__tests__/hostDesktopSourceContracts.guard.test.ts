@@ -613,3 +613,97 @@ describe('event types the desktop pipeline acts on, classified for the Host', ()
     }
   });
 });
+
+// Rule: AgentDeps is one interface for the three engines, and the Host writes every optional port of
+// each engine's bag out (runtime.ts, explicitPorts). The ports only another engine reads are written
+// once, in apps/host/src/agent/agent-deps-engines.ts, grouped by which engines read them. That grouping
+// was read off maker-core by hand. If an engine later starts reading a port grouped as another engine's,
+// the Host's bag for it keeps `undefined` there and nothing fails; this recomputes the grouping from the
+// agents' source and compares. Failure: a port the engine now reads stays unbound on the Host.
+describe('the Host\'s grouping of AgentDeps ports by the engines that read them', () => {
+  const coreAgents = path.join(repo, 'packages/maker-core/src/agents');
+  const ENGINES = { 'claude-code': 'claude', codex: 'codex', pi: 'pi' } as const;
+  type Engine = (typeof ENGINES)[keyof typeof ENGINES];
+  const BAGS: Record<string, Engine[]> = {
+    PORTS_ONLY_CODEX_READS: ['codex'],
+    PORTS_ONLY_PI_READS: ['pi'],
+    PORTS_ONLY_CLAUDE_READS: ['claude'],
+    PORTS_ONLY_CLAUDE_AND_PI_READ: ['claude', 'pi'],
+    PORTS_ONLY_CLAUDE_AND_CODEX_READ: ['claude', 'codex'],
+  };
+
+  /**
+   * The AgentDeps members a file reads: `deps.x`, `this.deps.x` (also with `?.`), and names destructured
+   * from either. Read from the syntax tree, so a port named in a comment or a string is not a read.
+   */
+  function readsIn(file: string): Set<string> {
+    const source = ts.createSourceFile(file, read(file), ts.ScriptTarget.Latest, true);
+    const isDeps = (node: ts.Expression) => (ts.isIdentifier(node) && node.text === 'deps')
+      || (ts.isPropertyAccessExpression(node) && node.name.text === 'deps' && node.expression.kind === ts.SyntaxKind.ThisKeyword);
+    const names = new Set<string>();
+    const visit = (node: ts.Node) => {
+      if (ts.isPropertyAccessExpression(node) && isDeps(node.expression)) names.add(node.name.text);
+      if (ts.isVariableDeclaration(node) && node.initializer && isDeps(node.initializer) && ts.isObjectBindingPattern(node.name)) {
+        for (const element of node.name.elements) {
+          const key = element.propertyName ?? element.name;
+          if (ts.isIdentifier(key)) names.add(key.text);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    return names;
+  }
+  function files(dir: string): string[] {
+    return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) return entry.name === '__tests__' ? [] : files(full);
+      return entry.name.endsWith('.ts') && !entry.name.includes('.test.') ? [full] : [];
+    });
+  }
+  function optionalAgentDepsPorts(): string[] {
+    const file = path.join(coreAgents, 'base-agent.ts');
+    const source = ts.createSourceFile(file, read(file), ts.ScriptTarget.Latest, true);
+    const decl = source.statements.find((node): node is ts.InterfaceDeclaration =>
+      ts.isInterfaceDeclaration(node) && node.name.text === 'AgentDeps');
+    assert.ok(decl, 'AgentDeps');
+    return decl.members.filter(member => member.questionToken && member.name && ts.isIdentifier(member.name))
+      .map(member => (member.name as ts.Identifier).text);
+  }
+  function hostBags(): Record<string, string[]> {
+    const file = path.join(hostAgent, 'agent-deps-engines.ts');
+    const source = ts.createSourceFile(file, read(file), ts.ScriptTarget.Latest, true);
+    const bags: Record<string, string[]> = {};
+    const visit = (node: ts.Node) => {
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+        let init: ts.Expression = node.initializer;
+        while (ts.isSatisfiesExpression(init) || ts.isAsExpression(init)) init = init.expression;
+        if (ts.isObjectLiteralExpression(init)) {
+          bags[node.name.text] = init.properties.map(property => (property.name as ts.Identifier).text);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    return bags;
+  }
+
+  it('matches the engines that read each port in maker-core', () => {
+    const ports = optionalAgentDepsPorts();
+    // A port the base agent reads (base-agent.ts) is read by all three engines. Only agents/ is read:
+    // maker.ts reads MakerDeps, whose own `toolLoopReviewer` is not the AgentDeps member of that name
+    // (the Claude agent reads that one; Codex and Pi take Maker's).
+    const sources = [
+      { engines: ['claude', 'codex', 'pi'] as Engine[], files: [path.join(coreAgents, 'base-agent.ts'), ...files(path.join(coreAgents, 'shared'))] },
+      ...Object.entries(ENGINES).map(([dir, engine]) => ({ engines: [engine] as Engine[], files: files(path.join(coreAgents, dir)) })),
+    ].map(entry => ({ ...entry, reads: new Set(entry.files.flatMap(file => [...readsIn(file)])) }));
+    const readers = new Map<string, Set<Engine>>(ports.map(port =>
+      [port, new Set(sources.filter(source => source.reads.has(port)).flatMap(source => source.engines))]));
+    const expected: Record<string, string[]> = Object.fromEntries(Object.entries(BAGS).map(([bag, engines]) => [bag,
+      ports.filter(port => { const set = readers.get(port)!; return set.size === engines.length && engines.every(e => set.has(e)); }).sort()]));
+    const actual = Object.fromEntries(Object.entries(hostBags()).map(([bag, keys]) => [bag, [...keys].sort()]));
+    expect(actual).toEqual(expected);
+    // Every optional port is read by some engine; one read by none would be grouped nowhere.
+    expect(ports.filter(port => readers.get(port)!.size === 0)).toEqual([]);
+  });
+});
