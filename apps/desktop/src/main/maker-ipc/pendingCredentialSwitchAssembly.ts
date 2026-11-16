@@ -40,7 +40,7 @@ export interface PendingCredentialSwitchAssemblyPorts {
   inputCoordinator: Pick<AgentInputCoordinator, 'wakeSession'>;
   resolveLenientSessionRoute: typeof import('../maker-host/model-route-guard-live.js').resolveLenientSessionRoute;
   getSessionDbAgentKind: (sessionId: string) => 'cc' | 'codex' | 'pi' | null;
-  getDesktopProviderService: typeof import('../maker-host/createDesktopProviderService.js').getDesktopProviderService;
+  getDesktopProviderService: () => Pick<ReturnType<typeof import('../maker-host/createDesktopProviderService.js').getDesktopProviderService>, 'listProviders'>;
   resolveConfiguredContextWindow: typeof import('../maker-host/model-context-settings.js').resolveConfiguredContextWindow;
   agentInputCoordinatorHolder: Pick<AgentInputCoordinator, 'refreshQueuedRoute'> | null;
   broadcastSessionPatched: typeof import('../localDb/ipc/sessions.js').broadcastSessionPatched;

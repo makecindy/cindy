@@ -135,7 +135,7 @@ export function createReadSessionRuntimeProfiles(ports: {
 /** register.ts's recoverRenamedSessionModelOnSend. */
 export function createRecoverRenamedSessionModelOnSend(ports: {
   agentSwitchPending: PendingAgentSwitchRegistry;
-  getDesktopProviderService: typeof import('../maker-host/createDesktopProviderService.js').getDesktopProviderService;
+  getDesktopProviderService: () => Pick<ReturnType<typeof import('../maker-host/createDesktopProviderService.js').getDesktopProviderService>, 'listProviders'>;
   readSessionRuntimeProfiles: ReturnType<typeof createReadSessionRuntimeProfiles>;
   handleSetModel: ReturnType<typeof createHandleSetModel>;
 }): (sessionId: string) => Promise<void> {
