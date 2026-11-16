@@ -252,9 +252,9 @@ export default {
       // against the real row backdrop, including during its color transition.
       await page.locator('[data-bot-group-id] img').first().waitFor();
       await page.waitForFunction(() => [...document.querySelectorAll('[data-bot-group-id] img')].every(image => image.complete && image.naturalWidth > 0));
-      const assertGap = async row => {
+      const assertGap = async (row, backdrop = row) => {
         const front = row.locator(':scope > span').first().locator(':scope > span > span').last();
-        const [bounds, rim] = await Promise.all([row.boundingBox(), front.boundingBox()]);
+        const [bounds, rim] = await Promise.all([backdrop.boundingBox(), front.boundingBox()]);
         assert.ok(bounds && rim);
         const { data, info } = await sharp(await page.screenshot({ scale: 'css' })).raw().toBuffer({ resolveWithObject: true });
         const pixel = (x, y) => {
@@ -262,8 +262,8 @@ export default {
           return Array.from(data.subarray(offset, offset + 3));
         };
         const gap = pixel(rim.x + 1, rim.y + rim.height / 2);
-        const backdrop = pixel(bounds.x + 4, rim.y + rim.height / 2);
-        assert.ok(gap.every((value, channel) => Math.abs(value - backdrop[channel]) <= 2), `transparent gap must expose row backdrop: ${gap} vs ${backdrop}`);
+        const background = pixel(bounds.x + 4, rim.y + rim.height / 2);
+        assert.ok(gap.every((value, channel) => Math.abs(value - background[channel]) <= 2), `transparent gap must expose row backdrop: ${gap} vs ${background}`);
       };
       await page.emulateMedia({ reducedMotion: 'no-preference' });
       for (const count of [4, 2, 3, 5]) {
@@ -302,6 +302,38 @@ export default {
       }
       await showIcons();
       await page.locator('[data-bot-group-id]').first().waitFor({ state: 'hidden' });
+      const section = page.locator('[data-sidebar-section="teammates"]');
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-sidebar-section="teammates"] img')].every(image => image.complete && image.naturalWidth > 0));
+      // The compact two-member layout has its own dimensions. Screenshots and
+      // expanded checks alone miss a misplaced compact cutout or enlarged portrait.
+      // Reuse the real-row pixel assertion for each composition in this UI tier.
+      for (const [count, diameter] of [[2, 26], [3, 17.6], [4, 15.8], [5, 14]]) {
+        const name = count === 4 ? 'Agent群聊' : `Group ${count}`;
+        const button = section.getByRole('button', { name, exact: true });
+        const frame = button.locator(':scope > span > span').first();
+        const portraits = frame.locator(':scope > span > span[aria-hidden]');
+        const geometry = () => portraits.evaluateAll(nodes => nodes.map(node => {
+          const { x, y, width, height } = node.getBoundingClientRect(); return { x, y, width, height };
+        }));
+        await page.mouse.move(700, 500);
+        const bounds = await frame.boundingBox();
+        assert.ok(bounds && bounds.width === 36 && bounds.height === 36, 'compact composition stays in its 36px frame');
+        const idle = await geometry();
+        assert.equal(idle.length, count, 'compact composition retains every member');
+        for (const portrait of idle) {
+          assert.ok(Math.abs(portrait.width - diameter) < 0.05 && Math.abs(portrait.height - diameter) < 0.05, `compact ${count}-member portraits retain their approved size`);
+          assert.ok(portrait.x >= bounds.x && portrait.y >= bounds.y && portrait.x + portrait.width <= bounds.x + bounds.width && portrait.y + portrait.height <= bounds.y + bounds.height, 'compact portraits fit inside their frame');
+        }
+        await assertGap(button, section);
+        await button.hover();
+        await assertGap(button, section);
+        assert.deepEqual(await geometry(), idle, 'compact hover must keep every portrait in place');
+        await button.click();
+        await button.locator('[data-teammate-selected]').waitFor();
+        assert.equal(await button.getAttribute('aria-current'), 'page');
+        await assertGap(button, section);
+        assert.deepEqual(await geometry(), idle, 'compact selection must keep every portrait in place');
+      }
       await ui.capture('compact');
       return;
     }
