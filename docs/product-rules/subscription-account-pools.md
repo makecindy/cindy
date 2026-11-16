@@ -20,6 +20,15 @@ Claude 保留官方 `subscriptionType` 与 `planTier`，已知具体档位显示
 模型选择器、菜单栏和手机沿用同一份元数据与格式化规则。供应商组与分享额度也逐账号读取，不为官方 CLI 账号另取一份供应商额度。实现见 `subscription-accounts/runtime.ts`、
 `usage/accountUsageStorage.ts` 和 `maker-shared/src/subscriptionPlanLabel.ts`。
 
+## 插件读取订阅用量（2026-11-16）
+
+`cindy.host.call('cindy_helper', 'get_subscription_usage', {providerId?})` 使用独立
+`agent.hostTools:['usage']` 声明与安装批准，只读当前 Cindy 账号在执行电脑上的已连接账号。
+与界面共用 `runtime.ts` 的逐账号读取、身份校验与缓存；`usageView.ts` 逐字段投影账号标识、套餐、
+额度窗口、观测时间及新鲜度，未知值不冒充 0。不返回邮箱、目录、凭证、身份指纹、其他电脑与分享供应商。
+异步读取后复核 owner、账号存在、原供应商归属与原生授权，插件网关继续复核安装批准和启用状态。
+调用与字段约定见[插件宿主工具手册](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md#读取订阅用量)。
+
 ## 合并与拿出由用户决定（2026-11-13 用户裁决，分批实现）
 
 用户把同类订阅拆成几个供应商，往往是想自己决定哪个任务用哪个账号；合并后新任务只能由账号池按策略分配，

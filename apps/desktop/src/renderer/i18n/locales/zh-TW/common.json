@@ -8198,6 +8198,8 @@
         "hostTools_controlDetail": "透過 Cindy 的任務工具修改、封存、還原及控制現有任務與專案，並在本機匯入原生任務檔案。",
         "hostTools_handoff": "任務投遞",
         "hostTools_handoffDetail": "透過 Cindy 的任務工具向現有任務傳送訊息。需要目前任務情境的操作須明確指定任務。",
+        "hostTools_usage": "讀取訂閱用量",
+        "hostTools_usageDetail": "讀取目前 Cindy 帳號在這台電腦上已連接的 Claude 和 Codex 帳號識別碼、方案、配額時段及更新時間。無法讀取電子郵件地址、憑證、檔案或其他電腦的資料，也無法修改帳號",
         "hostTools_settings": "應用程式設定",
         "hostTools_settingsDetail": "透過 Cindy 的設定工具讀取及修改應用程式設定；不傳回金鑰，也不代你完成機密輸入。",
         "hostTools_scheduler": "自動化管理",

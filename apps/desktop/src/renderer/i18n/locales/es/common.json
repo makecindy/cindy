@@ -8313,6 +8313,8 @@
         "hostTools_controlDetail": "Usar las herramientas de Cindy para editar, archivar, restaurar y controlar tareas y proyectos existentes, e importar archivos de tareas en formato nativo en este ordenador.",
         "hostTools_handoff": "Mensajes a tareas",
         "hostTools_handoffDetail": "Usar las herramientas de Cindy para enviar mensajes a tareas existentes. Las operaciones que necesitan una tarea actual requieren un destino explícito.",
+        "hostTools_usage": "Leer el uso de las suscripciones",
+        "hostTools_usageDetail": "Lee identificadores de cuenta, planes, períodos de cuota y horas de actualización de las suscripciones de Claude y Codex conectadas a tu cuenta actual de Cindy en este equipo. No permite leer correos electrónicos, credenciales, archivos ni datos de otros equipos, ni modificar cuentas.",
         "hostTools_settings": "Ajustes de la aplicación",
         "hostTools_settingsDetail": "Usar las herramientas de Cindy para leer y cambiar la configuración. No se devuelven secretos y los datos privados los introduces tú.",
         "hostTools_scheduler": "Gestión de automatizaciones",
