@@ -8529,6 +8529,7 @@
           "workdirClear": "Auf Standardordner zurücksetzen",
           "followAuxiliary": "Systemweites Hilfsmodell verwenden · {{model}}",
           "followAuxiliaryUnset": "Systemweites Hilfsmodell verwenden",
+          "remoteQuickAnswerHint": "Dieses Modell läuft nicht auf diesem Computer. Schnellantworten werden von diesem Computer gesendet und verwenden daher das systemweite Hilfsmodell.",
           "restoreModel": "Modell zurücksetzen"
         },
         "toolsTitle": "Tools",

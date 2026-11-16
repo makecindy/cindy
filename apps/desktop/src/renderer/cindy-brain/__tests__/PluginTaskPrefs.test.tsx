@@ -15,6 +15,9 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 vi.mock('@/hooks/useAvailableAgents', () => ({ useModelPickerAgents: () => [] }));
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: () => ({ leadAgentDeviceId: null, devices: [{ deviceId: 'share:abc', name: 'Shared' }] }),
+}));
 vi.mock('@/state/newMakerDraft', () => ({
   getEffortForModel: () => undefined, getFastModeForModel: () => false,
 }));
@@ -24,6 +27,9 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({ ModelSelector: (props: a
     {props.fallbackOption?.active ? props.fallbackOption.label : `${props.vendorKey}/${props.currentProviderId}/${props.modelId}`}
   </button>
   <button data-testid="follow" onClick={() => props.fallbackOption?.onSelect()}>follow</button>
+  {props.remoteAgent ? <button data-testid="remote-row" onClick={() => props.onUnifiedSelect({ engine: 'codex',
+    providerId: 'openai', modelId: 'chosen', effort: 'high', fast: false,
+    agentDevice: { deviceId: props.remoteAgent.devices[0].deviceId, name: 'Shared' } })}>remote</button> : null}
   <button data-testid="fast" onClick={() => props.onFastModeChange(true)}>Fast</button>
   </>
 ) }));
@@ -86,13 +92,24 @@ it('saves the complete selected combination as the plugin model', async () => {
   render(<PluginTaskPrefs ghostId="plugin" />);
   fireEvent.click(screen.getByTestId('model'));
   await waitFor(() => expect(state.save).toHaveBeenCalledWith('plugin', {
-    permissionMode: 'auto', agentKind: 'codex', providerId: 'openai', model: 'chosen', effort: 'high', fastMode: false,
+    permissionMode: 'auto', agentKind: 'codex', providerId: 'openai', model: 'chosen', agentDeviceId: null, effort: 'high', fastMode: false,
   }));
   expect(screen.getByTestId('model').textContent).toBe('codex/openai/chosen');
   expect(screen.getByText('settings.ghosts.detail.errandPrefs.restoreModel')).toBeTruthy();
 });
+// Rule (2026-11-16, model-selector-unified.md): a task-creating plugin lists other computers and
+// shares like an ordinary task, and a row there is saved with its run location. tier: unit.
+it('saves a remote row together with its run location and explains the quick-answer fallback', async () => {
+  render(<PluginTaskPrefs ghostId="plugin" />);
+  fireEvent.click(screen.getByTestId('remote-row'));
+  await waitFor(() => expect(state.save).toHaveBeenCalledWith('plugin', {
+    agentKind: 'codex', providerId: 'openai', model: 'chosen', agentDeviceId: 'share:abc', effort: 'high', fastMode: false,
+  }));
+  expect(screen.getByText('settings.ghosts.detail.errandPrefs.remoteQuickAnswerHint')).toBeTruthy();
+});
 it('quick-answer-only plugins show just the model row', () => {
   render(<PluginTaskPrefs ghostId="plugin" showTaskRows={false} />);
+  expect(screen.queryByTestId('remote-row')).toBeNull();
   expect(screen.getByTestId('model')).toBeTruthy();
   expect(screen.getByText('settings.ghosts.detail.errandPrefs.descModelOnly')).toBeTruthy();
   expect(screen.queryByTestId('permission')).toBeNull();

@@ -8601,6 +8601,7 @@
           "workdirClear": "Repor pasta predefinida",
           "followAuxiliary": "Usar modelo auxiliar do sistema · {{model}}",
           "followAuxiliaryUnset": "Usar modelo auxiliar do sistema",
+          "remoteQuickAnswerHint": "Este modelo não é executado neste computador. As respostas rápidas são enviadas a partir deste computador, por isso usam o modelo auxiliar do sistema.",
           "restoreModel": "Repor modelo"
         },
         "toolsTitle": "Ferramentas",

@@ -8472,6 +8472,7 @@
           "workdirClear": "复预设目录",
           "followAuxiliary": "从系统辅助模型 · {{model}}",
           "followAuxiliaryUnset": "从系统辅助模型",
+          "remoteQuickAnswerHint": "此模型不行于本机。速问速答唯自本机发，故从系统辅助模型。",
           "restoreModel": "复预设模型"
         },
         "toolsTitle": "Tools",

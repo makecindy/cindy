@@ -8486,6 +8486,7 @@
           "workdirClear": "恢复默认目录",
           "followAuxiliary": "跟随系统辅助模型 · {{model}}",
           "followAuxiliaryUnset": "跟随系统辅助模型",
+          "remoteQuickAnswerHint": "这个模型不在本机运行。快问快答只能从本机发出，会改用系统辅助模型。",
           "restoreModel": "恢复默认模型"
         },
         "toolsTitle": "工具",

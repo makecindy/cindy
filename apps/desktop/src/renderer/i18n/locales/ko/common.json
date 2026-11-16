@@ -8486,6 +8486,7 @@
           "workdirClear": "기본 폴더로 되돌리기",
           "followAuxiliary": "시스템 보조 모델 따르기 · {{model}}",
           "followAuxiliaryUnset": "시스템 보조 모델 따르기",
+          "remoteQuickAnswerHint": "이 모델은 이 컴퓨터에서 실행되지 않습니다. 빠른 답변은 이 컴퓨터에서 보내므로 시스템 보조 모델을 사용합니다.",
           "restoreModel": "모델 초기화"
         },
         "toolsTitle": "Tools",

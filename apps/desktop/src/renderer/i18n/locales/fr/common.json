@@ -8601,6 +8601,7 @@
           "workdirClear": "Revenir au dossier par défaut",
           "followAuxiliary": "Suivre le modèle auxiliaire du système · {{model}}",
           "followAuxiliaryUnset": "Suivre le modèle auxiliaire du système",
+          "remoteQuickAnswerHint": "Ce modèle ne s’exécute pas sur cet ordinateur. Les réponses rapides sont envoyées depuis cet ordinateur et utilisent donc le modèle auxiliaire du système.",
           "restoreModel": "Réinitialiser le modèle"
         },
         "toolsTitle": "Outils",
