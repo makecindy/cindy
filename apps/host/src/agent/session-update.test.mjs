@@ -4,7 +4,7 @@
  *   branch of handleSetModel): an intent until the next send, returned as
  *   { deferred: true, superseded: false, pendingUntilSend: true } and published as the task's
  *   agentSwitchIntent; the task row and the running Agent keep their route. Picking the current
- *   model again cancels the intent. The window gate and a rebuild run when the intent lands at the
+ *   model again replaces the intent with one for the current route, as the desktop registers it. The window gate and a rebuild run when the intent lands at the
  *   send (input-queue.test.mjs, model change at send).
  * - Gap: the Host applied a model change at once and refused a shrink at danger outright (its own
  *   window gate), where the desktop rebuilds at the send.
@@ -32,6 +32,8 @@ import { setSessionRouteLockImplementation } from '../../../desktop/src/main/loc
 import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { botProfiles, botSessionLinks } from '../../../desktop/src/main/localDb/schema.ts';
 import { createHostRuntimeSelection } from './runtime-selection.ts';
+import { Maker } from '@cindy/maker-core';
+import { getSessionLastLiveUsage, _resetSessionLastLiveUsageForTests } from '../../../desktop/src/main/maker-ipc/sessionLastLiveUsage.ts';
 
 // Route windows of the fixture providers; a model they do not list has no verified window.
 const WINDOWS = { big: 200_000, small: 100_000, huge: 300_000 };
@@ -266,4 +268,115 @@ test('restore: a send holding the task lock restores re-entrantly, and a restore
   await held;
   await restoring;
   assert.equal((await f.row('restore-locked')).status, 'active');
+});
+
+// Close convergence (runtime-selection.ts attachMaker):
+// - Rule: as the desktop's per-session status listener finalizes every closed runtime
+//   (sessionBindingLifecycle.ts → finalizeClosedSession → rememberSessionLastLiveUsage), each close of a
+//   task's runtime is seen exactly once, whichever path closed it, and its usage is read from the closed
+//   session at that moment (a cold Pi model change's window check reads it, sessionLastLiveUsage.ts).
+// - Gap: the Host kept no last live usage.
+// - Tier: unit, through a real Maker and its sessions; the agent is a fixture handle. Each Host path
+//   reaches the Maker through the entry named in its test.
+const closeAgent = handles => ({
+  capabilities: Object.fromEntries(['switchModel', 'effort', 'setPermissionModeMidSession', 'rewind', 'memory']
+    .map(key => [key, { supported: false, reason: 'not-implemented' }]).concat([['permissionModes', []]])),
+  startSession: async opts => {
+    let usage = { tokenUsage: 0, contextTokens: 80_000, contextWindow: 200_000, costUsd: 0 };
+    const handle = { id: `native-${opts.sessionId ?? handles.length}`, agentKind: 'claude-code', model: opts.model,
+      send: async () => {}, steer: async () => {}, abort: async () => {},
+      // The usage is gone one macrotask after the close: only a read at the close itself sees it.
+      close: async () => { setImmediate(() => { usage = undefined; }); },
+      events: async function* () { await new Promise(() => {}); },
+      getUsageSnapshot: () => usage,
+      setInteractionResolver: () => {} };
+    handles.push(handle);
+    return handle;
+  },
+  dispose: async () => {},
+});
+function closeFixture(t) {
+  _resetSessionLastLiveUsageForTests();
+  const rows = new Map();
+  const storage = {
+    create: async meta => { const row = { ...meta, createdAt: Date.now(), updatedAt: Date.now() }; rows.set(row.id, row); return row; },
+    get: async id => rows.get(id) ?? null,
+    list: async () => [...rows.values()],
+    update: async (id, patch) => { const next = { ...rows.get(id), ...patch, updatedAt: Date.now() }; rows.set(id, next); return next; },
+    compareAndClearSdkSessionId: async () => false,
+    delete: async id => { rows.delete(id); },
+  };
+  const silent = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return silent; } };
+  const maker = new Maker({ agents: { 'claude-code': closeAgent([]) }, storage, logger: silent });
+  const selection = createHostRuntimeSelection({
+    getMaker: () => maker, publish: () => {}, createDbMessage: async () => {},
+    pendingHandoff: { set() {}, readGeneration: () => 0 }, listProviderViews: async () => VIEWS,
+    resolveConfiguredContextWindow: () => null, readStoredSessionContextWindowBudget: () => null,
+    codexProxyAuthInjectionState: () => null,
+    inputQueue: { contextRecoveryRollover: () => null, sessionDbAgentKind: () => 'cc', isTurnRunning: () => false,
+      wakeSession() {}, refreshQueuedRoute() {}, cancelUsageLimitWait() {} },
+    log: quiet,
+  });
+  const seen = [];
+  const remember = selection.onSessionClosed;
+  selection.onSessionClosed = (id, session) => { seen.push(id); remember(id, session); };
+  const off = selection.attachMaker(maker);
+  t.after(async () => { off(); await maker.shutdown(); _resetSessionLastLiveUsageForTests(); });
+  const start = id => maker.createSession({ id, agentKind: 'claude-code', model: 'big', providerId: 'prov-a', workingDir: os.tmpdir() });
+  const settle = async () => { for (let i = 0; i < 5; i += 1) await new Promise(resolve => setImmediate(resolve)); };
+  const remembered = id => {
+    const usage = getSessionLastLiveUsage(id);
+    return usage && { contextTokens: usage.contextTokens, contextWindow: usage.contextWindow };
+  };
+  return { maker, start, seen, settle, remembered, off };
+}
+
+const CLOSE_PATHS = [
+  // turn-executor.mjs closeRuntime: an idle release, and a refresh of the runtime it still holds.
+  ['idle release', (maker, id) => maker.closeSession(id)],
+  ['idle release of the current runtime', (maker, id, session) => maker.closeSessionIfCurrent(session, 'runtime-refresh')],
+  // runtime-selection.ts agentSwitchDeps.closeSession (performSessionAgentSwitch).
+  ['engine switch', (maker, id) => maker.closeSession(id, 'agent-switch')],
+  // context-recovery-assembly.ts rollover closeSession (a context rebuild).
+  ['rebuild', (maker, id) => maker.closeSession(id, 'runtime-refresh')],
+  // main.ts deleteSession → inputQueue.disposeSession → executor.close → closeRuntime.
+  ['delete', (maker, id) => maker.closeSession(id)],
+  // main.ts disposeOwnerRuntime: inputQueue.dispose closes each runtime, then maker.shutdown.
+  ['shutdown', (maker, id) => maker.shutdown()],
+];
+for (const [name, close] of CLOSE_PATHS) {
+  test(`close convergence: ${name} is seen once, with the usage the runtime had at its close`, { timeout: 30_000 }, async t => {
+    const f = closeFixture(t);
+    const session = await f.start(`close-${name}`);
+    await close(f.maker, session.id, session);
+    await f.settle();
+    assert.deepEqual(f.seen, [session.id]);
+    assert.deepEqual(f.remembered(session.id), { contextTokens: 80_000, contextWindow: 200_000 });
+    assert.equal(session.getUsageSnapshot(), undefined, 'the fixture runtime has dropped its usage since');
+  });
+}
+
+test('close convergence: a runtime closed twice, or closed and then shut down, is seen once; the task\'s next runtime once more', { timeout: 30_000 }, async t => {
+  const f = closeFixture(t);
+  const first = await f.start('close-twice');
+  await Promise.all([f.maker.closeSession(first.id), f.maker.closeSession(first.id)]);
+  await f.settle();
+  assert.deepEqual(f.seen, ['close-twice']);
+  const next = await f.start('close-twice');
+  assert.notEqual(next, first);
+  const other = await f.start('close-then-shutdown');
+  await f.maker.closeSession(other.id);
+  await f.maker.shutdown();
+  await f.settle();
+  assert.deepEqual(f.seen.sort(), ['close-then-shutdown', 'close-twice', 'close-twice']);
+});
+
+test('close convergence: after the owner runtime unsubscribes, a close is not seen', { timeout: 30_000 }, async t => {
+  const f = closeFixture(t);
+  const session = await f.start('close-after-off');
+  f.off();
+  await f.maker.closeSession(session.id);
+  await f.settle();
+  assert.deepEqual(f.seen, []);
+  assert.equal(f.remembered(session.id), undefined);
 });

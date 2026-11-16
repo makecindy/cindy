@@ -439,6 +439,8 @@ function schedulePeriodicRefresh(): void {
 let claudeState: Record<string, unknown> | null = null;
 /** Real maker-core agents registered in this process. */
 let agentGraph: ReturnType<typeof createHostAgentGraph> | null = null;
+/** The maker's session-closed subscription of the current agent graph (runtime-selection.ts). */
+let offMakerSessionClosed: (() => void) | null = null;
 /** The desktop Git snapshot coordinator for this owner's tasks (agent/git-snapshot.ts). */
 let gitSnapshot: HostGitSnapshot | null = null;
 const hostLog = createLogger('host');
@@ -777,6 +779,10 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       acceptedInput: (id: string) => inputQueue.acceptedInputProvenance(id),
     }));
     attachAgentsToMakerMemory(makerMemory, agentGraph.instances);
+    // Every runtime close of a task, whichever path closed it (idle release, engine switch, rebuild,
+    // delete, shutdown): the Maker emits it from the session's own close, as the desktop's per-session
+    // status listener finalizes it (sessionBindingLifecycle.ts).
+    offMakerSessionClosed = runtimeSelection.attachMaker(agentGraph.maker);
     gitSnapshot = createHostGitSnapshot(agentGraph.maker);
     agentAuth = createHostAgentAuth({ maker: agentGraph.maker, readApiKey: () => gateway?.credential ?? null,
       publish: (channel, payload) => eventHub.publish({ type: 'plugin_push', channel, payload }) });
@@ -1609,6 +1615,8 @@ async function disposeOwnerRuntime(): Promise<void> {
     pluginManager = null;
     hostTools = null;
     hostConfirmations = null;
+    offMakerSessionClosed?.();
+    offMakerSessionClosed = null;
     agentGraph = null;
     gitSnapshot = null;
     mcpRuntime = null;

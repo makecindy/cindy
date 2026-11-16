@@ -49,6 +49,7 @@ import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import * as broadcastTap from '../../../desktop/src/main/device-link/broadcast-tap.js';
 import type { Logger } from '../../../desktop/src/main/logger.ts';
 import { recordHostContextSnapshot } from './context-usage.ts';
+import { rememberSessionLastLiveUsage } from '../../../desktop/src/main/maker-ipc/sessionLastLiveUsage.ts';
 
 /** What the Host's runtime selection reads from the rest of the Host (main.ts binds it). */
 export interface HostRuntimeSelectionDeps {
@@ -268,6 +269,20 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
       applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, options?.signal ? { signal: options.signal } : undefined),
     clearIntent(sessionId: string) {
       pendingSwitches.clear(sessionId);
+    },
+    /**
+     * A runtime of a task closed (the Maker's session:closed, from the session's own close): the
+     * desktop's finalizeClosedSession keeps its last live usage for a cold Pi model change's window
+     * check (sessionLastLiveUsage.ts), read from the closed session as the desktop reads it.
+     */
+    onSessionClosed(sessionId: string, session: { getUsageSnapshot?(): { contextTokens?: number; contextWindow?: number } | undefined }) {
+      rememberSessionLastLiveUsage(sessionId, session.getUsageSnapshot?.() as never);
+    },
+    /** Subscribes to a Maker's session-closed events (each session's own close); returns the unsubscribe. */
+    attachMaker(target: Pick<Maker, 'on'>): () => void {
+      return target.on(event => {
+        if (event.type === 'session:closed') this.onSessionClosed(event.sessionId, event.session);
+      });
     },
   };
 }
