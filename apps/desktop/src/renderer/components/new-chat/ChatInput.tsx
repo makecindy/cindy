@@ -386,7 +386,7 @@ import {
 } from '@/lib/providerModels';
 import {
   clearProviderModelEffort,
-  clearProviderModelFast, editProviderModelMemoryBatch,
+  clearProviderModelFast, clearProviderModelThinking, editProviderModelMemoryBatch,
   getProviderModelEffort,
   setProviderModelChoice,
   setProviderModelEffort,
@@ -988,6 +988,7 @@ const LOCAL_MODEL_MEMORY: ModelMemoryAccessors = {
   setFast: setProviderModelFast,
   getThinking: getProviderModelThinking,
   setThinking: setProviderModelThinking,
+  clearThinking: clearProviderModelThinking,
   // 「恢复推荐」= 删记忆键(跟随目录新默认),不是把这一版的默认快照写回去。
   // device-link 镜像没有这两个入口(隧道协议没有删除那一笔),按各自能力退化。
   clearEffort: clearProviderModelEffort,
@@ -1019,6 +1020,9 @@ const SSH_PROJECT_MODEL_MEMORY: ModelMemoryAccessors = (() => {
       local(agent) ? getProviderModelThinking(agent, providerId, modelId) : undefined,
     setThinking: (agent, providerId, modelId, enabled) => {
       if (local(agent)) setProviderModelThinking(agent, providerId, modelId, enabled);
+    },
+    clearThinking: (agent, providerId, modelId) => {
+      if (local(agent)) clearProviderModelThinking(agent, providerId, modelId);
     },
     clearEffort: (agent, providerId, modelId) => {
       if (local(agent)) clearProviderModelEffort(agent, providerId, modelId);

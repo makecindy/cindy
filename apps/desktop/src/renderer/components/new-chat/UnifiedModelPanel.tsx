@@ -452,7 +452,7 @@ export function UnifiedModelPanel({
   remoteSources,
 }: UnifiedModelPanelProps) {
   const { t } = useTranslation();
-  const [, refreshThinkingMemory] = useState(0);
+  const [thinkingMemoryVersion, refreshThinkingMemory] = useState(0);
   const storedFavorites = useModelFavorites();
   const isSharedProvider = isProviderShareAgentDeviceId(deviceId);
   // 远程 Agent:收藏一律读写任务所在电脑那一份(§1.5),浏览其他电脑的目录时也不读那台自己的收藏;
@@ -721,7 +721,7 @@ export function UnifiedModelPanel({
         entryMatchesModelId(entry, selected.modelId) &&
         (selected.providerId === null || selected.providerId === entry.providerId);
       const personalized = selectionPolicy === 'personalized';
-      const base = resolveUnifiedRowConfig({
+      const resolved = resolveUnifiedRowConfig({
         entry,
         ...(personalized
           ? { engineOverride: entry.aliasEntries ? readEntryPreference(entry, entryModelIds(entry), getEngineOverride) : enginePreferenceModelIds(entry).map(id => getEngineOverride(entry.providerId, id)).find(value => value !== undefined) }
@@ -754,7 +754,13 @@ export function UnifiedModelPanel({
       // **选中行读 live 值**,不读全局记忆:已建会话的深度 / Fast 由 DB / runtime 权威,
       // 其它对话改同一个模型的全局预设不该改写正在跑的这一条(与旧版 rowEffortOf /
       // fastOnOf 的选中行分支同语义)。
-      if (!isLiveRow(entry, base)) return base;
+      const live = isLiveRow(entry, resolved);
+      const thinkingCustomized = resolved.agent === 'pi' && resolved.capability?.thinkingToggle === true &&
+        (live ? !thinkingEnabled : modelMemory?.getThinking?.(
+          resolved.agent, entry.providerId, resolved.wireModelId ?? entry.modelId,
+        ) === false);
+      const base = thinkingCustomized ? { ...resolved, customized: true } : resolved;
+      if (!live) return base;
       const efforts: readonly string[] = base.efforts;
       const liveEffort =
         selectedEffort && efforts.includes(selectedEffort) ? selectedEffort : base.effort;
@@ -782,6 +788,8 @@ export function UnifiedModelPanel({
       isLiveRow,
       liveEngineAgent,
       memoryVersion,
+      thinkingMemoryVersion,
+      thinkingEnabled,
       modelMemory,
       selected.modelId,
       selected.providerId,
@@ -1102,9 +1110,11 @@ export function UnifiedModelPanel({
     // 要比的实时深度 / Fast —— 与 configOf 里「选中行读 live 值」取的是同一个格子。
     liveEffort: selectedEffort,
     liveFast: fastMode,
+    liveThinking: thinkingEnabled,
     modelMemory,
     onEffortChangeLive,
     onFastModeChangeLive,
+    onThinkingChangeLive,
     onSelect,
     onConfigure,
     onSelectedFavoriteAnchorClear,
@@ -1809,7 +1819,10 @@ export function UnifiedModelPanel({
                     });
                   },
                 }}
-                onResetToRecommended={() => resetToRecommended(target.anchor, target.entry, config)}
+                onResetToRecommended={() => {
+                  void Promise.resolve(resetToRecommended(target.anchor, target.entry, config))
+                    .finally(() => refreshThinkingMemory(value => value + 1));
+                }}
                 onAddFavorite={() => addFavorite(target.anchor, config)}
                 onRemoveFavorite={() => removeFavorite(target.anchor, target.entry)}
               />

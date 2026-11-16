@@ -400,7 +400,7 @@ describe('MiMo thinking switch in the actual unified picker', () => {
     }
     render(<Picker />);
     const flyout = await openRowFlyout('MiMo V2.6 Pro');
-    const toggle = within(flyout).getByRole('switch', { name: 'newChat.modelSelector.thinking' });
+    const toggle = await within(flyout).findByRole('switch', { name: 'newChat.modelSelector.thinking' });
     expect(toggle.getAttribute('aria-checked')).toBe('true');
     expect(within(flyout).queryByRole('slider')).toBeNull();
     for (const expected of ['false', 'true']) {
@@ -416,11 +416,12 @@ describe('MiMo thinking switch in the actual unified picker', () => {
   it('edits only the non-selected model preference, without changing the active model', async () => {
     let remembered: boolean | undefined;
     const setThinking = vi.fn((_agent, _provider, _model, value: boolean) => { remembered = value; });
+    const clearThinking = vi.fn(() => { remembered = undefined; });
     const onThinkingChange = vi.fn();
     renderPanel({ vendorKey: 'pi', unifiedAgents: ['pi'], modelId: 'other-model',
       currentProviderId: 'mimo-fixture', onThinkingChange,
       modelMemory: { getEffort: () => undefined, getFast: () => undefined,
-        setEffort: vi.fn(), setFast: vi.fn(), getThinking: () => remembered, setThinking } });
+        setEffort: vi.fn(), setFast: vi.fn(), getThinking: () => remembered, setThinking, clearThinking } });
     const flyout = await openRowFlyout('MiMo V2.6 Pro');
     const toggle = within(flyout).getByRole('switch', { name: 'newChat.modelSelector.thinking' });
     await act(async () => fireEvent.click(toggle));
@@ -428,6 +429,66 @@ describe('MiMo thinking switch in the actual unified picker', () => {
     expect(setThinking).toHaveBeenCalledWith('pi', 'mimo-fixture', 'mimo-v2.6-pro', false);
     expect(onThinkingChange).not.toHaveBeenCalled();
     expect(onProviderChange).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(within(flyout).getByText('恢复推荐')));
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(remembered).toBeUndefined();
+    expect(clearThinking).toHaveBeenCalledWith('pi', 'mimo-fixture', 'mimo-v2.6-pro');
+    expect(within(flyout).queryByText('恢复推荐')).toBeNull();
+    expect(onThinkingChange).not.toHaveBeenCalled();
+    expect(onProviderChange).not.toHaveBeenCalled();
+  });
+
+  // PR #10445 review: existing switch tests did not exercise reset. Unit tier;
+  // minimal input is a live Pi MiMo row with thinking=false. Observe the real
+  // picker state and saved preference across rejected, failed and successful writes.
+  it.each(['draft', 'session'] as const)('restores live thinking only after an accepted %s write', async kind => {
+    let remembered: boolean | undefined = false;
+    const clearThinking = vi.fn(() => { remembered = undefined; });
+    const clearFast = vi.fn();
+    const write = vi.fn(async (_enabled: boolean): Promise<boolean> => true);
+    const configure = vi.fn(() => true);
+    const resetFast = vi.fn(() => true);
+    function Picker() {
+      const [enabled, setEnabled] = React.useState(false);
+      return <ModelSelectorContent remoteAgent={undefined} vendorKey="pi" unifiedAgents={['pi']}
+        {...(kind === 'session' ? { sessionEngineFilter: {
+          currentAgent: 'pi' as const, runtimeAgent: 'pi' as const, onCrossEngineSelect: vi.fn(),
+        } } : { onUnifiedSelect: configure })}
+        modelId="mimo-v2.6-pro" currentProviderId="mimo-fixture" effort="high"
+        onModelChange={vi.fn()} onEffortChange={vi.fn()} onProviderChange={vi.fn()} onFastModeChange={resetFast}
+        thinkingEnabled={enabled} onThinkingChange={async value => {
+          if (!await write(value)) return false;
+          setEnabled(value); remembered = value; return true;
+        }}
+        modelMemory={{ getEffort: () => undefined, getFast: () => undefined,
+          setEffort: vi.fn(), setFast: vi.fn(), clearFast,
+          getThinking: () => remembered, setThinking: vi.fn(), clearThinking }} />;
+    }
+    render(<Picker />);
+    const flyout = await openRowFlyout('MiMo V2.6 Pro');
+    const toggle = await within(flyout).findByRole('switch', { name: 'newChat.modelSelector.thinking' });
+    const reset = () => within(flyout).getByText('恢复推荐');
+    for (const failure of ['rejected', 'false'] as const) {
+      if (failure === 'rejected') write.mockRejectedValueOnce(new Error('fixture rejected'));
+      else write.mockResolvedValueOnce(false);
+      await act(async () => fireEvent.click(reset()));
+      expect(toggle.getAttribute('aria-checked')).toBe('false');
+      expect(remembered).toBe(false);
+      expect(clearThinking).not.toHaveBeenCalled();
+      expect(clearFast).not.toHaveBeenCalled();
+    }
+    // A later default-config write fails after thinking was restored: roll the
+    // switch back and keep its saved override, rather than leaving half a reset.
+    (kind === 'draft' ? configure : resetFast).mockReturnValueOnce(false);
+    await act(async () => fireEvent.click(reset()));
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(remembered).toBe(false);
+    expect(clearThinking).not.toHaveBeenCalled();
+    expect(clearFast).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(reset()));
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(remembered).toBeUndefined();
+    expect(within(flyout).queryByText('恢复推荐')).toBeNull();
   });
 
   it.each(['favorite', 'recent'])('does not expose a global thinking edit in an unselected %s copy', async kind => {
