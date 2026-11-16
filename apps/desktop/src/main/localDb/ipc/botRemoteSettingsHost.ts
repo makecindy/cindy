@@ -67,7 +67,7 @@ export function createBotRemoteSettingsHost(deps: BotSettingsHostDeps) {
     let botId: string | null = null;
     if (botScoped) {
       const ref = request.resourceRef;
-      if (ref?.collectionId !== 'teammates' || ref.kind !== 'bot' || !BOT_ID.test(ref.id)) return failure('INVALID_PARAMS', 'Teammate required');
+      if (ref?.collectionId !== 'teammates' || ref.kind !== 'bot' || !BOT_ID.test(ref.id)) return failure('INVALID_PARAMS', 'Buddy required');
       botId = ref.id;
     }
     const assertCurrent = () => {
@@ -77,16 +77,16 @@ export function createBotRemoteSettingsHost(deps: BotSettingsHostDeps) {
     try {
       if (op === 'caps') return { ok: true, value: caps() };
       const handler = deps.ops[op];
-      if (!handler) return failure('UNSUPPORTED_CAPABILITY', 'Update Cindy on the teammate’s computer');
+      if (!handler) return failure('UNSUPPORTED_CAPABILITY', 'Update Cindy on the buddy’s computer');
       if (botId && !(await deps.botVisible(botId))) {
         assertCurrent();
-        return failure('NOT_FOUND', 'Teammate unavailable');
+        return failure('NOT_FOUND', 'Buddy unavailable');
       }
       const namedArg = HOST_OP_BOT_ARGS[op];
       const named = namedArg ? (args as Record<string, unknown>)[namedArg] : null;
       if (typeof named === 'string' && !(BOT_ID.test(named) && await deps.botVisible(named))) {
         assertCurrent();
-        return failure('NOT_FOUND', 'Teammate unavailable');
+        return failure('NOT_FOUND', 'Buddy unavailable');
       }
       assertCurrent();
       const value = await handler({ controllerDeviceId: context.controllerDeviceId, botId, args: args as Record<string, unknown>, assertCurrent });

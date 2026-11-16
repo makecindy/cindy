@@ -91,7 +91,7 @@ describe('CCAgentSessionView 接线不变式', () => {
     );
     expect(sessionViewSrc).not.toContain('if (remoteSessionUnavailable) return false');
     expect(sessionViewSrc).not.toContain('remoteSessionUnavailableRef');
-    expect(sessionViewSrc).toContain('if (!remoteDeviceId && !recoveringBaseline) {');
+    expect(sessionViewSrc).toContain('if (!remoteDeviceId && !recoveringBaseline && !deferVendorAuthGate) {');
     expect(sessionViewSrc).not.toContain('beforeEnqueue: checkVendorReady');
     // device-link 远程交接期间仍要禁用(见 remoteHandoffPreparing):那几段 await
     // 可能数十秒,不禁用的话用户补发的消息会插到草稿提交的首条之前。

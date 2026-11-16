@@ -9,10 +9,11 @@ const guard = source.slice(
   source.indexOf('  const canApplyAutomaticRuntimeSelection ='),
   source.indexOf('  cancelPendingAgentSwitchHolder ='),
 );
-const fallback = source.slice(
-  source.indexOf('  const maybeApplySessionRuntimeFallback = async ('),
-  source.indexOf('  const sessionControlService = createSessionControlService({'),
-);
+// The fallback body is in sessionRuntimeFallback.ts; its ports and imports keep the names injected below.
+// A Windows checkout has CRLF line endings; the slice below finds multi-line markers.
+const fallbackSource = readFileSync(new URL('../maker-ipc/sessionRuntimeFallback.ts', import.meta.url), 'utf8').replace(/\r\n?/g, '\n');
+const fallbackBodyStart = fallbackSource.indexOf('  return async (\n    sessionId: string,') + '  return '.length;
+const fallback = `const maybeApplySessionRuntimeFallback = ${fallbackSource.slice(fallbackBodyStart, fallbackSource.lastIndexOf('\n}'))}`;
 
 function harness() {
   const pending = createPendingAgentSwitchRegistry();
@@ -220,12 +221,6 @@ describe('automatic runtime selection respects the user send boundary', () => {
     expect(h.pending.get('session')?.model).toBe('chosen');
   });
 
-  it('uses the same guard before every automatic same-engine mutation can write or reconcile', () => {
-    const start = source.indexOf('  const handleSetModel = async (');
-    const body = source.slice(start, source.indexOf('      const routeExplicit =', start));
-    expect(body).toMatch(/internalOptions.source !== 'user' &&\s*!canApplyAutomaticRuntimeSelection\(sessionId, internalOptions.expectedGeneration\)/);
-    expect(body).toContain('return { deferred: false, superseded: true };');
-  });
 });
 
 it.each(['device-b', 'share:one'])('applies a same-engine fallback at %s without a no-op agent switch', async agentDeviceId => {

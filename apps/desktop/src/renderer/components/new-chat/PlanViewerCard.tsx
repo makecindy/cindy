@@ -155,7 +155,7 @@ export function PlanViewerCard({
           'flex h-[44px] items-center justify-between pl-[20px] pr-[10px]',
         )}
       >
-        <span className="text-14 font-semibold text-[var(--plan-min-title)]">
+        <span className="text-14 font-medium text-[var(--plan-min-title)]">
           {t('newChat.planReview.title')}
         </span>
         <div className="flex items-center gap-[4px]">
@@ -227,7 +227,7 @@ export function PlanViewerCard({
         )}
       >
         <div className="flex items-center gap-[12px]">
-          <span className="text-14 font-semibold text-[var(--plan-header-title)]">
+          <span className="text-14 font-medium text-[var(--plan-header-title)]">
             {t('newChat.planReview.title')}
           </span>
           <span className="text-12 font-normal text-[var(--plan-header-hint)]">
@@ -302,7 +302,7 @@ export function PlanViewerCard({
               'flex-1 resize-none overflow-y-auto px-[28px] py-[20px]',
               'whitespace-pre-wrap break-words bg-transparent outline-none',
               'font-mono text-13 leading-[1.7]',
-              'text-[var(--plan-edit-body)] caret-[var(--plan-edit-body)]',
+              'text-[var(--plan-edit-body)]',
             )}
             aria-label={t('newChat.planReview.toolbar.edit')}
           />
@@ -311,7 +311,7 @@ export function PlanViewerCard({
               className={cn(
                 'shrink-0 border-t px-[28px] py-[8px] text-12',
                 'border-[var(--plan-header-divider)]',
-                'bg-[var(--plan-content-bg)] text-red-500',
+                'bg-[var(--plan-content-bg)] text-[var(--error-fg)]',
               )}
               role="status"
             >

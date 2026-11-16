@@ -10,10 +10,13 @@ import {
 } from '@/../shared/appearanceSettings';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-let changed: (settings: AppearanceSettings) => void;
+const listeners = new Set<(settings: AppearanceSettings) => void>();
+const changed = (settings: AppearanceSettings) => listeners.forEach(listener => listener(settings));
 let saved: AppearanceSettings;
 let setPatch: ReturnType<typeof vi.fn>;
+let resetFields: ReturnType<typeof vi.fn>;
 beforeEach(() => {
+  listeners.clear();
   vi.stubGlobal(
     'ResizeObserver',
     class {
@@ -27,18 +30,19 @@ beforeEach(() => {
     width: 100,
   } as DOMRect);
   vi.stubGlobal('electronAPI', {
-    // Zero-transparency desktop mode exists only with macOS's native sidebar material (#9424).
+    // Zero desktop transparency keeps the original backdrop on every platform (#9424).
     platform: 'darwin',
     appearanceSettings: {
       getSync: () => saved,
       onChanged: (listener: typeof changed) => {
-        changed = listener;
-        return () => {};
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
       },
       setPatch: (setPatch = vi.fn(async (patch: Partial<AppearanceSettings>) => {
         saved = { ...saved, ...patch };
         changed(saved);
       })),
+      resetFields: (resetFields = vi.fn()),
     },
   });
   saved = { ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'cindy-window', wallpaperBlur: 4 };
@@ -73,7 +77,7 @@ describe('wallpaper blur gesture persistence', () => {
     saved = { ...saved, wallpaperId: 'none', wallpaperVisibility: legacy };
     const { unmount } = render(view());
     expect(visibility()).toBe('0');
-    expect(document.documentElement.dataset.desktopBlur).toBe('0');
+    expect(document.documentElement.dataset.desktopBlur).toBeUndefined();
     expect(setPatch).not.toHaveBeenCalled();
     const slider = screen.getByRole('slider', { name: 'settings.appearance.wallpaper.desktopVisibilityLabel' }).closest('.cindy-slider')!;
     pointer(slider, 'pointerdown', 60);
@@ -89,6 +93,7 @@ describe('wallpaper blur gesture persistence', () => {
     expect(visibility()).toBe('0.6');
     fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.wallpaper.reset' }));
     await waitFor(() => expect(setPatch).toHaveBeenCalledTimes(2));
+    expect(resetFields).not.toHaveBeenCalled();
     expect(visibility()).toBe('0');
     expect(saved.desktopVisibility).toBeNull();
   });
@@ -155,6 +160,7 @@ describe('wallpaper blur gesture persistence', () => {
     pointer(visibilityTrack(), 'pointerdown', 80);
     fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.wallpaper.reset' }));
     await waitFor(() => expect(setPatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ wallpaperVisibility: null })));
+    expect(resetFields).not.toHaveBeenCalled();
     expect(visibility()).not.toBe('0.8');
   });
   // Unit integration: zero visibility suspends rendering and interaction, but
@@ -171,7 +177,7 @@ describe('wallpaper blur gesture persistence', () => {
       expect(sliderTrack.hasAttribute('data-disabled')).toBe(true);
       expect(slider.getAttribute('aria-valuenow')).toBe('12');
       expect(blur()).toBe('');
-      if (wallpaperId === 'none') expect(root.dataset.desktopBlur).toBe('0');
+      if (wallpaperId === 'none') expect(root.dataset.desktopBlur).toBeUndefined();
       fireEvent.keyDown(slider, { key: 'ArrowRight' });
       pointer(sliderTrack, 'pointerdown', 80);
       pointer(sliderTrack, 'pointerup', 80);
@@ -232,8 +238,8 @@ describe('wallpaper blur gesture persistence', () => {
     render(view());
     pointer(track(), 'pointerdown', 80);
     fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.wallpaper.reset' }));
-    await waitFor(() => expect(setPatch).toHaveBeenCalledTimes(1));
-    expect(setPatch).toHaveBeenCalledWith(expect.objectContaining({ wallpaperBlur: null }));
+    await waitFor(() => expect(setPatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ wallpaperBlur: null })));
+    expect(resetFields).not.toHaveBeenCalled();
     expect(blur()).toBe('');
     expect(screen.getByRole('slider', { name: 'settings.appearance.wallpaper.desktopBlurLabel' }).getAttribute('aria-valuenow')).toBe('0');
   });
@@ -285,5 +291,30 @@ describe('wallpaper blur gesture persistence', () => {
     expect(blur()).toBe('12px');
     act(() => changed({ ...saved, wallpaperId: 'none' }));
     expect(screen.getByRole('slider', { name: 'settings.appearance.wallpaper.desktopBlurLabel' }).getAttribute('aria-valuenow')).toBe('12');
+  });
+  // Unit: Windows Acrylic has one system strength, so the desktop blur there
+  // is a Switch. It shares wallpaperBlur with artwork, so turning it back on
+  // must restore the previous artwork strength rather than a fixed value.
+  it('uses an on/off switch for desktop blur on Windows and restores the last strength', async () => {
+    (window.electronAPI as { platform: string }).platform = 'win32';
+    saved = { ...saved, wallpaperId: 'none', desktopVisibility: 0.4, wallpaperBlur: 7 };
+    const rendered = render(view());
+    expect(screen.queryByRole('slider', { name: 'settings.appearance.wallpaper.desktopBlurLabel' })).toBeNull();
+    const toggle = screen.getByRole('switch', { name: 'settings.appearance.wallpaper.desktopBlurLabel' });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(setPatch).toHaveBeenLastCalledWith({ wallpaperBlur: 0 }));
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(setPatch).toHaveBeenLastCalledWith({ wallpaperBlur: 7 }));
+    // Leaving the Appearance tab unmounts the section; the strength must survive it.
+    fireEvent.click(toggle);
+    await waitFor(() => expect(setPatch).toHaveBeenLastCalledWith({ wallpaperBlur: 0 }));
+    rendered.rerender(view(false));
+    rendered.rerender(view());
+    fireEvent.click(screen.getByRole('switch', { name: 'settings.appearance.wallpaper.desktopBlurLabel' }));
+    await waitFor(() => expect(setPatch).toHaveBeenLastCalledWith({ wallpaperBlur: 7 }));
+    act(() => changed({ ...saved, wallpaperId: 'cindy-window' }));
+    expect(thumb().getAttribute('aria-valuenow')).toBe('7');
   });
 });

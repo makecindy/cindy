@@ -292,6 +292,12 @@ export class RsbWebviewBackend implements BrowserBackend {
     return this.disposePromise;
   }
 
+  /** An open-tab reply can precede the guest's dom-ready/registry report. Keep
+   * that observation in the drain boundary rather than freezing in this gap. */
+  canReleaseClient(): boolean {
+    return !this.disposing && this.activeCalls.size === 0 && this.backgroundCalls.size === 0;
+  }
+
   private async performDispose(): Promise<void> {
     // Switching backends never closes the user's tabs. Only listeners,
     // captures and debugger attachments owned by this backend are released.

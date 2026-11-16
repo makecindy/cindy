@@ -1,3 +1,4 @@
+import { createInlineImagePreprocessor } from './inlineImagePreprocessor.js';
 
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import { rewriteFastModel } from './model-fast-mode.js';
@@ -24,7 +25,7 @@ import {
 } from '@cindy/model-providers';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
-import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody } from '@cindy/model-compat';
+import { normalizeProviderRequest, normalizeUnsupportedCodexWebSearch, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody, normalizeKimiToolHistory, resolveProviderCompatibilityProfile } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, normalizeDeepSeekV41ToolHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { bearerAccessTokenFromHeaders } from './chatgpt-bridge-auth-invalidation.js';
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -56,6 +57,7 @@ import {
   createInstructionsRegistry,
   createXaiModelInputRecoveryRule,
   createXaiModelInputSanitizeTransform,
+  countInlineRequestImages,
   createVllmResponsesCompatibilityRule,
   sanitizeXaiModelInputBody,
   sanitizeXaiModelInputFromBody,
@@ -98,6 +100,7 @@ import {
   getProviderRoutingDescriptor,
   getSessionRoutingDescriptor,
   resolveProviderRouteById,
+  oauthRefreshFailedDecision,
   resolveProviderRouteDecision,
   resolveFrozenProviderRouteDecision,
   resolveSessionRoute,
@@ -203,6 +206,7 @@ export interface CodexProxyHostPorts {
   bearerKeyFromHeaders: typeof import('../model-access/gatewayKeyRejection.js').bearerKeyFromHeaders;
   reportCindyGatewayKeyRejected: typeof import('../model-access/gatewayKeyRejection.js').reportCindyGatewayKeyRejected;
   createAttachmentRecovery: typeof import('./oversized-attachment-recovery.js').createAttachmentRecovery;
+  createRequestSizeController: typeof import('./oversized-attachment-recovery.js').createRequestSizeController;
   restrictSubscriptionRequest: typeof import('./subscription-fast-request-policy.js').restrictSubscriptionRequest;
   withSubscriptionFastRequestPolicy: typeof import('./subscription-fast-request-policy.js').withSubscriptionFastRequestPolicy;
   peekGrokAccessToken: typeof import('./grok-oauth-login.desktop.js').peekGrokAccessToken;
@@ -224,11 +228,36 @@ export interface CodexProxyHostPorts {
   parseCodexCustomProviderPath: typeof import('./codex-custom-provider-route.js').parseCodexCustomProviderPath;
   relativeProviderRequestPath: typeof import('./codex-custom-provider-route.js').relativeProviderRequestPath;
   setAppliedCustomProviderRoutes: typeof import('./codex-custom-provider-route.js').setCodexAppliedCustomProviderRoutes;
+  /** Optional inbound admission for every Codex proxy this core starts, checked before all
+   * routing (the Node Host requires inbound credentials on its loopback proxy). Not set: no
+   * check, as before. */
+  authorizeInbound?: import('@cindy/anthropic-compat-proxy').ProxyOptions['authorizeInbound'];
 }
 
 /** Same protocol, routing and recovery implementation for both launchers. */
+const CODEX_PROXY_MAX_REQUEST_BODY_BYTES = 42 * 1024 * 1024;
+const CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES = 12 * 1024 * 1024;
+const CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES = 8 * 1024 * 1024;
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && !Array.isArray(value);
+
+function isFullCodexWebSocketReplay(body: unknown): boolean {
+  return isPlainObject(body) && !Object.prototype.hasOwnProperty.call(body, 'previous_response_id');
+}
+
+export function shouldCompactCodexWebSocketFrame(message: Buffer, limitBytes = CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES): boolean {
+  if (message.length <= limitBytes) return false;
+  try {
+    const body: unknown = JSON.parse(message.toString('utf8'));
+    return isFullCodexWebSocketReplay(body);
+  } catch {
+    return false;
+  }
+}
+
 export function createCodexProxyHost(ports: CodexProxyHostPorts) {
-const { bearerKeyFromHeaders, reportCindyGatewayKeyRejected, createAttachmentRecovery, restrictSubscriptionRequest, withSubscriptionFastRequestPolicy, peekGrokAccessToken, isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId, buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM, claudeUpstreamEndpoint, isOpenAiSubscriptionProviderId, createXaiProxyAuthInvalidationObserver, resolveDesktopOutboundProxy, outboundFetch, readSilentEncryptedRetrySettings, recordXaiRateLimitSnapshot, CODEX_IMAGE_GENERATION_ACTOR_HEADER, codexCustomProviderRoutesSignature, findCodexAppliedCustomProviderRoute, isCodexCustomProviderNamespacePath, parseCodexCustomProviderPath, relativeProviderRequestPath, setAppliedCustomProviderRoutes } = ports;
+const imagePreprocessor = createInlineImagePreprocessor();
+const { bearerKeyFromHeaders, reportCindyGatewayKeyRejected, createAttachmentRecovery, createRequestSizeController, restrictSubscriptionRequest, withSubscriptionFastRequestPolicy, peekGrokAccessToken, isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId, buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM, claudeUpstreamEndpoint, isOpenAiSubscriptionProviderId, createXaiProxyAuthInvalidationObserver, resolveDesktopOutboundProxy, outboundFetch, readSilentEncryptedRetrySettings, recordXaiRateLimitSnapshot, CODEX_IMAGE_GENERATION_ACTOR_HEADER, codexCustomProviderRoutesSignature, findCodexAppliedCustomProviderRoute, isCodexCustomProviderNamespacePath, parseCodexCustomProviderPath, relativeProviderRequestPath, setAppliedCustomProviderRoutes } = ports;
 
 
 // scope = 'codex-proxy'。保持独立 scope,方便后续 E2E 日志脚本按 codex proxy 过滤。
@@ -305,7 +334,7 @@ const responsesReasoningContentRecoveryRule = createResponsesReasoningContentRec
 const duplicateResponsesToolCallRecoveryRule: RecoveryRule = {
   id: 'duplicate_responses_tool_call',
   enabled: () => true,
-  matches: (errorText) => /duplicate\s+function_call_output\s+for\s+call_id/i.test(errorText),
+  matches: (errorText) => /duplicate\s+(?:function_call_output|tool\s+output)\s+for\s+call_id\b/i.test(errorText),
   strip: normalizeRepeatedResponseToolCallIdsFromBody,
   onRetry: (threadId, model) => responsesToolCallHistoryStripController.markActive(threadId, model),
   useUpstreamModel: true,
@@ -439,19 +468,11 @@ function createArmedHttpRecoveryStripTransform(useUpstreamModel = false): Reques
   };
 }
 
-// codex 走 Responses API,每轮**全量重发**整个 thread 历史;导入的存量长会话
-// (贴图 base64 + 加密 reasoning blob,字节数膨胀远快于 token 数)单次请求体可以
-// 轻松越过 proxy 默认的 32MB —— 原生 codex 直连上游没有这道闸,曾导致导入会话
-// 每轮报 "stream disconnected before completion" 且无日志(2026-07 实踩)。
-// 放宽到 128MB 恢复与原生 codex 的对等;仍保留上限防内存被打爆(body 会整段
-// 缓冲 + JSON.parse,该值同时是单请求的内存 / 解析停顿预算)。
-const CODEX_PROXY_MAX_REQUEST_BODY_BYTES = 128 * 1024 * 1024;
-
-// ChatGPT 订阅后端的 WebSocket 单条消息上限约 16 MiB(2026-10 实测:12 MiB 通过,16 MiB 起
-// 回 1009 Message Too Big;HTTP 无此限制)。连接回收后 Codex 要整段重发历史,图片多的会话会
-// 每次被拒、退到 HTTP 慢传。超过时先把最早的内联附件外置为本地文件,压到目标值再发。
-const CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES = 15 * 1024 * 1024;
-const CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES = 12 * 1024 * 1024;
+// Codex 每轮全量重发历史，HTTP 兜底硬上限为 42 MiB。原始 JSON 超过这个
+// 入口窗口时先落盘，能挪图的请求仍按 32→14 MiB 重放，不因原始体积直接拒绝。
+// 关闭大小控制时，旧附件恢复也以 42 MiB 为限；无归属时仅压缩，仍超限则本地 413。
+// ChatGPT 订阅后端的 WebSocket 阈值独立：整段历史超过 12 MiB 时重放到 8 MiB，
+// 增量帧（带 previous_response_id）只预处理，不挪图。
 
 // proxy 路线 spawn 鉴权模式: codex 当前带的是 OAuth token(requires_openai_auth)还是 gateway key(env_key)。
 // index.ts prepareCodexExtraSpawnConfig 在每次 spawn 前按本次会话 credentialMode set; routingTransform 据此决策。
@@ -490,9 +511,26 @@ function headerValue(headers: Readonly<Record<string, string>>, name: string): s
 }
 
 function selectedThreadIdFromHeaders(headers: Readonly<Record<string, string>>): string {
-  return headerValue(headers, 'thread-id') ||
-    headerValue(headers, 'x-client-request-id') ||
-    'unknown';
+  const threadId = headerValue(headers, 'thread-id');
+  if (threadId) return threadId;
+  const requestId = headerValue(headers, 'x-client-request-id');
+  if (requestId && threadToSession.has(requestId)) return requestId;
+
+  // Standalone web search carries its thread in turn metadata, not thread-id.
+  // Only registered threads may select a session's Provider route.
+  const turnMetadata = headerValue(headers, 'x-codex-turn-metadata');
+  if (turnMetadata) {
+    try {
+      const metadata: unknown = JSON.parse(turnMetadata);
+      if (isPlainObject(metadata) && typeof metadata.thread_id === 'string'
+        && threadToSession.has(metadata.thread_id)) {
+        return metadata.thread_id;
+      }
+    } catch {
+      // Malformed optional metadata retains the legacy request-id fallback.
+    }
+  }
+  return requestId || 'unknown';
 }
 
 function guardianParentThreadIdFromHeaders(
@@ -1284,7 +1322,7 @@ function createChatBridgeDecision(
   }, { logger: log, fetchImpl: outboundFetch });
   return {
     localHandler: ({ rawBody, parsedBody, ctx, res }) => {
-      const body = prepareLocalBridgeBody({
+      let body = prepareLocalBridgeBody({
         rawBody,
         parsedBody,
         instructions,
@@ -1304,6 +1342,19 @@ function createChatBridgeDecision(
       const selected = catalogSelected && modelWithInterface(catalogSelected, route.routing.modelInterface);
       const standard = selected?.api ? invocationModelRecord(selected, route.routing.upstream) : !route.routing.requestPath
         ? providerModelRecord(actualModel, route.routing.upstream, 'openai-chat') : undefined;
+      const upstream = standard
+        ? buildRouteDecision(route.routing, null, 'codex', route.apiKey, route.oauthToken)?.upstreamOverride ?? route.routing.upstream
+        : route.routing.upstream;
+      // localHandler bypasses the proxy transform chain. Match the final route
+      // (including a frozen child's model) before either Chat serializer runs.
+      const usesChat = standard ? standard.execution.pi.api === 'openai-completions' : route.routing.wireProtocol === 'openai-chat';
+      if (usesChat && isPlainObject(body) && ctx?.method === 'POST'
+        && ctx.url.split('?', 1)[0]?.replace(/\/+$/, '') === '/responses') {
+        body = normalizeKimiToolHistory(body, {
+          harness: 'codex', protocol: 'openai-chat', upstreamBase: upstream, model: actualModel,
+          authMode: route.routing.authStrategy === 'oauth-token' || route.routing.authStrategy === 'provider-oauth-header' ? 'oauth' : 'api-key',
+        }) ?? body;
+      }
       if (standard && isPlainObject(body)) {
         const nativeHeaders = overrideHeadersCaseInsensitive(withChatBridgeUserAgent(Object.fromEntries(Object.entries(headers).filter(([name]) =>
           !['authorization', 'x-api-key'].includes(name.toLowerCase())))), resolveConversationSessionHeaders(ctx?.headers));
@@ -1311,11 +1362,25 @@ function createChatBridgeDecision(
           || (isOfficialAnthropicUpstream(standard.upstream) && (standard.contextWindow ?? 0) >= 1_000_000))) {
           appendCommaSeparatedHeaderToken(nativeHeaders, 'anthropic-beta', 'context-1m-2025-08-07');
         }
-        const nativeFetch = createPiProviderFetch({ row: { ...standard,
+        const nativeRow = { ...standard,
           supportsFastMode: selected?.supportsFastMode ?? standard.supportsFastMode,
-        }, providerId,
+        };
+        const chatProfile = standard.execution.pi.api === 'openai-completions'
+          ? resolveProviderCompatibilityProfile({
+            harness: 'codex', protocol: 'openai-chat', upstreamBase: upstream, model: actualModel,
+            authMode: route.routing.authStrategy === 'oauth-token' || route.routing.authStrategy === 'provider-oauth-header' ? 'oauth' : 'api-key',
+          }) : null;
+        // Kimi Code rejects developer messages. Its native SDK does not recognize
+        // this endpoint; fill only the missing role capability on this Codex route.
+        if ((chatProfile?.id === 'kimi' || chatProfile?.id === 'kimi-code')
+          && standard.execution.pi.compat?.supportsDeveloperRole === undefined) {
+          nativeRow.execution = { ...standard.execution, pi: { ...standard.execution.pi,
+            compat: { ...standard.execution.pi.compat, supportsDeveloperRole: false },
+          } };
+        }
+        const nativeFetch = createPiProviderFetch({ row: nativeRow, providerId,
           // Keep the catalog adapter while honoring the host assigned to this account.
-          upstream: buildRouteDecision(route.routing, null, 'codex', route.apiKey, route.oauthToken)?.upstreamOverride ?? route.routing.upstream,
+          upstream,
           apiKey: nativeBridgeApiKey(headers),
           headers: nativeHeaders,
           fetchImpl: async (url, init) => {
@@ -2080,6 +2145,24 @@ function responsesCompatibilityRouting(
   return responsesCompatibilityRoute(body, ctx, frozenAuthInjection).routing;
 }
 
+function isXdGrokWireModel(model: string): boolean {
+  return model.startsWith('x-ai/grok') || model.startsWith('x-ai-grok/grok');
+}
+
+function isXdGatewayUpstream(upstreamBase: string | undefined): boolean {
+  const endpoint = claudeUpstreamEndpoint().trim();
+  if (!upstreamBase || !endpoint) return false;
+  try {
+    const actual = new URL(upstreamBase);
+    const gateway = new URL(buildCodexGatewayBaseUrl(endpoint));
+    return actual.origin === gateway.origin &&
+      actual.pathname.replace(/\/+$/, '') === gateway.pathname.replace(/\/+$/, '') &&
+      actual.search === gateway.search;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The XD Gateway claims this wire model for its codex routing when the active
  * catalog exposes it under `xd.models.codex`. We use the catalog membership
@@ -2095,7 +2178,7 @@ function responsesCompatibilityRouting(
  * implicit routes (PR #2444 Codex P1).
  */
 function xdProviderClaimsWireModel(wireModel: string): boolean {
-  if (!wireModel.startsWith('x-ai/grok')) return false;
+  if (!isXdGrokWireModel(wireModel)) return false;
   const { authoritative, models } = getXdGatewayModelAccessSnapshot();
   if (!authoritative) {
     // Negative evidence is unavailable. The env-key default route and the
@@ -2147,7 +2230,8 @@ function createGatewayGrokResponsesCompatTransform(
   return (body, ctx) => {
     if (!isPlainObject(body)) return null;
     const requestModel = typeof body.model === 'string' ? body.model : '';
-    if (!requestModel.startsWith('x-ai/grok')) return null;
+    if (!isXdGrokWireModel(requestModel)) return null;
+    if (ctx.upstreamBase && !isXdGatewayUpstream(ctx.upstreamBase)) return null;
     // Use providerContextForRequest so subagent-frozen routes resolve to xd
     // even when the parent session belongs to a different provider. Only
     // clean tools when the effective provider for THIS request is xd.
@@ -2851,7 +2935,11 @@ function createCustomProviderReasoningTransform(
       || !isPlainObject(body) || typeof body.model !== 'string') return null;
     const route = customProviderRouteSnapshot(path.routeId, frozenRoutes);
     if (!route?.responseModels.includes(body.model)) return null;
-    const next = reconcileResponsesReasoningEffort(body, route.responseEffortsByModel[body.model] ?? []);
+    const routing = route.responseRoutingByModel[body.model];
+    const supported = routing && (routing.wireProtocol ?? 'openai-responses') === 'openai-responses'
+      ? normalizeUnsupportedCodexWebSearch(body, { harness: 'codex', protocol: 'openai-responses',
+          upstreamBase: ctx.upstreamBase ?? routing.upstream, model: body.model }) : body;
+    const next = reconcileResponsesReasoningEffort(supported, route.responseEffortsByModel[body.model] ?? []);
     return next === body ? null : next;
   };
 }
@@ -3156,7 +3244,7 @@ function resolveCodexCustomProviderRoutingDecision(
             threadId,
             subagentRoute.reasoningEffort,
           ) ?? unresolvedCollabSpawnRouteDecision();
-        });
+        }).catch(() => oauthRefreshFailedDecision());
       }
       return resolveProviderRouteDecision(
         subagentRoute.providerId,
@@ -3186,7 +3274,7 @@ function resolveCodexCustomProviderRoutingDecision(
             model !== requestModel ? model : undefined,
             threadId,
           );
-        });
+        }).catch(() => oauthRefreshFailedDecision());
       }
       // model 传给 scope 门(空串 = 控制面 GET,不受范围限制);声明了 modelPrefixes 的
       // 供应商(如 xai)只捕获自家命名空间的请求,其余回落默认路由。
@@ -3226,7 +3314,7 @@ function resolveCodexCustomProviderRoutingDecision(
           );
           if (implicitProviderOAuth) return implicitProviderOAuth;
           return decideCodexRoute({ model, authInjection, gatewayKey, requestKey: bearerKeyFromHeaders(ctx.headers), isReplacedGatewayKey: _isReplacedGatewayKey });
-        });
+        }).catch(() => oauthRefreshFailedDecision());
       }
       const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(model, 'codex', gatewayKey);
       if (implicitProviderOAuth) return implicitProviderOAuth;
@@ -3267,17 +3355,21 @@ function createTransformRequestChain(
 ): RequestTransform[] {
   const execFunctionAdapterTransform: RequestTransform = (body, ctx) => {
     if (!isPlainObject(body)) return null;
-    const routing = responsesCompatibilityRouting(body, ctx, frozenAuthInjection);
+    const { providerId, routing } = responsesCompatibilityRoute(body, ctx, frozenAuthInjection);
     if ((routing?.wireProtocol ?? 'openai-responses') !== 'openai-responses'
       || routing?.supportsResponsesCustomTools !== false) return null;
-    const upstreamBase = ctx.upstreamBase ?? routing.upstream;
+    const gatewayEndpoint = providerId === 'xd' ? claudeUpstreamEndpoint().trim() : '';
+    const upstreamBase = ctx.upstreamBase ?? (gatewayEndpoint
+      ? buildCodexGatewayBaseUrl(gatewayEndpoint)
+      : routing.upstream);
     const model = rewriteChatBridgeModel(String(body.model ?? ''), routing.modelIdRewrite?.stripPrefix);
     // Only known provider endpoints or the existing XD model contract lower namespaces.
     const endpoint = new URL(upstreamBase);
-    const gateway = new URL(getProviderRoutingDescriptor('xd', 'codex', String(body.model ?? ''))?.upstream ?? upstreamBase);
     const knownEndpoint = ['api.x.ai', 'cli-chat-proxy.grok.com', 'api.deepseek.com'].includes(endpoint.hostname)
       || VOLCENGINE_ARK_CHAT_HOST_RE.test(endpoint.hostname);
-    const gatewayDialect = endpoint.origin === gateway.origin && /^(?:x-ai\/grok|deepseek\/|bytedance-seed\/|doubao-seed-)/.test(String(body.model ?? ''));
+    const requestModel = String(body.model ?? '');
+    const gatewayDialect = providerId === 'xd' && isXdGatewayUpstream(upstreamBase) &&
+      (isXdGrokWireModel(requestModel) || /^(?:deepseek\/|bytedance-seed\/|doubao-seed-)/.test(requestModel));
     return execAdapter.adaptRequest(body, ctx.reqId,
       { harness: 'codex', protocol: 'openai-responses', upstreamBase, model }, knownEndpoint || gatewayDialect);
   };
@@ -3507,11 +3599,38 @@ async function createCodexProxyHandle(
     return decision instanceof Promise ? decision.then(uncompressed) : uncompressed(decision);
   };
   const attachmentRecovery = createAttachmentRecovery(sessionIdFromHeaders);
+  const requestSizeController = createRequestSizeController(sessionIdFromHeaders, imagePreprocessor, (headers, model) =>
+      providerContextForRequest(headers, model).providerId ?? guestProviderId
+        ?? gatewayProviderIdForRewrittenModel(model)
+        ?? ((frozenAuthInjection ?? getCodexProxyAuthInjection()) === 'oauth-bearer' ? 'openai' : 'xd'));
   const fitWebSocketRequest = async (
     request: Buffer,
+    parsed: unknown,
+    fullReplay: boolean,
     ctx: { url: string; headers: Readonly<Record<string, string>> },
     signal: AbortSignal,
   ): Promise<Buffer> => {
+    const context = { reqId: 0, method: 'POST', url: ctx.url, headers: ctx.headers };
+    try {
+      const controlled = await requestSizeController.control(request, 'responses', {
+        context, signal, route: requestSizeController.route?.(context, parsed) ?? {},
+        allowRemoval: fullReplay && requestSizeController.enabled?.() !== false,
+        triggerBytes: CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES,
+        targetBytes: CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES,
+      });
+      if (controlled) {
+        request = controlled.body;
+        log.info('request size control applied', { reqId: 0, transport: 'websocket',
+          originalBytes: controlled.originalBytes, bytes: controlled.bytes,
+          removedImages: controlled.removedImages, reason: controlled.reason });
+      }
+    } catch (error) {
+      log.info('request size control skipped', { reqId: 0, reason: 'error', originalBytes: request.length,
+        imageCount: countInlineRequestImages(request, 'responses'), errorType: error instanceof Error ? 'Error' : typeof error });
+    }
+    // Incremental frames only preprocess. Disabled/unavailable controllers keep
+    // the existing oversized-frame recovery as their fallback.
+    if (!fullReplay || request.length <= CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES) return request;
     const recover = attachmentRecovery({ reqId: 0, method: 'POST', url: ctx.url, headers: ctx.headers });
     let recovered: Buffer | null = null;
     try {
@@ -3533,6 +3652,7 @@ async function createCodexProxyHandle(
   const handle = await createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
+    ...(ports.authorizeInbound ? { authorizeInbound: ports.authorizeInbound } : {}),
     transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter, pricing, guestProviderId !== undefined).map(
       (transform): RequestTransform => {
         // Namespaced Responses use a frozen Provider route. Preserve its native
@@ -3550,7 +3670,7 @@ async function createCodexProxyHandle(
         scoped.onRequestSettled = transform.onRequestSettled;
         return scoped;
       },
-    ).concat((body, ctx) => {
+    ).concat(Object.assign((body: unknown, ctx: RequestTransformCtx) => {
       // 同连接的命名空间路由不跑普通改写链，档位只在这条专用 transform 里收敛。
       // 观察点必须排在它后面，卡片才读到真正发出去的档，而不是父任务存档档位。
       if (crossProviderRequests.has(ctx.headers)) return null;
@@ -3564,7 +3684,7 @@ async function createCodexProxyHandle(
         );
       }
       return reconciled;
-    }),
+    }, { errorMode: 'reject-request' as const })),
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
     bypassRequestTransforms: (_body, ctx) => {
       const path = parseCodexCustomProviderPath(ctx.url);
@@ -3579,7 +3699,8 @@ async function createCodexProxyHandle(
       const context = providerContextForRequest(ctx.headers, isPlainObject(body) && typeof body.model === 'string' ? body.model : '');
       const next = restrictSubscriptionRequest(body, context.sessionId ?? guestSessionId, context.providerId ?? guestProviderId ?? 'openai');
       const request = next ? Buffer.from(JSON.stringify(next)) : message;
-      return request.length > CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES ? fitWebSocketRequest(request, ctx, signal) : request;
+      const fullReplay = isFullCodexWebSocketReplay(body);
+      return fitWebSocketRequest(request, next ?? body, fullReplay, ctx, signal);
     }),
     transformResponse: (ctx) => {
       const response = {
@@ -3636,6 +3757,7 @@ async function createCodexProxyHandle(
     ),
     maxRequestBodyBytes: CODEX_PROXY_MAX_REQUEST_BODY_BYTES,
     oversizedRequestRecovery: attachmentRecovery,
+    requestSizeController,
     debugDumpRequestBody: process.env.XDT_PROXY_DUMP_REQUEST_BODY === '1',
     recoveryRules: [...CODEX_BODY_RECOVERY_RULES],
     logger: log,

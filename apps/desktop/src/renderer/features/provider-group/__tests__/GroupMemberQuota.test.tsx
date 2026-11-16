@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   status: new Set<(snapshot: { status: string }) => void>(),
   getState: vi.fn(),
   poolCommand: vi.fn(),
+  remotePush: new Set<(push: { deviceId: string; channel: string; payload?: { providerId: string } }, stamp?: unknown) => void>(),
   poolChanged: new Set<(event: { providerId: string }) => void>(),
   remoteInvoke: vi.fn(),
   realCard: false,
@@ -100,7 +101,8 @@ beforeEach(() => {
   mocks.control.clear();
   mocks.getState.mockReset().mockResolvedValue({ linkStatus: 'online' });
   mocks.poolChanged.clear();
-  mocks.poolCommand.mockReset().mockResolvedValue({ providerId: 'anthropic', configured: false, strategy: 'least', accounts: [poolAccount('default', { identity: 'me@example.com' })] });
+  mocks.remotePush.clear();
+  mocks.poolCommand.mockReset().mockRejectedValue(new Error('unsupported'));
   mocks.remoteInvoke.mockReset().mockRejectedValue(new Error('unsupported'));
   vi.stubGlobal('electronAPI', { subscriptionAccounts: {
     command: mocks.poolCommand,
@@ -110,6 +112,10 @@ beforeEach(() => {
     },
   }, deviceLink: {
     invoke: mocks.remoteInvoke,
+    onRemotePush: (listener: (push: { deviceId: string; channel: string; payload?: { providerId: string } }, stamp?: unknown) => void) => {
+      mocks.remotePush.add(listener);
+      return () => mocks.remotePush.delete(listener);
+    },
     getState: mocks.getState,
     onControlTargetChanged: (listener: (snapshot: { deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }) => void) => {
       mocks.control.add(listener);
@@ -839,7 +845,7 @@ describe('GroupMemberQuota', () => {
     expect(screen.queryByText('providerGroup.member.quota.loading')).toBeNull();
   });
 
-  it('lists every account on this computer, keeping the live card on the default account', async () => {
+  it('lists each account with its own quota instead of borrowing the provider card', async () => {
     mocks.poolCommand.mockResolvedValue(pool([
       poolAccount('default', { identity: 'first@example.com', usage: claudeUsage(90) }),
       poolAccount('work', { identity: 'second@example.com', usage: claudeUsage(25) }),
@@ -848,8 +854,8 @@ describe('GroupMemberQuota', () => {
     expect(mocks.poolCommand).toHaveBeenCalledWith({ action: 'read', providerId: 'anthropic' });
     const rows = screen.getAllByTestId('provider-group-member-account');
     expect(rows.map(row => row.querySelector('[title]')?.textContent)).toEqual(['first@example.com', 'second@example.com']);
-    // 默认账号沿用原卡，新增账号用自己的额度，互不借用。
-    expect(rows[0].querySelector('[data-testid="quota-card"]')?.textContent).toBe('This computer’s Claude');
+    // Unit regression: the CLI-origin row must use its 90% snapshot too.
+    expect(rows.map(row => row.querySelector('[data-testid="quota-card"]')?.getAttribute('data-usage'))).toEqual(['[90]', '[25]']);
     expect(rows[1].querySelector('[data-testid="quota-card"]')?.textContent).not.toBe('This computer’s Claude');
   });
 
@@ -868,6 +874,25 @@ describe('GroupMemberQuota', () => {
     expect(rows[1].querySelector('[title]')?.textContent).toBe('providerGroup.member.accountFallback');
   });
 
+  // Unit: a paused remote account stayed visible until polling. Verify the
+  // production hook responds to its device event and rejects another owner's push.
+  it('applies remote account pauses immediately on a current device push', async () => {
+    mocks.byDevice.mini = [claude('anthropic')];
+    mocks.remoteInvoke.mockResolvedValue(pool([poolAccount('work', { usage: claudeUsage(25) })]));
+    await show({ kind: 'device', deviceId: 'mini', providerId: 'anthropic' });
+    expect(screen.getByTestId('quota-card').getAttribute('data-usage')).toBe('[25]');
+    mocks.remoteInvoke.mockResolvedValue(pool([poolAccount('work', { paused: true, usage: claudeUsage(25) })]));
+    await act(async () => mocks.remotePush.forEach(listener => listener({ deviceId: 'mini', channel: 'subscription-accounts:changed', payload: { providerId: 'openai' } })));
+    expect(mocks.remoteInvoke).toHaveBeenCalledOnce();
+    await act(async () => mocks.remotePush.forEach(listener => listener(
+      { deviceId: 'mini', channel: 'subscription-accounts:changed', payload: { providerId: 'anthropic' } }, { dataOwnerId: 'someone-else', ownerGeneration: 1 },
+    )));
+    expect(mocks.remoteInvoke).toHaveBeenCalledOnce();
+    await act(async () => mocks.remotePush.forEach(listener => listener({ deviceId: 'mini', channel: 'subscription-accounts:changed', payload: { providerId: 'anthropic' } })));
+    expect(screen.queryByTestId('quota-card')).toBeNull();
+    expect(mocks.remoteInvoke).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps the single card when the other computer cannot list its accounts', async () => {
     mocks.byDevice.mini = [claude('anthropic')];
     mocks.cards = { 'mini:anthropic': { title: 'Mini’s Claude' } };
@@ -877,11 +902,12 @@ describe('GroupMemberQuota', () => {
     expect(screen.getByTestId('quota-card').textContent).toBe('Mini’s Claude');
   });
 
-  it('adds no account name when the default account is the only one', async () => {
+  it('hides the name but retains its own quota when only the CLI-origin account remains', async () => {
+    mocks.poolCommand.mockResolvedValue(pool([poolAccount('default', { identity: 'me@example.com', usage: claudeUsage(44) })]));
     await show({ kind: 'local', providerId: 'anthropic' });
     expect(mocks.poolCommand).toHaveBeenCalled();
-    expect(screen.queryByTestId('provider-group-member-account')).toBeNull();
-    expect(screen.getByTestId('quota-card').textContent).toBe('This computer’s Claude');
+    expect(screen.queryByText('me@example.com')).toBeNull();
+    expect(screen.getByTestId('quota-card').getAttribute('data-usage')).toBe('[44]');
   });
 
   // r4523414503: account enumeration must survive expired logins; the old quota
@@ -901,7 +927,7 @@ describe('GroupMemberQuota', () => {
   });
 
   // r4523511784: hiding the single account name must retain its allocation/login status.
-  it.each(['ready', 'paused', 'signed-out'])('shows a single added %s account without its name', async (state) => {
+  it.each(['ready', 'signed-out'])('shows a single added %s account without its name', async (state) => {
     mocks.poolCommand.mockResolvedValue(pool([
       poolAccount('default', { status: 'signed-out' }),
       poolAccount('work', { identity: 'second@example.com', paused: state === 'paused',
@@ -915,11 +941,10 @@ describe('GroupMemberQuota', () => {
       expect(screen.queryByTestId('quota-card')).toBeNull();
     } else {
       expect(screen.getByTestId('quota-card').textContent).not.toBe('This computer’s Claude');
-      if (state === 'paused') expect(screen.getByText('providerGroup.member.status.paused')).toBeTruthy();
     }
   });
 
-  it('says why an account has no bars and dims a paused one', async () => {
+  it('says why enabled accounts have no bars and excludes paused accounts', async () => {
     mocks.poolCommand.mockResolvedValue(pool([
       poolAccount('default', { identity: 'first@example.com', status: 'signed-out' }),
       poolAccount('work', { identity: 'second@example.com', paused: true, usage: claudeUsage(25) }),
@@ -930,11 +955,22 @@ describe('GroupMemberQuota', () => {
     const rows = screen.getAllByTestId('provider-group-member-account');
     expect(rows[0].textContent).toContain('subscriptionAccounts.signedOut');
     expect(rows[0].querySelector('[data-testid="quota-card"]')).toBeNull();
-    expect(rows[1].textContent).toContain('providerGroup.member.status.paused');
-    expect(rows[1].className).toContain('opacity-60');
+    expect(rows).toHaveLength(2);
+    expect(screen.queryByText('second@example.com')).toBeNull();
     // r4523414514: authenticated with no first usage snapshot needs an explanation.
-    expect(rows[2].textContent).toContain('quotaCard.noWindows');
-    expect(rows[2].querySelector('[data-testid="quota-card"]')).toBeNull();
+    expect(rows[1].textContent).toContain('quotaCard.noWindows');
+    expect(rows[1].querySelector('[data-testid="quota-card"]')).toBeNull();
+  });
+
+  // Unit, user report 2026-11-11: pausing the last account must not restore
+  // the cached default card. Existing multi-account tests missed the empty pool.
+  it('removes quota when every account is paused and restores it on enable', async () => {
+    mocks.poolCommand.mockResolvedValue(pool([poolAccount('default', { paused: true })]));
+    await show({ kind: 'local', providerId: 'anthropic' });
+    expect(screen.queryByTestId('quota-card')).toBeNull();
+    mocks.poolCommand.mockResolvedValue(pool([poolAccount('default', { usage: claudeUsage(44) })]));
+    await act(async () => mocks.poolChanged.forEach(listener => listener({ providerId: 'anthropic' })));
+    expect(screen.getByTestId('quota-card').getAttribute('data-usage')).toBe('[44]');
   });
 
   it('rereads the accounts when they change on this computer', async () => {

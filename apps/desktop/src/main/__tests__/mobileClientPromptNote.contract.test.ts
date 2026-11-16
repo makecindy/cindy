@@ -122,16 +122,17 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
   });
 
   it('steer 投递也注入说明,且只进 wire payload', () => {
-    expect(register).toContain("isMobileControllerInvoke() || so.fromMobileClient === true");
-    expect(register).toContain('shouldPrependMobileClientPromptNote(normalized, sess.agentKind)');
+    const steer = readFileSync(resolve(process.cwd(), 'src/main/maker-ipc/makerSteerTransaction.ts'), 'utf8');
+    expect(steer).toContain("isMobileControllerInvoke() || so.fromMobileClient === true");
+    expect(steer).toContain('shouldPrependMobileClientPromptNote(normalized, sess.agentKind)');
     // 插话同样先接引用说明,再接来源说明(与 send 事务同序)。
-    expect(register).toContain('prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerReplyQuoteNote)');
-    expect(register).toContain('prependNoteToWireUserMessage(withSteerReplyQuoteNote as HandoffWireMessage, steerSourceNote)');
+    expect(steer).toContain('prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerReplyQuoteNote)');
+    expect(steer).toContain('prependNoteToWireUserMessage(withSteerReplyQuoteNote as HandoffWireMessage, steerSourceNote)');
     // steer 与 send 事务共用同一份环境说明去重记忆,投递成功后才记为已发送。
-    expect(register).toContain("prependNoteToWireUserMessage(withSteerSourceNote as HandoffWireMessage, steerPlannedNotes['client-environment'])");
-    expect(register).toContain('steerNotePlan?.commit()');
-    expect(register).toContain('readWireSourceDevice(so.sourceDevice)');
-    expect(register).toContain('await sess.steer(steerPayload as never');
+    expect(steer).toContain("prependNoteToWireUserMessage(withSteerSourceNote as HandoffWireMessage, steerPlannedNotes['client-environment'])");
+    expect(steer).toContain('steerNotePlan?.commit()');
+    expect(steer).toContain('readWireSourceDevice(so.sourceDevice)');
+    expect(steer).toContain('await sess.steer(steerPayload as never');
   });
 
   it('直连 maker:send 的 wire sendOpts 必须消毒', () => {

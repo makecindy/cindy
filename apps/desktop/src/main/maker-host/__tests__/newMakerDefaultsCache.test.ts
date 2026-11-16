@@ -86,6 +86,18 @@ describe('getRemoteNewMakerDefaults (device-link 远程草稿镜像)', () => {
     expect(getRemoteNewMakerDefaults('codex')).toEqual({ worktreeEnabled: true });
   });
 
+  it('每个 vendor 槽都带被控端新建任务当前的引擎，控制端据此跟随', () => {
+    // 控制端按自己的引擎(Pi)来问时，也要告诉它被控端自己用的是 Claude。
+    seed({
+      selectedRoute: { harness: 'claude', providerId: 'anthropic', model: 'claude-opus-4-8', effort: 'high', fastMode: false },
+      lastByVendor: { cc: { model: 'claude-opus-4-8' }, pi: { model: 'qwen3' } },
+      fastModeByModel: {},
+      effortByModel: {},
+    });
+    expect(getRemoteNewMakerDefaults('pi').selectedAgentKind).toBe('claude-code');
+    expect(getRemoteNewMakerDefaultsByVendor().codex.selectedAgentKind).toBe('claude-code');
+  });
+
   it('镜像每个 vendor 的显式模型选择状态，供控制端决定是否应用区域默认', () => {
     seed({
       lastByVendor: {

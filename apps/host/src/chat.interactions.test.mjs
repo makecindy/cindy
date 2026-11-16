@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import os from 'node:os';
 
 import { createChatHandler } from './chat.mjs';
 import { createEventHub } from './events.mjs';
@@ -16,11 +17,12 @@ test('chat uses the durable queue and approvals reach the client once', async (t
   const hub = createEventHub();
   const broker = createInteractionBroker({ hub });
   const published = [];
-  let requested;
-  const requestPublished = new Promise(resolve => { requested = resolve; });
+  let requested, failed;
+  const requestPublished = new Promise((resolve, reject) => { requested = resolve; failed = reject; });
   const unsubscribeHub = hub.subscribe((event) => {
     published.push(event);
     if (event.type === 'interaction_request') requested(event);
+    if (event.type === 'input_projection' && event.projection.error) failed(new Error(event.projection.error));
   });
   t.after(unsubscribeHub);
 
@@ -28,6 +30,8 @@ test('chat uses the durable queue and approvals reach the client once', async (t
   let emitEvent = () => {};
   const session = {
     id: 'session-1',
+    instanceId: 'runtime-1', agentKind: 'claude-code', workDir: os.tmpdir(),
+    isTurnRunning: () => false,
     onEvent(callback) {
       emitEvent = callback;
       return () => {};
@@ -37,8 +41,10 @@ test('chat uses the durable queue and approvals reach the client once', async (t
     },
     async abort() {},
     async send(_text, options) {
+      options.onTurnReserved?.(1);
       await options.beforeProviderStart?.();
       await options.onAccepted?.(options.signal);
+      options.onDispatching?.();
       const listener = listeners[0];
       assert.ok(listener, 'the broker must be attached before the turn starts');
       const decision = await listener({ kind: 'permission', requestId: 'req-1' });
@@ -47,11 +53,12 @@ test('chat uses the durable queue and approvals reach the client once', async (t
     },
   };
 
-  const readSession = async () => ({ id: 'session-1', agentKind: 'claude-code', model: 'm', workingDir: '/tmp', providerId: null });
+  const readSession = async () => ({ id: 'session-1', agentKind: 'claude-code', model: 'm', workingDir: os.tmpdir(), providerId: null });
   let live = false;
   const saved = [];
   const queue = createInputQueue({ readSession, hub,
-    getMaker: () => ({ getSession: () => live ? session : null, createSession: async () => { live = true; return session; } }),
+    getMaker: () => ({ getSession: () => live ? session : null, getSessionMeta: async () => ({ title: 'Fixture' }),
+      createSession: async () => { live = true; return session; }, closeSession: async () => { live = false; } }),
     persistMessage: async (_id, message) => { saved.push(message); },
     interactions: broker,
   });

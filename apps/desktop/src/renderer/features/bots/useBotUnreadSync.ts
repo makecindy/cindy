@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { getBotProfiles, refreshBotProfiles, useBotProfiles } from './botStore';
 import { subscribeBotReadState } from './botReadState';
@@ -11,8 +11,8 @@ export function useBotUnreadSync(): void {
   const owner = getDataOwnerGeneration();
   const running = useSyncExternalStore(makerChatStore.subscribeAll, makerChatStore.getRunningSnapshot, makerChatStore.getRunningSnapshot);
   const runningBots = bots.flatMap(bot => bot.sessions.filter(session => running.get(session.id)?.isRunning).map(session => session.id)).sort().join(',');
-  // Final seals patch an existing message; they need not emit messages:created.
-  useEffect(() => { refreshBotProfiles(); }, [runningBots, owner]);
+  const scheduledRefresh = useRef<(() => void) | null>(null);
+  const lastMountedOwner = useRef<typeof owner | null>(null);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const refresh = () => {
@@ -22,6 +22,7 @@ export function useBotUnreadSync(): void {
         if (isDataOwnerGenerationCurrent(owner)) refreshBotProfiles();
       }, 120);
     };
+    scheduledRefresh.current = refresh;
     const maker = window.electronAPI?.maker;
     const subscriptions = [
       maker?.onBotProfileChanged?.(refresh),
@@ -43,9 +44,21 @@ export function useBotUnreadSync(): void {
     ];
     window.addEventListener('focus', refresh);
     return () => {
+      if (scheduledRefresh.current === refresh) scheduledRefresh.current = null;
       if (timer) clearTimeout(timer);
       subscriptions.forEach(unsubscribe => unsubscribe?.());
       window.removeEventListener('focus', refresh);
     };
   }, [owner]);
+  // Final seals patch an existing message; they need not emit messages:created.
+  // They share the 120 ms event window so a seal plus its message is one refresh.
+  // Initial entry/account changes still load immediately.
+  useEffect(() => {
+    if (lastMountedOwner.current !== owner) {
+      lastMountedOwner.current = owner;
+      refreshBotProfiles();
+    } else {
+      scheduledRefresh.current?.();
+    }
+  }, [runningBots, owner]);
 }

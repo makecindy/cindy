@@ -12,10 +12,16 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
+import type { SelfHostedRelayState } from '../../../shared/selfHostedRelay';
+
+/** 这台电脑的 Agent-Net 开关最近一次被同账号其他设备远程改动(原型)。 */
+export type AgentNetRemoteChange = NonNullable<SelfHostedRelayState['agentNetChangedBy']>;
+
 const STORAGE_KEY = 'remoteConnection.v2';
 
 let memoryValue: boolean | null = null;
 let onlyEncryptedValue = false;
+let changedByValue: AgentNetRemoteChange | null = null;
 export function getRemoteConnectionOnlyEncrypted(): boolean { return onlyEncryptedValue; }
 const listeners = new Set<() => void>();
 let storageSubscribed = false;
@@ -42,7 +48,7 @@ function onStorage(e: StorageEvent): void {
   if (api) {
     const epoch = hostEpoch;
     void api.command({ type: 'state' }).then((result) => {
-      if (epoch === hostEpoch) applyView(result.state.agentNetEnabled === true, result.state.agentNetOnlyEncrypted === true);
+      if (epoch === hostEpoch) applyState(result.state);
     }).catch(() => undefined);
     return;
   }
@@ -59,9 +65,9 @@ function subscribe(listener: () => void): () => void {
     if (api) {
       const epoch = hostEpoch;
       void api.command({ type: 'state' }).then((result) => {
-        if (epoch === hostEpoch && listeners.size) applyView(result.state.agentNetEnabled === true, result.state.agentNetOnlyEncrypted === true);
+        if (epoch === hostEpoch && listeners.size) applyState(result.state);
       }).catch(() => undefined);
-      offHost = api.onChanged((state) => { hostEpoch++; applyView(state.agentNetEnabled === true, state.agentNetOnlyEncrypted === true); });
+      offHost = api.onChanged((state) => { hostEpoch++; applyState(state); });
     }
   }
   return () => {
@@ -72,6 +78,11 @@ function subscribe(listener: () => void): () => void {
       offHost?.(); offHost = null; hostEpoch++;
     }
   };
+}
+
+function applyState(state: SelfHostedRelayState): void {
+  changedByValue = state.agentNetChangedBy ?? null;
+  applyView(state.agentNetEnabled === true, state.agentNetOnlyEncrypted === true);
 }
 
 function applyView(next: boolean, onlyEncrypted = onlyEncryptedValue): void {
@@ -91,7 +102,7 @@ export function setRemoteConnectionV2Enabled(next: boolean): Promise<void> {
   const epoch = ++hostEpoch;
   return api.command({ type: 'set-agent-net', enabled: next }).then((result) => {
     if (result.error) throw new Error(result.error);
-    if (epoch === hostEpoch) applyView(result.state.agentNetEnabled === true, result.state.agentNetOnlyEncrypted === true);
+    if (epoch === hostEpoch) applyState(result.state);
   });
 }
 
@@ -101,13 +112,24 @@ export function setRemoteConnectionOnlyEncrypted(next: boolean): Promise<void> {
   const epoch = ++hostEpoch;
   return api.command({ type: 'set-agent-net-encryption', enabled: next }).then((result) => {
     if (result.error) throw new Error(result.error);
-    if (epoch === hostEpoch) applyView(result.state.agentNetEnabled === true, result.state.agentNetOnlyEncrypted === true);
+    if (epoch === hostEpoch) applyState(result.state);
   });
 }
-export function useRemoteConnectionV2(): { enabled: boolean; setEnabled: (next: boolean) => void; onlyEncrypted: boolean; setOnlyEncrypted: (next: boolean) => void } {
+export function useRemoteConnectionV2(): {
+  enabled: boolean;
+  setEnabled: (next: boolean) => void;
+  onlyEncrypted: boolean;
+  setOnlyEncrypted: (next: boolean) => void;
+  changedBy: AgentNetRemoteChange | null;
+} {
   const [enabled, setState] = useState<boolean>(getRemoteConnectionV2Enabled);
   const [onlyEncrypted, setOnlyEncryptedState] = useState(getRemoteConnectionOnlyEncrypted);
-  useEffect(() => subscribe(() => { setState(getRemoteConnectionV2Enabled()); setOnlyEncryptedState(getRemoteConnectionOnlyEncrypted()); }), []);
+  const [changedBy, setChangedBy] = useState<AgentNetRemoteChange | null>(changedByValue);
+  useEffect(() => subscribe(() => {
+    setState(getRemoteConnectionV2Enabled());
+    setOnlyEncryptedState(getRemoteConnectionOnlyEncrypted());
+    setChangedBy(changedByValue);
+  }), []);
   const setEnabled = useCallback((next: boolean) => {
     void setRemoteConnectionV2Enabled(next).catch((error) => {
       window.dispatchEvent(new CustomEvent('agent-net-preference-error', { detail: { code: error instanceof Error ? error.message : 'FAILED' } }));
@@ -118,13 +140,14 @@ export function useRemoteConnectionV2(): { enabled: boolean; setEnabled: (next: 
       window.dispatchEvent(new CustomEvent('agent-net-preference-error', { detail: { code: error instanceof Error ? error.message : 'FAILED' } }));
     });
   }, []);
-  return { enabled, setEnabled, onlyEncrypted, setOnlyEncrypted };
+  return { enabled, setEnabled, onlyEncrypted, setOnlyEncrypted, changedBy };
 }
 
 /** 测试专用:清空内存值与监听。 */
 export function _resetRemoteConnectionV2ForTests(): void {
   memoryValue = null;
   onlyEncryptedValue = false;
+  changedByValue = null;
   listeners.clear();
   offHost?.(); offHost = null; hostEpoch++;
   if (storageSubscribed) {

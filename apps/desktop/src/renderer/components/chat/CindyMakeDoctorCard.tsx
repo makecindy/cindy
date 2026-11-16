@@ -30,6 +30,7 @@ import {
   type MakeUpstreamDecision,
   type MakeUpstreamItem,
 } from '../../../shared/cindyMakeDoctor';
+import appI18n from 'i18next';
 
 export function CindyMakeDoctorCard({
   data,
@@ -906,7 +907,7 @@ function MakeUpstreamResult({ item }: { item: MakeUpstreamItem }) {
             {t(`cindyMake.upstream.state.${item.state}`)}
             {item.author ? ` · ${t('cindyMake.upstream.author', { author: item.author })}` : ''}
             {item.updatedAt
-              ? ` · ${t('cindyMake.upstream.updated', { date: new Date(item.updatedAt).toLocaleDateString() })}`
+              ? ` · ${t('cindyMake.upstream.updated', { date: new Date(item.updatedAt).toLocaleDateString(appI18n.language) })}`
               : ''}
           </p>
           {item.summary && (

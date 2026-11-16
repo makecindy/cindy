@@ -73,6 +73,17 @@ Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` �
 
 `mcpApps.ui` 声明页面资源与工具可见性，完整写法见[§4.23](plugin-interactive-pages.md)。
 
+`agent.hostTools: string[]` 声明插件直接调用的宿主工具组：`history`、`control`、`handoff`、`settings`、`scheduler`、`terminal`、`files`、`storage`、`browser`、`computer`、`ssh`、`docs`、`discovery`、`usage`（只读本机订阅用量）。安装/更新确认整体授予该版本的全部已知声明能力，不另存分项批准；未知组保留但当前宿主不支持。UI 与 Node 均使用 `cindy.host.call`，详见[宿主工具调用](plugin-host-tools.md)。
+
+可选 `mcpApps.host` 声明具名视图、原生位置、命令、补全与附件处理提供者、普通设置字段和宿主能力，见[插件界面扩展](plugin-host-ui.md)。
+已安装版本批准有效且插件已启用时，宿主支持的声明直接生效；未知扩展保留为数据，不另存 Host UI 分项批准。
+
+`systemPrompt` 可选，声明包内静态系统提示词片段：
+`[{ "id": "style", "text": "Use the documented terminology.", "order": 100, "scope": "selected-task", "agentKinds": ["cc", "codex", "pi"] }]`。
+安装确认展示完整原文，用户在任务设置中选择后才生效；不进入其它任务或全局提示词。
+顺序、作用范围、引擎支持与大小限制见[静态系统提示词片段](plugin-control-points.md#静态系统提示词片段)。
+该能力尚未发布，开发示例不能作为正式版版本下限的依据。
+
 ### whenToUse:只写发现线索,不写使用规则
 
 在作者契约里,`whenToUse` 是专门给模型做插件发现与判断的唯一字段;
@@ -192,7 +203,7 @@ node secretBindings key、setup kv key——都不能使用 `__proto__`、`const
 
 v3 直接用顶层字段声明插件贡献项与自主 Host 能力，不再有 `slots`。带详单的字段是 `tools`、`cindy`、
 `agent`、`panel`、`mainView`、`taskView`、`card`、`subscribe`、`network`、`node`、`preview`、
-`browserExtension`、`skill`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`fs`、
+`browserExtension`、`skill`、`systemPrompt`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`fs`、
 `library`、`deviceSync`、`sessionContext`、`pick`、`workspace`、`liveScreen`(需同时声明 `node`,见 [§4.22.1](plugin-task-view.md#4221-在手机上查看与操作设备画面livescreen-能力))。不用的字段直接省略。
 `deviceSync` 的声明与调用约定见 [§4.10.2 资料同步](plugin-files-and-library.md#4102-同账号电脑间的插件资料同步)。
 邮件插件声明 `mail: true`，调用 Cindy 内置 `cindyMail.register(adapter)`
@@ -278,7 +289,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
 
 ```json
 "preview": {
-  "hosts": ["*.example.dev", "localhost"]   // 1–4 条;语法同 network.hosts;能在右侧栏打开的预览网站白名单,详情页逐条展示
+  "hosts": ["*.example.dev", "localhost"]   // 1–4 条;只接受普通域名模式或预览允许的回环名；不是完整 origin；详情页逐条展示
 }
 ```
 
@@ -323,7 +334,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
 
 ```json
 "network": {
-  "hosts": ["api.example.com", "*.weather.com"],   // 1–8 条;小写域名至少两段;通配只允许最左 "*.";详情页逐条展示给用户
+  "hosts": ["api.example.com", "*.weather.com"],   // 1–8 条；普通域名仅 HTTPS:443；完整 origin 可声明端口；HTTP/WS 只限字面量私网/回环与 localhost，且不注入凭证
   "secrets": [{                                     // 可选 0–4 条:需要用户填的凭证(你只声明名字和注入位置,值用户填、主机保管)
     "key": "api_token",                             // 小写字母开头,小写/数字/下划线,1–32;禁用宿主保留键(见 §2.1)
     "label": "Example API Token",                   // 给用户看的名称(设置页/详情页)
@@ -333,7 +344,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
     "inject": {                                     // 必填:这条凭证怎么进请求
       "header": "Authorization",                    // 注入的请求头名(Host/Cookie 等协议关键头禁用)
       "format": "Bearer {value}",                   // 恰含一个 {value} 占位,其余静态文本
-      "hosts": ["api.example.com"]                  // 可选:注入范围(hosts 声明条目的子集,逐字);缺省=全部
+      "hosts": ["api.example.com"]                  // 可选:注入范围(hosts 声明条目的子集,逐字);缺省只覆盖普通域名，完整 origin 必须显式写出，凭证只走 HTTPS/WSS
     },
     "exchange": {                                   // 可选:key 换令牌二段式(服务要求先拿 key 换临时令牌时声明,主机照单代办,见 §4.7;与 oauth 互斥)
       "url": "https://api.example.com/token",       // 交换端点(https;域名必须命中 hosts 白名单)
@@ -405,3 +416,16 @@ UI 保留。检查、字段绑定、保存状态和恢复都在主机
   (写 `"setup": { "requires": [] }` 显式声明无前置需求,主机不再用启发式拦你)。
 - 检查只管**存在性**(配没配),不管有效性(key 对不对)——填错 key 仍会在真正调用时
   由主机网络层报错,你的工具逻辑照常处理失败即可。
+
+### 决策与重排声明
+
+`cindy.models` 是可选的模型能力类目，动作支持 `decisions` 和 `rerank`：
+
+```json
+{ "cindy": { "models": ["decisions", "rerank"] } }
+```
+
+只声明实际需要的动作。主机会展示模型额度使用说明，未声明的调用和模型查询会被拒绝。
+调用协议见 `plugin-runtime.md` 的「决策与重排模型」。使用此能力时通过
+`minCindyVersion` 声明已验证的最低版本；运行时仍须处理旧版不支持响应，不能把权限拒绝
+或账号失效当成不支持而绕过。

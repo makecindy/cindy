@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import './pre-run-hook.desktop.js';
 import type { BrowserWindow } from 'electron';
 import { eq } from 'drizzle-orm';
 
@@ -32,12 +33,14 @@ import {
   hasQueuedSchedulerPrompt,
   isSchedulerAutoResumePending,
   isSchedulerPromptTracked,
+  releaseQueuedSchedulerPrompt,
   isSchedulerTargetSessionBusy,
   onSchedulerAutoResumeFailed,
   removeQueuedSchedulerPrompt,
 } from '../maker-ipc/register.js';
 import { DrizzleScheduleStorage } from './storage.desktop';
 import { MakerScheduleRunner } from './runner.desktop';
+import { captureScheduledOwnerGuard } from '../maker-ipc/scheduledSessionBootstrap.js';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { ScriptScheduleRunner } from './script-runner.desktop';
@@ -122,6 +125,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
         enqueuePrompt: enqueueSchedulerPrompt,
         removeQueuedPrompt: removeQueuedSchedulerPrompt,
         isPromptTracked: isSchedulerPromptTracked,
+        releasePrompt: releaseQueuedSchedulerPrompt,
         isAutoResumePending: isSchedulerAutoResumePending,
         onAutoResumeFailed: onSchedulerAutoResumeFailed,
         cancelAutoResume: cancelSchedulerAutoResume,
@@ -139,8 +143,9 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     return { notifier, promptRunner, scriptRunner };
   },
   // A teammate's project automations run only on its main computer (handed away: skipped here).
+  captureFireContext: captureScheduledOwnerGuard,
   wrapRunner: runner => withTeammateHomeGuard(runner, () => companionHomes.snapshot().demotedBotIds, ownTeammateProjectState),
-  isOwnTeammateProject: async workingDir => (await ownTeammateProjectState(workingDir)) !== null,
+  getTeammateProjectState: ownTeammateProjectState,
   isPassive: () => !app.isPackaged && process.env.XDT_SCHEDULER_PASSIVE === '1',
   dialogueWorkspaceRoots: () => dialogueWorkspaceRoots(),
   onStarted(scheduler, deps, passive) {

@@ -461,6 +461,68 @@ describe('ReviewTabBody turn source dropdown', () => {
 });
 
 describe('ReviewTabBody branch base dropdown', () => {
+  const candidates = [
+    'origin/main',
+    'feature/shared-long-prefix-first',
+    'feature/shared-long-prefix-second',
+  ].map((refName) => ({
+    refName,
+    shortName: refName,
+    kind: 'local' as const,
+    remote: null,
+    oid: 'a'.repeat(40),
+  }));
+
+  it('filters long names case-insensitively and selects the exact ref with the keyboard', () => {
+    const onSelectBase = vi.fn();
+    render(
+      createElement(BranchBaseDropdown, {
+        candidates,
+        selectedBaseRef: 'origin/main',
+        onSelectBase,
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.review.branch.baseTooltip' }));
+    const search = screen.getByRole('combobox');
+    fireEvent.change(search, { target: { value: '  SHARED-LONG-PREFIX  ' } });
+    expect(screen.getAllByRole('option')).toHaveLength(2);
+    expect(screen.getByRole('option', { name: candidates[2].shortName }).title).toBe(
+      candidates[2].refName,
+    );
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(search.getAttribute('aria-activedescendant')).toBe(screen.getAllByRole('option')[1].id);
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(onSelectBase).toHaveBeenCalledExactlyOnceWith(candidates[2].refName);
+    expect(screen.queryByRole('combobox')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.review.branch.baseTooltip' }));
+    expect(screen.getByRole('combobox').getAttribute('value')).toBe('');
+    expect(screen.getAllByRole('option')).toHaveLength(3);
+  });
+
+  it('keeps empty results and IME confirmation from selecting a branch', () => {
+    const onSelectBase = vi.fn();
+    render(
+      createElement(BranchBaseDropdown, {
+        candidates,
+        selectedBaseRef: 'origin/main',
+        onSelectBase,
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.review.branch.baseTooltip' }));
+    const search = screen.getByRole('combobox');
+    fireEvent.change(search, { target: { value: 'missing' } });
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
+    expect(screen.getByRole('status').textContent).toBe('newChat.branchChip.noMatch');
+    expect(search.hasAttribute('aria-activedescendant')).toBe(false);
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    fireEvent.change(search, { target: { value: 'second' } });
+    fireEvent.keyDown(search, { key: 'Enter', isComposing: true });
+    expect(onSelectBase).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('option'));
+    expect(onSelectBase).toHaveBeenCalledExactlyOnceWith(candidates[2].refName);
+  });
+
   it('marks stale local branch candidates with a tertiary text suffix', () => {
     render(
       createElement(BranchBaseDropdown, {
@@ -486,7 +548,7 @@ describe('ReviewTabBody branch base dropdown', () => {
       }),
     );
 
-    fireEvent.pointerDown(
+    fireEvent.click(
       screen.getByRole('button', { name: 'rightSidebar.review.branch.baseTooltip' }),
       {
         button: 0,

@@ -99,6 +99,32 @@ describe('renderer auth service', () => {
     expect(service.getSnapshot()).toEqual(local);
   });
 
+  // Unit: isolated mock startup broadcasts pending generation 0, then returns
+  // committed generation 1 without another push. The old version-only guard
+  // discarded that completion forever; the existing tests only use older replies.
+  it.each(['local', 'signed-out'] as const)('accepts a newer committed %s generation after a pending push', async (mode) => {
+    const service = createAuthService();
+    const pending = service.initialize();
+    const listener = vi.fn();
+    service.onAuthStateChange(listener);
+    push({ ...signedOut, ownerBoundaryPending: true });
+    const committed = mode === 'local' ? local : { ...signedOut, ownerGeneration: 1 };
+    resolve(committed);
+    await expect(pending).resolves.toEqual(committed);
+    expect(service.getSnapshot()).toEqual(committed);
+    expect(listener).toHaveBeenLastCalledWith(committed, 'initialize');
+  });
+
+  it('does not replace a newer pending transition with a reply from its outgoing generation', async () => {
+    const service = createAuthService();
+    const pending = service.initialize();
+    const boundary = { ...signedOut, ownerGeneration: local.ownerGeneration, ownerBoundaryPending: true };
+    push(boundary);
+    resolve(local);
+    await expect(pending).resolves.toEqual(boundary);
+    expect(service.getSnapshot()).toEqual(boundary);
+  });
+
   it('only removes the departing observer; renderer disposal releases IPC and the cache', () => {
     const service = createAuthService();
     const first = vi.fn();

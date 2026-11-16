@@ -88,6 +88,8 @@ export interface ModelPickerSheetProps {
   activeModelId: string;
   /** 已建会话的选择器传 true:当前来源按实际路由口径解析(见 buildMobileModelSections)。 */
   existingSessionRoute?: boolean;
+  /** Existing task binding on the directory host; omitted for configuration/new tasks. */
+  subscriptionTaskId?: string;
   /** 显式选中的来源 id(null = 跟随被控端默认路由;内部据此算高亮来源)。 */
   selectedProviderId: string | null;
   selectedEffort: string;

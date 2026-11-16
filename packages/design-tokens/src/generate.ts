@@ -124,6 +124,13 @@ export async function buildProductionFiles(root = findRepoRoot()) {
               declaration("UI_TEXT_TOKEN_SIZES", values(f.numeric)) +
               declaration("SCALED_TAILWIND_TOKENS", values(f.text)) +
               declaration("TAILWIND_LINE_HEIGHTS", values(f.lineHeight)) +
+              declaration("SCALABLE_APPEARANCE_TOKENS", Object.fromEntries(
+                Object.entries(f.css).flatMap(([name, id]) => {
+                  if (!/^(space|motion)-/.test(name)) return [];
+                  const match = cssValue(id).match(/^([\d.]+)(rem|px|ms|s)$/);
+                  return match ? [[`--${name}`, { value: Number(match[1]), unit: match[2] }]] : [];
+                }),
+              )) +
               declaration("NUMERIC_TEXT_CLASSES", Object.keys(f.numeric)),
           );
           const tailwindPath = "apps/desktop/tailwind.config.ts";

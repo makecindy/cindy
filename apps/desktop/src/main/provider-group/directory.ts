@@ -25,7 +25,7 @@ import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
 import { isSameProvider } from './matching.js';
-import type { ProviderGroupCodexUsageSnapshot } from './usage.js';
+import type { ProviderGroupCodexUsageSnapshot, ProviderGroupUsageInvalidation } from './usage.js';
 
 export interface ProviderGroupDirectoryDeps {
   /** 本机供应商(含未连接 / 停用的，便于给出原因)。 */
@@ -48,7 +48,7 @@ export interface ProviderGroupDirectoryDeps {
   readCodexUsage?(member: ProviderGroupMember): Promise<ProviderGroupCodexUsageSnapshot | null>;
   /** At the quick-pick deadline, include completed sources without waiting for a pending sibling. */
   peekCodexUsage?(member: ProviderGroupMember): ProviderGroupCodexUsageSnapshot | null;
-  invalidateUsage?(): void;
+  invalidateUsage?(scope?: ProviderGroupUsageInvalidation): void;
   now(): number;
   /** Monotonic clock paired with now() for bounded budgets and cache deadlines. */
   mono?(): number;
@@ -146,7 +146,7 @@ export interface ProviderGroupDirectory {
    */
   offlineForMs?(agentDeviceId: string): Promise<number | null>;
   /** 忘掉缓存(换账号、组内电脑失败后需要现读)。 */
-  invalidate(agentDeviceId?: string): void;
+  invalidate(agentDeviceId?: string, options?: Omit<ProviderGroupUsageInvalidation, 'agentDeviceId'>): void;
 }
 
 export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): ProviderGroupDirectory {
@@ -385,7 +385,9 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     async resolveMembers(_providerId, config, options) {
       if (options?.fresh) {
         devices = null;
-        deps.invalidateUsage?.();
+        for (const member of config.members) deps.invalidateUsage?.({
+          agentDeviceId: member.agentDeviceId ?? '', providerIds: [member.providerId],
+        });
         for (const member of config.members) if (member.agentDeviceId) catalogs.delete(member.agentDeviceId);
       }
       const needsDevices = config.members.some((m) => m.kind === 'device');
@@ -517,15 +519,15 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
       return deps.listReceivedShares().find((s) => s.shareId === shareId)?.owner.displayName ?? '';
     },
 
-    invalidate(agentDeviceId) {
-      deps.invalidateUsage?.();
+    invalidate(agentDeviceId, options) {
+      deps.invalidateUsage?.({ ...options, agentDeviceId });
       if (agentDeviceId === undefined) {
         catalogs.clear();
         devices = null;
         return;
       }
       catalogs.delete(agentDeviceId);
-      if (!isProviderShareAgentDeviceId(agentDeviceId)) devices = null;
+      if (agentDeviceId && !isProviderShareAgentDeviceId(agentDeviceId)) devices = null;
     },
   };
 }

@@ -799,6 +799,15 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       missingPlugin: sql<string | null>`CASE WHEN json_valid(schedule_runs.pre_run_hook_result)
         THEN json_extract(schedule_runs.pre_run_hook_result, '$.missingPlugin') END`,
     };
+    // LIMIT on the full projection can still parse every unread hook before
+    // SQLite sorts. Bound eligible IDs first, then evaluate only those rows.
+    const recentUnreadRunIds = db
+      .select({ id: scheduleRuns.id })
+      .from(scheduleRuns)
+      .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
+      .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere()))
+      .orderBy(desc(scheduleRuns.firedAt), desc(scheduleRuns.id))
+      .limit(SIDEBAR_UNREAD_RUN_LIMIT);
     const [latestSessionRows, unreadRows, runningRows, latestFailedRows] = await Promise.all([
       db
         .select(projection)
@@ -810,9 +819,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         .select(projection)
         .from(scheduleRuns)
         .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
-        .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere()))
-        .orderBy(desc(scheduleRuns.firedAt), desc(scheduleRuns.id))
-        .limit(SIDEBAR_UNREAD_RUN_LIMIT),
+        .where(inArray(scheduleRuns.id, recentUnreadRunIds))
+        .orderBy(desc(scheduleRuns.firedAt), desc(scheduleRuns.id)),
       db
         .select(projection)
         .from(scheduleRuns)

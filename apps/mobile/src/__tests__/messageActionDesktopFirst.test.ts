@@ -32,6 +32,7 @@ const components = executeRenderer<Record<string, React.ComponentType<any>>>(sou
   ChevronDown: leaf, ChevronRight: leaf, Layers: leaf, ToolRowStatusIcon: leaf,
   CompactActivityIndicator: leaf, WorkGroupElapsed: leaf, PluginInvocationHeader: leaf,
   Rail: View, RenderItemView: child, ExpandedWorkThinkingRow: child,
+  MessageContentOpenButton: View,
   projectMobileWorkActivities: () => ({ isPureExploration: false, toolActivitiesByChildKey: new Map() }),
   FoldablePanel: ({ children, collapsedBody, controlledExpanded, onControlledToggle, testID }: any) =>
     React.createElement('div', null,
@@ -83,5 +84,25 @@ describe('message detail lifecycle', () => {
     } finally { h.unmount(); }
     h = mount('ToolActionRow', props);
     try { expect(h.host.textContent).toContain('original input summary'); } finally { h.unmount(); }
+  });
+
+  // The group supplies its full-input action separately from the clipped row
+  // detail. Exercise the real row's disclosure and button, not a JSX scan.
+  it('offers the group full-input action only inside the expanded tool row', () => {
+    const onOpenInput = vi.fn();
+    const props = { actions: {}, onOpenInput, contentLayout: {},
+      row: { label: 'Bash', detail: 'x'.repeat(200), status: 'done', hasError: false },
+      tool: { key: 'bash', body: 'input summary' } };
+    const h = mount('ToolActionRow', props);
+    const inputButton = () => h.host.querySelector<HTMLButtonElement>('[data-testid="message.toolInputPayloadButton"]');
+    try {
+      expect(inputButton()).toBeNull();
+      act(() => h.host.querySelector('button')!.click());
+      expect(inputButton()).not.toBeNull();
+      act(() => inputButton()!.click());
+      expect(onOpenInput).toHaveBeenCalledOnce();
+      h.update({ ...props, onOpenInput: undefined });
+      expect(inputButton()).toBeNull();
+    } finally { h.unmount(); }
   });
 });

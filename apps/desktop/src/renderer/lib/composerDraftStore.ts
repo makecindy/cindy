@@ -33,6 +33,7 @@
 import type { AttachedFile } from '@/lib/fileTypes';
 import type { BrowserCommentDraftItem } from '@/lib/browserComments';
 import type { ChatQuote } from '@/lib/chatQuotes';
+import type { BotGroupQuoteView } from '../../shared/botGroupChat';
 import {
   appendQuoteToComposerDocument,
   prependLegacyQuotesToComposerDocument,
@@ -79,6 +80,8 @@ export interface ComposerDraft {
   focusAtEnd?: boolean;
   /** @deprecated 旧 renderer 的独立引用数组;saveDraft 会提升为正文节点。 */
   quotes?: ChatQuote[];
+  /** Unsent group reply reference, scoped to the same owner/group as this draft. */
+  botGroupQuote?: BotGroupQuoteView;
   /**
    * 内置浏览器页面评论(browser-comment-chip):待随下一条消息发送的评论列表,
    * composer 渲染为「N 条注释」胶囊,发送时序列化为 `# Browser comments:` 段
@@ -291,6 +294,18 @@ const presenceListeners = new Map<string, Set<DraftListener>>();
  *  detection in `recomputeDraftPresence`. NOT the read source of truth
  *  (`getDraftPresence` always computes fresh). */
 const presenceCache = new Map<string, boolean>();
+const allPresenceListeners = new Set<DraftListener>();
+
+/** Task housekeeping only needs identifiers, never composer contents. */
+export function getComposerDraftSessionIds(): string[] {
+  const prefix = ownerPrefix();
+  return [...drafts.entries()].filter(([key, draft]) => key.startsWith(prefix) && draftHasContent(draft))
+    .map(([key]) => key.slice(prefix.length));
+}
+export function subscribeAllDraftPresence(listener: DraftListener): () => void {
+  allPresenceListeners.add(listener);
+  return () => { allPresenceListeners.delete(listener); };
+}
 
 /**
  * Whether a Tiptap JSON doc carries any real content. Mirrors `isEditorEmpty`
@@ -323,6 +338,7 @@ export function draftHasContent(draft: ComposerDraft | undefined): boolean {
   if (!draft) return false;
   if (draft.attachments.length > 0) return true;
   if (draft.quotes && draft.quotes.length > 0) return true;
+  if (draft.botGroupQuote) return true;
   if (draft.browserComments && draft.browserComments.length > 0) return true;
   return tiptapDocHasContent(draft.text);
 }
@@ -335,6 +351,18 @@ export function draftHasContent(draft: ComposerDraft | undefined): boolean {
  */
 /** Every write to a draft, including silent keystroke saves (the new-task title preview). */
 const contentListeners = new Map<string, Set<DraftListener>>();
+const draftFlushers = new Map<string, DraftListener>();
+
+/** External editor operations first settle the original pending keystroke save. */
+export function registerDraftFlush(sessionId: string, flush: DraftListener): () => void {
+  const key = draftKey(sessionId);
+  draftFlushers.set(key, flush);
+  return () => { if (draftFlushers.get(key) === flush) draftFlushers.delete(key); };
+}
+
+export function flushDraft(sessionId: string): void {
+  draftFlushers.get(draftKey(sessionId))?.();
+}
 
 /** Subscribe to every save / clear of `sessionId`'s draft, including silent keystroke saves. */
 export function subscribeDraftContent(sessionId: string, handler: DraftListener): () => void {
@@ -368,6 +396,9 @@ function recomputeDraftPresence(sessionId: string, key = draftKey(sessionId)): v
   if (next === prev) return;
   if (next) presenceCache.set(key, true);
   else presenceCache.delete(key);
+  for (const listener of allPresenceListeners) {
+    try { listener(); } catch { log.warn('Draft protection observer failed'); }
+  }
   const set = presenceListeners.get(key);
   if (set)
     for (const fn of set) {

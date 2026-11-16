@@ -116,7 +116,7 @@ function Chip({
       aria-controls={controls}
       className={cn(
         'inline-flex h-6 max-w-full shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2.5 text-11 transition-colors',
-        'focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         'text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
       )}
     >
@@ -399,7 +399,7 @@ export function BotTaskCard({
           </SessionQuickSendProvider>
           {errorText ? (
             <details>
-              <summary className="flex min-h-8 cursor-pointer items-center rounded-lg text-12 text-[var(--text-secondary)] focus-visible:outline focus-visible:outline-2">
+              <summary className="flex min-h-8 cursor-pointer items-center rounded-lg text-12 text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
                 {t('appError.details')}
               </summary>
               <p className="whitespace-pre-wrap break-words text-12 text-[var(--text-secondary)]">

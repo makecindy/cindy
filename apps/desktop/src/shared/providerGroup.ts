@@ -21,10 +21,44 @@ export const PROVIDER_GROUP_STRATEGIES: readonly ProviderGroupStrategy[] = ['lea
 
 export type ProviderGroupMemberKind = 'local' | 'device' | 'share';
 
-/** 每台组内电脑默认同时接几个任务。 */
+/**
+ * 没设置过并发上限时存的值(旧版的默认上限)。2026-11-11 起没设置过 = 不限制并发；旧版写下的 4 也按没设置过处理，
+ * 旧版读到的仍是原来的默认值。实际上限一律经 effectiveConcurrencyLimit 读取。
+ */
 export const PROVIDER_GROUP_DEFAULT_LIMIT = 4;
 /** 远程 Agent 对每个控制端最多 16 个任务，组内电脑的并发上限不超过它。 */
 export const PROVIDER_GROUP_MAX_LIMIT = 16;
+
+/**
+ * 组内电脑与供应商内订阅账号的实际并发上限(2026-11-11 用户裁决：达到上限就不再分新任务；没设置过的不限制)。
+ * 设置过 = 新版写了 limitSet，或旧版存了默认 4 以外的值(旧版只能主动改出别的值)。没设置过返回 Infinity。
+ */
+export function effectiveConcurrencyLimit(entry: { limit: number; limitSet?: boolean }): number {
+  return entry.limitSet === true || entry.limit !== PROVIDER_GROUP_DEFAULT_LIMIT
+    ? entry.limit
+    : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * 设置页写回并发上限，覆盖到原设置上：null = 不限制(清除设置，存回旧版默认值，旧版读到的不变)。
+ * limitSet 显式给 undefined，覆盖时清掉之前的标记；保存时丢弃。
+ */
+export function concurrencyLimitPatch(limit: number | null): { limit: number; limitSet: true | undefined } {
+  return limit === null ? { limit: PROVIDER_GROUP_DEFAULT_LIMIT, limitSet: undefined } : { limit, limitSet: true };
+}
+
+/** 设置页并发下拉的取值：「不限制」排第一，其后 1～16。 */
+export const CONCURRENCY_LIMIT_UNLIMITED = 'unlimited';
+export const CONCURRENCY_LIMIT_OPTIONS: readonly string[] = [
+  CONCURRENCY_LIMIT_UNLIMITED,
+  ...Array.from({ length: PROVIDER_GROUP_MAX_LIMIT }, (_, i) => String(i + 1)),
+];
+export function concurrencyLimitOptionValue(entry: { limit: number; limitSet?: boolean }): string {
+  return Number.isFinite(effectiveConcurrencyLimit(entry)) ? String(entry.limit) : CONCURRENCY_LIMIT_UNLIMITED;
+}
+export function concurrencyLimitFromOption(value: string): number | null {
+  return value === CONCURRENCY_LIMIT_UNLIMITED ? null : Number(value);
+}
 export const PROVIDER_GROUP_DEFAULT_WEIGHT = 1;
 export const PROVIDER_GROUP_MAX_WEIGHT = 100;
 /**
@@ -51,8 +85,10 @@ export interface ProviderGroupMember {
    * 按一台电脑展示与计数，不显示、不用于连接；不会发给受邀者。旧组没有时由组所在电脑对账补上(removedShares.ts)。
    */
   hostDeviceId?: string;
-  /** 并发上限：只统计经本组分到这台的任务。 */
+  /** 并发上限：只统计经本组分到这台的任务。实际上限见 effectiveConcurrencyLimit。 */
   limit: number;
+  /** 用户在新版设置过上限；缺省时按 effectiveConcurrencyLimit 推断，旧版会丢弃这个字段。 */
+  limitSet?: true;
   weight: number;
   /** 暂停组内新任务分配；本机成员只暂停接收外部新任务，不影响本机自用或已有任务。 */
   paused: boolean;
@@ -106,7 +142,9 @@ export interface ProviderGroupMemberStatus {
   reason?: ProviderGroupUnavailableReason;
   /** 经本组分到这台、正在运行的任务数。 */
   running: number;
+  /** 与组设置相同的存储值；实际上限经 effectiveConcurrencyLimit 读取。 */
   limit: number;
+  limitSet?: true;
   weight: number;
   paused: boolean;
   /** 冷却到何时(unix ms)。 */
@@ -342,6 +380,7 @@ function normalizeMember(raw: unknown, groupProviderId: string): ProviderGroupMe
     ...(providerName ? { providerName } : {}),
     ...(hostDeviceId ? { hostDeviceId } : {}),
     limit: clampInt(value.limit, 1, PROVIDER_GROUP_MAX_LIMIT, PROVIDER_GROUP_DEFAULT_LIMIT),
+    ...(value.limitSet === true ? { limitSet: true as const } : {}),
     weight: clampInt(value.weight, 1, PROVIDER_GROUP_MAX_WEIGHT, PROVIDER_GROUP_DEFAULT_WEIGHT),
     paused: value.paused === true,
   };
@@ -520,7 +559,8 @@ export type ProviderGroupRemotePick =
   | { kind: 'none' }
   | { kind: 'member'; member: Pick<ProviderGroupMember, 'key' | 'kind' | 'agentDeviceId' | 'providerId'>; label: string;
       continuity?: { id: string; remainingMs: number; config: ProviderGroupConfig } }
-  | { kind: 'unavailable'; usageLimit?: ProviderGroupUsageLimit };
+  /** full：组里能接的电脑全部达到并发上限；旧版组所在电脑不带，按原「没有能用的电脑」提示。 */
+  | { kind: 'unavailable'; usageLimit?: ProviderGroupUsageLimit; full?: true };
 
 /** 一次最多报告的运行中任务数(每台电脑的任务上限远低于此)。 */
 export const PROVIDER_GROUP_REMOTE_MAX_LEASES = 512;
@@ -689,6 +729,7 @@ export function parseProviderGroupRemotePick(raw: unknown, groupProviderId: stri
     const limit = value.usageLimit as Partial<ProviderGroupUsageLimit> | null | undefined;
     const reset = limit?.resetAtMs;
     const valid = limit && (reset === null || (typeof reset === 'number' && Number.isSafeInteger(reset) && reset > 0));
+    if (value.full === true) return { kind: 'unavailable', full: true };
     return { kind: 'unavailable', ...(valid ? { usageLimit: { resetAtMs: reset } as ProviderGroupUsageLimit } : {}) };
   }
   if (value.kind !== 'member') return { kind: 'none' };
@@ -780,6 +821,7 @@ export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: stri
       ...(reason ? { reason } : {}),
       running: count(item.running, 10_000),
       limit: member.limit,
+      ...(member.limitSet ? { limitSet: true as const } : {}),
       weight: member.weight,
       paused: member.paused,
       ...(coolingUntil !== undefined ? { coolingUntil } : {}),

@@ -80,13 +80,9 @@ describe('TodaySpendChip dashboard routing', () => {
       compact("const isClaudeSubscription = isDeviceLinkRemoteClaudeSubscription || (!isDeviceLinkRemote &&"),
     );
     expect(compact(source)).toContain(compact('const isDeviceLinkRemoteClaudeSubscription ='));
-    expect(compact(source)).toContain(
-      compact('isDeviceLinkRemoteClaudeSubscription && !isSubscriptionBridge ? accountDeviceId : null,'),
-    );
-    // 本机订阅快照 hook 对 device-link 关闭(两个 hook 的 enabled 互斥)
-    expect(compact(source)).toContain(
-      compact('isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote,'),
-    );
+    // Snapshot ownership is covered through the real component in
+    // status/__tests__/TodaySpendChip.deviceLink.test.tsx: remote Claude reads
+    // must disable the local reader, including the new pinned-account path.
     // 形态未解析(默认路由无观察值 / 老被控端)的远程会话走占位分支:估算价值 / 累计 cost
     // 有哪个显哪个,不显示本机限额窗口;形态已解析的走对应形态分支,用被控端镜像渲染同一套卡片。
     expect(compact(source)).toContain(compact('const deviceLinkRemoteFormResolved ='));
@@ -118,11 +114,8 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(compact(source)).toContain(
       compact('const isAnyRemoteSession = Boolean(remoteHostId) || isDeviceLinkRemote;'),
     );
-    expect(compact(source)).toContain(
-      compact(
-        'const shouldReadLocalCodexAccountUsage = usesCodexQuotaForm && !isAnyRemoteSession;',
-      ),
-    );
+    // The real remote Codex render in TodaySpendChip.deviceLink.test.tsx checks
+    // both local quota-reader gates; do not pin their expression's source shape.
     // 按会话形态选配额槽: bridge → WHAM(openai-web)槽, CLI → app-server 槽,
     // 不跨槽回退(账号多限额桶互相污染, 2026-07-24 实报 bug)
     expect(compact(source)).toContain(

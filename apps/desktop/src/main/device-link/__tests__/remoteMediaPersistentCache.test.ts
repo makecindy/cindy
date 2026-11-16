@@ -17,7 +17,7 @@ const state = vi.hoisted(() => ({
 const peer = vi.hoisted(() => vi.fn());
 const fetchMedia = vi.hoisted(() => vi.fn());
 vi.mock('../filePeer', () => ({ tryPeerFile: peer }));
-vi.mock('../mediaTransfer', () => ({ removeRemote: vi.fn() }));
+vi.mock('../mediaTransfer.desktop', () => ({ removeRemote: vi.fn() }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root }, net: { fetch: fetchMedia } }));
 vi.mock('../../appSessionState', () => ({
   getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: state.owner }),

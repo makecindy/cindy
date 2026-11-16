@@ -5,7 +5,7 @@
  * 查 GitHub。宿主这边本来就为标题栏、侧栏、卡片状态位定时刷新 PR 状态(PrStatusService);
  * 这一份刷新看到某个 PR 变了(提交、检查、评论线程、合并状态、审批、合并/关闭)时,
  * 把引用这个 PR 的定时任务马上跑一轮,前置检查 stdin 里带 `trigger`,检查据此跳过自己的
- * 节奏与探测直接完整读取。宿主只认「定时任务的前置检查命令里写着这个 PR 的链接」,不懂跟进规则,
+ * 节奏与探测直接完整读取。宿主只识别前置检查中的 PR 链接,不把脚本正文当作事件授权,
  * GitLab MR 同样适用。
  *
  * 约束:
@@ -13,7 +13,7 @@
  * - 只触发 active、按计划重复且此刻没有在跑的任务(提前跑会用掉一次性任务,手动任务不该被别人启动);
  *   同一任务两次触发至少间隔 MIN_RETRIGGER_MS;
  * - 被动调度实例(与另一实例共库,自动触发让位给对方)不触发;
- * - 没有空闲的并发名额时不抢(run-now 本身不排队):这个 PR 记为待触发,下一次状态刷新再试,计划本身也会兜底;
+ * - 没有空闲名额或任务仍在运行时保留该任务的门铃,每 5 秒检查本地容量,计划本身也会兜底;
  * - 只看确定的结果(ok),失败或查不到不算变化,也不清掉基线;
  * - 全部是尽力而为:出错只记日志,不影响状态查询本身。
  */
@@ -67,16 +67,22 @@ const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\
 
 /** A schedule watches the PR when its pre-run check names the PR's URL (not a longer number). */
 export function watchesPr(schedule: Schedule, url: string): boolean {
-  const command = schedule.preRunHook?.command;
+  const command = prFollowCommand(schedule);
   if (!command || !url) return false;
   return new RegExp(`${escapeRegExp(url)}(?![0-9])`, 'i').test(command);
+}
+
+/** Only a configured pre-run check opts into implicit PR follow-up; script bodies are not consent. */
+export function prFollowCommand(schedule: Schedule): string {
+  return schedule.preRunHook?.command ?? '';
 }
 
 export class PrFollowWatch {
   private readonly signatures = new Map<string, string>();
   private readonly lastTriggered = new Map<string, number>();
-  /** PR URLs whose trigger found no free slot; retried on the next observation. */
-  private readonly pending = new Set<string>();
+  /** Keep one doorbell per schedule, so retrying a busy follower cannot rerun its siblings. */
+  private readonly pending = new Map<string, { url: string; isCurrent: () => boolean }>();
+  private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly now: () => number;
 
   constructor(private readonly deps: PrFollowWatchDeps) {
@@ -87,40 +93,70 @@ export class PrFollowWatch {
   observe(query: PrStatusQuery, result: PrStatusResult): void {
     const signature = prStatusSignature(result);
     if (signature === null) return;
-    this.retryPending();
     const key = prStatusKey(query);
     const previous = this.signatures.get(key);
     this.signatures.delete(key);
     this.signatures.set(key, signature);
     if (this.signatures.size > MAX_TRACKED) this.signatures.delete(this.signatures.keys().next().value!);
-    if (previous === undefined || previous === signature) return;
-    void this.trigger(sessionPrUrl(query)).catch((error) => {
+    if (previous === undefined || previous === signature) { this.retryPending(); return; }
+    const url = sessionPrUrl(query);
+    for (const [id, pending] of this.pending) if (pending.url === url) this.pending.delete(id);
+    this.retryPending();
+    void this.trigger(url).catch((error) => {
       this.deps.log?.warn?.('pr follow watch trigger failed', {
         error: error instanceof Error ? error.message : String(error),
       });
     });
   }
 
+  /** Snapshot the observer baseline before refreshing an explicit event. */
+  observedSignature(query: PrStatusQuery): string | undefined {
+    return this.signatures.get(prStatusKey(query));
+  }
+
+  /** An authenticated doorbell may represent a new comment without changing status counts. */
+  async notify(url: string, isCurrent: () => boolean = () => true): Promise<void> {
+    await this.trigger(url, isCurrent);
+  }
+
   private retryPending(): void {
-    for (const url of Array.from(this.pending)) {
-      this.pending.delete(url);
-      void this.trigger(url).catch(() => undefined);
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
+    for (const [id, { url, isCurrent }] of Array.from(this.pending)) {
+      this.pending.delete(id);
+      void this.trigger(url, isCurrent, id).catch(() => undefined);
     }
   }
 
-  private async trigger(url: string): Promise<void> {
-    if (!url || !this.deps.autoRunAllowed()) return;
-    const schedules = (await this.deps.listActive()).filter((schedule) => watchesPr(schedule, url));
+  private defer(id: string, url: string, isCurrent: () => boolean): void {
+    this.pending.set(id, { url, isCurrent });
+    // This only checks local scheduler capacity; it makes no GitHub API requests.
+    // A comment must not depend on another status change to be noticed after a busy run.
+    if (!this.retryTimer) {
+      this.retryTimer = setTimeout(() => this.retryPending(), 5_000);
+      this.retryTimer.unref?.();
+    }
+  }
+
+  private async trigger(url: string, isCurrent: () => boolean = () => true, onlyScheduleId?: string): Promise<void> {
+    if (!url || !isCurrent() || !this.deps.autoRunAllowed()) return;
+    const schedules = (await this.deps.listActive()).filter((schedule) =>
+      (!onlyScheduleId || schedule.id === onlyScheduleId) && watchesPr(schedule, url));
     const now = this.now();
     for (const schedule of schedules) {
+      if (!isCurrent()) return;
       if (schedule.status !== 'active' || !schedule.recurring || schedule.manual) continue;
-      if (this.deps.inflight(schedule.id) > 0) continue;
+      // Explicit App triggers own the event filter and durable queue. Do not run
+      // the same task again through the implicit PR-follow wakeup path.
+      if (schedule.webhookTrigger?.source?.preset === 'github-app') continue;
+      if (this.deps.inflight(schedule.id) > 0) { this.defer(schedule.id, url, isCurrent); continue; }
       const last = this.lastTriggered.get(schedule.id);
-      if (last !== undefined && now - last < MIN_RETRIGGER_MS) continue;
+      if (last !== undefined && now - last < MIN_RETRIGGER_MS) { this.defer(schedule.id, url, isCurrent); continue; }
       if (!this.deps.hasCapacity()) {
-        this.pending.add(url);
-        break;
+        this.defer(schedule.id, url, isCurrent);
+        continue;
       }
+      this.pending.delete(schedule.id);
       this.lastTriggered.set(schedule.id, now);
       this.deps.log?.info?.('pr follow watch: status changed, running schedule now', { scheduleId: schedule.id, url });
       void this.deps

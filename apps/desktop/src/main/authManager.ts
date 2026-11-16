@@ -116,6 +116,7 @@ import { resolveLoginScenarioFetch } from '@cindy/auth-client/fixtures';
 
 import { createLogger } from './logger';
 import { requestErrorMessage } from './requestErrorMessage';
+import { withProviderResponseDiagnostics } from './authProviderResponse';
 import { AuthOwnerChangeShellGate } from './authOwnerChangeShellGate';
 import {
   isGhostSkillProjectionBoundaryStableForOwner,
@@ -159,8 +160,11 @@ import {
 } from './appSessionState.js';
 import {
   claimLegacyOwnerNamespace,
+  hasExclusiveSharedLegacyUserDataAccess,
   recordLegacyGhostMigrationResult,
 } from './ownerNamespaceMigration.js';
+import { adoptLocalProfileAssets } from './localProfileAssetsMigration.js';
+import { acquireWindowsPackagedInstanceBarrier } from './windowsPackagedInstanceBarrier.js';
 import {
   migrateLocalNativeProviderAuthBindings,
   readLegacyNativeProviderAuthOwner,
@@ -340,6 +344,7 @@ const stableOwnerPostCommitCoordinator = new StableOwnerPostCommitCoordinator({
 
 /** Queue optional owner-scoped provisioning without holding authentication or the app shell. */
 export function requestStableOwnerPostCommit(reason: string): void {
+  if (authRefreshOverride !== null) return; // Host is the only durable owner writer.
   if (isPassiveSharedUserDataInstance()) return;
   void stableOwnerPostCommitCoordinator.ensure(reason);
 }
@@ -448,7 +453,10 @@ function createAuthClient(
     deviceId,
     clientType: 'desktop',
     locale: getResolvedMainLocale(),
-    fetch: scenarioFetch ?? (async (input, init) => net.fetch(input, init as RequestInit)),
+    fetch: withProviderResponseDiagnostics(
+      scenarioFetch ?? (async (input, init) => net.fetch(input, init as RequestInit)),
+      (diagnostic) => log.warn('login providers non-JSON response', diagnostic),
+    ),
     onRequestError: (apiPath, status, error) => {
       log.warn('auth request failed', apiPath, { realm, status }, requestErrorMessage(error));
     },
@@ -2478,6 +2486,20 @@ async function withCloudOwnerCommit<T>(opts: {
           throw new Error('cloud owner data reservation finalization remains pending');
         }
         rollbackReservation = null;
+        // The verified first cloud owner adopts local credentials and plugin
+        // installation facts while the old runtime is drained and the new
+        // owner is still quarantined. Optional provisioning must not race this.
+        await adoptLocalProfileAssets(opts.nextOwnerId, {
+          userDataDir: app.getPath('userData'),
+          dbFilePrefix: BRAND_IDENTITY.dbFilePrefix,
+          hasExclusiveSourceAccess: hasExclusiveSharedLegacyUserDataAccess,
+          acquireSourcePublicationBarrier: process.platform === 'win32'
+            ? () => acquireWindowsPackagedInstanceBarrier({
+                userDataDir: app.getPath('userData'),
+                programName: BRAND_IDENTITY.executableName,
+              })
+            : undefined,
+        });
         // Same-owner repair: advance the owner generation after the real commit
         // so activeOwnerScopeKey() changes and stale captured scopes are rejected.
         if (forceBumpGeneration) {
@@ -3961,6 +3983,20 @@ async function expireRuntimeAuth(
  */
 export function invalidateSession(reason: string): Promise<void> {
   if (sessionInvalidationPromise) return sessionInvalidationPromise;
+  if (authRefreshOverride !== null) {
+    // A UI-only client holds no resource credential. Its incidental 401 cannot
+    // delete the Host's credentials, commit signed-out to the shared profile or
+    // tear down the Host's owner. Re-read the authority; offline keeps its last
+    // projection and the connection banner rather than fabricating a logout.
+    const run = refresh().then(() => undefined, error => {
+      log.warn('Host auth recheck unavailable; keeping delegated owner state', error);
+    });
+    sessionInvalidationPromise = run;
+    void run.finally(() => {
+      if (sessionInvalidationPromise === run) sessionInvalidationPromise = null;
+    });
+    return run;
+  }
 
   const rejectedAccountKey =
     currentUser && !isPassiveSharedUserDataInstance()
@@ -5976,6 +6012,7 @@ async function runLoginAction(
     const errorState = loginPreparingErrorState(
       code,
       error instanceof AuthApiError ? error.retryAt : undefined,
+      code === 'INVALID_RESPONSE' && status >= 400 && status <= 599 ? status : undefined,
     );
     loginFlowState =
       flowCannotRetry || code === 'CREDENTIAL_STORE_UNAVAILABLE'

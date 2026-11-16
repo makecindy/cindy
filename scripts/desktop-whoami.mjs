@@ -113,7 +113,7 @@ function commandContainsPath(command, candidatePath) {
     const before = normalizedCommand[index - 1];
     const after = normalizedCommand[index + normalizedPath.length];
     const start = before === undefined || /\s|["'=]/.test(before);
-    const end = after === undefined || after === '/' || after === '"' || after === "'";
+    const end = after === undefined || /\s/.test(after) || after === '/' || after === '"' || after === "'";
     if (start && end) return true;
     index = normalizedCommand.indexOf(normalizedPath, index + 1);
   }
@@ -196,9 +196,18 @@ export function identifyDesktopProcesses(processes, worktrees) {
   const result = [];
   for (const worktree of worktrees) {
     const electronRoot = path.join(worktree.rootDir, 'node_modules', 'electron');
+    const native = readJson(path.join(worktree.rootDir, 'apps/desktop/resources/personal-native.json'));
+    const sharedExecutable = typeof native?.runtime?.directory === 'string'
+      ? path.join(native.runtime.directory, 'Cindy.app/Contents/MacOS/Electron') : null;
     for (const proc of processes) {
+      const fixedMatch = /^(\/.*?\.app)\/Contents\/MacOS\/Electron /.exec(proc.command);
+      const installed = fixedMatch ? readJson(fixedMatch[1] + '.personal-install.json') : null;
+      const fixedRuntime = installed && typeof installed.key === 'string' && installed.key === native?.runtime?.key
+        && installed.digest === native?.runtime?.digest;
       if (
-        !commandContainsPath(proc.command, electronRoot) ||
+        !(commandContainsPath(proc.command, electronRoot) || sharedExecutable &&
+          (proc.command.startsWith(sharedExecutable + ' ') || fixedRuntime) &&
+          commandContainsPath(proc.command, path.join(worktree.rootDir, 'apps/desktop'))) ||
         proc.command.includes('--type=') ||
         proc.command.includes('crashpad_handler')
       ) continue;

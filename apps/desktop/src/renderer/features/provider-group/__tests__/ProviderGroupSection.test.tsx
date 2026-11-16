@@ -89,6 +89,7 @@ const MINI = {
   providerId: 'anthropic-1a2b3c4d',
   label: 'Mac mini',
   limit: 4,
+  limitSet: true as const,
   weight: 1,
   paused: false,
 };
@@ -278,7 +279,9 @@ describe('ProviderGroupSection', () => {
     expect(rows[0].getAttribute('data-member-state')).toBe('available');
     // 运行数在状态行，上限只在下拉里：同一个数字不出现两次。
     expect(within(rows[0]).getByText('providerGroup.member.runningCount:{"count":1}')).toBeTruthy();
-    expect(within(rows[0]).getByText('providerGroup.member.limitOption:{"count":4}')).toBeTruthy();
+    // 2026-11-11：没设置过上限(含旧版默认 4)显示「不限制」；设置过的显示数字。
+    expect(within(rows[0]).getByText('providerGroup.member.limitUnlimited')).toBeTruthy();
+    expect(within(rows[1]).getByText('providerGroup.member.limitOption:{"count":4}')).toBeTruthy();
     expect(within(rows[1]).queryByText(/providerGroup\.member\.runningCount/)).toBeNull();
     expect(rows[1].getAttribute('data-member-state')).toBe('cooling');
     expect(within(rows[1]).getByText(/providerGroup\.member\.status\.coolingUntil/)).toBeTruthy();

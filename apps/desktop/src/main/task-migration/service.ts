@@ -22,6 +22,7 @@ import {
   type TaskMigrationView,
 } from '@cindy/device-link';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current';
+import { isOrcaReportStopSnapshotMarker } from '../localDb/agentInputQueueSnapshots';
 import { dialogueWorkspaceDayKey } from '../localDb/dialogueWorkspace';
 import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs';
 import { readDialogueWorkspaceSettings } from '../dialogue-workspace-settings';
@@ -34,7 +35,7 @@ import { getDeviceLinkInvokeContext } from '../device-link/invoke-context';
 import { readDeviceLinkSettings } from '../device-link/settings-store.desktop';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { tryUploadPeerAttachment } from '../device-link/filePeer';
-import { uploadLocalFile, removeRemote, MAX_MEDIA_BYTES } from '../device-link/mediaTransfer';
+import { uploadLocalFile, removeRemote, MAX_MEDIA_BYTES } from '../device-link/mediaTransfer.desktop';
 import { withAgentNetMediaTarget } from '../device-link/agentNetMediaRouting';
 import {
   materializeRemoteAttachment,
@@ -117,7 +118,10 @@ const logTargetFailure =
   };
 const errorCode = (error: unknown): string => {
   if ((error as NodeJS.ErrnoException)?.code === 'ENOSPC') return 'MIGRATION_NO_SPACE';
+  // Preserve only the known transport reason, never arbitrary remote error text.
+  if (error instanceof DeviceLinkError && error.code === 'DEVICE_OFFLINE') return 'DEVICE_OFFLINE';
   const message = error instanceof Error ? error.message : '';
+  if (/\bDEVICE_LINK_DEVICE_OFFLINE\b/.test(message)) return 'DEVICE_LINK_DEVICE_OFFLINE';
   return /\bMIGRATION_[A-Z_]+\b/.exec(message)?.[0] ?? 'MIGRATION_FAILED';
 };
 function selfId(): string {
@@ -282,7 +286,8 @@ async function assertSource(
     } catch {
       throw new Error('MIGRATION_TASK_QUEUED');
     }
-    if (!Array.isArray(messages) || messages.length) throw new Error('MIGRATION_TASK_QUEUED');
+    if (!Array.isArray(messages) || messages.some(item => !isOrcaReportStopSnapshotMarker(item)))
+      throw new Error('MIGRATION_TASK_QUEUED');
   }
   const live = getMakerIfReady()?.getSession(sessionId);
   if (!sourceBoundary) throw new Error('MIGRATION_HOST_NOT_READY');

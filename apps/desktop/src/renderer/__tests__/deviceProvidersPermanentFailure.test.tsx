@@ -201,6 +201,8 @@ async function mountSharePicker(options: { deferInitial?: boolean } = {}) {
   let remotePush: ((push: { deviceId: string; channel: string; payload?: unknown }) => void) | undefined;
   let currentSnapshot = receivedSnapshot([receivedShare()]);
   let phase: 'fresh' | 'pending' = 'fresh';
+  let catalogProviders = [provider('shared-model-provider')];
+  let catalogCapabilities = capabilities;
   let providerContinuity: { stale: boolean; remainingMs: number } | undefined;
   let capabilityContinuity: { stale: boolean; remainingMs: number } | undefined;
   let snapshotGate: Promise<ProviderShareReceivedSnapshot> | null = null;
@@ -212,10 +214,10 @@ async function mountSharePicker(options: { deferInitial?: boolean } = {}) {
     : null;
   const invoke = vi.fn(async (_device: string, channel: string) => {
     if (channel !== 'maker:provider:list') {
-      return { ...capabilities, ...(capabilityContinuity ? { providerContinuity: capabilityContinuity } : {}) };
+      return { ...catalogCapabilities, ...(capabilityContinuity ? { providerContinuity: capabilityContinuity } : {}) };
     }
     if (phase === 'pending') return new Promise<never>(() => undefined);
-    return { providers: [provider('shared-model-provider')],
+    return { providers: catalogProviders,
       ...(providerContinuity ? { providerContinuity } : {}) };
   });
   const command = vi.fn(async (request: { action: string }) => {
@@ -253,11 +255,14 @@ async function mountSharePicker(options: { deferInitial?: boolean } = {}) {
     latest = providers.useDeviceProviders('share:a');
     return null;
   }
-  await renderElement(createElement(Probe));
+  const catalogView = await renderElement(createElement(Probe));
   await flushMounted();
   expect(latest?.providers).toHaveLength(1);
   return {
-    command, store,
+    unmountCatalog: () => unmountElement(catalogView),
+    command, store, invoke,
+    setCapabilities: (next: typeof capabilities) => { catalogCapabilities = next; },
+    setProviders: (next: ProviderView[]) => { catalogProviders = next; },
     latest: () => latest!,
     providerReads: () => invoke.mock.calls.filter(([, channel]) => channel === 'maker:provider:list').length,
     capabilityReads: () => invoke.mock.calls.filter(([, channel]) => channel === 'maker:get-capabilities').length,
@@ -1147,4 +1152,137 @@ describe('agent capability cache hits', () => {
       await act(async () => { evictAllRemoteCapabilities(); });
     }
   });
+});
+
+// #6208 / unit: exercise received-push → real shared cache → mounted consumer.
+// Existing lifecycle cases changed permission/presence, missing unchanged-share
+// metadata with a successful empty directory followed by restored models.
+describe('received-share model catalog freshness', () => {
+  // #10711 review / unit: direct details can leave a cache while the only live
+  // consumer uses a task-host route. Previously its eviction had no replacement.
+  it.each(['providers', 'capabilities'] as const)('refreshes routed %s after direct details close', async (consumer) => {
+    const f = await mountSharePicker();
+    await f.unmountCatalog();
+    const original = f.invoke.getMockImplementation()!;
+    const routedReads: string[] = [];
+    f.invoke.mockImplementation(async (device, channel, ...args: unknown[]) => {
+      if (channel === CONTROLLED_MODEL_CATALOG_CHANNEL) {
+        const request = (args[0] as { channel: string; agentDeviceId: string }[])[0];
+        routedReads.push(request.agentDeviceId);
+        return original(device, request.channel);
+      }
+      return original(device, channel);
+    });
+    const target = modelCatalogKey('share:a', 'task-host')!;
+    const hook = await renderHookFixture(() => consumer === 'providers'
+      ? providers.useDeviceProviders(target) : useAgentCapabilities('claude-code', target));
+    await flushMounted();
+    const reads = routedReads.length;
+    f.setProviders([provider('updated-route')]);
+    f.setCapabilities({ ...capabilities, availableModels: [{ ...capabilities.availableModels[0], id: 'updated-route' }] });
+    await act(async () => { f.push([receivedShare()]); });
+    await flushMounted();
+    expect(hook.result.current.loading).toBe(false);
+    expect(providers.getCachedDeviceProviders(target)?.providers[0]?.id).toBe('updated-route');
+    expect(getCachedCapabilities('claude-code', target)?.availableModels[0]?.id).toBe('updated-route');
+    expect(routedReads.length).toBeGreaterThan(reads);
+    expect(routedReads.every(source => source === 'share:a')).toBe(true);
+  });
+
+  it('updates mounted and cached catalogs on unchanged membership, including empty → restored', async () => {
+    const f = await mountSharePicker();
+    const reads = f.providerReads();
+    f.setProviders([]);
+    f.setCapabilities({ ...capabilities, availableModels: [] });
+    await act(async () => { f.push([receivedShare()]); });
+    await flushMounted();
+    expect(f.latest().providers).toEqual([]);
+    expect(providers.getCachedDeviceProviders('share:a')?.providers).toEqual([]);
+    expect(f.providerReads()).toBe(reads + 1);
+    expect(getCachedCapabilities('claude-code', 'share:a')?.availableModels).toEqual([]);
+    const restored = provider('restored');
+    restored.models['claude-code'] = [{ id: 'restored-model', name: 'Restored', contextWindow: 32000, efforts: [], defaultEffort: null }];
+    f.setProviders([restored]);
+    f.setCapabilities({ ...capabilities, availableModels: [{ ...capabilities.availableModels[0], id: 'restored-model' }] });
+    await act(async () => { f.push([receivedShare()]); });
+    await flushMounted();
+    expect(f.latest().providers[0]?.models['claude-code']?.[0]?.id).toBe('restored-model');
+    expect(providers.getCachedDeviceProviders('share:a')?.providers[0]?.id).toBe('restored');
+    expect(getCachedCapabilities('claude-code', 'share:a')?.availableModels[0]?.id).toBe('restored-model');
+    expect(f.providerReads()).toBe(reads + 2);
+    expect(f.capabilityReads()).toBe(6); // Three engines per shared refresh.
+  });
+
+  it('does not prefetch unopened shares or reread unchanged offline/paused shares', async () => {
+    const f = await mountSharePicker();
+    const unavailable = [receivedShare({ shareId: 'offline', hostOnline: false }), receivedShare({ shareId: 'paused', status: 'paused' })];
+    const snapshot = receivedSnapshot([receivedShare(), receivedShare({ shareId: 'unopened' }), ...unavailable]);
+    f.setSnapshot(snapshot);
+    await providers.prefetchDeviceProviders('share:offline');
+    await providers.prefetchDeviceProviders('share:paused');
+    await act(async () => { f.push([...snapshot.received]); });
+    await flushMounted();
+    const reads = f.providerReads();
+    await act(async () => { f.push([...snapshot.received]); });
+    await flushMounted();
+    expect(f.providerReads()).toBe(reads + 1); // Only the already-mounted active share.
+    expect(providers.getCachedDeviceProviders('share:unopened')).toBeNull();
+  });
+  it('coalesces repeated unchanged pushes during a slow read and keeps the last catalog', async () => {
+    const f = await mountSharePicker();
+    const original = f.invoke.getMockImplementation()!;
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    let hold = true;
+    f.invoke.mockImplementation(async (device, channel) => {
+      if (hold) await pending;
+      return original(device, channel);
+    });
+    const reads = f.providerReads();
+    await act(async () => { f.push([receivedShare()]); });
+    expect(f.providerReads()).toBe(reads + 1);
+    for (let n = 0; n < 8; n++) {
+      await act(async () => { f.push([receivedShare()]); });
+    }
+    expect(f.providerReads()).toBe(reads + 1);
+    f.setProviders([provider('last')]);
+    hold = false;
+    await act(async () => { finish(); });
+    await flushMounted();
+    expect(f.providerReads()).toBe(reads + 2);
+    expect(f.latest().providers[0]?.id).toBe('last');
+  });
+
+  it.each(['direct', 'routed'])('invalidates a loaded but unused empty %s catalog without background polling', async (route) => {
+    const f = await mountSharePicker();
+    const cached = receivedShare({ shareId: 'cached' });
+    const snapshot = receivedSnapshot([receivedShare(), cached]);
+    f.setSnapshot(snapshot);
+    await act(async () => { f.push([...snapshot.received]); });
+    await flushMounted();
+    const original = f.invoke.getMockImplementation()!;
+    f.invoke.mockImplementation(async (device, channel) => channel === CONTROLLED_MODEL_CATALOG_CHANNEL
+      || (device === 'share:cached' && channel === 'maker:provider:list')
+      ? { providers: [] } : original(device, channel));
+    const target = route === 'routed' ? modelCatalogKey('share:cached', 'task-host')! : 'share:cached';
+    await providers.prefetchDeviceProviders(target);
+    expect(providers.getCachedDeviceProviders(target)?.providers).toEqual([]);
+    const reads = f.providerReads();
+    await act(async () => { f.push([...snapshot.received]); });
+    await flushMounted();
+    expect(providers.getCachedDeviceProviders(target)).toBeNull();
+    expect(f.providerReads()).toBe(reads + 1); // Only the mounted share is reread.
+  });
+
+  it('refreshes the model capability consumer after the settings catalog unmounts', async () => {
+    const f = await mountSharePicker();
+    await f.unmountCatalog();
+    const hook = await renderHookFixture(() => useAgentCapabilities('claude-code', 'share:a'));
+    await flushMounted();
+    f.setCapabilities({ ...capabilities, availableModels: [{ ...capabilities.availableModels[0], id: 'new-capability-model' }] });
+    await act(async () => { f.push([receivedShare()]); });
+    await flushMounted();
+    expect(hook.result.current.capabilities?.availableModels[0]?.id).toBe('new-capability-model');
+  });
+
 });

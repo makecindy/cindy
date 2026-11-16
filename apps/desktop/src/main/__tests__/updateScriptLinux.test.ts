@@ -8,6 +8,7 @@ import {
   buildLinuxUpdateScript,
   shellSingleQuote,
   DEFAULT_LINUX_UPDATE_SCRIPT_TIMINGS,
+  linuxRelaunchDisplayArgs,
   type LinuxUpdateScriptParams,
 } from '../updateScriptLinux';
 
@@ -32,6 +33,29 @@ describe('shellSingleQuote', () => {
   it('wraps paths in single quotes and escapes embedded quotes', () => {
     expect(shellSingleQuote(`/tmp/cindy's.deb`)).toBe(`'/tmp/cindy'\\''s.deb'`);
     expect(shellSingleQuote('/usr/lib/cindy/Cindy')).toBe(`'/usr/lib/cindy/Cindy'`);
+  });
+});
+
+// #9723: a Wayland-only desktop entry starts Cindy with --ozone-platform=wayland.
+// Relaunching without it makes Electron exit(1) before any window or log line.
+describe('linuxRelaunchDisplayArgs', () => {
+  it('keeps the launcher display switches and drops URLs, task and debug arguments', () => {
+    expect(linuxRelaunchDisplayArgs([
+      '/opt/Cindy/Cindy',
+      '--ozone-platform=wayland',
+      '--enable-features=WaylandWindowDecorations,UseOzonePlatform',
+      '--enable-wayland-ime',
+      '--password-store=kwallet6',
+      '--remote-debugging-port=9222',
+      'cindy://open?task=1',
+      '--ozone-platform=$(touch /tmp/x)',
+      '--',
+      '--ozone-platform=x11',
+    ])).toEqual([
+      '--ozone-platform=wayland',
+      '--enable-features=WaylandWindowDecorations,UseOzonePlatform',
+      '--enable-wayland-ime',
+    ]);
   });
 });
 
@@ -167,15 +191,15 @@ describe('buildLinuxUpdateScript structure', () => {
   });
 
   it('releases the lock before relaunch and verifies by spawned child pid', () => {
-    // 先放锁再拉起:新进程不会卡在 bootstrap 等自己的锁,2s 启动窗口后
-    // 按启动的子 PID(kill -0)验证,等锁的旧实例不会被误判。
-    const rmIdx = script.indexOf(`rm -f '/tmp/cindy-update.lock'`);
-    const nohupIdx = script.indexOf(`nohup '/usr/lib/cindy/Cindy' >/dev/null 2>&1 &`);
+    // 先放锁再拉起:新进程不会卡在 bootstrap 等自己的锁;之后按启动的
+    // 子 PID(kill -0)验证,等锁的旧实例不会被误判。
+    const relaunchStart = script.indexOf('relaunch_app() {');
+    const relaunch = script.slice(relaunchStart, script.indexOf('\n}', relaunchStart));
+    const rmIdx = relaunch.indexOf(`rm -f '/tmp/cindy-update.lock'`);
     expect(rmIdx).toBeGreaterThan(-1);
-    expect(nohupIdx).toBeGreaterThan(rmIdx);
+    expect(relaunch.indexOf('start_app')).toBeGreaterThan(rmIdx);
     expect(script).toContain('LAUNCHED_PID=$!');
     expect(script).toContain('if kill -0 "$LAUNCHED_PID" 2>/dev/null; then');
-    expect(script).toContain('sleep 2');
   });
 
   it('waits for the heartbeat to exit before removing the lock', () => {

@@ -50,7 +50,7 @@ vi.mock('../../cindy-media/ingest.js', () => ({
     return { url: `cindy-media://blobs/${hash}.png`, hash, ext: '.png', refIds };
   }),
 }));
-vi.mock('../../device-link/mediaTransfer.js', () => ({
+vi.mock('../../device-link/mediaTransfer.desktop.js', () => ({
   removeRemote: vi.fn(async (key: string) => { h.removed.push(key); }),
 }));
 vi.mock('../../device-link/remoteAttachment.js', () => ({

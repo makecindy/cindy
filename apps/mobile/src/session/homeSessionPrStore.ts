@@ -46,12 +46,23 @@ interface Entry {
   fetchedAt: number;
   refreshKey: string | undefined;
   inflight: boolean;
+  cancelLoad?: () => void;
   /** 本次运行里有一次查询成功返回(含「没有 PR」)。查询失败留下的空值不算,读回仍可补上。 */
   confirmed?: boolean;
   persist?: HomeSessionPrPersistTarget;
+  /** When this row last asked the computer for PR statuses (not just the reference list). */
+  statusAt?: number;
 }
 
 const MIN_REFETCH_MS = 10_000;
+/**
+ * The computer answers status reads from a 60-second cache (PrStatusService default TTL).
+ * A running task changes its updatedAt every few seconds, so status reads inside this window
+ * only return the same cached value while costing a ~10 KB round trip each. Task updates
+ * still re-read the reference list every MIN_REFETCH_MS, so a newly mentioned PR shows up
+ * as before; only repeat status reads for unchanged references are skipped.
+ */
+const HOST_STATUS_CACHE_MS = 60_000;
 /** 在途请求通常很快结束;任务有变化时至少隔这么久再补查一次。 */
 const IN_FLIGHT_RETRY_MS = 1_000;
 const MAX_ENTRIES = 300;
@@ -64,6 +75,16 @@ export function homeSessionPrCacheKey(scope: string, deviceId: string, sessionId
 
 export function readHomeSessionPr(key: string): HomeSessionPrInfo | null {
   return entries.get(key)?.value ?? null;
+}
+
+/** Opening the task menu must see association edits made in its details page. */
+export function expireHomeSessionPr(key: string): void {
+  const entry = entries.get(key);
+  if (!entry) return;
+  entry.cancelLoad?.();
+  // Keep known statuses during the refresh, but detach any older in-flight read
+  // so it cannot restore references removed while the menu was hidden.
+  entries.set(key, { ...entry, fetchedAt: Number.NEGATIVE_INFINITY, inflight: false, cancelLoad: undefined });
 }
 
 export function subscribeHomeSessionPr(key: string, listener: () => void): () => void {
@@ -88,10 +109,14 @@ export function subscribeHomeSessionPr(key: string, listener: () => void): () =>
  */
 export function refreshHomeSessionPr(
   key: string,
-  load: (previous: HomeSessionPrInfo | null) => Promise<HomeSessionPrInfo | null>,
+  load: (
+    previous: HomeSessionPrInfo | null,
+    options?: { reuseStatuses: boolean },
+  ) => Promise<HomeSessionPrInfo | null> & { cancel?: () => void },
   options: { now: number; refreshKey?: string; eventful?: boolean; persist?: HomeSessionPrPersistTarget },
 ): number {
   const entry = entries.get(key);
+  let reuseStatuses = false;
   if (entry) {
     const age = options.now - entry.fetchedAt;
     const eventful = options.eventful === true || entry.refreshKey !== options.refreshKey;
@@ -99,6 +124,12 @@ export function refreshHomeSessionPr(
     if (age < (eventful ? MIN_REFETCH_MS : PR_STATUS_REFRESH_INTERVAL_MS)) {
       return eventful ? MIN_REFETCH_MS - age : 0;
     }
+    // Only a task update qualifies: returning to the list or the app is the user looking
+    // again, and routine polls are already longer than the computer's cache.
+    reuseStatuses = options.eventful !== true
+      && entry.refreshKey !== options.refreshKey
+      && entry.statusAt !== undefined
+      && options.now - entry.statusAt < HOST_STATUS_CACHE_MS;
   }
   const next: Entry = {
     fetchedAt: options.now,
@@ -107,11 +138,14 @@ export function refreshHomeSessionPr(
     value: entry?.value ?? null,
     persist: options.persist ?? entry?.persist,
     confirmed: entry?.confirmed,
+    statusAt: reuseStatuses ? entry?.statusAt : options.now,
   };
   entries.delete(key);
   entries.set(key, next);
   trimEntries();
-  void load(next.value)
+  const pending = load(next.value, { reuseStatuses });
+  next.cancelLoad = pending.cancel;
+  void pending
     .then((value) => {
       if (entries.get(key) !== next) return;
       // 读回的上次结果可能在本次查询在途时才种入(冷启动已在线),load 拿到的 previous 里没有它:
@@ -124,6 +158,7 @@ export function refreshHomeSessionPr(
     .catch(() => undefined)
     .finally(() => {
       next.inflight = false;
+      next.cancelLoad = undefined;
       listeners.get(key)?.forEach((listener) => listener());
     });
   return 0;
@@ -143,21 +178,42 @@ function keepKnownStatus(value: HomeSessionPrInfo | null, known: HomeSessionPrIn
   return { ...filled, additional: value.additional.map(fill) };
 }
 
-export async function loadHomeSessionPr(
+export function loadHomeSessionPr(
   invoke: Invoke,
   deviceId: string,
   sessionId: string,
   previous: HomeSessionPrInfo | null = null,
   includeRelated = false,
+  reuseStatuses = false,
+): Promise<HomeSessionPrInfo | null> & { cancel: () => void } {
+  const controller = new AbortController();
+  return Object.assign(loadHomeSessionPrData(invoke, deviceId, sessionId, previous, includeRelated, reuseStatuses, controller.signal), {
+    cancel: () => controller.abort(),
+  });
+}
+
+async function loadHomeSessionPrData(
+  invoke: Invoke,
+  deviceId: string,
+  sessionId: string,
+  previous: HomeSessionPrInfo | null,
+  includeRelated: boolean,
+  reuseStatuses: boolean,
+  signal: AbortSignal,
 ): Promise<HomeSessionPrInfo | null> {
   const refs = await invoke<unknown>(deviceId, 'git-context:pr-refs:list', [sessionId]);
+  if (signal.aborted) return previous;
   const ref = latestPrRef(refs);
   if (!ref) return null;
   // 状态查询失败只是这一轮没拿到,不是「状态未知」:同一 PR 沿用上次已知状态
   // (已合并 / 已关闭不该退回中性图标);换了 PR 才没有可沿用的状态。
   const previousRows = previous ? [previous, ...(previous.additional ?? [])] : [];
   const selected = includeRelated && Array.isArray(refs)
-    ? (refs as SessionPrRef[]).filter(item => latestPrRef([item]) !== null).sort((a, b) => b.lastSeenAt - a.lastSeenAt).slice(0, MAX_STATUS_QUERIES)
+    ? (refs as SessionPrRef[]).filter(item => latestPrRef([item]) !== null)
+      // Match the desktop header: explicit pins and order precede recency.
+      .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)
+        || (b.priority ?? 0) - (a.priority ?? 0) || b.lastSeenAt - a.lastSeenAt)
+      .slice(0, MAX_STATUS_QUERIES)
     : [ref];
   const build = (statuses: unknown): HomeSessionPrInfo => {
     const rows = selected.map(item => {
@@ -167,11 +223,19 @@ export async function loadHomeSessionPr(
     });
     return { ...rows[0], ...(includeRelated ? { additional: rows.slice(1) } : {}) };
   };
+  // Same references as last time and every one already has a status: the computer would
+  // answer from its cache, so keep what we have. Any new or changed reference reads again.
+  if (reuseStatuses && selected.every(item => previousRows.some(row => row.status?.ok && prStatusKey(row.ref) === prStatusKey(item)))) {
+    return build(null);
+  }
   let statuses: unknown;
   try {
-    statuses = await remotePrStatuses(selected.map(prStatusQuery), sessionId, (channel, args) =>
-      invoke(deviceId, channel, args),
-    );
+    statuses = await remotePrStatuses(selected.map(prStatusQuery), sessionId, async (channel, args) => {
+      // An already-sent RPC cannot be recalled, but superseded reads must not
+      // dispatch status calls (including a later GitLab call after GitHub).
+      if (signal.aborted) throw new Error('PR read superseded');
+      return invoke(deviceId, channel, args);
+    });
   } catch {
     return build(null);
   }

@@ -108,7 +108,10 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
     // 命中 cache: 立刻 swap, 关 loading。
     const cached = sessionsStore.getByFilter(filter);
     if (cached !== null) {
-      setSnapshotState({ data: cached, filter });
+      // Re-read after render, but do not publish the same warm snapshot twice.
+      setSnapshotState((previous) =>
+        previous.data === cached && previous.filter === filter ? previous : { data: cached, filter },
+      );
       setIsLoading(false);
       setError(null);
     } else if (!hasAnySnapshotRef.current) {

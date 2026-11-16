@@ -211,7 +211,7 @@ export function BotGroupSidebarRow({
           : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover',
       )}
     >
-      <span className="relative flex shrink-0"><BotGroupSidebarAvatar members={group.members} selected={selected} />
+      <span className="relative flex shrink-0"><BotGroupSidebarAvatar members={group.members} />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-center gap-1.5">

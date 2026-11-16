@@ -61,7 +61,11 @@ export function IncomingShareBridge() {
           if (!getMobileAuthOwner().switching && AppState.currentState === 'active') refresh();
         }) },
       ];
-      refresh();
+      // A push or background fetch can launch the app straight into the background, where iOS
+      // suspends it within seconds. The native read holds a file lock in the App Group while it
+      // waits on the shared preferences, and being suspended with that lock held ends the
+      // process (0xdead10cc). The 'active' listener above picks the inbox up on first foreground.
+      if (AppState.currentState !== 'background') refresh();
     }).catch(() => undefined);
     return () => {
       active = false;

@@ -100,6 +100,23 @@ describe('CodexMicroGuardService suspension', () => {
     expect(fs.existsSync(f.store.hookPath)).toBe(false);
   });
 
+  it('keeps disk cleanup pending after emergency removal and completes on explicit recovery', async () => {
+    const f = fixture(true);
+    const service = f.make();
+    const mkdir = vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {
+      throw Object.assign(new Error('fixture full disk'), { code: 'ENOSPC' });
+    });
+    try {
+      expect(await service.getState()).toMatchObject({ enabled: false, status: 'recovery-required' });
+      expect(f.runner.nodeOptions).toBeNull();
+    } finally {
+      mkdir.mockRestore();
+    }
+    expect(f.store.readState()).not.toBeNull();
+    expect(await service.recover()).toEqual(PAUSED);
+    expect(f.store.readState()).toBeNull();
+  });
+
   it('exposes failed restoration and broadcasts the paused state after a manual retry', async () => {
     const f = fixture(true);
     f.runner.failNextMutation = true;

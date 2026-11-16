@@ -58,14 +58,10 @@ describe('ChatInput 的入口门控与调用路由', () => {
 
   it('lazy-create 从 DB 对齐原子模型选择的 effort 与 Fast,不复用旧排队快照', () => {
     const hostSource = readFileSync(
-      resolve(process.cwd(), 'src/main/maker-ipc/register.ts'),
+      resolve(process.cwd(), 'src/main/maker-ipc/sessionOptionsReconciler.ts'),
       'utf8',
     );
-    const start = hostSource.indexOf('async function reconcileCreateOptsAgainstDb(');
-    const end = hostSource.indexOf('const agentSwitchDeps:', start);
-    expect(start).toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
-    const body = hostSource.slice(start, end);
+    const body = hostSource;
     expect(body).toContain('effort: sessions.effort,');
     expect(body).toContain('fastMode: sessions.fastMode,');
     expect(body).toContain('permissionMode: sessions.permissionMode,');

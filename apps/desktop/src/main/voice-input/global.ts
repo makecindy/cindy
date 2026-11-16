@@ -69,6 +69,7 @@ import {
 } from './macHelperProcess.js';
 
 const log = createLogger('voice-input-global');
+const DISABLE_GLOBAL_SHORTCUTS = process.env.XDT_DISABLE_GLOBAL_SHORTCUTS === '1';
 type GlobalVoiceInputShortcutPhase = 'start' | 'tap' | 'end';
 
 const modifierShortcutRecordingWebContentsIds = new Set<number>();
@@ -952,6 +953,7 @@ function schedulePendingShortcutRecoveryRetry(delayMs: number): void {
 }
 
 async function recoverPendingNativeShortcutRegistration(): Promise<void> {
+  if (DISABLE_GLOBAL_SHORTCUTS) return;
   if (process.platform !== 'darwin') return;
   if (pendingShortcutRecoveryRunning) {
     // 同限流那条的道理：在飞的那次可能刚好在用户点开开关**之前**读到了 denied，而这次聚焦
@@ -1075,6 +1077,11 @@ function registerModifierShortcutRecordingCleanup(sender: WebContents): void {
 export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void {
   if (registered) return;
   registered = true;
+
+  // 两个全局入口共用开关，只在这里记录一次，避免设置同步和窗口聚焦反复刷日志。
+  if (DISABLE_GLOBAL_SHORTCUTS) {
+    log.info('global voice input and region screenshot shortcuts skipped (XDT_DISABLE_GLOBAL_SHORTCUTS=1)');
+  }
 
   onVoiceInputReady(prewarmGlobalVoiceInputOverlayAfterReady);
 
@@ -1628,6 +1635,7 @@ async function startWindowsNativeListener(
 async function setVoiceInputGlobalShortcut(
   shortcut: VoiceInputShortcut | null,
 ): Promise<VoiceInputGlobalResult> {
+  if (DISABLE_GLOBAL_SHORTCUTS) return { ok: true };
   if (process.platform === 'linux' && shortcut) {
     return {
       ok: false,

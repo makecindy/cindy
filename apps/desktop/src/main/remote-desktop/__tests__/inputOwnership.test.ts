@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AGENT_INPUT_WAIT_MS, HumanDesktopInput, HUMAN_INPUT_QUIET_MS, withAgentDesktopInput } from '../inputOwnership';
+import { AGENT_INPUT_WAIT_MS, HumanDesktopInput, HUMAN_INPUT_QUIET_MS, withAgentDesktopInput, pauseDesktopInputForClientUpgrade } from '../inputOwnership';
 
 const humans: HumanDesktopInput[] = [];
 const human = () => {
@@ -8,9 +8,56 @@ const human = () => {
   return input;
 };
 const agent = () => withAgentDesktopInput(async () => 'done');
+const pauses: Array<{ release(): void }> = [];
+const pause = () => { const lease = pauseDesktopInputForClientUpgrade(); if (lease) pauses.push(lease); return lease; };
 afterEach(() => {
+  pauses.splice(0).forEach(lease => lease.release());
   humans.splice(0).forEach((input) => input.release());
   vi.useRealTimers();
+});
+
+describe('signed client input pause during upgrade', () => {
+  it('blocks both remote and agent input, then restores both without replay', async () => {
+    const input = human();
+    const lease = pause();
+    expect(lease).not.toBeNull();
+    expect(() => input.begin([{ kind: 'text', text: 'never dispatched' }])).toThrow('No input was dispatched');
+    let writes = 0;
+    await expect(withAgentDesktopInput(async () => { writes++; })).rejects.toThrow('No input was dispatched');
+    lease!.release();
+    await expect(withAgentDesktopInput(async () => { writes++; })).resolves.toBeUndefined();
+    expect(writes).toBe(1);
+    const batch = input.begin([{ kind: 'text', text: 'fresh input' }]);
+    await batch.ready; batch.complete();
+  });
+
+  it('refuses to pause during an agent primitive', async () => {
+    let finish!: () => void;
+    const action = withAgentDesktopInput(() => new Promise<void>(resolve => { finish = resolve; }));
+    expect(pause()).toBeNull();
+    finish(); await action;
+    expect(pause()).not.toBeNull();
+  });
+
+  it('refuses to pause with a held human gesture, even after the quiet interval', () => {
+    vi.useFakeTimers();
+    const input = human();
+    input.begin([{ kind: 'key', code: 'ShiftLeft', down: true }]).complete();
+    vi.advanceTimersByTime(60_000);
+    expect(pause()).toBeNull();
+    input.begin([{ kind: 'key', code: 'ShiftLeft', down: false }]).complete();
+    vi.advanceTimersByTime(HUMAN_INPUT_QUIET_MS);
+    expect(pause()).not.toBeNull();
+  });
+
+  it('an old release cannot unpause a later upgrade', async () => {
+    const first = pause()!; first.release();
+    const next = pause()!;
+    first.release();
+    await expect(agent()).rejects.toThrow('No input was dispatched');
+    next.release();
+    await expect(agent()).resolves.toBe('done');
+  });
 });
 
 describe('remote input yields only during actual interaction', () => {

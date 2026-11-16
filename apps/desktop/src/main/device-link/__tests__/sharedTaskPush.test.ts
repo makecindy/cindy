@@ -184,6 +184,28 @@ describe('shared task guests never see the owner private message sources', () =>
     expect(sent.get('own-task').message.agentMeta).toEqual(message.agentMeta);
   });
 
+  it('redacts an auto-bridge batch for the guest: keeps count, drops senderSessionId and worker_id', async () => {
+    const transport = client();
+    __testing.setActiveClient(transport as never);
+    subscriptions.subscribe(guestA, ['session:task-a']);
+    subscriptions.subscribe('own-task', ['session:task-a']);
+    // 批次可见正文在构造时已去 worker_id（只留 role 前缀）；origin 仍带首条 senderSessionId 作 Host 授权证据。
+    const batchBody = '[Auto-bridged batch: 2 worker reports]\n\n[From Orca Worker backend]\n[Auto-bridged: worker 已完成，系统自动回传结果]\n\nAPI ready\n\n---\n\n[From Orca Worker frontend]\n[Auto-bridged: worker 异常终止]\n\nUI ready';
+    const batchMessage = {
+      clientId: 'mb1', sessionId: 'task-a', role: 'user',
+      content: JSON.stringify({ orcaSource: 'worker', content: batchBody }),
+      agentMeta: { origin: { kind: 'orca', senderLabel: '', senderSessionId: 'backend-session', displayText: batchBody, autoBridge: true, autoBridgeBatchCount: 2 } },
+    };
+    __testing.forwardPush('local-db:messages:created', { sessionId: 'task-a', message: batchMessage });
+    await vi.advanceTimersByTimeAsync(300);
+    const sent = new Map(transport.sendPush.mock.calls.map((call) => [call[0], call[2]]));
+    const guestMessage = sent.get(guestA).message;
+    expect(guestMessage.agentMeta.origin).toEqual({ kind: 'orca', senderLabel: '', displayText: batchBody, autoBridge: true, autoBridgeBatchCount: 2 });
+    expect(guestMessage.content).toContain('API ready');
+    expect(JSON.stringify(sent.get(guestA))).not.toMatch(/backend-session|worker_id/);
+    expect(sent.get('own-task').message.agentMeta).toEqual(batchMessage.agentMeta);
+  });
+
   it('redacts queued-message sources in input projection pushes for the guest', async () => {
     const transport = client();
     __testing.setActiveClient(transport as never);
@@ -217,6 +239,33 @@ describe('shared task guests never see the owner private message sources', () =>
     expect(guestView.recovery.item.text).toBe('please review');
     expect(guestView.recovery.item.origin).toEqual({ kind: 'session', senderSessionId: '', displayText: 'please review' });
     expect(JSON.stringify(guestView)).not.toMatch(/Cindy|owner-private-task|Owner private plan|bot-1|lead-task/);
+    expect(sent.get('own-task')).toEqual(projection);
+  });
+
+  it('redacts an auto-bridge batch in the guest queue projection: text drops worker_id', async () => {
+    const transport = client();
+    __testing.setActiveClient(transport as never);
+    subscriptions.subscribe(guestA, ['session:task-a']);
+    subscriptions.subscribe('own-task', ['session:task-a']);
+    // 批次 agent text 保留 worker_id 供 Lead 路由；访客投影只能拿可见正文（origin.displayText）。
+    const cleanBody = '[From Orca Worker backend]\n[Auto-bridged: worker 已完成，系统自动回传结果]\n\nAPI ready\n\n---\n\n[From Orca Worker frontend]\n[Auto-bridged: worker 异常终止]\n\nUI ready';
+    const agentText = `[Auto-bridged batch: 2 worker reports]\n\n[From Orca Worker backend (worker_id: backend)]\nAPI ready\n\n---\n\n[From Orca Worker frontend (worker_id: frontend)]\nUI ready`;
+    const projection = {
+      sessionId: 'task-a',
+      pendingQueue: [{
+        clientId: 'qb',
+        text: agentText,
+        persistedContent: JSON.stringify({ orcaSource: 'worker', content: cleanBody }),
+        origin: { kind: 'orca', senderLabel: '', senderSessionId: 'backend-session', displayText: cleanBody, autoBridge: true, autoBridgeBatchCount: 2 },
+      }],
+    };
+    __testing.forwardPush('maker:input:projection', projection);
+    await vi.advanceTimersByTimeAsync(300);
+    const sent = new Map(transport.sendPush.mock.calls.map((call) => [call[0], call[2]]));
+    const guestItem = sent.get(guestA).pendingQueue[0];
+    expect(guestItem.text).toBe(cleanBody);
+    expect(guestItem.origin).toEqual({ kind: 'orca', senderLabel: '', displayText: cleanBody, autoBridge: true, autoBridgeBatchCount: 2 });
+    expect(JSON.stringify(sent.get(guestA))).not.toMatch(/backend-session|worker_id/);
     expect(sent.get('own-task')).toEqual(projection);
   });
 

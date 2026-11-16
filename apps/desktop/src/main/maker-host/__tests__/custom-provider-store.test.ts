@@ -615,13 +615,13 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     await updateCustomProvider(config.id, { ...config, runtimes: { pi: runtime } });
     expect((await getCustomProvider(config.id))?.runtimes.pi?.imageApi).toBeUndefined();
   });
-  it('round-trips an explicit standalone Videos API independently of chat wire and hosted tools', async () => {
+  it.each(['xai-videos', 'minimax-videos', 'openai-videos'] as const)('round-trips %s independently of chat wire and hosted tools', async videoApi => {
     mountDb();
     const config = {
       id: 'standalone-videos', name: 'Standalone videos',
       runtimes: { pi: {
         baseUrl: 'http://127.0.0.1:8080/v1', wireProtocol: 'openai-chat' as const,
-        videoApi: 'xai-videos' as const,
+        videoApi,
         models: [{ id: 'private-video', name: 'Video', mode: 'video_generation' }],
       } },
     };
@@ -631,7 +631,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     }).ok).toBe(false);
     await createCustomProvider(config);
     const stored = await getCustomProvider(config.id);
-    expect(stored?.runtimes.pi?.videoApi).toBe('xai-videos');
+    expect(stored?.runtimes.pi?.videoApi).toBe(videoApi);
     expect(stored?.runtimes.pi?.supportsImageGeneration).toBeUndefined();
     const { videoApi: _removed, ...runtime } = config.runtimes.pi;
     await updateCustomProvider(config.id, { ...config, runtimes: { pi: runtime } });

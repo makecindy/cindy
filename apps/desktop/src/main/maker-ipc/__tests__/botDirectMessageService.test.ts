@@ -132,7 +132,11 @@ describe('botDirectMessageService', () => {
       { id: 'studio::bot-c', name: 'Mimi', deviceId: 'studio', deviceName: 'Studio', local: false, session_id: 'studio::c-main' },
       { id: 'studio::bot-d', name: 'New', deviceId: 'studio', deviceName: 'Studio', local: false },
     ] });
-    expect(await service.listAgents('ordinary')).toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+    expect(await service.listAgents('ordinary')).toMatchObject({ ok: true, agents: expect.arrayContaining([
+      { id: 'bot-a', name: expect.any(String), local: true, session_id: 'a-main' },
+      { id: 'bot-b', name: 'Dash Bot', local: true, session_id: 'b-main' },
+    ]) });
+    expect(await service.listAgents('missing')).toMatchObject({ ok: false });
   });
 
   it('sends a group owner a real assistant message in their private chat, with stable retry receipts', async () => {

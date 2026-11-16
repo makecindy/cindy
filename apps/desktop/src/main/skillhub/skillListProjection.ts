@@ -9,6 +9,7 @@ import type { StoredInstall } from './registry/types';
 import type { ProjectInput, ScanResult, Skill, SkillFileEntry, SkillScope, SkillKind, SourceReport } from './scanner';
 import { inspectLocalSkillTarget, isPluginManagedSkillPath } from './localSkillTarget';
 import { isIgnoredSkillPackagePath } from './packageIgnore';
+import { workingDirComparisonKey } from '../../shared/workingDir';
 
 /** Read-only list projection. Runs only in the bounded discovery process. */
 export interface SkillListProjectionInput {
@@ -105,12 +106,15 @@ export function buildSkillList(input: SkillListProjectionInput): ScanResult {
   const { projects, listed, managedSkillRoots, builtInSkills, registryEntries, disabledPaths, userDataDir, appDataDir } = input;
   const projectByWorkingDir = new Map<string, ProjectInput>();
   const projectsByCanonicalWorkingDir = new Map<string, ProjectInput[]>();
+  const projectPathKey = (value: string) => workingDirComparisonKey(path.normalize(value))!;
   const workingDirs: string[] = [];
   for (const p of projects) {
     if (p.projectRoot && path.isAbsolute(p.projectRoot)) {
+      const lexicalRoot = projectPathKey(p.projectRoot);
+      if (projectByWorkingDir.has(lexicalRoot)) continue;
       workingDirs.push(p.projectRoot);
-      projectByWorkingDir.set(path.normalize(p.projectRoot), p);
-      const canonicalRoot = realPathOrNormalized(p.projectRoot);
+      projectByWorkingDir.set(lexicalRoot, p);
+      const canonicalRoot = projectPathKey(realPathOrNormalized(p.projectRoot));
       const aliases = projectsByCanonicalWorkingDir.get(canonicalRoot) ?? [];
       aliases.push(p);
       projectsByCanonicalWorkingDir.set(canonicalRoot, aliases);
@@ -118,9 +122,9 @@ export function buildSkillList(input: SkillListProjectionInput): ScanResult {
   }
   const projectForWorkingDir = (workingDir?: string): ProjectInput | undefined => {
     if (!workingDir) return undefined;
-    const lexicalMatch = projectByWorkingDir.get(path.normalize(workingDir));
+    const lexicalMatch = projectByWorkingDir.get(projectPathKey(workingDir));
     if (lexicalMatch) return lexicalMatch;
-    const canonicalMatches = projectsByCanonicalWorkingDir.get(realPathOrNormalized(workingDir));
+    const canonicalMatches = projectsByCanonicalWorkingDir.get(projectPathKey(realPathOrNormalized(workingDir)));
     return canonicalMatches?.length === 1 ? canonicalMatches[0] : undefined;
   };
 

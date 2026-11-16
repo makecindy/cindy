@@ -27,12 +27,13 @@ const h = vi.hoisted(() => ({
   appDataDir: '',
   isPackaged: false,
   dataOwnerId: null as string | null,
+  generation: 1,
 }));
 
 // Mirror this fixture's changing profile/owner through the Host-neutral ports.
 vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => h.userDataDir, userDataPath: (...parts: string[]) => path.join(h.userDataDir, ...parts) }));
 configureOwnerContext({
-  read: () => ({ dataOwnerId: h.dataOwnerId, generation: 1, boundaryPending: false }),
+  read: () => ({ dataOwnerId: h.dataOwnerId, generation: h.generation, boundaryPending: false }),
   fallbackBaseDir: () => h.userDataDir,
 });
 
@@ -71,7 +72,7 @@ vi.mock('../../appSessionState.js', async (importOriginal) => {
     getActiveAppSession: () => ({
       mode: h.dataOwnerId ? ('local' as const) : ('signed-out' as const),
       dataOwnerId: h.dataOwnerId,
-      generation: 1,
+      generation: h.generation,
     }),
   };
 });
@@ -94,6 +95,12 @@ function fixture(): {
   const home = path.join(root, 'home');
   fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
   vi.spyOn(os, 'homedir').mockReturnValue(home);
+  // The Codex CLI home honours `CODEX_HOME` (#8258). An ambient absolute value
+  // would bypass the mocked home and point the reconcile flow at the developer's
+  // real `~/.codex/auth.json` — the refresh write in the local-reconnect case
+  // would overwrite that live credential with a test token. Neutralise it here;
+  // the CODEX_HOME cases below override it.
+  vi.stubEnv('CODEX_HOME', '');
   const systemAuth = path.join(home, '.codex', 'auth.json');
   fs.writeFileSync(
     systemAuth,
@@ -152,6 +159,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   h.dataOwnerId = null;
+  h.generation = 1;
   h.appDataDir = '';
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -265,6 +273,10 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     const releaseStat = fs.statSync(releaseAuth);
     const releaseBindingBytes = fs.readFileSync(releaseBinding);
     h.dataOwnerId = 'owner-a';
+    // P06 unit regression: successive public auth reads used to republish the
+    // same Dev snapshot. Keep all source/owner checks but publish identical bytes
+    // only once; the fixture previously checked source isolation, not repeat writes.
+    const copySnapshot = vi.spyOn(fs.promises, 'copyFile');
     const adapter = new DesktopCodexAuthAdapter();
     // This fixture owns credentials only; asset preparation has separate boundary tests.
     vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
@@ -285,6 +297,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
       accessToken: 'release-token',
       accountId: 'acct-release',
     });
+    expect(copySnapshot).toHaveBeenCalledTimes(1);
     expect(fs.statSync(localAuth).ino).not.toBe(fs.statSync(releaseAuth).ino);
     // Codex may refresh its local auth.json in place; the Release credential must
     // remain byte-for-byte unchanged because Dev receives a snapshot, not a link.
@@ -310,6 +323,57 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.readFileSync(releaseBinding)).toEqual(releaseBindingBytes);
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(true);
   });
+
+  // P06 unit: the public token read must not accept an equal snapshot after an
+  // owner/login/authorization change during comparison, nor grant scope after
+  // its Promise resolves. Earlier isolation cases had no comparison await.
+  it.each(['owner', 'generation', 'login-start', 'login-cancel', 'authorization', 'owner-after-compare'] as const)(
+    'rejects snapshot reuse across a changing authorization boundary (%s)', async (change) => {
+      const { releaseAuth, localAuth } = fixture();
+      fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+      fs.writeFileSync(releaseAuth, JSON.stringify({ tokens: { access_token: 'fixture-token', account_id: 'fixture-account' } }));
+      bindReleaseOpenAi(releaseAuth);
+      h.dataOwnerId = 'owner-a';
+      const adapter = new DesktopCodexAuthAdapter();
+      expect(await adapter.getAccessToken()).toBe('fixture-token');
+      const binding = path.join(h.userDataDir, 'native-provider-auth.json');
+      const originalBinding = fs.readFileSync(binding, 'utf8');
+      const originalLocal = fs.statSync(localAuth, { bigint: true });
+      const copy = vi.spyOn(fs.promises, 'copyFile');
+      const open = fs.promises.open.bind(fs.promises);
+      let comparisonReady = false;
+      vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (String(args[0]) === localAuth) {
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, 'close').mockImplementation(async () => {
+            await close();
+            comparisonReady = true;
+            if (change === 'owner') h.dataOwnerId = 'owner-b';
+            if (change === 'generation') h.generation++;
+            if (change === 'login-start') Object.assign(adapter, { pendingLogin: {} });
+            if (change === 'login-cancel') Object.assign(adapter, { loginCancellationOpen: true });
+            if (change === 'authorization') fs.writeFileSync(binding, `${originalBinding}\n`);
+          });
+        }
+        return handle;
+      });
+      const lstat = fs.lstatSync;
+      vi.spyOn(fs, 'lstatSync').mockImplementation((...args) => {
+        const stat = lstat(...args);
+        if (change === 'owner-after-compare' && comparisonReady && String(args[0]) === localAuth) {
+          comparisonReady = false;
+          queueMicrotask(() => { h.dataOwnerId = 'owner-b'; });
+        }
+        return stat;
+      });
+      await expect(adapter.getAccessToken()).rejects.toThrow('Release auth snapshot authorization changed');
+      expect(copy).not.toHaveBeenCalled();
+      expect(fs.statSync(localAuth, { bigint: true }).ino).toBe(originalLocal.ino);
+      expect(fs.readFileSync(binding, 'utf8')).toBe(change === 'authorization' ? `${originalBinding}\n` : originalBinding);
+      expect(JSON.parse(fs.readFileSync(binding, 'utf8')).openai).toBe('owner-a');
+    },
+  );
 
   // 测试价值（unit）：Release 凭证上挂着升级前 profile 留下的残留硬链(nlink>1)时,只读
   // Dev 的 mode:'local' 重连也不能去清 —— 清残留硬链 = 换掉 Release 的 inode(写操作),
@@ -438,6 +502,45 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(useCli ? systemAuth : releaseAuth);
   });
 
+  // #8258 / unit: 本机 Codex CLI 凭证发现必须跟随用户设置的 CODEX_HOME。
+  // 依据:提报者把 codex login 放在 CODEX_HOME=E:\CodexHome / NixOS 自定义目录,
+  // 发现路径写死 ~/.codex 导致「使用本机 Codex 账号」找不到登录态;现有覆盖只测
+  // ~/.codex 常规位置。最小失败输入:packaged + CODEX_HOME=自定义绝对目录。
+  describe('本机 Codex CLI 凭证发现跟随 CODEX_HOME (#8258)', () => {
+    it('packaged 下 CODEX_HOME 为绝对路径时使用该目录的 auth.json', () => {
+      const { systemAuth } = fixture();
+      const customHome = path.join(path.dirname(systemAuth), 'custom-codex-home');
+      fs.mkdirSync(customHome, { recursive: true });
+      h.isPackaged = true;
+      vi.stubEnv('CODEX_HOME', customHome);
+
+      expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(
+        path.join(customHome, 'auth.json'),
+      );
+    });
+
+    it('不继承环境里的 CODEX_HOME:凭证路径始终落在 fixture 的临时目录里', () => {
+      // 开发者的环境里若带着绝对路径 CODEX_HOME,凭证发现就会指到真实目录 ——
+      // 之后的 reconcile 写入会覆盖开发者真正的 auth.json。
+      const decoy = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-ambient-codex-home-'));
+      dirs.push(decoy);
+      vi.stubEnv('CODEX_HOME', decoy);
+      const { systemAuth } = fixture();
+      h.isPackaged = true;
+      expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(systemAuth);
+    });
+
+    it('相对路径与空值不生效,回退 ~/.codex(不按 cwd 解析)', () => {
+      const { systemAuth } = fixture();
+      h.isPackaged = true;
+      vi.stubEnv('CODEX_HOME', 'relative-codex-home');
+      expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(systemAuth);
+
+      vi.stubEnv('CODEX_HOME', '');
+      expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(systemAuth);
+    });
+  });
+
   // #9316 / unit: a junction to the Release profile must preserve the same-entry
   // read-only exception; making a snapshot there would replace Release auth itself.
   it.each([false, true])(
@@ -489,7 +592,8 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
       }),
     );
     const releaseBytes = fs.readFileSync(releaseAuth);
-    const releaseStat = fs.statSync(releaseAuth);
+    // NTFS file IDs can exceed Number.MAX_SAFE_INTEGER; compare exact identities.
+    const releaseStat = fs.statSync(releaseAuth, { bigint: true });
     const releaseBinding = path.join(h.userDataDir, 'native-provider-auth.json');
     h.dataOwnerId = 'owner-a';
     const adapter = new DesktopCodexAuthAdapter();
@@ -500,8 +604,10 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     });
     await expect(adapter.getAccessToken()).resolves.toBeNull();
     expect(fs.readFileSync(releaseAuth)).toEqual(releaseBytes);
-    expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
-    expect(fs.statSync(releaseAuth).ino).not.toBe(fs.statSync(systemAuth).ino);
+    expect(fs.statSync(releaseAuth, { bigint: true }).ino).toBe(releaseStat.ino);
+    expect(fs.statSync(releaseAuth, { bigint: true }).ino).not.toBe(
+      fs.statSync(systemAuth, { bigint: true }).ino,
+    );
     expect(fs.existsSync(releaseBinding)).toBe(false);
   });
 

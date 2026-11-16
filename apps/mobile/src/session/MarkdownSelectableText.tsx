@@ -24,12 +24,15 @@ type MarkdownSelectableTextProps = Omit<ComponentProps<typeof Text>, 'selectionC
   adjustVerticalAlignment?: boolean;
   /** Include larger inline headings when aligning a combined text run. */
   alignmentTextStyles?: readonly StyleProp<TextStyle>[];
+  /** Native paragraph layout is also needed while text is not yet selectable. */
+  paragraphLayout?: boolean;
 };
 
 export function MarkdownSelectableText({
   allowIosUITextView = true,
   adjustVerticalAlignment = true,
   alignmentTextStyles,
+  paragraphLayout = false,
   selectable,
   ...rest
 }: MarkdownSelectableTextProps) {
@@ -40,7 +43,7 @@ export function MarkdownSelectableText({
   const quoteCtx = useContext(SelectionQuoteContext);
   const renderedLinesRef = useRef<readonly string[]>([]);
   const fontScale = useWindowFontScale();
-  if (selectable && allowIosUITextView && Platform.OS === 'ios') {
+  if ((selectable || paragraphLayout) && allowIosUITextView && Platform.OS === 'ios') {
     const typography = [rest.style, ...(alignmentTextStyles ?? [])]
       .map((style) => StyleSheet.flatten(style) ?? {});
     const top = selectableTextVerticalOffset(typography, rest.allowFontScaling === false ? 1 : fontScale);
@@ -51,7 +54,7 @@ export function MarkdownSelectableText({
       return (
         <UITextView
           maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
-          selectable
+          selectable={selectable === true}
           uiTextView
           {...rest}
           style={alignedStyle}
@@ -61,11 +64,13 @@ export function MarkdownSelectableText({
     return (
       <UITextView
         maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
-        selectable
+        selectable={selectable === true}
         uiTextView
         {...rest}
         style={alignedStyle}
         onTextLayout={(e) => {
+          // Paragraph layout keeps this UIKit root mounted during streaming.
+          // Cache then too: enabling selection alone does not emit a new layout.
           // uitextview 自定义 spec 的 lines 是 string[](RN 核心 Text 是对象数组),
           // 双形态防御:确保缓存的是纯字符串行。
           const rawLines = e.nativeEvent.lines as unknown as readonly (string | { text: string })[];
@@ -74,7 +79,7 @@ export function MarkdownSelectableText({
         }}
         // menuActionLabel / onMenuAction 是 uitextview patch 的扩展 prop,不在
         // RN Text props 里,组件内部私有附加(经 {...rest} 透传到原生组件)。
-        {...{
+        {...(selectable ? {
           menuActionLabel: selectionQuoteMenuLabel(),
           sideChatMenuActionLabel: quoteCtx.askInSideChat ? i18n.t('session.sideChat.title') : '',
           onMenuAction: (event: { nativeEvent: { target: number; start: number; end: number } }) => {
@@ -83,7 +88,7 @@ export function MarkdownSelectableText({
           onSideChatMenuAction: (event: { nativeEvent: { target: number; start: number; end: number } }) => {
             handleSelectionQuoteMenuAction(event, renderedLinesRef.current, quoteCtx, 'side-chat');
           },
-        }}
+        } : {})}
       />
     );
   }
@@ -91,10 +96,13 @@ export function MarkdownSelectableText({
 }
 
 /**
- * iOS 可选中块里的嵌套 span:必须也是 UITextView(经库内祖先上下文渲染为原生 child),
- * 混入 RN Text 会破坏原生文本树。仅由 renderInline 在「块可选中且 iOS」时使用。
+ * iOS UIKit 文本树的嵌套 span 必须也是 UITextView(经库内祖先上下文渲染为原生 child)。
+ * 可选正文及需要段落排版的流式正文共用此家族，不能与 RN Text 根混用。
  */
-export function MarkdownSelectableSpan(props: ComponentProps<typeof Text>) {
+export function MarkdownSelectableSpan(props: ComponentProps<typeof Text> & {
+  paragraphIndent?: number;
+  paragraphFirstLineIndent?: number;
+}) {
   const cancelShareSelectionRowTap = useCancelShareSelectionRowTap();
   const handlePress = props.onPress
     ? (event: GestureResponderEvent) => {

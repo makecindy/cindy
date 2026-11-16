@@ -67,12 +67,13 @@ function RunningDot() {
 
 function StepStatusMark({ plan, step }: { plan: BotGroupPlanView; step: BotGroupPlanStepView }) {
   const { colors } = useTheme();
-  if (step.status === 'done') return <CompanionFadeIn play={started(plan) && plan.status !== 'done'} distance={0} scaleFrom={0.6} duration={motionDuration.fast}>
+  const state = stepState(plan, step);
+  if (state === 'skipped') return <CircleMinus size={iconSize.md} color={colors.textTertiary} />;
+  if (state === 'done') return <CompanionFadeIn play={started(plan) && plan.status !== 'done'} distance={0} scaleFrom={0.6} duration={motionDuration.fast}>
     <CircleCheck size={iconSize.md} color={colors.textSecondary} />
   </CompanionFadeIn>;
-  if (stepState(plan, step) === 'running') return <RunningDot />;
-  if (step.status === 'skipped') return <CircleMinus size={iconSize.md} color={colors.textTertiary} />;
-  if (step.status === 'failed') return <CircleAlert size={iconSize.md} color={colors.errorText} />;
+  if (state === 'running') return <RunningDot />;
+  if (state === 'failed') return <CircleAlert size={iconSize.md} color={colors.errorText} />;
   return <CircleDashed size={iconSize.md} color={colors.textTertiary} />;
 }
 
@@ -155,7 +156,7 @@ function BotGroupTalkCard({ plan, identityFor, deviceId, online, pending, onEdit
   const foldable = turns.end - turns.start < plan.steps.length;
   const shown = foldable && !expanded ? plan.steps.slice(turns.start, turns.end) : plan.steps;
   const current = plan.steps.find(step => step.position === plan.currentStep);
-  const statusKey = (step: BotGroupPlanStepView) => step.status === 'done' ? 'groupChat.plan.stepSpoken'
+  const statusKey = (step: BotGroupPlanStepView) => stepState(plan, step) === 'done' ? 'groupChat.plan.stepSpoken'
     : stepStatusKey(plan, step) ?? 'groupChat.plan.talkPending';
   const progress = plan.status === 'done' ? t('groupChat.plan.queueEnded')
     : plan.status === 'waiting' ? t(current?.status === 'failed' ? 'groupChat.plan.stepFailed' : 'groupChat.plan.queueWaiting')
@@ -410,7 +411,7 @@ export function BotGroupPlanFollowUpRow({ plan, followUp, identityFor, deviceId,
         </View>}
       <View style={[styles.followUpActions, Platform.OS !== 'ios' && styles.followUpActionsBounded, stackedActions && styles.followUpActionsStacked]}>
         <BotGroupPlanActions onStacked={() => setStackedActions(true)} actions={[
-          { label: t(plan?.kind === 'talk' ? 'groupChat.timeline.endTalk' : 'groupChat.timeline.endPlan'), busy: pending === 'dismiss', disabled: busy || !online, onPress: onEnd, testID: 'botGroup.followUp.end' },
+          ...(plan?.kind ? plan.canStop === true : plan?.canStop !== false) ? [{ label: t(plan?.kind === 'talk' ? 'groupChat.timeline.endTalk' : 'groupChat.timeline.endPlan'), busy: pending === 'dismiss', disabled: busy || !online, onPress: onEnd, testID: 'botGroup.followUp.end' }] : [],
           { label: t(failed ? 'groupChat.timeline.retryStep' : 'groupChat.timeline.continuePlan'), tone: 'primary', busy: pending === primary, disabled: busy || !online, onPress: failed ? onRetry : onContinue, testID: `botGroup.followUp.${primary}` },
         ]} />
       </View>

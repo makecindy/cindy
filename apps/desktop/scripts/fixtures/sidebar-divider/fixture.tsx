@@ -7,10 +7,12 @@ function Specimen() {
   const hidden = ctx.case === 'hidden';
   const peek = ctx.case === 'peek';
   const wallpaper = ctx.case === 'wallpaper';
+  const visibility = ctx.case === 'transparent' ? 1 : wallpaper || ctx.case === 'half' ? 0.5 : 0;
   useWallpaperBackground({
     background: wallpaper ? 'linear-gradient(#808080, #808080)' : undefined,
-    desktopBackground: !wallpaper,
-    visibility: ctx.case === 'transparent' ? 1 : wallpaper ? 0.5 : 0,
+    // Mirrors WallpaperSettingsProvider: 0% keeps the original backdrop.
+    desktopBackground: !wallpaper && visibility > 0,
+    visibility,
     blur: 0,
     reducedMotion: true,
   });

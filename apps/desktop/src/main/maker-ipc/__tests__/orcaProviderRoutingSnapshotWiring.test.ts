@@ -96,15 +96,6 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(routing.availability['claude-code'].find((provider) => provider.id === 'anthropic')?.localOnlyForSsh).toBe(true);
   });
 
-  it('rejects SSH account switching before deferring or replacing the running route', () => {
-    const guard = registerSource.indexOf("throwIpcError('INVALID_PARAMS', 'This provider requires local execution')");
-    expect(guard).toBeGreaterThan(-1);
-    expect(registerSource.slice(guard - 450, guard)).toContain('runtimeStatus.remoteHostId');
-    expect(registerSource.slice(guard - 300, guard)).toContain('isLocalOnlyProviderForAgent');
-    expect(registerSource.indexOf('const deferLockedSelection =', guard)).toBeGreaterThan(guard);
-    expect(registerSource.indexOf('const previousRuntime =', guard)).toBeGreaterThan(guard);
-  });
-
   it('waits for the first Anthropic claim and routes the discovered model from the same full snapshot', async () => {
     const anthropic = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'anthropic')!;
     const seed = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd')!.models[

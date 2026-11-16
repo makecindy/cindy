@@ -1,12 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { appIconArtwork } from '@cindy/maker-shared/app-icons';
 import defaultIconUrl from '@/../../resources/icon-dock.png?url';
-import catUrl from '@/../../resources/app-icons/cat.png?url';
-import markDarkUrl from '@/../../resources/app-icons/mark-dark.png?url';
-import markLightUrl from '@/../../resources/app-icons/mark-light.png?url';
-import wordmarkDarkUrl from '@/../../resources/app-icons/wordmark-dark.png?url';
-import wordmarkLightUrl from '@/../../resources/app-icons/wordmark-light.png?url';
 import { useIsDarkMode } from '@/components/markdown/useIsDarkMode';
 import { Tip } from '@/components/ui/tooltip';
 import { getInitialAppearanceSettings } from '@/hooks/useFontSettings';
@@ -15,13 +11,22 @@ import { toast } from '@/lib/toast';
 import { APP_ICONS, normalizeAppearanceSettings, type AppIcon } from '../../../shared/appearanceSettings';
 import { appearanceSettings } from './AppearanceSection.settings-search';
 
-/** Same Dock-ready files main passes to app.dock.setIcon (Apple icon grid baked in). */
-const PREVIEWS: Record<AppIcon, { light: string; dark: string }> = {
-  default: { light: defaultIconUrl, dark: defaultIconUrl },
-  mark: { light: markLightUrl, dark: markDarkUrl },
-  wordmark: { light: wordmarkLightUrl, dark: wordmarkDarkUrl },
-  cat: { light: catUrl, dark: catUrl },
-};
+/**
+ * Same Dock-ready files main passes to app.dock.setIcon (Apple icon grid baked
+ * in). The glob follows the shared icon list, so a new icon needs no edit here.
+ */
+const ARTWORK_URLS = import.meta.glob<string>('../../../../resources/app-icons/*.png', {
+  eager: true,
+  query: '?url',
+  import: 'default',
+});
+
+function previewUrl(icon: AppIcon, dark: boolean): string {
+  const artwork = appIconArtwork(icon, dark);
+  return artwork
+    ? (ARTWORK_URLS[`../../../../resources/app-icons/${artwork}.png`] ?? '')
+    : defaultIconUrl;
+}
 
 /**
  * macOS Dock icon choice. The 44px tile and its 1.5px inset ring use the 12px
@@ -113,7 +118,7 @@ export function DockIconPicker() {
               )}
             >
               <img
-                src={isDark ? PREVIEWS[icon].dark : PREVIEWS[icon].light}
+                src={previewUrl(icon, isDark)}
                 alt=""
                 draggable={false}
                 className="size-full"

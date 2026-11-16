@@ -295,8 +295,6 @@ export function InterruptedTasksResumeDialog({ suspended = false, onPendingChang
 
   return (
     <ConfirmDialog
-      presentation="standard"
-      cancelFirst
       autoFocusConfirm
       open={open && !suspended}
       onOpenChange={handleOpenChange}

@@ -4,9 +4,11 @@ import { MetadataContinuityReader, PROVIDER_GROUP_REMOTE_CHANNEL, readProviderMe
   type Envelope, type InvokeResultPayload, type MetadataContinuityScope } from '@cindy/device-link';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
+import { createLogger } from '../logger.js';
 import { MODEL_CATALOG_READ_CHANNELS } from '../../shared/controlledModelCatalog.js';
 import { PROVIDER_GROUP_IPC } from '../../shared/providerGroup.js';
 
+const log = createLogger('device-link:metadata');
 const READ_CHANNELS = new Set<string>(MODEL_CATALOG_READ_CHANNELS);
 
 const TEMPORARY_CODES = new Set([
@@ -28,6 +30,24 @@ export function isTemporaryProviderMetadataFailure(error: unknown): boolean {
   if (code === 'UNAVAILABLE') return !/Fast policy/i.test(String(row.message ?? ''));
   const status = row.statusCode ?? row.status;
   return status === 0 || status === 429 || (typeof status === 'number' && status >= 500 && status < 600);
+}
+
+/**
+ * The target answered, but does not support this read (older version / allowlist / argument
+ * shape). That is a capability of the target, not a permission transition: it must not fence the
+ * target's other in-flight reads ("Metadata scope changed" bursts for sibling catalog reads).
+ */
+function isCapabilityRefusal(error: unknown): boolean {
+  const row = error && typeof error === 'object' ? error as { code?: unknown; message?: unknown } : {};
+  const code = row.code === undefined || row.code === 'IPC_ERROR'
+    ? typeof row.message === 'string' ? /^\[([A-Z_]+)\]/.exec(row.message)?.[1] : undefined : row.code;
+  return typeof code === 'string'
+    && /^(DEVICE_LINK_)?CHANNEL_NOT_ALLOWED$|^INVALID_PARAMS$|^UNKNOWN_CHANNEL$|(^|_)(UNSUPPORTED|NOT_SUPPORTED)$/.test(code);
+}
+/** Non-temporary failures retire the target's snapshots; capability refusals and denials are handled apart. */
+function retireAfterFailure(target: string, error: unknown): void {
+  if (isTemporaryProviderMetadataFailure(error) || isCapabilityRefusal(error)) return;
+  invalidateProviderMetadataContinuity(target, { keepDenialNotifications: true });
 }
 
 const reader = new MetadataContinuityReader({ retryable: isTemporaryProviderMetadataFailure });
@@ -55,13 +75,15 @@ const directoryReader = new MetadataContinuityReader({
 });
 let generation = 0;
 const TARGET_GENERATION_CAP = 1024;
-const targetGenerations = new Map<string, number>();
-function ensureTargetGeneration(target: string): number | undefined {
+interface TargetGeneration { permission: number; source: number }
+const targetGenerations = new Map<string, TargetGeneration>();
+function ensureTargetGeneration(target: string): TargetGeneration | undefined {
   const existing = targetGenerations.get(target);
   if (existing !== undefined) return existing;
   if (targetGenerations.size >= TARGET_GENERATION_CAP) return undefined;
-  targetGenerations.set(target, 0);
-  return 0;
+  const initial = { permission: 0, source: 0 };
+  targetGenerations.set(target, initial);
+  return initial;
 }
 /** Directory mutations are independent of provider/group snapshots. */
 let directoryGeneration = 0;
@@ -99,7 +121,16 @@ export function handleProviderMetadataSourcePush(env: Envelope): boolean {
   if (env.kind !== 'push' || !env.src) return false;
   const payload = env.payload as { channel?: unknown } | undefined;
   if (!payload || typeof payload.channel !== 'string' || !PROVIDER_METADATA_SOURCE_CHANGE_CHANNELS.has(payload.channel)) return false;
-  invalidateProviderMetadataContinuity(env.src);
+  if (readProviderMetadataContinuity((env.payload as { payload?: unknown }).payload)?.remainingMs === 0) {
+    invalidateProviderMetadataContinuity(env.src);
+    return true;
+  }
+  // A source refresh retires old results, but is not itself a permission change.
+  // Keep the distinction so a read without a renderer subscription can recover.
+  invalidateLiveFences(env.src);
+  const current = targetGenerations.get(env.src);
+  if (current) targetGenerations.set(env.src, { ...current, source: current.source + 1 });
+  clearTargetDenials(env.src);
   return true;
 }
 
@@ -282,7 +313,7 @@ function clearTargetDenials(target: string): void {
 function fenceTarget(target: string): void {
   invalidateLiveFences(target);
   const current = targetGenerations.get(target);
-  if (current !== undefined) targetGenerations.set(target, current + 1);
+  if (current !== undefined) targetGenerations.set(target, { permission: current.permission + 1, source: current.source });
 }
 
 function isDeniedError(error: unknown): boolean {
@@ -339,7 +370,7 @@ export function invalidateProviderMetadataContinuity(
 function scope(
   allowed: () => boolean = () => true,
   target?: string,
-  options?: { liveFallback?: boolean },
+  options?: { liveFallback?: boolean; ignoreSourceChanges?: boolean },
 ): LiveOnlyScope {
   const owner = activeOwnerScopeKey();
   const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
@@ -348,7 +379,7 @@ function scope(
     && activeOwnerScopeKey() === owner
     && getClientEndpoint('deviceLinkApiBaseUrl') === endpoint && generation === epoch
     && targetCurrent && allowed();
-  const targetEpoch = target === undefined ? 0 : ensureTargetGeneration(target);
+  const targetEpoch = target === undefined ? undefined : ensureTargetGeneration(target);
   if (target !== undefined && targetEpoch === undefined) {
     // The bounded target registry is full. A live read may still use the real
     // authority, but must not mint a cache entry or claim a continuity budget.
@@ -365,7 +396,8 @@ function scope(
   return {
     key: JSON.stringify([owner, endpoint, epoch, target, targetEpoch]),
     current: () => scopeCurrent(target === undefined
-      || (targetGenerations.has(target) && targetGenerations.get(target) === targetEpoch)),
+      || (targetGenerations.get(target)?.permission === targetEpoch?.permission
+        && (options?.ignoreSourceChanges || targetGenerations.get(target)?.source === targetEpoch?.source))),
     // Live direct RPCs should refresh metadata even when cloud signaling is down.
     signalingAvailable: () => true,
   };
@@ -408,6 +440,59 @@ export async function invokeProviderMetadataContinuity(
   const groupView = channel === PROVIDER_GROUP_REMOTE_CHANNEL && args.length === 1
     && !!args[0] && typeof args[0] === 'object' && (args[0] as { action?: unknown }).action === 'view';
   if (!READ_CHANNELS.has(channel) && !groupView) return request();
+  const permissionScope = scope(allowed, target, { ignoreSourceChanges: true });
+  const originalSource = targetGenerations.get(target)?.source;
+  const captured = scopeFacts(target);
+  try {
+    return await readProviderMetadataOnce(target, channel, args, request, allowed);
+  } catch (error) {
+    // Retry only an obsolete successful read, once, within the original authority.
+    // Never classify arbitrary scope/denial errors as transient or reuse its result.
+    if (!(error instanceof Error) || error.message !== 'Metadata scope changed') throw error;
+    if (!permissionScope.current() || originalSource === targetGenerations.get(target)?.source) {
+      logScopeChange(target, channel, captured, allowed);
+      throw error;
+    }
+    return readProviderMetadataOnce(target, channel, args, request, allowed);
+  }
+}
+
+interface ScopeFacts { owner: string; endpoint: unknown; generation: number; permission?: number; source?: number }
+function scopeFacts(target: string): ScopeFacts {
+  const epoch = targetGenerations.get(target);
+  return { owner: activeOwnerScopeKey(), endpoint: getClientEndpoint('deviceLinkApiBaseUrl'), generation,
+    permission: epoch?.permission, source: epoch?.source };
+}
+const scopeLogAt = new Map<string, number>();
+/**
+ * Diagnostics only: which fence rejected a metadata read. Field logs showed bursts of
+ * "Metadata scope changed" (concurrent catalog reads, ~every 3h40m) without a visible cause.
+ * Debug level, one line per target per minute; no identifiers beyond the short target.
+ */
+function logScopeChange(target: string, channel: string, before: ScopeFacts, allowed: () => boolean): void {
+  const now = Date.now();
+  if (now - (scopeLogAt.get(target) ?? 0) < 60_000) return;
+  if (scopeLogAt.size >= 256) scopeLogAt.clear();
+  scopeLogAt.set(target, now);
+  const after = scopeFacts(target);
+  let allowedNow: boolean | 'threw';
+  try { allowedNow = allowed(); } catch { allowedNow = 'threw'; }
+  const changed = [
+    isAppSessionBoundaryPending() && 'session-boundary',
+    after.owner !== before.owner && 'owner',
+    after.endpoint !== before.endpoint && 'endpoint',
+    after.generation !== before.generation && 'all-targets',
+    after.permission !== before.permission && 'target-fence',
+    after.source !== before.source && 'source',
+    allowedNow !== true && 'local-precondition',
+  ].filter(Boolean);
+  log.debug(`metadata read fenced target=${target.slice(0, 8)} channel=${channel} by=${changed.join(',') || 'unknown'}`);
+}
+
+async function readProviderMetadataOnce(
+  target: string, channel: string, args: unknown[], request: () => Promise<InvokeResultPayload>,
+  allowed: () => boolean,
+): Promise<InvokeResultPayload> {
   const resource = createHash('sha256').update(JSON.stringify([target, channel, args])).digest('hex');
   const capturedScope = scope(allowed, target, { liveFallback: true });
   if (capturedScope.liveOnly) {
@@ -426,7 +511,7 @@ export async function invokeProviderMetadataContinuity(
       } catch (error) {
         if (!capturedScope.current() || fence.invalidated) throw new Error('Metadata scope changed');
         if (isDeniedError(error)) notifyTargetDenial(target, resource);
-        else if (!isTemporaryProviderMetadataFailure(error)) invalidateProviderMetadataContinuity(target, { keepDenialNotifications: true });
+        else retireAfterFailure(target, error);
         throw error;
       }
       if (!capturedScope.current() || fence.invalidated) throw new Error('Metadata scope changed');
@@ -434,7 +519,7 @@ export async function invokeProviderMetadataContinuity(
         if (isDeniedError(result.error)) notifyTargetDenial(target, resource);
         else {
           const failure = Object.assign(new Error(result.error.message), { code: result.error.code });
-          if (!isTemporaryProviderMetadataFailure(failure)) invalidateProviderMetadataContinuity(target, { keepDenialNotifications: true });
+          retireAfterFailure(target, failure);
         }
         return result;
       }
@@ -506,10 +591,7 @@ export async function invokeProviderMetadataContinuity(
         || (value as { providerContinuity?: { stale?: unknown } }).providerContinuity?.stale === true,
       remainingMs: result.remainingMs } } : value };
   } catch (error) {
-    if (capturedScope.current() && !isProviderMetadataBudgetExpired(error)
-      && !isTemporaryProviderMetadataFailure(error)) {
-      invalidateProviderMetadataContinuity(target, { keepDenialNotifications: true });
-    }
+    if (capturedScope.current() && !isProviderMetadataBudgetExpired(error)) retireAfterFailure(target, error);
     if (failure) return failure;
     throw error;
   }

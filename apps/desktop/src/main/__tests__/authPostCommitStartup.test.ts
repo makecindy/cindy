@@ -2,10 +2,17 @@ import { readFileSync } from 'node:fs';
 import { createSourceFile, isFunctionDeclaration, ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { StableOwnerPostCommitCoordinator } from '../stableOwnerPostCommit';
+import * as hostTools from '../mcp-integrations/hostToolCaller.js';
+import type { StableOwnerPostCommitTask } from '../stableOwnerPostCommit';
 
 // Run the production auth entrypoints with the real post-commit coordinator,
 // without loading Electron, credentials or another account's files.
 const source = readFileSync(new URL('../authManager.ts', import.meta.url), 'utf8');
+const bootstrap = readFileSync(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
+const stableTaskStart = bootstrap.indexOf('authManager.setStableOwnerPostCommitTask(');
+const stableTaskCode = transpileModule(bootstrap.slice(stableTaskStart, bootstrap.indexOf('\n});', stableTaskStart) + 4), {
+  compilerOptions: { target: ScriptTarget.ES2022 },
+}).outputText;
 const parsed = createSourceFile('authManager.ts', source, ScriptTarget.ES2022, true);
 function productionFunction(name: string): string {
   const declaration = parsed.statements.find(
@@ -85,6 +92,94 @@ function setup(mode: 'cloud' | 'local' | 'signed-out', passive = false) {
 }
 
 describe('authentication does not wait for optional plugin provisioning', () => {
+  it.each([false, true])('keeps first-owner assets behind the login fence (copy fails: %s)', async (fails) => {
+    // #10334: the SQLite/native-auth handoff alone let the cloud runtime start
+    // without local provider keys or installed plugins. Exercise the real auth
+    // commit; a failed asset copy must retain ownership without publishing ready.
+    let committed = false;
+    let claimed = false;
+    let assets = false;
+    let visible: boolean | undefined;
+    const rollback = vi.fn();
+    const deps = {
+      isPassiveSharedUserDataInstance: () => false,
+      withGhostSkillProjectionOwnerCommit: async (hooks: {
+        prepareCommit(): Promise<void>; commit(): Promise<unknown>;
+      }) => {
+        await hooks.prepareCommit();
+        const result = await hooks.commit();
+        visible = assets;
+        return result;
+      },
+      reserveCloudOwnerData: () => ({
+        finalize: () => { claimed = committed; return claimed; }, rollback,
+      }),
+      adoptLocalProfileAssets: async () => {
+        expect(claimed).toBe(true);
+        if (fails) throw new Error('asset copy unavailable');
+        assets = true;
+      },
+      app: { getPath: () => 'test-only-user-data' },
+      BRAND_IDENTITY: { dbFilePrefix: 'cindy', executableName: 'cindy' },
+      hasExclusiveSharedLegacyUserDataAccess: () => true,
+      acquireWindowsPackagedInstanceBarrier: vi.fn(),
+      requestStableOwnerPostCommit: vi.fn(),
+    };
+    const compiled = transpileModule(
+      `${productionFunction('withCloudOwnerCommit')}\nreturn withCloudOwnerCommit;`,
+      { compilerOptions: { target: ScriptTarget.ES2022 } },
+    ).outputText;
+    const commit = new Function(...Object.keys(deps), compiled)(...Object.values(deps));
+    const result = commit({ previousOwnerId: 'local-v1', nextOwnerId: 'first-cloud',
+      prepareTransition: async () => {}, commit: () => { committed = true; } });
+    if (fails) {
+      await expect(result).rejects.toThrow('asset copy unavailable');
+      expect(visible).toBeUndefined();
+      expect(deps.requestStableOwnerPostCommit).not.toHaveBeenCalled();
+    } else {
+      await result;
+      expect(visible).toBe(true);
+    }
+    expect(rollback).not.toHaveBeenCalled();
+  });
+
+  // Unit, #9801: the real stable-owner callback must recover the public provider
+  // factory after a same-owner generation bump. Existing startup tests did not
+  // call Host tools; one live provider previously remained HOST_NOT_READY.
+  it.each([
+    { liveMaker: true, pending: false, ownerId: 'owner', ready: true },
+    { liveMaker: false, pending: false, ownerId: 'owner', ready: false },
+    { liveMaker: true, pending: true, ownerId: 'owner', ready: false },
+    { liveMaker: true, pending: false, ownerId: 'other-owner', ready: false },
+  ])('rebinds only live same-owner Host providers after commit: %j', async scenario => {
+    const original = { kind: 'plugin' as const, pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 };
+    const recovered = { ...original, dataOwnerId: scenario.ownerId, ownerGeneration: 2 };
+    const result = { content: [{ type: 'text' as const, text: 'history' }] };
+    const runtime = { describe: () => ({ name: 'list_sessions', category: 'history' }),
+      call: vi.fn(async () => result), close: vi.fn(async () => {}) };
+    hostTools.setHostToolProviders([{ name: 'cindy_helper', toClaudeSdkConfig: () => null, toHostTools: () => runtime }], original);
+    let task!: StableOwnerPostCommitTask;
+    const deps = {
+      authManager: { setStableOwnerPostCommitTask: (callback: StableOwnerPostCommitTask) => { task = callback; } },
+      isAppSessionBoundaryPending: () => scenario.pending,
+      activeOwnerScopeKey: () => 'recovered-scope', getActiveAppSession: () => ({ dataOwnerId: scenario.ownerId }),
+      getActiveDataOwnerPushStamp: () => recovered, getMakerIfReady: () => scenario.liveMaker ? {} : null,
+      refreshHostToolProviderOwner: hostTools.refreshHostToolProviderOwner,
+      builtinPostCommitStep: { run: async () => 'deferred' },
+    };
+    try {
+      new Function(...Object.keys(deps), stableTaskCode)(...Object.values(deps));
+      await task({ reason: 'same-owner-projection-recovery', scopeKey: 'recovered-scope', dataOwnerId: scenario.ownerId });
+      hostTools.refreshHostToolProviderOwner(original);
+      const current = hostTools.createHostToolRuntime('cindy_helper', recovered);
+      expect(current !== null).toBe(scenario.ready);
+      if (current) {
+        expect(await current.call('list_sessions')).toEqual(result);
+        expect(hostTools.createHostToolRuntime('cindy_helper', original)).toBeNull();
+      } else expect(runtime.call).not.toHaveBeenCalled();
+    } finally { hostTools.setHostToolProviders([], original); }
+  });
+
   it.each([false, true])('settles the startup boundary push even with notify=false (teardown fails: %s)', async (fails) => {
     // The main window sees the pending push while its initialize IPC is in flight.
     // Its auth service deliberately ignores the later IPC result, so Main must
@@ -133,7 +228,6 @@ describe('authentication does not wait for optional plugin provisioning', () => 
 
   it('returns through the real startup IPC while the owner task remains pending', async () => {
     const run = setup('cloud');
-    const bootstrap = readFileSync(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
     const start = bootstrap.indexOf("ipcMain.handle('auth:initialize',");
     const end = bootstrap.indexOf("ipcMain.handle('auth:get-login-state',", start);
     const compiled = transpileModule(bootstrap.slice(start, end), {
@@ -141,6 +235,7 @@ describe('authentication does not wait for optional plugin provisioning', () => 
     }).outputText;
     let initialize!: () => Promise<unknown>;
     const deps = {
+      hostClientMode: false,
     authRefreshOverride: null,
       ipcMain: {
         handle: (_channel: string, handler: typeof initialize) => {

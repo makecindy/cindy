@@ -111,6 +111,11 @@ export function createChatHandler(deps) {
           end();
           return;
         }
+        if (event.type === 'input_receipt' && event.inputClientId === clientId
+          && event.status === 'interrupted') {
+          end();
+          return;
+        }
         if (event.inputClientId === clientId && event.turnScope !== 'background'
           && !isTurnContinuationBoundaryEvent(event)
           && (event.type === 'done' || isTerminalTurnErrorEvent(event))) end();

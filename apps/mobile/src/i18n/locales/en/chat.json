@@ -1,6 +1,42 @@
 {
-  "teammateProcess": {"retry": "Retry",
-    "empty": "No process details to show for this reply","unavailable": "Could not load process details","record":"Activity","operations":"Activity log","elapsed":"Working for {{duration}}","took":"Took {{duration}}","processing":"Working","worked":"Activity","thinking":"Thinking","thought":"Thought","failed_one":"{{count}} call failed","failed_other":"{{count}} calls failed","separator":", ","actions":{"running":{"read":"Reading files","edit":"Editing files","search":"Searching","web":"Browsing the web","command":"Running commands","tools":"Using tools","delegate":"Delegating work","plan":"Updating the plan"},"done":{"read":"Read files","edit":"Edited files","search":"Searched","web":"Browsed the web","command":"Ran commands","tools":"Used tools","delegate":"Delegated work","plan":"Updated the plan"}}},
+  "teammateProcess": {
+    "retry": "Retry",
+    "empty": "No process details to show for this reply",
+    "unavailable": "Could not load process details",
+    "record": "Activity",
+    "operations": "Activity log",
+    "elapsed": "Working for {{duration}}",
+    "took": "Took {{duration}}",
+    "processing": "Working",
+    "worked": "Activity",
+    "thinking": "Thinking",
+    "thought": "Thought",
+    "failed_one": "{{count}} call failed",
+    "failed_other": "{{count}} calls failed",
+    "separator": ", ",
+    "actions": {
+      "running": {
+        "read": "Reading files",
+        "edit": "Editing files",
+        "search": "Searching",
+        "web": "Browsing the web",
+        "command": "Running commands",
+        "tools": "Using tools",
+        "delegate": "Delegating work",
+        "plan": "Updating the plan"
+      },
+      "done": {
+        "read": "Read files",
+        "edit": "Edited files",
+        "search": "Searched",
+        "web": "Browsed the web",
+        "command": "Ran commands",
+        "tools": "Used tools",
+        "delegate": "Delegated work",
+        "plan": "Updated the plan"
+      }
+    }
+  },
   "imageDelivery": {
     "stored": "Image delivered",
     "failed": "Image delivery failed. Retry transferring the existing image.",
@@ -86,7 +122,7 @@
       "gitWorktreePrune": "Prune worktrees",
       "ghPrList": "List pull requests",
       "ghPrView": "View pull request",
-      "ghPrChecks": "Check pull request checks",
+      "ghPrChecks": "View pull request checks",
       "ghPrStatus": "Check pull request status",
       "ghPrDiff": "View pull request changes",
       "ghPrCreate": "Create pull request",
@@ -153,5 +189,13 @@
     "working": "Working…",
     "worked": "Worked for {{duration}}",
     "workDetails": "Work details"
+  },
+  "subscriptionAccountError": {
+    "limited": "The subscription account used by this task has reached its usage limit. Wait for the limit to reset or choose another model source. This task stays with its assigned account.",
+    "limitedUntil": "The subscription account used by this task has reached its usage limit. Expected reset: {{resetAt}}. Wait until then or choose another model source. This task stays with its assigned account.",
+    "loginRequired": "The subscription account used by this task needs sign-in. Sign in again on the computer running the task, then retry.",
+    "signingIn": "The subscription account used by this task is signing in. Retry after sign-in finishes.",
+    "unavailable": "The subscription account assigned to this task is unavailable for this request. Check the account in model provider settings on the computer running the task, or choose another model source.",
+    "legacy": "The subscription account assigned to this task is unavailable. Check its sign-in and usage status on the computer running the task, or choose another model source. This task does not switch accounts automatically."
   }
 }
