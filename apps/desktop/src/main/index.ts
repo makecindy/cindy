@@ -19,6 +19,7 @@ import { createLogger, initLogger } from './logger.js';
 import { configureUserDataDir, configureAppDataDir } from './userDataPath.js';
 import { configureProjectionBoundaryPassive } from './authBoundaryQuarantine.js';
 import { beginDesktopDevInstance, type DesktopDevMode } from './devStartupStatus.js';
+import { desktopRuntimeKind } from './hostDelegationEnv.js';
 import { ensureSystemBinPathForMachineId } from './deviceId.js';
 import { configureLinuxPasswordStore } from './linuxPasswordStore.js';
 import { recognizeLinuxUserInstallation, linuxUserDesktopName } from './linuxInstallation.js';
@@ -310,6 +311,8 @@ const desktopDevInstanceOptions = (() => {
     isolated: devFlags.profileKind === 'isolated-sandbox',
     isolationIntent: devFlags.isolated,
     profileKind: devFlags.profileKind,
+    // A Node Host on this profile reads it to tell its clients from desktops that open the database.
+    runtime: desktopRuntimeKind(process.env),
   };
 })();
 

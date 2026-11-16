@@ -1458,6 +1458,7 @@ import {
   captureSessionRuntimeControlOwnerEpoch,
   clearSessionRuntimeControlState,
   getPendingSessionRuntimeMutation,
+  applySessionRuntimeOverrideForStart,
   getSessionRuntimeControlSnapshot,
   projectSessionRuntimeControl,
   isPendingSessionRuntimeRouteExplicit,
@@ -8919,18 +8920,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertAccess?.();
     await options.waitForAccountProviderModelsReady();
     assertAccess?.();
-    const runtimeOverride =
-      typeof o.id === 'string' ? getSessionRuntimeControlSnapshot(o.id).effectiveOverride : null;
-    if (runtimeOverride && runtimeOverride.agentKind === o.agentKind) {
-      o.model = runtimeOverride.model;
-      // 供应商组分配到另一台电脑(或经另一台电脑的组改到这里)时，来源由那次分配决定：选中的那台上这个
-      // 供应商的 id 可能与原来不同，不让临时调整盖掉。留在本机的照旧按临时调整。
-      const groupDecidesSource = providerGroupStart !== null
-        && (providerGroupStart.overrideRoute || providerGroupStart.route.agentDeviceId !== null);
-      if (!groupDecidesSource) o.providerId = runtimeOverride.providerId;
-      o.effort = runtimeOverride.effort ?? undefined;
-      o.fastMode = runtimeOverride.fastMode;
-    }
+    // 供应商组分配到另一台电脑(或经另一台电脑的组改到这里)时，来源由那次分配决定：选中的那台上这个
+    // 供应商的 id 可能与原来不同，不让临时调整盖掉。留在本机的照旧按临时调整。
+    const groupDecidesSource = providerGroupStart !== null
+      && (providerGroupStart.overrideRoute || providerGroupStart.route.agentDeviceId !== null);
+    const runtimeOverride = applySessionRuntimeOverrideForStart(o, groupDecidesSource);
     assertAccess?.();
     await applyPersistedReviewMode(o);
     assertAccess?.();

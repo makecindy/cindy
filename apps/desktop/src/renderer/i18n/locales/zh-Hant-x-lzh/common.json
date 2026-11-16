@@ -18964,6 +18964,7 @@
     },
     "errors": {
       "piStartupCloudFile": "發現僅在雲端的指令檔案：{{path}}。它可能使 Pi 啟動等待。請在 Finder 中下載該檔案，確認已儲存在本機後重試；逾時也可能另有原因。",
+      "hostProfileInUseByDesktop": "這份資料正被單獨執行的 Cindy 電腦端使用。請先結束它，再傳送。",
       "openFileFailed": "無從於系統中啟此卷",
       "emptyResponse": "模型無所答。請再試；上下文甚長者，亦可易一模型。",
       "turnFailed": "差事行之未成（模型未報謬誤詳情），請再試。",
