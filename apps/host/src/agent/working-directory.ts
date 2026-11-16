@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { createWorkingDirectoryRecovery, isUnavailableFilesystemError } from '../../../desktop/src/main/maker-ipc/workingDirectoryRecovery.ts';
+import { canRecreateOwnerWorkingDirectory, createWorkingDirectoryRecovery, isUnavailableFilesystemError } from '../../../desktop/src/main/maker-ipc/workingDirectoryRecovery.ts';
+import { isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.ts';
+import { ownerScopedPath } from '../../../desktop/src/main/ownerContext.ts';
 import { createWorkingDirectoryPreflight } from '../../../desktop/src/main/maker-ipc/workingDirectoryPreflight.ts';
 import {
   allocateDialogueRecoveryWorkspace, findDialogueRecoveryWorkspace, requiredDialogueRecoveryRoot,
@@ -44,6 +46,10 @@ export function createHostWorkingDirectory(deps: {
   const recovery = createWorkingDirectoryRecovery({
     stat, mkdir: mkdirWorkingDirectory, realpath: realpathWorkingDirectory,
     requiredRoot: requiredDialogueRecoveryRoot, findFallback: findDialogueRecoveryWorkspace,
+    // As the desktop (register.ts, main e322628568): only the active owner's namespace is recreated,
+    // and nothing during an account switch.
+    canRecreateDirectory: dir => !isAppSessionBoundaryPending()
+      && canRecreateOwnerWorkingDirectory(getUserDataDir(), ownerScopedPath(), dir),
   }, allocateDialogueRecoveryWorkspace, workdirLog);
   const checkWorkDirExists = createWorkingDirectoryPreflight({
     workingDirectoryRecovery: recovery,

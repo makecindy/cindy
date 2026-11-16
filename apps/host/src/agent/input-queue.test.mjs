@@ -38,6 +38,7 @@ import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/cl
 import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionStorageAdapter.ts';
 import { createHostRuntimeSelection, hostRuntimeSelectionQueueHooks, HOST_RUNTIME_SELECTION_QUEUE_MEMBERS, HOST_RUNTIME_START_PORTS } from './runtime-selection.ts';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from '../../../desktop/src/main/maker-ipc/sessionContextWindowBudgetState.js';
+import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { getSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { watchCredentialGrantRevocation } from '../../../desktop/src/main/remote-agent/executor/credentialGrants.ts';
 import { withSessionPermissionChange } from '../../../desktop/src/main/maker-ipc/sessionPermissionChange.ts';
@@ -4058,6 +4059,25 @@ test('a send to a task whose ordinary directory was deleted recreates it and car
   await h.queue.enqueue('gone-dir', { clientId: 'second', text: 'second' });
   await waitFor(() => session.sent.length === 2);
   assert.equal(session.sent[1], 'second', 'the note is carried once');
+});
+
+// Rule (main e322628568, the desktop's working directory recovery: canRecreateOwnerWorkingDirectory):
+// generic recovery recreates a missing directory only inside the active owner's namespace; a folder
+// under another owner's directory in the profile is not recreated. Gap: the Host bound no such check,
+// so a send could recreate an inactive owner's folder.
+test('a send to a task whose directory was in another owner\'s namespace does not recreate it', async t => {
+  // The profile root as the recovery reads it now (other tests in this file reconfigure it).
+  const root = getUserDataDir();
+  const other = path.join(root, 'owners', 'another-owner-key', 'workspace', 'gone');
+  t.after(() => rmSync(path.join(root, 'owners', 'another-owner-key'), { recursive: true, force: true }));
+  const h = createHarness({ statDirectory: undefined,
+    readSession: async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'm', workingDir: other, providerId: 'xd',
+      permissionMode: 'ask', planModeEnabled: false }) });
+  t.after(() => h.queue.dispose());
+  await h.queue.enqueue('other-owner-dir', { clientId: 'first', text: 'first' });
+  await waitFor(() => h.queue.projection('other-owner-dir').error);
+  assert.equal(existsSync(other), false, 'the other owner\'s folder is not recreated');
+  assert.equal(h.maker.getSession('other-owner-dir') ?? null, null, 'no Agent started');
 });
 
 test('a send to a task whose managed worktree is gone fails at once without a recovery directory', async t => {
