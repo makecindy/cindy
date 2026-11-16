@@ -24,7 +24,7 @@ import { writeCodexServerCompaction } from '../../../desktop/src/main/maker-host
 import { readPiGlobalContext } from '../../../../packages/maker-core/src/agents/pi/global-context.ts';
 import { createMainI18n } from '../../../desktop/src/main/i18n.ts';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
-import { resolveHarnessBinaryPath } from './harness-binary.ts';
+import { createHostHarnessBinaries, resolveHarnessBinaryPath } from './harness-binary.ts';
 import { AGENT_BINARY_LAYOUT } from '../../../desktop/src/main/agent-binaries/binaryStatus.ts';
 
 // node:test has no default timeout; an explicit bound turns a hang into a failure.
@@ -337,4 +337,23 @@ test('Claude Code and Codex take the install that reports the highest version, a
     const bundled = installEngine(profile, kind, 'bundled', '0.1.0', { verified: false });
     assert.deepEqual(await resolveHarnessBinaryPath(kind, { userDataDir: profile, bundledCandidates: [bundled] }), { binaryPath: bundled }, kind);
   }
+});
+
+// Rule (desktop prepare: an invalid selection leaves Pi unavailable): the harness status the Host reports
+// (main.ts probe and boot values) is the engine choice it starts with. Gap: the status kept its own scan,
+// which takes the first `.verified` install, so Pi showed ready with an invalid selection and a higher
+// install left. Minimal failing input: status() still scanning after resolve(). tier: unit (fake engines).
+test('once the engines are chosen, an invalid Pi selection is not reported ready', { timeout: TEST_TIMEOUT_MS, skip: binarySkip }, async t => {
+  const profile = binaryProfile(t);
+  installEngine(profile, 'pi', PI_B, '0.72.0');
+  selectPi(profile, '{"schema":1,');
+  const claude = installEngine(profile, 'claude-code', 'a', '2.0.0');
+  const unavailable = [];
+  const binaries = createHostHarnessBinaries({ userDataDir: () => profile, harnessRoot: () => path.join(profile, 'no-bundled'),
+    onUnavailable: (kind, error) => unavailable.push([kind, error]) });
+  // Before an owner runtime chooses, the synchronous scan answers (and sees the leftover Pi install).
+  assert.deepEqual(binaries.status(), { 'claude-code': true, codex: false, pi: true });
+  assert.deepEqual(await binaries.resolve(), { 'claude-code': claude, codex: null, pi: null });
+  assert.deepEqual(binaries.status(), { 'claude-code': true, codex: false, pi: false });
+  assert.deepEqual(unavailable, [['pi', 'pi_selection_invalid']]);
 });

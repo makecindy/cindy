@@ -54,8 +54,7 @@ import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActive
 import { readSessionExtraDirsFromDb, readSessionWritableDirsFromDb } from '../../desktop/src/main/maker-host/session-storage.js';
 import { createProviderGroupStore } from '../../desktop/src/main/provider-group/storeCore.js';
 import { createProviderGroupBindings } from '../../desktop/src/main/provider-group/bindings.js';
-import { AGENT_BINARY_LAYOUT, readCachedBinaryStatus } from '../../desktop/src/main/agent-binaries/binaryStatus.js';
-import { resolveHarnessBinaryPath } from './agent/harness-binary.js';
+import { createHostHarnessBinaries, HOST_HARNESS_KINDS } from './agent/harness-binary.js';
 import { openOwnerDatabase, OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.js';
 import { discoverHostOwner, ownerDatabasePath, resolveHostDataDir, resolveHostRegion, resolveHostAppDataDir } from './profile-path.mjs';
 import { acquireHostRuntimeLease, acquireHostServiceLease, type HostRuntimeLease } from './runtime-lock.js';
@@ -280,47 +279,14 @@ const runtime: RuntimeState = { state: 'uninitialized', owner: null, storage: 'u
 /**
  * The engine binary of each harness, chosen once when an owner runtime starts with the desktop's rules
  * (agent/harness-binary.ts): Pi's explicit selection, then the bundled or dev checkout binary, then the
- * profile install that reports the highest version.
+ * profile install that reports the highest version. The harness status reports the same choice.
  */
-async function resolveHarnessBinaries(): Promise<Record<'claude-code' | 'codex' | 'pi', string | null>> {
-  const entries = await Promise.all(HARNESS_KINDS.map(async (kind) => {
-    const layout = kind === 'claude-code'
-      ? { dir: 'claude-code-bin', file: AGENT_BINARY_LAYOUT['claude-code'].binaryName }
-      : kind === 'codex'
-        ? { dir: 'codex-package-bin', file: AGENT_BINARY_LAYOUT.codex.binaryName }
-        : { dir: 'pi-bin', file: AGENT_BINARY_LAYOUT.pi.binaryName };
-    const resolved = await resolveHarnessBinaryPath(kind, {
-      userDataDir: resolveHostDataDir(),
-      bundledCandidates: [path.join(hostRuntimeLayout().harnessRoot, layout.dir, platformKey, layout.file)],
-    });
-    if (resolved.error) hostLog.warn('harness binary unavailable', { kind, error: resolved.error });
-    return [kind, resolved.binaryPath] as const;
-  }));
-  return Object.fromEntries(entries) as Record<'claude-code' | 'codex' | 'pi', string | null>;
-}
+const harnessBinaries = createHostHarnessBinaries({
+  userDataDir: () => resolveHostDataDir(),
+  harnessRoot: () => hostRuntimeLayout().harnessRoot,
+  onUnavailable: (kind, error) => hostLog.warn('harness binary unavailable', { kind, error }),
+});
 
-/** Dev checkout binaries, in the same order the Desktop dev lookup uses. */
-const HARNESS_KINDS = ['claude-code', 'codex', 'pi'] as const;
-const platformKey = `${process.platform}-${process.arch}`;
-
-function harnessStatus(): Record<string, boolean> {
-  return Object.fromEntries(HARNESS_KINDS.map((kind) => {
-    const layout = kind === 'claude-code'
-      ? { dir: 'claude-code-bin', file: AGENT_BINARY_LAYOUT['claude-code'].binaryName }
-      : kind === 'codex'
-        ? { dir: 'codex-package-bin', file: AGENT_BINARY_LAYOUT.codex.binaryName }
-        : { dir: 'pi-bin', file: AGENT_BINARY_LAYOUT.pi.binaryName };
-    const status = readCachedBinaryStatus({
-      kind,
-      isPackaged: false,
-      userDataDir: resolveHostDataDir(),
-      devCandidates: [
-        path.join(hostRuntimeLayout().harnessRoot, layout.dir, platformKey, layout.file),
-      ].map((candidate) => path.resolve(candidate)),
-    });
-    return [kind, status.binaryReady];
-  }));
-}
 /**
  * The Desktop's `AuthState.user` projection, resolved from the same adopted
  * session so the browser identifies the account exactly like the client does.
@@ -592,11 +558,11 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   const credentials = await createCredentialStore({ userDataDir: dataDir,
     keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined });
   // The engine binaries this owner runtime uses, read once (the model settings use the same ones).
-  const harnessBinaries = await resolveHarnessBinaries();
+  const harnessBinaryPaths = await harnessBinaries.resolve();
   providerConfig = createHostProviderConfig({ profileDir: dataDir, ownerId, credentials,
     gatewayConnected: () => Boolean(currentGateway()),
-    getCodexBinary: () => harnessBinaries.codex,
-    getClaudeBinary: () => harnessBinaries['claude-code'],
+    getCodexBinary: () => harnessBinaryPaths.codex,
+    getClaudeBinary: () => harnessBinaryPaths['claude-code'],
     publish: (channel, payload) => eventHub.publish({ type: 'plugin_push', channel, payload }),
     openExternal: async url => { await openSystemBrowser(url); } });
   await providerConfig.loadCatalog({
@@ -747,9 +713,9 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   hostTools.providers.push(...platformTools.providers);
   hostTools.services.replace(hostTools.providers);
 
-  const claudeBinary = harnessBinaries['claude-code'];
-  const codexBinary = harnessBinaries.codex;
-  const piBinary = harnessBinaries.pi;
+  const claudeBinary = harnessBinaryPaths['claude-code'];
+  const codexBinary = harnessBinaryPaths.codex;
+  const piBinary = harnessBinaryPaths.pi;
   if (claudeBinary || codexBinary || piBinary) {
     const gateway = modelAccess!.gateway;
     // Memory uses the same owner-scoped store Desktop reads, so a task started
@@ -1170,7 +1136,7 @@ const serverDeps = {
       osRelease: os.release(),
       locale: Intl.DateTimeFormat().resolvedOptions().locale,
       voiceInput: profile.voiceInput,
-      harness: harnessStatus(),
+      harness: harnessBinaries.status(),
       auth: account.authenticated && accountUser
         ? { user: accountUser, ownerId: runtime.owner }
         : {},
@@ -1224,7 +1190,7 @@ const serverDeps = {
     runtime,
     remote: deviceLink?.state() ?? { enabled: false, status: 'offline' },
     account,
-    harness: harnessStatus(),
+    harness: harnessBinaries.status(),
     claude: claudeState,
     maker: agentGraph ? { agents: agentGraph.agents } : null,
     sessions: sessionStorage ? (await listActiveSessions(sessionStorage)).length : null,
@@ -1237,12 +1203,12 @@ const serverDeps = {
   }),
   getAuthState: async () => { await startup; return projectAuthState(); },
   agentAuthState: async (kind: 'claude-code' | 'codex' | 'pi') => {
-    if (!HARNESS_KINDS.includes(kind)) throw new Error('Invalid agent kind');
+    if (!HOST_HARNESS_KINDS.includes(kind)) throw new Error('Invalid agent kind');
     if (!agentGraph?.instances[kind]) return { authenticated: false, errorReason: 'runtime_unavailable' };
     return agentGraph.maker.getAgentAuthState(kind);
   },
   agentStatus: async (kind: 'claude-code' | 'codex' | 'pi') => {
-    if (!HARNESS_KINDS.includes(kind)) throw new Error('Invalid agent kind');
+    if (!HOST_HARNESS_KINDS.includes(kind)) throw new Error('Invalid agent kind');
     return agentGraph?.maker.getAgentStatus(kind) ?? { binaryReady: false, binaryPath: null, authReady: false };
   },
   agentAuthInvoke: (channel: string, args: unknown[], caller: string) => {
