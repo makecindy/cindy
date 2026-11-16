@@ -756,6 +756,11 @@ export interface ModelSelectorBaseProps {
   pluginModels?: PluginModelsPickerProps;
   /** 语义同 ModelSelectorContentProps.modelGroups。 */
   modelGroups?: ModelGroupsPickerProps;
+  /**
+   * 选择器每次从关到开时调用一次(打开期间的重渲染不算)。新任务草稿用它向任务所在的另一台电脑重读模型组
+   * (model-groups.md「在另一台电脑上开的新任务」)。
+   */
+  onPickerOpen?: () => void;
   /** Authoritative surface-specific allowlist (e.g. one-shot or vision routes). */
   providersOverride?: ProviderView[];
   providersOverrideState?: { status: 'loading' | 'error' | 'ready'; refresh: () => void };
@@ -4227,6 +4232,7 @@ export function ModelSelector({
   onOpenRequestConsumed,
   pluginModels,
   modelGroups,
+  onPickerOpen,
   providersOverride,
   providersOverrideState,
   taskSourceProvider,
@@ -4342,6 +4348,7 @@ export function ModelSelector({
       const nextOpen = disabled ? false : next;
       const wasOpen = openRef.current;
       openRef.current = nextOpen;
+      if (nextOpen && !wasOpen) onPickerOpen?.();
       if (nextOpen && !wasOpen && providersOverrideState) {
         providersOverrideState.refresh();
       } else if (nextOpen && !wasOpen && !deviceId && !providersOverride) {
@@ -4357,7 +4364,7 @@ export function ModelSelector({
       }
       setOpen(nextOpen);
     },
-    [deviceId, disabled, discovery, resetDiscoveryPresentation, providersOverride, providersOverrideState, sshCodexRefresh],
+    [deviceId, disabled, discovery, resetDiscoveryPresentation, providersOverride, providersOverrideState, sshCodexRefresh, onPickerOpen],
   );
 
   const consumedOpenRequest = useRef(0);

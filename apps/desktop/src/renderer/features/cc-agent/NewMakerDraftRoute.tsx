@@ -1175,6 +1175,11 @@ export function NewMakerDraftRoute() {
     isDeviceLinkDraft && !effectiveRemoteHostId && draft.vendor !== 'orca',
     remoteModelGroupsRetry,
   );
+  // 每次打开模型选择器再向那台读一次，那台刚建或改了模式这里也能看到；不轮询。那台版本较旧、正在读或不是另一台电脑时不读。
+  const remoteModelGroupsStatus = remoteModelGroups.status;
+  const handleModelPickerOpen = useCallback(() => {
+    if (remoteModelGroupsStatus === 'ready' || remoteModelGroupsStatus === 'error') setRemoteModelGroupsRetry((value) => value + 1);
+  }, [remoteModelGroupsStatus]);
   const modelGroupsAllowed = !effectiveRemoteHostId && draft.vendor !== 'orca'
     && (!isDeviceLinkDraft || remoteModelGroups.status === 'ready');
   const { config: localModelGroupsConfig } = useModelGroups(modelGroupsAllowed && !isDeviceLinkDraft);
@@ -7012,6 +7017,7 @@ export function NewMakerDraftRoute() {
                     onUnifiedDraftSelect={handleUnifiedDraftSelect}
                     {...(pluginModelsProps ? { pluginModels: pluginModelsProps } : {})}
                     {...(modelGroupsProps ? { modelGroups: modelGroupsProps } : {})}
+                    onModelPickerOpen={handleModelPickerOpen}
                     selectedFavoriteUid={selectedFavoriteUid}
                     // 「+」菜单协同模式项:普通 Lead 的项目/对话 draft 都可用 —— eligible 由
                     // resolveCollabEntryPolicy 单点判定,与会话视图同一份(issue #1170)。Lead = 当前

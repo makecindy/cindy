@@ -18,7 +18,8 @@
     `agentMeta.pluginModelRoute`（`source: 'model-group'`，与本机写的同一结构）；任务不在 H 上时不写。
   - 结构不对：H 回 `[INVALID_PARAMS] invalid model group request`；其它异常统一 `[INTERNAL] model group request failed`，
     不带出路径或请求内容。C 收到结构不对的回包按读不到处理，不当成「没有模式」。
-- **读取次数与时限**：进入 H 的草稿时 `list` 一次，H 重新上线（重连代次）再读一次，不轮询；`resolve` 只在发送那一刻一次，
+- **读取次数与时限**：进入 H 的草稿时 `list` 一次；之后每次打开模型选择器、H 重新上线（重连代次）、这次没读到而发送被挡下时
+  各再 `list` 一次（旧端不支持或上一次还在读时不发），不轮询；`resolve` 只在发送那一刻一次，
   `commit` 在任务建成交出后一次。均用默认 30 秒 invoke 时限，不进断线重放集合（`resolve` 会登记凭据，`commit` 推进「轮流」）。
 - **旧端**：旧 H 的 allowlist 没有这个 channel，隧道回 `DEVICE_LINK_CHANNEL_NOT_ALLOWED`，C 不显示「模型组」，
   不改用 C 的模式；旧 C 不发这个请求，H 不受影响。不需要能力协商字段。

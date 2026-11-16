@@ -941,6 +941,8 @@ interface ChatInputProps {
   pluginModels?: PluginModelsPickerProps;
   /** 新任务的模型组(只有新任务草稿传)。 */
   modelGroups?: ModelGroupsPickerProps;
+  /** 模型选择器每次打开时调用一次(语义同 ModelSelector 的 onPickerOpen)。 */
+  onModelPickerOpen?: () => void;
   /**
    * 新会话统一模型选择器(model-selector-unified M5)的**选中直通**。
    *
@@ -1418,6 +1420,7 @@ export function ChatInput({
   onUnifiedDraftSelect,
   pluginModels,
   modelGroups,
+  onModelPickerOpen,
   selectedFavoriteUid = null,
 }: ChatInputProps) {
   // Keep the existing draft/editor mounted during a companion call, but reuse
@@ -10168,6 +10171,7 @@ export function ChatInput({
                   {!sessionModelLoading && <ModelSelector
                     openRequest={modelPickerRequest}
                     onOpenRequestConsumed={onModelPickerRequestConsumed}
+                    {...(onModelPickerOpen ? { onPickerOpen: onModelPickerOpen } : {})}
                     sshCodex={sshCodexCatalog}
                     // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或
                     // lastByVendor.model)。面板行的归一化 id 只活在面板内部 —— 从这里递进去

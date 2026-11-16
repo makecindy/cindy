@@ -2,8 +2,8 @@
  * 给同账号的另一台电脑开新任务时，用那台电脑自己的模式(model-groups.md「在另一台电脑上开的新任务」)。
  * 模式列表、选路与提交都经 `model-groups:remote` 问那台；本机的模式与缓存(modelGroupsClient)一概不参与。
  *
- * 读取次数：进入这台电脑的草稿时读一次列表，那台重新上线时、或这次没读到而发送被挡下时再读一次，不轮询；
- * 选路只在发送那一刻问一次。
+ * 读取次数：进入这台电脑的草稿时读一次列表；每次打开模型选择器、那台重新上线时、或这次没读到而发送被挡下时再读一次，
+ * 不轮询；选路只在发送那一刻问一次。
  */
 import { useEffect, useState } from 'react';
 import { isSharedTaskPeer, MODEL_GROUPS_REMOTE_CHANNEL } from '@cindy/device-link';
@@ -49,7 +49,7 @@ export async function readRemoteModelGroups(deviceId: string): Promise<ModelGrou
 
 /**
  * 那台电脑上当前账号的模式；deviceId 为空、共享任务访客或 enabled 为假时为 off。
- * retryEpoch 变了就重读一次(调用方在发送因「这次没读到」被挡下时递增)。
+ * retryEpoch 变了就重读一次(调用方在打开模型选择器、或发送因「这次没读到」被挡下时递增)；已读到的模式在重读期间照常显示。
  */
 export function useRemoteModelGroups(deviceId: string | undefined, enabled: boolean, retryEpoch = 0): RemoteModelGroupsState {
   const target = enabled && deviceId && !isSharedTaskPeer(deviceId) ? deviceId : undefined;

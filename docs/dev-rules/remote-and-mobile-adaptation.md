@@ -208,7 +208,7 @@ SSH 与跨账号组中转不变。实现见 `provider-group/remoteClient.ts`、`
 2026-11-16（[`model-groups.md`](../product-rules/model-groups.md) §3.2）：控制端给同账号被控电脑开新任务时，经
 `model-groups:remote` 读那台的模式并请那台选路。故障半径三问：① 证据只是这一次 `list` / `resolve` 失败或超时，
 不代表那台离线或不支持；只有 `DEVICE_LINK_CHANNEL_NOT_ALLOWED` 才按旧版处理（不显示）。② 恢复只在那台重新上线
-（`useDeviceLinkReconnectEpoch`）时重读一次列表，已读到的保留；`resolve` 失败不重试、不改用本机模式，停下保留输入，
+（`useDeviceLinkReconnectEpoch`）、用户打开模型选择器或发送被挡下时重读一次列表，不轮询，已读到的保留；`resolve` 失败不重试、不改用本机模式，停下保留输入，
 由用户再次发送；不重置 peer、共享 relay 或草稿里的其它状态，`commit` 失败只记日志。③ 回归
 `remoteModelGroups.test.tsx`（旧端隐藏、重读失败保留、从未读到时按读不到）与 `remoteHandler.test.ts`（凭据只认一次）；
 未做真实双电脑断网演练。手机端不提供，SSH 草稿不经这里。协议见
