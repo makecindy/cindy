@@ -41,6 +41,8 @@ export interface SharedQuotaDeps {
   read(shareId: string): Promise<unknown>;
   subscribe(changed: () => void): () => void;
   publish(sources: MenubarSubscriptionInput[]): void;
+  /** Delay before the next read; the quota overview reads more often while a panel is on screen. */
+  pollMs(): number;
 }
 
 interface SharedQuotaReading {
@@ -49,7 +51,10 @@ interface SharedQuotaReading {
   raw: unknown;
 }
 
-/** Visible-panel lease. Closing/revocation clears immediately and rejects every late response. */
+/**
+ * Authorized reads of received shares' quotas, held by the quota overview while it collects.
+ * Closing, revocation or an owner change clears immediately and rejects every late response.
+ */
 export class SharedQuotaReader {
   private revision = 0;
   private open = false;
@@ -186,7 +191,7 @@ export class SharedQuotaReader {
     this.timer = setTimeout(() => {
       this.timer = null;
       this.startRead(revision);
-    }, 5_000);
+    }, this.deps.pollMs());
   }
 
   private publishReadings(): void {
