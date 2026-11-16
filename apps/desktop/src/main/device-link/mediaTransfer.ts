@@ -14,6 +14,8 @@
  *
  * server 端点见 `apps/server/src/services/deviceLinkMedia.ts`;presign 走 `serverApiFetch`
  * (自动带 Bearer + 401 refresh),OSS PUT/GET 走裸 `net.fetch`(绝对 URL,不经 API_BASE)。
+ * presign-put 可选返回 `accelerateUrl`(海外加速兜底,同一 bucket/key):仅在普通地址网络层
+ * 失败后再试一次,见 docs/dev-rules/protocol-compatibility/device-link-oss-accelerate-fallback.md。
  *
  * 大文件策略:
  *   - 上传:≤ STREAM_THRESHOLD 的小媒体读进 Buffer 后整体 PUT(沿用 imageUploadIpc 的成熟路径,
@@ -105,6 +107,11 @@ interface PresignPutResponse {
   putUrl: string;
   key: string;
   expiresAt: string;
+  /**
+   * 可选的加速线路签名地址(同一 bucket、同一 key、同样的签名头)。服务端配置了加速线路
+   * 才返回,只在普通地址两条传输栈都因网络层失败后再试一次;缺省时行为与原来一致。
+   */
+  accelerateUrl?: string;
 }
 interface PresignGetResponse {
   getUrl: string;
@@ -236,6 +243,17 @@ class NonRetriableOssPutError extends Error {
   ) {
     super('non-retriable OSS PUT failure');
     this.name = 'NonRetriableOssPutError';
+  }
+}
+
+/**
+ * 两条传输栈都只因**网络层**失败(连不上、超时、代理拒绝)。只有这种失败才值得换
+ * 加速线路再试;消息与原来的用户可见串一致。
+ */
+class OssPutNetworkUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OssPutNetworkUnavailableError';
   }
 }
 
@@ -413,7 +431,39 @@ async function putBytesToOss(
   // 括号而非冒号:控制端模板本身是「取回 PDF 失败：{{detail}}」,再来一个冒号
   // 会串成两级冒号。中文标点按 i18n/GLOSSARY.md 的 zh-CN 规则用全角。
   const visibleHints = [...new Set(hints)].join(' / ');
-  throw new Error(visibleHints ? `OSS 上传失败（${visibleHints}）` : 'OSS 上传失败');
+  throw new OssPutNetworkUnavailableError(visibleHints ? `OSS 上传失败（${visibleHints}）` : 'OSS 上传失败');
+}
+
+/**
+ * 按 presign 结果上传:先走普通地址(原有两栈回退不变);仅当两栈都因网络层失败、
+ * 且服务端给了加速线路时,用同一份可重放 body 对加速地址再走一轮。签名拒绝、本地读盘
+ * 失败与取消都原样抛出,不碰加速线路——它解决不了这些问题,还要多付加速流量费。
+ */
+async function putPresignedToOss(
+  presigned: Pick<PresignPutResponse, 'putUrl' | 'accelerateUrl'>,
+  bodySource: OssPutBodySource,
+  contentType: string,
+  signal?: AbortSignal,
+  assertCurrent?: () => void,
+): Promise<void> {
+  let accelerateUrl: string | undefined;
+  if (typeof presigned.accelerateUrl === 'string' && presigned.accelerateUrl !== presigned.putUrl) {
+    try {
+      const parsed = new URL(presigned.accelerateUrl);
+      if ((parsed.protocol === 'https:' || parsed.protocol === 'http:') && parsed.hostname) {
+        // 保留原签名地址，不经 URL 重新序列化。
+        accelerateUrl = presigned.accelerateUrl;
+      }
+    } catch { /* 可选地址无法解析时沿用普通线路。 */ }
+  }
+  try {
+    await putBytesToOss(presigned.putUrl, bodySource, contentType, signal, assertCurrent);
+  } catch (err) {
+    if (!accelerateUrl || !(err instanceof OssPutNetworkUnavailableError)) throw err;
+    log.warn(`OSS PUT default route unavailable host=${hostOf(presigned.putUrl)}; retrying via accelerate host=${hostOf(accelerateUrl)}`);
+    await putBytesToOss(accelerateUrl, bodySource, contentType, signal, assertCurrent);
+    log.info(`OSS PUT recovered via accelerate host=${hostOf(accelerateUrl)}`);
+  }
 }
 
 /**
@@ -482,7 +532,8 @@ async function uploadLocalFile(
     } finally { await handle.close(); }
   }
   // A presign creates no object, so a result that arrives after cancellation needs no cleanup.
-  const { putUrl, key } = await abortable(presignPut(size, ext, contentType), opts.signal);
+  const presigned = await abortable(presignPut(size, ext, contentType), opts.signal);
+  const { key } = presigned;
   let sha256: string;
   // One per streaming attempt (a transport retry opens the file again): all must release it.
   const sourcesClosed: Promise<void>[] = [];
@@ -523,8 +574,8 @@ async function uploadLocalFile(
       sha256 = createHash('sha256').update(buf).digest('hex');
       // Buffer body 可重放:换栈重试直接复用同一份字节(fetch 不 transfer ArrayBuffer),
       // 也没有需要释放的底层资源。
-      await putBytesToOss(
-        putUrl,
+      await putPresignedToOss(
+        presigned,
         { create: () => exactArrayBuffer(buf) },
         contentType,
         opts.signal,
@@ -597,7 +648,7 @@ async function uploadLocalFile(
         // 已缓冲的数据,每次换栈上传都漏一个。
         dispose: () => attempts.at(-1)?.dispose(),
       };
-      await putBytesToOss(putUrl, bodySource, contentType, opts.signal, opts.assertCurrent);
+      await putPresignedToOss(presigned, bodySource, contentType, opts.signal, opts.assertCurrent);
       const uploadedAttempt = attempts.at(-1);
       if (!uploadedAttempt || uploadedAttempt.sent !== size) {
         // Cleanup is centralized below so transport and source-stream errors use the same path.
@@ -645,7 +696,8 @@ async function uploadBuffer(
     const uploaded = await uploadThroughAgentNet(size, contentType, async (offset, length) => bytes.subarray(offset, offset + length), opts);
     if (!uploaded) throw new Error('AGENT_NET_MEDIA_TARGET_CHANGED'); return uploaded;
   }
-  const { putUrl, key } = await abortable(presignPut(size, ext, contentType), opts.signal);
+  const presigned = await abortable(presignPut(size, ext, contentType), opts.signal);
+  const { key } = presigned;
   const ab = bytes.buffer.slice(
     bytes.byteOffset,
     bytes.byteOffset + bytes.byteLength,
@@ -653,7 +705,7 @@ async function uploadBuffer(
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   try {
     opts.assertCurrent?.();
-    await putBytesToOss(putUrl, { create: () => ab }, contentType, opts.signal, opts.assertCurrent);
+    await putPresignedToOss(presigned, { create: () => ab }, contentType, opts.signal, opts.assertCurrent);
     opts.assertCurrent?.();
     opts.signal?.throwIfAborted();
   } catch (error) {
