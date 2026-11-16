@@ -30,7 +30,7 @@ import {
 const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor: null as Editor | null, listening: false, stop: vi.fn().mockResolvedValue(undefined),
   cancel: vi.fn().mockResolvedValue(undefined),
   setModel: vi.fn(), selectModel: undefined as undefined | ((id: string) => Promise<void | boolean>), selectEffort: undefined as string | null | undefined, remoteProviders: [] as ProviderView[],
-  setThinkingEnabled: vi.fn(), selectThinking: undefined as undefined | ((enabled: boolean) => void | Promise<void>), thinkingValue: undefined as boolean | undefined,
+  setThinkingEnabled: vi.fn(), selectThinking: undefined as undefined | ((enabled: boolean) => void | boolean | Promise<void | boolean>), thinkingValue: undefined as boolean | undefined,
   switchSessionAgent: vi.fn(),
   localProviders: [] as ProviderView[],
   remoteStatus: 'ready' as 'ready' | 'loading' | 'error',
@@ -158,11 +158,11 @@ it('confirms a thinking preference only after the real session write succeeds', 
   setProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro', true);
   let reject!: (error: Error) => void;
   h.setThinkingEnabled.mockImplementationOnce(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
-  render(<ChatInput {...props} sessionId="thinking-write-test" deviceLinkDeviceId={null}
+  const view = render(<ChatInput {...props} sessionId="thinking-write-test" deviceLinkDeviceId={null}
     runtimeAgentKind="pi" vendorKey="pi" hideRuntimeControls={false}
     initialModel="mimo-v2.6-pro" initialProviderId="mimo-thinking-test" onSend={vi.fn()} />);
   await waitFor(() => expect(h.selectThinking).toBeTypeOf('function'));
-  let failed!: Promise<void>;
+  let failed!: Promise<void | boolean>;
   await act(async () => { failed = Promise.resolve(h.selectThinking!(false)); });
   expect(h.setThinkingEnabled).toHaveBeenCalledWith('thinking-write-test', false);
   expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(true);
@@ -185,9 +185,20 @@ it('confirms a thinking preference only after the real session write succeeds', 
     });
   });
   h.switchSessionAgent.mockRejectedValueOnce(new Error('intent rejected thinking'));
-  await act(async () => { await h.selectThinking!(true); });
+  // #10445 review, unit: a rejected staged write must report failure to the
+  // real picker's reset transaction, not just leave memory unchanged locally.
+  await act(async () => { expect(await h.selectThinking!(true)).toBe(false); });
   expect(h.switchSessionAgent).toHaveBeenCalled();
   expect(h.setThinkingEnabled).toHaveBeenCalledTimes(2);
+  expect(h.thinkingValue).toBe(false);
+  expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(false);
+  view.rerender(<ChatInput {...props} sessionId="thinking-write-test" deviceLinkDeviceId={null}
+    runtimeAgentKind="pi" vendorKey="pi" hideRuntimeControls={false} settingsLocked
+    initialModel="mimo-v2.6-pro" initialProviderId="mimo-thinking-test" onSend={vi.fn()} />);
+  h.switchSessionAgent.mockClear();
+  await act(async () => { expect(await h.selectThinking!(true)).toBe(false); });
+  expect(h.switchSessionAgent).not.toHaveBeenCalled();
+  expect(h.thinkingValue).toBe(false);
   expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(false);
   await act(async () => { setProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro', true); });
 });

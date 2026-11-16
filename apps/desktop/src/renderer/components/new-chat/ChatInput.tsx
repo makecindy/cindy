@@ -10195,7 +10195,7 @@ export function ChatInput({
                         : true
                     }
                     onThinkingChange={async (enabled) => {
-                      if (settingsLocked) return;
+                      if (settingsLocked) return false;
                       // Apply to the runtime (or the next-message intent) before
                       // confirming the preference. A rejected write must leave
                       // the visible switch and its remembered value unchanged.
@@ -10208,14 +10208,14 @@ export function ChatInput({
                             thinking: enabled,
                             axesOnly: true,
                           });
-                          if (!applied) return;
+                          if (!applied) return false;
                         } else {
                           const api = deviceLinkDeviceId
                             ? makerApiForDevice(deviceLinkDeviceId)
                             : window.electronAPI.maker;
                           await api.setThinkingEnabled(sessionId, enabled);
                         }
-                        if (!isSessionScopeCurrent(sessionId, currentSessionIdRef.current)) return;
+                        if (!isSessionScopeCurrent(sessionId, currentSessionIdRef.current)) return false;
                       }
                       if (currentModelAgentKind && effectiveSourceId) {
                         if (modelMemory?.setThinking) {

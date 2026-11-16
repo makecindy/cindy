@@ -423,7 +423,7 @@ describe('MiMo thinking switch in the actual unified picker', () => {
       modelMemory: { getEffort: () => undefined, getFast: () => undefined,
         setEffort: vi.fn(), setFast: vi.fn(), getThinking: () => remembered, setThinking, clearThinking } });
     const flyout = await openRowFlyout('MiMo V2.6 Pro');
-    const toggle = within(flyout).getByRole('switch', { name: 'newChat.modelSelector.thinking' });
+    const toggle = await within(flyout).findByRole('switch', { name: 'newChat.modelSelector.thinking' });
     await act(async () => fireEvent.click(toggle));
     expect(toggle.getAttribute('aria-checked')).toBe('false');
     expect(setThinking).toHaveBeenCalledWith('pi', 'mimo-fixture', 'mimo-v2.6-pro', false);
@@ -510,6 +510,7 @@ describe('MiMo thinking switch in the actual unified picker', () => {
       expect(within(row).queryByRole('button', { name: '自定义' })).toBeNull();
     } else {
       const flyout = await openFlyoutForRow(row);
+      await within(flyout).findByText('Pi');
       expect(within(flyout).queryByRole('switch', { name: 'newChat.modelSelector.thinking' })).toBeNull();
     }
     expect(onThinkingChange).not.toHaveBeenCalled();
