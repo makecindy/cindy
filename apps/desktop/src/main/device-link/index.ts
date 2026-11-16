@@ -2,6 +2,7 @@ import { trackMobileNotification, mobileNotificationDismissalBatch, acknowledgeM
 import { RemoteControlConsent, REMOTE_CONTROL_CONSENT_CHANNEL, consentDeviceName } from './remoteControlConsent.js';
 import { promptRemoteControlConsent } from './remoteControlConsentPrompt.js';
 import { PROVIDER_SHARE_AVAILABILITY_CAPABILITY, readShareAvailabilityCatalog } from './providerShareAvailability.js';
+import { isShareAvailabilityRead, projectShareAvailabilityRead } from './providerShareAvailabilityModels.js';
 import { pluginDeviceSync } from '../cindy-brain/index.js';
 import { PLUGIN_SYNC_CHANNEL } from '../cindy-brain/deviceSyncSlot.js';
 import { PluginSyncAccess } from './pluginSyncAccess.js';
@@ -179,12 +180,13 @@ import { startProviderShareRuntime, stopProviderShareRuntime } from './providerS
 import { refreshProviderShareHost, ownedProviderShareGuestAccess } from './providerShareHost.js';
 import { providerShareGuestPeer, shortDeviceRef } from '@cindy/device-link';
 import { tapRemoteModelCatalogChange } from './broadcast-tap.js';
-import { handleProviderMetadataSourcePush, invokeProviderMetadataContinuity, invalidateProviderMetadataContinuity, onProviderDirectoryDenied, onProviderMetadataDenied } from './providerMetadataContinuity.js';
+import { handleProviderMetadataSourcePush, invokeProviderMetadataContinuity, invalidateProviderMetadataContinuity, onProviderDirectoryDenied, onProviderMetadataDenied, isTemporaryProviderMetadataFailure } from './providerMetadataContinuity.js';
 import { retireControlOffRetention } from './controlOffRetention.js';
 import { bumpDeviceAccessGeneration, noteControllerAccessAllowed, syncRemoteControlAccessGeneration } from './remoteControlAccess.js';
 import {
   isProviderShareRefusal,
   getReceivedShares,
+  providerShareAccessEpoch,
   noteProviderShareAccessFailure,
   PROVIDER_SHARE_UNAVAILABLE_MESSAGE,
   resolveRemoteAgentTargetWhenReady,
@@ -2491,24 +2493,45 @@ export async function remoteBackgroundInvoke(
   const shared = deviceId !== agentDeviceId || parseProviderSharePeer(deviceId)?.role === 'host';
   if (!shared) return backgroundInvokeDevice(deviceId, channel, args, options);
   const peer = parseProviderSharePeer(deviceId);
+  const share = peer?.role === 'host' ? getReceivedShares().find(row =>
+    row.shareId === peer.shareId && row.hostDeviceId === peer.deviceId) : undefined;
+  const accessEpoch = share ? providerShareAccessEpoch(share.shareId) : undefined;
+  const closeEpoch = getRemoteLinkCloseEpoch(deviceId);
+  const readStandbyCatalog = async (): Promise<InvokeResultPayload | null> => {
+    // Presence is not reachability. Only the actual owner's advertised, authorized
+    // standby directory can replace this read; never use it to satisfy live probes.
+    if (!isShareAvailabilityRead(channel, args) || options?.liveProviderMetadata
+      || !share || share.status !== 'active' || share.standbyOnline === undefined) return null;
+    const verify = () => {
+      assertCurrent();
+      options?.preSend?.();
+      assertNotStandby();
+      assertRemoteControlTargetEnabled(deviceId);
+      if (getRemoteLinkCloseEpoch(deviceId) !== closeEpoch) {
+        throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed during catalog read');
+      }
+      if (providerShareAccessEpoch(share.shareId) !== accessEpoch
+        || !getReceivedShares().some(row => row.shareId === share.shareId
+          && row.hostDeviceId === share.hostDeviceId && row.status === 'active')) {
+        throw new DeviceLinkError('ACCESS_REVOKED', PROVIDER_SHARE_UNAVAILABLE_MESSAGE);
+      }
+    };
+    verify();
+    let result: Awaited<ReturnType<typeof readShareAvailabilityCatalog>>;
+    try { result = await readShareAvailabilityCatalog(share.shareId); }
+    catch {
+      verify();
+      return null;
+    }
+    verify();
+    return { ok: true, result: projectShareAvailabilityRead(result, channel, args) };
+  };
   // A delegated M losing a task lease (e.g. after restart) is not proof that
   // O revoked the whole share. Only the actual owner's denial invalidates G's share generation.
-  if (channel === 'maker:provider:list' && peer?.role === 'host') {
-    const share = getReceivedShares().find(row => row.shareId === peer.shareId && row.hostDeviceId === peer.deviceId);
-    if (share?.status === 'active' && share.standbyOnline !== undefined && !(share.hostDeviceOnline ?? share.hostOnline)) {
-      options?.preSend?.();
-      try {
-        assertNotStandby();
-        assertRemoteControlTargetEnabled(deviceId);
-        const result = await readShareAvailabilityCatalog(peer.shareId);
-        assertCurrent();
-        options?.preSend?.();
-        return { ok: true, result };
-      } catch (error) {
-        assertCurrent();
-        return { ok: false, error: { code: 'IPC_ERROR', message: PROVIDER_SHARE_UNAVAILABLE_MESSAGE } };
-      }
-    }
+  if (isShareAvailabilityRead(channel, args) && !options?.liveProviderMetadata
+    && share?.status === 'active' && share.standbyOnline !== undefined && !(share.hostDeviceOnline ?? share.hostOnline)) {
+    return await readStandbyCatalog()
+      ?? { ok: false, error: { code: 'IPC_ERROR', message: PROVIDER_SHARE_UNAVAILABLE_MESSAGE } };
   }
 
   const refusedOwnerShare = peer?.role === 'host' && getReceivedShares().some(share =>
@@ -2521,7 +2544,11 @@ export async function remoteBackgroundInvoke(
     assertCurrent();
     options?.preSend?.();
     if (result.ok) return result;
-    if (!isProviderShareRefusal(result.error.code, result.error.message)) return result;
+    if (!isProviderShareRefusal(result.error.code, result.error.message)) {
+      if (!isTemporaryProviderMetadataFailure(result.error)) return result;
+      // Do not catch a failed scope/cancellation check and enter fallback twice.
+      return readStandbyCatalog().then(fallback => fallback ?? result);
+    }
     noteProviderShareAccessFailure(refusedOwnerShare);
     return { ok: false, error: { code: 'IPC_ERROR', message: PROVIDER_SHARE_UNAVAILABLE_MESSAGE } };
   } catch (error) {
@@ -2529,6 +2556,10 @@ export async function remoteBackgroundInvoke(
     if (error instanceof DeviceLinkError && isProviderShareRefusal(error.code, error.message)) {
       noteProviderShareAccessFailure(refusedOwnerShare);
       throw Object.assign(new Error(PROVIDER_SHARE_UNAVAILABLE_MESSAGE), { code: error.code });
+    }
+    if (isTemporaryProviderMetadataFailure(error)) {
+      const fallback = await readStandbyCatalog();
+      if (fallback) return fallback;
     }
     noteProviderShareAccessFailure();
     throw error;

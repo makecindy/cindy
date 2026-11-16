@@ -75,10 +75,12 @@ vi.mock('../../device-link/providerShareCrossRegion.js', () => ({
   isCrossRegionProviderShareTarget: () => historyCrossRegion(),
   renewCrossRegionProviderShareLink: (...args: unknown[]) => historyOpenLink(...args),
 }));
-const guestPermission = vi.hoisted(() => ({ epoch: 0, status: 'active', listeners: new Set<() => void>() }));
+const guestPermission = vi.hoisted(() => ({ epoch: 0, status: 'active',
+  availabilityOwner: undefined as { hostDeviceId: string; hostOnline: boolean; standbyOnline: boolean } | undefined,
+  listeners: new Set<() => void>() }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({
   parseProviderShareAgentDeviceId: (device: string) => device.startsWith('share:') ? device.slice(6) : null,
-  findReceivedShare: () => ({ status: guestPermission.status }),
+  findReceivedShare: () => ({ status: guestPermission.status, ...guestPermission.availabilityOwner }),
   providerShareAccessEpoch: () => guestPermission.epoch,
   onProviderShareReceivedChanged: (listener: () => void) => { guestPermission.listeners.add(listener); return () => { guestPermission.listeners.delete(listener); }; },
 }));
@@ -1634,7 +1636,7 @@ describe('shared startup lease budget', () => {
       return { ok: true, result: {} };
     });
     const start = createDeviceAgentStarter({
-      remoteInvoke, renewSharedProviderLink: async () => undefined,
+      remoteInvoke, renewSharedProviderLink: peer => historyOpenLink(peer),
       rgPath: () => RG, codexPath: () => 'fixture-never-spawned', mcpProviders: () => [],
       prepareMcpBridge: async (_providers, _logger, ctx) => {
         if (state.localFailure) throw new Error(state.localFailure);
@@ -1661,7 +1663,38 @@ describe('shared startup lease budget', () => {
     }
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
   });
-  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); historyInvoke.mockReset(); historyOpenLink.mockReset(); });
+  afterEach(() => { guestPermission.availabilityOwner = undefined; vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); historyInvoke.mockReset(); historyOpenLink.mockReset(); });
+
+  // #10826, unit: the real starter must reach the authorized M when O's online
+  // heartbeat outlives its link. Existing availability tests never start a task.
+  it.each(['offline', 'denied', 'closed', 'revoked'])(
+    'uses standby only for an online owner transport failure before allocation (%s)', async mode => {
+      const f = fixture(); f.state.ready = true;
+      guestPermission.availabilityOwner = { hostDeviceId: 'owner-o', hostOnline: true, standbyOnline: true };
+      vi.spyOn(availability, 'lookupShareAvailability').mockResolvedValue(null);
+      const allocate = vi.spyOn(availability, 'allocateShareAvailability').mockResolvedValue({
+        deviceId: 'executor-m', generation: f.generation, leaseDurationMs: 30_000,
+      });
+      vi.spyOn(availability, 'reportShareAvailabilityStatus').mockResolvedValue(undefined);
+      historyOpenLink.mockImplementation(async peer => {
+        if (peer !== providerShareHostPeer('startup-budget', 'owner-o')) return;
+        if (mode === 'closed') historyCloseEpoch.mockReturnValue(1);
+        if (mode === 'revoked') guestPermission.epoch++;
+        throw Object.assign(new Error('owner link unavailable'), { code: mode === 'denied' ? 'ACCESS_REVOKED' : 'DEVICE_OFFLINE' });
+      });
+      if (mode === 'offline') {
+        const handle = await f.open('pending');
+        expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.target]);
+        expect(allocate).toHaveBeenCalledExactlyOnceWith('startup-budget', 'pending', 'codex', 'm');
+        expect(f.calls.some(call => call.op === 'allocate')).toBe(false);
+        await handle.close();
+      } else {
+        await expect(f.open('pending')).rejects.toThrow();
+        expect(allocate).not.toHaveBeenCalled();
+        expect(f.calls.some(call => call.op === 'open')).toBe(false);
+      }
+    },
+  );
 
   // Unit, direct-execution authorization contract: prompt preparation can keep
   // a send pending. Existing renewal cases returned its RPC result immediately,

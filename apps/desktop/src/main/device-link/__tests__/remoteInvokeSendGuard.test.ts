@@ -3,6 +3,11 @@ import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
 import { DeviceLinkError, FILE_PEER_CHANNEL, parseProviderSharePeer, providerShareHostPeer, type DeviceLinkClient } from '@cindy/device-link';
 import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery } from '../linkRecovery';
+import { isTemporaryProviderMetadataFailure } from '../providerMetadataContinuity';
+import { isShareAvailabilityRead, projectShareAvailabilityRead } from '../providerShareAvailabilityModels';
+
+vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => 'owner', isAppSessionBoundaryPending: () => false }));
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://example.invalid' }));
 
 // Run the production adapter with only its host dependencies injected, without
 // importing Electron startup. The shared-client tests cover actual queue admission.
@@ -27,6 +32,7 @@ function loadAdapters(overrides: Record<string, unknown>) {
     resolveRemoteAgentTargetWhenReady: async (id: string) => id,
     assertBackgroundLinkAccepted: () => {}, snapshotSubscriptions: () => [],
     getReceivedShares: () => [], isCrossRegionProviderShareTarget: () => false,
+    providerShareAccessEpoch: () => 0, isTemporaryProviderMetadataFailure, isShareAvailabilityRead, projectShareAvailabilityRead,
     isProviderShareRefusal: () => false, noteProviderShareAccessFailure: vi.fn(),
     PROVIDER_SHARE_UNAVAILABLE_MESSAGE: 'unavailable',
     assertNotStandby: () => {},
@@ -47,6 +53,92 @@ function loadAdapters(overrides: Record<string, unknown>) {
 
 const loadRemoteInvoke = (overrides: Record<string, unknown>) => loadAdapters(overrides).remoteInvoke;
 const loadBackgroundInvoke = (overrides: Record<string, unknown>) => loadAdapters(overrides).remoteBackgroundInvoke;
+
+// #10826, unit: the production background adapter must recover the model directory
+// when presence says online but the owner's data link fails. The availability tests
+// cover projection only and mock this adapter; they cannot catch this routing gap.
+const sharePeer = providerShareHostPeer('share', 'host');
+const receivedShare = { shareId: 'share', hostDeviceId: 'host', status: 'active', hostOnline: true, standbyOnline: true };
+const standbyCatalog = { providers: [{ id: 'shared', agents: ['codex'], routing: {}, source: 'user',
+  models: { codex: [{ id: 'model', name: 'Model', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high', supportsFastMode: true }] } }] };
+it.each(['result', 'throw', 'cross-region'])(
+  'reads the authorized standby catalog after an online owner transport failure (%s)', async mode => {
+    const failure = new DeviceLinkError('DEVICE_OFFLINE', 'unreachable');
+    const invoke = vi.fn(async () => {
+      if (mode !== 'result') throw failure;
+      return { ok: false, error: { code: failure.code, message: failure.message } };
+    });
+    const read = vi.fn(async () => standbyCatalog);
+    const remoteBackgroundInvoke = loadBackgroundInvoke({
+      getReceivedShares: () => [receivedShare], readShareAvailabilityCatalog: read,
+      client: { invoke }, crossRegionInvoke: invoke, isCrossRegionProviderShareTarget: () => mode === 'cross-region',
+    });
+    await expect(remoteBackgroundInvoke(sharePeer, 'maker:provider:list', [])).resolves.toEqual({ ok: true, result: standbyCatalog });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledExactlyOnceWith('share');
+  },
+);
+
+it.each(['maker:get-capabilities', 'maker:list-available-agents'])(
+  'keeps the picker usable after its companion read fails (%s)', async channel => {
+    const remoteBackgroundInvoke = loadBackgroundInvoke({
+      getReceivedShares: () => [receivedShare], readShareAvailabilityCatalog: async () => standbyCatalog,
+      client: { invoke: vi.fn(async () => { throw new DeviceLinkError('DEVICE_OFFLINE', 'unreachable'); }) },
+    });
+    const result = await remoteBackgroundInvoke(sharePeer, channel, channel === 'maker:get-capabilities' ? ['codex'] : []);
+    if (channel === 'maker:list-available-agents') expect(result).toEqual({ ok: true, result: ['codex'] });
+    else {
+      expect(result).toMatchObject({ ok: true, result: {
+        availableModels: [{ id: 'model', displayName: 'Model', efforts: ['high'], defaultEffort: 'high' }],
+        permissionModes: [], hasFastMode: false,
+      } });
+      expect(result.result).not.toHaveProperty('supportsSessionAgentSwitch');
+      expect(result.result).not.toHaveProperty('binaryReady');
+      expect(result.result.availableModels[0].supportsFastMode).toBe(false);
+    }
+  },
+);
+
+it.each(['direct success', 'denied', 'unsupported standby', 'other channel', 'live probe', 'invalid agent', 'both fail'])(
+  'preserves the direct outcome without manufacturing a catalog (%s)', async mode => {
+    const result = mode === 'direct success' ? { ok: true, result: { providers: [] } }
+      : { ok: false, error: { code: mode === 'denied' ? 'FORBIDDEN' : 'DEVICE_OFFLINE', message: 'unavailable' } };
+    const read = vi.fn(async () => { throw new Error('standby unavailable'); });
+    const remoteBackgroundInvoke = loadBackgroundInvoke({
+      getReceivedShares: () => [{ ...receivedShare, standbyOnline: mode === 'unsupported standby' ? undefined : true }],
+      readShareAvailabilityCatalog: read, client: { invoke: vi.fn(async () => result) },
+    });
+    await expect(remoteBackgroundInvoke(sharePeer,
+      mode === 'other channel' ? 'maker:agent:status' : mode === 'invalid agent' ? 'maker:get-capabilities' : 'maker:provider:list',
+      mode === 'invalid agent' ? ['unknown'] : [], mode === 'live probe' ? { liveProviderMetadata: true } : undefined))
+      .resolves.toEqual(result);
+    expect(read).toHaveBeenCalledTimes(mode === 'both fail' ? 1 : 0);
+  },
+);
+
+it.each(['account', 'permission', 'closed', 'cancelled', 'disabled'])(
+  'rejects a late standby catalog after %s changes', async change => {
+    let changed = false;
+    let release!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const read = vi.fn(async () => { await waiting; return standbyCatalog; });
+    const remoteBackgroundInvoke = loadBackgroundInvoke({
+      getReceivedShares: () => [receivedShare], readShareAvailabilityCatalog: read,
+      client: { invoke: vi.fn(async () => { throw new DeviceLinkError('DEVICE_OFFLINE', 'unreachable'); }) },
+      activeOwnerScopeKey: () => changed && change === 'account' ? 'other' : 'owner',
+      providerShareAccessEpoch: () => Number(changed && change === 'permission'),
+      getRemoteLinkCloseEpoch: () => Number(changed && change === 'closed'),
+      assertRemoteControlTargetEnabled: () => { if (changed && change === 'disabled') throw new Error('disabled'); },
+    });
+    const pending = remoteBackgroundInvoke(sharePeer, 'maker:provider:list', [], {
+      preSend: () => { if (changed && change === 'cancelled') throw new Error('cancelled'); },
+    }).then((result: unknown) => result, (error: unknown) => error);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    changed = true;
+    release();
+    expect(await pending).toBeInstanceOf(Error);
+  },
+);
 
 // Unit: compile all production adapters together, not just the former public body.
 // Minimal regression: a live recovery probe must reach RPC exactly once and bypass metadata snapshots.
