@@ -18,6 +18,7 @@ const links: Record<string, ProviderSetupLink> = {
   openhubs: key('https://openhubs.zhidemai.com/console/api-keys'),
   hinoki: account('https://app.hinoki.security'),
   'ollama-cloud': key('https://ollama.com/settings/keys'),
+  atlascloud: key('https://console.atlascloud.ai/api-keys'),
   // Official Claude CLI guide directs users here to sign in and create a key.
   agnes: account('https://platform.agnes-ai.com/'),
   deepseek: key('https://platform.deepseek.com/api_keys'),

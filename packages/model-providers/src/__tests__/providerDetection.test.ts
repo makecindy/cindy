@@ -94,6 +94,21 @@ describe('catalog mapping independent of desktop platform', () => {
       expect(matchOfficialProviders(fake, presets)).toEqual([]);
     }
   });
+  // Atlas Cloud exposes native Messages at the host root and Chat at /v1; the preset keeps
+  // both bases so discovery and every harness bind to the official origin only.
+  it('keeps Atlas Cloud selectable with native Messages for Claude Code and Chat elsewhere', () => {
+    const url = 'https://api.atlascloud.ai/v1';
+    const preset = presets.find(p => p.id === 'atlascloud')!;
+    expect(matchOfficialProviders(url, presets).map(p => p.id)).toEqual(['atlascloud']);
+    expect(bindDetectedProvider(preset, 'claude-code', url)?.runtimes['claude-code'])
+      .toMatchObject({ baseUrl: 'https://api.atlascloud.ai', wireProtocol: 'anthropic-messages' });
+    for (const agent of ['codex', 'pi'] as const) {
+      expect(bindDetectedProvider(preset, agent, url)?.runtimes[agent]).toMatchObject({ baseUrl: url, wireProtocol: 'openai-chat' });
+    }
+    for (const fake of [url.replace('.ai', '.ai.evil.test'), url + '/unregistered', url + '?token=fake']) {
+      expect(matchOfficialProviders(fake, presets)).toEqual([]);
+    }
+  });
   it.each(['cn', 'global'] as const)('classifies the entire active catalog without region filtering: %s', region => {
     expect(presets.length).toBeGreaterThan(28);
     for (const p of sortPresetsForRegion(presets, region)) {
