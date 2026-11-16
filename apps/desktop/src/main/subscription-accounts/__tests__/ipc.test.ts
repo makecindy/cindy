@@ -112,6 +112,9 @@ import { mapIpcErrorToI18nKey } from '../../../shared/ipcError.js';
 import { legacyCodexAccountCanRun, openAiRouteAllowsModel, setLegacyCodexAccountPaused } from '../legacyAccountAccess.js';
 import {
   normalizePlacementFile,
+  accountProviderId,
+  createSubscriptionProvider,
+  placeSubscriptionAccount,
   readMergedLegacyCodexAccountId,
   readOpenAiMergedLegacyAccountsIfReadable,
   readSharedOpenAiLegacyAccountsIfReadable,
@@ -120,6 +123,19 @@ import {
 } from '../placement.js';
 registerSubscriptionAccountsIpc();
 const invoke = (command: unknown) => h.handlers.get(SUBSCRIPTION_ACCOUNTS_CHANNEL)!({}, command);
+
+// Unit: CLI-origin accounts were rejected by the actual placement writer. Moving out and back
+// must persist like any account while the official CLI home and history remain unchanged.
+it.each(['anthropic', 'openai'] as const)('persists CLI-origin %s placement without relocating its home', async kind => {
+  const directory = accountDirectory(kind, 'default');
+  const provider = await createSubscriptionProvider(kind, 'default', 'Account', () => '12345678');
+  expect(accountProviderId(kind, 'default')).toBe(provider);
+  expect(normalizePlacementFile({ accounts: h.placement, providers: h.created }).providers[provider].account).toBe('default');
+  expect(accountDirectory(kind, 'default')).toBe(directory);
+  await placeSubscriptionAccount(kind, 'default', kind);
+  expect(accountProviderId(kind, 'default')).toBe(kind);
+  expect(accountDirectory(kind, 'default')).toBe(directory);
+});
 
 // #10286 review: preserve the exact reset target through the real owner push
 // adapter; ordinary pool/load events retain their original payload.
@@ -150,6 +166,34 @@ beforeEach(() => {
   h.execute.mockReset().mockResolvedValue({ accounts: [] });
   h.availability.mockReset().mockResolvedValue(true);
   h.sessionRead.mockReset().mockResolvedValue({ providerId: 'anthropic', state: 'legacy' });
+});
+
+// Unit, duplicate-account regression: one account can retain two native homes. The production
+// placement entry must commit their move/take-out together; prior cases only moved one home.
+it('moves and takes out all homes of an account atomically, including failed writes', async () => {
+  const first = `cindy-${accountOwnerPrefix()}-11111111-1111-4111-8111-111111111111`;
+  const second = `cindy-${accountOwnerPrefix()}-22222222-2222-4222-8222-222222222222`;
+  h.placement = { [`openai:${first}`]: 'openai', [`openai:${second}`]: 'openai' };
+  const before = structuredClone(h.placement);
+  h.placementWriteFails = true;
+  await expect(placeSubscriptionAccount('openai', [first, second], 'openai-target')).rejects.toThrow('placement write unavailable');
+  expect(h.placement).toEqual(before);
+  await expect(createSubscriptionProvider('openai', first, 'Account', () => '12345678', undefined, [second]))
+    .rejects.toThrow('placement write unavailable');
+  expect(h.placement).toEqual(before);
+  expect(h.created).toEqual({});
+  h.placementWriteFails = false;
+  let writes = 0;
+  h.beforeWrite = () => { writes++; };
+  await placeSubscriptionAccount('openai', [first, second], 'openai-target');
+  expect(h.placement).toEqual({ [`openai:${first}`]: 'openai-target', [`openai:${second}`]: 'openai-target' });
+  expect(writes).toBe(1);
+  const target = await createSubscriptionProvider('openai', first, 'Account', () => '12345678', undefined, [second]);
+  expect(h.placement).toEqual({ [`openai:${first}`]: target, [`openai:${second}`]: target });
+  expect(h.created[target].account).toBe(first);
+  expect(writes).toBe(2);
+  await expect(placeSubscriptionAccount('openai', [first, '../escape'], 'openai')).rejects.toThrow('Account cannot be moved');
+  expect(writes).toBe(2);
 });
 
 describe('legacy Codex account upgrade', () => {
@@ -321,11 +365,11 @@ describe('legacy Codex account upgrade', () => {
     await restoreAutoMergedLegacyCodexAccounts(connections, { disable, isDisabled });
     expect(readMergedLegacyCodexAccountId('openai-e')).toBeUndefined();
     expect(readMergedLegacyCodexAccountId('openai-d')).toBe(ids.d);
-    // Persisted placement never moves the CLI default account or accepts a malformed entry.
+    // CLI-origin profiles can move like every other account; malformed entries still fail closed.
     expect(normalizePlacementFile({ accounts: {
       'openai:default': 'openai-a', 'openai:../escape': 'openai-a', [`openai:${ids.a}`]: 'Not An Id',
       [`anthropic:${ids.a}`]: 'claude-work',
-    } })).toEqual({ accounts: { [`anthropic:${ids.a}`]: 'claude-work' }, providers: {}, strategies: {} });
+    } })).toEqual({ accounts: { 'openai:default': 'openai-a', [`anthropic:${ids.a}`]: 'claude-work' }, providers: {}, strategies: {} });
   });
 });
 describe('old automatically pooled account restoration', () => {
