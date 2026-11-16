@@ -4,7 +4,7 @@
 
 桌面标题旁的 PR 标识悬停显示信息浮窗，点击立即打开并保持浮窗；浮窗保持打开时再次点击标识会打开 PR 网页并收起浮窗，按 Escape 或点击外部可关闭。也可以点浮窗内的链接打开 PR 网页，键盘可从标识按 Tab 进入链接。缺少 gh／登录态时，安装和登录入口也放在浮窗内。
 
-PR 卡片与任务关联由 Agent 根据任务意图主动调用工具建立（或由用户在界面手动添加：右键消息中的 GitHub PR / GitLab MR 链接，在「打开方式」菜单选择「添加到顶栏」）。当前任务创建、承接处理 PR，或用户明确要求关联／跟进时使用显式入口；只是查询状态、引用历史修复或粘贴链接时不关联。消息正文、工具结果、导入消息、历史回填和消息重算均不自动建立关联。关联只用于显示状态，不登记自动化，也不推断唯一 owner；展示卡片与开始后台跟进是独立操作。
+PR 卡片与任务关联由 Agent 根据任务意图主动调用工具建立（或由用户在界面手动添加：右键消息中的 GitHub PR / GitLab MR 链接，在「打开方式」菜单选择「挂到顶栏」）。当前任务创建、承接处理 PR，或用户明确要求关联／跟进时使用显式入口；只是查询状态、引用历史修复或粘贴链接时不关联。消息正文、工具结果、导入消息、历史回填和消息重算均不自动建立关联。关联只用于显示状态，不登记自动化，也不推断唯一 owner；展示卡片与开始后台跟进是独立操作。
 
 桌面、手机、伙伴卡和任务摘要沿现有 `association_source=explicit` 且 `removed_at IS NULL` 的投影展示。升级保留已有未移除关联（包括历史 `association_origin=message`），不批量清理、不修改历史 migration。消息编辑、清空和回退不再重算 PR 关联；移除或恢复通过显式管理入口完成。attach 不复活已移除项，必须显式 restore。固定最多三条，工具列表不受顶栏数量限制。
 
@@ -209,4 +209,4 @@ GitHub 批次与重连补查使用独立执行队列，普通 Webhook 入队与�
 状态超过 90 秒未更新也恢复原频率，避免界面未打开时长期沿用过期的健康结论。
 这个健康状态只覆盖服务内部积压与已检测故障，不能证明 GitHub 发出的每个请求都已到达入口。
 
-消息链接右键入口仅对完整 HTTPS PR/MR 页面提供「添加到顶栏」；子页面链接先规范化为基础 URL，已关联项显示「已在顶栏」并禁用。已移除项仍需管理入口恢复。关联写到任务所属电脑，设备不明时不猜测为本机。实现见 [useOpenWithMenu.tsx](../../apps/desktop/src/renderer/components/chat/useOpenWithMenu.tsx)，回归见 [UserMessageUrlLink.test.tsx](../../apps/desktop/src/renderer/components/chat/__tests__/UserMessageUrlLink.test.tsx)。
+消息链接右键入口仅对完整 HTTPS PR/MR 页面提供「挂到顶栏」；子页面链接先规范化为基础 URL，已关联项显示「已在顶栏」并禁用。已移除项仍需管理入口恢复。关联写到任务所属电脑，设备不明时不猜测为本机。实现见 [useOpenWithMenu.tsx](../../apps/desktop/src/renderer/components/chat/useOpenWithMenu.tsx)，回归见 [UserMessageUrlLink.test.tsx](../../apps/desktop/src/renderer/components/chat/__tests__/UserMessageUrlLink.test.tsx)。
