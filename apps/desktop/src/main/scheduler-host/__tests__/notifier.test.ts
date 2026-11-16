@@ -46,6 +46,7 @@ function createNotifier(opts?: {
   shouldNotifyDesktop?: () => boolean;
   isRunAlertShownElsewhere?: () => boolean;
   publishMarkdown?: ReturnType<typeof vi.fn>;
+  publishFeishuGroups?: (schedule: Schedule, run: ScheduleRun) => Promise<void>;
 }): {
   notifier: DesktopNotifier;
   sendMarkdownText: ReturnType<typeof vi.fn>;
@@ -67,6 +68,7 @@ function createNotifier(opts?: {
     shouldNotifyDesktop: opts?.shouldNotifyDesktop ?? (() => true),
     isRunAlertShownElsewhere: opts?.isRunAlertShownElsewhere ?? (() => false),
     wecomGroupPublisher: { publishMarkdown },
+    publishFeishuGroups: opts?.publishFeishuGroups,
   });
   return { notifier, sendMarkdownText, warn, publishMarkdown };
 }
@@ -90,6 +92,26 @@ describe('DesktopNotifier desktop status mapping', () => {
     expect(showDesktopSessionEvent).not.toHaveBeenCalled();
     expect(sendMarkdownText).not.toHaveBeenCalled();
     expect(publishMarkdown).toHaveBeenCalled();
+  });
+
+  it('delivers explicitly authorized Feishu groups even with personal notifications disabled and muted', async () => {
+    isSessionNotificationsMutedSync.mockReturnValue(true);
+    const publishFeishuGroups = vi.fn(async () => undefined);
+    const { notifier, sendMarkdownText } = createNotifier({ publishFeishuGroups });
+    const definition = { ...schedule, notify: { desktop: false, feishu: false } };
+    const result = { ...run('success'), resultText: 'report' };
+    await notifier.notify(definition, result);
+    expect(publishFeishuGroups).toHaveBeenCalledWith(definition, result);
+    expect(showDesktopSessionEvent).not.toHaveBeenCalled();
+    expect(sendMarkdownText).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+  });
+
+  it('does not lose the personal notification when group enqueue fails', async () => {
+    const { notifier, warn } = createNotifier({ publishFeishuGroups: async () => { throw new Error('storage unavailable'); } });
+    await notifier.notify(schedule, run('success'));
+    expect(showDesktopSessionEvent).toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not be queued'));
   });
 
   it('maps a successful run to done', async () => {

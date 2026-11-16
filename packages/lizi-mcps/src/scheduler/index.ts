@@ -7,6 +7,7 @@
  */
 
 export { registerScheduleListTool } from './list.js';
+export { registerScheduleFeishuDeliveryTools } from './feishuDelivery.js';
 export { registerScheduleGetTool } from './get.js';
 export { registerScheduleWebhookTools } from './webhook.js';
 export { registerScheduleCreateTool } from './create.js';

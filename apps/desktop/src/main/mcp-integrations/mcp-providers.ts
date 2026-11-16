@@ -91,6 +91,7 @@ import { getSlackToolBridge } from '../hook-control/slackToolBridge.js';
 import { createLogger } from '../logger.js';
 import { createAgentAppUpdateCallbacks } from '../agent-app-update/index.js';
 import { getScheduler } from '../scheduler-host/index.desktop.js';
+import { getFeishuScheduleDelivery } from '../scheduler-host/feishuDeliveryRuntime.desktop.js';
 import { getScheduleWebhookHost, scheduleWebhookReceiver } from '../scheduler-host/webhook/runtime.js';
 import { stabilizeHookCommand } from '../scheduler-host/hook-script-generator.js';
 import { assertPreRunHookCommandSyntax } from '../scheduler-host/pre-run-hook.js';
@@ -562,6 +563,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       logger: createLogger('mcp/cindy_slack'),
     },
     scheduler: {
+      feishuDelivery: {
+        configure: (id, chatIds) => getFeishuScheduleDelivery().configure(id, chatIds),
+        status: id => getFeishuScheduleDelivery().status(id),
+      },
       withAccountDataAccess,
       authorizeCall: authorizeTaskToolCall,
       getScheduler: () => getScheduler(),

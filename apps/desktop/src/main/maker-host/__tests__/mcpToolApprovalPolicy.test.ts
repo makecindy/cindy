@@ -31,6 +31,7 @@ describe('desktop Claude read-only allowlist', () => {
   // bypass the task's normal review. Public policy entry, unit tier; both dispatch routes.
   it.each([
     ['cindy_scheduler', 'schedule_delete'],
+    ['cindy_scheduler', 'schedule_set_feishu_delivery'],
     ['cindy_helper', 'delete_session'],
     ['cindy_helper', 'rewind_session'],
     ['cindy_helper', 'export_session'],

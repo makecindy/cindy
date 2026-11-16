@@ -20,6 +20,8 @@ export interface ScheduleNotifierDeps {
    */
   isRunAlertShownElsewhere: (run: ScheduleRun) => boolean;
   wecomGroupPublisher?: WecomGroupNotificationPublisher;
+  /** Explicit, persisted group authorization; independent of personal notification preferences. */
+  publishFeishuGroups?: (schedule: Schedule, run: ScheduleRun) => Promise<void>;
 }
 
 export interface ScheduleNotifierRuntime {
@@ -45,6 +47,11 @@ export class ScheduleNotifier implements Notifier {
         // A failed history lookup must never hide the original failure.
         this.deps.logger.warn?.('scheduler failure dedup lookup failed', error);
       }
+    }
+    if (this.runtime.getMobileNotifyGeneration() !== generation) return;
+    if (this.deps.publishFeishuGroups) {
+      try { await this.deps.publishFeishuGroups(schedule, run); }
+      catch { this.deps.logger.warn?.('Feishu group delivery could not be queued; inspect delivery status'); }
     }
     if (this.runtime.getMobileNotifyGeneration() !== generation) return;
     // 「消息免打扰」任务不再发个人提醒。wecomGroup 是共享群通知,不跟个人静音走;

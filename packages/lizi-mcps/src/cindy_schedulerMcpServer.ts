@@ -41,6 +41,7 @@ import {
   registerScheduleSetPreRunHookTool,
   registerScheduleSilenceCurrentRunTool,
   registerScheduleUpdateTool,
+  registerScheduleFeishuDeliveryTools,
 } from './scheduler/index.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
 import { withAccountDataAccess, type AccountDataAccess } from './account-data-access.js';
@@ -93,7 +94,7 @@ const CATEGORY_ENUM = ['scheduler'] as const;
 /** 类目概览的一句话用途 + 作用范围(本机 / 可跨电脑);改工具作用范围时同步改这里。 */
 export const SCHEDULER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
   scheduler:
-    '定时任务（自动化 / 心跳）的查询与管理。定时任务保存在各自的电脑上：查询、修改、暂停、恢复、删除、立即运行，以及 schedule_create(device=) 新建，均可指定电脑（查询可传 all）；检查脚本安装、当前运行的通知设置只在本机。Webhook 触发配置可指定电脑；密钥与更换地址由用户在目标电脑详情操作。地址清单与名额释放覆盖账号全部电脑，重新连接可指定电脑。本机定时任务可完整选择本机、远程或分享来源的模型（schedule_list_models 查位置与模型），并为自动化显式指定模型运行位置。',
+    '定时任务（自动化 / 心跳）的查询与管理。定时任务保存在各自的电脑上：查询、修改、暂停、恢复、删除、立即运行，以及 schedule_create(device=) 新建，均可指定电脑（查询可传 all）；检查脚本安装、当前运行的通知设置只在本机。schedule_set_feishu_delivery / schedule_get_feishu_delivery 在支持的本机宿主配置授权群投递并查逐群回执，绑定原机器人身份，未接入时明确报错。Webhook 触发配置可指定电脑；密钥与更换地址由用户在目标电脑详情操作。地址清单与名额释放覆盖账号全部电脑，重新连接可指定电脑。本机定时任务可完整选择本机、远程或分享来源的模型（schedule_list_models 查位置与模型），并为自动化显式指定模型运行位置。',
 };
 
 function registerListToolsEntry(
@@ -228,6 +229,7 @@ export function createSchedulerMcpServer(
   // 免去 agent 自己查 / 抄 session id(同 silence,避免绑错会话)。
   registerScheduleCreateTool(registry, deps, getSessionContext);
   registerScheduleUpdateTool(registry, deps, getSessionContext);
+  registerScheduleFeishuDeliveryTools(registry, deps);
   // 前置检查脚本统一安装通道;host 未注入 hookScript 服务时内部自动跳过注册。
   registerScheduleSetPreRunHookTool(registry, deps);
   // pause / delete 注入 ctx:caller-ownership 豁免 —— agent 在任务 run 内

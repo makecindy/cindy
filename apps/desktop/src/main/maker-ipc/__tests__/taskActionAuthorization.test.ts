@@ -284,6 +284,7 @@ function desktopFixture(kind: 'private' | 'group' | 'automatic' = 'group') {
   return { authorize, confirm, activeInput, caller, rows, runtime, getSession };
 }
 const ownerWrites = [
+  ['cindy_scheduler', 'schedule_set_feishu_delivery'],
   ['cindy_helper', 'send_to_session'],
   ['cindy_helper', 'set_session_runtime'],
   ['cindy_orca', 'create_worker'],

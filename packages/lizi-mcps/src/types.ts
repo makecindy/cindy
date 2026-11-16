@@ -301,6 +301,11 @@ export interface SlackHookMcpDeps {
  * @cindy/maker-scheduler still has zero runtime deps per Phase 1).
  */
 export interface SchedulerMcpDeps {
+  /** Local host-owned group delivery. Absent hosts explicitly report unsupported. */
+  feishuDelivery?: {
+    configure(scheduleId: string, chatIds: string[]): Promise<unknown>;
+    status(scheduleId: string): unknown;
+  };
   withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
   /** Live per-call check (Bot main tasks may change automations only on their owner's own turn). */
   authorizeCall?: import('./tool-call-authority.js').ToolCallAuthorizer;

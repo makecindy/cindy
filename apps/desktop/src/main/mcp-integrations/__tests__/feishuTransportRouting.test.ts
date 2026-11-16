@@ -25,11 +25,11 @@ const resolve = createFeishuTransportResolver({ readTurnScope, getCompanionTrans
 beforeAll(async () => {
   client = await createDbClient({ transport: 'worker-thread', useInlineWorker: true });
   await client.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT)');
-  await client.exec('CREATE TABLE bot_session_links (session_id TEXT, bot_id TEXT, role TEXT)');
+  await client.exec('CREATE TABLE bot_session_links (session_id TEXT, bot_id TEXT, role TEXT, archived_at INTEGER)');
   await client.exec('CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, status TEXT)');
   await client.exec("INSERT INTO bot_profiles VALUES ('bot-a', 'active')");
   await client.exec("INSERT INTO sessions VALUES ('canonical', 'bot'), ('desktop', 'desktop'), ('late', 'bot')");
-  await client.exec("INSERT INTO bot_session_links VALUES ('canonical', 'bot-a', 'canonical')");
+  await client.exec("INSERT INTO bot_session_links VALUES ('canonical', 'bot-a', 'canonical', NULL)");
 });
 beforeEach(() => {
   commitVolatileAppSession('cloud', 'account-a');
@@ -44,9 +44,35 @@ afterAll(async () => {
 });
 
 describe('Feishu transport with worker database', () => {
+  // Scheduled publication has saved, explicit group authorization; ordinary
+  // notifications must retain the narrower routing when no IM turn exists.
+  it.each(['channel', 'group'])('uses the bound bot for authorized scheduled %s publication without changing ordinary notifications', async role => {
+    await client.exec("UPDATE bot_session_links SET role = ? WHERE session_id = 'canonical'", [role]);
+    const scheduled = createFeishuTransportResolver({ readTurnScope: () => null,
+      getCompanionTransport, personalIm: personal, includeBotLanes: true });
+    try {
+      expect((await resolve({ sessionId: 'canonical' })).im).toBe(personal);
+      expect((await scheduled({ sessionId: 'canonical' })).im).toBe(companion);
+      await client.exec("UPDATE bot_session_links SET archived_at = 1 WHERE session_id = 'canonical'");
+      await expect(scheduled({ sessionId: 'canonical' })).rejects.toThrow('Companion task is not active');
+      await client.exec("UPDATE bot_session_links SET archived_at = NULL WHERE session_id = 'canonical'");
+      getCompanionTransport.mockReturnValue(null);
+      await expect(scheduled({ sessionId: 'canonical' })).rejects.toThrow('Companion Feishu connection unavailable');
+    } finally {
+      await client.exec("UPDATE bot_session_links SET role = 'canonical', archived_at = NULL WHERE session_id = 'canonical'");
+    }
+  });
+
   it('resolves a canonical companion without an inbound scope', async () => {
     const { im } = await resolve({ sessionId: 'canonical' });
     expect(im.getOwnerOpenId()).toBe('ou_companion');
+  });
+
+  it('does not substitute the personal bot for a bot task whose ownership link is missing', async () => {
+    const scheduled = createFeishuTransportResolver({ readTurnScope: () => null,
+      getCompanionTransport, personalIm: personal, includeBotLanes: true });
+    await expect(scheduled({ sessionId: 'late' })).rejects.toThrow('Companion task ownership unavailable');
+    expect((await scheduled({ sessionId: 'desktop' })).im).toBe(personal);
   });
 
   it('keeps inbound scope ahead of DB lookup and ordinary desktop notifications on personal bot', async () => {
@@ -58,7 +84,7 @@ describe('Feishu transport with worker database', () => {
 
   it('sees canonical ownership established after an earlier lookup', async () => {
     expect((await resolve({ sessionId: 'late' })).im).toBe(personal);
-    await client.exec("INSERT INTO bot_session_links VALUES ('late', 'bot-a', 'canonical')");
+    await client.exec("INSERT INTO bot_session_links VALUES ('late', 'bot-a', 'canonical', NULL)");
     expect((await resolve({ sessionId: 'late' })).im).toBe(companion);
   });
 

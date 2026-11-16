@@ -161,6 +161,7 @@ interface Harness {
 async function makeHarness(opts?: {
   schedulerNotReady?: boolean;
   webhookManagement?: SchedulerMcpDeps['webhookManagement'];
+  feishuDelivery?: SchedulerMcpDeps['feishuDelivery'];
   context?: Parameters<typeof createSchedulerMcpServer>[1];
 }): Promise<Harness> {
   const storage = new InMemoryStorage();
@@ -177,6 +178,7 @@ async function makeHarness(opts?: {
 
   const server = createSchedulerMcpServer({
     webhookManagement: opts?.webhookManagement,
+    feishuDelivery: opts?.feishuDelivery,
     getScheduler: () => {
       if (opts?.schedulerNotReady) {
         throw new Error('scheduler not started');
@@ -229,6 +231,33 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
 
   beforeEach(async () => {
     h = await makeHarness();
+  });
+
+  // Unit: persistent external recipients must reach the Host through schema and
+  // the existing tool authorization; unsupported hosts must not silently succeed.
+  it('discovers group delivery, validates chat ids, and reports a missing host implementation', async () => {
+    expect(h.hostTools.describe('schedule_set_feishu_delivery')).toMatchObject({ name: 'schedule_set_feishu_delivery' });
+    const invalid = await h.hostTools.call('schedule_set_feishu_delivery', { id: 'daily', chatIds: ['bad'] });
+    expect(invalid.isError).toBe(true);
+    const unsupported = await h.hostTools.call('schedule_set_feishu_delivery', { id: 'daily', chatIds: ['oc_a'] });
+    expect(unsupported.isError).toBe(true);
+    expect(JSON.stringify(unsupported)).toContain('unavailable on this host');
+    await h.cleanup();
+  });
+
+  it('passes only explicit targets to the host and exposes its per-chat receipts', async () => {
+    await h.cleanup();
+    const configure = vi.fn(async () => ({ chatIds: ['oc_a', 'oc_b'] }));
+    const status = vi.fn(() => ({ receipts: [{ chatId: 'oc_a', code: 0, messageId: 'om_a' }] }));
+    h = await makeHarness({ feishuDelivery: { configure, status } });
+    const configured = parseToolResult(await h.hostTools.call('schedule_set_feishu_delivery', {
+      id: 'daily', chatIds: ['oc_a', 'oc_b'],
+    }));
+    expect(configured.envelope).toMatchObject({ ok: true });
+    expect(configure).toHaveBeenCalledExactlyOnceWith('daily', ['oc_a', 'oc_b']);
+    const queried = parseToolResult(await h.hostTools.call('schedule_get_feishu_delivery', { id: 'daily' }));
+    expect(queried.envelope).toMatchObject({ ok: true, data: { receipts: [{ code: 0, messageId: 'om_a' }] } });
+    await h.cleanup();
   });
 
   // Unit, parity #18: the plugin entry must manage the real Scheduler without a
@@ -316,7 +345,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(payload.ok).toBe(true);
     // 类目概览要在第一步就写明用途与作用范围(本机 / 可跨电脑)。
     expect(payload.categories).toEqual([
-      { name: 'scheduler', tool_count: 11, description: expect.stringMatching(/各自的电脑.*schedule_create.*只在本机/) },
+      { name: 'scheduler', tool_count: 13, description: expect.stringMatching(/各自的电脑.*schedule_create.*只在本机/) },
     ]);
     // Agent/user parity: the first discovery result must expose remote trigger
     // configuration while keeping secret/URL operations out of Agent tools.
@@ -364,12 +393,14 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       'schedule_create',
       'schedule_delete',
       'schedule_get',
+      'schedule_get_feishu_delivery',
       'schedule_list',
       'schedule_list_runs',
       'schedule_notify_current_run',
       'schedule_pause',
       'schedule_resume',
       'schedule_run_now',
+      'schedule_set_feishu_delivery',
       'schedule_silence_current_run',
       'schedule_update',
     ]);

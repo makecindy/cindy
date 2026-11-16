@@ -16,6 +16,8 @@ export function createFeishuTransportResolver(deps: {
   readTurnScope: (session: Caller) => { im: FeishuToolTransport } | null;
   getCompanionTransport: (botId: string, ownerOpenId?: string) => FeishuToolTransport | null;
   personalIm: FeishuToolTransport;
+  /** Explicit scheduled publication may be bound to a persisted group/channel task without an inbound lane. */
+  includeBotLanes?: boolean;
 }) {
   return async (session: Caller, ownerOpenId?: string): Promise<ResolvedTransport> => {
     const ownerScope = activeOwnerScopeKey();
@@ -50,7 +52,8 @@ export function createFeishuTransportResolver(deps: {
     snapshot = getCurrentDbClientSnapshot();
     if (!snapshot) throw new Error('DbClient not ready');
     const row = await snapshot.client.drizzle
-      .select({ botId: botSessionLinks.botId, profileStatus: botProfiles.status })
+      .select({ botId: botSessionLinks.botId, profileStatus: botProfiles.status,
+        role: botSessionLinks.role, archivedAt: botSessionLinks.archivedAt })
       .from(botSessionLinks)
       .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
       .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
@@ -58,12 +61,23 @@ export function createFeishuTransportResolver(deps: {
         eq(botSessionLinks.sessionId, session.sessionId),
         eq(sessions.source, 'bot'),
         // The owner's Bot Chat: the main Chat or one of its private-chat topics.
-        inArray(botSessionLinks.role, ['canonical', 'thread', 'routine']),
+        deps.includeBotLanes ? undefined : inArray(botSessionLinks.role, ['canonical', 'thread', 'routine']),
       ))
       .limit(1)
       .get();
     assertCurrent();
-    if (!row?.botId) return personalTransport();
+    if (!row?.botId) {
+      if (deps.includeBotLanes) {
+        const task = await snapshot.client.drizzle.select({ source: sessions.source }).from(sessions)
+          .where(eq(sessions.id, session.sessionId)).limit(1).get();
+        assertCurrent();
+        if (task?.source === 'bot') throw new Error('Companion task ownership unavailable');
+      }
+      return personalTransport();
+    }
+    if (deps.includeBotLanes && (row.archivedAt != null
+      || !['canonical', 'thread', 'routine', 'channel', 'group'].includes(row.role)))
+      throw new Error('Companion task is not active');
     // Keep canonical identity even if its profile is missing/inactive, so pause
     // cannot turn into a personal-bot fallback while a tool call is still alive.
     if (row.profileStatus !== 'active') throw new Error('Companion is not active');

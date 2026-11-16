@@ -61,6 +61,9 @@ vi.mock('../script-runner.desktop', () => ({ ScriptScheduleRunner: class { attac
 vi.mock('../script-capability-broker.desktop', () => ({ SchedulerScriptCapabilityBroker: class {} }));
 vi.mock('../notifier.desktop', () => ({ DesktopNotifier: class {} }));
 vi.mock('../../im/feishu/notificationOrigin', () => ({ sendFeishuSessionNotification: vi.fn() }));
+vi.mock('../feishuDeliveryRuntime.desktop', () => ({
+  getFeishuScheduleDelivery: vi.fn(), startFeishuScheduleDelivery: vi.fn(), stopFeishuScheduleDelivery: vi.fn(),
+}));
 vi.mock('../../wecomGroupNotification', () => ({ wecomGroupNotificationService: {} }));
 
 import { resetScheduler, startScheduler } from '../index.desktop';

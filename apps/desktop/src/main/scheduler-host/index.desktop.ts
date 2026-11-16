@@ -53,6 +53,7 @@ import { companionHomes } from '../companion-cloud/homes.js';
 import { startScheduleWebhooks, stopScheduleWebhooks } from './webhook/runtime.js';
 
 import { createSchedulerHost, type SchedulerHostStartDeps } from './index.js';
+import { getFeishuScheduleDelivery, startFeishuScheduleDelivery, stopFeishuScheduleDelivery } from './feishuDeliveryRuntime.desktop.js';
 
 export interface StartSchedulerDeps extends SchedulerHostStartDeps {
   getMainWindow: () => BrowserWindow | null;
@@ -63,6 +64,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
   createStorage: getDb => new DrizzleScheduleStorage(getDb),
   createRunners(deps, storage) {
     const notifier = new DesktopNotifier({
+      publishFeishuGroups: (schedule, run) => getFeishuScheduleDelivery().publish(schedule, run),
       hasUnrecoveredMatchingFailure: (run) => storage.hasUnrecoveredMatchingFailure(run),
       sendFeishuSessionNotification: async (sessionId, text) => {
         await sendFeishuSessionNotification(deps.feishuIm, sessionId, text);
@@ -147,11 +149,13 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
   isPassive: () => !app.isPackaged && process.env.XDT_SCHEDULER_PASSIVE === '1',
   dialogueWorkspaceRoots: () => dialogueWorkspaceRoots(),
   onStarted(scheduler, deps, passive) {
+    startFeishuScheduleDelivery(scheduler, deps.feishuIm, passive);
     startRewoundSchedulerPromptCleanup({ logger: deps.logger });
     if (!passive) void startScheduleWebhooks(scheduler, deps.logger).catch(error =>
       deps.logger.warn?.(`[scheduler-host] schedule webhooks failed to start (non-fatal): ${String(error)}`));
   },
   async beforeReset() {
+    stopFeishuScheduleDelivery();
     stopRewoundSchedulerPromptCleanup();
     await stopScheduleWebhooks();
   },
