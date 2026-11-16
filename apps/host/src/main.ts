@@ -934,8 +934,7 @@ const contextRecovery = createHostContextRecoveryWiring({
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,
   // A model or engine the user picked lands when the message is sent (runtime-selection.ts).
-  applyPendingAgentSwitch: (sessionId: string, options?: { signal?: AbortSignal }) =>
-    runtimeSelection.applyPendingAgentSwitch(sessionId, options),
+  applyPendingAgentSwitch: (sessionId: string) => runtimeSelection.applyPendingAgentSwitch(sessionId),
   restoreArchivedSessionForSend: taskRestore.restoreArchivedSessionForSend,
   // Another device's task is read over Device Link, which the Host does not have: it answers as the
   // desktop does when no link is connected (the reference is reported unavailable).

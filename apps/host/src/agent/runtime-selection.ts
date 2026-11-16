@@ -264,9 +264,12 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     switchAgent(params: Parameters<typeof performSessionAgentSwitch>[1]) {
       return withSendToSessionLock(params.sessionId as string, () => performSessionAgentSwitch(agentSwitchDeps, params));
     },
-    /** The send transaction's landing of a picked model or engine (the desktop's register.ts 18488). */
-    applyPendingAgentSwitch: (sessionId: string, options?: { signal?: AbortSignal }) =>
-      applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, options?.signal ? { signal: options.signal } : undefined),
+    /**
+     * The send transaction's landing of a picked model or engine: the step the desktop's transaction
+     * binding (register.ts, createMakerSendTransaction's applyPendingAgentSwitch) runs, called as it
+     * calls it, without the send's signal (the desktop passes that only to the provider group check).
+     */
+    applyPendingAgentSwitch: (sessionId: string) => applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId),
     clearIntent(sessionId: string) {
       pendingSwitches.clear(sessionId);
     },
