@@ -47,6 +47,7 @@ import { mobileDurableOutbox } from '@/session/mobileDurableOutbox';
 import { createDurableOutbox } from '@/session/durableOutbox';
 import { enqueueChatMessage } from '@/chat/chatOutbox';
 import { createChatOutboxDelivery } from '@/chat/chatOutbox';
+import { useChatOutboxDelivery } from '@/chat/useChatOutboxDelivery';
 import { createChatServerClient } from '@/chat/chatServerClient';
 import { forgetChatMessages } from '@/chat/chatMessageCache';
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
@@ -521,6 +522,33 @@ it('lists and opens an existing joined server group with all computers and the r
   expect(h.auth.apiFetch.mock.calls.every(([, options]) => options.baseUrl === 'https://chat.example.invalid')).toBe(true);
   await act(async () => { await send({ text: 'hello', clientId: 'fixture-operation', mentions: { all: false, botIds: [] } }); });
   expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: 'fixture-operation', content: [{ type: 'text', text: 'hello' }], mentions: [] } }));
+});
+// Regression: tapping send and immediately switching apps used to leave the message
+// in the ledger until the next foreground, because the root runner required an active
+// AppState. Delivery must follow the execution time the OS gives us, not the foreground.
+it('keeps delivering a queued group message while the app is already in the background', async () => {
+  const owner = getMobileAuthOwner();
+  const deliveryRoot = createRoot(document.createElement('div'));
+  const appState = (await import('react-native')).AppState as unknown as { currentState: string };
+  function Delivery() { useChatOutboxDelivery(owner.accountKey); return null; }
+  const posted = () => h.auth.apiFetch.mock.calls.some(([path, options]) =>
+    path === `/v1/conversations/${id}/messages` && options?.method === 'POST');
+  try {
+    showChat = true; await render();
+    expect(chat.state.kind).toBe('ready');
+    // Queued by the send button while the user is still in the app.
+    await act(async () => { await chat.act('send', { text: 'sent while away', clientId: 'background-send', mentions: { all: false, botIds: [] } }); });
+    expect(posted()).toBe(false);
+    // The user has already switched apps when the root runner picks the ledger up.
+    appState.currentState = 'background';
+    await act(async () => { deliveryRoot.render(createElement(Delivery)); });
+    for (let tick = 0; tick < 20 && !posted(); tick++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(appState.currentState).toBe('background');
+    expect(posted()).toBe(true);
+  } finally {
+    await act(async () => { deliveryRoot.unmount(); });
+    appState.currentState = 'active';
+  }
 });
 // #6907: the hook must pass direct-room scope to the real client's quote projection (unit tier).
 it('keeps the account owner label when quoting from a direct phone entry', async () => {
