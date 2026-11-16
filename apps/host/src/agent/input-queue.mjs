@@ -13,6 +13,7 @@ import { runSchedulerQueuedPreparation } from '../../../desktop/src/main/maker-i
 import { readTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionInput.ts';
 import { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/maker-ipc/queuedAttachmentOwnership.ts';
 import { createLogger } from '../../../desktop/src/main/logger.ts';
+import { isSessionErrorSuppressed } from '../../../desktop/src/main/maker-ipc/sessionErrorSuppression.ts';
 
 const attachmentLog = createLogger('host-attachments');
 
@@ -173,8 +174,14 @@ export function createInputQueue(deps) {
       isStoppingRuntime: () => closing,
       persistMessage: deps.persistMessage ?? (async () => {}),
       onPersistenceError: persistenceFailed,
-      onTerminal: (id, type, error, meta, direct) => {
-        if (direct) coordinator.wakeSession(id, 'host-turn-settled');
+      // When a terminal arrives (turn-executor.mjs handTerminalToCoordinator), as on the desktop.
+      handTerminal: (id, type, error, signals, meta) => coordinator.onTurnEvent(id, type, error, signals, meta),
+      isSessionErrorSuppressed: (id, event) => isSessionErrorSuppressed(coordinator, id, event),
+      // Once the turn's rows settle: the coordinator already has the terminal when it arrived as an
+      // event, so it is only woken; a turn that ended without one (a stop that only went idle, a
+      // closed or replaced runtime, a silent-stop done) hands it here, once.
+      onTerminal: (id, type, error, meta, direct, handedOver) => {
+        if (direct || handedOver) coordinator.wakeSession(id, 'host-turn-settled');
         else coordinator.onTurnEvent(id, type, error, undefined, meta);
         deps.onSessionSettled?.(id);
       },
@@ -201,7 +208,11 @@ export function createInputQueue(deps) {
         return promise;
       },
       isTurnRunning: executor.isRunning,
-      isLiveTurnRunning: id => deps.getMaker()?.getSession(id)?.isTurnRunning?.(),
+      // While a turn's rows settle after its terminal, the Host still counts it as running (isTurnRunning)
+      // and the Session is already idle; the coordinator, which now gets the terminal on arrival, would read
+      // that as a stale boundary and start polling it. The probe answers 'unavailable' (fail-closed) in that
+      // window; it never reports the Host's own record as a running Session.
+      isLiveTurnRunning: id => executor.isSettling(id) ? undefined : deps.getMaker()?.getSession(id)?.isTurnRunning?.(),
       isLiveSessionPresent: id => !!deps.getMaker()?.getSession(id),
       getTurnGeneration: id => deps.getMaker()?.getSession(id)?.getTurnGeneration?.() ?? null,
       getTurnSessionIdentity: id => deps.getMaker()?.getSession(id) ?? null,

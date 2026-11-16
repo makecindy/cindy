@@ -18,6 +18,7 @@ import { saveAgentInputQueueSnapshot, loadAgentInputQueueSnapshot, getPersistedI
 import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
 
 import { createInputQueue } from './input-queue.mjs';
+import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
 import { createTurnExecutor } from './turn-executor.mjs';
 import { lockSessionRoute } from './session-route-lock.mjs';
 import { CONTEXT_OVERFLOW_REASON } from '../../../../packages/maker-core/src/agents/shared/context-overflow-error.ts';
@@ -1445,6 +1446,41 @@ test('failed abort retains the active turn and does not start a second message',
   await waitFor(() => !h.queue.projection('task-stop').turnInProgress);
   assert.equal(h.persisted.find(row => row.role === 'assistant')?.content, 'finished after failed abort');
   assert.deepEqual(session.sent, ['long']);
+});
+
+// Checkpoint 4a. Rule: as on the desktop (sessionEventPreparation.ts), the input coordinator gets a turn's
+// terminal when it arrives, and each terminal once; the Host only wakes it after the rows settle. A turn
+// that ends with no terminal event (a stop that only goes idle) is handed once by finish; the done that
+// follows a failed turn goes to the coordinator only (not published, no row). Tier: unit, Host queue
+// with the shared coordinator.
+test('each terminal reaches the coordinator once: a done, a stop that only goes idle, a failed turn and its done', async t => {
+  const handed = t.mock.method(AgentInputCoordinator.prototype, 'onTurnEvent');
+  const kinds = id => handed.mock.calls.filter(call => call.arguments[0] === id).map(call => call.arguments[1]);
+  const h = createHarness();
+
+  await enqueue(h, 'once-done', { clientId: 'a', text: 'work' });
+  h.maker.sessions.get('once-done').emit({ type: 'done' });
+  await waitFor(() => !h.queue.projection('once-done').turnInProgress);
+  assert.deepEqual(kinds('once-done'), ['done']);
+
+  await enqueue(h, 'once-stop', { clientId: 'a', text: 'work' });
+  await h.queue.stop('once-stop');
+  await waitFor(() => !h.queue.projection('once-stop').turnInProgress);
+  assert.deepEqual(kinds('once-stop'), ['done']);
+
+  await enqueue(h, 'once-failed', { clientId: 'a', text: 'work' });
+  const failed = h.maker.sessions.get('once-failed');
+  failed.emit({ type: 'error', data: { message: 'upstream failed' } });
+  await waitFor(() => !h.queue.projection('once-failed').turnInProgress);
+  const published = h.events.length;
+  const rows = h.persisted.length;
+  failed.emit({ type: 'done' });
+  await waitFor(() => kinds('once-failed').length === 2);
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(kinds('once-failed'), ['error', 'done']);
+  assert.equal(h.events.slice(published).some(event => event.type === 'done'), false, 'the paired done is not published');
+  assert.equal(h.persisted.length, rows, 'the paired done writes no row');
+  await h.queue.dispose();
 });
 
 // A provider may acknowledge abort before it is idle, without a later done.
@@ -3962,6 +3998,20 @@ test('context recovery assembly: input queued while the replayed turn runs waits
   replayed.emit({ type: 'done', data: {}, sessionTurnGeneration: replayed.generation, sessionInstanceId: replayed.instanceId });
   await waitFor(() => replayed.sent.length === 2);
   assert.deepEqual(replayed.sent, [replay, 'next'], 'the summary went with the replay only');
+});
+
+// Checkpoint 4a. Rule: as on the desktop, the coordinator gets an overflow-class terminal error when it
+// arrives, before context recovery claims it, and holds that error until the rebuild clears it
+// (contextRecoveryRebuilt); recovery still owns the error's row, so none is written. Gap: the Host handed
+// the error to the coordinator only after the turn's rows settled. Tier: unit, real database, Host event path.
+test('context recovery assembly: the coordinator holds an overflow error from its arrival until the rebuild clears it, with no error row', { timeout: 30_000 }, async t => {
+  const r = await assembledRecovery(t);
+  const id = 'assembled-handed';
+  const first = await r.overflow(id);
+  assert.ok(r.h.queue.projection(id).error, 'the coordinator has the error on arrival');
+  await waitFor(() => { const next = r.h.maker.sessions.get(id); return next && next !== first && next.sent.length === 1; });
+  await waitFor(() => !r.h.queue.projection(id).error);
+  assert.deepEqual(r.rows(id, 'error'), []);
 });
 
 test('context recovery assembly: a summary not yet sent when the Host restarts goes with the next send, once', { timeout: 30_000 }, async t => {

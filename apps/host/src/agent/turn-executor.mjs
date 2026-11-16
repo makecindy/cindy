@@ -37,6 +37,7 @@ import { redactEventForRenderer } from '../../../desktop/src/main/maker-ipc/rend
 import { isGatewayProxyTokenRecoveryErrorEventForProvider } from '../../../desktop/src/main/maker-ipc/gatewayProxyTokenRecovery.ts';
 import { contextSnapshotForStatus, isContextCompactionSnapshot } from '../../../desktop/src/main/maker-ipc/sessionContextSnapshot.ts';
 import { recordHostContextSnapshot } from './context-usage.ts';
+import { readTerminalTurnErrorSignals } from '../../../desktop/src/main/maker-ipc/terminalTurnErrorSignals.ts';
 
 const makerKind = kind => kind === 'cc' ? 'claude-code' : kind;
 const dbKind = kind => kind === 'claude-code' ? 'cc' : kind;
@@ -45,7 +46,9 @@ const errorText = error => error instanceof Error ? error.message : String(error
 /**
  * Node platform adapter for one maker-core turn. Queue order, recovery and
  * dispatch ownership belong to AgentInputCoordinator, never to this adapter.
- * A terminal is handed back only after all visible reply rows have settled.
+ * The coordinator receives a turn's terminal when it arrives, as on the desktop; the next input
+ * still waits until all visible reply rows have settled, because the turn counts as running
+ * (isRunning, the coordinator's dispatch boundary) until then.
  */
 /**
  * Publishes an agent event to the Host's clients (the event stream and the device link read the
@@ -67,7 +70,7 @@ export function createTurnExecutor(deps) {
   // Context recovery of a terminal error (context-recovery.ts); without a recovery factory the
   // listener behaves as before.
   const recovery = deps.getRecoveryRollover ? createHostContextRecovery({ getRollover: deps.getRecoveryRollover,
-    isRecoverable: deps.isContextRecoveryOpen,
+    isRecoverable: deps.isContextRecoveryOpen, isErrorSuppressed: deps.isSessionErrorSuppressed,
     publish: (id, event, fields) => publishAgentEvent(deps.hub, id, event, fields), log }) : null;
   function historyFor(id) {
     let history = histories.get(id);
@@ -151,7 +154,8 @@ export function createTurnExecutor(deps) {
           deps.hub.publish({ type: 'input_receipt', sessionId, inputClientId: turn.clientId,
             clientId: turn.clientId, status: 'interrupted' });
         }
-        deps.onTerminal(sessionId, error ? 'error' : 'done', error, turn.terminalMeta, turn.direct === true);
+        deps.onTerminal(sessionId, error ? 'error' : 'done', error, turn.terminalMeta, turn.direct === true,
+          turn.terminalHandedOver === true);
       }
     });
     return turn.settlement;
@@ -186,6 +190,26 @@ export function createTurnExecutor(deps) {
     }
   }
 
+  // As the desktop's event preparation (sessionEventPreparation.ts) hands a terminal to the input
+  // coordinator: a product done (not a continuation boundary, not a silent-stop done, which the
+  // desktop decides on later) and a terminal error with its message and structured signals. The
+  // desktop leaves out the planned close of a remote daemon; the Host runs no remote tasks.
+  // Whether the terminal is this input's and current is the coordinator's own decision
+  // (shouldIgnoreUnownedTerminal, isFencedStaleTerminal).
+  function handTerminalToCoordinator(sessionId, event) {
+    if (!deps.handTerminal) return false;
+    const meta = { sessionTurnGeneration: event.sessionTurnGeneration, sessionInstanceId: event.sessionInstanceId };
+    if (event.type === 'done') {
+      if (isTurnContinuationBoundaryEvent(event) || event.data?.silentStop === true) return false;
+      deps.handTerminal(sessionId, 'done', undefined, undefined, meta);
+      return true;
+    }
+    if (!isTerminalTurnErrorEvent(event)) return false;
+    const { message, signals } = readTerminalTurnErrorSignals(event, redactEventForRenderer(event));
+    deps.handTerminal(sessionId, 'error', message, signals, meta);
+    return true;
+  }
+
   function listen(sessionId, session) {
     if (bindings.get(sessionId)?.session === session) return;
     if (bindings.has(sessionId)) clearPendingTurnChangeSets(sessionId);
@@ -205,6 +229,10 @@ export function createTurnExecutor(deps) {
         deps.persistAgentPlanModeChange?.({ ownerDb, sessionBindings: { getSession: id => bindings.get(id)?.session } }, session, event);
         return;
       }
+      // The coordinator gets a terminal before the Host's own turn filters below, which only keep the
+      // Host's records, publishing and rows: a follow-up of Session.holdEventStream was handled by the
+      // host that held it (as the desktop), and an owner that is not current has its coordinator closing.
+      const handedOver = !event.hostProjection && deps.isCurrent() && handTerminalToCoordinator(sessionId, event);
       const turn = turns.get(sessionId);
       if (!turn || turn.session !== session || !deps.isCurrent()) return;
       // The context usage a status event carries, decided as the desktop decides it
@@ -273,6 +301,8 @@ export function createTurnExecutor(deps) {
         const error = event.type === 'error'
           ? event.data?.message || event.message || (typeof event.data === 'string' ? event.data : 'Agent error')
           : undefined;
+        // The coordinator has this terminal already; finish then only wakes it once the rows settle.
+        if (handedOver) turn.terminalHandedOver = true;
         void finish(sessionId, turn, error, event, claim !== 'idle');
         if (claim !== 'idle') recovery.settle(recoveryTerminal, claim, () => turn.settlement);
       }
@@ -835,6 +865,8 @@ export function createTurnExecutor(deps) {
       });
     },
     isRunning(id) { return turns.get(id)?.running === true; },
+    // The turn has its terminal and its rows are still settling: still running for dispatch (isRunning).
+    isSettling(id) { const turn = turns.get(id); return turn?.terminal === true && turn.running === true; },
     isInputRunning(id, clientId) { const turn = turns.get(id); return turn?.clientId === clientId && turn.running; },
     // Context recovery has claimed this input's terminal error and is rebuilding before its replay:
     // the input is still being answered (the replay carries its client id).

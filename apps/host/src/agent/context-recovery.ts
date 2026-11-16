@@ -99,6 +99,11 @@ export function createHostContextRecovery(deps: {
    */
   isRecoverable?(data: unknown): boolean;
   publish(sessionId: string, event: AgentEvent, fields: Record<string, unknown>): void;
+  /**
+   * Whether the input coordinator has taken this terminal error over for an automatic resume, read
+   * as the desktop's delivery reads it (sessionErrorSuppression.ts, sessionEventDelivery.ts).
+   */
+  isErrorSuppressed?(sessionId: string, event: AgentEvent): boolean;
   log: { warn(message: string, fields?: Record<string, unknown>): void };
 }) {
   const held = new Map<string, HeldBroadcast>();
@@ -143,7 +148,7 @@ export function createHostContextRecovery(deps: {
       isPlannedUpgradeClose: terminal.isStopping,
       isRemoteAuthRetry: false,
       isGatewayProxyTokenRecovery: terminal.isGatewayProxyTokenRecovery,
-      autoResumeSuppressesPersist: false,
+      autoResumeSuppressesPersist: deps.isErrorSuppressed?.(terminal.session.id, terminal.event) === true,
       // A held terminal reserves no row id, as on the desktop (sessionEventDelivery.ts).
       persistId: undefined,
     };
