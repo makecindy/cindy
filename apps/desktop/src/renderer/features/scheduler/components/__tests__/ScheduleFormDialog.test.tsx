@@ -683,10 +683,10 @@ it('edits a long prompt in the expanded editor and returns focus on collapse', a
 
 // User decision 2026-11-16 / unit: use the real editor save path. Old snapshots
 // must change only after an explicit buddy-inheritance choice, never on opening.
-it.each([false, true])('keeps an old review route unless the owner selects buddy inheritance (%s)', async (chooseFollow) => {
+it.each([false, true])('keeps an old default route unless the owner selects buddy inheritance (%s)', async (chooseFollow) => {
   const upsertSchedule = vi.fn(async (_input: { config: Record<string, unknown> }) => ({}));
   Object.assign(window.electronAPI.maker, { projectAutomation: { upsertSchedule } });
-  const initial = schedule({ source: 'project', projectConfigId: 'teammate-memory-review',
+  const initial = schedule({ source: 'project', projectConfigId: 'future-default-task',
     workingDir: '/data/owners/owner/bots/mia/workspace', workspaceKind: 'project',
     fastMode: 'ultrafast',
     persistentSession: true, preRunHook: { command: 'node custom-check.cjs', timeoutMs: 4000 } });

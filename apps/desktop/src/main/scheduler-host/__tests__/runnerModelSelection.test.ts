@@ -94,7 +94,7 @@ vi.mock('../runners/_shared', () => ({
 }));
 
 import { MakerScheduleRunner } from '../runner.desktop';
-import { resolveTeammateMemoryReviewModel } from '../teammateMemoryReviewModel';
+import { resolveTeammateScheduleModel } from '../teammateScheduleModel';
 import { applyScheduledModelSelection, createScheduledModelScope, resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
 import type { ProviderView } from '@cindy/model-providers';
 import type { Scheduler } from '@cindy/maker-scheduler';
@@ -2396,13 +2396,13 @@ describe('MakerScheduleRunner model selection', () => {
 
 // User decision 2026-11-16 / unit: previous model tests only covered saved snapshots.
 // Minimum failure: opt-in review with an old persistent task after the buddy changes model.
-describe('supplied memory review model inheritance', () => {
+describe('Bot project schedule model inheritance', () => {
   const review = (overrides: Partial<Schedule> = {}) => baseSchedule({ source: 'project',
     projectConfigId: 'teammate-memory-review', model: undefined, ...overrides });
-  it('reads A then B on each fire, and respects explicit C without consulting the buddy', async () => {
+  it.each(['teammate-memory-review', 'future-default-task'])('reads A then B for %s, and respects explicit C', async (projectConfigId) => {
     let model = 'model-a';
     const primaryModel = vi.fn(async () => ({ harness: 'codex' as const, model, providerId: 'openai', effort: '', fastMode: false }));
-    const resolve = (schedule: Schedule) => resolveTeammateMemoryReviewModel(schedule, {
+    const resolve = (schedule: Schedule) => resolveTeammateScheduleModel(schedule, {
       isOwnProject: async () => true, follows: async () => true, primaryModel,
     });
     const h = createSessionHarness();
@@ -2410,11 +2410,11 @@ describe('supplied memory review model inheritance', () => {
     for (const next of ['model-a', 'model-b']) {
       model = next;
       h.send.mockClear();
-      await fireToCompletion(harness, h, review());
+      await fireToCompletion(harness, h, review({ projectConfigId }));
       expect(harness.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ model: next, providerId: 'openai', agentKind: 'codex' }));
     }
     h.send.mockClear();
-    await fireToCompletion(harness, h, review({ model: 'model-c', agentKind: 'codex', providerId: 'openai' }));
+    await fireToCompletion(harness, h, review({ projectConfigId, model: 'model-c', agentKind: 'codex', providerId: 'openai' }));
     expect(harness.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'model-c' }));
     expect(primaryModel).toHaveBeenCalledTimes(2);
   });
@@ -2426,7 +2426,7 @@ describe('supplied memory review model inheritance', () => {
     const harness = createRunnerHarness(h, { model: 'old-model', workDir: '/work', agentKind: 'codex' }, {
       acquirePendingAgentSwitch: acquire,
       resolveModelSelection: async choice => choice,
-      resolveInheritedModel: schedule => resolveTeammateMemoryReviewModel(schedule, {
+      resolveInheritedModel: schedule => resolveTeammateScheduleModel(schedule, {
         isOwnProject: async () => true, follows: async () => true,
         primaryModel: async () => ({ harness: 'codex', model: 'new-model', providerId: 'openai', effort: 'high', fastMode: false, agentDeviceId: 'remote' }),
       }),
@@ -2441,10 +2441,18 @@ describe('supplied memory review model inheritance', () => {
   it('does not read buddy model metadata for an ordinary project with the same config ID', async () => {
     const follows = vi.fn(async () => { throw new Error('project config was removed'); });
     const primaryModel = vi.fn(async () => { throw new Error('not a buddy'); });
-    await expect(resolveTeammateMemoryReviewModel(review(), {
+    await expect(resolveTeammateScheduleModel(review(), {
       isOwnProject: async () => false, follows, primaryModel,
     })).resolves.toBeNull();
     expect(follows).not.toHaveBeenCalled();
+    expect(primaryModel).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unmarked Bot project task on its existing model defaults', async () => {
+    const primaryModel = vi.fn(async () => { throw new Error('must not read the Bot model'); });
+    await expect(resolveTeammateScheduleModel(review({ projectConfigId: 'custom-task' }), {
+      isOwnProject: async () => true, follows: async () => false, primaryModel,
+    })).resolves.toBeNull();
     expect(primaryModel).not.toHaveBeenCalled();
   });
 

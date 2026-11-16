@@ -2,13 +2,13 @@ import type { Schedule } from '@cindy/maker-scheduler';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
 import { routeModelFields } from '../maker-ipc/botV2Carryover.js';
 
-/** Only the opt-in supplied review inherits; ordinary automations and saved choices do not. */
-export async function resolveTeammateMemoryReviewModel(schedule: Schedule, deps: {
+/** Only explicitly opted-in Bot project schedules inherit; saved model choices take precedence. */
+export async function resolveTeammateScheduleModel(schedule: Schedule, deps: {
   isOwnProject: (workingDir: string) => Promise<boolean>;
   follows: (workingDir: string, id: string) => Promise<boolean>;
   primaryModel: (workingDir: string) => Promise<BotModelRoute>;
 }): Promise<Partial<Schedule> | null> {
-  if (schedule.source !== 'project' || schedule.projectConfigId !== 'teammate-memory-review'
+  if (schedule.source !== 'project' || !schedule.projectConfigId
     || !schedule.workingDir || schedule.model?.trim()) return null;
   if (!await deps.isOwnProject(schedule.workingDir)) return null;
   if (!await deps.follows(schedule.workingDir, schedule.projectConfigId)) return null;

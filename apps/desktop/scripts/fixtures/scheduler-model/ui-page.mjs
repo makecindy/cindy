@@ -36,7 +36,7 @@ export default {
     'src/renderer/features/scheduler/components/TemplateGallery': 'export const TemplateGallery = () => null;',
   },
   cases: {
-    buddy: { about: 'Explicitly switch an old buddy review to follow its primary model, save and reopen', viewport: { width: 1100, height: 900 } },
+    buddy: { about: 'Switch a Bot project task with a new default ID to follow its primary model, save and reopen', viewport: { width: 1100, height: 900 } },
     default: { about: 'Pick the shared source, then return to the local source' },
     speed: { about: 'Edit, save and reopen automation speed through the real modal', viewport: { width: 1100, height: 900 } },
     'shared-speed': { about: 'Edit and restore speed for a shared model source', viewport: { width: 1100, height: 900 } },

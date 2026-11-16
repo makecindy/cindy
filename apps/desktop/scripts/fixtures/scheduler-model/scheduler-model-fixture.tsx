@@ -8,7 +8,7 @@ import { ScheduleFormDialog } from '../../../src/renderer/features/scheduler/com
 // UI integration: exercise the real editor and picker, including the modal's
 // stacking context. The fixture save boundary round-trips the submitted JSON;
 // it deliberately does not write to the user's scheduler or execute a task.
-let reviewConfig: Partial<ProjectScheduleConfig> = { id: 'teammate-memory-review', model: 'gpt-6.1-sol', providerId: 'openai' };
+let reviewConfig: Partial<ProjectScheduleConfig> = { id: 'future-default-task', model: 'gpt-6.1-sol', providerId: 'openai' };
 function SpeedEditor() {
   const buddy = ctx.case === 'buddy';
   const [saved, setSaved] = useState<Schedule>({
@@ -19,7 +19,7 @@ function SpeedEditor() {
     cronExpr: '0 9 * * *', timezone: 'Asia/Shanghai', workspaceKind: 'dialogue',
     useWorktree: false, notify: { desktop: false, feishu: false },
     status: 'paused', kind: 'cron', source: buddy ? 'project' : 'user', jobType: 'prompt', createdAt: 1, updatedAt: 1,
-    ...(buddy ? { projectConfigId: 'teammate-memory-review', workspaceKind: 'project',
+    ...(buddy ? { projectConfigId: 'future-default-task', workspaceKind: 'project',
       workingDir: '/fixture/owners/owner/bots/mia/workspace' } : {}),
   });
   const [open, setOpen] = useState(true);

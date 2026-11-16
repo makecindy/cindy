@@ -237,7 +237,7 @@ describe('project automation provider reconciliation', () => {
         return saved;
       });
       const loader = new ProjectAutomationLoader({
-        scheduler: { create, update } as unknown as ConstructorParameters<typeof ProjectAutomationLoader>[0]['scheduler'],
+        scheduler: { create, update, delete: async () => { saved = undefined; } } as unknown as ConstructorParameters<typeof ProjectAutomationLoader>[0]['scheduler'],
         storage: { list: async () => saved ? [saved] : [] } as ConstructorParameters<typeof ProjectAutomationLoader>[0]['storage'],
         getDb: () => ({
           select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
@@ -263,7 +263,7 @@ describe('project automation provider reconciliation', () => {
       expect(await loader.reconcile(dir)).toMatchObject({ updated: 0 });
       expect(update).toHaveBeenCalledTimes(2);
       // 2026-11-16 / unit: disk opt-in survives editor reconstruction and a fresh loader read.
-      const review = projectConfig({ id: 'teammate-memory-review', followTeammateModel: true });
+      const review = projectConfig({ id: 'future-default-task', followTeammateModel: true });
       await loader.upsertSchedule(dir, review);
       expect(await loader.followsTeammateModel(dir, review.id)).toBe(true);
       await loader.upsertSchedule(dir, projectConfig({ id: review.id, name: 'Renamed' }));
@@ -275,6 +275,8 @@ describe('project automation provider reconciliation', () => {
       expect((await restarted.loadProjectSchedules(dir))?.find(item => item.id === review.id))
         .toMatchObject({ name: review.name, model: 'chosen-c' });
       expect(await restarted.followsTeammateModel(dir, review.id)).toBe(false);
+      await expect(loader.removeSchedule(dir, review.id)).resolves.toMatchObject({ deleted: 1 });
+      await expect(restarted.followsTeammateModel(dir, review.id)).rejects.toThrow('automation was removed');
       // PR #9314 review: a teammate's own writes keep a file they cannot read instead of replacing it.
       const file = path.join(dir, ...PROJECT_AUTOMATION_REL_SEGMENTS);
       await fs.writeFile(file, '{"version":1,"schedules":[', 'utf8');

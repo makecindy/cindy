@@ -315,12 +315,12 @@ export function ScheduleFormDialog({
   const triggerMode = form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
   const webhookSettingsVisible = !isProjectAutomationMode && webhookReceiverReady && form.webhookEnabled;
 
-  const maybeTeammateReview = isProjectAutomationMode && initial?.projectConfigId === 'teammate-memory-review'
+  const maybeTeammateSchedule = isProjectAutomationMode && !!initial?.projectConfigId
     && !!teammateFolderOfProjectPath(projectWorkingDir);
-  const [ownReviewProject, setOwnReviewProject] = useState<string | null>(null);
-  const isTeammateReview = maybeTeammateReview && ownReviewProject === projectWorkingDir;
-  const [reviewModelReady, setReviewModelReady] = useState(false);
-  const [reviewModelReadError, setReviewModelReadError] = useState(false);
+  const [ownTeammateProject, setOwnTeammateProject] = useState<string | null>(null);
+  const isTeammateSchedule = maybeTeammateSchedule && ownTeammateProject === projectWorkingDir;
+  const [teammateModelReady, setTeammateModelReady] = useState(false);
+  const [teammateModelReadError, setTeammateModelReadError] = useState(false);
   const initialId = initial?.id;
   useEffect(() => {
     if (!open) return;
@@ -354,17 +354,17 @@ export function ScheduleFormDialog({
     setField,
   ]);
 
-  const reviewModelReadFailedText = t('scheduler.editor.reviewModelReadFailed');
+  const teammateModelReadFailedText = t('scheduler.editor.reviewModelReadFailed');
   // Read the durable opt-in, never infer it from an empty model or a matching snapshot.
   useEffect(() => {
-    if (!open || !maybeTeammateReview || !projectWorkingDir) return;
+    if (!open || !maybeTeammateSchedule || !projectWorkingDir) return;
     let current = true;
-    setOwnReviewProject(null);
-    setReviewModelReady(false);
-    setReviewModelReadError(false);
+    setOwnTeammateProject(null);
+    setTeammateModelReady(false);
+    setTeammateModelReadError(false);
     void window.electronAPI.localDb.bots.ownsProject(projectWorkingDir).then(async ownsProject => {
       if (!current) return;
-      if (!ownsProject) { setReviewModelReady(true); return; }
+      if (!ownsProject) { setTeammateModelReady(true); return; }
       const result = await window.electronAPI.fileBrowser.readFile({
         workdir: projectWorkingDir, relPath: PROJECT_AUTOMATION_REL_SEGMENTS.join('/'),
       });
@@ -372,16 +372,16 @@ export function ScheduleFormDialog({
       const file = JSON.parse(result.data.content);
       const config = file.version === 1 && Array.isArray(file.schedules)
         ? file.schedules.find((item: { id?: string }) => item.id === initial?.projectConfigId) : null;
-      if (!config) throw new Error('missing review');
+      if (!config) throw new Error('missing automation');
       if (!current) return;
-      setOwnReviewProject(projectWorkingDir);
+      setOwnTeammateProject(projectWorkingDir);
       setField('followTeammateModel', config.followTeammateModel === true && !config.model?.trim());
-      setReviewModelReady(true);
+      setTeammateModelReady(true);
     }).catch(() => {
-      if (current) setReviewModelReadError(true);
+      if (current) setTeammateModelReadError(true);
     });
     return () => { current = false; };
-  }, [open, maybeTeammateReview, projectWorkingDir, initial, initialId, initial?.projectConfigId, setField]);
+  }, [open, maybeTeammateSchedule, projectWorkingDir, initial, initialId, initial?.projectConfigId, setField]);
 
   /** 前置检查「AI 生成」:描述 → utility model 生成脚本落盘 → 命令回填输入框。 */
   const runHookGenerate = useCallback(async () => {
@@ -706,7 +706,7 @@ export function ScheduleFormDialog({
     && (!modelCatalogReady || defaultCapabilitiesLoading || (!agentsLoaded && agentsLoading));
 
   const handleSubmit = async () => {
-    if (awaitingNewModelCatalog || (maybeTeammateReview && !reviewModelReady)) return;
+    if (awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)) return;
     setSubmitError(null);
     const err = validate();
     if (err) {
@@ -898,7 +898,7 @@ export function ScheduleFormDialog({
                     })}
                   />
                 )}
-                {maybeTeammateReview && reviewModelReadError && <ErrorNotice message={reviewModelReadFailedText} />}
+                {maybeTeammateSchedule && teammateModelReadError && <ErrorNotice message={teammateModelReadFailedText} />}
                 {submitError && (
                   <ErrorNotice
                     message={t(`chat.remoteError.${parseAgentErrorCode(submitError)?.code}`)}
@@ -1012,8 +1012,8 @@ export function ScheduleFormDialog({
                                 )}
                                 <div className="min-w-0 flex-1" />
                                 <ModelEffortChip
-                                  disabled={maybeTeammateReview && !reviewModelReady}
-                                  followModel={isTeammateReview ? {
+                                  disabled={maybeTeammateSchedule && !teammateModelReady}
+                                  followModel={isTeammateSchedule ? {
                                     active: form.followTeammateModel === true && !form.model.trim(),
                                     label: t('scheduler.chips.model.followTeammate'),
                                     onFollow: () => {
@@ -1760,7 +1760,7 @@ export function ScheduleFormDialog({
                     : t('scheduler.editor.promptDialog.createAria')
                 }
                 onClick={() => void handleSubmit()}
-                disabled={submitting || awaitingNewModelCatalog || (maybeTeammateReview && !reviewModelReady)}
+                disabled={submitting || awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)}
                 className="min-w-[68px] shrink-0"
               >
                 {submitLabel}

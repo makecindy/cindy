@@ -89,7 +89,7 @@ export function formToProjectConfig(
   id: string,
 ): ProjectScheduleConfig {
   const cronExpr = form.cronExpr.trim();
-  const followsBuddy = id === 'teammate-memory-review' && form.followTeammateModel === true;
+  const followsBuddy = form.followTeammateModel === true;
   return {
     id,
     name: form.name.trim(),

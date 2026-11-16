@@ -52,7 +52,7 @@ export interface ProjectScheduleConfig {
   /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
   modelAgentDeviceId?: string;
-  /** Opt-in for the supplied memory review; explicit model choices take precedence. Stored in the project file only. */
+  /** Bot project model inheritance; new supplied tasks opt in, explicit models take precedence. Stored in the project file only. */
   followTeammateModel?: boolean;
   model?: string;
   /** 可选：显式来源(供应商)id。省略 → 走原生默认来源（与旧配置字节级一致）。详见 Schedule.providerId。 */

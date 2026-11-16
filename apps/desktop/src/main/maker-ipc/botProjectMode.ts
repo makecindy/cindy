@@ -414,6 +414,20 @@ function broadcastProjectRegistered(workingDir: string): void {
 /** The project's own nightly review: an ordinary project automation, not a host job. */
 export const BOT_PROJECT_MEMORY_REVIEW_ID = 'teammate-memory-review';
 
+/** Default Bot tasks inherit at creation; their definitions never contain a model snapshot. */
+export type BotDefaultProjectSchedule = Omit<ProjectScheduleConfig,
+  'followTeammateModel' | 'model' | 'agentKind' | 'modelAgentKind' | 'modelAgentDeviceId'
+  | 'providerId' | 'agentDeviceId' | 'effort' | 'fastMode'>;
+
+/** Shared creation policy for every supplied task; existing choices have no inferred provenance. */
+export function createBotDefaultProjectSchedule(
+  defaults: BotDefaultProjectSchedule,
+  current?: ProjectScheduleConfig,
+): ProjectScheduleConfig {
+  return { ...defaults, ...current,
+    followTeammateModel: current ? current.followTeammateModel : true };
+}
+
 export function botProjectMemoryReview(input: {
   botId: string;
   displayName: string;
@@ -421,7 +435,7 @@ export function botProjectMemoryReview(input: {
   timezone: string;
   /** Localized "{{name}} · …" title template. */
   title: string;
-}): ProjectScheduleConfig {
+}): BotDefaultProjectSchedule {
   const name = input.displayName.trim() || input.botId;
   return {
     id: BOT_PROJECT_MEMORY_REVIEW_ID,
@@ -432,7 +446,6 @@ export function botProjectMemoryReview(input: {
     recurring: true,
     persistentSession: true,
     silentWhenIdle: true,
-    followTeammateModel: true,
   };
 }
 
@@ -469,9 +482,7 @@ export async function ensureBotProjectAutomations(input: {
     title: t('bots.homeFolder.projectMode.memoryReviewName'),
   });
   await loader.upsertSchedule(input.workingDir, {
-    ...defaults, ...current,
-    // Old snapshots carry no provenance: never infer that a saved choice was a default.
-    followTeammateModel: current ? current.followTeammateModel : true,
+    ...createBotDefaultProjectSchedule(defaults, current),
     prompt: legacyHook ? current!.prompt : defaults.prompt,
     preRunHook: { ...preRunHook, ...current?.preRunHook, command: preRunHook.command },
   }, { keepUnreadable: true });
