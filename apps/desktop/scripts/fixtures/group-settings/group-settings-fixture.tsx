@@ -52,6 +52,7 @@ const group = {
     project: { kind: 'github', repo: 'makecindy/cindy' } } : {}),
   organizerBotId: data.alone ? null : 'aster', projectDir: data.role === 'member' ? null : '/Users/nana/Projects/cindy', autoContinue: false,
   supportsMentionAudiences: true, allowMentionAllBots: true,
+  supportsMemberInvites: true, allowMemberInvites: data.memberInvites === true,
   supportsDissolve: true, supportsGroupLeave: true, supportsListRemoval: true, supportsMemberAvatar: true,
   canInvite: data.role !== 'member', archived: !!data.archived, dissolvedAt: data.dissolved ? '2026-10-29T08:00:00Z' : null,
   lastMessage: null, speakingBotIds: [], planningBotId: null, openPlan: null, plans: [], messages: [],

@@ -11383,6 +11383,8 @@
         "projectDirNote": "分工行事時，同伴於此勞作。不擇亦可，將用此群議自有之卷匣；若擇 git 專案，每次分工將新開一 worktree 與分支，不動君手中之程式碼。",
         "autoContinueSaveFailed": "分工交接未能存，請再試",
         "projectDirSaveFailed": "案之卷匣未能存，確其尚存後再試",
+        "allowMemberInvites": "許諸成員邀友",
+        "allowMemberInvitesHint": "啟之，已入群者皆可邀友。唯群主與管理員可改。",
         "allowMentionAllBots": "許 @諸同伴",
         "allowMentionAllBotsHint": "唯群主可改。諸同伴或皆回覆，大群宜慎啟之。此開關不涉 AI 代答。"
       },
@@ -14056,7 +14058,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "方建 worktree · 輸入已停",
-      "subtitle": "目標分支 {{branch}} · 畢則自解"
+      "subtitle": "目標分支 {{branch}} · 畢則自解",
+      "elapsed": "已候 {{duration}}"
     },
     "worktree": {
       "detecting": "方察環境…",
