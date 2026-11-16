@@ -157,6 +157,8 @@ const claude = await cindy.host.call('cindy_helper', 'get_subscription_usage', {
   `usedPercent` 为 0–100 **已用**百分比，未知为 `null`，不能当作 0；未知时长、重置时间也为 `null`。
 - `resetsAt` 是 Unix 秒；`updatedAt` 是 Unix 毫秒，表示用量观测时间，不是插件本次读取时间。
   窗口保留各自时间，账号级时间为最新窗口时间。没有用量时 `windows:[]`、`updatedAt:null`。
+  部分 SDK 事件会保留未更新的窗口；无法证明各窗口观测时间时，保留用量值但时间为 `null`、
+  状态为 `stale`，不会用最新事件时间冒充所有窗口的更新时间。下一次完整读取恢复已知时间。
 - `usageStatus` 为 `available` / `stale` / `unavailable`。任一窗口更新时间未知、超过既有 180 秒缓存窗口
   或重置时刻已过则为 `stale`；没有用量为 `unavailable`。过期数据不能当成当前剩余额度。
 - 与设置页共用逐账号身份校验、缓存和并发合并，不接收强制刷新、owner、目录或设备参数。

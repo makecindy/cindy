@@ -330,7 +330,7 @@ describe('read-only subscription usage', () => {
     h.usage.mockImplementation(async (_kind: string, directory: string) => {
       const used = directory.endsWith('second') ? 74 : 12;
       return provider === 'anthropic'
-        ? { claudeUsage: { updatedAt: observedAt, fiveHour: { utilization: used, resetsAt: 9_999_999_999 },
+        ? { claudeUsage: { source: 'oauth-endpoint', updatedAt: observedAt, fiveHour: { utilization: used, resetsAt: 9_999_999_999 },
           scoped: [{ modelDisplayName: 'Sonnet', utilization: used + 1 }], accountFingerprint: 'must-not-leak', accessToken: 'must-not-leak' } }
         : { codexUsage: { appServerBuckets: { codex: { limitId: 'codex', limitName: null, updatedAt: observedAt,
           primary: { usedPercent: used, windowMinutes: 300, resetsAt: 9_999_999_999 }, secondary: null,
@@ -351,13 +351,43 @@ describe('read-only subscription usage', () => {
     h.read.mockImplementation(async (_kind: string, directory: string) => ({ authenticated: true, identity: directory }));
     const old = Date.now() - 600_000;
     h.usage.mockImplementation(async (_kind: string, directory: string) => directory.endsWith('second') ? {}
-      : { claudeUsage: { updatedAt: old, fiveHour: { utilization: 27, resetsAt: 1 } } });
+      : { claudeUsage: { source: 'oauth-endpoint', updatedAt: old, fiveHour: { utilization: 27, resetsAt: 1 } } });
     const result = await readSubscriptionUsage('anthropic');
     expect(result.accounts[0]).toMatchObject({ usageStatus: 'stale', updatedAt: old, windows: [{ usedPercent: 27, updatedAt: old }] });
     expect(result.accounts[1]).toMatchObject({ usageStatus: 'unavailable', updatedAt: null, windows: [], plan: { type: null, tier: null } });
     h.read.mockResolvedValue({ authenticated: false });
     await refreshSubscriptionPool('anthropic', true);
     expect((await readSubscriptionUsage('anthropic')).accounts.every(a => a.status === 'signed-out' && !a.windows.length)).toBe(true);
+  });
+
+  // PR #10832 review: a partial SDK event advances the snapshot/bucket clock but
+  // retains other windows. The public reader must not re-date those retained quotas.
+  it.each(['anthropic', 'openai'] as const)('marks retained %s windows stale after partial events and an endpoint failure', async provider => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const now = Date.now();
+    try {
+      h.pools[provider] = { strategy: 'round', accounts: [account('default')] };
+      h.usage.mockResolvedValue(provider === 'anthropic'
+        ? { claudeUsage: { source: 'oauth-endpoint', updatedAt: now,
+          fiveHour: { utilization: 20, resetsAt: now / 1000 + 3600 },
+          scoped: [{ modelDisplayName: 'Sonnet', utilization: 60, resetsAt: now / 1000 + 86400 }] } }
+        : { codexUsage: { appServerBuckets: { codex: { limitId: 'codex', limitName: null, updatedAt: now,
+          primary: { usedPercent: 20, windowMinutes: 300, resetsAt: now / 1000 + 3600 },
+          secondary: { usedPercent: 60, windowMinutes: 10080, resetsAt: now / 1000 + 86400 } } }, webSnapshot: null } });
+      expect((await readSubscriptionUsage(provider)).accounts[0].usageStatus).toBe('available');
+      const lease = (await acquireSubscriptionAccount(provider, undefined, []))!;
+      try {
+        vi.setSystemTime(now + 600_000);
+        observeSubscriptionAccountUsage(lease.account, provider === 'anthropic'
+          ? { status: 'allowed', rateLimitType: 'five_hour', utilization: 0.3, resetsAt: now / 1000 + 3600 }
+          : { limitId: 'codex', primary: { usedPercent: 30, windowMinutes: 300, resetsAt: now / 1000 + 3600 } });
+        h.usage.mockRejectedValue(new Error('endpoint unavailable'));
+        const result = (await readSubscriptionUsage(provider)).accounts[0];
+        expect(result).toMatchObject({ usageStatus: 'stale', updatedAt: null });
+        expect(result.windows.find(window => window.id === (provider === 'anthropic' ? 'weekly:Sonnet' : 'codex:secondary')))
+          .toMatchObject({ usedPercent: 60, updatedAt: null });
+      } finally { lease.release(); }
+    } finally { vi.useRealTimers(); }
   });
 
   it('matches UI deduplication only within the same provider and ChatGPT workspace', async () => {

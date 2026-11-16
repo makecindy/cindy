@@ -24,7 +24,9 @@ export function subscriptionUsageView(input: {
   const windows: { id: string; usedPercent: number | null; windowMinutes: number | null; resetsAt: number | null; updatedAt: number | null }[] = [];
   const usage = input.authenticated && !input.unavailable ? input.usage : undefined;
   const claude = usage?.claude;
-  const updatedAt = timestamp(claude?.updatedAt) ?? timestamp(input.updatedAt);
+  // Headers can retain endpoint percentages/scoped windows while advancing only
+  // the snapshot clock. Without per-window provenance that clock proves no age.
+  const updatedAt = claude?.source === 'oauth-endpoint' ? timestamp(claude.updatedAt) : null;
   const add = (id: string, used: unknown, minutes: number | null, reset: unknown, observedAt: unknown) => {
     const percent = number(used);
     windows.push({ id, usedPercent: percent === null ? null : Math.min(100, Math.max(0, percent)),
@@ -38,13 +40,18 @@ export function subscriptionUsageView(input: {
     }
   }
   for (const [id, bucket] of Object.entries(usage?.codex?.buckets ?? {})) {
+    const bucketAt = timestamp(bucket.updatedAt);
+    const readAt = timestamp(input.updatedAt);
+    // A later bucket event may have omitted either window. Until the next full
+    // read, do not use that event's time for a retained primary/secondary window.
+    const observedAt = bucketAt !== null && readAt !== null && bucketAt <= readAt ? bucketAt : null;
     for (const key of ['primary', 'secondary'] as const) {
       const window = bucket[key];
-      if (window) add(`${id}:${key}`, window.usedPercent, window.windowMinutes, window.resetsAt, bucket.updatedAt);
+      if (window) add(`${id}:${key}`, window.usedPercent, window.windowMinutes, window.resetsAt, observedAt);
     }
   }
   const observed = windows.flatMap(window => window.updatedAt === null ? [] : [window.updatedAt]);
-  const lastUpdated = windows.length ? observed.length ? Math.max(...observed) : updatedAt : null;
+  const lastUpdated = observed.length ? Math.max(...observed) : null;
   return {
     providerId: input.providerId, provider: input.provider, accountId: input.accountId,
     status: input.unavailable ? 'unavailable' : input.authenticated ? 'connected' : 'signed-out',
