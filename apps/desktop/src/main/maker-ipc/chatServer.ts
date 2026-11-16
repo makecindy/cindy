@@ -2849,7 +2849,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // Read only the directly quoted original through the room's authorized endpoint. Never
       // take media IDs from the quote snapshot, scan history or follow another quote from it.
       const quote = readBotGroupQuote(source.content);
-      const quoted = quote ? await readMessage(roomId, quote.messageId) : undefined;
+      // Quoted files are supplementary: a failed lookup must not discard the current request.
+      // The live/settlement check below still stops account changes and cancelled executions.
+      const quoted = quote ? await readMessage(roomId, quote.messageId).catch(() => undefined) : undefined;
       const quotedMessage = quoted && !quoted.deleted && quoted.origin !== 'system' && quoted.threadRootId === null
         && BigInt(quoted.seq) < BigInt(source.seq) ? quoted : undefined;
       if (!live() || run.settlement) throw new Error('STALE_EXECUTOR');

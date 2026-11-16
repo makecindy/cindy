@@ -2072,15 +2072,15 @@ describe('Chat Server result delivery and refresh', () => {
     // Targeted run: 14.20s wall / 158ms tests; collecting this existing service suite takes 11.19s.
     describe('quoted attachments', () => {
       const file = (n: number) => ({ type: 'media', mediaId: `80000000-0000-4000-8000-${String(n).padStart(12, '0')}`, caption: `lesson-${n}.docx` });
-      const quote = (n: number) => buildBotGroupQuoteCard({ messageId: message(n, peerId, '').id,
-        authorName: 'Ann', authorKind: 'user', excerpt: 'Lesson files', attachmentCount: 2, attachmentName: 'lesson-1.docx', sequence: n });
+      const quote = (n: number, attachmentCount = 2) => buildBotGroupQuoteCard({ messageId: message(n, peerId, '').id,
+        authorName: 'Ann', authorKind: 'user', excerpt: 'Lesson files', attachmentCount, attachmentName: attachmentCount ? 'lesson-1.docx' : null, sequence: n });
       const downloaded = (n: number) => ({ id: file(n).mediaId, name: file(n).caption, category: 'file',
         mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: 12,
         path: path.join(os.tmpdir(), file(n).caption), url: null });
       const notices = () => fixture.handle.mock.calls.filter(([route, method, body]) => route === `/conversations/${roomId}/messages`
         && method === 'POST' && body.content?.some((block: { namespace?: string }) => block.namespace === 'cindy.capability-notice'));
-      async function sendQuoted(ownFiles: ReturnType<typeof file>[] = []) {
-        history.push(message(100, selfId, '', { content: [{ type: 'text', text: '@Cindy read the lessons' }, quote(1), ...ownFiles] }));
+      async function sendQuoted(ownFiles: ReturnType<typeof file>[] = [], attachmentCount = 2) {
+        history.push(message(100, selfId, '', { content: [{ type: 'text', text: '@Cindy read the lessons' }, quote(1, attachmentCount), ...ownFiles] }));
         queue.push(request(100));
         await vi.advanceTimersByTimeAsync(12_000);
         return dispatched().at(-1)!;
@@ -2129,6 +2129,40 @@ describe('Chat Server result delivery and refresh', () => {
         expect(input.attachments).toEqual([downloaded(2)]);
         expect(fixture.download.mock.calls).toEqual([[roomId, file(2).mediaId]]);
         expect(notices()).toHaveLength(1);
+      });
+
+      // PR #10835: optional quote metadata failures used to abort even the owner's current text/files.
+      // Unit HTTP boundary; unlike the 403/404/410 matrix, these failures reject readMessage.
+      it.each([503, 429, 'timeout', 'text-only'] as const)('delivers the current request when the quoted read fails: %s', async failure => {
+        const handle = fixture.handle.getMockImplementation()!;
+        fixture.handle.mockImplementation((route, method, body) => {
+          if (route === `/conversations/${roomId}/messages/${message(1, peerId, '').id}`) {
+            if (failure === 'timeout') throw new Error('REQUEST_TIMEOUT');
+            return { status: failure === 'text-only' ? 503 : failure, body: { error: { code: 'TEMPORARILY_UNAVAILABLE' } } };
+          }
+          return handle(route, method, body);
+        });
+        const input = await sendQuoted([file(2)], failure === 'text-only' ? 0 : 2);
+        expect(input?.attachments).toEqual([downloaded(2)]);
+        expect(verifiedOwnerRequestText(input.autoReviewUserText)).toContain('@Cindy read the lessons');
+        expect(notices()).toHaveLength(failure === 'text-only' ? 0 : 1);
+        if (failure !== 'text-only') expect(input.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', 'Cindy'));
+        expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/messages/${message(1, peerId, '').id}`)).toHaveLength(1);
+      });
+
+      it('does not continue a failed quoted read after the execution service is disposed', async () => {
+        const handle = fixture.handle.getMockImplementation()!;
+        fixture.handle.mockImplementation((route, method, body) => {
+          if (route === `/conversations/${roomId}/messages/${message(1, peerId, '').id}`) {
+            service.dispose();
+            throw new Error('REQUEST_TIMEOUT');
+          }
+          return handle(route, method, body);
+        });
+        await sendQuoted([file(2)]);
+        expect(deps.dispatch).not.toHaveBeenCalled();
+        expect(fixture.download).not.toHaveBeenCalled();
+        expect(notices()).toHaveLength(0);
       });
 
       it('reports a failed quoted download and tries it again on a new explicit request', async () => {
