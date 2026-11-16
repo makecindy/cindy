@@ -196,7 +196,7 @@ export function PluginTaskSettings({
   const name = modelName && location ? `${modelName} · ${location.name}` : modelName;
   return (
     <View>
-      <Text style={styles.label}>{t("plugins.taskSettings")}</Text>
+      <Text style={styles.sectionLabel}>{t("plugins.taskSettings")}</Text>
       <View style={styles.card}>
         <Pressable
           accessibilityRole="button"
@@ -327,10 +327,10 @@ export function PluginTaskSettings({
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     fill: { flex: 1 },
-    label: {
+    sectionLabel: {
       fontSize: typeScale.footnote,
-      lineHeight: lineHeight.bodySmall,
-      fontWeight: fontWeight.regular,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.semibold,
       color: colors.textTertiary,
       marginBottom: spacing.sm,
     },
@@ -363,9 +363,9 @@ const makeStyles = (colors: ThemeColors) =>
     },
     hint: {
       fontSize: typeScale.footnote,
-      lineHeight: lineHeight.bodySmall,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.regular,
-      color: colors.textTertiary,
+      color: colors.textSecondary,
       marginVertical: spacing.sm,
     },
   });

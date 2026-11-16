@@ -298,7 +298,7 @@ export function PluginTaskPrefs({
 
       {agentDeviceId ? (
         // Quick answers are one-shot requests from this computer; they cannot follow a remote model.
-        <p className="text-12 leading-5 text-[var(--text-tertiary)]">
+        <p className="text-12 leading-[1.667] text-[var(--text-tertiary)]">
           {t('settings.ghosts.detail.errandPrefs.remoteQuickAnswerHint')}
         </p>
       ) : null}
