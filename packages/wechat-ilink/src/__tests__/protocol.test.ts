@@ -335,10 +335,11 @@ describe("iLink HTTP boundary", () => {
 
   // 测试价值
   // - 生产入口与可观察结果：TencentIlinkTransport.poll 把解码丢弃原因带回 host，
-  //   WechatIM 依赖它输出丢弃计数日志；缺失时丢弃再次不可观测。
+  //   WechatIM 依赖它输出丢弃计数日志；缺失时丢弃再次不可观测。非法同步条目
+  //   （null/字符串/数组）在 messagesFrom 过滤前也要计入，否则仍静默消失。
   // - Bug／规则依据：#10899。
   // - 现有覆盖缺口：已有 poll 用例只覆盖空列表与正常消息，无混合丢弃场景。
-  // - 最小失败输入：同一 poll 响应同时含 bot 消息与用户消息。
+  // - 最小失败输入：同一 poll 响应同时含非法条目、bot 消息与用户消息。
   // - tier：unit。
   it("surfaces decoder drop reasons alongside decoded poll messages", async () => {
     const fetchMock = vi.fn(async () =>
@@ -347,6 +348,8 @@ describe("iLink HTTP boundary", () => {
           ret: 0,
           get_updates_buf: "next",
           msgs: [
+            null,
+            "junk",
             {
               message_id: 7,
               message_type: 2,
@@ -374,7 +377,11 @@ describe("iLink HTTP boundary", () => {
     const result = await transport.poll("old", signal());
     expect(result.messages).toHaveLength(1);
     expect(result.messages[0]).toMatchObject({ messageId: "message:8", text: "hi" });
-    expect(result.droppedMessageReasons).toEqual(["not-user-message"]);
+    expect(result.droppedMessageReasons).toEqual([
+      "malformed-message",
+      "malformed-message",
+      "not-user-message",
+    ]);
   });
 
   // 测试价值
