@@ -11,6 +11,7 @@ import {
   relocateClaudeTranscriptsForMove,
   withSessionWorkingDirMoveLocks,
 } from './sessionWorkingDirMove.js';
+import { recordRecentWorkdirForSend } from './touchUserSendRecentWorkdir.js';
 import { captureSessionCreationCancellation } from '../sessionRuntimeCleanup.js';
 import { pagePermissionSessionChanged } from '../../mcp-apps/pagePermissions.js';
 import { removeSessionModelInterface } from '../../maker-host/session-model-interface.js';
@@ -95,12 +96,9 @@ import { removeSessionRefsIfDeleted as removeDeletedSessionMediaRefs } from '../
 import { imAttachmentsRoot, removeImSessionAttachmentDirs } from '../../im/shared/inboundFileStaging';
 import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
-import {
-  DESKTOP_VISIBLE_SESSION_SOURCES,
-  isRetainableProjectSession,
-} from '../../../shared/sessionSource.js';
-import { normalizeWorkingDirForProjectSettings } from '../../../shared/workingDir.js';
+import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../../shared/sessionSource.js';
 import { assertSessionContextWindowBudgetPatch } from '../sessionContextWindowBudgetPatch.js';
+import { isSessionSettingsOnlyPatch } from '../sessionSettingsOnlyPatch.js';
 import {
   pruneSessionContextWindowBudget,
   readSessionContextWindowBudget,
@@ -898,19 +896,14 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
       ownerScope,
     );
   }
-  // 项目独立保留真实使用时间；不能等归档/删除时再取清理时间，也不能从剩余任务重算。
-  // 复用入口处的 client，避免 await 期间切换账号后把旧项目写入新账号数据库。
-  const row = updated[0];
-  if (
-    row.workspaceKind === 'project' &&
-    row.workingDir &&
-    !row.remoteHostId &&
-    isRetainableProjectSession(row)
-  ) {
-    const projectDir = normalizeWorkingDirForProjectSettings(row.projectDir ?? row.workingDir);
-    const touched = await upsertRecentWorkdir(projectDir, ts, process.platform, dbClient);
-    if (touched && projectDir) broadcastRecentWorkdirsChanged(projectDir, ownerScope);
-  }
+  await recordRecentWorkdirForSend({
+    updated,
+    ts,
+    dbClient,
+    ownerScope,
+    upsertRecentWorkdir,
+    broadcastRecentWorkdirsChanged,
+  });
 }
 
 /**
@@ -1701,27 +1694,7 @@ export async function updateSessionInDb(
       opts,
       sessionWorktreeBindingLookup,
     });
-    // 只有纯设置字段(model/effort 等)才跳过 bump；凡带 activity 字段
-    // (clearedAt / sdkSessionId / status / token 用量等)仍需更新 updatedAt，
-    // 否则本地 /clear 后重启侧栏时间回退旧值。
-    const SETTINGS_ONLY_FIELDS = new Set([
-      'model',
-      'effort',
-      'permissionMode',
-      'fastMode',
-      'planModeEnabled',
-      'providerId',
-      'contextWindowBudget',
-      'orcaRole',
-      'extraDirs',
-      'writableDirs',
-      'pinnedAt',
-      'notificationsMuted',
-      'workingDir',
-      'workspaceKind',
-      'title',
-    ]);
-    const isSettingsOnly = Object.keys(p).every((k) => SETTINGS_ONLY_FIELDS.has(k));
+    const isSettingsOnly = isSessionSettingsOnlyPatch(p);
     // 任务窗口预算不进入行更新（偏好文件才是它的真源）——从行 patch 里剔除，
     // 否则 mapper 会把未知字段当成非法写入。
     const rowPatch = { ...p };
