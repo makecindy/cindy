@@ -290,3 +290,16 @@ it('projects iMessage connections only to controllers that advertise the channel
     ok: true, value: { connections: [{ id: 'legacy' }, { id: 'local-bridge' }] },
   });
 });
+
+it('keeps profile.get bounded with thousands of deleted routine associations', async () => {
+  const { boundedPluginResponse } = await import('../../../../renderer/features/plugin/remotePluginManagementClient');
+  const deleted = Array.from({ length: 8_000 }, (_, i) => ({ id: `deleted-${i}`, title: 'Routine',
+    kind: 'history', role: 'routine', updatedAt: 1, status: 'deleted' }));
+  const raw = { ...rawProfile, sessions: [...rawProfile.sessions, ...deleted] };
+  expect(boundedPluginResponse({ ok: true, value: { profile: raw } })).toBe(false);
+  const { call } = setup({ deps: { readProfile: vi.fn(async () => raw) } });
+  const result = await call('profile.get');
+  expect(result).toMatchObject({ ok: true });
+  expect(boundedPluginResponse(result)).toBe(true);
+  if (result.ok) expect(result.value.profile.sessions.map((s: { id: string }) => s.id)).toEqual(['main', 'old']);
+});

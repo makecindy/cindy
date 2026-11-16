@@ -1,3 +1,5 @@
+import { EMPTY_SESSION_PURGE_CUTOFF } from '../../shared/localDbMaintenance';
+import { purgeEmptySessions } from './emptySessionPurge';
 import type Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -262,12 +264,7 @@ export async function runDbSlimmingMaintenance(
         await source.backup(paths.work, {
           progress: (progress) => {
             const fraction = backupFraction(progress);
-            reportProgress(
-              options,
-              'copying',
-              progressStart + fraction * progressSpan,
-              true,
-            );
+            reportProgress(options, 'copying', progressStart + fraction * progressSpan, true);
             return 4_096;
           },
         });
@@ -410,17 +407,13 @@ export async function runDbSlimmingMaintenance(
   }
 }
 
-function maintenancePaths(
-  dbFilePath: string,
-  request: DbSlimmingRequestRecord,
-): MaintenancePaths {
+function maintenancePaths(dbFilePath: string, request: DbSlimmingRequestRecord): MaintenancePaths {
   const dbDir = path.dirname(dbFilePath);
   const customBackupDir = request.backupDirectory
     ? path.resolve(request.backupDirectory)
     : undefined;
   const defaultDirectoryBackup =
-    request.backupEnabled &&
-    (!customBackupDir || pathsEqual(customBackupDir, path.resolve(dbDir)));
+    request.backupEnabled && (!customBackupDir || pathsEqual(customBackupDir, path.resolve(dbDir)));
   const backupDir = request.backupEnabled ? (customBackupDir ?? dbDir) : null;
   const backupFinal = backupDir
     ? path.join(backupDir, `${path.basename(dbFilePath)}.slimming-backup`)
@@ -465,7 +458,10 @@ function assertMaintenanceSpace(
       );
     }
     if (!backupDirStat.isDirectory()) {
-      throw new DbSlimmingMaintenanceError('backup-failed', 'backup destination is not a directory');
+      throw new DbSlimmingMaintenanceError(
+        'backup-failed',
+        'backup destination is not a directory',
+      );
     }
   }
   if (backupDir && directoriesShareVolume(dbDir, backupDir)) {
@@ -510,9 +506,14 @@ function openSourceDatabase(dbFilePath: string): Database.Database {
     return db;
   } catch (error) {
     db.close();
-    throw new DbSlimmingMaintenanceError('integrity-check-failed', 'source database is invalid', true, {
-      cause: error,
-    });
+    throw new DbSlimmingMaintenanceError(
+      'integrity-check-failed',
+      'source database is invalid',
+      true,
+      {
+        cause: error,
+      },
+    );
   }
 }
 
@@ -587,26 +588,40 @@ function compactWorkingCopy(
       }
     }
 
-    db.exec('DROP TABLE IF EXISTS temp.db_slimming_targets');
-    db.exec('CREATE TEMP TABLE db_slimming_targets (id TEXT PRIMARY KEY, status TEXT NOT NULL)');
-    db.prepare(
-      `INSERT INTO temp.db_slimming_targets (id, status)
+    let targetCounts: TargetCounts;
+    if (request.emptySessionPurge) {
+      if (request.archivedBeforeMs !== EMPTY_SESSION_PURGE_CUTOFF || !request.backupEnabled || request.messageCount !== 0 || request.includeActiveTasks !== false) {
+        throw new Error('Empty-session purge requires backup and excludes message cleanup');
+      }
+      const count = db.transaction(() => purgeEmptySessions(db!, request.emptySessionPurge!))();
+      targetCounts = {
+        activeTaskCount: 0,
+        activeTaskIds: [],
+        deletedTaskCount: count,
+        archivedTaskCount: 0,
+        messageCount: 0,
+      };
+    } else {
+      db.exec('DROP TABLE IF EXISTS temp.db_slimming_targets');
+      db.exec('CREATE TEMP TABLE db_slimming_targets (id TEXT PRIMARY KEY, status TEXT NOT NULL)');
+      db.prepare(
+        `INSERT INTO temp.db_slimming_targets (id, status)
        SELECT id, status
          FROM sessions
         WHERE ((status = 'deleted' AND updated_at <= ?)
            OR (status = 'archived' AND updated_at <= ?)
            OR (? = 1 AND status = 'active' AND updated_at <= ?))
           AND EXISTS (SELECT 1 FROM messages WHERE messages.session_id = sessions.id)`,
-    ).run(
-      request.archivedBeforeMs,
-      request.archivedBeforeMs,
-      request.includeActiveTasks === true ? 1 : 0,
-      request.archivedBeforeMs,
-    );
+      ).run(
+        request.archivedBeforeMs,
+        request.archivedBeforeMs,
+        request.includeActiveTasks === true ? 1 : 0,
+        request.archivedBeforeMs,
+      );
 
-    const counts = db
-      .prepare(
-        `SELECT
+      const counts = db
+        .prepare(
+          `SELECT
            SUM(CASE WHEN t.status = 'active' THEN 1 ELSE 0 END) AS activeTaskCount,
            SUM(CASE WHEN t.status = 'deleted' THEN 1 ELSE 0 END) AS deletedTaskCount,
            SUM(CASE WHEN t.status = 'archived' THEN 1 ELSE 0 END) AS archivedTaskCount,
@@ -614,72 +629,70 @@ function compactWorkingCopy(
               FROM messages m
               JOIN temp.db_slimming_targets target ON target.id = m.session_id) AS messageCount
          FROM temp.db_slimming_targets t`,
-      )
-      .get() as {
-      activeTaskCount: number | null;
-      deletedTaskCount: number | null;
-      archivedTaskCount: number | null;
-      messageCount: number;
-    };
-    const targetCounts: TargetCounts = {
-      activeTaskCount: counts.activeTaskCount ?? 0,
-      activeTaskIds: (
-        db
-          .prepare(
-            "SELECT id FROM temp.db_slimming_targets WHERE status = 'active' ORDER BY id",
-          )
-          .all() as Array<{ id: string }>
-      )
-        .map(({ id }) => id)
-        .filter(isSafeTurnChangeSetSessionId),
-      deletedTaskCount: counts.deletedTaskCount ?? 0,
-      archivedTaskCount: counts.archivedTaskCount ?? 0,
-      messageCount: counts.messageCount ?? 0,
-    };
+        )
+        .get() as {
+        activeTaskCount: number | null;
+        deletedTaskCount: number | null;
+        archivedTaskCount: number | null;
+        messageCount: number;
+      };
+      targetCounts = {
+        activeTaskCount: counts.activeTaskCount ?? 0,
+        activeTaskIds: (
+          db
+            .prepare("SELECT id FROM temp.db_slimming_targets WHERE status = 'active' ORDER BY id")
+            .all() as Array<{ id: string }>
+        )
+          .map(({ id }) => id)
+          .filter(isSafeTurnChangeSetSessionId),
+        deletedTaskCount: counts.deletedTaskCount ?? 0,
+        archivedTaskCount: counts.archivedTaskCount ?? 0,
+        messageCount: counts.messageCount ?? 0,
+      };
 
-    const activeDb = db;
-    const messagesFtsDeleteTriggerSql = triggerSql(activeDb, 'messages_fts_delete');
-    const sessionColumns = new Set(
-      (
-        activeDb.prepare("PRAGMA table_info('sessions')").all() as Array<{ name: string }>
-      ).map((column) => column.name),
-    );
-    const listProjectionColumns = [
-      'list_preview',
-      'list_preview_role',
-      'list_message_count',
-    ].filter((column) => sessionColumns.has(column));
-    reportProgress(options, 'cleaning', 44, true);
-    const cleanup = activeDb.transaction(() => {
-      // message_id/session_id are UNINDEXED FTS columns. Letting the trigger run
-      // once per message turns a large cleanup into N full FTS scans. Drop only
-      // this trigger inside the transaction, scan FTS once by session, clear
-      // its stable rowid map in bulk, then restore the exact schema SQL.
-      if (messagesFtsDeleteTriggerSql) {
-        activeDb.exec('DROP TRIGGER messages_fts_delete');
-      }
-      if (tableExists(activeDb, 'messages_fts')) {
-        activeDb.exec(
-          `DELETE FROM messages_fts
+      const activeDb = db;
+      const messagesFtsDeleteTriggerSql = triggerSql(activeDb, 'messages_fts_delete');
+      const sessionColumns = new Set(
+        (activeDb.prepare("PRAGMA table_info('sessions')").all() as Array<{ name: string }>).map(
+          (column) => column.name,
+        ),
+      );
+      const listProjectionColumns = [
+        'list_preview',
+        'list_preview_role',
+        'list_message_count',
+      ].filter((column) => sessionColumns.has(column));
+      reportProgress(options, 'cleaning', 44, true);
+      const cleanup = activeDb.transaction(() => {
+        // message_id/session_id are UNINDEXED FTS columns. Letting the trigger run
+        // once per message turns a large cleanup into N full FTS scans. Drop only
+        // this trigger inside the transaction, scan FTS once by session, clear
+        // its stable rowid map in bulk, then restore the exact schema SQL.
+        if (messagesFtsDeleteTriggerSql) {
+          activeDb.exec('DROP TRIGGER messages_fts_delete');
+        }
+        if (tableExists(activeDb, 'messages_fts')) {
+          activeDb.exec(
+            `DELETE FROM messages_fts
             WHERE session_id IN (SELECT id FROM temp.db_slimming_targets)`,
-        );
-      }
-      if (tableExists(activeDb, 'messages_fts_rows')) {
-        activeDb.exec(
-          `DELETE FROM messages_fts_rows
+          );
+        }
+        if (tableExists(activeDb, 'messages_fts_rows')) {
+          activeDb.exec(
+            `DELETE FROM messages_fts_rows
             WHERE message_id IN (
               SELECT message.id
                 FROM messages message
                 JOIN temp.db_slimming_targets target ON target.id = message.session_id
             )`,
-        );
-      }
-      if (
-        tableExists(activeDb, 'chat_messages_vec_v1') &&
-        tableExists(activeDb, 'embedding_jobs')
-      ) {
-        activeDb.exec(
-          `DELETE FROM chat_messages_vec_v1
+          );
+        }
+        if (
+          tableExists(activeDb, 'chat_messages_vec_v1') &&
+          tableExists(activeDb, 'embedding_jobs')
+        ) {
+          activeDb.exec(
+            `DELETE FROM chat_messages_vec_v1
             WHERE rowid IN (
               SELECT job.rowid
                 FROM embedding_jobs job
@@ -687,136 +700,137 @@ function compactWorkingCopy(
                 JOIN temp.db_slimming_targets target ON target.id = message.session_id
                WHERE job.source = 'chat'
             )`,
-        );
-      }
-      if (tableExists(activeDb, 'embedding_jobs')) {
-        activeDb.exec(
-          `DELETE FROM embedding_jobs
+          );
+        }
+        if (tableExists(activeDb, 'embedding_jobs')) {
+          activeDb.exec(
+            `DELETE FROM embedding_jobs
             WHERE source = 'chat'
               AND source_id IN (
                 SELECT message.id
                   FROM messages message
                   JOIN temp.db_slimming_targets target ON target.id = message.session_id
               )`,
-        );
-      }
-      activeDb.exec(
-        `DELETE FROM messages
-          WHERE session_id IN (SELECT id FROM temp.db_slimming_targets)`,
-      );
-      if (listProjectionColumns.length > 0) {
+          );
+        }
         activeDb.exec(
-          `UPDATE sessions
+          `DELETE FROM messages
+          WHERE session_id IN (SELECT id FROM temp.db_slimming_targets)`,
+        );
+        if (listProjectionColumns.length > 0) {
+          activeDb.exec(
+            `UPDATE sessions
               SET ${listProjectionColumns.map((column) => `${column} = NULL`).join(', ')}
             WHERE id IN (SELECT id FROM temp.db_slimming_targets)`,
-        );
-      }
-      // Archived tasks stay visible after their history is purged, so they need the same
-      // cleared_at boundary as active tasks. Without it the renderer cannot tell
-      // "history cleared by maintenance" from "history failed to load" and shows a blank
-      // pane instead of the cleared placeholder (#3709). This runs before the
-      // includeActiveTasks block so archived tasks are stamped even when active tasks are
-      // excluded, and it only touches the archived targets in the current scan window.
-      if (sessionColumns.has('cleared_at')) {
-        activeDb
-          .prepare(
-            `UPDATE sessions
+          );
+        }
+        // Archived tasks stay visible after their history is purged, so they need the same
+        // cleared_at boundary as active tasks. Without it the renderer cannot tell
+        // "history cleared by maintenance" from "history failed to load" and shows a blank
+        // pane instead of the cleared placeholder (#3709). This runs before the
+        // includeActiveTasks block so archived tasks are stamped even when active tasks are
+        // excluded, and it only touches the archived targets in the current scan window.
+        if (sessionColumns.has('cleared_at')) {
+          activeDb
+            .prepare(
+              `UPDATE sessions
                 SET cleared_at = MAX(COALESCE(cleared_at, 0), ?)
               WHERE id IN (
                 SELECT id FROM temp.db_slimming_targets WHERE status = 'archived'
               )`,
-          )
-          .run(Math.floor(request.scannedAt));
-      }
-      if (request.includeActiveTasks === true) {
-        if (tableExists(activeDb, 'session_goals')) {
-          activeDb.exec(
-            `DELETE FROM session_goals
+            )
+            .run(Math.floor(request.scannedAt));
+        }
+        if (request.includeActiveTasks === true) {
+          if (tableExists(activeDb, 'session_goals')) {
+            activeDb.exec(
+              `DELETE FROM session_goals
               WHERE session_id IN (
                 SELECT id FROM temp.db_slimming_targets WHERE status = 'active'
               )`,
-          );
-        }
-        if (tableExists(activeDb, 'session_pr_refs')) {
-          activeDb.exec(
-            `DELETE FROM session_pr_refs
+            );
+          }
+          if (tableExists(activeDb, 'session_pr_refs')) {
+            activeDb.exec(
+              `DELETE FROM session_pr_refs
               WHERE session_id IN (
                 SELECT id FROM temp.db_slimming_targets WHERE status = 'active'
               )`,
-          );
-        }
-        const hasClearedAt = sessionColumns.has('cleared_at');
-        const hasUpdatedAt = sessionColumns.has('updated_at');
-        const activeResetAssignments = [
-          sessionColumns.has('sdk_session_id') ? 'sdk_session_id = NULL' : null,
-          sessionColumns.has('codex_plan_json') ? 'codex_plan_json = NULL' : null,
-          sessionColumns.has('summary') ? 'summary = NULL' : null,
-          hasClearedAt ? 'cleared_at = MAX(COALESCE(cleared_at, 0), ?)' : null,
-          hasUpdatedAt ? 'updated_at = MAX(COALESCE(updated_at, 0), ?)' : null,
-        ].filter((assignment): assignment is string => assignment !== null);
-        const activeResetBoundaryParameters = [
-          ...(hasClearedAt ? [Math.floor(request.scannedAt)] : []),
-          ...(hasUpdatedAt ? [Math.floor(request.scannedAt)] : []),
-        ];
-        if (activeResetAssignments.length > 0) {
-          activeDb
-            .prepare(
-              `UPDATE sessions
+            );
+          }
+          const hasClearedAt = sessionColumns.has('cleared_at');
+          const hasUpdatedAt = sessionColumns.has('updated_at');
+          const activeResetAssignments = [
+            sessionColumns.has('sdk_session_id') ? 'sdk_session_id = NULL' : null,
+            sessionColumns.has('codex_plan_json') ? 'codex_plan_json = NULL' : null,
+            sessionColumns.has('summary') ? 'summary = NULL' : null,
+            hasClearedAt ? 'cleared_at = MAX(COALESCE(cleared_at, 0), ?)' : null,
+            hasUpdatedAt ? 'updated_at = MAX(COALESCE(updated_at, 0), ?)' : null,
+          ].filter((assignment): assignment is string => assignment !== null);
+          const activeResetBoundaryParameters = [
+            ...(hasClearedAt ? [Math.floor(request.scannedAt)] : []),
+            ...(hasUpdatedAt ? [Math.floor(request.scannedAt)] : []),
+          ];
+          if (activeResetAssignments.length > 0) {
+            activeDb
+              .prepare(
+                `UPDATE sessions
                 SET ${activeResetAssignments.join(', ')}
               WHERE id IN (
                 SELECT id FROM temp.db_slimming_targets WHERE status = 'active'
               )`,
-            )
-            .run(...activeResetBoundaryParameters);
-        }
-        // Cleared ordinary tasks must not remain as empty entries in local or
-        // remote lists. Bot-owned timelines keep their separate lifecycle.
-        activeDb.exec(
-          `UPDATE sessions SET status = 'deleted'
+              )
+              .run(...activeResetBoundaryParameters);
+          }
+          // Cleared ordinary tasks must not remain as empty entries in local or
+          // remote lists. Bot-owned timelines keep their separate lifecycle.
+          activeDb.exec(
+            `UPDATE sessions SET status = 'deleted'
             WHERE id IN (
               SELECT id FROM temp.db_slimming_targets WHERE status = 'active'
             )${sessionColumns.has('source') ? " AND COALESCE(source, '') != 'bot'" : ''}`,
-        );
-        if (tableExists(activeDb, 'agent_input_queue_snapshots')) {
-          activeDb.exec(
-            `DELETE FROM agent_input_queue_snapshots
+          );
+          if (tableExists(activeDb, 'agent_input_queue_snapshots')) {
+            activeDb.exec(
+              `DELETE FROM agent_input_queue_snapshots
               WHERE session_id IN (
                 SELECT s.id FROM sessions s
                 JOIN temp.db_slimming_targets t ON t.id = s.id
                 WHERE t.status = 'active' AND s.status = 'deleted'
               )`,
-          );
-        }
-        if (tableExists(activeDb, 'shared_task_events')) {
-          // Persist closure in the same transaction; relay recovery consumes
-          // this existing journal after the compacted database is installed.
-          const sharedTasks = activeDb
-            .prepare(
-              `SELECT DISTINCT e.session_id AS sessionId
+            );
+          }
+          if (tableExists(activeDb, 'shared_task_events')) {
+            // Persist closure in the same transaction; relay recovery consumes
+            // this existing journal after the compacted database is installed.
+            const sharedTasks = activeDb
+              .prepare(
+                `SELECT DISTINCT e.session_id AS sessionId
                FROM shared_task_events e
                JOIN temp.db_slimming_targets t ON t.id = e.session_id
                JOIN sessions s ON s.id = t.id
               WHERE t.status = 'active' AND s.status = 'deleted'`,
-            )
-            .all() as Array<{ sessionId: string }>;
-          const closeSharedTask = activeDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL);
-          const commitPreparedClose = activeDb.prepare(
-            `UPDATE shared_task_events SET terminal = 1
+              )
+              .all() as Array<{ sessionId: string }>;
+            const closeSharedTask = activeDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL);
+            const commitPreparedClose = activeDb.prepare(
+              `UPDATE shared_task_events SET terminal = 1
              WHERE session_id = ? AND kind = 'local-close' AND revision = 0 AND terminal = 0`,
-          );
-          for (const { sessionId } of sharedTasks) {
-            closeSharedTask.run(Math.floor(request.scannedAt), sessionId);
-            // An interrupted preparation may already occupy the unique fence.
-            // Commit it together with deletion so relay recovery can retry it.
-            commitPreparedClose.run(sessionId);
+            );
+            for (const { sessionId } of sharedTasks) {
+              closeSharedTask.run(Math.floor(request.scannedAt), sessionId);
+              // An interrupted preparation may already occupy the unique fence.
+              // Commit it together with deletion so relay recovery can retry it.
+              commitPreparedClose.run(sessionId);
+            }
           }
         }
-      }
-      if (messagesFtsDeleteTriggerSql) activeDb.exec(messagesFtsDeleteTriggerSql);
-    });
-    cleanup();
+        if (messagesFtsDeleteTriggerSql) activeDb.exec(messagesFtsDeleteTriggerSql);
+      });
+      cleanup();
 
-    db.exec('DROP TABLE temp.db_slimming_targets');
+      db.exec('DROP TABLE temp.db_slimming_targets');
+    }
     reportProgress(options, 'compacting', 58, true);
     // VACUUM INTO writes the compact database once. In-place VACUUM first
     // builds a temporary database and then copies it back over the working
@@ -900,9 +914,14 @@ function installReplacement(dbFilePath: string, paths: MaintenancePaths): void {
     }
     restrictDbFilePermissions(dbFilePath);
   } catch (error) {
-    throw new DbSlimmingMaintenanceError('replacement-failed', 'database replacement failed', true, {
-      cause: error,
-    });
+    throw new DbSlimmingMaintenanceError(
+      'replacement-failed',
+      'database replacement failed',
+      true,
+      {
+        cause: error,
+      },
+    );
   }
 }
 
@@ -937,7 +956,9 @@ function restoreOriginalDatabase(
     throw new Error('original database could not be restored');
   }
   restrictDbFilePermissions(dbFilePath);
-  log.warn('database slimming replacement rolled back', { databaseName: path.basename(dbFilePath) });
+  log.warn('database slimming replacement rolled back', {
+    databaseName: path.basename(dbFilePath),
+  });
 }
 
 function completedResult(
@@ -962,9 +983,7 @@ function completedResult(
     reclaimedBytes: Math.max(0, request.beforeBytes - afterBytes),
     backupCreated: request.backupEnabled,
     ...(paths.backupLocation ? { backupLocation: paths.backupLocation } : {}),
-    ...(request.backupEnabled && paths.backupFinal
-      ? { backupPath: paths.backupFinal }
-      : {}),
+    ...(request.backupEnabled && paths.backupFinal ? { backupPath: paths.backupFinal } : {}),
   };
 }
 
@@ -1124,12 +1143,7 @@ function removeExactFile(filePath: string): boolean {
       if (attempt >= 3 || !['EBUSY', 'EACCES', 'EPERM'].includes(code ?? '')) {
         return !fs.existsSync(filePath);
       }
-      Atomics.wait(
-        new Int32Array(new SharedArrayBuffer(4)),
-        0,
-        0,
-        20 * (attempt + 1),
-      );
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20 * (attempt + 1));
     }
   }
 }
@@ -1142,12 +1156,7 @@ function renameWithRetry(from: string, to: string): void {
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (attempt >= 3 || !['EBUSY', 'EACCES', 'ENOTEMPTY'].includes(code ?? '')) throw error;
-      Atomics.wait(
-        new Int32Array(new SharedArrayBuffer(4)),
-        0,
-        0,
-        20 * (attempt + 1),
-      );
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20 * (attempt + 1));
     }
   }
 }

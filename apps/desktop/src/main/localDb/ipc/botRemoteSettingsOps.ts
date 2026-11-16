@@ -119,7 +119,7 @@ export function projectBotSettingsProfile(raw: unknown): Record<string, unknown>
     sessions: (Array.isArray(sessions) ? sessions : []).flatMap(item => {
       const session = item as Record<string, unknown>;
       // Group and IM lanes are not the teammate's own tasks and their records live in the group / IM.
-      if (!session || typeof session.id !== 'string' || session.role === 'group' || session.role === 'channel') return [];
+      if (!session || typeof session.id !== 'string' || session.status === 'deleted' || session.role === 'group' || session.role === 'channel') return [];
       return [{ id: session.id, title: session.title, kind: session.kind, updatedAt: session.updatedAt, status: session.status, role: session.role,
         ...(session.threadRoot ? { threadRoot: session.threadRoot } : {}) }];
     }),
