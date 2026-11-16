@@ -546,6 +546,27 @@ describe('Chat Server result delivery and refresh', () => {
       expect(continues()).toHaveLength(1);
     });
   });
+  // Unit: ordinary membership + own bot is the minimal previously denied input. Exercise
+  // production manage through HTTP: owner delegation must send leave, foreign removal stays denied.
+  it('withdraws only an owned companion using its own actor identity', async () => {
+    const foreignId = '00000000-0000-4000-8000-000000000099';
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route.endsWith('/members') && method === 'POST' && body.actorId === foreignId) return { status: 403, body: { error: { code: 'ROLE_REQUIRED' } } };
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [
+        { id: selfId, kind: 'human', ownerActorId: selfId, state: 'joined', role: 'member' },
+        { id: botId, kind: 'bot', ownerActorId: selfId, state: 'joined', role: 'member' },
+        { id: foreignId, kind: 'bot', ownerActorId: foreignId, state: 'joined', role: 'member' },
+      ], messages: [], cursor: '1' } };
+      return response(route);
+    });
+    const result = await service.chatServer!.manage({ groupId: roomId, action: { type: 'member', actorId: botId, action: 'remove' } });
+    expect(result).toMatchObject({ ok: true });
+    expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/members`, 'POST', expect.objectContaining({ actorId: botId, action: 'leave' }));
+    expect(fixture.requests.filter(request => request.url.endsWith('/members')).at(-1)?.actor).toBe(botId);
+    expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'member', actorId: foreignId, action: 'remove' } })).toMatchObject({ ok: false });
+    expect(fixture.requests.filter(request => request.url.endsWith('/members')).at(-1)?.actor).toBeUndefined();
+    expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/members`, 'POST', expect.objectContaining({ actorId: foreignId, action: 'remove' }));
+  });
   it('uses the mobile edited revision instead of a newer server snapshot when saving settings', async () => {
     await service.updateGroup({ groupId: roomId, name: 'Draft', expectedRevision: 7 });
     expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}`, 'PATCH', expect.objectContaining({ name: 'Draft', expectedRevision: 7 }));
@@ -2008,6 +2029,8 @@ describe('Chat Server result delivery and refresh', () => {
     ['a member with tools access', 'tools', '60000000-0000-4000-8000-000000000001', true],
     ['a chat-only member', 'chat', '60000000-0000-4000-8000-000000000001', true],
     ['the owner, once the task is gone', 'owner', selfId, false],
+    ['the owner, after their companion leaves', 'owner', selfId, true],
+    ['the owner, after an ordinary lease failure', 'owner', selfId, true],
   ] as const)('passes Thread words under a task card into the task only from the owner (%s)', async (_who, mode, speakerId, taskExists) => {
     const rootId = '70000000-0000-4000-8000-000000000001';
     const words = 'Please also update the docs';
@@ -2039,6 +2062,21 @@ describe('Chat Server result delivery and refresh', () => {
       return;
     }
     expect(deps.ensureLane).not.toHaveBeenCalled();
+    // Owner withdrawal: the server checks joined membership before STOP_REQUESTED, returning
+    // CONVERSATION_NOT_FOUND. Stop only that group's input, never an independent task turn.
+    if (_who === 'the owner, after their companion leaves' || _who === 'the owner, after an ordinary lease failure') {
+      const left = _who === 'the owner, after their companion leaves';
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => body?.action === 'heartbeat'
+        ? { status: left ? 404 : 409, body: { error: { code: left ? 'CONVERSATION_NOT_FOUND' : 'EXECUTION_EXPIRED' } } }
+        : previous(route, method, body));
+      await vi.advanceTimersByTimeAsync(15_000);
+      if (left) expect(deps.abortLane).toHaveBeenCalledExactlyOnceWith('task-1', input.clientId);
+      else expect(deps.abortLane).not.toHaveBeenCalled();
+      expect(await service.settleLaneTurn({ ...terminal, sessionId: 'task-1', activeInputClientId: input.clientId, resultText: 'Late reply' })).toBe(false);
+      expect(deliveries()).toHaveLength(0);
+      return;
+    }
     // Other members' words never drive the task; the owner's words carry them along as background.
     const message = `${words}\n\n${t('bots.groupChat.task.othersSaid')}\nAnn：Mind the changelog too`;
     expect(input).toMatchObject({ targetSessionId: 'task-1', message, persistedContent: message,

@@ -442,6 +442,7 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     ...(text(record.description, 2_000) ? { description: text(record.description, 2_000)! } : {}),
     supportsMemberRemoval: record.supportsMemberRemoval === true,
     supportsSettingsManagement: record.supportsSettingsManagement === true,
+    supportsOwnBotRemoval: record.supportsOwnBotRemoval === true,
     supportsReadReceipts: record.supportsReadReceipts === true,
     ...(record.supportsLocalReadSync === true ? { supportsLocalReadSync: true } : {}),
     supportsPersonalMask: record.supportsPersonalMask === true,

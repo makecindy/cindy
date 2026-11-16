@@ -2424,8 +2424,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     });
   }
   /**
-   * Task inputs are stopped only for an explicit group stop, scoped to this execution's
-   * input identity. Lease failures/disposal never stop an unrelated ordinary task turn.
+   * Task inputs are stopped only for an explicit stop or confirmed loss of room access,
+   * scoped to this execution's input identity. Other lease failures/disposal leave tasks alone.
    */
   function stopRunSession(run: Running, explicit = false): Promise<void> {
     if (!run.sessionId || (run.inTask && !explicit)) return Promise.resolve();
@@ -3663,7 +3663,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!run.settlement && running.get(run.execution.id) === run) {
         run.releaseToolAuthority?.();
         forgetRun(run);
-        await stopRunSession(run);
+        // Leaving a room fails its membership check before the server can return STOP_REQUESTED.
+        // Revoke only this group's input in a card task, retaining independent owner inputs.
+        await stopRunSession(run, error.message === 'CONVERSATION_NOT_FOUND');
         changed(run.execution.conversation_id);
       }
     } finally {
@@ -3884,9 +3886,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (!recipient) throw new Error('MEMBER_NOT_FOUND');
         if (recipient.kind !== 'human') throw new Error('HUMAN_OWNER_REQUIRED');
       }
-      const actorId = asManager ? managementActor(s) : undefined;
+      // Withdrawing your companion is its own leave, not permission to manage other members.
+      // The server independently validates actor ownership and settles only this room's executions.
+      const ownCompanion = action.type === 'member' && action.action === 'remove'
+        ? s.members.find(member => member.id === action.actorId && member.state === 'joined'
+          && member.kind === 'bot' && member.ownerActorId === selfId && member.id !== assistantActorId)
+        : undefined;
+      const actorId = ownCompanion?.id ?? (asManager ? managementActor(s) : undefined);
       await api(`/conversations/${target}${route}`, type === 'update' || type === 'archive' ? 'PATCH' : 'POST', {
-        operationId: randomUUID(), ...payload, ...(type === 'archive' ? { archived: action.archived } : {}),
+        operationId: randomUUID(), ...payload, ...(ownCompanion ? { action: 'leave' } : {}), ...(type === 'archive' ? { archived: action.archived } : {}),
       }, actorId);
       changed(target); return {};
     }),

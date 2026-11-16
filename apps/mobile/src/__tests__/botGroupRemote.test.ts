@@ -74,6 +74,13 @@ describe('parseBotGroupChatData', () => {
       runtimeFailureCode: code, runtimeFailureReason: reason }] }))!;
     expect(parsed.messages[0].runtimeFailureReason).toBe(expected);
   });
+  // Unit regression: Host's optional permission affordance was dropped by the real resource
+  // parser, hiding own-companion removal. Old/malformed hosts must not authorize the entry.
+  it.each([true, undefined, 'true'])('preserves own-companion removal capability only for explicit true (%s)', flag => {
+    const parsed = parseBotGroupChatData(chatData({ supportsOwnBotRemoval: flag }));
+    expect(parsed?.supportsOwnBotRemoval).toBe(flag === true);
+  });
+
   it('preserves skip permissions, pending-skip support, execution identity and skipped rows from the computer', () => {
     const base = chatData().plans[0];
     const parsed = parseBotGroupChatData(chatData({ plans: [{ ...base, kind: 'talk', canManage: true, supportsPendingSkip: true, canSetAutoContinue: true,
