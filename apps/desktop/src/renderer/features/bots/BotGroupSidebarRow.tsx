@@ -117,7 +117,7 @@ export function BotGroupSidebarRow({
       const source = t('bots.groupChat.sidebar.threadReply');
       const label = `${source} · ${text}`;
       const content = <>
-        <span className="inline-flex shrink-0 items-center gap-1 text-11 leading-4">
+        <span className="inline-flex shrink-0 items-center gap-1 text-11 leading-[1.455]">
           <MessagesSquare size={12} aria-hidden />{source}<span aria-hidden>·</span>
         </span>
         <span className="min-w-0 truncate">{text}</span>
@@ -130,10 +130,10 @@ export function BotGroupSidebarRow({
           event.stopPropagation();
           onOpenGroup(group.id, { messageId: last.messageId!, threadRootId: last.threadRootId! });
         }}
-        className={cn('pointer-events-auto relative -mb-2 flex min-h-6 min-w-0 flex-1 items-start gap-1 text-left text-12 leading-4 outline-none hover:underline underline-offset-2 focus-visible:ring-2 focus-visible:ring-ring', mutedClass)}>
+        className={cn('pointer-events-auto relative -mb-2 flex min-h-6 min-w-0 flex-1 items-start gap-1 text-left text-12 leading-[1.3334] outline-none hover:underline underline-offset-2 focus-visible:ring-2 focus-visible:ring-ring', mutedClass)}>
         {content}
       </button>;
-      return <span title={label} className={cn('flex min-w-0 flex-1 items-center gap-1 text-12 leading-4', mutedClass)}>{content}</span>;
+      return <span title={label} className={cn('flex min-w-0 flex-1 items-center gap-1 text-12 leading-[1.3334]', mutedClass)}>{content}</span>;
     }
     return <span className={cn('min-w-0 flex-1 truncate text-12 leading-4', mutedClass)} title={text}>{text}</span>;
   };

@@ -6196,13 +6196,30 @@ describe('sidebar topic reply navigation', () => {
   const rootId = '40000000-0000-4000-8000-000000000001';
   const messageId = '40000000-0000-4000-8000-000000000002';
   let revision = 0;
-  function prepare() {
+  function prepare(hasMore = false) {
     const historyRevision = `sidebar-history-${++revision}`;
     mocks.locationSearch = `?messageId=${messageId}&threadRootId=${rootId}`;
     mocks.locationKey = 'topic-first';
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, historyRevision }) });
-    mocks.thread.mockResolvedValue({ ok: true, historyRevision, root: msg({ id: rootId }),
-      replies: [msg({ id: messageId, content: 'Sidebar target reply', threadRootId: rootId })], hasMore: false });
+    const value = { ok: true, historyRevision, root: msg({ id: rootId }),
+      replies: [msg({ id: messageId, content: 'Sidebar target reply', threadRootId: rootId })], hasMore };
+    mocks.thread.mockResolvedValue(value);
+    return value;
+  }
+  function navigate(view: ReturnType<typeof renderView>, locationKey: string, targetId?: string) {
+    mocks.locationKey = locationKey;
+    mocks.locationSearch = targetId ? `?messageId=${targetId}&threadRootId=${rootId}` : '';
+    view.rerender(<Tooltip.Provider><FeatureSidebarSlotProvider isCollapsed={false}><HeaderSlot /><BotGroupChatView /></FeatureSidebarSlotProvider></Tooltip.Provider>);
+  }
+  async function cacheTopic(hasMore = false) {
+    const value = prepare(hasMore);
+    const view = renderView();
+    const target = (await screen.findByText('Sidebar target reply')).closest('[data-share-message-id]')!;
+    await waitFor(() => expect(target.classList.contains('ring-2')).toBe(true));
+    navigate(view, 'main-row');
+    await waitFor(() => expect(screen.queryByText('Sidebar target reply')).toBeNull());
+    mocks.thread.mockClear();
+    return { view, value };
   }
   it('highlights the exact reply again on a second click and returns to main chat', async () => {
     prepare();
@@ -6229,6 +6246,77 @@ describe('sidebar topic reply navigation', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'commonUi.retry' }));
     const target = (await screen.findByText('Sidebar target reply')).closest('[data-share-message-id]')!;
     await waitFor(() => expect(target.classList.contains('ring-2')).toBe(true));
+  });
+  // Unit: the existing cached-reopen case resolved its refresh immediately, and the
+  // failure case had no cache. Exercise the real route with both states combined.
+  it.each(['error result', 'rejected request'] as const)('locates cached replies while refresh is pending and after an %s', async failure => {
+    const { view } = await cacheTopic();
+    let finish!: (value: unknown) => void;
+    let reject!: (reason: Error) => void;
+    mocks.thread.mockImplementationOnce(() => new Promise((resolve, fail) => { finish = resolve; reject = fail; }));
+    navigate(view, 'topic-cached', messageId);
+    const target = (await screen.findByText('Sidebar target reply')).closest('[data-share-message-id]')!;
+    await waitFor(() => expect(target.classList.contains('ring-2')).toBe(true));
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(target, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+    target.classList.remove('ring-2');
+    navigate(view, 'topic-pending-again', messageId);
+    await waitFor(() => expect(target.classList.contains('ring-2')).toBe(true));
+    expect(scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ block: 'center' }));
+    expect(mocks.thread).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      if (failure === 'error result') finish({ ok: false, errorCode: 'NETWORK_ERROR' });
+      else reject(new Error('Network unavailable'));
+    });
+    await screen.findByRole('button', { name: 'commonUi.retry' });
+    expect(screen.getByText('Sidebar target reply').closest('[data-share-message-id]')).toBe(target);
+    target.classList.remove('ring-2');
+    scrollIntoView.mockClear();
+    navigate(view, 'topic-failed-again', messageId);
+    await waitFor(() => expect(target.classList.contains('ring-2')).toBe(true));
+    expect(scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ block: 'center' }));
+    expect(mocks.thread).toHaveBeenCalledOnce();
+    expect(mocks.toastInfo).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'commonUi.retry' })).toBeNull());
+    expect(screen.getByText('Sidebar target reply')).toBeTruthy();
+  });
+  it('clears a focused cached reply when refresh revokes access and does not restore it on reopen', async () => {
+    const { view } = await cacheTopic();
+    let finish!: (value: unknown) => void;
+    mocks.thread.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    navigate(view, 'topic-cached', messageId);
+    const target = (await screen.findByText('Sidebar target reply')).closest('[data-share-message-id]')!;
+    await waitFor(() => expect(target.classList.contains('ring-2')).toBe(true));
+    await act(async () => finish({ ok: false, errorCode: 'NOT_MEMBER' }));
+    expect(screen.queryByText('Sidebar target reply')).toBeNull();
+    navigate(view, 'main-row-again');
+    navigate(view, 'topic-revoked', messageId);
+    expect(screen.queryByText('Sidebar target reply')).toBeNull();
+    await act(async () => finish({ ok: false, errorCode: 'NOT_MEMBER' }));
+    expect(mocks.toastInfo).not.toHaveBeenCalled();
+  });
+  it.each([false, true])('waits for a successful refresh before searching beyond cached replies (hasMore=%s)', async hasMore => {
+    const { view, value } = await cacheTopic(hasMore);
+    const missingId = '40000000-0000-4000-8000-000000000003';
+    let finish!: (value: unknown) => void;
+    mocks.thread.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValue({ ...value, replies: [], hasMore: false });
+    navigate(view, 'topic-missing', missingId);
+    await screen.findByText('Sidebar target reply');
+    expect(mocks.thread).toHaveBeenCalledOnce();
+    expect(mocks.toastInfo).not.toHaveBeenCalled();
+    await act(async () => finish({ ok: false, errorCode: 'NETWORK_ERROR' }));
+    await screen.findByRole('button', { name: 'commonUi.retry' });
+    navigate(view, 'topic-missing-again', missingId);
+    expect(mocks.thread).toHaveBeenCalledOnce();
+    expect(mocks.toastInfo).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
+    await waitFor(() => expect(mocks.toastInfo).toHaveBeenCalledWith('bots.groupChat.server.thread.replyNotFound'));
+    expect(mocks.toastInfo).toHaveBeenCalledOnce();
+    expect(mocks.thread).toHaveBeenCalledTimes(hasMore ? 3 : 2);
+    if (hasMore) expect(mocks.thread.mock.calls.at(-1)?.[0].before).toBe(value.replies[0]!.sequence);
   });
   it('reports an unavailable reply only after its topic has loaded', async () => {
     prepare();

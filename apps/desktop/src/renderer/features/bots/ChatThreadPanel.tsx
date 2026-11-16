@@ -513,7 +513,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   // A share or sidebar preview opened this thread: find its reply, reading back a few pages if needed.
   const focusSearch = useRef<{ nonce: number; pages: number } | null>(null);
   useEffect(() => {
-    if (!focus || !root || error || !hasRead) return;
+    if (!focus || !root) return;
     if (focusSearch.current?.nonce !== focus.nonce) focusSearch.current = { nonce: focus.nonce, pages: 0 };
     const search = focusSearch.current;
     if (search.pages < 0) return;
@@ -523,6 +523,9 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       if (!replies.find(reply => reply.id === focus.messageId)?.deleted) readLocatedMention(focus.messageId, target);
       return;
     }
+    // Cached replies can be located while refresh waits or fails. Only a successful
+    // read can justify paging further or reporting that the reply is unavailable.
+    if (error || !hasRead) return;
     if (!hasMore || search.pages >= FOCUS_PAGE_LIMIT) {
       search.pages = -1;
       toast.info(t(key('thread.replyNotFound')));
