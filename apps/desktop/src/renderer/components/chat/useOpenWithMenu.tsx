@@ -17,10 +17,18 @@
  */
 
 import { useRef, useState, type ReactElement, type MouseEvent } from 'react';
-import { Globe, Link2, PanelRight } from 'lucide-react';
+import { GitPullRequest, Globe, Link2, PanelRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 
+import { parseSessionPrUrl, prStatusKey } from '@cindy/maker-shared';
+import { usePrActions, usePrRefsForSession } from '@/contexts/PrRefsContext';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+} from '@/contexts/dataOwnerGeneration';
+import { sessionsStore } from '@/lib/sessionsStore';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { toast } from '@/lib/toast';
 import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import {
@@ -66,8 +74,15 @@ export async function openUrlByPreference(
 ): Promise<void> {
   if (url.startsWith('https://')) {
     let supported = false;
-    try { supported = (await readMailPreview(sessionId, url, false)).supported; } catch { /* Older hosts retain normal link opening. */ }
-    if (supported) { await openMailPreview(sessionId, url); return; }
+    try {
+      supported = (await readMailPreview(sessionId, url, false)).supported;
+    } catch {
+      /* Older hosts retain normal link opening. */
+    }
+    if (supported) {
+      await openMailPreview(sessionId, url);
+      return;
+    }
   }
   if (getLinkOpenPreferenceForUrl(url) === 'sidebar') {
     await openInSidebar(sessionId, url, t);
@@ -79,7 +94,10 @@ export async function openUrlByPreference(
 
 /** Identical activation for user URLs, assistant Markdown and keyboard/middle clicks. */
 export async function activateMessageUrl(
-  event: Pick<MouseEvent<HTMLElement>, 'preventDefault' | 'stopPropagation' | 'shiftKey' | 'metaKey' | 'ctrlKey' | 'button'>,
+  event: Pick<
+    MouseEvent<HTMLElement>,
+    'preventDefault' | 'stopPropagation' | 'shiftKey' | 'metaKey' | 'ctrlKey' | 'button'
+  >,
   sessionId: string | undefined,
   url: string,
   t: TFunction,
@@ -132,7 +150,13 @@ export async function openHtmlFileByPreference(
     return;
   }
   const resolvedTarget = target ?? getLinkOpenPreference('local');
-  const key = JSON.stringify([sessionId, context.origin, context.workingDir, absPath, resolvedTarget]);
+  const key = JSON.stringify([
+    sessionId,
+    context.origin,
+    context.workingDir,
+    absPath,
+    resolvedTarget,
+  ]);
   const pending = pendingHtmlPreviews.get(key);
   if (pending) return pending;
   const opening = prepareRemoteHtml().finally(() => {
@@ -213,12 +237,88 @@ export interface UseOpenWithMenu {
 
 export function useOpenWithMenu({ sessionId }: { sessionId?: string }): UseOpenWithMenu {
   const { t } = useTranslation();
-  const [state, setState] = useState<{ x: number; y: number; url: string } | null>(null);
+  const [state, setState] = useState<{
+    x: number;
+    y: number;
+    url: string;
+    sessionId?: string;
+    owner: ReturnType<typeof getDataOwnerGeneration>;
+  } | null>(null);
   const sidebarTargetSessionId = useSidebarTargetSessionId(sessionId);
   const triggerRef = useRef<HTMLElement | null>(null);
+  const refs = usePrRefsForSession(sessionId ?? '');
+  const { invalidateRemotePrRefs } = usePrActions();
+  const adding = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const pr = state ? parseSessionPrUrl(state.url) : null;
+  const alreadyAdded =
+    pr !== null &&
+    refs.some(
+      (ref) =>
+        ref.removedAt == null &&
+        ref.associationSource !== 'legacy' &&
+        prStatusKey(ref) === prStatusKey(pr),
+    );
+
+  async function handleAddPr(): Promise<void> {
+    if (
+      !sessionId ||
+      !pr ||
+      alreadyAdded ||
+      adding.current ||
+      state?.sessionId !== sessionId ||
+      !isDataOwnerGenerationCurrent(state.owner)
+    )
+      return;
+    const requestSessionId = sessionId;
+    const owner = state.owner;
+    const input = { sessionId: requestSessionId, action: 'add' as const, url: pr.url };
+    adding.current = true;
+    setBusy(true);
+    setState(null);
+    try {
+      let session = sessionsStore.findById(requestSessionId);
+      let deviceId = session?.deviceLinkDeviceId ?? getStickySessionDeviceId(requestSessionId);
+      if (!deviceId && !session) {
+        // Absence from the list is not proof of local ownership. Confirm the row
+        // before any write; a missing/disconnected remote task must not fall back.
+        session = await window.electronAPI.localDb.sessions.get(requestSessionId);
+        if (!session) throw new Error('Task unavailable');
+        deviceId = session.deviceLinkDeviceId ?? getStickySessionDeviceId(requestSessionId);
+      }
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      if (deviceId) {
+        await window.electronAPI.deviceLink.invoke(deviceId, 'git-context:pr-refs:manage', [input]);
+        if (isDataOwnerGenerationCurrent(owner)) invalidateRemotePrRefs(requestSessionId);
+      } else {
+        await window.electronAPI.gitContext.managePrRefs(input);
+      }
+      if (isDataOwnerGenerationCurrent(owner))
+        toast.success(t('chat.markdownRenderer.prAddedToHeader'));
+    } catch (error) {
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      const code = extractIpcError(error)?.code;
+      const key =
+        code === 'ALREADY_EXISTS'
+          ? 'duplicate'
+          : code === 'INVALID_PARAMS'
+            ? 'invalidUrl'
+            : code === 'PRECONDITION_FAILED'
+              ? 'verifyFailed'
+              : code === 'UNSUPPORTED_CAPABILITY' || code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED'
+                ? 'unsupported'
+                : code === 'NOT_FOUND'
+                  ? 'notFound'
+                  : 'failed';
+      toast.error(t(`ccAgent.gitContext.pr.manage.errors.${key}`));
+    } finally {
+      adding.current = false;
+      setBusy(false);
+    }
+  }
 
   const openAt = (x: number, y: number, url: string): void => {
-    setState({ x, y, url });
+    setState({ x, y, url, sessionId, owner: getDataOwnerGeneration() });
   };
   const onContextMenu = (event: MouseEvent<HTMLElement>, url: string) => {
     event.preventDefault();
@@ -304,6 +404,16 @@ export function useOpenWithMenu({ sessionId }: { sessionId?: string }): UseOpenW
             {t('chat.markdownRenderer.shiftClick')}
           </DropdownMenuShortcut>
         </DropdownMenuItem>
+        {sessionId && pr ? (
+          <DropdownMenuItem onClick={handleAddPr} disabled={alreadyAdded || busy}>
+            <GitPullRequest className="mr-2 h-4 w-4" />
+            {t(
+              alreadyAdded
+                ? 'chat.markdownRenderer.prAlreadyInHeader'
+                : 'chat.markdownRenderer.addPrToHeader',
+            )}
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={handleCopyLink}>
           <Link2 className="mr-2 h-4 w-4" />
