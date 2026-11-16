@@ -71,6 +71,22 @@ export default {
       await checkSingleLine();
       await page.locator('textarea').fill('已重新登录，另补充一个现象。\n这里应该有充足的文字输入空间。');
       await checkComposer();
+      // Regression #10732 / review r4580889358: expanding at two rows used to
+      // leave plan feedback overflow hidden when later input exceeded its cap.
+      // Exercise the real fields in the browser; the old geometry-only checks
+      // never crossed the scroll threshold. UI/e2e tier, two rows -> twelve -> two.
+      const field = page.locator('textarea');
+      await field.fill(Array.from({ length: 12 }, (_, i) => `第 ${i + 1} 行反馈`).join('\n'));
+      await checkComposer();
+      const canScroll = await field.evaluate((el) =>
+        el.scrollHeight > el.clientHeight && getComputedStyle(el).overflowY === 'auto');
+      assert.ok(canScroll, 'Long answers remain scrollable after expanding from short text');
+      await field.evaluate((el) => { el.scrollTop = 0; });
+      await field.hover();
+      await page.mouse.wheel(0, 120);
+      await page.waitForFunction(() => document.querySelector('textarea').scrollTop > 0);
+      await field.fill('缩短后的反馈。\n第二行。');
+      assert.ok(await field.evaluate((el) => el.scrollHeight <= el.clientHeight), 'Shortened answers fit without scrolling');
       return;
     }
     if (ui.case === 'unanswered') {

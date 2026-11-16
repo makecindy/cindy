@@ -49,8 +49,8 @@ export function useAnswerComposerExpanded(
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, cap)}px`;
     el.style.overflowY = el.scrollHeight > cap ? 'auto' : 'hidden';
-    // Only a layout switch changes the width; typing is fitted by the composer itself.
-  }, [expanded]);
+    // Refit after both width changes and edits, including crossing the scroll cap.
+  }, [expanded, value]);
 
   return expanded;
 }
