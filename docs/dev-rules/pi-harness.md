@@ -475,7 +475,9 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   重试耗尽即释放运行标记并发布失败收尾与空闲状态，Host Stop 则保留取消结果；
   不依赖可能缺席的 `agent_settled`，不把失败伪装成原生成功。新 `agent_start` 前
   到达的旧终态不重复结算，也不清除下一条已准备消息的逐轮权限策略；队列中的旧
-  `done`／空闲状态仍属于旧轮次。回归见 `pi-long-tool-lifecycle.test.ts`、
+  `done`／空闲状态仍属于旧轮次。Stop 的异步成功回执也只清理发起停止时的策略归属；
+  归属从新消息准备发送时建立，不能只比较原生 `agent_start` 代次或策略对象引用。
+  回归见 `pi-long-tool-lifecycle.test.ts`、
   `pi-translator.test.ts` 与 `pi-auto-review-dispatch.test.ts`。
 - SDK 成功与正文入库／交付分开取证。只见 JSONL 成功但 SQLite 缺正文时，不能自动重跑
   已成功的工作；应沿 RPC → translator → Session → persistence 查丢失边界。
