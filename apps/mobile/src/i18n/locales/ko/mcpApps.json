@@ -4,10 +4,22 @@
   "loadFailed": "앱을 불러오지 못했습니다. 연결을 확인한 후 다시 불러오세요.",
   "updateRequired": "이 컴퓨터는 아직 MCP Apps를 지원하지 않습니다. 해당 컴퓨터의 Cindy를 업데이트한 후 다시 시도하세요.",
   "appName": "MCP App",
-  "cardTitle": "{{title}} · $t(mcpApps.appName)",
+  "cardTitle": "{{title}}",
   "messageSource": "$t(mcpApps.appName) “{{name}}”에서 전송",
   "serverId": "MCP 서버 ID: {{id}}",
   "exitFullscreen": "전체 화면 종료",
   "mobileUpdateRequired": "이 카드를 열려면 휴대폰의 Cindy를 업데이트하세요.",
-  "filesOnExecutionComputer": "파일 내용은 실행 컴퓨터에서 확인해 주세요"
+  "filesOnExecutionComputer": "파일 내용은 실행 컴퓨터에서 확인해 주세요",
+  "source": {
+    "official": "Cindy 공식",
+    "organization": "조직 · {{namespace}}",
+    "market": "플러그인 마켓",
+    "third-party": "타사 출처",
+    "local": "로컬 설치",
+    "unknown": "알 수 없는 출처"
+  },
+  "customMcp": "사용자 지정 MCP",
+  "sourceLabel": "출처",
+  "signatureLabel": "서명",
+  "fullscreen": "전체 화면"
 }

@@ -30,7 +30,7 @@ import { projectPluginWorkdir, resolvePluginWorkdir } from './remotePluginProjec
 import { takePeerAttachment } from '../device-link/peerAttachmentStore.js';
 import { parsePeerAttachmentRef } from '@cindy/device-link';
 import { capturePluginOauthPeer } from '../plugin-oauth/runtime.js';
-import { projectPluginPublishingSource } from './pluginPublishingSource.js';
+import { projectPluginPublishingSource, projectPluginInstallationSource } from './pluginPublishingSource.js';
 import { readMobilePreview } from './mobilePreview.js';
 import { createMailReader, mailReaderRemoteProvider } from './mailReader.js';
 import { resolveForgeInstallTarget, ghostInstallTargetContext } from './ghostInstallTarget.js';
@@ -215,7 +215,7 @@ export async function requestPluginUiApproval(id: string, sender?: WebContents, 
       return accepted;
     } : createWindowGhostInstallConsentPrompt(target!, confirmed => { declined = !confirmed; });
     const accepted = await confirm({
-      trust: ghost.trust?.level, purpose: 'ui-capability', initiator: 'user', origin: 'local-file', facts: {
+      installationSource: ghost.installationSource ?? { kind: 'unknown' }, trust: ghost.trust?.level, purpose: 'ui-capability', initiator: 'user', origin: 'local-file', facts: {
         kind: 'update', ghostId: id, name: ghost.manifest.name, version: ghost.manifest.version,
         previousVersion: ghost.manifest.version, added: ghostPermissionItems(ghost.manifest).filter(item => item.key === 'ui:pages'),
         removed: [], unchangedCount: 0, builtinOauthClientChanged: false,
@@ -2154,6 +2154,7 @@ export function getGhostManager(): GhostManager {
         }
         return {
           publishingSource: projectPluginPublishingSource(record, receipt, lookup),
+          installationSource: projectPluginInstallationSource(record, receipt, lookup),
         };
       },
       prepareListingSources: () => {
@@ -2163,6 +2164,8 @@ export function getGhostManager(): GhostManager {
             project: (record, receipt) => ({
               publishingSource: projectPluginPublishingSource(record, receipt,
                 snapshot.lookup({ ghostId: record.ghostId, namespace: record.namespace })),
+              installationSource: projectPluginInstallationSource(record, receipt,
+                snapshot.lookup({ ghostId: record.ghostId, namespace: record.namespace })),
             }),
             isCurrent: snapshot.isCurrent,
           };
@@ -2170,6 +2173,7 @@ export function getGhostManager(): GhostManager {
           return {
             project: (record, receipt) => ({
               publishingSource: projectPluginPublishingSource(record, receipt, { kind: 'invalid' }),
+              installationSource: projectPluginInstallationSource(record, receipt, { kind: 'invalid' }),
             }),
             // A failed read is not a validated snapshot; let async scans retry.
             isCurrent: () => false,
