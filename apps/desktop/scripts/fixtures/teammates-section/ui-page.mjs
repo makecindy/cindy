@@ -245,6 +245,7 @@ export default {
       await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterSortBy.manual'), exact: true }).click();
       assert.deepEqual(await titles(), ['pinned-0', 'pinned-1', 'pinned-2']);
       await ui.capture('manual-restored');
+      await openMenu();
       return;
     }
     const showIcons = async () => {
