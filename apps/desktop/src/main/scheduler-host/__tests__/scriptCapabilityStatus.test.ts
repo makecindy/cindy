@@ -14,6 +14,7 @@ describe('resolveScriptCapabilityStatuses', () => {
       { capability: 'jira.comment', state: 'ok' },
       { capability: 'sessions.dispatch', state: 'ok' },
       { capability: 'feishu.read', state: 'ok' },
+      { capability: 'settings.read', state: 'ok' },
     ]);
   });
 

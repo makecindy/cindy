@@ -12,11 +12,26 @@ import { GhostPipeDispatcher } from '../../cindy-brain/pipeDispatcher.js';
 import type { GhostPipeToolCall, InstalledGhost } from '../../../shared/ghost.js';
 import { installedGhostStoragePart, resolveInstalledGhost } from '../../../shared/pluginIdentity.js';
 import { SchedulerScriptCapabilityBroker } from '../script-capability-broker.desktop';
+import { SchedulerScriptCapabilityBroker as SharedBroker } from '../script-capability-broker';
 
 const sendToSessionMock = vi.hoisted(() => vi.fn());
 const restoreArchivedSessionForSend = vi.hoisted(() => vi.fn());
 const getSessionRowSnapshotStrict = vi.hoisted(() => vi.fn());
 vi.mock('../../localDb/ipc/sessions', () => ({ restoreArchivedSessionForSend, getSessionRowSnapshotStrict }));
+const providerReads = vi.hoisted(() => ({
+  current: true, models: vi.fn(), shares: vi.fn(), group: vi.fn(), remote: vi.fn(),
+}));
+vi.mock('../../app-settings/models.js', () => ({ manageAppModels: providerReads.models }));
+vi.mock('../../provider-group/managementScope.js', () => ({ captureProviderManagementScope: () => {
+  const guard = () => { if (!providerReads.current) throw new Error('OWNER_SCOPE_CHANGED'); };
+  guard();
+  return guard;
+} }));
+vi.mock('../../device-link/providerShareRuntime.js', () => ({ executeProviderShareManagementCommand: providerReads.shares }));
+vi.mock('../../provider-group/ipc.js', () => ({ createProviderGroupCommandDeps: () => ({}), executeProviderGroupCommand: providerReads.group }));
+vi.mock('../../provider-group/managementClient.js', () => ({ invokeProviderManagement: providerReads.remote }));
+vi.mock('../../device-link/index.js', () => ({ remoteInvoke: vi.fn() }));
+vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'this-computer' }));
 // ghost pipe 统一入口:缺省回显请求(jira/feishu 用例断言请求形状),
 // 单个用例可 mockResolvedValueOnce 覆盖返回(断言 data 解包 / 错误映射)。
 const callGhostToolMock = vi.hoisted(() =>
@@ -88,9 +103,88 @@ describe('SchedulerScriptCapabilityBroker', () => {
     callGhostToolMock.mockImplementation(async (request: unknown) => ({ ok: true, result: request }));
     registerCallMock.mockReset();
     finalizeCallMock.mockReset();
+    providerReads.current = true;
+    for (const mock of [providerReads.models, providerReads.shares, providerReads.group, providerReads.remote]) mock.mockReset();
     mockAvailableGhosts(['xd-atlassian', 'xd-feishu'].map((id) => ({
       ...makeInstalledGhost(id), namespaceState: 'pending',
     })), ['xd-atlassian', 'xd-feishu']);
+  });
+
+  // Unit: approved read-only script scope. Existing broker cases cannot reach
+  // these host reads. Minimal inputs prove observable views, denied writes and
+  // late-owner rejection through the production broker, without an Agent caller.
+  it.each([
+    ['list_model_providers', {}, { providers: [] }, 'models', { operation: 'list' }],
+    ['configure_model_provider', { change: { action: 'subscriptionAccounts', providerId: 'anthropic', command: { action: 'read' } } },
+      { accounts: { configured: false } }, 'models', { operation: 'provider', change: { action: 'subscriptionAccounts', providerId: 'anthropic', command: { action: 'read' } } }],
+    ['get_provider_usage_history', { providerId: 'anthropic' }, { coverageStart: '2026-11-15', todayKey: '2026-11-16', models: [] },
+      'shares', { action: 'usage-history', providerId: 'anthropic' }],
+    ['get_provider_group', { providerId: 'anthropic' }, { members: [], quota: null }, 'group', { action: 'get', providerId: 'anthropic' }],
+    ['get_provider_share_model_access', { providerId: 'anthropic', memberId: 'member' },
+      { models: null, providerModels: null, availableModels: [] }, 'shares', { action: 'get-model-access', providerId: 'anthropic', memberId: 'member' }],
+  ] as const)('delegates settings.%s to the existing host read', async (method, params, raw, handler, command) => {
+    providerReads[handler].mockResolvedValue(raw);
+    const result = await new SchedulerScriptCapabilityBroker().call(
+      { method: `settings.${method}`, params }, new Set(['settings.read']), { schedule: schedule() },
+    );
+    expect(result).toMatchObject(raw);
+    expect(providerReads[handler]).toHaveBeenCalledWith(...(handler === 'group'
+      ? [expect.any(Object), command] : [command, expect.any(Function)]));
+    expect(callGhostToolMock).not.toHaveBeenCalled();
+    expect(sendToSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('uses the original lightweight member read and explicit remote route', async () => {
+    const raw = { ready: true, includeUsage: false, shares: [{ shareId: 'share', providerId: 'anthropic',
+      members: [{ memberId: 'member', displayName: 'Member', status: 'active', privateNote: 'excluded' }] }] };
+    providerReads.shares.mockResolvedValue(raw);
+    const broker = new SchedulerScriptCapabilityBroker();
+    expect(await broker.call({ method: 'settings.list_provider_share_members', params: { device: 'this-computer' } },
+      new Set(['settings.read']), { schedule: schedule() })).toEqual({ scope: 'local', deviceId: 'local',
+      members: [{ shareId: 'share', providerId: 'anthropic', memberId: 'member', name: 'Member', status: 'active' }] });
+    expect(providerReads.shares).toHaveBeenCalledWith({ action: 'owned', range: 'all', includeUsage: false }, expect.any(Function));
+    providerReads.remote.mockRejectedValue(new Error('UNSUPPORTED_CAPABILITY'));
+    await expect(broker.call({ method: 'settings.get_provider_usage_history', params: { providerId: 'anthropic', device: 'older-computer' } },
+      new Set(['settings.read']), { schedule: schedule() })).rejects.toThrow('UNSUPPORTED_CAPABILITY');
+    expect(providerReads.shares).toHaveBeenCalledTimes(1);
+    expect(providerReads.remote).toHaveBeenCalledWith(expect.any(Function), 'older-computer',
+      { action: 'manage-share', command: { action: 'usage-history', providerId: 'anthropic' } });
+  });
+
+  it('rejects missing grants, caller injection and mixed-tool writes before host access', async () => {
+    const broker = new SchedulerScriptCapabilityBroker();
+    await expect(broker.call({ method: 'settings.list_model_providers', params: {} }, new Set(), { schedule: schedule() }))
+      .rejects.toMatchObject({ code: 'CAPABILITY_DENIED' });
+    for (const change of [{ action: 'rename', providerId: 'anthropic', name: 'x' },
+      { action: 'subscriptionAccounts', providerId: 'anthropic', command: { action: 'configure', paused: true } }]) {
+      await expect(broker.call({ method: 'settings.configure_model_provider', params: { change } },
+        new Set(['settings.read']), { schedule: schedule() })).rejects.toMatchObject({ code: 'CAPABILITY_DENIED' });
+    }
+    await expect(broker.call({ method: 'settings.list_model_providers', params: { callerSessionId: 'other' } },
+      new Set(['settings.read']), { schedule: schedule() })).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    await expect(broker.call({ method: 'settings.set_provider_share_member_status', params: { memberId: 'member', status: 'pause' } },
+      new Set(['settings.read']), { schedule: schedule() })).rejects.toMatchObject({ code: 'METHOD_NOT_FOUND' });
+    expect(providerReads.models).not.toHaveBeenCalled();
+    expect(providerReads.shares).not.toHaveBeenCalled();
+  });
+
+  it.each(['list_model_providers', 'get_provider_group'])('withholds settings.%s data after an owner change', async method => {
+    const read = async () => { providerReads.current = false; return { private: 'old-owner' }; };
+    providerReads.models.mockImplementation(read);
+    providerReads.group.mockImplementation(read);
+    await expect(new SchedulerScriptCapabilityBroker().call({ method: `settings.${method}`, params: { providerId: 'anthropic' } },
+      new Set(['settings.read']), { schedule: schedule() })).rejects.toThrow('OWNER_SCOPE_CHANGED');
+  });
+
+  it('reports unavailable settings ports without loading a desktop service', async () => {
+    const broker = new SharedBroker({}, { findTrustedXdGhostForScript: vi.fn(), getGhostCardService: vi.fn(),
+      getGhostPipeDispatcher: vi.fn(), tryGetOrcaCollabService: vi.fn(),
+      getSessionRowSnapshotStrict: vi.fn(), restoreArchivedSessionForSend: vi.fn() });
+    await expect(broker.call({ method: 'settings.list_model_providers', params: {} },
+      new Set(['settings.read']), { schedule: schedule() })).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+    expect(await broker.call({ method: 'host.capabilities', params: {} }, new Set(['settings.read']), { schedule: schedule() }))
+      .toMatchObject({ methods: expect.arrayContaining([{ method: 'settings.list_model_providers', capability: 'settings.read',
+        params: expect.any(String), description: expect.any(String), available: false }]) });
   });
 
   it.each([
@@ -474,7 +568,8 @@ describe('SchedulerScriptCapabilityBroker', () => {
     expect(byMethod.get('feishu.recent_messages')).toBe(false);
     expect(byMethod.get('sessions.dispatch')).toBe(false);
     expect(byMethod.get('jira.search_jql')).toBe(true);
-    expect(result.methods).toHaveLength(10);
+    expect(result.methods).toHaveLength(16);
+    expect(byMethod.get('settings.get_provider_usage_history')).toBe(false);
     expect(byMethod.get('github.get_pr_status')).toBe(false);
   });
 
