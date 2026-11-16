@@ -317,6 +317,7 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | 测试纪律：用发布构建跑 Host | 发布构建（带发布清单）会被认成安装版，与运行它的系统用户的 `~/.codex/auth.json` 对账、链接（与打包后的桌面在沙箱 profile 里的行为相同；m1-cp13 之前 Host 不读系统登录）。凡是用发布构建跑 Host 的测试（验证安装包、M4 的联合验收等），HOME 必须隔离 |
 | 移交交接任务：发布构建与系统 Codex 登录 | 上一行的情况由审核方在 M1 发布时通知交接任务 |
 | 基线缺口：`apps/host/scripts/scheduler-runtime.e2e.mjs` 加载即失败 | 不在 CI，自 main `41ed3b9f40`（2026-11-12）起坏了五天没人发现，2026-11-17 同步 main 后跑本机验收时才看到；原因与导入链见乙 1。不在 CI 的验收脚本会这样悄悄坏掉：4b 交付时附 `apps/host/scripts` 下所有不在 CI 的验收与 e2e 脚本能否加载并开始的清单 |
+| 基线失败：`apps/desktop/src/main/maker-ipc/__tests__/chatServer.test.ts`“settles the group alert through stopping a failed plan without needing its Session” | 2026-11-17 同步 main 时发现：单独跑、每次都失败（`dismissPlan` 返回不 ok）；在干净的 origin/main `e92a1b5947` 上同样失败，与本线改动无关（这个测试和被测文件都与 main 逐字相同）。不在本线修 |
 | 基线抖动：`apps/desktop/src/main/__tests__/worktreeRecycleJournalFilesystem.test.ts`“detects atomic replacements from an independent file writer” | m1-cp18c 门禁里失败一次（文件监听在负载下 1 秒内没收到变更通知）；文件与被测代码本分支没有改动，单文件重跑 5 次全过，整组桌面测试重跑全过。以后门禁里它再失败，先单文件重跑，过了按基线记（审核方 m1-cp18c 复核时定） |
 | 基线抖动：`packages/anthropic-compat-proxy/src/server-websocket.test.ts`“forwards the upgrade handshake, strips /v1, and pipes buffered bytes both ways” | m1-cp15a 门禁里失败一次（断言 SERVER_HEAD 时缓冲为空，5ms），该包自 m1-cp14 起没有改动；单文件重跑 5 次全过、整包重跑 578/578。以后门禁里它再失败，先单文件重跑，过了按基线记 |
 | 负载下超时：`apps/desktop/src/main/maker-host/__tests__/authAdaptersImportPurity.test.ts` | main 上已有的测试，自带 20 秒超时。m1-cp6 把 cindy-brain、maker-host、plugin-market 三个目录一起跑时超时，单独跑 6 秒通过。不归本分支 |
