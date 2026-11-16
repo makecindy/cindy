@@ -48,7 +48,6 @@ import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/c
 import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStorageAdapter.js';
 import { getDbClient, setCurrentDbClient, clearCurrentDbClient, getCurrentDbClientSnapshot } from '../../desktop/src/main/localDb/client/current.ts';
 import { loadAgentInputQueueSnapshot, saveAgentInputQueueSnapshot, getPersistedInputClientIds } from '../../desktop/src/main/localDb/agentInputQueueSnapshots.ts';
-import { touchUserSendRow } from '../../desktop/src/main/localDb/sessionQueries.ts';
 import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, ackSessionTurnEndedDurable,
   hasAssistantProgressAfterMessage, getRecoveryContextSnapshot,
 } from '../../desktop/src/main/localDb/sessionActiveTurn.ts';
@@ -138,7 +137,8 @@ import type { ContextRecoveryKind } from './agent/context-recovery.ts';
 import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring.ts';
 import { lockSessionRoute } from './agent/session-route-lock.mjs';
 import { createHostSessionUpdate } from './agent/session-update.ts';
-import { createHostSessionMovePorts } from './agent/session-move.ts';
+import { createHostSessionMovePorts, createRecentWorkdirsChangedPush } from './agent/session-move.ts';
+import { createHostTouchUserSend } from './agent/touch-user-send.ts';
 import { setLiveCcSessionBridge } from '../../desktop/src/main/maker-host/claude-transcript-relocation.ts';
 import { createHostTaskRestore } from './agent/task-restore.ts';
 import { createUserInputEnqueue } from './agent/user-input.ts';
@@ -1022,15 +1022,12 @@ const inputQueue = createInputQueue({
     if (!row) throw new Error('session not found');
     return row.clearedAt;
   },
-  touchUserSend: async (sessionId: string, atMs?: number) => {
-    const owner = getCurrentDbClientSnapshot();
-    if (!owner) throw new Error('DbClient not ready');
-    const ts = typeof atMs === 'number' && Number.isFinite(atMs) && atMs > 0 ? Math.floor(atMs) : Date.now();
-    const [row] = await touchUserSendRow(owner.client.drizzle, sessionId, ts);
-    if (row && getCurrentDbClientSnapshot() === owner) eventHub.publish({ type: 'session_changed', sessionId,
-      patch: { userSendAt: new Date(row.userSendAt!).toISOString(),
-        lastActivityAt: new Date(row.lastActivityAt!).toISOString(), updatedAt: new Date(row.updatedAt).toISOString() } });
-  },
+  // The desktop's touchUserSendInDb, with its recent project record (touch-user-send.ts).
+  touchUserSend: createHostTouchUserSend({
+    getOwner: getCurrentDbClientSnapshot,
+    publish: event => eventHub.publish(event),
+    broadcastRecentWorkdirsChanged: createRecentWorkdirsChangedPush(event => eventHub.publish(event)),
+  }),
   sent: (sessionId: string) => commitProvisionalSession(sessionId, sessionDraftPorts),
 });
 

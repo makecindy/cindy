@@ -52,6 +52,15 @@ export function createHostWorktreeBindingLookup(profileDir: string): SessionWork
 /** The desktop's local-db:recent-workdirs:changed (sessions.ts broadcastRecentWorkdirsChanged), a channel its renderer listens on. */
 export const RECENT_WORKDIRS_CHANGED_CHANNEL = 'local-db:recent-workdirs:changed';
 
+/**
+ * The desktop's recent projects push, with its `{ path }`: the Host's clients take it from the event
+ * stream (apps/web/shim.js; the desktop window in client mode, host-delegation.ts), as the desktop's own
+ * windows take it from IPC. A move and a send both announce through it.
+ */
+export function createRecentWorkdirsChangedPush(publish: (event: Record<string, unknown>) => void): (path: string) => void {
+  return path => publish({ type: 'plugin_push', channel: RECENT_WORKDIRS_CHANGED_CHANNEL, payload: { path } });
+}
+
 interface MoveMaker {
   getSession(sessionId: string): { isTurnRunning(): boolean } | null | undefined;
   listActiveSessions(): readonly { id: string; sdkSessionId?: string | null }[];
@@ -93,10 +102,7 @@ export function createHostSessionMovePorts(deps: {
         if (maker) await withRehydrateCloseSuppressed(sessionId, () => deps.closeRuntime(sessionId));
         return true;
       },
-      // The Host's clients take it from the event stream (apps/web/shim.js; the desktop window in client
-      // mode, host-delegation.ts), as the desktop's own windows take it from IPC.
-      broadcastRecentWorkdirsChanged: path =>
-        deps.publish({ type: 'plugin_push', channel: RECENT_WORKDIRS_CHANGED_CHANNEL, payload: { path } }),
+      broadcastRecentWorkdirsChanged: createRecentWorkdirsChangedPush(deps.publish),
     },
     // As register.ts setLiveCcSessionBridge: a Claude task's resume id in memory, and Maker closing its
     // runtime so the old directory's CLI stops writing the transcript being copied. The desktop does not

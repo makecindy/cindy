@@ -28,7 +28,8 @@ import { sessions } from '../../../desktop/src/main/localDb/schema.ts';
 import { setSessionProvider, getSessionProvider, clearSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { createHostSessionUpdate } from './session-update.ts';
 import { lockSessionRoute } from './session-route-lock.mjs';
-import { createHostSessionMovePorts } from './session-move.ts';
+import { createHostSessionMovePorts, createRecentWorkdirsChangedPush } from './session-move.ts';
+import { createHostTouchUserSend } from './touch-user-send.ts';
 import { setLiveCcSessionBridge } from '../../../desktop/src/main/maker-host/claude-transcript-relocation.ts';
 import { listRecentWorkdirs } from '../../../desktop/src/main/localDb/ipc/recentWorkdirsCore.ts';
 import { readSessionContextWindowBudget } from '../../../desktop/src/main/maker-host/session-context-budget-store.js';
@@ -854,4 +855,61 @@ test('move and window budget: a Review task refuses both, before anything is wri
   assert.deepEqual(await f.row('review-move'), before);
   assert.equal(readSessionContextWindowBudget('review-move'), null, 'the budget preference is not written');
   assert.deepEqual(movedEvents(f, 'review-move'), []);
+});
+
+// updatedAt and the send's recent project (A18, A19: the desktop's isSessionSettingsOnlyPatch and
+// recordRecentWorkdirForSend, moved out of updateSessionInDb and touchUserSendInDb):
+// - Rule: a patch of settings only (title, pin, mute, move) leaves updatedAt alone and a status change
+//   moves it (the sidebar orders by it); a user's send records the project it was made in as recent,
+//   announced while the owner holds; a stamp that changes nothing records and announces nothing.
+// - Gap: the Host bumped updatedAt on every /sessions/update, and its send recorded no recent project.
+// - Minimal failing input: each patch below on a task stamped updatedAt = 1; one send, the same send
+//   again, a send after the owner changed.
+// - Tier: unit, through the real entries over a migrated profile database.
+test('updatedAt: settings-only patches leave it, a status change moves it', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  const to = moveDir(f, 'stamp-to');
+  for (const [name, patch, moves] of [
+    ['a title', { title: 'Renamed' }, false],
+    ['a pin', { pinnedAt: new Date().toISOString() }, false],
+    ['a mute', { notificationsMuted: true }, false],
+    ['a move', { workingDir: to, workspaceKind: 'project' }, false],
+    ['an archive', { status: 'archived' }, true],
+  ]) {
+    const id = `stamp-${name.replaceAll(' ', '-')}`;
+    await f.task(id, { agentKind: 'codex', workDir: moveDir(f, `${id}-from`) });
+    await f.database.drizzle.update(sessions).set({ updatedAt: 1 }).where(eq(sessions.id, id));
+    await f.update(id, patch);
+    const row = await f.row(id);
+    if (moves) assert.ok(row.updatedAt > 1, name);
+    else assert.equal(row.updatedAt, 1, name);
+    assert.ok(movedEvents(f, id).length > 0, `${name}: still published`);
+  }
+});
+
+test('send: the project a send was made in becomes recent and is announced; an unchanged stamp or another owner announces nothing', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  const project = moveDir(f, 'sent-project');
+  await f.task('sent', { workDir: project });
+  const owner = { client: f.database };
+  // The owner the entry reads first, then the one current when it announces (an account switch during
+  // the write when they differ).
+  let after = owner;
+  let reads = 0;
+  const touch = createHostTouchUserSend({ getOwner: () => (reads++ === 0 ? owner : after), publish: event => f.events.push(event),
+    broadcastRecentWorkdirsChanged: createRecentWorkdirsChangedPush(event => f.events.push(event)) });
+  reads = 0;
+  await touch('sent', 5_000);
+  assert.ok((await listRecentWorkdirs()).some(entry => entry.path === project));
+  assert.deepEqual(recentPushes(f), [{ type: 'plugin_push', channel: 'local-db:recent-workdirs:changed', payload: { path: project } }]);
+  assert.equal(movedEvents(f, 'sent').at(-1).patch.userSendAt, new Date(5_000).toISOString());
+  const events = f.events.length;
+  reads = 0;
+  await touch('sent', 5_000);
+  assert.equal(f.events.length, events, 'the same stamp again changes nothing');
+  reads = 0;
+  after = { client: f.database };
+  await touch('sent', 6_000);
+  assert.equal(f.events.length, events, 'nothing is announced once the owner changed during the send');
+  assert.equal((await f.row('sent')).userSendAt, 6_000, 'the entry\'s own database is still stamped');
 });

@@ -5,6 +5,7 @@ import { sessionPatchToRow, sessionToCamel } from '../../../desktop/src/main/loc
 import type { DbClient } from '../../../desktop/src/main/localDb/client/DbClient.ts';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import { assertSessionContextWindowBudgetPatch } from '../../../desktop/src/main/localDb/sessionContextWindowBudgetPatch.js';
+import { isSessionSettingsOnlyPatch } from '../../../desktop/src/main/localDb/sessionSettingsOnlyPatch.ts';
 import { upsertRecentWorkdir } from '../../../desktop/src/main/localDb/ipc/recentWorkdirsCore.ts';
 import {
   assertReviewSessionPatchAllowed,
@@ -86,6 +87,9 @@ export function createHostSessionUpdate(deps: {
       }),
       sessionWorktreeBindingLookup: deps.move.lookupSessionWorktreeBinding,
     }));
+    // As updateSessionInDb, at the same place: a patch of settings only (a title, a pin, a mute, a move, a
+    // model) leaves updatedAt alone; a status change moves it.
+    const isSettingsOnly = isSessionSettingsOnlyPatch(patch);
     const hasBudget = patch.contextWindowBudget !== undefined;
     const budgetOnly = fields.length > 0 && fields.every(key => key === 'contextWindowBudget');
     if (hasBudget) {
@@ -130,7 +134,7 @@ export function createHostSessionUpdate(deps: {
       moveGuard: undefined, // see the entry below
       dbClient, setObj,
     }));
-    const update: Record<string, unknown> = { updatedAt: Date.now(), ...setObj };
+    const update: Record<string, unknown> = { ...(isSettingsOnly ? {} : { updatedAt: Date.now() }), ...setObj };
     if (typeof patch.title === 'string') update.title = patch.title;
     // Restoring goes through the shared transaction below; archiving still writes the column (release
     // table: the desktop's archive also checks lanes, recycles the worktree and notifies plugins).
@@ -138,7 +142,10 @@ export function createHostSessionUpdate(deps: {
     if (patch.pinnedAt === null) update.pinnedAt = null;
     else if (typeof patch.pinnedAt === 'string') update.pinnedAt = Date.parse(patch.pinnedAt) || null;
     if (typeof patch.notificationsMuted === 'boolean') update.notificationsMuted = patch.notificationsMuted;
-    await getDbClient().drizzle.update(sessionTable).set(update).where(eq(sessionTable.id, sessionId));
+    // As writeSessionPatch: nothing to write is no write (a model pick alone is an intent, not a column).
+    if (Object.keys(update).length > 0) {
+      await getDbClient().drizzle.update(sessionTable).set(update).where(eq(sessionTable.id, sessionId));
+    }
     // As the desktop's patchSessionMetaInDb: the other fields first, then the status transaction. The
     // event below carries the whole patch, so the restore does not publish its own.
     if (patch.status === 'active') await deps.restoreTaskToActive(sessionId, { publish: false });
