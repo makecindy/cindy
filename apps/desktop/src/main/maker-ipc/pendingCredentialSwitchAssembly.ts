@@ -215,3 +215,17 @@ export function createApplyPiPendingSelection(ports: { handleSetModel: ReturnTyp
   };
   return applyPiPendingSelection;
 }
+
+/** register.ts's reader of a task's pending switch for the proxy's routing (setPendingCredentialSwitchReader). */
+export function createPendingCredentialSwitchRouteReader(pendingCredentialSwitchService: PendingCredentialSwitchService) {
+  return (sessionId: string) => {
+    const pending = pendingCredentialSwitchService.get(sessionId);
+    return pending
+      ? {
+          model: pending.model,
+          providerId: pending.providerId,
+          ...(pending.previousRoute?.model ? { previousModel: pending.previousRoute.model } : {}),
+        }
+      : undefined;
+  };
+}

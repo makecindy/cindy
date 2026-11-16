@@ -275,6 +275,7 @@ import {
 import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
 import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
 import { parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
+import { createColdPiRehydrationBinding } from './coldPiRehydrationBinding.js';
 import {
   createRecoverRemoteRuntimeAxisPersistence,
   createSetSessionEffort,
@@ -294,7 +295,7 @@ import { createUserMessageDurableWrite } from './userMessageDurableWrite.js';
 import { createInterruptedTurnAutoResumeHooks } from './interruptedTurnAutoResumeHooks.js';
 import { createSessionRuntimeFallback } from './sessionRuntimeFallback.js';
 import { handleSilentStopTurnEndWithPorts } from './silentStopTurnEnd.js';
-import { createAgentSwitchBoundaryInsert, createAgentSwitchDbApply, createSwitchedSessionBootstrap, readAgentSwitchSessionRow } from './agentSwitchDepsCore.js';
+import { createAgentSwitchBoundaryInsert, createAgentSwitchDbApply, createRememberThinkingIntent, createSwitchedSessionBootstrap, readAgentSwitchSessionRow } from './agentSwitchDepsCore.js';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { accessChatDisplayCache } from './chatDisplayCache.js';
 import { accessBotGroupOutbox, commandBotGroupOutbox, sendCoordinatedBotGroupMessage, setBotGroupOutboxPublisher } from './botGroupOutboxStorage.js';
@@ -675,7 +676,6 @@ import {
 import { t } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
 import { createSessionActionRuntime, type SessionRuntimeAction } from './sessionActionRuntime.js';
-import { createColdPiRehydrationForWindowVerification } from './coldPiRehydration.js';
 import {
   desktopClaudeAuthAdapter,
   desktopCodexAuthAdapter,
@@ -824,7 +824,6 @@ import {
   type ProviderModelMemorySnapshot,
   syncNewMakerDraftCache,
   setProviderModelMemoryCache,
-  setThinkingEnabledInMemory,
   setWorkerCreationPrefsCache,
 } from '../maker-host/newMakerDefaultsCache.js';
 import {
@@ -1473,10 +1472,11 @@ import {
   clearPendingCredentialSwitchWith,
   getPendingCredentialSwitchTargetWith,
   registerPendingCredentialSwitchWith,
+  settlePendingCredentialSwitchWith,
   wakeSessionInputAfterCredentialSwitchWith,
   type PendingCredentialSwitchAccessPorts,
 } from './pendingCredentialSwitchAccess.js';
-import { createApplyPiPendingSelection, createPendingCredentialSwitchService } from './pendingCredentialSwitchAssembly.js';
+import { createApplyPiPendingSelection, createPendingCredentialSwitchRouteReader, createPendingCredentialSwitchService } from './pendingCredentialSwitchAssembly.js';
 import { PendingCredentialSwitchService, type PendingCredentialSwitchDeps } from './pendingCredentialSwitch.js';
 import {
   DeferredCodexRestartService,
@@ -4733,15 +4733,7 @@ const rewindInputSessions = new Set<string>();
 const SESSION_REWIND_STOP_TIMEOUT_MS = 15_000;
 let pendingCredentialSwitchHolder: PendingCredentialSwitchService | null = null;
 function settlePendingCredentialSwitch(sessionId: string, source: string): void {
-  const pending = pendingCredentialSwitchHolder?.onTurnSettled(sessionId);
-  if (!pending) return;
-  void pending.catch((err) => {
-    log.warn('pending credential switch settle failed', {
-      sessionId,
-      source,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  });
+  settlePendingCredentialSwitchWith({ pendingCredentialSwitchHolder, log }, sessionId, source);
 }
 // turn 收口时对远端 codex MCP 做一次 best-effort ensure 的钩子 (live turn
 // 期间被推迟的 daemon bootstrap 在 idle 时点补刀)。真实现定义在
@@ -11351,39 +11343,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // 冷 Pi 切模核实前的运行时恢复（#5508）：流程在 coldPiRehydration.ts 内，每条失败
   // 路径都带类别；这里只接 DB、工作目录探测与 bootstrap。
-  const rehydrateColdPiRuntimeForWindowVerification = createColdPiRehydrationForWindowVerification({
-    hasLiveSession: (sessionId) => !!maker.getSession(sessionId),
-    loadSessionRow: async (sessionId) => {
-      const [row] = await getDbClient()
-        .drizzle.select()
-        .from(sessions)
-        .where(eq(sessions.id, sessionId))
-        .limit(1);
-      return row;
-    },
-    buildCreateOpts: (sessionId, row) =>
-      buildCreateOptsWithStderr({
-        id: sessionId,
-        agentKind: 'pi',
-        workingDir: row.workingDir,
-        model: row.model,
-        providerId: row.providerId,
-        effort: (row.effort ?? undefined) as CreateOpts['effort'],
-        fastMode: (row.fastMode ?? false),
-        permissionMode: (row.permissionMode ?? 'ask') as CreateOpts['permissionMode'],
-        planMode: !!row.planModeEnabled,
-        title: row.title ?? undefined,
-        resumeSessionId: row.sdkSessionId,
-        orcaRole: row.orcaRole ?? undefined,
-      }),
-    checkWorkDirExists: (sessionId, workingDir, agentKind, remoteHostId) =>
-      checkWorkDirExists(sessionId, workingDir, agentKind, remoteHostId),
-    prepareCreateOpts: async (sessionId, createOpts) => {
-      await synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
-      const extraDirs = await readSessionExtraDirsFromDb(sessionId);
-      Object.assign(createOpts, directoryGrantsForRuntime(extraDirs));
-    },
-    bootstrapSession: (createOpts) => bootstrapSession(createOpts),
+  const rehydrateColdPiRuntimeForWindowVerification = createColdPiRehydrationBinding({
+    maker, buildCreateOptsWithStderr, checkWorkDirExists, synthesizeOrcaVendorOptionsFromDb,
+    readSessionExtraDirsFromDb, bootstrapSession,
   });
 
   const agentSwitchDeps: MakerSessionAgentSwitchHandlerDeps = {
@@ -11429,19 +11391,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
       agentHandoffPending.set(sessionId, handoff, expectedGeneration),
     readPendingHandoffGeneration: (sessionId) => agentHandoffPending.readGeneration(sessionId),
-    rememberThinkingIntent: ({ agentKind, providerId, model, thinking }) => {
-      setThinkingEnabledInMemory(agentKind, providerId, model, thinking);
-      // 同步本机 renderer 的记忆：主进程写的只是镜像，renderer 才是 providerModelMemory
-      // 的真相源。不写回这一笔，renderer 的全量快照会一直「尚未包含该选择」，提交时写入
-      // 的钉子也就撤不掉，反而会长期压住用户在被控端后来的显式改动（Greptile P1）。
-      broadcastToAllWindows(MAKER_PUSH.DRAFT_PREF_APPLY, {
-        agent: agentKind,
-        providerId: providerId ?? '',
-        modelId: model,
-        active: false,
-        thinking,
-      });
-    },
+    rememberThinkingIntent: createRememberThinkingIntent({ broadcastToAllWindows }),
     bootstrapSwitchedSession: createSwitchedSessionBootstrap({
       getActiveAppSession, buildCreateOptsWithStderr, resolveSwitchedSessionVendorOptions,
       synthesizeOrcaVendorOptionsFromDb, readSessionExtraDirsFromDb, directoryGrantsForRuntime,
@@ -20011,16 +19961,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     broadcastSessionPatched, log,
   });
   pendingCredentialSwitchHolder = pendingCredentialSwitchService;
-  setPendingCredentialSwitchReader((sessionId) => {
-    const pending = pendingCredentialSwitchService.get(sessionId);
-    return pending
-      ? {
-          model: pending.model,
-          providerId: pending.providerId,
-          ...(pending.previousRoute?.model ? { previousModel: pending.previousRoute.model } : {}),
-        }
-      : undefined;
-  });
+  setPendingCredentialSwitchReader(createPendingCredentialSwitchRouteReader(pendingCredentialSwitchService));
 
   // Memory 设置变更撞上 Codex busy 时的延迟软重启登记(见 deferredCodexRestart.ts)。
   // 与 pendingCredentialSwitchService 共用 turn 结束 / 会话关闭边界接线。
