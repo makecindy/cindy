@@ -91,6 +91,10 @@ export default {
       about: 'Teammate bubbles: quote, corner reaction, thread entry, task card, long text at the width cap; hover shows the toolbar beside the bubble',
       data: { ...base, bubbles: true },
     },
+    'reaction-colors': {
+      about: 'Color emoji retain full opacity in the reaction picker and badges in both themes',
+      data: { ...base, bubbles: true },
+    },
     arrangement: {
       about: 'Single-speaker server group, nobody named: the queue card stands on its own, Aster answered and Nova is speaking next by itself',
       data: { ...base, arrangement: 'running' },
@@ -175,6 +179,36 @@ export default {
   },
   async check(page, ui) {
     const definition = this.cases[ui.case];
+    if (ui.case === 'reaction-colors') {
+      const row = page.locator('[data-bot-group-message-id="a2"]');
+      await row.hover();
+      await row.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true }).click();
+      const picker = page.getByRole('dialog', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true });
+      await picker.waitFor();
+      await ui.capture('reaction-picker');
+      // Visual regression: translucent text ink also fades native color emoji.
+      // jsdom cannot paint color fonts; sample the actual computed ink alpha in Electron.
+      // Old code fails with tertiary alpha in the picker and primary alpha in badges.
+      const inkAlpha = element => {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext('2d');
+        context.fillStyle = getComputedStyle(element).color;
+        context.fillRect(0, 0, 1, 1);
+        return context.getImageData(0, 0, 1, 1).data[3];
+      };
+      const choice = picker.getByRole('button', { name: '👍', exact: true });
+      const glyph = choice.locator('span');
+      // Use the button itself in the pre-fix comparison, before the emoji span existed.
+      assert.equal(await ((await glyph.count()) ? glyph : choice).evaluate(inkAlpha), 255, 'picker emoji must not inherit translucent text ink');
+      await choice.hover();
+      await choice.focus();
+      assert.equal(await glyph.evaluate(inkAlpha), 255, 'hover and focus preserve emoji colors');
+      await page.keyboard.press('Escape');
+      const badge = row.locator('[data-reaction-corner] button > span').first();
+      assert.equal(await badge.evaluate(inkAlpha), 255, 'reaction badges preserve emoji colors');
+      return;
+    }
     if (definition.data.processRecord) {
       const journal = page.locator('[data-teammate-process]');
       await page.getByText('任务与 PR 的进展已整理，以下是需要跟进的事项。').waitFor();
