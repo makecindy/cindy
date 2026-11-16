@@ -3196,21 +3196,21 @@ test('model change at send: an engine switch keeps its thinking choice for the n
 // Host test reached the turn end with a pending switch, so a broken onTurnSettled left every switch
 // pending (the client keeps showing "switches after this turn"). The Host's own entries do not register
 // yet (release table, B2); this registers through the shared registerPendingCredentialSwitchWith.
-test('model change at send: a credential switch registered during a turn lands when the turn ends', { timeout: 30_000 }, async t => {
+// The second case: the landing's route write resolves the task's effort against the target model, and a
+// model without effort levels resolves none (fixed on the desktop in 7f86f08f2c: the write failed on
+// sessions.effort NOT NULL, so the switch never landed). The column keeps its value, as on the desktop.
+for (const efforts of [['low', 'high'], []]) {
+test(`model change at send: a credential switch registered during a turn lands when the turn ends (target effort levels: ${efforts.length ? efforts.join(', ') : 'none'})`, { timeout: 30_000 }, async t => {
   const r = await modelChangeRuntime(t);
   // As Maker: the runtimes it holds (maker.ts listActiveSessions).
   r.h.maker.listActiveSessions = () => [...r.h.maker.sessions.values()];
-  // A second connected provider offering the same models: the switch's target source. The models
-  // have effort levels: the landing's route write resolves the task's effort against the target model.
-  // Known desktop defect, shared here: for a model without effort levels that write stores effort =
-  // null, which sessions.effort (NOT NULL) refuses, so the switch never lands and the queue stays held.
-  // Its fix is a separate desktop change (local branch cindy/fix-pending-switch-null-effort); once it
-  // is merged, add a case with a model without effort levels.
+  // A second connected provider offering the same models: the switch's target source.
   const withEfforts = view => ({ ...view, models: { 'claude-code': view.models['claude-code']
-    .map(entry => ({ ...entry, efforts: ['low', 'high'], defaultEffort: 'high' })) } });
+    .map(entry => ({ ...entry, efforts, defaultEffort: efforts.at(-1) ?? null })) } });
   r.views.current = [...r.views.current, ...switchViews('claude-code').map(view => ({ ...view, id: 'prov-b' }))]
     .map(withEfforts);
   await r.createTask('settle');
+  r.db.db.prepare('UPDATE sessions SET effort = ? WHERE id = ?').run('high', 'settle');
   await r.h.queue.enqueue('settle', { clientId: 'settle-1', text: 'work' });
   await waitFor(() => r.h.maker.sessions.get('settle')?.sent.length === 1);
   const session = r.h.maker.sessions.get('settle');
@@ -3227,7 +3227,10 @@ test('model change at send: a credential switch registered during a turn lands w
   assert.equal(getSessionProvider('settle'), 'prov-b');
   const applied = r.h.events.filter(event => event.type === 'plugin_push' && event.channel === 'maker:session-credential-switch-applied');
   assert.deepEqual(applied.map(event => event.payload), [{ sessionId: 'settle', model: 'small', providerId: 'prov-b' }]);
+  assert.deepEqual({ ...r.db.db.prepare('SELECT model, effort, provider_id AS providerId FROM sessions WHERE id = ?').get('settle') },
+    { model: 'small', effort: 'high', providerId: 'prov-b' });
 });
+}
 
 // --- Permission mode and Plan mode (A7): the desktop's commit, run by the Host's set-permission-mode and
 // set-plan-mode entries (runtime-selection.ts over sessionPermissionSettings.ts) on a migrated database.
