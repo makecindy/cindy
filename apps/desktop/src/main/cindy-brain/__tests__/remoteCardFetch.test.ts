@@ -20,7 +20,7 @@ describe('fetchRemoteGhostCard', () => {
     })]);
     expect(result.card).toMatchObject({ ghostId: 'cindy-github', revision: 'r1', externalLinks: true, height: 900 });
     expect(result.card?.html).toContain('data-ghost-action="merge"');
-    expect(result.card?.html).not.toMatch(/onclick|<script|steal\(\)<\/script>/);
+    expect(result.card?.html).not.toMatch(/onclick|<script|steal\(\)<\/script>/i);
   });
 
   // Regression #10734: the real main-process invoke wraps resources, including failures.
