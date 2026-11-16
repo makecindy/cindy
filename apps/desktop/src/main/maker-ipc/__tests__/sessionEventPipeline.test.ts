@@ -715,6 +715,42 @@ describe('production Session event pipeline', () => {
     } finally { await h.dispose(); }
   });
 
+  it('hands the coordinator the terminal error message and only bounded structured signals', async () => {
+    // Auto-resume and the usage-limit wait decide on these signals (isInterruptedTurnError,
+    // usageLimitAutoResume), and the Node Host must hand over the same ones; provider data stays bounded.
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation(value => value);
+    try {
+      h.emit(event('error', {
+        message: 'Upstream stream ended',
+        sdkError: 'stream_closed',
+        reason: 'upstream',
+        errorStatus: 529,
+        toolLoop: { kind: 'pingpong', count: 4, detail: 'provider text' },
+        outputLimit: { outputTokens: 64, reasoningTokens: 65 },
+        usageLimit: true,
+        usageResetAt: 1_800_000_000_000,
+        codexErrorInfo: 'usageLimitExceeded',
+        extra: 'dropped',
+      }));
+      h.emit(event('error', { message: 'Second failure', usageResetAt: Number.POSITIVE_INFINITY, toolLoop: { kind: 'other', count: 1 } }));
+      const calls = h.deps.agentInputCoordinatorHolder.onTurnEvent.mock.calls.filter(call => call[1] === 'error');
+      expect(calls.map(call => call.slice(0, 4))).toEqual([
+        ['task', 'error', 'Upstream stream ended', {
+          sdkError: 'stream_closed',
+          reason: 'upstream',
+          errorStatus: 529,
+          toolLoop: { kind: 'pingpong', count: 4 },
+          outputLimit: { outputTokens: 64 },
+          usageLimit: true,
+          usageResetAt: 1_800_000_000_000,
+          codexErrorInfo: 'usageLimitExceeded',
+        }],
+        ['task', 'error', 'Second failure', {}],
+      ]);
+    } finally { await h.dispose(); }
+  });
+
   it('suppresses scheduled content before persistence and delivery while preserving unrelated replies', async () => {
     const h = harness();
     const close = beginQuietScheduledOutput('check', 'check-run');
