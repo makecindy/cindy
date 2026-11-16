@@ -193,6 +193,7 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 
 | 项 | 桌面与 Host | 后果 |
 |---|---|---|
+| 组织账号跨区登录时的 5 处版本区域发送（D1–D5，用户 2026-11-17 定为符合预期） | B 区组织账号登进 A 区版本时，以下请求按版本区域发往 A 区服务：D1 公开插件分享（选署名时带 token 与 authRealm，`plugin-market/sharing.ts:41-60`）；D2 本地插件分享（`localSharing.ts:35-56`）；D3 群聊邀请分享（`chatInviteShares.ts:9-40`）；D4 日志上报含崩溃与性能追踪（userId，`log-upload/index.ts:119,151-166`）；D5 TapDB 使用统计（`tapdbClient.ts:75-92,551-557`） | Host 上没有这 5 个模块（导入图核过）。Host 网页端的使用统计是新出现的入口，与 D5 不同：账号 realm 与渲染层区域不一致时不上报（甲-1，H 单元），不新增跨区上报 |
 | 网关 key 更换时运行中的 Pi 任务（m1-rc4 核对） | Pi 进程的 `CINDY_PI_API_KEY` 是启动时的网关 key；本机代理按会话 token 准入，转发 Pi 持有的 key（同一个路由核心） | 换 key 之后，运行中的 Pi 的下一次网关请求仍带旧 key，网关还认旧 key 时成功，不认时失败；桌面相同。m1-rc4 的修复只覆盖 Claude（代理换成当前 key）；Codex 的本机代理按当前 key 改写网关请求的 authorization（`codex-proxy-host.ts` 的网关路由）；Pi 两边都不换（`claude-proxy-runtime.test.mjs` 按桌面现状断言） |
 
 ## 三、Host 会写到 profile 之外的位置
@@ -280,6 +281,8 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | 电脑上已有 Host 在运行时打开桌面版 | **自动连接这个 Host**：桌面变成它的窗口，界面上标明当前连接的是后台 Host | 并存方案 B 的方向。会改桌面的启动行为，属于桌面行为变化，归第一阶段之后的单独桌面 PR 或迁移设计，不进现在的桌面准备分支。方案要答：窗口与 Host 版本不兼容时怎么办（审核方默认：拒绝并提示，不硬连）；标识放在哪里。B 落地之前：Host 启动时拒绝（方案 A），运行期间定期重扫 |
 | Host 安装包怎么发（区域） | 原话：“国内版、国际版各发一个包”（2026-11-17） | Host 发布包的区域与桌面一样在构建期定死（`region-and-editions.md` §2.4）：构建必须给区域、只收 cn / global；包的区域与启动时 `CINDY_HOST_REGION` 不同就拒绝启动；国内版桌面配国内版 Host 包、国际版配国际版。实现单元排在 2e 之前（区域常量那一行） |
 | 账号区域与版本不一致 | 原话：“我们理论上，不能再国际版查询国内用户的数据，反之亦然”（“再”应为“在”，2026-11-17）。这是数据边界原则，不是对提示方式的选择 | 先只读清点桌面跨区域组织登录与 Host 各类对外请求用的是版本区域还是 `account.realm`，带着事实再问用户具体规则；在那之前不新增拒绝登录的逻辑，个人版 Host 跟随桌面现有登录 |
+| Host 的跨区域登录规则 | 原话：“和桌面版一致”（2026-11-17，审核方带着区域数据边界清点去问） | 个人账号只能在本区域版本登录，企业组织账号可以跨区域；Host 直接用桌面的 `canRestoreAuthSessionForMembership`，按包的区域对会话 realm 与账号类型判定（登录时与采用桌面 profile 时都判）。甲类单元，接在区域单元之后 |
+| 桌面现有 5 处跨区发送（D1–D5，见第二节） | 原话：“符合预期，不用处理”（2026-11-17） | 只登记，不改桌面，也不进后面的桌面行为变更 PR；不再重复问 |
 
 同一轮由审核方定（非用户问题）：个人版 Host 自带一份内置 Skill（问题单第 2 条）。
 
@@ -356,6 +359,8 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | 基线抖动：`apps/desktop/src/main/__tests__/worktreeRecycleJournalFilesystem.test.ts`“detects atomic replacements from an independent file writer” | m1-cp18c 门禁里失败一次（文件监听在负载下 1 秒内没收到变更通知）；文件与被测代码本分支没有改动，单文件重跑 5 次全过，整组桌面测试重跑全过。以后门禁里它再失败，先单文件重跑，过了按基线记（审核方 m1-cp18c 复核时定） |
 | 基线抖动：`packages/anthropic-compat-proxy/src/server-websocket.test.ts`“forwards the upgrade handshake, strips /v1, and pipes buffered bytes both ways” | m1-cp15a 门禁里失败一次（断言 SERVER_HEAD 时缓冲为空，5ms），该包自 m1-cp14 起没有改动；单文件重跑 5 次全过、整包重跑 578/578。以后门禁里它再失败，先单文件重跑，过了按基线记 |
 | 负载下超时：`apps/desktop/src/main/maker-host/__tests__/authAdaptersImportPurity.test.ts` | main 上已有的测试，自带 20 秒超时。m1-cp6 把 cindy-brain、maker-host、plugin-market 三个目录一起跑时超时，单独跑 6 秒通过。不归本分支 |
+| 偶发、未复现：`session-import/__tests__/foreignSourceAdapters.test.ts` 的 OpenCode 一条 | 25a 的 Worker 在临时 HOME 下、和 400 多个文件一起并发跑 `vitest related` 时失败过一次。之后 origin/main d2c09ff142 单独跑 9/9、同一 related 集合（421 个文件）通过；准备分支与 25a 分支各单独 3 遍（审核方）都 9/9。不算基线也不算本线引入；再出现时先怀疑并发或共享临时目录，不是 OpenCode 本身 |
+| 负载下超时（第二次）：`plugin-market/__tests__/service.test.ts` “hides counts instead of unbounded installed-count resolution” | 准备分支第四轮同步时与另一组 vitest 并发运行，5 秒超时；单独跑 3 次各约 220 ms、整个文件 379/379。本线未改 plugin-market（与 origin/main 的 diff 为空）。第二次出现，不再判偶发：是主干测试对负载敏感（默认 5 秒超时），归主干测试问题，不在本线修 |
 | 基线失败：`apps/desktop/src/main/maker-ipc/__tests__/botLifecycleService.test.ts` 10 项 | 报 `SqliteError: no such table: mcp_app_view_states`（`deleteDeletedSessionViewStates`）。对照方法：把本分支改过的桌面源码换回合并的 main 版本（7eaf7788de）、删掉新增模块后单跑该文件，同样 10 项失败，判为 main 上原有问题。合并 main 后若自行恢复，删掉这一行 |
 | 待定：随包插件在 Host 不标内置 | 桌面的 GhostManager 带 `isTrustedBundledId`（`resources/builtin-ghosts` 下 official、xd 两组种子的 id），根命名空间里的这些安装标 `builtin`；Host 的 `createHostGhostManager` 没有这个选项，任何安装都不标。后果：首方事实的内置官方分支在 Host 上不成立，随包插件按非内置判定（其 Skill 不标官方，依赖内置身份的首方特权被拒）。3c 之前就是这样；也因此 3c 的查找收紧在 Host 上实际只改变托管 Skill 清单。种子 id 从哪里来（Host 发布包不含 `builtin-ghosts`）需要方案，**迁移前必须有结论** |
 | 待确认：gray-matter 在 Host 发布包里的形态 | 外置：`apps/host/scripts/build.mjs` 把所有第三方包设为外部依赖，按导入方位置解析后整包拷进发布目录的 `node_modules`（解析到仓库根 `node_modules/gray-matter`）。3c 之前已有 5 个导入方在 Host 的加载范围里（maker-core 的 customization-scanner、pinned-skill-invocation、memory/storage，桌面 skillhub/frontmatterValidation、cindy-brain/skillSlot），3c 没有新增依赖。证据用构建脚本原样截取的依赖插件对 `apps/host/src/main.ts` 跑 esbuild 得出（完整构建缺本机 Chromium） |
