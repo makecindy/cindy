@@ -12,11 +12,13 @@ const timeoutError = '[REMOTE_AGENT_TIMEOUT] [INVOKE_TIMEOUT] no invoke-result w
 function Fixture({ kind }: { kind: string }) {
   const [count, setCount] = useState(0);
   const [retryCount, setRetryCount] = useState(0);
+  const [chooseCount, setChooseCount] = useState(0);
   const onDiagnose = () => setCount((value) => value + 1);
   return (
-    <div className="p-4" data-diagnosis-count={count} data-retry-count={retryCount}>
+    <div className="p-4" data-diagnosis-count={count} data-retry-count={retryCount} data-choose-count={chooseCount}>
       {kind === 'timeout-live' ? (
-        <ErrorBanner error={timeoutError} retryText="Check task progress first"
+        <ErrorBanner error={timeoutError} agentDeviceId="share:timeout-target" retryText="Check task progress first"
+          onChooseComputer={() => setChooseCount((value) => value + 1)}
           onRetry={() => setRetryCount((value) => value + 1)} onDiagnose={onDiagnose} />
       ) : kind === 'timeout-history' ? (
         <ErrorMessageCard message={timeoutError} onDiagnose={onDiagnose} />

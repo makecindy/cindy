@@ -45,6 +45,9 @@ export default {
     await diagnose.click();
     assert.equal(await page.locator('[data-diagnosis-count]').getAttribute('data-diagnosis-count'), '1');
     if (ui.case === 'timeout-live') {
+      await page.getByRole('button', { name: await ui.t('sharedTaskRecovery.choose'), exact: true }).click();
+      assert.equal(await page.locator('[data-choose-count]').getAttribute('data-choose-count'), '1');
+      assert.equal(await page.locator('[data-retry-count]').getAttribute('data-retry-count'), '0');
       await page.getByRole('button', { name: await ui.t('chat.errorBanner.retry'), exact: true }).click();
       assert.equal(await page.locator('[data-retry-count]').getAttribute('data-retry-count'), '1');
     }

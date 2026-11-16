@@ -219,11 +219,13 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });
     const rawRemoteError = `[${code}] ${code === 'REMOTE_AGENT_TIMEOUT' ? '[INVOKE_TIMEOUT] no invoke-result within 30000ms after first socket write' : 'upstream HTTP 502'}; api_key=private-test-value`;
     const retry = vi.fn();
+    const choose = vi.fn();
+    const agentDeviceId = code === 'REMOTE_AGENT_TIMEOUT' ? 'share:timeout-target' : undefined;
     const bannerError = remoteErrorMessageForBanner(rawRemoteError);
     expect(bannerError).toContain(`[${code}]`);
     render(<I18nextProvider i18n={i18n}>{surface === 'live'
-      ? <ErrorBanner error={bannerError} retryText="original message" onRetry={retry} />
-      : <ErrorTailErrorBanner errorText={bannerError} onContinue={retry} onDismiss={vi.fn()} />}</I18nextProvider>);
+      ? <ErrorBanner error={bannerError} agentDeviceId={agentDeviceId} retryText="original message" onRetry={retry} onChooseComputer={choose} />
+      : <ErrorTailErrorBanner errorText={bannerError} agentDeviceId={agentDeviceId} onContinue={retry} onDismiss={vi.fn()} onChooseComputer={choose} />}</I18nextProvider>);
     expect(screen.getByText(locales[locale].chat.remoteError[code])).toBeTruthy();
     expect(screen.queryByText(locales[locale].chat.errorBanner.replyFailed)).toBeNull();
     expect(screen.queryByText(rawRemoteError)).toBeNull();
@@ -232,6 +234,10 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(/private-test-value/)).toBeNull();
     expect(retry).not.toHaveBeenCalled();
     if (code === 'REMOTE_AGENT_TIMEOUT') {
+      expect(screen.queryByText(locales[locale].sharedTaskRecovery.reason.timeout)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: locales[locale].sharedTaskRecovery.choose }));
+      expect(choose).toHaveBeenCalledOnce();
+      expect(retry).not.toHaveBeenCalled();
       fireEvent.click(screen.getByTitle(locales[locale].chat.errorBanner.retryTitle));
       expect(retry).toHaveBeenCalledOnce();
     }
