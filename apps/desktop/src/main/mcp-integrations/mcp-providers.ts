@@ -21,6 +21,9 @@ import { manageAppSettings } from '../app-settings/sections.js';
 import { importThemePackageFromTask } from '../local-themes/agent.js';
 import { manageAppModels } from '../app-settings/models.js';
 import { runProviderReadRequest } from './providerReadTools.js';
+import { executeProviderShareManagementCommand } from '../device-link/providerShareRuntime.js';
+import { createProviderGroupCommandDeps, executeProviderGroupCommand } from '../provider-group/ipc.js';
+import { invokeProviderManagement } from '../provider-group/managementClient.js';
 import { classifyOrigin } from '../input-handoff/originPolicy.js';
 import { inspectAppDefaultModel, changeAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
 import { hostname } from 'node:os';
@@ -1381,16 +1384,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return runProviderReadRequest({ ...input, device: input.device === getDeviceId() ? 'local' : input.device }, {
             local: async (request, guard) => {
               if (request.action === 'manage-share') {
-                const { executeProviderShareManagementCommand } = await import('../device-link/providerShareRuntime.js');
                 guard();
                 return executeProviderShareManagementCommand(request.command);
               }
-              const { createProviderGroupCommandDeps, executeProviderGroupCommand } = await import('../provider-group/ipc.js');
               guard();
               return executeProviderGroupCommand(createProviderGroupCommandDeps(), request.command);
             },
             remote: async (device, request, guard) => {
-              const { invokeProviderManagement } = await import('../provider-group/managementClient.js');
               guard();
               return invokeProviderManagement((target, channel, args, options) =>
                 deps.invokeRemote(target, channel, args, { ...options, preSend: () => { guard(); options?.preSend?.(); } }),
