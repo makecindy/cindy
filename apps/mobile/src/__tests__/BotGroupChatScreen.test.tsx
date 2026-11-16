@@ -2110,6 +2110,31 @@ describe('group settings', () => {
     expect(byId('botGroup.settings.memberMenu.abu.action.remove')).toBeNull();
   });
 
+  // Unit regression from iOS acceptance: the direct settings metadata has no executions.
+  // The real screen must retain live chat activity when confirming an owned companion's exit.
+  it('keeps live activity in direct group settings when the permission snapshot is idle', async () => {
+    const data = group({ serverBacked: true, revision: 5 });
+    data.members[0] = { ...data.members[0], actorId: 'human', actorKind: 'human', isSelf: true, isOwned: true, role: 'member' };
+    data.members[1] = { ...data.members[1], actorId: 'bot', actorKind: 'bot', isOwned: true, role: 'member' };
+    h.chat.server = true;
+    h.management = { group: data, editable: false, ready: true, loading: false, reason: 'permission', act: vi.fn(), refresh: vi.fn() };
+    await openSettings(data);
+    await click('botGroup.settings.teammate.abu');
+    const running = { ...data, round: { status: 'running' as const, canContinue: false,
+      speakers: [{ botId: 'abu', sessionId: null, activity: 'reply' as const }] } };
+    await render(running);
+    h.confirm.mockResolvedValue(false);
+    await click('botGroup.settings.removeOwn');
+    expect(h.confirm).toHaveBeenLastCalledWith(expect.objectContaining({
+      confirmLabel: 'groupChat.groupSettings.stopAndRemove',
+      message: expect.stringContaining('groupChat.groupSettings.removeOwnActiveHint'),
+    }));
+    await render(data);
+    await click('botGroup.settings.removeOwn');
+    expect(h.confirm).toHaveBeenLastCalledWith(expect.objectContaining({ confirmLabel: 'groupChat.groupSettings.removeOwn' }));
+    expect(h.management.act).not.toHaveBeenCalled();
+  });
+
   it('allows personal removal from an archived read-only group without management rights', async () => {
     h.chat.server = true;
     await openSettings(group({ serverBacked: true, archived: true, supportsListRemoval: true, supportsSettingsManagement: false,
