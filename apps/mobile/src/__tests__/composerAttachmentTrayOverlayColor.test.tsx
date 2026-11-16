@@ -64,6 +64,7 @@ vi.mock("react-native", async () => {
     Text: view("span"),
     ActivityIndicator: ({ color }: { color: string }) =>
       createElement("i", { "data-testid": "spinner", "data-color": color }),
+    PixelRatio: { roundToNearestPixel: (value: number) => value },
     StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
   };
 });
@@ -181,7 +182,13 @@ describe("composer attachment tray overlay foreground", () => {
         />,
       ));
       render(false);
-      expect(host.querySelectorAll('[data-testid="t.attachmentPendingChip"]')).toHaveLength(files.length);
+      const pendingChips = host.querySelectorAll('[data-testid="t.attachmentPendingChip"]');
+      expect(pendingChips).toHaveLength(files.length);
+      const pendingLayouts = Array.from(pendingChips, chip => JSON.parse(chip.getAttribute("data-layout")!));
+      for (const layout of pendingLayouts) {
+        expect(layout.minHeight).toBe(44);
+        expect(layout.paddingVertical ?? 0).toBe(0);
+      }
       render(true);
       expect(host.querySelector('[data-testid="t.attachmentPendingChip"]')).toBeNull();
       const chips = host.querySelectorAll('[data-testid="t.attachmentChip"]');
@@ -194,6 +201,10 @@ describe("composer attachment tray overlay foreground", () => {
         // flex: 1 gives Yoga a zero basis inside the intrinsic-width chip.
         expect(layout.flex).toBeUndefined();
         expect(layout.flexShrink).toBe(1);
+        expect(layout.minHeight).toBeUndefined();
+        expect(layout.alignSelf).toBe("stretch");
+        // The shared outer chip owns the touch height in both upload states.
+        expect(JSON.parse(chip.getAttribute("data-layout")!)).toEqual(pendingLayouts[index]);
         expect(JSON.parse(chip.getAttribute("data-layout")!).maxWidth).toBe("100%");
         act(() => button.click());
         const removeButton = chip.querySelector<HTMLButtonElement>('[data-testid="t.attachmentRemoveButton"]')!;

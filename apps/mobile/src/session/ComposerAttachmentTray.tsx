@@ -13,7 +13,7 @@ import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { Pen, RefreshCw, X } from 'lucide-react-native';
 import { Image } from 'expo-image';
 import { useTranslation } from 'react-i18next';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, PixelRatio, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import type { PendingLocalAttachmentUpload } from '@/session/mobileLocalAttachmentUpload';
@@ -382,15 +382,16 @@ function makeTrayStyles(colors: ThemeColors) {
       maxWidth: '100%' as const,
       paddingLeft: spacing.lg,
       paddingRight: spacing.md,
-      paddingVertical: 8,
+      // One outer touch height for pending, failed and uploaded file chips.
+      minHeight: PixelRatio.roundToNearestPixel(44),
     },
     // Keep the preview's intrinsic width; flex: 1 gives it a zero basis in the wrapping tray.
     chipPreview: {
       alignItems: 'center' as const,
+      alignSelf: 'stretch' as const,
       flexDirection: 'row' as const,
       flexShrink: 1,
       gap: spacing.sm,
-      minHeight: 48,
       minWidth: 0,
     },
     chipText: {
