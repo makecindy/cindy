@@ -807,6 +807,17 @@ describe('member note management', () => {
 });
 
 describe('same-account share management during account transitions', () => {
+  // Unit, plugin host-tools invocation lifetime: the UI tests covered owner
+  // changes, but not a plugin disabled while refreshing before its member write.
+  it('rechecks the calling installation after refresh and before changing a member', async () => {
+    let installed = true;
+    host.refresh.mockImplementationOnce(async () => { installed = false; });
+    await expect(executeProviderShareManagementCommand({ action: 'set-member', memberId: 'm1', status: 'pause' }, () => {
+      if (!installed) throw new Error('PERMISSION_DENIED');
+    })).rejects.toThrow('PERMISSION_DENIED');
+    expect(api.setMember).not.toHaveBeenCalled();
+    expect(host.member).not.toHaveBeenCalled();
+  });
   it.each([
     createLink, ...mutations,
     { action: 'get-run-limits' },

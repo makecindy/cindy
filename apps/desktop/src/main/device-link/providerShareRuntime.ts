@@ -1223,8 +1223,10 @@ export async function readReceivedProviderShareQuota(shareId: string): Promise<P
  * 同账号管理只执行分享者操作；申请和成员必须属于这台电脑的分享。经管理生成的链接由发起的那台电脑
  * 弹审批窗，本机在窗口期内静默；返回的 owned 只含这台电脑的分享，不带本机自己的弹窗安排。
  */
-export async function executeProviderShareManagementCommand(command: ProviderShareManagementCommand): Promise<unknown> {
-  const assertCurrent = captureProviderManagementScope();
+export async function executeProviderShareManagementCommand(command: ProviderShareManagementCommand, assertCaller: () => void = () => undefined): Promise<unknown> {
+  const assertOwner = captureProviderManagementScope();
+  const assertCurrent = () => { assertOwner(); assertCaller(); };
+  assertCurrent();
   if (command.action === 'approve' || command.action === 'reject' || command.action === 'set-member') {
     requireRunning();
     await refreshProviderShareHost('management');

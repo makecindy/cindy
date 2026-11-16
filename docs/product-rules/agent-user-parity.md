@@ -89,6 +89,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 
 | 对象     | 操作                                                       | 本机 | 跨电脑           |
 | -------- | ---------------------------------------------------------- | ---- | ---------------- |
+| 供应商分享 | 列出自己分享的成员、暂停／恢复、读改成员模型范围（`list_provider_share_members`、`set_provider_share_member_status`、`get_provider_share_model_access`、`set_provider_share_model_access`）；与界面共用宿主处理器，暂停立即关停运行中任务，回执不等待全部实例关停 | 有（Agent 与声明 `settings` 的插件共用；受邀者无管理权） | 有（`device` 指定同账号已授权电脑，沿现有 `provider-group:remote` 管理通道；旧端不支持时明确报错） |
 | 模型目录 | `configure_model_provider` 的 `rediscover`：内置供应商复用设置页真实刷新，等待发现完成后返回目录 | 有（2026-11-10；Claude 订阅通过内置 CLI 的 SDK 发现） | 在执行电脑的任务中调用；同账号远控 UI 复用原有刷新 IPC |
 | 模型供应商 | `configure_model_connection`：查询预设、读取／添加／编辑／删除 API 与免密本机连接、安全填写或更换密钥、发现与设置型号、验证连接 | 有（2026-11-07；复用设置页事务，保存、目录获取与推理验证分别报告） | 在执行电脑的任务中调用；手机及同账号电脑沿原有加密代输入卡填写密钥，不支持指定另一台电脑或 SSH |
 | 媒体模型 | `configure_model_connection` 声明 mode/modalities；`manage_media_guide` 按需 get、validate、save 自定义调用说明；`media` prepare/request/poll 使用指定连接 | 有（未发布；沿用任务权限，保存或校验不等于真实出片，错误原因与后备由 Agent 判断） | 在媒体连接所在电脑的本机任务执行；不新增跨电脑 Guide 同步或 SSH 管理 |

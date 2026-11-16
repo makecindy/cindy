@@ -7,6 +7,40 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// Unit, provider-sharing.md §7 / agent-user-parity.md: the real registry must
+// expose owner management to an installed plugin without borrowing a task.
+// Existing model/settings tests do not exercise member operations or their schema.
+it('offers provider share member tools to plugins without a Session and validates writes', async () => {
+  const call = vi.fn(async () => ({ members: [{ memberId: 'member', status: 'paused' }] }));
+  const server = createXdtHelperMcpServer({ providerSharing: { call } }, {
+    agentKind: 'codex', workingDir: '',
+    hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  const client = new Client({ name: 'provider-sharing-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    expect(server.hostTools.describe('list_provider_share_members')).toMatchObject({ category: 'settings' });
+    expect(parsePayload(await server.hostTools.call('list_provider_share_members', {})))
+      .toMatchObject({ ok: true, members: [{ memberId: 'member' }] });
+    expect(call).toHaveBeenLastCalledWith({ action: 'members', callerSessionId: undefined });
+    expect(parsePayload(await server.hostTools.call('set_provider_share_member_status', {
+      device: 'other-computer', providerId: 'anthropic', memberId: 'member', status: 'pause',
+    }))).toMatchObject({ ok: true });
+    expect(call).toHaveBeenLastCalledWith({ callerSessionId: undefined, action: 'status', device: 'other-computer',
+      providerId: 'anthropic', memberId: 'member', status: 'pause' });
+    expect(parsePayload(await server.hostTools.call('set_provider_share_member_status', {
+      providerId: 'anthropic', memberId: 'member', status: 'remove',
+    }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(parsePayload(await server.hostTools.call('set_provider_share_model_access', {
+      providerId: 'anthropic', memberId: 'member', models: ['model-a'], ownerId: 'someone-else',
+    }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).toHaveBeenCalledTimes(2);
+    const found = parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '供应商分享成员' } }));
+    expect(JSON.stringify(found)).toContain('models.provider-sharing');
+  } finally { await client.close(); await server.close(); }
+});
+
 // Unit, capability list #10/#15: the existing registry had no native package
 // transfer. A named task or file is enough to exercise discovery, caller identity
 // and scope rejection; no filesystem, network or engine process is needed.
