@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import sharp from 'sharp';
 
 const data = 'window.__uiPage.ctx.data';
 const profiles = ['Cindy', 'Writer', 'Researcher', 'Designer', 'Translator', 'Reviewer'].map((name, index) => ({
@@ -34,6 +35,18 @@ export default {
         { ...profiles[1], lastMessageAt: Date.now() - 120000, name: '写作伙伴', avatar: 'cindy://avatar/preset/dash', lastMessageRole: 'assistant', lastMessagePreview: '周报已整理好，请查看' },
         { ...profiles[2], lastMessageAt: Date.now() - 60000, name: '研究伙伴', avatar: 'cindy://avatar/preset/lizi', lastMessagePreview: '请选择接下来要研究的方向' },
       ], unread: { 'mate-2': 1 }, activities: [['chat-2', { sessionId: 'chat-2', phase: 'needs-interaction' }]], remoteBots: [], route: '/bots' },
+    },
+    'group-avatar-hover': {
+      about: 'Two-to-five-member artwork retains transparent gaps through hover, selection and compact mode',
+      data: { profiles: [], remoteBots: [], route: '/bots', groups: [2, 3, 4, 5].map(count => ({
+        id: `cutout-${count}`, name: count === 4 ? 'Agent群聊' : `Group ${count}`, replyMode: 'all', speakingMode: 'auto',
+        members: ['cindy', 'dash', 'lizi', '', 'dash'].slice(0, count).map((preset, index) => ({
+          botId: `member-${index}`, name: preset || '用户', avatar: preset ? `cindy://avatar/preset/${preset}` : '', avatarColor: 'violet', status: 'active',
+        })),
+        speakingBotIds: [], organizerBotId: 'member-0', projectDir: null,
+        lastMessage: { authorKind: 'user', isSelf: false, authorName: 'Alex', preview: '看看这份设计的效果', createdAt: Date.now() - 60_000 },
+        planningBotId: null, openPlan: null, createdAt: count, updatedAt: count,
+      })) },
     },
     'remote-running-snapshot': {
       about: 'Standalone remote running snapshot keeps the processing subtitle without an expanded orange dot',
@@ -230,6 +243,66 @@ export default {
       await ui.capture('collapsed-icons');
       await header.click();
       await ui.capture('expanded-icons');
+      return;
+    }
+    if (ui.case === 'group-avatar-hover') {
+      // Regression from the reported hover screenshots: translucent hover paint was
+      // reused as a separating border. jsdom's member-order tests cannot see pixels.
+      // UI tier: real rows, minimum 2 overlapping avatars, sample the foreground rim
+      // against the real row backdrop, including during its color transition.
+      await page.locator('[data-bot-group-id] img').first().waitFor();
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-bot-group-id] img')].every(image => image.complete && image.naturalWidth > 0));
+      const assertGap = async row => {
+        const front = row.locator(':scope > span').first().locator(':scope > span > span').last();
+        const [bounds, rim] = await Promise.all([row.boundingBox(), front.boundingBox()]);
+        assert.ok(bounds && rim);
+        const { data, info } = await sharp(await page.screenshot({ scale: 'css' })).raw().toBuffer({ resolveWithObject: true });
+        const pixel = (x, y) => {
+          const offset = (Math.floor(y) * info.width + Math.floor(x)) * info.channels;
+          return Array.from(data.subarray(offset, offset + 3));
+        };
+        const gap = pixel(rim.x + 1, rim.y + rim.height / 2);
+        const backdrop = pixel(bounds.x + 4, rim.y + rim.height / 2);
+        assert.ok(gap.every((value, channel) => Math.abs(value - backdrop[channel]) <= 2), `transparent gap must expose row backdrop: ${gap} vs ${backdrop}`);
+      };
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      for (const count of [4, 2, 3, 5]) {
+        const row = page.locator(`[data-bot-group-id="cutout-${count}"]`);
+        await page.mouse.move(700, 500);
+        const geometry = await row.locator('img').evaluateAll(nodes => nodes.map(node => {
+          const { x, y, width, height } = node.getBoundingClientRect(); return { x, y, width, height };
+        }));
+        if (count === 4) await ui.capture('four-idle', { locator: row });
+        if (count === 4) await row.evaluate(node => {
+          node.addEventListener('transitionrun', () => {
+            for (const animation of node.getAnimations()) {
+              animation.pause();
+              animation.currentTime = Number(animation.effect.getComputedTiming().duration) / 2;
+            }
+          }, { once: true });
+        });
+        await row.hover();
+        if (count === 4) {
+          await page.waitForFunction(() => document.querySelector('[data-bot-group-id="cutout-4"]')?.getAnimations().some(animation => animation.playState === 'paused'), null, { timeout: 2000 });
+          await ui.capture('four-hover-midway', { locator: row });
+          await assertGap(row);
+          await row.evaluate(node => node.getAnimations().forEach(animation => animation.finish()));
+        }
+        await ui.capture(`hover-${count}`, { locator: row });
+        await assertGap(row);
+        await row.evaluate(async node => { await Promise.all(node.getAnimations().map(animation => animation.finished)); });
+        await assertGap(row);
+        assert.deepEqual(await row.locator('img').evaluateAll(nodes => nodes.map(node => {
+          const { x, y, width, height } = node.getBoundingClientRect(); return { x, y, width, height };
+        })), geometry, 'hover must keep every portrait in place');
+        await row.click();
+        await row.evaluate(async node => { await Promise.all(node.getAnimations().map(animation => animation.finished)); });
+        await assertGap(row);
+        if (count === 4) await ui.capture('four-selected', { locator: row });
+      }
+      await showIcons();
+      await page.locator('[data-bot-group-id]').first().waitFor({ state: 'hidden' });
+      await ui.capture('compact');
       return;
     }
     // Time and status coexist in the existing trailing column, without overlap.
