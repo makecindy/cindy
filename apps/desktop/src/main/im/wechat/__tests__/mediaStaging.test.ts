@@ -8,9 +8,10 @@ const mocks = vi.hoisted(() => ({
   resolveSafe: vi.fn(),
 }));
 
-vi.mock('../silkDecoder', () => ({
-  decodeWechatSilkToWav: mocks.decodeWechatSilkToWav,
-}));
+vi.mock('../silkDecoder', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../silkDecoder')>();
+  return { ...actual, decodeWechatSilkToWav: mocks.decodeWechatSilkToWav };
+});
 
 vi.mock('../../../cindy-media/blobStore.desktop', () => ({
   resolveSafe: mocks.resolveSafe,
@@ -41,13 +42,27 @@ describe('WeChat media staging validation', () => {
     expect(__testing.detectWechatMedia({ kind: 'image' }, Buffer.from('not-image'))).toBeNull();
   });
 
-  it('requires the declared voice encoding to match the downloaded bytes', () => {
+  // 测试价值
+  // - 生产入口与可观察结果：detectWechatMedia 决定语音附件的 MIME 与入库分支；
+  //   #10899 前按 encode_type 硬编码，真实微信语音（编码值不在白名单）全部被拒。
+  // - Bug／规则依据：#10899。
+  // - 现有覆盖缺口：旧用例断言“声明编码必须匹配字节”，正是被移除的错误契约。
+  // - 最小失败输入：无 voiceEncoding 或超范围编码 + 真实容器魔数字节。
+  // - tier：unit。
+  it('detects voice containers by bytes regardless of the wire encode_type', () => {
     expect(
       __testing.detectWechatMedia({ kind: 'voice', voiceEncoding: 8 }, Buffer.from('OggSvoice')),
     ).toMatchObject({ mimeType: 'audio/ogg' });
+    expect(__testing.detectWechatMedia({ kind: 'voice' }, Buffer.from('OggSvoice'))).toMatchObject(
+      { mimeType: 'audio/ogg' },
+    );
     expect(
-      __testing.detectWechatMedia({ kind: 'voice', voiceEncoding: 7 }, Buffer.from('OggSvoice')),
-    ).toBeNull();
+      __testing.detectWechatMedia({ kind: 'voice', voiceEncoding: 6 }, Buffer.from('RIFF0000WAVEdata')),
+    ).toMatchObject({ mimeType: 'audio/wav' });
+    expect(
+      __testing.detectWechatMedia({ kind: 'voice', voiceEncoding: 99 }, Buffer.from('RIFF0000WAVEdata')),
+    ).toMatchObject({ mimeType: 'audio/wav' });
+    expect(__testing.detectWechatMedia({ kind: 'voice' }, Buffer.from('not-audio'))).toBeNull();
   });
 
   it('sanitizes platform filenames before creating owner-scoped paths', () => {
@@ -107,6 +122,44 @@ describe('WeChat media staging validation', () => {
     expect(result.mediaRefs).toHaveLength(1);
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：真实微信语音（SILK 字节、encode_type 不在旧白名单）经
+  //   stageWechatTaskMedia 应产出 audio/wav 附件；#10899 前整条消息被标
+  //   voice:unsupported-format，音频从未交给模型。
+  // - Bug／规则依据：#10899。
+  // - 现有覆盖缺口：旧用例只在 voiceEncoding===6 时才走解码，且无端到端 staging 断言。
+  // - 最小失败输入：media=[{kind:'voice'}]（无 voiceEncoding）+ #!SILK 魔数字节下载。
+  // - tier：unit（解码器 mock，字节识别与检测走真实实现）。
+  it('stages wire SILK voice as a wav attachment regardless of encode_type', async () => {
+    const wav = Buffer.from(pcmS16leToWav(Buffer.from([1, 0, 2, 0]), 24_000));
+    mocks.decodeWechatSilkToWav.mockResolvedValueOnce(wav);
+    const hash = 'b'.repeat(64);
+    mocks.ingestMedia.mockResolvedValueOnce({
+      hash,
+      ext: '.wav',
+      mimeType: 'audio/wav',
+      bytes: wav.byteLength,
+      url: `cindy-media://blobs/${hash}.wav`,
+      deduplicated: false,
+      refIds: [],
+    });
+    mocks.resolveSafe.mockReturnValueOnce({ absPath: '/media/wechat-voice.wav' });
+
+    const result = await stageWechatTaskMedia(
+      stageArgs({
+        media: [{ kind: 'voice' }],
+        downloadMedia: vi.fn().mockResolvedValue(Buffer.from('#!SILK_V3\u0000frames')),
+      }),
+    );
+
+    expect(mocks.decodeWechatSilkToWav).toHaveBeenCalledTimes(1);
+    expect(result.unsupportedMedia).toEqual([]);
+    expect(result.attachments).toEqual([
+      expect.objectContaining({ mimeType: 'audio/wav', storage: 'cindy-media' }),
+    ]);
+    expect(result.mediaBlobs).toEqual([expect.objectContaining({ mimeType: 'audio/wav' })]);
+  });
+
   it('distinguishes download, decode, and staging failures', async () => {
     const downloadFailed = await stageWechatTaskMedia(
       stageArgs({
@@ -122,7 +175,7 @@ describe('WeChat media staging validation', () => {
     const decodeFailed = await stageWechatTaskMedia(
       stageArgs({
         media: [{ kind: 'voice', voiceEncoding: 6 }],
-        downloadMedia: vi.fn().mockResolvedValue(Buffer.from('silk')),
+        downloadMedia: vi.fn().mockResolvedValue(Buffer.from('#!SILK_V3\u0000frames')),
       }),
     );
     expect(decodeFailed.unsupportedMedia).toEqual(['voice:decode-failed']);

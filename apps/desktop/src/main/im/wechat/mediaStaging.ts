@@ -13,7 +13,7 @@ import type {
   WechatPollMediaRefInput,
 } from '../../localDb/client/tx/types';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
-import { decodeWechatSilkToWav } from './silkDecoder';
+import { decodeWechatSilkToWav, isSilkStream } from './silkDecoder';
 
 const MAX_ATTACHMENTS_PER_MESSAGE = 4;
 
@@ -59,7 +59,10 @@ export async function stageWechatTaskMedia(args: {
       result.unsupportedMedia.push(`${ref.kind}:download-failed`);
       continue;
     }
-    if (ref.kind === 'voice' && ref.voiceEncoding === 6) {
+    // Voice bytes are decoded by content, not by the wire-side encode_type:
+    // real WeChat payloads arrive with encodings outside the hardcoded set
+    // and were silently rejected as unsupported (#10899).
+    if (ref.kind === 'voice' && isSilkStream(bytes)) {
       try {
         bytes = await decodeWechatSilkToWav(bytes, args.signal);
       } catch (error) {
@@ -204,11 +207,7 @@ function detectWechatMedia(ref: WechatMediaRef, bytes: Uint8Array): DetectedMedi
           }
         : null;
     case 'voice': {
-      if (
-        ref.voiceEncoding === 6 &&
-        startsWithAscii(bytes, 'RIFF') &&
-        startsWithAscii(bytes.subarray(8), 'WAVE')
-      ) {
+      if (startsWithAscii(bytes, 'RIFF') && startsWithAscii(bytes.subarray(8), 'WAVE')) {
         return {
           attachmentKind: 'file',
           fileName: 'wechat-voice.wav',
@@ -216,7 +215,7 @@ function detectWechatMedia(ref: WechatMediaRef, bytes: Uint8Array): DetectedMedi
           storage: 'cindy-media',
         };
       }
-      if (ref.voiceEncoding === 7 && isMp3(bytes)) {
+      if (isMp3(bytes)) {
         return {
           attachmentKind: 'file',
           fileName: 'wechat-voice.mp3',
@@ -224,7 +223,7 @@ function detectWechatMedia(ref: WechatMediaRef, bytes: Uint8Array): DetectedMedi
           storage: 'cindy-media',
         };
       }
-      if (ref.voiceEncoding === 8 && startsWithAscii(bytes, 'OggS')) {
+      if (startsWithAscii(bytes, 'OggS')) {
         return {
           attachmentKind: 'file',
           fileName: 'wechat-voice.ogg',

@@ -7,6 +7,7 @@ import {
   aes128EcbPaddedSize,
   chunkWechatText,
   decodeInboundMessage,
+  decodeInboundMessageWithReason,
   downloadWechatMedia,
   decryptAes128Ecb,
   encryptAes128Ecb,
@@ -97,6 +98,52 @@ describe("pure protocol utilities", () => {
         item_list: [null] as never,
       }),
     ).toMatchObject({ messageId: "message:3", media: [] });
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：decodeInboundMessageWithReason 把入站丢弃原因交给
+  //   transport/host 记录；#10899 前这些丢弃完全静默，无法与“服务器未下发”区分。
+  // - Bug／规则依据：#10899。
+  // - 现有覆盖缺口：已有用例只断言 decodeInboundMessage 返回 null，不含原因。
+  // - 最小失败输入：缺 sender / 缺 messageId / 缺 context_token / message_type≠USER。
+  // - tier：unit。
+  it("reports the drop reason for rejected inbound messages", () => {
+    expect(decodeInboundMessageWithReason({ message_id: 1 })).toEqual({
+      message: null,
+      dropReason: "missing-sender",
+    });
+    expect(
+      decodeInboundMessageWithReason({
+        message_id: 2,
+        from_user_id: "user",
+        to_user_id: "bot",
+      }),
+    ).toEqual({ message: null, dropReason: "missing-context-token" });
+    expect(
+      decodeInboundMessageWithReason({
+        from_user_id: "user",
+        to_user_id: "bot",
+        context_token: "ctx",
+      }),
+    ).toEqual({ message: null, dropReason: "missing-message-id" });
+    expect(
+      decodeInboundMessageWithReason({
+        message_id: 3,
+        message_type: 2,
+        from_user_id: "bot",
+        to_user_id: "user",
+        context_token: "ctx",
+      }),
+    ).toEqual({ message: null, dropReason: "not-user-message" });
+    expect(
+      decodeInboundMessageWithReason({
+        message_id: 4,
+        from_user_id: "user",
+        to_user_id: "bot",
+        context_token: "ctx",
+        item_list: [{ type: 1, text_item: { text: "hello" } }],
+      }),
+    ).toMatchObject({ dropReason: null, message: { text: "hello" } });
   });
 
   it("preserves a legitimate zero-byte file length", () => {
@@ -284,6 +331,50 @@ describe("iLink HTTP boundary", () => {
       messages: [],
       suggestedTimeoutMs: undefined,
     });
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：TencentIlinkTransport.poll 把解码丢弃原因带回 host，
+  //   WechatIM 依赖它输出丢弃计数日志；缺失时丢弃再次不可观测。
+  // - Bug／规则依据：#10899。
+  // - 现有覆盖缺口：已有 poll 用例只覆盖空列表与正常消息，无混合丢弃场景。
+  // - 最小失败输入：同一 poll 响应同时含 bot 消息与用户消息。
+  // - tier：unit。
+  it("surfaces decoder drop reasons alongside decoded poll messages", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          ret: 0,
+          get_updates_buf: "next",
+          msgs: [
+            {
+              message_id: 7,
+              message_type: 2,
+              from_user_id: "bot",
+              to_user_id: "user",
+              context_token: "ctx",
+            },
+            {
+              message_id: 8,
+              from_user_id: "user",
+              to_user_id: "bot",
+              context_token: "ctx",
+              item_list: [{ type: 1, text_item: { text: "hi" } }],
+            },
+          ],
+        }),
+      ),
+    );
+    const transport = new TencentIlinkTransport({
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      token: "fake-token",
+      botAgent: "Cindy/1.0.0",
+      fetch: fetchMock,
+    });
+    const result = await transport.poll("old", signal());
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({ messageId: "message:8", text: "hi" });
+    expect(result.droppedMessageReasons).toEqual(["not-user-message"]);
   });
 
   // 测试价值

@@ -948,6 +948,15 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     while (!signal.aborted && this.#isGenerationCurrent(generation)) {
       try {
         const result = await transport.poll(cursor, signal);
+        if (result.droppedMessageReasons?.length) {
+          const counts: Record<string, number> = {};
+          for (const reason of result.droppedMessageReasons) {
+            counts[reason] = (counts[reason] ?? 0) + 1;
+          }
+          this.log.warn('WeChat poll dropped inbound messages at the protocol decoder', {
+            counts,
+          });
+        }
         const now = this.#now();
         const preparedInputs = await Promise.all(
           result.messages.map((message, index) =>
@@ -1730,6 +1739,11 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       signal,
       now: receivedAt,
     });
+    if (staged.unsupportedMedia.length > 0) {
+      this.log.warn('WeChat inbound media rejected by staging', {
+        reasons: staged.unsupportedMedia,
+      });
+    }
     const quote = formatWechatQuote(message);
     return {
       message: {
