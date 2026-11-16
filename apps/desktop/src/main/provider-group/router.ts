@@ -63,6 +63,8 @@ export interface ProviderGroupRouterDeps {
    * 不提供 = 只算本机任务。
    */
   externalRunning?(providerId: string, memberKey: string): number;
+  /** 同账号控制端／受邀者尚未到执行端的预选，已包含在 externalRunning 中。 */
+  externalPending?(providerId: string, memberKey: string): number;
   /** 冷却的落盘位置；不提供 = 只在本次运行内有效。 */
   coolingStore?: {
     read(): ProviderGroupPersistedCooling;
@@ -299,6 +301,15 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
     return (r: ResolvedProviderGroupMember) => r.member.paused && !(input.localTask === true && r.member.kind === 'local');
   }
 
+  /** Scope follows the final executor identity. A local owner's task on another
+   * own computer is owner work; a guest plan never inherits that grant. */
+  function poolReadOptions(input: ProviderGroupPickInput, member: ProviderGroupMember) {
+    return {
+      remote: member.kind !== 'local' || input.localTask !== true,
+      ownComputer: input.ownComputer === true || (input.localTask === true && member.kind === 'device'),
+    };
+  }
+
   return {
     async pick(input) {
       const config = deps.readGroup(input.providerId);
@@ -320,8 +331,10 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       });
       await Promise.all(resolved.filter((r) => !r.pending && !r.providerContinuity?.stale
         && offersModel(r, input.agentKind, input.model) && !paused(r) && !input.exclude?.has(r.member.key))
-        .map((r) => recoverPoolCooling(input.providerId, r.member, input.model,
-          r.member.kind !== 'local' || input.localTask !== true, input.ownComputer === true)));
+        .map((r) => {
+          const options = poolReadOptions(input, r.member);
+          return recoverPoolCooling(input.providerId, r.member, input.model, options.remote, options.ownComputer);
+        }));
       const schedules = new Map<string, SubscriptionPoolScheduling>();
       if (deps.readPoolScheduling && !input.quotaRebalance) await Promise.all(resolved
         .filter(r => !r.pending && !r.providerContinuity?.stale && r.member.kind !== 'share'
@@ -331,9 +344,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           let timer: ReturnType<typeof setTimeout> | undefined;
           try {
             const summary = await Promise.race([
-              deps.readPoolScheduling!(r.member, input.model, {
-                remote: r.member.kind !== 'local' || input.localTask !== true, ownComputer: input.ownComputer === true,
-              }).catch(() => null),
+              deps.readPoolScheduling!(r.member, input.model, poolReadOptions(input, r.member)).catch(() => null),
               new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS); }),
             ]);
             if (summary) schedules.set(r.member.key, summary);
@@ -361,7 +372,8 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           running: physicalRunning,
           limit: accountFull ? 0 : effectiveConcurrencyLimit(r.member),
           ...(schedule?.accounts ? {
-            selectionRunning: schedule.running + Math.max(pendingLocalRunning(input.providerId, r.member.key),
+            selectionRunning: schedule.running + Math.max(pendingLocalRunning(input.providerId, r.member.key)
+              + (deps.externalPending?.(input.providerId, r.member.key) ?? 0),
               running(input.providerId, r.member.key) - schedule.totalRunning),
             roundSlots: schedule.accounts,
           } : {}),

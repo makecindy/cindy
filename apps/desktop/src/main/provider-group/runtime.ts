@@ -324,6 +324,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
     ) }),
     isTurnRunning: (sessionId) => applicationLoad.isTurnRunning(sessionId) || isTurnRunning(sessionId),
     externalRunning: (providerId, memberKey) => externalLoad.running(providerId, memberKey),
+    externalPending: (providerId, memberKey) => externalLoad.pending(providerId, memberKey),
     coolingStore: {
       read: readProviderGroupCooling,
       // 换账号后旧账号那份还在路上的写入不落进新账号的文件。

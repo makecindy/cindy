@@ -9,6 +9,7 @@ import { normalizeProviderGroupConfig, providerGroupSummaryForWire, type Provide
 import { PROVIDER_GROUP_PICK_QUICK_MS } from '../router.js';
 import { PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS, providerGroupMemberUsageState } from '../usage.js';
 import { createGroupContinuityExecutor } from '../continuityExecutor.js';
+import { handleProviderGroupRemote } from '../remoteHandler.js';
 import type { GroupContinuityGrant } from '../../../shared/providerGroupContinuity.js';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../service.js';
 import type { ProviderGroupBinding } from '../bindings.desktop.js';
@@ -685,6 +686,39 @@ describe('provider group runtime quota account selection', () => {
     const read = () => getProviderGroupDirectory().resolveMembers(localId, config);
     return { read, config, localId };
   }
+
+  // PR #10910 / unit: production owner factory must wire external pending load,
+  // not just direct router fixtures that inject that dependency themselves.
+  it('wires pending same-account picks through the owner runtime and actual remote handler', async () => {
+    const h = harness('anthropic', 'claude');
+    const model = 'claude-sonnet-5';
+    const devices = ['pooled', 'single'];
+    io.devices.mockResolvedValue({ devices: devices.map(deviceId => ({ deviceId, online: true,
+      remoteControlEnabled: true, controlEnabled: true, platform: 'darwin' })) });
+    io.catalog.mockImplementation(async (_invoke, deviceId) => [{ id: 'anthropic', connected: true,
+      subscriptionAccountPool: 'anthropic', auth: { method: 'oauth', native: 'claude' },
+      agents: ['claude-code'], models: { 'claude-code': [{ id: model }] }, routing: { 'claude-code': {} },
+      runningTurns: deviceId === 'pooled' ? 4 : 3,
+    } as unknown as ProviderView]);
+    h.config.members = normalizeProviderGroupConfig({ members: devices.map(agentDeviceId => ({
+      kind: 'device', agentDeviceId, providerId: 'anthropic',
+    })) }, h.localId)!.members;
+    io.group.mockReturnValue(h.config);
+    io.invoke.mockImplementation(async (deviceId, _channel, args) => ({ ok: true, result: args.length === 1
+      ? { providerId: 'anthropic', pooled: true, usage: null, schedulingVersion: 1 }
+      : { providerId: 'anthropic', model, scheduling: { version: 1, accounts: deviceId === 'pooled' ? 2 : 1,
+        running: deviceId === 'pooled' ? 0 : 3, totalRunning: deviceId === 'pooled' ? 4 : 3,
+        full: false, urgency: null, fiveHourTight: false } },
+    }));
+    const scope = getProviderGroupOwnerScope();
+    const results = await Promise.all(Array.from({ length: 5 }, (_, i) => handleProviderGroupRemote({
+      scope: () => scope, readGroup: () => h.config, isRemoteAllowed: () => true,
+      now: Date.now, sessionGroup: async () => null, replaceReportedUsage() {},
+    }, i % 2 ? 'phone' : 'laptop', { action: 'pick', providerId: h.localId, sessionId: `runtime-${i}`,
+      agentKind: 'claude-code', model })));
+    expect(results.map(result => result && 'member' in result ? result.member.agentDeviceId : null))
+      .toEqual(['pooled', 'pooled', 'pooled', 'pooled', 'single']);
+  });
 
   // Unit: actual owner runtime → IPC client → parser → router. Prior pool tests
   // only returned quota/availability; they could not detect a new host's anonymous

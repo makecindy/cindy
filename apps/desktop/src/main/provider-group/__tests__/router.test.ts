@@ -94,6 +94,18 @@ describe('subscription pools within a group', () => {
     expect(picks.map(pick => pick.kind === 'member' ? pick.member.key : null))
       .toEqual(['local', 'local', 'local', 'local', remote.key]);
   });
+
+  // PR #10910 review: localTask selects a remote executor with owner privileges,
+  // while a shared guest must retain stricter account grants. Prior local pool
+  // cases never depended on own-computer-only legacy account authorization.
+  it.each(['local', 'own-computer', 'guest'] as const)('matches remote account admission for a %s caller', async caller => {
+    const router = harness({}, {}, [], { ...config, members: [remote] }, {
+      readPoolScheduling: async (_member, _model, options) => ({ ...summary(options.ownComputer ? 1 : 0, 0) }),
+    });
+    const pick = await router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL,
+      ...(caller === 'local' ? { localTask: true } : caller === 'own-computer' ? { ownComputer: true } : {}) });
+    expect(pick.kind).toBe(caller === 'guest' ? 'unavailable' : 'member');
+  });
 });
 
 function harness(
