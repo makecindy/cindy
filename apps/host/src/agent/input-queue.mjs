@@ -1,15 +1,14 @@
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
-import { hydrateQueuedAgentReferences } from '../../../desktop/src/main/maker-ipc/agentInputReferences.ts';
 import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
 import { createTurnExecutor } from './turn-executor.mjs';
+import { hostCoordinatorDeps } from './coordinator-deps.ts';
 import { createHostIdleRelease } from './idle-release.ts';
 import { createAppMessageSender } from '../../../desktop/src/main/mcp-apps/messageSender.ts';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { randomUUID } from 'node:crypto';
 import { createSchedulerQueueBridge } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
 import { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/maker-ipc/queuedAcceptedCallbacks.ts';
-import { runSchedulerQueuedPreparation } from '../../../desktop/src/main/maker-ipc/schedulerQueuedPreparation.ts';
 import { readTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionInput.ts';
 import { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/maker-ipc/queuedAttachmentOwnership.ts';
 import { createLogger } from '../../../desktop/src/main/logger.ts';
@@ -186,100 +185,13 @@ export function createInputQueue(deps) {
         deps.onSessionSettled?.(id);
       },
     });
-    const coordinator = new AgentInputCoordinator({
-      sendToAgent: async (id, message, createOpts, sendOpts) => {
-        const clientId = sendOpts.persistUserMessage?.clientId;
-        try {
-          await runSchedulerQueuedPreparation(clientId, schedulePreparations,
-            () => { scheduleDiscardWatchers.delete(clientId); acceptedCallbacks.discard(clientId); });
-          assertCurrent();
-          const result = await executor.send(id, message, createOpts, sendOpts);
-          await acceptedCallbacks.settle(id, sendOpts, result);
-          return result;
-        } catch (error) {
-          await acceptedCallbacks.rollback(id, clientId);
-          throw error;
-        }
-      },
-      steerToAgent: executor.steer,
-      abortSession: id => {
-        const promise = executor.abort(id);
-        stateFor(id).aborting = promise;
-        return promise;
-      },
-      isTurnRunning: executor.isRunning,
-      // While a turn's rows settle after its terminal, the Host still counts it as running (isTurnRunning)
-      // and the Session is already idle; the coordinator, which now gets the terminal on arrival, would read
-      // that as a stale boundary and start polling it. The probe answers 'unavailable' (fail-closed) in that
-      // window; it never reports the Host's own record as a running Session.
-      isLiveTurnRunning: id => executor.isSettling(id) ? undefined : deps.getMaker()?.getSession(id)?.isTurnRunning?.(),
-      isLiveSessionPresent: id => !!deps.getMaker()?.getSession(id),
-      getTurnGeneration: id => deps.getMaker()?.getSession(id)?.getTurnGeneration?.() ?? null,
-      getTurnSessionIdentity: id => deps.getMaker()?.getSession(id) ?? null,
-      getObservedCurrentTurnTerminal: id => deps.getMaker()?.getSession(id)?.getObservedCurrentTurnTerminal?.(),
-      reconcileTurnIdle: executor.reconcileIdle,
-      getAgentKind: id => makerKind(deps.getMaker()?.getSession(id)?.agentKind) ?? null,
-      getSdkSessionId: async id => (await deps.readSession(id)).sdkSessionId || undefined,
-      hasAssistantProgressAfter: deps.hasAssistantProgressAfter,
-      getRecoveryContextSnapshot: deps.getRecoveryContextSnapshot,
-      hasPendingInteraction: id => (deps.interactions?.pending(id)?.length ?? 0) > 0,
-      hasPendingCredentialSwitch: deps.hasPendingCredentialSwitch,
-      rewindPersistedUserMessageAfterClear: deps.rewindPersistedUserMessageAfterClear,
-      createUserMessage: (id, input, options) => deps.persistMessage?.(id, input, options),
-      touchUserSend: deps.touchUserSend ?? (async () => {}),
-      emitProjection: publish,
-      persistQueueSnapshot: persist,
-      awaitQueuePersistence: flushed,
-      loadQueueSnapshot: deps.loadQueueSnapshot,
-      loadClearBoundary: deps.loadClearBoundary,
-      getPersistedClientIds: deps.getPersistedClientIds,
-      onUserMessagePersisting: (id, item) => attachmentOwnership.markPersistenceStarted(id, item.clientId),
-      onUserMessagePersisted: (id, item) => { void attachmentOwnership.settleDurable(id, item.clientId); },
-      onUserMessagePersistenceFailed: (id, item, options) => {
-        afterSnapshot(id, () => attachmentOwnership.markPersistenceFailed(id, item.clientId, options));
-      },
-      // Desktop register.ts (AgentInputCoordinator hooks): after the user row is durable
-      // and before vendor dispatch, open the turn change record, then the Git baseline.
-      beforeDispatchUserTurn: executor.beforeDispatchUserTurn,
-      // A durable turn that never reached the vendor: drop the record, then the baseline.
-      onUndispatchedUserTurn: executor.onUndispatchedUserTurn,
-      // Session references in the composer (register.ts resolveSessionReferences, with the Host's
-      // device identity; reading another device's task needs Device Link, which the Host lacks).
-      resolveSessionReferences: deps.resolveSessionReferences,
-      refreshAgentReferencesBeforeDispatch: async item => {
-        const refreshed = await hydrateQueuedAgentReferences(item, {
-          isSessionTurnRunning: target => deps.getMaker()?.getSession(target)?.isTurnRunning() ?? false,
-        });
-        Object.assign(item, refreshed);
-        if (refreshed.agentReferences === undefined) delete item.agentReferences;
-      },
-      supersedeRetriedUserTurn: deps.supersedeRetriedUserTurn,
-      // The coordinator has just kept this input as the task's recovery point (active-turn) when it
-      // stores the error row; that input stopped here, so its receipt follows the row (turn-executor).
-      persistTerminalSendError: (id, message) => {
-        const recovery = coordinator.getProjection(id).recovery;
-        executor.persistTerminalSendError(id, message, recovery?.kind === 'active-turn' ? recovery.item?.clientId : undefined);
-      },
-      // As register.ts: the scheduler bridge first (a scheduled prompt's persisted failure), then the
-      // Pi prompt timeout's runtime close (turn-executor).
-      onPersistedSendRejected: (id, message, item, recovering) => {
-        scheduleBridge.onPersistedSendRejected(id, message, item, recovering);
-        executor.onPersistedSendRejected(id, message);
-      },
-      onAcceptedQueuedMessage: async (id, item) => {
-        schedulePreparations.delete(item.clientId);
-        scheduleDiscardWatchers.delete(item.clientId);
-        await acceptedCallbacks.run(id, item, scheduleBridge.recoverySourceClientId(id, item));
-      },
-      onDiscardedQueuedMessage: (id, item) => {
-        afterSnapshot(id, () => attachmentOwnership.discardClient(id, item.clientId));
-        acceptedCallbacks.discard(item.clientId);
-        schedulePreparations.delete(item.clientId);
-        const discarded = scheduleDiscardWatchers.get(item.clientId);
-        scheduleDiscardWatchers.delete(item.clientId);
-        discarded?.();
-      },
-    });
+    // The coordinator's ports (coordinator-deps.ts, every optional port written out).
+    const coordinator = new AgentInputCoordinator(hostCoordinatorDeps({
+      deps, executor, coordinator: () => coordinator, scheduleBridge: () => scheduleBridge, assertCurrent,
+      noteAborting: (id, aborting) => { stateFor(id).aborting = aborting; },
+      publish, persist, flushed, afterSnapshot, attachmentOwnership, acceptedCallbacks,
+      schedulePreparations, scheduleDiscardWatchers,
+    }));
     // The desktop's idle-runtime release (idle-release.ts), one set of watchers per owner runtime.
     const idleRelease = deps.readClaudeIdleMinutes ? createHostIdleRelease({
       coordinator,
