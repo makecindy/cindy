@@ -240,7 +240,10 @@ describe('Chat Server result delivery and refresh', () => {
       }
       if (route.includes('/plans')) return { body: route.includes(planId) || plan.status === 'waiting' ? [plan] : [] };
       if (route.endsWith('/executions')) return { body: executions };
-      if (route.endsWith('/snapshot')) return { body: { ...response(route).body, reads: [{ thread_key: 'main', read_seq: '1' }] } };
+      // Alert settlement uses an owned bot; plan creation alone does not grant stop authority.
+      if (route.endsWith('/snapshot')) return { body: { ...response(route).body,
+        members: [{ id: botId, kind: 'bot', state: 'joined', ownerActorId: selfId }],
+        reads: [{ thread_key: 'main', read_seq: '1' }] } };
       return response(route);
     });
     const waiting = await service.getGroup(roomId);
