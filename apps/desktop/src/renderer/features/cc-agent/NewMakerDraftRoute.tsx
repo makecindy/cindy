@@ -1823,11 +1823,11 @@ export function NewMakerDraftRoute() {
   } = remoteDefaults;
 
   // 到另一台电脑新建任务：引擎跟随那台电脑自己的新建任务；回到本机再还原(见 remoteDraftEngineFollow)。
-  // 被控端默认值按「设备:引擎」读缓存而不是 remoteDraftState：换设备的那一轮渲染里
-  // remoteDraftState 还是上一台的值，拿它会按上一台电脑的引擎切换。
+  // 只用本次请求或推送确认的引擎；缓存可预览配置，但不能提前结束引擎跟随。
   useEffect(() => {
     const deviceId = isDeviceLinkDraft ? effectiveDeviceLinkDeviceId ?? null : null;
-    const defaults = deviceId ? getRemoteDraftDefaults(deviceId, capabilityAgentKind) : undefined;
+    const confirmed = remoteDefaults.confirmedEngineRef.current;
+    const defaults = confirmed?.deviceId === deviceId ? confirmed : undefined;
     const next = nextRemoteDraftEngine({
       ownerId: dataOwnerId,
       deviceId,
@@ -1835,7 +1835,7 @@ export function NewMakerDraftRoute() {
       defaultsReady: defaults !== undefined,
       selectedAgentKind: defaults?.selectedAgentKind,
     });
-    if (next) switchVendor(next);
+    if (next) switchVendor(next, { remoteFollow: true });
   }, [
     dataOwnerId,
     isDeviceLinkDraft,
@@ -3318,7 +3318,7 @@ export function NewMakerDraftRoute() {
   // 自动 pickup 新 vendor 的 lastByVendor 值。
   const handleVendorChange = useCallback((next: MakerVendor) => {
     markDefaultTupleCustomized();
-    switchVendor(next);
+    switchVendor(next, { userSelected: true });
   }, []);
 
   // 当前草稿选中的 vendor 变为不可用(如 Pi 未注册 / 被控端无 Pi)时,coerce 到首个可用来源
@@ -3555,7 +3555,7 @@ export function NewMakerDraftRoute() {
       // event 到达前的旧 Harness。switchVendor 自身同值早返，不会制造额外写入。
       // 手动选了普通模型 = 取消插件模型。
       if (getDraft().pluginModel || getDraft().modelGroup) patchDraft({ pluginModel: null, modelGroup: null });
-      switchVendor(selection.vendor);
+      switchVendor(selection.vendor, { userSelected: true });
       // ── 远程 Agent:模型面板里选到了另一台电脑上的模型(或从那台回到任务所在电脑)──────
       // 连 Agent 的运行位置一起换。任务、项目、附件都在任务所在电脑(本机或被控电脑),一概不动;
       // 只有模型目录与这次选择改按目标电脑。

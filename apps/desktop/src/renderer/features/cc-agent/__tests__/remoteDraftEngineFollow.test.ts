@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { __resetRemoteDraftEngineFollowForTest, nextRemoteDraftEngine } from '../remoteDraftEngineFollow';
+import { resetRemoteDraftEngineFollow, nextRemoteDraftEngine } from '../remoteDraftEngineFollow';
 
 // 控制端新装、引擎默认 Pi；被控端自己的新建任务用 Claude。远程草稿曾显示被控端 Pi 槽里的
 // 旧选择(本地千问 + 自动审批)，而不是被控端真正在用的 Claude 选择。
 const base = { ownerId: 'owner', selectedAgentKind: undefined, defaultsReady: false } as const;
 
 describe('remote draft engine follows the target computer', () => {
-  beforeEach(() => __resetRemoteDraftEngineFollowForTest());
+  beforeEach(() => resetRemoteDraftEngineFollow());
 
   it('switches to the target engine once its defaults arrive, and restores the local engine on return', () => {
     expect(nextRemoteDraftEngine({ ...base, deviceId: 'studio', currentVendor: 'pi' })).toBeNull();

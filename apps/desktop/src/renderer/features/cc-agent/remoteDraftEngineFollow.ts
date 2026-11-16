@@ -21,6 +21,7 @@ interface FollowEntry {
   vendorAtEntry: MakerVendor;
   /** 这次自动切到的引擎；null = 没切过。 */
   followedVendor: MakerVendor | null;
+  manuallySelected: boolean;
   settled: boolean;
 }
 
@@ -44,7 +45,7 @@ export function nextRemoteDraftEngine(args: {
   /** 当前远程目标；null = 本机草稿。 */
   deviceId: string | null;
   currentVendor: MakerVendor;
-  /** 被控端默认值已就绪(含旧端无此字段的情况)。 */
+  /** 本次请求/推送已确认默认值；旧缓存不算就绪，旧端无字段仍算确认。 */
   defaultsReady: boolean;
   selectedAgentKind: AgentKind | undefined;
 }): MakerVendor | null {
@@ -55,7 +56,7 @@ export function nextRemoteDraftEngine(args: {
     const leaving = entry;
     entry = null;
     if (
-      leaving?.followedVendor &&
+      leaving?.followedVendor && !leaving.manuallySelected &&
       currentVendor === leaving.followedVendor &&
       leaving.localVendor !== currentVendor
     ) {
@@ -70,17 +71,21 @@ export function nextRemoteDraftEngine(args: {
     entry = {
       ownerId,
       deviceId,
-      localVendor: previous ? previous.localVendor : currentVendor,
+      localVendor: previous && !previous.manuallySelected ? previous.localVendor : currentVendor,
       vendorAtEntry: currentVendor,
       followedVendor: stillFollowed ? previous!.followedVendor : null,
+      manuallySelected: false,
       settled: false,
     };
   }
 
-  if (entry.settled || !args.defaultsReady) return null;
+  if (entry.settled || entry.manuallySelected || !args.defaultsReady) return null;
   entry.settled = true;
   // 默认值到之前用户自己换了引擎：尊重他的选择。
-  if (currentVendor !== entry.vendorAtEntry) return null;
+  if (currentVendor !== (entry.followedVendor ?? entry.vendorAtEntry)) {
+    entry.manuallySelected = true;
+    return null;
+  }
   const target = args.selectedAgentKind;
   if (!target || sameEngine(currentVendor, target)) return null;
   const next = vendorForAgentKind(target);
@@ -88,6 +93,17 @@ export function nextRemoteDraftEngine(args: {
   return next;
 }
 
-export function __resetRemoteDraftEngineFollowForTest(): void {
+/** 手动选择是事件，即使切回自动跟随值也不能恢复自动资格。 */
+export function markRemoteDraftEngineManuallySelected(): void {
+  if (entry) entry.manuallySelected = true;
+}
+
+/** 自动跟随仅影响当前窗口；本机偏好镜像和落盘始终使用原来的引擎。 */
+export function persistedDraftVendor(ownerId: string | null, current: MakerVendor): MakerVendor {
+  return entry?.ownerId === ownerId && entry.followedVendor && !entry.manuallySelected
+    ? entry.localVendor : current;
+}
+
+export function resetRemoteDraftEngineFollow(): void {
   entry = null;
 }
