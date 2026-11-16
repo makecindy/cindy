@@ -1,5 +1,18 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { rehydrateCloseSuppression } from '../../maker-host/rehydrateCloseSuppression.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createBetterSqliteDatabase } from '../../localDb/betterSqliteFactory.js';
+import { createDbClientForHandle } from '../../localDb/client/createDbClientForHandle.js';
+import { clearCurrentDbClient, getDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
+import { runMigrations } from '../../localDb/migrate.js';
+import { configureMigrationRuntime } from '../../localDb/migrationRuntime.js';
+import * as schema from '../../localDb/schema.js';
+import { configureSqliteVecExtPath, loadSqliteVec } from '../../localDb/sqliteVecLoader.js';
+import { getSessionEffort, setSessionEffort } from '../../maker-host/session-effort-store.js';
 
 import {
   clearSessionProvider,
@@ -10,7 +23,7 @@ import {
   PendingCredentialSwitchService,
   type PendingCredentialSwitchDeps,
 } from '../pendingCredentialSwitch.js';
-import { createPendingCredentialSwitchRouteReader } from '../pendingCredentialSwitchAssembly.js';
+import { createPendingCredentialSwitchRouteReader, createPendingCredentialSwitchService } from '../pendingCredentialSwitchAssembly.js';
 
 const touchedSessions = new Set<string>();
 
@@ -664,5 +677,71 @@ describe('PendingCredentialSwitchService', () => {
       expect(resolveRoute2).toHaveBeenCalledWith('claude-code', 'gpt-5.5', 'xd');
       expect(resolveRoute2).toHaveBeenCalledWith('codex', 'gpt-5.5', 'xd');
     });
+  });
+});
+
+// Bug: the desktop's persistRoute (the route write a pending switch lands with) wrote `effort: null`
+// when the target model has no effort levels (resolveSessionRuntimeAxes resolves null). sessions.effort
+// is NOT NULL on an installed database (drizzle/0000_init.sql), so the write failed, the switch kept its
+// registration and retried at every turn end, and the task's input queue was never woken. Gap: the
+// service tests above stub persistRoute, so nothing ran this write against a real schema.
+describe('the desktop pending switch service on a migrated database', () => {
+  const vec = process.platform === 'darwin' ? 'dylib' : process.platform === 'win32' ? 'dll' : 'so';
+
+  it('lands a switch to a model without effort levels and keeps the stored effort', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'pending-switch-effort-'));
+    const file = path.join(dir, 'cindy.db');
+    configureMigrationRuntime({ drizzleDir: fileURLToPath(new URL('../../../../drizzle', import.meta.url)), isPackaged: true });
+    configureSqliteVecExtPath(fileURLToPath(new URL(`../../../../native/sqlite-vec/${process.platform}-${process.arch}/vec0.${vec}`, import.meta.url)));
+    const db = createBetterSqliteDatabase(file);
+    expect(loadSqliteVec(db).loaded).toBe(true);
+    await runMigrations(db, file);
+    const client = createDbClientForHandle({ db, drizzle: drizzle(db, { schema }) });
+    setCurrentDbClient(client, 'pending-switch-effort');
+    const sessionId = rememberSession('pending-switch-no-effort');
+    try {
+      const now = Date.now();
+      await getDbClient().drizzle.insert(schema.sessions).values({ id: sessionId, model: 'claude-opus-4-7', effort: 'high',
+        agentKind: 'cc', providerId: 'anthropic', createdAt: now, updatedAt: now });
+      const views = [{ id: 'anthropic', connected: true, agents: ['claude-code'], source: 'user', routing: { 'claude-code': {} },
+        models: { 'claude-code': [{ id: 'claude-haiku-4-5', efforts: [], defaultEffort: null, supportsFastMode: false }] } }];
+      const wakeSession = vi.fn();
+      const refreshQueuedRoute = vi.fn();
+      const broadcastSessionPatched = vi.fn();
+      const error = vi.fn();
+      const service = createPendingCredentialSwitchService({
+        maker: { listActiveSessions: () => [], closeSession: async () => {} },
+        isSessionInTurn: () => false,
+        applyPiPendingSelection: vi.fn(),
+        broadcastToAllWindows: vi.fn(),
+        inputCoordinator: { wakeSession },
+        resolveLenientSessionRoute: async (_agent, model, providerId) => ({ model, providerId, degraded: false }),
+        getSessionDbAgentKind: () => 'cc',
+        getDesktopProviderService: () => ({ listProviders: async () => views }) as never,
+        resolveConfiguredContextWindow: () => null,
+        agentInputCoordinatorHolder: { refreshQueuedRoute },
+        broadcastSessionPatched,
+        log: { debug() {}, info() {}, warn() {}, error } as never,
+      });
+      setSessionEffort(sessionId, 'high');
+
+      service.register(sessionId, { model: 'claude-haiku-4-5', providerId: 'anthropic', agentKind: 'claude-code' });
+      await service.onTurnSettled(sessionId);
+
+      expect(error).not.toHaveBeenCalled();
+      expect(service.has(sessionId)).toBe(false);
+      expect(wakeSession).toHaveBeenCalledWith(sessionId, 'pending-credential-switch-applied');
+      expect(db.prepare('SELECT model, effort, provider_id AS providerId FROM sessions WHERE id = ?').get(sessionId))
+        .toEqual({ model: 'claude-haiku-4-5', effort: 'high', providerId: 'anthropic' });
+      // The model has no effort levels: the runtime starts without one, and the queued input carries none.
+      expect(getSessionEffort(sessionId)).toBeNull();
+      expect(refreshQueuedRoute).toHaveBeenCalledWith(sessionId, expect.objectContaining({ model: 'claude-haiku-4-5', effort: undefined }));
+      expect(broadcastSessionPatched.mock.calls[0]?.[1]).not.toHaveProperty('effort');
+    } finally {
+      setSessionEffort(sessionId, null);
+      clearCurrentDbClient(client);
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
