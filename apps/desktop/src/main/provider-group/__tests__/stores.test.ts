@@ -31,6 +31,23 @@ afterEach(() => { scope.boundaryPending = false; activeOwner = 'owner-test'; vi.
 afterAll(async () => { await fs.promises.rm(tmpDir, { recursive: true, force: true }); });
 
 describe('provider group store', () => {
+  // Unit persistence regression (provider-groups.md §3): the prior fixture only had
+  // one connection per device. Save both independent IDs and reload the actual file.
+  it('persists two independent subscription members on one device without merging their identities', async () => {
+    const a = { kind: 'device', agentDeviceId: 'one-host', providerId: 'openai-sub-12345678', providerName: 'Codex A' };
+    const b = { ...a, providerId: 'openai-sub-abcdef01', providerName: 'Codex B' };
+    const first = await store.writeProviderGroup('openai', { strategy: 'round', members: [a] });
+    await store.writeProviderGroup('openai', { strategy: 'round', members: [a, b] }, first);
+    const disk = JSON.parse(fs.readFileSync(path.join(tmpDir, 'provider-group-prefs.json'), 'utf8'));
+    const reloaded = store.__testing.normalize(disk).groups.openai;
+    expect(reloaded.members.map((m) => [m.key, m.providerId, m.providerName])).toEqual([
+      ['device:one-host:openai-sub-12345678', a.providerId, 'Codex A'],
+      ['device:one-host:openai-sub-abcdef01', b.providerId, 'Codex B'],
+    ]);
+    expect(store.readProviderGroup('openai')).toEqual(reloaded);
+    await store.writeProviderGroup('openai', null);
+  });
+
   it.each(['save', 'delete'])('does not %s when teardown starts before the file lock is acquired', async (action) => {
     const initial = (await store.writeProviderGroup('boundary', { members: [{ kind: 'local' }] }))!;
     const pending = store.writeProviderGroup('boundary', action === 'delete' ? null : { ...initial, autoSwitch: false }, initial);
