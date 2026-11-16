@@ -189,6 +189,26 @@ function renderComposer(extra: Partial<ComponentProps<typeof ChatInput>> = {}) {
   return { ...view, props };
 }
 
+// Unit regression: existing-task hydration used to scan default Claude/global
+// before the real Codex project arrived. Exercise the actual mounted composer,
+// not just the command loader, and preserve the new-dialogue global roster.
+it('waits for task identity and loads its authoritative project only once', async () => {
+  const view = renderComposer({ sessionId: 'skill-hydration', runtimeAgentKind: null,
+    vendorKey: 'cc', initialWorkingDir: undefined });
+  await act(async () => {});
+  expect(h.listAgentSkills).not.toHaveBeenCalled();
+  view.rerender(<ChatInput {...view.props} runtimeAgentKind="codex" vendorKey="codex"
+    initialWorkingDir="/fixture/real-project" />);
+  await waitFor(() => expect(h.listAgentSkills).toHaveBeenCalledTimes(1));
+  expect(h.listAgentSkills).toHaveBeenLastCalledWith('codex', {
+    sessionId: 'skill-hydration', workingDir: '/fixture/real-project',
+  });
+  view.unmount();
+  h.listAgentSkills.mockClear();
+  renderComposer();
+  await waitFor(() => expect(h.listAgentSkills).toHaveBeenCalledTimes(1));
+});
+
 function supplyRangeGeometry() {
   // jsdom has no layout. Keep real ranges/selections while ProseMirror focuses.
   const createRange = document.createRange.bind(document);
@@ -692,7 +712,7 @@ it.each(['Enter', 'Tab'])('consumes %s for an empty slash result without sending
 // off to the install flow: it must not insert `/pr`, send, or keep the typed query.
 it('hands a plugin Skill setup row to its owner instead of inserting it', async () => {
   const onSelect = vi.fn();
-  const view = renderComposer({ sessionId: 'slash-plugin-setup', pluginSkillSetup: {
+  const view = renderComposer({ sessionId: 'slash-plugin-setup', runtimeAgentKind: 'codex', vendorKey: 'codex', pluginSkillSetup: {
     entries: [{ skillName: 'pr', description: 'needs GitHub', meta: 'not installed' }], onSelect } });
   await waitFor(() => expect(h.editor).not.toBeNull());
   await act(async () => {

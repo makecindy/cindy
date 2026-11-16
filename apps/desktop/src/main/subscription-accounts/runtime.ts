@@ -96,6 +96,7 @@ import { mapCodexAppServerModelsToCatalog, mapCodexModelsToCatalog } from '../ma
 import type { CatalogModel } from '@cindy/model-providers';
 import type { CodexModelListItem } from '@cindy/maker-core';
 import { readStoredAccountUsage, writeStoredAccountUsage } from '../usage/accountUsageStorage.js';
+import { subscriptionUsageView, SUBSCRIPTION_USAGE_TTL_MS } from './usageView.js';
 
 const log = desktopMakerLogger.child('subscription-accounts');
 
@@ -687,7 +688,7 @@ async function snapshot(
           !forceUsage &&
           sameAccount(current) &&
           current?.usageAt !== undefined &&
-          Date.now() - current.usageAt < 180_000;
+          Date.now() - current.usageAt < SUBSCRIPTION_USAGE_TTL_MS;
         let readSucceeded = false;
         let usage = auth.authenticated
           ? reuseUsage
@@ -1413,6 +1414,37 @@ function accountUsage(usage: Usage | undefined): { usage?: SubscriptionAccountUs
   return buckets && Object.keys(buckets).length > 0
     ? { usage: { codex: { buckets, planType: usage?.codexPlan, credits: usage?.codexCredits ?? null } } }
     : {};
+}
+/** Owner-local read for plugins and Agent tools. Uses the UI's per-account reader/cache, not SQL. */
+export async function readSubscriptionUsage(providerId?: string) {
+  const state = currentRuntime();
+  assertOwner(state);
+  const targets = (['anthropic', 'openai'] as const).flatMap(provider =>
+    (readPool(provider) ?? defaultPool()).accounts
+      .filter(account => accountStillPresent(state, provider, account.id)
+        && (account.id !== 'default' || defaultAccountBound(provider))
+        && (!providerId || accountProviderId(provider, account.id) === providerId))
+      .map(account => ({ provider, id: account.id, providerId: accountProviderId(provider, account.id) })));
+  await Promise.all(targets.map(account => snapshot(state, account.provider, account.id)));
+  assertOwner(state);
+  // Reads yield to removal, movement, native revocation and login. Recheck membership and use
+  // the latest owned cache, never an earlier result retained across another account's await.
+  const current = targets.filter(target => {
+    if (!accountStillPresent(state, target.provider, target.id)
+      || (target.id === 'default' && !defaultAccountBound(target.provider))
+      || accountProviderId(target.provider, target.id) !== target.providerId) return false;
+    return state.cache.has(keyOf(target.provider, target.id));
+  });
+  const accounts = (['anthropic', 'openai'] as const).flatMap(provider =>
+    accountProfileGroups(state, provider, current.filter(target => target.provider === provider)).map(group => {
+      const target = group[0];
+      const info = state.cache.get(keyOf(provider, target.id))!;
+      return subscriptionUsageView({ providerId: target.providerId, provider, accountId: target.id,
+        authenticated: info.auth.authenticated, unavailable: info.unavailable, plan: info.auth.plan,
+        planTier: info.auth.planTier, planType: info.auth.planType,
+        ...accountUsage(info.usage), updatedAt: info.usageAt }, Date.now());
+    }));
+  return { scope: 'local', accounts };
 }
 export function readSubscriptionPool(
   providerId: string,

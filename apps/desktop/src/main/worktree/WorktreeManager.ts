@@ -37,6 +37,12 @@ import {
 } from './gitExec';
 import { gitPathOutput } from './gitPathOutput';
 import { ensureManagedWorktreeExcluded } from './managedWorktreeExclude';
+import {
+  buildMultiboxAddArgs,
+  buildMultiboxRemoveArgs,
+  logMultiboxAddResult,
+  shouldUseMultibox,
+} from './multibox';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { applyWorktreeIncludeFile, listChangedWorktreeIncludeFiles } from './includePatternsEngine';
 import { hasKeepSentinel } from './safety';
@@ -625,18 +631,22 @@ interface CreatedSnapshot {
   /** 已 mkdirp 的父目录(dirname). 若 worktree add 失败需要清理。 */
   parentEnsured?: string;
   /** git worktree add 已成功执行(此时 worktree path 真实存在)。 */
-  worktreeAdded?: { path: string; baseRepo: string };
+  worktreeAdded?: { path: string; baseRepo: string; multibox?: boolean };
 }
 
 async function rollbackPartialCreate(snap: CreatedSnapshot): Promise<void> {
   // A failed create may already have launched checkout or acquired a task reference.
   if (snap.worktreeAdded) {
-    const { path: wp, baseRepo } = snap.worktreeAdded;
+    const { path: wp, baseRepo, multibox } = snap.worktreeAdded;
     try {
       await withWorktreeResourceLock(wp, async () => {
         if (hasKeepSentinel(wp) || hasLiveSessionReference({ path: wp }, await loadLiveSessionPathKeys())) return;
-        if ((await listNonReproducibleIgnoredFiles(baseRepo, wp)).length > 0) return;
-        await gitExec(['worktree', 'remove', wp], baseRepo);
+        // A Multibox worktree's ignored files were all cloned from the base checkout earlier in
+        // this same, never-published create (engine caches: often 100k+ files, tens of GB), so
+        // the byte-by-byte comparison would only hold this repository's create queue for hours.
+        if (!multibox && (await listNonReproducibleIgnoredFiles(baseRepo, wp)).length > 0) return;
+        // Both forms refuse dirty worktrees without force.
+        await gitExec(multibox ? buildMultiboxRemoveArgs(wp) : ['worktree', 'remove', wp], baseRepo);
       });
     } catch (err) {
       log.warn(
@@ -964,51 +974,66 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       // 5. git worktree add(--no-checkout 跳过文件解压, 加速主流程; longpaths 自动重试)
       //    对齐 CC Desktop: 大型仓库的全 checkout 可能耗时数十秒, 改成只建 worktree 元数据,
       //    后续 stageCheckout 同步拉关键文件, 全 checkout 后台跑。
+      //    仓库使用 Multibox 时改走 git multibox add(见 ./multibox): 一次给出带引擎缓存的
+      //    完整目录, 不带 --no-checkout(带上会退回普通 worktree), 失败原样返回不改用 git 重试。
       const branch = getBranchName(name);
-      const addArgs = buildWorktreeAddArgs(branch, worktreePath, req.sourceBranch);
-      try {
-        await timed('git worktree add', () => gitExec(addArgs, baseRepo));
-      } catch (err) {
-        if (err instanceof GitExecError && /filename too long|core\.longpaths/i.test(err.stderr)) {
-          // 启用 core.longpaths 后重试一次
-          try {
-            await gitExec(['config', '--global', 'core.longpaths', 'true']);
-            await timed('git worktree add retry', () => gitExec(addArgs, baseRepo));
-          } catch (retryErr) {
-            return { ok: false, error: classifyError(classifyAny(retryErr)) };
-          }
-        } else {
+      const useMultibox = await timed('detect multibox', () => shouldUseMultibox(baseRepo));
+      if (useMultibox) {
+        try {
+          const added = await timed('git multibox add', () =>
+            gitExec(buildMultiboxAddArgs(branch, worktreePath, req.sourceBranch), baseRepo));
+          logMultiboxAddResult(worktreePath, added.stdout);
+        } catch (err) {
           return { ok: false, error: classifyError(classifyAny(err)) };
         }
+      } else {
+        const addArgs = buildWorktreeAddArgs(branch, worktreePath, req.sourceBranch);
+        try {
+          await timed('git worktree add', () => gitExec(addArgs, baseRepo));
+        } catch (err) {
+          if (err instanceof GitExecError && /filename too long|core\.longpaths/i.test(err.stderr)) {
+            // 启用 core.longpaths 后重试一次
+            try {
+              await gitExec(['config', '--global', 'core.longpaths', 'true']);
+              await timed('git worktree add retry', () => gitExec(addArgs, baseRepo));
+            } catch (retryErr) {
+              return { ok: false, error: classifyError(classifyAny(retryErr)) };
+            }
+          } else {
+            return { ok: false, error: classifyError(classifyAny(err)) };
+          }
+        }
       }
-      snap.worktreeAdded = { path: worktreePath, baseRepo };
+      snap.worktreeAdded = { path: worktreePath, baseRepo, multibox: useMultibox };
 
       // 5b. stageCheckout: 同步拉 agent 启动必读文件(.claude/.sivi/CLAUDE.md/...),
       //     后台跑全 checkout。fullCheckoutPromise 故意 fire-and-forget,
-      //     失败仅日志, 不阻塞 IPC 返回。
+      //     失败仅日志, 不阻塞 IPC 返回。Multibox 返回时目录已完整, 没有后台 checkout。
       let bgPromise: Promise<void> | undefined;
-      const checkoutLease = await acquireWorktreeRuntimeLease(`checkout:${req.sessionId}`, worktreePath);
-      if (!checkoutLease) throw new Error('managed checkout runtime lease is missing');
-      try {
-        const stageRes = await timed('stage checkout', () => stageCheckout(
-          worktreePath,
-          (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
-        ));
-        bgPromise = stageRes.fullCheckoutPromise.finally(() => releaseWorktreeRuntimeLease(checkoutLease));
-        if (options?.trackBackgroundCheckout) {
-          const settled = bgPromise.catch(() => undefined);
-          backgroundCheckouts.set(req.sessionId, settled);
-          void settled.finally(() => {
-            if (backgroundCheckouts.get(req.sessionId) === settled) backgroundCheckouts.delete(req.sessionId);
-          });
+      if (!useMultibox) {
+        const checkoutLease = await acquireWorktreeRuntimeLease(`checkout:${req.sessionId}`, worktreePath);
+        if (!checkoutLease) throw new Error('managed checkout runtime lease is missing');
+        try {
+          const stageRes = await timed('stage checkout', () => stageCheckout(
+            worktreePath,
+            (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
+          ));
+          bgPromise = stageRes.fullCheckoutPromise.finally(() => releaseWorktreeRuntimeLease(checkoutLease));
+          if (options?.trackBackgroundCheckout) {
+            const settled = bgPromise.catch(() => undefined);
+            backgroundCheckouts.set(req.sessionId, settled);
+            void settled.finally(() => {
+              if (backgroundCheckouts.get(req.sessionId) === settled) backgroundCheckouts.delete(req.sessionId);
+            });
+          }
+        } catch (err) {
+          await releaseWorktreeRuntimeLease(checkoutLease);
+          // stageCheckout 内部已记 warn, 这里再保险记一条; 不视为致命
+          log.warn(
+            `[worktree] stageCheckout failed for ${worktreePath}:`,
+            err instanceof Error ? err.message : String(err),
+          );
         }
-      } catch (err) {
-        await releaseWorktreeRuntimeLease(checkoutLease);
-        // stageCheckout 内部已记 warn, 这里再保险记一条; 不视为致命
-        log.warn(
-          `[worktree] stageCheckout failed for ${worktreePath}:`,
-          err instanceof Error ? err.message : String(err),
-        );
       }
       // 防止 unhandled rejection(stageCheckout 已设 .catch 但再保险一次)
       bgPromise?.catch(() => {});
@@ -1034,9 +1059,12 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       }
 
       // 8. include patterns
+      //    Multibox 已按 .worktreeinclude 克隆过同一批文件(同盘为 reflink); 只补缺,
+      //    不用整份复制覆盖它们。
       try {
-        const results = await timed('apply include file', () =>
-          applyWorktreeIncludeFile(baseRepo, worktreePath),
+        const results = await timed('apply include file', () => (useMultibox
+          ? applyWorktreeIncludeFile(baseRepo, worktreePath, { overwriteExisting: false })
+          : applyWorktreeIncludeFile(baseRepo, worktreePath)),
         );
         const failed = results.filter((r) => r.status === 'failed');
         if (failed.length > 0) {
@@ -1440,7 +1468,11 @@ async function removeWorktreeForSessionInner(
     }
 
     try {
-      await gitExec(['worktree', 'remove', removalPath], meta.baseRepo);
+      // Multibox remove keeps the same dirty check without -f; --wait makes the lstat below meaningful.
+      const removeArgs = await shouldUseMultibox(meta.baseRepo)
+        ? buildMultiboxRemoveArgs(removalPath)
+        : ['worktree', 'remove', removalPath];
+      await gitExec(removeArgs, meta.baseRepo);
     } catch (error) {
       // A precreated compensation may never bypass Git's final dirty check.
       log.warn('[worktree] pre-created removal failed; preserving', error instanceof Error ? error.message : String(error));

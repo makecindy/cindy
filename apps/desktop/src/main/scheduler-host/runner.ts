@@ -241,6 +241,7 @@ export interface SchedulerQueueDeps {
     /** Runs under the send lock before the queued Session is captured. */
     onPreparing?: () => Promise<void>;
     onPreparationFailed?: (error: unknown) => void;
+    onPersistedFailure?: (message: string, recovering: boolean) => void;
     onAccepted: (queuedPermissions?: {
       permissionMode?: string;
       planMode?: boolean;
@@ -249,6 +250,7 @@ export interface SchedulerQueueDeps {
     onDiscarded?: (error?: string) => void;
   }): Promise<{ clientId: string } | { duplicate: true } | { retry: true }>;
   removeQueuedPrompt(sessionId: string, clientId: string): void;
+  releasePrompt?(sessionId: string, clientId: string): void;
   /**
    * 排队项(含派发中 / 可重试 recovery)是否仍被 coordinator 跟踪。派发等待的
    * 存活探测:coordinator 存在不经 onDiscarded 的静默放弃路径(新输入顶掉
@@ -2600,6 +2602,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // TS 控制流分析看不到,裸 let 会被收窄成 null/never。
     const waiterSlot: { current: TurnCompletionWaiter | null } = { current: null };
     let dispatched = false;
+    let persistedFailure: string | undefined;
     // ── 纯等待记账 + 派发取消标志 ──────────────────────────────────────────
     // 必须声明在 enqueuePrompt **之前**:队列此刻恰好空时 onAccepted 可能被同步调用,
     // 声明在后面会撞 TDZ。
@@ -2922,11 +2925,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
         failAfterAccept(err);
         failDispatch(err);
       },
-      onDiscarded: (error) => {
-        // 派发前失败保留原因；用户删队列行 / Stop / pause-delete 仍按 aborted 收尾。
-        failDispatch(new Error(error
-          ? schedulerFailureDetail(error)
-          : 'queued heartbeat prompt removed before dispatch (aborted)'));
+      onPersistedFailure: (message, recovering) => {
+        persistedFailure = schedulerFailureDetail(message);
+        if (!recovering) failDispatch(new Error(persistedFailure));
+      },
+      onDiscarded: () => {
+        // 排队项未派发即被移除(用户删队列行 / stop 清队列 / pause-delete 撤项)
+        // → run 按 aborted 收尾(引擎按 /abort/i 识别错误文案)。
+        failDispatch(new Error('queued heartbeat prompt removed before dispatch (aborted)'));
       },
     });
     if ('retry' in enqueueResult) {
@@ -2947,6 +2953,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
       return this.settleDuplicateQueuedFire(schedule, ctx, sessionId);
     }
     const { clientId } = enqueueResult;
+    const stopWaitingForRecovery = sq.onAutoResumeFailed?.(sessionId, ctx.runId, (error) => {
+      if (!dispatched) failDispatch(new Error(error
+        ? schedulerFailureDetail(error)
+        : persistedFailure ?? 'scheduled task auto-resume failed'));
+    });
     this.deps.logger.info?.('[runner] heartbeat prompt queued behind busy session', {
       scheduleId: schedule.id,
       runId: ctx.runId,
@@ -2978,11 +2989,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
         `[runner] ctx.signal aborted while heartbeat queued, cleaning up for ${sessionId}`,
       );
       sq.removeQueuedPrompt(sessionId, clientId);
-      sq.cancelAutoResume?.(sessionId, ctx.runId);
       // 这两个 promise 分别覆盖 accept 前与 accept 后；重复 reject 安全。不能只等
       // vendor terminal event：退避期没有活动 turn，Session.abort() 不会产生终态。
       failDispatch(abortError);
       failAfterAccept(abortError);
+      sq.cancelAutoResume?.(sessionId, ctx.runId);
       if (dispatched) {
         const live = this.deps.maker.getSession(sessionId);
         if (live) {
@@ -3007,8 +3018,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 派发等待存活探测:coordinator 存在不经 onDiscarded 的静默放弃路径(Stop 竞态
     // 把项转入 active-turn recovery 后,用户新输入把 recovery 顶掉 / 清会话等),
     // 不探测的话 dispatchGate 永不 settle,run 永久挂 running(review P1)。探测按
-    // clientId 查 pendingQueue / activeTurn / recovery,任一在即视为存活(可重试
-    // recovery 仍可能被用户 Retry 重新派发,我们注册的 accepted 回调依然生效)。
+    // clientId 查 pendingQueue / activeTurn / recovery，也认同 run 的自动替换项；
+    // 只有协调器批准的自动恢复能接回原 accepted 回调，人工接管属于新输入。
     //
     // 同一个轮询顺带兜排队上限:目标会话的 turn 可能长时间不结束(用户在长对话里、
     // 或那个会话自己卡死),队列永不 drain → dispatchGate 永不 settle。撤项后按顺延
@@ -3033,7 +3044,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (!sq.isPromptTracked(sessionId, clientId)) {
         failDispatch(
           new Error(
-            'queued heartbeat prompt was dropped before dispatch (queue cleared or recovery abandoned)',
+            persistedFailure ?? 'queued heartbeat prompt was dropped before dispatch (queue cleared or recovery abandoned)',
           ),
         );
         return;
@@ -3068,6 +3079,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
       await dispatchGate;
     } catch (err) {
       clearInterval(trackPoll);
+      stopWaitingForRecovery?.();
+      if (!ctx.signal.aborted && sq.isAutoResumePending?.(sessionId, ctx.runId)) {
+        sq.cancelAutoResume?.(sessionId, ctx.runId);
+      }
+      sq.releasePrompt?.(sessionId, clientId);
       ctx.signal.removeEventListener('abort', onAbort);
       endQueueWait(false);
       // 排队超时 / 拿不到执行槽都不是"这轮失败了",是"这轮没轮到" —— 与撞忙顺延
@@ -3102,6 +3118,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       throw err instanceof Error ? err : new Error(String(err));
     }
     clearInterval(trackPoll);
+    stopWaitingForRecovery?.();
+    sq.releasePrompt?.(sessionId, clientId);
     // 走到这里说明 onAccepted 已经成功要回了槽位(endQueueWait(true) 返回 true),
     // 记账早已切回 'running';这里不再重复调用。
 

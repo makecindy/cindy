@@ -1,14 +1,17 @@
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { createWorkingDirectoryRecovery } from '../workingDirectoryRecovery';
+import { canRecreateOwnerWorkingDirectory, createWorkingDirectoryRecovery } from '../workingDirectoryRecovery';
 import { createWorkingDirectoryPreflight } from '../workingDirectoryPreflight';
 
-function harness(originalState: 'EACCES' | 'file' | 'ENOENT' | 'ready', saved = true) {
-  const original = path.resolve('original-project');
+function harness(originalState: 'EACCES' | 'file' | 'ENOENT' | 'ready', saved = true, recreation?: {
+  original: string;
+  canRecreateDirectory(dir: string): boolean;
+}) {
+  const original = recreation?.original ?? path.resolve('original-project');
   const fallback = path.resolve('owned-dialogues', 'dialogue-recovery', 'saved');
   const stat = vi.fn(async (dir: string) => {
     if (dir === fallback) return { isDirectory: () => true };
-    if (dir !== original) throw new Error('unexpected filesystem probe');
+    if (dir !== original) return { isDirectory: () => true };
     if (originalState === 'EACCES' || originalState === 'ENOENT') {
       throw Object.assign(new Error(originalState), { code: originalState });
     }
@@ -17,7 +20,7 @@ function harness(originalState: 'EACCES' | 'file' | 'ENOENT' | 'ready', saved = 
   const mkdir = vi.fn();
   const findFallback = vi.fn(async (): Promise<string | undefined> => saved ? fallback : undefined);
   const allocate = vi.fn(async () => fallback);
-  const recovery = createWorkingDirectoryRecovery({ stat, mkdir, findFallback }, allocate);
+  const recovery = createWorkingDirectoryRecovery({ stat, mkdir, findFallback, canRecreateDirectory: recreation?.canRecreateDirectory }, allocate);
   const emit = vi.fn();
   const readiness = vi.fn(async (): Promise<'ready' | 'gone' | 'retry'> => 'ready');
   const managedBase = vi.fn((_dir: string): string | null => null);
@@ -38,8 +41,101 @@ function harness(originalState: 'EACCES' | 'file' | 'ENOENT' | 'ready', saved = 
     emitWorkDirMissingError: emit,
   };
   const check = createWorkingDirectoryPreflight(deps);
-  return { original, fallback, stat, mkdir, findFallback, allocate, recovery, emit, readiness, managedBase, isCindyMake, check };
+  return { original, fallback, stat, mkdir, findFallback, allocate, recovery, emit, readiness, managedBase, isCindyMake, check, deps };
 }
+
+// #10553: preflight + real recovery must not recreate a missing old-owner cwd.
+// Existing coverage had no owner namespace, so ENOENT incorrectly reached mkdir.
+// Unit tier: filesystem effects are recorded by the injected IO; no real accounts.
+describe('owner namespace in workdir recovery', () => {
+  it.each([
+    { paths: path.posix, root: '/profile', label: 'POSIX' },
+    { paths: path.win32, root: 'C:\\Profile', label: 'Windows' },
+    { paths: path.win32, root: '\\\\server\\share\\Profile', label: 'UNC' },
+  ])('preserves owner and ordinary-directory boundaries on $label', async ({ paths, root }) => {
+    const current = paths.join(root, 'owners', 'current');
+    const old = paths.join(root, 'owners', 'old', 'bots', 'buddy', 'workspace');
+    for (const [original, allowed] of [
+      [old, false],
+      [paths.join(root, 'owners', 'old', 'dialogues', 'task'), false],
+      [paths.join(current, 'bots', 'buddy', 'workspace'), true],
+      [paths.join(root, 'owners', 'current-other', 'project'), false],
+      [paths.join(root, 'owners-other', 'old', 'project'), true],
+      [paths.join(root, 'projects', 'owners', 'old', 'project'), true],
+      [paths.join(current, '..', 'old', 'bots', 'buddy', 'workspace'), false],
+    ] as const) {
+      const h = harness('ENOENT', false, {
+        original,
+        canRecreateDirectory: (dir) => canRecreateOwnerWorkingDirectory(root, current, dir, paths),
+      });
+      h.readiness.mockResolvedValue('gone');
+      expect(await h.check('task', original, 'codex')).toBe(allowed);
+      expect(h.mkdir.mock.calls).toEqual(allowed ? [[original, { recursive: true }, expect.any(Function)]] : []);
+      expect(h.allocate).not.toHaveBeenCalled();
+      expect(h.recovery.resolve('task', original)).toBe(original);
+      if (!allowed) {
+        expect(h.emit).toHaveBeenCalledWith('task', original, 'codex', 'not-exist', null);
+        expect(h.recovery.peek('task')).toBeNull();
+      }
+    }
+  });
+
+  it.each(['ready', 'ENOENT'] as const)('does not redirect an old-owner path in state %s', async (state) => {
+    const root = path.resolve('profile');
+    const original = path.join(root, 'owners', 'old', 'bots', 'buddy', 'workspace');
+    const h = harness(state, false, {
+      original,
+      canRecreateDirectory: (dir) => canRecreateOwnerWorkingDirectory(root, path.join(root, 'owners', 'current'), dir),
+    });
+    h.readiness.mockResolvedValue('gone');
+    expect(await h.check('task', original, 'codex')).toBe(state === 'ready');
+    expect(h.mkdir).not.toHaveBeenCalled();
+    expect(h.allocate).not.toHaveBeenCalled();
+    expect(h.recovery.resolve('task', original)).toBe(original);
+  });
+
+  it('rechecks Windows casing and separators without allowing a sibling owner', async () => {
+    const root = 'C:\\Profile';
+    for (const [original, allowed] of [
+      ['c:/PROFILE/OWNERS/CURRENT/bots/buddy/workspace', true],
+      ['c:/PROFILE/OWNERS/OLD/bots/buddy/workspace', false],
+    ] as const) {
+      const h = harness('ENOENT', false, { original, canRecreateDirectory: (dir) =>
+        canRecreateOwnerWorkingDirectory(root, 'C:\\Profile\\owners\\current', dir, path.win32) });
+      h.readiness.mockResolvedValue('gone');
+      expect(await h.check('task', original, 'codex')).toBe(allowed);
+      expect(h.mkdir).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    }
+  });
+
+  it('does not recreate an owner directory while signed out', async () => {
+    const root = path.resolve('profile');
+    const original = path.join(root, 'owners', 'old', 'bots', 'buddy', 'workspace');
+    const h = harness('ENOENT', false, { original, canRecreateDirectory: (dir) =>
+      canRecreateOwnerWorkingDirectory(root, path.resolve('no-session'), dir) });
+    h.readiness.mockResolvedValue('gone');
+    expect(await h.check('task', original, 'codex')).toBe(false);
+    expect(h.mkdir).not.toHaveBeenCalled();
+  });
+
+  it('does not recreate a directory after the owner changes during the last probe', async () => {
+    const root = path.resolve('profile');
+    let owner = path.join(root, 'owners', 'first');
+    const original = path.join(owner, 'bots', 'buddy', 'workspace');
+    const h = harness('ENOENT', false, { original, canRecreateDirectory: (dir) =>
+      canRecreateOwnerWorkingDirectory(root, owner, dir) });
+    h.readiness.mockResolvedValue('gone');
+    h.deps.findSimilarDirOnDisk.mockImplementation(async () => {
+      owner = path.join(root, 'owners', 'second');
+      h.recovery.clear();
+      return null;
+    });
+    expect(await h.check('task', original, 'codex')).toBe(false);
+    expect(h.mkdir).not.toHaveBeenCalled();
+    expect(h.allocate).not.toHaveBeenCalled();
+    expect(h.recovery.peek('task')).toBeNull();
+  });
+});
 
 describe('persistent ordinary recovery in workdir preflight', () => {
   it.each(['EACCES', 'file', 'ENOENT', 'ready'] as const)(

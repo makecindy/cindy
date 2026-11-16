@@ -5,7 +5,7 @@ import { createTurnExecutor } from './turn-executor.mjs';
 import { createAppMessageSender } from '../../../desktop/src/main/mcp-apps/messageSender.ts';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { randomUUID } from 'node:crypto';
-import { createSchedulerQueueBridge, failSchedulerQueuedPrompt, prepareQueuedPromptSnapshot } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
+import { createSchedulerQueueBridge, prepareQueuedPromptSnapshot } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
 import { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/maker-ipc/queuedAcceptedCallbacks.ts';
 import { runSchedulerQueuedPreparation } from '../../../desktop/src/main/maker-ipc/schedulerQueuedPreparation.ts';
 import { readTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionInput.ts';
@@ -229,16 +229,13 @@ export function createInputQueue(deps) {
       beforeDispatchUserTurn: (id, item, signal) => executor.beforeDispatchUserTurn(id, item, signal,
         snapshot => prepareQueuedPromptSnapshot(snapshot, scheduleDiscardWatchers, id, item, signal)),
       // A durable turn that never reached the vendor: drop the record, then the baseline.
-      onUndispatchedUserTurn: (id, item, disposition, error) => {
-        if (disposition === 'failed' && error && item.origin?.kind === 'scheduler') {
-          failSchedulerQueuedPrompt(scheduleDiscardWatchers, item.clientId, error);
-        }
-        executor.onUndispatchedUserTurn(id);
-      },
+      onUndispatchedUserTurn: executor.onUndispatchedUserTurn,
+      onPersistedSendRejected: (id, message, item, recovering) =>
+        scheduleBridge.onPersistedSendRejected(id, message, item, recovering),
       onAcceptedQueuedMessage: async (id, item) => {
         schedulePreparations.delete(item.clientId);
         scheduleDiscardWatchers.delete(item.clientId);
-        await acceptedCallbacks.run(id, item);
+        await acceptedCallbacks.run(id, item, scheduleBridge.recoverySourceClientId(id, item));
       },
       onDiscardedQueuedMessage: (id, item) => {
         afterSnapshot(id, () => attachmentOwnership.discardClient(id, item.clientId));
@@ -258,6 +255,7 @@ export function createInputQueue(deps) {
       createId: randomUUID,
       preparations: schedulePreparations,
       discardWatchers: scheduleDiscardWatchers,
+      discardAcceptedCallback: acceptedCallbacks.discard,
       enqueue: async req => {
         const id = req.targetSessionId;
         const state = stateFor(id);

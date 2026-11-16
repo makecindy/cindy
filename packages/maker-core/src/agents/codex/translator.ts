@@ -82,6 +82,8 @@ import type {
 // 但因为 reasoning text 现在是数组 join 出来的, reasoningTextLen 跟踪 join 后总长。
 
 export interface CodexRuntimeState {
+  /** Live collab identity only; never retain its prompt or agent output bodies. */
+  collabToolItems: Map<string, CollabAgentToolCallItem>;
   /** Text since the last completed tool belongs to the current sampling request. */
   samplingSegments: Map<string, { threadId: string; turnId: string; attempt: number; itemIds: Set<string> }>;
   /** item.id → reasoning 第一次 emit 'start' 的时间 (Date.now ms)。 */
@@ -150,6 +152,7 @@ export interface CodexRuntimeState {
 
 export function newCodexRuntimeState(): CodexRuntimeState {
   return {
+    collabToolItems: new Map(),
     samplingSegments: new Map(),
     reasoningStartedAt: new Map(),
     reasoningTextLen: new Map(),
@@ -429,6 +432,8 @@ interface TranslatorLog {
 export interface CodexTranslateContext {
   rt: CodexRuntimeState;
   log: TranslatorLog;
+  /** Late tool results belong to an ended turn, not the foreground speed clock. */
+  background?: boolean;
   /** Host denial paired by thread, turn and item; never inferred from empty output. */
   approvalDenialReason?: string;
   /** A failed sample cannot remain the adapter's successful final-text fallback. */
@@ -559,12 +564,14 @@ export function translateItemNotification(
     }
     ctx.rt.samplingSegments.delete(key);
   }
-  noteCodexGenerationBoundary(
-    ctx.rt,
-    phase,
-    item as { id?: unknown; type?: unknown },
-    notification as { turnId?: unknown },
-  );
+  if (!ctx.background) {
+    noteCodexGenerationBoundary(
+      ctx.rt,
+      phase,
+      item as { id?: unknown; type?: unknown },
+      notification as { turnId?: unknown },
+    );
+  }
 
   switch (itemType) {
     case 'agentMessage':
@@ -619,6 +626,71 @@ export function translateItemNotification(
       ctx.log.warn('unhandled item type', { phase, itemType });
       return;
   }
+}
+
+const OMITTED_ITEM_RESULT = 'Result omitted: too large to display.';
+
+/**
+ * item/* 通知超过单行上限、正文已被宿主丢弃时的翻译收尾 (见 AppServerHost 的
+ * ITEM_OMITTED_METHOD)。生成计时照常按 started / completed 暂停与恢复。completed 时,
+ * started 已 emit 过 tool_use 的工具要配一个不含正文的 tool_result: 否则 Session 会一直
+ * 把它算作在跑, 优雅停止卡在 waiting-for-safe-point。completion-only 的类型 (fileChange 等)
+ * 从未 emit 过 tool_use, 不凭空补卡。按 item.id 记的翻译状态一并清掉。
+ */
+export function translateOmittedItem(
+  phase: ItemPhase,
+  notification: { threadId: string; turnId: string; item: { id?: string; type?: string; status?: string } },
+  queue: AsyncQueue<AgentEvent>,
+  ctx: CodexTranslateContext,
+): CollabAgentToolCallItem | undefined {
+  const { item } = notification;
+  if (!ctx.background) noteCodexGenerationBoundary(ctx.rt, phase, item, notification);
+  if (phase !== 'completed' || !item.id) return;
+  const id = item.id;
+  // Same acceptance rule as translateItemNotification: a completed tool proves
+  // the earlier sampling output was accepted, even when its body was omitted.
+  let accepted: string[] | undefined;
+  if (item.type && SAMPLING_ACCEPTED_TOOL_TYPES.has(item.type)) {
+    const key = JSON.stringify([notification.threadId, notification.turnId]);
+    const segment = ctx.rt.samplingSegments.get(key);
+    if (segment?.itemIds.size) accepted = [...segment.itemIds];
+    ctx.rt.samplingSegments.delete(key);
+  }
+  for (const byItem of [
+    ctx.rt.itemTextLen,
+    ctx.rt.itemRawText,
+    ctx.rt.itemDeltaText,
+    ctx.rt.itemSnapshotText,
+    ctx.rt.itemMessagePhase,
+    ctx.rt.reasoningStartedAt,
+    ctx.rt.reasoningTextLen,
+    ctx.rt.pendingWebSearchInput,
+    ctx.rt.emittedWebSearchInput,
+  ]) {
+    byItem.delete(id);
+  }
+  const collab = ctx.rt.collabToolItems.get(id);
+  ctx.rt.collabToolItems.delete(id);
+  if (!ctx.rt.emittedToolUse.delete(id)) return;
+  const terminalCollab: CollabAgentToolCallItem | undefined = collab && (item.status === 'completed' || item.status === 'failed')
+    ? { ...collab, status: item.status } : undefined;
+  queue.push({
+    type: 'tool_result_full',
+    data: { toolUseId: id, fullText: OMITTED_ITEM_RESULT, outputOmitted: 'oversized',
+      isError: item.status === 'failed',
+      ...(accepted ? { assistantSamplingAccepted: { agentMessageIds: accepted } } : {}) },
+    source: 'codex',
+  });
+  queue.push({
+    type: 'tool_result',
+    data: { summary: OMITTED_ITEM_RESULT, toolUseIds: [id] },
+    source: 'codex',
+  });
+  if (terminalCollab) {
+    queue.push({ type: 'agent_task_update', source: 'codex',
+      data: toCodexTaskUpdate(terminalCollab, terminalCollab.status === 'failed' ? 'failed' : 'completed', OMITTED_ITEM_RESULT) });
+  }
+  return terminalCollab;
 }
 
 /**
@@ -2183,6 +2255,14 @@ function handleCollabAgentToolCall(
   const toolName = `collab:${item.tool}`;
   const isSpawn = item.tool.toLowerCase().startsWith('spawn');
   const hasSpawnReceiver = !isSpawn || item.receiverThreadIds.length > 0;
+  if (phase !== 'completed' && hasSpawnReceiver) {
+    ctx.rt.collabToolItems.set(item.id, {
+      type: item.type, id: item.id, tool: item.tool, status: item.status,
+      senderThreadId: item.senderThreadId, receiverThreadIds: [...item.receiverThreadIds], agentsStates: {},
+    });
+  } else if (phase === 'completed') {
+    ctx.rt.collabToolItems.delete(item.id);
+  }
   const input: Record<string, unknown> = {
     senderThreadId: item.senderThreadId,
     receiverThreadIds: item.receiverThreadIds,

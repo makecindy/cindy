@@ -3,7 +3,7 @@ import { needsSubscriptionAccountHandoff, hasRestoredPooledCodexQuota } from '..
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { accountProviderId, readMergedProviderAccount, resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef } from '../subscription-accounts/placement.js';
 import { legacyCodexAccountCanRun } from '../subscription-accounts/legacyAccountAccess.js';
-import { createSchedulerQueueBridge, failSchedulerQueuedPrompt, prepareQueuedPromptSnapshot, schedulerFailureDetail, type SchedulerQueueBridge, type SchedulerQueuedPromptObserver, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
+import { createSchedulerQueueBridge, prepareQueuedPromptSnapshot, schedulerFailureDetail, type SchedulerQueueBridge, type SchedulerQueuedPromptObserver, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
@@ -476,7 +476,7 @@ import {
   isDbClientNotReadyError,
   tryGetDbClient,
 } from '../localDb/client/current.js';
-import { createWorkingDirectoryRecovery, isUnavailableFilesystemError } from './workingDirectoryRecovery.js';
+import { canRecreateOwnerWorkingDirectory, createWorkingDirectoryRecovery, isUnavailableFilesystemError } from './workingDirectoryRecovery.js';
 import { createWorkingDirectoryPreflight } from './workingDirectoryPreflight.js';
 import { allocateDialogueRecoveryWorkspace, findDialogueRecoveryWorkspace, requiredDialogueRecoveryRoot } from './dialogueRecoveryWorkspace.js';
 import { workdirDiagnosticContext, workdirDiagnosticErrorCode } from '../workdirDiagnostics.js';
@@ -1645,7 +1645,15 @@ import { installSessionTurnObserver } from './sessionTurnObserver.js';
 
 const log = createLogger('maker-ipc');
 const workdirLog = createLogger('workdir-diagnostics');
-const workingDirectoryRecovery = createWorkingDirectoryRecovery({ stat: statWorkingDirectory, mkdir: mkdirWorkingDirectory, realpath: realpathWorkingDirectory, requiredRoot: requiredDialogueRecoveryRoot, findFallback: findDialogueRecoveryWorkspace }, allocateDialogueRecoveryWorkspace, workdirLog);
+const workingDirectoryRecovery = createWorkingDirectoryRecovery({
+  stat: statWorkingDirectory,
+  mkdir: mkdirWorkingDirectory,
+  realpath: realpathWorkingDirectory,
+  requiredRoot: requiredDialogueRecoveryRoot,
+  findFallback: findDialogueRecoveryWorkspace,
+  canRecreateDirectory: (dir) => !isAppSessionBoundaryPending() &&
+    canRecreateOwnerWorkingDirectory(app.getPath('userData'), ownerScopedUserDataPath(), dir),
+}, allocateDialogueRecoveryWorkspace, workdirLog);
 
 function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode {
   return isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code;
@@ -5363,6 +5371,10 @@ export function isSchedulerPromptTracked(sessionId: string, clientId: string): b
 
 export function removeQueuedSchedulerPrompt(sessionId: string, clientId: string): void {
   schedulerQueueBridgeHolder?.removeQueuedPrompt(sessionId, clientId);
+}
+
+export function releaseQueuedSchedulerPrompt(sessionId: string, clientId: string): void {
+  schedulerQueueBridgeHolder?.releasePrompt(sessionId, clientId);
 }
 
 function sessionMetaForIsland(session: {
@@ -19679,7 +19691,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       schedulerQueuedPromptPreparations.delete(item.clientId);
       // 返回 promise 让 coordinator 在 onPersisted 链路里 await —— worker 运行态与
       // pending auto-bridge 副作用必须先于 turn 启动完成；失败仍吞错落日志，不拦派发。
-      await orcaInterAgentDispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item, restoredFromSnapshot);
+      await orcaInterAgentDispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item, restoredFromSnapshot,
+        schedulerQueueBridgeHolder?.recoverySourceClientId(sessionId, item));
       const pluginTaskSession = maker.getSession(sessionId);
       if (pluginTaskSession && pluginTaskServiceForCurrentOwner) {
         await pluginTaskServiceForCurrentOwner().accept(sessionId, item, { instanceId: pluginTaskSession.instanceId, generation: pluginTaskSession.getTurnGeneration() });
@@ -19819,7 +19832,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'rejected');
       interruptedTurnAutoResumeHooks.onRejectedUserTurn(sessionId, item);
     },
-    persistTerminalSendError: (sessionId, message) => {
+    persistTerminalSendError: (sessionId, message, attemptToken) => {
+      if (attemptToken !== undefined) {
+        autoResumeBookkeeping.stashSuppressedError(sessionId, { message }, attemptToken);
+        return;
+      }
       onTurnErrorEvent(
         sessionId,
         {
@@ -19830,7 +19847,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       );
     },
     onUnconfirmedAutoResumeTurn: interruptedTurnAutoResumeHooks.onUnconfirmedAutoResumeTurn,
-    onPersistedSendRejected: (sessionId, message) => {
+    onPersistedSendRejected: (sessionId, message, item, recovering) => {
+      schedulerQueueBridgeHolder?.onPersistedSendRejected(sessionId, message, item, recovering);
       if (!isPiPromptRpcTimeoutError({ message })) return;
       // 第一次 timeout：只关掉卡住的原生进程，不自动 replay。用户重试时再 hidden rebuild。
       void maker.closeSession(sessionId).catch((error) => {
@@ -19946,10 +19964,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       publishUiTurnDispatching(sessionId, item.clientId);
       await prepareQueuedPromptSnapshot(gitSnapshotCoordinator, schedulerQueuedPromptDiscardWatchers, sessionId, item, signal);
     },
-    onUndispatchedUserTurn: (sessionId, item, disposition, error) => {
-      if (disposition === 'failed' && error && item.origin?.kind === 'scheduler') {
-        failSchedulerQueuedPrompt(schedulerQueuedPromptDiscardWatchers, item.clientId, error);
-      }
+    onUndispatchedUserTurn: (sessionId, item, disposition) => {
       welcomeDispatchReceipts.settle(sessionId, item.clientId, false);
       // 目标轮落库了却没能 dispatch(取消 / 失败): 记账该立刻还回去, 而不是等超时。
       publishUiTurnUndispatched(sessionId, item.clientId);
@@ -20099,6 +20114,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     createId,
     discardWatchers: schedulerQueuedPromptDiscardWatchers,
     preparations: schedulerQueuedPromptPreparations,
+    discardAcceptedCallback: orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback,
     enqueue: enqueueSendToSessionMessage,
   });
 
@@ -21015,13 +21031,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 ...(stored ? { planMode: stored.planModeEnabled === true } : {}),
               },
             });
-            if (req.onDiscarded) schedulerQueuedPromptDiscardWatchers.set(clientId, { onDiscarded: req.onDiscarded, signal: req.signal });
-            if (req.onPreparing) schedulerQueuedPromptPreparations.set(clientId, {
-              onPreparing: req.onPreparing, onPreparationFailed: req.onPreparationFailed,
-            });
+            const onAccepted = schedulerQueueBridgeHolder!.trackPrompt(clientId, req);
             orcaInterAgentDispatcher.registerQueuedOrcaInterAgentAcceptedCallback(
               clientId,
-              () => req.onAccepted({ permissionMode: continuation.createOpts.permissionMode, planMode: continuation.createOpts.planMode }),
+              () => onAccepted({ permissionMode: continuation.createOpts.permissionMode, planMode: continuation.createOpts.planMode }),
               req.onAcceptedRollback,
             );
             try {
@@ -21037,6 +21050,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               didEnqueue();
               return { clientId };
             } catch (error) {
+              schedulerQueueBridgeHolder!.releasePrompt(sid, clientId);
               schedulerQueuedPromptDiscardWatchers.delete(clientId);
               schedulerQueuedPromptPreparations.delete(clientId);
               orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(clientId);

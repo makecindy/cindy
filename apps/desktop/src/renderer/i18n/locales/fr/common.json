@@ -7999,7 +7999,6 @@
         "install": "Installer",
         "details": "Détails",
         "detailsAria": "Voir les détails de {{name}}",
-        "loadingDetails": "Chargement des détails…",
         "update": "Mettre à jour depuis le marketplace",
         "updateTo": "Mettre à jour vers la v{{version}}",
         "installed": "Installé",
@@ -8313,6 +8312,8 @@
         "hostTools_controlDetail": "Utiliser les outils de Cindy pour modifier, archiver, restaurer et contrôler les tâches et projets existants, et importer des fichiers de tâches au format natif sur cet ordinateur.",
         "hostTools_handoff": "Messages aux tâches",
         "hostTools_handoffDetail": "Utiliser les outils de Cindy pour envoyer des messages aux tâches existantes. Une opération nécessitant le contexte de la tâche actuelle exige une cible explicite.",
+        "hostTools_usage": "Lire l’utilisation des abonnements",
+        "hostTools_usageDetail": "Lire les identifiants de compte, les offres, les périodes de quota et les dates de mise à jour des abonnements Claude et Codex connectés à votre compte Cindy actuel sur cet ordinateur. Ne permet pas de lire les adresses e-mail, les identifiants de connexion, les fichiers ou les données d’autres ordinateurs, ni de modifier les comptes.",
         "hostTools_settings": "Paramètres de l’application",
         "hostTools_settingsDetail": "Utiliser les outils de Cindy pour lire et modifier la configuration. Aucun secret n’est renvoyé et les saisies confidentielles restent à votre charge.",
         "hostTools_scheduler": "Gestion des automatisations",
@@ -8935,23 +8936,10 @@
         "projectReadFailed": "Impossible de lire les paramètres du projet. Réessayez."
       },
       "usage": {
-        "title": "Vos appels",
-        "explanationLabel": "Mode de calcul de l'utilisation",
-        "explanation": "Appels d'outils effectués sur cet ordinateur par le compte actuel, y compris les échecs, expirations et annulations. Les 7 derniers jours correspondent à une fenêtre glissante de 168 heures. Les panneaux, les skills et le débogage sont exclus. Les enregistrements sont conservés jusqu'à leur effacement.",
-        "clear": "Effacer les enregistrements",
-        "loading": "Chargement des enregistrements…",
-        "unavailable": "Enregistrements personnels indisponibles",
-        "retry": "Réessayer",
-        "lastUsed": "Dernier appel",
-        "last7Days": "Appels des 7 derniers jours",
-        "never": "Aucun appel",
-        "clearTitle": "Effacer les enregistrements d'utilisation de ce plugin ?",
-        "clearDescription": "Supprime les enregistrements d'appels et les liens de session de ce compte sur cet ordinateur. Les nouveaux appels repartent d'un historique vierge. Les totaux partagés déjà reçus par le serveur ne sont pas retirés.",
         "downloadExplanation": "Nombre cumulé de demandes d'URL de téléchargement. Chaque URL de paquet émise avec succès compte une fois, y compris pour les mises à jour, réinstallations et nouvelles tentatives qui demandent une nouvelle URL. Il ne s'agit pas du nombre d'installations réussies.",
-        "clearAction": "Effacer",
         "downloadsValue": "{{value}} téléchargements",
         "usesValue": "{{value}} utilisations",
-        "usesExplanation": "Nombre cumulé d'appels d'outils partagés, toutes versions confondues, au sein de l'audience autorisée. Vos appels ci-dessous ne concernent que ce compte sur cet ordinateur."
+        "usesExplanation": "Nombre cumulé d'appels d'outils partagés, toutes versions confondues, au sein de l'audience autorisée."
       },
       "contribution": {
         "unreadReview": "Nouveau résultat du plugin",
@@ -11515,6 +11503,8 @@
         "projectDirNote": "Les amis travaillent ici lorsqu'ils se répartissent le travail. Vous pouvez laisser ce champ vide : ils utiliseront alors le dossier propre à cette conversation de groupe. Si vous choisissez un projet git, chaque répartition du travail obtient un nouveau worktree et une nouvelle branche, afin que votre propre code reste intact.",
         "autoContinueSaveFailed": "Impossible d'enregistrer le passage entre étapes. Réessayez.",
         "projectDirSaveFailed": "Impossible d'enregistrer le dossier du projet. Vérifiez que le dossier existe toujours, puis réessayez.",
+        "allowMemberInvites": "Tous les membres peuvent inviter des amis",
+        "allowMemberInvitesHint": "Si activé, tous les membres du groupe peuvent inviter des amis. Seuls le propriétaire et les administrateurs peuvent modifier ce réglage.",
         "allowMentionAllBots": "Autoriser @tous les amis",
         "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les amis peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous."
       },
@@ -11622,6 +11612,7 @@
         "threadRecent": "Messages récents du fil",
         "threadNew": "Nouveaux messages du fil",
         "replyingTo": "En réponse à « {{name}} » : {{text}}",
+        "filesOutsideWorkingDir": "Les fichiers situés hors du répertoire de travail n’ont pas été joints.",
         "earlierOmitted": "(Messages plus anciens omis)",
         "actingFor": "{{name}} · pour {{person}}",
         "checkout": {
@@ -14223,7 +14214,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "Création du worktree · saisie désactivée",
-      "subtitle": "Branche cible {{branch}} · déverrouillage automatique"
+      "subtitle": "Branche cible {{branch}} · déverrouillage automatique",
+      "elapsed": "En attente depuis {{duration}}"
     },
     "worktree": {
       "detecting": "Détection de l'environnement…",
@@ -15819,7 +15811,12 @@
       "REMOTE_PROVIDER_UPDATING": "Les identifiants de ce fournisseur de modèles sont en cours de mise à jour. Réessayez dans un instant.",
       "REMOTE_WORKDIR_UNAVAILABLE": "Le répertoire de travail distant est indisponible. Vérifiez que le dossier existe toujours sur cet ordinateur, puis réessayez.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "L'ordinateur ne peut pas encore confirmer si ce message a été envoyé. Patientez un instant et réessayez. N'envoyez pas deux fois le même message.",
-      "REMOTE_AGENT_UNAVAILABLE": "La connexion avec l'ordinateur qui exécute l'Agent a été interrompue. Réessayez. Si cela se reproduit, assurez-vous qu'il est en ligne et autorise le contrôle à distance.",
+      "REMOTE_AGENT_UNAVAILABLE": "Impossible de communiquer avec l'ordinateur où l'Agent est en cours d'exécution. Consultez les détails de l'erreur.",
+      "REMOTE_AGENT_TIMEOUT": "Le délai d'attente de l'ordinateur où l'Agent est en cours d'exécution a expiré. Le résultat est inconnu. Vérifiez la tâche avant de réessayer.",
+      "REMOTE_AGENT_LINK_BUSY": "La communication avec l'ordinateur où l'Agent est en cours d'exécution est saturée. Patientez un instant avant de réessayer.",
+      "REMOTE_AGENT_UNRESPONSIVE": "L'ordinateur où l'Agent est en cours d'exécution n'a pas répondu à plusieurs reprises. Les appels ont donc été temporairement suspendus. Patientez un instant avant de réessayer.",
+      "REMOTE_AGENT_OFFLINE": "L'ordinateur où l'Agent est en cours d'exécution est hors ligne. Réessayez une fois qu'il sera reconnecté.",
+      "REMOTE_AGENT_ACCESS_DENIED": "L'accès à distance à l'ordinateur où l'Agent est en cours d'exécution a été refusé. Vérifiez ses paramètres d'accès avant de réessayer.",
       "REMOTE_AGENT_PEER_TOO_OLD": "La version de Cindy sur l'autre ordinateur est trop ancienne pour cette action. Mettez d'abord Cindy à jour sur cet ordinateur.",
       "REMOTE_AGENT_EXPIRED": "Cette session est déjà terminée sur l'ordinateur qui exécute l'Agent. Renvoyez votre message.",
       "REMOTE_AGENT_NOT_FOUND": "Cette session est déjà terminée sur l'ordinateur qui exécute l'Agent. Renvoyez votre message.",
