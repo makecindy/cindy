@@ -201,6 +201,91 @@ it.each([
   expect(scanCatalogue()).toEqual(expectedCatalogue);
 });
 
+function taskDirectorySession(
+  id: string,
+  taskDirectory: string,
+  executionDirectory: string,
+  updatedAt: string,
+  lane: 'task' | 'companion',
+): Session {
+  const base = crossGroupSession(id, executionDirectory, executionDirectory, updatedAt);
+  if (lane === 'companion') {
+    return {
+      ...base,
+      workspaceKind: 'dialogue',
+      userSendAt: null,
+      companion: { id: `buddy-${id}`, role: 'group', taskProjectDir: taskDirectory },
+    };
+  }
+  const taskSession: Session & { taskProjectDir: string } = {
+    ...base,
+    userSendAt: '2026-09-08T00:00:00Z',
+    taskProjectDir: taskDirectory,
+  };
+  return taskSession;
+}
+
+// Unit regression: groupSessions now identifies a project by sessionTaskProjectDirectory
+// (taskProjectDir, then companion.taskProjectDir, then projectDir/cwd). Two sessions can
+// share one execution directory while those authoritative spellings differ only by case.
+// The larger spelling is newer and first, then activity and array order swap. The scan
+// root, hash, label, order, and picker target must stay on the smaller spelling.
+it.each([
+  {
+    lane: 'task' as const,
+    smaller: 'D:/Buddy/hf-parent',
+    larger: 'd:/buddy/hf-parent',
+    execution: 'D:/SharedGroup/repo',
+    cwdLabel: 'hf-parent · repo',
+  },
+  {
+    lane: 'task' as const,
+    smaller: '//Server/Share/hf-parent',
+    larger: '//server/share/HF-PARENT',
+    execution: '//Server/Share/shared-repo',
+    cwdLabel: 'hf-parent · shared-repo',
+  },
+  {
+    lane: 'companion' as const,
+    smaller: 'D:/Buddy/hf-parent',
+    larger: 'd:/buddy/hf-parent',
+    execution: 'D:/SharedGroup/repo',
+    cwdLabel: 'hf-parent · repo',
+  },
+  {
+    lane: 'companion' as const,
+    smaller: '//Server/Share/hf-parent',
+    larger: '//server/share/HF-PARENT',
+    execution: '//Server/Share/shared-repo',
+    cwdLabel: 'hf-parent · shared-repo',
+  },
+])('keeps the $lane task-directory root stable for $smaller', ({ lane, smaller, larger, execution, cwdLabel }) => {
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { platform: 'win32' } });
+  mocks.loading = false;
+  const expectedCatalogue = [
+    { projectRoot: smaller, hash: projectHash(smaller), displayName: 'hf-parent' },
+    { projectRoot: execution, hash: projectHash(execution), displayName: cwdLabel },
+  ];
+  const expectedTargets = [{ projectRoot: smaller, displayName: 'hf-parent' }];
+  mocks.sessions = [
+    taskDirectorySession('larger', larger, execution, '2026-09-09T00:00:00Z', lane),
+    taskDirectorySession('smaller', smaller, execution, '2026-09-08T00:00:00Z', lane),
+  ];
+  const storeSync = renderHook(useSkillhubStoreSync);
+  const picker = renderHook(useProjectsForPicker);
+  expect(scanCatalogue()).toEqual(expectedCatalogue);
+  expect(scanCatalogue().some((entry) => entry.projectRoot === larger)).toBe(false);
+  expect(picker.result.current.projects).toEqual(expectedTargets);
+  mocks.sessions = [
+    taskDirectorySession('smaller', smaller, execution, '2026-09-10T00:00:00Z', lane),
+    taskDirectorySession('larger', larger, execution, '2026-09-08T00:00:00Z', lane),
+  ];
+  storeSync.rerender();
+  picker.rerender();
+  expect(scanCatalogue()).toEqual(expectedCatalogue);
+  expect(picker.result.current.projects).toEqual(expectedTargets);
+});
+
 it('keeps pinned and newly created local project directories in the scan catalogue', () => {
   const session = (id: string, workingDir: string, extra: Partial<Session> = {}) => ({
     id, workingDir, workspaceKind: 'project', status: 'active',
