@@ -1916,8 +1916,8 @@ async function reconcileBuiltinGhostsLocked(
       },
       publishSeed: (id, seedDir, options) =>
         mutation.publishTrustedBundledSeed(id, seedDir, options),
-      storeInstall: (id, installedDir) => builtinSeedStoreInstall(id, installedDir, {
-        rootDir: brainRootDir(), manager, ledger: getPluginMarketLedger(),
+      storeInstall: (id, installedDir, seedDir) => builtinSeedStoreInstall(id, installedDir, {
+        rootDir: brainRootDir(), manager, ledger: getPluginMarketLedger(), seedDir,
       }),
       onApplyStart: () => {
         tipShown = true;

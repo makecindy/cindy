@@ -148,7 +148,8 @@ export interface ProvisionDeps {
    * 已装实例对应的商店安装(null = 没有已装的商店记录;抛错 = 账本读不了,本轮不动它)。
    * 缺省 = 不看商店,行为与旧版一致。
    */
-  storeInstall?: (id: string, installedDir: string) => BuiltinStoreInstallFact | null;
+  storeInstall?: (id: string, installedDir: string, seedDir?: string) =>
+    BuiltinStoreInstallFact | null | Promise<BuiltinStoreInstallFact | null>;
   log?: BuiltinProvisionerLogger;
 }
 
@@ -706,7 +707,7 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
           const existingDir = resolveBuiltinInstalledDir(repoRootDir, id);
           const installedDir = existingDir ?? path.join(repoRootDir, id);
           const installedExists = existingDir !== null;
-          const store = existingDir ? (deps.storeInstall?.(id, existingDir) ?? null) : null;
+          const store = existingDir ? (await deps.storeInstall?.(id, existingDir, seedDir) ?? null) : null;
 
           // 3) 受众:不命中 → 回收"播种装的"(seeded 台账内),手动装的不动。
           //    同 id 有商店安装时交给商店,不删(已是商店字节就摘台账)。
@@ -859,7 +860,7 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
         // 保留台账,等商店自动更新覆盖回来后下一轮再摘。
         let store: BuiltinStoreInstallFact | null;
         try {
-          store = deps.storeInstall?.(id, installedDir) ?? null;
+          store = await deps.storeInstall?.(id, installedDir) ?? null;
         } catch (err) {
           outcome.retryPending = true;
           log?.warn('builtin ghost orphan store lookup failed', {

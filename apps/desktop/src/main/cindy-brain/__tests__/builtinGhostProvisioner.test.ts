@@ -47,6 +47,64 @@ afterEach(async () => {
 // production adapter. Use real legacy directories, receipts, registry and ledger;
 // assert unchanged bytes/approval/storage identity after restart and seed removal.
 describe('builtin provisioning physical market identity', () => {
+  // PR #10309 review, unit: the existing fixtures all had receipts. Exercise
+  // the real startup migration/provision/approval chain from a pre-receipt seed.
+  async function legacySeed(enabled = true) {
+    const root = fs.realpathSync.native(await makeTempDir());
+    const repoRoot = path.join(root, 'installed');
+    const seedRoot = path.join(root, 'seeds');
+    const seedDir = await writeMinimalSeed(seedRoot, 'builtin-test');
+    const installedDir = await writeMinimalSeed(repoRoot, 'builtin-test');
+    if (!enabled) fs.writeFileSync(path.join(installedDir, '.disabled'), '');
+    const ledger = new PluginMarketLedger(path.join(root, 'market', 'ledger.v1.json'));
+    const manager = new GhostManager({ getRootDir: () => repoRoot,
+      isTrustedBundledId: id => id === 'builtin-test',
+      isTrustedBundledSource: (id, source) => id === 'builtin-test' && path.resolve(source) === seedDir });
+    managers.push(manager);
+    return { root, repoRoot, seedRoot, seedDir, installedDir, ledger, manager };
+  }
+
+  it.each([true, false])('recovers a pre-receipt seed without changing enabled=%s', async enabled => {
+    const { repoRoot, seedRoot, seedDir, installedDir: fixtureInstalledDir, ledger, manager } = await legacySeed(enabled);
+    await manager.migrateLegacyApprovalsOnce();
+    await manager.runExclusiveMutation(async mutation => {
+      const outcome = await provisionBuiltinGhosts({ seedRootDirs: [seedRoot], repoRootDir: repoRoot,
+        storeInstall: (id, dir, source) => builtinSeedStoreInstall(id, dir, { rootDir: repoRoot, manager, ledger, seedDir: source }),
+        publishSeed: (id, dir, options) => mutation.publishTrustedBundledSeed(id, dir, options) });
+      expect(outcome.retryPending).not.toBe(true);
+      expect(outcome.approved.map(manifest => manifest.id)).toEqual(['builtin-test']);
+      for (const manifest of outcome.approved) {
+        await mutation.approveTrustedBundledInstall(manifest, enabled, { sourceDir: seedDir });
+      }
+    });
+    expect(manager.list()[0]).toMatchObject({ enabled, namespace: null, namespaceState: 'confirmed',
+      instanceKey: 'builtin-test', approval: { state: 'approved' } });
+    expect(fs.readFileSync(path.join(fixtureInstalledDir, 'main.js'), 'utf8')).toBe('// brain');
+  });
+
+  it.each(['different-bytes', 'organization', 'unreadable-ledger'])('preserves legacy approval without claiming root for %s', async reason => {
+    const { root, repoRoot, seedRoot, installedDir, ledger, manager } = await legacySeed();
+    if (reason === 'different-bytes') fs.writeFileSync(path.join(installedDir, 'main.js'), '// older installed version');
+    if (reason === 'organization') ledger.upsertInstallation({
+      pluginId: `c${'a'.repeat(24)}`, ghostId: 'builtin-test', namespace: 'xd', releaseId: 'release-1',
+      version: '1.0.0', sha256: 'b'.repeat(64), scope: 'organization', organizationId: 'org-1',
+      source: 'market', installed: true, updatedAt: '2026-11-16T00:00:00.000Z' });
+    if (reason === 'unreadable-ledger') {
+      fs.mkdirSync(path.join(root, 'market'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'market', 'ledger.v1.json'), '{broken');
+    }
+    await manager.migrateLegacyApprovalsOnce();
+    const before = manager.readApprovedInstallReceipt('builtin-test');
+    const outcome = await provisionBuiltinGhosts({ seedRootDirs: [seedRoot], repoRootDir: repoRoot,
+      storeInstall: (id, dir, source) => builtinSeedStoreInstall(id, dir, { rootDir: repoRoot, manager, ledger, seedDir: source }) });
+    expect(outcome.approved).toEqual([]);
+    expect(outcome.updated).toEqual([]);
+    expect(outcome.retryPending).toBe(true);
+    expect(manager.readApprovedInstallReceipt('builtin-test')).toEqual(before);
+    expect(manager.list()[0]).toMatchObject({ enabled: true, namespaceState: 'pending', approval: { state: 'approved' } });
+    expect(manager.approvedInstallEvidence('builtin-test')?.packageSha256).toBeNull();
+  });
+
   async function harness(namespace: string | null = 'xd', relId = 'builtin-test') {
     const root = fs.realpathSync.native(await makeTempDir());
     const repoRoot = path.join(root, 'installed');
@@ -99,7 +157,7 @@ describe('builtin provisioning physical market identity', () => {
     managers.push(manager);
     fs.writeFileSync(path.join(repoRoot, PROVISIONING_STATE_FILE), JSON.stringify({ removed: [], seeded: ['builtin-test'] }));
     const deps = { seedRootDirs: [seedRoot], repoRootDir: repoRoot,
-      storeInstall: (id: string, dir: string) => builtinSeedStoreInstall(id, dir, { rootDir: repoRoot, manager, ledger }) };
+      storeInstall: (id: string, dir: string, source?: string) => builtinSeedStoreInstall(id, dir, { rootDir: repoRoot, manager, ledger, seedDir: source }) };
     return { ...deps, deps, seedRoot, seedDir, repoRoot, installedDir, stateRoot, registryStore, registry, manager, ledger, receipt, receipts, relId };
   }
 

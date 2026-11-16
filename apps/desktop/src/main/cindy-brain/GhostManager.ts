@@ -2287,7 +2287,16 @@ export class GhostManager {
         },
         approveTrustedBundledInstall: async (manifest, markerEnabled, options) => {
           assertCapabilityActive();
-          return this.approveTrustedBundledInstallUnlocked(manifest, markerEnabled, options);
+          const pendingNamespace = this.isPendingLegacyNamespace(manifest.id);
+          if (pendingNamespace) this.ensureNamespaceMigrationCensus();
+          const changed = await this.approveTrustedBundledInstallUnlocked(manifest, markerEnabled, options);
+          // A proven seed's first receipt must also finish its legacy census;
+          // pending identity would still block its existing Host credentials.
+          if (pendingNamespace) {
+            const committed = await this.commitPendingNamespaceUnlocked(manifest.id, null, 'builtin');
+            if (!committed.ok) throw new Error(`Builtin namespace confirmation deferred: ${committed.reason}`);
+          }
+          return changed;
         },
         removeInstallApproval: async (id) => {
           assertCapabilityActive();
@@ -2323,8 +2332,8 @@ export class GhostManager {
    * - **只写状态根、绝不动安装目录**:三份旧文件原样保留,因此回滚到旧客户端时它照旧
    *   从安装目录判定启停,不会错位(§5 兜底第 4 条 回滚余地)。
    *
-   * 随包种子 id 跳过 —— 它们走 provisioning 的 `approveTrustedBundledInstall`(有权威
-   * 字节可比,是更强的迁移形态)。
+   * 同名随包种子不替代旧安装事实：先恢复原批准，不推断 namespace 或包摘要。
+   * provisioning 只有核实可信种子字节后，才可通过原入口补成种子批准。
    */
   async migrateLegacyApprovalsOnce(): Promise<{
     migrated: string[];
@@ -2414,11 +2423,6 @@ export class GhostManager {
       // 判据走 ghostContentTree(lstat 分类),不信 Dirent 类型位:根子项是 junction/
       // 链接时一律不进迁移,也与 §3「只有真目录才算安装」同向。
       if (classifyGhostDirEntrySync(path.join(root, ...id.split('/'))) !== 'directory') continue;
-      // 随包种子交给 provisioning,不在迁移范围。
-      if (this.options.isTrustedBundledId?.(id)) {
-        result.skipped.push(id);
-        continue;
-      }
       // 续跑轮只认动笔前钉死的清单:清单外的 id(迁移窗口期间新装再删 receipt 的)
       // 骗不到续跑重铸,保持 fail closed。
       if (resumePending && !resumePending.has(id)) {
@@ -2471,8 +2475,8 @@ export class GhostManager {
       blockedByPendingJournal.length === 0 &&
       unreadableReceiptIds.length === 0
     ) {
-      // 历史 mixed 状态若只剩有效的非随包 receipt，补写 completed 收口；空目录或
-      // 只有随包目录仍不落台账，给 owner legacy 恢复流程留门。
+      // 历史 mixed 状态若只剩有效 receipt，补写 completed 收口；空目录
+      // 仍不落台账，给 owner legacy 恢复流程留门。
       if (sawApprovedNonBundledInstall) {
         await this.receiptStore.writeMigrationLedger({
           version: 1,
@@ -2599,7 +2603,7 @@ export class GhostManager {
    * 为什么允许绕过一次性 ledger 门:`ids` 来自恢复流程**刚从旧布局根搬进安装根**的
    * 目录 —— 这个来源本身就是旧世界的授权事实(与首轮迁移同一信任级),不是可变安装
    * 目录里凭空冒出来的目录。调用方只传本次恢复实际搬动/新增的 id;逐 id 仍然只在
-   * 没有有效 receipt 时 backfill,随包 id 照旧交给 provisioning。结果并进 ledger,
+   * 没有有效 receipt 时 backfill，不因同名种子跳过。结果并进 ledger,
    * 事后可分辨来源。
    */
   /**
@@ -2636,7 +2640,6 @@ export class GhostManager {
       const workIds = [...new Set(ids)].filter(
         (id): id is string =>
           isValidGhostId(id) &&
-          this.options.isTrustedBundledId?.(id) !== true &&
           !permanentlyBlockedIds.has(id),
       );
       // Persist the complete recovery work queue before the first backfill. If the

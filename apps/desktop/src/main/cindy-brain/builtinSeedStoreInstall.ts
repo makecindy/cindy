@@ -5,14 +5,14 @@ import { readInstalledGhostManifestSnapshot } from '../installedGhostManifest.js
 import { installedMarketManifestIdentity, verifyInstalledMarketManifest } from '../plugin-market/installedManifestIdentity.js';
 import type { PluginMarketLedger, PluginMarketInstallationRecord } from '../plugin-market/ledger.js';
 import type { GhostManager } from './GhostManager.js';
-import type { BuiltinStoreInstallFact } from './builtinGhostProvisioner.js';
+import { fingerprintDirContent, type BuiltinStoreInstallFact } from './builtinGhostProvisioner.js';
 
 /** Resolve provenance for the physical directory selected by the provisioner, never by bare name. */
-export function builtinSeedStoreInstall(
+export async function builtinSeedStoreInstall(
   id: string,
   installedDir: string,
-  deps: { rootDir: string; manager: GhostManager; ledger: PluginMarketLedger },
-): BuiltinStoreInstallFact | null {
+  deps: { rootDir: string; manager: GhostManager; ledger: PluginMarketLedger; seedDir?: string },
+): Promise<BuiltinStoreInstallFact | null> {
   const relId = path.relative(deps.rootDir, installedDir).split(path.sep).join('/');
   const instance = deps.manager.readInstanceForContent(relId);
   if (instance && (!instance.active || instance.ghostId !== id)) {
@@ -28,6 +28,23 @@ export function builtinSeedStoreInstall(
   } else if (!instance && receipt && hasDeliveryNamespace(receipt)) {
     namespace = receipt.namespace;
   } else {
+    // Pre-receipt seeds used this provisioning pass to obtain their first
+    // receipt. Missing namespace alone must not deadlock that recovery. Only
+    // exact current seed bytes with no retained market identity may proceed;
+    // a name, a tombstone, or a newly backfilled directory is not provenance.
+    const legacyIdentity = !instance || (instance.namespaceState === 'pending' &&
+      instance.pluginId === null && (instance.source === 'legacy' ||
+        (instance.source === 'manual' && deps.manager.approvedInstallEvidence(relId)?.legacyMigrated === true)));
+    if (legacyIdentity && deps.seedDir && (!receipt ||
+        (!hasDeliveryNamespace(receipt) && !receipt.packageSha256 && receipt.installOrigin !== 'agent-forge'))) {
+      const market = deps.ledger.lookupInstallationsForNamespaceMigration(id);
+      if (market.kind === 'invalid') throw new Error('Plugin market ledger is unreadable');
+      if (market.kind !== 'found' || market.records.length === 0) {
+        const seed = await fingerprintDirContent(deps.seedDir);
+        const installed = await fingerprintDirContent(installedDir);
+        if (!seed.hasNonRegularEntry && !installed.hasNonRegularEntry && seed.hash === installed.hash) return null;
+      }
+    }
     // Missing market records cannot establish root identity. Leave old pending
     // installations to the namespace migration instead of replacing their bytes
     // or publishing a root receipt (including audience/orphan reclamation).
