@@ -9,6 +9,11 @@ const root = release
   ? fileURLToPath(new URL('..', import.meta.url))
   : fileURLToPath(new URL('../../..', import.meta.url));
 
+/** The edition a release was built for (scripts/build.mjs --region); null when running from source. */
+export function hostReleaseRegion() {
+  return release?.region ?? null;
+}
+
 export function hostRuntimeLayout() {
   if (release && (release.platform !== process.platform || release.arch !== process.arch
       || release.modules !== process.versions.modules)) {

@@ -14,15 +14,18 @@ import { build } from 'esbuild';
 import { chromium } from 'playwright-core';
 import { clientMigrationContract } from '../src/client-migration-contract.mjs';
 import { selectReleaseHarnesses } from '../src/release-harnesses.mjs';
+import { assertWebRegion, selectReleaseRegion } from '../src/release-region.mjs';
 import { redundantCopies } from '../src/release-dependency-copies.mjs';
 
 const repo = fileURLToPath(new URL('../../..', import.meta.url));
 const host = path.join(repo, 'apps/host');
 const desktop = path.join(repo, 'apps/desktop');
 const { values } = parseArgs({ options: {
-  output: { type: 'string' }, 'web-dir': { type: 'string' }, harnesses: { type: 'string' },
+  output: { type: 'string' }, region: { type: 'string' }, 'web-dir': { type: 'string' }, harnesses: { type: 'string' },
 } });
-if (!values.output) throw new Error('Usage: pnpm --filter @cindy/host build --output <new-directory> [--web-dir <renderer-build>] [--harnesses <name,...>]');
+if (!values.output) throw new Error('Usage: pnpm --filter @cindy/host build --output <new-directory> --region <cn|global> [--web-dir <renderer-build>] [--harnesses <name,...>]');
+// One release per edition, as the desktop: required, fixed at build time, checked before any work.
+const region = selectReleaseRegion(values.region);
 // Resolved before any build work so an invalid selection fails immediately.
 const harnessSelection = selectReleaseHarnesses({ option: values.harnesses });
 for (const warning of harnessSelection.warnings) console.warn(`Warning: ${warning}`);
@@ -164,8 +167,10 @@ const nodePlugins = createNodePlugins(packages);
 try {
   const web = values['web-dir'] ? path.resolve(values['web-dir']) : path.join(desktop, '.vite/renderer/main_window');
   await fs.access(path.join(web, 'index.html'));
+  // The web client is the desktop renderer, which bakes its region when it is built.
+  assertWebRegion(web, region);
   const metadata = {
-    version: (await readJson(path.join(desktop, 'package.json'))).version,
+    version: (await readJson(path.join(desktop, 'package.json'))).version, region,
     platform: process.platform, arch: process.arch, modules: process.versions.modules,
     nodeVersion: process.versions.node,
   };
@@ -224,7 +229,11 @@ try {
       outfile: path.join(bin, 'power-worker.cjs'), bundle: true, platform: 'node', format: 'cjs', target: 'node22', external: ['electron'] });
   }
   const common = { absWorkingDir: repo, bundle: true, platform: 'node', target: 'node22',
-    plugins: nodePlugins, define: { __CINDY_HOST_RELEASE__: JSON.stringify(metadata) }, logLevel: 'warning' };
+    plugins: nodePlugins, logLevel: 'warning', define: {
+      __CINDY_HOST_RELEASE__: JSON.stringify(metadata),
+      // The desktop modules' build region (shared/brandRegion.ts), as vite.main.config.ts bakes it.
+      'import.meta.env.VITE_CINDY_AUTH_REGION': JSON.stringify(region),
+    } };
   await build({ ...common, entryPoints: ['apps/host/src/main.ts'], outfile: path.join(bin, 'host.mjs'), format: 'esm',
     banner: { js: 'import { createRequire as hostCreateRequire } from "node:module"; const require = hostCreateRequire(import.meta.url);' },
   });

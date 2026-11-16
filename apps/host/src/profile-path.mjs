@@ -1,13 +1,27 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { hostReleaseRegion } from './runtime-layout.mjs';
 
 const DB_FILE_PREFIX = 'cindy';
 
-export function resolveHostRegion(raw = process.env.CINDY_HOST_REGION) {
-  if (raw === undefined || raw === null || raw === '') return 'global';
-  if (raw === 'cn' || raw === 'global') return raw;
-  throw new Error(`CINDY_HOST_REGION must be "cn" or "global"; received ${JSON.stringify(raw)}`);
+/**
+ * The Host's edition. A release is built for one (scripts/build.mjs --region) and answers that; a
+ * CINDY_HOST_REGION naming the other edition refuses to start rather than being ignored. From source
+ * CINDY_HOST_REGION chooses, global when unset, for development only. The account's realm is separate:
+ * it only picks the sign-in and service endpoints.
+ */
+export function resolveHostRegion(raw = process.env.CINDY_HOST_REGION, release = hostReleaseRegion()) {
+  const requested = raw === undefined || raw === null || raw === '' ? null : raw;
+  if (requested !== null && requested !== 'cn' && requested !== 'global') {
+    throw new Error(`CINDY_HOST_REGION must be "cn" or "global"; received ${JSON.stringify(raw)}`);
+  }
+  if (release === null) return requested ?? 'global';
+  if (requested !== null && requested !== release) {
+    throw new Error(`HOST_REGION_MISMATCH: this Cindy Host release is the ${release} edition, but CINDY_HOST_REGION is ${requested}. `
+      + `Install the ${requested} release, or remove CINDY_HOST_REGION (a release does not need it).`);
+  }
+  return release;
 }
 
 /** Source and installed Hosts default to an independent profile. Existing

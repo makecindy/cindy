@@ -44,7 +44,11 @@ export async function load(url, context, nextLoad) {
     if (url.includes('/apps/desktop/') && /\.tsx?(?:\?|$)/.test(url)) {
       const filename = fileURLToPath(url);
       const source = await readFile(filename, 'utf8');
-      const result = await transform(source, { loader: filename.endsWith('.tsx') ? 'tsx' : 'ts', format: 'esm', target: 'node22', sourcefile: filename, sourcemap: 'inline' });
+      const result = await transform(source, { loader: filename.endsWith('.tsx') ? 'tsx' : 'ts', format: 'esm', target: 'node22', sourcefile: filename, sourcemap: 'inline',
+        // The desktop modules' build region (shared/brandRegion.ts). A release bakes its --region here
+        // (scripts/build.mjs); from source it follows CINDY_HOST_REGION, global when unset, for development
+        // only, the same value profile-path.mjs resolveHostRegion answers.
+        define: { 'import.meta.env.VITE_CINDY_AUTH_REGION': 'process.env.CINDY_HOST_REGION' } });
       return { format: 'module', shortCircuit: true, source: result.code };
     }
     return nextLoad(url, context);

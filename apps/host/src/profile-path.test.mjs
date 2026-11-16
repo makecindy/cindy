@@ -21,6 +21,18 @@ test('accepts only explicit CN or global identities', () => {
   assert.throws(() => resolveHostRegion('dev'), /must be "cn" or "global"/);
 });
 
+// A release answers the edition it was built for (scripts/build.mjs --region; region row of
+// docs/host/personal-migration-release-table.md). A CINDY_HOST_REGION naming the other edition refuses
+// rather than being ignored: an operator who kept CINDY_HOST_REGION=global from an old systemd unit
+// while installing the cn release must find out. Minimal failing input: release cn with
+// CINDY_HOST_REGION=global returning cn (silently ignored) or global (env wins).
+test('a release answers its build region and refuses a CINDY_HOST_REGION of the other edition', () => {
+  assert.equal(resolveHostRegion(undefined, 'cn'), 'cn');
+  assert.equal(resolveHostRegion('cn', 'cn'), 'cn');
+  assert.throws(() => resolveHostRegion('global', 'cn'), /HOST_REGION_MISMATCH: this Cindy Host release is the cn edition, but CINDY_HOST_REGION is global/);
+  assert.throws(() => resolveHostRegion('cn', 'global'), /HOST_REGION_MISMATCH/);
+});
+
 test('explicit Host data dirs retain Desktop XDT_USER_DATA_DIR semantics', () => {
   const base = { XDG_CONFIG_HOME: path.join('/config-home') };
   assert.equal(resolveHostDataDir({ env: base, appDataDir: '/appdata' }), path.join('/appdata', 'CindyHost', 'global'));

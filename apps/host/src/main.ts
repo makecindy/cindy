@@ -181,6 +181,14 @@ function parsePermissionMode(value: unknown): PermissionMode | undefined {
 }
 
 const command = process.argv[2];
+// Every command, before it reads a profile: a release refuses a CINDY_HOST_REGION that names the other
+// edition (profile-path.mjs resolveHostRegion) instead of running as the wrong one.
+try {
+  resolveHostRegion();
+} catch (error) {
+  console.error(`cindy-host: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
 if (command === '--help' || command === '-h') {
   console.log('Usage: cindy-host [serve|login [--region=cn|global] [--method=<id>]|open|status [--json]|remote [status|enable|disable|revoke <device-id>]|stop]');
 } else if (command === 'open') {
@@ -206,6 +214,7 @@ if (command === '--help' || command === '-h') {
       console.log(`authenticated: ${state.authenticated}`);
       console.log(`realm: ${state.realm ?? 'none'}`);
       console.log(`running: ${state.running === null ? 'unreachable' : state.running}`);
+      if ('region' in state && state.region) console.log(`region: ${state.region}`);
       if (state.baseUrl) console.log(`address: ${state.baseUrl}`);
       if (state.error) console.error(state.error);
       if ('credentialStoreUnavailable' in login) console.error('Credential store is unavailable; unlock it to inspect sign-in status.');
