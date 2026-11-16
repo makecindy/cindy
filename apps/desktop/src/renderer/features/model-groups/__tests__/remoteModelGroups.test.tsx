@@ -6,7 +6,7 @@
  * - 规则依据：docs/product-rules/model-groups.md「在另一台电脑上开的新任务」(那台版本较旧时不显示、不改用本机的模式；
  *   读不到时那台重新上线再读一次；只限同账号自己的电脑)。
  * - 现有覆盖缺口：协议与被控端处理在 main 侧测试，这里是发起端唯一区分「旧版不支持」与「暂时读不到」的地方。
- * - 最小失败输入：旧版那台回 CHANNEL_NOT_ALLOWED；读到过之后一次重读超时；一直在线时没读到(要靠发送被挡下重读)；共享任务访客的对端；没有选路凭据的结果。
+ * - 最小失败输入：旧版那台回 CHANNEL_NOT_ALLOWED；读到过之后一次重读超时；一直在线时没读到(要靠发送被挡下重读)；共享任务访客的对端；没有选路凭据的结果；超过协议上限的模型名。
  * - tier：unit，经真实 hook 与真实重连代次，只替换 preload 的 deviceLink 桥。
  * - 实测耗时：单独运行约 1 秒。
  */
@@ -15,6 +15,7 @@ import { MODEL_GROUPS_REMOTE_CHANNEL, sharedTaskHostPeer } from '@cindy/device-l
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ModelGroupResolveResult } from '../../../../shared/modelGroups';
+import { parseModelGroupsRemoteRequest } from '../../../../shared/modelGroupsRemote';
 import { commitRemoteModelGroup, useRemoteModelGroups } from '../remoteModelGroups';
 
 const CONFIG = {
@@ -51,17 +52,17 @@ describe('remote model groups', () => {
   it('hides modes for an older computer instead of borrowing this computer’s', async () => {
     const invoke = vi.fn().mockRejectedValue(new Error(`[DEVICE_LINK_CHANNEL_NOT_ALLOWED] channel '${MODEL_GROUPS_REMOTE_CHANNEL}' is not allowed`));
     installBridge(invoke);
-    const { result } = renderHook(() => useRemoteModelGroups('henrik-pc', true));
+    const { result } = renderHook(() => useRemoteModelGroups('host-pc', true));
     await waitFor(() => expect(result.current).toEqual({ status: 'unsupported' }));
-    expect(invoke).toHaveBeenCalledExactlyOnceWith('henrik-pc', MODEL_GROUPS_REMOTE_CHANNEL, [{ action: 'list' }]);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('host-pc', MODEL_GROUPS_REMOTE_CHANNEL, [{ action: 'list' }]);
   });
 
   it('keeps modes already read when a re-read fails, and re-reads only on reconnect', async () => {
     const invoke = vi.fn().mockResolvedValueOnce({ config: CONFIG }).mockRejectedValueOnce(new Error('[DEVICE_UNRESPONSIVE] timeout'));
     const bridge = installBridge(invoke);
-    const { result } = renderHook(() => useRemoteModelGroups('henrik-pc', true));
+    const { result } = renderHook(() => useRemoteModelGroups('host-pc', true));
     await waitFor(() => expect(result.current).toMatchObject({ status: 'ready', config: { routes: [{ id: 'r1' }] } }));
-    act(() => bridge.reconnect('henrik-pc'));
+    act(() => bridge.reconnect('host-pc'));
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
     expect(result.current).toMatchObject({ status: 'ready', config: { routes: [{ id: 'r1' }] } });
 
@@ -82,12 +83,19 @@ describe('remote model groups', () => {
     expect(result.current).toEqual({ status: 'off' });
 
     const kept = { outcome: 'unavailable', groupName: 'Daily', trace: [] } as ModelGroupResolveResult;
-    commitRemoteModelGroup('henrik-pc', kept, 'session-1', null);
-    commitRemoteModelGroup('henrik-pc', { ...kept, decisionId: 'd1' }, 'session-1', {
+    commitRemoteModelGroup('host-pc', kept, 'session-1', null);
+    commitRemoteModelGroup('host-pc', { ...kept, decisionId: 'd1' }, 'session-1', {
       pluginName: 'Daily', outcome: 'kept', modelName: 'GPT', why: 'failed', source: 'model-group',
     });
-    expect(invoke).toHaveBeenCalledExactlyOnceWith('henrik-pc', MODEL_GROUPS_REMOTE_CHANNEL, [{
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('host-pc', MODEL_GROUPS_REMOTE_CHANNEL, [{
       action: 'commit', decisionId: 'd1', note: { sessionId: 'session-1', pluginName: 'Daily', outcome: 'kept', modelName: 'GPT' },
     }]);
+    // 模型名连同供应商与电脑名超过协议上限时截短，那台照样收下这次提交(PR #10883 review)。
+    invoke.mockClear();
+    commitRemoteModelGroup('host-pc', { ...kept, decisionId: 'd2' }, 'session-1', {
+      pluginName: 'Daily', outcome: 'routed', modelName: `${'m'.repeat(256)} · Pro · Studio`, source: 'model-group',
+    });
+    const [request] = invoke.mock.calls[0][2];
+    expect(parseModelGroupsRemoteRequest(request)).toMatchObject({ action: 'commit', decisionId: 'd2', note: { outcome: 'routed' } });
   });
 });

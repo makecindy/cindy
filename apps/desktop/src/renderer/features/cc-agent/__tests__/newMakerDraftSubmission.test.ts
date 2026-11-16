@@ -756,17 +756,28 @@ describe('homepage submission to Main admission and first-message handoff', () =
       outcome: 'routed', groupName: 'PC', modelName: modelId, sourceName: 'Ollama',
       route: { agentKind: 'pi', model: modelId, providerId, effort: 'high' }, why: 'order', quota: null, trace: [], decisionId: 'pc-receipt',
     };
-    const result = await submit({ entry, deviceId: 'henrik-pc', remoteModelGroupRoute, effort: 'low', providers: [provider(providerId, ['low', 'high'])] });
+    const result = await submit({ entry, deviceId: 'host-pc', remoteModelGroupRoute, effort: 'low', providers: [provider(providerId, ['low', 'high'])] });
     expect(result.errors).toEqual([]);
-    expect(result.environment.resolveRemoteModelGroup).toHaveBeenCalledWith('henrik-pc', { type: 'route', id: 'r1' }, { hasImages: false });
-    expect(result.invokeRemote).toHaveBeenCalledWith('henrik-pc', 'maker:create-session', [expect.objectContaining({ providerId, model: modelId, effort: 'high' })]);
-    expect(result.environment.commitRemoteModelGroup).toHaveBeenCalledWith('henrik-pc', remoteModelGroupRoute, expect.any(String), null);
+    expect(result.environment.resolveRemoteModelGroup).toHaveBeenCalledWith('host-pc', { type: 'route', id: 'r1' }, { hasImages: false });
+    expect(result.invokeRemote).toHaveBeenCalledWith('host-pc', 'maker:create-session', [expect.objectContaining({ providerId, model: modelId, effort: 'high' })]);
+    expect(result.environment.commitRemoteModelGroup).toHaveBeenCalledWith('host-pc', remoteModelGroupRoute, expect.any(String), null);
     expect(result.environment.bindModelGroupSession).not.toHaveBeenCalled();
+  });
+  // PR #10883 review / unit：那台的模式把任务换到第三台电脑时，草稿手上的目录(同名来源只有 low)不是那一处的，
+  // 选出的推理强度要原样带过去。之前按草稿那一处的目录校准，high 被改掉。
+  it.each(['send', 'goal'] as const)('keeps %s effort when the target computer routes to another computer', async (entry) => {
+    const remoteModelGroupRoute: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: 'PC', modelName: modelId, sourceName: 'Ollama',
+      route: { agentKind: 'pi', model: modelId, providerId, effort: 'high', agentDeviceId: 'gpu-box' }, why: 'order', quota: null, trace: [], decisionId: 'pc-receipt',
+    };
+    const result = await submit({ entry, deviceId: 'host-pc', remoteModelGroupRoute, effort: 'low', providers: [provider(providerId, ['low'])], authCatalogKey: 'gpu-box' });
+    expect(result.errors).toEqual([]);
+    expect(result.invokeRemote).toHaveBeenCalledWith('host-pc', 'maker:create-session', [expect.objectContaining({ agentDeviceId: 'gpu-box', effort: 'high' })]);
   });
   // §3.2：那台的模式读不到或选路失败时停下保留输入，不改用原模型。Tier: unit。
   it.each(['send', 'goal'] as const)('stops %s when the target computer cannot route', async (entry) => {
     for (const failure of [{ remoteModelGroupRoute: new Error('[DEVICE_UNRESPONSIVE] timeout') }, { remoteModelGroupSendBlock: 'error' as const }]) {
-      const result = await submit({ entry, deviceId: 'henrik-pc', ...failure });
+      const result = await submit({ entry, deviceId: 'host-pc', ...failure });
       expect(result.invokeRemote.mock.calls.some(([, channel]) => channel === 'maker:create-session')).toBe(false);
       if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('newChat.modelSelector.remoteLoadFailed');
       else expect(String(result.errors.at(-1))).toContain('newChat.modelSelector.remoteLoadFailed');

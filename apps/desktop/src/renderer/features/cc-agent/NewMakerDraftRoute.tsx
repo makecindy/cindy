@@ -4876,7 +4876,9 @@ export function NewMakerDraftRoute() {
                 planModeEnabled: effectivePlanMode,
                 providerId,
               },
-              deviceProviders: agentCatalogProviders,
+              // 选路把任务换到草稿以外的位置时，手上的目录不是那一处的，不拿它校准选出的推理强度
+              // (选路时已按那一处的目录校验过)。
+              deviceProviders: routedTo && (routeAgentDeviceId ?? null) !== (effectiveAgentDeviceId ?? null) ? [] : agentCatalogProviders,
               capabilityAgentKind,
               // Agent 在另一台电脑运行:被控电脑把它记进任务,模型与来源属于那台的目录。
               agentDeviceId: routeAgentDeviceId,
@@ -6085,7 +6087,8 @@ export function NewMakerDraftRoute() {
               planModeEnabled: effectivePlanMode,
               providerId: chatInitialProviderId,
             },
-            deviceProviders: agentCatalogProviders,
+            // 同 handleSend：选路换了位置时不拿草稿那一处的目录校准选出的推理强度。
+            deviceProviders: routedTo && (routeAgentDeviceId ?? null) !== (effectiveAgentDeviceId ?? null) ? [] : agentCatalogProviders,
             capabilityAgentKind,
             agentDeviceId: routeAgentDeviceId,
           });

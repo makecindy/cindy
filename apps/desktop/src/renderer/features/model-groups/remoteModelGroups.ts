@@ -16,6 +16,7 @@ import { extractIpcError } from '@/utils/ipcError';
 
 import type { ModelGroupResolveRequest, ModelGroupResolveResult, ModelGroupSelection, ModelGroupsConfig } from '../../../shared/modelGroups';
 import {
+  MODEL_GROUP_REMOTE_NOTE_LIMITS,
   parseModelGroupsRemoteList,
   parseModelGroupsRemoteResolve,
   type ModelGroupRemoteNote,
@@ -115,14 +116,22 @@ export function commitRemoteModelGroup(
   }).catch((error: unknown) => log.warn('remote model group commit failed', error));
 }
 
-/** 本机说明里只有模型组用得到的字段交给那台；来源标记由那台写入时补上。 */
+/**
+ * 本机说明里只有模型组用得到的字段交给那台；来源标记由那台写入时补上。
+ * 文字按协议上限截短：说明太长不能挡住提交(否则那台的「轮流」不前进)。
+ */
 function toRemoteNote(note: PluginModelRouteNote): ModelGroupRemoteNote {
+  const limits = MODEL_GROUP_REMOTE_NOTE_LIMITS;
   return {
-    pluginName: note.pluginName,
+    pluginName: clip(note.pluginName, limits.name),
     outcome: note.outcome,
-    modelName: note.modelName,
-    ...(note.effort ? { effort: note.effort } : {}),
-    ...(note.reason ? { reason: note.reason } : {}),
+    modelName: clip(note.modelName, limits.name),
+    ...(note.effort && note.effort.length <= limits.effort ? { effort: note.effort } : {}),
+    ...(note.reason ? { reason: clip(note.reason, limits.reason) } : {}),
     ...(note.why === 'unavailable-route' ? { why: 'unavailable-route' as const } : {}),
   };
+}
+
+function clip(value: string, max: number): string {
+  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }

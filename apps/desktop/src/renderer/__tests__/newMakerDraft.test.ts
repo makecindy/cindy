@@ -685,7 +685,7 @@ describe('newMakerDraft store', () => {
   it('换任务所在电脑时清掉上一台的模式，显式一起给的新值保留', async () => {
     const { getDraft, patchDraft } = await loadModule();
     patchDraft({ modelGroup: { type: 'route', id: 'local-route' } });
-    patchDraft({ deviceLinkDeviceId: 'henrik-pc', deviceLinkDeviceName: 'Henrik-PC', workingDir: null });
+    patchDraft({ deviceLinkDeviceId: 'host-pc', deviceLinkDeviceName: 'Host PC', workingDir: null });
     expect(getDraft().modelGroup).toBeNull();
 
     patchDraft({ modelGroup: { type: 'route', id: 'pc-route' } });
