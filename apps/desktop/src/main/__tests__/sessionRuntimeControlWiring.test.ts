@@ -1325,7 +1325,9 @@ describe('session runtime control wiring', () => {
   });
 
   it('clears fixed-effort overrides from lazy bootstrap and the bridge effort store', () => {
-    expect(registerWithRuntimeSelectionSource).toContain('o.effort = runtimeOverride.effort ?? undefined;');
+    // bootstrapSession starts on the override through the shared step in sessionRuntimeControl.ts.
+    expect(registerSource).toContain('const runtimeOverride = applySessionRuntimeOverrideForStart(o, groupDecidesSource);');
+    expect(runtimeControlSource).toContain('o.effort = runtimeOverride.effort ?? undefined;');
     expect(registerWithRuntimeSelectionSource).toContain('setSessionEffort(session.id, runtimeOverride.effort);');
     expect(registerWithRuntimeSelectionSource).toContain('setSessionEffort(sessionId, selectionToCommit.effort);');
   });
