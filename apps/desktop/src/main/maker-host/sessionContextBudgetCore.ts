@@ -137,5 +137,28 @@ export function createSessionContextBudget(ports: SessionContextBudgetPorts) {
       ? budget : null;
   }
 
-  return { readStoredSessionContextWindowBudget, applySessionContextWindowBudgetToCreateOpts, resolveConfiguredContextWindow };
+  /**
+   * 预算变化是否真的改变**有效窗口**：不变时不必关掉活实例（模型级上限更紧、或重新选回
+   * 当前档位造成的假变化都会落在 false）。收敛口径与运行时下发完全一致，否则会出现
+   * 「判为无变化»不重建」但实际上引擎报文窗口不同的分叉。
+   */
+  function contextWindowBudgetChangesEffectiveWindow(input: {
+    catalog: Pick<Catalog, 'providers'>;
+    agent: AgentKind;
+    providerId: string | null | undefined;
+    modelId: string;
+    previous: number | null;
+    next: number | null;
+  }): boolean {
+    const before = resolveConfiguredContextWindow(
+      input.catalog, input.agent, input.providerId, input.modelId, input.previous,
+    );
+    const after = resolveConfiguredContextWindow(
+      input.catalog, input.agent, input.providerId, input.modelId, input.next,
+    );
+    return before !== after;
+  }
+
+  return { readStoredSessionContextWindowBudget, applySessionContextWindowBudgetToCreateOpts, resolveConfiguredContextWindow,
+    contextWindowBudgetChangesEffectiveWindow };
 }
