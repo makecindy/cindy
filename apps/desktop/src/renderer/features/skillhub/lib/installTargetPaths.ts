@@ -17,7 +17,13 @@ export function normalizeInstallPathKey(pathValue: string, options: InstallPathC
   // Remote paths cannot use the viewing computer's platform. The default keeps
   // the existing drive-path comparison and extends it to UNC; local callers
   // explicitly pass their platform to retain POSIX case sensitivity.
-  const normalized = workingDirComparisonKey(pathValue.trim(), { windows: options.windows ?? true }) ?? '';
+  const windows = options.windows ?? true;
+  const normalized = workingDirComparisonKey(pathValue.trim(), { windows }) ?? '';
+  if (!windows) {
+    // path.posix.normalize collapses a leading // and repeated slashes. Registry
+    // keys are already trimmed, so comparison trims a non-root trailing slash too.
+    return trimTrailingSeparators(normalized.replace(/\/+/g, '/'));
+  }
   const prefix = normalized.startsWith('//') ? '//' : '';
   return prefix + normalized.slice(prefix.length).replace(/\/+/g, '/');
 }

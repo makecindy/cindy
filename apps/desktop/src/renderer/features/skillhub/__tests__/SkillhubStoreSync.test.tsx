@@ -125,6 +125,82 @@ it.each([
   expect(picker.result.current.projects).toEqual(originalTargets);
 });
 
+function crossGroupSession(
+  id: string,
+  projectDir: string,
+  workingDir: string,
+  updatedAt: string,
+): Session {
+  return {
+    id, projectDir, workingDir, workspaceKind: 'project', status: 'active',
+    createdAt: '2026-09-08T00:00:00Z', updatedAt,
+    userSendAt: null, pinnedAt: null, _count: { messages: 1 },
+  } as Session;
+}
+
+function scanCatalogue(): Array<{ projectRoot: string; hash: string; displayName: string }> {
+  return mocks.syncProjects.mock.lastCall![0];
+}
+
+// Unit regression (PR #8019 cross-group half): within-group alias stability does
+// not decide a scan root claimed by two distinct project groups. The production
+// hook must keep the root, hash, label, and Windows comparison-key order when
+// activity reverses. These are separate groups, not one projectDir.
+it.each([
+  {
+    name: 'different shared cwd spellings',
+    newerFirst: [
+      crossGroupSession('b', 'E:/Work/b', 'd:/shared/task', '2026-09-09T00:00:00Z'),
+      crossGroupSession('a', 'D:/Work/a', 'D:/Shared/task', '2026-09-08T00:00:00Z'),
+    ],
+    expected: [
+      { projectRoot: 'D:/Shared/task', displayName: 'a · task' },
+      { projectRoot: 'D:/Work/a', displayName: 'a' },
+      { projectRoot: 'E:/Work/b', displayName: 'b' },
+    ],
+  },
+  {
+    name: 'one shared cwd spelling',
+    newerFirst: [
+      crossGroupSession('b', 'E:/Work/b', 'D:/Shared/task', '2026-09-09T00:00:00Z'),
+      crossGroupSession('a', 'D:/Work/a', 'D:/Shared/task', '2026-09-08T00:00:00Z'),
+    ],
+    expected: [
+      { projectRoot: 'D:/Shared/task', displayName: 'a · task' },
+      { projectRoot: 'D:/Work/a', displayName: 'a' },
+      { projectRoot: 'E:/Work/b', displayName: 'b' },
+    ],
+  },
+  {
+    name: 'parent cwd and child project root',
+    newerFirst: [
+      crossGroupSession('parent', 'D:/Repo', 'D:/Repo/sub', '2026-09-09T00:00:00Z'),
+      crossGroupSession('child', 'd:/repo/sub', 'D:/Other', '2026-09-08T00:00:00Z'),
+    ],
+    expected: [
+      { projectRoot: 'D:/Other', displayName: 'sub · Other' },
+      { projectRoot: 'D:/Repo', displayName: 'Repo' },
+      { projectRoot: 'd:/repo/sub', displayName: 'sub' },
+    ],
+  },
+])('keeps cross-group scan roots when activity changes: $name', ({ newerFirst, expected }) => {
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { platform: 'win32' } });
+  mocks.loading = false;
+  const expectedCatalogue = expected.map((entry) => ({
+    ...entry, hash: projectHash(entry.projectRoot),
+  }));
+  mocks.sessions = newerFirst;
+  const storeSync = renderHook(useSkillhubStoreSync);
+  expect(scanCatalogue()).toEqual(expectedCatalogue);
+  expect(scanCatalogue().some((entry) => entry.projectRoot === 'D:/Repo/sub')).toBe(false);
+  mocks.sessions = [...newerFirst].reverse().map((session, index) => ({
+    ...session,
+    updatedAt: index === 0 ? '2026-09-10T00:00:00Z' : '2026-09-08T00:00:00Z',
+  }));
+  storeSync.rerender();
+  expect(scanCatalogue()).toEqual(expectedCatalogue);
+});
+
 it('keeps pinned and newly created local project directories in the scan catalogue', () => {
   const session = (id: string, workingDir: string, extra: Partial<Session> = {}) => ({
     id, workingDir, workspaceKind: 'project', status: 'active',

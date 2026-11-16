@@ -20,7 +20,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { Outlet, useMatch } from 'react-router-dom';
 import { skillhubCatalogKey } from '../../../shared/skillhubCatalog';
-import { normalizeWorkingDirForStorage, workingDirComparisonKey } from '../../../shared/workingDir';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { useRegisterCCAgentSidebar } from '@/features/cc-agent/useRegisterCCAgentSidebar';
@@ -36,8 +35,7 @@ import {
   type SkillhubProject,
 } from './hooks/useSkillhub';
 import { useSkillSync } from './hooks/useSkillSync';
-import { projectHash } from './lib/projectHash';
-import { groupSkillhubSessions } from './lib/groupSkillhubSessions';
+import { groupSkillhubSessions, selectSkillhubScanRoots } from './lib/groupSkillhubSessions';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCatalogDevice } from '@/features/plugin/useCatalogDevice';
 
@@ -147,21 +145,7 @@ export function useSkillhubStoreSync(): void {
     const { projects } = groupSkillhubSessions(sessions, {
       includePinnedInProjects: true, includeDraftsInProjects: true, localPlatform,
     });
-    const catalogue = new Map<string, SkillhubProject>();
-    for (const project of projects.filter((p) => p.scope === 'local')) {
-      const sessionRoots = project.sessions.map((s) => normalizeWorkingDirForStorage(s.workingDir));
-      // Worktree roots are scanned separately; keep their casing representative
-      // stable too, even though groupSessions orders sessions by recent activity.
-      if (localPlatform === 'win32') sessionRoots.sort();
-      const roots = [project.workingDir, ...sessionRoots];
-      for (const root of roots) {
-        const key = workingDirComparisonKey(root, { windows: localPlatform === 'win32' });
-        if (!root || key === null || catalogue.has(key)) continue;
-        catalogue.set(key, { projectRoot: root, hash: projectHash(root),
-          displayName: root === project.workingDir ? project.displayName : `${project.displayName} · ${root.split('/').at(-1)}` });
-      }
-    }
-    return [...catalogue.values()];
+    return selectSkillhubScanRoots(projects, { windows: localPlatform === 'win32' });
   }, [sessions, sessionsLoading, localPlatform]);
 
   useEffect(() => {

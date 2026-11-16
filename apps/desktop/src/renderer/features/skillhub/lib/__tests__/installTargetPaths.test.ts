@@ -26,6 +26,23 @@ describe('install target path helpers', () => {
     expect(isInstallPathUnderProject(installed, '//Server/Share/Repo2', options)).toBe(false);
   });
 
+  it('keeps the omitted-options UNC contract and collapses only an explicit POSIX key', () => {
+    expect(normalizeInstallPathKey('//server/share/Repo/.agents/skills/Demo/')).toBe(
+      '//server/share/repo/.agents/skills/demo',
+    );
+    expect(normalizeInstallPathKey('//server/share/Repo/.agents/skills/Demo/')).not.toBe(
+      '/server/share/repo/.agents/skills/demo',
+    );
+    const posix = { windows: false };
+    const collapsed = '/home/me/repo/.agents/skills/demo';
+    expect(normalizeInstallPathKey('//home/me/repo/.agents/skills/demo', posix)).toBe(collapsed);
+    expect(normalizeInstallPathKey('//home/me/repo/.agents/skills/demo/', posix)).toBe(collapsed);
+    expect(normalizeInstallPathKey('//home//me/repo/.agents/skills/demo', posix)).toBe(collapsed);
+    expect(normalizeInstallPathKey('remote-project/abc')).toBe('remote-project/abc');
+    expect(normalizeInstallPathKey('remote-project/abc', posix)).toBe('remote-project/abc');
+    expect(normalizeInstallPathKey('remote-global', posix)).toBe('remote-global');
+  });
+
   it('keeps POSIX install keys case-sensitive even for double-slash roots', () => {
     const options = { windows: false };
     expect(normalizeInstallPathKey('//Server/Share/Repo', options)).not.toBe(

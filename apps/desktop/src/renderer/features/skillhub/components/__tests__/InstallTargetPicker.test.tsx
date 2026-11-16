@@ -57,6 +57,29 @@ it.each([
   }
 });
 
+// Unit regression: a POSIX registry stores path.posix.normalize, which turns a
+// leading // into one slash. The real picker must classify that key as the
+// project install and leave the global row installable.
+it('classifies a POSIX double-slash project install by its registry key', async () => {
+  projectMocks.projects = [{ projectRoot: '//home/me/repo', displayName: 'repo' }];
+  window.electronAPI = {
+    platform: 'linux',
+    skillhub: { registry: { getByName: vi.fn().mockResolvedValue({
+      success: true,
+      manifest: { installs: { '/home/me/repo/.agents/skills/demo': { version: '1.2.3' } } },
+    }) } },
+  } as never;
+  render(<Harness />);
+  await userEvent.click(screen.getByText('Open picker'));
+  await screen.findByText('v1.2.3');
+  const projectRow = screen.getByRole('button', { name: /repo/ }) as HTMLButtonElement;
+  const globalRow = screen.getByRole('button', { name: /skillhub.installPicker.global/ }) as HTMLButtonElement;
+  expect(projectRow.disabled).toBe(true);
+  expect(globalRow.disabled).toBe(false);
+  expect(within(projectRow).getByText('v1.2.3')).not.toBeNull();
+  expect(within(globalRow).queryByText('v1.2.3')).toBeNull();
+});
+
 it('focuses Cancel, contains Tab, closes on Escape and restores the opener', async () => {
   window.electronAPI = { skillhub: { registry: { getByName: vi.fn().mockResolvedValue({ success: false }) } } } as never;
   render(<Harness />);
