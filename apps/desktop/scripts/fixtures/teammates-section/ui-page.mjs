@@ -290,6 +290,11 @@ export default {
       await ui.capture('collapsed-icons');
       await header.click();
       await ui.capture('expanded-icons');
+      // Leave the published final capture on the new option and its avatar strip.
+      await header.click();
+      await openDisplayMenu();
+      await avatarsOption.click();
+      await openDisplayMenu();
       return;
     }
     if (ui.case === 'group-avatar-hover') {
