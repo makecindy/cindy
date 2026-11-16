@@ -853,3 +853,21 @@ describe('the desktop builds one instance of each usage pricing factory', () => 
     for (const name of names) expect(calls[name], name).toEqual([FACTORIES[name]]);
   });
 });
+
+describe('Host macOS system proxy rules', () => {
+  // 规则：Host 读 macOS 系统代理时照的是某一版 Electron 里 Chromium 的规则（apps/host/src/macos-system-proxy.ts，
+  // 放行表第 28 行 28b），常量 CHROMIUM_RULES_ELECTRON_VERSION 写明是哪一版。桌面升级 Electron 时这条变红；
+  // 升级的人改这个常量就会改到实现文件，macOS 比对（.github/workflows/macos-system-proxy-compare.yml）随之在
+  // 那个 PR 上运行。失效后果：Chromium 的代理规则变了（例如新增的隐式例外），Host 与桌面悄悄分叉。
+  it('follows the Electron version the desktop ships', () => {
+    const rules = read(path.join(hostSrc, 'macos-system-proxy.ts'));
+    const declared = /^export const CHROMIUM_RULES_ELECTRON_VERSION = '([^']+)';$/m.exec(rules)?.[1];
+    assert.ok(declared, 'CHROMIUM_RULES_ELECTRON_VERSION is declared in apps/host/src/macos-system-proxy.ts');
+    const desktop = JSON.parse(read(path.join(repo, 'apps/desktop/package.json')));
+    const electron = desktop.devDependencies?.electron ?? desktop.dependencies?.electron;
+    assert.equal(declared, electron,
+      `apps/desktop/package.json 的 Electron 是 ${electron}，apps/host/src/macos-system-proxy.ts 的 `
+      + `CHROMIUM_RULES_ELECTRON_VERSION 是 ${declared}：改这个常量，并等 macOS 系统代理比对 `
+      + '(.github/workflows/macos-system-proxy-compare.yml) 在这个 PR 上通过');
+  });
+});

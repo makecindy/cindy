@@ -31,6 +31,14 @@ import { createMakerLogger } from '../../desktop/src/main/maker-host/logger-adap
 
 const log = createMakerLogger('outbound-proxy');
 
+/**
+ * The Electron release whose Chromium these rules follow (Chromium 148.0.7778.280). A guard test
+ * (hostDesktopSourceContracts.guard.test.ts) fails when apps/desktop/package.json moves to another
+ * Electron: whoever upgrades updates this constant, which changes this file and so runs the macOS
+ * system proxy comparison (.github/workflows/macos-system-proxy-compare.yml) on that pull request.
+ */
+export const CHROMIUM_RULES_ELECTRON_VERSION = '42.11.12';
+
 /** The system's own scutil, by absolute path: never looked up on PATH, where a same-named program could stand in. */
 const SCUTIL_PATH = '/usr/sbin/scutil';
 const SCUTIL_TIMEOUT_MS = 1000;

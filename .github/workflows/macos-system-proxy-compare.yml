@@ -4,17 +4,22 @@
 # with Electron's session.resolveProxy, under groups of settings the job sets itself.
 #
 # The job CHANGES THE RUNNER'S SYSTEM PROXY SETTINGS (networksetup with sudo). It therefore runs only on
-# GitHub-hosted macOS runners, which are discarded afterwards, and only on demand: started by hand, or for
-# a pull request that changes the Electron version. Ordinary pull requests run only the small version check
-# below, on Linux. Never change system proxy settings on a development machine or your own computer to
-# reproduce it; the script refuses to start anywhere but a GitHub-hosted runner.
+# GitHub-hosted macOS runners, which are discarded afterwards, and only when needed: started by hand, or for
+# a pull request that changes this implementation (the three paths below). Ordinary pull requests do not run
+# it. An Electron upgrade reaches it through a guard test: CHROMIUM_RULES_ELECTRON_VERSION in
+# macos-system-proxy.ts must equal the Electron version in apps/desktop/package.json, so the upgrade changes
+# that file and this comparison runs on the upgrade's pull request.
+# Never change system proxy settings on a development machine or your own computer to reproduce it; the
+# script refuses to start anywhere but a GitHub-hosted runner.
 name: macOS system proxy comparison
 
 on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'apps/desktop/package.json'
+      - 'apps/host/src/macos-system-proxy.ts'
+      - 'apps/host/scripts/macos-system-proxy-*'
+      - '.github/workflows/macos-system-proxy-compare.yml'
 
 permissions:
   contents: read
@@ -24,33 +29,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  electron-version:
-    name: Electron version changed?
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      changed: ${{ steps.compare.outputs.changed }}
-    steps:
-      - name: Checkout client
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - name: Compare the Electron version with the base
-        id: compare
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          read_version() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const p=JSON.parse(s);console.log((p.devDependencies||{}).electron||(p.dependencies||{}).electron||"")})'; }
-          before="$(git show "$BASE_SHA:apps/desktop/package.json" | read_version)"
-          after="$(read_version < apps/desktop/package.json)"
-          echo "Electron: ${before:-none} -> ${after:-none}"
-          if [ "$before" != "$after" ]; then echo "changed=true" >> "$GITHUB_OUTPUT"; else echo "changed=false" >> "$GITHUB_OUTPUT"; fi
-
   compare:
     name: Host vs Electron system proxy results
-    needs: electron-version
-    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.electron-version.outputs.changed == 'true') }}
     runs-on: macos-15
     timeout-minutes: 30
     env:
