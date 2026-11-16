@@ -20,6 +20,8 @@ export function createHostContextRecoveryWiring(deps: {
   publish: HostRecoveryPorts['publish'];
   pendingHandoff: HostRecoveryPorts['pendingHandoff'];
   log: HostRecoveryPorts['log'] & { warn(message: string): void };
+  /** The runtime selection's cold Pi window check, read at call time (it is created after the queue). */
+  rehydrateColdPiRuntimeForWindowVerification?: HostRecoveryPorts['rehydrateColdPiRuntimeForWindowVerification'];
 }) {
   const { openKinds } = deps;
   const graph = () => {
@@ -59,6 +61,7 @@ export function createHostContextRecoveryWiring(deps: {
       } } : {}),
       pendingHandoff: deps.pendingHandoff,
       log: deps.log,
+      rehydrateColdPiRuntimeForWindowVerification: deps.rehydrateColdPiRuntimeForWindowVerification,
     }, runtime),
   };
 }

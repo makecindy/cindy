@@ -54,6 +54,8 @@ export interface HostRecoveryPorts {
   readSessionExtraDirsFromDb: ReplayContextRecoveryPorts['readSessionExtraDirsFromDb'];
   readSessionWritableDirsFromDb: ReplayContextRecoveryPorts['readSessionWritableDirsFromDb'];
   resolveVerifiedWindow?: ContextOverflowRolloverDeps['resolveVerifiedWindow'];
+  /** A cold Pi runtime resumed only to read its window and usage (runtime-selection.ts, the desktop's binding). */
+  rehydrateColdPiRuntimeForWindowVerification?: ContextOverflowRolloverDeps['rehydrateColdPiRuntimeForWindowVerification'];
   /** Present only while oversized Codex history recovery is open (classifyCodexHistory). */
   codexHistory?: Pick<ClassifyCodexHistoryPorts, 'readCodexThreadStorageReadOnly' | 'classifyCodexHistoryOversized'>;
   /** Present only while Pi's unsupported request option recovery is open. */
@@ -112,9 +114,9 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
     // - a subscription account change that needs a native session handoff: the Host has no
     //   subscription account handoff before a send yet (release table, row 30), so none is reported.
     needsNativeSessionHandoff: undefined,
-    // - a cold Pi runtime started only to read its context for a smaller window: not bound yet, so
-    //   such a switch answers 'unknown-context' (release table, explicit ports pass, 2026-11-17).
-    rehydrateColdPiRuntimeForWindowVerification: undefined,
+    // A cold Pi runtime resumed only to read its context for a smaller window: the same binding the
+    // model change uses (register.ts binds one function into both, as here).
+    rehydrateColdPiRuntimeForWindowVerification: host.rehydrateColdPiRuntimeForWindowVerification,
     getSessionRow: readSession,
     classifyCodexHistory: host.codexHistory ? (threadId: string) => classifyCodexHistoryWithPorts({
       captureDataOwnerBroadcastScope, getCurrentDbClientSnapshot, isDataOwnerBroadcastScopeCurrent,

@@ -2770,7 +2770,7 @@ test('context recovery: two tasks recovering at shutdown share one wait limit', 
 const quiet = { info() {}, warn() {}, error() {} };
 // One Host runtime over a profile database: the input queue, its recovery rollover and the Host's
 // pending handoff registry (handoff-pending.ts), as main.ts assembles them.
-function assembledRuntime(t, db, overrides = {}) {
+function assembledRuntime(t, db, overrides = {}, recoveryHost = {}) {
   const runtimes = [];
   let h;
   const handoffs = createHostAgentHandoffPending({ getOwner: getCurrentDbClientSnapshot,
@@ -2786,7 +2786,7 @@ function assembledRuntime(t, db, overrides = {}) {
       return createHostContextRecoveryRollover({ getMaker: () => h.maker, persistMessage: db.persistMessage,
         publish: event => h.events.push(event), buildCreateOptsWithStderr: createSessionStderrOptions(quiet),
         readSessionExtraDirsFromDb: async () => [], readSessionWritableDirsFromDb: async () => [],
-        pendingHandoff: handoffs, log: quiet }, runtime);
+        pendingHandoff: handoffs, log: quiet, ...recoveryHost }, runtime);
     },
     ...overrides,
   });
@@ -2885,6 +2885,9 @@ async function modelChangeRuntime(t, { agent = 'claude-code' } = {}) {
     applyPendingAgentSwitch: (id, options) => { landings.push(id); return queueHooks.applyPendingAgentSwitch(id, options); },
     // As main.ts: the queue's owner is the current account's database.
     getOwner: getCurrentDbClientSnapshot,
+  }, {
+    // As main.ts: the context rollover uses the runtime selection's cold Pi window check.
+    rehydrateColdPiRuntimeForWindowVerification: id => selection.rehydrateColdPiRuntimeForWindowVerification(id),
   });
   // As Maker: a task's meta is its stored row (maker.ts getSessionMeta reads the session storage).
   h.maker.getSessionMeta = id => new OwnerSessionStorage({ db: () => getCurrentDbClientSnapshot().client }).get(id);
@@ -3130,6 +3133,31 @@ test('model change at send: a released Pi task resumes to check its window, then
   assert.equal(r.row('cold-pi').model, 'small');
   assert.equal(r.h.maker.sessions.get('cold-pi').options.model, 'small');
   assert.equal(r.selection.projectIntent('cold-pi') ?? null, null);
+});
+
+// Rule (register.ts binds the same cold Pi window check into the context rollover and the model
+// change): when the rollover is asked about a smaller window for a Pi task whose runtime is released
+// (the model change's own resume failed, or idle release came in between), it resumes the runtime to
+// read its window and usage instead of answering 'unknown-context'. Gap: the Host left the rollover's
+// port unbound (explicit ports pass, 2026-11-17).
+test('model change at send: the context rollover resumes a released Pi task to read its window', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t, { agent: 'pi' });
+  await r.createTask('cold-pi-rollover');
+  const started = [];
+  const create = r.h.maker.createSession.bind(r.h.maker);
+  r.h.maker.createSession = async opts => {
+    started.push({ model: opts.model, resumeSessionId: opts.resumeSessionId });
+    const session = await create(opts);
+    session.getUsageSnapshot = () => ({ tokenUsage: 0, contextTokens: 10_000, contextWindow: 200_000, costUsd: 0 });
+    return session;
+  };
+  await r.runTurn('cold-pi-rollover', 'cold-pi-rollover-1', { contextTokens: 10_000, contextWindow: 200_000 });
+  await r.h.maker.closeSession('cold-pi-rollover'); // idle release
+  const answer = await r.h.queue.contextRecoveryRollover().prepareModelWindowSwitch('cold-pi-rollover', {
+    contextWindow: SWITCH_WINDOWS.small, recheckTargetPressure: true });
+  assert.notEqual(answer, 'unknown-context');
+  assert.deepEqual(started.at(-1), { model: 'big', resumeSessionId: 'native-cold-pi-rollover-1' },
+    'the released runtime is resumed to read its window');
 });
 
 // Rule (sessionAgentSwitchHandler.ts applyPendingAgentSwitchIfIdle: a user's engine pick that fails

@@ -942,6 +942,7 @@ const contextRecovery = createHostContextRecoveryWiring({
   publish: event => eventHub.publish(event),
   pendingHandoff,
   log: createLogger('context-recovery'),
+  rehydrateColdPiRuntimeForWindowVerification: sessionId => runtimeSelection.rehydrateColdPiRuntimeForWindowVerification(sessionId),
 });
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,

@@ -596,6 +596,8 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     },
     onSessionClosed,
     /** Subscribes to a Maker's session-closed events (each session's own close); returns the unsubscribe. */
+    /** register.ts's cold Pi window check (createColdPiRehydrationBinding); the context rollover binds it too. */
+    rehydrateColdPiRuntimeForWindowVerification,
     attachMaker(target: Pick<Maker, 'on'>): () => void {
       return target.on(event => {
         if (event.type === 'session:closed') onSessionClosed(event.sessionId, event.session);
