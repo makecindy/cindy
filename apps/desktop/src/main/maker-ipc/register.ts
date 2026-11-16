@@ -5183,6 +5183,7 @@ const subscriptionAccountRecoveryDeps = {
 export async function prepareUnhealthySessionForSend(sessionId: string): Promise<boolean> {
   const switched = await prepareSubscriptionAccountForSend(sessionId, {
     ...subscriptionAccountRecoveryDeps,
+    resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
     rebuild: async (id, assertCurrent) => {
       await subscriptionAccountRecoveryDeps.rebuild(id, assertCurrent);
       agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
