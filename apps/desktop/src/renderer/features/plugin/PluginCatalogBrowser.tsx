@@ -220,7 +220,10 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
   const refreshFlight = useRef<{ cache: PluginBrowserCache; promise: Promise<void> } | null>(null);
   useEffect(() => {
     if (!visible && !prewarm) return;
+    let active = true;
+    const current = () => active && alive.current && cacheRef.current === cache;
     const refresh = async (options?: { force?: boolean; renewIcons?: boolean }) => {
+      if (!current()) return;
       if (refreshFlight.current?.cache === cache) return refreshFlight.current.promise;
       if (!cache.metadata || !options?.force && Date.now() - cache.refreshedAt < PLUGIN_CATALOG_REFRESH_MS) return;
       const flight = (async () => {
@@ -237,11 +240,13 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           // Rebuild off-screen. An invalid cursor restarts this bounded resident
           // window from the beginning; visible batches stay intact until ready.
           for (const index of [...cache.pages.keys()].sort((a, b) => a - b)) {
+            if (!current()) return;
             pages.set(index, await loader.current({ query: query.trim().slice(0, 100), scope,
               cursor: cache.cursors.get(index), limit: PLUGIN_PAGE_SIZE, excludeInstalled: true, counts: false }));
+            if (!current()) return;
           }
         } catch (error) {
-          if (extractIpcError(error)?.code !== 'PLUGIN_LIST_CHANGED') return;
+          if (!current() || extractIpcError(error)?.code !== 'PLUGIN_LIST_CHANGED') return;
           pages.clear(); rebuilt = true;
           anchor.current = scrollRef.current ? readPluginCatalogAnchor(scrollRef.current) : null;
           const viewport = visiblePages.current;
@@ -260,8 +265,10 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           // Walk only as far as the user had loaded, plus the failed next page.
           // Keep six batches resident while rebuilding cursor metadata.
           for (let index = 0; index <= cache.last + 1; index++) {
+            if (!current()) return;
             const page = await loader.current({ query: query.trim().slice(0, 100), scope,
               cursor, limit: PLUGIN_PAGE_SIZE, excludeInstalled: true, counts: false });
+            if (!current()) return;
             pages.set(index, page); cursor = page.nextCursor;
             rebuiltHasNext = cursor !== null;
             if (page.items.some(item => item.pluginId === anchor.current?.id)) anchorPage = index;
@@ -275,14 +282,16 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           const first = firstVisiblePage();
           const last = Math.min(first + visiblePages.current.last - visiblePages.current.first, rebuiltSizes.size - 1);
           for (let index = first; index <= last; index++) {
+            if (!current()) return;
             if (pages.has(index) || !rebuiltCursors.has(index)) continue;
             pages.set(index, await loader.current({ query: query.trim().slice(0, 100), scope,
               cursor: rebuiltCursors.get(index), limit: PLUGIN_PAGE_SIZE, excludeInstalled: true, counts: false }));
+            if (!current()) return;
             retainVisiblePages();
           }
           if (visiblePages.current !== viewport) anchor.current = scrollRef.current ? readPluginCatalogAnchor(scrollRef.current) : null;
         }
-        if (!alive.current || cacheRef.current !== cache) return;
+        if (!current()) return;
         if ([...pages.values()].some(page => page.unavailableReason)) return;
         let changed = cache.error !== null;
         if (rebuilt) {
@@ -352,7 +361,11 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
       if (cache.countsFlight || cache.countsKey !== countsKey || Date.now() - cache.countsAt >= PLUGIN_CATALOG_REFRESH_MS) void count();
       void refresh();
     }, query.trim() ? 250 : 0);
-    return () => { clearTimeout(timer); cache.refresh = undefined; };
+    return () => {
+      active = false;
+      clearTimeout(timer); cache.refresh = undefined;
+      if (refreshFlight.current?.cache === cache) refreshFlight.current = null;
+    };
   }, [cache, countsKey, query, scope, visible, prewarm, count, scrollRef]);
   const previousRevision = useRef(revision);
   useEffect(() => {

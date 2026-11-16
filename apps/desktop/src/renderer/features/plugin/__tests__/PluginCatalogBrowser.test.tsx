@@ -145,7 +145,8 @@ it('keeps the visible early batch resident through a failed and retried cursor r
   render(view());
   await screen.findByText('Tool 0');
   for (let index = 1; index <= 8; index++) {
-    act(() => intersections.forEach(callback => callback()));
+    await waitFor(() => expect(intersections.size).toBe(1));
+    await act(async () => intersections.forEach(callback => callback()));
     await waitFor(() => expect(cache.current.last).toBe(index));
   }
   act(() => readVisibleRange?.(0, 3));
@@ -164,6 +165,53 @@ it('keeps the visible early batch resident through a failed and retried cursor r
   expect(cache.current.hasNext).toBe(false);
   expect(screen.getByText('Tool 0')).toBeTruthy();
   expect(cache.current.cursors.get(1)).toBe('new:10');
+});
+
+// Unit / PR review G1: a pending first refresh page must not keep reading a
+// departed filter/search/tab. Existing cases only checked late publication,
+// missing the real Main/Device Link requests between pages and cursor rebuilds.
+it.each([
+  ['resident', 'scope'], ['rebuild', 'scope'], ['rejected', 'scope'],
+  ['resident', 'query'], ['resident', 'tab'], ['resident', 'unmount'],
+] as const)('stops an obsolete %s refresh after changing %s', async (phase, transition) => {
+  let refreshing = false, rebuilding = false, waiting = true;
+  let finish!: (value: PluginMarketPage) => void;
+  const load = vi.fn(async (input: PluginMarketQuery) => {
+    if (!input.counts && refreshing && input.scope === 'all' && !input.query) {
+      if (phase === 'rebuild' && !rebuilding) {
+        rebuilding = true;
+        throw new Error('[PLUGIN_LIST_CHANGED] catalog changed');
+      }
+      if (!input.cursor && waiting) {
+        waiting = false;
+        return new Promise<PluginMarketPage>((resolve, reject) => {
+          finish = value => phase === 'rejected' ? reject(new Error('[PLUGIN_LIST_CHANGED] catalog changed')) : resolve(value);
+        });
+      }
+    }
+    return page(Number(input.cursor ?? 0), 20);
+  });
+  const { cache, view } = fixture(load);
+  const mounted = render(view());
+  await screen.findByText('Tool 0');
+  await waitFor(() => expect(intersections.size).toBe(1));
+  await act(async () => intersections.forEach(callback => callback()));
+  await waitFor(() => expect(cache.current.last).toBe(1));
+  refreshing = true;
+  let refresh!: Promise<void>;
+  await act(async () => { refresh = cache.current.refresh!({ force: true }); });
+  expect(finish).toBeTypeOf('function');
+  if (transition === 'scope') {
+    mounted.rerender(view('', true, 'public'));
+    // Returning to the same warm cache must not revive the departed refresh.
+    mounted.rerender(view());
+  } else if (transition === 'query') mounted.rerender(view('changed'));
+  else if (transition === 'tab') mounted.rerender(view('', false));
+  else mounted.unmount();
+  const reads = load.mock.calls.filter(([input]) => !input.counts && input.scope === 'all').length;
+  await act(async () => { finish(page(0, 20)); await refresh; });
+  expect(load.mock.calls.filter(([input]) => !input.counts && input.scope === 'all')).toHaveLength(reads);
+  if (transition !== 'unmount') expect(screen.getByText('Tool 0')).toBeTruthy();
 });
 
 it('shows first-page cards without waiting for the independent count', async () => {

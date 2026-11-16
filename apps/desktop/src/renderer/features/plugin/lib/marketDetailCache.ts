@@ -23,12 +23,6 @@ function contentKey(detail: PluginMarketDetail | undefined): string {
   return JSON.stringify({ ...detail,
     usageStatistics: detail.usageStatistics ? { ...detail.usageStatistics, asOf: undefined } : undefined,
     icon: detail.icon ? { mimeType: detail.icon.mimeType, sha256: detail.icon.sha256, sizeBytes: detail.icon.sizeBytes } : null,
-    readme: detail.readme ? { ...detail.readme, images: Object.fromEntries(Object.entries(detail.readme.images).map(([path, url]) => {
-      // Server images are immutable package objects; only their signatures renew.
-      if (!url.startsWith('https://')) return [path, url];
-      const parsed = new URL(url);
-      return [path, `${parsed.origin}${parsed.pathname}`];
-    })) } : detail.readme,
   });
 }
 

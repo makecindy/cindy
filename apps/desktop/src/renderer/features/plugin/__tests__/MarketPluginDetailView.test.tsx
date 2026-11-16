@@ -99,6 +99,25 @@ describe('MarketPluginDetailView', () => {
     expect(marketDetailCacheFor('cache-owner-A/zh-CN').peek('0')).toBeUndefined();
     expect(marketDetailCacheFor('cache-owner-B/zh-CN').peek('0')).toBeUndefined();
   });
+  // Unit / PR review G2: README images have no digest in the renderer mapping.
+  // Existing icon-renewal tests miss a plugin without an icon whose signed
+  // README URL changes after expiry. Both opening and background reads must
+  // deliver that renewed address to the existing README component.
+  it.each(['open', 'background', 'prefetch'] as const)('renews signed README images on a stale %s read', async mode => {
+    const cache = marketDetailCacheFor(`readme-renewal-${mode}`);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    try {
+      const readme = { path: 'README.md', markdown: '![Guide](guide.png)', images: { 'guide.png': 'https://images.invalid/guide.png?signature=expired' } };
+      await cache.load(detail.pluginId, async () => ({ ...detail, readme }));
+      clock.mockReturnValue(41_000);
+      const renewed = { ...readme, images: { 'guide.png': 'https://images.invalid/guide.png?signature=renewed' } };
+      const result = await cache.load(detail.pluginId, async () => ({ ...detail, readme: renewed }), mode);
+      expect(result.readme?.images['guide.png']).toBe(renewed.images['guide.png']);
+      expect(cache.peek(detail.pluginId)?.readme).toBe(result.readme);
+      const unchanged = await cache.load(detail.pluginId, async () => ({ ...detail, readme: { ...renewed } }), 'background');
+      expect(unchanged).toBe(result);
+    } finally { clock.mockRestore(); }
+  });
   // Unit / plugin-page-ux-fix: only a pending IPC with a catalog summary exposes
   // the old whole-page wait; existing cases all pass a complete manifest.
   it('delays loading feedback, keeps identity nodes, and never presents unknown permissions as empty', () => {
