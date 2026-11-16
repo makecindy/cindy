@@ -162,3 +162,5 @@ Mobile 只对 `UI_MOCK_SHOWCASE_PROJECTS` 中的展示项目启用这套文件�
   `apps/mobile/scripts/export-realdata-visual-snapshot.mjs`，它导出的是敏感数据，按脚本
   里的限制使用。
 - PR 截图来自模拟数据时要写明，不能当作真实账号、真实 Agent 行为已验证的证据。
+
+空响应暂停回归场景 `ui-mock-silent-stop`（「空响应续跑暂停」）由两端共用，包含预算、频控、任务保护及两种派发失败的历史错误和尾部错误。主提示应保持中性，展开详情可见实际原因；点击诊断仅检查预填内容，不发送消息。

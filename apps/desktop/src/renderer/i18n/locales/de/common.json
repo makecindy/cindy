@@ -12973,7 +12973,7 @@
           "reasoningDominated": "Das Nachdenken hat den Großteil des Ausgabebudgets verbraucht, die Antwort ist daher möglicherweise unvollständig. Senke die Denkintensität oder komprimiere zuerst den Verlauf und mach dann weiter.",
           "generic": "Das Modell hat die maximale Ausgabelänge erreicht, diese Antwort ist daher möglicherweise unvollständig. Sende eine neue Nachricht, um fortzufahren. Passiert das wiederholt, senke die Denkintensität oder komprimiere zuerst den Verlauf.",
           "join": "{{usage}} {{guidance}}",
-          "silentStopExhausted": "Das Modell hat mehrmals hintereinander leere Antworten geliefert. Das automatische Fortsetzen ist pausiert."
+          "silentStopExhausted": "Eine leere Antwort wurde erkannt. Die automatische Fortsetzung ist pausiert."
         },
         "permission": {
           "autoReviewUnavailable": "Die automatische Prüfung wurde nicht abgeschlossen. Bestätige, ob diese Aktion erlaubt werden soll.",
@@ -19036,7 +19036,7 @@
       "steerFailed": "Steuerung fehlgeschlagen: {{message}}",
       "qrExpired": "QR-Code abgelaufen, bitte starte erneut",
       "registrationFailed": "Erstellung fehlgeschlagen, bitte versuche es später erneut",
-      "silentStopExhausted": "Das Modell hat wiederholt leere Antworten zurückgegeben; die automatische Fortsetzung ist pausiert. Klicke auf „Fortsetzen“, um die Aufgabe fortzusetzen.",
+      "silentStopExhausted": "Eine leere Antwort wurde erkannt. Die automatische Fortsetzung ist pausiert.",
       "executionResultUnavailable": "Das Ausführungsergebnis konnte nicht abgerufen werden. Die automatische Fortsetzung wurde gestoppt. Bitte den Assistenten, das vorhandene Ausführungsergebnis zu prüfen.",
       "outputLimit": "Das Modell hat sein Ausgabelimit erreicht. Diese Antwort ist möglicherweise unvollständig. Sende eine neue Nachricht, um fortzufahren. Wenn dies wiederholt auftritt, reduziere die Denkintensität oder komprimiere zuerst den Gesprächsverlauf.",
       "outputLimitReasoning": "Das Denken hat den Großteil des Ausgabebudgets dieser Anfrage verbraucht. Die Antwort ist möglicherweise unvollständig. Reduziere die Denkintensität oder komprimiere den Gesprächsverlauf, bevor du fortfährst.",

@@ -44,6 +44,26 @@ const clickText = (text: string) => {
   expect(button).toBeTruthy(); button!.click();
 };
 
+// #10854, unit: live and persisted mobile errors share the known-reason copy;
+// the host cause stays available to diagnosis instead of becoming a false claim.
+it.each(['live', 'tail'] as const)('keeps silent-stop %s copy neutral and preserves diagnosis', async surface => {
+  await i18n.changeLanguage('en');
+  const message = '检测到空响应，自动续跑已暂停。自动续跑请求未派发。\nsilentStopFailureCause=dispatch-not-accepted';
+  const reason = 'silent-stop-exhausted';
+  const errorRow = { ...row(message), content: JSON.stringify({ message, reason, silentStopFailureCause: 'dispatch-not-accepted' }) };
+  const state = resolveSessionTailBanner({ messages: [errorRow], session: null, projection: { error: null, credentialSwitchWait: null }, isSessionStreaming: false, continuationInFlight: false, sessionMetadataSyncedForConnection: true, interruptAcked: false, hiddenErrorClientIds: new Set() });
+  const diagnose = vi.fn();
+  await act(async () => root.render(surface === 'live'
+    ? <InlineQueueSection projection={{ error: message, errorReason: reason } as InputProjection} onRetryError={vi.fn()} onContinueAfterError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} onDiagnose={diagnose} />
+    : <SessionTailBanner state={state!} onContinue={vi.fn()} onDismiss={vi.fn()} onDiagnose={diagnose} />));
+  expect(host.textContent).toContain('An empty response was detected. Automatic continuation is paused.');
+  expect(host.textContent).not.toContain('dispatch-not-accepted');
+  await act(async () => clickText(i18n.t('session.tail.showErrorDetails')));
+  expect(host.textContent).toContain('silentStopFailureCause=dispatch-not-accepted');
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="agentError.diagnose"]')!.click());
+  expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({ details: message, reason }));
+});
+
 // 诊断入口只在展开详情后出现；预填给新任务的提示带出错任务链接，且与详情同样脱敏。
 it('offers diagnosis after expanding details with a redacted prompt for the failed session', async () => {
   await i18n.changeLanguage('en');

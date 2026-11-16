@@ -59,7 +59,7 @@ export type UiMockMessage =
   | { role: 'user'; text: string }
   | { role: 'assistant'; text: string }
   | { role: 'thinking'; text: string }
-  | { role: 'error'; text: string }
+  | { role: 'error'; text: string; reason?: string; silentStopFailureCause?: string }
   | { role: 'tool'; name: string; input: Record<string, unknown>; result: string }
   /** New task "Let a plugin choose": the one-line note under the first message. */
   | { role: 'plugin-route'; note: Record<string, unknown> };
@@ -132,6 +132,27 @@ const RICH_ANSWER = [
 export const UI_MOCK_TASKS: readonly UiMockTask[] = [
   ...UI_MOCK_SHOWCASE_TASKS,
   UI_MOCK_BIDI_TASK,
+  {
+    id: 'ui-mock-silent-stop',
+    title: '空响应续跑暂停',
+    project: 'cindy-demo',
+    agentKind: 'codex', model: 'gpt-6-astra', effort: 'xhigh',
+    status: 'active', source: 'desktop', minutesAgo: 0,
+    messages: [
+      { role: 'user', text: '检查空响应后的暂停提示及诊断详情。' },
+      { role: 'assistant', text: '上一轮已正常完成，以下为不同停止原因的模拟记录。' },
+      ...[
+        ['budget', '本次自动续跑次数已用完。'],
+        ['rate-limit', '距上次自动续跑时间过短，已触发频率保护。'],
+        ['session-breaker', '本任务累计自动续跑次数已达上限。'],
+        ['dispatch-error', '派发自动续跑请求时发生错误。'],
+        ['dispatch-not-accepted', '自动续跑请求未派发。'],
+      ].map(([cause, detail]): UiMockMessage => ({
+        role: 'error', reason: 'silent-stop-exhausted', silentStopFailureCause: cause,
+        text: `检测到空响应，自动续跑已暂停。${detail}\nsilentStopFailureCause=${cause}`,
+      })),
+    ],
+  },
   {
     id: 'ui-mock-remote-communication',
     title: '远程通信错误指引',
@@ -561,7 +582,11 @@ function taskMessageRows(task: UiMockTask, endsAt: number): UiMockMessageRow[] {
         push('thinking', { kind: 'thinking', text: message.text, durationMs: 1_500, isRedacted: false });
         break;
       case 'error':
-        push('error', { message: message.text });
+        push('error', {
+          message: message.text,
+          ...(message.reason ? { reason: message.reason } : {}),
+          ...(message.silentStopFailureCause ? { silentStopFailureCause: message.silentStopFailureCause } : {}),
+        });
         break;
       case 'tool': {
         const toolUseId = `${UI_MOCK_ID_PREFIX}${task.id}-tool-${index + 1}`;

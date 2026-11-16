@@ -12973,7 +12973,7 @@
           "reasoningDominated": "Thinking used up most of the output budget, so the reply may be incomplete. Lower the reasoning effort, or compact the conversation first, then continue.",
           "generic": "The model hit its output length limit, so this reply may be incomplete. Send a new message to continue. If it keeps happening, lower the reasoning effort or compact the conversation first.",
           "join": "{{usage}} {{guidance}}",
-          "silentStopExhausted": "The model returned empty responses several times in a row, so automatic continuation is paused."
+          "silentStopExhausted": "An empty response was detected. Automatic continuation is paused."
         },
         "permission": {
           "autoReviewUnavailable": "Auto-review didn't finish. Confirm whether to allow this action.",
@@ -19036,7 +19036,7 @@
       "steerFailed": "Steer failed: {{message}}",
       "qrExpired": "QR code expired. Start again.",
       "registrationFailed": "Creation failed. Try again later.",
-      "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click “Continue” to resume the task.",
+      "silentStopExhausted": "An empty response was detected. Automatic continuation is paused.",
       "executionResultUnavailable": "Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.",
       "outputLimit": "The model reached its output limit, so this response may be incomplete. Send a new message to continue; if this repeats, lower the reasoning effort or compact the conversation history first.",
       "outputLimitReasoning": "Reasoning consumed most of this request’s output budget, so the response may be incomplete. Lower the reasoning effort or compact the conversation history before continuing.",

@@ -638,6 +638,7 @@
     "dismissNotice": "Fechar aviso",
     "ignore": "Ignorar",
     "executionResultUnavailable": "Não foi possível obter o resultado da execução. A continuação automática foi interrompida. Peça ao assistente para verificar o resultado da execução existente.",
+    "silentStopExhausted": "Foi detectada uma resposta vazia. A continuação automática foi pausada.",
     "outputLimit": "O modelo atingiu o limite de saída, então esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se isso se repetir, reduza o esforço de raciocínio ou compacte primeiro o histórico da conversa.",
     "outputLimitReasoning": "O raciocínio consumiu a maior parte do orçamento de saída desta solicitação, então a resposta pode estar incompleta. Reduza o esforço de raciocínio ou compacte o histórico da conversa antes de continuar.",
     "outputLimitUsage": "Esta solicitação ao modelo usou {{outputTokens}} tokens de saída, incluindo {{reasoningTokens}} tokens de raciocínio.",
