@@ -44,6 +44,19 @@ describe('MiMo native Responses search compatibility', () => {
       .toEqual({ tools: [fn], tool_choice: { type: 'allowed_tools', mode: 'auto', tools: [fn] } });
   });
 
+  it.each([false, true])('allows optional search-only choices without widening function access (functions=%s)', withFunctions => {
+    const fn = { type: 'function', name: 'read_file' };
+    const body = { tools: [...(withFunctions ? [fn] : []), { type: 'web_search' }],
+      tool_choice: { type: 'allowed_tools', mode: 'auto', tools: [{ type: 'web_search' }] } };
+    expect(normalizeProviderRequest(body, route)).toEqual({ ...(withFunctions ? { tools: [fn] } : {}), tool_choice: 'none' });
+    expect(body.tool_choice.mode).toBe('auto');
+  });
+
+  it('rejects a required allowed list containing only hosted search', () => {
+    expect(() => normalizeProviderRequest({ tools: [{ type: 'function', name: 'read_file' }, { type: 'web_search' }],
+      tool_choice: { type: 'allowed_tools', mode: 'required', tools: [{ type: 'web_search' }] } }, route)).toThrow(/allowed hosted/);
+  });
+
   it.each([
     { upstreamBase: 'https://api.openai.com/v1' },
     { upstreamBase: 'https://proxy.example/v1' },

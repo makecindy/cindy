@@ -38,8 +38,9 @@ function normalizeMimoResponsesWebSearch(body: Record<string, unknown>): Record<
   if (isPlainObject(choice) && choice.type === 'allowed_tools' && Array.isArray(choice.tools)) {
     const allowed = choice.tools.filter(tool => !isHostedSearch(tool));
     if (allowed.length !== choice.tools.length) {
-      if (!allowed.length) throw new Error('MiMo Responses cannot satisfy allowed hosted web search');
-      change().tool_choice = { ...choice, tools: allowed };
+      if (allowed.length) change().tool_choice = { ...choice, tools: allowed };
+      else if (choice.mode === 'auto') change().tool_choice = 'none';
+      else throw new Error('MiMo Responses cannot satisfy allowed hosted web search');
     }
   }
   if (Array.isArray(body.input)) {
