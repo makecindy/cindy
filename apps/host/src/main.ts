@@ -155,12 +155,16 @@ import { createHostAttachments } from './attachments.js';
 import { createSubagentReadService } from '../../desktop/src/main/localDb/ipc/subagentReadService.js';
 import { configureUserDataDir, configureAppDataDir, getUserDataDir } from '../../desktop/src/main/userDataPath.js';
 import { botSessionLinks, messages as messageTable, projectAliases as projectAliasTable, sessions as sessionTable } from '../../desktop/src/main/localDb/schema.js';
+import { startHostSystemProxySettings } from './outbound-proxy.ts';
 import { and, eq, isNull } from 'drizzle-orm';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { isDefaultDraftSessionTitle, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 
 const DEFAULT_VOICE_INPUT_SETTINGS = getDefaultVoiceInputSettings();
 configureGhostSnapshotProcess(createSnapshotProcess);
+// Outbound requests (sign-in included) follow the system proxy as on the desktop: on macOS the
+// static system proxy settings (release table row 28, 28b); proxy environment variables still win.
+startHostSystemProxySettings();
 const VALID_EFFORTS: Record<string, true> = {
   minimal: true, low: true, medium: true, high: true, xhigh: true, max: true, ultra: true,
 };

@@ -1,8 +1,8 @@
 import { createOutboundTransport } from '../../desktop/src/main/maker-host/outbound-fetch.js';
 import { createLogger } from '../../desktop/src/main/logger.js';
 /** Headless network adapter: the desktop's outbound proxy resolver (proxy environment variables
- * first; no system proxy or PAC on the Host yet, outbound-proxy.ts), with the same HTTP CONNECT /
- * SOCKS implementation used by desktop. */
+ * first, then the macOS static system proxy settings; no PAC on the Host yet, outbound-proxy.ts), with
+ * the same HTTP CONNECT / SOCKS implementation used by desktop. */
 import { isLoopbackHostname, parseOutboundProxyUrl,
   Socks5HttpAgent, Socks5HttpsAgent, TunnelingHttpsAgent } from '@cindy/anthropic-compat-proxy';
 import { resolveHostOutboundProxy } from './outbound-proxy.ts';
