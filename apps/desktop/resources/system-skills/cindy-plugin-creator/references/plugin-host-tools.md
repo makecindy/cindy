@@ -148,13 +148,13 @@ await cindy.host.call('cindy_helper', 'get_provider_group', {
 | `identity` | 官方 CLI 返回的登录身份，可能是登录邮箱或账号名，依供应商和当前可读状态而定 |
 | `directory` | 该账号在这台电脑上的 CLI 配置目录路径；知道路径不授予读取文件或凭据的权限 |
 | `accountKey` | 可选的已验证账号/工作区摘要，用于识别相同额度归属；不是密钥 |
-| `plan`、`legacy` | 已知订阅套餐及是否沿用旧 Codex 连接 |
+| `plan`、`planTier`、`planType`、`legacy` | 已知订阅套餐、上游原套餐档位（Claude planTier／Codex planType）及是否沿用旧 Codex 连接；缺失时不推测 |
 | `loginExpiresAt` | 可选的 Claude CLI 登录到期日期，仅作提示 |
 | `codexResetProviderId` | 现有 Codex 重置目标标识；读取此标识不授予重置或修改账号的能力 |
 | `paused`、`limit`、`limitSet`、`weight` | 现有暂停、并发配置与权重；不等于插件分配给成员的预算 |
 | `status`、`authIssue`、`running` | ready/signed-out/unavailable/limited 状态、已有诊断代码与运行数量，不含 CLI 原文 |
 | `usage.claude` | 原 Claude 快照中的已知窗口、比例、重置时间与来源等状态 |
-| `usage.codex.buckets`、`usage.codex.credits` | 原 Codex 各额度桶、窗口、更新时间与已知余额状态，保持原类型 |
+| `usage.codex.planType`、`usage.codex.buckets`、`usage.codex.credits` | 原 Codex 套餐档位（桶内也可有 planType）、各额度桶、窗口、更新时间与已知余额状态，保持原类型 |
 
 宿主原类型中的 `boundAccountId` 只在显式 taskId 读取时出现，`defaultAdded` 只用于 preview；本插件 read 调用不提供
 taskId 或 preview，因此不会为插件创造任务绑定。`lastConfirmedIdentity`、`reloginIdentity` 不在账号视图里。
