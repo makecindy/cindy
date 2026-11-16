@@ -390,3 +390,17 @@ test('close convergence: after the owner runtime unsubscribes, a close is not se
   assert.deepEqual(f.seen(), []);
   assert.equal(f.remembered(session.id), undefined);
 });
+
+// Rule: the Host refuses a task whose Agent runs on another computer with its remote execution refusal
+// (send-preflight.ts assertHostTaskExecutionSupported: UNSUPPORTED_CAPABILITY), where the desktop hands
+// the change to that computer (handleSetModel → applyAgentDeviceRuntimeSelection). Gap: the Host's
+// binding threw a plain error, answered as an untyped 500. Such a row reaches the Host by migration.
+test('model change: a task whose Agent runs on another computer is refused as remote execution, with nothing changed', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await f.task('on-device');
+  await f.database.drizzle.update(sessions).set({ agentDeviceId: 'other-computer' }).where(eq(sessions.id, 'on-device'));
+  await assert.rejects(f.update('on-device', { model: 'small' }), error =>
+    error.code === 'UNSUPPORTED_CAPABILITY' && /remote execution/.test(error.message));
+  assert.equal((await f.row('on-device')).model, 'big');
+  assert.equal(intentOf(f), undefined);
+});

@@ -150,7 +150,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   const assertModelRouteUsable: SessionRuntimeSelectionPorts['assertModelRouteUsable'] =
     (agent, model, providerId, remoteHostId, unavailableCode) => assertModelRouteUsableWith({
       // The Host refuses SSH tasks before any of this runs (send-preflight.ts).
-      listSshCodexProviders: async () => { throw new Error('Host does not run SSH tasks'); },
+      listSshCodexProviders: async () => throwIpcError('UNSUPPORTED_CAPABILITY', 'Host does not yet support remote execution'),
       verdictForModelRoute,
     }, agent, model, providerId, remoteHostId, unavailableCode);
   const { broadcastSessionRuntimeProjection } = createSessionRuntimeProjection({ broadcastSessionPatched });
@@ -352,7 +352,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     },
     canApplyAutomaticRuntimeSelection,
     // Tasks whose Agent runs on another computer are refused on the Host (send-preflight.ts).
-    applyAgentDeviceRuntimeSelection: async () => { throw new Error('Host does not run tasks on another computer'); },
+    applyAgentDeviceRuntimeSelection: async () => throwIpcError('UNSUPPORTED_CAPABILITY', 'Host does not yet support remote execution'),
     assertModelRouteUsable,
     agentSwitchDeps,
     resolvePendingRuntimeAxisPatch,
@@ -386,7 +386,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     getDesktopProviderService: providerService,
     resolveConfiguredContextWindow: deps.resolveConfiguredContextWindow,
     readStoredSessionContextWindowBudget: deps.readStoredSessionContextWindowBudget,
-    listSshCodexProviders: async () => { throw new Error('Host does not run SSH tasks'); },
+    listSshCodexProviders: async () => throwIpcError('UNSUPPORTED_CAPABILITY', 'Host does not yet support remote execution'),
     getCodexProxyAuthInjectionState: () => deps.codexProxyAuthInjectionState(),
     recordSessionContextSnapshot: recordHostContextSnapshot,
   });
