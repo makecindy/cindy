@@ -7,6 +7,7 @@ import ts from 'typescript';
 import { ContextSheet } from '@/session/ContextSheet.ios';
 import { ContextSheetMediaAddButton, useContextSheetMediaSelection } from '@/session/ContextSheetMediaSelection';
 import { RecentPhotosStrip } from '@/session/ContextSheetMediaViews';
+import { contextSheetMediaUploadCandidates } from '@/session/contextSheetMediaUpload';
 
 // Regression: selecting a recent photo focused the composer while the native
 // sheet was dismissing, leaving a focused WebView without a working keyboard.
@@ -49,6 +50,8 @@ vi.mock('@/theme', () => ({
   fontWeight: {}, iconSize: {}, iconStroke: {}, lineHeight: {}, radius: {}, spacing: {}, typeScale: {},
   useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}),
 }));
+// Only reached when an upload starts, which these cases never do; the real module loads i18n.
+vi.mock('@/session/mobileImageAttachment', () => ({ buildMobileImageAttachmentCandidate: vi.fn() }));
 vi.mock('@/session/useContextSheetMediaAssets', () => ({
   useContextSheetMediaAssets: () => ({ status: 'ready', assets: [
     { id: 'screenshot', uri: 'ph://screenshot', filename: 'screen.png' },
@@ -121,6 +124,7 @@ function setup(pendingCount = 0) {
   const bindings = {
     mediaTapAcceptedRef: { current: false }, mediaAssetAttachments: {}, uploadingMediaAssetIds: new Set(),
     attachments: [], getPendingUploadCount: () => pendingCount, MOBILE_MAX_ATTACHMENTS: 20, t: (key: string) => key,
+    contextSheetMediaUploadCandidates,
     setAttachmentError: vi.fn(), enqueueUploads: vi.fn(), auth: { getAccessToken: () => 'mock' },
     setContextSheetOpen: vi.fn(), requestAnimationFrame: (callback: () => void) => frames.push(callback),
     composerInputRef: { current: {
@@ -186,9 +190,13 @@ it('keeps circle-picked photos in the sheet until its bottom button adds them to
   expect(screen.bindings.enqueueUploads).not.toHaveBeenCalled();
   expect(screen.events).toEqual([]);
   screen.addPicked();
-  expect(screen.bindings.enqueueUploads).toHaveBeenCalledExactlyOnceWith(
-    [expect.objectContaining({ sourceId: 'other' }), expect.objectContaining({ sourceId: 'screenshot' })],
-    expect.anything());
+  // The picked order travels with the uploads: they run two at a time and may finish in any
+  // order, and the tray puts them back by this index (PR #10729 review).
+  const [candidates] = screen.bindings.enqueueUploads.mock.calls[0];
+  expect(candidates.map((item: any) => [item.sourceId, item.incomingShareOrder.index]))
+    .toEqual([['other', 0], ['screenshot', 1]]);
+  expect(new Set(candidates.map((item: any) => item.incomingShareOrder.batchId)).size).toBe(1);
+  expect(screen.bindings.enqueueUploads).toHaveBeenCalledOnce();
   expect(screen.events).toEqual(['close']);
 });
 

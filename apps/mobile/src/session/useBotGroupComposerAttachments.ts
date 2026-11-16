@@ -15,13 +15,13 @@ import { useTranslation } from 'react-i18next';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useAuth } from '@/auth/AuthContext';
 import { MOBILE_MAX_ATTACHMENTS } from './attachments';
+import { contextSheetMediaUploadCandidates } from './contextSheetMediaUpload';
 import type { MobileMessageGalleryImage } from './messageGallery';
 import { buildMediaPayload } from './messagePayload';
 import { discardMobileUploadedAttachment } from './mobileAttachmentUpload';
-import { buildMobileImageAttachmentCandidate } from './mobileImageAttachment';
 import { isComposerPastedImageUri } from './pastedImageAttachment';
 import type { RemoteSerializedAttachment } from './types';
-import { resolveContextSheetMediaAssetForUpload, type ContextSheetMediaAsset } from './useContextSheetMediaAssets';
+import type { ContextSheetMediaAsset } from './useContextSheetMediaAssets';
 import { useMobileLocalAttachments, type UseMobileLocalAttachmentsOptions } from './useMobileLocalAttachments';
 
 export function useBotGroupComposerAttachments({ deviceId, upload, onPicked }: {
@@ -53,7 +53,9 @@ export function useBotGroupComposerAttachments({ deviceId, upload, onPicked }: {
     getAccessToken: () => getAccessTokenRef.current(),
     getAttachmentCount: () => attachmentsRef.current.length,
     onUploaded: (attachment, candidate) => {
-      attachmentsRef.current = [...attachmentsRef.current, attachment];
+      // Uploads run two at a time: photos added together go back to the order they were picked in,
+      // not the order they finished uploading; everything else is appended.
+      attachmentsRef.current = local.insertUploadedAttachment(attachmentsRef.current, attachment);
       if (candidate.kind === 'image') setPreviews((current) => ({ ...current, [attachment.id]: candidate.uri }));
       const sourceId = candidate.sourceId;
       if (sourceId) setMediaAssetAttachments((current) => ({ ...current, [sourceId]: attachment.id }));
@@ -147,26 +149,8 @@ export function useBotGroupComposerAttachments({ deviceId, upload, onPicked }: {
     }
     mediaTapAcceptedRef.current = true;
     setError(null);
-    enqueueUploads(fresh.map((asset) => ({
-      kind: 'image' as const,
-      uri: asset.uri,
-      name: asset.filename,
-      size: 0,
-      sourceId: asset.id,
-      resolve: async () => {
-        const resolved = await resolveContextSheetMediaAssetForUpload(asset);
-        const candidate = buildMobileImageAttachmentCandidate({ fileName: resolved.filename, uri: resolved.uri }, 0);
-        return {
-          uri: candidate.uri,
-          name: candidate.name,
-          mimeType: candidate.mimeType,
-          width: resolved.width,
-          height: resolved.height,
-          // HEIC was already converted and resized while resolving.
-          skipPreprocess: resolved.optimized === true,
-        };
-      },
-    })), { token: getAccessTokenRef.current() });
+    // The candidates carry the order the photos were picked in (see onUploaded above).
+    enqueueUploads(contextSheetMediaUploadCandidates(fresh), { token: getAccessTokenRef.current() });
     onPickedRef.current();
   }, [busyAssetIds, enqueueUploads, getRemainingSlots, mediaAssetAttachments, reportLimit]);
   const toggleMediaAsset = useCallback((asset: ContextSheetMediaAsset) => addMediaAssets([asset]), [addMediaAssets]);
