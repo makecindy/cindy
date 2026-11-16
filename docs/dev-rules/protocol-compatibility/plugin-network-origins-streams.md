@@ -10,7 +10,7 @@
   localhost 及其子域；公网与普通主机名明文来源拒绝。Desktop main 与 Node Host 共用
   GhostManager 在安装/更新及随包批准时做早拦截；plugin-protocol 只解析格式、保持零运行依赖。
   运行时按每次请求和每一跳 URL 强制复用现有分类器、不查 DNS；Host 身份与动态连接边界不变。
-  插件策略另拒绝 `169.254.169.254`（既有 IP 规范化）及现有云元数据判据覆盖的
+  插件策略另拒绝 `169.254.169.254`、腾讯云 `169.254.0.23`（既有 IP 规范化及映射支持）和现有云元数据判据覆盖的
   `100.100.100.200`、`fd00:ec2::254` 和嵌入形式，包含 HTTPS/WSS；声明/批准及每跳均返回
   原 `NETWORK_INSECURE_ORIGIN`。不修改共享分类器、Browser direct 或其他私网/link-local 范围。
   无新 device-link 帧，官方与自建中转无需升级；网络仍在执行 Host 发起。

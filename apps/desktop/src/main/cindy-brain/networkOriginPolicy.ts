@@ -2,9 +2,10 @@ import { isPrivateOrLoopbackIpAddress, isLoopbackHost, isCloudMetadataIpAddress,
 import type { GhostManifest } from '../../shared/ghost.js';
 
 function cloudMetadataRejection(host: string): string | undefined {
-  // The shared policy classifies 169.254/16 as link-local; exclude only this
-  // endpoint, preserving the remaining link-local range and Browser policy.
-  if (normalizeIpAddress(host) === '169.254.169.254' || isCloudMetadataIpAddress(host))
+  // The shared policy classifies 169.254/16 as link-local; exclude only these
+  // metadata endpoints, preserving the remaining range and Browser policy.
+  const ip = normalizeIpAddress(host);
+  if (ip === '169.254.169.254' || ip === '169.254.0.23' || isCloudMetadataIpAddress(host))
     return '插件网络禁止访问云元数据地址';
   return undefined;
 }

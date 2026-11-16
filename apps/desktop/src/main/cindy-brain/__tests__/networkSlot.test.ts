@@ -151,7 +151,10 @@ const BRAVE_URL = 'https://api.search.brave.com/res/v1/web/search?q=hi';
 // the same Host policy is used by Desktop and Node, without external requests.
 describe('plugin cloud metadata boundary', () => {
   it.each(['http://169.254.169.254', 'http://100.100.100.200', 'http://[fd00:ec2::254]',
-    'https://169.254.169.254', 'https://[::ffff:6464:64c8]', 'https://[64:ff9b::6464:64c8]'])
+    'https://169.254.169.254', 'https://[::ffff:6464:64c8]', 'https://[64:ff9b::6464:64c8]',
+    // #10130 / 4581724529: Tencent's documented metadata endpoint was not
+    // covered by the three existing literals. Same unit entry/hop matrix.
+    'http://169.254.0.23', 'https://169.254.0.23', 'http://[::ffff:a9fe:17]'])
     ('rejects initial, redirected and WebSocket metadata origin %s', async origin => {
       const start = 'https://start.example.test';
       const wsOrigin = origin.replace(/^http/, 'ws');

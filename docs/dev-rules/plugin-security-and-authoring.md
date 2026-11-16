@@ -688,7 +688,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   plugin-protocol 的 manifest 解析保持零运行依赖，仅检查格式；真正强制边界在每次派发与每一跳，
   同步复用现有 net-policy/loopback 分类器、不查 DNS。`http://gitlab.internal` 等内网主机名须 HTTPS。
   插件网络统一拒绝 URL 中的云元数据字面量，不因 HTTPS/WSS 或来源批准而放行：
-  `169.254.169.254`（复用既有 IP 规范化）及现有 `isCloudMetadataIpAddress` 覆盖的
+  `169.254.169.254`、腾讯云 `169.254.0.23`（复用既有 IP 规范化及映射支持）和现有 `isCloudMetadataIpAddress` 覆盖的
   `100.100.100.200`、`fd00:ec2::254` 和嵌入形式。安装/批准和运行时每跳使用同一插件策略，
   返回既有 `NETWORK_INSECURE_ORIGIN`；其他私网、CGNAT、ULA 和 link-local 范围不变。
   不改共享云元数据分类器或 Browser direct 策略，不增加 DNS 解析或跨请求缓存。

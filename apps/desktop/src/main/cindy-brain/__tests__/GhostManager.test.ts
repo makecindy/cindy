@@ -121,7 +121,10 @@ function goodManifest(id = 'hello'): Record<string, unknown> {
 // literals, including TLS declarations and existing embedded-IP forms.
 it.each(['http://public.example:8080', 'ws://public.example:8080', 'http://gitlab.internal:8080',
   'http://169.254.169.254', 'https://100.100.100.200', 'wss://[fd00:ec2::254]',
-  'https://169.254.169.254', 'https://[::ffff:6464:64c8]', 'https://[64:ff9b::6464:64c8]'])
+  'https://169.254.169.254', 'https://[::ffff:6464:64c8]', 'https://[64:ff9b::6464:64c8]',
+  // #10130 / 4581724529: installation and update must reject this exact
+  // additional metadata literal without disabling ordinary link-local URLs.
+  'http://169.254.0.23', 'https://169.254.0.23', 'http://[::ffff:a9fe:17]'])
   ('rejects unsafe origin %s at inspect, install and update before replacing old approval', async origin => {
     const id = 'network-policy';
     const safe = { ...goodManifest(id), slots: ['tool', 'network'], network: { hosts: ['api.example.com'] } };
