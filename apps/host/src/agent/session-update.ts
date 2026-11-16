@@ -7,6 +7,7 @@ import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import { assertSessionContextWindowBudgetPatch } from '../../../desktop/src/main/localDb/sessionContextWindowBudgetPatch.js';
 import { isSessionSettingsOnlyPatch } from '../../../desktop/src/main/localDb/sessionSettingsOnlyPatch.ts';
 import { upsertRecentWorkdir } from '../../../desktop/src/main/localDb/ipc/recentWorkdirsCore.ts';
+import { cleanupSessionRuntimeForTerminalStatus } from '../../../desktop/src/main/localDb/sessionRuntimeCleanup.ts';
 import {
   assertReviewSessionPatchAllowed,
   assertSessionWorkspaceKindPatch,
@@ -153,6 +154,9 @@ export function createHostSessionUpdate(deps: {
       .where(eq(sessionTable.id, sessionId)).limit(1);
     const row = rows[0];
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
+    // As patchSessionMetaInDb, under the task's route lock (main.ts): an archive clears the task's runtime
+    // override and axes (the runtime cleanup bindHostSessionRuntimeHooks installs); other statuses do nothing.
+    cleanupSessionRuntimeForTerminalStatus(sessionId, patch.status);
     await recordRecentWorkdirForMove({
       projectTargetChanged: patch.workspaceKind !== undefined || patch.workingDir !== undefined,
       row, dbClient, ownerScope: null,

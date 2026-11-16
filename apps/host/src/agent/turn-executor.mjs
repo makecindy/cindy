@@ -887,6 +887,8 @@ export function createTurnExecutor(deps) {
       bootstrapSession: transactionDeps.bootstrapSession,
       broadcastSessionCreated: transactionDeps.broadcastSessionCreated,
     },
+    /** Forgets a task's working-directory recovery at its archive or delete (working-directory.ts). */
+    discardWorkingDirectoryRecovery: id => workingDirectory.discardWorkingDirectoryRecovery(id),
     /** The engine of a task as its message persistence knows it (the desktop's getSessionDbAgentKind). */
     sessionDbAgentKind: id => histories.get(id)?.getSessionDbAgentKind(id) ?? null,
     /** Rows of a task's turn not in the database yet, as the history view shows them (the desktop's

@@ -73,6 +73,7 @@ import { createHostReviewContextResolver } from './agent/review-context.js';
 import { createHostGitSnapshot, type HostGitSnapshot } from './agent/git-snapshot.js';
 import { removeTurnChangeSetsForSession } from '../../desktop/src/main/turn-change-set/store.js';
 import { removeSessionModelInterface } from '../../desktop/src/main/maker-host/session-model-interface.js';
+import { cleanupSessionRuntimeForTerminalStatus } from '../../desktop/src/main/localDb/sessionRuntimeCleanup.js';
 import { reconcileSavepointRefsForDeletedSessions } from '../../desktop/src/main/git-snapshot/savepointCleanup.js';
 import { createHostMcpRuntime } from './agent/mcp-runtime.js';
 import { createHostAgentAuth } from './agent/auth-service.js';
@@ -1548,6 +1549,9 @@ const serverDeps = {
     await inputQueue.disposeSession(sessionId);
     runtimeSelection.clearIntent(sessionId);
     await sessionStorage.delete(sessionId);
+    // As the desktop's status writers, under the task's route lock: a deleted task's runtime override and
+    // axes go (the runtime cleanup bindHostSessionRuntimeHooks installs).
+    cleanupSessionRuntimeForTerminalStatus(sessionId, 'deleted');
     // Desktop cleanup for a deleted task (localDb/ipc/sessions.ts cleanupSessionTerminalArtifacts).
     try { removeSessionModelInterface(sessionId); } catch (error) {
       hostLog.warn('session interface snapshot cleanup failed', { sessionId, error: String(error) });

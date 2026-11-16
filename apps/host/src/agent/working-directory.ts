@@ -86,5 +86,7 @@ export function createHostWorkingDirectory(deps: {
       path.dirname(path.resolve(dir)) === path.join(root, 'worktree-recovery')),
     peekWorkingDirectoryRecoveryNote: (sessionId: string, workingDir: string) => recovery.peek(sessionId, workingDir),
     consumeWorkingDirectoryRecoveryNote: (sessionId: string, note: string) => recovery.consume(sessionId, note),
+    /** At a task's archive or delete (the runtime cleanup, as register.ts's workingDirectoryRecovery.discard). */
+    discardWorkingDirectoryRecovery: (sessionId: string) => recovery.discard(sessionId),
   };
 }

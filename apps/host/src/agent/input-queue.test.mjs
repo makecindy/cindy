@@ -44,6 +44,8 @@ import { createHostProviderExecutionCheck } from './send-preflight.ts';
 import { bindHostSessionRuntimeHooks, createHostRuntimeSelection, hostRuntimeSelectionQueueHooks, HOST_RUNTIME_SELECTION_QUEUE_MEMBERS, HOST_RUNTIME_START_PORTS } from './runtime-selection.ts';
 import { acceptSessionRuntimeMutation } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
 import { readHostSession } from '../session-reads.ts';
+import { createHostSessionUpdate } from './session-update.ts';
+import { createHostTaskRestore } from './task-restore.ts';
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from '../../../desktop/src/main/maker-ipc/sessionContextWindowBudgetState.js';
 import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
@@ -5143,6 +5145,29 @@ test('runtime override: with no runtime change a task read is its row, in the de
     runtimeGeneration: 0, runtimeBaseline: SAVED_ROUTE, runtimeEffective: SAVED_ROUTE, runtimePending: null,
     runtimeBaselineRecoveryPending: false, runtimePluginsSelected: false,
   });
+});
+
+// Rule (the desktop's status writers run cleanupSessionRuntimeForTerminalStatus at an archive or delete,
+// which runs the cleanup register.ts set, now createSessionRuntimeCleanup, bound for the Host by
+// bindHostSessionRuntimeHooks): an archived task's runtime override does not outlive the archive. Gap: the
+// Host's archive only wrote the column, so a task archived after an automatic fallback and restored
+// started on the fallback route again. Minimal failing input: a fallback, an archive, a restore, a send.
+test('runtime override: a task archived after a fallback and restored starts on its saved route', { timeout: 30_000 }, async t => {
+  const r = await fallenBackTask(t, 'shelved');
+  t.after(bindHostSessionRuntimeHooks(r.selection));
+  // The task list's archive and restore, as main.ts builds the update entry (under the task's route lock).
+  const taskRestore = createHostTaskRestore({ getOwner: () => getDbClient(), publish: event => r.h.events.push(event) });
+  const update = lockSessionRoute(createHostSessionUpdate({
+    restoreTaskToActive: taskRestore.restoreTaskToActive,
+    persistSessionFields: (...args) => r.selection.persistSessionFields(...args),
+    publish: event => r.h.events.push(event),
+    setModel: (...args) => r.selection.setModel(...args),
+    move: async () => { throw new Error('Unexpected move'); },
+  }));
+  await update('shelved', { status: 'archived' });
+  await update('shelved', { status: 'active' });
+  assert.equal(r.row('shelved').status, 'active');
+  assert.deepEqual(await startedOn(r, 'shelved', 'shelved-1'), { model: 'big', providerId: 'prov-a' });
 });
 
 // Working-directory move (A5, session-move.ts with the executor's own close):

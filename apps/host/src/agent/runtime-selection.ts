@@ -68,11 +68,13 @@ import { directoryGrantsForRuntime } from '../../../desktop/src/main/maker-ipc/e
 import { setPendingCredentialSwitchReader } from '../../../desktop/src/main/maker-host/provider-route.ts';
 import type { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.desktop.ts';
 import {
+  createSessionRuntimeCleanup,
   createSessionRuntimeProjection,
   createSessionRuntimeProjector,
   createUpdateScheduledPreference,
 } from '../../../desktop/src/main/maker-ipc/sessionRuntimeProjection.ts';
 import { setSessionRuntimeProjector, type SessionRuntimeProjector } from '../../../desktop/src/main/localDb/mapper.ts';
+import { setSessionRuntimeCleanup } from '../../../desktop/src/main/localDb/sessionRuntimeCleanup.ts';
 import { createResolvePendingRuntimeAxisPatch } from '../../../desktop/src/main/maker-ipc/pendingRuntimeAxisPatch.ts';
 import { assertModelRouteUsableWith } from '../../../desktop/src/main/maker-ipc/modelRouteAdmission.ts';
 import {
@@ -139,6 +141,8 @@ export interface HostRuntimeSelectionDeps {
     wakeSession: AgentInputCoordinator['wakeSession'];
     refreshQueuedRoute: AgentInputCoordinator['refreshQueuedRoute'];
     cancelUsageLimitWait(sessionId: string): void;
+    /** Forgets a task's working-directory recovery (turn-executor.mjs discardWorkingDirectoryRecovery). */
+    discardWorkingDirectoryRecovery(sessionId: string): void;
     /** Starting a task's runtime outside a turn, as a send starts it (turn-executor.mjs startPorts). */
     startPorts(): HostRuntimeStartPorts;
   };
@@ -155,7 +159,7 @@ export interface HostRuntimeSelectionDeps {
  */
 export const HOST_RUNTIME_SELECTION_QUEUE_MEMBERS = [
   'contextRecoveryRollover', 'sessionDbAgentKind', 'isTurnRunning', 'wakeSession', 'refreshQueuedRoute',
-  'cancelUsageLimitWait', 'startPorts',
+  'cancelUsageLimitWait', 'discardWorkingDirectoryRecovery', 'startPorts',
 ] as const satisfies readonly (keyof HostRuntimeSelectionDeps['inputQueue'])[];
 type UnlistedQueueMembers = Exclude<keyof HostRuntimeSelectionDeps['inputQueue'], typeof HOST_RUNTIME_SELECTION_QUEUE_MEMBERS[number]>;
 const everyQueueMemberListed: [UnlistedQueueMembers] extends [never] ? true : never = true;
@@ -233,6 +237,16 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     // The desktop reads the task's runtime plugin selection (runtime-plugin-settings.ts); the Host has
     // none: it does not run runtime plugins (release table row 33, the plugin batch), so no task has one.
     runtimePluginsSelected: () => false,
+  }));
+  // The cleanup at a task's archive or delete (register.ts setSessionRuntimeCleanup), which
+  // bindHostSessionRuntimeHooks installs: the task's runtime override and axes do not outlive it.
+  const sessionRuntimeCleanup = createSessionRuntimeCleanup(explicitPorts<Parameters<typeof createSessionRuntimeCleanup>[0]>({
+    // The desktop stops a start still in progress on another computer; the Host starts no task on
+    // another computer (send-preflight.ts refuses remote tasks), so none is ever waiting.
+    cancelPendingRemoteStart: () => {},
+    discardWorkingDirectoryRecovery: sessionId => deps.inputQueue.discardWorkingDirectoryRecovery(sessionId),
+    broadcastSessionRuntimeProjection,
+    log: deps.log,
   }));
   const updateScheduledPreference = createUpdateScheduledPreference(explicitPorts<Parameters<typeof createUpdateScheduledPreference>[0]>({ broadcastSessionRuntimeProjection }));
   const resolvePendingRuntimeAxisPatch = createResolvePendingRuntimeAxisPatch(explicitPorts<Parameters<typeof createResolvePendingRuntimeAxisPatch>[0]>({
@@ -585,8 +599,9 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   return {
     pendingSwitches,
     agentSwitchDeps,
-    /** The task read projector (bindHostSessionRuntimeHooks installs it, as register.ts). */
+    /** The task read projector and the archive/delete cleanup (bindHostSessionRuntimeHooks installs them, as register.ts). */
     sessionRuntimeProjector,
+    sessionRuntimeCleanup,
     /** The interrupted-turn auto-resume's route change (auto-resume.ts), and the rebuild leases it marks. */
     maybeApplySessionRuntimeFallback,
     pendingSessionRuntimeFallbackRebuilds,
@@ -691,6 +706,10 @@ type HostRuntimeSelection = ReturnType<typeof createHostRuntimeSelection>;
  * (an automatic fallback) included, with runtimeEffective, runtimePending and runtimeGeneration, as the
  * route change pushes already do.
  *
+ * The cleanup at a task's archive or delete (sessionRuntimeCleanup.ts setSessionRuntimeCleanup; the
+ * desktop's, register.ts): the status writers call cleanupSessionRuntimeForTerminalStatus, which runs it,
+ * so a task archived after an automatic fallback starts on its saved route once restored.
+ *
  * The app session commit boundary (appSessionState.ts setAppSessionCommitBoundaryHook; the desktop's
  * hook, bootstrap-electron.ts): when the owner changes, before the new owner is visible, every task's
  * provider, runtime axes and runtime control state go (clearOwnerScopedSessionRuntimeSelection, which
@@ -704,12 +723,17 @@ type HostRuntimeSelection = ReturnType<typeof createHostRuntimeSelection>;
  * - task attention badges, remote desktop viewers, popped-out tab windows: window state, which the
  *   Host does not have.
  */
-export function bindHostSessionRuntimeHooks(selection: { sessionRuntimeProjector: SessionRuntimeProjector }): () => void {
+export function bindHostSessionRuntimeHooks(selection: {
+  sessionRuntimeProjector: SessionRuntimeProjector;
+  sessionRuntimeCleanup(sessionId: string): void;
+}): () => void {
   setAppSessionCommitBoundaryHook(() => clearOwnerScopedSessionRuntimeSelection());
   setSessionRuntimeProjector(selection.sessionRuntimeProjector);
+  setSessionRuntimeCleanup(selection.sessionRuntimeCleanup);
   return () => {
     setAppSessionCommitBoundaryHook(null);
     setSessionRuntimeProjector(null);
+    setSessionRuntimeCleanup(null);
   };
 }
 
