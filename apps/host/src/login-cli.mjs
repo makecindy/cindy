@@ -76,6 +76,7 @@ export async function runLoginCommand(argv, io = {}) {
     store,
     region,
     packageRegion: hostPackageRegion(),
+    warn: err,
     hostedCallbackUrl: endpoints.authDesktopCallbackUrl,
     openBrowser: async (url) => {
       out(`If it does not open, visit:\n${url}`);

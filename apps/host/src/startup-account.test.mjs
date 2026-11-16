@@ -28,7 +28,7 @@ let activeOwner = null, runtimeLease = null, currentSessionToken = null, account
 let account = { authenticated: false, realm: 'global' };
 const runtime = { owner: null };
 ${functions.join('\n')}
-return { start: ensureRuntime, resolve: resolveAccountUser, token: () => currentSessionToken };
+return { start: ensureRuntime, resolve: resolveAccountUser, token: () => currentSessionToken, account: () => account };
 `, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 function setup(overrides = {}) {
@@ -137,10 +137,14 @@ test('an adopted cross-region personal session stays signed out; an organization
         await assert.rejects(run.h.start(run.memberId), /database opened/, label);
         assert.equal(run.h.opens[0]?.ownerId, run.memberId, label);
         assert.equal(run.h.token(), 'fixture-access-value', label);
+        assert.equal(run.h.account().realm, sessionRealm, label);
       } else {
         await assert.rejects(run.h.start(run.memberId), (error) => error.code === 'HOST_CROSS_REGION_PERSONAL_ACCOUNT', label);
         assert.deepEqual(run.h.opens, [], `${label}: no account database is opened`);
         assert.equal(run.h.token(), null, `${label}: the session is not adopted`);
+        // Cleared, as the Desktop resets to its build realm; an empty realm is what makes the web
+        // shim block every statistics collector (甲 21).
+        assert.deepEqual(run.h.account(), { authenticated: false, realm: null }, label);
       }
       // As the Desktop: the rotated token stays in the record of its own region either way.
       assert.deepEqual([run.stored()?.realm, run.stored()?.refreshToken], [sessionRealm, `fixture-rotated-${sessionRealm}`], label);
