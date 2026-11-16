@@ -78,6 +78,7 @@ import { createHostIpcRoute } from './ipc-route.mjs';
 import { createHostIpcBindings } from './ipc-bindings/index.js';
 import { projectHostAuthState } from './auth-state.js';
 import { createHostModelAccess } from './agent/model-access.js';
+import { createHostUsagePricing } from './agent/usage-pricing.ts';
 import { MODEL_ACCESS_STATUS_CHANNEL } from '../../desktop/src/shared/modelAccess.js';
 import { createProviderCatalog } from './agent/providers.mjs';
 import { closeClaudeCliProxyBridge } from '../../desktop/src/main/maker-host/claude-cli-proxy-bridge.js';
@@ -455,6 +456,11 @@ let codexRuntime: ReturnType<typeof createHostCodexRuntime> | null = null;
 let claudeProxy: ReturnType<typeof createHostClaudeProxyRuntime> | null = null;
 let mcpRuntime: ReturnType<typeof createHostMcpRuntime> | null = null;
 let agentAuth: ReturnType<typeof createHostAgentAuth> | null = null;
+/** The XD gateway prices and reference prices of this process's account (release table row 13, 3a). */
+const usagePricing = createHostUsagePricing({
+  profileDir,
+  modelAccessApiBaseUrl: () => readAuthEndpoints((account.realm ?? resolveHostRegion()) as 'cn' | 'global').modelAccessApiBaseUrl,
+});
 const listProviders = createProviderCatalog({
   readProviders: connected => providerConfig?.publicViews(connected) ?? Promise.resolve([]),
   // Keep each engine's model list in step with the account's models (the desktop refreshes on catalog change).
@@ -478,6 +484,10 @@ const listProviders = createProviderCatalog({
     return parsed.models;
   },
   readOwner: () => ({ ...getActiveAppSession(), pending: isAppSessionBoundaryPending() }),
+  // The desktop's applyGatewayModels replaces the XD prices from the same /models response, and its
+  // model sync registers each round so billing waits briefly for it (model-access/index.ts).
+  applyPricedModels: (models, ownerId) => { usagePricing.replaceGatewayModelPricing(models, ownerId); },
+  trackModelsSync: sync => usagePricing.trackGatewayModelPricingSync(sync),
 });
 let stopPluginAuthorization: (() => void) | null = null;
 let platformClient: ReturnType<typeof createPlatformClientBridge> | null = null;
@@ -563,6 +573,10 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   // savepoint refs of tasks this DB marks deleted are removed from their repos.
   void reconcileSavepointRefsForDeletedSessions().catch(error =>
     hostLog.warn('savepoint reconcile postponed', { error: error instanceof Error ? error.message : String(error) }));
+  // As the desktop once the account DB is ready (bootstrap-electron.ts): the account currency and the
+  // last price snapshot come back from disk before the first /models round.
+  void usagePricing.prewarmModelPricing().catch(error =>
+    hostLog.warn('model pricing prewarm failed', { error: error instanceof Error ? error.message : String(error) }));
   runtime.owner = ownerId;
   runtime.storage = 'ready';
   delete runtime.detail;
@@ -1530,8 +1544,10 @@ const serverDeps = {
     if (!codexRuntime) throw new Error('Codex runtime is not available');
     return codexRuntime.readRoute();
   },
-  modelPricing: async () => null,
-  referenceModelPricing: () => ({}),
+  // `maker:usage:model-pricing-v2`, which the renderer's getModelPricing asks (preload.ts): the native
+  // XD quotes. The v1 channel shares this path; only device-link reaches it (device-link.ts).
+  modelPricing: () => usagePricing.getGatewayModelPricing(),
+  referenceModelPricing: () => usagePricing.readReferenceModelPricing(),
   agents: () => agentGraph?.agents ?? [],
   events: eventHub,
   input: {

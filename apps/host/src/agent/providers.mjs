@@ -3,9 +3,15 @@ import { modelsWithoutStalePaymentUpsell } from '../../../desktop/src/main/model
 const CACHE_MS = 5 * 60_000;
 
 /** Refresh account facts only. The shared catalog owns provider projection.
- * @param {{ readProviders: (connected: boolean) => Promise<import('@cindy/model-providers').ProviderView[]>, fetchModels: (gateway: {endpoint: string, credential: string}) => Promise<any[]>, applyModels: (models: any[], options: {authoritative: boolean, preservePaymentRequiredRoutes?: boolean, suppressEmbeddingFallback?: boolean}) => void, readModels: () => readonly any[], markModelsUnknown?: () => void, readOwner?: () => { dataOwnerId: string | null, generation: number, pending: boolean } }} deps
+ * @param {{ readProviders: (connected: boolean) => Promise<import('@cindy/model-providers').ProviderView[]>, fetchModels: (gateway: {endpoint: string, credential: string}) => Promise<any[]>, applyModels: (models: any[], options: {authoritative: boolean, preservePaymentRequiredRoutes?: boolean, suppressEmbeddingFallback?: boolean}) => void, readModels: () => readonly any[], markModelsUnknown?: () => void, readOwner?: () => { dataOwnerId: string | null, generation: number, pending: boolean }, applyPricedModels?: (models: any[], ownerId: string | undefined) => void, trackModelsSync?: (sync: Promise<unknown>) => void }} deps
+ *
+ * `applyPricedModels` receives the XD price projection's input where the desktop's applyGatewayModels
+ * replaces it (model-access/index.ts): a successful /models round and an account boundary (an empty
+ * list). `applyModels` also runs on every read between rounds and after a failed round, where the
+ * desktop keeps its last prices. `trackModelsSync` gets each round in flight, as the desktop's
+ * trackGatewayModelPricingSync does, so billing waits briefly for it.
  */
-export function createProviderCatalog({ readProviders, fetchModels, applyModels, readModels, markModelsUnknown, readOwner }) {
+export function createProviderCatalog({ readProviders, fetchModels, applyModels, readModels, markModelsUnknown, readOwner, applyPricedModels, trackModelsSync }) {
   let cached = null;
   let flight = null;
   let activeIdentity = null;
@@ -31,6 +37,7 @@ export function createProviderCatalog({ readProviders, fetchModels, applyModels,
       if (activeIdentity !== null) {
         cached = null;
         applyModels([], { authoritative: false, suppressEmbeddingFallback: true });
+        applyPricedModels?.([], owner.dataOwnerId ?? undefined);
       }
       activeIdentity = identity;
     }
@@ -54,8 +61,10 @@ export function createProviderCatalog({ readProviders, fetchModels, applyModels,
         pending.promise = Promise.resolve().then(() => fetchModels(options.gateway)).then(models => {
           check();
           cached = { at: Date.now(), models };
+          applyPricedModels?.(models, owner.dataOwnerId ?? undefined);
         }).finally(() => { if (flight === pending) flight = null; });
         flight = pending;
+        trackModelsSync?.(pending.promise);
       }
       try { await flight.promise; }
       catch {

@@ -8,6 +8,7 @@ import { HOST_CONTRACT_CHANNELS } from '@cindy/maker-shared/host-channel-contrac
 import type { TaskTagRequest } from '@cindy/maker-shared';
 import { createInboundDispatch } from '../../desktop/src/main/device-link/dispatch.js';
 import { createInvokeRegistry } from '../../desktop/src/main/device-link/invokeRegistryCore.js';
+import { toLegacyUsdModelPricing } from '../../desktop/src/main/maker-ipc/usageHandlers.js';
 import { createDeviceLinkSettingsStore } from '../../desktop/src/main/device-link/settings-store.js';
 import { createRemoteControlAccess } from '../../desktop/src/main/device-link/remoteControlAccessCore.js';
 import { createAvailabilityPolicy } from '../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
@@ -95,6 +96,10 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       return contract.map ? contract.map(result) : result;
     });
   }
+  // The desktop answers `maker:usage:model-pricing` (device-link v1) with the flat USD projection and
+  // `-v2` with the native quotes (usageHandlers.ts). Both contract entries share one Host path, which
+  // answers v2 for the renderer; v2 is not on the device-link allowlist, so v1 is projected here.
+  registry.register('maker:usage:model-pricing', async () => toLegacyUsdModelPricing(await call('/api/usage/model-pricing', {})));
   registry.register('maker:create-session', ([input]) => deps.createRuntimeSession(input));
   if (deps.mcpApps) registry.register(MCP_APPS_INVOKE, async ([sessionId, input]) => {
     const source = getDeviceLinkInvokeContext();

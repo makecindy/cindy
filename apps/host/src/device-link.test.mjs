@@ -90,6 +90,11 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   await once(wss, 'listening');
   const url = `ws://127.0.0.1:${wss.address().port}`;
   const service = createHostService({
+    // One USD and one CNY quote: the device-link v1 projection keeps only USD (usageHandlers.ts).
+    modelPricing: async () => ({ xd: {
+      'usd-model': { providerId: 'xd', modelId: 'usd-model', currency: 'USD', source: 'gateway', approximate: false, inputPerMtok: 3, outputPerMtok: 15 },
+      'cny-model': { providerId: 'xd', modelId: 'cny-model', currency: 'CNY', source: 'gateway', approximate: false, inputPerMtok: 20, outputPerMtok: 80 },
+    } }),
     listSessions: options => readHostSessionList(db.drizzle, options),
     getSession: id => readHostSession(db.drizzle, id),
     input: { enqueue: async (sessionId, item) => {
@@ -124,6 +129,9 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     return client;
   }
   for (const id of ['ios', 'android', 'desktop']) clients.push(await connect(id));
+  // A phone asks the v1 channel, as the desktop answers it: flat USD fields, CNY quotes left out.
+  const v1 = await clients[0].invoke('host', { channel: 'maker:usage:model-pricing', args: [] });
+  assert.deepEqual(v1.result, { 'usd-model': { inputUsdPerMtok: 3, outputUsdPerMtok: 15 } }, JSON.stringify(v1));
   const received = clients.map(() => []);
   clients.forEach((client, i) => client.onFrame(frame => { if (frame.kind === 'push') received[i].push(frame); }));
   duplicateNext = true;
