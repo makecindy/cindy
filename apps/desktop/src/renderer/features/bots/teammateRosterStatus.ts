@@ -21,5 +21,10 @@ export function groupTeammateStatus(group: BotGroupSummary, bots: readonly BotPr
   activities: ReadonlyMap<string, AgentIslandSessionActivity>, unread: boolean) {
   return resolveTeammateStatus({ unread, activities: [teammateGroupActivity(group),
     ...(!group.archived ? bots.flatMap(bot => bot.sessions.filter(session => session.groupId === group.id)
-      .map(session => activities.get(session.id))) : [])] });
+      .map(session => activities.get(session.id))
+      // Server executions own group failures, including disposal when a plan is
+      // ended. A retained lane error cannot resurrect that alert. Live local
+      // approvals and work still supplement the server's asynchronous projection;
+      // legacy hosts without that projection retain their existing fallback.
+      .filter(activity => !(group.serverBacked && group.teammateActivity && activity?.phase === 'error'))) : [])] });
 }

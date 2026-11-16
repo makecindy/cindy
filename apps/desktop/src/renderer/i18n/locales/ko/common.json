@@ -5730,7 +5730,8 @@
             "statusFailed": "제어 프로세스 상태 확인에 실패했습니다",
             "recoveryFailed": "제어 연결을 다시 구성하지 못했습니다",
             "extensionDisconnected": "연결된 브라우저 확장이 없습니다 (Cindy Chrome 플러그인과 확장을 설치하고 활성화하세요)",
-            "pluginMissing": "Cindy Chrome 플러그인이 설치되지 않았거나 꺼져 있습니다"
+            "pluginMissing": "Cindy Chrome 플러그인이 설치되지 않았거나 꺼져 있습니다",
+            "browserMissing": "이 컴퓨터에 Chrome이 설치되어 있지 않습니다"
           },
           "reconnect": "사이드바 브라우저 다시 연결",
           "recover": "사이드바 브라우저 복구",
@@ -5750,7 +5751,7 @@
         },
         "userBrowser": {
           "title": "내 브라우저",
-          "description": "사용 중인 Chrome 또는 Edge를 기존 로그인 그대로 조작합니다. 새 페이지는 백그라운드 창에서 열려 방해하지 않습니다."
+          "description": "이 컴퓨터의 Chrome(Edge도 사용 가능)입니다. Agent가 그 안에서 기존 로그인 그대로 직접 조작합니다. 새 페이지는 백그라운드 창에서 열려 방해하지 않습니다."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Cindy Chrome 플러그인 설치",
@@ -5769,7 +5770,9 @@
           "updatePluginTitle": "Cindy Chrome 플러그인 업데이트",
           "updatePluginBody": "설치된 Cindy Chrome 플러그인이 오래되어 내 브라우저를 지원하지 않습니다. 최신 버전으로 업데이트한 뒤 안내에 따라 확장을 추가하세요.",
           "updatePlugin": "업데이트하러 가기",
-          "storeOpened": "브라우저에서 Cindy 확장 페이지를 열었습니다. ‘Chrome에 추가’를 누르면 자동으로 연결됩니다"
+          "storeOpened": "브라우저에서 Cindy 확장 페이지를 열었습니다. ‘Chrome에 추가’를 누르면 자동으로 연결됩니다",
+          "installBrowserTitle": "먼저 Chrome 설치",
+          "installBrowserBody": "이 컴퓨터에 Chrome이 설치되어 있지 않습니다. '내 브라우저'에는 Cindy 확장 프로그램을 설치할 Chrome(또는 Edge)이 필요합니다. 설치하면 자동으로 다음 단계로 넘어갑니다."
         }
       },
       "android": {
