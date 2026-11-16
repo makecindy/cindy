@@ -2,7 +2,7 @@
   "picker": {
     "shareName": "Dibagikan oleh {{owner}}",
     "numbered": "{{name}} ({{index}})",
-    "unavailable": "Berbagi yang tidak tersedia"
+    "unavailable": "Berbagi yang sudah tidak tersedia"
   },
   "link": {
     "title": "Berbagi penyedia",

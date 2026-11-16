@@ -46,8 +46,8 @@
     }
   },
   "contextWindowSwitch": {
-    "title": "Model ini tidak cukup untuk percakapan saat ini",
-    "remoteTitle": "Sesi jarak jauh ini tidak bisa berganti model dengan aman",
+    "title": "Model ini tidak bisa memuat percakapan saat ini",
+    "remoteTitle": "Tugas jarak jauh ini tidak bisa berganti model dengan aman",
     "description": "Percakapan ini sudah memakai {{used}}, melebihi kapasitas model baru ({{total}}, sekitar {{pct}}%). Kalau beralih, Cindy akan membuat ringkasan singkat lalu melanjutkan. Riwayat obrolan tetap tersimpan, hanya tidak lagi diteruskan kata per kata ke model baru.",
     "remoteDescription": "Konteks tugas jarak jauh ini sudah memakai {{used}} / {{total}} (sekitar {{pct}}%), jadi tidak bisa dialihkan dengan aman ke model berjendela kecil ini. Pertahankan model saat ini, atau mulai tugas baru sebelum memilih model ini.",
     "cancel": "Pertahankan model ini",
@@ -77,9 +77,9 @@
     "accountUnassigned": "Akun belum ditetapkan",
     "accountCount_other": "{{count}} akun",
     "accountFallback": "Akun {{index}}",
-    "favoriteConfiguration": "Favoritkan penyiapan ini",
+    "favoriteConfiguration": "Favoritkan konfigurasi ini",
     "savedConfiguration": "Sudah difavoritkan · Ketuk untuk membatalkan",
-    "currentConfiguration": "Penyiapan saat ini",
+    "currentConfiguration": "Konfigurasi saat ini",
     "usingRecommended": "Memakai pengaturan yang disarankan",
     "customized": "Disesuaikan",
     "resetScopeHint": "Memulihkan yang disarankan akan mereset Harness, tingkat penalaran, dan Fast. Favorit yang sudah ada tidak berubah.",
@@ -93,10 +93,10 @@
     "parametersSaved": "Pengaturan tersimpan.",
     "restoredHint": "Pengaturan yang disarankan dipulihkan. Favorit yang sudah ada tidak berubah.",
     "favoriteRemoved": "Favorit dibatalkan. Pengaturan saat ini tidak berubah.",
-    "favoriteSaved": "Penyiapan ini ditambahkan ke favorit.",
+    "favoriteSaved": "Konfigurasi ini ditambahkan ke favorit.",
     "favoriteUpdated": "Favorit diperbarui. Konfigurasi yang sedang dipakai tidak berubah.",
     "favoriteChanged": "Favorit ini sudah diubah atau dihapus. Batalkan pengubahan lalu buka lagi untuk mencoba.",
-    "favoriteExists": "Penyiapan ini sudah ada di favorit. Batalkan pengubahan untuk langsung memakainya.",
+    "favoriteExists": "Konfigurasi ini sudah ada di favorit. Batalkan pengubahan untuk langsung memakainya.",
     "favorites": "Favorit",
     "all": "Semua model",
     "recommended": "Disarankan",
@@ -121,7 +121,7 @@
     "quotaUpdating": "Kuota menunggu pembaruan",
     "quotaResetSoon": "Segera direset",
     "quotaResetIn": "Direset dalam {{duration}}",
-    "quotaAverageHint": "Kuota mingguan · Bobot rata per akun",
+    "quotaAverageHint": "Kuota mingguan · Bobot sama per akun",
     "quotaResetHint": "Dengan laju saat ini, kuota mungkin masih tersisa saat reset: kuning dalam 24 jam, merah dalam 6 jam."
   }
 }

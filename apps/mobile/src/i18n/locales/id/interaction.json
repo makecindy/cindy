@@ -3,8 +3,8 @@
     "mcpComplete": "Selesai",
     "mcpCancel": "Batal",
     "mode": {
-      "default": "Izin default",
-      "acceptEdits": "Setujui perubahan otomatis",
+      "default": "Izin bawaan",
+      "acceptEdits": "Izinkan perubahan",
       "plan": "Mode rencana",
       "auto": "Peninjauan otomatis",
       "bypass": "Akses penuh"
@@ -51,7 +51,7 @@
     "readOnlyTitle": "Menunggu konfirmasi di komputermu",
     "pendingRequests": "Permintaan tertunda",
     "queueSwitchTo": "Beralih ke permintaan tertunda {{position}}: {{label}}",
-    "queueSwitchGeneric": "Beralih permintaan tertunda",
+    "queueSwitchGeneric": "Ganti permintaan tertunda",
     "queuePositionCurrent": "Saat ini",
     "queuePositionNext": "Berikutnya",
     "queuePositionNth": "No. {{index}}",
@@ -102,7 +102,7 @@
     "planHalf": "Beralih ke rencana layar separuh",
     "planEditorAccessibility": "Editor rencana",
     "planEditorPlaceholder": "Ubah rencana",
-    "planOutline": "Isi",
+    "planOutline": "Daftar isi",
     "planJumpTo": "Lompat ke bagian rencana {{title}}",
     "planEmpty": "Rencana masih kosong.",
     "planApproveAccessibility": "Setujui dan jalankan rencana",
@@ -138,7 +138,7 @@
       "label": "Issue"
     },
     "rename_sessions_confirm": {
-      "title": "Perubahan nama Sesi perlu konfirmasi",
+      "title": "Perubahan nama tugas perlu konfirmasi",
       "label": "Ganti nama"
     },
     "ghost_grant_confirm": {
@@ -150,7 +150,7 @@
       "label": "Plugin"
     },
     "fallback": {
-      "title": "Permintaan jauh perlu ditangani",
+      "title": "Permintaan jarak jauh perlu ditangani",
       "label": "Permintaan"
     },
     "input_handoff": {
@@ -211,7 +211,7 @@
     "goalObjectiveAccessibility": "Isi tujuan",
     "goalPlaceholder": "Apa yang ingin kamu capai? Agent akan terus bekerja menuju tujuan ini sampai selesai atau mencapai batas.",
     "advancedSettings": "Pengaturan lanjutan",
-    "limitsHint": "Jika tidak diubah, mengikuti batas default komputer jarak jauh; tujuan berhenti otomatis saat salah satu batas tercapai dan bisa dihentikan manual kapan saja; “Tanpa batas” berarti batas tersebut tidak ditetapkan.",
+    "limitsHint": "Jika tidak diubah, mengikuti batas bawaan komputer jarak jauh; tujuan berhenti otomatis saat salah satu batas tercapai dan bisa dihentikan manual kapan saja; “Tanpa batas” berarti batas tersebut tidak ditetapkan.",
     "maxTurns": "Giliran maksimum",
     "tokenBudget": "Anggaran token",
     "noProgressLimit": "Batas tanpa kemajuan",
@@ -219,10 +219,10 @@
     "goalMeta": "{{turns}} giliran · {{tokens}} token",
     "goalCapacityHint": "Hulu belum punya kapasitas tersedia saat ini; percobaan ulang dilakukan otomatis",
     "pause": "Jeda",
-    "resume": "Langkah berikutnya",
+    "resume": "Lanjutkan",
     "clearGoal": "Hentikan tujuan",
     "unlimited": "Tanpa batas",
-    "noScreenshots": "Tidak ada tangkapan layar ditemukan.",
+    "noScreenshots": "Tangkapan layar tidak ditemukan.",
     "mediaRemove": "Hapus lampiran foto {{name}}",
     "mediaDeselect": "Batal pilih foto {{name}}",
     "mediaSelect": "Pilih foto {{name}}",
@@ -282,7 +282,7 @@
       "embedded-frame": "Kolom ini berada di situs lain yang tertanam di halaman. Pastikan sumbernya tepercaya."
     },
     "agentControlled": "Layar ini dibuka oleh Agent. Sebelum mengisi, pastikan ini memang tempat yang ingin kamu masuki.",
-    "agentPicture": "Kode QR ini berasal dari tangkapan layar Agent, jadi Cindy tidak bisa melihat layar aslinya dan tidak tahu kapan selesai. Pastikan kode ini mengarah ke situs tempat kamu ingin masuk, lalu pilih “Kembalikan ke Agent” setelah memindai.",
+    "agentPicture": "Kode QR ini berasal dari tangkapan layar Agent, jadi Cindy tidak bisa melihat layar aslinya dan tidak akan otomatis melanjutkan setelah pemindaian. Pastikan kode ini mengarah ke situs tempat kamu ingin masuk, lalu pilih “Kembalikan ke Agent” setelah memindai.",
     "error": {
       "decision": "Tindakan tidak terkirim. Coba lagi.",
       "stale": "Layar sudah berubah. Ikuti tampilan terbaru.",
@@ -298,13 +298,13 @@
       "permission": "Cindy tidak punya izin membaca layar komputer ini. Izinkan Cindy di Aksesibilitas pada Pengaturan Sistem.",
       "target_gone": "Jendela tujuan sudah ditutup.",
       "unreadable": "Layar ini tidak bisa dibaca. Selesaikan langsung di komputer host, lalu kembalikan ke Agent.",
-      "action_failed": "Tindakan tadi tidak berlaku. Periksa layar lalu coba lagi.",
+      "action_failed": "Tindakan tadi tidak berpengaruh. Periksa layar lalu coba lagi.",
       "timeout": "Menunggu terlalu lama, serah terima input berakhir.",
       "unsupported": "Komputer ini belum mendukung serah terima input.",
       "origin_changed": "Halaman berubah sebelum diisi, jadi tidak ada yang dimasukkan. Periksa halaman saat ini lalu isi lagi.",
-      "picture_unavailable": "Tidak bisa menampilkan gambar langkah ini. Izinkan Cindy merekam layar di Pengaturan Sistem, dan pastikan jendelanya tidak diperkecil.",
-      "screen_locked": "Layar komputer ini terkunci (layar mati karena hemat daya juga mengunci). Bangunkan dan buka kuncinya, lalu minta Agent mencoba lagi.",
-      "nothing_to_fill": "Tidak ada yang perlu diisi di layar ini, jadi Agent melanjutkan sendiri."
+      "picture_unavailable": "Tidak bisa menampilkan gambar langkah ini. Izinkan Cindy merekam layar di Pengaturan Sistem, dan pastikan jendelanya tidak diminimalkan.",
+      "screen_locked": "Layar komputer ini terkunci (monitor yang tertidur juga akan mengunci layar). Bangunkan dan buka kuncinya, lalu minta Agent mencoba lagi.",
+      "nothing_to_fill": "Tidak ada yang perlu diisi di layar ini, jadi sudah dikembalikan ke Agent untuk melanjutkan."
     },
     "phase": {
       "reading": "Membaca layar…",
@@ -442,17 +442,17 @@
       "empty": "Tidak ada permintaan tertunda",
       "hint": {
         "plan_review": "Tinjau rencana dulu, beri masukan bila perlu, dan komputer baru melanjutkan setelah dikonfirmasi.",
-        "permission": "Hanya keputusan ini yang dikirim balik ke Sesi saat ini di komputer.",
+        "permission": "Hanya keputusan ini yang dikirim balik ke tugas saat ini di komputer.",
         "ask_user_question": "Jawaban disimpan sebagai draf; komputer melanjutkan setelah dikirim.",
         "issue_confirm": "Periksa judul dan isi sebelum mengirim.",
         "plugin_setup": "Konfigurasi harus diselesaikan di komputer; kamu bisa membatalkan permintaan ini di sini.",
-        "fallback": "Ponsel memproses permintaan jauh sesuai urutan yang dikirim komputer."
+        "fallback": "Ponsel memproses permintaan sesuai urutan yang dikirim komputer."
       }
     }
   },
   "companion": {
     "permissionRequest": "{{name}} minta konfirmasimu",
-    "operation": "Kontrol",
+    "operation": "Operasi",
     "details": "Lihat detail",
     "fields": {
       "path": "Berkas",
@@ -482,7 +482,7 @@
     "anonymous": "Anonim",
     "useAnonymous": "Gunakan atribusi anonim",
     "envLine": "Lingkungan klien saat pengiriman (dilampirkan otomatis): klien {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · bahasa antarmuka {{uiLanguage}}",
-    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}} (sesi ini)",
+    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}} (tugas ini)",
     "regionLine": "Wilayah versi: {{region}}",
     "regionCodeCn": "CN",
     "regionCodeDev": "Dev",

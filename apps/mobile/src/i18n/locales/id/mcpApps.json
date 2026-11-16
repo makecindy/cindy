@@ -1,5 +1,5 @@
 {
-  "sharedTaskReadOnly": "Hanya pemilik sesi yang bisa berinteraksi dengan kartu ini.",
+  "sharedTaskReadOnly": "Hanya pemilik tugas yang bisa berinteraksi dengan kartu ini.",
   "retry": "Muat ulang",
   "loadFailed": "Aplikasi gagal dimuat. Periksa koneksi lalu muat ulang.",
   "updateRequired": "Komputer ini belum mendukung MCP Apps. Perbarui Cindy di komputer itu lalu coba lagi.",

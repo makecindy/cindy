@@ -38,8 +38,8 @@
   "deviceRemovedHint": "Keluar lalu masuk lagi untuk bergabung kembali ke daftar perangkat.",
   "authFailedTitle": "Login tidak berlaku",
   "authFailedHint": "Status login sudah kedaluwarsa. Keluar lalu masuk lagi.",
-  "replacedTitle": "Koneksi dialihkan",
-  "replacedHint": "Koneksi perangkat ini dialihkan di tempat lain. Menyambung ulang.",
+  "replacedTitle": "Koneksi digantikan",
+  "replacedHint": "Koneksi perangkat ini digantikan dari tempat lain. Menyambung ulang.",
   "tooManyConnectionsTitle": "Koneksi mencapai batas",
   "tooManyConnectionsHint": "Terlalu banyak perangkat online untuk akun ini. Putuskan perangkat lain lalu coba lagi.",
   "versionMismatchTitle": "Versi tidak cocok",
@@ -53,9 +53,9 @@
       "stopped": "Relay tidak terhubung"
     },
     "hint": {
-      "online": "Sesi jarak jauh bisa disinkronkan.",
+      "online": "Tugas jarak jauh bisa disinkronkan.",
       "lastSynced": "Terakhir disinkronkan {{time}}",
-      "connecting": "Sesi jarak jauh akan berlangganan ulang otomatis saat jaringan pulih.",
+      "connecting": "Tugas jarak jauh akan dilanggan ulang otomatis saat jaringan pulih.",
       "stopped": "Koneksi pulih saat kamu kembali ke aplikasi atau masuk lagi."
     }
   },

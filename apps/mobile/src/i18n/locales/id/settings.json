@@ -10,7 +10,7 @@
     "build": "Nomor build",
     "environment": "Lingkungan APNs",
     "permission": "Izin sistem",
-    "alerts": "Pemberitahuan",
+    "alerts": "Peringatan banner",
     "lockScreen": "Layar kunci",
     "notificationCenter": "Pusat notifikasi",
     "copy": "Salin token APNs",
@@ -71,14 +71,14 @@
       "sage": "Inspirasi",
       "blue": "Alam mimpi",
       "lavender": "Kucing malam",
-      "red": "Collar merah",
+      "red": "Kalung merah",
       "custom": "Warna khusus",
       "hue": "Hue",
       "preview": "Pratinjau pesan",
-      "sampleUser": "Bantu rapikan inspirasiku hari ini.",
+      "sampleUser": "Bantu rapikan inspirasi hari ini.",
       "sampleAssistant": "Baik, ayo susun idenya bersama.",
       "hint": "Menyesuaikan terang-gelap untuk mode terang dan gelap agar teks tetap jelas. Hanya disimpan di perangkat ini.",
-      "customHint": "Geser pita warna untuk memilih warna. Menyesuaikan terang-gelap untuk mode terang dan gelap; hanya disimpan di perangkat ini.",
+      "customHint": "Geser pita warna untuk memilih warna. Kecerahan disesuaikan otomatis di mode terang dan gelap; hanya disimpan di perangkat ini.",
       "saveFailed": "Warna berlaku untuk sesi ini, tetapi gagal disimpan.",
       "retry": "Coba lagi",
       "cancel": "Batal",
@@ -142,7 +142,7 @@
     "sectionTitle": "Versi",
     "updateMethodInApp": "Bisa diperbarui di dalam App dan berlaku setelah mulai ulang.",
     "updateMethodPackage": "Unduh dan pasang versi baru untuk memperbarui.",
-    "updateMethodUnavailable": "Build pengembangan tidak bisa memperbarui di dalam App.",
+    "updateMethodUnavailable": "Build pengembangan tidak mendukung pembaruan di dalam App.",
     "checkAction": "Periksa pembaruan",
     "testFlightCheckAction": "Periksa pembaruan konten",
     "checking": "Memeriksa…",
@@ -157,7 +157,7 @@
     "bundleUpdateFound": "Pembaruan paket App tersedia",
     "upToDate": "Sudah versi terbaru",
     "bundleUpToDateNoOta": "Sudah terbaru. Versi ini tidak mendukung hot update.",
-    "downloadedRestarting": "Pembaruan terunduh. Mulai ulang…",
+    "downloadedRestarting": "Pembaruan terunduh. Memulai ulang…",
     "downloadedRestartRequired": "Pembaruan terunduh. Keluar sepenuhnya dan buka lagi App untuk menerapkannya.",
     "bundleCheckFailed": "Tidak bisa memeriksa pembaruan paket App. Coba lagi nanti.",
     "checkFailedDetail": "Pemeriksaan pembaruan gagal: {{detail}}",
@@ -187,9 +187,9 @@
     "backgroundModes": {
       "auto": "Otomatis",
       "on": "Selalu aktif",
-      "off": "Tutup"
+      "off": "Nonaktif"
     },
-    "actionReplyPlaceholder": "Pesan",
+    "actionReplyPlaceholder": "Tulis balasan",
     "actionNotDelivered": "Ini tidak sampai ke komputermu. Buka Cindy untuk menanggapinya.",
     "actionReplyNotDelivered": "Balasanmu tidak terkirim. Buka Cindy untuk mengirimnya lagi: {{text}}",
     "actionRequestEnded": "Permintaan ini sudah ditangani atau kedaluwarsa."
@@ -206,7 +206,7 @@
     "connecting": "Menghubungkan ke Relay",
     "stopped": "Relay tidak terhubung",
     "lastSynced": "Terakhir disinkronkan {{time}}",
-    "canSync": "Sesi jarak jauh bisa disinkronkan.",
+    "canSync": "Tugas jarak jauh bisa disinkronkan.",
     "reconnectHint": "Sesi jarak jauh akan berlangganan ulang otomatis saat jaringan pulih.",
     "resumeHint": "Koneksi pulih saat kamu kembali ke aplikasi atau masuk lagi."
   },
@@ -232,7 +232,7 @@
       "release": "Release"
     },
     "confirmTitle": "Ganti ke {{environment}}?",
-    "confirmBody": "Mengganti akan mengeluarkan akun saat ini dan memulai ulang App.",
+    "confirmBody": "Pergantian akan mengeluarkanmu dari akun saat ini dan memulai ulang App.",
     "cancel": "Batal",
     "switchAction": "Beralih",
     "switching": "Beralih…",
@@ -259,7 +259,7 @@
     "sectionTitle": "Informasi hukum",
     "privacyPolicy": "Kebijakan Privasi",
     "userAgreement": "Perjanjian Pengguna",
-    "view": "Tinjau",
+    "view": "Lihat",
     "openPrivacyPolicy": "Buka kebijakan privasi",
     "openUserAgreement": "Buka perjanjian pengguna",
     "appFilingNumber": "Nomor pendaftaran App",
@@ -271,11 +271,11 @@
   },
   "account": {
     "logoutConfirmTitle": "Keluar dari akun?",
-    "logoutConfirmRunning": "Masih ada sesi yang berjalan. Sesi tetap berjalan di komputermu, tetapi ponsel ini tidak lagi menerima dan mengendalikannya; semua akun dan mirror jarak jauh lokal yang tersimpan di ponsel ini juga dihapus.",
-    "logoutHint": "Keluar akan menghapus semua akun dan mirror jarak jauh di ponsel ini. Sesi di komputermu tidak terpengaruh.",
+    "logoutConfirmRunning": "Masih ada tugas yang berjalan. Tugas tetap berjalan di komputermu, tetapi ponsel ini tidak lagi menerima dan mengendalikannya; semua akun dan mirror jarak jauh lokal yang tersimpan di ponsel ini juga dihapus.",
+    "logoutHint": "Keluar akan menghapus semua akun dan mirror jarak jauh di ponsel ini. Tugas di komputermu tidak terpengaruh.",
     "logout": "Keluar",
     "loggingOut": "Sedang keluar…",
-    "loggingOutAccessibility": "Keluar dari akun"
+    "loggingOutAccessibility": "Sedang keluar dari akun"
   },
   "copyRow": {
     "action": "Salin",
@@ -304,7 +304,7 @@
     "sectionTitle": "Filter sidik suara",
     "label": "Kenali suaramu",
     "entryHint": "Membisukan suara orang lain saat input suara. Sidik suaramu hanya disimpan di ponsel ini.",
-    "openAccessibility": "Buka pengaturan “Kenali suaraku”",
+    "openAccessibility": "Buka pengaturan “Kenali suaramu”",
     "on": "Aktif",
     "off": "Nonaktif",
     "hint": "Membisukan suara orang lain saat input suara sehingga hanya ucapanmu yang ditranskripsikan; suara yang tumpang tindih denganmu tidak bisa dihilangkan sepenuhnya. Sidik suaramu dienkripsi di ponsel ini dan tidak pernah diunggah atau disinkronkan.",
@@ -340,7 +340,7 @@
       }
     },
     "strictness": {
-      "label": "Tingkat ketat",
+      "label": "Tingkat keketatan",
       "hint": "Makin ketat, makin banyak suara lain yang tersaring, tetapi di tempat berisik ucapanmu sendiri lebih mudah terpotong.",
       "restoreDefault": "Pulihkan default",
       "options": {
@@ -426,7 +426,7 @@
       "title": "Layar",
       "secondary": "Tampilkan di layar kedua",
       "hint": "Bila aktif, Cindy pindah ke layar kedua, misalnya layar bawah handheld dua layar. Saat mode handheld dimatikan, Cindy kembali ke layar utama.",
-      "none": "Perangkat ini hanya punya satu layar. Cindy menyesuaikan ukurannya.",
+      "none": "Perangkat ini hanya punya satu layar. Cindy otomatis menyesuaikan diri dengan ukurannya.",
       "current": "Layar saat ini",
       "single": "Layar utama"
     },

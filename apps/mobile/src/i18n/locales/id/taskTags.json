@@ -45,7 +45,7 @@
   "add": "Tambah tag",
   "editTitle": "Ubah tag",
   "editHint": "Perubahan berlaku untuk semua tugas yang memakai tag ini.",
-  "addHint": "Tag yang baru ditambahkan otomatis dipakai untuk sesi ini.",
+  "addHint": "Tag yang baru ditambahkan otomatis dipakai untuk tugas ini.",
   "selectedCount": "{{count}} dipilih",
   "presetImportant": "Penting",
   "presetFollowUp": "Perlu ditindaklanjuti",
