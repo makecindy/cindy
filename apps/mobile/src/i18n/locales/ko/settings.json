@@ -85,6 +85,16 @@
       "reset": "기본값으로 복원",
       "apply": "적용",
       "hex": "색상 코드"
+    },
+    "appIcon": {
+      "label": "앱 아이콘",
+      "saveFailed": "앱 아이콘을 변경하지 못했습니다. 다시 시도해 주세요",
+      "options": {
+        "default": "기본",
+        "cat": "검은 고양이",
+        "wordmark": "Cindy 워드마크",
+        "mark": "Cindy 심볼"
+      }
     }
   },
   "language": {

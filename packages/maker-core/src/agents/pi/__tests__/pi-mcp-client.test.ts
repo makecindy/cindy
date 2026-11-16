@@ -16,14 +16,14 @@ const compiled = ts.transpileModule(
   { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
 ).outputText;
 
-function gatewayWithFetch(fetchImpl: typeof fetch) {
+function gatewayWithFetch(fetchImpl: typeof fetch, permissionMode = 'ask') {
   const context: Record<string, any> = {
     fetch: fetchImpl, URL, Headers, AbortController, TextDecoder, process: { env: {} },
     // 沙箱没有模块系统：bridge 顶部的 node:crypto import 在切片后丢失，
     // 指纹计算用的 createHash 必须由宿主注入。
     setTimeout, clearTimeout, createHash,
     guestToolGate: null, toolsDisabledForTurn: () => false,
-    currentPermissionState: () => ({ mode: 'ask' }),
+    currentPermissionState: () => ({ mode: permissionMode }),
     FILE_WRITE_BUILTINS: new Set(), READONLY_BUILTINS: new Set(),
     CINDY_HOSTED: null, SUBAGENT_RUN_DIR_ENV: 'fixture-run-dir',
     resolveFileWriteTargetPath: () => null, isCindyShellTool: () => false,
@@ -51,7 +51,14 @@ function gatewayWithFetch(fetchImpl: typeof fetch) {
     .execute('call', { server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'demo' } }, signal);
   let approvalHook: any;
   context.installApproval(gateway, { on: (_event: string, handler: unknown) => { approvalHook = handler; } });
+  const approvals: unknown[] = [];
+  const approveInput = (input: unknown, toolCallId = 'call') => approvalHook(
+    { toolName: 'cindy_mcp_call_tool', toolCallId, input },
+    { ui: { input: async (_title: string, body: string) => { approvals.push(JSON.parse(body)); return 'allow'; } } },
+  );
   return { call, gateway, client,
+    approvals, approveInput,
+    invoke: (input: unknown, toolCallId = 'call') => registered.find(t => t.name === 'cindy_mcp_call_tool').execute(toolCallId, input),
     approve: () => approvalHook({ toolName: 'cindy_mcp_call_tool', toolCallId: 'call',
       input: { server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'demo' } } },
       { ui: { input: async () => 'allow' } }),
@@ -63,6 +70,68 @@ function gatewayWithFetch(fetchImpl: typeof fetch) {
 afterEach(() => vi.useRealTimers());
 
 describe('Pi MCP request lifecycle', () => {
+  // #10691: the registered gateway and real approval hook must reject missing
+  // ghost_id, including an extra args wrapper, before approval/HTTP. Previously
+  // only generic call_tool envelopes were checked. Unit tier, injected fetch.
+  it.each([
+    { server: 'cindy', tool: 'ghost_info' },
+    { server: 'cindy', tool: 'ghost_info', args: {} },
+    { server: 'cindy', tool: 'ghost_info', args: { args: { ghost_id: 'calendar' } } },
+  ])('explains invalid plugin parameters before approval or dispatch: %j', async input => {
+    const fetchImpl = vi.fn(async (_url: unknown, _options?: RequestInit) => Response.json({ result: { content: [] } }));
+    const h = gatewayWithFetch(fetchImpl);
+    h.gateway.add('cindy', h.client, [{ name: 'ghost_info', inputSchema: {
+      type: 'object', properties: { ghost_id: { type: 'string' } }, required: ['ghost_id'],
+    } }]);
+    await h.list({ server: 'cindy', tool: 'ghost_info' });
+    await h.approveInput(input);
+    await expect(h.invoke(input)).rejects.toThrow(/args\.ghost_id.*Expected args schema/);
+    expect(h.approvals).toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const corrected = { server: 'cindy', tool: 'ghost_info', args: { ghost_id: 'calendar' } };
+    await h.approveInput(corrected, 'corrected');
+    await h.invoke(corrected, 'corrected');
+    expect(h.approvals).toMatchObject([{ toolName: 'mcp__cindy__ghost_info', input: corrected.args }]);
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1]!.body)).params).toEqual({
+      name: 'ghost_info', arguments: corrected.args,
+    });
+  });
+
+  it.each(['ask', 'auto'])('does not authorize a skipped invalid invocation after schema recovery (%s)', async mode => {
+    const fetchImpl = vi.fn(async (_url: unknown, _options?: RequestInit) => Response.json({ result: { content: [] } }));
+    const h = gatewayWithFetch(fetchImpl, mode);
+    const input = { server: 'cindy', tool: 'ghost_call', args: {} };
+    await h.approveInput(input);
+    h.gateway.add('cindy', h.client, [{ name: 'ghost_call', inputSchema: { type: 'object' } }]);
+    await h.list({ server: 'cindy', tool: 'ghost_call' });
+    await expect(h.invoke(input)).rejects.toThrow(/cindy_mcp_list_tools/);
+    expect(h.approvals).toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    await h.approveInput(input, 'fresh');
+    await h.invoke(input, 'fresh');
+    expect(h.approvals).toHaveLength(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves legitimate nested plugin arguments and schema-declared args fields', async () => {
+    const fetchImpl = vi.fn(async (_url: unknown, _options?: RequestInit) => Response.json({ result: { content: [] } }));
+    const h = gatewayWithFetch(fetchImpl);
+    h.gateway.add('cindy', h.client, [{ name: 'ghost_call', inputSchema: {
+      type: 'object', properties: { ghost_id: { type: 'string' }, tool: { type: 'string' }, args: { type: 'object' } },
+      required: ['ghost_id', 'tool'],
+    } }]);
+    await h.list({ server: 'cindy', tool: 'ghost_call' });
+    const args = { ghost_id: 'calendar', tool: 'call_tool', args: { name: 'list_calendars', args: { include_hidden: false } } };
+    await h.invoke({ server: 'cindy', tool: 'ghost_call', args });
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1]!.body)).params.arguments).toEqual(args);
+    h.gateway.add('custom', h.client, [{ name: 'nested', inputSchema: {
+      type: 'object', properties: { args: { type: 'object' } }, required: ['args'],
+    } }]);
+    await h.list({ server: 'custom', tool: 'nested' });
+    await h.invoke({ server: 'custom', tool: 'nested', args: { args: { value: 0 } } });
+    expect(JSON.parse(String(fetchImpl.mock.calls[1][1]!.body)).params.arguments).toEqual({ args: { value: 0 } });
+  });
+
   it('discovers and resolves a custom MCP by display name without changing its id', async () => {
     const h = gatewayWithFetch(vi.fn(async () => Response.json({ result: { content: [{ type: 'text', text: 'ok' }] } })));
     h.gateway.add('4de87c18-f95d-4460-aeef-47aed2160c77', h.client, [{ name: 'probe' }], 'nowledge-mem');

@@ -85,6 +85,16 @@
       "reset": "Auf Standard zurücksetzen",
       "apply": "Anwenden",
       "hex": "Farbwert"
+    },
+    "appIcon": {
+      "label": "App-Symbol",
+      "saveFailed": "Das App-Symbol konnte nicht geändert werden. Bitte versuche es erneut.",
+      "options": {
+        "default": "Standard",
+        "cat": "Schwarze Katze",
+        "wordmark": "Cindy-Wortmarke",
+        "mark": "Cindy-Symbol"
+      }
     }
   },
   "language": {

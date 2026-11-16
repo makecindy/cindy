@@ -85,6 +85,16 @@
       "reset": "復預設",
       "apply": "用之",
       "hex": "色碼"
+    },
+    "appIcon": {
+      "label": "應用之標",
+      "saveFailed": "應用之標未能易，請稍後再試",
+      "options": {
+        "default": "常例",
+        "cat": "玄貓",
+        "wordmark": "Cindy 字標",
+        "mark": "Cindy 符記"
+      }
     }
   },
   "language": {

@@ -85,6 +85,16 @@
       "reset": "デフォルトに戻す",
       "apply": "適用",
       "hex": "カラーコード"
+    },
+    "appIcon": {
+      "label": "アプリアイコン",
+      "saveFailed": "アプリアイコンを変更できませんでした。もう一度お試しください",
+      "options": {
+        "default": "デフォルト",
+        "cat": "黒猫",
+        "wordmark": "Cindy ロゴタイプ",
+        "mark": "Cindy シンボル"
+      }
     }
   },
   "language": {
