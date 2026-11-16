@@ -3695,6 +3695,8 @@ test('a send to a task whose managed worktree is gone fails at once without a re
 //   the model that ran it, and a change of model adds one model-change card (register.ts).
 // - Gap: the Host carried neither note and recorded no model.
 async function notesFixture(t) {
+  // The queue's owner is the database it opens: close the queue before the database (last in, first out).
+  t = lifoCleanup(t);
   const db = await recoveryDatabase(t);
   const stored = { model: 'model-a' };
   const h = createHarness({ persistMessage: db.persistMessage, getOwner: getCurrentDbClientSnapshot,
@@ -3753,6 +3755,8 @@ test('a dispatched user turn records its model, and a changed model adds one mod
 // - Gap: the Host kept only the projection's error: after a restart the task showed the user's
 //   message with no error and no retry.
 async function undispatchedFixture(t, failure) {
+  // The queue's owner is the database it opens: close the queue before the database (last in, first out).
+  t = lifoCleanup(t);
   const db = await recoveryDatabase(t);
   const h = createHarness({ persistMessage: db.persistMessage, getOwner: getCurrentDbClientSnapshot,
     readSession: async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'm', workingDir: db.root,
@@ -3819,6 +3823,7 @@ test('a retried turn hides the user row and error row it replaces', { timeout: 3
 // it is unavailable as on a desktop with no link, and the message goes without it. Gap: the Host
 // dropped every reference.
 test('a send carries a referenced task\'s messages; another device\'s task is left out', { timeout: 30_000 }, async t => {
+  t = lifoCleanup(t); // close the queue before the database it is owned by
   const db = await recoveryDatabase(t);
   const h = createHarness({ persistMessage: db.persistMessage, getOwner: getCurrentDbClientSnapshot,
     resolveSessionReferences: (refs, options) => resolveSessionReferencesWithPorts({
@@ -3850,6 +3855,8 @@ test('a send carries a referenced task\'s messages; another device\'s task is le
 // Gap: the stream for a stored-but-undispatched turn never ended. (Context recovery through
 // /api/chat, whose claimed error stores no row, keeps its stream open: tests above.)
 async function chatFixture(t, { failAfterAccept = false } = {}) {
+  // The queue's owner is the database it opens: close the queue before the database (last in, first out).
+  t = lifoCleanup(t);
   const hub = createEventHub();
   const db = await recoveryDatabase(t);
   const h = createHarness({ hub,
