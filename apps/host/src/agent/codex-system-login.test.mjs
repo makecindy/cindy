@@ -44,28 +44,28 @@ import { createBridgeTokenReader } from './codex-runtime.ts';
 import { bindNativeProviderAuth } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.ts';
 import { currentCodexCredentialGeneration } from '../../../desktop/src/main/maker-host/codexCredentialRead.ts';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
+import { fileSymlinkSkipReason } from '../test-support/file-symlink.mjs';
+
+const fileSymlinkUnavailable = fileSymlinkSkipReason();
 
 const authJson = (token) => JSON.stringify({ account: { email: 'fixture@example.test' }, tokens: { access_token: token, account_id: 'workspace-a' } });
 
-function sharedProfile(t, ownerId) {
+function isolatedProfile(t, ownerId) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-system-login-')));
   t.after(() => { configureHostOwner({ userDataDir: root, ownerId: null }); fs.rmSync(root, { recursive: true, force: true }); });
-  const systemAuth = path.join(root, 'fake-home', '.codex', 'auth.json');
-  fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
-  fs.writeFileSync(systemAuth, authJson('system-token-1'), { mode: 0o600 });
   const profileDir = path.join(root, 'profile');
   configureHostOwner({ userDataDir: profileDir, ownerId });
   const codexHome = path.join(profileDir, 'codex-home');
-  // This fixture exercises a shared login surviving an atomic system refresh, not
-  // file-link creation. A directory junction has the same live-entry semantics
-  // on Windows without requiring file-symlink privileges (unlike a hard link).
-  if (process.platform === 'win32') {
-    fs.mkdirSync(profileDir, { recursive: true });
-    fs.symlinkSync(path.dirname(systemAuth), codexHome, 'junction');
-  } else {
-    fs.mkdirSync(codexHome, { recursive: true });
-    fs.symlinkSync(systemAuth, path.join(codexHome, 'auth.json'), 'file');
-  }
+  fs.mkdirSync(codexHome, { recursive: true });
+  return { root, profileDir, codexHome };
+}
+
+function sharedProfile(t, ownerId) {
+  const { root, profileDir, codexHome } = isolatedProfile(t, ownerId);
+  const systemAuth = path.join(root, 'fake-home', '.codex', 'auth.json');
+  fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+  fs.writeFileSync(systemAuth, authJson('system-token-1'), { mode: 0o600 });
+  fs.symlinkSync(systemAuth, path.join(codexHome, 'auth.json'));
   bindNativeProviderAuth('openai', { sharedSystem: true });
   const accounts = { isCodexAccountLoginActive: () => false, isCodexAccountProvider: () => false };
   const systemLogin = createHostCodexSystemLogin({ codexHome, systemAuthPath: systemAuth, loginActive: () => false });
@@ -76,7 +76,10 @@ function sharedProfile(t, ownerId) {
 
 // Release table row 26: the desktop clears "recovery required" after an account request (2e);
 // before that the Host keeps the mark. The renewed login must still be usable for tasks.
-test('after a system re-login the recovered login is usable on the Host, only marked', { timeout: TEST_TIMEOUT_MS }, async t => {
+test('after a system re-login the recovered login is usable on the Host, only marked', {
+  timeout: TEST_TIMEOUT_MS,
+  skip: fileSymlinkUnavailable,
+}, async t => {
   t = lifoCleanup(t);
   const p = sharedProfile(t, 'recovery-owner');
   await invalidateHostCodexLogin({ codexHome: p.codexHome, systemAuthPath: p.systemAuth, reason: 'token_revoked', hostBound: true,
@@ -97,14 +100,17 @@ test('after a system re-login the recovered login is usable on the Host, only ma
 test('a successful Cindy login reconciles before its auth boundary; a failed one does not', { timeout: TEST_TIMEOUT_MS }, async t => {
   t = lifoCleanup(t);
   for (const ok of [true, false]) {
-    const p = sharedProfile(t, `login-owner-${ok}`);
+    // This unit verifies injected login callbacks, not shared-file topology. Like
+    // codex-auth-boundary.test.mjs, it only needs an isolated owner/profile.
+    const p = isolatedProfile(t, `login-owner-${ok}`);
     const calls = [];
-    const systemLogin = { systemAuthPath: p.systemAuth, reconcile: async () => { calls.push('reconcile'); }, reconcileAfterLogin: async () => { calls.push('after-login'); } };
-    const accounts = { ...p.accounts, loginCodexAccount: async () => (ok ? { ok: true } : { ok: false, reason: 'login_failed' }),
+    const systemLogin = { systemAuthPath: null, reconcile: async () => { calls.push('reconcile'); }, reconcileAfterLogin: async () => { calls.push('after-login'); } };
+    const accounts = { loginCodexAccount: async () => (ok ? { ok: true } : { ok: false, reason: 'login_failed' }),
       codexAccountState: () => ({ authenticated: ok }), cancelCodexAccountLogin() {} };
     const auth = createCodexLocalCliAuth(null, undefined, p.codexHome, accounts, undefined,
       { systemLogin, afterLogin: async () => { calls.push('boundary'); } });
-    await auth.triggerLogin();
+    assert.deepEqual(await auth.triggerLogin(), ok
+      ? { authenticated: true } : { authenticated: false, errorReason: 'login_failed' });
     assert.deepEqual(calls, ok ? ['after-login', 'boundary'] : [], `login ok=${ok}`);
   }
 });

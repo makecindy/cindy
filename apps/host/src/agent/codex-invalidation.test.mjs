@@ -19,10 +19,12 @@ import {
 import { currentCodexCredentialGeneration } from '../../../desktop/src/main/maker-host/codexCredentialRead.ts';
 import { createHostCodexCredentials } from './codex-credentials.ts';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
+import { fileSymlinkSkipReason } from '../test-support/file-symlink.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
 const TEST_TIMEOUT_MS = 120_000;
+const fileSymlinkUnavailable = fileSymlinkSkipReason();
 
 const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-invalidation-home-'));
 const originalHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
@@ -202,28 +204,10 @@ test('an unwritable marker falls back to revoking the native authorization', { t
   assert.equal((await p.auth.getState({ providerId: 'openai' })).authenticated, false);
 });
 
-// Match codexAuthLink.test.ts: probe the actual filesystem capability, rather
-// than skipping all Windows machines or substituting a different link topology.
-function fileSymlinkUnavailableReason() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-file-link-probe-'));
-  try {
-    const target = path.join(root, 'target');
-    fs.writeFileSync(target, 'probe');
-    fs.symlinkSync(target, path.join(root, 'link'), 'file');
-    return false;
-  } catch (error) {
-    if (!['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) throw error;
-    return `File symlinks unavailable: ${error.code}; requires a symlink-capable test host`;
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
-const fileSymlinkUnavailable = fileSymlinkUnavailableReason();
 for (const link of ['hard', 'symbolic']) {
-  test(`a ${link}-linked login outside the profile: neither invalidation changes that file`, {
+  test(`a login linked to a file outside the profile (${link}): neither invalidation changes that file`, {
     timeout: TEST_TIMEOUT_MS,
-    skip: link === 'symbolic' && fileSymlinkUnavailable,
+    skip: link === 'symbolic' ? fileSymlinkUnavailable : false,
   }, async t => {
     t = lifoCleanup(t);
     for (const attribution of ['attributed', 'unattributed']) {
@@ -234,7 +218,7 @@ for (const link of ['hard', 'symbolic']) {
       const target = path.join(outside, 'auth.json');
       fs.writeFileSync(target, JSON.stringify({ tokens: { access_token: 'linked-token', account_id: 'fixture-workspace' } }), { mode: 0o600 });
       fs.rmSync(p.authPath);
-      if (link === 'hard') fs.linkSync(target, p.authPath); else fs.symlinkSync(target, p.authPath, 'file');
+      if (link === 'hard') fs.linkSync(target, p.authPath); else fs.symlinkSync(target, p.authPath);
       const before = { bytes: fs.readFileSync(target, 'utf8'), stat: fs.statSync(target) };
       const result = await invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'token_revoked',
         ...(attribution === 'attributed' ? {} : { credentialAttribution: 'unproven', loginInProgress: () => false }) });

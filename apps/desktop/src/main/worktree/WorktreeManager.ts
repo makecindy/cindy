@@ -27,6 +27,7 @@ import {
   validateWorktreeName,
 } from './nameGenerator';
 import { readAttachedWorktreeBranch } from './attachedBranch';
+import { refreshSelectedDefaultSource } from './freshBase';
 import { classifyError, type ClassifyInput } from './errorClassifier';
 import {
   gitExec,
@@ -38,7 +39,7 @@ import { gitPathOutput } from './gitPathOutput';
 import { ensureManagedWorktreeExcluded } from './managedWorktreeExclude';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { applyWorktreeIncludeFile, listChangedWorktreeIncludeFiles } from './includePatternsEngine';
-import { hasKeepSentinel, isManagedWorktreePath } from './safety';
+import { hasKeepSentinel } from './safety';
 import {
   isWorktreeDirty,
   listNonReproducibleIgnoredFiles,
@@ -824,6 +825,8 @@ export async function awaitBackgroundCheckout(sessionId: string): Promise<void> 
 }
 
 export interface CreateWorktreeOptions {
+  /** Desktop new-task entry only; internal option, never taken from IPC request fields. */
+  refreshDefaultSource?: boolean;
   /** Keep a handle on the background checkout so failure compensation can wait for it. */
   trackBackgroundCheckout?: boolean;
   /**
@@ -918,6 +921,11 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
           },
         };
       }
+    }
+
+    // Refresh before add/checkout. Other creation paths preserve their existing behavior.
+    if (options?.refreshDefaultSource) {
+      await refreshSelectedDefaultSource(baseRepo, req.sourceBranch);
     }
 
     // 3. 路径冲突避让

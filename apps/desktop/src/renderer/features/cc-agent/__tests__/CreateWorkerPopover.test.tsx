@@ -129,6 +129,10 @@ vi.mock('react-i18next', () => ({
     key.startsWith('orca.workerProject.') && values ? `${key} ${Object.values(values).join(' ')}` : key }),
 }));
 
+// WorkerProjectField uses only the branch picker export, not the new-task
+// checkout activity observer. Keep its unrelated task store out of this fixture.
+vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: {} }));
+
 vi.mock('@/hooks/useAgentCapabilities', () => ({
   useAgentCapabilities: (agent: 'codex' | 'claude-code') => ({
     capabilities: mocks.capabilitiesByAgent[agent],
@@ -2906,11 +2910,17 @@ describe('local Worker project selection', () => {
   const context: WorkerProjectContext = {recordedDirectory: '/repo', inherited: project, selected: project, dialogue: false, projects: []};
   const projectContext = vi.fn();
   beforeEach(() => {
+    // jsdom has no layout observer; the shared branch menu now observes its list.
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     projectContext.mockReset().mockResolvedValue(context);
     (window as unknown as {electronAPI: unknown}).electronAPI = {localDb: {orcaWorkflows: {projectContext}}, worktreeListBranches: vi.fn().mockResolvedValue({branches: ['main']})};
   });
-  afterEach(() => {cleanup(); Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView'); delete (window as unknown as {electronAPI?: unknown}).electronAPI;});
+  afterEach(() => {cleanup(); vi.unstubAllGlobals(); Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView'); delete (window as unknown as {electronAPI?: unknown}).electronAPI;});
   // Native picker cancellation does not select a project. Rejected IPC must also leave
   // the modal usable; previous field tests never opened the actual folder popover.
   it.each(['cancel', 'error'] as const)('keeps the selected project ready, closable and submittable after native picker %s', async (outcome) => {
