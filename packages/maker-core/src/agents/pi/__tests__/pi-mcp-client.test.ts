@@ -62,7 +62,9 @@ function gatewayWithFetch(fetchImpl: typeof fetch, permissionMode = 'ask') {
     approve: () => approvalHook({ toolName: 'cindy_mcp_call_tool', toolCallId: 'call',
       input: { server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'demo' } } },
       { ui: { input: async () => 'allow' } }),
-    connect: () => context.connect({ name: 'cindy', url: 'https://example.test/mcp' }, 'fake-token'),
+    connect: (server: { name: string; displayName?: string; url: string } = {
+      name: 'cindy', url: 'https://example.test/mcp',
+    }) => context.connect(server, 'fake-token'),
     resultHook: (event: unknown) => resultHooks[0]?.(event),
     list: (params: unknown = {}, signal?: AbortSignal) => registered.find(t => t.name === 'cindy_mcp_list_tools').execute('list', params, signal) };
 }
@@ -150,17 +152,85 @@ describe('Pi MCP request lifecycle', () => {
     expect(resolved.tool.serverName).toBe('4de87c18-f95d-4460-aeef-47aed2160c77');
   });
 
-  it('rejects an ambiguous display name with the matching stable ids', async () => {
-    const h = gatewayWithFetch(vi.fn(async () => Response.json({ result: { content: [] } })));
-    h.gateway.add('mcp_one', h.client, [{ name: 'probe' }], 'shared-name');
-    h.gateway.add('mcp_two', h.client, [{ name: 'probe' }], 'shared-name');
+  // #10529: named aliases were covered, but an unnamed UUID still leaked into
+  // discovery. Unit tier: real initialization, gateway tools and approval hook;
+  // only HTTP is injected. Missing and whitespace-only metadata are both valid.
+  it.each([undefined, '   '])('discovers and calls an unnamed UUID MCP with %j names', async emptyName => {
+    const id = '4de87c18-f95d-4460-aeef-47aed2160c77';
+    const displayName = '未命名 MCP (4de87c18)';
+    const inputSchema = { type: 'object', properties: { value: { type: 'string' } } };
+    const calls: unknown[] = [];
+    const h = gatewayWithFetch(vi.fn(async (_url, options) => {
+      const body = JSON.parse(String(options!.body));
+      if (body.method === 'initialize') return Response.json({ result: { serverInfo: { name: emptyName } } });
+      if (body.method === 'tools/list') return Response.json({ result: { tools: [{ name: 'probe', inputSchema }] } });
+      if (body.method === 'tools/call') calls.push(body.params);
+      return Response.json({ result: { content: [{ type: 'text', text: 'ok' }] } });
+    }));
+    const connect = () => h.connect({ name: id, displayName: emptyName, url: 'https://example.test/mcp' });
+    const connected = await connect();
+    h.gateway.add(id, connected.client, connected.tools, connected.displayName);
+    h.gateway.registerReconnect(id, connect);
 
-    const result = await h.list({ server: 'shared-name' });
+    expect((await h.list({ query: '未命名 MCP' })).details.tools).toEqual([
+      expect.objectContaining({ server: displayName, serverId: id, name: 'probe' }),
+    ]);
+    const input = { server: displayName, tool: 'probe', args: { value: 'example' } };
+    await expect(h.invoke(input)).rejects.toThrow(/cindy_mcp_list_tools/);
+    expect((await h.list({ server: displayName, tool: 'probe' })).details.tools[0].inputSchema).toEqual(inputSchema);
+    await h.approveInput(input, 'alias');
+    await expect(h.invoke(input, 'alias')).resolves.toMatchObject({ content: [{ text: 'ok' }] });
+    // The alias and original ID share disclosure and the canonical approval identity.
+    const byId = { ...input, server: id };
+    await h.approveInput(byId, 'id');
+    await h.invoke(byId, 'id');
+    expect(h.approvals).toEqual([
+      expect.objectContaining({ toolName: 'mcp__' + id + '__probe', input: input.args }),
+      expect.objectContaining({ toolName: 'mcp__' + id + '__probe', input: input.args }),
+    ]);
+    expect(calls).toEqual(Array(2).fill({ name: 'probe', arguments: input.args }));
+
+    h.gateway.markUnavailable(id, 'HTTP 503');
+    expect((await h.list({ server: displayName })).details.tools).toEqual([
+      expect.objectContaining({ server: displayName, serverId: id, name: 'probe' }),
+    ]);
+    expect(calls).toHaveLength(2); // Reconnecting must not replay a tool call.
+  });
+
+  it.each([
+    { configured: ' configured ', protocol: 'protocol', expected: 'configured' },
+    { configured: ' ', protocol: ' protocol ', expected: 'protocol' },
+  ])('preserves name precedence during initialization: $expected', async ({ configured, protocol, expected }) => {
+    const h = gatewayWithFetch(vi.fn(async (_url, options) => {
+      const body = JSON.parse(String(options!.body));
+      return Response.json({ result: body.method === 'initialize'
+        ? { serverInfo: { name: protocol } } : { tools: [{ name: 'probe' }] } });
+    }));
+    const id = '4de87c18-f95d-4460-aeef-47aed2160c77';
+    const connected = await h.connect({ name: id, displayName: configured, url: 'https://example.test/mcp' });
+    h.gateway.add(id, connected.client, connected.tools, connected.displayName);
+    expect((await h.list({ server: expected })).details.tools).toEqual([
+      expect.objectContaining({ server: expected, serverId: id, name: 'probe' }),
+    ]);
+  });
+
+  it.each([
+    { ids: ['mcp_one', 'mcp_two'], displayName: 'shared-name', alias: 'shared-name' },
+    { ids: ['4de87c18-f95d-4460-aeef-47aed2160c77', '4de87c18-f95d-4460-aeef-47aed2160c78'],
+      displayName: undefined, alias: '未命名 MCP (4de87c18)' },
+  ])('rejects an ambiguous display name with the matching stable ids: $alias', async ({ ids, displayName, alias }) => {
+    const h = gatewayWithFetch(vi.fn(async () => Response.json({ result: { content: [] } })));
+    for (const id of ids) h.gateway.add(id, h.client, [{ name: 'probe' }], displayName);
+
+    const result = await h.list({ server: alias });
     expect(result.details).toMatchObject({
       ok: false,
       errorCode: 'AMBIGUOUS_SERVER',
-      matchingServerIds: ['mcp_one', 'mcp_two'],
+      matchingServerIds: ids,
     });
+    for (const id of ids) {
+      expect(h.gateway.resolveCall({ server: id, tool: 'probe', args: {} }).tool.serverName).toBe(id);
+    }
   });
 
   it('reconnects an unavailable MCP when discovery uses its display name', async () => {
