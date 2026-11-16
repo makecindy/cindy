@@ -1691,6 +1691,16 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (this.deps.bootstrapSession) {
         agentDeviceId = createSessionOpts.agentDeviceId ?? null;
         createProviderId = createSessionOpts.providerId ?? null;
+        if (!isHeartbeat && resolvedSelection) {
+          // The ordinary startup funnel resolves a logical provider-group entry
+          // to its final member (including startup failover). Use that trusted
+          // receipt, not the mutable live session, as this run's dispatch target.
+          // Keep model/Agent checks and both queue-boundary checks unchanged;
+          // subsequent route changes still fail closed. Never save this member
+          // back to the automation's configured group choice.
+          resolvedSelection = { ...resolvedSelection, agentDeviceId, providerId: createProviderId };
+          schedule = { ...schedule, providerId: createProviderId ?? undefined };
+        }
       }
     } catch (err) {
       if (err instanceof CredentialModeSwitchBusyError) {
