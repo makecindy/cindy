@@ -335,6 +335,39 @@ describe('market action feedback', () => {
 
 // Unit: route unmount used to discard all catalog view state. Only IPC is
 // stubbed; the same page mounts again with its real catalog and search controls.
+// Unit / Codex 4584198380: Settings can remount the local Plugins pane
+// underneath Skills. Cached installed-tab prewarming and hidden revisions must
+// not query the catalog; activation resumes the existing page/count readers.
+it('defers local catalog prewarming and hidden revisions until activation', async () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(100_000);
+  vi.useFakeTimers();
+  const query = vi.fn(window.electronAPI.pluginMarket.query);
+  window.electronAPI.pluginMarket.query = query;
+  const view = (active: boolean) => <MemoryRouter initialEntries={['/plugins']}><GhostPluginPage active={active} /></MemoryRouter>;
+  const warm = render(view(true));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(query.mock.calls.some(([input]) => input.counts)).toBe(true);
+  const memory = pluginCatalogMemory(pluginCatalogOwnerKey('local', auth.dataOwnerId, auth.dataOwnerGeneration, 'en'), 'local');
+  const pages = memory.browser.current.pages;
+  warm.unmount();
+  query.mockClear();
+  clock.mockReturnValue(131_000);
+  const mounted = render(view(false));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(query).not.toHaveBeenCalled();
+  memory.catalogRevision += 1;
+  mounted.rerender(view(false));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(query).not.toHaveBeenCalled();
+  expect(memory.browser.current.pages).toBe(pages);
+  mounted.rerender(view(true));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(query.mock.calls.filter(([input]) => !input.counts)).toHaveLength(1);
+  expect(query.mock.calls.filter(([input]) => input.counts)).toHaveLength(1);
+  fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+  expect(screen.getByRole('button', { name: detail.name })).toBeTruthy();
+});
+
 it('restores tab, search, source and scroll together after leaving the plugin route', async () => {
   const mounted = render(page('/plugins'));
   fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));

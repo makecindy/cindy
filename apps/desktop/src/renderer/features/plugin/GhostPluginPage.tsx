@@ -460,10 +460,12 @@ export function GhostPluginPage(props: { embedded?: boolean; active?: boolean; o
 
 function LocalGhostPluginPage({
   embedded = false,
+  active = true,
   deviceControl,
   onSelectCatalogTab,
 }: {
   embedded?: boolean;
+  active?: boolean;
   deviceControl?: CatalogDeviceControl;
   onSelectCatalogTab?: (tab: 'plugins' | 'skills') => void;
 } = {}) {
@@ -2309,7 +2311,7 @@ function LocalGhostPluginPage({
             </section>
 
             <PluginCatalogBrowser cacheRef={browserCache} ownerKey={catalogOwnerKey}
-              prewarm
+              prewarm={active}
               filterHost={marketFiltersHost}
               catalogKey={marketLocale}
               revision={JSON.stringify([marketSnapshot?.items.map(item => [item.pluginId, item.installState, item.version]), customSourceNames, catalogRevision])}
@@ -2323,7 +2325,7 @@ function LocalGhostPluginPage({
                 if (root && tabs && tabs.getBoundingClientRect().top < root.getBoundingClientRect().top)
                   root.scrollTop += tabs.getBoundingClientRect().top - root.getBoundingClientRect().top;
               }}
-              showOrganization={showEnterprise} visible={!!query.trim() || catalogTab === 'market'}
+              showOrganization={showEnterprise} visible={active && (!!query.trim() || catalogTab === 'market')}
               scrollRef={pluginCatalogListRef} loadPage={window.electronAPI.pluginMarket.query}
               renderRevision={marketBusyId}
               onCounts={counts => setMarketTotal(counts?.all ?? null)}

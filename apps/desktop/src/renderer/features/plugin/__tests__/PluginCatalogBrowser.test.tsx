@@ -403,6 +403,36 @@ it('does not render unchanged cards or signed-url renewals and renders only a ch
   expect(renderItem).toHaveBeenCalledTimes(before + 2);
 });
 
+// Unit / Codex 4584198389: sequential renewal coverage missed a failed image
+// joining an ordinary in-flight refresh. Exercise the actual image component:
+// cache transport may change silently, but explicit renewal must restore src.
+it('publishes renewed image props when renewal joins an in-flight catalog refresh', async () => {
+  const value = (url: string): PluginMarketPage => ({ ...page(0, 1), items: [{ ...item(0),
+    icon: { sha256: 'a'.repeat(64), mimeType: 'image/png', sizeBytes: 12, url, expiresAt: '2030-01-01T00:00:00Z' } }] });
+  let hold = false;
+  let finish!: (value: PluginMarketPage) => void;
+  const load = vi.fn(async (input: PluginMarketQuery) => !input.counts && hold
+    ? new Promise<PluginMarketPage>(resolve => { finish = resolve; }) : value('https://icons.invalid/old'));
+  const { cache, view } = fixture(load, item => <article>{item.name}
+    <GhostPluginIcon iconId={item.ghostId} iconName={item.name} iconDataUrl={item.icon?.url} />
+  </article>);
+  render(view());
+  const card = await screen.findByText('Tool 0');
+  const image = card.querySelector('img')!;
+  expect(image.getAttribute('src')).toBe('https://icons.invalid/old');
+  fireEvent.error(image);
+  expect(card.querySelector('img')).toBeNull();
+  hold = true;
+  let ordinary!: Promise<void>;
+  act(() => { ordinary = cache.current.refresh!({ force: true }); });
+  await waitFor(() => expect(finish).toBeDefined());
+  const renewal = cache.current.refresh!({ force: true, renewIcons: true });
+  await act(async () => { finish(value('https://icons.invalid/new')); await Promise.all([ordinary, renewal]); });
+  expect(cache.current.pages.get(0)?.[0].icon?.url).toBe('https://icons.invalid/new');
+  expect(card.querySelector('img')?.getAttribute('src')).toBe('https://icons.invalid/new');
+  expect(load.mock.calls.filter(([input]) => !input.counts)).toHaveLength(2);
+});
+
 it('keeps visible batches while rebuilding an invalid continuation in the background', async () => {
   let changed = false;
   let release: ((page: PluginMarketPage) => void) | undefined;

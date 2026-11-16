@@ -252,6 +252,10 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
         // read need a follow-up. Concurrent callers join that one latest read.
         if (current() && pending.revision !== latestRevision.current && cache.refreshedRevision !== latestRevision.current) {
           await refresh({ ...options, force: true });
+        } else if (current() && options?.renewIcons) {
+          for (const [index, items] of cache.pages)
+            cache.pages.set(index, items.map(item => item.icon ? { ...item, icon: { ...item.icon } } : item));
+          rerender();
         }
         return;
       }
