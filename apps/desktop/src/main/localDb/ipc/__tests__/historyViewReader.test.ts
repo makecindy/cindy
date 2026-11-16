@@ -21,6 +21,22 @@ function reader(source: HistoryMessageSource[]) {
   return { list, api: createHistoryViewReader({ list, anchor, running: () => false }) };
 }
 describe('host history view', () => {
+  // Unit: page sealing used two full anchor reads although the production
+  // reader already supports bounded ID validation. Reject invalidated history
+  // through that same validator, without loading endpoint bodies again.
+  it('batch-validates page endpoints and rejects invalidated history before publishing', async () => {
+    const source = [row(0, 'user'), row(1, 'assistant')];
+    const base = reader(source);
+    const anchor = vi.fn(async (_sid: string, id: string) => source.find(r => r.id === id)!);
+    const validate = vi.fn(async (_sid: string, _ids: string[]) => {});
+    const api = createHistoryViewReader({ list: base.list, anchor, validate, running: () => false });
+    expect((await api.page('s')).items.length).toBeGreaterThan(0);
+    expect(validate).toHaveBeenCalledExactlyOnceWith('s', ['0', '1']);
+    expect(anchor).not.toHaveBeenCalled();
+    validate.mockRejectedValueOnce(new Error('History range changed'));
+    await expect(api.page('s')).rejects.toThrow('History range changed');
+  });
+
   // Unit performance regression: concurrent closed-history pages duplicated DB
   // scans/projection. Existing pagination tests never overlapped requests.
   // Two identical in-flight reads must share work, but later reads remain fresh.

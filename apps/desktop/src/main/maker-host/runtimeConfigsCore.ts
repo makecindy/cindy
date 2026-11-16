@@ -159,7 +159,7 @@ export interface PiRuntimeConfigHost {
   /** Absolute user-data root handed to maker-core. */
   userDataPath: string;
   /** Endpoint for local Pi sessions, read on every access. */
-  endpoint(): string;
+  endpoint(): string | undefined;
   /** Real gateway upstream for remote Pi sessions, read on every access. */
   remoteEndpoint(): string;
 }
@@ -272,21 +272,17 @@ export function createAgentRuntimeConfigs(ports: AgentRuntimeConfigPorts) {
    * 对应迁移自 vendor/claude/authAdapter.ts:66-78 的 ANTHROPIC_BASE_URL +
    * CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS, 并额外注入 maker 侧自动压缩阈值。
    *
-   * @param endpointFn 返回 Claude Code 子进程当前应该用的 ANTHROPIC_BASE_URL 的函数。
-   *   **必须传函数而不是字符串**: 每次 spawn(startSession) 时 env-builder 会读
-   *   `runtimeConfig.endpoint`, 我们用 getter 让它每次都调用这个函数读最新值。
-   *   proxy 在 splash 期异步启动, getter 保证每次新建 session 都拿到当时最新的就绪状态,
-   *   不需要重启 app 或重置 Maker 单例。
-   *
-   *   传 `getClaudeEndpoint`(函数引用)即可。getClaudeEndpoint 内部已经处理:
-   *     proxy ready → loopback URL(请求经 proxy 做 per-model 路由 + 字段适配);
-   *     proxy 没起  → 真上游 + warn(fail-open 兜底)。
+   * @param endpointFn Live snapshot for auxiliary reads, including their upstream fallback.
+   * @param resolveLocalEndpoint Local launch gate: waits for proxy startup and rejects
+   *   instead of freezing the snapshot fallback. Desktop and Node Host supply it;
+   *   native CLI subscription auth and remote sessions retain their own endpoints.
    */
-  function buildClaudeRuntimeConfig(endpointFn: () => string): AgentRuntimeConfig {
+  function buildClaudeRuntimeConfig(endpointFn: () => string, resolveLocalEndpoint?: () => Promise<string>): AgentRuntimeConfig {
     // 用 plain object + Object.defineProperty 装 getter, 而不是 class 实例。
     // 这样 AgentRuntimeConfig 接口(endpoint?: string)在结构类型上仍然成立 ——
     // 每次访问 runtimeConfig.endpoint 都会执行 endpointFn, 拿到当时最新的兼容模式状态。
     const config: AgentRuntimeConfig = {
+      ...(resolveLocalEndpoint ? { resolveLocalEndpoint } : {}),
       // behaviorFlags 用函数形态:env-builder 在每次 spawn 时传入凭证形态与来源。
       // gateway-key spawn 保持禁归因且不读钥匙串;Tool Search 仅对 XD/Anthropic 开启。
       // 会话中途连/断订阅只影响新 spawn —— 与 cc 子进程凭证冻结语义一致。

@@ -420,6 +420,8 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     supportsScopedStop: record.supportsScopedStop === true,
     supportsMentionAudiences: record.supportsMentionAudiences === true,
     allowMentionAllBots: record.allowMentionAllBots === true,
+    supportsMemberInvites: record.supportsMemberInvites === true,
+    allowMemberInvites: record.allowMemberInvites === true,
     supportsDivision: record.supportsDivision === true,
     archived: record.archived === true,
     dissolvedAt: text(record.dissolvedAt, 64),

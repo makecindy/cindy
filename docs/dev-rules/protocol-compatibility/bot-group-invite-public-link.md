@@ -40,3 +40,13 @@ Actor ID、owner、role 或 grants，不授予成员详情/历史权限，也不
 显示群缺省标识，坏图原槽显示首字，未知人数不能当 0、不能用摘要长度推算。既有邀请拒绝条件
 继续适用，不通过本次展示放宽。两端可独立升级，真实摘要/人数展示需服务端与客户端均支持；
 生产部署另核验，不新增 schema、原生配置或安装归因。
+
+## 群成员邀请朋友
+
+Chat Server 的 `/me.capabilities.groupMemberInvites=1` 表示支持群邀请配置。
+群快照追加 `allow_member_invites`（默认 false），群 PATCH、`ChatGroupAction.update`、
+`BotGroupUpdateInput` 和既有远程群设置 update 动作追加可选 `allowMemberInvites`。
+投影追加可选 `supportsMemberInvites` 与 `allowMemberInvites`；`canInvite` 同时覆盖有此权限的已加入成员。
+旧服务端隐藏开关，保持群主／管理员邀请；旧客户端忽略新字段，仍可正常邀请和使用群聊。
+先部署服务端，再更新客户端。滚动部署时旧副本仍拒绝普通成员邀请，需全部副本升级后再启用；
+回退旧服务端会恢复原有邀请限制，但保留配置值。自己的伙伴邀请保持原行为。

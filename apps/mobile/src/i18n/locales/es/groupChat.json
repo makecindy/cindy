@@ -304,6 +304,8 @@
       "loading": "Cargando configuración…",
       "unavailable": "No se pudo cargar la configuración del grupo. Inténtalo de nuevo."
     },
+    "allowMemberInvites": "Permitir que todos inviten amigos",
+    "allowMemberInvitesHint": "Al activarlo, todos los miembros del grupo pueden invitar amigos. Solo el dueño del grupo y los administradores pueden cambiarlo.",
     "allowMentionAllBots": "Permitir @todos los amigos",
     "allowMentionAllBotsHint": "Solo el dueño del grupo puede cambiarlo. Todos los amigos podrían responder; cuidado en grupos grandes. No afecta a la IA que responde por ti.",
     "notifications": {

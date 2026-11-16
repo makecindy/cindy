@@ -7,7 +7,7 @@ import { hasPluginHostToolGroupApproval } from './taskCapability.js';
 const SERVERS: Record<GhostHostToolGroup, string> = {
   history: 'cindy_helper', control: 'cindy_helper', handoff: 'cindy_helper', settings: 'cindy_helper',
   scheduler: 'cindy_scheduler', terminal: 'cindy_helper', files: 'cindy_helper', storage: 'cindy_helper',
-  browser: 'cindy_browser', computer: 'cindy_computer', ssh: 'cindy_ssh', docs: 'cindy_docs', discovery: 'cindy_helper',
+  browser: 'cindy_browser', computer: 'cindy_computer', ssh: 'cindy_ssh', docs: 'cindy_docs', discovery: 'cindy_helper', usage: 'cindy_helper',
 };
 
 /** A projection of the existing providers. It owns no plugins, credentials or service resources. */

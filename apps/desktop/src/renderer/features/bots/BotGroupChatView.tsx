@@ -54,7 +54,8 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { useAttachments } from '@/hooks/useAttachments';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
-import { discardDraftTree } from '@/lib/composerDraftStore';
+import './BotGroupChatView.css';
+import { captureDraftRecoveryScope, discardDraftTree } from '@/lib/composerDraftStore';
 import {
   classifyUnclassifiedDroppedItems,
   getDroppedFileItems,
@@ -313,8 +314,25 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const attachmentState = useAttachments(attachmentScope, attachmentScope);
   const [dragOver, setDragOver] = useState(false);
   const dragCounterRef = useRef(0);
+  const quoteDraftScope = useRef(captureDraftRecoveryScope(attachmentScope)).current;
   /** 引用回复 waiting in this group's composer; the page is rebuilt per group. */
-  const [quoteDraft, setQuoteDraft] = useState<BotGroupQuoteView | null>(null);
+  const [quoteDraft, setQuoteDraft] = useState<BotGroupQuoteView | null>(
+    () => quoteDraftScope.get()?.botGroupQuote ?? null,
+  );
+  useEffect(() => {
+    const existing = quoteDraftScope.get();
+    if (!existing && !quoteDraft) return;
+    quoteDraftScope.save({
+      ...existing, text: existing?.text ?? null, attachments: existing?.attachments ?? [],
+      botGroupQuote: quoteDraft ?? undefined,
+    });
+  }, [quoteDraftScope, quoteDraft]);
+  /** The quote went out with a message: clear only that quote, never one picked meanwhile. */
+  const acceptQuote = useCallback((sent: BotGroupQuoteView) => {
+    const existing = quoteDraftScope.get();
+    if (existing?.botGroupQuote === sent) quoteDraftScope.save({ ...existing, botGroupQuote: undefined });
+    setQuoteDraft(current => (current === sent ? null : current));
+  }, [quoteDraftScope]);
   const [jumpTarget, setJumpTarget] = useState<string | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   /** Quoted originals on older pages not re-read since the last push: quotes use their snapshot. */
@@ -1351,6 +1369,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   return (
     <div ref={threadLayoutRef} className={cn('flex h-full min-w-0 overflow-hidden', threadResize.isDragging && 'select-none [&_*]:cursor-col-resize')}>
     <BotGroupChatMain
+      direct={direct}
       className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-[var(--surface)]"
       onDragEnter={(event) => {
         if (!isAttachmentDrag(event)) return;
@@ -1580,6 +1599,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             dragOver={dragOver}
             quote={quoteDraft ? { view: quoteDraft, display: resolveBotGroupQuote(quoteDraft, quoteSources) } : null}
             onQuoteChange={setQuoteDraft}
+            onQuoteAccepted={acceptQuote}
             onSending={onSending}
           />}
         </div>
@@ -1604,9 +1624,11 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
 }
 
 /** Mount the observer with the ready view, after the loading/error early returns. */
-function BotGroupChatMain(props: ComponentProps<'main'>) {
-  const { containerRef } = useProportionalWidth(914);
-  return <main {...props} ref={containerRef} />;
+function BotGroupChatMain({ direct, className, ...props }: ComponentProps<'main'> & { direct: boolean }) {
+  // Groups use the available pane, including when a topic or sidebar is open.
+  // Keep private conversations on their existing reading width and padding.
+  const { containerRef } = useProportionalWidth(direct ? 914 : 1440, { compact: !direct });
+  return <main {...props} ref={containerRef} className={cn(className, !direct && 'bot-group-adaptive-width')} />;
 }
 
 /** Older shares checked before the latest edit, deletion or reset: they may be out of date. */

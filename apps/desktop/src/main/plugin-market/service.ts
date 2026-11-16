@@ -20,6 +20,7 @@ import {
 } from '@cindy/plugin-protocol';
 import { getResolvedMainLocale } from '../i18n.desktop.js';
 import { readGhostReadmeFromDir } from '../cindy-brain/ghostReadme.js';
+import { isRetainedSeedMarketTarget } from '../cindy-brain/builtinSeedStoreInstall.js';
 import { app, dialog } from 'electron';
 
 import {
@@ -817,8 +818,8 @@ function serverRecordMatchesDelivery(
 /**
  * 内置种子覆盖了这个商店安装，而种子已撤或当前 Release 不比种子旧（种子与商店按版本
  * 取新，相同取商店）：已装字节虽与账本不符（装着的是种子），仍按原商店路由更新回商店包。
- * 只认播种台账里的根 namespace 已批准实例，且账本仍指向当前目录项；不改变其它
- * 来源冲突的判定，也不用于授权查找。
+ * 只认播种台账里的根实例，或注册表仍保留原企业市场来源、被种子写成 root receipt 的旧目录。
+ * 企业恢复还须在实际更新事务中核对可信种子与现存字节；这里仅选路，不用于授权查找。
  */
 function seededBuiltinYieldsToRelease(
   plugin: VisiblePluginSummary,
@@ -831,7 +832,8 @@ function seededBuiltinYieldsToRelease(
     (record.source === 'market' || record.source === 'legacy-adopted') &&
     record.ghostId === plugin.ghostId &&
     ghost.manifest.id === plugin.ghostId &&
-    (!hasDeliveryNamespace(ghost) || ghost.namespace === null) &&
+    ((!hasDeliveryNamespace(ghost) || ghost.namespace === null) ||
+      isRetainedSeedMarketTarget(ghost, record, getGhostManager())) &&
     ghost.approval.state === 'approved' &&
     serverRecordMatchesSummaryRoute(plugin, record) &&
     builtinSeedYieldsToStoreVersion(plugin.ghostId, plugin.currentRelease.version),
