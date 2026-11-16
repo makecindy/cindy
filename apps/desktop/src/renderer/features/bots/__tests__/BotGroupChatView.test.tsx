@@ -2527,6 +2527,35 @@ describe('BotGroupChatView', () => {
       const row = document.querySelector(`[data-bot-group-message-id="${id}"]`) as HTMLElement;
       return within(row).getByRole('button', { name: 'bots.groupChat.server.quoteReply' });
     };
+    /** Hold main's durable enqueue so the page can be left while the send is still being saved. */
+    const gateEnqueue = (outcome: 'accept' | 'reject' = 'accept') => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const enqueues: Extract<BotGroupOutboxCommandRequest, { action: 'enqueue' }>[] = [];
+      const stored: BotGroupOutboxStoredEntry[] = [];
+      let revision = 0;
+      window.electronAPI.maker.botGroupOutboxCommand = async request => {
+        const result = (extra: Partial<BotGroupOutboxCommandResult> = {}): BotGroupOutboxCommandResult =>
+          ({ ...localResult(request, stored), revision: ++revision, ...extra });
+        if (request.action === 'enqueue') {
+          enqueues.push(request);
+          await gate;
+          if (outcome === 'reject') throw new Error('OUTBOX_SOURCE_CONSUMED');
+          stored.unshift({ ...request.entry, entryRevision: stored.length + 1, queueOrdinal: stored.length + 1 });
+          return result({ accepted: true });
+        }
+        if (request.action === 'claim') {
+          const row = stored.find(candidate => candidate.input.groupId === request.groupId
+            && candidate.input.clientId === request.clientId);
+          return result({ ...(row?.entryRevision === undefined ? {} : { execution: {
+            owner: request.owner, instanceId: 'main-test', groupId: row.input.groupId,
+            clientId: row.input.clientId, entryRevision: row.entryRevision, claimToken: 'claim-test' } }) });
+        }
+        if (request.action === 'prepared') return result({ execution: request.execution });
+        return result();
+      };
+      return { enqueues, release };
+    };
     beforeEach(() => {
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
     });
@@ -2996,6 +3025,79 @@ describe('BotGroupChatView', () => {
       renderView();
       await screen.findByRole('textbox');
       expect(screen.queryByTestId('bot-group-quote-preview')).toBeNull();
+    });
+
+    it('drops a sent quote from the group draft even when the page was left while main saved it', async () => {
+      const user = userEvent.setup();
+      const { enqueues, release } = gateEnqueue();
+      let view = renderView();
+      await user.click(await quoteButton());
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: '就这班' } });
+      fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+      await waitFor(() => expect(enqueues).toHaveLength(1));
+      expect(getDraft(botGroupAttachmentScope('g1'))?.botGroupQuote?.messageId).toBe('b1');
+      view.unmount();
+      mocks.groupId = 'g2';
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ id: 'g2', serverBacked: true }) });
+      view = renderView();
+      await screen.findByRole('textbox');
+      await act(async () => { release(); });
+      view.unmount();
+      mocks.groupId = 'g1';
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+      view = renderView();
+      const composer = await screen.findByRole('textbox') as HTMLTextAreaElement;
+      expect(screen.queryByTestId('bot-group-quote-preview')).toBeNull();
+      expect(getDraft(botGroupAttachmentScope('g1'))?.botGroupQuote).toBeUndefined();
+      fireEvent.change(composer, { target: { value: '下一句' } });
+      fireEvent.keyDown(composer, { key: 'Enter' });
+      await waitFor(() => expect(lastSend()).toMatchObject({ groupId: 'g1', text: '下一句' }));
+      expect(lastSend().quote).toBeUndefined();
+    });
+
+    it('keeps a quote picked while the earlier send was still being saved', async () => {
+      const user = userEvent.setup();
+      const g1 = detail({ serverBacked: true, messages: [...detail().messages, msg({ id: 'b2', sequence: 5, authorKind: 'bot',
+        authorBotId: 'xiaoman', authorName: '小满', content: '周日 9:00 也有票' })] });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: g1 });
+      const { enqueues, release } = gateEnqueue();
+      let view = renderView();
+      await user.click(await quoteButton());
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: '就这班' } });
+      fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+      await waitFor(() => expect(enqueues).toHaveLength(1));
+      view.unmount();
+      mocks.groupId = 'g2';
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ id: 'g2', serverBacked: true }) });
+      view = renderView();
+      await screen.findByRole('textbox');
+      view.unmount();
+      mocks.groupId = 'g1';
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: g1 });
+      view = renderView();
+      await screen.findByText('周日 9:00 也有票');
+      await user.click(await quoteButton('b2'));
+      expect(screen.getByTestId('bot-group-quote-preview').textContent).toContain('周日 9:00 也有票');
+      await act(async () => { release(); });
+      expect(getDraft(botGroupAttachmentScope('g1'))?.botGroupQuote?.messageId).toBe('b2');
+      expect(screen.getByTestId('bot-group-quote-preview').textContent).toContain('周日 9:00 也有票');
+      fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+      await waitFor(() => expect(lastSend()).toMatchObject({ groupId: 'g1', quote: { messageId: 'b2' } }));
+    });
+
+    it('keeps the quote when the message never entered the outbox', async () => {
+      const user = userEvent.setup();
+      const { enqueues, release } = gateEnqueue('reject');
+      renderView();
+      await user.click(await quoteButton());
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: '就这班' } });
+      fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+      await waitFor(() => expect(enqueues).toHaveLength(1));
+      await act(async () => { release(); });
+      await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.composer.sendFailed'));
+      expect(screen.getByTestId('bot-group-quote-preview')).toBeTruthy();
+      expect(getDraft(botGroupAttachmentScope('g1'))?.botGroupQuote?.messageId).toBe('b1');
+      expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('就这班');
     });
   });
 
