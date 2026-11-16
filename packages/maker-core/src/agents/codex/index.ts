@@ -7220,6 +7220,42 @@ assertRouteCurrent();
       }, run);
     };
 
+    // Configuration proves intent, not that this native thread completed MCP
+    // startup. Observe only explicitly provisioned helpers, after capability
+    // isolation/disabled overrides; never probe the shared host catalog.
+    const reportExpectedHelperAvailability = async (): Promise<void> => {
+      const config = currentThreadWorkspaceConfig().config;
+      if (reviewMode || config?.['mcp_servers.cindy_helper.enabled'] === false
+        || !['url', 'command'].some(key => {
+          const value = config?.[`mcp_servers.cindy_helper.${key}`];
+          return typeof value === 'string' && value.trim().length > 0;
+        })) return;
+      const checkedThreadId = threadId;
+      let state: string;
+      try {
+        const report = await readCodexThreadMcpServerTools(
+          (method, params, requestOpts) => host.request(method, params, requestOpts),
+          checkedThreadId, 'cindy_helper',
+        );
+        if (['list_tools', 'call_tool'].every(name => report.tools.some(tool => tool.name === name))) return;
+        state = report.state;
+      } catch {
+        // A failed probe is not proof of missing tools. Keep that distinction,
+        // and never expose transport errors containing endpoints/credentials.
+        state = 'unverified';
+      }
+      if (closed || threadId !== checkedThreadId || !isCurrentHost()) return;
+      const message = state === 'unverified'
+        ? 'Could not verify cindy_helper for this task. Task result reporting may be unavailable.'
+        : 'cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable.';
+      log.warn('Codex expected helper readiness check failed', { threadId: checkedThreadId, state });
+      eventQueue.push({ type: 'error', data: { message, isTerminal: false }, source: 'codex' });
+      // Recoverable error banners disappear on the next event. The existing
+      // independent notice channel keeps this diagnostic in task history without
+      // replacing the model's streamed reply or settling its turn.
+      eventQueue.push({ type: 'text', data: { text: message, isFinal: true }, standaloneText: true, source: 'codex' });
+    };
+
     /**
      * Start a replacement thread after the exact provider proof that the
      * persisted thread has no rollout. This is intentionally narrower than a
@@ -7799,6 +7835,7 @@ assertRouteCurrent();
           ? replacementProfileFingerprint
           : null;
         threadMayHaveRollout = retainHistory;
+        await reportExpectedHelperAvailability();
         log.debug('thread replaced with workspace permission profile', {
           previousThreadId,
           threadId,
@@ -7876,6 +7913,7 @@ assertRouteCurrent();
             ? resumeProfileFingerprint
             : null;
           threadMayHaveRollout = true;
+          await reportExpectedHelperAvailability();
           log.debug('workspace permission profile restored before turn/start', {
             threadId,
             referenceRoots: mutableExtraDirs.length,
@@ -7925,6 +7963,7 @@ assertRouteCurrent();
             subscription = host.subscribeThread(threadId, handlers);
             registerRootCodexMcpContext();
             resetAcceptedUsageCursors('context settings refresh');
+            await reportExpectedHelperAvailability();
           } catch (error) {
             // A timed-out resume can still complete later. Close this handle so a
             // retry cannot use that loaded thread with an unconfirmed budget. The
@@ -14278,6 +14317,7 @@ assertRouteCurrent();
               // every thread on the daemon shares the same process-level
               // cumulative usage source.
               resetAcceptedUsageCursors('thread/resume after stale daemon');
+              await reportExpectedHelperAvailability();
               if (collaborationMode?.mode === 'default') {
                 planModeDefaultMarkerNeeded = true;
                 if (turnParams.collaborationMode?.mode === 'default') {
@@ -15215,6 +15255,7 @@ assertRouteCurrent();
           refreshCodexAutoReviewerRoute(threadId);
           registerCodexDeveloperInstructions(threadId, registeredDeveloperInstructions);
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
+          await reportExpectedHelperAvailability();
         } else {
           sdkSessionId = threadId;
           threadMayHaveRollout = true;
@@ -15328,6 +15369,7 @@ assertRouteCurrent();
       const schedulerRefresh = ensureSchedulerMcpForResumedThread();
       if (schedulerRefresh) await schedulerRefresh;
     }
+    await reportExpectedHelperAvailability();
     return handle;
   }
 
