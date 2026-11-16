@@ -23,6 +23,11 @@
  *   disabled（503），再一次恢复到 ok。tier：unit。
  * - 实测：Host 的 node --import tsx --import ./src/loaders/register-raw.mjs --test 单文件，
  *   见交付记录。
+ *
+ * 清理（集成分支负载下偶发 ENOTEMPTY）：价格快照（modelPricingCore writeDiskCache）和账本币种
+ * （accountCurrencyStore 的写链：读、mkdir cache、写临时文件、改名）都是不等待的写入。测试结束时它们
+ * 可能还在线程池里，与 t.after 的 rmSync 交错，就会在已清空的 profile 里重建 cache/。每个 profile 上的
+ * 异步 fs 调用在这里登记，清理前等它们全部落完（不是重试 rm，也不是固定延时）。
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -38,18 +43,51 @@ import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/m
 import { resolveOwnerScopedSecretStorageKey } from '../../../desktop/src/main/secrets/providerSecretOwnerKey.ts';
 import { providerSecretStorageKey } from '../../../desktop/src/shared/providerSecrets.ts';
 
+const profileWrites = new Map();
+/** Every async fs call the production code makes under a test profile, so cleanup can wait for them. */
+for (const name of ['mkdir', 'writeFile', 'rename', 'readFile', 'rm', 'lstat', 'stat']) {
+  const original = fs.promises[name];
+  fs.promises[name] = function (target, ...rest) {
+    const result = original.call(this, target, ...rest);
+    const file = String(target);
+    for (const [root, pending] of profileWrites) {
+      if (file.startsWith(root)) {
+        pending.add(result);
+        result.then(() => pending.delete(result), () => pending.delete(result));
+      }
+    }
+    return result;
+  };
+}
+
+/** Until no fs call on the profile is in flight, including those a landing one starts (the currency write chain). */
+async function settleProfile(root) {
+  const pending = profileWrites.get(root);
+  while (pending?.size) {
+    await Promise.allSettled([...pending]);
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
+
 const PRICED = [{ id: 'claude-sonnet-4', currency: 'USD', inputCostPerToken: 0.000003, outputCostPerToken: 0.000015 }];
 
 /** A Host profile with one owner, its DB slot, a gateway key file and the two production pieces. */
 function setup(t, ownerId) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-pricing-'));
+  profileWrites.set(profile, new Set());
   configureHostOwner({ userDataDir: profile, ownerId });
   const client = {};
   setCurrentDbClient(client, ownerId);
   const keyFile = path.join(profile, 'safe-storage', `${resolveOwnerScopedSecretStorageKey(providerSecretStorageKey('xd'))}.enc`);
   fs.mkdirSync(path.dirname(keyFile), { recursive: true });
   fs.writeFileSync(keyFile, 'encrypted-key-a');
-  t.after(() => { clearCurrentDbClient(client); fs.rmSync(profile, { recursive: true, force: true }); });
+  t.after(async () => {
+    // The price snapshot and the ledger currency are written without waiting: let them land first.
+    await settleProfile(profile);
+    profileWrites.delete(profile);
+    clearCurrentDbClient(client);
+    fs.rmSync(profile, { recursive: true, force: true });
+  });
   const pricing = () => createHostUsagePricing({ profileDir: profile, modelAccessApiBaseUrl: () => 'https://model-access.example.test' });
   const rounds = [];
   const fed = [];
@@ -66,6 +104,7 @@ function setup(t, ownerId) {
   const list = (listProviders, force = false) =>
     listProviders({ gateway: { endpoint: 'https://gateway.example.test', credential: 'key-a' }, ownerId, force });
   return { profile, keyFile, pricing, catalog, rounds, fed, list, cacheFile: path.join(profile, 'cache', 'model-pricing.json'),
+    settle: () => settleProfile(profile),
     nextGeneration: () => { generation += 1; } };
 }
 
@@ -78,7 +117,8 @@ test('a successful /models round feeds the Host prices; reads between rounds and
   const first = await usagePricing.getGatewayModelPricing();
   assert.equal(first?.xd?.['claude-sonnet-4']?.inputPerMtok, 3);
   assert.equal(first?.xd?.['claude-sonnet-4']?.currency, 'USD');
-  await waitForFile(env.cacheFile);
+  await env.settle();
+  assert.ok(fs.existsSync(env.cacheFile), 'the price snapshot reaches the profile');
   const written = fs.readFileSync(env.cacheFile, 'utf8');
   const writtenAt = fs.statSync(env.cacheFile).mtimeMs;
 
@@ -99,7 +139,8 @@ test('a fresh Host process restores the price snapshot from its profile before a
   env.rounds.push(PRICED);
   await env.list(env.catalog(before));
   const expected = await before.getGatewayModelPricing();
-  await waitForFile(env.cacheFile);
+  await env.settle();
+  assert.ok(fs.existsSync(env.cacheFile), 'the price snapshot reaches the profile');
 
   const after = env.pricing();
   await after.prewarmModelPricing();
@@ -116,7 +157,8 @@ test('an account boundary clears the prices, and a replaced key file retires the
   assert.ok((await usagePricing.getGatewayModelPricing())?.xd);
 
   // Another key file (a rotated key) is another cache scope: the old snapshot no longer answers.
-  await waitForFile(env.cacheFile);
+  await env.settle();
+  assert.ok(fs.existsSync(env.cacheFile), 'the price snapshot reaches the profile');
   fs.rmSync(env.keyFile);
   fs.writeFileSync(env.keyFile, 'encrypted-key-b, rotated');
   assert.equal(await env.pricing().getGatewayModelPricing(), null);
@@ -176,10 +218,4 @@ for (const state of ['failed', 'disabled']) {
     assert.equal(env.rounds.length, 0, 'the read after ok ran a /models round');
     assert.deepEqual(await usagePricing.getGatewayModelPricing(), priced);
   });
-}
-
-async function waitForFile(file) {
-  // The cache write is fire-and-forget (writeDiskCache); wait for the event, not a fixed delay.
-  for (let i = 0; i < 200 && !fs.existsSync(file); i += 1) await new Promise(resolve => setImmediate(resolve));
-  assert.ok(fs.existsSync(file), 'the price snapshot reaches the profile');
 }
