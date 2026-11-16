@@ -8,7 +8,7 @@ import {
 import { isDeepStrictEqual } from 'node:util';
 import { setManagedProviders } from '../maker-host/active-catalog.js';
 import { beginProviderRouteMutation } from '../maker-host/provider-route.js';
-import { serverApiFetch } from '../serverApiClient.js';
+import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createByokSync, type ByokConnection } from './byokSync.js';
 import { buildByokProvider } from './byokProvider.js';

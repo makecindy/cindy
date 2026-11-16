@@ -294,6 +294,10 @@ export function SplashScreen() {
   // fixture 冻结走查没有真实下载遥测,给进度行一组演示数据看排版
   // (dev-only:readSplashPhaseFixture 在 PROD 恒 null,本分支不可达)。
   const statsProgress = fixture && !realIsDownloading ? 31 : downloadProgress;
+  // Keep raw precision in the bar; only completed transfers show 100% in the label.
+  const statsPercent = Number.isFinite(statsProgress)
+    ? Math.min(statsProgress >= 100 ? 100 : 99, Math.max(0, Math.round(statsProgress)))
+    : 0;
   const statsInfo =
     fixture && !realIsDownloading
       ? { speed: '11.5 MB/s', downloaded: '29.7 MB', total: '97.1 MB' }
@@ -483,7 +487,7 @@ export function SplashScreen() {
                     color: LOGIN_COLORS.secondaryText,
                   }}
                 >
-                  <span>{statsProgress}%</span>
+                  <span>{statsPercent}%</span>
                   {statsInfo.speed && (
                     <>
                       <span>·</span>

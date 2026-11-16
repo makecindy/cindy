@@ -36,6 +36,7 @@ import { useTranslation } from 'react-i18next';
 import { useConfirmLeaveWhileUploading } from '@/session/useConfirmLeaveWhileUploading';
 import { BOT_GROUP_MESSAGE_MAX_CHARS, type BotGroupMemberView, type BotGroupMention } from '@cindy/maker-shared/botGroupChat';
 import {
+  ambiguousBotGroupMentionLabels,
   filterBotGroupMentionCandidates,
   findBotGroupMentionQuery,
   insertBotGroupMention,
@@ -59,6 +60,7 @@ import type { BotGroupIdentityLookup } from './BotGroupPlan';
 import { ComposerAttachmentCollapsedBadge, ComposerAttachmentTray } from './ComposerAttachmentTray';
 import { useComposerPendingImagePreview } from './useComposerPendingImagePreview';
 import { ContextSheet, ContextSheetGroup, ContextSheetRow } from './ContextSheet';
+import { ContextSheetMediaAddButton, useContextSheetMediaSelection } from './ContextSheetMediaSelection';
 import { RecentPhotosStrip } from './ContextSheetMediaViews';
 import { ImageLightbox } from './ImageLightbox';
 import { ComposerToolbarLeftGroup, ComposerToolbarSpacer } from './MobileComposerInputRow';
@@ -90,7 +92,7 @@ type MentionOption =
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 export function BotGroupComposer({
-  pullThrough, members, identityFor, deviceId, online, allowMentionAllBots = false, running, planState, attachmentsSupported, divisionSupported = true, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
+  pullThrough, members, identityFor, deviceId, online, allowMentionAllBots = false, running, canStop = true, stopPending = false, planState, attachmentsSupported, divisionSupported = true, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
 }: {
   pullThrough?: ComposerPullThroughBridge;
   maskIndicator?: import('react').ReactNode;
@@ -101,6 +103,8 @@ export function BotGroupComposer({
   deviceId: string;
   online: boolean;
   running: boolean;
+  canStop?: boolean;
+  stopPending?: boolean;
   planState: BotGroupComposerPlanState | null;
   /** The active server/computer path takes attachments on send. */
   attachmentsSupported: boolean;
@@ -152,6 +156,13 @@ export function BotGroupComposer({
     upload: uploadAttachment,
     onPicked: () => { setSheetOpen(false); focusInput(); },
   });
+  // Photos picked with their selection circles wait in the sheet until its bottom button adds them.
+  const mediaSelection = useContextSheetMediaSelection({
+    open: sheetOpen,
+    getRemainingSlots: tray.getRemainingSlots,
+    onLimitReached: tray.reportLimit,
+    onChanged: () => tray.setError(null),
+  });
   const pendingImagePreview = useComposerPendingImagePreview(tray);
   const attachmentsEnabled = attachmentsSupported && online;
   // Paste handlers stay mounted for the whole screen (the input would remount otherwise); they
@@ -187,7 +198,7 @@ export function BotGroupComposer({
   // Attachments picked while the computer said yes stay unsendable if it later says no.
   const canSend = online && (trimmed.length > 0 || hasAttachments) && !tooLong && hasMembers
     && (attachmentsSupported || !hasAttachments);
-  const showStop = running && trimmed.length === 0 && !hasAttachments;
+  const showStop = canStop && running && trimmed.length === 0 && !hasAttachments;
   const divisionBlocked = isBotGroupDivisionBlocked(planState);
   const window = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -245,6 +256,15 @@ export function BotGroupComposer({
     const draftText = trimmed;
     const draftTracked = tracked;
     const draftDivision = division;
+    // One @ names one member: a typed name several members share stays in the draft to be picked.
+    const [ambiguousName] = ambiguousBotGroupMentionLabels(draft, {
+      members: mentionMembers.map((member) => ({ botId: member.botId, name: member.name })),
+      allLabels: [allLabel], allBotLabels, tracked: draftTracked,
+    });
+    if (ambiguousName) {
+      Alert.alert(t('groupChat.errors.mentionAmbiguous', { name: ambiguousName }));
+      return;
+    }
     sendingRef.current = true;
     setSending(true);
     // Clear at once like any chat; a failed send puts the draft back if nothing new was typed.
@@ -299,7 +319,7 @@ export function BotGroupComposer({
   };
 
   const stop = async () => {
-    if (stoppingRef.current) return;
+    if (stopPending || stoppingRef.current) return;
     stoppingRef.current = true;
     setStopping(true);
     try { await onStop(); } catch { /* the screen reports the failure */ } finally {
@@ -349,10 +369,10 @@ export function BotGroupComposer({
   </View> : plus;
   const previewUrl = previewId ? tray.galleryImages.find((image) => image.key === previewId)?.url ?? null : null;
 
-  const actionDisabled = showStop ? stopping : !canSend || sending;
+  const actionDisabled = showStop ? stopping || stopPending : !canSend || sending;
   const trailing = <Pressable accessibilityRole="button"
     accessibilityLabel={showStop ? t('groupChat.composer.stop') : t('groupChat.composer.send')}
-    accessibilityState={{ disabled: actionDisabled, busy: sending || stopping || undefined }}
+    accessibilityState={{ disabled: actionDisabled, busy: sending || stopping || stopPending || undefined }}
     disabled={actionDisabled} hitSlop={CONTROL_HIT_SLOP} onPress={() => void (showStop ? stop() : send())}
     style={({ pressed }) => [styles.control, styles.send, actionDisabled && styles.sendInactive, pressed && mobileInteractionStyles.pressed]}
     testID={showStop ? 'botGroup.composer.stop' : 'botGroup.composer.send'}>
@@ -473,7 +493,11 @@ export function BotGroupComposer({
       // If attachment access goes away while open, keep only supported group actions.
       media={mediaLibraryEnabled && attachmentsEnabled ? <RecentPhotosStrip busyAssetIds={tray.busyAssetIds}
         enabled={sheetOpen} onToggleAsset={tray.toggleMediaAsset} selectedAssetIds={tray.selectedAssetIds}
-        testID="botGroup.contextSheetPhotos" /> : null}
+        selection={mediaSelection} testID="botGroup.contextSheetPhotos" /> : null}
+      footer={mediaLibraryEnabled && attachmentsEnabled && mediaSelection.assets.length > 0
+        ? <ContextSheetMediaAddButton onAddAssets={tray.addMediaAssets} selection={mediaSelection}
+          testID="botGroup.contextSheetAddPhotosButton" />
+        : undefined}
       testID="botGroup.contextSheet"
     >
       {attachmentsEnabled ? <ContextSheetGroup label={Platform.OS === 'ios' && mediaLibraryEnabled ? '' : t('session.common.groupAdd')}>

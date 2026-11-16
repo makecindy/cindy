@@ -12,7 +12,7 @@ summary: Automations run a prompt (or a script) for you on a schedule, once, or 
 - Pick the **model** (and reasoning effort); the engine — Claude Code, Codex, or Pi — follows the model.
 - **Schedule**: **Automatic** or **Manually** (runs only when you click Run now). For Automatic, choose a preset — every N minutes, hourly, daily, weekdays, weekly, or monthly — in **Cron** mode (fixed clock times) or **Relative interval** mode (waits that long after the previous run finishes). Tick **Once** to run a single time at the next scheduled slot.
 - **Run session**: **New each run**, **Continuous session** (every run continues the same session), or **Bind existing session**.
-- Optional: **Stay quiet when checks find nothing** (only report changes or problems), send the result to a Feishu bot or WeCom group, and a **Pre-run check** — a command that decides whether a round runs or is skipped (**Generate with AI** can write it for you).
+- Optional: **Silent run** (successful runs don't notify by default; the prompt says when to notify, and failures still notify), send the result to a Feishu bot or WeCom group, and a **Pre-run check** — a command that decides whether a round runs or is skipped (**Generate with AI** can write it for you).
 - **Execution** can also be **Script only**: run a command in a project directory without an AI turn.
 - You can also ask an agent in any session to set up an automation for you.
 

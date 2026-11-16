@@ -33,25 +33,25 @@
     "expandMessage": "메시지 펼치기",
     "collapse": "접기",
     "expand": "펼치기",
-    "automationOriginNamed": "자동화 작업 「{{name}}」에서 전송",
+    "automationOriginNamed": "자동화 작업 “{{name}}”에서 전송",
     "automationOrigin": "자동화 작업에서 전송",
     "sessionOriginNamed": "세션 “{{name}}”에서 보냄",
-    "botOriginNamed": "동료 “{{name}}”에서 보냄",
+    "botOriginNamed": "동반자 “{{name}}”에서 보냄",
     "sessionOrigin": "다른 세션에서 보냄",
     "openSessionOrigin": "보낸 세션을 엽니다",
-    "sourceDeviceMobileNamed": "휴대폰 「{{name}}」에서 전송",
+    "sourceDeviceMobileNamed": "휴대폰 “{{name}}”에서 전송",
     "sourceDeviceMobile": "휴대폰에서 전송",
-    "sourceDeviceDesktopNamed": "컴퓨터 「{{name}}」에서 전송",
+    "sourceDeviceDesktopNamed": "컴퓨터 “{{name}}”에서 전송",
     "sourceDeviceDesktop": "컴퓨터에서 전송",
     "sourceDeviceId": "기기 ID: {{id}}",
     "sourceSessionId": "세션 ID: {{id}}",
-    "sourceTeammateId": "동료 ID: {{id}}",
+    "sourceTeammateId": "동반자 ID: {{id}}",
     "sourceAutomationId": "자동화 ID: {{id}}",
     "sourcePluginId": "플러그인 ID: {{id}}",
     "sourceMemberId": "멤버 ID: {{id}}",
     "openSourceDeviceHint": "기기 세부 정보를 엽니다. 기기 ID: {{id}}",
     "sourceDeviceRemoved": "이 기기는 삭제되었습니다",
-    "sourcePluginNamed": "플러그인 「{{name}}」에서 전송",
+    "sourcePluginNamed": "플러그인 “{{name}}”에서 전송",
     "sourcePlugin": "플러그인에서 전송",
     "sharedAuthor": "보낸 사람: {{name}}",
     "cindyFrom": "Cindy · {{platform}}에서",
@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "WeChat",
       "wecom": "WeCom",
-      "dingtalk": "DingTalk"
+      "dingtalk": "DingTalk",
+      "imessage": "iMessage"
     },
     "modelMismatch": "이번 턴은 선택한 {{selected}}이(가) 아니라 {{actual}}이(가) 응답했습니다(서버 측 임시 다운그레이드)",
     "copyStateCopying": "복사 중",
@@ -174,7 +175,7 @@
     "toolResultCompacted": "전체 도구 출력이 해제되었습니다(원래 크기 {{size}})",
     "mermaidEmpty": "빈 Mermaid 다이어그램.",
     "diffEditCount": "{{n}}개 편집",
-    "groupSentNamed": "그룹 「{{name}}」에서 보냄",
+    "groupSentNamed": "그룹 “{{name}}”에서 보냄",
     "groupSent": "그룹에서 보냄",
     "sourceGroupId": "그룹 ID: {{id}}",
     "selectText": "텍스트 선택",
@@ -233,8 +234,8 @@
     "resume": "계속",
     "attachmentCount": "첨부파일 {{n}}개",
     "attachmentMessage": "첨부파일 메시지",
-    "steeringLabel": "끼어들어 전송 중:{{text}}",
-    "queuedMessageLabel": "대기 중인 메시지 {{index}}:{{text}}",
+    "steeringLabel": "끼어들어 전송 중: {{text}}",
+    "queuedMessageLabel": "대기 중인 메시지 {{index}}: {{text}}",
     "editingInComposer": "아래 입력창에서 편집 중…",
     "cancel": "취소",
     "edit": "편집",
@@ -247,8 +248,8 @@
     "expandRemainingQueued": "남은 {{n}}개의 대기 중인 메시지 펼치기",
     "collapse": "접기",
     "expandRemaining": "남은 {{n}}개 펼치기",
-    "sendFailedMessage": "전송 실패한 메시지:{{text}}",
-    "sendingMessage": "전송 중인 메시지:{{text}}",
+    "sendFailedMessage": "전송 실패한 메시지: {{text}}",
+    "sendingMessage": "전송 중인 메시지: {{text}}",
     "uploadingAttachments": "첨부파일 업로드 중 {{uploaded}}/{{total}}",
     "delete": "삭제",
     "retry": "재시도",
@@ -259,7 +260,7 @@
     "waitingForNetwork": "네트워크가 돌아오면 전송",
     "queued": "대기 중",
     "retryImage": "이 이미지 다시 올리기",
-    "waitingMessage": "전송 대기 중인 메시지:{{text}}"
+    "waitingMessage": "전송 대기 중인 메시지: {{text}}"
   },
   "systemCard": {
     "pluginModelRoute": {
@@ -274,8 +275,8 @@
       "labelOverflow": "컨텍스트를 정리하고 계속합니다",
       "labelTimeout": "직전 응답이 없어 정리한 뒤 계속합니다",
       "labelStrip": "큰 이미지를 빼고 계속합니다",
-      "handoffTitle": "인계 내용——정리 후 이 대화의 이어서 넘긴 컨텍스트 요약(대화 기록에 포함되지 않으며 여기에서만 표시)",
-      "handoffTitleEnglishSource": "인계 내용——정리 후 이 대화의 이어서 넘긴 컨텍스트 요약. 원문은 영어(대화 기록에 포함되지 않으며 여기에서만 표시)"
+      "handoffTitle": "인계 내용——정리 후 이 대화의 다음 부분으로 넘긴 컨텍스트 요약(대화 기록에 포함되지 않으며 여기에서만 표시)",
+      "handoffTitleEnglishSource": "인계 내용——정리 후 이 대화의 다음 부분으로 넘긴 컨텍스트 요약. 원문은 영어(대화 기록에 포함되지 않으며 여기에서만 표시)"
     },
     "compact": {
       "savedTokens": "{{tokens}} 토큰 절약",
@@ -283,7 +284,7 @@
       "auto": "자동 압축",
       "aria": "대화가 압축되었습니다"
     },
-    "goalComplete": "목표 달성 · {{turns}}회 · 소요 {{duration}}",
+    "goalComplete": "목표 달성 · {{turns}}턴 · 소요 {{duration}}",
     "goalResumed": "사용량이 회복되어 목표를 계속합니다",
     "goalCapacityRetry": "모델 서비스가 혼잡했습니다. 목표를 다시 시도합니다",
     "autoResume": {
@@ -326,7 +327,7 @@
     "learnStartedBody": "증류는 데스크톱 백그라운드에서 진행됩니다. 완료되면 데스크톱에서 스킬 초안을 확인하고 검토하세요.",
     "learnFailed": "스킬 학습을 시작하지 못했습니다",
     "learnBusyBody": "이미 학습 작업이 진행 중입니다. 완료된 후 다시 시도하세요.",
-    "learnFailedBody": "시작 실패:{{detail}}",
+    "learnFailedBody": "시작 실패: {{detail}}",
     "unknownError": "알 수 없는 오류"
   },
   "queuePresentation": {
@@ -356,17 +357,17 @@
       "title": "큐 {{index}}",
       "orcaEditDisabled": "협업 메시지는 편집할 수 없습니다.",
       "busy": "큐 작업을 동기화하는 중입니다. 완료 후 다시 조작하세요.",
-      "steeringDisabled": "현재 turn에 끼어들기를 보내는 중입니다. 데스크톱 응답을 기다리세요.",
+      "steeringDisabled": "현재 턴에 끼어들기를 보내는 중입니다. 변경하려면 데스크톱 응답을 기다리세요.",
       "editLocked": "이 대기 메시지를 편집하는 중입니다. 완료 후 다시 조작하세요.",
       "interactionLocked": "다른 작업이 큐를 잠갔습니다. 완료 후 다시 조작하세요.",
       "syntheticHint": "시스템이 자동 생성한 지시입니다. 취소할 수 있지만 편집하거나 끼어들기로 보낼 수는 없습니다.",
-      "steeringHint": "현재 turn에 끼어들기를 보내는 중이어서 아직 편집하거나 이동할 수 없습니다.",
+      "steeringHint": "현재 턴에 끼어들기를 보내는 중이어서 아직 편집하거나 이동할 수 없습니다.",
       "editHint": "이 메시지를 편집하는 동안 데스크톱 자동 전송이 일시 중지됩니다.",
       "interactionHint": "큐 순서를 변경하거나 다른 작업이 진행 중이어서 아직 편집할 수 없습니다."
     }
   },
   "payloadPresentation": {
-    "remoteFetchBody": "모바일 앱에서 원격 데스크톱의 미디어를 가져옵니다.",
+    "remoteFetchBody": "모바일 앱에서 원격 데스크톱의 미디어를 가져오려고 시도합니다.",
     "missingRemotePath": "표시할 원격 경로가 없습니다",
     "missingRemotePathSentence": "표시할 원격 경로가 없습니다.",
     "mermaidSourceTitle": "Mermaid 다이어그램 소스",

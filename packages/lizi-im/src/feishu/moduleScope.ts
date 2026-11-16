@@ -30,7 +30,7 @@ export interface FeishuScopeOptions {
   secretKeyPrefix?: string;
   /** 是否注册 `feishuBot:*` 设置卡 IPC 并广播状态(只有设置页那份为 true)。 */
   ipc?: boolean;
-  /** 对外开放: 非主人的私聊与群 @ 进业务层(带非主人标记), 命令仍只认主人。 */
+  /** 允许非主人的群 @ 进业务层；不授予私聊权限，命令仍只认主人。 */
   guests?: boolean;
   /** Runtime ownership is independent of the owner's saved announcement preference. */
   shouldAnnounceLifecycle?: () => boolean;

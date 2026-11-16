@@ -48,6 +48,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip, Tooltip } from '@/components/ui/tooltip';
 import { Spinner } from '@/components/ui/spinner';
@@ -764,16 +765,11 @@ export function BranchWorktreeChip({
   );
 
   const checkboxSegment = (
-    <button
-      type="button"
-      onClick={() => !checkboxDisabled && onToggle(!checked)}
-      disabled={checkboxDisabled}
+    <label
       data-testid="create-agent-worktree-chip"
-      aria-pressed={checked}
-      aria-label={t('newChat.worktree.toggleAria')}
       className={cn(
         'inline-flex h-full items-center transition-colors',
-        'disabled:cursor-not-allowed disabled:opacity-50',
+        checkboxDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
         compact
           ? 'gap-1.5 pl-2 pr-3 text-12 font-medium leading-[1.167]'
           : 'gap-2.5 pl-2.5 pr-[18px] text-14 font-medium',
@@ -785,33 +781,16 @@ export function BranchWorktreeChip({
         checked && !checkboxDisabled && 'hover:bg-primary/10',
       )}
     >
-      <span
-        className={cn(
-          'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded',
-          'border-[1.5px] transition-colors',
-          checked
-            ? // CREATE AGENT 的深色主题 primary-foreground 与 primary 可能同为浅色，
-              // 直接使用全局 primary 会让勾选符号和背景缺少对比度。
-              // 复用草稿页已有的反色中性色，保证 light/dark 都能看清勾选状态。
-              'border-[var(--create-agent-send-bg)] bg-[var(--create-agent-send-bg)] text-[var(--create-agent-send-icon)]'
-            : 'border-muted-foreground bg-transparent',
-        )}
-      >
-        {checked && (
-          <svg
-            viewBox="0 0 16 16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2.5}
-            className="h-[10px] w-[10px]"
-          >
-            <path d="M3 8l3.5 3.5L13 5" />
-          </svg>
-        )}
-      </span>
+      <Checkbox
+        checked={checked}
+        disabled={checkboxDisabled}
+        onChange={() => onToggle(!checked)}
+        aria-label={t('newChat.worktree.toggleAria')}
+        className="disabled:opacity-100"
+      />
       {/* 术语表裁决:worktree 四语一律保留英文小写原词,故 label 不走 locale 分叉。 */}
       <span>worktree</span>
-    </button>
+    </label>
   );
 
   // 不可用时 tooltip 说明原因;可用时解释语义。禁用只针对 checkbox 半区,

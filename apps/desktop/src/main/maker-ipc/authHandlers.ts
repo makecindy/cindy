@@ -39,11 +39,12 @@ type CodexDeviceCodeProgressPayload = CodexDeviceCodeProgress & {
   mode: 'device-code';
 };
 
-type RendererSender = {
-  readonly id: number;
+export type AuthLoginController = {
+  readonly id: number | string;
   once?: (event: 'destroyed', listener: () => void) => unknown;
   removeListener?: (event: 'destroyed', listener: () => void) => unknown;
 };
+type RendererSender = AuthLoginController;
 
 type ActiveLoginOperation = {
   mode: AgentLoginMode;
@@ -132,6 +133,7 @@ export function registerMakerAuthHandlers(
     liveModelsApplied: boolean,
     isCurrent: () => boolean,
   ) => void | Promise<void>,
+  readController: (event: unknown) => AuthLoginController | null = rendererSender,
 ): void {
   const mutationGeneration = new Map<AgentKind, number>();
   const loginRequestGeneration = new Map<AgentKind, number>();
@@ -219,7 +221,7 @@ export function registerMakerAuthHandlers(
       return;
     }
     if (!sender) {
-      throwIpcError('INVALID_PARAMS', 'ownerId requires an Electron sender');
+      throwIpcError('INVALID_PARAMS', 'ownerId requires an authenticated controller');
     }
 
     const existing = loginOwners.get(ownerId);
@@ -432,7 +434,7 @@ export function registerMakerAuthHandlers(
     async (event, agentKind: unknown, rawOptions?: unknown): Promise<AuthState> => {
       const kind = requireAgentKind(agentKind);
       const { mode, ownerId } = requireLoginOptions(kind, rawOptions);
-      const sender = rendererSender(event);
+      const sender = readController(event);
       const current = activeLoginOperations.get(kind);
       if (current?.acceptingOwners && !current.settledFlag && current.mode === mode) {
         registerLoginOwner(kind, current, sender, ownerId);
@@ -487,8 +489,8 @@ export function registerMakerAuthHandlers(
       if (kind !== 'codex') {
         throwIpcError('INVALID_PARAMS', 'owner release is only supported by codex');
       }
-      const sender = rendererSender(event);
-      if (!sender) throwIpcError('INVALID_PARAMS', 'owner release requires an Electron sender');
+      const sender = readController(event);
+      if (!sender) throwIpcError('INVALID_PARAMS', 'owner release requires an authenticated controller');
       const owner = removeLoginOwner(ownerId!, sender);
       if (!owner) return;
       const operation = owner.operation;

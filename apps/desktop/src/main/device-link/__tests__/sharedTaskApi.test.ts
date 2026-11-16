@@ -2,19 +2,51 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ key: 'account:1', endpoint: 'https://relay.example.test', authenticated: true, boundary: false, accountId: 'owner', region: 'global', token: 'test-old-token' }));
 const http = vi.hoisted(() => vi.fn());
+const v2 = vi.hoisted(() => ({ enabled: false, known: new Set<string>(), request: vi.fn(), rememberService: vi.fn(),
+  rememberHost: vi.fn(), route: { v: 2, kind: 'shared-task', resourceId: 'pending-resource', server: 'https://private.example.test',
+    networkId: 'private:unit', rootPublicKey: 'unit-root', hostDeviceId: 'host', region: 'global' } }));
+vi.mock('../agentNetRuntime.js', () => ({ agentNetSelectionKey: () => v2.enabled ? 'private-v2' : 'legacy', isAgentNetActive: () => v2.enabled, agentNetAllowsLegacy: () => true }));
+// The legacy adapter tests isolate the new transport/vault boundary; its real
+// possession proof and pinned routing have separate SDK/host integration tests.
+vi.mock('../agentNetSharing.js', () => ({
+  selectedAgentNetSharingRoute: () => v2.enabled ? v2.route : null,
+  agentNetSharingRoute: (_kind: string, id: string) => v2.known.has(id) ? { ...v2.route, resourceId: id } : null,
+  listAgentNetSharedTasks: async () => null, agentNetSharingInvitation: () => null, joinAgentNetSharedTask: async () => null,
+  rememberAgentNetSharingService: v2.rememberService,
+  rememberAgentNetSharingHost: (_kind: string, id: string) => { v2.known.add(id); v2.rememberHost(id); },
+  requestAgentNetSharing: v2.request,
+  captureAgentNetSharingBoundaryClose: () => () => null,
+  retireAgentNetSharingGuest: () => {},
+}));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => state.key, isAppSessionBoundaryPending: () => state.boundary }));
 vi.mock('../../authManager.js', () => ({ getAuthState: () => ({ isAuthenticated: state.authenticated, user: { name: 'Account Guest' } }),
   getCurrentUserId: () => state.accountId, getActiveAuthRealm: () => state.region, getAccessToken: () => state.token }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => state.endpoint }));
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: http }));
+vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: http }));
 import { captureSharedTaskBoundaryClose, forgetSharedTaskList, runWithSharedTaskCallerGuard, sharedTaskApi } from '../sharedTaskApi.js';
 
 beforeEach(() => {
   state.key = 'account:1'; state.endpoint = 'https://relay.example.test'; state.authenticated = true; state.boundary = false;
   state.accountId = 'owner'; state.region = 'global'; state.token = 'test-old-token';
   http.mockReset();
+  v2.enabled = false; v2.known.clear(); v2.request.mockReset(); v2.rememberService.mockReset(); v2.rememberHost.mockReset();
 });
 describe('sharedTask Main HTTP adapter', () => {
+  // Public Main API: V2 creations and later mutations stay on their pinned
+  // service even after the selection changes. Old tests only exercised V1.
+  // Unit: no real network/storage; assertions observe actual adapter outputs.
+  it('routes a new V2 task to its pinned management service while preserving V1 resources', async () => {
+    v2.enabled = true; v2.request.mockResolvedValueOnce({ sharedTaskId: 'v2-task', revision: 1 });
+    await expect(sharedTaskApi.create('session', 'Task')).resolves.toMatchObject({ sharedTaskId: 'v2-task' });
+    expect(v2.rememberService).toHaveBeenCalledOnce(); expect(v2.rememberHost).toHaveBeenCalledWith('v2-task');
+    expect(http).not.toHaveBeenCalled();
+    v2.enabled = false; v2.request.mockResolvedValueOnce({ sharedTaskId: 'v2-task', status: 'closed' });
+    await expect(sharedTaskApi.close('v2-task')).resolves.toMatchObject({ status: 'closed' });
+    expect(http).not.toHaveBeenCalled();
+    http.mockResolvedValueOnce({ sharedTaskId: 'old-task', status: 'closed' });
+    await expect(sharedTaskApi.close('old-task')).resolves.toMatchObject({ status: 'closed' });
+    expect(http).toHaveBeenCalledOnce();
+  });
   // Unit: the native HTTP adapter must recheck the caller before each physical
   // attempt (including auth refresh), not only before awaiting the command.
   it('blocks a guarded invitation retry and late success without affecting ordinary UI calls', async () => {

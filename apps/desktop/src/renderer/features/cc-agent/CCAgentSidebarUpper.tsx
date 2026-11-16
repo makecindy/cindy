@@ -48,6 +48,7 @@ import { useNavigate, useMatch, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { cn } from '@/lib/utils';
 import { provisionalDraftTaskId, subscribeProvisionalDraftTask } from './provisionalDraftTask';
@@ -79,6 +80,7 @@ import { useNavigationAttention } from '@/lib/navigationAttentionStore';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
 import { useViewedBotSessionId } from '@/features/bots/useViewedBotSessionId';
+import { useCompanionCloud } from '@/features/bots/companionCloudStore';
 import { sharedTaskErrorKey } from '@/features/device-link/sharedTaskCompatibility';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { stripTrailingPathSeparators } from '../../../shared/pathText';
@@ -183,6 +185,7 @@ import {
   projectKeyComparisonSetHas,
   sidebarSessionsWithHiddenProjectsAsDialogues,
   visibleSidebarProjects,
+  withoutTeammateProjectsElsewhere,
 } from './lib/sidebarProjectVisibility';
 import {
   collectRestorableProjectKeys,
@@ -1237,7 +1240,11 @@ function ExpandedView({
   const unnamedLabelRef = useRef('');
   unnamedLabelRef.current = t('ccAgent.common.unnamedSession');
   const fireSessionNotification = useCallback(
-    (sessionId: string, kind: 'done' | 'error' | 'needs-reply', options?: { inputHandoff: true; inputHandoffRequestId?: string }) => {
+    (sessionId: string, kind: 'done' | 'error' | 'needs-reply', options?: {
+      inputHandoff?: true;
+      inputHandoffRequestId?: string;
+      alertEventId?: string;
+    }) => {
       const session = findSessionNotificationSession(sessionId, [
         sessionsRef.current,
         allSessionsForNotificationRef.current,
@@ -1293,11 +1300,17 @@ function ExpandedView({
     [fireSessionNotification],
   );
   const handleSessionError = useCallback(
-    (sessionId: string) => fireSessionNotification(sessionId, 'error'),
+    (sessionId: string, alertEventId?: string) => fireSessionNotification(
+      sessionId, 'error', alertEventId ? { alertEventId } : undefined,
+    ),
     [fireSessionNotification],
   );
   const handleSessionNeedsReply = useCallback(
-    (sessionId: string, options?: { inputHandoff: true; inputHandoffRequestId?: string }) => fireSessionNotification(sessionId, 'needs-reply', options),
+    (sessionId: string, options?: {
+      inputHandoff?: true;
+      inputHandoffRequestId?: string;
+      alertEventId?: string;
+    }) => fireSessionNotification(sessionId, 'needs-reply', options),
     [fireSessionNotification],
   );
 
@@ -1811,18 +1824,22 @@ function ExpandedView({
   }, [projectUniverse.projects.length, gcProjectKeys, filter]);
 
   /* ---- F-PJ-10: 在 render 阶段把 filter.projects 应用到 ProjectNode 列表 ---- */
+  // A teammate handed to another computer: its project here is hidden until it comes back.
+  const teammatesElsewhere = useCompanionCloud().demotedBotIds;
   const visibleProjects = useMemo(() => {
     const notHidden = visibleSidebarProjects(
-      groupsWithPinnedProjects.projects,
+      withoutTeammateProjectsElsewhere(groupsWithPinnedProjects.projects, teammatesElsewhere),
       hiddenProjectKeys,
       localPlatform,
     );
     if (filter.projectsAsSet === null) return notHidden;
     const allowed = filter.projectsAsSet;
+    // A teammate's project is not a project choice; the teammate filter decides its tasks.
     return notHidden.filter((project) =>
-      projectFilterIncludes(allowed, project.projectKey, localPlatform),
+      isTeammateProjectPath(project.workingDir)
+      || projectFilterIncludes(allowed, project.projectKey, localPlatform),
     );
-  }, [groupsWithPinnedProjects.projects, hiddenProjectKeys, filter.projectsAsSet, localPlatform]);
+  }, [groupsWithPinnedProjects.projects, hiddenProjectKeys, filter.projectsAsSet, localPlatform, teammatesElsewhere]);
 
   /* ---- M41: Vendor 过滤 — 应用到 pinned / unclassified / project sessions ---- */
   const vendorPredicate = useMemo(() => {
@@ -2036,7 +2053,6 @@ function ExpandedView({
       },
       [
         ...allProjectGroups.projects.flatMap((project) => project.sessions),
-        ...groups.bots.flatMap((bot) => bot.sessions),
         ...visibleDialogues,
         ...visibleUnclassified,
       ],
@@ -2064,7 +2080,6 @@ function ExpandedView({
     activeSessionId,
     attentionKinds,
     displayRunningSessionIds,
-    groups.bots,
     remoteActivityRevision,
     sidebarNotifications,
     urgentSet,
@@ -3943,8 +3958,6 @@ function ExpandedView({
                   projects={visibleProjectsWithVendor}
                   dialogues={visibleDialogues}
                   dialogueActionSessions={dialogueActionSessions}
-                  bots={groups.bots}
-                  onOpenBot={(botId) => navigate(`/bots/${botId}`)}
                   allKnownProjects={visibleProjectUniverse}
                   dialogueCount={allGroups.dialogues.length}
                   allProjectKeysForOrder={gcProjectKeys}

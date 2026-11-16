@@ -1,3 +1,6 @@
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
+import { remoteProviderDisableKey } from '@cindy/model-providers';
+import { withoutProviderHeaderCredentials } from '../maker-host/provider-public-view.js';
 import { withAvailabilityPolicyMutation } from '../device-link/providerShareAvailabilityPolicy.js';
 import { bindModelSourceSnapshot, acceptsModelSourceSnapshot, modelSourceRequestSignature, issueModelSourceSnapshot } from '../maker-host/model-source-snapshots.js';
 import { buildModelsFetchRequest } from '../maker-host/provider-model-fetch.js';
@@ -5,7 +8,7 @@ import { getProviderRouteCredentialRevision } from '../maker-host/provider-route
 import { appendSpeechModels, missingSpeechReference } from '../../shared/speechProviderSetup.js';
 import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
 import type { DeploymentDetectionResult } from '../../shared/providerDetection.js';
-import { pruneProviderGroupBindings } from '../provider-group/bindings.js';
+import { pruneProviderGroupBindings } from '../provider-group/bindings.desktop.js';
 import { writeProviderGroup } from '../provider-group/store.js';
 /**
  * provider:* IPC handlers。
@@ -80,6 +83,7 @@ import {
   customProviderExists,
   deleteCustomProvider,
   getCustomProvider,
+  listCustomProviders,
   updateCustomProvider,
   updateCustomProviderIfUnchanged,
   validateCustomProviderConfig,
@@ -102,7 +106,17 @@ import {
   finishProviderImportConfirm,
   previewProviderImport,
   createProviderImportDraftsFromFile,
+  createLocalProviderImport,
+  editLocalProviderImport,
+  isLocalProviderImport,
+  checkLocalProviderImportSource,
+  localProviderImportDraft,
+  equivalentLocalProvider,
+  completeEquivalentLocalImport,
+  localProviderImportItem,
 } from '../provider-import/providerImport.js';
+import { localSourceContext, readLocalProviderSource, SOURCE_IDS, type LocalSourceContext } from '../provider-import/local/sources.js';
+import type { LocalProviderImportScan, LocalProviderImportItem } from '../../shared/localProviderImport.js';
 import { readProviderImportFile } from '../provider-import/providerImportFile.js';
 import {
   builtinApiKeyStore,
@@ -272,21 +286,10 @@ function oauthRuntimeEndpointSignature(config: CustomProviderConfig | null): str
   }));
 }
 
-/** Never expose runtime header credentials to WebViews or synthetic remote events. */
-function withoutProviderHeaderCredentials(provider: ProviderView): ProviderView {
-  if (!provider.routing) return provider;
-  const routing = Object.fromEntries(
-    Object.entries(provider.routing).map(([agent, descriptor]) => {
-      if (!descriptor) return [agent, descriptor];
-      const safeDescriptor = { ...descriptor };
-      delete safeDescriptor.headerOverride;
-      return [agent, safeDescriptor];
-    }),
-  ) as ProviderView['routing'];
-  return { ...provider, routing };
-}
 
 export interface ProviderHandlerDeps {
+  /** Test seam: production reads known locations on this desktop, never renderer paths. */
+  localProviderSourceContext?: () => LocalSourceContext;
   /**
    * 当前供应商视图（含实时连接状态）；见 createDesktopProviderService。
    *
@@ -449,9 +452,17 @@ export interface ProviderHandlerDeps {
    */
   setModelsDisabled(providerId: string, modelIds: readonly string[], disabled: boolean): void;
   setProviderDisabled(providerId: string, disabled: boolean): void;
+  getDisabledProviders?(): Record<string, boolean>;
+  listRemoteProviders?(deviceId: string): Promise<ProviderView[]>;
   /** Per-provider opt-in for remote Agent use; absent means disabled. */
   getRemoteProviderInvocationEnabled?(providerId: string): boolean;
   setRemoteProviderInvocationEnabled?(providerId: string, enabled: boolean): void | Promise<void>;
+  /** 「远程连接」里的「让我的其他电脑用本机模型」，默认关闭。 */
+  getOwnComputerModelUse?(): boolean;
+  setOwnComputerModelUse?(enabled: boolean): Promise<void>;
+  /** 供应商「运行于」：用户改选过的电脑(deviceId 或 'local')。 */
+  getProviderRunLocation?(providerId: string): string | undefined;
+  setProviderRunLocation?(providerId: string, location: string | null): void;
   /**
    * 「恢复默认」= 删除该供应商的整组停用 override(供应商级 + 全部逐模型条目,含
    * 指向已下架模型的陈旧条目)。语义遵循 docs/dev-rules/configuration-and-overrides.md
@@ -698,7 +709,7 @@ export function registerProviderHandlers(
           auth?.method === 'apiKey' || !auth ? null : auth]);
       const sameContext = !!prior && !credentialAgents.has(agent)
         && context(prior, previous?.auth) === context(runtime, config.auth);
-      let signature: string | undefined;
+      let signatures: string[] = [];
       if (runtime.models.some(model => model.discoverySnapshotId || model.discoveredSource?.snapshotId)
         && (!previous || config.auth?.method !== 'oauth')) {
         try {
@@ -713,7 +724,14 @@ export function registerProviderHandlers(
             headers: { ...runtime.headers, ...(headers[agent as AgentKind]
               ?? (typeof storedHeaders === 'object' ? storedHeaders : {})) },
           });
-          signature = modelSourceRequestSignature(request.url, request.init);
+          signatures = [modelSourceRequestSignature(request.url, request.init)];
+          // A manifest request may fall back to the ordinary catalog after a
+          // 404/405. Accept that effective request identity too.
+          const requestUrl = new URL(request.url);
+          if (requestUrl.searchParams.has('client_version')) {
+            requestUrl.searchParams.delete('client_version');
+            signatures.push(modelSourceRequestSignature(requestUrl.toString(), request.init));
+          }
         } catch { /* A source without provable discovery context is omitted. */ }
       }
       return [agent, { ...runtime, models: runtime.models.map(model => {
@@ -721,8 +739,11 @@ export function registerProviderHandlers(
         const source = model.discoveredSource;
         // A receipt proves the submitted context even when credentials changed.
         // OAuth has no reconstructed signature, so retain its saved-context gate.
-        const accepted = (signature !== undefined || (sameContext && !!previous && config.auth?.method === 'oauth'))
-          && acceptsModelSourceSnapshot(model.id, source, config.id, agent as AgentKind, signature, model.discoverySnapshotId ?? source?.snapshotId);
+        const accepted = signatures.length > 0
+          ? signatures.some(signature => acceptsModelSourceSnapshot(
+            model.id, source, config.id, agent as AgentKind, signature, model.discoverySnapshotId ?? source?.snapshotId))
+          : acceptsModelSourceSnapshot(
+            model.id, source, config.id, agent as AgentKind, undefined, model.discoverySnapshotId ?? source?.snapshotId);
         const { discoveredSource: _source, ...rest } = model;
         // A stale renderer cannot restore a source invalidated by another edit/request.
         return { ...rest, ...((accepted ? source : old) ? { discoveredSource: accepted ? source : old } : {}) };
@@ -1213,6 +1234,7 @@ export function registerProviderHandlers(
       providers: ProviderView[];
       providerOrder: string[];
       modelVisibilityOverrides: Record<string, boolean>;
+      disabledProviders?: Record<string, boolean>;
     }> => {
       // 只有本机主页面能顺带触发绑定自愈与清单拉取:这条通道也服务 device-link(合成
       // event)和可能不受信的渲染上下文,它们只该拿到只读快照(PR #548 review)。
@@ -1256,12 +1278,15 @@ export function registerProviderHandlers(
               ),
             } : {}),
           };
+          const runLocation = deps.getProviderRunLocation?.(provider.id);
+          const located = runLocation ? { ...view, runLocation } : view;
           return remoteAccess
-            ? { ...view, remoteInvocationEnabled: remoteAccess(provider.id) }
-            : view;
+            ? { ...located, remoteInvocationEnabled: remoteAccess(provider.id) }
+            : located;
         }),
         providerOrder,
         modelVisibilityOverrides,
+        ...(trusted ? { disabledProviders: deps.getDisabledProviders?.() ?? {} } : {}),
       };
     };
   registry.handle(MAKER_INVOKE.PROVIDER_LIST, async (event) => {
@@ -1347,6 +1372,100 @@ export function registerProviderHandlers(
   const providerImportScope = (): { dataOwnerId: string | null; generation: number } =>
     captureProviderOwnerSession() ?? { dataOwnerId: null, generation: 0 };
 
+  // Different new IDs can describe the same connection. Only local-import final
+  // comparisons/confirmation share this queue; scans and ordinary CRUD do not.
+  let localImportTail: Promise<unknown> = Promise.resolve();
+  const serializeLocalImport = <T,>(task: () => Promise<T>): Promise<T> => {
+    const run = localImportTail.then(task, task);
+    localImportTail = run.catch(() => undefined);
+    return run;
+  };
+  const equivalentStoredLocalImport = async (id: string): Promise<string | undefined> => {
+    const draft = localProviderImportDraft(id, providerImportScope());
+    for (const stored of await listCustomProviders()) {
+      if (stored.auth?.method === 'oauth') continue;
+      // Avoid decrypting unrelated connections while scanning a large saved catalog.
+      if (draft.kind !== 'custom' || Object.keys(draft.config.runtimes).sort().join() !== Object.keys(stored.runtimes).sort().join()
+        || CUSTOM_PROVIDER_RUNTIME_AGENTS.some(agent => {
+          const a = draft.config.runtimes[agent], b = stored.runtimes[agent];
+          return a && b && (a.baseUrl !== b.baseUrl || a.wireProtocol !== b.wireProtocol
+            || a.requestPath !== b.requestPath || a.modelsUrl !== b.modelsUrl);
+        })) continue;
+      // A concurrent settings mutation may have staged keys beside an old config.
+      // Do not classify that transient combination as an existing connection.
+      if (providerConfigMutationCounts.has(stored.id)) continue;
+      const keys: Partial<Record<AgentKind, string>> = {};
+      const config = { ...stored, runtimes: { ...stored.runtimes } };
+      let readable = true;
+      for (const agent of CUSTOM_PROVIDER_RUNTIME_AGENTS) {
+        const runtime = config.runtimes[agent];
+        if (!runtime) continue;
+        try {
+          const key = deps.readCustomProviderKeyForMutation(stored.id, agent);
+          const headers = deps.readCustomProviderHeadersForMutation(stored.id, agent);
+          if ((key !== null && typeof key !== 'string') || (headers !== null && typeof headers !== 'object')) { readable = false; break; }
+          if (typeof key === 'string') keys[agent] = key;
+          config.runtimes[agent] = { ...runtime, ...(headers ? { headers: headers as Record<string, string> } : {}) };
+        } catch { readable = false; break; }
+      }
+      if (readable && !providerConfigMutationCounts.has(stored.id) && equivalentLocalProvider(draft, config, keys)) return stored.id;
+    }
+  };
+
+  let localScanRunning = false;
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_SCAN, async (event, ...args: unknown[]): Promise<LocalProviderImportScan> => {
+    assertTrustedProviderMutationSender(event);
+    if (args.length || localScanRunning) throwIpcError('INVALID_PARAMS', 'local scan is already running or invalid');
+    const owner = providerImportScope();
+    const items: LocalProviderImportItem[] = [];
+    const sources: LocalProviderImportScan['sources'] = [];
+    localScanRunning = true;
+    try {
+      const context = deps.localProviderSourceContext?.() ?? localSourceContext();
+      const snapshot = { ...context, env: { ...context.env } };
+      for (const source of SOURCE_IDS) {
+        const result = await readLocalProviderSource(source, snapshot);
+        assertTrustedProviderMutationSender(event);
+        assertProviderMutationOwner(owner);
+        const added: LocalProviderImportItem[] = [];
+        try {
+          for (const entry of result.entries) {
+            // Capture the stable reference only, never the whole credential-bearing result.
+            const ref = entry.ref;
+            const item = createLocalProviderImport(source, entry, owner, async () => {
+              const fresh = await readLocalProviderSource(source, snapshot);
+              return fresh.issue ? undefined : fresh.entries.find(e => e.ref === ref);
+            });
+            added.push(item);
+            if (!item.issue && await equivalentStoredLocalImport(item.importId)) item.issue = 'duplicate';
+            assertProviderMutationOwner(owner);
+          }
+          items.push(...added);
+          sources.push({ source, ...(result.issue ? { issue: result.issue } : {}) });
+        } catch {
+          for (const item of added) cancelProviderImport(item.importId);
+          assertProviderMutationOwner(owner);
+          sources.push({ source, issue: 'limit' });
+        }
+      }
+      return { items, sources };
+    } catch {
+      for (const item of items) cancelProviderImport(item.importId);
+      throwIpcError('INVALID_PARAMS', 'local scan was cancelled or the active account changed');
+    } finally { localScanRunning = false; }
+  });
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_EDIT, async (event, id: unknown, input: unknown, ...extra: unknown[]) => {
+    assertTrustedProviderMutationSender(event);
+    if (extra.length) throwIpcError('INVALID_PARAMS', 'invalid local edit');
+    const owner = providerImportScope();
+    try {
+      const item = editLocalProviderImport(id, input, owner);
+      if (!item.issue && await equivalentStoredLocalImport(item.importId)) item.issue = 'duplicate';
+      assertProviderMutationOwner(owner);
+      return item;
+    } catch { throwIpcError('INVALID_PARAMS', 'local configuration is invalid or expired'); }
+  });
+
   registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_FILE, async (event, ...args: unknown[]) => {
     assertTrustedProviderMutationSender(event);
     if (args.length) throwIpcError('INVALID_PARAMS', 'file import takes no arguments');
@@ -1403,10 +1522,8 @@ export function registerProviderHandlers(
     return { ok: true };
   });
 
-  registry.handle(
-    MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM,
-    async (
-      event,
+  const confirmProviderImport = async (
+      event: unknown,
       importId: unknown,
       target?: unknown,
       interrupt?: unknown,
@@ -1417,6 +1534,24 @@ export function registerProviderHandlers(
       const ownerAtIngress = providerImportScope();
       let started = false;
       try {
+        if (isLocalProviderImport(importId)) {
+          if (target !== undefined) throwIpcError('INVALID_PARAMS', 'local imports create connections only');
+          let completed: string | undefined;
+          try { completed = await checkLocalProviderImportSource(importId, ownerAtIngress); }
+          catch (error) {
+            assertProviderMutationOwner(ownerAtIngress);
+            if (localProviderImportItem(importId as string, ownerAtIngress).issue === 'changed')
+              throwIpcError('PRECONDITION_FAILED', 'saved API source changed; scan again');
+            throw error;
+          }
+          assertProviderMutationOwner(ownerAtIngress);
+          const existing = completed ?? await equivalentStoredLocalImport(importId as string);
+          assertProviderMutationOwner(ownerAtIngress);
+          if (existing) {
+            if (!completed) completeEquivalentLocalImport(importId as string, existing, ownerAtIngress);
+            return { ok: true, providerId: existing, authMethod: 'apiKey' };
+          }
+        }
         const providers = await deps.listProviders({ allowSideEffects: false });
         assertProviderMutationOwner(ownerAtIngress);
         const { draft, resolution } = beginProviderImportConfirm(
@@ -1520,8 +1655,11 @@ export function registerProviderHandlers(
           'provider import changed, is invalid or expired; preview again',
         );
       }
-    },
-  );
+    };
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, (event, id, target, interrupt) =>
+    isLocalProviderImport(id)
+      ? serializeLocalImport(() => confirmProviderImport(event, id, target, interrupt))
+      : confirmProviderImport(event, id, target, interrupt));
 
   function assertTrustedProviderMutationSender(event: unknown): void {
     if (event === MAIN_PROCESS_SENDER) return;
@@ -1697,6 +1835,14 @@ export function registerProviderHandlers(
     if (i.kind !== 'model' && i.kind !== 'provider' && i.kind !== 'reset') {
       throwIpcError('INVALID_PARAMS', 'kind must be "model", "provider" or "reset"');
     }
+    if (i.remoteDeviceId !== undefined && (
+      i.kind !== 'provider' || typeof i.remoteDeviceId !== 'string' ||
+      !i.remoteDeviceId || i.remoteDeviceId.length > MAX_DISABLE_ID_LENGTH ||
+      isProviderShareAgentDeviceId(i.remoteDeviceId)
+    )) throwIpcError('INVALID_PARAMS', 'invalid remote provider disable target');
+    const disableKey = typeof i.remoteDeviceId === 'string'
+      ? remoteProviderDisableKey(i.remoteDeviceId, i.providerId as string)
+      : i.providerId as string;
     // reset = 删除整组 override(恢复默认),无 disabled 语义;其余两种必须显式带方向。
     if (i.kind !== 'reset' && typeof i.disabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'disabled required');
@@ -1717,7 +1863,10 @@ export function registerProviderHandlers(
     // provider / model(chat 各 agent 清单 ∪ imageModels ∪ videoModels);恢复启用是
     // 删条目,故意不校验 —— 目录漂移后用户仍能清掉指向已下架 id 的陈旧 override。
     const requireCatalogProvider = async (providerId: string): Promise<ProviderView> => {
-      const provider = (await deps.listProviders()).find((p) => p.id === providerId);
+      const catalog = typeof i.remoteDeviceId === 'string'
+        ? await deps.listRemoteProviders?.(i.remoteDeviceId) ?? []
+        : await deps.listProviders();
+      const provider = catalog.find((p) => p.id === providerId);
       if (!provider) throwIpcError('INVALID_PARAMS', `unknown providerId "${providerId}"`);
       return provider;
     };
@@ -1769,6 +1918,7 @@ export function registerProviderHandlers(
           for (const m of provider.imageModels ?? []) known.add(m.id);
           for (const m of provider.videoModels ?? []) known.add(m.id);
           for (const m of provider.audioModels ?? []) known.add(m.id);
+          for (const m of provider.evaluationModels ?? []) known.add(m.id);
           for (const m of provider.embeddingModels ?? []) known.add(m.id);
           const unknown = modelIds.filter((id) => !known.has(id));
           if (unknown.length > 0) {
@@ -1785,12 +1935,12 @@ export function registerProviderHandlers(
       } else {
         if (i.disabled) await requireCatalogProvider(i.providerId as string);
         assertSameOwner();
-        persist(() => deps.setProviderDisabled(i.providerId as string, i.disabled as boolean));
+        persist(() => deps.setProviderDisabled(disableKey, i.disabled as boolean));
       }
       deps.broadcastChanged();
       return { ok: true };
     };
-    return withAvailabilityPolicyMutation(i.providerId as string, () => enqueueDisableWrite(run));
+    return withAvailabilityPolicyMutation(disableKey, () => enqueueDisableWrite(run));
   };
   registry.handle(MAKER_INVOKE.MODEL_DISABLE_SET, async (event, input: unknown) => {
     assertTrustedProviderMutationSender(event);
@@ -1827,6 +1977,49 @@ export function registerProviderHandlers(
     }
     deps.broadcastChanged();
     return { ok: true, enabled: value.enabled };
+  });
+
+  registry.handle(MAKER_INVOKE.OWN_COMPUTER_MODEL_USE_GET, async (event) => {
+    assertTrustedProviderMutationSender(event);
+    if (!deps.getOwnComputerModelUse) throwIpcError('INTERNAL', 'own computer model use is not wired');
+    return { enabled: deps.getOwnComputerModelUse() };
+  });
+
+  registry.handle(MAKER_INVOKE.OWN_COMPUTER_MODEL_USE_SET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const ownerAtIngress = captureProviderOwnerSession();
+    if (!deps.setOwnComputerModelUse) throwIpcError('INTERNAL', 'own computer model use is not wired');
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throwIpcError('INVALID_PARAMS', 'invalid input');
+    const value = input as Record<string, unknown>;
+    if (typeof value.enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'enabled required');
+    assertProviderMutationOwner(ownerAtIngress, 'active account changed before persisting own computer model use');
+    try {
+      await deps.setOwnComputerModelUse(value.enabled);
+    } catch (err) {
+      log.warn('own computer model use persist failed', { error: err instanceof Error ? err.message : String(err) });
+      throwIpcError('INTERNAL', 'failed to persist own computer model use');
+    }
+    // 自己的其他电脑据此重读目录(同「允许被远程调用」)。
+    deps.broadcastChanged();
+    return { ok: true, enabled: value.enabled };
+  });
+
+  registry.handle(MAKER_INVOKE.PROVIDER_RUN_LOCATION_SET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const ownerAtIngress = captureProviderOwnerSession();
+    if (!deps.setProviderRunLocation) throwIpcError('INTERNAL', 'provider run location is not wired');
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throwIpcError('INVALID_PARAMS', 'invalid input');
+    const value = input as Record<string, unknown>;
+    if (typeof value.providerId !== 'string' || value.providerId.length === 0 || value.providerId.length > 256) {
+      throwIpcError('INVALID_PARAMS', 'providerId required');
+    }
+    if (value.location !== null && (typeof value.location !== 'string' || !value.location || value.location.length > 256)) {
+      throwIpcError('INVALID_PARAMS', 'location must be a computer id, "local" or null');
+    }
+    assertProviderMutationOwner(ownerAtIngress, 'active account changed before persisting provider run location');
+    deps.setProviderRunLocation(value.providerId, value.location as string | null);
+    deps.broadcastChanged();
+    return { ok: true };
   });
 
   const parsePriceTarget = (value: unknown): ModelPriceOverrideTarget => {

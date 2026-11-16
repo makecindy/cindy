@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { acquireGhostDepositLock } from './ghostDepositQuota.js';
 import { GHOST_CINDY_DEPOSIT_MAX_BYTES, GHOST_CINDY_DEPOSIT_QUOTA_BYTES, type GhostPipePickResult } from '../../shared/ghost.js';
 import { sniffMediaMime, additionalMp3BytesNeeded } from '../cindy-media/sniffMediaMime.js';
-import { supportedMime } from '../cindy-media/blobStore.js';
+import { supportedMime } from '../cindy-media/blobStore.desktop.js';
 import { validateLibraryRelPath, DEFAULT_LIBRARY_LIMITS } from './libraryVault.js';
 
 type Failure = Extract<GhostPipePickResult, { ok: false }>;

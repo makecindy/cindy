@@ -7,13 +7,14 @@ import {
 } from '@cindy/orca-workflow';
 import type { OrcaRemoteLead } from '../../../shared/orcaRemoteWorker.js';
 import { createOrcaRemoteWorkerBridge } from '../orcaRemoteWorkerBridge.js';
+import type { OrcaRemoteWorkerBridgeDeps } from '../orcaRemoteWorkerBridge.js';
 import type { OrcaWorkerRecord } from '../../localDb/orcaTeamStore.js';
 
 // Value: production MCP handlers → execution-device route → attested Lead handler. The live
 // 2026-10-21 probe failed for a valid remote session with no local orcaRole. Existing tests
 // covered local links only. Minimal input: one remote Worker, one queued report. Unit tier;
 // no sockets, Electron app or real account is needed. Also protects device/team/child isolation.
-function setup() {
+function setup(deliverReport?: OrcaRemoteWorkerBridgeDeps['deliverReport']) {
   let owner = 1;
   let activeTeam: string | null = 'team-1';
   const remoteLead: OrcaRemoteLead = {
@@ -85,7 +86,8 @@ function setup() {
     readSession: vi.fn(),
     listWorkers: async () => [worker],
     remoteInvoke: vi.fn(),
-    invokeTool: (ctx, tool, args) => provider.invokeTool(ctx, tool, args, { manageWorkerStatus: false }),
+    invokeTool: (ctx, tool, args, reportClientId, onReportRejected) => provider.invokeTool(ctx, tool, args, { manageWorkerStatus: false, reportClientId, onReportRejected }),
+    ...(deliverReport ? { deliverReport } : {}),
     captureReportSettlement: captureSettlement,
   });
   const remoteInvoke = vi.fn(async (_device: string, _channel: string, args: unknown[]) => ({
@@ -149,6 +151,21 @@ function setup() {
 const json = (result: { content: Array<{ text: string }> }) => JSON.parse(result.content[0].text);
 
 describe('cross-device Worker bridge', () => {
+  // #9346: only the host can supply the persisted handoff ID. Exercise the full
+  // remote route and provider schema; model arguments must not choose that ID.
+  it('passes the host report identity through the manual remote bridge', async () => {
+    const deliver = vi.fn<NonNullable<OrcaRemoteWorkerBridgeDeps['deliverReport']>>(
+      async (_session, _ids, send) => send('host-report-id', () => {}),
+    );
+    const s = setup(deliver);
+    const result = await s.executionProvider.invokeTool(s.ctx, 'send_to_lead', {
+      ...s.request.args, reportClientId: 'model-controlled-id',
+    });
+    expect(result.isError).toBe(false);
+    expect(deliver).toHaveBeenCalledWith('proxy-1', ['input-a'], expect.any(Function));
+    expect(s.dispatch).toHaveBeenCalledWith(expect.objectContaining({ reportClientId: 'host-report-id' }));
+    expect(s.captureSettlement).not.toHaveBeenCalled();
+  });
   // PR #9690: a cross-device Worker reports like a local one. Device-link input carries no
   // trustworthy origin, so the former Lead-assigned-turn gate (#6659) rejected every real
   // assignment and left only the end-of-turn poll. A local Worker's send_to_lead is never

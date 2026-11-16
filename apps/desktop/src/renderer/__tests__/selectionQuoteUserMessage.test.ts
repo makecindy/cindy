@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 // @vitest-environment jsdom
 
 import { readFileSync } from 'node:fs';
@@ -208,7 +209,7 @@ describe('SelectionQuoteButton — message body selection actions', () => {
         createElement(Tooltip.Provider, null,
           createElement(ConfirmDialogProvider, null,
             createElement('div', { ref: containerRef },
-              createElement(UserMessage, {
+              createElement(UserMessage, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
                 workingDir: '', content: userText,
                 createdAt: '2026-11-09T10:00:00Z', sharedAuthorName: 'Message author',
                 ...userProps,
@@ -217,13 +218,13 @@ describe('SelectionQuoteButton — message body selection actions', () => {
               // UserMessage/AssistantMessage to stay out of a selected quote.
               createElement(BotMessageTimelineHeader, { startsUnread: true, groupTimestamp: 1794218400000 }),
               createElement(MessageSourceLabels, { sourceGroup: { groupId: 'group-1', name: 'Planning' }, align: 'start' }),
-              createElement(AssistantMessage, {
+              createElement(AssistantMessage, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
                 workingDir: '', content: reply,
                 createdAt: '2026-11-09T10:01:00Z', ghostReplyPending: true,
                 showActionBar: true, turnCostUsd: 0.001,
               }),
               cards,
-              nextUser && createElement(UserMessage, { workingDir: '', content: nextUser }),
+              nextUser && createElement(UserMessage, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, workingDir: '', content: nextUser }),
               createElement(SelectionQuoteButton, { sessionId, containerRef, onAskInSideChat }),
             ),
             createElement('p', null, 'Outside the message stream'),

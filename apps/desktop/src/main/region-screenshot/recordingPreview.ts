@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { ResourceUsageWindowController } from '../resource-usage-window/controller';
 import { markPlaybackFullscreenWindow } from '../remote-desktop/capturePermissions';
-import { getResolvedMainLocale, t } from '../i18n';
+import { getResolvedMainLocale, t } from '../i18n.desktop';
 import { RECORDING_PREVIEW_CHANNEL as C, validRecordingBytes, type RecordingPreviewDocument } from '../../shared/regionCapture';
 import { createScreenshotPageWindow } from './pageWindow';
 import { saveRegionRecording } from './save';

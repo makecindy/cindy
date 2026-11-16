@@ -291,7 +291,7 @@ import {
   saveTurnStartedAtForDeferred,
   preserveTurnPersistStateForBackground,
   redactToolInputForUntrustedBoundary,
-} from '../messagePersistBroadcaster.js';
+} from '../messagePersistBroadcaster.desktop.js';
 
 const SESSION = 'sess-tr';
 const FULL =
@@ -4365,6 +4365,19 @@ describe('媒体 echo 兜底:flushOrphanToolResults 从 fallback 池认领', () 
 });
 
 describe('ask_user persist first-write-wins', () => {
+  // Regression: withdrawal survives reload without being presented as an answer.
+  // Entry: production interaction writer; tier: unit.
+  it('persists a withdrawal reason with the existing cancelled status', async () => {
+    const request = { kind: 'ask_user_question', requestId: 'obsolete-question', questions: [{ question: 'Logged in?' }] };
+    const persistId = onInteractionMessage(SESSION, request);
+    onInteractionResolved(SESSION, persistId, 'ask_user_question', request,
+      { dismissed: true, withdrawalReason: '已从日志确认' });
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId,
+      expect.objectContaining({ status: 'cancelled', withdrawalReason: '已从日志确认', answers: {} }),
+      { text: '', acceptedAt: expect.any(Number) });
+  });
+
   it.each([
     [{ ' Scope? ': ' only inspect ' }, 'Clarifications:\n- Scope? → only inspect'],
     [{ ' ': ' only inspect ' }, 'Clarifications:\n- only inspect'],

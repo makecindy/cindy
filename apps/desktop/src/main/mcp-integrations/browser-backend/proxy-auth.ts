@@ -240,6 +240,13 @@ export function commandLineHasArgumentValue(
   return false;
 }
 
+/** Injectable command runner so tests can pin the PowerShell script and decode path. */
+export type ManagedChromeCommandRunner = (
+  file: string,
+  args: string[],
+  options: { encoding: 'utf8'; timeout: number; windowsHide: boolean; maxBuffer: number },
+) => Promise<{ stdout: string }>;
+
 /**
  * Windows command-line identity for a PID.
  *
@@ -252,17 +259,27 @@ export function commandLineHasArgumentValue(
  * Returns null on any failure, so callers treat an unknown identity as "do not
  * signal" rather than assuming ownership.
  */
-async function readWindowsProcessCommandLine(pid: number): Promise<string | null> {
+export async function readWindowsProcessCommandLine(
+  pid: number,
+  runCommand: ManagedChromeCommandRunner = execFileAsync,
+): Promise<string | null> {
   try {
     const powershell = `${process.env.SystemRoot ?? 'C:\\Windows'}`
       + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
-    const { stdout } = await execFileAsync(
+    const { stdout } = await runCommand(
       powershell,
       [
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction Stop; `
+        // Pin the console to BOM-less UTF-8 before writing: OutputEncoding is
+        // "the encoding the console uses to write output", so on a system whose
+        // code page is not UTF-8 a profile path with non-ASCII characters would
+        // otherwise come back mojibake. The identity comparison is exact, so
+        // mojibake would fail it and silently skip the very teardown this
+        // function gates. Same pin as desktopProcessIdentity.ts.
+        '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); '
+          + `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction Stop; `
           + 'if ($p) { [string]$p.CommandLine }',
       ],
       { encoding: 'utf8', timeout: 5_000, windowsHide: true, maxBuffer: 64 * 1024 },

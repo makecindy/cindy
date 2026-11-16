@@ -41,7 +41,9 @@ export function hasVisibleHistoryResult(content: unknown): boolean {
   try {
     const value = JSON.parse(text) as Record<string, unknown> | null;
     return !!value && !Array.isArray(value) && (typeof value.xdt_card_id === 'string'
-      || typeof value.xdt_anchor_card_id === 'string');
+      || typeof value.xdt_anchor_card_id === 'string'
+      // A send_to_session receipt: the teammate chat shows the task it started (BotStartedTasks).
+      || (value.ok === true && typeof value.target_session_id === 'string' && typeof value.wake_kind === 'string'));
   } catch { return false; }
 }
 

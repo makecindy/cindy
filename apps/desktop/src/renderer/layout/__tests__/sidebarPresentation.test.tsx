@@ -63,33 +63,24 @@ it('releases the frozen layout if the native request fails', async () => {
   expect(result.current).toEqual({ collapsed: false, instant: false });
 });
 
-// Unit regression: previous hook tests only covered opening; restored-open and
-// resized-open need different close deltas to avoid window drift across toggles.
-it('adopts an initially open sidebar and closes with its current width', async () => {
-  let sidebar = 300;
-  const resize = vi.fn(async (_width: number, _shrink?: number, adopt?: boolean) => adopt ? 301 : 0);
+// Unit regression: startup must expand the saved standalone bounds instead of
+// subtracting a sidebar from them; closing must not use the divider's new width.
+it('expands a restored-open sidebar and closes without a renderer-derived shrink', async () => {
+  const resize = vi.fn(async (requested: number) => requested > 0 ? 301 : -301);
   window.electronAPI = { windowSidebarExpansion: resize } as never;
-  const { rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width, () => sidebar),
+  const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, () => 301),
     { initialProps: { collapsed: false } });
   await act(async () => undefined);
-  expect(resize).toHaveBeenCalledExactlyOnceWith(0, 301, true);
-  sidebar = 500;
-  await act(async () => { rerender({ collapsed: true }); });
-  expect(resize).toHaveBeenLastCalledWith(0, 501);
-});
-
-it('retracts the sidebar resize delta after an outward expansion', async () => {
-  let sidebar = 400;
-  const resize = vi.fn(async (requested: number) => requested > 0 ? 401 : 0);
-  window.electronAPI = { windowSidebarExpansion: resize } as never;
-  const { rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width, () => sidebar),
-    { initialProps: { collapsed: true } });
-  await act(async () => { rerender({ collapsed: false }); });
-  window.innerWidth = 1401;
+  expect(resize).toHaveBeenCalledExactlyOnceWith(301);
+  expect(result.current.collapsed).toBe(true);
+  window.innerWidth = 1301;
   frame();
-  sidebar = 550;
+  expect(result.current.collapsed).toBe(false);
   await act(async () => { rerender({ collapsed: true }); });
-  expect(resize).toHaveBeenLastCalledWith(0, 551);
+  expect(resize).toHaveBeenLastCalledWith(0);
+  window.innerWidth = 1000;
+  frame();
+  expect(result.current.collapsed).toBe(true);
 });
 
 // Bug: leaving the chat route retracts the expansion; returning must expand again
@@ -97,13 +88,13 @@ it('retracts the sidebar resize delta after an outward expansion', async () => {
 it('re-expands when returning to a sidebar route after it was retracted', async () => {
   const resize = vi.fn(async (requested: number, _shrink?: number, adopt?: boolean) => (requested > 0 || adopt ? 401 : 0));
   window.electronAPI = { windowSidebarExpansion: resize } as never;
-  const { rerender } = renderHook(({ ready }) => useSidebarPresentation(root, false, ready, () => 400, () => 400),
+  const { rerender } = renderHook(({ ready }) => useSidebarPresentation(root, false, ready, () => 400),
     { initialProps: { ready: true } });
   await act(async () => undefined);
   resize.mockClear();
   await act(async () => { rerender({ ready: false }); });
   expect(resize).toHaveBeenLastCalledWith(0);
   await act(async () => { rerender({ ready: true }); });
-  expect(resize).toHaveBeenLastCalledWith(400, undefined);
+  expect(resize).toHaveBeenLastCalledWith(400);
   expect(resize.mock.calls.some((call) => call[2] === true)).toBe(false);
 });

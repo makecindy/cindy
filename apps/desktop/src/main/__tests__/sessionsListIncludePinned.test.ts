@@ -88,8 +88,8 @@ vi.mock('../device-link/broadcast-tap', () => ({
 vi.mock('../agent-island/service.js', () => ({
   getAgentIslandService: () => ({ handleSessionMetadataPatch: vi.fn() }),
 }));
-vi.mock('../imageCacheStore', () => ({ removeSession: vi.fn() }));
-vi.mock('../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
+vi.mock('../imageCacheStore.desktop', () => ({ removeSession: vi.fn() }));
+vi.mock('../messagePersistBroadcaster.desktop', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../sessionTaskSummary.js', () => ({ backfillPinnedSessionSummaries: vi.fn() }));
 vi.mock('../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: h.assertTrustedAppRendererEvent,

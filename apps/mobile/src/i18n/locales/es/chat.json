@@ -1,10 +1,10 @@
 {
   "imageDelivery": {
     "stored": "Imagen entregada",
-    "failed": "Error en la entrega de la imagen. Vuelva a intentar transferir la imagen existente.",
+    "failed": "Error en la entrega de la imagen. Vuelve a intentar transferir la imagen existente.",
     "retry": "Reintentar entrega",
     "retrying": "Entregando…",
-    "retryFailed": "La entrega aún no está disponible. Verifique que la computadora de origen esté en línea."
+    "retryFailed": "La entrega aún no está disponible. Comprueba que la computadora de origen esté en línea."
   },
   "agentActionRow": {
     "noContent": "Nada que mostrar",
@@ -87,7 +87,7 @@
       "ghPrView": "Ver solicitud de extracción",
       "ghPrChecks": "Ver comprobaciones de la solicitud de extracción",
       "ghPrStatus": "Verificar el estado de la solicitud de extracción",
-      "ghPrDiff": "Ver cambios en las solicitudes de extracción",
+      "ghPrDiff": "Ver cambios de la solicitud de extracción",
       "ghPrCreate": "Crear solicitud de extracción",
       "ghPrEdit": "Editar solicitud de extracción",
       "ghPrComment": "Comentar sobre la solicitud de extracción",
@@ -200,5 +200,13 @@
       }
     },
     "failed_many": "Fallaron {{count}} llamadas"
+  },
+  "subscriptionAccountError": {
+    "limited": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Espera a que se restablezca o elige otra fuente de modelos. La cuenta no cambia automáticamente.",
+    "limitedUntil": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Restablecimiento previsto: {{resetAt}}. Espera hasta entonces o elige otra fuente de modelos. La cuenta no cambia automáticamente.",
+    "loginRequired": "La cuenta de suscripción de esta tarea requiere iniciar sesión de nuevo. Hazlo en el ordenador que ejecuta la tarea y vuelve a intentarlo.",
+    "signingIn": "Se está iniciando sesión en la cuenta de suscripción de esta tarea. Vuelve a intentarlo cuando termine.",
+    "unavailable": "La cuenta de suscripción asignada a esta tarea no se puede usar para esta solicitud. Revisa la cuenta en los ajustes del proveedor de modelos del ordenador que ejecuta la tarea o elige otra fuente de modelos.",
+    "legacy": "La cuenta de suscripción asignada a esta tarea no está disponible. Revisa el inicio de sesión y el uso en el ordenador que ejecuta la tarea o elige otra fuente de modelos. La cuenta no cambia automáticamente."
   }
 }

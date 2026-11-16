@@ -14,7 +14,7 @@ import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
  */
 export type PluginCompanionInteractionKind = 'question' | 'permission' | 'plan' | 'other';
 
-/** A request a companion is waiting on. `title` follows the bot-autonomy summary: the question, or the tool to approve; other kinds carry none. */
+/** A request a companion is waiting on. `title` follows the pending-interaction summary (taskPhase.ts): the question, or the tool to approve; other kinds carry none. */
 export interface PluginCompanionInteraction {
   /** Opaque; pass back to `interaction`, `answer` or `open`. */
   ref: string;

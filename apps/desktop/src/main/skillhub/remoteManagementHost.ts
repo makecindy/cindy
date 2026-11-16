@@ -6,7 +6,7 @@ import {
   captureDataOwnerBroadcastScope,
   isDataOwnerBroadcastScopeCurrent,
 } from '../device-link/broadcast-tap';
-import { readDeviceLinkSettings } from '../device-link/settings-store';
+import { readDeviceLinkSettings } from '../device-link/settings-store.desktop';
 import { capturePluginOauthPeer } from '../plugin-oauth/runtime';
 import { RemoteSkillsManagement, type RemoteSkillRecord } from './remoteManagement';
 import {

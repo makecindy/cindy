@@ -8,6 +8,7 @@
 | 场景 | 要保住的行为 | 现有回归入口 |
 | --- | --- | --- |
 | 导入 Codex 历史后继续发送 | 导入时一次性把历史复制进 Cindy，之后只走实时写入，打开或翻页都不再重读原 rollout，同一回复只显示一份；旧版按需导入留下的任务首次打开时接入新导入记录，不重复写消息 | [messagesListImportSideEffects](../../apps/desktop/src/main/localDb/ipc/__tests__/messagesListImportSideEffects.test.ts) 的接入场景；[codexLocalSessions](../../apps/desktop/src/main/__tests__/codexLocalSessions.test.ts) 的分页 rollout 接管与续跑准备 |
+| 导入任务在任务列表的预览 | 列表显示最后一条真实消息；导入标记等空正文的 assistant 行不参与预览，旧版本存下的空预览在下次读取列表时自愈；最新消息被改写为空时，推送的是列表实际会显示的那一条 | [sessionListPagination](../../apps/desktop/src/main/localDb/__tests__/sessionListPagination.test.ts) 的导入任务场景；[sessionListProjection](../../apps/desktop/src/main/localDb/__tests__/sessionListProjection.test.ts) 的空行与回填场景；[assistantFinalRetraction](../../apps/desktop/src/main/localDb/ipc/__tests__/assistantFinalRetraction.test.ts) 的改写场景 |
 | 本地插件或历史文件多时切换任务、输入 | 通知发现只合并在途扫描，投递前重新核验安装与账号；展示用目录偏好异步读取，旧目录结果不覆盖新目录；历史定位只 stat 匹配 ID 的文件；麦克风热路径不等待 main | [subscriptionGateway](../../apps/desktop/src/main/cindy-brain/__tests__/subscriptionGateway.test.ts)、[codexLocalSessions](../../apps/desktop/src/main/__tests__/codexLocalSessions.test.ts)、[useInstalledGhosts](../../apps/desktop/src/renderer/cindy-brain/__tests__/useInstalledGhosts.test.tsx)、[microphonePermissionSnapshot](../../apps/desktop/src/preload/__tests__/microphonePermissionSnapshot.test.ts)；[性能对比与复跑方法](../acceptance/main-thread-stalls-2026-11-02.md) |
 | 打开技能列表时校验大量参考文件 | 完整内容指纹校验异步让出主线程，不延长信任缓存；校验中活动版本、清单或已经读取的文件／目录变化时不赋予官方身份；结束时核对文件与目录元数据，录制只保存固定阶段名与耗时 | [built-in-skills](../../apps/desktop/src/main/maker-host/__tests__/built-in-skills.test.ts)、[managed-skills](../../apps/desktop/src/main/maker-host/__tests__/managed-skills.test.ts)、[performanceTrace](../../apps/desktop/src/main/performance-trace/__tests__/performanceTrace.test.ts) |
 | 云端连接未完成就结束语音，随后立即再次录音 | 旧录音迟到的 done/error 不得结束新录音或丢失麦克风引用；启动期事件等待本次 start-ready 后按 runId 匹配，当前录音的早到授权事件仍须保留；普通输入、浮窗与提问卡共用事件分发 | [useVoiceInput.startup](../../apps/desktop/src/renderer/voice-input/__tests__/useVoiceInput.startup.test.ts)、[eventScope](../../apps/desktop/src/renderer/voice-input/__tests__/eventScope.test.ts) |
@@ -51,3 +52,32 @@ pnpm --filter desktop exec vitest run src/main/maker-ipc/__tests__/sessionPermis
 遇到新的复现，优先补在表中已有行为测试里，并写出触发条件和用户结果；只有出现新的业务边界时再建模块。本文只链接测试，不复制测试断言，不维护通过次数或临时任务状态。
 
 Windows 审查页的辅助功能回归须在隔离 Electron 中分别检查首次打开、切出再切回、焦点刷新和滚动，覆盖统一／分栏视图。先确认面板真正可见并通过原生 API 读取其内容，再记录主进程的 `BrowserAccessibilityManager::OnAccessibilityEvents`／`NotifyWinEvent`；仅测 renderer 帧率或读取 `accessibilitySupportEnabled` 不能证明 Windows 通知路径没有阻塞。`get_window_state` 等树读取自身可能改变事件生成条件，重启前后的测量不能直接当成同条件对照。
+
+
+## 冷任务的历史操作无需发送消息（2026-11-11）
+
+回退预览、回退提交（含编辑重发）在既有发送锁内恢复持久化原生会话，再执行操作。
+Pi 会话树、HTML 导出，以及 Pi / Codex 手动压缩共用 `sessionActionRuntime`；恢复只
+启动运行环境，不发送占位消息、不触发模型回答。手动压缩本身仍是用户主动请求的模型操作。
+任务状态必须为 active，保留供应商的 null 语义、执行设备、SSH 主机、权限与目录授权，
+恢复期间账号代次变化即停止。Claude 首轮回退后没有原生 ID 的任务继续走既有 DB-only 回退。
+
+历史操作通过 `_cindyRequireNativeResume` 禁用缺失历史时的新会话兜底；Codex / Pi 原生
+历史不可用时不清旧绑定、不执行后续回退。普通发送仍保留原先的 fresh fallback。
+故障半径：① 只表示当前任务的内存实例不存在；② 只恢复该任务、复用其原生历史；
+③ 不重启应用、不拆共享连接、不恢复已归档或删除的任务，也不重放发送。
+
+恢复边界：个性化提示词、记忆开关只在 renderer 的启动选项里，不落库，所以为回退 / 手动压缩
+临时恢复出的运行环境，在动作结束后立即以 `runtime-refresh` 关闭，下一次发送再带着正常启动
+选项冷启动；不能让它被后续发送静默复用。例外：Claude 回退提交后，原生回退（`pendingRewindTo`）只挂在该运行
+环境上、由它的下一次发送执行，所以成功提交后保留运行环境，否则下次发送会续上未裁剪的原生历史。严格恢复标记（`_cindyRequireNativeResume`）不经
+远程 Agent 线协议传到另一台电脑，所以 Agent 在另一台电脑上的任务，回退 / 手动压缩的冷恢复
+会拒绝并提示先在那台电脑恢复；要支持需另行评审线协议兼容（`protocol-compatibility.md`）。
+回退入口与其他会启动 Agent 的 IPC 一样，非 device-link 调用必须来自受信顶层页面。
+
+同类入口排查：上下文用量查询已有懒恢复；模型/权限设置已有持久化路径；插话必须确有
+运行中的轮次，不能通过隐式发消息来制造。没有把这些不同语义改成一律启动 Agent。
+
+回归入口：Desktop `sessionActionRuntime.test.ts`（冷启动、并发、状态、账号切换），
+`rewind-ipc.test.ts`（预览/提交接线与恢复失败不提交）、`rewind.test.ts`（历史与文件回退）；
+maker-core `codex/index.test.ts` 与 Pi `pi-auto-review-dispatch.test.ts` 的 strict resume 用例。

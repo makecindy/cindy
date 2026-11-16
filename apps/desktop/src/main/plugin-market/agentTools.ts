@@ -3,7 +3,7 @@ import type { PluginMarketService } from './service.js';
 import type { PluginMarketItem } from '../../shared/pluginMarket.js';
 import { deliveryNamespaceFields } from '../../shared/pluginIdentity.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
-import { ServerApiError } from '../serverApiClient.js';
+import { ServerApiError } from '../serverApiClient.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   isPluginMarketPassthroughErrorCode,

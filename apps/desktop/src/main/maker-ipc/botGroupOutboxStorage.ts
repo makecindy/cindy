@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { botGroupErrorVariant } from '@cindy/maker-shared/botGroupPresentation';
 import { getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated, ownerScopedUserDataPath } from '../appSessionState.js';
 import { getDbClient } from '../localDb/client/current.js';
-import { parseBlobUrl } from '../cindy-media/blobStore.js';
+import { parseBlobUrl } from '../cindy-media/blobStore.desktop.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 import { throwIpcError } from '../utils/ipcValidate.js';

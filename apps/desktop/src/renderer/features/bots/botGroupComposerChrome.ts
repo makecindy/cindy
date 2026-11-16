@@ -7,10 +7,10 @@
 import { useEffect, type MouseEvent, type RefObject } from 'react';
 
 /** Docked under the message list; no top rule — the card's border is the boundary. */
-export const BOT_GROUP_COMPOSER_DOCK = 'shrink-0 px-5 pb-4 pt-2';
+export const BOT_GROUP_COMPOSER_DOCK = 'shrink-0 px-[var(--cindy-input-pad,40px)] pb-4 pt-2';
 
 /** Centers the card in a wide main column; a narrow Thread panel simply fills it. */
-export const BOT_GROUP_COMPOSER_COLUMN = 'relative mx-auto w-full max-w-[760px]';
+export const BOT_GROUP_COMPOSER_COLUMN = 'relative mx-auto w-full max-w-[var(--cindy-input-width,934px)]';
 
 /** Starts at one line and grows with the text (see fitBotGroupComposerInput); max-h caps it and scrolls. */
 export const BOT_GROUP_COMPOSER_INPUT =

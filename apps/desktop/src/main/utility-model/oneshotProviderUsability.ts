@@ -1,4 +1,4 @@
-import { codexAccountState } from '../maker-host/codex-account-auth.js';
+import { codexAccountState } from '../maker-host/codex-account-auth.desktop.js';
 /**
  * oneshotProviderUsability.ts — 快问快答钉档的「已配置凭证」同步探测。
  *
@@ -11,8 +11,8 @@ import { storedCustomProviderId, type AgentKind, type Provider } from '@cindy/mo
 
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { hasChatgptOneshotReadiness } from '../maker-host/codex-oauth-readiness.js';
-import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.js';
-import { hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
+import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.desktop.js';
+import { hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.desktop.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 

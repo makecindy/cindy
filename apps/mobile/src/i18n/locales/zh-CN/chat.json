@@ -1,6 +1,42 @@
 {
-  "teammateProcess": {"retry": "重试",
-    "empty": "本轮没有可显示的过程记录","unavailable": "未能读取过程记录","record":"处理记录","operations":"操作记录","elapsed":"已处理 {{duration}}","took":"用时 {{duration}}","processing":"正在处理","worked":"处理记录","thinking":"正在思考","thought":"已思考","failed_one":"{{count}} 次调用失败","failed_other":"{{count}} 次调用失败","separator":"、","actions":{"running":{"read":"正在查看文件","edit":"正在编辑文件","search":"正在查找内容","web":"正在查阅网页","command":"正在运行命令","tools":"正在使用工具","delegate":"正在委派工作","plan":"正在整理计划"},"done":{"read":"查看了文件","edit":"编辑了文件","search":"查找了内容","web":"查阅了网页","command":"运行了命令","tools":"使用了工具","delegate":"委派了工作","plan":"整理了计划"}}},
+  "teammateProcess": {
+    "retry": "重试",
+    "empty": "这条回复没有可显示的过程记录",
+    "unavailable": "未能读取过程记录",
+    "record": "处理记录",
+    "operations": "操作记录",
+    "elapsed": "已处理 {{duration}}",
+    "took": "用时 {{duration}}",
+    "processing": "正在处理",
+    "worked": "处理记录",
+    "thinking": "正在思考",
+    "thought": "已思考",
+    "failed_one": "{{count}} 次调用失败",
+    "failed_other": "{{count}} 次调用失败",
+    "separator": "、",
+    "actions": {
+      "running": {
+        "read": "正在查看文件",
+        "edit": "正在编辑文件",
+        "search": "正在查找内容",
+        "web": "正在查阅网页",
+        "command": "正在运行命令",
+        "tools": "正在使用工具",
+        "delegate": "正在委派工作",
+        "plan": "正在整理计划"
+      },
+      "done": {
+        "read": "查看了文件",
+        "edit": "编辑了文件",
+        "search": "查找了内容",
+        "web": "查阅了网页",
+        "command": "运行了命令",
+        "tools": "使用了工具",
+        "delegate": "委派了工作",
+        "plan": "整理了计划"
+      }
+    }
+  },
   "imageDelivery": {
     "stored": "图片已交付",
     "failed": "图片交付失败，可重试传输已有图片。",
@@ -68,7 +104,7 @@
       "gitRebase": "变基分支",
       "gitMerge": "合并分支",
       "gitCherryPick": "拣选提交",
-      "gitStash": "管理暂存工作",
+      "gitStash": "管理贮藏的变更",
       "gitRestore": "恢复文件",
       "gitSubmodule": "管理子模块",
       "gitRemote": "查看远端仓库",
@@ -110,7 +146,7 @@
       "ghAuthLogout": "退出 GitHub",
       "ghAuthRefresh": "刷新 GitHub 授权",
       "ghAuthSwitch": "切换 GitHub 账号",
-      "ghRunList": "查看工作流运行",
+      "ghRunList": "查看工作流运行列表",
       "ghRunView": "查看工作流运行",
       "ghRunWatch": "监视工作流运行",
       "ghSearch": "搜索 GitHub",
@@ -153,5 +189,13 @@
     "working": "正在工作…",
     "worked": "已工作 {{duration}}",
     "workDetails": "工作过程"
+  },
+  "subscriptionAccountError": {
+    "limited": "此任务使用的订阅账号用量已达上限。可等用量重置后重试，或选择其他模型来源。此任务仍绑定原账号，不会自动换号。",
+    "limitedUntil": "此任务使用的订阅账号用量已达上限，预计于 {{resetAt}} 重置。可等重置后重试，或选择其他模型来源。此任务仍绑定原账号，不会自动换号。",
+    "loginRequired": "此任务使用的订阅账号需要重新登录。请在执行任务的电脑上重新登录该账号，再重试。",
+    "signingIn": "此任务使用的订阅账号正在登录，请完成登录后重试。",
+    "unavailable": "此任务绑定的订阅账号无法用于本次请求。请在执行任务的电脑上检查模型供应商中的账号设置，或选择其他模型来源。",
+    "legacy": "此任务绑定的订阅账号暂不可用。请在执行任务的电脑上检查该账号的登录与用量状态，或选择其他模型来源。此任务不会自动换号。"
   }
 }

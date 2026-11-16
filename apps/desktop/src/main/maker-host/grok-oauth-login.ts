@@ -17,7 +17,6 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
-import { shell } from 'electron';
 
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
@@ -31,8 +30,6 @@ import {
 } from '../oauthResultPage.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import { retainInvalidatedProviderPresentation } from './provider-presentation-store.js';
-import { outboundFetch } from './outbound-fetch.js';
-import { genericOAuthSecretIo, getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { OwnerBoundaryPendingError } from './owner-boundary-error.js';
 import {
@@ -41,6 +38,46 @@ import {
   unbindNativeProviderAuth,
 } from './nativeProviderAuthBinding.js';
 import type { XaiBridgeAuthRecoveryOutcome } from './xai-bridge-auth-invalidation.js';
+
+
+// ── 存储 blob ───────────────────────────────────────────────────────────────────
+export interface GrokTokenBlob {
+  identity?: string;
+  access_token: string;
+  refresh_token?: string;
+  /** epoch ms;access_token 过期时刻(由 expires_in 换算)。 */
+  expires_at?: number;
+  obtained_at?: number;
+  scope?: string;
+}
+
+export interface GrokDeviceCode {
+  userCode: string;
+  verificationUrl: string;
+  expiresAt: number;
+}
+
+interface TokenResponse {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+  scope?: string;
+  id_token?: string;
+}
+
+export interface GrokOAuthLoginResult {
+  ok: boolean;
+  reason?: string;
+}
+/** The same owner-bound OAuth lifecycle with platform I/O supplied by its launcher. */
+export function createGrokOAuthService(ports: {
+ outboundFetch: typeof fetch;
+ openExternal(url: string): Promise<unknown>;
+ genericOAuthSecretIo: import('./generic-oauth.js').GenericOAuthStorage;
+ getProviderSecretStore(): Pick<import('../secrets/providerSecretStore.js').ProviderSecretStore, 'get' | 'set' | 'remove'>;
+}) {
+ const { outboundFetch, openExternal, genericOAuthSecretIo, getProviderSecretStore } = ports;
+
 
 const log = desktopMakerLogger.child('grok-oauth-login');
 
@@ -76,17 +113,6 @@ function genChallenge(verifier: string): string {
 }
 function genState(): string {
   return base64URLEncode(randomBytes(16));
-}
-
-// ── 存储 blob ───────────────────────────────────────────────────────────────────
-export interface GrokTokenBlob {
-  identity?: string;
-  access_token: string;
-  refresh_token?: string;
-  /** epoch ms;access_token 过期时刻(由 expires_in 换算)。 */
-  expires_at?: number;
-  obtained_at?: number;
-  scope?: string;
 }
 
 // blob 内存缓存 —— safeStorage 解密是同步的 keychain/DPAPI 往返(每 xai 请求 + 每次
@@ -133,12 +159,6 @@ async function resolveEndpoints(
     token: FALLBACK_TOKEN_URL,
     device: FALLBACK_DEVICE_URL,
   };
-}
-
-export interface GrokDeviceCode {
-  userCode: string;
-  verificationUrl: string;
-  expiresAt: number;
 }
 
 async function waitForDevicePoll(ms: number, signal: AbortSignal): Promise<void> {
@@ -266,14 +286,6 @@ function buildAuthUrl(
   return url.toString();
 }
 
-interface TokenResponse {
-  access_token: string;
-  refresh_token?: string;
-  expires_in?: number;
-  scope?: string;
-  id_token?: string;
-}
-
 /**
  * OIDC nonce 校验(Core 3.1.3.7):id_token 的 nonce claim 必须等于授权请求发出的 nonce,
  * 否则视为重放/注入,拒绝本次登录。上游未返 id_token / 解析失败 → 不拦(PKCE 已保护授权码,
@@ -333,7 +345,7 @@ function blobFromTokenResponse(t: TokenResponse, prev?: GrokTokenBlob | null): G
 const CALLBACK_CORS_ALLOWED_ORIGINS = new Set(['https://accounts.x.ai', 'https://auth.x.ai']);
 
 /** origin 在白名单内时返回回调响应应附带的 CORS 头;否则为空(不放行)。 */
-export function xaiCallbackCorsHeaders(origin: string | undefined): Record<string, string> {
+function xaiCallbackCorsHeaders(origin: string | undefined): Record<string, string> {
   if (!origin || !CALLBACK_CORS_ALLOWED_ORIGINS.has(origin)) return {};
   return {
     'Access-Control-Allow-Origin': origin,
@@ -352,10 +364,10 @@ export function xaiCallbackCorsHeaders(origin: string | undefined): Record<strin
  * `listen EADDRNOTAVAIL: address not available 240.0.0.1:56121`),按端口号做子串匹配
  * 会把 EACCES / EADDRNOTAVAIL 一起误判成端口被占。
  */
-export const XAI_CALLBACK_PORT_OCCUPIED_MESSAGE = `xAI OAuth 回调端口 ${REDIRECT_PORT} 被占用(可能有其它 Grok 登录在跑),请关掉后重试`;
+const XAI_CALLBACK_PORT_OCCUPIED_MESSAGE = `xAI OAuth 回调端口 ${REDIRECT_PORT} 被占用(可能有其它 Grok 登录在跑),请关掉后重试`;
 
 // 导出仅供单测(runGrokOAuthLogin 是唯一运行期使用方)。
-export class CallbackListener {
+class CallbackListener {
   private server: Server;
   private expectedState = '';
   /** code 已收到、等待 token exchange 收口的全部连接(consent 页可能重试 fetch)。 */
@@ -574,21 +586,16 @@ let _currentListener: CallbackListener | null = null;
 let _currentAbort: AbortController | null = null;
 let _currentLoginKey: string | null = null;
 
-export interface GrokOAuthLoginResult {
-  ok: boolean;
-  reason?: string;
-}
-
 /** 跑一次 xAI 订阅 OAuth 浏览器登录。成功后把可刷新凭证写进 safeStorage('xai')。 */
 /** 取消进行中的 xAI 登录。 */
-export function cancelGrokOAuthLogin(providerId?: string): void {
+function cancelGrokOAuthLogin(providerId?: string): void {
   if (providerId && _currentLoginKey !== `${activeOwnerScopeKey()}:${providerId}`) return;
   _currentAbort?.abort();
   _currentListener?.close();
 }
 
 /** Whether any xAI login owns the one process-wide authorization slot. */
-export function isGrokOAuthLoginInProgress(): boolean {
+function isGrokOAuthLoginInProgress(): boolean {
   return _currentAbort !== null;
 }
 
@@ -759,7 +766,7 @@ function createGrokAccount(providerId: string) {
         opts?.onProgress?.('opening-browser');
         opts?.onAuthorizationUrl?.(authUrl);
         log.info('opening browser for xai oauth', { port: REDIRECT_PORT });
-        await shell.openExternal(authUrl);
+        await openExternal(authUrl);
 
         const code = await codePromise;
 
@@ -1118,9 +1125,9 @@ function account(providerId = 'xai') {
   }
   return value;
 }
-export const getGrokOAuthCredentialGeneration = (providerId = 'xai') =>
+const getGrokOAuthCredentialGeneration = (providerId = 'xai') =>
   account(providerId).getGrokOAuthCredentialGeneration();
-export function resetGrokOAuthMemoryCache(providerId?: string): void {
+function resetGrokOAuthMemoryCache(providerId?: string): void {
   if (providerId) {
     account(providerId).resetGrokOAuthMemoryCache();
     cancelGrokOAuthLogin(providerId);
@@ -1130,19 +1137,21 @@ export function resetGrokOAuthMemoryCache(providerId?: string): void {
   accounts.clear();
   cancelGrokOAuthLogin();
 }
-export const hasGrokOAuthLogin = (providerId = 'xai') => account(providerId).hasGrokOAuthLogin();
-export const hasGrokOAuthLoginUnbound = () => account().hasGrokOAuthLoginUnbound();
-export const logoutGrok = (providerId = 'xai') => {
+const hasGrokOAuthLogin = (providerId = 'xai') => account(providerId).hasGrokOAuthLogin();
+const hasGrokOAuthLoginUnbound = () => account().hasGrokOAuthLoginUnbound();
+const logoutGrok = (providerId = 'xai') => {
   cancelGrokOAuthLogin(providerId);
   account(providerId).logoutGrok();
 };
-export const runGrokOAuthLogin = (
+const runGrokOAuthLogin = (
   opts?: Parameters<ReturnType<typeof createGrokAccount>['runGrokOAuthLogin']>[0],
   providerId = 'xai',
 ) => account(providerId).runGrokOAuthLogin(opts);
-export const getGrokAccessToken = (providerId = 'xai') => account(providerId).getGrokAccessToken();
-export const peekGrokAccessToken = (providerId = 'xai') =>
+const getGrokAccessToken = (providerId = 'xai') => account(providerId).getGrokAccessToken();
+const peekGrokAccessToken = (providerId = 'xai') =>
   account(providerId).peekGrokAccessToken();
-export const recoverGrokAuthAfterRejection = (token: string, providerId = 'xai') =>
+const recoverGrokAuthAfterRejection = (token: string, providerId = 'xai') =>
   account(providerId).recoverGrokAuthAfterRejection(token);
-export const grokAccountIdentity = (providerId: string) => account(providerId).readBlob()?.identity;
+const grokAccountIdentity = (providerId: string) => account(providerId).readBlob()?.identity;
+return { xaiCallbackCorsHeaders, XAI_CALLBACK_PORT_OCCUPIED_MESSAGE, CallbackListener, cancelGrokOAuthLogin, isGrokOAuthLoginInProgress, getGrokOAuthCredentialGeneration, resetGrokOAuthMemoryCache, hasGrokOAuthLogin, hasGrokOAuthLoginUnbound, logoutGrok, runGrokOAuthLogin, getGrokAccessToken, peekGrokAccessToken, recoverGrokAuthAfterRejection, grokAccountIdentity };
+}

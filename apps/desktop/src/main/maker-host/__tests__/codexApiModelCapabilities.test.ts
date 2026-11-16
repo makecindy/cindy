@@ -22,6 +22,7 @@ import {
   setCodexApiModelProbe,
   requestCodexApiModelProbe,
 } from '../codex-api-model-capabilities.js';
+import { mapCodexAppServerModelsToCatalog } from '../codex-model-discovery.js';
 import { EMPTY_MODEL_CATALOG_OVERRIDES, sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 
 const efforts = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
@@ -50,6 +51,25 @@ afterEach(() => {
 });
 
 describe('Codex API engine capabilities', () => {
+  it.each(['gpt-5.6-terra', 'gpt-6.1-terra'])(
+    'projects the native Ultra/Fast report for official API model %s', modelId => {
+      const stored = config();
+      stored.runtimes.codex!.models[0] = { id: modelId, name: modelId };
+      setCustomProviderConfigs([stored]);
+      const reported = mapCodexAppServerModelsToCatalog([{
+        id: modelId, model: modelId, displayName: modelId, description: '', hidden: false,
+        supportedReasoningEfforts: efforts.map(reasoningEffort => ({ reasoningEffort, description: '' })),
+        defaultReasoningEffort: 'medium', additionalSpeedTiers: ['fast'], serviceTiers: [], isDefault: false,
+      }]);
+      setCodexApiModelCapabilities(reported);
+      expect(model()).toMatchObject({
+        id: modelId, efforts: [...efforts], supportsFastMode: true,
+        userModelConfig: { id: modelId, name: modelId },
+      });
+      expect(model().supportsUltrafastMode).not.toBe(true);
+    },
+  );
+
   it('adds live Ultra and Fast to configured exact IDs without changing membership or stored edits', () => {
     setActiveCatalog(structuredClone(BUNDLED_CATALOG));
     const stored = config();

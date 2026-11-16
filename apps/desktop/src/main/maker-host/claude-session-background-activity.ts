@@ -39,6 +39,11 @@ const TURN_END_GRACE_MS = 2_500;
 const STICKY_CACHE_LIMIT = 512;
 /** 响应流 onData 的记录节流:SSE 每 chunk 都进,毫秒级 set 也没必要。 */
 const STREAM_TOUCH_THROTTLE_MS = 5_000;
+/**
+ * 后台命令结束 → CLI 自动续跑那一轮开始之间的空窗。期间保持「仍在工作」,任务列表不会先闪成
+ * 已结束再亮回来;续跑没来时到点熄灭。
+ */
+const COMMAND_WORK_END_GRACE_MS = 5_000;
 
 interface SessionActivityState {
   lastActivityAt: number;
@@ -47,6 +52,11 @@ interface SessionActivityState {
   turnRunning: boolean;
   active: boolean;
   offTimer: NodeJS.Timeout | null;
+  /** 最近一次快照:该会话是否有仍在运行、会自己结束的后台命令(不含长驻服务)。 */
+  commandWork: boolean;
+  /** 已广播的「回合已结束但后台命令仍在工作」。 */
+  commandWorkActive: boolean;
+  commandWorkOffTimer: NodeJS.Timeout | null;
 }
 
 const states = new Map<string, SessionActivityState>();
@@ -54,6 +64,8 @@ const states = new Map<string, SessionActivityState>();
 const stickySdkToSession = new Map<string, string>();
 
 let broadcaster: ((payload: { sessionId: string; active: boolean }) => void) | null = null;
+let commandWorkBroadcaster: ((payload: { sessionId: string; active: boolean }) => void) | null =
+  null;
 
 /** host(register 阶段)注入广播函数;null = 卸载(测试收尾用)。 */
 export function setClaudeBackgroundActivityBroadcaster(
@@ -65,7 +77,16 @@ export function setClaudeBackgroundActivityBroadcaster(
 function ensureState(sessionId: string): SessionActivityState {
   let st = states.get(sessionId);
   if (!st) {
-    st = { lastActivityAt: 0, lastTurnEndAt: 0, turnRunning: false, active: false, offTimer: null };
+    st = {
+      lastActivityAt: 0,
+      lastTurnEndAt: 0,
+      turnRunning: false,
+      active: false,
+      offTimer: null,
+      commandWork: false,
+      commandWorkActive: false,
+      commandWorkOffTimer: null,
+    };
     states.set(sessionId, st);
   }
   return st;
@@ -176,6 +197,82 @@ export function noteClaudeSessionTurnState(sessionId: string, running: boolean):
     // 之后若仍有请求进来(后台子 agent),record 路径会重新评估点亮。
     setActive(sessionId, st, false);
   }
+  evaluateCommandWork(sessionId, st);
+}
+
+// ── 后台命令仍在工作 ─────────────────────────────────────────────────────────
+// 后台命令(run_in_background 的 Bash)不调模型,上面的 proxy 信号永远看不到它;回合也不等它
+// (长驻服务不能把回合挂住)。但「跑测试、构建」这类会自己结束的命令没跑完时任务其实没做完:
+// CLI 会在它结束后自动开新一轮。这里把「回合已结束 + 仍有这类命令在跑」广播给任务列表,
+// 显示为运行中,与 Codex / Pi(命令没跑完回合就不结束)一致。只影响展示:不改回合边界、
+// 完成提醒、发送排队与停止语义。长驻服务(backgroundCommandKind=service)不计。
+
+/** 后台任务快照里是否有仍在运行、会自己结束的后台命令。种类未知按工作算。 */
+export function hasWorkingBackgroundCommand(
+  tasks: ReadonlyArray<{ taskType?: string; backgroundCommandKind?: 'work' | 'service' }>,
+): boolean {
+  return tasks.some(
+    (task) => task.taskType === 'local_bash' && task.backgroundCommandKind !== 'service',
+  );
+}
+
+function setCommandWorkActive(sessionId: string, st: SessionActivityState, next: boolean): void {
+  if (st.commandWorkOffTimer) {
+    clearTimeout(st.commandWorkOffTimer);
+    st.commandWorkOffTimer = null;
+  }
+  if (st.commandWorkActive === next) return;
+  st.commandWorkActive = next;
+  try {
+    commandWorkBroadcaster?.({ sessionId, active: next });
+  } catch (err) {
+    log.warn('background command work broadcast threw', { sessionId, error: String(err) });
+  }
+}
+
+function evaluateCommandWork(sessionId: string, st: SessionActivityState): void {
+  if (st.turnRunning) {
+    // 回合在跑:列表本来就显示运行中,这一层让位。
+    setCommandWorkActive(sessionId, st, false);
+    return;
+  }
+  if (st.commandWork) {
+    setCommandWorkActive(sessionId, st, true);
+    return;
+  }
+  if (!st.commandWorkActive || st.commandWorkOffTimer) return;
+  st.commandWorkOffTimer = setTimeout(() => {
+    st.commandWorkOffTimer = null;
+    if (st.turnRunning || !st.commandWork) setCommandWorkActive(sessionId, st, false);
+  }, COMMAND_WORK_END_GRACE_MS);
+}
+
+/** host(register 阶段)注入「后台命令仍在工作」的广播函数;null = 卸载。 */
+export function setClaudeBackgroundCommandWorkBroadcaster(
+  fn: ((payload: { sessionId: string; active: boolean }) => void) | null,
+): void {
+  commandWorkBroadcaster = fn;
+}
+
+/**
+ * 会话后台任务表变化、或回合收尾时,用该会话的权威快照刷新一次。调用方传的是
+ * hasWorkingBackgroundCommand(session.listBackgroundTasks()) 的结果,不靠事件自己配对。
+ */
+export function noteClaudeSessionBackgroundCommandWork(sessionId: string, hasWork: boolean): void {
+  const existing = states.get(sessionId);
+  if (!existing && !hasWork) return;
+  const st = existing ?? ensureState(sessionId);
+  st.commandWork = hasWork;
+  evaluateCommandWork(sessionId, st);
+}
+
+/** 当前「回合已结束但后台命令仍在工作」的全部会话 id(renderer 任务列表挂载时的初始快照)。 */
+export function listClaudeBackgroundCommandWorkSessions(): string[] {
+  const ids: string[] = [];
+  for (const [sessionId, st] of states) {
+    if (st.commandWorkActive) ids.push(sessionId);
+  }
+  return ids;
 }
 
 /** 会话进程被关闭 / 会话被删除时清账(广播熄灭)。 */
@@ -187,6 +284,9 @@ export function clearClaudeSessionBackgroundActivity(sessionId: string): void {
     clearTimeout(st.offTimer);
     st.offTimer = null;
   }
+  // 进程已关,后台命令随之结束:不等续跑空窗,立即熄灭。
+  st.commandWork = false;
+  setCommandWorkActive(sessionId, st, false);
   states.delete(sessionId);
 }
 
@@ -208,11 +308,13 @@ export function listActiveClaudeBackgroundActivitySessions(): string[] {
 export function resetClaudeBackgroundActivityForTests(): void {
   for (const [sessionId, st] of states) {
     if (st.offTimer) clearTimeout(st.offTimer);
+    if (st.commandWorkOffTimer) clearTimeout(st.commandWorkOffTimer);
     void sessionId;
   }
   states.clear();
   stickySdkToSession.clear();
   broadcaster = null;
+  commandWorkBroadcaster = null;
 }
 
 /**

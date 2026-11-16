@@ -70,6 +70,7 @@ vi.mock('../RemoteControlSection', () => ({ RemoteControlSection: Stub }));
 vi.mock('@/features/device-link/SharedTaskDialog', () => ({ SharedTaskDialog: Stub }));
 vi.mock('../NotificationSection', () => ({ NotificationSection: Stub }));
 vi.mock('../WindowBehaviorSection', () => ({ WindowBehaviorSection: Stub }));
+vi.mock('../AwayFromComputerSection', () => ({ AwayFromComputerSection: Stub }));
 vi.mock('../ComposerSendShortcutSection', () => ({ ComposerSendShortcutSection: Stub }));
 vi.mock('../KeyboardShortcutsSection', () => ({ KeyboardShortcutsSection: Stub }));
 vi.mock('../AgentIslandSection', () => ({ AgentIslandSection: Stub }));
@@ -170,6 +171,7 @@ beforeEach(() => {
   vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
   vi.stubGlobal('ResizeObserver', class {
     observe() {}
+    unobserve() {}
     disconnect() {}
   });
   vi.stubGlobal('electronAPI', { platform: 'darwin', osRelease: '23.0.0', appVersion: '1.0.0',

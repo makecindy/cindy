@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { mountPage, subscription } from '../../ui-page/harness';
 import { BotCapabilitySettings } from '../../../src/renderer/features/bots/BotCapabilitySettings';
 import type { BotCapabilities, BotProfile } from '../../../src/renderer/features/bots/botStore';
-import { withBotSystemSkill } from '../../../src/shared/botSystemSkills';
 
 // The owner's real catalog on 2026-11-01 (descriptions shortened only where the source is long).
 const LEARNED = [
@@ -33,7 +32,6 @@ function Page({ initial }: { initial: BotCapabilities }) {
     <div className="mx-auto max-w-xl p-5">
       <BotCapabilitySettings expanded bot={{ id: 'fixture', canonicalSessionId: 'session-1' } as BotProfile}
         capabilities={capabilities} skills={[]} onChange={() => {}} onConfigure={() => {}}
-        onSystemSkillChange={(id, on) => setCapabilities((current) => ({ ...current, systemSkillsOff: withBotSystemSkill(current.systemSkillsOff, id, on) }))}
         onInputHandoffChange={(allowed) => setCapabilities((current) => ({ ...current, inputHandoff: allowed }))} />
     </div>
   );
@@ -41,7 +39,7 @@ function Page({ initial }: { initial: BotCapabilities }) {
 
 mountPage({
   host: (ctx) => {
-    const learned = ctx.case === 'empty' ? [] : LEARNED;
+    const learned = ctx.case === 'empty' || ctx.case === 'official' ? [] : LEARNED;
     return {
       localDb: {
         sessions: { get: async () => ({ id: 'session-1', agentKind: 'pi', workingDir: '/fixture' }) },
@@ -61,14 +59,17 @@ mountPage({
       maker: {
         onMcpChanged: subscription('mcp'),
         listCustomMcpServers: async () => ({ agentKind: 'pi', servers: [{ id: 'search-gateway', name: 'Search Gateway', available: true }] }),
-        listAgentSkills: async () => ({ success: true, skills: LOCAL }),
-        plugins: { list: async () => TOOLS },
+        listAgentSkills: async () => ({ success: true, skills: ctx.case === 'official' ? [
+          { name: 'pr', description: 'Follow a pull request through review and merge', enabled: true, cindyOfficial: true },
+          { name: 'cindy-skill-creator', description: 'Create a Cindy Skill', enabled: false, cindyOfficial: true },
+          { name: 'personal-notes', description: 'Organize my personal notes', enabled: true },
+        ] : LOCAL }),
+        plugins: { list: async () => ctx.case === 'official' ? [] : TOOLS },
       },
     };
   },
-  render: (ctx) => <Page initial={{
+  render: () => <Page initial={{
     modelChain: [], modelChainOverride: null, skillMode: 'allowlist', skillsExcluded: [], mcpMode: 'inherit', mcpServers: [],
     toolsetMode: 'inherit', toolsets: [], memory: true, permissions: 'ask',
-    ...(ctx.case === 'system-off' ? { systemSkillsOff: ['todo'] } : {}),
   } as unknown as BotCapabilities} />,
 });

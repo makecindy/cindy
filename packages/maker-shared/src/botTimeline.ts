@@ -1,4 +1,35 @@
+import { HISTORY_GAP_SPLIT_MS } from './historyGap.js';
+
 export const BOT_MESSAGE_TIME_GROUP_MS = 5 * 60 * 1_000;
+
+/** Presentation only: process and reply rows keep their keys and share one portrait.
+ * A sealed reply, visible boundary or unloaded history gap starts a new turn.
+ * Artifacts do not claim a portrait or break the surrounding reply column. */
+export function collectBotTurnContinuations<T extends { key: string }>(
+  items: readonly T[],
+  describe: (item: T) => {
+    kind: 'process' | 'reply' | 'boundary' | 'artifact';
+    completed?: boolean;
+    start?: number | null;
+    end?: number | null;
+  },
+): ReadonlySet<string> {
+  const continuations = new Set<string>();
+  let hasPortrait = false;
+  let previousEnd: number | null = null;
+  for (const item of items) {
+    const row = describe(item);
+    if (row.kind === 'boundary' || (row.start != null && previousEnd !== null
+      && row.start - previousEnd > HISTORY_GAP_SPLIT_MS)) hasPortrait = false;
+    if (row.kind === 'process' || row.kind === 'reply') {
+      if (hasPortrait) continuations.add(item.key);
+      hasPortrait = !row.completed;
+    }
+    const end = row.end ?? row.start;
+    if (end != null && Number.isFinite(end)) previousEnd = previousEnd === null ? end : Math.max(previousEnd, end);
+  }
+  return continuations;
+}
 
 export interface BotTimelineMessage {
   clientId: string;

@@ -136,8 +136,8 @@ describe('伙伴行的间距基线', () => {
     expect(source).toContain(
       '<div className="group/sidebar-header flex h-6 items-center justify-between pr-3 pl-6">',
     );
-    // 头像行起点 = 列表容器 12px + 行内边距 10px。
-    expect(source).toContain('<div ref={avatarRowRef} className="flex flex-nowrap items-center gap-1 overflow-hidden py-1 pr-0 pl-[22px]">');
+    // 头像行的挂载、容量与 +N 由 teammatesSection.test.tsx 经过真实组件验证，
+    // 换行与对齐由 teammates-section 单页场景验证，不再匹配旧 JSX 字面量。
     // 段头动作是 20px 图标钮,与其它段头动作同尺寸。
     expect(source).toContain('<BotCreateMenu variant="header" />');
     // 加入群聊收进「+」菜单的「输入邀请链接…」(#6013),段头不再有单独的加群按钮。

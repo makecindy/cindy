@@ -70,8 +70,8 @@ it('captures a visible row after empty rows and retains its signed viewport gap'
     row.dataset.renderItemKey = key;
     row.getBoundingClientRect = () => ({ top, bottom: top + height, height }) as DOMRect;
   }
-  const result = new Function('useCallback', 'scrollRef', 'itemsRef', 'pickIntersectingChildAnchor', 'readViewportChildAnchorClientId', code)(
-    (callback: unknown) => callback, { current: container }, { current: items }, pickIntersectingChildAnchor, readViewportChildAnchorClientId,
+  const result = new Function('useCallback', 'scrollRef', 'itemsRef', 'messageViewportRef', 'pickIntersectingChildAnchor', 'readViewportChildAnchorClientId', code)(
+    (callback: unknown) => callback, { current: container }, { current: items }, { current: null }, pickIntersectingChildAnchor, readViewportChildAnchorClientId,
   );
   expect(result).toEqual({ viewportTopKey: 'visible', offset: -14 });
 });

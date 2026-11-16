@@ -7,7 +7,7 @@
  * 机器上没有可用的 python 时整组 skip(不阻塞无 Python 的 CI 环境)。
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,9 +15,28 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import type { FireContext, Schedule, ScriptCapability } from '@cindy/maker-scheduler';
 
-import { ScriptScheduleRunner, type ScriptCapabilityBroker } from '../script-runner';
+import { ScriptScheduleRunner, type ScriptCapabilityBroker } from '../script-runner.desktop';
 
 const PYTHON_CLIENT_DIR = fileURLToPath(new URL('../python-client/', import.meta.url));
+
+const tmp = mkdtempSync(path.join(tmpdir(), 'cindy-script-proto-'));
+
+// Python writes its bytecode cache under HOME (macOS: ~/Library/Caches/com.apple.python). Every
+// Python this file starts, the script runner's included (it passes HOME and USERPROFILE through),
+// gets a home inside the fixture instead of the test runner's.
+const fixtureHome = path.join(tmp, 'home');
+mkdirSync(fixtureHome);
+const runnerHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+process.env.HOME = fixtureHome;
+process.env.USERPROFILE = fixtureHome;
+
+afterAll(() => {
+  for (const [name, value] of Object.entries(runnerHome)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+  rmSync(tmp, { recursive: true, force: true });
+});
 
 function detectPython(): string | null {
   for (const cmd of ['python', 'python3']) {
@@ -36,10 +55,6 @@ function detectPython(): string | null {
 }
 
 const PYTHON = detectPython();
-
-const tmp = mkdtempSync(path.join(tmpdir(), 'cindy-script-proto-'));
-
-afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 function schedule(command: string): Schedule {
   return {

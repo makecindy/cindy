@@ -16,8 +16,8 @@
  * remoteUnsubscribe)由 ipc.ts 持有 deps 后驱动。windowId = WebContents.id。
  */
 
-/** deviceId → topic → 持有该订阅的窗口集合。 */
-const registry = new Map<string, Map<string, Set<number>>>();
+/** deviceId → topic → 窗口及其最近一次订阅登记。 */
+const registry = new Map<string, Map<string, Map<number, symbol>>>();
 
 /**
  * 记录一个窗口对 (deviceId, topics) 的订阅意图。返回需要向 relay 转发的 topics ——
@@ -27,6 +27,7 @@ export function recordSubscribe(
   windowId: number,
   deviceId: string,
   topics: readonly string[],
+  registration: symbol = Symbol(),
 ): string[] {
   let byTopic = registry.get(deviceId);
   if (!byTopic) {
@@ -35,12 +36,12 @@ export function recordSubscribe(
   }
   const forwarded = new Set<string>();
   for (const t of topics) {
-    let set = byTopic.get(t);
-    if (!set) {
-      set = new Set();
-      byTopic.set(t, set);
+    let owners = byTopic.get(t);
+    if (!owners) {
+      owners = new Map();
+      byTopic.set(t, owners);
     }
-    set.add(windowId);
+    owners.set(windowId, registration);
     forwarded.add(t);
   }
   return [...forwarded];
@@ -55,14 +56,17 @@ export function recordUnsubscribe(
   windowId: number,
   deviceId: string,
   topics: readonly string[],
+  expectedRegistration?: symbol,
 ): string[] {
   const byTopic = registry.get(deviceId);
   const zeroed: string[] = [];
   for (const t of topics) {
-    const set = byTopic?.get(t);
-    if (set) {
-      set.delete(windowId);
-      if (set.size === 0) {
+    const owners = byTopic?.get(t);
+    // 失败只回滚自己的登记；迟到的旧请求不能撤销同窗口的新订阅。
+    if (expectedRegistration !== undefined && owners?.get(windowId) !== expectedRegistration) continue;
+    if (owners) {
+      owners.delete(windowId);
+      if (owners.size === 0) {
         byTopic!.delete(t);
         zeroed.push(t);
       }

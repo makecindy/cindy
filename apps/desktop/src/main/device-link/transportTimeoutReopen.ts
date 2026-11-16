@@ -12,6 +12,8 @@
  * relay 连接,也不会丢被控端保留的可靠 pending(它等到下一次 link-accept 续传)。
  */
 
+import { shortDeviceRef } from '@cindy/device-link';
+
 type Timer = ReturnType<typeof setTimeout>;
 
 export interface TransportTimeoutReopenDeps {
@@ -167,7 +169,7 @@ export function createTransportTimeoutReopenLoop(
         if (!isCurrent(deviceId, entry)) return; // 被 cancel/dispose 或已换代
         if (n >= maxAttempts) {
           deps.log?.warn(
-            `transport-timeout reopen gave up for ${deviceId.slice(0, 8)} after ${n} attempts: ${String(err)}`,
+            `transport-timeout reopen gave up for ${shortDeviceRef(deviceId)} after ${n} attempts: ${String(err)}`,
           );
           finishEntry(deviceId, entry);
           return;

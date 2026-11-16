@@ -81,6 +81,19 @@ export class RecoveryJournal {
     if (s.rollbackPolicy === 'manual') next.error = 'Manual upgrade failed; data compatibility is unknown. Inspect before any code rollback.';
     durableWrite(this.file, next); return next;
   }
+  rejectBeforeLaunch(reason) {
+    // Only the live launch caller may use this, before it attempts to spawn any candidate code.
+    // Missing readiness/heartbeat (or an interrupted supervisor) is never this evidence.
+    const s = this.read();
+    assert(s.phase === 'trial' && s.readyAt === null, 'Candidate may already have run');
+    const next = { ...s, phase: 'recovering', failed: s.selected, selected: s.good,
+      generation: this.nonce(), recoveryReason: 'candidate-not-launched',
+      launchFailure: { id: s.selected.id, reason, at: this.now(), retryable: true } };
+    delete next.error;
+    durableWrite(this.file, next);
+    durableWrite(path.join(path.dirname(this.file), 'known-good.json'), s.good);
+    return next;
+  }
   recoverInterrupted() {
     const s = this.read();
     if (s.phase === 'trial') return this.reject('interrupted before promotion');

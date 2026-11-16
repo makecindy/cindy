@@ -33,6 +33,14 @@ Composer scroll masking must align with the same wallpaper instead of introducin
 Built-in SVG wallpapers are decorative assets, not new semantic UI colors.
 Verify actual Light/Dark screenshots across host pages and the expanded tool pane.
 
+Data-only v2 theme packages may supply wallpaper defaults through the same
+AppearanceService and media ingestion/decoding used by settings and approved
+fixed plugin operations. Explicit wallpaper overrides win; clearing the named
+override follows the selected theme. No second canvas, media protocol or per-theme
+glass styles are introduced. The shared renderer canvas lives in
+`renderer/appearance/WallpaperPresenter.ts`; the original hook is a thin export.
+Theme motion 0 also reduces transitions/playback, and OS Reduce motion always wins.
+
 The built-in picker lists 13 artworks (user curation, 2026-10-17): the Cindy group —
 Whisper, Night Glance, Scarlet Stroll, Neon Silhouette, Prism Shards — followed by
 Night Launch, Silent Orbits, Dune Dawn, Planet Dawn, Indigo Folds, Dune Sphere,
@@ -51,7 +59,8 @@ and preview fallback; only manifest entries with video metadata offer motion. Do
 as a 3px bottom track inside the selected thumbnail (user choice, 2026-10-19), with no visible
 percentage or separate row. Its transform interpolates the precise byte ratio over
 the base motion tier, linearly for this transfer indicator to avoid restarting an
-ease-in/out on every progress sample; reduced motion updates immediately.
+ease-in/out on every progress sample (registered narrow exception, `DESIGN.md` §14.4);
+reduced motion updates immediately.
 It follows real transfer progress and disappears once ready;
 cache hits show the original directly. A failed tile shows a retry icon and supports click,
 Enter and Space to retry, preserving the grid's single Tab stop and selected border.
@@ -70,40 +79,54 @@ Earlier unreleased artwork (including Blue Gaze, Amber Light and the 2026-10-16 
 trimmed on 2026-10-17) is not shipped and needs no compatibility.
 The new artwork uses the existing continuous cover fit, theme-derived visibility
 and blur controls. None remains the default. With None selected, visibility controls
-desktop background transparency (0% opaque, 100% clear); the retained left sidebar
-material is independent. Both controls remain
+desktop background transparency (0% opaque, 100% clear); the left sidebar follows
+the same controls (user decision, 2026-11-10; refined 2026-11-11, below). Both controls remain
 sliders with the same ranges, preview/commit behavior and reset action when switching
 between None and artwork (user decision, 2026-11-08). Their labels and hints identify
-the current background source; do not replace desktop blur with a separate switch.
+the current background source; do not replace desktop blur with a separate switch,
+except on Windows, where it is an on/off Switch (user decision, 2026-11-11; see below).
 Desktop transparency has its own optional `desktopVisibility` override, defaulting to
 0% for both upgrades and new installs. Never infer desktop opt-in from legacy
 `wallpaperVisibility` or `wallpaperOverlay`; artwork keeps its existing values.
 Switching background sources restores each source's visibility. Reset removes the
-desktop override and returns to opaque content, retaining independent sidebar frost.
+desktop override and returns to the original backdrop with its frosted sidebar.
 At 0% desktop transparency or wallpaper visibility, disable the blur slider and
 suspend background blur without writing over its saved value. Restore that value
-as soon as visibility becomes positive. The independent sidebar material is not
-disabled by this optimization (user decision, 2026-11-08).
+as soon as visibility becomes positive.
 macOS passes the numeric radius to the native window backdrop. See
 [`desktop-backdrop-blur-research.md`](../desktop-backdrop-blur-research.md).
 Text and controls are never faded.
-The left task sidebar retains its own frosted material and readable tint floor,
-even when the background blur is zero (user decision, 2026-11-08). The two existing
-sliders still control the background; do not add a separate sidebar preference.
-For a desktop background on macOS, a non-interactive native effect view covers
-only the sidebar's currently visible width. Its geometry is local to each window,
-follows collapse/rail/peek animation and UI zoom, and disappears when hidden or
-when artwork covers the window. With artwork, a paint-only child of the sidebar
-blurs the in-app canvas; never apply the filter to the sidebar ancestor, which
-would change the containing block of its fixed menus. In desktop mode, the shared
-veil starts after the sidebar's visible edge; otherwise 0% transparency hides the
-native material beneath an opaque body. The sidebar retains its original tint.
-With artwork, compensate for the existing canvas veil rather than stacking two full coats.
-Windows/Linux retain the readable tint; native regional desktop sampling has only
-been implemented on macOS. Existing Windows whole-window Acrylic fallback remains.
-Without that native sidebar material (Windows/Linux), 0% desktop transparency does not
-enter desktop-background mode: the window keeps its original backdrop (Windows 11
-Acrylic, otherwise opaque) until transparency is raised (#9424).
+The left task sidebar follows the same visibility and blur controls as the main area
+(user decision, 2026-11-10). Do not add a separate sidebar preference, and do not add a
+shadow to the docked sidebar (owner decision, 2026-11-10: a trialed `--shadow-menu`
+edge was rejected); only its 1px divider separates it. With artwork, the docked
+sidebar paints no tint of its own and shows the same blurred canvas as the main area.
+On the desktop (user decision, 2026-11-11), the docked sidebar has the main area's hue
+and transparency, one step deeper: the shared veil on the aside plus a fixed shade on
+its frost layer (black, 4% light / 10% dark), so it is slightly deeper at every setting.
+The main veil starts at the sidebar's visible edge so the two coats never stack. On
+macOS a non-interactive native effect view covers only the sidebar's visible width
+(local per-window geometry following collapse/rail/peek animation and UI zoom;
+cleared when hidden or covered by artwork) and adds a fixed frost over the adjustable
+window radius. It keeps only the material's blur: its tint, blend and desktop-tinting
+layers and saturation boost are removed, and it stays active in an inactive window,
+because the system tint read as a cooler, different hue than Cindy's surfaces. An
+unrecognized private layer layout is left untouched (system material fallback), and
+leaving desktop mode restores the untouched material. Windows has no regional
+material: its sidebar shares the whole-window Acrylic and only the tint rule applies.
+The peek
+drawer takes the main area's color (owner decision, 2026-11-10) but covers at least
+90%: it overlays app content, and CSS backdrop blur does not render in the transparent
+window, so a fully see-through drawer lets the text beneath collide with its own. The
+shared veil hides none of that content, so the drawer's own surface coat is
+max(main area's veil, 90%). It drops that ineffective blur and keeps its divider and its
+`--shadow-menu` floating-layer elevation. At 0% desktop transparency the original
+backdrop, docked sidebar and peek drawer are unchanged.
+0% desktop transparency does not enter desktop-background mode on any platform: the
+window keeps its original backdrop (macOS HUD vibrancy with the frosted sidebar,
+Windows 11 22H2+ Acrylic, otherwise opaque) until transparency is raised (#9424).
+Electron applies Windows system backdrops only from build 22621, so earlier Windows 11
+builds keep the opaque backdrop rather than a translucent backing without its material.
 The controls reuse the visibility and blur overrides. On macOS, the own-window
 native addon applies `CGSSetWindowBackgroundBlurRadius` (0–20), with fixed vibrancy
 removed so it cannot obscure radius changes. Artwork clears this native radius.
@@ -112,8 +135,22 @@ clear NSWindow background needs a visually negligible alpha (0.001), restored
 when blur is cleared without overwriting the next theme's background.
 The private API is resolved at runtime; a missing addon or failed call falls back
 to the system material. Windows 11 continues to use Acrylic for nonzero values;
+its tint follows each window's own light/dark mode, which Cindy sets from its resolved
+theme rather than the Windows setting (2026-11-11: a dark theme on light Windows had
+shown a white-tinted backdrop) and re-asserts after Windows theme changes. Acrylic's
+own tint strength is system-defined, so 100% desktop transparency with blur remains a
+theme-tinted frost rather than clear glass. Because that strength is fixed,
+the Windows desktop blur control is a Switch rather than a slider (artwork blur
+stays a slider); turning it on restores the last nonzero shared blur value;
 systems without a native material retain clear transparency. The hint describes
-system-default fallback where adjustable blur is unavailable. A successful native
+system-default fallback where adjustable blur is unavailable. On Windows 11 22H2+ a
+window is created transparent only when the last session ended on a clear desktop
+(blur off); otherwise it is a regular frameless window, because a transparent window
+carrying Acrylic flickers (2026-11-11; see the research document's Windows device
+finding). `transparent` is fixed at creation, so turning desktop blur off in a regular
+window keeps Acrylic until the next launch, and turning it on in a transparent window
+may flicker until then; the switch hint tells users to restart after turning it off.
+Systems without a system backdrop always create transparent windows. A successful native
 call alone is not visual acceptance; keep the research document's validation limits.
 Selecting artwork restores the image/video controls. Reset removes these overrides.
 While a window's opaque in-app wallpaper canvas is active, disable its covered
@@ -178,8 +215,7 @@ Dragging previews both visibility and blur locally; only a committed pointer/key
 value is saved and broadcast to other windows. Cancelled gestures, window blur or
 leaving settings discard the preview; a failed save restores the saved value.
 The macOS dispatcher caches successful native state per window: radius-only changes
-retain the sidebar material, replaced materials resynchronize its mask, and failed
-native calls remain retryable. It also owns background-color writes so redundant
+do not recreate the material, and failed native calls remain retryable. It also owns background-color writes so redundant
 updates cannot erase the tiny alpha backing that preserves AppKit window corners.
 Existing artwork preferences without an explicit visibility override keep the previous Light/Dark veil
 mapping and display its equivalent visibility. The unchanged soft default is 37% visible in
@@ -225,7 +261,8 @@ and permit retry. The download and cache contract is defined in
 Decode one local video
 per window, suspend playback while hidden/minimized, and use the original still for
 reduced motion or playback failure. Static / Dynamic switches crossfade the video
-over the retained high-resolution still using base/ease-move (200ms), starting
+over the retained high-resolution still using fast/ease-move (150ms, the same pair as the
+still-image crossfade; maintainer ruling D-11, 2026-11-11), starting
 only after playback is ready. Switching back to Static releases the video after
 the fade; rapid toggles reverse it without adding a decoder. Reduced motion
 bypasses the transition and releases the video immediately.
@@ -258,4 +295,3 @@ up the entire frame to shorten a blink, which also accelerates curtains, hair an
 shadows (user correction, 2026-10-02). Avoid mid-blink reopening, alternating-frame
 holds and doubled eyelid outlines. Decoder frame counts alone do not establish natural
 motion; inspect the complete action and loop boundary before accepting an asset.
-

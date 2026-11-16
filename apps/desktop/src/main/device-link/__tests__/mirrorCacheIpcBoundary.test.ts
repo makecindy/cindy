@@ -66,7 +66,7 @@ vi.mock('../../appSessionState', () => ({
   activeOwnerScopeKey: (): string => 'cloud:owner-x:1',
   ownerScopedUserDataPath: (...parts: string[]): string => ['/data/owners/x', ...parts].join('/'),
 }));
-vi.mock('../../i18n', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop', () => ({ t: (key: string) => key }));
 // 读路径还会查 purge 队列是否有待清记录;边界测试只关心授权,给"干净"。
 vi.mock('../mirrorCachePurgeQueue', () => ({
   enqueuePurge: vi.fn(async () => undefined),
@@ -88,7 +88,7 @@ vi.mock('../../appCapabilities', () => ({
 vi.mock('../mirrorCacheStore', () => ({
   getMirrorCache: () => h.cache,
 }));
-vi.mock('../../serverApiClient', () => ({
+vi.mock('../../serverApiClient.desktop', () => ({
   serverApiFetch: vi.fn(),
   ServerApiError: class ServerApiError extends Error {},
 }));
@@ -105,6 +105,7 @@ vi.mock('../../clientEndpointsService.js', () => ({
 }));
 vi.mock('../index', () => ({
   getDeviceLinkStatus: () => 'online',
+  getDeviceLinkPeerLinks: () => ({ links: [{ deviceId: 'dev-1', path: 'relay', rttMs: 12, open: true, sentAgoMs: null, receivedAgoMs: null }], relayRttMs: 40 }),
   hasOfflineDirectPath: () => false,
   isDeviceDataPathAvailable: () => false,
   isPeerControlAvailable: () => true,
@@ -126,6 +127,7 @@ vi.mock('../index', () => ({
   remoteUnsubscribe: vi.fn(),
   disconnectAllControllers: vi.fn(),
   revokeController: vi.fn(),
+  setControllerModelUse: vi.fn(),
   restoreController: vi.fn(),
   broadcast: vi.fn(),
   deviceLinkApiBase: 'https://example.invalid',
@@ -141,7 +143,7 @@ vi.mock('../index', () => ({
     authoritativeName: null,
   }),
 }));
-vi.mock('../dispatch', () => ({ getActiveControllers: () => [] }));
+vi.mock('../dispatch.desktop', () => ({ getActiveControllers: () => [] }));
 vi.mock('../filePeer', () => ({ tryUploadPeerAttachment: vi.fn(async () => null) }));
 vi.mock('../outboundMedia', () => ({
   rewriteOutboundMedia: vi.fn(async (_c, a) => a),
@@ -151,7 +153,7 @@ vi.mock('../outboundSessionReferences', () => ({
   outboundSessionReferencesRequested: () => false,
   rewriteOutboundSessionReferences: vi.fn(async (_c, a) => a),
 }));
-vi.mock('../settings-store', () => ({
+vi.mock('../settings-store.desktop', () => ({
   forgetLastKnownDeviceName: vi.fn(),
   isPlaceholderDeviceName: () => false,
   normalizeCachedDeviceName: (name: string) => name.trim() || null,
@@ -187,7 +189,7 @@ import {
   disconnectAllControllers,
   remoteInvoke,
 } from '../index';
-import { setDeviceControlEnabled } from '../settings-store';
+import { setDeviceControlEnabled } from '../settings-store.desktop';
 
 const senderEvents = new EventEmitter();
 const FRAME = { detached: false };
@@ -501,5 +503,26 @@ describe('local control authorization IPC boundary', () => {
     for (const channel of [...calls.map(([channel]) => channel), ...Object.values(DESKTOP_LOCAL)]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel), channel).toBe(false);
     }
+  });
+});
+
+// 远程连接拓扑的只读 IPC 是新增的特权读(本账号设备的链路拓扑):沿 electron-security §5 两道门,
+// 不继承 GET_STATE / LIST_DEVICES 的免校验。
+describe('peer-links IPC 授权边界', () => {
+  it('sender 不可信 → 拒绝', async () => {
+    h.trusted = false;
+    await expect(call(DEVICE_LINK_INVOKE.GET_PEER_LINKS, undefined)).rejects.toThrow(/PERMISSION_DENIED/);
+  });
+
+  it('无 device-link capability → 拒绝', async () => {
+    h.canUseDeviceLink = false;
+    await expect(call(DEVICE_LINK_INVOKE.GET_PEER_LINKS, undefined)).rejects.toThrow(/PERMISSION_DENIED/);
+  });
+
+  it('sender 可信 + 有 capability → 原样返回主进程快照', async () => {
+    await expect(call(DEVICE_LINK_INVOKE.GET_PEER_LINKS, undefined)).resolves.toEqual({
+      links: [{ deviceId: 'dev-1', path: 'relay', rttMs: 12, open: true, sentAgoMs: null, receivedAgoMs: null }],
+      relayRttMs: 40,
+    });
   });
 });

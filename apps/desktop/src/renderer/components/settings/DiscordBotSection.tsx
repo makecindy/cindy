@@ -11,6 +11,7 @@ import { useDiscordBot } from '@/hooks/useDiscordBot';
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { ImLifecycleAnnouncementSection } from './ImLifecycleAnnouncementSection';
+import { DiscordChannelAccessSection } from './DiscordChannelAccessSection';
 
 const DISCORD_DEVELOPER_PORTAL_URL = 'https://discord.com/developers/applications';
 
@@ -279,6 +280,10 @@ export function DiscordBotSection({
           />
         </>
       )}
+
+      <div id={imBotSettings.discordChannels.targetId}>
+        <DiscordChannelAccessSection connected={status.kind === 'connected'} />
+      </div>
 
       <div className="border-t border-[var(--settings-theme-card-border)] pt-3">
         <button data-setting-id={imBotSettings.discord.id}

@@ -12,6 +12,7 @@ import { goBackGuarded } from '@/utils/backGuard';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useSharedTaskApi } from '@/device-link/useSharedTaskApi';
+import { parseAgentNetSharingInvitation } from '@cindy/agent-net/portable';
 import { getActiveSelfHostedRelay, subscribeSelfHostedRelayRoute } from '@/device-link/selfHostedRelayRouting';
 import { notifySharedTaskMembershipChanged } from '@/device-link/sharedTaskMembershipSignal';
 import { filterVisibleSharedTasks } from '@/device-link/sharedTaskVisibility';
@@ -230,7 +231,8 @@ export default function SharedSessionScreen() {
     router.replace({ pathname: '/sessions/[sessionId]', params: { sessionId: detail.sessionId, deviceId: target, deviceName: targetName } });
   };
   const joinInvitation = (input: string, enter = false) => void run(async (current) => {
-    const parsed = parseSharedTaskInvitation(input, getOfficialDeviceLinkApiBaseUrl());
+    const v2 = parseAgentNetSharingInvitation(input, 'shared-task');
+    const parsed = v2 ? { ok: true as const, invitation: input } : parseSharedTaskInvitation(input, getOfficialDeviceLinkApiBaseUrl());
     if (!parsed.ok) { setNotice(t(parsed.reason === 'different-server' ? 'sharedTask.invitationDifferentServer' : 'sharedTask.invalid')); return; }
     const joined = await api.join(parsed.invitation, sharedTaskAccountName(user?.name));
     notifySharedTaskMembershipChanged();
@@ -246,7 +248,7 @@ export default function SharedSessionScreen() {
   }, false, 'join');
   useEffect(() => {
     if (!incomingInvitation || !isAuthenticated || sessionId || deviceId || sharedTaskId) return;
-    const input = buildSharedTaskInvitationLink(incomingInvitation.invitation, incomingInvitation.server);
+    const input = incomingInvitation.link ?? buildSharedTaskInvitationLink(incomingInvitation.invitation, incomingInvitation.server);
     // Claim before waiting for relay capability. Leaving this screen discards the invitation.
     epoch.current++; pending.current = false; setBusy(false);
     setJoinedId(undefined); setState(null); setEnded(false); setTab('current');

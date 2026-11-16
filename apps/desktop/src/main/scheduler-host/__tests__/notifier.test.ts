@@ -5,7 +5,7 @@ import type { FeishuIM } from '@cindy/im';
 
 import { showDesktopSessionEvent } from '../../notificationService';
 import { getMobileNotifyGeneration, sendMobileSessionNotify } from '../../device-link';
-import { DesktopNotifier } from '../notifier';
+import { DesktopNotifier } from '../notifier.desktop';
 
 vi.mock('../../notificationService', () => ({
   showDesktopSessionEvent: vi.fn(),

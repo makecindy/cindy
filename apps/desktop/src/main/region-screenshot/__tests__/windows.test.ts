@@ -87,7 +87,7 @@ vi.mock('../translationPreferences', () => ({
 vi.mock('../save', () => ({ saveScreenshotImage: vi.fn(), saveRegionRecording: mocks.saveRecording }));
 vi.mock('../recordingClipboard', () => ({ copyRegionRecording: mocks.copyRecording }));
 vi.mock('../liveCapture', () => ({ captureLiveRegion: mocks.liveCapture, RegionVideoCapture: class { frame = mocks.liveCapture; stop() {} } }));
-vi.mock('../../i18n', () => ({ getResolvedMainLocale: () => mocks.locale, t: (key: string) => key }));
+vi.mock('../../i18n.desktop', () => ({ getResolvedMainLocale: () => mocks.locale, t: (key: string) => key }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }) }));
 import { OverlayPool, hideScreenshotOverlay, showScreenshotOverlay } from '../overlays';
 import { RegionScreenshotSession } from '../session';

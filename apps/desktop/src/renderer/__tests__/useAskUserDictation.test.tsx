@@ -7,6 +7,7 @@ import type { VoiceInputRendererEvent } from '@cindy/voice-input-core';
 import { useAskUserDictation } from '../components/new-chat/useAskUserDictation';
 import { resolveVoiceInputStartGuards } from '@/voice-input/startGuards';
 import { startVoiceInputCaptureSession } from '@/voice-input/captureSession';
+import { playVoiceInputStartCue } from '@/voice-input/startCue';
 
 vi.mock('@/voice-input/startGuards', () => ({
   resolveVoiceInputStartGuards: vi.fn(async () => ({
@@ -26,7 +27,8 @@ vi.mock('@/voice-input/captureSession', () => ({
   }),
 }));
 
-vi.mock('@/voice-input/startCue', () => ({
+vi.mock('@/voice-input/startCue', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/voice-input/startCue')>()),
   prepareVoiceInputCues: vi.fn(),
   playVoiceInputStartCue: vi.fn(async () => undefined),
   playVoiceInputEndCue: vi.fn(),
@@ -257,5 +259,45 @@ describe('useAskUserDictation', () => {
     act(() => onEvent?.({ type: 'state', runId: 'run-1', state: terminal } as VoiceInputRendererEvent));
     await expect(stopping).resolves.toBe(terminal === 'done');
     expect(text).toBe('已有补充说明');
+  });
+
+  // Unit regression, 2026-11-11: the start cue used to begin together with the
+  // microphone request; starting idle speakers delayed the first captured audio
+  // by about 450 ms. The question field wires its own cue and mute, which the
+  // composer startup tests do not reach. Minimal failing input: cue enabled,
+  // capture started but not yet retaining audio.
+  it('plays the start cue and mutes only once capture is retaining audio', async () => {
+    let captureReady!: () => void;
+    vi.mocked(startVoiceInputCaptureSession).mockImplementationOnce(async (options) => {
+      options.setEngine({ drainBufferedAudio: async () => undefined, stop: async () => undefined } as never);
+      captureReady = () => options.onCaptureReady?.();
+      return { ok: true, drainPendingChunks: () => undefined };
+    });
+    const muteSystemAudio = vi.fn(async () => ({ ok: true }));
+    window.electronAPI = {
+      platform: 'darwin',
+      voiceInput: {
+        onEvent: () => () => undefined,
+        getDataSnapshot: () => ({ settings: { playInteractionSound: true, muteSystemAudio: true, refinementEnabled: false, dictionaryEntries: [], language: 'auto', refinementInstructions: '' } }),
+        getHistoryForRefinement: () => [],
+        start: async () => ({ ok: true, runId: 'run-1' }),
+        cancel: async () => ({ ok: true }),
+        drainAudioQueue: async () => ({ ok: true }),
+        muteSystemAudio,
+        restoreSystemAudio: async () => ({ ok: true }),
+      },
+    } as unknown as typeof window.electronAPI;
+    const hook = renderHook(() => useAskUserDictation({
+      getText: () => '', setText: () => undefined,
+      getSelection: () => ({ start: 0, end: 0 }), focus: () => {},
+    }));
+    await act(async () => { expect(hook.result.current.start()).toBe(true); });
+    expect(playVoiceInputStartCue).not.toHaveBeenCalled();
+    expect(muteSystemAudio).not.toHaveBeenCalled();
+    await act(async () => { captureReady(); });
+    expect(playVoiceInputStartCue).toHaveBeenCalledOnce();
+    expect(muteSystemAudio).toHaveBeenCalledOnce();
+    await act(async () => { await hook.result.current.cancel(); });
+    hook.unmount();
   });
 });

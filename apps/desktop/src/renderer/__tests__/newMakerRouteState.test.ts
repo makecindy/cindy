@@ -8,7 +8,65 @@ import {
   isSameNewMakerDevice,
   readNewMakerDialogueTargetRequest,
   readNewMakerFolderPickerRequest,
+  shouldPrefillDefaultNewTaskWorkingDir,
 } from '@/features/cc-agent/lib/newMakerRouteState';
+
+describe('default directory for a new local task', () => {
+  const emptyLocalDraft = { workingDir: null, remoteHostId: null, deviceLinkDeviceId: null };
+
+  it('fills a generic local draft and yields to an explicitly chosen project', () => {
+    expect(
+      shouldPrefillDefaultNewTaskWorkingDir({ workspacePrompt: 'generic' }, emptyLocalDraft),
+    ).toBe(true);
+    expect(shouldPrefillDefaultNewTaskWorkingDir(null, emptyLocalDraft)).toBe(false);
+    expect(
+      shouldPrefillDefaultNewTaskWorkingDir(
+        { workspacePrompt: 'generic' },
+        { ...emptyLocalDraft, explicitNoProject: true },
+      ),
+    ).toBe(false);
+    expect(
+      shouldPrefillDefaultNewTaskWorkingDir(
+        { workspacePrompt: 'generic' },
+        {
+          ...emptyLocalDraft,
+          workingDir: '/chosen-project',
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it('does not replace a dialogue or a remote target', () => {
+    expect(
+      shouldPrefillDefaultNewTaskWorkingDir(makeDialogueNewMakerRouteState(null), emptyLocalDraft),
+    ).toBe(false);
+    expect(
+      shouldPrefillDefaultNewTaskWorkingDir(
+        {
+          workspacePrompt: 'generic',
+          dialogueTargetRequest: {
+            requestId: 'remote',
+            deviceId: 'computer-a',
+            deviceName: 'Computer A',
+          },
+        },
+        emptyLocalDraft,
+      ),
+    ).toBe(false);
+    expect(
+      shouldPrefillDefaultNewTaskWorkingDir(null, {
+        ...emptyLocalDraft,
+        remoteHostId: 'ssh-a',
+      }),
+    ).toBe(false);
+    expect(
+      shouldPrefillDefaultNewTaskWorkingDir(null, {
+        ...emptyLocalDraft,
+        deviceLinkDeviceId: 'computer-a',
+      }),
+    ).toBe(false);
+  });
+});
 
 describe('new maker execution device identity', () => {
   it.each([

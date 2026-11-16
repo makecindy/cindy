@@ -142,12 +142,14 @@ function SplashSpinner({
 /**
  * 品牌宿主组件。children 渲染在品牌层之上的 viewport 坐标 overlay
  * (登录页在其中自行铺设 stage 缩放的 Log_in 组;闸门屏放退化后的内容层)。
- * Provider 缺席时按静态终态渲染(PR4a 行为不变)。
+ * Provider 缺席或阻断屏指定 staticBrand 时按静态终态渲染。
  */
 export function MobileLoginHandoffStage(props: {
   children?: ReactNode;
   /** handoff 动画期品牌层由本宿主状态机驱动;静态调用方恒显 */
   showBrand?: boolean;
+  /** 阻断屏直接显示品牌终态,不推进共享 handoff 状态,解除阻断后仍可正常衔接。 */
+  staticBrand?: boolean;
   /** 键盘位移(物理 px,向上为正;只作用品牌层——children 位移由登录页自管) */
   keyboardShiftPx?: number;
   testID?: string;
@@ -158,11 +160,13 @@ export function MobileLoginHandoffStage(props: {
   const firstLaunchGate = useLoginFirstLaunchLight();
   const { mode: systemTheme } = useTheme();
   const handoff = resolveStartupSplashHandoff(firstLaunchGate, systemTheme);
-  // pending 时由 Android 原生帧复刻层继续覆盖；本舞台不提前猜测主题。
-  if (handoff.targetTheme == null) return null;
+  // 普通启动仍等主题交接；阻断时外层 splash 已隐藏，必须先挂载操作内容
+  // (含强更重新核对)，不能让首启存储读取把它们一起挡住。品牌图仍等主题确定。
+  const themePending = handoff.targetTheme == null;
+  if (themePending && !props.staticBrand) return null;
   return (
     <ThemeOverrideProvider mode={handoff.targetTheme}>
-      <MobileLoginHandoffStageInner {...props} />
+      <MobileLoginHandoffStageInner {...props} showBrand={themePending ? false : props.showBrand} />
     </ThemeOverrideProvider>
   );
 }
@@ -170,6 +174,7 @@ export function MobileLoginHandoffStage(props: {
 function MobileLoginHandoffStageInner({
   children,
   showBrand = true,
+  staticBrand = false,
   keyboardShiftPx = 0,
   testID,
   accessibilityLabel,
@@ -177,6 +182,7 @@ function MobileLoginHandoffStageInner({
   children?: ReactNode;
   /** handoff 动画期品牌层由本宿主状态机驱动;静态调用方恒显 */
   showBrand?: boolean;
+  staticBrand?: boolean;
   /** 键盘位移(物理 px,向上为正;只作用品牌层——children 位移由登录页自管) */
   keyboardShiftPx?: number;
   testID?: string;
@@ -185,8 +191,9 @@ function MobileLoginHandoffStageInner({
   const { colors, mode } = useTheme();
   const stage = useLoginSurface();
   const handoff = useLoginHandoffOptional();
-  // Provider 缺席 = 静态终态(pr4a 兼容);缺席时不播动画、不挂 spinner
-  const phase = handoff?.state.phase ?? 'done';
+  // 阻断屏不挂认证等 readiness reporter,不能等待 handoff 收束。只覆盖本实例
+  // 的展示阶段,保留 Provider 的真实状态供端点重试/强更撤回后继续启动。
+  const phase = staticBrand ? 'done' : (handoff?.state.phase ?? 'done');
 
   // 品牌资产为打包 require 资源(随 bundle 同步可用),宿主挂载即上报 assets 就绪
   useEffect(() => {

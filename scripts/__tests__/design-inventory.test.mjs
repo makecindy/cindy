@@ -1293,6 +1293,11 @@ test('Mobile new, removed, renamed routes and missing dev gates cannot silently 
   assert.ok(mobileRouteCoverage(temp,catalog).missing.includes('apps/mobile/app/plugin-management-preview.tsx'));
   fs.writeFileSync(pluginPreview, 'const demosEnabled = __DEV__ && process.env.EXPO_PUBLIC_CINDY_PLUGIN_DEMOS === "1"; export default function Preview() { if (!MOBILE_VISUAL_MOCK_ENABLED && !demosEnabled) return <Redirect href="/" />; return <View />; }');
   assert.equal(mobileRouteCoverage(temp,catalog).missing.includes('apps/mobile/app/plugin-management-preview.tsx'), false);
+  const groupPreview = path.join(app, 'group-execution-preview.tsx');
+  fs.writeFileSync(groupPreview, 'export default function Preview() { return <View />; }');
+  assert.ok(mobileRouteCoverage(temp,catalog).missing.includes('apps/mobile/app/group-execution-preview.tsx'));
+  fs.writeFileSync(groupPreview, 'export default function Preview() { if (!MOBILE_VISUAL_MOCK_ENABLED) return <Redirect href="/" />; return <View />; }');
+  assert.equal(mobileRouteCoverage(temp,catalog).missing.includes('apps/mobile/app/group-execution-preview.tsx'), false);
 });
 
 test('Mobile reexports, embedded viewer HTML, platform variants and codepoint ordering survive closure', async (t) => {

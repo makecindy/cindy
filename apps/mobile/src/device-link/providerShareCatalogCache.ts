@@ -11,7 +11,8 @@
  * 旧版桌面没有该 channel(CHANNEL_NOT_ALLOWED)= 没有分享,静默处理。
  */
 import { isProviderAccessDeniedError, parseProviderShareReceivedCatalogs, scrubSharedProvider,
-  readProviderMetadataContinuity, MetadataSnapshotExpiry, PROVIDER_METADATA_TRUST_MS } from '@cindy/device-link';
+  readProviderMetadataContinuity, MetadataSnapshotExpiry, PROVIDER_METADATA_TRUST_MS,
+  type ProviderShareFavoriteSource } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers/registry';
 
 import {
@@ -35,6 +36,8 @@ export interface ProviderShareCatalogEntry {
   ownerName: string;
   status: 'active' | 'paused';
   hostOnline: boolean;
+  /** 被控电脑给出的收藏身份。没有时不能收藏，也不用别的成员身份代替。 */
+  favoriteSource?: ProviderShareFavoriteSource;
   /** 分享者电脑上该供应商的目录;从未读到过时为 null。 */
   payload: DeviceProvidersPayload | null;
 }
@@ -149,6 +152,7 @@ export function parseProviderShareCatalogs(value: unknown): ProviderShareCatalog
     ownerName: share.owner.displayName,
     status: share.status,
     hostOnline: share.hostOnline,
+    ...(share.favoriteSource ? { favoriteSource: share.favoriteSource } : {}),
     payload: parseProviderShareCatalogPayload(share.catalog, share.providerId),
   }));
 }

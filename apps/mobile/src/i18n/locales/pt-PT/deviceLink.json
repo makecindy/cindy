@@ -24,7 +24,7 @@
   },
   "connectStep1": "Instale e abra {{appName}} no computador",
   "connectStep2": "Inicie sessão com a mesma conta do telemóvel",
-  "connectStep3": "Em Definições → Ligação remota, ative \"Permitir que dispositivos da mesma conta controlem este computador\"",
+  "connectStep3": "Em Definições → Ligação remota, ative «Permitir que dispositivos da mesma conta controlem este computador»",
   "brandEyebrow": "Cindy Mobile",
   "cloudTeaserTitle": "{{appName}} na nuvem, em breve",
   "cloudTeaserCopy": "Após o lançamento, a aplicação móvel funcionará de forma autónoma, sem precisar de computador.",

@@ -1,54 +1,15 @@
 #!/usr/bin/env node
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, join, relative, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const scriptDir = resolve(fileURLToPath(import.meta.url), '..');
 const mobileRoot = resolve(scriptDir, '..');
 
-const forbiddenFiles = [
-  'e2e/maestro/issue_confirm.yaml',
-  'e2e/maestro/visual_session_issue.yaml',
-];
-
-const fileNameRules = [
-  {
-    root: 'e2e/visual-baselines',
-    test: (filePath) => basename(filePath).startsWith('visual-session-issue.'),
-    reason: 'Issue Confirm is desktop-only for mobile V1; do not add visual baselines for it.',
-  },
-];
-
+// Feedback confirmation is supported on same-account phones when the host
+// advertises remoteConfirmSupported. The old desktop-only exclusion is retired.
 const contentRules = [
-  {
-    roots: ['package.json', 'scripts', 'e2e/maestro'],
-    exclude: [
-      'scripts/mobile-scope-guard.mjs',
-    ],
-    patterns: [
-      'issue_confirm.yaml',
-      'visual_session_issue',
-      'visual-session-issue',
-      'interaction.issue.',
-    ],
-    reason: 'Issue Confirm must not be part of mobile E2E flows, anchors, or visual screenshots.',
-  },
-  {
-    roots: ['src'],
-    exclude: [
-      'src/__tests__/interactionModel.test.ts',
-      'src/__tests__/remoteSessionStore.test.ts',
-    ],
-    patterns: [
-      'IssueConfirmCard',
-      'buildIssueConfirmDecision',
-      'buildIssueConfirmReviewPresentation',
-      'normalizeIssueConfirm',
-      'interaction.issue.',
-    ],
-    reason: 'Mobile UI must not reintroduce the GitHub Issue confirmation form.',
-  },
   {
     roots: ['app'],
     patterns: [
@@ -61,27 +22,6 @@ const contentRules = [
 ];
 
 const failures = [];
-
-for (const relativePath of forbiddenFiles) {
-  const absolutePath = resolve(mobileRoot, relativePath);
-  if (existsSync(absolutePath)) {
-    failures.push({
-      file: relativePath,
-      reason: 'Issue Confirm has no mobile V1 Maestro flow.',
-    });
-  }
-}
-
-for (const rule of fileNameRules) {
-  for (const filePath of walk(resolve(mobileRoot, rule.root))) {
-    if (rule.test(filePath)) {
-      failures.push({
-        file: toMobileRelative(filePath),
-        reason: rule.reason,
-      });
-    }
-  }
-}
 
 for (const rule of contentRules) {
   const excluded = new Set(rule.exclude ?? []);
@@ -105,12 +45,11 @@ for (const rule of contentRules) {
 }
 
 if (failures.length > 0) {
-  console.error('mobile-scope-guard failed: mobile V1 must not reintroduce the Issue Confirm form.');
+  console.error('mobile-scope-guard failed: unsupported mobile entry point.');
   for (const failure of failures) {
     const pattern = failure.pattern ? ` pattern="${failure.pattern}"` : '';
     console.error(`- ${failure.file}${pattern}: ${failure.reason}`);
   }
-  console.error('Allowed: shared protocol compatibility for issue_confirm and an unsupported desktop-only hint.');
   process.exit(1);
 }
 

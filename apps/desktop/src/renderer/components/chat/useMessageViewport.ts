@@ -62,6 +62,20 @@ export function useMessageViewport(options: Options) {
   } | null>(null);
   const mutations = useRef<MutationObserver | null>(null);
   const [geometry] = useState(() => new MessageViewportGeometry());
+  // Reading-position snapshots use the same row index as virtualization. A
+  // long expanded history must not scan every preceding DOM row on each scroll.
+  const getViewportTopRow = useCallback(() => {
+    const root = latest.current.scrollRef.current;
+    const items = latest.current.itemsRef.current;
+    if (!root || !items) return null;
+    const records = mutations.current?.takeRecords();
+    if (records?.length) geometry.mutations(records, items);
+    if (geometry.invalid) measurement.current = null;
+    const previousOrigin = geometry.origin;
+    geometry.refresh(root, items, heights.current);
+    if (geometry.origin !== previousOrigin) measurement.current = null;
+    return geometry.range(root.scrollTop, root.clientHeight, 0).anchorElement;
+  }, [geometry]);
   const needsReconcileRef = useRef<() => boolean>(() => true);
   const reconcileRef = useRef<() => void>(() => {});
   // Programmatic writes made in rAF or an event callback can paint before the
@@ -332,6 +346,7 @@ export function useMessageViewport(options: Options) {
   }, [options.scrollRef, options.itemsRef, options.connection, preserveTextAccessAnchor, syncViewport, geometry]);
 
   return {
+    getViewportTopRow,
     connectViewport,
     reconcileViewport,
     syncViewport,

@@ -5,6 +5,10 @@ import {
   type AppShortcutCombo,
   type AppShortcutId,
   type AppShortcutOverrides,
+  normalizeAppShortcutCombo,
+  matchesKeyboardEvent,
+  appShortcutCombosEqual,
+  APP_SHORTCUT_IDS,
 } from '../../shared/appShortcuts';
 import { voiceInputShortcutToAppShortcutCombo } from '../voice-input/appShortcutConflict';
 
@@ -113,4 +117,23 @@ export function subscribeAppShortcuts(listener: () => void): () => void {
   ensureInitialized();
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+/** Plugin defaults participate in the existing effective map and yield to user/Core keys. */
+export function matchesPluginAppShortcut(event: KeyboardEvent, shortcut: string): boolean {
+  ensureInitialized();
+  const parts = shortcut.split('+').map(part => part.trim());
+  const key = parts.pop();
+  if (!key || !parts.length || parts.some(part => !['Mod', 'Meta', 'Ctrl', 'Alt', 'Shift'].includes(part))) return false;
+  const combo = normalizeAppShortcutCombo({
+    code: /^[a-z]$/i.test(key) ? `Key${key.toUpperCase()}` : /^\d$/.test(key) ? `Digit${key}` : key,
+    meta: parts.includes('Meta') || parts.includes('Mod') && platform === 'darwin',
+    ctrl: parts.includes('Ctrl') || parts.includes('Mod') && platform !== 'darwin',
+    alt: parts.includes('Alt'), shift: parts.includes('Shift'),
+  });
+  if (!combo || !(combo.meta || combo.ctrl || combo.alt) ||
+      !combo.shift && !combo.alt && ['KeyA', 'KeyC', 'KeyV', 'KeyX', 'KeyY', 'KeyZ'].includes(combo.code)) return false;
+  if (APP_SHORTCUT_IDS.some(id => getAppShortcutCombos(id).some(current => appShortcutCombosEqual(current, combo))) ||
+      voiceYieldCombos.some(current => appShortcutCombosEqual(current, combo))) return false;
+  return matchesKeyboardEvent(event, combo);
 }

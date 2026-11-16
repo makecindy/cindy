@@ -26,7 +26,7 @@ function responses() {
 }
 
 // Integration tier: public PiAgent -> generated bridge -> official Pi -> loopback
-// HTTP, covering #5878/#6570/#6649, both adapters, one transcript input and TTL.
+// HTTP, covering #5878/#6570/#6649/#9785, both adapters, one transcript input and TTL.
 describe.skipIf(!existsSync(binary))('Pi cache recovery over real native RPC/HTTP', () => {
   // #7561: real Pi registry, not a mock of its registration semantics. The
   // former object wrapper destroyed name/config registrations even without 400.
@@ -185,7 +185,9 @@ export default function(pi) {
   it.each(['openai-completions', 'openai-responses'].flatMap(api => [
     { api, mode: 'opaque', rejection: { error: { message: 'opaque refusal', type: 'invalid_request_error', param: null } } },
     { api, mode: 'explicit', rejection: { message: '未知请求字段：prompt_cache_retention', type: 'invalid_request_error' } },
+    { api, mode: 'explicit-empty', rejection: { message: 'Validation: Unsupported parameter(s): `prompt_cache_retention`', type: 'invalid_request_error', param: '', code: 'invalid_request_error' } },
     { api, mode: 'always-fails', rejection: { message: 'Validation: Unsupported parameter(s): prompt_cache_key', type: 'invalid_request_error' } },
+    { api, mode: 'always-fails-empty', rejection: { message: 'Validation: Unsupported parameter(s): `prompt_cache_retention`', type: 'invalid_request_error', param: '', code: 'invalid_request_error' } },
     { api, mode: 'supported', rejection: {} },
     // #7561: actual followUp start has no second agent_start. Exercise the
     // public send queue and outgoing HTTP, beyond the unit lifecycle fixture.
@@ -196,7 +198,7 @@ export default function(pi) {
     const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-cache-integration-'));
     const received: Array<Record<string, unknown>> = [];
     let rejectCache = mode !== 'supported';
-    let persistentFailure = mode === 'always-fails';
+    let persistentFailure = mode.startsWith('always-fails');
     let firstArrived!: () => void;
     const firstRequest = new Promise<void>(resolve => { firstArrived = resolve; });
     let releaseFirst!: () => void;
@@ -263,7 +265,7 @@ export default function(pi) {
       const userInputs = mode === 'mixed' ? 3 : ['queued', 'steer'].includes(mode) ? 2 : 1;
       expect(entries.filter(entry => entry.type === 'message' && entry.message?.role === 'user')).toHaveLength(userInputs);
       expect(entries.filter(entry => entry.type === 'message' && entry.message?.role === 'assistant')).toHaveLength(userInputs);
-      if (mode === 'always-fails' || mode === 'steer') {
+      if (mode.startsWith('always-fails') || mode === 'steer') {
         expect(first.filter(e => e.type === 'error')).toHaveLength(1);
         expect(first.find(e => e.type === 'error')?.data).toMatchObject({ piCacheRecoveryHandled: true });
         expect(existsSync(storeFile)).toBe(false);
@@ -278,11 +280,13 @@ export default function(pi) {
       const store = JSON.parse(readFileSync(storeFile, 'utf8'));
       const records = Object.values(store.routes) as Array<{ learnedAt: number; expiresAt: number; evidence: string }>;
       expect(records).toHaveLength(1);
-      expect(records[0].expiresAt - records[0].learnedAt).toBe((mode === 'explicit' ? 7 : 1) * 86400000);
+      expect(records[0].evidence).toBe(mode.startsWith('explicit') ? 'explicit' : 'opaque');
+      expect(records[0].expiresAt - records[0].learnedAt).toBe((mode.startsWith('explicit') ? 7 : 1) * 86400000);
       expect(readFileSync(storeFile, 'utf8')).not.toContain(endpoint);
       if (mode === 'queued' || mode === 'mixed') return;
       await handle.close(); handle = await agent.startSession({ ...opts, sessionId: 'learned' });
       await run(); expect(received).toHaveLength(3); expect(received[2]).not.toHaveProperty('prompt_cache_key');
+      expect(received[2]).not.toHaveProperty('prompt_cache_retention');
       // The same running Pi must restore real fields when its rule expires.
       records[0].expiresAt = Date.now() - 1;
       writeFileSync(storeFile, JSON.stringify(store)); rejectCache = false;

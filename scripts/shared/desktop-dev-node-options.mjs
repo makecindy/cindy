@@ -1,8 +1,8 @@
 /**
- * Keep the development Forge process above the one-shot rebuild peak observed
- * in the desktop main target. An explicit developer override always wins.
+ * Leave headroom for the retained main/worker watch graphs and the renderer's
+ * cold-start transforms. An explicit developer override always wins.
  */
-export const DESKTOP_DEV_MAX_OLD_SPACE = 6144;
+export const DESKTOP_DEV_MAX_OLD_SPACE = 8192;
 
 const MAX_OLD_SPACE_OPTION = /(?:^|\s)--max[-_]old[-_]space[-_]size(?:=|\s)/;
 

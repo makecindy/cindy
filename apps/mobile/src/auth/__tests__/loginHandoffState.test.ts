@@ -217,7 +217,7 @@ describe('loginHandoff 接线(Provider/reporter 拓扑 + 清理,读源码断言)
   });
 
   it('gate 屏内容层退化:endpoint error 层可交互 retry(错误层文案 key 化不变)', () => {
-    expect(layoutSource).toContain('<MobileLoginHandoffStage>');
+    expect(layoutSource).toContain('<MobileLoginHandoffStage staticBrand>');
     // 内容层的动作 prop 已从 retry 专用改为通用 action(端点重试 / 强更去更新共用同一层),
     // 端点错误屏的接线与文案 key 化契约不变。
     expect(layoutSource).toContain('? endpointGate.resetToDev');

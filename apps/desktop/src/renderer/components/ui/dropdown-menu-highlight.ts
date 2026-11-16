@@ -134,16 +134,26 @@ export function attachMenuHighlight(
 
   // Client rects include the open animation's scale (on the panel or an ancestor), and the
   // layer inside the panel is scaled again, so measurements are converted back to layout px.
-  const place = (el: HTMLElement) => {
+  let lastPlacement: readonly number[] | null = null;
+  const place = (el: HTMLElement, snap = false) => {
     const p = panel.getBoundingClientRect();
     const r = visibleBox(el);
     const sx = panel.offsetWidth > 0 && p.width > 0 ? p.width / panel.offsetWidth : 1;
     const sy = panel.offsetHeight > 0 && p.height > 0 ? p.height / panel.offsetHeight : 1;
-    layer.style.width = `${r.width / sx}px`;
-    layer.style.height = `${r.height / sy}px`;
-    layer.style.transform = `translate(${(r.left - p.left) / sx - panel.clientLeft + panel.scrollLeft}px, ${
-      (r.top - p.top) / sy - panel.clientTop + panel.scrollTop
-    }px)`;
+    const box = [
+      (r.left - p.left) / sx - panel.clientLeft + panel.scrollLeft,
+      (r.top - p.top) / sy - panel.clientTop + panel.scrollTop,
+      r.width / sx,
+      r.height / sy,
+    ];
+    // ResizeObserver also sends an initial notification. An unchanged layout must not
+    // interrupt the glide that a pointer/keyboard selection has already started.
+    if (snap && lastPlacement?.every((value, index) => value === box[index])) return;
+    if (snap) layer.style.transition = 'none';
+    layer.style.width = `${box[2]}px`;
+    layer.style.height = `${box[3]}px`;
+    layer.style.transform = `translate(${box[0]}px, ${box[1]}px)`;
+    lastPlacement = box;
   };
 
   const show = (target: HTMLElement | null) => {
@@ -206,23 +216,25 @@ export function attachMenuHighlight(
     show(eligible(target) ? target : null);
   };
 
-  // Pointer moves, key presses, focus and scroll are coalesced into one update per frame.
-  // Scrolling moves rows under a still layer, so that frame re-places it without a slide.
+  // Layout changes can move the same active DOM row (e.g. a warning inserted above it).
+  // Coalesce them with input, and re-place without treating that movement as a new choice.
   let frame = 0;
   let replace = false;
+  let layoutTargetsDirty = true;
   const flush = () => {
     frame = 0;
-    if (replace && active) {
-      layer.style.transition = 'none';
-      place(active);
+    if (layoutTargetsDirty) {
+      syncResizeTargets();
+      layoutTargetsDirty = false;
     }
+    if (replace && eligible(active)) place(active, true);
     replace = false;
     update();
   };
   const schedule = () => {
     if (!frame) frame = requestAnimationFrame(flush);
   };
-  const onScroll = () => {
+  const onLayout = () => {
     replace = true;
     schedule();
   };
@@ -240,10 +252,28 @@ export function attachMenuHighlight(
     input = 'keyboard';
     schedule();
   };
+  const resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(onLayout) : null;
+  let resizeTargets = new Set<Element>();
+  const syncResizeTargets = () => {
+    if (!resizeObserver) return;
+    // Track rows, their groups/clipping containers and top-level notices. A fixed-height
+    // panel need not resize when content above the active row grows. Do not observe the
+    // decorative layer (whose size we write), or every icon/text node inside each row.
+    const next = new Set<Element>([panel, ...panel.children]);
+    next.delete(layer);
+    for (const row of rows()) {
+      for (let el: HTMLElement | null = row; el && el !== panel; el = el.parentElement) next.add(el);
+    }
+    for (const el of resizeTargets) if (!next.has(el)) resizeObserver.unobserve(el);
+    for (const el of next) if (!resizeTargets.has(el)) resizeObserver.observe(el, { box: 'border-box' });
+    resizeTargets = next;
+  };
   const observer = new MutationObserver((records) => {
     if (records.some((r) => r.type === 'childList')) {
       rowCache = null;
       clipCache = new WeakMap();
+      layoutTargetsDirty = true;
+      onLayout();
     }
     if (input === 'keyboard' || !pointer || (active && !active.isConnected)) update();
   });
@@ -259,7 +289,9 @@ export function attachMenuHighlight(
   options.keyboardSource?.addEventListener('keydown', onKey, true);
   panel.addEventListener('focusin', schedule);
   // Capture: nested scroll containers do not bubble their scroll events.
-  panel.addEventListener('scroll', onScroll, true);
+  panel.addEventListener('scroll', onLayout, true);
+  syncResizeTargets();
+  layoutTargetsDirty = false;
   // A list that names its current row (focus kept in the editor) shows it from the start,
   // as its own row fill did; Radix menus have no highlighted item until the first input.
   if (options.current) schedule();
@@ -267,12 +299,13 @@ export function attachMenuHighlight(
     active?.removeAttribute(MENU_ACTIVE_ROW_ATTR);
     cancelAnimationFrame(frame);
     observer.disconnect();
+    resizeObserver?.disconnect();
     panel.removeEventListener('pointermove', onMove);
     panel.removeEventListener('pointerleave', onLeave);
     panel.removeEventListener('keydown', onKey, true);
     options.keyboardSource?.removeEventListener('keydown', onKey, true);
     panel.removeEventListener('focusin', schedule);
-    panel.removeEventListener('scroll', onScroll, true);
+    panel.removeEventListener('scroll', onLayout, true);
   };
 }
 

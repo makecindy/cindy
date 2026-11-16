@@ -242,7 +242,9 @@ it('resets identity-bound row state before a recycled cell displays another item
     expect(bubbleSource).toContain('useRecyclingState(false)');
     expect(bubbleSource).toContain('useRecyclingState<{');
     expect(bubbleSource).toContain('useRecyclingState<string | null>(null)');
-    expect(source).toContain('const [contentWidth, setContentWidth] = useRecyclingState(0);');
+    // Markdown bodies also render in plain ScrollViews; only LegendList rows may pick recycling state.
+    expect(source).toContain('const [contentWidth, setContentWidth] = useRowState(0);');
+    expect(source).toContain('<LegendListRowContext.Provider value>');
     // 普通列表仍默认使用回收态；只有群聊的普通 ScrollView 注入 React 状态。
     // 同时守住逐层传递，避免嵌套缩略图漏接后恢复原来的群聊崩溃。
     for (const component of ['AttachmentStrip', 'MediaPreview', 'PendingAttachmentImage']) {
@@ -316,11 +318,13 @@ it('renders message bodies natively with in-place per-block selectable text', ()
     const selectableTextSource = readFileSync(resolve(process.cwd(), 'src/session/MarkdownSelectableText.tsx'), 'utf8');
     expect(selectableTextSource).toContain("from 'react-native-uitextview'");
     expect(selectableTextSource).toContain('function MarkdownSelectableText({');
-    expect(selectableTextSource).toContain("if (selectable && allowIosUITextView && Platform.OS === 'ios') {");
+    // #10103: native paragraph layout also covers non-selectable streaming text;
+    // selection itself remains controlled by selectable and the completed state.
+    expect(selectableTextSource).toContain("if ((selectable || paragraphLayout) && allowIosUITextView && Platform.OS === 'ios') {");
     expect(selectableTextSource).toContain('uiTextView');
     expect(selectableTextSource).toContain('function MarkdownSelectableSpan(');
     expect(source).toContain('const SpanText = ctx.SpanText ?? MessageBodyText;');
-    expect(markdownBodySource).toContain('blockSelectable && allowIosUITextView && Platform.OS === \'ios\'');
+    expect(markdownBodySource).toContain('(blockSelectable || paragraphLayout) && (allowIosUITextView || paragraphLayout) && Platform.OS === \'ios\'');
 
     // 气泡不抢占正文的原生选字或表格、代码块横向滚动手势。
     expect(bubbleSource).not.toContain('<Pressable');

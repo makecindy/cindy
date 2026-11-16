@@ -22,7 +22,7 @@ import type { BotProfile } from './botStore';
 
 interface Props {
   bot: RemoteBot;
-  initialPage?: 'home' | 'memory' | 'capabilities' | 'model' | 'voice' | 'channels' | 'routines';
+  initialPage?: 'home' | 'memory' | 'capabilities' | 'model' | 'voice' | 'channels';
   beforeCloseRef: MutableRefObject<(() => Promise<boolean>) | null>;
   onBack: () => void;
   onDeleted: () => void;
@@ -133,10 +133,6 @@ function RemoteSettingsPages({ bot, ops, initialPage: requestedPage = 'home', be
     () =>
       window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
         const payload = parseRemoteResourceChangedPayload(push.payload);
-        if (push.deviceId === bot.deviceId && push.channel === REMOTE_RESOURCE_CHANGED_CHANNEL && payload?.collectionId === 'routines' && isDeviceLinkRemotePushCurrent(push, stamp)) {
-          handle.changed('routines');
-          return;
-        }
         if (
           push.deviceId !== bot.deviceId ||
           push.channel !== REMOTE_RESOURCE_CHANGED_CHANNEL ||

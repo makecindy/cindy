@@ -1,0 +1,12 @@
+RESULT lead 50000 noticed true up 20000000 down 1: 16 seeds total 679.5s slowest 73.7s unfinished 0
+RESULT lead 50000 noticed true up 0 down 20000000: 16 seeds total 263.8s slowest 16.8s unfinished 0
+RESULT lead 50000 noticed true up 10000000 down 10000000: 16 seeds total 409.5s slowest 38.6s unfinished 0
+RESULT lead 50000 noticed false up 20000000 down 1: 16 seeds total 755.7s slowest 82.5s unfinished 0
+RESULT lead 50000 noticed false up 0 down 20000000: 16 seeds total 274.8s slowest 17.8s unfinished 0
+RESULT lead 50000 noticed false up 10000000 down 10000000: 16 seeds total 306.4s slowest 31.1s unfinished 0
+RESULT lead 5000 noticed true up 20000000 down 1: 16 seeds total 246.0s slowest 15.8s unfinished 0
+RESULT lead 5000 noticed true up 0 down 20000000: 16 seeds total 242.7s slowest 16.1s unfinished 0
+RESULT lead 5000 noticed true up 10000000 down 10000000: 16 seeds total 135.3s slowest 9.8s unfinished 0
+RESULT lead 5000 noticed false up 20000000 down 1: 16 seeds total 246.2s slowest 16.2s unfinished 0
+RESULT lead 5000 noticed false up 0 down 20000000: 16 seeds total 254.7s slowest 17.1s unfinished 0
+RESULT lead 5000 noticed false up 10000000 down 10000000: 16 seeds total 123.0s slowest 8.2s unfinished 0

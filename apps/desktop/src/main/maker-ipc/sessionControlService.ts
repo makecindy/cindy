@@ -1,12 +1,13 @@
-import { DelegationNotAuthorizedError, formatForwardedRequest, type CapturedAgentRequest } from './forwardedRequest.js';
+import { formatForwardedRequest, type CapturedAgentRequest } from './forwardedRequest.js';
 import type { AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import type {
   AgentKind,
   Effort,
+  PermissionMode,
   SessionGracefulStopResult,
   SessionTurnControlSnapshot,
 } from '@cindy/maker-core';
-import { assertTaskActionCurrent, bindTaskActionInput, combineInputGuards } from './taskActionAuthorization.js';
+import { assertTaskActionCurrent, bindTaskActionInput, combineInputGuards, hasTaskActionAuthorization } from './taskActionAuthorization.js';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type {
@@ -25,7 +26,7 @@ import {
   type SessionQueueSteerResult,
 } from './sessionQueueControl.js';
 
-type Failure<Code extends string> = { ok: false; errorCode: Code; message: string };
+type Failure<Code extends string> = { ok: false; errorCode: Code; message: string; data?: Record<string, unknown> };
 
 export type SessionQueuedMessageControlResult =
   | { ok: true; queuedMessageId: string }
@@ -35,12 +36,11 @@ export type SessionQueuedMessageControlResult =
       | 'MESSAGE_CONSUMING'
       | 'NOT_AUTHORIZED'
       | 'INVALID_ARGS'
-      | 'DELEGATION_NOT_AUTHORIZED'
     >;
 
 export type SessionSteerResult =
   | { ok: true; queuedMessageId: string }
-  | Failure<'NOT_FOUND' | 'NO_ACTIVE_TURN' | 'UNSUPPORTED_CAPABILITY' | 'DELIVERY_FAILED' | 'DELEGATION_NOT_AUTHORIZED'>;
+  | Failure<'NOT_FOUND' | 'NO_ACTIVE_TURN' | 'UNSUPPORTED_CAPABILITY' | 'DELIVERY_FAILED'>;
 
 export type SessionStopResult =
   | {
@@ -52,6 +52,7 @@ export type SessionStopResult =
   | Failure<'NOT_FOUND' | 'UNSUPPORTED_CAPABILITY'>;
 
 export interface SessionRuntimeDetails extends SessionActivitySnapshot {
+  permissionMode?: PermissionMode;
   runtimeGeneration: number;
   baselineProfile: SessionRuntimeProfile;
   effectiveProfile: SessionRuntimeProfile;
@@ -70,12 +71,17 @@ export type SessionRuntimeSetResult =
       generation: number;
       effectiveProfile: SessionRuntimeProfile;
       pendingMutation: PendingSessionRuntimeMutation | null;
+      permissionMode?: PermissionMode;
     }
-  | Failure<'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE'>;
+  | Failure<'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY' | 'INTERNAL'>;
 
 export interface SessionControlLiveSession {
   agentKind: AgentKind;
-  capabilities: { sameTurnSteer: { supported: boolean } };
+  capabilities: {
+    sameTurnSteer: { supported: boolean };
+    permissionModes?: readonly { id: PermissionMode }[];
+    setPermissionModeMidSession?: { supported: boolean };
+  };
   isTurnRunning(): boolean;
   getTurnGeneration(): number;
   requestGracefulStop(): Promise<SessionGracefulStopResult>;
@@ -93,6 +99,7 @@ export interface SessionControlServiceDeps {
   getLiveSession(sessionId: string): SessionControlLiveSession | null;
   getSessionActivitySnapshot(sessionId: string): Promise<SessionActivitySnapshot>;
   getSessionRuntimeDetails(sessionId: string): Promise<SessionRuntimeDetails>;
+  setSessionPermissionMode?(params: { sessionId: string; mode: PermissionMode; beforeMutation?: () => Promise<void> }): Promise<unknown>;
   setSessionRuntime(params: {
     targetSessionId: string;
     expectedGeneration?: number;
@@ -104,12 +111,13 @@ export interface SessionControlServiceDeps {
       providerId?: string | null;
       effort?: Effort | null;
       fastMode?: boolean | 'ultrafast';
+      permissionMode?: PermissionMode;
     };
   }): Promise<SessionRuntimeSetResult>;
   assertExternalInputAllowed(sessionId: string): Promise<void>;
   createQueuedMessage(params: {
     targetSessionId: string;
-    callerSessionId: string;
+    callerSessionId?: string;
     queuedMessageId: string;
     message: string;
   }): Promise<AgentInputQueuedMessage>;
@@ -165,7 +173,6 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       if (missing) return missing;
       const captured = await deps.captureRequest?.(params.callerSessionId, params.message,
         { sessionId: params.targetSessionId });
-      if (captured?.blocked) return { ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: captured.blocked };
       return queueControl.update({
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
@@ -232,7 +239,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
     },
 
     async steerSession(params: {
-      callerSessionId: string;
+      callerSessionId?: string;
       targetSessionId: string;
       message: string;
       /** Host-owned stable ID; the input coordinator owns acceptance deduplication. */
@@ -274,17 +281,10 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       }
       const turnGeneration = live.getTurnGeneration();
       const queuedMessageId = params.queuedMessageId ?? deps.createId();
-      let item: AgentInputQueuedMessage;
-      try {
-        item = await deps.createQueuedMessage({
-          ...params,
-          queuedMessageId,
-        });
-      } catch (error) {
-        if (error instanceof DelegationNotAuthorizedError)
-          return { ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: error.message };
-        throw error;
-      }
+      const item: AgentInputQueuedMessage = await deps.createQueuedMessage({
+        ...params,
+        queuedMessageId,
+      });
       await beforeMutation?.();
       const current = deps.getLiveSession(params.targetSessionId);
       if (
@@ -371,11 +371,56 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         providerId?: string | null;
         effort?: Effort | null;
         fastMode?: boolean | 'ultrafast';
+        permissionMode?: PermissionMode;
       };
     }): Promise<SessionRuntimeSetResult> {
       const missing = await ensureTarget(params.targetSessionId);
       if (params.beforeMutation) await params.beforeMutation();
       if (missing) return missing;
+      if (params.patch.permissionMode !== undefined) {
+        if (hasTaskActionAuthorization(params.targetSessionId)) {
+          return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
+            message: 'An admitted task cannot change its own permission mode, including in a mixed runtime patch.' };
+        }
+        if (!deps.setSessionPermissionMode) return { ok: false, errorCode: 'INVALID_ARGS', message: 'Permission control is unavailable.' };
+        const beforeMutation = combineInputGuards(params.beforeMutation, assertTaskActionCurrent);
+        const { permissionMode, ...runtimePatch } = params.patch;
+        const hasRuntimePatch = Object.keys(runtimePatch).length > 0;
+        let result: SessionRuntimeSetResult;
+        if (hasRuntimePatch) {
+          const live = deps.getLiveSession(params.targetSessionId);
+          if (live && (!live.capabilities.permissionModes?.some(mode => mode.id === permissionMode) ||
+            live.capabilities.setPermissionModeMidSession?.supported !== true)) {
+            return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
+              message: `The live ${live.agentKind} session does not support permission mode '${permissionMode}'. Runtime settings were not changed.` };
+          }
+          result = await deps.setSessionRuntime({ ...params, patch: runtimePatch, beforeMutation });
+        } else {
+          const details = await deps.getSessionRuntimeDetails(params.targetSessionId);
+          await beforeMutation?.();
+          if (params.expectedGeneration !== undefined && details.runtimeGeneration !== params.expectedGeneration)
+            return { ok: false, errorCode: 'CONFLICT', message: 'Runtime generation changed; read it again before retrying.' };
+          result = { ok: true, status: 'applied', generation: details.runtimeGeneration,
+            effectiveProfile: details.effectiveProfile, pendingMutation: details.pendingMutation };
+        }
+        if (!result.ok) return result;
+        try {
+          await beforeMutation?.();
+          await deps.setSessionPermissionMode({ sessionId: params.targetSessionId, mode: permissionMode, beforeMutation });
+        } catch (error) {
+          if (!hasRuntimePatch) throw error;
+          return { ok: false, errorCode: 'INTERNAL',
+            message: `Runtime settings were ${result.status}, but permission_mode failed. Read get_session_runtime before retrying.`,
+            data: { runtime: { status: result.status, generation: result.generation, fields: Object.keys(runtimePatch),
+              ...(result.effectiveBoundary ? { effective_boundary: result.effectiveBoundary } : {}) },
+              failed: 'permission_mode', original_error: {
+                code: typeof (error as { code?: unknown })?.code === 'string' ? (error as { code: string }).code : null,
+                message: error instanceof Error ? error.message : String(error),
+              } },
+          };
+        }
+        return { ...result, permissionMode };
+      }
       return deps.setSessionRuntime({ ...params,
         beforeMutation: combineInputGuards(params.beforeMutation, assertTaskActionCurrent),
       });
@@ -404,7 +449,7 @@ export function authorizeSessionQueueReorder(
   const plainMachineMessage =
     !item.sourcePlugin &&
     (item.origin?.kind === 'orca' ||
-      (item.origin?.kind === 'session' && !item.origin.senderBotId));
+      item.origin?.kind === 'session');
   const owned =
     authorizeSessionQueueItem(item, callerSessionId).ok || callerSessionId === targetSessionId;
   return plainMachineMessage && owned

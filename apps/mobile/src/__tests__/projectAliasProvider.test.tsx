@@ -40,6 +40,10 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
 } }));
 // Native WebView lifecycle has separate coverage; this suite exercises Provider subscriptions.
 vi.mock('@/device-link/DirectLinkTransport', () => ({ DirectLinkTransport: () => null }));
+// Exercise the existing V1/no-new-native-binary path without loading Expo's device runtime.
+vi.mock('../../modules/cindy-agent-net/src', () => ({ agentNetNative: null }));
+vi.mock('@/notifications/nativeNotifications', () => ({ default: {} }));
+vi.mock('@/notifications/nativePushEnvironment', () => ({ readIosPushEnvironment: async () => undefined }));
 vi.mock('expo-updates', () => ({ updateId: null, runtimeVersion: null, isEmbeddedLaunch: true }));
 vi.mock('expo-crypto', () => ({ getRandomBytes: (size: number) => new Uint8Array(size) }));
 vi.mock('@/device-link/rnWebSocket', () => ({ createRnWebSocket: vi.fn() }));
@@ -57,6 +61,7 @@ const transport = vi.hoisted(() => {
     connectNow = vi.fn();
     notifyNetworkChanged = vi.fn();
     getStatus = () => 'online';
+    hasOnlineConnection = () => true;
     connectionFor() { return this; }
     hasServerCapability = () => false;
     isOutboundExplicitlyClosed = () => false;
@@ -73,6 +78,7 @@ const transport = vi.hoisted(() => {
     onReliableFrameBeforeLink = () => () => {};
     onSeparateCrossAccountStatus = () => () => {};
     onSeparateCrossAccountIssue = () => () => {};
+    onScopedConnectionStatus = () => () => {};
     crossAccountConnection() { return this; }
     connectAllNow(...args: unknown[]) { (this.connectNow as (...input: unknown[]) => void)(...args); }
   }

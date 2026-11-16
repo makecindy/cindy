@@ -23,7 +23,7 @@ import {
 
 import { CURRENT_APP_ID } from '../shared/brandRegion.js';
 import { BROWSER_PARTITION } from '../shared/webviewPartition.js';
-import { getResolvedMainLocale } from './i18n.js';
+import { getResolvedMainLocale } from './i18n.desktop.js';
 import { createLogger, type Logger } from './logger.js';
 import {
   RSB_BROWSER_WEBAUTHN_LABELS,

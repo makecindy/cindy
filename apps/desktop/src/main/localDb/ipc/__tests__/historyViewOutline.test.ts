@@ -132,6 +132,14 @@ describe('SQLite history outline', () => {
     const content = outline('tool_use', { toolName: 'file_change', input: { changes: [{ path: '/work/no.md', kind: { type: 'add' } }] } });
     expect(withHistoryArtifacts({ id: '1', clientId: '1', role: 'tool_use', content, createdAt: '2026-09-25T00:00:00Z' }).historyArtifacts).toBeUndefined();
   });
+  // The teammate chat lists the tasks a reply started from these receipts (2026-11-10); folded to ''
+  // here they never reached the projection that keeps them visible.
+  it('keeps a send_to_session receipt readable', () => {
+    const receipt = JSON.stringify({ ok: true, target_session_id: 's-1', wake_kind: 'created', target_title: 'Fix it' });
+    expect(outline('tool_result', receipt, null, true)).toEqual(JSON.parse(receipt));
+    expect(outline('tool_result', `"target_session_id" "wake_kind" ${'x'.repeat(17_000)}`, null, true)).toBe('');
+  });
+
   it('keeps document delivery metadata and file suppression without edit bodies', () => {
     const delivery = { toolName: 'cindy_mcp_call_tool', input: { server: 'documents', tool: 'render_pdf', args: { outPath: '/work/report.pdf', htmlPath: '/work/source.html' } } };
     expect(outline('tool_use', delivery)).toEqual(delivery);

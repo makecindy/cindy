@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "開放",
+      "draft": "草",
+      "merged": "已併",
+      "closed": "已闔"
+    },
+    "statusUnavailable": "尚未取狀態",
     "title": "掌 PR 連結",
     "hint": "頂列至多示 3 個，固定之 PR 居先",
     "empty": "貼 GitHub PR 或 GitLab MR 連結即可增之",
@@ -32,7 +39,7 @@
     "hint": "左右拖之，可調兩欄之寬"
   },
   "sideChat": {
-    "collapse": "斂旁問",
+    "collapse": "收旁問",
     "resume": "續旁問",
     "list": "旁問錄",
     "summary": "旁問 · {{count}} 則",
@@ -130,9 +137,9 @@
         "processingReason": "語音方理，畢後再錄。"
       },
       "attachment": {
-        "count": "附卷 {{count}}",
-        "collapse": "斂附件",
-        "label": "附卷",
+        "count": "附件 {{count}}",
+        "collapse": "收附件",
+        "label": "附件",
         "busyReason": "附件方理，畢後再增。",
         "sendingReason": "訊方遣至電腦端，畢後再調附件。"
       },
@@ -190,9 +197,9 @@
       "unavailable": "不可用",
       "pendingCount": "待理 {{count}}",
       "readOnly": "僅讀",
-      "queuePaused": "候列已止",
+      "queuePaused": "佇列已暫停",
       "status": {
-        "active": "方用",
+        "active": "活躍",
         "archived": "已封存",
         "deleted": "已刪"
       },
@@ -210,7 +217,7 @@
           "a11y": "覽遠方之卷"
         },
         "queue": {
-          "label": "候列",
+          "label": "佇列",
           "a11y": "啟佇列面板"
         },
         "search": {
@@ -230,7 +237,7 @@
       },
       "actionCopy": {
         "pending": "請先理待處之請求，畢後輸入區自復。",
-        "archived": "差事已封存，遣之則自解封存。",
+        "archived": "差事已封存，遣訊則自解封存。",
         "deleted": "差事已刪，不可再為。",
         "queuePaused": "佇列已暫停，可於佇列面板續行。"
       }
@@ -253,20 +260,20 @@
           "plugins": "法器目錄",
           "memoryRules": "記憶規約",
           "memoryIndex": "記憶索引",
-          "profile": "同伴資料",
+          "profile": "同僚資料",
           "user": "主人指令",
           "directories": "附加目錄",
           "native": "Pi 原生規約",
           "skills": "技藝目錄",
-          "project": "專案指令",
+          "project": "案之指令",
           "tools": "工具定義",
-          "messages": "交談正文",
+          "messages": "言談正文",
           "other": "其餘指令",
           "note": "依當前文字粗估，非模型分詞之數。不計圖片與供方格式耗用，分項之和不等於原生總數。"
         }
       },
       "rateLimit": {
-        "plan": "約",
+        "plan": "方案",
         "remaining": "餘 {{percent}}",
         "used": "已用 {{percent}}",
         "resetsAt": "{{time}} 復初",
@@ -367,7 +374,7 @@
     "syncingSession": "方同步差事",
     "awaitingSync": "候差事同步",
     "resync": "重同步遠端差事",
-    "collapseHistory": "斂舊訊",
+    "collapseHistory": "收舊訊",
     "expandHistory": "覽舊訊",
     "accessRevokedShort": "存取已撤",
     "sessionNotSynced": "差事未同步",
@@ -376,7 +383,7 @@
     "syncing": "方同步",
     "pendingCount": "待理 {{num}}",
     "archived": "已封存",
-    "queuePausedNotice": "候列已止",
+    "queuePausedNotice": "佇列已暫停",
     "forkConfirmTitle": "自此另開一差事？",
     "forkConfirmDescription": "將據此處言談之上下文，另立一獨立新差事。原差事不改，此後兩處之訊互不相擾。",
     "forkConfirm": "另開差事",
@@ -482,6 +489,11 @@
     "worktreeCleanupPending": "前次之 worktree 尚待回收，請重連裝置後再試。"
   },
   "menu": {
+    "moveToProject": "移差事",
+    "moveFailed": "移差事未成",
+    "moveRunning": "差事方行，畢後再移",
+    "moveWorktree": "此差事之工作目錄乃 worktree，暫不支援移至他案",
+    "moveUnsupported": "請更新所連電腦之 Cindy，乃可移差事。",
     "details": "差事詳情",
     "chipPinned": "已居首",
     "chipArchived": "已封存",
@@ -562,7 +574,7 @@
       "taskCost": "本差事費用",
       "actualCost": "實費",
       "estimatedValue": "估值",
-      "totalTokens": "累 Token",
+      "totalTokens": "累計 Token",
       "seeDetails": "察明細",
       "valueUnavailable": "部分差事價值暫未取得",
       "valueExplanation": "價值依耗用與參考單價估之，非實際扣款。",
@@ -586,7 +598,7 @@
     "extraDirsSection": "附引目錄",
     "noExtraDirs": "今無附加目錄。附加目錄將作額外上下文，供遠端裝置上之 Agent。",
     "remove": "去之",
-    "collapseRemoteDir": "斂遠端目錄",
+    "collapseRemoteDir": "收遠端目錄",
     "browseRemoteDir": "覽遠端目錄",
     "reading": "方讀…",
     "parentDir": "上層",
@@ -623,8 +635,8 @@
     "dismissNotice": "闔提示",
     "ignore": "略之",
     "executionResultUnavailable": "未能取得行之結果，已停自動接續。可請助手察既有之結果。",
-    "outputLimit": "模型已達輸出之限，此答或有不全。可遣新訊以續；若屢至此限，宜降推理強度，或先壓縮對話記錄。",
-    "outputLimitReasoning": "思考已耗本次輸出預算之大半，此答或有不全。宜降推理強度，或先壓縮對話記錄，而後續之。",
+    "outputLimit": "模型已達輸出之限，此答或有不全。可遣新訊以續；若屢至此限，宜降思之深淺，或先壓縮言談錄。",
+    "outputLimitReasoning": "思考已耗本次輸出預算之大半，此答或有不全。宜降思之深淺，或先壓縮言談錄，而後續之。",
     "outputLimitUsage": "本次模型請求已輸出 {{outputTokens}} tokens，其中 {{reasoningTokens}} tokens 用於思考。",
     "outputLimitOutputUsage": "本次模型請求已輸出 {{outputTokens}} tokens。",
     "toolUseLoopDetected": "模型重複呼叫工具過多，Cindy 已止此輪，以免無限迴圈。可遣新訊以續。",
@@ -634,7 +646,7 @@
     "toolUseLoopDetectedRotationWithCount": "模型持續輪轉呼叫數工具，Cindy 察此輪已有 {{count}} 次呼叫，遂止此輪。可遣新訊以續。",
     "codexThreadLost": "Codex 鑑權模式已易，此差事不能再續，請新開差事。",
     "remoteCompactEncryptedContent": "整理上下文未成：模型不能讀歷史中之加密內容。自動接續未竟，可再試以復。",
-    "encryptedContentInvalid": "因易供方致加密不可用，此差事僅能於原供方下使用；請歸電腦端處置（可用「從這裡開啟新任務」棄協議加密內容，於新差事中續之）。"
+    "encryptedContentInvalid": "因易供方致加密不可用，此差事僅能於原供方下使用；請歸電腦端處置（可用「自此另開差事」棄協議加密內容，於新差事中續之）。"
   },
   "row": {
     "markRead": "已閱",
@@ -659,6 +671,8 @@
     "taskAlreadyCreated": "機上已立此差事，已存之訊將於原差事中續遣。"
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "可行此務之帳號或電腦，並行皆已至上限。俟運行之務畢，或於供應商設定中增其上限。",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "可行此務之帳號或電腦，並行皆已至上限。俟運行之務畢，或於供應商設定中增其上限。",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暫不支援切換 Harness。請擇當前 Harness 下之模型，或以所需 Harness 另立新 SSH 差事。",
     "MODEL_SELECTION_UNAVAILABLE": "所選模型於該供方下已不可用。請於規制中察連線，或另擇可用之模型。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未切換畢。請察謬誤詳情，待 Harness 就緒後再試。",
@@ -666,8 +680,8 @@
     "REMOTE_AGENT_GROUP_UNAVAILABLE": "供方組中諸機今皆不能行此差事：或皆離線、已暫停分配、方冷卻，或無此模型。可於機上此供方之「遠端與分享」頁察組內諸機。",
     "REMOTE_DAEMON_CLOSED": "遠端連線中斷，或方更新。此輪已畢，請重遣。",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端差事不能存取本地之卷或圖附件。請徑貼其內容。",
-    "AUTO_REVIEW_UNAVAILABLE": "自動審批暫不能決斷，須審批之操作已改由君確認。欲少受打擾，可將差事切至「完全訪問」，然風險更高。",
-    "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自動審批暫不能決斷，須審批之操作已改由君確認。個人微信不能用「完全訪問」，請徑確認此次操作。",
+    "AUTO_REVIEW_UNAVAILABLE": "自動審批暫不能決斷，須審批之操作已改由君確認。欲少受打擾，可將差事切至「完全存取」，然風險更高。",
+    "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自動審批暫不能決斷，須審批之操作已改由君確認。個人微信不能用「完全存取」，請徑確認此次操作。",
     "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自動審批未竟，確認亦未送達或未被點按。此次拒絕非君所點。",
     "REMOTE_COMPAT_MODE_UNSUPPORTED": "遠端差事不能用此機之相容通道。請改用 Cindy AI，或於本機差事中續之。",
     "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 憑據尚未就緒（登門後由服務端自動下發）。請稍候再試；若屢見之，請至「設定 → 模型供應商」察 Cindy AI 之連線狀態。",
@@ -696,11 +710,14 @@
     "REMOTE_AGENT_TOTAL_LIMIT": "遠方之機所留差事總數已達上限。請彼機之主人釋出暫不用之差事，或於「遠端與分享」中提高上限。",
     "REMOTE_AGENT_RESUME_LOST": "先前於彼機之言談未能接續，Agent 將於無先前上下文之下續行。",
     "REMOTE_AGENT_UNSUPPORTED": "彼機上此 Agent 不可用。請於彼機安裝或登門後再試，或易一 Agent。",
+    "REMOTE_AGENT_RESUME_UNAVAILABLE": "此機不能復差事舊態。請選他機或供方之模型，交接上下文以續行；舊訊皆存。",
     "REMOTE_AGENT_INVALID": "與行 Agent 之機通訊時有謬。請再試；若屢見之，請將兩機之 Cindy 皆更新至最新版。",
+    "REMOTE_AGENT_RESUME_REJECTED": "運行模型之電腦無法續此差事。請由差事列表新建差事，複製所需內容以續。原差事及待發之訊皆保留。",
     "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已達分享者所設之模型占比上限。請擇他可用之模型以續。",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼機未允遠端呼叫此供方。請於彼機之「設定 → 模型供應商」中開啟「允許遠端呼叫」，或易一模型。",
     "REMOTE_AGENT_FORK_FAILED": "行 Agent 之機未能自此另開差事。請再試，或換一則訊再試。",
     "REMOTE_AGENT_SHARE_PAUSED": "對方已暫停對君之分享，復之前不能用此等模型。可易他模型以續。",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "此乃舊版分享，啟「唯用 Agent-Net」時暫不可用。關此開關即可續之，亦可易他模型。",
     "REMOTE_AGENT_SHARE_REMOVED": "此分享已不可用（對方刪之或君已退出）。可易他模型以續。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "所分享之供方暫不可用：對方之機或不在線，或對方暫闔分享。可稍後再試，或易他模型以續。"
   },
@@ -726,21 +743,34 @@
     "remoteDirPathHint": "於行之裝置上察目錄；不存則報謬，不改用 Lead 所在之機之目錄。",
     "remoteDirInvalid": "請書行之裝置上之絕對路徑。",
     "roleLabel": "角色之名",
-    "roleHint": "僅一名號，便於多協作者時辨其角色，不改其能",
-    "customRole": "自擬",
-    "customRolePlaceholder": "自訂角色之名",
-    "customRolePredefinedError": "自訂角色之名不可與預設角色同名",
+    "taskLabel": "Worker 所司何事",
+    "enableHint": "今之差事為 Lead，司分派與驗收；另一 Agent 為 Worker，司執行而回報。",
+    "roles": {
+      "reviewer": {
+        "name": "審查",
+        "task": "覽 Lead 之所為，略陳建言。"
+      },
+      "developer": {
+        "name": "開發"
+      },
+      "tester": {
+        "name": "測試",
+        "task": "測試 Lead 迄今之成果，報其未過者與重現之步。"
+      }
+    },
+    "addRole": "增角色",
+    "removeRoleHint": "久按可除之",
+    "removeRoleConfirmTitle": "除「{{role}}」乎？",
+    "removeRoleConfirmDesc": "日後可由「增角色」隨時復增之。",
+    "removeRoleConfirm": "除角色",
+    "moreSettings": "其餘規制",
     "agentLabel": "Agent",
-    "modelLabel": "模型",
     "modelDefault": "常例",
     "modelDefaultHint": "沿用電腦端之 Worker 預設模型",
-    "permissionLabel": "權柄模式",
     "permissionAuto": "自動審批",
     "permissionFull": "完全存取",
-    "permissionAutoHint": "許於工作區內讀寫，並自動審批提權之請求；高風險之操作或遭拒，或須確認。",
-    "permissionFullHint": "許修改任意之卷並行連網之指令，無須再確認。風險最高，僅宜可信之差事。",
     "initialTaskLabel": "初始差事（可略）",
-    "initialTaskPlaceholder": "予此 Worker 之首則差事，可略",
+    "initialTaskPlaceholder": "書其首事以付之；留空則待命，由 Lead 分派",
     "workerCountSummary_one": "{{count}} 個 Worker · {{running}} 方行",
     "workerCountSummary_other": "{{count}} 個 Worker · {{running}} 方行",
     "loading": "方讀 Worker…",
@@ -800,12 +830,12 @@
   "resetAutoUse": {
     "label": "自用之",
     "rules": "自動使用之規",
-    "lowQuota": "每週餘額低於 1% 時自動用",
+    "lowQuota": "每週所餘低於 1% 時自動用",
     "resetDistance": "距限額重設尚餘",
     "days": "{{count}} 日以上",
     "unlimited": "不限",
     "custom": "自擬…",
-    "customDays": "自訂日數",
+    "customDays": "自擬日數",
     "dayUnit": "日以上",
     "apply": "用之",
     "expiring": "卡將到期時自動用",
@@ -816,12 +846,6 @@
     "failed": "存之未成，請再試。",
     "restore": "復預設"
   },
-  "followUp": {
-    "title": "要吾替君跟進差事否？",
-    "start": "始跟進",
-    "notNow": "暫不啟",
-    "saveFailed": "未能存之，請再試"
-  },
   "providerGroupRebalance": {
     "title": "改至 {{label}} 續之？",
     "body": "為均耗各名籍之限額，宜將此訊改由 {{label}} 遣出（{{quota}}）。改過去將攜近數輪言談與摘要，更早之細節或記不全。",
@@ -830,9 +854,9 @@
     "confirm": "改之",
     "remember": "改之，此後自動改（僅此差事）",
     "cancel": "罷",
-    "disable": "此任務勿自動切換",
-    "disableFailed": "未能確認此選擇已存。請查連線，並確認任務所在電腦之 Cindy 已更新，再試。此訊仍照常送出。",
-    "moreOptions": "更多選項"
+    "disable": "勿自動改（僅此差事）",
+    "disableFailed": "未能確認此選擇已存。請查連線，並確認差事所在電腦之 Cindy 已更新，再試。此訊仍照常送出。",
+    "moreOptions": "餘選項"
   },
   "messageEdit": {
     "editing": "方修此訊",
@@ -841,7 +865,7 @@
     "queueNotEmpty": "差事有排隊之訊，請先遣出或移除，再修",
     "notLast": "差事中已有更新之訊，此條非末條，不能修而重遣",
     "failed": "修而重遣未成，請再試",
-    "noPriorAssistant": "此訊之前尚無 AI 之復，電腦端今版未能修之；請更新電腦端 Cindy 再試。",
+    "noPriorAssistant": "此訊之前尚無 AI 回覆，電腦端今版未能修之；請更新電腦端 Cindy 再試。",
     "uploadsPending": "尚有附件上傳，待其畢，再修此訊。",
     "rollbackHint": "遣之，將撤上一輪對 {{count}} 卷之改動",
     "conversationOnlyHint": "遣之不復原案中之卷，上一輪之卷改動仍存"

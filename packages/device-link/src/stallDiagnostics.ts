@@ -9,9 +9,26 @@ export function diagnosticChannel(channel: string): string {
   return REMOTE_INVOKE_ALLOWLIST.has(channel) ? channel : 'unknown';
 }
 
+/**
+ * Log-only short form of a device identifier. It keeps the historical budget of eight
+ * identifying characters, but skips a readable prefix such as `dev-dev-` or `cloud-device-`:
+ * development and cloud ids share those prefixes, so the first eight characters alone made
+ * different computers look identical in logs. Plain production ids are unchanged.
+ * Never use the result as a key or as a name shown to people.
+ */
+export function shortDeviceRef(id: string | null | undefined): string {
+  if (!id) return 'unknown';
+  const split = id.lastIndexOf('-');
+  if (split > 0 && split <= 48) {
+    const tail = id.slice(split + 1);
+    if (/^[a-f\d]{16,}$/i.test(tail)) return id.slice(0, split + 1) + tail.slice(0, 8);
+  }
+  return id.slice(0, 8);
+}
+
 export function diagnosticRef(id: string | undefined): string {
   id = id && (parseSharedTaskPeer(id)?.deviceId ?? parseProviderSharePeer(id)?.deviceId ?? id);
-  return id && /^[a-f\d-]{8,128}$/i.test(id) ? id.slice(0, 8) : 'unknown';
+  return id && /^[a-z\d-]{8,128}$/i.test(id) ? shortDeviceRef(id) : 'unknown';
 }
 
 export function diagnosticOperation(payload: InvokePayload): string {

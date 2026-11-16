@@ -1,9 +1,9 @@
 import fs from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { fetchVideoTaskContent } from '../videoTaskContent.js';
+import { fetchVideoTaskContent, isVideoTaskContentRef } from '../videoTaskContent.js';
 
 const fetch = vi.hoisted(() => vi.fn());
-vi.mock('../../maker-host/outbound-fetch.js', () => ({ outboundFetch: fetch }));
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({ outboundFetch: fetch }));
 
 const reserve = 256n * 1024n * 1024n;
 const connection = { baseUrl: 'https://relay.example/v1', headers: { authorization: 'Bearer test-key' }, revision: 'original', assertCurrent: vi.fn() };
@@ -21,6 +21,18 @@ describe('private video task download disk budget', () => {
     }
     vi.restoreAllMocks();
   });
+
+  // A custom Guide must not turn a private content read into a credentialed
+  // request outside the connection's API path, including encoded dot segments.
+  it.each(['/../../admin/{taskId}', '/%2e%2e/%2E%2E/admin/{taskId}', '/../v10/{taskId}', '/%2e%2e%2f%2e%2e%2fadmin/{taskId}'])(
+    'rejects an escaping content path before fetching: %s', async contentPath => {
+      fetch.mockResolvedValue(new Response(new Uint8Array(8), { headers: { 'content-type': 'video/mp4' } }));
+      await expect(fetchVideoTaskContent(connection, 'paid-task', undefined, contentPath))
+        .rejects.toMatchObject({ code: 'MEDIA_RESULT_INVALID' });
+      expect(fetch).not.toHaveBeenCalled();
+      expect(directories).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([undefined, '1'])('counts actual streamed bytes with content-length=%s and cancels, cleans up, and does not retry overflow', async contentLength => {
     const cancel = vi.fn();
@@ -55,10 +67,15 @@ describe('private video task download disk budget', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('allows a complete stream within the budget and disposes the private file', async () => {
+  // Guide 路径与旧默认路径都必须只匹配原任务，沿用凭证读取、磁盘预算和清理（unit）。
+  it.each([undefined, '/renders/{taskId}/output'])('allows a complete stream at %s within the budget and disposes the private file', async contentPath => {
     const content = new Uint8Array(8).fill(7);
     fetch.mockResolvedValue(new Response(content, { headers: { 'content-type': 'video/mp4' } }));
-    const result = await fetchVideoTaskContent(connection, 'paid-task');
+    const result = await fetchVideoTaskContent(connection, 'paid-task', undefined, contentPath);
+    const relative = contentPath?.replace('{taskId}', 'paid-task') ?? '/videos/paid-task/content';
+    expect(fetch.mock.calls[0]![0]).toBe(`https://relay.example/v1${relative}`);
+    expect(isVideoTaskContentRef(relative, 'paid-task', connection.baseUrl, contentPath)).toBe(true);
+    expect(isVideoTaskContentRef(`https://other.example/v1${relative}`, 'paid-task', connection.baseUrl, contentPath)).toBe(false);
     expect(await fs.readFile(result.filePath)).toEqual(Buffer.from(content));
     expect(result.headerMime).toBe('video/mp4');
     await result.dispose();

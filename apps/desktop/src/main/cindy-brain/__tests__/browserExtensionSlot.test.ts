@@ -276,7 +276,7 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
     expect(slot.getPageControl()).toBeNull();
   });
 
-  // 2026-10-30: only the official Cindy Chrome takes over My browser; another plugin's declaration is ignored.
+  // The shared provider seam accepts any approved pageControl implementation.
   it('普通插件声明 pageControl 后可成为「我的浏览器」', async () => {
     const ghosts = [extGhost({ id: 'other-browser', nativeHost: false })];
     const { slot, bridges, settle } = await makeSlot({}, ghosts);
@@ -849,4 +849,109 @@ describe('browserExtensionSlot · 转交扩展请求', () => {
     ]);
     expect(deps.sendToGhost).toHaveBeenCalled();
   });
+});
+
+// Host delivery is asynchronous. An old owner or uncertain transport result must
+// not turn the shared slot's offline wake into a duplicate/cross-account request.
+describe('browserExtensionSlot · asynchronous host delivery', () => {
+  it('waits for a known offline result before waking and delivering once', async () => {
+    let answer!: (online: boolean) => void;
+    const wake = vi.fn(async () => true);
+    let calls = 0;
+    const sendToGhost = vi.fn(async (_id: string, payload: unknown) => {
+      if ((payload as { name: string }).name !== 'browser-extension-relay') return true;
+      if (++calls === 1) return new Promise<boolean>(resolve => { answer = resolve; });
+      return true;
+    });
+    const { slot, ghosts, bridges } = await makeSlot({ sendToGhost, wake });
+    try {
+      slot.reconcile(ghosts);
+      await slot.handleRequest('_root__my-browser', { kind: 'status' });
+      bridges[0].emitRelay({ id: 'async-1', clientId: 'browser', request: {} } as BrowserExtensionRelayNotice);
+      expect(wake).not.toHaveBeenCalled();
+      answer(false);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(wake).toHaveBeenCalledTimes(1);
+      expect(calls).toBe(2);
+      expect(bridges[0].calls.filter(([name]) => name === 'relayResult')).toEqual([]);
+    } finally { await slot.dispose(); }
+  });
+
+  it('does not wake or replay a delivery after its owner changes', async () => {
+    let owner = 'owner-a';
+    let answer!: (online: boolean) => void;
+    const wake = vi.fn(async () => true);
+    const sendToGhost = vi.fn(async (_id: string, payload: unknown) =>
+      (payload as { name: string }).name === 'browser-extension-relay'
+        ? new Promise<boolean>(resolve => { answer = resolve; }) : true);
+    const { slot, ghosts, bridges } = await makeSlot({ ownerScopeKey: () => owner, sendToGhost, wake });
+    try {
+      slot.reconcile(ghosts);
+      await slot.handleRequest('_root__my-browser', { kind: 'status' });
+      bridges[0].emitRelay({ id: 'old-owner', clientId: 'browser', request: {} } as BrowserExtensionRelayNotice);
+      owner = 'owner-b';
+      answer(false);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(wake).not.toHaveBeenCalled();
+      expect(bridges[0].calls).toContainEqual(['relayResult', ['old-owner', { ok: false, error: 'BRIDGE_STOPPED' }]]);
+    } finally { await slot.dispose(); }
+  });
+
+  it('keeps a failed wake unavailable and logged without a second delivery', async () => {
+    const warn = vi.fn();
+    const wake = vi.fn(async () => { throw Error('wake failed'); });
+    const sendToGhost = vi.fn(async (_id, payload) => (payload as { name: string }).name !== 'browser-extension-relay');
+    const { slot, ghosts, bridges } = await makeSlot({ wake, sendToGhost, log: { info: vi.fn(), warn } });
+    try {
+      slot.reconcile(ghosts);
+      await slot.handleRequest('_root__my-browser', { kind: 'status' });
+      bridges[0].emitRelay({ id: 'wake-failed', clientId: 'browser', request: {} } as BrowserExtensionRelayNotice);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(wake).toHaveBeenCalledTimes(1);
+      expect(sendToGhost.mock.calls.filter(([, p]) => (p as { name: string }).name === 'browser-extension-relay')).toHaveLength(1);
+      expect(warn).toHaveBeenCalledWith('browser extension relay wake failed', expect.objectContaining({ error: 'wake failed' }));
+      expect(bridges[0].calls).toContainEqual(['relayResult', ['wake-failed', { ok: false, error: 'PLUGIN_UNAVAILABLE' }]]);
+    } finally { await slot.dispose(); }
+  });
+
+  it.each([1, 2])('reports uncertain delivery on send %s without replaying a possible side effect', async failAt => {
+    const wake = vi.fn(async () => true);
+    let sends = 0;
+    const { slot, ghosts, bridges } = await makeSlot({ wake, sendToGhost: async (_id, payload) => {
+      if ((payload as { name: string }).name === 'browser-extension-relay') {
+        if (++sends === failAt) throw new Error('transport closed after send');
+        return false;
+      }
+      return true;
+    } });
+    try {
+      slot.reconcile(ghosts);
+      await slot.handleRequest('_root__my-browser', { kind: 'status' });
+      bridges[0].emitRelay({ id: 'uncertain', clientId: 'browser', request: {} } as BrowserExtensionRelayNotice);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(wake).toHaveBeenCalledTimes(failAt - 1);
+      expect(sends).toBe(failAt);
+      expect(bridges[0].calls).toContainEqual(['relayResult', ['uncertain', { ok: false, error: 'PLUGIN_DELIVERY_UNKNOWN' }]]);
+    } finally { await slot.dispose(); }
+  });
+});
+
+// Regression: reconcile removes the entry before its asynchronous transport
+// close completes. Host shutdown must still drain that retired entry.
+it('dispose waits for a transport already being retired by reconcile', async () => {
+  const f = await makeSlot();
+  f.slot.reconcile(f.ghosts);
+  await f.slot.handleRequest('_root__my-browser', { type: 'browser-extension-request', action: 'status' });
+  let release!: () => void;
+  const closed = new Promise<void>(resolve => { release = resolve; });
+  f.bridges[0].close = async () => { await closed; f.bridges[0].closed = true; };
+  f.slot.reconcile([]);
+  let disposed = false;
+  const disposing = f.slot.dispose().then(() => { disposed = true; });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  expect(disposed).toBe(false);
+  release();
+  await disposing;
+  expect(f.bridges[0].closed).toBe(true);
+  expect(f.natives[0].close).toHaveBeenCalledOnce();
 });

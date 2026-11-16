@@ -1,4 +1,5 @@
 import * as WebBrowser from 'expo-web-browser';
+import { isAgentNetMediaReference } from '@cindy/agent-net-protocol';
 import { requireNativeModule } from 'expo-modules-core';
 import {
   createContext,
@@ -69,7 +70,7 @@ import {
   resetMobileSessionRealm,
 } from '@/config/env';
 import { syncCanaryChannelAfterAuth } from '@/auth/canaryChannelSync';
-import { ensureDeviceId, hasStoredDeviceId } from '@/auth/deviceId';
+import { ensureDeviceId, hasStoredDeviceId, isCredentialStoreReadable } from '@/auth/deviceId';
 import { decodeJwtOrgSlug, isAccessTokenExpiring } from '@/auth/jwt';
 import {
   maybeEnableNonXdOrgBetaDefault,
@@ -91,6 +92,7 @@ import {
   setSecureItem,
 } from '@/auth/secureStorage';
 import {
+  LOGIN_CREDENTIAL_STORAGE,
   clearMobileLoginCredentialsForLogout,
   commitMobileLoginSessions,
   commitMobileRuntimeResourceSession,
@@ -123,10 +125,10 @@ import { unregisterActivityPush } from '@/widgets/agentActivityPush';
 import { resetAgentCapabilitiesCache } from '@/session/agentCapabilitiesCache';
 import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
-import { isSelfHostedRelayBaseUrl } from '@/device-link/selfHostedRelayRouting';
+import { isSelfHostedRelayBaseUrl, getSelfHostedRelayRouteGeneration } from '@/device-link/selfHostedRelayRouting';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { clearHomeSessionPrCache } from '@/session/homeSessionPrStore';
-import { getMobileAuthOwner, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
 import { clearMobileChatHistoryStore } from '@/chat/chatHistoryStore';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
@@ -1250,7 +1252,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             clearPersistedSession: () => deleteSecureItem(AUTH_SESSION_KEY),
           }),
         ).catch(() => null);
-        if (!reconciledAuth) return null;
+        if (!reconciledAuth) {
+          // A locked phone refuses Keychain reads. That is not a missing login: callers
+          // treat `null` as signed out and clear local data, so report it as a failure
+          // to retry instead. Reachable since notification buttons run the app in the
+          // background, until both login items are stored "after first unlock".
+          if (!(await isCredentialStoreReadable())) throw authCodeError('AUTH_STORAGE_LOCKED');
+          return null;
+        }
         const persistedVault = reconciledAuth.vault;
         const activeResourceAtStart = persistedVault?.activeAccountKey
           ? {
@@ -1685,7 +1694,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (token) return;
         let storedSession: AuthSessionRecord | null;
         try {
-          storedSession = await readPersistedAuthSession();
+          // Strict: an unreadable Keychain must reach the catch below. The lenient
+          // read turns it into "no session", which signs the person out.
+          storedSession = await readPersistedAuthSessionStrict();
         } catch {
           scheduleNext();
           return;
@@ -3321,52 +3332,78 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       opts.assertCurrent?.();
       // 自建中转:中转凭证由 apiFetchRaw 按目标地址附上;账号 token 不取、不发,中转的 401
       // 只说明中转凭证失效,不刷新也不退出账号(docs/self-hosted-relay-plan.md §5.3)。
-      if (isSelfHostedRelayBaseUrl(opts.baseUrl)) {
-        return apiFetchRaw<T>(path, { ...opts, token: null });
-      }
-      const token = await getAccessToken();
-      opts.assertCurrent?.();
-      if (!token) throw new Error('UNAUTHENTICATED');
-      try {
-        return await apiFetchRaw<T>(path, { ...opts, token });
-      } catch (error) {
-        opts.assertCurrent?.();
-        if (!(error instanceof ApiError) || error.status !== 401) throw error;
-        if (error.code === 'ACCOUNT_UNAVAILABLE') {
-          if (userRef.current) {
-            await terminateSession('ACCOUNT_UNAVAILABLE');
-          }
-          throw error;
+      const readLegacy = async (): Promise<T> => {
+        if (isSelfHostedRelayBaseUrl(opts.baseUrl)) {
+          return apiFetchRaw<T>(path, { ...opts, token: null });
         }
-        if (!isRefreshableUnauthorizedCode(error.code)) throw error;
-
-        const fresh = await refresh();
-        opts.assertCurrent?.();
-        if (!fresh) {
-          if (userRef.current) await terminateSession();
-          throw error;
-        }
+        const token = await getAccessToken();
+        nativeGuard();
+        if (!token) throw new Error('UNAUTHENTICATED');
         try {
-          return await apiFetchRaw<T>(path, { ...opts, token: fresh });
-        } catch (retryError) {
-          opts.assertCurrent?.();
-          if (
-            retryError instanceof ApiError &&
-            retryError.status === 401 &&
-            (retryError.code === 'ACCOUNT_UNAVAILABLE' ||
-              isRefreshableUnauthorizedCode(retryError.code))
-          ) {
+          return await apiFetchRaw<T>(path, { ...opts, token });
+        } catch (error) {
+          nativeGuard();
+          if (!(error instanceof ApiError) || error.status !== 401) throw error;
+          if (error.code === 'ACCOUNT_UNAVAILABLE') {
             if (userRef.current) {
-              await terminateSession(
-                retryError.code === 'ACCOUNT_UNAVAILABLE'
-                  ? 'ACCOUNT_UNAVAILABLE'
-                  : undefined,
-              );
+              await terminateSession('ACCOUNT_UNAVAILABLE');
             }
+            throw error;
           }
-          throw retryError;
+          if (!isRefreshableUnauthorizedCode(error.code)) throw error;
+
+          const fresh = await refresh();
+          nativeGuard();
+          if (!fresh) {
+            if (userRef.current) await terminateSession();
+            throw error;
+          }
+          try {
+            return await apiFetchRaw<T>(path, { ...opts, token: fresh });
+          } catch (retryError) {
+            nativeGuard();
+            if (
+              retryError instanceof ApiError &&
+              retryError.status === 401 &&
+              (retryError.code === 'ACCOUNT_UNAVAILABLE' ||
+                isRefreshableUnauthorizedCode(retryError.code))
+            ) {
+              if (userRef.current) {
+                await terminateSession(
+                  retryError.code === 'ACCOUNT_UNAVAILABLE'
+                    ? 'ACCOUNT_UNAVAILABLE'
+                    : undefined,
+                );
+              }
+            }
+            throw retryError;
+          }
         }
+      };
+      const nativeOwner = getMobileAuthOwner(), nativeRoute = getSelfHostedRelayRouteGeneration(), nativeDevice = deviceIdRef.current;
+      const nativeGuard = () => {
+        opts.assertCurrent?.();
+        if (!isMobileAuthOwnerCurrent(nativeOwner) || getSelfHostedRelayRouteGeneration() !== nativeRoute || deviceIdRef.current !== nativeDevice) {
+          throw new Error('AGENT_NET_OWNER_CHANGED');
+        }
+      };
+      if (path.startsWith('/api/device-link/media') && nativeDevice
+        && typeof (opts.body as { key?: unknown })?.key === 'string'
+        && isAgentNetMediaReference((opts.body as { key: string }).key)) {
+        const { mobileAgentNetMediaRequest } = await import('@/device-link/agentNetMediaApi');
+        nativeGuard();
+        const result = await mobileAgentNetMediaRequest<T>(path, { ...opts, assertCurrent: nativeGuard }, { deviceId: nativeDevice,
+          deviceName: nativeDevice, getAccessToken });
+        if (result.handled) return result.value;
       }
+      if (/^\/api\/device-link\/devices(?:\/|$)/.test(path) && nativeDevice) {
+        const { mobileAgentNetDeviceRequest } = await import('@/device-link/agentNetDeviceApi');
+        nativeGuard();
+        const result = await mobileAgentNetDeviceRequest<T>(path, { ...opts, assertCurrent: nativeGuard }, { deviceId: nativeDevice,
+          deviceName: nativeDevice, getAccessToken }, readLegacy);
+        if (result.handled) return result.value;
+      }
+      return readLegacy();
     },
     [getAccessToken, refresh, terminateSession],
   );
@@ -3609,6 +3646,7 @@ async function writePersistedAuthSession(
   await setSecureItem(
     AUTH_SESSION_KEY,
     serializeAuthSessionRecord(realm, refreshToken),
+    LOGIN_CREDENTIAL_STORAGE,
   );
 }
 
@@ -3616,7 +3654,7 @@ async function restorePersistedAuthSessionRaw(raw: string | null): Promise<void>
   if (raw === null) {
     await deleteSecureItem(AUTH_SESSION_KEY);
   } else {
-    await setSecureItem(AUTH_SESSION_KEY, raw);
+    await setSecureItem(AUTH_SESSION_KEY, raw, LOGIN_CREDENTIAL_STORAGE);
   }
 }
 

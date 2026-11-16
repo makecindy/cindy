@@ -892,6 +892,22 @@ describe('official bot follows defaults without an extra control', () => {
     expect((await rowOf('official')).model).toBe(OLD.model);
   });
 
+  // 回归：默认模型为空时任务由自动选模建出，创建记录的指纹多包一层；旧判断只认
+  // `["hook",` 前缀，这类任务被当成「不归官方跟随」，用户之后选了默认模型也不会切。
+  it('follows a task created by automatic model selection once a default is chosen', async () => {
+    const { writeHookDefaultRouteRecord } = await import('../../../hook-control/defaultRouteFollow');
+    const { resolvedImDefaultFingerprint } = await import('../../../../shared/imAutomaticModel');
+    const automaticFp = resolvedImDefaultFingerprint(hookFp, {
+      agentKind: OLD.agentKind,
+      agents: { [OLD.agentKind]: { model: OLD.model, providerId: OLD.providerId, effort: OLD.effort } },
+    } as unknown as Parameters<typeof resolvedImDefaultFingerprint>[1]);
+    await insertTask('official', OLD, { source: 'telegram', marker: false, record: null });
+    await writeHookDefaultRouteRecord('official', automaticFp);
+    await (await officialFollower()).syncUnderLock('official');
+    expect(mocks.applyRoute).toHaveBeenCalledWith('official', { ...NEW, agentDeviceId: null, fastMode: false }, 'claude-code');
+    expect(parseImDefaultRouteRecord((await rowOf('official')).imDefaultRoute)?.fp).toBe(nextHookFp);
+  });
+
   it('a same-value manual selection permanently stops following; a new task follows again', async () => {
     const { writeHookDefaultRouteRecord } = await import('../../../hook-control/defaultRouteFollow');
     await insertTask('official', OLD, { source: 'telegram', marker: false, record: hookRecord });

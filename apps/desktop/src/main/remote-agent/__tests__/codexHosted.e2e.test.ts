@@ -79,7 +79,7 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
 
   afterAll(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
   function codexDeps(home: string): AgentDeps {

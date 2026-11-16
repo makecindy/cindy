@@ -28,6 +28,16 @@ export type HostRuntimeLeaseResult = HostRuntimeLease | HostRuntimeLeaseBusy;
  */
 export function acquireHostRuntimeLease(userDataDir: string, ownerId: string): HostRuntimeLeaseResult {
   const lockPath = path.join(userDataDir, `cindy-host-runtime-${ownerId}.lock.db`);
+  return acquireLease(lockPath);
+}
+
+/** The endpoint and account vault belong to the whole Host, even before login.
+ * Acquire this before listening so a second process cannot replace discovery. */
+export function acquireHostServiceLease(userDataDir: string): HostRuntimeLeaseResult {
+  return acquireLease(path.join(userDataDir, 'cindy-host-service.lock.db'));
+}
+
+function acquireLease(lockPath: string): HostRuntimeLeaseResult {
   const lock: SqliteExclusiveFileLock = createSqliteExclusiveFileLock(
     lockPath,
     (file) => new Database(file, { timeout: 0 }),

@@ -73,7 +73,7 @@ vi.mock('../claude-native-connection.js', () => ({
   },
 }));
 
-vi.mock('../claude-native-cli.js', () => ({
+vi.mock('../claude-native-cli.desktop.js', () => ({
   claudeCliNetworkEnv: async () => ({ ...h.networkEnv }),
 }));
 

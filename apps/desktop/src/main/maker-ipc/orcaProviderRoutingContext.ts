@@ -178,7 +178,11 @@ export async function readOrcaWorkerProviderRoutingContext(deps: {
     },
   });
   const catalog = postClaimCatalog ?? deps.getCatalog();
-  const modelRegistry = catalog.modelRegistry;
+  return buildLocalProviderRoutingContext(views, catalog.modelRegistry);
+}
+
+/** Both launchers project admission from their current provider views identically. */
+export function buildLocalProviderRoutingContext(views: ProviderView[], modelRegistry?: Catalog['modelRegistry']): OrcaWorkerProviderRoutingContext {
 
   // Keep the route policy aligned with modelList.ts: disabled/non-chat capability entries do not
   // enter a new worker route, while the model registry identity remains provider-specific.

@@ -1,0 +1,28 @@
+[package]
+name = "agent-net-sim"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "agent-net 确定性网络模拟器，只用于测试，不进入产品。"
+
+[dependencies]
+agent-net-core = { path = ".." }
+# 真机 UDP 驱动：公网换端口测试和本机回环测试用。
+agent-net-udp = { path = "../udp" }
+# 只在模拟器和测试里提供加密算法，对照 Noise 官方测试向量。产品里由各平台传入系统自带的实现，核心不依赖它们。
+ring = "0.17"
+x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "zeroize", "precomputed-tables"] }
+
+[features]
+# 对比真实 KCP。需要先运行 fetch-kcp.sh，KCP 源码只放在被忽略的目录里，不进产品也不进仓库。
+kcp = []
+
+[[bin]]
+name = "compare"
+path = "src/bin/compare/main.rs"
+
+[[bin]]
+name = "netperf"
+path = "src/bin/netperf.rs"
+required-features = ["kcp"]

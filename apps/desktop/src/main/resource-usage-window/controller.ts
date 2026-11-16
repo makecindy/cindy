@@ -12,7 +12,7 @@ import {
   RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
 } from '../../shared/resourceUsageWindow.js';
 
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('resource-usage-window-controller');

@@ -1,4 +1,5 @@
-import { and, count, desc, eq, gte, inArray, isNull, ne, or } from 'drizzle-orm';
+import { normalizeTaskTags } from '@cindy/maker-shared';
+import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { normalizeProjectOrderPath } from '@cindy/maker-shared/project-order-sync';
 
 import type {
@@ -17,7 +18,8 @@ import { conversationSearchTitle } from '../../shared/conversationSearch.js';
 import type { SessionSource } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForComparison, normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
 import { getDbClient } from './client/current.js';
-import { botProfiles, botSessionLinks, messages, projectAliases, sessions } from './schema.js';
+import { historyCompanionJson, parseHistoryCompanion } from './historyCompanion.js';
+import { botProfiles, botSessionLinks, messages, projectAliases, sessions, sessionTaskTags, taskTags } from './schema.js';
 import { prepareChatHistorySearch } from './chatHistorySearch.js';
 import { normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import { visibleTextMatchesMessagesFtsQuery } from './chatHistorySearch.pure.js';
@@ -53,6 +55,7 @@ type SessionRow = Pick<typeof sessions.$inferSelect,
   | 'agentKind' | 'status' | 'source' | 'orcaRole' | 'parentSessionId'
   | 'userSendAt' | 'updatedAt' | 'createdAt'
 > & {
+  companionJson: string | null;
   companionId: string | null;
   companionName: string | null;
   companionStatus: string | null;
@@ -138,8 +141,10 @@ export async function searchConversations(
       // 命中一堆不显示这个词的行,高亮下标也会落在别的字上(PR #1031 review P1)。
       // renderer 渲染时调同一个 conversationSearchTitle,两端逐字一致。
       let match = fuzzyTitleMatch(conversationSearchTitle(row.title, request.unnamedLabel), query);
-      if (!match && row.workspaceKind === 'project' && !row.remoteHostId && row.workingDir
-        && aliasesByPath.get(normalizeProjectOrderPath(row.projectDir ?? row.workingDir))?.includes(query.toLowerCase())) {
+      const taskProjectDir = parseHistoryCompanion(row.companionJson)?.taskProjectDir;
+      const projectDir = taskProjectDir ?? row.projectDir ?? row.workingDir;
+      if (!match && (taskProjectDir || row.workspaceKind === 'project') && !row.remoteHostId && projectDir
+        && aliasesByPath.get(normalizeProjectOrderPath(projectDir))?.includes(query.toLowerCase())) {
         // Alias-only hits have no highlight positions in the task's title.
         match = { score: 0, indices: [] };
       }
@@ -210,7 +215,7 @@ export async function searchConversations(
 
   return {
     query,
-    results: await attachMessageCounts(results),
+    results: await attachResultMetadata(results),
     vectorUsed: content.vectorUsed,
     vectorSkipReason: content.vectorSkipReason,
     poolCapped: content.poolCapped,
@@ -340,7 +345,7 @@ function applyWorkingDirFilter(
   if (workingDirs == null) return rows;
   const allowed = new Set(workingDirs.map((dir) => normalizeWorkingDirForComparison(dir)));
   return rows.filter((row) => {
-    const key = normalizeWorkingDirForComparison(row.projectDir ?? row.workingDir);
+    const key = normalizeWorkingDirForComparison(parseHistoryCompanion(row.companionJson)?.taskProjectDir ?? row.projectDir ?? row.workingDir);
     return key != null && allowed.has(key);
   });
 }
@@ -380,6 +385,7 @@ async function listSearchableSessions(
       userSendAt: sessions.userSendAt,
       updatedAt: sessions.updatedAt,
       createdAt: sessions.createdAt,
+      companionJson: historyCompanionJson(sql`${sessions.id}`),
       companionId: botProfiles.id,
       companionName: botProfiles.displayName,
       companionStatus: botProfiles.status,
@@ -445,11 +451,13 @@ function sessionSummaryFromRow(
   row: SessionRow,
   messageCount: number,
 ): ConversationSearchSessionSummary {
+  const taskProjectDir = parseHistoryCompanion(row.companionJson)?.taskProjectDir;
   return {
     id: row.id,
     title: row.title,
     workingDir: row.workingDir,
     projectDir: row.projectDir,
+    ...(taskProjectDir ? { taskProjectDir } : {}),
     workspaceKind: row.workspaceKind,
     agentKind: normalizeDbAgentKind(row.agentKind),
     status: row.status,
@@ -473,15 +481,32 @@ function sessionSummaryFromRow(
   };
 }
 
-async function attachMessageCounts<T extends { session: ConversationSearchSessionSummary }>(
+async function attachResultMetadata<T extends { session: ConversationSearchSessionSummary }>(
   results: T[],
 ): Promise<T[]> {
-  const countMap = await fetchMessageCounts(results.map((item) => item.session.id));
+  if (results.length === 0) return results;
+  const sessionIds = results.map((item) => item.session.id);
+  // Enrich only the final page, in one batch, including tasks outside the sidebar cache.
+  const [countMap, tagRows] = await Promise.all([
+    fetchMessageCounts(sessionIds),
+    getDbClient().drizzle
+      .select({ sessionId: sessionTaskTags.sessionId, tag: taskTags })
+      .from(sessionTaskTags)
+      .innerJoin(taskTags, eq(taskTags.id, sessionTaskTags.tagId))
+      .where(inArray(sessionTaskTags.sessionId, sessionIds)),
+  ]);
+  const tagsBySession = new Map<string, unknown[]>();
+  for (const { sessionId, tag } of tagRows) {
+    const tags = tagsBySession.get(sessionId) ?? [];
+    tags.push(tag);
+    tagsBySession.set(sessionId, tags);
+  }
   return results.map((item) => ({
     ...item,
     session: {
       ...item.session,
       _count: { messages: countMap.get(item.session.id) ?? 0 },
+      tags: normalizeTaskTags(tagsBySession.get(item.session.id)),
     },
   }));
 }

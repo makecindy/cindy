@@ -16,7 +16,8 @@ import { useSyncExternalStore } from 'react';
 
 import { PROVIDER_METADATA_TRUST_MS, readProviderMetadataContinuity, type ProviderShareReceived } from '@cindy/device-link';
 
-import { hasSubscriptionShareCatalog, isSubscriptionShareCatalogStale } from '@/hooks/useDeviceProviders';
+import { hasDeviceProvidersInterest, hasSubscriptionShareCatalog, isSubscriptionShareCatalogStale } from '@/hooks/useDeviceProviders';
+import { hasDeviceCapabilitiesInterest } from '@/hooks/useAgentCapabilities';
 import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
 import { createLogger } from '@/lib/logger';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
@@ -246,7 +247,7 @@ function expireRegionRetention(): void {
 function invalidateShareCatalogs(
   previous: readonly ProviderShareReceived[],
   next: readonly ProviderShareReceived[],
-  options?: { clearEmpty?: boolean; skipCatalogs?: boolean; retireShareIds?: ReadonlySet<string> },
+  options?: { clearEmpty?: boolean; skipCatalogs?: boolean; retireShareIds?: ReadonlySet<string>; refreshShareIds?: ReadonlySet<string> },
 ): void {
   // 旧 Main 把临时不可达也投影成空列表；调用方只有在确认区域完整时
   // 才允许用空列表撤权，否则必须保留上一份有界显示。
@@ -277,6 +278,20 @@ function invalidateShareCatalogs(
   }
   for (const share of next) {
     const deviceId = providerShareAgentDeviceId(share.shareId);
+    // A received-list push is also a catalog invalidation even when membership
+    // is unchanged. Refresh live consumers, including successful empty results;
+    // retire an unused cached copy so reopening reads once without background polling.
+    if (share.status === 'active' && share.hostOnline && share.hostCapable
+      && options?.refreshShareIds?.has(share.shareId) && !changed.includes(share.shareId)) {
+      if (hasDeviceProvidersInterest(deviceId) || hasDeviceCapabilitiesInterest(deviceId)) {
+        void refreshRemoteCatalogSnapshot(deviceId).catch(() => undefined);
+      } else {
+        // Cached copies may exist only under task-host route keys. Retirement
+        // is read-free even when this source has never been opened directly.
+        void refreshRemoteCatalogSnapshot(deviceId, undefined, { retireOnly: true }).catch(() => undefined);
+      }
+      continue;
+    }
     if (share.status === 'active' && isSubscriptionShareCatalogStale(deviceId)) {
       void refreshRemoteCatalogSnapshot(deviceId).catch(() => undefined);
     }
@@ -285,7 +300,7 @@ function invalidateShareCatalogs(
 
 function setReceived(
   next: readonly ProviderShareReceived[],
-  options?: { clearEmpty?: boolean; skipCatalogs?: boolean; ownerId?: string | null; ownerGeneration?: number; loaded?: boolean },
+  options?: { clearEmpty?: boolean; skipCatalogs?: boolean; ownerId?: string | null; ownerGeneration?: number; loaded?: boolean; refreshShareIds?: ReadonlySet<string> },
 ): void {
   const previous = receivedSnapshot.received;
   const expiredShareIds = new Set<string>();
@@ -357,6 +372,7 @@ function readReceivedSnapshot(value: unknown): ProviderShareReceivedSnapshot | n
     ownerStamp: row.ownerStamp,
     confirmedRegions: row.confirmedRegions,
     received: row.received,
+    ...(Array.isArray(row.unavailableShareIds) ? { unavailableShareIds: row.unavailableShareIds.filter((id): id is string => typeof id === 'string') } : {}),
     ...(typeof row.active === 'boolean' ? { active: row.active } : {}),
     ...(regionBudget ? { regionBudget } : {}),
   };
@@ -365,7 +381,7 @@ function readReceivedSnapshot(value: unknown): ProviderShareReceivedSnapshot | n
 /** A snapshot with confirmed regions can tell an authoritative empty result from a
  * temporarily incomplete cross-region projection. An inactive runtime with no
  * shares is an explicit boundary and must retire all mounted catalogs. */
-function applyReceivedSnapshot(snapshot: ProviderShareReceivedSnapshot, requestStart?: BudgetRequestStart): void {
+function applyReceivedSnapshot(snapshot: ProviderShareReceivedSnapshot, requestStart?: BudgetRequestStart, refreshCatalogs = false): void {
   const ownerId = snapshot.ownerStamp.dataOwnerId;
   const previous = receivedSnapshot.received;
   const ownerChanged = receivedOwnerId === null ? previous.length > 0 : receivedOwnerId !== ownerId;
@@ -380,13 +396,14 @@ function applyReceivedSnapshot(snapshot: ProviderShareReceivedSnapshot, requestS
   const acceptedConfirmed = snapshot.confirmedRegions.filter(region =>
     regionSourceCurrent(region, budget?.[region]?.id));
   const confirmed = new Set(acceptedConfirmed);
-  const incoming = snapshot.received.filter(share =>
+  const unavailable = new Set(snapshot.unavailableShareIds);
+  const incoming = snapshot.received.filter(share => !unavailable.has(share.shareId) &&
     retentionLive(share.owner.region) && regionSourceCurrent(share.owner.region, budget?.[share.owner.region]?.id));
   const currentIds = new Set(incoming.map(share => share.shareId));
   // Same-owner incomplete projections keep their unconfirmed rows only within the
   // deadline inherited from their last true confirmation; an owner change must not
   // carry the previous account's rows into the new owner.
-  const retained = ownerChanged ? [] : previous.filter(share => !confirmed.has(share.owner.region)
+  const retained = ownerChanged ? [] : previous.filter(share => !unavailable.has(share.shareId) && !confirmed.has(share.owner.region)
     && !currentIds.has(share.shareId) && retentionLive(share.owner.region));
   // An empty, unconfirmed snapshot is not an authoritative empty list. This also
   // keeps a favorites-side query from claiming the new owner is fully loaded.
@@ -394,7 +411,8 @@ function applyReceivedSnapshot(snapshot: ProviderShareReceivedSnapshot, requestS
     || (!ownerChanged && previous.length > 0);
   const next = [...incoming, ...retained];
   setReceived(next, { clearEmpty: true, skipCatalogs: ownerChanged, ownerId,
-    ownerGeneration: snapshot.ownerStamp.ownerGeneration, loaded });
+    ownerGeneration: snapshot.ownerStamp.ownerGeneration, loaded,
+    ...(refreshCatalogs ? { refreshShareIds: new Set(incoming.map(share => share.shareId)) } : {}) });
   armRegionRetentionTimer();
 }
 
@@ -506,12 +524,12 @@ export function ensureProviderShareReceivedStarted(): void {
     void api.command({ action: 'received-snapshot' }).then((value) => {
       if (seq !== receivedPushSeq || !isDataOwnerGenerationCurrent(owner)) return;
       const snapshot = readReceivedSnapshot(value);
-      if (snapshot) applyReceivedSnapshot(snapshot, requestStart);
-      else setReceived(pushed, { ownerId: owner.dataOwnerId }); // Older Main / old preload fallback.
+      if (snapshot) applyReceivedSnapshot(snapshot, requestStart, true);
+      else setReceived(pushed, { ownerId: owner.dataOwnerId, refreshShareIds: new Set(pushed.map(share => share.shareId)) }); // Older Main / old preload fallback.
       refreshFavoriteMembership(api);
     }).catch(() => {
       if (seq !== receivedPushSeq || !isDataOwnerGenerationCurrent(owner)) return;
-      setReceived(pushed, { ownerId: owner.dataOwnerId });
+      setReceived(pushed, { ownerId: owner.dataOwnerId, refreshShareIds: new Set(pushed.map(share => share.shareId)) });
       refreshFavoriteMembership(api);
     });
   });

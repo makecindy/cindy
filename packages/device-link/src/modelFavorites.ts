@@ -19,6 +19,11 @@ export type ModelFavoriteMutation =
     }
   | { kind: "remove"; expected: RemoteModelFavorite };
 export const MODEL_FAVORITE_TEXT_MAX_LENGTH = 512;
+/**
+ * Desktop 本机收藏能放下带分享与成员身份的来源键。收藏通道仍用上面的 512：
+ * 更长的键若出现在回复里，旧客户端会整表解析失败。
+ */
+export const PROVIDER_SHARE_FAVORITE_SOURCE_MAX_LENGTH = 2048;
 const text = (v: unknown, max = MODEL_FAVORITE_TEXT_MAX_LENGTH): v is string =>
   typeof v === "string" && v.length > 0 && v.length <= max;
 
@@ -46,6 +51,52 @@ export function parseAgentDeviceFavoriteSource(value: string): AgentDeviceFavori
     if (!Array.isArray(parts) || parts.length !== 2 || !parts.every((part) => text(part)))
       return null;
     return { deviceId: parts[0], providerId: parts[1] };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 分享来的模型收藏：键里带分享、成员、供应商与归属区域，存在受邀者账号的收藏里。
+ * 投影回目录时才换成真实 providerId，绝不把这个键用于模型请求。
+ * 老客户端不认识此前缀，只会把它当成不认识的供应商藏起来，不会派到本机同名供应商。
+ */
+const PROVIDER_SHARE_FAVORITE_PREFIX = "provider-share-favorite:";
+export interface ProviderShareFavoriteSource {
+  shareId: string;
+  memberId: string;
+  providerId: string;
+  owner: { region: "cn" | "global" };
+}
+export function providerShareFavoriteSource(source: ProviderShareFavoriteSource): string {
+  const key = PROVIDER_SHARE_FAVORITE_PREFIX + JSON.stringify([
+    source.shareId, source.memberId, source.providerId, source.owner.region,
+  ]);
+  if (!source.shareId || !source.memberId || !source.providerId
+    || key.length > PROVIDER_SHARE_FAVORITE_SOURCE_MAX_LENGTH)
+    throw new Error("Invalid shared favorite source");
+  return key;
+}
+export function parseProviderShareFavoriteSource(value: string): {
+  shareId: string; memberId: string; providerId: string; region: "cn" | "global";
+} | null {
+  if (!value.startsWith(PROVIDER_SHARE_FAVORITE_PREFIX)) return null;
+  try {
+    const parts: unknown = JSON.parse(value.slice(PROVIDER_SHARE_FAVORITE_PREFIX.length));
+    if (!Array.isArray(parts) || parts.length !== 4
+      || !parts.every((part) => typeof part === "string" && part.length > 0)
+      || (parts[3] !== "cn" && parts[3] !== "global"))
+      return null;
+    return { shareId: parts[0], memberId: parts[1], providerId: parts[2], region: parts[3] };
+  } catch {
+    return null;
+  }
+}
+/** 收藏通道能往返的分享来源键。更长的键 Desktop 本机仍可存，但手机会整表读失败，所以不提供星标。 */
+export function providerShareFavoriteWireKey(source: ProviderShareFavoriteSource): string | null {
+  try {
+    const key = providerShareFavoriteSource(source);
+    return key.length <= MODEL_FAVORITE_TEXT_MAX_LENGTH ? key : null;
   } catch {
     return null;
   }

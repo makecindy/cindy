@@ -1,5 +1,5 @@
 import { BrowserWindow, type IpcMainInvokeEvent } from 'electron';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import type { ReviewArtifactConfirmationItem } from './reviewArtifactAuthorization.js';

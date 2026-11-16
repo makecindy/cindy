@@ -11,7 +11,7 @@ import { GhostFsSlot } from '../../cindy-brain/fsSlot.js';
 import { GhostPipeDispatcher } from '../../cindy-brain/pipeDispatcher.js';
 import type { GhostPipeToolCall, InstalledGhost } from '../../../shared/ghost.js';
 import { installedGhostStoragePart, resolveInstalledGhost } from '../../../shared/pluginIdentity.js';
-import { SchedulerScriptCapabilityBroker } from '../script-capability-broker';
+import { SchedulerScriptCapabilityBroker } from '../script-capability-broker.desktop';
 
 const sendToSessionMock = vi.hoisted(() => vi.fn());
 const restoreArchivedSessionForSend = vi.hoisted(() => vi.fn());

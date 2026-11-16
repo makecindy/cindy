@@ -21,6 +21,7 @@ import {
 
 /**
  * @param {{
+ *   ownerId?: string, passportId?: string,
  *   store: {read(key: string): string | null, write(key: string, value: string): void, remove(key: string): void},
  *   refresh(refreshToken: string): Promise<{accessToken: string, refreshToken?: string}>,
  *   logout(accessToken: string): Promise<void>,

@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 
 import { BILLING_INVOKE } from '../../../shared/billing.js';
-import { ServerApiError } from '../../serverApiClient.js';
+import { ServerApiError } from '../../serverApiClient.desktop.js';
 import { createBillingHandlers } from '../index.js';
 
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: vi.fn() }));
-vi.mock('../../serverApiClient.js', () => {
+vi.mock('../../serverApiClient.desktop.js', () => {
   class ServerApiError extends Error {
     constructor(
       public readonly code: string,

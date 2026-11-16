@@ -25,6 +25,8 @@ export class SafeStorageUnavailableError extends Error {
 
 /**
  * @typedef {object} CredentialStore
+ * @property {(value: string) => string} encrypt
+ * @property {(value: string) => string} decrypt
  * @property {(key: string) => string | null} read
  * @property {(key: string, value: string) => void} write
  * @property {(key: string) => void} remove

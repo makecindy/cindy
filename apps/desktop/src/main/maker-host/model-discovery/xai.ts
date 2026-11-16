@@ -9,8 +9,8 @@ export { parseXaiAccountModels } from './xai-models.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../../appSessionState.js';
 import { createLogger, type Logger } from '../../logger.js';
 import { setXaiDiscoveredModels, type XaiDiscoveredModel } from '../active-catalog.js';
-import { getGrokAccessToken, hasGrokOAuthLogin, peekGrokAccessToken } from '../grok-oauth-login.js';
-import { outboundFetch } from '../outbound-fetch.js';
+import { getGrokAccessToken, hasGrokOAuthLogin, peekGrokAccessToken } from '../grok-oauth-login.desktop.js';
+import { outboundFetch } from '../outbound-fetch.desktop.js';
 import { invalidateXaiBridgeAuth } from '../xai-auth-invalidation-host.js';
 import type {
   XaiBridgeAuthFailure,

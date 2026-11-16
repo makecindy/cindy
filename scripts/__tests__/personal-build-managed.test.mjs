@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseManifest, queueRequest, runtimeEnv, toolBundle } from '../personal-build/managed.mjs';
 import { checkCheckout } from '../personal-build/checkout-guard.mjs';
 import { run } from '../personal-build.mjs';
@@ -60,8 +60,27 @@ test('deployed bundle is self-contained and paths with spaces survive dispatch',
   const root = temp(t), bundle = path.join(root, 'tool bundle'); toolBundle(bundle);
   const help = run(process.execPath, [path.join(bundle, 'personal-build.mjs'), 'help'], root);
   assert.match(help, /sync-plugins/);
+  // Deployed tools retain the real classifier even when an old release has no guard code.
+  const guard=run(process.execPath,['--input-type=module','-e',
+    `const m=await import(process.argv[1]);m.assertNoRestartTargets([], '/old/release', ['/old/release']);
+     const p={pid:42,command:'/Applications/Cindy.app/Contents/MacOS/Electron /old/release/apps/desktop'};
+     try {m.assertNoRestartTargets([p].filter(p=>m.isRepositoryDesktopDevProcess(p,['/old/release'])), '/old/release',['/old/release']);process.exitCode=1;}
+     catch(e){if(!e.message.includes('occupied checkout'))throw e;console.log('protected');}`,
+    pathToFileURL(path.join(bundle,'restart-desktop-remote.mjs')).href],root);
+  assert.equal(guard,'protected');
   const c = { name: 'fixture', region: 'global', app: { checkout: root, repository: 'example/app' }, runtime: { clientDir: path.join(root, 'app [test]'), stagingDir: 'stage', stateDir: 'state', dataDir: 'data', node: process.execPath, mode: 'shared', toolPaths: [], idleMinutes: 120 } };
-  const env = runtimeEnv(c, path.join(root, 'config file.json'));
+  const oldRouting = [process.env.CINDY_PERSONAL_MONITOR_DIR,process.env.CINDY_PERSONAL_GENERATION];
+  process.env.CINDY_PERSONAL_MONITOR_DIR='/inherited-monitor';process.env.CINDY_PERSONAL_GENERATION='inherited-generation';
+  let env;
+  try {
+    env = runtimeEnv(c, path.join(root, 'config file.json'));
+    assert.equal(env.CINDY_PERSONAL_MONITOR_DIR,undefined);
+    assert.equal(env.CINDY_PERSONAL_GENERATION,undefined);
+  } finally {
+    for(const [i,key] of ['CINDY_PERSONAL_MONITOR_DIR','CINDY_PERSONAL_GENERATION'].entries()) {
+      if(oldRouting[i]===undefined)delete process.env[key];else process.env[key]=oldRouting[i];
+    }
+  }
   assert.equal(env.PERSONAL_CONFIG, path.join(root, 'config file.json'));
   assert.ok(new RegExp(env.PERSONAL_ELECTRON_RE).test(path.join(c.runtime.clientDir, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')));
 });
@@ -94,7 +113,8 @@ test('real engine stages, preserves edits, switches, rolls back and blocks parti
   git('worktree', 'add', '--detach', client, previous);
   put(path.join(bin, 'pnpm'), '#!/bin/sh\n[ "${CHECK_FAIL:-}" != 1 ]\n'); fs.chmodSync(path.join(bin, 'pnpm'), 0o755);
   const tools = path.resolve(here, '../personal-build');
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PERSONAL_STATE_DIR: state, PERSONAL_SOURCE_DIR: source, PERSONAL_CLIENT_DIR: client, PERSONAL_STAGING_DIR: path.join(root, 'stage'), PERSONAL_DATA_DIR: data, PERSONAL_PREVIOUS_REF: 'personal-build/fixture/previous', PERSONAL_TARGET: target, PERSONAL_MODE: 'shared', PERSONAL_TOOLS_DIR: tools };
+  // ZDOTDIR keeps the developer's ~/.zshenv from putting a real pnpm ahead of the stub.
+  const env = { ...process.env, ZDOTDIR: root, PATH: `${bin}:${process.env.PATH}`, PERSONAL_STATE_DIR: state, PERSONAL_SOURCE_DIR: source, PERSONAL_CLIENT_DIR: client, PERSONAL_STAGING_DIR: path.join(root, 'stage'), PERSONAL_DATA_DIR: data, PERSONAL_PREVIOUS_REF: 'personal-build/fixture/previous', PERSONAL_TARGET: target, PERSONAL_MODE: 'shared', PERSONAL_TOOLS_DIR: tools };
   const engine = (mode, extra = {}) => spawnSync('zsh', [path.join(tools, 'mac-engine.zsh'), mode], { env: { ...env, ...extra }, encoding: 'utf8' });
   let result = engine('stage'); assert.equal(result.status, 0, result.stdout + result.stderr);
   put(path.join(root, 'stage/file'), 'staging edit'); assert.notEqual(engine('stage').status, 0); assert.equal(fs.readFileSync(path.join(root, 'stage/file'), 'utf8'), 'staging edit');

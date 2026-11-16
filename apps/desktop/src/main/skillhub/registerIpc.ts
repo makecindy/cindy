@@ -4,7 +4,7 @@ import { remoteResourceRegistry } from '../device-link/remoteResourceRegistry';
 import { REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
 import { tapWindowBroadcast, getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap';
 import fs from 'node:fs';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate';
 import { isCindyLearnSkillEnabledForListing, setCindySkillEnabled } from './activationPreferences';
 import { isLocalSkillTargetCurrent, isPluginManagedSkillPath, type LocalSkillTarget } from './localSkillTarget';
@@ -31,7 +31,7 @@ import type { SkillhubPublishComparisonParams, SkillhubPublishComparison } from 
 import { type MdKind, parseAndValidateFrontmatter } from './frontmatterValidation';
 import * as importLocalSkill from './importLocalSkill';
 import * as installService from './installService';
-import { ServerApiError } from '../serverApiClient';
+import { ServerApiError } from '../serverApiClient.desktop';
 import { SkillhubMarketService, skillhubIpcError } from './marketService';
 import type { PublishParams, PublishProgressEvent } from './publishService';
 import { SkillPublishService } from './publishService';

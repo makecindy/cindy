@@ -6,7 +6,7 @@
  * and lazy details as desktop.
  */
 
-import { and, asc, desc, eq, gt, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
 import { createHistoryViewReader } from '../../../desktop/src/main/localDb/ipc/historyViewReader.js';
 import { messageToCamel } from '../../../desktop/src/main/localDb/mapper.js';
 import { messages as messageTable, sessions as sessionTable } from '../../../desktop/src/main/localDb/schema.js';
@@ -57,7 +57,7 @@ export async function readMessagesList(sessionId: string, opts: HistoryListOptio
     if (row) afterCursor = row;
   }
 
-  const conds = [
+  const conds: Array<SQL | undefined> = [
     eq(messageTable.sessionId, sessionId),
     isNull(messageTable.rewindAt),
   ];

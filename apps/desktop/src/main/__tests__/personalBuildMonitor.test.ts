@@ -2,12 +2,36 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createPersonalBuildMonitor } from '../personalBuildMonitor.js';
+import { createPersonalBuildMonitor, consumePersonalMonitorEnvironment } from '../personalBuildMonitor.js';
 
 // Unit tier through the actual monitor tick and real temporary files. No existing test exercises
 // developer supervisor quit requests. A stale pid/generation or activity beginning during await
 // must not authorize quitting. No real user profile, Electron process, timers or credentials.
 describe.runIf(process.platform === 'darwin')('personal build host handoff', () => {
+  it('consumes routing before child spawn and refuses a second writer for the same generation', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'personal-owner-'));
+    try {
+      const generation = '11111111-1111-1111-1111-111111111111';
+      const env = { CINDY_PERSONAL_MONITOR_DIR: directory, CINDY_PERSONAL_GENERATION: generation, KEEP: 'value' };
+      expect(consumePersonalMonitorEnvironment(env)).toEqual({ directory, generation });
+      expect({ ...env }).toEqual({ KEEP: 'value' });
+      expect(consumePersonalMonitorEnvironment(env)).toBeNull();
+      const deps = { directory, generation, pid: 42, now: () => 1000,
+        ready: () => true, remoteReady: () => true, idle: () => false, quitting: () => false,
+        busy: async () => true, quit: () => { throw new Error('unexpected quit'); } };
+      const owner = createPersonalBuildMonitor(deps);
+      await owner();
+      const before = fs.readFileSync(path.join(directory, 'heartbeat.json'), 'utf8');
+      const child = createPersonalBuildMonitor({ ...deps, pid: 43, busy: async () => false });
+      await child();
+      expect(fs.readFileSync(path.join(directory, 'heartbeat.json'), 'utf8')).toBe(before);
+      await owner();
+      expect(JSON.parse(before)).toMatchObject({ pid: 42, busy: true });
+      fs.unlinkSync(path.join(directory, 'host-owner.json'));
+      await createPersonalBuildMonitor({ ...deps, pid: 44 })();
+      expect(fs.readFileSync(path.join(directory, 'heartbeat.json'), 'utf8')).toBe(before);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
   it('requires a fresh supervisor plugin request, waits for idle, and records a single application result', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'personal-plugin-monitor-'));
     try {

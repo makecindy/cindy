@@ -18,10 +18,12 @@ import { buildReviewGroups, SetupMigrationDialog } from '../SetupMigrationDialog
 import { SetupMigrationHost } from '../SetupMigrationHost';
 import { SetupMigrationSection } from '@/components/settings/SetupMigrationSection';
 import { closeSetupMigration, openSetupMigration } from '../setupMigrationStore';
+import { closeFirstRunGuide, getFirstRunGuideState } from '@/features/first-run-guide/firstRunGuideStore';
 
-const confirmSuggestion = vi.hoisted(() => vi.fn(async () => true));
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ mode: 'cloud', dataOwnerId: 'owner', isAuthenticated: true }) }));
-vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: confirmSuggestion }) }));
+const signedIn = { mode: 'cloud', dataOwnerId: 'owner', isAuthenticated: true, isInitializing: false };
+const signedOut = { mode: 'signed-out', dataOwnerId: null, isAuthenticated: false, isInitializing: false };
+const auth = vi.hoisted(() => ({ current: null as unknown }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => auth.current ?? signedIn }));
 vi.mock('../SetupMigrationWalkthroughBar', () => ({ SetupMigrationWalkthroughBar: () => null }));
 
 const createCustomProvider = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
@@ -38,8 +40,10 @@ vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar: () => {} }));
 afterEach(() => {
   vi.useRealTimers();
   act(() => closeSetupMigration());
+  closeFirstRunGuide();
   cleanup();
   translation.t = (key) => key;
+  auth.current = null;
 });
 
 const plan: SetupMigrationPlan = {
@@ -106,6 +110,7 @@ function installApi() {
     })),
     state: vi.fn(),
     dismiss: vi.fn(),
+    firstRunGuide: vi.fn(async () => ({ show: true, migration: true, legacyMigrated: false })),
     onProgress: vi.fn(() => () => {}),
     host: { ready: vi.fn(), reply: vi.fn(), onRequest: vi.fn(() => () => {}) },
   };
@@ -296,23 +301,43 @@ it('shows a handled MCP failure without retrying renderer creation', async () =>
   expect(screen.getByText('setupMigration.failure.PERMISSION_DENIED')).toBeTruthy();
 });
 
-// Settings-only entry regression, component tier. Old tests entered via a suggested ID.
-// Smallest counterexamples: a login with one suggestion, or one selectable source.
-// Real Host/Dialog paths; fake IPC and clock.
-it('never offers migration on login or remount, while keeping the preferences host ready', async () => {
+// Rule: first-run-guide.md §2 (when the guide is shown). Component tier, real Host; fake IPC and clock.
+// Counterexamples: a session restored at startup must stay quiet (an upgrade is not a first
+// sign-in); a sign-in made in this run asks Main once and hands its answer to the guide.
+it('stays quiet for a session restored at startup, while keeping the preferences host ready', async () => {
   const { setupMigration } = installApi();
-  setupMigration.state.mockResolvedValue({ suggestion: { deviceId: 'd1', name: 'Mac mini' }, lastRun: null });
-  confirmSuggestion.mockClear();
   vi.useFakeTimers();
   const first = render(<SetupMigrationHost />);
   await act(async () => { await vi.advanceTimersByTimeAsync(7000); });
   first.unmount();
   render(<SetupMigrationHost />);
   await act(async () => { await vi.advanceTimersByTimeAsync(7000); });
-  expect(confirmSuggestion).not.toHaveBeenCalled();
-  expect(setupMigration.preview).not.toHaveBeenCalled();
-  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(setupMigration.firstRunGuide).not.toHaveBeenCalled();
+  expect(getFirstRunGuideState().open).toBe(false);
   expect(setupMigration.host.ready).toHaveBeenCalledTimes(2);
+});
+
+it('opens the get-started guide once after a sign-in, on the path Main decided', async () => {
+  const { setupMigration } = installApi();
+  vi.useFakeTimers();
+  auth.current = signedOut;
+  const view = render(<SetupMigrationHost />);
+  auth.current = signedIn;
+  view.rerender(<SetupMigrationHost />);
+  expect(setupMigration.firstRunGuide).not.toHaveBeenCalled();
+  await act(async () => { await vi.advanceTimersByTimeAsync(7000); });
+  expect(setupMigration.firstRunGuide).toHaveBeenCalledTimes(1);
+  expect(getFirstRunGuideState()).toMatchObject({ open: true, manual: false, migration: true, legacyMigrated: false });
+  // The guide leads; the assistant itself opens only from the guide's migration step.
+  expect(screen.queryByRole('dialog')).toBeNull();
+  // Signing out and back in during the same run does not ask again.
+  closeFirstRunGuide();
+  auth.current = signedOut;
+  view.rerender(<SetupMigrationHost />);
+  auth.current = signedIn;
+  view.rerender(<SetupMigrationHost />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(7000); });
+  expect(setupMigration.firstRunGuide).toHaveBeenCalledTimes(1);
 });
 
 it('requires a fresh explicit selection on every open, even with only one source', async () => {
@@ -336,7 +361,7 @@ it('requires a fresh explicit selection on every open, even with only one source
 // migration must not read another device. Earlier Host-only coverage missed entry wiring.
 it('opens only from the Settings action and can cancel without reading a source', async () => {
   const { setupMigration } = installApi();
-  setupMigration.state.mockResolvedValue({ suggestion: { deviceId: 'd1', name: 'Mac mini' }, lastRun: null });
+  setupMigration.state.mockResolvedValue({ lastRun: null });
   render(<><SetupMigrationSection /><SetupMigrationHost /></>);
   await waitFor(() => expect(setupMigration.state).toHaveBeenCalled());
   expect(screen.queryByRole('dialog')).toBeNull();

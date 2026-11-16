@@ -15,7 +15,7 @@ import type { FileHandle } from 'node:fs/promises';
 import { Transform, type Readable } from 'node:stream';
 import { request, type Dispatcher } from 'undici';
 
-import { resolveOutboundDispatcher } from '../maker-host/outbound-fetch.js';
+import { resolveOutboundDispatcher } from '../maker-host/outbound-fetch.desktop.js';
 import { PLUGIN_PUBLISHER_UPLOAD_TTL_MS } from './types.js';
 
 export const PLUGIN_PUBLISHER_PUT_STALL_TIMEOUT_MS = 60_000;

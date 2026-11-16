@@ -24,7 +24,6 @@ import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
 import { extractIpcError } from '@/utils/ipcError';
 import { cn } from '@/lib/utils';
 import { BotModelChainEditor } from './BotModelChainEditor';
-import { BotTaskModelEditor } from './BotTaskModelEditor';
 import { BotPortraitPicker } from './BotPortraitPicker';
 import { BotAvatar } from './BotAvatar';
 import { isManagedBotAvatarUrl, isSupportedBotAvatarValue } from '../../../shared/botAvatarValue';
@@ -411,6 +410,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted, initialPage 
   const fields = (item: SettingsPanel) =>
     item.action?.fields?.map((field) => {
       const id = `remote-bot-${field.id}`;
+      // An older host still lists the retired task model fields; they are not shown and go back unchanged.
       if (['modelChain', 'taskModel', 'taskFollowsPrimary', 'confirmName'].includes(field.id)) return null;
       const change = (value: string | boolean) => {
         if (!disabled && !revisionPendingRef.current)
@@ -568,16 +568,6 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted, initialPage 
               }));
           }}
         />
-        {item.action?.fields?.some(field => field.id === 'taskModel') &&
-          <BotTaskModelEditor deviceId={bot.deviceId} disabled={disabled}
-            value={draft.taskFollowsPrimary === true ? null : readRemoteBotModelChain(draft.taskModel)[0] ?? null}
-            inheritedRoute={readRemoteBotModelChain(draft.modelChain)[0]}
-            onChange={route => {
-              if (!disabled && !revisionPendingRef.current) setDraft(previous => ({ ...previous,
-                taskFollowsPrimary: route === null,
-                taskModel: serializeModelRoutes(route ? [route] : readRemoteBotModelChain(previous.modelChain).slice(0, 1)),
-              }));
-            }} />}
         </>
       ) : null}
       <Button

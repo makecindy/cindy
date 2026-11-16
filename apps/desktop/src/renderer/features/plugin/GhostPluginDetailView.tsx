@@ -2,7 +2,10 @@ import { getPluginToolUi } from '@cindy/plugin-protocol';
 import { pluginHasToolUi } from '@cindy/plugin-protocol';
 import type { PreparedPluginContribution } from '../../../shared/pluginContributions';
 import { PluginShareButton } from './PluginShareButton';
+import { PluginUiMenu } from '@/cindy-brain/PluginUiContributions';
+import { permissionItemDetail } from '../../../shared/ghostPermissionDetail';
 import { Button } from '@/components/ui/button';
+import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
 import { GithubAccountCard } from '@/features/cc-agent/GithubAccountCard';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
@@ -492,9 +495,10 @@ export function GhostPluginDetailView({
                       reloadKey={githubConnectionVersion}
                       account={
                         hasGithubConnection ? (
-                          <GithubAccountCard
-                            onConnected={() => setGithubConnectionVersion((version) => version + 1)}
-                          />
+                          <div>
+                            <GithubAccountCard onConnected={() => setGithubConnectionVersion((version) => version + 1)} />
+                            {ghost.manifest.id === 'cindy-github' && ghost.namespace === null && <GithubAppCard />}
+                          </div>
                         ) : undefined
                       }
                       ghost={ghost}
@@ -556,6 +560,7 @@ export function GhostPluginDetailView({
 
         {detail.permissions.length > 0 ? <PermissionSummary items={detail.permissions} /> : null}
         {ghost && pluginHasToolUi(ghost.manifest) && <section className="mt-4 space-y-3">
+          {!remote && <PluginUiMenu ghostId={detail.id} />}
           <h3 className="text-14 font-medium text-[var(--text-primary)]">{t('settings.ghosts.perm.mcpUi')}</h3>
           {ghost.manifest.tools?.filter(tool => getPluginToolUi(ghost.manifest)?.tools[tool.name]).map(tool => <div key={tool.name} className="text-13 text-[var(--text-secondary)]">
             <p>{tool.name}</p>
@@ -932,7 +937,7 @@ export function PermissionSummary({ items }: { items: readonly GhostPermissionIt
           key: item.key,
           title: t('settings.ghosts.perm.' + item.labelKey, item.labelArgs),
           descriptions: [
-            item.detailKey ? t('settings.ghosts.perm.' + item.detailKey, item.detailArgs) : '',
+            permissionItemDetail(item, t) ?? '',
             item.detail ?? '',
           ].filter(Boolean),
           icon: permissionItemIcon(item),

@@ -21,6 +21,7 @@
  * 截断工具与常量。
  */
 
+import { imText } from './imText';
 // 只做 type-only 依赖: 本模块被 hook-control/interactions 复用, 那条链路刻意
 // 不在运行期加载 maker-core barrel(session-runner 单测按最小面 mock 该包)。
 import type {
@@ -49,8 +50,10 @@ export const BTN_LABEL_MAX = 30;
  */
 export const HOOK_PERMISSION_INPUT_SUMMARY_MAX = 600;
 export const IM_PERMISSION_INPUT_PREVIEW_MAX = 800;
-/** 无选项降级时唯一按钮的文案(两侧一致)。 */
-export const ASK_CONTINUE_LABEL = '继续';
+/** 无选项降级时唯一按钮的文案(两侧一致, 跟随界面语言)。 */
+export function askContinueLabel(): string {
+  return imText('imBot.text.shared.card.askContinue');
+}
 /**
  * 把打勾卡勾选结果编成 answers value。
  *
@@ -88,7 +91,7 @@ export function formatAskAnswersForDisplay(answers: Record<string, string>): str
 /** IM 卡片截断: 折行后追加「…(已截断)」(卡片正文有排版空间)。 */
 export function truncateBlock(s: string, max: number): string {
   if (!s) return '';
-  return s.length > max ? `${s.slice(0, max)}\n\n…(已截断)` : s;
+  return s.length > max ? `${s.slice(0, max)}\n\n${imText('imBot.text.shared.card.truncated')}` : s;
 }
 
 /** hook 卡片截断: 单行省略号(标题 / 单行摘要用)。 */
@@ -303,7 +306,7 @@ export function composeInteractionModel(req: InteractionRequest): InteractionMod
               {
                 choiceId: 'ask:continue',
                 index: 0,
-                label: ASK_CONTINUE_LABEL,
+                label: askContinueLabel(),
                 answerText: '',
                 style: 'default',
                 decision: buildAskAnswerDecision(question.question, ''),
