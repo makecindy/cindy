@@ -2925,10 +2925,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         currentDisabledSkillLaunchPaths(disabledSkillLaunch),
       )
       : {};
-    const buildSettings = (): Settings => {
+    const buildSettings = (availableModels: string[]): Settings => {
       const settings = buildClaudeFlagSettings({
         showThinkingSummaries,
-        availableModels: currentAvailableSdkModels(mutableModel),
+        availableModels,
         // Bots keep memory in their own Cindy scope, including remote sessions.
         // For ordinary sessions, do not carry native-memory suppression across the
         // SSH boundary: the remote host retains its own Claude memory
@@ -3747,13 +3747,23 @@ export class ClaudeCodeAgent extends BaseAgent {
       forkSession?: boolean;
       permissionMode?: SdkPermissionMode;
       fresh?: boolean;
-    }): Promise<Query> => {
+    }, runtimeSnapshot?: QueryRuntimeSnapshot): Promise<Query> => {
       // 会话中途重建(rewind / 追加目录 / resume 恢复等)同样会让新 CLI 进程重读工作区设置。
       if (nativeCliAuth) {
         const override = await findWorkspaceSettingsOverride(opts.workingDir);
         if (override) throw new Error(workspaceSettingsOverrideMessage(override));
       }
-      const currentSdkModel = sdkModelFor(mutableModel);
+      const currentModel = mutableModel;
+      const currentProviderId = mutableProviderId;
+      const currentSdkModel = sdkModelFor(currentModel, currentProviderId);
+      const currentAvailableModels = currentAvailableSdkModels(currentModel, currentProviderId);
+      // Replay must compare against the route frozen into this Query, not the
+      // earlier rebuild request (closing/settings preparation may have awaited).
+      if (runtimeSnapshot) {
+        runtimeSnapshot.model = currentModel;
+        runtimeSnapshot.providerId = currentProviderId;
+        runtimeSnapshot.sdkModel = currentSdkModel;
+      }
       const workingWindow = resolveModelContextWindow(mutableModel);
       appliedContextWindow = workingWindow;
       applyClaudeContextWindow(env, workingWindow, getAutoCompactThresholdPct());
@@ -3972,7 +3982,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             ...(currentSdkEffort ? { effort: currentSdkEffort } : {}),
             // settings 对象跟本地分支同源 — 不透传则远端 SDK 拿不到
             // showThinkingSummaries / autoMemoryEnabled, 远端行为跟本地分歧。
-            settings: buildSettings(),
+            settings: buildSettings(currentAvailableModels),
             // settingSources 跟本地分支同源透传:远端 cc CLI 会读用户在远端机器
             // 上的 ~/.claude / 项目 .claude / cwd-local 三层 settings 文件 (slash
             // commands / output styles / hooks / per-project model 等)。不透传
@@ -4446,14 +4456,14 @@ export class ClaudeCodeAgent extends BaseAgent {
         }) : undefined;
       // 设置对象的落盘时间放在 spawn 前: 内容要跟着本次 Query 的输出上限 / 白名单快照,
       // 提前算会把上一代的 env 与模型清单写进文件。见 createLocalQueryArgs 处。
-      let localClaudeSettingsOption: () => string | Settings = () => buildSettings();
+      let localClaudeSettingsOption: () => string | Settings = () => buildSettings(currentAvailableModels);
       const prepareFlagSettings = async (): Promise<void> => {
         // 短设置仍内联, 与既有行为逐字节一致。超限才写临时文件。同一会话复用一份
         // 文件, 重建时按当前设置重写 (热切白名单另走 applyFlagSettings, 不依赖它)。
         // 落盘失败时托管技能插件已经铺好暂存目录, 而此刻启动清理 try 都还没进来 ——
         // 必须在这里先把它拆掉, 否则整份暂存目录会残留。
         const flagSettingsDelivery = await materializeClaudeFlagSettings(
-          buildSettings(),
+          buildSettings(currentAvailableModels),
           flagSettingsFile ?? undefined,
         ).catch(async (error: unknown) => {
           if (managedPlugins) {
@@ -6375,6 +6385,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       const runtimeSnapshot: QueryRuntimeSnapshot = {
         model: mutableModel,
         providerId: mutableProviderId,
+        sdkModel: sdkModelFor(mutableModel, mutableProviderId),
         effort: mutableEffort,
         fastMode: mutableFastMode,
         sdkPermissionMode: currentTurnSdkPermissionMode(),
@@ -6388,7 +6399,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         turnInFlight = true;
       }
       try {
-        q = await buildQuery({ permissionMode: runtimeSnapshot.sdkPermissionMode, fresh: true });
+        q = await buildQuery({ permissionMode: runtimeSnapshot.sdkPermissionMode, fresh: true }, runtimeSnapshot);
         if (closed) {
           // close 在 buildQuery 期间赢了竞态:teardown 只拆得到当时存在的 query,刚建的
           // 替换 query 必须在这里立即关掉,不 startForwardLoop。
@@ -6485,6 +6496,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     type QueryRuntimeSnapshot = {
       model: string;
       providerId: string | null;
+      sdkModel: string;
       effort: Effort;
       fastMode: boolean;
       sdkPermissionMode: SdkPermissionMode;
@@ -6505,41 +6517,42 @@ export class ClaudeCodeAgent extends BaseAgent {
     async function replayRuntimeDrift(snapshot: QueryRuntimeSnapshot, label: string): Promise<void> {
       for (let pass = 0; pass < 5; pass += 1) {
         let replayed = false;
-        if (mutableModel !== snapshot.model) {
+        const targetModel = mutableModel;
+        const targetProviderId = mutableProviderId;
+        const targetSdkModel = sdkModelFor(targetModel, targetProviderId);
+        if (targetModel !== snapshot.model || targetProviderId !== snapshot.providerId || targetSdkModel !== snapshot.sdkModel) {
           replayed = true;
-          const targetModel = mutableModel;
           try {
             // 与 live setModel 同序:先扩白名单再切。buildQuery await 期间切到的
             // 目录外模型,新 Query 的启动名单还是旧快照,直接 setModel 会撞组织限制。
             await q.applyFlagSettings({
-              availableModels: currentAvailableSdkModels(targetModel),
+              availableModels: currentAvailableSdkModels(targetModel, targetProviderId),
             });
-            await q.setModel(sdkModelFor(targetModel));
+            await q.setModel(targetSdkModel);
             snapshot.model = targetModel;
+            snapshot.providerId = targetProviderId;
+            snapshot.sdkModel = targetSdkModel;
             log.debug(`${label}: replayed setModel`, { model: targetModel });
             // 新 Query 的档位按旧模型构建;切模漂移时同 live setModel 一样按目标路由重下发。
             const targetEffort = mutableEffort;
-            const targetProviderId = mutableProviderId;
             await applyRouteEffort(targetModel, targetEffort, targetProviderId);
             snapshot.effort = targetEffort;
-            snapshot.providerId = targetProviderId;
           } catch (e) {
             log.warn(`${label}: replay setModel failed`, { error: String(e) });
           }
         }
-        // 同一 model ID 换来源(受阻 setModel 只改 mutableProviderId)时档位能力也可能不同。
-        if (mutableEffort !== snapshot.effort || mutableProviderId !== snapshot.providerId) {
+        // Only a successful model replay advances the route. Effort replay must
+        // not consume provider drift after a failed whitelist/model request.
+        if (mutableEffort !== snapshot.effort) {
           replayed = true;
           const targetEffort = mutableEffort;
-          const targetProviderId = mutableProviderId;
           try {
-            await applyRouteEffort(mutableModel, targetEffort, targetProviderId);
+            await applyRouteEffort(snapshot.model, targetEffort, snapshot.providerId);
             log.debug(`${label}: replayed setEffort`, { effort: targetEffort });
           } catch (e) {
             log.warn(`${label}: replay setEffort failed`, { error: String(e) });
           }
           snapshot.effort = targetEffort;
-          snapshot.providerId = targetProviderId;
         }
         if (mutableFastMode !== snapshot.fastMode) {
           replayed = true;
@@ -6587,6 +6600,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const runtimeSnapshot: QueryRuntimeSnapshot = {
           model: mutableModel,
           providerId: mutableProviderId,
+          sdkModel: sdkModelFor(mutableModel, mutableProviderId),
           effort: mutableEffort,
           fastMode: mutableFastMode,
           sdkPermissionMode: currentTurnSdkPermissionMode(),
@@ -6615,7 +6629,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           q = await buildQuery({
             permissionMode: runtimeSnapshot.sdkPermissionMode,
             fresh: true,
-          });
+          }, runtimeSnapshot);
           if (signal?.aborted) {
             inputQueue.end();
             rewindTransitionQueries.add(q);
@@ -6937,12 +6951,20 @@ export class ClaudeCodeAgent extends BaseAgent {
           }
           const forkSourceId = durableSdkSessionId;
           const sourceSdkSessionId = sdkSessionId;
+          runtimeReplaySnapshot = {
+            model: snapModel,
+            providerId: snapProviderId,
+            sdkModel: sdkModelFor(snapModel, snapProviderId),
+            effort: snapEffort,
+            fastMode: snapFastMode,
+            sdkPermissionMode: snapSdkPermissionMode,
+          };
           for (;;) {
             q = await buildQuery({
               ...(directoryGrantRebuild ? {} : { resumeSessionAt: resumeAt }),
               forkSession: true,
               permissionMode: snapSdkPermissionMode,
-            });
+            }, runtimeReplaySnapshot);
             if (resolveMaxOutputTokens(mutableModel) === appliedMaxOutputTokens || sendOpts?.signal?.aborted || closed) break;
             // Native MCP selection can still await after spawn. A setter in
             // that window must rebuild before this send reaches the old env.
@@ -6986,13 +7008,6 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 新 forward loop 是 async 任务, 在本同步段之后才起跑, 不会误读到 true。
           pendingRewindTo = undefined;
           clearBridgeState();
-          runtimeReplaySnapshot = {
-            model: snapModel,
-            providerId: snapProviderId,
-            effort: snapEffort,
-            fastMode: snapFastMode,
-            sdkPermissionMode: snapSdkPermissionMode,
-          };
           await replayRuntimeDrift(runtimeReplaySnapshot, 'rewind rebuild');
           if (sendOpts?.signal?.aborted) {
             rollbackUnacceptedFork();

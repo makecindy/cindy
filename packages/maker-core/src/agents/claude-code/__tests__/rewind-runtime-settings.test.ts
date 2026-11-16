@@ -639,6 +639,98 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     } finally { await handle.close(); }
   });
 
+  // #10716 / PR #10761: startSession → rewind → send must replay the actual SDK
+  // route before accepting input. Existing alias tests only switched a live Query;
+  // the minimum missed input is the same glm-5.3 ID changing provider while SDK
+  // creation or MCP preparation is deferred. Unit variants cover wire-only drift,
+  // a second switch during whitelist replay, and a rejected model request that
+  // must not consume drift.
+  it.each(['provider-only', 'wire-only', 'provider-during-replay', 'model-replay-rejected', 'mcp-preparation'] as const)(
+    'keeps the rebuilt SDK model and allowlist on the accepted route (%s)',
+    async (drift) => {
+      let supportsAlias = true;
+      const model = 'glm-5.3';
+      const resolveChoices = vi.fn(async () => ({ skipHostServers: [], denyNativeServers: [] }));
+      const { handle, firstQuery } = await startRewindableSession({
+        model,
+        providerId: 'provider-a',
+        availableModels: [{
+          id: model, displayName: model, contextWindow: 1_048_576,
+          efforts: ['low', 'high', 'xhigh'], defaultEffort: 'high',
+        }],
+        resolveClaudeSdkModelMetadata: (provider) => ({
+          contextWindow: 1_048_576,
+          supportsOneMillionSuffix: provider === 'provider-a' && supportsAlias,
+        }),
+        resolveModelEfforts: (provider) => provider === 'provider-b' ? ['low'] : ['low', 'high', 'xhigh'],
+        resolveLocalMcpDuplicateChoices: resolveChoices,
+      });
+      const secondQuery = createFakeQuery();
+      const { promise: rebuild, resolve: resolveRebuild } = Promise.withResolvers<typeof secondQuery>();
+      const { promise: preparation, resolve: releasePreparation } = Promise.withResolvers<void>();
+      const { promise: preparationEntered, resolve: enterPreparation } = Promise.withResolvers<void>();
+      try {
+        await handle.commitRewindFiles?.('user-model-route', 'assistant-model-route');
+        sdkMock.query.mockImplementationOnce(() => rebuild as unknown as typeof secondQuery);
+        if (drift === 'mcp-preparation') {
+          resolveChoices.mockImplementationOnce(async () => {
+            enterPreparation();
+            await preparation;
+            return { skipHostServers: [], denyNativeServers: [] };
+          });
+        }
+        const send = handle.send({ type: 'user', content: 'continue on the selected provider' });
+        if (drift === 'mcp-preparation') await preparationEntered;
+        else await vi.waitFor(() => expect(sdkMock.query).toHaveBeenCalledTimes(2));
+
+        if (drift === 'wire-only') supportsAlias = false;
+        await handle.setModel?.(model, { providerId: drift === 'wire-only' ? 'provider-a' : 'provider-b' });
+        await handle.setEffort?.('xhigh');
+        await handle.setFastMode?.(true);
+        await handle.setPermissionMode?.('ask');
+        expect(firstQuery.setModel).not.toHaveBeenCalled();
+        if (drift === 'provider-during-replay') {
+          secondQuery.applyFlagSettings.mockImplementationOnce(async () => {
+            await handle.setModel?.(model, { providerId: 'provider-a' });
+          });
+        } else if (drift === 'model-replay-rejected') {
+          secondQuery.setModel.mockRejectedValueOnce(new Error('temporary model request failure'));
+        }
+        releasePreparation();
+        if (drift === 'mcp-preparation') await vi.waitFor(() => expect(sdkMock.query).toHaveBeenCalledTimes(2));
+        expect(sdkMock.query.mock.calls[1][0].options.model).toBe('glm-5.3[1m]');
+        expect(sdkMock.query.mock.calls[1][0].options.settings.availableModels).toEqual(['glm-5.3[1m]']);
+        resolveRebuild(secondQuery);
+        await send;
+
+        const expectedWireModels = drift === 'provider-during-replay'
+          ? ['glm-5.3', 'glm-5.3[1m]']
+          : drift === 'model-replay-rejected' ? ['glm-5.3', 'glm-5.3'] : ['glm-5.3'];
+        expect(secondQuery.setModel.mock.calls).toEqual(expectedWireModels.map((wireModel) => [wireModel]));
+        const allowlistCalls = secondQuery.applyFlagSettings.mock.calls
+          .map(([settings], index) => ({ settings, order: secondQuery.applyFlagSettings.mock.invocationCallOrder[index] }))
+          .filter(({ settings }) => 'availableModels' in settings);
+        expect(allowlistCalls.map(({ settings }) => settings))
+          .toEqual(expectedWireModels.map((wireModel) => ({ availableModels: [wireModel] })));
+        for (const [index, call] of allowlistCalls.entries()) {
+          expect(call.order).toBeLessThan(secondQuery.setModel.mock.invocationCallOrder[index]);
+        }
+        const effortCalls = secondQuery.applyFlagSettings.mock.calls
+          .filter(([settings]) => 'effortLevel' in settings);
+        expect(effortCalls.at(-1)).toEqual([{ effortLevel: drift === 'wire-only' || drift === 'provider-during-replay' ? 'xhigh' : 'low' }]);
+        expect(secondQuery.applyFlagSettings).toHaveBeenCalledWith({ fastMode: true });
+        expect(secondQuery.setPermissionMode).toHaveBeenLastCalledWith('default');
+        expect(handle.getEffort?.()).toBe('xhigh');
+        expect(handle.getFastMode?.()).toBe(true);
+        expect(sdkMock.query.mock.calls[1][0].prompt.pending).toBe(1);
+      } finally {
+        releasePreparation();
+        resolveRebuild(secondQuery);
+        await handle.close();
+      }
+    },
+  );
+
   it('keeps a long Claude model catalog off the Windows command line (#9753)', async () => {
     // Windows CreateProcess rejects a command line over 32767 characters. The SDK
     // turns an inline settings object into one `--settings <json>` argument, so a
