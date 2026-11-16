@@ -20,15 +20,17 @@ export async function runProviderSharingRequest(request: ProviderSharingRequest,
     assertCurrent();
     return result;
   };
-  const owned = await call({ action: 'owned', range: 'all' }) as ProviderShareOwnerState;
-  if (!owned.ready) throw new Error('HOST_NOT_READY');
-  const members = owned.shares.filter(share => !request.providerId || share.providerId === request.providerId)
-    .flatMap(share => share.members.map(member => ({
-      shareId: share.shareId, providerId: share.providerId, memberId: member.memberId,
-      name: member.displayName, status: member.status,
-    })));
-  if (request.action === 'members') return { ...scope, members };
-  if (!members.some(member => member.memberId === request.memberId)) throw new Error('NOT_FOUND');
+  if (request.action === 'members') {
+    const owned = await call({ action: 'owned', range: 'all', includeUsage: false }) as ProviderShareOwnerState;
+    if (owned.includeUsage !== false) throw new Error('UNSUPPORTED_CAPABILITY');
+    if (!owned.ready) throw new Error('HOST_NOT_READY');
+    const members = owned.shares.filter(share => !request.providerId || share.providerId === request.providerId)
+      .flatMap(share => share.members.map(member => ({
+        shareId: share.shareId, providerId: share.providerId, memberId: member.memberId,
+        name: member.displayName, status: member.status,
+      })));
+    return { ...scope, members };
+  }
   if (request.action === 'status') {
     await call({ action: 'set-member', memberId: request.memberId, status: request.status });
     return { ...scope, memberId: request.memberId, status: request.status === 'pause' ? 'paused' : 'active',

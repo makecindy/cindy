@@ -25,12 +25,12 @@ it('offers provider share member tools to plugins without a Session and validate
       .toMatchObject({ ok: true, members: [{ memberId: 'member' }] });
     expect(call).toHaveBeenLastCalledWith({ action: 'members', callerSessionId: undefined });
     expect(parsePayload(await server.hostTools.call('set_provider_share_member_status', {
-      device: 'other-computer', providerId: 'anthropic', memberId: 'member', status: 'pause',
+      device: 'other-computer', memberId: 'member', status: 'pause',
     }))).toMatchObject({ ok: true });
     expect(call).toHaveBeenLastCalledWith({ callerSessionId: undefined, action: 'status', device: 'other-computer',
-      providerId: 'anthropic', memberId: 'member', status: 'pause' });
+      memberId: 'member', status: 'pause' });
     expect(parsePayload(await server.hostTools.call('set_provider_share_member_status', {
-      providerId: 'anthropic', memberId: 'member', status: 'remove',
+      memberId: 'member', status: 'remove',
     }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
     expect(parsePayload(await server.hostTools.call('set_provider_share_model_access', {
       providerId: 'anthropic', memberId: 'member', models: ['model-a'], ownerId: 'someone-else',

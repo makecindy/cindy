@@ -40,10 +40,11 @@ const accessMigration = vi.hoisted(() => ({ ids: vi.fn(), keep: vi.fn() }));
 const listProviders = vi.hoisted(() => vi.fn());
 const identityCard = vi.hoisted(() => vi.fn());
 const remember = vi.hoisted(() => vi.fn());
-const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(), referencePricing: vi.fn(), priceOverrides: vi.fn(),
+const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberQuery: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(), referencePricing: vi.fn(), priceOverrides: vi.fn(),
   enqueueDirectCleanup: vi.fn(), listPendingDirectCleanup: vi.fn(), acknowledgeDirectCleanup: vi.fn(),
   actual: null as ReturnType<typeof import('../providerShareUsageStore').createProviderShareUsageStore> | null }));
 const memberNotes = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
+const reshareList = vi.hoisted(() => vi.fn());
 vi.mock('../providerShareQuota.js', () => ({ readProviderShareQuota: vi.fn(), readProviderShareQuotaAccount: vi.fn() }));
 const visibility = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
 const modelAccess = vi.hoisted(() => ({ subscribe: () => () => undefined, read: vi.fn(), set: vi.fn(), allows: vi.fn() }));
@@ -86,7 +87,7 @@ vi.mock('../../usage/providerPartyUsageStore.js', () => ({
 }));
 vi.mock('../providerShareUsageStore.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../providerShareUsageStore.js')>(),
-  getProviderShareUsageStore: () => usageStores.actual ?? ({ history: usageStores.memberHistory, memberTokenSnapshot: usageStores.memberTokenSnapshot,
+  getProviderShareUsageStore: () => usageStores.actual ?? ({ query: usageStores.memberQuery, history: usageStores.memberHistory, memberTokenSnapshot: usageStores.memberTokenSnapshot,
     enqueueDirectCleanup: usageStores.enqueueDirectCleanup,
     listPendingDirectCleanup: usageStores.listPendingDirectCleanup,
     acknowledgeDirectCleanup: usageStores.acknowledgeDirectCleanup }),
@@ -107,6 +108,7 @@ vi.mock('../dispatch.desktop.js', () => ({
 }));
 vi.mock('../providerShareReshare.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../providerShareReshare.js')>(),
+  listProviderShareReshares: reshareList,
   pruneProviderShareReshares: vi.fn(async () => undefined),
 }));
 vi.mock('../providerShareHost.js', () => ({
@@ -118,6 +120,7 @@ vi.mock('../providerShareHost.js', () => ({
   providerShareAccessRevision: vi.fn(), providerShareGuestAccess: vi.fn(), ownedProviderShareGuestAccess: vi.fn(),
   providerShareGuestDenial: vi.fn(), ensureProviderSharePeerKnown: vi.fn(),
   quietProviderShareRequests: host.quiet, markProviderShareHostActive: host.active,
+  getProviderShareQuietRequestIds: () => [], getProviderShareWatchedRequests: () => [],
   applyLocalRequestDecision: host.decision, applyLocalMemberChange: host.member,
   providerShareMemberMatcher: (member: { shareId: string; memberId: string }) => (controller: string) => {
     try {
@@ -149,7 +152,7 @@ import { setBroadcastTapListener } from '../broadcast-tap';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../../shared/controlledModelCatalog';
 import { PROVIDER_SHARE_IPC } from '../../../shared/providerShare';
 import { createProviderShareUsageStore } from '../providerShareUsageStore';
-import { revokeProviderShareControllers } from '../dispatch.desktop';
+import { providerShareActiveControllers, revokeProviderShareControllers } from '../dispatch.desktop';
 import {
   clearAllProviderShareCatalogs,
   getCachedProviderShareCatalogs,
@@ -198,6 +201,9 @@ beforeEach(() => {
   host.complete.mockReturnValue(null);
   host.changed.mockReturnValue(() => undefined);
   memberNotes.read.mockReturnValue({});
+  reshareList.mockReturnValue([]);
+  usageStores.memberQuery.mockReturnValue([]);
+  vi.mocked(providerShareActiveControllers).mockReturnValue([]);
   memberNotes.set.mockResolvedValue(undefined);
   modelAccess.read.mockReturnValue({ models: null, providerModels: null });
   modelAccess.set.mockImplementation(async (_provider, _models, _member, assertCurrent) => { assertCurrent(); });
@@ -709,6 +715,37 @@ describe('shared provider classification', () => {
   });
 });
 
+// Unit / owner management: owned must support background reads without usage or
+// renewing the fast-poll window. Existing classification coverage only exercises
+// shared-provider-ids. Minimal failure input is one share and includeUsage:false.
+describe('owned without usage', () => {
+  it.each(['local', 'same-account'] as const)('echoes the read scope without usage or polling (%s)', async entry => {
+    const command = parseProviderShareCommand({ action: 'owned', range: 'all', includeUsage: false });
+    expect(command).toEqual({ action: 'owned', range: 'all', includeUsage: false });
+    const result = entry === 'local' ? await (async () => {
+      const handle = vi.spyOn(ipcMain, 'handle');
+      try {
+        registerProviderShareIpc();
+        return await handle.mock.calls.find(([channel]) => channel === PROVIDER_SHARE_IPC.COMMAND)![1]({} as Electron.IpcMainInvokeEvent, command);
+      } finally { handle.mockRestore(); }
+    })() : await executeProviderShareManagementCommand(command as ProviderShareManagementCommand);
+    expect(result).toMatchObject({ ready: true, includeUsage: false, shares: [{ members: [{ memberId: 'm1' }] }] });
+    expect(usageStores.memberQuery).not.toHaveBeenCalled();
+    expect(usageStores.priceOverrides).not.toHaveBeenCalled();
+    expect(usageStores.pricing).not.toHaveBeenCalled();
+    expect(host.active).not.toHaveBeenCalled();
+  });
+  it('keeps the legacy owned read and polling when no scope is requested', async () => {
+    expect(parseProviderShareCommand({ action: 'owned', range: 'all' })).toEqual({ action: 'owned', range: 'all' });
+    await expect(executeProviderShareManagementCommand({ action: 'owned', range: 'all' })).resolves.toMatchObject({ ready: true });
+    expect(usageStores.memberQuery).toHaveBeenCalledTimes(1);
+    expect(host.active).toHaveBeenCalledExactlyOnceWith(60_000);
+  });
+  it.each(['false', null, 0])('rejects malformed includeUsage %j', includeUsage => {
+    expect(() => parseProviderShareCommand({ action: 'owned', range: 'all', includeUsage })).toThrow('INVALID_PARAMS');
+  });
+});
+
 describe('provider share usage history wire budget', () => {
   it('caps the global row count even when the newest day alone has more rows', () => {
     const trimmed = trimProviderUsageHistory(historyWithRows(Array.from({ length: 5_001 }, (_, index) => historyRow(index))));
@@ -817,6 +854,17 @@ describe('same-account share management during account transitions', () => {
     })).rejects.toThrow('PERMISSION_DENIED');
     expect(api.setMember).not.toHaveBeenCalled();
     expect(host.member).not.toHaveBeenCalled();
+  });
+  // A committed pause must finish owner-local revocation even if its plugin
+  // stops while REST is in flight. Pre-write revocation is covered above.
+  it('applies a committed pause before refusing a result to the stopped caller', async () => {
+    let installed = true;
+    api.setMember.mockImplementationOnce(async () => { installed = false; return { status: 'paused' }; });
+    await expect(executeProviderShareManagementCommand({ action: 'set-member', memberId: 'm1', status: 'pause' }, () => {
+      if (!installed) throw new Error('PERMISSION_DENIED');
+    })).rejects.toThrow('PERMISSION_DENIED');
+    expect(host.member).toHaveBeenCalledExactlyOnceWith('m1', 'paused');
+    expect(host.refresh).toHaveBeenLastCalledWith('member');
   });
   it.each([
     createLink, ...mutations,

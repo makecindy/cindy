@@ -124,10 +124,12 @@ Node Host 的插件 computer 调用与未装配的 scheduler、SSH 和文档服�
 `settings` 组也提供供应商分享成员工具。先用 `list_provider_share_members({providerId?,device?})`
 查询精确的 `providerId` 与 `memberId`；只返回自己分享的成员 id、名字和状态，不包含分享给我的供应商。
 `device` 默认本机，另一台电脑必须属于同账号并已授权远控；沿用现有 Device Link 管理入口，旧端明确不支持。
+名单复用原 `owned` 的 `includeUsage:false` 读取，不计算历史用量或激活管理页快速轮询；缺少明确回执的旧电脑返回
+`UNSUPPORTED_CAPABILITY`，不会反复退回完整读取。暂停/恢复仅需 memberId，模型范围需要 providerId 与 memberId。
 
 ```js
 await cindy.host.call('cindy_helper', 'set_provider_share_member_status', {
-  providerId: 'anthropic', memberId: selectedMemberId, status: 'pause' // 或 resume
+  memberId: selectedMemberId, status: 'pause' // 或 resume
 });
 const access = await cindy.host.call('cindy_helper', 'get_provider_share_model_access', {
   providerId: 'anthropic', memberId: selectedMemberId

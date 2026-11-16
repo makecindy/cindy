@@ -3,9 +3,9 @@ import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { LiziMcpSessionContext } from '../types.js';
 import { errorPayload, okPayload } from './_payload.js';
 
-export type ProviderSharingRequest = { device?: string; providerId?: string } & (
-  | { action: 'members' }
-  | { action: 'status'; providerId: string; memberId: string; status: 'pause' | 'resume' }
+export type ProviderSharingRequest = { device?: string } & (
+  | { action: 'members'; providerId?: string }
+  | { action: 'status'; memberId: string; status: 'pause' | 'resume' }
   | { action: 'get-models'; providerId: string; memberId: string }
   | { action: 'set-models'; providerId: string; memberId: string; models: string[] | null }
 );
@@ -37,8 +37,8 @@ export function registerProviderSharingTools(registry: XdtHelperToolRegistry,
     description: '只读列出当前账号在本机拥有的供应商分享成员（shareId、providerId、memberId、name、status）。providerId 可筛选；device 可显式选择同账号已授权的另一台电脑。不包括分享给我的供应商，不赋予受邀者管理权。',
     inputShape: { device, providerId: id.optional() }, handler: input => invoke({ action: 'members', ...input }) });
   registry.register({ name: 'set_provider_share_member_status', category: 'settings',
-    description: '暂停或恢复自己分享的指定成员；先查询精确 providerId/memberId。暂停立即打断此人运行中的任务，成功回执不等待全部实例关停完成；恢复只允许后续消息，不自动续跑。默认本机，device 可指定同账号已授权电脑。',
-    inputShape: { ...member, status: z.enum(['pause', 'resume']) }, handler: input => invoke({ action: 'status', ...input }) });
+    description: '暂停或恢复自己分享的指定成员；先查询精确 memberId。暂停立即打断此人运行中的任务，成功回执不等待全部实例关停完成；恢复只允许后续消息，不自动续跑。默认本机，device 可指定同账号已授权电脑。',
+    inputShape: { device, memberId: id, status: z.enum(['pause', 'resume']) }, handler: input => invoke({ action: 'status', ...input }) });
   registry.register({ name: 'get_provider_share_model_access', category: 'settings',
     description: '读取自己分享的指定成员可用模型、供应商模型范围和当前型号目录。默认本机，device 可指定同账号已授权电脑；null 跟随全部，空数组不允许任何模型。',
     inputShape: member, handler: input => invoke({ action: 'get-models', ...input }) });
