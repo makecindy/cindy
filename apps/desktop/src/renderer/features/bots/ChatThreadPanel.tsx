@@ -681,7 +681,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
 
   const liveEntries = interleaveBotGroupWork(replyRows, sharing ? [] : speakers);
   const executionSpeakers = liveEntries.flatMap(entry => entry.kind === 'work' && entry.value.activity !== 'planning' ? [entry.value] : []);
-  const canStopMine = group.round.canStop !== false && executionSpeakers.some(speaker => speaker.isSelfRequested);
+  const canStopMine = executionSpeakers.some(speaker => speaker.isSelfRequested) && group.round.canStop !== false;
   const stopSpeaker = [...executionSpeakers].reverse().find(speaker => speaker.isSelfRequested)
     ?? (canStopAll ? executionSpeakers.at(-1) : undefined);
   return <ThreadPanel panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
