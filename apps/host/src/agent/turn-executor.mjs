@@ -236,6 +236,9 @@ export function createTurnExecutor(deps) {
       // Desktop records Codex's native turn diff from the event stream (register.ts)
       // and closes the turn change record at the turn's end (sessionEventPreparation.ts).
       noteTurnDiffEvent(sessionId, event, session.remoteHostId !== null);
+      // As the desktop (sessionEventPreparation.ts): the diff is kept by the change record only; it is
+      // not saved as history or sent to clients (it can be several megabytes).
+      if (event.type === 'turn_diff') return;
       if (turn.changeRecordStarted && event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) {
         const rawTurn = event.data?.raw;
         // Desktop settles a silent-stop done once its guard declines to resume

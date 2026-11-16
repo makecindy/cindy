@@ -2024,6 +2024,31 @@ test('a queued user turn opens its change record and Git baseline between the us
 });
 
 /**
+ * 回合 diff 不发给客户端（甲 7 事件清点）
+ * - Bug：Host 把引擎的 `turn_diff`（本轮工作区的累计 unified diff，可达数 MB）原样发给每个客户端，
+ *   也交给历史记录；桌面只交给改动记录。Host 的客户端（web shim、/api/chat 的调用方、e2e）没有读它的。
+ * - 规则依据：桌面 sessionEventPreparation.ts 在 broadcast 之前 `if (event.type === 'turn_diff') return;`。
+ * - 最小失败输入：回合中一条 turn_diff。
+ * - tier：unit（假引擎，真实的输入队列与回合执行，不调模型）。
+ */
+test('a turn diff stays with the change record: it is not sent to clients or saved as history, as on the desktop', async t => {
+  t = lifoCleanup(t);
+  const h = createHarness();
+  await enqueue(h, 'task-diff', { clientId: 'u-diff', text: 'edit' });
+  const session = h.maker.getSession('task-diff');
+  const rowsBefore = h.persisted.length;
+  session.emit({ type: 'turn_diff', source: 'codex', data: { diff: 'diff --git a/a.txt b/a.txt\n' } });
+  session.emit({ type: 'text', data: { text: 'edited', isFinal: true } });
+  session.emit({ type: 'done', data: {} });
+  await waitFor(() => !h.queue.projection('task-diff').turnInProgress);
+  const published = h.events.filter(event => event.sessionId === 'task-diff').map(event => event.type);
+  assert.equal(published.includes('turn_diff'), false);
+  assert.ok(published.includes('text'), 'the events around it are still delivered');
+  assert.deepEqual(h.persisted.slice(rowsBefore).map(row => row.role), ['assistant']);
+  await h.queue.dispose();
+});
+
+/**
  * Git 基线按回合结算（评审二，m1-rc4）
  * - Bug：已派发的回合以终止性 error 结束时不撤回基线；停止后 Host 先收尾、done 迟到时什么都不做。
  *   悬空的基线会让同一任务下一轮的保存点记到旧消息上，并让同仓其他任务被判为并发。
