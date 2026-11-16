@@ -10,7 +10,10 @@
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { isBuiltin } from 'node:module';
+import os from 'node:os';
 import path from 'node:path';
+import { build } from 'esbuild';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
@@ -900,3 +903,159 @@ describe('Host macOS system proxy rules', () => {
       + '(.github/workflows/macos-system-proxy-compare.yml) 在这个 PR 上通过');
   });
 });
+
+/**
+ * Rule: a shared module may keep a port in a module variable that the desktop fills once at startup
+ * (setX(impl)). Unlike a factory port it fails nothing when unbound: the module falls back to null, a
+ * no-op, an empty table or a refusal, so a port the Host never binds goes unnoticed (甲 5 found
+ * claude-transcript-relocation.ts's liveCcSessionBridge only by reading the code). Every such setter in
+ * the modules the Host loads is classified in apps/host/src/desktop-module-setters.ts.
+ * Collection: the Host's static import graph from the entries of apps/host/scripts/build.mjs plus the
+ * acceptance scripts, resolved by esbuild without running any module (workspace packages followed,
+ * third-party packages external). In its desktop and package sources (generated and vendored code
+ * excluded): exported functions named set|register|bind|configure|install|init… that write a
+ * module-level slot (a let/var that starts nullish or as an empty function, or an empty Map/Set/array),
+ * and exported empty containers that another file in the graph mutates.
+ * Failure: a new setter (or a newly loaded module with one) that the table does not classify, or a table
+ * entry whose setter is gone, turns this red until the table is updated. Setters not named this way,
+ * closure state of factories and modules loaded at run time through createRequire are not seen.
+ */
+describe('module-level port setters the Host loads, classified for the Host', () => {
+  const tableFile = path.join(hostSrc, 'desktop-module-setters.ts');
+  const SETTER = /^(set|register|bind|configure|install|init)[A-Z]/;
+  const MUTATORS = new Set(['set', 'push', 'add', 'unshift', 'splice', 'delete', 'clear']);
+  type Entry = { status: string; where?: string; reason?: string };
+
+  /** The modules the Host bundles (apps/host/scripts/build.mjs entries) and the acceptance scripts load. */
+  async function hostGraph(): Promise<string[]> {
+    const scripts = fs.readdirSync(path.join(repo, 'apps/host/scripts')).filter(name => name.endsWith('.e2e.mjs')).sort()
+      .map(name => `apps/host/scripts/${name}`);
+    const result = await build({
+      absWorkingDir: repo, bundle: true, write: false, metafile: true, splitting: true, platform: 'node', format: 'esm',
+      target: 'node22', outdir: path.join(os.tmpdir(), 'cindy-host-graph-unused'), logLevel: 'silent',
+      entryPoints: ['apps/host/src/main.ts', 'apps/host/src/plugins/node-worker.ts', 'apps/host/src/agent/pi-subagent-runner-process.cts',
+        'apps/desktop/src/main/cindy-brain/libraryDbWorker.ts', 'apps/desktop/src/main/cindy-brain/ghostSnapshotWorkerProcess.ts', ...scripts],
+      plugins: [{ name: 'host-graph', setup(builder) {
+        builder.onResolve({ filter: /\?raw$/ }, () => ({ path: 'raw', namespace: 'raw' }));
+        builder.onLoad({ filter: /.*/, namespace: 'raw' }, () => ({ contents: '', loader: 'text' }));
+        builder.onResolve({ filter: /^[^./]/ }, args => (isBuiltin(args.path)
+          || !(args.path.startsWith('@cindy/') || /^cindy-tools(\/|$)/.test(args.path) || args.path.startsWith('#'))
+          ? { path: args.path, external: true } : undefined));
+      } }],
+    });
+    return Object.keys(result.metafile.inputs).filter(file => /\.(ts|tsx|mts|cts|js|mjs|cjs)$/.test(file));
+  }
+
+  function settersIn(file: string): { setters: string[]; containers: string[] } {
+    const sf = ts.createSourceFile(file, read(path.join(repo, file)), ts.ScriptTarget.Latest, true);
+    const exported = new Set<string>();
+    for (const statement of sf.statements) {
+      if (ts.isExportDeclaration(statement) && statement.exportClause && ts.isNamedExports(statement.exportClause))
+        for (const element of statement.exportClause.elements) exported.add((element.propertyName ?? element.name).text);
+    }
+    const isExported = (node: ts.Statement) => !!ts.canHaveModifiers(node) && !!ts.getModifiers(node)?.some(m => m.kind === ts.SyntaxKind.ExportKeyword);
+    const slots = new Map<string, boolean>(); // module-level binding -> can be reassigned
+    const functions: Array<{ name: string; node: ts.Node }> = [];
+    const containers: string[] = [];
+    for (const statement of sf.statements) {
+      if (ts.isVariableStatement(statement)) {
+        const isConst = (statement.declarationList.flags & ts.NodeFlags.Const) !== 0;
+        for (const declaration of statement.declarationList.declarations) {
+          if (!ts.isIdentifier(declaration.name)) continue;
+          const name = declaration.name.text;
+          let init = declaration.initializer;
+          while (init && (ts.isAsExpression(init) || ts.isSatisfiesExpression(init))) init = init.expression;
+          if (init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) && (isExported(statement) || exported.has(name))) {
+            functions.push({ name, node: init });
+            continue;
+          }
+          const emptyFunction = !!init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) && ts.isBlock(init.body) && init.body.statements.length === 0;
+          const emptyContainer = !!init && ((ts.isNewExpression(init) && ts.isIdentifier(init.expression)
+            && /^(Map|Set|WeakMap|WeakSet)$/.test(init.expression.text) && !init.arguments?.length)
+            || (ts.isArrayLiteralExpression(init) && init.elements.length === 0));
+          const nullish = !init || init.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(init) && init.text === 'undefined')
+            || /\b(null|undefined)\b/.test(declaration.type?.getText(sf) ?? '');
+          if ((!isConst && (nullish || emptyFunction)) || emptyContainer) slots.set(name, !isConst);
+          if (isExported(statement) && isConst && emptyContainer) containers.push(name);
+        }
+      } else if (ts.isFunctionDeclaration(statement) && statement.name && (isExported(statement) || exported.has(statement.name.text))) {
+        functions.push({ name: statement.name.text, node: statement });
+      }
+    }
+    const setters = functions.filter(({ name, node }) => {
+      if (!SETTER.test(name) || /ForTest|ForTesting|^__/.test(name)) return false;
+      let writes = false;
+      const visit = (n: ts.Node): void => {
+        if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(n.left)
+          && slots.get(n.left.text) === true) writes = true;
+        if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && ts.isIdentifier(n.expression.expression)
+          && MUTATORS.has(n.expression.name.text) && slots.has(n.expression.expression.text)) writes = true;
+        ts.forEachChild(n, visit);
+      };
+      visit(node);
+      return writes;
+    }).map(({ name }) => name);
+    return { setters, containers };
+  }
+
+  /** The table as written: key, entry, and whether the entry sits on one line. */
+  function table(): Array<{ key: string; entry: Entry; oneLine: boolean }> {
+    const sf = ts.createSourceFile(tableFile, read(tableFile), ts.ScriptTarget.Latest, true);
+    let literal: ts.ObjectLiteralExpression | undefined;
+    const visit = (n: ts.Node): void => {
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === 'DESKTOP_MODULE_SETTERS'
+        && n.initializer && ts.isObjectLiteralExpression(n.initializer)) literal = n.initializer;
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    assert.ok(literal, 'DESKTOP_MODULE_SETTERS not found');
+    const line = (pos: number) => sf.getLineAndCharacterOfPosition(pos).line;
+    return literal.properties.map(property => {
+      assert.ok(ts.isPropertyAssignment(property) && ts.isStringLiteral(property.name) && ts.isObjectLiteralExpression(property.initializer),
+        `unexpected entry ${property.getText(sf)}`);
+      const entry: Entry = { status: '' };
+      for (const field of property.initializer.properties) {
+        assert.ok(ts.isPropertyAssignment(field) && ts.isIdentifier(field.name) && ts.isStringLiteral(field.initializer));
+        (entry as Record<string, string>)[field.name.text] = field.initializer.text;
+      }
+      return { key: property.name.text, entry, oneLine: line(property.getStart(sf)) === line(property.getEnd()) };
+    });
+  }
+
+  it('classifies every setter the Host loads, and only those', async () => {
+    const graph = await hostGraph();
+    const texts = new Map(graph.map(file => [file, read(path.join(repo, file))]));
+    const collected = new Set<string>();
+    for (const file of graph) {
+      if (!/^(apps\/desktop\/src|packages\/[^/]+\/src)\//.test(file) || /\/(_generated|vendor)\//.test(file)) continue;
+      const { setters, containers } = settersIn(file);
+      for (const name of setters) collected.add(`${file}#${name}`);
+      for (const name of containers) {
+        const mutation = new RegExp(`\\b${name}\\.(set|add|delete|clear|push|splice|unshift)\\(`);
+        if ([...texts].some(([other, text]) => other !== file && mutation.test(text))) collected.add(`${file}#${name}`);
+      }
+    }
+    const rows = table();
+    const keys = rows.map(row => row.key);
+    expect([...collected].filter(key => !keys.includes(key)).sort(), 'setters missing from desktop-module-setters.ts').toEqual([]);
+    expect(keys.filter(key => !collected.has(key)), 'entries whose setter is gone').toEqual([]);
+  }, 60_000);
+
+  it('keeps the table sorted, one entry per line, each status with its evidence', () => {
+    const rows = table();
+    const keys = rows.map(row => row.key);
+    expect(keys).toEqual([...keys].sort());
+    expect(rows.filter(row => !row.oneLine).map(row => row.key)).toEqual([]);
+    for (const { key, entry } of rows) {
+      expect(['bound', 'pending', 'not-applicable', 'internal'], key).toContain(entry.status);
+      if (entry.status === 'bound') {
+        // The Host file named must really mention the setter (or container) it is said to bind.
+        expect(entry.where, key).toMatch(/^apps\/host\//);
+        expect(new RegExp(`\\b${key.split('#')[1]}\\b`).test(read(path.join(repo, entry.where!))), `${key} not in ${entry.where}`).toBe(true);
+      } else {
+        expect(entry.reason?.trim(), key).toBeTruthy();
+      }
+    }
+  });
+});
+
