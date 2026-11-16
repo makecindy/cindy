@@ -17,12 +17,12 @@
 | `scheduler` | `cindy_scheduler` | 定时任务管理 |
 | `terminal` | `cindy_helper` | 宿主管理的命令、交互终端与后台作业 |
 | `files` | `cindy_helper` | 授权目录的文件操作与监听；调用 `file_request` |
-| `storage` | `cindy_helper` | 本插件存储接口与每次确认的跨插件副本分享；调用 `storage_request` |
+| `storage` | `cindy_helper` | 本插件存储接口与跨插件副本分享；调用 `storage_request` |
 | `browser` | `cindy_browser` | 当前浏览器的统一自动操作工具 |
 | `computer` | `cindy_computer` | 本机窗口、键盘和鼠标工具 |
 | `ssh` | `cindy_ssh` | 已配置 SSH 连接与远程命令 |
 | `docs` | `cindy_docs` | 插件私有目录内的文档生成、转换与读取 |
-| `discovery` | `cindy_helper` | 查询执行宿主提供的服务与本插件的声明、批准事实 |
+| `discovery` | `cindy_helper` | 查询执行宿主提供的服务与本插件声明 |
 
 各组在安装、更新确认和详情页展示。安装或更新确认是整体决定：接受即授予该版本 manifest 声明的全部已知能力，拒绝则不安装或不更新。已启用且整体安装批准有效的插件可直接调用已声明组，不另存分组批准，也没有补批入口。旧 receipt 中的分项批准字段读取时忽略，不迁移或清理数据。未知组按 Manifest v3 原样保存，当前宿主不支持。
 
@@ -53,7 +53,7 @@ const archived = await cindy.host.call('cindy_helper', 'archive_sessions', {
 
 ## 查询执行宿主的能力
 
-声明并获准 `agent.hostTools:['discovery']` 后调用：
+整体安装批准有效且声明 `agent.hostTools:['discovery']` 后调用：
 
 ```js
 const result = await cindy.host.call('cindy_helper', 'host_services', {});
@@ -62,10 +62,10 @@ const { scope, services } = JSON.parse(result.content.find(item => item.type ===
 
 `scope:'local'` 指执行插件的电脑，`services[]` 含 `group/server/tools/available`，有工具时另有示例 `entryTool`。
 不可用时 `reason` 为 `unsupported`（未提供）或 `disabled`（宿主开关关闭）；无法读取开关时为 `unavailable`。
-插件调用另含每组 `declared` / `approved`；这是宿主现查的本实例事实，不接受自报身份，也不查询其他插件数据。
+插件调用另含每组 `declared`，不返回独立 `approved` 状态；这是宿主现查的本实例声明，不接受自报身份，也不查询其他插件数据。
 `entryTool` 是该服务的一个现有工具入口；目录查询不执行工具、不启动服务、不读取凭证或内部路径。
 `available:true` 只说明宿主已接入且允许使用该服务；外部账号、浏览器连接、驱动安装和系统权限仍由原工具检查。
-服务注册替换后目录重建，开关、声明和批准每次现查。Node Host 缺少生产调度器等服务时明确返回不可用。
+服务注册替换后目录重建，开关、声明和整体安装批准每次现查。Node Host 缺少生产调度器等服务时明确返回不可用。
 普通 Agent 使用同一个 helper 工具查询服务，不附插件批准字段。查询能力不会赋予安装、停用或撤销其他插件的权限。
 
 ## 服务依赖与生命周期
@@ -98,7 +98,7 @@ const document = await cindy.host.call('cindy_docs', 'make_docx', {
 });
 ```
 
-浏览器使用用户已选择的后端；切换到「我的浏览器」、recipe、upload 等保留现有风险规则。
+浏览器使用用户已选择的后端；切换到「我的浏览器」、recipe、upload 等保留现有参数与业务校验，插件不追加风险确认。
 插件没有任务归属，选中侧边栏 `rsb-webview` 时返回 `BROWSER_RUNTIME_ACTION_FAILED` 并明确不支持；
 不会借用当前界面任务。专用浏览器与「我的浏览器」仍可用，原 Agent 和 UI 行为不变。
 页面中的主人私密输入保护保持生效，插件不能调用代输入确认或取得秘密。依赖真实任务的文件授权
@@ -106,7 +106,7 @@ const document = await cindy.host.call('cindy_docs', 'make_docx', {
 电脑观察快照按插件实例保留，停用、换版或账号变化后失效。录制等文件操作和文档工具的根目录
 为本插件私有文件目录；文档不能用路径参数越界。需要读取产物字节时另声明 `fs:true`，
 通过 `cindy.fs({op:'read',root:'data',path:'documents/report.docx'})` 读取；不能从宿主内部路径获取其他数据。
-SSH 使用当前账号已配置的连接池，沿用原连接管理和风险确认，私钥或认证值不进入插件。
+SSH 使用当前账号已配置的连接池，沿用原连接管理；插件不追加风险确认，私钥或认证值不进入插件。
 每个执行 Host 必须已提供对应服务；Node Host 插件复用已有 browser 平台 provider。
 Node Host 的插件 computer 调用与未装配的 scheduler、SSH 和文档服务返回
 `UNSUPPORTED_CAPABILITY`，不会因 manifest 声明自行安装或启动第二套实现。
@@ -173,8 +173,8 @@ user 锚点复制它之前的历史；assistant 锚点复制至下一条 user �
 
 ## 命令、终端和后台作业
 
-声明 `agent.hostTools:["terminal"]` 后，逻辑页和 Node Worker 使用同一入口。启动、输入、
-调整尺寸、停止和清除已退出记录每次经原宿主风险判定与确认；读取、列表不会执行新命令。
+整体安装批准有效且声明 `agent.hostTools:["terminal"]` 后，逻辑页和 Node Worker 使用同一入口。
+启动、输入、调整尺寸、停止和清除已退出记录不追加调用确认；读取、列表不会执行新命令。
 命令以用户身份在执行电脑上运行，能访问其本机文件和应用；这项能力不是文件沙箱。
 宿主只传筛选后的系统路径、语言与用户配置目录环境，不继承宿主 API key、token 或 Node
 启动注入变量，也不自动传任何 `node.secretBindings` 的凭证。
@@ -224,11 +224,11 @@ Node Host 为逻辑页和 Node Worker 装配相同的公共入口、helper regis
 `history` 组的本机任务列表、工作目录、历史消息与搜索复用桌面宿主的查询回调和同一账号数据库；
 另一个已认证客户端读取的是这份任务数据，不创建插件专用任务副本。普通任务的来源、权限与
 Plan 状态继续由共享输入协调器和任务动作检查判定，插件调用继续使用宿主核验的插件身份。
-无需打开插件页面；整体安装批准有效、已启用且当前 manifest 声明的工具组可直接使用。
-逻辑页与 Node Worker 共用这些安装和声明检查，不再进行首次组补批或逐次工具确认。
+无需打开插件页面或连接确认客户端；整体安装批准有效、启用且声明的能力直接使用原处理器。
+没有补批端点或独立工具组批准；Agent 自身的权限流程保持原样。
 安装/更新和 Host 现有独立业务确认继续由原有流程处理。
 
-这些确认只发送给一个已认证控制端，不写入任务事件回放。断线、停用、更新或账号边界使
+宿主原有安装确认及显式交互的确认只发送给一个已认证控制端，不写入任务事件回放；`host.call` 不产生这类批准请求。断线、停用、更新或账号边界使
 旧确认失效；插件应把取消作为本次未获批准，不能循环重试或伪造回答。
 确认发送积压超过 1 MiB，或写入遇到背压且缓冲未排空时，同样按无法送达拒绝本次确认。
 终端作业留在执行 Host，重新调用列表和续读不会再次启动程序。Node Host 当前已装配
@@ -237,8 +237,8 @@ Plan 状态继续由共享输入协调器和任务动作检查判定，插件调
 `UNSUPPORTED_CAPABILITY`，说明当前执行环境不支持此宿主服务；不会创建另一套调度任务。
 `history` 的本机查询与 `terminal` 已接通，其他组须以执行 Host 的工具目录和实际回执为准。
 Node Host 已提供的 `browser` 平台 provider 同时接入 Agent 与插件入口，不另建浏览器实现。
-Node Host 插件的 `computer` 在创建观察 runtime、确认或驱动执行之前返回 `UNSUPPORTED_CAPABILITY`，
-`host_services` 同样报告不可用：Desktop 的逐次批准身份不能从跨进程 caller 元数据重建。
+Node Host 插件的 `computer` 在创建观察 runtime 或驱动执行之前返回 `UNSUPPORTED_CAPABILITY`，
+`host_services` 同样报告不可用：现有平台桥尚未接通 Node 插件的安装归属与调用生命周期。
 不新增跨进程授权证明；Node Agent 与 Desktop 插件的电脑调用保留原路径、快照生命周期和门禁。
 已保存凭证的既有引用可由 Node Host 通过共享管理器注入，撤回来源后拒绝；建立引用仍只在可信 Desktop 详情页完成。
 需要定时任务时使用已提供调度器的执行宿主，不循环重试不支持结果。

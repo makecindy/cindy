@@ -349,8 +349,8 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     oauthTokens: { getFreshAccessToken: (...args) => oauth.getFreshAccessToken(...args), invalidateAccessToken: (...args) => oauth.invalidateAccessToken(...args) },
     readGhostMedia: async () => null, takeDirDeposit: () => null, writeSaveDeposit: async () => null,
     saveGhostMedia: async () => { throw new Error('media not used'); }, isSupportedMediaMime: () => false });
-  // Real PTY through the same Host service, gateway and registry. Only native
-  // owner confirmation is acknowledged by the fixture; no App install is fabricated here.
+  // Real PTY through the same Host service, gateway and registry. Overall install
+  // authority covers the declarations; no supplementary prompt may be requested.
   let readyResolve, echoResolve;
   const ready = new Promise(resolve => { readyResolve = resolve; });
   const echo = new Promise(resolve => { echoResolve = resolve; });
@@ -379,23 +379,12 @@ test('runs and reaps real plugin workers through the common broker', async t => 
   kv.write('test-node', { record: sharedValue });
   const database = { drizzle: {} }; setCurrentDbClient(database, 'fixture-owner');
   const confirmations = createHostConfirmations({ current: () => true });
-  const disconnect = confirmations.connect('web:fixture', event => {
-    if (event.channel === 'ghosts:confirm-request') queueMicrotask(() =>
-      confirmations.resolve('web:fixture', 'confirm', event.payload.requestId, true));
-    if (event.channel === 'ghosts:install-consent:request') queueMicrotask(() =>
-      confirmations.resolve('web:fixture', 'install', event.payload.requestId, false));
-    return true;
-  });
+  let prompts = 0;
+  const disconnect = confirmations.connect('web:fixture', () => { prompts++; return false; });
   const storage = new HostStorageService({ ownerKey: () => 'fixture-owner:1', getGhost, handoff, listGhosts: () => [ghost, receiver],
     providers: createHostStorageProviders({ kv, files: fileService, library: null, handoff,
       media: { describe: async () => null, read: async () => new Response(null, { status: 404 }) } }),
-    confirmShare: async (facts, current) => {
-      assert.equal(facts.sourceId, 'test-node'); assert.equal(facts.targetId, 'test-receiver');
-      assert.equal(facts.fileName, 'record.json');
-      const answer = await confirmations.confirm({ ghostId: facts.sourceId, ghostName: facts.sourceName,
-        body: `${facts.fileName} → ${facts.targetName}`, confirmText: null, cancelText: null, danger: false });
-      return current() && answer;
-    } });
+  });
   const hostTools = createHostToolService({ terminal: terminals, files: () => fileService, storage: () => storage,
     profileDir: dir, ownerId: 'fixture-owner', owner,
     getGhost, getSession: () => undefined, current: () => true, confirmations, t: key => key,
@@ -438,6 +427,10 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     assert.equal(browser.ok, true, JSON.stringify(browser));
     assert.equal(browser.result.ok, true, JSON.stringify(browser));
     assert.equal(browser.result.data.source, 'shared-browser-handler');
+    ghost.approvedHostToolGroups = [];
+    const legacyBrowser = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: {
+      server: 'cindy_browser', tool: 'browser', args: { action: 'status' } } });
+    assert.equal(legacyBrowser.result.ok, true, JSON.stringify(legacyBrowser));
     ghost.manifest.agent.hostTools = ghost.manifest.agent.hostTools.filter(group => group !== 'browser');
     const undeclaredBrowser = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: {
       server: 'cindy_browser', tool: 'browser', args: { action: 'status' } } });
@@ -451,7 +444,8 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     const capabilities = await terminalCall('host_services');
     assert.equal(capabilities.scope, 'local');
     assert.equal(capabilities.services.find(service => service.group === 'terminal').available, true);
-    assert.equal(capabilities.services.find(service => service.group === 'discovery').approved, true);
+    assert.equal(capabilities.services.find(service => service.group === 'discovery').declared, true);
+    assert.equal(Object.hasOwn(capabilities.services.find(service => service.group === 'discovery'), 'approved'), false);
     assert.equal(capabilities.services.find(service => service.group === 'scheduler').available, false);
     assert.equal(capabilities.services.find(service => service.group === 'computer').available, false);
     // §21 integration: execute a real plugin's host.call across the private FD,
@@ -466,7 +460,7 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     await fileCall('delete', { path: 'exports/worker.txt' });
     assert.equal(fs.existsSync(path.join(dir, 'exports/worker.txt')), false);
     // §27 integration: two actual workers use the same provider interface and
-    // real KV/handoff persistence. Native confirmation is acknowledged above.
+    // real KV/handoff persistence without supplementary confirmation.
     assert.deepEqual((await terminalCall('storage_request', { op: 'targets' })).targets,
       [{ id: 'test-receiver', name: 'Receiver fixture' }]);
     const share = await terminalCall('storage_request', { op: 'share', targetPluginId: 'test-receiver', source: { provider: 'kv', key: 'record' } });
@@ -503,6 +497,7 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     assert.throws(() => process.kill(first.result.pid, 0), { code: 'ESRCH' });
     ghost.enabled = false;
     assert.equal((await broker.handleRequest('test-node', { type: 'node-request', method: 'echo' })).ok, false);
+    assert.equal(prompts, 0);
   } finally {
     fileService.disposeAll();
     disconnect(); confirmations.close(); hostTools.close(); clearCurrentDbClient(database);

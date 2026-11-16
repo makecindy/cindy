@@ -241,14 +241,14 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   服务提供者沿用已有 browserExtension.pageControl 的普通插件准入、详情页激活、配对和生命周期，不另造注册中心。
   当前媒体生成没有独立 MCP server，继续用已有 cindy.media 接口，不虚设 media 组。
   discovery 的 host_services 查询同一 provider 目录：只检视已注册的 registry 定义，描述实例无任务/插件身份，
-  不执行工具且立即关闭；不关闭插件正在用的电脑连接。服务开关与本实例声明/批准现查，Node 未供应的服务明确不可用。
+  不执行工具且立即关闭；不关闭插件正在用的电脑连接。服务开关与本实例声明/整体安装批准现查，不投影独立 approved 状态，Node 未供应的服务明确不可用。
   该目录是投影，不持有服务实现、凭证、批准或插件管理权；不开放 ghost_* 写入口。
   服务依赖沿用 agent.hostTools，执行时查找当前 provider，不新增强依赖启动状态机或 setup 字段。
   逻辑页和 Node Worker 显式退出共用各宿主已有资源清理入口；网络、文件监听、终端和电脑连接由原服务释放。
   UI 的 stop/crash/update 同样销毁电脑连接与观察引用，不只覆盖 Node 停止。持久存储及浏览器 provider 继续由原所有者处理。
   `terminal` 复用 `main/terminal/PtyManager`，界面与 MCP 共用 `HostTerminalService` 的同一注册表；
   不另写插件进程实现。Host 核准的插件实例/安装代次或真实 Session 绑定作业 owner，id 不授予归属。
-  启动及输入等变更走原风险规则；命令具有用户级本机能力，确认中必须明确说明，不能宣称文件沙箱。
+  插件启动及输入等变更不追加审批；命令具有用户级本机能力，安装确认中的能力说明必须明确，不能宣称文件沙箱。Agent 自身风险流程不变。
   精确环境沿用 Node 插件的系统路径/语言/用户配置目录筛选，不继承宿主秘密或 Node 注入变量。
   输出按独立游标保留且有界；读取断开不杀进程，显式停用/更新/卸载、账号切换清理对应资源。
   任务托管作业订阅当次真实 Session 的关闭状态，关闭经 ProcessOwner destroyed 释放 PTY；
@@ -257,16 +257,16 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   私有通道均进入公共 `hostToolSlot`，共用整体安装批准、启用与 manifest 声明校验，不提供首次或逐次补批。
   `history` 组的本机查询通过共享 `historyToolCallbacks` 读取同一 owner 数据库，不建插件任务副本。
   两种执行宿主共用输入归属快照与任务动作授权器；群执行授权由各宿主的真实群运行时注入，缺失时拒绝。
-  无任务的确认复用 `WindowConfirmationBridge`，只接受被选中、已认证控制端的回答；Cindy 桌面
+  宿主已有安装确认与显式交互的确认复用 `WindowConfirmationBridge`，只接受被选中、已认证控制端的回答；插件 host.call 不产生批准请求。Cindy 桌面
   控制端再绑定真实顶层应用窗口，插件页面和其它窗口不能代答。无可用客户端、断线和超时均拒绝。
   确认载荷不进任务事件回放，不借用或伪造 Session；Node 仍按实际已装配 provider 报告能力。
   Node Host 当前不装配生产调度器；`cindy_scheduler` 返回 `UNSUPPORTED_CAPABILITY` 和执行环境不支持说明，
   不把未提供服务描述成暂未就绪，不另建插件调度实现。此入口不承担 Node Host 自身功能补齐。
   Node Host 的 browser 平台 provider 同时供 Agent 与插件使用；原客户端与后端门禁继续生效。
-  Node Host 插件 computer 在创建 runtime、弹确认和驱动执行前返回 `UNSUPPORTED_CAPABILITY`，
-  能力发现也报告不可用；不信任跨进程 caller 元数据，不新增逐次授权证明。
+  Node Host 的插件 computer 安装归属与调用生命周期尚未接入平台桥，在创建 runtime 和驱动执行前返回 `UNSUPPORTED_CAPABILITY`，
+  能力发现也报告不可用；不因删除审批而略过现有身份 guard，不新增票据或证明机制。
   Node Agent 与 Desktop 插件的电脑调用、快照生命周期及原 guard 不变。
-  `files` 组复用上述批准与详情重试。`pick({mode:'directory',access:'files'})` 的原生选择框列明
+  `files` 组复用整体安装批准与 manifest 声明，不追加分组批准。`pick({mode:'directory',access:'files'})` 的原生选择框选择实际资源，列明
   读写、列举、删除与监听范围，成功后在原亲选目录存储中记录随机引用及目录 dev/ino；旧路径不补引用。
   `fs root:'picked'` 和 helper `file_request` 使用同一 FsSlot/file-browser-core，不借用任务身份；
   Agent 调用后者使用真实 Session 工作目录，写/删走原风险规则，Plan 仍只读。引用仅限原实例、账号与执行电脑。
@@ -274,9 +274,9 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   自主监听在停用、页面结束或授权变化时关闭。Node 缺少选择器/watcher 时按实际支持返回错误，不补第二套服务。
   `storage` 的 `storage_request` 统一转发既有 KV/fs:data/Library/handoff/媒体接口，仍由原存储拥有数据与生命周期。
   `HostStorageProvider` 只定义转发与 snapshot seam，不另建数据副本、权限账本或通用插件注册中心。
-  跨插件分享是原 handoff 的显式副本：双方独立批准 storage，namespace 已确认且同账号本机/同组织，
-  可信宿主每次确认双方名称、具体文件与字节数。确认前后复核安装/owner，确认后复读源并校验摘要，变更拒绝；
-  只在最终 IO 期间持有原 handoff relocation hold，不阻塞用户等待确认时停用或恢复。写入回执不明返回 SHARE_RESULT_UNKNOWN，
+  跨插件分享是原 handoff 的显式副本：双方整体安装批准有效、启用且声明 storage，namespace 已确认且同账号本机/同组织。
+  不追加分享确认；宿主核对具体文件与字节数，准备及交付时复核安装/owner，复读源并校验摘要，变更拒绝；
+  只在最终 IO 期间持有原 handoff relocation hold，不阻塞准备期间停用或恢复。写入回执不明返回 SHARE_RESULT_UNKNOWN，
   补偿只用原 owner 根，不重发；副本仍按原 TTL/配额/SHA/详情删除管理。接收方已读取或另存的副本不能宣称可撤回。
 - `subscribe.topics` 的 `message` / `task-state` 在整体安装/更新确认中展示，整体安装批准有效、已启用且 manifest 声明该 topic 即分发，不另存主题批准。
   消息仅在持久化后通知，结构化附件使用不透明位置引用；附件读取只覆盖已有宿主授权的本机媒体和 grant / deposit / handoff 引用，复用既有账本和交接。历史 JSON 的 `files.path`、绝对路径、旧文件直读 URL 及跨电脑附件返回 `UNSUPPORTED_CAPABILITY`，不以消息形状授予文件读取权限，不新增可信来源表或确认流程。
@@ -668,8 +668,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 - `fs-request` 的 `workdir` 读、列、删和监听复用现有文件核心与宿主 watcher，沿用严格在途 `callId`
   及活跃 Session，不要求自主 `fs:true`，不接收插件自报的目录。读/list/watch 不扩大到工作目录外，
-  SSH 任务不能读取控制端同名目录；列表过滤隐藏路径与链接。删除按当前任务权限独立裁决，Ask
-  使用 `fs_delete` 原生确认，不复用写入记忆；计划模式禁止删除，确认后复核目录、目标与调用身份。
+  SSH 任务不能读取控制端同名目录；列表过滤隐藏路径与链接。新增插件删除不再追加 Full/Auto/Ask 审核或确认，
+  计划模式禁止删除，IO 前复核目录、目标与调用身份；Agent 自身的 file_request 权限流程不变。
   `watch/changes/unwatch` 只交换相对路径元数据，256 条有界缓冲与单 watcher 游标支持续读，缺口或错误
   明确 `resetRequired`；原调用结束或 Stop 即释放。UI 与 Node Host 接线均须提供相同的身份与取消语义。
   `data` 和 `save` 原行为、旧 manifest/receipt/批准保持不变。回归见 `fsSlot.test.ts`，作者用法见 §4.10。
