@@ -536,3 +536,80 @@ describe('runtime selection moved out of register.ts', () => {
     }
   });
 });
+
+/**
+ * The event types the desktop's event pipeline acts on, each classified for the Node Host.
+ *
+ * Rule: the desktop decides per event type in its pipeline (sessionEventPreparation.ts, sessionEventDelivery.ts,
+ * sessionEventTerminal.ts) and in register.ts's emitWiredSessionEvent; the Host's executor
+ * (apps/host/src/agent/turn-executor.mjs) is a separate implementation, so a new event type handled on the
+ * desktop does not reach the Host unless someone classifies it. Each type here is either aligned on the Host
+ * (where), a gap the release table records (which row), or a platform difference. The Host locations and
+ * rows are those of the integration branch (cindy/host-m1); they ship with the Host PR.
+ * Failure: a new type the desktop starts acting on, or a type it stopped acting on, turns this red until the
+ * table is updated. It cannot see a new effect added to an existing type; the release table's event
+ * inventory (A7) records those.
+ */
+describe('event types the desktop pipeline acts on, classified for the Host', () => {
+  const EVENT_TYPE_PARITY: Record<string, { host?: string; gaps?: string[]; platform?: string }> = {
+    account_usage: { gaps: ['row 13 (Codex account_usage snapshot)'] },
+    agent_task_update: { host: 'turn-executor.mjs noteBackgroundActivity; history.event (sessionEventStreamCore, shared)' },
+    compact_boundary: { host: 'turn-executor.mjs wireNotes.reset' },
+    done: {
+      host: 'turn-executor.mjs finish: flush, Codex plan, change record, Git savepoint, turn end',
+      gaps: ['A9 turn-end seal', 'A10 last activity', 'A13 list preview and pinned summary', 'checkpoint 4 and 5 (auto-resume)'],
+    },
+    error: {
+      host: 'turn-executor.mjs finish: error row, Codex plan failure, change record partial, Git abort; context recovery claim',
+      gaps: ['A15 Opus plan error reason', 'checkpoint 4 (terminal to the coordinator first, auto-resume)'],
+    },
+    image: { gaps: ['A11 Codex generated images'] },
+    interaction_dismissed: { gaps: ['A12 runtime interaction_dismissed'] },
+    plan_mode_changed: { host: 'turn-executor.mjs persistAgentPlanModeChange (shared persistAgentPlanModeChangeWith)' },
+    status: {
+      host: 'turn-executor.mjs context snapshot (shared), background activity',
+      gaps: ['smaller difference: running=false alone does not write the turn end time'],
+    },
+    text: { host: 'history.event (sessionEventStreamCore, shared)', gaps: ['A14 standaloneText notices'] },
+    turn_diff: { host: 'turn-executor.mjs noteTurnDiffEvent, not published' },
+  };
+
+  /** String literals compared with `<x>.type` (=== or !==) or used as `case` of a switch on `<x>.type`. */
+  function eventTypesIn(source: string, name: string): Set<string> {
+    const sf = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true);
+    const found = new Set<string>();
+    const isTypeAccess = (node: ts.Node) => ts.isPropertyAccessExpression(node) && node.name.text === 'type';
+    const visit = (node: ts.Node): void => {
+      if (ts.isBinaryExpression(node) && (node.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken
+        || node.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken)) {
+        if (isTypeAccess(node.left) && ts.isStringLiteral(node.right)) found.add(node.right.text);
+        if (isTypeAccess(node.right) && ts.isStringLiteral(node.left)) found.add(node.left.text);
+      }
+      if (ts.isSwitchStatement(node) && isTypeAccess(node.expression)) {
+        for (const clause of node.caseBlock.clauses) {
+          if (ts.isCaseClause(clause) && ts.isStringLiteral(clause.expression)) found.add(clause.expression.text);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    return found;
+  }
+
+  it('every event type the pipeline acts on is in the table, and every table entry is still acted on', () => {
+    const ipc = path.join(desktopMain, 'maker-ipc');
+    const register = read(path.join(ipc, 'register.ts'));
+    const wiredStart = register.indexOf('const emitWiredSessionEvent');
+    expect(wiredStart, 'emitWiredSessionEvent in register.ts').toBeGreaterThan(-1);
+    const wired = register.slice(wiredStart, register.indexOf('\n  };\n', wiredStart) + 5);
+    const acted = new Set<string>();
+    for (const file of ['sessionEventPreparation.ts', 'sessionEventDelivery.ts', 'sessionEventTerminal.ts']) {
+      for (const type of eventTypesIn(read(path.join(ipc, file)), file)) acted.add(type);
+    }
+    for (const type of eventTypesIn(wired, 'emitWiredSessionEvent')) acted.add(type);
+    expect([...acted].sort()).toEqual(Object.keys(EVENT_TYPE_PARITY).sort());
+    for (const [type, entry] of Object.entries(EVENT_TYPE_PARITY)) {
+      expect(Boolean(entry.host || entry.gaps?.length || entry.platform), `${type} is classified`).toBe(true);
+    }
+  });
+});
