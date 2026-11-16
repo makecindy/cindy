@@ -300,6 +300,7 @@ export function ComposerAttachmentCollapsedBadge({
 function makeTrayStyles(colors: ThemeColors) {
   return {
     tray: {
+      alignItems: 'flex-start' as const,
       flexDirection: 'row' as const,
       flexWrap: 'wrap' as const,
       gap: spacing.sm,
