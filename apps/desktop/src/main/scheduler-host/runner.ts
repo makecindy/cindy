@@ -191,6 +191,22 @@ function hasScheduledModelOverride(schedule: Schedule): boolean {
 }
 
 /**
+ * A bound schedule saved without `modelAgentKind` stores a model chosen for its own
+ * `agentKind` (the form and the legacy Mobile normalization read it that way). While the
+ * task still runs that Harness the model-only override keeps its follow-task path. Once
+ * the task moved to another Harness, that model cannot run there (a Claude subscription
+ * model on Codex is refused with 403), so this fire uses it as the explicit selection
+ * it was saved as: the task switches for this run and is restored afterwards.
+ */
+function legacyCrossHarnessModelAgentKind(
+  schedule: Schedule,
+  currentAgentKind: AgentKind | undefined,
+): AgentKind | undefined {
+  if (schedule.modelAgentKind || !schedule.model?.trim() || !currentAgentKind) return undefined;
+  return currentAgentKind !== schedule.agentKind ? schedule.agentKind : undefined;
+}
+
+/**
  * 调度场景的 model / permissionMode 兜底默认 —— schedule 表单允许"留空走默认"，
  * runner 必须把空值翻成具体合法值，否则落库就是空字符串 / 'ask'，主区右下角
  * model picker 显示 placeholder + permission 模式在 headless 跑时会卡所有需 approval
@@ -1100,6 +1116,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
       throwIfFireAborted(ctx.signal, 'credential switch setup');
       const restorePending = await this.restoreBoundQueue(schedule, ctx, sessionId);
       if (restorePending) return restorePending;
+      if (!schedule.modelAgentKind && schedule.model?.trim()) {
+        const currentAgentKind = (await this.deps.maker.getSessionMeta(sessionId).catch(() => null))?.agentKind;
+        const legacyModelAgentKind = legacyCrossHarnessModelAgentKind(schedule, currentAgentKind);
+        // Fire-local only: the saved schedule keeps its original shape.
+        if (legacyModelAgentKind) schedule = { ...schedule, modelAgentKind: legacyModelAgentKind };
+      }
       const selection: ScheduledModelSelection | undefined =
         schedule.modelAgentKind && schedule.model?.trim()
           ? {
