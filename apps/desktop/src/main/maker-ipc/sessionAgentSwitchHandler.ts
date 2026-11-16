@@ -47,7 +47,7 @@ import {
   type HandoffSourceMessage,
 } from './agentHandoff.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-live.js';
+import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-catalog.js';
 import { dbToMakerAgentKind, makerToDbAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
 

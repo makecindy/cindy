@@ -476,3 +476,52 @@ describe('shared turn files moved out of register.ts', () => {
     expect(resumeBlock.match(/binding\.rollbackBinding\(\);/g)).toHaveLength(2);
   });
 });
+
+// handleSetModel moved verbatim out of register.ts into maker-ipc/sessionRuntimeSelectionApply.ts (the
+// Node Host runs the same steps). The two contracts below were ordinary unit tests reading register.ts;
+// they now read the moved code and live here (test tier rules), each assertion unchanged.
+describe('runtime selection moved out of register.ts', () => {
+  const registerSource = read(path.join(desktopMain, 'maker-ipc/register.ts'));
+  const runtimeSelectionApplySource = read(path.join(desktopMain, 'maker-ipc/sessionRuntimeSelectionApply.ts'));
+
+  // Was in sessionRuntimeFallbackIntent.test.ts. Rule: an automatic same-engine change yields to a
+  // user's pending choice before it writes or reconciles. Failure: an automatic change overwrites the
+  // route the user just picked.
+  it('uses the same guard before every automatic same-engine mutation can write or reconcile', () => {
+    const start = runtimeSelectionApplySource.indexOf('  const handleSetModel = async (');
+    const body = runtimeSelectionApplySource.slice(start, runtimeSelectionApplySource.indexOf('      const routeExplicit =', start));
+    expect(body).toMatch(/internalOptions.source !== 'user' &&\s*!canApplyAutomaticRuntimeSelection\(sessionId, internalOptions.expectedGeneration\)/);
+    expect(body).toContain('return { deferred: false, superseded: true };');
+  });
+
+  // Was in orcaProviderRoutingSnapshotWiring.test.ts. Rule: a task on an SSH host cannot switch to a
+  // local-only account, refused before the selection is deferred or the running route replaced.
+  // Failure: an SSH worker is moved onto a provider that only exists on this computer.
+  it('rejects SSH account switching before deferring or replacing the running route', () => {
+    const guard = runtimeSelectionApplySource.indexOf("throwIpcError('INVALID_PARAMS', 'This provider requires local execution')");
+    expect(guard).toBeGreaterThan(-1);
+    expect(runtimeSelectionApplySource.slice(guard - 450, guard)).toContain('runtimeStatus.remoteHostId');
+    expect(runtimeSelectionApplySource.slice(guard - 300, guard)).toContain('isLocalOnlyProviderForAgent');
+    expect(runtimeSelectionApplySource.indexOf('const deferLockedSelection =', guard)).toBeGreaterThan(guard);
+    expect(runtimeSelectionApplySource.indexOf('const previousRuntime =', guard)).toBeGreaterThan(guard);
+  });
+
+  // Rule: createHandleSetModel's ports are bound when each call starts; the body used to read these
+  // three register.ts variables at each use. That is the same only while each is assigned once, at
+  // startup, before the set-model handler is registered. Failure: a later reset (an account switch,
+  // say) reaches a call already running with the old value.
+  it('assigns each runtime-selection holder once in register.ts', () => {
+    for (const holder of ['contextOverflowRolloverHolder', 'pendingCredentialSwitchHolder', 'agentInputCoordinatorHolder']) {
+      const assignments = registerSource.match(new RegExp(`(^|[^.\\w])${holder}\\s*=(?!=)`, 'gm')) ?? [];
+      // the one assignment (the declaration `let holder: … | null = null` does not match)
+      expect(assignments, holder).toHaveLength(1);
+    }
+    const handler = registerSource.indexOf('registerSessionSetModelHandler(makerSessionRegistry, {');
+    expect(handler).toBeGreaterThan(-1);
+    for (const holder of ['contextOverflowRolloverHolder', 'pendingCredentialSwitchHolder', 'agentInputCoordinatorHolder']) {
+      const assigned = registerSource.indexOf(`\n  ${holder} = `);
+      expect(assigned, holder).toBeGreaterThan(-1);
+      expect(assigned, holder).toBeLessThan(handler);
+    }
+  });
+});
