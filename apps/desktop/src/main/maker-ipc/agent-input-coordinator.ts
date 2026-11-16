@@ -559,6 +559,7 @@ export interface AgentInputCoordinatorDeps {
     sessionId: string,
     item: AgentInputQueuedMessage,
     disposition: 'cancelled' | 'failed',
+    error?: string,
   ) => void;
   /** Called immediately before the durable user-row write begins. */
   onUserMessagePersisting?: (sessionId: string, item: AgentInputQueuedMessage) => void;
@@ -5913,7 +5914,7 @@ export class AgentInputCoordinator {
       // 下一轮被 dispatch-boundary-busy 挡住,界面上只剩用户气泡、没有红条、也不能重试。
       latest.activeTurn = null;
       this.notifyRejectedUserTurn(sessionId, head);
-      this.notifyUndispatchedUserTurn(sessionId, head, 'failed');
+      this.notifyUndispatchedUserTurn(sessionId, head, 'failed', errorMessage(err));
       if (!rewound) {
         this.persistTerminalSendError(sessionId, latest.error!);
         this.notifyPersistedSendRejected(sessionId, latest.error!);
@@ -6103,6 +6104,7 @@ export class AgentInputCoordinator {
       sessionId,
       item,
       cancelledByUserBoundary ? 'cancelled' : 'failed',
+      cancelledByUserBoundary ? undefined : message,
     );
     if (
       latest.queueAbortPending &&
@@ -6609,7 +6611,7 @@ export class AgentInputCoordinator {
       const schedulerOrigin = this.setActiveTurnRecovery(state, item, {
         persistedFailure: true,
       }) === 'dropped-scheduler';
-      this.notifyUndispatchedUserTurn(sessionId, item, 'failed');
+      this.notifyUndispatchedUserTurn(sessionId, item, 'failed', message);
       log.warn(
         schedulerOrigin
           ? 'session closed before dispatch after persistence; dropped scheduler prompt (no user retry)'
@@ -7830,9 +7832,11 @@ export class AgentInputCoordinator {
     sessionId: string,
     item: AgentInputQueuedMessage,
     disposition: 'cancelled' | 'failed',
+    error?: string,
   ): void {
     try {
-      this.deps.onUndispatchedUserTurn?.(sessionId, item, disposition);
+      if (error === undefined) this.deps.onUndispatchedUserTurn?.(sessionId, item, disposition);
+      else this.deps.onUndispatchedUserTurn?.(sessionId, item, disposition, error);
     } catch (err) {
       log.warn('onUndispatchedUserTurn failed', {
         sessionId,

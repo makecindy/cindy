@@ -3,7 +3,7 @@ import { needsSubscriptionAccountHandoff, hasRestoredPooledCodexQuota } from '..
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { accountProviderId, readMergedProviderAccount, resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef } from '../subscription-accounts/placement.js';
 import { legacyCodexAccountCanRun } from '../subscription-accounts/legacyAccountAccess.js';
-import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
+import { createSchedulerQueueBridge, failSchedulerQueuedPrompt, prepareQueuedPromptSnapshot, schedulerFailureDetail, type SchedulerQueueBridge, type SchedulerQueuedPromptObserver, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
@@ -2003,10 +2003,10 @@ onCodexAutoResetRestored(providerId => usageLimitAutoResume.resumeRestored(id =>
 // 和「最终仍失败」桥给 runner，让同一个 run 继续等待或正确失败。
 const pendingSchedulerAutoResumeRunBySession = new Map<
   string,
-  { runId: string; attemptToken: number; usageLimitToken?: number; retryClientId?: string }
+  { runId: string; attemptToken: number; usageLimitToken?: number; retryClientId?: string; error?: string }
 >();
 interface SchedulerRecoveryListener {
-  failed(): void;
+  failed(error?: string): void;
   quotaWait?: { start(): void; resume(): boolean };
 }
 const schedulerAutoResumeFailureListeners = new Map<string, Set<SchedulerRecoveryListener>>();
@@ -2015,8 +2015,10 @@ function schedulerAutoResumeRunKey(sessionId: string, runId: string): string {
   return JSON.stringify([sessionId, runId]);
 }
 
-function beginSchedulerAutoResume(sessionId: string, runId: string, attemptToken: number): void {
-  pendingSchedulerAutoResumeRunBySession.set(sessionId, { runId, attemptToken });
+function beginSchedulerAutoResume(sessionId: string, runId: string, attemptToken: number, error?: string): void {
+  pendingSchedulerAutoResumeRunBySession.set(sessionId, {
+    runId, attemptToken, error: error ? schedulerFailureDetail(error) : undefined,
+  });
 }
 
 function clearSchedulerAutoResumePending(
@@ -2052,7 +2054,7 @@ function notifySchedulerAutoResumeFailed(
   if (!listeners) return;
   for (const listener of listeners) {
     try {
-      listener.failed();
+      listener.failed(current.error);
     } catch {
       // Runner listener failures must not break chat recovery cleanup.
     }
@@ -2081,7 +2083,7 @@ export function isSchedulerAutoResumePending(sessionId: string, runId: string): 
 export function onSchedulerAutoResumeFailed(
   sessionId: string,
   runId: string,
-  listener: () => void,
+  listener: (error?: string) => void,
   quotaWait?: SchedulerRecoveryListener['quotaWait'],
 ): () => void {
   const key = schedulerAutoResumeRunKey(sessionId, runId);
@@ -5326,7 +5328,7 @@ export type { SchedulerQueuedPromptRequest, SchedulerEnqueueResult } from './sch
 
 let schedulerQueueBridgeHolder: SchedulerQueueBridge | null = null;
 /** 排队心跳的 discard 监听(clientId → 通知 runner 收尾)。派发/丢弃后清条目。 */
-const schedulerQueuedPromptDiscardWatchers = new Map<string, () => void>();
+const schedulerQueuedPromptDiscardWatchers = new Map<string, SchedulerQueuedPromptObserver>();
 const schedulerQueuedPromptPreparations = new Map<string, {
   onPreparing: () => Promise<void>;
   onPreparationFailed?: (error: unknown) => void;
@@ -19464,6 +19466,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // lookup is async; unknown/unsafe resets release the run but keep Retry.
         pendingSchedulerAutoResumeRunBySession.set(sessionId, {
           runId: item.origin.runId, attemptToken: 0, usageLimitToken: candidateToken,
+          error: signals.message ? schedulerFailureDetail(signals.message) : undefined,
         });
         for (const listener of schedulerAutoResumeFailureListeners.get(schedulerAutoResumeRunKey(sessionId, item.origin.runId)) ?? []) {
           listener.quotaWait?.start();
@@ -19872,7 +19875,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (watcher) {
         schedulerQueuedPromptDiscardWatchers.delete(item.clientId);
         try {
-          watcher();
+          watcher.onDiscarded();
         } catch (err) {
           log.warn('scheduler queued prompt discard watcher threw', {
             clientId: item.clientId,
@@ -19941,9 +19944,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 才是目标续跑轮 —— 绕过 coordinator 的 turn(silent-stop 自动续跑)不走这里,
       // 结构上不可能被误认。详见 uiContinuationSignal 的模块注释。
       publishUiTurnDispatching(sessionId, item.clientId);
-      await gitSnapshotCoordinator?.onTurnStart(sessionId, signal);
+      await prepareQueuedPromptSnapshot(gitSnapshotCoordinator, schedulerQueuedPromptDiscardWatchers, sessionId, item, signal);
     },
-    onUndispatchedUserTurn: (sessionId, item, disposition) => {
+    onUndispatchedUserTurn: (sessionId, item, disposition, error) => {
+      if (disposition === 'failed' && error && item.origin?.kind === 'scheduler') {
+        failSchedulerQueuedPrompt(schedulerQueuedPromptDiscardWatchers, item.clientId, error);
+      }
       welcomeDispatchReceipts.settle(sessionId, item.clientId, false);
       // 目标轮落库了却没能 dispatch(取消 / 失败): 记账该立刻还回去, 而不是等超时。
       publishUiTurnUndispatched(sessionId, item.clientId);
@@ -21009,7 +21015,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 ...(stored ? { planMode: stored.planModeEnabled === true } : {}),
               },
             });
-            if (req.onDiscarded) schedulerQueuedPromptDiscardWatchers.set(clientId, req.onDiscarded);
+            if (req.onDiscarded) schedulerQueuedPromptDiscardWatchers.set(clientId, { onDiscarded: req.onDiscarded, signal: req.signal });
             if (req.onPreparing) schedulerQueuedPromptPreparations.set(clientId, {
               onPreparing: req.onPreparing, onPreparationFailed: req.onPreparationFailed,
             });

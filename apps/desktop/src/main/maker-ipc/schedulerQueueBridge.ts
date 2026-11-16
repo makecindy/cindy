@@ -1,6 +1,45 @@
 import type { AgentInputCoordinator } from './agent-input-coordinator.js';
 import type { SessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import type { SchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
+import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import type { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordinator.js';
+import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+
+export interface SchedulerQueuedPromptObserver {
+  onDiscarded(error?: string): void;
+  signal?: AbortSignal;
+}
+
+/** Bounded diagnostic text, never an Error stack or an arbitrary object dump. */
+export function schedulerFailureDetail(message: string): string {
+  return redactSensitiveText(message)
+    .replace(/\r?\n\s*at\s[^\r\n]*/g, '')
+    .replace(/(["'])(?:[A-Za-z]:[\\/]|\/|~[\\/])[^\r\n]*?\1/g, '<path>')
+    .replace(/(?:[A-Za-z]:[\\/]|~[\\/]|\/(?:Users|home|tmp|var|private)\/)[^\s"'<>]*/g, '<path>')
+    .replace(/\s+/g, ' ').trim().slice(0, 1024);
+}
+
+/** The row exists but its pre-accept hook failed, so no Session listener owns it. */
+export function failSchedulerQueuedPrompt(
+  watchers: Map<string, SchedulerQueuedPromptObserver>, clientId: string, message: string,
+): void {
+  const watcher = watchers.get(clientId);
+  watchers.delete(clientId);
+  try { watcher?.onDiscarded(schedulerFailureDetail(message)); }
+  catch { /* Runner listeners must not interrupt undispatched-turn cleanup. */ }
+}
+
+/** Both chat Stop and schedule pause/delete fence the same pre-vendor reservation. */
+export async function prepareQueuedPromptSnapshot(
+  snapshots: Pick<GitSnapshotCoordinator, 'onTurnStart'> | null | undefined,
+  watchers: Map<string, SchedulerQueuedPromptObserver>,
+  sessionId: string, item: AgentInputQueuedMessage, signal?: AbortSignal,
+): Promise<void> {
+  const runSignal = watchers.get(item.clientId)?.signal;
+  await snapshots?.onTurnStart(sessionId, runSignal && signal ? AbortSignal.any([signal, runSignal]) : signal, {
+    retryIntentTimeout: !!signal && !!runSignal && item.origin?.kind === 'scheduler' && !!item.origin.runId && !item.autoResume,
+  });
+}
 
 export interface SchedulerQueuedPromptRequest {
   sessionId: string;
@@ -11,6 +50,8 @@ export interface SchedulerQueuedPromptRequest {
   /** 落库与队列气泡展示的用户原始 prompt(不含隐藏协议)。 */
   persistedContent: string;
   origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId?: string };
+  /** In-memory run lifetime; never persisted or sent over the wire. */
+  signal?: AbortSignal;
   /** Runs under the send lock before the live session is captured or a user row is written. */
   onPreparing?: () => Promise<void>;
   /** Reject the queued run if preparation fails before dispatch. */
@@ -20,7 +61,7 @@ export interface SchedulerQueuedPromptRequest {
   /** 派发已 accept 但最终未成为运行 turn(取消/回滚)时回调。 */
   onAcceptedRollback?: () => void | Promise<void>;
   /** 排队项未派发即被丢弃(用户删除队列行 / stop 清队列 / 会话清理)时回调。 */
-  onDiscarded?: () => void;
+  onDiscarded?: (error?: string) => void;
 }
 
 /**
@@ -46,7 +87,7 @@ interface SchedulerQueueBridgeDeps<Meta> {
   getSessionMeta(sessionId: string): Promise<Meta | null>;
   getSessionRowSnapshot(sessionId: string): Promise<SessionRowSnapshot | null>;
   createId(): string;
-  discardWatchers: Map<string, () => void>;
+  discardWatchers: Map<string, SchedulerQueuedPromptObserver>;
   preparations: Map<string, SchedulerQueuedPreparation>;
   enqueue(req: {
     targetSessionId: string; message: string; persistedContent: string; clientId: string;
@@ -113,7 +154,7 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
       }
       const clientId = deps.createId();
       if (req.onDiscarded) {
-        schedulerQueuedPromptDiscardWatchers.set(clientId, req.onDiscarded);
+        schedulerQueuedPromptDiscardWatchers.set(clientId, { onDiscarded: req.onDiscarded, signal: req.signal });
       }
       if (req.onPreparing) {
         schedulerQueuedPromptPreparations.set(clientId, {

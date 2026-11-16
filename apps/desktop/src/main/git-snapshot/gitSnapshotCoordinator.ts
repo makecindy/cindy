@@ -6,7 +6,7 @@
  */
 
 import type { AgentKind } from '@cindy/maker-core';
-import { OperationBudget, operationCheckpoint, operationWait } from '../utils/operationBudget';
+import { OperationBudget, SnapshotOperationDeadlineError, operationCheckpoint, operationWait } from '../utils/operationBudget';
 
 import { createAfterEditLabel } from './gitSnapshotLabeler';
 import { enqueueGitRepoWrite } from './gitRepoWriteQueue';
@@ -139,7 +139,11 @@ export class GitSnapshotCoordinator {
    * Turn-start hook. Snapshots the current worktree state onto the session's
    * shadow savepoint chain as the baseline for this turn's file rewind.
    */
-  async onTurnStart(sessionId: string, signal?: AbortSignal): Promise<void> {
+  async onTurnStart(
+    sessionId: string,
+    signal?: AbortSignal,
+    options?: { retryIntentTimeout?: boolean },
+  ): Promise<void> {
     const autoSnapshotEnabled = this.deps.readAutoSnapshotEnabled();
     const record: TurnStartRecord = {
       operation: new OperationBudget(this.deps.snapshotTimeoutMs ?? TURN_SNAPSHOT_BUDGET_MS),
@@ -166,6 +170,16 @@ export class GitSnapshotCoordinator {
       const index = queue?.indexOf(record) ?? -1;
       if (index >= 0) queue!.splice(index, 1);
       if (queue?.length === 0) this.turnStartQueues.delete(sessionId);
+      // Only a scheduled, still-reserved send may repeat this pre-vendor step.
+      // No Git work or accepted callback ran while intent was unavailable. A
+      // late immutable intent can leave a rewind gap, never dispatch a turn.
+      // The recursive call has no retry option: two 8s attempts at most, with
+      // the original cancellation signal and no queue/user-row/run recreation.
+      if (!intentRecorded && options?.retryIntentTimeout && signal && !signal.aborted
+        && error instanceof SnapshotOperationDeadlineError) {
+        await this.onTurnStart(sessionId, signal);
+        return;
+      }
       throw error;
     }
   }

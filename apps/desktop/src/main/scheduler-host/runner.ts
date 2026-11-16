@@ -97,6 +97,7 @@ import {
 import { crossesCodexAppliedCustomProviderIdentity } from '../maker-host/codex-custom-provider-route.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace';
 import { AcceptedCallbackDispatchCancelled } from '../maker-ipc/acceptedCallbackRunner.js';
+import { schedulerFailureDetail } from '../maker-ipc/schedulerQueueBridge.js';
 
 
 import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff.js';
@@ -231,6 +232,7 @@ export interface SchedulerQueueDeps {
   /** 该 schedule 是否已有排队中(或正在派发)的心跳消息 —— 防重复入队。 */
   hasQueuedPrompt(sessionId: string, scheduleId: string): boolean;
   enqueuePrompt(req: {
+    signal?: AbortSignal;
     sessionId: string;
     text: string;
     persistedContent: string;
@@ -244,7 +246,7 @@ export interface SchedulerQueueDeps {
       planMode?: boolean;
     }) => void | Promise<void>;
     onAcceptedRollback?: (reason?: 'cancelled-before-dispatch') => void | Promise<void>;
-    onDiscarded?: () => void;
+    onDiscarded?: (error?: string) => void;
   }): Promise<{ clientId: string } | { duplicate: true } | { retry: true }>;
   removeQueuedPrompt(sessionId: string, clientId: string): void;
   /**
@@ -257,7 +259,7 @@ export interface SchedulerQueueDeps {
   isAutoResumePending?: (sessionId: string, runId: string) => boolean;
   /** 已接管的续跑最终仍失败（含补发未 dispatch / Stop / clear）。 */
   onAutoResumeFailed?: (
-    sessionId: string, runId: string, listener: () => void,
+    sessionId: string, runId: string, listener: (error?: string) => void,
     quotaWait?: { start(): void; resume(): boolean },
   ) => () => void;
   /** Schedule pause/delete：撤销仍属于该 run 的退避或派发前隐藏续跑。 */
@@ -2689,6 +2691,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
 
     const enqueuePrompt = options?.enqueuePrompt ?? sq.enqueuePrompt.bind(sq);
     const enqueueResult = await enqueuePrompt({
+      signal: ctx.signal,
       sessionId,
       text: promptToSend,
       inheritTargetPlanMode: true,
@@ -2919,10 +2922,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
         failAfterAccept(err);
         failDispatch(err);
       },
-      onDiscarded: () => {
-        // 排队项未派发即被移除(用户删队列行 / stop 清队列 / pause-delete 撤项)
-        // → run 按 aborted 收尾(引擎按 /abort/i 识别错误文案)。
-        failDispatch(new Error('queued heartbeat prompt removed before dispatch (aborted)'));
+      onDiscarded: (error) => {
+        // 派发前失败保留原因；用户删队列行 / Stop / pause-delete 仍按 aborted 收尾。
+        failDispatch(new Error(error
+          ? schedulerFailureDetail(error)
+          : 'queued heartbeat prompt removed before dispatch (aborted)'));
       },
     });
     if ('retry' in enqueueResult) {
@@ -3957,7 +3961,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
       autoResumeFailureUnsub = this.deps.schedulerQueue?.onAutoResumeFailed?.(
         sessionId,
         options.origin.runId,
-        () => fail(new Error('scheduled task auto-resume failed')),
+        (error) => fail(new Error(error
+          ? schedulerFailureDetail(error)
+          : 'scheduled task auto-resume failed')),
         {
           start: () => {
             if (settled || quotaWaiting) return;

@@ -121,6 +121,9 @@ import {
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 import { withScheduleLock } from '../scheduleLock';
 import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator.desktop.js';
+import { GitSnapshotCoordinator } from '../../git-snapshot/gitSnapshotCoordinator.js';
+import { createSchedulerQueueBridge, failSchedulerQueuedPrompt, prepareQueuedPromptSnapshot, type SchedulerQueuedPromptObserver } from '../../maker-ipc/schedulerQueueBridge.js';
+import type { SchedulerQueuedPreparation } from '../../maker-ipc/schedulerQueuedPreparation.js';
 import { createInputEnqueueHarness } from '../../maker-ipc/__tests__/inputEnqueueHarness.js';
 import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '../../../shared/interruptedTurn.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
@@ -326,9 +329,9 @@ interface QueueHarness {
   /** 同上但不吞 AcceptedCallbackDispatchCancelled,供取消语义的回归用例断言。 */
   acceptRaw(permissions?: { permissionMode?: string; planMode?: boolean }): Promise<void>;
   /** 模拟排队项被丢弃(用户删除 / abort 撤项)。 */
-  discard(): void;
+  discard(error?: string): void;
   /** 模拟普通自动续跑最终仍失败。 */
-  failAutoResume(): void;
+  failAutoResume(error?: string): void;
   startQuotaWait(): void;
   resumeQuotaWait(): boolean;
 }
@@ -355,7 +358,7 @@ function createQueueHarness(opts: {
   const enqueueCalls: QueueHarness['enqueueCalls'] = [];
   const removeCalls: QueueHarness['removeCalls'] = [];
   const cancelAutoResumeCalls: QueueHarness['cancelAutoResumeCalls'] = [];
-  const autoResumeFailureListeners = new Set<() => void>();
+  const autoResumeFailureListeners = new Set<(error?: string) => void>();
   let quotaWait: { start(): void; resume(): boolean } | undefined;
   return {
     enqueueCalls,
@@ -407,11 +410,11 @@ function createQueueHarness(opts: {
       catch (error) { request?.onPreparationFailed?.(error); return; }
       await enqueueCalls.at(-1)?.onAccepted(permissions);
     },
-    discard() {
-      enqueueCalls.at(-1)?.onDiscarded?.();
+    discard(error) {
+      enqueueCalls.at(-1)?.onDiscarded?.(error);
     },
-    failAutoResume() {
-      for (const listener of [...autoResumeFailureListeners]) listener();
+    failAutoResume(error) {
+      for (const listener of [...autoResumeFailureListeners]) listener(error);
     },
     startQuotaWait() { quotaWait?.start(); },
     resumeQuotaWait() { return quotaWait?.resume() ?? false; },
@@ -521,6 +524,115 @@ beforeEach(() => {
 });
 
 describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
+  // #10802 / unit: before accept there is no Session event listener. The
+  // scheduler must settle from the queued failure callback, not its later poll.
+  it.each(['recovered', 'exhausted', 'permission', 'stop', 'clear', 'pause', 'delete', 'unknown-send'] as const)(
+    'settles pre-accept snapshot preparation through the real queue: %s', async (outcome) => {
+    vi.useFakeTimers();
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const ctx = createFireContext();
+    const watchers = new Map<string, SchedulerQueuedPromptObserver>();
+    const preparations = new Map<string, SchedulerQueuedPreparation>();
+    let accepted: (() => void | Promise<void>) | undefined;
+    let releaseIntent!: (value: { attemptId: string }) => void;
+    const stalled = new Promise<{ attemptId: string }>(resolve => { releaseIntent = resolve; });
+    const recordTurnAttempt = vi.fn().mockImplementationOnce(() => outcome === 'permission'
+      ? Promise.reject(new Error('permission denied'))
+      : outcome === 'unknown-send' ? Promise.resolve({ attemptId: 'original' }) : stalled)
+      .mockImplementation(() => outcome === 'exhausted' ? stalled : Promise.resolve({ attemptId: 'recovered' }));
+    const snapshots = new GitSnapshotCoordinator({
+      snapshotTimeoutMs: 50, recordTurnAttempt, readAutoSnapshotEnabled: () => false,
+      detectRepoRoot: vi.fn(), getSessionContext: vi.fn(), resolveAnchor: vi.fn(),
+      getLastUserPrompt: vi.fn(), createShadowSavepoint: vi.fn(), createShadowMarker: vi.fn(),
+      oneShot: vi.fn(), logger: { ...createLogger(), debug: vi.fn() },
+    });
+    const vendorSend = vi.fn();
+    const persisted = vi.fn();
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: async (_sid, _message, _opts, sendOpts) => {
+        await preparations.get('snapshot-run-input')?.onPreparing();
+        sendOpts.persistUserMessage?.onPersisting?.();
+        persisted(sendOpts.persistUserMessage?.clientId);
+        await sendOpts.persistUserMessage?.onPersisted?.();
+        vendorSend();
+        if (outcome === 'unknown-send') throw new Error('Snapshot operation deadline exceeded');
+        return { kind: 'session-dispatch', source: 'test', dispatched: true };
+      },
+      beforeDispatchUserTurn: (sid, item, signal) => prepareQueuedPromptSnapshot(snapshots, watchers, sid, item, signal),
+      onAcceptedQueuedMessage: async () => { watchers.delete('snapshot-run-input'); await accepted?.(); },
+      onUndispatchedUserTurn: (_sid, item, disposition, error) => {
+        if (disposition === 'failed' && error) failSchedulerQueuedPrompt(watchers, item.clientId, error);
+      },
+      onDiscardedQueuedMessage: (_sid, item) => { watchers.get(item.clientId)?.onDiscarded(); watchers.delete(item.clientId); },
+      steerToAgent: async () => {}, abortSession: async () => {}, isTurnRunning: () => false,
+      hasPendingInteraction: () => false, getAgentKind: () => 'claude-code',
+      getSdkSessionId: async () => 'sdk-1', emitProjection: () => {},
+    });
+    const queue = createSchedulerQueueBridge({
+      coordinator, isSessionBusy: () => true, getSessionMeta: async () => ({}),
+      getSessionRowSnapshot: mocks.getSessionRowSnapshot, createId: () => 'snapshot-run-input',
+      discardWatchers: watchers, preparations,
+      enqueue: async req => {
+        accepted = () => req.onAccepted({ permissionMode: 'ask', planMode: false });
+        coordinator.enqueue(req.targetSessionId, {
+          clientId: req.clientId, text: req.message, persistedContent: req.persistedContent,
+          model: 'claude-opus-4-6', effort: '', permissionMode: 'ask', workingDir: '/repo',
+          origin: req.origin,
+          createOpts: { agentKind: 'claude-code', model: 'claude-opus-4-6', workingDir: '/repo',
+            permissionMode: 'ask', planMode: false, userPrompt: '', makerMemoryEnabled: true, displayReasoning: 'summarized' },
+          chatMessage: { clientId: req.clientId, role: 'user', content: req.persistedContent, createdAt: new Date().toISOString() },
+        });
+      },
+    });
+    const { runner } = createRunnerHarness(h.session, queue);
+    const fire = runner.fire(heartbeatSchedule(), ctx);
+    // Observe the thrown result consumed by the engine to persist this same run.
+    const settled = fire.then(result => ({ result, error: undefined }), error => ({ result: undefined, error }));
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(persisted).toHaveBeenCalledExactlyOnceWith('snapshot-run-input');
+      if (outcome === 'stop') coordinator.stop(SESSION_ID, { keepQueue: false, pauseQueue: true });
+      if (outcome === 'clear') coordinator.clearSession(SESSION_ID);
+      if (outcome === 'pause' || outcome === 'delete') ctx.abortController.abort();
+      await vi.advanceTimersByTimeAsync(100);
+      if (outcome === 'recovered') h.emit({ type: 'done', data: {}, source: 'claude-code' });
+      if (outcome === 'unknown-send') h.emit({ type: 'error', data: { message: 'Snapshot operation deadline exceeded' }, source: 'claude-code' });
+      // Existing liveness fallback also settles a session cleared by the user.
+      await vi.advanceTimersByTimeAsync(QUEUED_DISPATCH_TRACK_POLL_MS);
+      const result = await settled;
+      expect(recordTurnAttempt).toHaveBeenCalledTimes(['recovered', 'exhausted'].includes(outcome) ? 2 : 1);
+      expect(vendorSend).toHaveBeenCalledTimes(['recovered', 'unknown-send'].includes(outcome) ? 1 : 0);
+      if (outcome === 'recovered') expect(result.error).toBeUndefined();
+      else expect(result.error).toBeInstanceOf(Error);
+      if (outcome === 'exhausted') expect(result.error.message).toBe('Snapshot operation deadline exceeded');
+      if (outcome === 'permission') expect(result.error.message).toBe('permission denied');
+      expect(persisted).toHaveBeenCalledOnce();
+      releaseIntent({ attemptId: 'late' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vendorSend).toHaveBeenCalledTimes(['recovered', 'unknown-send'].includes(outcome) ? 1 : 0);
+      expect(h.listenerCount()).toBe(0);
+    } finally {
+      ctx.abortController.abort(); coordinator.clearSession(SESSION_ID); snapshots.onSessionClosed(SESSION_ID);
+      await vi.advanceTimersByTimeAsync(QUEUED_DISPATCH_TRACK_POLL_MS); await settled;
+      vi.useRealTimers();
+    }
+  });
+
+  it('preserves the quota cause when recovery fails without another vendor event', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, autoResumePending: () => true });
+    const { runner, notifier } = createRunnerHarness(h.session, queue.deps);
+    const fire = runner.fire(heartbeatSchedule(), createFireContext());
+    const rejected = expect(fire).rejects.toThrow("You've hit your usage limit");
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    queue.failAutoResume("You've hit your usage limit. token=synthetic-test-secret path='/home/example/private/data'\n    at internal-frame");
+    await rejected;
+    expect(latestNotifiedRun(notifier).errorMsg).toContain("You've hit your usage limit");
+    expect(latestNotifiedRun(notifier).errorMsg).not.toMatch(/synthetic-test-secret|example|internal-frame/);
+    expect(h.listenerCount()).toBe(0);
+  });
+
   // Review P1 / unit: the real IPC Continue input starts with planMode=false.
   // Connect that handler and coordinator to the real runner so the accepted
   // permission gate, rather than a mocked enqueue, decides vendor dispatch.

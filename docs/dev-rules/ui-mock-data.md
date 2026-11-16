@@ -90,6 +90,10 @@ pnpm restart:desktop:remote -- --mock --isolated=<名字>   # 另开一份模拟
 
 ## Mobile 模拟器
 
+自动化模拟记录包含发送前保存点超时和原始额度错误，分别打开任务
+`ui-mock-rich-answer` / `visual-automation-unread`，在历史失败提示中展开错误详情，
+检查原因传递后的文本与 Light / Dark 可读性；均为合成数据，不运行模型。
+
 ```bash
 pnpm mobile:sim:start -- --mock
 pnpm mobile:sim:whoami -- --mock --json

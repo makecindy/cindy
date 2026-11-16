@@ -539,6 +539,12 @@ async function visualMockInvoke<T = unknown>(
       return (visualMockSchedules().find((item) => item.id === args[0]) ?? visualMockSchedules()[0]) as T;
     case 'maker:schedule:list-runs':
       return visualMockScheduleRuns(String(args[0] ?? 'visual-schedule-1')) as T;
+    case 'maker:schedule:list-sidebar-index-runs': {
+      const schedule = visualMockSchedules()[0];
+      return { runs: visualMockScheduleRuns(schedule.id).map(run => ({
+        ...run, runId: run.id, scheduleName: schedule.name, scheduleStatus: schedule.status,
+      })) } as T;
+    }
     case 'maker:schedule:list-templates':
       return visualMockScheduleTemplates() as T;
     case 'file-browser:remote-op':
@@ -1094,6 +1100,24 @@ function visualMockSchedules(): ReturnType<MobileMakerTransport['schedule']['lis
 
 function visualMockScheduleRuns(_scheduleId: string): ReturnType<MobileMakerTransport['schedule']['listRuns']> extends Promise<infer T> ? T : never {
   return [
+    {
+      id: 'visual-run-snapshot-failed',
+      scheduleId: 'visual-schedule-1',
+      sessionId: 'ui-mock-rich-answer',
+      status: 'failed',
+      firedAt: NOW - 30000,
+      finishedAt: NOW - 14000,
+      errorMsg: 'Snapshot operation deadline exceeded',
+    },
+    {
+      id: 'visual-run-quota-failed',
+      scheduleId: 'visual-schedule-1',
+      sessionId: 'visual-automation-unread',
+      status: 'failed',
+      firedAt: NOW - 60000,
+      finishedAt: NOW - 44000,
+      errorMsg: "You've hit your usage limit. Try again later.",
+    },
     {
       id: 'visual-run-running',
       scheduleId: 'visual-schedule-1',

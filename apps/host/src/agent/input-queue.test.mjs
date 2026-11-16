@@ -359,6 +359,32 @@ test('scheduler preparation failure reaches the runner before any model or user-
   assert.equal(h.maker.getSession('scheduled-task'), null);
 });
 
+// #10802 / integration: Node Host uses the shared queue too; an already durable
+// pre-accept failure must reach its runner without sending or duplicating input.
+test('scheduled snapshot failure reaches the Host runner before acceptance', async t => {
+  t = lifoCleanup(t);
+  const run = new AbortController();
+  let failure; let accepted = 0;
+  const h = createHarness({ getGitSnapshot: () => ({
+    onTurnStart(_id, signal, options) {
+      assert.equal(signal.aborted, false);
+      assert.equal(options.retryIntentTimeout, true);
+      throw new Error('Snapshot operation deadline exceeded');
+    },
+    onTurnAbort() {}, onTurnEnd() {}, onSessionClosed() {},
+  }) });
+  t.after(() => h.queue.dispose());
+  const result = await h.queue.schedulerQueue().enqueuePrompt(scheduledInput({
+    signal: run.signal, onDiscarded: error => { failure = error; }, onAccepted: () => accepted++,
+  }));
+  await waitFor(() => failure);
+  assert.equal(failure, 'Snapshot operation deadline exceeded');
+  assert.equal(accepted, 0);
+  assert.equal(h.persisted.filter(row => row.clientId === result.clientId).length, 1);
+  assert.equal(h.maker.getSession('scheduled-task').sent.length, 0);
+  assert.equal(h.queue.schedulerQueue().isPromptTracked('scheduled-task', result.clientId), false);
+});
+
 test('a cancelled scheduler acceptance rolls back before vendor dispatch', async t => {
   t = lifoCleanup(t);
   const h = createHarness(); t.after(() => h.queue.dispose());
