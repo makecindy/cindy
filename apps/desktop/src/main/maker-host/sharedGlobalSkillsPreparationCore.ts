@@ -6,6 +6,7 @@
  * desktop binds the Electron values, the Host binds its own. The 30-second completion cache and the
  * once-per-set persistent warnings stay per instance, as they were per adapter instance.
  */
+import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { assertGhostSkillProjectionBoundaryStableForOwner, withSharedGlobalSkillProjectionMutation } from '../authBoundaryQuarantine.js';
 import { createLogger } from '../logger.js';
 import { migrateBuiltInGlobalSkillLinks, prepareBuiltInSkills } from './built-in-skills.js';
@@ -21,6 +22,23 @@ import {
  * stay out of log upload (`log-upload/sourceAllowlist` DENIED_SUB_SCOPES).
  */
 const assetPrepLog = createLogger('auth-adapters:asset-prep');
+
+/**
+ * The active owner, its cache key and whether it is still current. Moved unchanged from auth-adapters.ts,
+ * where the Codex asset preparation uses it too; the Node Host binds it as the preparation scope.
+ */
+export function preparationScope(): { key: string; ownerId: string | null; current: () => boolean } {
+  const owner = getActiveAppSession();
+  return {
+    key: JSON.stringify([owner.dataOwnerId, owner.generation, isAppSessionBoundaryPending()]),
+    ownerId: owner.dataOwnerId,
+    current: () => {
+      const latest = getActiveAppSession();
+      return !isAppSessionBoundaryPending() && latest.generation === owner.generation
+        && latest.dataOwnerId === owner.dataOwnerId;
+    },
+  };
+}
 
 export interface SharedGlobalSkillsPreparationPorts {
   /** The active owner, its cache key and whether it is still current (auth-adapters `preparationScope`). */

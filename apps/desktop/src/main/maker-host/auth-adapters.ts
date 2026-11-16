@@ -48,7 +48,7 @@ import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
 import { markClaudeSessionObserved } from './shared-global-skills.js';
 import { PreparationCache } from './preparation-cache.js';
 import { resolveBundledSystemSkillsRoot } from './built-in-skills.js';
-import { createSharedGlobalSkillsPreparation } from './sharedGlobalSkillsPreparationCore.js';
+import { createSharedGlobalSkillsPreparation, preparationScope } from './sharedGlobalSkillsPreparationCore.js';
 import {
   copyCodexAuthSnapshotWithRetry,
   inspectCodexAuthLink,
@@ -135,18 +135,6 @@ const log = createLogger('auth-adapters');
  */
 const assetPrepLog = createLogger('auth-adapters:asset-prep');
 
-function preparationScope(): { key: string; ownerId: string | null; current: () => boolean } {
-  const owner = getActiveAppSession();
-  return {
-    key: JSON.stringify([owner.dataOwnerId, owner.generation, isAppSessionBoundaryPending()]),
-    ownerId: owner.dataOwnerId,
-    current: () => {
-      const latest = getActiveAppSession();
-      return !isAppSessionBoundaryPending() && latest.generation === owner.generation
-        && latest.dataOwnerId === owner.dataOwnerId;
-    },
-  };
-}
 /**
  * 凭证文件的落盘 / 权限 / 硬链操作失败诊断。这些消息(icacls/chmod 的 `{ file }`、`fsp.rm` 与
  * `relinkSharedCodexAuth` 的 `error.message`)会带 `auth.json` / `models_cache.json` 等**凭证文件
