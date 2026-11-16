@@ -638,6 +638,7 @@
     "dismissNotice": "Fermer l'avis",
     "ignore": "Ignorer",
     "executionResultUnavailable": "Impossible de récupérer le résultat de l'exécution. La poursuite automatique s'est arrêtée. Demandez à l'assistant de vérifier le résultat d'exécution existant.",
+    "unexecutedToolMarkup": "Le modèle a écrit un appel d’outil sous forme de texte. L’exécution n’a pas pu être confirmée ; ce tour n’est donc pas terminé.",
     "outputLimit": "Le modèle a atteint sa limite de sortie ; cette réponse peut être incomplète. Envoyez un nouveau message pour continuer. Si cela se répète, réduisez l’effort de raisonnement ou compactez d’abord l’historique de la conversation.",
     "outputLimitReasoning": "Le raisonnement a consommé la majeure partie du budget de sortie de cette requête ; la réponse peut être incomplète. Réduisez l’effort de raisonnement ou compactez l’historique de la conversation avant de continuer.",
     "outputLimitUsage": "Cette requête au modèle a utilisé {{outputTokens}} jetons de sortie, dont {{reasoningTokens}} jetons de raisonnement.",

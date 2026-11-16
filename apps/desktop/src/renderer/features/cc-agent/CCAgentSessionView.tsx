@@ -6008,7 +6008,7 @@ function CCAgentSessionContent({
                     backgroundBash.stopping ||
                     remoteBackground.stopping
                   }
-                  suppressContent={Boolean(pendingPlanReview)}
+                  suppressContent={Boolean(pendingPlanReview) || errorReason === 'unexecuted-tool-markup'}
                   onStopBackgroundTasks={() => {
                     if (remoteDeviceId) void remoteBackground.stopAll();
                     else if (backgroundActivity.active) void backgroundActivity.stopAll();

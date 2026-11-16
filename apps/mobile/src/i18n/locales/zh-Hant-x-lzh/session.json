@@ -635,6 +635,7 @@
     "dismissNotice": "闔提示",
     "ignore": "略之",
     "executionResultUnavailable": "未能取得行之結果，已停自動接續。可請助手察既有之結果。",
+    "unexecutedToolMarkup": "模型以文字述工具之呼叫，未能核其執行結果，此輪未竟。",
     "outputLimit": "模型已達輸出之限，此答或有不全。可遣新訊以續；若屢至此限，宜降思之深淺，或先壓縮言談錄。",
     "outputLimitReasoning": "思考已耗本次輸出預算之大半，此答或有不全。宜降思之深淺，或先壓縮言談錄，而後續之。",
     "outputLimitUsage": "本次模型請求已輸出 {{outputTokens}} tokens，其中 {{reasoningTokens}} tokens 用於思考。",

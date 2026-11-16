@@ -12,6 +12,7 @@
 
 import { describe, it, expect } from 'vitest';
 
+import { i18n } from '@/i18n';
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
 import { ERROR_REASON_I18N_KEYS } from '@/components/chat/errorReasonI18n';
@@ -31,6 +32,27 @@ function errorRow(clientId: string, content: unknown): Message {
 }
 
 describe('mapServerMessages — persisted terminal error rows', () => {
+  it('restores unexecuted tool markup as a localized failure after reopening', () => {
+    const mapped = makerChatStore.__mapServerMessagesForTest([
+      errorRow('markup', { message: 'fallback', reason: 'unexecuted-tool-markup' }),
+    ]);
+    expect(mapped[0]).toMatchObject({ role: 'error', errorReason: 'unexecuted-tool-markup', isStreaming: false });
+    expect(ERROR_REASON_I18N_KEYS[mapped[0]!.errorReason!]).toBe('logic.errors.unexecutedToolMarkup');
+  });
+
+  it('shows the text-only tool failure in the live banner', () => {
+    try {
+      makerChatStore.__applyStreamEventForTest(SESSION_ID, {
+        sessionId: SESSION_ID, type: 'error', data: {
+          message: 'fallback', reason: 'unexecuted-tool-markup', isTerminal: true,
+        },
+      });
+      expect(makerChatStore.getSnapshot(SESSION_ID)).toMatchObject({
+        errorReason: 'unexecuted-tool-markup', error: i18n.t('logic.errors.unexecutedToolMarkup'),
+      });
+    } finally { makerChatStore.purgeSession(SESSION_ID); }
+  });
+
   it('maps Codex Auto reviewer failures to the stable localized reason key', () => {
     expect(ERROR_REASON_I18N_KEYS['codex-auto-review-unavailable']).toBe(
       'logic.errors.codexAutoReviewUnavailable',
