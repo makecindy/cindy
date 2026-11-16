@@ -320,7 +320,7 @@ async function submit(options: {
     leadingSlashInvocation, rebaseInlineRangesAfterSlashCommandRewrite, rewriteBuiltInSkillDraftForSend, setPending, setPendingGoal,
     rewritePiSkillMessageForSend: async ({ message }: { message: string }) => message,
     clearComposerDraftAndNotify: clearDraft, attachmentState: { clearFiles: vi.fn() },
-    resetDraftWorkspaceAfterSend: noop, navigate: vi.fn(), setWtCreating: noop,
+    resetDraftWorkspaceAfterSend: noop, navigate: vi.fn(), setWtCreatingInfo: vi.fn(),
     makeDraftSessionId: () => 'remote-created', resolveDeviceLinkSubmission, parseRemoteWorktreeCreateResult,
     recoverPendingRemotePrecreatedWorktrees: vi.fn(async () => ({ storageReadable: true, retained: 0 })),
     registerPendingRemotePrecreatedWorktree: async () => true,

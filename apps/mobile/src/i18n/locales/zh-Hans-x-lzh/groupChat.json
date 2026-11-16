@@ -298,6 +298,8 @@
       "loading": "方读群之设置…",
       "unavailable": "群之设置读取未成，请再试"
     },
+    "allowMemberInvites": "许诸成员邀友",
+    "allowMemberInvitesHint": "启之，已入群者皆可邀友。唯群主与管理员可改。",
     "allowMentionAllBots": "许 @诸同僚",
     "allowMentionAllBotsHint": "唯群主可改。同伴或皆作覆，大群慎启之。此开关不涉 AI 代答。",
     "notifications": {

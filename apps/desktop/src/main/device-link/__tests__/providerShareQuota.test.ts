@@ -155,7 +155,7 @@ describe('share quota projection', () => {
     const providerId = `${native}-target`;
     state.providers = [{ id: providerId, connected: true, auth: { method: 'oauth', native } }];
     const resetsAt = Date.now() / 1000 + 3600;
-    state.pool = [25, 60].map(percent => ({ isDefault: false, usage: native === 'claude'
+    state.pool = [25, 60].map(percent => ({ usage: native === 'claude'
       ? { claudeUsage: { updatedAt: 1, sevenDay: { utilization: percent, resetsAt } } }
       : { codexUsage: { appServerBuckets: { codex: { updatedAt: 1,
         secondary: { usedPercent: percent, windowMinutes: 10_080, resetsAt } } } } } }));
@@ -174,9 +174,8 @@ describe('share quota projection', () => {
       updatedAt: 1,
     });
     state.pool = [
-      { isDefault: true, usage: undefined },
+      { usage: { claudeUsage: { updatedAt: 1, sevenDay: { utilization: 86, resetsAt } } } },
       {
-        isDefault: false,
         usage: {
           claudeUsage: {
             updatedAt: 2,
@@ -203,9 +202,11 @@ describe('share quota projection', () => {
     const member = await readProviderShareQuotaAccountResult('anthropic');
     expect(member).toMatchObject({ windows: [{ kind: 'week' }], accounts: result.accounts });
     state.owner++;
-    state.pool = [{ isDefault: true, usage: undefined }];
+    state.pool = [(state.pool as unknown[])[0]];
+    readers.claude.mockClear();
     expect(await readProviderShareQuota('anthropic')).toMatchObject({ group: false, accounts: [{ windows: [{ kind: 'week' }] }] });
     expect(await readProviderShareQuotaAccountResult('anthropic')).not.toHaveProperty('accounts');
+    expect(readers.claude).not.toHaveBeenCalled();
   });
   it('expands pooled accounts reported by a group member computer and keeps older members readable', async () => {
     state.group = {

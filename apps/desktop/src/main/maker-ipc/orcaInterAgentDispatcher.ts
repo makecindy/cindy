@@ -281,6 +281,7 @@ export interface OrcaInterAgentDispatcher {
     sessionId: string,
     item: AgentInputQueuedMessage,
     restoredFromSnapshot?: boolean,
+    recoverySourceClientId?: string,
   ) => Promise<void> | undefined;
   rollbackQueuedOrcaInterAgentAcceptedCallback: (
     sessionId: string,
@@ -308,6 +309,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     sessionId: string,
     item: AgentInputQueuedMessage,
     restoredFromSnapshot?: boolean,
+    recoverySourceClientId?: string,
   ): Promise<void> | undefined => {
     if (!queuedAccepted.has(item.clientId) && restoredFromSnapshot
       && item.origin?.kind === 'orca' && item.orcaReportDelivery) {
@@ -316,7 +318,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         queuedAccepted.register(item.clientId, restored.accepted, restored.rollback);
       }
     }
-    return queuedAccepted.run(sessionId, item);
+    return queuedAccepted.run(sessionId, item, recoverySourceClientId);
   };
 
   const dispatchOrEnqueueOrcaInterAgentMessage = async (

@@ -136,6 +136,27 @@ function group(owned = false): BotGroupSummary {
     { actorId: 'bot', botId: 'bot', actorKind: 'bot', name: 'Partner', role: 'owner', isOwned: owned, guestAccess: 'chat', accessRevision: 1 },
   ] } as BotGroupSummary;
 }
+
+// Unit: the real management page must expose the permission only to managers;
+// invitation-menu tests previously covered read-only canInvite, not changing it.
+it.each(['owner', 'admin'] as const)('lets a %s change member invitations without changing other group rules', async role => {
+  const initial = { ...group(), supportsMemberInvites: true, allowMemberInvites: false,
+    members: group().members.map(member => member.actorId === 'me' ? { ...member, role } : member) };
+  const view = renderAt(initial, 'manage');
+  fireEvent.click(screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: {
+    type: 'update', name: initial.name, topic: '', description: '', expectedRevision: 1, allowMemberInvites: true,
+  } }));
+  view.update({ ...initial, revision: 2, allowMemberInvites: true });
+  expect(screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' }).getAttribute('aria-checked')).toBe('true');
+});
+
+it('hides member invitation controls from ordinary members and on older servers', () => {
+  const view = renderAt({ ...group(), supportsMemberInvites: true }, 'manage');
+  expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' })).toBeNull();
+  view.update({ ...group(true), supportsMemberInvites: false });
+  expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' })).toBeNull();
+});
 function activeProfile(id: string, name: string, status = 'active') {
   return { id, name, status, sessions: [] as Array<{ id: string }>, capabilities: {}, skills: [] as string[] };
 }

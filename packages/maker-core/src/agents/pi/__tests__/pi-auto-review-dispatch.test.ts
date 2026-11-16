@@ -816,6 +816,37 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  // #10787: exercise the actual refresh dispatcher, not just the owner helper.
+  // No pending Host approval means no external identity query. Unit tier.
+  it.each([false, true])('skips owner queries without a host approval (extension owned: %s)', async (extensionOwned) => {
+    const scope = vi.spyOn(subagentRuns, 'piSubagentApprovalScope').mockResolvedValue('refused');
+    let scansFinished = 0;
+    const scan = vi.spyOn(subagentRuns, 'scanPiSubagentRuns').mockImplementation(async function* () {
+      yield {
+        version: 1, runId: '123e4567-e89b-42d3-a456-4266141740e2', taskId: 'no-host-approval',
+        parentSessionId: 's1', runtimeOwnerId: '900001.1700000000:foreign',
+        runnerInstanceId: 'test-runner', state: 'running', startedAt: Date.now(), updatedAt: Date.now(),
+        ...(extensionOwned ? { interactiveOwner: 'extension' as const } : {}),
+        tasks: [{ childId: 'child', sessionId: 'child', agent: 'scout', status: 'running',
+          ...(extensionOwned ? { pendingApproval: { id: 'permission', method: 'confirm' as const, title: 'cindy:permission' } } : {}),
+        }],
+      };
+      scansFinished++;
+    });
+    let handle: PiTestSessionHandle | undefined;
+    try {
+      handle = await start('ask');
+      await vi.waitFor(() => expect(scansFinished).toBeGreaterThan(0));
+      expect(handle.listBackgroundTasks?.()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ taskId: 'no-host-approval' }),
+      ]));
+      expect(scope).not.toHaveBeenCalled();
+    } finally {
+      scan.mockRestore(); scope.mockRestore();
+      await handle?.close();
+    }
+  });
+
   it.each([false, true])('backs off an empty root and wakes a launch (scan in flight: %s)', async (inFlight) => {
     const realInterval = globalThis.setInterval;
     let tick: (() => void) | undefined;

@@ -8,6 +8,7 @@ import {
   worktreeContentMatches, worktreeStagedContentMatches,
 } from './contentSnapshot';
 import { gitExec } from './gitExec';
+import { buildMultiboxRemoveArgs, shouldUseMultibox } from './multibox';
 import { hasLiveSessionReference, loadLiveSessionPathKeys } from './liveSessionRefs';
 import { inventoryWorktree, sameWorktreeFiles, verifyRecoveryArchive } from './recoveryArchive';
 import {
@@ -282,6 +283,11 @@ async function recycleManagedWorktreeInSlot(meta: WorktreeMeta, options: Managed
         await assertWorktreeGitIdentity(meta);
         return worktreeContentMatches(meta.path, snapshot);
       };
+      // Decide the removal command before the final revalidation so the probe does not widen
+      // the window between that check and the destructive operation.
+      const removeArgs = await shouldUseMultibox(meta.baseRepo)
+        ? buildMultiboxRemoveArgs(meta.path, { force: true })
+        : ['-c', 'core.longpaths=true', 'worktree', 'remove', '--force', meta.path];
       if (!(await canRemove())) return defer('referenced-before-removal');
       if (await directoryIdentity(meta.path) !== identity) return defer('directory-replaced');
       await assertManagedResourcePath(meta, store.getAllPaths());
@@ -304,7 +310,7 @@ async function recycleManagedWorktreeInSlot(meta: WorktreeMeta, options: Managed
         await writeRecycleRecord(record);
       }
       try {
-        await gitExec(['-c', 'core.longpaths=true', 'worktree', 'remove', '--force', meta.path], meta.baseRepo);
+        await gitExec(removeArgs, meta.baseRepo);
       } catch {
         if (await directoryIdentity(meta.path) !== identity) return defer('remove-unconfirmed');
         if (!(await canRemove())) return defer('referenced-before-fallback');

@@ -532,87 +532,94 @@ export function MessageActionBar({
     </Tooltip.Root>
   );
 
-  // 用户轮累计优先；没有新字段的历史消息继续显示原始 SDK 分段成本。
-  const effectiveTurnMoney =
-    turnMoney ??
-    (typeof turnCostUsd === 'number' && turnCostUsd > 0
-      ? legacyUsdMoney(turnCostUsd)
-      : undefined);
-  const effectiveUserTurnMoney =
-    userTurnMoney ??
-    (typeof userTurnCostUsd === 'number' && userTurnCostUsd > 0
-      ? legacyUsdMoney(userTurnCostUsd)
-      : undefined);
-  const displayedMoney = effectiveUserTurnMoney ?? effectiveTurnMoney;
-  const displayedCostIsEstimate = effectiveUserTurnMoney
-    ? userTurnCostIsEstimate
-    : turnCostIsEstimate;
-  const isUserTurnTotal = effectiveUserTurnMoney != null;
-  const splitCost = displayedMoney ? splitUsageCost(displayedMoney, turnUsageDetails?.additionalCosts) : null;
-  const conversationText = splitCost && splitCost.conversation.amount > 1e-9
-    ? displayedCostIsEstimate
-      ? t('chat.messageActionBar.turnCostEstimatedValue', { cost: formatTurnCostMoney(splitCost.conversation) })
-      : formatTurnCostMoney(splitCost.conversation) : '';
-  const costLabel = [conversationText, ...(splitCost?.additional.map(formatTurnCostMoney) ?? [])].filter(Boolean).join(' + ');
+  // These modes omit usage entirely. Do not format discarded cost/token tooltips;
+  // compute fresh data again when a render switches back to a regular assistant.
+  const [costText, tokensText] = (() => {
+    if (companionFooter || compact || align !== 'left' || simplifiedBotConversation) return [null, null];
+    // 用户轮累计优先；没有新字段的历史消息继续显示原始 SDK 分段成本。
+    const effectiveTurnMoney =
+      turnMoney ??
+      (typeof turnCostUsd === 'number' && turnCostUsd > 0
+        ? legacyUsdMoney(turnCostUsd)
+        : undefined);
+    const effectiveUserTurnMoney =
+      userTurnMoney ??
+      (typeof userTurnCostUsd === 'number' && userTurnCostUsd > 0
+        ? legacyUsdMoney(userTurnCostUsd)
+        : undefined);
+    const displayedMoney = effectiveUserTurnMoney ?? effectiveTurnMoney;
+    const displayedCostIsEstimate = effectiveUserTurnMoney
+      ? userTurnCostIsEstimate
+      : turnCostIsEstimate;
+    const isUserTurnTotal = effectiveUserTurnMoney != null;
+    const splitCost = displayedMoney ? splitUsageCost(displayedMoney, turnUsageDetails?.additionalCosts) : null;
+    const conversationText = splitCost && splitCost.conversation.amount > 1e-9
+      ? displayedCostIsEstimate
+        ? t('chat.messageActionBar.turnCostEstimatedValue', { cost: formatTurnCostMoney(splitCost.conversation) })
+        : formatTurnCostMoney(splitCost.conversation) : '';
+    const costLabel = [conversationText, ...(splitCost?.additional.map(formatTurnCostMoney) ?? [])].filter(Boolean).join(' + ');
 
-  // 费用 — 样式与 timeText 完全一致(12px + 同色 + 0.5px 光学修正)。
-  // 仅 assistant(align='left')会拿到值;估算值(Codex 折算)表达为 token 价值。
-  const turnCostTooltipNode =
-    displayedMoney && displayedMoney.amount > 0 && turnUsageDetails ? (
-      <span className="whitespace-pre-line">
-        {buildTurnUsageTooltipLines({
-          details: turnUsageDetails,
-          t,
-          money: displayedMoney,
-          usageOnly: !!sessionId,
-          isEstimate: displayedCostIsEstimate,
-          ...(isUserTurnTotal ? { title: t('chat.messageActionBar.userTurnCostDetailsTitle') } : {}),
-        }).join('\n')}
-      </span>
-    ) : (
-      t(
-        displayedCostIsEstimate
-          ? 'chat.messageActionBar.turnCostEstimated'
-          : 'chat.messageActionBar.turnCost',
-      )
+    // 费用 — 样式与 timeText 完全一致(12px + 同色 + 0.5px 光学修正)。
+    // 仅 assistant(align='left')会拿到值;估算值(Codex 折算)表达为 token 价值。
+    const turnCostTooltipNode =
+      displayedMoney && displayedMoney.amount > 0 && turnUsageDetails ? (
+        <span className="whitespace-pre-line">
+          {buildTurnUsageTooltipLines({
+            details: turnUsageDetails,
+            t,
+            money: displayedMoney,
+            usageOnly: !!sessionId,
+            isEstimate: displayedCostIsEstimate,
+            ...(isUserTurnTotal ? { title: t('chat.messageActionBar.userTurnCostDetailsTitle') } : {}),
+          }).join('\n')}
+        </span>
+      ) : (
+        t(
+          displayedCostIsEstimate
+            ? 'chat.messageActionBar.turnCostEstimated'
+            : 'chat.messageActionBar.turnCost',
+        )
+      );
+
+    // 时间戳之后那一格的排版口径:与 timeText 同为 12px 次要文本 + 0.5px 光学修正;
+    // bar 的 gap-0.5(2px)对两段相邻文本太挤,额外 6px 左距(共 8px)让「时间 | 用量」
+    // 读成两个独立信息组。金额与 token 回退共用同一套 —— 换的是内容,不是位置。
+    const metaTextClassName = cn(
+      'inline-flex h-6 items-center text-12 font-normal whitespace-nowrap',
+      'relative top-[0.5px]',
+      'ml-1.5',
+      'text-[var(--settings-section-desc)] cursor-default',
     );
 
-  // 时间戳之后那一格的排版口径:与 timeText 同为 12px 次要文本 + 0.5px 光学修正;
-  // bar 的 gap-0.5(2px)对两段相邻文本太挤,额外 6px 左距(共 8px)让「时间 | 用量」
-  // 读成两个独立信息组。金额与 token 回退共用同一套 —— 换的是内容,不是位置。
-  const metaTextClassName = cn(
-    'inline-flex h-6 items-center text-12 font-normal whitespace-nowrap',
-    'relative top-[0.5px]',
-    'ml-1.5',
-    'text-[var(--settings-section-desc)] cursor-default',
-  );
-
-  const costText = displayedMoney && displayedMoney.amount > 0 && (
-    <UsageCostPopover key="cost" sessionId={sessionId} clientId={clientId}
-      className={metaTextClassName} label={costLabel} fallback={turnCostTooltipNode} />
-  );
-
-  // 金额缺席时的回退:显示本轮 token 总量。成因可能是网关目录整体不下发价格、
-  // 模型不在价表、或订阅估值也 miss —— 对用户都一样,这一格不该因此空着。
-  // 钱算不出来不代表用量算不出来:明细由 main 在 turn 结束时落库,与金额同源。
-  const tokensText = !(displayedMoney && displayedMoney.amount > 0) &&
-    turnUsageDetails &&
-    turnUsageDetails.totalTokens > 0 && (
-      <Tooltip.Root key="tokens">
-        <Tooltip.Trigger asChild>
-          <span className={metaTextClassName}>
-            {t('chat.messageActionBar.turnTokens', {
-              tokens: formatCompactTokens(turnUsageDetails.totalTokens),
-            })}
-          </span>
-        </Tooltip.Trigger>
-        <Tooltip.Content>
-          <span className="whitespace-pre-line">
-            {buildTurnUsageTooltipLines({ details: turnUsageDetails, t }).join('\n')}
-          </span>
-        </Tooltip.Content>
-      </Tooltip.Root>
+    const costText = displayedMoney && displayedMoney.amount > 0 && (
+      <UsageCostPopover key="cost" sessionId={sessionId} clientId={clientId}
+        className={metaTextClassName} label={costLabel} fallback={turnCostTooltipNode} />
     );
+
+    // 金额缺席时的回退:显示本轮 token 总量。成因可能是网关目录整体不下发价格、
+    // 模型不在价表、或订阅估值也 miss —— 对用户都一样,这一格不该因此空着。
+    // 钱算不出来不代表用量算不出来:明细由 main 在 turn 结束时落库,与金额同源。
+    const tokensText = !(displayedMoney && displayedMoney.amount > 0) &&
+      turnUsageDetails &&
+      turnUsageDetails.totalTokens > 0 && (
+        <Tooltip.Root key="tokens">
+          <Tooltip.Trigger asChild>
+            <span className={metaTextClassName}>
+              {t('chat.messageActionBar.turnTokens', {
+                tokens: formatCompactTokens(turnUsageDetails.totalTokens),
+              })}
+            </span>
+          </Tooltip.Trigger>
+          <Tooltip.Content>
+            <span className="whitespace-pre-line">
+              {buildTurnUsageTooltipLines({ details: turnUsageDetails, t }).join('\n')}
+            </span>
+          </Tooltip.Content>
+        </Tooltip.Root>
+      );
+
+    return [costText, tokensText];
+  })();
 
   // Edit (Pencil) button — last user message only. Enters the inline edit
   // state owned by UserMessage; keep it disabled while any message action is
@@ -928,7 +935,7 @@ export function MessageActionBar({
  * outer `side`, level with its top, inside the message row so moving the pointer across the gap keeps
  * the row hovered. It shows while the message (`group/message`) is hovered, while keyboard focus is
  * inside, while `open` (a picker) is set, and always on touch screens. The bubble must be `relative`.
- * ThreadPanel keeps this same toolbar in flow below the content, without a side gutter.
+ * Private ThreadPanel keeps this toolbar in flow below content; group topics retain the outer rail.
  */
 export function BubbleHoverToolbar({ side, open = false, besideReactions = false, marker, children }: {
   side: 'left' | 'right'; open?: boolean;

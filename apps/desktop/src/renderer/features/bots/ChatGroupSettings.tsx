@@ -252,6 +252,15 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
     const assistantAnswers = group.supportsGroupAssistant === true && group.assistantEnabled === true;
     body = <>
       {group.archived && <SettingsNotice>{t(key('archived'))}</SettingsNotice>}
+      {group.supportsMemberInvites && <SettingsSection title={t(key('inviteEntry'))}>
+        <SettingsCard>
+          <SettingsRow wrap title={t(shared('allowMemberInvites'))} hint={t(shared('allowMemberInvitesHint'))}
+            trailing={<Switch aria-label={t(shared('allowMemberInvites'))} checked={group.allowMemberInvites === true}
+              disabled={busy || group.revision === undefined || group.archived} onCheckedChange={allowMemberInvites => {
+                if (group.revision !== undefined) void mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '', expectedRevision: group.revision, allowMemberInvites });
+              }} />} />
+        </SettingsCard>
+      </SettingsSection>}
       {/* Whether unaddressed messages wake anyone; independent of the order teammates answer in. */}
       <SettingsSection title={t(key('replies'))}>
         <SettingsCard>
@@ -438,7 +447,7 @@ function Hero({ group, name, me, invite }: { group: BotGroupSummary; name: strin
   const { t } = useTranslation();
   const role = me?.role === 'owner' ? t(key('youAreOwner')) : me?.role === 'admin' ? t(key('youAreAdmin')) : null;
   return <div className="flex items-center gap-3">
-    <BotGroupSidebarAvatar members={group.members} compact surface="panel" />
+    <BotGroupSidebarAvatar members={group.members} compact />
     <div className="min-w-0 flex-1">
       <p className="text-16 font-medium leading-[1.375] text-[var(--text-primary)] [overflow-wrap:anywhere]">{name}</p>
       <p className="mt-0.5 text-13 leading-[1.38] tabular-nums text-[var(--text-secondary)]">
