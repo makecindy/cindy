@@ -409,6 +409,14 @@ it('retains notification capability and confirmed mode from a computer', () => {
   expect(parseBotGroupChatData(chatData({ notificationMode: 'unknown' }))?.notificationMode).toBeUndefined();
 });
 
+// Wire: remote group management must retain the host's invitation capability and value.
+it('retains the invitation setting from a computer without enabling it on old hosts', () => {
+  expect(parseBotGroupChatData(chatData({ supportsMemberInvites: true, allowMemberInvites: true })))
+    .toMatchObject({ supportsMemberInvites: true, allowMemberInvites: true });
+  expect(parseBotGroupChatData(chatData()))
+    .toMatchObject({ supportsMemberInvites: false, allowMemberInvites: false });
+});
+
 // Unit / #10345: remote-host parsing must retain the stable anchor, never confuse it with elapsed work.
 it('retains a remote execution timeline anchor independently of elapsed start', () => {
   for (const startedAt of [undefined, 60_000]) {

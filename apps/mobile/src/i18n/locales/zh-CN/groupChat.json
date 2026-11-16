@@ -309,6 +309,8 @@
       "loading": "正在读取群设置…",
       "unavailable": "群设置读取失败，请重试"
     },
+    "allowMemberInvites": "允许所有成员邀请朋友",
+    "allowMemberInvitesHint": "开启后，已加入的所有成员都可邀请朋友。仅群主和管理员可更改。",
     "allowMentionAllBots": "允许 @所有伙伴",
     "allowMentionAllBotsHint": "仅群主可更改。伙伴可能都会回复，大群请谨慎开启。此开关不影响 AI 代答。"
   },
