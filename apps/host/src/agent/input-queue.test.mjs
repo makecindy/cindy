@@ -4069,6 +4069,31 @@ test('context recovery assembly: the coordinator holds an overflow error from it
   assert.deepEqual(r.rows(id, 'error'), []);
 });
 
+// Current behaviour, pinned on request (release table section 5, "溢出错误时后面已排着输入"; row 30). Rule
+// shared with the desktop (contextRecoveryAssembly.ts contextRecoveryAbortSignal, from #4170): when input
+// is already queued behind an overflowed turn, the recovery gives way to it, clears the error and reports
+// recovered, so the overflowed message gets neither a replay nor an error row. The desktop then prepares
+// the unhealthy session before that send (prepareUnhealthySessionForSend, which can rebuild on token
+// pressure); the Host has no such step (row 30), so the queued input is sent on the overflowed runtime.
+// Tier: unit, real database, Host event path.
+test('context recovery assembly (current behaviour): an overflow with input queued behind it gives way to that input on the same runtime, with no rebuild and no error row', { timeout: 30_000 }, async t => {
+  const r = await assembledRecovery(t);
+  const id = 'assembled-queued-behind';
+  await r.db.createTask(id);
+  await r.h.queue.enqueue(id, { clientId: `${id}-input`, text: 'long task' });
+  await waitFor(() => r.h.maker.sessions.get(id)?.sent.length === 1);
+  const first = r.h.maker.sessions.get(id);
+  await r.h.queue.enqueue(id, { clientId: 'queued-behind', text: 'next' });
+  first.emit({ type: 'error', data: OVERFLOW, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
+  await waitFor(() => first.sent.length === 2);
+  assert.deepEqual(first.sent, ['long task', 'next'], 'the queued input goes to the overflowed runtime');
+  assert.equal(r.h.maker.sessions.get(id), first, 'no rebuilt runtime');
+  assert.deepEqual(r.rows(id, 'context_rebuild'), [], 'no rebuild');
+  assert.deepEqual(r.rows(id, 'error'), [], 'no error row for the overflowed message');
+  assert.equal(r.h.queue.projection(id).error, null);
+  assert.equal(r.h.events.some(event => event.sessionId === id && event.type === 'error'), false, 'the error is not published');
+});
+
 test('context recovery assembly: a summary not yet sent when the Host restarts goes with the next send, once', { timeout: 30_000 }, async t => {
   const r = await assembledRecovery(t);
   // The replay's runtime cannot start: the rebuild is committed, its summary never sent.
