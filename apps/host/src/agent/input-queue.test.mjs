@@ -1651,6 +1651,9 @@ test('failed reply persistence pauses the queue and resume saves without rerunni
   assert.equal(h.queue.projection('task-save').error, 'disk full');
   assert.equal(h.queue.projection('task-save').queuePaused, true);
   assert.deepEqual(session.sent, ['first']);
+  // While reply writes are paused the next input is not dispatched, so its user row is never queued
+  // behind the paused writes (the send transaction writes it only after dispatch starts).
+  assert.equal(saved.some(row => row.role === 'user' && row.clientId === 'b'), false);
   failWrite = false;
   await h.queue.resume('task-save');
   assert.equal(saved.filter(row => row.role === 'assistant').length, 1);
@@ -4900,6 +4903,35 @@ test('a failed user row leaves its input to retry or replace, and is never writt
   assert.deepEqual(session().sent, ['instead']);
   assert.deepEqual(userRows(), ['b']);
   assert.deepEqual(attempts, ['a', 'b']);
+});
+
+// Rule: an auto-resume's user row registers its pending outcome before the write and releases it
+// when the write fails (userMessageDurableWrite.ts releasePendingOutcomeOnFailure). Gap: the Host's
+// wrapper decides how a failure reaches that shared branch (the error is turned into a value inside
+// the write FIFO and thrown after it); a wrapper that swallowed it would leave the outcome pending.
+// Minimal failing input: the resume's user row fails once; the task must still resume a later turn.
+test('an auto-resume whose user row fails leaves the task able to resume again', async t => {
+  let failResumeRow = true;
+  let resumeRowAttempts = 0;
+  const r = await resumeHarness(t, { persistMessage: async (sessionId, input) => {
+    if (input.role === 'user' && input.agentMeta?.autoResume === true) {
+      resumeRowAttempts += 1;
+      if (failResumeRow) throw new Error('disk full');
+    }
+  } });
+  await r.interrupt();
+  for (let i = 0; i < 100 && resumeRowAttempts === 0; i += 1) { t.mock.timers.tick(500); await settle(); }
+  assert.equal(resumeRowAttempts, 1, 'the resume reached its user row');
+  assert.equal(r.session.sent.length, 1, 'the resume whose row failed was not sent');
+  failResumeRow = false;
+  await r.h.queue.enqueue('r', { clientId: 'b', text: 'carry on' });
+  await settle();
+  assert.equal(r.session.sent.length, 2);
+  await r.interrupt();
+  await r.backoff(3);
+  assert.equal(r.session.sent.length, 3, 'the next interrupted turn is resumed');
+  t.mock.timers.reset();
+  await r.h.queue.dispose();
 });
 
 test('a retried user row is written and sent once', async t => {

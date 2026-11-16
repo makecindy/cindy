@@ -567,18 +567,16 @@ export function createTurnExecutor(deps) {
     // createUserMessageDurably): it recharges the resume budgets for a person's message, registers an
     // auto-resume's pending outcome, and writes the row behind the task's reply rows with its
     // transcript anchor. A failed write goes back to the transaction, as on the desktop: it does not
-    // pause the task's reply writes and is not written later (auto-resume.ts).
+    // pause the task's reply writes and is not written later (auto-resume.ts). As on the desktop, the
+    // turn is checked once, before the row queues behind the reply rows; a turn cancelled while it
+    // waits still gets its row, as register.ts:17811 passes createUserMessageDurably unwrapped. There is
+    // no other path: an executor without the auto-resume runtime refuses to write a user row.
     createDbMessage: async (id, message, options) => {
       const turn = turns.get(id);
       turn?.check();
-      const write = deps.getAutoResume?.()?.createUserMessage;
-      const row = { ...message, agentKind: turn?.dbKind };
-      if (write) return write(id, row, options);
-      const history = historyFor(id);
-      await history.drain();
-      const transcriptParentUuid = history.getLastAssistantTranscriptUuid(id);
-      return deps.persistMessage(id, { ...row,
-        agentMeta: { ...message.agentMeta, ...(transcriptParentUuid ? { transcriptParentUuid } : {}) } }, options);
+      const autoResume = deps.getAutoResume?.();
+      if (!autoResume) throw new Error('user row write requires the auto-resume runtime (input-queue.mjs)');
+      return autoResume.createUserMessage(id, { ...message, agentKind: turn?.dbKind }, options);
     },
     isSessionRunningError,
     reconcileCreateOptsWithDb,
