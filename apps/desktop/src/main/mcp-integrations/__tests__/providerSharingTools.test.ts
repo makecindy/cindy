@@ -18,7 +18,7 @@ const setup = () => {
       return { models: ['a'], providerModels: null, availableModels: [{ id: 'a', name: 'A' }], memberBudget: { private: true } };
     return { ok: true };
   });
-  const remote = vi.fn(async (_device: string, input: ProviderShareManagementCommand, assertCurrent: () => void) => command(input, assertCurrent));
+  const remote = vi.fn(async (_device: string, input: ProviderShareManagementCommand, assertCurrent: () => void): Promise<unknown> => command(input, assertCurrent));
   return { command, remote, guard, revoke: () => { current = false; } };
 };
 
