@@ -885,6 +885,9 @@ export function createTurnExecutor(deps) {
     },
     /** The engine of a task as its message persistence knows it (the desktop's getSessionDbAgentKind). */
     sessionDbAgentKind: id => histories.get(id)?.getSessionDbAgentKind(id) ?? null,
+    /** Rows of a task's turn not in the database yet, as the history view shows them (the desktop's
+     * getSessionThinkingSnapshots, which its history view reads, bootstrap-electron.ts readHistoryLiveMessages). */
+    liveHistory: id => histories.get(id)?.getSessionThinkingSnapshots(id) ?? [],
     /** On shutdown, before stopping tasks: waits (bounded) for context recoveries in flight to end. */
     drainRecoveriesForShutdown: () => recovery?.drainForShutdown(),
     /** A recovery's replay was accepted (the recovery factory's onRebuilt). */

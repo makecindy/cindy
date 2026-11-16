@@ -17,6 +17,7 @@ import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/m
 import { saveAgentInputQueueSnapshot, loadAgentInputQueueSnapshot, getPersistedInputClientIds } from '../../../desktop/src/main/localDb/agentInputQueueSnapshots.ts';
 import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
 
+import { createHostHistoryReader } from './history.ts';
 import { createInputQueue } from './input-queue.mjs';
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
 import { createTurnExecutor } from './turn-executor.mjs';
@@ -810,6 +811,32 @@ test('persists thinking and tool work with the shared message identities', async
   assert.equal(result.toolUseId, 'read-1');
   assert.equal(result.content, 'contents');
   assert.equal(h.events.find(event => event.type === 'tool_result').persistId, result.clientId);
+  await h.queue.dispose();
+});
+
+// Release table section 6, Host history reader ③ and ④: the Host's history view was told a task is
+// running only while it was a provisional (unsent) task, and had no in-flight rows, so the latest
+// page of a running turn was projected as settled and showed nothing of the turn yet. The desktop
+// binds isSessionTurnPendingCompletion and getSessionThinkingSnapshots; main.ts binds this queue's
+// isTurnRunning (the executor's isRunning) and liveHistory. Minimal failing input: a running turn with
+// one thinking block still streaming. Tier: unit, the real queue and executor, real owner database.
+test('the history view of a running turn shows its in-flight rows as running', async () => {
+  const h = createHarness();
+  // The task's row, as every Host task has one: the reader checks the clear line against it.
+  await unitDatabase.exec(`INSERT OR IGNORE INTO sessions(id,source,status,created_at,updated_at)
+    VALUES ('history-running','desktop','active',1,1)`);
+  const reader = createHostHistoryReader({ running: id => h.queue.isTurnRunning(id), live: id => h.queue.liveHistory(id) });
+  await enqueue(h, 'history-running', { clientId: 'input', text: 'check a file' });
+  const session = h.maker.getSession('history-running');
+  session.emit({ type: 'thinking', data: { stage: 'delta', blockId: 'thought', text: 'inspecting' } });
+  const running = await reader.page('history-running', undefined, true);
+  assert.deepEqual(running.items.map(item => item.type === 'work' && [item.summary.firstMessageId, item.summary.isStreaming]),
+    [['history-live:thought', true]]);
+
+  session.emit({ type: 'thinking', data: { stage: 'final', blockId: 'thought', text: 'inspecting', durationMs: 5 } });
+  session.emit({ type: 'done' });
+  await waitFor(() => !h.queue.isTurnRunning('history-running'));
+  assert.deepEqual(h.queue.liveHistory('history-running'), []);
   await h.queue.dispose();
 });
 

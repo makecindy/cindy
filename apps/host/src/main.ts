@@ -478,7 +478,6 @@ let modelAccess: ReturnType<typeof createHostModelAccess> | null = null;
 const currentGateway = () => modelAccess?.gateway.credential && modelAccess.gateway.endpoint ? modelAccess.gateway : null;
 /** Owner-scoped Maker Memory; null until the runtime owns an account. */
 let makerMemory: ReturnType<typeof createHostMemoryManager> | null = null;
-const hostHistoryReader = createHostHistoryReader(isProvisionalSession);
 /** Non-secret projection of the adopted Desktop login; never tokens. */
 let account: { authenticated: boolean; realm: string | null; error?: string } = { authenticated: false, realm: null };
 
@@ -1014,6 +1013,12 @@ const inputQueue = createInputQueue({
     broadcastRecentWorkdirsChanged: createRecentWorkdirsChangedPush(event => eventHub.publish(event)),
   }),
   sent: (sessionId: string) => commitProvisionalSession(sessionId, sessionDraftPorts),
+});
+// The history view and work details: the desktop's reader, with the turn state and the in-flight rows
+// of this input queue (agent/history.ts).
+const hostHistoryReader = createHostHistoryReader({
+  running: id => inputQueue.isTurnRunning(id),
+  live: id => inputQueue.liveHistory(id),
 });
 
 // A client's new input (the input route and /api/chat) waits for the task's permission changes first,

@@ -376,6 +376,8 @@ export function createInputQueue(deps) {
       contextRecoveryRollover: () => rollover,
       /** The engine of a task as its message persistence knows it. */
       sessionDbAgentKind: id => executor.sessionDbAgentKind(id),
+      /** Rows of a task's turn not in the database yet (turn-executor.mjs liveHistory). */
+      liveHistory: id => executor.liveHistory(id),
       /** Starting a task's runtime outside a turn, as a send starts it (turn-executor.mjs startPorts). */
       startPorts: () => executor.startPorts,
       cancelUsageLimitWait: id => coordinator.cancelUsageLimitWait(id),

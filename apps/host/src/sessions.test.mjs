@@ -327,47 +327,74 @@ test('Host Pi recovery preserves message metadata and excludes cleared or rewoun
   assert.equal(await recovery.linkPiUserEntry('task', 'missing', 'pi-entry'), false);
 });
 
-// Contract of the shared reader (historyViewReader.ts:55): `anchor` must reject anchors in cleared
-// history. The Host's anchor (agent/history.ts createHostHistoryReader) only excludes rewound rows,
-// so a message from before the clear line is still accepted: as a work-details range it hands back
-// the cleared body (the /api/messages/work-details route, main.ts workDetails), as a page cursor
-// it is taken instead of refused. The desktop's anchor (localDb/ipc/messages.ts) answers NOT_FOUND.
-// Existing coverage: none for the Host history reader. Minimal failing input: one message before
-// the task's clear line used as the anchor. Tier: unit, real in-memory SQL through the reader
-// main.ts binds.
-test('Host history refuses a message from before the clear line as an anchor', async t => {
+// The Host history view as main.ts binds it (agent/history.ts createHostHistoryReader, the desktop's
+// localHistoryViewReader.ts) over a real in-memory owner database.
+function hostHistoryFixture(t, rows) {
   const { sqlite, db } = sessionListDb(t);
-  sqlite.exec(`INSERT INTO sessions(id,source,status,created_at,updated_at,cleared_at)
-    VALUES ('task','desktop','active',0,300,200);
-    INSERT INTO messages(id,client_id,session_id,role,content,created_at)
-    VALUES ('old','c-old','task','assistant','"cleared reply"',100),('new','c-new','task','user','"after the clear"',300);`);
+  sqlite.exec(rows);
   const client = createDbClientForHandle({ db: sqlite, drizzle: db });
   setCurrentDbClient(client, 'isolated');
   t.after(() => clearCurrentDbClient(client));
-  const reader = createHostHistoryReader();
+  return { sqlite };
+}
+
+// Contract of the shared reader (historyViewReader.ts:55): `anchor` must reject anchors in cleared
+// or rewound history. The Host's own anchor once took a message from before the clear line: as a
+// work-details range it handed back the cleared body (the /api/messages/work-details route, main.ts
+// workDetails), as a page cursor it was taken instead of refused. The Host now uses the desktop's
+// anchor (localHistoryViewReader.ts), which answers NOT_FOUND. Minimal failing input: one message
+// before the task's clear line, one rewound message, each used as the anchor. Tier: unit, real
+// in-memory SQL through the reader main.ts binds.
+test('Host history refuses a message from before the clear line, or rewound, as an anchor', async t => {
+  hostHistoryFixture(t, `INSERT INTO sessions(id,source,status,created_at,updated_at,cleared_at)
+    VALUES ('task','desktop','active',0,300,200);
+    INSERT INTO messages(id,client_id,session_id,role,content,created_at,rewind_at)
+    VALUES ('old','c-old','task','assistant','"cleared reply"',100,NULL),('new','c-new','task','user','"after the clear"',300,NULL),
+      ('undone','c-undone','task','assistant','"rewound reply"',400,500);`);
+  const reader = createHostHistoryReader({ running: () => false, live: () => [] });
   const range = id => ({ key: 'work', firstMessageId: id, lastMessageId: id });
   assert.deepEqual((await reader.details('task', range('new'))).messages.map(row => row.id), ['new']);
-  await assert.rejects(reader.details('task', range('old')), { code: 'NOT_FOUND' });
-  await assert.rejects(reader.page('task', 'old', true), { code: 'NOT_FOUND' });
+  for (const id of ['old', 'undone']) {
+    await assert.rejects(reader.details('task', range(id)), { code: 'NOT_FOUND' });
+    await assert.rejects(reader.page('task', id, true), { code: 'NOT_FOUND' });
+  }
 });
 
-// A clear while the page is being read: the reader re-anchors the page's endpoints after the scan
-// (historyViewReader.ts, "A clear/rewind during the scan invalidates the whole snapshot"), and the
-// desktop refuses the page then. The Host's anchor ignored the clear line, so the page went out
-// with the rows just cleared. Minimal failing input: the clear lands between the read and the
-// projection (the reader asks whether the task is running in between). Tier: unit, as above.
+// A clear while the page is being read: the reader re-checks the page's endpoints after the scan
+// (historyViewReader.ts, "A clear/rewind during the scan invalidates the whole snapshot") and refuses
+// the page. The Host's own anchor once ignored the clear line, so the page went out with the rows
+// just cleared. Minimal failing input: the clear lands between the read and the projection (the
+// reader asks for the in-flight rows in between). Tier: unit, as above.
 test('Host history refuses a page whose rows were cleared while it was read', async t => {
-  const { sqlite, db } = sessionListDb(t);
-  sqlite.exec(`INSERT INTO sessions(id,source,status,created_at,updated_at)
+  const { sqlite } = hostHistoryFixture(t, `INSERT INTO sessions(id,source,status,created_at,updated_at)
     VALUES ('task','desktop','active',0,300);
     INSERT INTO messages(id,client_id,session_id,role,content,created_at)
     VALUES ('m1','c-1','task','user','"question"',100),('m2','c-2','task','assistant','"answer"',200);`);
-  const client = createDbClientForHandle({ db: sqlite, drizzle: db });
-  setCurrentDbClient(client, 'isolated');
-  t.after(() => clearCurrentDbClient(client));
-  const reader = createHostHistoryReader(() => {
+  const reader = createHostHistoryReader({ running: () => false, live: () => {
     sqlite.exec("UPDATE sessions SET cleared_at=250 WHERE id='task'");
-    return false;
-  });
+    return [];
+  } });
   await assert.rejects(reader.page('task', undefined, true), { code: 'NOT_FOUND' });
+});
+
+// Release table section 6, Host history reader ②: the Host's reader had no outline and hydrate, so
+// a page scanned at most 2000 full rows (historyViewReader.ts MAX_HISTORY_SCAN_ROWS) and one long
+// turn answered UNSUPPORTED_CAPABILITY. The desktop reads bodies-free outlines (budget 100000) and
+// loads bodies on demand. Minimal failing input: one turn of 2100 thinking rows after its user row.
+// Tier: unit, real in-memory SQL through the reader main.ts binds.
+test('Host history reads a task longer than the full-row scan budget', async t => {
+  const { sqlite } = hostHistoryFixture(t, `INSERT INTO sessions(id,source,status,created_at,updated_at)
+    VALUES ('task','desktop','active',0,3000);
+    INSERT INTO messages(id,client_id,session_id,role,content,created_at) VALUES ('u','c-u','task','user','"go"',1);`);
+  const insert = sqlite.prepare("INSERT INTO messages(id,client_id,session_id,role,content,created_at) VALUES (?,?,'task','thinking',?,?)");
+  sqlite.transaction(() => { for (let n = 0; n < 2100; n++) insert.run(`t${n}`, `c-t${n}`, JSON.stringify(`step ${n}`), 10 + n); })();
+  const reader = createHostHistoryReader({ running: () => false, live: () => [] });
+  const page = await reader.page('task', undefined, true);
+  assert.deepEqual(page.items.map(item => item.type === 'work'
+    ? [item.summary.firstMessageId, item.summary.lastMessageId, item.summary.messageCount] : item.messages.map(row => row.id)),
+  [['u'], ['t0', 't2099', 2100]]);
+  const work = page.items[1].summary;
+  const details = await reader.details('task', work);
+  assert.equal(details.messages[0].id, 't0');
+  assert.equal(details.messages[0].content, 'step 0', 'the body is read when the work is opened');
 });
