@@ -16,6 +16,10 @@ const registerSource = readFileSync(resolve(mainRoot, 'maker-ipc/register.ts'), 
   /\r\n?/g,
   '\n',
 );
+const pendingCredentialSwitchAssemblySource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/pendingCredentialSwitchAssembly.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 const coldPiRehydrationSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/coldPiRehydration.ts'),
   'utf8',
@@ -695,8 +699,9 @@ describe('session runtime control wiring', () => {
   });
 
   it('reconciles deferred route axes before the pending gate can wake input', () => {
+    // The service's assembly moved verbatim to pendingCredentialSwitchAssembly.ts.
     const persistRoute = handlerBody(
-      registerSource,
+      pendingCredentialSwitchAssemblySource,
       'persistRoute: async (sessionId, route) => {',
       'logger: log,',
     );
@@ -1326,7 +1331,8 @@ describe('session runtime control wiring', () => {
     const rolloverWiring = handlerBody(
       registerSource,
       'contextOverflowRolloverHolder = createContextOverflowRollover({',
-      'const pendingCredentialSwitchService = new PendingCredentialSwitchService({',
+      // The service is assembled through pendingCredentialSwitchAssembly.ts at the same place.
+      'const pendingCredentialSwitchService = createPendingCredentialSwitchService({',
     );
 
     // The flow itself lives in coldPiRehydration.ts so its failure paths can be executed

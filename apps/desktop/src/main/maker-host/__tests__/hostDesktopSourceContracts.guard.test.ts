@@ -510,6 +510,17 @@ describe('runtime selection moved out of register.ts', () => {
   // three register.ts variables at each use. That is the same only while each is assigned once, at
   // startup, before the set-model handler is registered. Failure: a later reset (an account switch,
   // say) reaches a call already running with the old value.
+  // Rule: the pending credential switch service's assembly (pendingCredentialSwitchAssembly.ts) takes
+  // agentInputCoordinatorHolder by value, which is the same only while register.ts assigns it once,
+  // before that assembly. Failure: persistRoute refreshes the queued route of a stale coordinator or
+  // of none.
+  it('assigns the input coordinator holder before the pending credential switch service is assembled', () => {
+    const assigned = registerSource.indexOf('\n  agentInputCoordinatorHolder = ');
+    const assembled = registerSource.indexOf('const pendingCredentialSwitchService = createPendingCredentialSwitchService({');
+    expect(assigned).toBeGreaterThan(-1);
+    expect(assembled).toBeGreaterThan(assigned);
+  });
+
   it('assigns each runtime-selection holder once in register.ts', () => {
     for (const holder of ['contextOverflowRolloverHolder', 'pendingCredentialSwitchHolder', 'agentInputCoordinatorHolder']) {
       const assignments = registerSource.match(new RegExp(`(^|[^.\\w])${holder}\\s*=(?!=)`, 'gm')) ?? [];
