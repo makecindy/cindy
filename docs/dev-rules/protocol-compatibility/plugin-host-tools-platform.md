@@ -2,6 +2,13 @@
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件记录对应能力的增量协议与旧端降级。
 
+settings 增量注册 `get_provider_usage_history` / `get_provider_group`，Agent/插件共用原 usage-history 与组 get 处理器，
+异机复用现有同账号 manage-share / manage-group；无新 action、channel、额度 DTO、缓存或服务端请求种类。
+原 list_model_providers 与 configure_model_provider 的 subscriptionAccounts/read 允许经核验的插件无 Session 读取，
+保留原账号视图中的邮箱/账号名、账号目录与摘要等非凭证信息，具体字段见作者手册；不返回密钥，不放宽相邻写动作。
+原截断标记 coverageStart、当天累积、缺失/未知和错误语义保持，旧端不认识工具/命令时明确不支持，不退回本机/零数据。
+插件 Host 调用签名、manifest、receipt、自建中转透传及原 UI/Agent 命令保持，不涉及迁移。
+
 `terminal` 新增同一 helper registry 的 `terminal_start/list/read/write/resize/stop/forget`，不改 Host 调用签名。
 整体安装批准有效、启用且已声明新组即可调用；旧 receipt 的分项字段读到即忽略，未知组不提供实现。终端输出用 Host 随机进程代次及
 非消费游标续读，缺口显式 `resetRequired`；执行电脑不支持或重启后记录丢失时报告失败，不重放命令。

@@ -84,14 +84,21 @@ export type AppModelsRequest =
   | { operation: 'set'; target: z.infer<typeof target>; change: z.infer<typeof appModelConfiguration> }
   | { operation: 'provider'; change: z.infer<typeof appProviderChange> };
 export interface AppModelsCallbacks {
-  call(input: AppModelsRequest & { callerSessionId: string }, signal?: AbortSignal): Promise<Record<string, unknown>>;
+  call(input: AppModelsRequest & { callerSessionId?: string }, signal?: AbortSignal): Promise<Record<string, unknown>>;
+}
+
+/** Existing owner reads; never treat the whole provider mutation tool as read-only. */
+export function isReadOnlyAppModelsRequest(input: AppModelsRequest): boolean {
+  return input.operation === 'list' || (input.operation === 'provider'
+    && input.change.action === 'subscriptionAccounts' && input.change.command.action === 'read');
 }
 
 export function registerAppModelsTools(registry: XdtHelperToolRegistry, callbacks: AppModelsCallbacks,
   context: () => LiziMcpSessionContext): void {
   const invoke = async (input: AppModelsRequest, signal?: AbortSignal) => {
     const ctx = context();
-    if (!ctx.sessionId || ctx.remoteHostId) return errorPayload('CAPABILITY_NOT_AVAILABLE', '请在目标电脑的本机任务中管理模型设置。');
+    if ((!ctx.sessionId && !(ctx.hostCaller?.kind === 'plugin' && isReadOnlyAppModelsRequest(input))) || ctx.remoteHostId)
+      return errorPayload('CAPABILITY_NOT_AVAILABLE', '请在目标电脑的本机任务中管理模型设置；插件可读取供应商目录与订阅账号。');
     if (input.operation === 'connection' && 'interruptCodex' in input.change && input.change.interruptCodex && ctx.agentKind === 'codex')
       return errorPayload('CODEX_CALLER_WOULD_STOP', '此操作会中断当前 Codex 执行。请用 Claude Code 或 Pi 执行这次连接修改。');
     try {
