@@ -5326,6 +5326,13 @@
       "budget": "折扣",
       "subscription": "訂閱",
       "saveFailed": "儲存輔助模型設定失敗",
+      "remoteHint": "遠端模型可用於產生短文。BYOK 語音潤飾仍使用本機支援的模型。",
+      "remoteStatus": {
+        "outdated": "更新 {{device}} 上的 Cindy 後，即可使用它的輔助模型。",
+        "offline": "{{device}} 已離線。",
+        "revoked": "{{device}} 的模型使用權限已撤銷。",
+        "unavailable": "{{device}} 的輔助模型暫時無法使用。"
+      },
       "chain": {
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 Flash",

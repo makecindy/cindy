@@ -29,6 +29,7 @@ import { MACHINE_STATUS_CHANNEL } from './machineStatus.js';
 import { AGENT_NET_SWITCH_CHANNEL, AGENT_NET_SWITCH_TIMEOUT_MS } from './agentNetSwitch.js';
 import { PROVIDER_GROUP_REMOTE_CHANNEL } from './providerGroup.js';
 import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
+import { REMOTE_UTILITY_TEXT_CHANNEL } from './remoteUtilityText.js';
 import {
   ORCA_EXECUTION_DEVICES_CHANNEL,
   ORCA_REMOTE_WORKER_CAPS_CHANNEL,
@@ -425,6 +426,11 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 供应商运行 Agent，文件、命令与 Cindy 工具回到控制端执行。准入同 fs:list-dir 的论证：
   // 同账号 + 被控端显式打开远程控制时，控制端本就能驱动被控端的 Agent；不进共享任务白名单。
   REMOTE_AGENT_CHANNEL,
+  // Same-account short text that runs on the computer owning the provider. The
+  // controller keeps its own catalog and token budget; the host rechecks the exact
+  // route, provider remote-use grants and model-use revocation before dispatch.
+  // Older hosts return CHANNEL_NOT_ALLOWED, which the controller reports as unsupported.
+  REMOTE_UTILITY_TEXT_CHANNEL,
   // 供应商组(被控端 dispatch 拦截执行，不落 ipcMain handler)：同账号电脑问组所在电脑该用组里哪台、
   // 报告运行中的任务与需要冷却的电脑。只给同账号，分享受邀者与共享任务访客在 dispatch 再拒一次。
   PROVIDER_GROUP_REMOTE_CHANNEL,
@@ -941,6 +947,9 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
  * client-agnostic:mobile/web 控制端应使用同一映射(与 allowlist 同为协议契约)。
  */
 export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
+  // The host owns the execution deadline (90s) plus credential discovery; leave
+  // return-trip headroom so a slow link does not cut a legitimate short request.
+  [REMOTE_UTILITY_TEXT_CHANNEL]: 120_000,
   // Evidence collection may include git diff and bounded artifact reads before
   // the host can acknowledge the newly-created Reviewer session.
   'maker:review:start': 90_000,

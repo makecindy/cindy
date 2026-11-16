@@ -1562,7 +1562,8 @@ it('an open plugin selection without a source session follows the auxiliary chai
       activeOwnerScopeKey: () => 'owner', assertPlugin: () => {}, getPluginTaskSourceSessionId: () => sourceSessionId,
       resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
       getEffectiveAuxiliaryModelRefs: () => ['chain'], getEffectiveAuxiliaryModelChainSnapshot: () => 'chain',
-      auxiliaryChainSessionCandidates: () => candidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen };
+      auxiliaryChainSessionCandidates: () => candidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen,
+      isRemoteAuxiliaryModelRef: () => false };
     const js = ts.transpileModule(`${resolve}\nreturn resolveRoute;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
     return new Function(...Object.keys(deps), js)(...Object.values(deps))('p') as Promise<{ model: string; effort: string }>;
   };
@@ -1658,7 +1659,8 @@ it.each([
     resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
     // No auxiliary chain configured in this scenario: the new-task selection stays the inherited default.
     getEffectiveAuxiliaryModelRefs: () => [], getEffectiveAuxiliaryModelChainSnapshot: () => '',
-    auxiliaryChainSessionCandidates: () => [], pluginTaskRouteAttempts, pluginTaskSelectionIsOpen };
+    auxiliaryChainSessionCandidates: () => [], pluginTaskRouteAttempts, pluginTaskSelectionIsOpen,
+    isRemoteAuxiliaryModelRef: () => false };
   const js = ts.transpileModule(`${resolve}\nreturn {${preference} resolveRoute};`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;

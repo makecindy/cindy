@@ -37,6 +37,7 @@ import {
   RoutedDeviceLinkClient,
   type DeviceLinkClientOptions,
   FILE_PEER_CHANNEL,
+  isRemoteUtilityCancelInvoke,
   isProviderSharePeer,
   isScopedPeer,
   parseSharedTaskPeer,
@@ -598,6 +599,7 @@ function retriggerReopenForControlledDevices(): void {
 let appliedSettingsSnapshot: {
   remoteControlEnabled: boolean;
   revokedControllers: string[];
+  modelUseRevokedControllers: string[];
 } | null = null;
 /**
  * 「保持电脑唤醒」已应用基线。与被控授权不同:keepAwake 是**每个进程各自持有**一个
@@ -2104,8 +2106,8 @@ function refreshAppliedSettingsSnapshot(): void {
     appliedSettingsSnapshot = null;
     return;
   }
-  const { remoteControlEnabled, revokedControllers } = readDeviceLinkSettings();
-  appliedSettingsSnapshot = { remoteControlEnabled, revokedControllers: [...revokedControllers] };
+  const { remoteControlEnabled, revokedControllers, modelUseRevokedControllers } = readDeviceLinkSettings();
+  appliedSettingsSnapshot = { remoteControlEnabled, revokedControllers: [...revokedControllers], modelUseRevokedControllers: [...modelUseRevokedControllers] };
 }
 
 /**
@@ -2117,14 +2119,20 @@ function refreshAppliedSettingsSnapshot(): void {
 function pollExternalSettingsChange(): void {
   if (!client || !arbiter?.isOwner()) return;
   const prev = appliedSettingsSnapshot;
-  const { remoteControlEnabled, revokedControllers } = readDeviceLinkSettings();
-  appliedSettingsSnapshot = { remoteControlEnabled, revokedControllers: [...revokedControllers] };
+  const { remoteControlEnabled, revokedControllers, modelUseRevokedControllers } = readDeviceLinkSettings();
+  appliedSettingsSnapshot = { remoteControlEnabled, revokedControllers: [...revokedControllers], modelUseRevokedControllers: [...modelUseRevokedControllers] };
   // Apply the same permission boundary for an external settings write before
   // the link teardown below, so a lost close frame cannot leave old M
   // continuity entries inside the previous permission generation.
   syncRemoteControlAccessGeneration();
   if (!prev) return;
 
+  for (const id of modelUseRevokedControllers) {
+    if (!prev.modelUseRevokedControllers.includes(id)) void revokeControllerModelUse(id);
+  }
+  for (const id of prev.modelUseRevokedControllers) {
+    if (!modelUseRevokedControllers.includes(id)) notifyControllerModelUseRestored(id);
+  }
   if (prev.remoteControlEnabled !== remoteControlEnabled) {
     broadcast(DEVICE_LINK_PUSH.CONTROL_ENABLED_CHANGED, { remoteControlEnabled });
     client.sendPresence({ remoteControlEnabled });
@@ -2405,10 +2413,11 @@ async function remoteInvokeLive(
   };
   // Cleanup is best effort over the existing link. A late file answer must never
   // reopen the remote session just to dispose its now-unwanted allocation.
-  if (channel === FILE_PEER_CHANNEL && (args[0] as { action?: unknown } | null)?.action === 'close') {
+  if ((channel === FILE_PEER_CHANNEL && (args[0] as { action?: unknown } | null)?.action === 'close')
+    || isRemoteUtilityCancelInvoke({ channel, args })) {
     preSend();
     if (!client?.isLinkReady(deviceId))
-      throw new DeviceLinkError('LINK_NOT_OPEN', 'file cleanup requires an existing link');
+      throw new DeviceLinkError('LINK_NOT_OPEN', 'cleanup requires an existing link');
     return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...options, diagnosticSource: options?.diagnosticSource ?? 'main', preSend });
   }
   const invoke = async (): Promise<InvokeResultPayload> => {

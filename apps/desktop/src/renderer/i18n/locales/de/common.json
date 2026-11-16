@@ -5369,6 +5369,13 @@
       "budget": "Rabatt",
       "subscription": "Abo",
       "saveFailed": "Einstellungen für Hilfsmodelle konnten nicht gespeichert werden",
+      "remoteHint": "Remote-Modelle können kurze Texte erzeugen. Die BYOK-Sprachkorrektur verwendet weiterhin unterstützte Modelle auf diesem Computer.",
+      "remoteStatus": {
+        "outdated": "Aktualisiere Cindy auf {{device}}, um dessen Hilfsmodelle zu verwenden.",
+        "offline": "{{device}} ist offline.",
+        "revoked": "Der Modellzugriff auf {{device}} wurde widerrufen.",
+        "unavailable": "Die Hilfsmodelle auf {{device}} sind derzeit nicht verfügbar."
+      },
       "chain": {
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",

@@ -5369,6 +5369,13 @@
       "budget": "Discount",
       "subscription": "Subscription",
       "saveFailed": "Failed to save auxiliary model settings",
+      "remoteHint": "Remote models can generate short text. BYOK voice refinement continues to use supported models on this computer.",
+      "remoteStatus": {
+        "outdated": "Update Cindy on {{device}} to use its auxiliary models.",
+        "offline": "{{device}} is offline.",
+        "revoked": "Model access on {{device}} has been revoked.",
+        "unavailable": "Auxiliary models on {{device}} are currently unavailable."
+      },
       "chain": {
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",

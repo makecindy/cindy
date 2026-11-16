@@ -33,6 +33,10 @@ vi.mock('@/lib/toast', () => ({
   toast: { error: h.toastError },
 }));
 
+vi.mock('../useRemoteAuxiliaryRoutes', () => ({
+  useRemoteAuxiliaryRoutes: () => ({ devices: [], statuses: [], allows: () => false, encode: () => null }),
+}));
+
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ mode: h.authMode }),
 }));

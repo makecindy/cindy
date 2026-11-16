@@ -731,6 +731,7 @@ import { createBotGroupAttachmentStore } from './botGroupAttachments.js';
 import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import { getEffectiveAuxiliaryModelChainSnapshot, getEffectiveAuxiliaryModelRefs } from '../utility-model/resolveAuxiliaryModelChain.js';
 import { auxiliaryChainSessionCandidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from './pluginTaskDefaultRoute.js';
+import { isRemoteAuxiliaryModelRef } from '../../shared/remoteAuxiliaryModelRef.js';
 import { validateExistingLocalProjectDirectory } from '../mcp-integrations/createProject.js';
 import { findRepositoryFolders, folderRepositories } from './groupProjectFolder.js';
 import { listRecentWorkdirs } from '../localDb/ipc/recentWorkdirsCore.js';
@@ -14210,11 +14211,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // selection remains the last resort.
           for (const { candidate, effort } of pluginTaskRouteAttempts(auxiliaryChainSessionCandidates(getEffectiveAuxiliaryModelRefs()))) {
             try {
+              if (candidate.agentDeviceId) {
+                const remote = await resolveRemotePluginTaskRoute({ ...candidate,
+                  agentKind: candidate.agentKind === 'claude-code' ? 'cc' : candidate.agentKind,
+                  effort: effort ?? '', fastMode: false,
+                }, {
+                  readProviders: deviceId => readDeviceProviderViews(remoteBackgroundInvoke, deviceId),
+                  assertCurrent: () => assertPlugin(pluginId),
+                });
+                assertPlugin(pluginId);
+                return remote;
+              }
               execution = await resolveSessionExecution({ ...selection, ...candidate, ...(effort ? { effort } : {}) });
               assertPlugin(pluginId);
               break;
             } catch { execution = undefined; }
           }
+          if (!execution && getEffectiveAuxiliaryModelRefs().some(isRemoteAuxiliaryModelRef)) return routeUnavailable();
         }
         execution ??= await resolveSessionExecution(selection, sourceSessionId);
         assertPlugin(pluginId);

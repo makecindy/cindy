@@ -169,8 +169,13 @@ export type AutoReviewAuxiliaryFallback = (
   opts: { timeoutMs: number; signal?: AbortSignal; validateResponse: (text: string) => boolean },
 ) => Promise<UtilityTextResult>;
 
+import { decodeRemoteAuxiliaryModelRef, REMOTE_AUXILIARY_PROVIDER_PREFIX, type RemoteAuxiliaryRoute } from '../../shared/remoteAuxiliaryModelRef.js';
+import { encodeCatalogModelPin } from '../../shared/catalogModelPin.js';
+
 /** The Desktop-only reads, resolved by each launcher. */
 export interface OneShotCandidatesPorts {
+  /** Unsupported launchers retain the exact choice as unavailable, never resolve it locally. */
+  requestRemoteUtilityText?: (route: RemoteAuxiliaryRoute, prompt: string, opts: UtilityTextRequestOptions) => Promise<UtilityTextResult>;
   readClaudeApiKey: typeof import('../maker-host/auth-adapters.js').readClaudeApiKey;
   getChatgptBridgeAuth: typeof import('../maker-host/anthropic-responses-bridge-host.js').getChatgptBridgeAuth;
   getChatgptBridgeAuthForDispatch: typeof import('../maker-host/anthropic-responses-bridge-host.js').getChatgptBridgeAuthForDispatch;
@@ -895,6 +900,13 @@ async function requestExplicitProviderText(
   prompt: string,
   opts: UtilityTextRequestOptions & { providerId: string },
 ): Promise<UtilityTextResult> {
+  if (opts.providerId.toLowerCase().startsWith(REMOTE_AUXILIARY_PROVIDER_PREFIX)) {
+    const remote = opts.agentKind && opts.model ? decodeRemoteAuxiliaryModelRef(encodeCatalogModelPin({
+      providerId: opts.providerId, agentKind: opts.agentKind, model: opts.model,
+    })) : null;
+    if (!remote || !ports.requestRemoteUtilityText) return { ok: false, reason: 'no_candidate', attempts: [] };
+    return ports.requestRemoteUtilityText(remote, prompt, opts);
+  }
   const provider = getActiveCatalog().providers.find((item) => item.id === opts.providerId);
   const agentKind = opts.agentKind ?? inferProviderAgent(provider);
   const configuredModels = agentKind ? provider?.models[agentKind] ?? [] : [];

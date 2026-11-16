@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+const remoteText = vi.hoisted(() => vi.fn());
+vi.mock('../remote/client.js', () => ({ requestRemoteUtilityText: remoteText }));
 const localReady = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('../../local-model-runtime/preflight.js', () => ({ ensureManagedOllamaReadyForSession: localReady }));
 
@@ -139,6 +141,7 @@ import {
 } from '../oneShotCandidates.js';
 import { resetUtilityReasoningMemory } from '../utilityReasoningPlan.js';
 import { AUTO_AUXILIARY_MODEL_CHAIN } from '../../../shared/auxiliaryModelChain.js';
+import { encodeRemoteAuxiliaryModelRef } from '../../../shared/remoteAuxiliaryModelRef.js';
 
 const getProfiles = vi.mocked(getUtilityModelChainProfiles);
 const appCapabilities = vi.mocked(getAppCapabilities);
@@ -167,6 +170,31 @@ function makerMock(authenticated: boolean): Maker {
 }
 
 describe('utility one-shot candidates', () => {
+  // The shared chain must preserve remote location through ordinary auxiliary
+  // requests and custom approval fallback, rather than trying a local namesake.
+  it('dispatches an exact remote custom candidate without launching a local Agent', async () => {
+    const route = { deviceId: 'mini', providerId: 'magpie', agentKind: 'codex' as const, model: 'small' };
+    chainState.source = 'custom'; chainState.refs = [encodeRemoteAuxiliaryModelRef(route)];
+    remoteText.mockResolvedValue({ ok: true, text: 'remote result', providerId: 'magpie', model: 'small', transport: 'codex-responses' });
+    const maker = makerMock(false);
+    await expect(requestUtilityText(maker, 'title')).resolves.toMatchObject({ ok: true, text: 'remote result' });
+    expect(remoteText.mock.calls[0]?.[0]).toEqual(route);
+    expect(maker.oneShot).not.toHaveBeenCalled(); expect(fetchMock).not.toHaveBeenCalled();
+    remoteText.mockClear();
+    await expect(createCustomAutoReviewFallback()!('review', { timeoutMs: 1000, validateResponse: () => true })).resolves.toMatchObject({ ok: true });
+    expect(remoteText.mock.calls[0]?.[0]).toEqual(route);
+  });
+
+  it('keeps a failed remote-only custom chain from entering the automatic gateway chain', async () => {
+    const route = { deviceId: 'mini', providerId: 'magpie', agentKind: 'codex' as const, model: 'small' };
+    chainState.source = 'custom'; chainState.refs = [encodeRemoteAuxiliaryModelRef(route)];
+    remoteText.mockResolvedValue({ ok: false, reason: 'no_candidate', attempts: [] });
+    const maker = makerMock(false);
+    await expect(requestUtilityText(maker, 'title')).resolves.toMatchObject({ ok: false });
+    expect(remoteText).toHaveBeenCalledTimes(1);
+    expect(maker.oneShot).not.toHaveBeenCalled(); expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     fetchMock.mockReset();

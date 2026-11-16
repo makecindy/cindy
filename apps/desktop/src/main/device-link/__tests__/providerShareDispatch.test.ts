@@ -31,6 +31,7 @@ import {
   setProviderGroupRemoteHandler,
   setProviderShareAccess,
   setRemoteAgentHandler,
+  setRemoteUtilityTextHandler,
   setRemoteSubscriptionPoolQuotaReader,
   setRemoteClaudeSubscriptionUsageReader,
 } from '../dispatch.desktop';
@@ -130,6 +131,32 @@ describe('provider share link admission', () => {
     __testing.handleLinkOpen(client, GUEST, 'req-2', { capabilities: [] } as never, 0, true);
     expect(client.sendLinkAccept).not.toHaveBeenCalled();
     expect(client.closeLink).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Same-account auxiliary inference must not become a new guest capability or
+// leak a completed answer after its provider/model permission was revoked.
+// Existing remote-agent tests do not cover this independent short-text channel.
+describe('remote utility text dispatch', () => {
+  it('dispatches exact short-text requests for the owner, but refuses a share guest', async () => {
+    const handle = vi.fn(async () => ({ version: 1 as const, op: 'caps' as const, ok: true as const, hostEpoch: 'epoch', allowedRoutes: [] }));
+    setRemoteUtilityTextHandler({ handle, abortAll: vi.fn(), abortController: vi.fn(), revalidateModelAccess: vi.fn(), resultIsCurrent: () => true });
+    await expect(runInvoke('same-account-controller', { channel: 'maker:utility-text:v1', args: [{ version: 1, op: 'caps' }] }))
+      .resolves.toMatchObject({ ok: true, result: { op: 'caps' } });
+    state.access = ACCESS;
+    await expect(runInvoke(GUEST, { channel: 'maker:utility-text:v1', args: [{ version: 1, op: 'caps' }] }))
+      .resolves.toMatchObject({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED' } });
+    expect(handle).toHaveBeenCalledTimes(1);
+  });
+
+  it('rechecks a completed result at the final send boundary', () => {
+    const client = fakeClient();
+    const response = { version: 1 as const, op: 'caps' as const, ok: true as const, hostEpoch: 'epoch', allowedRoutes: [] };
+    const resultIsCurrent = vi.fn(() => false);
+    setRemoteUtilityTextHandler({ handle: vi.fn(), abortAll: vi.fn(), abortController: vi.fn(), revalidateModelAccess: vi.fn(), resultIsCurrent });
+    __testing.sendInvokeResultSafe(client, 'same-account-controller', 'utility-request', { ok: true, result: response }, 'maker:utility-text:v1');
+    expect(client.sendInvokeResult).toHaveBeenCalledWith('same-account-controller', 'utility-request', expect.objectContaining({ ok: false, error: expect.objectContaining({ code: 'ACCESS_REVOKED' }) }));
+    expect(resultIsCurrent).toHaveBeenCalledWith('same-account-controller', response);
   });
 });
 

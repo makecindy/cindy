@@ -16,6 +16,7 @@ import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
 import { getEffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChain.js';
 // After the Desktop modules, so module evaluation keeps the former order.
 import { createOneShotCandidates } from './oneShotCandidatesCore.js';
+import { requestRemoteUtilityText } from './remote/client.js';
 
 export { DEDICATED_AUTO_REVIEW_CANDIDATES } from './oneShotCandidatesCore.js';
 export type {
@@ -28,6 +29,7 @@ export type {
 } from './oneShotCandidatesCore.js';
 
 const desktopOneShot = createOneShotCandidates({
+  requestRemoteUtilityText: (...args) => requestRemoteUtilityText(...args),
   readClaudeApiKey: (...args) => readClaudeApiKey(...args),
   getChatgptBridgeAuth: (...args) => getChatgptBridgeAuth(...args),
   getChatgptBridgeAuthForDispatch: (...args) => getChatgptBridgeAuthForDispatch(...args),

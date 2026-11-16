@@ -5326,6 +5326,13 @@
       "budget": "割引",
       "subscription": "サブスクリプション",
       "saveFailed": "補助モデル設定を保存できませんでした",
+      "remoteHint": "リモートモデルは短いテキストの生成に使用できます。BYOK の音声校正では、引き続きこのコンピューターで対応しているモデルを使用します。",
+      "remoteStatus": {
+        "outdated": "補助モデルを使用するには、{{device}} の Cindy を更新してください。",
+        "offline": "{{device}} はオフラインです。",
+        "revoked": "{{device}} のモデル使用権限が取り消されました。",
+        "unavailable": "{{device}} の補助モデルは現在利用できません。"
+      },
       "chain": {
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",

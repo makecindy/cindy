@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
-import { DeviceLinkError, FILE_PEER_CHANNEL, parseProviderSharePeer, providerShareHostPeer, type DeviceLinkClient } from '@cindy/device-link';
+import { DeviceLinkError, FILE_PEER_CHANNEL, isRemoteUtilityCancelInvoke, parseProviderSharePeer, providerShareHostPeer, type DeviceLinkClient } from '@cindy/device-link';
 import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery } from '../linkRecovery';
 
 // Run the production adapter with only its host dependencies injected, without
@@ -19,7 +19,7 @@ type PeerInvoke = (peer: string, channel: string, args: unknown[]) => Promise<un
 function loadAdapters(overrides: Record<string, unknown>) {
   const epochs = overrides.openLinkCloseEpochs as Map<string, number> ?? new Map<string, number>();
   const dependencies = {
-    DeviceLinkError, FILE_PEER_CHANNEL, ensureInvokeLinkReady, invokeWithClosedLinkRecovery,
+    DeviceLinkError, FILE_PEER_CHANNEL, isRemoteUtilityCancelInvoke, ensureInvokeLinkReady, invokeWithClosedLinkRecovery,
     parseProviderSharePeer,
     activeOwnerScopeKey: () => 'owner', isAppSessionBoundaryPending: () => false,
     getRemoteLinkCloseEpoch: (id: string) => epochs.get(id) ?? 0,
@@ -130,7 +130,12 @@ it.each(['caller cancelled', 'target disabled', 'link closed', 'still valid'])(
   },
 );
 
-it.each([false, true])('never reopens a link for late file cleanup (ready=%s)', async (ready) => {
+it.each([
+  [false, FILE_PEER_CHANNEL, { action: 'close', connection: 'old' }],
+  [true, FILE_PEER_CHANNEL, { action: 'close', connection: 'old' }],
+  [false, 'maker:utility-text:v1', { version: 1, op: 'cancel', requestId: 'old', hostEpoch: 'epoch' }],
+  [true, 'maker:utility-text:v1', { version: 1, op: 'cancel', requestId: 'old', hostEpoch: 'epoch' }],
+] as const)('never reopens a link for cleanup (ready=%s, channel=%s)', async (ready, channel, request) => {
   const online = vi.fn();
   const reopen = vi.fn();
   const invoke = vi.fn().mockRejectedValue(new DeviceLinkError('LINK_NOT_OPEN', 'closed'));
@@ -139,7 +144,7 @@ it.each([false, true])('never reopens a link for late file cleanup (ready=%s)', 
     client: { isLinkReady: () => ready, invoke },
     openRemoteLink: reopen,
   });
-  await expect(remoteInvoke('host', FILE_PEER_CHANNEL, [{ action: 'close', connection: 'old' }]))
+  await expect(remoteInvoke('host', channel, [request]))
     .rejects.toMatchObject({ code: 'LINK_NOT_OPEN' });
   expect(invoke).toHaveBeenCalledTimes(ready ? 1 : 0);
   expect(online).not.toHaveBeenCalled();

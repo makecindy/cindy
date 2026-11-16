@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { encodeCatalogModelPin } from '../../../shared/catalogModelPin.js';
+import { encodeRemoteAuxiliaryModelRef } from '../../../shared/remoteAuxiliaryModelRef.js';
 import { auxiliaryChainSessionCandidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from '../pluginTaskDefaultRoute.js';
 
 describe('auxiliaryChainSessionCandidates', () => {
@@ -33,6 +34,21 @@ describe('auxiliaryChainSessionCandidates', () => {
       { candidate: a, effort: 'low' }, { candidate: a, effort: 'medium' },
       { candidate: b, effort: 'low' }, { candidate: b, effort: 'medium' },
       { candidate: aPi, effort: undefined }, { candidate: a, effort: undefined }, { candidate: b, effort: undefined },
+    ]);
+  });
+
+  // 测试价值：auxiliaryChainSessionCandidates 输出保留设备身份，未知远程版本不得变成本机候选；
+  // 依据远程模型设备隔离契约；现有测试只有本机；最小输入为同模型两台设备及未知版本。
+  // tier: unit；单文件实测墙钟 1.920s。
+  it('preserves remote device identity and never treats unknown remote refs as local', () => {
+    const base = { providerId: 'provider', agentKind: 'codex' as const, model: 'model' };
+    const a = encodeRemoteAuxiliaryModelRef({ ...base, deviceId: 'device-a' });
+    const b = encodeRemoteAuxiliaryModelRef({ ...base, deviceId: 'device-b' });
+    const unknown = encodeCatalogModelPin({ ...base, providerId: 'cindy-remote-aux://v2/device-a/provider' });
+    expect(auxiliaryChainSessionCandidates([a, b, a, unknown, encodeCatalogModelPin(base)])).toEqual([
+      { ...base, agentDeviceId: 'device-a' },
+      { ...base, agentDeviceId: 'device-b' },
+      base,
     ]);
   });
 

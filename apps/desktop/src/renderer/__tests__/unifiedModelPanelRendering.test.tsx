@@ -320,6 +320,19 @@ it('isolates request model tuning by location and discards it when the picker cl
   next.unmount();
 });
 
+// Unit: identical provider/model IDs on two computers must not share a transient Harness choice.
+it('isolates transient engine choices by device without inheriting local preferences', () => {
+  const request = renderHook(() => useTransientModelPickerPreferences(undefined, { inheritEngines: false }));
+  act(() => {
+    request.result.current.enginesForLocation!('a').set('xd', 'gpt-5.5', 'cc');
+    request.result.current.enginesForLocation!('b').set('xd', 'gpt-5.5', 'pi');
+  });
+  expect(request.result.current.enginesForLocation!('a').get('xd', 'gpt-5.5')).toBe('cc');
+  expect(request.result.current.enginesForLocation!('b').get('xd', 'gpt-5.5')).toBe('pi');
+  expect(request.result.current.engines.get('xd', 'gpt-5.5')).toBeUndefined();
+  request.unmount();
+});
+
 function renderPanel(
   props: Partial<React.ComponentProps<typeof ModelSelectorContent>> = {},
 ): ReturnType<typeof render> {

@@ -1,3 +1,5 @@
+import { REMOTE_UTILITY_TEXT_CHANNEL, isRemoteUtilityCancelInvoke, type RemoteUtilityResponse } from '@cindy/device-link';
+import type { RemoteUtilityHost } from '../utility-model/remote/host.js';
 import type { readUsageWidgetSnapshot } from '../quota-overview/service.js';
 import type { configureStandbyGuestCleanup } from './providerShareAvailabilityGuests.js';
 import type { prepareShareAvailability } from './providerShareAvailability.js';
@@ -801,9 +803,14 @@ function logProviderShareDenial(src: string, where: string, reason?: string): vo
   log.warn(`provider-share guest refused at ${where} from ${who}: ${why}`);
 }
 let remoteAgentHandler: RemoteAgentHandler | null = null;
+let remoteUtilityTextHandler: RemoteUtilityHost | null = null;
+function setRemoteUtilityTextHandler(handler: RemoteUtilityHost | null): void {
+  remoteUtilityTextHandler = handler;
+}
 
 async function revalidateRemoteModelAccess(): Promise<void> {
   await remoteAgentHandler?.revalidateModelAccess?.();
+  await remoteUtilityTextHandler?.revalidateModelAccess();
 }
 
 function setRemoteAgentHandler(handler: RemoteAgentHandler | null): void {
@@ -2822,6 +2829,7 @@ function dropAllControllers(
 ): void {
   stopFilePeers?.();
   remoteAgentHandler?.abortAll(reason === 'shutdown' ? 'app-quit' : 'navigation');
+  remoteUtilityTextHandler?.abortAll();
   remoteDesktop?.stop(
     undefined,
     undefined,
@@ -3417,7 +3425,7 @@ async function handleInvoke(
   const joiningExisting = !!(existingListing && existingListing.linkEpoch === invokeLinkEpoch);
 
   const controllerAdmission = remoteInvokeAdmissionState(src);
-  const interactive = !!payload?.channel && isInteractiveInvoke(payload.channel);
+  const interactive = (!!payload?.channel && isInteractiveInvoke(payload.channel)) || isRemoteUtilityCancelInvoke(payload);
   const controllerAtLimit = (
     controllerAdmission.messages >= REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT
       + (interactive ? REMOTE_INVOKE_INTERACTIVE_EXTRA_PER_CONTROLLER : 0)
@@ -3956,6 +3964,10 @@ function trySendInvokeResult(
   // 开关撤销和关后重开都使旧投影失效；关系仍有效不代表可继续发送旧额度。
   if (isProviderSharePeer(src) && channel === PROVIDER_SHARE_INSIGHTS_CHANNEL && result.ok
     && !providerShareAccess?.insightsCurrent?.(src, result.result)) result = PROVIDER_SHARE_ACCESS_FAILURE;
+  if (channel === REMOTE_UTILITY_TEXT_CHANNEL && result.ok
+    && !remoteUtilityTextHandler?.resultIsCurrent(src, result.result as RemoteUtilityResponse)) {
+    result = { ok: false, error: { code: 'ACCESS_REVOKED', message: 'Remote utility request is no longer valid' } };
+  }
   let candidate = result;
   try {
     client.sendInvokeResult(src, requestId, candidate);
@@ -4966,6 +4978,8 @@ function refoldOwnComputerPoolAliases(source: unknown, final: unknown): unknown 
  * 只匹配同账号控制端，分享来的受邀者另有撤权路径。
  */
 async function revokeControllerModelUse(deviceId: string): Promise<void> {
+  noteControllerAccessDenied(deviceId);
+  remoteUtilityTextHandler?.abortController(deviceId);
   await remoteAgentHandler?.abortControllers?.((controller) => controller === deviceId && !isProviderSharePeer(controller));
   sendPushBestEffort(deviceId, 'maker:provider:changed', {});
 }
@@ -5146,6 +5160,15 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     if (payload.args?.length !== 1) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] Invalid OAuth transaction' } };
     try { return { ok: true, result: await requestPluginOauth(src, payload.args[0]) }; }
     catch { return { ok: false, error: { code: 'IPC_ERROR', message: '[PRECONDITION_FAILED] Remote authorization unavailable' } }; }
+  }
+  if (payload.channel === REMOTE_UTILITY_TEXT_CHANNEL) {
+    if (!isSameAccountController(src)) return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'Utility text is available only to the same account' } };
+    if (!remoteUtilityTextHandler) return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'Utility text is not available on this Host' } };
+    try {
+      return { ok: true, result: await remoteUtilityTextHandler.handle(src, payload.args?.[0]) };
+    } catch {
+      return { ok: false, error: { code: 'IPC_ERROR', message: '[INTERNAL] Remote utility text failed' } };
+    }
   }
   if (payload.channel === REMOTE_AGENT_CHANNEL) {
     // 同账号的另一台电脑让 Agent 在本机运行；共享任务访客无权使用本机的 Agent 登录与额度
@@ -5597,6 +5620,8 @@ const __testing = {
     presenceOfflineCheck = null;
     remoteReviewInputGuard = null;
     remoteAgentHandler = null;
+    remoteUtilityTextHandler?.abortAll();
+    remoteUtilityTextHandler = null;
     remoteTurnChangeAction = null;
     remoteXaiSubscriptionUsageReader = null;
     remoteClaudeSubscriptionUsageReader = null;
@@ -5669,6 +5694,7 @@ return {
   notifyProviderShareCatalogChanged,
   revalidateRemoteModelAccess,
   setRemoteAgentHandler,
+  setRemoteUtilityTextHandler,
   setProviderGroupRemoteHandler,
   setSetupSnapshotRemoteHandler,
   setSetupTransferRemoteHandler,

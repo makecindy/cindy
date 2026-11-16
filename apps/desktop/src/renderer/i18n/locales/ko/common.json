@@ -5326,6 +5326,13 @@
       "budget": "할인",
       "subscription": "구독",
       "saveFailed": "보조 모델 설정을 저장하지 못했습니다",
+      "remoteHint": "원격 모델로 짧은 텍스트를 생성할 수 있습니다. BYOK 음성 다듬기는 계속 이 컴퓨터에서 지원하는 모델을 사용합니다.",
+      "remoteStatus": {
+        "outdated": "보조 모델을 사용하려면 {{device}}의 Cindy를 업데이트하세요.",
+        "offline": "{{device}}이(가) 오프라인입니다.",
+        "revoked": "{{device}}의 모델 사용 권한이 취소되었습니다.",
+        "unavailable": "{{device}}의 보조 모델을 현재 사용할 수 없습니다."
+      },
       "chain": {
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
