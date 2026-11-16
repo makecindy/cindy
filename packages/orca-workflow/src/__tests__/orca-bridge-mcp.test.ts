@@ -621,6 +621,7 @@ describe('orca_worker_bridge MCP helpers', () => {
       ...base,
       finishReport,
       captureLocalWorkerReport,
+      provider: workerProvider,
       seedExistingLeadResult: async () => {
         await server._registeredTools.read_lead.handler({ worker_id: 'worker-1' });
         lead.emit({ type: 'done', data: { result: 'Existing lead result' } } as AgentEvent);
@@ -699,6 +700,56 @@ describe('orca_worker_bridge MCP helpers', () => {
       true,
       { delivered: true, report },
     );
+  });
+
+  // 桌面实际走的是宿主派发这条路径：回执漏掉 report，captureLocalWorkerReport 就会把它
+  // 当成旧自由文本回报，latestReport 与结论状态映射全部丢失（Greptile P1）。
+  // 生产入口：send_to_lead handler + dispatchInterAgentMessage；unit tier。
+  it('keeps the structured report in the receipt on the host dispatch path', async () => {
+    const lead = makeSession('lead-1');
+    const dispatch = vi.fn(async (params: { onAccepted?: () => void | Promise<void> }) => {
+      await params.onAccepted?.();
+      return { ok: true as const, mode: 'dispatched' as const, clientId: 'msg-legacy-1' };
+    });
+    const h = makeWorkerBridgeLeadHarness(lead, dispatch);
+    const report = { state: 'ready' as const, summary: '已修好登录超时' };
+
+    const json = parseToolJson(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '已修好登录超时',
+      report,
+    }));
+
+    expect(json).toMatchObject({ ok: true });
+    expect(h.finishReport).toHaveBeenCalledExactlyOnceWith(true, { delivered: true, report });
+  });
+
+  // 旧设备的 schema 里没有 report，模型无从填写；桥接端核实身份后按旧契约放行，
+  // 但只要没带那个标记，缺 report 仍然拒绝（Greptile P1）。
+  // 生产入口：provider.invokeTool（Host 侧桥接入口）；unit tier。
+  it('lets only the attested legacy remote path skip the required report', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    const ctx = {
+      agentKind: 'claude-code' as const,
+      workingDir: '/repo',
+      mcpCallerAttested: true,
+      mcpCallerKind: 'root',
+      vendorOptions: {
+        orcaRole: 'worker' as const,
+        orcaWorkerId: 'worker-1',
+        orcaWorkerSessionId: 'worker-session-1',
+      },
+    };
+    const args = { worker_id: 'worker-1', message: '旧端回报' };
+
+    await expect(h.provider.invokeTool(ctx as never, 'send_to_lead', args)).rejects.toThrow(/report/);
+
+    const json = parseToolJson(
+      await h.provider.invokeTool(ctx as never, 'send_to_lead', args, { allowLegacyReport: true }),
+    );
+    expect(json).toMatchObject({ ok: true });
+    expect(h.finishReport).toHaveBeenCalledWith(true, { delivered: true });
   });
 
   it('refuses a blocked report without one concrete question', async () => {

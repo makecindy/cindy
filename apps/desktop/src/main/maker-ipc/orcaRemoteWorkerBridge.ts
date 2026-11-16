@@ -26,6 +26,8 @@ export interface OrcaRemoteWorkerBridgeDeps {
     args: Record<string, unknown>,
     reportClientId?: string,
     onReportRejected?: () => void,
+    /** Execution device predates the required `report`: accept the legacy free-text contract. */
+    allowLegacyReport?: boolean,
   ): Promise<OrcaToolResult>;
   deliverReport?(
     proxySessionId: string, inputClientIds: readonly string[],
@@ -192,6 +194,7 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
         request.args,
         reportClientId,
         onReportRejected,
+        request.tool === 'send_to_lead' && request.args.report === undefined,
       );
       let result: OrcaToolResult;
       try {

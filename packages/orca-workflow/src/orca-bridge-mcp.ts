@@ -1021,6 +1021,11 @@ interface WorkerBridgeInvokeOptions {
   reportClientId?: string;
   /** Host-only proof that dispatch returned a definite rejection, not an exception. */
   onReportRejected?: () => void;
+  /**
+   * 远端桥专用：来源电脑的版本还没有 `report` 字段，其模型无从填写。
+   * 桥接端已核实同账号身份与会话归属，这里按旧自由文本契约放行，只留一行 warn。
+   */
+  allowLegacyReport?: boolean;
 }
 
 export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
@@ -1171,9 +1176,11 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
                 return text({ error: 'Lead report was not accepted; the report remains with the Worker',
                   worker_id: link.workerId, lead_session_id: link.leadSessionId }, true);
               }
+              // 宿主派发这条路径是桌面实际走的入口；回执不带 report 会让结算端把它
+              // 当成旧自由文本回报，latestReport 与结论状态映射全部丢失。
               reportReceipt = result.mode === 'queued'
-                ? { delivered: false, queuedMessageId: result.clientId }
-                : { delivered: true };
+                ? { delivered: false, queuedMessageId: result.clientId, ...(report ? { report } : {}) }
+                : { delivered: true, ...(report ? { report } : {}) };
               return text({ ok: true,
                 ...(result.mode === 'queued' ? { queued: true } : {}),
                 ...(result.mode === 'steered' ? { steered: true } : {}),
@@ -1577,7 +1584,12 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
     ): Promise<OrcaToolResult> {
       let invoke: (() => Promise<OrcaToolResult>) | undefined;
       registerRoutedTools(ctx, (name, _description, shape, handler) => {
-        if (name === tool) invoke = () => handler(z.object(shape).parse(args));
+        if (name !== tool) return;
+        // 必填的 report 只约束能看见新 schema 的模型；旧设备经桥接进来时没有这个字段。
+        const parsed: z.output<z.ZodObject<typeof shape>> = (options.allowLegacyReport && args.report === undefined
+          ? z.object({ ...shape, report: z.optional(shape.report) }).parse(args)
+          : z.object(shape).parse(args)) as z.output<z.ZodObject<typeof shape>>;
+        invoke = () => handler(parsed);
       }, options);
       if (!invoke) return text({ error: 'unknown worker bridge tool' }, true);
       return invoke();
