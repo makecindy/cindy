@@ -67,6 +67,7 @@ export interface OversizedNotification {
   turnId?: string;
   itemId?: string;
   itemType?: string;
+  itemStatus?: string;
   turn?: Record<string, unknown>;
   /** 原始行长度 (UTF-16 code unit)。 */
   length: number;
@@ -110,6 +111,8 @@ function recordEnvelopeMember(
     envelope.itemId = value;
   } else if (key === 'type') {
     envelope.itemType = value;
+  } else if (key === 'status') {
+    envelope.itemStatus = value;
   }
 }
 

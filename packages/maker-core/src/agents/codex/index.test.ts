@@ -16840,6 +16840,38 @@ describe('CodexAgent MCP thread context hooks', () => {
     },
   );
 
+  // #8412, unit: the real approval handler must see only the current MCP call.
+  // Existing ambiguity tests never complete an earlier call via itemOmitted;
+  // a late update also verifies that completion leaves a tombstone.
+  it.each([false, true])('clears omitted MCP approval context with late update=%s', async (lateUpdate) => {
+    const policy = vi.fn((context: { toolName?: string }) =>
+      context.toolName === 'ghost_info' ? 'auto-approve' as const : 'prompt' as const);
+    const agent = new CodexAgent(createDeps({}, { getMcpToolApprovalPolicy: policy,
+      reviewAutoPermissionAction: async () => ({ verdict: 'block' }) }));
+    const host = installFakeHost(agent, (method) => method === Method.TurnStart
+      ? { turn: { id: 'omitted-context-turn' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'omitted-context', model: 'gpt-5.5',
+      workingDir: '/repo', permissionMode: 'auto' });
+    await handle.send({ type: 'user', content: 'Read both files.' });
+    const handlers = host.getThreadHandlers()!;
+    const oldCall = { threadId: 'start-thread-id', turnId: 'omitted-context-turn',
+      item: { id: 'old-call', type: 'mcpToolCall', server: 'cindy', tool: 'ghost_info',
+        arguments: { ghost_id: 'old-plugin' } } };
+    handlers.itemStarted!(oldCall);
+    handlers.itemOmitted!({ threadId: oldCall.threadId, turnId: oldCall.turnId,
+      phase: 'completed', item: { id: 'old-call', type: 'mcpToolCall' } });
+    if (lateUpdate) handlers.itemUpdated!(oldCall);
+    handlers.itemStarted!({ ...oldCall, item: { ...oldCall.item, id: 'current-call',
+      arguments: { ghost_id: 'current-plugin' } } });
+    const result = await handlers.mcpServerElicitation!({ threadId: oldCall.threadId,
+      turnId: oldCall.turnId, serverName: 'cindy', mode: 'form', message: 'Allow tool call',
+      requestedSchema: {}, _meta: { codex_approval_kind: 'mcp_tool_call' } });
+    expect(result.action).toBe('accept');
+    expect(policy).toHaveBeenLastCalledWith({ serverName: 'cindy', toolName: 'ghost_info',
+      toolParams: { ghost_id: 'current-plugin' } });
+    await handle.close();
+  });
+
   it.each(['auto-block', 'timeout', 'resolver-failure', 'no-resolver', 'user-denied'] as const)(
     'preserves the MCP denial cause for Cindy without changing native approval: %s', async (cause) => {
       const review = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'block', reason: 'secret reviewer content' }));
@@ -29517,6 +29549,54 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.close();
   });
 
+  // #8412, unit: local client -> host -> agent, unlike normal late-completion coverage.
+  // A previously started collab tool must emit one background terminal update
+  // even when its completed body was dropped, after either parent terminal.
+  it.each(['completed', 'error'] as const)('closes an omitted late collab after parent %s', async (terminal) => {
+    vi.useFakeTimers();
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({ sessionId: 'omitted-late-collab', model: 'gpt-5.4', workingDir: '/repo' });
+    const seen: AgentEvent[] = [];
+    void (async () => { for await (const event of handle.events()) seen.push(event); })();
+    const transport = createdTransports.at(-1)!;
+    const emit = (method: string, params: unknown) => transport.emitMockLine({ method, params });
+    const threadId = handle.id;
+    emit('turn/started', { threadId, turn: { id: 'old-turn' } });
+    const item = {
+      type: 'collabAgentToolCall', id: 'late-call', tool: 'sendInput', status: 'inProgress',
+      senderThreadId: threadId, receiverThreadIds: ['child'], agentsStates: {},
+    };
+    emit('item/started', { threadId, turnId: 'old-turn', item });
+    if (terminal === 'completed') {
+      emit('turn/completed', { threadId, turn: { id: 'old-turn', status: 'completed' } });
+    } else {
+      emit('error', { threadId, turnId: 'old-turn', willRetry: false,
+        error: { message: 'invalid input', codexErrorInfo: 'badRequest' } });
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    const beforeLate = seen.length;
+    const status = terminal === 'error' ? 'failed' : 'completed';
+    const omitted = { item: { ...item, status, prompt: 'x'.repeat(16 * 1024 * 1024 + 1) },
+      threadId, turnId: 'old-turn' };
+    emit('item/completed', omitted);
+    emit('item/completed', omitted);
+    // An ordinary duplicate shares the terminal tombstone with an omitted one.
+    emit('item/completed', { threadId, turnId: 'old-turn', item: { ...item, status } });
+    await vi.advanceTimersByTimeAsync(0);
+    const late = seen.slice(beforeLate);
+    expect(late.filter(event => event.type === 'tool_result')).toEqual([
+      expect.objectContaining({ turnScope: 'background', data: expect.objectContaining({ toolUseIds: ['late-call'] }) }),
+    ]);
+    expect(late.filter(event => event.type === 'agent_task_update')).toEqual([
+      expect.objectContaining({ turnScope: 'background', data: expect.objectContaining({ taskId: 'late-call', status }) }),
+    ]);
+    expect(late.every(event => event.turnScope === 'background')).toBe(true);
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(transport.closed).toBe(false);
+    await handle.close();
+    vi.useRealTimers();
+  });
+
   it('REPRO: preserves a late collab-agent terminal update after the parent turn completes', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
@@ -32008,7 +32088,7 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
     }
   });
 
-  it('迟到的旧 turn collab 收口不重启新 turn idle 计时或注入前台状态', async () => {
+  it.each([false, true])('迟到的旧 turn collab 收口不重启新 turn idle 计时或注入前台状态 omitted=%s', async (omitted) => {
     vi.useFakeTimers();
     try {
       const agent = new CodexAgent(createDeps());
@@ -32043,7 +32123,11 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
       await vi.advanceTimersByTimeAsync(IDLE_MS / 2);
 
       const beforeLate = seen.length;
-      handlers.itemCompleted?.({
+      if (omitted) handlers.itemOmitted?.({
+        threadId: 'start-thread-id', turnId: 'turn-1', phase: 'completed',
+        item: { type: 'collabAgentToolCall', id: 'old-spawn', status: 'completed' },
+      });
+      else handlers.itemCompleted?.({
         threadId: 'start-thread-id',
         turnId: 'turn-1',
         item: {
@@ -32068,6 +32152,8 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
         type: 'status',
         data: expect.objectContaining({ status: 'Generating...' }),
       }));
+      expect(lateEvents.filter(event => event.type === 'agent_task_update').at(-1)?.data)
+        .toMatchObject({ taskId: 'old-spawn', status: omitted ? 'running' : 'completed' });
 
       // 新 turn 从启动起静默满原始额度就必须收口；旧 turn 的 completed
       // 不能把已经消耗的一半 idle 配额重置成完整一轮。

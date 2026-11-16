@@ -137,7 +137,7 @@ export interface ItemOmittedParams {
   turnId: string;
   phase: 'started' | 'updated' | 'completed';
   /** item 里排在大字段之前的标量, 读不到时为空。 */
-  item: { id?: string; type?: string };
+  item: { id?: string; type?: string; status?: string };
 }
 
 /** thread/started 之外的 notification 都直接 params.threadId; thread/started 走 params.thread.id。 */
@@ -1780,7 +1780,7 @@ export class AppServerHost {
    *  - 其余通知驱动 turn / thread 状态机, 丢了任务会卡住, 不降级。
    */
   private handleOversizedNotification(notification: OversizedNotification): boolean {
-    const { method, threadId, turnId, itemId, itemType, turn } = notification;
+    const { method, threadId, turnId, itemId, itemType, itemStatus, turn } = notification;
     switch (method) {
       case 'turn/completed': {
         const status = turn?.status;
@@ -1811,7 +1811,7 @@ export class AppServerHost {
           threadId,
           turnId,
           phase: method === 'item/started' ? 'started' : method === 'item/updated' ? 'updated' : 'completed',
-          item: { id: itemId, type: itemType },
+          item: { id: itemId, type: itemType, ...(itemStatus ? { status: itemStatus } : {}) },
         };
         this.routeNotification(ITEM_OMITTED_METHOD, params);
         return true;
