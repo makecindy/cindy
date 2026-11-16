@@ -2779,6 +2779,7 @@ async function modelChangeRuntime(t) {
   const db = await recoveryDatabase(t);
   const row = id => db.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id);
   let selection;
+  const views = { current: SWITCH_VIEWS };
   const { h, handoffs } = assembledRuntime(t, db, {
     readSession: async id => {
       const stored = row(id);
@@ -2793,7 +2794,7 @@ async function modelChangeRuntime(t) {
     publish: event => h.events.push(event),
     createDbMessage: db.persistMessage,
     pendingHandoff: handoffs,
-    listProviderViews: async () => SWITCH_VIEWS,
+    listProviderViews: async () => views.current,
     resolveConfiguredContextWindow: (_catalog, _agentKind, _providerId, modelId) => SWITCH_WINDOWS[modelId] ?? null,
     readStoredSessionContextWindowBudget: () => null,
     codexProxyAuthInjectionState: () => null,
@@ -2819,7 +2820,12 @@ async function modelChangeRuntime(t) {
   };
   const rebuilds = id => db.db.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'context_rebuild'").all(id)
     .map(entry => JSON.parse(entry.content));
-  return { db, h, selection, row, createTask, runTurn, rebuilds };
+  const userRows = id => db.db.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'user'").all(id);
+  // The provider stops offering a model (it is no longer in its list); restore puts the list back.
+  const withdraw = modelId => { views.current = SWITCH_VIEWS.map(view => ({ ...view,
+    models: { 'claude-code': view.models['claude-code'].filter(entry => entry.id !== modelId) } })); };
+  const restoreModels = () => { views.current = SWITCH_VIEWS; };
+  return { db, h, selection, row, createTask, runTurn, rebuilds, userRows, withdraw, restoreModels };
 }
 
 // Rule (the desktop's send-time landing, sessionRuntimeSelectionApply.ts: a user's pick applied on send
@@ -2859,6 +2865,62 @@ test('model change at send: a task with no usage takes the smaller window with n
   assert.equal(r.row('empty').model, 'small');
   assert.equal(r.rebuilds('empty').length, 0);
   assert.equal(r.h.maker.sessions.get('empty').options.model, 'small');
+});
+
+// Rule (the desktop's send-time landing, makerSendTransaction.ts applyPendingAgentSwitch before the user
+// row; sessionAgentSwitchHandler.ts applyPendingAgentSwitchIfIdle: a same-engine failure throws and keeps
+// the intent): the send fails before it is accepted. No user row is written, the queue keeps the input as
+// its head with the typed error (recovery 'queue-head'), its receipt reads 'interrupted', and the pick
+// stays pending. Gap: the Host applied a pick at once and had no landing to fail.
+const sameEngineLandingFailure = async (r, id) => {
+  await r.createTask(id);
+  await r.selection.setModel(id, 'small', undefined, undefined, undefined);
+  r.withdraw('small'); // the picked model is no longer offered when the send lands it
+  await r.h.queue.enqueue(id, { clientId: `${id}-1`, text: 'first' });
+  await waitFor(() => r.h.queue.projection(id).error);
+  const projection = r.h.queue.projection(id);
+  assert.match(projection.error, /^\[[A-Z_]+\] /, 'the typed error, as the desktop shows it');
+  assert.deepEqual(projection.recovery, { kind: 'queue-head', clientId: `${id}-1` });
+  assert.deepEqual(projection.pendingQueue.map(item => item.clientId), [`${id}-1`], 'the input stays at the head');
+  assert.equal(await r.h.queue.inputStatus(id, `${id}-1`), 'interrupted');
+  assert.equal(r.userRows(id).length, 0, 'no user row before the pick lands');
+  assert.equal(r.row(id).model, 'big');
+  assert.equal(r.selection.projectIntent(id)?.model, 'small', 'the pick stays pending');
+  assert.equal(r.h.maker.sessions.get(id)?.sent.length ?? 0, 0, 'nothing reached a runtime');
+  return projection;
+};
+
+test('model change at send: a same-engine landing failure keeps the input at the queue head and the pick pending; switching back and retrying sends it', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await sameEngineLandingFailure(r, 'land-back');
+  // Exit: pick the task's current model again (an intent for the current route), then retry.
+  await r.selection.setModel('land-back', 'big', undefined, undefined, undefined);
+  await r.h.queue.retryLastError('land-back');
+  await waitFor(() => r.h.maker.sessions.get('land-back')?.sent.length === 1);
+  assert.equal(r.row('land-back').model, 'big');
+  assert.equal(r.h.maker.sessions.get('land-back').options.model, 'big');
+  assert.equal(r.userRows('land-back').length, 1, 'the input is written once, when it is sent');
+  assert.equal(r.h.queue.projection('land-back').error ?? null, null);
+  assert.equal(r.selection.projectIntent('land-back') ?? null, null, 'the landed intent is spent');
+});
+
+test('model change at send: a same-engine landing failure is left by discarding the input; the pick stays for the next send', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await sameEngineLandingFailure(r, 'land-drop');
+  // Exit: discard the input that was never accepted.
+  await r.h.queue.remove('land-drop', 'land-drop-1');
+  const projection = r.h.queue.projection('land-drop');
+  assert.deepEqual(projection.pendingQueue, []);
+  assert.equal(projection.error ?? null, null);
+  assert.equal(projection.recovery ?? null, null);
+  assert.equal(r.userRows('land-drop').length, 0);
+  assert.equal(r.selection.projectIntent('land-drop')?.model, 'small', 'discarding the input does not cancel the pick');
+  // The next send lands the pick once the model is offered again.
+  r.restoreModels();
+  await r.h.queue.enqueue('land-drop', { clientId: 'land-drop-2', text: 'second' });
+  await waitFor(() => r.h.maker.sessions.get('land-drop')?.sent.length === 1);
+  assert.equal(r.row('land-drop').model, 'small');
+  assert.equal(r.userRows('land-drop').length, 1);
 });
 
 test('context recovery assembly: an overflow rebuilds the task and replays the message on a new runtime, with no error left', { timeout: 30_000 }, async t => {
