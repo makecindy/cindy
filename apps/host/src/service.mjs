@@ -25,7 +25,8 @@ export const HOST_PATHS_ALLOWED_WHILE_HELD = Object.freeze({
   ]),
   // Stopping or interrupting the running turn.
   stop: Object.freeze(['/api/input/stop']),
-  // Answering the running turn: its permission requests and questions, and its plugin prompts.
+  // Answering the running turn: its permission requests and questions, and its plugin prompts. An
+  // install consent is answered only with a refusal (below): accepting installs into the shared profile.
   answer: Object.freeze(['/api/interactions/respond', '/api/ghosts/confirm/resolve', '/api/ghosts/install-consent/resolve']),
 });
 const ALLOWED_WHILE_HELD = new Set(Object.values(HOST_PATHS_ALLOWED_WHILE_HELD).flat());
@@ -39,6 +40,8 @@ export function createHostService(deps) {
     const url = { pathname };
     const held = deps.profileHold?.();
     if (held && !ALLOWED_WHILE_HELD.has(pathname)) throwIpcError('PRECONDITION_FAILED', held);
+    if (held && pathname === '/api/ghosts/install-consent/resolve' && body?.confirmed !== false)
+      throwIpcError('PRECONDITION_FAILED', held);
 
     for (const [action, handler] of Object.entries(HOST_BROWSER_SETTINGS_ACTIONS)) {
       if (pathname === `/api/browser-backend/${action}`)

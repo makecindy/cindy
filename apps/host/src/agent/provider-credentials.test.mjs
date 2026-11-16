@@ -334,3 +334,34 @@ test('a /models round in flight when the credentials fail is dropped: it writes 
   assert.equal(h.fetched.length, 3);
   assert.deepEqual(getXdGatewayModels().map(model => model.id), ['open-model', 'paid-model']);
 });
+
+// 测试价值
+// - 生产入口：providers.mjs 的 createProviderCatalog（/api/providers 的读取），main.ts 给它 isProfileHeld。
+// - 规则：并存方案 A 后续（审核方 2026-11-17 定）。闸门关着时，读取不能写桌面也在用的 profile 文件：一轮成功的
+//   /models 会写价格快照和账本币种（cache/model-pricing.json、cache/ledger-currency.json），所以不发 /models，
+//   只用已有的列表作答；闸门打开后照常刷新。
+// - 现有覆盖缺口：上面的用例只走凭据状态；之前闸门关着时 force 读取照样拉 /models 并写价格。
+// - 最小失败输入：闸门关着时一次 force 读取。tier：unit（假快照，没有 IO）。
+test('while a desktop uses the profile, reading the providers runs no /models round and feeds no prices', async () => {
+  const snapshot = fakeSnapshot();
+  let held = false;
+  let fetched = 0;
+  const priced = [];
+  const list = createProviderCatalog({ ...snapshot,
+    readProviders: async () => [],
+    fetchModels: async () => { fetched++; return [{ id: `round-${fetched}` }]; },
+    applyPricedModels: models => priced.push(models.map(model => model.id)),
+    isProfileHeld: () => held,
+  });
+  const gateway = { endpoint: 'https://gateway.example.test', credential: 'key' };
+  await list({ gateway, ownerId: 'owner' });
+  assert.deepEqual([fetched, priced], [1, [['round-1']]]);
+  held = true;
+  await list({ gateway, ownerId: 'owner', force: true });
+  assert.equal(fetched, 1, 'no /models round while held, not even forced');
+  assert.deepEqual(priced, [['round-1']], 'no price written');
+  assert.deepEqual(snapshot.state.models.map(model => model.id), ['round-1'], 'the read answers from the list it has');
+  held = false;
+  await list({ gateway, ownerId: 'owner', force: true });
+  assert.deepEqual([fetched, priced.at(-1)], [2, ['round-2']], 'released, the next read refreshes');
+});

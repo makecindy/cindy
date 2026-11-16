@@ -34,8 +34,9 @@ test('while held, reads, stops and answers to the running turn still reach their
   for (const [kind, paths] of Object.entries(HOST_PATHS_ALLOWED_WHILE_HELD)) {
     for (const path of paths) {
       const before = calls.length;
+      // `confirmed: false`: an install consent is answered only with a refusal while held (test below).
       const result = await invoke(path, { sessionId: 'task', callId: 'call', agentKind: 'claude-code', request: {},
-        requestId: 'request', confirmed: true }, { caller: 'device:test' });
+        requestId: 'request', confirmed: false }, { caller: 'device:test' });
       assert.equal(result.status, 200, `${kind} ${path} is answered`);
       assert.ok(calls.length > before, `${kind} ${path} reaches its handler`);
     }
@@ -49,10 +50,23 @@ test('while held, stopping the running turn and answering it are never refused',
   for (const path of ['/api/input/stop', '/api/interactions/respond', '/api/ghosts/confirm/resolve',
     '/api/ghosts/install-consent/resolve']) {
     const before = calls.length;
-    const result = await invoke(path, { sessionId: 'task', requestId: 'request', confirmed: true }, { caller: 'device:test' });
+    const result = await invoke(path, { sessionId: 'task', requestId: 'request', confirmed: false }, { caller: 'device:test' });
     assert.equal(result.status, 200, path);
     assert.ok(calls.length > before, `${path} reaches its handler`);
   }
+});
+
+// Rule (reviewer, 2026-11-17): accepting a plugin install consent installs into the profile the
+// desktop shares, so while held only a refusal is answered; a plugin confirmation is answered either way.
+test('while held, an install consent can be declined but not accepted; a plugin confirmation either way', async () => {
+  const { invoke, calls } = stubbedService(() => HELD);
+  const answer = (path, confirmed) => invoke(path, { requestId: 'request', confirmed }, { caller: 'device:test' });
+  await assert.rejects(answer('/api/ghosts/install-consent/resolve', true), isHeldRefusal);
+  assert.deepEqual(calls, [], 'the acceptance reached no handler');
+  assert.equal((await answer('/api/ghosts/install-consent/resolve', false)).status, 200);
+  assert.equal((await answer('/api/ghosts/confirm/resolve', true)).status, 200);
+  assert.equal((await answer('/api/ghosts/confirm/resolve', false)).status, 200);
+  assert.equal(calls.length, 3);
 });
 
 // Each category of write, one path or more each; the last one is a path no handler knows yet.

@@ -146,7 +146,9 @@ export function createHostServer(input) {
         || ['/control/platform', '/control/remote', '/events', '/chat', '/sessions', '/plugins'].includes(url.pathname) || url.pathname.startsWith('/sessions/');
       if (ownerRequest) {
         if (ownerPaused || logoutFlight || deps.isOwnerReady?.() === false) {
-          send(response, 409, { error: 'owner_runtime_unavailable' }); return;
+          // Why, when the Host can say it (coexistence plan A: its start was refused because a desktop
+          // uses this profile): a reason code and a sentence for the window. Older clients read only `error`.
+          send(response, 409, { error: 'owner_runtime_unavailable', ...(deps.ownerUnavailableReason?.() ?? {}) }); return;
         }
         const completion = new Promise(resolve => { finishOwnerRequest = resolve; });
         ownerRequests.add(completion);

@@ -318,6 +318,9 @@ const harnessBinaries = createHostHarnessBinaries({
 /** The refusal a new send gets while a desktop uses this profile, in the system language. */
 const profileInUseMessage = () => `${HOST_PROFILE_IN_USE_BY_DESKTOP}: ${
   createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]).t('logic.errors.hostProfileInUseByDesktop')}`;
+/** The same, for a start that was refused: quit the desktop, then restart the Host. */
+const profileInUseAtStartMessage = () => createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale])
+  .t('logic.errors.hostProfileInUseByDesktopAtStart');
 let coexistenceMonitor: CoexistenceMonitor | null = null;
 
 /**
@@ -538,6 +541,8 @@ const listProviders = createProviderCatalog({
   // model sync registers each round so billing waits briefly for it (model-access/index.ts).
   applyPricedModels: (models, ownerId) => { usagePricing.replaceGatewayModelPricing(models, ownerId); },
   trackModelsSync: sync => usagePricing.trackGatewayModelPricingSync(sync),
+  // Coexistence plan A: no /models round while a desktop uses this profile (agent/providers.mjs).
+  isProfileHeld: () => inputQueue.isHeldForDesktop(),
 });
 let stopPluginAuthorization: (() => void) | null = null;
 let platformClient: ReturnType<typeof createPlatformClientBridge> | null = null;
@@ -584,6 +589,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   catch (error) {
     runtimeLease = null; lease.release();
     runtime.state = 'blocked'; runtime.owner = ownerId; runtime.storage = 'unopened';
+    runtime.coexistence = { state: 'desktop-running', desktops: [] };
     // The error code only: the message would carry the profile path into the status.
     runtime.detail = `cannot tell whether a Cindy desktop app uses this profile (${(error as NodeJS.ErrnoException)?.code ?? 'unreadable'}); quit it and start cindy-host again`;
     throw new HostProfileInUseError(runtime.detail);
@@ -1236,6 +1242,9 @@ const serverDeps = {
   }),
   instanceId,
   isOwnerReady: () => runtime.state === 'ready' && account.authenticated && !isAppSessionBoundaryPending(),
+  // A start refused by a desktop on this profile (coexistence plan A): why, and what to do.
+  ownerUnavailableReason: () => (runtime.state === 'blocked' && runtime.coexistence?.state === 'desktop-running'
+    ? { reason: HOST_PROFILE_IN_USE_BY_DESKTOP, message: profileInUseAtStartMessage() } : null),
   requestStop: () => stop(),
   subagentRuns: subagentReads,
   token: apiToken,

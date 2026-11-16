@@ -9,7 +9,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getTableColumns, getTableName } from 'drizzle-orm';
 import { DeviceLinkClient, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
-  PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer } from '@cindy/device-link';
+  PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL } from '@cindy/device-link';
 import { readDeviceLinkInvokeSourceDevice } from '../../desktop/src/main/device-link/invoke-context.ts';
 import { createHostDeviceLink } from './device-link.ts';
 import { createHostService } from './service.mjs';
@@ -56,7 +56,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   let source;
   // Coexistence plan A: the refusal while a desktop uses the profile (null: not held).
   let held = null;
-  let created = 0, appCalls = 0;
+  let created = 0, appCalls = 0, oauthCalls = 0;
   t.after(async () => {
     clients.forEach(client => client.stop());
     await host?.stop();
@@ -117,6 +117,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
     profileHold: () => held,
     mcpApps: { invoke: async () => { appCalls++; return {}; }, releaseCaller: async () => {} },
+    requestPluginOauth: async () => { oauthCalls++; return { ok: true }; },
   });
   assert.equal(host.state().enabled, false);
   assert.equal(sockets.has('host'), false);
@@ -186,14 +187,19 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   // page's call are refused with the typed reason, and none reaches its handler; reads still answer.
   held = 'HOST_PROFILE_IN_USE_BY_DESKTOP: held for this test';
   for (const [channel, args] of [['maker:input:enqueue', ['task', { clientId: 'held', text: 'refused' }]],
-    ['maker:create-session', [{}]], [MCP_APPS_INVOKE, ['task', {}]]]) {
+    ['maker:create-session', [{}]], [MCP_APPS_INVOKE, ['task', {}]], [PLUGIN_OAUTH_CHANNEL, [{}]]]) {
     const reply = await clients[0].invoke('host', { channel, args });
     assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
-    assert.ok(JSON.stringify(reply.error).includes('HOST_PROFILE_IN_USE_BY_DESKTOP'), `${channel}: ${JSON.stringify(reply)}`);
+    // The dispatcher answers every plugin OAuth failure with its own fixed text (dispatch.ts:5148).
+    if (channel !== PLUGIN_OAUTH_CHANNEL)
+      assert.ok(JSON.stringify(reply.error).includes('HOST_PROFILE_IN_USE_BY_DESKTOP'), `${channel}: ${JSON.stringify(reply)}`);
   }
-  assert.deepEqual([writes, created, appCalls], [2, 0, 0], 'nothing reached a handler');
+  assert.deepEqual([writes, created, appCalls, oauthCalls], [2, 0, 0, 0], 'nothing reached a handler');
   assert.equal((await clients[0].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] })).ok, true, 'reads still answer');
   held = null;
+  // Released, a remote plugin authorization reaches the plugin OAuth entry again.
+  assert.equal((await clients[0].invoke('host', { channel: PLUGIN_OAUTH_CHANNEL, args: [{}] })).ok, true);
+  assert.equal(oauthCalls, 1);
   await host.revoke('ios');
   const denied = await clients[0].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] }).catch(error => ({ denied: error }));
   assert.ok(denied.denied || denied.ok === false);

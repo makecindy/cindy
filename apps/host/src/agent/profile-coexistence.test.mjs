@@ -3,11 +3,12 @@
  * - 生产入口：profile-coexistence.ts 的 createDesktopScanner（启动和运行中重扫共用，内部是桌面的
  *   findConcurrentLiveInstancePids）与 createCoexistenceMonitor（10 秒一次加目录监听，main.ts 据此关、开闸门）。
  * - 规则：并存方案 A（审核方 2026-11-17 定）。开库的桌面挡住 Host：没有 `runtime` 字段的旧记录按开库处理，
- *   `runtime: 'client'` 与 `passive: true` 放行；只在 SingletonLock 里出现的 PID 也挡；进程已结束的残留和
+ *   只放行 `runtime: 'client'`；`passive: true` 的开发实例也开库，照样挡（审核方 2026-11-17 定）；只在 SingletonLock
+ *   里出现的 PID 也挡；进程已结束的残留和
  *   PID 被复用的记录不挡。同一份记录只问一次进程身份。闸门遇到桌面立刻关，连续两次干净扫描才报可开，
  *   扫描失败按有桌面处理。
- * - 现有覆盖缺口：桌面的 ownerNamespaceMigration.test.ts 只测这个扫描在迁移里的用法，不测 runtime / passive
- *   的放行，也没有重扫和闸门状态。
+ * - 现有覆盖缺口：桌面的 ownerNamespaceMigration.test.ts 只测这个扫描在迁移里的用法，不测 runtime 的放行与
+ *   passive 的阻挡，也没有重扫和闸门状态。
  * - 最小失败输入：一个空转子进程的 PID 加一份记录；监听回调与定时器手动触发。tier：unit（子进程按 PID 结束，
  *   没有 100ms 以上的真实等待）。
  */
@@ -51,7 +52,7 @@ function countingPorts() {
   } } };
 }
 
-test('a live desktop record blocks, unless it is a Host client or a passive instance', async t => {
+test('a live desktop record blocks, a passive instance too, unless it is a Host client', async t => {
   const child = await liveChild(t);
   const p = profile(t);
   const { asked, ports } = countingPorts();
@@ -63,8 +64,9 @@ test('a live desktop record blocks, unless it is a Host client or a passive inst
   assert.deepEqual(await scan(), [child.pid]);
   p.write(child.pid, { runtime: 'client' });
   assert.deepEqual(await scan(), []);
+  // A passive dev instance skips migrations and the scheduler but opens and writes the same database.
   p.write(child.pid, { passive: true });
-  assert.deepEqual(await scan(), []);
+  assert.deepEqual(await scan(), [child.pid]);
   // An unreadable record keeps the PID visible through its file name, and blocks.
   fs.writeFileSync(path.join(p.dir, '.dev-instances', `${child.pid}.json`), '{ torn');
   assert.deepEqual(await scan(), [child.pid]);

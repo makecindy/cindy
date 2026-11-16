@@ -22,9 +22,10 @@ import { explicitPorts } from './explicit-ports.ts';
  * which keeps its stale-PID proofs in this process. The Host does not register in `.dev-instances`.
  *
  * Allowed beside the Host: a record that says `runtime: 'client'` (a client of a Host, which never
- * opens the database) or `passive: true` (a passive dev instance). Everything else is a desktop that
- * opens the database: a record without `runtime` (older desktops), a record that cannot be read, a
- * PID seen only through the SingletonLock.
+ * opens the database). Everything else is a desktop that opens the database: a record without
+ * `runtime` (older desktops), a `passive: true` dev instance (it skips migrations and the scheduler but
+ * opens and writes the same database: localDb/index.ts 171–197), a record that cannot be read, a PID
+ * seen only through the SingletonLock.
  */
 export const HOST_PROFILE_IN_USE_BY_DESKTOP = 'HOST_PROFILE_IN_USE_BY_DESKTOP';
 
@@ -133,12 +134,12 @@ export function createDesktopScanner(profileDir: string, ports: ProfileScanPorts
   };
 }
 
-/** A client of a Host, or a passive dev instance. Anything unreadable or without the field is not. */
+/** A client of a Host. Anything else (a passive instance, an unreadable record, no field) is not. */
 function allowedBesideHost(raw: string | undefined): boolean {
   if (raw === undefined) return false;
   try {
-    const record = JSON.parse(raw) as { runtime?: unknown; passive?: unknown } | null;
-    return record?.runtime === 'client' || record?.passive === true;
+    const record = JSON.parse(raw) as { runtime?: unknown } | null;
+    return record?.runtime === 'client';
   } catch { return false; }
 }
 

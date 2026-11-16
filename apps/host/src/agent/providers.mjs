@@ -14,7 +14,7 @@ const HELD_MODELS = Object.freeze({
 });
 
 /** Refresh account facts only. The shared catalog owns provider projection.
- * @param {{ readProviders: (connected: boolean) => Promise<import('@cindy/model-providers').ProviderView[]>, fetchModels: (gateway: {endpoint: string, credential: string}) => Promise<any[]>, applyModels: (models: any[], options: {authoritative: boolean, preservePaymentRequiredRoutes?: boolean, suppressEmbeddingFallback?: boolean}) => void, readModels: () => readonly any[], markModelsUnknown?: () => void, readOwner?: () => { dataOwnerId: string | null, generation: number, pending: boolean }, applyPricedModels?: (models: any[], ownerId: string | undefined) => void, trackModelsSync?: (sync: Promise<unknown>) => void }} deps
+ * @param {{ readProviders: (connected: boolean) => Promise<import('@cindy/model-providers').ProviderView[]>, fetchModels: (gateway: {endpoint: string, credential: string}) => Promise<any[]>, applyModels: (models: any[], options: {authoritative: boolean, preservePaymentRequiredRoutes?: boolean, suppressEmbeddingFallback?: boolean}) => void, readModels: () => readonly any[], markModelsUnknown?: () => void, readOwner?: () => { dataOwnerId: string | null, generation: number, pending: boolean }, applyPricedModels?: (models: any[], ownerId: string | undefined) => void, trackModelsSync?: (sync: Promise<unknown>) => void, isProfileHeld?: () => boolean }} deps
  *
  * `applyPricedModels` receives the XD price projection's input where the desktop's applyGatewayModels
  * replaces it (model-access/index.ts): a successful /models round and an account boundary (an empty
@@ -26,7 +26,7 @@ const HELD_MODELS = Object.freeze({
  * the Host model access as the desktop's credential sync feeds model-access/index.ts onStatusChange);
  * while it holds them, reads apply its empty list instead of the cached one and start no round.
  */
-export function createProviderCatalog({ readProviders, fetchModels, applyModels, readModels, markModelsUnknown, readOwner, applyPricedModels, trackModelsSync }) {
+export function createProviderCatalog({ readProviders, fetchModels, applyModels, readModels, markModelsUnknown, readOwner, applyPricedModels, trackModelsSync, isProfileHeld }) {
   let cached = null;
   let flight = null;
   let activeIdentity = null;
@@ -71,8 +71,11 @@ export function createProviderCatalog({ readProviders, fetchModels, applyModels,
       if (activeKey !== key) throw new Error('PROVIDER_CONNECTION_CHANGED');
     };
     let error;
-    // No /models round while the credentials are held: the desktop starts one only on ok.
-    if (options.gateway && !credentialHold && (!cached || Date.now() - cached.at >= CACHE_MS || options.force)) {
+    // No /models round while the credentials are held: the desktop starts one only on ok. Nor while a
+    // desktop that opens this profile runs (coexistence plan A): a round writes the price snapshot and
+    // ledger currency files the desktop shares, so the read answers from the list already held.
+    if (options.gateway && !credentialHold && !isProfileHeld?.()
+      && (!cached || Date.now() - cached.at >= CACHE_MS || options.force)) {
       if (flight?.key !== key) {
         // As the desktop's runModelsSync: once a new request starts, the last list still shows but
         // no longer proves that the account lacks a model; only this round's success restores that.

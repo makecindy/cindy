@@ -44,6 +44,8 @@ export interface HostDeviceLinkPorts {
   createRuntimeSession(input: unknown): Promise<unknown>;
   /** Coexistence plan A: the refusal while a desktop uses this profile, or null. */
   profileHold?(): string | null;
+  /** The remote plugin OAuth entry; the desktop's plugin-oauth runtime unless a test passes its own. */
+  requestPluginOauth?(peer: string, raw: unknown): Promise<unknown>;
   subscribe(listener: (event: any) => void): () => void;
   // Cloud revocation is required before narrowing a persisted standby grant.
   availabilityPolicy?: ReturnType<typeof createAvailabilityPolicy>;
@@ -136,7 +138,14 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     dispatchLocalInvoke: invoke,
     ...botBoundary, ...sharedTasks, admitSharedTaskFsWatchTopics,
     setBroadcastTapListener: broadcastTap.setBroadcastTapListener, broadcastTap,
-    requestPluginOauth, invalidatePluginOauth,
+    // A remote plugin authorization writes the plugin's sign-in on this computer: refused while a
+    // desktop uses this profile, as the service refuses other writes (the dispatcher handles this
+    // channel itself, PLUGIN_OAUTH_CHANNEL, so the service gate does not see it).
+    requestPluginOauth: async (peer: string, raw: unknown) => {
+      refuseWhileHeld();
+      return (deps.requestPluginOauth ?? requestPluginOauth)(peer, raw);
+    },
+    invalidatePluginOauth,
     ...createInteractionProjection(supportsRemotePluginOauth), projectInteractionDismissedForRemote,
     RECOVERY_CHECKPOINT_MARKER, remoteWorkingDirRejectionToIpcError,
   });

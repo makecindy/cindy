@@ -566,3 +566,26 @@ for (const boundary of ['logout', 'expired-owner', 'stop']) {
     assert.equal(bridge.status().waiting, 0);
   });
 }
+
+// 测试价值
+// - 生产入口：server.mjs 的 createHostServer（窗口与网页端的 owner 请求都经它）。
+// - 规则：并存方案 A 后续（审核方 2026-11-17 定）。Host 因桌面占用而启动被拒时，owner 请求的 409 要带原因码和一句
+//   能说清原因与做法的话，客户端据此显示人话，不再是笼统的 "not ready"；Host 说不出原因时只有 `error`，
+//   旧客户端照旧。
+// - 现有覆盖缺口：之前 409 只有 `{ error: 'owner_runtime_unavailable' }`。
+// - 最小失败输入：未就绪的 Host 收到一次 owner 请求。tier：unit（本机回环 HTTP）。
+test('a refused owner request says why when the Host knows, and stays a bare error otherwise', async t => {
+  const reason = { reason: 'HOST_PROFILE_IN_USE_BY_DESKTOP', message: 'Quit the desktop app, then restart the Host.' };
+  const ask = async ownerUnavailableReason => {
+    const server = createHostServer({ token: TOKEN, instanceId: 'fixture-host', probe: () => ({}), isOwnerReady: () => false,
+      ...(ownerUnavailableReason ? { ownerUnavailableReason } : {}) });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => server.close());
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/sessions/list`, {
+      method: 'POST', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' }, body: '{}' });
+    return { status: response.status, body: await response.json() };
+  };
+  assert.deepEqual(await ask(() => reason), { status: 409, body: { error: 'owner_runtime_unavailable', ...reason } });
+  assert.deepEqual(await ask(() => null), { status: 409, body: { error: 'owner_runtime_unavailable' } });
+  assert.deepEqual(await ask(undefined), { status: 409, body: { error: 'owner_runtime_unavailable' } });
+});
