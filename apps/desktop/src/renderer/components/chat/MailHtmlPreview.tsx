@@ -6,7 +6,7 @@ import { externalMailImageUrl, hasMailExternalImages, mailInlineDocument, mailRe
 import { Button } from '@/components/ui/button';
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
 import { useChatSessionFile } from './ChatSessionFileContext';
-import { activateMessageUrl } from './useOpenWithMenu';
+import { activateMessageUrl } from './messageLinkActions';
 import { followMailPreviewTheme, mailPreviewLinkUrl } from './mailPreviewAppearance';
 import { mailBodySerializer } from './mailBodyEditing';
 
