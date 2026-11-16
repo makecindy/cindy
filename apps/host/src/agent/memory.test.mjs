@@ -101,8 +101,10 @@ async function hostMemoryFixture(t, ownerId) {
   const oneShots = [];
   attachAgentsToMakerMemory(manager, { 'claude-code': { oneShot: async prompt => { oneShots.push(prompt); return 'merge nothing'; } } });
   const helperDecisions = [];
+  // Runs inside session_search, between its first checks and the search (memory-mcp-ports.ts).
+  const hooks = { duringHistoryDecision: () => {} };
   const provider = createHostMemoryMcpProviders(manager, {
-    readsAccountHistory: async sessionId => { helperDecisions.push(sessionId); return false; },
+    readsAccountHistory: async sessionId => { helperDecisions.push(sessionId); hooks.duringHistoryDecision(); return false; },
     deviceId: () => 'host-device',
   }).find(p => p.name === 'cindy_memory');
   const connect = async (workingDir, sessionId = 'task-memory') => {
@@ -113,7 +115,7 @@ async function hostMemoryFixture(t, ownerId) {
     t.after(async () => { await client.close(); await instance.close(); });
     return (name, args = {}) => client.callTool({ name: 'call_tool', arguments: { name, args } });
   };
-  return { root, db: opened.db, oneShots, connect, helperDecisions };
+  return { root, db: opened.db, drizzle: opened.drizzle, ownerId, oneShots, connect, helperDecisions, hooks };
 }
 
 const NOTE = { type: 'project', name: 'release-notes', title: 'Release notes', description: 'Where the release notes live', body: 'docs/release.md' };
@@ -200,4 +202,24 @@ test('a memory call from a task outside the current account is refused, as on th
 
   const stored = fs.readdirSync(f.root, { recursive: true }).filter(name => String(name).includes('release-notes'));
   assert.deepEqual(stored, []);
+});
+
+// The checks run again before a result leaves (the desktop closures re-check the database after the
+// operation): an account change during the call must not hand back what was read for the old one.
+// Gap: the test above changes the account between calls. Minimal failing input: another database
+// becomes current while session_search runs, after its history decision; the search itself still
+// finds the hit (the same file under a new client), so only the re-check stops it. Tier: unit, as above.
+test('session_search refuses its result when the account changes during the call', async t => {
+  const f = await hostMemoryFixture(t, 'memory-midcall-owner');
+  f.db.exec(`INSERT INTO messages(id,client_id,session_id,role,content,created_at)
+    VALUES ('m-own','c-own','task-memory','user','"where is the release checklist"',1);`);
+  const workdir = path.join(f.root, 'project');
+  fs.mkdirSync(workdir);
+  const search = await f.connect(workdir);
+  const next = createDbClientForHandle({ db: f.db, drizzle: f.drizzle });
+  f.hooks.duringHistoryDecision = () => setCurrentDbClient(next, f.ownerId);
+  const result = await search('session_search', { query: 'checklist' });
+  assert.deepEqual(f.helperDecisions, ['task-memory']);
+  assert.deepEqual(result, { isError: true, content: [{ type: 'text', text: JSON.stringify({
+    ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE', message: 'Account data is unavailable for this task.' }) }] });
 });

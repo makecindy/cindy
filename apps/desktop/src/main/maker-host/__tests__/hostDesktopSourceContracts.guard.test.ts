@@ -408,6 +408,53 @@ describe('Host copies of desktop expressions', () => {
     assert.ok(desktopDeps.length > 0);
     assert.equal(copied, desktopDeps);
   });
+
+  // 规则：cindy_memory 每次调用前的账号数据检查（Host `hostAccountDataAccess`）与 session_search 的调用方
+  // 检查（Host `createHostSessionSearch`），照抄桌面 mcp-providers.ts 里的两段内联闭包（`withAccountDataAccess`、
+  // memory 依赖的 `searchSessions`；放行表第七节第 26、25 项）。两段都内联在桌面的 provider 装配里
+  // （`searchSessions` 在 createLiziMcpProviders 的参数里），pluginTaskHelperScope.test.ts 按源码截取它们来测，
+  // 暂时不能搬成共用。
+  // 失效后果：桌面收紧了检查而 Host 没跟上，Host 的记忆工具悄悄比桌面松（换账号后上一个账号的任务读写数据）。
+  // 缺口：Host 的行为测试（memory.test.mjs）只验证现有的几种拒绝，看不到桌面以后加的检查。
+  // 最小失败输入：Host 副本里任一行与桌面不同。比较去掉缩进、空行与注释；session_search 只允许检索那一处不同。
+  it('keeps the cindy_memory caller checks line for line with the desktop closures', () => {
+    const fn = (file: string, pick: (node: ts.Node) => ts.Node | undefined) => {
+      const source = ts.createSourceFile(file, read(file), ts.ScriptTarget.ESNext, true);
+      const found: (ts.ArrowFunction | ts.FunctionDeclaration)[] = [];
+      const visit = (node: ts.Node) => {
+        const hit = pick(node);
+        if (hit && (ts.isArrowFunction(hit) || ts.isFunctionDeclaration(hit))) found.push(hit);
+        ts.forEachChild(node, visit);
+      };
+      visit(source);
+      assert.equal(found.length, 1, file);
+      const [hit] = found;
+      const lines = (text: string) => text.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('//'));
+      return { params: hit.parameters.map(p => p.getText(source)).join(', '), body: lines(hit.body!.getText(source)) };
+    };
+    const named = (node: ts.Node, name: string) => (ts.isVariableDeclaration(node) || ts.isPropertyAssignment(node) || ts.isFunctionDeclaration(node))
+      && node.name?.getText() === name;
+    const desktopFile = path.join(desktopMain, 'mcp-integrations/mcp-providers.ts');
+    const hostFile = path.join(hostAgent, 'memory-mcp-ports.ts');
+
+    const desktopAccess = fn(desktopFile, node => named(node, 'withAccountDataAccess') && ts.isVariableDeclaration(node) ? node.initializer : undefined);
+    const hostAccess = fn(hostFile, node => named(node, 'hostAccountDataAccess') ? node : undefined);
+    assert.ok(desktopAccess.body.length > 10);
+    assert.equal(hostAccess.params, desktopAccess.params);
+    assert.deepEqual(hostAccess.body, desktopAccess.body);
+
+    const desktopSearch = fn(desktopFile, node => named(node, 'searchSessions') && ts.isPropertyAssignment(node) ? node.initializer : undefined);
+    const hostSearch = fn(hostFile, node => ts.isReturnStatement(node) && node.parent.parent && named(node.parent.parent, 'createHostSessionSearch')
+      ? node.expression : undefined);
+    // The one difference: the search runs on the shared core with this Host's device id.
+    const search = new Map([
+      ['const hits = await searchSessionsWithBotScopeCore(query, opts, {', 'const hits = await searchSessionsWithBotScope(query, opts, {'],
+      ['botAccountWide: await input.readsAccountHistory(opts.callerSessionId),', 'botAccountWide: await botReadsAccountHistory(opts.callerSessionId),'],
+    ]);
+    assert.ok(desktopSearch.body.length > 10);
+    assert.equal(hostSearch.params, desktopSearch.params);
+    assert.deepEqual(hostSearch.body.filter(line => line !== 'readDeviceId: input.deviceId,').map(line => search.get(line) ?? line), desktopSearch.body);
+  });
 });
 
 // 以下断言原在桌面普通单测里读 register.ts；第一批桌面准备把被守护的代码原样搬进共用文件
