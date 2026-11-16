@@ -106,7 +106,7 @@ type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
 type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'> & {
   scheduledModelBaseline?: string | null;
 };
-type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
+export type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
 let sessionRuntimeProjector: SessionRuntimeProjector | null = null;
 
 export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | null): void {

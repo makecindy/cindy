@@ -1460,7 +1460,6 @@ import {
   getPendingSessionRuntimeMutation,
   applySessionRuntimeOverrideForStart,
   getSessionRuntimeControlSnapshot,
-  projectSessionRuntimeControl,
   isPendingSessionRuntimeRouteExplicit,
   mergeSessionRuntimeProfilePatch,
   recordUserSessionRuntimeMutation,
@@ -1475,7 +1474,7 @@ import {
   type ApplySessionRuntimeSelection,
   type InternalRuntimeSelectionOptions,
 } from './sessionRuntimeSelectionApply.js';
-import { createSessionRuntimeProjection, createUpdateScheduledPreference } from './sessionRuntimeProjection.js';
+import { createSessionRuntimeProjection, createSessionRuntimeProjector, createUpdateScheduledPreference } from './sessionRuntimeProjection.js';
 import { createResolvePendingRuntimeAxisPatch } from './pendingRuntimeAxisPatch.js';
 import { assertModelRouteUsableWith } from './modelRouteAdmission.js';
 import {
@@ -6583,17 +6582,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   log.info('registering maker:* IPC handlers');
   const { broadcastSessionRuntimeProjection, projectScheduledPreferences } =
     createSessionRuntimeProjection({ broadcastSessionPatched });
-  setSessionRuntimeProjector((session) => {
-    const baseline = parseScheduledModelBaseline(session.scheduledModelBaseline);
-    const projection = baseline ? projectScheduledPreferences(session.id, baseline) : projectSessionRuntimeControl(session.id, {
-      agentKind: dbToMakerAgentKind(session.agentKind),
-      model: session.model,
-      providerId: session.providerId?.trim() || null,
-      effort: session.effort as SessionRuntimeProfile['effort'],
-      fastMode: session.fastMode,
-    });
-    return { ...projection, runtimePluginsSelected: !!readRuntimePluginSettings(session.id) };
-  });
+  setSessionRuntimeProjector(createSessionRuntimeProjector({
+    projectScheduledPreferences,
+    runtimePluginsSelected: (sessionId) => !!readRuntimePluginSettings(sessionId),
+  }));
   setSessionRuntimeCleanup((sessionId) => {
     // 任务在另一台电脑上还没启动完：让那台停下，不再迟到地启动、跑完这一轮。
     cancelPendingRemoteStart(sessionId);

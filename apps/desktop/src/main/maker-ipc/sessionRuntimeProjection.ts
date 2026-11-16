@@ -1,6 +1,7 @@
 /**
  * The runtime projection of a task that the desktop broadcasts after a runtime change (model,
- * provider, effort, fast mode), and the update of a scheduled task's saved preferences. Moved
+ * provider, effort, fast mode), the projector every task read goes through (mapper.ts
+ * setSessionRuntimeProjector), and the update of a scheduled task's saved preferences. Moved
  * verbatim out of register.ts so the Node Host runs the same steps; register.ts binds the ports.
  *
  * - A task with a saved scheduled baseline projects that baseline (scheduled preferences win over the
@@ -14,6 +15,7 @@ import { and, eq } from 'drizzle-orm';
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { getDbClient } from '../localDb/client/current.js';
+import type { SessionRuntimeProjector } from '../localDb/mapper.js';
 import { sessions } from '../localDb/schema.js';
 import type { ScheduledModelSelection } from './scheduledModelSelection';
 import { projectSessionRuntimeControl, type SessionRuntimeProfile } from './sessionRuntimeControl.js';
@@ -86,6 +88,33 @@ export function createSessionRuntimeProjection(ports: SessionRuntimeProjectionPo
     };
   };
   return { broadcastSessionRuntimeProjection, projectScheduledPreferences };
+}
+
+export interface SessionRuntimeProjectorPorts {
+  /** createSessionRuntimeProjection's projectScheduledPreferences. */
+  projectScheduledPreferences(sessionId: string, saved: ScheduledModelBaseline): ReturnType<SessionRuntimeProjector>;
+  /** Whether the task has its own runtime plugin selection (the desktop reads runtime-plugin-settings). */
+  runtimePluginsSelected(sessionId: string): boolean;
+}
+
+/**
+ * The task read projector, as register.ts passed it to setSessionRuntimeProjector: a task with a saved
+ * scheduled baseline reads that baseline, any other task its row through projectSessionRuntimeControl
+ * (the accepted runtime override, when there is one, is what it reads as effective).
+ */
+export function createSessionRuntimeProjector(ports: SessionRuntimeProjectorPorts): SessionRuntimeProjector {
+  const { projectScheduledPreferences } = ports;
+  return (session) => {
+    const baseline = parseScheduledModelBaseline(session.scheduledModelBaseline);
+    const projection = baseline ? projectScheduledPreferences(session.id, baseline) : projectSessionRuntimeControl(session.id, {
+      agentKind: dbToMakerAgentKind(session.agentKind),
+      model: session.model,
+      providerId: session.providerId?.trim() || null,
+      effort: session.effort as SessionRuntimeProfile['effort'],
+      fastMode: session.fastMode,
+    });
+    return { ...projection, runtimePluginsSelected: ports.runtimePluginsSelected(session.id) };
+  };
 }
 
 /** updateScheduledPreference, as register.ts declared it. */
