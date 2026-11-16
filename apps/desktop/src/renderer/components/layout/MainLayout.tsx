@@ -426,9 +426,6 @@ export function MainLayout() {
   const remoteTaskEntriesWidth = remoteDesktopDeviceId
     ? (1 + Math.min(taskLiveScreenEntries.length, TASK_LIVE_SCREEN_LIMIT)) * 32
     : 0;
-  // Windows 内容区右上的显示入口始终跟随聊天区，展开时也不移入侧栏。
-  const showWindowsRightSidebarTrigger =
-    rightSidebarAvailable && rsbWindow.loaded;
   const rowRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   // B1a(去方位化):左侧占位块(pinning spacer + Sidebar)的 wrapper。
@@ -1026,7 +1023,6 @@ export function MainLayout() {
     return onRequestRightSidebarVisibility((visibility, opts) => {
       const currentSessionId = rightSidebarSessionIdRef.current;
       const targetSessionId = opts.sessionId ?? currentSessionId;
-      if (!targetSessionId) return;
       const targetCollapsed = visibility === 'close';
       const windowState = getRsbWindowUiState();
       if (!windowState.loaded) return;
@@ -1036,6 +1032,7 @@ export function MainLayout() {
       // (agent tab-op 在 detached 时 dispatch 到子窗口 renderer,其内的
       // SidebarWindowLayout 也订阅了本通道;这里主要覆盖主窗内直接调用方。)
       if (detachedNow) {
+        if (!targetSessionId) return;
         writeCollapsedFor(targetSessionId, targetCollapsed);
         if (visibility === 'open') {
           detachedHostSessionIdRef.current = detachedHostAfterOpen({
@@ -1058,7 +1055,7 @@ export function MainLayout() {
         return;
       }
       if (targetSessionId === currentSessionId) {
-        // 前台路径:走 UI + 持久化
+        // 前台路径:走 UI + 持久化；全局具名页没有任务时只更新本窗口折叠态。
         setIsRightSidebarCollapsed((prev) => {
           if (prev === targetCollapsed) return prev;
           if (shouldAnimateSidebarVisibilityRequest(opts)) {
@@ -1067,7 +1064,7 @@ export function MainLayout() {
           writeCollapsedFor(targetSessionId, targetCollapsed);
           return targetCollapsed;
         });
-      } else {
+      } else if (targetSessionId) {
         // 后台路径:写入目标 session 存档。用户手势跨任务 open 才切主窗;
         // agent / 插件自动化(userInitiated:false)只落档,不抢当前输入焦点。
         writeCollapsedFor(targetSessionId, targetCollapsed);
@@ -1099,15 +1096,6 @@ export function MainLayout() {
   // - 折叠 RSB 时自动退出(否则 maximize 状态下点折叠会导致主区 hidden + RSB 也 0 宽 → 全黑)
   // - 不持久化:刷新 / 切 session 默认非 maximize,跟"临时聚焦视图"语义一致
   const [isRightSidebarMaximized, setIsRightSidebarMaximized] = useState(false);
-  const rightSidebarOwnsRailChromeActions = resolveRightSidebarRailChromeActionsOwner({
-    hasRailChromeActions,
-    rightSidebarSide,
-    rightSidebarAvailable,
-    rightSidebarLoaded: rsbWindow.loaded,
-    isRightSidebarCollapsed,
-    isRightSidebarMaximized,
-    rsbDetached,
-  });
   const handleMaximizeRightSidebar = useCallback(() => {
     setIsRightSidebarMaximized((v) => !v);
   }, []);
@@ -1122,6 +1110,17 @@ export function MainLayout() {
     subagentsAvailable: rightSidebarSubagentsAvailable,
   });
   const rightSidebarPaneAvailable = rightSidebarAvailable || globalRightViewAvailable;
+  // Windows/Linux 与 macOS 使用同一在场条件，按钮占位也由它推导。
+  const showWindowsRightSidebarTrigger = rightSidebarPaneAvailable && rsbWindow.loaded;
+  const rightSidebarOwnsRailChromeActions = resolveRightSidebarRailChromeActionsOwner({
+    hasRailChromeActions,
+    rightSidebarSide,
+    rightSidebarAvailable: rightSidebarPaneAvailable,
+    rightSidebarLoaded: rsbWindow.loaded,
+    isRightSidebarCollapsed,
+    isRightSidebarMaximized,
+    rsbDetached,
+  });
   // 全局具名页可以从 /plugins 等非任务路由打开；其余页签仍按原规则保留并强制折叠。
   const { mounted: rightSidebarMounted, forceCollapsed: rightSidebarForceCollapsed } =
     useRetainedRightSidebarMount({
