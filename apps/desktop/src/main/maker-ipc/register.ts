@@ -7667,9 +7667,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 改用不抛的判定决定「这次读取要不要放行本机绑定自愈 + 清单拉取」。
     isTrustedSender: (event) =>
       isTrustedAppRendererEvent(event as Parameters<typeof isTrustedAppRendererEvent>[0]),
-    // 动态清单重新发现:目前没有需要主动重拉的供应商(anthropic 清单来自 Claude Code
-    // 会话 init 的 SDK 捕获,没有 HTTP 发现通道,也就没有失败态)。
-    rediscoverModels: async () => null,
+    // Independent subscription ids use the same account routing as native refresh;
+    // their editable display names never select a provider or CLI profile.
+    rediscoverModels: async (providerId) => {
+      const ref = resolveSubscriptionPoolProviderRef(providerId);
+      if (ref && !(await getMaker().refreshAgentLocalModels(ref.kind === 'anthropic' ? 'claude-code' : 'codex', {
+        providerId, credentialMode: 'oauth-bearer',
+      }))) throw new Error('Subscription model discovery did not produce a current snapshot');
+      return null;
+    },
     refreshBuiltinModels: refreshProviderModelsManually,
     requestModelsAutoRefresh: requestProviderModelAutoRefresh,
     scanLocalCli: () => scanLocalCliAuth(createLocalCliScanDeps()),

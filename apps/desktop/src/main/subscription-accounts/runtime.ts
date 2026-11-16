@@ -147,10 +147,40 @@ interface OwnerRuntime {
   codexCatalogs?: Map<string, readonly CatalogModel[]>;
   publishedCodexCatalog?: Record<string, readonly CatalogModel[] | null> | null;
   defaultCodexAuthEpoch: number;
+  claudeModels: Map<string, { auth: AccountSnapshot['auth']; models: CatalogModel[]; failedAt?: number }>;
+  claudeModelFlights: Map<string, { promise: Promise<void>; forced: boolean }>;
+  claudeCatalogs?: Map<string, readonly CatalogModel[]>;
+  publishedClaudeCatalog?: Record<string, readonly CatalogModel[] | null> | null;
+  defaultClaudeAuthEpoch: number;
 }
 let runtime: OwnerRuntime | undefined;
 const listeners = new Set<(providerId: SubscriptionProvider, resetAccountId?: string, change?: 'usage' | 'load') => void>();
 const codexModelListeners = new Set<() => void>();
+const claudeModelListeners = new Set<() => void>();
+type ClaudeModelProbe = (account: NativeSubscriptionAccount, previous: readonly CatalogModel[]) => Promise<CatalogModel[] | null>;
+let claudeModelProbe: ClaudeModelProbe | null = null;
+
+/** Only the executing Maker can supply a native CLI probe; names never select accounts. */
+export function setSubscriptionPoolClaudeModelProbe(probe: ClaudeModelProbe | null): void {
+  claudeModelProbe = probe;
+  runtime?.claudeModelFlights.clear();
+}
+export function onSubscriptionPoolClaudeModelsChanged(listener: () => void): () => void {
+  claudeModelListeners.add(listener);
+  return () => { claudeModelListeners.delete(listener); };
+}
+function publishClaudeCatalogChange(state: OwnerRuntime): void {
+  if (state !== runtime || state.owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return;
+  const pool = readPool('anthropic');
+  const providers = new Set(['anthropic', ...pool?.accounts.map(account => accountProviderId('anthropic', account.id)) ?? []]);
+  const models = pool ? Object.fromEntries([...providers].sort().map(providerId =>
+    [providerId, readSubscriptionPoolClaudeModels(providerId)])) : null;
+  if (isDeepStrictEqual(state.publishedClaudeCatalog ?? null, models)) return;
+  state.publishedClaudeCatalog = models;
+  for (const listener of claudeModelListeners) {
+    try { listener(); } catch { /* Publishing cannot invalidate a completed account read. */ }
+  }
+}
 /** Synchronous capability invalidation; listeners read the newly committed union. */
 export function onSubscriptionPoolCodexModelsChanged(listener: () => void): () => void {
   codexModelListeners.add(listener);
@@ -178,6 +208,7 @@ export function onSubscriptionAccountsChanged(
 }
 function changed(provider: SubscriptionProvider, resetAccountId?: string, change?: 'usage' | 'load') {
   if (provider === 'openai') publishCodexCatalogChange(currentRuntime());
+  else publishClaudeCatalogChange(currentRuntime());
   for (const listener of listeners) {
     try {
       listener(provider, resetAccountId, change);
@@ -203,6 +234,9 @@ function currentRuntime(): OwnerRuntime {
       codexModels: new Map(),
       codexModelFlights: new Map(),
       defaultCodexAuthEpoch: 0,
+      claudeModels: new Map(),
+      claudeModelFlights: new Map(),
+      defaultClaudeAuthEpoch: 0,
     };
   }
   expirePendingStarts(runtime);
@@ -600,9 +634,19 @@ async function snapshot(
   const ttl = cached?.unavailable ? ACCOUNT_SNAPSHOT_FAILURE_TTL_MS : ACCOUNT_SNAPSHOT_TTL_MS;
   if (!force && cached && Date.now() - cached.at < ttl
     && (id !== 'default' || defaultAccountBound(provider))) return cached;
+  const readCurrent = async (reading: Promise<AccountSnapshot>): Promise<AccountSnapshot> => {
+    const result = await reading;
+    // The first native status read can publish a login notification before it
+    // returns. That invalidates this old read without installing a signed-out
+    // snapshot. Re-read the new generation for every joined caller; a logout
+    // installs an explicit false snapshot and must never take this branch.
+    if (provider === 'anthropic' && id === 'default')
+      return state.cache.get(key) ?? snapshot(state, provider, id, false, forceUsage);
+    return result;
+  };
   const pending = state.flights.get(key);
   if (pending) {
-    if (!forceUsage || pending.forceUsage) return pending.promise;
+    if (!forceUsage || pending.forceUsage) return readCurrent(pending.promise);
     // A normal read may reuse its cached quota. A manual refresh waits for it,
     // then starts one fresh read shared by any other concurrent refreshes.
     await pending.promise;
@@ -610,6 +654,7 @@ async function snapshot(
   }
   const directory = directoryFor(provider, id);
   const defaultCodexAuthEpoch = state.defaultCodexAuthEpoch;
+  const defaultClaudeAuthEpoch = state.defaultClaudeAuthEpoch;
   const flight = (async (): Promise<AccountSnapshot> => {
     const startedAt = Date.now();
     let result: AccountSnapshot;
@@ -767,6 +812,8 @@ async function snapshot(
     assertOwner(state);
     if (provider === 'openai' && id === 'default' && state.defaultCodexAuthEpoch !== defaultCodexAuthEpoch)
       return state.cache.get(key) ?? { auth: { authenticated: false }, at: 0 };
+    if (provider === 'anthropic' && id === 'default' && state.defaultClaudeAuthEpoch !== defaultClaudeAuthEpoch)
+      return state.cache.get(key) ?? { auth: { authenticated: false }, at: 0 };
     if (result.usage?.claudeUsage) result = { ...result, usage: { ...result.usage, claudeUsage: {
       ...result.usage.claudeUsage, subscriptionType: result.auth.plan,
       planTier: result.auth.planTier, accountFingerprint: usageFingerprint(provider, result),
@@ -779,6 +826,7 @@ async function snapshot(
     } else if (observedUsage) await persistUsage(state, provider, id, result);
     assertOwner(state);
     if (provider === 'openai') publishCodexCatalogChange(state);
+    else publishClaudeCatalogChange(state);
     return result;
   })();
   state.flights.set(key, { promise: flight, forceUsage });
@@ -787,7 +835,7 @@ async function snapshot(
       state.flights.delete(key);
     })
     .catch(() => {});
-  return flight;
+  return readCurrent(flight);
 }
 
 /**
@@ -855,14 +903,145 @@ export function resetDefaultSubscriptionCodexDiscovery(authenticated: boolean): 
   publishCodexCatalogChange(state);
 }
 
+/** The native CLI login listener owns only the default profile, even when it was moved. */
+export function resetDefaultSubscriptionClaudeDiscovery(authenticated: boolean): void {
+  if (!readPool('anthropic')) return;
+  const state = currentRuntime();
+  state.defaultClaudeAuthEpoch += 1;
+  state.claudeModels.delete('default');
+  if (authenticated) state.cache.delete(keyOf('anthropic', 'default'));
+  else state.cache.set(keyOf('anthropic', 'default'), { auth: { authenticated: false }, at: Date.now() });
+  publishClaudeCatalogChange(state);
+}
+
+/** Read SDK membership on every saved Claude profile, without borrowing the default login or
+ * reserving task concurrency. Only the same owner/login may retain its last successful result. */
+export async function refreshSubscriptionPoolClaudeModels(force = false, providerId?: string): Promise<boolean> {
+  const state = currentRuntime();
+  const probe = claudeModelProbe;
+  const pool = readPool('anthropic');
+  if (!probe || !pool) return false;
+  const found = providerId ? poolFor(providerId) : null;
+  if (providerId && (!found || found.kind !== 'anthropic')) return false;
+  const historical = providerId ? readProviderBoundAccountIds('anthropic', providerId) : readBoundSubscriptionAccountIds('anthropic');
+  const serving = found ? new Set(servingAccounts(found).map(account => account.id)) : null;
+  const accounts = pool.accounts.filter(account => (!serving || serving.has(account.id) || historical.has(account.id))
+    && (!account.paused || historical.has(account.id)) && !disconnectedFor(pool, 'anthropic', account.id));
+  const refreshAccount = async (id: string): Promise<void> => {
+    const loggingIn = () => [...state.logins].some(([key, login]) => key.startsWith('anthropic:') && login.accountId === id);
+    if (loggingIn()) return;
+    const info = await snapshot(state, 'anthropic', id);
+    assertOwner(state);
+    if (!info.auth.authenticated || loggingIn()) {
+      if (!info.unavailable) state.claudeModels.delete(id);
+      return;
+    }
+    const auth = info.auth;
+    const previous = state.claudeModels.get(id);
+    const sameLogin = previous?.auth === auth || (!!auth.identity && previous?.auth.identity === auth.identity);
+    if (!force && previous && sameLogin && (previous.failedAt === undefined
+      || Date.now() - previous.failedAt < ACCOUNT_SNAPSHOT_FAILURE_TTL_MS)) {
+      if (previous.auth !== auth) state.claudeModels.set(id, { ...previous, auth });
+      return;
+    }
+    const pending = state.claudeModelFlights.get(id);
+    if (pending) {
+      await pending.promise;
+      if (probe === claudeModelProbe && state === runtime
+        && readPool('anthropic')?.accounts.some(account => account.id === id)
+        && ((force && !pending.forced) || state.claudeModels.get(id)?.auth !== auth)) await refreshAccount(id);
+      return;
+    }
+    const directory = directoryFor('anthropic', id);
+    const placement = accountProviderId('anthropic', id);
+    const isCurrent = () => state === runtime && state.owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()
+      && probe === claudeModelProbe && !loggingIn()
+      && !disconnectedFor(readPool('anthropic'), 'anthropic', id)
+      && readPool('anthropic')?.accounts.some(account => account.id === id && (!account.paused || historical.has(id))) === true
+      && (id !== 'default' || defaultAccountBound('anthropic'))
+      && state.cache.get(keyOf('anthropic', id))?.auth === auth
+      && directoryFor('anthropic', id) === directory && accountProviderId('anthropic', id) === placement;
+    const assertCurrent = () => { if (!isCurrent()) throw new Error('Subscription account changed during model discovery'); };
+    const flight = (async () => {
+      try {
+        assertCurrent();
+        const models = await probe({ id: `${accountOwnerPrefix()}:anthropic:${id}`, configDir: directory,
+          defaultProfile: id === 'default', assertCurrent, readState: async () => { assertCurrent(); return auth; } },
+        sameLogin ? previous?.models ?? [] : []);
+        assertCurrent();
+        if (models === null) throw new Error('Claude model probe did not return a current list');
+        state.claudeModels.set(id, { auth, models });
+      } catch (error) {
+        if (isCurrent()) {
+          state.claudeModels.set(id, { auth, models: sameLogin ? previous?.models ?? [] : [], failedAt: Date.now() });
+          log.warn('subscription account model read failed', { accountId: id, error: error instanceof Error ? error.name : typeof error });
+        }
+      }
+    })();
+    state.claudeModelFlights.set(id, { promise: flight, forced: force });
+    try { await flight; } finally { if (state.claudeModelFlights.get(id)?.promise === flight) state.claudeModelFlights.delete(id); }
+  };
+  await Promise.all(accounts.map(account => refreshAccount(account.id)));
+  publishClaudeCatalogChange(state);
+  return state === runtime && state.owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()
+    && probe === claudeModelProbe && accounts.some(account => {
+    const result = state.claudeModels.get(account.id);
+    return result?.failedAt === undefined && !!result && result.auth === state.cache.get(keyOf('anthropic', account.id))?.auth
+      && readPool('anthropic')?.accounts.some(current => current.id === account.id) === true;
+  });
+}
+
+/** null preserves existing native metadata before a usable account discovery;
+ * [] means there is no authenticated account eligible to publish membership. */
+export function readSubscriptionPoolClaudeModels(
+  providerId = 'anthropic', options: { includeBoundAccounts?: boolean } = {},
+): readonly CatalogModel[] | null {
+  const found = poolFor(providerId);
+  if (!found || found.kind !== 'anthropic') return null;
+  const state = currentRuntime();
+  const historical = options.includeBoundAccounts ? readProviderBoundAccountIds('anthropic', providerId) : new Set<string>();
+  const serving = new Set(servingAccounts(found).map(account => account.id));
+  const models = new Map<string, CatalogModel>();
+  let discoveryUnavailable = false;
+  if (!found.off || options.includeBoundAccounts) for (const account of found.pool.accounts) {
+    if ((!serving.has(account.id) && !historical.has(account.id)) || (account.paused && !historical.has(account.id))
+      || disconnectedFor(found.pool, 'anthropic', account.id)) continue;
+    if (account.id === 'default' && !defaultAccountBound('anthropic')) continue;
+    if ([...state.logins].some(([key, login]) => key.startsWith('anthropic:') && login.accountId === account.id)) continue;
+    const auth = state.cache.get(keyOf('anthropic', account.id))?.auth;
+    const snapshot = state.claudeModels.get(account.id);
+    if (!auth?.authenticated) continue;
+    if (!snapshot || !(snapshot.auth === auth || (!!auth.identity && snapshot.auth.identity === auth.identity))
+      || (snapshot.failedAt !== undefined && snapshot.models.length === 0)) {
+      discoveryUnavailable = true;
+      continue;
+    }
+    for (const model of snapshot.models) if (!models.has(model.id)) models.set(model.id, model);
+  }
+  // An upgrade has no per-account memory cache yet. Retain the provider's existing
+  // metadata until discovery succeeds, rather than turning a pending/failed SDK read
+  // into an empty allowlist for remote task recovery. This does not bypass auth/grants.
+  if (models.size === 0 && discoveryUnavailable) return null;
+  const next = [...models.values()];
+  const catalogs = state.claudeCatalogs ??= new Map();
+  const cacheKey = `${providerId}:${options.includeBoundAccounts ? 'routing' : 'selectable'}`;
+  const previous = catalogs.get(cacheKey);
+  if (previous && previous.length === next.length && next.every((model, index) => previous[index] === model)) return previous;
+  catalogs.set(cacheKey, next);
+  return next;
+}
+
 /** Owner-local model/list discovery; shares the account snapshot lifetime and in-flight work.
  * No inference or credential copying. Never publish a partial pagination result or a late login.
  */
-export async function refreshSubscriptionPoolCodexModels(force = false): Promise<void> {
+export async function refreshSubscriptionPoolCodexModels(force = false, providerId?: string): Promise<void> {
   const state = currentRuntime();
   const pool = readPool('openai');
   if (!pool) { publishCodexCatalogChange(state); return; }
   const historical = readBoundSubscriptionAccountIds('openai');
+  const found = providerId ? poolFor(providerId) : null;
+  if (providerId && (!found || found.kind !== 'openai')) return;
+  const serving = found ? new Set(servingAccounts(found).map(account => account.id)) : null;
   const refreshAccount = async (id: string): Promise<void> => {
     const loggingIn = () => [...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === id);
     const auth = state.cache.get(keyOf('openai', id))?.auth;
@@ -940,7 +1119,8 @@ export async function refreshSubscriptionPoolCodexModels(force = false): Promise
     state.codexModelFlights.set(id, { promise: flight, forced: force });
     try { await flight; } finally { if (state.codexModelFlights.get(id)?.promise === flight) state.codexModelFlights.delete(id); }
   };
-  await Promise.all(pool.accounts.filter(account => (!account.paused || historical.has(account.id)) && !disconnectedFor(pool, 'openai', account.id)
+  await Promise.all(pool.accounts.filter(account => (!serving || serving.has(account.id))
+    && (!account.paused || historical.has(account.id)) && !disconnectedFor(pool, 'openai', account.id)
     && !readLegacyCodexProviderId(account.id))
     .map(account => refreshAccount(account.id)));
   publishCodexCatalogChange(state);
@@ -984,8 +1164,8 @@ export function hasUnavailableSubscriptionPoolAccount(providerId: string): boole
   const state = currentRuntime();
   return servingAccounts(found).some(account => !account.paused
     && (state.cache.get(keyOf(found.kind, account.id))?.unavailable === true
-      || (found.kind === 'openai' && state.cache.get(keyOf(found.kind, account.id))?.auth.authenticated
-        && state.codexModels.get(account.id)?.failedAt !== undefined)));
+      || (state.cache.get(keyOf(found.kind, account.id))?.auth.authenticated
+        && (found.kind === 'openai' ? state.codexModels : state.claudeModels).get(account.id)?.failedAt !== undefined)));
 }
 
 /** Native account membership is independent of the supplier's union. Imported
@@ -2297,6 +2477,7 @@ export async function runSubscriptionAccountCommand(
       if (abort.signal.aborted) throw new Error('login_cancelled');
       const directory = directoryFor(provider, accountId);
       if (provider === 'openai') state.codexModels.delete(accountId);
+      else state.claudeModels.delete(accountId);
       await mkdir(directory, { recursive: true, mode: 0o700 });
       assertOwner(state);
       if (abort.signal.aborted) throw new Error('login_cancelled');
