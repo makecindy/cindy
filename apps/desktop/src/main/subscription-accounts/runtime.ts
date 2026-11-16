@@ -2045,7 +2045,7 @@ export async function acquireSubscriptionAccount(
       || (!control && readSubscriptionAccountBlocked(provider, binding.accountId, model)));
   if (!pinnedTarget || rebind) {
     for (const account of scoped) {
-      if (snapshots.has(account.id) || account.paused || [...state.logins].some(
+      if (snapshots.has(account.id) || (!control && account.paused) || [...state.logins].some(
         ([key, login]) => key.startsWith(provider + ':') && login.accountId === account.id,
       )) continue;
       const read = prepareAccount(account.id);

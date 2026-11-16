@@ -2188,6 +2188,29 @@ describe('tasks using imported Codex connections', () => {
 });
 
 describe('native account assignment on the executing computer', () => {
+  // PR #10885 review, unit: control reads may use paused accounts without task admission.
+  // #10892 moved Claude discovery to its own probe; retain the Claude control contract and
+  // exercise the remaining real refresh adapter caller (pools of legacy Codex profiles).
+  it.each(['anthropic', 'openai'] as const)('reads paused %s control accounts without admitting a new task or reserving capacity', async provider => {
+    const ids = provider === 'anthropic' ? ['default', 'second'] : ['first', 'second'];
+    h.pools[provider] = { strategy: 'least', accounts: ids.map(id => ({ ...account(id), paused: true })),
+      ...(provider === 'openai' ? { legacyCodexAccounts: { 'old-first': 'first', 'old-second': 'second' } } : {}) };
+    if (provider === 'anthropic') {
+      const lease = await acquireSubscriptionAccount(provider, undefined, [], true);
+      expect(lease?.account.configDir).toBe('anthropic/default');
+      lease!.release();
+    } else {
+      const modelRefresh = vi.fn<BaseAgent['refreshLocalModels']>().mockResolvedValue(true);
+      const agent = withSubscriptionAccounts({ kind: 'codex', refreshLocalModels: modelRefresh } as unknown as BaseAgent);
+      expect(await agent.refreshLocalModels()).toBe(true);
+      expect(modelRefresh.mock.calls[0][0]?.[NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/first');
+    }
+    expect((await readSubscriptionPool(provider)).accounts.map(entry => [entry.paused, entry.running]))
+      .toEqual([[true, 0], [true, 0]]);
+    expect(h.bindings.size).toBe(0);
+    await expect(acquireSubscriptionAccount(provider, undefined, [])).rejects.toThrow('No subscription account is available');
+  });
+
   // F1, unit: real acquire, task reader and adapter must not wait for another account's CLI.
   // Previous coverage only settled every sibling before asserting the selected directory.
   it.each(['anthropic', 'openai'] as const)('resumes a healthy %s task while its sibling status never answers', async provider => {
