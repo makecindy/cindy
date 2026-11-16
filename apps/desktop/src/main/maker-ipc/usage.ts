@@ -118,7 +118,8 @@ const claudeSubscriptionUsageReader = createClaudeSubscriptionUsageReader({
     // get_usage 是 Experimental:解析不出窗口按形状变化处理,抛错退避并保留已有缓存。
     if (!snapshot) throw new Error('claude get_usage returned unrecognized rate_limits');
     const subscriptionType = usage.subscriptionType ?? peekClaudeCliLoginStatus()?.subscriptionType;
-    return subscriptionType ? { ...snapshot, subscriptionType } : snapshot;
+    const planTier = peekClaudeCliLoginStatus()?.planTier;
+    return { ...snapshot, ...(subscriptionType ? { subscriptionType } : {}), ...(planTier ? { planTier } : {}) };
   },
   recordSnapshot: recordClaudeSubscriptionUsageSnapshot,
   clearSnapshot: clearClaudeSubscriptionUsageSnapshot,
@@ -474,10 +475,12 @@ export function registerMakerUsageIpc(maker: Maker): void {
     if (!snapshot) return;
     const fingerprint = currentClaudeAccountFingerprint();
     const subscriptionType = peekClaudeCliLoginStatus()?.subscriptionType;
+    const planTier = peekClaudeCliLoginStatus()?.planTier;
     void recordClaudeSubscriptionUsageSnapshot({
       ...snapshot,
       ...(fingerprint ? { accountFingerprint: fingerprint } : {}),
       ...(subscriptionType ? { subscriptionType } : {}),
+      ...(planTier ? { planTier } : {}),
     });
   });
 

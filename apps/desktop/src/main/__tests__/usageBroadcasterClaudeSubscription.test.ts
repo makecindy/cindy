@@ -5,9 +5,11 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+let testOwner = 0;
 
 const mocks = vi.hoisted(() => ({
   queryOne: vi.fn(),
+  pool: vi.fn((): { accounts: { id: string }[] } | null => null),
   exec: vi.fn(async () => undefined),
   getCurrentDbClientUserId: vi.fn(() => 'user-1'),
   tapWindowBroadcast: vi.fn(),
@@ -16,6 +18,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }));
+vi.mock('../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => mocks.getCurrentDbClientUserId() ?? '',
+  isAppSessionBoundaryPending: () => false,
+}));
+vi.mock('../subscription-accounts/store.js', () => ({ readLegacyCodexAccountId: () => undefined, readPool: mocks.pool }));
 vi.mock('../device-link/broadcast-tap.js', () => ({
   tapWindowBroadcast: mocks.tapWindowBroadcast,
 }));
@@ -43,10 +50,10 @@ function deferred<T>() {
 
 describe('claude subscription snapshot hydration race', () => {
   beforeEach(() => {
-    vi.resetModules();
+    mocks.pool.mockReset().mockReturnValue(null);
     mocks.queryOne.mockReset();
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.tapWindowBroadcast.mockReset();
   });
 
@@ -351,6 +358,7 @@ describe('claude subscription snapshot hydration race', () => {
 
 
 it('keeps named Codex and subscription pushes in their provider-scoped channels', async () => {
+  // reset-modules: isolate the provider-scoped broadcast regression from prior owner caches.
   vi.resetModules();
   mocks.tapWindowBroadcast.mockClear();
   mocks.queryOne.mockResolvedValue(null);
@@ -363,4 +371,19 @@ it('keeps named Codex and subscription pushes in their provider-scoped channels'
   broadcaster.broadcastSubscriptionAccountUsage('claude-2', null);
   expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith('usage:subscription-provider-account-changed',
     { providerId: 'claude-2', snapshot: null });
+});
+
+// Unit: an already-started legacy runtime can emit quota after the new pool removes its login.
+// This real legacy writer must neither persist nor return that removed account's late quota.
+it('does not revive a removed CLI-origin account through legacy quota events', async () => {
+  const broadcaster = await import('../usageBroadcaster');
+  mocks.getCurrentDbClientUserId.mockReturnValue('removed-account-owner');
+  mocks.queryOne.mockResolvedValue(null);
+  mocks.pool.mockReturnValue({ accounts: [{ id: 'second' }] });
+  mocks.exec.mockClear();
+  try {
+    await broadcaster.recordClaudeSubscriptionUsageSnapshot({ primary: { usedPercent: 42 }, fiveHour: { utilization: 42 }, updatedAt: 1 });
+    expect(mocks.exec).not.toHaveBeenCalled();
+    expect(await broadcaster.readClaudeSubscriptionUsageSnapshot()).toBeNull();
+  } finally { mocks.pool.mockReturnValue(null); }
 });

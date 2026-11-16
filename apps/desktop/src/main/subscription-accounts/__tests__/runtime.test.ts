@@ -43,16 +43,17 @@ const h = vi.hoisted(() => ({
   created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
   strategies: {} as Record<string, string>,
   copyOverrides: vi.fn(),
+  storedUsage: new Map<string, object | null>(),
 }));
 // Persisted placement is replaced like the pool file; its own rules are covered in ipc.test.ts.
 vi.mock('../placement.js', () => {
   type Kind = 'openai' | 'anthropic';
-  const owner = (kind: string, id: string) => (id === 'default' ? kind : h.placement[`${kind}:${id}`] ?? kind);
+  const owner = (kind: string, id: string) => h.placement[`${kind}:${id}`] ?? kind;
   const legacyAccount = (providerId: string) => h.pools.openai?.legacyCodexAccounts?.[providerId];
   const providerAccounts = <T extends { id: string }>(kind: string, accounts: readonly T[], providerId = kind) =>
     accounts.filter((a) => owner(kind, a.id) === providerId);
   const resolveSubscriptionPoolProvider = (providerId: string | null | undefined) => {
-    if (providerId === 'openai' || providerId === 'anthropic') return { kind: providerId as Kind, providerId };
+    if (providerId === 'openai' || providerId === 'anthropic') return { kind: providerId as Kind, providerId, ownAccount: 'default' };
     const created = providerId ? h.created[providerId] : undefined;
     if (providerId && created) return { kind: created.kind, providerId, ownAccount: created.account, created: true as const };
     const legacy = providerId ? legacyAccount(providerId) : undefined;
@@ -78,12 +79,12 @@ vi.mock('../placement.js', () => {
     pinnedOwnAccount,
     readMergedProviderAccount: (providerId: string) => {
       const ref = resolveSubscriptionPoolProvider(providerId);
-      return ref && ref.providerId !== ref.kind ? pinnedOwnAccount(ref) : undefined;
+      return ref ? pinnedOwnAccount(ref) : undefined;
     },
     accountOwnProvider: (kind: string, accountId: string) => {
-      if (accountId === 'default') return kind;
       const created = Object.entries(h.created).find(([, entry]) => entry.kind === kind && entry.account === accountId);
       if (created) return created[0];
+      if (accountId === 'default') return kind;
       const legacy = Object.entries(h.pools.openai?.legacyCodexAccounts ?? {}).find(([, id]) => id === accountId);
       return kind === 'openai' ? legacy?.[0] : undefined;
     },
@@ -139,6 +140,12 @@ vi.mock('../../maker-host/codex-home-path.js', () => ({
   getCodexHome: () => '/existing-cindy/codex-home',
 }));
 vi.mock('../../maker-host/model-disable-store.js', () => ({ copyProviderDisableOverrides: h.copyOverrides }));
+vi.mock('../../usage/accountUsageStorage.js', () => ({
+  readStoredAccountUsage: async (kind: string, id: string) => structuredClone(h.storedUsage.get(`${kind}:${id}`) ?? null),
+  writeStoredAccountUsage: async (kind: string, id: string, value: object | null, current = () => true) => {
+    if (current()) h.storedUsage.set(`${kind}:${id}`, structuredClone(value));
+  },
+}));
 vi.mock('node:fs/promises', () => ({ mkdir: vi.fn(), readFile: h.modelCacheRead }));
 vi.mock('../legacyAccountAccess.js', () => ({
   legacyCodexAccountCanRun: h.accountAllowed,
@@ -266,6 +273,77 @@ beforeEach(() => {
   h.created = {};
   h.strategies = {};
   h.copyOverrides.mockReset();
+  h.storedUsage.clear();
+});
+
+// Unit, 2026-11-16: the real pool reads/commands previously omitted secondary quota persistence
+// and rejected removal of the CLI-origin account. Storage itself is covered with DbClients in
+// accountUsageStorage.test.ts; these cases cover identity-checked restoration and task handoff.
+it.each(['anthropic', 'openai'] as const)('persists and restores every %s account with its own plan metadata', async provider => {
+  h.pools[provider] = { strategy: 'round', accounts: [account('default'), account('second')] };
+  h.read.mockImplementation(async (_provider: string, directory: string) => ({
+    authenticated: true, identity: directory, plan: provider === 'anthropic' ? 'max' : 'plus',
+    ...(provider === 'anthropic' ? { planTier: 'max_20x' } : { planType: 'plus' }),
+  }));
+  h.usage.mockImplementation(async (_provider: string, directory: string) => {
+    const used = directory.endsWith('second') ? 42 : 12;
+    const updatedAt = Date.now();
+    return provider === 'anthropic'
+      ? { claudeUsage: { updatedAt, fiveHour: { utilization: used }, sevenDay: null, scoped: [] } }
+      : { codexUsage: { appServerBuckets: { codex: { limitId: 'codex', limitName: null, updatedAt,
+        primary: { usedPercent: used, resetsAt: null, windowMinutes: 300 }, secondary: null } }, webSnapshot: null } };
+  });
+  const initial = await readSubscriptionPool(provider);
+  expect(h.storedUsage.has(`${provider}:default`)).toBe(true);
+  expect(h.storedUsage.has(`${provider}:second`)).toBe(true);
+  h.owner += ':restart'; // discard runtime state, retain the simulated owner's database
+  h.usage.mockRejectedValue(new Error('temporarily offline'));
+  const restored = await readSubscriptionPool(provider);
+  expect(restored.accounts.map(a => a.usage)).toEqual(initial.accounts.map(a => a.usage));
+  expect(restored.accounts[1]).toMatchObject(provider === 'anthropic' ? { planTier: 'max_20x' } : { planType: 'plus' });
+  h.owner += ':replacement';
+  h.read.mockResolvedValue({ authenticated: true, identity: 'different-account' });
+  expect((await readSubscriptionPool(provider)).accounts.every(a => a.usage === undefined)).toBe(true);
+});
+
+it.each(['anthropic', 'openai'] as const)('removes the CLI-origin %s account and hands its task to the remaining account', async provider => {
+  h.pools[provider] = { strategy: 'round', accounts: [account('default'), account('second')] };
+  h.bindings.set('task:existing', { providerId: provider, accountId: 'default' });
+  h.bindings.set('native:old', { providerId: provider, accountId: 'default' });
+  const after = await runSubscriptionAccountCommand({ action: 'remove', providerId: provider, accountId: 'default' });
+  expect(after.accounts.map(a => a.id)).toEqual(['second']);
+  expect(h.storedUsage.get(`${provider}:default`)).toBeNull();
+  let rebuilt = false;
+  const row = { status: 'idle', providerId: provider, agentKind: provider === 'openai' ? 'codex' : 'claude-code',
+    sdkSessionId: 'old', model: null } as SessionRowSnapshot;
+  expect(await prepareSubscriptionAccountForSend('existing', {
+    readSession: async () => row, isRunning: () => false,
+    rebuild: async (_id, assertCurrent) => { assertCurrent(); rebuilt = true; },
+  })).toBe(true);
+  expect(rebuilt).toBe(true);
+  expect(h.bindings.get('task:existing')?.accountId).toBe('second');
+  expect(h.bindings.get('native:old')?.accountId).toBe('default');
+});
+
+// Unit: the old default-only placement restriction hid authorization and affinity gaps. Exercise
+// actual management and dispatch for both engines; only storage and official CLI reads are fake.
+it.each(['anthropic', 'openai'] as const)('moves the CLI-origin %s account without relogin or changing task history', async provider => {
+  h.pools[provider] = { strategy: 'round', accounts: [account('default'), account('second')] };
+  const original = await acquireSubscriptionAccount(provider, undefined, ['task:moving']);
+  expect(original?.accountId).toBe('default');
+  await original!.bind(['task:moving', 'native:moving']);
+  original!.release();
+  await runSubscriptionAccountCommand({ action: 'place', providerId: provider, accountId: 'default', target: null });
+  const destination = h.placement[`${provider}:default`];
+  expect((await readSubscriptionPool(provider)).accounts.map(a => a.id)).toEqual(['second']);
+  h.bound = false; // turning off the now separate built-in route cannot revoke the moved profile
+  const moved = await acquireSubscriptionAccount(destination, undefined, ['task:moving', 'native:moving']);
+  expect(moved?.account.configDir).toBe(`${provider}/default`);
+  moved!.release();
+  expect(h.bindings.get('native:moving')?.accountId).toBe('default');
+  await runSubscriptionAccountCommand({ action: 'place', providerId: destination, accountId: 'default', target: provider });
+  h.bound = true;
+  expect((await readSubscriptionPool(provider)).accounts.map(a => a.id)).toEqual(['default', 'second']);
 });
 
 // Unit regression (2026-11-13): native accounts had auth/quota snapshots but no
@@ -1716,7 +1794,7 @@ describe('native account assignment on the executing computer', () => {
     // A removed account fails visibly instead of naming the remaining default.
     h.pools[provider]!.accounts = [account('default')];
     expect(await read({ sessionId: 'task-1' })).toEqual({ providerId: provider, state: 'unavailable' });
-    expect(await read({ sessionId: 'task-3' })).toEqual({ providerId: provider, state: 'legacy' });
+    expect(await read({ sessionId: 'task-3' })).toMatchObject({ providerId: provider, state: 'bound', account: { number: 1 } });
     h.pools = {};
     expect(await read({ sessionId: 'task-1' })).toEqual({ providerId: provider, state: 'legacy' });
   });
@@ -1739,19 +1817,14 @@ describe('native account assignment on the executing computer', () => {
     const channel = provider === 'anthropic' ? 'maker:usage:claude-subscription' : 'maker:usage:account';
     const args = provider === 'anthropic' ? [provider, true, scope] : ['codex', provider, scope];
     const result = await readLegacySubscriptionQuota(readLegacySubscriptionPoolUsage, channel, args, readSubscriptionSessionUsage);
-    if (accountId === 'default') {
-      expect(result).toBeUndefined();
-      expect(h.usage).not.toHaveBeenCalled();
-    } else {
-      expect(result).toMatchObject(provider === 'anthropic' ? { fiveHour: { utilization: 100, resetsAt: reset } }
-        : { primary: { usedPercent: 100, resetsAt: reset }, nativeAccountPool: true });
-      expect(h.usage).toHaveBeenCalledExactlyOnceWith(provider, `${provider}/${accountId}`);
-    }
+    expect(result).toMatchObject(provider === 'anthropic' ? { fiveHour: { utilization: 100, resetsAt: reset } }
+      : { primary: { usedPercent: 100, resetsAt: reset }, nativeAccountPool: true });
+    expect(h.usage).toHaveBeenCalledExactlyOnceWith(provider, `${provider}/${accountId}`);
     // A removed binding must not fall back to the still-available other profile.
     h.pools[provider]!.accounts = h.pools[provider]!.accounts.filter(a => a.id !== accountId);
     expect(await readSubscriptionSessionUsage(provider, 'limited-task')).toBeNull();
     expect(await readSubscriptionSessionUsage(provider, 'pre-pool-task')).toBeUndefined();
-    expect(h.usage).toHaveBeenCalledTimes(accountId === 'default' ? 0 : 1);
+    expect(h.usage).toHaveBeenCalledTimes(1);
   });
 
   // Unit: legacy wire reads must expose usable pool quota when the first account
@@ -1803,7 +1876,7 @@ describe('native account assignment on the executing computer', () => {
     h.pools = {};
     expect(await readLegacySubscriptionQuota(read, 'maker:usage:account', ['codex'])).toBeUndefined();
     h.pools.openai = { strategy: 'order', accounts: [account('default')] };
-    expect(await readLegacySubscriptionQuota(read, 'maker:usage:account', ['codex'])).toBeUndefined();
+    expect(await readLegacySubscriptionQuota(read, 'maker:usage:account', ['codex'])).toMatchObject({ providerId: 'openai' });
     h.pools.openai = { strategy: 'order', disconnected: true, accounts: [account('default')] };
     expect(await readLegacySubscriptionQuota(read, 'maker:usage:account', ['codex'])).toBeNull();
   });
@@ -1870,7 +1943,9 @@ describe('native account assignment on the executing computer', () => {
       expect((await runSubscriptionAccountCommand({ action: 'preview', providerId })).defaultAdded).toBe(true);
       expect(h.pools).toEqual({});
       h.pools[providerId] = { strategy: 'least', accounts: [] };
-      expect((await runSubscriptionAccountCommand({ action: 'preview', providerId })).defaultAdded).toBe(false);
+      const preview = await runSubscriptionAccountCommand({ action: 'preview', providerId });
+      expect(preview.defaultAdded).toBe(false);
+      expect(preview.accounts[0]).toMatchObject({ id: 'default', status: 'ready' });
       expect(h.login).not.toHaveBeenCalled();
     },
   );
@@ -2127,9 +2202,9 @@ describe('native account assignment on the executing computer', () => {
     let running = false;
     const rebuild = vi.fn(async (_id: string, assertCurrent: () => void) => { assertCurrent(); });
     const deps = { readSession: async () => row, isRunning: () => running, rebuild };
-    // A fresh owner drops the 30s snapshot cache; a list read then loads the snapshots the
-    // pre-send check uses (it never waits for the native CLI itself).
-    const freshOwner = async () => { h.owner += '-fresh'; await readSubscriptionPool('anthropic'); };
+    // Drop runtime state and explicitly refresh quota: persisted snapshots now survive restart.
+    // The pre-send check still only consumes the refreshed cache and never waits for the CLI.
+    const freshOwner = async () => { h.owner += '-fresh'; await refreshSubscriptionPool('anthropic', true); };
     expect(await prepareSubscriptionAccountFailover('t', deps)).toBe(false);
     exhausted.add('default'); await freshOwner();
     running = true;
@@ -3364,7 +3439,7 @@ describe('native account assignment on the executing computer', () => {
     await reading;
     h.placement['anthropic:second'] = 'anthropic-sub-12345678';
     finish({ claudeUsage: { updatedAt: Date.now(), fiveHour: { utilization: 10, resetsAt: Date.now() / 1000 + 3600 } } });
-    expect((await result)?.map(a => a.isDefault)).toEqual([true]);
+    expect((await result)?.map(a => a.usage?.claudeUsage?.fiveHour?.utilization)).toEqual([10]);
   });
 
   it('reports every usage window per account and lists only assignable accounts for sharing', async () => {
@@ -3394,10 +3469,7 @@ describe('native account assignment on the executing computer', () => {
       scoped: [{ modelDisplayName: 'Fable', utilization: 16 }],
     });
     const shared = await readSubscriptionPoolAccountUsages('anthropic');
-    expect(shared?.map((a) => [a.isDefault, a.usage?.claudeUsage?.sevenDay?.utilization])).toEqual([
-      [true, 86],
-      [false, 40],
-    ]);
+    expect(shared?.map(a => a.usage?.claudeUsage?.sevenDay?.utilization)).toEqual([86, 40]);
     expect(JSON.stringify(shared)).not.toContain('anthropic/');
     h.pools.anthropic!.disconnected = true;
     expect(await readSubscriptionPoolAccountUsages('anthropic')).toBeUndefined();

@@ -5,9 +5,11 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+let testOwner = 0;
 
 const mocks = vi.hoisted(() => ({
   queryOne: vi.fn(),
+  pool: vi.fn((): { accounts: { id: string }[] } | null => null),
   exec: vi.fn(async () => undefined),
   getCurrentDbClientUserId: vi.fn(() => 'user-1'),
   legacyCurrentUserId: vi.fn(() => null),
@@ -28,6 +30,11 @@ vi.mock('electron', () => ({
 vi.mock('../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
+vi.mock('../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => mocks.getCurrentDbClientUserId() ?? '',
+  isAppSessionBoundaryPending: () => false,
+}));
+vi.mock('../subscription-accounts/store.js', () => ({ readLegacyCodexAccountId: () => undefined, readPool: mocks.pool }));
 vi.mock('../localDb/dailySpend', () => ({
   incrementDailySpend: vi.fn(),
   getTodaySpend: vi.fn(async () => 0),
@@ -65,10 +72,10 @@ const WEB_SNAPSHOT = {
 
 describe('codex account usage source slots', () => {
   beforeEach(() => {
-    vi.resetModules();
+    mocks.pool.mockReset().mockReturnValue(null);
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.legacyCurrentUserId.mockReturnValue(null);
     mocks.broadcasts.length = 0;
   });
@@ -183,6 +190,7 @@ describe('codex account usage source slots', () => {
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
     const persistedJson = lastExecParams[1] as string;
 
+    // reset-modules: restore persisted quota after a simulated process restart.
     vi.resetModules();
     const rehydrated = await import('../usageBroadcaster');
     mocks.queryOne.mockResolvedValue({ snapshot: persistedJson });
@@ -202,10 +210,10 @@ describe('codex account usage source slots', () => {
 
 describe('codex app-server limit buckets', () => {
   beforeEach(() => {
-    vi.resetModules();
+    mocks.pool.mockReset().mockReturnValue(null);
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.broadcasts.length = 0;
   });
 
@@ -295,6 +303,7 @@ describe('codex app-server limit buckets', () => {
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
     const persistedJson = lastExecParams[1] as string;
 
+    // reset-modules: restore persisted quota after a simulated process restart.
     vi.resetModules();
     const rehydrated = await import('../usageBroadcaster');
     mocks.queryOne.mockResolvedValue({ snapshot: persistedJson });
@@ -320,10 +329,10 @@ describe('codex app-server limit buckets', () => {
 
 describe('codex bucket edge cases (review follow-up)', () => {
   beforeEach(() => {
-    vi.resetModules();
+    mocks.pool.mockReset().mockReturnValue(null);
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.broadcasts.length = 0;
   });
 
@@ -350,6 +359,7 @@ describe('codex bucket edge cases (review follow-up)', () => {
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
     const persistedJson = lastExecParams[1] as string;
 
+    // reset-modules: restore persisted quota after a simulated process restart.
     vi.resetModules();
     const rehydrated = await import('../usageBroadcaster');
     mocks.queryOne.mockResolvedValue({ snapshot: persistedJson });
@@ -426,10 +436,10 @@ describe('codex bucket edge cases (review follow-up)', () => {
 
 describe('codex stale bucket pruning', () => {
   beforeEach(() => {
-    vi.resetModules();
+    mocks.pool.mockReset().mockReturnValue(null);
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.broadcasts.length = 0;
   });
 
@@ -468,10 +478,10 @@ describe('codex stale bucket pruning', () => {
 
 describe('empty snapshot must not clobber the persisted row', () => {
   beforeEach(() => {
-    vi.resetModules();
+    mocks.pool.mockReset().mockReturnValue(null);
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.broadcasts.length = 0;
   });
 
@@ -585,7 +595,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
     expect(mocks.exec).not.toHaveBeenCalled();
 
     // 用户登录后必须重新查库, 并恢复正常落库。
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.queryOne.mockResolvedValue(null);
     await broadcaster.recordCodexAccountUsageSnapshot(APP_SERVER_SNAPSHOT);
 
@@ -597,14 +607,14 @@ describe('empty snapshot must not clobber the persisted row', () => {
     const broadcaster = await import('../usageBroadcaster');
     // DbClient 接管会关闭 legacy localDb 并清空它的 owner；新 client 仍持有当前用户。
     mocks.legacyCurrentUserId.mockReturnValue(null);
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.queryOne.mockResolvedValue({ snapshot: JSON.stringify(APP_SERVER_SNAPSHOT) });
 
     const payload = await broadcaster.readCodexAccountUsageSnapshot();
 
     expect(mocks.queryOne).toHaveBeenCalledWith(
       'SELECT snapshot FROM account_usage_snapshots WHERE agent_kind = ?',
-      ['codex'],
+      ['codex:default'],
     );
     expect(payload?.primary?.usedPercent).toBe(82);
     expect(payload?.secondary?.usedPercent).toBe(55);
@@ -734,10 +744,10 @@ describe('empty snapshot must not clobber the persisted row', () => {
 
 describe('sparse rate-limit updates without a limitId', () => {
   beforeEach(() => {
-    vi.resetModules();
+    mocks.pool.mockReset().mockReturnValue(null);
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.broadcasts.length = 0;
   });
 
@@ -774,4 +784,19 @@ describe('sparse rate-limit updates without a limitId', () => {
     const payload = await broadcaster.readCodexAccountUsageSnapshot();
     expect(Object.keys(payload?.appServerBuckets ?? {})).toEqual(['__default__']);
   });
+});
+
+// Unit: an already-started legacy runtime can emit quota after the new pool removes its login.
+// This real legacy writer must neither persist nor return that removed account's late quota.
+it('does not revive a removed CLI-origin account through legacy quota events', async () => {
+  const broadcaster = await import('../usageBroadcaster');
+  mocks.getCurrentDbClientUserId.mockReturnValue('removed-account-owner');
+  mocks.queryOne.mockResolvedValue(null);
+  mocks.pool.mockReturnValue({ accounts: [{ id: 'second' }] });
+  mocks.exec.mockClear();
+  try {
+    await broadcaster.recordCodexAccountUsageSnapshot({ primary: { usedPercent: 42 }, fiveHour: { utilization: 42 }, updatedAt: 1 });
+    expect(mocks.exec).not.toHaveBeenCalled();
+    expect(await broadcaster.readCodexAccountUsageSnapshot()).toBeNull();
+  } finally { mocks.pool.mockReturnValue(null); }
 });

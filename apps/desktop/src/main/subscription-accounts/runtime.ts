@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
 import { isDeepStrictEqual } from 'node:util';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
@@ -95,6 +95,7 @@ import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { mapCodexAppServerModelsToCatalog, mapCodexModelsToCatalog } from '../maker-host/codexModelMapping.js';
 import type { CatalogModel } from '@cindy/model-providers';
 import type { CodexModelListItem } from '@cindy/maker-core';
+import { readStoredAccountUsage, writeStoredAccountUsage } from '../usage/accountUsageStorage.js';
 
 const log = desktopMakerLogger.child('subscription-accounts');
 
@@ -121,7 +122,7 @@ type Usage = {
 interface AccountSnapshot {
   /** Non-secret equality key; never a credential or execution authorization. */
   accountKey?: string;
-  auth: AuthState & { plan?: string; loginExpiresAt?: string };
+  auth: AuthState & { plan?: string; planTier?: string; planType?: string; loginExpiresAt?: string };
   usage?: Usage;
   unavailable?: boolean;
   at: number;
@@ -207,6 +208,48 @@ function currentRuntime(): OwnerRuntime {
   return runtime;
 }
 const keyOf = (provider: SubscriptionProvider, id: string) => `${provider}:${id}`;
+function usageFingerprint(provider: SubscriptionProvider, info: AccountSnapshot): string | undefined {
+  return provider === 'openai' ? info.accountKey : info.auth.identity
+    ? createHash('sha256').update(`claude-usage:${info.auth.identity}`).digest('hex').slice(0, 16) : undefined;
+}
+
+function accountStillPresent(state: OwnerRuntime, provider: SubscriptionProvider, id: string): boolean {
+  if (state !== runtime || state.owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
+  const pool = readPool(provider);
+  return pool ? pool.accounts.some(account => account.id === id) && !disconnectedFor(pool, provider, id)
+    : id === 'default' && defaultAccountBound(provider);
+}
+
+async function persistUsage(state: OwnerRuntime, provider: SubscriptionProvider, id: string, info: AccountSnapshot): Promise<void> {
+  if (!info.auth.authenticated || !info.usage || !accountStillPresent(state, provider, id)) return;
+  const fingerprint = usageFingerprint(provider, info);
+  const payload = provider === 'anthropic' ? info.usage.claudeUsage && {
+    ...info.usage.claudeUsage, accountFingerprint: fingerprint,
+    subscriptionType: info.auth.plan, planTier: info.auth.planTier,
+  } : info.usage.codexUsage && {
+    ...info.usage.codexUsage, accountFingerprint: fingerprint,
+    planType: info.auth.planType ?? info.auth.plan ?? info.usage.codexPlan,
+    credits: info.usage.codexCredits, updatedAt: info.usageAt,
+  };
+  if (!payload) return;
+  await writeStoredAccountUsage(provider, id, payload, () => accountStillPresent(state, provider, id)
+    && state.cache.get(keyOf(provider, id)) === info).catch(() => log.warn('Account quota persistence unavailable'));
+}
+
+async function restoreUsage(provider: SubscriptionProvider, id: string, info: AccountSnapshot): Promise<AccountSnapshot> {
+  const fingerprint = usageFingerprint(provider, info);
+  if (!fingerprint || !info.auth.authenticated) return info;
+  const legacy = id === 'default' ? [provider === 'anthropic' ? 'claude-code' : 'codex']
+    : provider === 'openai' && readLegacyCodexProviderId(id) ? [`codex:${readLegacyCodexProviderId(id)}`] : [];
+  const raw = await readStoredAccountUsage(provider, id, legacy).catch(() => null);
+  if (!raw || raw.accountFingerprint !== fingerprint) return info;
+  const usage: Usage = provider === 'anthropic'
+    ? { claudeUsage: raw as unknown as NonNullable<Usage['claudeUsage']> }
+    : { codexUsage: providerGroupCodexUsageSnapshot(raw),
+      codexCredits: raw.credits as Usage['codexCredits'],
+      codexPlan: typeof raw.planType === 'string' ? raw.planType : undefined };
+  return { ...info, usage, usageAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : undefined };
+}
 function expirePendingStarts(state: OwnerRuntime): void {
   for (const [key, pending] of state.pendingStarts) {
     if (pending.until > Date.now()) continue;
@@ -369,6 +412,10 @@ function updatePool(
   );
 }
 function defaultAccountBound(provider: SubscriptionProvider): boolean {
+  // Moving an explicitly connected CLI profile retains its owner-scoped authorization.
+  // Disconnecting the now-empty built-in provider must not disconnect the moved account.
+  if (accountProviderId(provider, 'default') !== provider
+    && readPool(provider)?.accounts.some(account => account.id === 'default')) return true;
   return (
     isNativeProviderAuthBound(provider) &&
     (provider !== 'openai' ||
@@ -391,7 +438,14 @@ function disconnectedFor(
 export async function attachDefaultSubscriptionPool(provider: SubscriptionProvider): Promise<void> {
   const state = currentRuntime();
   assertOwner(state);
-  await updatePool(provider, (pool) => ({ ...pool, disconnected: false }));
+  if (!readPool(provider)?.accounts.some(account => account.id === 'default')) {
+    await placeSubscriptionAccount(provider, 'default', provider);
+    assertOwner(state);
+  }
+  await updatePool(provider, (pool) => ({ ...pool, disconnected: false,
+    accounts: pool.accounts.some(account => account.id === 'default') ? pool.accounts
+      : [...pool.accounts, { ...DEFAULT_SUBSCRIPTION_ACCOUNT }],
+  }));
   assertOwner(state);
   state.cache.delete(keyOf(provider, 'default'));
   changed(provider);
@@ -459,10 +513,16 @@ export function observeSubscriptionAccountUsage(
             ? mergeClaudeSubscriptionUsageSnapshot(cached.usage?.claudeUsage ?? null, incoming)
             : cached.usage?.claudeUsage,
         }
-      : { ...cached.usage, codexUsage };
+      : { ...cached.usage, codexUsage,
+        ...(typeof codexEvent?.planType === 'string' ? { codexPlan: codexEvent.planType } : {}),
+      };
   // The event updates usage, not the last account/endpoint read. Renewing `at`
   // here lets a stream of SDK events postpone authoritative polling indefinitely.
-  state.cache.set(key, { ...cached, usage });
+  const next = { ...cached, usage,
+    ...(usage.codexPlan ? { auth: { ...cached.auth, plan: usage.codexPlan, planType: usage.codexPlan } } : {}),
+  };
+  state.cache.set(key, next);
+  void persistUsage(state, provider, key.slice(provider.length + 1), next);
   changed(provider);
 }
 async function snapshot(
@@ -490,6 +550,7 @@ async function snapshot(
   const flight = (async (): Promise<AccountSnapshot> => {
     const startedAt = Date.now();
     let result: AccountSnapshot;
+    let observedUsage = false;
     if (id === 'default' && !defaultAccountBound(provider)) {
       result = { auth: { authenticated: false }, at: Date.now() };
     } else {
@@ -549,7 +610,13 @@ async function snapshot(
           else if (state.invalidated.get(key) === invalidated) state.invalidated.delete(key);
         }
         // Auth reads yield: quota events may have replaced the captured cache.
-        const current = state.cache.get(key);
+        let current = state.cache.get(key);
+        if (!current?.usage && auth.authenticated) {
+          const restored = await restoreUsage(provider, id, { auth, accountKey, at: Date.now() });
+          assertOwner(state);
+          // A task event may have arrived while SQLite was answering.
+          current = state.cache.get(key) ?? restored;
+        }
         const sameAccount = (previous: AccountSnapshot | undefined) => previous?.auth.identity === auth.identity
           && (provider !== 'openai' || (!!accountKey && previous?.accountKey === accountKey));
         const reuseUsage =
@@ -557,12 +624,18 @@ async function snapshot(
           sameAccount(current) &&
           current?.usageAt !== undefined &&
           Date.now() - current.usageAt < 180_000;
+        let readSucceeded = false;
         let usage = auth.authenticated
           ? reuseUsage
             ? current?.usage
-            : await readNativeAccountUsage(provider, directory).catch(() =>
-                sameAccount(state.cache.get(key)) ? state.cache.get(key)?.usage : undefined,
-              )
+            : await readNativeAccountUsage(provider, directory).then(value => {
+                readSucceeded = true;
+                observedUsage = true;
+                return value;
+              }).catch(() => {
+                const fallback = state.cache.get(key) ?? current;
+                return sameAccount(fallback) ? fallback?.usage : undefined;
+              })
           : undefined;
         const latest = state.cache.get(key);
         const eventDuringRead = auth.authenticated && sameAccount(latest)
@@ -599,12 +672,15 @@ async function snapshot(
         }
         result = {
           ...(accountKey ? { accountKey } : {}),
-          auth: { ...auth, plan: auth.plan ?? usage?.codexPlan },
-          usage,
+          auth: { ...auth, plan: auth.plan ?? usage?.codexPlan,
+            ...(provider === 'openai' ? { planType: auth.planType ?? auth.plan ?? usage?.codexPlan } : {}) },
+          usage: provider === 'openai' && usage ? { ...usage, codexPlan: auth.planType ?? auth.plan ?? usage.codexPlan } : usage,
           at: Date.now(),
-          usageAt: reuseUsage ? current?.usageAt
+          usageAt: reuseUsage || !readSucceeded ? current?.usageAt
             : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
         };
+        observedUsage ||= !!current?.usage && (current.auth.plan !== result.auth.plan
+          || current.auth.planTier !== result.auth.planTier || current.auth.planType !== result.auth.planType);
       } catch (error) {
         const account = provider === 'anthropic'
           ? readPool(provider)?.accounts.find((account) => account.id === id) : undefined;
@@ -625,7 +701,17 @@ async function snapshot(
     assertOwner(state);
     if (provider === 'openai' && id === 'default' && state.defaultCodexAuthEpoch !== defaultCodexAuthEpoch)
       return state.cache.get(key) ?? { auth: { authenticated: false }, at: 0 };
+    if (result.usage?.claudeUsage) result = { ...result, usage: { ...result.usage, claudeUsage: {
+      ...result.usage.claudeUsage, subscriptionType: result.auth.plan,
+      planTier: result.auth.planTier, accountFingerprint: usageFingerprint(provider, result),
+    } } };
+    const previous = state.cache.get(key);
     state.cache.set(key, result);
+    if (!result.auth.authenticated && !result.unavailable && (!previous || previous.auth.authenticated)) {
+      await writeStoredAccountUsage(provider, id, null, () => accountStillPresent(state, provider, id)
+        && state.cache.get(key) === result).catch(() => log.warn('Account quota persistence unavailable'));
+    } else if (observedUsage) await persistUsage(state, provider, id, result);
+    assertOwner(state);
     if (provider === 'openai') publishCodexCatalogChange(state);
     return result;
   })();
@@ -867,11 +953,7 @@ export function refreshSubscriptionPool(
  */
 export function readLegacySubscriptionPoolUsage(provider: SubscriptionProvider): Promise<Usage | null | undefined> {
   const pool = readPool(provider);
-  const members = pool ? providerAccounts(provider, pool.accounts) : [];
-  // One ordinary default account keeps its original native/web usage readers.
-  if (!pool || (!pool.disconnected && members.length === 1
-    && members[0].id === 'default' && !members[0].paused))
-    return Promise.resolve(undefined);
+  if (!pool) return Promise.resolve(undefined);
   return readSubscriptionPoolUsage(provider);
 }
 
@@ -891,8 +973,6 @@ export async function readSubscriptionSessionUsage(provider: SubscriptionProvide
       && readAccountBinding(`native:${nativeSessionId}`, provider)?.accountId === binding.accountId;
   };
   if (!current()) return null;
-  // The default account keeps its existing native/web reader and refresh policy.
-  if (binding.accountId === 'default') return undefined;
   const info = await snapshot(state, provider, binding.accountId);
   assertOwner(state);
   if (!current() || !info.auth.authenticated) return null;
@@ -1069,8 +1149,6 @@ export async function readSubscriptionSessionAccount(
       ...routeEcho,
       state: onlyDefault || keys.nativeSessionId ? 'legacy' : 'unassigned',
     };
-  if (onlyDefault && binding.accountId === 'default' && !legacyAccountId)
-    return { providerId: provider, state: 'legacy', ...routeEcho };
   // The task keeps its account wherever that account belongs now; number it among its own provider.
   const config = pool.accounts.find((a) => a.id === binding.accountId);
   const index = config ? accountSiblings(provider, pool.accounts, config.id).findIndex((a) => a.id === config.id) : -1;
@@ -1108,6 +1186,8 @@ export async function readSubscriptionSessionAccount(
       number: index + 1,
       ...(info.auth.identity ? { identity: info.auth.identity } : {}),
       ...(info.auth.plan ? { plan: info.auth.plan } : {}),
+      ...(info.auth.planTier ? { planTier: info.auth.planTier } : {}),
+      ...(info.auth.planType ? { planType: info.auth.planType } : {}),
       paused: config.paused,
       status: info.unavailable
         ? 'unavailable'
@@ -1233,7 +1313,7 @@ export async function readSubscriptionPoolUsage(
  */
 export async function readSubscriptionPoolAccountUsages(
   providerId: string,
-): Promise<Array<{ isDefault: boolean; usage: Usage | undefined }> | undefined> {
+): Promise<Array<{ usage: Usage | undefined }> | undefined> {
   const found = poolFor(providerId);
   if (!found || found.off) return undefined;
   const { kind: provider, pool, ref } = found;
@@ -1246,7 +1326,7 @@ export async function readSubscriptionPoolAccountUsages(
   return accounts.flatMap((account, index) =>
     latest.accounts.some(a => a.id === account.id && !a.paused)
       && accountProviderId(provider, account.id) === ref.providerId && infos[index].auth.authenticated
-      ? [{ isDefault: account.id === 'default', usage: infos[index].usage }]
+      ? [{ usage: infos[index].usage }]
       : [],
   );
 }
@@ -1254,7 +1334,7 @@ function accountUsage(usage: Usage | undefined): { usage?: SubscriptionAccountUs
   if (usage?.claudeUsage) return { usage: { claude: usage.claudeUsage } };
   const buckets = usage?.codexUsage?.appServerBuckets;
   return buckets && Object.keys(buckets).length > 0
-    ? { usage: { codex: { buckets, credits: usage?.codexCredits ?? null } } }
+    ? { usage: { codex: { buckets, planType: usage?.codexPlan, credits: usage?.codexCredits ?? null } } }
     : {};
 }
 export function readSubscriptionPool(
@@ -1286,8 +1366,11 @@ async function readSubscriptionPoolView(
     || accountProviderId(provider, binding.accountId) === ref.providerId) ? binding.accountId : undefined;
   // A provider lists its own accounts. A task's read also keeps the task's own account when it now
   // belongs to another provider, so the task never shows someone else's account.
-  const listed = pool.accounts.filter(
-    (account) => accountProviderId(provider, account.id) === ref.providerId || account.id === bound,
+  const previewAccounts = previewDefault && !pool.accounts.some(account => account.id === 'default')
+    ? [{ ...DEFAULT_SUBSCRIPTION_ACCOUNT }, ...pool.accounts] : pool.accounts;
+  const listed = previewAccounts.filter(
+    (account) => (previewDefault && account.id === 'default')
+      || accountProviderId(provider, account.id) === ref.providerId || account.id === bound,
   );
   const accounts = await Promise.all(
     listed.map(async (account) => {
@@ -1318,6 +1401,8 @@ async function readSubscriptionPoolView(
         identity: info.auth.identity,
         ...(info.auth.authenticated && !info.unavailable && info.accountKey ? { accountKey: info.accountKey } : {}),
         plan: info.auth.plan,
+        planTier: info.auth.planTier,
+        planType: info.auth.planType,
         ...(provider === 'anthropic' && !disconnectedFor(pool, provider, account.id) && info.auth.authenticated
           && info.auth.loginExpiresAt ? { loginExpiresAt: info.auth.loginExpiresAt } : {}),
         ...(info.auth.errorReason === 'codex_provider_managed_auth'
@@ -1974,8 +2059,6 @@ export async function runSubscriptionAccountCommand(
       setLegacyCodexAccountPaused(imported, command.paused);
     }
   } else if (command.action === 'remove') {
-    if (command.accountId === 'default')
-      throw new Error('The default CLI account cannot be removed');
     if (state.running.get(keyOf(provider, command.accountId))?.size)
       throw new Error('Account is in use');
     if ([...state.logins.values()].some((login) => login.accountId === command.accountId))
@@ -1985,6 +2068,7 @@ export async function runSubscriptionAccountCommand(
       accounts: pool.accounts.filter((a) => a.id !== command.accountId),
     }));
     state.cache.delete(keyOf(provider, command.accountId));
+    await writeStoredAccountUsage(provider, command.accountId, null);
     state.quotaCooling.delete(keyOf(provider, command.accountId));
     await clearSubscriptionAccountCooling(provider, command.accountId);
   } else {
@@ -2043,7 +2127,9 @@ export async function runSubscriptionAccountCommand(
           provider, accountId, providerBrandName(provider), () => randomUUID().replaceAll('-', '').slice(0, 8),
         );
         assertOwner(state);
-      } else if (adding && accountId !== 'default') {
+      } else if (adding) {
+        if (accountId === 'default' && initial?.accounts.some(account => account.id === 'default')
+          && accountProviderId(provider, accountId) !== owned) throw new Error('Account already belongs to another provider');
         // Adding inside a provider is an explicit merge, including into the built-in provider.
         // Without this record an upgrade would mistake it for an old automatically pooled account.
         await placeSubscriptionAccount(provider, accountId, owned);
@@ -2235,7 +2321,6 @@ async function changeAccountPlacement(
     // The built-in provider holds the CLI default login and is never merged away as a whole, even
     // when its pool has no default account (a pool migrated without one); move accounts instead.
     if (ref.providerId === kind) throw new Error('The built-in provider cannot be merged into another provider');
-    if (accounts.some((account) => account.id === 'default')) throw new Error('The default CLI account cannot be moved');
     for (const account of accounts) await placeSubscriptionAccount(kind, account.id, target);
     return;
   }
@@ -2248,6 +2333,7 @@ async function changeAccountPlacement(
   }));
   for (const id of removed) {
     state.cache.delete(keyOf(kind, id));
+    await writeStoredAccountUsage(kind, id, null);
     state.quotaCooling.delete(keyOf(kind, id));
     await clearSubscriptionAccountCooling(kind, id);
   }

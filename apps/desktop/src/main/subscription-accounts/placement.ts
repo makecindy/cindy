@@ -8,7 +8,7 @@
  * know, which would silently undo the user's arrangement. They never read or write this file.
  *
  * An account without an entry belongs to its built-in provider (`openai` / `anthropic`), which is
- * exactly what every older client assumes. The CLI default account always stays there.
+ * exactly what every older client assumes. Native CLI directories remain unchanged when moved.
  */
 import { createHash } from 'node:crypto';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
@@ -60,7 +60,7 @@ export function normalizePlacementFile(raw: unknown): PlacementFile {
       const split = key.indexOf(':');
       const kind = key.slice(0, split);
       const accountId = key.slice(split + 1);
-      if (isKind(kind) && accountIdValid(accountId) && accountId !== 'default'
+      if (isKind(kind) && accountIdValid(accountId)
         && typeof providerId === 'string' && PROVIDER_ID.test(providerId))
         accounts[key] = providerId;
     }
@@ -71,7 +71,7 @@ export function normalizePlacementFile(raw: unknown): PlacementFile {
       if (!CREATED_PROVIDER_ID.test(providerId) || !entry || typeof entry !== 'object') continue;
       const { kind, name, account } = entry as Partial<CreatedSubscriptionProvider>;
       if (!isKind(kind) || !providerId.startsWith(`${kind}-`) || typeof name !== 'string' || !name.trim()
-        || !accountIdValid(account) || account === 'default') continue;
+        || !accountIdValid(account)) continue;
       providers[providerId] = { kind, name: name.trim().slice(0, MAX_PROVIDER_NAME), account };
     }
   }
@@ -100,7 +100,6 @@ const file = createOverrideSettingsFile<PlacementFile>({
 
 /** The provider an account belongs to; its built-in provider when nothing else was recorded. */
 export function accountProviderId(kind: SubscriptionProvider, accountId: string): string {
-  if (accountId === 'default') return kind;
   file.invalidateIfChanged();
   return file.read().accounts[keyOf(kind, accountId)] ?? kind;
 }
@@ -173,7 +172,7 @@ export interface SubscriptionPoolProviderRef {
  */
 export function resolveSubscriptionPoolProvider(providerId: string | null | undefined): SubscriptionPoolProviderRef | null {
   if (!providerId) return null;
-  if (isKind(providerId)) return { kind: providerId, providerId };
+  if (isKind(providerId)) return { kind: providerId, providerId, ownAccount: 'default' };
   const created = readCreatedSubscriptionProviders()[providerId];
   if (created) return { kind: created.kind, providerId, ownAccount: created.account, created: true };
   const legacy = readLegacyCodexAccountId(providerId);
@@ -196,10 +195,10 @@ export function pinnedOwnAccount(ref: SubscriptionPoolProviderRef): string | und
 
 /** The provider an account was created with (a legacy connection or a created provider), if any. */
 export function accountOwnProvider(kind: SubscriptionProvider, accountId: string): string | undefined {
-  if (accountId === 'default') return kind;
   const created = Object.entries(readCreatedSubscriptionProviders())
     .find(([, entry]) => entry.kind === kind && entry.account === accountId)?.[0];
   if (created) return created;
+  if (accountId === 'default') return kind;
   if (kind !== 'openai') return undefined;
   return Object.entries(readOpenAiLegacyAccountsIfReadable() ?? {})
     .find(([, account]) => account === accountId)?.[0];
@@ -209,13 +208,13 @@ function assertOwner(owner: string): void {
   if (owner !== activeOwnerScopeKey()) throw new Error('Subscription account owner changed');
 }
 
-/** Record which provider an account belongs to (the default account always stays built-in). */
+/** Record which provider an account belongs to without changing its CLI directory. */
 export async function placeSubscriptionAccount(
   kind: SubscriptionProvider,
   accountId: string,
   providerId: string,
 ): Promise<void> {
-  if (accountId === 'default' || !accountIdValid(accountId) || !PROVIDER_ID.test(providerId))
+  if (!accountIdValid(accountId) || !PROVIDER_ID.test(providerId))
     throw new Error('Account cannot be moved');
   const owner = activeOwnerScopeKey();
   await file.updateAtomic(({ value }) => {
@@ -236,7 +235,7 @@ export async function createSubscriptionProvider(
   createId: () => string,
   prepare?: (providerId: string) => void,
 ): Promise<string> {
-  if (accountId === 'default' || !accountIdValid(accountId)) throw new Error('Account cannot be moved');
+  if (!accountIdValid(accountId)) throw new Error('Account cannot be moved');
   const owner = activeOwnerScopeKey();
   let providerId = '';
   await file.updateAtomic(({ value }) => {
