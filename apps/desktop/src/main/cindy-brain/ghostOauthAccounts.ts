@@ -1365,21 +1365,28 @@ export class GhostOauthAccountManager {
     }
 
     const key = this.cacheKey(instanceKey, secretKey, resolvedId);
+    const generation = this.ghostGeneration(instanceKey);
+    const assertCurrent = () => {
+      const current = parseManifest(this.deps.vault.read(instanceKey, accountsKey(secretKey))).accounts.find(account => account.id === resolvedId);
+      if (this.ghostGeneration(instanceKey) !== generation || current?.status !== 'connected' || current.reused) {
+        throw new Error('OAUTH_ACCOUNT_CHANGED');
+      }
+    };
     const cached = this.tokenCache.get(key);
     if (cached && (cached.expiresAt === null || cached.expiresAt > Date.now())) {
-      return { ok: true, accessToken: cached.accessToken, accountId: resolvedId };
+      return { ok: true, accessToken: cached.accessToken, accountId: resolvedId, assertCurrent };
     }
 
-    const inflight = this.refreshInflight.get(key);
-    if (inflight) return inflight;
-
-    const generation = this.ghostGeneration(instanceKey);
-    const task = this.refreshAccount(instanceKey, secretKey, decl, resolvedId, key, generation)
-      .finally(() => {
-        if (this.refreshInflight.get(key) === task) this.refreshInflight.delete(key);
-      });
-    this.refreshInflight.set(key, task);
-    return task;
+    let task = this.refreshInflight.get(key);
+    if (!task) {
+      task = this.refreshAccount(instanceKey, secretKey, decl, resolvedId, key, generation)
+        .finally(() => {
+          if (this.refreshInflight.get(key) === task) this.refreshInflight.delete(key);
+        });
+      this.refreshInflight.set(key, task);
+    }
+    const result = await task;
+    return result.ok ? { ...result, assertCurrent } : result;
   }
 
   /** Only an explicitly bound, directly owned account may enter Node plaintext. */

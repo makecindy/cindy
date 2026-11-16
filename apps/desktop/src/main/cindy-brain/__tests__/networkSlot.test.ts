@@ -379,7 +379,9 @@ describe('host network connections', () => {
 
   // §4: the existing installation guard did not cover source-credential
   // revocation after a WebSocket handshake. Both must stop later sends.
-  it.each(['installation', 'credential'] as const)('requires an exact WS origin, exchanges real frames, and closes on %s revocation', async boundary => {
+  // #10130 / 4577903614, unit: the existing socket covered referenced keys
+  // only. Removing a directly stored key must also reject the next real send.
+  it.each(['installation', 'credential', 'direct-key'] as const)('requires an exact WS origin, exchanges real frames, and closes on %s revocation', async boundary => {
     const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     await new Promise<void>(resolve => server.once('listening', resolve));
     const address = server.address();
@@ -400,7 +402,8 @@ describe('host network connections', () => {
     });
     const { slot } = makeSlot({
       getGhost: () => fakeGhost({ network: { hosts: [origin], secrets: [{ key: 'own', label: 'Own key', inject: { header: 'Authorization', format: 'Bearer {value}', hosts: [origin] } }] } }),
-      readSecret: () => boundary === 'credential' ? GHOST_SAVED_CREDENTIAL_MARKER : 'host-only-key',
+      readSecret: () => boundary === 'credential' ? GHOST_SAVED_CREDENTIAL_MARKER
+        : boundary === 'direct-key' && !current ? null : 'host-only-key',
       resolveSavedCredential: () => ({ value: 'host-only-key', assertCurrent: () => {
         if (!current) throw new Error('CREDENTIAL_REFERENCE_CHANGED');
       } }),
@@ -427,6 +430,32 @@ describe('host network connections', () => {
       for (const client of server.clients) client.terminate();
       await new Promise<void>(resolve => server.close(() => resolve()));
     }
+  });
+
+  // #10130 / 4577903614, unit: buffered fetches and reference guards do not
+  // cover a direct key deleted after an HTTP stream has been handed off.
+  it.each(['user', 'gh-cli'] as const)('closes a stream on the next read after its directly stored key is removed: %s', async source => {
+    const keys = new Map([['brave_api_key', 'synthetic-direct-key']]);
+    const ghost = fakeGhost();
+    ghost.manifest.network!.secrets![0]!.source = source;
+    const cancel = vi.fn();
+    const { slot } = makeSlot({
+      getGhost: () => ghost,
+      readSecret: (_id, key) => keys.get(key) ?? null,
+      fetchImpl: async () => new Response(new ReadableStream({ cancel }), { headers: { 'content-type': 'text/event-stream' } }),
+    });
+    try {
+      const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'stream' });
+      expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+      if (!opened.ok || !('connectionId' in opened)) return;
+      keys.delete('brave_api_key');
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId }))
+        .toMatchObject({ ok: false, errorCode: 'NETWORK_CONNECTION_UNAVAILABLE' });
+      expect(slot.hasInFlightRequests('web-search')).toBe(false);
+    } finally {
+      await slot.disposeAll();
+    }
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it('bounds stream history, reports a cursor gap, and expires abandoned connections', async () => {

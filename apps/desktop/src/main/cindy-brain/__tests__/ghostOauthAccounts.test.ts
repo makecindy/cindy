@@ -1902,6 +1902,11 @@ describe('getFreshAccessToken', () => {
     expect(a).toMatchObject({ ok: true, accessToken: 'at-sf' });
     expect(b).toMatchObject({ ok: true, accessToken: 'at-sf' });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+    // #10130 / 4577903614: both the refresh owner and its single-flight joiner
+    // must invalidate their previously returned credentials after disconnect.
+    expect(mgr.disconnectAccount(GHOST, KEY, 'acc-1')).toBe(true);
+    expect(() => a.ok && a.assertCurrent?.()).toThrow('OAUTH_ACCOUNT_CHANGED');
+    expect(() => b.ok && b.assertCurrent?.()).toThrow('OAUTH_ACCOUNT_CHANGED');
   });
 
   it('invalid_grant → AUTH_EXPIRED + 账号标 expired + rt 清除', async () => {

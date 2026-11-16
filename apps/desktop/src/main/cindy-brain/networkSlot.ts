@@ -212,7 +212,7 @@ export interface NetworkSlotDeps {
       decl: GhostSecretOauthDecl,
       accountId?: string,
     ): Promise<
-      | { ok: true; accessToken: string; accountId: string; assertCurrent?(): void }
+      | { ok: true; accessToken: string; accountId: string; reused?: true; assertCurrent?(): void }
       | {
           ok: false;
           error:
@@ -884,7 +884,7 @@ export class GhostNetworkSlot {
       const assertCurrent = () => { hostGuard(); for (const guard of credentialGuards) guard(); };
       assertCurrent();
       const inject = await this.injectSecrets(instanceKey, ghost.manifest.network.secrets ?? [], [], url,
-        ghost.manifest.network.hosts, parsed.headers, undefined, credentialGuards);
+        ghost.manifest.network.hosts, parsed.headers, undefined, credentialGuards, true);
       assertCurrent();
       if (inject.error) return { ok: false, errorCode: 'NETWORK_CREDENTIAL_UNAVAILABLE', message: inject.error };
       // openWebSocket creates its owned entry before its first await, so this
@@ -1288,7 +1288,7 @@ export class GhostNetworkSlot {
       const assertStillValid = () => { hostGuard(); nodeAuth?.assertCurrent(); for (const guard of credentialGuards) guard(); };
       assertStillValid();
       const inject0 = await this.injectSecrets(
-        instanceKey, declaredSecrets, connectionDecls, url, declaredHosts, requestHeaders, authAccount, credentialGuards,
+        instanceKey, declaredSecrets, connectionDecls, url, declaredHosts, requestHeaders, authAccount, credentialGuards, asMode === 'stream',
       );
       assertStillValid();
       if (inject0.error) return { ok: false, message: inject0.error };
@@ -1363,6 +1363,7 @@ export class GhostNetworkSlot {
             requestHeaders,
             authAccount,
             credentialGuards,
+            asMode === 'stream',
           );
           if (reInject.error) return { ok: false, message: reInject.error };
           initialConnectionInjected = new Map(reInject.connectionInjected);
@@ -1399,6 +1400,7 @@ export class GhostNetworkSlot {
               hopHeaders,
               authAccount,
               credentialGuards,
+              asMode === 'stream',
             );
             if (hopInject.error) return { ok: false, message: hopInject.error };
             currentConnectionInjected = hopInject.connectionInjected;
@@ -1842,6 +1844,7 @@ export class GhostNetworkSlot {
     headers: Record<string, string>,
     authAccount?: string,
     credentialGuards: Array<() => void> = [],
+    retainDirectCredential = false,
   ): Promise<{
     error: string | null;
     usedExchange: boolean;
@@ -1880,7 +1883,7 @@ export class GhostNetworkSlot {
       if (target.protocol !== 'https:' && target.protocol !== 'wss:') {
         return { error: '凭证仅允许通过 HTTPS/WSS 注入，明文来源不提供托管凭证', usedExchange, oauthInjected, connectionInjected };
       }
-      const resolved = await this.resolveSecretValue(instanceKey, secret, hostname, authAccount);
+      const resolved = await this.resolveSecretValue(instanceKey, secret, hostname, authAccount, retainDirectCredential);
       if ('error' in resolved) {
         return { error: resolved.error, usedExchange, oauthInjected, connectionInjected };
       }
@@ -1927,6 +1930,7 @@ export class GhostNetworkSlot {
     secret: GhostSecretDecl,
     hostname: string,
     authAccount?: string,
+    retainDirectCredential = false,
   ): Promise<
     | {
         value: string;
@@ -1947,7 +1951,9 @@ export class GhostNetworkSlot {
       }
       if (ghToken && ghToken.trim().length > 0) return { value: ghToken.trim() };
       const fallback = this.deps.readSecret(instanceKey, secret.key);
-      if (fallback && fallback.length > 0) return { value: fallback };
+      if (fallback && fallback.length > 0) return { value: fallback, assertCurrent: retainDirectCredential ? () => {
+        if (this.deps.readSecret(instanceKey, secret.key) !== fallback) throw new Error('CREDENTIAL_CHANGED');
+      } : undefined };
       return {
         error: `凭证「${secret.label}」不可用——未检测到本机 gh 登录，且尚未配置备用 Personal Access Token；请先运行 gh auth login，或到主界面侧边栏「插件」的本插件详情页填写 PAT`,
       };
@@ -2025,7 +2031,8 @@ export class GhostNetworkSlot {
             return { error: `凭证「${secret.label}」刷新令牌失败${result.detail ? `:${result.detail}` : ''},请稍后重试` };
         }
       }
-      return { value: result.accessToken, oauthAccountId: result.accountId, assertCurrent: result.assertCurrent };
+      return { value: result.accessToken, oauthAccountId: result.accountId,
+        assertCurrent: retainDirectCredential || result.reused ? result.assertCurrent : undefined };
     }
     let raw: string;
     let assertCurrent: (() => void) | undefined;
@@ -2044,7 +2051,12 @@ export class GhostNetworkSlot {
         raw = reused.value;
         assertCurrent = reused.assertCurrent;
         assertCurrent();
-      } else raw = stored;
+      } else {
+        raw = stored;
+        if (retainDirectCredential) assertCurrent = () => {
+          if (this.deps.readSecret(instanceKey, secret.key) !== stored) throw new Error('CREDENTIAL_CHANGED');
+        };
+      }
     }
     if (secret.exchange === undefined) return { value: raw, assertCurrent };
     const cacheKey = `${instanceKey}\u0000${secret.key}`;
