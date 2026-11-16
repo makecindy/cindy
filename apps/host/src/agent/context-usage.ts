@@ -1,6 +1,7 @@
 import { recordSessionContextSnapshotWith } from '../../../desktop/src/main/localDb/sessionContextSnapshotPersistence.ts';
 import * as broadcastTap from '../../../desktop/src/main/device-link/broadcast-tap.js';
 import { createLogger } from '../../../desktop/src/main/logger.ts';
+import { explicitPorts } from './explicit-ports.ts';
 
 /**
  * A task's context usage (tokens used, window) written back to its row, as the desktop's
@@ -14,13 +15,13 @@ import { createLogger } from '../../../desktop/src/main/logger.ts';
  * yet (release table, context usage write-back: the write is done, the broadcast is the third
  * batch), so that port does nothing.
  */
-const ports = {
+const ports = explicitPorts<Parameters<typeof recordSessionContextSnapshotWith>[0]>({
   captureOwnerScope: () => broadcastTap.captureDataOwnerBroadcastScope?.() ?? null,
   isOwnerScopeCurrent: (scope: ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null) =>
     scope === null || broadcastTap.isDataOwnerBroadcastScopeCurrent?.(scope) !== false,
   broadcastContext: () => {},
   log: createLogger('host-context-usage'),
-};
+});
 
 export function recordHostContextSnapshot(sessionId: string, contextTokens: number, contextWindow: number): Promise<void> {
   return recordSessionContextSnapshotWith(ports, sessionId, contextTokens, contextWindow);

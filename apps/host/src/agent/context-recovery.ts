@@ -14,6 +14,7 @@ import {
   type OverflowClaimResult,
 } from '../../../desktop/src/main/maker-ipc/contextOverflowRollover.ts';
 import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
+import { explicitPorts } from './explicit-ports.ts';
 
 /**
  * How long a Host shutdown waits, in total, for the context recoveries still in flight to end
@@ -108,7 +109,7 @@ export function createHostContextRecovery(deps: {
   };
 
   function ports(history: RecoveryHistory, rollover: () => Rollover | null): ContextRecoveryTerminalPorts {
-    return {
+    return explicitPorts<ContextRecoveryTerminalPorts>({
       getRollover: rollover,
       getSuppressedBroadcasts: () => held as unknown as ReturnType<ContextRecoveryTerminalPorts['getSuppressedBroadcasts']>,
       isTerminalTurnErrorEvent: event => isTerminalTurnErrorEvent(event),
@@ -128,7 +129,7 @@ export function createHostContextRecovery(deps: {
       handleAgentIslandEventAfterBroadcast: () => {},
       eventChannel: () => 'agent-event',
       log: deps.log,
-    };
+    });
   }
 
   function input(terminal: RecoveryTerminal) {
