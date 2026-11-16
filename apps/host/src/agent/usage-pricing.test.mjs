@@ -42,6 +42,7 @@ import { createHostModelAccess } from './model-access.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { resolveOwnerScopedSecretStorageKey } from '../../../desktop/src/main/secrets/providerSecretOwnerKey.ts';
 import { providerSecretStorageKey } from '../../../desktop/src/shared/providerSecrets.ts';
+import { commitVolatileAppSession } from '../../../desktop/src/main/appSessionState.ts';
 
 const profileWrites = new Map();
 /** Every async fs call the production code makes under a test profile, so cleanup can wait for them. */
@@ -219,3 +220,53 @@ for (const state of ['failed', 'disabled']) {
     assert.deepEqual(await usagePricing.getGatewayModelPricing(), priced);
   });
 }
+
+// 测试价值（登出，审核方 2026-11-17 选 (a)：不改生产代码，固定现状）
+// - 生产入口：createHostUsagePricing 的读取（/api/usage/model-pricing 用的 getGatewayModelPricing）。登出照
+//   main.ts disposeOwnerRuntime 的两步：closeStorage 清掉 DB 客户端（clearCurrentDbClient），会话提交为
+//   signed-out（commitVolatileAppSession）。
+// - 规则：价格按账号定。登出后不再给出上一个账号的价格（fail-closed）；同一账号重新登录，价格从内存或快照立即
+//   回来；另一个账号拿不到。桌面在登出时传空列表（model-access/index.ts:574），读取得到 `{}` 并改写快照文件；
+//   Host 不改写，靠价格 scope（用户加 Key 文件身份）对不上而得到 null，同账号的快照因此保留（放行表第 13 行）。
+// - 现有覆盖缺口：上面的账号边界用例走的是目录换身份，不走登出。
+// - 最小失败输入：一次带价格的轮次，然后登出；再登录同一账号（Key 文件不变）或另一个账号。tier：unit。
+function logOut() {
+  clearCurrentDbClient();
+  commitVolatileAppSession('signed-out', null, true);
+}
+function logIn(env, ownerId) {
+  configureHostOwner({ userDataDir: env.profile, ownerId });
+  env.client = {};
+  setCurrentDbClient(env.client, ownerId);
+}
+async function pricedThenLoggedOut(t, ownerId) {
+  const env = setup(t, ownerId);
+  const usagePricing = env.pricing();
+  env.rounds.push(PRICED);
+  await env.list(env.catalog(usagePricing));
+  const priced = await usagePricing.getGatewayModelPricing();
+  assert.equal(priced?.xd?.['claude-sonnet-4']?.inputPerMtok, 3);
+  await env.settle();
+  logOut();
+  t.after(() => clearCurrentDbClient());
+  return { env, usagePricing, priced };
+}
+
+test('after a logout the Host answers no price, not the last account\'s', async t => {
+  const { usagePricing } = await pricedThenLoggedOut(t, 'pricing-owner-logout');
+  assert.equal(await usagePricing.getGatewayModelPricing(), null);
+});
+
+test('the same account signing in again gets its prices back at once (its key file unchanged)', async t => {
+  const { env, usagePricing, priced } = await pricedThenLoggedOut(t, 'pricing-owner-relogin');
+  logIn(env, 'pricing-owner-relogin');
+  assert.deepEqual(await usagePricing.getGatewayModelPricing(), priced, 'from memory');
+  assert.deepEqual(await env.pricing().getGatewayModelPricing(), priced, 'and from the snapshot, which the logout left as it was');
+});
+
+test('another account signing in after a logout cannot read the previous account\'s prices', async t => {
+  const { env, usagePricing } = await pricedThenLoggedOut(t, 'pricing-owner-before-switch');
+  logIn(env, 'pricing-owner-after-switch');
+  assert.equal(await usagePricing.getGatewayModelPricing(), null, 'from memory');
+  assert.equal(await env.pricing().getGatewayModelPricing(), null, 'or from the snapshot');
+});

@@ -162,6 +162,18 @@ describe('Host main.ts wiring', () => {
     assert.ok(desktop.includes("import { resolveLocalMcpDuplicateChoices } from './mcp-duplicate-preferences.js';"));
     assert.ok(desktop.includes('    const claudeAgent = new ClaudeCodeAgent({\n      resolveLocalMcpDuplicateChoices,\n'));
   });
+
+  // 规则：放行表第 13 行 3a。账号凭据的每个状态，model access 的 publish 既推给窗口，也交给目录的
+  // noteCredentialStatus，照桌面 model-access/index.ts 的 onStatusChange（failed / disabled / unsupported / idle
+  // 清价并挂起，ok 解除）。usage-pricing.test.mjs 照这一行接线来测，测不到 main.ts 本身。
+  // 失效后果：凭据失败后 Host 继续答复失效账号的价格，恢复后也不会让目录过期重拉。
+  it('hands every credential status the model access publishes to the provider catalog', () => {
+    const access = call(read(path.join(hostSrc, 'main.ts')), 'modelAccess = createHostModelAccess(');
+    const publish = access.slice(access.indexOf('publish:status=>'), access.indexOf(',onKeyChanged:'));
+    assert.ok(publish.startsWith('publish:status=>{'), 'the publish callback');
+    assert.ok(publish.includes("eventHub.publish({type:'plugin_push',channel:MODEL_ACCESS_STATUS_CHANNEL,payload:status});"));
+    assert.ok(publish.includes('listProviders.noteCredentialStatus(status);'));
+  });
 });
 
 describe('Host engine assembly (runtime.ts) against the desktop construction sites', () => {
