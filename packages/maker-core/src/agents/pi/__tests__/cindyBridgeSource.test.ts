@@ -2663,6 +2663,9 @@ it('lets cindy_mcp_call_tool omit args and forwards an empty object for no-param
   expect(argsSchema.properties).toHaveProperty('args');
   expect(argsSchema.properties.name.type).toBeUndefined();
   expect(argsSchema.properties.args.type).toBeUndefined();
+  // 顶层必须留开(#10818): 一旦 additionalProperties: false, pi-schema 会先把模型平铺出来
+  // 的参数判成 unknown field 拒掉, 归位逻辑根本看不到它们, 用户要的操作被静默丢掉。
+  expect(callTool.parameters.additionalProperties).toBe(true);
 });
 
 it('tells the model the call_tool envelope instead of forwarding a flattened envelope', async () => {
@@ -2705,6 +2708,123 @@ it('tells the model the call_tool envelope instead of forwarding a flattened env
   await gateway.listResult({ server: 'cindy_workspace', tool: 'status' });
   await gateway.executeCall({ server: 'cindy_workspace', tool: 'status', args: { args: ['x'], name: 'y' } });
   expect(requests[0].params).toEqual({ name: 'status', arguments: { args: ['x'], name: 'y' } });
+});
+
+// #10818: 弱模型把工具参数平铺在网关调用的顶层(实测 MiniMax-M3.1 会把文档标识放进 args、
+// 把行列坐标平铺在外层)。只取 args 的实现会把坐标静默丢掉 —— 表格类服务于是按缺省值
+// 写回 A1 并返回成功, 链路看起来完全正常, 用户只会以为服务端忽略了参数。
+it('folds top-level tool parameters into args instead of dropping them', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'WROTE[A1]' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('cindy_sheets', client, [{
+    name: 'set_cell',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file_id: { type: 'string' }, sheet_id: { type: 'string' },
+        row: { type: 'integer' }, col: { type: 'integer' },
+      },
+      required: ['file_id', 'row', 'col'],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_sheets', tool: 'set_cell' });
+  // 模型把坐标平铺在顶层, 文档标识留在 args 里。
+  const result = await gateway.executeCall({
+    server: 'cindy_sheets', tool: 'set_cell', args: { file_id: 'doc-1' }, row: 10, col: 1,
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'set_cell', arguments: { file_id: 'doc-1', row: 10, col: 1 },
+  });
+  // 出站参数要看得见: 用户与模型据此才能分清「链路丢参」还是「服务端行为」。
+  const note = (result.content as Array<{ text?: string }>).map(block => block.text ?? '').join('\n');
+  expect(note).toContain('moved these top-level parameters into args before forwarding: row, col');
+  expect(note).toContain('"row":10');
+});
+
+it('fails loudly when the arguments cannot be read at all instead of forwarding empty arguments', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'WROTE[A1]' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('cindy_sheets', client, [{
+    name: 'set_cell',
+    inputSchema: {
+      type: 'object',
+      properties: { file_id: { type: 'string' }, row: { type: 'integer' }, col: { type: 'integer' } },
+      required: ['file_id', 'row', 'col'],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_sheets', tool: 'set_cell' });
+  // 参数放在一个读不出来的地方: 原样转发 {} 只会让服务端按缺省值静默兜底并返回成功。
+  await expect(gateway.executeCall({ server: 'cindy_sheets', tool: 'set_cell', args: 'row=10' }))
+    .rejects.toThrow(/args must be a JSON object/);
+  expect(requests).toHaveLength(0);
+});
+
+it('repairs a flattened plugin parameter instead of rejecting the call', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'CALENDARS[primary]' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('cindy', client, [{
+    name: 'ghost_info',
+    inputSchema: {
+      type: 'object', properties: { ghost_id: { type: 'string' } }, required: ['ghost_id'],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy', tool: 'ghost_info' });
+  // 模型把 ghost_id 平铺在顶层: 归位后照常调用, 而不是报「缺 args.ghost_id」。
+  await gateway.executeCall({ server: 'cindy', tool: 'ghost_info', ghost_id: 'calendar' });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({ name: 'ghost_info', arguments: { ghost_id: 'calendar' } });
 });
 
 it('intercepts a double-wrapped envelope and an entry-tool name before they reach the server', async () => {

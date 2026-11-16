@@ -232,6 +232,20 @@ function scriptedAnthropicTurn(requestBody: string): string {
     return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input)
       : anthropicTextTurn(8, 'Calendars listed');
   }
+  // #10818: 弱模型的典型偏差 —— 把工具参数平铺在网关调用的顶层(文档标识留在 args 里,
+  // 行列坐标平铺在外层)。这里脚本化这个形态, 验证真 pi + 网关 + MCP 端点这一链上,
+  // 坐标有没有真的发出去。
+  if (requestBody.includes('write a spreadsheet cell')) {
+    const calls = [
+      { name: 'cindy_mcp_list_tools', input: { server: 'cindy_sheets', tool: 'set_cell' } },
+      { name: 'cindy_mcp_call_tool', input: {
+        server: 'cindy_sheets', tool: 'set_cell', args: { file_id: 'doc-1', sheet_id: 'sheet-1' }, row: 10, col: 1,
+      } },
+    ];
+    const call = calls[toolResultCount];
+    return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input)
+      : anthropicTextTurn(3, 'Cell written');
+  }
   if (requestBody.includes('verify MCP structured result')) {
     const scenario = requestBody.includes('structured failure') ? 'failure'
       : requestBody.includes('rich failure') ? 'rich-failure' : 'success';
@@ -446,6 +460,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   const contactsLookupCalls: Array<{ query: string }> = [];
   const teammateLookupCalls: Array<Record<string, unknown>> = [];
   const botMemoryCalls: Array<Record<string, unknown>> = [];
+  // #10818: 探测端点收到的出站参数 —— 用来证明「坐标到底有没有发出去」。
+  const sheetCalls: Array<Record<string, unknown>> = [];
   // 记录假 MCP server 收到的请求 URL —— 断言真 pi(经 cindy-bridge fetch)把
   // host 下发的 `?session=<id>` 原样带到每个 MCP 请求上(orca 身份路由的 pi 侧半)。
   const seenMcpUrls: string[] = [];
@@ -708,6 +724,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       const isContacts = req.url?.includes('/contacts') ?? false;
       const isHelper = req.url?.includes('/helper') ?? false;
       const isMemory = req.url?.includes('/memory') ?? false;
+      const isSheets = req.url?.includes('/sheets') ?? false;
       const server = new McpServer({
         name: isPlugins ? 'cindy' : isOrca ? 'cindy_orca' : isWorkspace
           ? 'cindy_workspace'
@@ -717,6 +734,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
               ? 'cindy_helper'
               : isMemory
                 ? 'cindy_memory'
+                : isSheets
+                  ? 'cindy_sheets'
               : 'cindy_echo',
         version: '1.0.0',
       });
@@ -790,6 +809,24 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
             return { content: [{ type: 'text', text: `WORKSPACE[${query}]` }] };
           },
         );
+      } else if (isSheets) {
+        // 表格类服务的写单元格工具: 行列坐标是必填, 服务端收到就按坐标写。
+        server.registerTool(
+          'set_cell',
+          {
+            description: 'Write one spreadsheet cell',
+            inputSchema: {
+              file_id: z.string(),
+              sheet_id: z.string().optional(),
+              row: z.number().int(),
+              col: z.number().int(),
+            },
+          },
+          async (args) => {
+            sheetCalls.push(args);
+            return { content: [{ type: 'text', text: `CELL[${String(args.row)},${String(args.col)}]` }] };
+          },
+        );
       } else if (isContacts) {
         server.registerTool(
           'lookup',
@@ -859,7 +896,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
 
   function buildDeps(
     bridgeMode:
-        | 'plugins' | 'controls' | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' | 'recovery' = 'local',
+        | 'plugins' | 'controls' | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'sheets'
+        | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' | 'recovery' = 'local',
     logger: Logger = noopLogger,
   ): AgentDeps {
     return {
@@ -1036,6 +1074,14 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
             },
           };
         }
+        if (bridgeMode === 'sheets') {
+          return {
+            mcpBridge: {
+              token: MCP_TOKEN,
+              servers: [{ name: 'cindy_sheets', url: `${mcpUrl}/sheets` }],
+            },
+          };
+        }
         if (bridgeMode === 'bot-memory') {
           const sessionQuery = ctx?.sessionId
             ? `?session=${encodeURIComponent(ctx.sessionId)}`
@@ -1069,7 +1115,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     permissionMode: 'ask' | 'bypassPermissions',
     resolver: (req: InteractionRequest) => Promise<InteractionDecision>,
     bridgeMode:
-        | 'plugins' | 'controls' | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'recovery' = 'local',
+        | 'plugins' | 'controls' | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'sheets'
+        | 'remote' | 'remote-sse' | 'remote-paginated' | 'recovery' = 'local',
     prompt = 'call the echo tool',
     localHostOnly: boolean | 'native' = false,
     // 披露记录按 sessionId 落盘，所以要真正走到「首次未披露」必须给独立会话；
@@ -1156,6 +1203,25 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       expect(request.tools).toEqual(requests[0].tools);
       expect(request.system).toEqual(requests[0].system);
     }
+  });
+
+  // #10818: 自定义 MCP 工具的坐标参数不能被网关悄悄丢掉。模型把参数平铺在顶层时,
+  // 坐标必须真的到达服务端(表格类服务收到坐标才会写进那一格, 收不到就按缺省写回 A1
+  // 并返回成功), 出站参数还要回显出来, 用户与模型才能分清是链路丢参还是服务端行为。
+  it('forwards flattened spreadsheet coordinates to the server instead of dropping them', { timeout: 90_000 }, async () => {
+    sheetCalls.length = 0;
+    const approvals: Array<{ toolName: string; input: unknown }> = [];
+    const { requests } = await runOneTurn('ask', async request => {
+      if (request.kind === 'permission') approvals.push({ toolName: request.toolName, input: request.input });
+      return { kind: 'permission', behavior: 'allow' };
+    }, 'sheets', 'write a spreadsheet cell at row 10', false, 'sheets-coordinates');
+    expect(sheetCalls).toEqual([{ file_id: 'doc-1', sheet_id: 'sheet-1', row: 10, col: 1 }]);
+    // 审批框里显示的必须是真正发出去的那一份参数。
+    expect(approvals).toEqual([{
+      toolName: 'mcp__cindy_sheets__set_cell',
+      input: { file_id: 'doc-1', sheet_id: 'sheet-1', row: 10, col: 1 },
+    }]);
+    expect(latestToolResultContent(requests.at(-1)!)).toContain('"row":10');
   });
 
   // Integration: the real Pi binary must traverse both discovery layers with
