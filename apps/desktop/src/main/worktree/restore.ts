@@ -24,6 +24,7 @@ import {
 import { readAttachedWorktreeBranch } from './attachedBranch';
 import { gitExec, GitExecError } from './gitExec';
 import { ensureManagedWorktreeExcluded } from './managedWorktreeExclude';
+import { buildMultiboxRestoreArgs, logMultiboxAddResult, shouldUseMultibox } from './multibox';
 import { applyWorktreeIncludeFile } from './includePatternsEngine';
 import { pathKey } from './liveSessionRefs';
 import {
@@ -256,6 +257,15 @@ async function addRestoredWorktree(
   branch: string,
 ): Promise<void> {
   await ensureManagedWorktreeExcluded(baseRepo, worktreePath);
+  // Multibox carries engine caches back instead of a cold checkout. Beyond the branch's
+  // tracked files it only adds ignored files, while the pending snapshot holds untracked
+  // ones, so the stash apply below still lands on free paths. Its failures are returned
+  // as-is, never retried as a plain `git worktree add`.
+  if (await shouldUseMultibox(baseRepo)) {
+    const { stdout } = await gitExec(buildMultiboxRestoreArgs(worktreePath, branch), baseRepo);
+    logMultiboxAddResult(worktreePath, stdout);
+    return;
+  }
   const addArgs = ['-c', 'core.longpaths=true', 'worktree', 'add', worktreePath, branch];
   try {
     await gitExec(addArgs, baseRepo);
