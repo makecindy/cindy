@@ -144,6 +144,7 @@ await cindy.host.call('cindy_helper', 'set_provider_share_model_access', {
 模型名单 `null` 跟随供应商范围，`[]` 禁止所有模型；不改成员预算等其它设置。调用超时或失败可能已产生
 副作用，先查询，不自动重发。插件不借用任务身份，也不新增逐次审批或分项补批；受邀者不能通过该入口
 获得分享者的管理权限。未装配供应商分享服务的 Host 不提供这些工具。
+共享任务中的 Agent 按任务权限可管理主人的分享成员。
 
 `scheduler` 组直接复用 `cindy_scheduler` 的完整管理工具：`schedule_create`、`schedule_update`、
 `schedule_pause`、`schedule_resume`、`schedule_delete`、`schedule_run_now` 与 `schedule_list_runs`。
