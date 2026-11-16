@@ -76,6 +76,24 @@ describe('Host main.ts wiring', () => {
     assert.ok(helper.includes('export const hostAuthFetch = (input, init) => hostOutbound.outboundFetch(input, init);'));
   });
 
+  // 规则：Host 进程启动时在 macOS 上读静态系统代理设置（放行表第 28 行 28b）：main.ts 在分发命令之前调一次
+  // startHostSystemProxySettings（登录命令也走出口代理），它只在 darwin 上接 scutil 读取，scutil 写死绝对路径。
+  // 单测注入固定的 scutil 输出，走不到这一行。失效后果：Host 不再跟随系统代理，只靠系统代理才能连出去的
+  // 用户全部直连；或 scutil 经 PATH 查找、被同名程序顶替。
+  it('reads the macOS system proxy settings at startup, with the system scutil', () => {
+    const main = read(path.join(hostSrc, 'main.ts'));
+    assert.ok(main.includes("import { startHostSystemProxySettings } from './outbound-proxy.ts';\n"));
+    assert.equal(main.split('startHostSystemProxySettings();').length - 1, 1);
+    const call = main.indexOf('\nstartHostSystemProxySettings();\n');
+    assert.ok(call > 0 && call < main.indexOf('\nconst command = process.argv[2];\n'), 'a top-level call before the command dispatch');
+    const outbound = read(path.join(hostSrc, 'outbound-proxy.ts'));
+    assert.ok(outbound.includes("  if (process.platform === 'darwin') useHostSystemProxySettings(readScutilProxyOutput);\n"));
+    const rules = read(path.join(hostSrc, 'macos-system-proxy.ts'));
+    assert.ok(rules.includes("const SCUTIL_PATH = '/usr/sbin/scutil';\n"));
+    assert.equal(rules.split('execFile(').length - 1, 1);
+    assert.ok(rules.includes("    execFile(SCUTIL_PATH, ['--proxy'], {\n"));
+  });
+
   // 规则：Pi 包的退役钩子要拿到 Host 的 Maker（Maker 建好后 attach），Host 退出时关闭。
   // 失效后果：包变更后运行中的 Pi 任务不退役，或进程退出时留下监听。
   it('attaches the Pi packages to the Maker and closes them on teardown', () => {
