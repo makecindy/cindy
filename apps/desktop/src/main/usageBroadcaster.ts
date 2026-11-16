@@ -32,7 +32,10 @@ import type { XaiRateLimitSnapshot } from '../shared/xaiRateLimit';
 import { incrementDailyModelUsage, type DailyModelUsageDelta } from './localDb/dailyModelUsage';
 import { incrementDailySessionUsage } from './localDb/dailySessionUsage';
 import { getCurrentDbClientUserId, getDbClient } from './localDb/client/current';
-import { readStoredAccountUsage, writeStoredAccountUsage } from './usage/accountUsageStorage.js';
+import {
+  readStoredLegacyAccountUsage as readStoredAccountUsage,
+  writeStoredLegacyAccountUsage as writeStoredAccountUsage,
+} from './usage/accountUsageStorage.js';
 import { readLegacyCodexAccountId, readPool } from './subscription-accounts/store.js';
 import {
   mergeClaudeSubscriptionUsageSnapshot,

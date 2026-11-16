@@ -6,6 +6,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 let testOwner = 0;
+function legacyProjection(value: Record<string, any>) { return value.legacySnapshot ?? value; }
 
 const mocks = vi.hoisted(() => ({
   queryOne: vi.fn(),
@@ -77,7 +78,7 @@ describe('claude subscription snapshot hydration race', () => {
   it('serializes concurrent records behind one hydration read (stale row must not win)', async () => {
     const broadcaster = await import('../usageBroadcaster');
     const dbRead = deferred<{ snapshot: string } | null>();
-    mocks.queryOne.mockReturnValue(dbRead.promise);
+    mocks.queryOne.mockReturnValueOnce(dbRead.promise);
 
     // 冷缓存: 两笔 headers 快照并发到达 (5h=10% → 5h=20%), SQLite 读挂起中。
     const recordA = broadcaster.recordClaudeSubscriptionUsageSnapshot({
@@ -134,7 +135,7 @@ describe('claude subscription snapshot hydration race', () => {
 
     expect(mocks.exec).toHaveBeenCalled();
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.fiveHour?.utilization).toBe(42);
   });
 
@@ -230,7 +231,7 @@ describe('claude subscription snapshot hydration race', () => {
 
     expect(mocks.exec).toHaveBeenCalled();
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.rateLimitStatus).toBe('allowed');
   });
 
@@ -255,14 +256,14 @@ describe('claude subscription snapshot hydration race', () => {
 
     expect(mocks.exec).toHaveBeenCalled();
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.fiveHour?.utilization).toBe(54);
   });
 
   it('discards an in-flight hydration result when clear wins the race', async () => {
     const broadcaster = await import('../usageBroadcaster');
     const dbRead = deferred<{ snapshot: string } | null>();
-    mocks.queryOne.mockReturnValue(dbRead.promise);
+    mocks.queryOne.mockReturnValueOnce(dbRead.promise);
 
     // record 触发冷缓存 hydration (挂起) → clear 抢先完成。
     const record = broadcaster.recordClaudeSubscriptionUsageSnapshot({

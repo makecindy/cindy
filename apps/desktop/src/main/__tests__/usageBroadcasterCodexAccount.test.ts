@@ -6,11 +6,12 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 let testOwner = 0;
+function legacyProjection(value: Record<string, any>) { return value.legacySnapshot ?? value; }
 
 const mocks = vi.hoisted(() => ({
   queryOne: vi.fn(),
   pool: vi.fn((): { accounts: { id: string }[] } | null => null),
-  exec: vi.fn(async () => undefined),
+  exec: vi.fn(async (_sql?: string, _params?: unknown[]) => undefined),
   getCurrentDbClientUserId: vi.fn(() => 'user-1'),
   legacyCurrentUserId: vi.fn(() => null),
   /** 广播到 renderer 的 payload —— 并发用例据此断言不会闪出空快照。 */
@@ -531,7 +532,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
 
     expect(mocks.exec).toHaveBeenCalled();
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.primary?.usedPercent).toBe(91);
   });
 
@@ -556,7 +557,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
     // 且这份观测在下一笔事件时随 payload 一并落库, 不会永久停在内存里。
     await broadcaster.recordCodexAccountUsageSnapshot(NULL_SPARSE_EVENT);
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.primary?.usedPercent).toBe(91);
   });
 
@@ -579,7 +580,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
     // 而且下一笔事件写回库时窗口仍在, 不会把损坏落盘。
     await broadcaster.recordCodexAccountUsageSnapshot(NULL_SPARSE_EVENT);
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.primary?.usedPercent).toBe(82);
   });
 
@@ -650,7 +651,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
 
     expect(mocks.exec).toHaveBeenCalled();
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.rateLimitReachedType).toBe('credits_depleted');
   });
 
@@ -673,7 +674,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
 
     expect(mocks.exec).toHaveBeenCalled();
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.primary?.usedPercent).toBe(82);
     expect(persisted.secondary?.usedPercent).toBe(55);
   });
@@ -691,7 +692,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
 
     expect(mocks.exec).toHaveBeenCalled();
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.rateLimitReachedType ?? null).toBeNull();
   });
 
@@ -713,7 +714,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
 
     expect(mocks.exec).toHaveBeenCalled();
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.webSnapshot?.planType).toBe('prolite');
     expect(persisted.webSnapshot?.credits?.balance).toBe('12.50');
   });
@@ -798,5 +799,29 @@ it('does not revive a removed CLI-origin account through legacy quota events', a
     await broadcaster.recordCodexAccountUsageSnapshot({ primary: { usedPercent: 42 }, fiveHour: { utilization: 42 }, updatedAt: 1 });
     expect(mocks.exec).not.toHaveBeenCalled();
     expect(await broadcaster.readCodexAccountUsageSnapshot()).toBeNull();
+  } finally { mocks.pool.mockReturnValue(null); }
+});
+
+// Unit integration: seed the pool writer's actual stored shape, then use the real old broadcaster
+// and clear. Independent tests of either writer missed removal of the restoration fingerprint.
+it('preserves the verified pool row when a legacy reader updates or clears its quota', async () => {
+  const rows = new Map<string, string>();
+  mocks.getCurrentDbClientUserId.mockReturnValue('mixed-quota-writers');
+  mocks.pool.mockReturnValue({ accounts: [{ id: 'default' }] });
+  mocks.queryOne.mockImplementation(async (_sql, [key]) => rows.has(key) ? { snapshot: rows.get(key) } : null);
+  mocks.exec.mockImplementation(async (_sql, params) => { const [key, value] = params!; rows.set(String(key), String(value)); });
+  const storage = await import('../usage/accountUsageStorage.js');
+  const broadcaster = await import('../usageBroadcaster');
+  const verified = { accountFingerprint: 'same-verified-workspace', planType: 'plus',
+    appServerBuckets: { codex: { primary: { usedPercent: 12 }, updatedAt: Date.now() } }, webSnapshot: null };
+  try {
+    await storage.writeStoredAccountUsage('openai', 'default', verified);
+    await broadcaster.recordCodexAccountUsageSnapshot(APP_SERVER_SNAPSHOT);
+    expect(await storage.readStoredAccountUsage('openai', 'default')).toEqual(verified);
+    expect((await broadcaster.readCodexAccountUsageSnapshot())?.primary?.usedPercent).toBe(82);
+    await broadcaster.clearCodexAccountUsageSnapshot();
+    expect(await storage.readStoredAccountUsage('openai', 'default')).toEqual(verified);
+    expect(await broadcaster.readCodexAccountUsageSnapshot()).toBeNull();
+    expect([...rows.keys()]).toEqual(['codex:default']);
   } finally { mocks.pool.mockReturnValue(null); }
 });

@@ -412,10 +412,8 @@ function updatePool(
   );
 }
 function defaultAccountBound(provider: SubscriptionProvider): boolean {
-  // Moving an explicitly connected CLI profile retains its owner-scoped authorization.
-  // Disconnecting the now-empty built-in provider must not disconnect the moved account.
-  if (accountProviderId(provider, 'default') !== provider
-    && readPool(provider)?.accounts.some(account => account.id === 'default')) return true;
+  // Placement is never authorization. A moved CLI profile still needs its owner's existing
+  // native binding, and explicit revocation must also stop the profile at its new provider.
   return (
     isNativeProviderAuthBound(provider) &&
     (provider !== 'openai' ||
@@ -536,7 +534,8 @@ async function snapshot(
   const key = keyOf(provider, id);
   const cached = state.cache.get(key);
   const ttl = cached?.unavailable ? ACCOUNT_SNAPSHOT_FAILURE_TTL_MS : ACCOUNT_SNAPSHOT_TTL_MS;
-  if (!force && cached && Date.now() - cached.at < ttl) return cached;
+  if (!force && cached && Date.now() - cached.at < ttl
+    && (id !== 'default' || defaultAccountBound(provider))) return cached;
   const pending = state.flights.get(key);
   if (pending) {
     if (!forceUsage || pending.forceUsage) return pending.promise;
@@ -612,10 +611,12 @@ async function snapshot(
         // Auth reads yield: quota events may have replaced the captured cache.
         let current = state.cache.get(key);
         if (!current?.usage && auth.authenticated) {
+          const beforeRestore = current;
           const restored = await restoreUsage(provider, id, { auth, accountKey, at: Date.now() });
           assertOwner(state);
           // A task event may have arrived while SQLite was answering.
-          current = state.cache.get(key) ?? restored;
+          const afterRestore = state.cache.get(key);
+          current = afterRestore !== beforeRestore ? afterRestore ?? restored : restored;
         }
         const sameAccount = (previous: AccountSnapshot | undefined) => previous?.auth.identity === auth.identity
           && (provider !== 'openai' || (!!accountKey && previous?.accountKey === accountKey));
@@ -633,8 +634,9 @@ async function snapshot(
                 observedUsage = true;
                 return value;
               }).catch(() => {
-                const fallback = state.cache.get(key) ?? current;
-                return sameAccount(fallback) ? fallback?.usage : undefined;
+                const latest = state.cache.get(key);
+                return sameAccount(latest) && latest?.usage ? latest.usage
+                  : sameAccount(current) ? current?.usage : undefined;
               })
           : undefined;
         const latest = state.cache.get(key);
@@ -743,7 +745,7 @@ function poolFor(providerId: string) {
  */
 function servingAccounts(found: NonNullable<ReturnType<typeof poolFor>>) {
   const { kind, pool, ref } = found;
-  const pinned = pinnedOwnAccount(ref);
+  const pinned = ref.providerId === kind ? undefined : pinnedOwnAccount(ref);
   return pinned
     ? pool.accounts.filter((account) => account.id === pinned && !disconnectedFor(pool, kind, account.id))
     : providerAccounts(kind, pool.accounts, ref.providerId);
@@ -1130,7 +1132,8 @@ export async function readSubscriptionSessionAccount(
     .filter(Boolean)
     .map((key) => readAccountBinding(key, provider))
     .find(Boolean) ?? (legacyAccountId ? { accountId: legacyAccountId } : undefined)
-    ?? (pinnedOwnAccount(requestedRef) ? { accountId: pinnedOwnAccount(requestedRef)! } : undefined);
+    ?? ((requestedRef.providerId !== provider || keys.nativeSessionId) && pinnedOwnAccount(requestedRef)
+      ? { accountId: pinnedOwnAccount(requestedRef)! } : undefined);
   if (pinnedLegacyAccountId && binding?.accountId !== pinnedLegacyAccountId
     && (!binding || !('via' in binding) || binding.via !== requestedRoute))
     return { providerId: provider, state: 'unavailable' };
@@ -1705,7 +1708,8 @@ export async function acquireSubscriptionAccount(
   // A provider merged away with no accounts left keeps pinning its own account for old tasks.
   if (!binding && !options.accountId) {
     const own = pinnedOwnAccount(ref);
-    if (own) options = { ...options, accountId: own };
+    if (own && (ref.providerId !== provider || options.resuming === true))
+      options = { ...options, accountId: own };
   }
   // Accounts are chosen within one provider (placement.ts): the provider the task's account belongs
   // to now, or the provider this request names. A task follows its account; an account that belongs

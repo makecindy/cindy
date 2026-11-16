@@ -39,7 +39,9 @@ vi.mock('../../localDb/client/current.js', () => ({
     };
   },
 }));
-import { readStoredAccountUsage as read, writeStoredAccountUsage as write } from '../accountUsageStorage.js';
+import { readStoredAccountUsage as read, writeStoredAccountUsage as write,
+  readStoredLegacyAccountUsage as readLegacy, writeStoredLegacyAccountUsage as writeLegacy,
+} from '../accountUsageStorage.js';
 beforeEach(() => {
   h.owner = 'a'; h.epoch++; h.boundary = false; h.rows.clear(); h.beforeWrite = undefined; h.sql = undefined;
 });
@@ -79,6 +81,28 @@ it('isolates both providers, accounts and Cindy owners', async () => {
   expect(await read('anthropic', 'one')).toEqual({ used: 10, planTier: 'max_20x' });
   expect(await read('anthropic', 'two')).toEqual({ used: 20 });
   expect(await read('openai', 'one')).toEqual({ used: 30, planType: 'plus' });
+});
+
+// Unit: old broadcaster and pool shared a key but the old writer erased the pool identity.
+// The real queue must preserve both sources in either order, including their distinct clears.
+it.each(['anthropic', 'openai'] as const)('keeps verified and legacy %s observations independent in one account row', async provider => {
+  const verified = { accountFingerprint: 'account-a', used: 12, planType: 'plus' };
+  await Promise.all([write(provider, 'one', verified), writeLegacy(provider, 'one', { used: 42 })]);
+  expect(await read(provider, 'one')).toEqual(verified);
+  expect(await readLegacy(provider, 'one')).toEqual({ used: 42 });
+  await writeLegacy(provider, 'one', null);
+  expect(await read(provider, 'one')).toEqual(verified);
+  expect(await readLegacy(provider, 'one')).toBeNull();
+  await Promise.all([writeLegacy(provider, 'one', { used: 77 }), write(provider, 'one', { ...verified, used: 18 })]);
+  expect(await read(provider, 'one')).toEqual({ ...verified, used: 18 });
+  expect(await readLegacy(provider, 'one')).toEqual({ used: 77 });
+  await write(provider, 'one', { ...verified, accountFingerprint: 'account-b' });
+  expect(await readLegacy(provider, 'one')).toEqual({ ...verified, accountFingerprint: 'account-b' });
+  await write(provider, 'one', null);
+  expect(await readLegacy(provider, 'one')).toBeNull();
+  await writeLegacy(provider, 'one', verified);
+  expect(await read(provider, 'one')).toBeNull(); // legacy cannot promote its old digest to proof
+  expect(await readLegacy(provider, 'one')).toEqual(verified);
 });
 
 it('reads legacy data, then prefers account storage and keeps a cleared account cleared', async () => {

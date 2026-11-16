@@ -297,13 +297,31 @@ it.each(['anthropic', 'openai'] as const)('persists and restores every %s accoun
   expect(h.storedUsage.has(`${provider}:default`)).toBe(true);
   expect(h.storedUsage.has(`${provider}:second`)).toBe(true);
   h.owner += ':restart'; // discard runtime state, retain the simulated owner's database
+  const authorized = h.read.getMockImplementation()!;
+  h.read.mockRejectedValue(new Error('temporary authentication read failure'));
+  expect((await readSubscriptionPool(provider)).accounts.every(a => a.usage === undefined)).toBe(true);
+  h.read.mockImplementation(authorized);
   h.usage.mockRejectedValue(new Error('temporarily offline'));
-  const restored = await readSubscriptionPool(provider);
+  const restored = await refreshSubscriptionPool(provider, true);
   expect(restored.accounts.map(a => a.usage)).toEqual(initial.accounts.map(a => a.usage));
   expect(restored.accounts[1]).toMatchObject(provider === 'anthropic' ? { planTier: 'max_20x' } : { planType: 'plus' });
   h.owner += ':replacement';
   h.read.mockResolvedValue({ authenticated: true, identity: 'different-account' });
   expect((await readSubscriptionPool(provider)).accounts.every(a => a.usage === undefined)).toBe(true);
+});
+
+// Unit: the CLI-origin account used to become an implicit fallback for a newly empty provider.
+// Existing historical bindings must keep working, while new tasks cannot use another supplier.
+it.each(['anthropic', 'openai'] as const)('leaves an emptied %s provider unavailable to fresh tasks after moving its only account', async provider => {
+  h.pools[provider] = { strategy: 'least', accounts: [account('default')] };
+  const old = await acquireSubscriptionAccount(provider, undefined, ['task:original']);
+  await old!.bind(['task:original', 'native:original']); old!.release();
+  await runSubscriptionAccountCommand({ action: 'place', providerId: provider, accountId: 'default', target: null });
+  expect(hasConnectedSubscriptionPool(provider)).toBe(false);
+  expect((await readSubscriptionPool(provider)).accounts).toEqual([]);
+  await expect(acquireSubscriptionAccount(provider, undefined, [], false, { resuming: false })).rejects.toThrow();
+  const resumed = await acquireSubscriptionAccount(provider, undefined, ['task:original', 'native:original'], false, { resuming: true });
+  expect(resumed?.account.configDir).toBe(`${provider}/default`); resumed!.release();
 });
 
 it.each(['anthropic', 'openai'] as const)('removes the CLI-origin %s account and hands its task to the remaining account', async provider => {
@@ -336,14 +354,26 @@ it.each(['anthropic', 'openai'] as const)('moves the CLI-origin %s account witho
   await runSubscriptionAccountCommand({ action: 'place', providerId: provider, accountId: 'default', target: null });
   const destination = h.placement[`${provider}:default`];
   expect((await readSubscriptionPool(provider)).accounts.map(a => a.id)).toEqual(['second']);
-  h.bound = false; // turning off the now separate built-in route cannot revoke the moved profile
   const moved = await acquireSubscriptionAccount(destination, undefined, ['task:moving', 'native:moving']);
   expect(moved?.account.configDir).toBe(`${provider}/default`);
   moved!.release();
   expect(h.bindings.get('native:moving')?.accountId).toBe('default');
-  await runSubscriptionAccountCommand({ action: 'place', providerId: destination, accountId: 'default', target: provider });
+  h.bound = false;
+  await expect(acquireSubscriptionAccount(destination, undefined, [])).rejects.toThrow();
   h.bound = true;
+  await runSubscriptionAccountCommand({ action: 'place', providerId: destination, accountId: 'default', target: provider });
   expect((await readSubscriptionPool(provider)).accounts.map(a => a.id)).toEqual(['default', 'second']);
+});
+
+// Unit security regression: configure creates an unbound CLI placeholder. Moving it is an
+// arrangement change, never consent to reuse another owner's still logged-in system CLI.
+it.each(['anthropic', 'openai'] as const)('does not authorize a moved unbound %s CLI placeholder', async provider => {
+  h.bound = false;
+  h.pools[provider] = { strategy: 'least', accounts: [account('default')] };
+  await runSubscriptionAccountCommand({ action: 'place', providerId: provider, accountId: 'default', target: null });
+  const destination = h.placement[`${provider}:default`];
+  expect((await readSubscriptionPool(destination)).accounts[0].status).toBe('signed-out');
+  await expect(acquireSubscriptionAccount(destination, undefined, [])).rejects.toThrow();
 });
 
 // Unit regression (2026-11-13): native accounts had auth/quota snapshots but no
