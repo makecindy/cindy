@@ -14,6 +14,7 @@ import {
   MAX_REFERENCE_TOKENS,
   resolveSessionReferences,
 } from '../sessionReferenceResolver.js';
+import { resolveSessionReferencesWithPorts } from '../sessionReferenceResolverCore.js';
 
 function historyPage(items: Record<string, unknown>[], hasMore = false) {
   return { ok: true, result: { items, hasMore, nextCursor: null } };
@@ -629,3 +630,22 @@ describe('sessionReferenceResolver', () => {
     expect(context.terminal).toBeUndefined();
   });
 });
+
+// The resolver body the desktop and the Node Host share reads other devices only through the
+// remote ports its caller passes, not through the desktop's device-link.
+describe('sessionReferenceResolver core ports', () => {
+  beforeEach(() => remoteInvoke.mockReset());
+  it('reads another device through the given invoke, not the desktop\'s', async () => {
+    const invokeRemote = vi.fn().mockResolvedValueOnce({
+      ok: true, result: { id: 's-1', title: '远端', agentKind: 'cc', clearedAt: null },
+    }).mockResolvedValueOnce(historyPage([{ id: 'm-1', sessionId: 's-1', role: 'user', content: '问题', createdAt: 1 }]));
+    const [context] = await resolveSessionReferencesWithPorts(
+      { getSelfDeviceId: () => 'host-device', invokeRemote } as never,
+      [{ sessionId: 's-1', deviceId: 'other-device' }],
+    );
+    expect(context.deviceId).toBe('other-device');
+    expect(invokeRemote.mock.calls[0]).toEqual(['other-device', 'local-db:sessions:get', ['s-1']]);
+    expect(remoteInvoke).not.toHaveBeenCalled();
+  });
+});
+

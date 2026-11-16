@@ -28,7 +28,12 @@ export const providersSettings = defineSettings({
     fallbackTargetId: 'settings-panel-providers',
     titleKey: 'subscriptionAccounts.title',
     sectionKey: 'settings.tabs.providers',
-    keywordKeys: ['subscriptionAccounts.add', 'subscriptionAccounts.strategy'],
+    keywordKeys: [
+      'subscriptionAccounts.add',
+      'subscriptionAccounts.strategy',
+      'settings.providers.detail.sameAccountConnections',
+      'settings.providers.detail.sameAccountConnectionsHint',
+    ],
     aliases: [
       '多账号',
       '订阅账号',

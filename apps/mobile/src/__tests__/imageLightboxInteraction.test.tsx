@@ -47,6 +47,11 @@ const runtime = vi.hoisted(() => ({
 }));
 
 // 预览外壳的液态玻璃与系统菜单:测试环境没有原生模块,走实色底与底部面板回退。
+// Keep the real preview layout hook so rotation assertions exercise production geometry.
+vi.mock('@/platform/AdaptiveWindowContext', () => ({ useAdaptiveWindow: () => ({
+  ...runtime.dimensions, insets: runtime.insets, regularWidth: false, regularHeight: true,
+  barEdge: 'none', reservedRegionsSupported: false, regions: [],
+}) }));
 vi.mock('expo-glass-effect', () => ({ GlassView: ({ children }: any) => children }));
 vi.mock('@/session/useLiquidGlassAvailable', () => ({ useLiquidGlassAvailable: () => false }));
 vi.mock('@/platform/chrome', () => ({

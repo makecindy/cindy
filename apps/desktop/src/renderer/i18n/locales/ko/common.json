@@ -1104,19 +1104,23 @@
   },
   "privacyExit": {
     "status": "Cindy를 통해 원격 제어 중입니다",
-    "hint": "화면을 표시하려면 제어 중인 기기의 ‘보안’에서 ‘컴퓨터 프라이버시 화면’을 끄세요. 또는 이 컴퓨터에서 클릭하거나 아무 키나 누른 뒤 ‘연결 끊기’를 선택하세요.",
+    "hint": "이 화면을 표시하려면 제어하는 기기의 “보안”에서 “연결 중 프라이버시 화면 사용”을 끄세요. 또는 이 컴퓨터에서 클릭하거나 아무 키나 누른 뒤 “연결 끊기”를 선택하세요.",
     "title": "원격 데스크톱 연결을 끊을까요?",
-    "detail": "원격 제어를 종료하고 컴퓨터 화면을 복원합니다. 종료 시 잠금이 켜져 있으면 컴퓨터도 잠깁니다.",
+    "detail": "원격 제어를 끝내고 프라이버시 화면을 내립니다. “종료 시 컴퓨터 보호”가 켜져 있으면 컴퓨터도 잠깁니다.",
     "cancel": "연결 유지",
     "disconnect": "연결 끊기"
   },
   "awayGuard": {
     "status": "Cindy가 작업 중입니다",
-    "hint": "아무 키나 누르면 잠깁니다. Touch ID나 암호로 잠금 해제하세요.",
+    "hint": "아무 키나 Touch ID 키를 눌러 잠근 뒤, 지문이나 암호로 잠금을 해제합니다",
     "lockFailed": {
       "status": "Cindy가 이 Mac을 잠그지 못했습니다",
-      "hint": "Control-Command-Q를 눌러 잠그세요. 잠시 후 시스템도 자동으로 잠급니다."
-    }
+      "hint": "컴퓨터를 건드리면 다시 잠금을 시도합니다. 그래도 잠기지 않으면 Touch ID나 암호로 확인한 뒤 내릴 수 있습니다. 덮개를 닫거나 전원 버튼을 눌러 잠글 수도 있습니다.",
+      "hintWindows": "컴퓨터를 건드리면 다시 잠금을 시도합니다. 그래도 잠기지 않으면 Windows Hello나 PIN으로 확인한 뒤 내릴 수 있습니다. Windows 로고 키 + L을 눌러 잠글 수도 있습니다."
+    },
+    "hintWindows": "아무 키나 누르면 잠기며, Windows Hello나 암호로 잠금을 해제합니다",
+    "hintLinux": "아무 키나 누르면 잠기며, 암호로 잠금을 해제합니다",
+    "verifyReason": "프라이버시 화면 내리기"
   },
   "appBadge": {
     "attentionCount": "확인이 필요한 세션: {{count}}"
@@ -1267,9 +1271,9 @@
       "resolutionHint": "해상도를 변경하면 원격 컴퓨터의 실제 모니터에 적용됩니다."
     },
     "settingUnsupported": "이 컴퓨터는 아직 이 설정을 지원하지 않습니다",
-    "privacyScreen": "컴퓨터 프라이버시 화면",
-    "privacyScreenHint": "컴퓨터 화면을 가립니다. 컴퓨터에서 클릭하거나 키를 누른 뒤 확인하면 연결이 끊어집니다. 종료 시 잠금 설정도 적용됩니다.",
-    "privacyActive": "프라이버시 화면이 켜져 있습니다. 컴퓨터에서 클릭하거나 키를 누른 뒤 확인하면 연결이 끊어집니다. 종료 시 잠금 설정도 적용됩니다.",
+    "privacyScreen": "연결 중 프라이버시 화면 사용",
+    "privacyScreenHint": "원격 제어 중 이 컴퓨터의 화면을 가립니다. 컴퓨터 앞에서 누군가 클릭하거나 키를 누르면 연결을 끊을지 먼저 묻습니다.",
+    "privacyActive": "프라이버시 화면이 켜져 있습니다. 컴퓨터 앞에서 누군가 클릭하거나 키를 누르면 연결을 끊을지 먼저 묻습니다.",
     "privacyFailed": "프라이버시 화면을 켜지 못했습니다. 컴퓨터 화면이 여전히 보일 수 있습니다.",
     "hostMute": "원격 컴퓨터 음소거",
     "hostMuteHint": "연결 중 원격 컴퓨터의 소리를 음소거합니다",
@@ -1285,8 +1289,8 @@
     "idleNever": "안 함",
     "idleMinutes_other": "{{count}}분",
     "idleDisconnected": "장시간 조작이 없어 연결이 해제되었습니다. 다시 연결해 주세요.",
-    "lockOnExit": "종료 시 컴퓨터 잠금",
-    "lockOnExitHint": "원격 데스크톱을 종료하면 이 컴퓨터를 잠급니다.",
+    "lockOnExit": "종료 시 컴퓨터 보호",
+    "lockOnExitHint": "원격 데스크톱을 종료하면 컴퓨터를 잠급니다.",
     "lockOnExitFailed": "컴퓨터가 잠겼는지 확인하지 못했습니다. 자리를 비우기 전에 컴퓨터의 잠금 상태를 확인해 주세요.",
     "nativeResolution": "기본 해상도",
     "autoUnlock": "컴퓨터 자동 잠금 해제",
@@ -1328,7 +1332,9 @@
         "body": "이 작업은 다른 컴퓨터에서 {{device}}을(를) 열어 두었습니다. 이 컴퓨터의 “{{plugin}}” 플러그인을 새 버전으로 업데이트하면 오른쪽 사이드바에서 보고 조작할 수 있습니다.",
         "action": "업데이트"
       }
-    }
+    },
+    "lockOnExitHintPrivacy": "종료하면 프라이버시 화면을 표시하여 AI가 계속 작업할 수 있습니다. 컴퓨터를 건드리면 잠깁니다.",
+    "lockedEnablePrivacyHint": "자리를 비운 동안에도 AI가 이 컴퓨터를 계속 사용하게 하려면, 이 컴퓨터의 “설정 → 일반 → 자리를 비울 때”에서 프라이버시 화면을 켜세요."
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1880,7 +1886,8 @@
       "windowBehavior": "앱 동작",
       "shortcuts": "키보드 단축키",
       "mcpServers": "사용자 지정 MCP",
-      "bots": "파트너"
+      "bots": "파트너",
+      "awayFromComputer": "자리를 비울 때"
     },
     "remote": {
       "title": "원격 머신",
@@ -2446,21 +2453,23 @@
       "swallowActivationClickAria": "창으로 돌아올 때 실수로 클릭 방지 전환",
       "macRestartNote": "macOS에서는 변경 사항을 적용하려면 앱을 다시 시작해야 합니다.",
       "awayGuard": {
-        "label": "자리를 비워도 작업 계속하기",
-        "hint": "켜면 이 Mac은 아무 조작이 없어도 화면이 꺼지거나 잠기지 않아 AI가 언제든 사용할 수 있습니다. 한동안 자리를 비우면 검은 화면이 화면을 가리고 AI는 그 뒤에서 작업을 계속합니다. 키를 누르거나 클릭하면 즉시 잠기며 Touch ID나 암호로 잠금 해제할 수 있습니다.",
+        "label": "잠금 대신 프라이버시 화면 사용",
+        "hint": "AI가 화면을 써야 할 때 이 컴퓨터는 화면을 끄거나 잠그지 않습니다. 프라이버시 화면이 화면을 가리고 AI는 그 뒤에서 계속 작업합니다. 키를 누르거나 클릭하면 바로 잠기며, Touch ID나 암호로 잠금을 해제합니다. 작업이 없을 때는 평소처럼 화면이 꺼지고 잠깁니다. 원격 제어가 끝난 뒤에도 프라이버시 화면으로 이 컴퓨터를 보호합니다.",
         "permission": "누군가 이 Mac을 건드릴 때 즉시 잠그려면 '시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용'에서 Cindy를 허용하세요. 허용하기 전에는 평소처럼 화면이 꺼지고 잠깁니다.",
         "preview": "지금 사용해 보기",
-        "previewStarting": "마우스와 키보드에서 손을 떼세요. 3초 후 화면이 가려지며, 아무 키나 누르면 잠깁니다. 그다음 잠금을 해제해 보세요.",
-        "previewUnavailable": "화면을 가리지 못했습니다. Cindy를 다시 시작한 후 다시 시도하세요.",
+        "previewStarting": "마우스와 키보드에서 손을 떼세요. 3초 뒤 프라이버시 화면이 나타납니다. 아무 키나 눌러 잠근 뒤 잠금을 해제해 보세요.",
+        "previewUnavailable": "프라이버시 화면을 표시할 수 없습니다. Cindy를 다시 시작한 뒤 다시 시도하세요.",
         "delay": {
           "30": "30초",
           "60": "1분",
           "120": "2분",
           "300": "5분",
-          "label": "화면을 가리기까지",
-          "hint": "키보드와 마우스를 이 시간 동안 건드리지 않으면 가림 화면이 나타납니다. 기본값은 디스플레이 끄기 시간과 같습니다.",
+          "label": "프라이버시 화면 표시까지의 시간",
+          "hint": "AI가 작업하는 동안 키보드와 마우스를 이 시간만큼 건드리지 않으면 표시합니다. 기본값은 시스템의 화면 끄기 시간입니다.",
           "system": "시스템"
-        }
+        },
+        "hintWindows": "AI가 화면을 써야 할 때 이 컴퓨터는 화면을 끄거나 잠그지 않습니다. 프라이버시 화면이 화면을 가리고 AI는 그 뒤에서 계속 작업합니다. 키를 누르거나 클릭하면 바로 잠기며, Windows Hello나 암호로 잠금을 해제합니다. 작업이 없을 때는 평소처럼 화면이 꺼지고 잠깁니다. 원격 제어가 끝난 뒤에도 프라이버시 화면으로 이 컴퓨터를 보호합니다.",
+        "hintLinux": "AI가 화면을 써야 할 때 이 컴퓨터는 화면을 끄거나 잠그지 않습니다. 프라이버시 화면이 화면을 가리고 AI는 그 뒤에서 계속 작업합니다. 키를 누르거나 클릭하면 바로 잠기며, 암호로 잠금을 해제합니다. 작업이 없을 때는 평소처럼 화면이 꺼지고 잠깁니다. 원격 제어가 끝난 뒤에도 프라이버시 화면으로 이 컴퓨터를 보호합니다."
       }
     },
     "agentIsland": {
@@ -4299,7 +4308,9 @@
           "inline": "실행 위치",
           "signInHere": "이 컴퓨터에서 로그인",
           "writeFailed": "실행 위치를 저장하지 못했습니다. 다시 시도해 주세요."
-        }
+        },
+        "sameAccountConnections": "이 계정의 저장된 연결",
+        "sameAccountConnectionsHint": "같은 계정은 한 번만 표시됩니다. 연결을 선택하면 관리할 설정만 바뀌며 기존 작업의 연결은 유지됩니다."
       },
       "detect": {
         "groupLabel": "이 기기에서 감지됨",
@@ -5322,6 +5333,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex 서버 압축",
+        "description": "켜면 서버 압축을 우선 사용합니다. 끄면 Codex 기본 로컬 요약을 사용하며, 이 경우에도 현재 모델을 호출합니다.",
+        "hint": "이 컴퓨터에서 Codex가 다음 세션을 시작하거나 재개할 때 적용됩니다. 서버 압축을 지원하지 않는 제공자는 기존 방식을 유지합니다.",
+        "loadFailed": "Codex 압축 설정을 불러오지 못했습니다",
+        "saveFailed": "Codex 압축 설정을 저장하지 못했습니다"
+      },
       "title": "컨텍스트 압축",
       "description": "여기서 Claude Code와 Pi의 압축 비율을 조정합니다. Codex는 모델 컨텍스트 설정에 따라 임계값을 정합니다. 원격 압축이 실패하면 요약 압축으로 자동 전환하고 현재 작업에서 계속 사용합니다.",
       "card": {
@@ -6967,7 +6985,8 @@
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
-      }
+      },
+      "keepAwakeIncluded": "프라이버시 화면에 포함됨: 컴퓨터가 잠자기 상태로 전환되지 않습니다."
     },
     "imBot": {
       "beta": "Beta",
@@ -8150,6 +8169,8 @@
         "cindyTextOneshot": "Cindy의 빠른 채널에 질문하고 텍스트 답변을 받을 수 있음",
         "cindyTextOneshotDetail": "시스템의 경량 작업 모델 체인(자동 제목과 같은 경로)을 사용합니다. Agent를 사용하지 않고 파일에도 접근하지 않습니다. 모델 비용이 발생할 수 있습니다.",
         "cindyEmbedText": "텍스트를 벡터로 변환할 수 있습니다(의미 검색용)",
+        "cindyModelsDecisions": "의사결정 모델 호출 가능(모델 사용 한도 사용)",
+        "cindyModelsRerank": "재순위화 모델 호출 가능(모델 사용 한도 사용)",
         "cindyEmbedTextDetail": "텍스트가 시스템 벡터 모델로 전송되어 숫자 배열로 변환됩니다. 한 번에 최대 {{max}}개이며 모델 요금이 발생할 수 있습니다. 생성된 벡터는 플러그인만 보관하며 사용자 라이브러리에는 기록되지 않습니다.",
         "cindySearchWeb": "Cindy AI로 공개 웹을 검색할 수 있음",
         "cindySearchWebDetail": "검색 요청은 공개 웹에 접근하며 Cindy AI 할당량을 소모할 수 있습니다.",
@@ -8172,41 +8193,36 @@
         "agentCompanionsDetail": "모든 동반자(다른 컴퓨터에서 실행 중인 동반자 포함)의 이름, 설명, 아바타와 상태(작업 중, 처리 대기, 대기 중, 오프라인), 하고 있는 작업의 종류(생각 중, 도구 실행 중 등), 처리를 기다리는 요청의 내용(질문, 실행할 명령, 계획 — 대화에 보이는 것과 같음), 메인 대화의 최근 내용(내 메시지와 동반자의 답장 최대 50개, 도구 실행 과정 제외)을 확인하고 메인 창에서 동반자의 대화를 열 수 있습니다. 메시지 전달 권한도 있으면 플러그인에서 입력한 답을 동반자에게 전달할 수 있습니다(질문 답변, 요청 거절, 계획 의견). 실행 허용은 Cindy 자체 확인 창에서 직접 눌러야 합니다. 파일, 도구 실행 과정, 생각 내용은 읽을 수 없습니다.",
         "agentCompanionsRequest": "동반자 보기 권한 확인",
         "hostTools_history": "작업 기록",
-        "hostTools_historyDetail": "Cindy의 작업 도구로 기존 작업 목록, 전체 메시지와 기록 검색을 이용할 수 있습니다. 명시적으로 선택하고 접근 권한이 있는 다른 컴퓨터도 포함됩니다.",
+        "hostTools_historyDetail": "Cindy의 작업 도구로 기존 작업 목록, 전체 메시지와 기록 검색을 이용할 수 있습니다. 명시적으로 선택하고 접근 권한이 있는 다른 컴퓨터도 포함됩니다. 이 컴퓨터의 작업을 기본 형식의 파일로 내보낼 수 있습니다. 플러그인은 설치 시 부여된 권한으로 호출하며 Agent는 실행 시 자신의 권한 설정을 따릅니다.",
         "hostTools_control": "작업 관리",
-        "hostTools_controlDetail": "Cindy의 작업 도구로 기존 작업과 프로젝트를 수정, 보관, 복원하고 제어할 수 있습니다. 위험도가 높은 작업은 매번 Cindy에서 확인해야 합니다.",
+        "hostTools_controlDetail": "Cindy의 작업 도구로 기존 작업과 프로젝트를 수정, 보관, 복원하고 제어하며 이 컴퓨터에 기본 형식의 작업 파일을 가져올 수 있습니다.",
         "hostTools_handoff": "작업에 메시지 보내기",
         "hostTools_handoffDetail": "Cindy의 작업 도구로 기존 작업에 메시지를 보낼 수 있습니다. 현재 작업 정보가 필요한 작업은 대상 작업을 명시해야 합니다.",
         "hostTools_settings": "앱 설정",
         "hostTools_settingsDetail": "Cindy의 설정 도구로 앱 설정을 읽고 변경할 수 있습니다. 비밀 값은 반환되지 않으며 민감한 정보는 직접 입력해야 합니다.",
         "hostTools_scheduler": "자동화 관리",
-        "hostTools_schedulerDetail": "승인하면 플러그인이 자동 작업을 생성, 조회, 수정, 일시 정지, 재개, 삭제, 실행하고 실행 기록을 볼 수 있습니다. Agent가 실행하는 예약 작업은 전체 접근을 포함한 작업의 기본 권한으로 실행됩니다. 위험도가 높은 호스트 작업은 매번 확인합니다.",
+        "hostTools_schedulerDetail": "승인하면 플러그인이 자동 작업을 생성, 조회, 수정, 일시 정지, 재개, 삭제, 실행하고 실행 기록을 볼 수 있습니다. Agent가 실행하는 예약 작업은 전체 접근을 포함한 작업의 기본 권한으로 실행됩니다.",
         "hostTools_terminal": "터미널 및 명령",
         "codeDetailFiles": "플러그인 페이지는 격리된 상태를 유지합니다. 허용된 파일 작업은 선택한 디렉터리 안에서 Cindy가 수행합니다.",
         "hostTools_discovery": "호스트 기능 보기",
         "hostTools_discoveryDetail": "실행 컴퓨터가 제공하는 서비스와 이 플러그인이 선언하고 승인받은 도구 그룹을 읽습니다. 다른 플러그인을 설치하거나 비활성화하거나 권한을 취소할 수 없습니다.",
         "hostTools_browser": "브라우저 제어",
-        "hostTools_browserDetail": "Cindy에서 선택한 브라우저의 페이지를 읽고 조작합니다. 내 브라우저로 전환, 파일 업로드 등 민감한 작업은 계속 Cindy에서 확인합니다.",
+        "hostTools_browserDetail": "Cindy에서 선택한 브라우저의 페이지를 읽고 조작합니다. 내 브라우저로 전환하고 로그인된 페이지에 접근하거나 파일을 업로드할 수 있습니다.",
         "hostTools_computer": "컴퓨터 제어",
         "hostTools_computerDetail": "Cindy의 컴퓨터 도구로 창을 보고 키보드와 마우스를 조작합니다. 시스템 권한, 민감한 입력 보호 및 호스트 위험 규칙이 계속 적용됩니다.",
         "hostTools_ssh": "SSH 연결",
-        "hostTools_sshDetail": "설정된 SSH 연결로 명령을 실행하고 연결을 관리합니다. 자격 증명은 Cindy에 보관됩니다. 확인이 필요한 작업은 매번 확인합니다.",
+        "hostTools_sshDetail": "설정된 SSH 연결로 명령을 실행하고 연결을 관리합니다. 자격 증명은 Cindy에 보관됩니다.",
         "hostTools_docs": "문서 읽기 및 만들기",
-        "hostTools_docsDetail": "이 플러그인의 전용 디렉터리에서 Cindy의 문서 도구를 사용합니다. 문서를 만들거나 변환할 때는 Cindy의 확인이 필요합니다.",
+        "hostTools_docsDetail": "이 플러그인의 전용 디렉터리에서 Cindy의 문서 도구를 사용합니다.",
         "codeDetailHostServices": "플러그인 페이지는 계속 격리됩니다. 승인된 호스트 도구는 각 권한에 따라 브라우저, 컴퓨터, 연결 또는 문서를 조작할 수 있습니다.",
         "hostTools_storage": "저장소 및 플러그인 간 공유",
-        "hostTools_storageDetail": "이 플러그인의 저장소, Library 및 허용된 미디어를 사용합니다. 공유할 때마다 Cindy가 원본, 받는 플러그인 및 복사본을 확인합니다. 다른 플러그인의 저장소는 읽을 수 없습니다.",
-        "codeDetailStorage": "저장소 작업은 이 플러그인의 데이터로 제한됩니다. 다른 플러그인과의 공유는 매번 확인합니다.",
-        "storageShareTitle": "다른 플러그인에 복사본 전달",
-        "storageShareMessage": "플러그인 ‘{{name}}’의 ‘{{file}}’({{size}})을 ‘{{target}}’에 복사합니다. 독립된 복사본이 전달되며 원본의 변경 사항은 동기화되지 않습니다. 상대가 이미 읽거나 저장한 내용은 회수할 수 없습니다.",
+        "hostTools_storageDetail": "이 플러그인의 저장소, Library 및 허용된 미디어를 사용합니다. 양쪽 플러그인이 활성화되어 있고 storage를 선언했으며 같은 계정과 조직에 속할 때만 복사본을 공유합니다. 다른 플러그인의 저장소는 읽을 수 없습니다.",
+        "codeDetailStorage": "저장소 작업은 이 플러그인의 데이터로 제한됩니다. 양쪽 플러그인이 활성화되어 있고 storage를 선언했으며 같은 계정과 조직에 속할 때 복사본을 전달합니다.",
         "hostTools_files": "허용한 디렉터리의 파일",
         "hostTools_filesDetail": "직접 선택한 디렉터리에서 파일을 읽고 쓰고 나열하고 삭제하며 변경을 감시합니다. 이전 선택은 접근 권한을 부여하지 않습니다. 플러그인을 비활성화하면 접근이 중지됩니다.",
         "filesPickMessage": "플러그인 ‘{{name}}’이 선택한 디렉터리의 파일을 읽고 쓰고 나열하고 삭제하며 변경을 감시할 수 있습니다. 접근을 허용할 디렉터리를 선택하세요.",
         "codeDetailTerminal": "플러그인 페이지는 격리된 샌드박스에서 실행됩니다. 승인된 명령은 사용자 권한으로 실행되며 로컬 파일, 앱 및 네트워크에 접근할 수 있습니다.",
-        "hostTools_terminalDetail": "이 컴퓨터에서 사용자 권한으로 명령과 대화형 터미널을 시작하고, 이 플러그인의 프로세스 출력을 읽고 입력을 보내거나 중지합니다. 명령은 파일과 앱에 접근할 수 있습니다. 시작과 입력 등의 변경은 매번 Cindy에서 확인합니다.",
-        "hostToolsRequest": "{{group}} 권한 확인",
-        "hostToolCallTitle": "플러그인 작업 허용",
-        "hostToolCallMessage": "플러그인 ‘{{name}}’이(가) {{server}} / {{tool}}을(를) 호출하려고 합니다. 이번 허용은 아래 매개변수에만 적용됩니다.",
+        "hostTools_terminalDetail": "이 컴퓨터에서 사용자 권한으로 명령과 대화형 터미널을 시작하고, 이 플러그인의 프로세스 출력을 읽고 입력을 보내거나 중지합니다. 명령은 파일과 앱에 접근할 수 있습니다.",
         "agentHiddenTasks": "세션 목록에 표시되지 않는 백그라운드 세션을 만들 수 있음",
         "agentHiddenTasksDetail": "이 플러그인이 만든 세션을 세션 목록, 검색, 알림에 표시하지 않을 수 있습니다. 플러그인 상세의 「백그라운드 세션」에서 언제든지 확인하고 열거나 세션 목록에 표시할 수 있으며, 플러그인을 제거하면 다시 표시됩니다.",
         "agentErrand": "작업을 만들고 실행하며 결과를 읽을 수 있습니다",
@@ -9219,6 +9235,12 @@
         "failed": "정리를 완료하지 못함",
         "pending": "대기 중"
       }
+    },
+    "awayFromComputer": {
+      "title": "자리를 비울 때"
+    },
+    "navigation": {
+      "unavailable": "대상 컴퓨터의 설정을 열 수 없습니다. 온라인 상태이고 원격 제어가 허용되어 있는지 확인하세요. 이전 버전이라면 Cindy를 업데이트하세요."
     }
   },
   "remoteDevice": {
@@ -9334,6 +9356,7 @@
     "backToLogin": "로그인 방식으로 돌아가기"
   },
   "login": {
+    "networkResponseHint": "로그인 서비스에서 예상치 못한 응답을 받았습니다. 중간 네트워크나 프록시가 요청을 차단했을 수 있습니다. 네트워크 및 프록시 설정을 확인하세요.",
     "title": "Cindy에 오신 것을 환영합니다",
     "subtitle": "안전한 로그인 방법을 선택하세요",
     "savedLoginPreserved": "복구 과정에서 저장된 로그인 정보를 유지합니다",
@@ -9680,6 +9703,7 @@
     "tokenLine": "토큰: 총 {{total}} · 입력 {{input}} · 출력 {{output}}",
     "cacheLine": "캐시 세부: 읽기 {{read}} · 쓰기 {{create}} · 적중률 {{rate}}",
     "cacheLineNoRate": "캐시 세부: 읽기 {{read}} · 쓰기 {{create}}",
+    "stepsLine": "이번 턴 요청 {{steps}}회 · 요청당 약 {{context}} 컨텍스트",
     "modelLine": "모델: {{model}}",
     "multipleModels": "모델 {{count}}개",
     "costBreakdownHeader": "모델별:",
@@ -13881,6 +13905,7 @@
         "realtime": "실시간 음성",
         "embedding": "임베딩",
         "decision": "의사결정",
+        "rerank": "재순위화",
         "compression": "압축",
         "ungrouped": "미분류",
         "other": "기타"
@@ -17095,7 +17120,9 @@
         "saveAria": "자동화 저장",
         "createAria": "자동화 만들기",
         "namePlaceholder": "이 자동화의 이름을 지정하세요",
-        "promptPlaceholder": "예: Sentry에서 새로운 크래시를 찾아 주요 회귀를 요약합니다."
+        "promptPlaceholder": "예: Sentry에서 새로운 크래시를 찾아 주요 회귀를 요약합니다.",
+        "expandPrompt": "크게 편집",
+        "collapsePrompt": "접기"
       },
       "executionMode": {
         "label": "실행 방식",
@@ -17143,9 +17170,8 @@
         "automatic": "자동",
         "manually": "수동",
         "session": "세션",
-        "silentRun": "확인 결과 변화가 없으면 알리지 않기",
-        "silentRunTooltip": "변화나 문제만 보고합니다. 리마인더와 예약 메시지는 이 옵션을 끌 수 있습니다.",
-        "silentRunInfoAria": "조용히 실행 규칙 보기",
+        "silentRun": "조용히 실행",
+        "silentRunTooltip": "켜면 작업이 성공적으로 완료되어도 기본적으로 알림을 보내지 않습니다. 작업 프롬프트에서 특정 조건에 알림을 요청한 경우, AI가 조건이 충족될 때 직접 보고합니다. 실패와 오류는 계속 알림을 보냅니다.",
         "finishSendToFeishu": "완료 시 Feishu Bot에 전송",
         "finishSendToWecomGroup": "완료 시 WeCom 그룹으로 전송",
         "configWecomGroup": "WeCom 그룹 알림 설정",
@@ -17255,10 +17281,7 @@
       },
       "layout": {
         "content": "실행 내용",
-        "notifications": "알림 및 조용한 실행",
-        "contentTab": "내용 및 트리거",
-        "optionsTab": "실행 옵션",
-        "sections": "자동화 설정"
+        "notifications": "알림 및 조용한 실행"
       },
       "webhook": {
         "quotaHint": "Webhook 수신 횟수에는 일일 한도가 있으며 여기서 필터링해도 횟수는 줄지 않습니다. 보내는 곳(예: GitHub)에서 필요한 이벤트만 선택하세요.",
@@ -17334,6 +17357,19 @@
         "repositoriesLabel": "저장소",
         "repositoriesHint": "한 줄에 owner/repository 하나를 입력하세요. 이 GitHub App에 승인한 저장소만 작업을 시작할 수 있습니다.",
         "repositoriesInvalid": "owner/repository 형식의 유효한 저장소 이름을 1–50개 입력하세요.",
+        "connectAccount": "계정 연결",
+        "connectionLabel": "연결 방식",
+        "cindyConnection": "Cindy를 통해 연결 (권장)",
+        "manualConnection": "Webhook 수동 설정",
+        "cindyConnectionHint": "GitHub App으로 이벤트를 수신합니다. 계정을 연결하고 저장소를 승인하면 수신 URL이나 비밀 키를 입력할 필요가 없습니다.",
+        "manualConnectionHint": "GitHub 저장소 설정에 Cindy가 제공하는 수신 URL과 비밀 키를 입력합니다.",
+        "manualSetupHint": "저장한 후 자동화 상세 화면에서 수신 URL과 비밀 키를 확인하고 GitHub 저장소 설정에서 연결을 완료하세요.",
+        "accountLabel": "GitHub 계정",
+        "accountDisconnected": "GitHub에 연결되지 않았습니다. 먼저 계정을 연결하세요.",
+        "authorizeRepositories": "저장소 승인",
+        "appUnavailable": "여기서는 GitHub App에 연결할 수 없습니다. Webhook을 수동으로 설정할 수 있습니다.",
+        "cindyConnectionTitle": "GitHub · Cindy를 통한 연결",
+        "manualConnectionTitle": "GitHub · 수동 Webhook",
         "githubAppHint": "이 작업을 실행하는 컴퓨터에서 GitHub App에 연결하고 해당 저장소를 승인하세요. 별도의 Webhook URL이나 비밀 키는 필요하지 않습니다.",
         "githubAppPaused": "이 작업은 일시 중지되었습니다. 이벤트가 작업을 시작하지 않습니다."
       },
@@ -17923,7 +17959,6 @@
       "descriptionSaveDir": "아래 디렉터리는 현재 세션의 작업 디렉터리 밖에 있습니다. 허용하면 이 플러그인이 다운로드한 파일을 여기에 저장할 수 있습니다(기존 파일은 덮어쓰지 않습니다).",
       "descriptionRevealPath": "이 경로는 허용한 뒤에만 현재 Agent로 반환되며 대화 기록에 남습니다. 페어링된 기기에도 해당 기록이 동기화될 수 있습니다. 이 작업은 플러그인에 파일 읽기 권한을 부여하지 않습니다.",
       "descriptionFsWrite": "이 플러그인이 현재 세션의 작업 디렉터리에 아래 파일을 쓰려고 합니다. 허용하면 이 세션 동안 같은 디렉터리에 대한 이후 쓰기는 다시 묻지 않습니다.",
-      "descriptionFsDelete": "이 플러그인이 현재 작업의 작업 디렉터리에서 아래 파일이나 폴더를 삭제하려고 합니다. 폴더 안의 내용도 삭제됩니다. 이 허용은 이번 삭제에만 적용됩니다.",
       "descriptionWorkspace": "이 폴더는 현재 세션의 작업 디렉터리 밖에 있습니다. 허용하면 Cindy가 이 폴더를 작업 디렉터리로 하는 빈 세션을 사이드바에 만듭니다(이미 세션이 있으면 재사용). 폴더 안의 파일은 읽지 않습니다.",
       "descriptionForgeSource": "아래 디렉터리는 현재 세션의 작업 디렉터리 밖에 있습니다. 허용하면 Forge가 해당 디렉터리에서 플러그인을 패키징하거나 스캐폴드합니다(.cindy 산출물 또는 스켈레톤 파일을 씁니다).",
       "descriptionForgeScaffold": "아래 디렉터리는 현재 세션의 작업 디렉터리 밖에 있습니다. 허용하면 Forge가 해당 디렉터리에 플러그인 소스 스켈레톤을 만듭니다.",
@@ -21559,5 +21594,73 @@
     "switchOffer": {
       "action": "{{model}}(으)로 바꿔 계속"
     }
+  },
+  "projectSettings": {
+    "autoLoading": "아이콘 찾는 중…",
+    "autoNone": "프로젝트 이름으로 만든 문자 아이콘을 사용합니다.",
+    "autoSource": "출처",
+    "githubAvatar": "GitHub 계정 이미지 사용",
+    "title": "프로젝트 설정",
+    "name": "표시 이름",
+    "saveName": "이름 저장",
+    "reset": "기본값 복원",
+    "icon": "아이콘",
+    "directory": "프로젝트 폴더",
+    "done": "완료",
+    "failed": "저장하지 못했습니다. 다시 시도하세요.",
+    "unavailable": "설정을 사용할 수 없습니다. 업데이트된 컴퓨터에 연결하고 다시 시도하세요.",
+    "back": "뒤로",
+    "cancel": "취소",
+    "changeIcon": "아이콘 변경",
+    "chooseIcon": "아이콘 선택",
+    "save": "저장",
+    "symbols": "아이콘",
+    "emoji": "이모지",
+    "letters": "문자",
+    "image": "이미지",
+    "upload": "이미지 업로드",
+    "imageHint": "PNG, JPG, WebP · 정사각형으로 자르기",
+    "imageError": "이미지를 읽을 수 없습니다. 더 작은 PNG 또는 JPG를 사용하세요.",
+    "search": "아이콘 검색",
+    "customEmoji": "이모지 붙여넣기",
+    "lettersHint": "문자 또는 숫자 1~2개를 입력하세요.",
+    "thisComputer": "이 컴퓨터",
+    "nameHint": "프로젝트 목록에 표시됩니다. 폴더 이름은 바뀌지 않습니다.",
+    "copy": "경로 복사",
+    "copied": "복사됨",
+    "applyIcon": "아이콘 사용",
+    "noResults": "일치하는 아이콘이 없습니다",
+    "discardHint": "저장하지 않은 변경을 취소할까요?",
+    "keepEditing": "계속 편집",
+    "discard": "변경 취소",
+    "colors": {
+      "default": "기본 색상 (테마에 맞춤)"
+    }
+  },
+  "taskManagement": {
+    "scope": "이 컴퓨터의 현재 계정에만 적용됩니다.",
+    "archive": "자동 보관",
+    "enabled": "사용하지 않는 작업 자동 보관",
+    "description": "사용하지 않는 작업을 자동으로 보관합니다. 기록은 계속 확인할 수 있습니다.",
+    "days": "미사용 일수",
+    "daysHint": "마지막 메시지 송수신 또는 실행 종료부터 계산합니다.",
+    "days7": "7일",
+    "days14": "14일",
+    "days30": "30일",
+    "customDays": "일수 지정",
+    "invalidDays": "1~365 사이의 정수를 입력하세요.",
+    "reset": "기본값 복원",
+    "archiveHint": "사용 중인 작업은 유지됩니다. 보관된 작업은 언제든 복원할 수 있습니다.",
+    "preview": "보관 미리보기",
+    "loadFailed": "설정을 불러오지 못했습니다.",
+    "loading": "설정을 불러오는 중…",
+    "candidateCount": "보관 가능: {{count}}개",
+    "keptCount": "유지: {{count}}개",
+    "lastCheck": "최근 확인: {{date}}",
+    "notChecked": "아직 자동 확인하지 않았습니다",
+    "saveFailed": "설정이 저장되지 않았습니다. 다시 시도하세요.",
+    "archivedNotice": "미사용 작업 {{count}}개를 자동 보관했습니다",
+    "undo": "실행 취소",
+    "undoFailed": "취소할 수 없습니다. 보관된 작업에서 복원하세요."
   }
 }

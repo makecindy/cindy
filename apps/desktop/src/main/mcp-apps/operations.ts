@@ -17,6 +17,8 @@ export const mcpAppOperationSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('poll'), viewId: id, after: z.number().int().nonnegative().default(0) }),
   z.object({ op: z.literal('context'), viewId: id, context: McpUiHostContextSchema }),
   z.object({ op: z.literal('teardown'), viewId: id, alreadyNotified: z.boolean().default(false) }),
+  z.object({ op: z.literal('suspend'), viewId: id }),
+  z.object({ op: z.literal('resume'), viewId: id }),
   z.object({
     op: z.literal('display-mode'),
     viewId: id,
@@ -76,17 +78,13 @@ export async function handleMcpAppOperation(
   switch (input.op) {
     case 'open': {
       if (sessionId === null) throw new Error('MCP_APP_SESSION_UNAVAILABLE');
-      const document = await host.open(caller, sessionId, input.clientId, input.context, input.openId);
-      if (!local) {
-        if (document.sdk && input.sdkCacheHashes?.length) {
-          const hash = createHash('sha256').update(mcpAppSdkCacheText(document.sdk)).digest('hex');
-          if (input.sdkCacheHashes.includes(hash)) {
-            const { sdk: _sdk, ...rest } = document;
-            return { ...rest, sdkRef: hash } satisfies McpAppDocument;
-          }
-        }
-        return document;
-      }
+      const resolveSdkRef = !local && input.sdkCacheHashes?.length
+        ? (sdk: NonNullable<McpAppDocument['sdk']>) => {
+          const hash = createHash('sha256').update(mcpAppSdkCacheText(sdk)).digest('hex');
+          return input.sdkCacheHashes!.includes(hash) ? hash : undefined;
+        } : undefined;
+      const document = await host.open(caller, sessionId, input.clientId, input.context, input.openId, resolveSdkRef);
+      if (!local) return document;
       local.supply(document, caller, input.context as Record<string, unknown>);
       // Main supplies the private document directly to the isolated frame.
       return { viewId: document.viewId, transport: 'sandbox',
@@ -114,6 +112,14 @@ export async function handleMcpAppOperation(
       return {};
     case 'teardown':
       await host.teardown(caller, sessionId, input.viewId, input.alreadyNotified);
+      return {};
+    case 'suspend':
+      if (!local) throw new Error('MCP_APP_OWNER_ONLY');
+      await host.setSuspended(caller, sessionId, input.viewId, true);
+      return {};
+    case 'resume':
+      if (!local) throw new Error('MCP_APP_OWNER_ONLY');
+      await host.setSuspended(caller, sessionId, input.viewId, false);
       return {};
     case 'display-mode':
       host.displayMode(caller, sessionId, input.viewId, input.mode);

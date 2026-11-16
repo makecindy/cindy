@@ -20,7 +20,7 @@
 // This module builds the single Desktop instance. Its ports resolve the Desktop modules
 // when called, never when this module loads.
 import type { RoutingTransform } from '@cindy/anthropic-compat-proxy';
-import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
+import { createAttachmentRecovery, createRequestSizeController } from './oversized-attachment-recovery.js';
 import { outboundFetch } from './outbound-fetch.desktop.js';
 import { isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
 import { createPiWebSocketRequestPreparer, resolvePiWebSocketUpstream, piWebSocketTransforms } from './pi-subscription-websocket.js';
@@ -34,6 +34,7 @@ import { createAnthropicCompatProxyHost } from './anthropicCompatProxyHostCore.j
 
 const desktopProxy = createAnthropicCompatProxyHost({
   createAttachmentRecovery: (...args) => createAttachmentRecovery(...args),
+  createRequestSizeController: (...args) => createRequestSizeController(...args),
   outboundFetch: (...args) => outboundFetch(...args),
   isOpenAiSubscriptionProviderId: (...args) => isOpenAiSubscriptionProviderId(...args),
   createPiWebSocketRequestPreparer: (...args) => createPiWebSocketRequestPreparer(...args),

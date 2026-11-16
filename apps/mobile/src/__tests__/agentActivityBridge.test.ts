@@ -256,3 +256,32 @@ it('retains the last confirmed activity through background disconnects and verif
   await act(() => root.render(createElement(AgentActivityBridge)));
   expect(mock.native.setState).toHaveBeenLastCalledWith(null);
 });
+
+// Unit: the real bridge previously discarded the recovery budget on each
+// Device Link status change. One stale activity + offline/online is sufficient.
+it('keeps stale recovery bounded across connection changes in the mounted bridge', async () => {
+  setMobileAuthOwner('account-a', 'global');
+  vi.stubGlobal('__DEV__', true);
+  const send = vi.fn<typeof fetch>(async () => ({ ok: true, status: 200 } as Response));
+  vi.stubGlobal('fetch', send);
+  mock.native.configureAccount = vi.fn(async () => {});
+  mock.native.getPushRegistration = vi.fn(async () => ({
+    accountScope: JSON.stringify(['https://example.test', 'account-a']),
+    enabled: true, startToken: 'start', updateToken: 'update', activityId: 'active',
+    dismissed: false, supportsInputPushToken: true, isStale: true,
+  }));
+  mock.link.status = 'online';
+  await act(() => root.render(createElement(AgentActivityBridge)));
+  for (const status of ['offline', 'online']) {
+    mock.link.status = status;
+    await act(() => root.render(createElement(AgentActivityBridge)));
+  }
+  const recoveries = () => send.mock.calls.filter(call => JSON.parse(call[1]!.body as string).refreshStale);
+  expect(recoveries()).toHaveLength(1);
+  await act(() => {
+    vi.advanceTimersByTime(30_000);
+    for (const listener of mock.appStateListeners) listener('active');
+  });
+  expect(recoveries()).toHaveLength(2);
+  expect(mock.native.setState).not.toHaveBeenCalled();
+});

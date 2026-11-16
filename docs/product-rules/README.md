@@ -18,6 +18,7 @@
 | Telegram 命令、消息、附件与官方／个人 bot 差异 | [Telegram 能力台账](telegram-bot-parity.md) |
 | 通知上的按钮：在锁屏与 Apple Watch 上允许一次、拒绝、回复 | [通知上的按钮](notification-actions.md) |
 | 登录、密码、验证码等主人代输入 | [代输入](input-handoff.md) |
+| 隐私屏：用遮罩代替锁屏、远程控制时遮住屏幕、退出后保护，以及「离开电脑时」设置 | [隐私屏](privacy-screen.md) |
 | 邮件卡的收件人与编辑、发送确认、深浅色、已读标记与头像权限 | [邮件卡](mail-card.md) |
 | 目标运行、补充消息、停止与手机 `/goal` | [目标模式](goal-mode.md) |
 | 自动任务与目标任务的生命线：归档后恢复、归档前确认、失败后手动继续 | [归档与自动化](archive-pauses-automations.md) |

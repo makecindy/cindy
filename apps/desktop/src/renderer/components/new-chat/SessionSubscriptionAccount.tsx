@@ -7,6 +7,7 @@
  */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { TFunction } from 'i18next';
+import type { ProviderView } from '@cindy/model-providers';
 import { useOptionalDataOwnerGeneration } from '@/contexts/AuthContext';
 
 import {
@@ -97,7 +98,7 @@ async function readOlderHostTaskUsage(
 }
 
 interface ContextValue {
-  providerId: SubscriptionProvider;
+  providerId: string;
   /** 执行任务的电脑；null = 本机。 */
   deviceId: string | null;
   account: SessionSubscriptionAccountState;
@@ -113,10 +114,13 @@ export function sessionSubscriptionPoolProvider(
   agent: 'cc' | 'codex' | 'pi',
   providerId: string | null | undefined,
   remoteHostId?: string | null,
+  provider?: ProviderView,
 ): SubscriptionProvider | null {
   if (remoteHostId) return null;
-  if (providerId === 'anthropic') return agent === 'cc' ? providerId : null;
-  return providerId === 'openai' ? providerId : null;
+  const kind = provider && provider.id === providerId
+    ? provider.subscriptionAccountPool ?? provider.subscriptionPool ?? providerId : providerId;
+  if (kind === 'anthropic') return agent === 'cc' ? kind : null;
+  return kind === 'openai' ? kind : null;
 }
 
 // 切回同一个任务时先显示上次读到的账号，再在后台刷新。
@@ -148,14 +152,16 @@ function rememberUnsupportedSessionQuery(key: string): void {
 
 export function SessionSubscriptionAccountProvider({
   providerId,
+  routeProviderId,
   deviceId,
   sessionId,
   nativeSessionId,
   refreshKey,
   children,
 }: {
-  /** 任务这一轮用的供应商；只有 anthropic / openai 有账号池。 */
+  /** Subscription family; the actual source may be an independent account provider. */
   providerId: string | null | undefined;
+  routeProviderId?: string | null;
   /** 执行任务的另一台电脑；null = 本机(不传本机自己的 id)。 */
   deviceId: string | null;
   sessionId: string | null | undefined;
@@ -167,13 +173,14 @@ export function SessionSubscriptionAccountProvider({
   const pool =
     isSubscriptionProvider(providerId) && (sessionId || nativeSessionId) ? providerId : null;
   const remoteDeviceId = deviceId || null;
+  const route = routeProviderId || pool;
   const ownerGeneration = useOptionalDataOwnerGeneration();
   const foreground = useDocumentVisible(pool !== null);
   const reconnectEpoch = useDeviceLinkReconnectEpoch(
     pool && remoteDeviceId ? remoteDeviceId : undefined,
   );
   const key = pool
-    ? [remoteDeviceId ?? '', pool, sessionId ?? '', nativeSessionId ?? ''].join('\n')
+    ? [remoteDeviceId ?? '', pool, route, sessionId ?? '', nativeSessionId ?? ''].join('\n')
     : '';
   const [loaded, setLoaded] = useState<{
     key: string;
@@ -189,6 +196,7 @@ export function SessionSubscriptionAccountProvider({
     const query: SubscriptionSessionAccountQuery = {
       action: 'session',
       providerId: pool,
+      ...(route && route !== pool ? { routeProviderId: route } : {}),
       ...(sessionId ? { sessionId } : {}),
       ...(nativeSessionId ? { nativeSessionId } : {}),
     };
@@ -210,6 +218,7 @@ export function SessionSubscriptionAccountProvider({
               )
             : await window.electronAPI.subscriptionAccounts?.sessionAccount?.(query);
           view = parseSubscriptionSessionAccountView(raw, pool);
+          if (route !== pool && view?.routeProviderId !== route) view = null;
         } catch (error) {
           // 旧执行端或临时读取失败，先尝试已有的原生会话查询；明确不支持的记下，不再重发。
           if (remoteDeviceId && isUnsupportedSessionAccountQuery(error))
@@ -217,7 +226,7 @@ export function SessionSubscriptionAccountProvider({
         }
       }
       // 旧版本仍能按原生会话读出这个任务所在账号的用量；原来的读取只读那台的默认账号，不能沿用。
-      if (!view && remoteDeviceId && nativeSessionId)
+      if (!view && route === pool && remoteDeviceId && nativeSessionId)
         view = await readOlderHostTaskUsage(remoteDeviceId, pool, nativeSessionId).catch(() => null);
       if (!view) {
         // 读取失败不能证明任务用的是默认账号；保留已知结果，否则保持未知并继续重试。
@@ -250,7 +259,7 @@ export function SessionSubscriptionAccountProvider({
       offChanged?.();
       window.removeEventListener('focus', onFocus);
     };
-  }, [pool, key, remoteDeviceId, sessionId, nativeSessionId, foreground, refreshKey, reconnectEpoch, ownerGeneration]);
+  }, [pool, route, key, remoteDeviceId, sessionId, nativeSessionId, foreground, refreshKey, reconnectEpoch, ownerGeneration]);
 
   const loading = useMemo<SessionSubscriptionAccountState | null>(
     () => (pool ? { providerId: pool, state: 'loading' } : null),
@@ -265,8 +274,8 @@ export function SessionSubscriptionAccountProvider({
         ? cached.view
         : loading;
   const value = useMemo<ContextValue | null>(
-    () => (pool && account ? { providerId: pool, deviceId: remoteDeviceId, account } : null),
-    [pool, remoteDeviceId, account],
+    () => (route && account ? { providerId: route, deviceId: remoteDeviceId, account } : null),
+    [route, remoteDeviceId, account],
   );
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }

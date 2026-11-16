@@ -160,7 +160,7 @@ interface Running {
   /**
    * The turn runs in an ordinary task, not a lane: a task card's task (bot-group-chat.md §10) or the
    * task of the group's Cindy (§9). The task also runs its owner's own turns, so only this turn's
-   * exact input settles the execution and the task is never stopped from the group.
+   * exact input settles the execution. Explicit group stops cancel only that input.
    */
   inTask?: boolean;
   /** The group's teammates, set when this reply may name another with @ (servers with groupTeammateMentions). */
@@ -1171,7 +1171,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     await registerCompanionHomes({ api: request, selfDeviceId: self, actors, log: deps.log,
       botIds: profiles.filter(p => p.status === 'active').map(p => p.id), isDemoted: botId => runtime.state.isDemoted(botId) });
     if (!current()) return;
-    runtime.reconcile(profiles.map(p => ({ id: p.id, status: p.status })));
+    await runtime.reconcile(profiles.map(p => ({ id: p.id, status: p.status })));
     publishHomes();
   }
   function publishHomes() {
@@ -2392,11 +2392,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     });
   }
   /**
-   * Stops the turn's own lane. A task card's task is not stopped from the group: the words are
-   * already in it, like any message sent to a task, and its owner may be using it.
+   * Task inputs are stopped only for an explicit group stop, scoped to this execution's
+   * input identity. Lease failures/disposal never stop an unrelated ordinary task turn.
    */
-  function stopRunSession(run: Running): Promise<void> {
-    return run.sessionId && !run.inTask ? deps.abortLane(run.sessionId).catch(() => undefined) : Promise.resolve();
+  function stopRunSession(run: Running, explicit = false): Promise<void> {
+    if (!run.sessionId || (run.inTask && !explicit)) return Promise.resolve();
+    return (run.inTask ? deps.abortLane(run.sessionId, run.clientId) : deps.abortLane(run.sessionId)).catch(() => undefined);
   }
   /**
    * Group messages as background for a task: one shortened line each, oldest first, at most
@@ -2454,6 +2455,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           speakerName: speaker ? memberName(speaker, s.members) : source.author.name } },
       // A task started again after a restart keeps its own permission and plan mode.
       resumeWithStoredPermissionMode: true,
+      assertDispatchCurrent: () => {
+        if (!current() || running.get(execution.id) !== run || run.settlement) throw new Error('STALE_EXECUTOR');
+      },
       onAccepted: async () => {
         if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
         run.accepted = true;
@@ -2469,7 +2473,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (!run.settlement?.cancelled) {
       run.settlement = { terminal: { sessionId: run.sessionId, activeInputClientId: run.clientId, outcome: 'done', resultText: '' }, cancelled: true, payload: {}, retryAt: 0 };
       run.releaseToolAuthority?.();
-      await stopRunSession(run);
+      await stopRunSession(run, true);
     }
     // Keep the lane resolvable while the existing cancel receipt is being delivered.
     // A transport failure retries this receipt, never the model or a completion reply.
@@ -2703,7 +2707,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           // without publishing that reply or waiting for the server's lease expiry.
           run.settlement = { terminal: pending.terminal, cancelled: true, payload: {}, retryAt: 0 };
           run.releaseToolAuthority?.();
-          await stopRunSession(run);
+          await stopRunSession(run, true);
           return;
         }
         // Keep the result during transport/temporary service failures. A definitive
@@ -2804,8 +2808,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * computer — the server hands it to no one else — with the requester's own logins, model and
    * permission: one ordinary visible message in this computer's task for the group, the owner's own
    * request, like an owner's message to their bot in an IM channel. The task's turn for this exact
-   * input is the reply (`inTask`): its end completes the execution, and nothing from the group ever
-   * stops the task. The group shows 「处理中」 under the lease meanwhile. Tasks it opens show as cards.
+   * input is the reply (`inTask`): its end completes the execution, and an explicit group stop
+   * targets only that input. The group shows 「处理中」 under the lease meanwhile. Tasks it opens show as cards.
    */
   async function runAssistantExecution(execution: Execution, lane?: string) {
     if (running.has(execution.id)) return;
@@ -2864,6 +2868,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             speakerName: speaker ? memberName(speaker, s.members) : source.author.name } },
         ...(attachments.length ? { attachments } : {}),
         resumeWithStoredPermissionMode: true,
+        assertDispatchCurrent: () => {
+          if (!live() || run.settlement) throw new Error('STALE_EXECUTOR');
+        },
         onAccepted: async () => {
           if (!live()) throw new Error('STALE_EXECUTOR');
           run.accepted = true;
@@ -3269,6 +3276,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const dispatched = await deps.dispatch({ targetSessionId: lane.sessionId, clientId: run.clientId, message: stillContinuous ? prompt : fullPrompt,
         persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${fullPrompt}`, autoReviewUserText,
         attachments, toolsDisabled: toolsOff,
+        assertDispatchCurrent: () => {
+          if (!current() || running.get(execution.id) !== run || run.settlement) throw new Error('STALE_EXECUTOR');
+        },
         onQueued: async clientId => { run.clientId = clientId; }, onAccepted: async () => {
           if (!current() || running.get(execution.id) !== run) { await deps.abortLane(lane.sessionId); throw new Error('STALE_EXECUTOR'); }
           run.accepted = true;

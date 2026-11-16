@@ -65,8 +65,7 @@ export async function learnFixture(t, { publish = true } = {}) {
   const project = path.join(root, 'project');
   fs.mkdirSync(profile, { recursive: true });
   fs.mkdirSync(project);
-  // Runtime Skill discovery walks ancestors up to the nearest Git root. A
-  // Windows temp directory can live under the real home; keep that walk isolated.
+  // Native Skill discovery walks ancestors to a Git root; keep it inside the fixture.
   fs.mkdirSync(path.join(project, '.git'));
   configureHostOwner({ userDataDir: profile, ownerId: 'learn-capture-owner' });
   t.after(() => configureHostOwner({ userDataDir: profile, ownerId: null }));

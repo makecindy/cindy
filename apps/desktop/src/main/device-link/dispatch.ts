@@ -1143,7 +1143,14 @@ function projectInvokeResultForTunnel(
     : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
-    if (!sameAccountController) delete rest.subscriptionPoolTarget;
+    if (!sameAccountController) {
+      delete rest.subscriptionPoolTarget;
+      delete rest.subscriptionAccountKeys;
+      if (rest.openAiAccount && typeof rest.openAiAccount === 'object') {
+        const { accountKey: _key, ...account } = rest.openAiAccount as Record<string, unknown>;
+        rest.openAiAccount = account;
+      }
+    }
     // 「允许被远程调用」只是标记、不裁剪目录：远程控制与手机仍要看到全部供应商，
     // 只有远程 Agent 的选择入口按它筛选。只放行布尔值。
     delete rest.remoteInvocationEnabled;
@@ -4809,7 +4816,7 @@ function projectProviderListForShare(
             agent, Array.isArray(models) ? models.filter(allowed) : [],
           ]));
         }
-        for (const field of ['imageModels', 'videoModels', 'audioModels', 'embeddingModels']) {
+        for (const field of ['imageModels', 'videoModels', 'audioModels', 'embeddingModels', 'evaluationModels']) {
           if (Array.isArray(scrubbed[field])) scrubbed[field] = (scrubbed[field] as unknown[]).filter(allowed);
         }
       }

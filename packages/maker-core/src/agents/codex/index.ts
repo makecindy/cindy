@@ -5467,6 +5467,19 @@ assertRouteCurrent();
             ? host.getRemoteCompactionProviderId?.() ?? host.getDefaultModelProviderId?.()
             : host.getDefaultModelProviderId?.();
 
+    // Apply the explicit preference before native initialization to avoid starting
+    // a remote identity only to restart it as summary for the same new task.
+    const localSummaryProvider = opts.remoteHostId ? null : host.getLocalCompactionProviderId?.();
+    const serverCompactionPreference = opts.remoteHostId || hostedGuest
+      ? null : this.deps.getCodexServerCompactionPreference?.() ?? null;
+    // Only replace an existing remote-compaction identity. Custom provider identities
+    // already use native local compaction and must retain their routing/auth policy.
+    if (serverCompactionPreference === false && localSummaryProvider && threadModelProvider
+      && (threadModelProvider === host.getRemoteCompactionProviderId?.()
+        || threadModelProvider === host.getCindyRemoteCompactionProviderId?.())) {
+      threadModelProvider = localSummaryProvider;
+    }
+
     let initResp: Awaited<ReturnType<AppServerHost['ensureStarted']>>;
     try {
       assertCurrentHost('initialize');
@@ -7016,7 +7029,6 @@ assertRouteCurrent();
         indexedThreadAbsent = true;
       }
     }
-    const localSummaryProvider = opts.remoteHostId ? null : host.getLocalCompactionProviderId?.();
     if (localSummaryProvider && opts.resumeSessionId && isLikelyValidThreadId(opts.resumeSessionId)) {
       // Native modelProvider is durable thread metadata. Read it before overriding
       // resume defaults so recovery survives closing/reopening this same task.
@@ -7029,7 +7041,9 @@ assertRouteCurrent();
           'thread/read', { threadId: opts.resumeSessionId, includeTurns: false },
           { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
         )).thread.modelProvider;
-        if (savedProvider === localSummaryProvider) threadModelProvider = localSummaryProvider;
+        if (savedProvider === localSummaryProvider && serverCompactionPreference !== true) {
+          threadModelProvider = localSummaryProvider;
+        }
       } catch (error) {
         // Let the existing resume path recover an unused thread without a rollout.
         // Other read failures must not silently reset a saved summary identity.
