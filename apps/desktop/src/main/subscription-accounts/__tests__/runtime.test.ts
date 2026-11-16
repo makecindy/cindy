@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   tokens: vi.fn(),
   usage: vi.fn(),
   modelCacheRead: vi.fn(),
+  directoryEntries: vi.fn(),
   login: vi.fn(),
   bound: true,
   shared: true,
@@ -125,7 +126,7 @@ vi.mock('../../appSessionState.js', () => ({
   isAppSessionBoundaryPending: () => false,
 }));
 vi.mock('../../maker-host/nativeProviderAuthBinding.js', () => ({
-  bindNativeProviderAuth: vi.fn(),
+  bindNativeProviderAuth: vi.fn(() => { h.bound = true; h.shared = true; }),
   isNativeProviderAuthBound: () => h.bound,
   isNativeProviderAuthSharedSystemCredential: () => h.bound && h.shared,
 }));
@@ -150,8 +151,8 @@ vi.mock('../../usage/accountUsageStorage.js', () => ({
     if (current()) h.storedUsage.set(`${kind}:${id}`, structuredClone(value));
   },
 }));
-vi.mock('node:fs/promises', () => ({ mkdir: vi.fn(), readFile: h.modelCacheRead,
-  default: { mkdir: vi.fn(), writeFile: vi.fn(), rm: vi.fn(), readdir: async () => [],
+vi.mock('node:fs/promises', () => ({ mkdir: vi.fn(), readFile: h.modelCacheRead, readdir: h.directoryEntries,
+  default: { mkdir: vi.fn(), writeFile: vi.fn(), rm: vi.fn(), readdir: h.directoryEntries,
     readFile: h.modelCacheRead, stat: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } },
 }));
 // The host production dispatcher runs in memory; no listener or personal files.
@@ -275,6 +276,7 @@ beforeEach(() => {
   }));
   h.usage.mockReset().mockResolvedValue({});
   h.modelCacheRead.mockReset().mockRejectedValue(new Error('no account cache'));
+  h.directoryEntries.mockReset().mockResolvedValue([]);
   h.login.mockReset().mockResolvedValue(undefined);
   h.legacyRead.mockReset().mockResolvedValue({
     authenticated: true,
@@ -2341,6 +2343,333 @@ describe('tasks using imported Codex connections', () => {
 });
 
 describe('native account assignment on the executing computer', () => {
+  // PR #10910 merge / unit: the anonymous projection must use #10885 readiness,
+  // not wait for an unread sibling or label an entirely pending pool unavailable.
+  it.each(['ready-peer', 'all-pending'] as const)('projects only confirmed accounts with %s status', async stage => {
+    vi.useFakeTimers();
+    h.pools.anthropic = { strategy: 'least', accounts: ['default', 'second'].map(account) };
+    let finish!: () => void;
+    const barrier = new Promise<void>(resolve => { finish = resolve; });
+    h.read.mockImplementation(async (_kind, directory: string) => {
+      if (stage === 'all-pending' || directory.endsWith('/default')) await barrier;
+      return { authenticated: true, identity: directory };
+    });
+    const result: { value?: Awaited<ReturnType<typeof readSubscriptionPoolScheduling>> } = {};
+    const pending = readSubscriptionPoolScheduling('anthropic', 'claude-sonnet-5').then(value => { result.value = value; });
+    try {
+      await vi.advanceTimersByTimeAsync(2_000);
+      if (stage === 'ready-peer') expect(result.value).toMatchObject({ accounts: 1, running: 0, full: false });
+      else expect(result.value).toBeUndefined();
+      expect(h.bindings.size).toBe(0);
+      finish();
+      await pending;
+      expect(await readSubscriptionPoolScheduling('anthropic', 'claude-sonnet-5'))
+        .toMatchObject({ accounts: 2, running: 0, full: false });
+    } finally {
+      finish();
+      await pending;
+      vi.useRealTimers();
+    }
+  });
+
+  // PR #10885 review, unit: control reads may use paused accounts without task admission.
+  // #10892 moved Claude discovery to its own probe; retain the Claude control contract and
+  // exercise the remaining real refresh adapter caller (pools of legacy Codex profiles).
+  it.each(['anthropic', 'openai'] as const)('reads paused %s control accounts without admitting a new task or reserving capacity', async provider => {
+    const ids = provider === 'anthropic' ? ['default', 'second'] : ['first', 'second'];
+    h.pools[provider] = { strategy: 'least', accounts: ids.map(id => ({ ...account(id), paused: true })),
+      ...(provider === 'openai' ? { legacyCodexAccounts: { 'old-first': 'first', 'old-second': 'second' } } : {}) };
+    if (provider === 'anthropic') {
+      const lease = await acquireSubscriptionAccount(provider, undefined, [], true);
+      expect(lease?.account.configDir).toBe('anthropic/default');
+      lease!.release();
+    } else {
+      const modelRefresh = vi.fn<BaseAgent['refreshLocalModels']>().mockResolvedValue(true);
+      const agent = withSubscriptionAccounts({ kind: 'codex', refreshLocalModels: modelRefresh } as unknown as BaseAgent);
+      expect(await agent.refreshLocalModels()).toBe(true);
+      expect(modelRefresh.mock.calls[0][0]?.[NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/first');
+    }
+    expect((await readSubscriptionPool(provider)).accounts.map(entry => [entry.paused, entry.running]))
+      .toEqual([[true, 0], [true, 0]]);
+    expect(h.bindings.size).toBe(0);
+    await expect(acquireSubscriptionAccount(provider, undefined, [])).rejects.toThrow('No subscription account is available');
+  });
+
+  // F1, unit: real acquire, task reader and adapter must not wait for another account's CLI.
+  // Previous coverage only settled every sibling before asserting the selected directory.
+  it.each(['anthropic', 'openai'] as const)('resumes a healthy %s task while its sibling status never answers', async provider => {
+    vi.useFakeTimers();
+    h.pools[provider] = { strategy: 'least', accounts: [account('default'), account('second')] };
+    h.bindings.set('task:healthy', { providerId: provider, accountId: 'second' });
+    h.bindings.set('native:healthy-native', { providerId: provider, accountId: 'second' });
+    let finish!: (value: object) => void;
+    const slow = new Promise<object>(resolve => { finish = resolve; });
+    h.read.mockImplementation(async (_kind, directory: string) => directory.endsWith('/default')
+      ? slow : { authenticated: true, identity: 'healthy@example.test' });
+    const native = { id: 'healthy-native', close: vi.fn(async () => {}) } as unknown as AgentSessionHandle;
+    const start = vi.fn<(options: StartSessionOptions) => Promise<AgentSessionHandle>>().mockResolvedValue(native);
+    const agent = withSubscriptionAccounts({ kind: provider === 'openai' ? 'codex' : 'claude-code', startSession: start } as unknown as BaseAgent);
+    let handle: AgentSessionHandle | undefined;
+    const pending = agent.startSession({ providerId: provider, sessionId: 'healthy', resumeSessionId: 'healthy-native', model: 'gpt-6' } as StartSessionOptions)
+      .then(result => { handle = result; return result; });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handle).toBeDefined();
+      expect(start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]!.configDir).toBe(`${provider}/second`);
+      expect(await readSubscriptionSessionAccount(provider, { sessionId: 'healthy' }))
+        .toMatchObject({ state: 'bound', account: { number: 2, status: 'ready' } });
+    } finally {
+      finish({ authenticated: false });
+      await (await pending).close();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['status', 'models'] as const)('bounds new assignment waiting for sibling %s without racing the fastest account', async stage => {
+    vi.useFakeTimers();
+    h.pools.openai = { strategy: 'order', accounts: ['default', 'second', 'third'].map(account) };
+    let finish!: (value: object) => void;
+    const slow = new Promise<object>(resolve => { finish = resolve; });
+    h.read.mockImplementation(async (_kind, directory: string) => stage === 'status' && directory.endsWith('/default')
+      ? slow : { authenticated: true, identity: directory });
+    h.rpc.mockImplementation(async (directory: string) => {
+      if (directory.endsWith('/default')) return slow;
+      // third replies first; the policy must still prefer second within the common budget.
+      if (directory.endsWith('/second')) await new Promise(resolve => setTimeout(resolve, 500));
+      return { data: [{ id: 'gpt-6' }], nextCursor: null };
+    });
+    let selected: string | undefined;
+    const pending = acquireSubscriptionAccount('openai', 'gpt-6', []).then(lease => { selected = lease?.accountId; return lease; });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(selected).toBeUndefined(); // ready peers still share one fairness window
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(selected).toBe('second'); // order among all ready peers, not arrival order
+      (await pending)!.release();
+      finish(stage === 'status' ? { authenticated: false } : { data: [{ id: 'gpt-6' }], nextCursor: null });
+      await vi.advanceTimersByTimeAsync(0);
+      if (stage === 'models') {
+        const recovered = await acquireSubscriptionAccount('openai', 'gpt-6', []);
+        expect(recovered?.accountId).toBe('default');
+        recovered!.release();
+      }
+    } finally {
+      finish(stage === 'status' ? { authenticated: false } : { data: [{ id: 'gpt-6' }], nextCursor: null });
+      (await pending)?.release();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps independent providers and paused historical model discovery out of dispatch and model switches', async () => {
+    vi.useFakeTimers();
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second'), { ...account('historical'), paused: true }] };
+    h.placement['openai:second'] = 'separate';
+    h.created.separate = { kind: 'openai', name: 'Separate', account: 'second' };
+    h.bindings.set('native:old', { providerId: 'openai', accountId: 'historical' });
+    await readSubscriptionPool('openai');
+    await readSubscriptionPool('separate');
+    let finish!: (value: object) => void;
+    const slow = new Promise<object>(resolve => { finish = resolve; });
+    h.rpc.mockImplementation(async (directory: string) => directory.endsWith('/default')
+      ? { data: [{ id: 'gpt-6' }, { id: 'model-b' }], nextCursor: null } : slow);
+    const discovery = refreshSubscriptionPoolCodexModels(true);
+    let lease: Awaited<ReturnType<typeof acquireSubscriptionAccount>> | undefined;
+    const pending = acquireSubscriptionAccount('openai', 'gpt-6', []).then(value => { lease = value; return value; });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(lease?.accountId).toBe('default');
+      const apply = vi.fn(async () => {});
+      await lease!.changeModel('model-b', apply);
+      expect(apply).toHaveBeenCalledOnce();
+      expect(h.rpc.mock.calls.filter(([directory]) => directory === 'openai/second')).toHaveLength(1);
+    } finally {
+      finish({ data: [{ id: 'gpt-6' }], nextCursor: null });
+      await discovery;
+      (await pending)?.release();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['cold-single', 'owner-change', 'model-not-offered'] as const)
+  ('preserves %s admission while a native read is pending', async state => {
+    vi.useFakeTimers();
+    h.pools.openai = { strategy: 'order', accounts: state === 'cold-single' ? [account('second')] : [account('default'), account('second')] };
+    let finish!: (value: object) => void;
+    const slow = new Promise<object>(resolve => { finish = resolve; });
+    h.rpc.mockImplementation(async (directory: string) => directory.endsWith('/second') ? slow
+      : { data: [{ id: 'different-model' }], nextCursor: null });
+    let settled = false;
+    const pending = acquireSubscriptionAccount('openai', 'gpt-6', []);
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    try {
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(settled).toBe(false); // no cached/foreign membership admits the pending profile
+      if (state === 'owner-change') h.owner += '-changed';
+      finish({ data: [{ id: state === 'model-not-offered' ? 'different-model' : 'gpt-6' }], nextCursor: null });
+      if (state === 'owner-change') await expect(pending).rejects.toThrow('owner changed');
+      else if (state === 'model-not-offered') await expect(pending).rejects.toThrow('No subscription account');
+      else { const lease = await pending; expect(lease?.accountId).toBe('second'); lease!.release(); }
+    } finally {
+      finish({ data: [], nextCursor: null });
+      await pending.catch(() => {});
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['cancel', 'failure'] as const)('preserves the original unreadable account and history after Add %s', async state => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default')] };
+    h.bindings.set('native:old', { providerId: 'openai', accountId: 'default' });
+    const original = structuredClone(h.pools.openai);
+    h.read.mockImplementation(async (_kind, directory: string) => {
+      if (directory.endsWith('/default')) throw new Error('CLI unavailable');
+      return { authenticated: false };
+    });
+    let started!: () => void;
+    const loginStarted = new Promise<void>(resolve => { started = resolve; });
+    h.login.mockImplementation(async (_kind, _directory, signal: AbortSignal) => {
+      started();
+      if (state === 'failure') throw new Error('login_failed');
+      await new Promise<void>((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('login_cancelled')), { once: true }));
+    });
+    const command = runSubscriptionAccountCommand({ action: 'add', providerId: 'openai', loginKey: 'another' });
+    const rejected = expect(command).rejects.toThrow(state === 'cancel' ? 'login_cancelled' : 'login_failed');
+    await loginStarted;
+    if (state === 'cancel') await runSubscriptionAccountCommand({ action: 'cancel', providerId: 'openai', loginKey: 'another' });
+    await rejected;
+    expect(h.pools.openai).toEqual(original);
+    expect(h.placement).toEqual({});
+    expect(h.bindings.get('native:old')?.accountId).toBe('default');
+    expect(h.clearCooling).not.toHaveBeenCalled();
+    expect(h.login.mock.calls[0][1]).not.toBe('openai/default');
+  });
+
+  it.each(['empty', 'missing'] as const)('keeps legacy first-use Add compatible with a confirmed %s default directory', async state => {
+    h.pools = {};
+    h.bound = false;
+    if (state === 'missing') h.directoryEntries.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+    let signedIn = false;
+    h.read.mockImplementation(async () => ({ authenticated: signedIn }));
+    h.login.mockImplementation(async () => { signedIn = true; });
+    const view = await runSubscriptionAccountCommand({ action: 'add', providerId: 'openai', loginKey: 'first' });
+    expect(view.accounts.map(a => [a.id, a.status])).toEqual([['default', 'ready']]);
+    expect(h.login).toHaveBeenCalledExactlyOnceWith('openai', 'openai/default', expect.any(AbortSignal));
+  });
+
+  it('does not turn a disappearing detected login into Add overwriting the default home', async () => {
+    h.pools = {};
+    h.bound = false;
+    h.read.mockResolvedValueOnce({ authenticated: true, identity: 'original@example.test' })
+      .mockResolvedValue({ authenticated: false });
+    await expect(runSubscriptionAccountCommand({ action: 'add', providerId: 'openai', loginKey: 'changed' }))
+      .rejects.toThrow('login_failed');
+    expect(h.login).not.toHaveBeenCalled();
+    expect(h.clearCooling).not.toHaveBeenCalled();
+  });
+
+  it('rechecks a binding paused during its own status read before deciding whether to inspect replacements', async () => {
+    h.bindings.set('task:changed', { providerId: 'anthropic', accountId: 'default' });
+    h.read.mockImplementation(async (_kind, directory: string) => {
+      if (directory.endsWith('/default')) h.pools.anthropic!.accounts[0].paused = true;
+      return { authenticated: true, identity: 'account' };
+    });
+    const lease = await acquireSubscriptionAccount('anthropic', 'claude-model', ['task:changed'], false, { resuming: false });
+    expect(lease?.accountId).toBe('second');
+    lease!.release();
+    expect(h.bindings.get('task:changed')?.accountId).toBe('default'); // dispatch has not bound a new native history
+  });
+
+  it.each(['owner-change', 'cancel'] as const)('does not commit a %s during post-login verification', async state => {
+    h.pools.openai = { strategy: 'least', accounts: [account('second')] };
+    let verifying!: () => void;
+    const verificationStarted = new Promise<void>(resolve => { verifying = resolve; });
+    let finish!: (value: object) => void;
+    const verified = new Promise<object>(resolve => { finish = resolve; });
+    let loggedIn = false;
+    h.read.mockImplementation(async () => {
+      if (loggedIn) { verifying(); return verified; }
+      return { authenticated: false };
+    });
+    h.login.mockImplementation(async () => { loggedIn = true; });
+    const command = runSubscriptionAccountCommand({ action: 'login', providerId: 'openai', accountId: 'second', loginKey: 'verifying' });
+    const rejected = expect(command).rejects.toThrow(state === 'cancel' ? 'login_cancelled' : 'owner changed');
+    await verificationStarted;
+    let cancellation: Promise<unknown> | undefined;
+    if (state === 'owner-change') h.owner += '-changed';
+    else cancellation = runSubscriptionAccountCommand({ action: 'cancel', providerId: 'openai', loginKey: 'verifying' });
+    finish({ authenticated: true, identity: 'second@example.test' });
+    await rejected;
+    await cancellation;
+    expect(h.clearCooling).not.toHaveBeenCalled();
+    expect(h.pools.openai!.accounts.map(a => a.id)).toEqual(['second']);
+  });
+
+  // F2, unit: Add previously reused the existing default home after a failed auth read.
+  // Existing wizard coverage only tested explicit `connect:new` and healthy defaults.
+  it.each((['anthropic', 'openai'] as const).flatMap(provider =>
+    ['unavailable', 'signed-out', 'authorized', 'history', 'unreadable-directory'].map(state => ({ provider, state }))))
+  ('adds another $provider account without borrowing a $state default home', async ({ provider, state }) => {
+    h.pools = state === 'unavailable' || state === 'signed-out'
+      ? { [provider]: { strategy: 'least', accounts: [account('default')] } } : {};
+    h.bound = state === 'unavailable' || state === 'signed-out' || state === 'authorized';
+    if (state === 'signed-out') h.bindings.set('native:retained-history', { providerId: provider, accountId: 'default' });
+    if (state === 'history') h.directoryEntries.mockResolvedValue(['sessions']);
+    if (state === 'unreadable-directory') h.directoryEntries.mockRejectedValue(new Error('EACCES'));
+    const signedIn = new Set<string>();
+    h.read.mockImplementation(async (_kind, directory: string) => {
+      if (directory.endsWith('/default') && state === 'unavailable') throw new Error('CLI unavailable');
+      return { authenticated: signedIn.has(directory), identity: signedIn.has(directory) ? 'new@example.test' : undefined };
+    });
+    h.login.mockImplementation(async (_kind, directory: string) => { signedIn.add(directory); });
+    const view = await runSubscriptionAccountCommand({ action: 'add', providerId: provider, loginKey: 'another' });
+    const added = view.accounts.find(a => a.id !== 'default');
+    expect(added).toMatchObject({ status: 'ready', identity: 'new@example.test' });
+    expect(h.login).toHaveBeenCalledExactlyOnceWith(provider, `${provider}/${added!.id}`, expect.any(AbortSignal));
+    if (state === 'signed-out') expect(h.bindings.get('native:retained-history')?.accountId).toBe('default');
+    expect(h.pools[provider]!.accounts.map(a => a.id)).toEqual(['default', added!.id]);
+  });
+
+  // F3, unit: the official login control can finish while account/read fails or still reports
+  // signed out. Existing renewal tests checked this only for Claude's expected-email guard.
+  it.each(['unavailable', 'signed-out', 'authenticated'] as const)
+  ('commits OpenAI login and clears cooling only after %s verification', async verification => {
+    h.pools.openai = { strategy: 'least', accounts: [account('second')] };
+    let loggedIn = false;
+    h.read.mockImplementation(async () => {
+      if (loggedIn && verification === 'unavailable') throw new Error('CLI unavailable');
+      return { authenticated: loggedIn && verification === 'authenticated', identity: 'second@example.test' };
+    });
+    h.login.mockImplementation(async () => { loggedIn = true; });
+    const command = runSubscriptionAccountCommand({ action: 'login', providerId: 'openai', accountId: 'second', loginKey: 'verify' });
+    if (verification === 'authenticated') {
+      expect((await command).accounts[0].status).toBe('ready');
+      expect(h.clearCooling).toHaveBeenCalledWith('openai', 'second');
+    } else {
+      await expect(command).rejects.toThrow(verification === 'unavailable' ? 'SUBSCRIPTION_ACCOUNT_UNAVAILABLE' : 'login_failed');
+      expect(h.clearCooling).not.toHaveBeenCalled();
+      expect((await readSubscriptionPool('openai')).accounts[0].status)
+        .toBe(verification === 'unavailable' ? 'unavailable' : 'signed-out');
+    }
+    expect(h.pools.openai!.accounts.map(a => a.id)).toEqual(['second']);
+  });
+
+  it('retains rejected-credential evidence when post-login verification is unavailable', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('second')] };
+    h.tokens.mockResolvedValue({ accessToken: 'rejected-fixture-token', chatgptAccountId: 'fixture-workspace', canDispatch: () => true });
+    const lease = await acquireSubscriptionAccount('openai', undefined, [], false, { accountId: 'second' });
+    lease!.account.invalidateAuth!('token_revoked', 'rejected-fixture-token');
+    lease!.release();
+    let verifying = false;
+    h.login.mockImplementation(async () => { verifying = true; });
+    h.read.mockImplementation(async () => {
+      if (verifying) throw new Error('CLI unavailable');
+      return { authenticated: true, identity: 'account' };
+    });
+    await expect(runSubscriptionAccountCommand({ action: 'login', providerId: 'openai', accountId: 'second', loginKey: 'uncertain' }))
+      .rejects.toThrow('SUBSCRIPTION_ACCOUNT_UNAVAILABLE');
+    verifying = false;
+    expect((await readSubscriptionPool('openai')).accounts[0].status).toBe('signed-out');
+    expect(h.clearCooling).not.toHaveBeenCalled();
+  });
   // Unit regression (2026-11-13): account pools rejected ChatGPT before the upstream could
   // spend credits. Prior coverage asserted exhausted windows were admission failures; it never
   // started/resumed a full-window account with available, unknown or depleted cached credits.
@@ -2501,6 +2830,11 @@ describe('native account assignment on the executing computer', () => {
     await cancelled;
     expect(h.login.mock.calls[0][1]).not.toBe('openai/default');
     expect(h.pools.openai!.disconnected).toBe(true);
+    h.login.mockImplementation(async (_provider, directory: string) => {
+      h.read.mockImplementation(async (_kind, home: string) => home === directory
+        ? { authenticated: true, identity: 'new@example.test' }
+        : { authenticated: false, errorReason: 'codex_provider_managed_auth' });
+    });
     await runSubscriptionAccountCommand({ action: 'add', providerId: 'openai', loginKey: 'retry-new' });
     expect(h.login).toHaveBeenCalledTimes(2);
     expect(h.login.mock.calls[1][1]).not.toBe('openai/default');
@@ -3374,7 +3708,7 @@ describe('native account assignment on the executing computer', () => {
     secondary?.release();
   });
   it.each(['anthropic', 'openai'].flatMap(providerId =>
-    [true, false].map(bound => ({ providerId: providerId as SubscriptionProvider, bound }))))('reuses the signed-out $providerId default folder with binding=$bound', async ({ providerId, bound }) => {
+    [true, false].map(bound => ({ providerId: providerId as SubscriptionProvider, bound }))))('reconnects the signed-out $providerId default folder explicitly with binding=$bound', async ({ providerId, bound }) => {
     h.bound = bound;
     h.pools[providerId] = { strategy: 'least', accounts: [account('default')] };
     h.read.mockResolvedValue({ authenticated: false });
@@ -3382,7 +3716,8 @@ describe('native account assignment on the executing computer', () => {
       h.read.mockResolvedValue({ authenticated: true });
     });
     await runSubscriptionAccountCommand({
-      action: 'add',
+      action: 'connect',
+      target: 'default',
       providerId,
       loginKey: 'reconnect-first',
     });
