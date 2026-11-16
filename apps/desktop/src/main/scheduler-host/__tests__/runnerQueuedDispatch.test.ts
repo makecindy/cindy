@@ -37,6 +37,7 @@ import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
 import type { FireContext, Logger, Notifier, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 import type { ProviderView } from '@cindy/model-providers';
 import { resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
+import { createScheduledSessionBootstrap } from '../../maker-ipc/scheduledSessionBootstrap';
 import {
   setCodexAppliedCustomProviderRoutes,
   type CodexCustomProviderRoute,
@@ -445,6 +446,7 @@ function createRunnerHarness(
     acquirePendingAgentSwitch?: MakerScheduleRunnerDeps['acquirePendingAgentSwitch'];
     prepareModelPreferences?: MakerScheduleRunnerDeps['prepareModelPreferences'];
     resolveModelSelection?: MakerScheduleRunnerDeps['resolveModelSelection'];
+    bootstrapSession?: MakerScheduleRunnerDeps['bootstrapSession'];
     applyPiModelSelectionUnderLock?: MakerScheduleRunnerDeps['applyPiModelSelectionUnderLock'];
   } = {},
 ) {
@@ -482,6 +484,7 @@ function createRunnerHarness(
     notifier,
     logger,
     schedulerQueue,
+    bootstrapSession: opts.bootstrapSession,
     checkModelRoute: opts.checkModelRoute,
     acquirePendingAgentSwitch: opts.acquirePendingAgentSwitch,
     prepareModelPreferences: opts.prepareModelPreferences,
@@ -524,6 +527,7 @@ beforeEach(() => {
     providerId: null,
   });
   mocks.getSessionProvider.mockReturnValue(null);
+  mocks.setSessionProvider.mockReset();
   mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: 'ask', planModeEnabled: false });
 });
 
@@ -989,6 +993,95 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await expect(result).resolves.toMatchObject({ sessionId: SESSION_ID });
     expect(latestNotifiedRun(notifier).status).toBe('success');
     expect(schedule).toEqual(saved);
+  });
+
+  // Unit regression (2026-11-16): fire -> host bootstrap -> both queue callbacks.
+  // Existing group tests only exercised direct sends; a fresh local group picking
+  // a remote member failed before dispatch. Assert the run outcome and stored
+  // source, including different member provider IDs, without changing preferences.
+  describe('fresh provider-group startup receipt', () => {
+    function setup(groupDeviceId: string | null, memberDeviceId: string | null, memberProviderId: string,
+      agentKind: 'codex' | 'pi' = 'codex', unexpectedStartupDevice?: string) {
+      const h = createSessionHarness(async () => ({ accepted: true }));
+      Object.assign(h.session, { agentKind, model: 'shared-model', setFastMode: vi.fn() });
+      mocks.setSessionProvider.mockImplementation((_id, providerId) => {
+        mocks.getSessionProvider.mockReturnValue(providerId);
+      });
+      const bootstrapSession = createScheduledSessionBootstrap(async (options, assertCurrent) => {
+        assertCurrent();
+        expect(options.agentDeviceId ?? null).toBe(groupDeviceId);
+        expect(options.providerId).toBe('group-source');
+        // The trusted startup funnel returns the final route, after allocation
+        // and any startup failover, through its caller-owned options.
+        options.agentDeviceId = memberDeviceId ?? undefined;
+        options.providerId = memberProviderId;
+        Object.assign(h.session, { agentDeviceId: unexpectedStartupDevice ?? memberDeviceId });
+        return { session: h.session };
+      });
+      const queue = createQueueHarness({ busy: false });
+      const harness = createRunnerHarness(h.session, queue.deps, {
+        bootstrapSession, resolveModelSelection: async choice => choice,
+        checkModelRoute: async () => ({ kind: 'pass' }),
+      });
+      vi.mocked(harness.maker.isSessionAlive).mockReturnValue(false);
+      const schedule = heartbeatSchedule({ targetSessionId: undefined, workingDir: '/work',
+        agentKind, modelAgentKind: agentKind, modelAgentDeviceId: groupDeviceId ?? '',
+        model: 'shared-model', providerId: 'group-source', effort: 'high', fastMode: false });
+      const saved = structuredClone(schedule);
+      const result = harness.runner.fire(schedule, createFireContext()).catch((error: unknown) => error);
+      return { h, queue, ...harness, result, schedule, saved };
+    }
+
+    it.each([
+      [null, null, 'group-source', 'codex'],
+      [null, 'member', 'group-source', 'codex'],
+      [null, 'shared:member', 'member-source', 'codex'],
+      ['group-owner', 'member', 'member-source', 'codex'],
+      ['group-owner', null, 'member-source', 'codex'],
+      ['shared:owner', 'shared:owner', 'group-source', 'codex'],
+      ['group-owner', 'member', 'member-source', 'pi'],
+      ['group-owner', null, 'member-source', 'pi'],
+    ] as const)('dispatches group %s on member %s with source %s (%s)', async (group, member, provider, agentKind) => {
+      const { h, queue, result, schedule, saved, notifier } = setup(group, member, provider, agentKind);
+      await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+      await queue.accept();
+      h.emit({ type: 'done', data: {}, source: agentKind });
+      expect(await result).toMatchObject({ sessionId: SESSION_ID });
+      expect(latestNotifiedRun(notifier).status).toBe('success');
+      expect(mocks.getSessionProvider(SESSION_ID)).toBe(provider);
+      expect(mocks.backfillSessionMeta.mock.calls.at(-1)?.[2]).toMatchObject({ providerId: provider });
+      expect(schedule).toEqual(saved);
+    });
+
+    it('rejects a live startup location that differs from the host receipt', async () => {
+      const { h, queue, result } = setup(null, 'member', 'member-source', 'codex', 'unselected-member');
+      await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+      await queue.accept();
+      h.emit({ type: 'done', data: {}, source: 'codex' });
+      expect(String(await result)).toContain('Scheduled model route changed');
+      expect(await result).toBeInstanceOf(Error);
+    });
+
+    it.each([
+      ['preparing', 'device'], ['preparing', 'provider'], ['preparing', 'model'],
+      ['accepted', 'device'], ['accepted', 'provider'], ['accepted', 'model'],
+    ])('rejects a subsequent %s boundary %s change', async (boundary, axis) => {
+      const { h, queue, result } = setup(null, 'member', 'member-source');
+      await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+      const request = enqueueLast(queue);
+      if (boundary === 'accepted') await request.onPreparing?.();
+      if (axis === 'device') Object.assign(h.session, { agentDeviceId: 'unselected-member' });
+      if (axis === 'provider') mocks.getSessionProvider.mockReturnValue('unselected-source');
+      if (axis === 'model') Object.assign(h.session, { model: 'unselected-model' });
+      if (boundary === 'accepted') {
+        await expect(request.onAccepted({ permissionMode: 'ask', planMode: false }))
+          .rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+      } else await queue.accept();
+      h.emit({ type: 'done', data: {}, source: 'codex' });
+      expect(String(await result)).toContain('Scheduled model route changed');
+      expect(await result).toBeInstanceOf(Error);
+      expect(h.setModel).not.toHaveBeenCalled();
+    });
   });
 
   it.each([

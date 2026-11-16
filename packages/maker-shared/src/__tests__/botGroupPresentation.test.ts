@@ -381,7 +381,7 @@ describe('group body component display', () => {
 describe('unclaimed talk turn controls', () => {
   it('allows future pending turns only on capable hosts and leaves running turns protected', () => {
     const current = { position: 0, botId: 'a', botName: 'A', task: '', status: 'running' as const, executionId: 'run', executionStatus: 'running' };
-    const future = { position: 1, botId: 'b', botName: 'B', task: '', status: 'pending' as const };
+    const future = { position: 1, canStop: true, botId: 'b', botName: 'B', task: '', status: 'pending' as const };
     const value = plan({ kind: 'talk', status: 'running', currentStep: 0, canManage: true, supportsPendingSkip: true, steps: [current, future] });
     expect(canSkipBotGroupPlanStep(value, current)).toBe(false);
     expect(canSkipBotGroupPlanStep(value, future)).toBe(true);
@@ -392,7 +392,7 @@ describe('unclaimed talk turn controls', () => {
     expect(canSkipBotGroupPlanStep(value, { ...future, status: 'skipped' })).toBe(false);
   });
   const queued = () => plan({ kind: 'talk', status: 'running', canManage: true,
-    steps: [{ position: 0, botId: 'a', botName: 'A', task: '', status: 'running', executionId: 'run', executionStatus: 'queued' }],
+    steps: [{ position: 0, botId: 'a', botName: 'A', task: '', status: 'running', canStop: true, executionId: 'run', executionStatus: 'queued' }],
   });
   it('labels queued work without claiming that the device started it', () => {
     const value = queued();
@@ -406,7 +406,7 @@ describe('unclaimed talk turn controls', () => {
     for (const overrides of [{ kind: 'work' as const }, { canManage: false }, { status: 'stopped' as const }, { currentStep: 1 }]) {
       expect(canSkipBotGroupPlanStep({ ...value, ...overrides }, value.steps[0])).toBe(false);
     }
-    for (const overrides of [{ executionId: undefined }, { executionStatus: undefined }, { executionStatus: 'running' }]) {
+    for (const overrides of [{ canStop: false }, { canStop: undefined }, { executionId: undefined }, { executionStatus: undefined }, { executionStatus: 'running' }]) {
       expect(canSkipBotGroupPlanStep(value, { ...value.steps[0], ...overrides })).toBe(false);
     }
   });

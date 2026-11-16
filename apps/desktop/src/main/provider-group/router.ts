@@ -188,7 +188,17 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
     let read = poolReads.get(readKey);
     if (!read) {
       read = { cooling: remembered, result: deps.readPoolModelAvailability(member, model,
-        { remote, ...(remote && ownComputer ? { ownComputer: true } : {}) }).catch(() => null) };
+        { remote, ...(remote && ownComputer ? { ownComputer: true } : {}) }).catch(() => null).then(available => {
+        // Keep the caller's wait bounded, but use a late confirmation on the next pick.
+        // A newer failure or an expired/removed scope must not be undone.
+        if (available === true && cooling.get(key) === remembered && remembered[scope] > deps.now()) {
+          const next = { ...remembered };
+          delete next[scope];
+          cooling.set(key, next);
+          persistCooling();
+        }
+        return available;
+      }) };
       poolReads.set(readKey, read);
       void read.result.finally(() => { if (poolReads.get(readKey) === read) poolReads.delete(readKey); });
     }
@@ -196,16 +206,9 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
     if (read.cooling !== remembered) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const available = await Promise.race([read.result, new Promise<null>((resolve) => {
+      await Promise.race([read.result, new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS);
       })]);
-      // A newer failure wins over a slow read. Clear only this model's quota
-      // cooldown; authentication/overload and other models retain their scopes.
-      if (available !== true || cooling.get(key) !== remembered) return;
-      const next = { ...remembered };
-      delete next[scope];
-      cooling.set(key, next);
-      persistCooling();
     } finally {
       clearTimeout(timer);
     }
