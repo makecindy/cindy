@@ -51,8 +51,8 @@ export async function resolveCompanionSkillFiles(values: CompanionPreferenceValu
   known: (sha256: string) => string | undefined;
   upload?: (file: { name: string; size: number; path: string; sha256: string }) => Promise<string>;
   gaps?: CompanionSkillFileGaps;
-  /** The uploads and gaps still in use after this pass; anything else is forgotten. */
-  retain: (media: Record<string, string>, gaps: CompanionSkillFileGaps) => void;
+  /** A complete pass replaces receipts/gaps; a partial pass only adds receipts, preserving prior state. */
+  retain: (media: Record<string, string>, gaps: CompanionSkillFileGaps, preserveExisting?: boolean) => void;
   log?: CompanionLog;
 }): Promise<CompanionPreferenceValue[]> {
   const inUse: Record<string, string> = {};
@@ -117,6 +117,9 @@ export async function resolveCompanionSkillFiles(values: CompanionPreferenceValu
     resolved.push(list(key, slug, [], [...gap.omitted], gap.truncated === true));
   }
   if (!retried) deps.retain(inUse, gaps);
+  // Keep successful uploads across a later failure, without pruning receipts or gaps
+  // for files this incomplete pass could not reach. The next complete pass prunes normally.
+  else if (Object.keys(inUse).length) deps.retain(inUse, {}, true);
   return resolved;
 }
 

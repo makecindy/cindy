@@ -178,7 +178,7 @@ describe('media prepare conflict recovery', () => {
 // and timer/queue behavior. State I/O and file bytes stay in memory; no real sleeps.
 describe('companion skill media conflict sync', () => {
   const key = 'companion.skill-files.v1:brew';
-  function setupSync(t: ReturnType<typeof uploadServer>, saved?: string) {
+  function setupSync(t: ReturnType<typeof uploadServer>, saved?: string, partial = false) {
     const { state, files } = memoryState(saved);
     const preferences = new Map<string, { key: string; value: unknown; revision: number }>();
     let changed: (() => void) | undefined;
@@ -202,6 +202,7 @@ describe('companion skill media conflict sync', () => {
       host: {
         homes: createCompanionHomeRegistry(), openState: () => state,
         readValues: async () => [{ key, value: null, localFiles: [
+          ...(partial ? [{ path: 'scripts/good.py', sha256: 'good-sha', size: 3, absolutePath: '/unused-test-skill/good.py' }] : []),
           { path: 'scripts/new.py', sha256: 'sha', size: 3, absolutePath: '/unused-test-skill/new.py' },
         ] }],
         canonicalSession: async () => null, rowsAfter: async () => [], latestRows: async () => [],
@@ -263,6 +264,52 @@ describe('companion skill media conflict sync', () => {
       expect(restarted.state.bot('bot')?.skillFileMedia).toEqual({ 'old-sha': 'old-file' });
       expect(f.fetch).not.toHaveBeenCalled();
     } finally { s.runtime.dispose(); restarted?.runtime.dispose(); vi.useRealTimers(); }
+  });
+
+  // #10574 review, unit: one successful file before a persistent conflict. The single-file
+  // cases missed full PUTs repeating despite stable IDs. Exercise real sync + persisted restart,
+  // keeping the old manifest/gaps while reusing success, then pruning old receipts after recovery.
+  it('retains partial upload receipts across retries and restart without publishing an incomplete list', async () => {
+    const t = uploadServer();
+    const accept = vi.mocked(t.api).getMockImplementation()!;
+    let conflicting = true;
+    vi.mocked(t.api).mockImplementation(async (...args) => {
+      if (conflicting && args[0].endsWith('/media') && (args[2] as Prepare).name === 'new.py') {
+        t.calls.push({ route: args[0], method: args[1] ?? 'GET', data: args[2], actorId: args[3] });
+        throw rejection(409, 'OPERATION_CONFLICT');
+      }
+      return accept(...args);
+    });
+    const s = setupSync(t, undefined, true);
+    const old = { slug: 'brew', files: [{ path: 'scripts/new.py', sha256: 'old-sha', size: 3, mediaId: 'old-file' }] };
+    const gaps = { brew: { omitted: ['scripts/missing.py'] } };
+    s.preferences.set(key, { key, value: old, revision: 1 });
+    s.state.update('bot', 'actor', entry => { entry.skillFileMedia = { 'old-sha': 'old-file' }; entry.skillFileGaps = gaps; });
+    let restarted: ReturnType<typeof setupSync> | undefined;
+    try {
+      await s.runtime.syncNow();
+      await s.runtime.syncNow();
+      expect(f.fetch).toHaveBeenCalledTimes(1);
+      expect(t.prepares().filter(body => body.name === 'good.py')).toHaveLength(1);
+      expect(s.preferences.get(key)?.value).toEqual(old);
+      expect(s.state.bot('bot')?.skillFileMedia).toEqual({ 'old-sha': 'old-file', 'good-sha': 'file-0' });
+      expect(s.state.bot('bot')?.skillFileGaps).toEqual(gaps);
+      expect(await s.runtime.flushHere('bot')).toEqual({ ok: false, code: 'FAILED' });
+      s.runtime.dispose();
+      restarted = setupSync(t, s.files.get('state.json'), true);
+      restarted.preferences.set(key, { key, value: old, revision: 1 });
+      await restarted.runtime.syncNow();
+      expect(f.fetch).toHaveBeenCalledTimes(1);
+      expect(restarted.preferences.get(key)?.value).toEqual(old);
+      expect(restarted.state.bot('bot')?.skillFileGaps).toEqual(gaps);
+      conflicting = false;
+      await restarted.runtime.syncNow();
+      expect(f.fetch).toHaveBeenCalledTimes(2);
+      expect(restarted.preferences.get(key)?.value).toMatchObject({ files: [
+        { path: 'scripts/good.py', mediaId: 'file-0' }, { path: 'scripts/new.py', mediaId: 'file-1' },
+      ], omitted: ['scripts/missing.py'] });
+      expect(restarted.state.bot('bot')?.skillFileMedia).toEqual({ 'good-sha': 'file-0', sha: 'file-1' });
+    } finally { s.runtime.dispose(); restarted?.runtime.dispose(); }
   });
 
   it('coalesces a slow conflicting upload and a burst of local changes into one pending pass', async () => {
