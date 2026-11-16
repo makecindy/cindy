@@ -119,6 +119,64 @@ Node Host 的插件 computer 调用与未装配的 scheduler、SSH 和文档服�
 获准 browser 组的插件都消费相同后端。无需注册新的服务中心，不能从插件代码替用户激活自己。
 停用、卸载、换版和来源变化撤销旧桥接，已有配对和用户选择按原实例保存，多个实现不静默混用。
 
+## 供应商用量与账号状态
+
+声明 `agent.hostTools:["settings"]` 的插件与 Agent 调用同一宿主处理器，不需要当前任务或伪造 sessionId。
+`list_model_providers` 读取原供应商目录安全投影；从结果取得 providerId，再调用已有订阅账号读取：
+
+```js
+await cindy.host.call('cindy_helper', 'configure_model_provider', {
+  change: { action: 'subscriptionAccounts', providerId: selectedProviderId, command: { action: 'read' } }
+});
+await cindy.host.call('cindy_helper', 'get_provider_usage_history', {
+  providerId: selectedProviderId, device: 'local'
+});
+await cindy.host.call('cindy_helper', 'get_provider_group', {
+  providerId: selectedProviderId, device: selectedComputerId
+});
+```
+
+沿原工具返回 MCP 结果；文本 JSON 中的 `ok` 是工具回执，其余数据保持原接口形态。
+`subscriptionAccounts/read` 返回 `{scope:'local',providerId,accounts:SubscriptionPoolView}`，每个供应商只列自己的账号，
+不新建统一额度 DTO。插件可取得以下**非凭证信息**，不是只有额度数字；字段未提供时不补造：
+
+| 原字段 | 插件能够取得的信息 |
+| --- | --- |
+| 外层 `providerId`、`accounts.providerId`、`accounts.kind` | 供应商标识与账号池家族（当前原生池为 Anthropic/OpenAI） |
+| `accounts.configured`、`accounts.strategy` | 是否已配置及原账号选择策略 |
+| `accounts.accounts[].id` | 宿主账号标识，例如默认账号或已保存账号 id，不是访问令牌 |
+| `identity` | 官方 CLI 返回的登录身份，可能是登录邮箱或账号名，依供应商和当前可读状态而定 |
+| `directory` | 该账号在这台电脑上的 CLI 配置目录路径；知道路径不授予读取文件或凭据的权限 |
+| `accountKey` | 可选的已验证账号/工作区摘要，用于识别相同额度归属；不是密钥 |
+| `plan`、`legacy` | 已知订阅套餐及是否沿用旧 Codex 连接 |
+| `loginExpiresAt` | 可选的 Claude CLI 登录到期日期，仅作提示 |
+| `codexResetProviderId` | 现有 Codex 重置目标标识；读取此标识不授予重置或修改账号的能力 |
+| `paused`、`limit`、`limitSet`、`weight` | 现有暂停、并发配置与权重；不等于插件分配给成员的预算 |
+| `status`、`authIssue`、`running` | ready/signed-out/unavailable/limited 状态、已有诊断代码与运行数量，不含 CLI 原文 |
+| `usage.claude` | 原 Claude 快照中的已知窗口、比例、重置时间与来源等状态 |
+| `usage.codex.buckets`、`usage.codex.credits` | 原 Codex 各额度桶、窗口、更新时间与已知余额状态，保持原类型 |
+
+宿主原类型中的 `boundAccountId` 只在显式 taskId 读取时出现，`defaultAdded` 只用于 preview；本插件 read 调用不提供
+taskId 或 preview，因此不会为插件创造任务绑定。`lastConfirmedIdentity`、`reloginIdentity` 不在账号视图里。
+**不返回 API key、OAuth access/refresh token、授权请求头、登录文件内容或私钥**；不要让插件用上述目录旁路读取凭据。
+只放开现有 list/read，账号登录、添加、删除、配置、移位等相邻动作仍要求原任务调用上下文，未因此开放给插件。
+
+账号读取复用原缓存、在途合并和 CLI/API 查询；没有数据就保留原缺失/状态，不强刷、不新写缓存、不把缺失当零。
+旧独立 Claude provider 的额度路径已停用；原生账号池是另一条已有路径，不能据此声称旧独立连接恢复。
+未被该原接口覆盖的来源（例如 xAI 的独立读取路径）不会在本次自动纳入。订阅账号 read 仍只作用于执行插件的本机，
+不新增逐账号跨电脑接口；需要解释另一台电脑的组状态，用现有 `get_provider_group` 的 device。
+
+`get_provider_usage_history({providerId,device?})` 原样返回已有 usage-history：`providerId/todayKey/coverageStart/self/relays/members`。
+日期取供应商所在电脑的本地日，每行含原成员/执行维度、模型、turns、inputTokens、outputTokens、cacheCreateTokens、cacheReadTokens
+及原估算 amount；会暴露原 owner 可见的成员使用日期、模型与成员标识，不含任务正文或平台凭证。
+`coverageStart` 非空表示裁剪，边界日也可能不完整；为空只表示未发现回包裁剪，不证明源账本完整。当天仍累积，缺失不当零。
+原查询仍可能估价并使用已有价格来源；没有模型 token 消费不等于没有 API/进程成本。筛选、合并、费用与停止线由插件计算。
+
+`get_provider_group({providerId,device?})` 返回原 ProviderGroupView，含原组 config、成员标识/显示名、设备归属、可见 ownerName、
+appVersion、state、running、冷却及已知 quota。分享来的电脑仍沿原匿名与额度可见性边界；缺 quota 是未知，不是零。
+两个新读取的 device 默认本机，异机只经既有同账号授权管理通道，旧端不支持就明确报错，不退回本机数据。
+不新增页面轮询、跨电脑额度协议或宿主聚合；额度分配、暂停/恢复策略、看板与提醒属于插件，不能保证严格零超用。
+
 ## 定时任务与应用设置
 
 `scheduler` 组直接复用 `cindy_scheduler` 的完整管理工具：`schedule_create`、`schedule_update`、
