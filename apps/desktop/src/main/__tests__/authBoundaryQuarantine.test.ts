@@ -20,10 +20,6 @@ vi.mock('node:os', async () => {
   };
 });
 
-vi.mock('electron', () => ({
-  app: { getPath: () => pathMock.userDataDir },
-}));
-
 vi.mock('../logger.js', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} }),
 }));
@@ -44,6 +40,7 @@ vi.mock('../device-link/crossProcessLock.js', () => ({
 
 import {
   __testing,
+  configureProjectionBoundaryPassive,
   isGhostSkillProjectionBoundaryStableForOwner,
   readGhostSkillProjectionBoundaryState,
   withGhostSkillProjectionOwnerCommit,
@@ -55,6 +52,17 @@ import {
 } from '../authBoundaryQuarantine.js';
 
 import { removeGhostSkillLinksForRoots } from '../cindy-brain/skillSlot.js';
+import { configureUserDataDir } from '../userDataPath.js';
+
+// The desktop's own predicate minus `!app.isPackaged` (a test run is never packaged); see
+// main/index.ts and the injection-order guard in authPassiveSharedInstance.test.ts.
+configureProjectionBoundaryPassive(() => process.env.XDT_PASSIVE_SHARED_USER_DATA === '1');
+
+/** The instance's profile, as each launcher pins it at startup (main/userDataPath.ts). */
+function useUserDataDir(dir: string): void {
+  pathMock.userDataDir = dir;
+  configureUserDataDir(dir);
+}
 
 function readPersistedState(): unknown {
   return JSON.parse(
@@ -76,7 +84,7 @@ async function commitOwner(ownerId: string | null): Promise<void> {
 
 beforeEach(() => {
   pathMock.homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-auth-boundary-'));
-  pathMock.userDataDir = path.join(pathMock.homeDir, 'profile-user-data');
+  useUserDataDir(path.join(pathMock.homeDir, 'profile-user-data'));
   lockMock.held = true;
   lockMock.busyPaths.clear();
   lockMock.acquired.length = 0;
@@ -112,11 +120,11 @@ describe('Ghost skill projection boundary state', () => {
     const instanceB = path.join(pathMock.homeDir, 'isolated-dev-user-data');
     await commitOwner('cloud-user');
 
-    pathMock.userDataDir = instanceB;
+    useUserDataDir(instanceB);
     await commitOwner('local-v1');
     expect(isGhostSkillProjectionBoundaryStableForOwner('local-v1')).toBe(true);
 
-    pathMock.userDataDir = instanceA;
+    useUserDataDir(instanceA);
     expect(isGhostSkillProjectionBoundaryStableForOwner('cloud-user')).toBe(true);
     await expect(
       withSharedGlobalSkillProjectionMutation('cloud-user', async () => 'codex-home'),

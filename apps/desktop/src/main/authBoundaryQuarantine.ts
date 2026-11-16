@@ -21,10 +21,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 
-import { app } from 'electron';
-
 import { withSecurityBoundaryLock } from './device-link/crossProcessLock.js';
 import { createLogger } from './logger.js';
+import { getUserDataDir } from './userDataPath.js';
 import { atomicWriteFileSync } from './utils/atomicWriteFile.js';
 import { readBoundedFileNoFollowSync } from './utils/readBoundedFile.js';
 
@@ -32,7 +31,20 @@ const log = createLogger('ghost-skill-projection-boundary');
 const FILE_NAME = 'ghost-skill-projection-boundary.json';
 const QUARANTINE_FILE_NAME = 'ghost-skill-projection-boundary.quarantine.json';
 const MAX_BYTES = 16 * 1024;
+const STRICT_LOCK_WAIT_MS = 12_000;
 let processProjectionQuarantined = false;
+let strictLockWaitMs = STRICT_LOCK_WAIT_MS;
+// Not passive until the launcher says so: the Node Host never joins a shared dev profile.
+let passivePredicate: () => boolean = () => false;
+
+/**
+ * Install the launcher's "passive instance sharing another process's userData" test. The desktop
+ * passes its Electron predicate at startup (main/index.ts), before anything reads this boundary;
+ * the predicate is evaluated on every call, as the inline check it replaces was.
+ */
+export function configureProjectionBoundaryPassive(predicate: () => boolean): void {
+  passivePredicate = predicate;
+}
 
 export type GhostSkillProjectionBoundaryState =
   | {
@@ -88,11 +100,11 @@ type QuarantineRead =
 function filePath(): string {
   // Instance-scoped: instances sharing one userData (passive dev joins) share
   // this marker, separate userData directories never observe each other.
-  return path.join(app.getPath('userData'), FILE_NAME);
+  return path.join(getUserDataDir(), FILE_NAME);
 }
 
 function quarantinePath(): string {
-  return path.join(app.getPath('userData'), QUARANTINE_FILE_NAME);
+  return path.join(getUserDataDir(), QUARANTINE_FILE_NAME);
 }
 
 function lockPath(): string {
@@ -119,7 +131,7 @@ function normalizeOwnerArgument(value: string | null): string | null {
 }
 
 function isPassiveSharedUserDataInstance(): boolean {
-  return !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
+  return passivePredicate();
 }
 
 function normalizeRecord(raw: unknown): GhostSkillProjectionBoundaryState | null {
@@ -307,7 +319,7 @@ function createStrictLock(label: string, resolveLockPath: () => string): StrictL
         target,
         {
           label,
-          waitMs: 12_000,
+          waitMs: strictLockWaitMs,
         },
         async (status) => {
           if (!status.held) {
@@ -576,6 +588,10 @@ export const __testing = {
   readState,
   resetProcessQuarantine: () => {
     processProjectionQuarantined = false;
+  },
+  /** Tests only: a short wait for the cross-process lock; production stays at 12 s. */
+  setStrictLockWaitMs: (ms: number | null) => {
+    strictLockWaitMs = ms ?? STRICT_LOCK_WAIT_MS;
   },
   maxBytes: MAX_BYTES,
 };
