@@ -2413,6 +2413,27 @@
           "wireProtocol": "openai-chat"
         }
       }
+    },
+    {
+      "id": "iflytek-maas",
+      "name": "iFLYTEK Astron MaaS",
+      "docsUrl": "https://maas.xfyun.cn/doc/guide/index.html",
+      "models": [
+        {
+          "id": "spark-x2.6",
+          "name": "Spark X2.6"
+        }
+      ],
+      "runtimes": {
+        "codex": {
+          "baseUrl": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+          "wireProtocol": "openai-chat"
+        },
+        "pi": {
+          "baseUrl": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+          "wireProtocol": "openai-chat"
+        }
+      }
     }
   ]
 }

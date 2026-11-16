@@ -15,6 +15,9 @@ export { CINDY_MARK_TRANSFORM, CINDY_MARK_PATH, CINDY_MARK_EARRING_PATH, CINDY_M
 
 // Additional supplier marks: Lobe Icons 5.14.0 (MIT; included in THIRD-PARTY-NOTICES).
 export const PROVIDER_LOGO_PATHS = {
+  // Lobe Icons Spark Mono (MIT), commit 55746b0b082258211121c70bd26e6878fd3bd292.
+  'iflytek-maas': 'M11.615 0l6.237 6.107c2.382 2.338 2.823 3.743 3.161 6.15-1.197-1.732-1.776-2.02-4.504-2.772C12.48 8.374 11.095 5.933 11.615 0z M9.32 2.122C4.771 6.367 2 9.182 2 13.08c0 5.76 4.288 9.788 9.745 9.918 5.457.13 9.441-5.284 9.095-8.403-.347-3.118-4.418-3.81-4.418-3.81 1.69 3.16-.13 8.098-4.894 8.098-5.154 0-6.8-6.02-4.2-9.008.82 1.617 1.879 2.563 2.674 3.273.717.64 1.219 1.09 1.136 1.664-.173 1.213-1.385.866-1.385.866.346.607 3.6 1.473 4.59-1.342.613-1.741-.423-2.789-1.714-4.096-1.632-1.651-3.672-3.717-3.31-8.118z',
+
   // Official https://hinoki.security/assets/beta/logomark.svg, scaled to 24px (2026-11-06).
   hinoki: 'M7.41177 0C3.3182 0 0 3.31837 0 7.41174V24H16.58827C20.68173 24 24 20.68156 24 16.58818V0H7.41177Z',
   // Official Magpie mark, scaled from its 44px viewBox to this package's 24px grid.
@@ -102,6 +105,7 @@ export type ProviderLogoRouting = Readonly<
 
 /** Bundled regional presets share a brand and never infer it from display names. */
 const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
+  'iflytek-maas': 'iflytek-maas',
   hinoki: 'hinoki',
   agnes: 'agnes',
   openhubs: 'openhubs',
@@ -186,6 +190,7 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
 
 /** Renamed providers retain stable upstream hosts, matched only on DNS boundaries. */
 const PROVIDER_LOGO_KIND_BY_HOST: readonly (readonly [string, ProviderLogoKind])[] = [
+  ['maas-api.cn-huabei-1.xf-yun.com', 'iflytek-maas'],
   ['inference.hinoki.security', 'hinoki'],
   ['apihub.agnes-ai.com', 'agnes'],
   ['openhubs.zhidemai.com', 'openhubs'],
