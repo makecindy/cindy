@@ -43,6 +43,8 @@ import { createHostRuntimeSession } from './create-runtime-session.ts';
 import { createHostProviderExecutionCheck } from './send-preflight.ts';
 import { bindHostSessionRuntimeHooks, createHostRuntimeSelection, hostRuntimeSelectionQueueHooks, HOST_RUNTIME_SELECTION_QUEUE_MEMBERS, HOST_RUNTIME_START_PORTS } from './runtime-selection.ts';
 import { acceptSessionRuntimeMutation } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
+import { readHostSession } from '../session-reads.ts';
+import { getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from '../../../desktop/src/main/maker-ipc/sessionContextWindowBudgetState.js';
 import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { getSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
@@ -5095,13 +5097,52 @@ test('runtime override: a model the user picks after an automatic fallback is wh
 // ids) the next start ran on the route a fallback chose before. Minimal failing input: a fallback, a
 // sign-out and a sign-in, a send.
 test('runtime override: after signing out and in again a task starts on its saved route, not a fallback from before', { timeout: 30_000 }, async t => {
-  t.after(bindHostSessionRuntimeHooks());
   const r = await fallenBackTask(t, 'relogin');
+  t.after(bindHostSessionRuntimeHooks(r.selection));
   const profile = path.join(r.db.root, 'profile');
   // As main.ts: signing out commits signed-out (configureHostOwner), signing in commits the owner again.
   configureHostOwner({ userDataDir: profile, ownerId: null });
   configureHostOwner({ userDataDir: profile, ownerId: 'owner-recovery' });
   assert.deepEqual(await startedOn(r, 'relogin', 'relogin-1'), { model: 'big', providerId: 'prov-a' });
+});
+
+const RUNTIME_READ_FIELDS = ['agentKind', 'model', 'providerId', 'effort', 'fastMode', 'runtimeGeneration', 'runtimeBaseline',
+  'runtimeEffective', 'runtimePending', 'runtimeBaselineRecoveryPending', 'runtimePluginsSelected'];
+const runtimeRead = async id => {
+  const read = await readHostSession(getDbClient().drizzle, id);
+  return Object.fromEntries(RUNTIME_READ_FIELDS.map(key => [key, read[key]]));
+};
+// The model-change fixture's task row: 'big' on prov-a at effort 'high'.
+const SAVED_ROUTE = { agentKind: 'claude-code', model: 'big', providerId: 'prov-a', effort: 'high', fastMode: false };
+
+// Rule (register.ts setSessionRuntimeProjector, now createSessionRuntimeProjector, bound for the Host by
+// bindHostSessionRuntimeHooks): a task read shows the route the task runs on, so after an automatic
+// fallback the task's model and provider read as the fallback route, the saved one as the baseline. Gap:
+// the Host bound no projector, so a read returned the row: the model label went back to the saved route
+// on every reread while the task ran (and was billed) on the fallback. Minimal failing input: a fallback.
+test('runtime override: a task read shows the fallback route the task runs on, with the saved route as its baseline', { timeout: 30_000 }, async t => {
+  const r = await fallenBackTask(t, 'shown');
+  t.after(bindHostSessionRuntimeHooks(r.selection));
+  assert.deepEqual(await runtimeRead('shown'), {
+    agentKind: 'cc', model: 'big', providerId: 'prov-b', effort: '', fastMode: false,
+    runtimeGeneration: 1, runtimeBaseline: SAVED_ROUTE, runtimeEffective: FALLBACK_ROUTE, runtimePending: null,
+    runtimeBaselineRecoveryPending: false, runtimePluginsSelected: false,
+  });
+});
+
+// Reverse (the same projector): with no runtime change a read is the task row, and the runtime fields have
+// the desktop's shape (projectSessionRuntimeControl: generation 0, the row as both baseline and effective,
+// no pending change; runtimePluginsSelected false, as the Host runs no runtime plugins). Failure: binding
+// the projector changes what an ordinary task reads.
+test('runtime override: with no runtime change a task read is its row, in the desktop\'s runtime shape', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  t.after(bindHostSessionRuntimeHooks(r.selection));
+  await r.createTask('plain');
+  assert.deepEqual(await runtimeRead('plain'), {
+    agentKind: 'cc', model: 'big', providerId: 'prov-a', effort: 'high', fastMode: false,
+    runtimeGeneration: 0, runtimeBaseline: SAVED_ROUTE, runtimeEffective: SAVED_ROUTE, runtimePending: null,
+    runtimeBaselineRecoveryPending: false, runtimePluginsSelected: false,
+  });
 });
 
 // Working-directory move (A5, session-move.ts with the executor's own close):

@@ -1158,7 +1158,7 @@ const runtimeSelection = createHostRuntimeSelection({
   log: createLogger('runtime-selection'),
 });
 // The desktop's process-wide runtime selection slots (runtime-selection.ts), before any owner commit.
-bindHostSessionRuntimeHooks();
+bindHostSessionRuntimeHooks(runtimeSelection);
 
 const subagentReads = createSubagentReadService({
   getUserDataDir,

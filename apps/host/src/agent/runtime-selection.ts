@@ -69,8 +69,10 @@ import { setPendingCredentialSwitchReader } from '../../../desktop/src/main/make
 import type { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.desktop.ts';
 import {
   createSessionRuntimeProjection,
+  createSessionRuntimeProjector,
   createUpdateScheduledPreference,
 } from '../../../desktop/src/main/maker-ipc/sessionRuntimeProjection.ts';
+import { setSessionRuntimeProjector, type SessionRuntimeProjector } from '../../../desktop/src/main/localDb/mapper.ts';
 import { createResolvePendingRuntimeAxisPatch } from '../../../desktop/src/main/maker-ipc/pendingRuntimeAxisPatch.ts';
 import { assertModelRouteUsableWith } from '../../../desktop/src/main/maker-ipc/modelRouteAdmission.ts';
 import {
@@ -223,7 +225,15 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     pinExclusiveSessionProvider: (agent, model, providerId) =>
       pinExclusiveSessionProviderWithProviders(() => deps.listProviderViews(), agent, model, providerId),
   }));
-  const { broadcastSessionRuntimeProjection } = createSessionRuntimeProjection(explicitPorts<Parameters<typeof createSessionRuntimeProjection>[0]>({ broadcastSessionPatched }));
+  const { broadcastSessionRuntimeProjection, projectScheduledPreferences } = createSessionRuntimeProjection(explicitPorts<Parameters<typeof createSessionRuntimeProjection>[0]>({ broadcastSessionPatched }));
+  // The task read projector (register.ts setSessionRuntimeProjector), which bindHostSessionRuntimeHooks
+  // installs: every task read shows what the task runs on, an accepted runtime override included.
+  const sessionRuntimeProjector = createSessionRuntimeProjector(explicitPorts<Parameters<typeof createSessionRuntimeProjector>[0]>({
+    projectScheduledPreferences,
+    // The desktop reads the task's runtime plugin selection (runtime-plugin-settings.ts); the Host has
+    // none: it does not run runtime plugins (release table row 33, the plugin batch), so no task has one.
+    runtimePluginsSelected: () => false,
+  }));
   const updateScheduledPreference = createUpdateScheduledPreference(explicitPorts<Parameters<typeof createUpdateScheduledPreference>[0]>({ broadcastSessionRuntimeProjection }));
   const resolvePendingRuntimeAxisPatch = createResolvePendingRuntimeAxisPatch(explicitPorts<Parameters<typeof createResolvePendingRuntimeAxisPatch>[0]>({
     getDesktopProviderService: providerService,
@@ -575,6 +585,8 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   return {
     pendingSwitches,
     agentSwitchDeps,
+    /** The task read projector (bindHostSessionRuntimeHooks installs it, as register.ts). */
+    sessionRuntimeProjector,
     /** The interrupted-turn auto-resume's route change (auto-resume.ts), and the rebuild leases it marks. */
     maybeApplySessionRuntimeFallback,
     pendingSessionRuntimeFallbackRebuilds,
@@ -674,6 +686,11 @@ type HostRuntimeSelection = ReturnType<typeof createHostRuntimeSelection>;
  * calls this once, after the runtime selection is built and before the first owner commit
  * (configureHostOwner in ensureRuntime). Returns the undo, for tests.
  *
+ * The task read projector (mapper.ts setSessionRuntimeProjector; the desktop's, register.ts): every task
+ * read (the task list, a single task) shows the route the task runs on, an accepted runtime override
+ * (an automatic fallback) included, with runtimeEffective, runtimePending and runtimeGeneration, as the
+ * route change pushes already do.
+ *
  * The app session commit boundary (appSessionState.ts setAppSessionCommitBoundaryHook; the desktop's
  * hook, bootstrap-electron.ts): when the owner changes, before the new owner is visible, every task's
  * provider, runtime axes and runtime control state go (clearOwnerScopedSessionRuntimeSelection, which
@@ -687,9 +704,13 @@ type HostRuntimeSelection = ReturnType<typeof createHostRuntimeSelection>;
  * - task attention badges, remote desktop viewers, popped-out tab windows: window state, which the
  *   Host does not have.
  */
-export function bindHostSessionRuntimeHooks(): () => void {
+export function bindHostSessionRuntimeHooks(selection: { sessionRuntimeProjector: SessionRuntimeProjector }): () => void {
   setAppSessionCommitBoundaryHook(() => clearOwnerScopedSessionRuntimeSelection());
-  return () => { setAppSessionCommitBoundaryHook(null); };
+  setSessionRuntimeProjector(selection.sessionRuntimeProjector);
+  return () => {
+    setAppSessionCommitBoundaryHook(null);
+    setSessionRuntimeProjector(null);
+  };
 }
 
 /**
