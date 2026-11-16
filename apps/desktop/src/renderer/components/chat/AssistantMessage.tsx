@@ -231,6 +231,7 @@ interface AssistantMessageProps {
   turnUsageDetails?: TurnUsageDetails;
   /** 同一用户轮跨多个 SDK segment 聚合后的 token/cache/model 明细。 */
   userTurnUsageDetails?: TurnUsageDetails;
+  userTurnElapsedMs?: number;
   /** 本轮模型降级标记(main turn 结束检测命中时挂到收尾 assistant 上),
    *  正文下方渲染一条常显的降级提示行。 */
   modelMismatch?: { selected: string; actual: string };
@@ -271,6 +272,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   userTurnCostIsEstimate,
   turnUsageDetails,
   userTurnUsageDetails,
+  userTurnElapsedMs,
   modelMismatch,
   ghostReplyPending,
 }: AssistantMessageProps) {
@@ -390,6 +392,7 @@ export const AssistantMessage = memo(function AssistantMessage({
       userTurnCostUsd={userTurnCostUsd}
       userTurnCostIsEstimate={userTurnCostIsEstimate}
       turnUsageDetails={userTurnUsageDetails ?? turnUsageDetails}
+      userTurnElapsedMs={userTurnElapsedMs}
     />
   ) : null;
 

@@ -14,7 +14,9 @@ vi.mock('react-i18next', async () => {
   const { default: en } = await import('@/i18n/locales/en/common.json');
   const voice: Record<string, unknown> = en.bots.voiceMode;
   return {
-    useTranslation: () => ({ t: (key: string) => {
+    useTranslation: () => ({ t: (key: string, options?: Record<string, unknown>) => {
+      if (key === 'chat.messageActionBar.turnElapsed') return `Total elapsed ${options?.duration}`;
+      if (key === 'usageDetails.durationHoursMinutes') return `${options?.hours}h ${options?.minutes}m`;
       const value = key.startsWith('bots.voiceMode.') ? voice[key.slice('bots.voiceMode.'.length)] : null;
       return typeof value === 'string' ? value : key;
     } }),
@@ -220,6 +222,20 @@ describe('MessageActionBar', () => {
       configurable: true,
       value: { writeText },
     });
+  });
+
+  // #9806, unit: actual action bar shows whole-request elapsed alongside existing
+  // metadata. Previously only a local work-group duration was available. Minimal
+  // input is a 3,630,000ms request; no transport, timers or additional module loads.
+  it('shows elapsed time on ordinary replies and omits it where timing is unavailable', () => {
+    const { rerender } = render(<MessageActionBar copyText="reply" align="left" hovered userTurnElapsedMs={3_630_000} />);
+    expect(screen.getByText('Total elapsed 1h 0m')).toBeTruthy();
+    for (const userTurnElapsedMs of [undefined, NaN, -1]) {
+      rerender(<MessageActionBar copyText="reply" align="left" hovered userTurnElapsedMs={userTurnElapsedMs} />);
+      expect(screen.queryByText(/^Total elapsed/)).toBeNull();
+    }
+    rerender(<MessageActionBar copyText="reply" align="right" hovered userTurnElapsedMs={3_630_000} />);
+    expect(screen.queryByText(/^Total elapsed/)).toBeNull();
   });
 
   it('keeps companion quote and copy visible and opens a topic from More with a persistent focus target', async () => {

@@ -48,6 +48,7 @@ const context: ComponentProps<typeof WorkGroupRenderItemView>['context'] = {
   turnFinalAssistantClientIds: new Set(),
   subagentModelByToolUseId: new Map(),
   userTurnUsageDetailsByAssistantId: new Map(),
+  userTurnElapsedMsByAssistantId: new Map(),
 };
 function fixture(): Group {
   return {
