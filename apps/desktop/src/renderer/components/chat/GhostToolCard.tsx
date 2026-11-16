@@ -62,22 +62,17 @@ import {
   getGhostCardSnapshot,
   listSpawnCards,
   noteCardMeasuredHeight,
+  retainRemoteCardSession,
   subscribeGhostCards,
   type GhostRemoteCardSource,
 } from '@/cindy-brain/ghostCardStore';
 import {
-  answerRemoteCardConfirm,
-  answerRemoteCardModel,
-  claimRemoteCardPrompt,
   dispatchGhostCardAction,
-  getRemoteCardPrompt,
   prepareRemoteModelRoutes,
   routeForPicker,
-  subscribeRemoteCardPrompts,
-  type RemoteCardPrompt,
 } from '@/cindy-brain/ghostCardActions';
 import { useRemoteCardIdentity } from '@/cindy-brain/useRemoteCardIdentity';
-import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { RemoteCardModelRequest, useRemoteCardPromptFor } from './RemoteCardPrompt';
 import { useGhostCardThemeVars } from '@/cindy-brain/useGhostCardThemeVars';
 import { alignFrameWithGate } from '@/lib/hiddenAnimationGate';
 import { startGhostCardLiveIndicators } from '@/cindy-brain/ghostCardLive';
@@ -228,57 +223,6 @@ function useRemoteCardSource(callId: string): GhostRemoteCardSource | undefined 
   });
 }
 
-/**
- * A request the remote plugin made while handling this card's click. One view answers it:
- * confirmations use the app's dialog here; a model request is returned for the caller to show.
- */
-function useRemoteCardPromptFor(callId: string): Extract<RemoteCardPrompt, { kind: 'model' }> | undefined {
-  const prompt = useSyncExternalStore(subscribeRemoteCardPrompts, () => getRemoteCardPrompt(callId));
-  // Some card views (the detached mail editor) have no app dialog; another view of the card answers.
-  const confirm = useOptionalConfirmDialog()?.confirm;
-  const [owned, setOwned] = useState<RemoteCardPrompt>();
-  useEffect(() => {
-    if (!prompt || (prompt.kind === 'confirm' && !confirm) || !claimRemoteCardPrompt(prompt)) return;
-    if (prompt.kind === 'model') {
-      setOwned(prompt);
-      return;
-    }
-    const request = prompt.confirm;
-    void confirm!({
-      title: request.title,
-      description: request.body,
-      ...(request.confirmText ? { confirmText: request.confirmText } : {}),
-      ...(request.cancelText ? { cancelText: request.cancelText } : {}),
-      ...(request.danger ? { confirmVariant: 'destructive' as const } : {}),
-    }).then((accepted) => answerRemoteCardConfirm(prompt, accepted));
-  }, [prompt, confirm]);
-  return owned?.kind === 'model' && owned === prompt ? owned : undefined;
-}
-
-/** The plugin asked for a model; the menu opens at the card's top edge. */
-function RemoteCardModelRequest({ prompt, inDialog }: { prompt: Extract<RemoteCardPrompt, { kind: 'model' }>; inDialog?: boolean }) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(true);
-  const chosen = useRef(false);
-  if (!open) return null;
-  return (
-    <GhostCardModelSelect inDialog={inDialog}
-      rect={{ top: 0, left: 0, width: 0, height: 0 }}
-      initial={routeForPicker(prompt.request.initial ?? null, prompt.remote)}
-      onSelect={(route) => {
-        chosen.current = true;
-        void answerRemoteCardModel(prompt, route).then((answer) => {
-          if (answer.handled && !answer.accepted) toast.error(t('chat.ghostCall.modelSelectFailed'));
-        });
-      }}
-      onClose={() => {
-        setOpen(false);
-        if (!chosen.current) void answerRemoteCardModel(prompt, null);
-      }}
-    />
-  );
-}
-
 /** A second view of the same card; actions keep the original call identity. */
 export function GhostCardPreview({ callId, ghostId, html, sessionId, onEscape, settingsButtonRef, inDialog }: {
   callId: string; ghostId: string; html: string; sessionId: string; inDialog?: boolean; onEscape?: () => void; settingsButtonRef?: RefObject<HTMLButtonElement | null>;
@@ -337,7 +281,11 @@ function GhostCardCanvas({
   const remote = useRemoteCardSource(callId);
   const remoteRef = useRef(remote);
   remoteRef.current = remote;
-  useEffect(() => { if (remote) prepareRemoteModelRoutes(); }, [remote]);
+  useEffect(() => {
+    if (!remote) return;
+    prepareRemoteModelRoutes();
+    return retainRemoteCardSession(remote.deviceId, remote.sessionId);
+  }, [remote?.deviceId, remote?.sessionId]);
   const remotePrompt = useRemoteCardPromptFor(callId);
   // The iframe is not rebuilt when a plugin update adds card.externalLinks, so already-bound action handlers read this live.
   const allowExternalLinksRef = useRef(allowExternalLinks);

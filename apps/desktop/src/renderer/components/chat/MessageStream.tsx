@@ -365,6 +365,7 @@ import { CARD_EXPAND_TOGGLE_EVENT, GhostToolCard } from './GhostToolCard';
 import {
   ensureCard,
   ensureRemoteCard,
+  retainRemoteCardSession,
   ensureSessionCards,
   getGhostCardSnapshot,
   subscribeGhostCards,
@@ -3248,6 +3249,9 @@ export function MessageStream({
   // ensureCard 兜底(幂等,批量已 ready 者直接跳过)。
   // A task on another computer reads its cards from there (shared-task guests have no card access).
   const remoteCardDeviceId = ownerDeviceId && !isSharedTaskPeer(ownerDeviceId) ? ownerDeviceId : null;
+  useEffect(() => {
+    if (remoteCardDeviceId && sessionId) return retainRemoteCardSession(remoteCardDeviceId, sessionId);
+  }, [remoteCardDeviceId, sessionId]);
   useEffect(() => {
     if (sessionId && !ownerDeviceId) ensureSessionCards(sessionId);
   }, [sessionId, ownerDeviceId]);

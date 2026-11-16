@@ -311,11 +311,38 @@ const remoteUnread = new Map<string, { deviceId: string; sessionId: string }>();
 const REMOTE_RETRY_MS = 30_000;
 const remoteReads = new Map<string, Promise<void>>();
 let remoteSubscribed = false;
+const remoteViews = new Map<string, number>();
+const remoteDirty = new Set<string>();
+const remoteSessionKey = (deviceId: string, sessionId: string) => JSON.stringify([deviceId, sessionId]);
+
+/** Task stream and title-bar previews retain only the sessions currently displayed. */
+export function retainRemoteCardSession(deviceId: string, sessionId: string): () => void {
+  const key = remoteSessionKey(deviceId, sessionId);
+  const count = remoteViews.get(key) ?? 0;
+  remoteViews.set(key, count + 1);
+  ensureRemoteSubscribed();
+  if (!count) {
+    // Notices received while hidden did no IO; opening the task reads the latest versions.
+    for (const [callId, entry] of byCallId) {
+      if (entry.status === 'ready' && entry.remote?.deviceId === deviceId && entry.remote.sessionId === sessionId)
+        void readRemoteCard(deviceId, sessionId, callId);
+    }
+    for (const [callId, source] of remoteUnread) {
+      if (source.deviceId === deviceId && source.sessionId === sessionId)
+        void readRemoteCard(deviceId, sessionId, callId);
+    }
+  }
+  return () => {
+    const remaining = (remoteViews.get(key) ?? 1) - 1;
+    if (remaining) remoteViews.set(key, remaining);
+    else remoteViews.delete(key);
+  };
+}
 
 function readRemoteCard(deviceId: string, sessionId: string, callId: string): Promise<void> {
   const key = `${deviceId}\n${callId}`;
   const running = remoteReads.get(key);
-  if (running) return running;
+  if (running) { remoteDirty.add(key); return running; }
   const owner = getDataOwnerGeneration();
   const read = (async () => {
     let result: Awaited<ReturnType<typeof window.electronAPI.ghosts.getRemoteCard>> | null = null;
@@ -347,12 +374,17 @@ function readRemoteCard(deviceId: string, sessionId: string, callId: string): Pr
       remoteUnread.set(callId, { deviceId, sessionId });
     }
     // A card already shown keeps its last version when a refresh fails.
-    if (current?.status === 'ready' && result?.failed) return;
+    if (current?.status === 'ready' && (!result || result.failed)) return;
     if (current?.status !== 'missing') {
       byCallId.set(callId, { status: 'missing' });
       bump();
     }
-  })().finally(() => remoteReads.delete(key));
+  })().finally(() => {
+    remoteReads.delete(key);
+    const changed = remoteDirty.delete(key);
+    if (changed && isDataOwnerGenerationCurrent(owner) && remoteViews.has(remoteSessionKey(deviceId, sessionId)))
+      void readRemoteCard(deviceId, sessionId, callId);
+  });
   remoteReads.set(key, read);
   return read;
 }
@@ -372,14 +404,16 @@ function ensureRemoteSubscribed(): void {
       try { ids = JSON.parse(ref.id); } catch { continue; }
       if (!Array.isArray(ids) || ids.length !== 2 || typeof ids[0] !== 'string' || typeof ids[1] !== 'string') continue;
       const [sessionId, callId] = ids as [string, string];
+      if (!remoteViews.has(remoteSessionKey(push.deviceId, sessionId))) continue;
       const entry = byCallId.get(callId);
+      const reading = remoteReads.has(`${push.deviceId}\n${callId}`);
       const known = entry?.status === 'ready' && entry.remote?.deviceId === push.deviceId && entry.remote.sessionId === sessionId;
       // A click's result appears beside its card (`<root>::sp…`): read it when its root is shown here.
       const root = callId.includes(GHOST_CARD_SPAWN_SEP) ? byCallId.get(ghostCardRootCallId(callId)) : undefined;
       const spawned = !entry && root?.status === 'ready' && root.remote?.deviceId === push.deviceId && root.remote.sessionId === sessionId;
       const unread = remoteUnread.get(callId);
       const retried = unread?.deviceId === push.deviceId && unread.sessionId === sessionId;
-      if (known || spawned || retried) void readRemoteCard(push.deviceId, sessionId, callId);
+      if (known || spawned || retried || reading) void readRemoteCard(push.deviceId, sessionId, callId);
     }
   });
 }
@@ -430,4 +464,6 @@ export function __resetGhostCardStoreForTest(): void {
   remoteUnread.clear();
   remoteReads.clear();
   remoteSubscribed = false;
+  remoteViews.clear();
+  remoteDirty.clear();
 }

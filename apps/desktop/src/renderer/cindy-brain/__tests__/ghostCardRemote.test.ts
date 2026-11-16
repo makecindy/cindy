@@ -3,7 +3,7 @@ import { PLUGIN_COLLECTION, REMOTE_RESOURCE_CHANGED_CHANNEL, REMOTE_RESOURCE_INV
 
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
 
-import { __resetGhostCardStoreForTest, ensureRemoteCard, getGhostCardEntry } from '../ghostCardStore';
+import { __resetGhostCardStoreForTest, ensureRemoteCard, getGhostCardEntry, retainRemoteCardSession } from '../ghostCardStore';
 import { __resetGhostCardActionsForTest, dispatchGhostCardAction, routeForPicker } from '../ghostCardActions';
 
 // Production entries: MessageStream calls ensureRemoteCard for a remote task's card results, and
@@ -44,6 +44,7 @@ describe('remote plugin cards', () => {
 
   it('reads cards through the task computer, follows its change notices and asks an older host once', async () => {
     const { api, push } = stubApi();
+    retainRemoteCardSession('host', 'session');
     ensureRemoteCard('host', 'session', 'call');
     await flush();
     expect(api.ghosts.getRemoteCard).toHaveBeenCalledWith('host', 'session', 'call');
@@ -75,6 +76,38 @@ describe('remote plugin cards', () => {
     expect(api.ghosts.getRemoteCard).toHaveBeenCalledTimes(5);
     expect(getGhostCardEntry('a')).toEqual({ status: 'missing' });
     expect(getGhostCardEntry('b')).toEqual({ status: 'missing' });
+  });
+
+  // Regression #10734, unit: public store + actual change notification.
+  // Existing coverage completed every read before a notice; minimal failing timing is a notice
+  // during the first in-flight read. Leaving both task/preview views must stop shared-link IO.
+  it('coalesces notices during reads and stops IO after the last view leaves', async () => {
+    const { api, push } = stubApi();
+    const releaseTask = retainRemoteCardSession('host', 'session');
+    const releasePreview = retainRemoteCardSession('host', 'session');
+    let resolve!: (value: never) => void;
+    api.ghosts.getRemoteCard.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    ensureRemoteCard('host', 'session', 'call');
+    const notice = (callId = 'call') => push({ deviceId: 'host', channel: REMOTE_RESOURCE_CHANGED_CHANNEL,
+      payload: { collectionId: 'plugin-results', resourceRefs: [{ collectionId: 'plugin-results', kind: 'card', id: JSON.stringify(['session', callId]) }] } });
+    notice();
+    notice();
+    resolve({ card: { ghostId: 'cindy-github', html: '<p>old</p>', height: 120, revision: 'old', externalLinks: false } } as never);
+    await flush();
+    expect(api.ghosts.getRemoteCard).toHaveBeenCalledTimes(2);
+    expect(getGhostCardEntry('call')).toMatchObject({ html: '<p>call</p>', remote: { revision: 'rev-call' } });
+    releaseTask();
+    notice();
+    await flush();
+    expect(api.ghosts.getRemoteCard).toHaveBeenCalledTimes(3);
+    releasePreview();
+    notice();
+    notice('call::sphidden');
+    await flush();
+    expect(api.ghosts.getRemoteCard).toHaveBeenCalledTimes(3);
+    retainRemoteCardSession('host', 'session');
+    await flush();
+    expect(api.ghosts.getRemoteCard).toHaveBeenCalledTimes(4);
   });
 
   it('sends remote clicks to the task computer with its card version and translated model choices', async () => {

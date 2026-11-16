@@ -7,7 +7,7 @@ import { renderMailCard } from '../mailCards';
 // sanitizer runs again, an older host is recognised so the task keeps its tool rows, and mail cards
 // (which rely on host-only markers) are never shown from markup.
 const reply = (data: Record<string, unknown> | undefined) => async () =>
-  ({ blocks: data ? [{ id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data }] : [] });
+  ({ ok: true, result: { blocks: data ? [{ id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data }] : [] } });
 
 describe('fetchRemoteGhostCard', () => {
   it('asks for the markup on the task card and sanitizes it again on this computer', async () => {
@@ -21,6 +21,13 @@ describe('fetchRemoteGhostCard', () => {
     expect(result.card).toMatchObject({ ghostId: 'cindy-github', revision: 'r1', externalLinks: true, height: 900 });
     expect(result.card?.html).toContain('data-ghost-action="merge"');
     expect(result.card?.html).not.toMatch(/onclick|<script|steal\(\)<\/script>/);
+  });
+
+  // Regression #10734: the real main-process invoke wraps resources, including failures.
+  // Existing fixtures returned bare blocks; unit tier, minimal input is a failed invoke envelope.
+  it('does not mark transport failures as an unsupported host', async () => {
+    expect(await fetchRemoteGhostCard(async () => ({ ok: false, error: 'OFFLINE' }), 'host', 's', 'c'))
+      .toEqual({ card: null, failed: true });
   });
 
   it('recognises older hosts and keeps mail cards and invalid owners out', async () => {

@@ -18,6 +18,9 @@
 旧宿主忽略这个 primitive，回包里没有 `card`：控制端记下这台电脑不支持，本次运行内不再为它读卡，
 任务保持原来的工具行。手机不声明它，回包不变。卡片更新沿用既有 `maker:remote-resources:changed`
 （`sessions` topic 常驻订阅）；控制端只重读已显示的卡和它下方新出现的衍生卡（`<root>::sp…`）。
+读取先检查 Device Link 的 `{ ok, result }` 信封；传输失败可稍后重读，不当作旧宿主。
+变化通知在读取中到达时合并为一次补读，不丢最后版本。任务消息流与标题栏预览按会话登记显示生命周期，
+最后一个视图关闭后不再因通知读取，重新显示时刷新已知卡片。
 插件名与图标读既有 `plugin-identities` 资源。
 
 ## 操作
@@ -33,7 +36,8 @@
 
 点击后 20 秒内（有待答请求时延长到其过期时间）控制端每秒 `poll` 该页面，把插件发起的确认框与
 选模型请求（`confirms`、`modelPickers`）在本机显示，用既有 `answer` / `answer-model-picker` 回答；
-同一张卡同时出现在任务页和标题栏时只由一处回答。
+同一张卡同时出现在任务页和标题栏时只由一处回答。模型被宿主拒绝时重新打开选择器；
+领取请求的视图卸载时，以既有回答入口取消模型请求或拒绝确认，不让请求一直占着等到超时。
 
 ## 兼容与中转
 
@@ -43,4 +47,4 @@
 自建中转无需修改。需要任务所在电脑和控制端都升级才生效。
 
 回归入口：`cardRemoteResource.test.ts`、`cardActionDispatch.test.ts`、`remoteCardFetch.test.ts`、
-`ghostCardRemote.test.ts`。
+`ghostCardRemote.test.ts`、`RemoteCardPrompt.test.tsx`。

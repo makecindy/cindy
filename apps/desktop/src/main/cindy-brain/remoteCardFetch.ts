@@ -37,13 +37,15 @@ const isId = (value: unknown): value is string => typeof value === 'string' && v
  */
 export async function fetchRemoteGhostCard(
   invoke: Invoke, deviceId: unknown, sessionId: unknown, callId: unknown,
-): Promise<{ card: RemoteGhostCard } | { card: null; unsupported?: true }> {
+): Promise<{ card: RemoteGhostCard } | { card: null; unsupported?: true; failed?: true }> {
   if (!isId(deviceId) || !isId(sessionId) || !isId(callId)) return { card: null };
   const raw = await invoke(deviceId, REMOTE_RESOURCE_GET_CHANNEL, [{
     client: { protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: REMOTE_CARD_PRIMITIVES },
     ref: { collectionId: 'plugin-results', kind: 'card', id: JSON.stringify([sessionId, callId]) },
   }]);
-  const blocks = (raw as { blocks?: unknown } | null)?.blocks;
+  const reply = raw as { ok?: unknown; result?: { blocks?: unknown } } | null;
+  if (reply?.ok !== true) return { card: null, failed: true };
+  const blocks = reply.result?.blocks;
   const block = Array.isArray(blocks)
     ? blocks.find((item): item is { primitive: string; data?: unknown } => !!item && typeof item === 'object' && (item as { primitive?: unknown }).primitive === 'plugin-card-actions')
     : undefined;
