@@ -6,7 +6,7 @@
  * - 规则依据：docs/product-rules/model-groups.md「在另一台电脑上开的新任务」(那台版本较旧时不显示、不改用本机的模式；
  *   读不到时那台重新上线再读一次；只限同账号自己的电脑)。
  * - 现有覆盖缺口：协议与被控端处理在 main 侧测试，这里是发起端唯一区分「旧版不支持」与「暂时读不到」的地方。
- * - 最小失败输入：旧版那台回 CHANNEL_NOT_ALLOWED；读到过之后一次重读超时；共享任务访客的对端；没有选路凭据的结果。
+ * - 最小失败输入：旧版那台回 CHANNEL_NOT_ALLOWED；读到过之后一次重读超时；一直在线时没读到(要靠发送被挡下重读)；共享任务访客的对端；没有选路凭据的结果。
  * - tier：unit，经真实 hook 与真实重连代次，只替换 preload 的 deviceLink 桥。
  * - 实测耗时：单独运行约 1 秒。
  */
@@ -67,8 +67,12 @@ describe('remote model groups', () => {
 
     // 从来没读到过时，这次没读到不当成「没有模式」，也不当成旧版。
     invoke.mockRejectedValueOnce(new Error('[DEVICE_UNRESPONSIVE] timeout'));
-    const other = renderHook(() => useRemoteModelGroups('other-pc', true));
+    const other = renderHook(({ retry }) => useRemoteModelGroups('other-pc', true, retry), { initialProps: { retry: 0 } });
     await waitFor(() => expect(other.result.current).toEqual({ status: 'error' }));
+    // 那台一直在线、没有重连代次时，被挡下的发送触发重读。
+    invoke.mockResolvedValueOnce({ config: CONFIG });
+    other.rerender({ retry: 1 });
+    await waitFor(() => expect(other.result.current).toMatchObject({ status: 'ready' }));
   });
 
   it('never asks for shared-task peers, and commits only results carrying a receipt', async () => {

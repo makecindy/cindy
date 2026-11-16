@@ -1168,7 +1168,13 @@ export function NewMakerDraftRoute() {
   // (model-groups.md「在另一台电脑上开的新任务」)，那台版本较旧或还没读到时不显示，也不改用本机的模式。
   // SSH、协同、共享任务访客不提供。草稿此刻选着在另一台电脑运行的模型也照样提供：路线自己决定这次在哪台运行
   // (model-groups.md §3.1)。记住的那一项后来被删掉时按没选处理。
-  const remoteModelGroups = useRemoteModelGroups(effectiveDeviceLinkDeviceId, isDeviceLinkDraft && draft.vendor !== 'orca');
+  // 这次没读到时，被挡下的发送触发重读(那台一直在线时不会有重连代次)。
+  const [remoteModelGroupsRetry, setRemoteModelGroupsRetry] = useState(0);
+  const remoteModelGroups = useRemoteModelGroups(
+    effectiveDeviceLinkDeviceId,
+    isDeviceLinkDraft && !effectiveRemoteHostId && draft.vendor !== 'orca',
+    remoteModelGroupsRetry,
+  );
   const modelGroupsAllowed = !effectiveRemoteHostId && draft.vendor !== 'orca'
     && (!isDeviceLinkDraft || remoteModelGroups.status === 'ready');
   const { config: localModelGroupsConfig } = useModelGroups(modelGroupsAllowed && !isDeviceLinkDraft);
@@ -1197,7 +1203,7 @@ export function NewMakerDraftRoute() {
    * 草稿里选着那台电脑的模式，但那台的模式还没读到或这次没读到：先不发，提示稍后再试，不悄悄改用原来的模型。
    * 换电脑时草稿里的模式已清空(newMakerDraft)，所以这里的选择一定是给这台选的。
    */
-  const remoteModelGroupSendBlock = isDeviceLinkDraft && draft.modelGroup && !activeModelGroup
+  const remoteModelGroupSendBlock = isDeviceLinkDraft && !effectiveRemoteHostId && draft.modelGroup && !activeModelGroup
     && (remoteModelGroups.status === 'loading' || remoteModelGroups.status === 'error')
     ? remoteModelGroups.status
     : null;
@@ -4423,8 +4429,12 @@ export function NewMakerDraftRoute() {
         return true;
       };
       if (remoteModelGroupSendBlock && !shouldEnableCollab && !pluginModelAtSend) {
-        if (remoteModelGroupSendBlock === 'error') toast.error(t('newChat.modelSelector.remoteLoadFailed'));
-        else toast.warning(t('ccAgent.draft.deviceStillLoading'));
+        if (remoteModelGroupSendBlock === 'error') {
+          setRemoteModelGroupsRetry((value) => value + 1);
+          toast.error(t('newChat.modelSelector.remoteLoadFailed'));
+        } else {
+          toast.warning(t('ccAgent.draft.deviceStillLoading'));
+        }
         return false;
       }
       if (!modelGroupAtSend && !draftCatalogReady()) return false;
@@ -5909,6 +5919,7 @@ export function NewMakerDraftRoute() {
         if (goalPluginModel && !isCurrentDataOwner()) return;
         // 模型组：与 handleSend 同一流程。
         if (remoteModelGroupSendBlock && !shouldEnableCollab && !goalPluginModel) {
+          if (remoteModelGroupSendBlock === 'error') setRemoteModelGroupsRetry((value) => value + 1);
           throw new Error(t(remoteModelGroupSendBlock === 'error' ? 'newChat.modelSelector.remoteLoadFailed' : 'ccAgent.draft.deviceStillLoading'));
         }
         let modelGroupRoute: ModelGroupResolveResult | null = null;

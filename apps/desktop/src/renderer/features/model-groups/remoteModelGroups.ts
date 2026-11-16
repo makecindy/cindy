@@ -2,7 +2,8 @@
  * 给同账号的另一台电脑开新任务时，用那台电脑自己的模式(model-groups.md「在另一台电脑上开的新任务」)。
  * 模式列表、选路与提交都经 `model-groups:remote` 问那台；本机的模式与缓存(modelGroupsClient)一概不参与。
  *
- * 读取次数：进入这台电脑的草稿时读一次列表，那台重新上线时再读一次，不轮询；选路只在发送那一刻问一次。
+ * 读取次数：进入这台电脑的草稿时读一次列表，那台重新上线时、或这次没读到而发送被挡下时再读一次，不轮询；
+ * 选路只在发送那一刻问一次。
  */
 import { useEffect, useState } from 'react';
 import { isSharedTaskPeer, MODEL_GROUPS_REMOTE_CHANNEL } from '@cindy/device-link';
@@ -45,8 +46,11 @@ export async function readRemoteModelGroups(deviceId: string): Promise<ModelGrou
   return parseModelGroupsRemoteList(await invoke(deviceId, { action: 'list' }));
 }
 
-/** 那台电脑上当前账号的模式；deviceId 为空、共享任务访客或 enabled 为假时为 off。 */
-export function useRemoteModelGroups(deviceId: string | undefined, enabled: boolean): RemoteModelGroupsState {
+/**
+ * 那台电脑上当前账号的模式；deviceId 为空、共享任务访客或 enabled 为假时为 off。
+ * retryEpoch 变了就重读一次(调用方在发送因「这次没读到」被挡下时递增)。
+ */
+export function useRemoteModelGroups(deviceId: string | undefined, enabled: boolean, retryEpoch = 0): RemoteModelGroupsState {
   const target = enabled && deviceId && !isSharedTaskPeer(deviceId) ? deviceId : undefined;
   const reconnectEpoch = useDeviceLinkReconnectEpoch(target);
   const [state, setState] = useState<{ key: string; value: RemoteModelGroupsState } | null>(null);
@@ -71,7 +75,7 @@ export function useRemoteModelGroups(deviceId: string | undefined, enabled: bool
           : { key, value: { status: unsupported ? 'unsupported' : 'error' } }));
       });
     return () => { cancelled = true; };
-  }, [key, target, reconnectEpoch]);
+  }, [key, target, reconnectEpoch, retryEpoch]);
   if (!key) return { status: 'off' };
   return state?.key === key ? state.value : { status: 'loading' };
 }
