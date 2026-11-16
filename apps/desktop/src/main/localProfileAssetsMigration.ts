@@ -32,6 +32,7 @@ const PLUGIN_PATHS = [
   'ghost-kv',
   'ghost-fs',
   'ghost-cindy-prefs.json',
+  'ghost-errand-prefs.json',
   'ghost-workdir-prefs.json',
   'ghost-recent-usage.json',
   'plugin-market/ledger.v1.json',
@@ -276,6 +277,43 @@ async function pluginSecretKeys(localRoot: string): Promise<Set<string>> {
   return keys;
 }
 
+/** Keep user settings, but never attach local task IDs to an unrelated database. */
+async function stripTaskSessionLinks(stageRoot: string, entry: Entry): Promise<void> {
+  const file = path.join(stageRoot, entry.name);
+  const bytes = await readBoundedFileNoFollow(file, MAX_STATE_BYTES, {
+    containWithin: await fs.promises.realpath(stageRoot),
+    nonBlocking: true,
+    verifyContentStability: true,
+  });
+  if (!bytes) throw new Error('local plugin task preferences could not be safely read');
+  let prefs: unknown;
+  try {
+    prefs = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    // The settings store also treats unreadable JSON as defaults. Preserve the
+    // original for repair rather than turning a broken preference into login failure.
+    return;
+  }
+  if (
+    !prefs ||
+    typeof prefs !== 'object' ||
+    Array.isArray(prefs) ||
+    !Object.hasOwn(prefs, 'sessions')
+  )
+    return;
+  delete (prefs as Record<string, unknown>).sessions;
+  const mode = (await fs.promises.stat(file)).mode;
+  // Only rewrite our private snapshot; even a read-only source stays untouched.
+  try {
+    await fs.promises.chmod(file, mode | 0o200);
+    await fs.promises.writeFile(file, `${JSON.stringify(prefs)}\n`);
+  } finally {
+    await fs.promises.chmod(file, mode);
+  }
+  await syncFile(file);
+  entry.digest = await digest(stageRoot, entry);
+}
+
 async function savePlan(file: string, plan: Plan): Promise<void> {
   const text = `${JSON.stringify(plan)}\n`;
   if (Buffer.byteLength(text) > MAX_STATE_BYTES)
@@ -365,6 +403,10 @@ export async function adoptLocalProfileAssets(
           const secretStage = path.join(stage, 'secrets');
           await fs.promises.mkdir(pluginStage, { mode: 0o700 });
           await fs.promises.mkdir(secretStage, { mode: 0o700 });
+          const cloudDb = path.join(deps.userDataDir, `${deps.dbFilePrefix}-${ownerId}.db`);
+          const cloudDbExists = await exists(cloudDb);
+          const adoptedLocalDb =
+            cloudDbExists && readModelVisibilityAdoption(cloudDb) === 'adopted';
           // An existing cloud installation is authoritative as a unit. Never
           // combine its receipts or market routing with a different local install.
           let adoptPlugins = await exists(localRoot);
@@ -385,7 +427,13 @@ export async function adoptLocalProfileAssets(
             }
             for (const name of PLUGIN_PATHS) {
               if (await exists(path.join(localRoot, ...name.split('/')))) {
-                plan.plugins.push(await snapshot(localRoot, pluginStage, name));
+                const entry = await snapshot(localRoot, pluginStage, name);
+                // A missing DB is not adoption proof: legacy-profile recovery
+                // can still create a different cloud DB before local adoption.
+                if (name === 'ghost-errand-prefs.json' && !adoptedLocalDb) {
+                  await stripTaskSessionLinks(pluginStage, entry);
+                }
+                plan.plugins.push(entry);
               }
             }
           }
@@ -393,9 +441,7 @@ export async function adoptLocalProfileAssets(
           // A pre-existing, unrelated cloud DB did not adopt local provider rows.
           // Do not attach local credentials to its same-named providers. A prior
           // successful DB adoption is tied to the published file's identity.
-          const cloudDb = path.join(deps.userDataDir, `${deps.dbFilePrefix}-${ownerId}.db`);
-          const adoptProviders =
-            !(await exists(cloudDb)) || readModelVisibilityAdoption(cloudDb) === 'adopted';
+          const adoptProviders = !cloudDbExists || adoptedLocalDb;
           if (await exists(secretRoot)) {
             await requireDirectory(secretRoot);
             const containWithin = await fs.promises.realpath(secretRoot);

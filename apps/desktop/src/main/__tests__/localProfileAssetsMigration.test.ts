@@ -162,6 +162,23 @@ describe('first verified cloud owner adopts local assets', () => {
         '{"fixture":"original-market-facts"}',
       );
       f.write(path.join(f.local, 'ghost-kv/opendesign-trial.json'), '{"preference":true}');
+      // #10357 review: installed plugins must keep their actual task settings,
+      // not only KV data. A missing cloud DB is not proof of local task adoption.
+      const taskPrefs = {
+        errand: {
+          [instanceKey]: {
+            agentKind: 'codex',
+            providerId: 'opendesign',
+            model: 'test-model',
+            effort: 'high',
+            fastMode: true,
+            permissionMode: 'ask',
+            workingDir: path.join(f.root, 'project'),
+          },
+        },
+        sessions: { [instanceKey]: 'local-task', [`${instanceKey}#daily`]: 'daily-task' },
+      };
+      f.write(path.join(f.local, 'ghost-errand-prefs.json'), JSON.stringify(taskPrefs));
       f.write(
         path.join(f.local, 'ghost-install-state/.oauth-locks/opendesign-trial.lock'),
         'old-lock',
@@ -190,9 +207,14 @@ describe('first verified cloud owner adopts local assets', () => {
         '{"fixture":"original-market-facts"}',
       );
       expect(fs.existsSync(path.join(f.cloud, 'ghost-install-state/.oauth-locks'))).toBe(false);
+      expect(
+        JSON.parse(fs.readFileSync(path.join(f.cloud, 'ghost-errand-prefs.json'), 'utf8')),
+      ).toEqual({ errand: taskPrefs.errand });
       fs.unlinkSync(f.secret('cloud-a', keys[0]!));
+      fs.unlinkSync(path.join(f.cloud, 'ghost-errand-prefs.json'));
       expect(await adoptLocalProfileAssets('cloud-a', f.deps)).toBe('complete');
       expect(fs.existsSync(f.secret('cloud-a', keys[0]!))).toBe(false);
+      expect(fs.existsSync(path.join(f.cloud, 'ghost-errand-prefs.json'))).toBe(false);
       for (const key of keys.slice(1))
         expect(fs.readFileSync(f.secret('cloud-a', key), 'utf8')).toBe(`test-ciphertext:${key}`);
       for (const key of excluded) expect(fs.existsSync(f.secret('cloud-a', key))).toBe(false);
@@ -219,31 +241,40 @@ describe('first verified cloud owner adopts local assets', () => {
     expect(fs.existsSync(f.secret('cloud-b', key))).toBe(false);
   });
 
-  it('keeps existing cloud values and treats a cloud installation as one authoritative unit', async () => {
-    const f = fixture();
-    await install(f.local);
-    const key = 'provider_key_opendesign_codex';
-    f.write(f.secret('local-v1', key), 'local-test-ciphertext');
-    f.write(f.secret('cloud-a', key), 'cloud-test-ciphertext');
-    f.write(
-      f.secret('local-v1', 'ghost_secret_opendesign-trial_api_key'),
-      'local-plugin-ciphertext',
-    );
-    f.write(path.join(f.cloud, 'ghost-cindy-prefs.json'), '{"cloud":true}');
-    expect(await adoptLocalProfileAssets('cloud-a', f.deps)).toBe('adopted');
-    expect(fs.readFileSync(f.secret('cloud-a', key), 'utf8')).toBe('cloud-test-ciphertext');
-    expect(fs.readFileSync(path.join(f.cloud, 'ghost-cindy-prefs.json'), 'utf8')).toBe(
-      '{"cloud":true}',
-    );
-    expect(fs.existsSync(path.join(f.cloud, 'cindy-brain'))).toBe(false);
-    expect(fs.existsSync(f.secret('cloud-a', 'ghost_secret_opendesign-trial_api_key'))).toBe(false);
-  });
+  it.each(['ghost-cindy-prefs.json', 'ghost-errand-prefs.json'])(
+    'keeps existing cloud values and treats cloud %s as authoritative plugin state',
+    async (prefsFile) => {
+      const f = fixture();
+      await install(f.local);
+      const key = 'provider_key_opendesign_codex';
+      f.write(f.secret('local-v1', key), 'local-test-ciphertext');
+      f.write(f.secret('cloud-a', key), 'cloud-test-ciphertext');
+      f.write(
+        f.secret('local-v1', 'ghost_secret_opendesign-trial_api_key'),
+        'local-plugin-ciphertext',
+      );
+      f.write(
+        path.join(f.local, 'ghost-errand-prefs.json'),
+        '{"errand":{"opendesign-trial":{"model":"local-model"}}}',
+      );
+      f.write(path.join(f.cloud, prefsFile), '{"cloud":true}');
+      expect(await adoptLocalProfileAssets('cloud-a', f.deps)).toBe('adopted');
+      expect(fs.readFileSync(f.secret('cloud-a', key), 'utf8')).toBe('cloud-test-ciphertext');
+      expect(fs.readFileSync(path.join(f.cloud, prefsFile), 'utf8')).toBe('{"cloud":true}');
+      expect(fs.existsSync(path.join(f.cloud, 'cindy-brain'))).toBe(false);
+      expect(fs.existsSync(f.secret('cloud-a', 'ghost_secret_opendesign-trial_api_key'))).toBe(
+        false,
+      );
+    },
+  );
 
   it('recovers an interrupted publication only from its frozen snapshot', async () => {
     const f = fixture();
     await install(f.local);
     const key = 'provider_key_opendesign_codex';
     f.write(f.secret('local-v1', key), 'original-test-ciphertext');
+    const taskPrefs = { errand: { 'opendesign-trial': { model: 'original-model' } } };
+    f.write(path.join(f.local, 'ghost-errand-prefs.json'), JSON.stringify(taskPrefs));
     const link = fs.promises.link;
     const fault = vi
       .spyOn(fs.promises, 'link')
@@ -252,14 +283,18 @@ describe('first verified cloud owner adopts local assets', () => {
     fault.mockImplementation(link);
     f.write(f.secret('local-v1', key), 'changed-later-ciphertext');
     f.write(f.secret('local-v1', 'provider_key_later_codex'), 'later-ciphertext');
+    f.write(path.join(f.local, 'ghost-errand-prefs.json'), '{"errand":{}}');
     expect(await adoptLocalProfileAssets('cloud-a', f.deps)).toBe('adopted');
     expect(fs.readFileSync(f.secret('cloud-a', key), 'utf8')).toBe('original-test-ciphertext');
     expect(fs.existsSync(f.secret('cloud-a', 'provider_key_later_codex'))).toBe(false);
     expect(fs.existsSync(path.join(f.local, 'cindy-brain/opendesign-trial/ghost.json'))).toBe(true);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(f.cloud, 'ghost-errand-prefs.json'), 'utf8')),
+    ).toEqual(taskPrefs);
   });
 
   it.each([false, true])(
-    'only fills credentials for a previously adopted cloud DB (adopted: %s)',
+    'keeps task settings but only carries credentials and task links for an adopted cloud DB (%s)',
     async (adopted) => {
       const f = fixture();
       const db = path.join(f.root, 'cindy-cloud-a.db');
@@ -267,8 +302,37 @@ describe('first verified cloud owner adopts local assets', () => {
       if (adopted) recordModelVisibilityAdoption(db);
       const key = 'provider_key_opendesign_codex';
       f.write(f.secret('local-v1', key), 'test-ciphertext');
+      // Unit: the same public adoption entry must preserve user settings while
+      // preventing local task IDs from pointing into an unrelated cloud DB.
+      // Existing credential-only fixtures did not include plugin task prefs.
+      const taskPrefs = {
+        errand: {
+          'opendesign-trial': {
+            model: 'chosen-model',
+            permissionMode: 'ask',
+            workingDir: path.join(f.root, 'project'),
+          },
+        },
+        sessions: { 'opendesign-trial': 'local-task', 'opendesign-trial#daily': 'daily-task' },
+        futurePreference: { keep: true },
+      };
+      const sourcePrefs = path.join(f.local, 'ghost-errand-prefs.json');
+      f.write(sourcePrefs, JSON.stringify(taskPrefs));
+      fs.chmodSync(sourcePrefs, 0o444);
       await adoptLocalProfileAssets('cloud-a', f.deps);
       expect(fs.existsSync(f.secret('cloud-a', key))).toBe(adopted);
+      const migrated = JSON.parse(
+        fs.readFileSync(path.join(f.cloud, 'ghost-errand-prefs.json'), 'utf8'),
+      );
+      expect(migrated).toEqual(
+        adopted
+          ? taskPrefs
+          : {
+              errand: taskPrefs.errand,
+              futurePreference: taskPrefs.futurePreference,
+            },
+      );
+      expect(JSON.parse(fs.readFileSync(sourcePrefs, 'utf8'))).toEqual(taskPrefs);
     },
   );
 
