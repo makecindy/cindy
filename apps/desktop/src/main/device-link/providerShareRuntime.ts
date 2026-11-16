@@ -610,7 +610,9 @@ export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
       if (!isRemoteAgentLimitsPatch(value.limits)) throwIpcError('INVALID_PARAMS', 'Invalid remote task limits');
       return { action: value.action, limits: { ...value.limits } };
     case 'owned':
-      return { action: 'owned', range: usageRange(value.range) };
+      if (value.includeUsage !== undefined && typeof value.includeUsage !== 'boolean') throwIpcError('INVALID_PARAMS', 'Invalid owned usage scope');
+      return { action: 'owned', range: usageRange(value.range),
+        ...(value.includeUsage !== undefined ? { includeUsage: value.includeUsage } : {}) };
     case 'own-usage':
       return { action: 'own-usage', providerId: text(value.providerId, 'providerId'), range: usageRange(value.range) };
     case 'usage-history':
@@ -723,11 +725,12 @@ function createUsageEstimator() {
   };
 }
 
-async function ownerState(range: ProviderShareUsageRange): Promise<ProviderShareOwnerState> {
-  if (!running) return { ready: false, shares: [] };
-  const estimate = createUsageEstimator();
+async function ownerState(range: ProviderShareUsageRange, includeUsage = true): Promise<ProviderShareOwnerState> {
+  const scope = includeUsage ? {} : { includeUsage: false as const };
+  if (!running) return { ready: false, ...scope, shares: [] };
+  const estimate = includeUsage ? createUsageEstimator() : null;
   const shares = getProviderShareHostSnapshot();
-  const usage = getProviderShareUsageStore()?.query(new Set(shares.map((share) => share.shareId)), range) ?? [];
+  const usage = includeUsage ? getProviderShareUsageStore()?.query(new Set(shares.map((share) => share.shareId)), range) ?? [] : [];
   const reshares = listProviderShareReshares();
   const notes = providerShareMemberNotes.read();
   const runningTasks = new Map<string, number>();
@@ -739,6 +742,7 @@ async function ownerState(range: ProviderShareUsageRange): Promise<ProviderShare
   }
   return {
     ready: true,
+    ...scope,
     shares: await Promise.all(shares.map(async (share) => ({
       shareId: share.shareId,
       providerId: share.providerId,
@@ -772,7 +776,7 @@ async function ownerState(range: ProviderShareUsageRange): Promise<ProviderShare
             outputTokens: model.outputTokens,
             cacheReadTokens: model.cacheReadTokens,
             cacheCreateTokens: model.cacheCreateTokens,
-            amount: await estimate(model),
+            amount: estimate ? await estimate(model) : null,
           }))),
         };
       })),
@@ -1056,10 +1060,10 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
           if (recommended && !recommendationModelIds.includes(recommended) && recommended !== previous?.recommendedModel)
             throwIpcError('INVALID_PARAMS', 'The recommended model is unavailable');
         }
-        await remoteModelAccess.set(command.providerId, command.models, command.memberId, assertScope, command.memberBudget);
-        assertScope();
+        await remoteModelAccess.set(command.providerId, command.models, command.memberId, assertScope, command.memberBudget, assertOwner);
+        assertOwner();
         await revalidateRemoteModelAccess();
-        assertScope();
+        assertOwner();
         emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
         emit(MAKER_PUSH.PROVIDER_CHANGED, {});
         tapWindowBroadcast(MAKER_PUSH.PROVIDER_CHANGED, {});
@@ -1130,8 +1134,8 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
           : [],
       };
     case 'owned':
-      if (running) markProviderShareHostActive(60_000);
-      return ownerState(command.range);
+      if (running && command.includeUsage !== false) markProviderShareHostActive(60_000);
+      return ownerState(command.range, command.includeUsage);
     case 'own-usage':
       return ownUsage(command.providerId, command.range);
     case 'usage-history':
@@ -1223,8 +1227,10 @@ export async function readReceivedProviderShareQuota(shareId: string): Promise<P
  * 同账号管理只执行分享者操作；申请和成员必须属于这台电脑的分享。经管理生成的链接由发起的那台电脑
  * 弹审批窗，本机在窗口期内静默；返回的 owned 只含这台电脑的分享，不带本机自己的弹窗安排。
  */
-export async function executeProviderShareManagementCommand(command: ProviderShareManagementCommand): Promise<unknown> {
-  const assertCurrent = captureProviderManagementScope();
+export async function executeProviderShareManagementCommand(command: ProviderShareManagementCommand, assertCaller: () => void = () => undefined): Promise<unknown> {
+  const assertOwner = captureProviderManagementScope();
+  const assertCurrent = () => { assertOwner(); assertCaller(); };
+  assertCurrent();
   if (command.action === 'approve' || command.action === 'reject' || command.action === 'set-member') {
     requireRunning();
     await refreshProviderShareHost('management');
@@ -1243,11 +1249,14 @@ export async function executeProviderShareManagementCommand(command: ProviderSha
     rememberIssuedClipboardText(created.link, created.expiresAt);
     return created;
   }
-  const result = await execute(command, assertCurrent);
+  // A committed server mutation must finish owner-local revocation/cleanup even
+  // if the caller stops while REST is in flight. Its result is still withheld.
+  const committedCleanup = command.action === 'approve' || command.action === 'reject' || command.action === 'set-member';
+  const result = await execute(command, committedCleanup ? assertOwner : assertCurrent);
   assertCurrent();
   if (command.action === 'owned') {
-    const { ready, shares } = result as ProviderShareOwnerState;
-    return { ready, shares } satisfies ProviderShareOwnerState;
+    const { ready, shares, includeUsage } = result as ProviderShareOwnerState;
+    return { ready, shares, ...(includeUsage === false ? { includeUsage } : {}) } satisfies ProviderShareOwnerState;
   }
   return result;
 }
