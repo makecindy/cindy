@@ -1225,7 +1225,6 @@ import {
   isContextOverflowErrorData,
   isOversizedHistoryErrorData,
   isPiPromptRpcTimeoutError,
-  lookupVerifiedContextWindow,
   persistedUserContentToWireMessage,
 } from './contextOverflowRollover.js';
 import {
@@ -1431,10 +1430,7 @@ import {
   codexCustomProviderConfigSignature,
   hasCodexAppliedCustomProviderCapability,
 } from '../maker-host/codex-custom-provider-route.js';
-import {
-  commitRuntimeAxisAfterPersistence,
-  isSupportedRuntimeEffort,
-} from './runtimeSelectionAxes.js';
+import { commitRuntimeAxisAfterPersistence } from './runtimeSelectionAxes.js';
 import { runSchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
 import {
   acceptSessionRuntimeMutation,
@@ -1473,6 +1469,7 @@ import {
   wakeSessionInputAfterCredentialSwitchWith,
   type PendingCredentialSwitchAccessPorts,
 } from './pendingCredentialSwitchAccess.js';
+import { createApplyPiPendingSelection, createPendingCredentialSwitchService } from './pendingCredentialSwitchAssembly.js';
 import { PendingCredentialSwitchService, type PendingCredentialSwitchDeps } from './pendingCredentialSwitch.js';
 import {
   DeferredCodexRestartService,
@@ -20049,134 +20046,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // 延迟生效的凭证切换登记表:set-model 撞上"会话自己在跑"时不再拒绝,登记到这里,
   // turn 结束边界(上方 onEvent 接线)自动兑现:关会话 + 写 route + 广播 + 唤醒队列。
-  const pendingCredentialSwitchService = new PendingCredentialSwitchService({
-    maker,
-    isSessionInTurn,
-    isPiOwnerCurrent: sessionRuntimeControlOwnerEpochMatches,
-    withPiSessionLock: withSendToSessionLock,
-    applyPiPending: (sessionId, target, resolved, isCurrent) =>
+  const pendingCredentialSwitchService = createPendingCredentialSwitchService({
+    maker, isSessionInTurn,
+    applyPiPendingSelection: (sessionId, target, resolved, isCurrent) =>
       applyPiPendingSelection(sessionId, target, resolved, isCurrent),
-    broadcastFailed: (payload) => {
-      broadcastToAllWindows(MAKER_PUSH.SESSION_CREDENTIAL_SWITCH_FAILED, payload);
-    },
-    broadcastApplied: (payload) => {
-      broadcastToAllWindows(MAKER_PUSH.SESSION_CREDENTIAL_SWITCH_APPLIED, payload);
-    },
-    onApplied: (sessionId) => {
-      inputCoordinator.wakeSession(sessionId, 'pending-credential-switch-applied');
-    },
-    // 停用轴:deferred 切换收口前重裁决(SET_MODEL 时刻裁决过,但生效可能在数分钟
-    // 后,期间目标可能被停用;PR #744 review 第七轮,第十四轮换宽松降级形态 ——
-    // 目标全停时连模型一起换到启用兜底)。
-    resolveRoute: resolveLenientSessionRoute,
-    // 裁决改道 / 清空显式来源 / 全停换模型时回写 DB + 广播 patch:renderer 在
-    // deferred 接受时已按请求值落盘,不纠正则下一次懒 resume 按停用路由重建
-    // (PR #744 review 第十、十四轮)。
-    persistRoute: async (sessionId, route) => {
-      const ownerEpoch = pendingCredentialSwitchHolder?.get(sessionId)?.ownerEpoch;
-      const assertPendingOwner = () => {
-        if (ownerEpoch && !sessionRuntimeControlOwnerEpochMatches(ownerEpoch)) {
-          throw new Error('pending model switch account changed');
-        }
-      };
-      assertPendingOwner();
-      const pendingDb = getDbClient();
-      const agentKind = getSessionDbAgentKind(sessionId);
-      const [desiredRow] = await pendingDb
-        .drizzle.select({
-          model: sessions.model,
-          effort: sessions.effort,
-          fastMode: sessions.fastMode,
-        })
-        .from(sessions)
-        .where(eq(sessions.id, sessionId))
-        .limit(1);
-      assertPendingOwner();
-      const finalModel = route.model ?? desiredRow?.model ?? null;
-      const previousRoute = pendingCredentialSwitchHolder?.get(sessionId)?.previousRoute;
-      const restoringPreviousRoute =
-        !!route.model &&
-        route.model === previousRoute?.model &&
-        route.providerId === previousRoute.providerId;
-      let finalEffort = restoringPreviousRoute && route.effort && isSupportedRuntimeEffort(route.effort)
-        ? route.effort
-        : isSupportedRuntimeEffort(desiredRow?.effort)
-          ? desiredRow.effort
-          : !desiredRow && route.effort && isSupportedRuntimeEffort(route.effort)
-            ? route.effort
-            : null;
-      let finalFastMode = restoringPreviousRoute && route.fastMode !== undefined
-        ? route.fastMode
-        : desiredRow
-          ? desiredRow.fastMode ?? false
-          : route.fastMode ?? false;
-      if (agentKind && finalModel) {
-        const runtimeAgentKind = dbToMakerAgentKind(agentKind);
-        const providers = await getDesktopProviderService().listProviders({
-          allowSideEffects: false,
-          catalog: getActiveCatalog(),
-        });
-        const finalProviderId = route.providerId ?? effectiveSourceIdForModel(
-          providers,
-          null,
-          finalModel,
-          runtimeAgentKind,
-        );
-        const finalProvider = providers.find((provider) => provider.id === finalProviderId);
-        const catalogModel = findCatalogModel(finalProvider, finalModel, runtimeAgentKind, {
-          exact: true,
-        });
-        if (catalogModel) {
-          const axes = resolveSessionRuntimeAxes({
-            model: catalogModel,
-            effort: finalEffort,
-            fastMode: finalFastMode,
-            effortExplicit: false,
-            fastExplicit: false,
-          });
-          if (axes.ok) {
-            finalEffort = axes.effort;
-            finalFastMode = axes.fastMode;
-          }
-        }
-      }
-      const patch: Record<string, unknown> = {
-        providerId: route.providerId,
-        effort: finalEffort,
-        fastMode: finalFastMode,
-      };
-      if (route.model) patch.model = route.model;
-      if (route.model && agentKind) {
-        const verifiedWindow = lookupVerifiedContextWindow(
-          (resolvedAgentKind, modelId, pid) =>
-            resolveConfiguredContextWindow(
-              getActiveCatalog(),
-              dbToMakerAgentKind(resolvedAgentKind || agentKind),
-              pid,
-              modelId,
-            ),
-          route.model,
-          route.providerId ?? null,
-          dbToMakerAgentKind(agentKind),
-        );
-        if (verifiedWindow) patch.contextWindow = verifiedWindow;
-      }
-      assertPendingOwner();
-      await pendingDb.drizzle.update(sessions).set(patch).where(eq(sessions.id, sessionId));
-      assertPendingOwner();
-      setSessionEffort(sessionId, finalEffort);
-      setSessionFastMode(sessionId, finalFastMode);
-      if (finalModel) {
-        agentInputCoordinatorHolder?.refreshQueuedRoute(sessionId, {
-          model: finalModel,
-          providerId: route.providerId,
-          effort: finalEffort ?? undefined,
-          fastMode: finalFastMode,
-        });
-      }
-      broadcastSessionPatched(sessionId, patch);
-    },
-    logger: log,
+    broadcastToAllWindows, inputCoordinator, resolveLenientSessionRoute, getSessionDbAgentKind,
+    getDesktopProviderService, resolveConfiguredContextWindow, agentInputCoordinatorHolder,
+    broadcastSessionPatched, log,
   });
   pendingCredentialSwitchHolder = pendingCredentialSwitchService;
   setPendingCredentialSwitchReader((sessionId) => {
@@ -22261,27 +22137,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throw new Error('Pi model settings need a smaller context window; confirm the switch before continuing');
     }
   };
-  applyPiPendingSelection = async (sessionId, target, resolved, isCurrent) => {
-    const assertPendingCurrent = () => {
-      if (!isCurrent() || !target.ownerEpoch ||
-          !sessionRuntimeControlOwnerEpochMatches(target.ownerEpoch)) {
-        throw new Error('Pi pending model switch was superseded or its account changed');
-      }
-    };
-    assertPendingCurrent();
-    const result = await handleSetModel(sessionId, resolved.model, resolved.providerId,
-      undefined, undefined, {
-        source: target.selectionSource ?? 'user', applyingUserSelectionOnSend: true,
-        applyingPiCredentialPending: true, refreshPiConfiguration: true,
-        ...(target.previousRoute ? { previousPiRoute: target.previousRoute } : {}),
-        assertSelectionCurrent: assertPendingCurrent,
-      });
-    if (result.superseded) throw new Error('Pi pending model switch was superseded');
-    if (result.contextWindowConfirmationRequired) {
-      throw new Error('Pi model switch needs confirmation for its smaller context window');
-    }
-    return result.deferred ? 'deferred' : 'applied';
-  };
+  applyPiPendingSelection = createApplyPiPendingSelection({ handleSetModel });
   applyPiImModelSelectionHolder = async (sessionId, model, providerId, previousRoute, options) => {
     const result = await handleSetModel(sessionId, model, providerId, undefined, undefined, {
       source: options?.source ?? 'user', sessionLockHeld: true, applyingUserSelectionOnSend: true,
