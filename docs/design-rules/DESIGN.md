@@ -619,10 +619,13 @@ input/text
 
 Every confirmation built on the shared `ConfirmDialog` / provider uses its standard buttons; there is no per-caller presentation switch (maintainer ruling 2026-11-11, C-02 — supersedes the DS-6 two-caller pilot). Confirmation actions keep a 36px minimum height; long labels wrap within the panel and may grow vertically instead of overflowing or truncating. Keep `confirm-btn-*` local styling, default/destructive choice, focus branches and no scrim dismissal. Full Access and plugin-authorization confirmations follow the same buttons; the in-chat Permission card is not a `ConfirmDialog` and keeps its own `palette="permission"` presentation.
 
-**Interaction answer composers (user decision, 2026-11-10):** Free-text answers, custom-choice answers,
-withdrawn-question supplements and plan feedback use a full-width input frame. Text occupies its own
-full-width area; existing microphone and submit controls sit inside the frame in a trailing toolbar
-below the text, never squeeze the textarea into a narrow side column. Submission uses the main
+**Interaction answer composers (user decisions, 2026-11-10 and 2026-11-16):** Free-text answers, custom-choice answers,
+withdrawn-question supplements and plan feedback use one input frame that starts as a single line: while
+the answer is empty or fits one line, the text sits beside the existing microphone and submit controls,
+centred on them (about 48px tall). Once the answer wraps or contains a line break, the frame expands: the
+text takes its own full-width area and the controls move to a trailing toolbar below it, so a multi-line
+answer is never squeezed into a narrow column. The expansion holds until the answer is cleared, so the
+layout does not flip back and forth while typing (`useAnswerComposerExpanded`). Submission uses the main
 composer's paper-plane glyph, with the actual action retained in localized accessible names and
 Desktop tooltips. Multi-select custom input has one submit control, not a second footer submit.
 Question navigation, close/skip, validation, voice finalization and approval semantics stay unchanged.
