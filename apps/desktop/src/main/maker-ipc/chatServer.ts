@@ -962,7 +962,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const [localRow] = await getDbClient().drizzle.select({ id: botGroups.id }).from(botGroups).where(eq(botGroups.id, groupId)).limit(1);
     if (localRow && (await localSources()).some(group => group.id === groupId)) {
       await ensureUpgrade('foreground');
-      if (!upgradedGroups.has(groupId)) throw new Error('IMPORT_PENDING');
+      if (!upgradedGroups.has(groupId)) {
+        // A room also carries a local row for its lane metadata, and that row starts to look like
+        // an unimported history once those lanes are gone. An id that answers with a room is the
+        // room; only a history the server has never seen is still pending.
+        const room = await groupSnapshot(groupId).catch(error => {
+          if (error instanceof ChatResponseError && [403, 404].includes(error.status)) return null;
+          throw error;
+        });
+        if (!room) throw new Error('IMPORT_PENDING');
+        upgradedGroups.set(groupId, groupId);
+      }
     }
     const room = upgradedGroups.get(groupId) ?? groupId;
     if (current()) resolvedGroups.set(groupId, room);
