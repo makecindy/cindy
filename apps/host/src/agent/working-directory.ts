@@ -16,6 +16,7 @@ import { isCindyMakeWorktreePath } from '../../../desktop/src/main/cindy-make/so
 import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.ts';
 import { createLogger, type Logger } from '../../../desktop/src/main/logger.ts';
+import { explicitPorts } from './explicit-ports.ts';
 
 type Stat = Parameters<typeof createWorkingDirectoryPreflight>[0]['statWorkingDirectory'];
 
@@ -43,15 +44,15 @@ export function createHostWorkingDirectory(deps: {
 }) {
   const stat = deps.stat ?? statWorkingDirectory;
   const workdirLog = createLogger('workdir-diagnostics');
-  const recovery = createWorkingDirectoryRecovery({
+  const recovery = createWorkingDirectoryRecovery(explicitPorts<Parameters<typeof createWorkingDirectoryRecovery>[0]>({
     stat, mkdir: mkdirWorkingDirectory, realpath: realpathWorkingDirectory,
     requiredRoot: requiredDialogueRecoveryRoot, findFallback: findDialogueRecoveryWorkspace,
     // As the desktop (register.ts, main e322628568): only the active owner's namespace is recreated,
     // and nothing during an account switch.
-    canRecreateDirectory: dir => !isAppSessionBoundaryPending()
+    canRecreateDirectory: (dir: string) => !isAppSessionBoundaryPending()
       && canRecreateOwnerWorkingDirectory(getUserDataDir(), ownerScopedPath(), dir),
-  }, allocateDialogueRecoveryWorkspace, workdirLog);
-  const checkWorkDirExists = createWorkingDirectoryPreflight({
+  }), allocateDialogueRecoveryWorkspace, workdirLog);
+  const checkWorkDirExists = createWorkingDirectoryPreflight(explicitPorts<Parameters<typeof createWorkingDirectoryPreflight>[0]>({
     workingDirectoryRecovery: recovery,
     statWorkingDirectory: stat,
     readBoundWorkingDir: deps.readBoundWorkingDir,
@@ -75,7 +76,7 @@ export function createHostWorkingDirectory(deps: {
     },
     workdirLog,
     log: deps.log,
-  });
+  }));
   return {
     checkWorkDirExists,
     statDirectory: stat,

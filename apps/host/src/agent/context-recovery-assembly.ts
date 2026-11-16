@@ -36,6 +36,7 @@ import { findLatestContextRebuildMeta, findLatestUserMessageForRebuild } from '.
 import { listMessagesForAgentHandoff } from '../../../desktop/src/main/localDb/agentHandoffHistory.ts';
 import { dbToMakerAgentKind } from '../../../desktop/src/shared/agentKindConversion.ts';
 import { DEFAULT_MODEL_COMPACTION_PCT } from '../../../desktop/src/shared/modelContextLimit.ts';
+import { explicitPorts } from './explicit-ports.ts';
 
 type Log = ContextOverflowRolloverDeps['log'];
 
@@ -97,22 +98,30 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
   const readSession = (sessionId: string) => readContextRecoverySessionWithPorts({
     getDbClient, sessions, botSessionLinks, botProfiles, eq: (left, right) => eq(left, right),
   }, sessionId);
-  const callbacks: RecoveryCallbackPorts = {
+  const callbacks: RecoveryCallbackPorts = explicitPorts<RecoveryCallbackPorts>({
     getCoordinator: () => runtime.coordinator,
     resetWireNotes: id => runtime.resetWireNotes(id),
-  };
-  return createContextOverflowRollover({
+  });
+  return createContextOverflowRollover(explicitPorts<Parameters<typeof createContextOverflowRollover>[0]>({
     // Plugin-owned and headless plugin setup turns: the Host refuses both inputs today.
     hasExternalRecoveryOwner: () => false,
+    // Ports the Host leaves unbound, each written out (explicit-ports.ts):
+    // - a teammate's own sessions widen the recalled history; the Host refuses teammate tasks, so a
+    //   recovery reads only the current conversation, as the desktop does for an ordinary task.
+    listCompanionSessionIds: undefined,
+    // - a subscription account change that needs a native session handoff: the Host has no
+    //   subscription account handoff before a send yet (release table, row 30), so none is reported.
+    needsNativeSessionHandoff: undefined,
+    // - a cold Pi runtime started only to read its context for a smaller window: not bound yet, so
+    //   such a switch answers 'unknown-context' (release table, explicit ports pass, 2026-11-17).
+    rehydrateColdPiRuntimeForWindowVerification: undefined,
     getSessionRow: readSession,
-    ...(host.codexHistory ? {
-      classifyCodexHistory: (threadId: string) => classifyCodexHistoryWithPorts({
-        captureDataOwnerBroadcastScope, getCurrentDbClientSnapshot, isDataOwnerBroadcastScopeCurrent,
-        ...host.codexHistory!,
-      }, threadId),
-    } : {}),
+    classifyCodexHistory: host.codexHistory ? (threadId: string) => classifyCodexHistoryWithPorts({
+      captureDataOwnerBroadcastScope, getCurrentDbClientSnapshot, isDataOwnerBroadcastScopeCurrent,
+      ...host.codexHistory!,
+    }, threadId) : undefined,
     getAutoCompactThresholdPct: () => DEFAULT_MODEL_COMPACTION_PCT,
-    ...(host.resolveVerifiedWindow ? { resolveVerifiedWindow: host.resolveVerifiedWindow } : {}),
+    resolveVerifiedWindow: host.resolveVerifiedWindow,
     listMessages: sessionId => listMessagesForAgentHandoff(sessionId, 400) as ReturnType<ContextOverflowRolloverDeps['listMessages']>,
     findLatestUser: sessionId => findLatestUserMessageForRebuild(sessionId) as ReturnType<NonNullable<ContextOverflowRolloverDeps['findLatestUser']>>,
     findLatestRebuildMeta: findLatestContextRebuildMeta,
@@ -138,10 +147,8 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
       runtime.noteRebuilt(sessionId);
     },
     getRecoveryAbortSignal: sessionId => contextRecoveryAbortSignal(callbacks, sessionId),
-    ...(host.piCompat ? {
-      readPiNativeCompatOverride: host.piCompat.read,
-      recordPiNativeCompatOverride: host.piCompat.record,
-    } : {}),
+    readPiNativeCompatOverride: host.piCompat?.read,
+    recordPiNativeCompatOverride: host.piCompat?.record,
     replayUserMessage: (sessionId, content, agentFacingWireContent, recovery) => replayContextRecoveryWithPorts({
       getDbClient, sessions, eq: (left, right) => eq(left, right),
       buildCreateOptsWithStderr: host.buildCreateOptsWithStderr,
@@ -170,5 +177,5 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
     withSessionLock: withSendToSessionLock,
     withCloseSuppressed: withRehydrateCloseSuppressed,
     log: host.log,
-  });
+  }));
 }
