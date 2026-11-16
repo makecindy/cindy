@@ -1,16 +1,16 @@
 /**
  * 「是不是同一个供应商」(docs/product-rules/provider-groups.md §3)，不直接比较供应商 ID：
  *
- * - 官方供应商与订阅账号(Anthropic、OpenAI、xAI 及其登录预设)：同一品牌即可。设置里再添加的
+ * - 官方供应商与订阅账号(Anthropic、OpenAI、xAI 及其登录预设)：同一品牌即可。旧版设置里再添加的
  *   订阅账号 ID 是「品牌-随机 8 位」(AddProviderWizard)，两台电脑上一定不同。
  * - 自定义供应商：名称相同即可(忽略大小写与首尾空格)，ID 相同也算。ID 按名称生成，但改名后
  *   不变、本机同名时会带 `-2` 之类后缀，所以不只比 ID。
  *
- * 只用远端目录里已有的去敏字段(id / name / auth)，不新增协议字段。
+ * 只用远端目录里已有的去敏字段，不新增协议字段或改写连接身份。
  */
 import type { ProviderView } from '@cindy/model-providers';
 
-type ProviderIdentity = Pick<ProviderView, 'id' | 'name'> & {
+type ProviderIdentity = Pick<ProviderView, 'id' | 'name' | 'subscriptionAccountPool' | 'subscriptionPool'> & {
   auth?: { method?: string; native?: string; oauth?: unknown } | null;
 };
 
@@ -23,6 +23,10 @@ const ACCOUNT_ID = /^([a-z0-9_]+(?:-[a-z0-9_]+)*?)-[0-9a-f]{8}$/;
 
 /** 官方供应商 / 订阅账号的品牌；自定义供应商返回 null。 */
 export function providerBrand(view: ProviderIdentity): string | null {
+  // Independent subscription connections mirror their family's routes, but keep their
+  // own ID/accounts. Prefer the host's family metadata to guessing from openai-sub-*.
+  const pool = view.subscriptionAccountPool ?? view.subscriptionPool;
+  if (pool === 'openai' || pool === 'anthropic') return pool;
   const native = view.auth?.native;
   if (typeof native === 'string' && NATIVE_BRAND[native]) return NATIVE_BRAND[native];
   if (OFFICIAL_PROVIDER_IDS.has(view.id)) return view.id;

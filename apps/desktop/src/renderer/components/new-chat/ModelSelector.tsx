@@ -234,6 +234,8 @@ export interface ModelMemoryAccessors {
   setFast: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean | 'ultrafast') => void;
   getThinking?: (agent: AgentKind, providerId: string, modelId: string) => boolean | undefined;
   setThinking?: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean) => void;
+  /** Delete the override; older remote mirrors fall back to setting the default. */
+  clearThinking?: (agent: AgentKind, providerId: string, modelId: string) => void;
   /**
    * 「恢复推荐 / 回落默认」用的**删除**入口(2026-08-17 review H3)。
    *
@@ -824,7 +826,7 @@ export interface ModelSelectorBaseProps {
   /** 语义同 onEffortChange(含返回值口径)。 */
   onFastModeChange?: (enabled: boolean | 'ultrafast') => void | boolean | Promise<void | boolean>;
   thinkingEnabled?: boolean;
-  onThinkingChange?: (enabled: boolean) => void | Promise<void>;
+  onThinkingChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
   /** 非选中模型行的 effort/fast 全局预设读写器(按本机 / 被控设备隔离)。 */
   modelMemory?: ModelMemoryAccessors;
   /** When provided, only models with this vendorKey are shown in the dropdown. */
@@ -1008,7 +1010,7 @@ export interface ModelSelectorContentBaseProps {
   /** 语义同 onEffortChange(含返回值口径)。 */
   onFastModeChange?: (enabled: boolean | 'ultrafast') => void | boolean | Promise<void | boolean>;
   thinkingEnabled?: boolean;
-  onThinkingChange?: (enabled: boolean) => void | Promise<void>;
+  onThinkingChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
   modelMemory?: ModelMemoryAccessors;
   /** Request-owned preferences; edits never reach the user's saved defaults. */
   preferenceStore?: ModelPickerPreferenceStore;
@@ -3994,6 +3996,8 @@ function ModelSelectorContentView({
                 }
               : {})}
             {...(onFastModeChange ? { onFastModeChangeLive: onFastModeChange } : {})}
+            thinkingEnabled={thinkingEnabled}
+            {...(onThinkingChange ? { onThinkingChangeLive: onThinkingChange } : {})}
             panelElement={paneElement}
             {...(overlayContentClassName !== undefined
               ? { overlayClassName: overlayContentClassName }

@@ -10921,6 +10921,7 @@
       "duplicate": "Freund duplizieren",
       "moreActions": "Weitere Aktionen für {{name}}",
       "viewIcons": "Symbole",
+      "showCollapsedTeammateAvatars": "Avatare im eingeklappten Zustand anzeigen",
       "sectionExpand": "Freunde ausklappen",
       "showLess": "Weniger anzeigen",
       "sectionCollapse": "Freunde einklappen",

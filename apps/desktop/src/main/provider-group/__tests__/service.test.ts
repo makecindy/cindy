@@ -837,13 +837,24 @@ describe('onTurnError (automatic switch)', () => {
     expect(h.deps.fallback).not.toHaveBeenCalled();
   });
 
-  it('never switches between two accounts on the same computer', async () => {
+  // #10893, unit: a connection failure must not exclude a healthy account on
+  // the same host. The previous regression required skipping that connection.
+  it('switches to another independent connection on the same computer', async () => {
     const MINI2 = member('device', 'mini', 'anthropic-9f9f9f9f');
-    const h = harness({ members: [MINI, MINI2, LOCAL], row: { agentDeviceId: 'mini', providerId: MINI.providerId } });
+    const h = harness({ members: [MINI, MINI2], row: { agentDeviceId: 'mini', providerId: MINI.providerId } });
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    expect(h.service.mayHandleTurnError('s1', { sdkError: 'rate_limit' })).toBe(true);
     h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1);
     await flush();
-    expect(h.deps.switchAgentLocation).toHaveBeenCalledWith('s1', expect.objectContaining({ agentDeviceId: null }), expect.anything());
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentDeviceId: 'mini', providerId: MINI2.providerId,
+    }), expect.anything());
+    expect(h.row.providerId).toBe(MINI2.providerId);
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI2.key);
+    expect(h.router.coolingUntil('anthropic', MINI.key, MODEL)).not.toBeNull();
+    expect(h.router.coolingUntil('anthropic', MINI2.key, MODEL)).toBeNull();
+    expect(h.deps.continueSession).toHaveBeenCalledOnce();
+    expect(h.deps.fallback).not.toHaveBeenCalled();
   });
 
   it('reports the group of a task bound to this computer’s group', async () => {
@@ -1479,6 +1490,23 @@ describe('switching accounts between messages to balance quota', () => {
     return { ...h, usage };
   }
 
+  // #10893: physical-device equality must not hide a more urgent independent
+  // account. The accepted message must retain that exact connection binding.
+  it('balances quota between two independent connections on the same computer', async () => {
+    const second = member('device', 'mini', 'anthropic-second');
+    const usage = paceUsage(1_000_000);
+    const h = harness({ members: [MINI, second],
+      row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' },
+      usage: { [MINI.key]: usage.local, [second.key]: usage[MINI.key] },
+    });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ memberKey: second.key });
+    expect(await h.service.rebalanceDecision('s1', second.key, false, 'message-a')).toBe(true);
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.row).toMatchObject({ agentDeviceId: 'mini', providerId: second.providerId });
+    expect(h.bindings.get('s1')?.memberKey).toBe(second.key);
+  });
+
   // Unit: both sides of quota balancing must be live. The original fixtures
   // always returned live members and missed stale origins/targets and expiry
   // between the suggestion and the actual send.
@@ -2075,6 +2103,18 @@ describe('using the state the group keeps (2026-10-11)', () => {
 });
 
 describe('moving a task into a group on this computer from the model list (2026-10-11)', () => {
+  it('preserves a selected connection on the current computer instead of falling back to the group provider', async () => {
+    const h = harness({ members: [MINI], row: { agentDeviceId: 'mini', providerId: 'anthropic-other' } });
+    const route = await h.service.resolveSwitchTarget('s1', {
+      agentKind: 'claude-code', model: MODEL, providerId: 'anthropic', agentDeviceId: null,
+      current: { agentDeviceId: 'mini', providerId: 'anthropic-other' },
+    });
+    expect(route).toMatchObject({ agentDeviceId: 'mini', providerId: MINI.providerId });
+    expect(h.bindings.size).toBe(0);
+    await route?.commitBinding();
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
+  });
+
   it('picks a computer by the group state, skipping one that is cooling down', async () => {
     const h = harness({ members: [LOCAL, MINI, STUDIO], row: { agentDeviceId: 'elsewhere', providerId: 'openai', sdkSessionId: 'native' } });
     h.router.markCooling('anthropic', 'local', 2_000_000);
