@@ -55,9 +55,11 @@ it('exposes original usage history and provider group views through the shared r
   await Promise.all([server.connect(st), client.connect(ct)]);
   try {
     const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
-    expect(JSON.stringify(overview.categories.find((item: { name: string }) => item.name === 'settings'))).toContain('device');
+    expect(overview).toMatchObject({ categories: expect.arrayContaining([
+      expect.objectContaining({ name: 'settings', description: expect.stringContaining('device') }),
+    ]) });
     const detail = parsePayload(await client.callTool({ name: 'list_tools', arguments: { key: 'models.provider-state' } }));
-    expect(detail.control.summary).toContain('device');
+    expect(detail).toMatchObject({ control: expect.objectContaining({ summary: expect.stringContaining('device') }) });
     expect(server.hostTools.describe('get_provider_usage_history')).toMatchObject({ category: 'settings' });
     expect(parsePayload(await server.hostTools.call('get_provider_usage_history', { providerId: 'anthropic', device: 'computer' })))
       .toEqual({ ok: true, ...history });
