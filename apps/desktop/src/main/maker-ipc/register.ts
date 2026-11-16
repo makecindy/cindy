@@ -706,6 +706,7 @@ import {
 import { createBotGroupChatService, settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupChatServiceDeps, type BotGroupLaneTerminal } from './botGroupChatService.js';
 import { settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
 import { isRetiredGroupWelcomeInput, withChatServer } from './chatServer.js';
+import { withBotGroupUiMock } from './botGroupUiMock.js';
 import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
 import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
@@ -13725,7 +13726,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     log,
   };
-  botGroupChatServiceHolder = withChatServer(createBotGroupChatService(botGroupChatDeps), botGroupChatDeps);
+  botGroupChatServiceHolder = withBotGroupUiMock(withChatServer(createBotGroupChatService(botGroupChatDeps), botGroupChatDeps), botGroupChatDeps);
   unsubscribeCompanionCloudBroadcast?.();
   unsubscribeCompanionCloudBroadcast = companionHomes.onChange((snapshot) => {
     const scope = captureDataOwnerBroadcastScope();

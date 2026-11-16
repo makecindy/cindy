@@ -1931,7 +1931,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const page = (await messagesRead) ?? s.messages;
     const ownerMembers = direct ? [] : s.members;
     const executions = await executionsRead;
-    const ids = page.flatMap(m => m.content.flatMap(b => b.namespace === 'cindy.plan' && typeof b.data?.planId === 'string' ? [id.parse(b.data.planId)] : []));
+    // A failed execution may outlive its plan card's message window. Read that
+    // plan in the same request so its terminal state can retire the alert.
+    const ids = [...new Set([
+      ...page.flatMap(m => m.content.flatMap(b => b.namespace === 'cindy.plan' && typeof b.data?.planId === 'string' ? [id.parse(b.data.planId)] : [])),
+      ...executions.flatMap(e => e.status === 'failed' && e.plan_id ? [id.parse(e.plan_id)] : []),
+    ])];
     const plansRead = direct ? Promise.resolve([] as ServerPlan[]) : api<ServerPlan[]>(`/conversations/${roomId}/plans${ids.length ? `?ids=${ids.join(',')}` : ''}`);
     plansRead.catch(() => undefined);
     const executionFailures = summaryOnly || direct ? undefined : await failureSnapshot(roomId, s.members, [...(o.sourceMessageIds ?? []), ...page.map(m => m.id)], executions);

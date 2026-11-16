@@ -239,6 +239,23 @@ describe('direct group plans', () => {
 });
 
 describe('group list activity', () => {
+  // #10822 / unit: use the direct mobile production reader, not a copied status
+  // reducer. The existing roster test lacks failed executions with closed plans.
+  it('settles a stopped plan from server records even when there is no local Session', async () => {
+    const failed = { status: 'failed', plan_id: id(40), updated_at: '2026-10-10T00:00:00Z' };
+    let planStatus = 'stopped';
+    let executions = [failed];
+    const request = vi.fn().mockImplementation(async (path: string) => path.endsWith('/executions') ? executions
+      : path.includes(`/plans?ids=${id(40)}`) || planStatus === 'waiting' ? [{ id: id(40), status: planStatus }] : []);
+    const client = createChatServerClient(request);
+    expect(await client.rosterActivity(id(1), snapshot())).toEqual({ phase: 'idle' });
+    expect(request).toHaveBeenCalledWith(`/conversations/${id(1)}/plans?ids=${id(40)}`);
+    executions = [failed, { ...failed, plan_id: id(41) }];
+    expect(await client.rosterActivity(id(1), snapshot())).toEqual({ phase: 'error' });
+    planStatus = 'waiting';
+    expect(await client.rosterActivity(id(1), snapshot())).toEqual({ phase: 'needs-interaction' });
+  });
+
   it('refreshes pending execution state without a new message and tolerates an older server', async () => {
     const request = vi.fn().mockResolvedValueOnce([{ status: 'running' }]).mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ status: 'needs_input' }]).mockResolvedValueOnce([])
