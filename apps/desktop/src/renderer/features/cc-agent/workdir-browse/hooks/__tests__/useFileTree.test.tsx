@@ -237,6 +237,49 @@ describe('useFileTree refresh scheduling', () => {
 
     view.unmount();
   });
+
+  // #10863: a native watcher reports the physical target, leaving an expanded
+  // alias stale. Unit tier through the real hook, with POSIX wire paths and a
+  // synthetic event batch; verify visible content and no unrelated IPC reads.
+  it('refreshes cached aliases on target changes and retargets without scanning unrelated folders', async () => {
+    const root: DirEntry[] = [
+      { name: 'alias', relPath: 'alias', type: 'directory', size: 0, mtimeMs: 1, symlinkTarget: 'documents' },
+      { name: 'other', relPath: 'other', type: 'directory', size: 0, mtimeMs: 1 },
+    ];
+    mocks.loadExpandedSet.mockReturnValue(new Set(['alias', 'other']));
+    let updated = false;
+    mocks.listDir.mockImplementation(async ({ relPath }: { relPath: string }) => {
+      if (relPath === '') return root;
+      return updated && relPath === 'alias'
+        ? [{ name: 'new.md', relPath: 'alias/new.md', type: 'file', size: 1, mtimeMs: 2 }]
+        : [];
+    });
+    const view = renderHook(() => useFileTree({ workdir: '/alias-events' }));
+    await waitFor(() => expect(view.result.current.entries.has('other')).toBe(true));
+    const emit = mocks.eventCallbacks[0];
+    vi.useFakeTimers();
+    try {
+      mocks.listDir.mockClear();
+      updated = true;
+      await act(async () => {
+        emit({ workdir: '/alias-events', relPath: 'unrelated/file.md' });
+        emit({ workdir: '/alias-events', relPath: 'documents/new.md' });
+        emit({ workdir: '/alias-events', relPath: 'documents/new.md' });
+        await vi.advanceTimersByTimeAsync(70);
+      });
+      expect(mocks.listDir.mock.calls.map(([p]) => p.relPath)).toEqual(['alias']);
+      expect(view.result.current.entries.get('alias')?.[0]?.relPath).toBe('alias/new.md');
+      mocks.listDir.mockClear();
+      await act(async () => {
+        emit({ workdir: '/alias-events', relPath: 'alias' });
+        await vi.advanceTimersByTimeAsync(70);
+      });
+      expect(mocks.listDir.mock.calls.map(([p]) => p.relPath).sort()).toEqual(['', 'alias']);
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
 });
 
 /**

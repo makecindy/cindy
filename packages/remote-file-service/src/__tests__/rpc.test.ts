@@ -109,7 +109,7 @@ describe('remote-file-service RPC end-to-end', () => {
     await symlink(path.join(workdir, 'src'), path.join(workdir, 'alias'), 'junction');
     await client.connect();
     const { entries } = await client.request('listDir', { workdir });
-    expect(entries).toContainEqual(expect.objectContaining({ relPath: 'alias', type: 'directory' }));
+    expect(entries).toContainEqual(expect.objectContaining({ relPath: 'alias', type: 'directory', symlinkTarget: 'src' }));
     const children = await client.request('listDir', { workdir, relPath: 'alias' });
     expect(children.entries).toContainEqual(expect.objectContaining({ relPath: 'alias/a.ts' }));
     expect(await client.request('readFile', { workdir, relPath: 'alias/a.ts' }))

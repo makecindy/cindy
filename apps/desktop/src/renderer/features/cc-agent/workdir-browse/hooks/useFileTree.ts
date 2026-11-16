@@ -67,6 +67,8 @@ export interface DirEntry {
   type: 'file' | 'directory';
   size: number;
   mtimeMs: number;
+  /** Optional on older hosts; always relative to the workdir, never an absolute path. */
+  symlinkTarget?: string;
 }
 
 interface UseFileTreeOptions {
@@ -231,8 +233,8 @@ interface FileTreeStore {
   tokens: Map<string, number>;
   /** Single-flight directory requests plus one dirty bit for a trailing scan. */
   inFlight: Map<string, DirectoryRefresh>;
-  /** Parent directories observed by the IPC listener in the current turn. */
-  pendingEventParents: Set<string>;
+  /** Changed logical paths observed during the current coalescing window. */
+  pendingEventPaths: Set<string>;
   eventFlushTimer: ReturnType<typeof setTimeout> | null;
   /** chokidar listener 取消函数。首个挂载时挂、refCount 归 0 时调。 */
   watcherOff: (() => void) | null;
@@ -492,7 +494,7 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
     persistedExpanded,
     tokens: new Map(),
     inFlight: new Map(),
-    pendingEventParents: new Set(),
+    pendingEventPaths: new Set(),
     eventFlushTimer: null,
     watcherOff: null,
     refCount: 0,
@@ -663,14 +665,37 @@ function addDocModeAncestors(
  * directory can disappear when its last visible descendant is removed.
  */
 function queueEventRefresh(store: FileTreeStore, eventRelPath: string): void {
-  store.pendingEventParents.add(parentPath(eventRelPath));
+  store.pendingEventPaths.add(eventRelPath);
   if (store.eventFlushTimer) return;
   store.eventFlushTimer = setTimeout(() => {
     store.eventFlushTimer = null;
-    const parents = [...store.pendingEventParents];
-    store.pendingEventParents.clear();
+    const events = [...store.pendingEventPaths];
+    store.pendingEventPaths.clear();
     if (store.refCount === 0) return;
-
+    const parents = new Set(events.map(parentPath));
+    // Watchers report real target paths rather than every directory alias. Map
+    // only aliases already present in this lazy tree; never scan/follow the disk
+    // to discover aliases or refresh unrelated cached directories.
+    for (const entries of store.snapshot.entries.values()) {
+      for (const entry of entries) {
+        if (entry.type !== 'directory' || entry.symlinkTarget === undefined) continue;
+        const target = entry.symlinkTarget;
+        const prefix = target === '' ? '' : `${target}/`;
+        for (const eventRelPath of events) {
+          if (eventRelPath.startsWith(prefix)) {
+            const suffix = eventRelPath.slice(prefix.length);
+            parents.add(parentPath(`${entry.relPath}/${suffix}`));
+          }
+          // A removed target/ancestor hides the link; a retargeted link also needs
+          // its cached children refreshed even when its logical name stays put.
+          if (eventRelPath === target || target.startsWith(`${eventRelPath}/`)
+              || eventRelPath === entry.relPath) {
+            parents.add(parentPath(entry.relPath));
+            parents.add(entry.relPath);
+          }
+        }
+      }
+    }
     const targets = new Set<string>();
     for (const parent of parents) {
       if (store.docMode) {
@@ -789,7 +814,7 @@ function disposeStore(store: FileTreeStore): void {
   store.restoreQueue = null;
   if (store.eventFlushTimer) clearTimeout(store.eventFlushTimer);
   store.eventFlushTimer = null;
-  store.pendingEventParents.clear();
+  store.pendingEventPaths.clear();
   store.inFlight.clear();
   if (store.watcherOff) {
     store.watcherOff();

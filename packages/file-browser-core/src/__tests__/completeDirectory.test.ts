@@ -49,7 +49,7 @@ it('presents internal directory links and expands them using their logical paths
   const matcher = await loadIgnoreMatcher(root);
 
   expect(await listDir(root, '', matcher)).toEqual([
-    expect.objectContaining({ name: 'alias', relPath: 'alias', type: 'directory', size: 0 }),
+    expect.objectContaining({ name: 'alias', relPath: 'alias', type: 'directory', size: 0, symlinkTarget: 'documents' }),
     expect.objectContaining({ name: 'documents', type: 'directory' }),
   ]);
   expect(await listDir(root, 'alias', matcher)).toEqual([

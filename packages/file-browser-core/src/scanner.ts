@@ -77,6 +77,8 @@ export interface DirEntry {
   size: number;
   /** ms since epoch */
   mtimeMs: number;
+  /** Directory links only: canonical workdir-relative POSIX target for watcher invalidation. */
+  symlinkTarget?: string;
 }
 
 export interface FileReadResult {
@@ -327,6 +329,7 @@ export async function listDir(
   }
   const sub = assertInsideWorkdir(workdir, relPath);
   const abs = await assertRealPathInsideWorkdir(workdir, sub === '' ? workdir : path.join(workdir, sub));
+  let realRoot: Promise<string> | undefined;
   // In doc mode this top-level read participates in the same in-flight map as
   // recursive descendant probes. An overlapping `listDir('src')` can thus
   // reuse the read already started while listing the root, without retaining
@@ -352,6 +355,7 @@ export async function listDir(
       // 原子写中间产物 — 隐藏不让前端看到一闪而过的临时行。
       if (matcher && !isDir && d.name.endsWith(XDT_TMP_SUFFIX)) return null;
       let childAbs = path.join(abs, d.name);
+      let symlinkTarget: string | undefined;
       let st: Stats;
       try {
         st = await fs.lstat(childAbs);
@@ -369,6 +373,8 @@ export async function listDir(
         if (!target) return null;
         childAbs = target.abs;
         st = target.stat;
+        realRoot ??= fs.realpath(workdir);
+        symlinkTarget = path.relative(await realRoot, target.abs).split(path.sep).join('/');
       }
       if (!st.isDirectory() && !st.isFile()) return null;
       isDir = st.isDirectory();
@@ -388,6 +394,7 @@ export async function listDir(
         type: isDir ? 'directory' : 'file',
         size: isDir ? 0 : st.size,
         mtimeMs: st.mtimeMs,
+        ...(symlinkTarget === undefined ? {} : { symlinkTarget }),
       };
     }),
   );
