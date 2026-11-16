@@ -45,7 +45,9 @@ export default {
       // UI tier: old in-flow topic CSS put actions inside the bubble over the read mark.
       // Existing long-root/table cases had no own-message receipt. No source-string assertions.
       await panel.getByTestId('read-receipt').first().waitFor();
-      for (const id of ['root', 'reply-bot', 'reply-self']) {
+      // Review #4559581985: long self mask messages (with/without reactions) used to
+      // lose their menu beyond the panel edge. Exercise real geometry and menu hit testing.
+      for (const id of ['root', 'reply-bot', 'reply-self', 'reply-mask-reactions', 'reply-mask']) {
         const message = panel.locator(`[data-bot-group-message-id="${id}"]`);
         await message.hover();
         const toolbar = message.locator('[data-bot-group-message-actions]');
@@ -61,8 +63,17 @@ export default {
             separate: !receipt || actions.right <= receipt.left || actions.left >= receipt.right || actions.bottom <= receipt.top || actions.top >= receipt.bottom };
         });
         assert.ok(geometry.outside && geometry.top < 2, 'toolbar uses main-chat outer top alignment');
-        assert.ok(geometry.insidePanel && geometry.separate, 'toolbar fits the topic and does not overlap the read receipt');
+        assert.ok(geometry.insidePanel && geometry.separate, `${id}: toolbar fits the topic and does not overlap the read receipt`);
         await ui.capture(id);
+        const more = message.getByRole('button', { name: await ui.t('chat.messageActionBar.moreActions'), exact: true });
+        await more.click();
+        await page.getByRole('menuitem', { name: await ui.t('chat.messageActionBar.copy'), exact: true }).waitFor();
+        await page.keyboard.press('Escape');
+        await page.mouse.move(0, 0);
+        await more.focus();
+        await page.keyboard.press('Enter');
+        await page.getByRole('menuitem', { name: await ui.t('chat.messageActionBar.copy'), exact: true }).waitFor();
+        await page.keyboard.press('Escape');
       }
       return;
     }

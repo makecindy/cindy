@@ -489,7 +489,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
           data-testid={message.outbox ? "bot-group-outbox" : undefined}
           data-status={message.outbox?.status}
           aria-busy={sending && message.outbox?.status !== 'failed' ? true : undefined}
-          className={cn('group/message relative flex min-w-0 justify-end rounded-lg py-0.5', sharing && 'ml-10')}
+          className={cn('group/message relative flex min-w-0 justify-end rounded-lg py-0.5', attribution && 'bot-group-self-attributed', sharing && 'ml-10')}
         >
           {sharing && shareable ? <ShareMessageCheckbox clientId={message.id} /> : null}
           <div className={cn('flex min-w-0 flex-col items-end gap-1.5 transition-opacity', share ? 'max-w-[min(560px,calc(100%-var(--chat-bubble-gutter,120px)))]' : CHAT_BUBBLE_COLUMN_CLASS, sending && message.outbox?.status !== 'failed' && 'opacity-60')}>

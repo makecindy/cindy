@@ -356,6 +356,7 @@ Chat Server 声明 `capabilities.groupSingleSpeaker: 1` 时，服务器群按下
   成功回执只清理与此次发送快照一致的附件，关闭重开话题后的新标注保留。「同时发到群聊」沿用现有先回复、再贴回的流程。
   Desktop 群聊话题复用主群聊气泡外侧顶部的消息操作栏：自己消息在左侧，其他成员消息在右侧；悬停或键盘聚焦时显示，
   触屏沿用主群聊规则。表情与更多两项操作预留 64px 侧边空白，避开气泡右下角的已读标记，保留已读能力。
+  自己的代答消息另计右侧归属头像及间距的宽度，不能挤占操作栏留白；长消息带表情回应时，更多菜单也须完整可达。
   私聊话题保持气泡底部常显的消息操作栏，不预留侧边空白。两者均保持宽表格在自身容器内横向滚动，文件 chip 不超出气泡、
   长文件名省略。布局分支由 [ThreadPanel](../../apps/desktop/src/renderer/features/bots/ThreadPanel.tsx) 与
   [ThreadPanel.css](../../apps/desktop/src/renderer/features/bots/ThreadPanel.css) 约束；群聊由

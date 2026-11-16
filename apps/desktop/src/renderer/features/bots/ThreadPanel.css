@@ -6,6 +6,13 @@
   --chat-bubble-gutter: 64px;
 }
 
+/* The self attribution avatar (w-8 + ml-2.5) shares the row with a bubble whose
+   percentage max-width is measured against that whole row. Reserve both it and
+   the action rail, including when reactions move the toolbar farther out. */
+.thread-panel:not(.thread-panel-inline-actions) .bot-group-self-attributed {
+  --chat-bubble-gutter: calc(64px + 2rem + 0.625rem);
+}
+
 .thread-panel-inline-actions {
   --chat-bubble-gutter: 0px;
 }
