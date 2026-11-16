@@ -8604,6 +8604,7 @@
           "workdirClear": "Restablecer carpeta predeterminada",
           "followAuxiliary": "Usar modelo auxiliar del sistema · {{model}}",
           "followAuxiliaryUnset": "Usar modelo auxiliar del sistema",
+          "remoteQuickAnswerHint": "Este modelo no se ejecuta en esta computadora. Las respuestas rápidas se envían desde esta computadora, así que usan el modelo auxiliar del sistema.",
           "restoreModel": "Restablecer modelo"
         },
         "toolsTitle": "Herramientas",

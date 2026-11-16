@@ -8489,6 +8489,7 @@
           "workdirClear": "既定のフォルダーに戻す",
           "followAuxiliary": "システムの補助モデルに従う · {{model}}",
           "followAuxiliaryUnset": "システムの補助モデルに従う",
+          "remoteQuickAnswerHint": "このモデルはこのコンピュータでは実行されません。クイック回答はこのコンピュータから送信されるため、システムの補助モデルを使います。",
           "restoreModel": "モデルをリセット"
         },
         "toolsTitle": "Tools",

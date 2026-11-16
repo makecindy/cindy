@@ -147,15 +147,11 @@ export interface UnifiedMobileRemoteOptions {
 }
 
 /**
- * 只限本机的原因是封闭清单，与桌面 ModelSelectorLocalOnlyReason 同口径；规则见
- * docs/product-rules/model-selector-unified.md。
+ * 每个入口都必须声明模型来源；remote 为 undefined 只表示此刻不可用（如旧版被控电脑）。
+ * 手机端目前没有只限本机的入口；新增例外须同时改
+ * docs/product-rules/model-selector-unified.md 与 modelPickerSourceGuard.test.ts。
  */
-export type MobileModelPickerLocalOnlyReason = 'plugin-task-local-route';
-
-/** 每个入口都必须声明模型来源；remote 为 undefined 只表示此刻不可用（如旧版被控电脑）。 */
-export type MobileModelPickerSource =
-  | { remote: UnifiedMobileRemoteOptions | undefined; localOnlyReason?: never }
-  | { remote?: never; localOnlyReason: MobileModelPickerLocalOnlyReason };
+export type MobileModelPickerSource = { remote: UnifiedMobileRemoteOptions | undefined };
 
 export type UnifiedMobilePickerOptions = UnifiedMobilePickerBaseOptions & MobileModelPickerSource;
 
