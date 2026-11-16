@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · pour {{person}}"
+  },
   "progress": {
     "stop": "Arrêter",
     "stopMine": "Arrêter les miennes",

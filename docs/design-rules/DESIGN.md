@@ -150,6 +150,7 @@ and `task-tag-white-check` / `taskTagWhiteCheck` glyph to remain visible on ligh
 Images and emoji retain their intrinsic colors. Palette swatches are two rows of six; default is the first explicit choice above the palette, with an adaptive neutral swatch, a selected check and a localized “follow theme” label. It is not presented as a reset action. Color choices have localized names and a neutral selection ring. Mobile targets are 44pt;
 Desktop uses standard pill Buttons. Controls, project names and task status remain on their existing tokens.
 Project letter icons are identity artwork: square tiles with 25% corner radius, Cindy typography and weight 600. Automatic initials use a stable name-derived choice from the existing non-white identity colors, with theme-adjusted foreground and a 14% same-color background. Explicit default remains the theme foreground. Manual letter colors remain selectable; the tile shape also applies to them.
+Project image thumbnails use the same 25% corner crop on Desktop and Mobile, including automatic images, uploaded images and previews. This clips opaque asset corners without changing the image's intrinsic colors or persisted bytes; emoji and symbol geometry stay unchanged.
 
 ### Semantic & Accent
 
