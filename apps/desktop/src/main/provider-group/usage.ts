@@ -125,6 +125,7 @@ interface CodexUsageWindow {
 }
 
 interface CodexUsageBucket {
+  planType?: string;
   limitId: string | null;
   limitName: string | null;
   updatedAt: number | null;
@@ -169,6 +170,7 @@ function codexBucket(raw: unknown): CodexUsageBucket | null {
   if (!value) return null;
   return {
     limitId: typeof value.limitId === 'string' ? value.limitId : null,
+    ...(typeof value.planType === 'string' ? { planType: value.planType } : {}),
     limitName: typeof value.limitName === 'string' ? value.limitName : null,
     updatedAt: typeof value.updatedAt === 'number' && Number.isFinite(value.updatedAt) ? value.updatedAt : null,
     primary: codexWindow(value.primary), secondary: codexWindow(value.secondary),
@@ -199,7 +201,9 @@ export function providerGroupCodexUsageFromReads(account: unknown, rateLimits: u
   const table = resolveCodexBucketTable({ byLimitId: result?.rateLimitsByLimitId })
     ?? { [codexLimitBucketKey(latest)]: latest };
   return providerGroupCodexUsageSnapshot({
-    appServerBuckets: Object.fromEntries(Object.entries(table).map(([key, bucket]) => [key, { ...bucket, updatedAt: now }])),
+    appServerBuckets: Object.fromEntries(Object.entries(table).map(([key, bucket]) => [key, {
+      ...bucket, planType: bucket.planType ?? latest.planType, updatedAt: now,
+    }])),
     webSnapshot: cached?.webSnapshot,
   });
 }

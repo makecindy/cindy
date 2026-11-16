@@ -179,7 +179,7 @@ function mergeMediaModels(
   const seen = new Set<string>();
   const models: ExecutableMediaModel[] = [];
   for (const model of [...preferred, ...fallback]) {
-    const key = `${model.providerId}\u0000${model.id}`;
+    const key = JSON.stringify([model.providerId, model.mode, model.id]);
     if (seen.has(key)) continue;
     seen.add(key);
     models.push(model);

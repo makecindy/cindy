@@ -447,3 +447,31 @@ it('keeps concurrent execution updates between their original neighboring messag
   expect(ids([second])).toEqual(['request', 'second', 'later']);
   expect(ids([])).toEqual(['request', 'later']);
 });
+
+// Server receipts can precede their durable message row; source identity must beat delayed starts.
+describe('receipt-backed live execution placement', () => {
+  it('uses the source row before a delayed start without cloning the work', () => {
+    const work = { executionId: 'a', sourceMessageId: 'request', startedAt: 50 };
+    const entries = interleaveBotGroupWork([{ id: 'request', createdAt: 10 }, { id: 'later', createdAt: 30 }], [work]);
+    expect(entries.map(entry => entry.kind)).toEqual(['message', 'work', 'message']);
+    expect(entries[1]!.value).toBe(work);
+  });
+  it('recognizes the receipt alias of an optimistic row', () => {
+    const work = { executionId: 'a', sourceMessageId: 'server-request' };
+    const entries = interleaveBotGroupWork([{ id: 'pending:request', serverMessageId: 'server-request', createdAt: 10 }, { id: 'later', createdAt: 30 }], [work]);
+    expect(entries.map(entry => entry.kind)).toEqual(['message', 'work', 'message']);
+    expect(entries[1]!.value).toBe(work);
+  });
+  it('retires a live row already represented by the completed process', () => {
+    const answer = { id: 'answer', createdAt: 50, process: { executionId: 'a' } };
+    expect(interleaveBotGroupWork([answer], [{ executionId: 'a', timelineAt: 20 }])).toEqual([{ kind: 'message', value: answer, index: 0 }]);
+  });
+});
+
+// Optimistic timestamps use the local clock; persisted row order remains authoritative.
+it('pins receipt-backed work to its exact row despite differing source clocks', () => {
+  const own = { executionId: 'a', sourceMessageId: 'server-own' };
+  const other = { executionId: 'b', sourceMessageId: 'other' };
+  const entries = interleaveBotGroupWork([{ id: 'local-own', serverMessageId: 'server-own', createdAt: 50 }, { id: 'other', createdAt: 30 }], [other, own]);
+  expect(entries.map(entry => entry.kind === 'message' ? entry.value.id : entry.value.executionId)).toEqual(['local-own', 'a', 'other', 'b']);
+});
