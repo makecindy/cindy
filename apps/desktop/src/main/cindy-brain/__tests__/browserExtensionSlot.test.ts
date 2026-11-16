@@ -582,6 +582,50 @@ describe('browserExtensionSlot · 管子上行', () => {
     },
   );
 
+  // PR #10929: retry results could stop recovery while logs still showed only the initial error.
+  // Unit: reconcile + automatic retries + activate expose current failure reasons via the logger.
+  // Existing backoff tests cover scheduling, not diagnostic changes or duplicate log suppression.
+  it('logs changed native failure reasons and logs the same reason again after recovery', async () => {
+    let reason: string | undefined = 'EPERM';
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const install = vi.fn(async () => reason ? {
+      ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason,
+    } : { ok: true as const });
+    const { slot, ghosts } = await makeSlot({ log, createNativeBinding: () => ({
+      token: 'f'.repeat(64), install, close: vi.fn(async () => undefined),
+      status: () => reason ? 'unavailable' : 'ready',
+    }) });
+    vi.useFakeTimers();
+    try {
+      slot.reconcile(ghosts);
+      await vi.waitFor(() => expect(log.warn).toHaveBeenCalledOnce());
+      await vi.advanceTimersToNextTimerAsync();
+      expect(install).toHaveBeenCalledTimes(2);
+      expect(log.warn).toHaveBeenCalledOnce();
+      reason = 'EBUSY';
+      await vi.advanceTimersToNextTimerAsync();
+      expect(log.warn).toHaveBeenLastCalledWith('browser extension native binding unavailable', {
+        instanceId: '_root__my-browser', reason: 'EBUSY', retryBlocked: false,
+      });
+      reason = 'NATIVE_BINARY_MISSING';
+      await vi.advanceTimersToNextTimerAsync();
+      expect(log.warn).toHaveBeenLastCalledWith('browser extension native binding unavailable', {
+        instanceId: '_root__my-browser', reason, retryBlocked: true,
+      });
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(install).toHaveBeenCalledTimes(4);
+      expect(log.warn).toHaveBeenCalledTimes(3);
+      reason = undefined;
+      expect(await slot.activate('_root__my-browser')).toBe(true);
+      reason = 'NATIVE_BINARY_MISSING';
+      expect(await slot.activate('_root__my-browser')).toBe(false);
+      expect(log.warn).toHaveBeenCalledTimes(4);
+      expect(log.warn).toHaveBeenLastCalledWith('browser extension native binding unavailable', {
+        instanceId: '_root__my-browser', reason, retryBlocked: true,
+      });
+    } finally { await slot.dispose(); vi.useRealTimers(); }
+  });
+
   it('backs off transient failures up to five minutes without status polling accelerating them', async () => {
     const attempts: number[] = [];
     const install = vi.fn(async () => {

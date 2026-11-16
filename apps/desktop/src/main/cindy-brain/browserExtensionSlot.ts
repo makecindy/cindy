@@ -97,6 +97,8 @@ interface Entry {
   nativeRetryAt?: number;
   nativeFailures?: number;
   nativeRetryBlocked?: boolean;
+  /** Log reason changes once per failure streak, across startup, retries and explicit activation. */
+  nativeFailureReason?: string;
   /** A native install retry still running; stopping waits for it before withdrawing the registration. */
   nativeRetry?: Promise<unknown>;
   /** Failed native registration recovers even when no settings page or tool asks for status. */
@@ -293,11 +295,6 @@ export class GhostBrowserExtensionSlot {
       if (!saved) void this.requestPairings(instanceId);
       if (native) {
         const installed = await native.install(bridge.listeningPort, needs.extensionIds);
-        if (!installed.ok)
-          this.deps.log?.warn('browser extension native binding unavailable', {
-            instanceId,
-            reason: installed.reason,
-          });
         this.nativeInstallFinished(entry, installed);
       }
       this.deps.log?.info('browser extension bridge ready', {
@@ -332,12 +329,19 @@ export class GhostBrowserExtensionSlot {
       entry.nativeFailures = 0;
       entry.nativeRetryAt = undefined;
       entry.nativeRetryBlocked = false;
+      entry.nativeFailureReason = undefined;
       return;
     }
     // These failures need a package/installation change or an explicit activation. Generic
     // permission and missing-path errors can be transient; only a missing source binary is final.
     entry.nativeRetryBlocked = ['NATIVE_HOST_IN_USE', 'NATIVE_PATH_UNSAFE', 'NATIVE_BINARY_MISSING']
       .includes(result.reason);
+    if (entry.nativeFailureReason !== result.reason) {
+      this.deps.log?.warn('browser extension native binding unavailable', {
+        instanceId: entry.instanceId, reason: result.reason, retryBlocked: entry.nativeRetryBlocked,
+      });
+      entry.nativeFailureReason = result.reason;
+    }
     const delays = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
     const attempt = entry.nativeFailures ?? 0;
     entry.nativeFailures = Math.min(attempt + 1, delays.length);
