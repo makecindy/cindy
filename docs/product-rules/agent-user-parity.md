@@ -94,6 +94,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 媒体模型 | `configure_model_connection` 声明 mode/modalities；`manage_media_guide` 按需 get、validate、save 自定义调用说明；`media` prepare/request/poll 使用指定连接 | 有（未发布；沿用任务权限，保存或校验不等于真实出片，错误原因与后备由 Agent 判断） | 在媒体连接所在电脑的本机任务执行；不新增跨电脑 Guide 同步或 SSH 管理 |
 | 订阅账号 | `configure_model_provider` 的 `subscriptionAccounts`：查看、官方 CLI 登录、暂停、限额、权重与调度策略；2026-11-13 起另含登录为单独供应商（`create`）或加入指定供应商（`add`）、移动／拿出（`place`）、整体并入（`merge`）、删除新建的订阅供应商（`remove-provider`），与设置页共用校验和执行服务。插件只复用原 read 及供应商 list，保留身份/目录等非凭证字段，不放开相邻写动作 | 有（Claude / Codex；任意同类供应商，每个供应商只用自己的账号；2026-11-16 起所有账号均可移除／移动，读取包含上游已知的 planTier / planType；声明 settings 的插件 read 不需 Session） | 账号工具仍按执行电脑本机读取；不新增逐账号跨电脑额度。组状态可用下一行工具；原远控 UI 复用管理 IPC |
 | 供应商状态与用量 | `get_provider_usage_history` 原样读取已记录用量与 coverageStart，不在宿主聚合；`get_provider_group` 读取既有组视图、运行状态与已知 quota，未知不当零 | 有（Agent 与声明 settings 的插件共用原管理处理器） | 有（device 指定同账号已授权电脑，复用原 manage-share/usage-history 与 manage-group/get；旧端不支持时明确报错） |
+| 订阅用量 | `get_subscription_usage`（`usage` 分类；搜索「用量／额度」可发现）：逐账号只读标识、套餐、额度窗口与观测时间；插件通过独立 `agent.hostTools:['usage']` 声明调用同一入口 | 有（本机 Claude / Codex，不返回邮箱、凭证、目录或内部身份指纹） | 仅执行电脑当前 Cindy 账号已连接的本机订阅；不汇总远程／分享供应商，Node Host 未接入时明确不支持 |
 | 任务     | 列出、搜索、读聊天记录、发现电脑                           | 有   | 有               |
 | 任务与伙伴 | `list_sessions` 返回隐藏状态；`list_teammates` 分页枚举含隐藏、暂停、归档的伙伴，传 `teammate_id` 分页读取已保存的任务关系（默认100、最多1000） | 有（history 组，普通任务与插件共用） | 有（同账号历史查询；旧端不支持时明确返回未覆盖） |
 | 任务附件 | `read_session_attachment` 只读已有宿主授权的 Cindy 媒体与 grant / deposit / handoff 引用，分块字节与 SHA-256；历史 JSON 文件路径不构成授权，返回 `UNSUPPORTED_CAPABILITY`，不返回宿主路径 | 有（history 组，受上述限制） | 暂不支持，返回 `UNSUPPORTED_CAPABILITY` |
@@ -127,6 +128,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 定时任务 | 列出、详情、运行记录、修改、暂停、恢复、删除、立即运行     | 有   | 有（V1 / V2 各自实时名册判断可用；仅加密连接不依赖 V1 在线状态） |
 | 定时任务 | 选择远程／分享供应商模型（运行位置、引擎、模型与速度）及清除覆盖恢复跟随；绑定任务或持续模式切回本机须保留完整引擎／模型选择 | 有   | 有（设置或清除模型选择均核验目标电脑的 `supportsScheduleAgentDeviceSelection`） |
 | 定时任务 | 新建（可指定目标电脑）                                     | 有 | 有（2026-11-01；目标电脑须支持远程创建） |
+| 定时任务 | `schedule_create/update` 设置 `manual`：关闭定时、仅 Webhook 事件触发或恢复原定时，Agent／脚本执行方式均适用 | 有（省略值保持创建默认／更新 partial 语义） | 有；更新时 `manual` 不与 `cronExpr`、`notify` 三者同时传，避免旧手机全量表单兼容逻辑清除未传设置，可单独修改 `manual` |
 | 定时任务 | 安装检查脚本                                               | 有（绑定远程 Agent 时由本机辅助模型生成脚本） | 无 |
 | 定时任务 | 查可选运行位置与模型；设每次新建任务的 Agent 运行位置（其他电脑 / 分享来的供应商） | 有（2026-10-22） | 无 |
 | 定时任务 | 删除单条运行记录、标记已读                                 | 无   | 无               |

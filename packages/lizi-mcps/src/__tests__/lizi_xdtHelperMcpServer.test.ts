@@ -131,6 +131,28 @@ it('discovers Host services through the common validated registry', async () => 
     expect(list).toHaveBeenCalledOnce();
   } finally { await server.close(); }
 });
+// Unit: plugin callers have no Session; the new usage entry must use their attested
+// context and reject arbitrary owner/path/refresh parameters before touching host data.
+it('exposes read-only subscription usage to the common validated tool registry', async () => {
+  const read = vi.fn(async () => ({ scope: 'local', accounts: [{ accountId: 'second', windows: [] }] }));
+  const hostCaller = { kind: 'plugin' as const, pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 };
+  const server = createXdtHelperMcpServer({ subscriptionUsage: { read } }, { agentKind: 'codex', workingDir: '', hostCaller });
+  try {
+    expect(server.hostTools.describe('get_subscription_usage')).toMatchObject({ category: 'usage' });
+    expect(parsePayload(await server.hostTools.call('get_subscription_usage', { providerId: 'anthropic' })))
+      .toMatchObject({ ok: true, accounts: [{ accountId: 'second' }] });
+    expect(read.mock.calls[0]).toEqual([expect.objectContaining({ hostCaller }), 'anthropic']);
+    for (const key of ['ownerId', 'accountPath', 'refresh', 'deviceId', 'sessionId']) {
+      expect(parsePayload(await server.hostTools.call('get_subscription_usage', { [key]: 'other' }))).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    }
+    expect(read).toHaveBeenCalledOnce();
+    read.mockRejectedValueOnce(new Error('secret host path'));
+    const failed = await server.hostTools.call('get_subscription_usage', {});
+    expect(parsePayload(failed)).toMatchObject({ errorCode: 'SUBSCRIPTION_USAGE_UNAVAILABLE' });
+    expect(JSON.stringify(failed)).not.toContain('secret host path');
+  } finally { await server.close(); }
+});
+
 // Unit, #9801 / 4537273680: external-history scan/status callbacks also recover
 // interrupted imports. Existing task tests did not cover a plugin caller. The
 // real shared dispatcher must reject all three tools before any callback (and

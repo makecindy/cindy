@@ -8198,6 +8198,8 @@
         "hostTools_controlDetail": "通过 Cindy 的任务工具修改、归档、恢复和控制已有任务及项目，并在本机导入原生任务文件。",
         "hostTools_handoff": "任务投递",
         "hostTools_handoffDetail": "通过 Cindy 的任务工具给已有任务发送消息。需要当前任务上下文的操作必须显式指定任务。",
+        "hostTools_usage": "读取订阅用量",
+        "hostTools_usageDetail": "读取当前 Cindy 账号在这台电脑上已连接的 Claude 和 Codex 账号标识、套餐、配额窗口及更新时间。不能读取邮箱、凭证、文件或其他电脑的数据，也不能修改账号",
         "hostTools_settings": "应用设置",
         "hostTools_settingsDetail": "通过 Cindy 的设置工具读取和修改应用配置；不返回密钥，不代替你完成保密输入。",
         "hostTools_scheduler": "自动化管理",
