@@ -275,7 +275,12 @@ import {
 import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
 import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
 import { parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
-import { recoverRenamedSessionModelBeforeSend } from './renamedSessionModelRecovery';
+import {
+  createCanApplyAutomaticRuntimeSelection,
+  createReadSessionRuntimeProfiles,
+  createRecoverRenamedSessionModelOnSend,
+  createSelectSameAgentModel,
+} from './sessionRuntimeSelectionLanding.js';
 import { createTurnModelAttribution } from './turnModelAttribution.js';
 import { createUserMessageDurableWrite } from './userMessageDurableWrite.js';
 import { createInterruptedTurnAutoResumeHooks } from './interruptedTurnAutoResumeHooks.js';
@@ -1200,7 +1205,7 @@ import {
   type MakerSessionAgentSwitchHandlerDeps,
   type PendingAgentSwitchIntent,
 } from './sessionAgentSwitchHandler.js';
-import { pendingHarnessRuntimeMutation, setSessionRuntimeHarness } from './sessionRuntimeHarnessSelection.js';
+import { setSessionRuntimeHarness } from './sessionRuntimeHarnessSelection.js';
 import {
   COMPANION_SESSION_IDS_LIMIT,
   buildHandoffText,
@@ -1448,7 +1453,6 @@ import {
   remapSessionRuntimeProvider,
   resolveCompatibleSessionRuntimeEffort,
   resolveSessionRuntimeAxes,
-  sessionRuntimeGenerationMatches,
   sessionRuntimeControlOwnerEpochMatches,
   type SessionRuntimeAxisPatch,
   type SessionRuntimeProfile,
@@ -11303,9 +11307,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const agentSwitchPending = createPendingAgentSwitchRegistry();
   // User send intent owns the next route boundary, including automatic requests
   // that read the runtime generation after the picker accepted that intent.
-  const canApplyAutomaticRuntimeSelection = (sessionId: string, expectedGeneration?: number): boolean =>
-    !agentSwitchPending.get(sessionId) &&
-    sessionRuntimeGenerationMatches(sessionId, expectedGeneration);
+  const canApplyAutomaticRuntimeSelection = createCanApplyAutomaticRuntimeSelection({ agentSwitchPending });
   cancelPendingAgentSwitchHolder = (sessionId) => {
     agentSwitchPending.clear(sessionId);
     appliedContextWindowBudgets.delete(sessionId);
@@ -11425,22 +11427,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }),
     withCloseSuppressed: withRehydrateCloseSuppressed,
     pendingSwitches: agentSwitchPending,
-    selectSameAgentModel: async (sessionId, intent, applyNow, assertSelectionCurrent, beforeMutation, pendingSelectionAccess) => {
-      const result = await applySessionRuntimeSelection(sessionId, intent.model, intent.providerId, {
-        effort: (intent.effort ?? null) as SessionRuntimeProfile['effort'],
-        fastMode: intent.fastMode ?? false,
-        ...(intent.thinking !== undefined ? { thinking: intent.thinking } : {}),
-        // 只有 Agent 在另一台电脑运行的任务会在意图里带确认过的目标窗口。
-        // Preserve the exact window acknowledged by the picker until send.
-        ...(intent.confirmedContextWindow ? { confirmedContextWindow: intent.confirmedContextWindow } : {}),
-      }, { source: 'user', sessionLockHeld: true, applyingUserSelectionOnSend: applyNow,
-        runtimeSource: intent.runtimeSource, configStaged: intent.configStaged === true,
-        assertSelectionCurrent, beforeMutation, pendingSelectionAccess });
-      if (result.contextWindowConfirmationRequired !== undefined) {
-        throwIpcError('PRECONDITION_FAILED', 'Model context window changed or was unknown; select the model again to confirm');
-      }
-      return result;
-    },
+    selectSameAgentModel: createSelectSameAgentModel({
+      applySessionRuntimeSelection: (...args) => applySessionRuntimeSelection(...args),
+    }),
     onPendingSwitchChanged: (sessionId, intent) => {
       if (intent) recordUserSessionRuntimeMutation(sessionId);
       broadcastSessionPatched(sessionId, { agentSwitchIntent: intent });
@@ -16841,62 +16830,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
   settlePendingSessionRuntimeControlHolder = settlePendingSessionRuntimeControl;
 
-  const readSessionRuntimeProfiles = async (sessionId: string) => {
-    const meta = await maker.getSessionMeta(sessionId);
-    if (!meta) return null;
-    let baseline: SessionRuntimeProfile = {
-      agentKind: meta.agentKind,
-      model: meta.model,
-      providerId: null,
-      effort: meta.effort ?? null,
-      fastMode: (meta.fastMode === 'ultrafast' ? 'ultrafast' : meta.fastMode === true),
-    };
-    try {
-      const [row] = await getDbClient()
-        .drizzle.select({
-          agentKind: sessions.agentKind,
-          agentDeviceId: sessions.agentDeviceId,
-          model: sessions.model,
-          providerId: sessions.providerId,
-          effort: sessions.effort,
-          fastMode: sessions.fastMode,
-        })
-        .from(sessions)
-        .where(eq(sessions.id, sessionId))
-        .limit(1);
-      if (row) {
-        baseline = {
-          agentKind: dbToMakerAgentKind(row.agentKind),
-          agentDeviceId: row.agentDeviceId,
-          model: row.model,
-          providerId: row.providerId?.trim() || null,
-          effort: row.effort,
-          fastMode: (row.fastMode === 'ultrafast' ? 'ultrafast' : row.fastMode === true),
-        };
-      }
-    } catch (error) {
-      log.debug('session runtime baseline lookup failed', {
-        sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-    const control = getSessionRuntimeControlSnapshot(sessionId);
-    const live = maker.getSession(sessionId);
-    const effective: SessionRuntimeProfile = control.effectiveOverride ?? {
-      agentDeviceId: baseline.agentDeviceId,
-      agentKind: live?.agentKind ?? meta.agentKind,
-      model: live?.model ?? meta.model,
-      providerId: hasSessionProvider(sessionId)
-        ? getSessionProvider(sessionId)
-        : baseline.providerId,
-      effort:
-        (getSessionEffort(sessionId) as SessionRuntimeProfile['effort']) ?? meta.effort ?? null,
-      fastMode: live ? getSessionFastMode(sessionId) : (meta.fastMode ?? false),
-    };
-    const pendingMutation = pendingHarnessRuntimeMutation(agentSwitchPending.get(sessionId), control.generation, effective.agentDeviceId)
-      ?? control.pending;
-    return { baseline, effective, control, pendingMutation };
-  };
+  const readSessionRuntimeProfiles = createReadSessionRuntimeProfiles({ maker, agentSwitchPending, log });
 
   /**
    * 系统按配置发起的整条路由选择(伙伴模型对齐 / IM 渠道默认跟随): 跨引擎登记切换
@@ -22092,41 +22026,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getCodexProxyAuthInjectionState,
     recordSessionContextSnapshot,
   }));
-  recoverRenamedSessionModelOnSend = async (sessionId) => {
-    if (agentSwitchPending.get(sessionId)) return;
-    const [row] = await getDbClient().drizzle.select({
-      status: sessions.status,
-      model: sessions.model,
-      providerId: sessions.providerId,
-      agentKind: sessions.agentKind,
-      remoteHostId: sessions.remoteHostId,
-      agentDeviceId: sessions.agentDeviceId,
-      effort: sessions.effort,
-      fastMode: sessions.fastMode,
-    }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-    if (!row || row.status !== 'active' || !row.providerId ||
-        row.remoteHostId || row.agentDeviceId) return;
-    const providers = await getDesktopProviderService().listProviders({
-      allowSideEffects: false,
-      catalog: getActiveCatalog(),
-    });
-    const profiles = await readSessionRuntimeProfiles(sessionId);
-    await recoverRenamedSessionModelBeforeSend({
-      route: { ...row, agentKind: dbToMakerAgentKind(row.agentKind) },
-      effectiveRoute: profiles?.effective ?? null,
-      hasPendingSelection: !!agentSwitchPending.get(sessionId) || !!profiles?.pendingMutation,
-      providers,
-      apply: (model, providerId) => handleSetModel(
-        sessionId, model, providerId, undefined,
-        { effort: row.effort as SessionRuntimeProfile['effort'], fastMode: row.fastMode },
-        {
-          source: 'agent', sessionLockHeld: true, applyingUserSelectionOnSend: true,
-          persistRenamedSessionModel: true,
-          expectedGeneration: getSessionRuntimeControlSnapshot(sessionId).generation,
-        },
-      ),
-    });
-  };
+  recoverRenamedSessionModelOnSend = createRecoverRenamedSessionModelOnSend({
+    agentSwitchPending, getDesktopProviderService, readSessionRuntimeProfiles, handleSetModel,
+  });
   applyPiModelSettingsRefresh = async (sessionId, model, providerId) => {
     const generation = getSessionRuntimeControlSnapshot(sessionId).generation;
     const result = await handleSetModel(sessionId, model, providerId, undefined, undefined, {

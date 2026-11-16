@@ -19,12 +19,27 @@ function visit(node: ts.Node) {
   if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'applyAgentDeviceRuntimeSelection') {
     remoteSelection = node.initializer!.getText(source);
   }
-  if (ts.isPropertyAssignment(node) && node.name.getText(source) === 'selectSameAgentModel') {
-    selectionAdapter = node.initializer.getText(source);
-  }
   ts.forEachChild(node, visit);
 }
 visit(source);
+
+// selectSameAgentModel moved verbatim into sessionRuntimeSelectionLanding.ts: the adapter is the function
+// createSelectSameAgentModel returns, with the same names (throwIpcError, applySessionRuntimeSelection).
+function landingSelectionAdapter(): string {
+  const landing = ts.createSourceFile('sessionRuntimeSelectionLanding.ts',
+    readFileSync(new URL('../sessionRuntimeSelectionLanding.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+  let adapter = '';
+  const find = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === 'createSelectSameAgentModel') {
+      const returned = node.body?.statements.find(ts.isReturnStatement);
+      adapter = returned?.expression?.getText(landing) ?? '';
+    }
+    ts.forEachChild(node, find);
+  };
+  find(landing);
+  return adapter;
+}
+selectionAdapter = landingSelectionAdapter();
 const compile = (expression: string, bindings: Record<string, unknown>) => {
   const js = ts.transpileModule(`return ${expression};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   return new Function(...Object.keys(bindings), js)(...Object.values(bindings));

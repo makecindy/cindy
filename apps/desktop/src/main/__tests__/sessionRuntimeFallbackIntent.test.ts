@@ -5,9 +5,13 @@ import { shouldPreserveRuntimeFallbackAutoResume } from '../maker-ipc/interrupte
 import { createPendingAgentSwitchRegistry } from '../maker-ipc/sessionAgentSwitchHandler';
 
 const source = readFileSync(new URL('../maker-ipc/register.ts', import.meta.url), 'utf8');
-const guard = source.slice(
-  source.indexOf('  const canApplyAutomaticRuntimeSelection ='),
-  source.indexOf('  cancelPendingAgentSwitchHolder ='),
+// canApplyAutomaticRuntimeSelection is in sessionRuntimeSelectionLanding.ts (register.ts calls its factory
+// where it defined it); its port and import keep the names injected below.
+const landingSource = readFileSync(new URL('../maker-ipc/sessionRuntimeSelectionLanding.ts', import.meta.url), 'utf8')
+  .replace(/\r\n?/g, '\n');
+const guard = landingSource.slice(
+  landingSource.indexOf('  const canApplyAutomaticRuntimeSelection ='),
+  landingSource.indexOf('  return canApplyAutomaticRuntimeSelection;'),
 );
 // The fallback body is in sessionRuntimeFallback.ts; its ports and imports keep the names injected below.
 // A Windows checkout has CRLF line endings; the slice below finds multi-line markers.

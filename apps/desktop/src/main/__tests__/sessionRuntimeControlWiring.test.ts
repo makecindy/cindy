@@ -64,12 +64,20 @@ const runtimeSelectionApplySource = readFileSync(
   resolve(mainRoot, 'maker-ipc/sessionRuntimeSelectionApply.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+// selectSameAgentModel and recoverRenamedSessionModelOnSend moved verbatim into
+// sessionRuntimeSelectionLanding.ts; register.ts calls their factories where it defined them.
+const runtimeSelectionLandingSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeSelectionLanding.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 // What register.ts held before handleSetModel moved out: the assertions that searched the whole of
 // register.ts for code of that function read this.
-const registerWithRuntimeSelectionSource = `${registerSource}\n${runtimeSelectionApplySource}`;
+const registerWithRuntimeSelectionSource = `${registerSource}\n${runtimeSelectionApplySource}\n${runtimeSelectionLandingSource}`;
 function setModelSource(): string {
   return handlerBody(runtimeSelectionApplySource, 'const handleSetModel = async (', '  return handleSetModel;')
-    + handlerBody(registerSource, 'const handleSetModel = createHandleSetModel(', 'const recoverRemoteRuntimeAxisPersistence');
+    + handlerBody(registerSource, 'const handleSetModel = createHandleSetModel(', 'const recoverRemoteRuntimeAxisPersistence')
+    // recoverRenamedSessionModelOnSend, which register.ts assigned in that tail (its factory call).
+    + handlerBody(runtimeSelectionLandingSource, 'export function createRecoverRenamedSessionModelOnSend(', '\n}\n');
 }
 function handlerBody(source: string, channel: string, nextChannel: string): string {
   const start = source.indexOf(channel);
@@ -1114,7 +1122,8 @@ describe('session runtime control wiring', () => {
     expect(body).toContain('confirmedTargetPressure:');
     expect(body).toContain('internalOptions.applyingUserSelectionOnSend === true');
     expect(body).toContain('if (atomicSelection.effort !== null)');
-    expect(registerSource).toContain(
+    // The agent switch deps' selectSameAgentModel (register.ts binds it from this file).
+    expect(runtimeSelectionLandingSource).toContain(
       'sessionLockHeld: true, applyingUserSelectionOnSend: applyNow',
     );
   });
