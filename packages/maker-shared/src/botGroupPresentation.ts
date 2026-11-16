@@ -290,7 +290,7 @@ export function botGroupPlanStepState(plan: BotGroupPlanView, step: BotGroupPlan
 }
 
 export function canSkipBotGroupPlanStep(plan: BotGroupPlanView, step: BotGroupPlanStepView): boolean {
-  if (plan.kind !== 'talk' || plan.canManage !== true || plan.currentStep === null) return false;
+  if (plan.kind !== 'talk' || plan.canManage !== true || step.canStop !== true || plan.currentStep === null) return false;
   if (plan.supportsPendingSkip === true && ['running', 'waiting'].includes(plan.status)
     && step.position > plan.currentStep && step.status === 'pending') return true;
   return plan.status === 'running' && step.position === plan.currentStep

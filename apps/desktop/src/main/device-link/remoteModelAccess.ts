@@ -80,7 +80,8 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
           && !(memberBudget?.enabled && memberBudget.rules.length > 0);
       } catch { return false; }
     },
-    async set(providerId: string, models: RemoteModelSelection, memberId: string | undefined, assertCurrent: () => void, memberBudget?: ProviderShareMemberBudget | null) {
+    async set(providerId: string, models: RemoteModelSelection, memberId: string | undefined, assertCurrent: () => void,
+      memberBudget?: ProviderShareMemberBudget | null, assertAfterWrite: () => void = assertCurrent) {
       if (!isRemoteModelSelection(models)) throwIpcError('INVALID_PARAMS', 'Invalid remote model selection');
       if (memberBudget !== undefined && (!memberId || (memberBudget !== null && !isProviderShareMemberBudget(memberBudget))))
         throwIpcError('INVALID_PARAMS', 'Invalid member budget settings');
@@ -107,7 +108,7 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
         else Object.defineProperty(providers, providerId, { value: rule, enumerable: true, configurable: true, writable: true });
         return { providers };
       });
-      assertCurrent();
+      assertAfterWrite();
       const updated = read(providerId, memberId);
       for (const listener of listeners) {
         try { listener(); }

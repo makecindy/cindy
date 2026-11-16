@@ -73,7 +73,7 @@ Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` �
 
 `mcpApps.ui` 声明页面资源与工具可见性，完整写法见[§4.23](plugin-interactive-pages.md)。
 
-`agent.hostTools: string[]` 声明插件直接调用的宿主工具组：`history`、`control`、`handoff`、`settings`、`scheduler`、`terminal`、`files`、`storage`、`browser`、`computer`、`ssh`、`docs`、`discovery`。安装/更新确认整体授予该版本的全部已知声明能力，不另存分项批准；未知组保留但当前宿主不支持。UI 与 Node 均使用 `cindy.host.call`，详见[宿主工具调用](plugin-host-tools.md)。
+`agent.hostTools: string[]` 声明插件直接调用的宿主工具组：`history`、`control`、`handoff`、`settings`、`scheduler`、`terminal`、`files`、`storage`、`browser`、`computer`、`ssh`、`docs`、`discovery`、`usage`（只读本机订阅用量）。安装/更新确认整体授予该版本的全部已知声明能力，不另存分项批准；未知组保留但当前宿主不支持。UI 与 Node 均使用 `cindy.host.call`，详见[宿主工具调用](plugin-host-tools.md)。
 
 可选 `mcpApps.host` 声明具名视图、原生位置、命令、补全与附件处理提供者、普通设置字段和宿主能力，见[插件界面扩展](plugin-host-ui.md)。
 已安装版本批准有效且插件已启用时，宿主支持的声明直接生效；未知扩展保留为数据，不另存 Host UI 分项批准。

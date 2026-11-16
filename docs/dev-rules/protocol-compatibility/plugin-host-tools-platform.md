@@ -2,6 +2,15 @@
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件记录对应能力的增量协议与旧端降级。
 
+`usage`（2026-11-16）为独立只读组，经原 `cindy.host.call` / `host-tool-request` 调用
+`cindy_helper.get_subscription_usage({providerId?})`。不改已有消息签名、receipt 或数据存储布局；
+不声明该组的旧插件权限不变，扩权更新走既有安装确认。只读执行电脑当前 owner 的本机订阅账号，
+账号、套餐、窗口和时间通过字段白名单投影，不返回原生目录、邮箱、身份摘要或凭证。
+旧宿主将新组保留为未知声明且不提供工具，调用者须按不支持处理；未接入额度服务的 Node Host
+同样不宣称可用。未新增 Device Link channel / payload；官方和自建中转仍透传既有插件消息，
+本次不经过远程账号额度路径，不需要中转适配。结果与缓存约定见
+[作者手册](../../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md#读取订阅用量)。
+
 `terminal` 新增同一 helper registry 的 `terminal_start/list/read/write/resize/stop/forget`，不改 Host 调用签名。
 整体安装批准有效、启用且已声明新组即可调用；旧 receipt 的分项字段读到即忽略，未知组不提供实现。终端输出用 Host 随机进程代次及
 非消费游标续读，缺口显式 `resetRequired`；执行电脑不支持或重启后记录丢失时报告失败，不重放命令。

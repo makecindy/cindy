@@ -675,6 +675,27 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(knobs.closeCount).toBe(1); // 已 spawn → 必须关掉,避免僵尸持有 ?session= 路由
   });
 
+  // PR #10213 Windows CI: a failed initial durable scan logged through a deps
+  // alias assigned only after startup. Existing cases did not force scan failure
+  // before an RPC rejection, so they missed the unhandled TDZ error (unit tier).
+  it('reports a durable scan failure without masking a failed startup', async () => {
+    knobs.getStateRejects = true;
+    vi.spyOn(piSubagentRuns, 'scanPiSubagentRuns').mockImplementation(async function* () {
+      throw new Error('initial scan unavailable');
+    });
+    const warn = vi.fn();
+    const agent = new PiAgent(buildDeps({ logger: { ...noopLogger, warn } }));
+
+    await expect(agent.startSession(opts())).rejects.toMatchObject({
+      name: 'AgentStartupStoppedError', cause: new Error('get_state rejected (mock)'),
+    });
+    expect(warn).toHaveBeenCalledWith('pi subagent durable status refresh failed', {
+      message: 'initial scan unavailable',
+    });
+    expect(disposed).toBe(1);
+    expect(knobs.closeCount).toBe(1);
+  });
+
   // #9855: the startup error previously exposed only the RPC timeout. Exercise
   // startSession, not a formatter; simulate SF_DATALESS metadata, not a real
   // iCloud stall. Existing cases cover confirmed/unconfirmed cleanup separately.

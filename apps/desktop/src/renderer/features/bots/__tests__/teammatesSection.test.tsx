@@ -1065,7 +1065,9 @@ describe('TeammatesSection rows', () => {
     expect(mocks.refreshBotProfiles).toHaveBeenCalledTimes(1);
   });
 
-  it('refreshes a sealed reply when the turn stops and still accepts late tool rows', () => {
+  // Unit regression: final-seal and message events previously used independent
+  // refresh paths. The displayed final preview must update once for their burst.
+  it('coalesces a turn stop with its final message and still accepts late tool rows', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const old = bot({ id: 'bot-1', name: 'PR steward', lastMessagePreview: 'Old reply' });
     mocks.profiles = [old];
@@ -1074,8 +1076,14 @@ describe('TeammatesSection rows', () => {
     mocks.refreshBotProfiles.mockImplementation(() => {
       mocks.profiles = [{ ...old, lastMessagePreview: 'Sealed reply' }];
     });
+    mocks.refreshBotProfiles.mockClear();
     mocks.running = new Map();
     view.rerender(<><UnreadSync /><TeammatesSection /></>);
+    act(() => {
+      for (const listener of messageListeners) listener({ sessionId: 'bot-1-chat', message: { role: 'assistant' } });
+      vi.advanceTimersByTime(120);
+    });
+    expect(mocks.refreshBotProfiles).toHaveBeenCalledTimes(1);
     view.rerender(<><UnreadSync /><TeammatesSection /></>);
     expect(screen.getByText('Sealed reply')).toBeTruthy();
 

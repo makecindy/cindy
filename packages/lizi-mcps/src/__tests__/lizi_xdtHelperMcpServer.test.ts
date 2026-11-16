@@ -7,6 +7,40 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// Unit, provider-sharing.md §7 / agent-user-parity.md: the real registry must
+// expose owner management to an installed plugin without borrowing a task.
+// Existing model/settings tests do not exercise member operations or their schema.
+it('offers provider share member tools to plugins without a Session and validates writes', async () => {
+  const call = vi.fn(async () => ({ members: [{ memberId: 'member', status: 'paused' }] }));
+  const server = createXdtHelperMcpServer({ providerSharing: { call } }, {
+    agentKind: 'codex', workingDir: '',
+    hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  const client = new Client({ name: 'provider-sharing-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    expect(server.hostTools.describe('list_provider_share_members')).toMatchObject({ category: 'settings' });
+    expect(parsePayload(await server.hostTools.call('list_provider_share_members', {})))
+      .toMatchObject({ ok: true, members: [{ memberId: 'member' }] });
+    expect(call).toHaveBeenLastCalledWith({ action: 'members', callerSessionId: undefined });
+    expect(parsePayload(await server.hostTools.call('set_provider_share_member_status', {
+      device: 'other-computer', memberId: 'member', status: 'pause',
+    }))).toMatchObject({ ok: true });
+    expect(call).toHaveBeenLastCalledWith({ callerSessionId: undefined, action: 'status', device: 'other-computer',
+      memberId: 'member', status: 'pause' });
+    expect(parsePayload(await server.hostTools.call('set_provider_share_member_status', {
+      memberId: 'member', status: 'remove',
+    }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(parsePayload(await server.hostTools.call('set_provider_share_model_access', {
+      providerId: 'anthropic', memberId: 'member', models: ['model-a'], ownerId: 'someone-else',
+    }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).toHaveBeenCalledTimes(2);
+    const found = parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '供应商分享成员' } }));
+    expect(JSON.stringify(found)).toContain('models.provider-sharing');
+  } finally { await client.close(); await server.close(); }
+});
+
 // Unit, capability list #10/#15: the existing registry had no native package
 // transfer. A named task or file is enough to exercise discovery, caller identity
 // and scope rejection; no filesystem, network or engine process is needed.
@@ -67,6 +101,28 @@ it('discovers Host services through the common validated registry', async () => 
     expect(list).toHaveBeenCalledOnce();
   } finally { await server.close(); }
 });
+// Unit: plugin callers have no Session; the new usage entry must use their attested
+// context and reject arbitrary owner/path/refresh parameters before touching host data.
+it('exposes read-only subscription usage to the common validated tool registry', async () => {
+  const read = vi.fn(async () => ({ scope: 'local', accounts: [{ accountId: 'second', windows: [] }] }));
+  const hostCaller = { kind: 'plugin' as const, pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 };
+  const server = createXdtHelperMcpServer({ subscriptionUsage: { read } }, { agentKind: 'codex', workingDir: '', hostCaller });
+  try {
+    expect(server.hostTools.describe('get_subscription_usage')).toMatchObject({ category: 'usage' });
+    expect(parsePayload(await server.hostTools.call('get_subscription_usage', { providerId: 'anthropic' })))
+      .toMatchObject({ ok: true, accounts: [{ accountId: 'second' }] });
+    expect(read.mock.calls[0]).toEqual([expect.objectContaining({ hostCaller }), 'anthropic']);
+    for (const key of ['ownerId', 'accountPath', 'refresh', 'deviceId', 'sessionId']) {
+      expect(parsePayload(await server.hostTools.call('get_subscription_usage', { [key]: 'other' }))).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    }
+    expect(read).toHaveBeenCalledOnce();
+    read.mockRejectedValueOnce(new Error('secret host path'));
+    const failed = await server.hostTools.call('get_subscription_usage', {});
+    expect(parsePayload(failed)).toMatchObject({ errorCode: 'SUBSCRIPTION_USAGE_UNAVAILABLE' });
+    expect(JSON.stringify(failed)).not.toContain('secret host path');
+  } finally { await server.close(); }
+});
+
 // Unit, #9801 / 4537273680: external-history scan/status callbacks also recover
 // interrupted imports. Existing task tests did not cover a plugin caller. The
 // real shared dispatcher must reject all three tools before any callback (and
