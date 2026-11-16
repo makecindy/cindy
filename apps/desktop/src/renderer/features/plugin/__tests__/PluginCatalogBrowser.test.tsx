@@ -607,6 +607,9 @@ it('renders short filtered pages contiguously after an empty page with a continu
   const { cache, view } = fixture(load);
   render(view());
   await waitFor(() => expect(cache.current.metadata).not.toBeNull());
+  // Metadata is published before React commits the continuation observer.
+  // Deliver the viewport event only after that real subscription is installed.
+  await waitFor(() => expect(intersections.size).toBeGreaterThan(0));
   act(() => intersections.forEach(callback => callback()));
   await screen.findByText('Tool 10');
   expect(screen.getByText('Tool 11')).toBeTruthy();
