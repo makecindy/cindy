@@ -84,6 +84,8 @@ The decision and review correction are recorded in
 
 ## 2. Color Palette & Roles
 
+MCP App 卡片来源例外（2026-11-16）：第三方来源、本地安装、来源未知使用 warning 语义前景色（Desktop `--warning-fg`，Mobile `warningFg`）；市场来源不标色，自定义 MCP 使用普通文字色。只表达安装来源，不替代权限或签名判断。
+
 > **Multi-theme note**: the values in this section are the concrete **Default Light / Default Dark** (base theme) palette, given as the visual-spec reference sample. At runtime **every color is consumed through a token** (see §10 Theme System & Token Reference), so the same component automatically renders each theme's own colors under other themes (Eclipse / One Dark Pro / Monokai Pro, …). **When implementing components, always write tokens, never hex** — rules in §10.
 
 ### Primary Text

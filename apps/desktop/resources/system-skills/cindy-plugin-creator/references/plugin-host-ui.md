@@ -8,6 +8,20 @@
 复杂页面继续使用官方 MCP Apps `App`、资源、主题、CSP 和销毁协议。
 业务仍由原 `main.js` 执行，不另起 MCP 服务，不为打开页面伪造工具调用。
 
+### 标题、全屏与可用尺寸
+
+右侧栏页签（含分离窗口）、入口旁弹层、`sidebar.section` 不重复显示卡片标题；加载与重试在页面区域。
+来源由宿主安装记录决定，例外来源只在入口/页签悬停提示中显示，页面不能通过改名隐藏来源。
+`message.body`、`tool.body`、`settings.section` 仍有紧凑标题栏。
+桌面有标题栏且已就绪的页面默认有全屏按钮，前提是 App 的 `availableDisplayModes` 支持 fullscreen；手机只有 inline。
+资源可声明 `hostFullscreenButton: false` 隐藏该按钮（缺省 true），只影响宿主按钮，不禁止 `app.requestDisplayMode({mode:"fullscreen"})`。
+该字段映射为资源 `_meta["cindy/host-fullscreen-button"]`，自定义 MCP 可直接提供此扩展。
+旧宿主的资源解析保留并忽略该字段，不会拒装；要依赖按钮隐藏行为时，核验实际发布版本并填写对应 `minCindyVersion`，不要猜版本号。
+
+页签与全屏收到固定 `hostContext.containerDimensions: {width,height}`，页面铺满可用区域；
+尺寸变化走原 host-context 更新。页面应处理自身滚动，不要使用 `overflow:hidden` 截掉长内容。
+对话、弹层和折叠区仍是 `{width,maxHeight}` 内容高度模式；不要把这两种模式混作同一种自动增高布局。
+
 ### 声明与打开
 
 ```json
