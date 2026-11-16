@@ -43,13 +43,24 @@ export interface HistoryViewTransport<T extends HistoryMessageSource> {
 }
 
 export interface HistoryViewDiagnostic {
-  source: 'cache' | 'latest' | 'older' | 'details' | 'fallback' | 'reset';
+  source: 'cache' | 'latest' | 'older' | 'details' | 'fallback' | 'reset' | 'failed';
   previousItemCount: number;
   itemCount: number;
   messageCount: number;
   detailMessageCount: number;
   ready: boolean;
   stale: boolean;
+  /**
+   * 只在 source='failed' 时出现:哪一种分页读取失败,以及错误码(`[CODE]` 前缀,缺省 UNKNOWN)。
+   * 只带枚举,不带错误正文 —— 正文可能含路径或对端返回内容。
+   */
+  failure?: { read: 'latest' | 'older'; code: string };
+}
+
+/** 诊断只取 `[CODE] …` 前缀里的错误码;其它形状一律记 UNKNOWN。 */
+export function historyViewErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return /^\[([A-Z][A-Z0-9_]{0,63})\]/.exec(message)?.[1] ?? 'UNKNOWN';
 }
 
 /** Display-only artifact paths and live tool inputs are not read-request inputs. */
@@ -150,7 +161,11 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
-  private publish(patch: Partial<HistoryViewSnapshot<T>>, source?: HistoryViewDiagnostic['source']): void {
+  private publish(
+    patch: Partial<HistoryViewSnapshot<T>>,
+    source?: HistoryViewDiagnostic['source'],
+    failure?: HistoryViewDiagnostic['failure'],
+  ): void {
     const previousItemCount = this.state.items.length;
     this.state = { ...this.state, ...patch };
     if (source && this.transport.diagnostic) {
@@ -159,7 +174,8 @@ export class HistoryViewController<T extends HistoryMessageSource> {
           messageCount: historyViewLeaves(this.state.items).reduce((count, item) =>
             count + (item.type === 'messages' ? item.messages.length : 0), 0),
           detailMessageCount: [...this.state.details.values()].reduce((count, detail) => count + detail.messages.length, 0),
-          ready: this.state.ready, stale: this.state.stale === true });
+          ready: this.state.ready, stale: this.state.stale === true,
+          ...(failure ? { failure } : {}) });
       } catch { /* Diagnostics must not interrupt cache restoration or remote reads. */ }
     }
     for (const listener of this.listeners) listener();
@@ -288,7 +304,11 @@ export class HistoryViewController<T extends HistoryMessageSource> {
           this.refreshTimer = null;
           this.publish({ items: [], details: new Map(), expanded: new Set(), ready: false,
             nextCursor: null, hasMore: false, loading: false, error }, 'fallback');
-        } else this.publish({ loading: false, error });
+        } else {
+          // 读取失败过去不留任何诊断:界面停在缓存上,事后无从判断是没发出去还是发出去失败了。
+          this.publish({ loading: false, error }, 'failed',
+            { read: older ? 'older' : 'latest', code: historyViewErrorCode(error) });
+        }
       }
     }
   }
