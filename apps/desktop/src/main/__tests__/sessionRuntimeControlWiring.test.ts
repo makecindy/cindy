@@ -70,6 +70,29 @@ const runtimeSelectionLandingSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/sessionRuntimeSelectionLanding.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+// SET_EFFORT, SET_FAST_MODE and SET_THINKING_ENABLED's bodies after their sender check moved verbatim into
+// sessionRuntimeAxisSettings.ts; register.ts keeps each registration and its sender check and calls the
+// moved body. Slices of those handlers read register.ts with each body put back in place of that call.
+const runtimeAxisSettingsSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeAxisSettings.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+function movedHandlerBody(factory: string, params: string): string {
+  const start = runtimeAxisSettingsSource.indexOf(`export function ${factory}(`);
+  const head = `  return async (${params}) => {\n`;
+  const open = runtimeAxisSettingsSource.indexOf(head, start) + head.length;
+  const close = runtimeAxisSettingsSource.indexOf('\n  };\n}\n', open);
+  expect(start).toBeGreaterThan(-1);
+  expect(close).toBeGreaterThan(open);
+  return runtimeAxisSettingsSource.slice(open, close);
+}
+const registerWithAxisBodiesSource = registerSource
+  .replace('    return handleSetSessionEffort(sessionId, effort);',
+    movedHandlerBody('createSetSessionEffort', 'sessionId: unknown, effort: unknown'))
+  .replace('      return handleSetSessionFastMode(sessionId, requestedSpeed);',
+    movedHandlerBody('createSetSessionFastMode', 'sessionId: unknown, requestedSpeed: unknown'))
+  .replace('      return handleSetSessionThinkingEnabled(sessionId, enabled);',
+    movedHandlerBody('createSetSessionThinkingEnabled', 'sessionId: unknown, enabled: unknown'));
 // What register.ts held before handleSetModel moved out: the assertions that searched the whole of
 // register.ts for code of that function read this.
 const registerWithRuntimeSelectionSource = `${registerSource}\n${runtimeSelectionApplySource}\n${runtimeSelectionLandingSource}`;
@@ -103,17 +126,21 @@ const isUserPendingAgentSwitchIntent = new Function(ts.transpileModule(
   `return (intent) => ${userIntentPredicate.body!.getText(switchAst)};`,
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
 ).outputText)();
-function collectAxisHandlers(node: ts.Node): void {
+function collectAxisHandlers(node: ts.Node, ast: ts.SourceFile = registerAst): void {
   if (ts.isVariableDeclaration(node) && node.initializer &&
-      ['applyEffort', 'applyFastMode', 'persistEffort', 'persistFastMode', 'stagePendingUserRuntimeAxis'].includes(node.name.getText(registerAst))) {
-    axisHandlers.set(node.name.getText(registerAst), ts.transpileModule(
-      `return ${node.initializer.getText(registerAst)};`,
+      ['applyEffort', 'applyFastMode', 'persistEffort', 'persistFastMode', 'stagePendingUserRuntimeAxis'].includes(node.name.getText(ast))) {
+    axisHandlers.set(node.name.getText(ast), ts.transpileModule(
+      `return ${node.initializer.getText(ast)};`,
       { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
     ).outputText);
   }
-  ts.forEachChild(node, collectAxisHandlers);
+  ts.forEachChild(node, child => collectAxisHandlers(child, ast));
 }
 collectAxisHandlers(registerAst);
+// stagePendingUserRuntimeAxis, applyEffort and persistEffort are in sessionRuntimeAxisSettings.ts (register.ts
+// calls their factories); walking it after register.ts takes those declarations, with the same names.
+const runtimeAxisSettingsAst = ts.createSourceFile('sessionRuntimeAxisSettings.ts', runtimeAxisSettingsSource, ts.ScriptTarget.Latest, true);
+collectAxisHandlers(runtimeAxisSettingsAst, runtimeAxisSettingsAst);
 // Cross-file persistence contract: the real Renderer adapter must leave the
 // decision to Main even before its pending-intent projection reaches this UI.
 const rendererStoreAst = ts.createSourceFile('store.ts', readFileSync(
@@ -289,7 +316,8 @@ describe('active Claude subscription Fast setting', () => {
       resolvePendingRuntimeAxisPatch: async (_id: string, patch: object) => ({ ...patch }),
       recordUserSessionRuntimeAxisMutation: vi.fn(), setSessionFastMode: vi.fn(),
       maker: { getSession: () => ({ agentKind: 'claude-code', setFastMode: handle.setFastMode, getFastMode: handle.getFastMode }) },
-      persistFastMode, commitRuntimeAxisAfterPersistence, pendingCredentialSwitchHolder: null,
+      // The moved body reads the holder through its port (sessionRuntimeAxisSettings.ts); no switch is pending.
+      persistFastMode, commitRuntimeAxisAfterPersistence, getPendingCredentialSwitchHolder: () => null,
       remoteResponse: undefined, log: { debug: vi.fn() },
     };
     const run = new Function(...Object.keys(bindings), axisHandlers.get('applyFastMode')!)(...Object.values(bindings));
@@ -511,12 +539,12 @@ describe('session runtime control wiring', () => {
 
   it('serializes user effort and Fast mutations with model route changes', () => {
     const effort = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
       'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
@@ -954,12 +982,12 @@ describe('session runtime control wiring', () => {
 
   it('commits user effort and Fast state only after the live runtime call succeeds', () => {
     const effort = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
       'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
@@ -1008,12 +1036,12 @@ describe('session runtime control wiring', () => {
 
   it('drops in-flight effort and Fast mutations after an owner boundary', () => {
     const effort = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
       'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
@@ -1026,7 +1054,8 @@ describe('session runtime control wiring', () => {
         body.indexOf('return await apply'),
       );
     }
-    expect(registerSource).toContain(
+    // recoverRemoteRuntimeAxisPersistence, which holds this fence, moved into sessionRuntimeAxisSettings.ts.
+    expect(`${registerSource}\n${runtimeAxisSettingsSource}`).toContain(
       'if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return;',
     );
   });
@@ -1133,12 +1162,12 @@ describe('session runtime control wiring', () => {
   // without restoring the runtime stores cleared by archive cleanup.
   it('saves archived effort and Fast without recreating runtime state, and rejects deleted tasks', () => {
     const effort = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
       'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );

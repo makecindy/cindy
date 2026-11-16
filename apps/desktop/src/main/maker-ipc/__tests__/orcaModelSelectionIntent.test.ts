@@ -107,6 +107,11 @@ applySelectionAdapter = landingSelectionAdapter();
 source = ts.createSourceFile('sessionRuntimeSelectionApply.ts',
   readFileSync(new URL('../sessionRuntimeSelectionApply.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
 visit(source);
+// updateSavedScheduledAxis and stagePendingUserRuntimeAxis moved verbatim into sessionRuntimeAxisSettings.ts
+// (register.ts calls their factories); walking it last takes those declarations, with the same names.
+source = ts.createSourceFile('sessionRuntimeAxisSettings.ts',
+  readFileSync(new URL('../sessionRuntimeAxisSettings.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+visit(source);
 const remoteLead = { leadDeviceId: 'lead-device', leadSessionId: 'lead-session', workerLabel: 'worker' };
 const orcaIdentities = [
   { orcaRole: 'lead' },
