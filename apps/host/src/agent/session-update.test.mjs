@@ -13,7 +13,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
@@ -27,10 +27,14 @@ import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionSt
 import { sessions } from '../../../desktop/src/main/localDb/schema.ts';
 import { setSessionProvider, getSessionProvider, clearSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { createHostSessionUpdate } from './session-update.ts';
+import { readSessionContextWindowBudget } from '../../../desktop/src/main/maker-host/session-context-budget-store.js';
+import { createSessionContextBudget } from '../../../desktop/src/main/maker-host/sessionContextBudgetCore.ts';
+import { ownerScopedPath } from '../../../desktop/src/main/ownerContext.ts';
+import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from '../../../desktop/src/main/maker-ipc/sessionContextWindowBudgetState.js';
 import { setModelWithWindowConfirmation } from '../../../desktop/src/renderer/features/cc-agent/lib/modelWindowConfirmation.ts';
 import { createHostTaskRestore } from './task-restore.ts';
 import { setSessionRouteLockImplementation } from '../../../desktop/src/main/localDb/sessionRouteLock.ts';
-import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
+import { withSendToSessionLock, withSessionRestartLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { botProfiles, botSessionLinks } from '../../../desktop/src/main/localDb/schema.ts';
 import { createHostRuntimeSelection } from './runtime-selection.ts';
 import { Maker } from '@cindy/maker-core';
@@ -76,6 +80,8 @@ async function fixture(t) {
     getSession: id => live.get(id) ?? null,
     getSessionMeta: id => live.get(id) ? { id, agentKind: live.get(id).agentKind } : null,
     closeSession: async id => { live.delete(id); },
+    // As Maker (maker.ts): the runtimes it holds; a budget rebuild reads them.
+    listActiveSessions: () => [...live.values()],
   };
   const selection = createHostRuntimeSelection({
     getMaker: () => maker, getMakerIfReady: () => maker,
@@ -87,7 +93,13 @@ async function fixture(t) {
       const window = WINDOWS[modelId] ?? null;
       return window !== null && budget ? Math.min(window, budget) : window;
     },
-    readStoredSessionContextWindowBudget: id => budgets.get(id) ?? null,
+    // The fixture's budgets first, then the task's stored preference (what /sessions/update writes).
+    readStoredSessionContextWindowBudget: async id => budgets.has(id) ? budgets.get(id) : readSessionContextWindowBudget(id),
+    // As the budget core: a change matters when the route's configured window differs.
+    contextWindowBudgetChangesEffectiveWindow: ({ modelId, previous, next }) => {
+      const window = budget => (WINDOWS[modelId] ?? null) !== null && budget ? Math.min(WINDOWS[modelId], budget) : WINDOWS[modelId] ?? null;
+      return window(previous) !== window(next);
+    },
     codexProxyAuthInjectionState: () => null,
     inputQueue: { contextRecoveryRollover: () => null, sessionDbAgentKind: () => 'cc', isTurnRunning: () => false,
       wakeSession() {}, refreshQueuedRoute() {}, cancelUsageLimitWait() {} },
@@ -95,7 +107,7 @@ async function fixture(t) {
   });
   const update = createHostSessionUpdate({
     restoreTaskToActive,
-    readSessionForRun: async id => (await database.drizzle.select().from(sessions).where(eq(sessions.id, id)))[0],
+    persistSessionFields: (...args) => selection.persistSessionFields(...args),
     publish: event => events.push(event),
     setModel: (...args) => selection.setModel(...args),
   });
@@ -115,7 +127,9 @@ async function fixture(t) {
     return session;
   };
   const row = async id => (await database.drizzle.select().from(sessions).where(eq(sessions.id, id)))[0];
-  return { update, task, runtime, row, events, budgets, database, taskRestore, restoreCalls, selection };
+  const liveSession = id => live.get(id);
+  const closeRuntime = async id => { live.delete(id); };
+  return { update, task, runtime, row, events, budgets, database, taskRestore, restoreCalls, selection, liveSession, closeRuntime };
 }
 
 const intentOf = f => f.events.filter(event => event.type === 'session_changed'
@@ -165,13 +179,15 @@ test('model change: other fields are written at once, and a provider-only pick i
   assert.equal(intentOf(f)?.providerId, 'prov-b');
 });
 
-test('model change: a task that does not exist is "session not found", as before the gate, and a runtime left without its row is not changed', { timeout: 30_000 }, async t => {
+// A missing task is NOT_FOUND, typed as updateSessionInDb answers it (it was a plain error, HTTP 500).
+const notFound = { code: 'NOT_FOUND', message: '[NOT_FOUND] Session 不存在' };
+test('model change: a task that does not exist is NOT_FOUND, and a runtime left without its row is not changed', { timeout: 30_000 }, async t => {
   const f = await fixture(t);
-  await assert.rejects(f.update('window-missing', { model: 'small' }), { message: 'session not found' });
-  await assert.rejects(f.update('window-missing', { title: 'Renamed' }), { message: 'session not found' });
+  await assert.rejects(f.update('window-missing', { model: 'small' }), notFound);
+  await assert.rejects(f.update('window-missing', { title: 'Renamed' }), notFound);
   // Before the gate, the running Agent was switched and then the missing row reported.
   const orphan = f.runtime('window-orphan');
-  await assert.rejects(f.update('window-orphan', { model: 'small' }), { message: 'session not found' });
+  await assert.rejects(f.update('window-orphan', { model: 'small' }), notFound);
   assert.deepEqual(orphan.setModelCalls, []);
 });
 
@@ -276,6 +292,102 @@ for (const inTurn of [false, true]) {
     assert.equal((await f.row('subscription-switch')).providerId, 'prov-a', 'the row keeps its route until the send');
   });
 }
+
+/**
+ * A task's context window budget through /sessions/update (checkpoint 3b-2).
+ * - Rule: the desktop's budget chip saves through local-db:sessions:update (updateSessionInDb): the same
+ *   range check (assertSessionContextWindowBudgetPatch, INVALID_PARAMS with the desktop's text), a missing
+ *   task NOT_FOUND before anything is written, the budget kept in the task's preference file (no row
+ *   write), broadcast, and handed to the runtime hook (the shared budget reconcile). A budget that cannot
+ *   be saved fails a budget-only update and is dropped from a mixed one.
+ * - Gap: the field was not accepted (a plain error, then INVALID_PARAMS after A8): the web client's
+ *   budget never saved on the Host.
+ * - Minimal failing input: one budget; each refused value; a missing task; an unreadable preference
+ *   file alone and beside a title; a restart waiting on the task.
+ * - Tier: unit, through the real entry over a migrated profile database and the real preference store.
+ */
+const budgetEvents = (f, id) => f.events.filter(event => event.type === 'session_changed' && event.sessionId === id);
+
+test('window budget: /sessions/update keeps it in the preference file and broadcasts it, writing no row', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await f.task('budget-set');
+  const before = await f.row('budget-set');
+  const answer = await f.update('budget-set', { contextWindowBudget: 100_000 });
+  assert.equal(answer.id, 'budget-set');
+  assert.equal(readSessionContextWindowBudget('budget-set'), 100_000);
+  assert.deepEqual(await f.row('budget-set'), before, 'the row is not written (no updatedAt bump)');
+  assert.deepEqual(budgetEvents(f, 'budget-set').map(event => event.patch), [{ contextWindowBudget: 100_000 }]);
+  await f.update('budget-set', { contextWindowBudget: null });
+  assert.equal(readSessionContextWindowBudget('budget-set'), null);
+  assert.deepEqual(budgetEvents(f, 'budget-set').map(event => event.patch).at(-1), { contextWindowBudget: null });
+});
+
+test('window budget: an idle live runtime is rebuilt for a budget that changes its window', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await f.task('budget-live');
+  const live = f.runtime('budget-live');
+  t.after(() => { appliedContextWindowBudgets.delete('budget-live'); pendingSessionContextWindowBudgetReconciles.delete('budget-live'); });
+  await withSendToSessionLock('budget-live', () => f.update('budget-live', { contextWindowBudget: 100_000 }));
+  // The applier re-entered the send lock /sessions/update holds and rebuilt the runtime (closed it).
+  assert.equal(f.selection.pendingSwitches.get('budget-live'), undefined);
+  assert.notEqual(f.liveSession('budget-live'), live, 'the runtime is closed for its rebuild');
+  assert.equal(appliedContextWindowBudgets.get('budget-live'), 100_000);
+});
+
+test('window budget: an out-of-range value is INVALID_PARAMS with the desktop\'s text, and nothing changes', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await f.task('budget-range');
+  const before = await f.row('budget-range');
+  for (const value of [999, 100_000_001, 300_000.5, '300000']) {
+    await assert.rejects(f.update('budget-range', { contextWindowBudget: value }), error =>
+      error.code === 'INVALID_PARAMS' && error.message ===
+        '[INVALID_PARAMS] contextWindowBudget must be null or an integer within [1000, 100000000]', String(value));
+  }
+  assert.equal(readSessionContextWindowBudget('budget-range'), null);
+  assert.deepEqual(await f.row('budget-range'), before);
+  assert.deepEqual(budgetEvents(f, 'budget-range'), []);
+});
+
+test('window budget: a task that does not exist is NOT_FOUND and its preference is not written', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await assert.rejects(f.update('budget-missing', { contextWindowBudget: 300_000 }), notFound);
+  assert.equal(readSessionContextWindowBudget('budget-missing'), null);
+  assert.deepEqual(budgetEvents(f, 'budget-missing'), []);
+});
+
+test('window budget: an unreadable preference file fails a budget-only update and spares the title of a mixed one', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await f.task('budget-unreadable');
+  // The store refuses to write over a preference file it cannot read (it keeps it for a person to fix).
+  const prefs = ownerScopedPath('session-context-budget-prefs.json');
+  mkdirSync(path.dirname(prefs), { recursive: true });
+  writeFileSync(prefs, '{ not json');
+  await assert.rejects(f.update('budget-unreadable', { contextWindowBudget: 300_000 }), /unreadable|parse|JSON/i);
+  assert.deepEqual(budgetEvents(f, 'budget-unreadable'), [], 'nothing is broadcast for a budget that was not saved');
+  await f.update('budget-unreadable', { title: 'Renamed', contextWindowBudget: 300_000 });
+  assert.equal((await f.row('budget-unreadable')).title, 'Renamed');
+  assert.deepEqual(budgetEvents(f, 'budget-unreadable').map(event => event.patch), [{ title: 'Renamed' }],
+    'the title is broadcast, the unsaved budget is not');
+});
+
+test('window budget: with a restart waiting on the task, the budget is saved without an error and the next start reads it', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await f.task('budget-restart');
+  f.runtime('budget-restart');
+  t.after(() => { appliedContextWindowBudgets.delete('budget-restart'); pendingSessionContextWindowBudgetReconciles.delete('budget-restart'); });
+  let restart;
+  await withSendToSessionLock('budget-restart', async () => {
+    // A restart registers its fence, then waits for the lock /sessions/update holds (as main.ts wraps it).
+    restart = withSessionRestartLock('budget-restart', async () => { await f.closeRuntime('budget-restart'); });
+    await f.update('budget-restart', { contextWindowBudget: 100_000 });
+  });
+  await restart;
+  assert.equal(readSessionContextWindowBudget('budget-restart'), 100_000, 'the budget is saved');
+  assert.equal(appliedContextWindowBudgets.has('budget-restart'), false, 'not recorded as applied to the old runtime');
+  // The next start reads the task's stored budget (start-options, the budget core's reader).
+  const budget = createSessionContextBudget({ resolveContextProviderId: () => null, readSessionContextWindowBudget, logger: quiet });
+  assert.equal(await budget.readStoredSessionContextWindowBudget('budget-restart'), 100_000);
+});
 
 /**
  * Making an archived task active (task-restore.ts): the task list's restore and a send to the task
@@ -418,6 +530,7 @@ function closeFixture(t) {
     getMaker: () => maker, getMakerIfReady: () => maker, publish: () => {}, createDbMessage: async () => {},
     pendingHandoff: { set() {}, readGeneration: () => 0 }, listProviderViews: async () => VIEWS,
     resolveConfiguredContextWindow: () => null, readStoredSessionContextWindowBudget: () => null,
+    contextWindowBudgetChangesEffectiveWindow: () => false,
     codexProxyAuthInjectionState: () => null,
     inputQueue: { contextRecoveryRollover: () => null, sessionDbAgentKind: () => 'cc', isTurnRunning: () => false,
       wakeSession() {}, refreshQueuedRoute() {}, cancelUsageLimitWait() {} },

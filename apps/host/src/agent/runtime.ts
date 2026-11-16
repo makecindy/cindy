@@ -871,6 +871,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   const modelWindow = {
     resolveConfiguredContextWindow: startOptions.resolveConfiguredContextWindow,
     readStoredSessionContextWindowBudget: startOptions.readStoredSessionContextWindowBudget,
+    contextWindowBudgetChangesEffectiveWindow: startOptions.contextWindowBudgetChangesEffectiveWindow,
   };
   return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview, visionBridge, piPackages,
     contextRecovery, modelWindow,

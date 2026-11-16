@@ -37,6 +37,7 @@ import { createDbClientForHandle } from '../../../desktop/src/main/localDb/clien
 import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.ts';
 import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionStorageAdapter.ts';
 import { createHostRuntimeSelection, hostRuntimeSelectionQueueHooks, HOST_RUNTIME_SELECTION_QUEUE_MEMBERS, HOST_RUNTIME_START_PORTS } from './runtime-selection.ts';
+import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from '../../../desktop/src/main/maker-ipc/sessionContextWindowBudgetState.js';
 import { getSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { watchCredentialGrantRevocation } from '../../../desktop/src/main/remote-agent/executor/credentialGrants.ts';
 import { withSessionPermissionChange } from '../../../desktop/src/main/maker-ipc/sessionPermissionChange.ts';
@@ -2867,6 +2868,8 @@ async function modelChangeRuntime(t, { agent = 'claude-code' } = {}) {
   // Each send's landing hook call (the send transaction's applyPendingAgentSwitch), by task.
   const landings = [];
   const views = { current: SWITCH_VIEWS };
+  // Each task's stored window budget, as the budget reconcile reads it.
+  const budgets = new Map();
   const queueHooks = hostRuntimeSelectionQueueHooks(() => selection, { isSessionRestarting: () => false });
   const { h, handoffs } = assembledRuntime(t, db, {
     readSession: async id => {
@@ -2892,7 +2895,8 @@ async function modelChangeRuntime(t, { agent = 'claude-code' } = {}) {
     pendingHandoff: handoffs,
     listProviderViews: async () => views.current,
     resolveConfiguredContextWindow: (_catalog, _agentKind, _providerId, modelId) => SWITCH_WINDOWS[modelId] ?? null,
-    readStoredSessionContextWindowBudget: () => null,
+    readStoredSessionContextWindowBudget: async id => budgets.get(id) ?? null,
+    contextWindowBudgetChangesEffectiveWindow: ({ previous, next }) => previous !== next,
     codexProxyAuthInjectionState: () => null,
     inputQueue: h.queue,
     log: { debug() {}, info() {}, warn() {}, error() {} },
@@ -2924,7 +2928,7 @@ async function modelChangeRuntime(t, { agent = 'claude-code' } = {}) {
   // The provider lists a model under a new id whose unified key is the saved one (uniqueRenamedSessionModelId).
   const rename = (from, to) => { views.current = SWITCH_VIEWS.map(view => ({ ...view,
     models: { [agent]: view.models[agent].map(entry => (entry.id === from ? switchModel(to) : entry)) } })); };
-  return { db, h, selection, row, createTask, runTurn, rebuilds, userRows, withdraw, restoreModels, rename, landings, views };
+  return { db, h, selection, row, createTask, runTurn, rebuilds, userRows, withdraw, restoreModels, rename, landings, views, budgets };
 }
 
 // Rule (the desktop's send-time landing, sessionRuntimeSelectionApply.ts: a user's pick applied on send
@@ -3256,6 +3260,59 @@ test(`model change at send: a credential switch registered during a turn lands w
     { model: 'small', effort: 'high', providerId: 'prov-b' });
 });
 }
+
+// Rule (the desktop's send transaction, register.ts createMakerSendTransaction's applyPendingAgentSwitch:
+// after the landing and the renamed-model recovery, replayPendingSessionContextWindowBudgetUnderLock): a
+// window budget rebuild still owed for the task's live runtime is applied at the send, before the message
+// goes out, so the message runs on a runtime rebuilt for the budget. Gap: the Host's send hook had no
+// replay, so a budget saved during a turn never reached the runtime (release table, A3).
+test('model change at send: a window budget rebuild still owed is applied before the message goes out', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  r.h.maker.listActiveSessions = () => [...r.h.maker.sessions.values()];
+  t.after(() => { appliedContextWindowBudgets.delete('budget-replay'); pendingSessionContextWindowBudgetReconciles.delete('budget-replay'); });
+  await r.createTask('budget-replay');
+  await r.h.queue.enqueue('budget-replay', { clientId: 'budget-1', text: 'first' });
+  await waitFor(() => r.h.maker.sessions.get('budget-replay')?.sent.length === 1);
+  const first = r.h.maker.sessions.get('budget-replay');
+  first.emit({ type: 'done', data: {}, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
+  await waitFor(() => !r.h.queue.projection('budget-replay').turnInProgress);
+  // A budget saved during the turn left its rebuild owed (the reconcile's deferred branch).
+  r.budgets.set('budget-replay', 100_000);
+  pendingSessionContextWindowBudgetReconciles.add('budget-replay');
+
+  await r.h.queue.enqueue('budget-replay', { clientId: 'budget-2', text: 'second' });
+  await waitFor(() => r.h.maker.sessions.get('budget-replay')?.sent.includes('second'));
+  assert.notEqual(r.h.maker.sessions.get('budget-replay'), first, 'the message runs on a rebuilt runtime');
+  assert.equal(first.sent.includes('second'), false);
+  assert.equal(appliedContextWindowBudgets.get('budget-replay'), 100_000);
+  assert.equal(pendingSessionContextWindowBudgetReconciles.has('budget-replay'), false);
+});
+
+// Rule (the desktop's cleanupClosedSessionRuntime): a closed runtime's budget bookkeeping goes with it,
+// after the pending switch's own close handling, so a replacement starts from the stored budget. Gap: the
+// Host's close handling (runtime-selection.ts onSessionClosed, subscribed to Maker's session:closed) did
+// not touch the budget tables.
+test('model change at send: closing a task\'s runtime clears its window budget bookkeeping', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  // As Maker: session:closed for each runtime it closes (maker.ts); this fake Maker has no events.
+  const listeners = new Set();
+  r.h.maker.on = listener => { listeners.add(listener); return () => listeners.delete(listener); };
+  const off = r.selection.attachMaker(r.h.maker);
+  t.after(() => { off(); appliedContextWindowBudgets.delete('budget-close'); pendingSessionContextWindowBudgetReconciles.delete('budget-close'); });
+  await r.createTask('budget-close');
+  await r.h.queue.enqueue('budget-close', { clientId: 'close-1', text: 'work' });
+  await waitFor(() => r.h.maker.sessions.get('budget-close')?.sent.length === 1);
+  const session = r.h.maker.sessions.get('budget-close');
+  session.emit({ type: 'done', data: {}, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+  await waitFor(() => !r.h.queue.projection('budget-close').turnInProgress);
+  appliedContextWindowBudgets.set('budget-close', 100_000);
+  pendingSessionContextWindowBudgetReconciles.add('budget-close');
+  await r.h.maker.closeSession('budget-close');
+  // The closed runtime's last usage (the fake runtime reports none).
+  for (const listener of listeners) listener({ type: 'session:closed', sessionId: 'budget-close', session: { getUsageSnapshot: () => undefined } });
+  assert.equal(appliedContextWindowBudgets.has('budget-close'), false);
+  assert.equal(pendingSessionContextWindowBudgetReconciles.has('budget-close'), false);
+});
 
 // --- Permission mode and Plan mode (A7): the desktop's commit, run by the Host's set-permission-mode and
 // set-plan-mode entries (runtime-selection.ts over sessionPermissionSettings.ts) on a migrated database.

@@ -1038,6 +1038,10 @@ const runtimeSelection = createHostRuntimeSelection({
     if (!agentGraph) throw new Error('agent runtime is not ready');
     return agentGraph.modelWindow.readStoredSessionContextWindowBudget(sessionId);
   },
+  contextWindowBudgetChangesEffectiveWindow: input => {
+    if (!agentGraph) throw new Error('agent runtime is not ready');
+    return agentGraph.modelWindow.contextWindowBudgetChangesEffectiveWindow(input);
+  },
   // No Codex runtime (no binary): no proxy, so no injection, as the desktop's proxy host before start.
   codexProxyAuthInjectionState: () => codexRuntime?.proxy.getCodexProxyAuthInjectionState() ?? null,
   // The input queue's API is the current owner runtime's, forwarded by name (input-queue.mjs).
@@ -1318,10 +1322,10 @@ const serverDeps = {
   },
   updateSession: lockSessionRoute(createHostSessionUpdate({
     restoreTaskToActive: taskRestore.restoreTaskToActive,
-    readSessionForRun,
     publish: event => eventHub.publish(event),
     setModel: (sessionId, model, providerId, revision, selection) =>
       runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
+    persistSessionFields: (sessionId, patch) => runtimeSelection.persistSessionFields(sessionId, patch),
   })),
   /**
    * Cross-engine switch: record the intent and let the next enqueue apply it.

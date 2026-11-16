@@ -90,6 +90,8 @@ import * as broadcastTap from '../../../desktop/src/main/device-link/broadcast-t
 import type { Logger } from '../../../desktop/src/main/logger.ts';
 import { recordHostContextSnapshot } from './context-usage.ts';
 import { rememberSessionLastLiveUsage } from '../../../desktop/src/main/maker-ipc/sessionLastLiveUsage.ts';
+import { createSessionContextWindowBudgetReconcile, type SessionContextWindowBudgetReconcilePorts } from '../../../desktop/src/main/maker-ipc/sessionContextWindowBudgetReconcile.js';
+import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from '../../../desktop/src/main/maker-ipc/sessionContextWindowBudgetState.js';
 
 /** What the Host's runtime selection reads from the rest of the Host (main.ts binds it). */
 export interface HostRuntimeSelectionDeps {
@@ -111,6 +113,8 @@ export interface HostRuntimeSelectionDeps {
   /** A route's configured window with a task's window budget (start-options). */
   resolveConfiguredContextWindow: SessionRuntimeSelectionPorts['resolveConfiguredContextWindow'];
   readStoredSessionContextWindowBudget: SessionRuntimeSelectionPorts['readStoredSessionContextWindowBudget'];
+  /** Whether a budget change changes a route's effective window (start-options, the budget core). */
+  contextWindowBudgetChangesEffectiveWindow: SessionContextWindowBudgetReconcilePorts['contextWindowBudgetChangesEffectiveWindow'];
   /** The Codex proxy's credential injection state (codex-runtime.ts). */
   codexProxyAuthInjectionState(): ReturnType<SessionRuntimeSelectionPorts['getCodexProxyAuthInjectionState']>;
   /** The current owner runtime's input queue: its rollover, coordinator and executor facts. */
@@ -349,10 +353,31 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   // The Host's entries are not a shared task's guest (no Device Link invoke context).
   const captureSharedTaskSettingGuard: SessionRuntimeSelectionPorts['captureSharedTaskSettingGuard'] =
     sessionId => createSharedTaskSettingGuard(undefined, sessionId, { admitted: false });
+  // register.ts's budget reconcile, applier and replay (sessionContextWindowBudgetReconcile.ts), on the
+  // Host's ports: the runtime mutation dependencies are register.ts's runtimeMutationDeps, member for
+  // member. The applier takes the task's send lock itself; inside the Host's /sessions/update, which
+  // already holds it, it re-enters (sendToSessionLock.ts).
+  const contextWindowBudgetReconcile = createSessionContextWindowBudgetReconcile({
+    getMakerIfReady: deps.getMakerIfReady,
+    readStoredSessionContextWindowBudget: deps.readStoredSessionContextWindowBudget,
+    contextWindowBudgetChangesEffectiveWindow: deps.contextWindowBudgetChangesEffectiveWindow,
+    getPendingCredentialSwitchTarget: sessionId => getPendingCredentialSwitchTargetWith(accessPorts(), sessionId),
+    registerPendingCredentialSwitchForSession: (sessionId, target) =>
+      registerPendingCredentialSwitchWith(accessPorts(), sessionId, target),
+    runtimeMutationDeps: () => ({
+      maker: maker(), isSessionInTurn,
+      registerPendingCredentialSwitch: (sessionId, target) => registerPendingCredentialSwitchWith(accessPorts(), sessionId, target),
+      clearPendingCredentialSwitch: (sessionId, opts) => clearPendingCredentialSwitchWith(accessPorts(), sessionId, opts),
+      wakeSessionInputQueue: sessionId => wakeSessionInputAfterCredentialSwitchWith(accessPorts(), sessionId),
+      getPendingCredentialSwitch: sessionId => getPendingCredentialSwitchTargetWith(accessPorts(), sessionId),
+      codexAuthInjection: deps.codexProxyAuthInjectionState(), logger: deps.log,
+    }),
+    log: deps.log,
+  });
   const persistSessionFields: SessionRuntimeSelectionPorts['persistSessionFields'] = (sessionId, patch) => persistSessionFieldsWith({
     captureOwnerScope, isOwnerScopeCurrent, broadcastSessionPatched,
-    // The window budget hook of the session settings: checkpoint 3b-2 (the window budget).
-    applyContextWindowBudget: () => undefined,
+    // The session settings' budget hook, as the desktop registers it (bootstrap-electron.ts).
+    applyContextWindowBudget: () => contextWindowBudgetReconcile.sessionContextWindowBudgetApplier,
   }, sessionId, patch);
   const ports = (): SessionRuntimeSelectionPorts => ({
     maker: maker(),
@@ -480,6 +505,10 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   const onSessionClosed = (sessionId: string, session: Pick<Session, 'getUsageSnapshot'>) => {
     rememberSessionLastLiveUsage(sessionId, session.getUsageSnapshot());
     pendingCredentialSwitchService.onSessionClosed(sessionId);
+    // As the desktop's cleanupClosedSessionRuntime (register.ts), after the pending switch: a closed
+    // runtime's budget bookkeeping goes, so its replacement starts from the stored budget.
+    appliedContextWindowBudgets.delete(sessionId);
+    pendingSessionContextWindowBudgetReconciles.delete(sessionId);
   };
 
   return {
@@ -525,14 +554,18 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
      * The send transaction's landing of a picked model or engine, with the steps of the desktop's
      * transaction binding (register.ts, createMakerSendTransaction's applyPendingAgentSwitch) in its
      * order: the landing (called as the desktop calls it, without the send's signal), then, for a send
-     * that is not scheduled, the recovery of a renamed model. The desktop's other steps are not on the
-     * Host yet (release table: the scheduled model scope, the window budget replay, the Orca pending
-     * check, the provider group check).
+     * that is not scheduled, the recovery of a renamed model, then the replay of a window budget rebuild
+     * still owed (under the send lock the transaction holds). The desktop's other steps are not on the
+     * Host yet (release table: the scheduled model scope, the Orca pending check, the provider group
+     * check).
      */
     async applyPendingAgentSwitch(sessionId: string, options?: { signal?: AbortSignal; scheduled?: boolean; clientId?: string }) {
       await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId);
       if (!options?.scheduled) await recoverRenamedSessionModelOnSend(sessionId);
+      await contextWindowBudgetReconcile.replayPendingSessionContextWindowBudgetUnderLock(sessionId);
     },
+    /** The session settings write with the budget hook (persistSessionFieldsWith): /sessions/update's budget. */
+    persistSessionFields,
     /** A task's turn settled (the desktop's settlePendingCredentialSwitch): a pending switch lands now. */
     onTurnSettled(sessionId: string) {
       settlePendingCredentialSwitchWith(
