@@ -1800,6 +1800,7 @@ function CCAgentSessionContent({
       agentKind,
       wd,
       {
+        contextReady: !!session,
         skipAgentSkills: isRemoteSession,
         sessionId: session?.id,
       },
