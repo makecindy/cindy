@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ invoke: vi.fn(), owner: vi.fn(() => 'owner'), pending: vi.fn(() => false), chain: vi.fn(() => 'chain'), linkEpoch: vi.fn(() => 0) }));
-vi.mock('../../../device-link/index.js', () => ({ remoteBackgroundInvoke: mocks.invoke, remoteInvoke: mocks.invoke, getRemoteLinkCloseEpoch: mocks.linkEpoch }));
+const mocks = vi.hoisted(() => ({ invoke: vi.fn(), owner: vi.fn(() => 'owner'), pending: vi.fn(() => false), chain: vi.fn(() => 'chain'), linkEpoch: vi.fn((_deviceId: string) => 0) }));
 vi.mock('../../../appSessionState.js', () => ({ activeOwnerScopeKey: mocks.owner, isAppSessionBoundaryPending: mocks.pending }));
 vi.mock('../../resolveAuxiliaryModelChain.js', () => ({ getEffectiveAuxiliaryModelChainSnapshot: mocks.chain }));
 
-import { requestRemoteUtilityText } from '../client.js';
+import { createRemoteUtilityTextClient } from '../client.js';
+
+const requestRemoteUtilityText = createRemoteUtilityTextClient({
+  backgroundInvoke: (deviceId, channel, args, options) => mocks.invoke(deviceId, channel, args, options),
+  invokeOnExistingLink: (deviceId, channel, args, options) => mocks.invoke(deviceId, channel, args, options),
+  linkCloseEpoch: (deviceId) => mocks.linkEpoch(deviceId),
+}).request;
 
 // 测试价值：公开入口 requestRemoteUtilityText 的设备路由、验证和取消结果；依据 remote utility
 // 同账号设备路由与取消契约；host 测试不覆盖 client；最小输入为同名路由、无效响应和运行中取消。

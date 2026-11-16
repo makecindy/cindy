@@ -86,6 +86,22 @@ export const personalizationDetailsSettings = defineSettings({
     titleKey: 'settings.auxiliaryModels.fallback1.label',
     sectionKey: 'settings.sections.auxiliaryModels',
   },
+  auxiliaryModelsRemoteHint: {
+    id: 'settings.auxiliaryModels.remoteHint',
+    fallbackTargetId: 'settings-search-target-personalization-auxiliary-models',
+    tab: 'personalization',
+    targetId: 'settings-search-target-personalization-auxiliary-models',
+    titleKey: 'settings.auxiliaryModels.remoteHint',
+    sectionKey: 'settings.sections.auxiliaryModels',
+  },
+  auxiliaryModelsRemoteStatus: {
+    id: 'settings.auxiliaryModels.remoteStatus.outdated',
+    fallbackTargetId: 'settings-search-target-personalization-auxiliary-models',
+    tab: 'personalization',
+    targetId: 'settings-search-target-personalization-auxiliary-models',
+    titleKey: 'settings.auxiliaryModels.remoteStatus.outdated',
+    sectionKey: 'settings.sections.auxiliaryModels',
+  },
   auxiliaryModelsFallback2Label: {
     id: 'settings.auxiliaryModels.fallback2.label',
     fallbackTargetId: 'settings-search-target-personalization-auxiliary-models',

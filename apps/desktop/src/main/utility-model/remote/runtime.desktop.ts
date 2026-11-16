@@ -18,6 +18,9 @@ import { readProviderGroup } from '../../provider-group/store.js';
 import { hasOneshotProviderCredential } from '../oneshotProviderUsability.js';
 import { buildTextOneshotPinOptions } from '../textOneshotPinOptions.js';
 import { createRemoteUtilityHost, type RemoteUtilityHostDeps } from './host.js';
+import { createRemoteUtilityTextClient } from './client.js';
+import { setRemoteUtilityTextClient } from './registry.js';
+import { remoteBackgroundInvoke, remoteInvoke, getRemoteLinkCloseEpoch } from '../../device-link/index.js';
 
 let dispose: (() => void) | undefined;
 
@@ -77,6 +80,13 @@ export function installRemoteUtilityTextHost(execute: RemoteUtilityHostDeps['exe
     execute,
   });
   setRemoteUtilityTextHandler(host);
+  // The short-text client lives behind a port so the widely imported auxiliary
+  // facade never pulls the Device Link entry into unrelated modules.
+  setRemoteUtilityTextClient(createRemoteUtilityTextClient({
+    backgroundInvoke: (deviceId, channel, args, options) => remoteBackgroundInvoke(deviceId, channel, args, options),
+    invokeOnExistingLink: (deviceId, channel, args, options) => remoteInvoke(deviceId, channel, args, options),
+    linkCloseEpoch: getRemoteLinkCloseEpoch,
+  }));
 
   // Reuse the existing permission generations and change notifications instead of polling.
   const stopAccess = onRemoteControlAccessChanged((scope) => {
@@ -90,6 +100,7 @@ export function installRemoteUtilityTextHost(execute: RemoteUtilityHostDeps['exe
     stopProvider();
     host.abortAll();
     setRemoteUtilityTextHandler(null);
+    setRemoteUtilityTextClient(null);
   };
 }
 

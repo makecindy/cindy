@@ -3,17 +3,25 @@ import {
   REMOTE_UTILITY_TEXT_CHANNEL, parseRemoteUtilityResponse,
   type RemoteUtilityRoute, type RemoteUtilityResponse,
 } from '@cindy/device-link';
-import { remoteBackgroundInvoke, remoteInvoke, getRemoteLinkCloseEpoch } from '../../device-link/index.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import type { UtilityTextRequestOptions } from '../oneShotCandidates.js';
 import type { UtilityTextResult } from '../../../shared/utilityTextResult.js';
 import type { RemoteAuxiliaryRoute } from '../../../shared/remoteAuxiliaryModelRef.js';
 import { requestUtilityTextWithinTimeout } from '../utilityTextTimeout.js';
+import type { RemoteUtilityTextClient, RemoteUtilityTextTransport } from './transport.js';
 import { getEffectiveAuxiliaryModelChainSnapshot } from '../resolveAuxiliaryModelChain.js';
 
+/** Wraps the injected transport into the client the auxiliary chain consumes. */
+export function createRemoteUtilityTextClient(transport: RemoteUtilityTextTransport): RemoteUtilityTextClient {
+  return {
+    readCapabilities: (deviceId) => readRemoteUtilityTextCapabilities(transport, deviceId),
+    request: (route, prompt, opts) => requestRemoteUtilityText(transport, route, prompt, opts),
+  };
+}
+
 /** Uses the existing link, scheduler, request deduplication and result outbox. */
-export async function readRemoteUtilityTextCapabilities(deviceId: string) {
-  const reply = await remoteBackgroundInvoke(deviceId, REMOTE_UTILITY_TEXT_CHANNEL, [{ version: 1, op: 'caps' }]);
+async function readRemoteUtilityTextCapabilities(transport: RemoteUtilityTextTransport, deviceId: string) {
+  const reply = await transport.backgroundInvoke(deviceId, REMOTE_UTILITY_TEXT_CHANNEL, [{ version: 1, op: 'caps' }]);
   if (!reply.ok) return null;
   const result = parseRemoteUtilityResponse(reply.result);
   return result.op === 'caps' ? result : null;
@@ -27,15 +35,15 @@ function unavailable(route: RemoteUtilityRoute, reason: 'model_unavailable' | 't
 }
 
 /** An exact remote candidate; only the owning auxiliary chain chooses a fallback. */
-export async function requestRemoteUtilityText(route: RemoteAuxiliaryRoute, prompt: string, opts: UtilityTextRequestOptions = {}): Promise<UtilityTextResult> {
+async function requestRemoteUtilityText(transport: RemoteUtilityTextTransport, route: RemoteAuxiliaryRoute, prompt: string, opts: UtilityTextRequestOptions = {}): Promise<UtilityTextResult> {
   const owner = activeOwnerScopeKey();
-  const linkEpoch = getRemoteLinkCloseEpoch(route.deviceId);
+  const linkEpoch = transport.linkCloseEpoch(route.deviceId);
   // Capture the caller's routing decision too: a chain edited while this request
   // waits for the link must not dispatch the old choice afterwards.
   const chain = getEffectiveAuxiliaryModelChainSnapshot();
   const current = () => activeOwnerScopeKey() === owner && !isAppSessionBoundaryPending()
     && !opts.signal?.aborted && getEffectiveAuxiliaryModelChainSnapshot() === chain
-    && getRemoteLinkCloseEpoch(route.deviceId) === linkEpoch;
+    && transport.linkCloseEpoch(route.deviceId) === linkEpoch;
   const exact = { providerId: route.providerId, agentKind: route.agentKind, model: route.model };
   const timeout = () => unavailable(exact, 'timeout');
   return requestUtilityTextWithinTimeout(async (signal) => {
@@ -45,17 +53,17 @@ export async function requestRemoteUtilityText(route: RemoteAuxiliaryRoute, prom
     const cancel = () => {
       if (!submitted || !hostEpoch || activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) return;
       // Never retry inference to retrieve an uncertain result. Cancellation is best effort.
-      void remoteInvoke(route.deviceId, REMOTE_UTILITY_TEXT_CHANNEL,
+      void transport.invokeOnExistingLink(route.deviceId, REMOTE_UTILITY_TEXT_CHANNEL,
         [{ version: 1, op: 'cancel', hostEpoch, requestId }], { preSend: () => {
           if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()
-            || getRemoteLinkCloseEpoch(route.deviceId) !== linkEpoch) throw new Error('Request no longer active');
+            || transport.linkCloseEpoch(route.deviceId) !== linkEpoch) throw new Error('Request no longer active');
         } }).catch(() => undefined);
       // The local wait is authoritative; the host also sees the cancel envelope.
     };
     signal.addEventListener('abort', cancel, { once: true });
     try {
       if (!current() || signal.aborted) return timeout();
-      const caps = await readRemoteUtilityTextCapabilities(route.deviceId);
+      const caps = await readRemoteUtilityTextCapabilities(transport, route.deviceId);
       if (!current() || signal.aborted) return timeout();
       if (!caps || !caps.allowedRoutes.some((item) => item.providerId === exact.providerId && item.agentKind === exact.agentKind && item.model === exact.model))
         return unavailable(exact, 'model_unavailable');
@@ -66,7 +74,7 @@ export async function requestRemoteUtilityText(route: RemoteAuxiliaryRoute, prom
         disableReasoning: opts.disableReasoning ?? true, systemPrompt: opts.systemPrompt,
         responseInstructions: opts.responseInstructions,
       }).filter(([, value]) => value !== undefined));
-      const reply = await remoteBackgroundInvoke(route.deviceId, REMOTE_UTILITY_TEXT_CHANNEL,
+      const reply = await transport.backgroundInvoke(route.deviceId, REMOTE_UTILITY_TEXT_CHANNEL,
         [{ version: 1, op: 'run', requestId, hostEpoch, route: exact, prompt, options }], {
           preSend: () => {
             if (!current() || signal.aborted) throw new Error('Request cancelled');

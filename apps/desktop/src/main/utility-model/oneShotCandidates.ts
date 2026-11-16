@@ -16,7 +16,7 @@ import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
 import { getEffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChain.js';
 // After the Desktop modules, so module evaluation keeps the former order.
 import { createOneShotCandidates } from './oneShotCandidatesCore.js';
-import { requestRemoteUtilityText } from './remote/client.js';
+import { getRemoteUtilityTextClient } from './remote/registry.js';
 
 export { DEDICATED_AUTO_REVIEW_CANDIDATES } from './oneShotCandidatesCore.js';
 export type {
@@ -29,7 +29,10 @@ export type {
 } from './oneShotCandidatesCore.js';
 
 const desktopOneShot = createOneShotCandidates({
-  requestRemoteUtilityText: (...args) => requestRemoteUtilityText(...args),
+  // Remote routes are wired by the Desktop assembly; without it the choice stays
+  // unavailable instead of dispatching into a half-initialized Device Link.
+  requestRemoteUtilityText: (route, prompt, opts) => getRemoteUtilityTextClient()?.request(route, prompt, opts)
+    ?? Promise.resolve({ ok: false, reason: 'no_candidate', attempts: [] }),
   readClaudeApiKey: (...args) => readClaudeApiKey(...args),
   getChatgptBridgeAuth: (...args) => getChatgptBridgeAuth(...args),
   getChatgptBridgeAuthForDispatch: (...args) => getChatgptBridgeAuthForDispatch(...args),

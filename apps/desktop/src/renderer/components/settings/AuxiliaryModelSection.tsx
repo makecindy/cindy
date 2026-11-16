@@ -27,6 +27,13 @@ import { isRemoteAuxiliaryModelRef } from '../../../shared/remoteAuxiliaryModelR
 const log = createLogger('AuxiliaryModelSection');
 
 const SLOT_I18N = ['preferred', 'fallback1', 'fallback2'] as const;
+/** Literal keys so the settings search index can resolve each rendered status. */
+const REMOTE_STATUS_KEYS = {
+  outdated: 'settings.auxiliaryModels.remoteStatus.outdated',
+  offline: 'settings.auxiliaryModels.remoteStatus.offline',
+  revoked: 'settings.auxiliaryModels.remoteStatus.revoked',
+  unavailable: 'settings.auxiliaryModels.remoteStatus.unavailable',
+} as const;
 type AuxiliaryModelMode = 'automatic' | 'custom';
 
 export function AuxiliaryModelSection() {
@@ -272,7 +279,7 @@ export function AuxiliaryModelSection() {
               <span className="mt-1 block">{t('settings.auxiliaryModels.remoteHint')}</span>
               {remote.statuses.map(({ deviceId, name, status }) => (
                 <span key={deviceId} className="mt-1 block" role="status">
-                  {t(`settings.auxiliaryModels.remoteStatus.${status}`, { device: name })}
+                  {t(REMOTE_STATUS_KEYS[status], { device: name })}
                 </span>
               ))}
             </p>

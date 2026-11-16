@@ -4,7 +4,7 @@ import { encodeRemoteAuxiliaryModelRef } from '../../../shared/remoteAuxiliaryMo
 const remoteMocks = vi.hoisted(() => ({ caps: vi.fn(), read: vi.fn(), state: vi.fn(), write: vi.fn(), handle: vi.fn(), owner: vi.fn(() => 'owner') }));
 vi.mock('../../app-settings/runtime.js', () => ({ registerRuntimeSettingsSection: vi.fn() }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: remoteMocks.owner, isAppSessionBoundaryPending: () => false }));
-vi.mock('../../utility-model/remote/client.js', () => ({ readRemoteUtilityTextCapabilities: remoteMocks.caps }));
+
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 
 vi.mock('../../cindyAiProviderName.js', () => ({ getCindyAiProviderName: () => 'Cindy AI · 心动' }));
@@ -55,6 +55,7 @@ import {
   registerAuxiliaryModelSettingsIpc,
 } from '../auxiliary-model-settings.js';
 import { MAKER_INVOKE } from '../channels.js';
+import { setRemoteUtilityTextClient } from '../../utility-model/remote/registry.js';
 
 const PIN = 'cat:openrouter:codex:openai/gpt-5-mini';
 const PROFILE = 'codex-gpt-5.4-mini';
@@ -123,6 +124,8 @@ describe('remote auxiliary settings save', () => {
     remoteMocks.read.mockReturnValue({ models: [] });
     remoteMocks.state.mockReturnValue({ value: { models: [] }, isCustomized: false, customizedKeys: [], defaults: { models: [] } });
     remoteMocks.write.mockResolvedValue(undefined);
+    setRemoteUtilityTextClient({ request: async () => ({ ok: false, reason: 'no_candidate', attempts: [] }),
+      readCapabilities: remoteMocks.caps });
     registerAuxiliaryModelSettingsIpc();
   });
   function setHandler() {
