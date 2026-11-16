@@ -8241,6 +8241,8 @@
         "hostTools_controlDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben und Projekte bearbeiten, archivieren, wiederherstellen und steuern sowie native Aufgabendateien auf diesem Computer importieren.",
         "hostTools_handoff": "Aufgabennachrichten",
         "hostTools_handoffDetail": "Mit Cindys Werkzeugen Nachrichten an vorhandene Aufgaben senden. Vorgänge, die eine aktuelle Aufgabe benötigen, erfordern ein ausdrücklich angegebenes Ziel.",
+        "hostTools_usage": "Abonnementnutzung lesen",
+        "hostTools_usageDetail": "Liest Kontokennungen, Tarife, Kontingentzeiträume und Aktualisierungszeiten der Claude- und Codex-Abonnements, die auf diesem Computer mit deinem aktuellen Cindy-Konto verbunden sind. Kein Zugriff auf E-Mail-Adressen, Zugangsdaten, Dateien oder andere Computer. Konten können nicht geändert werden.",
         "hostTools_settings": "App-Einstellungen",
         "hostTools_settingsDetail": "Mit Cindys Werkzeugen die App-Konfiguration lesen und ändern. Geheimnisse werden nicht zurückgegeben; vertrauliche Eingaben machst du selbst.",
         "hostTools_scheduler": "Automatisierungsverwaltung",
@@ -11426,6 +11428,8 @@
         "projectDirNote": "Hier arbeiten Freunde bei der Arbeitsaufteilung. Du kannst das Feld leer lassen, dann nutzen sie den eigenen Ordner dieses Gruppenchats. Wenn du ein Git-Projekt auswählst, erhält jede Arbeitsaufteilung einen neuen Worktree und Branch, damit dein eigener Code unverändert bleibt.",
         "autoContinueSaveFailed": "Die Schrittübergabe konnte nicht gespeichert werden. Versuch es erneut.",
         "projectDirSaveFailed": "Der Projektordner konnte nicht gespeichert werden. Prüfe, ob der Ordner noch vorhanden ist, und versuch es erneut.",
+        "allowMemberInvites": "Alle Mitglieder dürfen Freunde einladen",
+        "allowMemberInvitesHint": "Wenn aktiviert, dürfen alle beigetretenen Mitglieder Freunde einladen. Nur Gruppeninhaber und Admins können dies ändern.",
         "allowMentionAllBots": "@Alle Freunde erlauben",
         "allowMentionAllBotsHint": "Nur der Gruppeninhaber kann dies ändern. Alle Teammitglieder können antworten; in großen Gruppen mit Bedacht verwenden. KI-Antworten in deinem Namen sind davon unabhängig."
       },
@@ -14108,7 +14112,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "Worktree wird erstellt · Eingabe deaktiviert",
-      "subtitle": "Zielbranch {{branch}} · wird automatisch freigegeben"
+      "subtitle": "Zielbranch {{branch}} · wird automatisch freigegeben",
+      "elapsed": "Wartet seit {{duration}}"
     },
     "worktree": {
       "detecting": "Umgebung wird erkannt…",

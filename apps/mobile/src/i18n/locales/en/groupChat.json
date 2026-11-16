@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · for {{person}}"
+  },
   "progress": {
     "stop": "Stop",
     "stopMine": "Stop Mine",
@@ -306,6 +309,8 @@
       "loading": "Loading settings…",
       "unavailable": "Couldn’t load group settings. Try again."
     },
+    "allowMemberInvites": "Let all members invite friends",
+    "allowMemberInvitesHint": "When on, all joined members can invite friends. Only the group owner and admins can change this.",
     "allowMentionAllBots": "Allow @all buddies",
     "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent."
   },

@@ -94,6 +94,10 @@ export function registerScheduleCreateTool(
       recurring: z
         .boolean()
         .describe('true=循环触发；false=触发一次后置 expired'),
+      manual: z
+        .boolean()
+        .optional()
+        .describe('true=不按时间自动触发（nextFireAt 为空），仍可立即运行；配合 webhookTrigger 即仅由事件触发。false 或省略=按 cronExpr / intervalMs 定时触发，可与 Webhook 并存。cronExpr / timezone 仍必填并保留，便于以后恢复定时；适用于 agent 和 script 执行方式。'),
       agentKind: z.enum(AGENT_KIND).describe('claude-code / codex / pi'),
       modelAgentKind: z.enum(AGENT_KIND).optional().describe('显式模型选择的引擎；绑定任务仅在下次执行时临时切换，结束后恢复'),
       fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('模型速度：false 标准、true 快速、ultrafast 超快；按所选模型支持的档位执行'),

@@ -537,6 +537,10 @@ export interface BotGroupSpeaker {
   executionId?: string;
   /** Stable history position (e.g. server enqueue time), independent of elapsed work. */
   timelineAt?: number;
+  /** Authenticated projection of requester identity; absence on old hosts grants no control. */
+  isSelfRequested?: boolean;
+  /** Public requester name for this execution of the group's Cindy. */
+  requesterName?: string;
   startedAt?: number;
   stopping?: boolean;
   executionStatus?: 'queued' | 'running' | 'needs_input' | 'stopping';
@@ -556,7 +560,7 @@ export interface BotGroupRoundView {
   speakers: BotGroupSpeaker[];
   /** True when the latest round ended naturally and may be continued. */
   canContinue: boolean;
-  /** Server groups: someone else's request or teammate is also working, so stopping only yours leaves it running. */
+  /** Server groups: someone else's request is also working, so stopping only yours leaves it running. */
   othersActive?: boolean;
   /** This account has work it can stop with the default scope; canStopAll is separate. Absent on older hosts. */
   canStop?: boolean;
@@ -567,6 +571,9 @@ export type ChatGroupNotificationMode = 'all' | 'mentions' | 'none';
 export interface BotGroupSummary {
   /** Execution snapshot already included by server-backed group summaries; absent on older hosts. */
   round?: BotGroupRoundView;
+  /** Manager-controlled friend invitations; absent on old servers/hosts. */
+  supportsMemberInvites?: boolean;
+  allowMemberInvites?: boolean;
   /** Owner-controlled companion broadcast; absent on old servers/hosts. */
   supportsMentionAudiences?: boolean;
   allowMentionAllBots?: boolean;
@@ -741,6 +748,7 @@ export interface BotGroupCreateInput {
 }
 
 export interface BotGroupUpdateInput {
+  allowMemberInvites?: boolean;
   allowMentionAllBots?: boolean;
   groupId: string;
   /** Optional optimistic precondition for server-backed settings. */
@@ -1046,7 +1054,7 @@ export interface ChatInvitePreview {
 export type ChatGroupAction =
   | { type: 'read'; messageId: string; conversationKind?: 'direct' }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
-  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; assistant?: boolean }
+  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; allowMemberInvites?: boolean; assistant?: boolean }
   | { type: 'nickname'; actorId: string; nickname: string | null }
   | { type: 'avatar'; actorId: string; avatar: { type: 'keep' | 'reset' } | { type: 'set'; data: Uint8Array; mimeType: string } }
   | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'ban' | 'unban' | 'role'; role?: 'admin' | 'member' }

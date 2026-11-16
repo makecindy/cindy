@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · por {{person}}"
+  },
   "progress": {
     "stop": "Parar",
     "stopMine": "Parar os meus",
@@ -301,6 +304,8 @@
       "loading": "A carregar definições…",
       "unavailable": "Não foi possível carregar as definições do grupo. Tente novamente."
     },
+    "allowMemberInvites": "Permitir que todos convidem amigos",
+    "allowMemberInvitesHint": "Quando ativado, todos os membros do grupo podem convidar amigos. Só o proprietário e os administradores podem alterar esta opção.",
     "allowMentionAllBots": "Permitir @todos os amigos",
     "allowMentionAllBotsHint": "Só o proprietário do grupo pode alterar. Todos os amigos podem responder; cuidado em grupos grandes. Não afeta a IA que responde em seu nome.",
     "notifications": {

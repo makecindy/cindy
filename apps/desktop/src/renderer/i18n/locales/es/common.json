@@ -8313,6 +8313,8 @@
         "hostTools_controlDetail": "Usar las herramientas de Cindy para editar, archivar, restaurar y controlar tareas y proyectos existentes, e importar archivos de tareas en formato nativo en este ordenador.",
         "hostTools_handoff": "Mensajes a tareas",
         "hostTools_handoffDetail": "Usar las herramientas de Cindy para enviar mensajes a tareas existentes. Las operaciones que necesitan una tarea actual requieren un destino explícito.",
+        "hostTools_usage": "Leer el uso de las suscripciones",
+        "hostTools_usageDetail": "Lee identificadores de cuenta, planes, períodos de cuota y horas de actualización de las suscripciones de Claude y Codex conectadas a tu cuenta actual de Cindy en este equipo. No permite leer correos electrónicos, credenciales, archivos ni datos de otros equipos, ni modificar cuentas.",
         "hostTools_settings": "Ajustes de la aplicación",
         "hostTools_settingsDetail": "Usar las herramientas de Cindy para leer y cambiar la configuración. No se devuelven secretos y los datos privados los introduces tú.",
         "hostTools_scheduler": "Gestión de automatizaciones",
@@ -11515,6 +11517,8 @@
         "projectDirNote": "Los amigos trabajan aquí cuando se reparten el trabajo. Si lo dejas vacío, usarán la carpeta de esta conversación grupal. Si eliges un proyecto de Git, cada encargo tendrá un worktree y una rama nuevos para no modificar tu código.",
         "autoContinueSaveFailed": "No se pudieron guardar las transiciones entre pasos. Inténtalo de nuevo.",
         "projectDirSaveFailed": "No se pudo guardar la carpeta del proyecto. Asegúrate de que la carpeta aún exista e inténtalo de nuevo.",
+        "allowMemberInvites": "Permitir que todos inviten amigos",
+        "allowMemberInvitesHint": "Al activarlo, todos los miembros del grupo pueden invitar amigos. Solo el dueño del grupo y los administradores pueden cambiarlo.",
         "allowMentionAllBots": "Permitir @todos los amigos",
         "allowMentionAllBotsHint": "Solo el dueño del grupo puede cambiarlo. Todos los amigos podrían responder; cuidado en grupos grandes. No afecta a la IA que responde por ti."
       },
@@ -14223,7 +14227,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "Creando worktree · entrada deshabilitada",
-      "subtitle": "Rama de destino {{branch}} · se desbloqueará automáticamente"
+      "subtitle": "Rama de destino {{branch}} · se desbloqueará automáticamente",
+      "elapsed": "Esperando desde hace {{duration}}"
     },
     "worktree": {
       "detecting": "Detectando entorno…",
