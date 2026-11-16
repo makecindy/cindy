@@ -7889,7 +7889,6 @@
         "install": "安裝",
         "details": "詳情",
         "detailsAria": "檢視 {{name}} 的詳情",
-        "loadingDetails": "正在載入詳情…",
         "update": "從市場更新",
         "updateTo": "更新到 v{{version}}",
         "installed": "已安裝",
@@ -8810,23 +8809,10 @@
         "projectReadFailed": "專案開關讀取失敗，請重試。"
       },
       "usage": {
-        "title": "個人呼叫",
-        "explanationLabel": "統計口徑",
-        "explanation": "僅統計本機目前帳號成功派發的工具呼叫，失敗、逾時或取消也計入。近 7 天為滾動 168 小時；面板、Skill 與除錯操作不計入。記錄預設保留，清除後重新開始。",
-        "clear": "清除記錄",
-        "loading": "正在讀取記錄…",
-        "unavailable": "個人記錄暫時無法使用",
-        "retry": "重試",
-        "lastUsed": "最近呼叫",
-        "last7Days": "近 7 日呼叫",
-        "never": "尚未呼叫",
-        "clearTitle": "清除此插件的使用記錄？",
-        "clearDescription": "清除本機目前帳號的呼叫記錄及任務關聯，後續呼叫重新開始記錄。已共享的累計統計不會撤回。",
         "downloadExplanation": "累計下載請求次數：成功取得安裝包下載位址後計一次，包括更新、重新安裝及重新取得位址的重試；不代表成功安裝次數。",
-        "clearAction": "清除",
         "downloadsValue": "{{value}} 次下載",
         "usesValue": "{{value}} 次使用",
-        "usesExplanation": "目前共享範圍內各版本累計的工具呼叫次數。下方個人呼叫僅統計本機目前帳號，口徑不同。"
+        "usesExplanation": "目前共享範圍內各版本累計的工具呼叫次數。"
       },
       "contribution": {
         "unreadReview": "有新的處理結果",

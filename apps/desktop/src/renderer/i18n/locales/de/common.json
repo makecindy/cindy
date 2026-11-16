@@ -7932,7 +7932,6 @@
         "install": "Installieren",
         "details": "Details",
         "detailsAria": "Details zu {{name}} anzeigen",
-        "loadingDetails": "Details werden geladen…",
         "update": "Aus Marktplatz aktualisieren",
         "updateTo": "Auf v{{version}} aktualisieren",
         "installed": "Installiert",
@@ -8853,23 +8852,10 @@
         "projectReadFailed": "Projekteinstellungen konnten nicht gelesen werden. Versuche es erneut."
       },
       "usage": {
-        "title": "Deine Aufrufe",
-        "explanationLabel": "So wird die Nutzung gezählt",
-        "explanation": "Tool-Aufrufe, die das aktuelle Konto auf diesem Computer ausgelöst hat, einschließlich fehlgeschlagener, abgebrochener und wegen Zeitüberschreitung beendeter Aufrufe. Die letzten 7 Tage umfassen die jeweils vergangenen 168 Stunden. Panels, Skills und Debugging sind ausgeschlossen. Einträge bleiben erhalten, bis sie gelöscht werden.",
-        "clear": "Einträge löschen",
-        "loading": "Einträge werden geladen…",
-        "unavailable": "Persönliche Einträge nicht verfügbar",
-        "retry": "Erneut versuchen",
-        "lastUsed": "Letzter Aufruf",
-        "last7Days": "Aufrufe in den letzten 7 Tagen",
-        "never": "Noch keine Aufrufe",
-        "clearTitle": "Nutzungseinträge dieses Plugins löschen?",
-        "clearDescription": "Entfernt Aufrufeinträge und Sitzungslinks für dieses Konto auf diesem Computer. Neue Aufrufe beginnen einen neuen Verlauf. Bereits vom Server empfangene gemeinsame Gesamtzahlen werden nicht zurückgenommen.",
         "downloadExplanation": "Kumulierte Anfragen nach Download-URLs. Jede erfolgreich ausgegebene Paket-URL zählt einmal, einschließlich Updates, Neuinstallationen und erneuter Versuche, die eine neue URL anfordern. Dies ist keine Zählung abgeschlossener Installationen.",
-        "clearAction": "Löschen",
         "downloadsValue": "{{value}} Downloads",
         "usesValue": "{{value}} Nutzungen",
-        "usesExplanation": "Kumulierte gemeinsame Tool-Aufrufe über alle Releases im autorisierten Nutzerkreis. Deine Aufrufe unten zählen nur für dieses Konto auf diesem Computer."
+        "usesExplanation": "Kumulierte gemeinsame Tool-Aufrufe über alle Releases im autorisierten Nutzerkreis."
       },
       "contribution": {
         "unreadReview": "Neues Plugin-Ergebnis",

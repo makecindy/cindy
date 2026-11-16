@@ -230,7 +230,9 @@ describe('Ghost plugin detail sections', () => {
     expect(screen.getByText('Read and edit the message draft')).toBeTruthy();
     expect(view.container.textContent).not.toContain('capability:draft');
   });
-  it('shows target shared counts without reading local personal usage for a remote installation', () => {
+  // Unit / round-4: installed detail no longer exposes personal call history.
+  // Extend the remote-only regression to local detail; retain shared header metrics.
+  it.each([false, true])('shows shared counts without personal usage for an installation (remote=%s)', remote => {
     vi.stubGlobal(
       'ResizeObserver',
       class {
@@ -242,7 +244,7 @@ describe('Ghost plugin detail sections', () => {
     Object.assign(window.electronAPI, { ghosts: { usageSummary } });
     render(
       <GhostPluginDetailView
-        remote
+        remote={remote}
         ghost={{ manifest: { id: detail.ghostId }, enabled: true } as InstalledGhost}
         detail={detail}
         marketItem={

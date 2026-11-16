@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemotePluginUiEnablePrompt } from '@/components/new-chat/RemotePluginUiEnablePrompt';
 import { RemotePluginPage } from '../RemotePluginPage';
+import { resetPluginCatalogMemoryForTest } from '../lib/pluginCatalogMemory';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { projectPluginUiConsent } from '../../../../shared/pluginUiConsent';
 import { ghostInstallApprovalToken } from '../../../../shared/ghost';
@@ -165,7 +166,13 @@ const configurationResource = (state = 'configured', id = 'weather') => ({
   ],
 });
 beforeEach(() => {
+  resetPluginCatalogMemoryForTest();
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  // Supply the actual scroller geometry omitted by jsdom now that only real
+  // virtual rows are rendered.
+  vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(800);
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800);
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) { return this.tagName === 'MAIN' ? 800 : 150; });
   vi.clearAllMocks();
   directoryMode.real = false;
   setDataOwnerGeneration('test-owner');
@@ -198,10 +205,62 @@ beforeEach(() => {
   );
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 describe('selected plugin host', () => {
+  // Unit / review finding 4: old Host snapshots were covered, but their finished
+  // recommendation placeholder was not. Keep three slots while capabilities
+  // are unknown, then remove them for either supported version-1 fallback.
+  it.each(['version-1', 'invalid-params'] as const)('finishes recommendation loading on a non-paging Host: %s', async fallback => {
+    const normal = invoke.getMockImplementation()!;
+    let finish!: () => void;
+    const capability = new Promise<void>(resolve => { finish = resolve; });
+    invoke.mockImplementation(async (device, channel, args) => {
+      if (args?.[0]?.actionId === 'management:snapshot' && args[0].input?.read === 'capabilities') {
+        await capability;
+        if (fallback === 'invalid-params') throw new Error('[INVALID_PARAMS] nonempty input unsupported');
+      }
+      return normal(device, channel, args);
+    });
+    render(<RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online />);
+    const pending = screen.getByText('settings.ghosts.page.todayRecommendations').closest('section')!;
+    expect(pending.querySelectorAll('[aria-hidden="true"]')).toHaveLength(3);
+    await act(async () => { finish(); });
+    await screen.findByText('computer-a');
+    expect(screen.queryByText('settings.ghosts.page.todayRecommendations')).toBeNull();
+    expect(invoke.mock.calls.some(call => call[2]?.[0]?.input?.read === 'recommendations')).toBe(false);
+    expect(invoke.mock.calls.some(call => call[2]?.[0]?.actionId === 'management:snapshot' && Object.keys(call[2][0].input).length === 0)).toBe(true);
+  });
+
+  // Unit: distinguishing unknown from unsupported must not collapse a new
+  // Host's slots before its recommendations arrive (or finish with an error).
+  it.each(['success', 'failure'] as const)('keeps the paging Host recommendation slots until its read finishes: %s', async outcome => {
+    const normal = invoke.getMockImplementation()!;
+    let finish!: (value: unknown) => void, fail!: (error: Error) => void;
+    const recommendations = new Promise((resolve, reject) => { finish = resolve; fail = reject; });
+    invoke.mockImplementation(async (device, channel, args) => {
+      if (args?.[0]?.input?.read === 'capabilities') return { effects: [], result: { catalogPaging: true } };
+      if (args?.[0]?.input?.read === 'recommendations') return { effects: [], result: await recommendations };
+      return normal(device, channel, args);
+    });
+    render(<RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online />);
+    await screen.findByText('computer-a');
+    const section = screen.getByText('settings.ghosts.page.todayRecommendations').closest('section')!;
+    expect(section.querySelectorAll('[aria-hidden="true"]')).toHaveLength(3);
+    const items = Array.from({ length: 3 }, (_, index) => ({ pluginId: `rec-${index}`, ghostId: `rec-${index}`, name: `Recommendation ${index}`,
+      scope: 'public', publisherKind: 'official', releaseId: `release-${index}`, installState: 'not-installed' }));
+    await act(async () => {
+      if (outcome === 'success') finish(items);
+      else fail(new Error('recommendations unavailable'));
+    });
+    if (outcome === 'success') {
+      expect(screen.getByText('Recommendation 0')).toBeTruthy();
+      expect(section.querySelectorAll('[aria-hidden="true"]')).toHaveLength(0);
+    } else expect(screen.queryByText('settings.ghosts.page.todayRecommendations')).toBeNull();
+  });
+
   // Unit, #9487: reconnect previously refreshed the snapshot but retained stale market pages.
   // The same installed set with a changed market release must display the new card.
   it('refreshes cached market cards after reconnect when installed versions are unchanged', async () => {
@@ -1329,4 +1388,19 @@ describe('remote task interactive-page consent prompt', () => {
     expect(snapshots()).toBe(before + rereads);
   });
 
+});
+
+// Unit / round-5: the remote source control shares the same viewport contract.
+// The old remote setter did not start the new list when its bar was pinned.
+it.each([[120, 50], [-50, 0]])('switches a remote source without forcing an unpinned bar (top=%s)', async (top, expected) => {
+  render(<RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online />);
+  await screen.findByText('computer-a');
+  fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
+  const radio = await screen.findByRole('radio', { name: /settings.ghosts.page.origin.public/ });
+  const marker = radio.closest('[role="radiogroup"]')!.parentElement!.parentElement!.previousElementSibling!;
+  const root = screen.getByRole('main');
+  vi.spyOn(root, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 800, 800));
+  vi.spyOn(marker, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, top, 800, 0));
+  root.scrollTop = 50; fireEvent.click(radio);
+  expect(root.scrollTop).toBe(expected);
 });

@@ -7889,7 +7889,6 @@
         "install": "纳",
         "details": "详",
         "detailsAria": "观 {{name}} 之详情",
-        "loadingDetails": "方载详情…",
         "update": "自坊更新",
         "updateTo": "更新至 v{{version}}",
         "installed": "已纳",
@@ -8796,23 +8795,10 @@
         "projectReadFailed": "案之开关读取未成，请再试。"
       },
       "usage": {
-        "title": "个人调用",
-        "explanationLabel": "计法",
-        "explanation": "仅计此机目前名籍成功派发之工具调用，失败、逾时或取消亦计入。近 7 日为滚动 168 小时；面板、Skill 与调试操作不计。记录预设留存，清除后重计。",
-        "clear": "清其录",
-        "loading": "方读记录…",
-        "unavailable": "个人记录暂不可用",
-        "retry": "再试",
-        "lastUsed": "近次调用",
-        "last7Days": "近 7 日调用",
-        "never": "未尝调用",
-        "clearTitle": "清除此法器之使用记录乎？",
-        "clearDescription": "将清除此机目前名籍之调用记录及差事关联，此后调用重新记之。已共享之累计不撤回。",
         "downloadExplanation": "累计下载请求次数：每成功取得安装包下载地址，计一次，含更新、重新安装及重取地址之重试；非成功安装之数。",
-        "clearAction": "清",
         "downloadsValue": "取下 {{value}}",
         "usesValue": "用 {{value}}",
-        "usesExplanation": "今共享范围内各版本累计之工具调用次数。下方个人调用仅计此机目前名籍，计法不同。"
+        "usesExplanation": "今共享范围内各版本累计之工具调用次数。"
       },
       "contribution": {
         "unreadReview": "有新处置之果",

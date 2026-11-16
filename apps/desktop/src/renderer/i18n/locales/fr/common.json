@@ -7999,7 +7999,6 @@
         "install": "Installer",
         "details": "Détails",
         "detailsAria": "Voir les détails de {{name}}",
-        "loadingDetails": "Chargement des détails…",
         "update": "Mettre à jour depuis le marketplace",
         "updateTo": "Mettre à jour vers la v{{version}}",
         "installed": "Installé",
@@ -8925,23 +8924,10 @@
         "projectReadFailed": "Impossible de lire les paramètres du projet. Réessayez."
       },
       "usage": {
-        "title": "Vos appels",
-        "explanationLabel": "Mode de calcul de l'utilisation",
-        "explanation": "Appels d'outils effectués sur cet ordinateur par le compte actuel, y compris les échecs, expirations et annulations. Les 7 derniers jours correspondent à une fenêtre glissante de 168 heures. Les panneaux, les skills et le débogage sont exclus. Les enregistrements sont conservés jusqu'à leur effacement.",
-        "clear": "Effacer les enregistrements",
-        "loading": "Chargement des enregistrements…",
-        "unavailable": "Enregistrements personnels indisponibles",
-        "retry": "Réessayer",
-        "lastUsed": "Dernier appel",
-        "last7Days": "Appels des 7 derniers jours",
-        "never": "Aucun appel",
-        "clearTitle": "Effacer les enregistrements d'utilisation de ce plugin ?",
-        "clearDescription": "Supprime les enregistrements d'appels et les liens de session de ce compte sur cet ordinateur. Les nouveaux appels repartent d'un historique vierge. Les totaux partagés déjà reçus par le serveur ne sont pas retirés.",
         "downloadExplanation": "Nombre cumulé de demandes d'URL de téléchargement. Chaque URL de paquet émise avec succès compte une fois, y compris pour les mises à jour, réinstallations et nouvelles tentatives qui demandent une nouvelle URL. Il ne s'agit pas du nombre d'installations réussies.",
-        "clearAction": "Effacer",
         "downloadsValue": "{{value}} téléchargements",
         "usesValue": "{{value}} utilisations",
-        "usesExplanation": "Nombre cumulé d'appels d'outils partagés, toutes versions confondues, au sein de l'audience autorisée. Vos appels ci-dessous ne concernent que ce compte sur cet ordinateur."
+        "usesExplanation": "Nombre cumulé d'appels d'outils partagés, toutes versions confondues, au sein de l'audience autorisée."
       },
       "contribution": {
         "unreadReview": "Nouveau résultat du plugin",

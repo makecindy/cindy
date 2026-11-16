@@ -7999,7 +7999,6 @@
         "install": "Instalar",
         "details": "Detalles",
         "detailsAria": "Ver detalles de {{name}}",
-        "loadingDetails": "Cargando detalles…",
         "update": "Actualizar desde el mercado",
         "updateTo": "Actualizar a v{{version}}",
         "installed": "Instalado",
@@ -8925,23 +8924,10 @@
         "projectReadFailed": "No se pudo leer la configuración de los proyectos. Vuelve a intentarlo."
       },
       "usage": {
-        "title": "Tus llamadas",
-        "explanationLabel": "Cómo se contabiliza el uso",
-        "explanation": "Llamadas a herramientas enviadas desde esta computadora por la cuenta actual, incluidos errores, tiempos de espera agotados y cancelaciones. Los últimos 7 días corresponden a un período móvil de 168 horas. Se excluyen los paneles, las habilidades y la depuración. Los registros se conservan hasta que se borren.",
-        "clear": "Borrar registros",
-        "loading": "Cargando registros…",
-        "unavailable": "Registros personales no disponibles",
-        "retry": "Reintentar",
-        "lastUsed": "Última llamada",
-        "last7Days": "Llamadas en los últimos 7 días",
-        "never": "Aún no hay llamadas",
-        "clearTitle": "¿Borrar los registros de uso de este complemento?",
-        "clearDescription": "Elimina los registros de llamadas y los enlaces a sesiones de esta cuenta en esta computadora. Las nuevas llamadas inician un historial nuevo. Los totales compartidos que el servidor ya recibió no se retiran.",
         "downloadExplanation": "Solicitudes acumuladas de URL de descarga. Cada URL de paquete emitida correctamente se cuenta una vez, incluidas las actualizaciones, reinstalaciones y reintentos que solicitan una URL nueva. No es un recuento de instalaciones completadas.",
-        "clearAction": "Borrar",
         "downloadsValue": "{{value}} descargas",
         "usesValue": "{{value}} usos",
-        "usesExplanation": "Llamadas compartidas acumuladas a herramientas en todas las versiones dentro del público autorizado. Tus llamadas a continuación solo contabilizan esta cuenta en esta computadora."
+        "usesExplanation": "Llamadas compartidas acumuladas a herramientas en todas las versiones dentro del público autorizado."
       },
       "contribution": {
         "unreadReview": "Nuevo resultado del complemento",

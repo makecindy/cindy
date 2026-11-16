@@ -7932,7 +7932,6 @@
         "install": "Install",
         "details": "Details",
         "detailsAria": "View details for {{name}}",
-        "loadingDetails": "Loading details…",
         "update": "Update from market",
         "updateTo": "Update to v{{version}}",
         "installed": "Installed",
@@ -8853,23 +8852,10 @@
         "projectReadFailed": "Could not read project settings. Try again."
       },
       "usage": {
-        "title": "Your calls",
-        "explanationLabel": "How usage is counted",
-        "explanation": "Tool calls dispatched on this computer by the current account, including failures, timeouts and cancellations. The last 7 days is a rolling 168 hours. Panels, Skills and debugging are excluded. Records remain until cleared.",
-        "clear": "Clear records",
-        "loading": "Loading records…",
-        "unavailable": "Personal records unavailable",
-        "retry": "Retry",
-        "lastUsed": "Last call",
-        "last7Days": "Calls in last 7 days",
-        "never": "No calls yet",
-        "clearTitle": "Clear this Plugin’s usage records?",
-        "clearDescription": "Remove call records and Session links for this account on this computer. New calls start a fresh history. Shared totals already received by the server are not withdrawn.",
         "downloadExplanation": "Cumulative download URL requests. Each successfully issued package URL counts once, including updates, reinstalls and retries that request a new URL. This is not a count of completed installations.",
-        "clearAction": "Clear",
         "downloadsValue": "{{value}} downloads",
         "usesValue": "{{value}} uses",
-        "usesExplanation": "Cumulative shared tool calls across all releases in the authorized audience. Your calls below count only this account on this computer."
+        "usesExplanation": "Cumulative shared tool calls across all releases in the authorized audience."
       },
       "contribution": {
         "unreadReview": "New plugin result",

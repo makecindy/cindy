@@ -7889,7 +7889,6 @@
         "install": "納",
         "details": "詳",
         "detailsAria": "觀 {{name}} 之詳情",
-        "loadingDetails": "方載詳情…",
         "update": "自坊更新",
         "updateTo": "更新至 v{{version}}",
         "installed": "已納",
@@ -8796,23 +8795,10 @@
         "projectReadFailed": "案之開關讀取未成，請再試。"
       },
       "usage": {
-        "title": "個人呼叫",
-        "explanationLabel": "計法",
-        "explanation": "僅計此機目前名籍成功派發之工具呼叫，失敗、逾時或取消亦計入。近 7 日為滾動 168 小時；面板、Skill 與除錯操作不計。記錄預設留存，清除後重計。",
-        "clear": "清其錄",
-        "loading": "方讀記錄…",
-        "unavailable": "個人記錄暫不可用",
-        "retry": "再試",
-        "lastUsed": "近次呼叫",
-        "last7Days": "近 7 日呼叫",
-        "never": "未嘗呼叫",
-        "clearTitle": "清除此法器之使用記錄乎？",
-        "clearDescription": "將清除此機目前名籍之呼叫記錄及差事關聯，此後呼叫重新記之。已共享之累計不撤回。",
         "downloadExplanation": "累計下載請求次數：每成功取得安裝包下載位址，計一次，含更新、重新安裝及重取位址之重試；非成功安裝之數。",
-        "clearAction": "清",
         "downloadsValue": "取下 {{value}}",
         "usesValue": "用 {{value}}",
-        "usesExplanation": "今共享範圍內各版本累計之工具呼叫次數。下方個人呼叫僅計此機目前名籍，計法不同。"
+        "usesExplanation": "今共享範圍內各版本累計之工具呼叫次數。"
       },
       "contribution": {
         "unreadReview": "有新處置之果",
