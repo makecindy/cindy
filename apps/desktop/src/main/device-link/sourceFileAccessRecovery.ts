@@ -29,6 +29,12 @@ export function withSourceFileAccessRecovery<T>(recovery: SourceFileAccessRecove
       try {
         recovery.assertCurrent();
       } catch (assertError) {
+        // 例外:中止类错误是作用域作废掐断在途传输的**症状**,根因是作用域失效。
+        // 这时守卫错误当主错误(它带着"这次发送为什么作废"),中止错误降级成 cause。
+        if (isScopeTeardownSymptom(error, recovery.signal)) {
+          attachDiagnosticCause(assertError, error);
+          throw assertError;
+        }
         attachDiagnosticCause(error, assertError);
       }
       throw error;
@@ -48,6 +54,19 @@ function attachDiagnosticCause(error: unknown, cause: unknown): void {
   } catch {
     // 冻结或只读的错误对象附不上 cause;原始错误照常抛出。
   }
+}
+
+/**
+ * 这个错误是不是「作用域作废掐断在途传输」的症状,而非失败根因。
+ * 传输链路用 `UPLOAD_CANCELLED` / `FILE_PEER_CANCELLED` 报告中止,标准中止异常用
+ * AbortError 标记 —— 都不说明"为什么"中止,只有作用域守卫知道。
+ */
+function isScopeTeardownSymptom(error: unknown, signal?: AbortSignal): boolean {
+  if (error === null || (typeof error !== 'object' && typeof error !== 'function')) return false;
+  const candidate = error as { name?: unknown; code?: unknown; message?: unknown };
+  if (candidate.name === 'AbortError' || candidate.code === 'ABORT_ERR') return true;
+  if (signal && error === signal.reason) return true;
+  return typeof candidate.message === 'string' && /cancel/i.test(candidate.message);
 }
 
 /** Captured by each transfer, so its asynchronous checkpoints retain the initiating scope. */

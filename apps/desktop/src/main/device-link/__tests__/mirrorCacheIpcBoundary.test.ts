@@ -322,12 +322,12 @@ describe('attachment access confirmation IPC', () => {
     });
     vi.mocked(rewriteOutboundMedia).mockImplementationOnce(async () => { await readWithSourceFileAccessRecovery(source, read); return []; });
     h.selectFile.mockResolvedValueOnce({ canceled: false, filePaths: [source] });
-    // #10852: 兜底复查不再顶替主错误 —— 上传被中止才是这次失败的直接原因,
-    // 作用域复查失败降级成 cause 保留下来,便于事后分辨是谁作废的。
+    // #10852: 作用域作废掐断在途传输时,根因是作用域失效 —— 守卫错误(带作废原因)
+    // 当主错误,中止类错误降级成 cause,便于事后分辨是谁作废的。
     const failure = await call(DEVICE_LINK_INVOKE.INVOKE, payload).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).message).toContain('UPLOAD_CANCELLED');
-    expect(((failure as Error).cause as Error | undefined)?.message).toContain('PERMISSION_DENIED');
+    expect((failure as Error).message).toContain('PERMISSION_DENIED');
+    expect(((failure as Error).cause as Error | undefined)?.message).toContain('UPLOAD_CANCELLED');
     expect(read).toHaveBeenCalledTimes(2);
     expect(remoteInvoke).not.toHaveBeenCalled();
     expect(h.invalidations.size).toBe(0);
@@ -336,12 +336,19 @@ describe('attachment access confirmation IPC', () => {
   });
 
   // #10852: 传输超时是真实故障原因,不能再被兜底复查的权限错误顶替。
+  // 生产里账号边界推进会同时作废作用域并中止在途传输,而 invoke 不看中止信号,
+  // 仍会一路跑到 30 秒超时 —— 这时真实故障必须留在主错误上。
   it('keeps the transport timeout primary when the scope expired during the transfer', async () => {
+    let aborted = false;
     vi.mocked(remoteInvoke).mockImplementationOnce(async () => {
-      h.ownerGeneration++;            // 传输期间账号边界推进 → 作用域复查也会失败
+      const { signal } = sourceFileAccessTransferOptions();
+      h.ownerGeneration++;                             // 传输期间账号边界推进 → 作用域复查也会失败
+      for (const cancel of h.invalidations) cancel();   // 作用域作废同时中止在途传输
+      aborted = signal?.aborted === true;
       throw new DeviceLinkError('INVOKE_TIMEOUT', 'no invoke-result within 30000ms');
     });
     const failure = await call(DEVICE_LINK_INVOKE.INVOKE, payload).catch((error: unknown) => error);
+    expect(aborted).toBe(true);
     expect(failure).toBeInstanceOf(Error);
     expect((failure as Error).message).toContain('DEVICE_LINK_TIMEOUT');
     expect((failure as Error).message).not.toContain('PERMISSION_DENIED');
@@ -349,7 +356,7 @@ describe('attachment access confirmation IPC', () => {
     // 守卫命中哪一条要能从日志反推。
     expect(h.loggers['device-link:ipc']?.warn).toHaveBeenCalledWith(
       'device-link send scope is no longer current',
-      expect.objectContaining({ reason: 'generation-changed' }),
+      expect.objectContaining({ reason: 'aborted' }),
     );
   });
 

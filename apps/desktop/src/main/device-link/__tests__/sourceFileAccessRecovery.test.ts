@@ -34,9 +34,10 @@ describe('native attachment source selection on Windows', () => {
   });
 });
 
-// #10852: 兜底复查不得顶替真实故障原因。
-// 传输超时/离线/附件读失败才是主错误,守卫复查失败只能作为 cause 补充。
-describe('send failure keeps the original error', () => {
+// #10852: 兜底复查不得顶替真实故障原因;反过来,中止症状要让位给作用域原因。
+// 传输超时/离线/附件读失败才是主错误,守卫复查失败只能作为 cause 补充;
+// 中止类错误(UPLOAD_CANCELLED)只是被掐断的症状,根因是作用域作废 —— 守卫错误当主错误。
+describe('send failure error primacy', () => {
   const transportError = () => Object.assign(new Error('no invoke-result within 30000ms'), {
     code: 'DEVICE_LINK_TIMEOUT',
   });
@@ -71,5 +72,17 @@ describe('send failure keeps the original error', () => {
       assertCurrent: () => { throw scopeError(); },
     }, async () => { throw 'plain failure'; });
     await expect(result).rejects.toBe('plain failure');
+  });
+
+  it('lets the scope failure lead when the operation only reports a cancellation', async () => {
+    // 中止类错误只说明"被掐断了",不说明"为什么";作用域守卫知道。
+    const scope = scopeError();
+    const cancelled = new Error('UPLOAD_CANCELLED');
+    const result = withSourceFileAccessRecovery({
+      selectFile: async () => null,
+      assertCurrent: () => { throw scope; },
+    }, async () => { throw cancelled; });
+    await expect(result).rejects.toBe(scope);
+    expect((scope as Error).cause).toBe(cancelled);
   });
 });
