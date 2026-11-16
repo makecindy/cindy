@@ -914,15 +914,15 @@ describe('Host macOS system proxy rules', () => {
  * acceptance scripts, resolved by esbuild without running any module (workspace packages followed,
  * third-party packages external). In its desktop and package sources (generated and vendored code
  * excluded): exported functions named set|register|bind|configure|install|init… that write a
- * module-level slot (a let/var that starts nullish or as an empty function, or an empty Map/Set/array),
- * and exported empty containers that another file in the graph mutates.
+ * module-level slot (a let/var that starts nullish or as any function, including a working default such as
+ * uiText.ts's English fallback or a function declared in the module, or an empty Map/Set/array), and
+ * exported empty containers that another file in the graph mutates.
  * Failure: a new setter (or a newly loaded module with one) that the table does not classify, or a table
  * entry whose setter is gone, turns this red until the table is updated. A `bound` entry must bind it in
  * the Host file it names (bindsIn: a call, a container mutation, or the setter handed over as a value).
- * Not seen: slots that start as a working function, the fallback itself (uiText.ts configureUiText,
- * whose default returns the English text); setters not named this way; closure state of factories;
- * modules loaded at run time through createRequire; and, for a setter handed over as a port value,
- * whether the receiving code really calls it.
+ * Not seen: slots that start as some other value (an object, a number); setters not named this way;
+ * closure state of factories; modules loaded at run time through createRequire; and, for a setter handed
+ * over as a port value, whether the receiving code really calls it.
  */
 describe('module-level port setters the Host loads, classified for the Host', () => {
   const tableFile = path.join(hostSrc, 'desktop-module-setters.ts');
@@ -961,6 +961,7 @@ describe('module-level port setters the Host loads, classified for the Host', ()
     const slots = new Map<string, boolean>(); // module-level binding -> can be reassigned
     const functions: Array<{ name: string; node: ts.Node }> = [];
     const containers: string[] = [];
+    const declaredFunctions = new Set(sf.statements.flatMap(s => (ts.isFunctionDeclaration(s) && s.name ? [s.name.text] : [])));
     for (const statement of sf.statements) {
       if (ts.isVariableStatement(statement)) {
         const isConst = (statement.declarationList.flags & ts.NodeFlags.Const) !== 0;
@@ -968,18 +969,21 @@ describe('module-level port setters the Host loads, classified for the Host', ()
           if (!ts.isIdentifier(declaration.name)) continue;
           const name = declaration.name.text;
           let init = declaration.initializer;
-          while (init && (ts.isAsExpression(init) || ts.isSatisfiesExpression(init))) init = init.expression;
-          if (init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) && (isExported(statement) || exported.has(name))) {
-            functions.push({ name, node: init });
+          while (init && (ts.isAsExpression(init) || ts.isSatisfiesExpression(init) || ts.isParenthesizedExpression(init))) init = init.expression;
+          const isFunction = !!init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init));
+          if (isFunction && (isExported(statement) || exported.has(name))) {
+            functions.push({ name, node: init! });
             continue;
           }
-          const emptyFunction = !!init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) && ts.isBlock(init.body) && init.body.statements.length === 0;
+          // A slot that starts as a function, empty or a working default (uiText.ts: the English fallback),
+          // or as a function declared in the module: the desktop may replace it and the Host may not.
+          const functionDefault = isFunction || (!!init && ts.isIdentifier(init) && declaredFunctions.has(init.text));
           const emptyContainer = !!init && ((ts.isNewExpression(init) && ts.isIdentifier(init.expression)
             && /^(Map|Set|WeakMap|WeakSet)$/.test(init.expression.text) && !init.arguments?.length)
             || (ts.isArrayLiteralExpression(init) && init.elements.length === 0));
           const nullish = !init || init.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(init) && init.text === 'undefined')
             || /\b(null|undefined)\b/.test(declaration.type?.getText(sf) ?? '');
-          if ((!isConst && (nullish || emptyFunction)) || emptyContainer) slots.set(name, !isConst);
+          if ((!isConst && (nullish || functionDefault)) || emptyContainer) slots.set(name, !isConst);
           if (isExported(statement) && isConst && emptyContainer) containers.push(name);
         }
       } else if (ts.isFunctionDeclaration(statement) && statement.name && (isExported(statement) || exported.has(statement.name.text))) {
