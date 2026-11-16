@@ -2786,7 +2786,8 @@ async function modelChangeRuntime(t, { agent = 'claude-code' } = {}) {
   const { h, handoffs } = assembledRuntime(t, db, {
     readSession: async id => {
       const stored = row(id);
-      return { id, status: stored.status, agentKind: agent, model: stored.model, workingDir: db.root,
+      // As the Host reads a task for a run: its stored engine (main.ts readSessionForRun).
+      return { id, status: stored.status, agentKind: stored.agent_kind === 'cc' ? 'claude-code' : stored.agent_kind, model: stored.model, workingDir: db.root,
         providerId: stored.provider_id, permissionMode: 'ask', planModeEnabled: false, sdkSessionId: stored.sdk_session_id };
     },
     applyPendingAgentSwitch: (id, options) => { landings.push(id); return selection.applyPendingAgentSwitch(id, options); },
@@ -2832,7 +2833,7 @@ async function modelChangeRuntime(t, { agent = 'claude-code' } = {}) {
   // The provider lists a model under a new id whose unified key is the saved one (uniqueRenamedSessionModelId).
   const rename = (from, to) => { views.current = SWITCH_VIEWS.map(view => ({ ...view,
     models: { [agent]: view.models[agent].map(entry => (entry.id === from ? switchModel(to) : entry)) } })); };
-  return { db, h, selection, row, createTask, runTurn, rebuilds, userRows, withdraw, restoreModels, rename, landings };
+  return { db, h, selection, row, createTask, runTurn, rebuilds, userRows, withdraw, restoreModels, rename, landings, views };
 }
 
 // Rule (the desktop's send-time landing, sessionRuntimeSelectionApply.ts: a user's pick applied on send
@@ -3033,6 +3034,39 @@ test('model change at send: a released Pi task resumes to check its window, then
   assert.equal(r.row('cold-pi').model, 'small');
   assert.equal(r.h.maker.sessions.get('cold-pi').options.model, 'small');
   assert.equal(r.selection.projectIntent('cold-pi') ?? null, null);
+});
+
+// Rule (sessionAgentSwitchHandler.ts applyPendingAgentSwitchIfIdle: a user's engine pick that fails
+// to land does not stop the send; only a same-engine pick, an Agent's pick or a change of computer
+// throws): the send goes on with the task's current engine, and the pick stays for the next send,
+// which lands it once its route is usable. Gap: the Host landed an engine pick on enqueue, outside
+// the send, and had no landing at the send to fail.
+test('model change at send: an engine pick that cannot land lets the send go on, and lands on a later send', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await r.createTask('cross');
+  const picked = await r.selection.switchAgent({ sessionId: 'cross', targetAgentKind: 'codex', model: 'gpt-x', providerId: 'prov-a' });
+  assert.equal(picked.deferred, true, 'an engine pick waits for the send');
+  const views = r.views.current;
+  r.views.current = []; // the picked provider is gone when the send lands the pick
+  await r.h.queue.enqueue('cross', { clientId: 'cross-1', text: 'first' });
+  await waitFor(() => r.h.maker.sessions.get('cross')?.sent.length === 1);
+  const first = r.h.maker.sessions.get('cross');
+  assert.equal(first.agentKind, 'claude-code', 'the send goes on with the current engine');
+  assert.equal(first.options.model, 'big');
+  assert.equal(r.row('cross').agent_kind, 'cc');
+  assert.equal(r.h.queue.projection('cross').error ?? null, null, 'no error for the send');
+  assert.equal(r.selection.projectIntent('cross')?.targetAgentKind, 'codex', 'the pick stays for the next send');
+  first.emit({ type: 'done', data: {}, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
+  await waitFor(() => !r.h.queue.projection('cross').active);
+  r.views.current = views;
+  await r.h.queue.enqueue('cross', { clientId: 'cross-2', text: 'second' });
+  await waitFor(() => { const next = r.h.maker.sessions.get('cross'); return next && next !== first && next.sent.length === 1; });
+  const next = r.h.maker.sessions.get('cross');
+  assert.equal(next.agentKind, 'codex', 'the next send lands the engine pick');
+  assert.equal(next.options.model, 'gpt-x');
+  assert.equal(r.row('cross').agent_kind, 'codex');
+  assert.equal(r.selection.projectIntent('cross') ?? null, null);
+  assert.equal(r.userRows('cross').length, 2);
 });
 
 test('context recovery assembly: an overflow rebuilds the task and replays the message on a new runtime, with no error left', { timeout: 30_000 }, async t => {
