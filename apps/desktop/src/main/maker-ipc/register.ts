@@ -50,7 +50,7 @@ import { openSession, setSessionOpeningModelAdmission } from '../localDb/session
 import { createPluginTaskReviewResolver } from './pluginTaskReviewContext.js';
 import { createPluginTargetReviewLoader } from '../cindy-brain/pluginTargetReview.js';
 import { isPluginTaskPermissionAllowed, assertPluginTaskResult, createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
-import { resolveRemotePluginTaskRoute } from './pluginTaskModelRoute.js';
+import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from './pluginTaskModelRoute.js';
 import { resolvePluginWorkerDirectory } from './pluginWorkerDirectory.js';
 import { PluginWriteAccessGate } from './pluginWriteAccessGate.js';
 import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
@@ -207,7 +207,7 @@ import { ensureBotCanonicalSession } from './botCanonicalSessionEnsure.js';
  */
 
 import { readCodexContextWindowInfo } from '../maker-host/codex-context-window.js';
-import { readSshCodexModelList, isVerifiedSshCodexResume } from '../remote-ssh/codex-model-list.js';
+import { readSshCodexModelList } from '../remote-ssh/codex-model-list.js';
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
 import { resolveConnectedDefaultProviderIdForModel } from '../maker-host/provider-route.js';
 import { bindGroupFastPolicy } from '../provider-group/fastPolicyRuntime.js';
@@ -967,6 +967,7 @@ import {
 import { onCodexAutoResetRestored, readXaiSubscriptionUsageSnapshotForDeviceLink, readClaudeSubscriptionUsageSnapshotForDeviceLink, readCodexAccountUsageSnapshotWithWebRefresh, readCodexRateLimitsForHost } from './usage.js';
 import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
 import { applyPersistedCindyMakeMarker } from './cindyMakeSessionStart.js';
+import { createLocalRouteAdmission } from './localRouteAdmission.js';
 import { assertCindyMakeEnabled, assertCindyMakeSessionAvailable } from '../cindy-make/featureGate.js';
 import { CINDY_MAKE_SESSION_SOURCE } from '../../shared/cindyMakeSession.js';
 import { cindyMakeManager } from '../cindy-make/manager.js';
@@ -8668,6 +8669,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return assertModelRouteUsableWith({ listSshCodexProviders, verdictForModelRoute }, agent, model, providerId, remoteHostId, unavailableCode);
   }
 
+  /** 本机运行时的启动准入(bootstrapSession 的 admitLocalRoute;判定与续接核实在 localRouteAdmission.ts)。 */
+  const admitLocalSessionRoute = createLocalRouteAdmission({
+    ensureManagedOllamaReadyForSession,
+    getUserDataDir: () => app.getPath('userData'),
+    assertModelRouteUsable,
+    pinExclusiveSessionProvider,
+  });
+
   // 供应商组(docs/product-rules/provider-groups.md)：在 agentSwitchDeps 就绪后装配。
   let providerGroupService: ProviderGroupService | null = null;
 
@@ -8953,51 +8962,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (provider) o.providerId = provider;
     }
     /** 本机运行时的启动准入(Agent 在另一台电脑运行时由那台按它自己的目录裁决)。 */
-    const admitLocalRoute = async (): Promise<void> => {
-      await ensureManagedOllamaReadyForSession({
-        providerId: o.providerId,
-        remoteHostId: o.remoteHostId ?? null,
-        userDataDir: app.getPath('userData'),
-      });
-      // 停用轴准入(PR #744 review):**新建**会话不得路由到用户停用的模型 / 来源。
-      // renderer 选择器已过滤,但 create-session 在 device-link allowlist 内,老控制端
-      // 可直接点名 —— main 必须自己裁决。resume 豁免(运行中的会话不打断)只给
-      // **经核实的原样续跑**:请求路由与本会话 DB 持久化路由一致才算;resumeSessionId
-      // 是调用方可控字段,携带任意非空 id 同时改点停用 model/provider 不能构成绕过
-      // (PR #744 review 第十六轮)。读不到会话行(远端新建等)按非豁免走正常裁决。
-      // 隐式来源的原生默认落点被停用而有启用替代拷贝时,把会话显式改路由过去(下方
-      // persistAndHydrateSessionProvider 会把它落库):实际路由层对隐式来源走原生
-      // 默认、不查停用标志,仅放行等于继续用停用拷贝付费。
-      if (typeof o.model === 'string' && o.model) {
-        let verifiedResume = false;
-        if (o.resumeSessionId && typeof o.id === 'string' && o.id) {
-          try {
-            const [row] = await getDbClient()
-              .drizzle.select({ model: sessions.model, providerId: sessions.providerId,
-                remoteHostId: sessions.remoteHostId, sdkSessionId: sessions.sdkSessionId, agentKind: sessions.agentKind })
-              .from(sessions)
-              .where(eq(sessions.id, o.id))
-              .limit(1);
-            verifiedResume =
-              !!row && row.model === o.model && (row.providerId ?? null) === (o.providerId ?? null);
-            if (o.agentKind === 'codex' && o.remoteHostId) {
-              verifiedResume = isVerifiedSshCodexResume(o, row ? { ...row, agentKind: dbToMakerAgentKind(row.agentKind) } : undefined);
-            }
-          } catch {
-            verifiedResume = false;
-          }
-        }
-        if (!verifiedResume) {
-          const reroute = await assertModelRouteUsable(o.agentKind, o.model, o.providerId ?? null, o.remoteHostId);
-          if (reroute && shouldApplyExclusiveProviderRerouteLive(o.providerId)) {
-            o.providerId = reroute;
-          }
-        } else if (!(o.agentKind === 'codex' && o.remoteHostId) && shouldApplyExclusiveProviderRerouteLive(o.providerId)) {
-          const pin = await pinExclusiveSessionProvider(o.agentKind, o.model, o.providerId ?? null);
-          if (pin) o.providerId = pin;
-        }
-      }
-    };
+    const admitLocalRoute = (): Promise<void> => admitLocalSessionRoute(o);
     if (!agentOnOtherDevice) await admitLocalRoute();
     assertAccess?.();
     let nativeRelocation: Awaited<ReturnType<typeof relocateForFreshStart>> | undefined;
@@ -13821,7 +13786,35 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { ...body, ...execution, effort: execution.effort ?? '',
       agentKind: execution.agentKind === 'claude-code' ? 'cc' : execution.agentKind };
   });
-  setPluginTaskConfigValidator(async config => { await resolveSessionExecution(config); });
+  // A saved run location is checked against that computer's (or share's) catalog, the
+  // same reader explicit remote plugin routes use; it never falls back to a local namesake.
+  const readPluginRouteProviders = (deviceId: string) => readDeviceProviderViews(remoteBackgroundInvoke, deviceId);
+  setPluginTaskConfigValidator(async config => {
+    const remote = savedPluginTaskRemoteRoute(config);
+    if (remote) {
+      await resolveRemotePluginTaskRoute(remote, { readProviders: readPluginRouteProviders, assertCurrent: () => {} });
+      return;
+    }
+    await resolveSessionExecution(config);
+  });
+  /**
+   * Execution for the legacy errand adapter and workspace drafts: the shared resolver,
+   * or the saved run location revalidated against that computer's catalog each time.
+   */
+  const resolvePluginSavedExecution = async (
+    config: Parameters<typeof resolveSessionExecution>[0] & { agentDeviceId?: string | null },
+    sourceSessionId?: string,
+    existing?: Parameters<typeof resolveSessionExecution>[2],
+  ): Promise<Awaited<ReturnType<typeof resolveSessionExecution>> & { agentDeviceId?: string }> => {
+    const remote = savedPluginTaskRemoteRoute(config);
+    if (!remote) return resolveSessionExecution(config, sourceSessionId, existing);
+    const route = await resolveRemotePluginTaskRoute(remote, {
+      readProviders: readPluginRouteProviders, assertCurrent: captureSessionOwner(),
+    });
+    return { agentKind: route.agentKind === 'cc' ? 'claude-code' : route.agentKind, model: route.model,
+      providerId: route.providerId, ...(route.effort ? { effort: route.effort as Effort } : {}),
+      fastMode: route.fastMode, agentDeviceId: route.agentDeviceId };
+  };
 
   // Ghost 的 Agent 槽只负责验证权限和整理 prompt；真正的新回合仍走
   // sendToSessionInternal 这一条主机通路，因此会话恢复、繁忙排队、消息落库与
@@ -13880,13 +13873,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const routeUnavailable = (): never => { throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected provider, model or effort is unavailable'); };
     const resolveRoute = async (pluginId: string, requested?: PluginTaskRoute, callId?: string): Promise<PluginTaskRoute> => {
       assertPlugin(pluginId);
-      if (requested?.agentDeviceId) {
-        return resolveRemotePluginTaskRoute(requested, {
-          readProviders: deviceId => readDeviceProviderViews(remoteBackgroundInvoke, deviceId),
+      const defaults = getPluginTaskDefaults(pluginId);
+      // Without an explicit route the user's saved choice applies together with its run
+      // location; an explicit route (local or remote) replaces the whole saved choice.
+      const remote = requested ? (requested.agentDeviceId ? requested : null) : savedPluginTaskRemoteRoute(defaults ?? {});
+      if (remote) {
+        return resolveRemotePluginTaskRoute(remote, {
+          readProviders: readPluginRouteProviders,
           assertCurrent: () => assertPlugin(pluginId),
         });
       }
-      const selection = { ...getPluginTaskDefaults(pluginId), ...requested };
+      const { agentDeviceId: _savedLocation, ...localDefaults } = defaults ?? {};
+      const selection = { ...localDefaults, ...requested };
       const sourceSessionId = getPluginTaskSourceSessionId(pluginId, callId);
       if (callId && !sourceSessionId && !(selection.agentKind && selection.model && selection.providerId)) throw new PluginTaskError('ROUTE_UNAVAILABLE', '发起任务已不可用，请重新调用，或在面板选择模型后创建任务');
       try {
@@ -13989,7 +13987,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           return current.workingDir === cfg.workingDir && current.permissionMode === cfg.permissionMode
             && current.agentKind === cfg.agentKind && current.model === cfg.model
             && current.providerId === cfg.providerId && current.effort === cfg.effort
-            && current.fastMode === cfg.fastMode;
+            && current.fastMode === cfg.fastMode && current.agentDeviceId === cfg.agentDeviceId;
         };
         // Receipt persistence/provider lookup can yield after the first resolution.
         // Reuse the resolver with the original request, then guard this configuration
@@ -14735,6 +14733,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             providerId: sessions.providerId,
             effort: sessions.effort,
             fastMode: sessions.fastMode,
+            agentDeviceId: sessions.agentDeviceId,
             permissionMode: sessions.permissionMode,
             workingDir: sessions.workingDir,
             workspaceKind: sessions.workspaceKind,
@@ -14764,7 +14763,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return sessionId;
       },
       getGhostName: getInstalledGhostName,
-      resolveExecution: resolveSessionExecution,
+      resolveExecution: resolvePluginSavedExecution,
       captureOwner: captureSessionOwner,
       normalizeWorkingDir: (dir) => normalizeWorkingDirForStorage(dir),
       isUserPickedDir: isGhostPickedDir,
@@ -14845,7 +14844,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     createDraftSession: async (params) => {
       const assertOwner = captureSessionOwner();
       const config = getPluginTaskDefaults(params.ghostId);
-      const execution = await resolveSessionExecution(config ?? {}, params.sourceSessionId);
+      const execution = await resolvePluginSavedExecution(config ?? {}, params.sourceSessionId);
       assertOwner();
       const sessionId = await createPluginDraftSession({
         ...params,

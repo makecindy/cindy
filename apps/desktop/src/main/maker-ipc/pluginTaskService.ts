@@ -111,8 +111,11 @@ export interface PluginTaskServiceDeps {
   assertAuthorized(pluginId: string): void;
   /** Undefined only when this plugin has opted out of its Host task card. */
   readPermissionMode(pluginId: string): unknown;
-  /** Include the inherited new-task selection when the resolver can use it. */
-  readModelPreference(pluginId: string): Partial<PluginTaskRoute> & { inheritedDefault?: string };
+  /** Raw preference fingerprint, including the explicit-local null marker; not an execution route. */
+  readModelPreference(pluginId: string): Omit<Partial<PluginTaskRoute>, 'agentDeviceId'> & {
+    agentDeviceId?: string | null;
+    inheritedDefault?: string;
+  };
   resolveRoute(pluginId: string, route?: PluginTaskRoute, callId?: string): Promise<PluginTaskRoute>;
   createSession(
     pluginId: string,

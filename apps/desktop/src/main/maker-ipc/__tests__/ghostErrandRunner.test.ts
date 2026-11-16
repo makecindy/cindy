@@ -144,6 +144,28 @@ describe('Pi 代办路由', () => {
 });
 
 describe('专属会话建/复用', () => {
+  // Historical settings never selected a run location. Preserve a user-repaired remote
+  // task in that case; new explicit Host/remote choices must replace it. tier: unit.
+  it.each([
+    { location: undefined, expectedSession: 'sess-old' },
+    { location: null, expectedSession: 'sess-new' },
+    { location: 'another-computer', expectedSession: 'sess-new' },
+  ])('respects the saved location $location without changing legacy reuse', async ({ location, expectedSession }) => {
+    const { deps, emitters } = makeDeps({
+      readConfig: () => ({ agentKind: 'cc', providerId: 'same-provider', model: 'claude-x', agentDeviceId: location }),
+      readSessionId: () => 'sess-old',
+      getSessionRow: async () => ({ ...ACTIVE_ROW, providerId: 'same-provider', agentDeviceId: 'other-computer' }),
+      resolveExecution: async () => ({ agentKind: 'claude-code', providerId: 'same-provider', model: 'claude-x',
+        fastMode: false, ...(typeof location === 'string' ? { agentDeviceId: location } : {}) }),
+    });
+    const pending = createGhostErrandRunner(deps)(REQUEST);
+    await vi.waitFor(() => expect(emitters.size).toBe(1));
+    const actualSession = [...emitters.keys()][0];
+    emitters.get(actualSession)!.emit(doneEvent());
+    expect(await pending).toMatchObject({ ok: true, sessionId: expectedSession });
+    expect(deps.createSession).toHaveBeenCalledTimes(expectedSession === 'sess-old' ? 0 : 1);
+  });
+
   it('无映射时创建会话并写映射,onSession 尽早回报,投递成功才 onDispatched', async () => {
     const { deps, emitters, writes } = makeDeps();
     const runner = createGhostErrandRunner(deps);

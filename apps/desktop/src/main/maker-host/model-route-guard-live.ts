@@ -29,15 +29,13 @@ import { getDesktopProviderService } from './createDesktopProviderService.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import {
+  pinExclusiveSessionProviderWithProviders,
   resolveLenientSessionRouteWithProviders,
   staticNativeDefaults,
   verdictForModelRouteWithProviders,
 } from './model-route-guard-catalog.js';
 import { getNewTaskDraftSelection } from './newMakerDefaultsCache.js';
-import {
-  materializeExclusiveProviderRoute,
-  type ModelRouteVerdict,
-} from './model-route-guard.js';
+import type { ModelRouteVerdict } from './model-route-guard.js';
 
 /**
  * Route admission must retain capability entries that selectable build-region
@@ -137,14 +135,7 @@ export async function pinExclusiveSessionProvider(
   model: string,
   providerId: string | null,
 ): Promise<string | undefined> {
-  let views: ProviderView[];
-  try {
-    views = await listRouteGuardProviders();
-  } catch {
-    return undefined;
-  }
-  const exclusive = materializeExclusiveProviderRoute(views, agent, model, providerId);
-  return exclusive.kind === 'pin' ? exclusive.providerId : undefined;
+  return pinExclusiveSessionProviderWithProviders(listRouteGuardProviders, agent, model, providerId);
 }
 
 // Moved to model-route-guard-catalog.ts, which does not load Electron (the Node Host imports it).
