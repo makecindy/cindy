@@ -5054,6 +5054,8 @@ test('auto-resume route switch: the second interruption resumes on another provi
   const third = await resumed(second, 3);
   assert.notEqual(third, second, 'the second resume runs on a rebuilt runtime');
   assert.equal(third.options.providerId, 'prov-b', 'the resume runs on the sibling provider');
+  // As the desktop: a start on the accepted override keeps the task row's saved provider baseline.
+  assert.equal(r.row('fb').provider_id, 'prov-a', 'the task row keeps its saved provider');
 });
 
 // Working-directory move (A5, session-move.ts with the executor's own close):

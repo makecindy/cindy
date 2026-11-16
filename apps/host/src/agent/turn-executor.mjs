@@ -44,7 +44,7 @@ import { recordHostContextSnapshot } from './context-usage.ts';
 import { readTerminalTurnErrorSignals } from '../../../desktop/src/main/maker-ipc/terminalTurnErrorSignals.ts';
 import { isForegroundRunningStatus, noteAutoResumeProgress, noteForegroundTurnStarted, settleAutoResumeAttemptOnDone,
   settleAutoResumeAttemptOnTerminalError } from '../../../desktop/src/main/maker-ipc/sessionEventAutoResumeSteps.ts';
-import { applyRuntimeOverrideForStart } from './runtime-override.ts';
+import { applySessionRuntimeOverrideForStart } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
 
 const makerKind = kind => kind === 'cc' ? 'claude-code' : kind;
 const dbKind = kind => kind === 'claude-code' ? 'cc' : kind;
@@ -383,13 +383,14 @@ export function createTurnExecutor(deps) {
 
   // As the desktop's bootstrapSession (register.ts) once the runtime has started: the task row takes the
   // start's provider (a route the start admission rerouted or pinned included), and a failed write
-  // refuses the start. The Host has no temporary runtime override, so the start's provider is written.
-  async function persistStartedSessionProvider(session, opts, assertAccess) {
+  // refuses the start. A start on an accepted runtime override keeps the saved provider baseline, as the
+  // desktop's `providerId: runtimeOverride ? undefined : o.providerId`.
+  async function persistStartedSessionProvider(session, opts, assertAccess, runtimeOverride = null) {
     try {
       const db = getDbClient().drizzle;
       await persistAndHydrateSessionProvider({
         sessionId: session.id,
-        providerId: opts.providerId,
+        providerId: runtimeOverride ? undefined : opts.providerId,
         updateProviderId: async (targetSessionId, providerId) => {
           deps.assertCurrent();
           await db.update(sessions).set({ providerId }).where(eq(sessions.id, targetSessionId));
@@ -544,14 +545,15 @@ export function createTurnExecutor(deps) {
         // stored.sdkSessionId takes no different value; for that reason no test covers this step alone.
         opts.resumeSessionId = opts.resumeSessionId ?? (opts.agentKind === makerKind(stored.agentKind) ? stored.sdkSessionId || undefined : undefined);
         // The accepted runtime mutation (an automatic route fallback) wins over the stored route,
-        // before the start admission, as in the desktop's bootstrapSession (runtime-override.ts).
-        applyRuntimeOverrideForStart(opts);
+        // before the start admission, through the desktop's own step. The Host refuses provider-group
+        // tasks at admission (send-preflight.ts), so a provider group never decides the source.
+        const runtimeOverride = applySessionRuntimeOverrideForStart(opts, false);
         await deps.admitLocalRoute(opts);
         assertAccess?.();
         turn?.check();
         const session = await deps.getMaker().createSession({ ...opts }, turn?.sendOpts.signal);
         turn?.check();
-        await persistStartedSessionProvider(session, opts, assertAccess);
+        await persistStartedSessionProvider(session, opts, assertAccess, runtimeOverride);
         turn?.check();
         rememberLiveSessionSettings(session, opts);
         setSessionProvider(opts.id, opts.providerId ?? null);
@@ -964,11 +966,11 @@ export function createTurnExecutor(deps) {
         // on the task row.
         const start = { ...options, id };
         // As the bootstrap above (the desktop restores through bootstrapSession too).
-        applyRuntimeOverrideForStart(start);
+        const runtimeOverride = applySessionRuntimeOverrideForStart(start, false);
         await deps.admitLocalRoute(start);
         deps.assertCurrent(); await assertCurrent();
         session = await maker.createSession({ ...start });
-        await persistStartedSessionProvider(session, start);
+        await persistStartedSessionProvider(session, start, undefined, runtimeOverride);
         rememberLiveSessionSettings(session, start);
       }
       deps.assertCurrent(); await assertCurrent();
