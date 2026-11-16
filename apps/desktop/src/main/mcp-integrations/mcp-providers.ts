@@ -20,6 +20,7 @@ import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
 import { manageAppSettings } from '../app-settings/sections.js';
 import { importThemePackageFromTask } from '../local-themes/agent.js';
 import { manageAppModels } from '../app-settings/models.js';
+import { runProviderReadRequest } from './providerReadTools.js';
 import { classifyOrigin } from '../input-handoff/originPolicy.js';
 import { inspectAppDefaultModel, changeAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
 import { hostname } from 'node:os';
@@ -52,6 +53,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 
 import {
   createLiziMcpProviders,
+  isReadOnlyAppModelsRequest,
   resolveLiziMcpSessionContext,
   setSessionPathAuthorizer,
   type LiziMcpProvider,
@@ -1338,12 +1340,15 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 伙伴自己沉淀的真技能。归属同样由 callerSessionId 反查,工具面不收 botId。
       modelSettings: {
         call: ({ callerSessionId, ...input }, signal) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
+          const readOnly = isReadOnlyAppModelsRequest(input);
+          if (!callerSessionId && !readOnly) throw new Error('NO_SESSION_CONTEXT');
           const guard = async () => {
             await assertCurrent();
-            if (input.operation === 'set' || input.operation === 'provider' || input.operation === 'connection' ||
-                (input.operation === 'mediaGuide' && input.change.action === 'save')) await assertTaskActionCurrent();
+            if (!readOnly && (input.operation === 'set' || input.operation === 'provider' || input.operation === 'connection' ||
+                (input.operation === 'mediaGuide' && input.change.action === 'save'))) await assertTaskActionCurrent();
           };
           return manageAppModels(input, guard, async (name, endpoints, lifetime) => {
+            if (!callerSessionId) throw new Error('NO_SESSION_CONTEXT');
             await guard();
             if (await isInputHandoffDisabledForSession(callerSessionId)) throw new Error('DISABLED_BY_OWNER');
             await guard();
@@ -1363,6 +1368,35 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               if (!started.ok) reject(new Error(started.errorCode));
             });
           }, signal);
+        }),
+      },
+      providerReads: {
+        call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async () => {
+          const plugin = !callerSessionId ? getPluginHostToolCaller() : undefined;
+          const owner = activeOwnerScopeKey();
+          const assertCurrent = () => {
+            plugin?.assertCurrent();
+            if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('OWNER_SCOPE_CHANGED');
+          };
+          return runProviderReadRequest({ ...input, device: input.device === getDeviceId() ? 'local' : input.device }, {
+            local: async (request, guard) => {
+              if (request.action === 'manage-share') {
+                const { executeProviderShareManagementCommand } = await import('../device-link/providerShareRuntime.js');
+                guard();
+                return executeProviderShareManagementCommand(request.command);
+              }
+              const { createProviderGroupCommandDeps, executeProviderGroupCommand } = await import('../provider-group/ipc.js');
+              guard();
+              return executeProviderGroupCommand(createProviderGroupCommandDeps(), request.command);
+            },
+            remote: async (device, request, guard) => {
+              const { invokeProviderManagement } = await import('../provider-group/managementClient.js');
+              guard();
+              return invokeProviderManagement((target, channel, args, options) =>
+                deps.invokeRemote(target, channel, args, { ...options, preSend: () => { guard(); options?.preSend?.(); } }),
+              device, request);
+            },
+          }, assertCurrent);
         }),
       },
       piRuntime: {
