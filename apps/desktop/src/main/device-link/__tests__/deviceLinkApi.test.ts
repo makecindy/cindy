@@ -43,7 +43,7 @@ vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readDevicePro
 vi.mock('../selfHostedRelayConfig.js', () => ({ readRelaySecrets: mocks.readV2Secrets }));
 vi.mock('../agentNetRuntime.js', () => ({ agentNetClientForRelay: () => ({
   rootPublicKey: 'A'.repeat(43), directory: mocks.v2Directory, request: mocks.v2Request,
-}), currentAgentNetClient: () => mocks.v2Active ? { certificate: { deviceId: 'pc' }, directory: mocks.v2Directory } : null,
+}), currentAgentNetClient: () => mocks.v2Active ? { certificate: { deviceId: 'pc' }, directory: mocks.v2Directory, request: mocks.v2Request } : null,
 agentNetRequiresEncryption: () => mocks.onlyEncrypted, agentNetSelectionKey: () => mocks.selection }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => mocks.scope, isAppSessionBoundaryPending: () => false }));
 
@@ -265,4 +265,126 @@ describe('deviceLinkApiFetch', () => {
     mocks.v2Directory.mockRejectedValue(new Error('UNTRUSTED_DIRECTORY'));
     await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toThrow('UNTRUSTED_DIRECTORY');
   });
+  // #10671: deviceLinkApiFetch → serverApiFetch → directory merge, unit tier.
+  // Existing tests only read directories; independent in-memory stores expose
+  // the original online-V2 stale-name overwrite after a successful V1 PATCH.
+  it.each([
+    ['official', true, 'after'], ['official', false, 'after'],
+    ['private', true, 'after'], ['official', true, null],
+  ] as const)('keeps %s rename consistent across Agent-Net toggles (online=%s, name=%s)', async (route, online, name) => {
+    let legacyName = 'before', encryptedName = 'before';
+    mocks.v2Active = true;
+    if (route === 'private') {
+      mocks.hasV2 = true;
+      mocks.relay = { baseUrl: 'http://192.168.1.20:47820', credential: 'relay-credential', role: 'owner',
+        relayId: 'r', name: 'Home', deviceId: 'pc', signingSeed: 'A'.repeat(43), ownerPublicKey: 'A'.repeat(43) };
+    }
+    mocks.v2Directory.mockImplementation(async () => [{ ...v2Peer('pc', online), name: encryptedName }]);
+    mocks.v2Request.mockImplementation(async (_method, _path, body) => {
+      encryptedName = body.name ?? 'system-name';
+      return {};
+    });
+    mocks.netFetch.mockImplementation(async (_url, init) => {
+      if (init.method === 'PATCH') {
+        legacyName = JSON.parse(init.body).name ?? 'system-name';
+        return new Response('{}', { status: 200 });
+      }
+      return new Response(JSON.stringify({ devices: [{ ...legacyPeer('pc', true), isSelf: true, name: legacyName }] }), { status: 200 });
+    });
+    await deviceLinkApiFetch('/api/device-link/devices/pc', { method: 'PATCH', body: { name } });
+    const names = [];
+    for (const enabled of [true, false, true]) {
+      mocks.v2Active = enabled;
+      const result = await deviceLinkApiFetch<{ devices: { name: string }[] }>('/api/device-link/devices');
+      names.push(result.devices[0].name);
+    }
+    expect(names).toEqual(Array(3).fill(name ?? 'system-name'));
+    expect(mocks.v2Request).toHaveBeenCalledExactlyOnceWith('PATCH', '/devices/pc', { name });
+  });
+
+  it.each(['PATCH', 'DELETE'] as const)('updates an official V2 member before the legacy %s', async method => {
+    mocks.v2Active = true;
+    mocks.v2Directory.mockResolvedValue([v2Peer('peer/space')]);
+    mocks.netFetch.mockResolvedValue(new Response('{}', { status: 200 }));
+    const body = method === 'PATCH' ? { name: 'Updated' } : undefined;
+    await deviceLinkApiFetch('/api/device-link/devices/peer%2Fspace', { method, body });
+    expect(mocks.v2Request).toHaveBeenCalledExactlyOnceWith(method, '/devices/peer%2Fspace', body);
+    expect(mocks.v2Request.mock.invocationCallOrder[0]).toBeLessThan(mocks.netFetch.mock.invocationCallOrder[0]);
+    expect(lastRequest().authorization).toBe('Bearer account-access-token');
+  });
+
+  it.each(['disabled', 'missing'] as const)('preserves legacy management when V2 is %s', async state => {
+    mocks.v2Active = state === 'missing';
+    mocks.v2Directory.mockResolvedValue([]);
+    mocks.netFetch.mockResolvedValue(new Response('{}', { status: 200 }));
+    await deviceLinkApiFetch('/api/device-link/devices/legacy-peer', { method: 'PATCH', body: { name: 'Updated' } });
+    expect(mocks.v2Request).not.toHaveBeenCalled();
+    expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['directory', 'mutation'] as const)('does not hide an official V2 %s failure with a legacy success', async stage => {
+    mocks.v2Active = true;
+    mocks.v2Directory.mockResolvedValue([v2Peer('peer')]);
+    const failure = Object.assign(new Error('unavailable'), { status: 503 });
+    (stage === 'directory' ? mocks.v2Directory : mocks.v2Request).mockRejectedValue(failure);
+    await expect(deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'PATCH', body: { name: 'Updated' } })).rejects.toBe(failure);
+    expect(mocks.netFetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['owner', 'endpoint', 'route', 'selection'] as const)('stops official management after %s changes during directory load', async change => {
+    mocks.v2Active = true;
+    mocks.v2Directory.mockImplementation(async () => {
+      if (change === 'owner') mocks.scope = 'owner-b';
+      if (change === 'endpoint') mocks.officialBase = 'https://other-region.invalid';
+      if (change === 'route') mocks.relay = { relayId: 'other' } as NonNullable<typeof mocks.relay>;
+      if (change === 'selection') mocks.selection = 'route-b';
+      return [v2Peer('peer')];
+    });
+    await expect(deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'PATCH', body: { name: 'Updated' } })).rejects.toThrow('DEVICE_LINK_SCOPE_CHANGED');
+    expect(mocks.v2Request).not.toHaveBeenCalled();
+    expect(mocks.netFetch).not.toHaveBeenCalled();
+  });
+
+  it('does not start the legacy mutation after an owner change during a V2 write', async () => {
+    mocks.v2Active = true;
+    mocks.v2Directory.mockResolvedValue([v2Peer('peer')]);
+    mocks.v2Request.mockImplementation(async () => { mocks.scope = 'owner-b'; return {}; });
+    await expect(deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'DELETE' })).rejects.toThrow('DEVICE_LINK_SCOPE_CHANGED');
+    expect(mocks.v2Request).toHaveBeenCalledTimes(1);
+    expect(mocks.netFetch).not.toHaveBeenCalled();
+  });
+
+  it('requires an encrypted identity when the official encrypted-only setting has no client', async () => {
+    mocks.onlyEncrypted = true;
+    await expect(deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'PATCH', body: { name: 'Updated' } })).rejects.toThrow('AGENT_NET_ENCRYPTED_IDENTITY_REQUIRED');
+    expect(mocks.netFetch).not.toHaveBeenCalled();
+  });
+  it.each(['owner', 'selection'] as const)('captures the original %s before async preparation', async change => {
+    const pending = deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'PATCH', body: { name: 'Updated' } });
+    if (change === 'owner') mocks.scope = 'owner-b';
+    else mocks.selection = 'route-b';
+    await expect(pending).rejects.toThrow('DEVICE_LINK_SCOPE_CHANGED');
+    expect(mocks.v2Request).not.toHaveBeenCalled();
+    expect(mocks.netFetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['owner', 'endpoint'] as const)('rejects a legacy retry after %s changes during token refresh', async change => {
+    mocks.netFetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'TOKEN_EXPIRED' } }), { status: 401 }));
+    mocks.refresh.mockImplementationOnce(async () => {
+      if (change === 'owner') mocks.scope = 'owner-b';
+      else mocks.officialBase = 'https://other-region.invalid';
+      return true;
+    });
+    await expect(deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'PATCH', body: { name: 'Updated' } })).rejects.toThrow('DEVICE_LINK_SCOPE_CHANGED');
+    expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a V2-only shared relay management request off the legacy endpoint', async () => {
+    mocks.relay = { baseUrl: 'http://192.168.1.20:47820', credential: '', role: 'member',
+      relayId: 'r', name: 'Shared', deviceId: 'pc', signingSeed: 'A'.repeat(43), ownerPublicKey: 'A'.repeat(43) };
+    await deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'PATCH', body: { name: null } });
+    expect(mocks.v2Request).toHaveBeenCalledExactlyOnceWith('PATCH', '/devices/peer', { name: null });
+    expect(mocks.netFetch).not.toHaveBeenCalled();
+  });
+
 });

@@ -15,8 +15,10 @@ export interface DeviceLinkApiPorts {
   activeSelfHostedRelay(): ActiveSelfHostedRelay | null;
   readCurrentDeviceDirectory: typeof import('./agentNetDeviceDirectory.js').readCurrentDeviceDirectory;
   legacyDeviceView: typeof import('./agentNetDeviceDirectory.js').projectAgentNetDevice;
+  /** Capture owner and Agent-Net selection before any async preparation. */
+  managementScopeKey(): string;
   // Keep preparation as an await boundary; route/owner checks must run after it.
-  prepareAgentNetRuntime(): Promise<Pick<typeof import('./agentNetRuntime.js'), 'agentNetClientForRelay'>>;
+  prepareAgentNetRuntime(): Promise<Pick<typeof import('./agentNetRuntime.js'), 'agentNetClientForRelay' | 'currentAgentNetClient' | 'agentNetSelectionKey' | 'agentNetRequiresEncryption'>>;
   prepareOwnerScope(): Promise<Pick<typeof import('../appSessionState.js'), 'activeOwnerScopeKey' | 'isAppSessionBoundaryPending'>>;
   prepareRelayConfig(): Promise<Pick<typeof import('./selfHostedRelayConfig.js'), 'readRelaySecrets'>>;
 }
@@ -81,6 +83,48 @@ async function deviceLinkApiFetch<T>(
       return readCurrentDeviceDirectory(() => officialDeviceLinkApiFetch(apiPath, opts), () => {
         if (activeSelfHostedRelay() || officialDeviceLinkApiBase() !== base) throw new Error('DEVICE_LINK_SCOPE_CHANGED');
       }) as Promise<T>;
+    }
+    const device = /^\/api\/device-link\/devices\/([^/?#]+)$/.exec(apiPath);
+    if (device && (opts.method === 'PATCH' || opts.method === 'DELETE')) {
+      const base = officialDeviceLinkApiBase();
+      const managementScope = ports.managementScopeKey();
+      const { activeOwnerScopeKey, isAppSessionBoundaryPending } = await ports.prepareOwnerScope();
+      const scope = activeOwnerScopeKey();
+      const assertOwner = () => {
+        if (managementScope !== ports.managementScopeKey() || activeSelfHostedRelay() || officialDeviceLinkApiBase() !== base
+          || scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('DEVICE_LINK_SCOPE_CHANGED');
+      };
+      assertOwner();
+      const runtime = await ports.prepareAgentNetRuntime();
+      assertOwner();
+      const selection = runtime.agentNetSelectionKey();
+      const assertCurrent = () => {
+        opts.signal?.throwIfAborted();
+        assertOwner();
+        if (selection !== runtime.agentNetSelectionKey()) throw new Error('DEVICE_LINK_SCOPE_CHANGED');
+      };
+      const api = runtime.currentAgentNetClient();
+      if (!api && runtime.agentNetRequiresEncryption()) throw new Error('AGENT_NET_ENCRYPTED_IDENTITY_REQUIRED');
+      if (api) {
+        const target = decodeURIComponent(device[1]);
+        const directory = await api.directory();
+        assertCurrent();
+        // V1 and V2 keep independent management records. Update even an offline
+        // V2 row so it cannot restore stale metadata when it comes online again.
+        if (directory.some(d => d.certificate.deviceId === target)) {
+          await api.request(opts.method, '/devices/' + encodeURIComponent(target), opts.method === 'PATCH' ? opts.body : undefined);
+          assertCurrent();
+        }
+      }
+      assertCurrent();
+      const result = await serverApiFetch<T>(apiPath, {
+        ...opts,
+        // The legacy client may refresh and retry. Its resolver runs outside
+        // network-error wrapping and before token lookup on every actual send.
+        baseUrl: () => { assertCurrent(); return base; },
+      });
+      assertCurrent();
+      return result;
     }
     return officialDeviceLinkApiFetch<T>(apiPath, opts);
   }
