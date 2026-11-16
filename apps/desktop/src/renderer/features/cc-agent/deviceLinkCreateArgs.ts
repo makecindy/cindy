@@ -142,6 +142,11 @@ export interface DeviceLinkSubmissionParams {
   capabilityAgentKind: AgentKind;
   /** 远程 Agent:运行 Agent 的另一台电脑;缺省 = 被控电脑本身。 */
   agentDeviceId?: string | null;
+  /**
+   * 候选值来自选路(插件或模型组),且选路把任务换到了 deviceProviders 以外的位置:这份目录不是那一处的,
+   * 不拿它校准推理档位(选路时已按那一处的目录校验过)。
+   */
+  routedElsewhere?: boolean;
 }
 
 /**
@@ -171,7 +176,7 @@ export function resolveDeviceLinkSubmission(p: DeviceLinkSubmissionParams): Devi
     p.candidate.model,
     p.capabilityAgentKind,
   );
-  const routeProvider = providerId
+  const routeProvider = providerId && !p.routedElsewhere
     ? p.deviceProviders.find((provider) => provider.id === providerId)
     : undefined;
   const routeModel = routeProvider
