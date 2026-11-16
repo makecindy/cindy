@@ -38,6 +38,7 @@ import { createDbClientForHandle } from '../../../desktop/src/main/localDb/clien
 import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.ts';
 import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionStorageAdapter.ts';
 import { createHostRuntimeSession } from './create-runtime-session.ts';
+import { createHostProviderExecutionCheck } from './send-preflight.ts';
 import { createHostRuntimeSelection, hostRuntimeSelectionQueueHooks, HOST_RUNTIME_SELECTION_QUEUE_MEMBERS, HOST_RUNTIME_START_PORTS } from './runtime-selection.ts';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from '../../../desktop/src/main/maker-ipc/sessionContextWindowBudgetState.js';
 import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
@@ -3414,16 +3415,27 @@ test('route admission: a plugin page restore is refused on a disabled copy, or s
 // Rule (the desktop's maker:create-session starts the runtime through bootstrapSession, whose admission
 // runs before the task row is inserted): a Device Link create on a disabled copy writes no task row and
 // starts nothing; a create on a disabled native default writes the row with the enabled copy.
-test('route admission: a Device Link create is refused before its row, or created on the rerouted copy', { timeout: 30_000 }, async t => {
-  const r = await modelChangeRuntime(t);
+// The Device Link create entry's ports as main.ts binds them: the runtime selection's admission and the
+// send path's provider group refusal over the given group store; the row and the runtime are recorded.
+const deviceLinkCreate = (r, groups = {}) => {
   const rows = [];
   const started = [];
   const ports = {
     serverDeps: { createSession: async input => { rows.push(input); await createTaskOn('created', input.providerId ?? null); return { id: 'created' }; } },
     getAgentGraph: () => ({ maker: { createSession: async opts => { started.push(opts); return r.h.maker.createSession(opts); } } }),
+    assertProviderExecutionSupported: createHostProviderExecutionCheck({
+      hostProviderBindings: { readProviderGroupBinding: () => null },
+      hostProviderGroups: { readProviderGroup: providerId => groups[providerId] ?? null },
+    }),
     admitLocalRoute: opts => r.selection.admitLocalRoute(opts),
   };
   const input = providerId => ({ agentKind: 'claude-code', model: 'big', workingDir: process.cwd(), providerId });
+  return { ports, rows, started, input };
+};
+
+test('route admission: a Device Link create is refused before its row, or created on the rerouted copy', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  const { ports, rows, started, input } = deviceLinkCreate(r);
   r.views.current = withDisabledCopy(r.views.current, 'claude-code', 'prov-a', 'big');
   await assert.rejects(createHostRuntimeSession(ports, input('prov-a')), /\[INVALID_PARAMS\] provider "prov-a" is disabled for model "big"/);
   assert.equal(rows.length, 0, 'no task row');
@@ -3433,6 +3445,19 @@ test('route admission: a Device Link create is refused before its row, or create
   assert.equal(rows[0].providerId, 'prov-a', 'the row is created with the enabled copy');
   assert.equal(r.row('created').provider_id, 'prov-a');
   assert.equal(started[0].providerId, 'prov-a');
+});
+
+// Rule (send-preflight.ts createHostProviderExecutionCheck: the Host has no provider group assignment, so
+// the send path refuses a provider group task with UNSUPPORTED_CAPABILITY): a Device Link create of a
+// provider group task is refused the same way, before any task row or runtime. Gap: this entry (main.ts)
+// did not refuse provider group tasks.
+test('Device Link create: a provider group task is refused with no task row and no runtime', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  const { ports, rows, started, input } = deviceLinkCreate(r, { 'group-1': { id: 'group-1' } });
+  await assert.rejects(createHostRuntimeSession(ports, input('group-1')),
+    { message: '[UNSUPPORTED_CAPABILITY] Host does not yet support provider groups' });
+  assert.equal(rows.length, 0, 'no task row');
+  assert.equal(started.length, 0, 'no runtime');
 });
 
 // Rule (sessionAgentSwitchHandler.ts: a switch back to an engine whose native session is parked starts

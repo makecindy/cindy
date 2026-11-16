@@ -5,7 +5,8 @@
  * is written.
  *
  * Ports: the server's task creation (main.ts serverDeps.createSession), the owner runtime's agent graph
- * (null until it is ready) and the runtime selection's start admission (runtime-selection.ts).
+ * (null until it is ready), the send path's provider group refusal and the runtime selection's start
+ * admission (runtime-selection.ts).
  */
 import type { Maker } from '@cindy/maker-core';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
@@ -16,17 +17,22 @@ import { readHostCreateSessionOpts } from '../create-session-request.js';
 export interface HostRuntimeSessionCreatePorts {
   serverDeps: { createSession(input: Record<string, unknown>): Promise<{ id: string }> };
   getAgentGraph(): { maker: Pick<Maker, 'createSession'> } | null;
+  /** The send path's provider group refusal (send-preflight.ts createHostProviderExecutionCheck). */
+  assertProviderExecutionSupported(id: string, providerId?: string | null): void;
   admitLocalRoute(opts: LocalRouteAdmissionOpts): Promise<void>;
 }
 
 export async function createHostRuntimeSession(ports: HostRuntimeSessionCreatePorts, input: unknown) {
-  const { serverDeps, getAgentGraph, admitLocalRoute } = ports;
+  const { serverDeps, getAgentGraph, assertProviderExecutionSupported, admitLocalRoute } = ports;
   const scope = activeOwnerScopeKey();
   const opts = readHostCreateSessionOpts(input, ensureDialogueWorkspaceDir);
   // These routes need separate execution services; never reinterpret a remote
   // task or Orca worker as an ordinary local task.
   if (opts.remoteHostId || opts.agentDeviceId || opts.orcaRole)
     throw new Error('[NOT_SUPPORTED] This execution route is not assembled in the Host yet');
+  // As the send path (turn-executor.mjs readExecutionSession): a provider group task is refused before
+  // its row or runtime exists; this entry did not refuse it before.
+  assertProviderExecutionSupported(opts.id ?? '', opts.providerId);
   // As the desktop's create entry starts its runtime (register.ts bootstrapSession): the start admission
   // before the task row is written, so a refused start leaves no row and a rerouted provider is the
   // one the row is created with.

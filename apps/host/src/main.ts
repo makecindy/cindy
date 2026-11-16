@@ -27,6 +27,7 @@ import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.js';
 import { createHostDeviceLink } from './device-link.js';
 import { createHostService } from './service.mjs';
 import { createHostRuntimeSession, type HostRuntimeSessionCreatePorts } from './agent/create-runtime-session.js';
+import { createHostProviderExecutionCheck } from './agent/send-preflight.js';
 import { explicitPorts } from './agent/explicit-ports.js';
 import { resolveRuntimeDeviceId } from '../../desktop/src/main/deviceId.js';
 import os from 'node:os';
@@ -855,6 +856,8 @@ const hostProviderGroups = createProviderGroupStore({
   withAvailabilityPolicyMutation: async () => { throw new Error('[UNSUPPORTED_CAPABILITY] Host cannot change provider groups'); },
 });
 const hostProviderBindings = createProviderGroupBindings(hostProviderGroups);
+// The send path and the Device Link create entry refuse provider group tasks with this one check.
+const assertProviderExecutionSupported = createHostProviderExecutionCheck({ hostProviderBindings, hostProviderGroups });
 const readSessionForRun = async (sessionId: string) => {
   const db = getDbClient();
   const rows = await db.drizzle.select().from(sessionTable)
@@ -979,12 +982,7 @@ const inputQueue = createInputQueue({
   hub: eventHub,
   reportAgentCindyGatewayKeyRejected: () => modelAccess?.reportCurrentKeyRejected(),
   readSession: readSessionForRun,
-  assertProviderExecutionSupported: (id: string, providerId?: string | null) => {
-    if (hostProviderBindings.readProviderGroupBinding(id)
-      || (providerId && hostProviderGroups.readProviderGroup(providerId))) {
-      throw new Error('[UNSUPPORTED_CAPABILITY] Host does not yet support provider groups');
-    }
-  },
+  assertProviderExecutionSupported,
   readSessionExtraDirs: readSessionExtraDirsFromDb,
   readSessionWritableDirs: readSessionWritableDirsFromDb,
   readMcpAppModelContext: async (id: string) => (await pluginGateway?.modelContext(id))
@@ -1740,6 +1738,7 @@ function startDeviceLink(): void {
     createRuntimeSession: input => createHostRuntimeSession(explicitPorts<HostRuntimeSessionCreatePorts>({
       serverDeps,
       getAgentGraph: () => agentGraph,
+      assertProviderExecutionSupported,
       admitLocalRoute: opts => runtimeSelection.admitLocalRoute(opts),
     }), input),
     availabilityPolicy: availabilityPolicy ?? undefined,
