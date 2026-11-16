@@ -1,3 +1,4 @@
+import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import { ImageLightbox } from "./ImageLightbox";
 import { buildMediaPayload } from "./messagePayload";
 import {
@@ -159,6 +160,7 @@ function RemoteAttachmentBody({
   const { colors } = useTheme();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
+  const chromeFrame = usePreviewChromeFrame();
   const shareAbort = useRef<AbortController | null>(null);
   const resolver = useRef(resolve);
   resolver.current = resolve;
@@ -256,7 +258,7 @@ function RemoteAttachmentBody({
         style={[
           styles.root,
           {
-            paddingTop: insets.top + 64,
+            paddingTop: chromeFrame.documentContentTop,
             paddingBottom: insets.bottom,
             paddingLeft: insets.left,
             paddingRight: insets.right,

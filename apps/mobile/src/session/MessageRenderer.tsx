@@ -1,3 +1,6 @@
+import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
+import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
+import { SettingsLinkSpan } from './SettingsLinkSpan';
 import type { ViewInstance } from 'react-native';
 import { resolveAttachmentPreviewSource } from './messagePayload';
 import {
@@ -163,6 +166,7 @@ import {
 } from '@/session/sentMessageAtoms';
 import { SelectionQuoteContext } from '@/session/selectionQuote';
 import { MarkdownSelectableText, MarkdownSelectableSpan } from './MarkdownSelectableText';
+import { MarkdownListParagraph } from './MarkdownListParagraph';
 // Passive formatting inside a selectable iOS block stays a raw UITextView child without the share-row gesture context.
 import { UITextView } from 'react-native-uitextview';
 import {
@@ -243,6 +247,7 @@ import {
 } from '@/session/filePreview';
 import {
   groupMobileMarkdownSelectableBlocks,
+  mobileMarkdownListMarkerText,
   mobileMarkdownManagedImagePreviewUrl,
   isMobileMarkdownImageDirectUrl,
   mobileMarkdownImageAltChipText,
@@ -432,7 +437,7 @@ import {
   recordMobileMarkdownParse,
   recordMobileMessageRenderItem,
 } from '@/session/mobileMarkdownRenderMetrics';
-import { latexToUnicodeApproximation } from '@cindy/maker-shared/math-markdown';
+import { tokenizeInlineMath } from '@cindy/maker-shared/math-markdown';
 import type { RemoteTextFilePreviewResult } from '@/device-link/mobileMakerTransport';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { iconSize, iconStroke, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -1042,6 +1047,10 @@ export function MessageRenderer({
     tailFollowerRef.current = null;
     initialAnchorDoneRef.current = false;
     reopeningAnchorRef.current = null;
+    if (reopeningFrameRef.current !== null) {
+      cancelAnimationFrame(reopeningFrameRef.current);
+      reopeningFrameRef.current = null;
+    }
     initialRevealGenerationRef.current += 1;
     initialRevealAnimationRef.current?.stop();
     initialRevealAnimationRef.current = null;
@@ -1400,7 +1409,7 @@ export function MessageRenderer({
   }, []);
 
   const scheduleHistoryAnchorRestore = useCallback((generation: number) => {
-    if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
+    if (!historyPositioningRef.current || !MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
     const transaction = historyPrependTransactionRef.current;
     if (
       !transaction
@@ -1424,7 +1433,8 @@ export function MessageRenderer({
     ) => {
       const currentTransaction = historyPrependTransactionRef.current;
       if (
-        !currentTransaction
+        !historyPositioningRef.current
+        || !currentTransaction
         || currentTransaction.generation !== generation
         || currentTransaction.userControlledAfterCommit
       ) return;
@@ -1534,7 +1544,7 @@ export function MessageRenderer({
   ]);
 
   const restoreHistoryAnchorOnce = useCallback((generation: number) => {
-    if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
+    if (!historyPositioningRef.current || !MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
     const transaction = historyPrependTransactionRef.current;
     if (
       !transaction
@@ -1558,7 +1568,7 @@ export function MessageRenderer({
   }, [getCurrentHistoryTopOffsetAdjustment, scrollToOffsetProgrammatically]);
 
   const scheduleHistoryPrependUserHandoffSettle = useCallback(() => {
-    if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
+    if (!historyPositioningRef.current || !MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
     const transaction = historyPrependTransactionRef.current;
     if (!transaction || !transaction.userHandoffPending) return;
     if (historyAnchorVerifyFrameRef.current !== null) return;
@@ -1569,7 +1579,8 @@ export function MessageRenderer({
       historyAnchorVerifyFrameRef.current = null;
       const currentTransaction = historyPrependTransactionRef.current;
       if (
-        !currentTransaction
+        !historyPositioningRef.current
+        || !currentTransaction
         || currentTransaction.generation !== generation
         || isDraggingRef.current
         || isMomentumScrollingRef.current
@@ -2168,7 +2179,7 @@ export function MessageRenderer({
   }, [getCurrentHistoryTopOffsetAdjustment, historyProgressKey, onLoadEarlier]);
 
   const flushQueuedLoadEarlier = useCallback(() => {
-    if (!queuedLoadEarlierRef.current) return;
+    if (!historyActiveRef.current || !historyPositioningRef.current || !queuedLoadEarlierRef.current) return;
     // Native MVCP can prepend while iOS is scrolling. Only the app-owned Android anchor
     // needs a quiet gesture boundary; delaying both platforms defeats near-start prefetch.
     if (MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR && (
@@ -2443,6 +2454,16 @@ export function MessageRenderer({
       setIsAwayFromBottom(!nearBottom);
       if (nearBottom) setHasNewMessages(false);
     }
+    // Native size anchoring can arrive after a retained history resizes and the
+    // tail verifier has already settled. That late scroll may be the last event:
+    // no subsequent layout/content-size callback will wake follow again. Use the
+    // same bounded controller, never an immediate scroll from onScroll. Its
+    // gesture/history guards and pending-seek ownership still take precedence.
+    if (nearBottomRef.current && !isDragSample && !isUserControllingScroll()
+      && metrics.contentHeight > 0 && metrics.viewportHeight > 0
+      && metrics.contentHeight - metrics.viewportHeight - metrics.offsetY > MOBILE_ANCHOR_VERIFY_TOLERANCE) {
+      runStickToLatestVerify();
+    }
     acknowledgeCompanionReadRef.current();
     // 拖动进近顶区时 onStartReached 边沿可能早已被消费(见 attemptAutoLoadEarlier 注释),
     // 滚动事件兜底重评估;前置短路让稳态滚动只付 1~2 次 ref 比较的成本。
@@ -2455,6 +2476,8 @@ export function MessageRenderer({
       if (anchor && !reopeningAnchorRef.current) readingPosition?.write({ anchor, atEnd: nearBottomRef.current });
     }
   }, [
+    isUserControllingScroll,
+    runStickToLatestVerify,
     captureCurrentHistoryAnchor,
     reopeningPosition,
     getCurrentHistoryTopOffsetAdjustment,
@@ -2472,6 +2495,7 @@ export function MessageRenderer({
   ]);
 
   const handleHistoryTouchStart = useCallback((event: GestureResponderEvent) => {
+    if (!historyPositioningRef.current) return;
     reopeningAnchorRef.current = null;
     // Android may omit momentum-end when a new finger stops a fling. The new touch owns the
     // ScrollView now, so the old momentum flag must not keep a queued history request suspended.
@@ -2533,6 +2557,7 @@ export function MessageRenderer({
   // 程序化 scrollToEnd 不会触发,故不会误置);同时记录拖动起点 offset,供
   // shouldUnpinMobileFollowOnDrag 判「相对起点累计上移」。
   const handleScrollBeginDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (!historyPositioningRef.current) return;
     richContent?.onScroll();
     reopeningAnchorRef.current = null;
     const nativeMetrics = {
@@ -2574,6 +2599,7 @@ export function MessageRenderer({
   ]);
 
   const handleMomentumScrollBegin = useCallback(() => {
+    if (!historyPositioningRef.current) return;
     isMomentumScrollingRef.current = true;
   }, []);
 
@@ -2594,10 +2620,33 @@ export function MessageRenderer({
   useEffect(() => {
     if (!historyPositioning) {
       tailFollowerRef.current?.reset();
+      // Detached native surfaces may never deliver touch/drag/momentum end.
+      // Release only transient gesture ownership; keep deliberate history intent.
+      isDraggingRef.current = false;
+      isMomentumScrollingRef.current = false;
+      dragStartOffsetYRef.current = null;
+      historyTouchStartYRef.current = null;
+      historyTouchTriggeredRef.current = false;
+      clearProgrammaticScroll();
+      if (historyAnchorVerifyFrameRef.current !== null) {
+        cancelAnimationFrame(historyAnchorVerifyFrameRef.current);
+        historyAnchorVerifyFrameRef.current = null;
+      }
       return;
     }
+    // Returning substitutes for a native gesture-end that never arrived. Keep
+    // the existing transaction owner and resume the same handoff/verification,
+    // including a page committed while hidden or a request queued before blur.
+    const transaction = historyPrependTransactionRef.current;
+    if (transaction?.userHandoffPending) scheduleHistoryPrependUserHandoffSettle();
+    else if (transaction?.pageCommitted && !transaction.anchorStable) {
+      transaction.verifyDeadlineAt = 0;
+      scheduleHistoryAnchorRestore(transaction.generation);
+    }
+    if (queuedLoadEarlierRef.current) scheduleQueuedLoadEarlierFlush();
     getTailFollower().reconcile();
-  }, [historyPositioning, getTailFollower]);
+  }, [historyPositioning, getTailFollower, clearProgrammaticScroll,
+    scheduleHistoryPrependUserHandoffSettle, scheduleHistoryAnchorRestore, scheduleQueuedLoadEarlierFlush]);
 
   const handleStartReached = useCallback(() => {
     attemptAutoLoadEarlier();
@@ -2677,6 +2726,7 @@ export function MessageRenderer({
   // 没有淡入阶段；持续 resize 或复杂 cell 占满 JS 也不能无限延长隐藏。
   useLayoutEffect(() => {
     if (initialAnchorDoneRef.current) return;
+    if (!historyPositioning) return;
     if (listData.length === 0) {
       initialRevealProgress.setValue(1);
       setListRevealed(true);
@@ -2738,6 +2788,7 @@ export function MessageRenderer({
       scrollToEndProgrammatically(false);
     }
   }, [
+    historyPositioning,
     reopeningPosition,
     reconcileReopeningAnchor,
     markProgrammaticScroll,
@@ -2779,6 +2830,7 @@ export function MessageRenderer({
   // 补滚被 readingOlderRef 挡住,即便被判近底(短会话)也必须在这里补,否则 topPadding
   // 变化两边都不处理、可见消息仍跳(review P1 L683)。
   useEffect(() => {
+    if (!historyPositioning) return;
     const prev = prevTopPaddingRef.current;
     prevTopPaddingRef.current = topPadding;
     const delta = topPadding - prev;
@@ -2792,7 +2844,7 @@ export function MessageRenderer({
     if (!initialAnchorDoneRef.current || nativeScrollEventSequenceRef.current === 0) return;
     const { offsetY } = scrollMetricsRef.current;
     scrollToOffsetProgrammatically(Math.max(0, offsetY + delta), false);
-  }, [reconcileReopeningAnchor, scrollToOffsetProgrammatically, topPadding]);
+  }, [historyPositioning, reconcileReopeningAnchor, scrollToOffsetProgrammatically, topPadding]);
 
   // 深链/搜索:滚到指定消息(LegendList scrollToIndex 自带 offscreen 处理,无需 rAF/失败兜底)。
   useEffect(() => {
@@ -2800,6 +2852,7 @@ export function MessageRenderer({
       lastAppliedFocusKeyRef.current = null;
       return;
     }
+    if (!historyPositioning) return;
     if (lastAppliedFocusKeyRef.current === focusRunKey) return;
     const index = listData.findIndex((item) => item.key === focusedItemKey);
     if (index < 0) return;
@@ -2820,6 +2873,7 @@ export function MessageRenderer({
       }
     }, () => { /* The existing bounded reveal fallback handles a failed native seek. */ });
   }, [
+    historyPositioning,
     focusRunKey,
     focusedItemKey,
     listData,
@@ -6186,6 +6240,10 @@ function MarkdownBodyBase({
     });
   }, [markdownParse]);
   const blocks = markdownParse.result.blocks;
+  const hasNestedLists = blocks.some(block => block.type === 'list_item' && (block.depth ?? 0) > 0);
+  // Paragraph layout needs UIKit on iOS. Expanded nested replies use bounded
+  // native runs instead of reintroducing the giant UITextView that blanked.
+  const paragraphUsesIosTextView = allowIosUITextView || hasNestedLists;
   const managedImagePreviewUrl = useCallback((url: string) => !publicMediaOnly && resolveMarkdownMedia
     ? mobileMarkdownManagedImagePreviewUrl(
       url, chatFilePathContext?.workdir, markdownImageCacheKey,
@@ -6277,9 +6335,9 @@ function MarkdownBodyBase({
   );
   const textRunGroupingOptions = useMemo(() => ({
     ...(Platform.OS === 'android' ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS : {}),
-    ...(boundTextRuns ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS : {}),
+    ...(boundTextRuns || hasNestedLists && !allowIosUITextView ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS : {}),
     imageRendersPreview,
-  }), [boundTextRuns, imageRendersPreview]);
+  }), [allowIosUITextView, boundTextRuns, hasNestedLists, imageRendersPreview]);
   // 连续纯文本块合并为 text_run，图片预览保持独立。
   // Android selectable Text 在超长原生文本视图里会偶发高度/滚动协商异常,长 run 分块
   // 后仍保留块内跨段选择。伙伴的 iOS 长消息展开也复用同一分块，避免巨型 UITextView。
@@ -6287,21 +6345,20 @@ function MarkdownBodyBase({
     () => groupMobileMarkdownSelectableBlocks(blocks, textRunGroupingOptions),
     [blocks, textRunGroupingOptions],
   );
-  // 块可选中且 iOS → 嵌套 span 必须是 UITextView 家族;其余场景缺省 RN Text。
-  const spanFor = useCallback((blockSelectable: boolean) =>
-      blockSelectable && allowIosUITextView && Platform.OS === 'ios'
+  // iOS 的可选或段落排版根使用 UITextView 家族，其余场景保持 RN Text。
+  const spanFor = useCallback((blockSelectable: boolean, paragraphLayout = false) =>
+      (blockSelectable || paragraphLayout) && (allowIosUITextView || paragraphLayout) && Platform.OS === 'ios'
       ? MarkdownSelectableSpan
       : undefined, [allowIosUITextView]);
   // 文本运行组:连续纯文本块(段落/标题/列表项)合进同一个原生文本视图,
   // 原生选择手柄即可横跨段落(单个 text view 是 iOS/Android 原生选择的天然边界)。
   // 段间距用「lineHeight = markdownBodyGap 的空行 span」还原:原生文本树内没有块级 gap 可用,
   // 一个高度恰为 gap 的空行在视觉上与原块间距一致。由单块切出的 continuation 不插间距。
-  // 列表项在树内表达为「marker 前缀 span + 正文」
-  // (无悬挂缩进;任务项以 ☑/☐ 字符替代原边框小方块)。
+  // 列表项保留同一原生文本树，通过段落缩进让自动换行仍留在当前层级。
   const renderTextRunBlock = useCallback((block: MobileMarkdownBlock, leadingGap: boolean): ReactNode => {
     if (block.type !== 'paragraph' && block.type !== 'heading' && block.type !== 'list_item') return null;
     const runSelectable = selectable === true;
-    const RunSpan = spanFor(runSelectable) ?? Text;
+    const RunSpan = spanFor(runSelectable, hasNestedLists) ?? Text;
     const spans: ReactNode[] = [];
     if (leadingGap) {
       spans.push(
@@ -6313,23 +6370,30 @@ function MarkdownBodyBase({
     const baseStyle: StyleProp<TextStyle> = block.type === 'heading'
       ? [styles.markdownHeading, headingSizeStyle(styles, block.level)]
       : styles.messageText;
+    const content: ReactNode[] = [];
     if (block.type === 'list_item' && !('textRunContinuation' in block && block.textRunContinuation)) {
-      const task = typeof block.checked === 'boolean';
-      spans.push(
+      content.push(
         <RunSpan key={`${block.key}:marker`} style={[styles.messageText, styles.markdownListMarkerInline]}>
-          {task ? block.checked ? '☑ ' : '☐ '
-              : block.ordered ? `${block.marker} ` : '• '}
+          {mobileMarkdownListMarkerText(block)}
         </RunSpan>,
       );
     }
-    spans.push(...renderInlines(block.inlines, spanFor(runSelectable), baseStyle, block.key));
+    content.push(...renderInlines(block.inlines, spanFor(runSelectable, hasNestedLists), baseStyle, block.key));
+    if (block.type === 'list_item' && (block.depth ?? 0) > 0) {
+      spans.push(<MarkdownListParagraph key={`${block.key}:paragraph`}
+        indent={(block.depth ?? 0) * typeScale.bodyLarge}
+        continuation={'textRunContinuation' in block && block.textRunContinuation === true}>
+        {content}
+      </MarkdownListParagraph>);
+    } else spans.push(...content);
     return spans;
-  }, [layout.markdownBodyGap, renderInlines, selectable, spanFor, styles]);
+  }, [hasNestedLists, layout.markdownBodyGap, renderInlines, selectable, spanFor, styles]);
   const renderTextRun = (group: Extract<MobileMarkdownBlockGroup, { type: 'text_run' }>): ReactNode => {
     const runSelectable = selectable === true;
     return (
       <MarkdownSelectableText
-        allowIosUITextView={allowIosUITextView}
+        allowIosUITextView={paragraphUsesIosTextView}
+        paragraphLayout={hasNestedLists}
         alignmentTextStyles={group.blocks.map((block) => block.type === 'heading'
           ? headingSizeStyle(styles, block.level)
           : styles.messageText)}
@@ -6353,7 +6417,7 @@ function MarkdownBodyBase({
     // Only text_run groups are bounded. Code, quotes and table cells retain
     // the stable RN Text fallback in expanded long companion messages.
     const singleBlockAllowsIosUITextView = allowIosUITextView && !boundTextRuns;
-    const singleBlockSpanFor = (blockSelectable: boolean) => singleBlockAllowsIosUITextView
+    const singleBlockSpanFor = (blockSelectable: boolean) => blockSelectable && singleBlockAllowsIosUITextView
       ? spanFor(blockSelectable)
       : undefined;
     if (block.type === 'mermaid') {
@@ -6432,7 +6496,7 @@ function MarkdownBodyBase({
           style={headingStyle}
           testID="message.markdownHeading"
         >
-          {renderInlines(block.inlines, singleBlockSpanFor(headingSelectable))}
+          {renderInlines(block.inlines, singleBlockSpanFor(headingSelectable), headingStyle)}
         </MarkdownSelectableText>
       );
     }
@@ -6454,7 +6518,7 @@ function MarkdownBodyBase({
       return (
         <View
           key={block.key}
-          style={[styles.markdownListRow, { gap: layout.markdownListGap }]}
+          style={[styles.markdownListRow, { gap: layout.markdownListGap, paddingLeft: (block.depth ?? 0) * typeScale.bodyLarge }]}
           testID={task ? 'message.markdownTaskItem' : undefined}
         >
           <Text style={[
@@ -6463,7 +6527,7 @@ function MarkdownBodyBase({
             task && styles.markdownTaskMarker,
           ]}>
             {task ? block.checked ? '✓' : ''
-                : block.ordered ? block.marker : '•'}
+                : mobileMarkdownListMarkerText(block).trim()}
           </Text>
           <MarkdownSelectableText
             allowIosUITextView={singleBlockAllowsIosUITextView}
@@ -6505,7 +6569,7 @@ function MarkdownBodyBase({
                       styles.markdownTableHeaderCell,
                     ]}
                   >
-                    {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)))}
+                    {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)), [styles.markdownTableCell, styles.markdownTableHeaderCell])}
                   </MarkdownSelectableText>
                 );
               })}
@@ -6522,7 +6586,7 @@ function MarkdownBodyBase({
                       selectable={inlinesSelectable(cell)}
                       style={[styles.markdownTableCell, { width: columnWidth }]}
                     >
-                      {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)))}
+                      {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)), styles.markdownTableCell)}
                     </MarkdownSelectableText>
                   );
                 })}
@@ -6769,6 +6833,9 @@ function renderInline(
           </SpanText>
         );
       }
+      const settingsTarget = parseSettingsNavigationUrl(inline.url);
+      if (settingsTarget) return <SettingsLinkSpan key={spanKey(`settings:${index}:${inline.url}`)} target={settingsTarget}
+        label={inline.text} SpanText={SpanText} style={clickableInlineStyle(styles, () => {}, ctx.baseStyle)} />;
       const session = parseSessionDeepLinkUrl(inline.url);
       if (session) {
         return (
@@ -6856,15 +6923,38 @@ function renderInline(
       );
     case 'strikethrough':
       return <StaticSpan maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`strike:${index}`)} style={[ctx.baseStyle, styles.markdownStrike]}>{inline.text}</StaticSpan>;
-    case 'math':
-      // inline 公式:原生 Text 流内嵌不了 KaTeX,用 Unicode 近似(上标 ²、
-      // 希腊字母、√ 等)保持文本流/选择/性能;复杂公式的精确渲染走 display
-      // 块的 WebView KaTeX。
+    case 'math': {
+      const mathSegments = tokenizeInlineMath(inline.text);
+      const baseFontSize = StyleSheet.flatten(ctx.baseStyle)?.fontSize ?? typeScale.bodyLarge;
+      const subFontSize =
+        baseFontSize <= typeScale.bodySmall
+          ? typeScale.micro
+          : baseFontSize <= typeScale.subtitle
+            ? typeScale.caption
+            : typeScale.footnote;
       return (
-        <StaticSpan maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`math:${index}`)} style={[ctx.baseStyle, styles.markdownMathInline]}>
-          {latexToUnicodeApproximation(inline.text)}
+        <StaticSpan maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`math:${index}`)} style={ctx.baseStyle}>
+          {mathSegments.map((segment, segIndex) => (
+            <StaticSpan
+              maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
+              key={spanKey(`math:${index}:${segIndex}`)}
+              style={[
+                ctx.baseStyle,
+                segment.kind === 'var'
+                  ? styles.markdownMathVar
+                  : segment.kind === 'sup'
+                    ? styles.markdownMathSup
+                    : segment.kind === 'sub'
+                      ? [segment.italic ? styles.markdownMathVar : styles.markdownMathText, { fontSize: subFontSize }]
+                      : styles.markdownMathText,
+              ]}
+            >
+              {segment.text}
+            </StaticSpan>
+          ))}
         </StaticSpan>
       );
+    }
     case 'image': {
       const managedPreview = ctx.renderManagedImage?.(inline);
       if (managedPreview) {
@@ -7736,6 +7826,7 @@ export function MessagePayloadModal({
     && isDirectPreviewableMediaUrl(payloadSummary.openTarget.value);
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
+  const previewChrome = usePreviewChromeFrame();
   const headerLayout = buildPayloadHeaderLayout({
     canCopy: canCopyPayload,
     canOpen: canOpenPayloadUrl,
@@ -7854,7 +7945,7 @@ export function MessagePayloadModal({
         <View style={[
             styles.payloadModal,
             {
-              paddingTop: safeAreaInsets.top + 64,
+              paddingTop: previewChrome.documentContentTop,
               paddingBottom: safeAreaInsets.bottom,
             },
           ]} testID="message.payloadModal">
@@ -7919,7 +8010,7 @@ export function MessagePayloadModal({
             // Landscape side insets hold the notch or a vertical system bar (Duo).
             paddingLeft: safeAreaInsets.left,
             paddingRight: safeAreaInsets.right,
-            paddingTop: safeAreaInsets.top + 64,
+            paddingTop: previewChrome.documentContentTop,
             },
         ]}
         testID="message.payloadModal"
@@ -9502,9 +9593,20 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // 对齐桌面聊天 markdown:<strong> 走浏览器默认 700,与 400 正文拉开明显对比。
   markdownStrong: { fontWeight: fontWeight.bold },
   markdownEmphasis: { fontStyle: 'italic' },
-  // inline 公式:Unicode 近似文本以斜体呈现(数学正文的传统排版形态),
-  // 与普通强调的区别只在语义,视觉上沿用 italic 已足够。
-  markdownMathInline: { fontStyle: 'italic' },
+  // inline 公式:按数学排版规则区分变量斜体与符号/数字/函数正体,衬线体对齐 KaTeX
+  // 气质,上标改走西文字体避免中文字体把 ¹²³ 放大成全角尺寸,下标走缩小字号统一基线。
+  markdownMathVar: {
+    fontFamily: Platform.select({ ios: 'Times New Roman', android: 'serif', default: 'serif' }),
+    fontStyle: 'italic',
+  },
+  markdownMathText: {
+    fontFamily: Platform.select({ ios: 'Times New Roman', android: 'serif', default: 'serif' }),
+    fontStyle: 'normal',
+  },
+  markdownMathSup: {
+    fontFamily: Platform.select({ ios: 'Helvetica Neue', android: 'sans-serif', default: undefined }),
+    fontStyle: 'normal',
+  },
   markdownStrike: { textDecorationLine: 'line-through' },
   markdownUnderlineStrike: { textDecorationLine: 'underline line-through' },
   // 行内 code:零底色 + 等宽字体 + 文字压暗(参照 Codex 客户端)。

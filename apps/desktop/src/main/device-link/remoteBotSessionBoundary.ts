@@ -219,6 +219,15 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
     // Rechecked on normal, cached and queued delivery by the existing dispatch path.
     const row = record(value);
     if (!row || row.ok !== true) return value;
+    if (Array.isArray(row.teammates)) {
+      await assertHistoryReferences(row.teammates.map(item => record(item)?.id), 'bot');
+      return value;
+    }
+    if (Array.isArray(row.relationships)) {
+      await assertHistoryReferences([row.teammateId], 'bot');
+      await assertHistoryReferences(row.relationships.map(item => record(item)?.sessionId), 'session');
+      return value;
+    }
     const listing = Array.isArray(row.sessions);
     if (!listing && !Array.isArray(row.hits)) throw new Error('[INVALID_PARAMS] Invalid history result');
     const entries = (listing ? row.sessions : row.hits) as unknown[];
@@ -313,6 +322,19 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
   const projected = await project(value);
   if (projected === null && channel.endsWith(':get')) throw new Error('[NOT_FOUND] Resource does not exist');
   return projected;
+}
+
+/** New history shapes keep the existing source-owned access rules on every delivery. */
+async function assertHistoryReferences(ids: unknown[], kind: 'session' | 'bot'): Promise<void> {
+  if (!lookup) throw new Error('[HOST_NOT_READY] History visibility is not ready');
+  if (ids.length > 1000 || ids.some(id => typeof id !== 'string' || !id || id.length > 512))
+    throw new Error('[INVALID_PARAMS] Invalid history result');
+  const unique = [...new Set(ids as string[])];
+  const access = batchLookup ? await batchLookup(unique, kind)
+    : new Map(await Promise.all(unique.map(async id => [id, await lookup!(id, kind)] as const)));
+  if (unique.some(id => kind === 'bot' ? access.get(id) !== 'visible'
+    : !['ordinary', 'visible', 'background'].includes(access.get(id) ?? 'hidden')))
+    throw new Error('[NOT_FOUND] History page is no longer available');
 }
 
 /**

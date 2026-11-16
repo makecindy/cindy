@@ -82,12 +82,19 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     return () => listeners.delete(cb);
   },
   send: (payload: unknown): Promise<unknown> => ports.send(payload),
+  host: {
+    call: (server: string, tool: string, args: Record<string, unknown> = {}): Promise<unknown> =>
+      ports.send({ type: 'host-tool-request', server, tool, args }),
+  },
   recommendations: (items: unknown[]): Promise<unknown> =>
     ports.send({ type: 'recommendations-update', items }),
   request: (req: Record<string, unknown>): Promise<unknown> =>
     ports.send({ ...req, type: 'host-request' }),
   fetch: (req: Record<string, unknown>): Promise<unknown> =>
     ports.send({ ...req, type: 'fetch-request' }),
+  network: Object.fromEntries(['open', 'read', 'send', 'close'].map(op => [op,
+    (req: Record<string, unknown>): Promise<unknown> => ports.send({ ...req, type: 'network-request', op }),
+  ])),
   downloads: {
     start: (req: Record<string, unknown>): Promise<unknown> => ports.send({ ...req, type: 'download-request', kind: 'start' }),
     cancel: (req: Record<string, unknown>): Promise<unknown> => ports.send({ ...req, type: 'download-request', kind: 'cancel' }),

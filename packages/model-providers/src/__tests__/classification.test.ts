@@ -145,7 +145,7 @@ describe('categorize', () => {
 
   it('大小写混用的 id(自定义 OAuth 极简发现常见,如 Qwen/Qwen3-Embedding-8B)兜底判定不区分大小写(2026-07 review 第 20 轮)', () => {
     expect(categorize('Qwen/Qwen3-Embedding-8B')).toBe('embedding');
-    expect(categorize('Qwen/Qwen3-Reranker-8B')).toBe('other');
+    expect(categorize('Qwen/Qwen3-Reranker-8B')).toBe('rerank');
     expect(categorize('DALL-E-3')).toBe('image');
     expect(isChatEligible({ id: 'Qwen/Qwen3-Embedding-8B' })).toBe(false);
     expect(isChatEligible({ id: 'Qwen/Qwen3-Reranker-8B' })).toBe(false);
@@ -213,8 +213,8 @@ describe('categorize', () => {
     expect(categorize('gpt-3.5-turbo-instruct')).toBe('other');
     expect(categorize('text-davinci-003')).toBe('other');
     expect(categorize('code-davinci-002')).toBe('other');
-    expect(categorize('rerank-v3.5')).toBe('other');
-    expect(categorize('rerank-english-v3.0')).toBe('other');
+    expect(categorize('rerank-v3.5')).toBe('rerank');
+    expect(categorize('rerank-english-v3.0')).toBe('rerank');
     expect(isChatEligible({ id: 'babbage-002' })).toBe(false);
     expect(isChatEligible({ id: 'davinci-002' })).toBe(false);
     expect(isChatEligible({ id: 'rerank-v3.5' })).toBe(false);
@@ -299,7 +299,7 @@ describe('categorize', () => {
     expect(categorize('qwen-tts')).toBe('tts');
     expect(categorize('qwen3-asr-flash-realtime')).toBe('stt');
     expect(categorize('Qwen/Qwen3-Embedding-8B')).toBe('embedding');
-    expect(categorize('Qwen/Qwen3-Reranker-8B')).toBe('other');
+    expect(categorize('Qwen/Qwen3-Reranker-8B')).toBe('rerank');
     expect(isChatEligible({ id: 'qwen-tts' })).toBe(false);
   });
 });
@@ -322,7 +322,7 @@ describe('classifyModel — mode 权威,缺省时回退 groupOf(issue #882)', ()
     { id: 'typesafe/jev', mode: 'evaluation', category: 'decision' },
     { id: 'edit-model', mode: 'image_edit', category: 'image' },
     { id: 'ocr-model', mode: 'ocr', category: 'other' },
-    { id: 'rerank-model', mode: 'rerank', category: 'other' },
+    { id: 'rerank-model', mode: 'rerank', category: 'rerank' },
     { id: 'gemini-3.1-flash-image', mode: 'image_generation', category: 'image' },
     { id: 'gemini-3-pro-image', mode: 'image_generation', category: 'image' },
     { id: 'gpt-image-1.5', mode: 'image_generation', category: 'image' },
@@ -605,7 +605,7 @@ describe('formatContextWindow(下沉自 ModelSelector,输出逐字一致)', () =
 // Unit contract: evaluation is a Decisions endpoint, never an Agent chat model.
 // Existing cases did not cover evaluation or the newly recognized decision group without mode.
 it('keeps decision after embedding and outside all chat selection paths', () => {
-  expect(CATEGORY_ORDER.slice(CATEGORY_ORDER.indexOf('embedding'), CATEGORY_ORDER.indexOf('compression') + 1)).toEqual(['embedding', 'decision', 'compression']);
+  expect(CATEGORY_ORDER.slice(CATEGORY_ORDER.indexOf('embedding'), CATEGORY_ORDER.indexOf('compression') + 1)).toEqual(['embedding', 'decision', 'rerank', 'compression']);
   expect(CHAT_VENDOR_CATEGORY_ORDER).not.toContain('decision');
   for (const value of [{ id: 'typesafe/jev', mode: 'evaluation' }, { id: 'typesafe/jev', group: 'decision' }]) {
     expect(isChatEligible(value)).toBe(false);

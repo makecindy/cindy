@@ -12,6 +12,7 @@ import {
   PrStatusService,
   filterPrStatusQueriesForRefs,
   mapRemoteToStatus,
+  withoutPrMetadata,
   type PrRemoteState,
 } from '../git-context/prStatusService';
 import type { GhCliTokenReadResult } from '../git-context/ghCliTokenSource';
@@ -256,6 +257,22 @@ describe('PrStatusService', () => {
     });
     const [r] = await svc.getStatuses([Q]);
     expect(r).toMatchObject({ ok: true, status: 'merged', prNumber: 85 });
+  });
+
+  // Protocol (git-context:pr-status / mr-status answer): status chips never read `metadata`
+  // (PR body, author/reviewer objects). Logs showed ~11 KB per answer over device-link, the
+  // second-largest result stream. The channel answer drops it; the service result keeps it for
+  // the main-process GitHub read tools (get_pr_changes).
+  it('keeps metadata for GitHub read tools but drops it from status channel answers', async () => {
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK,
+      fetchPr: async () => remote({ metadata: { body: 'x'.repeat(8_000), author: { login: 'a' } } }),
+    });
+    const [full] = await svc.getStatuses([Q]);
+    expect(full).toMatchObject({ ok: true, metadata: { author: { login: 'a' } } });
+    const answer = withoutPrMetadata(full);
+    expect(answer).not.toHaveProperty('metadata');
+    expect(answer).toMatchObject({ ok: true, status: 'open', prNumber: 85, title: full.ok ? full.title : '' });
   });
 
   it('PR 源分支(head.ref)透传到结果', async () => {

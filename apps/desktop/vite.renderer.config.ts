@@ -311,16 +311,10 @@ function requestedTargetPlatform(): string {
 }
 
 function omitDockPreviewAssetsPlugin(): Plugin {
-  const files = new Set(
-    [
-      'icon-dock.png',
-      'app-icons/cat.png',
-      'app-icons/mark-dark.png',
-      'app-icons/mark-light.png',
-      'app-icons/wordmark-dark.png',
-      'app-icons/wordmark-light.png',
-    ].map((file) => path.resolve(__dirname, 'resources', file).replace(/\\/g, '/')),
-  );
+  const resource = (file: string) => path.resolve(__dirname, 'resources', file).replace(/\\/g, '/');
+  const builtInIcon = resource('icon-dock.png');
+  // Every generated Dock rendition; the set of files follows the shared icon list.
+  const artworkDir = `${resource('app-icons')}/`;
 
   return {
     name: 'cindy-omit-dock-preview-assets',
@@ -328,7 +322,10 @@ function omitDockPreviewAssetsPlugin(): Plugin {
     // Run before Vite's asset loader so runtime-hidden Dock controls cannot
     // emit macOS-only PNGs into Windows/Linux renderer builds.
     load(id) {
-      if (files.has(id.split('?')[0].replace(/\\/g, '/'))) return 'export default "";';
+      const file = id.split('?')[0].replace(/\\/g, '/');
+      if (file === builtInIcon || (file.startsWith(artworkDir) && file.endsWith('.png'))) {
+        return 'export default "";';
+      }
       return null;
     },
   };

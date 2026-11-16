@@ -250,6 +250,16 @@ if (childMode) {
   // 的认知读参数;不暴露 spawnEntry(树深恒为 1,子进程不能再生孙进程)。
   process.argv = [process.argv[0], entryPath, ...childArgs];
 } else {
+  Object.defineProperty(globalThis, 'cindy', {
+    configurable: false, enumerable: false, writable: false,
+    value: Object.freeze({ host: Object.freeze({ call: (server: string, tool: string, args: Record<string, unknown> = {}) =>
+      hostServices.hostCall(server, tool, args) }),
+      fetch: (request: Record<string, unknown>) => hostServices.network({ ...request, op: 'fetch' }),
+      network: Object.freeze(Object.fromEntries(['open', 'read', 'send', 'close'].map(op => [op,
+        (request: Record<string, unknown>) => hostServices.network({ ...request, op }),
+      ]))),
+    }),
+  });
   // 普通模式 argv 保持旧形状([electron, 引导层, entryPath]),存量插件零变化。
   Object.defineProperty(globalThis, '__CINDY_NODE__', {
     configurable: false,

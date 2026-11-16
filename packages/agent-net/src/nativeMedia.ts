@@ -4,6 +4,8 @@ import type { NativeEnginePort } from './nativeTransport.js';
 
 export interface NativeMediaApi {
   request<T>(method: string, resource: string, input?: unknown, options?: { signal?: AbortSignal }): Promise<T>;
+  /** Starts an upload, offering direct transfer to the relay's storage when the client supports it. */
+  createMedia?(recipient: string, size: number, signal?: AbortSignal): Promise<{ id: string; chunkBytes: number }>;
   putMediaChunk(id: string, offset: number, bytes: Uint8Array, signal?: AbortSignal): Promise<{ received: number; complete: boolean }>;
   /** Keep cancellation and the range deadline through the consumer's body read. */
   withMediaResponse<T>(id: string, range: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T>;
@@ -32,9 +34,8 @@ export async function uploadNativeMedia(api: NativeMediaApi, engine: NativeEngin
     check(options, engine);
     if (!sessionValid(session, size)) throw new Error('INVALID_MEDIA_SESSION');
     if (options.binding !== undefined && session.binding !== options.binding) throw new Error('AGENT_NET_NATIVE_UPDATE_REQUIRED');
-    const created = await api.request<{ id: string; chunkBytes: number }>('POST', '/media', {
-      recipient, size: session.encryptedSize, chunkFormat: 'binary-v1',
-    }, { signal: options.signal });
+    const created = api.createMedia ? await api.createMedia(recipient, session.encryptedSize, options.signal)
+      : await api.request<{ id: string; chunkBytes: number }>('POST', '/media', { recipient, size: session.encryptedSize, chunkFormat: 'binary-v1' }, { signal: options.signal });
     id = created.id; check(options, engine);
     if (!/^[a-f0-9-]{36}$/.test(id) || !Number.isSafeInteger(created.chunkBytes) || created.chunkBytes < BLOCK + 16
       || created.chunkBytes > MAX_MEDIA_BINARY_CHUNK_BYTES) throw new Error('MEDIA_STREAM_UNSUPPORTED');

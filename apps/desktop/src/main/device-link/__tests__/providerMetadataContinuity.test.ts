@@ -372,6 +372,26 @@ describe('Main provider metadata continuity', () => {
    } finally { off(); }
  });
 
+  // Field logs (2026-11): an older target refusing one read as unsupported fenced the
+  // target's other in-flight catalog reads, which all failed with "Metadata scope changed".
+  it.each([
+    ['envelope', { ok: false as const, error: { code: 'CHANNEL_NOT_ALLOWED' as const, message: "channel 'maker:agent:status' not allowed remotely" } }],
+    ['ipc', { ok: false as const, error: { code: 'IPC_ERROR' as const, message: '[INVALID_PARAMS] Invalid account command' } }],
+  ])('does not fence sibling reads when the target refuses one read as unsupported (%s)', async (_form, refusal) => {
+    const denied = vi.fn(); const off = onProviderMetadataDenied(denied);
+    try {
+      await read('M', 'maker:provider:list', [], catalog);
+      let resolveSibling!: (value: InvokeResultPayload) => void;
+      const sibling = read('M', 'maker:provider:list', [], () => new Promise<InvokeResultPayload>(resolve => { resolveSibling = resolve; }));
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(read('M', 'maker:agent:status', [], async () => refusal)).resolves.toBe(refusal);
+      resolveSibling({ ok: true, result: { providers: [{ id: 'fresh' }], providerContinuity: { stale: false, remainingMs: 30 * 60_000 } } });
+      await expect(sibling).resolves.toMatchObject({ ok: true, result: { providers: [{ id: 'fresh' }] } });
+      expect(denied).not.toHaveBeenCalled();
+      expect(captureProviderMetadataContinuityScope('M')()).toBe(true);
+    } finally { off(); }
+  });
+
   it('fences siblings after a non-temporary live-read failure', async () => {
     await fillCapacity();
     const denied = vi.fn(); const off = onProviderMetadataDenied(denied);

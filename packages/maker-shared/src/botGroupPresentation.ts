@@ -126,6 +126,41 @@ export function mergeBotGroupMessages(
   return [...bySequence.values()].sort((a, b) => a.sequence - b.sequence);
 }
 
+/** Insert live executions by their original timestamp without reordering persisted messages.
+ * Without a timestamp, use the exact source row when available; older hosts without either precede history.
+ * Never use update/observation time: incremental updates must keep an execution in place.
+ */
+export function interleaveBotGroupWork<M extends { createdAt: number; id?: string; serverMessageId?: string; process?: { executionId: string } }, W extends { startedAt?: number; timelineAt?: number; sourceMessageId?: string; executionId?: string }>(
+  messages: readonly M[], work: readonly W[],
+): Array<{ kind: 'message'; value: M; index: number } | { kind: 'work'; value: W }> {
+  const source = (item: W) => item.sourceMessageId ? messages.find(message =>
+    message.id === item.sourceMessageId || message.serverMessageId === item.sourceMessageId) : undefined;
+  const timestamp = (item: W) => Number.isFinite(item.timelineAt) ? item.timelineAt!
+    : source(item)?.createdAt ?? (Number.isFinite(item.startedAt) ? item.startedAt! : 0);
+  const completed = new Set(messages.flatMap(message => message.process ? [message.process.executionId] : []));
+  const anchored = new Map<M, W[]>();
+  const pending = work.filter(item => !item.executionId || !completed.has(item.executionId))
+    .sort((a, b) => timestamp(a) - timestamp(b)).filter(item => {
+      const request = !Number.isFinite(item.timelineAt) ? source(item) : undefined;
+      if (!request) return true;
+      const list = anchored.get(request) ?? [];
+      list.push(item); anchored.set(request, list);
+      return false;
+    });
+  const result: Array<{ kind: 'message'; value: M; index: number } | { kind: 'work'; value: W }> = [];
+  let index = 0;
+  for (const [messageIndex, message] of messages.entries()) {
+    // Projected failures stay beside their source; their update time is not a history anchor.
+    while (!message.id?.startsWith('execution-failure:') && index < pending.length && timestamp(pending[index]!) < message.createdAt) {
+      result.push({ kind: 'work', value: pending[index++]! });
+    }
+    result.push({ kind: 'message', value: message, index: messageIndex });
+    for (const item of anchored.get(message) ?? []) result.push({ kind: 'work', value: item });
+  }
+  for (; index < pending.length; index++) result.push({ kind: 'work', value: pending[index]! });
+  return result;
+}
+
 /** Bound each HTTP reconciliation request to 100 displayed sources, without truncating loaded history. */
 export function botGroupExecutionFailureBatches(sourceIds: readonly string[]): string[][] {
   const unique = [...new Set(sourceIds)];

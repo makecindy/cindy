@@ -4101,7 +4101,7 @@ export function buildSilentRunInstruction(teammate = false): string {
   }
   return [
     '\n\n---\n[Silent scheduled run]',
-    'Successful checks without changes stay quiet. Do not announce checks or routine progress. If there is a new actionable result, a check failure, or this is an explicit reminder/scheduled delivery, call cindy_scheduler call_tool({ name: "schedule_notify_current_run", args: {} }), then write the concise final report. Only that final report is published.',
+    'Successful runs do not notify by default. Do not announce routine progress. If this run needs user attention as the task instructions define it, call cindy_scheduler call_tool({ name: "schedule_notify_current_run", args: {} }), then write the concise final report. Only that final report is published.',
   ].join('');
 }
 

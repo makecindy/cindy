@@ -8,7 +8,7 @@ import type { XdtHelperHistoryDeps } from "./_history_types.js";
 import { resolveHistoryScope } from "./_history_scope.js";
 import { errorPayload, okPayload } from "./_payload.js";
 
-export type HistoryQueryTool = "list_sessions" | "search_chat_history";
+export type HistoryQueryTool = "list_sessions" | "search_chat_history" | "list_teammates";
 export interface HistoryDevice {
   deviceId: string;
   deviceName: string;
@@ -59,6 +59,9 @@ export function qualifyHistoryPayload(
 ): Record<string, unknown> {
   if (value.ok !== true) return value;
   const qualify = (id: string) => `${deviceId}::${id}`;
+  if (Array.isArray(value.relationships)) return { ...value, relationships: value.relationships.map((link: Record<string, unknown>) => ({
+    ...link, sessionId: qualify(String(link.sessionId)),
+  })) };
   if (Array.isArray(value.sessions)) {
     return {
       ...value,

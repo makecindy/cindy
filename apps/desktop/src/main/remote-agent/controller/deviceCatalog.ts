@@ -10,6 +10,8 @@
 import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2, readProviderMetadataContinuity, scrubSharedProvider } from '@cindy/device-link';
 import { effectiveSourceIdForModel, getModel, isModelSelectableForNewRoute, isModelVisible, remoteInvocationModels, type ProviderView, type AgentKind } from '@cindy/model-providers';
 
+import { remoteProviderDisableKey, isProviderDisabled } from '@cindy/model-providers';
+import { readModelDisableOverrides } from '../../maker-host/model-disable-store.js';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
 
 type RemoteInvoke = (
@@ -85,7 +87,11 @@ export async function readDeviceProviderCatalog(
   const stale = continuity?.stale === true;
   const remainingMs = continuity?.remainingMs;
   const offered = parseDeviceProviderViews(result.result).filter((view) => view.remoteInvocationEnabled === true).map(remoteInvocationModels);
-  const providers = isProviderShareAgentDeviceId(deviceId) && !options.groupMember ? offered.map(scrubSharedProvider) : offered;
+  const access = isProviderShareAgentDeviceId(deviceId) ? undefined : readModelDisableOverrides();
+  const providers = isProviderShareAgentDeviceId(deviceId) && !options.groupMember
+    ? offered.map(scrubSharedProvider)
+    : offered.map(provider => isProviderDisabled(access, remoteProviderDisableKey(deviceId, provider.id))
+      ? { ...provider, suspended: true } : provider);
   if (!options.visibleOnly) return { views: providers, stale, ...(remainingMs !== undefined ? { remainingMs } : {}) };
   const visibility = isRecord(result.result) && isRecord(result.result.modelVisibilityOverrides)
     ? result.result.modelVisibilityOverrides : {};
