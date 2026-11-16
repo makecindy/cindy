@@ -203,7 +203,7 @@ async function submit(options: {
   const detectCwd = vi.fn(async () => {
     if (options.detectFailure) throw new Error('fixture probe failed');
     return { gitInstalled: true, isGitRepo: true, isInsideWorktree: false,
-      repoRoot: baseRepo, currentBranch: options.currentBranch === undefined ? 'main' : options.currentBranch };
+      repoRoot: baseRepo, currentBranch: options.currentBranch === null ? undefined : options.currentBranch ?? 'main' };
   });
   let worktreeSkills = options.worktreeSkills;
   const listAgentSkills = vi.fn(async (_agent, params) => ({ success: true,
@@ -401,6 +401,20 @@ async function submit(options: {
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
+  // PR #10696 / unit: real detached and unborn probes both omit currentBranch.
+  // They share this transport shape; exercise Send/Goal on local and linked devices.
+  it.each(['send', 'goal'] as const)('allows unnamed branches for %s locally and remotely', async entry => {
+    for (const deviceId of [undefined, 'task-computer']) {
+      const result = await submit({ entry, deviceId, currentBranch: null, displayedBranch: 'HEAD',
+        providers: [provider(providerId, ['medium'])], worktree: { enabled: false, sourceBranch: '' } });
+      expect(result.errors).toEqual([]);
+      expect(result.toastError).not.toHaveBeenCalled();
+      expect(result.detectCwd).toHaveBeenCalledOnce();
+      if (!deviceId) expect(result.createSession).toHaveBeenCalledOnce();
+      else expect(result.invokeRemote.mock.calls.some(([, channel]) => channel === 'maker:create-session')).toBe(true);
+    }
+  });
+
   // #10518 / unit: execute Send/Goal end to end. An external checkout can stale
   // the OFF label; stop handoff and refresh it, independently of source memory.
   it.each([
@@ -440,7 +454,10 @@ describe('homepage submission to Main admission and first-message handoff', () =
     const result = await submit({ entry, ...probe, worktree: { enabled: false, sourceBranch: 'main' } });
     expect(result.createSession).not.toHaveBeenCalled();
     expect(result.clearDraft).not.toHaveBeenCalled();
-    if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('ccAgent.draft.branchCheckFailed');
+    if (entry === 'send') {
+      expect(result.toastError).toHaveBeenCalledWith('ccAgent.draft.branchChanged');
+      expect(result.refreshDisplayedBranch).toHaveBeenCalledOnce();
+    }
     else expect(String(result.errors[0])).toContain('ccAgent.draft.branchCheckFailed');
   });
   it.each(['send', 'goal'] as const)('waits for the new project branch preference before %s', async entry => {

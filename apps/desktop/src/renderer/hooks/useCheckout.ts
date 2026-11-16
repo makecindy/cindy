@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -58,6 +58,11 @@ export function useCheckout(
   stateRef.current = state;
   const active = useRef(false);
   const mounted = useRef(true);
+  const scope = useMemo(() => ({ active: true }), [key]);
+  const isCurrent = useCallback(
+    () => scope.active && mounted.current && currentKey.current === key,
+    [key, scope],
+  );
   const actions = useRef<{
     undo?: (id: string) => Promise<void>;
     restore?: (id: string) => Promise<void>;
@@ -74,8 +79,10 @@ export function useCheckout(
   }, []);
   useEffect(() => {
     mounted.current = true;
+    scope.active = true;
     return () => {
       mounted.current = false;
+      scope.active = false;
       if (undoToast.current) toast.dismiss(undoToast.current);
       if (savedToast.current.id) toast.dismiss(savedToast.current.id);
       dismissError();
@@ -83,7 +90,7 @@ export function useCheckout(
       savedToast.current = { identity: '' };
       notices.current = {};
     };
-  }, [key, dismissError]);
+  }, [key, dismissError, scope]);
   const serial = useRef(0);
   const invoke = useCallback(
     async (req: CheckoutRequest): Promise<CheckoutReply> =>
@@ -96,32 +103,26 @@ export function useCheckout(
   );
   const update = useCallback(
     (patch: Partial<typeof state>) => {
-      if (currentKey.current === key)
-        setState((old) => ({ ...(old.key === key ? old : { key }), ...patch }));
+      if (isCurrent()) setState((old) => ({ ...(old.key === key ? old : { key }), ...patch }));
     },
-    [key],
+    [key, isCurrent],
   );
   const reportError = useCallback(
     (code: string, status?: CheckoutStatus, branch?: string) => {
-      if (!mounted.current || currentKey.current !== key) return;
+      if (!isCurrent()) return;
       update({ error: code });
       dismissError();
       errorToast.current = toast.error(formatCheckoutError(t, code, status, branch));
     },
-    [key, t, update, dismissError],
+    [key, t, update, dismissError, isCurrent],
   );
   const refresh = useCallback(
     async (branch?: string) => {
-      if (!repo || !supported || active.current) return;
+      if (!isCurrent() || !repo || !supported || active.current) return;
       const request = ++serial.current;
       try {
         const reply = await invoke({ action: 'status', baseRepo: repo, branch });
-        if (
-          'status' in reply &&
-          mounted.current &&
-          currentKey.current === key &&
-          request === serial.current
-        ) {
+        if ('status' in reply && isCurrent() && request === serial.current) {
           update({ status: reply.status, error: undefined });
           return reply.status;
         }
@@ -132,7 +133,7 @@ export function useCheckout(
         }
       }
     },
-    [repo, supported, invoke, key, update, reportError],
+    [repo, supported, invoke, key, update, reportError, isCurrent],
   );
   useEffect(() => {
     void refresh();
@@ -229,7 +230,7 @@ export function useCheckout(
   }, [observeSessionActivity, repo, supported, key, deviceId, sessionIds, state.busy, refresh]);
   const mutate = useCallback(
     async (req: CheckoutRequest) => {
-      if (active.current) return;
+      if (!isCurrent() || active.current) return;
       dismissError();
       active.current = true;
       onBusyChange?.(true);
@@ -239,7 +240,7 @@ export function useCheckout(
         let reply: CheckoutReply | undefined;
         try {
           reply = await invoke(req);
-          while ('pending' in reply && currentKey.current === key)
+          while ('pending' in reply && isCurrent())
             reply = await invoke({
               action: 'result',
               baseRepo: repo!,
@@ -247,7 +248,7 @@ export function useCheckout(
             });
         } catch (error) {
           // The write may already be committed. Recover its receipt, never replay it.
-          for (let attempt = 0; attempt < 2 && currentKey.current === key; attempt++) {
+          for (let attempt = 0; attempt < 2 && isCurrent(); attempt++) {
             if (!('operationId' in req)) break;
             try {
               const recovered = await invoke({
@@ -265,7 +266,7 @@ export function useCheckout(
           }
           if (!reply || 'pending' in reply) throw error;
         }
-        if ('pending' in reply || currentKey.current !== key || !mounted.current) return;
+        if ('pending' in reply || !isCurrent()) return;
         let error: string | undefined = reply.blocked;
         if (reply.blocked === 'changed') {
           if (req.action === 'restore') {
@@ -292,7 +293,7 @@ export function useCheckout(
       } catch {
         reportError('git');
         // A lost reply is not permission to repeat checkout. Only re-read facts.
-        if (currentKey.current === key) {
+        if (isCurrent()) {
           try {
             const fresh = await invoke({ action: 'status', baseRepo: repo! });
             if ('status' in fresh) update({ status: fresh.status });
@@ -306,7 +307,7 @@ export function useCheckout(
         update({ busy: false });
       }
     },
-    [invoke, key, repo, update, onBusyChange, reportError, dismissError],
+    [invoke, key, repo, update, onBusyChange, reportError, dismissError, isCurrent],
   );
   const performSwitch = useCallback(
     async (branch: string, status: CheckoutStatus, strategy: 'carry' | 'stash') => {
@@ -359,7 +360,7 @@ export function useCheckout(
         const action: ToastAction = {
           label: t('newChat.checkout.undo'),
           onClick: () => {
-            if (!mounted.current || currentKey.current !== key) {
+            if (!isCurrent()) {
               toast.dismiss(id);
               return;
             }
@@ -371,19 +372,19 @@ export function useCheckout(
         notices.current.undo = { id, message, action };
       }
     },
-    [repo, mutate, update, key, t],
+    [repo, mutate, update, key, t, isCurrent],
   );
   const picking = useRef(false);
   const pick = useCallback(
     async (branch: string) => {
-      if (picking.current || active.current) return;
+      if (!isCurrent() || picking.current || active.current) return;
       dismissError();
       picking.current = true;
       onBusyChange?.(true);
       update({ busy: true });
       try {
         const status = await refresh(branch);
-        if (!status || currentKey.current !== key) return;
+        if (!status || !isCurrent()) return;
         if (status.blocked) {
           reportError(status.blocked, status, branch);
           return;
@@ -396,11 +397,11 @@ export function useCheckout(
         update({ busy: false });
       }
     },
-    [refresh, key, update, performSwitch, onBusyChange, reportError, dismissError],
+    [refresh, key, update, performSwitch, onBusyChange, reportError, dismissError, isCurrent],
   );
   const undo = useCallback(
     async (expectedReceiptId?: string) => {
-      if (active.current || picking.current) return;
+      if (!isCurrent() || active.current || picking.current) return;
       dismissError();
       const matches = () =>
         stateRef.current.key === key &&
@@ -432,11 +433,11 @@ export function useCheckout(
         if (!reply.blocked) toast.success(t('newChat.checkout.undone'));
       }
     },
-    [repo, key, mutate, update, t, refresh, reportError, dismissError],
+    [repo, key, mutate, update, t, refresh, reportError, dismissError, isCurrent],
   );
   const restore = useCallback(
     async (stashId: string) => {
-      if (active.current || picking.current) return;
+      if (!isCurrent() || active.current || picking.current) return;
       dismissError();
       let status = stateRef.current.key === key ? stateRef.current.status : undefined;
       if (!repo) {
@@ -460,7 +461,7 @@ export function useCheckout(
       });
       if (reply && !reply.blocked) toast.success(t('newChat.checkout.restored'));
     },
-    [repo, key, mutate, t, refresh, reportError, dismissError],
+    [repo, key, mutate, t, refresh, reportError, dismissError, isCurrent],
   );
   actions.current = { undo, restore };
   const status = state.key === key ? state.status : undefined;
@@ -476,7 +477,7 @@ export function useCheckout(
       const action: ToastAction = {
         label: t('newChat.checkout.restore'),
         onClick: () => {
-          if (!mounted.current || currentKey.current !== key) {
+          if (!isCurrent()) {
             toast.dismiss(id);
             return;
           }
@@ -487,7 +488,7 @@ export function useCheckout(
       savedToast.current.id = id;
       notices.current.saved = { id, message, action };
     }
-  }, [key, status, t]);
+  }, [key, status, t, isCurrent]);
   useEffect(() => {
     for (const notice of Object.values(notices.current)) {
       const disabled = !!state.busy;

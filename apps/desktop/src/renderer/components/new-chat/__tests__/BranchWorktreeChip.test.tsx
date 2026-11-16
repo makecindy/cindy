@@ -773,8 +773,12 @@ it('keeps an old execution host read-only and never invokes the new channel', as
   // An explicit start can detect an external checkout even on a legacy host.
   // Refresh its label through detect-cwd, never the unsupported checkout channel.
   vi.mocked(window.electronAPI.worktreeDetectCwd).mockResolvedValue({
-    isGitRepo: true, gitInstalled: true, isInsideWorktree: false,
-    repoRoot: '/repo', currentBranch: 'feature', supportsCheckout: false,
+    isGitRepo: true,
+    gitInstalled: true,
+    isInsideWorktree: false,
+    repoRoot: '/repo',
+    currentBranch: 'feature',
+    supportsCheckout: false,
   });
   await act(async () => branchView.mock.lastCall?.[0]?.refresh());
   await waitFor(() => expect(branchButton().textContent).toBe('feature'));
@@ -1585,3 +1589,43 @@ it('refreshes remote checkout status only for the matching device activity', asy
     vi.useRealTimers();
   }
 });
+
+// PR #10696 / unit: an already-started write survives unmount, reads do not.
+it.each(['pending', 'lost-reply'])('stops result reads after unmount: %s', async (mode) => {
+  const checkout = setupCheckout();
+  let finish!: (value: unknown) => void;
+  let fail!: (error: Error) => void;
+  checkout.mockImplementation((req) =>
+    req.action === 'switch'
+      ? new Promise((resolve, reject) => {
+          finish = resolve;
+          fail = reject;
+        })
+      : Promise.resolve({ status: checkoutStatus }),
+  );
+  const view = render(<CheckoutRow />);
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  fireEvent.click(branchButton());
+  fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
+  await waitFor(() => expect(finish).toBeDefined());
+  const readsBeforeUnmount = checkout.mock.calls.length;
+  view.unmount();
+  await act(async () => {
+    if (mode === 'pending') finish({ pending: true, operationId: 'original-write' });
+    else fail(new Error('Lost reply'));
+  });
+  expect(checkout.mock.calls).toHaveLength(readsBeforeUnmount);
+  expect(checkout.mock.calls.filter(([req]) => req.action === 'result')).toHaveLength(0);
+  expect(checkout.mock.calls.filter(([req]) => req.action === 'switch')).toHaveLength(1);
+});
+
+// PR #10696: probe and chip must agree on detached/unborn HEAD, not a commit SHA.
+it.each([{ current: 'abc123', head: 'abc123' }, { current: 'HEAD', head: '' }])(
+  'publishes HEAD for an unnamed checkout %j', async (status) => {
+    setupCheckout(true, status);
+    const branchView = vi.fn();
+    render(<CheckoutRow branchView={branchView} />);
+    await waitFor(() => expect(branchButton().textContent).toBe('HEAD'));
+    expect(branchView.mock.lastCall?.[0]?.displayedBranch).toBe('HEAD');
+  },
+);

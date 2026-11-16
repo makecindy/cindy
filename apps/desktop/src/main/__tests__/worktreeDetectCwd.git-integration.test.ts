@@ -5,6 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
+import { createCheckoutService } from '../worktree/checkout';
 import { createWorktree, detectCwd } from '../worktree/WorktreeManager';
 import { app } from 'electron';
 import type { WorktreeMeta } from '../worktree/types';
@@ -52,7 +53,10 @@ it('preserves real Git snapshots for attached, detached, unborn, missing and nes
   await fs.mkdir(repo);
   const git = (...args: string[]) => exec('git', args, { cwd: repo, windowsHide: true });
   await git('init', '--initial-branch=main');
-  expect(await detectCwd(repo)).toMatchObject({
+  const unborn = await detectCwd(repo);
+  expect(unborn.currentBranch).toBeUndefined();
+  expect(await createCheckoutService(async () => []).status(repo)).toMatchObject({ current: 'HEAD', head: '' });
+  expect(unborn).toMatchObject({
     isGitRepo: true,
     isInsideWorktree: false,
     gitInstalled: true,
@@ -83,6 +87,10 @@ it('preserves real Git snapshots for attached, detached, unborn, missing and nes
   await git('-C', linked, 'checkout', '--detach');
   expect(await detectCwd(linked)).toEqual({ ...snapshot, currentBranch: undefined });
   await git('worktree', 'remove', '--force', linked);
+  await git('checkout', '--detach');
+  const detached = await detectCwd(repo);
+  expect(detached.isGitRepo).toBe(true);
+  expect(detached.currentBranch).toBeUndefined();
   expect(await detectCwd(linked)).toMatchObject({
     isGitRepo: false,
     isInsideWorktree: false,

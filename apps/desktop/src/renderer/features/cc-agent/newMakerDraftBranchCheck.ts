@@ -29,7 +29,7 @@ export async function checkDraftBranchBeforeStart({
   // Source memory is deliberately not the OFF branch comparison.
   if (worktree.baseRepo && !worktree.branchPreferenceReady)
     return 'ccAgent.draft.deviceStillLoading';
-  if (!displayedBranch) return 'ccAgent.draft.deviceStillLoading';
+  if (displayedBranch === undefined) return 'ccAgent.draft.deviceStillLoading';
 
   // The page's initial probe can be stale after a checkout elsewhere. Reuse the
   // existing target-computer probe once per explicit start, under the route's
@@ -45,9 +45,11 @@ export async function checkDraftBranchBeforeStart({
     return 'ccAgent.draft.branchCheckFailed';
   }
   // Hidden branch controls do not apply to non-Git directories or existing worktrees.
-  if (!current.gitInstalled || !current.isGitRepo || current.isInsideWorktree) return null;
-  if (!current.currentBranch) return 'ccAgent.draft.branchCheckFailed';
-  return displayedBranch === current.currentBranch
+  if (!current.gitInstalled) return 'ccAgent.draft.branchCheckFailed';
+  if (!current.isGitRepo || current.isInsideWorktree) return null;
+  const normalize = (branch?: string) =>
+    !branch?.trim() || branch.trim() === 'HEAD' ? 'HEAD' : branch.trim();
+  return normalize(displayedBranch) === normalize(current.currentBranch)
     ? null
-    : { code: 'ccAgent.draft.branchChanged', branch: current.currentBranch };
+    : { code: 'ccAgent.draft.branchChanged', branch: normalize(current.currentBranch) };
 }

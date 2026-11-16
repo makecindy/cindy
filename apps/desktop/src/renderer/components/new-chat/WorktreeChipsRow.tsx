@@ -290,7 +290,11 @@ export function WorktreeChipsRow({
     onCheckoutBusyChange,
     !effectiveWorktreeEnabled && !environmentDisabled && !advancedHidden,
   );
-  const actualBranch = checkout.status?.current || branches.current || currentBranch || 'HEAD';
+  const actualBranch = checkout.status
+    ? checkout.status.current === checkout.status.head
+      ? 'HEAD'
+      : checkout.status.current
+    : branches.current || currentBranch || 'HEAD';
   const refreshDisplayedBranch = useCallback(() => {
     if (detect.data?.supportsCheckout) {
       void checkout.refresh();

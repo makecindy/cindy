@@ -16,7 +16,13 @@ export interface CheckoutActivity extends CheckoutSession {
   workDir: string;
   remoteHostId?: string | null;
 }
-type Receipt = CheckoutReceipt & { repo: string; head: string; stash?: string };
+type Receipt = CheckoutReceipt & {
+  repo: string;
+  head: string;
+  stash?: string;
+  carrySnapshot?: string;
+  fingerprint: string;
+};
 const readOpts = { timeoutMs: 5_000, extraEnv: { LC_ALL: 'C', GIT_OPTIONAL_LOCKS: '0' } };
 const writeOpts = { extraEnv: { LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' } };
 const stashPrefix = ' [cindy-checkout-v1:';
@@ -75,8 +81,10 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
   async function status(input: string, target?: string, ownLock = false): Promise<CheckoutStatus> {
     const repo = await root(input);
     if (target) await git(repo, 'check-ref-format', '--branch', localBranch(target));
-    const head = await git(repo, 'rev-parse', 'HEAD');
-    const current = (await optional(repo, 'symbolic-ref', '--short', 'HEAD')) ?? head;
+    const head = (await optional(repo, 'rev-parse', '--verify', 'HEAD')) ?? '';
+    const current = head
+      ? ((await optional(repo, 'symbolic-ref', '--short', 'HEAD')) ?? head)
+      : 'HEAD';
     const treeOutput = (await gitExec(['worktree', 'list', '--porcelain', '-z'], repo, readOpts))
       .stdout;
     const trees = await Promise.all(
@@ -154,7 +162,13 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
       }
     const hash = createHash('sha256').update(head).update(porcelain);
     hash.update(
-      (await gitExec(['diff', '--cached', '--raw', '-z', 'HEAD', '--'], repo, readOpts)).stdout,
+      (
+        await gitExec(
+          ['diff', '--cached', '--raw', '-z', ...(head ? ['HEAD'] : []), '--'],
+          repo,
+          readOpts,
+        )
+      ).stdout,
     );
     // Include untracked bytes: a confirmation must not silently include subsequently edited files.
     for (const file of files) {
@@ -331,6 +345,10 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
         if (strategy === 'carry' && !before.carryAllowed)
           return { status: before, blocked: 'conflict' };
         assertScope();
+        const carrySnapshot =
+          strategy === 'carry' && before.files.length
+            ? (await git(repo, 'stash', 'create')) || undefined
+            : undefined;
         let stash: string | undefined;
         if (strategy === 'stash' && before.files.length) {
           const previousStash = await optional(repo, 'rev-parse', '--verify', 'refs/stash');
@@ -378,6 +396,8 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
             );
           }
         } catch {
+          if (carrySnapshot)
+            await write(repo, 'stash', 'store', '-m', 'Cindy: checkout recovery', carrySnapshot);
           const current = await optional(repo, 'symbolic-ref', '--short', 'HEAD');
           if (current === before.current) {
             // Only compensate on the original branch. Apply never drops the stash on conflict.
@@ -387,6 +407,14 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
           if (current !== target) return { status: await preflight(repo), blocked: 'changed' };
           // Checkout succeeded but a later fast-forward failed. Keep a usable undo receipt.
           partialFailure = true;
+        }
+        let after: CheckoutStatus;
+        try {
+          after = await preflight(repo);
+        } catch (error) {
+          if (carrySnapshot)
+            await write(repo, 'stash', 'store', '-m', 'Cindy: checkout recovery', carrySnapshot);
+          throw error;
         }
         const receipt: Receipt = {
           id: randomUUID(),
@@ -398,12 +426,22 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
           hadChanges: !!before.files.length,
           ...(fetchedCommits ? { fetchedCommits } : {}),
           stash,
+          carrySnapshot,
+          fingerprint: after.fingerprint,
           sessions: before.sessions,
         };
         receipts.set(receipt.id, receipt);
         return {
-          status: await preflight(repo),
-          receipt,
+          status: after,
+          receipt: {
+            id: receipt.id,
+            from: receipt.from,
+            to: receipt.to,
+            strategy: receipt.strategy,
+            hadChanges: receipt.hadChanges,
+            sessions: receipt.sessions,
+            ...(fetchedCommits ? { fetchedCommits } : {}),
+          },
           ...(partialFailure ? { blocked: 'git' as const } : {}),
         };
       });
@@ -420,22 +458,45 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
         if (!receipt || receipt.repo !== repo || before.current !== receipt.to)
           return { status: before, blocked: 'changed' };
         if (before.blocked) return { status: before, blocked: before.blocked };
+        if (before.fingerprint !== receipt.fingerprint)
+          return { status: before, blocked: 'changed' };
+        const originalHead = await optional(
+          repo,
+          'rev-parse',
+          '--verify',
+          receipt.from === receipt.head ? receipt.head : `refs/heads/${receipt.from}`,
+        );
+        if (receipt.from !== receipt.to && originalHead !== receipt.head)
+          return { status: before, blocked: 'changed' };
         if (receipt.stash && before.files.length) return { status: before, blocked: 'dirty' };
         if (before.occupied.includes(receipt.from)) return { status: before, blocked: 'occupied' };
         if (receipt.stash && !(await stashes(repo)).some((s) => s.id === receipt.stash))
           return { status: before, blocked: 'changed' };
         assertScope();
         const detached = receipt.from === receipt.head;
-        await write(
-          repo,
-          'switch',
-          '--no-overwrite-ignore',
-          ...(detached ? ['--detach', receipt.head] : [receipt.from]),
-        );
+        // Anchor the safety copy before discarding anything. Failure leaves a
+        // named, recoverable entry in git stash list, never just a dangling SHA.
+        if (receipt.carrySnapshot) {
+          await write(repo, 'stash', 'store', '-m', 'Cindy: undo recovery', receipt.carrySnapshot);
+        }
         try {
+          if (receipt.carrySnapshot)
+            await write(repo, 'restore', '--source=HEAD', '--staged', '--worktree', '--', '.');
+          await write(
+            repo,
+            'switch',
+            '--no-overwrite-ignore',
+            ...(detached ? ['--detach', receipt.head] : [receipt.from]),
+          );
+          if (
+            receipt.from !== receipt.to &&
+            (await git(repo, 'rev-parse', 'HEAD')) !== receipt.head
+          )
+            return { status: await preflight(repo), blocked: 'changed' };
+          if (receipt.carrySnapshot) await applyStash(repo, receipt.carrySnapshot);
           if (receipt.stash) await applyStash(repo, receipt.stash);
         } catch {
-          return { status: await preflight(repo), blocked: 'git', undoApplied: true };
+          return { status: await preflight(repo), blocked: 'git' };
         }
         receipts.delete(id);
         return { status: await preflight(repo), undoApplied: true };
