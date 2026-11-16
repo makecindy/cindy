@@ -204,7 +204,8 @@ export function createHostCodexRuntime(options: {
     prepareRemote: async () => { throw new Error('SSH Codex transport is not configured in this Host'); },
   });
   const threadStorage = createHostCodexThreadStorage({ profileDir: options.profileDir, accounts, check });
-  const deps: Partial<AgentDeps> = {
+  // Typed by its literal (checked against AgentDeps) so the Codex bag in runtime.ts sees exactly these ports.
+  const deps = {
     ...threadStorage.deps,
     prepareCodexExtraSpawnConfig: async (...args) => { check(); const value = inbound.withToken(await prepare(...args)); check(); return value; },
     disableCodexPluginRuntime: true,
@@ -247,7 +248,7 @@ export function createHostCodexRuntime(options: {
     getCodexSubagentIdentity: ({ childThreadId }) => proxy.getObservedCodexSubagentIdentity(childThreadId),
     armCodexHttpRecovery: proxy.armCodexHttpRecovery,
     registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => { check(); proxy.registerChildThread(parentThreadId, childThreadId); },
-  };
+  } satisfies Partial<AgentDeps>;
   return { deps, proxy, native, readRoute, modelContext,
     /** This runtime's native Codex history, read only (context recovery's history classification). */
     codexHistory: {

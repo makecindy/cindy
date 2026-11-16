@@ -63,6 +63,12 @@ import { createHostAutoReview } from './auto-review.js';
 import { createClaudeAutoPermissionFallbackCoordinator, setClaudeAutoClassifierUnavailableListener } from '../../../desktop/src/main/maker-host/claude-auto-permission-fallback.js';
 import { registerAgentProcess, registerCodexProcessRole } from '../../../desktop/src/main/process-monitor/codex-process-registry.js';
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../../../desktop/src/main/logger.js';
+import { readCodexCompactionState } from '../../../desktop/src/main/maker-host/compaction-settings-store.js';
+import { explicitPorts } from './explicit-ports.js';
+import {
+  PORTS_ONLY_CLAUDE_AND_CODEX_READ, PORTS_ONLY_CLAUDE_AND_PI_READ, PORTS_ONLY_CLAUDE_READS, PORTS_ONLY_CODEX_READS,
+  PORTS_ONLY_PI_READS,
+} from './agent-deps-engines.js';
 
 type HostProviderConfig = ReturnType<typeof createHostProviderConfig>;
 
@@ -600,8 +606,10 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     publish: notice => options.publishVisionBridgeNotice?.(notice),
     logger: LOGGER,
   });
-  const agent = options.binaryPath ? new ClaudeCodeAgent({
-    ...(options.resolveLocalMcpDuplicateChoices ? { resolveLocalMcpDuplicateChoices: options.resolveLocalMcpDuplicateChoices } : {}),
+  const agent = options.binaryPath ? new ClaudeCodeAgent(explicitPorts<AgentDeps>({
+    ...PORTS_ONLY_CODEX_READS,
+    ...PORTS_ONLY_PI_READS,
+    resolveLocalMcpDuplicateChoices: options.resolveLocalMcpDuplicateChoices,
     claudeHooks,
     auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative, options.claudeProxy, config.grok),
     runtimeConfig: runtimeConfigs.buildClaudeRuntimeConfig(engineEndpoint, claudeProxy ? () => claudeProxy.resolveAgentEndpoint() : undefined),
@@ -624,8 +632,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     }),
     // Skills the user disabled in Cindy, from the profile's activation preferences.
     getDisabledSkillPaths: readDisabledSkillPaths,
-    ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
-    ...(options.getManagedSkills ? { getManagedSkills: options.getManagedSkills } : {}),
+    getGhostRosterPrompt: options.getGhostRosterPrompt,
+    getManagedSkills: options.getManagedSkills,
     capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
     capabilityAdditions: availableModels('claude-code'),
     // The turn change record the desktop keeps for Claude and Pi (turn-change-set/store.ts).
@@ -637,14 +645,35 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     resolveCcDebugFile: resolveSessionCcDebugFile,
     trackCcDebugFile: trackSessionCcDebugFile,
     ...claudeModelResolvers,
-    ...(mcpProviders.length > 0 ? { mcpProviders } : {}),
-    ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
-  }) : null;
-  const codex = options.codexBinaryPath
-    ? new CodexAgent({
+    mcpProviders: mcpProviders.length > 0 ? mcpProviders : undefined,
+    makerMemory: options.makerMemory,
+    // Remote execution: send-preflight refuses tasks with a remote host or device (release table section 7, row 18).
+    getRemoteAgentFileOps: undefined,
+    remoteCcQueryFactory: undefined,
+    resolveRemoteClaudeRoute: undefined,
+    // Teammate tasks are refused here too; their session environment comes with them (section 4, M3).
+    resolveSessionEnvironment: undefined,
+    // SkillHub discovery isolation is M2 (section 4); without it the agent scans the native locations.
+    scanLocalCustomizations: undefined,
+  })) : null;
+  // main.ts builds the Codex runtime whenever it has the Codex binary; only test graphs build Codex
+  // without it, and then these ports stay unbound.
+  const codexRuntimePorts = options.codexRuntime?.deps ?? {
+    prepareCodexResumeSession: undefined, resolveCodexThreadStorage: undefined, recordCodexThreadLocation: undefined,
+    prepareCodexExtraSpawnConfig: undefined, disableCodexPluginRuntime: undefined, onCodexLocalModelsListed: undefined,
+    resolveCodexSubagentRoutingSignature: undefined, resolveCodexLocalAuthPolicy: undefined, isCodexAccountProvider: undefined,
+    isolateCodexAccountSessions: undefined, registerCodexTextOnlyPolicy: undefined, registerCodexSystemPromptForThread: undefined,
+    getCodexSubagentIdentity: undefined, armCodexHttpRecovery: undefined, registerCodexChildThreadForParent: undefined,
+  };
+  // codexModelResolvers exists exactly when there is a Codex binary (above).
+  const codex = codexBinaryPath && codexModelResolvers
+    ? new CodexAgent(explicitPorts<AgentDeps>({
+        ...PORTS_ONLY_CLAUDE_READS,
+        ...PORTS_ONLY_PI_READS,
+        ...PORTS_ONLY_CLAUDE_AND_PI_READ,
         auth: codexAuth,
         ...options.mcpRuntime.codexDeps,
-        ...options.codexRuntime?.deps,
+        ...codexRuntimePorts,
         // As the desktop (maker-host/index.ts): each read is fenced to the owner, the realm and
         // this agent's runtime, and takes the login's own credentials only from an authenticated
         // oauth-bearer state of this agent's auth adapter.
@@ -656,14 +685,14 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         }),
         ...codexModelResolvers,
         getDisabledSkillPaths: readDisabledSkillPaths,
-        ...(options.getManagedSkills ? { getManagedSkills: options.getManagedSkills } : {}),
+        getManagedSkills: options.getManagedSkills,
         // A getter, as on the desktop: evaluated after the MCP bridge is prepared.
         get capabilityRouting() { return codexCapabilityRouting.capabilityRouting(); },
         resolveCapabilityRouting: codexCapabilityRouting.resolveCapabilityRouting,
         capabilityAdditions: availableModels('codex'),
-        ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
+        getGhostRosterPrompt: options.getGhostRosterPrompt,
         runtimeConfig: runtimeConfigs.buildCodexRuntimeConfig(),
-        binaryPath: options.codexBinaryPath,
+        binaryPath: codexBinaryPath,
         logger: LOGGER,
         // As the desktop: Host exit reaps the tool trees below these app-servers (main.ts stop).
         registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
@@ -682,8 +711,25 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         },
         reviewAutoPermissionAction: autoReview.reviewAutoPermissionAction,
         mcpProviders,
-        ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
-      })
+        makerMemory: options.makerMemory,
+        // As the desktop (maker-host/index.ts): the user's Codex server-compaction choice, from the same
+        // file in this owner's profile; null keeps the native policy.
+        getCodexServerCompactionPreference: () => readCodexCompactionState().value.serverEnabled,
+        // The Host's outbound resolver (outbound.mjs, from the environment) keeps no per-origin path
+        // judgements, so an unreachable backend keeps the generic error text (section 2).
+        getOutboundPathFact: undefined,
+        // Remote execution: send-preflight refuses tasks with a remote host or device (release table section 7, row 18).
+        getRemoteAgentFileOps: undefined,
+        getRemoteCodexTransport: undefined,
+        // Only for the local-agent service's host-tools-only sessions, which the Host does not have (row 29).
+        prepareCodexHostToolCatalog: undefined,
+        // Cindy Skill projection into the Codex home is not on the Host yet (row 25).
+        prepareCodexSkills: undefined,
+        // Teammate tasks are refused here too (section 4, M3).
+        resolveSessionEnvironment: undefined,
+        // SkillHub discovery isolation is M2 (section 4).
+        scanLocalCustomizations: undefined,
+      }))
     : null;
   // The desktop's learned Pi cache compatibility (pi-native-compat-overrides-store.ts), on this
   // profile; the Pi bridge writes the file and the runtime reads it back.
@@ -698,7 +744,10 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // plugins/authorization.ts does; the window's language choice does not reach the Host.
   const { t } = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
   const pi = options.piBinaryPath
-    ? new PiAgent({
+    ? new PiAgent(explicitPorts<AgentDeps>({
+        ...PORTS_ONLY_CLAUDE_READS,
+        ...PORTS_ONLY_CODEX_READS,
+        ...PORTS_ONLY_CLAUDE_AND_CODEX_READ,
         auth: piAuth,
         ...options.mcpRuntime.piDeps,
         runtimeConfig: buildPiRuntimeConfig({
@@ -740,7 +789,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
           );
         },
         // Pi's loopback requests carry a per-session token the proxy checks (pi-host.ts).
-        ...(claudeProxy ? { registerPiProxySession: claudeProxy.registerPiProxySession } : {}),
+        registerPiProxySession: claudeProxy?.registerPiProxySession,
         // As the desktop (pi-host.ts): 执行端动态学习；SSH 独立存储，避免把本机线路结论带到远端。
         resolvePiNativeCompatStorePath: remoteHostId => remoteHostId
           ? '$HOME/.xdt-server/v1/pi-agent-home/pi-native-compat-overrides.json'
@@ -761,12 +810,12 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         ...piModelResolvers,
         getDisabledSkillPaths: readDisabledSkillPaths,
         capabilityAdditions: availableModels('pi'),
-        ...(options.getManagedSkills ? { getManagedSkills: options.getManagedSkills } : {}),
+        getManagedSkills: options.getManagedSkills,
         turnChangeCapture: { beforeKnownFileWrite: captureKnownFileBefore, noteOpaqueWrite: noteOpaqueTurnChange },
         registerLocalAgentProcess: ({ pid, kind, role, sessionId }) =>
           registerAgentProcess(pid, kind, role, sessionId),
-        ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
-        ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
+        getGhostRosterPrompt: options.getGhostRosterPrompt,
+        makerMemory: options.makerMemory,
         // As the desktop (pi-host.ts): the cloud-file startup hint and the extension dialog strings.
         formatPiStartupCloudFileHint: (file) => t('logic.errors.piStartupCloudFile').replace('{{path}}', () => file),
         getPiExtensionUiStrings: () => ({
@@ -789,7 +838,23 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         }),
         // Only for Pi models the vision bridge targets (layer C), as on the desktop.
         resolvePiVisionBridgeEnv: visionBridge.resolvePiVisionBridgeEnv,
-      })
+        // Remote execution: send-preflight refuses tasks with a remote host or device (release table section 7, row 18). The derived proxy token is for
+        // remote Pi sessions only; local ones take a fresh random token.
+        derivePiProxySessionToken: undefined,
+        getRemoteAgentFileOps: undefined,
+        getRemotePiAgentProxyEnv: undefined,
+        getRemotePiFileOps: undefined,
+        getRemotePiTransport: undefined,
+        remotePiSkipMcpBridge: undefined,
+        resolveRemotePiBinaryPath: undefined,
+        // Not bound on the desktop either (pi-host.ts takes it as an option, maker-host/index.ts passes none):
+        // approved project resources stay unavailable to Pi on both.
+        resolvePiProjectTrustInput: undefined,
+        // Teammate tasks are refused here too (section 4, M3).
+        resolveSessionEnvironment: undefined,
+        // SkillHub discovery isolation is M2 (section 4).
+        scanLocalCustomizations: undefined,
+      }))
     : null;
   const agents = {
     ...(agent ? { 'claude-code': agent } : {}),
@@ -803,10 +868,12 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   const capabilitiesByAgent = Object.fromEntries(
     Object.entries(agents).map(([kind, instance]) => [kind, instance.capabilities]),
   );
-  const maker = new Maker({
+  const maker = new Maker(explicitPorts<MakerDeps>({
     agents,
     storage: options.storage,
-    lifecycleHooks: {
+    // Starting the agent on another computer of the account (B5): the Host refuses device tasks at entry.
+    startDeviceAgentSession: undefined,
+    lifecycleHooks: explicitPorts<MakerDeps['lifecycleHooks']>({
       prepareStartOptions: startOptions.prepareStartOptions,
       onBeforeStart: startOptions.onBeforeStart,
       onStartFailed: startOptions.onStartFailed,
@@ -821,13 +888,21 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
       options.claudeProxy?.closeSession(id);
       try { await options.codexRuntime?.closeSession(id); }
       finally { await options.onSessionClose?.(id); }
-    } },
+    },
+      // The desktop marks Orca MCP hydration and Orca workers and settles a teammate's runtime snapshot
+      // here; the Host runs neither (send-preflight).
+      onStartSucceeded: undefined,
+      // Lets onClose skip what a transient rebuild must keep (temporary attachments, the worktree pool);
+      // the Host's onClose has none of those (it clears pricing and releases the lease, which the desktop
+      // also does on every close), and those rebuilds still close with the reason runtime-refresh.
+      isTransientCloseRequest: undefined,
+    }),
     logger: LOGGER,
     // Pi and Codex sessions read the tool-loop reviewer from Maker, as on the desktop.
     toolLoopReviewer: autoReview.toolLoopReviewer,
-    ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
+    makerMemory: options.makerMemory,
     visionBridge: visionBridge.hook,
-  });
+  }));
   visionBridge.activate();
   // As the desktop (register.ts): when the loopback proxy sees Claude's native Auto classifier
   // fail, the task stays on Auto and its later approvals go to the Cindy reviewer above.

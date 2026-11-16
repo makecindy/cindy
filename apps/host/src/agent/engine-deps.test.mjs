@@ -20,6 +20,7 @@ import { createHostAgentGraph } from './runtime.ts';
 import { getDesktopClaudeReadOnlyAllowedTools } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.ts';
 import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.ts';
 import { CodexCredentialModeSwitchBusyError } from '../../../desktop/src/main/maker-host/codex-credential-switch.ts';
+import { writeCodexServerCompaction } from '../../../desktop/src/main/maker-host/compaction-settings-store.ts';
 import { readPiGlobalContext } from '../../../../packages/maker-core/src/agents/pi/global-context.ts';
 import { createMainI18n } from '../../../desktop/src/main/i18n.ts';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
@@ -129,6 +130,20 @@ test('a Codex credential-mode switch is refused while a session is busy, by its 
   assert.deepEqual(closed, []);
 });
 
+
+// The desktop passes the user's Codex server-compaction choice at every Codex start; the Host passed
+// nothing, so a choice made in the window was ignored by Host tasks.
+test('Codex reads the user\'s server-compaction choice from the owner file the desktop writes', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
+  const graph = buildGraph(t, 'engine-deps-codex-compaction');
+  const read = graph.codex.deps.getCodexServerCompactionPreference;
+  assert.equal(read(), null, 'no choice keeps the native policy');
+  t.after(() => writeCodexServerCompaction(null));
+  writeCodexServerCompaction(false);
+  assert.equal(read(), false);
+  writeCodexServerCompaction(true);
+  assert.equal(read(), true);
+});
 
 test('Claude gets the MCP duplicate choices main.ts builds from the plugin gateway reads', { timeout: TEST_TIMEOUT_MS }, t => {
   t = lifoCleanup(t);
