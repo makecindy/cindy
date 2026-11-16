@@ -379,12 +379,9 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     'maker.input.setInteractionLock': (args) => rpc('/input/set-interaction-lock', { sessionId: args?.[0], lockId: args?.[1], locked: args?.[2] }),
     'maker.input.setEditLock': (args) => rpc('/input/set-edit-lock', { sessionId: args?.[0], clientId: args?.[1], locked: args?.[2] }),
     'maker.input.clearSession': (args) => rpc('/input/clear-session', { sessionId: args?.[0] }),
-    'maker.setPermissionMode': (args) => {
-      const sessionId = args?.[0];
-      const mode = args?.[1];
-      if (!sessionId) return Promise.resolve();
-      return rpc('/sessions/update', { sessionId, patch: { permissionMode: mode } });
-    },
+    // The desktop's set-permission-mode and set-plan-mode, with their IPC arguments (the Host runs the
+    // shared bodies: argument checks, the task's permission queue, rollback, grant revocation).
+    'maker.setPermissionMode': (args) => rpc('/sessions/set-permission-mode', { sessionId: args?.[0], mode: args?.[1] }),
     // The desktop's set-model with its own arguments; the answer is the Host's (a user's pick is an
     // intent until the next send: { deferred: true, pendingUntilSend: true }).
     'maker.setModel': (args) => {
@@ -414,12 +411,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     // handler bodies: a live change, or a change staged into a pending pick).
     'maker.setEffort': (args) => rpc('/sessions/set-effort', { sessionId: args?.[0], effort: args?.[1] }),
     'maker.setFastMode': (args) => rpc('/sessions/set-fast-mode', { sessionId: args?.[0], fastMode: args?.[1] }),
-    'maker.setPlanMode': (args) => {
-      const sessionId = args?.[0];
-      const planModeEnabled = args?.[1];
-      if (!sessionId) return Promise.resolve();
-      return rpc('/sessions/update', { sessionId, patch: { planModeEnabled } });
-    },
+    'maker.setPlanMode': (args) => rpc('/sessions/set-plan-mode', { sessionId: args?.[0], enabled: args?.[1] }),
     'maker.setThinkingEnabled': (args) => rpc('/sessions/set-thinking-enabled', { sessionId: args?.[0], enabled: args?.[1] }),
     'maker.listDesktopCommands': () => ({ success: true, commands: STATIC.emptyList }),
     'maker.claimLegacyModelVisibilityOwner': () => ({

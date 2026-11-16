@@ -46,6 +46,14 @@ import {
   type PendingCredentialSwitchAccessPorts,
 } from '../../../desktop/src/main/maker-ipc/pendingCredentialSwitchAccess.ts';
 import { createColdPiRehydrationBinding } from '../../../desktop/src/main/maker-ipc/coldPiRehydrationBinding.ts';
+import { createBotPermissionSync } from '../../../desktop/src/main/maker-ipc/botPermissionSyncCore.ts';
+import {
+  commitSessionPermissionModeWith,
+  createSetSessionPermissionMode,
+  createSetSessionPlanMode,
+  persistAgentPlanModeChangeWith,
+} from '../../../desktop/src/main/maker-ipc/sessionPermissionSettings.ts';
+import { createDeferredRestartQueueGate } from '../../../desktop/src/main/maker-ipc/deferredRestartQueueWiring.ts';
 import {
   createRecoverRemoteRuntimeAxisPersistence,
   createSetSessionEffort,
@@ -86,6 +94,8 @@ import { rememberSessionLastLiveUsage } from '../../../desktop/src/main/maker-ip
 /** What the Host's runtime selection reads from the rest of the Host (main.ts binds it). */
 export interface HostRuntimeSelectionDeps {
   getMaker(): Maker;
+  /** The Maker once the agent runtime is ready, else null (the desktop's getMakerIfReady). */
+  getMakerIfReady(): Maker | null;
   /** Publishes a Host event (the event hub). */
   publish(event: Record<string, unknown>): void;
   /** Writes a message row of a task (the Host's message store). */
@@ -438,6 +448,29 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   const setSessionThinkingEnabled = createSetSessionThinkingEnabled({
     maker: axisMaker, assertReviewSettingsUnlocked, captureSharedTaskSettingGuard,
   });
+  // A task's permission mode and Plan mode (sessionPermissionSettings.ts): the desktop's commit with the
+  // Host's Maker, review-task check, patch broadcast and session field write. The entries run outside the
+  // task's send lock, as the desktop's do: the permission queues come first, the send lock after.
+  const permissionMaker = { getSession: (sessionId: string) => maker().getSession(sessionId) };
+  // botPermissionSync.ts's lane sync: a Bot's other lanes follow a permission save.
+  const botPermissionSync = createBotPermissionSync({
+    getMakerIfReady: () => deps.getMakerIfReady(),
+    broadcastSessionPatched: (sessionId, patch) => broadcastSessionPatched(sessionId, patch),
+  });
+  const commitSessionPermissionMode = (sessionId: string, mode: string, remote = false, beforeMutation?: () => Promise<void>) =>
+    commitSessionPermissionModeWith({
+      maker: permissionMaker, assertReviewSettingsUnlocked,
+      broadcastSessionPatched: (patchedSessionId, patch) => broadcastSessionPatched(patchedSessionId, patch),
+      syncBotLinkedLanePermissions: botPermissionSync.syncBotLinkedLanePermissions,
+      // Called only inside a Device Link invoke (remote); the Host's entries are never one.
+      markRemoteSettingPersistedInsideHandler: () => {},
+      log: deps.log,
+    }, sessionId, mode, remote, beforeMutation);
+  const setSessionPermissionMode = createSetSessionPermissionMode({ commitSessionPermissionMode });
+  const setSessionPlanMode = createSetSessionPlanMode({
+    maker: permissionMaker, assertReviewSettingsUnlocked, persistSessionFields,
+    markRemoteSettingPersistedInsideHandler: () => {}, log: deps.log,
+  });
   /**
    * A runtime of a task closed (the Maker's session:closed, from the session's own close), finalized
    * in the desktop's order: finalizeClosedSession keeps its last live usage for a cold Pi model
@@ -460,6 +493,20 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     setFastMode: (sessionId: unknown, requestedSpeed: unknown) => setSessionFastMode(sessionId, requestedSpeed),
     /** The desktop's set-thinking-enabled. */
     setThinkingEnabled: (sessionId: unknown, enabled: unknown) => setSessionThinkingEnabled(sessionId, enabled),
+    /** The desktop's set-permission-mode (its arguments checked, then the commit). */
+    setPermissionMode: (sessionId: unknown, mode: unknown) => setSessionPermissionMode(sessionId, mode),
+    /** The desktop's set-plan-mode. */
+    setPlanMode: (sessionId: unknown, enabled: unknown) => setSessionPlanMode(sessionId, enabled),
+    /**
+     * A Plan mode a runtime changed itself (its plan_mode_changed event), saved as the desktop's
+     * emitWiredSessionEvent saves it; the executor gives the owner it wired the runtime under and its
+     * session bindings.
+     */
+    persistAgentPlanModeChange: (
+      ports: Pick<Parameters<typeof persistAgentPlanModeChangeWith>[0], 'ownerDb' | 'sessionBindings'>,
+      session: Parameters<typeof persistAgentPlanModeChangeWith>[1],
+      event: Parameters<typeof persistAgentPlanModeChangeWith>[2],
+    ) => persistAgentPlanModeChangeWith({ ...ports, persistSessionFields, log: deps.log }, session, event),
     /** A model change a client asks for: the desktop's set-model (source 'user'). */
     setModel(sessionId: string, model: unknown, providerId: unknown, revision: unknown, selection: unknown) {
       deps.inputQueue.cancelUsageLimitWait(sessionId);
@@ -514,3 +561,35 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     },
   };
 }
+
+type HostRuntimeSelection = ReturnType<typeof createHostRuntimeSelection>;
+
+/**
+ * The input queue's hooks the runtime selection answers (main.ts passes them to createInputQueue; the
+ * input-queue tests use the same function): a pick lands at the send, the coordinator and idle-release
+ * gates of a pending credential switch (with the gateway restart, deferredRestartQueueWiring.ts), a
+ * turn's end landing that switch before the rest of the settle work, and a runtime's own Plan change.
+ * The selection is read at call time: main.ts creates it after the queue.
+ */
+export function hostRuntimeSelectionQueueHooks(
+  getSelection: () => Pick<HostRuntimeSelection,
+    'applyPendingAgentSwitch' | 'hasPendingCredentialSwitch' | 'onTurnSettled' | 'persistAgentPlanModeChange'>,
+  ports: { isSessionRestarting(sessionId: string): boolean; afterTurnSettled?(sessionId: string): void },
+) {
+  return {
+    applyPendingAgentSwitch: (sessionId: string, options?: { signal?: AbortSignal; scheduled?: boolean; clientId?: string }) =>
+      getSelection().applyPendingAgentSwitch(sessionId, options),
+    hasPendingCredentialSwitch: createDeferredRestartQueueGate({
+      hasPendingCredentialSwitchEntry: (sessionId: string) => getSelection().hasPendingCredentialSwitch(sessionId),
+      isSessionRestarting: (sessionId: string) => ports.isSessionRestarting(sessionId),
+    }),
+    hasPendingCredentialSwitchEntry: (sessionId: string) => getSelection().hasPendingCredentialSwitch(sessionId),
+    onSessionSettled: (sessionId: string) => {
+      getSelection().onTurnSettled(sessionId);
+      ports.afterTurnSettled?.(sessionId);
+    },
+    persistAgentPlanModeChange: (...args: Parameters<HostRuntimeSelection['persistAgentPlanModeChange']>) =>
+      getSelection().persistAgentPlanModeChange(...args),
+  };
+}
+

@@ -391,14 +391,17 @@ test('thrown values that are not errors are never serialised to the client', asy
   assert.deepEqual(capabilities.body, { error: 'agent_not_registered', message: 'Unexpected error' });
 });
 
-// The desktop's set-effort, set-fast-mode and set-thinking-enabled reach their Host entries with the
-// IPC arguments the web client passes (shim.js), and answer what the entry returns.
-test('effort, Fast mode and thinking routes pass the desktop IPC arguments to their entries', async (t) => {
+// The desktop's set-effort, set-fast-mode, set-thinking-enabled, set-permission-mode and set-plan-mode
+// reach their Host entries with the IPC arguments the web client passes (shim.js), and answer what the
+// entry returns.
+test('effort, Fast mode, thinking, permission and Plan routes pass the desktop IPC arguments to their entries', async (t) => {
   const calls = [];
   const request = await withServer(t, {
     setSessionEffort: (...args) => { calls.push(['effort', ...args]); return { deferred: true, superseded: false, pendingUntilSend: true }; },
     setSessionFastMode: (...args) => { calls.push(['fast', ...args]); return undefined; },
     setSessionThinkingEnabled: (...args) => { calls.push(['thinking', ...args]); return undefined; },
+    setSessionPermissionMode: (...args) => { calls.push(['permission', ...args]); return true; },
+    setSessionPlanMode: (...args) => { calls.push(['plan', ...args]); return undefined; },
   });
   const headers = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
   const post = (path, body) => request(path, { method: 'POST', headers, body: JSON.stringify(body) });
@@ -407,7 +410,12 @@ test('effort, Fast mode and thinking routes pass the desktop IPC arguments to th
   assert.deepEqual(effort.body, { deferred: true, superseded: false, pendingUntilSend: true });
   assert.equal((await post('/api/sessions/set-fast-mode', { sessionId: 's1', fastMode: 'ultrafast' })).status, 200);
   assert.equal((await post('/api/sessions/set-thinking-enabled', { sessionId: 's1', enabled: false })).status, 200);
-  assert.deepEqual(calls, [['effort', 's1', 'low'], ['fast', 's1', 'ultrafast'], ['thinking', 's1', false]]);
+  const permission = await post('/api/sessions/set-permission-mode', { sessionId: 's1', mode: 'auto' });
+  assert.equal(permission.status, 200);
+  assert.equal(permission.body, true);
+  assert.equal((await post('/api/sessions/set-plan-mode', { sessionId: 's1', enabled: true })).status, 200);
+  assert.deepEqual(calls, [['effort', 's1', 'low'], ['fast', 's1', 'ultrafast'], ['thinking', 's1', false],
+    ['permission', 's1', 'auto'], ['plan', 's1', true]]);
 });
 
 test('cross-engine switch returns a deferred intent and exposes it for the renderer', async (t) => {

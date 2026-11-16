@@ -96,6 +96,13 @@ export function createHostService(deps) {
     if (url.pathname === '/api/sessions/set-thinking-enabled') {
       return { status: 200, body: (await deps.setSessionThinkingEnabled(body.sessionId, body.enabled)) ?? null };
     }
+    if (url.pathname === '/api/sessions/set-permission-mode') {
+      // The desktop's set-permission-mode and set-plan-mode, with their IPC arguments.
+      return { status: 200, body: (await deps.setSessionPermissionMode(body.sessionId, body.mode)) ?? null };
+    }
+    if (url.pathname === '/api/sessions/set-plan-mode') {
+      return { status: 200, body: (await deps.setSessionPlanMode(body.sessionId, body.enabled)) ?? null };
+    }
     if (url.pathname === '/api/sessions/set-model') {
       // The desktop's set-model, with its IPC arguments (the web client passes them through).
       return { status: 200, body: await deps.setSessionModel(String(body.sessionId ?? ''), body.model, body.providerId, body.revision, body.selection) };

@@ -77,7 +77,7 @@ async function fixture(t) {
     closeSession: async id => { live.delete(id); },
   };
   const selection = createHostRuntimeSelection({
-    getMaker: () => maker,
+    getMaker: () => maker, getMakerIfReady: () => maker,
     publish: event => events.push(event),
     createDbMessage: async () => {},
     pendingHandoff: { set() {}, readGeneration: () => 0 },
@@ -313,7 +313,7 @@ function closeFixture(t) {
   const handles = [];
   const maker = new Maker({ agents: { 'claude-code': closeAgent(handles) }, storage, logger: silent });
   const selection = createHostRuntimeSelection({
-    getMaker: () => maker, publish: () => {}, createDbMessage: async () => {},
+    getMaker: () => maker, getMakerIfReady: () => maker, publish: () => {}, createDbMessage: async () => {},
     pendingHandoff: { set() {}, readGeneration: () => 0 }, listProviderViews: async () => VIEWS,
     resolveConfiguredContextWindow: () => null, readStoredSessionContextWindowBudget: () => null,
     codexProxyAuthInjectionState: () => null,

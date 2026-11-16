@@ -36,8 +36,11 @@ import { openOwnerDatabase } from '../../../desktop/src/main/localDb/startupCore
 import { createDbClientForHandle } from '../../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.ts';
 import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionStorageAdapter.ts';
-import { createHostRuntimeSelection, HOST_RUNTIME_SELECTION_QUEUE_MEMBERS, HOST_RUNTIME_START_PORTS } from './runtime-selection.ts';
+import { createHostRuntimeSelection, hostRuntimeSelectionQueueHooks, HOST_RUNTIME_SELECTION_QUEUE_MEMBERS, HOST_RUNTIME_START_PORTS } from './runtime-selection.ts';
 import { getSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
+import { watchCredentialGrantRevocation } from '../../../desktop/src/main/remote-agent/executor/credentialGrants.ts';
+import { withSessionPermissionChange } from '../../../desktop/src/main/maker-ipc/sessionPermissionChange.ts';
+import { createUserInputEnqueue } from './user-input.ts';
 import { getThinkingEnabledFromMemory } from '../../../desktop/src/main/maker-host/newMakerDefaultsCache.ts';
 import { createHostMessageStore, createHostMessageRecovery } from '../message-store.ts';
 import { resolveSessionReferencesWithPorts } from '../../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
@@ -2830,6 +2833,8 @@ const switchModel = id => ({ id, efforts: [], defaultEffort: null, supportsFastM
 const switchViews = agent => [{ id: 'prov-a', connected: true, agents: [agent], source: 'user',
   routing: { [agent]: {} }, models: { [agent]: ['big', 'small'].map(switchModel) } }];
 async function modelChangeRuntime(t, { agent = 'claude-code' } = {}) {
+  // The queue's owner is the account's database (as main.ts): close the queue before the database.
+  t = lifoCleanup(t);
   const SWITCH_VIEWS = switchViews(agent);
   const db = await recoveryDatabase(t);
   const row = id => db.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id);
@@ -2837,6 +2842,7 @@ async function modelChangeRuntime(t, { agent = 'claude-code' } = {}) {
   // Each send's landing hook call (the send transaction's applyPendingAgentSwitch), by task.
   const landings = [];
   const views = { current: SWITCH_VIEWS };
+  const queueHooks = hostRuntimeSelectionQueueHooks(() => selection, { isSessionRestarting: () => false });
   const { h, handoffs } = assembledRuntime(t, db, {
     readSession: async id => {
       const stored = row(id);
@@ -2844,14 +2850,18 @@ async function modelChangeRuntime(t, { agent = 'claude-code' } = {}) {
       return { id, status: stored.status, agentKind: stored.agent_kind === 'cc' ? 'claude-code' : stored.agent_kind, model: stored.model, workingDir: db.root,
         providerId: stored.provider_id, permissionMode: 'ask', planModeEnabled: false, sdkSessionId: stored.sdk_session_id };
     },
-    applyPendingAgentSwitch: (id, options) => { landings.push(id); return selection.applyPendingAgentSwitch(id, options); },
-    // As main.ts: a settled turn lands the task's pending credential switch.
-    onSessionSettled: id => selection.onTurnSettled(id),
+    // The runtime selection's queue hooks, as main.ts passes them (runtime-selection.ts), each send's
+    // landing recorded by task.
+    ...queueHooks,
+    applyPendingAgentSwitch: (id, options) => { landings.push(id); return queueHooks.applyPendingAgentSwitch(id, options); },
+    // As main.ts: the queue's owner is the current account's database.
+    getOwner: getCurrentDbClientSnapshot,
   });
   // As Maker: a task's meta is its stored row (maker.ts getSessionMeta reads the session storage).
   h.maker.getSessionMeta = id => new OwnerSessionStorage({ db: () => getCurrentDbClientSnapshot().client }).get(id);
   selection = createHostRuntimeSelection({
     getMaker: () => h.maker,
+    getMakerIfReady: () => h.maker,
     publish: event => h.events.push(event),
     createDbMessage: db.persistMessage,
     pendingHandoff: handoffs,
@@ -3192,6 +3202,10 @@ test('model change at send: a credential switch registered during a turn lands w
   r.h.maker.listActiveSessions = () => [...r.h.maker.sessions.values()];
   // A second connected provider offering the same models: the switch's target source. The models
   // have effort levels: the landing's route write resolves the task's effort against the target model.
+  // Known desktop defect, shared here: for a model without effort levels that write stores effort =
+  // null, which sessions.effort (NOT NULL) refuses, so the switch never lands and the queue stays held.
+  // Its fix is a separate desktop change (local branch cindy/fix-pending-switch-null-effort); once it
+  // is merged, add a case with a model without effort levels.
   const withEfforts = view => ({ ...view, models: { 'claude-code': view.models['claude-code']
     .map(entry => ({ ...entry, efforts: ['low', 'high'], defaultEffort: 'high' })) } });
   r.views.current = [...r.views.current, ...switchViews('claude-code').map(view => ({ ...view, id: 'prov-b' }))]
@@ -3213,6 +3227,248 @@ test('model change at send: a credential switch registered during a turn lands w
   assert.equal(getSessionProvider('settle'), 'prov-b');
   const applied = r.h.events.filter(event => event.type === 'plugin_push' && event.channel === 'maker:session-credential-switch-applied');
   assert.deepEqual(applied.map(event => event.payload), [{ sessionId: 'settle', model: 'small', providerId: 'prov-b' }]);
+});
+
+// --- Permission mode and Plan mode (A7): the desktop's commit, run by the Host's set-permission-mode and
+// set-plan-mode entries (runtime-selection.ts over sessionPermissionSettings.ts) on a migrated database.
+// Gap for each: the Host's old /sessions/update path only switched the runtime and wrote the column.
+const flushTurns = async () => { for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve)); };
+const sessionPatches = (r, id) => r.h.events.filter(event => event.type === 'session_changed' && event.sessionId === id)
+  .map(event => event.patch);
+const permissionRow = (r, id) => r.db.db.prepare('SELECT permission_mode AS mode, plan_mode_enabled AS plan FROM sessions WHERE id = ?').get(id);
+// A task with a live runtime (one turn run and ended).
+async function liveTask(r, id) {
+  await r.createTask(id);
+  return r.runTurn(id, `${id}-1`);
+}
+// Holds a task's permission queue (sessionPermissionChange.ts) from now until release() is called; work
+// queued for the task after this waits behind it.
+function holdPermissionQueue(id) {
+  let release;
+  let started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const held = withSessionPermissionChange(id, () => new Promise(resolve => { release = resolve; started(); }));
+  return { held, release: async () => { await ready; release(); return held; } };
+}
+
+// Rule: the desktop's commitSessionPermissionMode: the live runtime switches, the task row is written
+// through bots.persistSessionPermission, and the clients get the patch.
+test('permission mode: a change applies to the live runtime, the task row and the clients', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  const live = await liveTask(r, 'perm-apply');
+  assert.equal(await r.selection.setPermissionMode('perm-apply', 'auto'), true);
+  assert.equal(live.options.permissionMode, 'auto');
+  assert.equal(permissionRow(r, 'perm-apply').mode, 'auto');
+  assert.deepEqual(sessionPatches(r, 'perm-apply').at(-1), { permissionMode: 'auto' });
+});
+
+// Rule: the desktop's SET_PERMISSION_MODE checks its arguments before the commit (isSessionPermissionMode).
+// Gap: the desktop's guard test injects a check that always passes, so no test refused an invalid mode.
+test('permission mode: an invalid mode is refused with INVALID_PARAMS and nothing changes', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  const live = await liveTask(r, 'perm-invalid');
+  const before = live.options.permissionMode;
+  const patchesBefore = sessionPatches(r, 'perm-invalid').length;
+  // Refused before the runtime is touched (the database transaction would refuse it too, after the
+  // runtime had switched and been rolled back).
+  const runtimeSwitches = [];
+  const switchRuntime = live.setPermissionMode;
+  live.setPermissionMode = async mode => { runtimeSwitches.push(mode); return switchRuntime(mode); };
+  await assert.rejects(r.selection.setPermissionMode('perm-invalid', 'everything'), err => err.code === 'INVALID_PARAMS');
+  await assert.rejects(r.selection.setPermissionMode(42, 'auto'), err => err.code === 'INVALID_PARAMS');
+  assert.deepEqual(runtimeSwitches, [], 'the runtime never switched');
+  assert.equal(live.options.permissionMode, before);
+  assert.equal(permissionRow(r, 'perm-invalid').mode, 'ask');
+  assert.equal(sessionPatches(r, 'perm-invalid').length, patchesBefore, 'no patch reached the clients');
+});
+
+// Rule: the desktop's commit rolls the runtime back when the write fails, inside the same queue turn, and
+// reports the failure; a task with no row is NOT_FOUND; a review task's settings are fixed.
+test('permission mode: a failed write rolls the runtime back; a missing task is NOT_FOUND; a review task is refused', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  const live = await liveTask(r, 'perm-fail');
+  r.db.db.exec(`CREATE TRIGGER perm_fail BEFORE UPDATE OF permission_mode ON sessions WHEN NEW.id = 'perm-fail'
+    BEGIN SELECT RAISE(ABORT, 'permission write failed'); END;`);
+  await assert.rejects(r.selection.setPermissionMode('perm-fail', 'bypassPermissions'), /permission write failed/);
+  assert.equal(live.options.permissionMode, 'ask', 'the runtime is back on the stored mode');
+  assert.equal(permissionRow(r, 'perm-fail').mode, 'ask');
+  await assert.rejects(r.selection.setPermissionMode('perm-missing', 'auto'), err => err.code === 'NOT_FOUND');
+  await r.createTask('perm-review');
+  r.db.db.prepare("UPDATE sessions SET source = 'review' WHERE id = ?").run('perm-review');
+  await assert.rejects(r.selection.setPermissionMode('perm-review', 'auto'), err => err.code === 'UNSUPPORTED_CAPABILITY');
+  assert.equal(permissionRow(r, 'perm-review').mode, 'ask');
+});
+
+// Rule: a real permission or Plan change drops the task's shared provider "always allow" grants and
+// revokes their live observers (credentialGrants.ts forgetCredentialGrants). On the Host the observers are
+// task actions' rewind authorizations (taskActionHost.ts, loaded by host-tools.ts). Gap: no Host test
+// reached this revocation.
+test('permission and Plan mode: a real change revokes the task\'s grant observers; the same value does not', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await liveTask(r, 'perm-grants');
+  let revoked = 0;
+  const unwatch = watchCredentialGrantRevocation('perm-grants', () => { revoked += 1; });
+  t.after(unwatch);
+  await r.selection.setPermissionMode('perm-grants', 'ask');
+  assert.equal(revoked, 0, 'the same permission mode keeps the grants');
+  await r.selection.setPermissionMode('perm-grants', 'auto');
+  assert.equal(revoked, 1);
+  await r.selection.setPlanMode('perm-grants', false);
+  assert.equal(revoked, 1, 'the same Plan mode keeps the grants');
+  await r.selection.setPlanMode('perm-grants', true);
+  assert.equal(revoked, 2);
+});
+
+// Rule: changes of one task are ordered behind its permission queue: a later change starts after the
+// earlier one has finished (sessionPermissionChange.ts), so the last choice is what stays.
+test('permission mode: two changes of a task run one after the other and the later one stays', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  const live = await liveTask(r, 'perm-order');
+  const switchRuntime = live.setPermissionMode;
+  const calls = [];
+  let releaseFirst;
+  const firstHeld = new Promise(resolve => { releaseFirst = resolve; });
+  live.setPermissionMode = async mode => { calls.push(mode); if (calls.length === 1) await firstHeld; return switchRuntime(mode); };
+  const first = r.selection.setPermissionMode('perm-order', 'auto');
+  const second = r.selection.setPermissionMode('perm-order', 'bypassPermissions');
+  await waitFor(() => calls.length === 1);
+  await flushTurns();
+  assert.deepEqual(calls, ['auto'], 'the second change waits for the first');
+  releaseFirst();
+  await Promise.all([first, second]);
+  assert.deepEqual(calls, ['auto', 'bypassPermissions']);
+  assert.equal(live.options.permissionMode, 'bypassPermissions');
+  assert.equal(permissionRow(r, 'perm-order').mode, 'bypassPermissions');
+});
+
+// Rule (the desktop's maker:send and INPUT_ENQUEUE): a client's new input waits for the task's permission
+// changes in flight before anything takes the send lock, and is refused if the account changed meanwhile.
+// Gap: the Host's input entries did not wait, so an input could start a turn before a tightening landed.
+test('new input waits for a permission change in flight, and is refused if the account changed', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  const enqueue = createUserInputEnqueue({ getOwner: getCurrentDbClientSnapshot, enqueue: (id, input) => r.h.queue.enqueue(id, input) });
+  await r.createTask('input-wait');
+  const change = holdPermissionQueue('input-wait');
+  const entered = enqueue('input-wait', { clientId: 'input-wait-1', text: 'after the change' });
+  await flushTurns();
+  assert.equal(r.h.maker.sessions.get('input-wait'), undefined, 'nothing started while the change runs');
+  await change.release();
+  await entered;
+  await waitFor(() => r.h.maker.sessions.get('input-wait')?.sent.length === 1);
+  // The account changes while an input waits: it is refused and never queued.
+  await r.createTask('input-owner');
+  let owner = getCurrentDbClientSnapshot();
+  const ownerEnqueue = createUserInputEnqueue({ getOwner: () => owner, enqueue: (id, input) => r.h.queue.enqueue(id, input) });
+  const ownerChange = holdPermissionQueue('input-owner');
+  const refused = ownerEnqueue('input-owner', { clientId: 'input-owner-1', text: 'stale' }).then(() => null, err => err);
+  await flushTurns();
+  owner = { another: 'owner' };
+  await ownerChange.release();
+  assert.equal((await refused)?.code, 'PRECONDITION_FAILED');
+  assert.equal(r.h.maker.sessions.get('input-owner'), undefined);
+});
+
+// Rule (the desktop: "Only fresh user IPC waits ... Internal continuations and turn cleanup must remain
+// able to finish"): the queue's next input and a context recovery's replay do not wait for the permission
+// queue. Reverse guard: a later change must not make them wait too.
+test('the queue\'s next input and a recovery replay do not wait for the permission queue', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await r.createTask('drain');
+  await r.h.queue.enqueue('drain', { clientId: 'drain-1', text: 'first' });
+  await waitFor(() => r.h.maker.sessions.get('drain')?.sent.length === 1);
+  await r.h.queue.enqueue('drain', { clientId: 'drain-2', text: 'second' });
+  const session = r.h.maker.sessions.get('drain');
+  const change = holdPermissionQueue('drain');
+  const stamp = { sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId };
+  session.emit({ type: 'status', data: { isRunning: true }, ...stamp });
+  session.emit({ type: 'done', data: {}, ...stamp });
+  // The queue sends its next input at the turn's end while the permission queue is still held.
+  await waitFor(() => [...r.h.maker.sessions.values()].some(entry => entry.sent.includes('second')));
+  await change.release();
+});
+test('a context recovery replay does not wait for the permission queue', { timeout: 30_000 }, async t => {
+  const r = await assembledRecovery(t);
+  const change = holdPermissionQueue('replay-held');
+  const first = await r.overflow('replay-held');
+  await waitFor(() => { const next = r.h.maker.sessions.get('replay-held'); return next && next !== first && next.sent.length === 1; });
+  await change.release();
+});
+
+// Rule: the desktop's SET_PLAN_MODE commit, and its save of a Plan mode the runtime changed itself
+// (emitWiredSessionEvent: behind the task's permission queue, only while the owner, the binding and the
+// runtime's value still hold; the clients learn it from the session patch, not from the raw event).
+// Gap: the Host did not save a runtime's own Plan change, so a task that left Plan mode was back in it at
+// its next runtime start.
+test('Plan mode: a change applies; a runtime\'s own exit is saved, but not for a stale value, a replaced runtime or another account', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  const live = await liveTask(r, 'plan');
+  live.getPlanMode = () => live.options.planMode ?? false;
+  await r.selection.setPlanMode('plan', true);
+  assert.equal(live.options.planMode, true);
+  assert.equal(permissionRow(r, 'plan').plan, 1);
+  assert.deepEqual(sessionPatches(r, 'plan').at(-1), { planModeEnabled: true });
+  // The runtime leaves Plan mode itself (a plan approved): saved.
+  live.options.planMode = false;
+  live.emit({ type: 'plan_mode_changed', data: { enabled: false } });
+  await withSessionPermissionChange('plan', async () => {});
+  assert.equal(permissionRow(r, 'plan').plan, 0);
+  assert.deepEqual(sessionPatches(r, 'plan').at(-1), { planModeEnabled: false });
+  assert.equal(r.h.events.some(event => event.event?.type === 'plan_mode_changed' || event.type === 'plan_mode_changed'), false,
+    'not delivered as a turn event');
+  // A stale value: the runtime is back in Plan mode by the time the save runs.
+  await r.selection.setPlanMode('plan', true);
+  let held = holdPermissionQueue('plan');
+  live.options.planMode = false;
+  live.emit({ type: 'plan_mode_changed', data: { enabled: false } });
+  live.options.planMode = true;
+  await held.release();
+  await withSessionPermissionChange('plan', async () => {});
+  assert.equal(permissionRow(r, 'plan').plan, 1);
+  // A replaced runtime: the event of the runtime the task no longer has is not saved.
+  held = holdPermissionQueue('plan');
+  live.options.planMode = false;
+  live.emit({ type: 'plan_mode_changed', data: { enabled: false } });
+  await r.h.maker.closeSession('plan');
+  await r.h.queue.enqueue('plan', { clientId: 'plan-2', text: 'next' });
+  await waitFor(() => { const next = r.h.maker.sessions.get('plan'); return next && next !== live && next.sent.length === 1; });
+  await held.release();
+  await withSessionPermissionChange('plan', async () => {});
+  assert.equal(permissionRow(r, 'plan').plan, 1);
+  // A runtime wired under another account (the account changed since): the Host's binding with an owner
+  // that is no longer the current one, as the executor hands it over.
+  const next = r.h.maker.sessions.get('plan');
+  next.getPlanMode = () => next.options.planMode ?? false;
+  next.options.planMode = false;
+  r.selection.persistAgentPlanModeChange({ ownerDb: { client: {}, userId: 'another-owner', clientEpoch: -1 },
+    sessionBindings: { getSession: () => next } }, next, { type: 'plan_mode_changed', data: { enabled: false } });
+  await withSessionPermissionChange('plan', async () => {});
+  assert.equal(permissionRow(r, 'plan').plan, 1);
+});
+
+// Rule (botPermissionSync.ts, now bound on the Host): a permission save of a Bot task is followed by its
+// other lanes: each is reconciled behind its own permission queue, its grant observers revoked, and the
+// clients told. Gap: bound to nothing, the other lanes' rows changed (the shared transaction) but no client
+// heard of it and their grants stayed.
+test('Bot: a permission change of a Bot task reaches its other lanes\' rows, grants and clients', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  const now = Date.now();
+  await r.createTask('bot-main');
+  await r.createTask('bot-topic');
+  r.db.db.prepare("UPDATE sessions SET source = 'bot' WHERE id IN ('bot-main', 'bot-topic')").run();
+  r.db.db.prepare("INSERT INTO bot_profiles (id, display_name, current_version, created_at, updated_at) VALUES ('bot-1', 'Bot', 1, ?, ?)").run(now, now);
+  r.db.db.prepare("INSERT INTO bot_profile_versions (id, bot_id, version, capabilities_json, created_at) VALUES ('bot-1-v1', 'bot-1', 1, ?, ?)")
+    .run(JSON.stringify({ permissions: 'ask' }), now);
+  const link = r.db.db.prepare('INSERT INTO bot_session_links (id, bot_id, session_id, role, created_at) VALUES (?, ?, ?, ?, ?)');
+  link.run('link-main', 'bot-1', 'bot-main', 'canonical', now);
+  link.run('link-topic', 'bot-1', 'bot-topic', 'channel', now);
+  let topicRevoked = 0;
+  const unwatch = watchCredentialGrantRevocation('bot-topic', () => { topicRevoked += 1; });
+  t.after(unwatch);
+  await r.selection.setPermissionMode('bot-main', 'auto');
+  assert.equal(permissionRow(r, 'bot-main').mode, 'auto');
+  assert.equal(permissionRow(r, 'bot-topic').mode, 'auto');
+  assert.deepEqual(sessionPatches(r, 'bot-topic').at(-1), { permissionMode: 'auto' });
+  assert.ok(topicRevoked >= 1, 'the other lane\'s grants are dropped');
 });
 
 // Guard: main.ts casts the untyped queue api to the runtime selection's inputQueue port. Every member

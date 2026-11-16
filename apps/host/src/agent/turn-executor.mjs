@@ -194,7 +194,17 @@ export function createTurnExecutor(deps) {
     history.noteSessionAgentKind(sessionId, dbKind(session.agentKind ?? turns.get(sessionId)?.dbKind));
     deps.interactions?.attach(session, sessionId, { history, isCurrent: deps.isCurrent,
       isPaused: () => deps.isExecutionPaused?.(sessionId) === true });
+    // As the desktop wires a runtime (register.ts): the owner it was wired under, which a runtime's own
+    // Plan change is saved for.
+    const ownerDb = deps.getOwner?.() ?? null;
     const unsubscribe = session.onEvent(event => {
+      // As the desktop's emitWiredSessionEvent: a Plan mode the runtime changed itself is saved (behind
+      // the task's permission queue, only while the owner, this binding and the runtime's value hold), in
+      // or out of a turn, and is not delivered as a turn event.
+      if (event.type === 'plan_mode_changed') {
+        deps.persistAgentPlanModeChange?.({ ownerDb, sessionBindings: { getSession: id => bindings.get(id)?.session } }, session, event);
+        return;
+      }
       const turn = turns.get(sessionId);
       if (!turn || turn.session !== session || !deps.isCurrent()) return;
       // The context usage a status event carries, decided as the desktop decides it
