@@ -285,6 +285,38 @@ describe('selected plugin host', () => {
     expect(screen.queryByText('Old market release')).toBeNull();
   });
 
+  // Unit / Codex C2: while unmounted the page cannot observe Host pushes.
+  // Reconnect tests keep the component mounted and miss a fresh cached remount.
+  // Re-enter within 30 seconds: show the cache during the read, then adopt the
+  // changed installed list, or preserve it with the existing read-failure UI.
+  it.each(['success', 'failure'] as const)('revalidates a warm remote snapshot after remount: %s', async outcome => {
+    vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    const first = render(<RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online />);
+    await screen.findByText('computer-a');
+    first.unmount();
+    const normal = invoke.getMockImplementation()!;
+    let finish!: (value: unknown) => void, fail!: (error: Error) => void;
+    const pending = new Promise((resolve, reject) => { finish = resolve; fail = reject; });
+    invoke.mockImplementation(async (device, channel, args) => args[0]?.actionId === 'management:snapshot'
+      && Object.keys(args[0].input ?? {}).length === 0 ? { effects: [], result: await pending } : normal(device, channel, args));
+    const before = invoke.mock.calls.length;
+    render(<RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online />);
+    expect(screen.getByText('computer-a')).toBeTruthy();
+    await waitFor(() => expect(invoke.mock.calls.slice(before).some(call => call[2]?.[0]?.actionId === 'management:snapshot'
+      && Object.keys(call[2][0].input ?? {}).length === 0)).toBe(true));
+    await act(async () => {
+      if (outcome === 'success') finish(snapshot('Changed while away'));
+      else fail(new Error('Host read failed'));
+    });
+    if (outcome === 'success') {
+      expect(await screen.findByText('Changed while away')).toBeTruthy();
+      expect(screen.queryByText('computer-a')).toBeNull();
+    } else {
+      expect(screen.getByText('computer-a')).toBeTruthy();
+      expect(notices.error).toHaveBeenCalledWith('settings.ghosts.remote.readFailed', expect.objectContaining({ action: expect.any(Object) }));
+    }
+  });
+
   it.each(['cancelled', 'changed'] as const)('presents the %s receipt with the existing notice', async outcome => {
     const normal = invoke.getMockImplementation()!;
     invoke.mockImplementation(async (device, channel, args) =>

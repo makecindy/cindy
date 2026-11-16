@@ -70,7 +70,12 @@ export function pluginInstalledGrid(memory: CatalogMemory, query: string) {
 }
 
 export function mergePluginSnapshot(previous: PluginMarketSnapshot | null, next: PluginMarketSnapshot, renewIcons = false) {
-  const items = mergePluginItems(previous?.items ?? [], next.items, renewIcons);
+  // Main reports failures per source, alongside successful custom results.
+  const received = new Set(next.items.map(item => item.pluginId));
+  const unavailable = new Set(next.unavailableCustomSourceNames);
+  const retained = previous?.items.filter(item => !received.has(item.pluginId) && (item.sourceType === 'server'
+    ? next.unavailableReason !== null : unavailable.has(item.sourceMarketName ?? ''))) ?? [];
+  const items = mergePluginItems(previous?.items ?? [], [...retained, ...next.items], renewIcons);
   return previous?.items === items && samePluginValue(previous, { ...next, items }) ? previous : { ...next, items };
 }
 
@@ -78,7 +83,6 @@ export function readLocalPluginSnapshot(memory: CatalogMemory, force = false, re
   if (memory.snapshotFlight) return memory.snapshotFlight;
   if (!force && memory.snapshot && Date.now() - memory.snapshotAt < PLUGIN_CATALOG_REFRESH_MS) return Promise.resolve(memory.snapshot);
   const flight = window.electronAPI.pluginMarket.snapshot().then(next => {
-    if (next.unavailableReason && memory.snapshot) throw new Error(next.unavailableReason);
     memory.snapshotAt = Date.now();
     return mergePluginSnapshot(memory.snapshot, next, renewIcons);
   }).finally(() => { if (memory.snapshotFlight === flight) memory.snapshotFlight = null; });

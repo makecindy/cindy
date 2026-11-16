@@ -661,6 +661,28 @@ describe('plugin page return navigation', () => {
     expect(install).toHaveBeenCalledWith(detail.pluginId, expect.objectContaining({ expectedReleaseId: fresh.releaseId, expectedManifest: fresh.manifest }));
   });
 
+  // Unit / Codex C1: the foreground path requests preserveOnError. Even after
+  // the reader accepts partial data, this caller must publish successful custom
+  // metadata while retaining the official cards and bounded outage behavior.
+  it('publishes partial custom-source refreshes during an official outage', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const snapshots = vi.fn().mockResolvedValue({ items: [detail], unavailableReason: null,
+      customSourceNames: [], unavailableCustomSourceNames: [] });
+    window.electronAPI.pluginMarket.snapshot = snapshots;
+    render(page('/plugins'));
+    const memory = pluginCatalogMemory(pluginCatalogOwnerKey('local', auth.dataOwnerId, auth.dataOwnerGeneration, 'en'), 'local');
+    await waitFor(() => expect(memory.snapshot?.items).toHaveLength(1));
+    const custom = { ...detail, pluginId: 'custom-updated', ghostId: 'custom-updated', sourceType: 'local-market' as const,
+      sourceMarketName: 'working', version: '2.0.0' };
+    snapshots.mockResolvedValue({ items: [custom], unavailableReason: 'official offline',
+      customSourceNames: ['working'], unavailableCustomSourceNames: [] });
+    clock.mockReturnValue(32_000);
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    await waitFor(() => expect(memory.snapshot?.customSourceNames).toEqual(['working']));
+    expect(memory.snapshot?.items.map(item => item.pluginId)).toEqual([detail.pluginId, custom.pluginId]);
+    expect(memory.snapshot?.unavailableReason).toBe('official offline');
+  });
+
   // Unit / review finding 3: settled partition-switch tests miss a pending old
   // locale. Snapshot success/error and recommendations may only publish to their
   // initiating bucket; the new language still waits for Main's locale sync.

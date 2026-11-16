@@ -188,7 +188,7 @@ export function RemotePluginPage({
       if (writable() && revision === readRevision.current) {
         setSnapshot(previous => {
           const market = mergePluginSnapshot(previous?.market ?? null, next.market);
-          return previous?.market === market && samePluginValue(previous, next) ? previous : { ...next, market };
+          return previous?.market === market && samePluginValue(previous, { ...next, market }) ? previous : { ...next, market };
         });
         catalogMemory.snapshotAt = Date.now(); refreshAt.current = catalogMemory.snapshotAt;
         setCatalogPaging(paging);
@@ -321,7 +321,9 @@ export function RemotePluginPage({
       setProjectPickerOpen(false);
     }
   }, [online, active]);
-  const previousVisibility = useRef({ online, active });
+  // A remount may have missed Host pushes while unsubscribed. Reuse the first
+  // activation refresh even when its retained snapshot is younger than the TTL.
+  const previousVisibility = useRef({ online: false, active: false });
   useEffect(() => {
     const previous = previousVisibility.current;
     previousVisibility.current = { online, active };

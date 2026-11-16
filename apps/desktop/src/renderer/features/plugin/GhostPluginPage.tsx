@@ -705,15 +705,14 @@ function LocalGhostPluginPage({
     try {
       const snapshot = await readLocalPluginSnapshot(memory, !background, renewIcons);
       if (!current()) return;
-      // Main intentionally represents market outages as data so the initial page can render a
-      // non-blocking empty state. During icon renewal, convert that fulfilled unavailable result
-      // back into a failure: the catch path preserves the visible snapshot and the hook retries.
-      if (preserveOnError && snapshot.unavailableReason !== null) {
-        throw new Error(snapshot.unavailableReason);
-      }
       setMarketSnapshot(snapshot);
       lastMarketRefreshAtRef.current = Date.now();
       if (current()) await memory.browser.current.refresh?.();
+      // Publish successful sources before reporting an official outage to the
+      // existing icon-renewal retry hook. Failed sources retain their old data.
+      if (preserveOnError && snapshot.unavailableReason !== null) {
+        throw new Error(snapshot.unavailableReason);
+      }
     } catch (error) {
       if (!current()) return;
       setMarketSnapshot((current) =>
