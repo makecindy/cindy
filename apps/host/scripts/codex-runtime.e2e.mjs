@@ -212,7 +212,9 @@ try {
   };
   graph = createHostAgentGraph({ userDataDir: profile, providerConfig: config, gateway: modelAccess.gateway,
     codexBinaryPath: binary, codexRuntime: runtime, mcpRuntime: mcp, makerMemory: memory,
-    mcpProviders: createHostMemoryMcpProviders(memory),
+    // main.ts passes the helper's history decision (hostTools.readsAccountHistory); this run has no
+    // helper and never calls session_search, so every task reads as its own history only.
+    mcpProviders: createHostMemoryMcpProviders(memory, { readsAccountHistory: async () => false, deviceId: () => '' }),
     storage: new OwnerSessionStorage({ db: () => database }),
   });
   attachAgentsToMakerMemory(memory, graph.instances);

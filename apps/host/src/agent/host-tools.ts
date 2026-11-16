@@ -93,6 +93,15 @@ export function createHostToolService(options: Options) {
   services.replace(providers);
   return {
     providers, terminal, services,
+    /**
+     * Whether a task's history reads may cover every task: the cindy_helper history decision
+     * (historyToolCallbacks.ts resolveSessionScope, through the same authorizer), which the desktop's
+     * session_search shares (mcp-providers.ts botReadsAccountHistory).
+     */
+    async readsAccountHistory(sessionId: string | undefined): Promise<boolean> {
+      if (!sessionId && getPluginHostToolCaller()) return true;
+      return (await authorizeCall({ sessionId, server: 'cindy_helper', tool: 'history', args: {} })).ok;
+    },
     request(id: string, payload: unknown, pageCurrent: () => boolean) {
       return handlePluginHostToolRequest(id, payload, () => current() && pageCurrent(), {
         owner: options.owner, getGhost: options.getGhost,

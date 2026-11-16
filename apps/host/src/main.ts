@@ -786,7 +786,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       // Vision-bridge notices, which the desktop sends its windows; the client maps them to
       // MAKER_PUSH.EVENT (device-link.ts) and they are not persisted.
       publishVisionBridgeNotice: notice => eventHub.publish(notice),
-      mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...createHostMemoryMcpProviders(makerMemory), pluginGateway.provider]),
+      mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...createHostMemoryMcpProviders(makerMemory, { readsAccountHistory: hostTools.readsAccountHistory, deviceId: () => currentDeviceId ?? '' }), pluginGateway.provider]),
       userDataDir: dataDir,
     });
     // The desktop's Auto-review authorization context (review-context.ts).

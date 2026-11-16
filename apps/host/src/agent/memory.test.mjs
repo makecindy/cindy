@@ -10,6 +10,12 @@ import { readMemorySettings, createHostMemoryManager, createHostMemoryMcpProvide
 import { configureHostOwner } from './claude-auth.mjs';
 import { beginAppSessionBoundary } from '../../../desktop/src/main/appSessionState.ts';
 import { dataOwnerStorageKey } from '../../../desktop/src/main/dataOwnerPath.ts';
+import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
+import { openOwnerDatabase } from '../../../desktop/src/main/localDb/startupCore.ts';
+import { createDbClientForHandle } from '../../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
+import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
+import { hostRuntimeLayout } from '../runtime-layout.mjs';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 const require = createRequire(new URL('../../../desktop/package.json', import.meta.url));
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
@@ -74,7 +80,11 @@ async function hostMemoryFixture(t, ownerId) {
   const manager = createHostMemoryManager({ userDataDir: root, ownerId });
   const oneShots = [];
   attachAgentsToMakerMemory(manager, { 'claude-code': { oneShot: async prompt => { oneShots.push(prompt); return 'merge nothing'; } } });
-  const provider = createHostMemoryMcpProviders(manager).find(p => p.name === 'cindy_memory');
+  const helperDecisions = [];
+  const provider = createHostMemoryMcpProviders(manager, {
+    readsAccountHistory: async sessionId => { helperDecisions.push(sessionId); return false; },
+    deviceId: () => 'host-device',
+  }).find(p => p.name === 'cindy_memory');
   const clients = [];
   t.after(async () => {
     for (const close of clients) await close();
@@ -82,15 +92,15 @@ async function hostMemoryFixture(t, ownerId) {
     configureHostOwner({ userDataDir: root, ownerId: null });
     fs.rmSync(root, { recursive: true, force: true });
   });
-  const connect = async workingDir => {
-    const { instance } = provider.toClaudeSdkConfig({ sessionId: 'task-memory', agentKind: 'claude-code', workingDir });
+  const connect = async (workingDir, sessionId = 'task-memory') => {
+    const { instance } = provider.toClaudeSdkConfig({ sessionId, agentKind: 'claude-code', workingDir });
     const client = new Client({ name: 'host-memory-test', version: '1' });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await Promise.all([client.connect(a), instance.connect(b)]);
     clients.push(async () => { await client.close(); await instance.close(); });
     return (name, args = {}) => client.callTool({ name: 'call_tool', arguments: { name, args } });
   };
-  return { root, oneShots, connect };
+  return { root, oneShots, connect, helperDecisions };
 }
 
 const NOTE = { type: 'project', name: 'release-notes', title: 'Release notes', description: 'Where the release notes live', body: 'docs/release.md' };
@@ -126,4 +136,45 @@ test('a memory written from a teammate project lands in the project folder, as o
   const written = await call('memory_write', NOTE);
   assert.notEqual(written.isError, true, JSON.stringify(written));
   assert.deepEqual(fs.readdirSync(path.join(workspace, '.cindy', 'memory')).filter(name => name.endsWith('.md') && name.includes('release-notes')).length, 1);
+});
+
+// The desktop binds session_search to the messages_fts search (mcp-providers.ts searchSessions); the
+// Host did not, so the tool was not registered and a Host task could not search its task history.
+// Minimal failing input: one stored message, then session_search from a task of the same account.
+// Tier: unit, real migrated owner database in a temp profile, in-process MCP.
+test('session_search on the Host finds task history, with the desktop checks on the caller', async t => {
+  // The database lives in the fixture's profile: close it before the profile is removed.
+  t = lifoCleanup(t);
+  const ownerId = 'memory-search-owner';
+  const f = await hostMemoryFixture(t, ownerId);
+  // The development build refuses to migrate what it takes for the official shared profile
+  // (XDT_OFFICIAL_SHARED_PROFILE=1 inside a Cindy task); this is a fixture profile.
+  const sharedProfile = process.env.XDT_OFFICIAL_SHARED_PROFILE;
+  delete process.env.XDT_OFFICIAL_SHARED_PROFILE;
+  t.after(() => { if (sharedProfile !== undefined) process.env.XDT_OFFICIAL_SHARED_PROFILE = sharedProfile; });
+  configureAppDataDir(path.join(f.root, 'app-data'));
+  const layout = hostRuntimeLayout();
+  const opened = await openOwnerDatabase({ userDataDir: f.root, ownerId, isPackaged: false,
+    drizzleDir: layout.drizzleDir, sqliteVecExtPath: layout.sqliteVecPath });
+  const database = createDbClientForHandle({ db: opened.db, drizzle: opened.drizzle, dispose: async () => opened.db.close() });
+  setCurrentDbClient(database, ownerId);
+  t.after(async () => { clearCurrentDbClient(); await database.dispose(); });
+  opened.db.exec(`INSERT INTO sessions(id,source,status,created_at,updated_at) VALUES
+      ('task-memory','desktop','active',1,1),('task-earlier','desktop','active',1,1);
+    INSERT INTO messages(id,client_id,session_id,role,content,created_at)
+      VALUES ('m-earlier','c-earlier','task-earlier','user','"where is the release checklist"',1);`);
+  const workdir = path.join(f.root, 'project');
+  fs.mkdirSync(workdir);
+
+  const search = await (await f.connect(workdir))('session_search', { query: 'checklist' });
+  assert.notEqual(search.isError, true, JSON.stringify(search));
+  const { hits } = JSON.parse(search.content[0].text).data;
+  assert.deepEqual(hits.map(hit => [hit.sessionId, hit.messageId, hit.sessionUrl]),
+    [['task-earlier', 'm-earlier', 'cindy://session/task-earlier?device=host-device']]);
+  assert.deepEqual(f.helperDecisions, ['task-memory']);
+
+  // A caller that is not a task of this account (the desktop's restricted surface) is refused.
+  const stranger = await (await f.connect(workdir, 'task-elsewhere'))('session_search', { query: 'checklist' });
+  assert.equal(stranger.isError, true);
+  assert.match(stranger.content[0].text, /unavailable for this task/);
 });
