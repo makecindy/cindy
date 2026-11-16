@@ -396,9 +396,7 @@ html:lang(ko) {
   margin: 0;
   --composer-list-padding: 1.5em;
   --composer-list-marker-extra: 0em;
-  padding-inline-start: calc(
-    var(--composer-list-padding, 1.5em) + var(--composer-list-marker-extra, 0em)
-  );
+  padding-inline-start: 0;
 }
 /* The ideographic comma is a full-width glyph, unlike the period / closing
    parenthesis in the other ordered markers. Keep its extra width separate
@@ -443,8 +441,18 @@ html:lang(ko) {
   content: counter(list-item) '、';
 }
 [data-chat-input-root] .ProseMirror li {
+  direction: ltr;
+  margin-inline-start: calc(
+    var(--composer-list-padding, 1.5em) + var(--composer-list-marker-extra, 0em)
+  );
   padding-inline-start: 0.15em;
   overflow-wrap: anywhere;
+}
+/* Each paragraph already has dir=auto. A parent li with dir=auto skips that
+   directional subtree, so follow the first paragraph's native direction.
+   Reserve marker space per item, including mixed and nested lists. */
+[data-chat-input-root] .ProseMirror li:has(> p:first-child:dir(rtl)) {
+  direction: rtl;
 }
 [data-chat-input-root] .ProseMirror li > p {
   margin: 0;
@@ -1376,13 +1384,15 @@ body.resizing-pane [data-ghost-webview] {
   color: #c9d1d9;
   font-weight: bold;
 }
+/* Diff rows use the shared diff tokens (DESIGN.md §2), not github-dark's
+ * paler #aff5b4 / #ffdcd7, so hljs diffs match DiffView and ```diff blocks. */
 .dark .hljs-addition {
-  color: #aff5b4;
-  background-color: #033a16;
+  color: var(--diff-add-fg);
+  background-color: var(--diff-add-bg);
 }
 .dark .hljs-deletion {
-  color: #ffdcd7;
-  background-color: #67060c;
+  color: var(--diff-del-fg);
+  background-color: var(--diff-del-bg);
 }
 
 /* Diff full-row fill (2026-04-21) — highlight.js wraps each `+`/`-` line in

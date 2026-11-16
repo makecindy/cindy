@@ -4,7 +4,11 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import type { JSONContent } from '@tiptap/core';
 import { leadingSlashInvocation } from '@cindy/maker-shared';
 import type { InstalledGhost } from '../../../shared/ghost';
-import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
+import {
+  installedGhostLogicalIdentity,
+  installedGhostStoragePart,
+  type PluginLogicalIdentity,
+} from '../../../shared/pluginIdentity';
 import { getWorkdirDisabledGhostIds, useWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
@@ -67,16 +71,28 @@ export function pluginSkillSetupStates(
 
 /**
  * Where to make `pluginId` usable: its installed page, or its single market listing.
+ * An expected identity restricts recommendations to that verified source.
  * null = no single trusted source (do not silently choose between publishers).
  */
 export async function pluginSetupRoute(
   ghost: InstalledGhost | undefined,
   pluginId: string,
+  expectedIdentity?: PluginLogicalIdentity,
 ): Promise<string | null> {
+  if (expectedIdentity && expectedIdentity.ghostId !== pluginId) return null;
+  if (ghost && expectedIdentity) {
+    const actual = installedGhostLogicalIdentity(ghost);
+    if (actual.ghostId !== expectedIdentity.ghostId || actual.namespace !== expectedIdentity.namespace)
+      return null;
+  }
   if (ghost) return `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(ghost))}`;
   const market = await window.electronAPI.pluginMarket.lookup([pluginId]);
   const matches = market.items.filter(
-    (item) => item.ghostId === pluginId && item.installState !== 'conflict',
+    (item) =>
+      item.ghostId === pluginId &&
+      item.installState !== 'conflict' &&
+      // Missing namespace is unknown, never an implicit root match.
+      (!expectedIdentity || item.namespace === expectedIdentity.namespace),
   );
   return matches.length === 1 ? `/plugins?market=${encodeURIComponent(matches[0].pluginId)}` : null;
 }

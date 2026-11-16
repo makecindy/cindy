@@ -3,9 +3,22 @@ import {
   claudeModelFamily,
   isXaiWeeklyUsageCurrent,
   matchScopedWindowForModel,
+  formatClaudeSubscriptionPlanLabel,
+  formatCodexPlanLabel,
 } from '../subscriptionUsage.js';
 
 describe('subscription usage shared rules', () => {
+  // Unit: both clients used to collapse all Max tiers; older/unknown tiers must remain readable.
+  it.each([
+    ['max', 'max_5x', 'Max 5×'], ['max', 'max_20x', 'Max 20×'],
+    ['max', undefined, 'Max'], ['max', 'max_other', 'Max'], ['ultra', undefined, 'Ultra'],
+  ])('renders the reported Claude plan %s / %s as %s', (plan, tier, expected) => {
+    expect(formatClaudeSubscriptionPlanLabel(plan, tier)).toBe(expected);
+  });
+  it('preserves known and newly introduced Codex plan types', () => {
+    expect(formatCodexPlanLabel('prolite')).toBe('Pro Lite');
+    expect(formatCodexPlanLabel('future_plan')).toBe('Future Plan');
+  });
   it.each([
     ['claude-fable-5[1m]', 'fable'],
     ['claude-opus-5-5[1m] ', 'opus'],

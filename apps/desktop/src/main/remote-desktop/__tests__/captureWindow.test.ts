@@ -390,14 +390,16 @@ it.each(['files', 'direct'] as const)('keeps %s transport separate and denies ca
   const win = fake.windows[0], ses = fake.sessions[0];
   expect(isCaptureWindowWebContents(win.webContents)).toBe(true);
   // Unit regression: routed private networks cannot resolve Chromium's default
-  // mDNS candidates. Exercise the real window factory: opt in only the direct
-  // data window, before navigation, without granting media or changing files/video.
-  // Actual ICE and byte transfer are covered by provider-share-direct-smoke.mjs.
-  if (mode === 'direct') {
-    expect(win.webContents.setWebRTCIPHandlingPolicy).toHaveBeenCalledExactlyOnceWith('default_public_and_private_interfaces');
-    expect(win.webContents.setWebRTCIPHandlingPolicy.mock.invocationCallOrder[0])
-      .toBeLessThan(win.loadURL.mock.invocationCallOrder[0]);
-  } else expect(win.webContents.setWebRTCIPHandlingPolicy).not.toHaveBeenCalled();
+  // mDNS candidates, and neither can a peer when either OS withholds multicast:
+  // two computers on one LAN then moved files over TURN (2026-11) while their
+  // control link was direct. Exercise the real window factory: both data windows
+  // opt in before navigation, without granting media; the desktop video window
+  // keeps Chromium's default (asserted above) because its capture permission
+  // already publishes real addresses. Actual ICE and byte transfer are covered
+  // by provider-share-direct-smoke.mjs and file-peer-smoke.mjs.
+  expect(win.webContents.setWebRTCIPHandlingPolicy).toHaveBeenCalledExactlyOnceWith('default_public_and_private_interfaces');
+  expect(win.webContents.setWebRTCIPHandlingPolicy.mock.invocationCallOrder[0])
+    .toBeLessThan(win.loadURL.mock.invocationCallOrder[0]);
   expect(win.webContents.mainFrame.url).toBe(`http://localhost:9988/index.html?mode=${mode}`);
   owner.registered(event(win));
   await ready;

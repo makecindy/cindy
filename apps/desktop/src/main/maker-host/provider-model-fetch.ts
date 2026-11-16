@@ -26,8 +26,7 @@ import {
 import { classifyProviderError, type ProviderErrorCode } from '../../shared/providerErrors.js';
 import {
   deriveModelsDiscoveryUrl,
-  readCachedGenericOAuthAccessToken,
-  refreshGenericOAuthIfNeeded,
+  readGenericOAuthAccessToken,
 } from './generic-oauth.desktop.js';
 import { outboundFetch } from './outbound-fetch.desktop.js';
 
@@ -36,6 +35,7 @@ const FETCH_TIMEOUT_MS = 10_000;
 /** 失败响应体最多读取的字节数（分类只看前几 KB）。 */
 const MAX_ERROR_BODY_BYTES = 16 * 1024;
 const INVALID_DISCOVERY_URL = 'model discovery requires HTTP(S) URLs without embedded credentials';
+const CODEX_MODELS_CLIENT_VERSION = '0.147.0';
 
 // Share only an in-flight Hinoki HTTP read, not parsed models or agent-bound
 // provenance receipts. Every caller keeps its own parsing/error policy below.
@@ -124,15 +124,15 @@ export async function fetchSavedOAuthProviderModels(
   if (provider?.source !== 'user' || provider.auth.method !== 'oauth' || !oauth || !route || route.disabled || !isCurrent()) {
     return { ok: false, code: 'AUTH_INVALID' };
   }
+  let token: string | null;
   try {
-    await refreshGenericOAuthIfNeeded(storageProviderId, oauth);
+    token = await readGenericOAuthAccessToken(storageProviderId, oauth);
   } catch {
-    return { ok: false, code: 'UNKNOWN' };
+    return { ok: false, code: 'AUTH_INVALID' };
   }
   // A token refresh can outlive logout, account switching, or edits to this connection.
   // Never use the old endpoint snapshot with credentials from the new owner/configuration.
   if (!isCurrent()) return { ok: false, code: 'AUTH_INVALID' };
-  const token = readCachedGenericOAuthAccessToken(storageProviderId, oauth);
   if (!token) return { ok: false, code: 'AUTH_INVALID' };
   const modelsUrl = route.modelsUrl ?? oauth.modelsDiscoveryUrl;
   const result = await fetchProviderModels({
@@ -204,7 +204,16 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
     ? `${baseUrl.origin}${baseUrl.pathname.replace(/\/openai\/?$/, '').replace(/\/+$/, '')}/models`
     : explicit && modelsUrl?.origin === baseUrl.origin
     ? explicit : spec.wireProtocol === 'google-generative-ai'
-      ? `${spec.baseUrl.replace(/\/+$/, '')}/models` : deriveModelsDiscoveryUrl(spec.baseUrl);
+      ? `${spec.baseUrl.replace(/\/+$/, '')}/models` : deriveModelsDiscoveryUrl(
+        spec.baseUrl,
+        !explicit && spec.agent === 'codex'
+          && (spec.wireProtocol ?? 'openai-responses') === 'openai-responses'
+          && !isLoopbackProviderUrl(spec.baseUrl)
+          && baseUrl.origin !== 'https://api.elevenlabs.io'
+          && !isOpenRouterModelsUrl(deriveModelsDiscoveryUrl(spec.baseUrl))
+          ? { clientVersion: CODEX_MODELS_CLIENT_VERSION }
+          : undefined,
+      );
   const copilot = copilotModelsRequest(configuredDiscoveryUrl);
   const discoveryUrl = copilot?.url ?? configuredDiscoveryUrl;
   const mustStripCredentialHeaders =

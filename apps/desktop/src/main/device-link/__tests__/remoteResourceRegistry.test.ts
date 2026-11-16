@@ -18,7 +18,7 @@ function provider(overrides: Partial<RemoteResourceProvider> = {}): RemoteResour
     collection: {
       id: 'teammates',
       resourceKind: 'bot',
-      title: 'Teammates',
+      title: "Buddies",
     },
     list: vi.fn(async (): Promise<RemoteCollectionListResponse> => ({
       collectionId: 'teammates',

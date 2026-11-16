@@ -112,12 +112,6 @@ export function EnvCheckProvider({ children }: { children: ReactNode }) {
   const lastProgressSourceRef = useRef<'update' | 'binary' | null>(null);
   // Retry 防护：递增 callId，Phase 1 返回后校验是否仍为当前调用，避免旧 promise 干扰新流程
   const callIdRef = useRef(0);
-  // Mirror status to ref so the grace-period tick (delayed setTimeout) can see
-  // the latest value synchronously — closing over `status` from useCallback
-  // would always read the stale value at checkEnvironment() call time.
-  const statusRef = useRef<EnvCheckStatus>('idle');
-  useEffect(() => { statusRef.current = status; }, [status]);
-
   // Listen to CCD download progress from main process
   useEffect(() => {
     const unsubCCD = window.electronAPI.onBinaryDownloadProgress((payload) => {
@@ -192,11 +186,9 @@ export function EnvCheckProvider({ children }: { children: ReactNode }) {
         if (phase2InFlightRef.current && lastProgressSourceRef.current === 'binary') {
           return prev;
         }
-        // Terminal failure during startup: drop into download_failed so the splash
-        // dialog appears. Background polls (prev === 'passed') are filtered above.
-        if (payload.failed === true) {
-          return 'download_failed';
-        }
+        // Update failure must not display a blocking startup dialog. The reply
+        // or fixed grace period releases the splash once local services are ready.
+        if (payload.failed === true) return prev;
         if (typeof payload.progress === 'number') {
           // 二进制段 → 热更段切换(此时 Phase 2 已结束):无动画归零。
           if (lastProgressSourceRef.current === 'binary') {
@@ -269,40 +261,16 @@ export function EnvCheckProvider({ children }: { children: ReactNode }) {
     if (thisCallId !== callIdRef.current) return;
 
     // ── Phase 2 passed, maker:* IPC registered — resolve Phase 1 ──
-    // Grace 设计:Phase 1 一般 ~8ms 拿到 manifest 结论(内网 CDN);若 3s 内还没回,
-    // 多半是 manifest 慢或本身没更新,放行进主界面避免阻塞启动(#26 原意)。
-    // 但若 grace 到点时 Phase 1 已经在下补丁(status === 'updating'),不能硬切到
-    // passed 把正在下载的补丁踢出 splash——必须等下完,否则会出现"补丁下完后直接进
-    // 主界面、不触发 relaunch 提示"的回归。
+    // Updates are optional: even a stalled download must release the startup
+    // screen after this grace period. Main retains download/verification state.
     const UPDATE_GRACE_MS = 3_000;
     type UpdateResult = Awaited<typeof updatePromise>;
     const updateResult = await new Promise<UpdateResult>((resolve) => {
-      let settled = false;
-      const safeResolve = (v: UpdateResult) => {
-        if (settled) return;
-        settled = true;
-        resolve(v);
-      };
-
-      void updatePromise.then(safeResolve);
-
-      const tick = () => {
-        if (settled) return;
-        // 正在下补丁/已下完待重启 → 继续等 updatePromise,不超时。
-        // 'download_failed'(failed 事件先于 reply 到达)也要等:此时
-        // update-check-startup 已经/即将返回,以 null 结算会让下面的兜底
-        // setStatus('passed') 把重试弹窗冲掉。
-        if (
-          statusRef.current === 'updating' ||
-          statusRef.current === 'update_done' ||
-          statusRef.current === 'download_failed'
-        ) {
-          setTimeout(tick, 500);
-          return;
-        }
-        safeResolve(null);
-      };
-      setTimeout(tick, UPDATE_GRACE_MS);
+      const timer = setTimeout(() => resolve(null), UPDATE_GRACE_MS);
+      void updatePromise.then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      });
     });
 
     // 再次校验：grace period 期间可能发生了 retry
@@ -311,16 +279,6 @@ export function EnvCheckProvider({ children }: { children: ReactNode }) {
     if (updateResult?.hasUpdate && updateResult?.action === 'relaunch') {
       setStatus('update_done');
       setUpdateVersion(updateResult.version);
-      return;
-    }
-
-    // 热更下载失败:manifest 已确认存在新版本、只是文件没拉下来(或校验失败)。
-    // 留在 splash 弹重试对话框,与 main 侧 update-check-startup 的意图对齐
-    // (避免带着旧二进制静默进 app)。此前这里无条件 setStatus('passed'),会把
-    // failed 事件先行设置的 'download_failed' 冲掉——弹窗闪一下就消失(race)。
-    // 不会锁死离线用户:彻底断网时重试会命中 manifest_failed,走下面的放行分支。
-    if (updateResult?.hasUpdate && updateResult?.error === 'download_failed') {
-      setStatus('download_failed');
       return;
     }
 

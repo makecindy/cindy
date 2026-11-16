@@ -1576,6 +1576,31 @@ describe('device-link controller handlers', () => {
     expect(refcountTesting.refCount('dev-2', 'sessions')).toBe(0);
   });
 
+  // #8979 r4523117284 / unit: renderer ACK reuse depends on Main retaining the
+  // newer registration. Existing single-request failures miss this ordering.
+  it.each(['throw', 'result'])('旧 subscribe 迟到失败不撤销恢复后的新订阅 (%s)', async failure => {
+    let failOld!: () => void;
+    const old = new Promise<Awaited<ReturnType<DeviceLinkIpcDeps['subscribe']>>>((resolve, reject) => {
+      failOld = () => failure === 'throw'
+        ? reject(new DeviceLinkError('INVOKE_TIMEOUT', 'old request'))
+        : resolve({ ok: false, error: { code: 'INVOKE_TIMEOUT', message: 'old request' } });
+    });
+    const deps = makeDeps({ subscribe: vi.fn().mockReturnValueOnce(old)
+      .mockResolvedValue({ ok: true, result: { ok: true } }) });
+    const oldResult = handleSubscribe(deps, 'dev-2', ['session:s1'], 1).catch(error => error);
+    handleCloseLink(deps, 'dev-2');
+    await handleSubscribe(deps, 'dev-2', ['session:s1'], 1);
+    await handleSubscribe(deps, 'dev-2', ['session:s1'], 2);
+    failOld();
+    expect(await oldResult).toBeInstanceOf(Error);
+    expect(refcountTesting.refCount('dev-2', 'session:s1')).toBe(2);
+    expect(refcountTesting.snapshotSubscriptions('dev-2')).toEqual([{ deviceId: 'dev-2', topics: ['session:s1'] }]);
+    await handleUnsubscribe(deps, 'dev-2', ['session:s1'], 2);
+    expect(deps.unsubscribe).not.toHaveBeenCalled();
+    await handleUnsubscribe(deps, 'dev-2', ['session:s1'], 1);
+    expect(deps.unsubscribe).toHaveBeenCalledExactlyOnceWith('dev-2', ['session:s1']);
+  });
+
   it('订阅失败不留残留 ref:失败窗口不计数,后续成功窗口 unsubscribe 仍正常转发', async () => {
     // 窗口 1 订阅失败(ACCESS_REVOKED):handler 抛错,且**不应**记引用计数。
     const deps = makeDeps({

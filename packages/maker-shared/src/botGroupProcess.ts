@@ -39,8 +39,15 @@ export interface BotGroupProcessMessage {
   content: unknown;
   createdAt?: string;
   toolUseId?: string | null;
-  agentMeta?: { assistantPhase?: unknown; botPrivateReply?: unknown; failedSamplingAttempt?: unknown;
+  agentMeta?: { assistantPhase?: unknown; botPrivateReply?: unknown; botGroupLane?: unknown; replyToClientId?: unknown; failedSamplingAttempt?: unknown;
     turnCompleted?: unknown; isSyntheticTrigger?: unknown } | null;
+}
+/** Group-lane privacy routes the reply away from the Bot's private conversation.
+ * Its own process remains visible to the owner; unrelated private turns stay hidden. */
+export function isBotGroupProcessMessageVisible(row: BotGroupProcessMessage): boolean {
+  const meta = row.agentMeta;
+  return !meta?.failedSamplingAttempt && (!meta?.botPrivateReply || meta.botGroupLane === true
+    || typeof meta.replyToClientId === 'string' && meta.replyToClientId.startsWith('bot-group:'));
 }
 export interface BotGroupProcessNote { id: string; text: string }
 /** Walk existing bounded history windows, stopping at this exact turn's end. No task-wide fallback. */
@@ -48,29 +55,39 @@ export async function readBotGroupProcessMessages(
   ref: BotGroupProcessRef,
   read: (clientId: string) => Promise<readonly BotGroupProcessMessage[]>,
   cancelled: () => boolean,
+  /** A later input/prose proves this turn can no longer receive work records. */
+  onBoundary?: () => void,
 ): Promise<BotGroupProcessMessage[]> {
   const messages: BotGroupProcessMessage[] = [];
   const seen = new Set<string>();
   let cursor = ref.clientId;
+  let completed = false;
   for (;;) {
     const page = await read(cursor);
     if (cancelled()) return [];
     const anchor = page.findIndex(row => row.clientId === cursor);
-    if (anchor < 0) return messages;
+    if (anchor < 0) throw new Error('Group process history anchor unavailable');
     if (!messages.length) messages.push(page[anchor]!);
     const tail = page.slice(anchor + 1).filter(row => !seen.has(row.clientId));
     if (!tail.length) return messages;
     for (const row of tail) {
       seen.add(row.clientId);
       const meta = row.agentMeta;
-      if (row.role === 'user' && meta?.isSyntheticTrigger !== true) return messages;
-      if (!meta?.botPrivateReply && !meta?.failedSamplingAttempt) {
+      // Like private-chat history, retain work records that settle after the
+      // answer. A seal closes reply prose, not the delivery of thinking/results.
+      // Stop before another input or new prose so its work cannot enter this turn.
+      if (completed && row.role !== 'thinking' && row.role !== 'tool_result'
+        || row.role === 'user' && meta?.isSyntheticTrigger !== true) {
+        onBoundary?.();
+        return messages;
+      }
+      if (isBotGroupProcessMessageVisible(row)) {
         // Preserve timing but never copy reasoning/final-answer text into process prose.
         messages.push(row.role === 'thinking' || row.role === 'assistant'
           && (meta?.assistantPhase === 'final_answer' || meta?.turnCompleted === true && meta?.assistantPhase !== 'commentary')
           ? { ...row, content: '' } : row);
       }
-      if (meta?.turnCompleted === true && !meta.failedSamplingAttempt) return messages;
+      if (meta?.turnCompleted === true && !meta.failedSamplingAttempt) completed = true;
     }
     cursor = tail[tail.length - 1]!.clientId;
   }
@@ -87,7 +104,7 @@ export async function readBotGroupProcessNotes(
 
 export type BotGroupProcessChild = ProjectableWorkChild & { text?: string };
 export function projectBotGroupProcess(messages: readonly BotGroupProcessMessage[], running: boolean) {
-  const visible = messages.filter(row => !row.agentMeta?.botPrivateReply && !row.agentMeta?.failedSamplingAttempt);
+  const visible = messages.filter(isBotGroupProcessMessageVisible);
   const pairing = buildMessageToolResultPairing(visible);
   const items: BotGroupProcessChild[] = [];
   // Pi and legacy providers do not label commentary. Subsequent work proves that

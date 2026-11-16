@@ -10,6 +10,11 @@ import { readBoundedFileNoFollowSync } from './utils/readBoundedFile.js';
 import { parsePluginAppearanceSource, type PluginAppearanceSource } from '../shared/pluginAppearance.js';
 
 const filePath = () => path.join(app.getPath('userData'), 'custom-wallpaper.json');
+let appearanceWallpaperReferences: () => string[] = () => [];
+/** The appearance owner supplies selected and in-flight theme media references. */
+export function configureAppearanceWallpaperReferences(read: () => string[]): void {
+  appearanceWallpaperReferences = read;
+}
 
 // Like theme preferences, the media is shared by accounts in this Desktop profile.
 export const customWallpaperStore = createOverrideSettingsFile<{ url: string; fallbackUrl?: string; pluginSource?: PluginAppearanceSource }>({
@@ -64,6 +69,7 @@ export function readReferencedClientWallpaperUrls(): string[] {
   return [
     customUrl,
     fallbackUrl,
+    ...appearanceWallpaperReferences(),
     ...Object.values(manifest)
       .filter((item) => item.delivery === 'cdn')
       .flatMap((item) => [

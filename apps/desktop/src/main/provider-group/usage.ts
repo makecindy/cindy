@@ -100,6 +100,24 @@ function paceState(windows: readonly ProviderGroupMemberQuota[] | null, now: num
   return { urgency: pace?.urgency ?? null, quota: pace?.window ?? null };
 }
 
+/**
+ * 任意一组额度窗口的排序事实，供不经原始订阅快照的调用方(模型组)与供应商组用同一把尺子：用完的窗口算撞上限，
+ * 5 小时及更短的窗口只判断快不快满，按更长的窗口(周额度)排；只有短窗口的套餐按它排。已过重置时刻的旧窗口不算。
+ * 没有窗口时全部为未知，不当作没用过。
+ */
+export function quotaWindowsScheduleState(windows: readonly ProviderGroupMemberQuota[], now: number) {
+  const live = windows.filter((w) => w.resetAtMs === null || w.resetAtMs > now);
+  const full = live.filter((w) => w.usedPercent >= 100);
+  const long = live.filter((w) => w.windowMs > FIVE_HOURS_MS);
+  const paced = long.length > 0 ? long : live;
+  return {
+    limited: full.length > 0,
+    resetAtMs: full.length > 0 && full.every((w) => w.resetAtMs !== null) ? Math.max(...full.map((w) => w.resetAtMs!)) : null,
+    fiveHourTight: live.some((w) => w.windowMs <= FIVE_HOURS_MS && fiveHourTight(w.usedPercent, w.resetAtMs, now)),
+    ...paceState(paced.length > 0 ? paced : null, now),
+  };
+}
+
 interface CodexUsageWindow {
   usedPercent?: number;
   windowMinutes: number | null;
@@ -107,6 +125,7 @@ interface CodexUsageWindow {
 }
 
 interface CodexUsageBucket {
+  planType?: string;
   limitId: string | null;
   limitName: string | null;
   updatedAt: number | null;
@@ -151,6 +170,7 @@ function codexBucket(raw: unknown): CodexUsageBucket | null {
   if (!value) return null;
   return {
     limitId: typeof value.limitId === 'string' ? value.limitId : null,
+    ...(typeof value.planType === 'string' ? { planType: value.planType } : {}),
     limitName: typeof value.limitName === 'string' ? value.limitName : null,
     updatedAt: typeof value.updatedAt === 'number' && Number.isFinite(value.updatedAt) ? value.updatedAt : null,
     primary: codexWindow(value.primary), secondary: codexWindow(value.secondary),
@@ -181,7 +201,9 @@ export function providerGroupCodexUsageFromReads(account: unknown, rateLimits: u
   const table = resolveCodexBucketTable({ byLimitId: result?.rateLimitsByLimitId })
     ?? { [codexLimitBucketKey(latest)]: latest };
   return providerGroupCodexUsageSnapshot({
-    appServerBuckets: Object.fromEntries(Object.entries(table).map(([key, bucket]) => [key, { ...bucket, updatedAt: now }])),
+    appServerBuckets: Object.fromEntries(Object.entries(table).map(([key, bucket]) => [key, {
+      ...bucket, planType: bucket.planType ?? latest.planType, updatedAt: now,
+    }])),
     webSnapshot: cached?.webSnapshot,
   });
 }
@@ -204,7 +226,9 @@ function codexUsageState(snapshot: ProviderGroupCodexUsageSnapshot, model: strin
   const tight = timed.some((w) => w.windowMinutes! * 60_000 <= FIVE_HOURS_MS
     && fiveHourTight(w.usedPercent, w.resetsAt ? w.resetsAt * 1000 : null, now));
   return {
-    ...limit,
+    // The executing native pool admits ChatGPT requests and remembers real rejections.
+    // Its plan-only projection must not block credits before that admission can run.
+    ...(snapshot.nativeAccountPool ? { limited: false, resetAtMs: null } : limit),
     fiveHourTight: tight,
     ...paceState(paced.length > 0 && paced.every(current)
       ? paced.map((w) => ({

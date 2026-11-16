@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RemoteControlConsent, consentDeviceName } from '../remoteControlConsent.js';
 import { promptRemoteControlConsent } from '../remoteControlConsentPrompt.js';
+import { clearControllerPlatforms, getControllerApp, setControllerPlatform } from '../controllerPlatform.js';
 import type { BrowserWindow } from 'electron';
 
 const nativeDialog = vi.hoisted(() => vi.fn());
@@ -11,17 +12,46 @@ vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 // without a local decision; late/replayed/foreign replies must not resume work. Unit tier,
 // injected dialog/transport with fake clocks; minimal input is one valid request.
 const id = '12345678-1234-1234-1234-123456789abc';
-function harness() {
+function harness(app?: string | (() => string | undefined)) {
   let enabled = false, eligible = true, scope = 'owner-a';
   const send = vi.fn();
   const prompt = vi.fn<(peer: string, purpose: string, signal: AbortSignal) => Promise<boolean>>().mockResolvedValue(true);
   const enable = vi.fn(async (assertCurrent: () => void) => { assertCurrent(); enabled = true; });
-  const consent = new RemoteControlConsent({ scope: () => scope, eligible: () => eligible, enabled: () => enabled, send, prompt, enable });
+  const consent = new RemoteControlConsent({ scope: () => scope, app: typeof app === 'function' ? app : () => app,
+    eligible: () => eligible, enabled: () => enabled, send, prompt, enable });
   return { consent, send, prompt, enable, revoke: () => { eligible = false; }, switchAccount: () => { scope = 'owner-b'; } };
 }
 const request = () => ({ version: 1, kind: 'request', id, purpose: 'Download source', ttlMs: 45_000 });
 afterEach(() => vi.useRealTimers());
 describe('remote control consent', () => {
+  // Mixed-version App routing, unit: real controller cache + consent request.
+  // Missing-app frames previously erased a known Friend and sent it a Cindy dialog.
+  it('retains a known App across old presence until explicitly replaced or the owner cache resets', async () => {
+    clearControllerPlatforms();
+    setControllerPlatform('other', 'darwin', 'cindy-friend');
+    const h = harness(() => getControllerApp('other'));
+    try {
+      setControllerPlatform('other', 'darwin');
+      const result = h.consent.request('other', 'Download source');
+      expect(h.send).not.toHaveBeenCalled();
+      await expect(result).resolves.toBe('unavailable');
+      setControllerPlatform('other', 'darwin', 'cindy');
+      expect(getControllerApp('other')).toBe('cindy');
+      clearControllerPlatforms();
+      setControllerPlatform('other', 'darwin');
+      expect(getControllerApp('other')).toBeUndefined();
+    } finally { h.consent.reset(); clearControllerPlatforms(); }
+  });
+  // App routing, unit: platform-only eligibility offered Cindy consent dialogs to
+  // Friend/unknown Apps. Real request/receive must neither send nor prompt.
+  it.each(['cindy-friend', 'other-app'])('does not exchange Cindy consent requests with app=%s', async app => {
+    const h = harness(app);
+    await expect(h.consent.request('other', 'Download source')).resolves.toBe('unavailable');
+    await h.consent.receive('other', request());
+    expect(h.send).not.toHaveBeenCalled();
+    expect(h.prompt).not.toHaveBeenCalled();
+    expect(h.enable).not.toHaveBeenCalled();
+  });
   // Regression: unparented macOS dialogs ignore AbortSignal.
   it('always parents the native dialog and never falls back to an unparented prompt', async () => {
     const parent = { isDestroyed: () => false, isMinimized: () => false, show: vi.fn(), focus: vi.fn() } as unknown as BrowserWindow;

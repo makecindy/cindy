@@ -17,12 +17,13 @@ import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import * as Dialog from '@radix-ui/react-dialog';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { Select } from '@/components/ui/select';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { ChevronDown, Folder, Plus, X } from 'lucide-react';
+import { ChevronDown, CircleAlert, Folder, Plus, X } from 'lucide-react';
 import { AddRemoteProjectDialog } from '@/components/new-chat/AddRemoteProjectDialog';
 import {
   connectedProvidersForAgent,
@@ -232,6 +233,8 @@ export function CreateWorkerPopover({
   const [remoteRolesRequest, setRemoteRolesRequest] = useState(0);
   const [agent, setAgent] = useState<'claude-code' | 'codex' | 'pi'>('codex');
   const [model, setModel] = useState(DEFAULT_WORKER_CREATION_PREFS.codex.model);
+  const [modelPickerOpenRequest, setModelPickerOpenRequest] = useState(0);
+  const modelPickerRequestSequence = useRef(0);
   const [effort, setEffort] = useState<Effort>(DEFAULT_WORKER_CREATION_PREFS.codex.effort);
   const [fast, setFast] = useState(DEFAULT_WORKER_CREATION_PREFS.codex.fast);
   // 显式选定的模型来源(标准面板供应商分段);null = 未显式。device-link 远程创建
@@ -1004,6 +1007,11 @@ export function CreateWorkerPopover({
   // 选了 Lead 之外的位置、但任务所在电脑现在不能带这个字段(能力还在读 / 已降级)：不能悄悄按 Lead 的位置建。
   const agentLocationUnsendable =
     !agentLocationSelectable && agentDeviceId !== (executionDeviceId ? null : leadAgentDeviceId ?? null);
+  // Keep the remembered route intact; explain the blocked form only after its catalog settles.
+  const savedModelUnavailable = prefsRestored && !modelCatalogLoading
+    && (activeCaps !== null || activeCapabilitiesState.error !== null)
+    && restoredModelSelectionRef.current
+    && (rememberedSourceUnavailable || !currentModel || agentLocationUnsendable);
   const canCreate =
     (!localProjectEnabled || project.ready) &&
     !isSubmitting &&
@@ -1409,7 +1417,13 @@ export function CreateWorkerPopover({
               {deviceId && remoteProviders.unsupported && currentModelSupportsFast && (
                 <FastModeToggle enabled={!!fast} onToggle={() => setFast((v) => !v)} />
               )}
+              {savedModelUnavailable ? (
+                <CircleAlert size={14} className="shrink-0 text-[var(--error-fg)]" aria-hidden />
+              ) : null}
               <ModelSelector
+                openRequest={modelPickerOpenRequest}
+                onOpenRequestConsumed={(request) => setModelPickerOpenRequest((pending) => pending === request ? 0 : pending)}
+                ariaContext={savedModelUnavailable ? t('orca.createWorker.savedModelUnavailable') : undefined}
                 fastModeConfigurable={['codex', 'pi']}
                 unifiedAgents={pickerAgents}
                 onUnifiedSelect={deviceId && remoteProviders.unsupported ? undefined : (selection) => {
@@ -1483,6 +1497,17 @@ export function CreateWorkerPopover({
               agent: agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code',
             })}
           </p>
+        ) : savedModelUnavailable ? (
+          <ErrorNotice
+            className="-mt-2 mb-4"
+            role="status"
+            message={t('orca.createWorker.savedModelUnavailable')}
+            actions={(
+              <Button type="button" size="sm" onClick={() => setModelPickerOpenRequest(++modelPickerRequestSequence.current)}>
+                {t('orca.createWorker.reselectModel')}
+              </Button>
+            )}
+          />
         ) : null}
         {remoteWorkerPermissionModeUnsupported && requireWorkerPermissionModeSupport ? (
           <p

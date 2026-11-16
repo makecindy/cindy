@@ -146,6 +146,7 @@ export type MemoryErrorCode =
   | 'version-conflict'
   | 'already-exists'
   | 'not-found'
+  | 'ambiguous-address'
   | 'path-traversal'
   | 'io-error'
   | 'not-ready';

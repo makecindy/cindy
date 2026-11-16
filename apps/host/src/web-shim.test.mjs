@@ -43,7 +43,7 @@ function browser(respond = () => ({}), script = source, openEvents = (_url, { si
   calls.length = 0; // Ignore the independent plugin-list boot read.
   const close = () => listeners.get('pagehide')?.({ persisted: false });
   cleanups.push(close);
-  return { api: window.electronAPI, calls, redirects, opened, focus: () => listeners.get('focus')?.(), close };
+  return { api: window.electronAPI, window, calls, redirects, opened, focus: () => listeners.get('focus')?.(), close };
 }
 
 // Browser Files have no local filesystem authority, and opening a task must
@@ -57,6 +57,21 @@ test('browser-only task actions preserve synchronous paths and same-origin navig
   assert.equal(b.opened.length, 1);
 });
 
+// Regression: a release built with `--harnesses pi-bin` has no Claude Code or
+// Codex, and the startup check required both, so the web client stayed on its
+// startup failure screen. Minimal inputs: Pi only passes; no ready agent fails.
+test('the startup check passes when any bundled agent is ready', async () => {
+  const b = browser();
+  for (const [harness, passed] of [
+    [{ 'claude-code': false, codex: false, pi: true }, true],
+    [{ 'claude-code': true, codex: true, pi: false }, true],
+    [{ 'claude-code': false, codex: false, pi: false }, false],
+  ]) {
+    b.window.__cindyBoot = { harness };
+    assert.equal((await b.api.checkEnvironment()).allPassed, passed, JSON.stringify(harness));
+  }
+});
+
 test('both auth API shapes use the same Host routes', async () => {
   const b = browser(() => ({ isAuthenticated: true }));
   await b.api.auth.getState();
@@ -67,6 +82,16 @@ test('both auth API shapes use the same Host routes', async () => {
     '/api/auth/state', '/api/auth/refresh', '/api/auth/state', '/api/auth/refresh',
   ]);
   assert.ok(b.calls.every(c => c.credentials === 'same-origin'));
+});
+
+test('installation and business confirmations use the authenticated Host routes', async () => {
+  const b = browser(() => ({ granted: true, handled: true }));
+  await b.api.ghosts.resolveInstallConsent('group-request', true);
+  await b.api.ghosts.resolveConfirm('command-request', false);
+  assert.deepEqual(b.calls.map(call => ({ url: call.url, body: call.body })), [
+    { url: '/api/ghosts/install-consent/resolve', body: { requestId: 'group-request', confirmed: true } },
+    { url: '/api/ghosts/confirm/resolve', body: { requestId: 'command-request', confirmed: false } },
+  ]);
 });
 
 test('entering the app preserves the actual Host auth verdict', async () => {
@@ -164,6 +189,15 @@ test('unsupported web actions cannot report a successful save or execution', asy
   ]) {
     await assert.rejects(action(), { code: 'HOST_CHANNEL_UNSUPPORTED' });
   }
+  assert.equal(b.calls.length, 0);
+});
+
+// Regression: the generic read fallback answered `modelGroups.get()` with `null`;
+// the renderer stored it as the model group config and the model picker crashed
+// reading `config.routes`. Minimal input: one call, which must reject.
+test('the model groups read rejects instead of answering a null config', async () => {
+  const b = browser();
+  await assert.rejects(b.api.modelGroups.get(), { code: 'HOST_CHANNEL_UNSUPPORTED' });
   assert.equal(b.calls.length, 0);
 });
 

@@ -15,6 +15,7 @@ import {
   resolveHostDelegation,
   startHostEventBridge,
 } from '../host-delegation';
+import { createIpcChannelUsage } from '../ipcChannelUsage';
 
 const roots: string[] = [];
 
@@ -197,6 +198,24 @@ describe('host proxy round trip', () => {
 });
 
 describe('createHostClient', () => {
+  it('requires the selected trusted owner window and preserves preload confirmation objects', async () => {
+    const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+    const client = { request: vi.fn(async () => ({ handled: true })) };
+    const ipcMain = { removeHandler() {}, handle: (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) => {
+      handlers.set(channel, listener);
+    } };
+    const window = {} as IpcMainInvokeEvent;
+    registerHostDelegatedIpc({ client, ipcMain });
+    await expect(handlers.get('ghosts:confirm:resolve')!(window, { requestId: 'r1', confirmed: true }))
+      .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(client.request).not.toHaveBeenCalled();
+    registerHostDelegatedIpc({ client, ipcMain, authorizePluginApproval: event => event === window });
+    await expect(handlers.get('ghosts:confirm:resolve')!({} as IpcMainInvokeEvent, { requestId: 'r1', confirmed: true }))
+      .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    await expect(handlers.get('ghosts:confirm:resolve')!(window, { requestId: 'r1', confirmed: true }))
+      .resolves.toEqual({ handled: true });
+    expect(client.request).toHaveBeenCalledExactlyOnceWith('/api/ghosts/confirm/resolve', { requestId: 'r1', confirmed: true });
+  });
   it('pins requests to the original Host instance and refuses redirects', async () => {
     const fetchMock = vi.fn(async () => new Response('{}'));
     vi.stubGlobal('fetch', fetchMock);
@@ -301,6 +320,58 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
     });
   });
 
+  /** Electron 42 order: invoke asks has() then get(); handle() asks has() before it registers. */
+  function electronLikeIpcMain() {
+    const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+    const ipcMain = {
+      _invokeHandlers: handlers,
+      removeHandler: (channel: string) => { handlers.delete(channel); },
+      handle(channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) {
+        if (handlers.has(channel)) throw new Error(`Attempted to register a second handler for '${channel}'`);
+        handlers.set(channel, listener);
+      },
+      handleOnce(channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) {
+        this.handle(channel, listener);
+      },
+    };
+    const invoke = async (channel: string) => {
+      if (!handlers.has(channel)) throw new Error(`No handler registered for '${channel}'`);
+      return handlers.get(channel)!({} as IpcMainInvokeEvent);
+    };
+    return { ipcMain, invoke };
+  }
+
+  it('answers the has() lookup Electron makes before get(), and counts unserved invokes', async () => {
+    const { ipcMain, invoke } = electronLikeIpcMain();
+    const usage = createIpcChannelUsage({ mode: 'client' });
+    const logged: string[] = [];
+    installUnsupportedMakerFallbacks({ ipcMain, usage, log: (channel) => logged.push(channel) });
+
+    await expect(invoke('maker:remote-ssh:connect')).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+    await expect(invoke('maker:remote-ssh:connect')).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+    await expect(invoke('skillhub:list')).rejects.toThrow(/No handler registered/);
+
+    expect(logged).toEqual(['maker:remote-ssh:connect']);
+    expect(usage.report().channels).toEqual({
+      'invoke:maker:remote-ssh:connect': { kind: 'invoke', count: 2, handled: 0, missing: 0, unsupported: 2 },
+      'invoke:skillhub:list': { kind: 'invoke', count: 1, handled: 0, missing: 1, unsupported: 0 },
+    });
+  });
+
+  it('still lets the desktop register a maker:* channel after the fallback is installed', async () => {
+    const { ipcMain, invoke } = electronLikeIpcMain();
+    const usage = createIpcChannelUsage({ mode: 'client' });
+    installUnsupportedMakerFallbacks({ ipcMain, usage });
+
+    expect(() => ipcMain.handle('maker:open-session-in-new-window', () => 'opened')).not.toThrow();
+    expect(() => ipcMain.handleOnce('maker:once', () => 'once')).not.toThrow();
+    await expect(invoke('maker:open-session-in-new-window')).resolves.toBe('opened');
+    await expect(invoke('maker:once')).resolves.toBe('once');
+    // A real duplicate registration still fails loudly.
+    expect(() => ipcMain.handle('maker:open-session-in-new-window', () => 'again')).toThrow(/second handler/);
+    expect(usage.report().channels).toEqual({});
+  });
+
   it('fails with UNSUPPORTED_CAPABILITY for explicit unproxied channels list', async () => {
     const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
     const ipcMain = {
@@ -347,6 +418,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
     const sidebarChanges: unknown[] = [];
     let projectAliasesNotified = false;
     const errors: unknown[] = [];
+    const pluginPushes: unknown[] = [];
 
     const server = http.createServer((req, res) => {
       try {
@@ -368,6 +440,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
           res.write('data: {"seq":9,"type":"error_persisted","sessionId":"s1","persistId":"err"}\n\n');
           res.write('data: {"seq":10,"type":"subagent_runs_changed","sessionId":"s1"}\n\n');
           res.write('data: {"seq":11,"type":"right_sidebar_tabs_changed","sessionId":"s1"}\n\n');
+          res.write('data: {"seq":12,"type":"plugin_push","channel":"ghosts:changed","payload":{"ghosts":[]}}\n\n');
         } else {
           res.writeHead(404);
           res.end();
@@ -388,6 +461,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
       broadcast: (payload) => broadcasts.push(payload),
       onInputProjection: (payload) => projections.push(payload),
       onInteractionRequest: (payload) => interactions.push(payload),
+      onPluginPush: (channel, payload) => pluginPushes.push({ channel, payload }),
       onSettingsChanged: (domain, value) => settingsChanged.push({ domain, value }),
       onSessionChanged: (event) => sessionEvents.push(event),
       onMessageCreated: (event) => messageEvents.push(event),
@@ -417,6 +491,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
     expect(broadcasts).toEqual([{ seq: 7, type: 'text', sessionId: 's1' }]);
     expect(projections).toEqual([{ sessionId: 's1', turnInProgress: true }]);
     expect(interactions).toEqual([{ sessionId: 's1', request: { requestId: 'r1' } }]);
+    expect(pluginPushes).toEqual([{ channel: 'ghosts:changed', payload: { ghosts: [] } }]);
     expect(settingsChanged).toEqual([{ domain: 'appearance', value: { theme: 'dark' } }]);
     expect(sessionEvents).toEqual([{ seq: 2, type: 'session_changed', action: 'create', sessionId: 's1' }]);
     expect(messageEvents).toEqual([{ seq: 3, type: 'message_created', sessionId: 's1', messageId: 'm1' }]);

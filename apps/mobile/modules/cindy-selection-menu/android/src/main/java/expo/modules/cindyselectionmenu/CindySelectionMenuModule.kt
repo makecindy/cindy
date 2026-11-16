@@ -10,12 +10,19 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.widget.TextView
+import com.facebook.react.bridge.ReactContext
+import com.facebook.react.common.annotations.UnstableReactNativeAPI
+import com.facebook.react.fabric.FabricUIManager
+import com.facebook.react.uimanager.PixelUtil
+import com.facebook.react.uimanager.UIManagerHelper
+import com.facebook.react.uimanager.common.UIManagerType
 import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.lang.ref.WeakReference
 
 /** Adds actions to the existing TextView selection menu; leaves native layout and handles intact. */
+@OptIn(UnstableReactNativeAPI::class)
 class CindySelectionMenuModule : Module() {
   private data class Binding(
     val view: WeakReference<TextView>,
@@ -27,6 +34,23 @@ class CindySelectionMenuModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("CindySelectionMenu")
     Events("onAction")
+
+    // Register before the first text tree is built. Fabric uses this same
+    // registry for both measurement and display, including prepared layouts.
+    Function("registerListIndent") {
+      val context = appContext.reactContext as? ReactContext ?: return@Function false
+      val manager = UIManagerHelper.getUIManager(context, UIManagerType.FABRIC) as? FabricUIManager
+        ?: return@Function false
+      manager.textEffectRegistry.register("cindy-list-indent") { props ->
+        val head = props?.getDouble("indent") ?: 0.0
+        val first = props?.getDouble("firstLineIndent") ?: 0.0
+        ListIndentSpan(
+          PixelUtil.toPixelFromDIP(if (first.isFinite()) first.coerceAtLeast(0.0) else 0.0).toInt(),
+          PixelUtil.toPixelFromDIP(if (head.isFinite()) head.coerceAtLeast(0.0) else 0.0).toInt(),
+        )
+      }
+      true
+    }
 
     AsyncFunction("attach") { tag: Int, registration: String, quoteLabel: String, sideChatLabel: String ->
       val view = appContext.findView<View>(tag) as? TextView ?: return@AsyncFunction

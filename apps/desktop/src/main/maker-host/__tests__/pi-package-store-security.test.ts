@@ -7,7 +7,7 @@ import fsSync, {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { createRequire } from 'node:module';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import type { PiPackageMutationRequest } from '../../../shared/piPackages.js';
@@ -4400,6 +4400,47 @@ describe('Pi package executable-code boundary', () => {
     }
   });
 
+  // CI #6656 / job 129924709772: a queued token event from the old directory
+  // can observe the first new token before the 2 s fallback poll reattaches.
+  // The real-OS case below cannot force that event ordering. Unit: keep real
+  // token files and the public subscription, control only fs.watch callbacks.
+  it('reattaches on a queued token event from a replaced directory before notifying peers', async () => {
+    const callbacks: Array<(event: 'rename', name: string) => void> = [];
+    const watchSpy = vi.spyOn(fsSync, 'watch').mockImplementation(((...args: unknown[]) => {
+      callbacks.push(args[2] as (event: 'rename', name: string) => void);
+      const watcher = { close: vi.fn(), on: vi.fn().mockReturnThis() };
+      return watcher as unknown as ReturnType<typeof fsSync.watch>;
+    }) as typeof fsSync.watch);
+    syncBuiltinESMExports();
+    let unsubscribe: (() => void) | undefined;
+    try {
+      const home = path.join(runtime.userData, 'pi-package-home');
+      await fs.mkdir(home, { recursive: true });
+      const store = await import('../pi-package-store.js');
+      const listener = vi.fn();
+      unsubscribe = store.onPiPackagesChanged(listener);
+      const tokenName = 'cindy-package-runtime-change-token';
+      const publish = (tag: string) => writePeerToken(path.join(home, tokenName), `runtime:${Date.now()}-${tag}\n`);
+      publish('before');
+      callbacks[0]!('rename', tokenName);
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.mkdir(home, { recursive: true });
+      publish('after');
+      // This is the old handle's queued token event, not a directory-name event.
+      callbacks[0]!('rename', tokenName);
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(2));
+      expect(watchSpy).toHaveBeenCalledTimes(2);
+      publish('next');
+      callbacks[1]!('rename', tokenName);
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(3), { timeout: 1_000 });
+    } finally {
+      unsubscribe?.();
+      watchSpy.mockRestore();
+      syncBuiltinESMExports();
+    }
+  });
+
   it('reattaches the directory watcher after the package home is replaced', async () => {
     // Replacing the watched directory leaves a handle bound to the old one on
     // some platforms without an 'error' event. The fallback poll must replace it,
@@ -4419,11 +4460,24 @@ describe('Pi package executable-code boundary', () => {
       publishPeerRuntimeToken('before-replace');
       await waitForNotifications(1, 1_500);
 
-      await fs.rm(home, { recursive: true, force: true });
-      await fs.mkdir(home, { recursive: true });
-      // The first edge may arrive through events still queued on the old handle
-      // or through the fallback poll, depending on the platform.
-      publishPeerRuntimeToken('first-after-replace');
+      // On a loaded runner, token reads started by the old handle's events can
+      // finish after the directory is recreated and the next token is written,
+      // while the reattach attempt already failed on the missing directory.
+      // Hold those reads back so that ordering happens on every run.
+      const open = fs.open.bind(fs);
+      const slowTokenReads = vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+        if (String(args[0]).includes('change-token')) await new Promise((resolve) => setTimeout(resolve, 40));
+        return open(...args);
+      });
+      try {
+        await fs.rm(home, { recursive: true, force: true });
+        await fs.mkdir(home, { recursive: true });
+        // The first edge may arrive through events still queued on the old handle
+        // or through the fallback poll, depending on the platform.
+        publishPeerRuntimeToken('first-after-replace');
+      } finally {
+        slowTokenReads.mockRestore();
+      }
       await waitForNotifications(2, 5_000);
 
       // The watcher is reattached, so the next edge must not wait for the poll.

@@ -30,9 +30,9 @@ describe('organization account usage', () => {
     fetch.mockResolvedValue({ ...valid, todaySpend: 1.25, dailyLimitEnabled });
     expect(await readOrganizationAccountUsage()).toMatchObject({ ...valid, todaySpend: null, dailyLimitEnabled: false });
   });
-  it.each([[404, 'NOT_FOUND'], [501, 'MODEL_ACCESS_QUOTA_NOT_SUPPORTED']])('allows legacy fallback only for an unavailable capability', async (status, code) => {
+  it.each([[404, 'NOT_FOUND'], [501, 'MODEL_ACCESS_QUOTA_NOT_SUPPORTED']])('treats unsupported quota capabilities as unavailable', async (status, code) => {
     fetch.mockRejectedValue(new ServerApiError(code, status, 'safe'));
-    expect(await readOrganizationAccountUsage()).toBeUndefined();
+    expect(await readOrganizationAccountUsage()).toBeNull();
   });
   it.each([401, 403, 429, 500, 503])('never falls back after status %s', async status => {
     fetch.mockRejectedValue(new ServerApiError('ERROR', status, 'safe'));

@@ -44,7 +44,7 @@ vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('@/components/markdown/MermaidLightboxHost', () => ({ MermaidLightboxHost: () => null }));
 vi.mock('@/components/markdown/MermaidSourceEditor', () => ({ MermaidSourceEditorHost: () => null }));
 vi.mock('@/components/markdown/MarkdownImageLightboxHost', () => ({ MarkdownImageLightboxHost: () => null }));
-vi.mock('@/features/cc-agent/workdir-browse/ImagePreview', () => ({ ImagePreview: () => null }));
+vi.mock('@/features/cc-agent/workdir-browse/ImagePreview', () => ({ ImagePreview: ({ src, relPath }: { src: string; relPath: string }) => createElement('img', { src, alt: relPath }) }));
 vi.mock('@/features/cc-agent/workdir-browse/PdfPreview', () => ({ PdfPreview: () => null }));
 vi.mock('@/features/cc-agent/workdir-browse/DrawioPreview', () => ({ DrawioPreview: () => null }));
 vi.mock('@/lib/fileBrowserTransport', () => ({ fileBrowserApiFor: () => ({}) }));
@@ -170,4 +170,32 @@ describe('FileBodyView selection quotes', () => {
     emitAddToChat();
     expect(second).toHaveBeenCalledTimes(2);
   });
+});
+
+// SVG file clicks previously exposed only XML. Unit tier: use the real file body
+// and editor to cover default presentation and retaining unsaved source edits;
+// existing selection tests exercise Markdown only.
+it('previews SVG by default and retains source edits across preview toggles', () => {
+  const source = '<svg xmlns="http://www.w3.org/2000/svg"><text>before</text></svg>';
+  const props = {
+    workdir, relPath: 'drawing.svg',
+    content: { kind: 'text' as const, relPath: 'drawing.svg', content: source, size: source.length, mtimeMs: 0, truncated: false },
+  };
+  const { container, rerender } = render(createElement(FileBodyView, props));
+  expect(decodeURIComponent(screen.getByRole('img').getAttribute('src')!)).toContain(source);
+  fireEvent.click(screen.getByRole('button', { name: 'attachmentPreview.source' }));
+  expect(screen.queryByRole('img')).toBeNull();
+  const view = EditorView.findFromDOM(container.querySelector<HTMLElement>('.cm-editor')!)!;
+  const updated = source.replace('before', 'after');
+  act(() => view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: updated } }));
+  fireEvent.click(screen.getByRole('button', { name: 'attachmentPreview.rendered' }));
+  expect(decodeURIComponent(screen.getByRole('img').getAttribute('src')!)).toContain(updated);
+  fireEvent.click(screen.getByRole('button', { name: 'attachmentPreview.source' }));
+  expect(view.state.doc.toString()).toBe(updated);
+  // Search navigation still opens the source, but its consumed parameters must
+  // not permanently prevent returning to the rendered image.
+  rerender(createElement(FileBodyView, { ...props, jumpQuery: 'text', jumpLine: 1 }));
+  expect(screen.queryByRole('img')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'attachmentPreview.rendered' }));
+  expect(screen.getByRole('img')).toBeTruthy();
 });

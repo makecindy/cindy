@@ -7,6 +7,8 @@
  */
 
 export const VERSION = '0.0.0';
+export { setTransportTextResolver } from './transportText.js';
+export type { TransportTextResolver, TransportTextVars } from './transportText.js';
 export { UnsupportedInboundMediaError } from './inboundKind.js';
 export { buildInboundMessageFacts } from './inboundFacts.js';
 export type { InboundMessageFacts } from './inboundFacts.js';

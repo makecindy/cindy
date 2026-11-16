@@ -36,17 +36,110 @@ test('custom providers resolve only their own runtime credential and never reuse
   assert.equal(await resolve('xd', 'codex'), null);
 });
 
-test('a failed catalog refresh cannot expose models from another account or credential', async () => {
-  let models = [];
-  const list = createProviderCatalog({ applyModels: value => { models = value; },
-    readProviders: async () => models.length ? [{ id: 'xd', models }] : [], fetchModels: async ({ credential }) => {
-    if (credential !== 'account-a-key') throw new Error('denied');
-    return [{ id: 'private-model' }];
-  } });
+// A fake of the active-catalog XD snapshot with the setter semantics the catalog relies on: the list,
+// the authority mark and the payment refusals (kept only when the caller asks to preserve them).
+const fakeSnapshot = () => {
+  const state = { models: [], authoritative: false, paid: [] };
+  return {
+    state,
+    applyModels: (models, options) => {
+      state.models = models;
+      state.authoritative = options.authoritative;
+      if (!options.preservePaymentRequiredRoutes) state.paid = models.filter(m => m.availability === 'requires_payment').map(m => m.id);
+    },
+    readModels: () => state.models,
+    markModelsUnknown: () => { state.authoritative = false; },
+  };
+};
+
+test('after an owner, generation or endpoint change, a failed refresh does not expose the old list', async () => {
+  for (const change of ['owner', 'generation', 'endpoint']) {
+    const snapshot = fakeSnapshot();
+    let fail = false;
+    const list = createProviderCatalog({ ...snapshot,
+      readProviders: async () => snapshot.state.models.length ? [{ id: 'xd', models: snapshot.state.models }] : [],
+      fetchModels: async () => {
+        if (fail) throw new Error('denied');
+        return [{ id: 'private-model' }, { id: 'paid-model', availability: 'requires_payment' }];
+      } });
+    const gateway = { endpoint: 'https://gateway.example', credential: 'account-a-key' };
+    assert.equal((await list({ gateway, ownerId: 'a', ownerGeneration: 1 })).providers.length, 1, change);
+    fail = true;
+    const next = change === 'owner' ? { gateway, ownerId: 'b', ownerGeneration: 1 }
+      : change === 'generation' ? { gateway, ownerId: 'a', ownerGeneration: 2 }
+        : { gateway: { ...gateway, endpoint: 'https://other-gateway.example' }, ownerId: 'a', ownerGeneration: 1 };
+    const result = await list(next);
+    assert.ok(result.error, change);
+    assert.equal(result.providers.length, 0, change);
+    assert.deepEqual(snapshot.state, { models: [], authoritative: false, paid: [] }, change);
+  }
+});
+
+test('after a key-only change, a failed refresh keeps the old list and payment refusals, non-authoritative', async () => {
+  const snapshot = fakeSnapshot();
+  const credentials = [];
+  const list = createProviderCatalog({ ...snapshot,
+    readProviders: async () => [{ id: 'xd', models: snapshot.state.models }],
+    fetchModels: async ({ credential }) => {
+      credentials.push(credential);
+      if (credential !== 'account-a-key') throw new Error('denied');
+      return [{ id: 'private-model' }, { id: 'paid-model', availability: 'requires_payment' }];
+    } });
   const gateway = { endpoint: 'https://gateway.example', credential: 'account-a-key' };
-  assert.equal((await list({ gateway, ownerId: 'a' })).providers.length, 1);
-  assert.equal((await list({ gateway: { ...gateway, credential: 'account-b-key' }, ownerId: 'b' })).providers.length, 0);
-  assert.equal((await list({ gateway: { ...gateway, credential: 'rotated-key' }, ownerId: 'a' })).providers.length, 0);
+  await list({ gateway, ownerId: 'a' });
+  assert.deepEqual(snapshot.state.paid, ['paid-model']);
+  assert.equal(snapshot.state.authoritative, true);
+  // The rotated key is refetched at once, without waiting for the five-minute cache.
+  const result = await list({ gateway: { ...gateway, credential: 'rotated-key' }, ownerId: 'a' });
+  assert.deepEqual(credentials, ['account-a-key', 'rotated-key']);
+  assert.ok(result.error);
+  assert.deepEqual(result.providers[0].models, [{ id: 'private-model' }]);
+  assert.deepEqual(snapshot.state, { models: [{ id: 'private-model' }], authoritative: false, paid: ['paid-model'] });
+});
+
+// Port contract: a failed refresh keeps the list currently in the shared snapshot (main.ts reads it
+// with getXdGatewayModels), as the desktop's runModelsSync does, not a private copy of the last
+// success. Inside the Host only this catalog writes that snapshot, so the two agree today.
+test('a failed refresh keeps the current snapshot list, read through the port', async () => {
+  const snapshot = fakeSnapshot();
+  let fail = false;
+  const list = createProviderCatalog({ ...snapshot, readProviders: async () => [],
+    fetchModels: async () => {
+      if (fail) throw new Error('denied');
+      return [{ id: 'allowed' }];
+    } });
+  const options = { ownerId: 'a', gateway: { endpoint: 'https://gateway.example', credential: 'fixture' } };
+  await list(options);
+  snapshot.state.models = [{ id: 'current' }, { id: 'upsell', availability: 'requires_payment' }];
+  fail = true;
+  await list({ ...options, force: true });
+  assert.deepEqual(snapshot.state.models, [{ id: 'current' }]);
+});
+
+// Unit regression: a forced refresh that failed left the last success fresh, so the next read inside
+// the cache window restored its authority (and dropped the payment refusals' preservation) without a
+// successful round. The desktop stays non-authoritative until a round succeeds.
+test('a failed refresh is not followed by a cached read that restores authority', async () => {
+  const snapshot = fakeSnapshot();
+  let fail = false;
+  let calls = 0;
+  const list = createProviderCatalog({ ...snapshot, readProviders: async () => [],
+    fetchModels: async () => {
+      calls++;
+      if (fail) throw new Error('denied');
+      return [{ id: 'allowed' }];
+    } });
+  const options = { ownerId: 'a', gateway: { endpoint: 'https://gateway.example', credential: 'fixture' } };
+  await list(options);
+  fail = true;
+  await list({ ...options, force: true });
+  assert.equal(snapshot.state.authoritative, false);
+  await list(options);
+  assert.equal(calls, 3);
+  assert.equal(snapshot.state.authoritative, false);
+  fail = false;
+  await list(options);
+  assert.equal(snapshot.state.authoritative, true);
 });
 
 // Unit regression: a retained catalog read used to return a hardcoded owner
@@ -54,7 +147,7 @@ test('a failed catalog refresh cannot expose models from another account or cred
 test('catalog rejects an in-flight response after its owner generation changes', async () => {
   let owner = { dataOwnerId: 'a', generation: 7, pending: false };
   let resume;
-  const list = createProviderCatalog({ readOwner: () => owner, applyModels() {}, fetchModels: async () => [],
+  const list = createProviderCatalog({ readOwner: () => owner, applyModels() {}, readModels: () => [], fetchModels: async () => [],
     readProviders: () => new Promise(resolve => { resume = resolve; }) });
   const result = list({ ownerId: 'a', gateway: null });
   owner = { ...owner, generation: 8 };
@@ -73,6 +166,7 @@ test('model refresh is single-flight and rejects a stale credential response', a
   const list = createProviderCatalog({
     readProviders: async () => [{ id: 'xd', models: applied }],
     applyModels: models => { applied = models; },
+    readModels: () => applied,
     fetchModels: async ({ credential }) => {
       calls++;
       if (credential === 'old') { started(); return new Promise(resolve => { resume = resolve; }); }
@@ -99,6 +193,7 @@ test('failed refresh preserves executable models but drops stale payment adverti
   const list = createProviderCatalog({
     readProviders: async () => [{ id: 'xd', models: applied }],
     applyModels: models => { applied = models; },
+    readModels: () => applied,
     fetchModels: async () => {
       if (fail) throw Error('sensitive synthetic upstream failure');
       return [{ id: 'allowed' }, { id: 'upgrade', availability: 'requires_payment' }];

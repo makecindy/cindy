@@ -10,3 +10,8 @@
 
 "activity.waitingForUpdate" = "更新待ち";
 "activity.lastUpdated" = "最終更新";
+
+"activity.toReview" = "要確認";
+"activity.inProgress" = "進行中";
+"activity.pendingCount %lld" = "対応待ち %lld";
+"activity.unreadCount %lld" = "未読の結果 %lld";
