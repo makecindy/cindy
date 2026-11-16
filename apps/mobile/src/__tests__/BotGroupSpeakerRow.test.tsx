@@ -355,3 +355,34 @@ it('places the stop on the latest own source when execution receipts arrive reve
   expect(rows[1]?.textContent).toContain(i18n.t('groupChat.speaking.queued'));
   expect(rows[1]?.querySelector('[data-testid="botGroup.work.stop"]')).not.toBeNull();
 });
+
+// Review #4581739972: arranging is a status row; only an execution hosts the group control.
+it.each([
+  { serverBacked: true, own: true, admin: false },
+  { serverBacked: false, own: true, admin: false },
+  { serverBacked: true, own: false, admin: true },
+])('keeps the stop off the newest planning row ($serverBacked, $own, $admin)', async ({ serverBacked, own, admin }) => {
+  const group = workGroup();
+  Object.assign(group, { serverBacked, supportsScopedStop: true, canStopAll: admin });
+  group.round.othersActive = true;
+  group.round.speakers = [
+    { ...group.round.speakers[0]!, timelineAt: 10, isSelfRequested: own, executionStatus: 'running' },
+    { botId: 'abu', sessionId: null, activity: 'planning', timelineAt: 20, isSelfRequested: true },
+  ];
+  await renderWork(group, true, { onStop: vi.fn(async () => undefined) });
+  const rows = node.querySelectorAll('[data-testid="botGroup.speaking"]');
+  expect(rows).toHaveLength(2);
+  expect(rows[0]?.querySelector('[data-testid="botGroup.work.stop"]')).not.toBeNull();
+  expect(rows[1]?.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+  expect(node.querySelectorAll('[data-testid="botGroup.work.stop"]')).toHaveLength(1);
+});
+
+it.each([true, false])('shows planning without an execution stop (admin: %s)', async admin => {
+  const group = workGroup();
+  Object.assign(group, { serverBacked: true, supportsScopedStop: true, canStopAll: admin });
+  group.round.othersActive = true;
+  group.round.speakers = [{ botId: 'abu', sessionId: null, activity: 'planning', isSelfRequested: true }];
+  await renderWork(group, true, { onStop: vi.fn(async () => undefined) });
+  expect(node.querySelector('[data-testid="botGroup.speaking"]')).not.toBeNull();
+  expect(node.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+});

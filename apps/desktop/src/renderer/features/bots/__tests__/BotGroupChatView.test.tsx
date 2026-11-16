@@ -6033,3 +6033,24 @@ it.each([true, false])('keeps topic-only stop ownership in the group composer (m
     await waitFor(() => expect(mocks.stopBotGroupRound).toHaveBeenCalled());
   } else expect(stop).toBeNull();
 });
+
+// Review #4581739975: the topic control must name the same request it can stop.
+it.each([false, undefined])('keeps the topic stop on my execution when the latest request is %s', async isSelfRequested => {
+  const root = msg({ id: 'stop-topic-root', content: 'Topic with concurrent work' });
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [root],
+    round: { status: 'running', canStop: true, canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: null, executionId: 'topic-mine', activity: 'reply', threadRootId: root.id, timelineAt: 10, isSelfRequested: true },
+      { botId: 'xiaoman', sessionId: null, executionId: 'topic-other', activity: 'reply', threadRootId: root.id, timelineAt: 20, isSelfRequested },
+    ] },
+  }) });
+  mocks.thread.mockResolvedValue({ ok: true, root, replies: [], hasMore: false });
+  renderView();
+  fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+  const panel = screen.getByRole('complementary');
+  const rows = await within(panel).findAllByTestId('bot-group-progress');
+  expect(rows).toHaveLength(2);
+  expect(within(rows[0]!).queryByRole('button', { name: 'bots.groupChat.progress.stop' })).not.toBeNull();
+  expect(within(rows[1]!).queryByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeNull();
+  fireEvent.click(within(rows[0]!).getByRole('button', { name: 'bots.groupChat.progress.stop' }));
+  await waitFor(() => expect(mocks.stopBotGroupRound).toHaveBeenCalled());
+});

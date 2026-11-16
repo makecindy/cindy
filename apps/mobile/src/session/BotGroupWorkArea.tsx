@@ -82,16 +82,17 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
   const speakers = interleaveBotGroupWork(group.messages ?? [], group.round.speakers.filter(speaker =>
     group.members.some(member => member.botId === speaker.botId))).flatMap(entry => entry.kind === 'work' ? [entry.value] : []);
   if (!speakers.length) return children?.(EMPTY_WORK_ROWS) ?? null;
-  const stopPending = stopping || speakers.filter(speaker => speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId || group.canStopAll).every(speaker => speaker.stopping || speaker.executionStatus === 'stopping');
+  const executionSpeakers = speakers.filter(speaker => speaker.activity !== 'planning');
+  const stopPending = stopping || executionSpeakers.filter(speaker => speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId || group.canStopAll).every(speaker => speaker.stopping || speaker.executionStatus === 'stopping');
   const stopButton = (onPress: (() => void) | undefined) => <Pressable testID="botGroup.work.stop" accessibilityRole="button"
     accessibilityLabel={t('groupChat.composer.stop')} accessibilityState={{ disabled: stopPending, busy: stopPending }}
     disabled={stopPending} style={styles.stop} onPress={onPress}>
     <Text style={styles.stopText}>{t(stopPending ? 'groupChat.speaking.stopping' : 'groupChat.progress.stop')}</Text>
   </Pressable>;
-  const canStopMine = group.round.canStop !== false && speakers.some(speaker => speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId);
+  const canStopMine = group.round.canStop !== false && executionSpeakers.some(speaker => speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId);
   const canStopAll = group.supportsScopedStop && group.canStopAll && group.round.othersActive;
-  const controlSpeaker = (canStopMine ? [...speakers].reverse().find(speaker => speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId) : undefined)
-    ?? (canStopAll ? speakers.at(-1) : undefined);
+  const controlSpeaker = (canStopMine ? [...executionSpeakers].reverse().find(speaker => speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId) : undefined)
+    ?? (canStopAll ? executionSpeakers.at(-1) : undefined);
   const stopControl = online && onStop && (canStopMine || canStopAll) ? canStopAll
       ? <BotGroupMenu title={t('groupChat.progress.stop')} accessibilityLabel={t('groupChat.composer.stop')}
           disabled={stopPending} testID="botGroup.work.stopMenu" sections={[{ id: 'scope', options: [
