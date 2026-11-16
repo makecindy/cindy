@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { listDir } from '../scanner';
+import { listDir, readFile, statEntry } from '../scanner';
 import { loadIgnoreMatcher } from '../ignore';
 
 const roots: string[] = [];
@@ -35,6 +35,75 @@ it('retains realpath boundaries when listing without presentation filters', asyn
   await fs.symlink(outside, path.join(root, 'link'), 'junction');
   expect(await listDir(root, '')).toEqual([]);
   await expect(listDir(root, 'link')).rejects.toThrow('escapes');
+});
+
+// #10863: existing coverage only rejects external links. Exercise the real
+// presentation/expansion/read entries with one internal directory junction.
+// Unit tier, isolated small filesystem fixtures; relPath is a POSIX API path.
+it('presents internal directory links and expands them using their logical paths', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'complete-dir-'));
+  roots.push(root);
+  await fs.mkdir(path.join(root, 'documents'));
+  await fs.writeFile(path.join(root, 'documents/note.md'), 'linked document');
+  await fs.symlink(path.join(root, 'documents'), path.join(root, 'alias'), 'junction');
+  const matcher = await loadIgnoreMatcher(root);
+
+  expect(await listDir(root, '', matcher)).toEqual([
+    expect.objectContaining({ name: 'alias', relPath: 'alias', type: 'directory', size: 0 }),
+    expect.objectContaining({ name: 'documents', type: 'directory' }),
+  ]);
+  expect(await listDir(root, 'alias', matcher)).toEqual([
+    expect.objectContaining({ relPath: 'alias/note.md', type: 'file', size: 15 }),
+  ]);
+  expect(await readFile(root, 'alias/note.md')).toMatchObject({ content: 'linked document' });
+  expect(await statEntry(root, 'alias')).toMatchObject({ type: 'directory' });
+  // Complete enumeration serves recursive transfers and keeps its no-follow contract.
+  expect((await listDir(root, '')).map(entry => entry.name)).toEqual(['documents']);
+});
+
+it('applies directory ignores to aliases and hides invalid or external directory links', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'complete-dir-'));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'complete-outside-'));
+  roots.push(root, outside);
+  await fs.mkdir(path.join(root, 'documents'));
+  await fs.writeFile(path.join(root, '.gitignore'), 'alias/\n');
+  await fs.symlink(path.join(root, 'documents'), path.join(root, 'alias'), 'junction');
+  await fs.symlink(path.join(root, 'missing'), path.join(root, 'broken'), 'junction');
+  await fs.symlink(outside, path.join(root, 'outside'), 'junction');
+  const matcher = await loadIgnoreMatcher(root);
+  expect((await listDir(root, '', matcher)).map(entry => entry.name)).toEqual(['documents', '.gitignore']);
+  await expect(listDir(root, 'outside', matcher)).rejects.toThrow('escapes');
+
+  // A previously visible alias may be retargeted between listing and expansion.
+  await fs.unlink(path.join(root, 'alias'));
+  await fs.symlink(outside, path.join(root, 'alias'), 'junction');
+  await expect(listDir(root, 'alias', matcher)).rejects.toThrow('escapes');
+});
+
+it('finds documents through directory links without following cycles or sharing alias filters', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'complete-dir-'));
+  roots.push(root);
+  for (const name of ['documents', 'container', 'empty']) await fs.mkdir(path.join(root, name));
+  await fs.writeFile(path.join(root, 'documents/note.md'), 'doc');
+  await fs.symlink(path.join(root, 'documents'), path.join(root, 'container/docs'), 'junction');
+  await fs.symlink(path.join(root, 'empty'), path.join(root, 'empty/loop'), 'junction');
+  await fs.symlink(root, path.join(root, 'documents/back'), 'junction');
+  await fs.writeFile(path.join(root, '.gitignore'), 'documents/\ncontainer/docs/note.md\n');
+  const matcher = await loadIgnoreMatcher(root);
+  expect(await listDir(root, '', matcher, { docMode: true })).toEqual([]);
+  // A second alias has a different logical ignore rule despite the same target.
+  await fs.symlink(path.join(root, 'documents'), path.join(root, 'container/visible'), 'junction');
+  expect((await listDir(root, '', matcher, { docMode: true })).map(entry => entry.name))
+    .toEqual(['container']);
+  expect((await listDir(root, 'container', matcher, { docMode: true })).map(entry => entry.name))
+    .toEqual(['visible']);
+  const unfiltered = { ignores: () => false };
+  expect((await listDir(root, '', unfiltered, { docMode: true })).map(entry => entry.name))
+    .toEqual(['container', 'documents']);
+  expect((await listDir(root, 'container', unfiltered, { docMode: true })).map(entry => entry.name))
+    .toEqual(['docs', 'visible']);
+  expect((await listDir(root, 'container/docs', unfiltered, { docMode: true })).map(entry => entry.name))
+    .toContain('note.md');
 });
 
 // #7064: exercise listDir's returned order, not a copied comparator. Existing

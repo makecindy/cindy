@@ -44,6 +44,28 @@ async function makeSymlinkFixture(): Promise<
 }
 
 describe('file-browser scanner symlink boundaries', () => {
+  // #10863 exposes directory links in the tree: rename/delete must act on the
+  // selected link, not its target. Existing tests only cover escaping links.
+  // Unit tier, one real junction is the minimal destructive regression input.
+  it('renames and deletes a directory link without changing the target directory', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-file-browser-'));
+    try {
+      await mkdir(path.join(root, 'target'));
+      await fsWriteFile(path.join(root, 'target/note.md'), 'keep');
+      await symlink(path.join(root, 'target'), path.join(root, 'alias'), 'junction');
+      expect(await renameEntry(root, 'alias', 'renamed')).toMatchObject({
+        relPath: 'renamed', type: 'directory', size: 0,
+      });
+      expect((await lstat(path.join(root, 'renamed'))).isSymbolicLink()).toBe(true);
+      expect(await fsReadFile(path.join(root, 'target/note.md'), 'utf8')).toBe('keep');
+      await deleteEntry(root, 'renamed');
+      expect(await fsReaddir(root)).toEqual(['target']);
+      expect(await fsReadFile(path.join(root, 'target/note.md'), 'utf8')).toBe('keep');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects read/stat/write through a symlink that escapes the workdir', async () => {
     const fixture = await makeSymlinkFixture();
     try {

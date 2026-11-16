@@ -6,7 +6,7 @@
  */
 
 import { PassThrough } from 'node:stream';
-import { mkdtemp, mkdir, rm, writeFile as fsWriteFile, readFile as fsReadFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile as fsWriteFile, readFile as fsReadFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -100,6 +100,22 @@ describe('remote-file-service RPC end-to-end', () => {
     const { entries } = await client.request('listDir', { workdir, includeIgnored: true, docMode: true });
     expect(entries.map((e) => e.name)).toEqual(expect.arrayContaining(['node_modules', '.gitignore', 'blob.bin']));
     await expect(client.request('listDir', { workdir, includeIgnored: true, maxEntries: 1 })).rejects.toThrow('DIRECTORY_TOO_LARGE');
+  });
+
+  // #10863: the RPC must preserve presentation versus transfer enumeration,
+  // including alias-relative paths. Unit tier; one real internal junction is
+  // the smallest input absent from existing list/read RPC coverage.
+  it('browses internal directory links over RPC without following them in complete enumeration', async () => {
+    await symlink(path.join(workdir, 'src'), path.join(workdir, 'alias'), 'junction');
+    await client.connect();
+    const { entries } = await client.request('listDir', { workdir });
+    expect(entries).toContainEqual(expect.objectContaining({ relPath: 'alias', type: 'directory' }));
+    const children = await client.request('listDir', { workdir, relPath: 'alias' });
+    expect(children.entries).toContainEqual(expect.objectContaining({ relPath: 'alias/a.ts' }));
+    expect(await client.request('readFile', { workdir, relPath: 'alias/a.ts' }))
+      .toMatchObject({ content: 'export const a = 1;\n' });
+    const complete = await client.request('listDir', { workdir, includeIgnored: true });
+    expect(complete.entries.some(entry => entry.name === 'alias')).toBe(false);
   });
 
   it('readFile returns content and BINARY_FILE for binaries', async () => {

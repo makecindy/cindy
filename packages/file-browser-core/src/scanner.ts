@@ -158,6 +158,18 @@ async function assertRealParentInsideWorkdir(
   }
 }
 
+/** Resolve a directory link for presentation only. Broken links, loops and
+ * targets outside the workdir are not browsable entries. File links stay hidden. */
+async function resolveDirectoryLink(workdir: string, abs: string): Promise<{ abs: string; stat: Stats } | null> {
+  try {
+    const realAbs = await assertRealPathInsideWorkdir(workdir, abs);
+    const stat = await fs.stat(realAbs);
+    return stat.isDirectory() ? { abs: realAbs, stat } : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface ListDirOptions {
   /** Optional transfer budget; exceeding it fails instead of returning a partial list. */
   maxEntries?: number;
@@ -236,29 +248,42 @@ function readDocDirents(abs: string): Promise<Dirent[]> {
 }
 
 async function hasDocDescendantInner(
+  workdir: string,
   abs: string,
   relPath: string,
   matcher: Matcher,
   found: Found,
+  ancestors: ReadonlySet<string>,
 ): Promise<boolean> {
   if (found.v) return true;
   let dirents: Dirent[];
+  let realAbs: string;
   try {
-    dirents = await readDocDirents(abs);
+    realAbs = await assertRealPathInsideWorkdir(workdir, abs);
+    if (ancestors.has(realAbs)) return false;
+    dirents = await readDocDirents(realAbs);
   } catch {
     return false;
   }
   if (found.v) return true;
   // Pass 1: own files (cheaper than recursing).
-  const subdirs: { name: string; childRel: string }[] = [];
+  const nextAncestors = new Set(ancestors).add(realAbs);
+  const subdirs: { abs: string; childRel: string }[] = [];
   for (const d of dirents) {
     const childRel = relPath === '' ? d.name : `${relPath}/${d.name}`;
-    const isDir = d.isDirectory();
+    let isDir = d.isDirectory();
+    let childAbs = path.join(realAbs, d.name);
+    if (d.isSymbolicLink()) {
+      if (matcher.ignores(childRel, true)) continue;
+      const target = await resolveDirectoryLink(workdir, childAbs);
+      if (!target) continue;
+      childAbs = target.abs;
+      isDir = true;
+    }
     if (matcher.ignores(childRel, isDir)) continue;
-    if (d.isSymbolicLink()) continue;
     if (isDir) {
-      subdirs.push({ name: d.name, childRel });
-    } else if (isDocModeFile(d.name)) {
+      subdirs.push({ abs: childAbs, childRel });
+    } else if (d.isFile() && isDocModeFile(d.name)) {
       found.v = true;
       return true;
     }
@@ -268,18 +293,21 @@ async function hasDocDescendantInner(
   // `Found` cell, so a fast hit stops deeper work in sibling branches.
   const results = await Promise.all(
     subdirs.map((s) =>
-      hasDocDescendantInner(path.join(abs, s.name), s.childRel, matcher, found),
+      hasDocDescendantInner(workdir, s.abs, s.childRel, matcher, found, nextAncestors),
     ),
   );
   return results.some(Boolean);
 }
 
 async function hasDocDescendant(
+  workdir: string,
   abs: string,
   relPath: string,
   matcher: Matcher,
 ): Promise<boolean> {
-  return hasDocDescendantInner(abs, relPath, matcher, { v: false });
+  // Each branch owns its ancestors: sibling aliases may have different ignore
+  // rules, so a traversal-wide visited set would discard legitimate documents.
+  return hasDocDescendantInner(workdir, abs, relPath, matcher, { v: false }, new Set());
 }
 
 /**
@@ -298,8 +326,7 @@ export async function listDir(
     throw new Error('Invalid directory entry limit');
   }
   const sub = assertInsideWorkdir(workdir, relPath);
-  const abs = sub === '' ? workdir : path.join(workdir, sub);
-  await assertRealPathInsideWorkdir(workdir, abs);
+  const abs = await assertRealPathInsideWorkdir(workdir, sub === '' ? workdir : path.join(workdir, sub));
   // In doc mode this top-level read participates in the same in-flight map as
   // recursive descendant probes. An overlapping `listDir('src')` can thus
   // reuse the read already started while listing the root, without retaining
@@ -318,28 +345,37 @@ export async function listDir(
   const candidates = await Promise.all(
     dirents.map(async (d): Promise<DirEntry | null> => {
       const childRel = sub === '' ? d.name : `${sub}/${d.name}`;
-      const isDir = d.isDirectory();
+      // A directory symlink's Dirent.isDirectory() is false. Classify links as
+      // directory candidates before applying directory-only ignore patterns.
+      let isDir = d.isDirectory() || d.isSymbolicLink();
       if (matcher?.ignores(childRel, isDir)) return null;
       // 原子写中间产物 — 隐藏不让前端看到一闪而过的临时行。
       if (matcher && !isDir && d.name.endsWith(XDT_TMP_SUFFIX)) return null;
-      // We need stats for size + mtime; use lstat to avoid following symlinks
-      // into Library/ et al. (some Unity setups symlink huge caches in).
+      let childAbs = path.join(abs, d.name);
       let st: Stats;
       try {
-        st = await fs.lstat(path.join(abs, d.name));
+        st = await fs.lstat(childAbs);
       } catch (error) {
         // Complete enumeration must not silently return a partial snapshot.
         if (!matcher) throw error;
         // Presentation mode tolerates files removed mid-scan or inaccessible entries.
         return null;
       }
-      // Skip symlinks unless they point inside the workdir; cheaper to just
-      // skip than to chase them. User can open via OS if needed.
-      if (st.isSymbolicLink()) return null;
+      if (st.isSymbolicLink()) {
+        // Unfiltered enumeration is also used by recursive transfers. Preserve
+        // its no-follow behavior; only the lazy presentation tree exposes links.
+        if (!matcher) return null;
+        const target = await resolveDirectoryLink(workdir, childAbs);
+        if (!target) return null;
+        childAbs = target.abs;
+        st = target.stat;
+      }
       if (!st.isDirectory() && !st.isFile()) return null;
+      isDir = st.isDirectory();
+      if (matcher?.ignores(childRel, isDir)) return null;
       if (opts.docMode) {
         if (isDir) {
-          if (!(await hasDocDescendant(path.join(abs, d.name), childRel, matcher ?? { ignores: () => false }))) {
+          if (!(await hasDocDescendant(workdir, childAbs, childRel, matcher ?? { ignores: () => false }))) {
             return null;
           }
         } else if (!isDocModeFile(d.name)) {
@@ -655,11 +691,15 @@ export async function renameEntry(
   const absFrom = path.join(workdir, fromSub);
   const absTo = path.join(workdir, toSub);
   const realFrom = await assertRealPathInsideWorkdir(workdir, absFrom);
+  // Resolve parents, but retain the selected final entry. Renaming a visible
+  // directory link must move the link rather than the directory it points to.
+  const source = path.join(await assertRealPathInsideWorkdir(workdir, path.dirname(absFrom)), path.basename(absFrom));
+  const st = await fs.stat(realFrom);
   await assertRealParentInsideWorkdir(workdir, absTo);
   const caseOnly = fromSub.toLowerCase() === toSub.toLowerCase();
   if (caseOnly) {
     try {
-      const [fromStat, toStat] = await Promise.all([fs.stat(realFrom), fs.stat(absTo)]);
+      const [fromStat, toStat] = await Promise.all([fs.lstat(source), fs.lstat(absTo)]);
       if (fromStat.dev !== toStat.dev || fromStat.ino !== toStat.ino) {
         throw new Error(`目标已存在: ${toSub}`);
       }
@@ -669,15 +709,14 @@ export async function renameEntry(
     }
   } else {
     try {
-      await fs.access(absTo);
+      await fs.lstat(absTo);
       throw new Error(`目标已存在: ${toSub}`);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT') throw err;
     }
   }
-  await fs.rename(realFrom, absTo);
-  const st = await fs.lstat(absTo);
+  await fs.rename(source, absTo);
   return {
     relPath: toSub,
     type: st.isDirectory() ? 'directory' : 'file',
@@ -695,10 +734,12 @@ export async function deleteEntry(workdir: string, relPath: string): Promise<voi
   const sub = assertInsideWorkdir(workdir, relPath);
   if (sub === '') throw new Error('cannot delete workdir root');
   const abs = path.join(workdir, sub);
-  const realAbs = await assertRealPathInsideWorkdir(workdir, abs);
+  await assertRealPathInsideWorkdir(workdir, abs);
+  const entryAbs = path.join(await assertRealPathInsideWorkdir(workdir, path.dirname(abs)), path.basename(abs));
   // rm with recursive+force handles both file and directory; force only
   // suppresses "not found" which is fine for a delete operation.
-  await fs.rm(realAbs, { recursive: true, force: true });
+  // rm does not follow the final symlink; removing a link must preserve its target.
+  await fs.rm(entryAbs, { recursive: true, force: true });
 }
 
 /** Cheap stat for the unrenderable placeholder (size + mtime). */
