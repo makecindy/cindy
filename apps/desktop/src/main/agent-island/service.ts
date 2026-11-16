@@ -2084,6 +2084,15 @@ export class AgentIslandService {
     return [...(this.state.sessions.get(sessionId)?.pendingInteractionIds ?? [])];
   }
 
+  /** Display demand counts execution, including muted and group-chat tasks. */
+  getLocalRunningTaskCount(): number {
+    let count = 0;
+    for (const task of this.state.sessions.values()) {
+      if (task.sourceDeviceId === null && task.running && task.phase === 'running') count++;
+    }
+    return count;
+  }
+
   getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[] {
     return buildAllSessionActivitySnapshots(this.state);
   }

@@ -34,9 +34,6 @@
     "apps/desktop/src/main/__tests__/chatAttachmentIpcOwnerBoundary.test.ts": {
       "sourceReads": 1
     },
-    "apps/desktop/src/main/__tests__/claudeAccountUsageSource.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/main/__tests__/claudeOrphanReaper.test.ts": {
       "resetModules": 1
     },
@@ -109,9 +106,6 @@
     },
     "apps/desktop/src/main/__tests__/sessionDragReleaseNativeHost.test.ts": {
       "resetModules": 1
-    },
-    "apps/desktop/src/main/__tests__/sessionRuntimeFallbackIntent.test.ts": {
-      "sourceReads": 1
     },
     "apps/desktop/src/main/__tests__/sessionTaskSummary.test.ts": {
       "sourceReads": 2
@@ -317,9 +311,6 @@
       "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/orcaLifecycleService.test.ts": {
-      "sourceReads": 1
-    },
-    "apps/desktop/src/main/maker-ipc/__tests__/orcaModelSelectionIntent.test.ts": {
       "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/orcaProviderRoutingSnapshotWiring.test.ts": {

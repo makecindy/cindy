@@ -108,3 +108,26 @@ main-page capture rejection, fake microphone capture, and webContents destructio
 Mixed microphone/legacy-desktop requests were rejected by Chromium's bad-IPC
 validation before our permission callback. These synthetic tests do not replace
 real system audio, Windows lock/UAC or mobile cross-NAT release validation.
+
+## Persistent remote-exit covers
+
+Windows `--away-guard` keeps physical keyboard/mouse input behind the cover while
+allowing injected input until local interaction starts locking. Mouse drift and
+release edges do not lock. Main EOF or missing heartbeats also requests a lock.
+`--lock-screen` reports success only after the current user's session is locked;
+`--lock-state` returns `locked`, `unlocked` or `unavailable`.
+[LockWorkStation](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-lockworkstation)
+is asynchronous, so the helper checks the current session's
+[WTS SessionFlags](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/ns-wtsapi32-wtsinfoex_level1_w),
+not merely whether the input desktop changed (which can also mean UAC).
+No elevation or SYSTEM broker is needed to lock the caller's own session.
+A cover cannot protect a UAC desktop: startup refuses it, and an active guard
+requests locking if Windows changes away from the covered Default desktop.
+
+Hyprland's `away` command adopts its existing privacy token. Its watchdog and
+physical input request the system locker without dropping the mask. A confirmed
+compositor session lock releases the input fence so authentication works normally.
+Main's `stop` cannot uncover an unlocked persistent cover. `lock` requests the
+same transition for application shutdown. `gate.hpp` tests and the production
+watchdog-body test run without touching any real desktop; the full plugin must
+still be built and exercised against its pinned Hyprland ABI on Linux.

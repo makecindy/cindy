@@ -492,7 +492,10 @@ function DeviceDetailScreenContent() {
     if (automationScopeKey || !shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status)) {
       return sections;
     }
-    return [{ key: 'search', title: '', data: indexedSearch.results }];
+    // An empty section still contributes header/footer cells and hides ListEmptyComponent.
+    return indexedSearch.results.length > 0
+      ? [{ key: 'search', title: '', data: indexedSearch.results }]
+      : [];
   }, [automationScopeKey, indexedSearch.results, indexedSearch.status, searchQuery, sections]);
   const listContext = useMemo(
     () => buildRemoteSessionListContext({
@@ -894,7 +897,7 @@ function DeviceDetailScreenContent() {
         />
         {/* 连接提示只是零高度锚点;iOS 内容区从屏幕顶开始,锚点挪到顶栏下沿。 */}
         {usesNativeStackHeader()
-          ? <View pointerEvents="box-none" style={[styles.projectConnectionAnchor, { top: headerHeight }]}>{connectionBanner}</View>
+          ? <View pointerEvents="box-none" style={[styles.projectConnectionAnchor, { top: headerHeight, left: insets.left, right: insets.right }]}>{connectionBanner}</View>
           : connectionBanner}
         <ListDisclosureScope controller={disclosure.controller}>
           <SectionList

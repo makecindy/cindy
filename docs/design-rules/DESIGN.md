@@ -113,7 +113,7 @@ The interface is built from a three-tier layer system that applies symmetrically
 
 ### Task tag identity colors
 
-用户确认的任务标签色板为红、橙、黄、绿、蓝、紫、灰、粉、珊瑚、青、靛蓝、白共十二色。只用于标签色球与编辑色板，表示用户分类，不表示任务运行状态。色球为圆形、细描边，选中时勾位于球内；白色在 Light/Dark 中均保持白色，用独立深色勾保证对比度。Desktop 使用 `task-tag-*` 语义 token；Mobile 使用对应 `taskTag*` 色板字段。默认面板只显示选择列表，添加或编辑后才显示名称和两行六列色板，不显示双击编辑提示。
+用户确认的任务标签色板为红、橙、黄、绿、蓝、紫、灰、粉、珊瑚、青、靛蓝、白共十二色。用于标签色球与编辑色板，以及用户选择的项目图标和图标色板（见本节项目图标规则），表示用户分类或身份，不表示任务运行状态。色球为圆形、细描边，选中时勾位于球内；白色在 Light/Dark 中均保持白色，用独立深色勾保证对比度。Desktop 使用 `task-tag-*` 语义 token；Mobile 使用对应 `taskTag*` 色板字段。默认面板只显示选择列表，添加或编辑后才显示名称和两行六列色板，不显示双击编辑提示。
 
 ### Personal message bubble colors (Mobile, 2026-10-12)
 
@@ -138,6 +138,18 @@ Small interactive chips (button backgrounds, tag pills, avatar fills, selected-n
 - **Silver** (`#a3a3a3`): Tertiary text and deeply de-emphasized metadata. **Never use it as a placeholder** — too prominent, reads as filled-in (see §4 Inputs; the G3 erratum is archived in [`design-decision-log.md`](./design-decision-log.md); placeholders use `--text-placeholder` `#c4c4c4`).
 
 > ~~**Button Text Dark** (`#404040`)~~ — deprecated (2026-06, G1). Once labeled the "white-surface button text color", but no real button ever used it (only bare hardcodes in the experimental view). White Pill secondary text uniformly uses **Near Black** (`--text-primary` `#262626`).
+
+### Project icon identity colors (user request, 2026-11-13)
+
+Project symbols and letter icons reuse the existing task-tag palette, order and localized color names (`TASK_TAG_COLORS`):
+red, orange, yellow, green, blue, purple, gray, pink, coral, teal, indigo and white.
+Desktop reads `--task-tag-*`; Mobile reads `taskTag*` directly. No separate project palette or new color
+values. This extends the tag identity-color role to user-selected project symbols, letter icons and their picker.
+Default explicitly uses `text-primary` / `textPrimary`: dark ink in Light, light ink in Dark. White uses the tag's white fill, neutral border
+and `task-tag-white-check` / `taskTagWhiteCheck` glyph to remain visible on light surfaces.
+Images and emoji retain their intrinsic colors. Palette swatches are two rows of six; default is the first explicit choice above the palette, with an adaptive neutral swatch, a selected check and a localized “follow theme” label. It is not presented as a reset action. Color choices have localized names and a neutral selection ring. Mobile targets are 44pt;
+Desktop uses standard pill Buttons. Controls, project names and task status remain on their existing tokens.
+Project letter icons are identity artwork: square tiles with 25% corner radius, Cindy typography and weight 600. Automatic initials use a stable name-derived choice from the existing non-white identity colors, with theme-adjusted foreground and a 14% same-color background. Explicit default remains the theme foreground. Manual letter colors remain selectable; the tile shape also applies to them.
 
 ### Semantic & Accent
 
@@ -607,10 +619,13 @@ input/text
 
 Every confirmation built on the shared `ConfirmDialog` / provider uses its standard buttons; there is no per-caller presentation switch (maintainer ruling 2026-11-11, C-02 — supersedes the DS-6 two-caller pilot). Confirmation actions keep a 36px minimum height; long labels wrap within the panel and may grow vertically instead of overflowing or truncating. Keep `confirm-btn-*` local styling, default/destructive choice, focus branches and no scrim dismissal. Full Access and plugin-authorization confirmations follow the same buttons; the in-chat Permission card is not a `ConfirmDialog` and keeps its own `palette="permission"` presentation.
 
-**Interaction answer composers (user decision, 2026-11-10):** Free-text answers, custom-choice answers,
-withdrawn-question supplements and plan feedback use a full-width input frame. Text occupies its own
-full-width area; existing microphone and submit controls sit inside the frame in a trailing toolbar
-below the text, never squeeze the textarea into a narrow side column. Submission uses the main
+**Interaction answer composers (user decisions, 2026-11-10 and 2026-11-16):** Free-text answers, custom-choice answers,
+withdrawn-question supplements and plan feedback use one input frame that starts as a single line: while
+the answer is empty or fits one line, the text sits beside the existing microphone and submit controls,
+centred on them (about 48px tall). Once the answer wraps or contains a line break, the frame expands: the
+text takes its own full-width area and the controls move to a trailing toolbar below it, so a multi-line
+answer is never squeezed into a narrow column. The expansion holds until the answer is cleared, so the
+layout does not flip back and forth while typing (`useAnswerComposerExpanded`). Submission uses the main
 composer's paper-plane glyph, with the actual action retained in localized accessible names and
 Desktop tooltips. Multi-select custom input has one submit control, not a second footer submit.
 Question navigation, close/skip, validation, voice finalization and approval semantics stay unchanged.

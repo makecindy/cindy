@@ -393,9 +393,11 @@ Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断
 普通重连规则。重连中断结算前的成功完成优先，不得提前发错误触发重建。
 收到 Codex 的 `warning`「Falling back from WebSockets to HTTPS transport」后同样清除重连
 计时：HTTPS 要先上传完整历史才有事件，交给 Codex 自身 HTTP 超时与 upstream-idle 兜底。
-ChatGPT 订阅 WebSocket 单条消息上限约 16 MiB（超限回 1009），codex-proxy 在出站消息超过
-15 MiB 时按 #5103 的附件外置把最旧的内联附件转为本地文件；这是按实际出站字节判定，不是
-按历史体积推断断连原因。
+ChatGPT 订阅 WebSocket 单条消息上限约 16 MiB（超限回 1009）。Codex 的附件外置已从旧的
+15 MiB 触发改为对缺少 `previous_response_id` 的整段重发帧按 12 MiB→8 MiB 重放，增量帧不挪图；
+成功恢复保持在 15 MiB 安全边界内。不可恢复帧仍沿原有 1009／HTTPS 回退路径处理，具体规则见
+[模型请求超限时的附件恢复](media-storage-and-protocols.md#模型请求超限时的附件恢复)。
+这仍按实际出站字节判定，不是按历史体积推断断连原因。
 普通 timeout、纯文本大历史和网络失败
 不得进入这套压缩，也不得进入自动续跑死循环。`status` / `account_usage` 是传输层或用量
 心跳，不得刷新 Session 零事件看门狗或 Codex upstream-idle 计时。`text` / `thinking`

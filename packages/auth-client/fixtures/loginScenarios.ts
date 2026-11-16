@@ -15,7 +15,7 @@
  *    双断言校验(dev 对照含 → 生产产物不含)。
  *
  * 附录 A 是 `XDT_LOGIN_SCENARIO` / `EXPO_PUBLIC_LOGIN_SCENARIO` 的合法值域冻结表,
- * 本文件的场景解析照表实现;变更值域须先改计划(评审管制),不得只改代码。
+ * 本文件的场景解析照表实现;新增网络错误场景登记于 docs/dev-rules/ui-mock-data.md。
  */
 
 import type { AuthFetch, AuthFetchResponse } from "../src/client.js";
@@ -29,6 +29,7 @@ export const CINDY_LOGIN_FIXTURE_SENTINEL = "__CINDY_LOGIN_FIXTURE_SENTINEL__";
 
 /** 附录 A scenario token 值域(error:<endpoint>:<CODE> 单列语法校验)。 */
 export const LOGIN_SCENARIO_TOKENS = Object.freeze([
+  "providers:non-json-418",
   "providers:phone-only",
   "providers:email-only",
   "providers:both",
@@ -322,6 +323,15 @@ export function createScenarioFetch(
     const path = new URL(input).pathname;
     const endpoint = endpointOf(path);
 
+    if (scenario.kind === "providers" && scenario.variant === "non-json-418" && endpoint === "providers") {
+      const body = '<html><title>418</title><body>Request blocked by proxy</body></html>';
+      return {
+        ok: false, status: 418,
+        headers: { get: (name) => ({ server: 'scenario-proxy', via: '1.1 scenario-proxy' })[name as 'server' | 'via'] ?? null },
+        text: async () => body,
+        json: async () => JSON.parse(body),
+      };
+    }
     // error 场景:仅目标 endpoint 注错,其余照常
     if (scenario.kind === "error" && endpoint === scenario.errorEndpoint) {
       return jsonResponse(400, {

@@ -1,3 +1,4 @@
+import { createInlineImagePreprocessor } from './inlineImagePreprocessor.js';
 /**
  * The Claude and Pi loopback compatibility proxy, shared by Desktop and the Node Host.
  * Moved verbatim from anthropic-compat-proxy-host.ts, which now builds the Desktop
@@ -126,6 +127,7 @@ import { createPiResponsesVerbosityTransform } from './pi-responses-verbosity.js
 /** The Desktop-only reads, resolved by each launcher. */
 export interface AnthropicCompatProxyHostPorts {
   createAttachmentRecovery: typeof import('./oversized-attachment-recovery.js').createAttachmentRecovery;
+  createRequestSizeController: typeof import('./oversized-attachment-recovery.js').createRequestSizeController;
   outboundFetch: typeof import('./outbound-fetch.desktop.js').outboundFetch;
   isOpenAiSubscriptionProviderId: typeof import('./codex-account-auth.desktop.js').isOpenAiSubscriptionProviderId;
   createPiWebSocketRequestPreparer: typeof import('./pi-subscription-websocket.js').createPiWebSocketRequestPreparer;
@@ -147,7 +149,8 @@ export interface AnthropicCompatProxyHostPorts {
 
 /** One loopback proxy with its routing, transforms, recovery rules and observers. */
 export function createAnthropicCompatProxyHost(ports: AnthropicCompatProxyHostPorts) {
-const { createAttachmentRecovery, outboundFetch, isOpenAiSubscriptionProviderId, createPiWebSocketRequestPreparer, resolvePiWebSocketUpstream, piWebSocketTransforms, isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId, getPiNativeSubscriptionHandler, getResponsesBridgeHandler, subscriptionRequestAllowsFast, withSubscriptionFastRequestPolicy, resolveDesktopOutboundProxy, claudeUpstreamEndpoint, readSilentEncryptedRetrySettings } = ports;
+const imagePreprocessor = createInlineImagePreprocessor();
+const { createAttachmentRecovery, createRequestSizeController, outboundFetch, isOpenAiSubscriptionProviderId, createPiWebSocketRequestPreparer, resolvePiWebSocketUpstream, piWebSocketTransforms, isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId, getPiNativeSubscriptionHandler, getResponsesBridgeHandler, subscriptionRequestAllowsFast, withSubscriptionFastRequestPolicy, resolveDesktopOutboundProxy, claudeUpstreamEndpoint, readSilentEncryptedRetrySettings } = ports;
 
 // scope = 'cc-proxy' → logger.ts 的 emit() 路由把这条流量并入统一 agent 流
 // (agent-*.ndjson, source=proxy)。child(sub) 会继续保持 'cc-proxy/sub' 前缀, routing 一致。
@@ -155,6 +158,7 @@ const log = createMakerLogger('cc-proxy');
 
 let _handle: ProxyHandle | null = null;
 let _initialized = false;
+const requestSizeProviders = new WeakMap<Readonly<Record<string, string>>, string>();
 
 // gateway api key reader —— 由 host 注入(readClaudeApiKey),避免 proxy-host 直接 import
 // auth-adapters(重模块)。oauth-spawn 下走网关的请求(默认 / 选 XD)要把鉴权头换成它。
@@ -1136,6 +1140,7 @@ function createModelRoutingTransform(): RoutingTransform {
       // pending 与 activeOwnerScopeKey 合成同一条 ownerBoundDispatchUnsafe:
       // 切换在 await 里完整完成时两端 pending 都是 false。
       if (ownerBoundDispatchUnsafe(ctx)) return ownerBoundaryPendingRoute();
+      requestSizeProviders.set(ctx.headers, fastIdentities.get(ctx.headers)?.providerId ?? 'xd');
       resolved = withSubscriptionFastRequestPolicy(resolved, fastIdentities.get(ctx.headers) ?? {}, ctx);
       return withOwnerBoundaryDispatchGate(
         refuseUnsafePlaceholderPassthrough(stripGuestRouteHeader(stripInternalPiHeaders(resolved)), ctx),
@@ -1211,6 +1216,19 @@ async function ensureAnthropicCompatProxyReady(): Promise<void> {
         }
         const sdkSessionId = headerValue(headers, 'x-claude-code-session-id');
         return sdkSessionId ? _resolveCcSessionId?.(sdkSessionId) : null;
+      }),
+      requestSizeController: createRequestSizeController(headers => {
+        const piSessionId = headerValue(headers, 'x-cindy-pi-session-id');
+        if (piSessionId) return authenticatePiProxySession(piSessionId, headerValue(headers, 'x-cindy-pi-session-token')) ? piSessionId : null;
+        const sdkSessionId = headerValue(headers, 'x-claude-code-session-id');
+        return sdkSessionId ? _resolveCcSessionId?.(sdkSessionId) : null;
+      }, imagePreprocessor, (headers) => {
+        const resolved = requestSizeProviders.get(headers);
+        if (resolved) return resolved;
+        const pi = headerValue(headers, 'x-cindy-pi-session-id');
+        const sdk = headerValue(headers, 'x-claude-code-session-id');
+        const session = pi || (sdk ? _resolveCcSessionId?.(sdk) : null);
+        return (session ? getSessionProvider(session) : null) ?? 'xd';
       }),
       // 'oauth' 模式按 model 分流(claude-* → api.anthropic.com 走订阅;其余 → gateway 换 key)。
       // 'gateway' 模式恒返 null,字节级行为与扩展前一致。

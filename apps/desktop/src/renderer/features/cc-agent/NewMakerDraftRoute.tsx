@@ -1,3 +1,4 @@
+import { ResolvedProjectIcon } from './sidebar/ResolvedProjectIcon';
 import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
 import { askPluginModelRoute, usePluginModels, writePluginModelRouteNote } from './pluginModelRoute';
 import { bindModelGroupSession, modelGroupLocationNameFrom, resolveModelGroup, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
@@ -282,7 +283,8 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { extractIpcError } from '@/utils/ipcError';
-import { rememberRemoteDraftDefaults, forgetRemoteDraftDefaults } from './remoteDraftDefaultsCache';
+import { rememberRemoteDraftDefaults, forgetRemoteDraftDefaults, getRemoteDraftDefaults } from './remoteDraftDefaultsCache';
+import { nextRemoteDraftEngine } from './remoteDraftEngineFollow';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import {
   useAgentCapabilities,
@@ -1820,6 +1822,29 @@ export function NewMakerDraftRoute() {
     remoteDraftRevisionRef,
   } = remoteDefaults;
 
+  // 到另一台电脑新建任务：引擎跟随那台电脑自己的新建任务；回到本机再还原(见 remoteDraftEngineFollow)。
+  // 只用本次请求或推送确认的引擎；缓存可预览配置，但不能提前结束引擎跟随。
+  useEffect(() => {
+    const deviceId = isDeviceLinkDraft ? effectiveDeviceLinkDeviceId ?? null : null;
+    const confirmed = remoteDefaults.confirmedEngineRef.current;
+    const defaults = confirmed?.deviceId === deviceId ? confirmed : undefined;
+    const next = nextRemoteDraftEngine({
+      ownerId: dataOwnerId,
+      deviceId,
+      currentVendor: draft.vendor,
+      defaultsReady: defaults !== undefined,
+      selectedAgentKind: defaults?.selectedAgentKind,
+    });
+    if (next) switchVendor(next, { remoteFollow: true });
+  }, [
+    dataOwnerId,
+    isDeviceLinkDraft,
+    effectiveDeviceLinkDeviceId,
+    capabilityAgentKind,
+    draft.vendor,
+    remoteDraftState.value,
+  ]);
+
   // 运行 Agent 的电脑只提供模型目录：没有它的草稿默认值，改用本次运行内对这台电脑的上一次
   // 选择 + 本机为这台电脑记的每模型档位(见 agentDeviceDraftMemory)。任务建到被控电脑时，权限
   // 在被控电脑上生效：等被控电脑的草稿值到了，沿用其中的权限档。
@@ -3293,7 +3318,7 @@ export function NewMakerDraftRoute() {
   // 自动 pickup 新 vendor 的 lastByVendor 值。
   const handleVendorChange = useCallback((next: MakerVendor) => {
     markDefaultTupleCustomized();
-    switchVendor(next);
+    switchVendor(next, { userSelected: true });
   }, []);
 
   // 当前草稿选中的 vendor 变为不可用(如 Pi 未注册 / 被控端无 Pi)时,coerce 到首个可用来源
@@ -3530,7 +3555,7 @@ export function NewMakerDraftRoute() {
       // event 到达前的旧 Harness。switchVendor 自身同值早返，不会制造额外写入。
       // 手动选了普通模型 = 取消插件模型。
       if (getDraft().pluginModel || getDraft().modelGroup) patchDraft({ pluginModel: null, modelGroup: null });
-      switchVendor(selection.vendor);
+      switchVendor(selection.vendor, { userSelected: true });
       // ── 远程 Agent:模型面板里选到了另一台电脑上的模型(或从那台回到任务所在电脑)──────
       // 连 Agent 的运行位置一起换。任务、项目、附件都在任务所在电脑(本机或被控电脑),一概不动;
       // 只有模型目录与这次选择改按目标电脑。
@@ -3737,7 +3762,7 @@ export function NewMakerDraftRoute() {
     && !effectiveAgentDeviceId && !activePluginModel && !activeModelGroup && unifiedModelPanelActive && draft.vendor !== 'orca'
     ? localProviders.find((provider) => provider.id === effectiveSourceId) ?? null
     : null;
-  const runLocation = useProviderBorrow(runLocationProvider).location;
+  const { location: runLocation, routeProviderId: runLocationProviderId, borrowedCatalog: runLocationCatalog } = useProviderBorrow(runLocationProvider);
   const runLocationAppliedRef = useRef<string | null>(null);
   useEffect(() => {
     if (!runLocationProvider || !draftInitialModel) return;
@@ -3746,19 +3771,21 @@ export function NewMakerDraftRoute() {
       return;
     }
     const device = remoteAgentDevices?.find((candidate) => candidate.deviceId === runLocation);
-    const key = `${runLocationProvider.id}:${runLocation}`;
+    const key = `${runLocationProvider.id}:${runLocation}:${runLocationProviderId}`;
     if (!device || runLocationAppliedRef.current === key) return;
+    // A matching account does not imply that this computer exposes the selected model.
+    if (!runLocationCatalog?.provider.models[dbToMakerAgentKind(draft.vendor)]?.some(model => model.id === draftInitialModel && !model.disabled)) return;
     runLocationAppliedRef.current = key;
     handleUnifiedDraftSelect({
       vendor: draft.vendor,
-      providerId: runLocationProvider.id,
+      providerId: runLocationProviderId ?? runLocationProvider.id,
       modelId: draftInitialModel,
       ...(draftInitialEffort ? { effort: draftInitialEffort } : {}),
       fast: effectiveFastMode,
       favoriteUid: selectedFavoriteUid,
       agentDevice: { deviceId: device.deviceId, name: device.name },
     });
-  }, [runLocationProvider, runLocation, remoteAgentDevices, draftInitialModel, draftInitialEffort, draft.vendor,
+  }, [runLocationProvider, runLocationProviderId, runLocationCatalog, runLocation, remoteAgentDevices, draftInitialModel, draftInitialEffort, draft.vendor,
     effectiveFastMode, selectedFavoriteUid, handleUnifiedDraftSelect]);
 
   // ─── 用户改 workingDir(FolderPicker)→ 写回 draft ─────────────────────
@@ -6721,11 +6748,13 @@ export function NewMakerDraftRoute() {
                     className="inline-flex h-[30px] min-w-20 max-w-[220px] items-center justify-center gap-1.5 rounded-full border border-[var(--create-agent-control-border)] bg-[var(--create-agent-control-bg)] px-3 text-12 font-medium leading-[1.167] text-[var(--create-agent-control-text)] transition-colors hover:bg-[var(--create-agent-control-bg-hover)] active:bg-[var(--create-agent-control-bg-pressed)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--create-agent-focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
                     aria-label={t('newChat.collaboration.modeLabel')}
                   >
-                    <MessageSquare
+                    {effectiveWorkingDir ? <ResolvedProjectIcon directory={effectiveWorkingDir}
+                      remoteHostId={effectiveRemoteHostId} deviceId={effectiveDeviceLinkDeviceId}
+                      name={createAgentModeLabel} size={18} /> : <MessageSquare
                       size={12}
                       strokeWidth={2}
                       className="shrink-0 text-[var(--create-agent-control-icon)]"
-                    />
+                    />}
                     <span className="min-w-0 truncate">{createAgentModeLabel}</span>
                     <ChevronDown
                       size={12}

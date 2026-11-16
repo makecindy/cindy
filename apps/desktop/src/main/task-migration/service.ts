@@ -22,6 +22,7 @@ import {
   type TaskMigrationView,
 } from '@cindy/device-link';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current';
+import { isOrcaReportStopSnapshotMarker } from '../localDb/agentInputQueueSnapshots';
 import { dialogueWorkspaceDayKey } from '../localDb/dialogueWorkspace';
 import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs';
 import { readDialogueWorkspaceSettings } from '../dialogue-workspace-settings';
@@ -285,7 +286,8 @@ async function assertSource(
     } catch {
       throw new Error('MIGRATION_TASK_QUEUED');
     }
-    if (!Array.isArray(messages) || messages.length) throw new Error('MIGRATION_TASK_QUEUED');
+    if (!Array.isArray(messages) || messages.some(item => !isOrcaReportStopSnapshotMarker(item)))
+      throw new Error('MIGRATION_TASK_QUEUED');
   }
   const live = getMakerIfReady()?.getSession(sessionId);
   if (!sourceBoundary) throw new Error('MIGRATION_HOST_NOT_READY');

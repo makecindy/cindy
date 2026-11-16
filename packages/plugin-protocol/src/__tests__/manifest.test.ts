@@ -34,6 +34,15 @@ const validManifest = {
 } as const;
 
 describe('Ghost manifest contract', () => {
+  // Unit: pre-feature stored declarations must not invalidate existing image capabilities.
+  it.each([{}, [], ['rerank', 'rerank'], [42]])('ignores malformed historical model APIs %j only when stored', models => {
+    const raw = { ...validManifest, slots: ['tool', 'cindy'], cindy: { image: ['generate'], models } };
+    expect(validateGhostManifest(raw).ok).toBe(false);
+    expect(validateStoredGhostManifest({ ...raw, cindy: { models } }).ok).toBe(true);
+    const stored = validateStoredGhostManifest(raw);
+    expect(stored).toMatchObject({ ok: true, manifest: { cindy: { image: ['generate'] } } });
+    if (stored.ok) expect(stored.manifest.cindy?.models).toEqual(models);
+  });
   it('validates static task prompt declarations while preserving older installed plugin behavior', () => {
     const base = { ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined };
     expect(validateGhostManifest({ ...base, systemPrompt: [{ id: 'style', order: 0, text: 'Static', scope: 'selected-task' }] })).toMatchObject({ ok: true });
@@ -1924,7 +1933,7 @@ describe('cindy 详单:media/text/embed/search 类目与 oneshotModel 校验', (
   it('接受 media/text/embed 类目并保留', () => {
     const r = validateGhostManifest({
       ...base,
-      cindy: { media: ['deposit'], text: ['oneshot'], embed: ['text'] },
+      cindy: { media: ['deposit'], text: ['oneshot'], embed: ['text'], models: ['decisions', 'rerank'] },
     });
     expect(r.ok, r.ok ? '' : String(r.reason)).toBe(true);
     if (!r.ok) return;
@@ -1932,6 +1941,7 @@ describe('cindy 详单:media/text/embed/search 类目与 oneshotModel 校验', (
       media: ['deposit'],
       text: ['oneshot'],
       embed: ['text'],
+      models: ['decisions', 'rerank'],
     });
   });
 

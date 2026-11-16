@@ -40,7 +40,33 @@ const queuedInputOriginSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/queuedInputOrigin.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+const runtimeFallbackSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeFallback.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+const autoResumeHooksSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/interruptedTurnAutoResumeHooks.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+const modelSwitchGateInputSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/modelSwitchGateInput.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 
+// handleSetModel moved verbatim into sessionRuntimeSelectionApply.ts; register.ts keeps the binding
+// (createHandleSetModel) and the set-model IPC registration that follows it. The text these
+// assertions read is the moved function followed by that register.ts tail, in their former order.
+const runtimeSelectionApplySource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeSelectionApply.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+// What register.ts held before handleSetModel moved out: the assertions that searched the whole of
+// register.ts for code of that function read this.
+const registerWithRuntimeSelectionSource = `${registerSource}\n${runtimeSelectionApplySource}`;
+function setModelSource(): string {
+  return handlerBody(runtimeSelectionApplySource, 'const handleSetModel = async (', '  return handleSetModel;')
+    + handlerBody(registerSource, 'const handleSetModel = createHandleSetModel(', 'const recoverRemoteRuntimeAxisPersistence');
+}
 function handlerBody(source: string, channel: string, nextChannel: string): string {
   const start = source.indexOf(channel);
   const end = source.indexOf(nextChannel, start + channel.length);
@@ -464,9 +490,9 @@ describe('session runtime control wiring', () => {
     expect(body.indexOf('clearAllSessionRuntimeControlStates();')).toBeLessThan(
       body.indexOf('authManager.setStableOwnerPostCommitTask('),
     );
-    expect(registerSource).toContain('effort: resolveRetainedRuntimeEffort({');
-    expect(registerSource).toContain('targetModelHasFixedEffort,');
-    expect(registerSource).toContain(
+    expect(registerWithRuntimeSelectionSource).toContain('effort: resolveRetainedRuntimeEffort({');
+    expect(registerWithRuntimeSelectionSource).toContain('targetModelHasFixedEffort,');
+    expect(registerWithRuntimeSelectionSource).toContain(
       'fastMode: retainedSession.getFastMode() ?? previousRuntime.fastMode',
     );
   });
@@ -605,11 +631,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('guards local user model changes before parsing input while preserving trusted internal paths', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const ingress = setModel.indexOf('registerSessionSetModelHandler(makerSessionRegistry, {');
     expect(ingress).toBeGreaterThan(-1);
     expect(setModel.slice(0, ingress)).not.toContain('assertTrustedAppRendererEvent(');
@@ -627,11 +649,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('passes user null effort through catalog normalization before model side effects', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const confirmation = setModel.indexOf('const confirmedContextWindow =');
     const selectionValidation = setModel.indexOf('!isSupportedRuntimeEffort(selectionEffort)');
     const axisResolution = setModel.indexOf('const axes = resolveSessionRuntimeAxes({');
@@ -658,11 +676,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('validates atomic user axes against the selected catalog model before side effects', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const axisValidation = setModel.indexOf('if (atomicSelection) {');
     expect(axisValidation).toBeGreaterThan(-1);
     expect(setModel).not.toContain("if (internalOptions.source !== 'user' && atomicSelection)");
@@ -715,11 +729,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('commits device-link atomic axes before a rebuilt queue can wake', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const selectionStart = setModel.indexOf('const selectionToCommit = atomicSelection;');
     const applyAxes = setModel.indexOf('await applyRuntimeSelectionAxesWithRecovery({');
     const patchEffort = setModel.indexOf('patch.effort = atomicSelection.effort;', applyAxes);
@@ -755,11 +765,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('persists a send-time renamed model inside the shared route transaction', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     expect(setModel).toContain('persistRenamedSessionModel: true');
     const persistGate = setModel.indexOf('internalOptions.persistRenamedSessionModel === true');
     const persist = setModel.indexOf('await persistSessionFields(sessionId, patch);', persistGate);
@@ -768,11 +774,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('uses current runtime window facts but still requires a verified target before rebuilding', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const verifiedWindowOnly = setModel.indexOf(
       'targetContextWindow = verifiedTargetWindow ?? undefined;',
     );
@@ -830,11 +832,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('restores the cold-session source provider before window evaluation even when the switch names a target provider (#3996)', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     // 目标 provider(用户要切去的来源)与源会话 provider(窗口评估所需身份)是两个
     // 独立事实。冷会话内存未 hydrate 时,即使请求显式携带目标 provider,也必须先从
     // DB 恢复源 provider,否则 currentProviderId 为 null,源模型窗口按全局 modelId
@@ -847,15 +845,18 @@ describe('session runtime control wiring', () => {
     const restore = setModel.indexOf('if (!hasSessionProvider(sessionId)) {');
     const hydrate = setModel.indexOf('hydrateSessionProvider(sessionId, persistedProviderId);');
     const current = setModel.indexOf('const currentProviderId = internalOptions.previousPiRoute');
-    const catalogCurrent = setModel.indexOf('const catalogCurrentWindow =');
+    // The source window is resolved in modelSwitchGateInput.ts; handleSetModel calls it.
+    const catalogCurrent = setModel.indexOf('const switchWindows = resolveModelSwitchWindows({');
     expect(requested).toBeGreaterThan(-1);
     expect(restore).toBeGreaterThan(requested);
     expect(hydrate).toBeGreaterThan(restore);
     expect(current).toBeGreaterThan(hydrate);
     // 恢复出的源 provider 必须先于源窗口解析被消费;目标窗口仍由目标 provider 解析。
     expect(catalogCurrent).toBeGreaterThan(current);
-    expect(setModel).toContain(
-      'lookupVerifiedContextWindow(\n          resolveRouteWindow,\n          model,\n          targetRouteProviderId,',
+    expect(setModel).toContain('currentRuntimeModel, currentProviderId, piPreview, liveCurrentWindow,');
+    expect(modelSwitchGateInputSource).toContain('const catalogCurrentWindow =');
+    expect(modelSwitchGateInputSource).toContain(
+      'lookupVerifiedContextWindow(\n    resolveRouteWindow,\n    model,\n    targetRouteProviderId,',
     );
     expect(setModel).toContain('const targetProviderId =');
     // 停用轴准入只依赖目标路由,源 provider 的 DB 查询失败不能跳过准入
@@ -868,7 +869,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('projects rebuilt zero usage and the verified window after the runtime is closed', () => {
-    const coreSource = readFileSync(resolve(mainRoot, 'maker-ipc/contextRecoveryAssembly.ts'), 'utf8');
+    const coreSource = readFileSync(resolve(mainRoot, 'maker-ipc/contextRecoveryAssembly.ts'), 'utf8').replace(/\r\n?/g, '\n');
     const coreAst = ts.createSourceFile('contextRecoveryAssembly.ts', coreSource, ts.ScriptTarget.Latest, true);
     const core = coreAst.statements.find((node): node is ts.FunctionDeclaration =>
       ts.isFunctionDeclaration(node) && node.name?.text === 'commitContextRecoveryWithPorts');
@@ -893,13 +894,11 @@ describe('session runtime control wiring', () => {
     expect(commitRebuild).toContain("log.warn('context rebuild card creation failed after commit'");
     expect(commitRebuild).toContain('try {\n        await createDbMessage(\n          sessionId,');
 
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
-    expect(setModel).toContain("typeof runtimeStatus.contextTokens === 'number'");
-    expect(setModel).toContain('runtimeStatus.contextTokens >= 0');
+    const setModel = setModelSource();
+    // The usage reading is validated in modelSwitchGateInput.ts; handleSetModel calls it.
+    expect(setModel).toContain('resolveModelSwitchContextTokens(runtimeStatus, liveContextTokens)');
+    expect(modelSwitchGateInputSource).toContain("typeof runtimeStatus.contextTokens === 'number'");
+    expect(modelSwitchGateInputSource).toContain('runtimeStatus.contextTokens >= 0');
     const persistFinalRoute = setModel.indexOf('await persistSessionFields(sessionId, patch);');
     const projectFinalWindow = setModel.indexOf(
       '// commitRebuild first projects zero usage against the still-authoritative',
@@ -914,11 +913,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('omits effort from the DB patch for fixed-effort models (sessions.effort NOT NULL)', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     // 固定 effort 模型(efforts.length === 0)的运行时语义是 effort: null,但
     // sessions.effort 列是 NOT NULL——把 null 写进 DB patch 会让整个模型切换被
     // NOT NULL 约束炸掉(issue #3691)。持久化 patch 必须省略该字段,内存 store
@@ -1027,11 +1022,7 @@ describe('session runtime control wiring', () => {
   // stage an archived task, but automatic changes and send-time application must
   // still stop before recreating runtime state. The old guard rejected all three.
   it('allows only user picker staging on archived tasks inside the shared route lock', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const terminalGuard = setModel.indexOf("runtimeStatus.status !== 'active'");
     expect(terminalGuard).toBeGreaterThan(setModel.indexOf('const applyLocked = async () => {'));
     expect(terminalGuard).toBeLessThan(setModel.indexOf('acceptSessionRuntimeMutation({'));
@@ -1048,11 +1039,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('stages user routes before every runtime mutation and prevents remote persistence of the source route', () => {
-    const body = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const body = setModelSource();
     const stage = body.indexOf('agentSwitchPending.set(sessionId, intent)');
     expect(stage).toBeGreaterThan(body.indexOf('assertModelRouteUsable('));
     expect(stage).toBeGreaterThan(body.indexOf('resolveSessionRuntimeAxes('));
@@ -1070,19 +1057,15 @@ describe('session runtime control wiring', () => {
   });
 
   it('carries the Pi thinking intent through every staged selection replay', () => {
-    const body = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const body = setModelSource();
     const early = body.slice(body.indexOf('// A picker click'), body.indexOf('const axisPatch:'));
     // 点选暂存：intent 必须带上思考意图，否则发送时回放会丢档位。
     expect(early).toContain('{ thinking: atomicSelection.thinking }');
     // 发送回放 / deferred 结算另两条重建链也不能丢。
-    expect(registerSource).toContain('{ thinking: intent.thinking }');
-    expect(registerSource).toContain('{ thinking: pending.thinking }');
+    expect(registerWithRuntimeSelectionSource).toContain('{ thinking: intent.thinking }');
+    expect(registerWithRuntimeSelectionSource).toContain('{ thinking: pending.thinking }');
     expect(
-      registerSource.split('{ thinking: atomicSelection.thinking }').length,
+      registerWithRuntimeSelectionSource.split('{ thinking: atomicSelection.thinking }').length,
     ).toBeGreaterThanOrEqual(3);
     // 回合中延期（deferLockedSelection）的两条登记都要暂存思考意图：只靠结算侧回放
     // pending.thinking 不够，登记时不写就恒为 undefined，原症状会在「回合中切模」
@@ -1097,14 +1080,14 @@ describe('session runtime control wiring', () => {
       defer.split('{ thinking: atomicSelection.thinking }').length - 1,
     ).toBeGreaterThanOrEqual(2);
     // 非 Pi 引擎绝不能收到 thinkingEnabled（只有 Pi 的 set_model 会消费它）。
-    expect(registerSource).toContain(
+    expect(registerWithRuntimeSelectionSource).toContain(
       "runtimeAgentKind === 'pi' && atomicSelection?.thinking !== undefined",
     );
     // 提交写入镜像后同步本机 renderer 记忆：renderer 的全量快照才会带上该选择，
     // 镜像里的钉子得以撤销（否则会长期压住被控端后来的显式改动）。
-    const rememberThinking = registerSource.slice(
-      registerSource.indexOf('rememberThinkingIntent: ({'),
-      registerSource.indexOf('bootstrapSwitchedSession: async (sessionId, opts)'),
+    const rememberThinking = registerWithRuntimeSelectionSource.slice(
+      registerWithRuntimeSelectionSource.indexOf('rememberThinkingIntent: ({'),
+      registerWithRuntimeSelectionSource.indexOf('bootstrapSwitchedSession: async (sessionId, opts)'),
     );
     expect(rememberThinking).toContain(
       'setThinkingEnabledInMemory(agentKind, providerId, model, thinking)',
@@ -1113,7 +1096,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('only relinks retained cross-host writers without rewriting native history', () => {
-    const body = handlerBody(registerSource, 'const handleSetModel = async (', 'const recoverRemoteRuntimeAxisPersistence');
+    const body = setModelSource();
     expect(body).toContain('requiresCodexThreadRelink: () => maker.requiresCodexThreadHostTransfer(');
     expect(body).toContain('...(canTransferThread ? {');
     expect(body).toContain('relinkCodexProviderThread(');
@@ -1190,27 +1173,27 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain(
       'const pendingSessionRuntimeFallbackRebuilds = new WeakMap<Session, number>();',
     );
-    expect(registerSource).toContain(
+    expect(runtimeFallbackSource).toContain(
       'pendingSessionRuntimeFallbackRebuilds.set(runtimeSession, attemptToken);',
     );
-    expect(registerSource).toContain(
+    expect(autoResumeHooksSource).toContain(
       'pendingSessionRuntimeFallbackRebuilds.delete(fallbackRebuildSession);',
     );
     expect(registerSource).toContain(
       'shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason)',
     );
     expect(registerSource).toContain('autoResumeBookkeeping.hasLiveSchedule(session.id, attemptToken)');
-    expect(registerSource).toContain(
-      'decision.episodeAttempt,\n                decision.attemptToken,',
+    expect(autoResumeHooksSource).toContain(
+      'decision.episodeAttempt,\n                  decision.attemptToken,',
     );
-    expect(registerSource).toContain('isRemoteModelSwitchRouteChangeError(error)');
-    expect(registerSource).toContain(
+    expect(runtimeFallbackSource).toContain('isRemoteModelSwitchRouteChangeError(error)');
+    expect(runtimeFallbackSource).toContain(
       'automatic session runtime fallback rebuilding frozen remote route',
     );
-    expect(registerSource).toContain(
+    expect(runtimeFallbackSource).toContain(
       'await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));',
     );
-    expect(registerSource).toContain('result = await applyCandidate();');
+    expect(runtimeFallbackSource).toContain('result = await applyCandidate();');
   });
 
   it('fails closed when non-UI runtime selection requires model-window confirmation', () => {
@@ -1235,10 +1218,12 @@ describe('session runtime control wiring', () => {
       'runtime selection was not changed',
     );
 
+    // The fallback is in sessionRuntimeFallback.ts; register.ts assembles it.
+    expect(registerSource).toContain('const maybeApplySessionRuntimeFallback = createSessionRuntimeFallback<Session>({');
     const fallback = handlerBody(
-      registerSource,
-      'const maybeApplySessionRuntimeFallback = async (',
-      'const sessionControlService = createSessionControlService({',
+      runtimeFallbackSource,
+      'export function createSessionRuntimeFallback',
+      '\n}\n',
     );
     const fallbackGuard = fallback.indexOf(
       'if (runtimeSelectionRequiresModelWindowConfirmation(result))',
@@ -1256,11 +1241,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('fences atomic model axis settlement after an owner boundary', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     expect(setModel).toContain('const assertRuntimeOwnerCurrent = (): void => {');
     expect(setModel).toContain('assertCanCommit: assertRuntimeOwnerCurrent,');
 
@@ -1285,18 +1266,18 @@ describe('session runtime control wiring', () => {
   });
 
   it('clears fixed-effort overrides from lazy bootstrap and the bridge effort store', () => {
-    expect(registerSource).toContain('o.effort = runtimeOverride.effort ?? undefined;');
-    expect(registerSource).toContain('setSessionEffort(session.id, runtimeOverride.effort);');
-    expect(registerSource).toContain('setSessionEffort(sessionId, selectionToCommit.effort);');
+    expect(registerWithRuntimeSelectionSource).toContain('o.effort = runtimeOverride.effort ?? undefined;');
+    expect(registerWithRuntimeSelectionSource).toContain('setSessionEffort(session.id, runtimeOverride.effort);');
+    expect(registerWithRuntimeSelectionSource).toContain('setSessionEffort(sessionId, selectionToCommit.effort);');
   });
 
   it('keeps explicit provider null and fixed-effort null through runtime settlement', () => {
-    expect(registerSource).toMatch(
+    expect(registerWithRuntimeSelectionSource).toMatch(
       /effectiveProviderId === null\s*\? null\s*: \(normalizeSessionProviderId\(effectiveProviderId\) \?\? currentProviderId\)/,
     );
-    expect(registerSource).toContain('effort: pending.profile.effort,');
-    expect(registerSource).toContain('effort: selected.effort, fastMode: selected.fastMode');
-    expect(registerSource).toContain('effort: next.effort, fastMode: next.fastMode');
+    expect(registerWithRuntimeSelectionSource).toContain('effort: pending.profile.effort,');
+    expect(registerWithRuntimeSelectionSource).toContain('effort: selected.effort, fastMode: selected.fastMode');
+    expect(registerWithRuntimeSelectionSource).toContain('effort: next.effort, fastMode: next.fastMode');
   });
 
   it('projects runtime state into shared session snapshots and patch notifications', () => {
@@ -1311,16 +1292,18 @@ describe('session runtime control wiring', () => {
   // persists Pi runtime-verified windows without catalog replacement: covered by the executable sessionEventPipeline tests.
 
   it('counts fallback eligibility across the whole interrupted-turn episode', () => {
-    expect(registerSource).toContain(
-      'decision.episodeAttempt,\n                decision.attemptToken,',
+    expect(autoResumeHooksSource).toContain(
+      'decision.episodeAttempt,\n                  decision.attemptToken,',
     );
   });
 
   it('records failed fallback routes without allowing stale owner work to mutate state', () => {
+    // The fallback is in sessionRuntimeFallback.ts; register.ts assembles it.
+    expect(registerSource).toContain('const maybeApplySessionRuntimeFallback = createSessionRuntimeFallback<Session>({');
     const fallback = handlerBody(
-      registerSource,
-      'const maybeApplySessionRuntimeFallback = async (',
-      'const sessionControlService = createSessionControlService({',
+      runtimeFallbackSource,
+      'export function createSessionRuntimeFallback',
+      '\n}\n',
     );
     expect(fallback).toContain(
       'const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();',
@@ -1355,11 +1338,7 @@ describe('session runtime control wiring', () => {
     expect(rehydrate).not.toContain('.send(');
     expect(rolloverWiring).toContain('rehydrateColdPiRuntimeForWindowVerification,');
 
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const rehydrateCall = setModel.indexOf(
       'await rehydrateColdPiRuntimeForWindowVerification(sessionId)',
     );
@@ -1384,11 +1363,7 @@ describe('session runtime control wiring', () => {
     expect(coldPiRehydrationSource).not.toContain('throw new Error(');
     expect(coldPiRehydrationSource).toContain('{ cause: error }');
 
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const rehydrateCall = setModel.indexOf('await rehydrateColdPiRuntimeForWindowVerification(sessionId)');
     const catchBlock = setModel.slice(rehydrateCall, setModel.indexOf('rehydratedColdPiRuntime = liveSessionBeforeRouteChange;'));
     expect(catchBlock).toContain('} catch (error) {');
@@ -1426,11 +1401,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('keeps the model switch alive when cold Pi rehydration fails (dead stored route)', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     // 存量 BYOM 路由已死（provider 被删/不再提供该模型）时冷启动 bootstrap 必然
     // fail-closed 失败；恢复失败若拒绝切模，发送与切模互相锁死（会话永久卡死）。
     // catch 必须降级：只记日志，并与「跳过核实」同款语义置位，让目标路由由下一次
@@ -1451,11 +1422,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('skips the cold Pi window rehydration when the live usage leaves the target headroom', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     // 冷启动核实(2~3s)必须经预检：目标窗口对**已知占用**有余量时不再拉起运行时，
     // 路由照常落定、下一次发送按目标窗口懒重建；danger/overflow 仍走原核实路径。
     const pressurePreflight = setModel.indexOf('shouldSkipColdPiWindowRehydration({');
@@ -1510,11 +1477,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('closes a cold Pi runtime when route persistence fails after rehydrate', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const rehydrate = setModel.indexOf(
       'await rehydrateColdPiRuntimeForWindowVerification(sessionId)',
     );
@@ -1559,11 +1522,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('rejects only remote rebuild pressure before applying the runtime model', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
 
     expect(setModel).not.toContain('CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1');
     expect(deviceLinkHostSource).not.toContain(
@@ -1593,11 +1552,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('fails closed before switching a busy or unverifiable cold remote Pi runtime', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
 
     expect(setModel.indexOf('return deferLockedSelection()')).toBeLessThan(apply);
@@ -1614,11 +1569,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('switches and verifies Pi before deciding whether the actual window needs rebuild', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
     const closeRecovery = setModel.indexOf('const closeRejectedPiRuntime =');
     const finalWindow = setModel.indexOf('const finalPiWindow =');
@@ -1683,11 +1634,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('refreshes model-only context snapshots against the retained target provider route', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const refreshStart = setModel.indexOf(
       'if (!response.deferred) {\n          try {\n            const currentAgentKind =',
     );
@@ -1705,11 +1652,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('commits runtime control before best-effort context bookkeeping', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const runtimeCommit = setModel.indexOf('let generation: number;');
     const contextSnapshot = setModel.indexOf('await recordSessionContextSnapshot(');
     expect(runtimeCommit).toBeGreaterThan(-1);
@@ -1756,11 +1699,7 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('mergeSessionRuntimeProfilePatch(mergeBase, patch)');
     expect(registerSource).toContain('routeExplicit,');
     expect(registerSource).toContain('effectiveProfile: profiles.effective,');
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     expect(setModel).toContain(
       'if (internalOptions.deferWhileRunning && isSessionInTurn(sessionId))',
     );
@@ -1777,22 +1716,14 @@ describe('session runtime control wiring', () => {
   });
 
   it('defers in-turn selections with the clicked effort/Fast snapshot', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     expect(setModel).toContain('buildDeferredRuntimeSelectionProfile({');
     expect(setModel).toContain('atomicSelection,');
     expect(registerSource).toContain('nextDeferredModelWindowRetry(');
   });
 
   it('rebuilds live Orca Workers for model routes while preserving effort-only hot updates', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     expect(setModel).toContain("runtimeStatus.orcaRole === 'worker'");
     expect(setModel).toContain('forceSessionRebuild:');
     expect(setModel).toContain('rebuildLiveOrcaWorker ||');

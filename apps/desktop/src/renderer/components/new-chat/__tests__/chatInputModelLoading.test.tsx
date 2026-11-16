@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useState, type ComponentProps, type ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
-import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../../shared/ghost';
+import { type InstalledGhost } from '../../../../shared/ghost';
 import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
 import type { ComposerSuggestionEntry } from '@/lib/composerSuggestion';
 import type { UnifiedCommand } from '@/lib/slashCommands';
@@ -206,7 +206,7 @@ it.each([['@', ''], ['/', ''], ['@', 'suffix'], ['/', 'suffix']] as const)('inse
         ui: { resources: [], tools: { lookup: { visibility: ['app'] } } },
         host: { contributions: [{ id: 'lookup', title: 'Reference', position: 'composer.completion', tool: 'lookup', trigger }] },
       } } };
-  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); h.ghosts = [ghost];
+  h.ghosts = [ghost];
   h.providerCall.mockResolvedValue({ structuredContent: { items: [{ id: 'one', label: 'Reference', insertText: '<b>plain</b>' }] } });
   render(<PluginUiProvider><ChatInput {...props} sessionId={`completion-${trigger}`} deviceLinkDeviceId={null} onSend={vi.fn()} /></PluginUiProvider>);
   await act(async () => { h.editor!.commands.setContent(`<p>${trigger}ab${suffix}</p>`); h.editor!.commands.setTextSelection(4); });

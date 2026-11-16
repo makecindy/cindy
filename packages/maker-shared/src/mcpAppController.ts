@@ -95,7 +95,8 @@ export class McpAppController {
         this.startupTimer = undefined;
       }
       if (['ui/notifications/initialized', 'ui/notifications/size-changed', 'ui/notifications/host-context-changed',
-        'ui/notifications/sandbox-handshake-started', 'ui/notifications/sandbox-result-delivered'].includes(message.method ?? ''))
+        'ui/notifications/sandbox-handshake-started', 'ui/notifications/sandbox-result-delivered',
+        'ui/notifications/sandbox-escape'].includes(message.method ?? ''))
         this.onState(message);
       return;
     }
@@ -106,6 +107,7 @@ export class McpAppController {
     }
     if (message.method === 'ui/notifications/sandbox-escape') {
       void this.displayMode('inline').catch((error) => this.fail(error));
+      this.onState(message);
       return;
     }
     if (message.method?.startsWith('ui/notifications/sandbox-')) return;
@@ -146,12 +148,31 @@ export class McpAppController {
   }
 
   async context(context: Record<string, unknown>): Promise<void> {
-    if (this.document && !this.closing)
+    if (this.document && !this.closing && !this.suspended)
       await this.invoke(this.sessionId, { op: 'context', viewId: this.document.viewId, context });
   }
   async displayMode(mode: 'inline' | 'fullscreen' | 'pip'): Promise<void> {
     if (this.document && !this.closing)
       await this.invoke(this.sessionId, { op: 'display-mode', viewId: this.document.viewId, mode });
+  }
+  private suspended = false;
+  private visibilityDelivery: Promise<void> = Promise.resolve();
+  /** Same-computer Renderer control; never issue this operation over device-link. */
+  suspend(): Promise<void> {
+    if (this.document?.transport !== 'sandbox' || this.closing || this.suspended) return this.visibilityDelivery;
+    this.suspended = true;
+    const viewId = this.document.viewId;
+    return this.visibilityDelivery = this.visibilityDelivery.then(async () => {
+      if (!this.closing) await this.invoke(this.sessionId, { op: 'suspend', viewId });
+    });
+  }
+  resume(): Promise<void> {
+    if (!this.suspended || this.closing) return this.visibilityDelivery;
+    this.suspended = false;
+    const viewId = this.document!.viewId;
+    return this.visibilityDelivery = this.visibilityDelivery.then(async () => {
+      if (!this.closing) await this.invoke(this.sessionId, { op: 'resume', viewId });
+    });
   }
   private fail(error: unknown): void {
     if (this.closing) return;
@@ -285,6 +306,7 @@ export class McpAppController {
         alreadyNotified: !!this.teardownId,
       });
     } finally {
+      this.suspended = false;
       this.stopped = true;
       this.outbound = [];
     }

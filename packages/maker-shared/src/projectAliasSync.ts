@@ -5,12 +5,18 @@ import {
   type SyncedProjectOrderOwnerStamp,
 } from './projectOrderSync.js';
 
+export const PROJECT_SETTINGS_SET_CHANNEL = 'sidebar-settings:set-project-info';
+import { validProjectIcon } from './projectIcons.js';
+export * from './projectIcons.js';
 export const PROJECT_ALIASES_GET_CHANNEL = 'sidebar-settings:get-project-aliases';
 export const PROJECT_ALIASES_CHANGED_CHANNEL = 'local-db:project-aliases:changed';
 
 export interface HostProjectAliasesSnapshot {
   /** Host identities only: a controller's device: overrides stay on that controller. */
   aliases: readonly { projectKey: string; alias: string }[];
+  icons?: Readonly<Record<string, string>>;
+  settingsSupported?: boolean;
+  settingsVersion?: number;
   platform: string;
   ownerStamp?: SyncedProjectOrderOwnerStamp;
 }
@@ -81,7 +87,21 @@ export function parseHostProjectAliasesSnapshot(raw: unknown): HostProjectAliase
     seen.add(comparison);
     aliases.push({ projectKey, alias: trimmed });
   }
-  return { aliases, platform: value.platform, ...(ownerStamp ? { ownerStamp } : {}) };
+  const icons: Record<string, string> = {};
+  if (value.icons && typeof value.icons === 'object' && !Array.isArray(value.icons)) {
+    for (const [key, icon] of Object.entries(value.icons)) {
+      if (projectAliasComparisonKey(key, value.platform) && validProjectIcon(icon)) icons[key] = icon;
+    }
+  }
+  return { aliases, platform: value.platform, ...(ownerStamp ? { ownerStamp } : {}),
+    ...(value.settingsSupported === true ? { settingsSupported: true, settingsVersion: typeof value.settingsVersion === 'number' ? value.settingsVersion : 1, icons } : {}) };
+}
+
+export function resolveProjectIcon(snapshot: HostProjectAliasesSnapshot | undefined, projectKey: string): string | null {
+  if (!snapshot?.icons) return null;
+  const key = projectAliasComparisonKey(projectKey, snapshot.platform);
+  if (!key) return null;
+  return Object.entries(snapshot.icons).find(([candidate]) => projectAliasComparisonKey(candidate, snapshot.platform) === key)?.[1] ?? null;
 }
 
 const aliasIndexes = new WeakMap<HostProjectAliasesSnapshot, ReadonlyMap<string, string>>();
@@ -159,6 +179,9 @@ function snapshotsEqual(a: HostProjectAliasesSnapshot | undefined, b: HostProjec
   return !!a && a.platform === b.platform
     && a.ownerStamp?.dataOwnerId === b.ownerStamp?.dataOwnerId
     && a.ownerStamp?.ownerGeneration === b.ownerStamp?.ownerGeneration
+    && a.settingsSupported === b.settingsSupported
+    && a.settingsVersion === b.settingsVersion
+    && JSON.stringify(a.icons ?? {}) === JSON.stringify(b.icons ?? {})
     && a.aliases.length === b.aliases.length
     && a.aliases.every((row, index) => row.projectKey === b.aliases[index].projectKey && row.alias === b.aliases[index].alias);
 }
