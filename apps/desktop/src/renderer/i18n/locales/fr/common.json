@@ -11012,6 +11012,7 @@
       "duplicate": "Dupliquer l’ami",
       "moreActions": "Plus d'actions pour {{name}}",
       "viewIcons": "Icônes",
+      "showCollapsedTeammateAvatars": "Afficher les avatars en mode réduit",
       "sectionExpand": "Développer les amis",
       "showLess": "Afficher moins",
       "sectionCollapse": "Réduire les amis",

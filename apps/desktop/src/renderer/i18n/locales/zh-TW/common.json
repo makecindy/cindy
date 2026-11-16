@@ -10883,6 +10883,7 @@
       "duplicate": "複製夥伴",
       "moreActions": "{{name}} 的更多操作",
       "viewIcons": "圖示",
+      "showCollapsedTeammateAvatars": "收起時顯示頭像",
       "sectionExpand": "展開夥伴",
       "showLess": "收起",
       "sectionCollapse": "收起夥伴",

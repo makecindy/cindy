@@ -4,6 +4,7 @@ import type { StartSchedulerDeps } from '../index.desktop';
 import type { SchedulerOptions } from '@cindy/maker-scheduler';
 
 const mocks = vi.hoisted(() => ({
+  pendingInput: vi.fn<(sessionId: string) => boolean>(),
   restore: vi.fn<(sessionId: string) => Promise<boolean>>(),
   quotaWait: vi.fn<(scheduleId: string) => Promise<string | null>>(),
   lastUserActionAt: vi.fn<(sessionId: string) => number | null>(),
@@ -34,6 +35,7 @@ vi.mock('../../maker-ipc/scheduledSessionBootstrap.js', () => ({ captureSchedule
 vi.mock('../../maker-ipc/register.js', () => ({
   bootstrapScheduledSession: vi.fn(),
   ensureSchedulerQueueRestored: mocks.restore,
+  hasPendingSchedulerTargetInput: mocks.pendingInput,
   findSchedulerUsageLimitWait: mocks.quotaWait,
   getSessionLastUserActionAt: mocks.lastUserActionAt,
   applyPiImModelSelectionUnderLock: vi.fn(), acquirePendingAgentSwitchForDirectSend: vi.fn(),
@@ -68,6 +70,7 @@ import { resetScheduler, startScheduler } from '../index.desktop';
 afterEach(async () => {
   await resetScheduler();
   mocks.restore.mockReset();
+  mocks.pendingInput.mockReset();
   mocks.quotaWait.mockReset();
   mocks.lastUserActionAt.mockReset();
   mocks.runnerDeps = null;
@@ -117,6 +120,9 @@ describe('scheduler queue wiring', () => {
       feishuIm: {} as StartSchedulerDeps['feishuIm'], logger: {},
     });
 
+    mocks.pendingInput.mockReturnValue(restored);
+    expect(mocks.runnerDeps?.schedulerQueue?.hasPendingInput?.('restored-session')).toBe(restored);
+    expect(mocks.pendingInput).toHaveBeenCalledExactlyOnceWith('restored-session');
     const restore = mocks.runnerDeps?.schedulerQueue?.ensureQueueRestored;
     expect(restore).toBe(mocks.restore);
     await expect(restore!('restored-session')).resolves.toBe(restored);

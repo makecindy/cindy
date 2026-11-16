@@ -11012,6 +11012,7 @@
       "duplicate": "Duplicar amigo",
       "moreActions": "Otras acciones para {{name}}",
       "viewIcons": "Iconos",
+      "showCollapsedTeammateAvatars": "Mostrar avatares al contraer",
       "sectionExpand": "Expandir amigos",
       "showLess": "Mostrar menos",
       "sectionCollapse": "Contraer amigos",
