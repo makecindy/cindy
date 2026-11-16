@@ -145,15 +145,15 @@ describe('worktree recovery with real Git', () => {
     let interrupted = false;
     vi.mocked(gitExec).mockImplementation(async (args, cwd, options) => {
       const result = await execute(args, cwd, options);
-      if (!interrupted && args[0] === 'reset' && args[1] === '--soft') {
+      if (!interrupted && args[0] === 'update-ref' && args[1] === '--no-deref' && args[2] === 'HEAD') {
         interrupted = true;
-        throw new Error('interrupted after soft reset');
+        throw new Error('interrupted after HEAD restoration');
       }
       return result;
     });
     try {
       expect(await recycleManagedWorktree(meta, { canRemove: async () => true })).toBe(true);
-      await expect(restoreRecordedWorktree(meta.sessionId, meta.path)).rejects.toThrow('interrupted after soft reset');
+      await expect(restoreRecordedWorktree(meta.sessionId, meta.path)).rejects.toThrow('interrupted after HEAD restoration');
       vi.mocked(gitExec).mockImplementation(execute);
       const record = (await readRecycleRecord(meta.path))!;
       expect(record.multiboxRestore).toBe(true);
@@ -176,6 +176,43 @@ describe('worktree recovery with real Git', () => {
         if (change === 'files') expect(await fs.readFile(path.join(meta.path, 'newer.txt'), 'utf8')).toBe('new user file');
         if (change === 'index') expect(await git(meta.path, 'show', ':tracked.txt')).toBe('new staged bytes');
       }
+    } finally {
+      vi.mocked(gitExec).mockImplementation(execute);
+      await fs.rm(config, { force: true });
+    }
+  }, 30_000);
+
+  // PR #10836 review: a manual switch can happen after the detached-HEAD probe. A
+  // dereferencing reset would move that unrelated branch. Inject exactly before the
+  // HEAD write and assert the real user ref is unchanged; real Git/integration tier.
+  it('preserves a concurrent-user-branch switch during Multibox HEAD restoration', async () => {
+    const meta = await createFixture('multibox-head-race');
+    const config = path.join(repo, '.multibox.toml');
+    await fs.writeFile(config, '[carry]\n');
+    const userHead = await git(repo, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'user branch head');
+    await git(repo, 'branch', 'user-during-restore', userHead);
+    const execute = vi.mocked(gitExec).getMockImplementation()!;
+    let switched = false;
+    vi.mocked(gitExec).mockImplementation(async (args, cwd, options) => {
+      const writesHead = (args[0] === 'reset' && args[1] === '--soft')
+        || (args[0] === 'update-ref' && args[2] === 'HEAD');
+      if (!switched && writesHead) {
+        switched = true;
+        await git(meta.path, 'switch', 'user-during-restore');
+      }
+      return execute(args, cwd, options);
+    });
+    try {
+      expect(await recycleManagedWorktree(meta, { canRemove: async () => true })).toBe(true);
+      const restored = await restoreRecordedWorktree(meta.sessionId, meta.path).catch(() => false);
+      expect(switched).toBe(true);
+      expect(await git(repo, 'rev-parse', 'refs/heads/user-during-restore')).toBe(userHead);
+      expect(restored).toBe(false);
+      const record = (await readRecycleRecord(meta.path))!;
+      expect(await git(repo, 'rev-parse', record.snapshot!.ref)).toBe(record.snapshot!.commit);
+      // The injected user switch itself removes snapshot-only tracked paths. Recovery
+      // must retain their authoritative snapshot, not undo that deliberate checkout.
+      expect(await git(repo, 'show', `${record.snapshot!.commit}:draft.txt`)).toBe('multibox-head-race contents');
     } finally {
       vi.mocked(gitExec).mockImplementation(execute);
       await fs.rm(config, { force: true });

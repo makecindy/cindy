@@ -91,8 +91,10 @@ async function restoreMultiboxSnapshot(record: RecycleRecord, worktreePath: stri
     && !(await indexIsRestorable(worktreePath, snapshot.tree))) return false;
   if (!guardHeld()) return false;
   if (head === snapshot.commit) {
-    if (headRef !== null) return false;
-    await gitExec(['reset', '--soft', snapshot.head], worktreePath);
+    if (headRef !== null || await readWorktreeHeadRef(worktreePath) !== null) return false;
+    // Never dereference a branch a user switched to after the probe. CAS rejects a
+    // changed commit; --no-deref guarantees this write cannot move any branch ref.
+    await gitExec(['update-ref', '--no-deref', 'HEAD', snapshot.head, snapshot.commit], worktreePath);
   }
   if (!(await indexIsRestorable(worktreePath, snapshot.indexTree))) {
     await gitExec(['read-tree', snapshot.indexTree], worktreePath);
