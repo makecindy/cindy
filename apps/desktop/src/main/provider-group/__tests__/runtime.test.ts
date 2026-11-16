@@ -812,7 +812,9 @@ describe('provider group runtime quota account selection', () => {
   // Test value / unit: event → real runtime/readers/directory/router, two competing
   // members. A busy member's update used to discard the healthier second pool's
   // pending reply and select the busy one. Earlier tests only invalidated settled reads.
-  it.each(['claude', 'codex'] as const)('keeps %s healthy-pool allocation through unrelated and load events', async native => {
+  it.each([
+    ['claude', false], ['codex', false], ['claude', true], ['codex', true],
+  ] as const)('keeps %s healthy-pool allocation through notifications and late=%s reads', async (native, late) => {
     vi.useFakeTimers();
     const providerId = native === 'codex' ? 'openai' : 'anthropic';
     const h = harness(providerId, native);
@@ -838,9 +840,13 @@ describe('provider group runtime quota account selection', () => {
           resetsAt: Date.now() / 1000 + 604800 },
       } } } };
     let finish!: () => void;
+    let refreshSlow = false;
     const waiting = new Promise<void>(resolve => { finish = resolve; });
     io.invoke.mockImplementation(async (deviceId) => {
-      if (deviceId === 'healthy') await waiting;
+      if (deviceId === 'healthy') {
+        if (refreshSlow) await new Promise(() => {});
+        await waiting;
+      }
       return { ok: true, result: { providerId, pooled: true, usage: quota(deviceId === 'busy' ? 20 : 0) } };
     });
     const router = getProviderGroupRouter();
@@ -854,13 +860,29 @@ describe('provider group runtime quota account selection', () => {
       io.accountPush!('healthy', 'subscription-accounts:changed', { providerId: native === 'codex' ? 'anthropic' : 'openai' });
       io.accountPush!('healthy', 'subscription-accounts:changed', { providerId, change: 'load' });
     }
+    if (late) {
+      io.accountPush!('healthy', 'subscription-accounts:changed', { providerId, change: 'usage' });
+      await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS);
+      expect(await first).toMatchObject({ member: { agentDeviceId: 'busy' } });
+    }
     finish();
-    expect(await first).toMatchObject({ kind: 'member', member: { agentDeviceId: 'healthy' } });
-    expect(await pick()).toMatchObject({ member: { agentDeviceId: 'healthy' } });
+    await vi.advanceTimersByTimeAsync(0);
+    if (!late) expect(await first).toMatchObject({ kind: 'member', member: { agentDeviceId: 'healthy' } });
+    refreshSlow = late;
+    const second = pick();
+    await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS);
+    expect(await second).toMatchObject({ member: { agentDeviceId: 'healthy' } });
     // Busy's settled quota was refreshed once on demand; healthy's pending and cached
     // pool reply survived all 80 notifications, including its own load changes.
-    expect(io.invoke.mock.calls.filter(([deviceId]) => deviceId === 'healthy')).toHaveLength(1);
+    expect(io.invoke.mock.calls.filter(([deviceId]) => deviceId === 'healthy')).toHaveLength(late ? 2 : 1);
     expect(io.invoke.mock.calls.filter(([deviceId]) => deviceId === 'busy')).toHaveLength(2);
+    if (late) {
+      await vi.advanceTimersByTimeAsync(15_001);
+      const expired = pick();
+      await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS);
+      expect(await expired).toMatchObject({ member: { agentDeviceId: 'busy' } });
+      expect(io.invoke.mock.calls.filter(([deviceId]) => deviceId === 'healthy')).toHaveLength(2);
+    }
   });
 
   it.each(['usage', 'load', 'identity', 'named-identity', 'legacy', 'owner', 'link-close'] as const)(
@@ -1107,7 +1129,7 @@ describe('provider group runtime quota account selection', () => {
     await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS);
   });
 
-  it('discards completed OpenAI quota if the owner changes while its sibling source is pending', async () => {
+  it.each(['owner', 'identity'] as const)('discards completed OpenAI quota if %s changes while its sibling source is pending', async change => {
     vi.useFakeTimers();
     const h = harness('openai-second', 'codex');
     const account = { source: 'openai-web', updatedAt: Date.now(), primary: { usedPercent: 100 } };
@@ -1120,8 +1142,12 @@ describe('provider group runtime quota account selection', () => {
     } }));
     const read = h.read();
     await vi.advanceTimersByTimeAsync(0);
-    owner = 'owner-after-partial-openai-read';
+    if (change === 'owner') owner = 'owner-after-partial-openai-read';
+    else io.accountPush!('mini', 'subscription-accounts:changed', { providerId: 'openai' });
     complete({ rateLimits: { primary: { usedPercent: 25 } } });
-    for (const member of await read) expect(member.codexUsage).toBeNull();
+    const members = await read;
+    expect(members[1].codexUsage).toBeNull();
+    if (change === 'owner') expect(members[0].codexUsage).toBeNull();
+    else expect(members[0].codexUsage).not.toBeNull();
   });
 });

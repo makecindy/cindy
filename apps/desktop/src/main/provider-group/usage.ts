@@ -328,7 +328,7 @@ export function providerGroupUsageMatches(key: string, scope?: ProviderGroupUsag
 
 /** Per-owner, bounded remote reads. A slow/old peer cannot stall routing or multiply in-flight requests. */
 export function createProviderGroupUsageReader<T>(deps: ProviderGroupUsageReaderDeps<T>) {
-  const cached = new Map<string, { at: number; snapshot: T | null; current: () => boolean }>();
+  const cached = new Map<string, { at: number; snapshot: T | null; refresh: boolean; current: () => boolean }>();
   const pending = new Map<string, { result: Promise<T | null>; refresh: boolean; current: () => boolean }>();
 
   async function bounded(promise: Promise<T | null>) {
@@ -357,7 +357,8 @@ export function createProviderGroupUsageReader<T>(deps: ProviderGroupUsageReader
         || (member.agentDeviceId && isProviderShareAgentDeviceId(member.agentDeviceId))) return null;
       const key = JSON.stringify([member.agentDeviceId, member.providerId]);
       const previous = cached.get(key);
-      if ((member.kind !== 'local' || deps.cacheLocal) && previous?.current() && deps.now() - previous.at < REMOTE_USAGE_CACHE_MS) {
+      if ((member.kind !== 'local' || deps.cacheLocal) && previous?.current() && !previous.refresh
+        && deps.now() - previous.at < REMOTE_USAGE_CACHE_MS) {
         return deps.parseSnapshot(previous.snapshot, deps.now());
       }
       let request = pending.get(key);
@@ -378,17 +379,28 @@ export function createProviderGroupUsageReader<T>(deps: ProviderGroupUsageReader
           pending.delete(key);
           if (deps.isCurrent() && current() && (member.kind !== 'local' || deps.cacheLocal)) {
             if (cached.size >= MAX_CACHED_ACCOUNTS) cached.delete(cached.keys().next().value!);
-            cached.set(key, { at: entry.refresh ? -Infinity : deps.now(), snapshot, current });
+            cached.set(key, { at: deps.now(), snapshot, refresh: entry.refresh, current });
           }
           return snapshot;
         });
         pending.set(key, request);
       }
       const snapshot = await bounded(request.result);
+      // A usage notification asks for a refresh, not an identity revocation. A
+      // late valid reply must stay useful if the next refresh also exceeds the
+      // wait budget; otherwise a busy slow peer can remain unknown forever.
+      if (snapshot === null && previous?.current() && cached.get(key) === previous
+        && deps.now() - previous.at < REMOTE_USAGE_CACHE_MS) {
+        return deps.parseSnapshot(previous.snapshot, deps.now());
+      }
       return deps.isCurrent() && request.current() ? deps.parseSnapshot(snapshot, deps.now()) : null;
     },
     invalidate(scope?: ProviderGroupUsageInvalidation) {
-      for (const key of cached.keys()) if (providerGroupUsageMatches(key, scope)) cached.delete(key);
+      for (const [key, entry] of cached) {
+        if (!providerGroupUsageMatches(key, scope)) continue;
+        if (scope?.preservePending) entry.refresh = true;
+        else cached.delete(key);
+      }
       if (!scope?.preservePending) {
         for (const key of pending.keys()) if (providerGroupUsageMatches(key, scope)) pending.delete(key);
       } else {

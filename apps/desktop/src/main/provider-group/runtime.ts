@@ -85,21 +85,30 @@ function runtimeForActiveOwner(): OwnerRuntime {
   if (current?.owner === owner) return current;
   type PoolQuota = Awaited<ReturnType<typeof readSubscriptionPoolUsage>>;
   const isCurrent = () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner && current?.directory === directory;
-  const captureCurrent = (member: { agentDeviceId?: string | null }) => {
+  const captureCurrent = (member: { agentDeviceId?: string | null; providerId?: string }) => {
     const deviceId = member.agentDeviceId;
     const epoch = deviceId ? getRemoteLinkCloseEpoch(deviceId) : 0;
-    return () => isCurrent() && (!deviceId || getRemoteLinkCloseEpoch(deviceId) === epoch);
+    const identity = member.providerId ? poolProviders.get(deviceId ?? '')?.get(member.providerId)?.identity : undefined;
+    return () => isCurrent() && identity?.valid !== false && (!deviceId || getRemoteLinkCloseEpoch(deviceId) === epoch);
   };
   // Use the owning computer's provider metadata: a named subscription may own a pool,
   // while an unregistered legacy connection still uses its existing single-account reader.
-  const poolProviders = new Map<string, Map<string, { pooled: boolean; family: SubscriptionProvider | null }>>();
+  const poolProviders = new Map<string, Map<string, {
+    pooled: boolean; family: SubscriptionProvider | null; identity: { valid: boolean };
+  }>>();
   const rememberPools = (deviceId: string, providers: ProviderView[]) => {
     if (!isCurrent()) return [];
+    const previous = poolProviders.get(deviceId);
+    const ids = new Set(providers.filter(provider => provider.connected && !provider.suspended).map(provider => provider.id));
+    for (const [id, metadata] of previous ?? []) if (!ids.has(id)) metadata.identity.valid = false;
     poolProviders.set(deviceId, new Map(providers.map(provider => {
       const source = providerWeeklyQuotaSource(provider);
+      const previousIdentity = previous?.get(provider.id)?.identity;
       return [provider.id, { pooled: !!(provider.subscriptionPool || provider.subscriptionAccountPool),
         family: provider.subscriptionAccountPool ?? provider.subscriptionPool
-          ?? (source === 'codex' ? 'openai' : source === 'claude' ? 'anthropic' : null) }];
+          ?? (source === 'codex' ? 'openai' : source === 'claude' ? 'anthropic' : null),
+        identity: previousIdentity?.valid ? previousIdentity
+          : { valid: provider.connected && !provider.suspended } }];
     })));
     return providers;
   };
@@ -112,7 +121,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
     const cached = poolQuotaReads.get(key);
     if (cached?.current() && (cached.pending || (model === undefined && Date.now() - cached.at < 30_000)))
       return cached.result as Promise<T | null>;
-    const current = captureCurrent({ agentDeviceId: deviceId });
+    const current = captureCurrent({ agentDeviceId: deviceId, providerId });
     const entry = { at: Date.now(), pending: true, result: null! as Promise<T | null>, current };
     entry.result = Promise.resolve().then(() => isCurrent() ? request() : null).catch(() => null).then(result => {
       if (!current() || poolQuotaReads.get(key) !== entry) return null;
@@ -231,11 +240,19 @@ function runtimeForActiveOwner(): OwnerRuntime {
     localRunning: async (providerId) => (await readProviderRunningTurnsByProvider())?.get(providerId) ?? null,
     readClaudeUsage: (member) => usage.read(member),
     readCodexUsage: async (member) => {
+      const current = captureCurrent(member);
       const [account, limits] = await Promise.all([codexUsage.read(member), codexLimits.read(member)]);
-      return mergeCodexUsage(account, limits);
+      return current() ? mergeCodexUsage(account, limits) : null;
     },
     peekCodexUsage: (member) => mergeCodexUsage(codexUsage.peek(member), codexLimits.peek(member)),
     invalidateUsage: (scope) => {
+      if (!scope?.preservePending) {
+        for (const [deviceId, providers] of poolProviders) for (const [providerId, metadata] of providers) {
+          if (!providerGroupUsageMatches(JSON.stringify([deviceId, providerId]), scope)) continue;
+          metadata.identity.valid = false;
+          metadata.identity = { valid: true };
+        }
+      }
       for (const [key, entry] of poolQuotaReads) {
         if (!providerGroupUsageMatches(key, scope)) continue;
         if (scope?.preservePending && entry.pending) entry.at = -Infinity;
