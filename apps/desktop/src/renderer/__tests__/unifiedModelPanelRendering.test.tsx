@@ -491,6 +491,68 @@ describe('MiMo thinking switch in the actual unified picker', () => {
     expect(within(flyout).queryByText('恢复推荐')).toBeNull();
   });
 
+  // PR #10445 cross-engine reset regression (model-selector-unified §1.4, unit).
+  // Existing cases only reset Pi to Pi. Minimal missing input: a Codex override
+  // with thinking=false saved in the recommended Pi slot. Exercise the real
+  // picker and observe both the saved preference and the resulting default UI.
+  it.each(['draft', 'unselected', 'legacy-mirror'] as const)(
+    'clears recommended-engine thinking after a cross-engine reset (%s)', async kind => {
+      const route = { baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1', wireProtocol: 'openai-chat' as const,
+        models: [{ id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro' }] };
+      const provider = buildUserProvider({ id: 'mimo-fixture', name: 'MiMo', runtimes: { pi: route, codex: route } },
+        { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      const piModel = { ...provider.models.pi![0], recommendedAgent: 'pi' as const };
+      providersRef.providers = [{ ...provider, connected: true,
+        models: { pi: [piModel], codex: [{ ...piModel, thinkingToggle: false }] } }];
+      setModelEngineOverride('mimo-fixture', 'mimo-v2.6-pro', 'codex');
+      let remembered: boolean | undefined = false;
+      const clearThinking = vi.fn((_agent, _provider, _model) => { remembered = undefined; });
+      const setThinking = vi.fn((_agent, _provider, _model, value: boolean) => { remembered = value; });
+      const configure = vi.fn(() => true);
+      const onThinkingChange = vi.fn();
+      function Picker() {
+        const [engine, setEngine] = React.useState<'codex' | 'pi'>('codex');
+        const [, refreshMemory] = React.useReducer(value => value + 1, 0);
+        return <ModelSelectorContent remoteAgent={undefined} vendorKey={engine} unifiedAgents={['pi', 'codex']}
+          modelId={kind === 'draft' ? 'mimo-v2.6-pro' : 'other-model'} currentProviderId="mimo-fixture" effort="high"
+          onModelChange={vi.fn()} onEffortChange={vi.fn()} onProviderChange={vi.fn()}
+          thinkingEnabled={remembered ?? true} onThinkingChange={onThinkingChange}
+          onUnifiedSelect={() => { if (!configure()) return false; setEngine('pi'); return true; }}
+          modelMemory={{ getEffort: () => undefined, getFast: () => undefined,
+            setEffort: vi.fn(), setFast: vi.fn(), getThinking: agent => agent === 'pi' ? remembered : undefined,
+            setThinking: (agent, provider, model, enabled) => {
+              setThinking(agent, provider, model, enabled); refreshMemory();
+            }, ...(kind === 'legacy-mirror' ? {} : { clearThinking: (agent, provider, model) => {
+              clearThinking(agent, provider, model); refreshMemory();
+            } }) }} />;
+      }
+      render(<Picker />);
+      const flyout = await openRowFlyout('MiMo V2.6 Pro');
+      const reset = await within(flyout).findByText('恢复推荐');
+      expect(rowFor('MiMo V2.6 Pro').querySelector('[data-unified-triple]')?.getAttribute('title')).toContain('Codex');
+      if (kind === 'draft') {
+        configure.mockReturnValueOnce(false);
+        await act(async () => fireEvent.click(reset));
+        expect(remembered).toBe(false);
+        expect(getModelEngineOverride('mimo-fixture', 'mimo-v2.6-pro')).toBe('codex');
+        expect(clearThinking).not.toHaveBeenCalled();
+      }
+      await act(async () => fireEvent.click(reset));
+      expect(getModelEngineOverride('mimo-fixture', 'mimo-v2.6-pro')).toBeUndefined();
+      if (kind === 'legacy-mirror') {
+        expect(remembered).toBe(true);
+        expect(setThinking).toHaveBeenCalledWith('pi', 'mimo-fixture', 'mimo-v2.6-pro', true);
+      } else {
+        expect(remembered).toBeUndefined();
+        expect(clearThinking).toHaveBeenCalledWith('pi', 'mimo-fixture', 'mimo-v2.6-pro');
+      }
+      const toggle = await within(flyout).findByRole('switch', { name: 'newChat.modelSelector.thinking' });
+      expect(toggle.getAttribute('aria-checked')).toBe('true');
+      expect(within(flyout).queryByText('恢复推荐')).toBeNull();
+      expect(onThinkingChange).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(['favorite', 'recent'])('does not expose a global thinking edit in an unselected %s copy', async kind => {
     const copy = { providerId: 'mimo-fixture', modelId: 'mimo-v2.6-pro', agent: 'pi' as const };
     const uid = kind === 'favorite' ? addModelFavorite(copy) : recordRecentModel(copy, 1000);

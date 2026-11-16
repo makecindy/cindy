@@ -1169,10 +1169,15 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         await runLive(() => options.onThinkingChangeLive!(false));
       return false;
     }
-    if (resetThinking && owner === getProviderModelMemoryOwner()) {
-      for (const model of entryWireIds(entry, config.agent)) {
-        if (modelMemory?.clearThinking) modelMemory.clearThinking(config.agent, anchor.providerId, model);
-        else modelMemory?.setThinking?.(config.agent, anchor.providerId, model, true);
+    if (owner === getProviderModelMemoryOwner()) {
+      // Like effort/Fast, clear both engine slots: switching back to the
+      // recommendation must not revive its previously saved thinking override.
+      for (const agent of new Set([config.agent, entry.recommended])) {
+        if (entry.capabilities[agent]?.thinkingToggle !== true) continue;
+        for (const model of entryWireIds(entry, agent)) {
+          if (modelMemory?.clearThinking) modelMemory.clearThinking(agent, anchor.providerId, model);
+          else modelMemory?.setThinking?.(agent, anchor.providerId, model, true);
+        }
       }
     }
   };
