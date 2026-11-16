@@ -5831,7 +5831,8 @@
             "statusFailed": "la vérification du statut du contrôleur a échoué",
             "recoveryFailed": "la connexion de contrôle n'a pas pu être reconstruite",
             "extensionDisconnected": "aucune extension de navigateur n'est connectée (installez et activez le plugin Cindy Chrome et son extension)",
-            "pluginMissing": "le plugin Cindy Chrome n'est pas installé ou pas activé"
+            "pluginMissing": "le plugin Cindy Chrome n'est pas installé ou pas activé",
+            "browserMissing": "Chrome n'est pas installé sur cet ordinateur"
           },
           "reconnect": "Reconnecter le navigateur",
           "recover": "Restaurer le navigateur",
@@ -5851,7 +5852,7 @@
         },
         "userBrowser": {
           "title": "Mon navigateur",
-          "description": "Fonctionne dans le Chrome ou l'Edge que vous utilisez, avec vos connexions existantes. Les nouvelles pages s'ouvrent dans une fenêtre en arrière-plan, sans vous gêner."
+          "description": "Votre propre Chrome sur cet ordinateur (Edge fonctionne aussi). L'Agent y travaille directement, avec vos connexions existantes. Les nouvelles pages s'ouvrent dans une fenêtre en arrière-plan, sans vous gêner."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Installer le plugin Cindy Chrome",
@@ -5870,7 +5871,9 @@
           "updatePluginTitle": "Mettre à jour le plugin Cindy Chrome",
           "updatePluginBody": "Le plugin Cindy Chrome installé est trop ancien pour « Mon navigateur ». Mettez-le à jour vers la dernière version, puis suivez ses indications pour ajouter l'extension.",
           "updatePlugin": "Mettre à jour",
-          "storeOpened": "La page de l'extension Cindy s'est ouverte dans votre navigateur. Choisissez « Ajouter à Chrome » et la connexion se fera d'elle-même."
+          "storeOpened": "La page de l'extension Cindy s'est ouverte dans votre navigateur. Choisissez « Ajouter à Chrome » et la connexion se fera d'elle-même.",
+          "installBrowserTitle": "Installez d'abord Chrome",
+          "installBrowserBody": "Chrome n'est pas installé sur cet ordinateur. « Mon navigateur » a besoin de Chrome (ou d'Edge) pour l'extension Cindy. Une fois installé, l'étape suivante s'affichera ici automatiquement."
         }
       },
       "android": {

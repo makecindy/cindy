@@ -221,6 +221,43 @@ describe('Chat Server result delivery and refresh', () => {
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
 
+  // #10822 / unit: getGroup + dismissPlan exercise the production server
+  // projection and existing stop action. Earlier tests never combined a failed
+  // execution, stopped plan and absent local Session with an already-read group.
+  it('settles the group alert through stopping a failed plan without needing its Session', async () => {
+    const planId = '60000000-0000-4000-8000-000000000001';
+    const plan = { id: planId, revision: 1, kind: 'work', source_message_id: execution.source_message_id,
+      request_text: 'Make a draft', organizer_id: botId, creator_id: selfId, status: 'waiting', current_step: 0,
+      created_at: '2026-10-03T00:00:00Z', updated_at: '2026-10-03T00:00:01Z',
+      steps: [{ position: 0, botId, botName: 'Bot', task: 'draft', status: 'failed' },
+        { position: 1, botId, botName: 'Bot', task: 'review', status: 'pending' }] };
+    const failed = { ...execution, plan_id: planId, status: 'failed', updated_at: plan.updated_at };
+    let executions = [failed];
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === `/conversations/${roomId}/plans/${planId}` && method === 'POST') {
+        expect(body.action).toBe('stop'); plan.status = 'stopped'; plan.revision += 1;
+        return { body: {} };
+      }
+      if (route.includes('/plans')) return { body: route.includes(planId) || plan.status === 'waiting' ? [plan] : [] };
+      if (route.endsWith('/executions')) return { body: executions };
+      if (route.endsWith('/snapshot')) return { body: { ...response(route).body, reads: [{ thread_key: 'main', read_seq: '1' }] } };
+      return response(route);
+    });
+    const waiting = await service.getGroup(roomId);
+    expect(waiting.ok && waiting.group.teammateActivity?.phase).toBe('needs-interaction');
+    expect((await service.dismissPlan({ groupId: roomId, planId })).ok).toBe(true);
+    const stopped = await service.getGroup(roomId);
+    expect(stopped.ok && stopped.group.teammateActivity?.phase).toBe('idle');
+    expect(stopped.ok && stopped.group.openPlan).toBeNull();
+    expect(stopped.ok && stopped.group.serverUnread?.count).toBe(0);
+    expect(stopped.ok && stopped.group.plans[0]?.steps.map(step => step.status)).toEqual(['failed', 'pending']);
+    expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/plans?ids=${planId}`, 'GET', undefined);
+    expect(deps.ensureLane).not.toHaveBeenCalled();
+    executions = [failed, { ...failed, id: '40000000-0000-4000-8000-000000000002', plan_id: '' }];
+    const newerFailure = await service.getGroup(roomId);
+    expect(newerFailure.ok && newerFailure.group.teammateActivity?.phase).toBe('error');
+  });
+
   it('keeps the displayed talk execution identity across a refreshed plan revision', async () => {
     const planId = '60000000-0000-4000-8000-000000000001';
     const plan = { id: planId, revision: 4, kind: 'talk', source_message_id: execution.source_message_id,
