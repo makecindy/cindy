@@ -55,6 +55,7 @@ import { readSessionExtraDirsFromDb, readSessionWritableDirsFromDb } from '../..
 import { createProviderGroupStore } from '../../desktop/src/main/provider-group/storeCore.js';
 import { createProviderGroupBindings } from '../../desktop/src/main/provider-group/bindings.js';
 import { AGENT_BINARY_LAYOUT, readCachedBinaryStatus } from '../../desktop/src/main/agent-binaries/binaryStatus.js';
+import { resolveHarnessBinaryPath } from './agent/harness-binary.js';
 import { openOwnerDatabase, OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.js';
 import { discoverHostOwner, ownerDatabasePath, resolveHostDataDir, resolveHostRegion, resolveHostAppDataDir } from './profile-path.mjs';
 import { acquireHostRuntimeLease, acquireHostServiceLease, type HostRuntimeLease } from './runtime-lock.js';
@@ -276,20 +277,26 @@ interface RuntimeState {
 
 const runtime: RuntimeState = { state: 'uninitialized', owner: null, storage: 'unopened' };
 
-/** Resolved dev checkout binary for one harness, or null when absent. */
-function harnessBinaryPath(kind: 'claude-code' | 'codex' | 'pi'): string | null {
-  const layout = kind === 'claude-code'
-    ? { dir: 'claude-code-bin', file: AGENT_BINARY_LAYOUT['claude-code'].binaryName }
-    : kind === 'codex'
-      ? { dir: 'codex-package-bin', file: AGENT_BINARY_LAYOUT.codex.binaryName }
-      : { dir: 'pi-bin', file: AGENT_BINARY_LAYOUT.pi.binaryName };
-  const status = readCachedBinaryStatus({
-    kind,
-    isPackaged: false,
-    userDataDir: resolveHostDataDir(),
-    devCandidates: [path.join(hostRuntimeLayout().harnessRoot, layout.dir, platformKey, layout.file)],
-  });
-  return status.binaryPath ?? null;
+/**
+ * The engine binary of each harness, chosen once when an owner runtime starts with the desktop's rules
+ * (agent/harness-binary.ts): Pi's explicit selection, then the bundled or dev checkout binary, then the
+ * profile install that reports the highest version.
+ */
+async function resolveHarnessBinaries(): Promise<Record<'claude-code' | 'codex' | 'pi', string | null>> {
+  const entries = await Promise.all(HARNESS_KINDS.map(async (kind) => {
+    const layout = kind === 'claude-code'
+      ? { dir: 'claude-code-bin', file: AGENT_BINARY_LAYOUT['claude-code'].binaryName }
+      : kind === 'codex'
+        ? { dir: 'codex-package-bin', file: AGENT_BINARY_LAYOUT.codex.binaryName }
+        : { dir: 'pi-bin', file: AGENT_BINARY_LAYOUT.pi.binaryName };
+    const resolved = await resolveHarnessBinaryPath(kind, {
+      userDataDir: resolveHostDataDir(),
+      bundledCandidates: [path.join(hostRuntimeLayout().harnessRoot, layout.dir, platformKey, layout.file)],
+    });
+    if (resolved.error) hostLog.warn('harness binary unavailable', { kind, error: resolved.error });
+    return [kind, resolved.binaryPath] as const;
+  }));
+  return Object.fromEntries(entries) as Record<'claude-code' | 'codex' | 'pi', string | null>;
 }
 
 /** Dev checkout binaries, in the same order the Desktop dev lookup uses. */
@@ -584,10 +591,12 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   const pluginOwner = activeOwnerScopeKey();
   const credentials = await createCredentialStore({ userDataDir: dataDir,
     keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined });
+  // The engine binaries this owner runtime uses, read once (the model settings use the same ones).
+  const harnessBinaries = await resolveHarnessBinaries();
   providerConfig = createHostProviderConfig({ profileDir: dataDir, ownerId, credentials,
     gatewayConnected: () => Boolean(currentGateway()),
-    getCodexBinary: () => harnessBinaryPath('codex'),
-    getClaudeBinary: () => harnessBinaryPath('claude-code'),
+    getCodexBinary: () => harnessBinaries.codex,
+    getClaudeBinary: () => harnessBinaries['claude-code'],
     publish: (channel, payload) => eventHub.publish({ type: 'plugin_push', channel, payload }),
     openExternal: async url => { await openSystemBrowser(url); } });
   await providerConfig.loadCatalog({
@@ -738,9 +747,9 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   hostTools.providers.push(...platformTools.providers);
   hostTools.services.replace(hostTools.providers);
 
-  const claudeBinary = harnessBinaryPath('claude-code');
-  const codexBinary = harnessBinaryPath('codex');
-  const piBinary = harnessBinaryPath('pi');
+  const claudeBinary = harnessBinaries['claude-code'];
+  const codexBinary = harnessBinaries.codex;
+  const piBinary = harnessBinaries.pi;
   if (claudeBinary || codexBinary || piBinary) {
     const gateway = modelAccess!.gateway;
     // Memory uses the same owner-scoped store Desktop reads, so a task started
