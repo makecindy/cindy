@@ -279,6 +279,13 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
               onValueChange={value => void saveRules({ speakingMode: value as typeof speakingMode })} />} />}
         </SettingsCard>
       </SettingsSection>
+      {group.supportsCompanionOwnerNames && <SettingsSection>
+        <SettingsCard><SettingsRow wrap title={t(shared('shortCompanionNames'))} hint={t(shared('shortCompanionNamesHint'))}
+          trailing={<Switch aria-label={t(shared('shortCompanionNames'))} checked={group.hideCompanionOwnerNames === true}
+            disabled={busy || group.revision === undefined} onCheckedChange={hideCompanionOwnerNames => {
+              if (group.revision !== undefined) void mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '', expectedRevision: group.revision, hideCompanionOwnerNames });
+            }} />} /></SettingsCard>
+      </SettingsSection>}
       {/* The group's project: a shared repository and this computer's folder. Replies and 分工 work in it (§7.5). */}
       <SettingsSection title={t(key('project'))} caption={t(key('projectCaption'))}>
         <SettingsCard>

@@ -17,8 +17,57 @@ import {
   botGroupNewMessageCount,
   botGroupActivityAt,
   latestBotGroupMessage,
+  chatGroupMemberName,
 } from '../botGroupPresentation.js';
 import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupOpenPlanSummary, type BotGroupPlanStepStatus, type BotGroupPlanView, type BotGroupSummary } from '../botGroupChat.js';
+
+// #9419, unit: exercise the shared production label used by Desktop and direct Mobile. Existing
+// coverage has no opt-in group with several humans, nor a later same-name participant.
+describe('optional group companion owner labels', () => {
+  const owner = { id: 'h1', kind: 'human', state: 'joined', name: 'Alex' };
+  const family = { id: 'h2', kind: 'human', state: 'joined', name: 'Sam' };
+  const bot = { id: 'b1', kind: 'bot', state: 'joined', name: 'Helper', ownerActorId: owner.id, ownerName: 'Alex' };
+
+  it('keeps the existing label by default and hides it only when opted in', () => {
+    const members = [owner, family, bot];
+    expect(chatGroupMemberName(bot, members)).toBe('Helper (Alex)');
+    expect(chatGroupMemberName(bot, members, true)).toBe('Helper');
+    expect(chatGroupMemberName(family, members, true)).toBe('Sam');
+  });
+
+  it('keeps a disambiguating owner label when any joined member has the same name', () => {
+    const members = [owner, family, bot];
+    for (const kind of ['human', 'bot', 'integration']) {
+      const namesake = { id: 'other', kind, state: 'joined', name: 'helper' };
+      expect(chatGroupMemberName(bot, [...members, namesake], true)).toBe('Helper (Alex)');
+      expect(chatGroupMemberName(bot, [...members, { ...namesake, state: 'left' }], true)).toBe('Helper');
+    }
+  });
+
+  // #9427 review: a shortened name must not collide with another companion's
+  // forced full label, including when fallback propagates through several names.
+  it('avoids collisions with forced owner labels, including cascading fallbacks', () => {
+    const duplicate = { ...bot, id: 'b2', ownerActorId: family.id, ownerName: 'Sam' };
+    const nested = { ...bot, id: 'b3', name: 'Helper (Alex)', ownerActorId: family.id, ownerName: 'Sam' };
+    const chained = { ...bot, id: 'b4', name: 'Helper (Alex) (Sam)', ownerActorId: family.id, ownerName: 'Sam' };
+    const members = [owner, family, bot, duplicate, nested, chained];
+    expect(chatGroupMemberName(bot, members, true)).toBe('Helper (Alex)');
+    expect(chatGroupMemberName(nested, members, true)).toBe('Helper (Alex) (Sam)');
+    expect(chatGroupMemberName(chained, members, true)).toBe('Helper (Alex) (Sam) (Sam)');
+    // A potential full label is harmless when its owner is itself shortened.
+    const unique = [owner, family, bot, nested];
+    expect(chatGroupMemberName(bot, unique, true)).toBe('Helper');
+    expect(chatGroupMemberName(nested, unique, true)).toBe('Helper (Alex)');
+    const departedOwner = { ...bot, ownerActorId: undefined, ownerName: 'Alex' };
+    expect(chatGroupMemberName(nested, [owner, family, departedOwner, nested], true)).toBe('Helper (Alex) (Sam)');
+  });
+
+  it('fails back to the existing label for a direct room or an incomplete roster', () => {
+    expect(chatGroupMemberName(bot, [], true)).toBe('Helper (Alex)');
+    expect(chatGroupMemberName(bot, [family, bot], true)).toBe('Helper (Alex)');
+    expect(chatGroupMemberName(bot, [owner, family], true)).toBe('Helper (Alex)');
+  });
+});
 
 describe('group list activity', () => {
   it('keeps creation as a floor without treating settings edits as activity', () => {

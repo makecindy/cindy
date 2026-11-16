@@ -307,7 +307,9 @@
       "noneHint": "Deaktiviere alle Systembenachrichtigungen für diese Gruppe. Ungelesene Nachrichten bleiben erhalten.",
       "saving": "Wird gespeichert…",
       "saveFailed": "Benachrichtigungseinstellungen konnten nicht gespeichert werden. Versuche es erneut."
-    }
+    },
+    "shortCompanionNames": "Kurze Partnernamen",
+    "shortCompanionNamesHint": "Bei eindeutigen Namen wird der Name des Besitzers ausgeblendet. Bei gleichen Namen bleibt er zur Unterscheidung sichtbar."
   },
   "errors": {
     "memberLimit": "Ein Gruppenchat braucht 2–6 Freunde",

@@ -20,6 +20,27 @@ export interface BotGroupMentionMember {
   /** Chat Server's undecorated name, so an existing @name still resolves. */
   displayName?: string;
   nickname?: string | null;
+  ownerName?: string;
+  /** Present on companions when the server supports short names, whether enabled or not. */
+  ownerNameHidden?: boolean;
+  shortOwnerNamesEnabled?: boolean;
+  actorKind?: 'human' | 'bot' | 'integration';
+}
+
+/** A historical full label remains recognizable when a group's new display label is short. */
+export function botGroupFormerOwnerLabel(member: Pick<BotGroupMentionMember, 'name' | 'ownerName' | 'ownerNameHidden'>): string | undefined {
+  const owner = member.ownerName?.trim();
+  const name = member.name.trim();
+  return member.ownerNameHidden === true && owner && name ? `${name} (${owner})` : undefined;
+}
+
+/** A short label written before a preference or roster change remains recognizable afterwards. */
+export function botGroupFormerShortLabel(member: Pick<BotGroupMentionMember, 'name' | 'ownerName' | 'ownerNameHidden' | 'shortOwnerNamesEnabled'>): string | undefined {
+  const owner = member.ownerName?.trim();
+  const name = member.name.trim();
+  const suffix = owner ? ` (${owner})` : '';
+  return member.shortOwnerNamesEnabled !== undefined && member.ownerNameHidden === false && suffix && name.endsWith(suffix) && name.length > suffix.length
+    ? name.slice(0, -suffix.length) : undefined;
 }
 
 /** A mention picked from the candidate list; `label` is the text after `@`. */
@@ -95,8 +116,8 @@ function buildLabelEntries(
   }
   for (const member of members) {
     const name = member.name.trim();
-    for (const raw of [member.name, member.nickname || member.displayName || '']) {
-      const label = raw.trim();
+    for (const raw of [member.name, member.nickname || member.displayName || '', botGroupFormerOwnerLabel(member), botGroupFormerShortLabel(member)]) {
+      const label = raw?.trim() ?? '';
       if (!label || byLabel.get(label)?.all || byLabel.get(label)?.allBots) continue;
       const entry = byLabel.get(label) ?? { label, all: false, botIds: [], aliasIds: [] };
       const owners = label === name ? entry.botIds : entry.aliasIds;
@@ -120,17 +141,18 @@ interface MentionToken {
   entry: LabelEntry;
 }
 
-function scanMentionTokens(text: string, entries: readonly LabelEntry[]): MentionToken[] {
+function scanMentionTokens(text: string, entries: readonly LabelEntry[], tracked: readonly BotGroupTrackedMention[] = []): MentionToken[] {
   const tokens: MentionToken[] = [];
   let index = text.indexOf('@');
   while (index >= 0) {
     let next = index + 1;
     if (isMentionStart(text, index)) {
-      const entry = entries.find(
-        (candidate) =>
-          text.startsWith(candidate.label, index + 1) &&
-          endsAtBoundary(candidate.label, text[index + 1 + candidate.label.length]),
-      );
+      const matches = (candidate: LabelEntry) => text.startsWith(candidate.label, index + 1)
+        && endsAtBoundary(candidate.label, text[index + 1 + candidate.label.length]);
+      // A pick records a specific token and ID. A roster refresh can introduce a
+      // longer label covering its following prose; it must not steal that identity.
+      const picked = tracked.find(mention => mention.start === index && entries.some(candidate => candidate.label === mention.label.trim() && matches(candidate)));
+      const entry = picked ? entries.find(candidate => candidate.label === picked.label.trim() && matches(candidate)) : entries.find(matches);
       if (entry) {
         const end = index + 1 + entry.label.length;
         tokens.push({ start: index, end, entry });
@@ -157,7 +179,7 @@ export function ambiguousBotGroupMentionLabels(text: string, input: MentionInput
   const tracked = input.tracked ?? [];
   const entries = buildLabelEntries(input.members, input.allLabels, tracked, input.allBotLabels);
   const labels: string[] = [];
-  for (const token of scanMentionTokens(text, entries)) {
+  for (const token of scanMentionTokens(text, entries, tracked)) {
     if (token.entry.all || token.entry.allBots || !typedTargets(token.entry).ambiguous) continue;
     if (tracked.some(mention => mention.start === token.start && mention.label.trim() === token.entry.label)) continue;
     if (!labels.includes(token.entry.label)) labels.push(token.entry.label);
@@ -179,7 +201,7 @@ export function resolveBotGroupMentions(
   const botIds: string[] = [];
   let all = false;
   let allBots = false;
-  for (const token of scanMentionTokens(text, entries)) {
+  for (const token of scanMentionTokens(text, entries, input.tracked ?? [])) {
     // A pick names that companion even when its name is also a 「所有人」 label; only the
     // 「所有人」 option or a typed reserved word addresses everyone.
     const picked = (input.tracked ?? []).filter(mention =>
@@ -216,8 +238,17 @@ export function splitBotGroupRelaySteps(
   text: string,
   input: { members: readonly BotGroupMentionMember[]; allLabels: readonly string[]; allBotLabels?: readonly string[] },
 ): BotGroupRelayStep[] | null {
-  const tokens = scanMentionTokens(text, buildLabelEntries(input.members, input.allLabels, [], input.allBotLabels));
+  const entries = buildLabelEntries(input.members, input.allLabels, [], input.allBotLabels);
+  const tokens = scanMentionTokens(text, entries);
   if (!tokens.length) return null;
+  // The send carries target IDs, not each picked token's span. When a newly introduced
+  // longer label overlaps a former short label, even the same set of IDs cannot prove
+  // which teammate owns each step. Let the organizer propose the plan instead.
+  if (input.members.some(member => member.shortOwnerNamesEnabled !== undefined) && tokens.some(token =>
+    entries.some(candidate => candidate.label.length < token.entry.label.length
+      && token.entry.label.startsWith(candidate.label)
+      && endsAtBoundary(candidate.label, token.entry.label[candidate.label.length])
+      && (candidate.all || candidate.allBots || typedTargets(candidate).botIds.length !== 1 || typedTargets(candidate).botIds[0] !== typedTargets(token.entry).botIds[0])))) return null;
   // An @ that is not a teammate (renamed since it was picked) would drop or garble a step.
   if (/@\S/.test(text.slice(0, tokens[0]!.start))) return null;
   const steps: BotGroupRelayStep[] = [];
@@ -264,7 +295,7 @@ export function retainBotGroupTrackedMentions(
     return []; // This particular token was edited or deleted, even if a namesake remains.
   });
   const entries = buildLabelEntries(input.members, input.allLabels, tracked, input.allBotLabels);
-  const tokens = scanMentionTokens(text, entries);
+  const tokens = scanMentionTokens(text, entries, tracked);
   return tracked.filter(mention => tokens.some(token =>
     token.start === mention.start && token.entry.label === mention.label.trim()));
 }

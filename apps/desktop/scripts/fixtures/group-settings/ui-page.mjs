@@ -25,6 +25,7 @@ export default {
     archived: { about: 'Archived group seen by its owner', data: { role: 'owner', archived: true } },
     dissolved: { about: 'Dissolved group: no invite, no personal sections', data: { role: 'member', dissolved: true } },
     'many-teammates': { about: '邀请伙伴 with 30 spare teammates: search and scrolling', data: { role: 'owner', spare: 30 } },
+    'short-names': { about: 'Group manager can choose short companion names when the server supports them', data: { role: 'owner', shortNames: true } },
     'group-cindy': { about: 'Server with the group Cindy, on: its switch, 「Cindy 回答」, organizer under 分工, Cindy in 成员 without a menu', data: { role: 'owner', assistant: 'on' } },
     'group-cindy-off': { about: 'The group Cindy switched off: 没有 @ 人的时候 reads as before', data: { role: 'owner', assistant: 'off' } },
   },
@@ -34,6 +35,12 @@ export default {
     const dialog = page.getByRole('dialog');
     const invite = page.getByTestId('chat-group-invite');
     const manage = await row(page, await t('manage'));
+    if (ui.case === 'short-names') {
+      await manage.click();
+      await dialog.getByRole('switch', { name: await ui.t('bots.groupChat.settings.shortCompanionNames') }).waitFor();
+      await ui.capture('short-names');
+      return;
+    }
     if (ui.case === 'dismissal') {
       const scrimPoint = { x: 80, y: 340 }; // Directly over the background action: detect click-through.
       const clickScrim = () => page.mouse.click(scrimPoint.x, scrimPoint.y);

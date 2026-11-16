@@ -181,6 +181,10 @@ export interface BotGroupMemberView {
   nickname?: string | null;
   ownerActorId?: string;
   ownerName?: string;
+  /** Present when the group supports the preference; true when this companion's label is short. */
+  ownerNameHidden?: boolean;
+  /** The room opted in, including companions whose label keeps the owner because of a collision. */
+  shortOwnerNamesEnabled?: boolean;
   isOwned?: boolean;
   /** The computer running this owned companion (its Chat Server actor home); live task cards read there. */
   homeDeviceId?: string | null;
@@ -570,6 +574,9 @@ export interface BotGroupSummary {
   /** Owner-controlled companion broadcast; absent on old servers/hosts. */
   supportsMentionAudiences?: boolean;
   allowMentionAllBots?: boolean;
+  /** Optional server capability and room-wide display preference (absent on older servers). */
+  supportsCompanionOwnerNames?: boolean;
+  hideCompanionOwnerNames?: boolean;
   /** Public roster state, optional for older hosts. */
   teammateActivity?: { phase: string };
   /** Explicit direct-message landing; group management remains unavailable. */
@@ -742,6 +749,7 @@ export interface BotGroupCreateInput {
 
 export interface BotGroupUpdateInput {
   allowMentionAllBots?: boolean;
+  hideCompanionOwnerNames?: boolean;
   groupId: string;
   /** Optional optimistic precondition for server-backed settings. */
   expectedRevision?: number;
@@ -1046,7 +1054,7 @@ export interface ChatInvitePreview {
 export type ChatGroupAction =
   | { type: 'read'; messageId: string; conversationKind?: 'direct' }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
-  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; assistant?: boolean }
+  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; assistant?: boolean; hideCompanionOwnerNames?: boolean }
   | { type: 'nickname'; actorId: string; nickname: string | null }
   | { type: 'avatar'; actorId: string; avatar: { type: 'keep' | 'reset' } | { type: 'set'; data: Uint8Array; mimeType: string } }
   | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'ban' | 'unban' | 'role'; role?: 'admin' | 'member' }

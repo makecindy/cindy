@@ -1813,6 +1813,22 @@ describe('BotGroupChatView', () => {
     expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
   });
 
+  // #9419: do not send an ambiguous short draft as an unaddressed message.
+  it('keeps an ambiguous short mention until the sender picks a member', async () => {
+    const namesakes = [
+      { ...detail().members[0]!, name: 'Ann (Alex)', displayName: 'Ann', ownerName: 'Alex', ownerNameHidden: false, shortOwnerNamesEnabled: true },
+      { ...detail().members[1]!, name: 'Ann (Sam)', displayName: 'Ann', ownerName: 'Sam', ownerNameHidden: false, shortOwnerNamesEnabled: true },
+    ];
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ members: namesakes }) });
+    renderView();
+    const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '@Ann hello' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    expect(input.value).toBe('@Ann hello');
+    expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.errors.mentionAmbiguous:Ann');
+  });
+
   it('keeps a selected target and its draft across roster removal and a rejected retry', async () => {
     const namesakes = [
       { ...detail().members[0]!, botId: 'picked', name: 'Ann' },

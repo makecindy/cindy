@@ -16,6 +16,7 @@ interface Data {
   noAbout?: boolean;
   /** Teammates of yours that are not in the group yet, offered by 邀请伙伴. */
   spare?: number;
+  shortNames?: boolean;
   /** A server with the group's own Cindy (bot-group-chat.md §9): on, or switched off. */
   assistant?: 'on' | 'off';
 }
@@ -52,6 +53,7 @@ const group = {
     project: { kind: 'github', repo: 'makecindy/cindy' } } : {}),
   organizerBotId: data.alone ? null : 'aster', projectDir: data.role === 'member' ? null : '/Users/nana/Projects/cindy', autoContinue: false,
   supportsMentionAudiences: true, allowMentionAllBots: true,
+  supportsCompanionOwnerNames: !!data.shortNames, hideCompanionOwnerNames: !!data.shortNames,
   supportsDissolve: true, supportsGroupLeave: true, supportsListRemoval: true, supportsMemberAvatar: true,
   canInvite: data.role !== 'member', archived: !!data.archived, dissolvedAt: data.dissolved ? '2026-10-29T08:00:00Z' : null,
   lastMessage: null, speakingBotIds: [], planningBotId: null, openPlan: null, plans: [], messages: [],

@@ -290,7 +290,7 @@ export function layoutBotGroupTimeline(
 
 // ---- Names -----------------------------------------------------------------------------
 
-type NamedMember = Pick<BotGroupMemberView, 'name' | 'ownerName' | 'isOwned' | 'actorKind'>;
+type NamedMember = Pick<BotGroupMemberView, 'name' | 'ownerName' | 'ownerNameHidden' | 'isOwned' | 'actorKind'>;
 
 function ownerSuffix(member: NamedMember): string | null {
   const owner = member.ownerName?.trim();
@@ -300,6 +300,7 @@ function ownerSuffix(member: NamedMember): string | null {
 /** The member's own name without a 「 (主人昵称)」 suffix the host may already have added. */
 export function botGroupMemberBaseName(member: NamedMember): string {
   const name = member.name.trim();
+  if (member.ownerNameHidden) return name;
   const suffix = ownerSuffix(member);
   return suffix && name.endsWith(suffix) && name.length > suffix.length ? name.slice(0, -suffix.length) : name;
 }
@@ -309,6 +310,7 @@ export function botGroupMemberBaseName(member: NamedMember): string {
  * 人类成员与本地群照常显示名字。只用于展示，点名与身份仍按 id。
  */
 export function botGroupMemberDisplayName(member: NamedMember): string {
+  if (member.ownerNameHidden) return member.name.trim();
   const suffix = ownerSuffix(member);
   if (suffix && member.isOwned === false && member.actorKind !== 'human') return `${botGroupMemberBaseName(member)}${suffix}`;
   return member.name.trim();

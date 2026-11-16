@@ -201,6 +201,9 @@ describe('names in multi-owner groups', () => {
     expect(botGroupMemberDisplayName(mine)).toBe('LiZi');
     expect(botGroupMemberDisplayName(human)).toBe('Chris');
     expect(botGroupMemberBaseName(theirs)).toBe('Cindy');
+    // A companion can genuinely have its owner's name in parentheses: once the group
+    // hides attribution those characters belong to the companion's name, not a suffix.
+    expect(botGroupMemberBaseName({ ...theirs, name: 'Cindy (Chris)', ownerNameHidden: true })).toBe('Cindy (Chris)');
   });
 
   it('lists the teammates a human brought in', () => {

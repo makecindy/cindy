@@ -307,7 +307,9 @@
       "noneHint": "止本群一切系统告知，未读之讯仍存。",
       "saving": "方存…",
       "saveFailed": "告知之设未能存，请再试。"
-    }
+    },
+    "shortCompanionNames": "简示同僚之名",
+    "shortCompanionNamesHint": "启之则不重名者省主人名；同名者仍显示以别之。"
   },
   "errors": {
     "memberLimit": "一群议须同伴 2–6 位",
