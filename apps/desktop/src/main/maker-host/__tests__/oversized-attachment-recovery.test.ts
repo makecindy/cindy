@@ -1,3 +1,5 @@
+import sharp from 'sharp';
+import { createInlineImagePreprocessor } from '../inlineImagePreprocessor.js';
 import { mkdtemp, writeFile, readFile, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
@@ -11,13 +13,13 @@ const state = vi.hoisted(() => ({
   existing: undefined as any, resolved: 'test-session' as string | null, invalidOwner: false,
   getSnapshot: vi.fn(), info: vi.fn(), ingest: vi.fn(), query: vi.fn(), addRef: vi.fn(), removeRef: vi.fn(),
 }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, mkdtemp: vi.fn(actual.mkdtemp), writeFile: vi.fn(actual.writeFile), rm: vi.fn(actual.rm) };
+});
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: state.info }) }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
 vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => state.getSnapshot() }));
-vi.mock('node:fs/promises', async importOriginal => {
-  const fs = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...fs, mkdtemp: vi.fn(fs.mkdtemp), rm: vi.fn(fs.rm) };
-});
 vi.mock('../../cindy-media/refCompensationJournal.desktop.js', () => ({
   captureMediaRefCompensationScope: () => ({ assertStillValid: () => { if (state.invalidOwner) throw new Error('owner changed'); } }),
   withMediaRefCompensation: async ({ perform, compensate, refIds }: any) => {
@@ -187,6 +189,137 @@ it('recovers a spooled PDF to hook-attachments while preserving images in the me
   }
 });
 
+// PR2 unit regression: PDFs reached prepare before PR1's image-only fix.
+// PR1's spy callbacks return null, so they cannot detect saving the original PNG
+// after real compression. A PDF plus a 64x48 PNG exercises the actual adapter/
+// controller; only storage/account ports are fakes.
+// Half noise keeps the compressed PNG above the small injected removal budget.
+it('prepares only the PNG and preserves its compressed bytes separately from the PDF', async () => {
+  const pixels = Buffer.alloc(64 * 48 * 3);
+  let seed = 1;
+  for (let i = 0; i < pixels.length / 2; i++) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    pixels[i] = seed >>> 24;
+  }
+  const png = await sharp(pixels, { raw: { width: 64, height: 48, channels: 3 } })
+    .png({ compressionLevel: 0 }).toBuffer();
+  const file = pdfBlock(1);
+  const pdf = Buffer.from(file.file_data.split(',')[1], 'base64');
+  const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [
+    file, { type: 'input_image', image_url: `data:image/png;base64,${png.toString('base64')}` },
+  ] }] }));
+  const preprocessor = createInlineImagePreprocessor(() => true);
+  const prepare = vi.spyOn(preprocessor, 'prepare');
+  const controller = createRequestSizeController(() => state.resolved, preprocessor);
+  const result = await controller.control(raw, 'responses', {
+    signal: new AbortController().signal, route: { providerId: 'xai', modelId: 'grok-4' },
+    triggerBytes: 3500, targetBytes: 1600,
+  });
+
+  expect(prepare).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ bytes: png, mimeType: 'image/png' }));
+  const prepared = await prepare.mock.results[0].value;
+  expect(prepared).toMatchObject({ changed: true, mimeType: 'image/png', width: 64, height: 48 });
+  expect(prepared!.bytes.length).toBeLessThanOrEqual(png.length * 0.85);
+  expect(result).toMatchObject({ imageCount: 1, removedImages: 1 });
+  const content = JSON.parse(result!.body.toString()).input[0].content as Array<{ text: string }>;
+  const pdfPath = preservedLocalPath(content[0].text);
+  const pngPath = preservedLocalPath(content[1].text);
+  expect(path.dirname(pdfPath)).toBe(path.join(state.root, 'hook-attachments', 'test-session'));
+  expect(path.extname(pdfPath)).toBe('.pdf');
+  expect(await readFile(pdfPath)).toEqual(pdf);
+  expect(pngPath).toBe(path.join(state.root, 'saved.png'));
+  const stored = await readFile(pngPath);
+  expect(stored).toEqual(prepared!.bytes);
+  expect(await sharp(stored).raw().toBuffer()).toEqual(pixels);
+  expect(state.ingest).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ mimeType: 'image/png', isCache: false }), expect.anything(),
+  );
+  expect(state.addRef).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ refKind: 'session-attachment', refId: 'test-session' }), expect.anything(),
+  );
+});
+
+// PR #10699, unit: a real adapter's WebP must become PNG in the rejected request,
+// not only in future requests. Existing denial tests used a fake prepare callback.
+it('retries its own rejected WebP as PNG and remembers the denial for later PNG inputs', async () => {
+  const png = await sharp({ create: { width: 64, height: 48, channels: 4, background: { r: 40, g: 80, b: 120, alpha: 0.5 } } })
+    .png({ compressionLevel: 0 }).toBuffer();
+  const preprocessor = createInlineImagePreprocessor(() => true);
+  const prepare = vi.spyOn(preprocessor, 'prepare');
+  const controller = createRequestSizeController(() => state.resolved, preprocessor, () => 'openai');
+  const control = vi.spyOn(controller, 'control');
+  const ctx = { reqId: 10699, method: 'POST', url: '/v1/responses', headers: {} };
+  const model = 'gpt-webp-rejection-regression';
+  const signal = new AbortController().signal;
+  const webp = await preprocessor.prepare({ bytes: png, mimeType: 'image/png', route: controller.route!(ctx, { model }), signal });
+  expect(webp?.mimeType).toBe('image/webp');
+  const bodyFor = (bytes: Buffer, mime: string) => ({ model, input: [{ role: 'user', content: [
+    { type: 'input_image', image_url: `data:${mime};base64,${bytes.toString('base64')}` },
+  ] }] });
+  const sent = Buffer.from(JSON.stringify(bodyFor(webp!.bytes, 'image/webp')));
+  const retried = await controller.retry!(sent, { kind: 'unsupported-image-format' }, ctx, signal);
+  expect(control.mock.calls[0][2]).toMatchObject({ allowRemoval: false, route: { deniedMimeTypes: ['image/webp'] } });
+  const candidate = await prepare.mock.results.at(-1)!.value;
+  expect(candidate?.mimeType).toBe('image/png');
+  expect(candidate!.bytes.length).toBeGreaterThan(webp!.bytes.length);
+  expect(retried).not.toBeNull();
+  expect(retried!.equals(sent)).toBe(false);
+  const retriedUrl = JSON.parse(retried!.toString()).input[0].content[0].image_url as string;
+  expect(retriedUrl).toMatch(/^data:image\/png;base64,/);
+  expect(await sharp(Buffer.from(retriedUrl.split(',')[1], 'base64')).raw().toBuffer()).toEqual(await sharp(png).raw().toBuffer());
+
+  const original = bodyFor(png, 'image/png');
+  const route = controller.route!(ctx, original);
+  expect(route.deniedMimeTypes).toContain('image/webp');
+  const subsequent = await controller.control(Buffer.from(JSON.stringify(original)), 'responses', { context: ctx, route, signal });
+  expect(JSON.parse(subsequent!.body.toString()).input[0].content[0].image_url).toMatch(/^data:image\/png;base64,/);
+  expect(state.ingest).not.toHaveBeenCalled();
+  expect(state.addRef).not.toHaveBeenCalled();
+});
+
+// PR #10699, unit: real loopback proxy -> classifier -> controller retry ->
+// real encoder. Direct retry tests cannot detect a dropped or repeated resend.
+it('retries a WebP format 400 once as PNG and sends PNG directly on the next request', async () => {
+  const png = await sharp({ create: { width: 64, height: 48, channels: 4, background: { r: 40, g: 80, b: 120, alpha: 0.5 } } })
+    .png({ compressionLevel: 0 }).toBuffer();
+  const received: string[] = [];
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const image = JSON.parse(Buffer.concat(chunks).toString()).input[0].content[0].image_url as string;
+    received.push(image);
+    res.setHeader('content-type', 'application/json');
+    res.statusCode = image.startsWith('data:image/png;') ? 200 : 400;
+    res.end(res.statusCode === 200 ? '{}' : JSON.stringify({ error: { message: 'unsupported image format' } }));
+  });
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  const address = upstream.address();
+  if (!address || typeof address === 'string') throw new Error('test server address unavailable');
+  const controller = createRequestSizeController(() => state.resolved, createInlineImagePreprocessor(() => true), () => 'openai');
+  const proxy = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${address.port}`, transformRequest: [], requestSizeController: controller });
+  const body = JSON.stringify({ model: 'gpt-webp-http-retry-regression', input: [{ role: 'user', content: [
+    { type: 'input_image', image_url: `data:image/png;base64,${png.toString('base64')}` },
+  ] }] });
+  const send = () => fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+  try {
+    const first = await send();
+    await first.text();
+    expect({ status: first.status, calls: received.length }).toEqual({ status: 200, calls: 2 });
+    expect(received[0]).toMatch(/^data:image\/webp;base64,/);
+    expect(received[1]).toMatch(/^data:image\/png;base64,/);
+    expect(await sharp(Buffer.from(received[1].split(',')[1], 'base64')).raw().toBuffer()).toEqual(await sharp(png).raw().toBuffer());
+    const second = await send();
+    await second.text();
+    expect(second.status).toBe(200);
+    expect(received).toHaveLength(3);
+    expect(received[2]).toMatch(/^data:image\/png;base64,/);
+  } finally {
+    await proxy.dispose();
+    upstream.closeAllConnections();
+    await new Promise<void>(resolve => upstream.close(() => resolve()));
+  }
+});
+
 // PR #10663: batch persistence could leave the first new reference on later failure.
 // Unit tier: two different images, with failure/cancellation/owner change during commit.
 // Existing compensation tests covered only the legacy recovery factory.
@@ -349,8 +482,9 @@ it.each([100 * 1024, 1024 * 1024, 5 * 1024 * 1024])('forwards %i bytes of text w
   await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
   const address = upstream.address();
   if (!address || typeof address === 'string') throw new Error('test server address unavailable');
-  const prepare = vi.fn(async () => null);
-  const controller = createRequestSizeController(() => state.resolved, { prepare });
+  const preprocessor = createInlineImagePreprocessor(() => true);
+  const prepare = vi.spyOn(preprocessor, 'prepare');
+  const controller = createRequestSizeController(() => state.resolved, preprocessor);
   const proxy = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${address.port}`, transformRequest: [], requestSizeController: controller });
   try {
     const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [{ type: 'input_text', text: 'x'.repeat(bytes) }] }] }));
@@ -370,17 +504,34 @@ it.each([100 * 1024, 1024 * 1024, 5 * 1024 * 1024])('forwards %i bytes of text w
   }
 });
 
-it.each([false, true])('does not stage media when a small image only needs preprocessing: changed=%s', async changed => {
-  const prepare = vi.fn(async () => changed ? { bytes: Buffer.alloc(300), mimeType: 'image/webp', width: 1, height: 1, changed: true, cacheKey: 'small' } : null);
-  const controller = createRequestSizeController(() => state.resolved, { prepare });
-  const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [pngBlock()] }] }));
-  const result = await controller.control(raw, 'responses', { signal: new AbortController().signal, route: {} });
+// PR2 integration: use the actual adapter, including JPEG passthrough, to
+// protect PR1's lazy persistence contract after the compressor is wired in.
+it.each([false, true])('does not stage media with the real adapter: changed=%s', async changed => {
+  const preprocessor = createInlineImagePreprocessor(() => true);
+  const prepare = vi.spyOn(preprocessor, 'prepare');
+  const controller = createRequestSizeController(() => state.resolved, preprocessor);
+  const image = sharp({ create: { width: 64, height: 48, channels: 3, background: '#123456' } });
+  const bytes = await (changed ? image.png({ compressionLevel: 0 }) : image.jpeg({ quality: 95 })).toBuffer();
+  const mime = changed ? 'image/png' : 'image/jpeg';
+  const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [{ type: 'input_image', image_url: `data:${mime};base64,${bytes.toString('base64')}` }] }] }));
+  vi.mocked(writeFile).mockClear();
+  const result = await controller.control(raw, 'responses', { signal: new AbortController().signal, route: { providerId: 'openai', modelId: 'gpt-6-astra' } });
   expect(prepare).toHaveBeenCalledOnce();
   expect(result?.removedImages ?? 0).toBe(0);
   expect(result !== null).toBe(changed);
+  if (changed) {
+    const uri = JSON.parse(result!.body.toString()).input[0].content[0].image_url as string;
+    expect(uri).toMatch(/^data:image\/webp;base64,/);
+    const encoded = Buffer.from(uri.split(',')[1], 'base64');
+    expect(await sharp(encoded).raw().toBuffer()).toEqual(await sharp(bytes).raw().toBuffer());
+  } else {
+    expect(result).toBeNull(); // The caller keeps the original JPEG request.
+  }
   expect(mkdtemp).not.toHaveBeenCalled();
   expect(rm).not.toHaveBeenCalled();
+  expect(writeFile).not.toHaveBeenCalled();
   expect(state.ingest).not.toHaveBeenCalled();
+  expect(state.addRef).not.toHaveBeenCalled();
   expect(state.info).not.toHaveBeenCalled();
 });
 
@@ -481,3 +632,36 @@ it('uses a learned byte trigger for later text-only requests without DB or disk 
     await proxy.dispose(); upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));
   }
 });
+// Unit, PR 2: existing ownership tests replace prepare with a fake encoder.
+// Real Desktop controller + real adapter + sharp must compress a valid PNG at
+// default request thresholds without allocating staging files or media refs.
+it.each(['no-db', 'no-session', 'session-missing', 'remote-session'] as const)(
+  'uses the real image adapter without disk writes for %s', async reason => {
+    if (reason === 'no-db') state.snapshot = null;
+    if (reason === 'no-session') state.resolved = null;
+    if (reason === 'session-missing') state.session = null;
+    if (reason === 'remote-session') state.session.remoteHostId = 'remote';
+    const png = await sharp({ create: { width: 64, height: 48, channels: 3, background: '#235681' } })
+      .png({ compressionLevel: 0 }).toBuffer();
+    const controller = createRequestSizeController(() => state.resolved, createInlineImagePreprocessor(() => true), () => 'openai');
+    const context = { reqId: 81, method: 'POST', url: '/v1/responses', headers: {} };
+    const body = { model: 'gpt-6-astra', input: [{ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${png.toString('base64')}` }] }] };
+    const raw = Buffer.from(JSON.stringify(body));
+    vi.mocked(mkdtemp).mockClear();
+    vi.mocked(writeFile).mockClear();
+    const result = await controller.control(raw, 'responses', { context, route: controller.route!(context, body), signal: new AbortController().signal });
+    expect(result?.removedImages).toBe(0);
+    const image = JSON.parse(result!.body.toString()).input[0].content[0].image_url as string;
+    expect(image.startsWith('data:image/webp;base64,')).toBe(true);
+    const compressed = Buffer.from(image.slice(image.indexOf(',') + 1), 'base64');
+    expect(compressed.length).toBeLessThanOrEqual(png.length * 0.85);
+    expect(await sharp(compressed).metadata()).toMatchObject({ format: 'webp', width: 64, height: 48 });
+    expect(await sharp(compressed).raw().toBuffer()).toEqual(await sharp(png).raw().toBuffer());
+    expect(mkdtemp).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(state.ingest).not.toHaveBeenCalled();
+    expect(state.addRef).not.toHaveBeenCalled();
+    expect(await readdir(state.root)).toEqual([]);
+    expect(state.info).toHaveBeenCalledWith('request size control skipped', expect.objectContaining({ reason, imageCount: 1 }));
+  },
+);

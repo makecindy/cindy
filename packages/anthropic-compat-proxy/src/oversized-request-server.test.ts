@@ -504,9 +504,15 @@ it.each(['controlled', 'disabled', 'unowned-above', 'unowned-below'] as const)(
 // Real retry/forwarding state machine, tiny inline fixtures. Learned rules must
 // be committed on success, apply to later tasks on the same route, and replay
 // from the same original history as the retry (not the already-cut wire body).
-it.each(['responses', 'anthropic', 'chat'] as const)('learns independent count rules after successful %s retries only', async format => {
+// PR #10693: unrelated scenarios shared one timeout and exceeded 5s on Windows.
+// Keep each stateful history intact, but give independent rules fresh fixtures.
+// Unit tier; all three protocols still use the production HTTP proxy/controller.
+it.each((['responses', 'anthropic', 'chat'] as const).flatMap(format => [
+  'replay and route isolation', 'unusable advertised limits', 'progressive tightening',
+  'independent byte and count limits', 'tiny count-only retries', 'unknown count limits',
+].map(scenario => ({ format, scenario }))))('learns $format count rules: $scenario', async ({ format, scenario }) => {
   const received: Buffer[] = [];
-  let reject: { count?: number; failRetry?: boolean; maxBytes?: number } | undefined = { count: 50 };
+  let reject: { count?: number; failRetry?: boolean; maxBytes?: number } | undefined;
   let pendingFailure = false;
   const upstream = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
@@ -541,56 +547,77 @@ it.each(['responses', 'anthropic', 'chat'] as const)('learns independent count r
     const response = await fetch(`${proxy.url}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-provider': provider }, body: wire(count, size) });
     expect(response.status).toBe(status); await response.text(); return received.at(-1)!;
   };
-  const retry = await send(60);
-  expect(received).toHaveLength(2);
-  expect(imageCount(received[0])).toBe(60);
-  expect(imageCount(retry)).toBe(31);
-  expect(await send(60)).toEqual(retry);
-  const appended = await send(61);
-  expect(imageCount(appended)).toBe(32);
-  expect(appended.subarray(0, retry.length - 2)).toEqual(retry.subarray(0, -2));
-  expect(await send(1)).toEqual(wire(1));
-  expect(await send(60, 200, 'route-b')).toEqual(wire(60));
-  for (const advertised of [100, 60]) {
-    reject = { count: advertised };
-    const recovered = await send(60, 200, `route-limit-${advertised}`);
-    expect(imageCount(recovered)).toBe(12); // Greater than OR equal to actual count is not a usable limit.
-    expect(await send(60, 200, `route-limit-${advertised}`)).toEqual(recovered);
+  if (scenario === 'replay and route isolation') {
+    reject = { count: 50 };
+    const retry = await send(60);
+    expect(received).toHaveLength(2);
+    expect(imageCount(received[0])).toBe(60);
+    expect(imageCount(retry)).toBe(31);
+    expect(await send(60)).toEqual(retry);
+    const appended = await send(61);
+    expect(imageCount(appended)).toBe(32);
+    expect(appended.subarray(0, retry.length - 2)).toEqual(retry.subarray(0, -2));
+    expect(await send(1)).toEqual(wire(1));
+    expect(await send(60, 200, 'route-b')).toEqual(wire(60));
+
+    // Route C has no prior rule. Failed retries must not teach anything.
+    reject = { count: 50, failRetry: true };
+    await send(60, 503, 'route-c');
+    expect(await send(60, 200, 'route-c')).toEqual(wire(60));
+    return;
   }
 
-  // A stricter second rejection must replay the original 60 images, not just
-  // the 31 images sent on the preceding attempt: 30 -> 13 gives 24 at the tail.
-  reject = { count: 30 };
-  const tightened = await send(60);
-  expect(imageCount(tightened)).toBe(24);
-  expect(await send(60)).toEqual(tightened);
-  reject = { count: 80 }; // Above the actual 24 images: treat the limit as unknown and tighten again.
-  const tighterAgain = await send(60);
-  expect(imageCount(tighterAgain)).toBe(4); // 24 * 44% -> trigger 10, target 4; replay the original 60.
-  expect(await send(60)).toEqual(tighterAgain);
+  if (scenario === 'unusable advertised limits') {
+    for (const advertised of [100, 60]) {
+      reject = { count: advertised };
+      const recovered = await send(60, 200, `route-limit-${advertised}`);
+      expect(imageCount(recovered)).toBe(12); // Greater than OR equal to actual count is not a usable limit.
+      expect(await send(60, 200, `route-limit-${advertised}`)).toEqual(recovered);
+    }
+    return;
+  }
 
-  // Route C has no prior rule. Failed retries must not teach anything.
-  reject = { count: 50, failRetry: true };
-  await send(60, 503, 'route-c');
-  expect(await send(60, 200, 'route-c')).toEqual(wire(60));
+  if (scenario === 'progressive tightening') {
+    reject = { count: 50 };
+    expect(imageCount(await send(60))).toBe(31);
+    // A stricter second rejection must replay the original 60 images, not just
+    // the 31 images sent on the preceding attempt: 30 -> 13 gives 24 at the tail.
+    reject = { count: 30 };
+    const tightened = await send(60);
+    expect(imageCount(tightened)).toBe(24);
+    expect(await send(60)).toEqual(tightened);
+    reject = { count: 80 }; // Above the actual 24 images: treat the limit as unknown and tighten again.
+    const tighterAgain = await send(60);
+    expect(imageCount(tighterAgain)).toBe(4); // 24 * 44% -> trigger 10, target 4; replay the original 60.
+    expect(await send(60)).toEqual(tighterAgain);
+    return;
+  }
 
-  reject = { count: 50, maxBytes: 32000 };
-  const both = await send(60, 200, 'route-d');
-  expect(both.length).toBeLessThanOrEqual(32000);
-  expect(imageCount(both)).toBeLessThanOrEqual(50);
-  expect(await send(60, 200, 'route-d')).toEqual(both);
-  expect(imageCount(await send(60, 200, 'route-d', 3))).toBe(31); // Below the byte cap, count still applies.
-  expect((await send(6, 200, 'route-d', 5000)).length).toBeLessThanOrEqual(32000); // Below count cap, bytes still apply.
-  reject = { count: 50 };
-  const tinyRetry = await send(60, 200, 'route-e', 3);
-  expect(imageCount(tinyRetry)).toBe(31); // Placeholders can make this retry larger in bytes.
-  expect(tinyRetry.length).toBeGreaterThan(wire(60, 3).length);
-  expect(await send(60, 200, 'route-e', 3)).toEqual(tinyRetry);
+  if (scenario === 'independent byte and count limits') {
+    reject = { count: 50, maxBytes: 32000 };
+    const both = await send(60, 200, 'route-d');
+    expect(both.length).toBeLessThanOrEqual(32000);
+    expect(imageCount(both)).toBeLessThanOrEqual(50);
+    expect(await send(60, 200, 'route-d')).toEqual(both);
+    expect(imageCount(await send(60, 200, 'route-d', 3))).toBe(31); // Below the byte cap, count still applies.
+    expect((await send(6, 200, 'route-d', 5000)).length).toBeLessThanOrEqual(32000); // Below count cap, bytes still apply.
+    return;
+  }
+
+  if (scenario === 'tiny count-only retries') {
+    reject = { count: 50 };
+    const tinyRetry = await send(60, 200, 'route-e', 3);
+    expect(imageCount(tinyRetry)).toBe(31); // Placeholders can make this retry larger in bytes.
+    expect(tinyRetry.length).toBeGreaterThan(wire(60, 3).length);
+    expect(await send(60, 200, 'route-e', 3)).toEqual(tinyRetry);
+    return;
+  }
+
+  expect(scenario).toBe('unknown count limits');
   reject = {};
   const unknownCount = await send(60, 200, 'route-f');
   expect(imageCount(unknownCount)).toBe(12); // No L: 60 * 44% -> trigger 26, target 11.
   expect(await send(60, 200, 'route-f')).toEqual(unknownCount);
-
 });
 
 it.each([400, 413])('does not learn a rule when the %i recovery retry fails', async status => {

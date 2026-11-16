@@ -1,3 +1,4 @@
+import { APP_ICONS, isAppIcon, type AppIcon } from '@cindy/maker-shared/app-icons';
 import { DEFAULT_FONT_SIZES } from './generated/appearance-tokens';
 import { normalizePluginAppearanceSettings, type PluginAppearanceSettingsFields } from './pluginAppearance';
 import type { AppearanceFontResource } from './pluginAppearance';
@@ -32,13 +33,8 @@ export interface AppearanceOverrides extends PluginAppearanceSettingsFields {
   appIcon?: AppIcon;
 }
 
-/** macOS Dock icon choices; mark and wordmark also have light and dark artwork. */
-export const APP_ICONS = ['default', 'cat', 'wordmark', 'mark'] as const;
-export type AppIcon = (typeof APP_ICONS)[number];
-
-export function isAppIcon(value: unknown): value is AppIcon {
-  return APP_ICONS.includes(value as AppIcon);
-}
+/** macOS Dock icon choices; the list and artwork are shared with Mobile. */
+export { APP_ICONS, isAppIcon, type AppIcon };
 
 export type WallpaperMotion = 'static' | 'dynamic';
 

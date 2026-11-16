@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · 替 {{person}}"
+  },
   "progress": {
     "stop": "停止",
     "stopMine": "停止我發起的",

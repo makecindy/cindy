@@ -1178,6 +1178,7 @@ function devEnvEntries(env) {
     ['XDT_MODELS_URL', env.XDT_MODELS_URL],
     ['XDT_MODELS_PATH', env.XDT_MODELS_PATH],
     ['XDT_DISABLE_MODELS_FETCH', env.XDT_DISABLE_MODELS_FETCH],
+    ['XDT_DISABLE_GLOBAL_SHORTCUTS', env.XDT_DISABLE_GLOBAL_SHORTCUTS],
     // 启动即自动打开 DevTools(main 的 ready-to-show 里消费;见 bootstrap-electron)。
     // 给"快捷键/菜单打不开 DevTools"的环境兜底,QA 控制台验证依赖它。
     ['OPEN_DEVTOOLS', env.OPEN_DEVTOOLS],

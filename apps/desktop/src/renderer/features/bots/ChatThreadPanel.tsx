@@ -679,7 +679,11 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
     if (!wasFollowing && stickToBottomRef.current) refreshRef.current();
   };
 
-  const stopSpeaker = interleaveBotGroupWork([], speakers).at(-1)?.value;
+  const liveEntries = interleaveBotGroupWork(replyRows, sharing ? [] : speakers);
+  const executionSpeakers = liveEntries.flatMap(entry => entry.kind === 'work' && entry.value.activity !== 'planning' ? [entry.value] : []);
+  const canStopMine = executionSpeakers.some(speaker => speaker.isSelfRequested) && group.round.canStop !== false;
+  const stopSpeaker = [...executionSpeakers].reverse().find(speaker => speaker.isSelfRequested)
+    ?? (canStopAll ? executionSpeakers.at(-1) : undefined);
   return <ThreadPanel panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
             {following !== undefined ? (
               <Tip text={t(key(following ? 'thread.unfollowTip' : 'thread.followTip'))}>
@@ -707,13 +711,13 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
               {rootRows.map(message => <Fragment key={message.id}>{renderRow(message, false)}</Fragment>)}
             </ThreadPanelRoot>
             {hasMore && <div className="mt-2"><Button variant="secondary" size="sm" onClick={() => void read(replies[0]?.sequence)}>{t('bots.groupChat.timeline.loadEarlier')}</Button></div>}
-            {interleaveBotGroupWork(replyRows, sharing ? [] : speakers).map((entry, index, timeline) => {
+            {liveEntries.map((entry, index, timeline) => {
               if (entry.kind === 'work') {
                 const speaker = entry.value;
                 return <Fragment key={`work:${speaker.executionId ?? speaker.member.botId}`}>
                   <BotGroupProgressStrip step={null} speakers={[speaker]} onStop={onStop} stopping={stopping}
-                    canStop={group.round.canStop} canStopAll={canStopAll} showStop={speaker === stopSpeaker}
-                    stopPending={stopping || speakers.every(item => item.stopping || item.executionStatus === 'stopping')} />
+                    canStop={canStopMine} canStopAll={canStopAll} showStop={speaker === stopSpeaker}
+                    stopPending={stopping || executionSpeakers.filter(item => item.isSelfRequested || canStopAll).every(item => item.stopping || item.executionStatus === 'stopping')} />
                   <BotGroupSpeakerInteraction speaker={speaker} />
                 </Fragment>;
               }

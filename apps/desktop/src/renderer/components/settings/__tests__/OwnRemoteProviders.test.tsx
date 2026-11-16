@@ -347,7 +347,7 @@ describe('OwnRemoteProviderRows / OwnRemoteProviderDetail', () => {
   it('shows the models that computer leaves visible, read-only', () => {
     render(<OwnRemoteProviderDetail entry={entry} />);
     const list = screen.getByTestId('own-remote-provider-models');
-    expect(Array.from(list.querySelectorAll('li')).map((item) => item.textContent)).toEqual(['Opus 5.5']);
+    expect(Array.from(list.querySelectorAll('li')).map((item) => item.textContent)).toEqual(['Opus 5.5opus']);
     expect(within(list).queryByRole('switch')).toBeNull();
     expect(screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' })).toBeTruthy();
   });

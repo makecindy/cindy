@@ -40,7 +40,15 @@ const source = ts.createSourceFile('NewMakerDraftRoute.tsx', readFileSync(
   resolve(__dirname, '../NewMakerDraftRoute.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const callbacks: Record<string, ts.Expression> = {};
 const routeDeclarations: string[] = [];
+const worktreeDeclarations: string[] = [];
 function visit(node: ts.Node) {
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
+    && ['wtEffectiveSourceBranch', 'wtSourceReady'].includes(node.name.text)) {
+    worktreeDeclarations.push(`const ${node.getText(source)};`);
+  }
+  if (ts.isBinaryExpression(node) && node.left.getText(source) === 'wtRef.current') {
+    worktreeDeclarations.push(`${node.getText(source)};`);
+  }
   if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
     && ['controlledModelRoute', 'deviceLinkRemoteAgentSupported', 'effectiveAgentDeviceId', 'remoteAgentDevices', 'catalogDeviceId'].includes(node.name.text)) {
     routeDeclarations.push(`const ${node.getText(source)};`);
@@ -54,6 +62,10 @@ function visit(node: ts.Node) {
   ts.forEachChild(node, visit);
 }
 visit(source);
+const worktreeSnapshotCode = ts.transpileModule(worktreeDeclarations.join('\n') + '\nwtRef.current;', {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText;
+
 const collabBuilder = source.statements.find((node): node is ts.FunctionDeclaration =>
   ts.isFunctionDeclaration(node) && node.name?.text === 'draftEnableOrcaOptions');
 if (!collabBuilder) throw new Error('Draft collaboration builder missing');
@@ -111,6 +123,10 @@ function provider(id = providerId, efforts: PiReasoningEffort[] = []): ProviderV
 async function submit(options: {
   entry?: 'send' | 'goal';
   createFailure?: boolean;
+  sourceBranch?: string;
+  defaultSourceBranch?: string;
+  checkoutBusy?: boolean;
+  worktreeEnabled?: boolean;
   pluginRoute?: () => Promise<GhostStartTaskRouteResult>;
   /** 选了模型组：发送时解析出的结果。 */
   modelGroupRoute?: ModelGroupResolveResult;
@@ -143,6 +159,7 @@ async function submit(options: {
   };
   branchSaving?: boolean;
   currentBranch?: string | null;
+  displayedBranch?: string;
   detectFailure?: boolean;
 } = {}) {
   const providers = options.providers ?? [provider()];
@@ -186,7 +203,7 @@ async function submit(options: {
   const detectCwd = vi.fn(async () => {
     if (options.detectFailure) throw new Error('fixture probe failed');
     return { gitInstalled: true, isGitRepo: true, isInsideWorktree: false,
-      repoRoot: baseRepo, currentBranch: options.currentBranch === undefined ? 'main' : options.currentBranch };
+      repoRoot: baseRepo, currentBranch: options.currentBranch === null ? undefined : options.currentBranch ?? 'main' };
   });
   let worktreeSkills = options.worktreeSkills;
   const listAgentSkills = vi.fn(async (_agent, params) => ({ success: true,
@@ -236,6 +253,7 @@ async function submit(options: {
   const toastError = vi.fn();
   const toastWarning = vi.fn();
   const clearDraft = vi.fn();
+  const refreshDisplayedBranch = vi.fn();
   let started = false;
   const checkAndConfirm = vi.fn(async (_vendor, params) => ({
     proceed: options.authCatalogKey === undefined || params.deviceId === options.authCatalogKey,
@@ -278,8 +296,11 @@ async function submit(options: {
     wtRef: { current: options.worktree
       ? { confirmedIneligible: false, baseRepo, name: 'creator', branchPreferenceReady: true, supportsRecoveryKeyDiscard: true, ...options.worktree }
       : hasWorktree
-      ? { enabled: true, confirmedIneligible: false, baseRepo, name: 'creator', sourceBranch: 'other-branch', branchPreferenceReady: true, supportsRecoveryKeyDiscard: true }
+      ? { enabled: options.worktreeEnabled ?? true, confirmedIneligible: false, baseRepo, name: 'creator', sourceBranch: 'other-branch', branchPreferenceReady: true, supportsRecoveryKeyDiscard: true }
       : { enabled: false, confirmedIneligible: true } },
+    wtCheckoutBranchViewRef: { current: { cwd: baseRepo, deviceId: options.deviceId ?? null,
+      displayedBranch: options.displayedBranch ?? 'main', refresh: refreshDisplayedBranch } },
+    wtCheckoutBusyRef: { current: options.checkoutBusy ?? false },
     wtPreferenceSavingRef: { current: false }, wtPreferenceAuthorityUnknownRef: { current: false },
     wtBranchPreferenceSavingRef: { current: options.branchSaving ?? false },
     wtBranchPreferenceErrorRef: { current: false },
@@ -288,7 +309,8 @@ async function submit(options: {
     markSendInFlight: (value: boolean) => { if (value) started = true; else done(); },
     t: (key: string) => key, authVendor: agentKind,
     vendorAuthGate: { checkAndConfirm },
-    localDraftSessionIdRef: { current: 'draft-id' }, optimisticFirstMessageTitle: () => null,
+    localDraftSessionIdRef: { current: 'draft-id' }, optimisticFirstMessageTitle: () => null, autoTitleLabels: {},
+    remoteProjectsStore: { setPendingTitlePreview: noop, clearPendingTitlePreview: noop, clearPendingFirstSend: noop },
     createSession, toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
     makerChatStore: { setSessionRuntime: noop, sendMessage, autoNameSession: noop }, sessionsStore: { patchLocal: noop },
     markSessionStarting: noop, clearSessionStarting: noop,
@@ -307,7 +329,6 @@ async function submit(options: {
     }) => (await invoke('maker:create-session', [createArgs])).sessionId,
     commitRemoteSessionHandoff: () => {}, rememberRecoverableHandoff: () => {},
     deliverRecoverableHandoff: (_id: string, deliver: () => Promise<boolean>) => deliver(),
-    remoteProjectsStore: { setPendingTitlePreview: noop, clearPendingTitlePreview: noop, clearPendingFirstSend: noop },
     getBranchName: (name: string) => `cindy/${name}`,
     sessionService: { touchUserSend: async () => {}, get: async () => ({ status: 'active' }), update: async () => {} },
     crossAgentConvertService: { detect: async () => ({ items: [] }) },
@@ -329,6 +350,16 @@ async function submit(options: {
     log: { warn: (...args: unknown[]) => errors.push(args), error: (...args: unknown[]) => errors.push(args) },
     toast: { error: toastError, warning: toastWarning },
   };
+  if (options.defaultSourceBranch) {
+    environment.wtRef.current = runInNewContext(worktreeSnapshotCode, {
+      wtRef: {}, wtEnabled: true, wtName: 'creator', wtBaseRepo: baseRepo,
+      wtSourceBranch: options.sourceBranch ?? '', wtBranchPreferenceReady: true,
+      wtBranchPreferenceSaving: false, wtPreferenceSaving: false,
+      wtSupportsRecoveryKeyDiscard: true, wtConfirmedIneligible: false,
+      effectiveDeviceLinkDeviceId: options.deviceId,
+      wtDefaultSource: { baseRepo, deviceId: options.deviceId ?? null, sourceBranch: options.defaultSourceBranch },
+    });
+  }
   if (options.collab) {
     environment.draftEnableOrcaOptions = runInNewContext(collabBuilderCode, {
       ...environment, connectedProvidersForAgent, isModelSelectableForNewRoute, createWorkerLabel,
@@ -365,20 +396,33 @@ async function submit(options: {
     }
     if (started) await finished;
     if (hasWorktree && createSession.mock.calls.length) await worktreeFinished;
-    return { createSession, ipcCreate, sendMessage, setGoal, errors, environment, setPending, setPendingGoal, toastError, toastWarning, clearDraft, detectCwd, listAgentSkills, invokeRemote, enableOrca, createNote, checkAndConfirm };
+    return { createSession, ipcCreate, sendMessage, setGoal, errors, environment, setPending, setPendingGoal, toastError, toastWarning, clearDraft, refreshDisplayedBranch, detectCwd, listAgentSkills, invokeRemote, enableOrca, createNote, checkAndConfirm };
   } finally { vi.unstubAllGlobals(); }
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
-  // #10518 / unit: run the complete Send/Goal callbacks. branchPick only proves
-  // selecting does not checkout; it cannot prove creation and draft handoff stop.
-  // Minimal failure: worktree OFF, source cindy/other, repo HEAD main.
+  // PR #10696 / unit: real detached and unborn probes both omit currentBranch.
+  // They share this transport shape; exercise Send/Goal on local and linked devices.
+  it.each(['send', 'goal'] as const)('allows unnamed branches for %s locally and remotely', async entry => {
+    for (const deviceId of [undefined, 'task-computer']) {
+      const result = await submit({ entry, deviceId, currentBranch: null, displayedBranch: 'HEAD',
+        providers: [provider(providerId, ['medium'])], worktree: { enabled: false, sourceBranch: '' } });
+      expect(result.errors).toEqual([]);
+      expect(result.toastError).not.toHaveBeenCalled();
+      expect(result.detectCwd).toHaveBeenCalledOnce();
+      if (!deviceId) expect(result.createSession).toHaveBeenCalledOnce();
+      else expect(result.invokeRemote.mock.calls.some(([, channel]) => channel === 'maker:create-session')).toBe(true);
+    }
+  });
+
+  // #10518 / unit: execute Send/Goal end to end. An external checkout can stale
+  // the OFF label; stop handoff and refresh it, independently of source memory.
   it.each([
     ['send', undefined, 'feature/other'], ['send', 'task-computer', 'cindy/other'],
     ['goal', undefined, 'cindy/other'], ['goal', 'task-computer', 'feature/other'],
-  ] as const)('retains the draft for %s on %s when branch %s would be ignored', async (entry, deviceId, sourceBranch) => {
+  ] as const)('retains the draft for %s on %s when the displayed branch changed to %s', async (entry, deviceId, currentBranch) => {
     const result = await submit({ entry, deviceId, providers: [provider(providerId, ['medium'])],
-      worktree: { enabled: false, sourceBranch } });
+      currentBranch, displayedBranch: 'main', worktree: { enabled: false, sourceBranch: 'main' } });
     expect(result.createSession).not.toHaveBeenCalled();
     expect(result.invokeRemote.mock.calls.some(([, channel]) => channel === 'maker:create-session')).toBe(false);
     expect(result.sendMessage).not.toHaveBeenCalled();
@@ -391,8 +435,9 @@ describe('homepage submission to Main admission and first-message handoff', () =
     } else {
       expect(result.detectCwd).toHaveBeenCalledWith({ cwd: '/fixture/repo' });
     }
-    if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('ccAgent.draft.branchRequiresWorktree');
-    else expect(String(result.errors[0])).toContain('ccAgent.draft.branchRequiresWorktree');
+    expect(result.refreshDisplayedBranch).toHaveBeenCalledOnce();
+    if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('ccAgent.draft.branchChanged');
+    else expect(String(result.errors[0])).toContain('ccAgent.draft.branchChanged');
   });
   it.each(['send', 'goal'] as const)('does not start %s while an OFF branch choice is still saving', async entry => {
     const result = await submit({ entry, branchSaving: true,
@@ -409,7 +454,10 @@ describe('homepage submission to Main admission and first-message handoff', () =
     const result = await submit({ entry, ...probe, worktree: { enabled: false, sourceBranch: 'main' } });
     expect(result.createSession).not.toHaveBeenCalled();
     expect(result.clearDraft).not.toHaveBeenCalled();
-    if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('ccAgent.draft.branchCheckFailed');
+    if (entry === 'send') {
+      expect(result.toastError).toHaveBeenCalledWith('ccAgent.draft.branchChanged');
+      expect(result.refreshDisplayedBranch).toHaveBeenCalledOnce();
+    }
     else expect(String(result.errors[0])).toContain('ccAgent.draft.branchCheckFailed');
   });
   it.each(['send', 'goal'] as const)('waits for the new project branch preference before %s', async entry => {
@@ -423,9 +471,9 @@ describe('homepage submission to Main admission and first-message handoff', () =
   });
   it.each([
     ['send', undefined], ['goal', undefined], ['send', 'task-computer'], ['goal', 'task-computer'],
-  ] as const)('allows %s on %s on the current branch with worktree OFF', async (entry, deviceId) => {
+  ] as const)('allows %s on %s on the displayed branch with different remembered source and worktree OFF', async (entry, deviceId) => {
     const result = await submit({ entry, deviceId, providers: [provider(providerId, ['medium'])],
-      worktree: { enabled: false, sourceBranch: 'main' } });
+      worktree: { enabled: false, sourceBranch: 'remembered-feature' } });
     expect(result.errors).toEqual([]);
     if (deviceId) {
       expect(result.invokeRemote).toHaveBeenCalledWith(deviceId, 'maker:create-session', [expect.objectContaining({ workingDir: '/fixture/repo' })]);
@@ -444,6 +492,27 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.createSession).toHaveBeenCalledOnce();
     expect(result.detectCwd).not.toHaveBeenCalled();
   });
+  // Rule C: execute the real default-to-snapshot derivation and submission, not
+  // just the chip. Earlier fixtures supplied only an explicit source. Tier: unit.
+  it.each([undefined, 'task-computer'])('creates on %s using the derived default unless a source was remembered', async deviceId => {
+    for (const sourceBranch of ['', 'remembered-feature']) {
+      const result = await submit({ deviceId, message: '/help', worktreeSkills: [], sourceBranch, defaultSourceBranch: 'refs/remotes/origin/main' });
+      const request = deviceId
+        ? result.invokeRemote.mock.calls.find(([, channel]) => channel === 'worktree:create')?.[2]?.[0]
+        : vi.mocked(result.environment.window.electronAPI.worktreeCreate).mock.calls[0]?.[0];
+      expect(request?.sourceBranch).toBe(sourceBranch || 'refs/remotes/origin/main');
+      expect(result.errors).toEqual([]);
+    }
+  });
+
+  // Checkout is asynchronous even when worktree is off. The actual send/goal
+  // callbacks must retain the draft rather than start a task on the old branch.
+  it.each(['send', 'goal'] as const)('does not create a task while checkout is running (%s)', async entry => {
+    const result = await submit({ entry, checkoutBusy: true, worktreeEnabled: false, worktreeSkills: [] });
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.sendMessage).not.toHaveBeenCalled();
+  });
+
   // #8010 review / unit: execute the route's actual declarations then its submit
   // callback. Earlier fixtures always gave B a local provider/capability marker.
   it('offers and submits a routed source when the task host has no local providers', async () => {

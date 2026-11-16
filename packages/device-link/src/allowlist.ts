@@ -763,6 +763,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'worktree:list-branches',
   // Sync status is local-only; sync mutates only by explicit fetch + fast-forward.
   // sync-branch baseRepo also passes dispatch PATH_GUARDED_CHANNELS.
+  'worktree:checkout',
   'worktree:branch-sync-status',
   'worktree:sync-branch',
   'worktree:suggest-name',

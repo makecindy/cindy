@@ -1,3 +1,4 @@
+import { createInlineImagePreprocessor } from './inlineImagePreprocessor.js';
 
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import { rewriteFastModel } from './model-fast-mode.js';
@@ -255,6 +256,7 @@ export function shouldCompactCodexWebSocketFrame(message: Buffer, limitBytes = C
 }
 
 export function createCodexProxyHost(ports: CodexProxyHostPorts) {
+const imagePreprocessor = createInlineImagePreprocessor();
 const { bearerKeyFromHeaders, reportCindyGatewayKeyRejected, createAttachmentRecovery, createRequestSizeController, restrictSubscriptionRequest, withSubscriptionFastRequestPolicy, peekGrokAccessToken, isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId, buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM, claudeUpstreamEndpoint, isOpenAiSubscriptionProviderId, createXaiProxyAuthInvalidationObserver, resolveDesktopOutboundProxy, outboundFetch, readSilentEncryptedRetrySettings, recordXaiRateLimitSnapshot, CODEX_IMAGE_GENERATION_ACTOR_HEADER, codexCustomProviderRoutesSignature, findCodexAppliedCustomProviderRoute, isCodexCustomProviderNamespacePath, parseCodexCustomProviderPath, relativeProviderRequestPath, setAppliedCustomProviderRoutes } = ports;
 
 
@@ -509,9 +511,26 @@ function headerValue(headers: Readonly<Record<string, string>>, name: string): s
 }
 
 function selectedThreadIdFromHeaders(headers: Readonly<Record<string, string>>): string {
-  return headerValue(headers, 'thread-id') ||
-    headerValue(headers, 'x-client-request-id') ||
-    'unknown';
+  const threadId = headerValue(headers, 'thread-id');
+  if (threadId) return threadId;
+  const requestId = headerValue(headers, 'x-client-request-id');
+  if (requestId && threadToSession.has(requestId)) return requestId;
+
+  // Standalone web search carries its thread in turn metadata, not thread-id.
+  // Only registered threads may select a session's Provider route.
+  const turnMetadata = headerValue(headers, 'x-codex-turn-metadata');
+  if (turnMetadata) {
+    try {
+      const metadata: unknown = JSON.parse(turnMetadata);
+      if (isPlainObject(metadata) && typeof metadata.thread_id === 'string'
+        && threadToSession.has(metadata.thread_id)) {
+        return metadata.thread_id;
+      }
+    } catch {
+      // Malformed optional metadata retains the legacy request-id fallback.
+    }
+  }
+  return requestId || 'unknown';
 }
 
 function guardianParentThreadIdFromHeaders(
@@ -3576,7 +3595,7 @@ async function createCodexProxyHandle(
     return decision instanceof Promise ? decision.then(uncompressed) : uncompressed(decision);
   };
   const attachmentRecovery = createAttachmentRecovery(sessionIdFromHeaders);
-  const requestSizeController = createRequestSizeController(sessionIdFromHeaders, undefined, (headers, model) =>
+  const requestSizeController = createRequestSizeController(sessionIdFromHeaders, imagePreprocessor, (headers, model) =>
       providerContextForRequest(headers, model).providerId ?? guestProviderId
         ?? gatewayProviderIdForRewrittenModel(model)
         ?? ((frozenAuthInjection ?? getCodexProxyAuthInjection()) === 'oauth-bearer' ? 'openai' : 'xd'));

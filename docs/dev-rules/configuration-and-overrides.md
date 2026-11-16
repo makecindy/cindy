@@ -187,6 +187,37 @@ Codex 的回退上限为 **42 MiB**，不会恢复到原来的 128 MiB，Claude 
 [模型请求超限时的附件恢复](media-storage-and-protocols.md#模型请求超限时的附件恢复)为正本；
 实现入口为 `oversizedAttachmentRecoveryCore.ts` 的 `createRequestSizeController`。
 
+### 代理图片压缩
+
+`XDT_IMAGE_COMPRESSION_DISABLE` 是 Desktop 与 Node Host 的隐藏进程环境开关，不进入设置页或
+持久化配置。未设置时默认开启；仅字符串 `1` 关闭，其他值不关闭。移除该环境变量恢复默认。
+
+开关只控制本地代理的图片预处理（`prepare`）及单张图片超限后的进一步压缩（`tighten`）；
+关闭时保留输入图片，不调用编码器，也不复用已缓存的压缩结果。它不控制附件的
+`image-resizer` 缩图，与 `XDT_REQUEST_SIZE_CONTROL_DISABLE` 控制的请求体积恢复互不替代。
+每次调用都读取宿主进程当前的环境值；从外部修改启动环境后，需要重新启动宿主才能带入新值。
+
+实现与回归见 `apps/desktop/src/main/maker-host/inlineImagePreprocessor.ts` 及
+`__tests__/inlineImagePreprocessor.test.ts`。
+
+### 全局快捷键
+
+`XDT_DISABLE_GLOBAL_SHORTCUTS` 是 Desktop 的隐藏进程环境开关，适用于开发版（含
+`--isolated` 沙箱）与打包版，不进入设置页或持久化配置。只有值为字符串 `1` 时才跳过
+语音输入与区域截图的全局快捷键注册，未设置或其他值均保持原有行为。修改启动环境后
+需重启进程；移除开关后重启即恢复用户已保存的快捷键，不清空或写回设置。
+经 `restart:desktop:remote` 新开 Terminal 启动时，启动器会将此变量转发给开发进程。
+
+语音输入的 Electron 全局注册、macOS 修饰键／功能键原生监听、Windows 原生监听及其
+功能键保留注册均会跳过；区域截图同样跳过全局注册。主动跳过视为成功，不报快捷键占用、
+不重试恢复或提示重启。每个进程仅记录一行 info 日志，由语音输入初始化入口统一记录。
+输入框麦克风按钮、长按输入框、renderer 内的按键处理与浮层 Escape 等临时快捷键不受影响。
+
+实现入口：`apps/desktop/src/main/voice-input/global.ts` 的 `setVoiceInputGlobalShortcut`、
+`recoverPendingNativeShortcutRegistration` 与 `registerGlobalVoiceInputIpc`，以及
+`apps/desktop/src/main/region-screenshot/index.ts` 的 `syncShortcut`。
+启动环境转发见 `scripts/restart-desktop-remote.mjs` 的 `devEnvEntries`。
+
 ## 6. 设置搜索与页面定义
 
 设置页新增、改写设置控件时，使用 `defineSettings` 声明稳定 ID、分类、定位锚点、

@@ -212,18 +212,20 @@ function assertOwner(owner: string): void {
 /** Record which provider an account belongs to (the default account always stays built-in). */
 export async function placeSubscriptionAccount(
   kind: SubscriptionProvider,
-  accountId: string,
+  accountId: string | readonly string[],
   providerId: string,
 ): Promise<void> {
-  if (accountId === 'default' || !accountIdValid(accountId) || !PROVIDER_ID.test(providerId))
+  const ids = typeof accountId === 'string' ? [accountId] : accountId;
+  if (ids.some(id => id === 'default' || !accountIdValid(id)) || !PROVIDER_ID.test(providerId))
     throw new Error('Account cannot be moved');
+  if (ids.length === 0) return;
   const owner = activeOwnerScopeKey();
   await file.updateAtomic(({ value }) => {
     assertOwner(owner);
     const accounts = { ...value.accounts };
     // The built-in provider is the default; storing it explicitly records the user's choice so a
     // later load never mistakes this account for one the upgrade merged.
-    accounts[keyOf(kind, accountId)] = providerId;
+    for (const id of ids) accounts[keyOf(kind, id)] = providerId;
     return { accounts };
   });
 }
@@ -235,8 +237,10 @@ export async function createSubscriptionProvider(
   name: string,
   createId: () => string,
   prepare?: (providerId: string) => void,
+  additionalAccountIds: readonly string[] = [],
 ): Promise<string> {
-  if (accountId === 'default' || !accountIdValid(accountId)) throw new Error('Account cannot be moved');
+  const ids = [accountId, ...additionalAccountIds];
+  if (ids.some(id => id === 'default' || !accountIdValid(id))) throw new Error('Account cannot be moved');
   const owner = activeOwnerScopeKey();
   let providerId = '';
   await file.updateAtomic(({ value }) => {
@@ -246,7 +250,9 @@ export async function createSubscriptionProvider(
     if (!CREATED_PROVIDER_ID.test(providerId)) throw new Error('Invalid subscription provider id');
     prepare?.(providerId);
     providers[providerId] = { kind, name: name.trim().slice(0, MAX_PROVIDER_NAME) || kind, account: accountId };
-    return { providers, accounts: { ...value.accounts, [keyOf(kind, accountId)]: providerId } };
+    return { providers, accounts: { ...value.accounts,
+      ...Object.fromEntries(ids.map(id => [keyOf(kind, id), providerId])),
+    } };
   });
   return providerId;
 }

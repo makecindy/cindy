@@ -90,6 +90,16 @@ void mountPage({
         ],
       }),
     },
+    deviceLink: {
+      onRemotePush: subscription('remotePush'),
+      invoke: async (_deviceId: string, channel: string) => {
+        if (channel === 'maker:subscription-accounts')
+          return { providerId: 'anthropic', configured: false, accounts: [] };
+        if (channel === 'maker:usage:claude-subscription')
+          return { sevenDay: { utilization: 40, resetsAt: Date.now() / 1000 + 3600 } };
+        throw new Error(`Unexpected remote channel: ${channel}`);
+      },
+    },
   }),
   render: (ctx) => {
     if (ctx.case.startsWith('full-panel')) return (
@@ -102,7 +112,8 @@ void mountPage({
         </div>
       </main>
     );
-    const scope = { deviceId: null, ...(['bound', 'session-bound'].includes(ctx.case) ? { taskId: 'existing-task' } : {}) };
+    const scope = { deviceId: ctx.case === 'legacy-remote' ? 'other-device' : null,
+      ...(['bound', 'session-bound'].includes(ctx.case) ? { taskId: 'existing-task' } : {}) };
     return (
       <div className="p-4">
         <SessionSubscriptionAccountProvider

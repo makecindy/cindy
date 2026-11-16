@@ -1,3 +1,4 @@
+import { createInlineImagePreprocessor } from './inlineImagePreprocessor.js';
 /**
  * The Claude and Pi loopback compatibility proxy, shared by Desktop and the Node Host.
  * Moved verbatim from anthropic-compat-proxy-host.ts, which now builds the Desktop
@@ -148,6 +149,7 @@ export interface AnthropicCompatProxyHostPorts {
 
 /** One loopback proxy with its routing, transforms, recovery rules and observers. */
 export function createAnthropicCompatProxyHost(ports: AnthropicCompatProxyHostPorts) {
+const imagePreprocessor = createInlineImagePreprocessor();
 const { createAttachmentRecovery, createRequestSizeController, outboundFetch, isOpenAiSubscriptionProviderId, createPiWebSocketRequestPreparer, resolvePiWebSocketUpstream, piWebSocketTransforms, isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId, getPiNativeSubscriptionHandler, getResponsesBridgeHandler, subscriptionRequestAllowsFast, withSubscriptionFastRequestPolicy, resolveDesktopOutboundProxy, claudeUpstreamEndpoint, readSilentEncryptedRetrySettings } = ports;
 
 // scope = 'cc-proxy' → logger.ts 的 emit() 路由把这条流量并入统一 agent 流
@@ -1220,7 +1222,7 @@ async function ensureAnthropicCompatProxyReady(): Promise<void> {
         if (piSessionId) return authenticatePiProxySession(piSessionId, headerValue(headers, 'x-cindy-pi-session-token')) ? piSessionId : null;
         const sdkSessionId = headerValue(headers, 'x-claude-code-session-id');
         return sdkSessionId ? _resolveCcSessionId?.(sdkSessionId) : null;
-      }, undefined, (headers) => {
+      }, imagePreprocessor, (headers) => {
         const resolved = requestSizeProviders.get(headers);
         if (resolved) return resolved;
         const pi = headerValue(headers, 'x-cindy-pi-session-id');

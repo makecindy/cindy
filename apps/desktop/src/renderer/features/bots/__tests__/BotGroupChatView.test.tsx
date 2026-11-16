@@ -41,7 +41,8 @@ vi.mock('@/components/chat/FileLightbox', () => ({
 const mocks = vi.hoisted(() => ({
   // Keep translation identity stable so attachment effects do not reload on every render.
   t: (key: string, options?: Record<string, unknown>) =>
-    options && 'name' in options ? `${key}:${String(options.name)}`
+    key === 'bots.groupChat.assistant.actingFor' ? `${options?.name} · for ${options?.person}`
+      : options && 'name' in options ? `${key}:${String(options.name)}`
       : key === 'bots.groupChat.memberCount' ? `${key}:${String(options?.count)}` : key,
   groupId: 'g1',
   locationState: null as { createdGroupInvite?: string | null } | null,
@@ -5237,7 +5238,7 @@ it('keeps only the current public progress note between tool calls', () => {
 it('keeps waiting work inspectable without inventing an elapsed time', async () => {
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi'], round: {
     status: 'running', canContinue: false, speakers: [
-      { botId: 'mimi', activity: 'reply', executionId: 'waiting', sessionId: 'lane-mimi', executionStatus: 'needs_input' },
+      { botId: 'mimi', activity: 'reply', executionId: 'waiting', isSelfRequested: true, sessionId: 'lane-mimi', executionStatus: 'needs_input' },
     ],
   } }) });
   renderView();
@@ -5257,11 +5258,11 @@ it('opens the exact remote execution and leaves other members’ private tasks u
     homeDevice: { deviceId: 'studio', name: 'Studio', online: true, isSelf: false, remoteControlEnabled: true },
   }] });
   mocks.remoteInvoke.mockResolvedValue({ ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'g1' }, blocks: [{ primitive: 'bot-group-chat', data: {
-    id: 'g1', round: { speakers: [{ executionId: 'other-thread', sessionId: 'wrong-lane' }, { executionId: 'this-turn', sessionId: 'correct-lane' }] },
+    id: 'g1', round: { speakers: [{ executionId: 'other-thread', sessionId: 'wrong-lane' }, { executionId: 'this-turn', isSelfRequested: true, sessionId: 'correct-lane' }] },
   } }] });
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi', 'xiaoman'], round: {
     status: 'running', canContinue: false, speakers: [
-      { botId: 'mimi', activity: 'reply', executionId: 'this-turn', sessionId: null, startedAt: Date.now() - 10_000 },
+      { botId: 'mimi', activity: 'reply', executionId: 'this-turn', isSelfRequested: true, sessionId: null, startedAt: Date.now() - 10_000 },
       { botId: 'xiaoman', activity: 'reply', executionId: 'theirs', sessionId: null, startedAt: Date.now() - 10_000 },
     ],
   } }) });
@@ -5280,8 +5281,8 @@ it.each([[false, false], [false, true], [true, false], [true, true]])('keeps the
     canStopAll: admin,
     speakingBotIds: ['mimi', 'xiaoman'],
     round: { status: 'running', canContinue: false, othersActive: admin, speakers: [
-      { botId: 'mimi', activity: 'reply', executionId: 'first-running', sessionId: 'lane-mimi', timelineAt: Date.now() - (newestFirst ? 1000 : 10000), startedAt: Date.now() - 10_000, executionStatus: 'running' },
-      { botId: 'xiaoman', activity: 'reply', executionId: 'last-stopping', sessionId: 'lane-xiaoman', timelineAt: Date.now() - (newestFirst ? 10000 : 1000), startedAt: Date.now() - 10_000, executionStatus: 'stopping', stopping: true },
+      { botId: 'mimi', activity: 'reply', executionId: 'first-running', isSelfRequested: true, sessionId: 'lane-mimi', timelineAt: Date.now() - (newestFirst ? 1000 : 10000), startedAt: Date.now() - 10_000, executionStatus: 'running' },
+      { botId: 'xiaoman', activity: 'reply', executionId: 'last-stopping', isSelfRequested: true, sessionId: 'lane-xiaoman', timelineAt: Date.now() - (newestFirst ? 10000 : 1000), startedAt: Date.now() - 10_000, executionStatus: 'stopping', stopping: true },
     ] },
   }) });
   renderView();
@@ -5308,7 +5309,7 @@ it.each(['reply', 'step'] as const)('shows a queued %s without generation or wor
     ...(activity === 'step' ? withPlan(queuedPlan, []) : {}),
     speakingBotIds: ['mimi'],
     round: { status: 'running', canContinue: false, speakers: [{ botId: 'mimi', activity,
-      executionId: 'queued-execution', executionStatus: 'queued', sessionId: null, startedAt: Date.now() - 120_000 }] },
+      executionId: 'queued-execution', isSelfRequested: true, executionStatus: 'queued', sessionId: null, startedAt: Date.now() - 120_000 }] },
   }) });
   renderView();
   const strip = await screen.findByTestId('bot-group-progress');
@@ -5322,7 +5323,7 @@ it.each(['reply', 'step'] as const)('shows a queued %s without generation or wor
 it('shows newly queued work immediately in the timeline', async () => {
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi'],
     round: { status: 'running', canContinue: false, speakers: [{ botId: 'mimi', activity: 'reply',
-      executionId: 'just-queued', executionStatus: 'queued', sessionId: null, startedAt: Date.now() }] },
+      executionId: 'just-queued', isSelfRequested: true, executionStatus: 'queued', sessionId: null, startedAt: Date.now() }] },
   }) });
   renderView();
   const row = await screen.findByTestId('bot-group-progress');
@@ -5918,6 +5919,82 @@ it('does not reread group history for busy-only online presence', async () => {
   } finally { view.unmount(); vi.useRealTimers(); }
 });
 
+// Multi-member requests retain chronology and controls follow the requester, not bot ownership.
+// Unit regression: a send receipt arrives before its history row; live work must use that row's alias.
+it('anchors live work to a confirmed optimistic request before later messages', async () => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [] }) });
+  let stored: BotGroupOutboxStoredEntry[] = [];
+  window.electronAPI.maker.botGroupOutbox = async () => stored;
+  window.electronAPI.maker.botGroupOutboxCommand = async request => {
+    if (request.action === 'enqueue') stored = [{ ...request.entry, status: 'sent', messageId: 'own-source', entryRevision: 1, queueOrdinal: 1 }];
+    return { ok: true, owner: request.owner, instanceId: 'anchor-test', revision: 1, entries: stored, accepted: true };
+  };
+  renderView();
+  await screen.findByRole('textbox');
+  const input = { groupId: 'g1', clientId: 'own-optimistic', text: 'Own optimistic request', mentions: { all: false, botIds: [] } };
+  await act(async () => enqueueBotGroupSend({ input, signature: botGroupSendSignature(input, ''), draft: input.text,
+    tracked: [], files: [], attachmentScope: botGroupAttachmentScope('g1') }));
+  await waitFor(() => expect(getBotGroupOutbox('g1')[0]?.messageId).toBe('own-source'));
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true,
+    messages: [msg({ id: 'later-source', sequence: 2, createdAt: 30, content: 'Later foreign request', isSelf: false })],
+    round: { status: 'running', canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'other-work', sourceMessageId: 'later-source', threadRootId: null, isSelfRequested: false },
+      { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'own-work', sourceMessageId: 'own-source', threadRootId: null, isSelfRequested: true },
+    ] },
+  }) });
+  await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'round' })));
+  const work = await screen.findAllByTestId('bot-group-work');
+  const later = screen.getByText('Later foreign request');
+  expect(work[0]!.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(work[0]!).getByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeTruthy();
+  expect(within(work[1]!).queryByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeNull();
+});
+
+// Unit regression: the same Cindy has concurrent requests; each live row must name its requester.
+it('names the requester on each running and queued Cindy execution', async () => {
+  const group = detail({ serverBacked: true, round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'ann-work', requesterName: 'Ann', isSelfRequested: false, executionStatus: 'running' },
+    { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'chris-work', requesterName: 'Chris', isSelfRequested: true, executionStatus: 'queued' },
+  ] } });
+  group.members = group.members.map(member => member.botId === 'mimi' ? { ...member, name: 'Cindy', assistant: true } : member);
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group });
+  renderView();
+  const work = await screen.findAllByTestId('bot-group-work');
+  expect(within(work[0]!).getByText('Cindy · for Ann')).toBeTruthy();
+  expect(within(work[1]!).getByText('Cindy · for Chris')).toBeTruthy();
+});
+
+it('places live work before later messages and leaves another request read-only', async () => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true,
+    messages: [msg({ id: 'request', sequence: 1, createdAt: 10, content: 'First request' }), msg({ id: 'later', sequence: 2, createdAt: 30, content: 'Later message' })],
+    round: { status: 'running', canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: 'mine-lane', activity: 'reply', executionId: 'mine-work', timelineAt: 20, isSelfRequested: true },
+      { botId: 'xiaoman', sessionId: 'other-lane', activity: 'reply', executionId: 'other-work', timelineAt: 40, isSelfRequested: false },
+    ] },
+  }) });
+  renderView();
+  const work = await screen.findAllByTestId('bot-group-work');
+  const later = screen.getByText('Later message');
+  expect(work[0]!.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(later.compareDocumentPosition(work[1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(work[0]!).getByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeTruthy();
+  expect(within(work[1]!).queryByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeNull();
+  expect(within(work[1]!).queryByRole('button', { name: 'bots.groupChat.progress.viewProcess' })).toBeNull();
+});
+
+// Missing requester metadata on older hosts must not inherit aggregate ownership controls.
+it('keeps legacy server work read-only despite aggregate stop permission', async () => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true,
+    round: { status: 'running', canStop: true, canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: null, executionId: 'legacy', activity: 'reply' },
+    ] },
+  }) });
+  renderView();
+  expect(await screen.findByTestId('bot-group-work')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'bots.groupChat.composer.stop' })).toBeNull();
+});
+
 // Unit: an older live execution must not be appended below a later human message.
 it('inserts live work before later messages and keeps its element on an incremental refresh', async () => {
   const startedAt = Date.now() - 20_000;
@@ -5936,4 +6013,44 @@ it('inserts live work before later messages and keeps its element on an incremen
   await screen.findByText('Newest message');
   expect(screen.getByTestId('bot-group-work')).toBe(work);
   expect(work.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+// Topic filtering hides work rows, while the group composer still stops only my requests.
+it.each([true, false])('keeps topic-only stop ownership in the group composer (mine: %s)', async isSelfRequested => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true,
+    round: { status: 'running', canStop: true, canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: null, executionId: 'topic-only', activity: 'reply',
+        sourceMessageId: 'topic-source', threadRootId: 'topic-root', isSelfRequested },
+    ] },
+  }) });
+  renderView();
+  await screen.findByRole('textbox');
+  expect(screen.queryByTestId('bot-group-work')).toBeNull();
+  const stop = screen.queryByRole('button', { name: 'bots.groupChat.composer.stop' });
+  if (isSelfRequested) {
+    expect(stop).not.toBeNull();
+    fireEvent.click(stop!);
+    await waitFor(() => expect(mocks.stopBotGroupRound).toHaveBeenCalled());
+  } else expect(stop).toBeNull();
+});
+
+// Review #4581739975: the topic control must name the same request it can stop.
+it.each([false, undefined])('keeps the topic stop on my execution when the latest request is %s', async isSelfRequested => {
+  const root = msg({ id: 'stop-topic-root', content: 'Topic with concurrent work' });
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [root],
+    round: { status: 'running', canStop: true, canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: null, executionId: 'topic-mine', activity: 'reply', threadRootId: root.id, timelineAt: 10, isSelfRequested: true },
+      { botId: 'xiaoman', sessionId: null, executionId: 'topic-other', activity: 'reply', threadRootId: root.id, timelineAt: 20, isSelfRequested },
+    ] },
+  }) });
+  mocks.thread.mockResolvedValue({ ok: true, root, replies: [], hasMore: false });
+  renderView();
+  fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+  const panel = screen.getByRole('complementary');
+  const rows = await within(panel).findAllByTestId('bot-group-progress');
+  expect(rows).toHaveLength(2);
+  expect(within(rows[0]!).queryByRole('button', { name: 'bots.groupChat.progress.stop' })).not.toBeNull();
+  expect(within(rows[1]!).queryByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeNull();
+  fireEvent.click(within(rows[0]!).getByRole('button', { name: 'bots.groupChat.progress.stop' }));
+  await waitFor(() => expect(mocks.stopBotGroupRound).toHaveBeenCalled());
 });

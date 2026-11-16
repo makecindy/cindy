@@ -1,5 +1,7 @@
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
-import { declaredGhostHostToolGroups, isGhostCindyModelActionsDeclaration, type GhostHostToolGroup } from '@cindy/plugin-protocol';
+import { declaredGhostHostToolGroups, isGhostCindyModelActionsDeclaration } from '@cindy/plugin-protocol';
+import { isValidGhostNetworkHostPattern as isValidPluginNetworkHostPattern, ghostNetworkTargetMatches } from '@cindy/plugin-protocol';
+export { ghostNetworkTargetMatches } from '@cindy/plugin-protocol';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
 import { getPluginHostUi, hostUiApprovalSubjects, HOST_UI_CAPABILITIES, isHostUiPosition, type GhostHostUi } from '@cindy/plugin-protocol';
@@ -17,6 +19,7 @@ import {
   GHOST_LOCALES,
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_OAUTH_SCOPES_MAX,
+  GHOST_TOOLS_MAX,
   isValidCindyVersion,
   selectGhostReadmePath,
   validateGhostReadmeDeclaration,
@@ -219,7 +222,7 @@ export interface GhostCardNeeds {
  *   可重新提交"处理)。
  */
 export interface GhostAgentNeeds {
-  /** Each known group requires its own explicit Host receipt approval. */
+  /** 安装或更新批准后，可调用当前 manifest 声明的 Host 工具组。 */
   hostTools?: string[];
   background?: boolean;
   errand?: boolean;
@@ -382,6 +385,7 @@ export const GHOST_NODE_CHILD_MODE_FLAG = '__cindy-node-child__';
 /** worker → 主机:代启/喂 stdin/收 stdin/杀进程。 */
 export type GhostNodeChildToHostMessage =
   | (GhostPipeHostToolRequest & { reqId: string })
+  | { type: 'network-request'; reqId: string; request: Record<string, unknown> }
   | { type: 'authenticated-fetch'; reqId: string; rpcId: string; authorization: string; request: Record<string, unknown> }
   | { type: 'plugin-authorize'; reqId: string; rpcId: string; request: PluginAuthorizationRequest }
   | { type: 'device-authorize'; reqId: string; rpcId: string; url: string }
@@ -409,6 +413,12 @@ function isChildId(v: unknown): v is string {
 export function parseGhostNodeChildToHostMessage(raw: unknown): GhostNodeChildToHostMessage | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const m = raw as Record<string, unknown>;
+  if (m.type === 'network-request') {
+    if (Object.keys(m).sort().join(',') !== 'reqId,request,type' || !isChildId(m.reqId) ||
+        !m.request || typeof m.request !== 'object' || Array.isArray(m.request)) return null;
+    try { if (JSON.stringify(m.request).length > GHOST_NODE_NETWORK_REQUEST_MAX_CHARS) return null; } catch { return null; }
+    return { type: m.type, reqId: m.reqId, request: m.request as Record<string, unknown> };
+  }
   if (m.type === 'host-tool-request') {
     if (Object.keys(m).sort().join(',') !== 'args,reqId,server,tool,type' || !isChildId(m.reqId) ||
       typeof m.server !== 'string' || typeof m.tool !== 'string' || !m.args || typeof m.args !== 'object' || Array.isArray(m.args)) return null;
@@ -719,7 +729,7 @@ export interface GhostCindyNeeds {
  * activity = 轮次内思考/审批/等待用户输入的开始结束边界(只含 id 元数据);
  * session = 会话创建/归档/切换(切换 = 用户把哪个会话切到台前,2026-07-13 增)。
  * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
- * 两项分别展示权限并记录显式批准；旧元数据主题的批准语义保持。
+ * 两项在安装或更新确认中展示；整体批准后按当前声明订阅，旧元数据主题语义保持。
  */
 export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
@@ -730,7 +740,7 @@ export function declaredGhostTaskEventTopics(manifest: Pick<GhostManifest, 'subs
 }
 export function ghostTaskEventApproved(ghost: InstalledGhost, topic: GhostSubscribeTopic): boolean {
   return !GHOST_TASK_EVENT_TOPICS.includes(topic as GhostTaskEventTopic) ||
-    (ghost.approval?.state === 'approved' && ghost.approvedEventTopics?.includes(topic as GhostTaskEventTopic) === true);
+    (ghost.enabled === true && ghost.approval?.state === 'approved' && ghost.manifest.subscribe?.topics?.includes(topic) === true);
 }
 
 /**
@@ -754,8 +764,8 @@ export type GhostMessageHook = (typeof GHOST_MESSAGE_HOOKS)[number];
  * - 插件只能收紧：`allow` 只表示"不反对"，不能替用户批准本来需要确认的事；
  * - 只问用户在该任务里选定的插件(任务的 preRunPlugin)，不是装了就管所有任务；
  * - 出错(没装/停用/超时/崩溃/熔断)怎么办由用户在任务里设置(onFailure)，插件不能自报；
- * - 只有用户在安装/更新确认里看到过的节点才可被选用(receipt approvedControlPoints)，
- *   防止插件提前写上 Host 还不认识的节点名、Host 升级后静默获得拦截权。
+ * - 旧控制节点沿用 receipt approvedControlPoints；任务运行时五点只依赖整包安装批准，
+ *   并在任务里选择提供者，不额外批准节点。
  * 新增节点 = 在本目录加一项 + 在 Host 对应流程按任务配置调用 screenControlPoint。
  */
 export const GHOST_CONTROL_POINT_FAILURE_ACTIONS = ['allow', 'skip', 'block'] as const;
@@ -863,13 +873,20 @@ export function declaredGhostControlPoints(manifest: Pick<GhostManifest, 'subscr
   return manifest.systemPrompt?.length ? [...points, 'system-prompt'] : points;
 }
 
-/** 某个已装插件在该控制节点上是否生效:声明 + 用户确认过。 */
+/** 任务运行时五点随整包安装批准，不维护节点级批准记录。 */
+export function isGhostRuntimeControlPoint(point: string): boolean {
+  return point === 'will-start-turn' || point === 'will-model-request' || point === 'will-compose-context'
+    || point === 'will-search-memory' || point === 'system-prompt';
+}
+
+/** 任务运行时五点只检查整包安装；旧控制节点保留原有名单语义。 */
 export function ghostControlPointActive(
-  ghost: Pick<InstalledGhost, 'enabled' | 'manifest' | 'approvedControlPoints'>,
+  ghost: Pick<InstalledGhost, 'enabled' | 'manifest' | 'approval' | 'approvedControlPoints'>,
   point: GhostControlPointId,
 ): boolean {
   return ghost.enabled && declaredGhostControlPoints(ghost.manifest).includes(point) &&
-    ghost.approvedControlPoints?.includes(point) === true;
+    (isGhostRuntimeControlPoint(point) ? ghost.approval?.state === 'approved'
+      : ghost.approvedControlPoints?.includes(point) === true);
 }
 
 /** 当前 Host 认识的全部 will- 钩子(消息钩子 + 控制节点)。 */
@@ -902,18 +919,10 @@ export const GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL = 8;
 
 /**
  * 域名白名单条目格式:小写域名,至少两段(拒绝裸 TLD / 单段内网名),
- * 通配只允许最左一段(`*.example.com`);不收 IP、端口、路径、协议。
+ * 通配只允许最左一段(`*.example.com`)；精确 HTTP(S)/WS(S) origin 也可声明端口或内网地址。
  */
-const GHOST_NETWORK_LABEL_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 export function isValidGhostNetworkHostPattern(p: unknown): p is string {
-  if (typeof p !== 'string' || p.length === 0 || p.length > 253) return false;
-  const bare = p.startsWith('*.') ? p.slice(2) : p;
-  const labels = bare.split('.');
-  // 至少两段:`*.com` / `localhost` / 裸 TLD 全部拒绝,命中面必须是具体域。
-  if (labels.length < 2) return false;
-  // 纯数字四段视作 IP,拒收(白名单只认域名)。
-  if (labels.every((l) => /^\d+$/.test(l))) return false;
-  return labels.every((l) => GHOST_NETWORK_LABEL_RE.test(l));
+  return isValidPluginNetworkHostPattern(p);
 }
 
 /**
@@ -927,7 +936,9 @@ export function ghostNetworkHostMatches(pattern: string, hostname: string): bool
   return hostname === pattern;
 }
 
-function ghostNetworkHostPatternWithinCap(actual: string, reviewed: string): boolean {
+export function ghostNetworkHostPatternWithinCap(actual: string, reviewed: string): boolean {
+  if (actual.includes('://')) return ghostNetworkTargetMatches(reviewed, new URL(actual));
+  if (reviewed.includes('://')) return false;
   if (!actual.startsWith('*.')) return ghostNetworkHostMatches(reviewed, actual);
   if (!reviewed.startsWith('*.')) return false;
   return ghostNetworkHostMatches(reviewed, `cap-probe.${actual.slice(2)}`);
@@ -1999,8 +2010,6 @@ export interface InstalledGhost {
   observeCapabilityApproved?: true;
   /** Independent Host consent for reading companions: roster, live status, pending request summaries and latest reply. */
   companionsCapabilityApproved?: true;
-  approvedHostToolGroups?: GhostHostToolGroup[];
-  approvedEventTopics?: GhostTaskEventTopic[];
   /** Only model APIs explicitly shown in an install/update confirmation. Missing means none. */
   approvedCindyModelActions?: GhostCindyModelsAction[];
   manifest: GhostManifest;
@@ -3015,11 +3024,10 @@ function compareGhostPermissionItems(
  */
 function withoutUnapprovedControlPoints(installed: InstalledGhost): GhostManifest['subscribe'] {
   const subscribe = installed.manifest.subscribe;
-  if (!subscribe) return subscribe;
-  const topics = subscribe.topics?.filter(topic => ghostTaskEventApproved(installed, topic));
-  const hooks = subscribe.hooks?.filter((hook) =>
-    !isGhostControlPointId(hook) || installed.approvedControlPoints?.includes(hook) === true);
-  return { ...subscribe, topics, hooks: hooks?.length ? hooks : undefined };
+  if (!subscribe?.hooks) return subscribe;
+  const hooks = subscribe.hooks.filter((hook) =>
+    !isGhostControlPointId(hook) || isGhostRuntimeControlPoint(hook) || installed.approvedControlPoints?.includes(hook) === true);
+  return { ...subscribe, hooks: hooks.length ? hooks : undefined };
 }
 
 /** 声明了 `approval: "auto"` 但用户从没确认过的工具,不算旧权限。 */
@@ -3046,15 +3054,12 @@ export function diffInstalledGhostPermissionItems(
           ui: installed.uiCapabilityApproved === true ? getPluginToolUi(installed.manifest) : undefined,
           host: undefined }
         : undefined,
-      ...(installed.manifest.agent ? { agent: { ...installed.manifest.agent,
-        hostTools: declaredGhostHostToolGroups(installed.manifest).filter(group => installed.approvedHostToolGroups?.includes(group)),
-      } } : {}),
       // 声明过但未确认的新能力不算旧权限，更新时作为新增项复核。
       cindy: installed.manifest.cindy ? { ...installed.manifest.cindy,
         models: declaredGhostCindyModelActions(installed.manifest).filter(action => installed.approvedCindyModelActions?.includes(action)),
       } : undefined,
+      // 仅旧控制节点沿用分项批准；任务运行时五点以已安装 manifest 为比较基线。
       subscribe: withoutUnapprovedControlPoints(installed),
-      systemPrompt: installed.approvedControlPoints?.includes('system-prompt') ? installed.manifest.systemPrompt : undefined,
       tools: withoutUnapprovedAutoTools(installed),
     };
     // Host declarations belong to the installed version, even when the legacy
@@ -3332,8 +3337,8 @@ export function ghostNetworkAuthorizationWithinCap(
     if (secret.inject.header !== cap.inject.header || secret.inject.format !== cap.inject.format) {
       return false;
     }
-    const actualHosts = secret.inject.hosts ?? actualNetwork.hosts;
-    const reviewedHosts = cap.inject.hosts ?? reviewedNetwork.hosts;
+    const actualHosts = secret.inject.hosts ?? actualNetwork.hosts.filter(pattern => !pattern.includes('://'));
+    const reviewedHosts = cap.inject.hosts ?? reviewedNetwork.hosts.filter(pattern => !pattern.includes('://'));
     if (!isHostPatternSubset(actualHosts, reviewedHosts)) return false;
     if (secret.url !== undefined && secret.url !== cap.url) return false;
     if (secret.hint !== undefined && secret.hint !== cap.hint) return false;
@@ -4955,8 +4960,8 @@ function validateGhostManifestInput(
   // 工具声明(卡槽②):与 slots 含 'tool' 严格成对,规则同 panel。
   let tools: GhostToolDecl[] | undefined;
   if (raw.tools !== undefined) {
-    if (!Array.isArray(raw.tools) || raw.tools.length === 0 || raw.tools.length > 16) {
-      return { ok: false, reason: 'tools 必须是 1–16 项的数组' };
+    if (!Array.isArray(raw.tools) || raw.tools.length === 0 || raw.tools.length > GHOST_TOOLS_MAX) {
+      return { ok: false, reason: `tools 必须是 1–${GHOST_TOOLS_MAX} 项的数组` };
     }
     tools = [];
     const seenNames = new Set<string>();
@@ -5468,7 +5473,7 @@ function validateGhostManifestInput(
     const seenPreviewHosts = new Set<string>();
     for (const host of previewRaw.hosts) {
       if (
-        !isValidGhostNetworkHostPattern(host) &&
+        (!isValidGhostNetworkHostPattern(host) || (typeof host === 'string' && host.includes('://'))) &&
         !(typeof host === 'string' && GHOST_PREVIEW_LOOPBACK_HOSTS.has(host))
       ) {
         return { ok: false, reason: `preview.hosts 含不合法域名模式 ${JSON.stringify(host)}` };
@@ -5829,7 +5834,7 @@ function validateGhostManifestInput(
       if (typeof h !== 'string' || !isValidGhostNetworkHostPattern(h.trim().toLowerCase())) {
         return {
           ok: false,
-          reason: `network.hosts 含非法条目 ${JSON.stringify(h)}(小写域名、至少两段、通配只允许最左 "*.";不收 IP / 端口 / 路径 / 协议)`,
+          reason: `network.hosts 含非法条目 ${JSON.stringify(h)}(填写域名模式或精确 HTTP(S)/WS(S) origin，不含路径、查询或内嵌凭证)`,
         };
       }
       const host = h.trim().toLowerCase();
@@ -6039,7 +6044,7 @@ function validateGhostManifestInput(
                 'network.secrets[].source 为 oidc-token 时必须显式声明非空 inject.hosts，限制企业身份令牌的流向',
             };
           }
-          if (injectHosts.some((host) => host.startsWith('*.'))) {
+          if (injectHosts.some((host) => host.startsWith('*.') || host.includes('://'))) {
             return {
               ok: false,
               reason:
@@ -7462,6 +7467,7 @@ export type GhostPipeNodeResult =
         | 'CANCELLED'
         | 'INVALID_REQUEST'
         | 'PERMISSION_DENIED'
+        | 'HOST_INJECTION_REQUIRED'
         | 'PROCESS_START_FAILED'
         | 'PROCESS_EXITED'
         | 'PROTOCOL_ERROR'
@@ -9363,6 +9369,8 @@ export type GhostFetchMethod = (typeof GHOST_FETCH_METHODS)[number];
 
 /** 请求体上限(UTF-8 字节)。 */
 export const GHOST_FETCH_BODY_MAX_BYTES = 256 * 1024;
+/** Private network frame: legal text body (up to 6x JSON escaping) plus metadata. */
+export const GHOST_NODE_NETWORK_REQUEST_MAX_CHARS = 2 * 1024 * 1024;
 /** 响应体上限(超限截断并标 truncated;2026-07-21 由 1MB 放宽到 50MB,Jira 等大 JSON 不再被截)。 */
 export const GHOST_FETCH_RESPONSE_MAX_BYTES = 50 * 1024 * 1024;
 /** 超时缺省/下限/上限(毫秒;越界 clamp 不拒单)。 */
@@ -9917,8 +9925,8 @@ export interface GhostLibraryOverview {
 export interface GhostPipeFetchRequest {
   type: 'fetch-request';
   /**
-   * 目标地址:仅 https、默认端口。自主调用的 host 必须命中 network.hosts；
-   * 当前 Agent tool-call 可凭严格在途 callId 访问普通未声明 host。
+   * 自主目标须命中 network.hosts 的 HTTPS:443 域名或精确 HTTP(S) origin。
+   * 当前 Agent tool-call 可凭严格在途 callId 访问普通未声明 HTTPS:443 host。
    */
   url: string;
   /** 缺省 GET。 */
@@ -9966,7 +9974,7 @@ export interface GhostPipeFetchRequest {
    * 任意类型字节由主机直接写进 save 票据指向的 workdir 目录(须同时传
    * saveTo;字节不进沙箱也不进总仓,见 GHOST_SAVE_DEPOSIT_* 常量)。
    */
-  as?: 'text' | 'media' | 'file' | 'library';
+  as?: 'text' | 'media' | 'file' | 'library' | 'stream';
   /** as:library 的库内相对目标。 */
   path?: string;
   /**
@@ -9997,6 +10005,7 @@ export interface GhostPipeFetchRequest {
 
 /** 代理 fetch 的返回(cindy.send 的 resolve 值)。 */
 export type GhostPipeFetchResult =
+  | { ok: true; status: number; headers: Record<string, string>; connectionId: string }
   | {
       ok: true;
       /** HTTP 状态码(4xx/5xx 也走 ok:true——那是"代发成功,对方说不行")。 */
@@ -10042,6 +10051,29 @@ export type GhostPipeFetchResult =
       errorCode?: string;
       limitBytes?: number;
     };
+
+/** Live network connections stay on their execution Host. Cursors are
+ * non-consuming and contain no installation, account or credential authority. */
+export interface GhostNetworkEvent {
+  sequence: number;
+  type: 'text' | 'binary' | 'end' | 'error';
+  /** Binary WebSocket frames use base64; HTTP streams remain UTF-8 text. */
+  data?: string;
+  errorCode?: string;
+  code?: number;
+}
+
+export type GhostPipeNetworkRequest =
+  | { type: 'network-request'; op: 'open'; url: string; headers?: Record<string, string>; protocols?: string[] }
+  | { type: 'network-request'; op: 'read'; connectionId: string; cursor?: number; waitMs?: number }
+  | { type: 'network-request'; op: 'send'; connectionId: string; data: string; binary?: boolean }
+  | { type: 'network-request'; op: 'close'; connectionId: string };
+
+export type GhostPipeNetworkResult =
+  | { ok: true; connectionId: string }
+  | { ok: true; events: GhostNetworkEvent[]; nextCursor: number; closed: boolean; resetRequired: boolean }
+  | { ok: true }
+  | { ok: false; errorCode: string; message: string };
 
 /** 工具调用的结构化失败分类(与 cindy-tools 的 CindyGhostCallErrorCode 同构)。 */
 export type GhostToolCallErrorCode =

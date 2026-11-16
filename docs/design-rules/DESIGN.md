@@ -150,6 +150,7 @@ and `task-tag-white-check` / `taskTagWhiteCheck` glyph to remain visible on ligh
 Images and emoji retain their intrinsic colors. Palette swatches are two rows of six; default is the first explicit choice above the palette, with an adaptive neutral swatch, a selected check and a localized “follow theme” label. It is not presented as a reset action. Color choices have localized names and a neutral selection ring. Mobile targets are 44pt;
 Desktop uses standard pill Buttons. Controls, project names and task status remain on their existing tokens.
 Project letter icons are identity artwork: square tiles with 25% corner radius, Cindy typography and weight 600. Automatic initials use a stable name-derived choice from the existing non-white identity colors, with theme-adjusted foreground and a 14% same-color background. Explicit default remains the theme foreground. Manual letter colors remain selectable; the tile shape also applies to them.
+Project image thumbnails use the same 25% corner crop on Desktop and Mobile, including automatic images, uploaded images and previews. This clips opaque asset corners without changing the image's intrinsic colors or persisted bytes; emoji and symbol geometry stay unchanged.
 
 ### Semantic & Accent
 
@@ -619,10 +620,13 @@ input/text
 
 Every confirmation built on the shared `ConfirmDialog` / provider uses its standard buttons; there is no per-caller presentation switch (maintainer ruling 2026-11-11, C-02 — supersedes the DS-6 two-caller pilot). Confirmation actions keep a 36px minimum height; long labels wrap within the panel and may grow vertically instead of overflowing or truncating. Keep `confirm-btn-*` local styling, default/destructive choice, focus branches and no scrim dismissal. Full Access and plugin-authorization confirmations follow the same buttons; the in-chat Permission card is not a `ConfirmDialog` and keeps its own `palette="permission"` presentation.
 
-**Interaction answer composers (user decision, 2026-11-10):** Free-text answers, custom-choice answers,
-withdrawn-question supplements and plan feedback use a full-width input frame. Text occupies its own
-full-width area; existing microphone and submit controls sit inside the frame in a trailing toolbar
-below the text, never squeeze the textarea into a narrow side column. Submission uses the main
+**Interaction answer composers (user decisions, 2026-11-10 and 2026-11-16):** Free-text answers, custom-choice answers,
+withdrawn-question supplements and plan feedback use one input frame that starts as a single line: while
+the answer is empty or fits one line, the text sits beside the existing microphone and submit controls,
+centred on them (about 48px tall). Once the answer wraps or contains a line break, the frame expands: the
+text takes its own full-width area and the controls move to a trailing toolbar below it, so a multi-line
+answer is never squeezed into a narrow column. The expansion holds until the answer is cleared, so the
+layout does not flip back and forth while typing (`useAnswerComposerExpanded`). Submission uses the main
 composer's paper-plane glyph, with the actual action retained in localized accessible names and
 Desktop tooltips. Multi-select custom input has one submit control, not a second footer submit.
 Question navigation, close/skip, validation, voice finalization and approval semantics stay unchanged.
