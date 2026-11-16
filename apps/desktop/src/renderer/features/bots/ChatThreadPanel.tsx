@@ -684,7 +684,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const canStopMine = executionSpeakers.some(speaker => speaker.isSelfRequested) && group.round.canStop !== false;
   const stopSpeaker = [...executionSpeakers].reverse().find(speaker => speaker.isSelfRequested)
     ?? (canStopAll ? executionSpeakers.at(-1) : undefined);
-  return <ThreadPanel panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
+  return <ThreadPanel inlineActions={false} panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
             {following !== undefined ? (
               <Tip text={t(key(following ? 'thread.unfollowTip' : 'thread.followTip'))}>
                 <Button variant="secondary" tone="quiet" size="sm" aria-pressed={following} data-thread-follow=""

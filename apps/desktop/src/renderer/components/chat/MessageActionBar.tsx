@@ -928,7 +928,7 @@ export function MessageActionBar({
  * outer `side`, level with its top, inside the message row so moving the pointer across the gap keeps
  * the row hovered. It shows while the message (`group/message`) is hovered, while keyboard focus is
  * inside, while `open` (a picker) is set, and always on touch screens. The bubble must be `relative`.
- * ThreadPanel keeps this same toolbar in flow below the content, without a side gutter.
+ * Private ThreadPanel keeps this toolbar in flow below content; group topics retain the outer rail.
  */
 export function BubbleHoverToolbar({ side, open = false, besideReactions = false, marker, children }: {
   side: 'left' | 'right'; open?: boolean;
