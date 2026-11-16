@@ -2397,8 +2397,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     });
   }
   /**
-   * Task inputs are stopped only for an explicit group stop, scoped to this execution's
-   * input identity. Lease failures/disposal never stop an unrelated ordinary task turn.
+   * Task inputs are stopped only for an explicit stop or confirmed loss of room access,
+   * scoped to this execution's input identity. Other lease failures/disposal leave tasks alone.
    */
   function stopRunSession(run: Running, explicit = false): Promise<void> {
     if (!run.sessionId || (run.inTask && !explicit)) return Promise.resolve();
@@ -3618,7 +3618,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!run.settlement && running.get(run.execution.id) === run) {
         run.releaseToolAuthority?.();
         forgetRun(run);
-        await stopRunSession(run);
+        // Leaving a room fails its membership check before the server can return STOP_REQUESTED.
+        // Revoke only this group's input in a card task, retaining independent owner inputs.
+        await stopRunSession(run, error.message === 'CONVERSATION_NOT_FOUND');
         changed(run.execution.conversation_id);
       }
     } finally {

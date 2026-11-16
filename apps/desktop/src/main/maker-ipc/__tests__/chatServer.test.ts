@@ -1987,6 +1987,8 @@ describe('Chat Server result delivery and refresh', () => {
     ['a member with tools access', 'tools', '60000000-0000-4000-8000-000000000001', true],
     ['a chat-only member', 'chat', '60000000-0000-4000-8000-000000000001', true],
     ['the owner, once the task is gone', 'owner', selfId, false],
+    ['the owner, after their companion leaves', 'owner', selfId, true],
+    ['the owner, after an ordinary lease failure', 'owner', selfId, true],
   ] as const)('passes Thread words under a task card into the task only from the owner (%s)', async (_who, mode, speakerId, taskExists) => {
     const rootId = '70000000-0000-4000-8000-000000000001';
     const words = 'Please also update the docs';
@@ -2018,6 +2020,21 @@ describe('Chat Server result delivery and refresh', () => {
       return;
     }
     expect(deps.ensureLane).not.toHaveBeenCalled();
+    // Owner withdrawal: the server checks joined membership before STOP_REQUESTED, returning
+    // CONVERSATION_NOT_FOUND. Stop only that group's input, never an independent task turn.
+    if (_who === 'the owner, after their companion leaves' || _who === 'the owner, after an ordinary lease failure') {
+      const left = _who === 'the owner, after their companion leaves';
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => body?.action === 'heartbeat'
+        ? { status: left ? 404 : 409, body: { error: { code: left ? 'CONVERSATION_NOT_FOUND' : 'EXECUTION_EXPIRED' } } }
+        : previous(route, method, body));
+      await vi.advanceTimersByTimeAsync(15_000);
+      if (left) expect(deps.abortLane).toHaveBeenCalledExactlyOnceWith('task-1', input.clientId);
+      else expect(deps.abortLane).not.toHaveBeenCalled();
+      expect(await service.settleLaneTurn({ ...terminal, sessionId: 'task-1', activeInputClientId: input.clientId, resultText: 'Late reply' })).toBe(false);
+      expect(deliveries()).toHaveLength(0);
+      return;
+    }
     // Other members' words never drive the task; the owner's words carry them along as background.
     const message = `${words}\n\n${t('bots.groupChat.task.othersSaid')}\nAnn：Mind the changelog too`;
     expect(input).toMatchObject({ targetSessionId: 'task-1', message, persistedContent: message,
