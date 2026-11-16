@@ -154,6 +154,19 @@ export const UI_MOCK_TASKS: readonly UiMockTask[] = [
     ],
   },
   {
+    id: 'ui-mock-auto-review-model-unavailable',
+    title: '自动审批模型不可用',
+    project: 'cindy-demo',
+    agentKind: 'pi', model: 'custom-demo', effort: 'medium',
+    status: 'active', source: 'desktop', minutesAgo: 0,
+    messages: [
+      { role: 'user', text: '请运行项目构建。' },
+      { role: 'error', text: '[AUTO_REVIEW_NO_AVAILABLE_MODEL] No automatic review model is available.' },
+      { role: 'assistant', text: '审批需要你确认后才能继续。可在设置中连接审批供应商或自定义辅助模型。' },
+      { role: 'error', text: '[AUTO_REVIEW_NO_AVAILABLE_MODEL] No automatic review model is available.' },
+    ],
+  },
+  {
     id: 'ui-mock-remote-communication',
     title: '远程通信错误指引',
     project: 'cindy-demo',

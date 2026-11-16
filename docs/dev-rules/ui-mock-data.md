@@ -88,6 +88,12 @@ pnpm restart:desktop:remote -- --mock --isolated=<名字>   # 另开一份模拟
   `SOUL.md` 临时设为只读，验证真实文件写入失败时表单保留草稿；解除只读后直接保存应成功。
   只对该合成文件施加故障，验收后恢复文件属性并关闭沙箱。
 
+Desktop 群告警：隔离沙箱 `ui-mock/group-alert.json` 写入 `{"status":"waiting"}`，
+重启后从群列表打开「群告警验收」。使用真实「结束分工」入口后，合成计划变为 stopped，
+失败步骤仍保留，群行告警消失。将文件中的 `newFailure` 或 `pending` 设为 true，重新打开
+主界面可分别检查另一执行失败和待决定状态；不发送消息、不运行模型。该场景只替换合成群的
+服务输入，没有原执行 Session，真实服务器停止动作由生产服务入口回归测试覆盖。
+
 ## Mobile 模拟器
 
 ```bash
@@ -112,6 +118,8 @@ pnpm mobile:sim:whoami -- --mock --json
 - 写邮件卡片：`cindy://sessions/visual-mail-draft?deviceId=cindy-visual-mock-mac`（仅手机端的模拟任务，含一张回复草稿卡）。
 - 反馈确认：`cindy://sessions/visual-issue-confirm?deviceId=cindy-visual-mock-mac`，合成反馈草稿、署名与环境，覆盖预览、编辑和展开详情；不提交。Desktop 对应 `pnpm ui:check --page issue-confirm --case all --theme all`，两端均加载实际组件。
 - 群聊点名：`cindy://companions/groups/mention-qa?deviceId=cindy-visual-mock-mac`，合成成员覆盖显式身份、唯一名称回退、重名、未知及群体提及。沿用实际群聊组件与成员身份 sheet，只用于界面验收；话题入口另由直连 Chat Server 的组件回归覆盖。
+- 群列表告警：模拟电脑的伙伴群列表包含「已结束分工」「另一执行失败」「仍需回复」三行，
+  由真实共享状态判据生成无提醒、错误、待回复状态，验证失败历史不等于仍需处理。只用于列表目检。
 
 - 群内执行：`cindy://companions/groups/execution-qa?deviceId=cindy-visual-mock-mac`；后缀 `-work`／`-talk` 查看长分工与讨论队列，`-member`／`-legacy` 查看普通成员与旧宿主的默认停止，`-peer` 查看无操作权限的群友仍可见的公共 Cindy 消息与两条独立执行。仅合成内存回执，不访问真实权限或模型。
 - 窄屏正文：`cindy://group-execution-preview?width=320&groupId=execution-qa`（`width` 可选 `393`）。复用真实群聊页，把正文容器限宽；设备窗口、系统安全区和原生导航栏仍取当前模拟器，不将它当作另一机型的整屏验收。

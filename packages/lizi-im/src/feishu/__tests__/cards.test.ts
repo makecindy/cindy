@@ -53,3 +53,25 @@ describe('buildInteractiveCardV1 action 模块拆分', () => {
     );
   });
 });
+
+describe('buildInteractiveCardV1 按钮排布', () => {
+  type Mod = { tag: string; layout?: string; actions: Array<{ width?: string; text: { content: string }; value: { id: string } }> };
+
+  it('默认横排: 不带 layout, 按钮不设满宽', () => {
+    const mods = actionModules(buildInteractiveCardV1(specWithButtons(3))) as Mod[];
+    expect(mods[0]!.layout).toBeUndefined();
+    expect(mods[0]!.actions.every((btn) => btn.width === undefined)).toBe(true);
+  });
+
+  it('list: 每个模块 flow 布局、每个按钮满宽, 文案与回调 value 不变', () => {
+    const spec = { ...specWithButtons(7), buttonLayout: 'list' as const };
+    const mods = actionModules(buildInteractiveCardV1(spec)) as Mod[];
+    expect(mods).toHaveLength(2);
+    expect(mods.every((mod) => mod.layout === 'flow')).toBe(true);
+    const buttons = mods.flatMap((mod) => mod.actions);
+    expect(buttons.every((btn) => btn.width === 'fill')).toBe(true);
+    expect(buttons.map((btn) => [btn.value.id, btn.text.content])).toEqual(
+      Array.from({ length: 7 }, (_, i) => [`btn:${i}`, `L${i}`]),
+    );
+  });
+});

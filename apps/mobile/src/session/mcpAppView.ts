@@ -7,6 +7,7 @@ import { prepareMcpAppNativeDocument, type McpAppNativeDocument } from './mcpApp
 export interface McpAppViewState {
   loading: boolean;
   height: number;
+  focus?: { top: number; bottom: number };
   filesUnavailable?: boolean;
   error?: ReturnType<typeof mcpAppFailureKey> | 'mcpApps.mobileUpdateRequired';
 }
@@ -129,6 +130,16 @@ export class McpAppView {
     try {
       const envelope = JSON.parse(data) as { key?: string; message: AppRpc };
       if (envelope.key !== this.bridgeKey) return;
+      if (envelope.message.method === 'ui/notifications/cindy-mobile-focus') {
+        if (this.closing) return;
+        const rect = envelope.message.params;
+        if (rect === null) this.update({ focus: undefined });
+        else if (rect && typeof rect.top === 'number' && typeof rect.bottom === 'number'
+          && Number.isFinite(rect.top) && Number.isFinite(rect.bottom)
+          && rect.top >= 0 && rect.bottom > rect.top && rect.bottom <= this.state.height + 1)
+          this.update({ focus: { top: rect.top, bottom: rect.bottom } });
+        return;
+      }
       if (envelope.message.method === 'ui/notifications/sandbox-proxy-ready')
         this.controller.sandboxReady(this.nativeDocument?.resourceUrl);
       else this.controller.receive(envelope.message);

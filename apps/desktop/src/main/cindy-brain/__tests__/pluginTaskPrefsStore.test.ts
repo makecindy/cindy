@@ -61,6 +61,18 @@ describe('normalizeConfig(单插件配置清洗)', () => {
     expect(__testing.normalizeConfig({ agentKind: 'pi' })).toEqual({ agentKind: 'pi' });
   });
 
+  // 规则(2026-11-16):运行位置只随完整模型组合保存;单独的位置或 'local' 不能让
+  // 之后的解析把本机同名供应商当成远程来源。tier: unit。
+  it('运行位置只随完整模型组合保留', () => {
+    const choice = { agentKind: 'codex', providerId: 'anthropic', model: 'm' } as const;
+    expect(__testing.normalizeConfig({ ...choice, agentDeviceId: 'share:abc' }))
+      .toEqual({ ...choice, agentDeviceId: 'share:abc' });
+    expect(__testing.normalizeConfig({ ...choice, agentDeviceId: null }))
+      .toEqual({ ...choice, agentDeviceId: null });
+    expect(__testing.normalizeConfig({ model: 'm', agentDeviceId: 'device-1' })).toEqual({ model: 'm' });
+    expect(__testing.normalizeConfig({ ...choice, agentDeviceId: 'local' })).toEqual(choice);
+  });
+
   it('非对象入参 → 空配置', () => {
     expect(__testing.normalizeConfig(null)).toEqual({});
     expect(__testing.normalizeConfig('x')).toEqual({});

@@ -29,6 +29,26 @@ getRun/listRuns/readMessages 复用本机回执和历史、按原插件/账号�
 回归：`taskSlot.test.ts`、`pluginTaskSnapshot.test.ts`、`pluginTaskService.test.ts`、
 `sessionRuntimeHarnessSelection.test.ts`；同时运行原远程往返和 Session 控制回归。
 
+### 插件设置保存运行位置（2026-11-16，未发布）
+
+宿主「模型与任务」卡与普通任务列出相同来源；`ghost-errand-prefs.json` 的插件配置可选保存
+`agentDeviceId`（字符串指定远程来源，`null` 明确选本机；只随完整模型组合保存，
+单独出现按脏数据丢弃，历史缺字段的配置不迁移）。
+保存时 `setPluginTaskConfigValidator` 用 `savedPluginTaskRemoteRoute` 组成完整 route，经
+`resolveRemotePluginTaskRoute` 按那台电脑的目录核对；不读本机目录和本机已装 Harness。
+没有显式 route 的 `tasks.create` 与 `setModel('plugin-default')` 采用保存的位置；显式 route
+（本机或远程）整组替换保存的选择，不把保存的位置拼进显式本机 route。旧 errand 与
+`workspace.ensureSession` 经 `resolvePluginSavedExecution` 同样带位置建任务，errand 复用判定与
+设置变更检查都比较位置；errand 只有设置明确选过位置时才比较任务位置，历史缺字段时
+保留原来复用用户修好任务的语义，其它字段不匹配仍按原方式重建本机任务。
+快问快答（`getPluginOneshotModelSelection`）在有远程位置时返回 null，
+走身份卡声明 / 系统辅助模型链。手机与远程 Desktop 经 `task-settings:set` / `kind:'tasks'` 的
+`model.agentDeviceId` 写入，宿主读取结果带 `remoteRoutes:true`；协议见
+[插件任务设置的运行位置](protocol-compatibility/plugin-task-preferences-remote-route.md)。
+新控制端用 `model.agentDeviceId:null` 明确切回宿主；旧控制端修改权限时回传同一模型组合，
+宿主保留已存运行位置，避免把整卡回传误当作选择本机同名来源。
+旧版客户端读取同一文件会丢掉该字段，降级后按本机同名供应商解析，这是不支持降级的已知边界。
+
 ## 新建任务、继续任务与读取结果
 
 插件调用的是 Cindy 普通任务（Session）能力。界面、工具说明和文档统一使用「新建任务」「打开任务」「继续任务」，不另设 AI 代办或插件专属任务概念。

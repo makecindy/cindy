@@ -221,6 +221,46 @@ describe('Chat Server result delivery and refresh', () => {
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
 
+  // #10822 / unit: getGroup + dismissPlan exercise the production server
+  // projection and existing stop action. Earlier tests never combined a failed
+  // execution, stopped plan and absent local Session with an already-read group.
+  it('settles the group alert through stopping a failed plan without needing its Session', async () => {
+    const planId = '60000000-0000-4000-8000-000000000001';
+    const plan = { id: planId, revision: 1, kind: 'work', source_message_id: execution.source_message_id,
+      request_text: 'Make a draft', organizer_id: botId, creator_id: selfId, status: 'waiting', current_step: 0,
+      created_at: '2026-10-03T00:00:00Z', updated_at: '2026-10-03T00:00:01Z',
+      steps: [{ position: 0, botId, botName: 'Bot', task: 'draft', status: 'failed' },
+        { position: 1, botId, botName: 'Bot', task: 'review', status: 'pending' }] };
+    const failed = { ...execution, plan_id: planId, status: 'failed', updated_at: plan.updated_at };
+    let executions = [failed];
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === `/conversations/${roomId}/plans/${planId}` && method === 'POST') {
+        expect(body.action).toBe('stop'); plan.status = 'stopped'; plan.revision += 1;
+        return { body: {} };
+      }
+      if (route.includes('/plans')) return { body: route.includes(planId) || plan.status === 'waiting' ? [plan] : [] };
+      if (route.endsWith('/executions')) return { body: executions };
+      // Alert settlement uses an owned bot; plan creation alone does not grant stop authority.
+      if (route.endsWith('/snapshot')) return { body: { ...response(route).body,
+        members: [{ id: botId, kind: 'bot', state: 'joined', ownerActorId: selfId }],
+        reads: [{ thread_key: 'main', read_seq: '1' }] } };
+      return response(route);
+    });
+    const waiting = await service.getGroup(roomId);
+    expect(waiting.ok && waiting.group.teammateActivity?.phase).toBe('needs-interaction');
+    expect((await service.dismissPlan({ groupId: roomId, planId })).ok).toBe(true);
+    const stopped = await service.getGroup(roomId);
+    expect(stopped.ok && stopped.group.teammateActivity?.phase).toBe('idle');
+    expect(stopped.ok && stopped.group.openPlan).toBeNull();
+    expect(stopped.ok && stopped.group.serverUnread?.count).toBe(0);
+    expect(stopped.ok && stopped.group.plans[0]?.steps.map(step => step.status)).toEqual(['failed', 'pending']);
+    expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/plans?ids=${planId}`, 'GET', undefined);
+    expect(deps.ensureLane).not.toHaveBeenCalled();
+    executions = [failed, { ...failed, id: '40000000-0000-4000-8000-000000000002', plan_id: '' }];
+    const newerFailure = await service.getGroup(roomId);
+    expect(newerFailure.ok && newerFailure.group.teammateActivity?.phase).toBe('error');
+  });
+
   it('keeps the displayed talk execution identity across a refreshed plan revision', async () => {
     const planId = '60000000-0000-4000-8000-000000000001';
     const plan = { id: planId, revision: 4, kind: 'talk', source_message_id: execution.source_message_id,
@@ -230,7 +270,8 @@ describe('Chat Server result delivery and refresh', () => {
       steps: [{ position: 0, botId, botName: 'Bot', task: '', status: 'running' },
         { position: 1, botId, botName: 'Next', task: '', status: 'pending' }] };
     fixture.handle.mockImplementation((route, method) => route.includes('/plans')
-      ? { body: method === 'POST' ? {} : [plan] } : response(route));
+      ? { body: method === 'POST' ? {} : [plan] } : route.endsWith('/snapshot')
+        ? { body: { room: room(roomId), members: [{ id: botId, kind: 'bot', state: 'joined', ownerActorId: selfId }], messages: [], cursor: '1' } } : response(route));
     const result = await service.getGroup(roomId);
     if (!result.ok) throw new Error(result.errorCode);
     expect(result.group.plans?.[0].steps[0]).toMatchObject({ executionId: execution.id, executionStatus: 'queued' });
@@ -507,6 +548,27 @@ describe('Chat Server result delivery and refresh', () => {
       await stepEnded('3');
       expect(continues()).toHaveLength(1);
     });
+  });
+  // Unit: ordinary membership + own bot is the minimal previously denied input. Exercise
+  // production manage through HTTP: owner delegation must send leave, foreign removal stays denied.
+  it('withdraws only an owned companion using its own actor identity', async () => {
+    const foreignId = '00000000-0000-4000-8000-000000000099';
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route.endsWith('/members') && method === 'POST' && body.actorId === foreignId) return { status: 403, body: { error: { code: 'ROLE_REQUIRED' } } };
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [
+        { id: selfId, kind: 'human', ownerActorId: selfId, state: 'joined', role: 'member' },
+        { id: botId, kind: 'bot', ownerActorId: selfId, state: 'joined', role: 'member' },
+        { id: foreignId, kind: 'bot', ownerActorId: foreignId, state: 'joined', role: 'member' },
+      ], messages: [], cursor: '1' } };
+      return response(route);
+    });
+    const result = await service.chatServer!.manage({ groupId: roomId, action: { type: 'member', actorId: botId, action: 'remove' } });
+    expect(result).toMatchObject({ ok: true });
+    expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/members`, 'POST', expect.objectContaining({ actorId: botId, action: 'leave' }));
+    expect(fixture.requests.filter(request => request.url.endsWith('/members')).at(-1)?.actor).toBe(botId);
+    expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'member', actorId: foreignId, action: 'remove' } })).toMatchObject({ ok: false });
+    expect(fixture.requests.filter(request => request.url.endsWith('/members')).at(-1)?.actor).toBeUndefined();
+    expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/members`, 'POST', expect.objectContaining({ actorId: foreignId, action: 'remove' }));
   });
   it('uses the mobile edited revision instead of a newer server snapshot when saving settings', async () => {
     await service.updateGroup({ groupId: roomId, name: 'Draft', expectedRevision: 7 });
@@ -1970,6 +2032,8 @@ describe('Chat Server result delivery and refresh', () => {
     ['a member with tools access', 'tools', '60000000-0000-4000-8000-000000000001', true],
     ['a chat-only member', 'chat', '60000000-0000-4000-8000-000000000001', true],
     ['the owner, once the task is gone', 'owner', selfId, false],
+    ['the owner, after their companion leaves', 'owner', selfId, true],
+    ['the owner, after an ordinary lease failure', 'owner', selfId, true],
   ] as const)('passes Thread words under a task card into the task only from the owner (%s)', async (_who, mode, speakerId, taskExists) => {
     const rootId = '70000000-0000-4000-8000-000000000001';
     const words = 'Please also update the docs';
@@ -2001,6 +2065,21 @@ describe('Chat Server result delivery and refresh', () => {
       return;
     }
     expect(deps.ensureLane).not.toHaveBeenCalled();
+    // Owner withdrawal: the server checks joined membership before STOP_REQUESTED, returning
+    // CONVERSATION_NOT_FOUND. Stop only that group's input, never an independent task turn.
+    if (_who === 'the owner, after their companion leaves' || _who === 'the owner, after an ordinary lease failure') {
+      const left = _who === 'the owner, after their companion leaves';
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => body?.action === 'heartbeat'
+        ? { status: left ? 404 : 409, body: { error: { code: left ? 'CONVERSATION_NOT_FOUND' : 'EXECUTION_EXPIRED' } } }
+        : previous(route, method, body));
+      await vi.advanceTimersByTimeAsync(15_000);
+      if (left) expect(deps.abortLane).toHaveBeenCalledExactlyOnceWith('task-1', input.clientId);
+      else expect(deps.abortLane).not.toHaveBeenCalled();
+      expect(await service.settleLaneTurn({ ...terminal, sessionId: 'task-1', activeInputClientId: input.clientId, resultText: 'Late reply' })).toBe(false);
+      expect(deliveries()).toHaveLength(0);
+      return;
+    }
     // Other members' words never drive the task; the owner's words carry them along as background.
     const message = `${words}\n\n${t('bots.groupChat.task.othersSaid')}\nAnn：Mind the changelog too`;
     expect(input).toMatchObject({ targetSessionId: 'task-1', message, persistedContent: message,
@@ -3929,10 +4008,10 @@ describe('Chat Server result delivery and refresh', () => {
     });
 
     it.each([
-      ['a member stops only their own requests', 'member', undefined, [['own', undefined]]],
-      ['an owner may stop everyone', 'owner', 'all', [['own', undefined], ['bot', undefined], ['foreign', undefined]]],
-      ['an owner who did not ask for all stops only their own', 'owner', undefined, [['own', undefined]]],
-      ['a member whose own teammate is admin stops everyone as that teammate', 'member', 'all', [['own', undefined], ['bot', otherBot], ['foreign', otherBot]], 'admin'],
+      ['a member stops only their own companions', 'member', undefined, [['bot', undefined]]],
+      ['an owner cannot stop everyone', 'owner', 'all', []],
+      ['an owner stops only their own companions', 'owner', undefined, [['bot', undefined]]],
+      ['an admin companion does not grant stop-all rights', 'member', 'all', [], 'admin'],
     ] as const)('%s', async (_label, role, scope, expected, botRole?: string) => {
       const ids = { own: '40000000-0000-4000-8000-00000000000a', bot: '40000000-0000-4000-8000-00000000000b', foreign: '40000000-0000-4000-8000-00000000000c' };
       singleSpeaker(route => route === `/conversations/${roomId}/executions` ? { body: [
@@ -3941,28 +4020,55 @@ describe('Chat Server result delivery and refresh', () => {
         { ...execution, id: ids.foreign, status: 'queued', bot_id: foreignBot, requester_id: otherHuman },
       ] } : undefined, role, botRole ?? 'member');
       const from = fixture.requests.length;
-      expect(await service.stopRound(roomId, scope)).toEqual({ ok: true });
+      expect(await service.stopRound(roomId, scope)).toMatchObject(scope === 'all'
+        ? { ok: false, errorCode: 'PERMISSION_DENIED' } : { ok: true });
       const stops = fixture.requests.slice(from).filter(r => r.url.endsWith('/control'));
       expect(stops.map(r => [Object.entries(ids).find(([, id]) => r.url.includes(id))![0], r.actor || undefined])).toEqual(expected);
     });
 
-    // A manager's human identity can stop everyone on the server. Missing metadata
-    // must not turn the default own-only action into the explicit all action.
-    it.each([
-      ['owner', undefined], ['admin', undefined], ['owner', 'all'], ['admin', 'all'],
-    ] as const)('keeps missing-requester work in the requested scope: %s %s', async (role, scope) => {
+    // Unit / Nov 16 ownership policy: one public actor carries multiple people's requests.
+    // The personal-companion matrix cannot catch cancelling a peer's turn on that same actor.
+    it('lets an admin stop only their own public Cindy turn', async () => {
+      const peerId = '40000000-0000-4000-8000-00000000000a';
       singleSpeaker(route => route === `/conversations/${roomId}/executions` ? { body: [
-        { ...execution, status: 'queued', bot_id: foreignBot, requester_id: undefined },
-      ] } : undefined, role);
+        { ...execution, status: 'running', bot_id: foreignBot, requester_id: selfId },
+        { ...execution, id: peerId, status: 'running', bot_id: foreignBot, requester_id: otherHuman },
+      ] } : route.endsWith('/snapshot') ? { body: { room: room(roomId), members: members('admin').map(m => m.id === foreignBot ? { ...m, assistant: true } : m), messages: [], cursor: '1' } } : undefined, 'admin');
       const from = fixture.requests.length;
-      expect(await service.stopRound(roomId, scope)).toMatchObject(scope === 'all'
-        ? { ok: true } : { ok: false, errorCode: 'STOP_OWNERSHIP_UNKNOWN' });
-      const stops = fixture.requests.slice(from).filter(request => request.url.endsWith('/control'));
-      expect(stops).toHaveLength(scope === 'all' ? 1 : 0);
-      if (scope === 'all') expect(stops[0].actor).toBeUndefined();
+      expect(await service.stopRound(roomId)).toMatchObject({ ok: true });
+      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control')).map(r => r.url))
+        .toEqual([expect.stringContaining(`/executions/${execution.id}/control`)]);
     });
 
-    // #8045: exercise the production stop entry point, including server refusals and races.
+    // Unit / same policy: stopping an owned arrangement cannot indirectly stop foreign work.
+    it('stops only the owned execution in a mixed-owner plan and rejects foreign step controls', async () => {
+      const plan = { id: '80000000-0000-4000-8000-000000000002', revision: 1, creator_id: selfId, status: 'running',
+        steps: [{ position: 0, botId: otherBot, status: 'running' }, { position: 1, botId: foreignBot, status: 'pending' }] };
+      singleSpeaker(route => route.includes('/plans') ? { body: [plan] }
+        : route === `/conversations/${roomId}/executions` ? { body: [
+          { ...execution, status: 'running', bot_id: otherBot, requester_id: selfId, plan_id: plan.id },
+        ] } : undefined, 'admin');
+      const from = fixture.requests.length;
+      expect(await service.stopRound(roomId)).toMatchObject({ ok: true });
+      plan.status = 'waiting';
+      expect(await service.dismissPlan({ groupId: roomId, planId: plan.id })).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      expect(await service.editPlanStep({ groupId: roomId, planId: plan.id, position: 1, action: 'skip' })).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control')).map(r => r.url))
+        .toEqual([expect.stringContaining(`/executions/${execution.id}/control`)]);
+      expect(fixture.handle.mock.calls.filter(([route, method]) => route.includes('/plans/') && method === 'POST')).toEqual([]);
+    });
+
+    // Unit: Nov 16 ownership policy replaces role/requester stop authority. A single
+    // public Cindy execution with no requester must never be stopped by a manager.
+    it.each(['owner', 'admin', 'member'] as const)('refuses unknown public Cindy ownership for %s', async role => {
+      singleSpeaker(route => route === `/conversations/${roomId}/executions` ? { body: [
+        { ...execution, status: 'queued', bot_id: foreignBot, requester_id: undefined },
+      ] } : route.endsWith('/snapshot') ? { body: { room: room(roomId), members: members(role).map(m => m.id === foreignBot ? { ...m, assistant: true } : m), messages: [], cursor: '1' } } : undefined, role);
+      const from = fixture.requests.length;
+      expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode: 'STOP_OWNERSHIP_UNKNOWN' });
+      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toEqual([]);
+    });
+
     it.each([
       ['another requester', otherHuman, 'PERMISSION_DENIED'],
       ['no active work', null, 'NOTHING_TO_STOP'],
@@ -3974,31 +4080,13 @@ describe('Chat Server result delivery and refresh', () => {
       expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toEqual([]);
     });
 
-    // #8045: production /executions omits requester_id. Source authors are not
-    // authority; stop as the signed-in human and observe the server's decision.
-    // Unit: the existing scope matrix only used complete execution metadata.
-    it.each([
-      ['accepted', 200, 'cancelled', true, 'member'],
-      ['denied', 403, 'queued', false, 'member'],
-      ['member with an admin teammate', 200, 'cancelled', true, 'admin'],
-    ] as const)('lets the server authorize missing-requester work: %s', async (_label, status, nextStatus, ok, botRole) => {
-      let controlled = false;
-      singleSpeaker(route => {
-        if (route.endsWith('/control')) {
-          controlled = true;
-          return status === 200 ? { body: {} } : { status, body: { error: { code: 'ROLE_REQUIRED' } } };
-        }
-        if (route === `/conversations/${roomId}/executions`) return { body: [
-          { ...execution, bot_id: foreignBot, requester_id: undefined, status: controlled ? nextStatus : 'queued' },
-        ] };
-      }, 'member', botRole);
+    it.each([['owned', otherBot, true], ['foreign', foreignBot, false]] as const)('uses companion ownership when requester is absent: %s', async (_label, bot, owned) => {
+      singleSpeaker(route => route === `/conversations/${roomId}/executions` ? { body: [
+        { ...execution, status: 'queued', bot_id: bot, requester_id: undefined },
+      ] } : undefined);
       const from = fixture.requests.length;
-      expect(await service.stopRound(roomId)).toMatchObject(ok ? { ok: true } : { ok: false, errorCode: 'PERMISSION_DENIED' });
-      const stops = fixture.requests.slice(from).filter(request => request.url.endsWith('/control'));
-      expect(stops).toHaveLength(1);
-      expect(stops[0].actor).toBeUndefined();
-      const detail = await service.getGroup(roomId);
-      expect(detail.ok && detail.group.round.status).toBe(ok ? 'idle' : 'running');
+      expect(await service.stopRound(roomId)).toMatchObject(owned ? { ok: true } : { ok: false, errorCode: 'PERMISSION_DENIED' });
+      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toHaveLength(owned ? 1 : 0);
     });
 
     it.each([
@@ -4015,7 +4103,7 @@ describe('Chat Server result delivery and refresh', () => {
       singleSpeaker(route => {
         if (route.endsWith('/control')) { rejected = true; return { status, body: { error: { code: 'CONTROL_REFUSED' } } }; }
         if (route === `/conversations/${roomId}/executions`) return { body: rejected && nextStatus === 'absent' ? []
-          : [{ ...execution, status: rejected ? nextStatus : 'queued', bot_id: foreignBot, requester_id: selfId }] };
+          : [{ ...execution, status: rejected ? nextStatus : 'queued', bot_id: otherBot, requester_id: selfId }] };
       });
       expect(await service.stopRound(roomId)).toMatchObject(errorCode ? { ok: false, errorCode } : { ok: true });
       expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/executions`)).toHaveLength(2);
@@ -4026,17 +4114,47 @@ describe('Chat Server result delivery and refresh', () => {
       singleSpeaker(route => {
         if (route.endsWith(`/${execution.id}/control`)) return { status: 403, body: { error: { code: 'ROLE_REQUIRED' } } };
         if (route === `/conversations/${roomId}/executions`) return { body: [execution.id, secondId].map(id =>
-          ({ ...execution, id, status: 'queued', bot_id: foreignBot, requester_id: selfId })) };
+          ({ ...execution, id, status: 'queued', bot_id: otherBot, requester_id: selfId })) };
       });
       expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
       expect(fixture.handle.mock.calls.filter(([route]) => route.endsWith('/control')).map(([route]) => route))
         .toContain(`/conversations/${roomId}/executions/${secondId}/control`);
     });
 
+    // Unit / PR #10861: HTTP rejection coverage misses actPlan's local ownership recheck.
+    // Reassigning the first plan between list and detail must not strand later owned work.
+    it('continues stopping owned work after a plan is reassigned before its local permission check', async () => {
+      const reassignedId = '80000000-0000-4000-8000-000000000002';
+      const ownedId = '80000000-0000-4000-8000-000000000003';
+      const plan = { id: reassignedId, creator_id: selfId, status: 'proposed', revision: 1,
+        steps: [{ position: 0, botId: otherBot, status: 'pending' }] };
+      const owned = { ...plan, id: ownedId };
+      let reassigned = false;
+      singleSpeaker((route, method) => {
+        if (route === `/conversations/${roomId}/plans?ids=${reassignedId}`) {
+          reassigned = true;
+          return { body: [{ ...plan, revision: 2, steps: [{ position: 0, botId: foreignBot, status: 'pending' }] }] };
+        }
+        if (route === `/conversations/${roomId}/plans?ids=${ownedId}`) return { body: [owned] };
+        if (route === `/conversations/${roomId}/plans`) return { body: [
+          { ...plan, ...(reassigned ? { revision: 2, steps: [{ position: 0, botId: foreignBot, status: 'pending' }] } : {}) }, owned,
+        ] };
+        if (route === `/conversations/${roomId}/plans/${ownedId}` && method === 'POST') return { body: { ok: true } };
+        if (route === `/conversations/${roomId}/executions`) return { body: [
+          { ...execution, status: 'queued', bot_id: otherBot, requester_id: selfId },
+        ] };
+      });
+      expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      const controls = fixture.handle.mock.calls.filter(([, method, body]) => method === 'POST' && body?.action === 'stop')
+        .map(([route]) => route);
+      expect(controls).toEqual([`/conversations/${roomId}/plans/${ownedId}`, `/conversations/${roomId}/executions/${execution.id}/control`]);
+      expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/plans`)).toHaveLength(2);
+    });
+
     it.each(['running', 'stopped'])('does not hide a rejected plan stop when the plan remains %s', async status => {
       const planId = '80000000-0000-4000-8000-000000000002';
       let rejected = false;
-      const plan = { id: planId, creator_id: selfId, status: 'running', revision: 1 };
+      const plan = { id: planId, creator_id: selfId, status: 'running', revision: 1, steps: [{ botId: otherBot, status: 'running' }] };
       singleSpeaker((route, method) => {
         if (route === `/conversations/${roomId}/plans/${planId}` && method === 'POST') {
           rejected = true; return { status: 409, body: { error: { code: 'PLAN_CHANGED' } } };
@@ -4049,21 +4167,21 @@ describe('Chat Server result delivery and refresh', () => {
     // Without the capability the server still runs rounds: Stop ends the whole round and replies read the full main group.
     const olderServer = (extra: (route: string) => unknown = () => undefined) =>
       singleSpeaker(route => route === '/me' ? { body: { actor: { id: selfId } } } : extra(route));
-    it.each([['single-speaker', true], ['older', false]] as const)('offers an owner the stop-scope choice only on a %s server', async (_label, offered) => {
+    it.each([['single-speaker', true], ['older', false]] as const)('never offers stop-all on a %s server', async (_label, offered) => {
       if (offered) singleSpeaker(undefined, 'owner'); else singleSpeaker(route => route === '/me' ? { body: { actor: { id: selfId } } } : undefined, 'owner');
       await vi.advanceTimersByTimeAsync(0);
       const result = await service.getGroup(roomId);
-      expect(result.ok && !!result.group.canStopAll).toBe(offered);
+      expect(result.ok && !!result.group.canStopAll).toBe(false);
     });
-    it('keeps the whole-round stop on an older server', async () => {
+    it('keeps ownership isolation on an older server', async () => {
       olderServer(route => route === `/conversations/${roomId}/executions` ? { body: [
-        { ...execution, id: '40000000-0000-4000-8000-00000000000a', status: 'queued', bot_id: foreignBot, requester_id: selfId },
+        { ...execution, id: '40000000-0000-4000-8000-00000000000a', status: 'queued', bot_id: otherBot, requester_id: otherHuman },
         { ...execution, id: '40000000-0000-4000-8000-00000000000c', status: 'queued', bot_id: foreignBot, requester_id: otherHuman },
       ] } : undefined);
       await vi.advanceTimersByTimeAsync(0);
       const from = fixture.requests.length;
       expect(await service.stopRound(roomId)).toEqual({ ok: true });
-      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toHaveLength(2);
+      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toHaveLength(1);
     });
     it('keeps the full main-group context on an older server', async () => {
       const history = Array.from({ length: 15 }, (_, n) => message(`50000000-0000-4000-8000-0000000001${String(n).padStart(2, '0')}`, `earlier message ${n}`));
