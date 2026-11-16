@@ -1,3 +1,4 @@
+import { canStopBotGroupSpeaker } from '@cindy/maker-shared/botGroupChat';
 import { interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupWorkRow } from './BotGroupWorkArea';
 import { ComposerPullThroughScrollView, useComposerPullThroughBridge } from './composerPullThrough';
@@ -926,8 +927,8 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         quoteMessageId={replyTo?.messageId} focusRequest={replyFocusRequest}
         placeholder={threadRootId ? t('groupChat.thread.placeholder') : undefined}
         stopPending={stopping || group.round.status === 'running' && group.round.speakers.length > 0 && group.round.speakers.every(speaker => speaker.stopping || speaker.executionStatus === 'stopping')}
-        canStop={group.round.canStop !== false && (!group.serverBacked || (chat.server ? group.round.canStop === true
-          : chat.state.kind === 'ready' && chat.state.group.round.speakers.some(speaker => speaker.isSelfRequested === true)))} running={!threadRootId && group.round.status === 'running'} planState={threadRootId || chat.server ? null : botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
+        canStop={group.round.canStop !== false && (!group.serverBacked || group.supportsOwnedStop === true && (chat.server ? group.round.canStop === true
+          : chat.state.kind === 'ready' && chat.state.group.round.speakers.some(speaker => canStopBotGroupSpeaker(group, speaker))))} running={!threadRootId && group.round.status === 'running'} planState={threadRootId || chat.server ? null : botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
         divisionSupported={!threadRootId && !chat.server && (!group.singleSpeaker || group.supportsDivision === true)} attachmentsSupported={group.supportsAttachments === true} uploadAttachment={chat.uploadAttachment} onSend={send} onStop={stop} />
       </View>
       {Platform.OS === 'ios' ? <DockKeyboardBottomSpacer restingBottom={insets.bottom}

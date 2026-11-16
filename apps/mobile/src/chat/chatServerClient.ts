@@ -1,4 +1,5 @@
 import { botGroupMentionAudience } from '@cindy/maker-shared/botGroupMentions';
+import { canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
 import { readBotGroupProcessCard, type BotGroupMention } from '@cindy/maker-shared/botGroupChat';
 import type { ChatMaskAction, ChatMaskState, ChatMaskMention, ChatGroupNotificationMode } from '@cindy/maker-shared/botGroupChat';
 import { teammateChatActivity, type TeammateActivity } from '@cindy/maker-shared/teammate-status';
@@ -79,6 +80,10 @@ export interface ChatExecutionFailure {
   failure_code?: unknown; updated_at?: string; plan_id?: string | null;
 }
 export interface ChatExecution extends ChatExecutionFailure { threadRootId?: string | null; requester_id?: string; created_at?: string; status: string }
+function mayStopWork(members: ChatMember[], selfId: string, botId: string, requesterId?: string) {
+  const member = members.find(member => member.id === botId && member.kind === 'bot');
+  return canStopBotGroupWork(member && { assistant: member.assistant, isOwned: member.ownerActorId === selfId }, requesterId === selfId);
+}
 /** Existing Chat Server plan contract, also consumed by Desktop's chatServer adapter. */
 export interface ChatPlan {
   activeExecution?: { id: string; status: string };
@@ -146,9 +151,10 @@ function chatPlanView(plan: ChatPlan, snapshot: ChatSnapshot, self: string): Bot
   return { id: plan.id, revision: plan.revision, status: plan.status, organizerBotId: plan.organizer_id,
     organizerName: snapshot.members.find(member => member.id === plan.organizer_id)?.name ?? '',
     supportsPendingSkip: plan.supportsPendingSkip === true,
-    steps: plan.steps.map(step => ({ ...step, ...(step.position === plan.current_step && plan.activeExecution
+    steps: plan.steps.map(step => ({ ...step, canStop: mayStopWork(snapshot.members, self, step.botId, plan.creator_id), ...(step.position === plan.current_step && plan.activeExecution
       ? { executionId: plan.activeExecution.id, executionStatus: plan.activeExecution.status } : {}) })), currentStep: plan.current_step, workDir: null, branch: null,
     ...(plan.kind ? { kind: plan.kind } : {}),
+    canStop: !snapshot.room.archived && !snapshot.room.dissolved_at && canStopBotGroupPlan(plan, self, (bot, requester) => mayStopWork(snapshot.members, self, bot, requester)),
     canManage: !snapshot.room.archived && !snapshot.room.dissolved_at && (plan.creator_id === self || !!chatGroupManager(snapshot, self)),
     // Direct sends do not yet use the computer's plan-comment/arrangement pipeline.
     canAdd: false, createdAt: Date.parse(plan.created_at), updatedAt: Date.parse(plan.updated_at) };
@@ -339,6 +345,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   const memberViews: BotGroupMemberView[] = active.map(member => ({
     ...chatMemberIdentity(member, ownerMembers), actorId: member.id, actorKind: member.kind, isSelf: member.id === selfId,
     isOwned: member.ownerActorId === selfId, role: member.role, ownerActorId: member.ownerActorId,
+    ...(member.assistant === true ? { assistant: true } : {}),
     ...(member.displayName !== undefined ? { displayName: member.displayName } : {}),
     ...(member.nickname !== undefined ? { nickname: member.nickname } : {}),
     ...(member.groupAvatar !== undefined ? { groupAvatar: member.groupAvatar } : {}),
@@ -460,7 +467,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     ...(room.kind !== 'direct' && page.snapshot.reads ? { notificationMode: mainRead?.muted ? 'none' as const : mainRead?.notification_scope ?? 'all' as const } : {}),
     serverBacked: true, supportsGroupLeave: room.kind !== 'direct', dissolvedAt: room.dissolved_at ?? null, archived: room.archived, selfActorId: selfId,
     // Invite links are created by an owner or admin this account controls, as on Desktop.
-    canStopAll: room.kind !== 'direct' && !!chatGroupManager(page.snapshot, selfId),
+    canStopAll: false, supportsOwnedStop: true,
     canInvite: room.kind !== 'direct' && !room.archived && !room.dissolved_at && active.some(member => member.ownerActorId === selfId && (['owner', 'admin'].includes(member.role) || (room.kind === 'group' && room.allow_member_invites === true))),
     topic: room.topic, description: room.description,
     supportsSettingsManagement: room.kind === 'group', supportsMemberRemoval: room.kind === 'group',
@@ -472,10 +479,10 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     openPlan: open ? { id: open.id, status: open.status, currentStep: open.currentStep, stepCount: open.steps.length,
       currentBotName: currentStep?.botName ?? null, currentStepStatus: currentStep?.status ?? null, ...(open.kind ? { kind: open.kind } : {}) } : null,
     plans, messages: projectBotGroupExecutionFailures(messages, failures),
-    hasMoreBefore: page.before !== null, round: { canStop: (page.plans ?? []).some(p => p.creator_id === selfId && ['proposed', 'running', 'waiting'].includes(p.status)) || executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status)
-        && e.requester_id === selfId), status: executions.length ? 'running' : 'idle', speakers, canContinue: false,
+    hasMoreBefore: page.before !== null, round: { canStop: (page.plans ?? []).some(p => canStopBotGroupPlan(p, selfId, (bot, requester) => mayStopWork(members, selfId, bot, requester)) && ['proposed', 'running', 'waiting'].includes(p.status)) || executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status)
+        && mayStopWork(members, selfId, e.bot_id, e.requester_id)), status: executions.length ? 'running' : 'idle', speakers, canContinue: false,
       othersActive: executions.some(execution => ['queued', 'running', 'needs_input'].includes(execution.status)
-        && execution.requester_id !== selfId) }, supportsAttachments: true };
+        && !mayStopWork(members, selfId, execution.bot_id, execution.requester_id)) }, supportsAttachments: true };
 }
 
 export function createChatServerClient(request: ChatRequest, personalList = createConversationListState(),
@@ -896,6 +903,11 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       if (plan.creator_id !== self && !manager) throw new Error('ROLE_REQUIRED');
       const step = plan.steps.find(step => step.position === plan.current_step);
       const action = input.action === 'dismiss' && plan.status === 'waiting' ? 'stop' : input.action;
+      if (action === 'stop' && !canStopBotGroupPlan(plan, self, (bot, requester) => mayStopWork(snapshot.members, self, bot, requester))) throw new Error('ROLE_REQUIRED');
+      if (input.action === 'skip') {
+        const target = plan.steps.find(step => step.position === input.position);
+        if (!target || !mayStopWork(snapshot.members, self, target.botId, plan.creator_id)) throw new Error('ROLE_REQUIRED');
+      }
       if ((action === 'start' || action === 'dismiss') && plan.status !== 'proposed'
         || action === 'stop' && plan.status !== 'waiting'
         || action === 'continue' && (plan.status !== 'waiting' || !(step?.status === 'done' || plan.kind === 'talk' && step?.status === 'skipped'))
@@ -926,6 +938,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         { operationId, expectedRevision: plan.revision, action, ...edit }, manager?.id === self ? undefined : manager?.id, signal);
     },
     async stop(roomId: string, operationId: string, scope?: 'all', current = () => true) {
+      if (scope === 'all') throw new Error('ROLE_REQUIRED');
       const room = chatId(roomId);
       const check = () => { if (!current()) throw new Error('OWNER_CHANGED'); };
       const call: ChatRequest = async <T,>(path: string, method?: 'GET' | 'POST' | 'PATCH', body?: unknown, actorId?: string) => {
@@ -937,11 +950,6 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       check();
       const self = await identity(); check();
       const snapshot = await call<ChatSnapshot>(`/conversations/${room}/snapshot`);
-      const manager = chatGroupManager(snapshot, self);
-      if (scope === 'all' && (!singleSpeaker || !manager)) throw new Error('ROLE_REQUIRED');
-      const everything = scope === 'all';
-      const asManager = manager?.id === self ? undefined : manager?.id;
-      const humanIsManager = snapshot.members.some(member => member.id === self && member.state === 'joined' && ['owner', 'admin'].includes(member.role));
 
       const plans = await call<ChatPlan[]>(`/conversations/${room}/plans`);
       const stoppedPlans = new Set<string>();
@@ -954,25 +962,26 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       };
       let stopped = false;
       let unknownRequester = false;
-      for (const plan of plans.filter(plan => (everything || plan.creator_id === self) && ['proposed', 'running', 'waiting'].includes(plan.status))) {
+      for (const plan of plans.filter(plan => canStopBotGroupPlan(plan, self, (bot, requester) => mayStopWork(snapshot.members, self, bot, requester)) && ['proposed', 'running', 'waiting'].includes(plan.status))) {
         try {
           await call(`/conversations/${room}/plans/${chatId(plan.id)}`, 'POST',
             { operationId: `${operationId}:plan:${plan.id}`, expectedRevision: plan.revision, action: 'stop' },
-            plan.creator_id === self ? undefined : asManager);
+            undefined);
           stoppedPlans.add(plan.id); stopped = true;
         } catch (error) { if (!refused(error)) throw error; refusedPlans.set(plan.id, error); }
       }
       const executions = await call<ChatExecution[]>(`/conversations/${room}/executions`);
       for (const execution of executions.filter(execution => ['queued', 'running', 'needs_input'].includes(execution.status) && !(execution.plan_id && stoppedPlans.has(execution.plan_id)))) {
 
-        if (!everything && execution.requester_id !== self) {
-          if (execution.requester_id) continue;
-          if (humanIsManager) { unknownRequester = true; continue; }
+        if (!mayStopWork(snapshot.members, self, execution.bot_id, execution.requester_id)) {
+          const member = snapshot.members.find(member => member.id === execution.bot_id);
+          if (!member || (member.assistant ? !execution.requester_id : !member.ownerActorId)) unknownRequester = true;
+          continue;
         }
         try {
           await call(`/conversations/${room}/executions/${chatId(execution.id)}/control`, 'POST',
             { operationId: `${operationId}:execution:${execution.id}`, action: 'stop' },
-            everything && execution.requester_id !== self ? asManager : undefined);
+            undefined);
           stopped = true;
         } catch (error) { if (!refused(error)) throw error; refusedExecutions.set(execution.id, error); }
       }
