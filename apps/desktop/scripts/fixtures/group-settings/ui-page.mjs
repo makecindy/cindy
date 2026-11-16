@@ -236,6 +236,11 @@ export default {
     await (await row(page, 'Aster')).click();
     await dialog.getByRole('radiogroup').waitFor();
     await ui.capture('companion');
+    await (await row(page, await t('removeOwn'))).click();
+    const withdrawal = page.getByRole('alertdialog');
+    await withdrawal.waitFor();
+    await ui.capture('companion-remove-confirm');
+    await withdrawal.getByRole('button', { name: await ui.t('bots.cancel'), exact: true }).click();
     await back.click();
 
     // 本群资料: nickname and the group-only avatar, without account profile controls.

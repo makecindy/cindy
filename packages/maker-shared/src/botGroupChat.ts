@@ -585,6 +585,8 @@ export interface BotGroupSummary {
   supportsDissolve?: boolean;
   /** Upgraded host forwards leave explicitly; absent on old compatibility hosts. */
   supportsGroupLeave?: boolean;
+  /** Host can let an owner withdraw their own companion without group management privileges. */
+  supportsOwnBotRemoval?: boolean;
   supportsListRemoval?: boolean;
   supportsMemberAvatar?: boolean;
   supportsNotificationSettings?: boolean;

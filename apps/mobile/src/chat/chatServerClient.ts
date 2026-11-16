@@ -106,7 +106,7 @@ export interface ChatHistoryPage { messages: ChatMessage[]; before: string | nul
 export type ChatGroupSettingsAction =
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
   | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean; allowMentionAllBots?: boolean }
-  | { type: 'member'; actorId: string; action: 'invite' | 'remove' | 'role'; role?: 'admin' | 'member' }
+  | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'role'; role?: 'admin' | 'member' }
   /** Your own group identity: a nickname, or a public avatar URL (null resets it). */
   | { type: 'nickname'; actorId: string; nickname: string | null }
   | { type: 'avatar'; actorId: string; avatar: string | null }

@@ -504,6 +504,27 @@ describe('Chat Server result delivery and refresh', () => {
       expect(continues()).toHaveLength(1);
     });
   });
+  // Unit: ordinary membership + own bot is the minimal previously denied input. Exercise
+  // production manage through HTTP: owner delegation must send leave, foreign removal stays denied.
+  it('withdraws only an owned companion using its own actor identity', async () => {
+    const foreignId = '00000000-0000-4000-8000-000000000099';
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route.endsWith('/members') && method === 'POST' && body.actorId === foreignId) return { status: 403, body: { error: { code: 'ROLE_REQUIRED' } } };
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [
+        { id: selfId, kind: 'human', ownerActorId: selfId, state: 'joined', role: 'member' },
+        { id: botId, kind: 'bot', ownerActorId: selfId, state: 'joined', role: 'member' },
+        { id: foreignId, kind: 'bot', ownerActorId: foreignId, state: 'joined', role: 'member' },
+      ], messages: [], cursor: '1' } };
+      return response(route);
+    });
+    const result = await service.chatServer!.manage({ groupId: roomId, action: { type: 'member', actorId: botId, action: 'remove' } });
+    expect(result).toMatchObject({ ok: true });
+    expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/members`, 'POST', expect.objectContaining({ actorId: botId, action: 'leave' }));
+    expect(fixture.requests.filter(request => request.url.endsWith('/members')).at(-1)?.actor).toBe(botId);
+    expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'member', actorId: foreignId, action: 'remove' } })).toMatchObject({ ok: false });
+    expect(fixture.requests.filter(request => request.url.endsWith('/members')).at(-1)?.actor).toBeUndefined();
+    expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/members`, 'POST', expect.objectContaining({ actorId: foreignId, action: 'remove' }));
+  });
   it('uses the mobile edited revision instead of a newer server snapshot when saving settings', async () => {
     await service.updateGroup({ groupId: roomId, name: 'Draft', expectedRevision: 7 });
     expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}`, 'PATCH', expect.objectContaining({ name: 'Draft', expectedRevision: 7 }));

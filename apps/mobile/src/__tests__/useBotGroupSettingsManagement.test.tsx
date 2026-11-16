@@ -73,7 +73,7 @@ it('reads and saves cloud settings and offers offline companions without any hos
   expect(writes().slice(1).map(call => call[2])).toEqual([
     { operationId: 'operation-2', actorId: id(4), action: 'invite' },
     { operationId: 'operation-3', actorId: id(3), action: 'role', role: 'admin' },
-    { operationId: 'operation-4', actorId: id(3), action: 'remove' },
+    { operationId: 'operation-4', actorId: id(3), action: 'leave' },
   ]);
 });
 
@@ -112,6 +112,24 @@ it('lets an ordinary member save notifications without a manager or online compu
   source = { ...source, notificationMode: 'none' };
   await render();
   expect(result.group?.notificationMode).toBe('none');
+});
+
+// Unit regression: ordinary members can withdraw only their own companion. Prior coverage
+// exercised manager removal, not the actor identity/body required by the existing leave API.
+it('withdraws an owned companion as that actor without granting removal of other companions', async () => {
+  snapshot.members[0].role = 'member';
+  snapshot.members.push({ ...snapshot.members[1], id: id(8), ownerActorId: id(9) });
+  await render();
+  await act(async () => { await result.act('remove-member', { actorId: id(3) }); });
+  expect(writes()).toEqual([[`/conversations/${id(1)}/members`, 'POST',
+    { operationId: 'operation-1', actorId: id(3), action: 'leave' }, id(3)]]);
+  await act(async () => { await expect(result.act('remove-member', { actorId: id(8) })).rejects.toThrow('PERMISSION_DENIED'); });
+  expect(writes()).toHaveLength(1);
+  // Ownership revoked since the earlier snapshot must not be reused after refresh.
+  snapshot.members[1].ownerActorId = id(9);
+  await act(async () => { await result.refresh(); });
+  await act(async () => { await expect(result.act('remove-member', { actorId: id(3) })).rejects.toThrow('PERMISSION_DENIED'); });
+  expect(writes()).toHaveLength(1);
 });
 
 it('selects only an owned manager, never a foreign owner', async () => {

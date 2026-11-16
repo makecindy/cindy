@@ -328,6 +328,7 @@ export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteCh
     ...(detail.serverBacked === true ? {} : { supportsLocalReadSync: true }),
     supportsPersonalMask: detail.serverBacked === true,
     supportsMemberRemoval: detail.serverBacked === true,
+    supportsOwnBotRemoval: detail.serverBacked === true,
     supportsSettingsManagement: detail.serverBacked === true,
   };
 }

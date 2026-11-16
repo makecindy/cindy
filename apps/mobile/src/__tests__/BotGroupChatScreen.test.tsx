@@ -2079,6 +2079,37 @@ describe('group settings', () => {
     expect(byId('botGroup.settings')).not.toBeNull();
   }
 
+  // Unit regression: server settings through an upgraded host previously hid My companions.
+  // Exercise real screen/sheet navigation, confirmation and action, plus the old-host fallback.
+  it.each([true, false])('withdraws own companions from their settings page (direct=%s)', async direct => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, supportsOwnBotRemoval: true, revision: 5 });
+    data.members[0] = { ...data.members[0], actorId: 'human', actorKind: 'human', isSelf: true, isOwned: true, role: 'member' };
+    data.members[1] = { ...data.members[1], actorId: 'bot', actorKind: 'bot', isOwned: true, role: 'member' };
+    data.members[2] = { ...data.members[2], actorId: 'foreign', actorKind: 'bot', isOwned: false, role: 'member' };
+    h.chat.server = direct;
+    const manage = vi.fn(async () => ({ effects: [] }));
+    if (direct) h.management = { group: data, editable: false, ready: true, loading: false, reason: 'permission', act: manage, refresh: vi.fn() };
+    await openSettings(data);
+    expect(byId('botGroup.settings.teammate.xiaoman')).toBeNull();
+    await click('botGroup.settings.teammate.abu');
+    h.confirm.mockResolvedValueOnce(false);
+    await click('botGroup.settings.removeOwn');
+    expect(manage).not.toHaveBeenCalled(); expect(h.chat.act).not.toHaveBeenCalled();
+    await click('botGroup.settings.removeOwn');
+    expect(direct ? manage : h.chat.act).toHaveBeenCalledWith('remove-member', direct ? { actorId: 'bot' } : { expectedRevision: 5, actorId: 'bot' });
+    expect(byId('botGroup.settings.myTeammates')).not.toBeNull();
+  });
+
+  it('hides own companion withdrawal on an older host', async () => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, supportsMemberRemoval: true });
+    data.members[0] = { ...data.members[0], actorId: 'human', actorKind: 'human', isSelf: true, isOwned: true, role: 'member' };
+    data.members[1] = { ...data.members[1], actorId: 'bot', actorKind: 'bot', isOwned: true, role: 'member' };
+    await openSettings(data);
+    expect(byId('botGroup.settings.myTeammates')).toBeNull();
+    await click('botGroup.settings.tab.members');
+    expect(byId('botGroup.settings.memberMenu.abu.action.remove')).toBeNull();
+  });
+
   it('allows personal removal from an archived read-only group without management rights', async () => {
     h.chat.server = true;
     await openSettings(group({ serverBacked: true, archived: true, supportsListRemoval: true, supportsSettingsManagement: false,

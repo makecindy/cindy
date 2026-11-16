@@ -3838,9 +3838,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (!recipient) throw new Error('MEMBER_NOT_FOUND');
         if (recipient.kind !== 'human') throw new Error('HUMAN_OWNER_REQUIRED');
       }
-      const actorId = asManager ? managementActor(s) : undefined;
+      // Withdrawing your companion is its own leave, not permission to manage other members.
+      // The server independently validates actor ownership and settles only this room's executions.
+      const ownCompanion = action.type === 'member' && action.action === 'remove'
+        ? s.members.find(member => member.id === action.actorId && member.state === 'joined'
+          && member.kind === 'bot' && member.ownerActorId === selfId && member.id !== assistantActorId)
+        : undefined;
+      const actorId = ownCompanion?.id ?? (asManager ? managementActor(s) : undefined);
       await api(`/conversations/${target}${route}`, type === 'update' || type === 'archive' ? 'PATCH' : 'POST', {
-        operationId: randomUUID(), ...payload, ...(type === 'archive' ? { archived: action.archived } : {}),
+        operationId: randomUUID(), ...payload, ...(ownCompanion ? { action: 'leave' } : {}), ...(type === 'archive' ? { archived: action.archived } : {}),
       }, actorId);
       changed(target); return {};
     }),
