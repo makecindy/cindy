@@ -368,15 +368,20 @@ describe('copyCodexAuthSnapshot', () => {
 });
 
 describe('recoverCodexAuth', () => {
-  it('systemAuth 存在 → 重建 myAuth 并返回 true', async () => {
+  it('systemAuth 存在时按文件软链接能力恢复，不复制原生凭证', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
     expect(fs.existsSync(myAuth)).toBe(false);
 
     const ok = await recoverCodexAuth(systemAuth, myAuth);
 
-    expect(ok).toBe(true);
-    expect(fs.existsSync(myAuth)).toBe(true);
-    expect(fs.readFileSync(myAuth, 'utf-8')).toBe(SYSTEM_CONTENT);
+    expect(ok).toBe(canLinkFile);
+    expect(fs.existsSync(myAuth)).toBe(canLinkFile);
+    if (canLinkFile) {
+      expect(fs.lstatSync(myAuth).isSymbolicLink()).toBe(true);
+      expect(fs.readFileSync(myAuth, 'utf-8')).toBe(SYSTEM_CONTENT);
+    }
+    expect(fs.readFileSync(systemAuth, 'utf-8')).toBe(SYSTEM_CONTENT);
+    expect(fs.statSync(systemAuth).nlink).toBe(1);
   });
 
   it('systemAuth 不存在 → 返回 false,不创建 myAuth', async () => {
