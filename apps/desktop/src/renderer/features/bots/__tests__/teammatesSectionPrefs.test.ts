@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { readTeammatesViewMode, writeTeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from '../teammatesSectionPrefs';
+import { readCollapsedTeammateAvatars, writeCollapsedTeammateAvatars, readTeammatesViewMode, writeTeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from '../teammatesSectionPrefs';
 
 beforeEach(() => localStorage.clear());
 
@@ -36,4 +36,21 @@ it('stores icon mode independently from collapse and other accounts', () => {
   expect(readTeammatesViewMode('owner-b')).toBe('list');
   writeTeammatesSectionCollapsed('owner-a', false);
   expect(readTeammatesViewMode('owner-a')).toBe('icons');
+});
+
+// Unit: the new opt-in must persist per account without changing existing fold/style
+// choices. Existing tests only cover those two preferences; two owners distinguish leakage.
+it('defaults collapsed avatars off and stores the explicit choice independently per account', () => {
+  expect(readCollapsedTeammateAvatars('owner-a')).toBe(false);
+  writeTeammatesSectionCollapsed('owner-a', true);
+  writeTeammatesViewMode('owner-a', 'icons');
+  writeCollapsedTeammateAvatars('owner-a', true);
+  expect(readCollapsedTeammateAvatars('owner-a')).toBe(true);
+  expect(readCollapsedTeammateAvatars('owner-b')).toBe(false);
+  expect(readTeammatesSectionCollapsed('owner-a')).toBe(true);
+  expect(readTeammatesViewMode('owner-a')).toBe('icons');
+  writeCollapsedTeammateAvatars('owner-a', false);
+  expect(readCollapsedTeammateAvatars('owner-a')).toBe(false);
+  writeCollapsedTeammateAvatars(null, true);
+  expect(readCollapsedTeammateAvatars(null)).toBe(false);
 });

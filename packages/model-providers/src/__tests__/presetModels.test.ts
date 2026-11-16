@@ -25,6 +25,19 @@ describe("预设推荐模型单一清单", () => {
       expect(preset?.runtimes[agent]).not.toHaveProperty("modelsUrl");
     }
   });
+  it("Open Design 通过现有 Chat 兼容展开，不声明未经证实的原生协议与型号", () => {
+    const source = rawPresets.find((preset) => preset.id === "open-design");
+    expect(source).toMatchObject({ models: [], runtimes: {
+      codex: { baseUrl: "https://amr-link.open-design.ai/v1", modelsUrl: "https://amr-link.open-design.ai/v1/models", wireProtocol: "openai-chat" },
+      pi: { baseUrl: "https://amr-link.open-design.ai/v1", modelsUrl: "https://amr-link.open-design.ai/v1/models", wireProtocol: "openai-chat" },
+    }});
+    expect(Object.keys(source!.runtimes as object).sort()).toEqual(["codex", "pi"]);
+    expect(source).not.toHaveProperty("authMethod");
+    const preset = BUNDLED_CATALOG.presets?.find(({ id }) => id === "open-design");
+    for (const agent of ["claude-code", "codex", "pi"] as const) {
+      expect(preset?.runtimes[agent]).toMatchObject({ baseUrl: "https://amr-link.open-design.ai/v1", modelsUrl: "https://amr-link.open-design.ai/v1/models", wireProtocol: "openai-chat", models: [] });
+    }
+  });
   it("随包预设只在顶层写一份清单，不再按引擎各写一份", () => {
     const perEngine = rawPresets.filter((preset) =>
       Object.values(

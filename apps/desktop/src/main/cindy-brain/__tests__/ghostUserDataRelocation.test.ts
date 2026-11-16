@@ -17,6 +17,7 @@ import { GhostManager } from '../GhostManager.js';
 import { createGhostInstallReceipt, GhostInstallReceiptStore, hashApprovedSkillContent } from '../ghostInstallReceipt.js';
 import { runGhostSnapshotWorkerRequest } from '../ghostSnapshotWorkerProcess.js';
 import { relocateGhostUserDataResources, type GhostUserDataRelocationResources } from '../ghostUserDataRelocation.js';
+import { withGhostOauthMutationLock } from '../ghostOauthMutationLock.js';
 import { writeTestCindyPackage } from './cindyPackageFixture.js';
 
 const scope = vi.hoisted(() => ({ dir: '' }));
@@ -201,7 +202,9 @@ it('completes source replacement and another plugin uninstall without reversing 
   let entered!: () => void, finish!: () => void;
   const started = new Promise<void>(resolve => { entered = resolve; });
   const gate = new Promise<void>(resolve => { finish = resolve; });
-  const manager = new GhostManager({ getRootDir: () => root, onArchiveSourceState: async (source, destination) => {
+  const manager = new GhostManager({ getRootDir: () => root,
+    onUninstallSourceState: id => withGhostOauthMutationLock(scope.dir, id, path.join(scope.dir, `${id}.oauth.lock`), async () => {}),
+    onArchiveSourceState: async (source, destination) => {
     entered(); await gate; await service.relocatePlugin(source, destination);
   } });
   await manager.commitPendingNamespace(from, 'acme', 'market-organization');

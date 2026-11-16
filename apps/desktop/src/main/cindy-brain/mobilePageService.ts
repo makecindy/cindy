@@ -859,7 +859,7 @@ export class MobilePluginPages {
                   })) ?? [],
                 permissions,
                 details: detailFacts,
-                tasks: ghost.manifest.showTaskPreferences !== false && Boolean(ghost.manifest.agent?.tasks || ghost.manifest.agent?.errand),
+                tasks: ghost.manifest.showTaskPreferences !== false && Boolean(ghost.manifest.agent?.tasks || ghost.manifest.agent?.errand || ghost.manifest.workspace),
                 // Content is fetched on demand with PLUGIN_README_ACTION; older phones ignore the flag.
                 ...(ghost.manifest.readme ? { readme: true } : {}),
                 mobile: parsePluginMobileDeclaration(ghost.manifest.mobile) !== null,
@@ -905,7 +905,7 @@ export class MobilePluginPages {
           if (
             !settings ||
             !ghost.enabled ||
-            !(ghost.manifest.agent?.tasks || ghost.manifest.agent?.errand)
+            !(ghost.manifest.agent?.tasks || ghost.manifest.agent?.errand || ghost.manifest.workspace)
           )
             return fail();
           const revision = this.deps.revision(ghost),

@@ -1,10 +1,8 @@
 /**
  * branchPick.test.ts — 分支区点选语义(纯函数)回归。
  *
- * 语义契约:
- *  - checkbox 是唯一能改动 worktree 勾选状态的入口;
- *  - ON / OFF 时选分支都只改源分支,选当前源分支 no-op;
- *  - 永远不产生"checkout 用户 checkout"的效果
+ * 验证未勾时选择分支触发真实 checkout 意图，已勾时只改变源分支。
+ * 最小失败输入是记住的源分支与当前分支不同；不改变勾选记忆。Tier: unit。
  */
 import { describe, expect, it } from 'vitest';
 
@@ -29,26 +27,32 @@ describe('resolveBranchPick', () => {
     ).toEqual({ kind: 'noop' });
   });
 
-  it('worktree OFF: picking a branch only changes the future worktree source', () => {
+  it('worktree OFF: picking a branch requests checkout', () => {
     for (const { currentBranch, picked } of [
       { currentBranch: 'main', picked: 'feat/x' },
       { currentBranch: null, picked: 'feat/y' },
     ]) {
       expect(
-        resolveBranchPick(
-          { worktreeEnabled: false, currentBranch, sourceBranch: '' },
-          picked,
-        ),
-      ).toEqual({ kind: 'set-source', branch: picked });
+        resolveBranchPick({ worktreeEnabled: false, currentBranch, sourceBranch: '' }, picked),
+      ).toEqual({ kind: 'checkout', branch: picked });
     }
   });
 
-  it('worktree OFF: picking the already selected source is a no-op', () => {
+  it('worktree OFF: picking the current branch never writes the source preference', () => {
+    expect(
+      resolveBranchPick(
+        { worktreeEnabled: false, currentBranch: 'main', sourceBranch: 'feat/x' },
+        'main',
+      ),
+    ).toEqual({ kind: 'noop' });
+  });
+
+  it('worktree OFF: the remembered source must still switch the current checkout', () => {
     expect(
       resolveBranchPick(
         { worktreeEnabled: false, currentBranch: 'main', sourceBranch: 'feat/x' },
         'feat/x',
       ),
-    ).toEqual({ kind: 'noop' });
+    ).toEqual({ kind: 'checkout', branch: 'feat/x' });
   });
 });
