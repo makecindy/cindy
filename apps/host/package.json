@@ -8,7 +8,7 @@
     "cindy-host-login": "./src/main.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "cross-env NODE_OPTIONS=--max-old-space-size=8192 tsc --noEmit -p tsconfig.json",
     "start": "node --import tsx --import ./src/loaders/register-raw.mjs src/main.ts",
     "test": "node --import ./src/loaders/test-region.mjs --import tsx --import ./src/loaders/register-raw.mjs --test \"src/**/*.test.mjs\"",
     "build": "node scripts/build.mjs",
