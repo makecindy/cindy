@@ -12,8 +12,8 @@ export default {
   name: 'teammates-section',
   entry: './teammates-fixture.tsx',
   viewport: { width: 800, height: 600 },
-  real: 'TeammatesSection rows, current-chat preview, show-all/show-less controls, avatar strip, theme and translations',
-  notCovered: 'Roster loading, cloud/device connections, create/delete menus and message delivery',
+  real: 'TeammatesSection rows, PinnedSection display sorting and menu, current-chat preview, show-all/show-less controls, avatar strip, theme and translations',
+  notCovered: 'Roster loading, cloud/device connections, create/delete menus, message delivery, pinned drag persistence and collapsed RailNav',
   stubs: {
     'src/renderer/features/cc-agent/sidebar/sessionWorktreeInfo': { partial: 'export const useTaskInfoWorktree=()=>null;' },
     'src/renderer/contexts/AuthContext': { partial: 'export const useAuth=()=>({dataOwnerId:"ui-fixture"});' },
@@ -27,6 +27,10 @@ export default {
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
   cases: {
+    'pinned-sort': {
+      about: 'Pinned display sorting changes task order and restores the manual order without changing view style',
+      data: { showPinned: true, profiles: [], remoteBots: [], route: '/bots' },
+    },
     'collapse-attention': {
       about: 'Independent icon/list choice; collapsed sections keep unread and pending feedback only',
       data: { showPinned: true, profiles: [
@@ -208,6 +212,28 @@ export default {
     },
   },
   async check(page, ui) {
+    if (ui.case === 'pinned-sort') {
+      const pinned = page.getByRole('button', { name: await ui.t('ccAgent.sidebar.pinned'), exact: true });
+      const section = pinned.locator('xpath=../../..');
+      const openMenu = async () => {
+        await pinned.hover();
+        await section.getByRole('button', { name: await ui.t('ccAgent.sidebar.viewStyle'), exact: true }).click();
+      };
+      const titles = () => page.locator('[data-sortable-id]')
+        .evaluateAll(rows => rows.map(row => row.getAttribute('data-sortable-id')));
+      assert.deepEqual(await titles(), ['pinned-0', 'pinned-1', 'pinned-2']);
+      await openMenu();
+      await ui.capture('sorting-menu');
+      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterSortBy.activity'), exact: true }).click();
+      assert.deepEqual(await titles(), ['pinned-2', 'pinned-1', 'pinned-0']);
+      assert.equal(await page.evaluate(() => localStorage.getItem('cc-agent.sidebar.pinnedSortBy')), 'recency');
+      await ui.capture('recent-first');
+      await openMenu();
+      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterSortBy.manual'), exact: true }).click();
+      assert.deepEqual(await titles(), ['pinned-0', 'pinned-1', 'pinned-2']);
+      await ui.capture('manual-restored');
+      return;
+    }
     const showIcons = async () => {
       const section = page.locator('[data-sidebar-section="teammates"]');
       await section.getByRole('button', { name: await ui.t('bots.title'), exact: true }).hover();
