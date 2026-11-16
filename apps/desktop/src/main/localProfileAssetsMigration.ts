@@ -20,6 +20,10 @@ import {
 import { GhostInstallReceiptStore } from './cindy-brain/ghostInstallReceipt.js';
 import { parsePluginInstallRelId, pluginInstallStoragePart } from '../shared/pluginIdentity.js';
 import { readModelVisibilityAdoption } from './localDb/modelVisibilityAdoption.js';
+import {
+  ghostSavedCredentialReferenceKey,
+  isReusableSavedSecret,
+} from '../shared/pluginAccountReuse.js';
 
 // This is an adoption of an existing installation, never an install/approval.
 // Keep the content, receipts (including skill snapshots and instance registry),
@@ -261,10 +265,22 @@ async function pluginSecretKeys(localRoot: string): Promise<Set<string>> {
     const instanceKey = pluginInstallStoragePart(relId);
     keys.add(`ghost_alias_migration_${instanceKey}`);
     const manifest = approval.receipt.manifest;
+    // gh-cli stores only the user's optional fallback PAT at this vault key;
+    // the active CLI login is resolved separately and is never read here.
+    const networkSecrets = (manifest.network?.secrets ?? []).filter(
+      (secret) => isReusableSavedSecret(secret) || secret.source === 'gh-cli',
+    );
+    // The marker stored at a normal secret key is unusable without its Host
+    // reference. Copy only that declared companion ciphertext; the existing
+    // resolver still checks both installations and the source credential.
+    // OAuth records and dynamic connection tokens remain outside this handoff.
+    for (const secret of networkSecrets) {
+      if (isReusableSavedSecret(secret)) {
+        keys.add(ghostSecretStorageKey(instanceKey, ghostSavedCredentialReferenceKey(secret.key)));
+      }
+    }
     const userSecretKeys = [
-      ...(manifest.network?.secrets ?? [])
-        .filter((secret) => secret.source === undefined || secret.source === 'user')
-        .map((secret) => secret.key),
+      ...networkSecrets.map((secret) => secret.key),
       ...(manifest.node?.secretBindings ?? [])
         .filter((binding) => !binding.oauthSecret)
         .map((binding) => binding.key),
@@ -437,7 +453,7 @@ export async function adoptLocalProfileAssets(
               }
             }
           }
-          const pluginKeys = adoptPlugins ? await pluginSecretKeys(localRoot) : new Set<string>();
+          const pluginKeys = adoptPlugins ? await pluginSecretKeys(pluginStage) : new Set<string>();
           // A pre-existing, unrelated cloud DB did not adopt local provider rows.
           // Do not attach local credentials to its same-named providers. A prior
           // successful DB adoption is tied to the published file's identity.

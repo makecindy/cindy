@@ -18,8 +18,11 @@
 `localProfileAssetsMigration.ts` 只接受 `localProfileDataMigration` 已持久提交的首个
 cloud owner，在账号切换隔离区内、旧插件运行已停止后交接；后续账号不能继承。
 自定义 Provider API key 与 headers 仅在目标数据库尚不存在或有真实本地库采用证明时复制。
-插件只带走原批准清单中 `network.secrets` 的用户填写静态凭证、无 `oauthSecret` 的
-`node.secretBindings` 手填凭证及对应 hint；登录令牌、OAuth 账号及刷新令牌、
+插件只带走原批准清单中 `network.secrets` 的用户填写静态凭证（含 `gh-cli` 的已存备用 PAT，
+不读取 CLI 登录）、无 `oauthSecret` 的
+`node.secretBindings` 手填凭证及对应 hint；普通网络密钥的 Host 已保存凭证引用密文随原键一并交接，
+引用仍由原解析器复核双方安装与来源凭证。来源凭证不在交接范围时引用保持不可用，不补授权。
+登录令牌、OAuth 账号及刷新令牌、
 动态连接授权、Library 绑定、目录授权均不在此交接范围。不得扩大为整个保险库复制。
 
 同机交接只复制现有 `safeStorage` 密文，不解密、不输出内容，不覆盖目标已有值，保留

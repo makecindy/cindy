@@ -19,6 +19,9 @@ import { runGhostSnapshotWorkerRequest } from '../cindy-brain/ghostSnapshotWorke
 import { pluginInstallStoragePart } from '../../shared/pluginIdentity.js';
 import { validateGhostManifest } from '../../shared/ghost.js';
 import { recordModelVisibilityAdoption } from '../localDb/modelVisibilityAdoption.js';
+import { GhostSavedCredentialManager } from '../cindy-brain/ghostSavedCredentials.js';
+import { GhostConnectionManager } from '../cindy-brain/ghostConnections.js';
+import { ghostSecretStorageKey, ghostSecretHintStorageKey } from '../../shared/providerSecrets.js';
 
 // Unit tier. #10334's existing database/native-auth tests never read migrated
 // custom keys or installation receipts. Real temporary files, the durable owner
@@ -47,10 +50,16 @@ function fixture(claim = true) {
   return { root, local, cloud, secret, write, deps };
 }
 
-async function install(local: string, enabled = true, namespaced = false) {
+async function install(
+  local: string,
+  enabled = true,
+  namespaced = false,
+  id = 'opendesign-trial',
+  secretSource?: 'gh-cli',
+) {
   const raw = {
     schemaVersion: 2,
-    id: 'opendesign-trial',
+    id,
     name: 'OpenDesign',
     version: '0.4.27',
     ...(namespaced ? { namespace: null } : {}),
@@ -73,12 +82,13 @@ async function install(local: string, enabled = true, namespaced = false) {
       ],
     },
     network: {
-      hosts: ['api.example.com'],
+      hosts: ['api.example.com', 'api.github.com'],
       secrets: [
         {
           key: 'api_key',
           label: 'API key',
-          inject: { header: 'Authorization', format: 'Bearer {value}' },
+          ...(secretSource ? { source: secretSource } : {}),
+          inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.github.com'] },
         },
         {
           key: 'account',
@@ -154,6 +164,10 @@ describe('first verified cloud owner adopts local assets', () => {
         `ghost_secret_${instanceKey}_oauth_token`,
         `ghost_hint_${instanceKey}_oauth_token`,
         `ghost_secret_${instanceKey}_account`,
+        `ghost_secret_${instanceKey}_account-reused-credential`,
+        `ghost_secret_${instanceKey}_manual_token-reused-credential`,
+        `ghost_secret_${instanceKey}_api_key-connections`,
+        `ghost_secret_${instanceKey}_api_key-token-test-connection`,
       ];
       for (const key of [...keys, ...excluded])
         f.write(f.secret('local-v1', key), `test-ciphertext:${key}`);
@@ -225,6 +239,82 @@ describe('first verified cloud owner adopts local assets', () => {
             (entry) => entry.isDirectory() && entry.name.startsWith('.local-profile-assets-'),
           ),
       ).toEqual([]);
+    },
+  );
+
+  it.each([undefined, 'gh-cli'] as const)(
+    'preserves a selected saved credential (source=%s) through owner adoption and restart',
+    async (sourceKind) => {
+      // Unit, #10357: a copied marker alone cannot resolve a saved credential.
+      // Existing direct-key fixtures missed the Host-owned companion reference.
+      // Exercise real reuse/adoption/resolve with two installed plugins and only
+      // synthetic vault bytes in the temporary fixture, never OS credentials.
+      const f = fixture();
+      const source = await install(f.local, true, true, 'credential-source', sourceKind);
+      const target = await install(f.local);
+      const sources = [source, target].map(({ instanceKey, receipt }) => ({
+        instanceKey,
+        name: receipt.manifest.name,
+        manifest: receipt.manifest,
+      }));
+      const runtime = (owner: string) => {
+        const vault = {
+          read: (id: string, key: string) => {
+            const file = f.secret(owner, ghostSecretStorageKey(id, key));
+            return fs.existsSync(file)
+              ? fs.readFileSync(file, 'utf8').slice('test-ciphertext:'.length)
+              : null;
+          },
+          store: (id: string, key: string, value: string) => {
+            f.write(f.secret(owner, ghostSecretStorageKey(id, key)), `test-ciphertext:${value}`);
+            return true;
+          },
+          remove: (id: string, key: string) => {
+            fs.rmSync(f.secret(owner, ghostSecretStorageKey(id, key)), { force: true });
+          },
+          readTail: () => null,
+        };
+        const manager = new GhostSavedCredentialManager({
+          vault,
+          connections: new GhostConnectionManager({ vault }),
+          connectionSources: () => sources,
+          connectionSource: (id) => sources.find((source) => source.instanceKey === id) ?? null,
+          captureTarget: (id) => (sources.some((source) => source.instanceKey === id) ? id : null),
+          withMutationLock: async (_id, task) => task(),
+        });
+        return { manager, vault };
+      };
+      const local = runtime('local-v1');
+      local.vault.store(source.instanceKey, 'api_key', 'synthetic-source-key');
+      const hintKey = ghostSecretHintStorageKey(source.instanceKey, 'api_key');
+      f.write(f.secret('local-v1', hintKey), 'synthetic-encrypted-hint');
+      expect(
+        await local.manager.reuse(target.instanceKey, 'api_key', {
+          kind: 'secret',
+          instanceKey: source.instanceKey,
+          secretKey: 'api_key',
+          accountId: 'saved',
+        }),
+      ).toEqual({ ok: true });
+      expect(local.manager.resolve(target.instanceKey, 'api_key')?.value).toBe(
+        'synthetic-source-key',
+      );
+      await adoptLocalProfileAssets('cloud-a', f.deps);
+      expect(fs.readFileSync(f.secret('cloud-a', hintKey), 'utf8')).toBe(
+        'synthetic-encrypted-hint',
+      );
+      const cloud = runtime('cloud-a');
+      const resolved = cloud.manager.resolve(target.instanceKey, 'api_key');
+      expect(resolved?.value).toBe('synthetic-source-key');
+      resolved!.assertCurrent();
+      cloud.vault.remove(source.instanceKey, 'api_key');
+      expect(() => resolved!.assertCurrent()).toThrow('CREDENTIAL_REFERENCE_CHANGED');
+      expect(cloud.manager.resolve(target.instanceKey, 'api_key')).toBeNull();
+      expect(local.manager.resolve(target.instanceKey, 'api_key')?.value).toBe(
+        'synthetic-source-key',
+      );
+      expect(await adoptLocalProfileAssets('cloud-b', f.deps)).toBe('not-owner');
+      expect(runtime('cloud-b').manager.resolve(target.instanceKey, 'api_key')).toBeNull();
     },
   );
 
