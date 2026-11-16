@@ -21913,7 +21913,11 @@
     "sourceHint_blank": "Introduza um nome. A pasta será criada automaticamente.",
     "sourceHint_existing": "Escolha uma pasta de projeto neste computador.",
     "sourceHint_repository": "Cole a ligação do repositório para transferir para este computador.",
-    "source": "Origem do projeto"
+    "source": "Origem do projeto",
+    "sourceShort_blank": "Novo",
+    "sourceShort_existing": "Pasta",
+    "sourceShort_repository": "Repositório",
+    "automaticMain": "Principal · Automático"
   },
   "taskManagement": {
     "scope": "Apenas para esta conta neste computador.",

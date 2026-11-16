@@ -504,6 +504,10 @@
     "sourceHint_blank": "Enter a name. The project folder is created automatically.",
     "sourceHint_existing": "Choose an existing project folder on this computer.",
     "sourceHint_repository": "Paste a repository link to download it to this computer.",
-    "source": "Project source"
+    "source": "Project source",
+    "sourceShort_blank": "Blank",
+    "sourceShort_existing": "Folder",
+    "sourceShort_repository": "Repository",
+    "automaticMain": "Primary · Automatic"
   }
 }

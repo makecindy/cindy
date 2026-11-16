@@ -504,6 +504,10 @@
     "sourceHint_blank": "名前を入力するとフォルダが自動作成されます。",
     "sourceHint_existing": "このコンピュータの既存フォルダを選択します。",
     "sourceHint_repository": "リンクを貼り付けてこのコンピュータにダウンロードします。",
-    "source": "作成方法"
+    "source": "作成方法",
+    "sourceShort_blank": "新規",
+    "sourceShort_existing": "フォルダ",
+    "sourceShort_repository": "リポジトリ",
+    "automaticMain": "メイン · 自動作成"
   }
 }

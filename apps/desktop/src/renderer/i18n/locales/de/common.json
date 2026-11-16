@@ -21708,7 +21708,11 @@
     "sourceHint_blank": "Name eingeben. Der Projektordner wird automatisch erstellt.",
     "sourceHint_existing": "Einen vorhandenen Projektordner auf diesem Computer wählen.",
     "sourceHint_repository": "Repository-Link einfügen und auf diesen Computer herunterladen.",
-    "source": "Projektquelle"
+    "source": "Projektquelle",
+    "sourceShort_blank": "Neu",
+    "sourceShort_existing": "Ordner",
+    "sourceShort_repository": "Repository",
+    "automaticMain": "Hauptordner · Automatisch"
   },
   "taskManagement": {
     "scope": "Nur für dieses Konto auf diesem Computer.",

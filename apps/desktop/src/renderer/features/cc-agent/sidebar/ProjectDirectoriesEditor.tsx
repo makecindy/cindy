@@ -9,6 +9,7 @@ import { FormField } from '@/components/ui/form-field';
 /** The same draft editor is used by project creation and project settings. */
 export function ProjectDirectoriesEditor({
   mainDirectory,
+  automatic = false,
   onMainDirectoryChange,
   copied,
   onCopy,
@@ -21,6 +22,7 @@ export function ProjectDirectoriesEditor({
   onBrowse,
 }: {
   mainDirectory: string;
+  automatic?: boolean;
   onMainDirectoryChange?: (path: string) => void;
   copied: boolean;
   onCopy: () => void;
@@ -55,31 +57,33 @@ export function ProjectDirectoriesEditor({
                 {mainDirectory}
               </span>
               <span className="shrink-0 rounded bg-[var(--surface-hover-soft)] px-2 py-1 text-12 text-[var(--text-secondary)]">
-                {label('mainDirectory')}
+                {label(automatic ? 'automaticMain' : 'mainDirectory')}
               </span>
-              <Button
-                variant="secondary"
-                tone="quiet"
-                className="w-8 shrink-0 px-0"
-                aria-label={label(
-                  onMainDirectoryChange ? 'removeDirectory' : copied ? 'copied' : 'copy',
-                )}
-                disabled={disabled}
-                onClick={() => {
-                  if (onMainDirectoryChange) {
-                    onMainDirectoryChange(value[0]?.path ?? '');
-                    onChange(value.slice(1));
-                  } else onCopy();
-                }}
-              >
-                {onMainDirectoryChange ? (
-                  <X size={15} />
-                ) : copied ? (
-                  <Check size={15} />
-                ) : (
-                  <Copy size={15} />
-                )}
-              </Button>
+              {!automatic && (
+                <Button
+                  variant="secondary"
+                  tone="quiet"
+                  className="w-8 shrink-0 px-0"
+                  aria-label={label(
+                    onMainDirectoryChange ? 'removeDirectory' : copied ? 'copied' : 'copy',
+                  )}
+                  disabled={disabled}
+                  onClick={() => {
+                    if (onMainDirectoryChange) {
+                      onMainDirectoryChange(value[0]?.path ?? '');
+                      onChange(value.slice(1));
+                    } else onCopy();
+                  }}
+                >
+                  {onMainDirectoryChange ? (
+                    <X size={15} />
+                  ) : copied ? (
+                    <Check size={15} />
+                  ) : (
+                    <Copy size={15} />
+                  )}
+                </Button>
+              )}
             </div>
           )}
           {value.map((item, index) => (

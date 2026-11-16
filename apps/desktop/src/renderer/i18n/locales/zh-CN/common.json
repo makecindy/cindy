@@ -21626,7 +21626,11 @@
     "sourceHint_blank": "填写名称，自动创建项目目录。",
     "sourceHint_existing": "选择这台电脑上已有的项目目录。",
     "sourceHint_repository": "粘贴仓库链接，下载到这台电脑。",
-    "source": "项目来源"
+    "source": "项目来源",
+    "sourceShort_blank": "空白项目",
+    "sourceShort_existing": "已有文件夹",
+    "sourceShort_repository": "仓库导入",
+    "automaticMain": "主目录 · 自动创建"
   },
   "taskManagement": {
     "scope": "仅应用于当前账号在这台电脑上的任务。",

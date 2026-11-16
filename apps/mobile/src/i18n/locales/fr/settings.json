@@ -504,6 +504,10 @@
     "sourceHint_blank": "Saisissez un nom. Le dossier sera créé automatiquement.",
     "sourceHint_existing": "Choisissez un dossier de projet sur cet ordinateur.",
     "sourceHint_repository": "Collez un lien de dépôt pour le télécharger sur cet ordinateur.",
-    "source": "Origine du projet"
+    "source": "Origine du projet",
+    "sourceShort_blank": "Nouveau",
+    "sourceShort_existing": "Dossier",
+    "sourceShort_repository": "Dépôt",
+    "automaticMain": "Principal · Automatique"
   }
 }

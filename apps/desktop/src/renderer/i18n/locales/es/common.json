@@ -21913,7 +21913,11 @@
     "sourceHint_blank": "Escribe un nombre. La carpeta se creará automáticamente.",
     "sourceHint_existing": "Elige una carpeta de proyecto en este equipo.",
     "sourceHint_repository": "Pega el enlace del repositorio para descargarlo en este equipo.",
-    "source": "Origen del proyecto"
+    "source": "Origen del proyecto",
+    "sourceShort_blank": "Nuevo",
+    "sourceShort_existing": "Carpeta",
+    "sourceShort_repository": "Repositorio",
+    "automaticMain": "Principal · Automático"
   },
   "taskManagement": {
     "scope": "Solo se aplica a esta cuenta en este ordenador.",

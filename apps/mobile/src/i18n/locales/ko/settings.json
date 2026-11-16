@@ -504,6 +504,10 @@
     "sourceHint_blank": "이름을 입력하면 폴더가 자동으로 생성됩니다.",
     "sourceHint_existing": "이 컴퓨터의 기존 프로젝트 폴더를 선택하세요.",
     "sourceHint_repository": "저장소 링크를 붙여 넣어 이 컴퓨터에 다운로드하세요.",
-    "source": "프로젝트 소스"
+    "source": "프로젝트 소스",
+    "sourceShort_blank": "새 프로젝트",
+    "sourceShort_existing": "폴더",
+    "sourceShort_repository": "저장소",
+    "automaticMain": "기본 · 자동 생성"
   }
 }

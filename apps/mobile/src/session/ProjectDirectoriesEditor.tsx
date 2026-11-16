@@ -16,6 +16,7 @@ import {
 
 export function ProjectDirectoriesEditor({
   mainDirectory,
+  automatic = false,
   onMainDirectoryChange,
   copied,
   onCopy,
@@ -27,6 +28,7 @@ export function ProjectDirectoriesEditor({
   onBrowse,
 }: {
   mainDirectory: string;
+  automatic?: boolean;
   onMainDirectoryChange?: (path: string) => void;
   copied: boolean;
   onCopy: () => void;
@@ -58,35 +60,37 @@ export function ProjectDirectoriesEditor({
                 {mainDirectory}
               </Text>
               <Text style={[styles.note, { color: colors.textSecondary }]}>
-                {label("mainDirectory")}
+                {label(automatic ? "automaticMain" : "mainDirectory")}
               </Text>
             </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={label(
-                onMainDirectoryChange
-                  ? "removeDirectory"
-                  : copied
-                    ? "copied"
-                    : "copy",
-              )}
-              disabled={disabled}
-              style={styles.remove}
-              onPress={() => {
-                if (onMainDirectoryChange) {
-                  onMainDirectoryChange(value[0]?.path ?? "");
-                  onChange(value.slice(1));
-                } else onCopy();
-              }}
-            >
-              {onMainDirectoryChange ? (
-                <X size={iconSize.md} color={colors.textSecondary} />
-              ) : copied ? (
-                <Check size={iconSize.md} color={colors.textSecondary} />
-              ) : (
-                <Copy size={iconSize.md} color={colors.textSecondary} />
-              )}
-            </Pressable>
+            {!automatic && (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={label(
+                  onMainDirectoryChange
+                    ? "removeDirectory"
+                    : copied
+                      ? "copied"
+                      : "copy",
+                )}
+                disabled={disabled}
+                style={styles.remove}
+                onPress={() => {
+                  if (onMainDirectoryChange) {
+                    onMainDirectoryChange(value[0]?.path ?? "");
+                    onChange(value.slice(1));
+                  } else onCopy();
+                }}
+              >
+                {onMainDirectoryChange ? (
+                  <X size={iconSize.md} color={colors.textSecondary} />
+                ) : copied ? (
+                  <Check size={iconSize.md} color={colors.textSecondary} />
+                ) : (
+                  <Copy size={iconSize.md} color={colors.textSecondary} />
+                )}
+              </Pressable>
+            )}
           </View>
         </View>
       )}
@@ -180,9 +184,11 @@ export function ProjectDirectoriesEditor({
             }}
           />
         ))}
-      {showHint && <Text style={[styles.note, { color: colors.textSecondary }]}>
-        {label("directoriesHint")}
-      </Text>}
+      {showHint && (
+        <Text style={[styles.note, { color: colors.textSecondary }]}>
+          {label("directoriesHint")}
+        </Text>
+      )}
     </View>
   );
 }

@@ -504,6 +504,10 @@
     "sourceHint_blank": "填寫名稱，自動建立專案目錄。",
     "sourceHint_existing": "選擇這台電腦上現有的專案目錄。",
     "sourceHint_repository": "貼上儲存庫連結，下載到這台電腦。",
-    "source": "專案來源"
+    "source": "專案來源",
+    "sourceShort_blank": "空白專案",
+    "sourceShort_existing": "現有資料夾",
+    "sourceShort_repository": "儲存庫匯入",
+    "automaticMain": "主目錄 · 自動建立"
   }
 }

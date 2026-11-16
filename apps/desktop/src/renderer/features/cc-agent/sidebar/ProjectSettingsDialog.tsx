@@ -110,6 +110,10 @@ export function ProjectSettingsDialog({
     setError(null);
   };
   const repositoryCreation = create && (snapshot?.settingsVersion ?? 0) >= 7;
+  const automaticDirectory = repositoryCreation && source !== 'existing' && !directory;
+  const directoryPreview = automaticDirectory
+    ? `${snapshot?.creationRoot ?? ''}/${projectCreationFolderName(name || parseProjectRepository(repositoryUrl)?.name || 'Project')}`
+    : directory;
   const changeRepository = (value: string) => {
     const previous = parseProjectRepository(repositoryUrl);
     const next = parseProjectRepository(value);
@@ -412,40 +416,36 @@ export function ProjectSettingsDialog({
                   </div>
                 </div>
               ) : stage === 'profile' ? (
-                <div className="flex flex-col gap-6">
+                <div className="flex flex-col gap-5">
                   {repositoryCreation && (
                     <div className="flex flex-col gap-2">
-                      <div
-                        className="flex flex-col gap-2 sm:flex-row sm:flex-wrap"
-                        role="group"
+                      <SegmentedControl
+                        value={source}
+                        onValueChange={chooseSource}
                         aria-label={label('source')}
-                      >
-                        {(['blank', 'existing', 'repository'] as const).map((item) => (
-                          <Button
-                            key={item}
-                            variant={source === item ? 'primary' : 'secondary'}
-                            aria-pressed={source === item}
-                            disabled={busy || !available}
-                            onClick={() => chooseSource(item)}
-                          >
-                            {label(`source_${item}`)}
-                          </Button>
-                        ))}
-                      </div>
+                        disabled={busy || !available}
+                        fullWidth
+                        optionClassName="min-w-0 flex-1 px-2"
+                        options={(['blank', 'existing', 'repository'] as const).map((item) => ({
+                          value: item,
+                          label: label(`sourceShort_${item}`),
+                          'aria-label': label(`source_${item}`),
+                        }))}
+                      />
                       <p className="text-12 text-[var(--text-secondary)]">
                         {label(`sourceHint_${source}`)}
                       </p>
                     </div>
                   )}
-                  <div className="flex items-center gap-4 py-2">
+                  <div className="flex items-end gap-3">
                     <button
                       type="button"
                       disabled={!available || busy}
                       onClick={openPicker}
                       aria-label={label('changeIcon')}
-                      className="group relative flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-hover-soft)] text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                      className="group relative flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-hover-soft)] text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                     >
-                      {draw(icon, isProjectImage(icon) || isProjectImageDraft(icon) ? 64 : 36)}
+                      {draw(icon, isProjectImage(icon) || isProjectImageDraft(icon) ? 48 : 28)}
                       <span
                         className="absolute bottom-0 right-0 flex size-6 items-center justify-center rounded-tl-lg bg-[var(--surface-elevated)] text-[var(--text-secondary)] opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
                         aria-hidden="true"
@@ -454,6 +454,9 @@ export function ProjectSettingsDialog({
                       </span>
                     </button>
                     <div className="min-w-0 flex-1">
+                      <p className="mb-2 text-13 text-[var(--text-primary)]">
+                        {label('createNamePlaceholder')}
+                      </p>
                       <Input
                         aria-label={label('name')}
                         value={name}
@@ -473,7 +476,7 @@ export function ProjectSettingsDialog({
                             event.currentTarget.blur();
                           }
                         }}
-                        inputClassName="text-20 font-medium"
+                        inputClassName="text-15"
                       />
                       {(!create || !!directory) && name !== defaultName && (
                         <Button
@@ -546,19 +549,13 @@ export function ProjectSettingsDialog({
                       <Monitor size={15} />
                       <span>{project.deviceLinkDeviceName || label('thisComputer')}</span>
                     </div>
-                    {repositoryCreation && source !== 'existing' && !directory && (
-                      <p className="select-text break-all text-12 text-[var(--text-secondary)]">
-                        {t('projectSettings.autoDirectory', {
-                          path: `${snapshot?.creationRoot ?? ''}/${projectCreationFolderName(name || parseProjectRepository(repositoryUrl)?.name || 'Project')}`,
-                        })}
-                      </p>
-                    )}
                     <ProjectDirectoriesEditor
-                      mainDirectory={directory}
+                      mainDirectory={directoryPreview}
+                      automatic={automaticDirectory}
                       showHint={!create}
                       copied={copied}
                       onMainDirectoryChange={
-                        create
+                        create && !automaticDirectory
                           ? (path) => {
                               setDirectory(path);
                               if (path && source === 'blank') setSource('existing');
@@ -578,7 +575,7 @@ export function ProjectSettingsDialog({
                       local={!project.deviceLinkDeviceId && !key.startsWith('remote:')}
                       onBrowse={
                         project.deviceLinkDeviceId && !key.startsWith('remote:')
-                          ? () => setRemoteBrowse(directory ? 'additional' : 'main')
+                          ? () => setRemoteBrowse(directoryPreview ? 'additional' : 'main')
                           : undefined
                       }
                     />

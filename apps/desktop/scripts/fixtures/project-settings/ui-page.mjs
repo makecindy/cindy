@@ -99,17 +99,18 @@ export default {
         .fill(repository ? 'https://gitlab.example.com/engineering/platform/client/applications/project-management/demo' : 'Demo');
       if (repository && !(await repositoryInput.isVisible())) throw new Error('Pasted URL did not reveal repository options');
       if (ui.case === 'create-blank') {
-        await page.getByRole('button', { name: await ui.t('projectSettings.source_repository'), exact: true }).click();
+        await page.getByRole('radio', { name: await ui.t('projectSettings.source_repository'), exact: true }).click();
         await repositoryInput.waitFor();
         await page.getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true }).click();
         if (await page.evaluate(() => window.projectSettingsWrites.length)) throw new Error('Empty repository mode created a blank project');
         await repositoryInput.fill('https://github.com/example/Demo');
         if (await page.getByText(await ui.t('projectSettings.invalidRepository'), { exact: true }).count()) throw new Error('Repository error persisted after editing');
         await ui.capture('repository-options');
-        await page.getByRole('button', { name: await ui.t('projectSettings.source_blank'), exact: true }).click();
+        await page.getByRole('radio', { name: await ui.t('projectSettings.source_blank'), exact: true }).click();
         if (await repositoryInput.count()) throw new Error('Repository field remained after switching to blank');
       }
       await ui.capture('automatic-location');
+      if (ui.case === 'create-auto') await page.getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true }).click();
       await page
         .getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true })
         .click();
@@ -119,12 +120,14 @@ export default {
       if (repository && writes[0].repositoryUrl !== 'https://gitlab.example.com/engineering/platform/client/applications/project-management/demo')
         throw new Error('Repository paste was lost');
       if (!repository && writes[0].repositoryUrl) throw new Error('Blank creation retained a hidden repository URL');
+      if (ui.case === 'create-auto' && writes[0].value.directories?.[0]?.path !== '/Projects/Reference') throw new Error('Adding another directory replaced the automatic primary');
       const opened = await page.evaluate(() => window.projectCreatedPath);
       if (opened !== (repository ? '/Projects/demo' : '/Projects/Demo'))
         throw new Error('Did not use host-assigned directory');
       return;
     }
     if (ui.case === 'create-primary') {
+      await page.getByRole('radio', { name: await ui.t('projectSettings.source_existing'), exact: true }).click();
       for (const path of ['/Projects/First', '/Projects/Second']) {
         await page.evaluate((path) => {
           window.projectPickerPath = path;
@@ -153,7 +156,7 @@ export default {
       return;
     }
     if (ui.case === 'create-existing') {
-      await page.getByRole('button', { name: await ui.t('projectSettings.source_existing'), exact: true }).click();
+      await page.getByRole('radio', { name: await ui.t('projectSettings.source_existing'), exact: true }).click();
       if (!(await page.getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true }).isDisabled())) throw new Error('Existing mode requires a folder');
       await page.evaluate((path) => {
         window.projectPickerPath = path;
@@ -205,6 +208,7 @@ export default {
 
     if (ui.case === 'directories' || ['create', 'create-legacy'].includes(ui.case)) {
       if (['create', 'create-legacy'].includes(ui.case)) {
+        if (ui.case === 'create') await page.getByRole('radio', { name: await ui.t('projectSettings.source_existing'), exact: true }).click();
         if (ui.case === 'create-legacy') {
           if (await page.getByRole('textbox', { name: await ui.t('projectSettings.repository'), exact: true }).count()) throw new Error('Old host exposed cloning');
           await page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true }).fill('Demo');
