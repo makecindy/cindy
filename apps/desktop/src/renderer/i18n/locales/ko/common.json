@@ -5730,7 +5730,8 @@
             "statusFailed": "제어 프로세스 상태 확인에 실패했습니다",
             "recoveryFailed": "제어 연결을 다시 구성하지 못했습니다",
             "extensionDisconnected": "연결된 브라우저 확장이 없습니다 (Cindy Chrome 플러그인과 확장을 설치하고 활성화하세요)",
-            "pluginMissing": "Cindy Chrome 플러그인이 설치되지 않았거나 꺼져 있습니다"
+            "pluginMissing": "Cindy Chrome 플러그인이 설치되지 않았거나 꺼져 있습니다",
+            "browserMissing": "이 컴퓨터에 Chrome이 설치되어 있지 않습니다"
           },
           "reconnect": "사이드바 브라우저 다시 연결",
           "recover": "사이드바 브라우저 복구",
@@ -5750,7 +5751,7 @@
         },
         "userBrowser": {
           "title": "내 브라우저",
-          "description": "사용 중인 Chrome 또는 Edge를 기존 로그인 그대로 조작합니다. 새 페이지는 백그라운드 창에서 열려 방해하지 않습니다."
+          "description": "이 컴퓨터의 Chrome(Edge도 사용 가능)입니다. Agent가 그 안에서 기존 로그인 그대로 직접 조작합니다. 새 페이지는 백그라운드 창에서 열려 방해하지 않습니다."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Cindy Chrome 플러그인 설치",
@@ -5769,7 +5770,9 @@
           "updatePluginTitle": "Cindy Chrome 플러그인 업데이트",
           "updatePluginBody": "설치된 Cindy Chrome 플러그인이 오래되어 내 브라우저를 지원하지 않습니다. 최신 버전으로 업데이트한 뒤 안내에 따라 확장을 추가하세요.",
           "updatePlugin": "업데이트하러 가기",
-          "storeOpened": "브라우저에서 Cindy 확장 페이지를 열었습니다. ‘Chrome에 추가’를 누르면 자동으로 연결됩니다"
+          "storeOpened": "브라우저에서 Cindy 확장 페이지를 열었습니다. ‘Chrome에 추가’를 누르면 자동으로 연결됩니다",
+          "installBrowserTitle": "먼저 Chrome 설치",
+          "installBrowserBody": "이 컴퓨터에 Chrome이 설치되어 있지 않습니다. '내 브라우저'에는 Cindy 확장 프로그램을 설치할 Chrome(또는 Edge)이 필요합니다. 설치하면 자동으로 다음 단계로 넘어갑니다."
         }
       },
       "android": {
@@ -8486,6 +8489,7 @@
           "workdirClear": "기본 폴더로 되돌리기",
           "followAuxiliary": "시스템 보조 모델 따르기 · {{model}}",
           "followAuxiliaryUnset": "시스템 보조 모델 따르기",
+          "remoteQuickAnswerHint": "이 모델은 이 컴퓨터에서 실행되지 않습니다. 빠른 답변은 이 컴퓨터에서 보내므로 시스템 보조 모델을 사용합니다.",
           "restoreModel": "모델 초기화"
         },
         "toolsTitle": "Tools",
@@ -10872,6 +10876,7 @@
       "duplicate": "동반자 복제",
       "moreActions": "{{name}} 추가 작업",
       "viewIcons": "아이콘",
+      "showCollapsedTeammateAvatars": "접었을 때 아바타 표시",
       "sectionExpand": "동반자 펼치기",
       "showLess": "접기",
       "sectionCollapse": "동반자 접기",
@@ -11649,6 +11654,11 @@
           "transferHint": "상대가 소유자가 되고 본인은 관리자가 됩니다.",
           "removeTitle": "{{name}}을(를) 그룹에서 내보낼까요?",
           "removeHint": "메시지를 읽거나 보낼 수 없게 됩니다. 해당 멤버의 동료도 나갑니다.",
+          "removeOwn": "그룹에서 내보내기",
+          "removeOwnScope": "이 그룹에만 적용됩니다. 파트너는 계정에 유지됩니다.",
+          "removeOwnHint": "{{name}} 파트너가 “{{group}}” 메시지를 더 이상 받지 않습니다. 기록은 유지되며 다른 그룹과 개인 채팅에는 영향을 주지 않습니다.",
+          "removeOwnActiveHint": "이 그룹에서 진행 중인 요청이 중지됩니다. 별도로 시작한 작업은 계속 실행됩니다.",
+          "stopAndRemove": "중지 후 내보내기",
           "leave": "그룹 나가기",
           "leaveHint": "나와 내 동반자가 이 그룹에서 나갑니다. 새 메시지를 받지 못하며 그룹 기록을 볼 수 없게 됩니다.",
           "soleOwnerHint": "그룹에 나만 남았어요. 그룹을 보관하면 기록을 유지하고 나중에 다시 사용할 수 있어요.",
@@ -12881,6 +12891,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "사용 가능한 자동 검토 모델이 없습니다. Agent가 실행되는 컴퓨터에서 모델 제공자를 열어 검토용 제공자를 활성화하고 연결하거나, 설정에서 보조 모델을 직접 구성하세요. 검토가 필요한 작업은 계속 직접 확인해야 합니다.",
           "autoReviewUnavailable": "자동 리뷰가 판단을 내리지 못했습니다. 검토가 필요한 작업은 직접 확인하도록 바뀌었습니다. 중단을 줄이려면 이 세션을 전체 접근으로 전환하세요. 위험도는 더 높습니다.",
           "autoReviewUnavailableWechat": "자동 리뷰가 판단을 내리지 못했습니다. 검토가 필요한 작업은 직접 확인하도록 바뀌었습니다. 개인 WeChat에서는 전체 접근을 사용할 수 없습니다. 이번 작업을 직접 확인하세요.",
           "autoReviewConfirmUndelivered": "자동 리뷰가 끝나지 않았고, 확인 요청도 전달되지 않았거나 응답이 없었습니다. 이번 거부는 직접 선택하신 것이 아닙니다.",
@@ -15622,6 +15633,7 @@
       "DEVICE_LINK_BUSY": "원격 컴퓨터가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
       "REMOTE_DAEMON_CLOSED": "원격 연결이 끊겼습니다. 업데이트 중일 수 있습니다. 이번 턴은 종료되었으니 메시지를 다시 보내 주세요.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "원격 세션에서는 로컬 파일/이미지 첨부에 접근할 수 없습니다. 내용을 직접 붙여넣으세요.",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "사용 가능한 자동 검토 모델이 없습니다. Agent가 실행되는 컴퓨터에서 모델 제공자를 열어 검토용 제공자를 활성화하고 연결하거나, 설정에서 보조 모델을 직접 구성하세요. 검토가 필요한 작업은 계속 직접 확인해야 합니다.",
       "AUTO_REVIEW_UNAVAILABLE": "자동 리뷰가 판단을 내리지 못했습니다. 검토가 필요한 작업은 직접 확인하도록 바뀌었습니다. 중단을 줄이려면 이 작업을 전체 접근으로 전환하세요. 위험도는 더 높습니다.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "자동 리뷰가 판단을 내리지 못했습니다. 검토가 필요한 작업은 직접 확인하도록 바뀌었습니다. 개인 WeChat에서는 전체 접근을 사용할 수 없습니다. 이번 작업을 직접 확인하세요.",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "자동 리뷰를 끝내지 못했고 확인도 완료되지 않았습니다. 사용자가 거부한 것이 아닙니다.",

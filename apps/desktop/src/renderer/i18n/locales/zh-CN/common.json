@@ -5730,7 +5730,8 @@
             "statusFailed": "无法检查浏览器连接状态",
             "recoveryFailed": "控制连接未能重建",
             "extensionDisconnected": "没有已连接的浏览器扩展（安装并启用 Cindy Chrome 插件与扩展）",
-            "pluginMissing": "还没有安装或启用 Cindy Chrome 插件"
+            "pluginMissing": "还没有安装或启用 Cindy Chrome 插件",
+            "browserMissing": "这台电脑还没有安装 Chrome"
           },
           "reconnect": "重新连接浏览器",
           "recover": "恢复浏览器",
@@ -5750,7 +5751,7 @@
         },
         "userBrowser": {
           "title": "我的浏览器",
-          "description": "直接操作你正在用的 Chrome 或 Edge，沿用你已有的登录。新页面在后台窗口打开，不打扰你。"
+          "description": "就是你电脑上的 Chrome（也支持 Edge）：Agent 直接在里面操作，沿用你已有的登录。新页面在后台窗口打开，不打扰你。"
         },
         "userBrowserSetup": {
           "installPluginTitle": "安装 Cindy Chrome 插件",
@@ -5769,7 +5770,9 @@
           "updatePluginTitle": "更新 Cindy Chrome 插件",
           "updatePluginBody": "已装的 Cindy Chrome 插件版本较旧，还不支持「我的浏览器」。更新到最新版后，再按提示把扩展装进浏览器。",
           "updatePlugin": "去更新",
-          "storeOpened": "已在浏览器里打开 Cindy 扩展页面，点「添加至 Chrome」后会自动连接"
+          "storeOpened": "已在浏览器里打开 Cindy 扩展页面，点「添加至 Chrome」后会自动连接",
+          "installBrowserTitle": "先安装 Chrome",
+          "installBrowserBody": "这台电脑还没有安装 Chrome。「我的浏览器」需要 Chrome（或 Edge）来装 Cindy 扩展，装好后这里会自动进入下一步。"
         }
       },
       "android": {
@@ -8486,6 +8489,7 @@
           "workdirClear": "恢复默认目录",
           "followAuxiliary": "跟随系统辅助模型 · {{model}}",
           "followAuxiliaryUnset": "跟随系统辅助模型",
+          "remoteQuickAnswerHint": "这个模型不在本机运行。快问快答只能从本机发出，会改用系统辅助模型。",
           "restoreModel": "恢复默认模型"
         },
         "toolsTitle": "工具",
@@ -10872,6 +10876,7 @@
       "duplicate": "复制伙伴",
       "moreActions": "{{name}} 的更多操作",
       "viewIcons": "图标",
+      "showCollapsedTeammateAvatars": "收起时显示头像",
       "sectionExpand": "展开伙伴",
       "showLess": "收起",
       "sectionCollapse": "收起伙伴",
@@ -11649,6 +11654,11 @@
           "transferHint": "对方成为群主，你将成为管理员。",
           "removeTitle": "将 {{name}} 移出群？",
           "removeHint": "该成员将无法继续查看或发消息；如果是伙伴的主人，其伙伴也会退出。",
+          "removeOwn": "移出群聊",
+          "removeOwnScope": "移出仅影响这个群，伙伴仍保留在你的账号中。",
+          "removeOwnHint": "{{name}} 将不再接收「{{group}}」的消息。历史消息会保留，其他群和私聊不受影响。",
+          "removeOwnActiveHint": "移出会停止它在本群的活跃请求。已独立开启的任务继续运行。",
+          "stopAndRemove": "停止并移出",
           "leave": "退出群聊",
           "leaveHint": "你和你的伙伴将退出此群聊，不再接收新消息，也无法查看群历史。",
           "soleOwnerHint": "群里只剩你。可以归档群，保留历史记录，以后再恢复使用。",
@@ -12881,6 +12891,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "没有可用的自动审批模型。请在运行 Agent 的电脑上，前往「模型供应商」启用并连接审批供应商，或在设置中自定义「辅助模型」。需要审批的操作仍由你确认。",
           "autoReviewUnavailable": "自动审批暂时无法给出判断，需要审批的操作已改为由你确认。想少被打断，可以把任务切到「完全访问」，但风险更高。",
           "autoReviewUnavailableWechat": "自动审批暂时无法给出判断，需要审批的操作已改为由你确认。个人微信不能使用「完全访问」，请直接确认这次操作。",
           "autoReviewConfirmUndelivered": "自动审批没完成，确认也没有送到或没有被点。这次拒绝不是你点的。",
@@ -15622,6 +15633,7 @@
       "DEVICE_LINK_BUSY": "远端繁忙，请稍后重试。",
       "REMOTE_DAEMON_CLOSED": "远端连接中断了，可能正在更新。这一轮已经结束，请重新发送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远端任务无法访问本地文件/图片附件。请直接粘贴内容。",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "没有可用的自动审批模型。请在运行 Agent 的电脑上，前往「模型供应商」启用并连接审批供应商，或在设置中自定义「辅助模型」。需要审批的操作仍由你确认。",
       "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断，需要审批的操作已改为由你确认。想少被打断，可以把任务切到「完全访问」，但风险更高。",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自动审批暂时无法给出判断，需要审批的操作已改为由你确认。个人微信不能使用「完全访问」，请直接确认这次操作。",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自动审批不可用，确认请求也未完成。这不是你手动拒绝的。",

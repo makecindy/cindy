@@ -145,6 +145,10 @@ it('forwards scoped reset invalidation without marking ordinary pool changes', (
   expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai', resetAccountId: 'second' });
   listener('openai');
   expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai' });
+  listener('openai', undefined, 'usage');
+  expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai', change: 'usage' });
+  listener('anthropic', undefined, 'load');
+  expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'anthropic', change: 'load' });
 });
 beforeEach(() => {
   h.context = null;

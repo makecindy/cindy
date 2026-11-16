@@ -5831,7 +5831,8 @@
             "statusFailed": "falha na verificação do status do controlador",
             "recoveryFailed": "não foi possível restabelecer a conexão de controle",
             "extensionDisconnected": "nenhuma extensão de navegador está conectada (instale e ative o plugin Cindy Chrome e sua extensão)",
-            "pluginMissing": "o plugin Cindy Chrome não está instalado ou ativado"
+            "pluginMissing": "o plugin Cindy Chrome não está instalado ou ativado",
+            "browserMissing": "o Chrome não está instalado neste computador"
           },
           "reconnect": "Reconectar navegador",
           "recover": "Recuperar navegador",
@@ -5851,7 +5852,7 @@
         },
         "userBrowser": {
           "title": "Meu navegador",
-          "description": "Funciona no Chrome ou Edge que você está usando, com seus logins existentes. Novas páginas abrem em uma janela em segundo plano, sem atrapalhar."
+          "description": "O seu próprio Chrome neste computador (o Edge também funciona). O Agent trabalha diretamente nele, com seus logins existentes. Novas páginas abrem em uma janela em segundo plano, sem atrapalhar."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Instalar o plugin Cindy Chrome",
@@ -5870,7 +5871,9 @@
           "updatePluginTitle": "Atualizar o plugin Cindy Chrome",
           "updatePluginBody": "O plugin Cindy Chrome instalado é antigo demais para Meu navegador. Atualize-o para a versão mais recente e siga a orientação para adicionar a extensão.",
           "updatePlugin": "Atualizar",
-          "storeOpened": "A página da extensão Cindy foi aberta no seu navegador. Escolha Adicionar ao Chrome e a conexão será feita automaticamente."
+          "storeOpened": "A página da extensão Cindy foi aberta no seu navegador. Escolha Adicionar ao Chrome e a conexão será feita automaticamente.",
+          "installBrowserTitle": "Instale o Chrome primeiro",
+          "installBrowserBody": "O Chrome não está instalado neste computador. “Meu navegador” precisa do Chrome (ou Edge) para a extensão Cindy. Depois de instalar, aqui avança para a próxima etapa automaticamente."
         }
       },
       "android": {
@@ -8601,6 +8604,7 @@
           "workdirClear": "Restaurar pasta padrão",
           "followAuxiliary": "Seguir modelo auxiliar do sistema · {{model}}",
           "followAuxiliaryUnset": "Seguir modelo auxiliar do sistema",
+          "remoteQuickAnswerHint": "Este modelo não roda neste computador. As respostas rápidas são enviadas deste computador, então usam o modelo auxiliar do sistema.",
           "restoreModel": "Redefinir modelo"
         },
         "toolsTitle": "Ferramentas",
@@ -11001,6 +11005,7 @@
       "duplicate": "Duplicar amigo",
       "moreActions": "Mais ações para {{name}}",
       "viewIcons": "Ícones",
+      "showCollapsedTeammateAvatars": "Mostrar avatares quando recolhido",
       "sectionExpand": "Expandir amigos",
       "showLess": "Mostrar menos",
       "sectionCollapse": "Recolher amigos",
@@ -11778,6 +11783,11 @@
           "transferHint": "Essa pessoa se tornará proprietária e você se tornará administrador.",
           "removeTitle": "Remover {{name}} deste grupo?",
           "removeHint": "Essa pessoa perderá o acesso às mensagens. Os amigos dela também sairão.",
+          "removeOwn": "Remover do grupo",
+          "removeOwnScope": "Isso afeta apenas este grupo. Seu parceiro permanece na sua conta.",
+          "removeOwnHint": "{{name}} deixará de receber mensagens de “{{group}}”. O histórico será mantido; outros grupos e conversas privadas não serão afetados.",
+          "removeOwnActiveHint": "As solicitações ativas neste grupo serão interrompidas. Tarefas iniciadas de forma independente continuarão em execução.",
+          "stopAndRemove": "Parar e remover",
           "leave": "Sair do grupo",
           "leaveHint": "Você e seus amigos sairão deste grupo. Você não receberá mais novas mensagens nem terá acesso ao histórico.",
           "soleOwnerHint": "Você é o único membro restante. Arquive este grupo para manter o histórico e restaurá-lo depois.",
@@ -13041,6 +13051,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "Nenhum modelo de revisão automática está disponível. No computador que executa o Agente, ative e conecte um provedor de revisão em Provedores de modelos ou personalize os modelos auxiliares nas configurações. As ações que precisam de revisão continuam exigindo sua confirmação.",
           "autoReviewUnavailable": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. Mude esta tarefa para Acesso total se preferir não ser interrompido. Esse modo apresenta maior risco.",
           "autoReviewUnavailableWechat": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. O WeChat pessoal não pode usar Acesso total. Confirme esta ação diretamente.",
           "autoReviewConfirmUndelivered": "A revisão automática não terminou e a confirmação não foi entregue ou não foi respondida. Esta recusa não foi feita por você.",
@@ -15791,6 +15802,7 @@
       "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente em breve.",
       "REMOTE_DAEMON_CLOSED": "A conexão remota caiu, possivelmente durante uma atualização. Este turno foi encerrado. Envie a mensagem novamente.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Anexos de arquivos/imagens locais não estão acessíveis em sessões remotas. Cole o conteúdo diretamente.",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "Nenhum modelo de revisão automática está disponível. No computador que executa o Agente, ative e conecte um provedor de revisão em Provedores de modelos ou personalize os modelos auxiliares nas configurações. As ações que precisam de revisão continuam exigindo sua confirmação.",
       "AUTO_REVIEW_UNAVAILABLE": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. Mude esta tarefa para Acesso total se preferir não ser interrompido. Esse modo apresenta maior risco.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. O WeChat pessoal não pode usar Acesso total. Confirme esta ação diretamente.",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "A revisão automática estava indisponível, e a solicitação de confirmação não foi concluída. Isso não é uma rejeição do usuário.",

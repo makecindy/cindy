@@ -333,17 +333,28 @@ export function isPluginPageSurface(
   return value === "panel" || value === "mainView" || value === "settings";
 }
 
-/** Trusted native settings; no directory, credentials or provider execution routing on the wire. */
+/**
+ * Trusted native settings; no directory, credentials or provider endpoints on the wire.
+ * `config.agentDeviceId` names where the Agent runs (a computer id or share:<id>), never how to reach it.
+ */
 export interface PluginTaskPreferences {
   revision: string;
   config: {
     agentKind?: "cc" | "codex" | "pi";
     model?: string;
     providerId?: string;
+    /** Remote run location, null = explicit Host choice, omitted = legacy default/reuse behavior. */
+    agentDeviceId?: string | null;
     effort?: string;
     fastMode?: boolean | 'ultrafast';
     permissionMode?: string;
   };
   permissionModes: string[];
   defaultPermissionMode: string;
+  /**
+   * The Host saves and runs a model from another computer or share (`model.agentDeviceId`
+   * in task-settings:set; null explicitly selects this Host). Older Hosts omit it:
+   * controllers then list only that Host's models and do not send the location field.
+   */
+  remoteRoutes?: boolean;
 }

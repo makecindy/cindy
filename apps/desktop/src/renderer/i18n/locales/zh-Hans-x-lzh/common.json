@@ -5730,7 +5730,8 @@
             "statusFailed": "无从察浏览器连接之状",
             "recoveryFailed": "操控之连接未能重建",
             "extensionDisconnected": "无已连之浏览器扩充（请纳并启 Cindy Chrome 法器及其扩充）",
-            "pluginMissing": "Cindy Chrome 法器尚未安装或启用"
+            "pluginMissing": "Cindy Chrome 法器尚未安装或启用",
+            "browserMissing": "此机尚未安装 Chrome"
           },
           "reconnect": "重连浏览器",
           "recover": "复浏览器",
@@ -5750,7 +5751,7 @@
         },
         "userBrowser": {
           "title": "我之浏览器",
-          "description": "径操君正用之 Chrome 或 Edge，沿用既有之登录。新页开于背景窗口，不扰君。"
+          "description": "即君机上之 Chrome（亦可用 Edge）：Agent 径操其中，沿用既有之登录。新页开于背景窗口，不扰君。"
         },
         "userBrowserSetup": {
           "installPluginTitle": "纳 Cindy Chrome 法器",
@@ -5769,7 +5770,9 @@
           "updatePluginTitle": "更新 Cindy Chrome 法器",
           "updatePluginBody": "所纳 Cindy Chrome 法器版本较旧，尚不支持「我之浏览器」。更新至最新版后，再依提示将扩充装入浏览器。",
           "updatePlugin": "往更新",
-          "storeOpened": "已于浏览器开 Cindy 扩充之页，点「加到 Chrome」后自连"
+          "storeOpened": "已于浏览器开 Cindy 扩充之页，点「加到 Chrome」后自连",
+          "installBrowserTitle": "先装 Chrome",
+          "installBrowserBody": "此机尚未安装 Chrome。「我之浏览器」须 Chrome（或 Edge）以装 Cindy 扩展，装毕此处自进下一步。"
         }
       },
       "android": {
@@ -8472,6 +8475,7 @@
           "workdirClear": "复预设目录",
           "followAuxiliary": "从系统辅助模型 · {{model}}",
           "followAuxiliaryUnset": "从系统辅助模型",
+          "remoteQuickAnswerHint": "此模型不行于本机。速问速答唯自本机发，故从系统辅助模型。",
           "restoreModel": "复预设模型"
         },
         "toolsTitle": "Tools",
@@ -10872,6 +10876,7 @@
       "duplicate": "拷贝同伴",
       "moreActions": "{{name}} 之余事",
       "viewIcons": "图标",
+      "showCollapsedTeammateAvatars": "收时示头像",
       "sectionExpand": "展同伴",
       "showLess": "收",
       "sectionCollapse": "收同伴",
@@ -11638,6 +11643,11 @@
           "transferHint": "彼为群主，君则为执事。",
           "removeTitle": "将 {{name}} 移出群议？",
           "removeHint": "此成员将不能再览或遣讯；其同伴亦将退出。",
+          "removeOwn": "移出群聊",
+          "removeOwnScope": "惟此群受之，伙伴仍存于君之账号。",
+          "removeOwnHint": "{{name}} 将不复收「{{group}}」之消息。旧讯仍存，他群与私聊不受影响。",
+          "removeOwnActiveHint": "移出将止其于此群之请求。另启之任务仍行。",
+          "stopAndRemove": "停止并移出",
           "leave": "退出群议",
           "leaveHint": "君与君之同伴将退出此群议，不复收新讯，亦不能览群中旧录。",
           "soleOwnerHint": "曲终人散，群中唯余君一人。可封存此群，存其旧录，他日再复用之。",
@@ -12881,6 +12891,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "无可用之自动审批模型。请于运行 Agent 之电脑，在「模型供应商」启用并连接审批供应商，或于设置自定「辅助模型」。待审之举仍由君确认。",
           "autoReviewUnavailable": "自动审批暂不能断，须审批之操作已改由君确认。欲少受扰，可将差事切至「完全访问」，然风险更高。",
           "autoReviewUnavailableWechat": "自动审批暂不能断，须审批之操作已改由君确认。个人微信不可用「完全访问」，请径确认此举。",
           "autoReviewConfirmUndelivered": "自动审批未竟，确认或未送达，或无人点选。此番之拒，非君所点。",
@@ -15613,6 +15624,7 @@
       "DEVICE_LINK_BUSY": "远程方忙，请稍后再试。",
       "REMOTE_DAEMON_CLOSED": "远程连接中断，或方更新。此轮已终，请再遣。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远程差事不能取此机之卷／图附件。请径贴其内容。",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "无可用之自动审批模型。请于运行 Agent 之电脑，在「模型供应商」启用并连接审批供应商，或于设置自定「辅助模型」。待审之举仍由君确认。",
       "AUTO_REVIEW_UNAVAILABLE": "自动审批暂不能断，须审批之操作已改由君确认。欲少受扰，可将差事切至「完全访问」，然风险更高。",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自动审批暂不能断，须审批之操作已改由君确认。个人微信不可用「完全访问」，请径确认此举。",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自动审批未毕，确认亦未送达或未被点。此番拒绝非君所点。",

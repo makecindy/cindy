@@ -82,3 +82,45 @@ describe('buildProjectPickerCard — 按钮数据不带本机路径', () => {
     }
   });
 });
+
+describe('选项列表卡按列表排布(飞书一行一个满宽按钮, 文字不被压缩)', () => {
+  it('/model、/project、/ctr、/session 及接管会话卡标记 list', () => {
+    const sections = [
+      {
+        provider: { id: 'p1', name: '供应商一' },
+        models: [
+          { id: 'm1', displayName: '模型一号超长名称' },
+          { id: 'm2', displayName: '模型二号超长名称' },
+        ],
+      },
+    ] as unknown as Parameters<typeof cards.buildModelPickerCard>[0]['sections'];
+    const specs = [
+      cards.buildModelPickerCard({
+        sessionId: 's1',
+        agentKind: 'claude' as Parameters<typeof cards.buildModelPickerCard>[0]['agentKind'],
+        sections,
+        currentModelId: 'm1',
+        currentProviderId: 'p1',
+        currentEffort: null,
+      }),
+      cards.buildProjectPickerCard({ botAppId: 'bot1', projects: PROJECTS, currentName: 'proj-a' }),
+      cards.buildControlPickerCard({ botAppId: 'bot1', projects: PROJECTS }),
+      cards.buildControlSessionPickerCard({
+        botAppId: 'bot1',
+        workingDir: PROJECTS[0]!.workingDir,
+        displayName: 'proj-a',
+        sessions: [{ id: 'sess-1', title: '会话一' }] as unknown as Parameters<
+          typeof cards.buildControlSessionPickerCard
+        >[0]['sessions'],
+      }),
+    ];
+    for (const spec of specs) expect(spec.buttonLayout).toBe('list');
+  });
+
+  it('空态卡只剩少量操作按钮, 保持默认横排', () => {
+    expect(cards.buildControlPickerCard({ botAppId: 'bot1', projects: [] }).buttonLayout).toBeUndefined();
+    expect(
+      cards.buildProjectPickerCard({ botAppId: 'bot1', projects: [], currentName: 'x' }).buttonLayout,
+    ).toBeUndefined();
+  });
+});

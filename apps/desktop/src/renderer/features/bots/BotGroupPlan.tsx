@@ -579,6 +579,7 @@ export function BotGroupPlanFollowUpRow({
         >
           {t(followUp.kind === 'continue' ? 'bots.groupChat.timeline.continuePlan' : 'bots.groupChat.timeline.retryStep')}
         </Button>
+        {(plan?.kind ? plan.canStop === true : plan?.canStop !== false) && (
         <Button
           type="button"
           variant="secondary"
@@ -590,7 +591,7 @@ export function BotGroupPlanFollowUpRow({
           onClick={onEnd}
         >
           {t(talk ? 'bots.groupChat.timeline.endTalk' : 'bots.groupChat.timeline.endPlan')}
-        </Button>
+        </Button>)}
       </span>
     </DividerRow>
   );
