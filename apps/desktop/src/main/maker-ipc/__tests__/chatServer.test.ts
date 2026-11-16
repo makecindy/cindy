@@ -2066,6 +2066,84 @@ describe('Chat Server result delivery and refresh', () => {
       });
     });
     const dispatched = () => vi.mocked(deps.dispatch).mock.calls.map(([input]) => input);
+    // Unit regression: withChatServer must deliver a directly quoted message's files to dispatch.
+    // Existing public-Cindy tests cover text background only. Minimal failure: two DOCX files in
+    // an earlier message, then a separate @Cindy with a quote and no uploaded files of its own.
+    // Targeted run: 14.20s wall / 158ms tests; collecting this existing service suite takes 11.19s.
+    describe('quoted attachments', () => {
+      const file = (n: number) => ({ type: 'media', mediaId: `80000000-0000-4000-8000-${String(n).padStart(12, '0')}`, caption: `lesson-${n}.docx` });
+      const quote = (n: number) => buildBotGroupQuoteCard({ messageId: message(n, peerId, '').id,
+        authorName: 'Ann', authorKind: 'user', excerpt: 'Lesson files', attachmentCount: 2, attachmentName: 'lesson-1.docx', sequence: n });
+      const downloaded = (n: number) => ({ id: file(n).mediaId, name: file(n).caption, category: 'file',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: 12,
+        path: path.join(os.tmpdir(), file(n).caption), url: null });
+      const notices = () => fixture.handle.mock.calls.filter(([route, method, body]) => route === `/conversations/${roomId}/messages`
+        && method === 'POST' && body.content?.some((block: { namespace?: string }) => block.namespace === 'cindy.capability-notice'));
+      async function sendQuoted(ownFiles: ReturnType<typeof file>[] = []) {
+        history.push(message(100, selfId, '', { content: [{ type: 'text', text: '@Cindy read the lessons' }, quote(1), ...ownFiles] }));
+        queue.push(request(100));
+        await vi.advanceTimersByTimeAsync(12_000);
+        return dispatched().at(-1)!;
+      }
+      beforeEach(() => {
+        fixture.download.mockReset().mockImplementation(async (_room: string, mediaId: string) => downloaded(Number(mediaId.slice(-12))));
+      });
+      afterEach(() => { fixture.download.mockReset(); });
+
+      it('delivers the quoted DOCX files even behind text progress, without following nested quotes or other history', async () => {
+        history.push(message(1, peerId, '', { content: [quote(2), file(1), file(2)] }),
+          message(2, peerId, '', { content: [file(3)] }));
+        await ask(10, 'Hello');
+        expect(dispatched()[0]!.attachments).toBeUndefined();
+        expect(fixture.download).not.toHaveBeenCalled();
+        await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Hi' });
+        const input = await sendQuoted();
+        expect(input.attachments).toEqual([downloaded(1), downloaded(2)]);
+        expect(fixture.download.mock.calls).toEqual([[roomId, file(1).mediaId], [roomId, file(2).mediaId]]);
+        expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/messages/${message(1, peerId, '').id}`)).toHaveLength(1);
+        expect(fixture.handle.mock.calls.some(([route]) => route === `/conversations/${roomId}/messages/${message(2, peerId, '').id}`)).toBe(false);
+        expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe('@Cindy read the lessons');
+        expect(notices()).toHaveLength(0);
+      });
+
+      it.each([1, 20])('merges quoted files with %i current files, deduplicating before the shared limit', async count => {
+        history.push(message(1, peerId, '', { content: [file(1), file(21)] }));
+        const input = await sendQuoted(Array.from({ length: count }, (_, i) => file(i + 1)));
+        const expected = count === 1 ? [downloaded(1), downloaded(21)] : Array.from({ length: 20 }, (_, i) => downloaded(i + 1));
+        expect(input.attachments).toEqual(expected);
+        expect(fixture.download).toHaveBeenCalledTimes(expected.length);
+        expect(notices()).toHaveLength(count === 1 ? 0 : 1);
+        if (count === 20) expect(input.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', 'Cindy'));
+      });
+
+      it.each(['deleted', 'forbidden', 'missing', 'gone', 'other-thread', 'future'] as const)('does not deliver an unavailable quoted original: %s', async state => {
+        const original = message(1, peerId, '', { content: [file(1)], deleted: state === 'deleted',
+          threadRootId: state === 'other-thread' ? message(2, peerId, '').id : null, seq: state === 'future' ? '101' : '1' });
+        history.push(original);
+        const handle = fixture.handle.getMockImplementation()!;
+        fixture.handle.mockImplementation((route, method, body) => route === `/conversations/${roomId}/messages/${original.id}`
+          && ['forbidden', 'missing', 'gone'].includes(state)
+          ? { status: state === 'forbidden' ? 403 : state === 'missing' ? 404 : 410, body: { error: { code: 'MESSAGE_UNAVAILABLE' } } }
+          : handle(route, method, body));
+        const input = await sendQuoted([file(2)]);
+        expect(input.attachments).toEqual([downloaded(2)]);
+        expect(fixture.download.mock.calls).toEqual([[roomId, file(2).mediaId]]);
+        expect(notices()).toHaveLength(1);
+      });
+
+      it('reports a failed quoted download and tries it again on a new explicit request', async () => {
+        history.push(message(1, peerId, '', { content: [file(1), file(2)] }));
+        fixture.download.mockRejectedValueOnce(new Error('MEDIA_DOWNLOAD_FAILED'));
+        const input = await sendQuoted();
+        expect(input.attachments).toEqual([downloaded(2)]);
+        expect(notices()).toHaveLength(1);
+        await service.settleLaneTurn({ ...terminal, sessionId: input.targetSessionId, activeInputClientId: input.clientId, resultText: 'One file unavailable' });
+        history.push(message(101, selfId, '', { content: [{ type: 'text', text: '@Cindy retry' }, quote(1)] }));
+        queue.push(request(101));
+        await vi.advanceTimersByTimeAsync(12_000);
+        expect(dispatched().at(-1)!.attachments).toEqual([downloaded(1), downloaded(2)]);
+      });
+    });
     // These requests come from another device: the head start this computer leaves it has passed.
     async function ask(n: number, text: string, requester = selfId) {
       history.push(message(n, requester, text));
