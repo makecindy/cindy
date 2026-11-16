@@ -11521,6 +11521,7 @@
         "threadRecent": "Neueste Nachrichten im Thread",
         "threadNew": "Neue Nachrichten im Thread",
         "replyingTo": "Antwort an „{{name}}“: {{text}}",
+        "filesOutsideWorkingDir": "Dateien außerhalb des Arbeitsverzeichnisses wurden nicht angehängt.",
         "earlierOmitted": "(Ältere Nachrichten ausgelassen)",
         "actingFor": "{{name}} · für {{person}}",
         "checkout": {

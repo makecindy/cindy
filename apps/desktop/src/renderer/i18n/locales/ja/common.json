@@ -11476,6 +11476,7 @@
         "threadRecent": "スレッドの最近のメッセージ",
         "threadNew": "スレッドの新しいメッセージ",
         "replyingTo": "「{{name}}」への返信：{{text}}",
+        "filesOutsideWorkingDir": "作業ディレクトリ外のファイルは添付されていません。",
         "earlierOmitted": "（それ以前のメッセージは省略）",
         "actingFor": "{{name}} · {{person}} の代わり",
         "checkout": {

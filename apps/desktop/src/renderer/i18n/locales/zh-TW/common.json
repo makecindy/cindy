@@ -11476,6 +11476,7 @@
         "threadRecent": "話題裡最近的訊息",
         "threadNew": "話題裡的新訊息",
         "replyingTo": "回覆「{{name}}」：{{text}}",
+        "filesOutsideWorkingDir": "部分檔案不在工作目錄內，未附上。",
         "earlierOmitted": "（更早的訊息略去）",
         "actingFor": "{{name}} · 替 {{person}}",
         "checkout": {

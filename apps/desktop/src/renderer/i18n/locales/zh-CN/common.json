@@ -11476,6 +11476,7 @@
         "threadRecent": "话题里最近的消息",
         "threadNew": "话题里的新消息",
         "replyingTo": "回复「{{name}}」：{{text}}",
+        "filesOutsideWorkingDir": "部分文件不在工作目录内，未附上。",
         "earlierOmitted": "（更早的消息略去）",
         "actingFor": "{{name}} · 替 {{person}}",
         "checkout": {

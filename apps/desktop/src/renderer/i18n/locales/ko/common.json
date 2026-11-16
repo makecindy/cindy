@@ -11476,6 +11476,7 @@
         "threadRecent": "스레드의 최근 메시지",
         "threadNew": "스레드의 새 메시지",
         "replyingTo": "\"{{name}}\" 님에게 답장: {{text}}",
+        "filesOutsideWorkingDir": "작업 디렉터리 밖의 파일은 첨부되지 않았습니다.",
         "earlierOmitted": "(이전 메시지는 생략)",
         "actingFor": "{{name}} · {{person}} 대신",
         "checkout": {
