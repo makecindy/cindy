@@ -13,7 +13,7 @@ import { assertHostSessionRegion } from './auth/region-policy.ts';
 import { refreshHostSession as realRefreshHostSession } from './auth/refresh.mjs';
 import { projectAdoptedSession } from './credentials/session.mjs';
 import { OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.ts';
-import { createDesktopScanner } from './agent/profile-coexistence.ts';
+import { createDesktopScanner, HostProfileInUseError } from './agent/profile-coexistence.ts';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -49,7 +49,7 @@ function setup(overrides = {}) {
     observeSkillProjectionBoundary: (ownerId) => { steps.push(`boundary:${ownerId}`); return 'stable'; },
     acquireHostRuntimeLease: () => ({ held: true, release() {} }),
     // No desktop on the profile (coexistence plan A); the refusal below scans a real one.
-    createDesktopScanner: () => async () => [], OwnerDatabaseError,
+    createDesktopScanner: () => async () => [], OwnerDatabaseError, HostProfileInUseError,
     readAdoptedSessionState: async () => ({ authenticated: true, realm: 'global' }),
     openOwnerDatabase: async (args) => { opens.push(args); steps.push('open'); throw new Error('database opened'); },
     path: { join: (...parts) => parts.join('/') }, layout: { packaged: false, drizzleDir: 'desktop/drizzle', sqliteVecPath: 'desktop/vec0' }, process,
@@ -193,7 +193,7 @@ test('a desktop that opens the profile refuses the start: lease released, blocke
   };
   const refused = setup(ports);
   await assert.rejects(refused.start('account-b'),
-    error => error instanceof OwnerDatabaseError && error.code === 'DB_SCHEMA_LOCKED' && error.message.includes(`pid ${child.pid}`));
+    error => error instanceof HostProfileInUseError && error.code === 'HOST_PROFILE_IN_USE_BY_DESKTOP' && error.message.includes(`pid ${child.pid}`));
   assert.equal(released, 1, 'the runtime lease is released');
   assert.equal(refused.lease(), null);
   assert.equal(reads, 0, 'no account read');

@@ -13,6 +13,7 @@ import { DeviceLinkClient, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHA
 import { readDeviceLinkInvokeSourceDevice } from '../../desktop/src/main/device-link/invoke-context.ts';
 import { createHostDeviceLink } from './device-link.ts';
 import { createHostService } from './service.mjs';
+import { MCP_APPS_INVOKE } from '../../desktop/src/shared/mcpApps.ts';
 import { createEventHub } from './events.mjs';
 import { configureHostOwner } from './agent/claude-auth.mjs';
 import { configureAppDataDir } from '../../desktop/src/main/userDataPath.ts';
@@ -53,6 +54,9 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const clients = [];
   let host, hold, release, writes = 0, duplicateNext = false;
   let source;
+  // Coexistence plan A: the refusal while a desktop uses the profile (null: not held).
+  let held = null;
+  let created = 0, appCalls = 0;
   t.after(async () => {
     clients.forEach(client => client.stop());
     await host?.stop();
@@ -90,6 +94,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   await once(wss, 'listening');
   const url = `ws://127.0.0.1:${wss.address().port}`;
   const service = createHostService({
+    profileHold: () => held,
     // One USD and one CNY quote: the device-link v1 projection keeps only USD (usageHandlers.ts).
     modelPricing: async () => ({ xd: {
       'usd-model': { providerId: 'xd', modelId: 'usd-model', currency: 'USD', source: 'gateway', approximate: false, inputPerMtok: 3, outputPerMtok: 15 },
@@ -108,8 +113,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   host = createHostDeviceLink({ profileDir: profile, version: 'test', getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: service, subscribe: hub.subscribe,
-    createRuntimeSession: async () => { throw new Error('Not part of this transport test'); },
+    createRuntimeSession: async () => { created++; throw new Error('Not part of this transport test'); },
     disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
+    profileHold: () => held,
+    mcpApps: { invoke: async () => { appCalls++; return {}; }, releaseCaller: async () => {} },
   });
   assert.equal(host.state().enabled, false);
   assert.equal(sockets.has('host'), false);
@@ -175,6 +182,18 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   clients[2] = await connect('desktop');
   assert.equal(writes, 2, 'reattaching the desktop must not replay mobile writes');
   hold = undefined;
+  // Coexistence plan A: while a desktop uses the profile, a phone's send, a new task and a plugin
+  // page's call are refused with the typed reason, and none reaches its handler; reads still answer.
+  held = 'HOST_PROFILE_IN_USE_BY_DESKTOP: held for this test';
+  for (const [channel, args] of [['maker:input:enqueue', ['task', { clientId: 'held', text: 'refused' }]],
+    ['maker:create-session', [{}]], [MCP_APPS_INVOKE, ['task', {}]]]) {
+    const reply = await clients[0].invoke('host', { channel, args });
+    assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
+    assert.ok(JSON.stringify(reply.error).includes('HOST_PROFILE_IN_USE_BY_DESKTOP'), `${channel}: ${JSON.stringify(reply)}`);
+  }
+  assert.deepEqual([writes, created, appCalls], [2, 0, 0], 'nothing reached a handler');
+  assert.equal((await clients[0].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] })).ok, true, 'reads still answer');
+  held = null;
   await host.revoke('ios');
   const denied = await clients[0].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] }).catch(error => ({ denied: error }));
   assert.ok(denied.denied || denied.ok === false);

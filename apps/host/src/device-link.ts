@@ -42,6 +42,8 @@ export interface HostDeviceLinkPorts {
   invoke(path: string, body?: any, context?: { caller: string }): Promise<ServiceResult>;
   releaseAuthCaller?(caller: string): void;
   createRuntimeSession(input: unknown): Promise<unknown>;
+  /** Coexistence plan A: the refusal while a desktop uses this profile, or null. */
+  profileHold?(): string | null;
   subscribe(listener: (event: any) => void): () => void;
   // Cloud revocation is required before narrowing a persisted standby grant.
   availabilityPolicy?: ReturnType<typeof createAvailabilityPolicy>;
@@ -100,8 +102,15 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   // `-v2` with the native quotes (usageHandlers.ts). Both contract entries share one Host path, which
   // answers v2 for the renderer; v2 is not on the device-link allowlist, so v1 is projected here.
   registry.register('maker:usage:model-pricing', async () => toLegacyUsdModelPricing(await call('/api/usage/model-pricing', {})));
-  registry.register('maker:create-session', ([input]) => deps.createRuntimeSession(input));
+  // Coexistence plan A: while a desktop uses this profile, a new task's runtime and a plugin page's
+  // calls (they write through the plugin) are refused, as the service refuses other writes.
+  const refuseWhileHeld = () => {
+    const held = deps.profileHold?.();
+    if (held) throw Object.assign(new Error(`[PRECONDITION_FAILED] ${held}`), { code: 'PRECONDITION_FAILED' });
+  };
+  registry.register('maker:create-session', ([input]) => { refuseWhileHeld(); return deps.createRuntimeSession(input); });
   if (deps.mcpApps) registry.register(MCP_APPS_INVOKE, async ([sessionId, input]) => {
+    refuseWhileHeld();
     const source = getDeviceLinkInvokeContext();
     if (!source || source.sharedTask) throw new Error('[PRECONDITION_FAILED] MCP_APP_OWNER_ONLY');
     if (typeof sessionId !== 'string' || (input && typeof input === 'object' && 'deviceId' in input))

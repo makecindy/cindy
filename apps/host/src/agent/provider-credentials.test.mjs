@@ -238,7 +238,10 @@ async function heldCatalog(t, ownerId) {
   t.after(() => { setXdGatewayModels([]); configureHostOwner({ userDataDir: profile, ownerId: null }); fs.rmSync(profile, { recursive: true, force: true }); });
   const rounds = [];
   const fetched = [];
+  const priced = [];
   const catalog = createProviderCatalog({
+    // The price projection's input (main.ts applyPricedModels): the models of each list it is fed.
+    applyPricedModels: models => priced.push(models.map(model => model.id)),
     readProviders: async () => [],
     // As main.ts: the shared active catalog of this process.
     applyModels: (models, options) => setXdGatewayModels(models, options),
@@ -264,7 +267,7 @@ async function heldCatalog(t, ownerId) {
   assert.deepEqual(getXdGatewayModels().map(model => model.id), ['open-model', 'paid-model']);
   assert.equal(refusedByGuard(), true, 'the paid route is refused before');
   return {
-    access, rounds, fetched, read,
+    access, rounds, fetched, priced, read,
     fail: () => { writable = false; respond = () => ({ endpoint, apiKey: 'fixture-key-b' }); },
     disable: () => { respond = () => { throw Object.assign(new Error('model access disabled'), { code: 'MODEL_ACCESS_DISABLED', statusCode: 503 }); }; },
     recover: () => { writable = true; respond = () => ({ endpoint, apiKey: key }); },
@@ -307,4 +310,27 @@ test('credentials disabled: the models and refusals go, no embedding fallback, n
   await h.read();
   assert.equal(h.fetched.length, 1, 'the old key is not used for /models after disabled');
   assert.deepEqual(getXdGatewayModels(), []);
+});
+
+test('a /models round in flight when the credentials fail is dropped: it writes neither the list nor the prices', async t => {
+  const h = await heldCatalog(t, 'model-hold-in-flight');
+  let land;
+  h.rounds.push(new Promise(resolve => { land = resolve; }));
+  const inFlight = h.read(true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.fetched.length, 2, 'the forced round is in flight');
+  h.fail();
+  assert.equal((await h.access.sync.retry()).state, 'failed');
+  const pricedBefore = h.priced.length;
+  land(ROUND);
+  await inFlight;
+  assert.deepEqual(getXdGatewayModels(), [], 'the late round shows no models');
+  assert.deepEqual(h.priced.slice(pricedBefore), [], 'and feeds no prices');
+  // Not cached either: after ok the next read runs its own round instead of serving the dropped one.
+  h.recover();
+  assert.equal((await h.access.sync.retry()).state, 'ok');
+  h.rounds.push(ROUND);
+  await h.read();
+  assert.equal(h.fetched.length, 3);
+  assert.deepEqual(getXdGatewayModels().map(model => model.id), ['open-model', 'paid-model']);
 });

@@ -28,6 +28,18 @@ import { explicitPorts } from './explicit-ports.ts';
  */
 export const HOST_PROFILE_IN_USE_BY_DESKTOP = 'HOST_PROFILE_IN_USE_BY_DESKTOP';
 
+/**
+ * The Host's start refused because a desktop that opens this profile's database is running. Its own
+ * code: `DB_SCHEMA_LOCKED` names the database migration lease, which this is not.
+ */
+export class HostProfileInUseError extends Error {
+  readonly code = HOST_PROFILE_IN_USE_BY_DESKTOP;
+  constructor(message: string) {
+    super(message);
+    this.name = 'HostProfileInUseError';
+  }
+}
+
 export interface ProfileScanPorts {
   readdir(dir: string): Promise<string[]>;
   readFile(file: string): Promise<string>;

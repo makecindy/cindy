@@ -1,5 +1,34 @@
 import { clientErrorMessage } from './client-error.mjs';
 import { HOST_BROWSER_SETTINGS_ACTIONS } from '@cindy/maker-shared/host-channel-contract';
+import { throwIpcError } from '../../desktop/src/main/utils/ipcValidate.ts';
+
+/**
+ * What still runs while a desktop that opens this profile's database is live (coexistence plan A,
+ * agent/profile-coexistence.ts). Everything else is refused, typed, before its handler runs; a path
+ * added later is refused too until it is listed here. Allowed are reads, and what a running turn
+ * needs to end: stopping it, and answering its permission requests, questions and plugin prompts.
+ * Without those the turn would not end and the profile could never be released.
+ */
+export const HOST_PATHS_ALLOWED_WHILE_HELD = Object.freeze({
+  // Reads: they answer from what this process holds or read the shared files; none writes.
+  read: Object.freeze([
+    '/api/me', '/api/auth/state', '/api/profile', '/api/runtime/sessions', '/api/conversations/search',
+    '/api/sessions/list', '/api/sessions/get', '/api/sessions/messages', '/api/sessions/agent-switch-intent',
+    '/api/sessions/interrupted-pending', '/api/sessions/error-tail-pending', '/api/sessions/interrupted-candidates',
+    '/api/messages/list', '/api/messages/history-view', '/api/messages/work-details', '/api/messages/estimated-value',
+    '/api/turn-change-sets/list', '/api/project-info/get', '/api/project-info/image', '/api/project-aliases/list',
+    '/api/recent-workdirs/list', '/api/ghosts', '/api/ghosts/runtime-states', '/api/ghosts/card', '/api/ghosts/cards',
+    '/api/plugins/list', '/api/providers', '/api/agents', '/api/agents/auth-state', '/api/agents/status',
+    '/api/agents/codex-runtime-route', '/api/model-access', '/api/usage/model-pricing', '/api/usage/reference-model-pricing',
+    '/api/interactions/pending', '/api/input/projection', '/api/agent-commands', '/api/agent-skills', '/api/capabilities',
+    '/api/right-sidebar-tabs/list', '/api/browser-backend/get-state', '/api/browser-backend/get-health',
+  ]),
+  // Stopping or interrupting the running turn.
+  stop: Object.freeze(['/api/input/stop']),
+  // Answering the running turn: its permission requests and questions, and its plugin prompts.
+  answer: Object.freeze(['/api/interactions/respond', '/api/ghosts/confirm/resolve', '/api/ghosts/install-consent/resolve']),
+});
+const ALLOWED_WHILE_HELD = new Set(Object.values(HOST_PATHS_ALLOWED_WHILE_HELD).flat());
 
 /** Owner business operations shared by HTTP and authenticated Device Link.
  * Transport admission and owner leases belong to the caller. No synthetic HTTP
@@ -8,6 +37,8 @@ import { HOST_BROWSER_SETTINGS_ACTIONS } from '@cindy/maker-shared/host-channel-
 export function createHostService(deps) {
   return async function invoke(pathname, body = {}, context = {}) {
     const url = { pathname };
+    const held = deps.profileHold?.();
+    if (held && !ALLOWED_WHILE_HELD.has(pathname)) throwIpcError('PRECONDITION_FAILED', held);
 
     for (const [action, handler] of Object.entries(HOST_BROWSER_SETTINGS_ACTIONS)) {
       if (pathname === `/api/browser-backend/${action}`)

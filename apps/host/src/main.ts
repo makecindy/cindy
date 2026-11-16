@@ -28,7 +28,7 @@ import { createHostDeviceLink } from './device-link.js';
 import { createHostService } from './service.mjs';
 import { createHostRuntimeSession, type HostRuntimeSessionCreatePorts } from './agent/create-runtime-session.js';
 import {
-  createCoexistenceMonitor, createDesktopScanner, HOST_PROFILE_IN_USE_BY_DESKTOP,
+  createCoexistenceMonitor, createDesktopScanner, HOST_PROFILE_IN_USE_BY_DESKTOP, HostProfileInUseError,
   type CoexistenceMonitor, type CoexistenceState,
 } from './agent/profile-coexistence.js';
 import { createHostProviderExecutionCheck } from './agent/send-preflight.js';
@@ -585,14 +585,14 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     runtime.state = 'blocked'; runtime.owner = ownerId; runtime.storage = 'unopened';
     // The error code only: the message would carry the profile path into the status.
     runtime.detail = `cannot tell whether a Cindy desktop app uses this profile (${(error as NodeJS.ErrnoException)?.code ?? 'unreadable'}); quit it and start cindy-host again`;
-    throw new OwnerDatabaseError('DB_SCHEMA_LOCKED', runtime.detail);
+    throw new HostProfileInUseError(runtime.detail);
   }
   if (desktops.length) {
     runtimeLease = null; lease.release();
     runtime.state = 'blocked'; runtime.owner = ownerId; runtime.storage = 'unopened';
     runtime.coexistence = { state: 'desktop-running', desktops };
     runtime.detail = `a Cindy desktop app (pid ${desktops.join(', ')}) is running on this profile; quit it and start cindy-host again`;
-    throw new OwnerDatabaseError('DB_SCHEMA_LOCKED', runtime.detail);
+    throw new HostProfileInUseError(runtime.detail);
   }
 
   // Verify the credential owner under the profile lease, before opening any
@@ -1218,6 +1218,9 @@ setLiveCcSessionBridge(sessionMove.liveCcSessionBridge);
 
 const serverDeps = {
   ipcRoute,
+  // Coexistence plan A: while a desktop uses this profile, only reads, stops and answers reach the
+  // handlers (service.mjs HOST_PATHS_ALLOWED_WHILE_HELD); the rest get this refusal.
+  profileHold: () => (inputQueue.isHeldForDesktop() ? profileInUseMessage() : null),
   browserBackend: (handler: keyof NonNullable<typeof platformTools>['browserSettings'], payload: unknown) => {
     if (!platformTools) throw new Error('HOST_RUNTIME_NOT_READY');
     return platformTools.browserSettings[handler](undefined, payload);
@@ -1852,9 +1855,9 @@ function startDeviceLink(): void {
     canRegister: () => remoteIdentityReady && account.authenticated && !authClosed,
     invoke: service, subscribe: eventHub.subscribe,
     // The Device Link create entry, with the runtime start admission (agent/create-runtime-session.ts).
+    // Coexistence plan A: a new task's runtime and a plugin page's calls are refused while held (device-link.ts).
+    profileHold: () => (inputQueue.isHeldForDesktop() ? profileInUseMessage() : null),
     createRuntimeSession: input => {
-      // A new task's runtime is new work too (coexistence plan A).
-      if (inputQueue.isHeldForDesktop()) throwIpcError('PRECONDITION_FAILED', profileInUseMessage());
       return createHostRuntimeSession(explicitPorts<HostRuntimeSessionCreatePorts>({
       serverDeps,
       getAgentGraph: () => agentGraph,

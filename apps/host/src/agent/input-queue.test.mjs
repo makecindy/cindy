@@ -5200,8 +5200,11 @@ test('profile hold: every new send is refused, typed; the running turn ends; not
   // An input accepted before the hold still answers its reconnect.
   assert.deepEqual((await h.queue.enqueue('held', { clientId: 'queued', text: 'next job' })).pendingQueue.map(i => i.clientId), ['queued']);
   assert.equal(await h.queue.releaseDesktopHold(), false, 'not while a turn runs');
-  // Editing a queued input is not a send; its write must not lift the hold's execution pause.
-  await h.queue.updateText('held', 'queued', 'next job, edited');
+  // Editing, removing or moving a queued input writes the queue the desktop may be using: refused too.
+  await assert.rejects(h.queue.updateText('held', 'queued', 'next job, edited'), isHeldRefusal);
+  await assert.rejects(h.queue.updateContent('held', 'queued', { text: 'edited' }), isHeldRefusal);
+  await assert.rejects(h.queue.remove('held', 'queued'), isHeldRefusal);
+  await assert.rejects(h.queue.move('held', 'queued', 0), isHeldRefusal);
 
   const session = h.maker.sessions.get('held');
   session.emit({ type: 'done', data: {} });

@@ -336,6 +336,8 @@ export function createInputQueue(deps) {
     }
     async function mutate(id, fn) {
       return command(id, async state => {
+        // Editing, removing or moving a queued input writes the queue the desktop may be using.
+        refuseWhileHeld();
         coordinator.setExecutionPaused(id, true);
         const result = fn();
         await flushed(id);
@@ -511,6 +513,7 @@ export function createInputQueue(deps) {
       updateText: (id, clientId, text) => mutate(id, () => coordinator.updateText(id, clientId, text)),
       updateContent(id, clientId, item) {
         return command(id, async (state, admission) => {
+          refuseWhileHeld();
           const old = coordinator.getProjection(id).pendingQueue.find(row => row.clientId === clientId);
           if (!old) return api.projection(id);
           const composed = composeInput({ ...old, ...item, clientId,
