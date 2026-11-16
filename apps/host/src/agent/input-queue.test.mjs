@@ -2779,6 +2779,8 @@ async function modelChangeRuntime(t) {
   const db = await recoveryDatabase(t);
   const row = id => db.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id);
   let selection;
+  // Each send's landing hook call (the send transaction's applyPendingAgentSwitch), by task.
+  const landings = [];
   const views = { current: SWITCH_VIEWS };
   const { h, handoffs } = assembledRuntime(t, db, {
     readSession: async id => {
@@ -2786,7 +2788,7 @@ async function modelChangeRuntime(t) {
       return { id, status: stored.status, agentKind: 'claude-code', model: stored.model, workingDir: db.root,
         providerId: stored.provider_id, permissionMode: 'ask', planModeEnabled: false, sdkSessionId: stored.sdk_session_id };
     },
-    applyPendingAgentSwitch: (id, options) => selection.applyPendingAgentSwitch(id, options),
+    applyPendingAgentSwitch: (id, options) => { landings.push(id); return selection.applyPendingAgentSwitch(id, options); },
   });
   h.maker.getSessionMeta = async id => ({ id, agentKind: 'claude-code', model: row(id)?.model, workDir: db.root });
   selection = createHostRuntimeSelection({
@@ -2825,7 +2827,7 @@ async function modelChangeRuntime(t) {
   const withdraw = modelId => { views.current = SWITCH_VIEWS.map(view => ({ ...view,
     models: { 'claude-code': view.models['claude-code'].filter(entry => entry.id !== modelId) } })); };
   const restoreModels = () => { views.current = SWITCH_VIEWS; };
-  return { db, h, selection, row, createTask, runTurn, rebuilds, userRows, withdraw, restoreModels };
+  return { db, h, selection, row, createTask, runTurn, rebuilds, userRows, withdraw, restoreModels, landings };
 }
 
 // Rule (the desktop's send-time landing, sessionRuntimeSelectionApply.ts: a user's pick applied on send
@@ -2921,6 +2923,44 @@ test('model change at send: a same-engine landing failure is left by discarding 
   await waitFor(() => r.h.maker.sessions.get('land-drop')?.sent.length === 1);
   assert.equal(r.row('land-drop').model, 'small');
   assert.equal(r.userRows('land-drop').length, 1);
+});
+
+// Rule (the desktop's recovery replay goes through the same send transaction, makerSendTransaction.ts
+// applyPendingAgentSwitch; contextOverflowRollover.ts keeps the task in flight for the whole recovery,
+// so a landing that had to prepare the window would get 'in-flight'): a pick made during a turn that
+// overflows lands at the recovery's replay. The overflow rebuild has already reset the task (no native
+// session, no context used), so the landing needs no window preparation and the pick lands on the
+// replay with no second rebuild and no error. The hook runs once per send (the first send, then the
+// replay); the pick lands once. Gap: the Host landed a pick only on enqueue, so a replay kept the old
+// model.
+test('model change at send: a pick made during a turn that overflows lands on the recovery replay, with one rebuild', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await r.createTask('combo');
+  await r.h.queue.enqueue('combo', { clientId: 'combo-1', text: 'long task' });
+  await waitFor(() => r.h.maker.sessions.get('combo')?.sent.length === 1);
+  const first = r.h.maker.sessions.get('combo');
+  // As Maker writes it for the runtime, and the usage at danger for the smaller window.
+  r.db.db.prepare('UPDATE sessions SET sdk_session_id = ?, context_tokens = ? WHERE id = ?').run('native-combo', 95_000, 'combo');
+  const stamp = { sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId };
+  first.emit({ type: 'status', data: { isRunning: true }, ...stamp });
+  const picked = await r.selection.setModel('combo', 'small', undefined, undefined, undefined);
+  assert.equal(picked.pendingUntilSend, true, 'a pick during a turn waits for the next send');
+  first.emit({ type: 'error', data: OVERFLOW, ...stamp });
+  await waitFor(() => { const next = r.h.maker.sessions.get('combo'); return next && next !== first && next.sent.length === 1; });
+  const replayed = r.h.maker.sessions.get('combo');
+  assert.equal(replayed.options.model, 'small', 'the replay runs on the picked model');
+  assert.match(replayed.sent[0], /long task$/, 'the user\'s message is replayed once, after the rebuild summary');
+  assert.equal(r.row('combo').model, 'small');
+  assert.equal(r.row('combo').context_tokens, 0, 'the overflow rebuild reset the usage before the landing');
+  assert.deepEqual(r.rebuilds('combo').map(marker => marker.reason), ['context-overflow'], 'one rebuild, no second one for the window');
+  assert.equal(r.selection.projectIntent('combo') ?? null, null, 'the pick is spent');
+  assert.deepEqual(r.landings.filter(id => id === 'combo'), ['combo', 'combo'], 'the hook runs for the first send and the replay');
+  const projection = r.h.queue.projection('combo');
+  assert.equal(projection.error ?? null, null);
+  assert.equal(projection.recovery ?? null, null);
+  assert.equal(await r.h.queue.inputStatus('combo', 'combo-1'), 'running', 'a reconnecting client sees the input running');
+  assert.equal(r.userRows('combo').length, 1, 'the replay writes no second user row');
+  assert.equal(r.db.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE session_id = 'combo' AND role = 'error'").get().n, 0);
 });
 
 test('context recovery assembly: an overflow rebuilds the task and replays the message on a new runtime, with no error left', { timeout: 30_000 }, async t => {
