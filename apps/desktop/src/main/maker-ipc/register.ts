@@ -109,7 +109,6 @@ import { readDeviceProviderViews, readRemoteProviderRoute } from '../remote-agen
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
 import { cancelPendingRemoteStart } from '../remote-agent/controller/startRemote.js';
 import { createNativeHistoryRelocator } from '../remote-agent/controller/relocateNativeHistory.js';
-import { forgetCredentialGrants } from '../remote-agent/executor/credentialGrants.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { withSharedSessionResumeRecovery } from './sharedSessionResumeRecovery.js';
 import {
@@ -755,7 +754,13 @@ import { syncBotLanePermission, syncBotLinkedLanePermissions } from './botPermis
 import { ensureBotGroupLaneSession } from '../localDb/ipc/bots.js';
 import { restartBotRuntime } from './botRuntimeRestart.js';
 import { registerBotLifecycleHandlers } from './botLifecycleService.js';
-import { isSessionPermissionMode, persistPermissionModeWithoutRuntime } from './sessionPermissionPersistence.js';
+import { persistPermissionModeWithoutRuntime } from './sessionPermissionPersistence.js';
+import {
+  commitSessionPermissionModeWith,
+  createSetSessionPermissionMode,
+  createSetSessionPlanMode,
+  persistAgentPlanModeChangeWith,
+} from './sessionPermissionSettings.js';
 import { withSessionPermissionChange } from './sessionPermissionChange.js';
 import { withBotPermissionChange } from './botPermissionDispatch.js';
 import { getPluginHostToolCaller } from '../mcp-integrations/hostToolCaller.js';
@@ -6403,16 +6408,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   // consumes the localized notice.
   const emitWiredSessionEvent = (event: AgentEvent) => {
     if (event.type === 'plan_mode_changed') {
-      const enabled = (event.data as { enabled?: unknown })?.enabled;
-      if (typeof enabled === 'boolean') {
-        // Do not block event consumption/turn lease release on this queue.
-        void withSessionPermissionChange(session.id, async () => {
-          if (!ownerDb || ownerDb !== getCurrentDbClientSnapshot()
-            || sessionBindings.getSession(session.id) !== session
-            || session.getPlanMode() !== enabled) return;
-          await persistSessionFields(session.id, {planModeEnabled: enabled});
-        }).catch((error) => log.warn('persist plan_mode_changed failed', {sessionId: session.id, error: String(error)}));
-      }
+      persistAgentPlanModeChangeWith({ ownerDb, sessionBindings, persistSessionFields, log }, session, event);
       return;
     }
     handleSessionEvent(ownerEventDependencies, session, event);
@@ -22178,58 +22174,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   );
 
   async function commitSessionPermissionMode(sessionId: string, mode: string, remote = false, beforeMutation?: () => Promise<void>) {
-    const snapshot = getCurrentDbClientSnapshot();
-    const assertOwnerCurrent = () => {
-      if (!snapshot || snapshot !== getCurrentDbClientSnapshot()) {
-        throwIpcError('PRECONDITION_FAILED', 'Account changed during permission update');
-      }
-    };
-    return withBotPermissionChange(sessionId, () => withSessionPermissionChange(sessionId, async () => {
-      await beforeMutation?.();
-      assertOwnerCurrent();
-      await assertReviewSettingsUnlocked(sessionId);
-      await beforeMutation?.();
-      assertOwnerCurrent();
-      const [row] = await snapshot!.client.drizzle.select({permissionMode: sessions.permissionMode})
-        .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-      assertOwnerCurrent();
-      if (!row) throwIpcError('NOT_FOUND', 'session not found');
-      await beforeMutation?.();
-      const sess = maker.getSession(sessionId);
-      let runtimeChanged = false;
-      try {
-        if (sess) {
-          await sess.setPermissionMode(mode as PermissionMode);
-          runtimeChanged = true;
-        }
-        await beforeMutation?.();
-        assertOwnerCurrent();
-        const saved = await snapshot!.client.tx('bots.persistSessionPermission', {sessionId, mode});
-        if (!saved.updated) throwIpcError('NOT_FOUND', 'session not found');
-        assertOwnerCurrent();
-      } catch (error) {
-        // Keep recovery inside the same permission operation so it cannot
-        // overwrite a later user choice. Never recover into a new account.
-        if (runtimeChanged && sess && snapshot === getCurrentDbClientSnapshot()) {
-          await sess.setPermissionMode(row.permissionMode as PermissionMode).catch((rollbackError) => {
-            log.warn('permission runtime rollback failed', {sessionId, error: String(rollbackError)});
-          });
-        }
-        throw error;
-      }
-      // 分享供应商的「本任务总是允许」随权限档变化失效；Agent 实例被回收时执行器收不到这次切换。
-      if (row.permissionMode !== mode) forgetCredentialGrants(sessionId);
-      broadcastSessionPatched(sessionId, { permissionMode: mode });
-      await syncBotLinkedLanePermissions(sessionId);
-      if (remote) {
-        const result = {};
-        markRemoteSettingPersistedInsideHandler(result);
-        return result;
-      }
-      return true;
-    }));
+    return commitSessionPermissionModeWith({
+      maker, assertReviewSettingsUnlocked, broadcastSessionPatched, syncBotLinkedLanePermissions,
+      markRemoteSettingPersistedInsideHandler, log,
+    }, sessionId, mode, remote, beforeMutation);
   }
 
+  const handleSetSessionPermissionMode = createSetSessionPermissionMode({ commitSessionPermissionMode });
   ipcMain.handle(
     MAKER_INVOKE.SET_PERMISSION_MODE,
     async (event, sessionId: unknown, mode: unknown) => {
@@ -22241,16 +22192,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!isDeviceLinkInvoke()) {
         assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
       }
-      if (typeof sessionId !== 'string' || typeof mode !== 'string') {
-        throwIpcError('INVALID_PARAMS', 'sessionId + mode required');
-      }
-      if (!isSessionPermissionMode(mode)) {
-        throwIpcError('INVALID_PARAMS', 'invalid permission mode');
-      }
-      return commitSessionPermissionMode(sessionId, mode, isDeviceLinkInvoke());
+      return handleSetSessionPermissionMode(sessionId, mode);
     },
   );
 
+  const handleSetSessionPlanMode = createSetSessionPlanMode({
+    maker, assertReviewSettingsUnlocked, persistSessionFields, markRemoteSettingPersistedInsideHandler, log,
+  });
   ipcMain.handle(
     MAKER_INVOKE.SET_PLAN_MODE,
     async (event, sessionId: unknown, enabled: unknown) => {
@@ -22258,48 +22206,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!isDeviceLinkInvoke()) {
         assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
       }
-      if (typeof sessionId !== 'string' || typeof enabled !== 'boolean') {
-        throwIpcError('INVALID_PARAMS', 'sessionId + enabled required');
-      }
-      const snapshot = getCurrentDbClientSnapshot();
-      const remote = isDeviceLinkInvoke();
-      const assertOwnerCurrent = () => {
-        if (!snapshot || snapshot !== getCurrentDbClientSnapshot())
-          throwIpcError('PRECONDITION_FAILED', 'Account changed during Plan update');
-      };
-      return withSessionPermissionChange(sessionId, async () => {
-        assertOwnerCurrent();
-        await assertReviewSettingsUnlocked(sessionId);
-        assertOwnerCurrent();
-        const [row] = await snapshot!.client.drizzle.select({planModeEnabled: sessions.planModeEnabled})
-          .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-        assertOwnerCurrent();
-        if (!row) throwIpcError('NOT_FOUND', 'session not found');
-        const sess = maker.getSession(sessionId);
-        try {
-          if (sess) await sess.setPlanMode(enabled);
-          assertOwnerCurrent();
-          if (maker.getSession(sessionId) !== sess) throwIpcError('PRECONDITION_FAILED', 'Session changed during Plan update');
-          await persistSessionFields(sessionId, {planModeEnabled: enabled});
-          assertOwnerCurrent();
-        } catch (error) {
-          // A provider may change its runtime before rejecting. Preserve the
-          // existing best-effort recovery, inside this same complete commit.
-          if (sess && snapshot === getCurrentDbClientSnapshot() && maker.getSession(sessionId) === sess) {
-            await sess.setPlanMode(!!row.planModeEnabled).catch((rollbackError) => {
-              log.warn('Plan runtime rollback failed', {sessionId, error: String(rollbackError)});
-            });
-          }
-          throw error;
-        }
-        // 计划模式同属权限档：分享供应商的「本任务总是允许」随之失效(同上)。
-        if (!!row.planModeEnabled !== enabled) forgetCredentialGrants(sessionId);
-        if (remote) {
-          const result = {};
-          markRemoteSettingPersistedInsideHandler(result);
-          return result;
-        }
-      });
+      return handleSetSessionPlanMode(sessionId, enabled);
     },
   );
 

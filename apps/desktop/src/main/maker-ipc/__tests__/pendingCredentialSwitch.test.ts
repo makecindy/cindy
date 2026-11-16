@@ -10,6 +10,7 @@ import {
   PendingCredentialSwitchService,
   type PendingCredentialSwitchDeps,
 } from '../pendingCredentialSwitch.js';
+import { createPendingCredentialSwitchRouteReader } from '../pendingCredentialSwitchAssembly.js';
 
 const touchedSessions = new Set<string>();
 
@@ -401,6 +402,21 @@ describe('PendingCredentialSwitchService', () => {
     h.service.onSessionClosed('never-registered');
     expect(h.broadcastApplied).not.toHaveBeenCalled();
     expect(h.onApplied).not.toHaveBeenCalled();
+  });
+
+  // The proxy picks a busy task's route from this reader (provider-route.ts setPendingCredentialSwitchReader);
+  // a wrong value sends the request to the wrong model or provider. Shared by the desktop and the Node Host.
+  it('gives the proxy the pending target and the model it replaces', () => {
+    const h = createHarness([]);
+    const read = createPendingCredentialSwitchRouteReader(h.service);
+    h.service.register('route-with-previous', {
+      model: 'gpt-5.5', providerId: 'xd', previousRoute: { model: 'gpt-5.4', providerId: 'openai' },
+    });
+    h.service.register('route-without-previous', { model: 'gpt-5.5', providerId: 'xd' });
+
+    expect(read('route-with-previous')).toEqual({ model: 'gpt-5.5', providerId: 'xd', previousModel: 'gpt-5.4' });
+    expect(read('route-without-previous')).toEqual({ model: 'gpt-5.5', providerId: 'xd' });
+    expect(read('never-registered')).toBeUndefined();
   });
 
   describe('收口前的停用重裁决(PR #744 review 第七轮起,宽松降级形态)', () => {
