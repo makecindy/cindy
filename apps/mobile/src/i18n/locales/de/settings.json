@@ -436,5 +436,51 @@
       "sendText": "Eingegebenen Text senden",
       "taskHint": "Diese Kurzbefehle gelten auf Sitzungsseiten. Ist eine Taste der Spracheingabe zugewiesen, hat diese Vorrang; beim Loslassen bleibt der Text im Nachrichtenfeld."
     }
+  },
+  "projectInfo": {
+    "automatic": "Projektsymbol verwenden",
+    "autoLoading": "Projektsymbol wird gesucht…",
+    "autoNone": "Initialen aus dem Projektnamen werden verwendet.",
+    "autoSource": "Quelle",
+    "githubAvatar": "GitHub-Profilbild verwenden",
+    "title": "Projekteinstellungen",
+    "name": "Anzeigename",
+    "saveName": "Name speichern",
+    "reset": "Standard wiederherstellen",
+    "icon": "Symbol",
+    "directory": "Projektordner",
+    "done": "Fertig",
+    "failed": "Speichern fehlgeschlagen. Erneut versuchen.",
+    "unavailable": "Einstellungen nicht verfügbar. Einen aktualisierten Computer verbinden und erneut versuchen.",
+    "back": "Zurück",
+    "cancel": "Abbrechen",
+    "changeIcon": "Symbol ändern",
+    "chooseIcon": "Symbol auswählen",
+    "save": "Speichern",
+    "symbols": "Symbole",
+    "emoji": "Emoji",
+    "letters": "Buchstaben",
+    "image": "Bild",
+    "upload": "Bild hochladen",
+    "imageHint": "PNG, JPG oder WebP · quadratischer Zuschnitt",
+    "imageError": "Das Bild konnte nicht gelesen werden. Versuche eine kleinere PNG- oder JPG-Datei.",
+    "search": "Symbole suchen",
+    "customEmoji": "Oder ein Emoji einfügen",
+    "lettersHint": "Ein oder zwei Buchstaben oder Zahlen.",
+    "thisComputer": "Dieser Computer",
+    "nameHint": "Name in der Projektliste. Der Ordnername bleibt unverändert.",
+    "copy": "Pfad kopieren",
+    "copied": "Kopiert",
+    "applyIcon": "Symbol verwenden",
+    "noResults": "Keine passenden Symbole",
+    "discardHint": "Ungespeicherte Änderungen verwerfen?",
+    "keepEditing": "Weiter bearbeiten",
+    "discard": "Verwerfen",
+    "colors": {
+      "default": "Standard (dem Design folgen)"
+    }
+  },
+  "navigation": {
+    "unavailable": "Die Einstellungen des Zielcomputers konnten nicht geöffnet werden. Prüfe, ob er online ist und Fernsteuerung erlaubt. Aktualisiere Cindy bei einer älteren Version."
   }
 }

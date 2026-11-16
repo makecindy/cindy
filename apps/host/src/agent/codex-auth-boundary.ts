@@ -11,7 +11,7 @@ type CredentialScope = 'instance-isolated' | 'system-shared' | 'unknown';
  */
 export function createCodexAuthBoundary(ports: {
   /** Retire every local Codex host holding this profile's login (forceDisposeLocalHostForAuthChange). */
-  retireLocalHosts(reason: string): Promise<void>;
+  retireLocalHosts(reason: string, preserveSubscriptionAccounts?: boolean): Promise<void>;
   clearProxyAuthInjection(): void;
   publishRuntimeRoute(): void | Promise<void>;
   clearBridgeCredentialCache(): void;
@@ -37,7 +37,7 @@ export function createCodexAuthBoundary(ports: {
     /** setOnInvalidatedBroadcast. */
     async afterInvalidation(reason: string, credentialScope: CredentialScope): Promise<void> {
       try {
-        await ports.retireLocalHosts(`Codex credential invalidated: ${reason}`);
+        await ports.retireLocalHosts(`Codex credential invalidated: ${reason}`, true);
         ports.clearBridgeCredentialCache();
       } catch (error) {
         // The prompt to sign in again must still reach the agents.

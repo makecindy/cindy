@@ -1,3 +1,4 @@
+import { createInlineImagePreprocessor } from './inlineImagePreprocessor.js';
 
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import { rewriteFastModel } from './model-fast-mode.js';
@@ -24,7 +25,7 @@ import {
 } from '@cindy/model-providers';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
-import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody, normalizeKimiToolHistory } from '@cindy/model-compat';
+import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody, normalizeKimiToolHistory, resolveProviderCompatibilityProfile } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, normalizeDeepSeekV41ToolHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { bearerAccessTokenFromHeaders } from './chatgpt-bridge-auth-invalidation.js';
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -56,6 +57,7 @@ import {
   createInstructionsRegistry,
   createXaiModelInputRecoveryRule,
   createXaiModelInputSanitizeTransform,
+  countInlineRequestImages,
   createVllmResponsesCompatibilityRule,
   sanitizeXaiModelInputBody,
   sanitizeXaiModelInputFromBody,
@@ -204,6 +206,7 @@ export interface CodexProxyHostPorts {
   bearerKeyFromHeaders: typeof import('../model-access/gatewayKeyRejection.js').bearerKeyFromHeaders;
   reportCindyGatewayKeyRejected: typeof import('../model-access/gatewayKeyRejection.js').reportCindyGatewayKeyRejected;
   createAttachmentRecovery: typeof import('./oversized-attachment-recovery.js').createAttachmentRecovery;
+  createRequestSizeController: typeof import('./oversized-attachment-recovery.js').createRequestSizeController;
   restrictSubscriptionRequest: typeof import('./subscription-fast-request-policy.js').restrictSubscriptionRequest;
   withSubscriptionFastRequestPolicy: typeof import('./subscription-fast-request-policy.js').withSubscriptionFastRequestPolicy;
   peekGrokAccessToken: typeof import('./grok-oauth-login.desktop.js').peekGrokAccessToken;
@@ -232,8 +235,29 @@ export interface CodexProxyHostPorts {
 }
 
 /** Same protocol, routing and recovery implementation for both launchers. */
+const CODEX_PROXY_MAX_REQUEST_BODY_BYTES = 42 * 1024 * 1024;
+const CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES = 12 * 1024 * 1024;
+const CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES = 8 * 1024 * 1024;
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && !Array.isArray(value);
+
+function isFullCodexWebSocketReplay(body: unknown): boolean {
+  return isPlainObject(body) && !Object.prototype.hasOwnProperty.call(body, 'previous_response_id');
+}
+
+export function shouldCompactCodexWebSocketFrame(message: Buffer, limitBytes = CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES): boolean {
+  if (message.length <= limitBytes) return false;
+  try {
+    const body: unknown = JSON.parse(message.toString('utf8'));
+    return isFullCodexWebSocketReplay(body);
+  } catch {
+    return false;
+  }
+}
+
 export function createCodexProxyHost(ports: CodexProxyHostPorts) {
-const { bearerKeyFromHeaders, reportCindyGatewayKeyRejected, createAttachmentRecovery, restrictSubscriptionRequest, withSubscriptionFastRequestPolicy, peekGrokAccessToken, isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId, buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM, claudeUpstreamEndpoint, isOpenAiSubscriptionProviderId, createXaiProxyAuthInvalidationObserver, resolveDesktopOutboundProxy, outboundFetch, readSilentEncryptedRetrySettings, recordXaiRateLimitSnapshot, CODEX_IMAGE_GENERATION_ACTOR_HEADER, codexCustomProviderRoutesSignature, findCodexAppliedCustomProviderRoute, isCodexCustomProviderNamespacePath, parseCodexCustomProviderPath, relativeProviderRequestPath, setAppliedCustomProviderRoutes } = ports;
+const imagePreprocessor = createInlineImagePreprocessor();
+const { bearerKeyFromHeaders, reportCindyGatewayKeyRejected, createAttachmentRecovery, createRequestSizeController, restrictSubscriptionRequest, withSubscriptionFastRequestPolicy, peekGrokAccessToken, isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId, buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM, claudeUpstreamEndpoint, isOpenAiSubscriptionProviderId, createXaiProxyAuthInvalidationObserver, resolveDesktopOutboundProxy, outboundFetch, readSilentEncryptedRetrySettings, recordXaiRateLimitSnapshot, CODEX_IMAGE_GENERATION_ACTOR_HEADER, codexCustomProviderRoutesSignature, findCodexAppliedCustomProviderRoute, isCodexCustomProviderNamespacePath, parseCodexCustomProviderPath, relativeProviderRequestPath, setAppliedCustomProviderRoutes } = ports;
 
 
 // scope = 'codex-proxy'。保持独立 scope,方便后续 E2E 日志脚本按 codex proxy 过滤。
@@ -444,19 +468,11 @@ function createArmedHttpRecoveryStripTransform(useUpstreamModel = false): Reques
   };
 }
 
-// codex 走 Responses API,每轮**全量重发**整个 thread 历史;导入的存量长会话
-// (贴图 base64 + 加密 reasoning blob,字节数膨胀远快于 token 数)单次请求体可以
-// 轻松越过 proxy 默认的 32MB —— 原生 codex 直连上游没有这道闸,曾导致导入会话
-// 每轮报 "stream disconnected before completion" 且无日志(2026-07 实踩)。
-// 放宽到 128MB 恢复与原生 codex 的对等;仍保留上限防内存被打爆(body 会整段
-// 缓冲 + JSON.parse,该值同时是单请求的内存 / 解析停顿预算)。
-const CODEX_PROXY_MAX_REQUEST_BODY_BYTES = 128 * 1024 * 1024;
-
-// ChatGPT 订阅后端的 WebSocket 单条消息上限约 16 MiB(2026-10 实测:12 MiB 通过,16 MiB 起
-// 回 1009 Message Too Big;HTTP 无此限制)。连接回收后 Codex 要整段重发历史,图片多的会话会
-// 每次被拒、退到 HTTP 慢传。超过时先把最早的内联附件外置为本地文件,压到目标值再发。
-const CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES = 15 * 1024 * 1024;
-const CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES = 12 * 1024 * 1024;
+// Codex 每轮全量重发历史，HTTP 兜底硬上限为 42 MiB。原始 JSON 超过这个
+// 入口窗口时先落盘，能挪图的请求仍按 32→14 MiB 重放，不因原始体积直接拒绝。
+// 关闭大小控制时，旧附件恢复也以 42 MiB 为限；无归属时仅压缩，仍超限则本地 413。
+// ChatGPT 订阅后端的 WebSocket 阈值独立：整段历史超过 12 MiB 时重放到 8 MiB，
+// 增量帧（带 previous_response_id）只预处理，不挪图。
 
 // proxy 路线 spawn 鉴权模式: codex 当前带的是 OAuth token(requires_openai_auth)还是 gateway key(env_key)。
 // index.ts prepareCodexExtraSpawnConfig 在每次 spawn 前按本次会话 credentialMode set; routingTransform 据此决策。
@@ -1329,9 +1345,23 @@ function createChatBridgeDecision(
           || (isOfficialAnthropicUpstream(standard.upstream) && (standard.contextWindow ?? 0) >= 1_000_000))) {
           appendCommaSeparatedHeaderToken(nativeHeaders, 'anthropic-beta', 'context-1m-2025-08-07');
         }
-        const nativeFetch = createPiProviderFetch({ row: { ...standard,
+        const nativeRow = { ...standard,
           supportsFastMode: selected?.supportsFastMode ?? standard.supportsFastMode,
-        }, providerId,
+        };
+        const chatProfile = standard.execution.pi.api === 'openai-completions'
+          ? resolveProviderCompatibilityProfile({
+            harness: 'codex', protocol: 'openai-chat', upstreamBase: upstream, model: actualModel,
+            authMode: route.routing.authStrategy === 'oauth-token' || route.routing.authStrategy === 'provider-oauth-header' ? 'oauth' : 'api-key',
+          }) : null;
+        // Kimi Code rejects developer messages. Its native SDK does not recognize
+        // this endpoint; fill only the missing role capability on this Codex route.
+        if ((chatProfile?.id === 'kimi' || chatProfile?.id === 'kimi-code')
+          && standard.execution.pi.compat?.supportsDeveloperRole === undefined) {
+          nativeRow.execution = { ...standard.execution, pi: { ...standard.execution.pi,
+            compat: { ...standard.execution.pi.compat, supportsDeveloperRole: false },
+          } };
+        }
+        const nativeFetch = createPiProviderFetch({ row: nativeRow, providerId,
           // Keep the catalog adapter while honoring the host assigned to this account.
           upstream,
           apiKey: nativeBridgeApiKey(headers),
@@ -3548,11 +3578,38 @@ async function createCodexProxyHandle(
     return decision instanceof Promise ? decision.then(uncompressed) : uncompressed(decision);
   };
   const attachmentRecovery = createAttachmentRecovery(sessionIdFromHeaders);
+  const requestSizeController = createRequestSizeController(sessionIdFromHeaders, imagePreprocessor, (headers, model) =>
+      providerContextForRequest(headers, model).providerId ?? guestProviderId
+        ?? gatewayProviderIdForRewrittenModel(model)
+        ?? ((frozenAuthInjection ?? getCodexProxyAuthInjection()) === 'oauth-bearer' ? 'openai' : 'xd'));
   const fitWebSocketRequest = async (
     request: Buffer,
+    parsed: unknown,
+    fullReplay: boolean,
     ctx: { url: string; headers: Readonly<Record<string, string>> },
     signal: AbortSignal,
   ): Promise<Buffer> => {
+    const context = { reqId: 0, method: 'POST', url: ctx.url, headers: ctx.headers };
+    try {
+      const controlled = await requestSizeController.control(request, 'responses', {
+        context, signal, route: requestSizeController.route?.(context, parsed) ?? {},
+        allowRemoval: fullReplay && requestSizeController.enabled?.() !== false,
+        triggerBytes: CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES,
+        targetBytes: CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES,
+      });
+      if (controlled) {
+        request = controlled.body;
+        log.info('request size control applied', { reqId: 0, transport: 'websocket',
+          originalBytes: controlled.originalBytes, bytes: controlled.bytes,
+          removedImages: controlled.removedImages, reason: controlled.reason });
+      }
+    } catch (error) {
+      log.info('request size control skipped', { reqId: 0, reason: 'error', originalBytes: request.length,
+        imageCount: countInlineRequestImages(request, 'responses'), errorType: error instanceof Error ? 'Error' : typeof error });
+    }
+    // Incremental frames only preprocess. Disabled/unavailable controllers keep
+    // the existing oversized-frame recovery as their fallback.
+    if (!fullReplay || request.length <= CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES) return request;
     const recover = attachmentRecovery({ reqId: 0, method: 'POST', url: ctx.url, headers: ctx.headers });
     let recovered: Buffer | null = null;
     try {
@@ -3621,7 +3678,8 @@ async function createCodexProxyHandle(
       const context = providerContextForRequest(ctx.headers, isPlainObject(body) && typeof body.model === 'string' ? body.model : '');
       const next = restrictSubscriptionRequest(body, context.sessionId ?? guestSessionId, context.providerId ?? guestProviderId ?? 'openai');
       const request = next ? Buffer.from(JSON.stringify(next)) : message;
-      return request.length > CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES ? fitWebSocketRequest(request, ctx, signal) : request;
+      const fullReplay = isFullCodexWebSocketReplay(body);
+      return fitWebSocketRequest(request, next ?? body, fullReplay, ctx, signal);
     }),
     transformResponse: (ctx) => {
       const response = {
@@ -3678,6 +3736,7 @@ async function createCodexProxyHandle(
     ),
     maxRequestBodyBytes: CODEX_PROXY_MAX_REQUEST_BODY_BYTES,
     oversizedRequestRecovery: attachmentRecovery,
+    requestSizeController,
     debugDumpRequestBody: process.env.XDT_PROXY_DUMP_REQUEST_BODY === '1',
     recoveryRules: [...CODEX_BODY_RECOVERY_RULES],
     logger: log,

@@ -22,7 +22,7 @@ import { createClaudeNativeCli } from '../../../desktop/src/main/maker-host/clau
 import { readClaudeCliLoginStatusBySpawn } from '@cindy/maker-core/claude-cli-login-status';
 import { setActiveCatalog, setCustomProviders, setCustomProviderConfigs, setSubscriptionPoolProviders, setLocalCatalogOverrides, getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';
 import { publishSubscriptionPoolProviders } from '../../../desktop/src/main/maker-host/subscriptionPoolCatalog.js';
-import { readCreatedSubscriptionProviders } from '../../../desktop/src/main/subscription-accounts/placement.js';
+import { readCreatedSubscriptionProvidersIfReadable } from '../../../desktop/src/main/subscription-accounts/placement.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
 import { createCatalogCache } from '../../../desktop/src/main/maker-host/catalogCache.js';
 import { readModelCatalogOverrides } from '../../../desktop/src/main/maker-host/model-catalog-override-store.js';
@@ -129,7 +129,7 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
       const configs = await headers.listCustomProvidersWithSecureHeaders(); check();
       if (generation !== listGeneration) return configs;
       setCustomProviderConfigs(configs);
-      publishSubscriptionPoolProviders({ readCreatedSubscriptionProviders, setSubscriptionPoolProviders, log });
+      publishSubscriptionPoolProviders({ readCreatedSubscriptionProvidersIfReadable, setSubscriptionPoolProviders, log });
       setLocalCatalogOverrides(readModelCatalogOverrides());
       return configs;
     } catch (err) {

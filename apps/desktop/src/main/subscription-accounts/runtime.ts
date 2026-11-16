@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
 import { isDeepStrictEqual } from 'node:util';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { getCodexHome } from '../maker-host/codex-home-path.js';
@@ -118,6 +119,8 @@ type Usage = {
   codexPlan?: string;
 };
 interface AccountSnapshot {
+  /** Non-secret equality key; never a credential or execution authorization. */
+  accountKey?: string;
   auth: AuthState & { plan?: string; loginExpiresAt?: string };
   usage?: Usage;
   unavailable?: boolean;
@@ -529,6 +532,15 @@ async function snapshot(
             auth = { ...auth, identity: saved.lastConfirmedIdentity };
           }
         }
+        // Email alone cannot distinguish ChatGPT workspaces. Reuse the host-only native
+        // auth reader and publish only a digest, never the account id or credential.
+        let accountKey: string | undefined;
+        if (provider === 'openai' && auth.authenticated && auth.identity) {
+          try {
+            const native = await readNativeCodexTokens(directory);
+            if (native.canDispatch()) accountKey = codexAccountDisplayKey(auth.identity, native.chatgptAccountId);
+          } catch { /* Missing native identity keeps sources separate; it does not sign them out. */ }
+        }
         const invalidated = state.invalidated.get(key);
         if (provider === 'openai' && invalidated && auth.authenticated) {
           const current = await readNativeCodexTokens(directory);
@@ -538,21 +550,22 @@ async function snapshot(
         }
         // Auth reads yield: quota events may have replaced the captured cache.
         const current = state.cache.get(key);
-        const sameAccount = current?.auth.identity === auth.identity;
+        const sameAccount = (previous: AccountSnapshot | undefined) => previous?.auth.identity === auth.identity
+          && (provider !== 'openai' || (!!accountKey && previous?.accountKey === accountKey));
         const reuseUsage =
           !forceUsage &&
-          sameAccount &&
+          sameAccount(current) &&
           current?.usageAt !== undefined &&
           Date.now() - current.usageAt < 180_000;
         let usage = auth.authenticated
           ? reuseUsage
             ? current?.usage
             : await readNativeAccountUsage(provider, directory).catch(() =>
-                state.cache.get(key)?.auth.identity === auth.identity ? state.cache.get(key)?.usage : undefined,
+                sameAccount(state.cache.get(key)) ? state.cache.get(key)?.usage : undefined,
               )
           : undefined;
         const latest = state.cache.get(key);
-        const eventDuringRead = auth.authenticated && latest?.auth.identity === auth.identity
+        const eventDuringRead = auth.authenticated && sameAccount(latest)
           && latest?.usage !== current?.usage;
         // A successful read owns the full snapshot; overlay only concurrent
         // events, not the old endpoint fields carried along in the event cache.
@@ -585,6 +598,7 @@ async function snapshot(
           }
         }
         result = {
+          ...(accountKey ? { accountKey } : {}),
           auth: { ...auth, plan: auth.plan ?? usage?.codexPlan },
           usage,
           at: Date.now(),
@@ -658,6 +672,24 @@ export function hasConnectedSubscriptionPool(providerId: string, options: { incl
   return found.pool.accounts.filter(account => (serving.has(account.id) || historical.has(account.id))
     && !disconnectedFor(found.pool, found.kind, account.id))
     .some((a) => state.cache.get(keyOf(found.kind, a.id))?.auth.authenticated);
+}
+
+/** Complete cached identity set of this provider, for presentation on the owner's devices.
+ * Unknown, paused, signed-out and historical-only accounts never imply equivalence.
+ */
+export function subscriptionProviderAccountKeys(providerId: string): string[] | undefined {
+  const found = poolFor(providerId);
+  if (!found || found.off) return undefined;
+  const accounts = providerAccounts(found.kind, found.pool.accounts, found.ref.providerId);
+  if (!accounts.length || accounts.some(account => account.paused)) return undefined;
+  const state = currentRuntime();
+  const keys: string[] = [];
+  for (const account of accounts) {
+    const cached = state.cache.get(keyOf(found.kind, account.id));
+    if (!cached?.auth.authenticated || cached.unavailable || !cached.accountKey) return undefined;
+    keys.push(cached.accountKey);
+  }
+  return [...new Set(keys)].sort();
 }
 
 /** The legacy default adapter's auth boundary invalidates only its own pool slot. */
@@ -1087,6 +1119,10 @@ export async function readSubscriptionSessionAccount(
       ...(info.auth.authenticated ? accountUsage(info.usage) : {}),
       ...(blocked ? { blocked: true as const, switchAvailable } : {}),
       ...((keys.routeProviderId || keys.legacyProviderId) && config.paused ? { switchAvailable } : {}),
+      // The task follows its account (subscription-account-pools.md 任务跟着账号走). Tell the local
+      // composer where the account lives now so an emptied source is not shown as disconnected for
+      // this task; remote replies keep their existing shape.
+      ...(!options.remote && destination !== requestedRoute ? { ownerProviderId: destination } : {}),
     },
   };
 }
@@ -1280,6 +1316,7 @@ async function readSubscriptionPoolView(
         ...(provider === 'openai' ? { codexResetProviderId: readLegacyCodexProviderId(account.id) ?? codexResetScope(account.id) } : {}),
         ...(account.id === 'default' && legacyCodexDefault(provider) ? { legacy: true } : {}),
         identity: info.auth.identity,
+        ...(info.auth.authenticated && !info.unavailable && info.accountKey ? { accountKey: info.accountKey } : {}),
         plan: info.auth.plan,
         ...(provider === 'anthropic' && !disconnectedFor(pool, provider, account.id) && info.auth.authenticated
           && info.auth.loginExpiresAt ? { loginExpiresAt: info.auth.loginExpiresAt } : {}),
@@ -1311,7 +1348,34 @@ async function readSubscriptionPoolView(
     strategy: providerStrategy(ref.providerId, provider, pool),
     ...(taskId ? { boundAccountId: bound ?? null } : {}),
     accounts,
+    ...(previewDefault
+      ? { defaultAdded: defaultLoginAdded(state, provider, accounts.find((account) => account.id === 'default')) }
+      : {}),
   };
+}
+
+/**
+ * Add-provider preview (2026-11-14 user decision): the CLI's own login is already in Cindy when the
+ * built-in provider uses it, or when the same identity is already signed in as another account of
+ * this kind. The wizard then offers no shortcut for it. Saved records and cached identities only:
+ * no extra CLI or quota reads.
+ */
+function defaultLoginAdded(
+  state: OwnerRuntime,
+  provider: SubscriptionProvider,
+  cli: SubscriptionPoolView['accounts'][number] | undefined,
+): boolean {
+  const saved = readPool(provider);
+  // Older connected providers use an implicit default slot before any pool is saved.
+  if ((!saved || saved.accounts.some((account) => account.id === 'default'))
+    && !disconnectedFor(saved, provider, 'default') && defaultAccountBound(provider)) return true;
+  const identity = cli && (cli.status === 'ready' || cli.status === 'limited')
+    ? cli.identity?.trim().toLowerCase() : undefined;
+  if (!identity) return false;
+  return (saved?.accounts ?? []).some((account) => account.id !== 'default'
+    && !disconnectedFor(saved, provider, account.id)
+    && [account.lastConfirmedIdentity, state.cache.get(keyOf(provider, account.id))?.auth.identity]
+      .some((value) => value?.trim().toLowerCase() === identity));
 }
 
 /** Each provider assigns among its own accounts with its own policy; built-ins keep the pool's. */
@@ -1979,7 +2043,9 @@ export async function runSubscriptionAccountCommand(
           provider, accountId, providerBrandName(provider), () => randomUUID().replaceAll('-', '').slice(0, 8),
         );
         assertOwner(state);
-      } else if (command.action === 'add' && owned !== provider) {
+      } else if (adding && accountId !== 'default') {
+        // Adding inside a provider is an explicit merge, including into the built-in provider.
+        // Without this record an upgrade would mistake it for an old automatically pooled account.
         await placeSubscriptionAccount(provider, accountId, owned);
         assertOwner(state);
       }

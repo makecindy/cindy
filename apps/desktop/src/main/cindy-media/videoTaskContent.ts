@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { MediaDownloadError } from './mediaDownload.js';
-import type { ProviderVideoConnection } from './providerMediaRuntime.js';
+import { isMediaUrlWithinBase, type ProviderVideoConnection } from './providerMediaRuntime.js';
 
 const DISK_RESERVE_BYTES = 256n * 1024n * 1024n;
 
@@ -17,20 +17,22 @@ async function availableDownloadBytes(directory: string): Promise<bigint> {
 }
 
 function taskContentPath(taskId: string, template = '/videos/{taskId}/content'): string {
-  if (!/^[a-zA-Z0-9_-]{1,256}$/.test(taskId)) throw new MediaDownloadError('MEDIA_RESULT_INVALID', '视频任务 ID 无效');
+  if (!taskId || taskId.length > 256 || taskId === '.' || taskId === '..') throw new MediaDownloadError('MEDIA_RESULT_INVALID', '视频任务 ID 无效');
   if (!template.startsWith('/') || template.startsWith('//') || template.includes('\\') || !template.includes('{taskId}')) {
     throw new MediaDownloadError('MEDIA_RESULT_INVALID', '视频任务内容路径无效');
   }
-  return template.replaceAll('{taskId}', taskId);
+  return template.replaceAll('{taskId}', encodeURIComponent(taskId));
 }
 
 export function videoTaskContentUrl(taskId: string, baseUrl: string, contentPath?: string): string {
-  return `${baseUrl.replace(/\/+$/, '')}${taskContentPath(taskId, contentPath)}`;
+  const url = `${baseUrl.replace(/\/+$/, '')}${taskContentPath(taskId, contentPath)}`;
+  if (!isMediaUrlWithinBase(url, baseUrl)) throw new MediaDownloadError('MEDIA_RESULT_INVALID', '视频任务内容路径越出当前连接范围');
+  return url;
 }
 
 /** A private task resource, never an arbitrary URL authorized to receive an API key. */
 export function isVideoTaskContentRef(raw: string, taskId: string, baseUrl: string, contentPath?: string): boolean {
-  if (!/^[a-zA-Z0-9_-]{1,256}$/.test(taskId)) return false;
+  if (!taskId || taskId.length > 256 || taskId === '.' || taskId === '..') return false;
   const relative = taskContentPath(taskId, contentPath);
   const base = baseUrl.replace(/\/+$/, '');
   return raw === relative || raw === relative.slice(1) ||

@@ -75,6 +75,41 @@ describe('translateResponsesRequest', () => {
     expect(keep.messages[1]).toEqual({ role: 'developer', content: 'mid-conversation dev note' });
   });
 
+  it('accepts a single structured content part in a partner bootstrap message (#10605)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'additional_tools', role: 'developer', tools: [] },
+        { type: 'message', role: 'user', content: { type: 'input_text', text: 'welcome' } },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'welcome' },
+      { role: 'user', content: 'hello' },
+    ]);
+  });
+
+  it('accepts a single structured content part in a collaboration message (#10605)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'agent_message', author: 'researcher', content: { type: 'output_text', text: 'ready' } },
+        { type: 'message', role: 'user', content: 'continue' },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'assistant', content: '[collab researcher]\nready' },
+      { role: 'user', content: 'continue' },
+    ]);
+  });
+
+  it('still rejects a content object without a recognized part type', () => {
+    expect(() => translateResponsesRequest(base({
+      input: [{ type: 'message', role: 'user', content: { text: 'malformed' } }],
+    }))).toThrow('input[0].content');
+  });
+
   it('coalesces mid-conversation system/developer into one leading system when asked', () => {
     const source = base({
       instructions: 'top-level',

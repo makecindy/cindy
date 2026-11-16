@@ -250,11 +250,12 @@ describe('provider share invoke', () => {
     registry.register('maker:provider:list', async () => ({ providers: [{
       id: 'anthropic', remoteInvocationEnabled: true,
       models: { 'claude-code': [{ id: 'small' }, { id: 'large' }] },
+      evaluationModels: [{ id: 'small', mode: 'evaluation' }, { id: 'large', mode: 'rerank' }],
     }] }));
     try {
       for (const [src, model] of [[GUEST, 'small'], [second, 'large']]) {
         await expect(runInvoke(src, { channel: 'maker:provider:list', args: [] })).resolves.toMatchObject({
-          ok: true, result: { providers: [{ models: { 'claude-code': [{ id: model }] } }] },
+          ok: true, result: { providers: [{ models: { 'claude-code': [{ id: model }] }, evaluationModels: [{ id: model }] }] },
         });
       }
     } finally { registry.reset(); }

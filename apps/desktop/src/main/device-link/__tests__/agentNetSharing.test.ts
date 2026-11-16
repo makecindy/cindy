@@ -12,7 +12,7 @@ import { AgentNetClient } from '@cindy/agent-net-relay/client';
 import { buildAgentNetSharingInvitation, parseAgentNetSharingInvitation } from '@cindy/agent-net';
 import { RoutedDeviceLinkClient, providerShareHostPeer, sharedTaskHostPeer } from '@cindy/device-link';
 const state = vi.hoisted(() => ({ key: 'owner-a', pending: false, api: null as any,
-  relay: null as any, config: null as any,
+  relay: null as any, config: null as any, allowLegacy: false,
   files: new Map<string, string>(), writes: [] as string[], http: vi.fn(), card: vi.fn(), agentNetEnabled: true, onlyEncrypted: false,
 }));
 vi.mock('node:fs', () => ({ default: {
@@ -44,7 +44,7 @@ vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => (
 // variants used by the handover close still resolve the old owner's client.
 vi.mock('../agentNetRuntime.js', () => ({ currentAgentNetClient: () => state.pending ? null : state.api, isAgentNetActive: () => true,
   outgoingAgentNetClient: () => state.api, outgoingAgentNetClientForRelay: () => { throw new Error('AGENT_NET_IDENTITY_MISMATCH'); },
-  agentNetAllowsLegacy: () => false, agentNetOnlyEncryptedByUser: () => state.onlyEncrypted, agentNetSelectionKey: () => 'selected-private', agentNetClientForRelay: () => null,
+  agentNetAllowsLegacy: () => state.allowLegacy, agentNetOnlyEncryptedByUser: () => state.onlyEncrypted, agentNetSelectionKey: () => 'selected-private', agentNetClientForRelay: () => null,
   openScopedAgentNetAppSocket: vi.fn() }));
 import { selectedAgentNetSharingRoute, rememberAgentNetSharingService, requestAgentNetSharing,
   joinAgentNetSharedTask, agentNetSharingRoute, stopAgentNetSharing, captureAgentNetSharingBoundaryClose, bindAgentNetSharing,
@@ -52,7 +52,7 @@ import { selectedAgentNetSharingRoute, rememberAgentNetSharingService, requestAg
 import { resolveAgentNetProviderShareLink, providerShareApi, providerShareLinkFor, providerShareHiddenByEncryptedOnly } from '../providerShareApi.js';
 beforeEach(() => {
   state.key = 'owner-a'; state.pending = false; state.files.clear(); state.writes = [];
-  state.relay = null; state.config = null; state.agentNetEnabled = true; state.onlyEncrypted = false;
+  state.relay = null; state.config = null; state.agentNetEnabled = true; state.onlyEncrypted = false; state.allowLegacy = false;
   state.http.mockReset(); state.card.mockReset();
   const identity = generateIdentity('self-device'), { bootstrap } = createPrivateNetwork('Unit fixture', identity);
   state.api = new AgentNetClient('https://private.example.test', identity, bootstrap.ownerCertificate, bootstrap.rootPublicKey);
@@ -104,6 +104,65 @@ it('keeps a provider application, approval, transport identity and leave on its 
     expect(new Headers(init.headers).get('authorization')).toMatch(/^AgentNetIdentity /);
   }
   expect(state.card.mock.calls.every(([, opts]) => opts.body.audience === 'cindy-agent-net-sharing')).toBe(true);
+});
+// Review #10578: a partial outage returns cached rows rather than throwing. Unit,
+// real Main API + aggregation + SDK; previous leave tests never populated that
+// cache. An older read must not refill it, and a later admission must still work.
+it.each([
+  { legacy: false, late: false },
+  { legacy: false, late: true },
+  { legacy: true, late: true },
+])('forgets a successful leave from a failed origin cache (legacy=$legacy, late=$late)', async ({ legacy, late }) => {
+  state.allowLegacy = legacy;
+  const old = state.api;
+  state.api = new AgentNetClient(old.base, old.identity, old.certificate, old.rootPublicKey, undefined, { fetch: state.http });
+  if (!legacy) rememberAgentNetSharingService({ ...selectedAgentNetSharingRoute('provider-share')!,
+    server: 'https://friend.example.test', networkId: 'private:friend' });
+  const row = (shareId: string, memberId: string) => ({ shareId, memberId, providerId: 'claude', providerLabel: 'Remote',
+    hostDeviceId: 'remote-host', deviceName: 'Owner', owner: { displayName: 'Owner', avatarUrl: null, region: 'global' },
+    status: 'active', hostOnline: true, hostCapable: true });
+  const departed = row('left-share', 'left-member'), neighbour = row('neighbour-share', 'neighbour-member');
+  const healthy = row('healthy-share', 'healthy-member');
+  let mode: 'live' | 'pending' | 'failed' = 'live', reads = 0;
+  const response = Promise.withResolvers<{ shares: typeof departed[] }>(), started = Promise.withResolvers<void>();
+  const readSource = async () => {
+    reads++;
+    if (mode === 'failed') throw new Error('source unavailable');
+    if (mode === 'pending') { started.resolve(); return response.promise; }
+    return { shares: [departed, neighbour] };
+  };
+  state.http.mockImplementation(async (url: string) => {
+    const { hostname, pathname } = new URL(String(url));
+    if (pathname.endsWith('/sharing-origins')) return Response.json({ origins: [] });
+    if (pathname.endsWith('/leave')) return Response.json({});
+    return Response.json(hostname === 'friend.example.test' ? await readSource() : { shares: [healthy] });
+  });
+  state.card.mockImplementation(async (path: string) => {
+    if (path.endsWith('/received')) return readSource();
+    if (path.endsWith('/leave')) return {};
+    return { card: 'unit-limited-identity-card', expiresAt: new Date(Date.now() + 300_000).toISOString() };
+  });
+  await providerShareApi.listReceived();
+  const neighbourSeed = agentNetSharingRoute('provider-share', 'neighbour-share')?.seed;
+  let polling: ReturnType<typeof providerShareApi.listReceived> | undefined;
+  try {
+    if (late) { mode = 'pending'; polling = providerShareApi.listReceived(); await started.promise; }
+    await providerShareApi.leave('left-member');
+    mode = 'failed'; response.resolve({ shares: [departed, neighbour] });
+    if (polling) expect((await polling).map(share => share.shareId)).not.toContain('left-share');
+    const partial = await providerShareApi.listReceived();
+    expect(partial.map(share => share.shareId).sort()).toEqual(['healthy-share', 'neighbour-share']);
+    expect(partial.authorityIncomplete).toBe(true);
+    expect(partial.unavailableShareIds).toContain('neighbour-share');
+    if (!legacy) {
+      expect(agentNetSharingRoute('provider-share', 'left-share')?.retired).toBe(true);
+      expect(agentNetSharingRoute('provider-share', 'neighbour-share')).toMatchObject({ seed: neighbourSeed, retired: false });
+    }
+    mode = 'live';
+    expect((await providerShareApi.listReceived()).map(share => share.shareId)).toContain('left-share');
+    if (!legacy) expect(agentNetSharingRoute('provider-share', 'left-share')?.retired).toBe(false);
+    expect(reads).toBe(late ? 4 : 3);
+  } finally { response.resolve({ shares: [departed, neighbour] }); await polling; }
 });
 // Bug (real owner, 2026-11-10): origin sync had saved a placeholder service for
 // the owner's own relay; the host listing reused it as each share's route, so

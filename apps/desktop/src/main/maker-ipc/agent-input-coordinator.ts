@@ -473,6 +473,8 @@ export interface AgentInputCoordinatorDeps {
     signals: InterruptedTurnErrorSignals,
     item: AgentInputQueuedMessage,
   ) => AutoResumeAgentSwitchCause | null;
+  /** Shared bounded budget for provider-group recovery, which has no normal auto-resume token. */
+  claimExternalAutomaticRecovery?: (sessionId: string) => boolean;
   /**
    * **纯判定**：这条 terminal error 有没有可能被自愈接管（`isInterruptedTurnError`）。
    * 不消耗额度、不排期、无副作用。
@@ -1320,6 +1322,11 @@ function rebaseQueuedItemRoute(
   item.createOpts.effort = route.effort;
   item.createOpts.fastMode = route.fastMode;
   if (route.effort) item.effort = route.effort;
+}
+
+function requiresOrcaReportPersistence(item: AgentInputQueuedMessage): boolean {
+  return Boolean(item.orcaReportDelivery || item.orcaReportDeliveryFence === true
+    || item.mergedDeliveryClientIds?.length);
 }
 
 export class AgentInputCoordinator {
@@ -2554,7 +2561,7 @@ export class AgentInputCoordinator {
     // In particular, preserve ACK-uncertain items and their protective pause.
     // Do not infer non-delivery from the live turn ending during the request.
     if (!this.hasPendingQueueItem(sessionId, item.clientId)) return 'not-attempted';
-    if ((item.orcaReportDelivery || item.mergedDeliveryClientIds?.length) && item.durableDelivery) {
+    if (requiresOrcaReportPersistence(item) && item.durableDelivery) {
       if (!this.deps.awaitQueuePersistence) throw new Error('Durable input is unavailable');
       await this.deps.awaitQueuePersistence(sessionId);
       if (this.states.get(sessionId) !== state || state.generation !== generation
@@ -2573,7 +2580,7 @@ export class AgentInputCoordinator {
     const clientId = item.clientId;
     return (
       !this.isQueueRestored(sessionId) ||
-      Boolean(item.origin?.kind === 'orca' && (item.orcaReportDelivery || item.mergedDeliveryClientIds?.length) && state.orcaReportsStopped) ||
+      Boolean(item.origin?.kind === 'orca' && requiresOrcaReportPersistence(item) && state.orcaReportsStopped) ||
       !this.deps.isTurnRunning(sessionId) ||
       state.queuePaused || state.queueAbortPending || state.abortBoundaryToken !== null ||
       state.queueInteractionLocks.length > 0 ||
@@ -2868,7 +2875,7 @@ export class AgentInputCoordinator {
       }
     };
     try {
-      if ((item.orcaReportDelivery || item.mergedDeliveryClientIds?.length) && item.durableDelivery) {
+      if (requiresOrcaReportPersistence(item) && item.durableDelivery) {
         if (!this.deps.awaitQueuePersistence) throw new Error('Durable input is unavailable');
         await this.deps.awaitQueuePersistence(sessionId);
       }
@@ -3305,7 +3312,7 @@ export class AgentInputCoordinator {
 
   stop(
     sessionId: string,
-    opts?: { keepQueue?: boolean; pauseQueue?: boolean; resumeOnUserInput?: boolean },
+    opts?: { keepQueue?: boolean; pauseQueue?: boolean; resumeOnUserInput?: boolean; discardActiveInput?: boolean },
   ): AgentInputProjection {
     const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
     assertSharedTaskQueueMutation(sharedTask, sessionId, 'agent.stop');
@@ -3352,7 +3359,8 @@ export class AgentInputCoordinator {
     clearErrorProjectionSignals(state);
     state.stickyError = null;
     state.recovery = null;
-    this.cancelPreSendActiveTurn(sessionId, state, preserveQueue);
+    // A scoped group stop preserves unrelated queued inputs, never the cancelled active input.
+    this.cancelPreSendActiveTurn(sessionId, state, preserveQueue && !opts?.discardActiveInput);
     // 用户显式 Stop 立即结束续跑行的 vendor-turn 归属。已跨过 vendor dispatch
     // 的 activeTurn 仍需保留到 abort/terminal 收口，以维持队列边界；这里只清 owner，
     // 让本次 stop projection 不再把「重新连接中」误判为仍在飞。
@@ -3968,9 +3976,12 @@ export class AgentInputCoordinator {
   }
 
   private preserveRestoredQueueProvenance(current: AgentInputQueuedMessage, replacement: AgentInputQueuedMessage): AgentInputQueuedMessage {
+    const requiresPersistence = requiresOrcaReportPersistence(current);
     // An edited/merged row is no longer the original automatic report. Its
     // normal queue delivery remains available, but restart must await the user.
     delete replacement.orcaReportDelivery;
+    if (requiresPersistence) replacement.orcaReportDeliveryFence = true;
+    else delete replacement.orcaReportDeliveryFence;
     if (current.durableDelivery) replacement.durableDelivery = current.durableDelivery;
     const deliveryIds = [...new Set([...(current.mergedDeliveryClientIds ?? []), ...(replacement.mergedDeliveryClientIds ?? [])])];
     if (deliveryIds.length) replacement.mergedDeliveryClientIds = deliveryIds;
@@ -4869,7 +4880,7 @@ export class AgentInputCoordinator {
     // Only trusted durable reports need a pre-ACK steer receipt. Ordinary
     // composer steers keep their existing lifetime and recovery behavior.
     const steeringReports = state.directSteeringItems.filter(item =>
-      (item.orcaReportDelivery || item.mergedDeliveryClientIds?.length) && item.durableDelivery
+      requiresOrcaReportPersistence(item) && item.durableDelivery
       && !queued.some(queuedItem => queuedItem.clientId === item.clientId));
     return [...queued, ...steeringReports]
       .filter((item) => item.origin?.kind !== 'scheduler')
@@ -4970,6 +4981,7 @@ export class AgentInputCoordinator {
     delete projected[HOST_ONLY_AGENT_PREFIX];
     delete projected.hostAcceptedAtMs;
     delete projected.orcaReportDelivery;
+    delete projected.orcaReportDeliveryFence;
     delete projected.mergedDeliveryClientIds;
     delete projected.autoReviewUserText;
     delete projected.botTaskCoordination;
@@ -5322,8 +5334,7 @@ export class AgentInputCoordinator {
     if (this.restoreAttempted.has(sessionId) && !this.restoredQueueSessions.has(sessionId))
       return 'queue-restore-failed';
     if (state.pendingQueue.length === 0) return 'queue-empty';
-    if (state.pendingQueue[0].origin?.kind === 'orca' && (state.pendingQueue[0].orcaReportDelivery
-      || state.pendingQueue[0].mergedDeliveryClientIds?.length) && state.orcaReportsStopped) return 'orca-report-stopped';
+    if (state.pendingQueue[0].origin?.kind === 'orca' && requiresOrcaReportPersistence(state.pendingQueue[0]) && state.orcaReportsStopped) return 'orca-report-stopped';
     if (state.queuePaused && !(state.queuePausedByRestore && (this.restoredUsageLimitRetryItems.has(state.pendingQueue[0])
       || this.restoredOrcaReports.has(state.pendingQueue[0]))))
       return state.queuePausedByRestore ? 'queue-paused-by-restore' : 'queue-paused';
@@ -5617,13 +5628,13 @@ export class AgentInputCoordinator {
         referenceContexts,
       );
       const makerUserMessage = buildMakerUserMessage(head, referenceContexts);
-      if (head.orcaReportDelivery || head.mergedDeliveryClientIds?.length) {
+      if (requiresOrcaReportPersistence(head)) {
         // A crash after allocation may leave a committed grant without a user
         // row. Persist the uncertain attempt before entering the startup path;
         // only a proven safe rejection below can re-arm automatic delivery.
         if (head.orcaReportDelivery) head.orcaReportDelivery.recoveryBlocked = true;
         this.maybePersistQueueSnapshot(sessionId);
-        if (head.mergedDeliveryClientIds?.length && !this.deps.awaitQueuePersistence) throw new Error('Durable input is unavailable');
+        if ((head.orcaReportDeliveryFence || head.mergedDeliveryClientIds?.length) && !this.deps.awaitQueuePersistence) throw new Error('Durable input is unavailable');
         await this.deps.awaitQueuePersistence?.(sessionId);
         if (!this.isActiveTurnCurrent(sessionId, active)) return;
       }
@@ -7221,7 +7232,7 @@ export class AgentInputCoordinator {
     // resumeAfterProviderGroupDeclined 以 preferProviderGroup=false 回到原有恢复。
     // 其他中断仍先走自愈(如断线后在原电脑恢复)；不能交给组的输入也保持原有处理。
     if (preferProviderGroup) {
-      const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals);
+      const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals, false);
       if (cause === 'overload' || cause === 'usage-limit') return null;
     }
     try {
@@ -7454,7 +7465,7 @@ export class AgentInputCoordinator {
     // a provider-group takeover that this scheduled path does not start.
     if (isSchedulerOriginItem(item)) return;
     if (!this.willNotifyUsageLimitedTurnError(state, item)) return;
-    const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals);
+    const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals, true);
     if (!cause) return;
     state.providerGroupSwitchHold = {
       id: ++this.providerGroupSwitchHoldSeq,
@@ -7470,10 +7481,14 @@ export class AgentInputCoordinator {
     item: AgentInputQueuedMessage,
     message?: string,
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
+    consumeBudget = false,
   ): AutoResumeAgentSwitchCause | null {
     if (!this.deps.onUsageLimitedTurnError || isSchedulerOriginItem(item) || item.sharedTaskAuthor) return null;
     try {
-      return this.deps.providerGroupSwitchCandidate?.(sessionId, { ...(signals ?? {}), message }, item) ?? null;
+      const cause = this.deps.providerGroupSwitchCandidate?.(sessionId, { ...(signals ?? {}), message }, item) ?? null;
+      if (!cause) return null;
+      if (consumeBudget && this.deps.claimExternalAutomaticRecovery?.(sessionId) === false) return null;
+      return cause;
     } catch (err) {
       log.warn('providerGroupSwitchCandidate failed', { sessionId, error: errorMessage(err) });
       return null;
@@ -7527,6 +7542,12 @@ export class AgentInputCoordinator {
   getProviderGroupSwitchHoldId(sessionId: string): number | null {
     const state = this.states.get(sessionId);
     return state && isProviderGroupSwitchHoldLive(state) ? state.providerGroupSwitchHold!.id : null;
+  }
+
+  /** Whether an automatic provider-group relocation currently owns the recovery hold. */
+  hasProviderGroupSwitchHold(sessionId: string): boolean {
+    const state = this.states.get(sessionId);
+    return Boolean(state && isProviderGroupSwitchHoldLive(state));
   }
 
   /** A synchronous group candidate was declined by its async configuration/eligibility check. */

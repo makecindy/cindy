@@ -436,5 +436,51 @@
       "sendText": "Enviar texto escrito",
       "taskHint": "Estes atalhos funcionam nas páginas de sessão. Um botão atribuído à voz tem prioridade; ao soltá-lo, o texto fica na caixa de mensagem."
     }
+  },
+  "projectInfo": {
+    "automatic": "Usar ícone do projeto",
+    "autoLoading": "A procurar ícone…",
+    "autoNone": "A utilizar as iniciais do nome do projeto.",
+    "autoSource": "Origem",
+    "githubAvatar": "Usar avatar do GitHub",
+    "title": "Definições do projeto",
+    "name": "Nome apresentado",
+    "saveName": "Guardar nome",
+    "reset": "Restaurar predefinição",
+    "icon": "Ícone",
+    "directory": "Pasta do projeto",
+    "done": "Concluído",
+    "failed": "Não foi possível guardar. Tente novamente.",
+    "unavailable": "Definições indisponíveis. Ligue um computador atualizado e tente novamente.",
+    "back": "Voltar",
+    "cancel": "Cancelar",
+    "changeIcon": "Alterar ícone",
+    "chooseIcon": "Escolher ícone",
+    "save": "Guardar",
+    "symbols": "Ícones",
+    "emoji": "Emoji",
+    "letters": "Letras",
+    "image": "Imagem",
+    "upload": "Carregar imagem",
+    "imageHint": "PNG, JPG ou WebP · recorte quadrado",
+    "imageError": "Não foi possível ler a imagem. Tente um PNG ou JPG mais pequeno.",
+    "search": "Pesquisar ícones",
+    "customEmoji": "Ou cole um emoji",
+    "lettersHint": "Use uma ou duas letras ou números.",
+    "thisComputer": "Este computador",
+    "nameHint": "Nome na lista de projetos. A pasta não será renomeada.",
+    "copy": "Copiar caminho",
+    "copied": "Copiado",
+    "applyIcon": "Usar ícone",
+    "noResults": "Nenhum ícone encontrado",
+    "discardHint": "Descartar alterações não guardadas?",
+    "keepEditing": "Continuar a editar",
+    "discard": "Descartar",
+    "colors": {
+      "default": "Predefinida (seguir tema)"
+    }
+  },
+  "navigation": {
+    "unavailable": "Não foi possível abrir as definições do computador de destino. Verifique se está online e permite controlo remoto; atualize o Cindy se tiver uma versão antiga."
   }
 }

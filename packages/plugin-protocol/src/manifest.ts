@@ -382,6 +382,16 @@ export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
  * 分成两档:两者花不同的钱(轻量任务模型链 vs embedding 模型),合成一档
  * 就没法只授权其中一样。
  */
+export const GHOST_CINDY_MODELS_ACTIONS = ['decisions', 'rerank'] as const;
+export type GhostCindyModelsAction = (typeof GHOST_CINDY_MODELS_ACTIONS)[number];
+
+/** Historical unknown data can be retained without being interpreted as a capability. */
+export function isGhostCindyModelActionsDeclaration(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 &&
+    value.every(action => typeof action === 'string' && GHOST_SLOT_NAME_RE.test(action)) &&
+    new Set(value).size === value.length;
+}
+
 export const GHOST_CINDY_EMBED_ACTIONS = ['text'] as const;
 export type GhostCindyEmbedAction = (typeof GHOST_CINDY_EMBED_ACTIONS)[number];
 
@@ -406,6 +416,7 @@ export interface GhostCindyNeeds {
   text?: GhostCindyTextAction[];
   /** 向量类:text=文本转向量(只生成不存储,向量原样递回意识自己保管)。 */
   embed?: GhostCindyEmbedAction[];
+  models?: GhostCindyModelsAction[];
   /** 搜索类:web=Cindy 托管的公网搜索(主机固定路由,插件不经手网关凭证)。 */
   search?: GhostCindySearchAction[];
   /**
@@ -2017,7 +2028,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
         reason: '声明了 cindy 能力详单但 slots 未包含 "cindy"',
       };
     }
-    cindy = unknownDeclarationFields(cindyRaw, ['image', 'video', 'media', 'text', 'embed', 'search', 'oneshotModel']);
+    cindy = unknownDeclarationFields(cindyRaw, ['image', 'video', 'media', 'text', 'embed', 'models', 'search', 'oneshotModel']);
     // 类目 → 合法动作表(image / video / media / text / embed / search;动作集恰好
     // 同名,但按类目查表,未来某类目动作分叉时这里天然承接)。
     const actionTable: Record<string, readonly string[]> = {
@@ -2026,11 +2037,18 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       media: GHOST_CINDY_MEDIA_ACTIONS,
       text: GHOST_CINDY_TEXT_ACTIONS,
       embed: GHOST_CINDY_EMBED_ACTIONS,
+      models: GHOST_CINDY_MODELS_ACTIONS,
       search: GHOST_CINDY_SEARCH_ACTIONS,
     };
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
       if (category === 'oneshotModel') continue; // 标量意图键,不是类目,单独校验
       if (!Object.hasOwn(actionTable, category)) continue;
+      if (category === 'models' && preserveHistoricalParameterSize && !isGhostCindyModelActionsDeclaration(actionsRaw)) {
+        // Keep old opaque bytes for receipt comparisons/downgrades, but never grant them.
+        Object.assign(cindy, { models: actionsRaw });
+        continue;
+      }
+
       if (!Array.isArray(actionsRaw) || actionsRaw.length === 0) {
         return { ok: false, reason: `cindy.${category} 必须是非空数组` };
       }
@@ -2055,6 +2073,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       else if (category === 'media') cindy.media = actions as GhostCindyMediaAction[];
       else if (category === 'text') cindy.text = actions as GhostCindyTextAction[];
       else if (category === 'embed') cindy.embed = actions as GhostCindyEmbedAction[];
+      else if (category === 'models') cindy.models = actions as GhostCindyModelsAction[];
       else if (category === 'search') cindy.search = actions as GhostCindySearchAction[];
       else
         return {

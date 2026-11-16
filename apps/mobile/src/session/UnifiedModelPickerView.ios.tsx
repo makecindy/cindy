@@ -27,6 +27,7 @@ import {
   autocorrectionDisabled,
   textInputAutocapitalization,
   lineLimit,
+  id,
 } from "@expo/ui/swift-ui/modifiers";
 import {
   Check,
@@ -193,6 +194,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
           {group.rows.map((row) => (
             <ComposerNativeRow
               key={row.key}
+              modifiers={[id(`${group.key}:${row.key}`)]}
               title={row.entry.displayName}
               subtitle={[
                 mobileAgentLabel(row.config.agent),
@@ -373,6 +375,9 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         active: !options && !page,
         header: listHeader,
         content: listContent,
+        initialScrollTargetId: p.groups.flatMap(group =>
+          group.rows.filter(row => row.selected).map(row => `${group.key}:${row.key}`)
+        )[0],
       }}
     >
       {p.error ? (

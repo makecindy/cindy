@@ -313,6 +313,8 @@ export interface AgentInputQueuedMessage {
   durableDelivery?: true;
   /** Host-owned merged delivery identities survive edits without granting recovery. */
   mergedDeliveryClientIds?: string[];
+  /** Main-only persistence fence retained by edits; never grants automatic recovery. */
+  orcaReportDeliveryFence?: true;
   /** Main-authored Worker report receipt. Kept in snapshots, never accepted from input IPC. */
   orcaReportDelivery?: {
     workerId: string;

@@ -17,6 +17,10 @@ import { describe, expect, it } from 'vitest';
 const repoRoot = resolve(__dirname, '..', '..', '..', '..', '..');
 const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const userMessageDurableWriteSource = readFileSync(
+  resolve(__dirname, '..', 'maker-ipc', 'userMessageDurableWrite.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 const dispatchBoundarySource = readFileSync(
   resolve(__dirname, '..', 'turn-change-set', 'dispatchBoundary.ts'),
   'utf8',
@@ -712,8 +716,11 @@ describe('sendToSession ordering', () => {
       '    isSessionRunningError,',
     );
 
-    expect(makerSendCreateDbMessageBlock).toContain('return await enqueueDurableWrite');
+    // The user-row write is assembled here and written in userMessageDurableWrite.ts.
+    expect(makerSendCreateDbMessageBlock).toContain('createUserMessageDurableWrite({');
     expect(makerSendCreateDbMessageBlock).not.toContain('notifyAgentIslandUserPrompt(');
+    expect(userMessageDurableWriteSource).toContain('return await enqueueDurableWrite');
+    expect(userMessageDurableWriteSource).not.toContain('notifyAgentIslandUserPrompt(');
     expect(source).toContain('createDbMessage: createUserMessageDurably,');
     expect(makerSendPreviewHookBlock).toContain('previewUserPrompt: (session, content, options) => {');
     expect(makerSendPreviewHookBlock).toContain(

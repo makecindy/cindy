@@ -47,6 +47,11 @@ Mobile 另外保留双端一致性测试用的 `session-primary` 与 Orca 两条
 
 ## Desktop
 
+登录服务的非 JSON 网络错误用 `XDT_LOGIN_SCENARIO=providers:non-json-418` 验证：
+它只在开发构建将登录方式 GET 替换为合成的 418 HTML 响应（`server` / `via` 为
+`scenario-proxy`），经过真实 auth client、诊断脱敏与登录页；不代表复现了报告人的网络。
+此场景属于登录流程测试，不加会跳过登录页的 `--mock`。正式构建仍由同一 fixture stub 排除。
+
 ```bash
 pnpm restart:desktop:remote -- --mock
 pnpm restart:desktop:remote -- --mock --isolated=<名字>   # 另开一份模拟沙箱，可与别的 worktree 并行
@@ -96,6 +101,7 @@ pnpm mobile:sim:whoami -- --mock --json
   环境，加 `--takeover` 重启；`whoami` 不带相同的 `--mock` 会判定环境不一致。
 - App 里是一台在线的模拟电脑和一台离线电脑，任务、消息、插件演示、文件浏览都由
   `apps/mobile/src/debug/visualMock.ts` 在内存里提供，写操作只在本次进程内生效，重启即还原。
+- 项目设置：手机首页项目行右侧设置按钮使用真实设置页；名称、线性图标、Emoji、字母及上传图片保存在 mock 进程内存中（支持 profile 组合保存和按项目读取图片），返回列表即时显示，重启还原，不连接真实电脑。
 - 模拟电脑支持协同：任务或新建任务的「+」面板 →「协同模式」可以直接打开开启协同的表单，角色清单
   （含添加、长按移除）读写的是模拟电脑上的那一份，只在本次进程内生效。
 - 生效条件是开发构建（`__DEV__`）；正式包不包含这条路径。

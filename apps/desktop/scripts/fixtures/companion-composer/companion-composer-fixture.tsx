@@ -6,7 +6,7 @@ import { makerChatStore } from '../../../src/renderer/lib/makerChatStore';
 import { useAttachments } from '../../../src/renderer/hooks/useAttachments';
 import { getDraft } from '../../../src/renderer/lib/composerDraftStore';
 import { PluginUiProvider } from '../../../src/renderer/cindy-brain/PluginUiContributions';
-import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../src/shared/ghost';
+import type { InstalledGhost } from '../../../src/shared/ghost';
 import { pluginUiInterestKey, type PluginUiInterest } from '../../../src/shared/pluginUi';
 import fixturePhoto from '../../../src/renderer/assets/bot-presets/cindy.png';
 import {
@@ -40,7 +40,6 @@ const plugin: InstalledGhost = {
     } },
   },
 };
-plugin.approvedHostUi = ghostHostUiApprovalTokens(plugin.manifest);
 
 function CacheComposer() {
   const attachmentState = useAttachments('fixture-cache-draft');

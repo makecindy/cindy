@@ -1,3 +1,5 @@
+import { remoteProviderDisableKey, isProviderDisabled } from '@cindy/model-providers';
+import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { parseKimiAccountUsageResult } from '../../shared/providerAccountUsage.js';
 import { kimiSource } from './collect.js';
 /**
@@ -211,12 +213,16 @@ export function retainRemoteSubscriptions(
 ): { sources: MenubarSubscriptionInput[]; seen: Map<string, RemoteSeen> } {
   const seen = new Map<string, RemoteSeen>();
   const sources: MenubarSubscriptionInput[] = [];
+  const access = readModelDisableOverrides();
+  const stopped = (source: MenubarSubscriptionInput) => !!source.device && !!source.providerId
+    && isProviderDisabled(access, remoteProviderDisableKey(source.device.id, source.providerId));
   for (const source of read.sources) {
+    if (stopped(source)) continue;
     seen.set(source.id, { source, seenAtMs: nowMs });
     sources.push(source);
   }
   for (const [id, entry] of previous) {
-    if (seen.has(id) || nowMs - entry.seenAtMs >= REMOTE_RETAIN_MS) continue;
+    if (stopped(entry.source) || seen.has(id) || nowMs - entry.seenAtMs >= REMOTE_RETAIN_MS) continue;
     const deviceId = entry.source.device?.id;
     const poolFailed = entry.source.pooled && deviceId && read.failed.has(`remote:${deviceId}:${entry.source.providerId}`);
     if (!(deviceId && read.unreachable.has(deviceId)) && !read.failed.has(id) && !poolFailed) continue;

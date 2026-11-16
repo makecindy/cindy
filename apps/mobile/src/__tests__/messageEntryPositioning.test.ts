@@ -27,7 +27,7 @@ const ref = <T>(current: T) => ({ current });
 function fixture(focused: string | null = null, saved?: object) {
   const state = { revealed: false, away: false };
   const bindings: Record<string, any> = {
-    initialAnchorDoneRef: ref(false), initialRevealGenerationRef: ref(0),
+    historyPositioning: true, initialAnchorDoneRef: ref(false), initialRevealGenerationRef: ref(0),
     initialRevealAnimationRef: ref(null), initialRevealProgress: { setValue: vi.fn() },
     setListRevealed: (value: boolean) => { state.revealed = value; },
     setIsAwayFromBottom: (value: boolean) => { state.away = value; },
@@ -50,6 +50,27 @@ function fixture(focused: string | null = null, saved?: object) {
 }
 
 describe('message entry lifecycle', () => {
+  it('does not consume initial bookmark positioning while the history is hidden', () => {
+    const h = fixture(null, { atEnd: false, anchor: { key: 'older', viewportOffset: 24 } });
+    h.bindings.historyPositioning = false;
+    h.layout();
+    expect(h.bindings.listRef.current.scrollToIndex).not.toHaveBeenCalled();
+    expect(h.bindings.initialAnchorDoneRef.current).toBe(false);
+    h.bindings.historyPositioning = true;
+    h.layout(); h.layout();
+    expect(h.bindings.listRef.current.scrollToIndex).toHaveBeenCalledExactlyOnceWith({ index: 0, viewPosition: 0, viewOffset: 24, animated: false });
+  });
+
+  it('defers an explicit message seek while the task is hidden and applies it once on return', async () => {
+    const h = fixture('older');
+    h.bindings.historyPositioning = false;
+    h.focus();
+    expect(h.bindings.listRef.current.scrollToIndex).not.toHaveBeenCalled();
+    h.bindings.historyPositioning = true;
+    h.focus(); await Promise.resolve(); h.focus();
+    expect(h.bindings.listRef.current.scrollToIndex).toHaveBeenCalledTimes(1);
+  });
+
   // Regression: retained history can stay blank on reentry after native reveal
   // cancellation. Existing tests never settled the native fallback as cancelled.
   // Execute the production layout callback with that minimum native result;

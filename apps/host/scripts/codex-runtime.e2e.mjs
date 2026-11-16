@@ -1,6 +1,10 @@
 // Real native Codex process + production Host assembly + real HTTP proxy.
 // The upstream is a local fixture, not a model or an OAuth provider.
 import assert from 'node:assert/strict';
+import console from 'node:console';
+import process from 'node:process';
+import { setTimeout, clearTimeout } from 'node:timers';
+import { realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,7 +12,7 @@ import { createServer } from 'node:http';
 
 const binary = process.env.CINDY_TEST_CODEX_BINARY;
 if (!binary || !path.isAbsolute(binary)) throw new Error('Set CINDY_TEST_CODEX_BINARY to the native Codex binary');
-const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-host-codex-e2e-')));
+const root = realpathSync.native(await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-host-codex-e2e-')));
 process.env.HOME = path.join(root, 'home'); // Isolated process, never the user's CLI home.
 process.env.USERPROFILE = process.env.HOME;
 await fs.mkdir(process.env.HOME);
@@ -25,6 +29,8 @@ let toolScenario = null;
 // When set, the fixture first answers with an `exec` tool call that writes a memory through the
 // Host's cindy_memory MCP server, then captures the tool result.
 let memoryScenario = null;
+// When positive, that many next /responses requests are refused as exceeding the context window.
+let overflowNext = 0;
 const responsesStream = events => events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
 const upstream = createServer(async (req, res) => {
   let raw = '';
@@ -73,6 +79,14 @@ const upstream = createServer(async (req, res) => {
   }
   if (!req.url?.endsWith('/responses')) {
     res.writeHead(404, { 'content-type': 'application/json' }).end('{"error":{"message":"No optional endpoint in fixture"}}');
+    return;
+  }
+  if (overflowNext > 0) {
+    overflowNext -= 1;
+    requests.push({ url: req.url, authorization: req.headers.authorization, body: JSON.parse(raw), overflow: true });
+    res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: {
+      type: 'invalid_request_error', code: 'context_length_exceeded',
+      message: 'Your input exceeds the context window of this model. Please adjust your input and try again.' } }));
     return;
   }
   requests.push({ url: req.url, authorization: req.headers.authorization, body: JSON.parse(raw) });
@@ -130,6 +144,8 @@ const { createHostMessageStore } = await import('../src/message-store.ts');
 const { createChatHandler } = await import('../src/chat.mjs');
 const { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcpProviders } = await import('../src/agent/memory.mjs');
 const { createHostReviewContextResolver } = await import('../src/agent/review-context.ts');
+const { createHostContextRecoveryWiring } = await import('../src/agent/context-recovery-wiring.ts');
+const { createHostAgentHandoffPending } = await import('../src/agent/handoff-pending.ts');
 initLogger({ logDir: path.join(root, 'logs'), isDev: true, level: 'debug' });
 const profile = path.join(root, 'profile');
 const ownerId = 'native-runtime-fixture';
@@ -137,6 +153,9 @@ let database, config, modelAccess, mcp, runtime, graph, queue, chatServer, memor
 let releaseBlockedResponse;
 let stripProxyToken = false;
 const handles = [];
+const threadRegistrations = [];
+const historyOperations = [];
+const { NATIVE_SUBSCRIPTION_ACCOUNT } = await import('@cindy/maker-core');
 try {
   await fs.mkdir(profile, { recursive: true });
   configureHostOwner({ userDataDir: profile, ownerId });
@@ -182,6 +201,15 @@ try {
     const { [CODEX_PROXY_TOKEN_ENV]: _withheld, ...extraEnv } = value.extraEnv ?? {};
     return { ...value, extraArgs, extraEnv };
   };
+  for (const name of ['resolveCodexThreadStorage', 'prepareCodexResumeSession']) {
+    const original = runtime.deps[name];
+    runtime.deps[name] = (...args) => { historyOperations.push([name, ...args]); return original(...args); };
+  }
+  const recordLocation = runtime.deps.recordCodexThreadLocation;
+  runtime.deps.recordCodexThreadLocation = async (...args) => {
+    await recordLocation(...args);
+    threadRegistrations.push(args);
+  };
   graph = createHostAgentGraph({ userDataDir: profile, providerConfig: config, gateway: modelAccess.gateway,
     codexBinaryPath: binary, codexRuntime: runtime, mcpRuntime: mcp, makerMemory: memory,
     mcpProviders: createHostMemoryMcpProviders(memory),
@@ -225,6 +253,168 @@ try {
     clearSessionProvider(sessionId);
     graph.gatewayRestart.onSessionSettled();
   }
+  // A gateway key change while a live Codex session is idle: the next send to that same session
+  // carries the new key. The pending restart of the shared runtime runs as soon as no Codex session
+  // is busy (gatewayCodexRestart.ts schedule → onSessionSettled), not at the next send.
+  {
+    const sessionId = 'native-idle-rotation';
+    setSessionProvider(sessionId, 'xd');
+    const handle = await graph.codex.startSession({ sessionId, providerId: 'xd', model: 'fixture-model', workingDir: root });
+    handles.push(handle);
+    const idleTurn = async () => {
+      const completed = (async () => {
+        for await (const event of handle.events()) {
+          if (event.type === 'error') throw new Error(`Idle rotation turn failed: ${JSON.stringify(event.data)}`);
+          if (event.type === 'done') return;
+        }
+        throw new Error('Idle rotation turn ended without done');
+      })();
+      void completed.catch(() => {});
+      let timer;
+      try {
+        await Promise.race([(async () => {
+          await handle.send({ type: 'user', content: 'return synthetic complete' }, { throwOnStartFailure: true });
+          await completed;
+        })(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Idle rotation turn timed out')), 45_000); })]);
+      } finally { clearTimeout(timer); }
+    };
+    await idleTurn();
+    assert.equal(requests.at(-1).authorization, `Bearer ${gatewayKey}`);
+    gatewayKey = 'synthetic-idle-rotated-gateway-key';
+    await modelAccess.sync.sync();
+    await idleTurn();
+    assert.equal(requests.at(-1).authorization, 'Bearer synthetic-idle-rotated-gateway-key',
+      'the next send to the idle live session carries the new key');
+    await handle.close();
+    runtime.closeSession(sessionId);
+    clearSessionProvider(sessionId);
+    graph.gatewayRestart.onSessionSettled();
+    console.log('PASS a gateway key change while a live Codex session is idle: its next send carries the new key');
+  }
+  // Native storage capability fixture, as minted by the executing host after
+  // owner checks. It selects two synthetic account homes, never a real login.
+  // Model traffic still goes to this script's local upstream through the real graph.
+  const accountHomeA = path.join(root, 'native-account-a');
+  const accountHomeB = path.join(root, 'native-account-b');
+  const account = (id, configDir) => ({
+    id, configDir, assertCurrent() { assert.ok(runtime.isCurrent()); },
+    async readState() { return { authenticated: true, authSource: 'api-key', identity: id }; },
+    async readCodexTokens() { return { accessToken: 'synthetic-native-token', chatgptAccountId: id }; },
+  });
+  const runStorageTurn = async handle => {
+    const completed = (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === 'error') throw Error(`Storage turn failed: ${JSON.stringify(event.data)}`);
+        if (event.type === 'done') return;
+      }
+      throw Error('Storage turn ended without done');
+    })();
+    void completed.catch(() => {});
+    let timer;
+    try {
+      await Promise.race([(async () => { await handle.send({ type: 'user', content: 'return synthetic complete' }, { throwOnStartFailure: true }); await completed; })(),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Storage turn timed out')), 45_000); })]);
+    } finally { clearTimeout(timer); }
+  };
+  // The local mock provider requires this synthetic API env key; this step
+  // verifies directory capabilities, not subscription login/allocation (M2).
+  process.env.XDT_CODEX_API_KEY = 'synthetic-custom-key';
+  const firstStorageHandle = await graph.codex.startSession({ sessionId: 'storage-account-a', providerId: 'cprov-fixture',
+    model: 'fixture-model', workingDir: root, [NATIVE_SUBSCRIPTION_ACCOUNT]: account('storage-a', accountHomeA) });
+  handles.push(firstStorageHandle);
+  await runStorageTurn(firstStorageHandle);
+  const originalThread = firstStorageHandle.id;
+  const originalStorage = await runtime.deps.resolveCodexThreadStorage(originalThread, { readOnly: true });
+  assert.equal(originalStorage.historyHome, accountHomeA);
+  assert.equal(originalStorage.sqliteHome, accountHomeA);
+  await firstStorageHandle.close();
+  const resumedStorageHandle = await graph.codex.startSession({ sessionId: 'storage-account-b', providerId: 'cprov-fixture',
+    model: 'fixture-model', workingDir: root, resumeSessionId: originalThread,
+    [NATIVE_SUBSCRIPTION_ACCOUNT]: account('storage-b', accountHomeB) });
+  handles.push(resumedStorageHandle);
+  await runStorageTurn(resumedStorageHandle);
+  assert.equal(resumedStorageHandle.id, originalThread);
+  assert.deepEqual(await runtime.deps.resolveCodexThreadStorage(originalThread, { readOnly: true }), originalStorage);
+  assert.ok(threadRegistrations.some(([id, sqlite, file]) => id === originalThread && sqlite === accountHomeA && file === originalStorage.rolloutPath));
+  await resumedStorageHandle.close();
+  const assertCurrent = () => assert.ok(runtime.isCurrent());
+  await graph.codex.syncThreadArchiveState({ threadId: originalThread, archived: true, assertCurrent });
+  const archived = await runtime.deps.resolveCodexThreadStorage(originalThread, { readOnly: true });
+  assert.equal(archived.historyHome, accountHomeA);assert.equal(archived.sqliteHome, accountHomeA);
+  assert.ok(archived.rolloutPath.includes(path.sep + 'archived_sessions' + path.sep));
+  await graph.codex.syncThreadArchiveState({ threadId: originalThread, archived: false, assertCurrent });
+  const restored = await runtime.deps.resolveCodexThreadStorage(originalThread, { readOnly: true });
+  assert.equal(restored.historyHome, accountHomeA);assert.equal(restored.sqliteHome, accountHomeA);
+  assert.ok(restored.rolloutPath.includes(path.sep + 'sessions' + path.sep));
+  // A real route handoff also retains the canonical storage, not just the
+  // transfer predicate: the resumed process now uses the gateway route.
+  await graph.codex.requiresCodexThreadHostTransfer({ threadId: originalThread, sessionId: 'storage-route',
+    providerId: 'xd', model: 'fixture-model' });
+  const routedStorageHandle = await graph.codex.startSession({ sessionId: 'storage-route', providerId: 'xd',
+    model: 'fixture-model', workingDir: root, resumeSessionId: originalThread });
+  handles.push(routedStorageHandle);
+  await runStorageTurn(routedStorageHandle);
+  assert.equal(routedStorageHandle.id, originalThread);
+  assert.deepEqual(await runtime.deps.resolveCodexThreadStorage(originalThread, { readOnly: true }), restored);
+  assert.ok(threadRegistrations.some(([id, sqlite, file]) => id === originalThread && sqlite === accountHomeA && file === restored.rolloutPath));
+  await routedStorageHandle.close();
+  const nativeTurns = [...new Set((await fs.readFile(restored.rolloutPath, 'utf8')).trim().split('\n')
+    .map(line => JSON.parse(line)).filter(row => row.type === 'turn_context').map(row => row.payload.turn_id).filter(Boolean))];
+  assert.ok(nativeTurns.length >= 2, 'both native turns have persisted fork anchors');
+  for (const tailTurnsToDrop of [0, 1]) {
+    const fork = await graph.codex.forkSdkSession({ sourceSdkSessionId: originalThread, providerId: 'cprov-fixture',
+      model: 'fixture-model', workingDir: root, upToMessageId: undefined, tailTurnsToDrop, lastTurnId: nativeTurns.at(-1 - tailTurnsToDrop),
+      [NATIVE_SUBSCRIPTION_ACCOUNT]: account('storage-b', accountHomeB) });
+    const forkStorage = await runtime.deps.resolveCodexThreadStorage(fork.newSdkSessionId, { readOnly: true });
+    assert.equal(forkStorage.historyHome, accountHomeA);assert.equal(forkStorage.sqliteHome, accountHomeA);
+    assert.ok(threadRegistrations.some(([id, sqlite, file]) => id === fork.newSdkSessionId && sqlite === accountHomeA && file === forkStorage.rolloutPath));
+  }
+  // Route handoff still resolves the old storage before selecting a new host.
+  await graph.codex.requiresCodexThreadHostTransfer({ threadId: originalThread, sessionId: 'storage-route',
+    providerId: 'xd', model: 'fixture-model' });
+  assert.deepEqual(await runtime.deps.resolveCodexThreadStorage(originalThread, { readOnly: true }), restored);
+  const localHistoryCalls = historyOperations.length;
+  assert.equal(await graph.codex.requiresCodexThreadHostTransfer({ threadId: originalThread, sessionId: 'remote-storage',
+    remoteHostId: 'unconfigured-fixture', providerId: 'xd', model: 'fixture-model' }), false);
+  await assert.rejects(graph.codex.syncThreadArchiveState({ threadId: originalThread, archived: true,
+    remoteHostId: 'unconfigured-fixture', assertCurrent }), /host did not provide getRemoteCodexTransport/);
+  await fs.mkdir(path.join(root, 'isolated-guest', 'codex'), { recursive: true });
+  await assert.rejects(graph.codex.forkSdkSession({ sourceSdkSessionId: originalThread, providerId: 'cprov-fixture',
+    model: 'fixture-model', workingDir: root, upToMessageId: undefined, lastTurnId: nativeTurns.at(-1),
+    hostedGuestHome: path.join(root, 'isolated-guest') }), /not found|no rollout|does not exist/i);
+  assert.equal(historyOperations.length, localHistoryCalls, 'remote/guest paths never consult the local history resolver or preparer');
+  delete process.env.XDT_CODEX_API_KEY;
+  console.log('PASS native cross-account resume, archive/unarchive, fork/tail rollback and route storage');
+
+  // An independent Codex account (a user-added native Codex source with its own login): the task
+  // the Host starts on it runs in the account's own home, never in the profile's codex-home
+  // (desktop getAuthEnv order; m1-cp19). The login is synthetic; no model request is made.
+  {
+    const { legacyCodexAccountHome } = await import('../../desktop/src/main/maker-host/codex-account-path.ts');
+    const { createHash } = await import('node:crypto');
+    const accountId = 'cxacct-fixture';
+    await createCustomProvider({ id: accountId, name: 'OpenAI · fixture', auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', wireProtocol: 'openai-responses', models: [] } } });
+    await config.list();
+    const accountHome = legacyCodexAccountHome(profile, ownerId, accountId);
+    await fs.mkdir(accountHome, { recursive: true });
+    const claims = Buffer.from(JSON.stringify({ sub: 'fixture-subject', email: 'fixture@example.invalid' })).toString('base64url');
+    const jwt = `header.${claims}.signature`;
+    await fs.writeFile(path.join(accountHome, 'auth.json'), JSON.stringify({ tokens: { access_token: jwt, id_token: jwt,
+      refresh_token: 'synthetic-refresh', account_id: 'fixture-workspace' } }), { mode: 0o600 });
+    await fs.writeFile(path.join(accountHome, 'account.json'), JSON.stringify({
+      principal: createHash('sha256').update('fixture-subject\0fixture-workspace').digest('hex'), label: 'fixture@example.invalid' }));
+    assert.equal(config.codexAccounts.codexAccountState(accountId).authenticated, true, 'the fixture account is logged in');
+    const accountHandle = await graph.codex.startSession({ sessionId: 'independent-account', providerId: accountId,
+      model: 'gpt-5.4', workingDir: root });
+    handles.push(accountHandle);
+    const accountStorage = await runtime.deps.resolveCodexThreadStorage(accountHandle.id, { readOnly: true });
+    assert.equal(accountStorage.historyHome, accountHome);
+    assert.equal(accountStorage.sqliteHome, accountHome);
+    await accountHandle.close();
+    console.log('PASS an independent Codex account task starts on the Host in the account\'s own home, not the profile codex-home');
+  }
+
   // Shared-send integration: earlier checks bypass the queue. Use the real
   // HTTP/queue/Maker pipeline, isolated SQLite and a synthetic local upstream.
   const sessionId = 'queued-native-fixture';
@@ -321,6 +511,83 @@ try {
   assert.equal(await graph.maker.lifecycleHooks.getCodexHistoryHasProductPrompt(sessionId), true);
   console.log('PASS Codex product prompt delivery persists on the Host task row');
   console.log('PASS shared Host HTTP + queue + native Codex: send, persisted UUID/reply, steer, runtime reopen and stop (synthetic local upstream)');
+
+  // ---- Context recovery of an overflow, through the queue as main.ts wires it ----
+  // A third-party provider's task: one ordinary turn, then the upstream refuses the next request
+  // as too long. Recovery rebuilds the task and replays the message on a new native thread with
+  // the summary of the first turn; the client sees no error.
+  {
+    const recoveryTask = 'recovery-native-fixture';
+    await new OwnerSessionStorage({ db: () => database }).create({ id: recoveryTask,
+      title: 'Recovery fixture', agentKind: 'codex', model: 'fixture-model', workDir: root });
+    await database.drizzle.update(sessions).set({ providerId: 'cprov-fixture' }).where(eq(sessions.id, recoveryTask));
+    const store = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) });
+    const pendingHandoff = createHostAgentHandoffPending({ getOwner: getCurrentDbClientSnapshot,
+      publish: event => hub.publish(event), log: console });
+    const recoveryQueue = createInputQueue({ getMaker: () => graph.maker, hub, readSession,
+      getOwner: getCurrentDbClientSnapshot, persistMessage: store, pendingHandoff,
+      markStarted: async id => { markSessionTurnStarted(id); await drainSessionActiveTurnWrites(id); },
+      markEnded: async (id, at) => { markSessionTurnEnded(id, at); await drainSessionActiveTurnWrites(id); },
+      ...createHostContextRecoveryWiring({ openKinds: new Set(['context-overflow']), getGraph: () => graph,
+        persistMessage: store, publish: event => hub.publish(event), pendingHandoff, log: console }),
+    });
+    const seen = [];
+    const unsubscribeRecovery = hub.subscribe(event => { if (event.sessionId === recoveryTask) seen.push(event); });
+    const doneCount = () => seen.filter(event => event.event?.type === 'done').length;
+    const until = async (predicate, what) => {
+      const deadline = Date.now() + 60_000;
+      // real-wait: the native process answers on its own schedule.
+      while (!predicate()) {
+        if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    };
+    const rowsOf = async role => (await database.drizzle.select().from(messages).where(eq(messages.sessionId, recoveryTask)))
+      .filter(row => row.role === role);
+    const inputText = request => JSON.stringify(request.body.input ?? []);
+    try {
+      await recoveryQueue.enqueue(recoveryTask, { clientId: 'recovery-first', text: 'remember the word heliotrope' });
+      await until(() => doneCount() === 1, 'the first turn');
+      const beforeOverflow = requests.length;
+      overflowNext = 1;
+      await recoveryQueue.enqueue(recoveryTask, { clientId: 'recovery-second', text: 'now return synthetic complete' });
+      await until(() => doneCount() === 2, 'the replayed turn');
+      const turnRequests = requests.slice(beforeOverflow);
+      assert.equal(turnRequests[0].overflow, true, 'the upstream refused the request as too long');
+      const replayed = turnRequests.filter(request => !request.overflow);
+      assert.equal(replayed.length, 1, 'one replay reaches the upstream');
+      const [marker] = await rowsOf('context_rebuild');
+      const { handoff } = JSON.parse(marker.content);
+      const firstLine = handoff.split('\n').find(line => line.trim().length > 20);
+      assert.ok(firstLine, 'the summary has content');
+      const count = (text, needle) => text.split(JSON.stringify(needle).slice(1, -1)).length - 1;
+      assert.equal(count(inputText(replayed[0]), firstLine), 1, 'the replay carries the summary once');
+      assert.match(inputText(replayed[0]), /now return synthetic complete/);
+      assert.match(inputText(replayed[0]), /heliotrope/, 'the summary carries the first turn');
+      assert.equal(replayed[0].authorization, 'Bearer synthetic-custom-key', 'the replay uses the provider\'s credential');
+      assert.equal(seen.filter(event => event.event?.type === 'error' || event.type === 'error').length, 0, 'the client sees no error');
+      assert.equal((await rowsOf('user')).length, 2, 'the replay writes no second user row');
+      assert.equal((await rowsOf('error')).length, 0, 'no error row');
+      // The summary was consumed: the next message goes without it.
+      const beforeNext = requests.length;
+      await recoveryQueue.enqueue(recoveryTask, { clientId: 'recovery-third', text: 'one more' });
+      await until(() => doneCount() === 3, 'the next turn');
+      const next = requests.slice(beforeNext);
+      assert.equal(next.length, 1);
+      // The new user message has no summary; the history still holds the replay's one copy.
+      const userItems = (next[0].body.input ?? []).filter(item => item?.role === 'user');
+      const lastUser = JSON.stringify(userItems.at(-1) ?? null);
+      assert.match(lastUser, /one more/);
+      assert.equal(count(lastUser, firstLine), 0, 'the next message carries no summary');
+      assert.equal(count(inputText(next[0]), firstLine), 1, 'the summary is not added again to the history');
+      assert.equal(JSON.parse((await rowsOf('context_rebuild'))[0].content).consumed, true);
+    } finally {
+      unsubscribeRecovery();
+      overflowNext = 0;
+      await recoveryQueue.dispose();
+    }
+    console.log('PASS native Codex context overflow recovery through the production wiring: rebuilt, replayed once with the summary and the provider credential, no client error; the next message carries no summary');
+  }
   assert.ok(requests.length >= 3);
   // The desktop product system prompt reaches the real Codex request (runtimeConfigsCore.ts).
   assert.ok(requests.some(request => JSON.stringify(request.body).includes('You are Cindy, an open-source AI assistant.')),

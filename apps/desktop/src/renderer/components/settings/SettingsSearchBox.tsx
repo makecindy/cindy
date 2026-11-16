@@ -23,15 +23,17 @@ import {
 } from './settingsSearchCatalog';
 
 interface SettingsSearchBoxProps {
+  requestedQuery?: string;
   visibleTabIds: readonly VisibleSettingsTab[];
   searchContext?: SettingsSearchContext;
   additionalDocuments?: readonly SettingsSearchDocument[];
   onSelect?: (result: { tab: SettingsTab; sectionId: string }) => void;
 }
 
-export function SettingsSearchBox({ visibleTabIds, searchContext, additionalDocuments, onSelect }: SettingsSearchBoxProps) {
+export function SettingsSearchBox({ requestedQuery = '', visibleTabIds, searchContext, additionalDocuments, onSelect }: SettingsSearchBoxProps) {
   const { t } = useTranslation();
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(requestedQuery.slice(0, 200));
+  useEffect(() => { setQuery(requestedQuery.slice(0, 200)); }, [requestedQuery]);
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   // Results list: glide highlight on the aria-selected result; arrow keys stay in the field.

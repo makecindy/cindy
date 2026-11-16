@@ -2,6 +2,7 @@ import { createGroupAssistantTasks } from '../groupAssistantTask.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
+import { setTimeout as yieldToIo } from 'node:timers/promises';
 import path from 'node:path';
 import ts from 'typescript';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
@@ -2074,7 +2075,24 @@ describe('Chat Server result delivery and refresh', () => {
 
     // Claimed as the group's Cindy, never through AI reply mode; the requester's own words become one
     // ordinary visible message in the group's task with its label and the group's recent messages; only
-    // that input's turn end answers the group, and the group never stops the task.
+    // that input's turn end answers the group.
+    it('stops the exact public Cindy task input when another device requests a stop', async () => {
+      await ask(5, 'Wait until stopped');
+      const [input] = dispatched();
+      expect(input!.assertDispatchCurrent).toBeTypeOf('function');
+      expect(() => input!.assertDispatchCurrent!()).not.toThrow();
+      const original = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => body?.action === 'heartbeat'
+        ? { status: 409, body: { error: { code: 'STOP_REQUESTED' } } }
+        : original(route, method, body));
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(deps.abortLane).toHaveBeenCalledExactlyOnceWith('group-task-1', input!.clientId);
+      expect(() => input!.assertDispatchCurrent!()).toThrow('STALE_EXECUTOR');
+      expect(fixture.handle.mock.calls.some(([, , body]) => body?.action === 'cancel')).toBe(true);
+      expect(await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: input!.clientId, resultText: 'Late result' })).toBe(false);
+      expect(deliveries()).toHaveLength(0);
+    });
+
     it('delivers your request into the group task and answers with that turn', async () => {
       history.push(message(2, peerId, 'The build is red\nagain'));
       await ask(5, '@Cindy please fix it');
@@ -2235,12 +2253,15 @@ describe('Chat Server result delivery and refresh', () => {
         }));
         const sync = vi.fn(() => new Promise<void>(() => {}));
         deps.groupCheckouts = { ensure, sync, isManaged: folder => folder.startsWith(root), dirOf: () => dir };
-        // Finding the folder reads the real disk, which the fake clock does not wait for (slow CI).
+        // Real disk I/O needs real time on Windows; a fixed number of setImmediate turns can
+        // finish before access() completes. Keep fake service timers frozen while waiting.
         const delivered = async (count: number) => {
-          for (let i = 0; i < 200 && dispatched().length < count; i++) {
-            await new Promise(resolve => setImmediate(resolve));
+          const deadline = vi.getRealSystemTime() + 2000;
+          while (dispatched().length < count && vi.getRealSystemTime() < deadline) {
+            await yieldToIo(1);
             await vi.advanceTimersByTimeAsync(0);
           }
+          expect(dispatched()).toHaveLength(count);
         };
         await ask(5, 'Where are the docs?');
         await delivered(1);

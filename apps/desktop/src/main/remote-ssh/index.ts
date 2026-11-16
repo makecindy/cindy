@@ -17,7 +17,7 @@
  * The pool itself is in-memory; on app restart, hydrate() rebuilds it from disk.
  */
 
-import { app, ipcMain, BrowserWindow, dialog } from 'electron';
+import { app, ipcMain, BrowserWindow, dialog, powerMonitor } from 'electron';
 import { t } from '../i18n.desktop.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import fs from 'node:fs/promises';
@@ -58,6 +58,7 @@ import {
   type ManagedConfigWriteToken,
   type ReadSshConfigResult,
   type RemoteAgentKind,
+  type AgentUnavailableReason,
 } from '@cindy/maker-remote-ssh';
 
 import { createLogger } from '../logger.js';
@@ -134,10 +135,20 @@ import { prepareRemoteAgentInstall } from './codex-install-lifecycle.js';
 import { getRemoteCodexLiveTurnChecker } from '../maker-host/remote-session-start-ensure.js';
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import { RemoteHostHydrationQueue } from './hydration-queue.js';
+import { watchNetworkChanges } from '../device-link/networkChanges.js';
 
 export { redactSshSensitiveText };
 
 const log = createLogger('remote-ssh/ipc');
+
+function formatAgentUnavailableError(reason?: AgentUnavailableReason): string {
+  switch (reason) {
+    case 'environment-unset': return t('settings.remote.agentError.environmentUnset');
+    case 'endpoint-empty': return t('settings.remote.agentError.endpointEmpty');
+    case 'endpoint-unavailable': return t('settings.remote.agentError.endpointUnavailable');
+    default: return t('ipcError.SSH_AGENT_UNAVAILABLE');
+  }
+}
 
 // Shared by manual and silent installation inside their existing per-host install lock.
 async function installRemoteAgent(
@@ -318,6 +329,7 @@ function getPool(): ConnectionPool {
       logger: poolLogger,
       hostKeys: getSharedHostKeyStore(),
       formatHostKeyError,
+      formatAgentUnavailableError,
     });
   }
   return pool;
@@ -1424,9 +1436,35 @@ export async function removeRemoteSshHost(args: unknown) {
   });
 }
 
+let stopNetworkRecovery: (() => void) | null = null;
+
+/**
+ * Hosts whose live connection dropped and exhausted the bounded reconnect stay
+ * failed without a background loop. A system network change or wake gives them
+ * one more bounded round (RemoteHost.retryAfterNetworkChange); the next use of
+ * a host always reconnects on its own.
+ */
+function startNetworkRecovery(): void {
+  if (stopNetworkRecovery) return;
+  const retry = (reason: 'network' | 'resume') => {
+    const retried = pool?.retryAfterNetworkChange() ?? [];
+    if (retried.length > 0) log.info('ssh network recovery', { reason, hosts: retried });
+  };
+  const stopWatch = watchNetworkChanges(() => retry('network'));
+  const onResume = () => retry('resume');
+  powerMonitor?.on?.('resume', onResume);
+  stopNetworkRecovery = () => {
+    stopWatch();
+    powerMonitor?.off?.('resume', onResume);
+  };
+}
+
 export function registerRemoteSshIpc(): void {
   if (registered) return;
   registered = true;
+  // powerMonitor is only usable after app ready (and absent in non-Electron test runtimes).
+  if (app?.isReady?.()) startNetworkRecovery();
+  else void app?.whenReady?.().then(() => { if (registered) startNetworkRecovery(); });
 
   // Wire pool status → renderer broadcast (once, at registration time).
   // ready 转换时顺带应用 agent-proxy 愿望 (建隧道 + codex env 对账): 这是
@@ -1455,7 +1493,12 @@ export function registerRemoteSshIpc(): void {
       if (host) broadcastStatus(host.snapshot());
     },
     createTunnelHost: (cfg) =>
-      new RemoteHost(cfg, { logger: poolLogger, hostKeys: getSharedHostKeyStore(), formatHostKeyError }),
+      new RemoteHost(cfg, {
+        logger: poolLogger,
+        hostKeys: getSharedHostKeyStore(),
+        formatHostKeyError,
+        formatAgentUnavailableError,
+      }),
     getMainHost: (hostId) => getPool().get(hostId) ?? null,
   });
 
@@ -2563,6 +2606,8 @@ function shellQuoteSh(s: string): string {
 
 /** Tear down all live connections (含 agent-proxy 隧道专用连接). Hook into onQuit. */
 export async function disposeRemoteSshPool(): Promise<void> {
+  stopNetworkRecovery?.();
+  stopNetworkRecovery = null;
   await disposeAllTunnels().catch(() => undefined);
   if (!pool) return;
   await pool.dispose();
