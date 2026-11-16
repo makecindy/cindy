@@ -15,6 +15,7 @@ import frCommon from "./locales/fr";
 import deCommon from "./locales/de";
 import ptPTCommon from "./locales/pt-PT";
 import ptBRCommon from "./locales/pt-BR";
+import idCommon from "./locales/id";
 import lzhCommon from "./locales/zh-Hant-x-lzh";
 import lzhHansCommon from "./locales/zh-Hans-x-lzh";
 import i18n from "i18next";
@@ -45,6 +46,7 @@ const resources = {
   "de": { common: deCommon },
   "pt-PT": { common: ptPTCommon },
   "pt-BR": { common: ptBRCommon },
+  "id": { common: idCommon },
   "zh-Hant-x-lzh": { common: lzhCommon },
   "zh-Hans-x-lzh": { common: lzhHansCommon },
   en: { common: enCommon },

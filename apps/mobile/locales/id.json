@@ -1,0 +1,8 @@
+{
+  "ios": {
+    "NSLocalNetworkUsageDescription": "Cindy menemukan perangkat yang sudah dipasangkan di jaringan ini agar bisa terhubung langsung.",
+    "NSMicrophoneUsageDescription": "Cindy memerlukan akses mikrofon untuk input suara di sesi jarak jauh.",
+    "NSCameraUsageDescription": "Cindy memerlukan akses kamera untuk melampirkan foto ke sesi jarak jauh.",
+    "NSPhotoLibraryUsageDescription": "Cindy memerlukan akses galeri foto untuk menampilkan foto dan tangkapan layar terbaru agar cepat dilampirkan."
+  }
+}

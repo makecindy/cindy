@@ -13,6 +13,7 @@ import frCommon from "@/i18n/locales/fr";
 import deCommon from "@/i18n/locales/de";
 import ptPTCommon from "@/i18n/locales/pt-PT";
 import ptBRCommon from "@/i18n/locales/pt-BR";
+import idCommon from "@/i18n/locales/id";
 import enCommon from "@/i18n/locales/en";
 import zhCNCommon from "@/i18n/locales/zh-CN";
 import jaCommon from "@/i18n/locales/ja";
@@ -29,6 +30,7 @@ const CATALOGS: Record<string, unknown> = {
   de: deCommon,
   "pt-PT": ptPTCommon,
   "pt-BR": ptBRCommon,
+  "id": idCommon,
   "zh-CN": zhCNCommon,
   ja: jaCommon,
   ko: koCommon,
