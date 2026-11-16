@@ -882,7 +882,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('projects rebuilt zero usage and the verified window after the runtime is closed', () => {
-    const coreSource = readFileSync(resolve(mainRoot, 'maker-ipc/contextRecoveryAssembly.ts'), 'utf8');
+    const coreSource = readFileSync(resolve(mainRoot, 'maker-ipc/contextRecoveryAssembly.ts'), 'utf8').replace(/\r\n?/g, '\n');
     const coreAst = ts.createSourceFile('contextRecoveryAssembly.ts', coreSource, ts.ScriptTarget.Latest, true);
     const core = coreAst.statements.find((node): node is ts.FunctionDeclaration =>
       ts.isFunctionDeclaration(node) && node.name?.text === 'commitContextRecoveryWithPorts');
@@ -1198,7 +1198,7 @@ describe('session runtime control wiring', () => {
     );
     expect(registerSource).toContain('autoResumeBookkeeping.hasLiveSchedule(session.id, attemptToken)');
     expect(autoResumeHooksSource).toContain(
-      'decision.episodeAttempt,\n                decision.attemptToken,',
+      'decision.episodeAttempt,\n                  decision.attemptToken,',
     );
     expect(runtimeFallbackSource).toContain('isRemoteModelSwitchRouteChangeError(error)');
     expect(runtimeFallbackSource).toContain(
@@ -1307,7 +1307,7 @@ describe('session runtime control wiring', () => {
 
   it('counts fallback eligibility across the whole interrupted-turn episode', () => {
     expect(autoResumeHooksSource).toContain(
-      'decision.episodeAttempt,\n                decision.attemptToken,',
+      'decision.episodeAttempt,\n                  decision.attemptToken,',
     );
   });
 

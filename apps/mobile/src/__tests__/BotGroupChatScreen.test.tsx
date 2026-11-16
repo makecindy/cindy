@@ -320,6 +320,7 @@ vi.mock('@/session/useMobileLocalAttachments', () => ({
       beginPastePlaceholders: vi.fn(), failPastePlaceholders: vi.fn(), enqueueUploads: h.local.enqueueUploads,
       removePendingUpload: h.local.removePendingUpload, retryPendingUpload: vi.fn(),
       waitForPendingUploads: h.local.wait, releaseUploadedSources: h.local.release, getPendingUploadCount: () => pendingUploads.length,
+      insertUploadedAttachment: (current: any[], attachment: any) => [...current, attachment],
     };
   },
 }));

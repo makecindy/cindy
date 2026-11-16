@@ -215,6 +215,7 @@ export function createInputQueue(deps) {
       touchUserSend: deps.touchUserSend ?? (async () => {}),
       emitProjection: publish,
       persistQueueSnapshot: persist,
+      awaitQueuePersistence: flushed,
       loadQueueSnapshot: deps.loadQueueSnapshot,
       loadClearBoundary: deps.loadClearBoundary,
       getPersistedClientIds: deps.getPersistedClientIds,
