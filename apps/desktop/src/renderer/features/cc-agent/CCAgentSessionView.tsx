@@ -6278,7 +6278,10 @@ function CCAgentSessionContent({
                   }
                 />
               ) : worktreePreparing && smoothedBranchName ? (
-                <WorktreeCreatingOverlay branchName={smoothedBranchName} />
+                <WorktreeCreatingOverlay
+                  branchName={smoothedBranchName}
+                  startedAt={worktreeCreation?.status === 'creating' ? worktreeCreation.startedAt : undefined}
+                />
               ) : shareSelectionActive && sessionId ? (
                 <ShareSelectionBar
                   sessionId={sessionId}

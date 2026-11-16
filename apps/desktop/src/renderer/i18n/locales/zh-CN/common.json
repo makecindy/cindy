@@ -14058,7 +14058,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "正在创建 worktree · 输入已禁用",
-      "subtitle": "目标分支 {{branch}} · 完成后自动解锁"
+      "subtitle": "目标分支 {{branch}} · 完成后自动解锁",
+      "elapsed": "已等待 {{duration}}"
     },
     "worktree": {
       "detecting": "检测环境中…",

@@ -14112,7 +14112,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "Worktree wird erstellt · Eingabe deaktiviert",
-      "subtitle": "Zielbranch {{branch}} · wird automatisch freigegeben"
+      "subtitle": "Zielbranch {{branch}} · wird automatisch freigegeben",
+      "elapsed": "Wartet seit {{duration}}"
     },
     "worktree": {
       "detecting": "Umgebung wird erkannt…",

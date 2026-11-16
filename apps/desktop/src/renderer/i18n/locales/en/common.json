@@ -14112,7 +14112,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "Creating worktree · input disabled",
-      "subtitle": "Target branch {{branch}} · will unlock automatically"
+      "subtitle": "Target branch {{branch}} · will unlock automatically",
+      "elapsed": "Waiting for {{duration}}"
     },
     "worktree": {
       "detecting": "Detecting environment…",

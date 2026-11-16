@@ -14058,7 +14058,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "worktree を作成中 · 入力は無効です",
-      "subtitle": "対象ブランチ {{branch}} · 完了後に自動でロック解除"
+      "subtitle": "対象ブランチ {{branch}} · 完了後に自動でロック解除",
+      "elapsed": "待機時間 {{duration}}"
     },
     "worktree": {
       "detecting": "環境を検出中…",
