@@ -344,7 +344,8 @@ export interface Schedule {
   silentWhenIdle?: boolean;
   /**
    * 程序变化门。true → 没有脚本 exit 0 或插件放行时不启动模型（run 记 skipped，零 token）。
-   * 缺省/false 保持旧行为：检查仍可启动模型，只是无变化不播报。已有任务不迁移。
+   * 与 silentWhenIdle 无关：静默只管成功轮是否通知，门只管没有程序信号时是否启动模型。
+   * 缺省/false 保持旧行为：每轮照常启动模型。已有任务不迁移。
    */
   programChangeGate?: boolean;
   /** Execution mode; omitted/legacy schedules run an agent. */
@@ -489,8 +490,8 @@ export interface CreateScheduleInput {
   /** 仅明确判定为检查型的创建入口显式设 true；未分类 agent 与 script 缺省 false。存量与显式选择保持不变。 */
   silentWhenIdle?: boolean;
   /**
-   * 见 Schedule.programChangeGate。仅 Agent 检查创建入口在未显式 modelDetectsChange 时设 true。
-   * 桌面表单、提醒和已有任务不设。
+   * 见 Schedule.programChangeGate。只由调用方显式设置（schedule_create 的同名字段），
+   * 不从 silentWhenIdle 推导。桌面表单不设；缺省 false。
    */
   programChangeGate?: boolean;
   /** Execution mode; defaults to agent for legacy schedules. */

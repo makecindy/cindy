@@ -1023,15 +1023,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
       throw new Error(errMsg);
     }
 
-    // 检查的「有没有变化」由程序信号决定。没有脚本放行、也没有插件前置检查时，
-    // 不恢复目标、不建会话、不启动模型。提醒和显式交给模型发现变化的任务不带这道门。
+    // 打开程序变化门的检查，「有没有变化」由程序信号决定。没有脚本放行、也没有插件
+    // 前置检查时，不恢复目标、不建会话、不启动模型。门是创建时单独的显式选择，
+    // 与静默运行（只管成功轮通不通知）无关，不看 silentWhenIdle。
     // 退出后续跑已经过了这道门，不能因为续跑时清掉了 hook 再把它当成没信号。
     // Webhook 触发的这一轮由外部事件发起，事件本身就是程序信号。
     if (
       !ctx.resumeSessionId &&
       !ctx.webhook &&
       schedule.programChangeGate === true &&
-      schedule.silentWhenIdle === true &&
       !schedule.preRunHook?.command?.trim() &&
       !schedule.preRunPlugin
     ) {

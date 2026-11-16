@@ -373,18 +373,18 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
     expect(maker.createSession).not.toHaveBeenCalled();
   });
 
-  it('turning a gated check back into a reminder still starts the model path', async () => {
-    mocks.getSessionRowSnapshot.mockRejectedValue(new Error('past-gate'));
-    const { runner } = createRunner(vi.fn() as never);
+  // 合入 main d90d1995b3 后静默运行只管通知，门是单独的显式选择：关掉静默不能顺带关门。
+  it('the gate does not depend on silent run: a notifying gated check still skips without a signal', async () => {
+    const { runner, maker } = createRunner(vi.fn() as never);
     await expect(runner.fire(
-      baseSchedule({
-        silentWhenIdle: false,
-        programChangeGate: true,
-        preRunHook: undefined,
-        targetSessionId: 'owner',
-      }),
+      baseSchedule({ silentWhenIdle: false, programChangeGate: true, preRunHook: undefined }),
       createFireContext(),
-    )).rejects.toThrow('past-gate');
+    )).resolves.toEqual({
+      sessionId: '',
+      skipped: true,
+      resultText: 'skipped: no program change signal; model not started',
+    });
+    expect(maker.createSession).not.toHaveBeenCalled();
   });
 
   it('a selected plugin is a change signal, so the gate does not skip before it', async () => {

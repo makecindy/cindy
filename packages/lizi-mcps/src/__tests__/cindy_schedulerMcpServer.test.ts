@@ -442,32 +442,28 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     await h.cleanup();
   });
 
-  it('a new check does not start a model unless the caller says the model detects changes', async () => {
-    const check = await h.client.callTool({
-      name: 'call_tool',
-      arguments: { name: 'schedule_create', args: { ...baseCreate, name: 'ci-check', silentWhenIdle: true } as unknown as Record<string, unknown> },
-    });
-    const checkEnv = parseToolResult(check as { content: unknown[]; isError?: boolean });
-    expect(checkEnv.isError).toBe(false);
-    if (!checkEnv.envelope.ok) throw new Error('unreachable');
-    expect(checkEnv.envelope.data).toMatchObject({ silentWhenIdle: true, programChangeGate: true });
-
-    const research = await h.client.callTool({
-      name: 'call_tool',
-      arguments: { name: 'schedule_create', args: { ...baseCreate, name: 'radar', silentWhenIdle: true, modelDetectsChange: true } as unknown as Record<string, unknown> },
-    });
-    const researchEnv = parseToolResult(research as { content: unknown[]; isError?: boolean });
-    expect(researchEnv.isError).toBe(false);
-    if (!researchEnv.envelope.ok) throw new Error('unreachable');
-    expect(researchEnv.envelope.data).toMatchObject({ silentWhenIdle: true, programChangeGate: false });
-
-    const reminder = await h.client.callTool({
-      name: 'call_tool',
-      arguments: { name: 'schedule_create', args: baseCreate as unknown as Record<string, unknown> },
-    });
-    const reminderEnv = parseToolResult(reminder as { content: unknown[]; isError?: boolean });
-    if (!reminderEnv.envelope.ok) throw new Error('unreachable');
-    expect((reminderEnv.envelope.data as Schedule).programChangeGate).not.toBe(true);
+  // PR #8285 合入 main d90d1995b3 后：静默运行是通用通知规则（汇总、提醒、审查都用），
+  // 不能推出「这是检查」。最小失败输入：silentWhenIdle=true、不传 programChangeGate。
+  // 旧推导会落库 programChangeGate=true，之后没有脚本/插件的每一轮都 skipped，汇总永远不出。
+  it('silent run never implies the program change gate; only an explicit programChangeGate opens it', async () => {
+    const create = async (extra: Record<string, unknown>): Promise<Schedule> => {
+      const res = await h.client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'schedule_create', args: { ...baseCreate, ...extra } as unknown as Record<string, unknown> },
+      });
+      const env = parseToolResult(res as { content: unknown[]; isError?: boolean });
+      expect(env.isError).toBe(false);
+      if (!env.envelope.ok) throw new Error('unreachable');
+      return env.envelope.data as Schedule;
+    };
+    const silentSummary = await create({ name: 'daily-summary', silentWhenIdle: true });
+    expect(silentSummary.silentWhenIdle).toBe(true);
+    expect(silentSummary.programChangeGate).not.toBe(true);
+    expect(await create({ name: 'ci-check', silentWhenIdle: true, programChangeGate: true }))
+      .toMatchObject({ silentWhenIdle: true, programChangeGate: true });
+    expect(await create({ name: 'loud-check', programChangeGate: true }))
+      .toMatchObject({ silentWhenIdle: false, programChangeGate: true });
+    await h.cleanup();
   });
 
   it('call_tool(schedule_create) accepts agentKind: pi as a first-class scheduled agent', async () => {
@@ -879,6 +875,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     for (const extra of [
       { persistentSession: true },
       { useWorktree: true },
+      { programChangeGate: true },
     ]) {
       const result = await h.client.callTool({
         name: 'call_tool',
@@ -1412,19 +1409,11 @@ describe('schedule_update — partial 语义的 JSON 边界翻译', () => {
     return JSON.parse((res.content[0] as { text: string }).text) as { ok: boolean; code?: string };
   }
 
-  it('modelDetectsChange false opens the program gate and does not leak the tool flag', async () => {
-    const { updated, registry } = setup();
-    const env = await callUpdate(registry, { modelDetectsChange: false });
+  it.each([true, false])('programChangeGate=%s is written as given, independent of silentWhenIdle', async (gate) => {
+    const { updated, registry } = setup({ silentWhenIdle: true, programChangeGate: !gate });
+    const env = await callUpdate(registry, { programChangeGate: gate });
     expect(env.ok).toBe(true);
-    expect(updated.patch?.programChangeGate).toBe(true);
-    expect(updated.patch).not.toHaveProperty('modelDetectsChange');
-  });
-
-  it('modelDetectsChange true closes the program gate', async () => {
-    const { updated, registry } = setup({ programChangeGate: true });
-    const env = await callUpdate(registry, { modelDetectsChange: true });
-    expect(env.ok).toBe(true);
-    expect(updated.patch?.programChangeGate).toBe(false);
+    expect(updated.patch).toEqual({ programChangeGate: gate });
   });
 
   it('只改 prompt → patch 不含 intervalMs key(真 partial,不再需要三件套)', async () => {

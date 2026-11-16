@@ -26,6 +26,9 @@ import type { CreateScheduleInput } from '@cindy/maker-scheduler';
 import { LOCAL_SCHEDULE_AGENT_DEVICE } from './listModels.js';
 import { stabilizePreRunHookForCreate } from '@cindy/maker-scheduler';
 
+const SCRIPT_PROGRAM_CHANGE_GATE_ERROR =
+  'invalid request: programChangeGate 只用于 agent 执行方式；executionMode="script" 本来就不启动模型';
+
 export function registerScheduleCreateTool(
   registry: SchedulerToolRegistry,
   deps: SchedulerMcpDeps,
@@ -44,7 +47,7 @@ export function registerScheduleCreateTool(
       '(5) 默认 useWorktree=false / notify={desktop:true, feishu:false}；' +
       '(6) 删除已有调度前先用 schedule_get / schedule_list 核对目标和授权；本次自动跟进达到既定停止条件时，可自行停止和清理自身调度，不影响其他调度；' +
       '(7) 用户希望默认不打扰、不需要每轮完成都收到通知时（如说"静默运行 / 没事别打扰我 / 只记录不用每次提醒"）设 silentWhenIdle=true；什么时候需要提醒写进 prompt（如 CI 失败/新评论时提醒），满足时用 schedule_notify_current_run 主动上报。省略此字段按 false 处理；保留用户已有选择；' +
-      '(8) 轮询型任务（"有新 PR 才 review / CI 挂了才处理"）优先配 preRunHook 前置检查（exit 0=放行、exit 2=跳过本轮不烧 token；报错/超时 fail-closed 阻止本轮并记录失败）。**脚本一律经 schedule_set_pre_run_hook 创建/修改**（落盘路径、协议、自测由宿主代码统一保证），不要自己写脚本文件再手填 preRunHook.command——先调它拿 command 再来创建，或创建后传 scheduleId 让它直接挂载；' +
+      '(8) 轮询型任务（"有新 PR 才 review / CI 挂了才处理"）优先配 preRunHook 前置检查（exit 0=放行、exit 2=跳过本轮不烧 token；报错/超时 fail-closed 阻止本轮并记录失败）。**脚本一律经 schedule_set_pre_run_hook 创建/修改**（落盘路径、协议、自测由宿主代码统一保证），不要自己写脚本文件再手填 preRunHook.command——先调它拿 command 再来创建，或创建后传 scheduleId 让它直接挂载。有没有变化完全交给脚本或插件判断的检查，另设 programChangeGate=true，没信号时不启动模型；' +
       '(9) 既有工作流程中的自动跟进，沿用该流程明确的频率、执行引擎、静默与通知默认值；用户在线也不需要为这些默认值另行确认。用户主动新建独立任务时，若关键实体或会实质改变目标的参数缺失，先询问，不盲猜；用户已明确说明或已有流程定义的参数不重复问。' +
       '(10) **仅运行脚本模式（零 token）**：executionMode="script" 时不启动 agent，宿主直接执行 scriptConfig.command（cwd=workingDir，必填本地项目目录）；脚本经 stdout/stdin 的 cindy-script/1 JSONL 协议回调宿主受限能力，能力按 scriptConfig.capabilities 白名单授予（默认全拒）。script 模式不需要 prompt（可省），不支持 useWorktree / persistentSession。单任务跟进应传 bindToCurrentSession=true 或 targetSessionId：它是脚本的生命周期绑定及唯一投递目标，普通目标归档后会像用户发消息一样恢复原任务，完成后保持激活；目标删除或不存在时自动暂停，恢复任务不会自动恢复已暂停的调度。未绑定脚本保留独立任务语义。与 preRunHook 的分工：preRunHook 只是"要不要跑"的闸门，script 模式是"任务本体就是脚本"。' +
       '(11) 在另一台电脑上创建：传 device=那台电脑的 deviceId（同账号、在线、已开启远程控制）。workingDir 必须是那台电脑上已存在的目录，或省略。model / providerId 用 schedule_list_models 的 agentDeviceId=同一台电脑 得到的目录，不要用本机来源 id。不能 bindToCurrentSession。创建回执若是 REMOTE_RESULT_UNKNOWN 或 REMOTE_TIMEOUT，先 schedule_list / schedule_get 确认没有重复再建，不要盲重试。若要迁移已有任务，先 schedule_get 读取源定义，在目标电脑创建并 schedule_get 回读确认后再暂停源任务；创建或暂停回执不明时先查询状态，不要盲目重试。',
@@ -154,10 +157,10 @@ export function registerScheduleCreateTool(
         .boolean()
         .optional()
         .describe('静默运行:true → 成功 run 默认不通知、不产生未读红点;任务 prompt 可自行说明哪些条件需要提醒,agent 满足条件时调用 schedule_notify_current_run 主动上报。失败轮仍会通知。省略时默认 false。'),
-      modelDetectsChange: z
+      programChangeGate: z
         .boolean()
         .optional()
-        .describe('仅检查任务使用。true → 变化由模型判断，每次触发都启动模型，无变化只是不播报。省略或 false → 没变化不启动模型，必须由 preRunHook（exit 2 跳过 / exit 0 放行）或插件前置检查给出程序信号。提醒任务不要设。'),
+        .describe('程序变化门，与 silentWhenIdle 无关、各自单独设置。只有检查的「有没有变化」由程序判断时才设 true：前置脚本（经 schedule_set_pre_run_hook 挂载；exit 0=有变化，带 stdout 启动模型；exit 2=没变化，跳过本轮）或插件前置检查。打开后没有脚本或插件时，每轮记 skipped、不启动模型。汇总、提醒、审查，以及要由模型自己发现变化的检查（例如上网检索）都不要设。省略 = false。仅 agent 执行方式。'),
       preRunPlugin: z
         .object({
           pluginId: z.string().min(1).max(512),
@@ -211,16 +214,10 @@ export function registerScheduleCreateTool(
         .describe('local（默认，本机）或要存放这条自动化的电脑 deviceId。闹钟保存在那台电脑上，对方关机则不会触发。workingDir 必须是那台电脑上已存在的目录，或省略。'),
     },
     handler: async (args) => {
-      const { bindToCurrentSession, device, modelDetectsChange, ...rest } = args as CreateScheduleInput & {
+      const { bindToCurrentSession, device, ...rest } = args as CreateScheduleInput & {
         bindToCurrentSession?: boolean;
         device?: string;
-        modelDetectsChange?: boolean;
       };
-      const withProgramChangeGate = (input: CreateScheduleInput): CreateScheduleInput => (
-        (input.executionMode ?? 'agent') !== 'script' && input.silentWhenIdle === true
-          ? { ...input, programChangeGate: modelDetectsChange !== true }
-          : input
-      );
       if (!isLocalDevice(device)) {
         try {
         if (bindToCurrentSession) {
@@ -244,11 +241,11 @@ export function registerScheduleCreateTool(
           if (!input.scriptConfig?.command?.trim() || !(input.workingDir ?? '').trim()) {
             throw new Error('invalid request: executionMode="script" 需要 scriptConfig.command 和目标电脑上已存在的 workingDir');
           }
+          if (input.programChangeGate === true) throw new Error(SCRIPT_PROGRAM_CHANGE_GATE_ERROR);
         } else if (!input.prompt?.trim()) {
           throw new Error('invalid request: prompt 不能为空(agent 模式必填)');
         }
         if (input.intervalMs !== undefined) assertCronAndTimezoneValid(input.cronExpr, input.timezone);
-        input = withProgramChangeGate(input);
         return runOnDevice(deps, device, async () => {
           throw new Error('invalid device: remote create must not use the local scheduler');
         }, { op: 'create', args: [input] });
@@ -282,6 +279,7 @@ export function registerScheduleCreateTool(
               'invalid request: script 模式不支持 useWorktree / persistentSession',
             );
           }
+          if (input.programChangeGate === true) throw new Error(SCRIPT_PROGRAM_CHANGE_GATE_ERROR);
           input = { ...input, prompt: input.prompt ?? '', workspaceKind: 'project' };
         } else if (!input.prompt?.trim()) {
           throw new Error('invalid request: prompt 不能为空(agent 模式必填)');
@@ -315,8 +313,6 @@ export function registerScheduleCreateTool(
             stabilizeCommand: deps.hookScript.stabilizeCommand,
           });
         }
-        // 检查默认走程序信号。模型自己发现变化必须显式声明，避免每次空转都叫醒模型。
-        input = withProgramChangeGate(input);
         return scheduler.create(input);
       });
     },

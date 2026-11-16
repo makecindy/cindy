@@ -442,6 +442,8 @@ describe("cindy_scheduler cross-device routing", () => {
       { cronExpr: "not a cron" },
       // 运行位置 id 相对本机的设备目录,对那台电脑没有意义。
       { agentDeviceId: "studio", model: "claude-opus-5-5" },
+      // 旧端会丢掉程序变化门却报成功；跨电脑更新不协商该能力，直接拒绝。
+      { programChangeGate: true },
     ]) {
       const result = await s.registry.call("schedule_update", {
         id: "r1",
@@ -557,7 +559,10 @@ describe('remote schedule create', () => {
     expect(s.scheduler.create).not.toHaveBeenCalled();
   });
 
-  it('a remote silent check carries the program change gate', async () => {
+  it.each([
+    { extra: { programChangeGate: true }, gate: true },
+    { extra: { silentWhenIdle: true }, gate: undefined },
+  ])('a remote create carries only an explicit program change gate: %j', async ({ extra, gate }) => {
     const s = setup();
     const result = parse(await s.registry.call('schedule_create', {
       device: 'spark',
@@ -567,15 +572,13 @@ describe('remote schedule create', () => {
       timezone: 'Asia/Shanghai',
       recurring: true,
       agentKind: 'pi',
-      silentWhenIdle: true,
       useWorktree: false,
       notify: { desktop: true, feishu: false },
+      ...extra,
     }));
     expect(result.ok).toBe(true);
-    expect(s.invoke).toHaveBeenCalledWith('spark', 'create', [expect.objectContaining({
-      silentWhenIdle: true,
-      programChangeGate: true,
-    })]);
+    const [, , [sent]] = s.invoke.mock.calls[0] as [string, string, [Record<string, unknown>]];
+    expect(sent.programChangeGate).toBe(gate);
     expect(s.scheduler.create).not.toHaveBeenCalled();
   });
 
