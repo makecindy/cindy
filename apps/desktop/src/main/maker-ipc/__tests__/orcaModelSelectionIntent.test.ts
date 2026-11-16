@@ -74,7 +74,6 @@ function visit(node: ts.Node) {
     if (node.name.getText(source) === 'confirmedTargetPressure' && node.initializer.getText(source).includes('runtimeStatus.orcaRole')) {
       confirmationChecks.push(node.initializer.getText(source));
     }
-    if (node.name.getText(source) === 'selectSameAgentModel') applySelectionAdapter = node.initializer.getText(source);
   }
   if (ts.isIfStatement(node) && node.expression.getText(source).includes('!internalOptions.applyingUserSelectionOnSend')
     && node.thenStatement.getText(source).includes('pendingUntilSend: true')) {
@@ -86,6 +85,23 @@ function visit(node: ts.Node) {
   ts.forEachChild(node, visit);
 }
 visit(source);
+// selectSameAgentModel moved verbatim into sessionRuntimeSelectionLanding.ts: the adapter is the function
+// createSelectSameAgentModel returns, with the same names (throwIpcError, applySessionRuntimeSelection).
+function landingSelectionAdapter(): string {
+  const landing = ts.createSourceFile('sessionRuntimeSelectionLanding.ts',
+    readFileSync(new URL('../sessionRuntimeSelectionLanding.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+  let adapter = '';
+  const find = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === 'createSelectSameAgentModel') {
+      const returned = node.body?.statements.find(ts.isReturnStatement);
+      adapter = returned?.expression?.getText(landing) ?? '';
+    }
+    ts.forEachChild(node, find);
+  };
+  find(landing);
+  return adapter;
+}
+applySelectionAdapter = landingSelectionAdapter();
 // handleSetModel moved verbatim into sessionRuntimeSelectionApply.ts. Walking it after register.ts
 // collects its branches in the order they had there (everything else stays before its old place).
 source = ts.createSourceFile('sessionRuntimeSelectionApply.ts',
