@@ -292,9 +292,11 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     // Dismissing an input handoff and the runtime's asynchronous questions on the owner's next
     // message: the Host's questions arrive after checkpoint 4 (askUserQuestionAsync, release table).
     onOwnerMessage: undefined,
-    // The desktop's message persistence learns the clear boundary here, so a background turn started
-    // before a clear writes no rows after it (backgroundTurnPredatesSessionClear). The Host's
-    // persistence is not told: a gap found while writing this list, recorded in the release table.
+    // The desktop's message persistence learns the conversation clear boundary here, so a background
+    // turn started before a /clear writes no rows after it (backgroundTurnPredatesSessionClear). The
+    // desktop calls clearSession only from its /clear entry (maker:input:clear-session). The Host has no
+    // /clear entry yet: it calls clearSession only when a task is deleted or a draft discarded, and
+    // closes the task's persistence right after. Bound with the Host's /clear entry (release table).
     noteSessionClearBoundary: undefined,
   });
 }
