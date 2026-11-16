@@ -92,6 +92,12 @@ function validHistoryContent(value: unknown): value is AssistantMessage['content
     (block.type === 'toolCall' && typeof block.id === 'string' && typeof block.name === 'string' && block.arguments && typeof block.arguments === 'object'
       && !Array.isArray(block.arguments) && (block.thoughtSignature === undefined || typeof block.thoughtSignature === 'string'))));
 }
+
+/** Remove only provider-invalid remnants from a failed assistant attempt. */
+export function sanitizePiAssistantContent(content: AssistantMessage['content']): AssistantMessage['content'] {
+  return content.filter(block => !(block.type === 'thinking' && block.thinkingSignature === ''));
+}
+
 function nativeHistory(request: ResponsesRequest, identity: string): Map<string, AssistantMessage['content'][]> {
   const saved = new Map<string, AssistantMessage['content'][]>();
   for (const item of Array.isArray(request.input) ? request.input : []) {
@@ -100,8 +106,10 @@ function nativeHistory(request: ResponsesRequest, identity: string): Map<string,
     try {
       const value = JSON.parse(Buffer.from(encrypted.slice(HISTORY_PREFIX.length), 'base64').toString());
       if (value.identity !== identity || !validHistoryContent(value.content)) continue;
-      const key = visibleHistoryKey(value.content);
-      saved.set(key, [...(saved.get(key) ?? []), value.content]);
+      const content = sanitizePiAssistantContent(value.content);
+      if (content.length === 0) continue;
+      const key = visibleHistoryKey(content);
+      saved.set(key, [...(saved.get(key) ?? []), content]);
     } catch { /* Foreign or incomplete opaque history never becomes native content. */ }
   }
   return saved;
@@ -272,8 +280,10 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
           toolNames.set(tool.id, tool.function.name);
           content.push({ type: 'toolCall', id: tool.id, name: tool.function.name, arguments: JSON.parse(tool.function.arguments) });
         }
+        const sanitized = sanitizePiAssistantContent(content);
+        if (sanitized.length === 0) continue;
         context.messages.push({ role: 'assistant', api: model.api, provider: model.provider,
-          model: model.id, content: savedHistory.get(visibleHistoryKey(content))?.shift() ?? content, usage: zeroUsage(), stopReason: message.tool_calls?.length ? 'toolUse' : 'stop', timestamp: 0 });
+          model: model.id, content: savedHistory.get(visibleHistoryKey(sanitized))?.shift() ?? sanitized, usage: zeroUsage(), stopReason: message.tool_calls?.length ? 'toolUse' : 'stop', timestamp: 0 });
       } else if (message.role === 'tool') {
         context.messages.push({ role: 'toolResult', toolCallId: message.tool_call_id,
           toolName: toolNames.get(message.tool_call_id) ?? '', content: [{ type: 'text', text: message.content }], isError: false, timestamp: 0 });

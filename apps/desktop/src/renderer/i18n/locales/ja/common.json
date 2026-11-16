@@ -264,6 +264,8 @@
     "transferProgress": "転送済み {{sent}} / {{total}} · 平均 {{speed}}/s",
     "thisComputer": "このコンピューター",
     "selectedComputer": "選択したコンピューター",
+    "sourceComputer": "コピー元のコンピューター",
+    "waitingForSource": "{{name}}はオフラインです。オンラインに戻るとコピーを続行します。",
     "estimating": "ファイル数とサイズを計算中…",
     "fileSummary": "プロジェクトファイル：{{count}} 個、合計 {{size}}",
     "estimateNote": "隠しファイルを含むコピー前の推定値です。別途コピーする Git 履歴、タスクの会話と添付ファイルは含みません。コピーまでにファイルが変更されると、最終サイズが変わる場合があります。",
@@ -1102,19 +1104,23 @@
   },
   "privacyExit": {
     "status": "Cindy でリモート操作されています",
-    "hint": "画面を表示するには、操作側の端末の「セキュリティ」で「パソコンのプライバシースクリーン」をオフにします。または、このパソコンでクリックするか任意のキーを押し、「切断」を選んでください。",
+    "hint": "画面を表示するには、操作側の端末の「セキュリティ」で「接続中にプライバシースクリーンを表示」をオフにします。または、このパソコンでクリックするか任意のキーを押し、「切断」を選んでください。",
     "title": "リモートデスクトップを切断しますか？",
-    "detail": "リモート操作を終了し、パソコンの画面を元に戻します。終了時のロックが有効な場合は、パソコンもロックされます。",
+    "detail": "リモート操作を終了し、プライバシースクリーンを外します。「終了時にパソコンを保護」がオンの場合は、パソコンもロックされます。",
     "cancel": "接続を維持",
     "disconnect": "切断"
   },
   "awayGuard": {
     "status": "Cindy が作業中です",
-    "hint": "いずれかのキーを押すとロックされます。Touch ID またはパスワードで解除してください。",
+    "hint": "任意のキーまたは Touch ID キーでロックし、指紋またはパスワードで解除します",
     "lockFailed": {
       "status": "Cindy はこの Mac をロックできませんでした",
-      "hint": "Control-Command-Q でロックしてください。しばらくするとシステムも自動でロックします。"
-    }
+      "hint": "パソコンに触れるともう一度ロックを試します。それでもロックできない場合は、Touch ID またはパスワードで確認すると外せます。蓋を閉じるか電源ボタンを押してロックすることもできます。",
+      "hintWindows": "パソコンに触れるともう一度ロックを試します。それでもロックできない場合は、Windows Hello または PIN で確認すると外せます。Windows ロゴ キー + L でロックすることもできます。"
+    },
+    "hintWindows": "任意のキーでロックし、Windows Hello またはパスワードで解除します",
+    "hintLinux": "任意のキーでロックし、パスワードで解除します",
+    "verifyReason": "プライバシースクリーンを外す"
   },
   "appBadge": {
     "attentionCount": "対応が必要なセッション：{{count}}"
@@ -1265,10 +1271,10 @@
       "resolutionHint": "解像度の変更はリモートの実際のモニターに反映されます。"
     },
     "settingUnsupported": "このパソコンはまだこの設定に対応していません",
-    "privacyScreen": "パソコンのプライバシースクリーン",
-    "privacyScreenHint": "パソコンの画面を隠します。パソコンでクリックまたはキーを押し、確認すると切断します。終了時のロック設定も適用されます。",
-    "privacyActive": "プライバシースクリーンが有効です。パソコンでクリックまたはキーを押し、確認すると切断します。終了時のロック設定も適用されます。",
-    "privacyFailed": "プライバシースクリーンを有効にできませんでした。パソコンの画面が見えている可能性があります。",
+    "privacyScreen": "接続中にプライバシースクリーンを表示",
+    "privacyScreenHint": "リモート操作中、このパソコンの画面を覆います。パソコンの前でクリックやキー操作があると、切断するかどうかを確認します。",
+    "privacyActive": "プライバシースクリーンがオンです。パソコンの前でクリックやキー操作があると、切断するかどうかを確認します。",
+    "privacyFailed": "プライバシースクリーンをオンにできませんでした。パソコンの画面が見えている可能性があります。",
     "hostMute": "操作先をミュート",
     "hostMuteHint": "接続中は操作先の音声をミュートします",
     "hostMuteFailed": "操作先のミュート状態を変更できません",
@@ -1283,8 +1289,8 @@
     "idleNever": "しない",
     "idleMinutes_other": "{{count}} 分",
     "idleDisconnected": "操作がなかったため切断しました。再接続してください。",
-    "lockOnExit": "終了時にパソコンをロック",
-    "lockOnExitHint": "リモートデスクトップを終了すると、接続先のパソコンをロックします。",
+    "lockOnExit": "終了時にパソコンを保護",
+    "lockOnExitHint": "リモートデスクトップの終了時にパソコンをロックします。",
     "lockOnExitFailed": "パソコンのロックを確認できませんでした。パソコンの状態を確認してください。",
     "nativeResolution": "ネイティブ",
     "autoUnlock": "コンピューターを自動ロック解除",
@@ -1326,7 +1332,9 @@
         "body": "このタスクは別のコンピュータで {{device}} を開いています。このコンピュータの「{{plugin}}」プラグインを新しいバージョンに更新すると、右サイドバーで表示・操作できます。",
         "action": "更新"
       }
-    }
+    },
+    "lockOnExitHintPrivacy": "終了時にプライバシースクリーンを表示し、AI は作業を続けられます。パソコンに触れるとロックされます。",
+    "lockedEnablePrivacyHint": "離席中もこのパソコンを AI に使わせるには、このパソコンの「設定 → 一般 → 離席中」でプライバシースクリーンをオンにしてください。"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1363,7 +1371,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定は保存されましたが、Cindy で再読み込みできませんでした。SSH 設定を再読み込みしてください。",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy はこの SSH 設定を安全に管理できません。再読み込みして、Cindy の所有マーカーとホストエイリアスの一意性を確認してください。",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy はこのホストの一部の SSH 設定規則を安全に再現できません。ターミナルの SSH は動作する場合があります。Match、条件付き Include、IdentityAgent、IdentitiesOnly、公開鍵設定を確認してください。",
-    "SSH_AGENT_UNAVAILABLE": "SSH Agent を使用できません。SSH Agent を起動し、ssh-add で対応する秘密鍵を読み込んでから再試行してください。",
+    "SSH_AGENT_UNAVAILABLE": "このコンピューターの SSH 鍵エージェント（ssh-agent）を利用できません。起動していることと、ssh-add -l に必要な鍵が表示されることを確認してください。「鍵の管理」に対処方法があります。",
     "SSH_HOST_PREFS_WRITE_FAILED": "ホストは保存されていますが、表示名または Agent Proxy の設定を保存できませんでした。ローカルストレージの権限を確認して再試行してください。",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "このタスクのタブ数の上限に達しました。いくつかのタブを閉じてください",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "タブの内容が大きすぎるため、追加できません",
@@ -1454,6 +1462,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "要確認",
+      "summaryInProgress": "進行中",
+      "summaryPending": "対応待ち",
+      "summaryUnread": "未読の結果",
       "markRead": "既読にする",
       "archive": "アーカイブ",
       "actionFailed": "操作を完了できませんでした。通知は保持されています。もう一度お試しください。",
@@ -1874,7 +1886,8 @@
       "windowBehavior": "アプリの動作",
       "shortcuts": "キーボードショートカット",
       "mcpServers": "カスタム MCP",
-      "bots": "パートナー"
+      "bots": "パートナー",
+      "awayFromComputer": "離席中"
     },
     "remote": {
       "title": "リモートマシン",
@@ -1890,6 +1903,12 @@
       "footnote": "Phase A は SSH 接続管理のみ。リモートでのエージェント実行は今後のアップデートで対応します。",
       "viaAuth": "{{label}} で認証",
       "readOnlyFromSshConfig": "接続情報は SSH 設定から読み込まれています",
+      "importedAgentHint": "このコンピューターの SSH 鍵エージェント（ssh-agent）で認証します。ターミナルの ssh で接続できても、エージェントが利用可能とは限りません。",
+      "agentError": {
+        "environmentUnset": "IdentityAgent が参照する環境変数が Cindy に設定されていません。その変数を Cindy に設定するか、SSH 設定の IdentityAgent を修正してください。",
+        "endpointEmpty": "IdentityAgent の展開後の接続先が空です。SSH 設定の IdentityAgent を修正してください。",
+        "endpointUnavailable": "IdentityAgent に設定された SSH 鍵エージェントの接続先を利用できません。その接続先とエージェントを確認してください。既定の ssh-agent は別の接続先を使っている場合があります。"
+      },
       "configWarning": "一部の SSH 設定ルールを Cindy では評価できません。ホスト一覧や接続情報がターミナルの SSH と異なる場合があります。",
       "configDiagnostic": {
         "io": "Cindy は SSH 設定を読み込めませんでした。最後に正常に読み込んだホストを引き続き表示しています。ファイルのアクセス権を確認して、再読み込みしてください。",
@@ -1987,7 +2006,7 @@
           "tryThis": "ターミナルで次のコマンドを試してください",
           "close": "閉じる",
           "fallbackTitle": "あるいは agent を使わない方法も",
-          "fallbackBody": "ホスト追加時に「秘密鍵ファイル」認証に切り替えれば、{{appName}} は鍵ファイルを ssh に直接渡し、接続のたびに passphrase を尋ねます。agent は不要です。トレードオフ:接続ごとに passphrase 入力が必要ですが、メモリ上に鍵キャッシュは残りません。",
+          "fallbackBody": "ホストの追加時に「秘密鍵ファイル」を選ぶこともできます。{{appName}} が秘密鍵をプロセスのメモリに読み込み、ssh-agent は使いません。現在は暗号化されていない秘密鍵のみ対応し、接続時に鍵の passphrase を尋ねることはありません。暗号化された鍵には ssh-agent を使用してください。",
           "reason": {
             "agent_unavailable": "ssh-add が ssh-agent に到達できません(ssh-add が未インストール、agent が未起動、または SSH_AUTH_SOCK が未設定)。",
             "bad_passphrase": "ssh-add が passphrase を拒否しました。",
@@ -2434,21 +2453,23 @@
       "swallowActivationClickAria": "ウィンドウに戻るときの誤クリック防止を切り替え",
       "macRestartNote": "macOS では変更を反映するにはアプリの再起動が必要です。",
       "awayGuard": {
-        "label": "離席中も作業を続ける",
-        "hint": "オンにすると、この Mac は操作がなくても画面のスリープやロックをしないため、AI がいつでも使えます。しばらく離席すると黒いカバーで画面が隠れ、AI はその裏で作業を続けます。キーを押すかクリックするとすぐにロックされ、Touch ID またはパスワードで解除できます。",
+        "label": "ロックの代わりにプライバシースクリーンを使う",
+        "hint": "AI が画面を使うあいだ、このパソコンは画面をスリープさせずロックもしません。プライバシースクリーンが画面を覆い、AI はその裏で作業を続けます。キーを押すかクリックするとすぐにロックされ、Touch ID またはパスワードで解除できます。タスクがないときは通常どおりスリープしてロックします。リモート操作が終わったあとも、プライバシースクリーンでこのパソコンを保護します。",
         "permission": "誰かがこの Mac に触れたときにすぐロックするには、「システム設定 > プライバシーとセキュリティ > アクセシビリティ」で Cindy を許可してください。許可するまでは、通常どおり画面がスリープしてロックされます。",
         "preview": "今すぐ試す",
-        "previewStarting": "マウスとキーボードから手を離してください。3 秒後に画面が覆われます。いずれかのキーを押すとロックされるので、解除してみてください。",
-        "previewUnavailable": "画面を覆えませんでした。Cindy を再起動してもう一度お試しください。",
+        "previewStarting": "マウスとキーボードから手を離してください。3 秒後にプライバシースクリーンが表示されます。任意のキーでロックし、解除して試してください。",
+        "previewUnavailable": "プライバシースクリーンを表示できませんでした。Cindy を再起動してもう一度お試しください。",
         "delay": {
           "30": "30 秒",
           "60": "1 分",
           "120": "2 分",
           "300": "5 分",
-          "label": "画面を隠すまでの時間",
-          "hint": "キーボードとマウスに触れない時間がこれを超えるとカバーが表示されます。既定ではディスプレイのスリープ時間と同じです。",
+          "label": "プライバシースクリーンを表示するまでの時間",
+          "hint": "AI の作業中、キーボードとマウスにこの時間触れなかったときに表示します。デフォルトはシステムの画面オフの時間です。",
           "system": "システムに従う"
-        }
+        },
+        "hintWindows": "AI が画面を使うあいだ、このパソコンは画面をオフにせずロックもしません。プライバシースクリーンが画面を覆い、AI はその裏で作業を続けます。キーを押すかクリックするとすぐにロックされ、Windows Hello またはパスワードで解除できます。タスクがないときは通常どおり画面がオフになりロックされます。リモート操作が終わったあとも、プライバシースクリーンでこのパソコンを保護します。",
+        "hintLinux": "AI が画面を使うあいだ、このパソコンは画面をオフにせずロックもしません。プライバシースクリーンが画面を覆い、AI はその裏で作業を続けます。キーを押すかクリックするとすぐにロックされ、パスワードで解除できます。タスクがないときは通常どおり画面がオフになりロックされます。リモート操作が終わったあとも、プライバシースクリーンでこのパソコンを保護します。"
       }
     },
     "agentIsland": {
@@ -4287,7 +4308,9 @@
           "inline": "実行先",
           "signInHere": "このコンピュータでログイン",
           "writeFailed": "実行先を保存できませんでした。もう一度お試しください。"
-        }
+        },
+        "sameAccountConnections": "このアカウントの保存済み接続",
+        "sameAccountConnectionsHint": "同じアカウントは1つにまとめて表示されます。接続を選ぶと管理対象の設定が切り替わります。既存のタスクの接続は変わりません。"
       },
       "detect": {
         "groupLabel": "このデバイスで検出",
@@ -5310,6 +5333,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex サーバー圧縮",
+        "description": "オンの場合はサーバー圧縮を優先します。オフの場合は Codex 標準のローカル要約を使いますが、引き続き現在のモデルを呼び出します。",
+        "hint": "このコンピューターで Codex が次回セッションを開始または再開する際に適用されます。サーバー圧縮に非対応のプロバイダーは従来の動作を維持します。",
+        "loadFailed": "Codex の圧縮設定を読み込めませんでした",
+        "saveFailed": "Codex の圧縮設定を保存できませんでした"
+      },
       "title": "コンテキスト圧縮",
       "description": "Claude Code と Pi の圧縮率をここで調整します。Codex はモデルのコンテキスト設定からしきい値を決定します。リモート圧縮に失敗すると要約による圧縮に自動で切り替え、現在のタスクで継続します。",
       "card": {
@@ -6955,7 +6985,8 @@
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
-      }
+      },
+      "keepAwakeIncluded": "プライバシースクリーンに含まれています：パソコンはスリープしません。"
     },
     "imBot": {
       "beta": "Beta",
@@ -8138,6 +8169,8 @@
         "cindyTextOneshot": "Cindy のクイックチャンネルに質問してテキスト回答を受け取れます",
         "cindyTextOneshotDetail": "システムの軽量タスクモデルチェーン(自動タイトルと同じ経路)を使用します。Agent は使わず、ファイルにもアクセスしません。モデル料金が発生する場合があります。",
         "cindyEmbedText": "テキストをベクトルに変換できます（意味検索用）",
+        "cindyModelsDecisions": "意思決定モデルを呼び出せます（モデル利用枠を使用）",
+        "cindyModelsRerank": "リランキングモデルを呼び出せます（モデル利用枠を使用）",
         "cindyEmbedTextDetail": "テキストはシステムのベクトルモデルに送られて数値列に変換されます。1 回あたり最大 {{max}} 件で、モデル料金が発生する場合があります。生成されたベクトルはプラグインだけが保持し、あなたのライブラリには書き込まれません。",
         "cindySearchWeb": "Cindy AI で公開ウェブを検索できます",
         "cindySearchWebDetail": "検索では公開ウェブにアクセスし、Cindy AI のクォータを消費する場合があります。",
@@ -8160,41 +8193,36 @@
         "agentCompanionsDetail": "すべての仲間（他のコンピューターで実行中の仲間を含む）の名前、説明、アバター、状態（作業中、対応待ち、待機中、オフライン）、取り組んでいる作業の種類（思考中、ツール実行中など）、対応待ちのリクエストの内容（質問、実行するコマンド、計画。会話に表示されるものと同じ）、メインの会話の最近のやり取り（あなたのメッセージと仲間の返信を最大 50 件。ツールの過程は含みません）を確認し、メインウィンドウで仲間の会話を開くことができます。メッセージ送信の権限もある場合は、プラグインで入力した回答を仲間に渡せます（質問への回答、リクエストの拒否、計画へのフィードバック）。実行の許可には Cindy 自身の確認ダイアログでの操作が必要です。ファイル、ツールの過程、思考の内容は読み取れません。",
         "agentCompanionsRequest": "仲間の閲覧権限を確認",
         "hostTools_history": "タスク履歴",
-        "hostTools_historyDetail": "Cindy のタスクツールで既存のタスク一覧、メッセージ全文、履歴検索を利用できます。明示的に選択した、アクセス可能な別のパソコンも対象です。",
+        "hostTools_historyDetail": "Cindy のタスクツールで既存のタスク一覧、メッセージ全文、履歴検索を利用できます。明示的に選択した、アクセス可能な別のパソコンも対象です。このパソコンのタスクをネイティブ形式のファイルとしてエクスポートできます。プラグインはインストール時の権限で呼び出し、Agent は実行時に自身の権限設定に従います。",
         "hostTools_control": "タスク管理",
-        "hostTools_controlDetail": "Cindy のタスクツールで既存のタスクやプロジェクトを編集、アーカイブ、復元、操作できます。高リスクの操作は毎回 Cindy で確認が必要です。",
+        "hostTools_controlDetail": "Cindy のタスクツールで既存のタスクやプロジェクトを編集、アーカイブ、復元、操作し、このパソコンにネイティブ形式のタスクファイルをインポートできます。",
         "hostTools_handoff": "タスクへの送信",
         "hostTools_handoffDetail": "Cindy のタスクツールで既存のタスクにメッセージを送信できます。現在のタスク情報が必要な操作では、対象のタスクを明示する必要があります。",
         "hostTools_settings": "アプリ設定",
         "hostTools_settingsDetail": "Cindy の設定ツールでアプリの設定を読み取り、変更できます。秘密情報は返されず、機密情報の入力は本人が行います。",
         "hostTools_scheduler": "自動化の管理",
-        "hostTools_schedulerDetail": "承認すると、プラグインは自動タスクの作成、一覧表示、編集、一時停止、再開、削除、実行と実行履歴の閲覧ができます。Agent が実行する定期タスクには、フルアクセスを含むタスクの既定の権限が適用されます。高リスクのホスト操作は毎回確認が必要です。",
+        "hostTools_schedulerDetail": "承認すると、プラグインは自動タスクの作成、一覧表示、編集、一時停止、再開、削除、実行と実行履歴の閲覧ができます。Agent が実行する定期タスクには、フルアクセスを含むタスクの既定の権限が適用されます。",
         "hostTools_terminal": "ターミナルとコマンド",
         "codeDetailFiles": "プラグインのページは隔離されたままです。許可したファイル操作は、選択したディレクトリ内で Cindy が実行します。",
         "hostTools_discovery": "ホストの機能を確認",
         "hostTools_discoveryDetail": "実行するコンピュータのサービスと、このプラグインが宣言し許可されたツール群を読み取ります。他のプラグインのインストール、無効化、権限取り消しはできません。",
         "hostTools_browser": "ブラウザ操作",
-        "hostTools_browserDetail": "Cindy で選択したブラウザのページを読み取り、操作します。「マイブラウザ」への切り替え、ファイルのアップロードなどの機密性の高い操作では、引き続き Cindy が確認します。",
+        "hostTools_browserDetail": "Cindy で選択したブラウザのページを読み取り、操作します。「マイブラウザ」に切り替え、ログイン済みのページへアクセスし、ファイルをアップロードできます。",
         "hostTools_computer": "コンピュータ操作",
         "hostTools_computerDetail": "Cindy のツールでウィンドウを表示し、キーボードやマウスを操作します。システム権限、機密入力の保護、ホストのリスク規則が引き続き適用されます。",
         "hostTools_ssh": "SSH 接続",
-        "hostTools_sshDetail": "設定済みの SSH 接続でコマンドを実行し、接続を管理します。認証情報は Cindy に留まります。確認が必要な操作は毎回確認します。",
+        "hostTools_sshDetail": "設定済みの SSH 接続でコマンドを実行し、接続を管理します。認証情報は Cindy に留まります。",
         "hostTools_docs": "文書の読み取りと作成",
-        "hostTools_docsDetail": "このプラグインの専用ディレクトリで Cindy の文書ツールを使用します。作成や変換には Cindy の確認が必要です。",
+        "hostTools_docsDetail": "このプラグインの専用ディレクトリで Cindy の文書ツールを使用します。",
         "codeDetailHostServices": "プラグインのページは隔離されたままです。許可されたホストツールは各権限の範囲でブラウザ、コンピュータ、接続、文書を操作できます。",
         "hostTools_storage": "ストレージとプラグイン間共有",
-        "hostTools_storageDetail": "このプラグインのストレージ、Library、許可されたメディアを使用します。共有のたびに Cindy が送信元、受信プラグイン、コピー内容を確認します。他のプラグインのストレージは読み取れません。",
-        "codeDetailStorage": "ストレージ操作はこのプラグインのデータに限定されます。他のプラグインへの共有は毎回確認します。",
-        "storageShareTitle": "他のプラグインにコピーを渡す",
-        "storageShareMessage": "プラグイン「{{name}}」の「{{file}}」（{{size}}）を「{{target}}」にコピーします。独立したコピーが渡され、元の変更は同期されません。相手が読み取ったり保存した内容は取り消せません。",
+        "hostTools_storageDetail": "このプラグインのストレージ、Library、許可されたメディアを使用します。共有は、双方が有効で storage を宣言し、同じアカウントと組織に属するプラグイン間でコピーを渡します。他のプラグインのストレージは読み取れません。",
+        "codeDetailStorage": "ストレージ操作はこのプラグインのデータに限定されます。共有には双方が有効で storage を宣言し、同じアカウントと組織に属する必要があり、コピーを渡します。",
         "hostTools_files": "許可したディレクトリのファイル",
         "hostTools_filesDetail": "明示的に選んだディレクトリ内でファイルの読み取り、書き込み、一覧表示、削除と変更の監視を行います。以前の選択では許可されません。プラグインを無効にするとアクセスを停止します。",
         "filesPickMessage": "プラグイン「{{name}}」が選択したディレクトリ内のファイルを読み取り、書き込み、一覧表示、削除し、変更を監視できるようになります。アクセスを許可するディレクトリを選んでください。",
         "codeDetailTerminal": "プラグインのページは独立したサンドボックスで実行されます。許可されたコマンドはユーザー権限で実行され、ローカルのファイル、アプリ、ネットワークにアクセスできます。",
-        "hostTools_terminalDetail": "このコンピューターでユーザー権限のコマンドや対話型ターミナルを起動し、このプラグインのプロセスの出力確認、入力、停止を行います。コマンドはファイルやアプリにアクセスできます。起動や入力などの変更は毎回 Cindy で確認します。",
-        "hostToolsRequest": "{{group}}の権限を確認",
-        "hostToolCallTitle": "プラグインの操作を許可",
-        "hostToolCallMessage": "プラグイン「{{name}}」が {{server}} / {{tool}} を呼び出そうとしています。今回の許可は以下のパラメーターにのみ適用されます。",
+        "hostTools_terminalDetail": "このコンピューターでユーザー権限のコマンドや対話型ターミナルを起動し、このプラグインのプロセスの出力確認、入力、停止を行います。コマンドはファイルやアプリにアクセスできます。",
         "agentHiddenTasks": "セッションリストに表示されないバックグラウンドセッションを作成できます",
         "agentHiddenTasksDetail": "このプラグインが作成したセッションを、セッションリスト・検索・通知に表示しないようにできます。プラグイン詳細の「バックグラウンドセッション」からいつでも確認したり開いたり、セッションリストに表示したりできます。プラグインをアンインストールすると再び表示されます。",
         "agentErrand": "タスクを作成し、作業を実行して結果を取得できます",
@@ -9207,6 +9235,12 @@
         "failed": "クリーンアップ未完了",
         "pending": "待機中"
       }
+    },
+    "awayFromComputer": {
+      "title": "離席中"
+    },
+    "navigation": {
+      "unavailable": "対象のパソコンの設定を開けませんでした。オンラインでリモート操作が許可されているか確認し、古いバージョンの場合は Cindy を更新してください。"
     }
   },
   "remoteDevice": {
@@ -9322,6 +9356,7 @@
     "backToLogin": "ログイン方法に戻る"
   },
   "login": {
+    "networkResponseHint": "ログインサービスから想定外の応答が返されました。ネットワークの中継機器やプロキシがリクエストを遮断している可能性があります。ネットワークとプロキシの設定を確認してください。",
     "title": "Cindy へようこそ",
     "subtitle": "安全なログイン方法を選択してください",
     "savedLoginPreserved": "復旧操作で保存済みのログイン情報は削除しません",
@@ -9668,6 +9703,7 @@
     "tokenLine": "トークン: 合計 {{total}} · 入力 {{input}} · 出力 {{output}}",
     "cacheLine": "キャッシュ内訳: 読み取り {{read}} · 書き込み {{create}} · ヒット率 {{rate}}",
     "cacheLineNoRate": "キャッシュ内訳: 読み取り {{read}} · 書き込み {{create}}",
+    "stepsLine": "このターンのリクエスト {{steps}} 回 · 1 回あたり約 {{context}} のコンテキスト",
     "modelLine": "モデル: {{model}}",
     "multipleModels": "{{count}} 個のモデル",
     "costBreakdownHeader": "モデル別:",
@@ -13434,6 +13470,15 @@
           "askNoQuestion": "Agent があなたの回答を待っていますが、表示できる質問がありません。「続けて」と返信してください。",
           "askQuestion": "Agent があなたの回答を必要としています:\n{{question}}\n{{options}}\n選択肢の番号を返信するか、回答を直接入力してください。"
         }
+      },
+      "questions": {
+        "cardHint": "質問者のみ回答できます。選択肢をタップし、複数の質問・複数選択の場合は選択後に送信してください。このメッセージへの返信で補足もできます。複数の質問には「質問番号: 回答」（例「2: 日本語」）と返信し、入力後に送信してください。",
+        "submitLabel": "回答を送信",
+        "multiSelectHint": "（複数選択可）",
+        "resolved": "✅ 選択: {{option}}",
+        "expired": "このカードは期限切れです",
+        "textHint": "質問者のみ回答できます。{{code}} の後に回答を入力してください。複数の質問には「{{code}} 2: 回答」で答え、最後に「{{code}} OK」で送信します。",
+        "replyHint": "質問者のみ回答できます。選択肢をタップし、複数の質問・複数選択の場合は選択後に送信してください。\n{{code}} の後に回答を入力してください。複数の質問には「{{code}} 2: 回答」で答え、最後に「{{code}} OK」で送信します。"
       }
     }
   },
@@ -13860,6 +13905,7 @@
         "realtime": "リアルタイム音声",
         "embedding": "埋め込み",
         "decision": "意思決定",
+        "rerank": "リランキング",
         "compression": "圧縮",
         "ungrouped": "未分類",
         "other": "その他"
@@ -14007,7 +14053,7 @@
       "notGitRepo": "現在のディレクトリは git リポジトリではありません",
       "alreadyInWorktree": "すでに worktree 内です。ネストは禁止です",
       "toggleAria": "worktree 分離を使用",
-      "chipTooltip": "独立した worktree でこのチャットを開始し、現在のブランチには影響しません"
+      "chipTooltip": "プロジェクトの別コピーで開始し、現在のファイルや変更、ほかのセッションには影響しません"
     },
     "branchChip": {
       "label": "ブランチ",
@@ -14376,6 +14422,81 @@
       "later": "後で",
       "ready": "操作可能なページを有効にしました。次のプラグインツール呼び出しから表示できます。",
       "updateHost": "ここで操作可能なページを承認するには、実行側のコンピューターで Cindy を更新してください。"
+    },
+    "checkout": {
+      "useWorktree": "worktree を使う",
+      "switched": "{{branch}} に切り替えました",
+      "stashed": " · 変更を保存しました",
+      "carried": " · 変更を引き継ぎました",
+      "fetched": "{{branch}} から新しいコミットを {{count}} 件取得しました",
+      "sessionsContinue": "{{names}} も次回から {{branch}} で続行します。",
+      "undo": "元に戻す",
+      "savedChanges": "{{branch}} で一時保存した変更があります。",
+      "restore": "変更を復元",
+      "undone": "ブランチの切り替えを取り消しました",
+      "restored": "退避した変更を復元しました",
+      "title": "{{branch}} に切り替える",
+      "dirtyDescription": "{{branch}} には未コミットの変更があるファイルが {{count}} 件あります",
+      "dirtyDescription_one": "{{branch}} には未コミットの変更があるファイルが {{count}} 件あります",
+      "dirtyDescription_other": "{{branch}} には未コミットの変更があるファイルが {{count}} 件あります",
+      "dirtyDescription_many": "{{branch}} には未コミットの変更があるファイルが {{count}} 件あります",
+      "carry": "変更を {{branch}} に引き継ぐ",
+      "stash": "先に保存する",
+      "idleSessions": "{{count}} 件のセッションも新しいブランチに移ります",
+      "errors": {
+        "busy": "このディレクトリでセッションが実行中のため、今はブランチを切り替えられません",
+        "operation": "ブランチの変更を統合中です。完了してから切り替えてください",
+        "occupied": "{{branch}} は別の worktree で開かれているため、ここでは切り替えられません",
+        "changed": "ブランチまたは変更内容が変わりました。ディレクトリを確認して再試行してください",
+        "undoChanged": "ブランチまたは変更内容が変わりました。ディレクトリを確認してください。元に戻せるのは切り替え先のブランチにいる間だけです。",
+        "restoreChanged": "現在のブランチが変わりました。変更を保存したブランチに戻ってから復元してください",
+        "conflict": "変更が切り替え先と競合するため引き継げません。一時保存するか、worktree を使ってください。",
+        "ignored": "{{branch}} に切り替えると、{{file}} を含むローカルのファイルやフォルダー（計 {{count}} 件）が上書きされるため、切り替えを中止しました",
+        "dirty": "新しい未コミットの変更があります。処理してから復元してください。",
+        "diverged": "ローカルとリモートのブランチに異なる更新があります。違いを解消してから切り替えてください",
+        "missing": "選択したブランチは存在しません。一覧を更新してください。",
+        "git": "操作を完了できませんでした。現在のブランチと保存した変更を確認してから再試行してください",
+        "savedMissing": "保存した変更はもうありません",
+        "undoUnavailable": "この切り替えはもう元に戻せません"
+      },
+      "carryDescription": "変更を引き継ぎ、{{branch}} で編集を続けます",
+      "stashDescription": "変更を保存し、{{branch}} を変更のない状態にします。{{current}} に戻ると復元できます",
+      "carryConflict": "変更が {{branch}} の内容と競合するため、引き継げません",
+      "newFile": "新しいファイル",
+      "deletedFile": "削除済み",
+      "dialogSessions": "「{{name}}」など {{count}} 件のセッションもこのディレクトリを使い、{{branch}} で続行します",
+      "dialogSessions_one": "「{{name}}」もこのディレクトリを使い、{{branch}} で続行します",
+      "dialogSessions_other": "「{{name}}」など {{count}} 件のセッションもこのディレクトリを使い、{{branch}} で続行します",
+      "dialogSessions_many": "「{{name}}」など {{count}} 件のセッションもこのディレクトリを使い、{{branch}} で続行します",
+      "moreFiles": "ほか {{count}} 件のファイル",
+      "moreFiles_one": "ほか {{count}} 件のファイル",
+      "moreFiles_other": "ほか {{count}} 件のファイル",
+      "moreFiles_many": "ほか {{count}} 件のファイル",
+      "question": "変更をどうしますか？",
+      "noLoss": "どれを選んでも変更は残ります",
+      "worktree": "そのままにして worktree を使う",
+      "worktreeDescription": "別のコピーで {{branch}} から開始し、ここはそのままにします",
+      "carryConfirm": "変更を持って切り替え",
+      "stashConfirm": "保存して切り替え",
+      "startWorktree": "worktree で開始",
+      "showFiles": "表示",
+      "hideFiles": "閉じる",
+      "running": "実行中",
+      "runningTitle": "{{count}} 件のセッションがここで実行中",
+      "runningTitle_one": "「{{name}}」がここで実行中",
+      "runningTitle_other": "{{count}} 件のセッションがここで実行中",
+      "runningTitle_many": "{{count}} 件のセッションがここで実行中",
+      "runningWait": "すべて完了するまでブランチは切り替えられません。",
+      "runningWait_one": "完了するまでブランチは切り替えられません。",
+      "runningWait_other": "すべて完了するまでブランチは切り替えられません。",
+      "runningWait_many": "すべて完了するまでブランチは切り替えられません。",
+      "idleSessions_one": "「{{name}}」も新しいブランチに移ります",
+      "idleSessions_other": "{{count}} 件のセッションも新しいブランチに移ります",
+      "idleSessions_many": "{{count}} 件のセッションも新しいブランチに移ります",
+      "runningWithWorktree": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
+      "runningWithWorktree_one": "完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
+      "runningWithWorktree_other": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
+      "runningWithWorktree_many": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。"
     }
   },
   "onboarding": {
@@ -15965,6 +16086,8 @@
       "claudeSubscriptionWorkspaceOverride": "このフォルダーの .claude 設定が Claude の接続先または認証方法を変更しているため、ここでは Claude サブスクリプションを使用できません。該当する設定を削除するか、ゲートウェイまたは API キーのモデルを選択してください",
       "deviceStillLoading": "リモートデバイスの読み込み中です。しばらくお待ちください",
       "remoteDefaultsLoadFailed": "リモートデバイスの設定を読み込めませんでした。接続を確認してください。Cindy が再試行しています。",
+      "branchChanged": "プロジェクトの現在のブランチは {{branch}} になりました。確認してから再送信してください。",
+      "branchCheckFailed": "現在のブランチを確認できませんでした。worktree を有効にして選択したブランチを使うか、プロジェクトを確認して再試行してください。",
       "worktreeMissingRepo": "worktree を作成できません：現在のディレクトリのリポジトリルートが見つかりません",
       "worktreeRepoHint": "作業ディレクトリを選び直し、右下のフォルダー表示が更新されてから再試行してください",
       "sessionInactive": "セッションはすでにアクティブではありません",
@@ -16540,6 +16663,8 @@
             "title": "リポジトリのイベント",
             "description": "Cindy GitHub App を接続すると、レビューや CI の変更時に追跡中の PR が更新されます。",
             "connected": "{{login}} として接続済み · {{count}} 件のリポジトリを追跡中",
+            "syncing": "リポジトリを同期しています…",
+            "finishInBrowser": "GitHub でリポジトリの設定を完了してから Cindy に戻ってください。",
             "missing": "次のリポジトリの App インストールとアクセス権を確認してください：{{repositories}}",
             "error": "接続を確認できませんでした。もう一度お試しください。",
             "repositories": "リポジトリを選択",
@@ -17070,7 +17195,9 @@
         "saveAria": "自動化を保存",
         "createAria": "自動化を作成",
         "namePlaceholder": "この自動化に名前を付ける",
-        "promptPlaceholder": "例: Sentry で新しいクラッシュを見つけ、主要なリグレッションを要約する。"
+        "promptPlaceholder": "例: Sentry で新しいクラッシュを見つけ、主要なリグレッションを要約する。",
+        "expandPrompt": "広げて編集",
+        "collapsePrompt": "縮める"
       },
       "executionMode": {
         "label": "実行方法",
@@ -17118,9 +17245,8 @@
         "automatic": "自動",
         "manually": "手動",
         "session": "セッション",
-        "silentRun": "確認で変化がなければ通知しない",
-        "silentRunTooltip": "変化や問題のみ報告します。リマインダーや定時送信ではオフにできます。",
-        "silentRunInfoAria": "サイレント実行のルールを表示",
+        "silentRun": "サイレント実行",
+        "silentRunTooltip": "オンにすると、正常完了時はデフォルトで通知しません。タスク説明で特定条件の通知を求めている場合、AI が条件を満たしたときに自動で上報します。失敗や異常は引き続き通知されます。",
         "finishSendToFeishu": "完了時に Feishu Bot に送信",
         "finishSendToWecomGroup": "完了時に WeCom グループへ送信",
         "configWecomGroup": "WeCom グループ通知を設定",
@@ -17230,10 +17356,7 @@
       },
       "layout": {
         "content": "実行内容",
-        "notifications": "通知とサイレント実行",
-        "contentTab": "内容と起動方法",
-        "optionsTab": "実行オプション",
-        "sections": "自動化の設定"
+        "notifications": "通知とサイレント実行"
       },
       "webhook": {
         "quotaHint": "Webhook の受信回数には 1 日の上限があり、ここでのフィルターでは回数は減りません。送信元（GitHub など）で必要なイベントだけを選択してください。",
@@ -17309,6 +17432,19 @@
         "repositoriesLabel": "リポジトリ",
         "repositoriesHint": "owner/repository を1行に1つ入力します。この GitHub App に許可したリポジトリのみがタスクを開始できます。",
         "repositoriesInvalid": "有効な owner/repository 形式のリポジトリ名を1～50件入力してください。",
+        "connectAccount": "アカウントを接続",
+        "connectionLabel": "接続方法",
+        "cindyConnection": "Cindy 経由で接続（推奨）",
+        "manualConnection": "Webhook を手動設定",
+        "cindyConnectionHint": "GitHub App でイベントを受信します。アカウントを接続してリポジトリを許可するだけで、受信 URL やシークレットの入力は不要です。",
+        "manualConnectionHint": "GitHub のリポジトリ設定に、Cindy が提供する受信 URL とシークレットを入力します。",
+        "manualSetupHint": "保存後、自動化の詳細で受信 URL とシークレットを取得し、GitHub のリポジトリ設定で接続を完了してください。",
+        "accountLabel": "GitHub アカウント",
+        "accountDisconnected": "GitHub に未接続です。まずアカウントを接続してください。",
+        "authorizeRepositories": "リポジトリを許可",
+        "appUnavailable": "ここでは GitHub App に接続できません。Webhook を手動で設定できます。",
+        "cindyConnectionTitle": "GitHub · Cindy 経由の接続",
+        "manualConnectionTitle": "GitHub · 手動 Webhook",
         "githubAppHint": "このタスクを実行するコンピュータで GitHub App に接続し、これらのリポジトリを許可してください。個別の Webhook URL やシークレットは不要です。",
         "githubAppPaused": "このタスクは一時停止中です。イベントでは開始されません。"
       },
@@ -17898,7 +18034,6 @@
       "descriptionSaveDir": "以下のディレクトリは現在のセッションの作業ディレクトリの外にあります。許可すると、このプラグインがダウンロードしたファイルをここに保存できます(既存ファイルは上書きされません)。",
       "descriptionRevealPath": "このパスは許可後にのみ現在の Agent へ返され、会話履歴に入ります。ペアリング済みデバイスにも同期される場合があります。この操作によってプラグインへファイルの読み取り権限が付与されることはありません。",
       "descriptionFsWrite": "このプラグインは現在のセッションの作業ディレクトリに以下のファイルを書き込もうとしています。許可すると、このセッション中は同じディレクトリへの書き込みは再確認されません。",
-      "descriptionFsDelete": "このプラグインは、現在のタスクの作業ディレクトリから以下のファイルまたはフォルダを削除しようとしています。フォルダ内の内容も削除されます。この許可は今回の削除にのみ適用されます。",
       "descriptionWorkspace": "このフォルダは現在のセッションの作業ディレクトリの外にあります。許可すると、Cindy がこのフォルダを作業ディレクトリとする空のセッションをサイドバーに作成します(既にセッションがある場合は再利用)。中のファイルは読み取りません。",
       "descriptionForgeSource": "以下のディレクトリは現在のセッションの作業ディレクトリの外にあります。許可すると、Forge がそこでプラグインをパックまたは雛形生成します（.cindy 成果物または雛形ファイルを書き込みます）。",
       "descriptionForgeScaffold": "以下のディレクトリは現在のセッションの作業ディレクトリの外にあります。許可すると、Forge がそこにプラグインの雛形を生成します。",
@@ -21326,8 +21461,7 @@
     "providerManagedAuth": "現在の Codex プロバイダーでは ChatGPT アカウント情報を取得できません。プロバイダーの追加時に「$t(subscriptionAccounts.signIn.anotherAccount)」を選ぶと、別のフォルダーを使用できます。",
     "signIn": {
       "checking": "ローカルアカウントを確認中…",
-      "detected": "ログイン済みのアカウントが見つかりました",
-      "useAccount": "このアカウントを使う",
+      "useAccount": "このコンピュータの {{cli}} アカウントを使う",
       "anotherAccount": "別のアカウントでログイン",
       "keepExisting": "新しいアカウントは、統合先を選ばない限り単独のプロバイダーになります。既存のログインは維持されます。",
       "checkFailed": "ローカルアカウントを確認できませんでした。再試行してください。",
@@ -21337,7 +21471,6 @@
     "title": "サブスクリプションアカウント",
     "strategy": "負荷分散",
     "add": "アカウントを追加",
-    "default": "既定フォルダー",
     "defaultTag": "既定",
     "ready": "接続済み",
     "signedOut": "ログインが必要",
@@ -21536,5 +21669,73 @@
     "switchOffer": {
       "action": "{{model}} に切り替えて続行"
     }
+  },
+  "projectSettings": {
+    "autoLoading": "アイコンを検索中…",
+    "autoNone": "プロジェクト名から生成した文字アイコンを使用します。",
+    "autoSource": "取得元",
+    "githubAvatar": "GitHub アカウントの画像を使用",
+    "title": "プロジェクト設定",
+    "name": "表示名",
+    "saveName": "名前を保存",
+    "reset": "既定値に戻す",
+    "icon": "アイコン",
+    "directory": "プロジェクトフォルダー",
+    "done": "完了",
+    "failed": "保存できませんでした。再試行してください。",
+    "unavailable": "設定を利用できません。更新済みのコンピューターに接続して再試行してください。",
+    "back": "戻る",
+    "cancel": "キャンセル",
+    "changeIcon": "アイコンを変更",
+    "chooseIcon": "アイコンを選択",
+    "save": "保存",
+    "symbols": "アイコン",
+    "emoji": "絵文字",
+    "letters": "文字",
+    "image": "画像",
+    "upload": "画像をアップロード",
+    "imageHint": "PNG・JPG・WebP · 正方形に切り抜き",
+    "imageError": "画像を読み込めません。小さい PNG または JPG をお試しください。",
+    "search": "アイコンを検索",
+    "customEmoji": "絵文字を貼り付ける",
+    "lettersHint": "文字または数字を1〜2文字入力。",
+    "thisComputer": "このコンピューター",
+    "nameHint": "プロジェクト一覧の表示名です。フォルダー名は変わりません。",
+    "copy": "パスをコピー",
+    "copied": "コピー済み",
+    "applyIcon": "このアイコンを使用",
+    "noResults": "一致するアイコンがありません",
+    "discardHint": "未保存の変更を破棄しますか？",
+    "keepEditing": "編集を続ける",
+    "discard": "破棄",
+    "colors": {
+      "default": "標準色（テーマに合わせる）"
+    }
+  },
+  "taskManagement": {
+    "scope": "このコンピューターの現在のアカウントにのみ適用されます。",
+    "archive": "自動アーカイブ",
+    "enabled": "未使用のタスクを自動アーカイブ",
+    "description": "使っていないタスクを自動でアーカイブします。履歴は引き続き確認できます。",
+    "days": "未使用の日数",
+    "daysHint": "最後のメッセージの送受信または実行終了から数えます。",
+    "days7": "7 日",
+    "days14": "14 日",
+    "days30": "30 日",
+    "customDays": "日数を指定",
+    "invalidDays": "1～365 の整数を入力してください。",
+    "reset": "既定に戻す",
+    "archiveHint": "使用中のタスクは保持されます。アーカイブしたタスクはいつでも復元できます。",
+    "preview": "アーカイブのプレビュー",
+    "loadFailed": "設定を読み込めませんでした。",
+    "loading": "設定を読み込み中…",
+    "candidateCount": "対象タスク：{{count}}",
+    "keptCount": "保持：{{count}}",
+    "lastCheck": "最終確認：{{date}}",
+    "notChecked": "自動確認はまだ実行されていません",
+    "saveFailed": "設定を保存できませんでした。もう一度操作してください。",
+    "archivedNotice": "未使用のタスクを自動アーカイブしました：{{count}}",
+    "undo": "取り消す",
+    "undoFailed": "取り消せませんでした。アーカイブ済みのタスクから復元してください。"
   }
 }

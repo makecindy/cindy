@@ -346,6 +346,11 @@ export function RemoteDesktopViewerWindow() {
       )}
     </span>
   );
+  // How the host protects itself on exit decides the wording (docs/product-rules/privacy-screen.md).
+  const coversOnExit = state?.caps?.exitProtection === 'privacy-screen';
+  const exitHintKey = coversOnExit
+    ? 'remoteDesktop.lockOnExitHintPrivacy'
+    : 'remoteDesktop.lockOnExitHint';
   const preference = (key: 'privacyScreen' | 'hostMute' | 'clipboardSync' | 'lockOnExit') =>
     state && (
       <div className="remote-viewer-preference" key={key}>
@@ -371,9 +376,15 @@ export function RemoteDesktopViewerWindow() {
                 ? 'remoteDesktop.settingUnsupported'
                 : key === 'privacyScreen' && state.safety.privacyActive
                   ? 'remoteDesktop.privacyActive'
-                  : `remoteDesktop.${key}Hint`,
+                  : key === 'lockOnExit'
+                    ? exitHintKey
+                    : `remoteDesktop.${key}Hint`,
           )}
         </p>
+        {key === 'lockOnExit' && state.caps?.lockOnExit && state.caps.exitProtection === 'lock' && (
+          // The host offers a privacy screen but it is off: say where to turn it on.
+          <p>{t('remoteDesktop.lockedEnablePrivacyHint')}</p>
+        )}
       </div>
     );
   return (
@@ -415,7 +426,7 @@ export function RemoteDesktopViewerWindow() {
             <span>
               {state?.closing
                 ? t(
-                    state.preferences.lockOnExit && state.caps?.lockOnExit
+                    state.preferences.lockOnExit && state.caps?.lockOnExit && !coversOnExit
                       ? 'remoteDesktop.lockingOnExit'
                       : 'remoteDesktop.disconnecting',
                   )
@@ -768,37 +779,40 @@ export function RemoteDesktopViewerWindow() {
           >
             {preference('privacyScreen')}
             {preference('lockOnExit')}
-            <FormField
-              label={t('remoteDesktop.idleLock')}
-              className="remote-viewer-field"
-              hint={
-                state?.caps && !state.caps.idleLock
-                  ? t('remoteDesktop.settingUnsupported')
-                  : undefined
-              }
-            >
-              {(field) => (
-                <Select
-                  {...field}
-                  label={t('remoteDesktop.idleLock')}
-                  value={String(
-                    state?.preferences.idleTimeoutMinutes ?? REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES,
-                  )}
-                  disabled={!state?.ready || state.closing || !state.caps?.idleLock}
-                  options={REMOTE_DESKTOP_IDLE_MINUTES.map((minutes) => ({
-                    value: String(minutes),
-                    label:
-                      minutes === 0
-                        ? t('remoteDesktop.idleNever')
-                        : t('remoteDesktop.idleMinutes', { count: minutes }),
-                  }))}
-                  onValueChange={(value) =>
-                    void controller.current?.preference({ idleTimeoutMinutes: Number(value) })
-                  }
-                  onOpenChange={onSelectOpenChange}
-                />
-              )}
-            </FormField>
+            {/* Hosts with their own away time decide idle protection themselves. */}
+            {!state?.caps?.hostIdle && (
+              <FormField
+                label={t('remoteDesktop.idleLock')}
+                className="remote-viewer-field"
+                hint={
+                  state?.caps && !state.caps.idleLock
+                    ? t('remoteDesktop.settingUnsupported')
+                    : undefined
+                }
+              >
+                {(field) => (
+                  <Select
+                    {...field}
+                    label={t('remoteDesktop.idleLock')}
+                    value={String(
+                      state?.preferences.idleTimeoutMinutes ?? REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES,
+                    )}
+                    disabled={!state?.ready || state.closing || !state.caps?.idleLock}
+                    options={REMOTE_DESKTOP_IDLE_MINUTES.map((minutes) => ({
+                      value: String(minutes),
+                      label:
+                        minutes === 0
+                          ? t('remoteDesktop.idleNever')
+                          : t('remoteDesktop.idleMinutes', { count: minutes }),
+                    }))}
+                    onValueChange={(value) =>
+                      void controller.current?.preference({ idleTimeoutMinutes: Number(value) })
+                    }
+                    onOpenChange={onSelectOpenChange}
+                  />
+                )}
+              </FormField>
+            )}
             <div className="remote-viewer-panel-section">
               {state && (
                 <>
@@ -971,7 +985,7 @@ export function RemoteDesktopViewerWindow() {
         description={
           t('remoteDesktop.viewer.confirmDisconnectHint') +
           (state?.preferences.lockOnExit && state.caps?.lockOnExit
-            ? ` ${t('remoteDesktop.lockOnExitHint')}`
+            ? ` ${t(exitHintKey)}`
             : '')
         }
         confirmText={t('remoteDesktop.disconnect')}

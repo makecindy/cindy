@@ -11,7 +11,7 @@ const versions: Record<MakeToolId, string> = {
   git: 'git version 2.55.0',
   gitLfs: 'git-lfs/3.8.0',
   node: 'v22.23.2',
-  pnpm: '10.33.2',
+  pnpm: '11.28.9',
   python: 'Python 3.13.15',
 };
 function harness(present: MakeToolId[] = []) {

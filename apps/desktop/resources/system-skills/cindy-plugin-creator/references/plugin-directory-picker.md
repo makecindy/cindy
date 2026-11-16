@@ -42,8 +42,8 @@ await cindy.fs({ root: 'picked', directoryRef: selected.directoryRef,
   op: 'write', path: 'exports/report.txt', content: 'ready' });
 ```
 
-`files` 单独列在安装/更新与详情权限清单，批准记录沿用 Host receipt；缺少批准时首次调用
-复用宿主确认，拒绝后由详情页重试。选目录的系统对话框另外明确说明读、写、列举、删除和
+`files` 单独列在安装/更新与详情能力清单；整体安装批准有效、启用且声明 files 即可使用，
+不追加工具组批准。选目录的系统对话框只选择实际资源，明确说明读、写、列举、删除和
 持续监听范围。只有这次明确选择才签发 `directoryRef`；旧的 pick 路径、过户票据、
 `fs:true` 和未知声明不会自动取得引用或访问权。引用不返回绝对路径，不要求 Node 能力。
 

@@ -15,10 +15,10 @@
   "switchRetro": "Mudar para retrô",
   "skinSwipeHint": "Deslize para a esquerda ou direita aqui para mudar a aparência.",
   "hostDisconnected": "O computador encerrou a conexão de área de trabalho remota.",
-  "privacyScreen": "Tela de privacidade do computador",
-  "privacyScreenHint": "Oculte as telas do computador. Clique ou pressione uma tecla no computador e confirme para desconectar. O bloqueio ao sair será aplicado se estiver ativado.",
-  "privacyActive": "A tela de privacidade está ativada. Clique ou pressione uma tecla no computador e confirme para desconectar. O bloqueio ao sair será aplicado se estiver ativado.",
-  "privacyFailed": "Não foi possível ativar a tela de privacidade. As telas do computador ainda podem estar visíveis.",
+  "privacyScreen": "Tela de privacidade durante a conexão",
+  "privacyScreenHint": "Cobre a tela deste computador durante o controle remoto. Se alguém clicar ou pressionar uma tecla no computador, pergunta antes de desconectar.",
+  "privacyActive": "A tela de privacidade está ativada. Se alguém clicar ou pressionar uma tecla no computador, pergunta antes de desconectar.",
+  "privacyFailed": "Não foi possível ativar a tela de privacidade. A tela do computador ainda pode estar visível.",
   "clipboardSync": "Sincronização da área de transferência",
   "clipboardSyncHint": "Sincronize texto, imagens e texto formatado nos dois sentidos enquanto o app estiver em primeiro plano. Permita colar se o iPhone solicitar.",
   "clipboardSyncConflict": "As duas áreas de transferência mudaram. As duas cópias foram mantidas. Copie novamente em qualquer dispositivo para sincronizar.",
@@ -194,7 +194,7 @@
   "idleMinutes_other": "{{count}} minutos",
   "idleDisconnected": "Desconectado por inatividade. Reconecte quando estiver pronto.",
   "backgroundDisconnected": "A área de trabalho remota foi encerrada quando o Cindy entrou em segundo plano. Reconecte para continuar.",
-  "lockOnExit": "Bloquear computador ao sair",
+  "lockOnExit": "Proteger computador ao sair",
   "lockOnExitHint": "Bloqueia o computador ao sair da área de trabalho remota.",
   "lockOnExitFailed": "Não foi possível confirmar que o computador foi bloqueado. Verifique o computador antes de deixá-lo sem supervisão.",
   "hostMute": "Silenciar computador remoto",
@@ -209,5 +209,8 @@
   "keyAppWindows": "Janelas do app",
   "keySearch": "Buscar",
   "keyTaskView": "Visão de tarefas",
-  "keySpace": "Espaço"
+  "keySpace": "Espaço",
+  "lockOnExitHintPrivacy": "Mostra a tela de privacidade ao sair, para a IA continuar trabalhando; tocar no computador o bloqueia.",
+  "lockedEnablePrivacyHint": "Para a IA continuar usando este computador enquanto você está fora, ative a tela de privacidade nas Configurações dele → Geral → Quando você está fora.",
+  "protectingOnExit": "Mostrando a tela de privacidade…"
 }

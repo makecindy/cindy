@@ -1,3 +1,4 @@
+import { ResolvedProjectIcon } from './sidebar/ResolvedProjectIcon';
 import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
 import { askPluginModelRoute, usePluginModels, writePluginModelRouteNote } from './pluginModelRoute';
 import { bindModelGroupSession, modelGroupLocationNameFrom, resolveModelGroup, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
@@ -59,7 +60,12 @@ import { themeService } from '@/themes/theme-service';
 import type { Theme as ColorTheme } from '@/themes/types';
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
 import { ChatInput } from '@/components/new-chat/ChatInput';
-import { WorktreeChipsRow } from '@/components/new-chat/WorktreeChipsRow';
+import {
+  WorktreeChipsRow,
+  type WorktreeDefaultSource,
+  type CheckoutBranchView,
+} from '@/components/new-chat/WorktreeChipsRow';
+import { checkDraftBranchBeforeStart } from './newMakerDraftBranchCheck';
 import {
   FolderPickerPopover,
   type FolderPickerDeviceScope,
@@ -281,7 +287,8 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { extractIpcError } from '@/utils/ipcError';
-import { rememberRemoteDraftDefaults, forgetRemoteDraftDefaults } from './remoteDraftDefaultsCache';
+import { rememberRemoteDraftDefaults, forgetRemoteDraftDefaults, getRemoteDraftDefaults } from './remoteDraftDefaultsCache';
+import { nextRemoteDraftEngine } from './remoteDraftEngineFollow';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import {
   useAgentCapabilities,
@@ -915,6 +922,16 @@ export function NewMakerDraftRoute() {
   const pageDragCounterRef = useRef(0);
   const [pageDragOver, setPageDragOver] = useState(false);
   const [wtCreating, setWtCreating] = useState(false);
+  const [wtCheckoutBusy, setWtCheckoutBusy] = useState(false);
+  const wtCheckoutBusyRef = useRef(false);
+  const wtCheckoutBranchViewRef = useRef<CheckoutBranchView | null>(null);
+  const handleWtCheckoutBranchViewChange = useCallback((view: CheckoutBranchView | null) => {
+    wtCheckoutBranchViewRef.current = view;
+  }, []);
+  const handleWtCheckoutBusyChange = useCallback((busy: boolean) => {
+    wtCheckoutBusyRef.current = busy;
+    setWtCheckoutBusy(busy);
+  }, []);
   // 首页「+」→「新建目标」弹窗开关 + 打开时输入框已有文字(作默认目标内容)。
   const [newGoalOpen, setNewGoalOpen] = useState(false);
   const [newGoalInitialObjective, setNewGoalInitialObjective] = useState('');
@@ -923,6 +940,7 @@ export function NewMakerDraftRoute() {
   const [wtEnabled, setWtEnabled] = useState(false);
   const [wtName, setWtName] = useState('');
   const [wtSourceBranch, setWtSourceBranch] = useState('');
+  const [wtDefaultSource, setWtDefaultSource] = useState<WorktreeDefaultSource | null>(null);
   const [wtBaseRepo, setWtBaseRepo] = useState<string | null>(null);
   const [wtSupportsRecoveryKeyDiscard, setWtSupportsRecoveryKeyDiscard] = useState<boolean | null>(
     null,
@@ -1818,6 +1836,29 @@ export function NewMakerDraftRoute() {
     skipDefaultsRefetchRef,
     remoteDraftRevisionRef,
   } = remoteDefaults;
+
+  // 到另一台电脑新建任务：引擎跟随那台电脑自己的新建任务；回到本机再还原(见 remoteDraftEngineFollow)。
+  // 只用本次请求或推送确认的引擎；缓存可预览配置，但不能提前结束引擎跟随。
+  useEffect(() => {
+    const deviceId = isDeviceLinkDraft ? effectiveDeviceLinkDeviceId ?? null : null;
+    const confirmed = remoteDefaults.confirmedEngineRef.current;
+    const defaults = confirmed?.deviceId === deviceId ? confirmed : undefined;
+    const next = nextRemoteDraftEngine({
+      ownerId: dataOwnerId,
+      deviceId,
+      currentVendor: draft.vendor,
+      defaultsReady: defaults !== undefined,
+      selectedAgentKind: defaults?.selectedAgentKind,
+    });
+    if (next) switchVendor(next, { remoteFollow: true });
+  }, [
+    dataOwnerId,
+    isDeviceLinkDraft,
+    effectiveDeviceLinkDeviceId,
+    capabilityAgentKind,
+    draft.vendor,
+    remoteDraftState.value,
+  ]);
 
   // 运行 Agent 的电脑只提供模型目录：没有它的草稿默认值，改用本次运行内对这台电脑的上一次
   // 选择 + 本机为这台电脑记的每模型档位(见 agentDeviceDraftMemory)。任务建到被控电脑时，权限
@@ -3292,7 +3333,7 @@ export function NewMakerDraftRoute() {
   // 自动 pickup 新 vendor 的 lastByVendor 值。
   const handleVendorChange = useCallback((next: MakerVendor) => {
     markDefaultTupleCustomized();
-    switchVendor(next);
+    switchVendor(next, { userSelected: true });
   }, []);
 
   // 当前草稿选中的 vendor 变为不可用(如 Pi 未注册 / 被控端无 Pi)时,coerce 到首个可用来源
@@ -3529,7 +3570,7 @@ export function NewMakerDraftRoute() {
       // event 到达前的旧 Harness。switchVendor 自身同值早返，不会制造额外写入。
       // 手动选了普通模型 = 取消插件模型。
       if (getDraft().pluginModel || getDraft().modelGroup) patchDraft({ pluginModel: null, modelGroup: null });
-      switchVendor(selection.vendor);
+      switchVendor(selection.vendor, { userSelected: true });
       // ── 远程 Agent:模型面板里选到了另一台电脑上的模型(或从那台回到任务所在电脑)──────
       // 连 Agent 的运行位置一起换。任务、项目、附件都在任务所在电脑(本机或被控电脑),一概不动;
       // 只有模型目录与这次选择改按目标电脑。
@@ -3736,7 +3777,7 @@ export function NewMakerDraftRoute() {
     && !effectiveAgentDeviceId && !activePluginModel && !activeModelGroup && unifiedModelPanelActive && draft.vendor !== 'orca'
     ? localProviders.find((provider) => provider.id === effectiveSourceId) ?? null
     : null;
-  const runLocation = useProviderBorrow(runLocationProvider).location;
+  const { location: runLocation, routeProviderId: runLocationProviderId, borrowedCatalog: runLocationCatalog } = useProviderBorrow(runLocationProvider);
   const runLocationAppliedRef = useRef<string | null>(null);
   useEffect(() => {
     if (!runLocationProvider || !draftInitialModel) return;
@@ -3745,19 +3786,21 @@ export function NewMakerDraftRoute() {
       return;
     }
     const device = remoteAgentDevices?.find((candidate) => candidate.deviceId === runLocation);
-    const key = `${runLocationProvider.id}:${runLocation}`;
+    const key = `${runLocationProvider.id}:${runLocation}:${runLocationProviderId}`;
     if (!device || runLocationAppliedRef.current === key) return;
+    // A matching account does not imply that this computer exposes the selected model.
+    if (!runLocationCatalog?.provider.models[dbToMakerAgentKind(draft.vendor)]?.some(model => model.id === draftInitialModel && !model.disabled)) return;
     runLocationAppliedRef.current = key;
     handleUnifiedDraftSelect({
       vendor: draft.vendor,
-      providerId: runLocationProvider.id,
+      providerId: runLocationProviderId ?? runLocationProvider.id,
       modelId: draftInitialModel,
       ...(draftInitialEffort ? { effort: draftInitialEffort } : {}),
       fast: effectiveFastMode,
       favoriteUid: selectedFavoriteUid,
       agentDevice: { deviceId: device.deviceId, name: device.name },
     });
-  }, [runLocationProvider, runLocation, remoteAgentDevices, draftInitialModel, draftInitialEffort, draft.vendor,
+  }, [runLocationProvider, runLocationProviderId, runLocationCatalog, runLocation, remoteAgentDevices, draftInitialModel, draftInitialEffort, draft.vendor,
     effectiveFastMode, selectedFavoriteUid, handleUnifiedDraftSelect]);
 
   // ─── 用户改 workingDir(FolderPicker)→ 写回 draft ─────────────────────
@@ -4241,25 +4284,34 @@ export function NewMakerDraftRoute() {
     setWtName(name);
   }, []);
 
+  // Only explicit picks live in wtSourceBranch. The row's derived default is
+  // scoped to the execution device/repository and never written to preferences.
+  const wtEffectiveSourceBranch =
+    wtSourceBranch ||
+    (wtDefaultSource?.baseRepo === wtBaseRepo &&
+    wtDefaultSource?.deviceId === (effectiveDeviceLinkDeviceId ?? null)
+      ? wtDefaultSource.sourceBranch
+      : '');
+  const wtSourceReady = wtBranchPreferenceReady && !!wtEffectiveSourceBranch;
   const wtRef = useRef({
     enabled: wtEnabled,
     name: wtName,
-    sourceBranch: wtSourceBranch,
+    sourceBranch: wtEffectiveSourceBranch,
     baseRepo: wtBaseRepo,
     supportsRecoveryKeyDiscard: wtSupportsRecoveryKeyDiscard,
     confirmedIneligible: wtConfirmedIneligible,
-    branchPreferenceReady: wtBranchPreferenceReady,
+    branchPreferenceReady: wtSourceReady,
     branchPreferenceSaving: wtBranchPreferenceSaving,
     preferenceSaving: wtPreferenceSaving,
   });
   wtRef.current = {
     enabled: wtEnabled,
     name: wtName,
-    sourceBranch: wtSourceBranch,
+    sourceBranch: wtEffectiveSourceBranch,
     baseRepo: wtBaseRepo,
     supportsRecoveryKeyDiscard: wtSupportsRecoveryKeyDiscard,
     confirmedIneligible: wtConfirmedIneligible,
-    branchPreferenceReady: wtBranchPreferenceReady,
+    branchPreferenceReady: wtSourceReady,
     branchPreferenceSaving: wtBranchPreferenceSaving,
     preferenceSaving: wtPreferenceSaving,
   };
@@ -4391,15 +4443,16 @@ export function NewMakerDraftRoute() {
       // worktree 是用户对本次 project session 的明确选择。探测、分支偏好或远端
       // recovery 能力尚未就绪时保留输入并提示；绝不能把勾选静默降级成普通 session。
       // Checkbox APPLY 是双向门：无论 ON→OFF 还是 OFF→ON，创建都必须等
-      // 工作端确认，否则会把旧状态误当成这次用户意图。分支 APPLY 则只在
-      // Worktree ON 时阻塞；OFF 仍可直接创建普通 session，保持两条轴独立。
+      // 工作端确认，否则会把旧状态误当成这次用户意图。分支 APPLY 在 OFF 时也须
+      // 等待：旧回显分支可能等于 HEAD，而用户刚选的新分支并不等于 HEAD。
       // 确认不合格(2026-08-07 裁决)时控件隐藏、勾选不生效，偏好写入在途不应
       // 卡住普通会话创建——确认不合格目录永远不会创建 worktree。
       if (
         selectedWorktree.confirmedIneligible !== true &&
-        (wtPreferenceSavingRef.current ||
+        (wtCheckoutBusyRef.current ||
+          wtPreferenceSavingRef.current ||
           wtPreferenceAuthorityUnknownRef.current ||
-          (selectedWorktree.enabled && wtBranchPreferenceSavingRef.current))
+          wtBranchPreferenceSavingRef.current)
       ) {
         toast.warning(t('ccAgent.draft.deviceStillLoading'));
         return false;
@@ -4447,6 +4500,29 @@ export function NewMakerDraftRoute() {
       void (async () => {
         try {
           if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
+          const branchView = wtCheckoutBranchViewRef.current;
+          const displayedBranch =
+            branchView?.cwd === selectedWorkingDir &&
+            branchView?.deviceId === (effectiveDeviceLinkDeviceId ?? null)
+              ? branchView.displayedBranch
+              : undefined;
+          const branchError = await checkDraftBranchBeforeStart({
+            workingDir: selectedWorkingDir,
+            deviceId: effectiveDeviceLinkDeviceId,
+            ssh: isRemoteProjectDraft,
+            worktree: selectedWorktree,
+            displayedBranch,
+          });
+          if (!isCurrentDataOwner()) return;
+          if (branchError) {
+            if (typeof branchError === 'object') {
+              branchView?.refresh();
+              toast.error(t(branchError.code, { branch: branchError.branch }));
+            } else {
+              toast.error(t(branchError));
+            }
+            return;
+          }
           // 插件模型：建任务前问一次插件。插件只能从已连接的模型里选(主进程校验)，
           // 没回应、没意见或选了用不了的模型都沿用用户原来的模型；下面整笔创建都用这一组值。
           const pluginRoute = pluginModelAtSend
@@ -5665,15 +5741,15 @@ export function NewMakerDraftRoute() {
         const selectedWorktree = { ...wtRef.current };
         // Keep Goal on the exact same worktree contract as Send.  In
         // particular, an in-flight checkbox write blocks both directions,
-        // while an in-flight branch write only blocks a Worktree-enabled
-        // project.  OFF remains an ordinary base-repo create even if the
-        // independent branch preference transaction is still settling.
+        // and an in-flight branch choice must settle before comparing it with
+        // the current checkout, including when worktree is OFF.
         // 确认不合格(2026-08-07 裁决)时跳过偏好写入守卫,与 Send 同口径。
         if (
           selectedWorktree.confirmedIneligible !== true &&
-          (wtPreferenceSavingRef.current ||
+          (wtCheckoutBusyRef.current ||
+            wtPreferenceSavingRef.current ||
             wtPreferenceAuthorityUnknownRef.current ||
-            (selectedWorktree.enabled && wtBranchPreferenceSavingRef.current))
+            wtBranchPreferenceSavingRef.current)
         ) {
           throw new Error(t('ccAgent.draft.deviceStillLoading'));
         }
@@ -5700,6 +5776,27 @@ export function NewMakerDraftRoute() {
         const isCurrentDataOwner = () =>
           dataOwnerAtGoal.dataOwnerId === dataOwnerId &&
           isDataOwnerGenerationCurrent(dataOwnerAtGoal);
+        const branchView = wtCheckoutBranchViewRef.current;
+        const displayedBranch =
+          branchView?.cwd === selectedWorkingDir &&
+          branchView?.deviceId === (effectiveDeviceLinkDeviceId ?? null)
+            ? branchView.displayedBranch
+            : undefined;
+        const branchError = await checkDraftBranchBeforeStart({
+          workingDir: selectedWorkingDir,
+          deviceId: effectiveDeviceLinkDeviceId,
+          ssh: isRemoteProjectDraft,
+          worktree: selectedWorktree,
+          displayedBranch,
+        });
+        if (!isCurrentDataOwner()) throw new Error(t('ccAgent.draft.createSessionFailed'));
+        if (branchError) {
+          if (typeof branchError === 'object') {
+            branchView?.refresh();
+            throw new Error(t(branchError.code, { branch: branchError.branch }));
+          }
+          throw new Error(t(branchError));
+        }
         let policyEnabled = collabPolicy.enabled;
         if (effectiveCollab.enabled && collabPolicyEligible) {
           if (collabPolicy.loading) {
@@ -6673,7 +6770,9 @@ export function NewMakerDraftRoute() {
                   onOpenChange={handleDevicePickerOpenChange}
                   // 窄屏 pill 排会进正常流并 flex-wrap;多台时收成图标 + 状态点少占一行。
                   compact={isDraftNarrow && selectableDevices.length > 1}
-                  disabled={wtCreating || sendInFlight || directoryRecoverySelecting}
+                  disabled={
+                    wtCreating || wtCheckoutBusy || sendInFlight || directoryRecoverySelecting
+                  }
                 />
                 <FolderPickerPopover
                   open={folderPickerOpen}
@@ -6698,15 +6797,19 @@ export function NewMakerDraftRoute() {
                   <button
                     type="button"
                     data-testid="create-agent-mode-pill"
-                    disabled={wtCreating || sendInFlight || directoryRecoverySelecting}
+                    disabled={
+                      wtCreating || wtCheckoutBusy || sendInFlight || directoryRecoverySelecting
+                    }
                     className="inline-flex h-[30px] min-w-20 max-w-[220px] items-center justify-center gap-1.5 rounded-full border border-[var(--create-agent-control-border)] bg-[var(--create-agent-control-bg)] px-3 text-12 font-medium leading-[1.167] text-[var(--create-agent-control-text)] transition-colors hover:bg-[var(--create-agent-control-bg-hover)] active:bg-[var(--create-agent-control-bg-pressed)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--create-agent-focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
                     aria-label={t('newChat.collaboration.modeLabel')}
                   >
-                    <MessageSquare
+                    {effectiveWorkingDir ? <ResolvedProjectIcon directory={effectiveWorkingDir}
+                      remoteHostId={effectiveRemoteHostId} deviceId={effectiveDeviceLinkDeviceId}
+                      name={createAgentModeLabel} size={18} /> : <MessageSquare
                       size={12}
                       strokeWidth={2}
                       className="shrink-0 text-[var(--create-agent-control-icon)]"
-                    />
+                    />}
                     <span className="min-w-0 truncate">{createAgentModeLabel}</span>
                     <ChevronDown
                       size={12}
@@ -6725,6 +6828,9 @@ export function NewMakerDraftRoute() {
                   onEnabledChange={handleWtEnabledChange}
                   sourceBranch={wtSourceBranch}
                   onSourceBranchChange={handleWtSourceBranchChange}
+                  onDefaultSourceBranchChange={setWtDefaultSource}
+                  onCheckoutBranchViewChange={handleWtCheckoutBranchViewChange}
+                  onCheckoutBusyChange={handleWtCheckoutBusyChange}
                   onBaseRepoChange={handleWtBaseRepoChange}
                   onRecoveryKeyDiscardSupportChange={handleWtRecoveryKeyDiscardSupportChange}
                   onConfirmedIneligibleChange={handleWtConfirmedIneligibleChange}
@@ -6763,7 +6869,7 @@ export function NewMakerDraftRoute() {
                     // 几次隧道往返。锁定态即时告诉用户「已发出、处理中」,也免得这段时间补写的
                     // 内容在交接成功清空草稿时被一并丢掉;失败解锁后原文仍在。
                     disabled={sendInFlight}
-                    sendBlocked={directoryRecoverySelecting}
+                    sendBlocked={directoryRecoverySelecting || wtCheckoutBusy}
                     settingsLocked={directoryRecoverySelecting}
                     onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
                     externalDragOver={pageDragOver}

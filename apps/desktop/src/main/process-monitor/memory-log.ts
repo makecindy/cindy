@@ -61,6 +61,41 @@ export function formatMemorySample(
   );
 }
 
+/** perf_hooks `monitorEventLoopDelay()` 返回的直方图里本模块用到的子集,单位纳秒。 */
+export interface EventLoopDelayHistogram {
+  percentile(percentile: number): number;
+  readonly max: number;
+  reset(): void;
+  disable(): boolean;
+}
+
+const NS_PER_MS = 1_000_000;
+
+/**
+ * 主进程事件循环延迟计数:每次采样输出上一个采样窗口内的 p99 / 最大值(毫秒)后清零。
+ *
+ * 2026-11 个人版日志里远程请求偶发 50 秒、日志出现多段 5–11 秒空白,同时 DB worker 执行
+ * 只有几毫秒、结果回到主线程却要等将近 1 秒——症状指向主线程被占,但没有任何指标能直接
+ * 证明是哪一段时间、卡了多久。窗口最大值能回答「这 10 分钟里最长卡了多久」,p99 区分
+ * 偶发长停顿和持续拥塞。只有整数毫秒,保持本行可上报。
+ */
+export function createEventLoopDelayCounters(histogram: EventLoopDelayHistogram): {
+  counters(): MemoryLogCounters;
+  stop(): void;
+} {
+  return {
+    counters() {
+      const p99 = histogram.percentile(99) / NS_PER_MS;
+      const max = histogram.max / NS_PER_MS;
+      histogram.reset();
+      return { eventLoopDelayP99Ms: Math.round(p99), eventLoopDelayMaxMs: Math.round(max) };
+    },
+    stop() {
+      histogram.disable();
+    },
+  };
+}
+
 export interface MemoryLogDeps {
   getMetrics(): readonly MemoryLogMetric[];
   memoryUsage(): MainMemoryUsage;

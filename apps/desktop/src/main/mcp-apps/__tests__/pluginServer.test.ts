@@ -94,24 +94,53 @@ async function fixture() {
   };
 }
 describe('plugin virtual App server', () => {
+  // Unit: real SDK resource/bridge/runner. A named installed page must work
+  // without a legacy-page registry entry or an Agent permission interaction.
+  it.each([null, 'task'])('opens and calls a named plugin page outside legacy page approval (%s)', async sessionId => {
+    const { client, grant, events } = await fixture();
+    const config: AppServerConfig = { id: 'plugin-source', url: '', transport: 'in-process',
+      plugin: { instance: grant.instance, revision: grant.revision, domains: ['https://api.example.com'],
+        assertCurrent() {} } as AppServerConfig['plugin'] };
+    const authorizeTool = vi.fn(async () => { throw new Error('Agent approval must not run'); });
+    const host = new McpAppsHost({ owner: () => owner, config: () => undefined,
+      readCard: vi.fn(), writeCard: vi.fn(), sendMessage: vi.fn(), authorizeTool,
+      connection: () => ({ tools: async () => (await client.listTools()).tools, getClient: async () => client,
+        resource: async (uri: string) => ({ result: await client.readResource({ uri }), meta: {} }),
+        listen: () => () => {}, close: async () => {} }) as unknown as AppConnection });
+    const owner = {};
+    try {
+      const document = await host.openResource('renderer:1', sessionId, { config, id: 'named', title: 'Named',
+        serverId: config.id, serverRevision: host.serverRevision(config), resourceUri: 'ui://planner', assertCurrent: grant.assertCurrent }, {});
+      await host.dispatch('renderer:1', sessionId, document.viewId, { jsonrpc: '2.0', id: 1, method: 'ui/initialize',
+        params: { protocolVersion: '2026-01-26', appInfo: { name: 'Named', version: '1' }, appCapabilities: {} } });
+      const initial = await host.poll('renderer:1', sessionId, document.viewId, 0);
+      await host.dispatch('renderer:1', sessionId, document.viewId, { jsonrpc: '2.0', method: 'ui/notifications/initialized' });
+      await host.dispatch('renderer:1', sessionId, document.viewId, { jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: { name: 'save', arguments: { value: 'saved' } } });
+      await vi.waitFor(() => expect(events).toEqual([sessionId]));
+      const result = await host.poll('renderer:1', sessionId, document.viewId, initial.at(-1)!.seq);
+      expect(result).toContainEqual(expect.objectContaining({ message: expect.objectContaining({ id: 2,
+        result: { content: [{ type: 'text', text: '{"value":"saved"}' }] } }) }));
+      expect(authorizeTool).not.toHaveBeenCalled();
+    } finally { await host.reset(); }
+  });
   // Unit: real native-action Host -> SDK server -> one-use grant. Existing page
   // ticket cases do not originate in native composer input; no local path may enter args.
-  it('carries native attachment authority through the original ticket without exposing its path in args', async () => {
+  it.each([null, 'task'])('runs a native action without Agent approval and preserves its source ticket (%s)', async sessionId => {
     const { client, grants } = await fixture();
     const owner = {};
     const config: AppServerConfig = { id: 'plugin-source', url: '', transport: 'in-process',
       plugin: { instance: 'demo', revision: 'v1' } as AppServerConfig['plugin'] };
-    const authorizeTool = vi.fn(async () => {});
-    const host = new McpAppsHost({ owner: () => owner, config: () => config,
+    const authorizeTool = vi.fn(async () => { throw new Error('Agent approval must not run'); });
+    const host = new McpAppsHost({ owner: () => owner, config: () => undefined,
       connection: () => ({ tools: async () => (await client.listTools()).tools, getClient: async () => client }) as AppConnection,
       authorizeTool, readCard: vi.fn(), writeCard: vi.fn(), sendMessage: vi.fn() });
     const args = { attachment: { name: 'input.pdf', size: 5, mimeType: 'application/pdf' } };
-    const result = await host.callPluginAction('renderer:1', null, { serverId: config.id, id: 'parse', title: 'Parse',
-      attachments: [path.resolve('input.pdf')], assertCurrent() {} }, 'save', args, new AbortController().signal);
+    const result = await host.callPluginAction('renderer:1', sessionId, { config, id: 'parse', title: 'Parse',
+      attachmentBytes: new Uint8Array(5), assertCurrent() {} }, 'save', args, new AbortController().signal);
     expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual(args);
-    expect(grants[0]).toMatchObject({ sessionId: null, attachments: [path.resolve('input.pdf')] });
-    expect(authorizeTool).toHaveBeenCalledWith(null, expect.objectContaining({ name: 'save' }), args,
-      expect.any(AbortSignal), expect.objectContaining({ caller: 'renderer:1' }));
+    expect(grants[0]).toMatchObject({ sessionId, attachmentBytes: new Uint8Array(5) });
+    expect(authorizeTool).not.toHaveBeenCalled();
     await host.reset();
   });
   it('projects shared pages and visibility into standard MCP tools and resource metadata', async () => {

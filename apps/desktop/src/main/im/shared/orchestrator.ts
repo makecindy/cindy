@@ -71,7 +71,10 @@ const registry = new Map<string, ImOrchestrator>();
 // Background sends can be the first activity after restart: restore only output
 // routing from the saved channel identity, without creating/resuming a session.
 onChannelTurn(async (session, phase, source) => {
-  if (phase !== 'starting') return;
+  if (phase !== 'starting') {
+    for (const orchestrator of registry.values()) orchestrator.turnRunner.noteChannelTurnSource(session, undefined);
+    return;
+  }
   if (source === 'provider-wake' || source === 'provider-wake-local') {
     // No send precedes a harness wake-up: its first event fans out right after this synchronous
     // call. Only output already wired for a channel can be marked in time; a cold route restored

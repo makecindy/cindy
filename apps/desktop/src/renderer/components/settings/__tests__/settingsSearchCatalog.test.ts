@@ -169,29 +169,21 @@ describe('settings discoverability regressions', () => {
   });
   // Unit regression (#8481): script/style controls mount only for an explicitly
   // selected classical locale; ordinary and system preferences leave them absent.
-  it.each(['en', 'zh-CN', 'system', 'zh-Hans-x-lzh', 'zh-Hant-x-lzh'])(
+  it.each(['en', 'zh-CN', 'zh-TW', 'system', 'zh-Hans-x-lzh', 'zh-Hant-x-lzh'])(
     'finds classical controls only when mounted for %s', (locale) => {
       const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, locale });
       expect(searchSettings(documents, '唐诗').some(({ entry }) => entry.id === 'general.classicalLanguage')).toBe(locale.endsWith('-x-lzh'));
       for (const lng of ['zh-CN', 'en']) {
         const matches = searchSettings(documents, searchI18n.t('settings.language.classical.label', { lng }));
         expect(matches.some(({ entry }) => entry.id === 'general.classicalLanguage')).toBe(locale.endsWith('-x-lzh'));
+        const styles = searchSettings(documents, searchI18n.t('settings.language.classical.styleAriaLabel', { lng }));
+        expect(styles.some(({ entry }) => entry.id === 'general.classicalLanguage')).toBe(locale.endsWith('-x-lzh'));
+        expect(styles.some(({ entry }) => entry.id === 'general.replyStyle')).toBe(false);
         const language = searchSettings(documents, searchI18n.t('settings.language.options.classical', { lng }));
         expect(language.some(({ entry }) => entry.id === 'general.displayLanguage')).toBe(true);
       }
     },
   );
-  // Unit regression (#8561): the modern-Chinese reply-style row is searchable by
-  // the style names it renders; classical and system/en locales keep it absent.
-  it.each(['en', 'zh-CN', 'zh-TW', 'system', 'zh-Hans-x-lzh'])('finds the reply-style row only in modern Chinese locales for %s', (locale) => {
-    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, locale });
-    const visible = locale === 'zh-CN' || locale === 'zh-TW';
-    expect(searchSettings(documents, '唐诗').some(({ entry }) => entry.id === 'general.replyStyle')).toBe(visible);
-    for (const lng of ['zh-CN', 'en']) {
-      const matches = searchSettings(documents, searchI18n.t('settings.language.classical.styleAriaLabel', { lng }));
-      expect(matches.some(({ entry }) => entry.id === 'general.replyStyle')).toBe(visible);
-    }
-  });
   // Unit regression (#8481): disabled refinement leaves both child controls
   // unmounted. Query real translated labels instead of inspecting declarations.
   it.each([false, true])('filters refinement children with refinementEnabled=%s', (voiceRefinementEnabled) => {

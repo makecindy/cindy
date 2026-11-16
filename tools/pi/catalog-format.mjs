@@ -91,6 +91,15 @@ export function toCindyProviderModel(row) {
         value >= 0,
     ),
   );
+  // Cerebras bills cached tokens at the standard input rate (FAQ checked 2026-11-13):
+  // https://inference-docs.cerebras.ai/capabilities/prompt-caching.md
+  // Correct the known stale Pi tariff on fresh imports and refreshes alike;
+  // a different channel or a newer tariff must remain authoritative.
+  if (provider === 'cerebras' && id === 'gpt-oss-120b' &&
+      baseUrl === 'https://api.cerebras.ai/v1' && api === 'openai-completions' &&
+      cost.input === 0.35 && cost.output === 0.75 && cost.cacheRead === 0) {
+    cost.cacheRead = cost.input;
+  }
   if (Array.isArray(row.cost?.tiers)) cost.tiers = row.cost.tiers;
   return {
     id,

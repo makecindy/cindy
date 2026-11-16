@@ -37,7 +37,11 @@ function describeRuntimes(runtimes: CustomProviderConfig['runtimes']) {
         wireProtocol: runtime.wireProtocol,
         supportsImageGeneration: runtime.supportsImageGeneration,
         imageApi: runtime.imageApi,
-        models: runtime.models.map((model) => ({ id: model.id, name: model.name, mode: model.mode })),
+        videoApi: runtime.videoApi,
+        models: runtime.models.map((model) => ({ id: model.id, name: model.name,
+          ...(model.mode ? { mode: model.mode } : {}),
+          ...(model.modalities ? { modalities: model.modalities } : {}),
+        })),
       },
     ]),
   );
@@ -109,11 +113,6 @@ export async function manageProviderConnection(
       name: change.name,
       auth: { method: authMethod },
       runtimes,
-    };
-    const imageApiOwners = Object.keys(runtimes).filter((agent) => runtimes[agent as AgentKind]?.imageApi === 'openai-images');
-    if (imageApiOwners.length > 1) return {
-      ok: false, saved: false, errorCode: 'IMAGE_API_OWNER_CONFLICT', imageApiOwners,
-      resolution: 'Declare imageApi on one runtime only; that runtime supplies the Images endpoint and credentials.',
     };
     if (!validateCustomProviderConfig(config).ok) throw new Error('Invalid connection');
     const busy = api.checkHostChange(config, null);
@@ -194,17 +193,6 @@ export async function manageProviderConnection(
           }
         : config.runtimes[change.agent]!;
     const next = { ...config, runtimes: { ...config.runtimes, [change.agent]: runtime } };
-    if (change.action === 'setRuntime' && runtime.imageApi === 'openai-images') {
-      // Match the connection editor's explicit single-owner selection. Preserve
-      // other runtimes and their credentials; never pick an owner by agent order.
-      for (const agent of Object.keys(next.runtimes) as AgentKind[]) {
-        const other = next.runtimes[agent];
-        if (agent !== change.agent && other?.imageApi) {
-          const { imageApi: _imageApi, ...rest } = other;
-          next.runtimes[agent] = rest;
-        }
-      }
-    }
     const endpoints = [
       ...new Set([runtime.baseUrl, runtime.modelsUrl].filter((url): url is string => !!url)),
     ];

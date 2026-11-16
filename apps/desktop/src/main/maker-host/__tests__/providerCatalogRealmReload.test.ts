@@ -7,10 +7,19 @@ import { providerShareGuestPeer } from '@cindy/device-link';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import * as activeCatalogForHostParity from '../active-catalog.js';
+import { readCreatedSubscriptionProviders } from '../../subscription-accounts/placement.js';
+import { createHostProviderConfig } from '../../../../../host/src/agent/provider-config.js';
+import { projectSubscriptionPoolCatalog } from '../subscriptionPoolCatalog.js';
+import { createHostModelContext } from '../../../../../host/src/agent/model-context.js';
+
 const h = vi.hoisted(() => ({
   endpoint: 'https://model.cn.example',
   buildEndpoint: 'https://model.cn.example',
   owner: 'owner-default',
+  profileRoot: null as string | null,
+  actualPlacement: false,
+  placementError: null as Error | null,
   imageKeys: new Map<string, string>(),
   speechKey: null as string | null,
   secretsClearedListeners: new Set<() => void>(),
@@ -40,6 +49,7 @@ const h = vi.hoisted(() => ({
   /** `${kind}:${accountId}` -> provider the account belongs to (placement.ts); absent = built-in. */
   placement: {} as Record<string, string>,
   restoreLegacy: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => false),
+  copyAccountOverrides: vi.fn(),
   /** Providers Cindy created for subscription accounts, and the providers whose accounts were read. */
   created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
   refreshed: new Set<string>(),
@@ -75,7 +85,16 @@ vi.mock('../../subscription-accounts/placement.js', async (importOriginal) => {
     readMergedLegacyCodexAccountId: merged,
     readMergedProviderAccount: merged,
     restoreAutoMergedLegacyCodexAccounts: h.restoreLegacy,
-    readCreatedSubscriptionProviders: () => h.created,
+    restoreUnplacedSubscriptionAccounts: (options: Parameters<typeof actual.restoreUnplacedSubscriptionAccounts>[0]) =>
+      h.actualPlacement ? actual.restoreUnplacedSubscriptionAccounts(options) : Promise.resolve(false),
+    readCreatedSubscriptionProviders: () => {
+      if (h.placementError) throw h.placementError;
+      return h.actualPlacement ? actual.readCreatedSubscriptionProviders() : h.created;
+    },
+    readCreatedSubscriptionProvidersIfReadable: () => {
+      if (h.placementError) throw h.placementError;
+      return h.actualPlacement ? actual.readCreatedSubscriptionProvidersIfReadable() : h.created;
+    },
   };
 });
 vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
@@ -105,6 +124,7 @@ vi.mock('../codex-account-auth.desktop.js', async (importOriginal) => {
 vi.mock('../model-disable-store.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../model-disable-store.js')>(),
   readModelDisableOverrides: () => ({ disabledModels: h.disabledModels, disabledProviders: {} }),
+  copyProviderDisableOverrides: h.copyAccountOverrides,
 }));
 
 vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => os.tmpdir(), userDataPath: (...parts: string[]) => path.join(os.tmpdir(), ...parts) }));
@@ -179,7 +199,7 @@ vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => `signed-out:${h.owner ?? 'none'}`,
   isAppSessionBoundaryPending: () => false,
   ownerScopedUserDataPath: (...segments: string[]) =>
-    path.join(os.tmpdir(), 'provider-catalog-realm-reload', h.owner, ...segments),
+    path.join(h.profileRoot ?? path.join(os.tmpdir(), 'provider-catalog-realm-reload'), h.owner, ...segments),
 }));
 vi.mock('../../../shared/brandRegion.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../shared/brandRegion.js')>();
@@ -256,6 +276,15 @@ vi.mock('../model-discovery/anthropic.js', () => ({
   loadAnthropicModelsFromDiskCache: async () => undefined,
   refreshAnthropicModelsFromHttp: async () => undefined,
 }));
+// Host and Desktop share the same asynchronous DB result; no database or credential IO here.
+vi.mock('../customProviderHeaderService.js', () => ({
+  createCustomProviderHeaderService: () => ({ listCustomProvidersWithSecureHeaders: () => h.customProviderRead() }),
+}));
+vi.mock('../../localDb/client/current.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../localDb/client/current.js')>();
+  const snapshot = {};
+  return { ...actual, getCurrentDbClientSnapshot: () => snapshot };
+});
 vi.mock('../custom-provider-header-secrets.js', () => ({
   listCustomProvidersWithSecureHeaders: () => h.customProviderRead(),
 }));
@@ -283,6 +312,8 @@ import {
 } from '@cindy/model-providers';
 import { resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection.js';
 import { deriveCindyMediaConfig } from '../../cindy-brain/cindyMediaCatalog.js';
+import { listEvaluationModels } from '../../cindy-evaluate/models.js';
+import { setModelVisibilityMirror, clearModelVisibilityMirror } from '../model-visibility-mirror.js';
 import { getProviderSecretStore } from '../../secrets/providerSecretStore.js';
 import {
   getActiveCatalog,
@@ -580,6 +611,279 @@ describe('provider catalog realm reload', () => {
       setActiveCatalog(previous);
     }
   });
+  it('filters legacy context profiles after imported pool projection in both desktop and Host', () => {
+    const input = structuredClone(getActiveCatalog());
+    const openai = input.providers.find(provider => provider.id === 'openai')!;
+    const model = (id: string) => ({ id, name: id, contextWindow: 100_000, efforts: [], defaultEffort: null });
+    openai.models.codex = [model('base-fixture')];
+    // The projection accepts native Codex imports independently of auth.method;
+    // only the canonical OAuth provider applies the legacy-profile filter. This
+    // input exposes a filter-before-projection implementation leaking the alias.
+    input.providers.push({ ...openai, id: 'legacy-order-fixture',
+      auth: { method: 'apiKey', native: 'codex' },
+      models: { codex: [model('gpt-order[1m]'), model('imported-order-fixture')] },
+    });
+    h.pool = { strategy: 'least', accounts: [{ id: 'imported', paused: false, limit: 4, weight: 1 }],
+      legacyCodexAccounts: { 'legacy-order-fixture': 'imported' } };
+    h.poolModels = null;
+    h.legacyLoggedIn.add('legacy-order-fixture');
+    const read = vi.spyOn(activeCatalogForHostParity, 'getActiveCatalog').mockReturnValue(input);
+    try {
+      const host = createHostModelContext({ readGatewayKey: () => null, hasCodexOAuthLogin: () => false,
+        codexAccountState: id => ({ authenticated: h.legacyLoggedIn.has(id) }) });
+      const ids = (catalog: typeof input) => catalog.providers.find(provider => provider.id === 'openai')!.models.codex!.map(m => m.id);
+      expect(ids(getDesktopSelectableCatalog())).toEqual(['base-fixture', 'imported-order-fixture']);
+      expect(ids(host.getSelectableCatalog())).toEqual(ids(getDesktopSelectableCatalog()));
+      expect(input.providers.at(-1)!.models.codex!.map(m => m.id)).toContain('gpt-order[1m]');
+    } finally {
+      read.mockRestore();
+      h.pool = null;
+      h.legacyLoggedIn.clear();
+    }
+  });
+
+  // Test value: main caf1429fc9/a11646d4cb/78efab80b8 changed placement and
+  // historical routing; the old OpenAI-only projection loses placed account models.
+  // Unit: real Desktop binding + Host selectable binding + shared routing core,
+  // with deterministic store ports, no CLI discovery or native homes.
+  it.each([false, true])('projects placed, merged, lent and paused accounts with routing=%s', (routing) => {
+    const input = structuredClone(getActiveCatalog());
+    const openai = input.providers.find(provider => provider.id === 'openai')!;
+    const model = (id: string) => ({ id, name: id, contextWindow: 100_000, efforts: [], defaultEffort: null });
+    openai.models = { codex: [model('base')] };
+    const imported = (id: string, modelId: string) => ({ ...openai, id,
+      auth: { method: 'apiKey' as const, native: 'codex' as const }, models: { codex: [model(modelId)] } });
+    input.providers = [openai, { ...openai, id: 'openai-created', subscriptionPool: 'openai', models: { codex: [model('created-base')] } },
+      { ...openai, id: 'borrower', models: { codex: [model('borrower-base')] } },
+      imported('legacy-merged', 'merged-only'), imported('legacy-lent', 'lent-only'), imported('legacy-paused', 'paused-only')];
+    h.pool = { strategy: 'least', accounts: ['merged', 'lent', 'paused'].map(id => ({ id, paused: id === 'paused', limit: 4, weight: 1 })),
+      legacyCodexAccounts: { 'legacy-merged': 'merged', 'legacy-lent': 'lent', 'legacy-paused': 'paused' } };
+    h.placement = { 'openai:merged': 'openai-created', 'openai:lent': 'borrower', 'openai:paused': 'borrower' };
+    h.created = { 'openai-created': { kind: 'openai', name: 'Created', account: 'merged' } };
+    h.boundAccountIdsByProvider = { 'openai-created': ['paused'] };
+    h.legacyLoggedIn = new Set(['legacy-merged', 'legacy-lent', 'legacy-paused']);
+    const read = vi.spyOn(activeCatalogForHostParity, 'getActiveCatalog').mockReturnValue(input);
+    const ids = (catalog: Catalog, id: string) => catalog.providers.find(p => p.id === id)!.models.codex!.map(m => m.id);
+    try {
+      const host = createHostModelContext({ readGatewayKey: () => null, hasCodexOAuthLogin: () => false,
+        codexAccountState: id => ({ authenticated: h.legacyLoggedIn.has(id) }) });
+      const ports = {
+        readPool: () => h.pool,
+        codexAccountState: (id: string) => ({ authenticated: h.legacyLoggedIn.has(id) }),
+        readSubscriptionPoolCodexModels: () => null,
+        getActiveCatalogWithCodexModels: activeCatalogForHostParity.getActiveCatalogWithCodexModels,
+        accountProviderId: (_kind: string, id: string) => h.placement[`openai:${id}`] ?? 'openai',
+        readMergedProviderAccount: (id: string) => h.pool?.legacyCodexAccounts?.[id],
+        readProviderBoundAccountIds: (_kind: string, id: string) => new Set(h.boundAccountIdsByProvider[id] ?? []),
+      } satisfies Parameters<typeof projectSubscriptionPoolCatalog>[1];
+      const projected = projectSubscriptionPoolCatalog(input, ports, routing);
+      expect(ids(projected, 'openai-created')).toEqual(routing ? ['created-base', 'merged-only', 'paused-only'] : ['created-base', 'merged-only']);
+      expect(ids(projected, 'borrower')).toEqual(['borrower-base', 'lent-only']);
+      // Host only consumes selectable=false; even in a routing test it must not
+      // absorb the paused historical model into its selectable list.
+      expect(ids(host.getSelectableCatalog(), 'openai-created')).toEqual(['created-base', 'merged-only']);
+      expect(host.getSelectableCatalog()).toEqual(getDesktopSelectableCatalog());
+    } finally {
+      read.mockRestore(); h.pool = null; h.placement = {}; h.created = {};
+      h.boundAccountIdsByProvider = {}; h.legacyLoggedIn.clear();
+    }
+  });
+
+  it.each([false, true])('keeps the explicit Desktop-discovery / Host-null difference with routing=%s', async routing => {
+    const previous = getActiveCatalog();
+    const input = structuredClone(previous);
+    const openai = input.providers.find(p => p.id === 'openai')!;
+    openai.models.codex = [{ id: 'host-snapshot', name: 'Host snapshot', contextWindow: 100_000, efforts: [], defaultEffort: null }];
+    input.providers.push({ ...openai, id: 'openai-discovery-created', subscriptionPool: 'openai', models: { codex: [{ id: 'created-snapshot', name: 'Created snapshot', contextWindow: 100_000, efforts: [], defaultEffort: null }] } });
+    h.created = { 'openai-discovery-created': { kind: 'openai', name: 'Created discovery', account: 'fixture' } };
+    h.poolConnectionByProvider = { 'openai-discovery-created': { serving: true, bound: true } };
+    const read = vi.spyOn(activeCatalogForHostParity, 'getActiveCatalog').mockReturnValue(input);
+    h.pool = { strategy: 'least', accounts: [{ id: 'fixture', paused: false, limit: 4, weight: 1 }] };
+    h.poolModels = [{ id: 'pool-discovered', name: 'Pool discovered', contextWindow: 100_000, efforts: [], defaultEffort: null }];
+    try {
+      const host = createHostModelContext({ readGatewayKey: () => null, hasCodexOAuthLogin: () => false,
+        codexAccountState: () => ({ authenticated: false }) });
+      const hostIds = host.getSelectableCatalog().providers.find(p => p.id === 'openai')!.models.codex!.map(m => m.id);
+      const desktop = routing ? getDesktopProviderService({ allowSideEffects: false }).listProviders({ catalog: input, snapshotOnly: true }) : null;
+      // The binding's default=false path also uses the discovered account list.
+      expect(getDesktopSelectableCatalog().providers.find(p => p.id === 'openai')!.models.codex!.map(m => m.id)).toEqual(['pool-discovered']);
+      expect(hostIds).toEqual(['host-snapshot']);
+      expect(host.getSelectableCatalog().providers.find(p => p.id === 'openai-discovery-created')!.models.codex!.map(m => m.id)).toEqual(['created-snapshot']);
+      expect(getDesktopSelectableCatalog().providers.find(p => p.id === 'openai-discovery-created')!.models.codex!.map(m => m.id)).toEqual(['pool-discovered']);
+      if (desktop) {
+        const views = await desktop;
+        expect(guestProviderModelIds(views, 'openai', 'codex')).toEqual(['pool-discovered']);
+        expect(guestProviderModelIds(views, 'openai-discovery-created', 'codex')).toEqual(['pool-discovered']);
+      }
+    } finally { read.mockRestore(); h.poolModels = null; h.pool = null; h.created = {}; h.poolConnectionByProvider = {}; }
+  });
+
+  // Test value: a created provider must reach the catalog at both production
+  // read boundaries, while unreadable placement and stale reads preserve isolation.
+  // Unit: one unique temp profile, real placement-file reader, no vault/network.
+  it('publishes the same placement file through Desktop and Host and preserves unreadable bytes', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-placement-parity-'));
+    const previousOwner = h.owner;
+    h.profileRoot = root; h.owner = randomUUID(); h.actualPlacement = true;
+    const file = path.join(root, h.owner, 'subscription-account-placement.json');
+    const config = createHostProviderConfig({ profileDir: root, ownerId: h.owner, openExternal: async () => {},
+      credentials: { decrypt: () => { throw Error('no credential IO'); }, read: () => null, write: () => { throw Error('no credential IO'); }, remove: () => {} } });
+    const publish = vi.spyOn(activeCatalogForHostParity, 'setSubscriptionPoolProviders');
+    try {
+      await fsp.mkdir(path.dirname(file), { recursive: true });
+      const contents = JSON.stringify({ accounts: {}, providers: { 'openai-sub-1234abcd': { kind: 'openai', name: 'Fixture', account: 'cindy-123456789abc-12345678-1234-1234-1234-123456789abc' } }, strategies: {} });
+      await fsp.writeFile(file, contents);
+      h.customProviderRead.mockResolvedValue([]);
+      await refreshCustomProvidersIntoCatalog();
+      expect(publish).toHaveBeenLastCalledWith([{ id: 'openai-sub-1234abcd', kind: 'openai', name: 'Fixture' }]);
+      const desktopArgs = publish.mock.lastCall;
+      await config.list();
+      expect(publish.mock.lastCall).toEqual(desktopArgs);
+      expect(getActiveCatalog().providers.some(p => p.id === 'openai-sub-1234abcd')).toBe(true);
+      await fsp.writeFile(file, '{unreadable-placement');
+      publish.mockClear();
+      await refreshCustomProvidersIntoCatalog(); await config.list();
+      // Publication preserves the current list; other readers keep default-empty semantics.
+      expect(publish).not.toHaveBeenCalled();
+      expect(getActiveCatalog().providers.some(p => p.id === 'openai-sub-1234abcd')).toBe(true);
+      expect(await fsp.readFile(file, 'utf8')).toBe('{unreadable-placement');
+      expect(readCreatedSubscriptionProviders()).toEqual({});
+      await fsp.writeFile(file, contents.replace('Fixture', 'Renamed'));
+      publish.mockClear();
+      await refreshCustomProvidersIntoCatalog(); await config.list();
+      const renamed = [[{ id: 'openai-sub-1234abcd', kind: 'openai', name: 'Renamed' }]];
+      expect(publish.mock.calls).toEqual([renamed, renamed]);
+      expect(getActiveCatalog().providers.find(p => p.id === 'openai-sub-1234abcd')?.name).toBe('Renamed');
+    } finally {
+      publish.mockRestore(); await config.close(); setCustomProviders([]);
+      h.profileRoot = null; h.owner = previousOwner; h.actualPlacement = false; h.customProviderRead.mockReset();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Unit: real owner-scoped placement file through both launchers. Publication
+  // must distinguish missing/valid-empty from unreadable without sharing old-owner state.
+  it.each(['valid-empty', 'missing', 'cold-and-new-owner'] as const)('publishes %s placement consistently in both launchers', async state => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-placement-states-'));
+    const previousOwner = h.owner;
+    h.profileRoot = root; h.owner = randomUUID(); h.actualPlacement = true;
+    const file = () => path.join(root, h.owner, 'subscription-account-placement.json');
+    const contents = JSON.stringify({ providers: { 'openai-sub-1234abcd': { kind: 'openai', name: 'Fixture',
+      account: 'cindy-123456789abc-12345678-1234-1234-1234-123456789abc' } } });
+    const createConfig = () => createHostProviderConfig({ profileDir: root, ownerId: h.owner, openExternal: async () => {},
+      credentials: { decrypt: () => { throw Error('no credential IO'); }, read: () => null, write: () => { throw Error('no credential IO'); }, remove: () => {} } });
+    let config = createConfig();
+    const exists = () => getActiveCatalog().providers.some(p => p.id === 'openai-sub-1234abcd');
+    try {
+      h.customProviderRead.mockResolvedValue([]);
+      await fsp.mkdir(path.dirname(file()), { recursive: true });
+      if (state === 'cold-and-new-owner') {
+        setCustomProviders([]);
+        await fsp.writeFile(file(), '{cold-damage');
+        await refreshCustomProvidersIntoCatalog(); await config.list();
+        expect(exists()).toBe(false);
+        await fsp.writeFile(file(), contents);
+        await refreshCustomProvidersIntoCatalog(); await config.list();
+        expect(exists()).toBe(true);
+        await config.close();
+        h.owner = randomUUID(); setCustomProviders([]); config = createConfig();
+        await fsp.mkdir(path.dirname(file()), { recursive: true }); await fsp.writeFile(file(), '{new-owner-damage');
+        await refreshCustomProvidersIntoCatalog(); await config.list();
+        expect(exists()).toBe(false);
+        expect(await fsp.readFile(file(), 'utf8')).toBe('{new-owner-damage');
+      } else {
+        for (const launcher of ['desktop', 'host']) {
+          await fsp.writeFile(file(), contents);
+          await (launcher === 'desktop' ? refreshCustomProvidersIntoCatalog() : config.list());
+          expect(exists()).toBe(true);
+          if (state === 'missing') await fsp.unlink(file()); else await fsp.writeFile(file(), '{}');
+          await (launcher === 'desktop' ? refreshCustomProvidersIntoCatalog() : config.list());
+          expect(exists()).toBe(false);
+        }
+      }
+    } finally {
+      await config.close(); setCustomProviders([]); h.profileRoot = null; h.owner = previousOwner;
+      h.actualPlacement = false; h.customProviderRead.mockReset(); await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // 2026-11-14 user correction: old wizard/pool additions must also become separate providers.
+  // Unit, real catalog refresh + placement file; prior restoration covered only legacy connections.
+  // Minimal failure: default + one unplaced account, no custom-provider connection to restore.
+  it('publishes a separate provider for an old pooled account on catalog refresh and keeps it on reload', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-pooled-account-restore-'));
+    const previous = getActiveCatalog();
+    const previousOwner = h.owner;
+    const accountId = 'cindy-123456789abc-12345678-1234-1234-1234-123456789abc';
+    h.profileRoot = root; h.owner = randomUUID(); h.actualPlacement = true;
+    h.pool = { strategy: 'least', accounts: ['default', accountId].map(id => ({ id, paused: false, limit: 4, weight: 1 })) };
+    h.customProviderRead.mockResolvedValue([]);
+    h.copyAccountOverrides.mockClear();
+    try {
+      setActiveCatalog(BUNDLED_CATALOG);
+      await refreshCustomProvidersIntoCatalog();
+      const created = getActiveCatalog().providers.filter(p => p.id.startsWith('openai-sub-'));
+      expect(created).toHaveLength(1);
+      expect(h.copyAccountOverrides).toHaveBeenCalledExactlyOnceWith('openai', created[0].id);
+      const file = path.join(root, h.owner, 'subscription-account-placement.json');
+      const persisted = await fsp.readFile(file, 'utf8');
+      expect(JSON.parse(persisted).accounts).toEqual({ [`openai:${accountId}`]: created[0].id });
+      await refreshCustomProvidersIntoCatalog();
+      expect(getActiveCatalog().providers.filter(p => p.id.startsWith('openai-sub-')).map(p => p.id)).toEqual([created[0].id]);
+      expect(await fsp.readFile(file, 'utf8')).toBe(persisted);
+    } finally {
+      setCustomProviders([]); setActiveCatalog(previous);
+      h.pool = null; h.profileRoot = null; h.owner = previousOwner;
+      h.actualPlacement = false; h.customProviderRead.mockReset();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('retains the published list in both launchers when the placement read port throws', async () => {
+    const config = createHostProviderConfig({ profileDir: os.tmpdir(), ownerId: h.owner, openExternal: async () => {},
+      credentials: { decrypt: () => '', read: () => null, write: () => {}, remove: () => {} } });
+    setSubscriptionPoolProviders([{ id: 'openai-current', kind: 'openai', name: 'Current' }]);
+    const publish = vi.spyOn(activeCatalogForHostParity, 'setSubscriptionPoolProviders');
+    try {
+      h.customProviderRead.mockResolvedValue([]);
+      h.placementError = Error('placement reader threw');
+      await refreshCustomProvidersIntoCatalog(); await config.list();
+      expect(publish).not.toHaveBeenCalled();
+      expect(getActiveCatalog().providers.some(p => p.id === 'openai-current')).toBe(true);
+      expect(h.warn).toHaveBeenCalledWith('publishing subscription providers failed', { err: 'Error: placement reader threw' });
+    } finally { publish.mockRestore(); h.placementError = null; await config.close(); setCustomProviders([]); h.customProviderRead.mockReset(); }
+  });
+
+  it.each(['owner', 'generation', 'failure'] as const)('does not publish a stale or failed %s read in either launcher', async reason => {
+    const previousOwner = h.owner;
+    const config = createHostProviderConfig({ profileDir: os.tmpdir(), ownerId: h.owner, openExternal: async () => {},
+      credentials: { decrypt: () => '', read: () => null, write: () => {}, remove: () => {} } });
+    const publish = vi.spyOn(activeCatalogForHostParity, 'setSubscriptionPoolProviders');
+    try {
+      for (const launcher of ['desktop', 'host']) {
+        h.created = { 'openai-current': { kind: 'openai', name: 'Current', account: 'current' } };
+        setSubscriptionPoolProviders([{ id: 'openai-current', kind: 'openai', name: 'Current' }]);
+        let resolve!: (configs: CustomProviderConfig[]) => void;
+        let reject!: (error: Error) => void;
+        h.customProviderRead.mockReset().mockReturnValueOnce(new Promise<CustomProviderConfig[]>((yes, no) => { resolve = yes; reject = no; }));
+        publish.mockClear();
+        const pending = launcher === 'desktop' ? refreshCustomProvidersIntoCatalog() : config.list();
+        if (reason === 'owner') h.owner = previousOwner + '-stale';
+        if (reason === 'generation') {
+          h.customProviderRead.mockResolvedValueOnce([]);
+          await (launcher === 'desktop' ? refreshCustomProvidersIntoCatalog() : config.list());
+          publish.mockClear();
+        }
+        if (reason === 'failure') reject(Error('fixture DB failure')); else resolve([]);
+        if (launcher === 'host' && reason !== 'generation') await expect(pending).rejects.toThrow(reason === 'owner' ? 'PROVIDER_OWNER_CHANGED' : 'fixture DB failure');
+        else await pending;
+        expect(publish).not.toHaveBeenCalled();
+        expect(getActiveCatalog().providers.some(p => p.id === 'openai-current')).toBe(reason !== 'failure');
+        h.owner = previousOwner;
+      }
+    } finally { publish.mockRestore(); await config.close(); h.owner = previousOwner; h.created = {}; setCustomProviders([]); h.customProviderRead.mockReset(); }
+  });
+
   // A connection merged into OpenAI (since 2026-11-13 only when the user chose it) keeps its model
   // membership under the canonical supplier through the real loader/view wiring. Regression: the
   // picker was covered but explicit/lazy full-catalog reads used by scheduled admission dropped
@@ -656,6 +960,30 @@ describe('provider catalog realm reload', () => {
       setActiveCatalog(previous);
     }
   });
+  // Unit: real provider-list wiring must retain channel readiness after hiding a
+  // standalone model, otherwise the user's OFF switch becomes impossible to re-enable.
+  it.each(['evaluation', 'rerank'] as const)('keeps hidden %s models manageable but excludes them from calls', async mode => {
+    const previous = getActiveCatalog();
+    const previousModels = activeCatalogForHostParity.getXdGatewayModels();
+    const id = `example-${mode}`;
+    const api = mode === 'evaluation' ? 'decisions' : 'rerank';
+    try {
+      setActiveCatalog(BUNDLED_CATALOG);
+      activeCatalogForHostParity.setXdGatewayModels([{ id, name: 'Standalone', mode, agents: [], availability: 'available' }]);
+      const agent = getActiveCatalog().providers.find(provider => provider.id === 'xd')!.agents[0];
+      setModelVisibilityMirror({ [`${agent}:xd:${id}`]: false });
+      const listed = await getDesktopProviderService().listProviders({ allowSideEffects: false, snapshotOnly: true });
+      expect(listed.find(provider => provider.id === 'xd')?.availableMediaModelIds).toContain(id);
+      expect(listEvaluationModels(api)).toEqual([]);
+      setModelVisibilityMirror({ [`${agent}:xd:${id}`]: true });
+      expect(listEvaluationModels(api)).toMatchObject([{ id }]);
+    } finally {
+      clearModelVisibilityMirror();
+      activeCatalogForHostParity.setXdGatewayModels([...previousModels]);
+      setActiveCatalog(previous);
+    }
+  });
+
   // #6768 unit regression: a hidden TTS route needs channel readiness in the
   // actual provider-list wiring before its management switch can be used.
   // Renderer tests inject that snapshot and could not catch missing Main wiring.

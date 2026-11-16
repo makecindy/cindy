@@ -334,6 +334,8 @@ describe('composer keyboard geometry and motion', () => {
   // 旧判定把遮挡算成 0，输入框被盖住且直到冷启动都不恢复。iPhone 没有悬浮键盘，
   // 这类坐标改用同宽度下最近一次正常的停靠高度；iPad 悬浮键盘由上面两例保持原判定。
   it('keeps the last docked height when iPhone reports an impossible keyboard frame', () => {
+    // 每次弹出相隔足够久：各算一次停稳的键盘，而不是同一次键盘还在调整高度。
+    const now = vi.spyOn(Date, 'now').mockReturnValue(100_000);
     native.viewport = { width: 400, height: 900, scale: 3, fontScale: 1 };
     const corner: KeyboardEvent = {
       duration: 383,
@@ -357,16 +359,18 @@ describe('composer keyboard geometry and motion', () => {
     emit('keyboardWillShow', corner);
     expect(height()).toBe(342);
     emit('keyboardWillHide', corner);
+    now.mockReturnValue(110_000);
     emit('keyboardWillShow', frame(520, 380));
     emit('keyboardWillHide');
     expect(height()).toBe(0);
-    expect(JSON.parse(storage.get('cindy.mobile.keyboard-docked-height.v2') ?? '{}')).toMatchObject({ 400: 380 });
+    expect(JSON.parse(storage.get('cindy.mobile.keyboard-docked-height.v2') ?? '{}')).toEqual({ 400: [300, 380] });
     emit('keyboardWillShow', corner);
     expect(height()).toBe(380);
     emit('keyboardDidChangeFrame', frame(368, 301));
     expect(height()).toBe(380);
     emit('keyboardWillHide', corner);
     // 转屏中途或换输入法时出现更矮的正常键盘，不能把沿用高度压低到盖住输入框。
+    now.mockReturnValue(120_000);
     emit('keyboardWillShow', frame(650, 250));
     expect(height()).toBe(250);
     emit('keyboardWillChangeFrame', corner);
@@ -404,6 +408,46 @@ describe('composer keyboard geometry and motion', () => {
     emit('keyboardWillHide');
     emit('keyboardWillShow', corner);
     expect(height()).toBe(230);
+  });
+
+  // 2026-11-16 Duo 外屏（466×678）：常用键盘 324，系统给错坐标时输入框却被抬到 417，悬在键盘上方
+  // 约 93pt。模拟器同屏实测英文 290、表情 338：偶尔出现一次的高键盘被永久记成最高值。
+  // 沿用高度只看最近几次停稳的键盘；先占位再定高的过渡帧算同一次，不单独占一条记录。
+  it('stops lifting for an occasional taller keyboard after ordinary keyboards return', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(100_000);
+    native.viewport = { width: 466, height: 678, scale: 3, fontScale: 1 };
+    const docked = (height: number): KeyboardEvent => ({
+      ...keyboardEvent(678 - height, height),
+      endCoordinates: { screenX: 0, screenY: 678 - height, width: 466, height },
+    });
+    const corner: KeyboardEvent = {
+      ...keyboardEvent(),
+      endCoordinates: { screenX: 192, screenY: 524, width: 274, height: 154 },
+    };
+    const show = (...heights: number[]) => {
+      now.mockReturnValue(Date.now() + 10_000);
+      heights.forEach((value, index) => {
+        emit(index === 0 ? 'keyboardWillShow' : 'keyboardWillChangeFrame', docked(value));
+        now.mockReturnValue(Date.now() + 300);
+      });
+      emit('keyboardWillHide');
+    };
+    const liftForImpossibleFrame = () => {
+      emit('keyboardWillShow', corner);
+      const lift = height();
+      emit('keyboardWillHide', corner);
+      return lift;
+    };
+    render();
+    show(324);
+    show(417);
+    // 刚用过高键盘：宁可略高也不盖住输入框。
+    expect(liftForImpossibleFrame()).toBe(417);
+    // 第三方键盘每次弹出先占位 417 再落到 324：过渡帧不算一次高键盘。
+    for (let i = 0; i < 6; i += 1) show(417, 324);
+    expect(liftForImpossibleFrame()).toBe(324);
+    expect(JSON.parse(storage.get('cindy.mobile.keyboard-docked-height.v2') ?? '{}'))
+      .toEqual({ 466: [324, 324, 324, 324, 324, 324] });
   });
 
   // PR #8665 review：本机记录异步读出，读完前遇到异常坐标只能先用估算；读完若记录更高，

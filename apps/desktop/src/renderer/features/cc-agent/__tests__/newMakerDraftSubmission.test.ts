@@ -28,6 +28,7 @@ import { recallAgentDeviceSelection } from '../agentDeviceDraftMemory';
 import { filterHealthyDraftProviders, resolveDraftProviderForModel } from '../../../../shared/draftModelCalibration';
 import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
 import type { ModelGroupResolveResult } from '../../../../shared/modelGroups';
+import { checkDraftBranchBeforeStart } from '../newMakerDraftBranchCheck';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceId: vi.fn() }));
@@ -39,7 +40,15 @@ const source = ts.createSourceFile('NewMakerDraftRoute.tsx', readFileSync(
   resolve(__dirname, '../NewMakerDraftRoute.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const callbacks: Record<string, ts.Expression> = {};
 const routeDeclarations: string[] = [];
+const worktreeDeclarations: string[] = [];
 function visit(node: ts.Node) {
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
+    && ['wtEffectiveSourceBranch', 'wtSourceReady'].includes(node.name.text)) {
+    worktreeDeclarations.push(`const ${node.getText(source)};`);
+  }
+  if (ts.isBinaryExpression(node) && node.left.getText(source) === 'wtRef.current') {
+    worktreeDeclarations.push(`${node.getText(source)};`);
+  }
   if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
     && ['controlledModelRoute', 'deviceLinkRemoteAgentSupported', 'effectiveAgentDeviceId', 'remoteAgentDevices', 'catalogDeviceId'].includes(node.name.text)) {
     routeDeclarations.push(`const ${node.getText(source)};`);
@@ -53,6 +62,10 @@ function visit(node: ts.Node) {
   ts.forEachChild(node, visit);
 }
 visit(source);
+const worktreeSnapshotCode = ts.transpileModule(worktreeDeclarations.join('\n') + '\nwtRef.current;', {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText;
+
 const collabBuilder = source.statements.find((node): node is ts.FunctionDeclaration =>
   ts.isFunctionDeclaration(node) && node.name?.text === 'draftEnableOrcaOptions');
 if (!collabBuilder) throw new Error('Draft collaboration builder missing');
@@ -110,6 +123,10 @@ function provider(id = providerId, efforts: PiReasoningEffort[] = []): ProviderV
 async function submit(options: {
   entry?: 'send' | 'goal';
   createFailure?: boolean;
+  sourceBranch?: string;
+  defaultSourceBranch?: string;
+  checkoutBusy?: boolean;
+  worktreeEnabled?: boolean;
   pluginRoute?: () => Promise<GhostStartTaskRouteResult>;
   /** 选了模型组：发送时解析出的结果。 */
   modelGroupRoute?: ModelGroupResolveResult;
@@ -134,6 +151,16 @@ async function submit(options: {
   worktreeSkillsAfterCollab?: AgentSkillCommand[];
   collab?: CollabDraft;
   slashCommandRanges?: Array<{ start: number; end: number }>;
+  worktree?: {
+    enabled: boolean;
+    sourceBranch: string;
+    confirmedIneligible?: boolean | null;
+    branchPreferenceReady?: boolean;
+  };
+  branchSaving?: boolean;
+  currentBranch?: string | null;
+  displayedBranch?: string;
+  detectFailure?: boolean;
 } = {}) {
   const providers = options.providers ?? [provider()];
   const backend = options.backendProviders ?? providers;
@@ -172,13 +199,19 @@ async function submit(options: {
   // Synthetic IPC paths; no filesystem is touched by these renderer fixtures.
   const baseRepo = '/fixture/repo';
   const worktreePath = '/fixture/repo/.cindy-worktrees/creator';
-  const hasWorktree = options.worktreeSkills !== undefined;
+  const hasWorktree = options.worktree?.enabled ?? options.worktreeSkills !== undefined;
+  const detectCwd = vi.fn(async () => {
+    if (options.detectFailure) throw new Error('fixture probe failed');
+    return { gitInstalled: true, isGitRepo: true, isInsideWorktree: false,
+      repoRoot: baseRepo, currentBranch: options.currentBranch === null ? undefined : options.currentBranch ?? 'main' };
+  });
   let worktreeSkills = options.worktreeSkills;
   const listAgentSkills = vi.fn(async (_agent, params) => ({ success: true,
     skills: params?.workingDir === worktreePath ? worktreeSkills : options.skills ?? [],
   }));
   const createNote = vi.fn(async () => ({}));
   const invokeRemote = vi.fn(async (_deviceId, channel, args) => {
+    if (channel === 'worktree:detect-cwd') return detectCwd();
     if (channel === 'maker:list-agent-skills') return listAgentSkills(args[0], args[1]);
     if (channel === 'maker:list-agent-commands') return { success: true, commands: [] };
     if (channel === 'worktree:create') return { ok: true,
@@ -191,6 +224,7 @@ async function submit(options: {
     return { workerSessionId: 'worker' };
   });
   vi.stubGlobal('window', { electronAPI: {
+    worktreeDetectCwd: detectCwd,
     deviceLink: { invoke: invokeRemote },
     worktreeCreate: vi.fn(async () => ({ ok: true, meta: { path: worktreePath, branch: 'cindy/creator' } })),
     ghosts: { routeNewTask: options.pluginRoute },
@@ -217,10 +251,15 @@ async function submit(options: {
   const setPending = vi.fn();
   const setPendingGoal = vi.fn();
   const toastError = vi.fn();
+  const toastWarning = vi.fn();
+  const clearDraft = vi.fn();
+  const refreshDisplayedBranch = vi.fn();
+  let started = false;
   const checkAndConfirm = vi.fn(async (_vendor, params) => ({
     proceed: options.authCatalogKey === undefined || params.deviceId === options.authCatalogKey,
   }));
   const environment = {
+    checkDraftBranchBeforeStart,
     deviceDisplayName, dbToMakerAgentKind, chatEligibleSourcesForModel, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
     controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
     // 没选模型组的用例：发送路径不解析、不写说明、不记绑定。
@@ -247,24 +286,31 @@ async function submit(options: {
     isDeviceLinkDraft: !!options.deviceId, isRemoteProjectDraft: !!options.remoteHostId,
     isAgentDeviceDraft: !!options.agentDeviceId, remoteModelListStatus: options.remoteModelListStatus ?? 'ready', remoteDraftState: { status: 'ready' },
     effectiveRemoteHostId: options.remoteHostId, effectiveAgentDeviceId: options.agentDeviceId,
-    effectiveWorkingDir: hasWorktree ? baseRepo : options.remoteHostId ? '/remote/project' : null,
+    effectiveWorkingDir: hasWorktree || options.worktree ? baseRepo : options.remoteHostId ? '/remote/project' : null,
     effectiveExtraDirs: [], effectiveWritableDirs: [], effectiveFastMode: false, effectivePlanMode: false,
     effectiveDeviceLinkDeviceId: options.deviceId, effectiveDeviceLinkDeviceName: options.deviceId,
     catalogDeviceId: modelCatalogKey(options.agentDeviceId ?? options.deviceId, options.catalogHostDeviceId),
     agentCatalogProviders: providers, deviceProvidersLoading: false, deviceProvidersUnsupported: false,
     deviceModelVisibilityOverrides: undefined, isModelSelectableForNewRoute, isDeviceModelVisible,
     matchNavigationCommandName: () => null,
-    wtRef: { current: hasWorktree
-      ? { enabled: true, confirmedIneligible: false, baseRepo, name: 'creator', sourceBranch: 'other-branch', branchPreferenceReady: true, supportsRecoveryKeyDiscard: true }
+    wtRef: { current: options.worktree
+      ? { confirmedIneligible: false, baseRepo, name: 'creator', branchPreferenceReady: true, supportsRecoveryKeyDiscard: true, ...options.worktree }
+      : hasWorktree
+      ? { enabled: options.worktreeEnabled ?? true, confirmedIneligible: false, baseRepo, name: 'creator', sourceBranch: 'other-branch', branchPreferenceReady: true, supportsRecoveryKeyDiscard: true }
       : { enabled: false, confirmedIneligible: true } },
+    wtCheckoutBranchViewRef: { current: { cwd: baseRepo, deviceId: options.deviceId ?? null,
+      displayedBranch: options.displayedBranch ?? 'main', refresh: refreshDisplayedBranch } },
+    wtCheckoutBusyRef: { current: options.checkoutBusy ?? false },
     wtPreferenceSavingRef: { current: false }, wtPreferenceAuthorityUnknownRef: { current: false },
-    wtBranchPreferenceSavingRef: { current: false },
+    wtBranchPreferenceSavingRef: { current: options.branchSaving ?? false },
+    wtBranchPreferenceErrorRef: { current: false },
     getDataOwnerGeneration: () => ({ dataOwnerId: 'fixture' }), dataOwnerId: 'fixture',
     isDataOwnerGenerationCurrent: () => true,
-    markSendInFlight: (value: boolean) => { if (!value) done(); },
+    markSendInFlight: (value: boolean) => { if (value) started = true; else done(); },
     t: (key: string) => key, authVendor: agentKind,
     vendorAuthGate: { checkAndConfirm },
-    localDraftSessionIdRef: { current: 'draft-id' }, optimisticFirstMessageTitle: () => null,
+    localDraftSessionIdRef: { current: 'draft-id' }, optimisticFirstMessageTitle: () => null, autoTitleLabels: {},
+    remoteProjectsStore: { setPendingTitlePreview: noop, clearPendingTitlePreview: noop, clearPendingFirstSend: noop },
     createSession, toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
     makerChatStore: { setSessionRuntime: noop, sendMessage, autoNameSession: noop }, sessionsStore: { patchLocal: noop },
     markSessionStarting: noop, clearSessionStarting: noop,
@@ -273,7 +319,7 @@ async function submit(options: {
     NEW_MAKER_DRAFT_KEY: 'fixture', rewriteBrowserCommentsFromRehomedFiles: () => [],
     leadingSlashInvocation, rebaseInlineRangesAfterSlashCommandRewrite, rewriteBuiltInSkillDraftForSend, setPending, setPendingGoal,
     rewritePiSkillMessageForSend: async ({ message }: { message: string }) => message,
-    clearComposerDraftAndNotify: noop, attachmentState: { clearFiles: noop },
+    clearComposerDraftAndNotify: clearDraft, attachmentState: { clearFiles: vi.fn() },
     resetDraftWorkspaceAfterSend: noop, navigate: vi.fn(), setWtCreating: noop,
     makeDraftSessionId: () => 'remote-created', resolveDeviceLinkSubmission, parseRemoteWorktreeCreateResult,
     recoverPendingRemotePrecreatedWorktrees: vi.fn(async () => ({ storageReadable: true, retained: 0 })),
@@ -282,6 +328,7 @@ async function submit(options: {
       invoke: (channel: string, args: unknown[]) => Promise<{ sessionId: string }>; createArgs: unknown;
     }) => (await invoke('maker:create-session', [createArgs])).sessionId,
     commitRemoteSessionHandoff: () => {}, rememberRecoverableHandoff: () => {},
+    deliverRecoverableHandoff: (_id: string, deliver: () => Promise<boolean>) => deliver(),
     getBranchName: (name: string) => `cindy/${name}`,
     sessionService: { touchUserSend: async () => {}, get: async () => ({ status: 'active' }), update: async () => {} },
     crossAgentConvertService: { detect: async () => ({ items: [] }) },
@@ -301,8 +348,18 @@ async function submit(options: {
     isLocalGoalWorktreeCleanupPendingError: () => false,
     plainTextToTiptapDoc, excludeCommentScreenshots: () => [],
     log: { warn: (...args: unknown[]) => errors.push(args), error: (...args: unknown[]) => errors.push(args) },
-    toast: { error: toastError, warning: noop },
+    toast: { error: toastError, warning: toastWarning },
   };
+  if (options.defaultSourceBranch) {
+    environment.wtRef.current = runInNewContext(worktreeSnapshotCode, {
+      wtRef: {}, wtEnabled: true, wtName: 'creator', wtBaseRepo: baseRepo,
+      wtSourceBranch: options.sourceBranch ?? '', wtBranchPreferenceReady: true,
+      wtBranchPreferenceSaving: false, wtPreferenceSaving: false,
+      wtSupportsRecoveryKeyDiscard: true, wtConfirmedIneligible: false,
+      effectiveDeviceLinkDeviceId: options.deviceId,
+      wtDefaultSource: { baseRepo, deviceId: options.deviceId ?? null, sourceBranch: options.defaultSourceBranch },
+    });
+  }
   if (options.collab) {
     environment.draftEnableOrcaOptions = runInNewContext(collabBuilderCode, {
       ...environment, connectedProvidersForAgent, isModelSelectableForNewRoute, createWorkerLabel,
@@ -337,13 +394,125 @@ async function submit(options: {
       await callback(options.message ?? 'hello', selectedModel, options.submittedEffort ?? selection.effort ?? '',
         'default', [], [], { providerId: selectedProviderId, slashCommandRanges: options.slashCommandRanges });
     }
-    await finished;
+    if (started) await finished;
     if (hasWorktree && createSession.mock.calls.length) await worktreeFinished;
-    return { createSession, ipcCreate, sendMessage, setGoal, errors, environment, setPending, setPendingGoal, toastError, listAgentSkills, invokeRemote, enableOrca, createNote, checkAndConfirm };
+    return { createSession, ipcCreate, sendMessage, setGoal, errors, environment, setPending, setPendingGoal, toastError, toastWarning, clearDraft, refreshDisplayedBranch, detectCwd, listAgentSkills, invokeRemote, enableOrca, createNote, checkAndConfirm };
   } finally { vi.unstubAllGlobals(); }
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
+  // PR #10696 / unit: real detached and unborn probes both omit currentBranch.
+  // They share this transport shape; exercise Send/Goal on local and linked devices.
+  it.each(['send', 'goal'] as const)('allows unnamed branches for %s locally and remotely', async entry => {
+    for (const deviceId of [undefined, 'task-computer']) {
+      const result = await submit({ entry, deviceId, currentBranch: null, displayedBranch: 'HEAD',
+        providers: [provider(providerId, ['medium'])], worktree: { enabled: false, sourceBranch: '' } });
+      expect(result.errors).toEqual([]);
+      expect(result.toastError).not.toHaveBeenCalled();
+      expect(result.detectCwd).toHaveBeenCalledOnce();
+      if (!deviceId) expect(result.createSession).toHaveBeenCalledOnce();
+      else expect(result.invokeRemote.mock.calls.some(([, channel]) => channel === 'maker:create-session')).toBe(true);
+    }
+  });
+
+  // #10518 / unit: execute Send/Goal end to end. An external checkout can stale
+  // the OFF label; stop handoff and refresh it, independently of source memory.
+  it.each([
+    ['send', undefined, 'feature/other'], ['send', 'task-computer', 'cindy/other'],
+    ['goal', undefined, 'cindy/other'], ['goal', 'task-computer', 'feature/other'],
+  ] as const)('retains the draft for %s on %s when the displayed branch changed to %s', async (entry, deviceId, currentBranch) => {
+    const result = await submit({ entry, deviceId, providers: [provider(providerId, ['medium'])],
+      currentBranch, displayedBranch: 'main', worktree: { enabled: false, sourceBranch: 'main' } });
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.invokeRemote.mock.calls.some(([, channel]) => channel === 'maker:create-session')).toBe(false);
+    expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.setGoal).not.toHaveBeenCalled();
+    expect(result.clearDraft).not.toHaveBeenCalled();
+    expect(result.environment.attachmentState.clearFiles).not.toHaveBeenCalled();
+    expect(result.environment.navigate).not.toHaveBeenCalled();
+    if (deviceId) {
+      expect(result.invokeRemote).toHaveBeenCalledWith(deviceId, 'worktree:detect-cwd', [{ cwd: '/fixture/repo' }]);
+    } else {
+      expect(result.detectCwd).toHaveBeenCalledWith({ cwd: '/fixture/repo' });
+    }
+    expect(result.refreshDisplayedBranch).toHaveBeenCalledOnce();
+    if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('ccAgent.draft.branchChanged');
+    else expect(String(result.errors[0])).toContain('ccAgent.draft.branchChanged');
+  });
+  it.each(['send', 'goal'] as const)('does not start %s while an OFF branch choice is still saving', async entry => {
+    const result = await submit({ entry, branchSaving: true,
+      worktree: { enabled: false, sourceBranch: 'main' } });
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.clearDraft).not.toHaveBeenCalled();
+    expect(result.detectCwd).not.toHaveBeenCalled();
+    if (entry === 'send') expect(result.toastWarning).toHaveBeenCalledWith('ccAgent.draft.deviceStillLoading');
+    else expect(String(result.errors[0])).toContain('ccAgent.draft.deviceStillLoading');
+  });
+  it.each([
+    ['send', { currentBranch: null }], ['goal', { detectFailure: true }],
+  ] as const)('keeps %s editable when the current branch cannot be verified', async (entry, probe) => {
+    const result = await submit({ entry, ...probe, worktree: { enabled: false, sourceBranch: 'main' } });
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.clearDraft).not.toHaveBeenCalled();
+    if (entry === 'send') {
+      expect(result.toastError).toHaveBeenCalledWith('ccAgent.draft.branchChanged');
+      expect(result.refreshDisplayedBranch).toHaveBeenCalledOnce();
+    }
+    else expect(String(result.errors[0])).toContain('ccAgent.draft.branchCheckFailed');
+  });
+  it.each(['send', 'goal'] as const)('waits for the new project branch preference before %s', async entry => {
+    const result = await submit({ entry, worktree: {
+      enabled: false, sourceBranch: '', branchPreferenceReady: false,
+    } });
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.clearDraft).not.toHaveBeenCalled();
+    if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('ccAgent.draft.deviceStillLoading');
+    else expect(String(result.errors[0])).toContain('ccAgent.draft.deviceStillLoading');
+  });
+  it.each([
+    ['send', undefined], ['goal', undefined], ['send', 'task-computer'], ['goal', 'task-computer'],
+  ] as const)('allows %s on %s on the displayed branch with different remembered source and worktree OFF', async (entry, deviceId) => {
+    const result = await submit({ entry, deviceId, providers: [provider(providerId, ['medium'])],
+      worktree: { enabled: false, sourceBranch: 'remembered-feature' } });
+    expect(result.errors).toEqual([]);
+    if (deviceId) {
+      expect(result.invokeRemote).toHaveBeenCalledWith(deviceId, 'maker:create-session', [expect.objectContaining({ workingDir: '/fixture/repo' })]);
+    } else {
+      expect(result.createSession).toHaveBeenCalledOnce();
+    }
+    expect(result.detectCwd).toHaveBeenCalledOnce();
+  });
+  it.each([
+    { confirmedIneligible: true },
+    { remoteHostId: 'ssh-host' },
+  ])('ignores hidden branch preferences for an ineligible or SSH project: %j', async ({ confirmedIneligible, remoteHostId }) => {
+    const result = await submit({ remoteHostId,
+      worktree: { enabled: false, sourceBranch: 'cindy/other', confirmedIneligible } });
+    expect(result.errors).toEqual([]);
+    expect(result.createSession).toHaveBeenCalledOnce();
+    expect(result.detectCwd).not.toHaveBeenCalled();
+  });
+  // Rule C: execute the real default-to-snapshot derivation and submission, not
+  // just the chip. Earlier fixtures supplied only an explicit source. Tier: unit.
+  it.each([undefined, 'task-computer'])('creates on %s using the derived default unless a source was remembered', async deviceId => {
+    for (const sourceBranch of ['', 'remembered-feature']) {
+      const result = await submit({ deviceId, message: '/help', worktreeSkills: [], sourceBranch, defaultSourceBranch: 'refs/remotes/origin/main' });
+      const request = deviceId
+        ? result.invokeRemote.mock.calls.find(([, channel]) => channel === 'worktree:create')?.[2]?.[0]
+        : vi.mocked(result.environment.window.electronAPI.worktreeCreate).mock.calls[0]?.[0];
+      expect(request?.sourceBranch).toBe(sourceBranch || 'refs/remotes/origin/main');
+      expect(result.errors).toEqual([]);
+    }
+  });
+
+  // Checkout is asynchronous even when worktree is off. The actual send/goal
+  // callbacks must retain the draft rather than start a task on the old branch.
+  it.each(['send', 'goal'] as const)('does not create a task while checkout is running (%s)', async entry => {
+    const result = await submit({ entry, checkoutBusy: true, worktreeEnabled: false, worktreeSkills: [] });
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.sendMessage).not.toHaveBeenCalled();
+  });
+
   // #8010 review / unit: execute the route's actual declarations then its submit
   // callback. Earlier fixtures always gave B a local provider/capability marker.
   it('offers and submits a routed source when the task host has no local providers', async () => {

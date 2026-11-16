@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { transferableAbortController } from 'node:util';
 import {
   createGithubStarPrompt, installGithubStarPrompt, recordGithubStarPromptSend,
   recordGithubStarPromptCompletion,
@@ -20,7 +21,11 @@ vi.mock('@/i18n', () => {
 // these eligibility races. Minimal input: accepted send, matching completion, quiet landing,
 // then one intervening activity/state change (including during the GitHub request).
 let cleanups: Array<() => void> = [];
+// React Router uses Node's Request in jsdom. Its signal must come from the
+// same native implementation, rather than jsdom's separate AbortSignal realm.
+const NativeAbortController = transferableAbortController().constructor;
 beforeEach(() => {
+  vi.stubGlobal('AbortController', NativeAbortController);
   vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-09T00:00:00Z')); localStorage.clear();
   vi.spyOn(document, 'hasFocus').mockReturnValue(true);
   vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
@@ -29,6 +34,7 @@ afterEach(() => {
   cleanups.forEach(fn => fn()); cleanups = [];
   document.body.replaceChildren();
   toast.dismissAll(); vi.runOnlyPendingTimers(); vi.restoreAllMocks(); vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 function setup(checkValue: boolean | null = false, ownerId = 'user') {
   const show = vi.fn((_dismiss: () => void) => vi.fn());
