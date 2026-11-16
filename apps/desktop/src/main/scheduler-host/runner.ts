@@ -1261,6 +1261,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
               currentThreadModelProviderId: liveSession.codexThreadModelProviderId,
               targetProviderId: schedule.providerId?.trim() || row?.providerId || null,
               targetModel: schedule.model?.trim() || meta?.model || liveSession.model,
+              sessionId,
             })
           ) {
             holder.releaseAgentSwitchLock?.();
@@ -1560,6 +1561,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             currentCodexThreadModelProviderId: liveSession.codexThreadModelProviderId,
             currentCodexCindyRemoteCompactionCompatible:
               liveSession.codexCindyRemoteCompactionCompatible,
+            sessionId,
           }
         : null;
       const crossesCustomProviderIdentity = credentialSwitchInput
@@ -1570,6 +1572,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             currentThreadModelProviderId: credentialSwitchInput.currentCodexThreadModelProviderId,
             targetProviderId: credentialSwitchInput.nextProviderId,
             targetModel: credentialSwitchInput.nextModel,
+            sessionId: credentialSwitchInput.sessionId,
           })
         : false;
       if (
@@ -2189,6 +2192,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
               currentCodexThreadModelProviderId: session.codexThreadModelProviderId,
               currentCodexCindyRemoteCompactionCompatible:
                 session.codexCindyRemoteCompactionCompatible,
+              sessionId: session.id,
             })
           ) {
             throw new Error(
@@ -3335,6 +3339,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         currentThreadModelProviderId: live.codexThreadModelProviderId,
         targetProviderId: nextProviderId,
         targetModel,
+        sessionId: live.id,
       })
     ) {
       throw new QueuedCodexThreadIdentityMismatchError(
@@ -3352,6 +3357,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         currentCodexProxyActive: live.codexProxyActive,
         currentCodexThreadModelProviderId: live.codexThreadModelProviderId,
         currentCodexCindyRemoteCompactionCompatible: live.codexCindyRemoteCompactionCompatible,
+        sessionId: live.id,
       })
     ) {
       throw new QueuedCodexThreadIdentityMismatchError(
@@ -3370,6 +3376,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         currentCodexProxyActive: live.codexProxyActive,
         currentCodexThreadModelProviderId: live.codexThreadModelProviderId,
         currentCodexCindyRemoteCompactionCompatible: live.codexCindyRemoteCompactionCompatible,
+        sessionId: live.id,
       })
     ) {
       if (resolvedSelection) {

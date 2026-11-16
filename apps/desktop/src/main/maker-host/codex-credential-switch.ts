@@ -53,6 +53,11 @@ export interface ShouldCloseSessionForCredentialSwitchInput {
    * 它是 thread 级冻结身份，不能用可能已被 UI 提前覆盖的 provider store 代替。
    */
   currentCodexThreadModelProviderId?: string | null;
+  /**
+   * 任务 id。自定义供应商身份要对照这个任务已经固定的接口；
+   * 不传时按当前目录默认，行为与以前一样。
+   */
+  sessionId?: string | null;
   /** 当前 host 的独立 Subagent 路由是否兼容 Cindy Codex 远程压缩。 */
   currentCodexCindyRemoteCompactionCompatible?: boolean | null;
   /**
@@ -185,6 +190,7 @@ export function isCodexThreadModelProviderIdentityMismatch(
       currentThreadModelProviderId: input.currentCodexThreadModelProviderId,
       targetProviderId: input.nextProviderId,
       targetModel: input.nextModel,
+      sessionId: input.sessionId,
     })
   ) {
     return true;

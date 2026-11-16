@@ -1,7 +1,11 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   BUNDLED_CATALOG,
+  bindProviderPresetRuntime,
   buildUserProvider,
   type CustomProviderConfig,
 } from '@cindy/model-providers';
@@ -12,6 +16,7 @@ import {
   codexCustomProviderRouteSignature,
   crossesCodexAppliedCustomProviderIdentity,
   deriveCodexCustomProviderRoutes,
+  hasAppliedCodexCustomProviderRoute,
   hasCodexAppliedCustomProviderCapability,
   isCodexCustomProviderNamespacePath,
   parseCodexCustomProviderPath,
@@ -21,7 +26,13 @@ import {
   setCodexAppliedCustomProviderRoutes,
   toCodexCustomProviderHostRoutes,
 } from '../codex-custom-provider-route.js';
+import { setActiveCatalog } from '../active-catalog.js';
+import {
+  isCodexThreadModelProviderIdentityMismatch,
+  shouldCloseSessionForCredentialSwitch,
+} from '../codex-credential-switch.js';
 import { beginProviderRouteMutation } from '../provider-route.js';
+import { configureSessionModelInterfaceStorage, sessionModelInterface } from '../session-model-interface.js';
 
 function customProvider(overrides: Partial<CustomProviderConfig> = {}) {
   return buildUserProvider({
@@ -58,6 +69,8 @@ function catalog(provider = customProvider()) {
 
 afterEach(() => {
   setCodexAppliedCustomProviderRoutes([]);
+  setActiveCatalog(BUNDLED_CATALOG);
+  configureSessionModelInterfaceStorage(() => null);
 });
 
 describe('Codex custom Provider identity', () => {
@@ -87,7 +100,9 @@ describe('Codex custom Provider identity', () => {
       resolveCodexCustomProviderModelProviderId(routes, 'provider-alpha', 'chat-text'),
     ).toBeNull();
 
-    const disabled = customProvider({
+    // Missing image generation is not a reason to drop the identity (#9611).
+    // A Responses model still gets cindy_custom_<hash>; only the actor header stays off.
+    const textOnly = customProvider({
       runtimes: {
         codex: {
           baseUrl: 'https://provider.example/v1',
@@ -96,7 +111,342 @@ describe('Codex custom Provider identity', () => {
         },
       },
     });
-    expect(deriveCodexCustomProviderRoutes(catalog(disabled))).toEqual([]);
+    const textRoutes = deriveCodexCustomProviderRoutes(catalog(textOnly));
+    expect(textRoutes).toHaveLength(1);
+    expect(textRoutes[0]).toMatchObject({
+      capabilities: { imageGeneration: false },
+      responseModels: ['vision-input'],
+    });
+    expect(
+      buildCodexCustomProviderArgs('http://127.0.0.1:43210', 'env-key', textRoutes).extraArgs.join(' '),
+    ).not.toContain('x-openai-actor-authorization');
+
+    const chatOnly = customProvider({
+      runtimes: {
+        codex: {
+          baseUrl: 'https://provider.example/v1',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'chat-only', name: 'Chat Only' }],
+        },
+      },
+    });
+    expect(deriveCodexCustomProviderRoutes(catalog(chatOnly))).toEqual([]);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：deriveCodexCustomProviderRoutes / buildCodexCustomProviderArgs。
+  //   没有图片生成能力的 Responses 自定义供应商也要拿到 cindy_custom_<hash>，
+  //   并写进 Codex spawn 的 model_providers；否则 thread/resume 报 -32600（#9611）。
+  // - Bug／规则依据：#9611。旧门槛要求 capabilities 里至少一项为 true，普通文本供应商被整条丢掉。
+  // - 现有覆盖缺口：上面的用例把「没有 Responses 模型」和「没有图片能力」混在一起，
+  //   期望空路由；本用例只去掉 supportsImageGeneration，保留 Responses 模型。
+  // - 最小失败输入：openai-responses + 一个文本模型，不声明 supportsImageGeneration。
+  // - tier：unit。调公开函数，不启 Electron、不访问网络。
+  it('registers a Responses provider that has no image-generation capability', () => {
+    const textOnly = customProvider({
+      runtimes: {
+        codex: {
+          baseUrl: 'https://provider.example/v1',
+          requestPath: '/v1/responses',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'chat-text-only', name: 'Chat Text Only' }],
+        },
+      },
+    });
+    const routes = deriveCodexCustomProviderRoutes(catalog(textOnly));
+    expect(routes).toHaveLength(1);
+    expect(routes[0]).toMatchObject({
+      providerId: 'provider-alpha',
+      capabilities: { imageGeneration: false },
+      responseModels: ['chat-text-only'],
+    });
+    expect(routes[0]?.modelProviderId).toMatch(/^cindy_custom_[a-f0-9]{20}$/);
+    expect(
+      resolveCodexCustomProviderModelProviderId(routes, 'provider-alpha', 'chat-text-only'),
+    ).toBe(routes[0]?.modelProviderId);
+
+    const config = buildCodexCustomProviderArgs('http://127.0.0.1:43210', 'env-key', routes);
+    const argv = config.extraArgs.join(' ');
+    expect(argv).toContain(`model_providers.${routes[0]!.modelProviderId}.wire_api="responses"`);
+    expect(argv).toContain(`/_cindy/custom-provider/${routes[0]!.routeId}`);
+    expect(argv).not.toContain('x-openai-actor-authorization');
+    expect(argv).not.toContain('provider.example');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：hasAppliedCodexCustomProviderRoute。纯文本路由也要算已应用，
+  //   OAuth 重新登录才会重建 Host；否则凭证代次推进后专用路由持续 503（#9759）。
+  // - Bug／规则依据：#9759。旧判断只认 imageGeneration 已应用，纯文本路由被漏掉。
+  // - 现有覆盖缺口：hasCodexAppliedCustomProviderCapability 要求能力为 true，
+  //   覆盖不了「没有图片能力但路由已冻结」。
+  // - 最小失败输入：imageGeneration: false 的已应用路由；另一个不匹配的 providerId。
+  // - tier：unit。调公开函数，不启 Electron、不访问网络。
+  it('treats an applied text-only route as present and ignores a different provider', () => {
+    const textOnly = customProvider({
+      runtimes: {
+        codex: {
+          baseUrl: 'https://provider.example/v1',
+          requestPath: '/v1/responses',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'chat-text-only', name: 'Chat Text Only' }],
+        },
+      },
+    });
+    const [route] = deriveCodexCustomProviderRoutes(catalog(textOnly));
+    expect(route?.capabilities.imageGeneration).toBe(false);
+    setCodexAppliedCustomProviderRoutes(route ? [route] : []);
+
+    expect(hasAppliedCodexCustomProviderRoute('provider-alpha')).toBe(true);
+    expect(hasAppliedCodexCustomProviderRoute('custom:xai')).toBe(false);
+    expect(hasAppliedCodexCustomProviderRoute('provider-other')).toBe(false);
+
+    const release = registerCodexScopedCustomProviderRoutes('external:text', route ? [route] : []);
+    try {
+      setCodexAppliedCustomProviderRoutes([]);
+      expect(hasAppliedCodexCustomProviderRoute('provider-alpha')).toBe(true);
+    } finally {
+      release();
+    }
+    expect(hasAppliedCodexCustomProviderRoute('provider-alpha')).toBe(false);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：deriveCodexCustomProviderRoutes（内部 routeForProvider）。
+  //   auth.native === 'codex' 的额外订阅账号不得拿到 cindy_custom_<hash>，否则占位 bearer
+  //   会发给 chatgpt.com；不带 native 的纯文本供应商仍要有路由（#9759）。
+  // - Bug／规则依据：#9759。去掉图片能力门槛后，source:'user' 的原生订阅账号被卷进来。
+  // - 现有覆盖缺口：文本供应商用例没有 auth.native。
+  // - 最小失败输入：oauth + native:'codex'，并带一个 openai-responses 模型。
+  // - tier：unit。调公开函数，不启 Electron、不访问网络。
+  it('does not register a native Codex subscription account on the custom route', () => {
+    const nativeCodex = customProvider({
+      id: 'extra-chatgpt',
+      name: 'Extra ChatGPT',
+      auth: { method: 'oauth', native: 'codex' },
+      runtimes: {
+        codex: {
+          baseUrl: 'https://chatgpt.com/backend-api/codex',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'gpt-subscription', name: 'GPT Subscription' }],
+        },
+      },
+    });
+    expect(nativeCodex.auth.native).toBe('codex');
+    expect(nativeCodex.models.codex?.map((model) => model.id)).toEqual(['gpt-subscription']);
+    expect(deriveCodexCustomProviderRoutes(catalog(nativeCodex))).toEqual([]);
+
+    const textOnly = customProvider({
+      runtimes: {
+        codex: {
+          baseUrl: 'https://provider.example/v1',
+          requestPath: '/v1/responses',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'chat-text-only', name: 'Chat Text Only' }],
+        },
+      },
+    });
+    expect(deriveCodexCustomProviderRoutes(catalog(textOnly))).toHaveLength(1);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：deriveCodexCustomProviderRoutes。
+  //   Cloudflare AI Gateway 预设的 Responses 模型不再登记成 cindy_custom 路由；
+  //   同一目录里普通自定义供应商仍然登记。
+  // - Bug／规则依据：#9759。命名空间路由只发普通 Bearer，
+  //   而这类预设靠原生适配器把密钥写进 cf-aig-authorization 并删掉 Authorization。
+  //   它们没有 auth.native，旧判断会把它们登记进去，连接认证直接失败。
+  // - 现有覆盖缺口：上面只排除 auth.native 的订阅账号。
+  // - 最小失败输入：绑定账号后的 cloudflare-ai-gateway 预设，加一条普通 Responses 供应商。
+  // - tier：unit。调公开函数，不启 Electron、不访问网络。
+  it('does not register Cloudflare AI Gateway Responses models on the custom route', () => {
+    const preset = BUNDLED_CATALOG.presets!.find((item) => item.id === 'cloudflare-ai-gateway')!;
+    const runtimes = Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, {
+      ...bindProviderPresetRuntime(
+        runtime!,
+        runtime!.baseUrl
+          .replace('{CLOUDFLARE_ACCOUNT_ID}', 'fixture-account')
+          .replace('{CLOUDFLARE_GATEWAY_ID}', 'fixture-gateway'),
+      ),
+      catalogPresetId: preset.id,
+    }]));
+    const gateway = buildUserProvider(
+      { id: 'my-cloudflare', name: 'My Cloudflare', runtimes },
+      { presets: BUNDLED_CATALOG.presets },
+    );
+    expect(gateway.auth.native).toBeUndefined();
+    expect(gateway.models.codex?.some((model) => model.id === 'gpt-4.1')).toBe(true);
+
+    const routes = deriveCodexCustomProviderRoutes(catalog(gateway));
+    expect(routes.find((route) => route.providerId === 'my-cloudflare')).toBeUndefined();
+    expect(routes.flatMap((route) => route.responseModels)).not.toContain('gpt-4.1');
+
+    const ordinary = customProvider({
+      id: 'ordinary-responses',
+      name: 'Ordinary Responses',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://provider.example/v1',
+          requestPath: '/v1/responses',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'chat-text-only', name: 'Chat Text Only' }],
+        },
+      },
+    });
+    const ordinaryRoutes = deriveCodexCustomProviderRoutes(catalog(ordinary));
+    expect(ordinaryRoutes).toHaveLength(1);
+    expect(ordinaryRoutes[0]).toMatchObject({
+      providerId: 'ordinary-responses',
+      responseModels: ['chat-text-only'],
+    });
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：resolveCodexCustomProviderModelProviderId。
+  //   任务已把接口固定成 Chat 时返回 null；同一型号没有快照、或快照仍是 Responses 时仍返回 cindy_custom 身份。
+  // - Bug／规则依据：#9759。当前目录默认改成 Responses 后，旧 Chat 任务也会被登记成动态身份，
+  //   恢复时从 /chat/completions 静默切到 /responses。
+  // - 现有覆盖缺口：身份解析不看 sessionModelInterface。
+  // - 最小失败输入：Kimi Code 的 k3.1-pro，先用 openai-completions 固定任务，再把目录默认改回 Responses。
+  // - tier：unit。调公开函数，不启 Electron、不访问网络。
+  it('keeps a Chat-pinned task off the custom Responses identity', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'codex-custom-interface-'));
+    const config = {
+      id: 'provider-kimi',
+      name: 'Kimi',
+      runtimes: {
+        codex: {
+          catalogPresetId: 'moonshot-kimi-code',
+          baseUrl: 'https://api.kimi.com/coding/v1',
+          wireProtocol: 'openai-chat' as const,
+          models: [{ id: 'k3.1-pro', name: 'Kimi' }],
+        },
+      },
+    };
+    try {
+      configureSessionModelInterfaceStorage(() => directory);
+      const chatRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+      const chatRoute = chatRegistry.models.flatMap(entry => entry.routes)
+        .find(item => item.providerId === 'moonshot-kimi-code' && item.modelId === 'k3.1-pro')!;
+      chatRoute.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-completions'];
+      const chatProvider = buildUserProvider(config, {
+        modelRegistry: chatRegistry,
+        presets: BUNDLED_CATALOG.presets,
+      });
+      const pinned = sessionModelInterface(
+        'old-chat-task',
+        config.id,
+        'codex',
+        chatProvider.models.codex![0]!,
+        chatRegistry,
+      );
+      expect(pinned?.api).toBe('openai-completions');
+
+      const responsesRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+      const responsesRoute = responsesRegistry.models.flatMap(entry => entry.routes)
+        .find(item => item.providerId === 'moonshot-kimi-code' && item.modelId === 'k3.1-pro')!;
+      responsesRoute.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-responses'];
+      const provider = buildUserProvider(config, {
+        modelRegistry: responsesRegistry,
+        presets: BUNDLED_CATALOG.presets,
+      });
+      expect(provider.models.codex![0]?.route?.wireProtocol).toBe('openai-responses');
+      const routes = deriveCodexCustomProviderRoutes({
+        ...BUNDLED_CATALOG,
+        modelRegistry: responsesRegistry,
+        providers: [...BUNDLED_CATALOG.providers, provider],
+      });
+      setActiveCatalog({
+        ...BUNDLED_CATALOG,
+        modelRegistry: responsesRegistry,
+        providers: [...BUNDLED_CATALOG.providers, provider],
+      });
+      expect(routes[0]?.responseModels).toContain('k3.1-pro');
+
+      expect(
+        resolveCodexCustomProviderModelProviderId(routes, config.id, 'k3.1-pro', 'old-chat-task'),
+      ).toBeNull();
+      expect(
+        resolveCodexCustomProviderModelProviderId(routes, config.id, 'k3.1-pro'),
+      ).toBe(routes[0]?.modelProviderId);
+
+      const responsesPinned = sessionModelInterface(
+        'responses-task',
+        config.id,
+        'codex',
+        provider.models.codex![0]!,
+        responsesRegistry,
+      );
+      expect(responsesPinned?.api).toBe('openai-responses');
+      expect(
+        resolveCodexCustomProviderModelProviderId(routes, config.id, 'k3.1-pro', 'responses-task'),
+      ).toBe(routes[0]?.modelProviderId);
+
+      // 生产路径与 spawn 回调同形：冻结进本次 Host 的路由，再按任务快照决定身份。
+      const resolveCustomProviderModelProviderId = (
+        providerId: string | null | undefined,
+        model: string | null | undefined,
+        sessionId?: string | null,
+      ) => resolveCodexCustomProviderModelProviderId(routes, providerId, model, sessionId);
+      expect(resolveCustomProviderModelProviderId(config.id, 'k3.1-pro', 'old-chat-task')).toBeNull();
+      expect(resolveCustomProviderModelProviderId(config.id, 'k3.1-pro', 'responses-task'))
+        .toBe(routes[0]?.modelProviderId);
+
+      setCodexAppliedCustomProviderRoutes(routes);
+      const pinnedThread = {
+        agentKind: 'codex' as const,
+        remoteHostId: null,
+        currentCodexProxyActive: true,
+        currentProviderId: config.id,
+        nextProviderId: config.id,
+        currentModel: 'k3.1-pro',
+        nextModel: 'k3.1-pro',
+        targetProviderId: config.id,
+        targetModel: 'k3.1-pro',
+      };
+      expect(crossesCodexAppliedCustomProviderIdentity({
+        ...pinnedThread,
+        currentThreadModelProviderId: 'cindy_gateway',
+        sessionId: 'old-chat-task',
+      })).toBe(false);
+      expect(crossesCodexAppliedCustomProviderIdentity({
+        ...pinnedThread,
+        currentThreadModelProviderId: routes[0]?.modelProviderId,
+        sessionId: 'old-chat-task',
+      })).toBe(true);
+      expect(crossesCodexAppliedCustomProviderIdentity({
+        ...pinnedThread,
+        currentThreadModelProviderId: 'cindy_gateway',
+      })).toBe(true);
+      expect(crossesCodexAppliedCustomProviderIdentity({
+        ...pinnedThread,
+        currentThreadModelProviderId: routes[0]?.modelProviderId,
+        sessionId: 'responses-task',
+      })).toBe(false);
+      expect(isCodexThreadModelProviderIdentityMismatch({
+        ...pinnedThread,
+        currentCodexThreadModelProviderId: 'cindy_gateway',
+        sessionId: 'old-chat-task',
+      })).toBe(false);
+      expect(isCodexThreadModelProviderIdentityMismatch({
+        ...pinnedThread,
+        currentCodexThreadModelProviderId: routes[0]?.modelProviderId,
+        sessionId: 'old-chat-task',
+      })).toBe(true);
+
+      // 模型切换和排队心跳用的就是这两个入口。已钉成 Chat 的旧任务必须带上 sessionId，
+      // 否则按当前目录默认会被看成 Responses，误判成身份失配并关掉会话。
+      expect(shouldCloseSessionForCredentialSwitch({
+        ...pinnedThread,
+        currentCodexThreadModelProviderId: 'cindy_gateway',
+        sessionId: 'old-chat-task',
+      })).toBe(false);
+      expect(shouldCloseSessionForCredentialSwitch({
+        ...pinnedThread,
+        currentCodexThreadModelProviderId: 'cindy_gateway',
+      })).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('uses the applied Host snapshot to identify only real dynamic identity crossings', () => {
@@ -302,9 +652,19 @@ describe('Codex custom Provider identity', () => {
     expect(codexCustomProviderRouteSignature(catalog(buildUserProvider(effortChanged))))
       .not.toBe(codexCustomProviderRouteSignature(catalog(buildUserProvider(config))));
 
-    const disabled = structuredClone(config);
-    delete disabled.runtimes.codex?.supportsImageGeneration;
-    expect(codexCustomProviderConfigSignature(disabled)).toBe('');
+    // Turning image generation off changes the snapshot, but does not erase the identity (#9611).
+    const textOnly = structuredClone(config);
+    delete textOnly.runtimes.codex?.supportsImageGeneration;
+    const textSignature = codexCustomProviderConfigSignature(textOnly);
+    expect(textSignature).not.toBe('');
+    expect(textSignature).not.toBe(baseline);
+    expect(deriveCodexCustomProviderRoutes(catalog(buildUserProvider(textOnly)))).toMatchObject([
+      { capabilities: { imageGeneration: false }, responseModels: ['model-a', 'model-b'] },
+    ]);
+
+    const chatOnly = structuredClone(config);
+    chatOnly.runtimes.codex!.wireProtocol = 'openai-chat';
+    expect(codexCustomProviderConfigSignature(chatOnly)).toBe('');
   });
 
   it('parses only the dedicated route and strips the prefix completely', () => {

@@ -354,12 +354,14 @@ describe('AppServerHost custom Provider subagent policy', () => {
       dynamicIdentity: false,
       disableSubagents: false,
       disableModelOverrides: false,
+      disableWebSearch: false,
     });
   });
 
   it.each([
     ['same Provider eligible child', 'images-a', 'image-a-alt', false],
-    ['same Provider non-Responses child', 'images-a', 'text-a', true],
+    // 同一供应商的非 Responses 子模型走协议桥接，子代理保持开启。
+    ['same Provider non-Responses child', 'images-a', 'text-a', false],
     ['different Provider child', 'images-b', 'image-b', true],
   ] as const)('%s', (_label, providerId, catalogModel, disableSubagents) => {
     expect(policy(
@@ -369,6 +371,7 @@ describe('AppServerHost custom Provider subagent policy', () => {
       dynamicIdentity: true,
       disableSubagents,
       disableModelOverrides: true,
+      disableWebSearch: true,
     });
   });
 
@@ -380,7 +383,118 @@ describe('AppServerHost custom Provider subagent policy', () => {
       dynamicIdentity: true,
       disableSubagents: false,
       disableModelOverrides: true,
+      disableWebSearch: true,
     });
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：getCustomProviderThreadPolicy。
+  //   纯文本 Responses 身份返回 disableModelOverrides: false，图片生成身份仍为 true。
+  // - Bug／规则依据：#9759。扩大身份登记后，纯文本供应商也被无条件关掉 spawn_agent 的模型覆写，
+  //   用户已开启的智能调配失效。
+  // - 现有覆盖缺口：上面的路由都带 imageGeneration: true。
+  // - 最小失败输入：同一份路由表里加一条 imageGeneration 不为 true 的文本身份。
+  // - tier：unit。只构造 AppServerHost，不启进程、不访问网络。
+  it('keeps model overrides enabled for a text-only custom Provider', () => {
+    const host = new AppServerHost({
+      createTransport: () => new HangingTransport(),
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      codexCustomProviderRoutes: [
+        ...routes,
+        {
+          providerId: 'text-a',
+          modelProviderId: 'cindy_custom_cccccccccccccccccccc',
+          capabilities: { imageGeneration: false },
+          responseModels: ['text-model'],
+        },
+      ],
+    });
+    expect(host.getCustomProviderThreadPolicy('text-a', 'text-model')).toEqual({
+      dynamicIdentity: true,
+      disableSubagents: false,
+      disableModelOverrides: false,
+      // 纯文本 Responses 自定义供应商保留原生网页搜索。
+      disableWebSearch: false,
+    });
+    expect(host.getCustomProviderThreadPolicy('images-a', 'image-a').disableModelOverrides).toBe(true);
+    expect(host.getCustomProviderThreadPolicy('images-a', 'image-a').disableWebSearch).toBe(true);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：getCustomProviderThreadPolicy。
+  //   父级是 Responses 模型、子模型属于同一供应商但不在 responseModels 里时，disableSubagents 仍为 false。
+  // - Bug／规则依据：#9759。智能调配开启后，同供应商的 Chat/Messages 子模型被当成不兼容而关掉子代理。
+  // - 现有覆盖缺口：上面的「同供应商非 Responses 子模型」只覆盖了图片生成身份；纯文本身份还没有对应子模型。
+  // - 最小失败输入：父模型 text-model 在 responseModels 里，子模型 text-chat 同属 text-a 但不在名单里。
+  // - tier：unit。只构造 AppServerHost，不启进程、不访问网络。
+  it('keeps subagents enabled when a text child uses another protocol on the same Provider', () => {
+    const host = new AppServerHost({
+      createTransport: () => new HangingTransport(),
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      codexCustomProviderRoutes: [{
+        providerId: 'text-a',
+        modelProviderId: 'cindy_custom_cccccccccccccccccccc',
+        capabilities: { imageGeneration: false },
+        responseModels: ['text-model'],
+      }],
+      subagentRoute: {
+        providerId: 'text-a',
+        catalogModel: 'text-chat',
+        reasoningEffort: null,
+      },
+    });
+    expect(host.getCustomProviderThreadPolicy('text-a', 'text-model')).toEqual({
+      dynamicIdentity: true,
+      disableSubagents: false,
+      disableModelOverrides: false,
+      disableWebSearch: false,
+    });
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：getCustomProviderModelProviderId / getCustomProviderThreadPolicy。
+  //   回调拿到任务 id；回调说这个任务不该用自定义身份时，身份是 null，策略也不再打开 dynamicIdentity。
+  // - Bug／规则依据：#9759。恢复旧任务时要把 sessionId 交给主机快照，固定成非 Responses 的任务不能拿到 cindy_custom_*。
+  // - 现有覆盖缺口：上面的用例都没有 resolveCustomProviderModelProviderId，也不传 sessionId。
+  // - 最小失败输入：同一条文本路由，old-chat-task 的回调返回 null，responses-task 返回身份。
+  // - tier：unit。只构造 AppServerHost，不启进程、不访问网络。
+  it('forwards the task id and keeps a non-matching snapshot off the custom identity', () => {
+    const seen: Array<string | null | undefined> = [];
+    const identity = 'cindy_custom_cccccccccccccccccccc';
+    const host = new AppServerHost({
+      createTransport: () => new HangingTransport(),
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      codexCustomProviderRoutes: [{
+        providerId: 'text-a',
+        modelProviderId: identity,
+        capabilities: { imageGeneration: false },
+        responseModels: ['text-model'],
+      }],
+      resolveCustomProviderModelProviderId: (providerId, model, sessionId) => {
+        seen.push(sessionId);
+        if (sessionId === 'old-chat-task') return null;
+        return providerId === 'text-a' && model === 'text-model' ? identity : null;
+      },
+    });
+
+    expect(host.getCustomProviderModelProviderId('text-a', 'text-model', 'old-chat-task')).toBeNull();
+    expect(host.getCustomProviderThreadPolicy('text-a', 'text-model', 'old-chat-task')).toEqual({
+      dynamicIdentity: false,
+      disableSubagents: false,
+      disableModelOverrides: false,
+      disableWebSearch: false,
+    });
+    expect(host.getCustomProviderModelProviderId('text-a', 'text-model', 'responses-task')).toBe(identity);
+    expect(host.getCustomProviderThreadPolicy('text-a', 'text-model', 'responses-task')).toEqual({
+      dynamicIdentity: true,
+      disableSubagents: false,
+      disableModelOverrides: false,
+      disableWebSearch: false,
+    });
+    expect(seen).toEqual(['old-chat-task', 'old-chat-task', 'responses-task', 'responses-task']);
   });
 });
 
