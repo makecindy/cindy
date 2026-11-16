@@ -5350,6 +5350,10 @@ export function isSchedulerTargetSessionBusy(sessionId: string): boolean {
   return schedulerQueueBridgeHolder?.isSessionBusy(sessionId) ?? false;
 }
 
+export function hasPendingSchedulerTargetInput(sessionId: string): boolean {
+  return schedulerQueueBridgeHolder?.hasPendingInput(sessionId) ?? false;
+}
+
 export function hasQueuedSchedulerPrompt(sessionId: string, scheduleId: string): boolean {
   return schedulerQueueBridgeHolder?.hasQueuedPrompt(sessionId, scheduleId) ?? false;
 }
