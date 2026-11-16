@@ -135,8 +135,17 @@ Codex 所选目录由当前供应商管理认证、无法提供 ChatGPT 账号�
 2026-11-14 起 `preview` 回包可选追加 `defaultAdded: boolean`：默认 CLI 登录已被内置供应商使用，或同一身份已是同类
 未断开的其他账号时为 `true`，新向导据此不再提供默认账号快捷按钮。只读已保存记录与已缓存身份，不额外读取 CLI 或额度。
 旧控制端忽略该字段；新控制端连接旧宿主时字段缺省，按原样提供快捷按钮。沿用原 channel，中转无需适配。
-`subscription-accounts:changed` 普通变化仅推送供应商 id，重置数据刷新可附加上述 `resetAccountId`，
-路由到既有 `sessions` topic 后由当前管理页重读。
+`subscription-accounts:changed` 继续推送供应商类别 `providerId`，重置数据刷新可附加上述 `resetAccountId`，
+路由到既有 `sessions` topic 后由当前管理页重读。2026-11-16 起可选追加 `change: "usage" | "load"`：
+仅分别用于普通额度观察与运行占用变化。缺省或未知值仍是身份／配置可能变化的完整失效通知，
+登录、移除、暂停、归属变动与鉴权失效不得标成普通变化。
+新版组主按来源电脑及该供应商类别（含同类命名账号供应商）失效；用量变化保留同身份在途额度，
+负载变化只刷新目录。旧提供端缺字段时新版仍完整失效该电脑对应类别，缺 `providerId` 则失效该电脑全部额度；
+旧组主忽略新增字段，维持原行为。需要组主升级才能消除跨成员的额度丢弃，提供端升级后还可避免普通变化作废自身在途读取。
+Main 的远程观察者仅收到上述白名单元数据，不接收原始推送正文。
+既有 push channel、sessions topic、allowlist、JSON 帧和鉴权均不变；官方与自建中转透传业务 payload，
+无需服务端或中转升级。回归见 `subscription-accounts/__tests__/ipc.test.ts`、`runtime.test.ts` 及
+`provider-group/__tests__/runtime.test.ts` 的通知竞争与迟到恢复用例。
 `read` 的账号视图以 `usage`（该账号自身的 Claude 窗口快照或 Codex 桶及余额）取代未发布的单条 `quota`。
 同账号 `manage-share` 的 `quota-account` 在池内有多个可分配账号时额外返回 `accounts`（匿名数组），
 顶层仍是首个账号：旧组主只读顶层，新组主遇到无 `accounts` 的旧成员按单账号显示。

@@ -203,6 +203,7 @@ import {
   refreshSubscriptionPool,
   refreshSubscriptionPoolCodexModels,
   onSubscriptionPoolCodexModelsChanged,
+  onSubscriptionAccountsChanged,
   readSubscriptionPoolCodexModels,
   resetDefaultSubscriptionCodexDiscovery,
   readSubscriptionAccountBlocked,
@@ -315,6 +316,39 @@ it.each(['anthropic', 'openai'] as const)('persists and restores every %s accoun
   h.owner += ':replacement';
   h.read.mockResolvedValue({ authenticated: true, identity: 'different-account' });
   expect((await readSubscriptionPool(provider)).accounts.every(a => a.usage === undefined)).toBe(true);
+});
+
+// Test value / unit: use real admission, account events and commands. A healthy
+// second slot after first-slot exhaustion must emit usage/load hints, whereas
+// sign-in, pause and removal must keep invalidating the old identity. Prior tests
+// verify quota and account commands separately, not the event consumed by groups.
+it('distinguishes usage and load changes from sign-in, pause and removal', async () => {
+  h.pools.anthropic = { strategy: 'order', accounts: [account('default'), account('second')] };
+  h.read.mockImplementation(async (_kind: string, directory: string) => ({ authenticated: true, identity: directory }));
+  h.usage.mockImplementation(async (_kind: string, directory: string) => ({ claudeUsage: {
+    updatedAt: Date.now(), fiveHour: { utilization: directory.endsWith('second') ? 10 : 100,
+      resetsAt: Date.now() / 1000 + 3600 }, sevenDay: null, scoped: [],
+  } }));
+  const changed = vi.fn();
+  const unsubscribe = onSubscriptionAccountsChanged(changed);
+  const lease = await acquireSubscriptionAccount('anthropic', 'claude-sonnet-5', []);
+  try {
+    expect(lease?.account.id).toContain('anthropic:second');
+    expect(changed).toHaveBeenLastCalledWith('anthropic', undefined, 'load');
+    observeSubscriptionAccountUsage(lease!.account, { status: 'allowed', rateLimitType: 'five_hour', utilization: 0.2 });
+    expect(changed).toHaveBeenLastCalledWith('anthropic', undefined, 'usage');
+    lease!.running(false);
+    expect(changed).toHaveBeenLastCalledWith('anthropic', undefined, 'load');
+    for (const command of [
+      { action: 'login', providerId: 'anthropic', accountId: 'second', loginKey: 'test-login' },
+      { action: 'configure', providerId: 'anthropic', accountId: 'second', paused: true },
+      { action: 'remove', providerId: 'anthropic', accountId: 'second' },
+    ] satisfies SubscriptionAccountCommand[]) {
+      changed.mockClear();
+      await runSubscriptionAccountCommand(command);
+      expect(changed).toHaveBeenLastCalledWith('anthropic', undefined, undefined);
+    }
+  } finally { lease?.release(); unsubscribe(); }
 });
 
 // Unit, plugin quota contract (2026-11-16): existing UI reads expose native paths/identity and
