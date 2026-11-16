@@ -3501,7 +3501,7 @@ describe('Worker tool defaults follow the submitted panel route atomically', () 
  *   引擎、模型、来源与 Agent 位置，以及冲突 / 选不到时的错误码。
  * - 规则依据：docs/product-rules/model-groups.md §6.2(参数冲突、不换工作电脑、共享任务不用主人的模式、选不到即失败、只在落定后提交)。
  * - 现有覆盖缺口：此前 Worker 创建不经过模型组；相邻用例只覆盖记忆、显式来源与供应商组跟随。
- * - 最小失败输入：模式的推理强度该模型不支持(当成显式参数会让创建失败)；Lead 的 Agent 在另一台电脑而模式选中本机来源(省略位置会改跟 Lead 查错目录)；Lead 归在供应商组而
+ * - 最小失败输入：模式的推理强度该模型不支持(当成显式参数会让创建失败；被 resolver 去掉后又继承了 Lead 的档位)；只传图片不传首条任务(图片例外改了来源)；Lead 的 Agent 在另一台电脑而模式选中本机来源(省略位置会改跟 Lead 查错目录)；Lead 归在供应商组而
  *   模式选中 Lead 现用来源(会被改成组那一项)；未提交的选路被当成已采用，「轮流」提前前进。
  * - tier：unit，注入依赖，真实 resolver 只配内存 fake。
  */
@@ -3576,7 +3576,7 @@ describe('Worker created through a model group mode', () => {
         workingDir: 'C:\\repo', model: 'studio-model', effort: 'medium', permissionMode: 'default', fastMode: false,
         providerId: 'studio-xd', remoteHostId: null, agentDeviceId: 'mac-studio' })),
     });
-    const result = await create(service, { initialTaskImages: ['/tmp/a.png'] });
+    const result = await create(service, { initialTask: 'compare the screenshot', initialTaskImages: ['/tmp/a.png'] });
     expect(resolveModelGroup).toHaveBeenCalledWith({ selection: { type: 'route', id: 'r1' }, context: { hasImages: true } });
     expect(result).toMatchObject({
       ok: true,
@@ -3591,10 +3591,21 @@ describe('Worker created through a model group mode', () => {
 
   it.each([
     ['an effort the model lacks falls back like a new task', 'max', 'xhigh'],
-    ['no mode effort keeps the original Worker default (Lead effort)', undefined, 'medium'],
+    // resolver 去掉了模型不支持的档位，或模式不指定：都用模型默认档，不继承 Worker 默认档或 Lead 的 medium。
+    ['no mode effort uses the model default, not the Worker default or Lead effort', undefined, 'high'],
   ])('%s', async (_name, effort, expected) => {
-    const { service } = createDeps({ resolveModelGroup: routed(effort ? { effort } : {}) });
+    const { service } = createDeps({
+      resolveModelGroup: routed(effort ? { effort } : {}),
+      getWorkerDefaults: vi.fn(() => ({ effort: 'low' })),
+    });
     await expect(create(service)).resolves.toMatchObject({ ok: true, resolved: { model: 'gpt-5.4', effort: expected } });
+  });
+
+  it.each([undefined, '  '])('does not apply the image exception when no first task carries the images (task %j)', async (initialTask) => {
+    const resolveModelGroup = routed();
+    const { service } = createDeps({ resolveModelGroup });
+    await create(service, { initialTask, initialTaskImages: ['/tmp/a.png'] });
+    expect(resolveModelGroup).toHaveBeenCalledWith({ selection: { type: 'route', id: 'r1' } });
   });
 
   it("does not let the Lead's provider group replace the source the mode picked", async () => {

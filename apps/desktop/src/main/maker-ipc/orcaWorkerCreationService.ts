@@ -646,8 +646,11 @@ function resolveWorkerConfig(params: {
   availableModels: OrcaWorkerModelCapabilities[];
   model: string;
   providerId: string | null;
-  /** false = input.effort 只是偏好(模式带的档位)：模型不支持就用模型默认档，不报错。 */
-  effortExplicit?: boolean;
+  /**
+   * true = 档位来自模式(model-groups.md §4 推理强度)：带了就当偏好，模型不支持退到默认档；没带(模式不指定，
+   * 或 resolver 因模型不支持已去掉)就用模型默认档，不继承 Worker 默认档或 Lead 的档位。
+   */
+  effortFromMode?: boolean;
 }): ResolveWorkerConfigResult {
   const { input, lead, defaults, availableModels, model, providerId } = params;
   const modelCapabilities = availableModels.find((candidate) => candidate.id === model);
@@ -659,8 +662,8 @@ function resolveWorkerConfig(params: {
   }
   const normalizedEffort = normalizeResolvedEffort({
     model: modelCapabilities,
-    effort: input.effort ?? defaults.effort ?? lead.effort,
-    explicit: input.effort !== undefined && params.effortExplicit !== false,
+    effort: params.effortFromMode ? input.effort ?? null : input.effort ?? defaults.effort ?? lead.effort,
+    explicit: input.effort !== undefined && !params.effortFromMode,
   });
   return {
     ok: true,
@@ -1143,8 +1146,9 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       return { ok: false, errorCode: 'MODEL_GROUP_UNAVAILABLE',
         message: 'Model group modes are not available in a shared task. No Worker was created; choose an explicit model.' };
     }
-    const routed = await routeWorkerByModelGroup(routeId, { hasImages: (request.initialTaskImages?.length ?? 0) > 0 },
-      deps.resolveModelGroup);
+    // 图片只随非空的首条任务发出(没有首条任务时发的是就绪占位)，图片例外按实际会发出的消息判断。
+    const sendsImages = (request.initialTask?.trim().length ?? 0) > 0 && (request.initialTaskImages?.length ?? 0) > 0;
+    const routed = await routeWorkerByModelGroup(routeId, { hasImages: sendsImages }, deps.resolveModelGroup);
     if (!routed.ok) return routed;
     await assertCurrent?.();
     const { modelGroupId: _modelGroupId, useCreationPrefs: _useCreationPrefs, ...rest } = request;
@@ -1157,8 +1161,8 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     onCreated?: (assertCreatedCurrent: () => Promise<void>) => void,
     rememberedRouting?: OrcaWorkerProviderRoutingContext,
     /**
-     * pinnedRoute = 路线已由模式选定：不再改跟 Lead 的供应商组那一项；模式带的推理强度只是偏好，
-     * 模型不支持这一档时按模型默认档(与新任务 §4 推理强度一致)，不因此创建失败。
+     * pinnedRoute = 路线已由模式选定：不再改跟 Lead 的供应商组那一项；推理强度按模式(与新任务 §4 推理强度
+     * 一致)：带了的档位只是偏好，模型不支持退到默认档；没带就用模型默认档，不继承 Worker 默认档或 Lead 的档位。
      */
     options: { pinnedRoute?: boolean } = {}): Promise<OrcaWorkerCreationResult> {
     const role = normalizeOrcaWorkerRole(params.role);
@@ -1416,7 +1420,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       availableModels,
       model: modelResolution.model,
       providerId: inheritedProviderId,
-      effortExplicit: !options.pinnedRoute,
+      effortFromMode: options.pinnedRoute === true,
     });
     if (!resolvedConfig.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: resolvedConfig.message };
@@ -1490,7 +1494,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           defaultEffort: routeEffortMeta.defaultEffort,
           effortsUnknown: routeEffortMeta.effortsUnknown,
         },
-        effort: params.effort ?? defaults.effort ?? lead.effort,
+        effort: options.pinnedRoute ? params.effort ?? null : params.effort ?? defaults.effort ?? lead.effort,
         explicit: params.effort !== undefined && !options.pinnedRoute,
       });
       if (!renormalized.ok) {

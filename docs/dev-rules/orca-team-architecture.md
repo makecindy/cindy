@@ -222,7 +222,9 @@ Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast �
 `execution_device_id`，过创建准入、读到 Lead 后拒绝 SSH Lead，然后调用与界面共用的 `modelGroupResolver.resolve`（`main/model-groups/runtime.ts`）
 选一次；选中的路线作为显式 agent／model／provider／位置／effort 交回 `createResolvedWorkerInTeam`，
 原有的位置授权、目录与模型校验照旧，不读 Worker 记忆，不跟随 Lead 的供应商组（`pinnedRoute`）；
-模式带的 effort 按非显式偏好归一，模型不支持时退到默认档而不是 `INVALID_PARAMS`。
+模式带的 effort 按非显式偏好归一，模型不支持时退到默认档而不是 `INVALID_PARAMS`；模式没带 effort（含
+resolver 已因模型不支持去掉的）时用模型默认档，不用 `defaults.effort ?? lead.effort`（`effortFromMode`）。
+图片例外只在非空 `initialTask` 带图片时生效。
 本机来源显式传 `agentDeviceId: null`，不能省略成「跟 Lead」。选路凭据 `decisionId` 只在宿主内流转：
 `OrcaLifecycleService.createWorker` 在 Worker 落定（未回滚）后才 `commit`，并在返回前去掉它。
 界面 IPC 的创建参数逐字段构造，不接收 `modelGroupId`。
