@@ -22,7 +22,7 @@ import {
   declaredAutoApproveTools,
   declaredGhostCindyModelActions,
   type GhostCindyModelsAction,
-  declaredGhostControlPoints,
+  isGhostRuntimeControlPoint,
   ghostManifestToAuthorFormat,
   isValidGhostId,
   validateGhostManifestLocaleResource,
@@ -1294,12 +1294,14 @@ function approvedAutoToolsField(raw: unknown, manifest: GhostManifest): { approv
 
 /**
  * 只保留仍在本次批准 manifest 里声明的节点名(格式合法即可，不按当前 Host 目录过滤：
- * 回退到旧版再升级时，旧版不认识的已批准节点不应丢)。空列表省略字段。
+ * 回退到旧版再升级时，旧版不认识的已批准节点不应丢)。任务运行时五点的旧记录忽略，
+ * 不迁移或改写原文件。空列表省略字段。
  */
 function approvedControlPointsField(raw: unknown, manifest: GhostManifest): { approvedControlPoints?: string[] } {
   if (!Array.isArray(raw)) return {};
-  const declared = new Set([...(manifest.subscribe?.hooks ?? []), ...declaredGhostControlPoints(manifest)]);
-  const points = [...new Set(raw.filter((item): item is string => typeof item === 'string' && declared.has(item as never)))];
+  const declared = new Set(manifest.subscribe?.hooks ?? []);
+  const points = [...new Set(raw.filter((item): item is string => typeof item === 'string'
+    && !isGhostRuntimeControlPoint(item) && declared.has(item as never)))];
   return points.length > 0 ? { approvedControlPoints: points.sort() } : {};
 }
 

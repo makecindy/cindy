@@ -48,6 +48,7 @@ const testWindow = {
   },
   removeEventListener() {},
 };
+let engineFollow: typeof import('../features/cc-agent/remoteDraftEngineFollow');
 let draftStore: DraftModule;
 let secondWindow: DraftModule;
 let onStorage: ((event: StorageEvent) => void) | undefined;
@@ -60,6 +61,7 @@ beforeAll(async () => {
   vi.resetModules();
   storageListeners.length = 0;
   draftStore = await import('@/state/newMakerDraft');
+  engineFollow = await import('../features/cc-agent/remoteDraftEngineFollow');
   onStorage = storageListeners.at(-1);
 });
 
@@ -68,6 +70,7 @@ beforeEach(() => {
   testWindow.localStorage = memStorage;
   vi.stubGlobal('localStorage', memStorage);
   draftStore.__reloadForTest();
+  engineFollow.resetRemoteDraftEngineFollow();
 });
 
 async function loadModule() {
@@ -2122,4 +2125,37 @@ it('persists the default, preserves explicit permissions, isolates owners and re
   m.setNewMakerDraftOwner('permission-owner');
   expect(m.getDraft().newChatDefaultPermissionMode).toBeNull();
   expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+});
+
+// #10731 review: unit，真实 store + 内存存储。旧覆盖缺少临时引擎、无关写入与重启的组合。
+// 最小失败输入：本机 Pi → 远程 Claude → 改目录 → 重启，应仍用本机 Pi。
+describe('remote engine is a window-local choice', () => {
+  function followRemote() {
+    draftStore.switchVendor('pi');
+    const next = engineFollow.nextRemoteDraftEngine({
+      ownerId: null, deviceId: 'remote', currentVendor: 'pi',
+      defaultsReady: true, selectedAgentKind: 'claude-code',
+    });
+    expect(next).toBe('cc');
+    draftStore.switchVendor(next!, { remoteFollow: true });
+  }
+  it('keeps the local engine on disk and in preference sync through unrelated writes and restart', () => {
+    followRemote();
+    draftStore.patchDraft({ extraDirs: ['/extra'] });
+    expect(draftStore.getDraft().vendor).toBe('cc');
+    expect(draftStore.getDraftForPreferenceSync().vendor).toBe('pi');
+    draftStore.__reloadForTest();
+    expect(draftStore.getDraft().vendor).toBe('pi');
+  });
+  it('preserves manual selection even after selecting the followed engine again', () => {
+    followRemote();
+    draftStore.switchVendor('codex', { userSelected: true });
+    draftStore.switchVendor('cc', { userSelected: true });
+    expect(engineFollow.nextRemoteDraftEngine({
+      ownerId: null, deviceId: null, currentVendor: 'cc',
+      defaultsReady: false, selectedAgentKind: undefined,
+    })).toBeNull();
+    draftStore.__reloadForTest();
+    expect(draftStore.getDraft().vendor).toBe('cc');
+  });
 });

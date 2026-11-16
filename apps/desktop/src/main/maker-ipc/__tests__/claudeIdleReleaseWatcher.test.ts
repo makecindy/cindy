@@ -5,7 +5,10 @@ import { makerToDbAgentKind } from '../../../shared/agentKindConversion';
 import { Maker, type AgentSessionHandle, type BaseAgent, type SessionMeta, type SessionStorage, type StartSessionOptions } from '@cindy/maker-core';
 import { createRehydrateCloseSuppression } from '../../maker-host/rehydrateCloseSuppression';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createClaudeIdleReleaseWatcher, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, type IdleClaudeSession, type IdleReleaseAgentKind } from '../claudeIdleReleaseWatcher';
+import { createClaudeIdleReleaseWatcher, createIdleReleaseRuntimeClose, createOrdinaryIdleReleaseTaskCheck, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, type IdleClaudeSession, type IdleReleaseAgentKind } from '../claudeIdleReleaseWatcher';
+import { AgentInputCoordinator } from '../agent-input-coordinator';
+import { hasIdleReleaseQueuedWork, hasPendingIdleReleaseInput, hasScheduledIdleReleaseAutoResume } from '../idleReleaseInputGates';
+import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 
 function fixture(agentKind: IdleReleaseAgentKind = 'claude-code') {
   let now = 0;
@@ -423,4 +426,75 @@ it('keeps a real Codex Session while native work lives, then releases and resume
     await maker.shutdown();
     suppression.resetForTest();
   }
+});
+
+// The input gates every idle-release watcher reads, shared by the desktop and the Node Host,
+// against the real input coordinator: a queue that cannot be restored, a restored follow-up
+// and a queued auto-resume each keep the runtime; an empty restored queue does not.
+describe('idle release input gates', () => {
+  const queued = (clientId: string, patch: Partial<AgentInputQueuedMessage> = {}): AgentInputQueuedMessage => ({
+    clientId, text: 'next', persistedContent: 'next', model: 'claude-opus-4-7', effort: 'medium',
+    permissionMode: 'default', workingDir: '/repo',
+    chatMessage: { clientId, role: 'user', content: 'next', isStreaming: false, createdAt: '2026-11-15T00:00:00.000Z' },
+    createOpts: { agentKind: 'claude-code', workingDir: '/repo', model: 'claude-opus-4-7', effort: 'medium', permissionMode: 'default' },
+    ...patch,
+  });
+  const coordinatorWith = (loadQueueSnapshot: (sessionId: string) => Promise<AgentInputQueuedMessage[]>) =>
+    new AgentInputCoordinator({
+      sendToAgent: vi.fn(async () => 'accepted' as const), steerToAgent: vi.fn(async () => {}),
+      abortSession: vi.fn(async () => {}), isTurnRunning: () => true, getTurnGeneration: () => 0,
+      hasPendingInteraction: () => false, getAgentKind: () => 'claude-code',
+      getSdkSessionId: vi.fn(async () => 'native-history'), hasAssistantProgressAfter: async () => false,
+      createUserMessage: vi.fn(async () => undefined), touchUserSend: vi.fn(async () => {}),
+      emitProjection: () => {}, persistQueueSnapshot: vi.fn(async () => {}), loadQueueSnapshot,
+      getPersistedClientIds: async () => new Set<string>(),
+    } as unknown as ConstructorParameters<typeof AgentInputCoordinator>[0]);
+
+  it('keeps a runtime whose queue cannot be restored or holds a follow-up, and releases an empty one', async () => {
+    const unavailable = coordinatorWith(async () => { throw new Error('snapshot unavailable'); });
+    await expect(hasPendingIdleReleaseInput(unavailable, 'task')).resolves.toBe(true);
+
+    const followUp = coordinatorWith(async () => [queued('follow-up')]);
+    await expect(hasPendingIdleReleaseInput(followUp, 'task')).resolves.toBe(true);
+    expect(hasIdleReleaseQueuedWork(followUp, 'task')).toBe(true);
+    expect(hasScheduledIdleReleaseAutoResume(followUp, 'task')).toBe(false);
+
+    const resume = coordinatorWith(async () => [queued('resume', { autoResume: true })]);
+    await resume.ensureQueueRestored('task');
+    expect(hasScheduledIdleReleaseAutoResume(resume, 'task')).toBe(true);
+    expect(hasIdleReleaseQueuedWork(resume, 'task')).toBe(true);
+
+    const empty = coordinatorWith(async () => []);
+    await expect(hasPendingIdleReleaseInput(empty, 'task')).resolves.toBe(false);
+    expect(hasIdleReleaseQueuedWork(empty, 'task')).toBe(false);
+    expect(hasScheduledIdleReleaseAutoResume(empty, 'task')).toBe(false);
+  });
+});
+
+// The ordinary-task check and the runtime close the desktop and the Node Host share: the check asks
+// the database the caller reads now with the engine's SQL; the close retires only an idle current
+// runtime, except when retrying a close that failed into error.
+describe('idle release shared check and close', () => {
+  it('checks ordinary scope with the given SQL and closes idle-only unless retrying an error', async () => {
+    const queryOne = vi.fn(async (_sql: string, params?: unknown[]) => (params?.[0] === 'task' ? { id: 'task' } : undefined));
+    const isOrdinary = createOrdinaryIdleReleaseTaskCheck(() => ({ queryOne } as never), ORDINARY_CODEX_TASK_SQL);
+    await expect(isOrdinary('task', 'native')).resolves.toBe(true);
+    await expect(isOrdinary('other', 'native')).resolves.toBe(false);
+    expect(queryOne).toHaveBeenCalledWith(ORDINARY_CODEX_TASK_SQL, ['task', 'native']);
+
+    const closeSessionIfCurrent = vi.fn(async () => 'closed' as const);
+    const suppressed: string[] = [];
+    const close = createIdleReleaseRuntimeClose({ closeSessionIfCurrent } as never,
+      async (id, task) => { suppressed.push(id); return await task(); });
+    let status = 'active';
+    const session = { id: 'task', getStatus: () => status } as unknown as IdleClaudeSession;
+    await expect(close(session, false)).resolves.toBe(true);
+    status = 'error';
+    await expect(close(session, true)).resolves.toBe(true);
+    expect(closeSessionIfCurrent.mock.calls).toEqual([
+      [session, 'runtime-refresh', { onlyIfIdle: true }],
+      [session, 'runtime-refresh', undefined],
+    ]);
+    expect(suppressed).toEqual(['task', 'task']);
+  });
 });

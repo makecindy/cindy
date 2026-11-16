@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
-import { describe, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 const repo = path.resolve(__dirname, '../../../../../..');
 const hostSrc = path.join(repo, 'apps/host/src');
@@ -407,5 +407,121 @@ describe('Host copies of desktop expressions', () => {
     const copied = after(read(path.join(desktopMain, 'learn-host/__tests__/hostLearnCaptureParity.test.ts')), '  desktop = createCindyLearnInvocationCapture({', '\n  }) as Capture;');
     assert.ok(desktopDeps.length > 0);
     assert.equal(copied, desktopDeps);
+  });
+});
+
+// 以下断言原在桌面普通单测里读 register.ts；第一批桌面准备把被守护的代码原样搬进共用文件
+// （interruptedTurnAutoResumeHooks.ts、silentStopTurnEnd.ts），Host 之后直接调用这些文件。断言随代码
+// 改读新文件，按测试规范从普通单测移到这里，每条的意思不变；register.ts 一侧的接线断言留在原文件。
+describe('shared turn files moved out of register.ts', () => {
+  const autoResumeHooksSource = read(path.join(desktopMain, 'maker-ipc/interruptedTurnAutoResumeHooks.ts'));
+  const silentStopTurnEndSource = read(path.join(desktopMain, 'maker-ipc/silentStopTurnEnd.ts'));
+
+  // 原在 interruptedContinuationContract.test.ts “keeps a scheduler auto-resume owned until dispatch and fails it
+  // when discarded”。规则：定时任务的自动续接在派发前一直归它所有，被丢弃时以 deferredOwner 收尾。
+  // 失效后果：定时任务的续接在派发前就被清掉，或被丢弃后留在待定状态。
+  it('keeps a scheduler auto-resume owned until dispatch and fails it when discarded', () => {
+    const scheduleStart = autoResumeHooksSource.indexOf('autoResumeBookkeeping.schedule(');
+    const scheduleEnd = autoResumeHooksSource.indexOf('onUnconfirmedAutoResumeTurn:', scheduleStart);
+    expect(scheduleStart).toBeGreaterThan(-1);
+    expect(scheduleEnd).toBeGreaterThan(scheduleStart);
+    const scheduleHook = autoResumeHooksSource.slice(scheduleStart, scheduleEnd);
+    expect(scheduleHook).not.toMatch(/clearSchedulerAutoResumePending\s*\(/);
+    expect(scheduleHook).toMatch(/\(attempt\)\s*=>\s*\{\s*return\s*\(async/);
+    expect(scheduleHook).not.toMatch(/void\s*\(async\s*\(\)\s*=>/);
+
+    const ownerDiscardedStart = autoResumeHooksSource.indexOf('onResumableTurnErrorDiscarded: (');
+    const ownerDiscardedEnd = autoResumeHooksSource.indexOf('onResumableTurnError: (', ownerDiscardedStart);
+    expect(autoResumeHooksSource.slice(ownerDiscardedStart, ownerDiscardedEnd)).toMatch(
+      /deferredOwner:\s*options\.owner/,
+    );
+  });
+
+  // 原在 makerEventHotPathOrdering.test.ts “keeps auto-resume-owned terminal errors out of Agent Island until they
+  // are final”与“preserves continuation-only retry across its exact unexpected provider rebuild”。规则：过期的续接
+  // 不再重试；只续接型的续接记下预期的那一次重建；未确认的续接放弃持久化的那一份。失效后果：过期续接重复发送，
+  // 或只续接型的续接在重建后丢失。
+  it('keeps the auto-resume hooks\' attempt, rebuild and unconfirmed-turn steps', () => {
+    expect(autoResumeHooksSource).toContain('if (!attempt.isCurrent()) {');
+    expect(autoResumeHooksSource).toContain('if (isContinuationOnlyAutoResumeReason(signals.reason)) {');
+    expect(autoResumeHooksSource).toContain(
+      'pendingContinuationOnlyAutoResumeRebuilds.set(runtimeSession, decision.attemptToken);',
+    );
+    expect(autoResumeHooksSource).toContain('autoResumeBookkeeping.abandonUnconfirmedPersistedResume(');
+  });
+
+  // 原在 makerEventHotPathOrdering.test.ts “preserves the product clock before a silent-stop continuation can emit
+  // running”。规则：静默停止续接发出前先保住这一轮的计时。失效后果：续接一开始就把用时清零。
+  it('preserves the product clock before a silent-stop continuation can emit running', () => {
+    const start = silentStopTurnEndSource.indexOf('export async function handleSilentStopTurnEndWithPorts(');
+    const continuation = silentStopTurnEndSource.slice(start);
+    const first = continuation.indexOf('productTurnWallClockTracker.preserveForContinuation(session.id);');
+    const second = continuation.indexOf('const sendResult = await session.sendHostTurnContinuation(');
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(second).toBeGreaterThanOrEqual(0);
+    expect(first).toBeLessThan(second);
+  });
+
+  // 原在 silentStopContinuationBinding.test.ts “binds the reserved generation via the extracted helper and rolls back
+  // on send failure”。规则：续接预约的代次经 helper 绑定，sendOpts 并入续接调用，未派发与抛出两条失败都回滚。
+  // 失效后果：续接失败后代次留着，后面的终止事件被当成过期丢掉。
+  it('binds the reserved generation via the extracted helper and rolls back on send failure', () => {
+    const start = silentStopTurnEndSource.indexOf('export async function handleSilentStopTurnEndWithPorts(');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = silentStopTurnEndSource.indexOf('\n}\n', start);
+    expect(end).toBeGreaterThan(start);
+    const resumeBlock = silentStopTurnEndSource.slice(start, end);
+    expect(resumeBlock).toContain('bindSilentStopContinuationGeneration(session.id');
+    expect(resumeBlock).toContain('...binding.sendOpts,');
+    expect(resumeBlock.match(/binding\.rollbackBinding\(\);/g)).toHaveLength(2);
+  });
+});
+
+// handleSetModel moved verbatim out of register.ts into maker-ipc/sessionRuntimeSelectionApply.ts (the
+// Node Host runs the same steps). The two contracts below were ordinary unit tests reading register.ts;
+// they now read the moved code and live here (test tier rules), each assertion unchanged.
+describe('runtime selection moved out of register.ts', () => {
+  const registerSource = read(path.join(desktopMain, 'maker-ipc/register.ts'));
+  const runtimeSelectionApplySource = read(path.join(desktopMain, 'maker-ipc/sessionRuntimeSelectionApply.ts'));
+
+  // Was in sessionRuntimeFallbackIntent.test.ts. Rule: an automatic same-engine change yields to a
+  // user's pending choice before it writes or reconciles. Failure: an automatic change overwrites the
+  // route the user just picked.
+  it('uses the same guard before every automatic same-engine mutation can write or reconcile', () => {
+    const start = runtimeSelectionApplySource.indexOf('  const handleSetModel = async (');
+    const body = runtimeSelectionApplySource.slice(start, runtimeSelectionApplySource.indexOf('      const routeExplicit =', start));
+    expect(body).toMatch(/internalOptions.source !== 'user' &&\s*!canApplyAutomaticRuntimeSelection\(sessionId, internalOptions.expectedGeneration\)/);
+    expect(body).toContain('return { deferred: false, superseded: true };');
+  });
+
+  // Was in orcaProviderRoutingSnapshotWiring.test.ts. Rule: a task on an SSH host cannot switch to a
+  // local-only account, refused before the selection is deferred or the running route replaced.
+  // Failure: an SSH worker is moved onto a provider that only exists on this computer.
+  it('rejects SSH account switching before deferring or replacing the running route', () => {
+    const guard = runtimeSelectionApplySource.indexOf("throwIpcError('INVALID_PARAMS', 'This provider requires local execution')");
+    expect(guard).toBeGreaterThan(-1);
+    expect(runtimeSelectionApplySource.slice(guard - 450, guard)).toContain('runtimeStatus.remoteHostId');
+    expect(runtimeSelectionApplySource.slice(guard - 300, guard)).toContain('isLocalOnlyProviderForAgent');
+    expect(runtimeSelectionApplySource.indexOf('const deferLockedSelection =', guard)).toBeGreaterThan(guard);
+    expect(runtimeSelectionApplySource.indexOf('const previousRuntime =', guard)).toBeGreaterThan(guard);
+  });
+
+  // Rule: createHandleSetModel's ports are bound when each call starts; the body used to read these
+  // three register.ts variables at each use. That is the same only while each is assigned once, at
+  // startup, before the set-model handler is registered. Failure: a later reset (an account switch,
+  // say) reaches a call already running with the old value.
+  it('assigns each runtime-selection holder once in register.ts', () => {
+    for (const holder of ['contextOverflowRolloverHolder', 'pendingCredentialSwitchHolder', 'agentInputCoordinatorHolder']) {
+      const assignments = registerSource.match(new RegExp(`(^|[^.\\w])${holder}\\s*=(?!=)`, 'gm')) ?? [];
+      // the one assignment (the declaration `let holder: … | null = null` does not match)
+      expect(assignments, holder).toHaveLength(1);
+    }
+    const handler = registerSource.indexOf('registerSessionSetModelHandler(makerSessionRegistry, {');
+    expect(handler).toBeGreaterThan(-1);
+    for (const holder of ['contextOverflowRolloverHolder', 'pendingCredentialSwitchHolder', 'agentInputCoordinatorHolder']) {
+      const assigned = registerSource.indexOf(`\n  ${holder} = `);
+      expect(assigned, holder).toBeGreaterThan(-1);
+      expect(assigned, holder).toBeLessThan(handler);
+    }
   });
 });

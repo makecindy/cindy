@@ -3445,7 +3445,30 @@ class CindyMcpGateway {
     });
   }
 
+  // Share deterministic input errors with the approval hook. Never unwrap or
+  // guess parameters: ghost_call and third-party tools legitimately accept args.
+  private callInputError(input: unknown): string | null {
+    const record = recordInput(input);
+    const server = typeof record.server === 'string' ? this.resolveServerName(record.server) : null;
+    const tool = server && typeof record.tool === 'string'
+      ? this.tools.get(mcpGatewayKey(server, record.tool)) : undefined;
+    // Only the host plugin gateway is in scope. Other MCP tools retain their
+    // server-owned validation and the generic call_tool envelope diagnostics.
+    if (!tool || tool.serverName !== 'cindy' || !tool.name.startsWith('ghost_')) return null;
+    const schema = tool.inputSchema;
+    const required = Array.isArray(schema.required)
+      ? schema.required.filter((key): key is string => typeof key === 'string') : [];
+    const args = recordInput(record.args);
+    const missing = required.filter(key => !Object.prototype.hasOwnProperty.call(args, key));
+    if (missing.length === 0) return null;
+    return 'Invalid ' + tool.serverName + '/' + tool.name + ' parameters: missing '
+      + missing.map(key => 'args.' + key).join(', ')
+      + '. Put the selected tool parameters directly in gateway args, without an extra wrapping args.'
+      + ' Expected args schema: ' + schemaHint(schema);
+  }
+
   resolveCall(input: unknown): ResolvedMcpGatewayCall | null {
+    if (this.callInputError(input)) return null;
     const record = recordInput(input);
     const requestedServerName = typeof record.server === 'string' ? record.server : '';
     const toolName = typeof record.tool === 'string' ? record.tool : '';
@@ -3935,7 +3958,7 @@ class CindyMcpGateway {
     const approvedDefinition = toolCallId ? this.approvedDefinitions.get(toolCallId) : undefined;
     if (toolCallId) this.approvedDefinitions.delete(toolCallId);
     const resolved = this.resolveCall(params);
-    if (!resolved) throw new Error(this.unknownCallMessage(params));
+    if (!resolved) throw new Error(this.callInputError(params) ?? this.unknownCallMessage(params));
     if (approvedDefinition !== undefined && this.approvalDefinition(resolved) !== approvedDefinition) {
       throw new McpBridgeError('tool definition changed; inspect it with cindy_mcp_list_tools and call again');
     }
@@ -5243,9 +5266,9 @@ export default async function cindyBridge(piApi: any) {
     // 分类只认「解析成功」：披露状态不参与权限命名与采集分类，否则被门拦下的那次
     // 会被当成非 gateway 调用，权限命名与采集都会漏掉这一条。
     const gatewayCall = resolvedGatewayCall;
-    // Invalid or unknown gateway input cannot execute a capability. Let execute()
-    // return its deterministic discovery/schema error without showing a misleading
-    // permission prompt for the wrapper itself.
+    // Invalid or unknown input gets a deterministic error, not a permission prompt.
+    // Bind the skipped approval to this invocation: same-batch recovery/discovery
+    // may replace its schema before execute(), but cannot authorize the old call.
     if (
       (event.toolName === CINDY_MCP_CALL_TOOL
         || CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
@@ -5255,7 +5278,10 @@ export default async function cindyBridge(piApi: any) {
         || event.toolName === CINDY_INPUT_HANDOFF_TOOL
         || event.toolName === CINDY_BOT_MEMORY_TOOL)
       && !gatewayCall
-    ) return;
+    ) {
+      if (event.toolName === CINDY_MCP_CALL_TOOL) mcpGateway.markPermissionSkipped(event.toolCallId);
+      return;
+    }
     // 披露门必须判在**发起权限询问之前**：pi 的权限询问由本 hook 发起，若等到工具实现
     // 里才拦，这次弹框已经发生了 —— 被门拦下的一次也打扰用户，与 pi-harness 记载的
     // 「未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框」相悖。
