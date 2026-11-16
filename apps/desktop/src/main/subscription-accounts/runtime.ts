@@ -149,7 +149,7 @@ interface OwnerRuntime {
   defaultCodexAuthEpoch: number;
 }
 let runtime: OwnerRuntime | undefined;
-const listeners = new Set<(providerId: SubscriptionProvider, resetAccountId?: string) => void>();
+const listeners = new Set<(providerId: SubscriptionProvider, resetAccountId?: string, change?: 'usage' | 'load') => void>();
 const codexModelListeners = new Set<() => void>();
 /** Synchronous capability invalidation; listeners read the newly committed union. */
 export function onSubscriptionPoolCodexModelsChanged(listener: () => void): () => void {
@@ -169,18 +169,18 @@ function publishCodexCatalogChange(state: OwnerRuntime): void {
   }
 }
 export function onSubscriptionAccountsChanged(
-  listener: (providerId: SubscriptionProvider, resetAccountId?: string) => void,
+  listener: (providerId: SubscriptionProvider, resetAccountId?: string, change?: 'usage' | 'load') => void,
 ) {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
   };
 }
-function changed(provider: SubscriptionProvider, resetAccountId?: string) {
+function changed(provider: SubscriptionProvider, resetAccountId?: string, change?: 'usage' | 'load') {
   if (provider === 'openai') publishCodexCatalogChange(currentRuntime());
   for (const listener of listeners) {
     try {
-      listener(provider, resetAccountId);
+      listener(provider, resetAccountId, change);
     } catch {
       /* Views cannot invalidate a completed account operation. */
     }
@@ -316,7 +316,7 @@ function expirePendingStarts(state: OwnerRuntime): void {
   for (const [key, pending] of state.pendingStarts) {
     if (pending.until > Date.now()) continue;
     const provider = key.slice(0, key.indexOf(':')) as SubscriptionProvider;
-    if (state.running.get(keyOf(provider, pending.accountId))?.delete(pending.token)) changed(provider);
+    if (state.running.get(keyOf(provider, pending.accountId))?.delete(pending.token)) changed(provider, undefined, 'load');
     // Keep the task's admission marker until takeover: an expired reassignment
     // must not use the ordinary existing-task exemption to exceed the limit.
   }
@@ -585,7 +585,7 @@ export function observeSubscriptionAccountUsage(
   };
   state.cache.set(key, next);
   void persistUsage(state, provider, key.slice(provider.length + 1), next);
-  changed(provider);
+  changed(provider, undefined, 'usage');
 }
 async function snapshot(
   state: OwnerRuntime,
@@ -1961,7 +1961,7 @@ export async function acquireSubscriptionAccount(
     }
     active.add(token);
     state.lastPicked.set(selectionProvider, selected);
-    changed(provider);
+    changed(provider, undefined, 'load');
   }
   let released = false;
   let handedOff = false;
@@ -2118,12 +2118,12 @@ export async function acquireSubscriptionAccount(
         else active.delete(token);
       }
       if (wasActive !== active.has(token)) {
-        changed(provider);
+        changed(provider, undefined, 'load');
       }
     },
     release: () => {
       released = true;
-      if (!handedOff && active.delete(token)) changed(provider);
+      if (!handedOff && active.delete(token)) changed(provider, undefined, 'load');
     },
   };
 }

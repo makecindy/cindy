@@ -12,6 +12,7 @@ import { createGroupContinuityExecutor } from '../continuityExecutor.js';
 import type { GroupContinuityGrant } from '../../../shared/providerGroupContinuity.js';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../service.js';
 import type { ProviderGroupBinding } from '../bindings.desktop.js';
+import { DEVICE_LINK_PUSH } from '../../../shared/deviceLinkIpc.js';
 
 vi.mock('../../maker-host/model-disable-store.js', () => ({ readModelDisableOverrides: () => ({}) }));
 
@@ -28,15 +29,15 @@ const io = vi.hoisted(() => ({
   self: vi.fn(() => 'self'),
   closeEpoch: vi.fn(() => 0),
   offlineDirect: vi.fn(() => false),
-  localAccountPush: undefined as (() => void) | undefined,
-  accountPush: undefined as ((deviceId: string, channel: string) => void) | undefined,
+  localAccountPush: undefined as ((providerId?: 'anthropic' | 'openai', resetAccountId?: string, change?: 'usage' | 'load') => void) | undefined,
+  accountPush: undefined as ((deviceId: string, channel: string, payload?: unknown) => void) | undefined,
 }));
 
 // Keep the real account runtime; capture only its event subscription so both
 // local and remote invalidation exercise the production directory/cache owner.
 vi.mock('../../subscription-accounts/runtime.js', async importOriginal => ({
   ...await importOriginal<Record<string, unknown>>(),
-  onSubscriptionAccountsChanged: (listener: () => void) => { io.localAccountPush = listener; return () => {}; },
+  onSubscriptionAccountsChanged: (listener: typeof io.localAccountPush) => { io.localAccountPush = listener; return () => {}; },
 }));
 // The account runtime now statically imports route admission. These directory/cache tests never
 // dispatch accounts; keep that permission leaf fail-closed without loading share/fast-policy assembly.
@@ -49,7 +50,7 @@ vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => owner, i
 vi.mock('../../device-link/providerShareGuest.js', () => ({ getReceivedShares: io.shares,
   captureProviderShareGroupRecovery: () => async () => undefined }));
 vi.mock('../../device-link/ipc.js', () => ({ handleListDevices: io.devices, defaultDeps: vi.fn() }));
-vi.mock('../../device-link/index.js', () => ({ onRemotePushChannel: (listener: (deviceId: string, channel: string) => void) => { io.accountPush = listener; return () => {}; }, remoteBackgroundInvoke: io.invoke, getDeviceLinkStatus: io.status,
+vi.mock('../../device-link/index.js', () => ({ onRemotePushChannel: (listener: typeof io.accountPush) => { io.accountPush = listener; return () => {}; }, remoteBackgroundInvoke: io.invoke, getDeviceLinkStatus: io.status,
   getSelfDeviceId: io.self, getRemoteLinkCloseEpoch: io.closeEpoch, hasOfflineDirectPath: io.offlineDirect }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://device-link.invalid' }));
 vi.mock('../../device-link/controllerPlatform.js', () => ({ isMobilePlatform: () => false }));
@@ -86,6 +87,7 @@ const { captureProviderMetadataContinuityScope, invokeProviderMetadataContinuity
   typeof import('../../device-link/providerMetadataContinuity.js')>('../../device-link/providerMetadataContinuity.js');
 
 afterEach(() => {
+  io.closeEpoch.mockReturnValue(0);
   setProviderGroupClaudeUsageReader(null);
   setProviderGroupCodexUsageReader(null);
   io.group.mockReset();
@@ -747,9 +749,55 @@ describe('provider group runtime quota account selection', () => {
     expect(io.invoke.mock.calls.filter(([, channel]) => channel === 'maker:subscription-pool:quota')).toHaveLength(1);
   });
 
-  // Unit, pause report: invalidating the visible directory used to leave the
-  // separate 30-second pool cache alive. The real change event must change quota.
-  it.each(['local', 'remote'])('drops pool quota caches on %s account changes', async source => {
+  // Test value / unit: real event/runtime/router gates a delayed healthy second
+  // account. The previous immediate recovery matrix missed deadline + revocation
+  // races; a late success must help future picks but never erase newer evidence.
+  it.each(['healthy', 'new-failure', 'identity', 'revoked', 'owner'] as const)(
+    'fences a late pool recovery against %s state', async state => {
+      vi.useFakeTimers();
+      const h = harness('anthropic');
+      const model = 'claude-sonnet-5';
+      h.config.members = h.config.members.slice(1);
+      io.group.mockReturnValue(h.config);
+      io.catalog.mockResolvedValue([{ id: 'anthropic', connected: true, agents: ['claude-code'],
+        auth: { method: 'oauth', native: 'claude' }, models: { 'claude-code': [{ id: model }] },
+        routing: { 'claude-code': {} } } as unknown as ProviderView]);
+      let finish!: (value: unknown) => void;
+      let modelReads = 0;
+      io.invoke.mockImplementation(async (_device, _channel, args) => {
+        if (args.length === 1) return { ok: true, result: { providerId: 'anthropic', pooled: true,
+          usage: { claudeUsage: usage() } } };
+        modelReads++;
+        return modelReads === 1 ? new Promise(resolve => { finish = resolve; })
+          : { ok: true, result: { providerId: 'anthropic', model, available: false } };
+      });
+      const { router } = getProviderGroupOwnerScope();
+      const key = h.config.members[0].key;
+      const until = Date.now() + 1_800_000;
+      router.markCooling(h.localId, key, until, model);
+      const pick = () => router.pick({ providerId: h.localId, model, agentKind: 'claude-code' });
+      const first = pick();
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(await first).toMatchObject({ kind: 'unavailable' });
+      if (state === 'new-failure') router.markCooling(h.localId, key, until + 1000, model);
+      if (state === 'identity') io.accountPush!('mini', 'subscription-accounts:changed', { providerId: 'anthropic' });
+      if (state === 'revoked') io.accountPush!('mini', DEVICE_LINK_PUSH.ACCESS_REVOKED);
+      if (state === 'owner') { owner = 'owner-after-recovery'; getProviderGroupOwnerScope(); }
+      finish({ ok: true, result: { providerId: 'anthropic', model, available: true } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(router.coolingUntil(h.localId, key, model))
+        .toBe(state === 'healthy' ? null : state === 'new-failure' ? until + 1000 : until);
+      if (state === 'healthy') {
+        expect(await pick()).toMatchObject({ kind: 'member' });
+        expect(modelReads).toBe(1);
+      }
+      io.closeEpoch.mockReturnValue(0);
+    },
+  );
+
+  // Unit, pause report: invalidate all cache layers for the affected computer,
+  // retaining the other computer's evidence (local changes used to clear both).
+  it.each(['local', 'remote'])('scopes pool quota invalidation to %s account changes', async source => {
     const h = harness('anthropic', 'claude');
     let percent = 100;
     io.invoke.mockImplementation(async () => ({ ok: true, result: { providerId: 'anthropic', pooled: true,
@@ -758,8 +806,95 @@ describe('provider group runtime quota account selection', () => {
     percent = 10;
     if (source === 'local') io.localAccountPush!();
     else io.accountPush!('mini', 'subscription-accounts:changed');
-    expect((await h.read())[1].claudeUsage?.fiveHour?.utilization).toBe(10);
+    expect((await h.read())[1].claudeUsage?.fiveHour?.utilization).toBe(source === 'remote' ? 10 : 100);
   });
+
+  // Test value / unit: event → real runtime/readers/directory/router, two competing
+  // members. A busy member's update used to discard the healthier second pool's
+  // pending reply and select the busy one. Earlier tests only invalidated settled reads.
+  it.each(['claude', 'codex'] as const)('keeps %s healthy-pool allocation through unrelated and load events', async native => {
+    vi.useFakeTimers();
+    const providerId = native === 'codex' ? 'openai' : 'anthropic';
+    const h = harness(providerId, native);
+    const model = native === 'codex' ? 'gpt-5.3-codex' : 'claude-sonnet-5';
+    const provider = (id: string, runningTurns = 0) => ({ id, connected: true,
+      subscriptionAccountPool: providerId, auth: { method: 'oauth', native }, runningTurns,
+      agents: [native === 'codex' ? 'codex' : 'claude-code'],
+      models: { [native === 'codex' ? 'codex' : 'claude-code']: [{ id: model }] },
+      routing: { [native === 'codex' ? 'codex' : 'claude-code']: {} },
+    }) as unknown as ProviderView;
+    const devices = ['busy', 'healthy'];
+    io.devices.mockResolvedValue({ devices: devices.map(deviceId => ({ deviceId, online: true,
+      remoteControlEnabled: true, controlEnabled: true, platform: 'darwin' })) });
+    io.catalog.mockImplementation(async (_invoke, deviceId) => [provider(providerId, deviceId === 'busy' ? 2 : 0)]);
+    h.config.members = normalizeProviderGroupConfig({ strategy: 'least', members: devices.map(agentDeviceId => ({
+      kind: 'device', agentDeviceId, providerId,
+    })) }, h.localId)!.members;
+    io.group.mockReturnValue(h.config);
+    const quota = (used: number) => native === 'claude' ? { claudeUsage: { ...usage(),
+      sevenDay: { utilization: used, resetsAt: Date.now() / 1000 + 604800 } } }
+      : { codexUsage: { nativeAccountPool: true, appServerBuckets: { codex: {
+        updatedAt: Date.now(), secondary: { usedPercent: used, windowMinutes: 10080,
+          resetsAt: Date.now() / 1000 + 604800 },
+      } } } };
+    let finish!: () => void;
+    const waiting = new Promise<void>(resolve => { finish = resolve; });
+    io.invoke.mockImplementation(async (deviceId) => {
+      if (deviceId === 'healthy') await waiting;
+      return { ok: true, result: { providerId, pooled: true, usage: quota(deviceId === 'busy' ? 20 : 0) } };
+    });
+    const router = getProviderGroupRouter();
+    const pick = () => router.pick({ providerId: h.localId, model, agentKind: native === 'codex' ? 'codex' : 'claude-code' });
+    const first = pick();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(io.invoke).toHaveBeenCalledTimes(2);
+    for (let index = 0; index < 20; index++) {
+      io.accountPush!('busy', 'subscription-accounts:changed', { providerId, change: 'usage' });
+      io.localAccountPush!(providerId, undefined, 'load');
+      io.accountPush!('healthy', 'subscription-accounts:changed', { providerId: native === 'codex' ? 'anthropic' : 'openai' });
+      io.accountPush!('healthy', 'subscription-accounts:changed', { providerId, change: 'load' });
+    }
+    finish();
+    expect(await first).toMatchObject({ kind: 'member', member: { agentDeviceId: 'healthy' } });
+    expect(await pick()).toMatchObject({ member: { agentDeviceId: 'healthy' } });
+    // Busy's settled quota was refreshed once on demand; healthy's pending and cached
+    // pool reply survived all 80 notifications, including its own load changes.
+    expect(io.invoke.mock.calls.filter(([deviceId]) => deviceId === 'healthy')).toHaveLength(1);
+    expect(io.invoke.mock.calls.filter(([deviceId]) => deviceId === 'busy')).toHaveLength(2);
+  });
+
+  it.each(['usage', 'load', 'identity', 'named-identity', 'legacy', 'owner', 'link-close'] as const)(
+    'handles a %s change during a pool read without resurrecting revoked evidence', async change => {
+      vi.useFakeTimers();
+      const providerId = change === 'named-identity' ? 'anthropic-target' : 'anthropic';
+      const h = harness(providerId);
+      if (change === 'named-identity') io.catalog.mockResolvedValue([{ id: providerId, connected: true,
+        subscriptionAccountPool: 'anthropic', auth: { method: 'oauth', native: 'claude' } } as ProviderView]);
+      let finish!: (value: unknown) => void;
+      io.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      io.invoke.mockResolvedValue({ ok: true, result: { providerId, pooled: true,
+        usage: { claudeUsage: { ...usage(), fiveHour: { utilization: 100 } } } } });
+      const first = h.read();
+      await vi.advanceTimersByTimeAsync(0);
+      if (change === 'owner') {
+        const previousOwner = owner;
+        owner = 'intermediate-owner'; getProviderGroupOwnerScope();
+        owner = previousOwner; getProviderGroupOwnerScope();
+      } else if (change === 'link-close') io.closeEpoch.mockReturnValue(1);
+      else io.accountPush!('mini', 'subscription-accounts:changed', change === 'legacy' ? undefined
+        : { providerId: 'anthropic', ...(change === 'usage' || change === 'load' ? { change } : {}) });
+      const second = change === 'usage' || change === 'load' ? h.read() : null;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(io.invoke).toHaveBeenCalledTimes(1);
+      finish({ ok: true, result: { providerId, pooled: true, usage: { claudeUsage: usage() } } });
+      expect((await first)[1].claudeUsage?.fiveHour?.utilization ?? null)
+        .toBe(change === 'usage' || change === 'load' ? 25 : null);
+      if (second) expect((await second)[1].claudeUsage?.fiveHour?.utilization).toBe(25);
+      const next = (await h.read())[1].claudeUsage?.fiveHour?.utilization;
+      expect(next).toBe(change === 'load' ? 25 : 100);
+      expect(io.invoke).toHaveBeenCalledTimes(change === 'load' ? 1 : 2);
+    },
+  );
 
   // PR review: pooled native quota must survive both remote parsing and source merging for bridge engines.
   it.each(['openai', 'legacy-target'])('uses %s remote pool buckets for Pi and Claude Code while retaining model-specific capacity', async providerId => {
