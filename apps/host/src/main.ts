@@ -137,7 +137,7 @@ import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from
 import { createInputQueue } from './agent/input-queue.mjs';
 import { readClaudeIdleMinutesFrom } from '../../desktop/src/main/maker-host/claudeIdleReleaseSettingsCore.js';
 import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
-import { createHostRuntimeSelection, hostRuntimeSelectionQueueHooks } from './agent/runtime-selection.ts';
+import { bindHostSessionRuntimeHooks, createHostRuntimeSelection, hostRuntimeSelectionQueueHooks } from './agent/runtime-selection.ts';
 import { throwIpcError } from '../../desktop/src/main/utils/ipcValidate.js';
 import type { ContextRecoveryKind } from './agent/context-recovery.ts';
 import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring.ts';
@@ -1157,6 +1157,8 @@ const runtimeSelection = createHostRuntimeSelection({
   readProviderGroup: providerId => hostProviderGroups.readProviderGroup(providerId),
   log: createLogger('runtime-selection'),
 });
+// The desktop's process-wide runtime selection slots (runtime-selection.ts), before any owner commit.
+bindHostSessionRuntimeHooks();
 
 const subagentReads = createSubagentReadService({
   getUserDataDir,

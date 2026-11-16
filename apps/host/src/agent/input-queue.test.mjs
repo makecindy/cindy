@@ -41,7 +41,8 @@ import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/cl
 import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionStorageAdapter.ts';
 import { createHostRuntimeSession } from './create-runtime-session.ts';
 import { createHostProviderExecutionCheck } from './send-preflight.ts';
-import { createHostRuntimeSelection, hostRuntimeSelectionQueueHooks, HOST_RUNTIME_SELECTION_QUEUE_MEMBERS, HOST_RUNTIME_START_PORTS } from './runtime-selection.ts';
+import { bindHostSessionRuntimeHooks, createHostRuntimeSelection, hostRuntimeSelectionQueueHooks, HOST_RUNTIME_SELECTION_QUEUE_MEMBERS, HOST_RUNTIME_START_PORTS } from './runtime-selection.ts';
+import { acceptSessionRuntimeMutation } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from '../../../desktop/src/main/maker-ipc/sessionContextWindowBudgetState.js';
 import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { getSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
@@ -5057,6 +5058,50 @@ test('auto-resume route switch: the second interruption resumes on another provi
   assert.equal(third.options.providerId, 'prov-b', 'the resume runs on the sibling provider');
   // As the desktop: a start on the accepted override keeps the task row's saved provider baseline.
   assert.equal(r.row('fb').provider_id, 'prov-a', 'the task row keeps its saved provider');
+});
+
+// An automatic route fallback on a task of the model-change runtime: the shared fallback step accepts it
+// as the interrupted-turn auto-resume does (sessionRuntimeFallback.ts acceptSessionRuntimeMutation,
+// source 'fallback'); the task row keeps its saved route ('big' on prov-a).
+const FALLBACK_ROUTE = { agentKind: 'claude-code', model: 'big', providerId: 'prov-b', effort: null, fastMode: false };
+async function fallenBackTask(t, id) {
+  const r = await modelChangeRuntime(t);
+  r.views.current = ['prov-a', 'prov-b'].map(provider => ({ ...switchViews('claude-code')[0], id: provider }));
+  await r.createTask(id);
+  acceptSessionRuntimeMutation({ sessionId: id, source: 'fallback', profile: FALLBACK_ROUTE, deferred: false });
+  return r;
+}
+const startedOn = async (r, id, clientId) => {
+  await r.h.queue.enqueue(id, { clientId, text: 'next' });
+  await waitFor(() => r.h.maker.sessions.get(id)?.sent.length === 1);
+  const { model, providerId } = r.h.maker.sessions.get(id).options;
+  return { model, providerId };
+};
+
+// Rule (the desktop's set-model, sessionRuntimeSelectionApply.ts, records a user mutation, which drops
+// the accepted override; bootstrapSession then starts on the row): a user who picks a model after an
+// automatic fallback gets the pick at the next start, not the fallback route. Gap: no Host test picks
+// after a fallback; the start reads the override (applySessionRuntimeOverrideForStart). Minimal failing
+// input: a fallback to prov-b, then a pick of 'small' on prov-a.
+test('runtime override: a model the user picks after an automatic fallback is what the next start uses', { timeout: 30_000 }, async t => {
+  const r = await fallenBackTask(t, 'pick');
+  await r.selection.setModel('pick', 'small', 'prov-a', undefined, undefined);
+  assert.deepEqual(await startedOn(r, 'pick', 'pick-1'), { model: 'small', providerId: 'prov-a' });
+});
+
+// Rule (bootstrap-electron.ts setAppSessionCommitBoundaryHook → clearOwnerScopedSessionRuntimeSelection,
+// bound for the Host by bindHostSessionRuntimeHooks): an owner commit drops every task's runtime control
+// state. Gap: the Host bound no boundary hook, so after signing out and in again (same account, same task
+// ids) the next start ran on the route a fallback chose before. Minimal failing input: a fallback, a
+// sign-out and a sign-in, a send.
+test('runtime override: after signing out and in again a task starts on its saved route, not a fallback from before', { timeout: 30_000 }, async t => {
+  t.after(bindHostSessionRuntimeHooks());
+  const r = await fallenBackTask(t, 'relogin');
+  const profile = path.join(r.db.root, 'profile');
+  // As main.ts: signing out commits signed-out (configureHostOwner), signing in commits the owner again.
+  configureHostOwner({ userDataDir: profile, ownerId: null });
+  configureHostOwner({ userDataDir: profile, ownerId: 'owner-recovery' });
+  assert.deepEqual(await startedOn(r, 'relogin', 'relogin-1'), { model: 'big', providerId: 'prov-a' });
 });
 
 // Working-directory move (A5, session-move.ts with the executor's own close):

@@ -82,12 +82,15 @@ import { createLocalRouteAdmission } from '../../../desktop/src/main/maker-ipc/l
 import { hostManagedLocalModelNotReady } from './pi-native-providers.ts';
 import { persistSessionFieldsWith } from '../../../desktop/src/main/localDb/sessionFieldPersistence.ts';
 import { readSessionSource } from '../../../desktop/src/main/localDb/sessionDispatchSnapshot.ts';
-import { recordUserSessionRuntimeMutation } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
+import {
+  clearOwnerScopedSessionRuntimeSelection,
+  recordUserSessionRuntimeMutation,
+} from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
 import { createSharedTaskSettingGuard } from '../../../desktop/src/main/maker-ipc/sharedTaskSetting.ts';
 import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { withRehydrateCloseSuppressed } from '../../../desktop/src/main/maker-host/rehydrateCloseSuppression.ts';
 import { setSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
-import { getActiveAppSession } from '../../../desktop/src/main/appSessionState.ts';
+import { getActiveAppSession, setAppSessionCommitBoundaryHook } from '../../../desktop/src/main/appSessionState.ts';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import * as broadcastTap from '../../../desktop/src/main/device-link/broadcast-tap.js';
 import type { Logger } from '../../../desktop/src/main/logger.ts';
@@ -665,6 +668,29 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
 }
 
 type HostRuntimeSelection = ReturnType<typeof createHostRuntimeSelection>;
+
+/**
+ * The process-wide runtime selection slots the desktop fills at startup, filled for the Host: main.ts
+ * calls this once, after the runtime selection is built and before the first owner commit
+ * (configureHostOwner in ensureRuntime). Returns the undo, for tests.
+ *
+ * The app session commit boundary (appSessionState.ts setAppSessionCommitBoundaryHook; the desktop's
+ * hook, bootstrap-electron.ts): when the owner changes, before the new owner is visible, every task's
+ * provider, runtime axes and runtime control state go (clearOwnerScopedSessionRuntimeSelection, which
+ * also advances the owner epoch). The desktop's other steps of that hook, on the Host:
+ * - local Agent confirmations (cancelLocalAgentConfirmations): the Host runs no local Agent service
+ *   (release table row 29); its own tool confirmations close in disposeOwnerRuntime (main.ts), which
+ *   every owner commit follows;
+ * - a Claude Code login in progress (cancelClaudeCliLogin): disposeOwnerRuntime closes the provider
+ *   configuration, whose cancelLogins aborts it and kills the CLI child; every commit of another owner
+ *   follows that dispose (ensureRuntime refuses an owner switch while an owner runtime is up);
+ * - task attention badges, remote desktop viewers, popped-out tab windows: window state, which the
+ *   Host does not have.
+ */
+export function bindHostSessionRuntimeHooks(): () => void {
+  setAppSessionCommitBoundaryHook(() => clearOwnerScopedSessionRuntimeSelection());
+  return () => { setAppSessionCommitBoundaryHook(null); };
+}
 
 /**
  * The input queue's hooks the runtime selection answers (main.ts passes them to createInputQueue; the
