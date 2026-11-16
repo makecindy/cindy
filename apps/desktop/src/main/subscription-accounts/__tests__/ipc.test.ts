@@ -168,6 +168,34 @@ beforeEach(() => {
   h.sessionRead.mockReset().mockResolvedValue({ providerId: 'anthropic', state: 'legacy' });
 });
 
+// Unit, duplicate-account regression: one account can retain two native homes. The production
+// placement entry must commit their move/take-out together; prior cases only moved one home.
+it('moves and takes out all homes of an account atomically, including failed writes', async () => {
+  const first = `cindy-${accountOwnerPrefix()}-11111111-1111-4111-8111-111111111111`;
+  const second = `cindy-${accountOwnerPrefix()}-22222222-2222-4222-8222-222222222222`;
+  h.placement = { [`openai:${first}`]: 'openai', [`openai:${second}`]: 'openai' };
+  const before = structuredClone(h.placement);
+  h.placementWriteFails = true;
+  await expect(placeSubscriptionAccount('openai', [first, second], 'openai-target')).rejects.toThrow('placement write unavailable');
+  expect(h.placement).toEqual(before);
+  await expect(createSubscriptionProvider('openai', first, 'Account', () => '12345678', undefined, [second]))
+    .rejects.toThrow('placement write unavailable');
+  expect(h.placement).toEqual(before);
+  expect(h.created).toEqual({});
+  h.placementWriteFails = false;
+  let writes = 0;
+  h.beforeWrite = () => { writes++; };
+  await placeSubscriptionAccount('openai', [first, second], 'openai-target');
+  expect(h.placement).toEqual({ [`openai:${first}`]: 'openai-target', [`openai:${second}`]: 'openai-target' });
+  expect(writes).toBe(1);
+  const target = await createSubscriptionProvider('openai', first, 'Account', () => '12345678', undefined, [second]);
+  expect(h.placement).toEqual({ [`openai:${first}`]: target, [`openai:${second}`]: target });
+  expect(h.created[target].account).toBe(first);
+  expect(writes).toBe(2);
+  await expect(placeSubscriptionAccount('openai', [first, '../escape'], 'openai')).rejects.toThrow('Account cannot be moved');
+  expect(writes).toBe(2);
+});
+
 describe('legacy Codex account upgrade', () => {
   // PR #10405, unit: full routing derives historical model membership from the persisted source;
   // an update must invalidate that index without admitting bindings from another provider kind.
