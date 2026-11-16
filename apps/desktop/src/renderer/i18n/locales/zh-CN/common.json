@@ -10884,6 +10884,7 @@
       "duplicate": "复制伙伴",
       "moreActions": "{{name}} 的更多操作",
       "viewIcons": "图标",
+      "showCollapsedTeammateAvatars": "收起时显示头像",
       "sectionExpand": "展开伙伴",
       "showLess": "收起",
       "sectionCollapse": "收起伙伴",

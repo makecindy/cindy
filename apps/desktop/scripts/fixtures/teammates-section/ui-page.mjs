@@ -28,7 +28,7 @@ export default {
   },
   cases: {
     'collapse-attention': {
-      about: 'Independent icon/list choice; collapsed sections keep unread and pending feedback only',
+      about: 'Independent icon/list choice; collapsed avatars opt-in preserves the default attention-only behavior',
       data: { showPinned: true, profiles: [
         { ...profiles[0], lastMessageAt: Date.now() - 180000, name: '日程助手', avatar: 'cindy://avatar/preset/cindy', lastMessagePreview: '今天的安排已同步' },
         { ...profiles[1], lastMessageAt: Date.now() - 120000, name: '写作伙伴', avatar: 'cindy://avatar/preset/dash', lastMessageRole: 'assistant', lastMessagePreview: '周报已整理好，请查看' },
@@ -225,6 +225,26 @@ export default {
       assert.equal(await page.getByText('写作伙伴', { exact: true }).count(), 1);
       assert.equal(await page.getByText('研究伙伴', { exact: true }).count(), 1);
       await ui.capture('collapsed-list');
+      const openDisplayMenu = async () => {
+        await header.hover();
+        await page.locator('[data-sidebar-section="teammates"]').getByRole('button', { name: await ui.t('ccAgent.sidebar.viewStyle'), exact: true }).click();
+      };
+      await openDisplayMenu();
+      const avatarsOption = page.getByRole('menuitemcheckbox', { name: await ui.t('bots.list.showCollapsedTeammateAvatars'), exact: true });
+      assert.equal(await avatarsOption.getAttribute('aria-checked'), 'false');
+      await ui.capture('collapsed-avatars-menu-off');
+      await avatarsOption.click();
+      assert.equal(await header.getAttribute('aria-expanded'), 'false');
+      assert.equal(await page.getByRole('button', { name: '日程助手', exact: true }).count(), 1);
+      await page.getByText('写作伙伴', { exact: true }).waitFor({ state: 'hidden' });
+      await ui.capture('collapsed-all-avatars');
+      await openDisplayMenu();
+      assert.equal(await avatarsOption.getAttribute('aria-checked'), 'true');
+      await ui.capture('collapsed-avatars-menu-on');
+      await avatarsOption.click();
+      assert.equal(await page.getByRole('button', { name: '日程助手', exact: true }).count(), 0);
+      await page.getByText('写作伙伴', { exact: true }).waitFor({ state: 'visible' });
+      assert.equal(await page.getByText('写作伙伴', { exact: true }).count(), 1);
       await showIcons();
       assert.equal(await header.getAttribute('aria-expanded'), 'false');
       await ui.capture('collapsed-icons');
