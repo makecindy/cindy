@@ -205,7 +205,7 @@ describe('Host engine assembly (runtime.ts) against the desktop construction sit
     const desktopModels = between(desktop, 'resolvePiRuntimeModels: () =>', 'mcpProviders: piMcpProviders,', true).replaceAll('getDesktopSelectableCatalog()', 'modelContext.getSelectableCatalog()');
     // The Host lists the three resolvers before its loopback-proxy line. (The unit test this came
     // from ended its Host slice at a marker that no longer occurred, so it compared nothing.)
-    const hostModels = between(runtime, 'resolvePiRuntimeModels: () =>', '...(claudeProxy ? { registerPiProxySession', true);
+    const hostModels = between(runtime, 'resolvePiRuntimeModels: () =>', 'registerPiProxySession: claudeProxy?.registerPiProxySession,', true);
     assert.equal(hostModels, desktopModels, 'the three model resolvers are the desktop lines');
     assert.equal(between(runtime, 'resolvePiGlobalContextHome: (remoteHostId) => {', '        },', true),
       between(piHost, 'resolvePiGlobalContextHome: (remoteHostId) => {', '    },', true));
