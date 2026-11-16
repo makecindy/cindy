@@ -9195,10 +9195,10 @@ export function registerGhostIpc(): void {
     return ghost ? { name: ghost.manifest.name, iconDataUrl: ghost.iconDataUrl } : undefined;
   }, {
     externalLinks: id => findGhostForPhysicalStoragePart(id)?.manifest.card?.externalLinks === true,
-    dispatch: async (callId, actionId, prompt, pageId, ghostId, controllerId, formValues, formChange, mailUpload) => {
+    dispatch: async (callId, actionId, prompt, pageId, ghostId, controllerId, formValues, formChange, mailUpload, modelSelection) => {
       if (!mobilePluginPages) return false;
       mobilePluginPages.assertInteraction(pageId, ghostId, controllerId);
-      return (await getGhostCardActionDispatcher().dispatch(callId, actionId, prompt, pageId, formValues, formChange, mailUpload)).ok;
+      return (await getGhostCardActionDispatcher().dispatch(callId, actionId, prompt, pageId, formValues, formChange, mailUpload, modelSelection)).ok;
     },
   }, async (sessionId, key) => (await loadGitContextIpc()).readSessionPrStatus(sessionId, key), async (sessionId) => {
     const allMerged = await (await loadGitContextIpc()).readSessionPrsAllMerged(sessionId);
@@ -10364,6 +10364,21 @@ export function registerGhostIpc(): void {
         error: err instanceof Error ? err.message : String(err),
       });
       return { card: null };
+    }
+  });
+
+  // A card of a task on another computer: read through that computer and sanitized again here.
+  // Older hosts and unavailable links answer null, and the task keeps its plain tool rows.
+  ipcMain.handle('ghosts:card:get-remote', async (event, deviceId: unknown, sessionId: unknown, callId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      const [{ remoteInvoke }, { fetchRemoteGhostCard }] = await Promise.all([
+        import('../device-link/index.js'), import('./remoteCardFetch.js'),
+      ]);
+      return await fetchRemoteGhostCard(remoteInvoke, deviceId, sessionId, callId);
+    } catch (err) {
+      log.warn('ghosts:card:get-remote failed', { error: err instanceof Error ? err.message : String(err) });
+      return { card: null, failed: true };
     }
   });
 
