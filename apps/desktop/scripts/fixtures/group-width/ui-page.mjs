@@ -22,6 +22,9 @@ export default {
   }])), private: {
     about: 'The shared group renderer keeps private conversations at their existing reading width',
     viewport: { width: 1920, height: 900 }, data: { ...data, direct: true },
+  }, 'self-thread-share': {
+    about: 'A self-shared thread reply with a long quote keeps its 560px column while ordinary group bubbles expand',
+    viewport: { width: 1920, height: 900 }, data: { ...data, sidebar: true },
   } },
   async ready(page) {
     await group.ready(page);
@@ -39,6 +42,7 @@ export default {
   },
   async check(page, ui) {
     if (ui.case.startsWith('split-')) return checkSplit(page, ui);
+    if (ui.case === 'self-thread-share') return checkSelfThreadShare(page, ui);
     if (ui.case.startsWith('wide-')) {
       await page.evaluate(async () => {
         const { group } = await window.electronAPI.maker.getBotGroup('fixture-group');
@@ -111,3 +115,72 @@ export default {
     }
   },
 };
+
+// UI integration regression for PR #10810: the generic column override also
+// widened the non-bubble self thread-share column. Existing cases had no shares.
+// A shared reply with a long quote in a wide group reproduces the wrong cap;
+// resize the same mounted view to ensure the retained cap still fits small panes.
+async function checkSelfThreadShare(page, ui) {
+  await page.evaluate(async () => {
+    const { group } = await window.electronAPI.maker.getBotGroup('fixture-group');
+    group.messages = group.messages.map((message, i) => i ? message : {
+      ...message, content: '', isSelf: true, reactions: [],
+      quote: {
+        messageId: 'width-bot', authorKind: 'bot', authorName: 'Aster',
+        excerpt: group.messages[1].content, attachmentCount: 0, attachmentName: null,
+        sequence: group.messages[1].sequence,
+      },
+      threadShare: {
+        messageId: 'shared-reply', threadRootId: 'width-bot', status: 'available',
+        authorKind: 'user', authorBotId: null, authorName: 'You', sharedByAuthor: true,
+        content: '贴回的话题内容保留原有阅读宽度。'.repeat(20),
+        attachments: [], createdAt: message.createdAt, edited: false, version: 1,
+      },
+    });
+    window.__uiPage.emit('botGroupChanged', { groupId: group.id, change: 'messages' });
+  });
+  const row = page.locator('[data-bot-group-message-id="width-user"]');
+  await row.locator('figure').waitFor();
+  const check = async () => {
+    const m = await row.evaluate(el => {
+      const box = element => { const r = element.getBoundingClientRect(); return { x: r.x, right: r.right, width: r.width }; };
+      return {
+        pane: box(el.closest('main')), available: box(el.querySelector('.chat-bubble-layout')).width,
+        column: box(el.querySelector('.chat-bubble-column')), card: box(el.querySelector('figure')),
+        actions: box(el.querySelector('.chat-bubble-toolbar')),
+      };
+    });
+    const expected = Math.min(560, m.available - (m.available <= 480 ? 0 : 120));
+    assert.ok(Math.abs(m.column.width - expected) <= 1,
+      `self thread-share column: expected ${expected}px, got ${m.column.width}px`);
+    assert.ok(Math.abs(m.column.width - m.card.width) <= 1, 'share column and card keep the same width');
+    for (const box of [m.column, m.card, m.actions]) {
+      assert.ok(box.x >= m.pane.x && box.right <= m.pane.right, 'shared reply and actions stay inside the pane');
+    }
+  };
+  await row.scrollIntoViewIfNeeded();
+  await ui.capture('wide-share');
+  await check();
+  assert.ok((await page.getByTestId('bot-group-bubble').boundingBox()).width > 1000,
+    'ordinary long group messages still use the wide reading cap');
+  await page.locator('[data-ui-page-subject]').evaluate(el => {
+    el.style.height = `${el.getBoundingClientRect().height}px`;
+    el.style.width = '400px'; el.style.maxWidth = '100%'; el.style.flex = 'none';
+  });
+  await page.waitForFunction(() => {
+    const main = document.querySelector('[data-testid="bot-group-timeline"]').closest('main');
+    return Math.abs(parseFloat(main.style.getPropertyValue('--cindy-message-width')) - 360) < 1;
+  });
+  await check();
+  await row.scrollIntoViewIfNeeded();
+  await ui.capture('narrow-share');
+  // Restore the wide pane so the final before/after capture compares the same state.
+  await page.locator('[data-ui-page-subject]').evaluate(el => {
+    el.style.width = ''; el.style.flex = '';
+  });
+  await page.waitForFunction(() => {
+    const column = document.querySelector('[data-bot-group-message-id="width-user"] .chat-bubble-column');
+    return Math.abs(column.getBoundingClientRect().width - 560) < 1;
+  });
+  await check();
+}
