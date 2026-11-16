@@ -202,9 +202,11 @@ test('an unwritable marker falls back to revoking the native authorization', { t
   assert.equal((await p.auth.getState({ providerId: 'openai' })).authenticated, false);
 });
 
-test('a login linked to a file outside the profile: neither invalidation changes that file', { timeout: TEST_TIMEOUT_MS }, async t => {
-  t = lifoCleanup(t);
-  for (const link of ['hard', 'symbolic']) {
+for (const link of ['hard', 'symbolic']) {
+  test(`a login linked to a file outside the profile (${link}): neither invalidation changes that file`, {
+    timeout: TEST_TIMEOUT_MS,
+  }, async t => {
+    t = lifoCleanup(t);
     for (const attribution of ['attributed', 'unattributed']) {
       const p = profile(t);
       // A migrated profile: codex-home/auth.json is a link to a login kept elsewhere.
@@ -240,8 +242,8 @@ test('a login linked to a file outside the profile: neither invalidation changes
       // Only the profile's own entry goes, and only for an attributed invalidation.
       assert.equal(fs.existsSync(p.authPath) || isLink(p.authPath), attribution === 'unattributed', `${link}/${attribution}: profile entry`);
     }
-  }
-});
+  });
+}
 
 
 // As the desktop (auth-adapters.ts invalidate): only an independent account is left to the account

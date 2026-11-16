@@ -5,6 +5,7 @@ import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscri
 type PoolUsage = {
   claudeUsage?: ClaudeSubscriptionUsageSnapshot | null;
   codexUsage?: ProviderGroupCodexUsageSnapshot | null;
+  codexPlan?: string;
 };
 type ReadPoolUsage = (provider: SubscriptionProvider) => Promise<PoolUsage | null | undefined>;
 
@@ -47,7 +48,10 @@ export async function readLegacySubscriptionQuota(
   if (!pool) return null;
   if (provider === 'anthropic') {
     const usage = providerGroupUsageSnapshot(pool.claudeUsage, Date.now());
-    return usage ? { ...usage, providerId: provider } : null;
+    return usage ? { ...usage, providerId: provider,
+      subscriptionType: pool.claudeUsage?.subscriptionType,
+      planTier: pool.claudeUsage?.planTier,
+    } : null;
   }
   const usage = pool.codexUsage;
   if (!usage) return null;
@@ -64,7 +68,7 @@ export async function readLegacySubscriptionQuota(
     if (!Object.keys(freshBuckets).length) return null;
     return {
       providerId: provider,
-      account: { email: null, accountId: null, planType: null },
+      account: { email: null, accountId: null, planType: general?.planType ?? pool.codexPlan ?? null },
       rateLimits: freshBuckets.codex ?? freshBuckets.__default__ ?? { primary: null, secondary: null },
       rateLimitsByLimitId: freshBuckets,
       rateLimitResetCredits: null,
@@ -73,6 +77,7 @@ export async function readLegacySubscriptionQuota(
   }
   return {
     ...general,
+    planType: general?.planType ?? pool.codexPlan,
     providerId: provider,
     source: 'codex-app-server',
     appServerBuckets: buckets,

@@ -59,7 +59,6 @@ export async function learnFixture(t, { publish = true } = {}) {
   const home = path.join(root, 'home');
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   process.env.HOME = process.env.USERPROFILE = home;
-  // Keep in-process discovery inside the same temporary Home as child processes.
   t.mock.method(os, 'homedir', () => home);
   process.env.CLAUDE_CONFIG_DIR = path.join(home, '.claude');
   const profile = path.join(root, 'profile');

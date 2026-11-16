@@ -154,7 +154,7 @@ function AccountTag({ children }: { children: ReactNode }) {
 }
 
 /**
- * `defaultUsage` is the provider's existing usage card; it belongs to the CLI default account.
+ * `defaultUsage` is a compatibility fallback only when the account endpoint is unavailable.
  * `dashboard` is the provider's usage page, shared by every account in the pool.
  */
 export function SubscriptionAccountsSection({
@@ -326,7 +326,7 @@ export function SubscriptionAccountsSection({
         <AccountListPlaceholder reserve={expectAccounts} label={t('ccAgent.common.loading')} />
       )}
       {/* A failed refresh keeps the loaded list, whose default row already holds the card. */}
-      {defaultUsage && (view ? accounts.every((account) => account.id !== 'default') : failed) && (
+      {defaultUsage && !view && failed && (
         <div data-testid="provider-usage-module" className="-mx-4 mt-3">
           {defaultUsage}
         </div>
@@ -375,8 +375,8 @@ export function SubscriptionAccountsSection({
                   t('providerGroup.member.accountFallback', { index: index + 1 });
                 const plan =
                   kind === 'openai'
-                    ? formatCodexPlanLabel(account.plan)
-                    : formatClaudeSubscriptionPlanLabel(account.plan);
+                    ? formatCodexPlanLabel(account.planType ?? account.plan)
+                    : formatClaudeSubscriptionPlanLabel(account.plan, account.planTier);
                 const usage = buildSubscriptionAccountUsageCard(
                   account.usage,
                   t,
@@ -427,9 +427,7 @@ export function SubscriptionAccountsSection({
                   <AccountResetCredits key={`${resetScope}:${account.identity ?? ''}`} scope={resetScope} />
                 ) : null;
                 const usageNode =
-                  account.id === 'default' && defaultUsage ? (
-                    defaultUsage
-                  ) : usage ? (
+                  usage ? (
                     <QuotaHoverCard variant="embedded" hideIdentity account={usage}>
                       {resetNode}
                     </QuotaHoverCard>
@@ -466,9 +464,6 @@ export function SubscriptionAccountsSection({
                               {name}
                             </span>
                             {plan && <AccountTag>{plan}</AccountTag>}
-                            {account.id === 'default' && !account.legacy && (
-                              <AccountTag>{t('subscriptionAccounts.defaultTag')}</AccountTag>
-                            )}
                           </div>
                           <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-12 text-[var(--text-secondary)]">
                             <span className="inline-flex min-w-0 items-center gap-1.5">
@@ -606,42 +601,35 @@ export function SubscriptionAccountsSection({
                               <FolderOpen size={18} className="mr-2.5" />
                               {t('subscriptionAccounts.openDirectory')}
                             </DropdownMenuItem>
-                            {/* The CLI default login always stays with the built-in provider. */}
-                            {account.id !== 'default' && (
-                              <MoveAccountMenu
-                                targets={placementTargets}
-                                canTakeOut={providerId === kind || accounts.length > 1}
-                                disabled={busy}
-                                onMove={(target) => void moveAccount({ id: account.id, name }, target)}
-                              />
-                            )}
-                            {account.id !== 'default' && (
-                              <>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  variant="danger"
-                                  disabled={busy || account.running > 0}
-                                  onSelect={() => {
-                                    void confirm({
-                                      title: t('subscriptionAccounts.removeTitle', { name }),
-                                      description: t('subscriptionAccounts.removeDescription'),
-                                      confirmText: t('subscriptionAccounts.remove'),
-                                      confirmVariant: 'destructive',
-                                    }).then((ok) => {
-                                      if (ok)
-                                        void run({
-                                          action: 'remove',
-                                          providerId,
-                                          accountId: account.id,
-                                        });
+                            <MoveAccountMenu
+                              targets={placementTargets}
+                              canTakeOut={providerId === kind || accounts.length > 1}
+                              disabled={busy}
+                              onMove={(target) => void moveAccount({ id: account.id, name }, target)}
+                            />
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              variant="danger"
+                              disabled={busy || account.running > 0}
+                              onSelect={() => {
+                                void confirm({
+                                  title: t('subscriptionAccounts.removeTitle', { name }),
+                                  description: t('subscriptionAccounts.removeDescription'),
+                                  confirmText: t('subscriptionAccounts.remove'),
+                                  confirmVariant: 'destructive',
+                                }).then((ok) => {
+                                  if (ok)
+                                    void run({
+                                      action: 'remove',
+                                      providerId,
+                                      accountId: account.id,
                                     });
-                                  }}
-                                >
-                                  <CircleMinus size={18} className="mr-2.5" />
-                                  {t('subscriptionAccounts.remove')}
-                                </DropdownMenuItem>
-                              </>
-                            )}
+                                });
+                              }}
+                            >
+                              <CircleMinus size={18} className="mr-2.5" />
+                              {t('subscriptionAccounts.remove')}
+                            </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </div>
@@ -650,11 +638,7 @@ export function SubscriptionAccountsSection({
                         labels keep their column); the right edge meets the row controls. */}
                     {usageNode && (
                       <div
-                        data-testid={
-                          account.id === 'default' && defaultUsage
-                            ? 'provider-usage-module'
-                            : undefined
-                        }
+                        data-testid="subscription-account-usage"
                         className={cn(
                           '-mx-4 mt-1 grid grid-cols-subgrid [@container(min-width:440px)]:ml-7 [&>*]:col-span-full',
                           account.paused && 'opacity-60',

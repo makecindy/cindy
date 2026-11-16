@@ -509,7 +509,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   };
   let profiles: Array<typeof botProfiles.$inferSelect> = [];
   const workspaces = () => chatServerWorkspaces(config.baseUrl, selfId, current);
-  const planning = new Map<string, { botId: string; controller: AbortController; timelineAt: number }>();
+  const planning = new Map<string, { botId: string; controller: AbortController; sourceMessageId: string; timelineAt: number }>();
   // Invalidate even a send still preparing/uploading its attachments. Its delayed
   // receipt must not start an arrangement after a newer message or control action.
   let nextIntentVersion = 0;
@@ -1943,6 +1943,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // Keep execution identity across computers and concurrent threads. Only the executing
     // computer resolves a lane; authenticated peers retrieve it through the group resource.
     const speakers: BotGroupSpeaker[] = [];
+    const speakerRequesterName = (botId: string, requesterId: string | undefined) => {
+      const bot = s.members.find(member => member.id === botId);
+      const requester = s.members.find(member => member.id === requesterId);
+      return bot && isAssistant(bot) && requester ? { requesterName: memberName(requester, ownerMembers) } : {};
+    };
     const sourceMessages = new Map<string, Message | undefined>([...s.messages, ...page].map(message => [message.id, message]));
     for (const e of executions.filter(e => ['queued', 'running', 'needs_input', 'stopping'].includes(e.status))) {
       if (!e.plan_id && !summaryOnly && !sourceMessages.has(e.source_message_id)) {
@@ -1959,7 +1964,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const timelineAt = e.created_at ? Date.parse(e.created_at) : NaN;
       const startedAt = run?.started;
       const speaker: BotGroupSpeaker = { botId: localBot(e.bot_id)?.id ?? e.bot_id, sessionId: run?.sessionId || null,
-        executionId: e.id, sourceMessageId: e.source_message_id,
+        executionId: e.id, sourceMessageId: e.source_message_id, isSelfRequested: e.requester_id === selfId,
+        ...speakerRequesterName(e.bot_id, e.requester_id),
         ...(e.plan_id || source ? { threadRootId: e.plan_id ? null : source!.threadRootId ?? null } : {}),
         ...(Number.isFinite(timelineAt) ? { timelineAt } : {}),
         ...(Number.isFinite(startedAt) ? { startedAt } : {}), stopping: e.status === 'stopping',
@@ -1974,7 +1980,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // The organizer is visibly 「正在看」 while this device decides whether to arrange (§7.2),
     // as the local service showed it. It works on the auxiliary model, not in a lane session.
     const deciding = planning.get(roomId);
-    if (deciding) speakers.push({ botId: deciding.botId, sessionId: null, activity: 'planning', timelineAt: deciding.timelineAt });
+    if (deciding) speakers.push({ botId: deciding.botId, sessionId: null, activity: 'planning', isSelfRequested: true, sourceMessageId: deciding.sourceMessageId, threadRootId: null, timelineAt: deciding.timelineAt, ...speakerRequesterName(deciding.botId, selfId) });
     // Sidebar refresh must not download every attachment in every group's history.
     const messages = summaryOnly ? [] : await messageViews(roomId, page, s.members, ownerMembers);
     const projection = !summaryOnly ? await history()?.projection<Message>(roomId, o.sourceMessageIds ?? []) : undefined;
@@ -2035,10 +2041,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       messages, ...(projection ? { historyRevision: projection.generation, messageUpdates } : {}), executionFailures, ...(threadShareUpdates && Object.keys(threadShareUpdates).length ? { threadShareUpdates } : {}),
       ...(shares ? { threadShareVersion: shares.version } : {}), ...(threadList ? { threads: threadList } : {}), hasMoreBefore: page.length === (o.limit ?? 100), plans,
       round: { canStop: !singleSpeaker || !!deciding || serverPlans.some(p => p.creator_id === selfId && ['proposed', 'running', 'waiting'].includes(p.status)) || executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status)
-          && ((!e.requester_id && !s.members.some(m => m.id === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role))) || e.requester_id === selfId || !!localBot(e.bot_id) || s.members.some(m => m.id === e.bot_id && m.ownerActorId === selfId))),
+          && ((!e.requester_id && !s.members.some(m => m.id === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role))) || e.requester_id === selfId)),
         status: deciding || executions.some(e => ['queued', 'running', 'needs_input', 'stopping'].includes(e.status)) ? 'running' : 'idle', speakers,
-        othersActive: executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status) && e.requester_id !== selfId
-          && !localBot(e.bot_id) && !s.members.some(m => m.id === e.bot_id && m.ownerActorId === selfId)), canContinue: !open && !planning.has(roomId) && (executions.some(e => !e.plan_id && ordinaryExecution(e)) || s.messages.some(discussionSource)) && !executions.some(e => ['queued','running','stopping'].includes(e.status)) } };
+        othersActive: executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status) && e.requester_id !== selfId), canContinue: !open && !planning.has(roomId) && (executions.some(e => !e.plan_id && ordinaryExecution(e)) || s.messages.some(discussionSource)) && !executions.some(e => ['queued','running','stopping'].includes(e.status)) } };
   }
   function planView(plan: ServerPlan, members: Member[], workspace: ReturnType<ReturnType<typeof chatServerWorkspaces>['read']>, readOnly = false): BotGroupPlanView {
     return { id: plan.id, status: plan.status, organizerBotId: localBot(plan.organizer_id)?.id ?? plan.organizer_id,
@@ -2139,7 +2144,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     planning.get(s.room.id)?.controller.abort();
     const controller = new AbortController();
-    const pending = { botId: localBot(organizer.id)?.id ?? organizer.id, controller, timelineAt: Date.now() };
+    const pending = { botId: localBot(organizer.id)?.id ?? organizer.id, controller, sourceMessageId: sourceId, timelineAt: Date.now() };
     planning.set(s.room.id, pending); changed(s.room.id);
     let explicit = forced;
     try {
@@ -4308,8 +4313,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (i.autoContinue) autoContinuePlans(i.groupId);
       return { ok: true as const, ...(folderRepository ? { folderRepository } : {}) };
     }),
-    // Stop stops what is yours: your requests and arrangements, and your teammates' work for
-    // others. An owner or admin may stop everything (`all`). Work you may not stop is left running.
+    // Stop stops your requests and arrangements. An owner or admin may stop everything (`all`). Work you may not stop is left running.
     stopRound: (roomId, scopeInput) => safe(async () => {
       const room = await groupRoom(id.parse(roomId));
       const hadPlanning = planning.has(room) || !!pendingPlanCancels.get(room)?.size;
@@ -4332,7 +4336,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const humanIsManager = s.members.some(m => m.id === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role));
       const everything = scopeInput === 'all' && !!manager;
       const asManager = manager === selfId ? undefined : manager;
-      const ownBot = (botId: string) => !!localBot(botId) || s.members.some(m => m.id === botId && m.ownerActorId === selfId);
       const refused = (error: unknown) => error instanceof ChatResponseError && [403, 404, 409].includes(error.status);
       const plans = await api<ServerPlan[]>(`/conversations/${room}/plans`);
       const stoppedPlans = new Set<string>();
@@ -4347,9 +4350,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         }
         const executions = await api<Execution[]>(`/conversations/${room}/executions`);
         for (const e of executions.filter(e => ['queued', 'running', 'needs_input'].includes(e.status) && !(e.plan_id && stoppedPlans.has(e.plan_id)))) {
-          // Your own teammate stops its work for others as itself; a request you made, as you.
-          const asBot = !everything && e.requester_id !== selfId && ownBot(e.bot_id);
-          if (!everything && !asBot && e.requester_id !== selfId) {
+          // Default control follows the requester, regardless of who owns the bot.
+          if (!everything && e.requester_id !== selfId) {
             if (e.requester_id) continue;
             // A manager's human identity could stop anyone on the server. Without
             // ownership metadata, only an explicit all action may use that power.
@@ -4357,7 +4359,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           }
           // Some servers omit requester_id. For an ordinary human, ask the server
           // to authorize the stop; never infer ownership or use a foreign teammate.
-          try { await api(`/conversations/${room}/executions/${e.id}/control`, 'POST', { operationId: randomUUID(), action: 'stop' }, asBot ? e.bot_id : everything && e.requester_id !== selfId ? asManager : undefined); }
+          try { await api(`/conversations/${room}/executions/${e.id}/control`, 'POST', { operationId: randomUUID(), action: 'stop' }, everything && e.requester_id !== selfId ? asManager : undefined); }
           catch (error) { if (refused(error)) { refusedExecutions.set(e.id, error); continue; } throw error; }
           stopped = true;
           const run = running.get(e.id);
