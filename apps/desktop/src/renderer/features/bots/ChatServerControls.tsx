@@ -13,7 +13,14 @@ import type { BotGroupDetail, BotGroupMemberView, BotGroupMessageView } from '..
 
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
-const emojiChoices = ['👍', '❤️', '😂', '🎉', '👀', '🙏', '✅', '🤔', '🔥', '👏', '🚀', '💯'];
+const emojiChoices = [
+  '👍', '❤️', '😂', '🎉', '👀', '🙏',
+  '✅', '🤔', '🔥', '👏', '🚀', '💯',
+  '😀', '😄', '😊', '😍', '🥰', '😎',
+  '🤣', '😅', '🥹', '😭', '😮', '😱',
+  '😢', '😡', '🤯', '😴', '🤦', '🤷',
+  '👌', '🤝', '💪', '🙌', '👋', '✨',
+];
 const iconClass = 'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-50';
 export { chatErrorKey } from './chatError';
 
