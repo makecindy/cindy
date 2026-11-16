@@ -212,6 +212,23 @@ it('validates remote task routes without reading or falling back to local provid
   expect(host.providers).not.toHaveBeenCalled();
 });
 
+it('validates a shared Claude primary independently of the local catalog and keeps its exact source', async () => {
+  // Synthetic source: a local Claude installation/provider is not required for a shared route.
+  host.agents = ['codex'];
+  host.providers.mockClear();
+  const shared: BotModelRoute = { harness: 'claude', model: 'fixture-sonnet', providerId: 'fixture-provider',
+    agentDeviceId: 'share:fixture-source', effort: 'high', fastMode: false };
+  host.remote.mockResolvedValue({ provider: { id: shared.providerId }, model: { efforts: ['high'], supportsFastMode: false } });
+  expect(await resolveAvailableTaskModels([shared])).toEqual([shared]);
+  expect(host.remote).toHaveBeenLastCalledWith({ agentDeviceId: shared.agentDeviceId,
+    agentKind: 'claude-code', providerId: shared.providerId, model: shared.model });
+  for (const reason of ['DEVICE_LINK_DEVICE_OFFLINE', 'DEVICE_LINK_CHANNEL_NOT_ALLOWED']) {
+    host.remote.mockRejectedValueOnce(new Error(reason));
+    expect(await validateTaskModel(shared)).toBe(false);
+  }
+  expect(host.providers).not.toHaveBeenCalled();
+});
+
 it('rejects an owner change even when the remote default lookup fails', async () => {
   host.remote.mockImplementation(async () => {
     host.owner = 'owner:2';

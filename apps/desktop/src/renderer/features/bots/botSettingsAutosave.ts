@@ -253,6 +253,11 @@ export interface BotSettingsAutosaveHandle {
   flushDetached(): void;
   /** 取消未触发的计时,不提交。 */
   cancel(): void;
+  /**
+   * 用户明确放弃草稿时调用:未被接受的「显式选模型」也一并放弃。否则 isDirty() 仍因
+   * 选择代次未落而为真,卸载时 flushDetached 会把基线连同 modelSelection=true 再发一次。
+   */
+  discardPendingModelSelection(): void;
   /** 是否有已改但未落库的内容。 */
   isDirty(): boolean;
   hasPendingModelSelection(): boolean;
@@ -379,6 +384,9 @@ export function createBotSettingsAutosave(
     },
     cancel() {
       clearTimer();
+    },
+    discardPendingModelSelection() {
+      savedModelSelectionRevision = modelSelectionRevision;
     },
     isDirty,
     hasPendingModelSelection: () => modelSelectionRevision !== savedModelSelectionRevision,
