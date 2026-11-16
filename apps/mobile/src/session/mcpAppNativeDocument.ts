@@ -17,6 +17,26 @@ export interface McpAppNativeDocument {
 }
 let swept = false;
 
+// Only geometry leaves the resource. The existing sandbox checks its window and
+// origin; the native View consumes this notification locally, before MCP routing.
+export const MCP_APP_FOCUS_SCRIPT = `<script data-cindy-mobile-focus>
+(()=>{
+ let scheduled=false;
+ const report=()=>{
+  scheduled=false;
+  const active=document.activeElement;
+  const editable=active&&(active.matches('input:not([type=button]):not([type=submit]):not([type=checkbox]):not([type=radio]),textarea')||active.isContentEditable);
+  const rect=editable?active.getBoundingClientRect():null;
+  parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/cindy-mobile-focus',params:rect?{top:rect.top,bottom:rect.bottom}:null},'*');
+ };
+ const schedule=()=>{if(!scheduled){scheduled=true;requestAnimationFrame(report);}};
+ document.addEventListener('focusin',schedule);
+ document.addEventListener('focusout',schedule);
+ document.addEventListener('input',schedule);
+ window.addEventListener('resize',schedule);
+})();
+</script>`;
+
 // Android's WebStorage.deleteOrigin does not clear localStorage and has no
 // completion callback. Run in the new App origin, before any untrusted HTML,
 // and do not navigate to that HTML until IndexedDB deletion has completed.
@@ -114,6 +134,7 @@ export async function prepareMcpAppNativeDocument(
     const html = (await import("@cindy/maker-shared/mcp-app-sdk")).withHostAppSdk(
       document.html, new URL(HOST_APP_SDK_PATH, resourceUrl).href,
       addon ? { coreUrl: new URL(CINDY_VIEW_STATE_SDK_PATH, resourceUrl).href, reactUrl: new URL(CINDY_VIEW_STATE_REACT_SDK_PATH, resourceUrl).href } : undefined,
+      MCP_APP_FOCUS_SCRIPT,
     );
     resource.writeSync(html);
     const resourceOrigin = new URL(resourceUrl).origin;

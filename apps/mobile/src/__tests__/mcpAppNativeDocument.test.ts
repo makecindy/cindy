@@ -43,7 +43,7 @@ vi.mock("expo-file-system", () => {
   }
   return { Directory, File, Paths: { cache: "file:///cache" } };
 });
-import { MCP_APP_STORAGE_BOOTSTRAP, prepareMcpAppNativeDocument } from "../session/mcpAppNativeDocument";
+import { MCP_APP_FOCUS_SCRIPT, MCP_APP_STORAGE_BOOTSTRAP, prepareMcpAppNativeDocument } from "../session/mcpAppNativeDocument";
 
 const document = {
   viewId: "view",
@@ -85,7 +85,7 @@ it("serves complete App HTML and its exact CSP on a different origin from the tr
   expect(resource[1]).toBe('initialize.html');
   expect(resource[4]).toEqual([["initialize.html", "2", "text/html"], ["resource.html", "0", "text/html"]]);
   expect(
-    state.files.get("file:///cache/mcp-apps/" + "01".repeat(24) + "/0")?.replace(/<script data-cindy-runtime>[\s\S]*?<\/script>/, "").replace(/<script type="importmap">[\s\S]*?<\/script>/, ""),
+    state.files.get("file:///cache/mcp-apps/" + "01".repeat(24) + "/0")?.replace(/<script data-cindy-runtime>[\s\S]*?<\/script>/, "").replace(/<script data-cindy-mobile-focus>[\s\S]*?<\/script>/, "").replace(/<script type="importmap">[\s\S]*?<\/script>/, ""),
   ).toBe(document.html);
   expect(state.files.get("file:///cache/mcp-apps/" + "01".repeat(24) + "/0")).toContain(new URL('/__cindy/sdk/ext-apps/app.js', view.resourceUrl).href);
   expect(state.files.has("file:///cache/mcp-apps/" + "01".repeat(24) + "/3")).toBe(false);
@@ -227,7 +227,7 @@ it('routes both optional Cindy state modules through the existing native asset l
 it('ignores malformed optional SDK metadata on the phone', async () => {
   const view = await prepareMcpAppNativeDocument({ ...document, sdk: { source: 7 } } as never, 'native-key');
   expect(state.start.mock.calls[0][4]).toEqual([['initialize.html', '2', 'text/html'], ['resource.html', '0', 'text/html']]);
-  expect(state.files.get('file:///cache/mcp-apps/' + '01'.repeat(24) + '/0')?.replace(/<script data-cindy-runtime>[\s\S]*?<\/script>/, '').replace(/<script type="importmap">[\s\S]*?<\/script>/, '')).toBe(document.html);
+  expect(state.files.get('file:///cache/mcp-apps/' + '01'.repeat(24) + '/0')?.replace(/<script data-cindy-runtime>[\s\S]*?<\/script>/, '').replace(/<script data-cindy-mobile-focus>[\s\S]*?<\/script>/, "").replace(/<script type="importmap">[\s\S]*?<\/script>/, '')).toBe(document.html);
   await view.close();
 });
 
@@ -239,4 +239,22 @@ it('ignores malformed addons while keeping the official SDK on an older payload'
   expect(state.files.has(root + '/4')).toBe(false);
   expect(state.files.get(root + '/0')).not.toContain('@cindy/ext-apps');
   await view.close();
+});
+
+// #10431 unit: execute the mobile resource's real focus listener. Existing server
+// manifest tests cannot prove that geometry (and no input value) reaches reveal.
+it('reports editable focus geometry and blur through the existing resource bridge', () => {
+  const listeners = new Map<string, () => void>();
+  const postMessage = vi.fn();
+  let flush = () => {};
+  const document = { activeElement: { value: 'must-not-leave-resource', matches: () => true,
+    getBoundingClientRect: () => ({ top: 90, bottom: 210 }) } as any,
+    addEventListener: (name: string, callback: () => void) => listeners.set(name, callback) };
+  new Script(MCP_APP_FOCUS_SCRIPT.slice(MCP_APP_FOCUS_SCRIPT.indexOf('>') + 1, MCP_APP_FOCUS_SCRIPT.lastIndexOf('</script>'))).runInNewContext({ document,
+    window: { addEventListener() {} }, parent: { postMessage }, requestAnimationFrame: (callback: () => void) => { flush = callback; } });
+  listeners.get('focusin')!(); flush();
+  expect(postMessage.mock.calls[0][0]).toEqual({ jsonrpc: '2.0', method: 'ui/notifications/cindy-mobile-focus', params: { top: 90, bottom: 210 } });
+  document.activeElement = { matches: () => false };
+  listeners.get('focusout')!(); flush();
+  expect(postMessage.mock.calls[1][0].params).toBeNull();
 });
