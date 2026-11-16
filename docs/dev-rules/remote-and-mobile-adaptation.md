@@ -476,6 +476,54 @@ channel + 键（运行诊断单键；带 `providerId` 的用量按账号）做 l
   `node scripts/direct-link-electron-smoke.mjs` 另外启动两个临时 Electron 进程，验证生产
   Main/preload/隔离 renderer 的真实 IPC、WebRTC 与中继回退；账号和 userData 均为独立 fixture。
 
+### 各通道的局域网地址与系统权限（2026-11-16）
+
+控制消息、文件、远程桌面各自建立 WebRTC 连接、各自选路，控制通道直连不代表另外两条也直连。
+局域网能否直连，先看双方能否拿到对方的局域网地址。Chromium 对没有捕获权限的页面只公布
+mDNS 名，解析要靠双方都能收发组播；跨网段、组播被过滤或任一端系统不给局域网权限时，对端
+拿不到地址，只能走公网或 TURN。各端公布的 host 候选如下，新增通道时对照补齐：
+
+| 通道 | 运行位置 | 公布的局域网地址 |
+| --- | --- | --- |
+| 控制消息 | Desktop 隐藏数据窗口 `direct` | 默认路由的真实地址（`default_public_and_private_interfaces`） |
+| 文件、附件、远程视频读取 | Desktop 隐藏数据窗口 `files` | 同上；此前只有 mDNS 名 |
+| 远程桌面被控端 | Desktop 捕获窗口 `desktop` | 全部网卡的真实地址（含 VPN 网卡与 TCP 候选），由捕获权限带来 |
+| 远程桌面查看端 | Desktop 主窗口 | 同上，由受信任页面的媒体权限检查带来 |
+| 手机的控制消息与文件 | Mobile WebView | 只有 mDNS 名；iOS 原生视频接收端为真实地址 |
+
+- **数据窗口显式设置策略。** `direct` 与 `files` 不授予任何捕获权限，由
+  [`captureWindow.ts`](../../apps/desktop/src/main/remote-desktop/captureWindow.ts) 在加载页面前
+  设置地址策略，只公布默认路由的地址、不枚举其他网卡。`desktop` 保持 Chromium 默认：套用同一
+  策略会把它收窄到一块网卡，丢掉 VPN 路径。文件信令只对同账号、已开启被控且未撤权的设备开放
+  （不在共享任务访客和供应商分享的通道清单里），地址随既有 `device-link:file-peer` RPC 送达，
+  与控制通道信令的可见范围一致。
+- **一端公布真实地址即可。** 对端只有 mDNS 名时，由它主动连过来，本端按来源地址建立路径
+  （ICE 的 prflx 候选）。手机因此依赖电脑端公布真实地址。新旧端混用不需要协商：不改 wire
+  协议、能力位和信令格式，自建中转继续透传原 RPC，无需适配。
+- **macOS「本地网络」权限。** 没拿到许可的 App（连同它启动的 Agent、SSH 等子进程）向局域网
+  地址发起的 TCP 与 UDP 一律报 `EHOSTUNREACH`，连网关也不通；公网与 VPN 网卡不受影响。它仍能
+  收到局域网对端先发来的单播 UDP，并在同一个 socket 上回复。所以对端有许可、又知道本机真实
+  地址时，ICE 仍能由对端打通：控制通道一直能直连，只公布 mDNS 名的文件通道不能。Info.plist
+  缺 `NSLocalNetworkUsageDescription` 时系统不弹授权、直接拒绝；正式包由 `forge.config.ts`
+  声明，个人版由 `scripts/personal-build/native-capabilities.mjs` 写入运行时，改动后要用
+  更新过的构建工具重新生成运行时才生效。
+- **故障记录。** 2026-11 两台同一局域网的电脑，控制通道直连，文件却走 TURN（往返 430–580 ms，
+  每秒 5–8 KB）。文件连接的统计里本端有 4 个 host 候选，对端一个也没有；其中一台的 App 没有
+  本地网络许可，既发不出组播，也不能主动连对端。两处都要修：文件窗口公布真实地址，该 App
+  取得本地网络许可。
+- **排查顺序。** ① 文件日志 `device-link:filePeer` 的 `stats.candidates`：`remote` 里没有
+  `host`，说明对端地址没送到或解析不了；② 在 App 启动的子进程里连网关（`nc -z <网关> 80`），
+  报 `No route to host` 而公网可达，说明这个 App 没有本地网络许可，到「系统设置 › 隐私与
+  安全性 › 本地网络」核对；③ 控制通道看 `direct transport reason=`，长期只有
+  `negotiation-timeout` 而没有 `connected`，说明两端都无法主动连到对方。
+- **验证。** [`captureWindow.test.ts`](../../apps/desktop/src/main/remote-desktop/__tests__/captureWindow.test.ts)
+  断言两个数据窗口在导航前设置策略、`desktop` 不设置。`node scripts/provider-share-direct-smoke.mjs
+  --electron-mdns` 用两个真实 Electron 进程验证：双方都只有 mDNS 名时连不上，任一端公布真实地址
+  即可接通并逐字节收发，生产 `files` 窗口的候选为字面地址。Electron 42 / Chromium 148 实测三种
+  配置的候选：无捕获权限的默认策略 2 个 mDNS 名；数据窗口策略为默认路由的 IPv4 与 IPv6 各 1 个；
+  有捕获权限的默认策略为全部网卡的 UDP 与 TCP 地址。真实两台电脑、手机与电脑、跨网段和 VPN 下的
+  文件速度与远程桌面延迟未在本次验证。
+
 ### 系统睡眠前主动离线（2026-11-14）
 
 2026-11-10～14 日志：一台合盖笔记本的直连约 300 次「接上就断」，其中 93% 在 3 分钟内伴随对端离线——
@@ -818,10 +866,22 @@ Mobile 历史读取在 relay 已在线且目标 presence 不是明确不可用�
 历史控制器与页面同步；也不能为了放行读取伪造在线快照。明确离线／停用或 relay 未在线时
 仍只展示缓存，授权、撤权和旧代结果拦截继续由原链路处理。
 
-Mobile 项目标题的电脑图标同样使用共享连接状态、当前 presence、无响应与撤权证据，
+Mobile 项目标题的电脑图标只使用针对这台电脑的证据：当前 presence、无响应与撤权，
 不从页面局部设备清单的缺失、旧快照或列表读取失败推导断连。首页、任务抽屉与宽屏常驻列表
-共用此判据；重建列表与普通同步不会重置连接图标，真实断连与恢复仍随共享状态更新。
+共用此判据；重建列表与普通同步不会重置连接图标，真实断连与恢复仍随 presence 更新。
 实现与回归见 `homeProjectMachineIdentity.ts`、`HomeSurface.tsx` 与 `homeProjectMachineIdentity.test.ts`。
+
+**手机自己的连接问题不是电脑离线的证据**（2026-11-16）。每次回到 App 手机都要重连中继，
+期间电脑图标曾全部显示为已断开；手机中继断线后保留的直连也断开时，还会给电脑合成一条离线
+presence，请求随即按 `DEVICE_OFFLINE` 失败、首页把电脑标成离线并排入镜像清理，重连后才恢复。
+现在手机中继未在线只由连接横幅说明，电脑状态保持上一次已知结果；直连断开只有在中继此前已
+明确通知该电脑离线（保留期内被直连顶住的判定）时才落成离线，否则与中继断线时的其它对端
+同样处理：失效该对端的建链缓存与订阅 ACK、取消它的恢复排队，请求按瞬时 `NOT_CONNECTED`
+等待手机重连。故障半径三问：① 证据是手机本机的中继连接与这一条直连，都不涉及电脑是否在线；
+② 只失效这一台电脑的建链缓存、订阅 ACK 与恢复排队，不改 presence、不清镜像、不重建连接，
+其它电脑不受影响，电脑真的离线时由重连后的中继判定、名单读取或建链回绝给出；③ 回归见
+`historyViewProvider.test.tsx`「does not declare the computer offline when the phone loses its
+relay and then the direct path」，修复前该用例得到 presence=false。
 
 Mobile 返回任务或恢复网络时，历史视图只恢复展示，由页面既有同步协调器发起快照，
 不再由视图激活另读一页。已有缓存且订阅尚未确认时，最多等待 2 秒合并本次列表／详情

@@ -63,6 +63,8 @@ Agent 的 `get_project_icon` 返回同一自动图标及来源，`update_project
 - 主机：`projectInfoCore.ts`、`projectIconStore.ts`、`projectIconMedia.ts`，Desktop 与 Node Host 共用。
 - 双端：`ProjectSettingsDialog.tsx`、`ProjectSettingsSheet.tsx` 及各端 `ProjectIcon.tsx`。
 - 合约：`projectAliasSync.ts`、`projectIcons.ts` 与 `hostChannelContract.ts`。
+- 线性图标的清单与图形两端共用：`projectIcons.ts` 的 `PROJECT_SYMBOLS` 是唯一清单，`pnpm generate:project-symbols`
+  从 Lucide 生成 `projectSymbolNodes.generated.ts`，两端各用自己的 Lucide 运行时渲染同一份图形，不再各自登记。
 - 桌面真实组件检查：`pnpm ui:check --page project-settings --theme all --locale zh-CN,en --viewport 720x800,360x780`。
 - 回归：`projectInfoCore.test.ts`、`projectIconMedia.test.ts`、`projectIconStore.test.ts`、
   `projectAliasesBroadcast.test.ts`、`projectAliasSync.test.ts`、`projectIcons.test.ts`。

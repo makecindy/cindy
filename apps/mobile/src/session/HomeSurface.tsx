@@ -2296,11 +2296,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   );
   const projectMachineIdentities = useMemo(
     () => buildHomeProjectMachineIdentities(home, {
-      status, getPresenceAvailability, unresponsiveDevices, revokedDevices,
+      getPresenceAvailability, unresponsiveDevices, revokedDevices,
     }),
     // Presence is read through a stable getter; its version/connection epoch must
     // refresh icons even when the page-local device list has not changed.
-    [home, status, getPresenceAvailability, presenceVersion, connectionEpoch, unresponsiveDevices, revokedDevices],
+    [home, getPresenceAvailability, presenceVersion, connectionEpoch, unresponsiveDevices, revokedDevices],
   );
   const runningSessionIds = useMemo(() => {
     const ids = new Set<string>();
