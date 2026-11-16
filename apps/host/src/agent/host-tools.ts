@@ -20,6 +20,7 @@ import type { HostStorageService } from '../../../desktop/src/main/cindy-brain/s
 import { createStorageToolExecutor } from '../../../desktop/src/main/cindy-brain/storageToolAccess.js';
 import { HostServiceCatalog, createHostServiceToolExecutor } from '../../../desktop/src/main/cindy-brain/hostServiceCatalog.js';
 import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.js';
+import { HELP_KNOWLEDGE } from '../../../desktop/src/main/maker-ipc/helpKnowledge.generated.js';
 import type { createHostConfirmations } from '../host-confirmations.js';
 
 interface Options {
@@ -73,6 +74,8 @@ export function createHostToolService(options: Options) {
   const providers = createLiziMcpProviders({
     xdtHelper: { authorizeCall,
       hostServices: createHostServiceToolExecutor(services, { pluginCall: getPluginHostToolCaller, getGhost: options.getGhost, supportsPluginServer }),
+      // The product help the desktop gives get_capabilities({ scope: 'help' }) (mcp-providers.ts productHelpDocs).
+      productHelpDocs: HELP_KNOWLEDGE,
       resolveSurface: async ({ sessionId }) => {
         const db = current() ? tryGetDbClient() : null;
         return db ? resolveHelperSurface(db, sessionId) : 'restricted';

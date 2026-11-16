@@ -10,6 +10,12 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
 import { createLiziMcpProviders } from '@cindy/mcps';
 import { handlePluginHostToolRequest } from '../../desktop/src/main/cindy-brain/hostToolSlot.ts';
 import { createHostToolRuntime, setHostToolProviders } from '../../desktop/src/main/mcp-integrations/hostToolCaller.ts';
+import { HELP_KNOWLEDGE } from '../../desktop/src/main/maker-ipc/helpKnowledge.generated.ts';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { getTableColumns, getTableName } from 'drizzle-orm';
+import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
+import { sessions, botSessionLinks, botProfiles } from '../../desktop/src/main/localDb/schema.ts';
 
 // Unit: existing installation and business confirmations use the Host's
 // window-bound confirmation bridge; a different paired controller, disconnection
@@ -271,4 +277,41 @@ test('negotiated HTTP event streams deliver one live owner dialog without puttin
   assert.deepEqual(await reply.json(), { handled: true });
   assert.equal(await answer, true);
   assert.equal(received[0].type, 'plugin_push');
+});
+
+// Test value (engineering-conventions §3.2)
+// - Production entry and observable result: the Host's cindy_helper provider from createHostToolService,
+//   called the way an engine calls it (toHostTools(...).call). get_capabilities({ scope: 'help' }) returns
+//   the desktop's product help (index, then a full document) instead of HELP_UNAVAILABLE.
+// - Rule: release table row 22 (cindy_helper ports); the desktop passes productHelpDocs: HELP_KNOWLEDGE
+//   (mcp-providers.ts). Without it an agent on the Host answers "where is X / how do I" without the docs.
+// - Coverage gap: the tests above call plugin host tools and history; none reads get_capabilities.
+// - Minimal failing input: the Host xdtHelper deps without productHelpDocs.
+// - Tier: unit, in process with an in-memory SQLite task row; no engine or network.
+test('the Host cindy_helper serves the desktop product help to agents', async () => {
+  // An ordinary active task of the current owner, in the real tables the helper's authorizer and surface read.
+  const sqlite = new Database(':memory:');
+  for (const table of [sessions, botSessionLinks, botProfiles]) {
+    sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
+  }
+  sqlite.exec("INSERT INTO sessions(id,title,source,status,created_at,updated_at) VALUES ('task','Task','desktop','active',1,1)");
+  const database = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
+  setCurrentDbClient(database, 'owner');
+  const confirmations = createHostConfirmations({ current: () => true });
+  const service = createHostToolService({ profileDir: '/fixture', ownerId: 'owner', current: () => true,
+    owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), getGhost: () => null,
+    getSession: () => undefined, confirmations, t: key => key,
+    // As main.ts: the input coordinator's facts for the calling turn, here an owner-typed turn.
+    taskActions: { input: () => ({ key: 'owner-turn', ownerInput: true, boundary: 'fixture' }) } });
+  const agent = service.providers.find(p => p.name === 'cindy_helper').toHostTools({ agentKind: 'codex', workingDir: '', sessionId: 'task' });
+  const body = result => JSON.parse(result.content.find(item => item.type === 'text').text);
+  try {
+    const index = body(await agent.call('get_capabilities', { scope: 'help' }));
+    assert.equal(index.ok, true, JSON.stringify(index));
+    assert.deepEqual(index.docs.map(doc => doc.key), HELP_KNOWLEDGE.map(doc => doc.id));
+    const first = HELP_KNOWLEDGE[0];
+    const doc = body(await agent.call('get_capabilities', { scope: 'help', key: first.id }));
+    assert.equal(doc.ok, true, JSON.stringify(doc));
+    assert.equal(doc.doc.content, first.content);
+  } finally { await agent.close(); service.close(); confirmations.close(); clearCurrentDbClient(database); sqlite.close(); }
 });
