@@ -199,6 +199,7 @@ import {
   hasUnavailableSubscriptionPoolAccount,
   needsSubscriptionAccountHandoff as probeSubscriptionAccountHandoff,
   readSubscriptionPool,
+  readSubscriptionUsage,
   refreshSubscriptionPool,
   refreshSubscriptionPoolCodexModels,
   onSubscriptionPoolCodexModelsChanged,
@@ -314,6 +315,93 @@ it.each(['anthropic', 'openai'] as const)('persists and restores every %s accoun
   h.owner += ':replacement';
   h.read.mockResolvedValue({ authenticated: true, identity: 'different-account' });
   expect((await readSubscriptionPool(provider)).accounts.every(a => a.usage === undefined)).toBe(true);
+});
+
+// Unit, plugin quota contract (2026-11-16): existing UI reads expose native paths/identity and
+// have no public projection. Two different account quotas, missing data and an in-flight
+// removal/owner switch must remain distinguishable through the real read entry.
+describe('read-only subscription usage', () => {
+  it.each(['anthropic', 'openai'] as const)('projects each %s account without native identity or secret fields', async provider => {
+    h.pools[provider] = { strategy: 'round', accounts: [account('default'), account('second')] };
+    h.read.mockImplementation(async (_kind: string, directory: string) => ({ authenticated: true,
+      identity: `${directory}@private.test`, plan: provider === 'anthropic' ? 'max' : 'plus',
+      planTier: provider === 'anthropic' ? 'max_20x' : undefined, accessToken: 'must-not-leak' }));
+    const observedAt = Date.now() - 10_000;
+    h.usage.mockImplementation(async (_kind: string, directory: string) => {
+      const used = directory.endsWith('second') ? 74 : 12;
+      return provider === 'anthropic'
+        ? { claudeUsage: { updatedAt: observedAt, fiveHour: { utilization: used, resetsAt: 9_999_999_999 },
+          scoped: [{ modelDisplayName: 'Sonnet', utilization: used + 1 }], accountFingerprint: 'must-not-leak', accessToken: 'must-not-leak' } }
+        : { codexUsage: { appServerBuckets: { codex: { limitId: 'codex', limitName: null, updatedAt: observedAt,
+          primary: { usedPercent: used, windowMinutes: 300, resetsAt: 9_999_999_999 }, secondary: null,
+          accessToken: 'must-not-leak' } }, webSnapshot: null } };
+    });
+    const result = await readSubscriptionUsage(provider);
+    expect(result.accounts.map(a => [a.accountId, a.windows[0].usedPercent])).toEqual([['default', 12], ['second', 74]]);
+    expect(result.accounts[0]).toMatchObject({ providerId: provider, provider, status: 'connected',
+      plan: { type: provider === 'anthropic' ? 'max' : 'plus', tier: provider === 'anthropic' ? 'max_20x' : null }, usageStatus: 'available' });
+    expect(result.accounts[0].windows[0]).toMatchObject({ windowMinutes: 300, resetsAt: 9_999_999_999 });
+    expect(JSON.stringify(result)).not.toMatch(/must-not-leak|private\.test|directory|accountKey|accountFingerprint|accessToken/);
+    const reads = h.usage.mock.calls.length;
+    expect(await readSubscriptionUsage(provider)).toEqual(result);
+    expect(h.usage).toHaveBeenCalledTimes(reads);
+  });
+
+  it('preserves unknown and stale readings without refreshing the observation time', async () => {
+    h.read.mockImplementation(async (_kind: string, directory: string) => ({ authenticated: true, identity: directory }));
+    const old = Date.now() - 600_000;
+    h.usage.mockImplementation(async (_kind: string, directory: string) => directory.endsWith('second') ? {}
+      : { claudeUsage: { updatedAt: old, fiveHour: { utilization: 27, resetsAt: 1 } } });
+    const result = await readSubscriptionUsage('anthropic');
+    expect(result.accounts[0]).toMatchObject({ usageStatus: 'stale', updatedAt: old, windows: [{ usedPercent: 27, updatedAt: old }] });
+    expect(result.accounts[1]).toMatchObject({ usageStatus: 'unavailable', updatedAt: null, windows: [], plan: { type: null, tier: null } });
+    h.read.mockResolvedValue({ authenticated: false });
+    await refreshSubscriptionPool('anthropic', true);
+    expect((await readSubscriptionUsage('anthropic')).accounts.every(a => a.status === 'signed-out' && !a.windows.length)).toBe(true);
+  });
+
+  it('matches UI deduplication only within the same provider and ChatGPT workspace', async () => {
+    h.pools.openai = { strategy: 'round', accounts: [account('default'), account('second')] };
+    h.read.mockResolvedValue({ authenticated: true, identity: 'same@example.test' });
+    h.tokens.mockResolvedValue({ chatgptAccountId: 'same-workspace', canDispatch: () => true });
+    expect((await readSubscriptionUsage('openai')).accounts.map(a => a.accountId)).toEqual(['default']);
+    h.placement['openai:second'] = 'separate';
+    expect((await readSubscriptionUsage()).accounts.filter(a => a.provider === 'openai')
+      .map(a => [a.providerId, a.accountId])).toEqual([['openai', 'default'], ['separate', 'second']]);
+  });
+
+  it('only reads connected owner accounts and keeps custom provider placement', async () => {
+    h.bound = false;
+    h.placement['anthropic:second'] = 'my-claude';
+    h.created['my-claude'] = { kind: 'anthropic', name: 'Private name', account: 'second' };
+    expect((await readSubscriptionUsage()).accounts.map(a => [a.providerId, a.accountId])).toEqual([['my-claude', 'second']]);
+    expect(h.read).toHaveBeenCalledTimes(1);
+    expect((await readSubscriptionUsage('anthropic')).accounts).toEqual([]);
+    expect((await readSubscriptionUsage('not-a-local-provider')).accounts).toEqual([]);
+  });
+
+  it.each(['remove', 'move', 'revoke'] as const)('drops a %s during another account read', async change => {
+    let release!: () => void;
+    let reached!: () => void;
+    const waiting = new Promise<void>(resolve => { reached = resolve; });
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    h.read.mockImplementation(async (_kind: string, directory: string) => {
+      if (directory.endsWith('second')) { reached(); await pending; }
+      return { authenticated: true, identity: directory };
+    });
+    const result = readSubscriptionUsage('anthropic');
+    await waiting;
+    if (change === 'remove') h.pools.anthropic!.accounts = [account('second')];
+    else if (change === 'move') h.placement['anthropic:default'] = 'moved';
+    else h.bound = false;
+    release();
+    expect((await result).accounts.map(a => a.accountId)).toEqual(['second']);
+  });
+
+  it('rejects a late read after the Cindy owner changes', async () => {
+    h.read.mockImplementation(async () => { h.owner = 'another-owner'; return { authenticated: true }; });
+    await expect(readSubscriptionUsage('anthropic')).rejects.toThrow('owner changed');
+  });
 });
 
 // Unit: the CLI-origin account used to become an implicit fallback for a newly empty provider.

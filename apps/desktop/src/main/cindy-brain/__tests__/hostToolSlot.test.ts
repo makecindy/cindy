@@ -7,7 +7,7 @@ import { captureTaskActionSyncGuard, captureTaskActionDeliveryGuard, hasTaskActi
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 import { createGhostPageBridge } from '../../../shared/ghostPageBridge.js';
-import { createSchedulerMcpServer, type SchedulerMcpDeps } from '@cindy/mcps';
+import { createSchedulerMcpServer, createXdtHelperMcpServer, type SchedulerMcpDeps } from '@cindy/mcps';
 import { Scheduler, type Schedule } from '@cindy/maker-scheduler';
 import { withPluginSchedulerApproval } from '../pluginSchedulerApproval.js';
 import { GhostRuntime, type SandboxHandle } from '../runtime/GhostRuntime.js';
@@ -64,6 +64,34 @@ function fixture() {
   return { ports, invoke, result, call, closePage: () => { pageLive = false; }, get ghost() { return ghost!; }, remove: () => { ghost = null; }, changeOwner: () => { generation++; } };
 }
 const code = (value: Awaited<ReturnType<typeof handlePluginHostToolRequest>>) => JSON.parse(value.content[0].type === 'text' ? value.content[0].text : '{}').errorCode;
+
+// Unit: the quota endpoint is new; existing history tests cannot prove that settings
+// permission alone cannot read it. Exercise the actual helper registry through the plugin gateway.
+it('requires usage permission and suppresses a quota result after plugin revocation', async () => {
+  const f = fixture();
+  f.ghost.manifest.agent!.hostTools = ['settings'];
+  let revoke = false;
+  const read = vi.fn(async () => {
+    if (revoke) f.ghost.enabled = false;
+    return { scope: 'local', accounts: [{ accountId: 'only-owner-account' }] };
+  });
+  const ports: PluginHostToolPorts = { ...f.ports, createRuntime: (_server, caller) => {
+    const server = createXdtHelperMcpServer({ subscriptionUsage: { read }, authorizeCall: authorizePluginHostToolCall },
+      { agentKind: 'codex', workingDir: '', hostCaller: caller });
+    return { ...server.hostTools, close: () => server.close() };
+  } };
+  const request = () => handlePluginHostToolRequest('dashboard', {
+    type: 'host-tool-request', server: 'cindy_helper', tool: 'get_subscription_usage', args: {},
+  }, () => true, ports);
+  expect(code(await request())).toBe('PERMISSION_DENIED');
+  expect(read).not.toHaveBeenCalled();
+  f.ghost.manifest.agent!.hostTools = ['usage'];
+  expect(JSON.stringify(await request())).toContain('only-owner-account');
+  revoke = true;
+  const late = await request();
+  expect(code(late)).toBe('PERMISSION_DENIED');
+  expect(JSON.stringify(late)).not.toContain('only-owner-account');
+});
 
 // Unit, plugin installation authority: the real gateway previously asked the Agent
 // policy again after group approval, including a model patch retaining ask. Existing

@@ -8241,6 +8241,8 @@
         "hostTools_controlDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben und Projekte bearbeiten, archivieren, wiederherstellen und steuern sowie native Aufgabendateien auf diesem Computer importieren.",
         "hostTools_handoff": "Aufgabennachrichten",
         "hostTools_handoffDetail": "Mit Cindys Werkzeugen Nachrichten an vorhandene Aufgaben senden. Vorgänge, die eine aktuelle Aufgabe benötigen, erfordern ein ausdrücklich angegebenes Ziel.",
+        "hostTools_usage": "Abonnementnutzung lesen",
+        "hostTools_usageDetail": "Liest Kontokennungen, Tarife, Kontingentzeiträume und Aktualisierungszeiten der Claude- und Codex-Abonnements, die auf diesem Computer mit deinem aktuellen Cindy-Konto verbunden sind. Kein Zugriff auf E-Mail-Adressen, Zugangsdaten, Dateien oder andere Computer. Konten können nicht geändert werden.",
         "hostTools_settings": "App-Einstellungen",
         "hostTools_settingsDetail": "Mit Cindys Werkzeugen die App-Konfiguration lesen und ändern. Geheimnisse werden nicht zurückgegeben; vertrauliche Eingaben machst du selbst.",
         "hostTools_scheduler": "Automatisierungsverwaltung",
