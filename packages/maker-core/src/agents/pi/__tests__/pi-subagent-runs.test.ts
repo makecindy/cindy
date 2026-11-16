@@ -684,6 +684,49 @@ describe('PI durable subagent run store', () => {
         .resolves.toBe(true);
     });
 
+    // #10849 review: async discovery must retain the existing runner-query
+    // budget across both latest-generation passes and diagnostics. Unit tier;
+    // unlike owner start times, runner presence already has bounded reuse.
+    it('reuses asynchronous runner identity across scans but checks exit before the cache', async () => {
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+      restores.push(() => Object.defineProperty(process, 'platform', platform));
+      let now = Date.now();
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      restores.push(() => clock.mockRestore());
+      let alive = true;
+      const realKill = process.kill.bind(process);
+      const kill = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+        if (pid !== runnerPid || signal !== 0) return realKill(pid, signal);
+        if (!alive) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+        return true;
+      }) as typeof process.kill);
+      restores.push(() => kill.mockRestore());
+      const probe = vi.fn(async () => ({ stdout: `node ${runnerScript} config.json`, stderr: '' }));
+      childProcess.asyncProbe = probe;
+      const root = await makeRoot();
+      const run = expired();
+      await writeStatus(root, run);
+      const collect = async () => {
+        const found = [];
+        for await (const item of scanPiSubagentRuns(root, { latestPerTask: true })) found.push(item.runId);
+        return found;
+      };
+      await expect(collect()).resolves.toEqual([run.runId]);
+      await expect(collect()).resolves.toEqual([run.runId]);
+      await expect(listPiSubagentRunDiagnostics(root)).resolves.toEqual([]);
+      expect(probe).toHaveBeenCalledTimes(1);
+      now += 10_001;
+      await expect(collect()).resolves.toEqual([run.runId]);
+      expect(probe).toHaveBeenCalledTimes(2);
+      alive = false;
+      await expect(collect()).resolves.toEqual([]);
+      await expect(listPiSubagentRunDiagnostics(root)).resolves.toEqual([
+        expect.objectContaining({ kind: 'stale', runId: run.runId }),
+      ]);
+      expect(probe).toHaveBeenCalledTimes(2);
+    });
+
     it('reports a reclaim when the recorded pid now runs something else', async () => {
       // Nothing of ours is left at that pid, and the replacement is not ours to
       // signal — refusing forever would wedge every boundary behind it.

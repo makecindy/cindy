@@ -1497,6 +1497,17 @@ function isProcessAlive(pid: number | undefined): boolean | null {
 const RUNNER_IDENTITY_TTL_MS = 10_000;
 const RUNNER_IDENTITY_CACHE_MAX = 64;
 const runnerIdentityCache = new Map<string, { at: number; presence: PiSubagentRunnerPresence }>();
+const pendingRunnerIdentities = new Map<string, Promise<PiSubagentRunnerPresence>>();
+
+function rememberRunnerPresence(key: string, presence: PiSubagentRunnerPresence): void {
+  runnerIdentityCache.delete(key);
+  runnerIdentityCache.set(key, { at: Date.now(), presence });
+  while (runnerIdentityCache.size > RUNNER_IDENTITY_CACHE_MAX) {
+    const oldest = runnerIdentityCache.keys().next().value;
+    if (oldest === undefined) break;
+    runnerIdentityCache.delete(oldest);
+  }
+}
 
 function runnerPresenceForStale(status: PiSubagentRunStatus): PiSubagentRunnerPresence {
   const key = `${status.runnerPid}:${status.runnerScript}`;
@@ -1508,19 +1519,39 @@ function runnerPresenceForStale(status: PiSubagentRunStatus): PiSubagentRunnerPr
   // outlived its process is what makes a sweep count work that is already over.
   // A signal-0 syscall, no spawn, and only on the expired-heartbeat path.
   if (isProcessAlive(status.runnerPid) === false) {
-    runnerIdentityCache.set(key, { at: now, presence: 'gone' });
+    rememberRunnerPresence(key, 'gone');
     return 'gone';
   }
   const cached = runnerIdentityCache.get(key);
   if (cached && now - cached.at < RUNNER_IDENTITY_TTL_MS) return cached.presence;
   const presence = classifyRunnerPresenceSync(status);
-  runnerIdentityCache.set(key, { at: now, presence });
-  if (runnerIdentityCache.size > RUNNER_IDENTITY_CACHE_MAX) {
-    for (const [entryKey, entry] of runnerIdentityCache) {
-      if (now - entry.at >= RUNNER_IDENTITY_TTL_MS) runnerIdentityCache.delete(entryKey);
-    }
-  }
+  rememberRunnerPresence(key, presence);
   return presence;
+}
+
+/** Reuse runner classifications only for stale display, never for owner/control authority. */
+async function runnerPresenceForStaleAsync(status: PiSubagentRunStatus): Promise<PiSubagentRunnerPresence> {
+  const key = `${status.runnerPid}:${status.runnerScript}`;
+  // A completed "running" answer must not hide an exit inside its TTL.
+  if (isProcessAlive(status.runnerPid) === false) {
+    rememberRunnerPresence(key, 'gone');
+    return 'gone';
+  }
+  const cached = runnerIdentityCache.get(key);
+  if (cached && Date.now() - cached.at < RUNNER_IDENTITY_TTL_MS) return cached.presence;
+  const pending = pendingRunnerIdentities.get(key);
+  if (pending) return pending;
+  const probe = (async () => {
+    const classified = await classifyRunnerPresence(status);
+    const presence = isProcessAlive(status.runnerPid) === false ? 'gone' : classified;
+    rememberRunnerPresence(key, presence);
+    return presence;
+  })();
+  pendingRunnerIdentities.set(key, probe);
+  try { return await probe; }
+  finally {
+    if (pendingRunnerIdentities.get(key) === probe) pendingRunnerIdentities.delete(key);
+  }
 }
 
 export function isPiSubagentRunStale(
@@ -1573,7 +1604,7 @@ async function isPiSubagentRunStaleAsync(
     const identity = piSubagentOwnerIdentity(status.runtimeOwnerId);
     if (identity !== null && await isOwnerInstanceAliveAsync(identity)) return false;
   }
-  return await classifyRunnerPresence(status) === 'gone';
+  return await runnerPresenceForStaleAsync(status) === 'gone';
 }
 
 async function listRunDirectoryIds(root: string): Promise<string[]> {
