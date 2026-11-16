@@ -275,6 +275,7 @@ async function submit(options: {
     }),
     commitRemoteModelGroup: vi.fn(), buildModelGroupRouteNote: () => null,
     remoteModelGroupSendBlock: options.remoteModelGroupSendBlock ?? null,
+    setRemoteModelGroupsRetry: vi.fn(),
     bindModelGroupSession: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
     ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
@@ -769,6 +770,8 @@ describe('homepage submission to Main admission and first-message handoff', () =
       expect(result.invokeRemote.mock.calls.some(([, channel]) => channel === 'maker:create-session')).toBe(false);
       if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('newChat.modelSelector.remoteLoadFailed');
       else expect(String(result.errors.at(-1))).toContain('newChat.modelSelector.remoteLoadFailed');
+      // 这次没读到而被挡下：请那台重读一次模式列表。
+      if ('remoteModelGroupSendBlock' in failure) expect(result.environment.setRemoteModelGroupsRetry).toHaveBeenCalled();
     }
   });
   // #10240 / unit: real creation callbacks must not commit a model-group choice
