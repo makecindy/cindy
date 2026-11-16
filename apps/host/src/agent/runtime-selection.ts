@@ -491,6 +491,15 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
       settlePendingCredentialSwitchWith(
         { pendingCredentialSwitchHolder: pendingCredentialSwitchService, log: deps.log }, sessionId, 'host-turn-settled');
     },
+    /**
+     * register.ts registerPendingCredentialSwitchForSession: a credential switch that waits for the task's
+     * turn to end. The Agent, system, IM card and scheduled model changes register through it on the
+     * desktop; on the Host they are not wired yet (release table, B2), so only tests call it today.
+     */
+    registerPendingCredentialSwitch: (
+      sessionId: string,
+      target: Parameters<typeof registerPendingCredentialSwitchWith>[2],
+    ) => registerPendingCredentialSwitchWith(accessPorts(), sessionId, target),
     /** Whether a credential switch waits for this task's turn to end (the coordinator and idle-release gates). */
     hasPendingCredentialSwitch: (sessionId: string) => pendingCredentialSwitchService.has(sessionId),
     clearIntent(sessionId: string) {

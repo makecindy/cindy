@@ -37,6 +37,7 @@ import { createDbClientForHandle } from '../../../desktop/src/main/localDb/clien
 import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.ts';
 import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionStorageAdapter.ts';
 import { createHostRuntimeSelection, HOST_RUNTIME_SELECTION_QUEUE_MEMBERS, HOST_RUNTIME_START_PORTS } from './runtime-selection.ts';
+import { getSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { getThinkingEnabledFromMemory } from '../../../desktop/src/main/maker-host/newMakerDefaultsCache.ts';
 import { createHostMessageStore, createHostMessageRecovery } from '../message-store.ts';
 import { resolveSessionReferencesWithPorts } from '../../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
@@ -2844,6 +2845,8 @@ async function modelChangeRuntime(t, { agent = 'claude-code' } = {}) {
         providerId: stored.provider_id, permissionMode: 'ask', planModeEnabled: false, sdkSessionId: stored.sdk_session_id };
     },
     applyPendingAgentSwitch: (id, options) => { landings.push(id); return selection.applyPendingAgentSwitch(id, options); },
+    // As main.ts: a settled turn lands the task's pending credential switch.
+    onSessionSettled: id => selection.onTurnSettled(id),
   });
   // As Maker: a task's meta is its stored row (maker.ts getSessionMeta reads the session storage).
   h.maker.getSessionMeta = id => new OwnerSessionStorage({ db: () => getCurrentDbClientSnapshot().client }).get(id);
@@ -3174,6 +3177,42 @@ test('model change at send: an engine switch keeps its thinking choice for the n
   const pushed = r.h.events.filter(event => event.type === 'plugin_push' && event.channel === 'maker:draft-pref:apply');
   assert.deepEqual(pushed.map(event => event.payload),
     [{ agent: 'codex', providerId: 'prov-a', modelId: 'gpt-think', active: false, thinking: false }]);
+});
+
+// Rule (the desktop's settlePendingCredentialSwitch, wired to a turn's end in register.ts; main.ts wires
+// onSessionSettled to runtimeSelection.onTurnSettled): a credential switch registered while the task's
+// turn runs waits for that turn, then lands at its end: the runtime is closed so the next send starts on
+// the new route, the task's route store takes the new source, and the clients hear it applied. Gap: no
+// Host test reached the turn end with a pending switch, so a broken onTurnSettled left every switch
+// pending (the client keeps showing "switches after this turn"). The Host's own entries do not register
+// yet (release table, B2); this registers through the shared registerPendingCredentialSwitchWith.
+test('model change at send: a credential switch registered during a turn lands when the turn ends', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  // As Maker: the runtimes it holds (maker.ts listActiveSessions).
+  r.h.maker.listActiveSessions = () => [...r.h.maker.sessions.values()];
+  // A second connected provider offering the same models: the switch's target source. The models
+  // have effort levels: the landing's route write resolves the task's effort against the target model.
+  const withEfforts = view => ({ ...view, models: { 'claude-code': view.models['claude-code']
+    .map(entry => ({ ...entry, efforts: ['low', 'high'], defaultEffort: 'high' })) } });
+  r.views.current = [...r.views.current, ...switchViews('claude-code').map(view => ({ ...view, id: 'prov-b' }))]
+    .map(withEfforts);
+  await r.createTask('settle');
+  await r.h.queue.enqueue('settle', { clientId: 'settle-1', text: 'work' });
+  await waitFor(() => r.h.maker.sessions.get('settle')?.sent.length === 1);
+  const session = r.h.maker.sessions.get('settle');
+  await r.selection.registerPendingCredentialSwitch('settle', { model: 'small', providerId: 'prov-b' });
+  assert.equal(r.selection.hasPendingCredentialSwitch('settle'), true);
+  const stamp = { sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId };
+  session.emit({ type: 'status', data: { isRunning: true }, ...stamp });
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(r.selection.hasPendingCredentialSwitch('settle'), true, 'the switch waits while the turn runs');
+  assert.equal(r.h.maker.sessions.get('settle'), session);
+  session.emit({ type: 'done', data: {}, ...stamp });
+  await waitFor(() => !r.selection.hasPendingCredentialSwitch('settle'));
+  assert.equal(r.h.maker.sessions.get('settle'), undefined, 'the runtime is closed for the next send');
+  assert.equal(getSessionProvider('settle'), 'prov-b');
+  const applied = r.h.events.filter(event => event.type === 'plugin_push' && event.channel === 'maker:session-credential-switch-applied');
+  assert.deepEqual(applied.map(event => event.payload), [{ sessionId: 'settle', model: 'small', providerId: 'prov-b' }]);
 });
 
 // Guard: main.ts casts the untyped queue api to the runtime selection's inputQueue port. Every member
