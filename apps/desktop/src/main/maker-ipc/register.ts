@@ -756,6 +756,7 @@ import { ensureBotGroupLaneSession } from '../localDb/ipc/bots.js';
 import { restartBotRuntime } from './botRuntimeRestart.js';
 import { registerBotLifecycleHandlers } from './botLifecycleService.js';
 import { isSessionPermissionMode, persistPermissionModeWithoutRuntime } from './sessionPermissionPersistence.js';
+import { commitSessionPermissionModeWith } from './sessionPermissionSettings.js';
 import { withSessionPermissionChange } from './sessionPermissionChange.js';
 import { withBotPermissionChange } from './botPermissionDispatch.js';
 import { getPluginHostToolCaller } from '../mcp-integrations/hostToolCaller.js';
@@ -22178,56 +22179,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   );
 
   async function commitSessionPermissionMode(sessionId: string, mode: string, remote = false, beforeMutation?: () => Promise<void>) {
-    const snapshot = getCurrentDbClientSnapshot();
-    const assertOwnerCurrent = () => {
-      if (!snapshot || snapshot !== getCurrentDbClientSnapshot()) {
-        throwIpcError('PRECONDITION_FAILED', 'Account changed during permission update');
-      }
-    };
-    return withBotPermissionChange(sessionId, () => withSessionPermissionChange(sessionId, async () => {
-      await beforeMutation?.();
-      assertOwnerCurrent();
-      await assertReviewSettingsUnlocked(sessionId);
-      await beforeMutation?.();
-      assertOwnerCurrent();
-      const [row] = await snapshot!.client.drizzle.select({permissionMode: sessions.permissionMode})
-        .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-      assertOwnerCurrent();
-      if (!row) throwIpcError('NOT_FOUND', 'session not found');
-      await beforeMutation?.();
-      const sess = maker.getSession(sessionId);
-      let runtimeChanged = false;
-      try {
-        if (sess) {
-          await sess.setPermissionMode(mode as PermissionMode);
-          runtimeChanged = true;
-        }
-        await beforeMutation?.();
-        assertOwnerCurrent();
-        const saved = await snapshot!.client.tx('bots.persistSessionPermission', {sessionId, mode});
-        if (!saved.updated) throwIpcError('NOT_FOUND', 'session not found');
-        assertOwnerCurrent();
-      } catch (error) {
-        // Keep recovery inside the same permission operation so it cannot
-        // overwrite a later user choice. Never recover into a new account.
-        if (runtimeChanged && sess && snapshot === getCurrentDbClientSnapshot()) {
-          await sess.setPermissionMode(row.permissionMode as PermissionMode).catch((rollbackError) => {
-            log.warn('permission runtime rollback failed', {sessionId, error: String(rollbackError)});
-          });
-        }
-        throw error;
-      }
-      // 分享供应商的「本任务总是允许」随权限档变化失效；Agent 实例被回收时执行器收不到这次切换。
-      if (row.permissionMode !== mode) forgetCredentialGrants(sessionId);
-      broadcastSessionPatched(sessionId, { permissionMode: mode });
-      await syncBotLinkedLanePermissions(sessionId);
-      if (remote) {
-        const result = {};
-        markRemoteSettingPersistedInsideHandler(result);
-        return result;
-      }
-      return true;
-    }));
+    return commitSessionPermissionModeWith({
+      maker, assertReviewSettingsUnlocked, broadcastSessionPatched, syncBotLinkedLanePermissions,
+      markRemoteSettingPersistedInsideHandler, log,
+    }, sessionId, mode, remote, beforeMutation);
   }
 
   ipcMain.handle(
