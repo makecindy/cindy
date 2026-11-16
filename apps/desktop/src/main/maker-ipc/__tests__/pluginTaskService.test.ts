@@ -428,6 +428,29 @@ it('persists automatic naming intent and dispatches separate context without dup
     .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
 });
 
+// unit: message-source.md「插件转发的 IM 消息」(2026-11-16). relay joins the send identity only when
+// present: the digest literal below was written by the build before relay existed, so a plugin
+// retrying an old requestKey still replays instead of conflicting. Relay reaches dispatch as-is.
+it('keeps relay-free send receipts replayable and binds a relay to its request key', async () => {
+  const f = fixture(), task = await f.create();
+  const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'send',
+    text: '群里有人问发布时间', context: '<group_chat_context>' };
+  await f.service.send('p', request);
+  const receipt = [...f.rows.values()].find(row => row.operation === 'send')!;
+  expect(receipt.fingerprint).toBe('b80eb91c8bf354d5846b2e1f951852685d31a52722cf00fdcb7a1a8db9f026e1');
+  expect(f.deps.dispatch).toHaveBeenCalledExactlyOnceWith('p', task.taskId, expect.any(String), request.text, [], request.context);
+  const relay = { platform: 'wechat', chatType: 'group' as const, chatName: '产品群', sender: { id: 'wxid_a', name: 'Chris', isOwner: false } };
+  await expect(f.service.send('p', { ...request, relay })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+  const run = await f.service.send('p', { ...request, requestKey: 'relay', relay });
+  expect(f.deps.dispatch).toHaveBeenLastCalledWith('p', task.taskId, run.inputMessageId, request.text, [], request.context, relay);
+  // Key order is not identity; a changed relay is.
+  const { sender, ...rest } = relay;
+  expect(await f.service.send('p', { ...request, requestKey: 'relay', relay: { sender, ...rest } })).toEqual(run);
+  await expect(f.service.send('p', { ...request, requestKey: 'relay', relay: { ...relay, sender: { ...sender, isOwner: true } } }))
+    .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+  expect(f.deps.dispatch).toHaveBeenCalledTimes(2);
+});
+
 // unit: a failed naming-metadata read must not leave an unsent receipt that
 // suppresses the retry. Inject the store failure after host bookkeeping starts.
 it('retries after a failed naming-metadata read without leaving an unsent receipt', async () => {

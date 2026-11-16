@@ -283,12 +283,14 @@ export function createProviderModelRefreshCoordinator(
       syncScope();
       const connectedIds = new Set<BuiltinRefreshableProviderId>();
       for (const provider of providers) {
+        const subscription = provider.subscriptionAccountPool ?? provider.subscriptionPool;
+        const refreshId = subscription ?? provider.id;
         if (
-          provider.source === 'builtin' &&
+          (provider.source === 'builtin' || subscription === 'anthropic' || subscription === 'openai') &&
           provider.connected &&
-          isBuiltinRefreshableProviderId(provider.id)
+          isBuiltinRefreshableProviderId(refreshId)
         ) {
-          connectedIds.add(provider.id);
+          connectedIds.add(refreshId);
         }
       }
 

@@ -467,3 +467,13 @@ Host 校验规范 base64，嗅探 PNG/JPEG/WebP，最多 4 张、合计 20 MiB�
 
 queue 与 steer 都把托管 URL 写入 files、chatMessage.images 和持久消息信封；模型输入由既有附件装配器生成。
 正文/附件来源仍是插件续行，不把截图变为新用户授权；目标、批准、owner 和取消闸保持不变。
+
+### 转发 IM 消息的出处（2026-11-16）
+
+`tasks.capabilities().messageRelay` 表示 `tasks.send` 接受可选 `relay:{platform,chatType,chatName?,sender:{id,name,isOwner}}`；
+`taskSlot.ts` 逐层只认这些键并按 `MESSAGE_SOURCE_RELAY_LIMITS` 限长，`targets.send` 不接受。`PluginTaskService.send`
+只在请求带 relay 时把它加进回执摘要（不带时摘要逐字节不变，旧 requestKey 照常重放），并且只在有 relay 时把它作为
+`dispatch` 的第七个参数传下去。`register.ts` 的派发适配器用 `readMessageSourcePluginRelay` 清洗后盖章到
+`sourcePlugin.relay`，插件名与插件 id 仍由宿主决定。展示、`[消息来源]` 与访客脱敏见
+[消息来源](../product-rules/message-source.md)「插件转发的 IM 消息」；只是本机插件管子的增量字段，无 device-link、
+官方或自建 relay 改动，无数据库迁移。

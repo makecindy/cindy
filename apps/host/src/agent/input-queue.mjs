@@ -352,6 +352,10 @@ export function createInputQueue(deps) {
       schedulerQueue: () => ({ ...scheduleBridge,
         ensureQueueRestored: id => command(id, () => coordinator.isQueueRestored(id)),
         isSessionBusy: id => { assertCurrent(); return scheduleBridge.isSessionBusy(id); },
+        hasPendingInput: id => {
+          if (closing) throw new Error('session is closed');
+          assertCurrent(); return scheduleBridge.hasPendingInput(id);
+        },
         enqueuePrompt: req => command(req.sessionId, async (_state, admission) => {
           // The bridge reads metadata and the stored row before enqueue. Keep
           // the original command generation across every one of those reads.

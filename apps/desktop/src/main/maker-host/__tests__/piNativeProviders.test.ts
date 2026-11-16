@@ -67,6 +67,22 @@ import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
 type Cfg = Parameters<typeof buildPiNativeProvidersFromConfigs>[0][number];
 
+// #10434, unit: an empty UI intensity ladder must not disable the native switch.
+it.each(['xiaomi', 'xiaomi-token-plan-cn', 'xiaomi-token-plan-ams', 'xiaomi-token-plan-sgp'])(
+  'retains the %s native Pi on/off map behind the visible switch', source => {
+    const row = PROVIDER_MODEL_CATALOG.providers[source].find(row => row.id === 'mimo-v2.6-pro')!;
+    const config = { id: 'mimo-switch', name: 'MiMo', runtimes: { pi: {
+      baseUrl: row.upstream, wireProtocol: 'openai-chat' as const, models: [{ id: row.id, name: row.name }],
+    } } };
+    const provider = buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const native = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined,
+      { ...BUNDLED_CATALOG, providers: [provider] }).providers[0].models[0];
+    expect(provider.models.pi![0]).toMatchObject({ thinkingToggle: true, efforts: [], defaultEffort: null });
+    expect(native).toMatchObject({ reasoning: true, thinkingLevelMap: row.execution.pi.thinkingLevelMap,
+      compat: { supportsReasoningEffort: false, thinkingFormat: 'deepseek' } });
+  },
+);
+
 // Unit: native Pi bypasses the Desktop proxy; assert the emitted model config,
 // including endpoint overrides and explicit user headers (not just a helper).
 it('attributes native Pi per model endpoint without lending identity to another service', () => {
