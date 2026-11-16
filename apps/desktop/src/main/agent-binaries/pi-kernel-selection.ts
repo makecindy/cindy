@@ -1,7 +1,9 @@
 /**
- * The explicit Pi kernel selection (`<root>/selected.json`) and the binary it names: moved verbatim out
- * of PiKernelManager (pi-kernel-manager.ts readSelection and selectedBinary) so a process without
- * Electron (the Node Host) honors the same selection with the same checks.
+ * The explicit Pi kernel selection (`<root>/selected.json`) and the binary it names: moved out of
+ * PiKernelManager (pi-kernel-manager.ts readSelection and selectedBinary) with the logic unchanged so a
+ * process without Electron (the Node Host) honors the same selection with the same checks. Not every
+ * line is verbatim: the private methods became functions that take the install root and the probe in
+ * place of this.deps.root and this.deps.probe, and VERSION and Selection are exported.
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';

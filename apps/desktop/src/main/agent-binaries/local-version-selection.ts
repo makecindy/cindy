@@ -1,9 +1,11 @@
 /**
  * The installed versions of an agent binary under one install root (`<root>/<version>/<binary>` with a
- * `.verified` marker) and the preferred one by the version each binary reports. Moved verbatim out of
- * factory.ts so a process without Electron (the Node Host) chooses the same install; the install root
- * is passed in (read when the scan runs, as factory.ts's getInstallRoot was) instead of derived from
- * app.getPath('userData').
+ * `.verified` marker) and the preferred one by the version each binary reports. Moved out of factory.ts
+ * with the logic unchanged so a process without Electron (the Node Host) chooses the same install; the
+ * install root is passed in (read when the scan runs, as factory.ts's getInstallRoot was) instead of
+ * derived from app.getPath('userData'). Not every line is verbatim: the scan joins the binary and
+ * `.verified` paths on the root it read once, where factory.ts's getFinalBinPath and getVerifiedMarker
+ * went through getInstallRoot (and its idempotent mkdir) for each path; the paths are the same.
  */
 import fs from 'node:fs';
 import path from 'node:path';
