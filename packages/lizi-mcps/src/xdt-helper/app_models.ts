@@ -20,8 +20,8 @@ const connectionModel = z.strictObject({ id, name: z.string().min(1).max(256).op
 const connectionRuntime = z.strictObject({
   baseUrl: endpoint, modelsUrl: endpoint.optional(),
   wireProtocol: z.enum(['anthropic-messages', 'openai-responses', 'openai-chat', 'google-generative-ai']),
-  supportsImageGeneration: z.boolean().optional(),
-  imageApi: z.literal('openai-images').optional(),
+  supportsImageGeneration: z.boolean().optional().describe('Codex Responses hosted image tool; separate from the standalone Images API.'),
+  imageApi: z.literal('openai-images').optional().describe('Standalone Images API for this runtime. Other runtimes keep their own API declarations and credentials; Guide execution selects its connection explicitly.'),
   videoApi: z.enum(['xai-videos', 'minimax-videos', 'openai-videos']).optional(),
   models: z.array(connectionModel).max(2000),
 });

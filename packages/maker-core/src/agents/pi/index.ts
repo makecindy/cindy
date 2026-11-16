@@ -4281,6 +4281,9 @@ export class PiAgent extends BaseAgent {
     // 强制确认策略命中的工具 —— 与 Claude(task_notification 续跑)/ Codex(plan
     // follow-up send)同口径。清空只认 turn 终态,由 send 预检覆盖为最新值。
     let activeTurnPermissionPolicy: TurnPermissionPolicy | null = null;
+    // Ownership begins at send preparation, before native agent_start. Policy
+    // objects can be reused across turns, so their identity is not a turn fence.
+    let activeTurnPermissionPolicyOwner: symbol | null = null;
     let mutableModel = opts.model;
     let appliedCacheRoutes = cacheRoutes;
     let appliedModelConfigHash = modelConfigHash;
@@ -4413,6 +4416,7 @@ export class PiAgent extends BaseAgent {
       opts?: { dismissPending?: boolean; surfaceLost?: boolean },
     ): void => {
       activeTurnPermissionPolicy = null;
+      activeTurnPermissionPolicyOwner = null;
       if (opts?.surfaceLost) autoReviewDecisionCache.clear();
       if (opts?.dismissPending) {
         dismissAllPendingPrompts(reason, 'deny', { surfaceLost: opts.surfaceLost === true });
@@ -4728,6 +4732,8 @@ export class PiAgent extends BaseAgent {
       task: PiSubagentRunStatus['tasks'][number],
     ): Promise<void> => {
       if (closed && !detachedApprovalSupervisorActive) return;
+      const approval = task.pendingApproval;
+      if (!approval || status.interactiveOwner === 'extension') return;
       // Shared userData can contain active runs from another Desktop instance.
       // Missing ownership is legacy metadata and must fail closed here. A
       // reopened task's new handle may *adopt* an approval parked by an earlier
@@ -4735,19 +4741,18 @@ export class PiAgent extends BaseAgent {
       // gone) — otherwise navigation-close approvals stay unreachable forever.
       // Adoption moves the delivery surface only; the verdict path below forces
       // explicit confirmation for it.
-      const approvalScope = piSubagentApprovalScope(
+      const approvalScope = await piSubagentApprovalScope(
         status,
         subagentRuntimeOwnerId,
         process.pid,
         sid,
       );
+      if (accountBoundaryTeardown || (closed && !detachedApprovalSupervisorActive)) return;
       if (approvalScope === 'refused') return;
       const adopted = approvalScope === 'adopted';
       // Controls must carry the run's own owner id, not ours, or the mailbox
       // owner filter would reject an adopted answer.
       const controlOwnerId = status.runtimeOwnerId ?? subagentRuntimeOwnerId;
-      const approval = task.pendingApproval;
-      if (!approval || status.interactiveOwner === 'extension') return;
       const turnChangeCapture = approval.method === 'confirm'
         && approval.title === 'cindy:turn-change-capture';
       const key = `${status.runId}:${task.childId}:${approval.id}`;
@@ -5251,7 +5256,7 @@ export class PiAgent extends BaseAgent {
         active ||= [...piSubagentStatuses.values()].some((status) => !isPiSubagentTerminal(status.state));
         succeeded = true;
       } catch (error) {
-        deps.logger.warn('pi subagent durable status refresh failed', {
+        this.deps.logger.warn('pi subagent durable status refresh failed', {
           message: error instanceof Error ? error.message : String(error),
         });
       } finally {
@@ -5875,6 +5880,9 @@ export class PiAgent extends BaseAgent {
         transport,
         logger: this.deps.logger,
         onEvent: (event: PiRpcEvent) => {
+          // Retry exhaustion already settled the old run. Its optional native
+          // tail must not clear a new prompt's permission policy before start.
+          if (ctx.turnSettled && (event.type === 'agent_settled' || event.type === 'auto_retry_end')) return;
           const cacheInput = cacheInputTracker.observe(event);
           if (cacheInput) pendingCacheCompatibility = { key: cacheInput.key, value: readCacheCompatibility() };
           if (event.type === 'extension_ui_request' && event.method === 'input' && event.title === 'cindy:cache-input') {
@@ -7964,8 +7972,10 @@ export class PiAgent extends BaseAgent {
         // (plan 审批实施轮 / 自动继续)不经 send,仍读这份闭包值继承(§7.10)。
         // provider 接受前任何失败都必须撤销,避免"任务显示已开始、实际未启动"却残留策略。
         const previousTurnPermissionPolicy = activeTurnPermissionPolicy;
+        const previousTurnPermissionPolicyOwner = activeTurnPermissionPolicyOwner;
         const previousModelRequestControl = activeModelRequestControl;
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
+        activeTurnPermissionPolicyOwner = Symbol('pi-turn-permission-policy');
         activeModelRequestControl = sendOpts?.[MODEL_REQUEST_CONTROL];
         let providerAccepted = false;
         let promptRequestStarted = false;
@@ -8302,6 +8312,7 @@ export class PiAgent extends BaseAgent {
           // turn 没启动；此时恢复旧 policy 会让正在运行的新 turn 用错安全边界。
           if (!providerAccepted) {
             activeTurnPermissionPolicy = previousTurnPermissionPolicy;
+            activeTurnPermissionPolicyOwner = previousTurnPermissionPolicyOwner;
             activeModelRequestControl = previousModelRequestControl;
             if (reviewIntentUpdated) {
               currentAutoReviewIntent = '';
@@ -8471,6 +8482,7 @@ export class PiAgent extends BaseAgent {
 
       async requestGracefulStop(): Promise<void> {
         if (closed || piProcessExited || rpcDisconnected) throw new Error('No active Pi turn to stop');
+        const stoppedPolicyOwner = activeTurnPermissionPolicyOwner;
         const hostAbortToken = markPiHostAbortRequested(ctx);
         autoReviewDecisionCache.clear();
         dismissAllPendingPrompts('turn_aborted', 'deny');
@@ -8488,11 +8500,14 @@ export class PiAgent extends BaseAgent {
           rollbackPiHostAbortRequest(ctx, hostAbortToken);
           throw new Error(`Pi graceful stop rejected: ${resp.error ?? 'unknown'}`);
         }
-        clearActiveTurnPermissionPolicy('turn_aborted');
+        if (activeTurnPermissionPolicyOwner === stoppedPolicyOwner) {
+          clearActiveTurnPermissionPolicy('turn_aborted');
+        }
       },
 
       async abort(): Promise<void> {
         if (closed || piProcessExited || rpcDisconnected) return;
+        const stoppedPolicyOwner = activeTurnPermissionPolicyOwner;
         const hostAbortToken = markPiHostAbortRequested(ctx);
         autoReviewDecisionCache.clear();
         // 先把等待中的调用 fail-closed 唤醒；即使 abort RPC 失败，也不能让用户刚拒绝/
@@ -8503,7 +8518,9 @@ export class PiAgent extends BaseAgent {
         try {
           const resp = await proc.request({ type: 'abort' });
           if (resp.success) {
-            clearActiveTurnPermissionPolicy('turn_aborted');
+            if (activeTurnPermissionPolicyOwner === stoppedPolicyOwner) {
+              clearActiveTurnPermissionPolicy('turn_aborted');
+            }
           } else {
             rollbackPiHostAbortRequest(ctx, hostAbortToken);
             deps.logger.warn('pi abort request rejected', {

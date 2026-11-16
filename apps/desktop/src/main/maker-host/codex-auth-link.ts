@@ -131,6 +131,8 @@ export type CodexAuthSnapshotKind =
 
 export interface CodexAuthSnapshotOutcome {
   kind: CodexAuthSnapshotKind;
+  /** A freshly verified independent snapshot already contained these exact bytes. */
+  unchanged?: true;
   error?: Error;
 }
 
@@ -291,12 +293,64 @@ function removeLegacyCodexAuthAlias(systemAuth: string, myAuth: string): boolean
   }
 }
 
-/** One-way snapshot for read-only Dev use. Never called to publish a system credential. */
+function sameSnapshotFile(a: BigIntStats, b: BigIntStats): boolean {
+  return a.isFile() && b.isFile() && a.ino !== 0n && a.dev === b.dev && a.ino === b.ino
+    && a.mode === b.mode && a.nlink === b.nlink && a.size === b.size
+    && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
+}
+
+/** Bounded, invocation-local comparison. Never cache credentials or file identities. */
+async function readMatchingSnapshot(systemAuth: string, myAuth: string): Promise<{
+  source: BigIntStats; target: BigIntStats;
+} | null> {
+  let sourceHandle: Awaited<ReturnType<typeof fsp.open>> | undefined;
+  let targetHandle: Awaited<ReturnType<typeof fsp.open>> | undefined;
+  let sourceBytes: Buffer | undefined;
+  let targetBytes: Buffer | undefined;
+  try {
+    const source = await fsp.stat(systemAuth, { bigint: true });
+    const target = await fsp.lstat(myAuth, { bigint: true });
+    // Shared aliases must still be detached. Large/unusual files use the existing
+    // copy path rather than allocating an unbounded credential buffer.
+    if (!source.isFile() || !target.isFile() || target.nlink !== 1n
+      || source.ino === 0n || target.ino === 0n
+      || (source.dev === target.dev && source.ino === target.ino)
+      || source.size !== target.size || source.size > 1_048_576n
+      || (source.mode & 0o777n) !== (target.mode & 0o777n)) return null;
+    sourceHandle = await fsp.open(systemAuth, 'r');
+    targetHandle = await fsp.open(myAuth, 'r');
+    if (!sameSnapshotFile(source, await sourceHandle.stat({ bigint: true }))
+      || !sameSnapshotFile(target, await targetHandle.stat({ bigint: true }))) return null;
+    const size = Number(source.size);
+    sourceBytes = Buffer.alloc(size + 1);
+    targetBytes = Buffer.alloc(size + 1);
+    const [sourceRead, targetRead] = await Promise.allSettled([
+      sourceHandle.read(sourceBytes, 0, size + 1, 0),
+      targetHandle.read(targetBytes, 0, size + 1, 0),
+    ]);
+    if (sourceRead.status !== 'fulfilled' || targetRead.status !== 'fulfilled'
+      || sourceRead.value.bytesRead !== size || targetRead.value.bytesRead !== size
+      || !sourceBytes.equals(targetBytes)) return null;
+    return { source, target };
+  } catch {
+    return null;
+  } finally {
+    sourceBytes?.fill(0);
+    targetBytes?.fill(0);
+    await Promise.all([sourceHandle?.close(), targetHandle?.close()]);
+  }
+}
+
+/** One-way snapshot for read-only Dev use. Never called to publish a system credential.
+ * An optional current-authorization guard enables exact-content reuse; other callers
+ * retain the original copy behavior. The guard must be synchronous and fail closed.
+ */
 export async function copyCodexAuthSnapshot(
   systemAuth: string,
   myAuth: string,
   platform: NodeJS.Platform = process.platform,
   execFileImpl: typeof execFileP = execFileP,
+  assertCurrent?: () => void,
 ): Promise<CodexAuthSnapshotOutcome> {
   const token = `${process.pid}.${randomUUID()}`;
   const sidecar = `${myAuth}.${token}.copytmp`;
@@ -304,6 +358,17 @@ export async function copyCodexAuthSnapshot(
   try {
     if (codexAuthPathsShareEntry(systemAuth, myAuth)) {
       throw new Error('Cannot snapshot a Codex credential onto its own directory entry');
+    }
+    if (assertCurrent) {
+      assertCurrent();
+      const matching = await readMatchingSnapshot(systemAuth, myAuth);
+      assertCurrent();
+      // No await between the final path/identity checks and reuse. Atime is not
+      // compared because the reads themselves may update it; ctime is compared.
+      if (matching && sameSnapshotFile(matching.source, fs.statSync(systemAuth, { bigint: true }))
+        && sameSnapshotFile(matching.target, fs.lstatSync(myAuth, { bigint: true }))) {
+        return { kind: 'copied', unchanged: true };
+      }
     }
     // 身份比较必须用 bigint:NTFS 的 file id 可能超出安全整数范围,四舍五入后
     // 两个不同的 inode 会比较成相等 —— 撕裂代次的字节会被当成稳定代次发布,
@@ -335,6 +400,7 @@ export async function copyCodexAuthSnapshot(
         codexAuthTimestampSeconds(sourceStat.mtimeNs),
       )
       .catch(() => undefined);
+    assertCurrent?.();
     if (platform === 'win32') {
       try {
         await fsp.rm(myAuth, { force: true });
@@ -368,10 +434,11 @@ export async function copyCodexAuthSnapshotWithRetry(
   myAuth: string,
   platform: NodeJS.Platform = process.platform,
   execFileImpl: typeof execFileP = execFileP,
+  assertCurrent?: () => void,
 ): Promise<CodexAuthSnapshotOutcome> {
   let last: CodexAuthSnapshotOutcome = { kind: 'source-changed' };
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    last = await copyCodexAuthSnapshot(systemAuth, myAuth, platform, execFileImpl);
+    last = await copyCodexAuthSnapshot(systemAuth, myAuth, platform, execFileImpl, assertCurrent);
     if (last.kind !== 'source-changed') return last;
   }
   return last;

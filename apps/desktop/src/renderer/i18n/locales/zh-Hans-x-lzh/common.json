@@ -5730,7 +5730,8 @@
             "statusFailed": "无从察浏览器连接之状",
             "recoveryFailed": "操控之连接未能重建",
             "extensionDisconnected": "无已连之浏览器扩充（请纳并启 Cindy Chrome 法器及其扩充）",
-            "pluginMissing": "Cindy Chrome 法器尚未安装或启用"
+            "pluginMissing": "Cindy Chrome 法器尚未安装或启用",
+            "browserMissing": "此机尚未安装 Chrome"
           },
           "reconnect": "重连浏览器",
           "recover": "复浏览器",
@@ -5750,7 +5751,7 @@
         },
         "userBrowser": {
           "title": "我之浏览器",
-          "description": "径操君正用之 Chrome 或 Edge，沿用既有之登录。新页开于背景窗口，不扰君。"
+          "description": "即君机上之 Chrome（亦可用 Edge）：Agent 径操其中，沿用既有之登录。新页开于背景窗口，不扰君。"
         },
         "userBrowserSetup": {
           "installPluginTitle": "纳 Cindy Chrome 法器",
@@ -5769,7 +5770,9 @@
           "updatePluginTitle": "更新 Cindy Chrome 法器",
           "updatePluginBody": "所纳 Cindy Chrome 法器版本较旧，尚不支持「我之浏览器」。更新至最新版后，再依提示将扩充装入浏览器。",
           "updatePlugin": "往更新",
-          "storeOpened": "已于浏览器开 Cindy 扩充之页，点「加到 Chrome」后自连"
+          "storeOpened": "已于浏览器开 Cindy 扩充之页，点「加到 Chrome」后自连",
+          "installBrowserTitle": "先装 Chrome",
+          "installBrowserBody": "此机尚未安装 Chrome。「我之浏览器」须 Chrome（或 Edge）以装 Cindy 扩展，装毕此处自进下一步。"
         }
       },
       "android": {
@@ -7889,7 +7892,6 @@
         "install": "纳",
         "details": "详",
         "detailsAria": "观 {{name}} 之详情",
-        "loadingDetails": "方载详情…",
         "update": "自坊更新",
         "updateTo": "更新至 v{{version}}",
         "installed": "已纳",
@@ -8808,23 +8810,10 @@
         "projectReadFailed": "案之开关读取未成，请再试。"
       },
       "usage": {
-        "title": "个人调用",
-        "explanationLabel": "计法",
-        "explanation": "仅计此机目前名籍成功派发之工具调用，失败、逾时或取消亦计入。近 7 日为滚动 168 小时；面板、Skill 与调试操作不计。记录预设留存，清除后重计。",
-        "clear": "清其录",
-        "loading": "方读记录…",
-        "unavailable": "个人记录暂不可用",
-        "retry": "再试",
-        "lastUsed": "近次调用",
-        "last7Days": "近 7 日调用",
-        "never": "未尝调用",
-        "clearTitle": "清除此法器之使用记录乎？",
-        "clearDescription": "将清除此机目前名籍之调用记录及差事关联，此后调用重新记之。已共享之累计不撤回。",
         "downloadExplanation": "累计下载请求次数：每成功取得安装包下载地址，计一次，含更新、重新安装及重取地址之重试；非成功安装之数。",
-        "clearAction": "清",
         "downloadsValue": "取下 {{value}}",
         "usesValue": "用 {{value}}",
-        "usesExplanation": "今共享范围内各版本累计之工具调用次数。下方个人调用仅计此机目前名籍，计法不同。"
+        "usesExplanation": "今共享范围内各版本累计之工具调用次数。"
       },
       "contribution": {
         "unreadReview": "有新处置之果",
@@ -11383,6 +11372,8 @@
         "projectDirNote": "分工行事时，同伴于此劳作。不择亦可，将用此群议自有之卷匣；若择 git 项目，每次分工将新开一 worktree 与分支，不动君手中之代码。",
         "autoContinueSaveFailed": "分工交接未能存，请再试",
         "projectDirSaveFailed": "案之卷匣未能存，确其尚存后再试",
+        "allowMemberInvites": "许诸成员邀友",
+        "allowMemberInvitesHint": "启之，已入群者皆可邀友。唯群主与管理员可改。",
         "allowMentionAllBots": "许 @诸同伴",
         "allowMentionAllBotsHint": "唯群主可改。诸同伴或皆回复，大群宜慎启之。此开关不涉 AI 代答。"
       },
@@ -11488,6 +11479,7 @@
         "threadRecent": "话题近言",
         "threadNew": "话题新言",
         "replyingTo": "答「{{name}}」：{{text}}",
+        "filesOutsideWorkingDir": "部分文件不在工作目录内，未附上。",
         "earlierOmitted": "（更早之言略之）",
         "actingFor": "{{name}} · 代 {{person}}",
         "checkout": {
@@ -11649,6 +11641,11 @@
           "transferHint": "彼为群主，君则为执事。",
           "removeTitle": "将 {{name}} 移出群议？",
           "removeHint": "此成员将不能再览或遣讯；其同伴亦将退出。",
+          "removeOwn": "移出群聊",
+          "removeOwnScope": "惟此群受之，伙伴仍存于君之账号。",
+          "removeOwnHint": "{{name}} 将不复收「{{group}}」之消息。旧讯仍存，他群与私聊不受影响。",
+          "removeOwnActiveHint": "移出将止其于此群之请求。另启之任务仍行。",
+          "stopAndRemove": "停止并移出",
           "leave": "退出群议",
           "leaveHint": "君与君之同伴将退出此群议，不复收新讯，亦不能览群中旧录。",
           "soleOwnerHint": "曲终人散，群中唯余君一人。可封存此群，存其旧录，他日再复用之。",
@@ -14056,7 +14053,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "方建 worktree · 输入已停",
-      "subtitle": "目标分支 {{branch}} · 毕则自解"
+      "subtitle": "目标分支 {{branch}} · 毕则自解",
+      "elapsed": "已候 {{duration}}"
     },
     "worktree": {
       "detecting": "方察环境…",
@@ -15643,7 +15641,12 @@
       "REMOTE_PROVIDER_UPDATING": "此模型供方之凭证方更新。请稍后再试。",
       "REMOTE_WORKDIR_UNAVAILABLE": "远程工作目录今不可用。请确认彼机上之目录犹在，然后再试。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "机端暂不能确知此讯已遣否。请稍后再试，勿重遣同一讯。",
-      "REMOTE_AGENT_UNAVAILABLE": "与行 Agent 之机断连。请再试；若屡见，再确认彼机在线且许远程控制。",
+      "REMOTE_AGENT_UNAVAILABLE": "未能与行 Agent 之机通信，请阅错误详情。",
+      "REMOTE_AGENT_TIMEOUT": "候行 Agent 之机回应逾时，结果未明。再试前请先察差事进展。",
+      "REMOTE_AGENT_LINK_BUSY": "与行 Agent 之机通信繁忙，请稍候再试。",
+      "REMOTE_AGENT_UNRESPONSIVE": "行 Agent 之机屡未回应，已暂停呼叫。请稍候再试。",
+      "REMOTE_AGENT_OFFLINE": "行 Agent 之机已离线，待其重连再试。",
+      "REMOTE_AGENT_ACCESS_DENIED": "未获准远程访问行 Agent 之机。请先察彼机访问设置。",
       "REMOTE_AGENT_PEER_TOO_OLD": "彼机之 Cindy 版本过旧，暂不支持此举。请先于彼机更新 Cindy。",
       "REMOTE_AGENT_EXPIRED": "此差事于行 Agent 之机上已终。请再遣。",
       "REMOTE_AGENT_NOT_FOUND": "此差事于行 Agent 之机上已终。请再遣。",

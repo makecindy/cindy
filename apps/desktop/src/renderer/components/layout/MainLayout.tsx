@@ -1,3 +1,4 @@
+import { useRightSidebarMaximizeEscape } from './useRightSidebarMaximizeEscape';
 import { toast } from '@/lib/toast';
 import { openSettingsNavigation } from '@/lib/settingsNavigation';
 import { FirstRunGuide } from '@/features/first-run-guide/FirstRunGuide';
@@ -1128,24 +1129,8 @@ export function MainLayout() {
       loaded: rsbWindow.loaded,
       detached: rsbDetached,
     });
-  useEffect(() => {
-    if (!isRightSidebarMaximized) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      // 输入态让路 —— 用户在 input / contenteditable 里按 Esc 通常是取消编辑。
-      const target = e.target as HTMLElement | null;
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target?.closest?.('[contenteditable="true"]')
-      ) {
-        return;
-      }
-      setIsRightSidebarMaximized(false);
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [isRightSidebarMaximized]);
+  const exitRightSidebarMaximize = useCallback(() => setIsRightSidebarMaximized(false), []);
+  useRightSidebarMaximizeEscape(isRightSidebarMaximized, exitRightSidebarMaximize);
   // 折叠 RSB / session 切换 / 主路由切走聊天视图 → 自动退出 maximize。
   useEffect(() => {
     if (isRightSidebarCollapsed && isRightSidebarMaximized) {

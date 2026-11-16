@@ -1,7 +1,7 @@
 /**
  * 测试价值（放行表第 24 行，24a）
- * - 可观察结果：走桌面真实的启动路径。ensureAnthropicCompatProxyReady 起代理前，
- *   getClaudeEndpoint 回落到上游地址；起来后是 127.0.0.1 回环地址；一条带网关 key 的
+ * - 可观察结果：走桌面真实的启动路径。resolveClaudeAgentEndpoint 等待代理后，
+ *   返回 127.0.0.1 回环地址；同步 getClaudeEndpoint 为辅助读取保留上游快照；一条带网关 key 的
  *   Claude 请求经代理原样到达本机模拟上游，响应带回；关闭后又回落到上游地址。
  * - 规则依据：anthropic-compat-proxy-host.ts（现在只建桌面实例，实现在
  *   anthropicCompatProxyHostCore.ts）；bootstrap-electron.ts 建任务前 await 就绪、退出时关闭。
@@ -46,13 +46,12 @@ describe('the desktop Claude proxy built from the shared core', () => {
     }
   });
 
-  it('starts on loopback, forwards a Claude request to the upstream, and falls back after dispose', async () => {
+  it('resolves a loopback launch endpoint, forwards locally, and retains metadata snapshots after dispose', async () => {
     const proxy = await import('../anthropic-compat-proxy-host.js');
     expect(proxy.isAnthropicCompatProxyHandleReady()).toBe(false);
     expect(proxy.getClaudeEndpoint()).toBe(state.upstream);
-    await proxy.ensureAnthropicCompatProxyReady();
+    const endpoint = new URL(await proxy.resolveClaudeAgentEndpoint());
     expect(proxy.isAnthropicCompatProxyHandleReady()).toBe(true);
-    const endpoint = new URL(proxy.getClaudeEndpoint());
     expect(endpoint.hostname).toBe('127.0.0.1');
     expect(endpoint.origin).not.toBe(new URL(state.upstream).origin);
 

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   CodexMicroGuardManager,
@@ -112,6 +112,89 @@ describe('paused Codex Micro guard recovery', () => {
     const manager = new CodexMicroGuardManager(store, runner, 'gui/501', environment);
     return { store, token, runner, environment, manager };
   }
+
+  it.each(['ENOSPC', 'EDQUOT', 'EROFS'])(
+    'removes the global preload when %s prevents allocating the cleanup lock',
+    async (code) => {
+      const { store, runner, manager, environment } = fixture('--trace-warnings');
+      const mkdir = vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {
+        throw Object.assign(new Error('fixture storage failure'), { code });
+      });
+      try {
+        await expect(manager.recover()).rejects.toMatchObject({ code });
+        expect(runner.nodeOptions).toBe('--trace-warnings');
+        expect(environment.NODE_OPTIONS).toBe('--trace-warnings');
+      } finally {
+        mkdir.mockRestore();
+      }
+      // We stopped new inheritance, not claimed that disk cleanup completed.
+      expect(store.readState()).not.toBeNull();
+      expect(fs.existsSync(store.hookPath)).toBe(true);
+      await manager.recover();
+      expect(store.readState()).toBeNull();
+    },
+  );
+
+  it('unsets a guard-only environment without allocating disk space', async () => {
+    const { runner, manager } = fixture(null);
+    const mkdir = vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {
+      throw Object.assign(new Error('fixture full disk'), { code: 'ENOSPC' });
+    });
+    try {
+      await expect(manager.recover()).rejects.toMatchObject({ code: 'ENOSPC' });
+      expect(runner.nodeOptions).toBeNull();
+      expect(runner.commands).toEqual([
+        ['print', 'gui/501'], ['unsetenv', 'NODE_OPTIONS'], ['print', 'gui/501'],
+      ]);
+    } finally {
+      mkdir.mockRestore();
+    }
+  });
+
+  it.each([false, true])('keeps emergency verification failures visible (invalid=%s)', async (invalid) => {
+    const { runner, manager } = fixture();
+    const original = runner.nodeOptions;
+    runner.invalidSnapshot = invalid;
+    runner.ignoreMutations = !invalid;
+    const mkdir = vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {
+      throw Object.assign(new Error('fixture full disk'), { code: 'ENOSPC' });
+    });
+    try {
+      await expect(manager.recover()).rejects.toThrow(
+        invalid ? 'snapshot is invalid' : 'preload remains',
+      );
+      expect(runner.nodeOptions).toBe(original);
+    } finally {
+      mkdir.mockRestore();
+    }
+  });
+
+  it('does not rewrite unrelated NODE_OPTIONS during emergency cleanup', async () => {
+    const { runner, manager } = fixture();
+    runner.nodeOptions = '--trace-warnings --require=/unrelated/hook.cjs';
+    const mkdir = vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {
+      throw Object.assign(new Error('fixture full disk'), { code: 'ENOSPC' });
+    });
+    try {
+      await expect(manager.recover()).rejects.toMatchObject({ code: 'ENOSPC' });
+      expect(runner.commands).toEqual([['print', 'gui/501']]);
+    } finally {
+      mkdir.mockRestore();
+    }
+  });
+
+  it('does not bypass permission failures or touch unrelated global options', async () => {
+    const { runner, manager } = fixture();
+    const mkdir = vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {
+      throw Object.assign(new Error('fixture denied'), { code: 'EACCES' });
+    });
+    try {
+      await expect(manager.recover()).rejects.toMatchObject({ code: 'EACCES' });
+      expect(runner.commands).toEqual([]);
+    } finally {
+      mkdir.mockRestore();
+    }
+  });
 
   it('clears an active legacy lease, retains its hook, and preserves external options exactly', async () => {
     const original = '  --title="two  spaces"  ';
