@@ -15643,6 +15643,8 @@
       "addPrToHeader": "Añadir al encabezado",
       "prAlreadyInHeader": "Ya está en el encabezado",
       "prAddedToHeader": "Añadido al encabezado: el estado acompaña a esta tarea.",
+      "prAssociatedNotInHeader": "Enlazado, fuera del encabezado",
+      "prSavedNotInHeader": "Enlace guardado. Los tres espacios del encabezado están ocupados; puedes fijar este PR desde la gestión de PR del encabezado de la tarea.",
       "linkCopied": "Enlace copiado",
       "viewSourceFile": "Ver código fuente",
       "openInSidebarFailed": "No se pudo abrir en el navegador de la barra lateral",

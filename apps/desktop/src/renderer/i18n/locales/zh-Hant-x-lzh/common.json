@@ -15465,6 +15465,8 @@
       "addPrToHeader": "加入頂列",
       "prAlreadyInHeader": "已在頂列",
       "prAddedToHeader": "已入頂列，狀態隨差事而行",
+      "prAssociatedNotInHeader": "已關聯，未入頂列",
+      "prSavedNotInHeader": "關聯已存；頂列三席已滿，可於差事頂列之 PR 管理中固定之",
       "linkCopied": "連結已錄",
       "viewSourceFile": "觀原碼",
       "openInSidebarFailed": "於側欄瀏覽器中開之未成",

@@ -20,7 +20,12 @@ import { useRef, useState, type ReactElement, type MouseEvent } from 'react';
 import { GitPullRequest, Globe, Link2, PanelRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { parseSessionPrUrl, prStatusKey } from '@cindy/maker-shared';
+import {
+  MAX_STATUS_QUERIES,
+  parseSessionPrUrl,
+  prStatusKey,
+  type SessionPrRef,
+} from '@cindy/maker-shared';
 import { usePrActions, usePrRefsForSession } from '@/contexts/PrRefsContext';
 import {
   getDataOwnerGeneration,
@@ -71,14 +76,14 @@ export function useOpenWithMenu({ sessionId }: { sessionId?: string }): UseOpenW
   const adding = useRef(false);
   const [busy, setBusy] = useState(false);
   const pr = state ? parseSessionPrUrl(state.url) : null;
-  const alreadyAdded =
-    pr !== null &&
-    refs.some(
-      (ref) =>
-        ref.removedAt == null &&
-        ref.associationSource !== 'legacy' &&
-        prStatusKey(ref) === prStatusKey(pr),
-    );
+  const activeRefs = refs.filter(
+    (ref) => ref.removedAt == null && ref.associationSource !== 'legacy',
+  );
+  const associatedIndex = pr
+    ? activeRefs.findIndex((ref) => prStatusKey(ref) === prStatusKey(pr))
+    : -1;
+  const alreadyAdded = associatedIndex >= 0;
+  const inHeader = alreadyAdded && associatedIndex < MAX_STATUS_QUERIES;
 
   async function handleAddPr(): Promise<void> {
     if (
@@ -107,14 +112,28 @@ export function useOpenWithMenu({ sessionId }: { sessionId?: string }): UseOpenW
         deviceId = session.deviceLinkDeviceId ?? getStickySessionDeviceId(requestSessionId);
       }
       if (!isDataOwnerGenerationCurrent(owner)) return;
+      let result: unknown;
       if (deviceId) {
-        await window.electronAPI.deviceLink.invoke(deviceId, 'git-context:pr-refs:manage', [input]);
+        result = await window.electronAPI.deviceLink.invoke(
+          deviceId,
+          'git-context:pr-refs:manage',
+          [input],
+        );
         if (isDataOwnerGenerationCurrent(owner)) invalidateRemotePrRefs(requestSessionId);
       } else {
-        await window.electronAPI.gitContext.managePrRefs(input);
+        result = await window.electronAPI.gitContext.managePrRefs(input);
       }
-      if (isDataOwnerGenerationCurrent(owner))
-        toast.success(t('chat.markdownRenderer.prAddedToHeader'));
+      if (isDataOwnerGenerationCurrent(owner)) {
+        // Manage returns sorted rows including removed entries, unlike the refs cache.
+        const visible =
+          !Array.isArray(result) ||
+          (result as SessionPrRef[])
+            .filter((ref) => ref.removedAt == null && ref.associationSource !== 'legacy')
+            .slice(0, MAX_STATUS_QUERIES)
+            .some((ref) => prStatusKey(ref) === prStatusKey(pr));
+        if (visible) toast.success(t('chat.markdownRenderer.prAddedToHeader'));
+        else toast.info(t('chat.markdownRenderer.prSavedNotInHeader'));
+      }
     } catch (error) {
       if (!isDataOwnerGenerationCurrent(owner)) return;
       const code = extractIpcError(error)?.code;
@@ -229,7 +248,9 @@ export function useOpenWithMenu({ sessionId }: { sessionId?: string }): UseOpenW
             <GitPullRequest className="mr-2 h-4 w-4" />
             {t(
               alreadyAdded
-                ? 'chat.markdownRenderer.prAlreadyInHeader'
+                ? inHeader
+                  ? 'chat.markdownRenderer.prAlreadyInHeader'
+                  : 'chat.markdownRenderer.prAssociatedNotInHeader'
                 : 'chat.markdownRenderer.addPrToHeader',
             )}
           </DropdownMenuItem>

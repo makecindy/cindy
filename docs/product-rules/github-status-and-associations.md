@@ -209,4 +209,4 @@ GitHub 批次与重连补查使用独立执行队列，普通 Webhook 入队与�
 状态超过 90 秒未更新也恢复原频率，避免界面未打开时长期沿用过期的健康结论。
 这个健康状态只覆盖服务内部积压与已检测故障，不能证明 GitHub 发出的每个请求都已到达入口。
 
-消息链接右键入口仅对完整 HTTPS PR/MR 页面提供「添加到顶栏」；子页面链接先规范化为基础 URL，已关联项显示「已在顶栏」并禁用。已移除项仍需管理入口恢复。关联写到任务所属电脑，设备不明时不猜测为本机。实现见 [useOpenWithMenu.tsx](../../apps/desktop/src/renderer/components/chat/useOpenWithMenu.tsx)，回归见 [UserMessageUrlLink.test.tsx](../../apps/desktop/src/renderer/components/chat/__tests__/UserMessageUrlLink.test.tsx)。
+消息链接右键入口仅对完整 HTTPS PR/MR 页面提供「添加到顶栏」；子页面链接先规范化为基础 URL，顶栏只展示排序后的前 3 条；已关联且在前 3 条时显示「已在顶栏」，否则显示「已关联，未在顶栏」，两者均禁用。关联保存但未进入前 3 条时，提示到任务顶栏的 PR 管理中固定。已移除项仍需管理入口恢复。关联写到任务所属电脑，设备不明时不猜测为本机。实现见 [useOpenWithMenu.tsx](../../apps/desktop/src/renderer/components/chat/useOpenWithMenu.tsx)，回归见 [UserMessageUrlLink.test.tsx](../../apps/desktop/src/renderer/components/chat/__tests__/UserMessageUrlLink.test.tsx)。

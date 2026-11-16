@@ -15643,6 +15643,8 @@
       "addPrToHeader": "Adicionar ao cabeçalho",
       "prAlreadyInHeader": "Já está no cabeçalho",
       "prAddedToHeader": "Adicionado ao cabeçalho — o estado acompanha esta tarefa.",
+      "prAssociatedNotInHeader": "Associado, fora do cabeçalho",
+      "prSavedNotInHeader": "Associação guardada. Os três lugares do cabeçalho estão ocupados; fixe este PR na gestão de PRs no cabeçalho da tarefa.",
       "linkCopied": "Ligação copiada",
       "viewSourceFile": "Ver código-fonte",
       "openInSidebarFailed": "Não foi possível abrir no navegador da barra lateral",

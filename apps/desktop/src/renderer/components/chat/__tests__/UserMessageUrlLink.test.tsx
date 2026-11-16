@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { SessionPrRef } from '@cindy/maker-shared';
+import { parseSessionPrUrl, type SessionPrRef } from '@cindy/maker-shared';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -10,8 +10,8 @@ const prState = vi.hoisted(() => ({
   session: { id: 'session-a' } as { id: string; deviceLinkDeviceId?: string } | null,
   sticky: undefined as string | undefined,
   invalidate: vi.fn(),
-  manage: vi.fn(async () => []),
-  remote: vi.fn(async () => []),
+  manage: vi.fn(async (): Promise<SessionPrRef[]> => []),
+  remote: vi.fn(async (): Promise<unknown> => []),
   get: vi.fn(),
 }));
 vi.mock('@/contexts/PrRefsContext', () => ({
@@ -57,7 +57,7 @@ vi.mock('@/features/right-sidebar/lib/openInSidebarBrowser', () => ({
 }));
 
 vi.mock('@/lib/toast', () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
 import { SessionNavigationModeProvider } from '@/features/cc-agent/embeddedSessionNavigation';
@@ -230,6 +230,7 @@ describe('UserMessageUrlLink', () => {
       'https://git.example.com/group/sub/repo/-/merge_requests/7',
     ],
   ])('adds the canonical PR/MR for %s locally', async (url, canonical) => {
+    prState.manage.mockResolvedValueOnce([parseSessionPrUrl(canonical)! as SessionPrRef]);
     render(<UserMessageUrlLink url={url} sessionId="session-a" />);
     fireEvent.contextMenu(screen.getByRole('link'));
     fireEvent.click(screen.getByText('chat.markdownRenderer.addPrToHeader'));
@@ -269,6 +270,49 @@ describe('UserMessageUrlLink', () => {
     expect(item.disabled).toBe(true);
     fireEvent.click(item);
     expect(prState.manage).not.toHaveBeenCalled();
+  });
+
+  // A saved fourth association is not visible: use the server ordering rather
+  // than the pre-write cache, on both local and device-link paths.
+  it.each(['local', 'remote'])(
+    'reports a saved fourth PR without claiming visibility (%s)',
+    async (source) => {
+      const pinned = [1, 2, 3].map(
+        (prNumber) => ({ owner: 'o', repo: 'r', prNumber, pinned: true }) as SessionPrRef,
+      );
+      const added = { owner: 'o', repo: 'r', prNumber: 7 } as SessionPrRef;
+      prState.refs = pinned;
+      if (source === 'remote') {
+        prState.sticky = 'host-a';
+        prState.remote.mockResolvedValueOnce([...pinned, added]);
+      } else prState.manage.mockResolvedValueOnce([...pinned, added]);
+      render(<UserMessageUrlLink url="https://github.com/o/r/pull/7" sessionId="session-a" />);
+      fireEvent.contextMenu(screen.getByRole('link'));
+      fireEvent.click(screen.getByText('chat.markdownRenderer.addPrToHeader'));
+      await waitFor(() =>
+        expect(toast.info).toHaveBeenCalledWith('chat.markdownRenderer.prSavedNotInHeader'),
+      );
+      expect(toast.success).not.toHaveBeenCalled();
+      prState.refs = [...pinned, added];
+      fireEvent.contextMenu(screen.getByRole('link'));
+      const item = screen.getByText(
+        'chat.markdownRenderer.prAssociatedNotInHeader',
+      ) as HTMLButtonElement;
+      expect(item.disabled).toBe(true);
+      expect(screen.queryByText('chat.markdownRenderer.prAlreadyInHeader')).toBeNull();
+    },
+  );
+
+  it('keeps the legacy success fallback when a remote host returns no list', async () => {
+    prState.sticky = 'host-a';
+    prState.remote.mockResolvedValueOnce(undefined);
+    render(<UserMessageUrlLink url="https://github.com/o/r/pull/7" sessionId="session-a" />);
+    fireEvent.contextMenu(screen.getByRole('link'));
+    fireEvent.click(screen.getByText('chat.markdownRenderer.addPrToHeader'));
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith('chat.markdownRenderer.prAddedToHeader'),
+    );
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it.each(['session', 'sticky'] as const)(

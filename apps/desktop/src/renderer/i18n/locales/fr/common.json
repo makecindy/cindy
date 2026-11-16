@@ -15643,6 +15643,8 @@
       "addPrToHeader": "Ajouter à l’en-tête",
       "prAlreadyInHeader": "Déjà dans l’en-tête",
       "prAddedToHeader": "Ajouté à l’en-tête — le statut accompagne cette tâche.",
+      "prAssociatedNotInHeader": "Liée, absente de l’en-tête",
+      "prSavedNotInHeader": "Lien enregistré. Les trois places de l’en-tête sont prises ; épinglez cette PR dans la gestion des PR de l’en-tête de la tâche.",
       "linkCopied": "Lien copié",
       "viewSourceFile": "Voir la source",
       "openInSidebarFailed": "Impossible d'ouvrir dans le navigateur de la barre latérale",
