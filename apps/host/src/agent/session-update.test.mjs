@@ -1,14 +1,15 @@
 /**
- * The Host's /sessions/update with the model-switch window gate (session-update.ts,
- * model-window-gate.ts).
- * - Rule: a model change from a client is gated as the desktop gates one from a Device Link client
- *   (register.ts applySessionRuntimeSelection, `isRemote`): a verified shrink whose usage is at
- *   danger or overflow is refused with PRECONDITION_FAILED and the desktop's text, before anything
- *   changes; anything unverified goes through. The Host applies a change during a turn at once
- *   (no deferred selection), so it is gated as if idle.
- * - Gap: Host model changes had no window gate at all, and /sessions/update had no test.
- * - Tier: unit, through the real entry over a migrated profile database; windows come from a fake
- *   route resolver.
+ * The Host's /sessions/update with the desktop's set-model (session-update.ts, runtime-selection.ts).
+ * - Rule: a user's model or provider pick is the desktop's (sessionRuntimeSelectionApply.ts, the user
+ *   branch of handleSetModel): an intent until the next send, returned as
+ *   { deferred: true, superseded: false, pendingUntilSend: true } and published as the task's
+ *   agentSwitchIntent; the task row and the running Agent keep their route. Picking the current
+ *   model again cancels the intent. The window gate and a rebuild run when the intent lands at the
+ *   send (input-queue.test.mjs, model change at send).
+ * - Gap: the Host applied a model change at once and refused a shrink at danger outright (its own
+ *   window gate), where the desktop rebuilds at the send.
+ * - Tier: unit, through the real entries over a migrated profile database; providers and windows come
+ *   from fixture ports.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,16 +26,19 @@ import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/m
 import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionStorageAdapter.ts';
 import { sessions } from '../../../desktop/src/main/localDb/schema.ts';
 import { setSessionProvider, getSessionProvider, clearSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
-import { planUserRuntimeModelSwitch } from '../../../desktop/src/shared/runtimeModelSwitchGate.ts';
 import { createHostSessionUpdate } from './session-update.ts';
 import { createHostTaskRestore } from './task-restore.ts';
 import { setSessionRouteLockImplementation } from '../../../desktop/src/main/localDb/sessionRouteLock.ts';
 import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { botProfiles, botSessionLinks } from '../../../desktop/src/main/localDb/schema.ts';
-import { MODEL_WINDOW_REBUILD_UNSUPPORTED } from './model-window-gate.ts';
+import { createHostRuntimeSelection } from './runtime-selection.ts';
 
-// Route windows of the fixture catalog; a model it does not know has no verified window.
+// Route windows of the fixture providers; a model they do not list has no verified window.
 const WINDOWS = { big: 200_000, small: 100_000, huge: 300_000 };
+const model = id => ({ id, efforts: [], defaultEffort: null, supportsFastMode: false });
+const VIEWS = ['prov-a', 'prov-b'].map(id => ({ id, connected: true, agents: ['claude-code'], source: 'user',
+  routing: { 'claude-code': {} }, models: { 'claude-code': Object.keys(WINDOWS).map(model) } }));
+const quiet = { debug() {}, info() {}, warn() {}, error() {} };
 
 async function fixture(t) {
   // The development build refuses to migrate what it takes for the official shared profile
@@ -64,18 +68,33 @@ async function fixture(t) {
   const taskRestore = createHostTaskRestore({ getOwner: () => database, publish: event => events.push(event) });
   const restoreCalls = [];
   const restoreTaskToActive = (id, options) => { restoreCalls.push(['task list', id]); return taskRestore.restoreTaskToActive(id, options); };
+  const maker = {
+    getSession: id => live.get(id) ?? null,
+    getSessionMeta: id => live.get(id) ? { id, agentKind: live.get(id).agentKind } : null,
+    closeSession: async id => { live.delete(id); },
+  };
+  const selection = createHostRuntimeSelection({
+    getMaker: () => maker,
+    publish: event => events.push(event),
+    createDbMessage: async () => {},
+    pendingHandoff: { set() {}, readGeneration: () => 0 },
+    listProviderViews: async () => VIEWS,
+    resolveConfiguredContextWindow: (_catalog, _agentKind, _providerId, modelId, budget) => {
+      const window = WINDOWS[modelId] ?? null;
+      return window !== null && budget ? Math.min(window, budget) : window;
+    },
+    readStoredSessionContextWindowBudget: id => budgets.get(id) ?? null,
+    codexProxyAuthInjectionState: () => null,
+    inputQueue: { contextRecoveryRollover: () => null, sessionDbAgentKind: () => 'cc', isTurnRunning: () => false,
+      wakeSession() {}, refreshQueuedRoute() {}, cancelUsageLimitWait() {} },
+    log: quiet,
+  });
   const update = createHostSessionUpdate({
     restoreTaskToActive,
     getLiveSession: id => live.get(id),
     readSessionForRun: async id => (await database.drizzle.select().from(sessions).where(eq(sessions.id, id)))[0],
     publish: event => events.push(event),
-    modelWindow: () => ({
-      resolveRouteWindow: (_agentKind, modelId, _providerId, budget) => {
-        const window = WINDOWS[modelId] ?? null;
-        return window !== null && budget ? Math.min(window, budget) : window;
-      },
-      readSessionBudget: async id => budgets.get(id) ?? null,
-    }),
+    setModel: (...args) => selection.setModel(...args),
   });
   const task = async (id, { agentKind = 'claude-code', model = 'big', contextTokens = 0 } = {}) => {
     await storage.create({ id, title: 'Window fixture', agentKind, model, workDir: root, providerId: 'prov-a' });
@@ -93,91 +112,54 @@ async function fixture(t) {
     return session;
   };
   const row = async id => (await database.drizzle.select().from(sessions).where(eq(sessions.id, id)))[0];
-  return { update, task, runtime, row, events, budgets, database, taskRestore, restoreCalls };
+  return { update, task, runtime, row, events, budgets, database, taskRestore, restoreCalls, selection };
 }
 
-// Each cell: the task's usage and the change it asks for. `refused`: the Host's verdict.
-const CELLS = [
-  { name: 'a verified shrink at danger', contextTokens: 95_000, target: 'small', refused: true },
-  { name: 'a verified shrink at overflow', contextTokens: 150_000, target: 'small', refused: true },
-  { name: 'a verified shrink with low usage', contextTokens: 50_000, target: 'small', refused: false },
-  { name: 'a larger window', contextTokens: 150_000, target: 'huge', refused: false },
-  { name: 'an unverified target window', contextTokens: 150_000, target: 'unlisted', refused: false },
-  { name: 'an unverified current window', contextTokens: 150_000, current: 'unlisted', target: 'small', refused: false },
-  { name: 'Codex, which compacts natively', agentKind: 'codex', contextTokens: 150_000, target: 'small', refused: false },
-];
+const intentOf = f => f.events.filter(event => event.type === 'session_changed'
+  && Object.hasOwn(event.patch ?? {}, 'agentSwitchIntent')).at(-1)?.patch.agentSwitchIntent;
 
 for (const inTurn of [false, true]) {
-  for (const cell of CELLS) {
-    test(`model change ${inTurn ? 'during a turn' : 'while idle'}: ${cell.name} is ${cell.refused ? 'refused' : 'applied'}`, { timeout: 30_000 }, async t => {
-      const f = await fixture(t);
-      const id = `window-${inTurn ? 'turn' : 'idle'}-${CELLS.indexOf(cell)}`;
-      const current = cell.current ?? 'big';
-      await f.task(id, { agentKind: cell.agentKind, model: current, contextTokens: cell.contextTokens });
-      const session = f.runtime(id, { model: current, inTurn, agentKind: cell.agentKind });
-      const change = f.update(id, { model: cell.target });
-      if (cell.refused) {
-        await assert.rejects(change, error => error.code === 'PRECONDITION_FAILED'
-          && error.message === `[PRECONDITION_FAILED] ${MODEL_WINDOW_REBUILD_UNSUPPORTED}`);
-        assert.equal((await f.row(id)).model, current, 'the task row keeps its model');
-        assert.deepEqual(session.setModelCalls, [], 'the running Agent keeps its model');
-        assert.equal(getSessionProvider(id), 'prov-a', 'the provider registration is unchanged');
-        assert.equal(f.events.length, 0, 'nothing is published');
-      } else {
-        await change;
-        assert.equal((await f.row(id)).model, cell.target);
-        assert.deepEqual(session.setModelCalls.map(([model]) => model), [cell.target]);
-      }
-      // The desktop's Device Link path on the same facts: idle, the same verdict; during a turn the
-      // desktop defers the change to the next send (no deferred selection on the Host).
-      const plan = planUserRuntimeModelSwitch({ agentKind: cell.agentKind ?? 'claude-code', model: cell.target,
-        providerId: 'prov-a', currentFastMode: false, selection: { effort: null, fastMode: false },
-        gate: { inTurn, isRemote: true, agentKind: cell.agentKind ?? 'claude-code', runtimeRouteChanged: true,
-          verifiedTargetWindow: WINDOWS[cell.target] ?? null, verifiedCurrentWindow: WINDOWS[current],
-          contextTokensKnown: true, contextTokens: cell.contextTokens } });
-      assert.equal(plan.outcome, inTurn ? 'defer' : cell.refused ? 'reject' : 'hot-apply');
-    });
-  }
+  test(`model change ${inTurn ? 'during a turn' : 'while idle'}: a user's pick is an intent until the next send`, { timeout: 30_000 }, async t => {
+    const f = await fixture(t);
+    const id = `intent-${inTurn ? 'turn' : 'idle'}`;
+    // Usage at danger for the smaller window: the gate runs at the send, not here.
+    await f.task(id, { contextTokens: 95_000 });
+    const session = f.runtime(id, { inTurn });
+    const answer = await f.update(id, { model: 'small' });
+    assert.deepEqual(answer.runtimeSelection, { deferred: true, superseded: false, pendingUntilSend: true });
+    assert.equal((await f.row(id)).model, 'big', 'the task row keeps its model');
+    assert.deepEqual(session.setModelCalls, [], 'the running Agent keeps its model');
+    assert.equal(getSessionProvider(id), 'prov-a', 'the provider registration is unchanged');
+    assert.equal(intentOf(f)?.model, 'small', 'the intent is published');
+    assert.equal(f.selection.projectIntent(id)?.model, 'small', 'and shown to a reconnecting client');
+  });
 }
 
-test('model change: the running Agent\'s usage counts over the stored usage, and the task\'s window budget caps both windows', { timeout: 30_000 }, async t => {
+// As the desktop's user branch (sessionRuntimeSelectionApply.ts, the picker records intent only): a
+// pick of the task's current model is an intent too, replacing the earlier one; it lands at the send
+// with no route change.
+test('model change: picking the current model again replaces the intent with the current route', { timeout: 30_000 }, async t => {
   const f = await fixture(t);
-  // Stored usage 0, the runtime reports 95k: refused against the 100k target.
-  await f.task('window-live');
-  f.runtime('window-live', { usage: { contextTokens: 95_000, contextWindow: 200_000 } });
-  await assert.rejects(f.update('window-live', { model: 'small' }), { code: 'PRECONDITION_FAILED' });
-  // 300k to 200k at 195k is refused; with a 150k budget both windows are 150k, not a shrink.
-  await f.task('window-unbudgeted', { model: 'huge', contextTokens: 195_000 });
-  f.runtime('window-unbudgeted', { model: 'huge' });
-  await assert.rejects(f.update('window-unbudgeted', { model: 'big' }), { code: 'PRECONDITION_FAILED' });
-  await f.task('window-budget', { model: 'huge', contextTokens: 195_000 });
-  f.budgets.set('window-budget', 150_000);
-  f.runtime('window-budget', { model: 'huge' });
-  await f.update('window-budget', { model: 'big' });
-  assert.equal((await f.row('window-budget')).model, 'big');
+  await f.task('intent-back');
+  f.runtime('intent-back');
+  await f.update('intent-back', { model: 'small' });
+  const back = await f.update('intent-back', { model: 'big' });
+  assert.equal(back.runtimeSelection.pendingUntilSend, true);
+  assert.equal(intentOf(f)?.model, 'big');
+  assert.equal(f.selection.projectIntent('intent-back')?.model, 'big');
+  assert.equal((await f.row('intent-back')).model, 'big');
 });
 
-test('model change: a provider-only change is gated on the same model, and other fields never are', { timeout: 30_000 }, async t => {
+test('model change: other fields are written at once, and a provider-only pick is an intent too', { timeout: 30_000 }, async t => {
   const f = await fixture(t);
-  await f.task('window-other', { contextTokens: 150_000 });
-  f.runtime('window-other');
-  await f.update('window-other', { title: 'Renamed', effort: 'high' });
-  assert.equal((await f.row('window-other')).title, 'Renamed');
-  // Same model on another provider: the windows are the same, the change goes through.
-  await f.update('window-other', { providerId: 'prov-b' });
-  assert.equal((await f.row('window-other')).providerId, 'prov-b');
-});
-
-test('model change: a cold task (no running Agent) is gated on its stored model and usage', { timeout: 30_000 }, async t => {
-  const f = await fixture(t);
-  await f.task('window-cold', { contextTokens: 150_000 });
-  await assert.rejects(f.update('window-cold', { model: 'small' }), { code: 'PRECONDITION_FAILED' });
-  await f.update('window-cold', { model: 'huge' });
-  assert.equal((await f.row('window-cold')).model, 'huge');
-  // A cold Pi task's current window is only what its runtime reports: unverified, so it goes through.
-  await f.task('window-cold-pi', { agentKind: 'pi', contextTokens: 150_000 });
-  await f.update('window-cold-pi', { model: 'small' });
-  assert.equal((await f.row('window-cold-pi')).model, 'small');
+  await f.task('intent-other');
+  f.runtime('intent-other');
+  await f.update('intent-other', { title: 'Renamed' });
+  assert.equal((await f.row('intent-other')).title, 'Renamed');
+  const answer = await f.update('intent-other', { providerId: 'prov-b' });
+  assert.equal(answer.runtimeSelection.pendingUntilSend, true);
+  assert.equal((await f.row('intent-other')).providerId, 'prov-a', 'the row keeps its provider until the send');
+  assert.equal(intentOf(f)?.providerId, 'prov-b');
 });
 
 test('model change: a task that does not exist is "session not found", as before the gate, and a runtime left without its row is not changed', { timeout: 30_000 }, async t => {

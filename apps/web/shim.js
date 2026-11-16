@@ -385,14 +385,12 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
       if (!sessionId) return Promise.resolve();
       return rpc('/sessions/update', { sessionId, patch: { permissionMode: mode } });
     },
+    // The desktop's set-model with its own arguments; the answer is the Host's (a user's pick is an
+    // intent until the next send: { deferred: true, pendingUntilSend: true }).
     'maker.setModel': (args) => {
-      const [sessionId, model, providerId, _rev, selection] = args ?? [];
+      const [sessionId, model, providerId, revision, selection] = args ?? [];
       if (!sessionId) return Promise.resolve({ deferred: false });
-      const patch = { model };
-      if (providerId !== undefined) patch.providerId = providerId;
-      if (selection?.effort) patch.effort = selection.effort;
-      if (selection?.fastMode !== undefined) patch.fastMode = selection.fastMode;
-      return rpc('/sessions/update', { sessionId, patch }).then(() => ({ deferred: false }));
+      return rpc('/sessions/set-model', { sessionId, model, providerId, revision, selection });
     },
     'maker.switchSessionAgent': async (args) => {
       const [sessionId, targetAgentKind, model, providerId, effort, fastMode] = args ?? [];

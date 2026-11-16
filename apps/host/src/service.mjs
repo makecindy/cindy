@@ -86,6 +86,10 @@ export function createHostService(deps) {
     if (url.pathname === '/api/sessions/update') {
         return { status: 200, body: await deps.updateSession(String(body.sessionId ?? ''), body.patch ?? {}) };
     }
+    if (url.pathname === '/api/sessions/set-model') {
+      // The desktop's set-model, with its IPC arguments (the web client passes them through).
+      return { status: 200, body: await deps.setSessionModel(String(body.sessionId ?? ''), body.model, body.providerId, body.revision, body.selection) };
+    }
     if (url.pathname === '/api/sessions/switch-agent') {
         return { status: 200, body: await deps.switchSessionAgent(String(body.sessionId ?? ''), String(body.targetAgentKind ?? ''), String(body.model ?? ''), body.providerId ?? null, body.effort, body.fastMode) };
     }

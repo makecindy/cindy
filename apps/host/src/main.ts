@@ -130,6 +130,7 @@ import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from
 import { createInputQueue } from './agent/input-queue.mjs';
 import { readClaudeIdleMinutesFrom } from '../../desktop/src/main/maker-host/claudeIdleReleaseSettingsCore.js';
 import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
+import { createHostRuntimeSelection } from './agent/runtime-selection.ts';
 import type { ContextRecoveryKind } from './agent/context-recovery.ts';
 import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring.ts';
 import { lockSessionRoute } from './agent/session-route-lock.mjs';
@@ -859,45 +860,6 @@ const readSessionForRun = async (sessionId: string) => {
     fastMode: row.fastMode, planModeEnabled: row.planModeEnabled,
   };
 };
-/** Web client cross-engine switches: registered as an intent, applied on next enqueue. */
-const pendingAgentSwitches = new Map<string, {
-  targetAgentKind: 'claude-code' | 'codex' | 'pi';
-  model: string;
-  providerId: string | null;
-  effort?: string;
-  fastMode?: boolean | 'ultrafast';
-}>();
-
-function projectAgentSwitchIntent(intent: {
-  targetAgentKind: 'claude-code' | 'codex' | 'pi';
-  model: string;
-  providerId: string | null;
-  effort?: string;
-  fastMode?: boolean | 'ultrafast';
-} | undefined): Record<string, unknown> | null {
-  if (!intent) return null;
-  return {
-    targetAgentKind: intent.targetAgentKind,
-    model: intent.model,
-    providerId: intent.providerId,
-    ...(intent.effort ? { effort: intent.effort } : {}),
-    ...(intent.fastMode !== undefined ? { fastMode: intent.fastMode } : {}),
-  };
-}
-
-async function applyPendingAgentSwitch(sessionId: string): Promise<void> {
-  const intent = pendingAgentSwitches.get(sessionId);
-  if (!intent) return;
-  await serverDeps.updateSession(sessionId, {
-    agentKind: intent.targetAgentKind,
-    model: intent.model,
-    providerId: intent.providerId,
-    ...(intent.effort ? { effort: intent.effort } : {}),
-    ...(intent.fastMode !== undefined ? { fastMode: intent.fastMode } : {}),
-  });
-  pendingAgentSwitches.delete(sessionId);
-  eventHub.publish({ type: 'session_changed', sessionId, patch: { agentSwitchIntent: null } });
-}
 const interactionBroker = createInteractionBroker({ hub: eventHub });
 const fileConfirmation = new GhostGrantConfirmBridge({
   broadcast: (channel, payload) => eventHub.publish({
@@ -965,6 +927,9 @@ const contextRecovery = createHostContextRecoveryWiring({
 });
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,
+  // A model or engine the user picked lands when the message is sent (runtime-selection.ts).
+  applyPendingAgentSwitch: (sessionId: string, options?: { signal?: AbortSignal }) =>
+    runtimeSelection.applyPendingAgentSwitch(sessionId, options),
   restoreArchivedSessionForSend: taskRestore.restoreArchivedSessionForSend,
   // Another device's task is read over Device Link, which the Host does not have: it answers as the
   // desktop does when no link is connected (the reference is reported unavailable).
@@ -1030,6 +995,33 @@ const inputQueue = createInputQueue({
         lastActivityAt: new Date(row.lastActivityAt!).toISOString(), updatedAt: new Date(row.updatedAt).toISOString() } });
   },
   sent: (sessionId: string) => commitProvisionalSession(sessionId, sessionDraftPorts),
+});
+
+// A task's model and engine changes, with the desktop's steps (runtime-selection.ts): the shared
+// pending-switch registry (one for the Host process, as the desktop's), the desktop's set-model and
+// engine switch, and the send transaction's landing.
+const runtimeSelection = createHostRuntimeSelection({
+  getMaker: () => {
+    if (!agentGraph) throw new Error('agent runtime is not ready');
+    return agentGraph.maker;
+  },
+  publish: event => eventHub.publish(event),
+  createDbMessage: (sessionId, body) => insertSessionMessage(sessionId, body),
+  pendingHandoff,
+  listProviderViews: async () => (await listProviders({ gateway: currentGateway(), ownerId: runtime.owner })).providers,
+  resolveConfiguredContextWindow: (...args) => {
+    if (!agentGraph) throw new Error('agent runtime is not ready');
+    return agentGraph.modelWindow.resolveConfiguredContextWindow(...args);
+  },
+  readStoredSessionContextWindowBudget: sessionId => {
+    if (!agentGraph) throw new Error('agent runtime is not ready');
+    return agentGraph.modelWindow.readStoredSessionContextWindowBudget(sessionId);
+  },
+  // No Codex runtime (no binary): no proxy, so no injection, as the desktop's proxy host before start.
+  codexProxyAuthInjectionState: () => codexRuntime?.proxy.getCodexProxyAuthInjectionState() ?? null,
+  // The input queue's API is the current owner runtime's, forwarded by name (input-queue.mjs).
+  inputQueue: inputQueue as unknown as Parameters<typeof createHostRuntimeSelection>[0]['inputQueue'],
+  log: createLogger('runtime-selection'),
 });
 
 const subagentReads = createSubagentReadService({
@@ -1306,13 +1298,22 @@ const serverDeps = {
     getLiveSession: (sessionId: string) => agentGraph?.maker.getSession(sessionId),
     readSessionForRun,
     publish: event => eventHub.publish(event),
-    modelWindow: () => agentGraph?.modelWindow ?? null,
+    setModel: (sessionId, model, providerId, revision, selection) =>
+      runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
   })),
   /**
    * Cross-engine switch: record the intent and let the next enqueue apply it.
    * Mirrors the desktop contract (`deferred: true`) so the renderer can show
    * the target engine optimistically without reporting "未生效".
    */
+  /**
+   * A model change a client asks for: the desktop's set-model (runtime-selection.ts). A user's pick is
+   * an intent until the next send; the arguments are the desktop IPC's (the web client passes them
+   * through unchanged).
+   */
+  setSessionModel: (sessionId: string, model: unknown, providerId: unknown, revision: unknown, selection: unknown) =>
+    runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
+  /** An engine change a client asks for: the desktop's switch-session-agent (an intent until the next send). */
   switchSessionAgent: async (
     sessionId: string,
     targetAgentKind: string,
@@ -1320,35 +1321,8 @@ const serverDeps = {
     providerId: string | null,
     effort?: string,
     fastMode?: boolean | 'ultrafast',
-  ) => {
-    const rows = await getDbClient().drizzle.select({ id: sessionTable.id }).from(sessionTable)
-      .where(eq(sessionTable.id, sessionId)).limit(1);
-    if (!rows[0]) throw new Error('session not found');
-    if (!model) throw new Error('model is required');
-    const intent = {
-      targetAgentKind: targetAgentKind === 'codex' ? 'codex' : targetAgentKind === 'pi' ? 'pi' : 'claude-code',
-      model,
-      providerId: providerId ?? null,
-      ...(typeof effort === 'string' && effort ? { effort } : {}),
-      ...(fastMode === true || fastMode === false || fastMode === 'ultrafast' ? { fastMode } : {}),
-    } as const;
-    pendingAgentSwitches.set(sessionId, intent);
-    eventHub.publish({
-      type: 'session_changed',
-      sessionId,
-      patch: { agentSwitchIntent: projectAgentSwitchIntent(intent) },
-    });
-    return {
-      switched: false,
-      agentKind: intent.targetAgentKind,
-      model: intent.model,
-      engineReady: true,
-      deferred: true,
-    };
-  },
-  getSessionAgentSwitchIntent: (sessionId: string) => (
-    projectAgentSwitchIntent(pendingAgentSwitches.get(sessionId))
-  ),
+  ) => runtimeSelection.switchAgent({ sessionId, targetAgentKind, model, providerId, effort, fastMode } as never),
+  getSessionAgentSwitchIntent: (sessionId: string) => runtimeSelection.projectIntent(sessionId),
   /**
    * Auto-title step 1 (Codex-style immediate placeholder): persist the
    * normalized first user text while the title is still the default sentinel.
@@ -1383,7 +1357,7 @@ const serverDeps = {
     const existing = await sessionStorage.get(sessionId);
     if (!existing) return { deleted: false, sessionId };
     await inputQueue.disposeSession(sessionId);
-    pendingAgentSwitches.delete(sessionId);
+    runtimeSelection.clearIntent(sessionId);
     await sessionStorage.delete(sessionId);
     // Desktop cleanup for a deleted task (localDb/ipc/sessions.ts cleanupSessionTerminalArtifacts).
     try { removeSessionModelInterface(sessionId); } catch (error) {
@@ -1402,7 +1376,7 @@ const serverDeps = {
       return { discarded: false, remaining: Boolean(await sessionStorage?.get(sessionId)) };
     }
     await inputQueue.disposeSession(sessionId);
-    pendingAgentSwitches.delete(sessionId);
+    runtimeSelection.clearIntent(sessionId);
     const discarded = await discardProvisionalSessionRow(sessionId, sessionDraftPorts);
     return { discarded, remaining: Boolean(await sessionStorage?.get(sessionId)) };
   }),
@@ -1478,10 +1452,6 @@ const serverDeps = {
   input: {
     ...inputQueue,
     projection: (sessionId: string) => inputQueue.getProjection(sessionId),
-    enqueue: async (sessionId: string, item: Record<string, unknown>) => {
-      await applyPendingAgentSwitch(sessionId);
-      return inputQueue.enqueue(sessionId, item);
-    },
   },
   interactions,
   agentCommands: async (input: { agentKind?: string }) => {

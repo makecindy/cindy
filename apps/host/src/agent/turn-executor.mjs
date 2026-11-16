@@ -335,6 +335,9 @@ export function createTurnExecutor(deps) {
   });
   const statDirectory = workingDirectory.statDirectory;
   const transaction = createMakerSendTransaction({
+    // A model or engine the user picked lands when the message is sent, before the runtime is read
+    // (makerSendTransaction.ts), with the desktop's steps (runtime-selection.ts).
+    applyPendingAgentSwitch: deps.applyPendingAgentSwitch,
     // A server's OS language is not the remote user's interface preference.
     getResolvedMainLocale: deps.getResolvedMainLocale ?? (() => null),
     getMainClassicalStyle: deps.getMainClassicalStyle ?? (() => DEFAULT_CLASSICAL_REPLY_STYLE),
@@ -696,6 +699,8 @@ export function createTurnExecutor(deps) {
 
   return {
     send,
+    /** The engine of a task as its message persistence knows it (the desktop's getSessionDbAgentKind). */
+    sessionDbAgentKind: id => histories.get(id)?.getSessionDbAgentKind(id) ?? null,
     /** On shutdown, before stopping tasks: waits (bounded) for context recoveries in flight to end. */
     drainRecoveriesForShutdown: () => recovery?.drainForShutdown(),
     /** A recovery's replay was accepted (the recovery factory's onRebuilt). */

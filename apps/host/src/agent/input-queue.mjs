@@ -389,6 +389,12 @@ export function createInputQueue(deps) {
         getLastUserActionAt: id => states.get(id)?.lastUserActionAt ?? null,
       }),
       isTurnRunning: executor.isRunning,
+      /** This runtime's context recovery rollover (null when recovery is not assembled). */
+      contextRecoveryRollover: () => rollover,
+      /** The engine of a task as its message persistence knows it. */
+      sessionDbAgentKind: id => executor.sessionDbAgentKind(id),
+      cancelUsageLimitWait: id => coordinator.cancelUsageLimitWait(id),
+      refreshQueuedRoute: (id, route) => coordinator.refreshQueuedRoute(id, route),
       /** A context recovery's replay was accepted (the recovery factory's onRebuilt). */
       noteContextRecoveryRebuilt: id => executor.noteRecoveryRebuilt(id),
       wakeSession: (id, reason) => coordinator.wakeSession(id, reason),
