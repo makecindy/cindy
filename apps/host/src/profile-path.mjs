@@ -70,8 +70,21 @@ export function ownerDatabasePath(userDataDir, ownerId) {
   return path.join(userDataDir, `${DB_FILE_PREFIX}-${ownerId}.db`);
 }
 
+/**
+ * The OS app-data root the Host shares with the desktop: the Skill mutation locks and the built-in
+ * Skill bundle live under `<appData>/Cindy`, so both sides must resolve the same directory or their
+ * cross-process exclusion silently splits. Electron's app.getPath('appData') does not follow $HOME on
+ * macOS (measured 2026-11-17, release table row 25) while os.homedir() does, so a desktop that launches
+ * the Host passes its own value in CINDY_HOST_APP_DATA_DIR and the Host uses it as given; only a Host
+ * installed on its own computes it. A value that is not absolute is refused rather than guessed.
+ */
 export function resolveHostAppDataDir(options = {}) {
   const env = options.env ?? process.env;
+  const passed = env.CINDY_HOST_APP_DATA_DIR;
+  if (passed !== undefined && passed !== '') {
+    if (!path.isAbsolute(passed)) throw new Error('CINDY_HOST_APP_DATA_DIR must be an absolute directory');
+    if (!options.appDataDir) return passed;
+  }
   return options.appDataDir
     ?? env.APPDATA
     ?? (process.platform === 'darwin'
