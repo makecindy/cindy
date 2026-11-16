@@ -1,4 +1,4 @@
-import { getPluginToolUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
+import { getPluginHostUi, getPluginToolUi, parseGhostUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
 import { hostUiApprovalSubjects } from '../hostUi.js';
 import { describe, expect, it } from 'vitest';
 import {
@@ -10,6 +10,7 @@ import {
   GHOST_MANIFEST_SCHEMA_VERSION,
   GHOST_MAIN_VIEW_ICONS,
   GHOST_OAUTH_SCOPES_MAX,
+  GHOST_TOOLS_MAX,
   LEGACY_GHOST_SLOTS,
   compareCindyVersions,
   ghostManifestUsesOidcToken,
@@ -34,6 +35,27 @@ const validManifest = {
 } as const;
 
 describe('Ghost manifest contract', () => {
+  // 第23项：沿用已批准的 network.hosts 字段，以精确 origin 开放端口、内网和 WS。
+  // 旧域名语义不变；最小失败输入为 http://127.0.0.1:8080，tier=unit。
+  it('validates exact network origins without accepting paths, credentials or wildcard origins', () => {
+    for (const target of ['http://127.0.0.1:8080', 'https://api.example.com:8443', 'ws://localhost:9001', 'wss://stream.example.com', 'http://[::1]:8080']) {
+      const result = validateGhostManifest({ ...validManifest, slots: ['tool', 'network'], network: { hosts: [target] } });
+      expect(result, target).toMatchObject({ ok: true, manifest: { network: { hosts: [target] } } });
+    }
+    for (const target of ['http://localhost:8080/path', 'https://user:pw@example.com', 'ws://*.example.com', 'http://localhost:8080?key=x', 'file://host']) {
+      expect(validateGhostManifest({ ...validManifest, slots: ['tool', 'network'], network: { hosts: [target] } }).ok, target).toBe(false);
+    }
+  });
+
+  // Unit: pre-feature stored declarations must not invalidate existing image capabilities.
+  it.each([{}, [], ['rerank', 'rerank'], [42]])('ignores malformed historical model APIs %j only when stored', models => {
+    const raw = { ...validManifest, slots: ['tool', 'cindy'], cindy: { image: ['generate'], models } };
+    expect(validateGhostManifest(raw).ok).toBe(false);
+    expect(validateStoredGhostManifest({ ...raw, cindy: { models } }).ok).toBe(true);
+    const stored = validateStoredGhostManifest(raw);
+    expect(stored).toMatchObject({ ok: true, manifest: { cindy: { image: ['generate'] } } });
+    if (stored.ok) expect(stored.manifest.cindy?.models).toEqual(models);
+  });
   it('validates static task prompt declarations while preserving older installed plugin behavior', () => {
     const base = { ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined };
     expect(validateGhostManifest({ ...base, systemPrompt: [{ id: 'style', order: 0, text: 'Static', scope: 'selected-task' }] })).toMatchObject({ ok: true });
@@ -211,6 +233,17 @@ describe('Ghost manifest contract', () => {
     expect(GHOST_MANUAL_ENTRY_FILE).toBe('MANUAL.md');
     expect(GHOST_MANUAL_MD_MAX_BYTES).toBe(64 * 1024);
     expect(GHOST_MANUAL_DESCRIPTION_MAX_CHARS).toBe(300);
+  });
+
+  it('accepts up to GHOST_TOOLS_MAX tools and rejects more', () => {
+    const tools = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({ name: `t${i}`, description: 'y' }));
+    expect(GHOST_TOOLS_MAX).toBe(48);
+    expect(validateGhostManifest({ ...validManifest, tools: tools(GHOST_TOOLS_MAX) }).ok).toBe(true);
+    expect(validateGhostManifest({ ...validManifest, tools: tools(GHOST_TOOLS_MAX + 1) })).toEqual({
+      ok: false,
+      reason: 'tools 必须是 1–48 项的数组',
+    });
   });
 
   it('accepts and normalizes a valid schema v2 manifest', () => {
@@ -1924,7 +1957,7 @@ describe('cindy 详单:media/text/embed/search 类目与 oneshotModel 校验', (
   it('接受 media/text/embed 类目并保留', () => {
     const r = validateGhostManifest({
       ...base,
-      cindy: { media: ['deposit'], text: ['oneshot'], embed: ['text'] },
+      cindy: { media: ['deposit'], text: ['oneshot'], embed: ['text'], models: ['decisions', 'rerank'] },
     });
     expect(r.ok, r.ok ? '' : String(r.reason)).toBe(true);
     if (!r.ok) return;
@@ -1932,6 +1965,7 @@ describe('cindy 详单:media/text/embed/search 类目与 oneshotModel 校验', (
       media: ['deposit'],
       text: ['oneshot'],
       embed: ['text'],
+      models: ['decisions', 'rerank'],
     });
   });
 
@@ -2078,6 +2112,87 @@ describe('interactive page declarations', () => {
     expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
     expect(hostUiApprovalSubjects(host)).toContainEqual(expect.objectContaining({ key: 'contribution:help-menu' }));
   });
+  // UI opening: old unknown positions confer no authority; newly understood
+  // placements and provider input must be separately approved. Tier: unit.
+  it('keeps all eight legacy subjects unchanged when old packages contain previously unknown provider metadata', () => {
+    const positions = ['composer.toolbar', 'session.header', 'statusbar', 'message.actions', 'message.menu', 'turn.footer', 'message.body', 'tool.body'];
+    const host = { views: [{ id: 'page', title: 'Page', resourceUri: 'ui://planner' }],
+      contributions: positions.map((position, index) => ({ id: `old-${index}`, title: 'Old entry', position, view: 'page' })) };
+    const historical = { ...host, contributions: host.contributions.map(entry => ({ ...entry,
+      trigger: '@' as const, accept: { extensions: ['.pdf'] } })) };
+    expect(validateStoredGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: historical } })).toMatchObject({ ok: true,
+      manifest: { mcpApps: { host: { contributions: historical.contributions } } } });
+    expect(hostUiApprovalSubjects(historical)).toEqual(hostUiApprovalSubjects(host));
+  });
+  // Unit, #9987: persisted unknown data must not revoke approved toolbar/command
+  // subjects. The metadata-only case above did not exercise newly strict fields.
+  it.each([
+    { settings: { vendor: true } },
+    { settings: [{ id: 'invalid', title: 'Invalid', type: 'boolean', default: 'yes' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'sidebar.navigation', kind: 'status' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'session.menu', kind: 'select', tool: 'help', options: [{ label: 'One', value: 'one' }] }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'settings.section', tool: 'help' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'composer.completion', tool: 'help' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'composer.attachment', tool: 'help' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'sidebar.section', tool: 'help' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'window.titlebar', kind: 'status' }] },
+  ])('keeps legacy host authority when stored extensions are invalid: %j', extension => {
+    const legacy = { contributions: [{ id: 'old', title: 'Old toolbar', position: 'composer.toolbar', tool: 'help' }],
+      commands: [{ id: 'command', title: 'Old command', tool: 'help', shortcut: 'Mod+Shift+H' }] };
+    const host = { ...legacy, ...extension, contributions: [...legacy.contributions, ...(extension.contributions ?? [])] };
+    const raw = { ...base, mcpApps: { ...base.mcpApps, host } };
+    expect(validateGhostManifest(raw).ok).toBe(false);
+    const stored = validateStoredGhostManifest(raw);
+    if (!stored.ok) throw new Error(stored.reason);
+    const projected = getPluginHostUi(stored.manifest);
+    expect(projected).toMatchObject(legacy);
+    expect(hostUiApprovalSubjects(projected!)).toEqual(hostUiApprovalSubjects(legacy));
+  });
+  it.each(['sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion', 'window.titlebar'])(
+    'approves the understood %s placement without changing an existing entry token', position => {
+      const old = { id: 'legacy', title: 'Open', position: 'composer.toolbar', tool: 'help' };
+      const entry = { id: 'extension', title: 'Extension', position,
+        ...(position === 'settings.section' ? { view: 'settings' } : { tool: 'help' }),
+        ...(position === 'composer.completion' ? { trigger: '@' as const } : {}) };
+      const host = { views: [{ id: 'settings', title: 'Settings', resourceUri: 'ui://planner' }], contributions: [old, entry] };
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+      expect(hostUiApprovalSubjects(host).find(subject => subject.key === 'contribution:extension')).toBeDefined();
+      expect(hostUiApprovalSubjects(host).find(subject => subject.key === 'contribution:legacy')).toEqual({
+        key: 'contribution:legacy', detail: '{"position":"composer.toolbar","kind":"button","tool":"help"}',
+      });
+    },
+  );
+  it('validates registered settings and approves their schema independently of translated labels/defaults', () => {
+    const field = { id: 'enabled', title: 'Enabled', type: 'boolean' as const, default: false };
+    const host = { settings: [field] };
+    const validate = (settings: unknown) => validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: { settings } } });
+    expect(validate([field]).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host)).toContainEqual(expect.objectContaining({ key: 'setting:enabled' }));
+    expect(hostUiApprovalSubjects(host)).toEqual(hostUiApprovalSubjects({ settings: [{ ...field, title: 'Changed', default: true }] }));
+    for (const settings of [[{ ...field, default: 'false' }], [field, field], [{ ...field, id: '__proto__' }],
+      [{ id: 'count', title: 'Count', type: 'number', default: 10, min: 20 }]]) expect(validate(settings).ok).toBe(false);
+  });
+  it('rejects a completion view, missing trigger and a task-scoped settings page', () => {
+    for (const host of [
+      { contributions: [{ id: 'complete', title: 'Complete', position: 'composer.completion', tool: 'help' }] },
+      { views: [{ id: 'page', title: 'Page', resourceUri: 'ui://planner' }],
+        contributions: [{ id: 'complete', title: 'Complete', position: 'composer.completion', view: 'page', trigger: '@' }] },
+      { views: [{ id: 'page', title: 'Page', resourceUri: 'ui://planner', scope: 'task' }],
+        contributions: [{ id: 'settings', title: 'Settings', position: 'settings.section', view: 'page' }] },
+    ]) expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(false);
+  });
+  // B: processing user-added files is separately approved; a sidebar section
+  // must reference a declared view, with no native list/layout registry (unit).
+  it('approves attachment matching and a sidebar view as distinct contributions', () => {
+    const host = { views: [{ id: 'section', title: 'Section', resourceUri: 'ui://planner' }], contributions: [
+      { id: 'files', title: 'Parse files', position: 'composer.attachment', tool: 'help', accept: { extensions: ['.pdf'], mimeTypes: ['image/*'] } },
+      { id: 'section', title: 'Section', position: 'sidebar.section', view: 'section' },
+    ] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host).map(subject => subject.key)).toContain('contribution:files');
+    expect(hostUiApprovalSubjects(host).find(subject => subject.key === 'contribution:files')?.detail).toContain('image/*');
+    expect(hostUiApprovalSubjects(host).map(subject => subject.key)).toContain('contribution:section');
+  });
   it('validates appearance resource declarations and grants only known fields', () => {
     const host = { capabilities: ['appearance', 'app-icon'], appearance: { fields: ['bodyFont', 'appIcon', 'future-field'],
       resources: [{ id: 'font', kind: 'font' as const, path: 'assets/font.woff2' }] } };
@@ -2118,6 +2233,22 @@ describe('interactive page declarations', () => {
     { capabilities: ['context', 'context'] },
   ])('rejects invalid host UI authority: %j', host => {
     expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(false);
+  });
+  it('lets every declared tool carry UI up to the shared tools limit', () => {
+    const names = Array.from({ length: GHOST_TOOLS_MAX }, (_, i) => `t${i}`);
+    const tools = names.map((name) => ({ name, description: 'y' }));
+    expect(validateGhostManifest({
+      ...base,
+      tools,
+      mcpApps: { ui: { resources: [], tools: Object.fromEntries(names.map((name) => [name, { visibility: ['app'] }])) } },
+    }).ok).toBe(true);
+
+    // The UI map has its own count gate; check it directly since the manifest tools gate fires first.
+    const over = [...names, 'extra'];
+    const ui = (keys: string[]) => ({ resources: [], tools: Object.fromEntries(keys.map((name) => [name, { visibility: ['app'] }])) });
+    const overTools = over.map((name) => ({ name }));
+    expect(parseGhostUi(ui(names), overTools, [], isSafeGhostRelativePath)).not.toBeNull();
+    expect(parseGhostUi(ui(over), overTools, [], isSafeGhostRelativePath)).toBeNull();
   });
   it.each([
     { resources: [{
@@ -2205,6 +2336,14 @@ it('keeps a liveScreen declaration as a granted capability only in v3', () => {
   // Without a node worker the declaration could never run: refuse it at install.
   const { node: _node, ...withoutNode } = base;
   expect(validateGhostManifest({ ...withoutNode, liveScreen: true }).ok).toBe(false);
+  // A task page may also serve tasks on another computer, only for a live screen plugin.
+  const taskView = { html: 'task.html', remote: true };
+  const remote = validateGhostManifest({ ...base, liveScreen: true, taskView });
+  expect(remote.ok && remote.manifest.taskView).toEqual(taskView);
+  expect(validateGhostManifest({ ...base, taskView }).ok).toBe(false);
+  expect(
+    validateGhostManifest({ ...base, liveScreen: true, taskView: { ...taskView, remote: 1 } }).ok,
+  ).toBe(false);
 });
 
 describe('tool approval declaration', () => {

@@ -1,5 +1,6 @@
 import { configureUserDataDir } from '../../../userDataPath.js';
 import { configureOwnerContext } from '../../../ownerContext.js';
+import { _setStoreForTests } from '../../../worktree/worktreeStore.js';
 import { registerMakerSessionCreateHandler } from '../../../maker-ipc/sessionCreateHandler';
 import { MAKER_INVOKE } from '../../../maker-ipc/channels';
 import { withSendToSessionLock } from '../../../maker-ipc/sendToSessionLock';
@@ -217,6 +218,7 @@ import {
 } from '../../../appBadgeService';
 import { retireDeletedPiSubagentState } from '../piSubagentDeletion';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
+import { setSessionRestoreObserver } from '../../sessionRestoreRetention';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 import { createRemoteSessionsStatusSetter } from '../../../mcp-integrations/sessionStatusRemote.js';
 import * as sessionQueries from '../../sessionQueries';
@@ -226,7 +228,7 @@ function createDb(): void {
   const sqlite = new Database(':memory:');
   // 与 schema.ts 的 sessions/messages 全列对齐(selectSessionWithCount select 全列)。
   sqlite.exec(`
-    CREATE TABLE bot_session_links(session_id TEXT, bot_id TEXT, role TEXT, route_key TEXT);
+    CREATE TABLE bot_session_links(session_id TEXT, bot_id TEXT, role TEXT, route_key TEXT, archived_at INTEGER);
     CREATE TABLE bot_profiles(id TEXT, status TEXT, hidden_at INTEGER);
     CREATE TABLE task_tags (
       id TEXT PRIMARY KEY NOT NULL,
@@ -301,6 +303,12 @@ function createDb(): void {
       list_preview_role TEXT,
       list_message_count INTEGER
     );
+    CREATE TABLE mcp_app_view_states (
+      message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      server_id TEXT NOT NULL, server_revision TEXT NOT NULL, plugin_instance TEXT,
+      state_json TEXT NOT NULL, byte_length INTEGER NOT NULL
+    );
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
       client_id TEXT NOT NULL,
@@ -367,6 +375,13 @@ async function invokeCreate(body: Record<string, unknown>): Promise<unknown> {
 }
 
 beforeEach(() => {
+  // Exercise the real worktree lookup without constructing electron-store in this Node fixture.
+  // Each case owns its registry; the separate safe-directory cleanup store is never used here.
+  const memory = new Map<string, unknown>([['worktrees', {}]]);
+  _setStoreForTests({
+    get: (key: string, fallback: unknown) => memory.get(key) ?? fallback,
+    set: (key: string, value: unknown) => { memory.set(key, value); },
+  } as unknown as NonNullable<Parameters<typeof _setStoreForTests>[0]>);
   clearAllSessionAttention();
   setSessionOpeningModelAdmission(async body => body);
   vi.clearAllMocks();
@@ -411,6 +426,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  setSessionRestoreObserver(null);
+  _setStoreForTests(null);
   setSessionRuntimeCleanup(null);
   setSessionWorktreeBindingLookup(null);
   setSessionWorktreeRecycle(null);
@@ -423,6 +440,59 @@ afterEach(async () => {
 });
 
 describe('local-db:sessions:update handler wiring', () => {
+  // #10546 review, db tier: the ordinary restore/engine tests missed patch-meta's
+  // production transaction branch used by archive undo. Minimal input: one old
+  // archived task and an async retention save. Activation must wait for the save;
+  // failure or revocation during that await must leave the task archived.
+  it('waits for restore retention before activating through the patch-meta transaction', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
+    Object.assign(h.client!, { tx: async (name: string, args: unknown) => runDbTransaction(h.sqlite!, { name, args }) });
+    let entered!: () => void;
+    const saving = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const retain = vi.fn(async (ids, db) => {
+      expect(ids).toEqual(['codex-local']);
+      expect(db).toBe(h.db);
+      entered();
+      await gate;
+    });
+    setSessionRestoreObserver(retain);
+    const restoring = patchSessionMetaInDb('codex-local', { status: 'active' });
+    try {
+      expect(await Promise.race([saving.then(() => 'saving'), restoring.then(() => 'restored')])).toBe('saving');
+      expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'archived' });
+      expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await restoring;
+    }
+    expect(retain).toHaveBeenCalledOnce();
+    expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'active' });
+  });
+
+  it.each(['persistence', 'owner', 'cancel', 'condition'] as const)(
+    'does not activate through the patch-meta transaction after a retention %s failure', async failure => {
+      h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
+      Object.assign(h.client!, { tx: async (name: string, args: unknown) => runDbTransaction(h.sqlite!, { name, args }) });
+      h.captureOwnerScope = true;
+      const controller = new AbortController();
+      let current = true;
+      setSessionRestoreObserver(async () => {
+        if (failure === 'persistence') throw new Error('RETENTION_WRITE_FAILED');
+        if (failure === 'owner') h.ownerCurrent = false;
+        if (failure === 'cancel') controller.abort();
+        if (failure === 'condition') current = false;
+      });
+      await expect(patchSessionMetaInDb('codex-local', { status: 'active' }, {
+        signal: controller.signal,
+        beforeWrite: () => { if (!current) throw new Error('TASK_ARCHIVE_SCOPE_CHANGED'); },
+      })).rejects.toThrow('PRECONDITION_FAILED');
+      expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'archived' });
+      expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    },
+  );
+
   // Terminal lifecycle through both real public handlers: an ordinary fork survives,
   // but a hidden side chat must not remain running after its parent becomes unreachable (unit).
   it.each([invokeUpdate, invokePatchMeta])('deletes dependent side chats without deleting ordinary forks (%#)', async update => {
@@ -434,7 +504,14 @@ describe('local-db:sessions:update handler wiring', () => {
     Object.assign(h.client!, { tx: async (name: string, args: unknown) => runDbTransaction(h.sqlite!, { name, args }) });
     h.sqlite!.prepare("UPDATE sessions SET parent_session_id = 'cc-local', source = 'side-chat' WHERE id = 'codex-local'").run();
     h.sqlite!.prepare("UPDATE sessions SET parent_session_id = 'cc-local' WHERE id = 'pi-local'").run();
+    // The real terminal transaction also owns private state; include its schema
+    // instead of masking missing-table failures as worktree errors.
+    for (const id of ['cc-local', 'codex-local', 'pi-local']) {
+      h.sqlite!.prepare("INSERT INTO messages (id,client_id,session_id,role,content,created_at) VALUES (?,?,?,'assistant','{}',1)").run(id, id, id);
+      h.sqlite!.prepare("INSERT INTO mcp_app_view_states VALUES (?,?, 'fixture','revision',NULL,'{}',2)").run(id, id);
+    }
     await update('cc-local', { status: 'deleted' });
+    expect(h.sqlite!.prepare('SELECT session_id FROM mcp_app_view_states').all()).toEqual([{ session_id: 'pi-local' }]);
     expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'deleted' });
     expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('pi-local')).toEqual({ status: 'active' });
     expect(h.runtimeCleanup).toHaveBeenCalledWith('codex-local');
@@ -1035,19 +1112,24 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(persisted).toEqual({ title: 'Release Bot', status: 'active' });
   });
 
-  it('archives, restores and deletes teammate tasks listed with ordinary tasks', async () => {
+  // Group visibility must work through the real IPC guard, not only the worker transaction.
+  it.each([['routine', 'routine:daily'], ['group', 'group:room:thread:root'], ['group', 'group:room:personal-digest']])('archives, restores and deletes listed %s tasks', async (role, routeKey) => {
     // 例行任务 / 渠道专线进入普通任务列表，生命周期与普通任务一致；主聊天仍由伙伴生命周期管理。
+    h.sqlite!.exec(`CREATE TABLE shared_task_events (shared_task_id TEXT, session_id TEXT, revision INTEGER, kind TEXT, terminal INTEGER, snapshot TEXT, recorded_at INTEGER, PRIMARY KEY (shared_task_id, kind, revision))`);
+    Object.assign(h.client!, { tx: async (name: string, args: unknown) => runDbTransaction(h.sqlite!, { name, args }) });
     const link = h.sqlite!.prepare('INSERT INTO bot_session_links(session_id, bot_id, role, route_key) VALUES (?, ?, ?, ?)');
     link.run('bot-local', 'bot-1', 'canonical', null);
     await expect(invokeUpdate('bot-local', { status: 'archived' })).rejects.toThrow(/Bot task lifecycle/);
 
     h.sqlite!.prepare('UPDATE bot_session_links SET role = ?, route_key = ? WHERE session_id = ?')
-      .run('routine', 'routine:daily', 'bot-local');
+      .run(role, routeKey, 'bot-local');
     const status = () => (h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('bot-local') as { status: string }).status;
     await invokeUpdate('bot-local', { status: 'archived' });
     expect(status()).toBe('archived');
+    if (role === 'group') h.sqlite!.exec("UPDATE bot_session_links SET archived_at=NULL WHERE session_id='bot-local'");
     await restoreArchivedSessionForSend('bot-local');
     expect(status()).toBe('active');
+    if (role === 'group') expect((h.sqlite!.prepare("SELECT archived_at FROM bot_session_links WHERE session_id='bot-local'").get() as { archived_at: number }).archived_at).toBeGreaterThan(0);
     await invokeUpdate('bot-local', { status: 'deleted' });
     expect(status()).toBe('deleted');
   });

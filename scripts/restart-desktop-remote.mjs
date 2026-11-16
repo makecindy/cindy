@@ -1171,11 +1171,14 @@ function devEnvEntries(env) {
     ['XDT_DEVICE_LINK_LOCAL_URL', env.XDT_DEVICE_LINK_LOCAL_URL],
     ['XDT_DEVICE_LINK_CN_LOCAL_URL', env.XDT_DEVICE_LINK_CN_LOCAL_URL],
     ['XDT_DEVICE_LINK_GLOBAL_LOCAL_URL', env.XDT_DEVICE_LINK_GLOBAL_LOCAL_URL],
+    ['XDT_WEBHOOK_CN_LOCAL_URL', env.XDT_WEBHOOK_CN_LOCAL_URL],
+    ['XDT_WEBHOOK_GLOBAL_LOCAL_URL', env.XDT_WEBHOOK_GLOBAL_LOCAL_URL],
     // 模型目录闭环调试覆写。dev 默认仍不联网；只有显式给 URL 时，主进程才允许
     // 从该地址拉取 Catalog。PATH / DISABLE 同步透传，避免 runner 吞掉已有契约。
     ['XDT_MODELS_URL', env.XDT_MODELS_URL],
     ['XDT_MODELS_PATH', env.XDT_MODELS_PATH],
     ['XDT_DISABLE_MODELS_FETCH', env.XDT_DISABLE_MODELS_FETCH],
+    ['XDT_DISABLE_GLOBAL_SHORTCUTS', env.XDT_DISABLE_GLOBAL_SHORTCUTS],
     // 启动即自动打开 DevTools(main 的 ready-to-show 里消费;见 bootstrap-electron)。
     // 给"快捷键/菜单打不开 DevTools"的环境兜底,QA 控制台验证依赖它。
     ['OPEN_DEVTOOLS', env.OPEN_DEVTOOLS],

@@ -19,13 +19,15 @@ import {
 import { readinessFromBinaryStatus } from '@/hooks/useVendorReadiness';
 
 describe('readinessFromBinaryStatus（本地运行时就绪推导）', () => {
-  it('Codex 与 Pi 缺少本地二进制时都返回 binary-missing', () => {
+  // 断网首装后 Claude Code 也可能尚未安装,三个 agent 同一规则。
+  it('任一 agent 缺少本地二进制时都返回 binary-missing', () => {
+    expect(readinessFromBinaryStatus('cc', false)).toBe('binary-missing');
     expect(readinessFromBinaryStatus('codex', false)).toBe('binary-missing');
     expect(readinessFromBinaryStatus('pi', false)).toBe('binary-missing');
   });
 
-  it('Claude 不依赖该二进制轴，已就绪时不产生覆盖状态', () => {
-    expect(readinessFromBinaryStatus('cc', false)).toBeNull();
+  it('已就绪时不产生覆盖状态', () => {
+    expect(readinessFromBinaryStatus('cc', true)).toBeNull();
     expect(readinessFromBinaryStatus('codex', true)).toBeNull();
     expect(readinessFromBinaryStatus('pi', true)).toBeNull();
   });
@@ -86,13 +88,13 @@ describe('deriveRemoteReadiness（被控端就绪推导）', () => {
     ).toBe('binary-missing');
   });
 
-  it('cc:binary 随包,binaryReady 不参与判定', () => {
+  it('cc:被控端断网首装未装 Claude Code 时报组件缺失;null(跳过查询)不触发', () => {
     expect(
       deriveRemoteReadiness('cc', { binaryReady: false, sourceReady: true, authReady: null }),
-    ).toBe('ready');
+    ).toBe('binary-missing');
     expect(
-      deriveRemoteReadiness('cc', { binaryReady: false, sourceReady: false, authReady: null }),
-    ).toBe('unauthenticated');
+      deriveRemoteReadiness('cc', { binaryReady: null, sourceReady: true, authReady: null }),
+    ).toBe('ready');
   });
 });
 

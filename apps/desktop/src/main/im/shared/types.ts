@@ -27,7 +27,7 @@ import type {
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
 import type { GroupHistoryAccessScope } from './groupHistoryAccess';
-import type { ChannelToolScope } from './channelToolScope';
+import type { ChannelToolScope, TelegramReplyMediaScope } from './channelToolScope';
 import type { ImChannelNoteSource } from './channelNote';
 import type { ImOutputDriver, IMAttachment, IMMessageEvent, IMUnsupportedEntry, TextChannelIM } from '@cindy/im';
 
@@ -199,8 +199,8 @@ export interface ImChannelAdapter {
    */
   interactionExpiredNotice?: string;
   /**
-   * `/project` 项目切换开关(个人 Telegram: true)。开启后 slash 层放行
-   * /project 命令: 列出 desktop 端项目工作区, 选中后把当前 (bot, user/lane)
+   * `/project` 项目切换开关(个人 Telegram、个人飞书: true)。开启后 slash 层放行
+   * /project 命令: 列出侧栏的本机项目, 选中后把当前 (bot, user/lane)
    * 会话行切到该项目目录并重开上下文(bot 原生会话, 非接管)。开启时
    * ui.cards.project 必须提供(orchestrator 接线期断言)。
    */
@@ -303,6 +303,8 @@ export interface ImChannelAdapter {
    * provider 开始前登记、终态释放(channelToolScope.ts)；不实现即本轮没有渠道工具。
    */
   channelToolScopeFor?(event: IMMessageEvent): ChannelToolScope | undefined;
+  /** Only for an already admitted background reply to this exact lane. */
+  replyMediaScopeFor?(userId: string): TelegramReplyMediaScope;
   /**
    * 本条消息的 `[渠道说明]` 来源事实（只进模型正文, 见 channelNote.ts）。
    * 缺省按入站事件通用推断（imChannelNoteSourceFromEvent）; 渠道有更准确的

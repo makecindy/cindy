@@ -55,15 +55,16 @@ export function createHostPluginGateway(options: GatewayOptions) {
     },
     credentials: { ...options.credentials, assertAvailable: runtime.assertCurrent },
   });
+  const readCustomMcpToken = (id: string) => {
+    runtime.assertCurrent();
+    return options.credentials.read(`owner_${dataOwnerStorageKey(options.ownerId)}_${customMcpSecretStorageKey(id)}`);
+  };
   const custom = createCustomMcpRegistry({
     ...apps,
     listCustomMcpServers: async () => {
       const configs = await customStore.listCustomMcpServers(); runtime.assertCurrent(); return configs;
     },
-    readCustomMcpToken: id => {
-      runtime.assertCurrent();
-      return options.credentials.read(`owner_${dataOwnerStorageKey(options.ownerId)}_${customMcpSecretStorageKey(id)}`);
-    },
+    readCustomMcpToken,
     createAppServerProxy: createAppServerProxyFactory(apps),
   });
   const registry = createPluginAppRegistry(apps.replacePluginAppServers);
@@ -141,6 +142,18 @@ export function createHostPluginGateway(options: GatewayOptions) {
   };
   return {
     provider, host, modelContext: apps.mcpAppModelContext, appServerIds: apps.appServerIds,
+    /** The plugin roster section the desktop gives each engine (ghost.ts getGhostRosterPrompt).
+     * After an owner change it is empty instead of describing the previous owner's plugins. */
+    rosterPrompt: (ctx: { workingDir?: string }) => (runtime.current() ? gateway.getGhostRosterPrompt(ctx) : ''),
+    /** Built-in and approved plugin Skills, the desktop's listCindyManagedSkills (maker-host/managed-skills.ts). */
+    managedSkills: () => runtime.listManagedSkills(),
+    /** This owner's custom MCP registry reads and token reader, as the desktop's MCP duplicate
+     * preferences read them (mcp-duplicate-preferences.ts). Read-only. */
+    customMcp: {
+      getBuiltinMcpServerNames: () => custom.getBuiltinMcpServerNames(),
+      listRegistrableCustomMcpServers: () => custom.listRegistrableCustomMcpServers(),
+      readCustomMcpToken,
+    },
     async prepareMcpProviders(providers: McpProvider[]) {
       runtime.assertCurrent();
       custom.registerCustomMcpArrays(providers);

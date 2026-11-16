@@ -10,14 +10,14 @@ import { issueCertificate, publicBytes, verifySignature } from '@cindy/agent-net
 const state = vi.hoisted(() => ({
   subject: 'membership-a', scope: 'scope-a', base: 'https://agent-net.example.test', pending: false, unreadable: false,
   root: null as any, secrets: new Map<string, any>(), writes: [] as any[], requests: 0,
-  beforeIssue: null as null | (() => Promise<void>),
+  beforeIssue: null as null | (() => Promise<void>), relay: null as any,
 }));
 vi.mock('node:fs/promises', () => ({ default: { mkdir: vi.fn(async () => undefined) } }));
 vi.mock('node:fs', async (original) => ({ ...await original<any>(), existsSync: () => state.unreadable }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => state.scope, isAppSessionBoundaryPending: () => state.pending }));
 vi.mock('../../authManager.js', () => ({ getCurrentUserId: () => state.subject, getActiveAuthRealm: () => 'global', getDeviceId: () => 'unit-device' }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => state.base }));
-vi.mock('../selfHostedRelayRouting.js', () => ({ activeSelfHostedRelay: () => null }));
+vi.mock('../selfHostedRelayRouting.js', () => ({ activeSelfHostedRelay: () => state.relay }));
 vi.mock('../selfHostedRelayConfig.js', () => ({
   readRelaySecrets: (id: string) => state.secrets.get(id) ?? null,
   writeRelaySecrets: (id: string, value: unknown) => { state.writes.push(value); state.secrets.set(id, value); },
@@ -34,11 +34,11 @@ vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: vi.fn(async
     identity: { deviceId: body.deviceId, signingKey: body.signingKey, transportKey: body.transportKey } });
   return { rootPublicKey: publicBytes(state.root), certificate };
 }) }));
-import { ensureOfficialAgentNetClient, officialAgentNetSlot } from '../agentNetOfficial.js';
+import { currentOfficialAgentNetClient, ensureOfficialAgentNetClient, officialAgentNetSlot, outgoingOfficialAgentNetClient } from '../agentNetOfficial.js';
 beforeEach(() => {
   state.subject = 'membership-a'; state.scope = 'scope-a'; state.pending = false; state.unreadable = false;
   state.base = 'https://agent-net.example.test'; state.root = generateKeyPairSync('ed25519').privateKey;
-  state.secrets.clear(); state.writes = []; state.requests = 0; state.beforeIssue = null;
+  state.secrets.clear(); state.writes = []; state.requests = 0; state.beforeIssue = null; state.relay = null;
 });
 afterEach(() => vi.useRealTimers());
 it('single-flights account enrollment and keeps the signed identity in the existing encrypted vault', async () => {
@@ -49,6 +49,17 @@ it('single-flights account enrollment and keeps the signed identity in the exist
   expect(saved.agentNet.signingPrivateKey).toContain('PRIVATE KEY');
   expect((await ensureOfficialAgentNetClient('Renamed')).identity.signingKey).toBe(first.identity.signingKey);
   expect(state.requests).toBe(1);
+});
+// Bug #10092 review: the account-handover close resolves an official-service
+// task's authority while the boundary is pending, possibly after the user
+// selected a self-hosted relay; the old gates captured no member and the
+// Agent-Net share stayed open. Ordinary traffic must still refuse both.
+it('resolves the outgoing official identity for handover close despite a pending boundary or selected relay', async () => {
+  const enrolled = await ensureOfficialAgentNetClient('Unit device'), writes = state.writes.length;
+  state.pending = true; state.relay = { relayId: 'selected-private' };
+  expect(currentOfficialAgentNetClient()).toBeNull();
+  expect(outgoingOfficialAgentNetClient()?.certificate.signature).toBe(enrolled.certificate.signature);
+  expect(state.writes).toHaveLength(writes);
 });
 it('pins the original root across renewal and never replaces an unreadable credential file', async () => {
   const first = await ensureOfficialAgentNetClient('Unit device');

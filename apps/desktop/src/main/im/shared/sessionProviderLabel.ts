@@ -1,6 +1,7 @@
 /**
  * 失败时按任务实际路由读取定位信息；目录不可读也保留任务名和模型 ID。
  */
+import { imText } from './imText';
 import { eq } from 'drizzle-orm';
 import { actualSourceIdForModel } from '@cindy/model-providers';
 
@@ -28,7 +29,10 @@ export async function resolveSessionErrorContext(sessionId: string): Promise<{
       .limit(1);
     if (!row) return {};
     const context = {
-      taskLabel: `${row.title || '任务'}（${sessionId.slice(0, 8)}）`,
+      taskLabel: imText('imBot.text.shared.quota.taskLabel', {
+        title: row.title || imText('imBot.text.shared.quota.untitledTask'),
+        id: sessionId.slice(0, 8),
+      }),
       ...(row.model ? { modelLabel: row.model } : {}),
     };
     if (!row.model) return context;

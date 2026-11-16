@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from '../teammatesSectionPrefs';
+import { readTeammatesViewMode, writeTeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from '../teammatesSectionPrefs';
 
 beforeEach(() => localStorage.clear());
 
@@ -25,4 +25,15 @@ describe('teammates section collapse preference', () => {
     localStorage.setItem('sidebar.teammatesSection.v1.owner.owner-a', 'sideways');
     expect(readTeammatesSectionCollapsed('owner-a')).toBe(false);
   });
+});
+
+// Display preference was previously inseparable from collapse. Keep account isolation
+// and collapse independent at the production persistence boundary (unit tier).
+it('stores icon mode independently from collapse and other accounts', () => {
+  writeTeammatesViewMode('owner-a', 'icons');
+  writeTeammatesSectionCollapsed('owner-a', true);
+  expect(readTeammatesViewMode('owner-a')).toBe('icons');
+  expect(readTeammatesViewMode('owner-b')).toBe('list');
+  writeTeammatesSectionCollapsed('owner-a', false);
+  expect(readTeammatesViewMode('owner-a')).toBe('icons');
 });

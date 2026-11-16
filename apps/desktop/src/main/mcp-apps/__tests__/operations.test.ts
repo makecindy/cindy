@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { handleMcpAppOperation, handleMcpAppFrameOperation } from '../operations.js';
 import type { McpAppsHost } from '../host.js';
@@ -6,12 +7,13 @@ function fixture() {
     csp: "default-src 'none'; connect-src https://private-app.example.invalid", prefersBorder: true,
     policy: { connectDomains: ['https://private-app.example.invalid'] } };
   const api = {
-    open: vi.fn(async () => document),
+    open: vi.fn<McpAppsHost['open']>(async () => document),
     dispatch: vi.fn(),
     poll: vi.fn(async () => []),
     context: vi.fn(),
     teardown: vi.fn(),
     cancelOpen: vi.fn(),
+    setSuspended: vi.fn(),
     displayMode: vi.fn(),
     linkResult: vi.fn(),
     authorizeLink: vi.fn(async () => ({ authorized: true, validForMs: 30_000 })),
@@ -38,8 +40,8 @@ describe('task-bound MCP App operations', () => {
         f.local,
       ),
     ).toEqual({ viewId: 'view', transport: 'sandbox', prefersBorder: true });
-    expect(f.api.open).toHaveBeenCalledWith('renderer:1', 'task', 'card', { theme: 'dark' }, undefined);
-    expect(f.local.supply).toHaveBeenCalledWith(f.document, 'renderer:1');
+    expect(f.api.open).toHaveBeenCalledWith('renderer:1', 'task', 'card', { theme: 'dark' }, undefined, undefined);
+    expect(f.local.supply).toHaveBeenCalledWith(f.document, 'renderer:1', { theme: 'dark' });
     await handleMcpAppOperation(f.host, 'device:phone', 'task', {
       op: 'poll',
       viewId: 'view',
@@ -61,7 +63,7 @@ describe('task-bound MCP App operations', () => {
     expect(await handleMcpAppOperation(f.host, 'device:phone', 'task', {
       op: 'open', clientId: 'card',
     })).toEqual(f.document);
-    expect(f.api.open).toHaveBeenCalledWith('device:phone', 'task', 'card', {}, undefined);
+    expect(f.api.open).toHaveBeenCalledWith('device:phone', 'task', 'card', {}, undefined, undefined);
     expect(f.local.supply).not.toHaveBeenCalled();
   });
   it.each([
@@ -116,4 +118,32 @@ describe('task-bound MCP App operations', () => {
         'MCP_APP_INVALID_REQUEST',
       );
   });
+});
+
+it('returns an SDK reference only when the viewer advertises its exact content hash', async () => {
+  const f = fixture();
+  const sdk = { source: 'export const App = 1;', addons: { 'cindy/view-state': { source: 'core-v1', reactSource: 'react-v1' } } };
+  const hash = createHash('sha256').update(JSON.stringify([sdk.source, 'core-v1', 'react-v1'])).digest('hex');
+  f.api.open.mockImplementation(async (_caller, _session, _card, _context, _openId, resolveSdkRef) => {
+    const sdkRef = resolveSdkRef?.(sdk);
+    return { ...f.document, ...(sdkRef ? { sdkRef } : { sdk }) };
+  });
+  const result = await handleMcpAppOperation(f.host, 'device:viewer', 'task', {
+    op: 'open', clientId: 'card', context: { theme: 'dark' }, sdkCacheHashes: [hash],
+  });
+  expect(result).toEqual({ ...f.document, sdkRef: hash });
+  expect(f.api.open).toHaveBeenCalledWith('device:viewer', 'task', 'card', { theme: 'dark' }, undefined, expect.any(Function));
+  for (const hashes of [undefined, [], ['0'.repeat(64)]]) {
+    await expect(handleMcpAppOperation(f.host, 'device:viewer', 'task', {
+      op: 'open', clientId: 'card', sdkCacheHashes: hashes,
+    })).resolves.toEqual({ ...f.document, sdk });
+  }
+});
+
+it.each(['suspend', 'resume'])('only lets the local presenter control %s on its bound View', async op => {
+  const f = fixture();
+  await handleMcpAppOperation(f.host, 'renderer:1', 'task', { op, viewId: 'view' }, f.local);
+  expect(f.api.setSuspended).toHaveBeenCalledExactlyOnceWith('renderer:1', 'task', 'view', op === 'suspend');
+  await expect(handleMcpAppOperation(f.host, 'device:phone', 'task', { op, viewId: 'view' })).rejects.toThrow('MCP_APP_OWNER_ONLY');
+  await expect(handleMcpAppFrameOperation(f.host, 'renderer:1', 'task', 'view', { op, viewId: 'view' }, f.local.openLink)).rejects.toThrow('MCP_APP_INVALID_REQUEST');
 });

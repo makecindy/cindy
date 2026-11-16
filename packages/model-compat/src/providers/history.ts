@@ -1,6 +1,7 @@
 /** Cindy provider policies, consolidated from codex-proxy-host. Route selection stays in the host. */
 import { isPlainObject } from "../object";
 import { stripEmptyResponseMessage } from "./seed";
+import { resolveProviderCompatibilityProfile, type CompatibilityRoute } from '../profiles';
 
 export const STRICT_GATEWAY_TOOL_HISTORY_MODELS = new Set([
   'moonshot/kimi-k3',
@@ -26,6 +27,28 @@ export type DeepSeekToolHistoryResult =
  */
 export function normalizeDeepSeekV41ToolHistory(
   body: Record<string, unknown>,
+): DeepSeekToolHistoryResult {
+  return normalizeInterleavedToolHistory(body, 'developer');
+}
+
+/** Kimi's bare model IDs are eligible only on its actual Chat endpoint. */
+export function normalizeKimiToolHistory(
+  body: Record<string, unknown>,
+  route: CompatibilityRoute,
+): Record<string, unknown> | null {
+  if (route.harness !== 'codex' || route.protocol !== 'openai-chat'
+    || (route.model !== 'k3' && route.model !== 'k3[1m]')) return null;
+  const profile = resolveProviderCompatibilityProfile(route);
+  if (profile?.id !== 'kimi' && profile?.id !== 'kimi-code') return null;
+  const result = normalizeInterleavedToolHistory(body, 'assistant');
+  // Incomplete/ambiguous histories remain intact for the upstream to validate.
+  // Never synthesize a result or borrow one across a user/reasoning boundary.
+  return result.kind === 'normalized' ? result.body : null;
+}
+
+function normalizeInterleavedToolHistory(
+  body: Record<string, unknown>,
+  displacedRole: 'developer' | 'assistant',
 ): DeepSeekToolHistoryResult {
   if (!Array.isArray(body.input)) return { kind: 'unchanged' };
   const input: unknown[] = body.input;
@@ -65,13 +88,13 @@ export function normalizeDeepSeekV41ToolHistory(
     const endCalls = index;
     const pending = new Set(calls.keys());
     const outputs: Record<string, unknown>[] = [];
-    const developers: Record<string, unknown>[] = [];
+    const messages: Record<string, unknown>[] = [];
     let cursor = endCalls;
     while (cursor < input.length && pending.size > 0) {
       const item = input[cursor];
       if (!isPlainObject(item)) break;
-      if (item.role === 'developer' && (item.type === 'message' || item.type === undefined)) {
-        developers.push(item);
+      if (item.role === displacedRole && (item.type === 'message' || item.type === undefined)) {
+        messages.push(item);
       } else {
         const call = calls.get(item.call_id);
         if (
@@ -83,7 +106,7 @@ export function normalizeDeepSeekV41ToolHistory(
       }
       cursor += 1;
     }
-    if (developers.length === 0) {
+    if (messages.length === 0) {
       normalized.push(...input.slice(start, endCalls));
       continue;
     }
@@ -102,7 +125,7 @@ export function normalizeDeepSeekV41ToolHistory(
         (Object.hasOwn(output, 'namespace') && output.namespace !== call.namespace)
       ) return { kind: 'invalid' };
     }
-    normalized.push(...input.slice(start, endCalls), ...outputs, ...developers);
+    normalized.push(...input.slice(start, endCalls), ...outputs, ...messages);
     index = cursor;
     changed = true;
   }
@@ -118,9 +141,10 @@ export function responseToolCallId(item: unknown, output: boolean): string | nul
 
 /**
  * Repair repeated Responses call IDs without changing valid histories. Calls and outputs are
- * paired by their order in `input`; unmatched duplicate outputs are removed because a call can
- * have only one result. This is activated after a provider rejects the history, then reused for
- * subsequent requests in that thread.
+ * paired by their order in `input`. When one call has several outputs (e.g. exec notify),
+ * combine their contents in wire order rather than guessing which one is the final result.
+ * Reused call IDs keep their ordered pairing. This is activated after a provider rejects the
+ * history, then reused for subsequent requests in that thread.
  */
 export function normalizeRepeatedResponseToolCallIds(
   body: Record<string, unknown>,
@@ -141,10 +165,27 @@ export function normalizeRepeatedResponseToolCallIds(
   const callIdByIndex = new Map<number, string>();
   const outputIdByIndex = new Map<number, string>();
   const removedOutputs = new Set<number>();
+  const mergedOutputByIndex = new Map<number, string | unknown[]>();
 
   for (const [callId, callIndexes] of callsById) {
     const outputIndexes = outputsById.get(callId) ?? [];
     if (callIndexes.length < 2 && outputIndexes.length < 2) continue;
+
+    if (callIndexes.length === 1 && outputIndexes.length > 1) {
+      const callIndex = callIndexes[0]!;
+      const call = input[callIndex] as Record<string, unknown>;
+      const expectedType = call.type === 'function_call' ? 'function_call_output' : 'custom_tool_call_output';
+      const outputs = outputIndexes.map(index => input[index] as Record<string, unknown>);
+      // Only merge a proven single exchange. Malformed or pre-call results must
+      // not be silently discarded or attached to another invocation.
+      if (outputIndexes.some(index => index <= callIndex) || outputs.some(item =>
+        item.type !== expectedType || (typeof item.output !== 'string' && !Array.isArray(item.output)),
+      )) return null;
+      const contents = outputs.map(item => item.output as string | unknown[]);
+      mergedOutputByIndex.set(outputIndexes[0]!, contents.every(output => typeof output === 'string')
+        ? contents.join('\n\n')
+        : contents.flatMap(output => typeof output === 'string' ? [{ type: 'input_text', text: output }] : output));
+    }
 
     const uniqueIds = callIndexes.map((_, occurrence) => {
       if (occurrence === 0) return callId;
@@ -183,7 +224,10 @@ export function normalizeRepeatedResponseToolCallIds(
     const callId = callIdByIndex.get(index);
     if (callId !== undefined) return [{ ...(item as Record<string, unknown>), call_id: callId }];
     const outputId = outputIdByIndex.get(index);
-    if (outputId !== undefined) return [{ ...(item as Record<string, unknown>), call_id: outputId }];
+    if (outputId !== undefined) return [{
+      ...(item as Record<string, unknown>), call_id: outputId,
+      ...(mergedOutputByIndex.has(index) ? { output: mergedOutputByIndex.get(index) } : {}),
+    }];
     return [item];
   });
   return { ...body, input: nextInput };

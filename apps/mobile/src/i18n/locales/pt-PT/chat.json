@@ -85,7 +85,7 @@
       "gitWorktreePrune": "Limpar referências a worktrees removidas",
       "ghPrList": "Listar pull requests",
       "ghPrView": "Ver pull request",
-      "ghPrChecks": "Verificar resultados dos testes do pull request",
+      "ghPrChecks": "Ver verificações do pull request",
       "ghPrStatus": "Verificar estado do pull request",
       "ghPrDiff": "Ver alterações do pull request",
       "ghPrCreate": "Criar pull request",

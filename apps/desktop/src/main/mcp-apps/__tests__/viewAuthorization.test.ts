@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createAppMessageSender } from '../messageSender.js';
 import { queuedAppMessageGuard } from '../message.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
@@ -13,6 +14,8 @@ import type { McpAppRecord } from '../../../shared/mcpApps.js';
 import { AppConnection, type AppServerConfig } from '../connection.js';
 import { McpAppsHost, appServerRevision } from '../host.js';
 import { handleMcpAppFrameOperation, handleMcpAppOperation } from '../operations.js';
+import { createMcpAppsRuntime } from '../runtimeCore.js';
+import { OwnerScopedAppResourceCache } from '../appResourceCache.js';
 
 const hosts: McpAppsHost[] = [];
 
@@ -52,6 +55,41 @@ it.each([true, false])('enforces plugin CSP subset and revokes opened Views (dec
     await expect(host.poll('renderer:1', 'task', document.viewId, 0)).rejects.toThrow();
     expect(connection.isClosed).toBe(true);
   }
+});
+it('reuses prepared resources for a version and owner, then invalidates both boundaries', async () => {
+  let owner = {};
+  const config: AppServerConfig = { id: 'cached-plugin', url: '', transport: 'in-process', plugin: {
+    instance: 'cached', revision: 'one', packageSha256: 'hash-one', directory: '/fixture', title: 'Fixture',
+    trust: 'unverified', domains: [], assertCurrent() {}, createTransport() { throw new Error('unused'); },
+  } };
+  const tool = { name: 'form', inputSchema: { type: 'object' as const }, _meta: { ui: { resourceUri: 'ui://form' } } };
+  const record = () => ({ version: 1 as const, serverId: config.id, serverRevision: appServerRevision(config), resourceUri: 'ui://form', tool, arguments: {}, result: { content: [] } });
+  const resource = vi.fn(async () => ({ result: { contents: [{ uri: 'ui://form', mimeType: 'text/html;profile=mcp-app', text: '<p>cached</p>' }] } }));
+  const connection = { getClient: async () => ({ getServerCapabilities: () => ({}) }), tools: async () => [tool], resource,
+    listen: () => () => {}, close: async () => {} } as unknown as AppConnection;
+  const host = new McpAppsHost({ owner: () => owner, config: () => config, connection: () => connection,
+    readCard: async () => record(), writeCard: async () => {}, authorizeTool: async () => {}, sendMessage: async () => {} });
+  hosts.push(host);
+  await host.open('renderer:cache', 'task', 'card-one', {});
+  await host.open('renderer:cache', 'task', 'card-two', {});
+  expect(resource).toHaveBeenCalledOnce();
+  config.plugin!.revision = 'two'; config.plugin!.packageSha256 = 'hash-two';
+  await host.open('renderer:cache', 'task', 'card-three', {});
+  expect(resource).toHaveBeenCalledTimes(2);
+  owner = {};
+  await host.open('renderer:cache', 'task', 'card-four', {});
+  expect(resource).toHaveBeenCalledTimes(3);
+});
+
+it('bounds owner-scoped prepared resource cache entries and bytes', () => {
+  const cache = new OwnerScopedAppResourceCache<{ html: string }>(2, 10);
+  const first = {}, second = {};
+  // The key is retained by Map too, so its bytes must count against the bound.
+  cache.set(first, 'long-key', { html: '1' }); cache.set(first, 'other-key', { html: '2' });
+  expect(cache.get(first, 'long-key')).toBeUndefined();
+  expect(cache.get(first, 'other-key')).toBeDefined();
+  cache.set(second, 'a', { html: '1234' });
+  expect(cache.get(second, 'a')).toBeDefined();
 });
 afterEach(async () => {
   vi.useRealTimers();
@@ -125,6 +163,7 @@ async function fixture(caller = 'renderer:1', plugin = false, html = '<p>Form</p
   };
   let notify!: (message: Notification) => void;
   const connection = {
+    config,
     getClient: async () => ({
       ...methods,
       getServerCapabilities: () => ({ tools: {}, resources: {}, prompts: {} }),
@@ -917,4 +956,137 @@ it('cancels a ui/message still preparing when its document is replaced', async (
   metadata.resolve({});
   await vi.waitFor(() => expect(finished).toBe(true));
   expect(enqueue).not.toHaveBeenCalled();
+});
+
+it('keeps SDK negotiation hashes out of the initialized page hostContext', async () => {
+  const f = await fixture('device:viewer');
+  const sdk = f.document.sdk!;
+  const addon = sdk.addons?.['cindy/view-state'];
+  const hash = createHash('sha256').update(JSON.stringify([sdk.source, addon?.source ?? null, addon?.reactSource ?? null])).digest('hex');
+  const doc = await handleMcpAppOperation(f.host, 'device:viewer', 'task', {
+    op: 'open', clientId: 'second', sdkCacheHashes: [hash], context: { theme: 'dark' },
+  }) as { viewId: string; sdkRef?: string };
+  expect(doc.sdkRef).toBe(hash);
+  await f.host.dispatch('device:viewer', 'task', doc.viewId, {
+    jsonrpc: '2.0', id: 777, method: 'ui/initialize', params: {
+      protocolVersion: '2026-01-26', appInfo: { name: 'Fixture', version: '1' }, appCapabilities: {},
+    },
+  });
+  await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 777, result: expect.anything() })));
+  const reply = f.outgoing.find(message => 'id' in message && message.id === 777);
+  if (!reply || !('result' in reply)) throw new Error('Missing initialize result');
+  expect(reply.result.hostContext).toMatchObject({ theme: 'dark' });
+  expect(reply.result.hostContext).not.toHaveProperty('sdkCacheHashes');
+  expect(reply.result.hostContext).not.toHaveProperty('sdkRef');
+  expect(JSON.stringify(reply.result.hostContext)).not.toContain(hash);
+});
+
+// PR-E / §8.3, unit: real Host dispatch/poll and SDK bridge. Previously every
+// hidden request ran immediately. Observe upstream calls, authorization reads,
+// RPC receipts and View disposal rather than a parallel queue implementation.
+it('defers local tools and resource reads, pauses poll reads, and executes each once after resume', async () => {
+  const f = await fixture('renderer:1', true);
+  const assertPlugin = vi.spyOn(f.config.plugin!, 'assertCurrent');
+  f.methods.callTool.mockResolvedValue({ content: [] });
+  f.methods.readResource.mockResolvedValue({ contents: [] });
+  const initial = await f.poll(0);
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, true);
+  f.readCard.mockClear(); f.methods.tools.mockClear(); assertPlugin.mockClear();
+  await f.dispatch({ jsonrpc: '2.0', id: 301, method: 'tools/call', params: { name: 'form', arguments: {} } });
+  await f.dispatch({ jsonrpc: '2.0', id: 302, method: 'resources/read', params: { uri: 'data://private' } });
+  const poll = f.poll(initial.at(-1)!.seq);
+  f.host.context('renderer:1', 'task', f.viewId, { theme: 'dark' });
+  f.notify(); f.notify();
+  await Promise.resolve();
+  expect(f.readCard).not.toHaveBeenCalled();
+  expect(assertPlugin).not.toHaveBeenCalled();
+  expect(f.methods.callTool).not.toHaveBeenCalled();
+  expect(f.methods.readResource).not.toHaveBeenCalled();
+  expect(f.outgoing).toEqual([]);
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, false);
+  await vi.waitFor(() => {
+    expect(f.methods.callTool).toHaveBeenCalledOnce();
+    expect(f.methods.readResource).toHaveBeenCalledOnce();
+    expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 301, result: { content: [] } }));
+    expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 302, result: { contents: [] } }));
+  }, { interval: 1 });
+  await poll;
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, false);
+  expect(f.methods.callTool).toHaveBeenCalledOnce();
+});
+
+it.each(['teardown', 'account', 'disabled', 'revision', 'permission'] as const)(
+  'drops retained requests on %s without affecting another caller', async reason => {
+    const f = await fixture('renderer:1', true);
+    const runtime = createMcpAppsRuntime();
+    runtime.setMcpAppsHost(f.host);
+    const original = { ...f.config, plugin: { ...f.config.plugin! } };
+    runtime.replacePluginAppServers(new Map([[f.config.id, () => original]]));
+    const peer = await f.host.open('device:healthy', 'task', 'other-card', {});
+    await f.host.setSuspended('renderer:1', 'task', f.viewId, true);
+    await f.dispatch({ jsonrpc: '2.0', id: 401, method: 'tools/call', params: { name: 'form' } });
+    if (reason === 'teardown') await f.host.teardown('renderer:1', 'task', f.viewId, true);
+    else if (reason === 'account') { f.revoke('owner'); runtime.resetAppServers(); }
+    else {
+      if (reason === 'revision') f.config.plugin!.revision = 'two';
+      if (reason === 'disabled') f.revoke('server');
+      if (reason === 'permission') f.config.plugin!.assertCurrent = () => { throw new Error('MCP_PLUGIN_UNAVAILABLE'); };
+      runtime.replacePluginAppServers(reason === 'revision' ? new Map([[f.config.id, () => f.config]]) : new Map());
+    }
+    expect(f.methods.callTool).not.toHaveBeenCalled();
+    await expect(f.host.setSuspended('renderer:1', 'task', f.viewId, false)).rejects.toThrow();
+    if (reason === 'teardown') await expect(f.host.assertViewAuthorized('device:healthy', 'task', peer.viewId)).resolves.toBeUndefined();
+  },
+);
+
+it('bounds deferred page messages and denies nonlocal and foreign View suspension', async () => {
+  const f = await fixture();
+  await expect(f.host.setSuspended('device:phone', 'task', f.viewId, true)).rejects.toThrow('MCP_APP_OWNER_ONLY');
+  await expect(f.host.setSuspended('renderer:other', 'task', f.viewId, true)).rejects.toThrow('MCP_APP_VIEW_UNAVAILABLE');
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, true);
+  for (let i = 0; i < 32; i++) await f.dispatch({ jsonrpc: '2.0', id: 500 + i, method: 'tools/list' });
+  await expect(f.dispatch({ jsonrpc: '2.0', id: 600, method: 'tools/list' })).rejects.toThrow('MCP_APP_BACKPRESSURE');
+  await expect(f.poll(0)).rejects.toThrow('MCP_APP_VIEW_UNAVAILABLE');
+});
+
+it('replays one latest host context after a suspended draft changes', async () => {
+  const f = await fixture('renderer:1', true);
+  f.outgoing.length = 0;
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, true);
+  f.host.context('renderer:1', 'task', f.viewId, {
+    theme: 'dark',
+    containerDimensions: { width: 420, height: 280 },
+  });
+  expect(f.outgoing).toEqual([]);
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, false);
+  const updates = f.outgoing.filter(
+    (message) => 'method' in message && message.method === 'ui/notifications/host-context-changed',
+  );
+  expect(updates).toHaveLength(1);
+  expect(updates[0]).toMatchObject({
+    params: { theme: 'dark', containerDimensions: { width: 420, height: 280 } },
+  });
+});
+
+it('does not send a context update after resume when suspended context did not change', async () => {
+  const f = await fixture('renderer:1', true);
+  f.outgoing.length = 0;
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, true);
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, false);
+  expect(
+    f.outgoing.filter(
+      (message) =>
+        'method' in message && message.method === 'ui/notifications/host-context-changed',
+    ),
+  ).toHaveLength(0);
+});
+
+it('rejects a waiting poll when normal close drops queued work', async () => {
+  const f = await fixture('renderer:1', true);
+  const initial = await f.poll(0);
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, true);
+  const waiting = f.poll(initial.at(-1)!.seq);
+  await f.host.teardown('renderer:1', 'task', f.viewId, true);
+  await expect(waiting).rejects.toThrow('MCP_APP_VIEW_UNAVAILABLE');
+  expect(f.methods.callTool).not.toHaveBeenCalled();
 });

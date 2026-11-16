@@ -1,7 +1,10 @@
+import { toast } from '@/lib/toast';
+import { openSettingsNavigation } from '@/lib/settingsNavigation';
 import { FirstRunGuide } from '@/features/first-run-guide/FirstRunGuide';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { PerformanceTrace, openPerformanceTrace } from '@/components/performance-trace/PerformanceTrace';
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import { usePluginUiWindowCandidates, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
 import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../../shared/pluginIdentity';
 import { drainPendingDeepLinks } from '@/lib/pendingDeepLinks';
 import { ChatInviteHost, reportMalformedChatInvite, requestChatInvite } from '@/features/bots/ChatInviteHost';
@@ -39,6 +42,13 @@ import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportLi
 import { SessionShareImportWizard } from '@/components/settings/SessionShareImportWizard';
 import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
 import { TaskRemoteDesktopButton } from '@/features/remote-desktop/TaskRemoteDesktopButton';
+import {
+  TASK_LIVE_SCREEN_LIMIT,
+  TaskLiveScreenButtons,
+  useAutoOpenTaskLiveScreens,
+} from '@/features/remote-desktop/TaskLiveScreenButtons';
+import { useTaskLiveScreens } from '@/features/remote-desktop/useTaskLiveScreens';
+import { installLiveScreenRelay } from '@/features/remote-desktop/liveScreenRelay';
 import { CredentialStoreBanner } from '@/components/layout/CredentialStoreBanner';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
 import { useAgentIslandRemoteSessionsSync } from '@/features/device-link/agentIslandRemoteSessions';
@@ -112,6 +122,7 @@ import {
 import { requestNewWorkerFromShortcut } from '@/features/cc-agent/lib/newWorkerShortcut';
 import { useSessionBrowseHistory } from '@/features/cc-agent/useSessionBrowseHistory';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTaskArchiveProtection } from '@/hooks/useTaskArchiveProtection';
 // chat-data-localization F1 V0.4 / M-FE6
 import { useCorruptionRestoredToast } from '@/hooks/useCorruptionRestoredToast';
 // #37 schema-drift release-side toast
@@ -406,6 +417,22 @@ export function MainLayout() {
     !isSharedTaskPeer(rightSidebarWorkdirInfo.deviceLinkDeviceId)
       ? rightSidebarWorkdirInfo.deviceLinkDeviceId
       : null;
+  // 那台电脑的插件为当前任务开着的设备（例如模拟器）：画面和操作都在该插件自己的任务页里，
+  // 所以本机装着同一个插件时，设备出现就在右侧栏自动打开它的任务页（与任务在本机时同一个
+  // 页面）；没装时提示去安装。远程桌面入口旁另给一个找回入口。旧版电脑或读不到时都没有。
+  // 主窗口替插件页面持有到那台电脑的画面连接并转交画面；自己不画任何东西。
+  useEffect(() => installLiveScreenRelay(), []);
+  const taskLiveScreens = useTaskLiveScreens(remoteDesktopDeviceId, rightSidebarSessionId);
+  const liveScreenEntries = useAutoOpenTaskLiveScreens(
+    remoteDesktopDeviceId ? rightSidebarSessionId : null,
+    taskLiveScreens,
+  );
+  const taskLiveScreenEntries =
+    remoteDesktopDeviceId && rightSidebarSessionId ? liveScreenEntries : [];
+  // Windows chip 栈按入口个数让位：远程桌面 1 个 + 设备画面若干，每个 28px + 4px 间距。
+  const remoteTaskEntriesWidth = remoteDesktopDeviceId
+    ? (1 + Math.min(taskLiveScreenEntries.length, TASK_LIVE_SCREEN_LIMIT)) * 32
+    : 0;
   // Windows 内容区右上的显示入口始终跟随聊天区，展开时也不移入侧栏。
   const showWindowsRightSidebarTrigger =
     rightSidebarAvailable && rsbWindow.loaded;
@@ -472,7 +499,7 @@ export function MainLayout() {
   // (下面的 `!isSettingsRoute && <ChromeActions>`)，快捷键不能跟着一起消失——
   // hook 的语义包含「从设置等栈外页后退回最近任务」。浏览栈按数据所有者
   // (账号 + 恢复代次)隔离：切号时不能把上一个账号的任务带过来。
-  const { dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
+  const { dataOwnerId, dataOwnerRecoveryEpoch, dataOwnerGeneration } = useAuth();
   const browseHistory = useSessionBrowseHistory({
     ownerKey: `${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`,
   });
@@ -509,6 +536,7 @@ export function MainLayout() {
     [location.pathname, splitGroup.root],
   );
 
+  useTaskArchiveProtection(dataOwnerId, dataOwnerGeneration, visibleSessions);
   const syncAgentIslandVisibleSession = useCallback(() => {
     if (!isAgentIslandSupported()) return;
     if (!document.hasFocus()) return;
@@ -745,6 +773,7 @@ export function MainLayout() {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
+        | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => {
       if (payload.type === 'chat-message') {
@@ -815,6 +844,10 @@ export function MainLayout() {
       }
       if (payload.type === 'provider-import') {
         navigate(`/settings?tab=providers&import=${encodeURIComponent(payload.importId)}`);
+        return;
+      }
+      if (payload.type === 'settings-navigation') {
+        void openSettingsNavigation(payload.target, navigate).catch(() => toast.error(t('settings.navigation.unavailable')));
         return;
       }
       if (payload.type === 'settings') {
@@ -1696,8 +1729,11 @@ export function MainLayout() {
 
   // Session/tool-pane declarations update Shell state during navigation. Keep
   // unrelated updates from invalidating the entire routed conversation again.
+  const { settings: pluginSettings, sidebarSections: pluginSidebarSections,
+    titlebarEntries: pluginTitlebarEntries, onGhostsChanged: handleInstalledGhostsChange } = usePluginUiWindowCandidates();
   const outletContext = useMemo(() => ({
     sidebarWidth,
+    pluginSettings,
     rightSidebarCollapsed: rsbDetached || isRightSidebarCollapsed,
     onToggleRightSidebar: handleOpenRightSidebar,
     rightSidebarSide,
@@ -1705,7 +1741,7 @@ export function MainLayout() {
     setRightSidebarSessionId: declareRightSidebarSessionId,
     setRightSidebarWorkdir,
   }), [
-    sidebarWidth, rsbDetached, isRightSidebarCollapsed, handleOpenRightSidebar,
+    sidebarWidth, pluginSettings, rsbDetached, isRightSidebarCollapsed, handleOpenRightSidebar,
     rightSidebarSide, declareRightSidebarSessionId, setRightSidebarWorkdir,
   ]);
 
@@ -1751,6 +1787,8 @@ export function MainLayout() {
                 spacer 卸载、aside 摘掉 fixed 落回流内 —— 两者矩形一致,交换无跳变。 */}
             {sidebarPeek.peekState === 'pinning' && <SidebarPinSpacer width={sidebarWidth} />}
             <Sidebar
+              pluginSections={pluginSidebarSections}
+              pluginSessionId={rightSidebarSessionId}
               isCollapsed={isSidebarCollapsed}
               // peek 抽屉恒以展开态呈现(预览完整列表),rail 视觉在 peek 期强制关闭。
               isRail={sidebarPeek.isPeekVisible ? false : isRailMode}
@@ -1806,11 +1844,11 @@ export function MainLayout() {
                 style={{
                   ['--content-top-left-actions-inset' as string]:
                     !isMac && rightSidebarSide === 'left'
-                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + (remoteDesktopDeviceId ? 32 : 0)}px`
+                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + remoteTaskEntriesWidth}px`
                       : '0px',
                   ['--content-top-right-actions-inset' as string]:
                     !isMac && rightSidebarSide === 'right'
-                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + (remoteDesktopDeviceId ? 32 : 0)}px`
+                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + remoteTaskEntriesWidth}px`
                       : '0px',
                 }}
               >
@@ -1834,12 +1872,32 @@ export function MainLayout() {
                   // mac:远程桌面入口落在顶栏右端,紧挨窗口右上角的右栏开关(右栏展开时
                   // 仍在聊天区顶栏右端)。Windows 走下方内容区 chip 栈。
                   trailing={
-                    isMac && remoteDesktopDeviceId ? (
-                      <TaskRemoteDesktopButton
-                        key={remoteDesktopDeviceId}
-                        deviceId={remoteDesktopDeviceId}
-                        className={rightSidebarAvailable ? 'mr-1' : 'mr-2'}
-                      />
+                    pluginTitlebarEntries.length > 0 || (isMac && remoteDesktopDeviceId) ? (
+                      <>
+                        {pluginTitlebarEntries.length > 0 && (
+                          <PluginUiSlotControls
+                            entries={pluginTitlebarEntries}
+                            sessionId={rightSidebarSessionId}
+                            appearance="titlebar"
+                          />
+                        )}
+                        {isMac && remoteDesktopDeviceId && (
+                          <>
+                            {rightSidebarSessionId && (
+                              <TaskLiveScreenButtons
+                                sessionId={rightSidebarSessionId}
+                                entries={taskLiveScreenEntries}
+                                className="mr-1"
+                              />
+                            )}
+                            <TaskRemoteDesktopButton
+                              key={remoteDesktopDeviceId}
+                              deviceId={remoteDesktopDeviceId}
+                              className={rightSidebarAvailable ? 'mr-1' : 'mr-2'}
+                            />
+                          </>
+                        )}
+                      </>
                     ) : undefined
                   }
                 >
@@ -1871,10 +1929,18 @@ export function MainLayout() {
                       }
                     >
                       {remoteDesktopDeviceId && (
-                        <TaskRemoteDesktopButton
-                          key={remoteDesktopDeviceId}
-                          deviceId={remoteDesktopDeviceId}
-                        />
+                        <>
+                          {rightSidebarSessionId && (
+                            <TaskLiveScreenButtons
+                              sessionId={rightSidebarSessionId}
+                              entries={taskLiveScreenEntries}
+                            />
+                          )}
+                          <TaskRemoteDesktopButton
+                            key={remoteDesktopDeviceId}
+                            deviceId={remoteDesktopDeviceId}
+                          />
+                        </>
                       )}
                       {showWindowsRightSidebarTrigger && (
                         <RightSidebarToggle
@@ -1950,6 +2016,7 @@ export function MainLayout() {
               不再逐像素回灌 React；设置页接管时非 chat 面板统一歇业。 */}
           <TabGroupHostProvider value={tabGroupHost}>
             <LayoutRoot
+              onInstalledGhostsChange={handleInstalledGhostsChange}
               suppressNonChatPanels={isSettingsRoute}
               sidebarExpansionReady={rightSidebarAvailable && rsbWindow.loaded && !rsbDetached}
               rightTabsCollapsed={

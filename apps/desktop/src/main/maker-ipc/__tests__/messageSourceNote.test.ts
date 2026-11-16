@@ -61,6 +61,18 @@ describe('buildWireMessageSourceNote', () => {
       .toBe(buildWireMessageSourceNote({ origin }));
   });
 
+  // bot-group-chat.md「群里的 Cindy」: its note already says the speaker is this owner; the review
+  // receipt that carries the owner's words must not add a second, differently worded owner clause.
+  it('states a request to the group Cindy once, without the relay clause', () => {
+    const origin = { kind: 'session', senderSessionId: '', displayText: 'Fix it',
+      groupRequest: { groupId: 'g-1', groupName: 'Launch', speakerId: 'm-1', speakerName: 'Chris' } };
+    const note = buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request',
+      request: { sessionId: 's-1', clientId: 'group-cindy:e:1', plainBody: true, delegatedText: 'Fix it' } } });
+    expect(note).toBe(buildWireMessageSourceNote({ origin }));
+    expect(note).toContain('发言人就是本机主人');
+    expect(note).not.toContain('代表用户对本任务的请求');
+  });
+
   it('describes task, partner, plugin and shared-member senders with ids', () => {
     expect(buildWireMessageSourceNote({ origin: taskOrigin })).toBe(
       '[消息来源] 本条由任务「周报」(session_id: s-1) 发送，不是用户本人输入。',

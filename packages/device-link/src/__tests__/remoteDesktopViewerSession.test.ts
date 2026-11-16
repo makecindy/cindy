@@ -358,7 +358,7 @@ it("a live screen names a listed screen, keeps only what applies to it and refus
     autoControl: true,
     viewerDisplay: true,
   };
-  const screen = { plugin: "sim", id: "UDID-1" };
+  const screen = { plugin: "sim", id: "UDID-1", pluginIdentity: "_ns__acme__sim" };
   f.request.mockResolvedValueOnce(full).mockResolvedValueOnce({
     lease: "lease",
     display: { id: "live-screen:UDID-1" },

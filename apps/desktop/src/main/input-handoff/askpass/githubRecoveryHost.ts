@@ -19,6 +19,7 @@ export const resolveGithubAuthRecovery = createGithubAuthRecovery({
   },
   sessionContext: getSessionFsSnapshot,
   listGhosts: () => getGhostManager().list(),
+  findInstalledInstance: (id) => getGhostManager().findInstalledInstance(id),
   isAvailableForActiveSession: isGhostAvailableForActiveSession,
   isDisabledForWorkdir: isGhostDisabledForWorkdir,
   isTrusted: canUseGithubHostCredentials,

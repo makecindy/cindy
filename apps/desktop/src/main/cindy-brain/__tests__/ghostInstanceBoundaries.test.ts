@@ -18,7 +18,7 @@ const load = createGhostProductionCallbacks<{
   initialize: 'let cardActionDispatcherSingleton = null;' });
 
 const loadUsageBinding = createGhostProductionCallbacks<{
-  bindPluginUsage: (ghost: InstalledGhost) => Promise<void>;
+  bindPluginUsage: (ghost: InstalledGhost, previousRevision?: string, force?: boolean) => Promise<void>;
 }>({ functions: ['bindPluginUsage'] });
 
 function harness() {
@@ -137,6 +137,66 @@ describe('usage binding instance revalidation', () => {
   // Unit regression: a market refresh used to rescan every plugin once per
   // binding. Read the committed target inside the lock and retain fallback for
   // missing registry entries, without binding a same-name replacement instance.
+  it('skips rebinding when the installed revision already has a usage handle', async () => {
+    const { organization } = harness();
+    const bind = vi.fn(async () => {});
+    const captureBound = vi.fn(() => ({ subjectId: 'subject-1' }));
+    const list = vi.fn();
+    const findInstalledInstance = vi.fn();
+    const withGhostInstallLock = vi.fn(async () => {});
+    const api = loadUsageBinding({
+      activeOwnerScopeKey: () => 'owner-a',
+      currentPluginUsageService: () => ({ bind, captureBound }),
+      isAppSessionBoundaryPending: () => false,
+      getGhostManager: () => ({ list, findInstalledInstance }),
+      findInstalledGhostByInstanceId,
+      readPluginUsageIdentity: (ghost: InstalledGhost) => ghost.approval,
+      withGhostInstallLock,
+      log: { warn: vi.fn() },
+    });
+    await api.bindPluginUsage(organization);
+    const approvedRevision = organization.approval.state === 'approved' ? organization.approval.revision : '';
+    expect(captureBound).toHaveBeenCalledWith(installedGhostStoragePart(organization), approvedRevision);
+    expect(withGhostInstallLock).not.toHaveBeenCalled();
+    expect(bind).not.toHaveBeenCalled();
+  });
+
+  it('force-rebinds when source backfill changes the reporting identity', async () => {
+    const { organization } = harness();
+    const bind = vi.fn(async () => {});
+    const captureBound = vi.fn(() => ({ subjectId: 'subject-1' }));
+    const api = loadUsageBinding({
+      activeOwnerScopeKey: () => 'owner-a',
+      currentPluginUsageService: () => ({ bind, captureBound }),
+      isAppSessionBoundaryPending: () => false,
+      getGhostManager: () => ({ list: vi.fn(() => [organization]), findInstalledInstance: vi.fn(() => organization) }),
+      findInstalledGhostByInstanceId,
+      readPluginUsageIdentity: (ghost: InstalledGhost) => ghost.approval,
+      withGhostInstallLock: async (_id: string, callback: () => Promise<void>) => { await callback(); },
+      log: { warn: vi.fn() },
+    });
+    await api.bindPluginUsage(organization, undefined, true);
+    expect(bind).toHaveBeenCalledOnce();
+  });
+
+  it('rebinds with previousRevision even when a usage handle already exists', async () => {
+    const { organization } = harness();
+    const bind = vi.fn(async () => {});
+    const captureBound = vi.fn(() => ({ subjectId: 'subject-1' }));
+    const api = loadUsageBinding({
+      activeOwnerScopeKey: () => 'owner-a',
+      currentPluginUsageService: () => ({ bind, captureBound }),
+      isAppSessionBoundaryPending: () => false,
+      getGhostManager: () => ({ list: vi.fn(() => [organization]), findInstalledInstance: vi.fn(() => organization) }),
+      findInstalledGhostByInstanceId,
+      readPluginUsageIdentity: (ghost: InstalledGhost) => ghost.approval,
+      withGhostInstallLock: async (_id: string, callback: () => Promise<void>) => { await callback(); },
+      log: { warn: vi.fn() },
+    });
+    await api.bindPluginUsage(organization, 'previous-revision');
+    expect(bind).toHaveBeenCalledOnce();
+  });
+
   it.each(['indexed', 'fallback', 'removed', 'owner-changed'] as const)(
     'revalidates the committed installation with %s state', async (state) => {
       const { organization, root } = harness();

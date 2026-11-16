@@ -66,6 +66,32 @@ it('defers the hidden market read until visible and reuses its page on later tab
   expect(load).toHaveBeenCalledTimes(1);
 });
 
+// Unit regression: ordinary browsing showed installed plugins because only search
+// requested exclusion. Existing paging tests returned only uninstalled fixtures.
+// Two installed states and one source conflict exercise visible results and counts.
+it.each(['', 'Tool'])('excludes installed plugins and updates from the market for query "%s", retaining conflicts', async query => {
+  vi.useFakeTimers();
+  const installed = [
+    { ...item(0), installState: 'installed' as const },
+    { ...item(1), installState: 'update-available' as const },
+  ];
+  const available = [item(2), { ...item(3), installState: 'conflict' as const }];
+  const load = vi.fn(async (input: PluginMarketQuery) => {
+    const items = input.excludeInstalled ? available : [...installed, ...available];
+    return { ...page(0, 4), items, nextCursor: null,
+      counts: { all: items.length, public: items.length, organization: 0, personal: 0, custom: 0 } };
+  });
+  const { cache, view } = fixture(load);
+  render(view(query));
+  await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+  expect(screen.queryByText('Tool 0')).toBeNull();
+  expect(screen.queryByText('Tool 1')).toBeNull();
+  expect(screen.getByText('Tool 2')).toBeTruthy();
+  expect(screen.getByText('Tool 3')).toBeTruthy();
+  expect(cache.current.counts).toMatchObject({ all: 2, public: 2 });
+  expect(load).toHaveBeenCalledTimes(1);
+});
+
 it('reuses search-wide counts across source filters and recounts for a new search', async () => {
   const load = vi.fn(async (query: PluginMarketQuery) => ({ ...page(0), counts: query.counts === false ? null : page(0).counts }));
   const { cache, view } = fixture(load);

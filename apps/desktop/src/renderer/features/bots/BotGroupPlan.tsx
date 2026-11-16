@@ -335,7 +335,7 @@ export function BotGroupPlanCard({
       className="bot-group-talk-card w-full max-w-[720px] min-w-0 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 py-2.5">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <Circle size={16} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" />
-        <span className="flex-1 text-15 font-semibold leading-6 text-[var(--text-primary)]">{t('bots.groupChat.plan.talkTitle')}</span>
+        <span className="flex-1 text-15 font-medium leading-6 text-[var(--text-primary)]">{t('bots.groupChat.plan.talkTitle')}</span>
         <span className="text-12 leading-6 tabular-nums text-[var(--text-tertiary)]">{progress}</span>
       </div>
       <ol className="mt-2 flex flex-col">

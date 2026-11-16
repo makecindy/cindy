@@ -161,7 +161,7 @@ export function PlanReviewBubble({
     >
       {/* Header */}
       <div className="flex items-center gap-[8px]">
-        <span className="text-13 font-semibold text-[var(--ask-header-text)]">
+        <span className="text-13 font-medium text-[var(--ask-header-text)]">
           {t('chat.planReviewBubble.title')}
         </span>
         {/* badge / 状态短语是 UI chrome,禁选;标题与正文保持可选 */}

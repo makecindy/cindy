@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { isCindyApp } from '@cindy/maker-shared/device-list';
+import { clearControllerPlatforms, getControllerApp, setControllerPlatform } from '../device-link/controllerPlatform';
 
 import {
   applyControllerPresenceDirectorySnapshot,
@@ -13,10 +15,13 @@ import {
   resetControllerPresenceFreshness,
 } from '../device-link/controllerPresenceDirectory';
 
+afterEach(clearControllerPlatforms);
+
 function createHarness() {
   const freshness = createControllerPresenceFreshnessTracker();
   const onlineByDevice = new Map<string, boolean>();
   const platformByDevice = new Map<string, string>();
+  const appByDevice = new Map<string, string | undefined>();
   const nameByDevice = new Map<string, string>();
   const exchanged = vi.fn();
   const confirmed = vi.fn();
@@ -27,6 +32,7 @@ function createHarness() {
     freshness,
     onlineByDevice,
     platformByDevice,
+    appByDevice,
     nameByDevice,
     exchanged,
     confirmed,
@@ -49,7 +55,8 @@ function createHarness() {
         getOnline: (deviceId) => onlineByDevice.get(deviceId),
         setOnline: (deviceId, online) => onlineByDevice.set(deviceId, online),
         forgetOnline: (deviceId) => onlineByDevice.delete(deviceId),
-        setPlatform: (deviceId, platform) => {
+        setPlatform: (deviceId, platform, app) => {
+          appByDevice.set(deviceId, app);
           if (platform) platformByDevice.set(deviceId, platform);
           else platformByDevice.delete(deviceId);
         },
@@ -68,6 +75,15 @@ function createHarness() {
 }
 
 describe('controller presence directory snapshot', () => {
+  // App routing, unit: cold directory seeding passes app to the same metadata
+  // cache used by live presence. Previous tests only retained platform.
+  it('passes App identity through online and offline directory seeding', () => {
+    const h = createHarness();
+    h.apply([{ deviceId: 'friend', online: true, platform: 'darwin', app: 'cindy-friend' }]);
+    expect(h.appByDevice.get('friend')).toBe('cindy-friend');
+    h.apply([{ deviceId: 'friend', online: false, platform: 'darwin', app: 'cindy-friend' }]);
+    expect(h.appByDevice.get('friend')).toBe('cindy-friend');
+  });
   // Unit: group RPC availability outlives transient relay loss only on a
   // bounded, already-authenticated path. Only an online false bit is a fresh
   // control-off; offline rows mask the flag and must keep verified availability.
@@ -439,6 +455,7 @@ describe('controller presence directory snapshot', () => {
 // This keeps the index.ts early return and callback wiring in the test instead
 // of reimplementing the adapter as a pure helper copy.
 function createPresenceListAdapter(status: 'connecting' | 'online' | 'stopped', tornDown = false) {
+  clearControllerPlatforms();
   const source = ts.createSourceFile('index.ts', readFileSync(resolve(process.cwd(), 'src/main/device-link/index.ts'), 'utf8'), ts.ScriptTarget.Latest, true);
   const declaration = source.statements.find((node): node is ts.FunctionDeclaration =>
     ts.isFunctionDeclaration(node) && node.name?.text === 'applyControllerPresenceListSnapshot');
@@ -451,24 +468,41 @@ function createPresenceListAdapter(status: 'connecting' | 'online' | 'stopped', 
   const available = new Map<string, boolean>();
   const disabled = new Set<string>();
   const retire = vi.fn();
+  const desktopOnline = vi.fn();
+  const mobileOnline = vi.fn();
   const client = { getStatus: () => status, getSelfDeviceId: () => 'self-device',
     noteRemoteControlEnabled: vi.fn(), noteRemoteControlDisabled: vi.fn() };
   const apply = new Function(
     'client', 'linkTornDown', 'applyControllerPresenceDirectorySnapshot', 'controllerPresenceFreshness',
     'presenceOnlineByDevice', 'presenceAvailableByDevice', 'presenceControlDisabledByDevice',
-    'hasOfflineDirectPath', 'setControllerPlatform', 'presenceNameByDevice', 'isDeviceRevoked',
+    'hasOfflineDirectPath', 'setControllerPlatform', 'getControllerApp', 'isCindyApp', 'presenceNameByDevice', 'isDeviceRevoked',
     'isMobilePlatform', 'shouldExchangeDictionaryWith', 'handleMobilePeerOnline',
     'handleDesktopPeerOnline', 'replayActiveSubscriptions', 'retireControlOffRetention',
     compiled + '\nreturn applyPresenceList;',
   )(client, tornDown, applyControllerPresenceDirectorySnapshot, freshness, online, available, disabled,
-    () => false, vi.fn(), new Map(), () => false, (platform: string | null) => platform === 'ios' || platform === 'android',
-    () => false, vi.fn(), vi.fn(), vi.fn(), retire) as (devices: unknown[], requestEpoch: number) => Map<string, { online: boolean; enabled?: boolean }>;
-  return { apply, client, online, available, disabled, retire, freshness };
+    () => false, setControllerPlatform, getControllerApp, isCindyApp, new Map(), () => false, (platform: string | null) => platform === 'ios' || platform === 'android',
+    () => true, mobileOnline, desktopOnline, vi.fn(), retire) as (devices: unknown[], requestEpoch: number) => Map<string, { online: boolean; enabled?: boolean }>;
+  return { apply, client, online, available, disabled, retire, freshness, desktopOnline, mobileOnline };
 }
 
 describe('Main presence-list control evidence', () => {
   const row = (deviceId: string, online: boolean, remoteControlEnabled: boolean) => ({
     deviceId, name: deviceId, online, remoteControlEnabled, platform: 'darwin', isSelf: false,
+  });
+
+  // Mixed-version routing, unit: execute the real Main directory adapter.
+  // Existing cases only tested control evidence while connecting; a known
+  // Friend going offline then returning without app must not trigger Cindy sync.
+  it('keeps Cindy-only online work off for a known App when later directory rows omit app', () => {
+    const h = createPresenceListAdapter('online');
+    const presenceRow = (deviceId: string, online: boolean, app?: string) => ({ deviceId, online, platform: 'darwin', app });
+    h.apply([presenceRow('friend', true, 'cindy-friend')], 0);
+    h.apply([presenceRow('friend', false)], 0);
+    h.apply([presenceRow('friend', true)], 0);
+    expect(h.desktopOnline).not.toHaveBeenCalled();
+    expect(h.mobileOnline).not.toHaveBeenCalled();
+    h.apply([presenceRow('legacy', true)], 0);
+    expect(h.desktopOnline).toHaveBeenCalledExactlyOnceWith('legacy');
   });
 
   it('applies fresh enabled evidence while signaling is connecting', () => {

@@ -1,6 +1,6 @@
 /**
  * 模型组「最近的选择」的本机记录：<userData>/owners/<账号>/model-group-decisions.json，`{ decisions: [...] }`，
- * 最新在前、最多 MODEL_GROUP_DECISIONS_MAX 条。只记组、选中的模型与来源、原因和当时的额度，
+ * 最新在前、最多 MODEL_GROUP_DECISIONS_MAX 条。只记组、选中的模型与来源(含运行位置)、原因和当时的额度，
  * 不记消息、任务标题、账号或凭证。账号作用域未提交时不读不写。文件坏了按没有记录处理，下次写入覆盖。
  * 旧版经模式(2026-11-11 并入路线)留下的条目读取时丢弃。
  */
@@ -68,7 +68,7 @@ function decision(value: unknown): ModelGroupDecision | null {
     const kind = agentKind(raw.agentKind);
     const why = WHY.find((item) => item === raw.why);
     if (kind) entry.agentKind = kind;
-    for (const key of ['providerId', 'model', 'modelName', 'sourceName'] as const) {
+    for (const key of ['providerId', 'model', 'agentDeviceId', 'modelName', 'sourceName'] as const) {
       const field = text(raw[key]);
       if (field) entry[key] = field;
     }
@@ -125,6 +125,7 @@ export function recordModelGroupDecision(
         agentKind: result.route.agentKind,
         providerId: result.route.providerId,
         model: result.route.model,
+        agentDeviceId: result.route.agentDeviceId,
         modelName: result.modelName,
         sourceName: result.sourceName,
         effort: result.route.effort,

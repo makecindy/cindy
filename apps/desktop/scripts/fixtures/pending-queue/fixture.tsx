@@ -25,6 +25,15 @@ function entry(clientId: string, text: string): QueuedMessage {
 function Fixture() {
   const [queue, setQueue] = useState([
     entry('question-reply:answered:fixture', '这条回答只在原问题卡片展示。'),
+    {
+      ...entry('worker', '复核已完成，请先查看这条结果。'),
+      origin: {
+        kind: 'session' as const,
+        senderSessionId: 'reviewer',
+        senderSessionTitle: 'Worker · reviewer',
+        displayText: '复核已完成，请先查看这条结果。',
+      },
+    },
     entry('first', '先检查手机版消息排队的处理逻辑。'),
     entry('second', '再把桌面版的交互对齐：消息显示在对话里，点击「排队中」调整顺序、编辑或取消。'),
   ]);

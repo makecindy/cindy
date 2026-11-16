@@ -295,7 +295,7 @@ export function buildConversationShareSvgLayout({
         innerY += height + 5;
         continue;
       }
-      const lines = wrapSvgText(block.text, textWidth, block.fontSize);
+      const lines = wrapSvgText(block.text, textWidth, block.fontSize, true);
       textBlocks.push({
         color: block.color,
         fontSize: block.fontSize,
@@ -394,7 +394,10 @@ function conversationShareBodyParts(
   }
   return safeParts.flatMap<ShareBodyPart>((part) => {
     if ("image" in part) return [part];
-    const text = part.text.replace(/\n{3,}/g, "\n\n").trim();
+    // Images split text parts; trim boundary whitespace without removing the
+    // U+2003 list indentation at the start of the next sanitized text part.
+    const text = part.text.replace(/\n{3,}/g, "\n\n")
+      .replace(/^[^\S\u2003]+/u, "").trimEnd();
     return text ? [{ text }] : [];
   });
 }
@@ -431,7 +434,7 @@ function markdownBlockParts(
           : taskMarker
         : block.marker;
       return [
-        { text: `${marker} ` },
+        { text: `${"\u2003".repeat(block.depth ?? 0)}${marker} ` },
         ...markdownInlineParts(block.inlines, images),
       ];
     }
@@ -491,6 +494,7 @@ export function wrapSvgText(
   text: string,
   maxWidth: number,
   fontSize: number,
+  preserveListIndent = false,
 ): string[] {
   const maxUnits = Math.max(1, maxWidth / fontSize);
   const lines: string[] = [];
@@ -501,12 +505,16 @@ export function wrapSvgText(
     }
     let line = "";
     let units = 0;
+    // Only sanitized body fallback opts in; metadata keeps its existing layout.
+    const indent = preserveListIndent ? (paragraph.match(/^\u2003+/u)?.[0] ?? "") : "";
     for (const character of Array.from(paragraph)) {
       const characterUnits = conservativeArialGlyphWidthEm(character);
       if (line && units + characterUnits > maxUnits) {
         lines.push(line.trimEnd());
-        line = "";
-        units = 0;
+        // U+2003 is one em in the shared conservative font metrics. Reserve
+        // room for the next glyph even when the source nesting is very deep.
+        line = indent.slice(0, Math.max(0, Math.floor(maxUnits - characterUnits)));
+        units = line.length;
       }
       line += character;
       units += characterUnits;

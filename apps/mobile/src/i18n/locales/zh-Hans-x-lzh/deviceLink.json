@@ -26,7 +26,7 @@
   "connectStep2": "以与手机同一名籍登门",
   "connectStep3": "于「设置 → 远程连接」中打开「允许同帐号设备控制本机」",
   "brandEyebrow": "CINDY 手机版",
-  "cloudTeaserTitle": "云端 {{appName}}，方在筹措",
+  "cloudTeaserTitle": "云端 {{appName}}，方在筹备",
   "cloudTeaserCopy": "上线之后，无须电脑，手机版即可径用。",
   "sectionFirstRun": "始用",
   "sectionOffline": "曾连之机",
@@ -63,8 +63,8 @@
     "noKey": "{{agent}} 不可用：电脑端尚未设可用之 API Key。请于电脑端 {{appName}} 之「设置 → 模型供应商」设毕后再试。",
     "noOauth": "{{agent}} 不可用：电脑端尚未完成名籍授权。请于电脑端 {{appName}} 之「设置 → 模型供应商」重连名籍后再试。",
     "noCredentials": "{{agent}} 不可用：电脑端尚未登门。请于电脑端 {{appName}} 之「设置 → 模型供应商」登门后再试。",
-    "noEncryption": "{{agent}} 不可用：电脑端系统安全保存空间不可用，读不到已存之密钥。请察系统钥匙圈（macOS）或系统帐号加密（Windows），然后重启电脑端 {{appName}}。",
-    "proxyNotReady": "{{agent}} 暂不可用：电脑端组件未就。请稍候再试；若屡见之，请重启电脑端 {{appName}}。",
+    "noEncryption": "{{agent}} 不可用：电脑端系统安全存储空间不可用，读不到已存之密钥。请察系统钥匙串（macOS）或系统账户加密（Windows），然后重启电脑端 {{appName}}。",
+    "proxyNotReady": "{{agent}} 暂不可用：电脑端组件未就绪。请稍候再试；若屡见之，请重启电脑端 {{appName}}。",
     "default": "{{agent}} 不可用：电脑端登门凭证不可用。请于电脑端 {{appName}} 之「设置 → 模型供应商」重新登门后再试。（{{reason}}）"
   },
   "remoteError": {

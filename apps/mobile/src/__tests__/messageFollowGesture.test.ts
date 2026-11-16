@@ -46,6 +46,13 @@ const compiled = ts.transpileModule([
   `return { ${callbackNames.join(', ')} };`,
 ].join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
+const visibilityEffect = renderer!.body!.statements.find(node => ts.isExpressionStatement(node)
+  && ts.isCallExpression(node.expression) && node.expression.arguments[0]?.getText(source).includes('if (!historyPositioning)')) as ts.ExpressionStatement;
+const visibilityCallback = (visibilityEffect.expression as ts.CallExpression).arguments[0].getText(source);
+const visibilityCompiled = ts.transpileModule(`return (${visibilityCallback})();`, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022 },
+}).outputText;
+
 function harness(richContent: RichContentRuntime | null = new RichContentRuntime(), inspection?: ReturnType<typeof useProcessDisclosureViewport>) {
   const ref = <T>(current: T) => ({ current });
   const state = {
@@ -66,6 +73,7 @@ function harness(richContent: RichContentRuntime | null = new RichContentRuntime
     readingPositionActiveRef: ref(() => true),
     initialRevealAnimationRef: ref<{ stop: () => void } | null>({ stop: vi.fn() }),
     historyPrependTransactionRef: ref(null), nativeScrollEventSequenceRef: ref(0),
+    historyAnchorVerifyFrameRef: ref<number | null>(null), queuedLoadEarlierRef: ref(false),
     // Companion receipt behavior is covered by the mounted MessageRenderer tests.
     acknowledgeCompanionReadRef: ref(vi.fn()),
     shareSelectionActiveRef: ref(false),
@@ -119,6 +127,11 @@ function harness(richContent: RichContentRuntime | null = new RichContentRuntime
   } });
   return {
     ...callbacks, state, tailScroll, scrollEvent, processViewport,
+    setPositioning: (enabled: boolean) => {
+      state.historyPositioningRef.current = enabled;
+      const bindings = { ...environment, ...callbacks, historyPositioning: enabled };
+      new Function(...Object.keys(bindings), visibilityCompiled)(...Object.values(bindings));
+    },
     readingPosition: environment.readingPosition,
     captureCurrentHistoryAnchor: environment.captureCurrentHistoryAnchor,
     initialRevealProgress: environment.initialRevealProgress,
@@ -137,6 +150,72 @@ beforeEach(() => {
   vi.stubGlobal('cancelAnimationFrame', (timer: ReturnType<typeof setTimeout>) => clearTimeout(timer));
 });
 afterEach(() => { setMobileDebugSink(undefined); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+describe('late native positioning after task reentry', () => {
+  it.each(['touch', 'drag', 'momentum'] as const)('releases an interrupted %s when the task hides', (kind) => {
+    const h = harness();
+    if (kind === 'touch') h.handleHistoryTouchStart(touch());
+    if (kind === 'drag') h.handleScrollBeginDrag(h.scrollEvent(1200));
+    if (kind === 'momentum') h.handleMomentumScrollBegin();
+    h.setPositioning(false);
+    // Late native begin callbacks from the detached surface cannot reacquire it.
+    h.handleMomentumScrollBegin();
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleHistoryTouchStart(touch());
+    h.handleContentSize(382, 2600);
+    settle();
+    expect(h.tailScroll).not.toHaveBeenCalled();
+    h.setPositioning(true);
+    settle();
+    expect(h.state.scrollMetricsRef.current.offsetY).toBe(1800);
+    expect(h.state.nearBottomRef.current).toBe(true);
+  });
+
+  it('keeps deliberate history reading across a hidden interrupted gesture', () => {
+    const h = harness();
+    h.handleScrollBeginDrag(h.scrollEvent(1200));
+    h.handleScroll(h.scrollEvent(500));
+    h.setPositioning(false);
+    h.handleContentSize(382, 2600);
+    h.setPositioning(true);
+    settle();
+    expect(h.state.nearBottomRef.current).toBe(false);
+    expect(h.tailScroll).not.toHaveBeenCalled();
+  });
+
+  it('recovers a native jump after the resize follower has already settled', () => {
+    const h = harness();
+    h.state.scrollMetricsRef.current = { contentHeight: 110350, offsetY: 109681, viewportHeight: 669 };
+    h.runStickToLatestVerify();
+    settle();
+    h.handleContentSize(382, 111130);
+    settle();
+    h.tailScroll.mockClear();
+    // The native size anchor lands after onContentSizeChange and its verifier.
+    // No more content-size/layout event follows this scroll sample.
+    h.handleScroll({ nativeEvent: { contentSize: { height: 111130 },
+      contentOffset: { y: 73197.6667 }, layoutMeasurement: { height: 678 } } });
+    settle();
+    expect(h.state.nearBottomRef.current).toBe(true);
+    expect(h.state.scrollMetricsRef.current.offsetY).toBe(110452);
+    expect(h.tailScroll).toHaveBeenCalledTimes(1);
+    // The correction acknowledgement must not start another scroll cycle.
+    h.handleScroll({ nativeEvent: { contentSize: { height: 111130 },
+      contentOffset: { y: 110452 }, layoutMeasurement: { height: 678 } } });
+    settle();
+    expect(h.tailScroll).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['history', 'touch', 'hidden'] as const)('does not reclaim the viewport from %s', (owner) => {
+    const h = harness();
+    if (owner === 'history') { h.state.nearBottomRef.current = false; h.state.userScrollForOlderRef.current = true; }
+    if (owner === 'touch') h.handleHistoryTouchStart(touch());
+    if (owner === 'hidden') h.state.historyPositioningRef.current = false;
+    h.handleScroll(h.scrollEvent(200));
+    settle();
+    expect(h.tailScroll).not.toHaveBeenCalled();
+  });
+});
 
 describe('streaming follow yields to the reader', () => {
   // Unit / #9249 r4500877064: actual hook + production handleScroll. The old
