@@ -2253,3 +2253,77 @@ describe('terminal intent during session creation', () => {
   });
 
 });
+
+/**
+ * The two writers of a task's context window budget (checkpoint 3b-2): the desktop's own budget chip
+ * saves through local-db:sessions:update (updateSessionInDb), a remote set-* mirror through
+ * persistSessionFields (persistSessionFieldsWith, which the Node Host's /sessions/update uses for a
+ * budget). A budget-only change ends the same on both: task row, budget preference, the runtime hook's
+ * previous / next, broadcasts in order, and whether it throws. The two known differences are pinned as
+ * they are (release table docs/host/personal-migration-release-table.md, section 2, "任务窗口预算的两条写入路径").
+ * Whoever changes one writer and not the other turns a case here red.
+ * - Tier: unit, through the registered IPC handler and the exported writer over a full sessions table.
+ */
+describe('a budget-only change through updateSessionInDb and through persistSessionFields', () => {
+  const run = async (writer: 'update' | 'persist', setup: { stored: number | null; failWrite?: boolean; id?: string }, next: number | null) => {
+    const id = setup.id ?? 'cc-local';
+    writeSessionContextWindowBudget(id, setup.stored);
+    const log: unknown[] = [];
+    h.tapWindowBroadcast.mockImplementation((channel: string, payload: unknown) => { log.push(['broadcast', channel, payload]); });
+    h.handlers.clear();
+    registerSessionIpc(undefined, {
+      closeIdleSessionForMove: h.closeIdleSessionForMove,
+      applyContextWindowBudget: async (sessionId, change) => { log.push(['apply', sessionId, change]); },
+    });
+    if (setup.failWrite) {
+      vi.mocked(writeSessionContextWindowBudget).mockImplementationOnce(() => {
+        throw new Error('session context budget settings file is unreadable');
+      });
+    }
+    const rowBefore = JSON.stringify(h.sqlite!.prepare('SELECT * FROM sessions WHERE id = ?').get(id));
+    let error: string | null = null;
+    try {
+      if (writer === 'update') await invokeUpdate(id, { contextWindowBudget: next });
+      else await persistSessionFields(id, { contextWindowBudget: next });
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : String(caught);
+    }
+    return {
+      error,
+      rowUnchanged: JSON.stringify(h.sqlite!.prepare('SELECT * FROM sessions WHERE id = ?').get(id)) === rowBefore,
+      budget: readSessionContextWindowBudget(id),
+      customized: isSessionContextWindowBudgetCustomized(id),
+      log,
+    };
+  };
+  const patched = (sessionId: string, contextWindowBudget: number | null) =>
+    ['broadcast', 'local-db:sessions:patched', { sessionId, patch: { contextWindowBudget } }];
+
+  it.each([
+    ['set from none', { stored: null }, 300_000],
+    ['clear', { stored: 300_000 }, null],
+    ['the same value again', { stored: 300_000 }, 300_000],
+  ] as const)('%s ends the same', async (_name, setup, next) => {
+    const viaUpdate = await run('update', setup, next);
+    expect(viaUpdate.error).toBeNull();
+    expect(viaUpdate.budget).toBe(next);
+    expect(viaUpdate.log).toEqual([patched('cc-local', next), ['apply', 'cc-local', { previous: setup.stored, next }]]);
+    expect(await run('persist', setup, next)).toEqual(viaUpdate);
+  });
+
+  it('known difference: when the preference file refuses the write, only updateSessionInDb has broadcast the unsaved value', async () => {
+    const unsaved = { error: 'session context budget settings file is unreadable', rowUnchanged: true, budget: null, customized: false };
+    expect(await run('update', { stored: null, failWrite: true }, 300_000))
+      .toEqual({ ...unsaved, log: [patched('cc-local', 300_000)] });
+    expect(await run('persist', { stored: null, failWrite: true }, 300_000)).toEqual({ ...unsaved, log: [] });
+  });
+
+  it('known difference: for a task that does not exist, updateSessionInDb answers NOT_FOUND and persistSessionFields writes the preference', async () => {
+    expect(await run('update', { stored: null, id: 'missing-task' }, 300_000))
+      .toEqual({ error: '[NOT_FOUND] Session 不存在', rowUnchanged: true, budget: null, customized: false, log: [] });
+    expect(await run('persist', { stored: null, id: 'missing-task' }, 300_000)).toEqual({
+      error: null, rowUnchanged: true, budget: 300_000, customized: true,
+      log: [patched('missing-task', 300_000), ['apply', 'missing-task', { previous: null, next: 300_000 }]],
+    });
+  });
+});
