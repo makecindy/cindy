@@ -82,6 +82,7 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
         if (typeof input.name === 'string') action.name = input.name;
         if (typeof input.topic === 'string') action.topic = input.topic;
         if (typeof input.description === 'string') action.description = input.description;
+        if (typeof input.allowMemberInvites === 'boolean') action.allowMemberInvites = input.allowMemberInvites;
         if (typeof input.allowMentionAllBots === 'boolean') action.allowMentionAllBots = input.allowMentionAllBots;
         if (input.replyMode === 'all' || input.replyMode === 'mentioned') action.responseMode = input.replyMode;
         if (input.speakingMode === 'auto' || input.speakingMode === 'sequential') action.speakingMode = input.speakingMode;
@@ -120,16 +121,17 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
       if (valid()) await refresh();
     }
   }, [api, binding, groupId, refresh, valid]);
-  /** A join link from the owner or admin you control; revoking takes the same link back. */
+  /** A join link from an eligible joined actor you control; rights come from the latest snapshot. */
   const invite = useCallback(async (revoke?: string) => {
     const current = verified.current?.binding === binding ? verified.current.settings : undefined;
-    if (!valid() || !current?.managerId || current.group.dissolvedAt || current.group.archived) throw new Error('PERMISSION_DENIED');
-    if (revoke) { await api.client.revokeInvite(groupId, current.managerId, revoke, randomUUID()); return null; }
+    const actorId = current?.managerId ?? (current?.group.canInvite ? chatGroupMembership(current.group).self?.actorId : undefined);
+    if (!valid() || !actorId || current?.group.dissolvedAt || current?.group.archived) throw new Error('PERMISSION_DENIED');
+    if (revoke) { await api.client.revokeInvite(groupId, actorId, revoke, randomUUID()); return null; }
     // Share publication may fail after the invite was created. Retry its original
     // receipt so the Chat Server returns the same token instead of another invite.
     const prior = pendingInvite.current;
-    const operation = prior?.binding === binding && prior.managerId === current.managerId ? prior
-      : { binding, managerId: current.managerId, operationId: randomUUID() };
+    const operation = prior?.binding === binding && prior.managerId === actorId ? prior
+      : { binding, managerId: actorId, operationId: randomUUID() };
     pendingInvite.current = operation;
     const link = await api.client.createInvite(groupId, operation.managerId, operation.operationId);
     if (!valid()) throw new Error('OWNER_CHANGED');

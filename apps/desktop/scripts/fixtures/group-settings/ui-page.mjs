@@ -16,6 +16,7 @@ export default {
     'src/renderer/features/bots/BotRosterView': 'export const BotRosterView = () => null;',
   },
   cases: {
+    'member-invites': { about: 'Owner manages friend invitations; members can still invite their own teammates', data: { role: 'owner', memberInvites: true } },
     default: { about: 'Owner: 群管理 with 解散, member menus, invite menu with both items', data: { role: 'owner' } },
     dismissal: { about: 'Scrim and × close, nested layers stay isolated, Escape backs out of subpages, reopening clears route state', data: { role: 'owner' } },
     admin: { about: 'Admin: 群管理 without 解散, cannot manage the owner', data: { role: 'admin' } },
@@ -34,6 +35,14 @@ export default {
     const dialog = page.getByRole('dialog');
     const invite = page.getByTestId('chat-group-invite');
     const manage = await row(page, await t('manage'));
+    if (ui.case === 'member-invites') {
+      await manage.click();
+      const toggle = dialog.getByRole('switch', { name: await ui.t('bots.groupChat.settings.allowMemberInvites') });
+      await toggle.waitFor();
+      assert.equal(await toggle.getAttribute('aria-checked'), 'true');
+      await ui.capture('member-invites');
+      return;
+    }
     if (ui.case === 'dismissal') {
       const scrimPoint = { x: 80, y: 340 }; // Directly over the background action: detect click-through.
       const clickScrim = () => page.mouse.click(scrimPoint.x, scrimPoint.y);

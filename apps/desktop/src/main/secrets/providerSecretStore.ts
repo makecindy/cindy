@@ -765,7 +765,7 @@ const ghostSecretStore = createGhostSecretStore({
     }
   },
 }, log);
-export const { migrateInstalledGhostSecretAliases, readGhostSecret, readGhostSecretStrict, ghostSecretSaved, storeGhostSecret, readGhostSecretTailFromIo, readGhostSecretTail, removeGhostSecret, removeGhostSecrets, assertGhostSecretsCanRelocate, migrateGhostSecrets } = ghostSecretStore;
+export const { migrateInstalledGhostSecretAliases, readGhostSecret, readGhostSecretStrict, ghostSecretSaved, storeGhostSecret, readGhostSecretTailFromIo, readGhostSecretTail, removeGhostSecret, removeGhostSecrets, listGhostAccountReferenceKeys, assertGhostSecretsCanRelocate, migrateGhostSecrets } = ghostSecretStore;
 
 export const genericOAuthSecretIo = {
   read(providerId: string): string | null {

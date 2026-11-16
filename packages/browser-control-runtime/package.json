@@ -10,7 +10,8 @@
     ".": "./src/index.ts",
     "./dom-read": "./src/dom-read.ts",
     "./config-dir": "./src/shim/_local/text-utils.ts",
-    "./ssrf-runtime": "./src/shim/ssrf-runtime.ts"
+    "./ssrf-runtime": "./src/shim/ssrf-runtime.ts",
+    "./network-address": "./src/shim/network-address.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

@@ -125,12 +125,6 @@
     "apps/desktop/src/main/__tests__/updateService.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/main/__tests__/usageBroadcasterClaudeSubscription.test.ts": {
-      "resetModules": 2
-    },
-    "apps/desktop/src/main/__tests__/usageBroadcasterCodexAccount.test.ts": {
-      "resetModules": 9
-    },
     "apps/desktop/src/main/__tests__/usageBroadcasterXaiSubscription.test.ts": {
       "resetModules": 1
     },

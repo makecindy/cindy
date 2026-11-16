@@ -51,11 +51,12 @@ function invitationPreview(value: MobileChatInvitePreview): MobileChatInvitePrev
 
 export interface ChatRoom {
   id: string; name: string; state?: string; kind: string; archived: boolean; dissolved_at?: string | null;
-  topic?: string; description?: string; allow_mention_all_bots?: boolean;
+  topic?: string; description?: string; allow_mention_all_bots?: boolean; allow_member_invites?: boolean;
   created_at: string; updated_at: string; revision: number; head?: string;
   response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential'; organizer_id?: string | null;
 }
 export interface ChatMember {
+  assistant?: boolean;
   id: string; kind: 'human' | 'bot' | 'integration'; name: string; state: string;
   ownerActorId: string; ownerName: string; avatar: string | null;
   role: 'owner' | 'admin' | 'member' | 'guest';
@@ -104,7 +105,7 @@ export type ChatSetHomeResult = { ok: true; homeDeviceId: string } | { ok: false
 export interface ChatHistoryPage { messages: ChatMessage[]; before: string | null; historyRevision?: string; messageUpdates?: ChatMessage[] }
 export type ChatGroupSettingsAction =
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
-  | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean; allowMentionAllBots?: boolean }
+  | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean; allowMentionAllBots?: boolean; allowMemberInvites?: boolean }
   | { type: 'member'; actorId: string; action: 'invite' | 'remove' | 'role'; role?: 'admin' | 'member' }
   /** Your own group identity: a nickname, or a public avatar URL (null resets it). */
   | { type: 'nickname'; actorId: string; nickname: string | null }
@@ -440,10 +441,14 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   const executions = (page.executions ?? []).filter(row => ['queued', 'running', 'needs_input', 'stopping'].includes(row.status));
   // Enqueue time anchors history; it is not an elapsed-work start.
   const speakers = executions.map(row => {
+    const bot = page.snapshot.members.find(member => member.id === row.bot_id);
+    const requester = page.snapshot.members.find(member => member.id === row.requester_id);
     const source = [...page.messages, ...page.snapshot.messages].find(message => message.id === row.source_message_id);
     const threadRootId = row.plan_id ? null : row.threadRootId !== undefined ? row.threadRootId : source ? source.threadRootId ?? null : undefined;
     return { sourceMessageId: row.source_message_id, ...(threadRootId !== undefined ? { threadRootId } : {}), botId: row.bot_id, sessionId: null, executionId: row.id,
-    timelineAt: row.created_at && Number.isFinite(Date.parse(row.created_at)) ? Date.parse(row.created_at) : undefined,
+    isSelfRequested: row.requester_id === selfId,
+    ...(bot?.kind === 'bot' && bot.assistant === true && requester ? { requesterName: memberName(requester, ownerMembers) } : {}),
+    ...(row.created_at && Number.isFinite(Date.parse(row.created_at)) ? { timelineAt: Date.parse(row.created_at) } : {}),
     executionStatus: row.status as 'queued' | 'running' | 'needs_input' | 'stopping', stopping: row.status === 'stopping',
     activity: row.plan_id ? 'step' as const : 'reply' as const };
   }).filter(speaker => speaker.threadRootId === (page.threadRootId ?? null));
@@ -456,10 +461,10 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     serverBacked: true, supportsGroupLeave: room.kind !== 'direct', dissolvedAt: room.dissolved_at ?? null, archived: room.archived, selfActorId: selfId,
     // Invite links are created by an owner or admin this account controls, as on Desktop.
     canStopAll: room.kind !== 'direct' && !!chatGroupManager(page.snapshot, selfId),
-    canInvite: room.kind !== 'direct' && !room.dissolved_at && active.some(member => member.ownerActorId === selfId && ['owner', 'admin'].includes(member.role)),
+    canInvite: room.kind !== 'direct' && !room.archived && !room.dissolved_at && active.some(member => member.ownerActorId === selfId && (['owner', 'admin'].includes(member.role) || (room.kind === 'group' && room.allow_member_invites === true))),
     topic: room.topic, description: room.description,
     supportsSettingsManagement: room.kind === 'group', supportsMemberRemoval: room.kind === 'group',
-    revision: room.revision, members: memberViews, allowMentionAllBots: room.allow_mention_all_bots === true, replyMode: room.response_mode, speakingMode: room.speaking_mode,
+    revision: room.revision, members: memberViews, allowMentionAllBots: room.allow_mention_all_bots === true, allowMemberInvites: room.allow_member_invites === true, replyMode: room.response_mode, speakingMode: room.speaking_mode,
     organizerBotId: room.organizer_id ?? null, projectDir: null, projectDirName: null,
     createdAt: Date.parse(room.created_at), updatedAt: Date.parse(room.updated_at),
     lastMessage: last ? { authorKind: last.authorKind, authorName: last.authorName, preview: mobileMarkdownPreviewText(last.threadShare ? i18next.t(last.isSelf ? 'groupChat.thread.sidebarOwn' : 'groupChat.thread.sidebarOther', { name: last.authorName }) : botGroupMessageSummaryText(last)).slice(0, 80), createdAt: last.createdAt } : null,
@@ -468,10 +473,9 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
       currentBotName: currentStep?.botName ?? null, currentStepStatus: currentStep?.status ?? null, ...(open.kind ? { kind: open.kind } : {}) } : null,
     plans, messages: projectBotGroupExecutionFailures(messages, failures),
     hasMoreBefore: page.before !== null, round: { canStop: (page.plans ?? []).some(p => p.creator_id === selfId && ['proposed', 'running', 'waiting'].includes(p.status)) || executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status)
-        && ((!e.requester_id && !members.some(m => m.id === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role))) || e.requester_id === selfId
-        || active.some(m => m.id === e.bot_id && m.kind === 'bot' && m.ownerActorId === selfId))), status: executions.length ? 'running' : 'idle', speakers, canContinue: false,
+        && e.requester_id === selfId), status: executions.length ? 'running' : 'idle', speakers, canContinue: false,
       othersActive: executions.some(execution => ['queued', 'running', 'needs_input'].includes(execution.status)
-        && execution.requester_id !== selfId && !members.some(member => member.id === execution.bot_id && member.ownerActorId === selfId)) }, supportsAttachments: true };
+        && execution.requester_id !== selfId) }, supportsAttachments: true };
 }
 
 export function createChatServerClient(request: ChatRequest, personalList = createConversationListState(),
@@ -557,12 +561,13 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
   let supportsMemberAvatar = false;
   let supportsNotificationSettings = false;
   let supportsMentionAudiences = false;
+  let supportsMemberInvites = false;
   let lastIdentity: { id: string; at: number } | undefined;
   let readingIdentity: Promise<string> | undefined;
   async function identity() {
     if (openHistory && lastIdentity && Date.now() - lastIdentity.at < 60_000) return lastIdentity.id;
     return readingIdentity ??= (async () => {
-      const me = await request<{ actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupNotificationSettings?: number } }>('/me');
+      const me = await request<{ actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberInvites?: number; groupNotificationSettings?: number } }>('/me');
       if (me.actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
       supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
       supportsListRemoval = me.capabilities?.conversationListStateVersion === 1;
@@ -571,6 +576,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       supportsMemberAvatar = me.capabilities?.groupMemberAvatar === 1;
       supportsNotificationSettings = me.capabilities?.groupNotificationSettings === 1;
       supportsMentionAudiences = me.capabilities?.groupMentionAudiences === 1;
+      supportsMemberInvites = me.capabilities?.groupMemberInvites === 1;
       const id = chatId(me.actor.id); lastIdentity = { id, at: Date.now() };
       return id;
     })().finally(() => { readingIdentity = undefined; });
@@ -611,7 +617,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           text: message.reply.content.map(block => block.text ?? block.fallback ?? block.caption ?? '').join('\n') } } : {}),
       })) };
     },
-    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsNotificationSettings, supportsScopedStop: singleSpeaker }),
+    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsMemberInvites, supportsNotificationSettings, supportsScopedStop: singleSpeaker }),
     async groupSettings(roomId: string) {
       const [snapshot, self] = await Promise.all([
         request<ChatSnapshot>(`/conversations/${chatId(roomId)}/snapshot`), identity(),
@@ -636,7 +642,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const { type: _type, ...body } = action;
       return request(`/conversations/${chatId(roomId)}${route}`, method, { operationId, ...body }, managerId ? chatId(managerId) : undefined);
     },
-    /** A reusable or expiring join link; only an owner or admin may create one. */
+    /** A reusable or expiring join link; the server checks current invitation rights. */
     async createInvite(roomId: string, managerId: string, operationId: string): Promise<ChatInviteLink> {
       if (!inviteShares) throw new Error('CHAT_ENDPOINT_UNAVAILABLE');
       const invite = await request<{ token?: unknown; expiresAt?: unknown; reusable?: unknown }>(`/conversations/${chatId(roomId)}/invite-links`, 'POST', { operationId }, chatId(managerId));
@@ -926,7 +932,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const everything = scope === 'all';
       const asManager = manager?.id === self ? undefined : manager?.id;
       const humanIsManager = snapshot.members.some(member => member.id === self && member.state === 'joined' && ['owner', 'admin'].includes(member.role));
-      const ownBots = new Set(snapshot.members.filter(member => member.state === 'joined' && member.kind === 'bot' && member.ownerActorId === self).map(member => member.id));
+
       const plans = await call<ChatPlan[]>(`/conversations/${room}/plans`);
       const stoppedPlans = new Set<string>();
       const refusedPlans = new Map<string, unknown>();
@@ -948,15 +954,15 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       }
       const executions = await call<ChatExecution[]>(`/conversations/${room}/executions`);
       for (const execution of executions.filter(execution => ['queued', 'running', 'needs_input'].includes(execution.status) && !(execution.plan_id && stoppedPlans.has(execution.plan_id)))) {
-        const asBot = !everything && execution.requester_id !== self && ownBots.has(execution.bot_id);
-        if (!everything && execution.requester_id !== self && !asBot) {
+
+        if (!everything && execution.requester_id !== self) {
           if (execution.requester_id) continue;
           if (humanIsManager) { unknownRequester = true; continue; }
         }
         try {
           await call(`/conversations/${room}/executions/${chatId(execution.id)}/control`, 'POST',
             { operationId: `${operationId}:execution:${execution.id}`, action: 'stop' },
-            asBot ? execution.bot_id : everything && execution.requester_id !== self ? asManager : undefined);
+            everything && execution.requester_id !== self ? asManager : undefined);
           stopped = true;
         } catch (error) { if (!refused(error)) throw error; refusedExecutions.set(execution.id, error); }
       }

@@ -1944,7 +1944,13 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
           and(eq(messages.createdAt, oldestCreatedAtMs), lt(messageRowid, oldestOnPage.rowid)),
         )
       : lt(messages.createdAt, oldestCreatedAtMs);
-  const priorUser = await db
+  // A visible real user row already establishes this page's cost boundary.
+  // Looking behind it adds a round trip and reads an irrelevant earlier round.
+  // Continuations and pages starting midway through a round still query back.
+  const priorUser = oldestOnPage.role === 'user' && oldestOnPage.agentMeta?.autoResume !== true
+    && oldestOnPage.rowid != null
+    ? [{ createdAt: oldestCreatedAtMs, rowid: oldestOnPage.rowid }]
+    : await db
     .select({
       createdAt: messages.createdAt,
       rowid: messageRowid,

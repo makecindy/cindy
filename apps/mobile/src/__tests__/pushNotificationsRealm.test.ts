@@ -53,9 +53,15 @@ vi.mock('react-native', () => ({
 
 vi.mock('expo-modules-core', () => ({
   requireOptionalNativeModule: () => ({
+    isPaused: async () => false,
     get setTaskBadgeIdentity() { return envState.badgeNative ? async () => {} : undefined; },
     get applyTaskBadge() { return envState.badgeNative ? async () => true : undefined; },
   }),
+}));
+
+vi.mock('expo-localization', () => ({
+  getLocales: () => [{ languageTag: 'en-US', languageCode: 'en', regionCode: 'US' }],
+  getCalendars: () => [{ timeZone: 'America/New_York' }],
 }));
 
 vi.mock('@/notifications/nativePushEnvironment', () => ({ readIosPushEnvironment: mocks.readIosPushEnvironment }));
@@ -90,6 +96,7 @@ import { setActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
 import { clearNotificationBadge, isNotificationRouteVisible, createTaskBadgeSync } from '@/notifications/notificationBadge';
 import { createServerTaskBadgeSync, type TaskBadgeSnapshot } from '@/notifications/taskBadgeSync';
 import { readAndroidPushAvailability, setAndroidPushAvailability } from '../notifications/androidPushAvailability';
+import { readChatBackgroundEnabled } from '../notifications/chatBackground';
 
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 
@@ -390,14 +397,49 @@ describe('push notification realm routing', () => {
   // to badge-only delivery, and that capability must never reach chat registration.
   it.each([false, true])('allows cloud delivery with both registrations and scopes badge capability (native=%s)', async supported => {
     envState.platform = 'android';
+    envState.activeRealm = 'global';
     envState.badgeNative = supported;
     setAndroidPushAvailability('unavailable');
-    const apiFetch = vi.fn(async (_path: string, _opts: { body?: Record<string, unknown> }) => ({}));
+    expect(await readChatBackgroundEnabled()).toBe(true);
+    const apiFetch = vi.fn(async (_path: string, _opts: { body?: Record<string, unknown> }) => ({ registered: true, deliveryConfigured: true }));
     await expect(syncPushRegistration({ enabled: true, apiFetch: apiFetch as any })).resolves.toBe('registered');
     expect(readAndroidPushAvailability()).toBe('available');
+    expect(await readChatBackgroundEnabled()).toBe(false);
     expect(apiFetch.mock.calls.find(([path]) => path === '/api/device-link/push-token')?.[1].body?.taskBadgeVersion)
       .toBe(supported ? 1 : undefined);
     expect(apiFetch.mock.calls.find(([path]) => path === '/v1/push-token')?.[1].body).not.toHaveProperty('taskBadgeVersion');
+  });
+  // Exercise the actual registration -> availability -> auto background policy.
+  // A 200 from either a legacy or unconfigured server must preserve direct delivery.
+  it.each([
+    { path: '/v1/push-token', response: { registered: true, deliveryConfigured: false } },
+    { path: '/api/device-link/push-token', response: { registered: true, deliveryConfigured: false } },
+    { path: '/v1/push-token', response: { registered: true } },
+    { path: '/api/device-link/push-token', response: { registered: true } },
+    { path: '/v1/push-token', response: { registered: true, deliveryConfigured: 'true' } },
+    { path: '/v1/push-token', response: null },
+  ])('keeps automatic direct delivery for $path with $response', async ({ path, response }) => {
+    envState.platform = 'android'; envState.activeRealm = 'global';
+    setAndroidPushAvailability('available');
+    const apiFetch = vi.fn(async (target: string) => target === path ? response : { registered: true, deliveryConfigured: true });
+    await expect(syncPushRegistration({ enabled: true, apiFetch: apiFetch as any })).resolves.toBe('registered');
+    expect(readAndroidPushAvailability()).toBe('unavailable');
+    expect(await readChatBackgroundEnabled()).toBe(true);
+    const status = JSON.parse(store.get('cindy.push.lastRegistration')!);
+    expect(status.endpoints).toContainEqual({
+      service: path === '/v1/push-token' ? 'chat' : 'device-link', outcome: 'accepted',
+      ...(typeof response?.deliveryConfigured === 'boolean' ? { deliveryConfigured: response.deliveryConfigured } : {}),
+    });
+  });
+  it('records missing chat APNs configuration without undoing successful iOS token storage', async () => {
+    const apiFetch = vi.fn(async (path: string) => ({ registered: true, deliveryConfigured: path !== '/v1/push-token' }));
+    await expect(syncPushRegistration({ enabled: true, apiFetch: apiFetch as any })).resolves.toBe('registered');
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(store.get('cindy.push.lastRegistration')!)).toMatchObject({ stage: 'registered', endpoints: expect.arrayContaining([
+      { service: 'device-link', outcome: 'accepted', deliveryConfigured: true },
+      { service: 'chat', outcome: 'accepted', deliveryConfigured: false },
+    ]) });
+    expect(readStoredRealms(PENDING_KEY)).toEqual([]);
   });
   // Unit: a cached FCM token must not make first enable fail when cloud registration is offline.
   it('keeps Android opt-in usable through the direct channel when cloud registration fails', async () => {
