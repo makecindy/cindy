@@ -7999,7 +7999,6 @@
         "install": "Instalar",
         "details": "Detalhes",
         "detailsAria": "Ver detalhes de {{name}}",
-        "loadingDetails": "Carregando detalhes…",
         "update": "Atualizar pelo marketplace",
         "updateTo": "Atualizar para v{{version}}",
         "installed": "Instalado",
@@ -8937,23 +8936,10 @@
         "projectReadFailed": "Não foi possível ler as configurações dos projetos. Tente novamente."
       },
       "usage": {
-        "title": "Suas chamadas",
-        "explanationLabel": "Como o uso é contabilizado",
-        "explanation": "Chamadas de ferramentas enviadas neste computador pela conta atual, incluindo falhas, tempos limite excedidos e cancelamentos. Os últimos 7 dias correspondem a uma janela móvel de 168 horas. Painéis, Skills e depuração não são contabilizados. Os registros permanecem até serem limpos.",
-        "clear": "Limpar registros",
-        "loading": "Carregando registros…",
-        "unavailable": "Registros pessoais indisponíveis",
-        "retry": "Tentar novamente",
-        "lastUsed": "Última chamada",
-        "last7Days": "Chamadas nos últimos 7 dias",
-        "never": "Nenhuma chamada ainda",
-        "clearTitle": "Limpar os registros de uso deste plugin?",
-        "clearDescription": "Remove os registros de chamadas e os links de sessões desta conta neste computador. Novas chamadas iniciam um novo histórico. Os totais compartilhados já recebidos pelo servidor não são removidos.",
         "downloadExplanation": "Total acumulado de solicitações de URLs de download. Cada URL de pacote emitida com sucesso conta uma vez, incluindo atualizações, reinstalações e novas tentativas que solicitam uma nova URL. Não é uma contagem de instalações concluídas.",
-        "clearAction": "Limpar",
         "downloadsValue": "{{value}} downloads",
         "usesValue": "{{value}} usos",
-        "usesExplanation": "Total acumulado de chamadas de ferramentas compartilhadas em todas as versões para o público autorizado. Suas chamadas abaixo contabilizam apenas esta conta neste computador."
+        "usesExplanation": "Total acumulado de chamadas de ferramentas compartilhadas em todas as versões para o público autorizado."
       },
       "contribution": {
         "unreadReview": "Novo resultado do plugin",

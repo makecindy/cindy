@@ -7889,7 +7889,6 @@
         "install": "설치",
         "details": "상세",
         "detailsAria": "{{name}} 상세 보기",
-        "loadingDetails": "상세 정보 불러오는 중…",
         "update": "마켓에서 업데이트",
         "updateTo": "v{{version}}(으)로 업데이트",
         "installed": "설치됨",
@@ -8822,23 +8821,10 @@
         "projectReadFailed": "프로젝트 설정을 읽지 못했습니다. 다시 시도하세요."
       },
       "usage": {
-        "title": "내 호출",
-        "explanationLabel": "집계 방식",
-        "explanation": "이 컴퓨터의 현재 계정에서 전달된 도구 호출을 집계하며 실패, 시간 초과, 취소도 포함합니다. 최근 7일은 지난 168시간입니다. 패널, Skill, 디버깅은 제외합니다. 기록은 지울 때까지 보관됩니다.",
-        "clear": "기록 지우기",
-        "loading": "기록 불러오는 중…",
-        "unavailable": "개인 기록을 불러올 수 없습니다",
-        "retry": "다시 시도",
-        "lastUsed": "최근 호출",
-        "last7Days": "최근 7일 호출",
-        "never": "아직 호출 없음",
-        "clearTitle": "이 플러그인의 사용 기록을 지울까요?",
-        "clearDescription": "이 컴퓨터의 현재 계정에서 호출 기록과 세션 연결을 지웁니다. 이후 호출부터 새로 기록합니다. 서버가 이미 받은 공유 합계는 취소되지 않습니다.",
         "downloadExplanation": "누적 다운로드 URL 요청 수입니다. 패키지 URL 발급 성공마다 1회로 집계하며 업데이트, 재설치, 새 URL을 요청하는 재시도도 포함합니다. 설치 완료 횟수가 아닙니다.",
-        "clearAction": "지우기",
         "downloadsValue": "{{value}} 다운로드",
         "usesValue": "{{value}} 사용",
-        "usesExplanation": "허용된 공유 범위의 모든 버전에서 누적된 도구 호출 수입니다. 아래 내 호출은 이 컴퓨터의 현재 계정만 집계합니다."
+        "usesExplanation": "허용된 공유 범위의 모든 버전에서 누적된 도구 호출 수입니다."
       },
       "contribution": {
         "unreadReview": "새 처리 결과가 있습니다",
