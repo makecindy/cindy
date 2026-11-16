@@ -16989,7 +16989,7 @@ function disposeLiveErrorPersist(sessionId: string): void {
     return;
   }
   if (!state?.error) return;
-  const tailRowId = persistedTailRowIdForLiveError(state);
+  const tailRowId = getLiveErrorMessageClientId(state);
   if (tailRowId) markLiveErrorRowDisposed(sessionId, tailRowId);
   _disposedLiveErrorIntents.set(sessionId, {
     text: state.error,
@@ -17012,7 +17012,7 @@ function markLiveErrorRowDisposed(sessionId: string, clientId: string): void {
 }
 
 /**
- * live 横幅没有绑定落库行时，找出它对应的已落库尾部错误行。
+ * 返回 live 横幅拥有的精确落库行；旧 Host 没有绑定时才按尾部与文案安全认领。
  *
  * 错误落库后若用户没在看这个任务(或之后离开过)，live 横幅会交给历史错误卡，绑定一并清掉；
  * main 的输入投影仍带着这次错误，之后任何一次投影(打开任务、队列变化、协同派活等)都会把
@@ -17020,15 +17020,19 @@ function markLiveErrorRowDisposed(sessionId: string, clientId: string): void {
  * 保留绑定：后来的新错误(远程断线期间漏收的新一轮、scheduler 发送前失败直接换掉错误等)
  * 可能不经过新一轮启动就顶替旧错误，保留的绑定会被错用到新错误上，关闭标掉的是旧行。
  *
- * 改在关闭时按当前看到的内容认领：已加载历史的最后一条(与尾部错误卡同一判定)是未处置的
- * error 行，且文案与 live 横幅一致(liveErrorTextMatchesRow)，才认为是同一次错误。对不上
- * (历史未加载、尾部不是 error、文案不同)就什么都不标，不会标到无关行。
+ * 改在显示/关闭时按当前看到的内容认领：共享尾部选择器找到未处置的 error 行
+ * (跳过位置/模型/历史边界卡)，且文案与 live 横幅一致(liveErrorTextMatchesRow)，才认为
+ * 是同一次错误。历史未加载、已有真实进展或文案不同就不认领，不会标到无关行。
  * 关闭的错误可能还没落库：尾部仍是同文案的旧行时，这里会把旧行一起标掉(它不在尾部之后
  * 就不再显示，没有可见影响)，真正那一行由 claimDisposedLiveErrorRow 等它落库后补标。
  */
-function persistedTailRowIdForLiveError(state: SessionChatState): string | null {
-  if (!state.error || !state.historyLoaded) return null;
-  const tail = state.messages[state.messages.length - 1];
+export function getLiveErrorMessageClientId(
+  state: Pick<SessionChatState, 'error' | 'errorPersistId' | 'historyLoaded' | 'messages' | 'disposedErrorPersistId'>,
+): string | null {
+  if (!state.error) return null;
+  if (state.errorPersistId) return state.errorPersistId;
+  if (!state.historyLoaded) return null;
+  const tail = findErrorTailMessage(state.messages, state.disposedErrorPersistId);
   return tail && isUndisposedErrorRowFor(tail, state.error, state.disposedErrorPersistId)
     ? tail.clientId
     : null;

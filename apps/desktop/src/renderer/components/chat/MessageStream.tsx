@@ -107,7 +107,6 @@ import type {
   ContinuationInFlightProjectionCapability,
 } from '@/hooks/useCCAgentChat';
 import { findLastUserInputClientId, isAutoResumeRowInFlight } from '@/lib/autoResumePresentation';
-import { findErrorTailMessage } from '@/lib/errorTailMessage';
 import { InputHandoffRecordRow, readInputHandoffRecordData } from '@/features/input-handoff/InputHandoffRecordRow';
 export { findLastUserInputClientId, isAutoResumeRowInFlight } from '@/lib/autoResumePresentation';
 import { Spinner } from '@/components/ui/spinner';
@@ -498,7 +497,7 @@ interface MessageStreamProps {
   botUnreadBoundaryAt?: number | null;
   onBotReadThrough?: (at: number) => void;
   messages: ChatMessage[];
-  /** Persisted row already owned by the live error banner; keep its recovery state there. */
+  /** Exact row owned by a rendered replacement error banner; otherwise keep its history card. */
   activeErrorClientId?: string | null;
   /** The ongoing call appears only in its transcript popover, including history replays. */
   activeVoiceCallId?: string | null;
@@ -6386,12 +6385,6 @@ export function MessageStream({
     return collectAssistantTurnUsageDetails(metadataMessages, turnFinalAssistantClientIds);
   }, [metadataMessages, turnFinalAssistantClientIds]);
 
-  // Share the task view's terminal boundary: location/model/history records do
-  // not resolve a failure, but later user/assistant progress does.
-  const errorTailClientId = useMemo(
-    () => findErrorTailMessage(visibleMessages)?.clientId,
-    [visibleMessages],
-  );
   const previousLocalFileRefsRef = useRef<readonly KnownLocalFileRef[]>([]);
   const localFileRefs = useMemo<readonly KnownLocalFileRef[]>(() => {
     return collectStableLocalFileRefs(rawMetadataMessages, previousLocalFileRefsRef.current);
@@ -6873,7 +6866,6 @@ export function MessageStream({
                         continuationInFlightProjectionCapability={
                           continuationInFlightProjectionCapability
                         }
-                        isTailError={msg.clientId === errorTailClientId}
                         isActiveError={msg.role === 'error' && msg.clientId === activeErrorClientId}
                         localFileRefs={localFileRefs}
                         assistantAvatar={botContinuationKeys.has(item.key) ? botReplyColumnSpacer : assistantAvatar}
@@ -7062,7 +7054,6 @@ const MessageItem = memo(function MessageItem({
   isLastUserInput,
   isContinuationTurnOwner,
   continuationInFlightProjectionCapability,
-  isTailError,
   isActiveError,
   localFileRefs,
   assistantAvatar,
@@ -7113,9 +7104,7 @@ const MessageItem = memo(function MessageItem({
   isContinuationTurnOwner?: boolean;
   /** 当前投影对精确续跑边界字段的支持状态；legacy 才允许启用旧端兼容兜底。 */
   continuationInFlightProjectionCapability?: ContinuationInFlightProjectionCapability;
-  /** True when the shared tail selector assigns this row to the actionable
-   *  banner above the composer instead of an inline history card. */
-  isTailError?: boolean;
+  /** The parent actually renders this exact error in a replacement banner. */
   isActiveError?: boolean;
   localFileRefs: readonly KnownLocalFileRef[];
   /** Bot 对话:assistant 气泡左侧的伙伴头像。普通任务不传。 */
@@ -7306,13 +7295,9 @@ const MessageItem = memo(function MessageItem({
       // 呈现走 CCAgentSessionView 输入框上方的 InterruptedTurnBanner(与 ErrorBanner
       // 同风格)+ sidebar 'error' 红点,这里渲染 null。
       if (message.errorReason === APP_EXIT_INTERRUPTED_REASON) return null;
-      // The same selector owns this row above the composer, even when a later
-      // location/model/history boundary card follows it. Dismissed or resolved
-      // failures remain available as static history cards.
-      if (isActiveError || isTailError) return null;
-      // A live error may be followed by hidden or system rows when history is
-      // reloaded. Its exact persisted identity still belongs to the live banner;
-      // unrelated failures remain available as compact history cards.
+      // Only a rendered alternate UI may own this exact row. Standalone and
+      // read-only streams retain failures, including those before location cards.
+      if (isActiveError) return null;
       return (
         <ErrorMessageCard
           message={message.content}

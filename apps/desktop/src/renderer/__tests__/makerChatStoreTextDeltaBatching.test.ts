@@ -10,6 +10,7 @@ import { GHOST_SETUP_MAX_INTERACTION_STEPS, GHOST_SETUP_MAX_STEPS } from '../../
 import type { AgentInputProjection, AgentInputQueuedMessage } from '../../shared/agentInputQueue';
 import type { Message, Session } from '@/lib/ccAgent.types';
 import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
+import { findErrorTailMessage } from '@/lib/errorTailMessage';
 
 vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => []),
@@ -3601,6 +3602,11 @@ describe('makerChatStore text delta batching', () => {
     content: JSON.stringify({ text: 'hi' }),
     createdAt: '2026-10-16T00:00:01.000Z',
   });
+  const errorTailLocationRow = serverMessage({
+    id: 'location-row', clientId: 'location', sessionId: SESSION_ID, role: 'agent_switch',
+    content: { fromAgentKind: 'codex', toAgentKind: 'codex', nativeHistory: 'restored' },
+    createdAt: '2026-10-16T00:00:03.000Z',
+  });
   function persistedErrorRow(
     clientId: string,
     message: string,
@@ -3623,6 +3629,51 @@ describe('makerChatStore text delta batching', () => {
     await flushPromises();
     expect(makerChatStore.getSnapshot(SESSION_ID).historyLoaded).toBe(true);
   }
+
+  // PR #10760 review: legacy projections have no persist ID. A location card
+  // after the failure must not prevent durable dismissal or revive it on reload.
+  // Standard tier; existing restore coverage ended physically on the error row.
+  it('durably dismisses a restored legacy live error before a location record', async () => {
+    const error = persistedErrorRow('legacy-timeout', 'upstream timed out');
+    await reloadHistory([errorTailUserRow, error, errorTailLocationRow]);
+    onInputProjection?.(projection(SESSION_ID, { error: 'upstream timed out' }));
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+
+    makerChatStore.clearError(SESSION_ID);
+    await flushPromises();
+    expect(messageService.dismissError).toHaveBeenCalledWith(SESSION_ID, 'legacy-timeout');
+    expect(findErrorTailMessage(makerChatStore.getSnapshot(SESSION_ID).messages)).toBeNull();
+
+    makerChatStore.purgeSession(SESSION_ID);
+    await reloadHistory([errorTailUserRow, persistedErrorRow('legacy-timeout', 'upstream timed out', { dismissed: true }), errorTailLocationRow]);
+    expect(findErrorTailMessage(makerChatStore.getSnapshot(SESSION_ID).messages)).toBeNull();
+  });
+
+  it('keeps a newer same-text failure while an exact-ID dismissal is pending across a location record', async () => {
+    const text = 'upstream timed out';
+    const original = persistedErrorRow('error-original', text);
+    await reloadHistory([errorTailUserRow, original, errorTailLocationRow]);
+    onInputProjection?.({ ...projection(SESSION_ID, { error: text }), errorPersistId: 'error-original' });
+    const dismissal = Promise.withResolvers<Message>();
+    vi.mocked(messageService.dismissError).mockReturnValueOnce(dismissal.promise);
+    makerChatStore.clearError(SESSION_ID);
+    await flushPromises();
+
+    const newer = persistedErrorRow('error-newer', text, {}, '2026-10-16T00:00:04.000Z');
+    onDbMessageCreated?.({ sessionId: SESSION_ID, message: newer });
+    onDbMessageCreated?.({ sessionId: SESSION_ID, message: { ...errorTailLocationRow,
+      id: 'new-location-row', clientId: 'new-location', createdAt: '2026-10-16T00:00:05.000Z',
+    } });
+    onInputProjection?.({ ...projection(SESSION_ID, { error: text }), errorPersistId: 'error-newer' });
+    dismissal.resolve({ ...original, content: { message: text, dismissed: true } });
+    await flushPromises();
+
+    const state = makerChatStore.getSnapshot(SESSION_ID);
+    expect(messageService.dismissError).toHaveBeenCalledExactlyOnceWith(SESSION_ID, 'error-original');
+    expect(state.errorPersistId).toBe('error-newer');
+    expect(state.messages.find(message => message.clientId === 'error-original')?.errorDismissed).toBe(true);
+    expect(findErrorTailMessage(state.messages, state.disposedErrorPersistId)?.clientId).toBe('error-newer');
+  });
 
   it.each([
     ['main 落库的普通错误', 'main'],
@@ -3715,7 +3766,7 @@ describe('makerChatStore text delta batching', () => {
 
   it('error 事件带出的 HTTP 状态后缀不影响认领尾部同一行', async () => {
     // 落库行不存 errorStatus；横幅文案末尾的「(HTTP 500)」要去掉再比。
-    await reloadHistory([errorTailUserRow, persistedErrorRow('err-persist-status', 'upstream failed')]);
+    await reloadHistory([errorTailUserRow, persistedErrorRow('err-persist-status', 'upstream failed'), errorTailLocationRow]);
     onEvent?.({
       sessionId: SESSION_ID,
       event: {
@@ -3763,7 +3814,7 @@ describe('makerChatStore text delta batching', () => {
     });
     onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-A' });
     expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
-    await reloadHistory([errorTailUserRow, persistedErrorRow('err-persist-A', 'error A')]);
+    await reloadHistory([errorTailUserRow, persistedErrorRow('err-persist-A', 'error A'), errorTailLocationRow]);
 
     // B 还没落库：尾部仍是 A，文案不同。
     onInputProjection?.(projection(SESSION_ID, { error: 'error B' }));
