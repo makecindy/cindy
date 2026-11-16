@@ -1617,7 +1617,7 @@ export async function listPiSubagentRunDiagnostics(root: string): Promise<PiSuba
     let parsedStatus: PiSubagentRunStatus | null = null;
     try {
       parsedStatus = parseStatus(await readSmallJson(path.join(root, runId, 'status.json')), runId);
-      if (parsedStatus && !isPiSubagentRunStale(parsedStatus)) continue;
+      if (parsedStatus && !await isPiSubagentRunStaleAsync(parsedStatus, Date.now())) continue;
     } catch {
       // Fall through to the immutable config snapshot for safe display metadata.
     }

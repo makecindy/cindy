@@ -828,10 +828,16 @@ describe('PI durable subagent run store', () => {
         return found;
       };
       await expect(collect()).resolves.toEqual([launch.runId]);
+      // refresh's missing-record fallback and the Desktop durable reconciler
+      // also scan diagnostics; neither may restore the synchronous probe.
+      await expect(listPiSubagentRunDiagnostics(root)).resolves.toEqual([]);
       expect(childProcess.spawnSync).not.toHaveBeenCalled();
       // Recycled owner, no runner ever launched: the abandoned record disappears.
       childProcess.asyncProbe = async () => ({ stdout: String(nowSec() - 5), stderr: '' });
       await expect(collect()).resolves.toEqual([]);
+      await expect(listPiSubagentRunDiagnostics(root)).resolves.toEqual([
+        expect.objectContaining({ runId: launch.runId, kind: 'stale' }),
+      ]);
     });
 
     it('round-trips the minted id and still parses the legacy two-part form', () => {
