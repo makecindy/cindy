@@ -1060,10 +1060,10 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
           if (recommended && !recommendationModelIds.includes(recommended) && recommended !== previous?.recommendedModel)
             throwIpcError('INVALID_PARAMS', 'The recommended model is unavailable');
         }
-        await remoteModelAccess.set(command.providerId, command.models, command.memberId, assertScope, command.memberBudget);
-        assertScope();
+        await remoteModelAccess.set(command.providerId, command.models, command.memberId, assertScope, command.memberBudget, assertOwner);
+        assertOwner();
         await revalidateRemoteModelAccess();
-        assertScope();
+        assertOwner();
         emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
         emit(MAKER_PUSH.PROVIDER_CHANGED, {});
         tapWindowBroadcast(MAKER_PUSH.PROVIDER_CHANGED, {});

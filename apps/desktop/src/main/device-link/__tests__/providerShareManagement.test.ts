@@ -152,7 +152,7 @@ import { setBroadcastTapListener } from '../broadcast-tap';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../../shared/controlledModelCatalog';
 import { PROVIDER_SHARE_IPC } from '../../../shared/providerShare';
 import { createProviderShareUsageStore } from '../providerShareUsageStore';
-import { providerShareActiveControllers, revokeProviderShareControllers } from '../dispatch.desktop';
+import { providerShareActiveControllers, revalidateRemoteModelAccess, revokeProviderShareControllers } from '../dispatch.desktop';
 import {
   clearAllProviderShareCatalogs,
   getCachedProviderShareCatalogs,
@@ -991,10 +991,20 @@ describe('remote model access management', () => {
     ] } }]);
     host.snapshot.mockReturnValue([{ providerId: 'anthropic', requests: [], members: [{ memberId: 'm1' }] }]);
   });
+  it('finishes persisted model revocation before refusing the stopped caller result', async () => {
+    let installed = true;
+    modelAccess.set.mockImplementationOnce(async (_provider, _models, _member, before, _budget, after) => {
+      before(); installed = false; after?.();
+    });
+    await expect(executeProviderShareManagementCommand({ action: 'set-model-access', providerId: 'anthropic', memberId: 'm1', models: [] }, () => {
+      if (!installed) throw new Error('PERMISSION_DENIED');
+    })).rejects.toThrow('PERMISSION_DENIED');
+    expect(revalidateRemoteModelAccess).toHaveBeenCalledTimes(1);
+  });
   it.each([undefined, 'm1'])('saves remote model permissions in the managed owner scope: member=%s', async (memberId) => {
     const command = parseProviderShareCommand({ action: 'set-model-access', providerId: 'anthropic', memberId, models: ['small'] }) as ProviderShareManagementCommand;
     const result = await executeProviderShareManagementCommand(command);
-    expect(modelAccess.set).toHaveBeenCalledWith('anthropic', ['small'], memberId, expect.any(Function), undefined);
+    expect(modelAccess.set).toHaveBeenCalledWith('anthropic', ['small'], memberId, expect.any(Function), undefined, expect.any(Function));
     expect(result).toMatchObject({ version: 1, availableModels: [{ id: 'small', name: 'Small' }, { id: 'large', name: 'Large' }] });
     expect(api.setMember).not.toHaveBeenCalled();
   });
