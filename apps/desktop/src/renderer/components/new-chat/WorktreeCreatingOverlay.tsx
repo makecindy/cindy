@@ -52,7 +52,7 @@ export function WorktreeCreatingOverlay({ branchName, startedAt }: WorktreeCreat
         'border border-[hsl(var(--sidebar-border))]',
       )}
     >
-      <div className="flex items-center gap-[10px]">
+      <div className="flex min-w-0 flex-1 items-center gap-[10px]">
         <div
           className={cn(
             'flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
@@ -61,11 +61,17 @@ export function WorktreeCreatingOverlay({ branchName, startedAt }: WorktreeCreat
         >
           <Spinner size={16} className="text-[var(--workingdir-icon)]" />
         </div>
-        <div className="flex flex-col gap-[2px]">
-          <div className="text-14 font-medium leading-tight text-[var(--msg-assistant-text)]">
+        <div className="flex min-w-0 flex-col gap-[2px]">
+          <div
+            className="truncate text-14 font-medium leading-tight text-[var(--msg-assistant-text)]"
+            title={t('newChat.worktreeCreatingOverlay.heading')}
+          >
             {t('newChat.worktreeCreatingOverlay.heading')}
           </div>
-          <div className="text-12 font-normal leading-tight text-[var(--workingdir-text)]">
+          <div
+            className="truncate text-12 font-normal leading-tight text-[var(--workingdir-text)]"
+            title={t('newChat.worktreeCreatingOverlay.subtitle', { branch: branchName })}
+          >
             {t('newChat.worktreeCreatingOverlay.subtitle', { branch: branchName })}
           </div>
         </div>

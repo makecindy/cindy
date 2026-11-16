@@ -80,8 +80,37 @@ export function buildMultiboxAddArgs(
 }
 
 /** 恢复时在已有分支上重建目录：`git multibox add <path> <branch>`。 */
-export function buildMultiboxRestoreArgs(worktreePath: string, branch: string): string[] {
-  return ['-c', 'core.longpaths=true', 'multibox', 'add', '--json', worktreePath, branch];
+export function buildMultiboxRestoreArgs(worktreePath: string, branch: string, options: { detach?: boolean } = {}): string[] {
+  return ['-c', 'core.longpaths=true', 'multibox', 'add', '--json', ...(options.detach ? ['--detach'] : []), worktreePath, branch];
+}
+
+/** Only the CLI's automatically carried local config may be extra to a saved file tree. */
+export async function isCarriedMultiboxConfig(baseRepo: string, worktreePath: string, relative: string): Promise<boolean> {
+  if (relative !== MULTIBOX_CONFIG_FILE) return false;
+  try {
+    const source = path.join(baseRepo, relative);
+    const target = path.join(worktreePath, relative);
+    const [sourceStat, targetStat] = await Promise.all([fs.lstat(source), fs.lstat(target)]);
+    if (!sourceStat.isFile() || !targetStat.isFile()) return false;
+    const [sourceBytes, targetBytes] = await Promise.all([fs.readFile(source), fs.readFile(target)]);
+    return sourceBytes.equals(targetBytes);
+  } catch { return false; }
+}
+
+/** Called only immediately after a fresh Multibox add, before any task can own the directory. */
+export async function deferCarriedMultiboxConfig(baseRepo: string, worktreePath: string, snapshot: string): Promise<void> {
+  let listed: string;
+  try {
+    // Legacy stash-form snapshots keep untracked files in the third parent.
+    listed = (await gitExec(['ls-tree', '-r', '--name-only', '-z', `${snapshot}^3`, '--', MULTIBOX_CONFIG_FILE], baseRepo)).stdout;
+  } catch { return; } // No untracked parent: retain the config and the ordinary apply/error path.
+  if (!listed.split('\0').includes(MULTIBOX_CONFIG_FILE)) return;
+  if (!(await isCarriedMultiboxConfig(baseRepo, worktreePath, MULTIBOX_CONFIG_FILE))) {
+    throw new Error('Multibox configuration changed before snapshot restoration; preserving it');
+  }
+  // This byte-identical generated copy is reproducible from base. The user's saved
+  // version takes its place during stash apply; the snapshot is retained on failure.
+  await fs.unlink(path.join(worktreePath, MULTIBOX_CONFIG_FILE));
 }
 
 /** `git multibox remove --wait [-f] <path>`：前台删除，返回时目录已不存在。 */

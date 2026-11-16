@@ -7019,7 +7019,7 @@ export function NewMakerDraftRoute() {
                     }
                   />
                   {!newGoalOpen && directoryRecoveryNotice}
-                  {wtCreatingInfo ? (
+                  {!newGoalOpen && wtCreatingInfo ? (
                     <div className="mt-3 w-full">
                       <WorktreeCreatingOverlay
                         branchName={wtCreatingInfo.branch}
@@ -7104,6 +7104,12 @@ export function NewMakerDraftRoute() {
                   onOpenChange={setNewGoalOpen}
                   onCreate={handleCreateGoal}
                   initialObjective={newGoalInitialObjective}
+                  creationProgress={wtCreatingInfo ? (
+                    <WorktreeCreatingOverlay
+                      branchName={wtCreatingInfo.branch}
+                      startedAt={wtCreatingInfo.startedAt}
+                    />
+                  ) : undefined}
                   creationRecovery={directoryRecoveryNotice}
                   creationRecoveryBusy={directoryRecoverySelecting}
                 />
