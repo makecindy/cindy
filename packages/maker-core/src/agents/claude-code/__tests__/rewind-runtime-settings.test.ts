@@ -217,6 +217,7 @@ async function startRewindableSession(
     providerId?: string;
     resolveModelCompactionPct?: AgentDeps['resolveModelCompactionPct'];
     resolveModelEfforts?: AgentDeps['resolveModelEfforts'];
+    resolveClaudeSdkModelMetadata?: AgentDeps['resolveClaudeSdkModelMetadata'];
     shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean;
     stream?: ReturnType<typeof createControlledStream>;
   } = {},
@@ -254,6 +255,7 @@ async function startRewindableSession(
     resolveLocalMcpDuplicateChoices: options.resolveLocalMcpDuplicateChoices,
     resolveModelCompactionPct: options.resolveModelCompactionPct,
     ...(options.resolveModelEfforts ? { resolveModelEfforts: options.resolveModelEfforts } : {}),
+    resolveClaudeSdkModelMetadata: options.resolveClaudeSdkModelMetadata,
     ...(remoteCcQueryFactory ? { remoteCcQueryFactory } : {}),
   });
   const handle = await agent.startSession({
@@ -598,6 +600,43 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
         process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = originalCompactPctOverride;
       }
     }
+  });
+
+  // #10716 / unit: startSession must send the real SDK a configured model ID, not
+  // infer an alias from capacity. Earlier SDK-env coverage only used a <1M model.
+  // The minimum failure is a 1,048,576-token DeepSeek route without a CC alias.
+  it.each([
+    ['deepseek-flash', false, 'deepseek-flash', 'deepseek-flash'],
+    ['deepseek-flash', undefined, 'deepseek-flash', 'deepseek-flash'],
+    ['deepseek-v4-flash', false, 'deepseek-v4-flash', 'deepseek-v4-flash'],
+    ['claude-custom', false, 'claude-custom', 'claude-custom'],
+    ['claude-custom', undefined, 'claude-custom', 'claude-custom'],
+    ['claude-sonnet-5', false, 'claude-sonnet-5[1m]', 'claude-sonnet-5[1m]'],
+    ['claude-fable-5-2', undefined, 'claude-fable-5-2[1m]', 'claude-fable-5-2[1m]'],
+    ['future-native-family-6', true, 'future-native-family-6[1m]', 'future-native-family-6'],
+    ['glm-5.3', true, 'glm-5.3[1m]', 'glm-5.3'],
+    ['glm-5.3[1m]', false, 'glm-5.3[1m]', 'glm-5.3[1m]'],
+  ] as const)('starts %s with only its supported SDK alias and keeps its actual budget', async (model, supported, sdkModel, otherSdkModel) => {
+    const { handle, firstQuery } = await startRewindableSession({
+      model,
+      providerId: 'selected-provider',
+      availableModels: [{ id: model, displayName: model, contextWindow: 1_048_576, efforts: [], defaultEffort: null }],
+      resolveClaudeSdkModelMetadata: supported === undefined ? undefined : (providerId, id) => providerId === 'selected-provider' && id === model
+        ? { contextWindow: 1_048_576, supportsOneMillionSuffix: supported } : null,
+      resolveModelContextLimit: () => 600_000,
+    });
+    try {
+      const options = sdkMock.query.mock.calls[0]![0].options;
+      expect(options.model).toBe(sdkModel);
+      expect(options.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('600000');
+      expect(options.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('600000');
+      expect(JSON.parse(options.env.XDT_MAKER_MODEL_CONTEXT_WINDOWS)[sdkModel]).toBe(600_000);
+      await handle.setModel?.(model, { providerId: 'other-provider' });
+      expect(firstQuery.setModel).toHaveBeenLastCalledWith(otherSdkModel);
+      expect(firstQuery.applyFlagSettings).toHaveBeenCalledWith({
+        availableModels: [otherSdkModel],
+      });
+    } finally { await handle.close(); }
   });
 
   it('keeps a long Claude model catalog off the Windows command line (#9753)', async () => {

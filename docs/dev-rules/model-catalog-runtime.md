@@ -222,6 +222,11 @@ Registry 的全部模型及其 routes，防止只翻译当前默认启用的几�
   必须同时配置 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`。该原生窗口最低 100K；更小的预算通过
   `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` 等比例降低触发阈值。`/context` 的原生窗口／阈值展示
   不包含这项百分比调整，不能据此断言小预算无效，需验证真实 `compact_boundary`。
+- Claude Code 的 `[1m]` 是模型路由别名，不是容量单位。SDK 仅为原生 Claude 的带版本号型号、
+  Anthropic 订阅实报型号，或当前供应商 `models.claude-code` 显式声明的变体追加后缀；第三方裸 ID 即使目录窗口
+  超过 1M 也保持原样，不借用其它供应商或引擎的同名变体。用户已选的带后缀 ID 原样保留，
+  较小任务预算不改写模型身份；实际工作窗口仍由上述环境变量单点注入。
+  回归见 `engineModelResolvers.test.ts` 与 Claude `rewind-runtime-settings.test.ts`（#10716）。
 - 预算控制自动整理的触发时机，不代表每个请求（系统提示、工具定义、最新消息和输出）
   都能严格压到该 token 数以内。原生引擎的最少历史组数和保留空间仍适用。
 - Pi 的模型窗口同时用于请求输出长度裁剪，不能把 1K 等小预算直接写成模型容量。

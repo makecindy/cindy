@@ -73,6 +73,34 @@ describe('Claude resolvers', () => {
     expect(resolvers.resolveModelContextLimit(null, 'shared-model')).toBeNull();
     expect(resolvers.resolveModelEfforts(null, 'shared-model')).toBeNull();
   });
+
+  // #10716 / unit: aliases belong to one provider and one harness. A matching
+  // ID in Pi or another connection must not modify Claude SDK's configured ID.
+  it('resolves long-context aliases only from the actual Claude Code route', () => {
+    const catalog = catalogFor('claude-code', 1_048_576);
+    const xd = catalog.providers.find((provider) => provider.id === 'xd')!;
+    const other = catalog.providers.find((provider) => provider.id !== 'xd')!;
+    const variant = { ...xd.models['claude-code']![0], id: 'shared-model[1m]' };
+    other.models['claude-code']!.push(variant);
+    xd.models.pi = [variant];
+    const resolvers = createClaudeModelResolvers({
+      getCatalog: () => catalog, resolveContextProviderId: resolveModelContextProviderId,
+    });
+    expect(resolvers.resolveClaudeSdkModelMetadata('xd', 'shared-model')).toEqual({
+      contextWindow: 1_048_576, supportsOneMillionSuffix: false,
+    });
+    expect(resolvers.resolveClaudeSdkModelMetadata(other.id, 'shared-model')).toEqual({
+      contextWindow: 272_000, supportsOneMillionSuffix: true,
+    });
+    xd.models['claude-code']!.push(variant);
+    expect(resolvers.resolveClaudeSdkModelMetadata('xd', 'shared-model')?.supportsOneMillionSuffix).toBe(true);
+    expect(resolvers.resolveClaudeSdkModelMetadata('missing-provider', 'shared-model')).toBeNull();
+    xd.models['claude-code']!.push({ ...variant, id: 'claude-custom' });
+    expect(resolvers.resolveClaudeSdkModelMetadata('xd', 'claude-custom')?.supportsOneMillionSuffix).toBe(false);
+    const native = catalog.providers.find((provider) => provider.id === 'anthropic')!;
+    native.models['claude-code']!.push({ ...variant, id: 'future-native-family-6' });
+    expect(resolvers.resolveClaudeSdkModelMetadata(native.id, 'future-native-family-6')?.supportsOneMillionSuffix).toBe(true);
+  });
 });
 
 describe('Codex resolvers', () => {

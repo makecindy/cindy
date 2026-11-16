@@ -277,58 +277,31 @@ export function buildClaudeSystemPromptAppend(parts: {
 }
 
 /**
- * 公开短 ID → Claude SDK 实际接受的字符串。
- * SDK 需要 [1m] beta 通道后缀，这是 SDK 细节，不外泄给调用方。
- *
- * haiku 不再重写成日期快照 id:目录短 id(claude-haiku-4-5)就是 Anthropic 官方别名,
- * 上游(订阅直连 / 网关)均接受;带版本号的别名不存在跨代漂移,同号新快照跟随即可。
- *
- * [1m] 后缀的唯一决策依据是目录(providers.json)的 contextWindow:
- *   - 窗口已知且 ≥1M → 带 [1m];已知且 <1M → 绝不带(已带的强制剥掉)。
- *     窗口 <1M 却带 [1m] 会让 cc-code 的 has1mContext 把窗口判成 1M,撑大
- *     auto-compact 阈值 → 对话冲过上游真实上限后空转,会话"假死"(折扣 GPT 实踩)。
- *     真实窗口口径已由 catalog 经 env-builder(XDT_MAKER_MODEL_CONTEXT_WINDOWS,
- *     id 与 id[1m] 双键)注入 cc,[1m] 不再承担窗口语义,只是 wire 串的一部分。
- *   - 窗口未知(目录外模型 / 未传窗口的老调用方)→ 回落下方硬编码映射链,行为不变。
- *     这样"新增模型要不要 [1m]"只改 OSS 目录即可,不必发版。
- *
- * 一律走显式版本号,不要用 'opus' / 'sonnet' 这类别名:
- * cc-code 二进制升级后别名指针会漂移到下一代模型(例如 'opus' 从 4.6 跳到 4.7),
- * 导致调用方明明选了 4.6 却实际命中 4.7,且只有"上一代"模型踩这个坑。
+ * Catalog ID → Claude SDK model string. Capacity alone does not declare a wire
+ * alias: third-party models keep their configured ID unless this route explicitly
+ * lists the [1m] variant. Native Claude IDs retain their long-context channel.
+ * An explicitly selected suffixed ID is already a route identity; never strip it
+ * because a working budget is smaller. Actual budgets are injected by env-builder.
  */
-export function toSdkModelString(model: string, contextWindow?: number | null): string {
+export function toSdkModelString(
+  model: string,
+  contextWindow?: number | null,
+  supportsOneMillionSuffix?: boolean,
+): string {
+  if (model.endsWith('[1m]')) return model;
+  // Catalog-free embedders retain versioned native families, not arbitrary
+  // private IDs such as claude-custom. Hosts additionally know native accounts.
+  const nativeModel = /^claude-(?:opus|sonnet|haiku|fable)-\d+(?:-\d+)*$/.test(model);
   if (typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0) {
-    const bare = model.endsWith('[1m]') ? model.slice(0, -'[1m]'.length) : model;
-    return contextWindow >= 1_000_000 ? `${bare}[1m]` : bare;
+    return contextWindow >= 1_000_000 && (supportsOneMillionSuffix || nativeModel)
+      ? `${model}[1m]`
+      : model;
   }
-  return legacyToSdkModelString(model);
+  return nativeModel ? nativeClaudeSdkModelString(model) : model;
 }
 
-/** 目录窗口未知时的兜底映射链(与窗口规则引入前一致;haiku 日期重写已移除,见函数头)。 */
-function legacyToSdkModelString(model: string): string {
-  // #3764:含命名空间前缀(provider/…)的 id 是自定义/网关 Provider 的路由键,不属于
-  // 本兜底链的官方裸 id 知识范围 —— 除下面显式列出的已知命名空间条目外一律逐字透传。
-  // 此前 includes('sonnet') 的含糊匹配会把 `cindy/claude-sonnet-5` 改写成 `…[1m]`,
-  // 而 `cindy/claude-opus-5` 透传:同一自定义 Provider 的两个模型 wire id 形态不
-  // 对称,被上游按白名单逐一 403(官方 Claude Code CLI 对同上游是逐字发送、两个
-  // 模型均可用)。窗口已知的路径不经过本函数,不受影响。
-  if (model.includes('/')) {
-    // 折扣GPT(codex/* 经折扣网关)真实上下文上限远低于 1M(catalog cc 侧 = 272k),
-    // 绝不能带 [1m]: cc-code 的 has1mContext 只要在 model 串里见到 [1m] 就把窗口判成
-    // 1M(getContextWindowForModel 直接 return 1_000_000), 撑大 auto-compact 阈值 →
-    // 对话冲过折扣网关真实上限(~24 万 token)后空转, 用户侧表现为会话"假死"。
-    // 路由不依赖 [1m]: isAnthropicWireModel 只按 claude-/sonnet/opus/haiku/fable 前缀
-    // 判定, codex/ 前缀始终走 provider 网关, 去掉 [1m] 不改变路由判定;
-    // 真实窗口由 catalog 经 translator 窗口口径注入(=272k)。
-    if (model === 'codex/gpt-5.5' || model === 'codex/gpt-5.4') return model;
-    if (model === 'codex/gpt-5.6-sol' || model === 'codex/gpt-5.6-terra') return model;
-    // DeepSeek / GLM 的 [1m] 是历史兼容路由后缀; 上下文大小另走 maker capabilities。
-    if (model === 'deepseek/deepseek-v4-pro' || model === 'deepseek/deepseek-v4-flash') {
-      return `${model}[1m]`;
-    }
-    if (model === 'z-ai/glm-5.2') return `${model}[1m]`;
-    return model;
-  }
+/** Native Claude fallback when the host has no catalog window for the model. */
+function nativeClaudeSdkModelString(model: string): string {
   if (model === 'claude-opus-5') return 'claude-opus-5[1m]';
   if (model.includes('opus-4-8')) return 'claude-opus-4-8[1m]';
   if (model.includes('opus-4-7')) return 'claude-opus-4-7[1m]';
@@ -342,10 +315,6 @@ function legacyToSdkModelString(model: string): string {
   if (model === 'claude-sonnet-4-6') return 'claude-sonnet-4-6[1m]';
   // 兜底:未来新增裸 sonnet 型号在此映射更新前,也透传显式 id 而非裸别名。
   if (model.includes('sonnet')) return `${model}[1m]`;
-  // 官方 gpt-5.5 / gpt-5.4 真实支持 1M, 走 [1m] beta 通道。
-  if (model === 'gpt-5.5' || model === 'gpt-5.4') return `${model}[1m]`;
-  // DeepSeek 裸 id 的 [1m] 同上为历史兼容路由后缀。
-  if (model === 'deepseek-v4-flash') return `${model}[1m]`;
   return model;
 }
 
@@ -1032,17 +1001,15 @@ export class ClaudeCodeAgent extends BaseAgent {
     return 'high';
   }
 
-  /**
-   * catalog id → SDK wire 串,[1m] 由目录 contextWindow 驱动(见 toSdkModelString)。
-   * 模型不在 capabilities(目录外/host 未注入)时窗口传 undefined → 走 legacy 兜底链。
-   */
-  private sdkModelFor(model: string): string {
+  /** Alias declarations must come from the selected provider, not the deduplicated capabilities. */
+  private sdkModelFor(model: string, providerId?: string | null): string {
+    const metadata = this.deps.resolveClaudeSdkModelMetadata?.(providerId, model);
     const descriptor = this.capabilities.availableModels.find((m) => m.id === model);
-    const window =
-      descriptor && Number.isFinite(descriptor.contextWindow) && descriptor.contextWindow > 0
-        ? descriptor.contextWindow
-        : undefined;
-    return toSdkModelString(model, window);
+    return toSdkModelString(
+      model,
+      metadata?.contextWindow ?? descriptor?.contextWindow,
+      metadata?.supportsOneMillionSuffix,
+    );
   }
 
   /**
@@ -1504,7 +1471,8 @@ export class ClaudeCodeAgent extends BaseAgent {
 
     // 箭头别名捕获 this —— 下方 replayRuntimeDrift(普通 function)与 handle 对象
     // 字面量方法里没有类实例 this,统一经它取 wire 串。
-    const sdkModelFor = (model: string): string => this.sdkModelFor(model);
+    let mutableProviderId = opts.providerId ?? null;
+    const sdkModelFor = (model: string, providerId = mutableProviderId): string => this.sdkModelFor(model, providerId);
     const resolveRemoteClaudeRoute = this.deps.resolveRemoteClaudeRoute?.bind(this.deps);
     const getAuthEnv = this.deps.auth.getAuthEnv.bind(this.deps.auth);
     const sdkModel = sdkModelFor(opts.model);
@@ -1796,7 +1764,6 @@ export class ClaudeCodeAgent extends BaseAgent {
     let makerMemoryIndex = '';
     let memoryFlushController: MemoryFlushController | null = null;
     let mutableModel = opts.model;
-    let mutableProviderId = opts.providerId ?? null;
     const getAutoCompactThresholdPct = (
       model = mutableModel,
       provider = mutableProviderId,
@@ -2898,12 +2865,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 个 catalog-id → wire-string 映射,启动与热切共用,后加载的网关模型(如
     // x-ai/grok-4.6)也能进名单。
     // 受邀者会话只列分享的供应商为 Claude Code 提供的模型(子代理可选的模型也受这份名单约束)。
-    const currentAvailableSdkModels = (selectedModel: string): string[] => [
+    const currentAvailableSdkModels = (selectedModel: string, providerId = mutableProviderId): string[] => [
       ...new Set([
         ...(guestProvider
-          ? guestProvider.modelIds.map((id) => sdkModelFor(id))
-          : this.capabilities.availableModels.map(({ id }) => sdkModelFor(id))),
-        sdkModelFor(selectedModel),
+          ? guestProvider.modelIds.map((id) => sdkModelFor(id, providerId))
+          : this.capabilities.availableModels.map(({ id }) => sdkModelFor(id, providerId))),
+        sdkModelFor(selectedModel, providerId),
       ]),
     ];
     const resolveModelContextWindow = (model: string, providerId = mutableProviderId): number | undefined => {
@@ -7824,7 +7791,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 才有)若被当成 spawn 声明,下次切模会与仍烤着旧快照的 remoteEnv 比对
           // 误拒(codex P2 #1035)。
         }
-        const sdkModel = sdkModelFor(newModel);
+        const sdkModel = sdkModelFor(newModel, targetProviderId);
         const outputLimitNeedsRebuild = resolveMaxOutputTokens(newModel, targetProviderId) !== appliedMaxOutputTokens;
         if (outputLimitNeedsRebuild && opts.remoteHostId) {
           throw new Error(
@@ -7856,7 +7823,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // "restricted by your organization's settings"(2026-08-13)。applyFlagSettings
           // 是 merge,先把当前目录 + 目标模型并进去再切。
           await q.applyFlagSettings({
-            availableModels: currentAvailableSdkModels(newModel),
+            availableModels: currentAvailableSdkModels(newModel, targetProviderId),
           });
           await q.setModel(sdkModel);
           // 切模已生效:档位重下发失败只 warn,不把整个 setModel 报成失败(同下方 auto 审查重配)。
