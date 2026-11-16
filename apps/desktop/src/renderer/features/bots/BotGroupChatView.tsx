@@ -32,6 +32,7 @@ import { cn } from '@/lib/utils';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type DragEvent } from 'react';
 import { ArrowLeft, CircleAlert, RefreshCcw, Settings2 } from 'lucide-react';
 import { useBotGroupWorkTargets } from './useBotGroupWorkTargets';
+import { useRemoteDevices } from '@/features/device-link/remoteProjectsStore';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
@@ -827,7 +828,11 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   }, [group?.serverBacked, threadRootId, closeThread, shareScope]);
 
   const settingsLabel = t('bots.groupChat.settings.open');
-  const headerStatus = headerGroup ? botGroupHeaderStatus(headerGroup, displayName, t) : null;
+  const mainHeaderSpeakers = headerGroup?.round?.speakers.filter(speaker => speaker.threadRootId === null || (!speaker.sourceMessageId && !speaker.threadRootId));
+  const headerStatus = headerGroup ? botGroupHeaderStatus(mainHeaderSpeakers ? { ...headerGroup,
+    speakingBotIds: mainHeaderSpeakers.map(speaker => speaker.botId),
+    round: { ...headerGroup.round!, speakers: mainHeaderSpeakers },
+  } : headerGroup, displayName, t) : null;
   const personalMask = useGroupMask(groupId);
   const readLocatedMention = useReadLocatedMention(groupId);
   const header = useMemo(() => {
@@ -876,6 +881,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   }, [direct, headerGroup?.name, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, headerGroup?.dissolvedAt, headerGroup?.archived, members, headerStatus, openSettings, separator, settingsLabel, t]);
   useRegisterContentHeader(header);
 
+  // Group-level stopping remains available even when all visible work belongs to topics.
   const running = group?.round.status === 'running';
   // Several Bots think at once in a broadcast round's first circle; the key follows the set.
   const speakingKey = running && group ? group.round.speakers.map((speaker) => (speaker.executionId ?? `${speaker.botId}:${speaker.activity}`)).join(',') : '';
@@ -1234,13 +1240,20 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const openPlan = group ? openBotGroupPlan({ openPlan: group.openPlan, plans }) : null;
   const runningStep = runningBotGroupPlanStep(openPlan);
   const workTargets = useBotGroupWorkTargets(group);
-  const speakers = useMemo<BotGroupLiveSpeaker[]>(() => (running && group
+  const remoteDevices = useRemoteDevices();
+  const allSpeakers = useMemo<BotGroupLiveSpeaker[]>(() => (group?.round.status === 'running'
     ? group.round.speakers.flatMap((speaker) => {
         const member = memberById.get(speaker.botId);
-        const target = speaker.executionId ? workTargets.get(speaker.executionId) : undefined;
-        return member ? [{ ...speaker, member, displayName: botGroupMemberDisplayName(member), sessionId: speaker.sessionId || target?.sessionId || null, target }] : [];
+        const runsOn = speaker.executor;
+        const deviceName = runsOn && !runsOn.here ? remoteDevices.find(device => device.deviceId === runsOn.deviceId)?.deviceName ?? '' : '';
+        // The group's Cindy runs on another of the requester's computers: its task opens there.
+        const target = (speaker.executionId ? workTargets.get(speaker.executionId) : undefined)
+          ?? (runsOn && !runsOn.here && runsOn.sessionId ? { sessionId: runsOn.sessionId, deviceId: runsOn.deviceId, deviceName, botId: speaker.botId } : undefined);
+        return member ? [{ ...speaker, member, displayName: botGroupMemberDisplayName(member), sessionId: speaker.sessionId || target?.sessionId || null, target,
+          executor: runsOn ? { deviceName, ...(runsOn.here ? { here: true } : {}), ...(runsOn.model ? { model: runsOn.model } : {}) } : undefined }] : [];
       })
-    : []), [running, group, memberById, workTargets]);
+    : []), [group, memberById, workTargets, remoteDevices]);
+  const speakers = allSpeakers.filter(speaker => speaker.threadRootId === null || (!speaker.sourceMessageId && !speaker.threadRootId));
   const stopSpeaker = interleaveBotGroupWork([], speakers.filter(speaker => speaker.activity !== 'planning')).at(-1)?.value;
   const stepSpeaker = runningStep
     ? speakers.find((speaker) => speaker.activity === 'step' && speaker.member.botId === runningStep.step.botId)
@@ -1578,7 +1591,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         />
       ) : null}
     </BotGroupChatMain>
-    {group.serverBacked && threadRootId && <ChatThreadPanel key={`${group.id}:${threadRootId}`} group={group} rootId={threadRootId} quoteSources={quoteSources}
+    {group.serverBacked && threadRootId && <ChatThreadPanel key={`${group.id}:${threadRootId}`} group={group} rootId={threadRootId} speakers={allSpeakers.filter(speaker => speaker.threadRootId === threadRootId)} onStop={scope => void stopRound(scope)} stopping={stopping} canStopAll={!!group.canStopAll && !!group.round.othersActive} quoteSources={quoteSources}
       focus={threadFocus} sharedReplies={sharedReplies} onPostPending={beginPendingShare} onRevealShare={revealMainMessage} onClose={closeThread} resize={threadResize} />}
     </div>
   );

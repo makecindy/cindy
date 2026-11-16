@@ -347,6 +347,8 @@ function parseRound(value: unknown): BotGroupRoundView {
       if (!speaker || !botId) return [];
       return [{
         botId,
+        ...(id(speaker.sourceMessageId) ? { sourceMessageId: id(speaker.sourceMessageId)! } : {}),
+        ...(speaker.threadRootId === null ? { threadRootId: null } : id(speaker.threadRootId) ? { threadRootId: id(speaker.threadRootId)! } : {}),
         sessionId: optionalId(speaker.sessionId),
         activity: enumOf(speaker.activity, SPEAKER_ACTIVITIES) ?? 'reply',
         ...(id(speaker.executionId) ? { executionId: id(speaker.executionId)! } : {}),

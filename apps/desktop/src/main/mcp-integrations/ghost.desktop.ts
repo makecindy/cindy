@@ -1,3 +1,5 @@
+import { callEvaluate, readEvaluationImageFile } from '../cindy-evaluate/runtime.js';
+import { resolveSafe as resolveEvaluationImage } from '../imageCacheStore.desktop.js';
 /** Desktop platform services for the shared plugin gateway. */
 import { publishPluginAppResult, pluginModelResult } from '../mcp-apps/pluginCards.js';
 import * as community from '../plugin-contributions/host.js';
@@ -22,6 +24,9 @@ import { createGhostGateway } from './ghost.js';
 export type { GhostGrantLiveSessionState, ToolResultImageDescription, CindyGhostsHostDeps } from './ghost.js';
 
 const gateway = createGhostGateway({
+  callEvaluate: (...args) => callEvaluate(...args),
+  readEvaluationImageFile: (...args) => readEvaluationImageFile(...args),
+  resolveEvaluationImage: (...args) => resolveEvaluationImage(...args),
   publishPluginAppResult: (...args) => publishPluginAppResult(...args),
   pluginModelResult: (...args) => pluginModelResult(...args),
   community,

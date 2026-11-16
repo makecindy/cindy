@@ -303,6 +303,7 @@ export function ModelGroupsSection() {
                         onEffortChange={() => undefined}
                         configurationEnabled={false}
                         triggerVariant="field"
+                        fieldPanelWidth="content"
                         popoverSide="bottom"
                         ariaContext={t('modelGroups.settings.addSource')}
                         fallbackOption={{ active: true, label: t('modelGroups.settings.chooseModel'), onSelect: () => undefined }}

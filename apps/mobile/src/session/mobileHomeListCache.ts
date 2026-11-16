@@ -1,3 +1,4 @@
+import { normalizeHomeDisplayOrder, type HomeDisplayOrder } from './homeProjectOrder';
 import { parseTaskCompanion, parseTaskTeammate } from './teammateTaskSource';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { normalizeTaskTags } from '@cindy/maker-shared';
@@ -40,6 +41,7 @@ type StoredHomeListCache = {
   version: 1;
   updatedAt: number;
   devices: CachedHomeDeviceSnapshot[];
+  displayOrder?: HomeDisplayOrder | null;
 };
 
 function storageKeyForUser(userId: string): string {
@@ -48,19 +50,25 @@ function storageKeyForUser(userId: string): string {
 
 // 读取快照;无缓存 / JSON 损坏 / 形状不对 / userId 缺失一律静默返回空数组(乐观 hydrate 不应抛错)。
 export async function getCachedHomeListSnapshot(userId: string): Promise<CachedHomeDeviceSnapshot[]> {
+  return (await getCachedHomeListState(userId)).devices;
+}
+
+export async function getCachedHomeListState(userId: string): Promise<{ devices: CachedHomeDeviceSnapshot[]; displayOrder: HomeDisplayOrder | null }> {
+  const empty = { devices: [], displayOrder: null };
   // 废弃的 v1 全局 key 顺带清掉(fire-and-forget,不阻塞冷启动首帧)。
   void AsyncStorage.removeItem(LEGACY_STORAGE_KEY).catch(() => undefined);
-  if (!userId.trim()) return [];
+  if (!userId.trim()) return empty;
   const raw = await AsyncStorage.getItem(storageKeyForUser(userId)).catch(() => null);
-  if (!raw) return [];
+  if (!raw) return empty;
   try {
     const parsed = JSON.parse(raw) as unknown;
     const devices = isRecord(parsed) && Array.isArray((parsed as StoredHomeListCache).devices)
       ? (parsed as StoredHomeListCache).devices
       : [];
-    return normalizeSnapshotDevices(devices, MAX_CACHED_HOME_SESSIONS_PER_DEVICE);
+    return { devices: normalizeSnapshotDevices(devices, MAX_CACHED_HOME_SESSIONS_PER_DEVICE),
+      displayOrder: isRecord(parsed) ? normalizeHomeDisplayOrder(parsed.displayOrder) : null };
   } catch {
-    return [];
+    return empty;
   }
 }
 
@@ -80,7 +88,8 @@ export async function cacheHomeListSnapshot(userId: string, sessions: readonly R
       await AsyncStorage.removeItem(storageKey).catch(() => undefined);
       return;
     }
-    const payload: StoredHomeListCache = { version: 1, updatedAt: Date.now(), devices };
+    const payload: StoredHomeListCache = { version: 1, updatedAt: Date.now(), devices,
+      displayOrder: displayOrderOwner === userId ? displayOrder : null };
     const serialized = JSON.stringify(payload);
     if (utf8ByteLength(serialized) > MAX_CACHED_HOME_LIST_BYTES) continue;
     if (epoch !== writeEpoch) return;
@@ -91,6 +100,14 @@ export async function cacheHomeListSnapshot(userId: string, sessions: readonly R
     return;
   }
   // 缩到最小档仍超体积上限:放弃本次写入,保留旧快照(缓存只是首屏加速,不追求完整)。
+}
+
+// Reuse the existing snapshot write/debounce; no additional storage read or timer.
+let displayOrderOwner = '';
+let displayOrder: HomeDisplayOrder | null = null;
+export function rememberHomeDisplayOrder(userId: string, order: HomeDisplayOrder): void {
+  displayOrderOwner = userId;
+  displayOrder = normalizeHomeDisplayOrder(order);
 }
 
 // 去抖回写:collect 在定时器触发时才执行,拿的是届时最新的 store 快照(不闭包旧数据)。
@@ -126,6 +143,8 @@ export function scheduleHomeListSnapshotPersist(
 export async function clearCachedHomeListSnapshot(): Promise<void> {
   // 自增代际,作废所有 in-flight 的 cacheHomeListSnapshot 写入(见其代际核对)。
   writeEpoch += 1;
+  displayOrderOwner = '';
+  displayOrder = null;
   if (persistTimer) {
     clearTimeout(persistTimer);
     persistTimer = null;

@@ -401,32 +401,43 @@ export function refreshReceivedShares(reason: string): Promise<void> {
   const rt = runtime;
   if (!rt) return Promise.resolve();
   if (rt.refreshing) return rt.refreshing;
-  const requestedAt = Date.now();
-  const requestedMono = performance.now();
-  const requestedRegion = getActiveAuthRealm();
   const run = (async () => {
     try {
-      const received = await providerShareApi.listReceived();
-      // A late success belongs to the previous account/region and cannot install
-      // a fresh display window. The readiness timestamp keeps its old meaning.
-      if (!current(rt) || getActiveAuthRealm() !== requestedRegion) return;
-      rt.received = received;
-      rt.unavailable = new Set(received.unavailableShareIds);
-      rt.authorityIncomplete = received.authorityIncomplete === true;
-      rt.fetchedAt = Date.now();
-      rt.viewAnchor = makeViewAnchor(requestedRegion, requestedAt, requestedMono);
-      const changed = emitChanged(rt);
-      if (changed) await changed;
-    } catch (error) {
-      if (current(rt)) {
-        log.warn('received shares refresh failed', { reason, error: error instanceof Error ? error.message : String(error) });
-        if (isAuthoritativeShareListDenial(error)) {
-          // A refusal is authoritative for this account/device: drop the old
-          // rows, mark this region as confirmed empty and fence their metadata.
-          rt.received = [];
-          if (rt.fetchedAt === 0) rt.fetchedAt = Date.now();
-          void emitChanged(rt);
+      // Leaving replaces received immediately. A read from before that decision
+      // cannot restore it; drain one coalesced follow-up in the same in-flight job.
+      while (current(rt)) {
+        let before = rt.received;
+        const requestedAt = Date.now();
+        const requestedMono = performance.now();
+        const requestedRegion = getActiveAuthRealm();
+        try {
+          const received = await providerShareApi.listReceived();
+          // A late success belongs to the previous account/region and cannot install
+          // a fresh display window. The readiness timestamp keeps its old meaning.
+          if (!current(rt) || getActiveAuthRealm() !== requestedRegion) return;
+          if (rt.received !== before) continue;
+          rt.received = received;
+          rt.unavailable = new Set(received.unavailableShareIds);
+          rt.authorityIncomplete = received.authorityIncomplete === true;
+          rt.fetchedAt = Date.now();
+          rt.viewAnchor = makeViewAnchor(requestedRegion, requestedAt, requestedMono);
+          before = received;
+          const changed = emitChanged(rt);
+          if (changed) await changed;
+        } catch (error) {
+          if (current(rt) && rt.received !== before) continue;
+          if (current(rt)) {
+            log.warn('received shares refresh failed', { reason, error: error instanceof Error ? error.message : String(error) });
+            if (isAuthoritativeShareListDenial(error)) {
+              // A refusal is authoritative for this account/device: drop the old
+              // rows, mark this region as confirmed empty and fence their metadata.
+              rt.received = [];
+              if (rt.fetchedAt === 0) rt.fetchedAt = Date.now();
+              void emitChanged(rt);
+            }
+          }
         }
+        return;
       }
     } finally {
       rt.refreshing = null;
@@ -622,12 +633,20 @@ export async function leaveProviderShare(memberId: string): Promise<void> {
   const shareId = allReceived(rt).find((share) => share.memberId === memberId)?.shareId ?? null;
   const forgetPrefs = shareId ? captureProviderShareGuestPrefsRemoval(shareId) : null;
   const crossRegion = await crossRegionLeave(memberId);
+  let refreshed: Promise<void> | undefined;
+  let changed: Promise<void> | void = undefined;
   if (!crossRegion) {
     if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
     await providerShareApi.leave(memberId);
+    if (current(rt)) {
+      // The successful leave is already authoritative, even if its list refresh
+      // fails. Replacing the array also fences any older in-flight list/denial.
+      rt.received = rt.received.filter((share) => share.memberId !== memberId);
+      changed = emitChanged(rt);
+      // Join/start the post-leave read now, before preference I/O can outlive it.
+      refreshed = refreshReceivedShares('left');
+    }
   }
   // 退出后这个分享的本机偏好(「信任 {分享者}」)一起忘掉。
-  if (forgetPrefs) await forgetPrefs();
-  if (!current(rt)) return;
-  if (!crossRegion) await refreshReceivedShares('left');
+  await Promise.all([forgetPrefs?.(), changed, refreshed]);
 }

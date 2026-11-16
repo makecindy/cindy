@@ -23,7 +23,7 @@ export function buildPluginSettingsPages(ghosts: readonly InstalledGhost[]): Plu
     const root = `plugin-settings-${instanceId}`;
     const pages: PluginSettingsPage[] = host.settings?.length
       ? [{ ghost, instanceId, title: ghost.manifest.name, id: root }] : [];
-    if (ghost.uiCapabilityApproved === true) for (const item of host.contributions ?? []) {
+    for (const item of host.contributions ?? []) {
       if (item.position === 'settings.section' && item.view) pages.push({ ghost, instanceId,
         viewId: item.view, contributionId: item.id, input: item.arguments,
         title: `${ghost.manifest.name} · ${item.title}`, id: `${root}-${item.id}` });

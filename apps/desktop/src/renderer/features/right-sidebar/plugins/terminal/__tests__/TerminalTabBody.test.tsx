@@ -6,6 +6,7 @@ import type { TabKindHostContext } from '../../../types';
 import type { TerminalExitEvent } from '@/../shared/terminal-bridge';
 
 const fit = vi.fn();
+let onExitHandler: ((event: unknown) => void) | undefined;
 const resize = vi.fn(async () => undefined);
 const entry = {
   terminal: {
@@ -27,7 +28,11 @@ const entry = {
 };
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, options?: Record<string, unknown>) => (
+      options ? `${key} ${JSON.stringify(options)}` : key
+    ),
+  }),
 }));
 vi.mock('@/components/ui/spinner', () => ({ Spinner: () => null }));
 vi.mock('../lib/xtermPool', () => ({
@@ -78,6 +83,7 @@ beforeEach(() => {
   resize.mockClear();
   entry.terminal.open.mockClear();
   entry.terminal.onData.mockClear();
+  onExitHandler = undefined;
   entry.terminal.cols = 80;
   entry.terminal.rows = 24;
   entry.lastSize = { cols: 80, rows: 24 };
@@ -98,7 +104,7 @@ beforeEach(() => {
         restart: vi.fn(),
         write: vi.fn(),
         onData: vi.fn(() => vi.fn()),
-        onExit: vi.fn(() => vi.fn()),
+        onExit: vi.fn((handler: (event: unknown) => void) => { onExitHandler = handler; return vi.fn(); }),
       },
     },
   });
@@ -108,6 +114,28 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+
+describe('TerminalTabBody exit display', () => {
+  it.each([
+    [{ code: 1, signal: '0' }, 'rightSidebar.terminal.processExited', { code: 1 }],
+    [{ code: null, signal: '9' }, 'rightSidebar.terminal.processKilled', { signal: '9' }],
+  ])('distinguishes exit code from a real signal: %o', async (exit, messageKey, interpolation) => {
+    render(
+      <TerminalTabBody
+        state={{ created: true, exited: null, title: '', shellId: '', shellDisplayName: '' }}
+        ctx={makeContext()}
+        active
+      />,
+    );
+
+    await waitFor(() => expect(onExitHandler).toBeTypeOf('function'));
+    await act(async () => {
+      onExitHandler?.({ id: 'terminal-1', exit });
+    });
+    expect(screen.getByText(`${messageKey} ${JSON.stringify(interpolation)}`)).toBeTruthy();
+  });
 });
 
 describe('TerminalTabBody sidebar visibility', () => {

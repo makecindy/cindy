@@ -264,6 +264,8 @@
     "transferProgress": "Transferred {{sent}} / {{total}} · Average {{speed}}/s",
     "thisComputer": "this computer",
     "selectedComputer": "selected computer",
+    "sourceComputer": "the source computer",
+    "waitingForSource": "Waiting for {{name}} to come back online. Copying will continue then.",
     "estimating": "Counting files and calculating size…",
     "fileSummary": "Project files: {{count}}, totaling {{size}}",
     "estimateNote": "Pre-copy estimate including hidden files. Git history, conversation and attachments are copied separately and excluded from this size. Files may change before copying.",
@@ -1114,19 +1116,23 @@
   },
   "privacyExit": {
     "status": "This computer is being remotely controlled through Cindy",
-    "hint": "To show this screen, turn off Computer privacy screen under Security on the device controlling it. Or click or press any key on this computer, then choose Disconnect.",
+    "hint": "To show this screen, turn off Privacy screen while connected under Security on the controlling device. Or click or press any key on this computer, then choose Disconnect.",
     "title": "Disconnect remote desktop?",
-    "detail": "This will end remote control and restore this computer’s screen. The computer will lock if lock on exit is enabled.",
+    "detail": "This ends remote control and removes the privacy screen. If Protect Computer on Exit is on, the computer also locks.",
     "cancel": "Keep connected",
     "disconnect": "Disconnect"
   },
   "awayGuard": {
     "status": "Cindy is working",
-    "hint": "Press any key to lock, then unlock with Touch ID or your password.",
+    "hint": "Press any key or the Touch ID key to lock, then unlock with your fingerprint or password",
     "lockFailed": {
       "status": "Cindy couldn't lock this Mac",
-      "hint": "Press Control-Command-Q to lock it. The screen will also lock on its own after a while."
-    }
+      "hint": "Touch the computer to try locking again. If it still can’t lock, verify with Touch ID or your password to remove the cover. You can also close the lid or press the power button to lock.",
+      "hintWindows": "Touch the computer to try locking again. If it still can’t lock, verify with Windows Hello or your PIN to remove the cover. You can also press the Windows logo key + L to lock."
+    },
+    "hintWindows": "Press any key to lock; unlock with Windows Hello or your password",
+    "hintLinux": "Press any key to lock; unlock with your password",
+    "verifyReason": "remove the privacy screen"
   },
   "appBadge": {
     "attentionCount": "Tasks needing attention: {{count}}"
@@ -1277,10 +1283,10 @@
       "resolutionHint": "Resolution changes affect the actual remote monitor."
     },
     "settingUnsupported": "This computer does not support this setting yet",
-    "privacyScreen": "Computer privacy screen",
-    "privacyScreenHint": "Cover the computer’s screens. Click or press a key on the computer, then confirm to disconnect. Lock on exit applies if enabled.",
-    "privacyActive": "Privacy screen is on. Click or press a key on the computer, then confirm to disconnect. Lock on exit applies if enabled.",
-    "privacyFailed": "Privacy screen could not be enabled. The computer’s screens may still be visible.",
+    "privacyScreen": "Privacy screen while connected",
+    "privacyScreenHint": "Covers this computer’s screen during remote control. If someone clicks or presses a key at the computer, it asks before disconnecting.",
+    "privacyActive": "Privacy screen is on. If someone clicks or presses a key at the computer, it asks before disconnecting.",
+    "privacyFailed": "Couldn't turn on the privacy screen. The computer's screen may still be visible.",
     "hostMute": "Mute controlled computer",
     "hostMuteHint": "Mute the controlled computer while connected",
     "hostMuteFailed": "Couldn’t change the controlled computer’s mute state",
@@ -1296,7 +1302,7 @@
     "idleMinutes_one": "{{count}} minute",
     "idleMinutes_other": "{{count}} minutes",
     "idleDisconnected": "Disconnected due to inactivity. Reconnect when you are ready.",
-    "lockOnExit": "Lock Computer on Exit",
+    "lockOnExit": "Protect Computer on Exit",
     "lockOnExitHint": "Locks the computer when you exit remote desktop.",
     "lockOnExitFailed": "Could not confirm that the computer locked. Check the computer before leaving it unattended.",
     "nativeResolution": "Native",
@@ -1339,7 +1345,9 @@
         "body": "This task has {{device}} open on another computer. Update the “{{plugin}}” plugin on this computer to view and operate it in the right sidebar.",
         "action": "Update"
       }
-    }
+    },
+    "lockOnExitHintPrivacy": "Shows the privacy screen when you exit, so AI can keep working; touching the computer locks it.",
+    "lockedEnablePrivacyHint": "To let AI keep using this computer while you're away, turn on the privacy screen in its Settings → General → When You're Away."
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1376,7 +1384,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "The SSH config was saved, but Cindy could not refresh it. Reload the SSH configuration.",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy cannot safely manage this SSH configuration. Reload it, then verify the Cindy ownership marker and that the host alias is unique.",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy cannot safely reproduce some SSH configuration rules for this host. Terminal SSH may still work; review Match, conditional Include, IdentityAgent, IdentitiesOnly, and public-key settings.",
-    "SSH_AGENT_UNAVAILABLE": "The SSH Agent is unavailable. Start it, load the matching private key with ssh-add, and try again.",
+    "SSH_AGENT_UNAVAILABLE": "The local SSH key agent (ssh-agent) is unavailable. Check that it is running and that ssh-add -l lists the required key. See Manage keys for troubleshooting.",
     "SSH_HOST_PREFS_WRITE_FAILED": "The host is still saved, but its display name or Agent Proxy settings could not be saved. Check local storage permissions and try again.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "This task has reached its tab limit. Close some tabs first",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "Tab content is too large to add",
@@ -1467,6 +1475,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "To review",
+      "summaryInProgress": "In progress",
+      "summaryPending": "Needs your action",
+      "summaryUnread": "Unread results",
       "markRead": "Mark as read",
       "archive": "Archive",
       "actionFailed": "Could not complete the action. The notification has been kept. Try again.",
@@ -1904,7 +1916,8 @@
       "windowBehavior": "App Behavior",
       "shortcuts": "Keyboard Shortcuts",
       "mcpServers": "Custom MCP",
-      "bots": "Buddies"
+      "bots": "Buddies",
+      "awayFromComputer": "When You're Away"
     },
     "remote": {
       "title": "Remote machines",
@@ -1920,6 +1933,12 @@
       "footnote": "Only SSH connection management is available for now. Running agents on remote machines is coming in a later update.",
       "viaAuth": "via {{label}}",
       "readOnlyFromSshConfig": "Connection details come from SSH configuration",
+      "importedAgentHint": "Authenticates through the local SSH key agent (ssh-agent). A successful terminal ssh connection does not mean the agent is ready.",
+      "agentError": {
+        "environmentUnset": "The environment variable referenced by IdentityAgent is not set for Cindy. Set it or correct IdentityAgent in your SSH config.",
+        "endpointEmpty": "IdentityAgent resolves to an empty endpoint. Correct IdentityAgent in your SSH config.",
+        "endpointUnavailable": "The SSH key agent endpoint configured by IdentityAgent is unavailable. Check that endpoint and its agent; the default ssh-agent may use a different endpoint."
+      },
       "configWarning": "Cindy cannot evaluate some SSH configuration rules. The host list or connection details may differ from terminal SSH.",
       "configDiagnostic": {
         "io": "Cindy could not read your SSH configuration. The last successfully loaded hosts are still shown. Check file permissions and reload.",
@@ -2017,7 +2036,7 @@
           "tryThis": "Try this from your terminal",
           "close": "Close",
           "fallbackTitle": "Or skip the agent entirely",
-          "fallbackBody": "You can add this host with “Identity file” auth instead — {{appName}} will pass the key file to ssh directly and you’ll be prompted for the passphrase on each connection. No agent needed. Security tradeoff: you type the passphrase for every connection, but no key is cached in memory.",
+          "fallbackBody": "You can also choose “Identity file” when adding a host. {{appName}} reads the private key into process memory without ssh-agent. Only unencrypted private keys are currently supported; connections do not prompt for a key passphrase. Use ssh-agent for encrypted keys.",
           "reason": {
             "agent_unavailable": "ssh-add couldn't reach your ssh-agent (binary missing, agent not running, or SSH_AUTH_SOCK unset).",
             "bad_passphrase": "ssh-add rejected the passphrase.",
@@ -2464,21 +2483,23 @@
       "swallowActivationClickAria": "Toggle protection from accidental clicks when returning to the window",
       "macRestartNote": "On macOS, restart the app for changes to take effect.",
       "awayGuard": {
-        "label": "Keep working while you're away",
-        "hint": "When on, this Mac won't sleep its display or lock on its own, so AI can use it at any time. After you've been away for a while, a black cover hides the screen and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Touch ID or your password.",
+        "label": "Use privacy screen instead of locking",
+        "hint": "When AI needs the screen, this computer won't turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Touch ID or your password. With no tasks running, the display sleeps and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
         "permission": "Allow Cindy in System Settings > Privacy & Security > Accessibility so it can lock the screen as soon as someone touches this Mac. Until then, the screen sleeps and locks as usual.",
         "preview": "Try it now",
-        "previewStarting": "Take your hands off the mouse and keyboard. The screen is covered in 3 seconds; press any key to lock it, then unlock.",
-        "previewUnavailable": "Couldn't cover the screen. Restart Cindy and try again.",
+        "previewStarting": "Let go of the mouse and keyboard. In 3 seconds the privacy screen appears; press any key to lock, then unlock to try it.",
+        "previewUnavailable": "Couldn't show the privacy screen. Restart Cindy and try again.",
         "delay": {
           "30": "30 sec",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
-          "label": "Cover the screen after",
-          "hint": "How long the keyboard and mouse stay untouched before the cover goes up. By default, the same as your display sleep time.",
+          "label": "Show privacy screen after",
+          "hint": "How long nobody touches the keyboard or mouse while AI is working. Defaults to the system's display-off time.",
           "system": "System"
-        }
+        },
+        "hintWindows": "When AI needs the screen, this computer won’t turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Windows Hello or your password. With no tasks running, the display turns off and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
+        "hintLinux": "When AI needs the screen, this computer won’t turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with your password. With no tasks running, the display turns off and locks as usual. After a remote session ends, the privacy screen protects this computer too."
       }
     },
     "agentIsland": {
@@ -3958,6 +3979,7 @@
           "unsupportedProtocol": "This model protocol is not supported by connection testing",
           "inconclusive": "Connection could not be confirmed. Check the address or network before retrying; the previous request may have run.",
           "exhausted": "All candidate interfaces were tried. No working connection was found.",
+          "model": "Tested model: {{model}}",
           "costHint": "Testing sends short generation requests and may incur a small charge.",
           "details": "View attempts",
           "stop": "Stop test"
@@ -4329,7 +4351,9 @@
           "inline": "Runs on",
           "signInHere": "Sign in on this computer",
           "writeFailed": "Couldn’t save where this provider runs. Try again."
-        }
+        },
+        "sameAccountConnections": "Saved connections for this account",
+        "sameAccountConnectionsHint": "This account appears once. Choosing a connection only changes which settings you manage; existing tasks keep their connection."
       },
       "detect": {
         "groupLabel": "Detected on this device",
@@ -5352,6 +5376,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex server compaction",
+        "description": "Prefer server compaction when enabled. When disabled, Codex uses native local summarization, which still calls the current model.",
+        "hint": "Applies when Codex next starts or resumes a session on this computer. Providers without server compaction keep their existing behavior.",
+        "loadFailed": "Could not load Codex compaction settings",
+        "saveFailed": "Could not save Codex compaction settings"
+      },
       "title": "Context compaction",
       "description": "Adjust Claude Code and Pi compaction ratios here. Codex derives its threshold from the model context setting. If remote compaction fails, it automatically switches to summary compaction and keeps using it for the current task.",
       "card": {
@@ -6440,7 +6471,7 @@
         "hook": "Cindy IM bots"
       },
       "hook": {
-        "description": "Connect Slack, Telegram, Feishu / Lark and other channels to the same Cindy. Messages are dispatched to this device and share its project list and session runner; each provider keeps its own account and preferences.",
+        "description": "Connect Slack, Telegram, Feishu / Lark and other channels to the same Cindy. Messages are dispatched to this device and share its project list and session runner; every project’s model and permissions are shared by all channels, while each channel keeps its own account link.",
         "slackDescription": "Bind Slack workspaces and hand tasks to Cindy from Slack.",
         "slackDisabledHint": "Turn on the switch to start Slack authorization; once bound you can dispatch tasks from Slack.",
         "slackBoundHint": "Binding complete. Turning the switch off unbinds this device; turning it back on requires authorizing again.",
@@ -6459,32 +6490,20 @@
           "error": "Connection failed"
         },
         "form": {
-          "workspacesCardTitle": "Working directory mappings",
-          "workspacesCardDescription": "Alias → local absolute path; the directory list is shared across channels while run preferences stay per channel.",
-          "workspacesBoundCount_one": "{{count}} local working directory bound",
-          "workspacesBoundCount_other": "{{count}} local working directories bound",
+          "workspacesCardTitle": "Projects and models",
+          "workspacesCardDescription": "Shared by every official bot. Projects come from your sidebar — create, rename, or remove them there. Changes made with /model in a chat show up here too.",
+          "workspacesBoundCount_one": "{{count}} project",
+          "workspacesBoundCount_other": "{{count}} projects",
           "aliasPlaceholder": "Alias, e.g. my-server",
-          "addWorkspace": "Add working directory",
-          "removeWorkspace": "Remove this working directory",
-          "changeDir": "Click to change directory (alias and preferences kept)",
+          "addProject": "Add project",
           "defaultWorkspaceChip": "Default: {{name}}",
-          "defaultWorkspaceAria": "Choose the default working directory for dispatched tasks",
-          "defaultWorkspaceRadioAria": "Set “{{name}}” as the default working directory",
-          "defaultWorkspaceRowHint": "The selected directory is the default working directory: any Telegram DM, group or topic conversation that has not picked a project of its own runs its tasks there (conversations that chose one with /workspace keep theirs). Mind the permission mode on the selected directory’s row — set to Full access, an @mention from any group runs with full access inside that repository.",
-          "legacyDefaultsTitle": "Legacy “new conversation” defaults are still in effect",
-          "legacyDefaultsDescription": "This device saved older official-bot defaults that still act as the fallback for directories without their own settings (official Telegram and X share one copy). These values are now set per directory. Restoring defaults clears all of the following:",
-          "legacyDefaultsRow": {
-            "agentKind": "Default agent: {{current}} → {{fallback}}",
-            "permissionMode": "Permission mode: {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsRowAgent": "{{agent}}: {{fields}}",
-          "legacyDefaultsField": {
-            "model": "model {{current}} → {{fallback}}",
-            "effort": "reasoning effort {{current}} → {{fallback}}",
-            "source": "model source {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsFieldSeparator": ", ",
-          "legacyDefaultsSourceFollowsGlobal": "follows global settings"
+          "defaultWorkspaceAria": "Choose the default project for dispatched tasks",
+          "defaultWorkspaceRadioAria": "Set “{{name}}” as the default project",
+          "defaultWorkspaceRowHint": "The selected project is the default: Telegram, Feishu / Lark and X conversations that have not picked a project run their tasks there.",
+          "defaultProjectTag": "Default",
+          "defaultProjectFullAccessWarning": "The default project “{{name}}” has Full access: an @mention from any group runs with full access inside it.",
+          "sharedSettingsPointer": "Projects, models and permissions are shared by all official bots.",
+          "sharedSettingsPointerAction": "Open settings"
         },
         "binding": {
           "copyLink": "Copy link",
@@ -6502,7 +6521,8 @@
         "toast": {
           "saveFailed": "Failed to save",
           "toggleFailed": "Failed to toggle",
-          "actionFailed": "Operation failed"
+          "actionFailed": "Operation failed",
+          "addProjectFailed": "Failed to add project"
         },
         "loginRequired": "Sign in to your {{appName}} account first; the connection resumes automatically after login.",
         "standbyHint": "Another Cindy instance on this computer is using the Slack connection. Close it, then turn this switch back on to take over.",
@@ -6633,7 +6653,7 @@
             "usageBody": "Post on X mentioning @askmycindy and the task is dispatched to this device to run here; the result comes back as a reply.",
             "riskLabel": "Replies Are Public",
             "riskPublicBody": "Replies are public and visible to anyone. Use this for public questions and problems, not for private matters that could expose personal information.",
-            "riskWorkdirBody": "Every X task runs in the default working directory set in X connection settings. The Agent can read and write files there, and its conclusion is posted publicly — if that directory points at a private repository, file contents may become public with it.",
+            "riskWorkdirBody": "Every X task runs in the default project set in X connection settings. The Agent can read and write files there, and its conclusion is posted publicly — if that project points at a private repository, file contents may become public with it.",
             "withdrawLabel": "To Withdraw a Reply",
             "withdrawBody": "The person who asked can delete the answer by replying “@askmycindy /delete” to it. Include @askmycindy in the reply text. Only the public reply is deleted; the local task record is kept.",
             "ackTitle": "X Is Linked — How It Works and What to Watch For",
@@ -6713,8 +6733,8 @@
           "botFallback": "Cindy bot",
           "bridgeTitle": "Feishu / Lark Bots",
           "bridgeDescription": "Bots only pass your Feishu / Lark messages to Cindy. Each linked account’s messages go to its working computer, and sessions stay separate for each bot and account.",
-          "settingsTitle": "Working Directories and Models",
-          "settingsDescription": "These belong to your Cindy account on this computer, not to a bot or a Feishu / Lark account, so every Feishu / Lark bot uses the same ones. The directory list is also shared with other channels.",
+          "settingsTitle": "Projects and Models",
+          "settingsDescription": "These belong to your Cindy account on this computer, not to a bot or a Feishu / Lark account, so every Feishu / Lark bot uses the same ones. The projects are the local projects in the sidebar and are also shared with other channels.",
           "workingDeviceLabel": "Working computer: {{name}}",
           "workingDeviceThisComputer": "This computer",
           "workingDeviceUnknown": "Working computer not yet synced",
@@ -6928,9 +6948,10 @@
         "offlineLocal": "{{provider}} is offline. Changes are saved on this computer and sync to the chat model card when it reconnects.",
         "requireBinding": "Complete {{provider}} account linking first.",
         "serverUnsupported": "Server is too old or not responding; preferences cannot be loaded.",
+        "loadFailed": "Could not load project settings.",
         "retry": "Retry",
         "toast": {
-          "saveFailed": "Failed to save directory preferences"
+          "saveFailed": "Failed to save project settings"
         },
         "teamChipAria": "Choose which Slack workspace these preferences belong to"
       }
@@ -7007,7 +7028,8 @@
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
-      }
+      },
+      "keepAwakeIncluded": "Included in the privacy screen: this computer won't sleep."
     },
     "imBot": {
       "beta": "Beta",
@@ -8190,6 +8212,8 @@
         "cindyTextOneshot": "Can ask Cindy's fast lane a question and receive a text answer",
         "cindyTextOneshotDetail": "Uses the system's lightweight utility model chain (the same lane as auto titles). No Agent involved and no file access. Model charges may apply.",
         "cindyEmbedText": "Can send text to be turned into vectors (for semantic search)",
+        "cindyModelsDecisions": "Can call decision models (uses your model quota)",
+        "cindyModelsRerank": "Can call reranking models (uses your model quota)",
         "cindyEmbedTextDetail": "Text is sent to the system embedding model and turned into numbers, up to {{max}} items per call. Model charges may apply. The vectors go only to the plugin — nothing is written to your own library.",
         "cindySearchWeb": "Can search the public web with Cindy AI",
         "cindySearchWebDetail": "Search requests access the public web and may consume Cindy AI quota.",
@@ -8212,41 +8236,36 @@
         "agentCompanionsDetail": "Can view all your buddies, including those running on your other computers: name, description, avatar, status (working, waiting for you, idle, offline), what kind of step each is on (such as thinking or running a tool), the requests waiting for you as their cards show them (questions, commands to run, plans), and the recent conversation in each buddy’s main chat (up to 50 of your messages and their replies, without tool steps); and open a buddy’s conversation in the main window. With the message delivery permission as well, it can pass on the answers you give in the plugin: answer questions, decline requests, and give feedback on plans. Allowing a step still takes your click in Cindy’s own confirmation. Cannot read files, tool steps or thinking.",
         "agentCompanionsRequest": "Review buddy viewing permission",
         "hostTools_history": "Task History",
-        "hostTools_historyDetail": "Use Cindy’s task tools to list existing tasks, read complete messages and search history, including your other computers when explicitly selected and accessible.",
+        "hostTools_historyDetail": "Use Cindy’s task tools to list existing tasks, read complete messages and search history, including your other computers when explicitly selected and accessible. Export local tasks as native files. Plugin calls use installation authorization; Agent calls follow their own runtime permissions.",
         "hostTools_control": "Task Management",
-        "hostTools_controlDetail": "Use Cindy’s task tools to edit, archive, restore and control existing tasks and projects. High-risk operations require confirmation in Cindy each time.",
+        "hostTools_controlDetail": "Use Cindy’s task tools to edit, archive, restore and control existing tasks and projects, and import native task files on this computer.",
         "hostTools_handoff": "Task Messaging",
         "hostTools_handoffDetail": "Use Cindy’s task tools to send messages to existing tasks. Operations needing a current task require an explicit task target.",
         "hostTools_settings": "App Settings",
         "hostTools_settingsDetail": "Use Cindy’s settings tools to read and change app configuration. Secrets are not returned, and private input remains yours to provide.",
         "hostTools_scheduler": "Automation Management",
-        "hostTools_schedulerDetail": "After approval, the plugin can create, list, edit, pause, resume, delete and run automated tasks, and read run history. Agent-run scheduled tasks use the task’s default permissions, including Full Access. High-risk host operations require confirmation each time.",
+        "hostTools_schedulerDetail": "After approval, the plugin can create, list, edit, pause, resume, delete and run automated tasks, and read run history. Agent-run scheduled tasks use the task’s default permissions, including Full Access.",
         "hostTools_terminal": "Terminal and Commands",
         "codeDetailFiles": "The plugin page stays isolated. Cindy performs approved file operations within the directories you select.",
         "hostTools_discovery": "View Host Capabilities",
         "hostTools_discoveryDetail": "Read the services provided by the execution computer and this plugin’s declared and approved tool groups. Cannot install, disable or revoke other plugins.",
         "hostTools_browser": "Browser Control",
-        "hostTools_browserDetail": "Read and operate pages in Cindy’s selected browser. Switching to My Browser, uploading files and other sensitive actions keep Cindy’s confirmations.",
+        "hostTools_browserDetail": "Read and operate pages in Cindy’s selected browser. Can switch to My Browser, access signed-in pages and upload files.",
         "hostTools_computer": "Computer Control",
         "hostTools_computerDetail": "View windows and use keyboard and mouse actions through Cindy’s computer tools. System permissions, sensitive input protection and Host risk rules still apply.",
         "hostTools_ssh": "SSH Connections",
-        "hostTools_sshDetail": "Run commands and manage your configured SSH connections. Credentials stay with Cindy. Actions requiring confirmation are confirmed each time.",
+        "hostTools_sshDetail": "Run commands and manage your configured SSH connections. Credentials stay with Cindy.",
         "hostTools_docs": "Read and Create Documents",
-        "hostTools_docsDetail": "Use Cindy’s document tools within this plugin’s private directory. Creating and converting documents requires Cindy’s confirmation.",
+        "hostTools_docsDetail": "Use Cindy’s document tools within this plugin’s private directory.",
         "codeDetailHostServices": "Plugin pages stay isolated. Approved Host tools can operate browsers, computers, connections or documents as described in each permission.",
         "hostTools_storage": "Storage and Sharing Between Plugins",
-        "hostTools_storageDetail": "Use this plugin’s storage, Library and authorized media. Cindy confirms the source, recipient plugin and exact copy for every share. Other plugins’ storage cannot be read.",
-        "codeDetailStorage": "Storage operations stay within this plugin’s data. You confirm every share with another plugin.",
-        "storageShareTitle": "Give a Copy to Another Plugin",
-        "storageShareMessage": "Copy “{{file}}” ({{size}}) from plugin “{{name}}” to plugin “{{target}}”. The recipient gets an independent copy; source updates are not synchronized. Content already read or saved by the recipient cannot be recalled.",
+        "hostTools_storageDetail": "Use this plugin’s storage, Library and authorized media. Sharing delivers a copy only between enabled plugins that declare storage under the same account and organization. Other plugins’ storage cannot be read.",
+        "codeDetailStorage": "Storage operations stay within this plugin’s data. Sharing delivers copies between enabled plugins that declare storage under the same account and organization.",
         "hostTools_files": "Files in Selected Directories",
         "hostTools_filesDetail": "Read, write, list, delete files and watch changes in directories you explicitly select. Previous selections do not grant access. Disabling the plugin stops access.",
         "filesPickMessage": "Plugin “{{name}}” will be able to read, write, list and delete files in the selected directory and watch changes. Select a directory you allow it to access.",
         "codeDetailTerminal": "Plugin pages run in an isolated sandbox. Approved commands run as your user and can access local files, apps and networks.",
-        "hostTools_terminalDetail": "Start commands and interactive terminals as your user on this computer, read output, send input and stop this plugin’s processes. Commands can access your files and apps. Starting, entering input and other changes require confirmation in Cindy each time.",
-        "hostToolsRequest": "Review {{group}} Permission",
-        "hostToolCallTitle": "Allow Plugin Operation",
-        "hostToolCallMessage": "The plugin “{{name}}” wants to call {{server}} / {{tool}}. This approval applies only to the parameters below.",
+        "hostTools_terminalDetail": "Start commands and interactive terminals as your user on this computer, read output, send input and stop this plugin’s processes. Commands can access your files and apps.",
         "agentHiddenTasks": "Can create background tasks hidden from the task list",
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
         "agentErrand": "Create tasks, perform work, and read results",
@@ -9259,6 +9278,12 @@
         "failed": "Cleanup could not finish",
         "pending": "Queued"
       }
+    },
+    "awayFromComputer": {
+      "title": "When You're Away"
+    },
+    "navigation": {
+      "unavailable": "Could not open settings on the target computer. Check that it is online and allows remote control; update Cindy if it is an older version."
     }
   },
   "remoteDevice": {
@@ -9374,6 +9399,7 @@
     "backToLogin": "Back to sign-in"
   },
   "login": {
+    "networkResponseHint": "The sign-in service returned an unexpected response. A network intermediary or proxy may be blocking the request. Check your network and proxy settings.",
     "title": "Welcome to Cindy",
     "subtitle": "Choose a secure way to sign in",
     "savedLoginPreserved": "Recovery keeps your saved sign-in details",
@@ -9720,6 +9746,7 @@
     "tokenLine": "Tokens: {{total}} total · input {{input}} · output {{output}}",
     "cacheLine": "Cache breakdown: read {{read}} · write {{create}} · hit rate {{rate}}",
     "cacheLineNoRate": "Cache breakdown: read {{read}} · write {{create}}",
+    "stepsLine": "Requests this turn: {{steps}} · ~{{context}} context each",
     "modelLine": "Model: {{model}}",
     "multipleModels": "{{count}} models",
     "costBreakdownHeader": "By model:",
@@ -11189,6 +11216,9 @@
         "step": "Step {{step}}/{{total}}",
         "speaking": "{{name}} is replying…",
         "elapsed": "{{time}} so far",
+        "onDevice": "on {{device}}",
+        "onOtherComputer": "on another computer",
+        "onThisComputer": "on this computer",
         "viewProcess": "Show work",
         "hideProcess": "Hide work",
         "stop": "Stop",
@@ -11494,10 +11524,12 @@
         "earlierOmitted": "(Earlier messages omitted)",
         "actingFor": "{{name}} · for {{person}}",
         "checkout": {
+          "preparing": "(Cindy) The group's project {{repo}} is being downloaded into this folder on this computer and should be ready within a few minutes. Until then the folder may be empty: answer right away when it is just a conversation; when the work needs the code, wait until the project's files are here.",
           "gitMissing": "(Cindy) The group's project {{repo}} is not on this computer yet: git is not installed here. {{guide}} Once it is installed, @Cindy again and Cindy will download the project and work in it.",
           "signInOpened": "(Cindy) The group's project {{repo}} is not on this computer yet: connect your GitHub account first. Cindy opened GitHub sign-in on this computer; once you are signed in, @Cindy again and Cindy will download the project.",
           "signIn": "(Cindy) The group's project {{repo}} is not on this computer yet: connect your GitHub account first. Sign in to GitHub in Cindy on this computer, then @Cindy again.",
           "unavailable": "(Cindy) The group's project {{repo}} could not be downloaded to this computer: your GitHub account may not have access to it, or the network is unavailable. Make sure you can open the repository on GitHub, then @Cindy again.",
+          "accessRequired": "(Cindy) The group's project {{repo}} could not be downloaded to this computer: git on this computer cannot access {{host}} yet. Clone the repository once with git on this computer (or set up an access token), then @Cindy again.",
           "installGit": {
             "darwin": "In Terminal, run xcode-select --install and follow the prompts.",
             "win32": "Download and install Git from https://git-scm.com/download/win with the default options.",
@@ -11718,7 +11750,12 @@
           "projectCaption": "Buddies reply and do work splits in this project. The repository is shared with the group; the folder stays on this computer.",
           "githubRepo": "GitHub repository",
           "githubRepoHint": "Enter owner/name. Computers without a chosen folder use their own copy of this project, or download one.",
+          "repository": "Repository",
+          "repositoryHint": "GitHub: enter owner/name. GitLab (self-hosted too), CNB and others: paste the repository link. Computers without a chosen folder use their own copy of this project, or download one.",
+          "repositoryPlaceholder": "owner/name or repository link",
           "githubRepoSaveFailed": "The repository wasn’t saved. Check it and try again.",
+          "folderRepoFilled": "Filled in the repository {{repo}} from this folder. Other members’ computers will use it too.",
+          "folderRepoDiffers": "This folder is a checkout of {{repo}}, not the group’s repository. This computer still works in this folder.",
           "projectFolder": "Folder on this computer",
           "projectDirAutoHint": "Found from the repository among your projects.",
           "organizerHint": "Decides who does each step. Defaults to the first buddy.",
@@ -12554,7 +12591,7 @@
         "expiredCardNotice": "This card has expired",
         "slash": {
           "new": "🌱 Fresh start — I’ve cleared our previous conversation. Let’s take it from the top.",
-          "help": "🤖 Here’s what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/model       Switch to a different model\n/permission  Change the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely control a workspace on the desktop (send it again during control to switch sessions)\n/exctr       End remote control and return to our Discord DM\n/help        See what I can do\n\nNeed to stop something that’s running? Just send `!stop` — I’ll abort the current run right away and drop queued messages too. The session is kept, so you can continue later.\n\nOtherwise, just send me a message. I’m listening.",
+          "help": "🤖 Here’s what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/model       Switch to a different model\n/permission  Change the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely control a project on the desktop (send it again during control to switch sessions)\n/exctr       End remote control and return to our Discord DM\n/help        See what I can do\n\nNeed to stop something that’s running? Just send `!stop` — I’ll abort the current run right away and drop queued messages too. The session is kept, so you can continue later.\n\nOtherwise, just send me a message. I’m listening.",
           "unknownCommand": "I don’t recognize the command `{{cmd}}` 🤔\nCommands I know: /new, /model, /permission, /ctr, /exctr, /help",
           "localTaskAccessUnavailable": "🔒 `{{cmd}}` isn’t available in server channels — it would expose the private sessions / projects on your desktop in public. To use it, send it to me in a DM.",
           "detachedBySlash": "🚪 Remote control ended — we’re back in our Discord DM. Send /ctr whenever you want to control the desktop again.",
@@ -12633,15 +12670,15 @@
             "fullAccessCancelled": "Cancelled — keeping current permissions"
           },
           "control": {
-            "title": "🎮 Pick a workspace",
-            "emptyBody": "_No workspaces to control yet. Open or create a session on the desktop, then come back._",
-            "hint": "Choose a workspace to continue; 🚪 Exit cancels.",
+            "title": "🎮 Pick a project",
+            "emptyBody": "_No projects to control yet. Open or create a session on the desktop, then come back._",
+            "hint": "Choose a project to continue; 🚪 Exit cancels.",
             "attachedSwitchHint": "🎮 Currently controlling: **{{sessionTitle}}**\nPick a new session to switch to it; 🚪 Exit keeps things as they are.",
             "btnExit": "🚪 Exit",
             "resolvedExit": "🚪 Left. Send /ctr whenever you want remote control again.",
             "sessionPickerTitle": "🎮 Sessions in {{displayName}}",
-            "sessionPickerHint": "Pick a session to continue · ➕ New starts a fresh one · ↩️ Back changes workspace · 🚪 Exit cancels",
-            "sessionPickerEmptyBody": "_No active sessions in workspace **{{displayName}}** yet. Why not start one with ➕ New?_",
+            "sessionPickerHint": "Pick a session to continue · ➕ New starts a fresh one · ↩️ Back changes project · 🚪 Exit cancels",
+            "sessionPickerEmptyBody": "_No active sessions in project **{{displayName}}** yet. Why not start one with ➕ New?_",
             "btnNew": "➕ New",
             "btnBack": "↩️ Back",
             "resolvedSessionPick": "🎯 You’re in: **{{sessionTitle}}** ({{workspaceName}})\nYour messages now go straight to this session. Send `/exctr` anytime to leave.",
@@ -12751,7 +12788,7 @@
         "slash": {
           "start": "👋 Hi, I'm your personal Cindy assistant!\n\nIn a direct chat, just send me a message. In groups, I only respond when you @ me or reply to one of my messages. Send /help to see all commands.",
           "new": "🌱 New session created — it's in your session list now. Let's start fresh!",
-          "help": "🤖 Here's what I can do:\n\n/new         Create a new session (old ones are kept; in groups, it's created for the current group topic)\n/project     Work in a project folder (runs here in the bot, doesn't take over desktop)\n/session     List recent desktop sessions; tap one to take it over and keep chatting\n/model       Bring in a different model\n/permission  Change the permission mode (auto / bypass / ask, etc.)\n/settings    See the current project, Agent, model, effort, and permissions\n/ctr         Remotely take over a workspace on desktop (send it again during a takeover to switch sessions)\n/exctr       End the takeover and go back to the Telegram chat\n/help        See what I can do\n\nSomething running that you want to stop? Send /stop (or `!stop`) — I'll halt the current run right away and drop any queued messages. The session is kept so you can continue.\n\nIn a direct chat, just send me a message. In groups, I only respond when you @ me or reply to one of my messages — and I remember recent group messages for context.",
+          "help": "🤖 Here's what I can do:\n\n/new         Create a new session (old ones are kept; in groups, it's created for the current group topic)\n/project     Work in a project folder (runs here in the bot, doesn't take over desktop)\n/session     List recent desktop sessions; tap one to take it over and keep chatting\n/model       Bring in a different model\n/permission  Change the permission mode (auto / bypass / ask, etc.)\n/settings    See the current project, Agent, model, effort, and permissions\n/ctr         Remotely take over a project on desktop (send it again during a takeover to switch sessions)\n/exctr       End the takeover and go back to the Telegram chat\n/help        See what I can do\n\nSomething running that you want to stop? Send /stop (or `!stop`) — I'll halt the current run right away and drop any queued messages. The session is kept so you can continue.\n\nIn a direct chat, just send me a message. In groups, I only respond when you @ me or reply to one of my messages — and I remember recent group messages for context.",
           "unknownCommand": "I don't recognize the command `{{cmd}}` 🤔\nCommands I understand: /new, /session, /project, /model, /permission, /settings, /ctr, /exctr, /stop, /help",
           "settings": "⚙️ Current settings\n\nProject: {{workspace}}\nAgent: {{agent}}\nModel: {{model}}\nEffort: {{effort}}\nPermissions: {{permission}}\n\nTo change them, send /project, /model, or /permission.",
           "settingsCompanion": "⚙️ Current settings (teammate)\n\nProject: {{workspace}}\nAgent: {{agent}}\nModel: {{model}}\nEffort: {{effort}}\nPermissions: {{permission}}\n\nModel, permissions, and working directory follow the teammate's settings. Change them in the teammate settings in Cindy.",
@@ -12853,15 +12890,15 @@
             "dialogueName": "Chat (managed folder)"
           },
           "control": {
-            "title": "🎮 Pick a workspace",
-            "emptyBody": "_No workspaces to take over yet. Open or create a session in desktop, then come back._",
-            "hint": "Tap a workspace to continue; tap 🚪 Exit to cancel",
+            "title": "🎮 Pick a project",
+            "emptyBody": "_No projects to take over yet. Open or create a session in desktop, then come back._",
+            "hint": "Tap a project to continue; tap 🚪 Exit to cancel",
             "attachedSwitchHint": "🎮 Currently controlling: **{{title}}**\nPick another session to switch right over; tap 🚪 Exit to keep things as they are",
             "btnExit": "🚪 Exit",
             "resolvedExit": "🚪 I'm out. Send /ctr next time you want remote control",
             "sessionPickerTitle": "🎮 Sessions in {{name}}",
-            "sessionPickerHint": "Pick a session to continue · ➕ New for a new session · ↩️ Back to change workspace · 🚪 Exit to cancel",
-            "sessionPickerEmptyBody": "_No active sessions in workspace **{{name}}** yet. Why not tap ➕ New to start one?_",
+            "sessionPickerHint": "Pick a session to continue · ➕ New for a new session · ↩️ Back to change project · 🚪 Exit to cancel",
+            "sessionPickerEmptyBody": "_No active sessions in project **{{name}}** yet. Why not tap ➕ New to start one?_",
             "btnNew": "➕ New",
             "btnBack": "↩️ Back",
             "resolvedSessionPick": "🎯 You're in: **{{title}}** ({{workspace}})\nYour messages now go straight into this session; send `/exctr` anytime to leave",
@@ -12870,7 +12907,7 @@
             "sessionBusyOldCardPlaceholder": "⏳ That session is still running — here's a fresh card below, pick again",
             "recentSessions": {
               "title": "🕑 Recent sessions",
-              "hint": "Tap one to take over and keep chatting (sorted by time across workspaces) · Use /ctr to pick by workspace · 🚪 Exit to cancel",
+              "hint": "Tap one to take over and keep chatting (sorted by time across projects) · Use /ctr to pick by project · 🚪 Exit to cancel",
               "emptyBody": "_No active sessions on desktop yet. Start one in desktop first, then come back._"
             },
             "sessionBusyPrompts": {
@@ -13024,18 +13061,18 @@
           "permissionTimeout": "Timed out waiting for approval. The permission request was denied."
         },
         "run": {
-          "routeReselectHint": ". Choose a model again for this channel's working directory in Settings → IM bots.",
+          "routeReselectHint": ". Choose a model again for this channel's project in Settings → IM bots.",
           "awaitingPermission": "Waiting for approval · needs your confirmation",
           "awaitingAnswer": "Waiting for an answer · needs your choice",
           "awaitingPlan": "Waiting for review · needs you to confirm the plan",
           "awaitingFallback": "Waiting for your confirmation",
           "cancelledBeforeRun": "The task was stopped by the user, so this message was not run.",
-          "liveSessionDirUnmapped": "This task is running in a directory that's no longer in the working directory mappings, so this message was not run. Add that directory under Settings → Remote Connection → Working directory mappings, or close this task in the desktop app and resend.",
+          "liveSessionDirUnmapped": "This task is running in a directory that no longer belongs to any project, so this message was not run. Add that directory as a project in the sidebar, or close this task in the desktop app and resend.",
           "interactionExpired": "The task has ended, so this interaction is no longer valid.",
           "telegramOfficialBot": "Telegram official bot"
         },
         "dispatch": {
-          "dirUnmapped": "This task's directory is no longer in the working directory mappings, so this message was not run. Add its directory under Settings → Remote Connection → Working directory mappings, then send it again."
+          "dirUnmapped": "This task's directory no longer belongs to any project, so this message was not run. Add its directory as a project in the sidebar, then send it again."
         }
       },
       "wecom": {
@@ -13120,9 +13157,9 @@
             "fullAccessCancelled": "Cancelled. Current permissions kept"
           },
           "control": {
-            "title": "🎮 Choose a workspace",
-            "emptyBody": "_No workspaces are available to take over yet. Create a task in Cindy Desktop first._",
-            "hint": "Choose a workspace to continue, or exit.",
+            "title": "🎮 Choose a project",
+            "emptyBody": "_No projects are available to take over yet. Create a task in Cindy Desktop first._",
+            "hint": "Choose a project to continue, or exit.",
             "attachedSwitchHint": "Currently controlling: **{{sessionTitle}}**",
             "btnExit": "🚪 Exit",
             "resolvedExit": "🚪 Exited takeover",
@@ -13184,7 +13221,7 @@
       "feishu": {
         "slash": {
           "new": "🌱 Fresh start — I've cleared our previous conversation. Let's begin again!",
-          "help": "🤖 Here's what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/model       Switch to a different model\n/permission  Adjust the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely control a workspace in the desktop app (send it again while controlling to switch sessions)\n/exctr       End remote control and return to our DM\n/help        See what I can do\n\nNeed to stop something that's running? Just send `!stop` — I'll halt the current run right away and drop any queued messages. The session is kept, so you can pick it up again.\n\nOtherwise, just send me a message — I'm listening~",
+          "help": "🤖 Here's what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/project     Work in a project folder (runs here in the bot, doesn't take over desktop)\n/model       Switch to a different model\n/permission  Adjust the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely control a project in the desktop app (send it again while controlling to switch sessions)\n/exctr       End remote control and return to our DM\n/help        See what I can do\n\nNeed to stop something that's running? Just send `!stop` — I'll halt the current run right away and drop any queued messages. The session is kept, so you can pick it up again.\n\nOtherwise, just send me a message — I'm listening~",
           "unknownCommand": "I don't recognize the `{{cmd}}` command 🤔\nCommands I understand: /new, /model, /permission, /ctr, /exctr, /help",
           "detachedBySlash": "🚪 Remote control ended — we're back in our DM. Send /ctr whenever you want to control the desktop app again",
           "detachedByRevoke": "⚠️ You ended remote control from the desktop app. New messages will go to our DM again.",
@@ -13281,15 +13318,28 @@
             "resolved": "✅ Switched to “Auto-review” — head back to the group and keep going~",
             "failed": "❌ Couldn't switch: {{reason}}. You can send /permission auto to switch manually"
           },
+          "project": {
+            "title": "📂 Switch project folder",
+            "hint": "**Current**: {{name}}\nPick a project and the next messages will work in that folder (context restarts; model and permission settings are kept)",
+            "emptyBody": "_No active project workspaces on desktop yet. Open a project in desktop first, then come back._",
+            "btnDialogue": "💬 Back to chat",
+            "btnCancel": "🚪 Never mind",
+            "resolvedPick": "📂 Switched to **{{name}}** — fresh context is ready, send an instruction to get started. To go back to a regular chat, send /project and pick “Back to chat”",
+            "resolvedDialogue": "💬 Back in the chat folder — context starts fresh.",
+            "resolvedCancel": "🚪 No switch — keeping things as they are",
+            "switchFailed": "❌ Couldn't switch: {{reason}} (the folder may have been moved or deleted)",
+            "attachedUnsupported": "🎮 You're taking over a desktop session via /ctr — during a takeover, messages go straight into that session, so /project isn't needed. To switch projects, send `/exctr` to end the takeover first",
+            "dialogueName": "Chat (managed folder)"
+          },
           "control": {
-            "title": "🎮 Pick a workspace",
-            "emptyBody": "_No workspaces to control yet~ Open or create a session in the desktop app, then come back_",
-            "hint": "Tap a workspace to continue; tap 🚪 Exit to cancel",
+            "title": "🎮 Pick a project",
+            "emptyBody": "_No projects to control yet~ Open or create a session in the desktop app, then come back_",
+            "hint": "Tap a project to continue; tap 🚪 Exit to cancel",
             "attachedSwitchHint": "🎮 Currently controlling: **{{title}}**\nPick another session to switch over; tap 🚪 Exit to keep things as they are",
             "btnExit": "🚪 Exit",
             "resolvedExit": "🚪 Exited. Send /ctr next time you want remote control",
             "sessionPickerTitle": "🎮 Sessions in {{workspace}}",
-            "sessionPickerHint": "Pick a session to continue · ➕ New to start one · ↩️ Back to change workspace · 🚪 Exit to cancel",
+            "sessionPickerHint": "Pick a session to continue · ➕ New to start one · ↩️ Back to change project · 🚪 Exit to cancel",
             "sessionPickerEmptyBody": "_No active sessions in **{{workspace}}** yet~ Why not tap ➕ New to start one?_",
             "btnNew": "➕ New",
             "btnBack": "↩️ Back",
@@ -13334,7 +13384,7 @@
       "wechat": {
         "slash": {
           "new": "🌱 Fresh start — I've cleared the previous conversation. Let's begin again~",
-          "help": "🤖 Here's what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/model       Switch models\n/permission  Adjust the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely take over a workspace in the desktop app (send it again while in control to switch sessions)\n/exctr       End the takeover and return to our WeChat DM\n/help        See what I can do\n\nNeed to stop something that's in progress? Just send `!stop` — I'll halt the current run right away and drop queued messages. The session stays, so you can continue later.\n\nOtherwise, just message me. I'm listening~",
+          "help": "🤖 Here's what I can do:\n\n/new         Start fresh (clears the current conversation context)\n/model       Switch models\n/permission  Adjust the permission mode (auto / bypass / ask, etc.)\n/ctr         Remotely take over a project in the desktop app (send it again while in control to switch sessions)\n/exctr       End the takeover and return to our WeChat DM\n/help        See what I can do\n\nNeed to stop something that's in progress? Just send `!stop` — I'll halt the current run right away and drop queued messages. The session stays, so you can continue later.\n\nOtherwise, just message me. I'm listening~",
           "unknownCommand": "I don't recognize the command `{{cmd}}` 🤔\nCommands I understand: /new, /model, /permission, /ctr, /exctr, /help",
           "detachedBySlash": "🚪 Takeover ended — we're back in our WeChat DM. Send /ctr next time you want to control the desktop app remotely",
           "detachedByRevoke": "⚠️ You took back control in the desktop app. New messages will go to our WeChat DM again.",
@@ -13417,14 +13467,14 @@
             "fullAccessCancelled": "Canceled. Current permissions kept"
           },
           "control": {
-            "title": "🎮 Pick a workspace",
-            "emptyBody": "_No workspaces to take over yet~ Open or create a session in the desktop app, then come back_",
-            "hint": "Tap a workspace to continue; tap 🚪 Exit to cancel",
+            "title": "🎮 Pick a project",
+            "emptyBody": "_No projects to take over yet~ Open or create a session in the desktop app, then come back_",
+            "hint": "Tap a project to continue; tap 🚪 Exit to cancel",
             "attachedSwitchHint": "🎮 Currently in control: **{{sessionTitle}}**\nPick a new session to switch over; tap 🚪 Exit to keep things as they are",
             "btnExit": "🚪 Exit",
             "resolvedExit": "🚪 Exited. Send /ctr whenever you want remote control again",
             "sessionPickerTitle": "🎮 Sessions in {{displayName}}",
-            "sessionPickerHint": "Pick a session to continue · ➕ New for a fresh one · ↩️ Back to change workspace · 🚪 Exit to cancel",
+            "sessionPickerHint": "Pick a session to continue · ➕ New for a fresh one · ↩️ Back to change project · 🚪 Exit to cancel",
             "sessionPickerEmptyBody": "_No active sessions in **{{displayName}}** yet~ Why not tap ➕ New to start one?_",
             "btnNew": "➕ New",
             "btnBack": "↩️ Back",
@@ -13474,6 +13524,15 @@
           "askNoQuestion": "The Agent is waiting for your answer, but there's no question to show. Reply “continue”.",
           "askQuestion": "The Agent needs your answer:\n{{question}}\n{{options}}\nReply with an option number, or type your answer."
         }
+      },
+      "questions": {
+        "cardHint": "Only the requester can answer. Tap an option; submit after choosing for multiple questions or multiple selections. You can also reply to this message with text. For multiple questions, reply with “question number: answer” (e.g. “2: English”), then submit.",
+        "submitLabel": "Submit answers",
+        "multiSelectHint": " (select all that apply)",
+        "resolved": "✅ Selected: {{option}}",
+        "expired": "This card has expired",
+        "textHint": "Only the original requester can answer. Reply with {{code}} followed by your answer. For multiple questions use {{code}} 2: answer, then {{code}} OK to submit all.",
+        "replyHint": "Only the requester can answer. Tap an option; submit after choosing for multiple questions or multiple selections.\nReply with {{code}} followed by your answer. For multiple questions use {{code}} 2: answer, then {{code}} OK to submit all."
       }
     }
   },
@@ -13900,6 +13959,7 @@
         "realtime": "Realtime Audio",
         "embedding": "Embeddings",
         "decision": "Decision",
+        "rerank": "Rerank",
         "compression": "Compression",
         "ungrouped": "Ungrouped",
         "other": "Other"
@@ -16025,6 +16085,8 @@
       "claudeSubscriptionWorkspaceOverride": "This folder's .claude settings change where Claude sends requests or how it signs in, so the Claude subscription can't be used here. Remove those settings, or pick a gateway or API key model",
       "deviceStillLoading": "The remote device is still loading. Wait a moment.",
       "remoteDefaultsLoadFailed": "Could not load the remote device settings. Check the connection; Cindy is retrying.",
+      "branchRequiresWorktree": "The selected branch is not the current branch. Enable worktree or select the current branch.",
+      "branchCheckFailed": "Could not verify the current branch. Enable worktree to use the selected branch, or check the project and try again.",
       "worktreeMissingRepo": "Can't create a worktree: the current directory's repo root is missing",
       "worktreeRepoHint": "Try picking the working directory again, and retry once the folder badge at the bottom right refreshes",
       "sessionInactive": "Session is no longer active",
@@ -16600,6 +16662,8 @@
             "title": "Repository events",
             "description": "Connect the Cindy GitHub App to update followed PRs when reviews or CI change.",
             "connected": "Connected as {{login}} · Repositories watched: {{count}}",
+            "syncing": "Syncing repositories…",
+            "finishInBrowser": "Finish repository setup in GitHub, then return to Cindy.",
             "missing": "Check App installation and access for: {{repositories}}",
             "error": "Could not check the connection. Try again.",
             "repositories": "Choose repositories",
@@ -17130,7 +17194,9 @@
         "saveAria": "Save automation",
         "createAria": "Create automation",
         "namePlaceholder": "Name this Automation",
-        "promptPlaceholder": "Example: Find new crashes in Sentry and summarize the top regressions."
+        "promptPlaceholder": "Example: Find new crashes in Sentry and summarize the top regressions.",
+        "expandPrompt": "Expand editor",
+        "collapsePrompt": "Collapse"
       },
       "executionMode": {
         "label": "Execution",
@@ -17178,9 +17244,8 @@
         "automatic": "Automatic",
         "manually": "Manually",
         "session": "Session",
-        "silentRun": "Stay quiet when checks find nothing",
-        "silentRunTooltip": "Report changes or problems only. Turn off for reminders and scheduled messages.",
-        "silentRunInfoAria": "View silent run rules",
+        "silentRun": "Silent run",
+        "silentRunTooltip": "When enabled, successful runs do not notify by default. If the task prompt asks to notify under specific conditions, AI will report when those conditions are met. Failures and errors still notify.",
         "finishSendToFeishu": "Send result to Feishu bot",
         "finishSendToWecomGroup": "Send result to WeCom group",
         "configWecomGroup": "Configure WeCom group notifications",
@@ -17290,10 +17355,7 @@
       },
       "layout": {
         "content": "What to run",
-        "notifications": "Notifications & quiet runs",
-        "contentTab": "Content & Trigger",
-        "optionsTab": "Run options",
-        "sections": "Automation settings"
+        "notifications": "Notifications & quiet runs"
       },
       "webhook": {
         "quotaHint": "Webhook deliveries have a daily limit, and filtering here doesn't reduce the count. In the sender, such as GitHub, select only the events you need.",
@@ -17369,6 +17431,19 @@
         "repositoriesLabel": "Repositories",
         "repositoriesHint": "Enter owner/repository, one per line. Only repositories authorized for this GitHub App can trigger the task.",
         "repositoriesInvalid": "Enter 1–50 valid repository names in owner/repository format.",
+        "connectAccount": "Connect account",
+        "connectionLabel": "Connection method",
+        "cindyConnection": "Connect through Cindy (recommended)",
+        "manualConnection": "Set up Webhook manually",
+        "cindyConnectionHint": "Receive events through GitHub App. Connect your account and authorize repositories, without copying a receiver URL or secret.",
+        "manualConnectionHint": "Enter the receiver URL and secret provided by Cindy in your GitHub repository settings.",
+        "manualSetupHint": "After saving, get the receiver URL and secret from the automation details, then finish setup in GitHub repository settings.",
+        "accountLabel": "GitHub account",
+        "accountDisconnected": "GitHub is not connected. Connect your account to continue.",
+        "authorizeRepositories": "Authorize repositories",
+        "appUnavailable": "GitHub App connection is unavailable here. You can set up a Webhook manually.",
+        "cindyConnectionTitle": "GitHub · Via Cindy",
+        "manualConnectionTitle": "GitHub · Manual Webhook",
         "githubAppHint": "Connect GitHub App on the computer running this task and authorize these repositories. No separate Webhook URL or secret is needed.",
         "githubAppPaused": "This task is paused. Events will not start it."
       },
@@ -17959,7 +18034,6 @@
       "descriptionSaveDir": "The directory below is outside this session's working directory. If you allow, this plugin can save downloaded files into it (existing files are never overwritten).",
       "descriptionRevealPath": "The path is returned to the current Agent only after you allow it and will enter the conversation record; paired devices may sync that record. This does not grant any plugin access to the file.",
       "descriptionFsWrite": "This plugin requests to write the files below into the current session's working directory. If you allow, further writes to the same directory in this session won't ask again.",
-      "descriptionFsDelete": "This plugin requests to delete the files or folders below from the current task's working directory. Deleting a folder also deletes its contents. This approval applies to this deletion only.",
       "descriptionWorkspace": "This folder is outside this session's working directory. If you allow, Cindy creates an empty session for it in the sidebar (an existing session is reused) without reading any files inside.",
       "descriptionForgeSource": "The directory below is outside this session's working directory. If you allow, Forge will pack or scaffold the plugin there (it writes a .cindy artifact or skeleton files).",
       "descriptionForgeScaffold": "The directory below is outside this session's working directory. If you allow, Forge will create plugin source files there.",
@@ -21355,6 +21429,30 @@
     "lineNumbers": "Line numbers"
   },
   "subscriptionAccounts": {
+    "placement": {
+      "needsUpdate": "The computer running this needs a Cindy update before accounts can be moved this way.",
+      "moveTo": "Move to…",
+      "separate": "Its own provider",
+      "moveTitle": "Move {{name}} to {{target}}?",
+      "takeOutTitle": "Make {{name}} its own provider?",
+      "moveDescription": "Only the provider this account belongs to changes. Its sign-in and history stay, and existing tasks keep using this account.",
+      "moveConfirm": "Move",
+      "failed": "Couldn't change where the account belongs. Try again later.",
+      "mergeInto": "Merge into…",
+      "mergeTitle": "Merge {{name}} into {{target}}?",
+      "mergeDescription": "All accounts of this provider move to the other provider, and this provider no longer appears in the provider list or for new tasks. Existing tasks keep their accounts.",
+      "mergeConfirm": "Merge",
+      "deleteTitle": "Delete {{name}}?",
+      "deleteDescription": "Cindy stops using this provider's accounts. Their CLI logins and conversation history stay on this computer.",
+      "deleteConfirm": "Delete",
+      "deleteInUse": "A task is using this provider's account. Delete it after the task finishes.",
+      "signInQuestion": "Where should the new account go?",
+      "signInSeparate": "As its own provider",
+      "signInSeparateHint": "Choose it for a new task to always use this account.",
+      "signInInto": "Add to {{name}}",
+      "signInContinue": "Continue to sign in",
+      "signInBack": "Back"
+    },
     "loginIdentityUnknown": "The original identity of this account is unknown. Use Add Account to connect a new account.",
     "loginExpiresInDays": "Sign-in expires in about {{days}} days",
     "loginExpiresSoon": "Sign-in expires soon",
@@ -21369,10 +21467,9 @@
     "providerManagedAuth": "The current Codex provider does not expose a ChatGPT account. When adding the provider, choose “$t(subscriptionAccounts.signIn.anotherAccount)” to use a separate folder.",
     "signIn": {
       "checking": "Checking local account…",
-      "detected": "Signed-in account found",
-      "useAccount": "Use this account",
+      "useAccount": "Use the {{cli}} account on this computer",
       "anotherAccount": "Sign in to another account",
-      "keepExisting": "The new account joins this provider. Existing sign-ins stay unchanged.",
+      "keepExisting": "The new account becomes its own provider unless you choose one to join. Existing sign-ins stay unchanged.",
       "checkFailed": "Couldn’t check the local account. Try again.",
       "retry": "Retry",
       "useCodex": "Sign in with Codex"
@@ -21380,7 +21477,6 @@
     "title": "Subscription accounts",
     "strategy": "Load balancing",
     "add": "Add account",
-    "default": "Default folder",
     "defaultTag": "Default",
     "ready": "Connected",
     "signedOut": "Sign in required",
@@ -21580,5 +21676,73 @@
     "switchOffer": {
       "action": "Continue with {{model}}"
     }
+  },
+  "projectSettings": {
+    "autoLoading": "Finding project icon…",
+    "autoNone": "Using initials from the project name.",
+    "autoSource": "Source",
+    "githubAvatar": "Use GitHub account avatar",
+    "title": "Project settings",
+    "name": "Display name",
+    "saveName": "Save name",
+    "reset": "Restore default",
+    "icon": "Icon",
+    "directory": "Project directory",
+    "done": "Done",
+    "failed": "Could not save. Try again.",
+    "unavailable": "Project settings are unavailable. Connect to an updated computer and try again.",
+    "back": "Back",
+    "cancel": "Cancel",
+    "changeIcon": "Change icon",
+    "chooseIcon": "Choose an icon",
+    "save": "Save",
+    "symbols": "Icons",
+    "emoji": "Emoji",
+    "letters": "Letters",
+    "image": "Image",
+    "upload": "Upload image",
+    "imageHint": "PNG, JPG or WebP · cropped to square",
+    "imageError": "Could not read this image. Try a smaller PNG or JPG.",
+    "search": "Search icons",
+    "customEmoji": "Or paste an emoji",
+    "lettersHint": "Use one or two letters or numbers.",
+    "thisComputer": "This computer",
+    "nameHint": "Shown in your project list. The folder name stays the same.",
+    "copy": "Copy path",
+    "copied": "Copied",
+    "applyIcon": "Use icon",
+    "noResults": "No matching icons",
+    "discardHint": "Discard unsaved changes?",
+    "keepEditing": "Keep editing",
+    "discard": "Discard",
+    "colors": {
+      "default": "Default (follow theme)"
+    }
+  },
+  "taskManagement": {
+    "scope": "Applies to this account on this computer only.",
+    "archive": "Auto-archive",
+    "enabled": "Automatically archive idle tasks",
+    "description": "Automatically archive idle tasks. Their history stays available.",
+    "days": "Idle days",
+    "daysHint": "Measured from the last message sent or received, or the end of a run.",
+    "days7": "7 days",
+    "days14": "14 days",
+    "days30": "30 days",
+    "customDays": "Custom days",
+    "invalidDays": "Enter a whole number from 1 to 365.",
+    "reset": "Restore defaults",
+    "archiveHint": "Tasks in use are kept. Archived tasks can be restored anytime.",
+    "preview": "Archive preview",
+    "loadFailed": "Could not load settings.",
+    "loading": "Loading settings…",
+    "candidateCount": "Eligible tasks: {{count}}",
+    "keptCount": "Kept: {{count}}",
+    "lastCheck": "Last check: {{date}}",
+    "notChecked": "No automatic check yet",
+    "saveFailed": "Settings were not saved. Try again.",
+    "archivedNotice": "Automatically archived idle tasks: {{count}}",
+    "undo": "Undo",
+    "undoFailed": "Could not undo. Restore the tasks from Archived."
   }
 }

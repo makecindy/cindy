@@ -13,7 +13,7 @@ import { openPluginTaskTab } from '../openPluginTaskTab';
 import { _resetSidebarCommandsForTests, onRequestRightSidebarVisibility } from '../sidebarCommands';
 import { __resetSidebarTabWindowsStateForTest, __setSidebarTabWindowsStateForTest } from '@/lib/sidebarTabWindowState';
 import { openPluginUiView } from '../openPluginUiView';
-import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../../../shared/ghost';
+import { type InstalledGhost } from '../../../../../shared/ghost';
 
 const installed = vi.hoisted(() => ({ ghosts: [] as InstalledGhost[] }));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ readInstalledGhostsSnapshot: () => installed.ghosts }));
@@ -59,7 +59,7 @@ describe('openPluginTaskTab', () => {
         id: 'sim', name: 'Sim', kind: 'chip', entry: 'main.js', version: '1',
         mcpApps: { ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
           host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board' }] } } } };
-    ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); installed.ghosts = [ghost];
+    installed.ghosts = [ghost];
     const previous = addGlobalPluginTab('previous')!; setActiveGlobalTabId(previous.id);
     vi.mocked(routeSidebarCommand).mockResolvedValue(route);
     const opening = openPluginUiView('sim', 'board', null, { selected: 'one' });

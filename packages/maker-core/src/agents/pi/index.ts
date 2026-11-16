@@ -253,6 +253,8 @@ import {
   assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
   emptyPiProjectResourceCliPaths,
+  estimateSpawnArgvLength,
+  piSpawnArgvBudget,
   type PiProjectResourceCliPaths,
   filterPiProjectCliSkills,
   piProjectResourceCliArgs,
@@ -1131,7 +1133,10 @@ function piManagedCommandFailureReceipt(strings: PiExtensionUiStrings, error: un
         : 'Keep the current runtime. Check the official asset and retry pi update --self after the unpacking or verification problem is resolved.';
   const message = (details.packagesUpdated ? 'Pi packages updated successfully. ' : '')
     + (details.phase === 'host-binary-update'
-      ? `Cindy Host Pi update failed (${details.hostStage ?? 'unknown stage'}). ${hostRecovery}`
+      ? details.hostStage === 'unsupported'
+        // A host that cannot install a new Pi core says so; there is nothing to retry.
+        ? 'Updating the Pi core is not available here yet; package install, update and remove still work.'
+        : `Cindy Host Pi update failed (${details.hostStage ?? 'unknown stage'}). ${hostRecovery}`
       : details.packagesUpdated
         ? 'Pi core update failed. Retry pi update --self; do not repeat the completed package phase.'
         : 'Pi native command failed. Inspect the current state before retrying.');
@@ -3877,7 +3882,8 @@ export class PiAgent extends BaseAgent {
       const body = truncateToByteBudget(summary, PI_DIGEST_MAX_BODY_BYTES);
       const seq = ++digestSeq;
       // slug 唯一:sessionId 片段 + 递增序号;resume/跨会话用 Date.now 防撞名(create 模式撞名会抛)。
-      const slug = slugifyForMemory(`digest-${digestSlugBase}-${Date.now()}-${seq}`, 64);
+      // 不再带 `digest-` 前缀:文件名已由 storage 加 `digest_`, 重复前缀会被前缀校验拒绝。
+      const slug = slugifyForMemory(`${digestSlugBase}-${Date.now()}-${seq}`, 64);
       try {
         await manager.write(memoryScopeKey, {
           type: 'digest',
@@ -4114,6 +4120,7 @@ export class PiAgent extends BaseAgent {
     // discovery and path checks can fail before any projection is created.
     let managedSkillPaths: string[];
     let managedSkillRoot: string | undefined;
+    let projectSkillRoot: string | undefined;
     let args: string[];
     const taskSystemPrompt = opts[TASK_SYSTEM_PROMPT] ?? '';
     let taskSystemPromptPath: string | undefined;
@@ -4157,7 +4164,7 @@ export class PiAgent extends BaseAgent {
         await writeFile(taskSystemPromptPath, taskSystemPrompt, 0o600);
       }
 
-      args = [
+      const buildArgs = (projectResourceArgs: readonly string[]): string[] => [
         '--mode',
         'rpc',
         // --no-approve remains the hard project-settings gate. Explicit --skill /
@@ -4194,15 +4201,37 @@ export class PiAgent extends BaseAgent {
         bridgeExtensionPath,
         ...(localSubagentSupported ? ['--extension', subagentExtensionPath] : []),
         ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
-        ...(loadProjectResourcesInPlace
-          ? piProjectResourceCliArgs(projectResourceCli)
-          : []),
+        ...(loadProjectResourcesInPlace ? projectResourceArgs : []),
       ];
+      args = buildArgs(loadProjectResourcesInPlace ? piProjectResourceCliArgs(projectResourceCli) : []);
+      const spawnBudget = piSpawnArgvBudget(process.platform);
+      if (
+        projectResourceCli.skills.length > 0
+        && spawnBudget !== null
+        && estimateSpawnArgvLength(args, process.platform) > spawnBudget
+      ) {
+        // .agents/.claude/.codex may expose the same Skills through junctions.
+        // Keep the original explicit paths for ordinary launches, but collapse
+        // an oversized project-Skill segment into one session-owned root.
+        projectSkillRoot = path.join(configHome, 'cindy-project-skills');
+        args = buildArgs([
+          '--skill', projectSkillRoot,
+          ...projectResourceCli.promptTemplates.flatMap((promptPath) => ['--prompt-template', promptPath]),
+          ...projectResourceCli.extensions.flatMap((extensionPath) => ['--extension', extensionPath]),
+        ]);
+      }
       if (managedSkillRoot) {
         await fs.mkdir(managedSkillRoot);
         for (const [index, skillPath] of managedLaunchSkills.entries()) {
           // Preserve discovery order for same-name skills without long filenames.
           await fs.symlink(path.dirname(skillPath), path.join(managedSkillRoot, String(index).padStart(12, '0')),
+            process.platform === 'win32' ? 'junction' : 'dir');
+        }
+      }
+      if (projectSkillRoot) {
+        await fs.mkdir(projectSkillRoot);
+        for (const [index, skillPath] of projectResourceCli.skills.entries()) {
+          await fs.symlink(skillPath, path.join(projectSkillRoot, String(index).padStart(12, '0')),
             process.platform === 'win32' ? 'junction' : 'dir');
         }
       }
@@ -6460,6 +6489,7 @@ export class PiAgent extends BaseAgent {
             ...managedPackageRoots,
             ...projectResourceCli.skills,
             ...managedSkillPaths,
+            ...(projectSkillRoot ? [projectSkillRoot] : []),
             ...(managedSkillRoot ? [managedSkillRoot] : []),
             ...projectResourceCli.promptTemplates,
             ...projectResourceCli.extensions,

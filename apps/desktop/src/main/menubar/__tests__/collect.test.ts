@@ -1,5 +1,10 @@
 import type { ProviderView } from '@cindy/model-providers';
-import { describe, expect, it } from 'vitest';
+import { codexAccountDisplayKey } from '../../maker-host/codex-auth-identity';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { remoteProviderDisableKey } from '@cindy/model-providers';
+const disabled = vi.hoisted(() => ({ providers: {} as Record<string, boolean> }));
+vi.mock('../../maker-host/model-disable-store.js', () => ({ readModelDisableOverrides: () => ({ disabledProviders: disabled.providers }) }));
+beforeEach(() => { disabled.providers = {}; });
 
 import {
   kimiSource,
@@ -193,6 +198,31 @@ describe('collectMenubarInputs', () => {
     ]);
   });
 
+  // #10405, unit: a legacy connection can own several accounts. Previous fixtures only
+  // used built-in ids, hiding both the missed pool read and the wrong Claude projection.
+  it.each(['local', 'remote'])('reads a legacy Codex target pool on %s', async location => {
+    const legacy = provider({ id: 'legacy-codex', subscriptionAccountPool: 'openai',
+      auth: { method: 'oauth', native: 'codex' }, remoteInvocationEnabled: true,
+      agents: ['codex'], models: { codex: [] } });
+    const owned: SubscriptionPoolView = { ...pool, providerId: legacy.id, kind: 'openai',
+      accounts: pool.accounts.map((account, index) => ({ ...account, id: `owned-${index}` })) };
+    const calls: string[] = [];
+    const remote = location === 'remote' ? (await readRemoteSubscriptions(remoteDeps(async (_device, channel) => {
+      calls.push(channel);
+      return { ok: true, result: owned };
+    }, [legacy]))).sources.filter(source => source.providerId === legacy.id) : [];
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => location === 'local' ? [legacy] : [],
+      readSubscriptionPool: async id => { expect(id).toBe(legacy.id); return owned; },
+      readRemoteSubscriptions: async () => remote,
+    }));
+    expect(collected.sources).toMatchObject([
+      { providerId: legacy.id, family: 'codex', account: 'default@example.com', windows: [{ usedPercent: 90 }] },
+      { providerId: legacy.id, family: 'codex', account: 'extra@example.com', windows: [{ usedPercent: 35 }] },
+    ]);
+    if (location === 'remote') expect(calls).not.toContain('maker:usage:account');
+  });
+
   // #10110 review: email is not a Codex workspace identity. Previous fixtures
   // only covered different emails; two legal pool entries sharing an email lost
   // one quota and transferred its running marker. Unit, real collector/peer reader.
@@ -212,6 +242,33 @@ describe('collectMenubarInputs', () => {
       { plan: 'Plus', windows: [{ usedPercent: 90 }], consuming: false },
       { plan: 'Team', windows: [{ usedPercent: 35 }], consuming: location === 'local' },
     ]);
+  });
+
+  it('counts a verified pooled subscription once across providers and own computers', async () => {
+    const owned = { ...pool, accounts: [{ ...pool.accounts[0], accountKey: 'verified-person-workspace' }] };
+    const peer = (await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: owned })))).sources;
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [provider({ id: 'openai' }), provider({ id: 'independent', subscriptionAccountPool: 'openai' })],
+      readSubscriptionPool: async id => ({ ...owned, providerId: id, kind: 'openai',
+        accounts: owned.accounts.map(account => ({ ...account, running: id === 'independent' ? 1 : 0 })) }),
+      readRemoteSubscriptions: async () => peer,
+    }));
+    expect(collected.sources).toHaveLength(1);
+    expect(collected.sources[0]).toMatchObject({ providerId: 'openai', consuming: true, windows: [{ usedPercent: 90 }] });
+  });
+
+  it('recognizes the same native login before and after adding an account pool', async () => {
+    const identity = 'default@example.com';
+    const key = codexAccountDisplayKey(identity, 'workspace')!;
+    const owned = { ...pool, accounts: [{ ...pool.accounts[0], accountKey: key }] };
+    const peer = (await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: owned })))).sources;
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [provider({ id: 'openai', auth: { method: 'oauth', native: 'codex' }, openAiAccount: { identity, source: 'oauth' } })],
+      readCodex: async () => ({ accountId: 'workspace', primary: { usedPercent: 20, windowMinutes: 10_080, resetsAt: nowSec + 86_400 } }) as never,
+      readRemoteSubscriptions: async () => peer,
+    }));
+    expect(collected.sources).toHaveLength(1);
+    expect(collected.sources[0]).toMatchObject({ id: 'openai', account: identity });
   });
 
   it('deduplicates local accounts while retaining different people in one workspace', async () => {
@@ -293,6 +350,17 @@ describe('collectMenubarInputs', () => {
       : invoke(id, channel, args),
     };
   }
+
+  it('removes locally stopped remote accounts from live quota and offline retention', async () => {
+    const first = await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: pool })));
+    expect(first.sources.length).toBeGreaterThan(0);
+    const previous = retainRemoteSubscriptions(new Map(), first, NOW).seen;
+    disabled.providers[remoteProviderDisableKey('peer', 'openai')] = true;
+    const next = await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: pool })));
+    expect(next.sources).toEqual([]);
+    const offline = { ...next, unreachable: new Set(['peer']) };
+    expect(retainRemoteSubscriptions(previous, offline, NOW + 1).sources).toEqual([]);
+  });
 
   it('does not resurrect paused peer accounts through migrated aliases', async () => {
     const calls: unknown[] = [];

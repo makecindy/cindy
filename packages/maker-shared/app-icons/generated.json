@@ -1,0 +1,24 @@
+{
+  "sources": {
+    "packages/maker-shared/app-icons/manifest.json": "6b8ac9537e73805acb8840b74c1da42a9b2ffb090f94b95d72dded69a5abb99d",
+    "packages/maker-shared/app-icons/cat.png": "77de719f0bcd950c411984ba348e34baf6a7dc199e3d4629e907c552628db691",
+    "packages/maker-shared/app-icons/wordmark-light.png": "3d467820c1bc4db53c65e55ffae505ea2dbdd8fe3d27340cea6cee08739ad532",
+    "packages/maker-shared/app-icons/wordmark-dark.png": "4f9232f7ef65415cc0270fa3659aa25eff0c516deff108aca65cbc64b82f2bf8",
+    "packages/maker-shared/app-icons/mark-light.png": "4ffe776083d32532df5635a57b401e50dc8786fef3f229832b28221494a79aa3",
+    "packages/maker-shared/app-icons/mark-dark.png": "695748f1a707d23b469d48e13818edca71414dd9413eb0b851f5e52c4f712388",
+    "apps/mobile/assets/icon.png": "f954fa4b955bdb828f0c18745123175d9244f5a0337091ddf51e7922f08ecc42"
+  },
+  "outputs": {
+    "apps/desktop/resources/app-icons/cat.png": "5e931cd7d3d1523aabf3353038eb7b444dd304e5e06dd11dd47dc3a7cd514afe",
+    "apps/desktop/resources/app-icons/wordmark-light.png": "b22e044da4c5b6cac75d7e110d19241c6a84823aeb93dc6fc4e8fea82e89364a",
+    "apps/desktop/resources/app-icons/wordmark-dark.png": "013e3982ae4cd8d109b66e1070857ec63c6483306c98f2480a11f007d347536f",
+    "apps/desktop/resources/app-icons/mark-light.png": "2f0a83e14c3030251516a439e9b7a9b244195a3628cd903011a5a2441b010473",
+    "apps/desktop/resources/app-icons/mark-dark.png": "6c3bd6ccb99b3b13ebe4fdc1a76635a8f737a3b1f2bb369aba5a7acbeb84037a",
+    "apps/mobile/assets/app-icons/cat.png": "a306e2c5ef9d31f5d36db4760af9d77b950e5c3b396f0cd541a4ddef1687ca42",
+    "apps/mobile/assets/app-icons/wordmark-light.png": "0ecf52fa534c6688e8eec78f326c33dc0cb948734e3090b59539b326d90dd8d5",
+    "apps/mobile/assets/app-icons/wordmark-dark.png": "20f65a0fa0088203c5b390a2d155fb5b438958e770015e73766878fb29ab13fb",
+    "apps/mobile/assets/app-icons/mark-light.png": "f09606b8b90cff96184530a0f0226684254b059708b0844a8664a2ceb6b12ece",
+    "apps/mobile/assets/app-icons/mark-dark.png": "8180ac4c0fe127cf9a698ac7787cbccffa7432120139899218d8125efd1d086b",
+    "apps/mobile/assets/app-icons/default.png": "0aa1f0e2245fa7f75a9f5f6bdf0d5033e51b6f22da32ebec77be246a5f97b931"
+  }
+}

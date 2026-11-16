@@ -30,9 +30,10 @@ export interface CodexRateLimitResetServiceDeps {
   readRateLimits(): Promise<AccountRateLimitsResponse>;
   consumeResetCredit(
     params: ConsumeAccountRateLimitResetCreditParams,
+    identity?: CodexRateLimitAccountIdentity,
   ): Promise<ConsumeAccountRateLimitResetCreditResponse>;
   readAccountIdentity(): Promise<CodexRateLimitAccountIdentity>;
-  recordRateLimitSnapshot(snapshot: unknown): Promise<void>;
+  recordRateLimitSnapshot(snapshot: unknown, identity?: CodexRateLimitAccountIdentity): Promise<void>;
   now?: () => number;
   createIdempotencyKey?: () => string;
 }
@@ -241,7 +242,7 @@ export function createCodexRateLimitResetService(
         source: 'codex-app-server',
         updatedAt: now(),
         accountId,
-      });
+      }, identity);
     }
 
     const availableCount = normalizeAvailableCount(
@@ -390,7 +391,7 @@ export function createCodexRateLimitResetService(
       const response = await deps.consumeResetCredit({
         idempotencyKey,
         ...(offer.creditId ? { creditId: offer.creditId } : {}),
-      });
+      }, currentAccount);
       // Mark the attempt settled before refreshing. That refresh may expose another
       // available credit and must receive a fresh idempotency key, while concurrent
       // retries of this attempt still join offer.pending until the final result is ready.

@@ -979,24 +979,27 @@ describe('被控端控制链路生命周期', () => {
 
   // PR #10150 review: the pool alias was folded against the pool's original (closed) mark, so with the
   // switch on a same-account computer saw the open pool and the folded old connection as two entries.
-  it('folds the old Codex connection into the pool after the own-computer switch opens it', async () => {
+  it.each(['openai', 'openai-sub-target'])('folds the old Codex connection into %s after the own-computer switch opens it', async target => {
     const { client, feed } = makeFakeClient();
     wireInboundDispatch(client);
     registry.register('maker:provider:list', () => ({
       providers: [
-        { id: 'openai', name: 'OpenAI', agents: [], models: {}, remoteInvocationEnabled: false },
-        { id: 'old-openai', name: 'Old OpenAI', agents: [], models: {}, remoteInvocationEnabled: false, subscriptionPoolAlias: true },
+        { id: target, name: 'OpenAI', agents: [], models: {}, remoteInvocationEnabled: false },
+        { id: 'old-openai', name: 'Old OpenAI', agents: [], models: {}, remoteInvocationEnabled: false, subscriptionPoolAlias: true,
+          ...(target === 'openai' ? {} : { subscriptionPoolTarget: target }) },
       ],
     }));
     feed({ v: 1, kind: 'link-open', id: 'open-ctrl-alias', src: 'ctrl-alias', payload: { controllerName: 'ctrl-alias', protocolVersion: 1, appVersion: '2.0.0' } });
     let ownComputers = false;
     setRemoteAgentHandler({ handle: vi.fn(), abortAll: vi.fn(), ownComputerModelUseEnabled: () => ownComputers });
     const alias = async () => ((await runInvoke('ctrl-alias', { channel: 'maker:provider:list', args: [] })) as {
-      result: { providers: Record<string, unknown>[] } }).result.providers.find((provider) => provider.id === 'old-openai')?.subscriptionPoolAlias;
+      result: { providers: Record<string, unknown>[] } }).result.providers.find((provider) => provider.id === 'old-openai');
     try {
-      expect(await alias()).toBeUndefined();
+      expect((await alias())?.subscriptionPoolAlias).toBeUndefined();
+      expect((await alias())?.subscriptionPoolTarget).toBeUndefined();
       ownComputers = true;
-      expect(await alias()).toBe(true);
+      expect(await alias()).toMatchObject({ subscriptionPoolAlias: true,
+        ...(target === 'openai' ? {} : { subscriptionPoolTarget: target }) });
     } finally { setRemoteAgentHandler(null); }
   });
 
