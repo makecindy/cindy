@@ -5831,7 +5831,8 @@
             "statusFailed": "la verificación del estado del controlador falló",
             "recoveryFailed": "la conexión de control no se pudo reconstruir",
             "extensionDisconnected": "no hay ninguna extensión de navegador conectada (instala y habilita el complemento Cindy Chrome y su extensión)",
-            "pluginMissing": "el complemento Cindy Chrome no está instalado o habilitado"
+            "pluginMissing": "el complemento Cindy Chrome no está instalado o habilitado",
+            "browserMissing": "Chrome no está instalado en este ordenador"
           },
           "reconnect": "Reconectar el navegador",
           "recover": "Recuperar navegador",
@@ -5851,7 +5852,7 @@
         },
         "userBrowser": {
           "title": "Mi navegador",
-          "description": "Funciona en el Chrome o Edge que estás usando, con tus inicios de sesión existentes. Las páginas nuevas se abren en una ventana en segundo plano y no interfieren."
+          "description": "Tu propio Chrome en este ordenador (Edge también sirve). El Agent trabaja directamente en él, con tus inicios de sesión existentes. Las páginas nuevas se abren en una ventana en segundo plano y no interfieren."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Instala el complemento Cindy Chrome",
@@ -5870,7 +5871,9 @@
           "updatePluginTitle": "Actualiza el complemento Cindy Chrome",
           "updatePluginBody": "El complemento Cindy Chrome instalado es demasiado antiguo para «Mi navegador». Actualízalo a la última versión y luego sigue las indicaciones para agregar la extensión.",
           "updatePlugin": "Actualizar",
-          "storeOpened": "Se abrió la página de la extensión Cindy en tu navegador. Elige Agregar a Chrome y se conectará automáticamente."
+          "storeOpened": "Se abrió la página de la extensión Cindy en tu navegador. Elige Agregar a Chrome y se conectará automáticamente.",
+          "installBrowserTitle": "Instala Chrome primero",
+          "installBrowserBody": "Chrome no está instalado en este ordenador. «Mi navegador» necesita Chrome (o Edge) para la extensión de Cindy. Cuando lo instales, aquí se pasará al siguiente paso automáticamente."
         }
       },
       "android": {
@@ -11779,6 +11782,11 @@
           "transferHint": "Pasará a ser el propietario y tú serás administrador.",
           "removeTitle": "¿Quitar a {{name}} de este grupo?",
           "removeHint": "Perderá el acceso a los mensajes. Sus amigos también saldrán del grupo.",
+          "removeOwn": "Quitar del grupo",
+          "removeOwnScope": "Esto solo afecta a este grupo. Tu compañero permanece en tu cuenta.",
+          "removeOwnHint": "{{name}} dejará de recibir mensajes de «{{group}}». Se conserva el historial; los otros grupos y chats privados no se ven afectados.",
+          "removeOwnActiveHint": "Se detendrán sus solicitudes activas en este grupo. Las tareas iniciadas de forma independiente seguirán ejecutándose.",
+          "stopAndRemove": "Detener y quitar",
           "leave": "Dejar grupo",
           "leaveHint": "Saldrás de este grupo junto con tus compañeros. Ya no recibirás mensajes nuevos ni tendrás acceso a su historial.",
           "soleOwnerHint": "Eres el único miembro que queda. Archiva este grupo para conservar su historial y restaurarlo más adelante.",
