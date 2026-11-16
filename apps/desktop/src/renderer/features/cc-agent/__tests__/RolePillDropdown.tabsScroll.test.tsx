@@ -142,14 +142,38 @@ describe('WorkerTabsList overflow scrolling', () => {
     expect(order()).toEqual(['worker-1', 'worker-0', 'worker-2']);
     expect(onSwitchFocus).not.toHaveBeenCalled();
     view.unmount();
-    const reopened = render(<WorkerListToolbar {...props} workers={[...workers, ...manyWorkers(4).slice(3)]} />);
+    // Production snapshots are newest-first; a second arrival must not displace
+    // the first newcomer, even after a temporary empty/loading projection.
+    const newcomers = manyWorkers(5).slice(3);
+    const reopened = render(<WorkerListToolbar {...props} workers={[newcomers[0], ...workers]} />);
     expect(order()).toEqual(['worker-1', 'worker-0', 'worker-2', 'worker-3']);
+    reopened.rerender(<WorkerListToolbar {...props} workers={[newcomers[1], newcomers[0], ...workers]} />);
+    expect(order()).toEqual(['worker-1', 'worker-0', 'worker-2', 'worker-3', 'worker-4']);
+    reopened.rerender(<WorkerListToolbar {...props} workers={[]} />);
+    reopened.rerender(<WorkerListToolbar {...props} workers={[newcomers[1], newcomers[0], ...workers]} />);
+    expect(order()).toEqual(['worker-1', 'worker-0', 'worker-2', 'worker-3', 'worker-4']);
     reopened.rerender(<WorkerListToolbar {...props} workers={[workers[0], workers[2]]} />);
     expect(order()).toEqual(['worker-0', 'worker-2']);
     reopened.rerender(<WorkerListToolbar {...props} leadSessionId="lead-b" />);
     expect(order()).toEqual(['worker-0', 'worker-1', 'worker-2']);
     reopened.rerender(<WorkerListToolbar {...props} />);
     expect(order()).toEqual(['worker-1', 'worker-0', 'worker-2']);
+  });
+
+  it('appends arrivals before manual sorting without writing projection updates to storage', () => {
+    const workers = manyWorkers(4);
+    const props = { leadSessionId: 'lead-arrivals', worker: workers[0], workers: workers.slice(0, 2),
+      selectedWorkerId: workers[0].workerId, activeWorkerCount: 4, softLimit: 5, hardLimit: 8,
+      onSwitchFocus: vi.fn(), onOpenCreate: vi.fn(), onArchiveWorker: vi.fn() };
+    const write = vi.spyOn(Storage.prototype, 'setItem');
+    const view = render(<WorkerListToolbar {...props} />);
+    view.rerender(<WorkerListToolbar {...props} workers={[workers[2], ...props.workers]} />);
+    view.rerender(<WorkerListToolbar {...props} workers={[workers[3], workers[2], ...props.workers]} />);
+    const order = Array.from(screen.getByTestId('worker-tabs-scroller')
+      .querySelectorAll('[data-sortable-id]')).map((el) => el.getAttribute('data-sortable-id'));
+    expect(order).toEqual(['worker-0', 'worker-1', 'worker-2', 'worker-3']);
+    expect(write).not.toHaveBeenCalled();
+    expect(props.onSwitchFocus).not.toHaveBeenCalled();
   });
 
   it('isolates saved order by account and Lead host and recovers malformed storage', () => {

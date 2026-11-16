@@ -21,8 +21,17 @@ export function useWorkerTabOrder(workers: WorkerInfo[], leadSessionId?: string)
       return [];
     }
   }, [scope]);
-  const [manual, setManual] = useState<{ scope: string | null; ids: string[] } | null>(null);
-  const ids = manual?.scope === scope ? manual.ids : stored;
+  const [order, setOrder] = useState<{ scope: string | null; ids: string[] } | null>(null);
+  const rememberedIds = order?.scope === scope ? order.ids : stored;
+  const knownIds = new Set(rememberedIds);
+  const newcomers = workers.filter((worker) => !knownIds.has(worker.workerId));
+  const ids = newcomers.length
+    ? [...rememberedIds, ...newcomers.map((worker) => worker.workerId)]
+    : rememberedIds;
+  // Snapshots arrive newest-first. Remember first-seen IDs in the existing view
+  // state so later arrivals cannot displace earlier newcomers. Keep absent IDs
+  // through transient empty projections; only explicit sorting writes storage.
+  if (order?.scope !== scope || newcomers.length) setOrder({ scope, ids });
   const byId = new Map(workers.map((worker) => [worker.workerId, worker]));
   const ordered = ids.flatMap((id) => {
     const worker = byId.get(id);
@@ -40,7 +49,7 @@ export function useWorkerTabOrder(workers: WorkerInfo[], leadSessionId?: string)
     const retained = new Set(next);
     next.push(...workers.filter((worker) => !retained.has(worker.workerId)).map((worker) => worker.workerId));
     if (next.every((id, index) => id === ordered[index]?.workerId)) return;
-    setManual({ scope, ids: next });
+    setOrder({ scope, ids: next });
     if (!scope) return;
     try {
       localStorage.setItem(scope, JSON.stringify(next));
