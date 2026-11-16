@@ -79,6 +79,11 @@ export interface BuiltinStoreInstallFact {
   ownsInstalledBytes: boolean;
 }
 
+/** A bare legacy directory can belong to a non-root or unresolved instance. */
+export type BuiltinInstalledSourceFact =
+  | { kind: 'preserve' }
+  | ({ kind: 'store' } & BuiltinStoreInstallFact);
+
 export interface ProvisionIdentity {
   userId: string;
   email: string | null;
@@ -143,10 +148,11 @@ export interface ProvisionDeps {
    */
   onApplyStart?: () => void;
   /**
-   * 已装实例对应的商店安装(null = 没有已装的商店记录;抛错 = 账本读不了,本轮不动它)。
-   * 缺省 = 不看商店,行为与旧版一致。
+   * 已装物理目录的来源：非 root / 身份未定时 preserve，不覆盖、批准或回收；
+   * store 为同一 root 实例的商店事实；null = 无商店记录；抛错 = 本轮不动它。
+   * 缺省 = 不看安装来源，行为与旧版一致。
    */
-  storeInstall?: (id: string, installedDir: string) => BuiltinStoreInstallFact | null;
+  storeInstall?: (id: string, installedDir: string) => BuiltinInstalledSourceFact | null;
   log?: BuiltinProvisionerLogger;
 }
 
@@ -705,6 +711,12 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
           const installedDir = existingDir ?? path.join(repoRootDir, id);
           const installedExists = existingDir !== null;
           const store = existingDir ? (deps.storeInstall?.(id, existingDir) ?? null) : null;
+          // 目录形态不能决定 namespace：旧 `<id>` 也可能是企业 / local 安装。
+          // 来源保护先于受众、版本和指纹判断，也不能为它重新铸造 root 批准。
+          if (store?.kind === 'preserve') {
+            outcome.skipped.push(id);
+            return;
+          }
 
           // 3) 受众:不命中 → 回收"播种装的"(seeded 台账内),手动装的不动。
           //    同 id 有商店安装时交给商店,不删(已是商店字节就摘台账)。
@@ -855,7 +867,7 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
       if (installedDir) {
         // 同 id 有商店安装:不删,交给商店。已是商店字节就摘台账;仍是种子字节时
         // 保留台账,等商店自动更新覆盖回来后下一轮再摘。
-        let store: BuiltinStoreInstallFact | null;
+        let store: BuiltinInstalledSourceFact | null;
         try {
           store = deps.storeInstall?.(id, installedDir) ?? null;
         } catch (err) {
@@ -866,6 +878,7 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
           });
           continue;
         }
+        if (store?.kind === 'preserve') continue;
         if (store) {
           if (store.ownsInstalledBytes) seeded.delete(id);
           continue;

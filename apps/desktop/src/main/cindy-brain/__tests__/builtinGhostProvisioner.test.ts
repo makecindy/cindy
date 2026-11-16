@@ -4,6 +4,16 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { GHOST_INSTALL_MANIFEST_MAX_BYTES } from '../../../shared/ghost.js';
+import { hasDeliveryNamespace } from '../../../shared/pluginIdentity.js';
+import { readInstalledGhostManifestSnapshot } from '../../installedGhostManifest.js';
+import { PluginMarketLedger } from '../../plugin-market/ledger.js';
+import {
+  installedMarketManifestIdentity,
+  verifyInstalledMarketManifest,
+} from '../../plugin-market/installedManifestIdentity.js';
+import { GhostManager } from '../GhostManager.js';
+import { GhostInstallReceiptStore } from '../ghostInstallReceipt.js';
 import {
   fingerprintDirContent,
   isTrustedBuiltinSeedSource,
@@ -12,8 +22,14 @@ import {
   readBuiltinTombstones,
   recordBuiltinTombstone,
   renameBuiltinTombstone,
+  type ProvisionDeps,
 } from '../builtinGhostProvisioner.js';
 import { isGhostInstallLockHeld } from '../ghostInstallLock.js';
+import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
+
+const createBuiltinStoreInstall = createGhostProductionCallbacks<{
+  builtinSeedStoreInstall: NonNullable<ProvisionDeps['storeInstall']>;
+}>({ functions: ['builtinSeedStoreInstall'] });
 
 const tempDirs: string[] = [];
 
@@ -731,7 +747,7 @@ describe('builtinGhostProvisioner 与同名商店安装按版本取新', () => {
       seedRootDirs: [seedRoot],
       repoRootDir: repoRoot,
       beforeReplace,
-      storeInstall: () => ({ version: '1.0.0', ownsInstalledBytes: true }),
+      storeInstall: () => ({ kind: 'store', version: '1.0.0', ownsInstalledBytes: true }),
     });
 
     expect(outcome.skipped).toContain('builtin-test');
@@ -748,7 +764,7 @@ describe('builtinGhostProvisioner 与同名商店安装按版本取新', () => {
       seedRootDirs: [seedRoot],
       repoRootDir: repoRoot,
       beforeReplace,
-      storeInstall: () => ({ version: '1.0.0', ownsInstalledBytes: true }),
+      storeInstall: () => ({ kind: 'store', version: '1.0.0', ownsInstalledBytes: true }),
     });
 
     expect(outcome.updated.map((m) => m.id)).toEqual(['builtin-test']);
@@ -765,20 +781,20 @@ describe('builtinGhostProvisioner 与同名商店安装按版本取新', () => {
     await provisionBuiltinGhosts({
       seedRootDirs: [seedRoot],
       repoRootDir: repoRoot,
-      storeInstall: () => ({ version: '1.0.0', ownsInstalledBytes: true }),
+      storeInstall: () => ({ kind: 'store', version: '1.0.0', ownsInstalledBytes: true }),
     });
 
     await provisionBuiltinGhosts({
       seedRootDirs: [seedRoot],
       repoRootDir: repoRoot,
-      storeInstall: () => ({ version: '2.0.0', ownsInstalledBytes: false }),
+      storeInstall: () => ({ kind: 'store', version: '2.0.0', ownsInstalledBytes: false }),
     });
     expect(readSeeded(repoRoot)).toEqual(['builtin-test']);
 
     await provisionBuiltinGhosts({
       seedRootDirs: [seedRoot],
       repoRootDir: repoRoot,
-      storeInstall: () => ({ version: '2.0.0', ownsInstalledBytes: true }),
+      storeInstall: () => ({ kind: 'store', version: '2.0.0', ownsInstalledBytes: true }),
     });
     expect(readSeeded(repoRoot)).toEqual([]);
   });
@@ -788,7 +804,7 @@ describe('builtinGhostProvisioner 与同名商店安装按版本取新', () => {
     await provisionBuiltinGhosts({
       seedRootDirs: [seedRoot],
       repoRootDir: repoRoot,
-      storeInstall: () => ({ version: '1.0.0', ownsInstalledBytes: true }),
+      storeInstall: () => ({ kind: 'store', version: '1.0.0', ownsInstalledBytes: true }),
     });
     await fs.promises.rm(path.join(seedRoot, 'builtin-test'), { recursive: true });
     await writeMinimalSeed(seedRoot, 'other-seed');
@@ -798,7 +814,7 @@ describe('builtinGhostProvisioner 与同名商店安装按版本取新', () => {
       seedRootDirs: [seedRoot],
       repoRootDir: repoRoot,
       beforeRemove,
-      storeInstall: (id) => (id === 'builtin-test' ? { version: '2.0.0', ownsInstalledBytes: true } : null),
+      storeInstall: (id) => (id === 'builtin-test' ? { kind: 'store', version: '2.0.0', ownsInstalledBytes: true } : null),
     });
 
     expect(outcome.removed).toEqual([]);
@@ -812,7 +828,7 @@ describe('builtinGhostProvisioner 与同名商店安装按版本取新', () => {
     await provisionBuiltinGhosts({
       seedRootDirs: [seedRoot],
       repoRootDir: repoRoot,
-      storeInstall: () => ({ version: '1.0.0', ownsInstalledBytes: true }),
+      storeInstall: () => ({ kind: 'store', version: '1.0.0', ownsInstalledBytes: true }),
     });
     await fs.promises.rm(path.join(seedRoot, 'builtin-test'), { recursive: true });
     await writeMinimalSeed(seedRoot, 'other-seed');
@@ -833,5 +849,250 @@ describe('builtinGhostProvisioner 与同名商店安装按版本取新', () => {
     expect(beforeRemove).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(storeDir, 'ghost.json'))).toBe(true);
     expect(readSeeded(repoRoot)).toContain('builtin-test');
+  });
+});
+
+// Test value (#10841, unit): run provisioning through the production source
+// lookup with a real legacy bare-directory receipt, instance registry and market
+// ledger. Injected store facts above miss the root-only production lookup that
+// overwrote an approved enterprise 2.4.10 with bundled 2.2.1 on restart.
+// Preserve bytes, enabled approval and delivery identity across repeated passes,
+// audience changes and orphan cleanup; an unrelated same-id org must not prevent
+// a legitimate root seed update.
+// Full-file measurement: 36 unit cases in 4.34s on Windows (Vitest 3.2.7).
+describe('builtin provisioning preserves legacy enterprise installations', () => {
+  async function createLegacyMarketFixture(namespace: string | null | undefined) {
+    const root = fs.realpathSync.native(await makeTempDir());
+    const seedRoot = path.join(root, 'seeds');
+    const repoRoot = path.join(root, 'installed');
+    const stateRoot = path.join(root, 'state');
+    const id = 'xd-feishu';
+    const seedDir = await writeMinimalSeed(seedRoot, id);
+    const installedDir = await writeMinimalSeed(repoRoot, id);
+    const setVersion = async (dir: string, version: string) => {
+      const file = path.join(dir, 'ghost.json');
+      const manifest = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+      await fs.promises.writeFile(file, JSON.stringify({ ...manifest, version }));
+    };
+    await setVersion(seedDir, '2.2.1');
+    await setVersion(installedDir, '2.4.10');
+    await fs.promises.writeFile(path.join(installedDir, 'main.js'), '// enterprise 2.4.10');
+    const snapshot = readInstalledGhostManifestSnapshot(
+      installedDir,
+      GHOST_INSTALL_MANIFEST_MAX_BYTES,
+    );
+    if (!snapshot.ok) throw new Error(snapshot.reason);
+    const receipts = new GhostInstallReceiptStore(() => stateRoot);
+    const receipt = {
+      schemaVersion: 2 as const,
+      id,
+      ...(namespace !== undefined ? { namespace } : {}),
+      revision: '11111111-1111-4111-8111-111111111111',
+      manifest: snapshot.snapshot.manifest,
+      localeResources: {},
+      enabled: true,
+      trust: {
+        level: 'unverified' as const,
+        publisherSigned: false,
+        publisherVerified: false,
+        reviewed: false,
+      },
+      packageSha256: 'a'.repeat(64),
+      skillContentSha256: {},
+    };
+    await receipts.write(receipt, { relId: id });
+    const ledger = new PluginMarketLedger(path.join(root, 'market', 'ledger.v1.json'));
+    const record = {
+      pluginId: `c${'a'.repeat(24)}`,
+      ghostId: id,
+      releaseId: 'release-feishu',
+      version: '2.4.10',
+      sha256: receipt.packageSha256,
+      source: 'market' as const,
+      installed: true,
+      scope: namespace === null ? ('public' as const) : ('organization' as const),
+      namespace: namespace === undefined ? 'xd' : namespace,
+      organizationId: namespace === null ? null : 'org-xd',
+      rawManifestSha256: snapshot.snapshot.rawManifestSha256,
+      updatedAt: '2026-11-16T00:00:00.000Z',
+    };
+    ledger.upsertInstallation(record);
+    const createManager = () =>
+      new GhostManager({ getRootDir: () => repoRoot, getStateDir: () => stateRoot });
+    let manager = createManager();
+    manager.list();
+    const storeInstall = createBuiltinStoreInstall({
+      path,
+      hasDeliveryNamespace,
+      GHOST_INSTALL_MANIFEST_MAX_BYTES,
+      readInstalledGhostManifestSnapshot,
+      installedMarketManifestIdentity,
+      verifyInstalledMarketManifest,
+      brainRootDir: () => repoRoot,
+      getGhostManager: () => manager,
+      getPluginMarketLedger: () => ledger,
+    }).builtinSeedStoreInstall;
+    return {
+      id,
+      seedRoot,
+      repoRoot,
+      installedDir,
+      seedDir,
+      receipts,
+      receipt,
+      ledger,
+      record,
+      storeInstall,
+      setVersion,
+      get manager() {
+        return manager;
+      },
+      restart() {
+        manager.disposeNotificationIndex();
+        manager = createManager();
+      },
+    };
+  }
+
+  it.each(['2.2.1', '9.0.0'])(
+    'preserves the enterprise install across restarts with seed %s',
+    async (seedVersion) => {
+      const fixture = await createLegacyMarketFixture('xd');
+      try {
+        await fixture.setVersion(fixture.seedDir, seedVersion);
+        const beforeReplace = vi.fn();
+        for (let restart = 0; restart < 3; restart++) {
+          fixture.restart();
+          const outcome = await provisionBuiltinGhosts({
+            seedRootDirs: [fixture.seedRoot],
+            repoRootDir: fixture.repoRoot,
+            storeInstall: fixture.storeInstall,
+            beforeReplace,
+          });
+          expect(outcome.updated).toEqual([]);
+          expect(outcome.approved).toEqual([]);
+        }
+        expect(await fs.promises.readFile(path.join(fixture.installedDir, 'main.js'), 'utf8')).toBe(
+          '// enterprise 2.4.10',
+        );
+        expect(fixture.manager.list()).toMatchObject([
+          {
+            manifest: { id: fixture.id, version: '2.4.10' },
+            namespace: 'xd',
+            namespaceState: 'confirmed',
+            instanceKey: fixture.id,
+            enabled: true,
+            approval: { state: 'approved', revision: fixture.receipt.revision },
+          },
+        ]);
+        expect(fixture.ledger.installationForPlugin(fixture.record)).toEqual(fixture.record);
+        expect(beforeReplace).not.toHaveBeenCalled();
+      } finally {
+        fixture.manager.disposeNotificationIndex();
+      }
+    },
+  );
+
+  it.each(['audience', 'orphan'])(
+    'does not delete a legacy enterprise install during %s cleanup',
+    async (cleanup) => {
+      const fixture = await createLegacyMarketFixture('xd');
+      try {
+        await fs.promises.writeFile(
+          path.join(fixture.repoRoot, PROVISIONING_STATE_FILE),
+          JSON.stringify({ removed: [], seeded: [fixture.id] }),
+        );
+        if (cleanup === 'audience') {
+          await fs.promises.writeFile(
+            path.join(fixture.seedRoot, 'provisioning.json'),
+            JSON.stringify({
+              ghosts: { [fixture.id]: { audience: { userIds: ['another-user'] } } },
+            }),
+          );
+        } else {
+          await fs.promises.rm(fixture.seedDir, { recursive: true });
+          await writeMinimalSeed(fixture.seedRoot, 'another-seed');
+        }
+        const beforeRemove = vi.fn();
+        const outcome = await provisionBuiltinGhosts({
+          seedRootDirs: [fixture.seedRoot],
+          repoRootDir: fixture.repoRoot,
+          storeInstall: fixture.storeInstall,
+          beforeRemove,
+        });
+        expect(outcome.removed).toEqual([]);
+        expect(await fs.promises.readFile(path.join(fixture.installedDir, 'main.js'), 'utf8')).toBe(
+          '// enterprise 2.4.10',
+        );
+        expect(fixture.receipts.read(fixture.id)).toMatchObject({
+          state: 'approved',
+          receipt: { namespace: 'xd', enabled: true },
+        });
+        expect(beforeRemove).not.toHaveBeenCalled();
+      } finally {
+        fixture.manager.disposeNotificationIndex();
+      }
+    },
+  );
+
+  it.each(['pending', 'unconfirmed', 'blocked'] as const)(
+    'preserves an unresolved legacy identity (%s)',
+    async (state) => {
+      const fixture = await createLegacyMarketFixture(state === 'pending' ? undefined : 'xd');
+      try {
+        if (state === 'unconfirmed') {
+          const legacyReceipt = { ...fixture.receipt };
+          delete legacyReceipt.namespace;
+          await fixture.receipts.write(legacyReceipt, { relId: fixture.id });
+          fixture.restart();
+        } else if (state === 'blocked') {
+          await fs.promises.writeFile(
+            path.join(fixture.manager.approvalStateRoot(), 'plugin-instances.v2.json'),
+            JSON.stringify({ schemaVersion: 999, census: null, instances: {} }),
+          );
+          fixture.restart();
+        }
+        expect(fixture.manager.readNamespaceState(fixture.id)).toBe(
+          state === 'blocked' ? 'unknown' : state,
+        );
+        const outcome = await provisionBuiltinGhosts({
+          seedRootDirs: [fixture.seedRoot],
+          repoRootDir: fixture.repoRoot,
+          storeInstall: fixture.storeInstall,
+        });
+        expect(outcome.updated).toEqual([]);
+        expect(await fs.promises.readFile(path.join(fixture.installedDir, 'main.js'), 'utf8')).toBe(
+          '// enterprise 2.4.10',
+        );
+      } finally {
+        fixture.manager.disposeNotificationIndex();
+      }
+    },
+  );
+
+  it('still updates the root instance when an unrelated enterprise market record has the same id', async () => {
+    const fixture = await createLegacyMarketFixture(null);
+    try {
+      fixture.ledger.upsertInstallation({
+        ...fixture.record,
+        namespace: 'xd',
+        scope: 'organization',
+        organizationId: 'org-xd',
+        pluginId: `c${'b'.repeat(24)}`,
+      });
+      await fixture.setVersion(fixture.seedDir, '9.0.0');
+      const outcome = await provisionBuiltinGhosts({
+        seedRootDirs: [fixture.seedRoot],
+        repoRootDir: fixture.repoRoot,
+        storeInstall: fixture.storeInstall,
+      });
+      expect(outcome.updated.map((manifest) => manifest.version)).toEqual(['9.0.0']);
+      expect(await fs.promises.readFile(path.join(fixture.installedDir, 'main.js'), 'utf8')).toBe(
+        '// brain',
+      );
+      expect(fixture.ledger.installationForPlugin(fixture.record)).toEqual(fixture.record);
+    } finally {
+      fixture.manager.disposeNotificationIndex();
+    }
   });
 });

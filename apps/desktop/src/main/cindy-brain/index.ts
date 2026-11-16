@@ -364,7 +364,7 @@ import {
   renameBuiltinTombstone,
   resolveBuiltinInstalledDir,
   seedIsNewerThanStore,
-  type BuiltinStoreInstallFact,
+  type BuiltinInstalledSourceFact,
   type ProvisionIdentity,
 } from './builtinGhostProvisioner.js';
 import { getAccessToken, getAuthState, onAuthStateChange } from '../authManager.js';
@@ -3811,10 +3811,21 @@ export async function diagnoseScheduleHookPluginForActiveOwner(
 }
 
 /**
- * 内置种子对照的同 id 商店安装(builtinGhostProvisioner 的 storeInstall):只认服务端市场
- * 已装的根 namespace 记录。账本或该记录损坏时抛错,播种把该种子按本轮失败处理、不动已装字节。
+ * 内置种子只能管理 root 实例。先按物理目录核对 Host 安装身份，再读取同实例的商店记录；
+ * 企业 / local 与身份未定的旧目录一律保留。账本损坏时抛错，本轮不动已装字节。
  */
-function builtinSeedStoreInstall(id: string, installedDir: string): BuiltinStoreInstallFact | null {
+function builtinSeedStoreInstall(id: string, installedDir: string): BuiltinInstalledSourceFact | null {
+  const relId = path.relative(brainRootDir(), installedDir).split(path.sep).join('/');
+  const manager = getGhostManager();
+  const namespaceState = manager.readNamespaceState(relId);
+  if (
+    manager.isInstanceRegistryBlocked() ||
+    namespaceState === 'pending' ||
+    namespaceState === 'unconfirmed' ||
+    manager.readDeliveryNamespace(relId) != null
+  ) {
+    return { kind: 'preserve' };
+  }
   // 严格查询：账本文件或该插件的记录损坏时不能当成「没有商店来源」（那会让孤儿回收
   // 把真实的商店安装当种子删掉），抛错让播种跳过本轮。
   const lookup = getPluginMarketLedger().lookupInstallationForAuthorization({ ghostId: id, namespace: null });
@@ -3833,9 +3844,9 @@ function builtinSeedStoreInstall(id: string, installedDir: string): BuiltinStore
   const snapshot = readInstalledGhostManifestSnapshot(installedDir, GHOST_INSTALL_MANIFEST_MAX_BYTES);
   // ghost.json 相同不代表目录里还是商店包(旧播种器允许同版本种子覆盖,只改代码不改清单)。
   // 批准回执里的包摘要才是落位那一刻的包身份:商店安装 = Release sha256,播种发布 = 目录摘要。
-  const relId = path.relative(brainRootDir(), installedDir).split(path.sep).join('/');
-  const evidence = getGhostManager().approvedInstallEvidence(relId);
+  const evidence = manager.approvedInstallEvidence(relId);
   return {
+    kind: 'store',
     version: record.version,
     ownsInstalledBytes:
       snapshot.ok &&
