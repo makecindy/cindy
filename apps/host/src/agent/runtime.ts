@@ -17,6 +17,7 @@ import type { AgentDeps, AgentKind, AuthAdapter, AuthAdapterOptions, AuthLoginOp
 
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.ts';
 import { createMakerLogger } from '../../../desktop/src/main/maker-host/logger-adapter.js';
+import { getHostOutboundPathSnapshotFor } from '../outbound-proxy.ts';
 import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/codex-local-auth-state.js';
 import { commitHostCodexDisconnectBoundary, readHostCodexInvalidation, readHostCodexRecoveryRequirement } from './codex-invalidation.js';
 import { createHostCodexSystemLogin, detectHostCodexCredentialScope, resolveHostSystemCodexAuthPath } from './codex-system-login.js';
@@ -715,9 +716,15 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         // As the desktop (maker-host/index.ts): the user's Codex server-compaction choice, from the same
         // file in this owner's profile; null keeps the native policy.
         getCodexServerCompactionPreference: () => readCodexCompactionState().value.serverEnabled,
-        // The Host's outbound resolver (outbound.mjs, from the environment) keeps no per-origin path
-        // judgements, so an unreachable backend keeps the generic error text (section 2).
-        getOutboundPathFact: undefined,
+        // As the desktop (maker-host/index.ts): the exit origin the Codex proxy recorded for this
+        // thread, then the outbound resolver's judgement for that origin (outbound-proxy.ts). Without
+        // a recorded origin (no Codex proxy, or Codex reaching the upstream directly) the generic
+        // error text stays (release table section 7).
+        getOutboundPathFact: ({ threadId }) => {
+          if (!threadId) return null;
+          const origin = options.codexRuntime?.proxy.getCodexThreadUpstreamOrigin(threadId);
+          return origin ? getHostOutboundPathSnapshotFor([origin]) : null;
+        },
         // Remote execution: send-preflight refuses tasks with a remote host or device (release table section 7, row 18).
         getRemoteAgentFileOps: undefined,
         getRemoteCodexTransport: undefined,
