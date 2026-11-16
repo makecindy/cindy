@@ -53,6 +53,13 @@ export interface HostAutoResumePorts {
    * the takeover was dropped (Host-only; input-queue.mjs ends that input's /api/chat stream).
    */
   onTakeoverReleased?(sessionId: string): void;
+  /**
+   * Coexistence plan A (input-queue.mjs holdForDesktop): a desktop that opens this profile's database
+   * is running. A resume that comes due then answers as superseded: the interrupted turn ends with its
+   * error in its history, as when the person takes over, and no continuation is queued (a queued one
+   * would be written to the queue snapshot the desktop is using).
+   */
+  isProfileHeld(): boolean;
   log: AutoResumeLog;
 }
 
@@ -115,7 +122,9 @@ export function createHostAutoResume(ports: HostAutoResumePorts) {
   const hooks = createInterruptedTurnAutoResumeHooks<Session>(explicitPorts<InterruptedTurnAutoResumeHookPorts<Session>>({
     inputCoordinator: {
       isExecutionPaused: sessionId => ports.coordinator().isExecutionPaused(sessionId),
-      autoRetryLastError: (sessionId, attemptToken) => ports.coordinator().autoRetryLastError(sessionId, attemptToken),
+      autoRetryLastError: (sessionId, attemptToken) => ports.isProfileHeld()
+        ? Promise.resolve('superseded' as const)
+        : ports.coordinator().autoRetryLastError(sessionId, attemptToken),
     },
     interruptedTurnAutoResumeGuard,
     autoResumeBookkeeping,

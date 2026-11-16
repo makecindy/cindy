@@ -212,6 +212,11 @@ export function createHostContextRecovery(deps: {
      * terminal of its own client id). Only while that recovery runs: it ends, fails, throws, is
      * rebuilt or is drained at shutdown, and the entry goes. A replay outside a recovery gets none.
      */
+    /** Whether a recovery of this task is running (its replay belongs to the turn that overflowed). */
+    isRecovering(sessionId: string): boolean {
+      return recovering.has(sessionId);
+    },
+
     replayClientId(sessionId: string): string | undefined {
       const clientId = recovering.get(sessionId)?.terminal.fields.inputClientId;
       return typeof clientId === 'string' ? clientId : undefined;

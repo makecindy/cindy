@@ -12,6 +12,13 @@ import { CindyAuthClient as RealAuthClient, parseAuthSessionRecord, serializeAut
 import { assertHostSessionRegion } from './auth/region-policy.ts';
 import { refreshHostSession as realRefreshHostSession } from './auth/refresh.mjs';
 import { projectAdoptedSession } from './credentials/session.mjs';
+import { OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.ts';
+import { createDesktopScanner } from './agent/profile-coexistence.ts';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 // Unit regression: run the real startup/auth functions with in-memory network,
 // credentials and storage. A valid login for B must never open A's database.
@@ -28,7 +35,7 @@ let activeOwner = null, runtimeLease = null, currentSessionToken = null, account
 let account = { authenticated: false, realm: 'global' };
 const runtime = { owner: null };
 ${functions.join('\n')}
-return { start: ensureRuntime, resolve: resolveAccountUser, token: () => currentSessionToken, account: () => account };
+return { start: ensureRuntime, resolve: resolveAccountUser, token: () => currentSessionToken, account: () => account, runtime, lease: () => runtimeLease };
 `, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 function setup(overrides = {}) {
@@ -41,6 +48,8 @@ function setup(overrides = {}) {
     // Row 25 (25a): the Host reads the Skill projection boundary for the owner it just configured.
     observeSkillProjectionBoundary: (ownerId) => { steps.push(`boundary:${ownerId}`); return 'stable'; },
     acquireHostRuntimeLease: () => ({ held: true, release() {} }),
+    // No desktop on the profile (coexistence plan A); the refusal below scans a real one.
+    createDesktopScanner: () => async () => [], OwnerDatabaseError,
     readAdoptedSessionState: async () => ({ authenticated: true, realm: 'global' }),
     openOwnerDatabase: async (args) => { opens.push(args); steps.push('open'); throw new Error('database opened'); },
     path: { join: (...parts) => parts.join('/') }, layout: { packaged: false, drizzleDir: 'desktop/drizzle', sqliteVecPath: 'desktop/vec0' }, process,
@@ -153,4 +162,48 @@ test('an adopted cross-region personal session stays signed out; an organization
       await run.close();
     }
   }
+});
+
+// 测试价值
+// - 生产入口：main.ts 的 ensureRuntime（本文件按源码取出并注入端口），用真的 createDesktopScanner 扫一个
+//   临时 profile 的 `.dev-instances`；登记的是一个活着的子进程。
+// - 规则：并存方案 A（审核方 2026-11-17 定）。运行时租约只挡第二个 Host；同一 profile 上有开库的桌面时，
+//   Host 启动被拒：释放租约、停在 blocked、不读账号、不开库，也不自动重试。没有 `runtime` 字段的记录（旧版桌面）
+//   按开库处理；`runtime: 'client'` 的记录（Host 的客户端）不挡。
+// - 现有覆盖缺口：上面的用例只覆盖账号核对；之前 Host 看不到桌面。
+// - 最小失败输入：一份没有 runtime 字段、PID 活着的登记记录。tier：unit（一个空转子进程，按 PID 结束）。
+test('a desktop that opens the profile refuses the start: lease released, blocked, nothing read or opened', async t => {
+  const profile = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-coexistence-start-'));
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], { stdio: 'ignore' });
+  await once(child, 'spawn');
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) { const exited = once(child, 'exit'); child.kill(); await exited; }
+    rmSync(profile, { recursive: true, force: true });
+  });
+  mkdirSync(path.join(profile, '.dev-instances'));
+  const record = { schemaVersion: 1, pid: child.pid, startedAtMs: Date.now(), userDataDir: profile, state: 'ready', passive: false };
+  const recordFile = path.join(profile, '.dev-instances', `${child.pid}.json`);
+  writeFileSync(recordFile, JSON.stringify(record));
+  let released = 0;
+  let reads = 0;
+  const ports = {
+    resolveHostDataDir: () => profile, createDesktopScanner,
+    acquireHostRuntimeLease: () => ({ held: true, release() { released += 1; } }),
+    readAdoptedSessionState: async () => { reads += 1; return { authenticated: true, realm: 'global' }; },
+  };
+  const refused = setup(ports);
+  await assert.rejects(refused.start('account-b'),
+    error => error instanceof OwnerDatabaseError && error.code === 'DB_SCHEMA_LOCKED' && error.message.includes(`pid ${child.pid}`));
+  assert.equal(released, 1, 'the runtime lease is released');
+  assert.equal(refused.lease(), null);
+  assert.equal(reads, 0, 'no account read');
+  assert.deepEqual(refused.opens, [], 'no database opened');
+  assert.equal(refused.runtime.state, 'blocked');
+  assert.deepEqual(refused.runtime.coexistence, { state: 'desktop-running', desktops: [child.pid] });
+
+  // A client of a Host (runtime: 'client') on the same profile never opens its database: the start goes on.
+  writeFileSync(recordFile, JSON.stringify({ ...record, runtime: 'client' }));
+  const allowed = setup(ports);
+  await assert.rejects(allowed.start('account-b'), /database opened/);
+  assert.equal(allowed.opens.length, 1);
 });

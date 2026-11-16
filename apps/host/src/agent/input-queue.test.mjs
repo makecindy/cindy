@@ -18,7 +18,8 @@ import { saveAgentInputQueueSnapshot, loadAgentInputQueueSnapshot, getPersistedI
 import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
 
 import { createHostHistoryReader } from './history.ts';
-import { createInputQueue } from './input-queue.mjs';
+import { createInputQueue, holdTaskForProfile, PROFILE_HOLD_LOCK } from './input-queue.mjs';
+import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../desktop/src/shared/agentInputQueue.ts';
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
 import { createTurnExecutor } from './turn-executor.mjs';
 import { lockSessionRoute } from './session-route-lock.mjs';
@@ -5134,4 +5135,157 @@ test('move: a Claude task moved during its turn is closed by Maker, and the exec
   await ports.liveCcSessionBridge.closeSession('move-claude-turn');
   assert.equal(handles[0].closed, true, 'the runtime in the old directory is closed');
   await waitFor(() => !h.queue.isTurnRunning('move-claude-turn') && h.queue.projection('move-claude-turn').turnInProgress === false);
+});
+
+
+// ── Coexistence plan A: the profile hold (input-queue.mjs holdForDesktop / releaseDesktopHold) ─────
+// 测试价值
+// - 生产入口：createInputQueue 的 holdForDesktop / releaseDesktopHold（main.ts 按 profile-coexistence.ts 的重扫
+//   调用），以及 enqueue、steer、resume、retryLastError、调度入队、/api/chat、自动续跑和快照恢复这些真实入口。
+// - 规则：并存方案 A（审核方 2026-11-17 定）。开库的桌面在跑时，新的发送一律拒绝，错误码 PRECONDITION_FAILED，
+//   带固定标记 HOST_PROFILE_IN_USE_BY_DESKTOP；在跑的回合跑完；排队的不开始；用量上限后的自动继续、中断自动续跑、
+//   快照恢复都不发出（交互锁加 execution-pause 两样都加）。重新打开：等在跑的回合结束 → 重建输入队列运行时 →
+//   按库里的快照恢复 → 解锁；桌面期间处理掉的输入不再发，没处理的照常发。
+// - 现有覆盖缺口：之前 Host 不知道桌面在用同一份数据，没有任何闸门。
+// - 最小失败输入：一条在跑、两条排队的任务；一次中断；一份落库的快照；桌面处理掉其中一条（直接改库模拟）。
+//   tier：unit（内存假 Maker 与临时 SQLite，计时用假时钟）。
+const HELD = 'HOST_PROFILE_IN_USE_BY_DESKTOP: held for this test';
+const isHeldRefusal = error => error?.code === 'PRECONDITION_FAILED' && error.message === `[PRECONDITION_FAILED] ${HELD}`;
+
+/** A Host input queue over a temporary SQLite queue store, as in the restart test above. */
+function durableHold(t) {
+  t = lifoCleanup(t);
+  const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-hold-'));
+  const sqlite = new Database(path.join(root, 'queue.sqlite'));
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS messages(client_id TEXT, session_id TEXT, PRIMARY KEY(session_id, client_id));
+    CREATE TABLE IF NOT EXISTS agent_input_queue_snapshots(session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, active_turn_started_at INTEGER, last_turn_ended_at INTEGER, provider_id TEXT);
+    INSERT OR IGNORE INTO sessions(id) VALUES ('held')`);
+  setCurrentDbClient({ drizzle: drizzle(sqlite) }, 'isolated-test');
+  t.after(() => { clearCurrentDbClient(); sqlite.close(); rmSync(root, { recursive: true, force: true }); });
+  const record = (id, clientId) => sqlite.prepare('INSERT OR IGNORE INTO messages(session_id,client_id) VALUES (?,?)').run(id, clientId);
+  const h = createHarness({
+    markStarted: markSessionTurnStartedDurable,
+    markEnded: async (id, at) => { markSessionTurnEnded(id, at); await drainSessionActiveTurnWrites(id); },
+    persistQueueSnapshot: saveAgentInputQueueSnapshot, loadQueueSnapshot: loadAgentInputQueueSnapshot,
+    getPersistedClientIds: getPersistedInputClientIds,
+    persistMessage: async (id, row) => { if (row.role === 'user') record(id, row.clientId); },
+  });
+  t.after(() => h.queue.dispose());
+  return { ...h, record };
+}
+
+test('profile hold: every new send is refused, typed; the running turn ends; nothing queued starts', async t => {
+  const h = durableHold(t);
+  await h.queue.enqueue('held', { clientId: 'running', text: 'long job' });
+  await waitFor(() => h.maker.sessions.get('held')?.sent.length === 1);
+  await h.queue.enqueue('held', { clientId: 'queued', text: 'next job' });
+  h.queue.holdForDesktop(HELD);
+  assert.equal(h.queue.isHeldForDesktop(), true);
+  await assert.rejects(h.queue.enqueue('held', { clientId: 'new', text: 'more' }), isHeldRefusal);
+  await assert.rejects(h.queue.steer('held', { clientId: 'steer', text: 'also this' }), isHeldRefusal);
+  await assert.rejects(h.queue.resume('held'), isHeldRefusal);
+  await assert.rejects(h.queue.retryLastError('held'), isHeldRefusal);
+  await assert.rejects(h.queue.schedulerQueue().enqueuePrompt({ sessionId: 'held' }), isHeldRefusal);
+  // A new task's first send, and /api/chat: the stream carries the same typed refusal.
+  await assert.rejects(h.queue.enqueue('other', { clientId: 'first', text: 'hello' }), isHeldRefusal);
+  const writes = [];
+  const response = Object.assign(new EventEmitter(), { writableEnded: false, headersSent: false,
+    writeHead() { this.headersSent = true; }, write(chunk) { writes.push(String(chunk)); },
+    end(chunk) { if (chunk) writes.push(String(chunk)); this.writableEnded = true; this.emit('close'); } });
+  const chat = createChatHandler({ events: createEventHub(), readSession: async id => ({ id, status: 'active' }),
+    enqueue: (id, input) => h.queue.enqueue(id, input), inputStatus: (id, clientId) => h.queue.inputStatus(id, clientId) });
+  await chat(Readable.from([Buffer.from(JSON.stringify({ sessionId: 'held', clientId: 'chat', prompt: 'via chat' }))]), response);
+  assert.ok(writes.some(chunk => chunk.includes(`[PRECONDITION_FAILED] ${HELD}`)), 'the stream says why');
+  // An input accepted before the hold still answers its reconnect.
+  assert.deepEqual((await h.queue.enqueue('held', { clientId: 'queued', text: 'next job' })).pendingQueue.map(i => i.clientId), ['queued']);
+  assert.equal(await h.queue.releaseDesktopHold(), false, 'not while a turn runs');
+  // Editing a queued input is not a send; its write must not lift the hold's execution pause.
+  await h.queue.updateText('held', 'queued', 'next job, edited');
+
+  const session = h.maker.sessions.get('held');
+  session.emit({ type: 'done', data: {} });
+  await settle();
+  assert.deepEqual(session.sent, ['long job'], 'the queued input does not start');
+  const projection = h.queue.projection('held');
+  assert.deepEqual(projection.pendingQueue.map(i => i.clientId), ['queued']);
+  assert.deepEqual(projection.queueInteractionLocks.filter(lock => [PROFILE_HOLD_LOCK, 'execution-pause'].includes(lock)).sort(),
+    ['execution-pause', PROFILE_HOLD_LOCK].sort(), 'both locks, so the window can show why');
+});
+
+test('profile hold: the desktop answered one queued input meanwhile; reopened, the Host sends only the other', async t => {
+  const h = durableHold(t);
+  await h.queue.enqueue('held', { clientId: 'running', text: 'long job' });
+  await waitFor(() => h.maker.sessions.get('held')?.sent.length === 1);
+  await h.queue.enqueue('held', { clientId: 'answered', text: 'the desktop sends this' });
+  await h.queue.enqueue('held', { clientId: 'waiting', text: 'still waiting' });
+  h.queue.holdForDesktop(HELD);
+  h.maker.sessions.get('held').emit({ type: 'done', data: {} });
+  await settle();
+  // The desktop, on the same database: it sends "answered" (its user row) and saves its queue without it.
+  h.record('held', 'answered');
+  await saveAgentInputQueueSnapshot('held', (await loadAgentInputQueueSnapshot('held')).filter(i => i.clientId !== 'answered'));
+  assert.equal(await h.queue.releaseDesktopHold(), true);
+  assert.equal(h.queue.isHeldForDesktop(), false);
+  const reopened = await h.queue.getProjection('held');
+  assert.deepEqual(reopened.pendingQueue.map(i => i.clientId), ['waiting'], 'the queue comes from the database');
+  await h.queue.resume('held');
+  await waitFor(() => h.maker.sessions.get('held')?.sent.length === 1);
+  assert.deepEqual(h.maker.sessions.get('held').sent, ['still waiting']);
+});
+
+test('profile hold: a durable queue restored while held stays unsent, and resume is refused', async t => {
+  const h = durableHold(t);
+  // A queue saved before this runtime read it (a restart, or another process).
+  await saveAgentInputQueueSnapshot('held', [{ clientId: 'saved', text: 'saved work', persistedContent: 'saved work',
+    model: 'stored-model', workingDir: '/tmp', effort: '', permissionMode: 'ask',
+    chatMessage: { clientId: 'saved', role: 'user', content: 'saved work' },
+    createOpts: { agentKind: 'claude-code', model: 'stored-model', workingDir: '/tmp' } }]);
+  h.queue.holdForDesktop(HELD);
+  const restored = await h.queue.getProjection('held');
+  assert.deepEqual(restored.pendingQueue.map(i => i.clientId), ['saved']);
+  assert.ok(restored.queueInteractionLocks.includes(PROFILE_HOLD_LOCK) && restored.queueInteractionLocks.includes('execution-pause'),
+    'a task first read while held is held too');
+  await assert.rejects(h.queue.resume('held'), isHeldRefusal);
+  await settle();
+  assert.equal(h.maker.sessions.size, 0, 'nothing started');
+});
+
+test('profile hold: an interrupted turn waiting for its automatic resume is not resumed', async t => {
+  const r = await resumeHarness(t);
+  await r.interrupt();
+  r.h.queue.holdForDesktop(HELD);
+  for (let i = 0; i < 60; i += 1) { t.mock.timers.tick(500); await settle(5); }
+  assert.equal(r.session.sent.length, 1, 'no automatic resume while held');
+  assert.deepEqual(r.h.queue.projection('r').pendingQueue, [], 'and no hidden continuation is queued (or saved)');
+  await settle();
+  assert.equal(r.errorRows().length, 1, 'the interruption is written to its history, once');
+  t.mock.timers.reset();
+  await r.h.queue.dispose();
+});
+
+// The Host does not continue after a usage limit yet (coordinator-deps.ts onUsageLimitedTurnError, the
+// third batch). The continuation it will run is the coordinator's continueAfterUsageLimitReset; the
+// hold's two locks keep that from reaching the agent.
+test('profile hold: a usage-limit continuation that comes due is not sent', async () => {
+  const sent = [];
+  const coordinator = new AgentInputCoordinator({
+    sendToAgent: async (_id, item) => { sent.push(item.text ?? item.content); return 'accepted'; },
+    steerToAgent: async () => {}, abortSession: async () => {},
+    isTurnRunning: () => false, getTurnGeneration: () => 0, hasPendingInteraction: () => false,
+    getAgentKind: () => 'claude-code', getSdkSessionId: async () => undefined,
+    hasAssistantProgressAfter: async () => false, createUserMessage: async () => undefined,
+    touchUserSend: async () => {}, emitProjection: () => {},
+  });
+  const item = { clientId: 'quota', text: 'original work', persistedContent: 'original work', model: 'm', effort: '',
+    permissionMode: 'ask', workingDir: '/tmp', chatMessage: { clientId: 'quota', role: 'user', content: 'original work' },
+    createOpts: { agentKind: 'claude-code', model: 'm', workingDir: '/tmp' } };
+  const info = { reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON, attempt: 1, maxAttempts: 3, sessionTotal: 0 };
+  const token = coordinator.restoreUsageLimitRecovery('quota-task',
+    { kind: 'active-turn', item, error: 'weekly limit' }, coordinator.getGeneration('quota-task'));
+  assert.ok(coordinator.armUsageLimitWait('quota-task', token, Date.now() + 60_000));
+  holdTaskForProfile(coordinator, 'quota-task');
+  await coordinator.continueAfterUsageLimitReset('quota-task', token, info);
+  await settle();
+  assert.deepEqual(sent, [], 'held: not sent');
 });

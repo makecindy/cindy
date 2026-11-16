@@ -15,6 +15,7 @@ import { readTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskAct
 import { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/maker-ipc/queuedAttachmentOwnership.ts';
 import { createLogger } from '../../../desktop/src/main/logger.ts';
 import { isSessionErrorSuppressed } from '../../../desktop/src/main/maker-ipc/sessionErrorSuppression.ts';
+import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.ts';
 
 const attachmentLog = createLogger('host-attachments');
 const log = createLogger('host-auto-resume');
@@ -29,6 +30,20 @@ export function storedSessionOptions(stored) {
 }
 
 const makerKind = kind => kind === 'cc' ? 'claude-code' : kind;
+
+/** The interaction lock a profile hold puts on every task (coexistence plan A, profile-coexistence.ts). */
+export const PROFILE_HOLD_LOCK = 'profile-coexistence';
+
+/**
+ * Hold one task while a desktop that opens this profile's database runs: nothing queued starts
+ * (any interaction lock stops the coordinator's dispatch) and the execution pause stops the
+ * automatic continuations that read it (interrupted-turn auto-resume when the error arrives and
+ * when its wait ends; a saved usage-limit recovery). Both survive Stop.
+ */
+export function holdTaskForProfile(coordinator, id) {
+  coordinator.setInteractionLock(id, PROFILE_HOLD_LOCK, true, { preserveOnStop: true });
+  coordinator.setExecutionPaused(id, true);
+}
 const errorText = error => error instanceof Error ? error.message : String(error);
 
 /** Only composition fields cross the browser trust boundary. Host receipts,
@@ -89,6 +104,8 @@ function composeInput(item, stored) {
 /** Node assembly of the desktop input transaction. There is one queue state
  * machine for both launchers; this module owns only IO and runtime lifetime. */
 export function createInputQueue(deps) {
+  // Coexistence plan A: null, or the refusal a new send gets while a desktop uses this profile.
+  let profileHold = null;
   let runtime = createRuntime();
 
   function createRuntime() {
@@ -131,6 +148,17 @@ export function createInputQueue(deps) {
         parts: materialized.materializedParts, cleanupAfterDurable: materialized.cleanupAfterAcceptance,
       });
       return { item: materialized.item, ownerId };
+    }
+    /** A new send while the profile is held: refused, typed, before anything is written. */
+    function refuseWhileHeld() {
+      if (profileHold) throwIpcError('PRECONDITION_FAILED', profileHold.message);
+    }
+    function holdIfHeld(id) {
+      if (profileHold) holdTaskForProfile(coordinator, id);
+    }
+    /** The execution pause this module lifts after a write stays while the profile is held. */
+    function unpause(id) {
+      if (!profileHold) coordinator.setExecutionPaused(id, false);
     }
     function stateFor(id) {
       if (!states.has(id)) states.set(id, { commands: Promise.resolve(), writing: Promise.resolve(),
@@ -175,6 +203,7 @@ export function createInputQueue(deps) {
       onTakeoverReleased: id => releaseResumeOrigin(id),
       maybeApplySessionRuntimeFallback: deps.maybeApplySessionRuntimeFallback,
       pendingSessionRuntimeFallbackRebuilds: deps.pendingSessionRuntimeFallbackRebuilds,
+      isProfileHeld: () => profileHold !== null,
       log,
     });
     // The input whose stream an automatic resume continues, per task (Host-only: /api/chat follows
@@ -286,7 +315,7 @@ export function createInputQueue(deps) {
           acceptedCallbacks.discard(req.clientId);
           throw error;
         } finally {
-          if (!stateFor(id).persistenceError) coordinator.setExecutionPaused(id, false);
+          if (!stateFor(id).persistenceError) unpause(id);
         }
       },
     });
@@ -298,6 +327,7 @@ export function createInputQueue(deps) {
         assertCurrent();
         await coordinator.ensureQueueRestored(id);
         assertCurrent();
+        holdIfHeld(id);
         if (state.admission !== admission) throw new Error('input cancelled before acceptance');
         return fn(state, admission);
       });
@@ -309,7 +339,7 @@ export function createInputQueue(deps) {
         coordinator.setExecutionPaused(id, true);
         const result = fn();
         await flushed(id);
-        if (!state.persistenceError) coordinator.setExecutionPaused(id, false);
+        if (!state.persistenceError) unpause(id);
         return project(result);
       });
     }
@@ -317,6 +347,7 @@ export function createInputQueue(deps) {
       const state = stateFor(id);
       state.admission += 1;
       await coordinator.ensureQueueRestored(id);
+      holdIfHeld(id);
       // Abort is urgent. A pending steer/send command may itself need this
       // cancellation to settle, so never serialize Stop behind that promise.
       coordinator.stop(id, options);
@@ -357,6 +388,7 @@ export function createInputQueue(deps) {
           assertCurrent(); return scheduleBridge.hasPendingInput(id);
         },
         enqueuePrompt: req => command(req.sessionId, async (_state, admission) => {
+          refuseWhileHeld();
           // The bridge reads metadata and the stored row before enqueue. Keep
           // the original command generation across every one of those reads.
           scheduleAdmissions.set(req.sessionId, admission);
@@ -417,6 +449,7 @@ export function createInputQueue(deps) {
           }
           const known = await deps.getPersistedClientIds?.(id, [item?.clientId]);
           if (known?.has(item?.clientId)) return api.projection(id);
+          refuseWhileHeld();
           const prepared = await prepareAttachments(id, composeInput(item, await deps.readSession(id)), admission);
           let accepted = false;
           try {
@@ -427,7 +460,7 @@ export function createInputQueue(deps) {
             if (prepared.ownerId) attachmentOwnership.activateCurrentOwner(id, item.clientId, prepared.ownerId);
             await flushed(id);
             await attachmentOwnership.markDurable(id, item.clientId, prepared.ownerId ?? undefined);
-            if (!state.persistenceError) coordinator.setExecutionPaused(id, false);
+            if (!state.persistenceError) unpause(id);
             return api.projection(id);
           } finally {
             if (!accepted && prepared.ownerId) await attachmentOwnership.discardSpecific(id, item.clientId, prepared.ownerId);
@@ -438,6 +471,7 @@ export function createInputQueue(deps) {
       async resume(id) {
         if (stateFor(id).closed) return api.projection(id);
         return command(id, async (state, admission) => {
+          refuseWhileHeld();
           await state.aborting?.catch(error => { if (executor.isRunning(id)) throw error; });
           await executor.retryPersistence(id);
           if (state.persistenceError) await persist(id, state.snapshot);
@@ -445,14 +479,15 @@ export function createInputQueue(deps) {
           if (state.admission !== admission) throw new Error('input cancelled before acceptance');
           state.persistenceError = null;
           coordinator.resume(id);
-          coordinator.setExecutionPaused(id, false);
+          unpause(id);
           return api.projection(id);
         });
       },
-      retryLastError: id => command(id, () => coordinator.retryLastError(id)),
+      retryLastError: id => command(id, () => { refuseWhileHeld(); return coordinator.retryLastError(id); }),
       clearError: id => command(id, () => coordinator.clearError(id)),
       steer(id, item) {
         return command(id, async (state, admission) => {
+          refuseWhileHeld();
           const prepared = await prepareAttachments(id, composeInput(item, await deps.readSession(id)), admission);
           const previous = prepared.ownerId
             ? attachmentOwnership.activateCurrentOwner(id, item.clientId, prepared.ownerId) : null;
@@ -495,7 +530,7 @@ export function createInputQueue(deps) {
             }
             await flushed(id);
             await attachmentOwnership.markDurable(id, clientId);
-            if (!state.persistenceError) coordinator.setExecutionPaused(id, false);
+            if (!state.persistenceError) unpause(id);
             return api.projection(id);
           } finally {
             if (!accepted && prepared.ownerId) await attachmentOwnership.discardSpecific(id, clientId, prepared.ownerId);
@@ -522,6 +557,13 @@ export function createInputQueue(deps) {
       },
       /** Starts releasing idle runtimes once this owner's agent runtime is ready (main.ts). */
       startIdleRelease: () => { if (!closing) idleRelease?.start(); },
+      /** Hold every task this runtime knows (the profile hold started; later tasks are held as they are read). */
+      holdKnownTasks() { for (const id of states.keys()) holdTaskForProfile(coordinator, id); },
+      /**
+       * Whether a turn of this runtime is still running, a context recovery included (its replay is
+       * part of the turn that overflowed): the hold is not released before they end.
+       */
+      hasRunningTurns: () => [...states.keys()].some(id => executor.isRunning(id) || executor.isRecovering(id)),
       /** One scan of every idle-release watcher, for tests. */
       scanIdleRelease: async () => { await idleRelease?.scanNow(); },
       async dispose() {
@@ -560,6 +602,42 @@ export function createInputQueue(deps) {
     return api;
   }
   const api = Object.fromEntries(Object.keys(runtime).map(name => [name, (...args) => runtime[name](...args)]));
-  api.dispose = async () => { try { await runtime.dispose(); } finally { runtime = createRuntime(); } };
+  // The owner's runtime ends: a hold belonged to it (the next owner's start scans the profile again).
+  api.dispose = async () => { try { await runtime.dispose(); } finally { profileHold = null; runtime = createRuntime(); } };
+  /**
+   * Coexistence plan A: a desktop that opens this profile's database is running. New sends are
+   * refused with `[PRECONDITION_FAILED] <message>`; nothing queued starts and no automatic
+   * continuation runs (holdTaskForProfile). A running turn finishes, and a context recovery's replay
+   * belongs to it. Repeating it only updates the message.
+   */
+  api.holdForDesktop = message => {
+    const first = profileHold === null;
+    profileHold = { message };
+    if (first) runtime.holdKnownTasks();
+  };
+  api.isHeldForDesktop = () => profileHold !== null;
+  /**
+   * The desktop is gone: open again only once no turn runs (false: still held, ask again later). The
+   * desktop may have answered or removed queued inputs meanwhile, so this runtime's queues are not
+   * trusted: the runtime is rebuilt (dispose writes no queue whose items did not change) and every
+   * task restores its queue from the database when next read, before the hold is lifted.
+   */
+  let releasing = null;
+  async function release() {
+    if (runtime.hasRunningTurns()) return false;
+    // The hold ends between the two runtimes: no read of the new one is held by mistake. When the
+    // old one cannot be disposed, the new one stays held and the next clean scan tries again.
+    const released = profileHold;
+    let disposed = false;
+    try { await runtime.dispose(); disposed = true; }
+    // A desktop that came back meanwhile replaced the hold: that one stays.
+    finally { if (disposed && profileHold === released) profileHold = null; runtime = createRuntime(); }
+    return profileHold === null;
+  }
+  api.releaseDesktopHold = () => {
+    if (profileHold === null) return Promise.resolve(true);
+    if (!releasing) releasing = release().finally(() => { releasing = null; });
+    return releasing;
+  };
   return api;
 }

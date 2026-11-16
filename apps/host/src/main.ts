@@ -27,6 +27,10 @@ import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.js';
 import { createHostDeviceLink } from './device-link.js';
 import { createHostService } from './service.mjs';
 import { createHostRuntimeSession, type HostRuntimeSessionCreatePorts } from './agent/create-runtime-session.js';
+import {
+  createCoexistenceMonitor, createDesktopScanner, HOST_PROFILE_IN_USE_BY_DESKTOP,
+  type CoexistenceMonitor, type CoexistenceState,
+} from './agent/profile-coexistence.js';
 import { createHostProviderExecutionCheck } from './agent/send-preflight.js';
 import { explicitPorts } from './agent/explicit-ports.js';
 import { createSkillProjectionBoundaryObserver } from './agent/skill-projection-boundary.js';
@@ -287,6 +291,12 @@ interface RuntimeState {
   agents?: string[];
   agentLane?: string;
   detail?: string;
+  /**
+   * Coexistence plan A (agent/profile-coexistence.ts): whether a desktop that opens this profile's
+   * database runs beside the Host (PIDs only). `waiting-for-turns`: it is gone, and the Host opens
+   * again once its running turns end.
+   */
+  coexistence?: { state: CoexistenceState['state'] | 'waiting-for-turns'; desktops: number[] };
 }
 
 const runtime: RuntimeState = { state: 'uninitialized', owner: null, storage: 'unopened' };
@@ -303,6 +313,46 @@ const harnessBinaries = createHostHarnessBinaries({
   harnessRoot: () => hostRuntimeLayout().harnessRoot,
   onUnavailable: (kind, error) => hostLog.warn('harness binary unavailable', { kind, error }),
 });
+
+/** The refusal a new send gets while a desktop uses this profile, in the system language. */
+const profileInUseMessage = () => `${HOST_PROFILE_IN_USE_BY_DESKTOP}: ${
+  createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]).t('logic.errors.hostProfileInUseByDesktop')}`;
+let coexistenceMonitor: CoexistenceMonitor | null = null;
+
+/**
+ * Rescan the profile while the runtime runs. A desktop that opens the database holds the input
+ * queue (new sends refused, nothing queued starts); once it is gone, the queue opens again after the
+ * running turns end, rebuilt from the database (input-queue.mjs releaseDesktopHold).
+ */
+function startProfileCoexistence(dataDir: string, scan: () => Promise<number[]>): void {
+  coexistenceMonitor?.stop();
+  const message = profileInUseMessage();
+  const monitor = createCoexistenceMonitor({
+    scan, registryDir: path.join(dataDir, '.dev-instances'), log: hostLog,
+    onScan: state => {
+      if (coexistenceMonitor !== monitor) return;
+      if (state.state === 'desktop-running') {
+        if (!inputQueue.isHeldForDesktop()) hostLog.warn('a desktop opened this profile; new sends are held', { pids: state.desktops });
+        inputQueue.holdForDesktop(message);
+        runtime.coexistence = { ...state };
+        return;
+      }
+      if (!inputQueue.isHeldForDesktop()) { runtime.coexistence = { ...state }; return; }
+      runtime.coexistence = { state: 'waiting-for-turns', desktops: [] };
+      void inputQueue.releaseDesktopHold().then((released: boolean) => {
+        if (released && coexistenceMonitor === monitor && monitor.state().state === 'clear' && !inputQueue.isHeldForDesktop()) {
+          runtime.coexistence = { state: 'clear', desktops: [] };
+          hostLog.info('the desktop left this profile; sends are accepted again');
+        }
+      }, (error: unknown) => hostLog.warn('releasing the profile hold failed; trying again on the next scan', {
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    },
+  });
+  coexistenceMonitor = monitor;
+  runtime.coexistence = { state: 'clear', desktops: [] };
+  monitor.start();
+}
 
 /**
  * The Desktop's `AuthState.user` projection, resolved from the same adopted
@@ -523,6 +573,27 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     throw new OwnerDatabaseError('DB_SCHEMA_LOCKED', runtime.detail);
   }
   runtimeLease = lease;
+
+  // Coexistence plan A: the runtime lease only stops a second Host. A desktop that opens this
+  // profile's database refuses the start: the lease is released and the Host stays blocked until it
+  // is restarted (no automatic retry). A scan that cannot read the registry refuses as well.
+  const scanProfile = createDesktopScanner(dataDir);
+  let desktops: number[];
+  try { desktops = await scanProfile(); }
+  catch (error) {
+    runtimeLease = null; lease.release();
+    runtime.state = 'blocked'; runtime.owner = ownerId; runtime.storage = 'unopened';
+    // The error code only: the message would carry the profile path into the status.
+    runtime.detail = `cannot tell whether a Cindy desktop app uses this profile (${(error as NodeJS.ErrnoException)?.code ?? 'unreadable'}); quit it and start cindy-host again`;
+    throw new OwnerDatabaseError('DB_SCHEMA_LOCKED', runtime.detail);
+  }
+  if (desktops.length) {
+    runtimeLease = null; lease.release();
+    runtime.state = 'blocked'; runtime.owner = ownerId; runtime.storage = 'unopened';
+    runtime.coexistence = { state: 'desktop-running', desktops };
+    runtime.detail = `a Cindy desktop app (pid ${desktops.join(', ')}) is running on this profile; quit it and start cindy-host again`;
+    throw new OwnerDatabaseError('DB_SCHEMA_LOCKED', runtime.detail);
+  }
 
   // Verify the credential owner under the profile lease, before opening any
   // database or constructing an agent. Refresh errors here must not be swallowed
@@ -840,6 +911,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   }
   await plugins.reconcile();
   await pluginGateway.refresh();
+  startProfileCoexistence(dataDir, scanProfile);
   runtime.state = 'ready';
 }
 
@@ -1676,6 +1748,7 @@ async function disposeOwnerRuntime(): Promise<void> {
   deviceLink = null;
   remoteIdentityReady = false;
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+  coexistenceMonitor?.stop(); coexistenceMonitor = null;
   const errors: unknown[] = [];
   const attempt = async (operation: () => unknown) => {
     try { await operation(); } catch (error) { errors.push(error); }
@@ -1779,12 +1852,16 @@ function startDeviceLink(): void {
     canRegister: () => remoteIdentityReady && account.authenticated && !authClosed,
     invoke: service, subscribe: eventHub.subscribe,
     // The Device Link create entry, with the runtime start admission (agent/create-runtime-session.ts).
-    createRuntimeSession: input => createHostRuntimeSession(explicitPorts<HostRuntimeSessionCreatePorts>({
+    createRuntimeSession: input => {
+      // A new task's runtime is new work too (coexistence plan A).
+      if (inputQueue.isHeldForDesktop()) throwIpcError('PRECONDITION_FAILED', profileInUseMessage());
+      return createHostRuntimeSession(explicitPorts<HostRuntimeSessionCreatePorts>({
       serverDeps,
       getAgentGraph: () => agentGraph,
       assertProviderExecutionSupported,
       admitLocalRoute: opts => runtimeSelection.admitLocalRoute(opts),
-    }), input),
+    }), input);
+    },
     availabilityPolicy: availabilityPolicy ?? undefined,
     disableShareAvailability,
 

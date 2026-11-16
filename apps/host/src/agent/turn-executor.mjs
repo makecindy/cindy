@@ -1011,6 +1011,8 @@ export function createTurnExecutor(deps) {
     // Context recovery has claimed this input's terminal error and is rebuilding before its replay:
     // the input is still being answered (the replay carries its client id).
     isInputRecovering(id, clientId) { return recovery?.replayClientId(id) === clientId; },
+    /** A context recovery of the task is running: part of its turn (input-queue.mjs releaseDesktopHold). */
+    isRecovering(id) { return recovery?.isRecovering(id) === true; },
     reconcileIdle(id) {
       const turn = turns.get(id);
       if (!turn?.abortRequested || turn.terminal || turn.session?.isTurnRunning?.() !== false) return false;
