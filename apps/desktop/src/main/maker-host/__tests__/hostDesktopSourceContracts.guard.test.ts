@@ -94,6 +94,20 @@ describe('Host main.ts wiring', () => {
     assert.ok(rules.includes("    execFile(SCUTIL_PATH, ['--proxy'], {\n"));
   });
 
+  // 规则：Host 进程只装一次桌面在启动时填的三个运行时选择槽（owner 提交边界的清理、任务读取的投影器、归档与
+  // 删除时的清理，runtime-selection.ts bindHostSessionRuntimeHooks），在模块顶层、建好运行时选择之后（早于
+  // 任何 owner 提交）；删除任务时与归档一样在路线锁里调清理。行为测试经 bindHostSessionRuntimeHooks 本身，
+  // 走不到 main.ts 这几行。失效后果：换账号后残留运行时调整、读到的模型与实际路线不一致、删除的任务留着调整。
+  it('binds the runtime selection slots once at top level and cleans a deleted task', () => {
+    const main = read(path.join(hostSrc, 'main.ts'));
+    assert.equal(main.split('bindHostSessionRuntimeHooks(').length - 1, 1, 'one call');
+    const bind = main.indexOf('\nbindHostSessionRuntimeHooks(runtimeSelection);\n');
+    assert.ok(bind > main.indexOf('\nconst runtimeSelection = createHostRuntimeSelection({\n'), 'a top-level call after the runtime selection');
+    const remove = main.slice(main.indexOf('  deleteSession: lockSessionRoute(async (sessionId: string) => {'));
+    const body = remove.slice(0, remove.indexOf('\n  }),\n'));
+    assert.ok(body.indexOf("cleanupSessionRuntimeForTerminalStatus(sessionId, 'deleted');") > body.indexOf('await sessionStorage.delete(sessionId);'));
+  });
+
   // 规则：Pi 包的退役钩子要拿到 Host 的 Maker（Maker 建好后 attach），Host 退出时关闭。
   // 失效后果：包变更后运行中的 Pi 任务不退役，或进程退出时留下监听。
   it('attaches the Pi packages to the Maker and closes them on teardown', () => {
