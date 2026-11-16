@@ -314,7 +314,7 @@ export function TeammatesSection() {
       const rowIsVisible = visibleGroups.some(group => group.id === pending.groupId);
       if (row && rowIsVisible) {
         pendingArchiveFocusRef.current = null;
-        row.focus();
+        (row.matches('button') ? row : row.querySelector<HTMLButtonElement>('button'))?.focus();
         return;
       }
 
@@ -480,7 +480,10 @@ export function TeammatesSection() {
   const renderGroupRow = (group: BotGroupSummary) => (
     <BotGroupSidebarRow key={'group:' + group.id} group={group} bots={bots}
       islandActivity={islandActivity} now={now} selected={group.id === selectedGroupId}
-      onOpenGroup={id => navigate('/bots/groups/' + encodeURIComponent(id))}
+      onOpenGroup={(id, reply) => {
+        const query = reply ? '?' + new URLSearchParams(reply).toString() : '';
+        navigate('/bots/groups/' + encodeURIComponent(id) + query);
+      }}
       onContextMenu={event => {
         event.preventDefault(); event.stopPropagation();
         openContextMenu('group', group.id, event.currentTarget, event.clientX, event.clientY);

@@ -11208,6 +11208,7 @@
       "unavailableTitle": "此群議已不可用",
       "unavailableDescription": "或已被刪。歸同伴頁，可啟他群議與同伴。",
       "sidebar": {
+        "threadReply": "話題覆",
         "title": "群議",
         "empty": "尚無訊",
         "preview": "{{name}}：{{text}}",
@@ -11537,6 +11538,7 @@
           "sharedReplyFrom": "貼回 {{name}} 之話題回覆",
           "sharedReply": "貼回一則話題回覆",
           "edited": "已修",
+          "replyNotFound": "未得此覆言。",
           "sourceUnavailable": "原回覆已刪，或君無權覽之。",
           "viewThread": "覽話題",
           "viewInMain": "於群議中覽",

@@ -514,6 +514,10 @@ export function isBotGroupPlanOpen(status: BotGroupPlanStatus): boolean {
 }
 
 export interface BotGroupLastMessage {
+  /** Optional on older hosts. Identifies the previewed message, not a quoted/shared source. */
+  messageId?: string;
+  /** The previewed message belongs to this topic; absent/null means the main chat. */
+  threadRootId?: string | null;
   isSelf?: boolean;
   authorKind: BotGroupAuthorKind;
   authorName: string;

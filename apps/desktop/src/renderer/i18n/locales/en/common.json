@@ -11253,6 +11253,7 @@
       "unavailableTitle": "This Group Chat Is No Longer Available",
       "unavailableDescription": "It may have been deleted. Go back to Buddies to open another group chat or buddy.",
       "sidebar": {
+        "threadReply": "Thread reply",
         "title": "Group Chats",
         "empty": "No messages yet",
         "preview": "{{name}}: {{text}}",
@@ -11582,6 +11583,7 @@
           "sharedReplyFrom": "Shared a thread reply from {{name}}",
           "sharedReply": "Shared a thread reply",
           "edited": "Edited",
+          "replyNotFound": "This reply could not be found.",
           "sourceUnavailable": "The original reply was deleted or isn’t available to you.",
           "viewThread": "View thread",
           "viewInMain": "View in main chat",

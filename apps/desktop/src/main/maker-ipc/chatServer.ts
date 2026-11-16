@@ -2030,6 +2030,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       ...(!direct && assistantActorId ? { supportsGroupAssistant: true, assistantEnabled: s.room.assistant !== false } : {}),
       // Only servers that tell a 分工 from a queue (kind) can hand one on by itself.
       ...(singleSpeaker ? { autoContinue: workspace?.autoContinue === true } : {}), lastMessage: last && lastView ? {
+        messageId: last.id, threadRootId: last.threadRootId ?? null,
         isSelf: lastView.isSelf, authorKind: lastView.authorKind, authorName: lastView.authorName, noticeCode: lastView.noticeCode,
         preview: lastIsShare ? '' : notificationPreview(botGroupMessageSummaryText(lastView) || mediaNames(last), 80), createdAt: lastView.createdAt, ...(lastIsShare ? { threadShare: true } : {}),
       } : null, speakingBotIds: speakers.map(s => s.botId), planningBotId: planning.get(roomId)?.botId ?? null, openPlan: open ? { id: open.id, status: open.status, currentStep: open.currentStep, stepCount: open.steps.length, currentBotName: open.steps[open.currentStep ?? 0]?.botName ?? null, currentStepStatus: open.steps[open.currentStep ?? 0]?.status ?? null, ...(open.kind ? { kind: open.kind } : {}) } : null,

@@ -11208,6 +11208,7 @@
       "unavailableTitle": "このグループチャットは利用できません",
       "unavailableDescription": "削除された可能性があります。仲間のページに戻ると、ほかのグループチャットや仲間を開けます。",
       "sidebar": {
+        "threadReply": "スレッドへの返信",
         "title": "グループチャット",
         "empty": "メッセージはまだありません",
         "preview": "{{name}}: {{text}}",
@@ -11537,6 +11538,7 @@
           "sharedReplyFrom": "{{name}} のスレッド返信を共有しました",
           "sharedReply": "スレッドの返信を共有しました",
           "edited": "編集済み",
+          "replyNotFound": "この返信が見つかりませんでした。",
           "sourceUnavailable": "元の返信は削除されたか、表示する権限がありません。",
           "viewThread": "スレッドを見る",
           "viewInMain": "メインチャットで見る",

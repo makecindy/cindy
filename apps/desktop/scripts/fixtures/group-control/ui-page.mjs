@@ -36,8 +36,10 @@ export default {
   viewport: { width: 1280, height: 800 },
   real: 'BotGroupChatView (timeline, composer, send button, header registration), ControlledBanner, ContentHeader shell, Markdown, theme, fonts and translations',
   notCovered:
-    'Account sign-in, audio capture, native voice shortcuts, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
+    'Account sign-in, audio capture, native voice shortcuts, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state/topic-preview cases and is otherwise an empty frame',
   cases: {
+    'topic-preview': { about: 'Sidebar source label and independent group/reply targets, exact reply highlight and repeat navigation',
+      viewport: { width: 1000, height: 700 }, data: { ...base, name: 'Cindy 讨论', bubbles: true, topicPreview: true } },
     'reply-composer': {
       about: 'Real thread reply composer with microphone and editable draft at narrow width',
       viewport: { width: 420, height: 600 },
@@ -199,6 +201,34 @@ export default {
   },
   async check(page, ui) {
     const definition = this.cases[ui.case];
+    if (ui.case === 'topic-preview') {
+      const row = page.locator('[data-bot-group-id="fixture-group"]');
+      const topic = row.getByRole('button', { name: new RegExp(await ui.t('bots.groupChat.server.thread.viewThread')) });
+      const group = row.getByRole('button', { name: 'Cindy 讨论', exact: true });
+      assert.equal(await row.locator('button button').count(), 0, 'independent native buttons');
+      const originalHeight = await row.evaluate(el => el.getBoundingClientRect().height);
+      const hitArea = await topic.evaluate(el => {
+        const bounds = el.getBoundingClientRect();
+        const title = el.closest('[data-bot-group-id]').querySelector('[title="Cindy 讨论"]').getBoundingClientRect();
+        return { height: bounds.height, separate: bounds.top >= title.bottom,
+          sourceFits: el.firstElementChild.getBoundingClientRect().right <= bounds.right };
+      });
+      assert.ok(hitArea.height >= 24 && hitArea.separate && hitArea.sourceFits, 'source fits; the reply target is at least 24px and does not overlap the group title');
+      await topic.click();
+      const reply = page.locator('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]');
+      await reply.waitFor();
+      await page.waitForFunction(() => document.querySelector('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]')?.classList.contains('ring-2'));
+      await ui.capture('reply-located');
+      await reply.evaluate(el => el.classList.remove('ring-2'));
+      await topic.focus();
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.querySelector('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]')?.classList.contains('ring-2'));
+      await group.click();
+      await reply.waitFor({ state: 'detached' });
+      assert.equal(await row.evaluate(el => el.getBoundingClientRect().height), originalHeight, 'row geometry stays stable');
+      await ui.capture('main-chat');
+      return;
+    }
     if (ui.case === 'reaction-colors') {
       const row = page.locator('[data-bot-group-message-id="a2"]');
       await row.hover();

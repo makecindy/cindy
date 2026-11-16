@@ -11340,6 +11340,7 @@
       "unavailableTitle": "Esta conversa em grupo não está mais disponível",
       "unavailableDescription": "Ela pode ter sido excluída. Volte para Amigos para abrir outra conversa em grupo ou amigo.",
       "sidebar": {
+        "threadReply": "Resposta no tópico",
         "title": "Conversas em grupo",
         "empty": "Nenhuma mensagem ainda",
         "preview": "{{name}}: {{text}}",
@@ -11673,6 +11674,7 @@
           "sharedReplyFrom": "Compartilhou uma resposta de tópico de {{name}}",
           "sharedReply": "Compartilhou uma resposta de tópico",
           "edited": "Editado",
+          "replyNotFound": "Não foi possível encontrar esta resposta.",
           "sourceUnavailable": "A resposta original foi excluída ou não está disponível para você.",
           "viewThread": "Ver tópico",
           "viewInMain": "Ver na conversa principal",
