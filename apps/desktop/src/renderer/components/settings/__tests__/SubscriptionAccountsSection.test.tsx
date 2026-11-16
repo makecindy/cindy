@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from '@/lib/toast';
 import type { SubscriptionPoolView } from '../../../../shared/subscriptionAccounts';
@@ -15,10 +15,10 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
-  useConfirmDialog: () => ({ confirm: vi.fn() }),
+  useConfirmDialog: () => ({ confirm: vi.fn(async () => true) }),
 }));
 
-import { SubscriptionAccountsSection } from '../SubscriptionAccountsSection';
+import { SubscriptionAccountsSection, SubscriptionPoolViewCache } from '../SubscriptionAccountsSection';
 
 /* 测试价值：多账号设置页曾给每个账号另画一条周用量条，又在底部重复原用量卡，且漏掉
  * 5 小时与分模型周窗口。经真实组件验证：默认账号行放原用量卡，其他账号用同一张卡显示
@@ -29,7 +29,9 @@ const view: SubscriptionPoolView = {
   configured: true,
   strategy: 'least',
   accounts: [
-    { id: 'default', paused: false, limit: 4, weight: 1, directory: '/home/.claude', status: 'ready', running: 0, identity: 'first@example.test' },
+    { id: 'default', paused: false, limit: 4, weight: 1, directory: '/home/.claude', status: 'ready', running: 0, identity: 'first@example.test',
+      plan: 'max', planTier: 'max_20x', usage: { claude: { source: 'oauth-endpoint', updatedAt: Date.now(),
+        fiveHour: { utilization: 10, resetsAt }, sevenDay: { utilization: 20, resetsAt }, scoped: [] } } },
     {
       id: 'cindy-owner-second',
       paused: false,
@@ -59,10 +61,23 @@ beforeEach(() => {
       command: vi.fn(async () => view),
       onChanged: vi.fn(() => () => undefined),
     },
+    // Providers an account may move to (2026-11-13); none of the same kind unless a test adds them.
+    maker: { listProviders: vi.fn(async () => ({ providers: [] })) },
   };
 });
 
 describe('SubscriptionAccountsSection usage', () => {
+  // Unit: the CLI-origin row hid Remove even though it must be an ordinary pool member.
+  it('allows removing the first CLI-origin account through the same menu and command', async () => {
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    const rows = await screen.findAllByTestId('subscription-account');
+    fireEvent.pointerDown(within(rows[0]).getByRole('button', { name: 'providerGroup.member.moreAria' }),
+      { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'subscriptionAccounts.remove' }));
+    await waitFor(() => expect(window.electronAPI.subscriptionAccounts.command).toHaveBeenCalledWith({
+      action: 'remove', providerId: 'anthropic', accountId: 'default',
+    }));
+  });
   // Unit regression: the real second-account row must expose the shared reset UI
   // and send its own scope/key. Previously only the supplied default card had it.
   it.each([true, false])('shows and saves second-account reset preferences with quota present=%s', async hasQuota => {
@@ -76,7 +91,7 @@ describe('SubscriptionAccountsSection usage', () => {
     const setCodexResetAutoUse = vi.fn(async () => ({ ...snapshot, autoUse: {
       ...autoUse, settings: { ...autoUse.settings, enabled: true }, customized: true,
     } }));
-    Object.assign(window.electronAPI, { maker: { usage: { getCodexRateLimits, setCodexResetAutoUse } } });
+    Object.assign(window.electronAPI.maker, { usage: { getCodexRateLimits, setCodexResetAutoUse } });
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, providerId: 'openai', accounts: [
       view.accounts[0], { ...view.accounts[1], codexResetProviderId: scope, usage: hasQuota ? { codex: { credits: null, buckets: {
         codex: { limitId: 'codex', limitName: null, updatedAt: Date.now(), primary: null,
@@ -84,9 +99,9 @@ describe('SubscriptionAccountsSection usage', () => {
       } } } : undefined },
     ] });
     render(<SubscriptionAccountsSection providerId="openai" defaultUsage={<div>Default quota</div>} />);
-    const toggle = await screen.findByRole('switch', { name: 'codexResets.autoUse.label' });
-    const rows = screen.getAllByTestId('subscription-account');
-    expect(within(rows[0]).getByText('Default quota')).toBeTruthy();
+    const rows = await screen.findAllByTestId('subscription-account');
+    const toggle = await within(rows[1]).findByRole('switch', { name: 'codexResets.autoUse.label' });
+    expect(screen.queryByText('Default quota')).toBeNull();
     expect(within(rows[1]).getByText('codexResets.title')).toBeTruthy();
     expect(getCodexRateLimits).toHaveBeenCalledWith(scope);
     await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
@@ -151,36 +166,37 @@ describe('SubscriptionAccountsSection usage', () => {
     await waitFor(() => expect(error).toHaveBeenCalledWith('subscriptionAccounts.providerManagedAuth'));
   });
 
-  it('keeps the provider card on the default account and shows every window of added accounts', async () => {
+  it('shows each account quota and tier without a privileged default card', async () => {
     render(
       <SubscriptionAccountsSection
         providerId="anthropic"
         defaultUsage={<div data-testid="original-card">original</div>}
       />,
     );
-    const original = await screen.findByTestId('original-card');
-    const rows = screen.getAllByTestId('subscription-account');
+    const rows = await screen.findAllByTestId('subscription-account');
     expect(rows).toHaveLength(2);
-    expect(within(rows[0] as HTMLElement).getByTestId('original-card')).toBe(original);
-    expect(screen.getAllByTestId('original-card')).toHaveLength(1);
+    expect(screen.queryByTestId('original-card')).toBeNull();
+    expect(within(rows[0]).getByText('Max 20×')).toBeTruthy();
+    expect(screen.queryByText('subscriptionAccounts.defaultTag')).toBeNull();
     const added = within(rows[1] as HTMLElement);
     for (const name of ['quotaCard.fiveHourLabel', 'quotaCard.weeklyLabel', 'Fable weekly'])
       expect(added.getByRole('progressbar', { name })).toBeTruthy();
-    expect(within(rows[0] as HTMLElement).queryByRole('progressbar')).toBeNull();
+    expect(within(rows[0]).getByRole('progressbar', { name: 'quotaCard.fiveHourLabel' })).toBeTruthy();
   });
   // Regression: a failed refresh kept the list and also showed the provider card below it.
-  it('shows the provider card once when a refresh fails after the list loaded', async () => {
+  it('keeps account quotas without adding a legacy card when refresh fails', async () => {
     render(
       <SubscriptionAccountsSection
         providerId="anthropic"
         defaultUsage={<div data-testid="original-card">original</div>}
       />,
     );
-    await screen.findByTestId('original-card');
+    await screen.findAllByTestId('subscription-account');
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockRejectedValueOnce(new Error('offline'));
     fireEvent.focus(window);
     expect(await screen.findByRole('alert')).toBeTruthy();
-    expect(screen.getAllByTestId('original-card')).toHaveLength(1);
+    expect(screen.queryByTestId('original-card')).toBeNull();
+    expect(screen.getAllByTestId('subscription-account-usage')).toHaveLength(2);
   });
   // Regression: a connected account's menu offered plain "Sign in", reading as if it were signed out.
   it.each([
@@ -205,13 +221,36 @@ describe('SubscriptionAccountsSection usage', () => {
       accounts: [{ ...view.accounts[0], identity: undefined, status: 'signed-out' }],
     });
     render(<SubscriptionAccountsSection providerId="anthropic" />);
-    // The loading spinner goes once the read lands.
-    await vi.waitFor(() => expect(document.querySelector('.animate-spinner')).toBeNull());
+    // The loading placeholder goes once the read lands.
+    await vi.waitFor(() => expect(screen.queryByTestId('subscription-accounts-loading')).toBeNull());
     expect(screen.queryAllByTestId('subscription-account')).toHaveLength(0);
     expect(screen.queryByRole('radiogroup')).toBeNull();
     expect(screen.queryByRole('switch')).toBeNull();
     expect(screen.queryByText('1')).toBeNull();
     expect(screen.getByRole('button', { name: 'subscriptionAccounts.add' })).toBeTruthy();
+  });
+  // Regression (2026-11-14): switching back to a subscription provider emptied its list into a
+  // spinner, then pushed the page down again when the read landed. Within one providers page the
+  // last list stays on screen while the fresh read replaces it. Minimal input: remount with the
+  // read still pending (before the fix: no rows, only the spinner).
+  it('shows the last list at once when the providers page switches back to it', async () => {
+    const page = (
+      <SubscriptionPoolViewCache.Provider value={new Map()}>
+        <SubscriptionAccountsSection providerId="anthropic" />
+      </SubscriptionPoolViewCache.Provider>
+    );
+    const { unmount } = render(page);
+    expect(await screen.findAllByTestId('subscription-account')).toHaveLength(2);
+    unmount();
+    let land: (next: SubscriptionPoolView) => void = () => {};
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(
+      () => new Promise<SubscriptionPoolView>((resolve) => { land = resolve; }),
+    );
+    render(page);
+    expect(screen.getAllByTestId('subscription-account')).toHaveLength(2);
+    expect(screen.queryByTestId('subscription-accounts-loading')).toBeNull();
+    await act(async () => { land({ ...view, accounts: [view.accounts[1]] }); });
+    expect(screen.getAllByTestId('subscription-account')).toHaveLength(1);
   });
   // An account that needs signing in again is still an account: known, busy, or beside another.
   const unknown = { ...view.accounts[0], identity: undefined, status: 'signed-out' as const };

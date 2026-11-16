@@ -78,6 +78,11 @@ import { observeSubscriptionAccountUsage, pooledCodexResetTarget, onSubscription
 import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.desktop.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { CodexResetAutoUse, parseCodexResetAutoUse } from '../usage/codexResetAutoUse.js';
+import {
+  detachedDefaultCodexHome,
+  readDefaultCodexHomeIdentity,
+  withDetachedDefaultCodexHome,
+} from '../usage/codexDefaultAccountHome.js';
 import { codexResetAutoUseStore, codexResetAccountKey } from '../usage/codexResetAutoUseStore.js';
 import { observeUsageChanges } from '../usageBroadcaster.js';
 import type { CodexResetAutoUseSettings } from '@cindy/maker-shared/device-link-contract';
@@ -113,7 +118,8 @@ const claudeSubscriptionUsageReader = createClaudeSubscriptionUsageReader({
     // get_usage 是 Experimental:解析不出窗口按形状变化处理,抛错退避并保留已有缓存。
     if (!snapshot) throw new Error('claude get_usage returned unrecognized rate_limits');
     const subscriptionType = usage.subscriptionType ?? peekClaudeCliLoginStatus()?.subscriptionType;
-    return subscriptionType ? { ...snapshot, subscriptionType } : snapshot;
+    const planTier = peekClaudeCliLoginStatus()?.planTier;
+    return { ...snapshot, ...(subscriptionType ? { subscriptionType } : {}), ...(planTier ? { planTier } : {}) };
   },
   recordSnapshot: recordClaudeSubscriptionUsageSnapshot,
   clearSnapshot: clearClaudeSubscriptionUsageSnapshot,
@@ -291,7 +297,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
     const assertScope = () => {
       if (isAppSessionBoundaryPending() || scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
     };
-  const service = createCodexRateLimitResetService(pooledCodexResetTarget(key) ?? {
+  const nativeTarget: Parameters<typeof withDetachedDefaultCodexHome>[0] = {
     readRateLimits: async () => { assertScope(); const result = await maker.readAgentAccountRateLimits('codex', providerId); assertScope(); return result; },
     consumeResetCredit: async (params) => { assertScope(); const result = await maker.consumeAgentAccountRateLimitResetCredit('codex', params, providerId); assertScope(); return result; },
     readAccountIdentity: async () => {
@@ -306,7 +312,10 @@ export function registerMakerUsageIpc(maker: Maker): void {
       return { email: identity, accountId };
     },
     recordRateLimitSnapshot: (snapshot) => scope === activeOwnerScopeKey() ? recordCodexAccountUsageSnapshot(snapshot, providerId) : Promise.resolve(),
-  });
+  };
+  // The built-in target is the pool's default account; without its own login it reads that account's home.
+  const service = createCodexRateLimitResetService(pooledCodexResetTarget(key)
+    ?? (providerId ? nativeTarget : withDetachedDefaultCodexHome(nativeTarget, assertScope)));
 
     resetServices.set(key, service);
     return service;
@@ -318,6 +327,12 @@ export function registerMakerUsageIpc(maker: Maker): void {
     const pooled = id && pooledCodexResetTarget(id);
     if (pooled) {
       const identity = await pooled.readAccountIdentity();
+      return codexResetAccountKey(identity.email, identity.accountId);
+    }
+    const defaultHome = id ? null : await detachedDefaultCodexHome();
+    if (defaultHome) {
+      const identity = await readDefaultCodexHomeIdentity(defaultHome);
+      if (scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('Account scope changed');
       return codexResetAccountKey(identity.email, identity.accountId);
     }
     const state = await desktopCodexAuthAdapter.getState({ providerId: id });
@@ -460,10 +475,12 @@ export function registerMakerUsageIpc(maker: Maker): void {
     if (!snapshot) return;
     const fingerprint = currentClaudeAccountFingerprint();
     const subscriptionType = peekClaudeCliLoginStatus()?.subscriptionType;
+    const planTier = peekClaudeCliLoginStatus()?.planTier;
     void recordClaudeSubscriptionUsageSnapshot({
       ...snapshot,
       ...(fingerprint ? { accountFingerprint: fingerprint } : {}),
       ...(subscriptionType ? { subscriptionType } : {}),
+      ...(planTier ? { planTier } : {}),
     });
   });
 

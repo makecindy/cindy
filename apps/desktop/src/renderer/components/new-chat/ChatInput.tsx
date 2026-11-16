@@ -181,7 +181,9 @@ import {
   tryBeginAgentSendDispatch,
 } from '@/lib/agentSwitchCoordinator';
 import {
+  followedAccountSourceProvider,
   isSelectedSourceDisconnected,
+  withFollowedAccountSource,
   resolveEffort,
   resolveRequestedEffort,
   resolveRemoteSwitchEffort,
@@ -189,6 +191,7 @@ import {
   resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
 } from './sourceSwitch';
+import { useSessionSubscriptionAccount } from './SessionSubscriptionAccount';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PermissionSelector } from './PermissionSelector';
 import { PluginWriteAccessRecovery } from './PluginWriteAccessRecovery';
@@ -523,7 +526,13 @@ function isPointInsideElement(
  * 在已建任务里替用户「点中选择器里的一行」：同引擎与跨引擎(含它的确认)都走选择器原有链路。
  * 返回 = 这次选择真的落到任务上了没有(取消确认、被挡下或失败都为 false)。
  */
-export type SessionModelPick = (pick: { agent: AgentKind; providerId: string; modelId: string }) => Promise<boolean>;
+export type SessionModelPick = (pick: {
+  agent: AgentKind;
+  providerId: string;
+  modelId: string;
+  /** 同时换到这一档推理强度(模型组的模式指定了时)；省略 = 按选择器原有规则。 */
+  effort?: Effort;
+}) => Promise<boolean>;
 
 interface ChatInputProps {
   /** 已建任务：ChatInput 把「按选择器的方式换到这个模型」放进来，供撞配额横幅的「换来源继续」调用。 */
@@ -2179,8 +2188,33 @@ export function ChatInput({
     () => sshHostId ? mergeSshCodexCatalog(localProviders.providers, sshCodexProviders.providers) : null,
     [sshHostId, localProviders.providers, sshCodexProviders.providers],
   );
+  // 已建立的本机任务跟着账号走：账号被拆出 / 移走后，原来源在这个任务里按账号现在所在的供应商显示和放行
+  // (sourceSwitch.ts followedAccountSourceProvider)。草稿、远程、SSH 与其他任务不受影响。
+  const taskAccount = useSessionSubscriptionAccount(
+    sessionId && !catalogDeviceId && !sshHostId ? activeProviderId : null,
+    null,
+  );
+  const taskSourceProvider = useMemo(
+    () => sessionId && !catalogDeviceId && !sshHostId
+      && activeProviderId === (runtimeEffective ? runtimeEffective.providerId : initialProviderId)
+      ? followedAccountSourceProvider({
+          providers: localProviders.providers,
+          providerId: activeProviderId,
+          account: taskAccount,
+          // 只恢复已生效路由；乐观选择的新型号不能借此绕过来源校验。
+          agent: runtimeEffective ? runtimeEffective.agentKind : runtimeAgentKind,
+          modelId: runtimeEffective ? runtimeEffective.model : initialModel,
+        })
+      : null,
+    [sessionId, catalogDeviceId, sshHostId, localProviders.providers, activeProviderId, taskAccount,
+      runtimeEffective, runtimeAgentKind, initialModel, initialProviderId],
+  );
+  const localTaskProviders = useMemo(
+    () => withFollowedAccountSource(localProviders.providers, taskSourceProvider),
+    [localProviders.providers, taskSourceProvider],
+  );
   const providers = catalogDeviceId ? remoteProviders.providers
-    : sshCatalogProviders ?? localProviders.providers;
+    : sshCatalogProviders ?? localTaskProviders;
   const sendProviders = filterChatBridgedCodexProviders(
     providers,
     currentModelAgentKind ?? 'codex',
@@ -2238,9 +2272,12 @@ export function ChatInput({
     (activeProviderId ?? null) === (runtimeEffective ? runtimeEffective.providerId ?? null : initialProviderId ?? null) &&
     (!activeProviderId || activeProviderId === 'openai');
   const enforceConnectedSourceGate = (!sessionId || !catalogDeviceId) && !preserveSshCodexRoute;
-  const remoteModelListBlocked =
+  // 新任务选了模型组或「让插件选」：这次用哪个模型、在哪台运行由发送时的选路决定，草稿底层模型的来源
+  // 只在选路沿用它时才用得上(由发送回调在选路后检查)。输入框不按底层模型先挡下发送(model-groups.md §5)。
+  const sendRoutesOwnModel = !sessionId && (!!modelGroups?.active || !!pluginModels?.active);
+  const remoteModelListBlocked = !sendRoutesOwnModel && (
     (!!catalogDeviceId && enforceConnectedSourceGate && remoteModelListStatus !== 'ready') ||
-    (!!sshCodexHostId && sshCodexProviders.status !== 'ready');
+    (!!sshCodexHostId && sshCodexProviders.status !== 'ready'));
   // chatEligibleSourcesForModel(不是裸 sourcesForModel):非聊天模型即便"存在于某个
   // 已连接来源"也不算有可发送来源(issue #882 第 3 点,2026-07 review)——否则 Send
   // 会对着一个 image/embedding 端点放行,而不是显示这里的"去连接"空态。已建会话
@@ -2260,6 +2297,7 @@ export function ChatInput({
   const noConnectedSource =
     enforceConnectedSourceGate &&
     !!currentModelAgentKind &&
+    !sendRoutesOwnModel &&
     !providersLoading &&
     !remoteModelListBlocked &&
     // 老被控端明确不支持 provider:list 时只能依据 capabilities 放行；不能把缺少
@@ -4679,12 +4717,17 @@ export function ChatInput({
 
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
   // agent-builtin + agent-skill); 内部并发, mergeCommands 按优先级合并去重。
-  const paletteAgentKind = agentKind ?? 'claude-code';
+  const paletteAgentKind = runtimeAgentKind ?? agentKind ?? 'claude-code';
+  const slashContextReady = !sessionId || runtimeAgentKind != null;
+  // Existing tasks use one authoritative snapshot. Mirrored composer state
+  // catches up in an effect and otherwise scans the previous/global folder first.
+  const slashWorkingDir = sessionId ? initialWorkingDir : workingDir;
   // remote session:workingDir 是远端主机路径,不能按它扫本机 skills/files。
   // slash 退化为 desktop + agent-builtin(传 null),@ 文件面板直接关闭(见 atOpen)。
   const isRemoteSession = !!remoteHostId;
   const slashCommandContextKey = JSON.stringify([
-    workingDir ?? null,
+    slashWorkingDir ?? null,
+    slashContextReady,
     paletteAgentKind,
     isRemoteSession,
     sessionId ?? null,
@@ -4697,7 +4740,7 @@ export function ChatInput({
   });
   const [piRuntimeCommandStatus, setPiRuntimeCommandStatus] =
     useState<PiPackageCommandRuntimeStatus | null>(null);
-  const slashCommandsReady = isSlashCommandRosterReady(
+  const slashCommandsReady = slashContextReady && isSlashCommandRosterReady(
     slashCommandLoadState,
     slashCommandContextKey,
   );
@@ -4732,9 +4775,10 @@ export function ChatInput({
       // workingDir 是被控端路径；SSH remote 显式关扫描。desktop 命令始终本地。
       loadAllCommands(
         paletteAgentKind,
-        workingDir,
+        slashWorkingDir,
         {
           ...opts,
+          contextReady: slashContextReady,
           skipAgentSkills: isRemoteSession,
           sessionId,
           allowManagedPiPackagePreview: !isRemoteSession,
@@ -4762,7 +4806,8 @@ export function ChatInput({
         });
     },
     [
-      workingDir,
+      slashWorkingDir,
+      slashContextReady,
       paletteAgentKind,
       isRemoteSession,
       sessionId,
@@ -6022,7 +6067,7 @@ export function ChatInput({
         // 非聊天来源不该被当成"可以发"放行(issue #882 第 3 点,2026-07 review)。
         if (
           enforceConnectedSourceGate && !canAttemptBaselineRecovery &&
-          currentModelAgentKind &&
+          currentModelAgentKind && !sendRoutesOwnModel &&
           // 旧被控端明确不支持 provider:list 时，控制端没有可检查的来源镜像；
           // 与模型列表一致交给 capabilities + 被控端发送链路做兼容回退。
           !(deviceLinkDeviceId && remoteProviders.unsupported)
@@ -6569,6 +6614,7 @@ export function ChatInput({
       providers,
       remoteProviders.unsupported,
       remoteModelListBlocked,
+      sendRoutesOwnModel,
       remoteModelListStatus,
       sshCodexHostId,
       sshCodexProviders.status,
@@ -9175,18 +9221,18 @@ export function ChatInput({
   // 每次渲染后换成最新闭包(与 performAgentSwitchRef 同理)；卸载时收回，横幅不会调到已离开的任务。
   useEffect(() => {
     if (!sessionModelPickRef || !sessionId) return;
-    const pick: SessionModelPick = async ({ agent, providerId, modelId }) => {
+    const pick: SessionModelPick = async ({ agent, providerId, modelId, effort }) => {
       if (!sessionEngineFilter) {
         if (agent !== runtimeAgentKind) return false;
-        return (await handleProviderChange(providerId, modelId)) !== false;
+        return (await handleProviderChange(providerId, modelId, effort)) !== false;
       }
       const runtime = sessionEngineFilter.runtimeAgent;
       const pending = sessionEngineFilter.pendingTarget;
       const crossEngine = runtime === undefined || agent !== runtime || (pending !== undefined && pending !== runtime);
       if (crossEngine) {
-        return sessionEngineFilter.onCrossEngineSelect({ providerId, modelId, targetAgent: agent, effort: '' });
+        return sessionEngineFilter.onCrossEngineSelect({ providerId, modelId, targetAgent: agent, effort: effort ?? '' });
       }
-      return (await handleProviderChange(providerId, modelId)) !== false;
+      return (await handleProviderChange(providerId, modelId, effort)) !== false;
     };
     sessionModelPickRef.current = pick;
     return () => {
@@ -10234,7 +10280,7 @@ export function ChatInput({
                         : undefined
                     }
                     {...(!sessionId && unifiedPanelActive && pluginModels ? { pluginModels } : {})}
-                    {...(!sessionId && unifiedPanelActive && modelGroups ? { modelGroups } : {})}
+                    {...(unifiedPanelActive && modelGroups ? { modelGroups } : {})}
                     // 草稿取调用方持有的锚点,会话取本组件的内存态(见 effectiveSelectedFavoriteUid)。
                     selectedFavoriteUid={effectiveSelectedFavoriteUid}
                     // 会话内同引擎选中一行后回传该行的收藏锚点(跨引擎那一路在
@@ -10299,6 +10345,8 @@ export function ChatInput({
                     // 无意图才回到会话 runtime 的 selectedProviderId。
                     currentProviderId={activeProviderId}
                     sourceDisconnected={selectedSourceDisconnected}
+                    // 与上面 providers 同一份任务视图：账号被拆出后原来源在这个任务里按账号所在的供应商显示。
+                    {...(taskSourceProvider ? { taskSourceProvider } : {})}
                     // 断开来源回落到默认来源后,面板会高亮同模型的回落行;点击该行必须重新
                     // 发出来源选择,把显示中的默认来源钉回会话的显式来源。
                     reselectEmitsChange={selectedSourceDisconnected}

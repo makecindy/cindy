@@ -46,7 +46,11 @@ export interface McpAppRecord {
   };
   cancelled?: string;
 }
+export { McpAppSdkCache, mcpAppSdkCacheText } from './mcpAppSdkCache.js';
+
 export interface McpAppDocument {
+  /** Optional hash reference, only in response to advertised SDK bytes. */
+  sdkRef?: string;
   /** Executor-owned SDK bytes for this View; absent on older hosts. Never persisted in cards. */
   sdk?: { source: string; addons?: { 'cindy/view-state'?: { source: string; reactSource: string } } };
   viewId: string;
@@ -184,7 +188,8 @@ post({jsonrpc:'2.0',method:'ui/notifications/sandbox-proxy-ready',params:{}});
 export function mcpAppSandboxDocument(nativeBridgeKey = '', resourceUrl?: string): string {
   const key = JSON.stringify(nativeBridgeKey).replace(/</g, '\\u003c');
   const resource = JSON.stringify(resourceUrl ?? null).replace(/</g, '\\u003c');
-  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}</style></head><body><script>const bridgeKey=${key};const expectedResourceUrl=${resource};${MCP_APP_SANDBOX_SCRIPT}</script></body></html>`;
+  // The top-level WebView owns the layout viewport; the App iframe cannot set it.
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}</style></head><body><script>const bridgeKey=${key};const expectedResourceUrl=${resource};${MCP_APP_SANDBOX_SCRIPT}</script></body></html>`;
 }
 /** Legacy inline wrapper; served native Views receive CSP headers from their resource server. */
 export function mcpAppNativeResource(html: string, csp: string): string {

@@ -10,3 +10,8 @@
 
 "activity.waitingForUpdate" = "Waiting for update";
 "activity.lastUpdated" = "Last updated";
+
+"activity.toReview" = "To review";
+"activity.inProgress" = "In progress";
+"activity.pendingCount %lld" = "Needs your action %lld";
+"activity.unreadCount %lld" = "Unread results %lld";

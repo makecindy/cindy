@@ -839,14 +839,15 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       const state = resolved?.find((r) => r.member.key === memberKey);
       if (!state) return null;
       const cooling = router.coolingUntil(providerId, memberKey, model) !== null
-        || providerGroupMemberUsageState(state, model, deps.now(), agentKind).limited;
+        || (!state.providerContinuity?.stale && providerGroupMemberUsageState(state, model, deps.now(), agentKind).limited);
       if (state.state === 'ok' && !cooling) return false;
       return { reason: cooling ? 'cooling' : state.state };
     },
     async rebalanceTarget(providerId, config, memberKey, model, agentKind, exclude) {
       const resolved = await withTimeout(deps.directory.resolveMembers(providerId, config), PROVIDER_GROUP_BEFORE_SEND_TIMEOUT_MS);
       const current = resolved?.find((r) => r.member.key === memberKey);
-      if (!resolved || current?.state !== 'ok' || router.coolingUntil(providerId, memberKey, model) !== null) return null;
+      if (!resolved || current?.state !== 'ok' || current.providerContinuity?.stale
+        || router.coolingUntil(providerId, memberKey, model) !== null) return null;
       const now = deps.now();
       const state = providerGroupMemberUsageState(current, model, now, agentKind);
       if (state.limited || !state.quota) return null;
@@ -856,7 +857,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       return target ? { memberKey: target.key, label: target.label, quota: target.quota } : null;
     },
     invalidate(member) {
-      deps.directory.invalidate(member.agentDeviceId ?? undefined);
+      deps.directory.invalidate(member.agentDeviceId ?? '', { providerIds: [member.providerId] });
     },
     async memberKeyOf(groupProviderId, row) {
       if (row.agentDeviceId) {
@@ -1893,6 +1894,12 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         }
         if (config === undefined) {
           if (!mayReopenElsewhere(sessionId)) return null;
+          // A committed user move can leave the old binding until the group is
+          // reachable again. Without its config we cannot verify the new member;
+          // let the persisted route start normally, never reconstruct the old
+          // location from that binding ("local" is relative to the group owner).
+          const located = await locatedMemberKey(source, existingBinding.providerId, row);
+          if (located !== existingBinding.memberKey) return null;
           const member = pendingMember(
             existingBinding.memberKey,
             row.providerId ?? existingBinding.providerId,

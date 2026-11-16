@@ -9,6 +9,7 @@ import type {
   DesktopPermissionStatus,
   RemoteDesktopDisplayMode,
 } from '@cindy/device-link';
+import { createLogger } from '../logger';
 import { HumanDesktopInput } from './inputOwnership';
 import { resolveLinuxInputBinary, isX11Desktop, x11InputGeometry } from './linuxInput';
 import { readLinuxUnlockState } from './linuxCredentials';
@@ -28,6 +29,7 @@ import {
 } from './windowsHost';
 
 const exec = promisify(execFile);
+const log = createLogger('remote-desktop:input');
 const inputBinaryName = () =>
   process.platform === 'darwin' ? 'cindy-macos-desktop-input' : 'cindy-windows-desktop-input.exe';
 let build: Promise<string> | null = null;
@@ -74,11 +76,15 @@ async function resolveBinary(): Promise<string> {
           )
         : '';
     digest.update(callerSource);
-    if (process.platform === 'darwin') digest.update(process.execPath).update('dev-caller-v1');
+    if (process.platform === 'darwin') {
+      digest.update(process.execPath).update('dev-caller-v1');
+      digest.update(await fs.readFile(path.join(sourceRoot, 'macos-input-Info.plist')));
+    }
     if (process.platform === 'win32') {
       digest.update(await fs.readFile(path.join(sourceRoot, '.cargo', 'config.toml')));
       digest.update(await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'desktop.rs')));
       digest.update(await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'privacy.rs')));
+      digest.update(await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'verify.rs')));
       digest.update(
         await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'selection.rs')),
       );
@@ -107,9 +113,17 @@ async function resolveBinary(): Promise<string> {
           JSON.stringify(Buffer.from(process.execPath).toString('base64')),
         );
         await fs.writeFile(main, program);
-        await exec('swiftc', ['-D', 'DESKTOP_INPUT_DEVELOPMENT', main, '-O', '-o', temporary], {
-          timeout: 120_000,
-        });
+        // The linked Info.plist names Cindy in the owner-verification prompt.
+        const plist = path.join(sourceRoot, 'macos-input-Info.plist');
+        await exec(
+          'swiftc',
+          [
+            '-D', 'DESKTOP_INPUT_DEVELOPMENT', main, '-O', '-o', temporary,
+            '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist',
+            '-Xlinker', plist,
+          ],
+          { timeout: 120_000 },
+        );
       } finally {
         await fs.rm(buildDirectory, { recursive: true, force: true });
       }
@@ -148,7 +162,7 @@ export async function readDesktopLockState(): Promise<'locked' | 'unlocked' | 'u
   if (process.platform === 'linux') {
     return readLinuxUnlockState();
   }
-  if (process.platform !== 'darwin') return 'unavailable';
+  if (process.platform !== 'darwin' && process.platform !== 'win32') return 'unavailable';
   try {
     const { stdout } = await exec(await resolveBinary(), ['--lock-state'], {
       timeout: 5000,
@@ -196,18 +210,48 @@ export async function lockDesktopScreen(
   signal: AbortSignal,
 ): Promise<void> {
   if (process.platform === 'linux') return lockLinuxDesktop(isCurrent, signal);
-  if (process.platform !== 'darwin') throw new Error('DESKTOP_LOCK_UNAVAILABLE');
+  if (process.platform !== 'darwin' && process.platform !== 'win32')
+    throw new Error('DESKTOP_LOCK_UNAVAILABLE');
   const binary = await resolveBinary();
   if (signal.aborted || !isCurrent()) throw new Error('DESKTOP_LEASE_EXPIRED');
+  let stdout = '';
   try {
-    const { stdout } = await exec(binary, ['--lock-screen'], {
-      timeout: 5000,
-      maxBuffer: 1024,
-      signal,
-    });
-    if (stdout.trim() !== 'locked') throw new Error('DESKTOP_LOCK_FAILED');
+    // macOS tries the system lock, then the shortcut: about 5 s at worst.
+    ({ stdout } = await exec(binary, ['--lock-screen'], { timeout: 7000, maxBuffer: 1024, signal }));
+  } catch (error) {
+    stdout = String((error as { stdout?: unknown }).stdout ?? '');
+  }
+  if (stdout.trim() === 'locked') return;
+  // Only the helper's fixed word is logged (session, caller, permission, timeout).
+  const reason = /^lock-failed ([a-z-]{1,16})$/m.exec(stdout)?.[1] ?? (signal.aborted ? 'aborted' : 'unknown');
+  log.warn('screen lock not confirmed', { reason });
+  throw new Error('DESKTOP_LOCK_FAILED');
+}
+
+/**
+ * Asks the system to verify this computer's owner (macOS Touch ID / password, Windows
+ * Hello / PIN), only when the privacy screen could not lock it
+ * (docs/product-rules/privacy-screen.md). The prompt belongs to the OS: no credential
+ * reaches Cindy, only the result. `window` is the native handle Windows anchors its
+ * prompt to. Unsupported elsewhere.
+ */
+export async function verifyDesktopOwner(
+  reason: string,
+  window?: Buffer,
+): Promise<'verified' | 'denied' | 'unavailable'> {
+  if (process.platform !== 'darwin' && process.platform !== 'win32') return 'unavailable';
+  const args =
+    process.platform === 'win32'
+      ? ['--verify-owner', window ? String(window.readBigInt64LE(0)) : '0', reason]
+      : ['--verify-owner', reason];
+  try {
+    const binary = await resolveBinary();
+    // The owner may take a while to reach the prompt; it is not retried automatically.
+    const { stdout } = await exec(binary, args, { timeout: 180_000, maxBuffer: 1024, windowsHide: true });
+    const word = stdout.trim();
+    return word === 'verified' || word === 'denied' ? word : 'unavailable';
   } catch {
-    throw new Error('DESKTOP_LOCK_FAILED');
+    return 'unavailable';
   }
 }
 

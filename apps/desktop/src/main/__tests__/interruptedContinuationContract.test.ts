@@ -10,6 +10,8 @@ const registerSource = readFileSync(
 // Retain local characterization guards at the production stages they describe.
 // Cross-stage delivery and recovery timing run in sessionEventPipeline.test.ts.
 const eventSource = [
+  // The pipeline's auto-resume steps are in sessionEventAutoResumeSteps.ts; the pipeline calls them in place.
+  'sessionEventAutoResumeSteps',
   'sessionEventPreparation',
   'sessionEventStream',
   'sessionEventDelivery',
@@ -79,21 +81,11 @@ describe('interrupted continuation enqueue contract', () => {
   });
 
   it('keeps a scheduler auto-resume owned until dispatch and fails it when discarded', () => {
-    const scheduleStart = registerSource.indexOf('autoResumeBookkeeping.schedule(');
-    const scheduleEnd = registerSource.indexOf('steerToAgent:', scheduleStart);
-    expect(scheduleStart).toBeGreaterThan(-1);
-    expect(scheduleEnd).toBeGreaterThan(scheduleStart);
-    const scheduleHook = registerSource.slice(scheduleStart, scheduleEnd);
-    expect(scheduleHook).not.toMatch(/clearSchedulerAutoResumePending\s*\(/);
-    expect(scheduleHook).toMatch(/\(attempt\)\s*=>\s*\{\s*return\s*\(async/);
-    expect(scheduleHook).not.toMatch(/void\s*\(async\s*\(\)\s*=>/);
+    // The auto-resume hooks are in interruptedTurnAutoResumeHooks.ts; register.ts hands them to the coordinator.
+    // The hooks' own schedule and discard steps are guarded in hostDesktopSourceContracts.guard.test.ts.
+    expect(registerSource).toContain('onResumableTurnError: interruptedTurnAutoResumeHooks.onResumableTurnError,');
 
     expect(eventSource).toMatch(/getAutoResumeDeferredOwner\(session\.id\)/);
-    const ownerDiscardedStart = registerSource.indexOf('onResumableTurnErrorDiscarded:');
-    const ownerDiscardedEnd = registerSource.indexOf('onResumableTurnError:', ownerDiscardedStart);
-    expect(registerSource.slice(ownerDiscardedStart, ownerDiscardedEnd)).toMatch(
-      /deferredOwner:\s*options\.owner/,
-    );
 
     const dispatchedStart = registerSource.indexOf('onDispatchedUserTurn:');
     const dispatchedEnd = registerSource.indexOf('noteSessionClearBoundary', dispatchedStart);

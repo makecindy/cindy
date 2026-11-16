@@ -50,6 +50,11 @@ function PluginViewTabPillTitle({ state, t }: { state: PluginViewTabState; t: TF
 
 function PluginViewTabPillIcon({ state }: { state: PluginViewTabState }) {
   const ghost = useInstalledGhostByInstance(state.instanceId);
+  // 与 plugin-task 页签一致：插件有品牌图标时优先显示，否则回退到 mainView 系统图标
+  if (ghost?.iconDataUrl) {
+    // design: intrinsic-geometry — 插件品牌图沿用 plugin-task 页签同款 13px 内容裁剪（图标自身的圆角，不是控件边框）
+    return <img src={ghost.iconDataUrl} alt="" width={13} height={13} className="rounded-[3px]" />;
+  }
   const Icon = MAIN_VIEW_ICONS[ghost?.manifest.mainView?.icon ?? 'puzzle'] ?? Puzzle;
   return <Icon size={13} />;
 }

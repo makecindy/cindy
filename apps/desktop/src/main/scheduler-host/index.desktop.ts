@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import './pre-run-hook.desktop.js';
 import type { BrowserWindow } from 'electron';
 import { eq } from 'drizzle-orm';
 
@@ -32,6 +33,7 @@ import {
   hasQueuedSchedulerPrompt,
   isSchedulerAutoResumePending,
   isSchedulerPromptTracked,
+  releaseQueuedSchedulerPrompt,
   isSchedulerTargetSessionBusy,
   onSchedulerAutoResumeFailed,
   removeQueuedSchedulerPrompt,
@@ -123,6 +125,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
         enqueuePrompt: enqueueSchedulerPrompt,
         removeQueuedPrompt: removeQueuedSchedulerPrompt,
         isPromptTracked: isSchedulerPromptTracked,
+        releasePrompt: releaseQueuedSchedulerPrompt,
         isAutoResumePending: isSchedulerAutoResumePending,
         onAutoResumeFailed: onSchedulerAutoResumeFailed,
         cancelAutoResume: cancelSchedulerAutoResume,

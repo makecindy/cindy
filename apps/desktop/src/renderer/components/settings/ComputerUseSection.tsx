@@ -500,6 +500,11 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
           ? `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(userBrowserPlugin))}`
           : '/plugins',
       );
+    if (browserBackendHealth?.reason === 'browser-missing') {
+      // No Chrome / Edge yet: get Chrome first; the poll below moves on once it is installed.
+      void window.electronAPI.openExternal(CHROME_DOWNLOAD_URL);
+      return;
+    }
     if (browserBackendHealth?.reason === 'extension-disconnected') {
       // Open the store page in the user's own browser; the page polls and turns connected once the
       // extension is added. Without a Chromium browser, the plugin page explains the other routes.

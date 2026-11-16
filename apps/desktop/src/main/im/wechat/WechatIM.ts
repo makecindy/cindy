@@ -1,3 +1,4 @@
+import { findImQuestionReply } from '../shared/questionPresentation';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -956,7 +957,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         const interactionIndexes = new Set(
           result.messages
             .map((message, index) =>
-              this.#pendingInteractions.has(message.senderId) &&
+              (this.#pendingInteractions.has(message.senderId) || findImQuestionReply(this, message)) &&
               message.text.trim() !== '/stop' &&
               message.text.trim() !== '/stop all'
                 ? index
@@ -1039,6 +1040,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
           for (const index of interactionIndexes) {
             const message = result.messages[index];
             if (message) {
+              const answer = committed.committed && findImQuestionReply(this, message);
+              if (answer) { await answer(); continue; }
               await this.#handleInteractionReplyMessage(message, transport, signal);
             }
           }
@@ -1190,6 +1193,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         botContextId,
         groupHistoryAccess,
         userId: task.peerId,
+        questionRespondentId: task.peerId,
         userMessageId: task.id,
         // 个人微信只有私聊；渠道说明、引用与投递事实只进模型，落库保留原文。
         channelNoteSource: {

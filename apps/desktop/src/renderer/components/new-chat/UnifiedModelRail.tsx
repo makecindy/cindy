@@ -245,6 +245,7 @@ function RailButton(props: RailButtonProps) {
   return props.provider ? (
     <ModelPickerAccountBoundary
       providerId={props.provider.auth?.method === 'oauth' ? props.provider.id : ''}
+      subscriptionPool={!!props.provider.subscriptionPool || !!props.provider.subscriptionAccountPool}
       deviceId={props.usageDeviceId}
     >
       <ProviderQuotaButton {...props} provider={props.provider} />
@@ -274,7 +275,10 @@ function ProviderQuotaButton(props: RailButtonProps & { provider: ProviderView }
   const displayedQuota = pool
     ? pool.average === null
       ? null
-      : { usedPercent: 100 - pool.average, resetsAt: null }
+      : {
+          usedPercent: 100 - pool.average,
+          resetsAt: pool.isPool ? null : pool.members[0]?.resetsAt ?? null,
+        }
     : quota;
   return (
     <RailButtonView {...props} accountIdentity={identity} quota={displayedQuota} pool={pool} />

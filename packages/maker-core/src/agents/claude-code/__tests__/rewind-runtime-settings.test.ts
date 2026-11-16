@@ -1032,6 +1032,75 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：ClaudeCodeAgent.startSession 的 SDK query options.effort；未声明能力的自定义模型仍把用户选择传给 Claude Code。
+   * - Bug／规则依据：#10621；effortsUnknown=true 时空 efforts 只是能力未知的占位值。
+   * - 现有覆盖缺口：已有用例只覆盖显式声明档位的模型，没有覆盖未知能力的空占位数组。
+   * - 最小失败输入：efforts=[]、effortsUnknown=true、effort=max。
+   * - tier：unit；实测耗时记录在 PR 验证项中。
+   */
+  it('passes an explicit effort through when model effort support is unknown', async () => {
+    const customModel: ModelDescriptor = {
+      id: 'custom/claude-compatible',
+      displayName: 'Custom Claude-compatible model',
+      contextWindow: 200_000,
+      efforts: [],
+      effortsUnknown: true,
+      defaultEffort: null,
+    };
+    const { handle } = await startRewindableSession({
+      model: customModel.id,
+      effort: 'max',
+      availableModels: [customModel],
+    });
+
+    expect(sdkMock.query.mock.calls[0]?.[0]?.options?.effort).toBe('max');
+
+    await handle.close();
+  });
+
+  it('omits effort when model explicitly declares no effort support', async () => {
+    const customModel: ModelDescriptor = {
+      id: 'custom/no-effort',
+      displayName: 'Custom model without effort support',
+      contextWindow: 200_000,
+      efforts: [],
+      effortsUnknown: false,
+      defaultEffort: null,
+    };
+    const { handle } = await startRewindableSession({
+      model: customModel.id,
+      effort: 'max',
+      availableModels: [customModel],
+    });
+
+    expect(sdkMock.query.mock.calls[0]?.[0]?.options?.effort).toBeUndefined();
+
+    await handle.close();
+  });
+
+  it('uses concrete route effort support over a flattened descriptor', async () => {
+    const customModel: ModelDescriptor = {
+      id: 'shared/model',
+      displayName: 'Shared model',
+      contextWindow: 200_000,
+      efforts: [],
+      effortsUnknown: true,
+      defaultEffort: null,
+    };
+    const { handle } = await startRewindableSession({
+      model: customModel.id,
+      effort: 'max',
+      availableModels: [customModel],
+      resolveModelEfforts: () => [],
+    });
+
+    expect(sdkMock.query.mock.calls[0]?.[0]?.options?.effort).toBeUndefined();
+
+    await handle.close();
+  });
+
   it('clamps a carried-over xhigh to the target model efforts on start and live change (#5402)', async () => {
     const glm: ModelDescriptor = {
       id: 'z-ai/glm-5.3',

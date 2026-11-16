@@ -76,6 +76,27 @@ describe('git-review scopeResolver', () => {
     });
   });
 
+  it('reports the selected linked worktree as the Review source when no managed binding exists', async () => {
+    const d = deps({
+      getSessionRow: vi.fn().mockResolvedValue({
+        id: 's1', workingDir: '/repo/wt-new', worktreePath: null, remoteHostId: null,
+      }),
+      getManagedWorktreePath: vi.fn().mockReturnValue(null),
+      resolveSessionDir: vi.fn().mockResolvedValue({
+        workdir: '/repo/wt-new', head: { kind: 'branch', branch: 'fix/new', shortSha: 'abc1234' }, source: 'worktree',
+      }),
+      git: vi.fn(async (args: readonly string[]) => ({
+        stdout: args.includes('--show-toplevel') ? '/repo/wt-new\n' : 'abcdef\n',
+        stderr: '', exitCode: 0,
+      })),
+    });
+    const scope = await resolveReviewScope('s1', d);
+    expect(scope).toMatchObject({ workdir: path.resolve('/repo/wt-new'), branch: 'fix/new', source: 'worktree' });
+    expect(scope.resolutionChain.find((step) => step.source === 'worktree')).toMatchObject({
+      path: '/repo/wt-new', ok: true,
+    });
+  });
+
   it('resolves an SSH session with remote POSIX paths without probing local paths', async () => {
     const d = deps({
       getSessionRow: vi.fn().mockResolvedValue({

@@ -104,10 +104,11 @@ A 是基线提交的工具层，C 是当前工作区；两组都经生产 MCP �
 - **真实网站题**（`--real-sites` 才加，`gh-releases` `gh-pr` `crates` `pypi` `hn` `tailscale` `apple` `wiki`）：
   八道公开网站上的读取题，标准答案在运行前从各站的公开接口或页面现取，取不到的题直接跳过并说明。
   它们需要联网，取决于网站当天的内容，也可能被网站拦截：这一组失败是去查原因的信号，不单独当作回归。
-  改规则措辞、读取或等待逻辑后跑这一组；与其它产品的横向对比不在这个脚本里。
+  改规则措辞、读取或等待逻辑后跑这一组；与 BrowserMCP 的横向对比用 `--variants B,C`，见下文。
 
-它只覆盖专用浏览器运行时和夹具页面，**不证明侧边栏、「我的浏览器」或真实网站上的表现**，也
-不是完整的 Cindy 会话。结论只用于比较工具层改动前后的同一批任务，不当作通用成功率。
+Cindy 一侧只覆盖专用浏览器运行时；默认使用夹具页面，加 `--real-sites` 后才包含上述真实网站题。
+**不证明侧边栏或「我的浏览器」的表现**，也不是完整的 Cindy 会话。结论只用于同一批题上的工具层
+改动前后对比，或用 `--variants B,C` 与 BrowserMCP 对比，不外推到其它真实网站，不当作通用成功率。
 
 `--check` 不调用模型、不产生用量：在同一套真实浏览器与夹具上经 MCP 入口直接驱动 `batch` 与
 `cdp`（封闭 Shadow DOM 内的点击、输入、取值，拒绝读 Cookie，整表单一次提交，多页读取，失败即停），
@@ -152,6 +153,10 @@ A 是基线提交的工具层，C 是当前工作区；两组都经生产 MCP �
 同一套题也拿去测过 Claude App 和 Codex App：测法、结果、局限和复现步骤见
 [浏览器网页任务四方实测](../benchmarks/browser-tasks-2026-11-11/README.md)。`--serve` 会打印题目原文和
 答案，可以把题目发给任何产品；`--effort` 指定命令行的推理强度。
+
+`--variants B,C` 把当前工作区和开源的 BrowserMCP 放在同一场里比（隔离环境见
+`scripts/benchmarks/browsermcp-env.mjs`）。2026-11-14 的结果、它在 Chrome 158 上的问题，以及对比中发现的
+「一个标签页让所有查找卡住」缺陷见 [BrowserMCP 对比实测](../benchmarks/browsermcp-2026-11-14/README.md)。
 
 ### 在运行中的 Cindy 里实测三种后端
 
@@ -361,6 +366,15 @@ bundle id 投递打开链接事件，外部链接会落到 Cindy 的实例。采
 回归位于 `browser-extension/__tests__/bridge.test.ts`、浏览器后端的 `user-browser-backend.test.ts` /
 `health-service.test.ts` 与设置页的 `ComputerUseSection.browserHealth.test.tsx`，覆盖过期空列表、
 首次读取前已过期、恢复、等待到期、未配对及探测失败。
+
+### 没有 Chrome 时先装浏览器（2026-11-16）
+
+「我的浏览器」对用户就是本机的 Chrome（Edge、Brave、Chromium 同样可用，扩展从 Chrome 网上应用店安装）。
+未连接时，若 `listInstalledChromium` 一个也找不到，健康状态报 `browser-missing`：设置页先显示
+「先安装 Chrome」与「下载 Chrome」（打开 Chrome 官方下载页），装好后原有轮询自动进入装插件／
+装扩展的步骤。该判断只替换 `plugin-missing` 与 `extension-disconnected`；`plugin-updating`、
+`plugin-selection-required` 与 `status-failed` 保持原样；安装位置读取异常时按“已安装”处理，
+不挡住后续指引。回归在 `health-service.test.ts` 与 `ComputerUseSection.browserHealth.test.tsx`。
 
 ## 插件更新时的浏览器连接（2026-11-07）
 

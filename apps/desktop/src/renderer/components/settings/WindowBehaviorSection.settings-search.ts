@@ -2,43 +2,6 @@ import { defineSettings, type SettingsSearchModule } from './settingsSearchTypes
 
 /** Search entries owned by WindowBehaviorSection. */
 export const windowBehaviorSettings = defineSettings({
-  devicesKeepAwake: {
-    id: 'settings.devices.keepAwake',
-    fallbackTargetId: 'settings-window-behavior',
-    tab: 'general',
-    targetId: 'settings-search-settings-devices-keepAwake',
-    titleKey: 'settings.devices.keepAwake',
-    sectionKey: 'settings.sections.windowBehavior',
-    descriptionKey: 'settings.devices.keepAwakeHint',
-  },
-  awayGuard: {
-    id: 'settings.windowBehavior.awayGuard.label',
-    fallbackTargetId: 'settings-window-behavior',
-    tab: 'general',
-    targetId: 'settings-search-away-guard',
-    titleKey: 'settings.windowBehavior.awayGuard.label',
-    aliases: ['锁屏', '防窥', '遮挡屏幕', 'lock screen', 'privacy screen'],
-    sectionKey: 'settings.sections.windowBehavior',
-    descriptionKey: 'settings.windowBehavior.awayGuard.hint',
-    isVisible: ({ platform }) => platform === 'darwin',
-  },
-  awayGuardDelay: {
-    id: 'settings.windowBehavior.awayGuard.delay.label',
-    fallbackTargetId: 'settings-window-behavior',
-    tab: 'general',
-    targetId: 'settings-search-away-guard-delay',
-    titleKey: 'settings.windowBehavior.awayGuard.delay.label',
-    sectionKey: 'settings.sections.windowBehavior',
-    descriptionKey: 'settings.windowBehavior.awayGuard.delay.hint',
-    options: [
-      { value: '30', labelKey: 'settings.windowBehavior.awayGuard.delay.30' },
-      { value: '60', labelKey: 'settings.windowBehavior.awayGuard.delay.60' },
-      { value: '120', labelKey: 'settings.windowBehavior.awayGuard.delay.120' },
-      { value: '300', labelKey: 'settings.windowBehavior.awayGuard.delay.300' },
-      { value: 'system', labelKey: 'settings.windowBehavior.awayGuard.delay.system' },
-    ],
-    isVisible: ({ platform }) => platform === 'darwin',
-  },
   loginItemLabel: {
     id: 'settings.windowBehavior.loginItem.label',
     fallbackTargetId: 'settings-window-behavior',

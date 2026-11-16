@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
 import { SseTranslator } from '@cindy/anthropic-responses-bridge';
 import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, modelProtocolComparison, parseModelsListResponse, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
-import { probePiProvider, createPiProviderFetch, handlePiProviderRequest, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText } from '../pi-provider-transport.js';
+import { probePiProvider, createPiProviderFetch, handlePiProviderRequest, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText, sanitizePiAssistantContent } from '../pi-provider-transport.js';
 
 vi.mock('@earendil-works/pi-ai/api/openai-completions', async (importOriginal) => ({
   ...await importOriginal<typeof import('@earendil-works/pi-ai/api/openai-completions')>(),
@@ -14,6 +14,13 @@ const reply = [
 ].map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
 
 describe('Pi-owned transport for Cindy harnesses', () => {
+  it('drops empty thinking signatures while retaining substantive assistant output', () => {
+    expect(sanitizePiAssistantContent([
+      { type: 'thinking', thinking: 'stale', thinkingSignature: '' },
+      { type: 'text', text: 'keep this' },
+    ] as never)).toEqual([{ type: 'text', text: 'keep this' }]);
+  });
+
   // #10269, unit: the ID-only model on a Messages connection must carry its
   // Chat identity through the installed serializer, including a tool result.
   // Descriptor-only tests cannot catch SDK compatibility/header regressions.

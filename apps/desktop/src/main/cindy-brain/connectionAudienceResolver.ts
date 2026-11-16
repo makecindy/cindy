@@ -84,7 +84,7 @@ export function declaredOidcTokenHosts(manifest: GhostManifest): string[] {
       (manifest.network?.secrets ?? [])
         .filter((secret) => secret.source === 'oidc-token')
         .flatMap((secret) => secret.inject.hosts ?? [])
-        .filter((host) => isValidGhostNetworkHostPattern(host) && !host.startsWith('*.')),
+        .filter((host) => isValidGhostNetworkHostPattern(host) && !host.startsWith('*.') && !host.includes('://')),
     ),
   ];
 }

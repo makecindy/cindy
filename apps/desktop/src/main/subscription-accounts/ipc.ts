@@ -34,8 +34,9 @@ export function registerSubscriptionAccountsIpc(): void {
   setRemoteSubscriptionPoolQuotaReader((channel, args) =>
     readLegacySubscriptionQuota(readLegacySubscriptionPoolUsage, channel, args, readSubscriptionSessionUsage),
   );
-  onSubscriptionAccountsChanged((providerId, resetAccountId) =>
-    broadcast('subscription-accounts:changed', { providerId, ...(resetAccountId ? { resetAccountId } : {}) }),
+  onSubscriptionAccountsChanged((providerId, resetAccountId, change) =>
+    broadcast('subscription-accounts:changed', { providerId, ...(resetAccountId ? { resetAccountId } : {}),
+      ...(change ? { change } : {}) }),
   );
   ipcMain.handle('maker:subscription-pool:quota', async (event, providerId: unknown, model?: unknown) => {
     const context = getDeviceLinkInvokeContext();

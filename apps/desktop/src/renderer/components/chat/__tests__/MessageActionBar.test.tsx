@@ -4,7 +4,7 @@ import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContri
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../../shared/ghost';
+import { type InstalledGhost } from '../../../../shared/ghost';
 import { pluginUiInterestKey, type PluginUiStateChange } from '../../../../shared/pluginUi';
 
 const installed = vi.hoisted(() => ({ ghosts: [] as InstalledGhost[] }));
@@ -52,6 +52,7 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 import { MessageActionBar } from '../MessageActionBar';
+import * as usageTooltip from '@/lib/turnUsageTooltip';
 import { PluginUiProvider, usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { ChatMessageActions } from '@/features/bots/ChatServerControls';
 import type { GhostMcpApps } from '@cindy/plugin-protocol';
@@ -75,7 +76,7 @@ describe('plugin entries in the message More menu', () => {
           host: { contributions: [{ id: 'message-menu', title: 'Analyze message', position: 'message.menu',
             tool: 'help', match: { roles: [role] } }] },
         } } };
-    value.approvedHostUi = ghostHostUiApprovalTokens(value.manifest);
+
     return value;
   };
   const Bar = ({ group = false }: { group?: boolean }) => {
@@ -97,7 +98,7 @@ describe('plugin entries in the message More menu', () => {
   it('keeps group message menus and actions available without a task session', async () => {
     const value = ghost();
     (value.manifest.mcpApps as GhostMcpApps).host!.contributions!.push({ id: 'message-action', title: 'Group action', position: 'message.actions', tool: 'help' });
-    value.approvedHostUi = ghostHostUiApprovalTokens(value.manifest);
+
     installed.ghosts = [value];
     render(<PluginUiProvider><Bar group /></PluginUiProvider>);
     expect(screen.getByRole('button', { name: 'Group action' })).toBeTruthy();
@@ -110,7 +111,7 @@ describe('plugin entries in the message More menu', () => {
   it.each(['none', 'disabled', 'unapproved', 'other-role'])('adds no menu or subscription for %s consumers', mode => {
     const value = ghost(mode === 'other-role' ? 'user' : 'assistant');
     if (mode === 'disabled') value.enabled = false;
-    if (mode === 'unapproved') value.approvedHostUi = [];
+    if (mode === 'unapproved') value.approval = { state: 'invalid' };
     installed.ghosts = mode === 'none' ? [] : [value];
     renderBar();
     expect(screen.queryByRole('button', { name: 'chat.messageActionBar.moreActions' })).toBeNull();
@@ -620,6 +621,28 @@ describe('MessageActionBar', () => {
       totalTokens: 2_107_700,
       cacheHitRate: 0.95,
     };
+
+    // Unit performance regression: hidden usage variants previously formatted full
+    // tooltip data on every render. Existing visibility checks missed that work.
+    // Switching back must still render current usage, so no cross-render cache.
+    it.each([
+      { simplifiedBotConversation: true },
+      { companionFooter: true },
+      { compact: true },
+      { align: 'right' as const },
+    ])('skips hidden usage work and restores current usage when mode changes: %j', (mode) => {
+      const build = vi.spyOn(usageTooltip, 'buildTurnUsageTooltipLines');
+      try {
+        const props = { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, copyText: 'body',
+          align: 'left' as const, hovered: true, turnUsageDetails: details };
+        const { rerender } = render(<MessageActionBar {...props} {...mode} />);
+        expect(screen.queryByText('chat.messageActionBar.turnTokens')).toBeNull();
+        expect(build).not.toHaveBeenCalled();
+        rerender(<MessageActionBar {...props} />);
+        expect(screen.getByText('chat.messageActionBar.turnTokens')).toBeTruthy();
+        expect(build).toHaveBeenCalledWith(expect.objectContaining({ details }));
+      } finally { build.mockRestore(); }
+    });
 
     it('无金额 + 有 token 明细 → 显示 token,tooltip 说明取不到报价', () => {
       render(

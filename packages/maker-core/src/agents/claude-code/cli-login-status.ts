@@ -19,6 +19,8 @@ export interface ClaudeCliLoginStatus {
   notSubscription?: true;
   authMethod?: string;
   subscriptionType?: string;
+  /** Official CLI tier (for example max_5x / max_20x); never inferred from usage. */
+  planTier?: string;
   email?: string;
   /** Official CLI estimate for the end of this login's refresh chain, not an auth verdict. */
   loginExpiresAt?: string;
@@ -54,6 +56,7 @@ export function parseClaudeCliLoginStatus(stdout: string): ClaudeCliLoginStatus 
     (apiProvider === undefined || apiProvider === 'firstParty');
   if (!subscription) return { loggedIn: false, notSubscription: true };
   const subscriptionType = optionalString(record.subscriptionType);
+  const planTier = optionalString(record.planTier);
   const email = optionalString(record.email);
   const expiry = optionalString(record.loginExpiresAt);
   const loginExpiresAt = expiry && expiry.length <= 64 && Number.isFinite(Date.parse(expiry))
@@ -63,6 +66,7 @@ export function parseClaudeCliLoginStatus(stdout: string): ClaudeCliLoginStatus 
     loggedIn: true,
     ...(authMethod ? { authMethod } : {}),
     ...(subscriptionType ? { subscriptionType } : {}),
+    ...(planTier ? { planTier } : {}),
     ...(email ? { email } : {}),
     ...(loginExpiresAt ? { loginExpiresAt } : {}),
   };

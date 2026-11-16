@@ -782,6 +782,19 @@ export function isRemoteAgentReadInvoke(channel: string, args: unknown[] | undef
   return !!request && typeof request === 'object' && (request as { op?: unknown }).op === 'poll';
 }
 
+/**
+ * 远程 Agent poll 是长轮询：没有新数据时被控端会刻意挂起至多 waitMs。返回这次调用
+ * 预期的挂起上限(非 poll 为 0)，只供诊断把它从「慢」的判定里扣除，不改超时与重试。
+ */
+export function remoteAgentInvokeHoldMs(channel: string, args: unknown[] | undefined): number {
+  if (!isRemoteAgentReadInvoke(channel, args)) return 0;
+  const waitMs = (args![0] as { waitMs?: unknown }).waitMs;
+  if (waitMs === undefined) return REMOTE_AGENT_READ_WAIT_MS;
+  return Number.isSafeInteger(waitMs) && (waitMs as number) >= 0
+    ? Math.min(waitMs as number, REMOTE_AGENT_READ_WAIT_MS)
+    : 0;
+}
+
 // ─── 控制端解析被控端回包(对端可能是不同版本，按最小合同防御)───────────────
 
 /** 控制端接受的单次 read 数据上限：高于本版本的 READ_MAX_BYTES，给新版被控端留余量。 */

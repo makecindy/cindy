@@ -40,6 +40,8 @@ const state = vi.hoisted(() => ({
   pair: null as null | { generation: string; expiresAt: number; ownerDeviceId: string; executorDeviceId: string },
   check: vi.fn(),
   failGrant: false,
+  grants: 0,
+  warnings: [] as unknown[][],
   failGrantError: undefined as Error | undefined,
   supportsDirect: true,
   supportsFastCache: false,
@@ -63,7 +65,9 @@ vi.mock('../../device-link/providerShareApi.js', () => ({
   providerShareOwnerKey: () => state.owner,
   checkProviderShareDelegation: (...args: unknown[]) => state.check(...args),
   clearProviderShareDelegationChecks: () => {},
+  providerShareDelegationRetryAt: () => 0,
   grantProviderShareDelegation: async ({ executorDeviceId }: { executorDeviceId: string }) => {
+    state.grants++;
     if (state.failGrantError) throw state.failGrantError;
     if (state.failGrant) throw Error('server unavailable');
     state.pair = { generation: randomUUID(), expiresAt: Date.now() + 30 * 60_000,
@@ -151,7 +155,7 @@ vi.mock('../../usage/providerPartyUsageStore.js', () => ({
   flushProviderPartyUsage: async () => {}, currentProviderPartyUsageStore: () => ({}),
 }));
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-fast-sync-'));
-vi.mock('../../logger.js', () => ({ createLogger: () => ({ info() {}, warn() {}, error() {} }) }));
+vi.mock('../../logger.js', () => ({ createLogger: () => ({ info() {}, warn(...args: unknown[]) { state.warnings.push(args); }, error() {} }) }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => state.owner,
   ownerScopedUserDataPath: (file: string) => path.join(temporary, state.owner, file),
@@ -229,6 +233,8 @@ beforeEach(() => {
   state.revoked = [];
   state.pair = null;
   state.failGrant = false;
+  state.grants = 0;
+  state.warnings = [];
   state.failGrantError = undefined;
   state.supportsDirect = true;
   state.supportsFastCache = false;
@@ -703,6 +709,60 @@ describe('direct allocation authorization and Fast prebinding', () => {
         .some((row) => row.sessionId === 'task_a' && row.committedAt !== undefined)).toBe(true);
     },
   );
+
+  // Unit / installed O callbacks + real receipt ledger, fake clock. Repeated
+  // snapshot/model/sweep triggers and host rebuild used to retry a failed
+  // provisional restoration immediately. Other tests only exercised one sweep.
+  it.each([false, true])('keeps failed receipt repairs cooled across reentry and host rebuild (revoked: %s)', async (revoked) => {
+    state.supportsFastCache = true;
+    await installDirectHost();
+    await allocate('repair-history');
+    const old = state.usage!.listActiveDirectReceiptRoutes(state.owner)[0];
+    await state.usage!.registerDirectReceiptRoute({ ...old, generation: randomUUID(), committedAt: undefined });
+    disposeRemoteAgentHost();
+    await state.usage!.flush();
+    await installDirectHost();
+    vi.useFakeTimers({ toFake: ['performance'] });
+    const retryAt = Date.now() + 90_000;
+    state.failGrantError = Object.assign(Error('rate limited'), { statusCode: 429, retryAt });
+    const before = state.grants;
+    state.hostChanged!();
+    await vi.waitFor(() => expect(state.grants).toBe(before + 1));
+    for (let i = 0; i < 20; i++) { state.hostChanged!(); state.modelChanged!(); }
+    vi.advanceTimersByTime(5_000);
+    expect(state.grants).toBe(before + 1);
+    disposeRemoteAgentHost();
+    await state.usage!.flush();
+    await installDirectHost();
+    state.hostChanged!();
+    vi.advanceTimersByTime(60_000);
+    state.hostChanged!();
+    expect(state.grants).toBe(before + 1);
+    if (revoked) {
+      state.approved = false;
+      state.hostChanged!();
+      await vi.waitFor(() => expect(state.delegateCalls.some(request => request.op === 'delegate'
+        && request.action === 'revoke' && request.generation === old.generation), JSON.stringify({ old: old.generation,
+          calls: state.delegateCalls, warnings: state.warnings,
+          rows: state.usage!.listActiveDirectReceiptRoutes(state.owner),
+        })).toBe(true));
+      expect(await allocate('forbidden')).toBeNull();
+      expect(state.grants).toBe(before + 1);
+      return;
+    }
+    // Fresh foreground tasks are not blocked by this receipt's retry date.
+    state.failGrantError = undefined;
+    const foreground = allocate('foreground');
+    await vi.waitFor(() => expect(state.grants, JSON.stringify(state.warnings)).toBe(before + 2), { timeout: 500 });
+    expect(await foreground).not.toBeNull();
+    vi.advanceTimersByTime(25_000);
+    state.hostChanged!();
+    await vi.waitFor(() => expect(state.usage!.listActiveDirectReceiptRoutes(state.owner)
+      .filter(row => row.sessionId === 'repair-history'), JSON.stringify(state.warnings)).toHaveLength(1), { timeout: 1_000 });
+    expect(state.usage!.listActiveDirectReceiptRoutes(state.owner)
+      .find(row => row.sessionId === 'repair-history')?.committedAt).toBeDefined();
+    expect(delegation.delegatedProviderShareSessionAllowed(guestPeer, 'foreground')).toBe(true);
+  }, 5_000);
 });
 
 function blockCapabilitiesRequest() {

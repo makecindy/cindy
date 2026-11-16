@@ -83,7 +83,7 @@ import {
 import { preparePinnedClaudeSkillInvocation } from './pinned-skill-invocation.js';
 import { isBotMcpServerAllowed } from '../shared/bot-runtime-policy.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
-import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
+import { loadMemoryContext } from '../../memory/context.js';
 import { MemoryFlushController } from '../../memory/flush-controller.js';
 import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
 import type {
@@ -1005,11 +1005,18 @@ export class ClaudeCodeAgent extends BaseAgent {
   ): ClaudeSdkEffort | undefined {
     const descriptor = this.capabilities.availableModels.find((m) => m.id === model);
     // 来源不明(null)时不收窄,只保留原有的「无档位模型不下发」判断。
+    const hasRouteResolver = Boolean(this.deps.resolveModelEfforts);
     const routeEfforts = this.routeEffortsForModel(model, providerId);
-    if ((routeEfforts ?? descriptor?.efforts)?.length === 0) return undefined;
+    const efforts = hasRouteResolver ? routeEfforts : descriptor?.efforts;
+    const routeEffortsUnknown = hasRouteResolver && routeEfforts === null;
+    // 自定义来源未声明能力时, efforts=[] 只是占位值; 保留用户显式选择,交由
+    // Claude Code SDK/CLI 裁决。只有明确声明为空的模型才省略 effort。
+    if (!routeEffortsUnknown && (hasRouteResolver || descriptor?.effortsUnknown !== true) && efforts?.length === 0) {
+      return undefined;
+    }
     // 会话档位可能来自上一个模型(如 Claude 的 xhigh),原样下发会被只认目录档位的
     // 上游拒绝(GLM-5.3 收到 xhigh 回 400/1210,#5402)。按目标来源声明的档位收窄。
-    return clampEffortForClaude((clampEffortToSupported(effort, routeEfforts ?? undefined) as Effort | undefined) ?? effort);
+    return clampEffortForClaude((clampEffortToSupported(effort, routeEffortsUnknown ? undefined : efforts ?? undefined) as Effort | undefined) ?? effort);
   }
 
   private sdkMaxEffortFallbackForModel(
@@ -1474,6 +1481,11 @@ export class ClaudeCodeAgent extends BaseAgent {
       : { model: opts.model };
     const nativeSubscriptionAccount = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
     nativeSubscriptionAccount?.assertCurrent();
+    // Provider auth itself checks proxy readiness. Let a local launch join or
+    // retry warmup before that check; read-only auth status stays side-effect free.
+    if (!opts.remoteHostId && credentialMode === 'provider-oauth') {
+      await this.deps.runtimeConfig.resolveLocalEndpoint?.();
+    }
     const authState = await this.deps.auth.getState({ ...authOptions, nativeSubscriptionAccount });
     if (!authState.authenticated) {
       throw new AgentNotAuthenticatedError(
@@ -1565,6 +1577,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       nativeSubscriptionAccount,
       credentialMode,
       nativeCliAuth,
+      // Remote startup also builds this preliminary env, but must never wait
+      // for or materialize the controller's local model proxy.
+      mode: opts.remoteHostId ? 'remote' : 'local',
       authModel: opts.model,
       sessionProviderId: opts.providerId ?? null,
       activeModel: sdkModel,
@@ -1824,11 +1839,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     if (makerMemoryEnabled && makerMemory) {
       try {
         // 设备托管：记忆在任务所在电脑上，只用随启动选项带来的快照，不打开本机记忆库。
-        const store = hosted ? null : await makerMemory.getStore(memoryScopeKey);
-        makerMemoryRules = opts.makerMemoryScopeKey?.startsWith('bot:')
-          ? ''
-          : MAKER_MEMORY_RULES;
-        makerMemoryIndex = opts.makerMemoryIndexSnapshot ?? (store ? await store.getIndex() : '');
+        const memoryContext = await loadMemoryContext({
+          manager: makerMemory, scopeKey: memoryScopeKey, hosted: !!hosted,
+          snapshot: opts.makerMemoryIndexSnapshot, projectDirectory: opts.makerMemoryProjectDir,
+        });
+        makerMemoryRules = memoryContext.rules;
+        makerMemoryIndex = memoryContext.index;
         memoryFlushController = new MemoryFlushController({
           logger: log.child('memory-flush'),
           workdir: memoryScopeKey,

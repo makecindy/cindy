@@ -21,6 +21,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({
 }) }));
 import { WebhookAccountManager } from '../WebhookAccountManager';
 import { WebhookTriggerPanel } from '../WebhookTriggerPanel';
+import { WebhookSourceFields } from '../WebhookSourceFields';
 
 const endpoint = { id: 'whk_old', url: 'https://example.test/hooks/whk_old', scheduleId: 'old',
   scheduleName: '旧电脑巡检', deviceId: 'retired', deviceName: '旧电脑', currentDevice: false,
@@ -205,4 +206,40 @@ it('已释放状态和重新连接入口不藏在配置里，仍须确认后恢�
   expect(c.api.restoreWebhookEndpoint).not.toHaveBeenCalled();
   state.confirm.mockResolvedValueOnce(true); fireEvent.click(reconnect);
   await waitFor(() => expect(c.api.restoreWebhookEndpoint).toHaveBeenCalledWith('fixture'));
+});
+
+// PR #10662 review regression / unit-jsdom: the editor and background detail
+// previously each refreshed GitHub account state on focus. Existing tests only
+// mount one card. Minimal input: active App task with an unauthorized repository,
+// detail setup suspended while the real source form is mounted.
+it('lets the editor own account reads while the background detail is covered', async () => {
+  const githubAppStatus = vi.fn(async () => ({ available: true, login: 'example',
+    repositories: [], unavailable: ['example/project'] }));
+  Object.assign(window.electronAPI, { gitContext: { githubAppStatus } });
+  Object.assign(window.electronAPI.maker.schedule, { webhookStatus: async () => ({
+    receiver: 'cloud', connected: false, hasSecret: true, ignored: 0,
+  }) });
+  const schedule = { id: 'app', status: 'active', webhookTrigger: {
+    source: { preset: 'github-app', repositories: ['example/project'] },
+  } } as Schedule;
+  const element = (editing: boolean) => <MemoryRouter>
+    <WebhookTriggerPanel schedule={schedule} connectionSetupVisible={!editing} />
+    {editing && <WebhookSourceFields preset="github-app" signed formatText="" events=""
+      repositories="example/project" onEventsChange={() => {}} onPresetChange={() => {}}
+      onSignedChange={() => {}} onFormatChange={() => {}} />}
+  </MemoryRouter>;
+  const view = render(element(false));
+  await screen.findByRole('button', { name: '授权仓库' });
+  expect(githubAppStatus).toHaveBeenCalledTimes(1);
+  view.rerender(element(true));
+  await waitFor(() => expect(githubAppStatus).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.getByRole('button', { name: '授权仓库' }).hasAttribute('disabled')).toBe(false));
+  await act(async () => fireEvent(window, new Event('focus')));
+  expect(githubAppStatus).toHaveBeenCalledTimes(3);
+  expect(screen.getAllByRole('button', { name: '授权仓库' })).toHaveLength(1);
+  view.rerender(element(false));
+  await waitFor(() => expect(githubAppStatus).toHaveBeenCalledTimes(4));
+  await act(async () => fireEvent(window, new Event('focus')));
+  expect(githubAppStatus).toHaveBeenCalledTimes(5);
+  expect(screen.getAllByRole('button', { name: '授权仓库' })).toHaveLength(1);
 });

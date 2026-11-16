@@ -175,7 +175,7 @@ import {
 import { applyPiDisabledSkillSettings, filterPiDisabledProjectSkills, piDisabledDiscoveryPaths } from './skill-activation.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
 import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
-import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
+import { loadMemoryContext } from '../../memory/context.js';
 import type {
   Capabilities,
   ManualCompactResult,
@@ -253,6 +253,8 @@ import {
   assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
   emptyPiProjectResourceCliPaths,
+  estimateSpawnArgvLength,
+  piSpawnArgvBudget,
   type PiProjectResourceCliPaths,
   filterPiProjectCliSkills,
   piProjectResourceCliArgs,
@@ -268,6 +270,7 @@ import {
   markPiHostTurnStartPending,
   rollbackPiHostAbortRequest,
   rollbackPiHostTurnStart,
+  setPiTranslateModel,
   translatePiEvent,
   usageSnapshotOf,
   piTurnUsageOf,
@@ -1130,7 +1133,10 @@ function piManagedCommandFailureReceipt(strings: PiExtensionUiStrings, error: un
         : 'Keep the current runtime. Check the official asset and retry pi update --self after the unpacking or verification problem is resolved.';
   const message = (details.packagesUpdated ? 'Pi packages updated successfully. ' : '')
     + (details.phase === 'host-binary-update'
-      ? `Cindy Host Pi update failed (${details.hostStage ?? 'unknown stage'}). ${hostRecovery}`
+      ? details.hostStage === 'unsupported'
+        // A host that cannot install a new Pi core says so; there is nothing to retry.
+        ? 'Updating the Pi core is not available here yet; package install, update and remove still work.'
+        : `Cindy Host Pi update failed (${details.hostStage ?? 'unknown stage'}). ${hostRecovery}`
       : details.packagesUpdated
         ? 'Pi core update failed. Retry pi update --self; do not repeat the completed package phase.'
         : 'Pi native command failed. Inspect the current state before retrying.');
@@ -3853,10 +3859,15 @@ export class PiAgent extends BaseAgent {
     // curated 记忆)。gate 与 CC 同口径;best-effort,失败只 warn,绝不阻断会话。
     // memoryScopeKey / compactionMemoryEnabled 已在 MCP 注册前解析并冻进 ctx。
     let makerMemoryIndex = '';
+    let makerMemoryRules = '';
     if (makerMemoryPromptEnabled) {
       try {
-        makerMemoryIndex = opts.makerMemoryIndexSnapshot
-          ?? await (await this.deps.makerMemory!.getStore(memoryScopeKey)).getIndex();
+        const memoryContext = await loadMemoryContext({
+          manager: this.deps.makerMemory, scopeKey: memoryScopeKey, hosted: !!opts.deviceHosted,
+          snapshot: opts.makerMemoryIndexSnapshot, projectDirectory: opts.makerMemoryProjectDir,
+        });
+        makerMemoryIndex = memoryContext.index;
+        makerMemoryRules = memoryContext.rules;
       } catch (err) {
         this.deps.logger.warn('pi maker memory load failed at session start (skipping injection)', {
           message: err instanceof Error ? err.message : String(err),
@@ -3871,7 +3882,8 @@ export class PiAgent extends BaseAgent {
       const body = truncateToByteBudget(summary, PI_DIGEST_MAX_BODY_BYTES);
       const seq = ++digestSeq;
       // slug 唯一:sessionId 片段 + 递增序号;resume/跨会话用 Date.now 防撞名(create 模式撞名会抛)。
-      const slug = slugifyForMemory(`digest-${digestSlugBase}-${Date.now()}-${seq}`, 64);
+      // 不再带 `digest-` 前缀:文件名已由 storage 加 `digest_`, 重复前缀会被前缀校验拒绝。
+      const slug = slugifyForMemory(`${digestSlugBase}-${Date.now()}-${seq}`, 64);
       try {
         await manager.write(memoryScopeKey, {
           type: 'digest',
@@ -3908,8 +3920,7 @@ export class PiAgent extends BaseAgent {
       ['host', isolatedBotProfile(opts.botRuntimeProfile) ? undefined : this.deps.runtimeConfig.systemPrompt?.trim()],
       ['plugins', ghostRosterPrompt.trim()],
       ['profile', reviewMode ? undefined : opts.botProfileContextPrompt?.trim()],
-      ['memoryRules', makerMemoryPromptEnabled && !opts.makerMemoryScopeKey?.startsWith('bot:')
-        ? MAKER_MEMORY_RULES : undefined],
+      ['memoryRules', makerMemoryRules],
       ['memoryIndex', makerMemoryIndex.trim()],
       ['user', reviewMode ? undefined : opts.botUserProfilePrompt?.trim()],
       ['user', reviewMode || isolatedBotProfile(opts.botRuntimeProfile) ? undefined : opts.userPrompt?.trim()],
@@ -4109,6 +4120,7 @@ export class PiAgent extends BaseAgent {
     // discovery and path checks can fail before any projection is created.
     let managedSkillPaths: string[];
     let managedSkillRoot: string | undefined;
+    let projectSkillRoot: string | undefined;
     let args: string[];
     const taskSystemPrompt = opts[TASK_SYSTEM_PROMPT] ?? '';
     let taskSystemPromptPath: string | undefined;
@@ -4152,7 +4164,7 @@ export class PiAgent extends BaseAgent {
         await writeFile(taskSystemPromptPath, taskSystemPrompt, 0o600);
       }
 
-      args = [
+      const buildArgs = (projectResourceArgs: readonly string[]): string[] => [
         '--mode',
         'rpc',
         // --no-approve remains the hard project-settings gate. Explicit --skill /
@@ -4189,15 +4201,37 @@ export class PiAgent extends BaseAgent {
         bridgeExtensionPath,
         ...(localSubagentSupported ? ['--extension', subagentExtensionPath] : []),
         ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
-        ...(loadProjectResourcesInPlace
-          ? piProjectResourceCliArgs(projectResourceCli)
-          : []),
+        ...(loadProjectResourcesInPlace ? projectResourceArgs : []),
       ];
+      args = buildArgs(loadProjectResourcesInPlace ? piProjectResourceCliArgs(projectResourceCli) : []);
+      const spawnBudget = piSpawnArgvBudget(process.platform);
+      if (
+        projectResourceCli.skills.length > 0
+        && spawnBudget !== null
+        && estimateSpawnArgvLength(args, process.platform) > spawnBudget
+      ) {
+        // .agents/.claude/.codex may expose the same Skills through junctions.
+        // Keep the original explicit paths for ordinary launches, but collapse
+        // an oversized project-Skill segment into one session-owned root.
+        projectSkillRoot = path.join(configHome, 'cindy-project-skills');
+        args = buildArgs([
+          '--skill', projectSkillRoot,
+          ...projectResourceCli.promptTemplates.flatMap((promptPath) => ['--prompt-template', promptPath]),
+          ...projectResourceCli.extensions.flatMap((extensionPath) => ['--extension', extensionPath]),
+        ]);
+      }
       if (managedSkillRoot) {
         await fs.mkdir(managedSkillRoot);
         for (const [index, skillPath] of managedLaunchSkills.entries()) {
           // Preserve discovery order for same-name skills without long filenames.
           await fs.symlink(path.dirname(skillPath), path.join(managedSkillRoot, String(index).padStart(12, '0')),
+            process.platform === 'win32' ? 'junction' : 'dir');
+        }
+      }
+      if (projectSkillRoot) {
+        await fs.mkdir(projectSkillRoot);
+        for (const [index, skillPath] of projectResourceCli.skills.entries()) {
+          await fs.symlink(skillPath, path.join(projectSkillRoot, String(index).padStart(12, '0')),
             process.platform === 'win32' ? 'junction' : 'dir');
         }
       }
@@ -4226,7 +4260,7 @@ export class PiAgent extends BaseAgent {
         return accepted;
       };
     }
-    const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
+    const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger, { model: initialWireModel });
     ctx.getPriceVariant = opts.getPriceVariant;
     ctx.resolveUsagePriceVariant = opts.resolveUsagePriceVariant;
     ctx.workingContextWindow = startupWorkingContextWindow;
@@ -4247,6 +4281,9 @@ export class PiAgent extends BaseAgent {
     // 强制确认策略命中的工具 —— 与 Claude(task_notification 续跑)/ Codex(plan
     // follow-up send)同口径。清空只认 turn 终态,由 send 预检覆盖为最新值。
     let activeTurnPermissionPolicy: TurnPermissionPolicy | null = null;
+    // Ownership begins at send preparation, before native agent_start. Policy
+    // objects can be reused across turns, so their identity is not a turn fence.
+    let activeTurnPermissionPolicyOwner: symbol | null = null;
     let mutableModel = opts.model;
     let appliedCacheRoutes = cacheRoutes;
     let appliedModelConfigHash = modelConfigHash;
@@ -4379,6 +4416,7 @@ export class PiAgent extends BaseAgent {
       opts?: { dismissPending?: boolean; surfaceLost?: boolean },
     ): void => {
       activeTurnPermissionPolicy = null;
+      activeTurnPermissionPolicyOwner = null;
       if (opts?.surfaceLost) autoReviewDecisionCache.clear();
       if (opts?.dismissPending) {
         dismissAllPendingPrompts(reason, 'deny', { surfaceLost: opts.surfaceLost === true });
@@ -4694,6 +4732,8 @@ export class PiAgent extends BaseAgent {
       task: PiSubagentRunStatus['tasks'][number],
     ): Promise<void> => {
       if (closed && !detachedApprovalSupervisorActive) return;
+      const approval = task.pendingApproval;
+      if (!approval || status.interactiveOwner === 'extension') return;
       // Shared userData can contain active runs from another Desktop instance.
       // Missing ownership is legacy metadata and must fail closed here. A
       // reopened task's new handle may *adopt* an approval parked by an earlier
@@ -4701,19 +4741,18 @@ export class PiAgent extends BaseAgent {
       // gone) — otherwise navigation-close approvals stay unreachable forever.
       // Adoption moves the delivery surface only; the verdict path below forces
       // explicit confirmation for it.
-      const approvalScope = piSubagentApprovalScope(
+      const approvalScope = await piSubagentApprovalScope(
         status,
         subagentRuntimeOwnerId,
         process.pid,
         sid,
       );
+      if (accountBoundaryTeardown || (closed && !detachedApprovalSupervisorActive)) return;
       if (approvalScope === 'refused') return;
       const adopted = approvalScope === 'adopted';
       // Controls must carry the run's own owner id, not ours, or the mailbox
       // owner filter would reject an adopted answer.
       const controlOwnerId = status.runtimeOwnerId ?? subagentRuntimeOwnerId;
-      const approval = task.pendingApproval;
-      if (!approval || status.interactiveOwner === 'extension') return;
       const turnChangeCapture = approval.method === 'confirm'
         && approval.title === 'cindy:turn-change-capture';
       const key = `${status.runId}:${task.childId}:${approval.id}`;
@@ -5217,7 +5256,7 @@ export class PiAgent extends BaseAgent {
         active ||= [...piSubagentStatuses.values()].some((status) => !isPiSubagentTerminal(status.state));
         succeeded = true;
       } catch (error) {
-        deps.logger.warn('pi subagent durable status refresh failed', {
+        this.deps.logger.warn('pi subagent durable status refresh failed', {
           message: error instanceof Error ? error.message : String(error),
         });
       } finally {
@@ -5841,6 +5880,9 @@ export class PiAgent extends BaseAgent {
         transport,
         logger: this.deps.logger,
         onEvent: (event: PiRpcEvent) => {
+          // Retry exhaustion already settled the old run. Its optional native
+          // tail must not clear a new prompt's permission policy before start.
+          if (ctx.turnSettled && (event.type === 'agent_settled' || event.type === 'auto_retry_end')) return;
           const cacheInput = cacheInputTracker.observe(event);
           if (cacheInput) pendingCacheCompatibility = { key: cacheInput.key, value: readCacheCompatibility() };
           if (event.type === 'extension_ui_request' && event.method === 'input' && event.title === 'cindy:cache-input') {
@@ -6455,6 +6497,7 @@ export class PiAgent extends BaseAgent {
             ...managedPackageRoots,
             ...projectResourceCli.skills,
             ...managedSkillPaths,
+            ...(projectSkillRoot ? [projectSkillRoot] : []),
             ...(managedSkillRoot ? [managedSkillRoot] : []),
             ...projectResourceCli.promptTemplates,
             ...projectResourceCli.extensions,
@@ -7655,6 +7698,7 @@ export class PiAgent extends BaseAgent {
       mutableModel = model;
       pendingCurrentDescriptorRefresh = false;
       mutableWireModel = wireModel;
+      setPiTranslateModel(ctx, wireModel);
       mutablePiProviderId = provider;
       activeEffortSnapshot = nextEffortSnapshot;
       mutableProviderId = effectiveProviderId;
@@ -7928,8 +7972,10 @@ export class PiAgent extends BaseAgent {
         // (plan 审批实施轮 / 自动继续)不经 send,仍读这份闭包值继承(§7.10)。
         // provider 接受前任何失败都必须撤销,避免"任务显示已开始、实际未启动"却残留策略。
         const previousTurnPermissionPolicy = activeTurnPermissionPolicy;
+        const previousTurnPermissionPolicyOwner = activeTurnPermissionPolicyOwner;
         const previousModelRequestControl = activeModelRequestControl;
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
+        activeTurnPermissionPolicyOwner = Symbol('pi-turn-permission-policy');
         activeModelRequestControl = sendOpts?.[MODEL_REQUEST_CONTROL];
         let providerAccepted = false;
         let promptRequestStarted = false;
@@ -8266,6 +8312,7 @@ export class PiAgent extends BaseAgent {
           // turn 没启动；此时恢复旧 policy 会让正在运行的新 turn 用错安全边界。
           if (!providerAccepted) {
             activeTurnPermissionPolicy = previousTurnPermissionPolicy;
+            activeTurnPermissionPolicyOwner = previousTurnPermissionPolicyOwner;
             activeModelRequestControl = previousModelRequestControl;
             if (reviewIntentUpdated) {
               currentAutoReviewIntent = '';
@@ -8435,6 +8482,7 @@ export class PiAgent extends BaseAgent {
 
       async requestGracefulStop(): Promise<void> {
         if (closed || piProcessExited || rpcDisconnected) throw new Error('No active Pi turn to stop');
+        const stoppedPolicyOwner = activeTurnPermissionPolicyOwner;
         const hostAbortToken = markPiHostAbortRequested(ctx);
         autoReviewDecisionCache.clear();
         dismissAllPendingPrompts('turn_aborted', 'deny');
@@ -8452,11 +8500,14 @@ export class PiAgent extends BaseAgent {
           rollbackPiHostAbortRequest(ctx, hostAbortToken);
           throw new Error(`Pi graceful stop rejected: ${resp.error ?? 'unknown'}`);
         }
-        clearActiveTurnPermissionPolicy('turn_aborted');
+        if (activeTurnPermissionPolicyOwner === stoppedPolicyOwner) {
+          clearActiveTurnPermissionPolicy('turn_aborted');
+        }
       },
 
       async abort(): Promise<void> {
         if (closed || piProcessExited || rpcDisconnected) return;
+        const stoppedPolicyOwner = activeTurnPermissionPolicyOwner;
         const hostAbortToken = markPiHostAbortRequested(ctx);
         autoReviewDecisionCache.clear();
         // 先把等待中的调用 fail-closed 唤醒；即使 abort RPC 失败，也不能让用户刚拒绝/
@@ -8467,7 +8518,9 @@ export class PiAgent extends BaseAgent {
         try {
           const resp = await proc.request({ type: 'abort' });
           if (resp.success) {
-            clearActiveTurnPermissionPolicy('turn_aborted');
+            if (activeTurnPermissionPolicyOwner === stoppedPolicyOwner) {
+              clearActiveTurnPermissionPolicy('turn_aborted');
+            }
           } else {
             rollbackPiHostAbortRequest(ctx, hostAbortToken);
             deps.logger.warn('pi abort request rejected', {

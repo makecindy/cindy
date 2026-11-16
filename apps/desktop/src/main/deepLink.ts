@@ -1,3 +1,4 @@
+import { parseSettingsNavigationUrl, parseSettingsNavigationTarget, type SettingsNavigationTarget } from '@cindy/maker-shared/settings-navigation';
 /**
  * deepLink — cindy:// (+ 历史 xdt-maker://) custom URL scheme + folder-context-menu handoff
  * ---------------------------------------------------------------------------
@@ -126,7 +127,9 @@ export type DeepLinkPayload =
    * "打开 xdt-maker" 按钮 / 自动唤起)。main 进程内消化,不发给 renderer、
    * 不进 pending 缓存 (冷启动时 app 启动本身就会前台,缓存无意义)。
    */
-  | { type: 'focus' };
+  | { type: 'focus' }
+  /** Device-bound settings navigation from chat or an authenticated controller. */
+  | { type: 'settings-navigation'; target: SettingsNavigationTarget };
 
 /**
  * 解析 cindy:// / xdt-maker:// URL 为 typed payload(两种 scheme 都认,
@@ -139,6 +142,10 @@ export type DeepLinkPayload =
  */
 export function parseDeepLink(url: string): DeepLinkPayload | null {
   if (typeof url !== 'string') return null;
+  if (/^cindy:\/\/settings-link(?:[/?#]|$)/.test(url)) {
+    const target = parseSettingsNavigationUrl(url);
+    return target ? { type: 'settings-navigation', target } : null;
+  }
   const v2 = parseAgentNetSharingInvitation(url, 'shared-task');
   if (v2) return { type: 'shared-task-join', invitation: v2.receipt.invitation, server: v2.server,
     link: buildAgentNetSharingInvitation(v2.receipt, v2.server) };
@@ -422,7 +429,7 @@ export function handleIncomingOpenFolder(workingDir: string, source: string): vo
   dispatchDeepLink(payload);
 }
 
-export function handleIncomingShareFile(filePath: string, source: string): void {
+export function handleIncomingShareFile(filePath: string, source: string, owner?: DataOwnerBroadcastScope): void {
   if (typeof filePath !== 'string' || filePath.length === 0) {
     log.warn('ignoring empty --open-share-file', { source });
     return;
@@ -437,7 +444,7 @@ export function handleIncomingShareFile(filePath: string, source: string): void 
     return;
   }
   log.info('received open-share-file', { source, filePath: cleaned });
-  dispatchDeepLink({ type: 'share-import', filePath: cleaned });
+  dispatchDeepLink({ type: 'share-import', filePath: cleaned }, true, owner);
 }
 
 /**
@@ -470,6 +477,12 @@ export function focusMainWindow(platform: NodeJS.Platform = process.platform): b
   }
   if (platform === 'darwin') app.focus({ steal: true });
   return true;
+}
+
+/** Queue a validated navigation request; this never changes a setting. */
+export function openMainWindowSettingsNavigation(target: SettingsNavigationTarget): void {
+  if (!parseSettingsNavigationTarget(target)) throw new Error('Invalid settings target');
+  dispatchDeepLink({ type: 'settings-navigation', target });
 }
 
 /**

@@ -382,14 +382,12 @@ describe('Shared create project picker', () => {
     const send = newMakerDraftRouteSource.slice(sendStart, goalStart);
     const goal = newMakerDraftRouteSource.slice(goalStart);
 
-    // Checkbox APPLY is a bidirectional gate. Branch APPLY only gates when the
-    // current checkbox intent is ON, so OFF can still create a base-repo task.
+    // Both APPLY transactions must settle before consuming the displayed choice.
+    // OFF mismatch and draft preservation are exercised by newMakerDraftSubmission.
     for (const flow of [send, goal]) {
       expect(flow).toContain('wtPreferenceSavingRef.current');
       expect(flow).toContain('wtPreferenceAuthorityUnknownRef.current');
-      expect(flow).toContain(
-        'selectedWorktree.enabled && wtBranchPreferenceSavingRef.current',
-      );
+      expect(flow).toContain('wtBranchPreferenceSavingRef.current');
     }
     expect(newMakerDraftRouteSource).toContain('wtPreferenceWriteChainRef.current');
     expect(newMakerDraftRouteSource).toContain('wtBranchWriteChainRef.current');
@@ -454,18 +452,17 @@ describe('Shared create project picker', () => {
 
   it('merges branch and worktree into a single joined pill (Claude Code style)', () => {
     // 2026-07-29 用户裁决:[⎇ 分支 │ ☑ worktree] 是一个 pill、两个点击区;
-    // 分支选择与 checkbox 独立,未勾时也可先选源分支;悬停任一半区时分隔线隐去。
+    // 分支选择与 checkbox 独立;未勾时操作实际分支,悬停任一半区时分隔线隐去。
     expect(worktreeChipsSource).toContain('function BranchWorktreeChip');
     expect(worktreeChipsSource).toContain('data-testid="create-agent-branch-worktree"');
     expect(worktreeChipsSource).toContain(
-      '!(disabled || branchDisabled || environmentDisabled) && baseRepo !== null',
+      '!(disabled || branchDisabled || environmentDisabled || checkout.busy) &&',
     );
     expect(worktreeChipsSource).toContain('aria-disabled={!branchInteractive}');
     expect(worktreeChipsSource).toContain('tabIndex={branchInteractive ? 0 : -1}');
     expect(worktreeChipsSource).not.toMatch(/\n\s+disabled=\{!branchInteractive\}/);
-    expect(worktreeChipsSource).toContain(
-      "const branchLabel = sourceBranch || branches.current || currentBranch || 'HEAD'",
-    );
+    // OFF actual branch vs ON source selection is exercised through the real
+    // component in BranchWorktreeChip.test.tsx, including stale-label refresh.
     expect(worktreeChipsSource).toContain(
       'effectiveWorktreeEnabled || branchListWanted ? baseRepo : null',
     );
@@ -482,13 +479,12 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain('if (wd && !isRemoteProjectDraft');
     // device-link 草稿的 git 探测经隧道在被控端执行(本机 git 对远程路径必然误报);
     // SSH(worktreeDisabled)仍不探测。
-    expect(worktreeChipsSource).toContain('deviceLinkReconnectEpoch,');
+    expect(worktreeChipsSource).toContain('deviceLinkReconnectEpoch + branchCheckEpoch,');
     expect(newMakerDraftRouteSource).toContain(
       'deviceLinkReconnectEpoch={remoteDraftRefreshEpoch}',
     );
-    expect(worktreeChipsSource).toContain(
-      "sourceBranch || branches.current || currentBranch || 'HEAD'",
-    );
+    // Old controlled hosts keep the detect-cwd label; the component regression
+    // exercises that fallback without invoking their unsupported checkout channel.
     expect(worktreeChipsSource).not.toContain("sourceBranch || branches.current || 'main'");
   });
 
@@ -855,7 +851,7 @@ describe('Shared create project picker', () => {
   it('disables and guards workspace switching while a send is in flight', () => {
     // 设备、工作区以及本次创建会消费的 worktree 配置都要冻结。
     expect(
-      (newMakerDraftRouteSource.match(/disabled=\{wtCreating \|\| sendInFlight \|\| directoryRecoverySelecting\}/g) ?? []).length,
+      (newMakerDraftRouteSource.match(/disabled=\{\s*wtCreating \|\| (?:wtCheckoutBusy \|\| )?sendInFlight \|\| directoryRecoverySelecting\s*\}/g) ?? []).length,
     ).toBe(3);
     const handler = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf('const handleModePickerSelect = useCallback('),
@@ -1744,12 +1740,21 @@ describe('Shared create project picker', () => {
     // 远程分支按**模型目录所在电脑**的目录 + 草稿当前模型复算,用与 main 同源的解析函数。
     // 目录通常就是被控端的;Agent 在另一台电脑运行时只取那台开放了远程调用的供应商(2026-10-09)。
     expect(body).toContain('effectiveSourceIdForModel(');
-    expect(body).toContain('agentCatalogProviders,');
+    // 目标目录里**可选**的型号清单(新路由准入 + 被控端自己的显示/隐藏过滤):
+    // 被退役 / 要付费 / 被藏起来的型号不能被选成来源(Codex review #9369)。
+    expect(body).toContain('targetSelectableProviders,');
     expect(newMakerDraftRouteSource).toContain(
       '() => (effectiveAgentDeviceId ? remoteAgentProviders(deviceProviders) : deviceProviders),',
     );
     expect(body).toContain('draftInitialModel,');
-    expect(body).toContain('return deviceLinkInitial?.providerId || effectiveSourceIdForModel(');
+    // 播种来源只有在**最终型号**上还能路由时才保留:播种型号被换成目录里的别的型号后,
+    // 那个来源往往不提供新型号,显式带上它会让发送侧对着一个路由不出该型号的来源建任务。
+    expect(body).toContain('const seedProviderId = resolveDraftProviderForModel(');
+    // 播种来源按**显式选择**(explicitDraftProviderId)取,不直接读 holder 里播进去的
+    // providerId:自动默认(applySuggestedDefaultTuple)也会把 providerId 落进快照,把它
+    // 当显式选择保留,首条消息会被钉在断连 / 失败的来源上(Codex review #9369 第十二轮)。
+    expect(body).toContain('explicitDraftProviderId,');
+    expect(body).toContain('return seedProviderId || effectiveSourceIdForModel(');
   });
 
   it('keeps recent-folder storage out of project-option selection', () => {

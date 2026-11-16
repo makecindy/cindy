@@ -1,5 +1,5 @@
 import manifest from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/host-ui/ghost.json';
-import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../src/shared/ghost';
+import type { InstalledGhost } from '../../../src/shared/ghost';
 import { pluginUiInterestKey, type PluginUiInterest, type PluginUiStateChange } from '../../../src/shared/pluginUi';
 import { PluginUiBody, PluginUiMenu, PluginUiProvider, PluginUiSlot, usePluginUiMessageCandidates } from '../../../src/renderer/cindy-brain/PluginUiContributions';
 import { Button } from '../../../src/renderer/components/ui/button';
@@ -7,8 +7,7 @@ import { MessageActionBar } from '../../../src/renderer/components/chat/MessageA
 import { AppFrame, mountPage } from '../../ui-page/harness';
 
 const ghost: InstalledGhost = { manifest: manifest as unknown as InstalledGhost['manifest'], enabled: true,
-  dir: '/fixture', approval: { state: 'approved', revision: 'fixture' }, uiCapabilityApproved: true };
-ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest);
+  dir: '/fixture', approval: { state: 'approved', revision: 'fixture' } };
 let receive: ((update: { epoch: string; updates: PluginUiStateChange[] }) => void) | undefined;
 let epoch = '', interests: PluginUiInterest[] = [];
 const task = 'fixture-task';
@@ -29,6 +28,7 @@ void mountPage({
     },
   },
   render: () => <AppFrame><PluginUiProvider>
+    <p className="pointer-events-none fixed right-2 top-2 z-50 text-12 text-[var(--text-secondary)]">验收样本，非产品默认界面</p>
     <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-auto p-5">
       <div className="flex flex-wrap items-center justify-between gap-2"><h1 className="text-16 font-medium">任务工作台</h1>
         <PluginUiSlot position="session.header" sessionId={task} /><PluginUiMenu sessionId={task} /></div>
