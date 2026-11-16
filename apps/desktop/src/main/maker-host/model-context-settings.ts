@@ -65,13 +65,7 @@ export function contextWindowBudgetChangesEffectiveWindow(input: {
   previous: number | null;
   next: number | null;
 }): boolean {
-  const before = resolveConfiguredContextWindow(
-    input.catalog, input.agent, input.providerId, input.modelId, input.previous,
-  );
-  const after = resolveConfiguredContextWindow(
-    input.catalog, input.agent, input.providerId, input.modelId, input.next,
-  );
-  return before !== after;
+  return desktopContextBudget.contextWindowBudgetChangesEffectiveWindow(input);
 }
 
 /**
