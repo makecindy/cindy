@@ -147,18 +147,23 @@ describe('group reply file delivery', () => {
 
   it('deduplicates accepted symlink targets before the file limit, retaining the first link', async () => {
     const aliases: string[] = [];
-    for (let i = 0; i < 24; i++) {
-      const alias = path.join(work, `same-report-${i}.pdf`);
-      await fs.symlink(pdf, alias);
-      aliases.push(alias);
-    }
+    const links: string[] = [];
     try {
+      for (let i = 0; i < 24; i++) {
+        const alias = path.join(work, `same-report-${i}.pdf`);
+        // Directory junctions exercise real symlink resolution on Windows
+        // without requiring the file-symlink privilege.
+        await fs.symlink(process.platform === 'win32' ? work : pdf, alias,
+          process.platform === 'win32' ? 'junction' : 'file');
+        links.push(alias);
+        aliases.push(process.platform === 'win32' ? path.join(alias, path.basename(pdf)) : alias);
+      }
       const body = [...aliases, pdf].map(source => `[report](<${source}>)`).join(' ');
       const result = await prepareChatReplyFiles(body, 'lane', () => {});
       expect(result.attachments).toHaveLength(1);
       expect(result.attachments[0]!.name).toBe(path.basename(aliases[0]!));
       expect((await result.attachments[0]!.readBytes!()).toString()).toBe('%PDF-1.4\nreport');
-    } finally { for (const alias of aliases) await fs.unlink(alias); }
+    } finally { for (const link of links) await fs.unlink(link); }
   });
 
   it('deduplicates real filesystem identities before applying the count limit', async () => {
@@ -262,12 +267,37 @@ describe('group reply file delivery', () => {
     await expect(prepareChatReplyFiles(`[file](<${url}>)`, 'lane', () => {})).rejects.toThrow('ATTACHMENT_UNAVAILABLE');
   });
 
+  // #10612, unit: the real preparer must omit only lexical outside references,
+  // before filesystem inspection; unrelated links and the input Markdown survive.
+  it.each(['relative', 'absolute', 'reference', 'link-only'] as const)('omits an outside file without inspecting it (%s)', async kind => {
+    const outside = path.join(root, 'private.pdf');
+    const target = kind === 'absolute' ? pathToFileURL(outside).href : '../private.pdf';
+    const text = kind === 'reference' ? `Done. [handoff][file]\n\n[file]: ${target}`
+      : `${kind === 'link-only' ? '' : 'Done. '}[handoff](${target})`;
+    const realpath = vi.spyOn(fs, 'realpath');
+    const lstat = vi.spyOn(fs, 'lstat');
+    const open = vi.spyOn(fs, 'open');
+    try {
+      const result = await prepareChatReplyFiles(text, 'lane', () => {}, undefined, true);
+      expect(result).toMatchObject({ omittedFiles: 1, attachments: [] });
+      expect(result.text.trim()).toBe(kind === 'link-only' ? 'handoff' : 'Done. handoff');
+      expect(realpath.mock.calls.map(args => args[0])).toEqual([work]);
+      expect(lstat).not.toHaveBeenCalled();
+      expect(open).not.toHaveBeenCalled();
+    } finally { realpath.mockRestore(); lstat.mockRestore(); open.mockRestore(); }
+  });
+
+  it.each(['file://server/private.pdf', 'xdt-file://local?path=/private.pdf&remoteHostId=other', '../%2e%2e/private.pdf'])
+    ('does not turn invalid or remote file syntax into an omitted file: %s', async target => {
+      await expect(prepareChatReplyFiles(`[file](${target})`, 'lane', () => {}, undefined, true)).rejects.toThrow('ATTACHMENT_UNAVAILABLE');
+    });
+
   it('refuses a symlink escaping the task before reading its bytes', async () => {
     const link = path.join(work, 'escape');
     // A real directory junction also works on unprivileged Windows runners.
     await fs.symlink(root, link, process.platform === 'win32' ? 'junction' : 'dir');
     try {
-      const result = await prepareChatReplyFiles('[file](./escape/private.pdf)', 'lane', () => {});
+      const result = await prepareChatReplyFiles('[file](./escape/private.pdf)', 'lane', () => {}, undefined, true);
       await expect(result.attachments[0]!.readBytes!()).rejects.toThrow('ATTACHMENT_UNAVAILABLE');
     } finally { await fs.unlink(link); }
   });
@@ -276,7 +306,7 @@ describe('group reply file delivery', () => {
     const link = path.join(work, 'hard-link.pdf');
     await fs.link(path.join(root, 'private.pdf'), link);
     try {
-      const result = await prepareChatReplyFiles('[file](./hard-link.pdf)', 'lane', () => {});
+      const result = await prepareChatReplyFiles('[file](./hard-link.pdf)', 'lane', () => {}, undefined, true);
       await expect(result.attachments[0]!.readBytes!()).rejects.toThrow('ATTACHMENT_UNAVAILABLE');
     } finally { await fs.unlink(link); }
   });

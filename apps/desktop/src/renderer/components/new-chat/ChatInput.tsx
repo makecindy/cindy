@@ -4717,12 +4717,17 @@ export function ChatInput({
 
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
   // agent-builtin + agent-skill); 内部并发, mergeCommands 按优先级合并去重。
-  const paletteAgentKind = agentKind ?? 'claude-code';
+  const paletteAgentKind = runtimeAgentKind ?? agentKind ?? 'claude-code';
+  const slashContextReady = !sessionId || runtimeAgentKind != null;
+  // Existing tasks use one authoritative snapshot. Mirrored composer state
+  // catches up in an effect and otherwise scans the previous/global folder first.
+  const slashWorkingDir = sessionId ? initialWorkingDir : workingDir;
   // remote session:workingDir 是远端主机路径,不能按它扫本机 skills/files。
   // slash 退化为 desktop + agent-builtin(传 null),@ 文件面板直接关闭(见 atOpen)。
   const isRemoteSession = !!remoteHostId;
   const slashCommandContextKey = JSON.stringify([
-    workingDir ?? null,
+    slashWorkingDir ?? null,
+    slashContextReady,
     paletteAgentKind,
     isRemoteSession,
     sessionId ?? null,
@@ -4735,7 +4740,7 @@ export function ChatInput({
   });
   const [piRuntimeCommandStatus, setPiRuntimeCommandStatus] =
     useState<PiPackageCommandRuntimeStatus | null>(null);
-  const slashCommandsReady = isSlashCommandRosterReady(
+  const slashCommandsReady = slashContextReady && isSlashCommandRosterReady(
     slashCommandLoadState,
     slashCommandContextKey,
   );
@@ -4770,9 +4775,10 @@ export function ChatInput({
       // workingDir 是被控端路径；SSH remote 显式关扫描。desktop 命令始终本地。
       loadAllCommands(
         paletteAgentKind,
-        workingDir,
+        slashWorkingDir,
         {
           ...opts,
+          contextReady: slashContextReady,
           skipAgentSkills: isRemoteSession,
           sessionId,
           allowManagedPiPackagePreview: !isRemoteSession,
@@ -4800,7 +4806,8 @@ export function ChatInput({
         });
     },
     [
-      workingDir,
+      slashWorkingDir,
+      slashContextReady,
       paletteAgentKind,
       isRemoteSession,
       sessionId,

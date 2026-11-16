@@ -40,6 +40,20 @@ const XD: CindyMediaProviderSlice = {
 };
 
 describe('selectExecutableCoreMediaModels', () => {
+  // #10147, standard: the plugin catalog combined image/video lists before
+  // provider/id deduplication. A shared ID plus the repeated local video source
+  // must retain one video per provider, with the first source's metadata.
+  it('deduplicates within the requested media type and preserves other providers', () => {
+    const image = { id: 'shared', providerId: 'relay', mode: 'image_generation', name: 'Image' };
+    const video = { ...image, mode: 'video_generation', name: 'Video' };
+    const duplicate = { ...video, name: 'Repeated local video' };
+    const otherProvider = { ...video, providerId: 'other' };
+    const models = [image, video, duplicate, otherProvider];
+
+    expect(selectExecutableCoreMediaModels(models, 'video')).toEqual([video, otherProvider]);
+    expect(selectExecutableCoreMediaModels(models, 'image')).toEqual([image]);
+  });
+
   it('保留 Core 可执行但没有 legacy alias 的视频模型', () => {
     const models = [
       { id: 'legacy-video', mode: 'video_generation', coreExecutable: false },

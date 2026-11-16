@@ -1,5 +1,10 @@
-import { readFileSync } from 'node:fs';
-const avatarData = 'data:image/png;base64,' + readFileSync(new URL('../../../../mobile/assets/bot-presets/cindy.png', import.meta.url)).toString('base64');
+import sharp from 'sharp';
+// UI integration regression: ProjectIcon in the real picker must clip opaque white
+// image corners. Previous automatic-image coverage only checked that an img existed.
+// A white square with a dark rounded tile is the minimal input from the reported bug.
+const avatarData = 'data:image/png;base64,' + (await sharp(Buffer.from(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><path fill="white" d="M0 0h64v64H0z"/><rect width="64" height="64" rx="16" fill="#101015"/></svg>',
+)).png().toBuffer()).toString('base64');
 import assert from 'node:assert/strict';
 
 export default {
@@ -19,11 +24,34 @@ export default {
     await page.getByText('D:/work/cindy', { exact: true }).waitFor();
     if (!ui.case.startsWith('move')) {
       const project = page.getByRole('button').filter({ hasText: '项目新名称 · Cindy' });
-      if (ui.case === 'automatic') await project.locator('img').waitFor();
+      if (ui.case === 'automatic') {
+        const image = project.locator('img');
+        await image.waitFor();
+        await image.evaluate(img => img.decode());
+        await ui.capture('project-menu');
+        const box = await image.boundingBox();
+        assert.ok(box);
+        const { data, info } = await sharp(await page.screenshot()).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+        const scale = info.width / await page.evaluate(() => innerWidth);
+        const pixel = (x, y) => {
+          const offset = (Math.floor(y * scale) * info.width + Math.floor(x * scale)) * info.channels;
+          return [...data.subarray(offset, offset + 3)];
+        };
+        const background = pixel(box.x - 2, box.y + 1);
+        for (const [x, y] of [
+          [box.x + 0.5, box.y + 0.5],
+          [box.x + box.width - 0.5, box.y + 0.5],
+          [box.x + 0.5, box.y + box.height - 0.5],
+          [box.x + box.width - 0.5, box.y + box.height - 0.5],
+        ]) {
+          assert.ok(pixel(x, y).every((channel, i) => Math.abs(channel - background[i]) <= 3),
+            'Image corners must reveal the surrounding menu instead of opaque image pixels');
+        }
+      }
       else await project.locator('[data-project-monogram]').getByText('CY', {exact: true}).waitFor();
       await page.getByRole('button').filter({ hasText: 'D:/archive/cindy' }).locator('[data-project-monogram]').getByText('AC', {exact: true}).waitFor();
     }
-    await ui.capture('project-menu');
+    if (ui.case !== 'automatic') await ui.capture('project-menu');
     const renamed = page.getByText('项目新名称 · Cindy', { exact: true });
     assert.equal(await renamed.count(), 1, 'Saved alias must appear in the actual project menu');
     if (ui.case === 'move-explicit-project') {

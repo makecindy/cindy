@@ -179,7 +179,7 @@ function mergeMediaModels(
   const seen = new Set<string>();
   const models: ExecutableMediaModel[] = [];
   for (const model of [...preferred, ...fallback]) {
-    const key = `${model.providerId}\u0000${model.id}`;
+    const key = JSON.stringify([model.providerId, model.mode, model.id]);
     if (seen.has(key)) continue;
     seen.add(key);
     models.push(model);
@@ -276,6 +276,8 @@ export async function listAvailableMediaModels(
           CINDY_AI_PROVIDER_ID,
           model.id,
           'defaultEnabled' in model ? model.defaultEnabled : undefined,
+          undefined,
+          model.mode === 'video_generation' ? 'video' : 'image',
         ),
       )
       .map((model) => ({ ...model, providerId: CINDY_AI_PROVIDER_ID }));
@@ -548,6 +550,8 @@ export async function listExecutableMediaModels(
       CINDY_AI_PROVIDER_ID,
       model.id,
       'defaultEnabled' in model ? model.defaultEnabled : undefined,
+      undefined,
+      model.mode === 'video_generation' ? 'video' : 'image',
     );
   });
   const gatewayModels: ExecutableMediaModel[] = [];

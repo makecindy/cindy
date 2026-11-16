@@ -12,7 +12,7 @@ vi.mock('../../ossPublicUpload.js', () => ({ uploadPublicAsset: avatarUpload }))
 const fixture = vi.hoisted(() => ({ upload: vi.fn<(...args: Parameters<ReturnType<typeof import('../chatServerMedia.js').createChatMedia>['upload']>) => Promise<unknown[]>>(async () => []), download: vi.fn(), packaged: true, urls: [] as string[], wsUrls: [] as string[], exists: vi.fn(), config: '', handle: vi.fn(), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[], token: 'isolated-test-token', refresh: vi.fn(async () => true), requests: [] as Array<{ url: string; token: string; actor?: string }> }));
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => fixture.token, refresh: fixture.refresh }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
-const replyFiles = vi.hoisted(() => ({ prepare: vi.fn(async (text: string) => ({ text, attachments: [] as unknown[] })) }));
+const replyFiles = vi.hoisted(() => ({ prepare: vi.fn(async (text: string, _sessionId?: string, _assertCurrent?: () => void, _fallbackId?: string | null, _omitOutsideWorkingDir?: boolean): Promise<{ text: string; attachments: unknown[]; omittedFiles?: number }> => ({ text, attachments: [] })) }));
 vi.mock('../chatServerReplyFiles.js', () => ({ prepareChatReplyFiles: replyFiles.prepare }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: fixture.upload, download: fixture.download }) }));
 const replyImages = vi.hoisted(() => vi.fn(async (text: string): Promise<{ text: string; attachments: import('../chatServerMedia.js').ChatUploadAttachment[] }> => ({ text, attachments: [] })));
@@ -56,9 +56,11 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   }) as typeof actual.lstat;
   return { ...actual, mkdir: vi.fn(async () => undefined), default: { ...actual, lstat }, lstat };
 });
-vi.mock('node:fs', () => ({ existsSync: fixture.exists, readFileSync: () => fixture.config || '{"baseUrl":"https://example.com","token":"test"}' }));
+vi.mock('node:fs', async original => ({ constants: (await original<typeof import('node:fs')>()).constants,
+  existsSync: fixture.exists, readFileSync: () => fixture.config || '{"baseUrl":"https://example.com","token":"test"}' }));
 vi.mock('../botGroupChatService.js', () => ({ readPersistedReplyText: vi.fn() }));
-vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: {
+const replyScope = vi.hoisted(() => ({ snapshot: null as unknown }));
+vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => replyScope.snapshot, getDbClient: () => ({ drizzle: {
   select: () => ({ from: () => ({ where: () => Object.assign(Promise.resolve(fixture.profiles), { limit: async () => [{ id: 'existing-local-group' }] }) }) }),
   insert: () => ({ values: () => ({ onConflictDoNothing: async () => undefined }) }),
 } }) }));
@@ -114,6 +116,8 @@ import { buildMessageSourceNote, messageSourceSenderFromMeta } from '@cindy/make
 import { buildBotGroupCapabilityNotice, botGroupQuoteFromMessage, buildBotGroupQuoteCard, buildBotGroupTaskCard, buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
 import type { ChatHistoryState } from '@cindy/maker-shared/chat-history';
+const realReplyFiles = await vi.importActual<typeof import('../chatServerReplyFiles.js')>('../chatServerReplyFiles.js');
+const realReplyFs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
 
 describe('splitChatMessageText', () => {
   it('breaks at the last line before the limit, else at the limit, never inside a surrogate pair', () => {
@@ -2066,6 +2070,118 @@ describe('Chat Server result delivery and refresh', () => {
       });
     });
     const dispatched = () => vi.mocked(deps.dispatch).mock.calls.map(([input]) => input);
+    // Unit regression: withChatServer must deliver a directly quoted message's files to dispatch.
+    // Existing public-Cindy tests cover text background only. Minimal failure: two DOCX files in
+    // an earlier message, then a separate @Cindy with a quote and no uploaded files of its own.
+    // Targeted run: 14.20s wall / 158ms tests; collecting this existing service suite takes 11.19s.
+    describe('quoted attachments', () => {
+      const file = (n: number) => ({ type: 'media', mediaId: `80000000-0000-4000-8000-${String(n).padStart(12, '0')}`, caption: `lesson-${n}.docx` });
+      const quote = (n: number, attachmentCount = 2) => buildBotGroupQuoteCard({ messageId: message(n, peerId, '').id,
+        authorName: 'Ann', authorKind: 'user', excerpt: 'Lesson files', attachmentCount, attachmentName: attachmentCount ? 'lesson-1.docx' : null, sequence: n });
+      const downloaded = (n: number) => ({ id: file(n).mediaId, name: file(n).caption, category: 'file',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: 12,
+        path: path.join(os.tmpdir(), file(n).caption), url: null });
+      const notices = () => fixture.handle.mock.calls.filter(([route, method, body]) => route === `/conversations/${roomId}/messages`
+        && method === 'POST' && body.content?.some((block: { namespace?: string }) => block.namespace === 'cindy.capability-notice'));
+      async function sendQuoted(ownFiles: ReturnType<typeof file>[] = [], attachmentCount = 2) {
+        history.push(message(100, selfId, '', { content: [{ type: 'text', text: '@Cindy read the lessons' }, quote(1, attachmentCount), ...ownFiles] }));
+        queue.push(request(100));
+        await vi.advanceTimersByTimeAsync(12_000);
+        return dispatched().at(-1)!;
+      }
+      beforeEach(() => {
+        fixture.download.mockReset().mockImplementation(async (_room: string, mediaId: string) => downloaded(Number(mediaId.slice(-12))));
+      });
+      afterEach(() => { fixture.download.mockReset(); });
+
+      it('delivers the quoted DOCX files even behind text progress, without following nested quotes or other history', async () => {
+        history.push(message(1, peerId, '', { content: [quote(2), file(1), file(2)] }),
+          message(2, peerId, '', { content: [file(3)] }));
+        await ask(10, 'Hello');
+        expect(dispatched()[0]!.attachments).toBeUndefined();
+        expect(fixture.download).not.toHaveBeenCalled();
+        await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Hi' });
+        const input = await sendQuoted();
+        expect(input.attachments).toEqual([downloaded(1), downloaded(2)]);
+        expect(fixture.download.mock.calls).toEqual([[roomId, file(1).mediaId], [roomId, file(2).mediaId]]);
+        expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/messages/${message(1, peerId, '').id}`)).toHaveLength(1);
+        expect(fixture.handle.mock.calls.some(([route]) => route === `/conversations/${roomId}/messages/${message(2, peerId, '').id}`)).toBe(false);
+        expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe('@Cindy read the lessons');
+        expect(notices()).toHaveLength(0);
+      });
+
+      it.each([1, 20])('merges quoted files with %i current files, deduplicating before the shared limit', async count => {
+        history.push(message(1, peerId, '', { content: [file(1), file(21)] }));
+        const input = await sendQuoted(Array.from({ length: count }, (_, i) => file(i + 1)));
+        const expected = count === 1 ? [downloaded(1), downloaded(21)] : Array.from({ length: 20 }, (_, i) => downloaded(i + 1));
+        expect(input.attachments).toEqual(expected);
+        expect(fixture.download).toHaveBeenCalledTimes(expected.length);
+        expect(notices()).toHaveLength(count === 1 ? 0 : 1);
+        if (count === 20) expect(input.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', 'Cindy'));
+      });
+
+      it.each(['deleted', 'forbidden', 'missing', 'gone', 'other-thread', 'future'] as const)('does not deliver an unavailable quoted original: %s', async state => {
+        const original = message(1, peerId, '', { content: [file(1)], deleted: state === 'deleted',
+          threadRootId: state === 'other-thread' ? message(2, peerId, '').id : null, seq: state === 'future' ? '101' : '1' });
+        history.push(original);
+        const handle = fixture.handle.getMockImplementation()!;
+        fixture.handle.mockImplementation((route, method, body) => route === `/conversations/${roomId}/messages/${original.id}`
+          && ['forbidden', 'missing', 'gone'].includes(state)
+          ? { status: state === 'forbidden' ? 403 : state === 'missing' ? 404 : 410, body: { error: { code: 'MESSAGE_UNAVAILABLE' } } }
+          : handle(route, method, body));
+        const input = await sendQuoted([file(2)]);
+        expect(input.attachments).toEqual([downloaded(2)]);
+        expect(fixture.download.mock.calls).toEqual([[roomId, file(2).mediaId]]);
+        expect(notices()).toHaveLength(1);
+      });
+
+      // PR #10835: optional quote metadata failures used to abort even the owner's current text/files.
+      // Unit HTTP boundary; unlike the 403/404/410 matrix, these failures reject readMessage.
+      it.each([503, 429, 'timeout', 'text-only'] as const)('delivers the current request when the quoted read fails: %s', async failure => {
+        const handle = fixture.handle.getMockImplementation()!;
+        fixture.handle.mockImplementation((route, method, body) => {
+          if (route === `/conversations/${roomId}/messages/${message(1, peerId, '').id}`) {
+            if (failure === 'timeout') throw new Error('REQUEST_TIMEOUT');
+            return { status: failure === 'text-only' ? 503 : failure, body: { error: { code: 'TEMPORARILY_UNAVAILABLE' } } };
+          }
+          return handle(route, method, body);
+        });
+        const input = await sendQuoted([file(2)], failure === 'text-only' ? 0 : 2);
+        expect(input?.attachments).toEqual([downloaded(2)]);
+        expect(verifiedOwnerRequestText(input.autoReviewUserText)).toContain('@Cindy read the lessons');
+        expect(notices()).toHaveLength(failure === 'text-only' ? 0 : 1);
+        if (failure !== 'text-only') expect(input.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', 'Cindy'));
+        expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/messages/${message(1, peerId, '').id}`)).toHaveLength(1);
+      });
+
+      it('does not continue a failed quoted read after the execution service is disposed', async () => {
+        const handle = fixture.handle.getMockImplementation()!;
+        fixture.handle.mockImplementation((route, method, body) => {
+          if (route === `/conversations/${roomId}/messages/${message(1, peerId, '').id}`) {
+            service.dispose();
+            throw new Error('REQUEST_TIMEOUT');
+          }
+          return handle(route, method, body);
+        });
+        await sendQuoted([file(2)]);
+        expect(deps.dispatch).not.toHaveBeenCalled();
+        expect(fixture.download).not.toHaveBeenCalled();
+        expect(notices()).toHaveLength(0);
+      });
+
+      it('reports a failed quoted download and tries it again on a new explicit request', async () => {
+        history.push(message(1, peerId, '', { content: [file(1), file(2)] }));
+        fixture.download.mockRejectedValueOnce(new Error('MEDIA_DOWNLOAD_FAILED'));
+        const input = await sendQuoted();
+        expect(input.attachments).toEqual([downloaded(2)]);
+        expect(notices()).toHaveLength(1);
+        await service.settleLaneTurn({ ...terminal, sessionId: input.targetSessionId, activeInputClientId: input.clientId, resultText: 'One file unavailable' });
+        history.push(message(101, selfId, '', { content: [{ type: 'text', text: '@Cindy retry' }, quote(1)] }));
+        queue.push(request(101));
+        await vi.advanceTimersByTimeAsync(12_000);
+        expect(dispatched().at(-1)!.attachments).toEqual([downloaded(1), downloaded(2)]);
+      });
+    });
     // These requests come from another device: the head start this computer leaves it has passed.
     async function ask(n: number, text: string, requester = selfId) {
       history.push(message(n, requester, text));
@@ -2438,10 +2554,18 @@ describe('Chat Server result delivery and refresh', () => {
     // The member list shows the group's Cindy as plain Cindy with Cindy's artwork, nobody's teammate;
     // group management sees the switch, and an older server none of it.
     it('projects the group Cindy and its switch', async () => {
+      queue = [request(1), request(2, peerId)];
+      const serve = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route === `/conversations/${roomId}/executions`
+        ? { body: queue.map(work => ({ ...work, status: 'running' })) } : serve(route, method, body));
       const result = await service.getGroup(roomId);
       if (!result.ok) throw new Error(result.errorCode);
       expect(result.group).toMatchObject({ supportsGroupAssistant: true, assistantEnabled: true, organizerBotId: null });
       expect(result.group.members.find(m => m.actorId === cindyId)).toMatchObject({ assistant: true, name: 'Cindy', avatar: 'cindy://avatar/preset/cindy', isOwned: false });
+      expect(result.group.round.speakers).toEqual(expect.arrayContaining([
+        expect.objectContaining({ requesterName: 'Chris', isSelfRequested: true }),
+        expect.objectContaining({ requesterName: 'Ann', isSelfRequested: false }),
+      ]));
       expect((await service.chatServer!.manage({ groupId: roomId, action: { type: 'update', name: 'Room', topic: '', description: '', expectedRevision: 1, assistant: false } })).ok).toBe(true);
       expect(fixture.handle.mock.calls.find(([route, method]) => route === `/conversations/${roomId}` && method === 'PATCH')?.[2]).toMatchObject({ assistant: false, expectedRevision: 1 });
     });
@@ -2712,6 +2836,85 @@ describe('Chat Server result delivery and refresh', () => {
     await service.settleLaneTurn({ ...terminal, resultText: '[Report](./report.pdf)' });
     expect(deliveries()).toHaveLength(0);
     expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(1);
+  });
+
+  // #10612, unit: exercise the real preparer through settlement. The existing
+  // generic-error mock cannot distinguish an outside link from a failed upload.
+  it.each(['plain', 'mixed', 'persisted', 'thread', 'retry', 'revoked', 'owner-changed', 'expired'] as const)
+    ('delivers completed text when a real file link is outside the working directory (%s)', async mode => {
+    const root = await realReplyFs.mkdtemp(path.join(os.tmpdir(), 'chat-outside-reply-'));
+    const work = path.join(root, 'task');
+    await realReplyFs.mkdir(work);
+    await realReplyFs.writeFile(path.join(root, 'handoff.md'), 'private bytes');
+    const report = path.join(work, 'report.pdf');
+    await realReplyFs.writeFile(report, '%PDF-1.4 report');
+    const open = vi.spyOn((await import('node:fs/promises')).default, 'open');
+    try {
+      const text = 'Finished the work. See [handoff](../handoff.md).' + (mode === 'mixed' ? ' [Report](./report.pdf)' : '');
+      if (mode === 'persisted') vi.mocked((await import('../botGroupChatService.js')).readPersistedReplyText).mockResolvedValueOnce(text);
+      replyScope.snapshot = { client: { drizzle: { select: (fields: object) => ({ from: () => ({ where: () => ({ limit: async () => {
+        if (mode === 'owner-changed') replyScope.snapshot = null;
+        return ['content' in fields ? { content: JSON.stringify([{ type: 'text', text }]) }
+          : { workingDir: work, remoteHostId: null, status: 'active', clearedAt: null }];
+      } }) }) }) } } };
+      replyFiles.prepare.mockImplementation((text, sessionId, assertCurrent, fallbackId, omit) =>
+        realReplyFiles.prepareChatReplyFiles(text, sessionId!, assertCurrent!, fallbackId, omit));
+      if (mode === 'thread') {
+        const previous = fixture.handle.getMockImplementation()!;
+        fixture.handle.mockImplementation((route, method, body) => {
+          const result = previous(route, method, body);
+          if (route === '/executions/claim' && result.body.execution)
+            result.body.execution = { ...result.body.execution, thread_root_id: execution.source_message_id };
+          return result;
+        });
+      }
+      await startFileReply();
+      const previous = fixture.handle.getMockImplementation()!;
+      let lostAck = false;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (mode === 'revoked' && route.endsWith('/members')) return { body: [] };
+        if (mode === 'expired' && body?.action === 'heartbeat') return { status: 409, body: { code: 'EXECUTION_EXPIRED' } };
+        if (mode === 'retry' && body?.action === 'complete' && !lostAck) { lostAck = true; throw new Error('ACK lost'); }
+        return previous(route, method, body);
+      });
+      if (mode === 'mixed') fixture.upload.mockImplementation(async (_room, _operation, files) => {
+        expect(files).toHaveLength(1);
+        expect((await files[0].readBytes!()).toString()).toBe('%PDF-1.4 report');
+        return [{ type: 'media', mediaId: 'report', caption: 'report.pdf' }];
+      });
+      await service.settleLaneTurn({ ...terminal, resultText: mode === 'persisted' ? '' : text,
+        ...(mode === 'persisted' ? { resultMessageClientId: 'persisted-reply' } : {}) });
+      if (mode === 'revoked' || mode === 'owner-changed' || mode === 'expired') {
+        expect(deliveries()).toHaveLength(0);
+        expect(open).not.toHaveBeenCalled();
+        return;
+      }
+      expect(deliveries()).toHaveLength(1);
+      expect(deliveries()[0][2].content[0].text).toContain('Finished the work. See handoff.');
+      expect(deliveries()[0][2].content[0].text).toContain(t('bots.groupChat.assistant.filesOutsideWorkingDir'));
+      expect(deliveries()[0][2].content[0].text).not.toContain('../handoff.md');
+      if (mode === 'mixed') {
+        expect(deliveries()[0][2].content).toContainEqual({ type: 'media', mediaId: 'report', caption: 'report.pdf' });
+        expect(open).toHaveBeenCalledOnce();
+        expect(open.mock.calls[0][0]).toBe(await realReplyFs.realpath(report));
+      } else {
+        expect(fixture.upload.mock.calls.every(call => call[2].length === 0)).toBe(true);
+        expect(open).not.toHaveBeenCalled();
+      }
+      if (mode === 'retry') {
+        const sent = structuredClone(deliveries()[0][2]);
+        await vi.advanceTimersByTimeAsync(16_000);
+        expect(deliveries()).toHaveLength(2);
+        expect(deliveries()[1][2]).toEqual(sent);
+        expect(replyFiles.prepare).toHaveBeenCalledOnce();
+      }
+      expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(0);
+      expect(deps.dispatch).toHaveBeenCalledOnce();
+    } finally {
+      replyScope.snapshot = null;
+      open.mockRestore();
+      await realReplyFs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it.each([400, 413, 415, 422])('reports a file rejected by the media service (%s)', async status => {
@@ -3726,9 +3929,9 @@ describe('Chat Server result delivery and refresh', () => {
     });
 
     it.each([
-      ['a member stops only their own requests and teammates', 'member', undefined, [['own', undefined], ['bot', otherBot]]],
+      ['a member stops only their own requests', 'member', undefined, [['own', undefined]]],
       ['an owner may stop everyone', 'owner', 'all', [['own', undefined], ['bot', undefined], ['foreign', undefined]]],
-      ['an owner who did not ask for all stops only their own', 'owner', undefined, [['own', undefined], ['bot', otherBot]]],
+      ['an owner who did not ask for all stops only their own', 'owner', undefined, [['own', undefined]]],
       ['a member whose own teammate is admin stops everyone as that teammate', 'member', 'all', [['own', undefined], ['bot', otherBot], ['foreign', otherBot]], 'admin'],
     ] as const)('%s', async (_label, role, scope, expected, botRole?: string) => {
       const ids = { own: '40000000-0000-4000-8000-00000000000a', bot: '40000000-0000-4000-8000-00000000000b', foreign: '40000000-0000-4000-8000-00000000000c' };
@@ -4913,7 +5116,7 @@ describe('Chat Server result delivery and refresh', () => {
       const planningAt = Date.now();
       const deciding = await service.getGroup(roomId);
       expect(deciding).toMatchObject({ ok: true, group: { planningBotId: botId, speakingBotIds: [botId],
-        round: { status: 'running', speakers: [{ botId, sessionId: null, activity: 'planning', timelineAt: planningAt }] } } });
+        round: { status: 'running', speakers: [{ botId, sessionId: null, activity: 'planning', threadRootId: null, timelineAt: planningAt }] } } });
       // Unit / #10345: refreshing a slow arrangement must not move its timeline position.
       await vi.advanceTimersByTimeAsync(1000);
       expect(await service.getGroup(roomId)).toMatchObject({ ok: true, group: {
