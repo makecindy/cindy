@@ -107,6 +107,7 @@ import type {
   ContinuationInFlightProjectionCapability,
 } from '@/hooks/useCCAgentChat';
 import { findLastUserInputClientId, isAutoResumeRowInFlight } from '@/lib/autoResumePresentation';
+import { findErrorTailMessage } from '@/lib/errorTailMessage';
 import { InputHandoffRecordRow, readInputHandoffRecordData } from '@/features/input-handoff/InputHandoffRecordRow';
 export { findLastUserInputClientId, isAutoResumeRowInFlight } from '@/lib/autoResumePresentation';
 import { Spinner } from '@/components/ui/spinner';
@@ -6385,11 +6386,12 @@ export function MessageStream({
     return collectAssistantTurnUsageDetails(metadataMessages, turnFinalAssistantClientIds);
   }, [metadataMessages, turnFinalAssistantClientIds]);
 
-  // error-tail-banner:尾部未忽略的 error 行由输入框上方红条独家承载,流内需要
-  // 知道"是不是最后一条"来跳过重复渲染。走可见序列:尾部挂着子代理内部行时,
-  // 真实的最后一条可见 error 会因为"不是最后一条"而在流内重复渲染一遍。
-  const lastMessageClientId =
-    visibleMessages.length > 0 ? visibleMessages[visibleMessages.length - 1].clientId : undefined;
+  // Share the task view's terminal boundary: location/model/history records do
+  // not resolve a failure, but later user/assistant progress does.
+  const errorTailClientId = useMemo(
+    () => findErrorTailMessage(visibleMessages)?.clientId,
+    [visibleMessages],
+  );
   const previousLocalFileRefsRef = useRef<readonly KnownLocalFileRef[]>([]);
   const localFileRefs = useMemo<readonly KnownLocalFileRef[]>(() => {
     return collectStableLocalFileRefs(rawMetadataMessages, previousLocalFileRefsRef.current);
@@ -6871,7 +6873,7 @@ export function MessageStream({
                         continuationInFlightProjectionCapability={
                           continuationInFlightProjectionCapability
                         }
-                        isLastMessage={msg.clientId === lastMessageClientId}
+                        isTailError={msg.clientId === errorTailClientId}
                         isActiveError={msg.role === 'error' && msg.clientId === activeErrorClientId}
                         localFileRefs={localFileRefs}
                         assistantAvatar={botContinuationKeys.has(item.key) ? botReplyColumnSpacer : assistantAvatar}
@@ -7060,7 +7062,7 @@ const MessageItem = memo(function MessageItem({
   isLastUserInput,
   isContinuationTurnOwner,
   continuationInFlightProjectionCapability,
-  isLastMessage,
+  isTailError,
   isActiveError,
   localFileRefs,
   assistantAvatar,
@@ -7111,10 +7113,9 @@ const MessageItem = memo(function MessageItem({
   isContinuationTurnOwner?: boolean;
   /** 当前投影对精确续跑边界字段的支持状态；legacy 才允许启用旧端兼容兜底。 */
   continuationInFlightProjectionCapability?: ContinuationInFlightProjectionCapability;
-  /** True iff this message is the last message in the full list —
-   *  error-tail-banner: a trailing un-dismissed error row is rendered by the
-   *  actionable banner above the composer instead of an inline card. */
-  isLastMessage?: boolean;
+  /** True when the shared tail selector assigns this row to the actionable
+   *  banner above the composer instead of an inline history card. */
+  isTailError?: boolean;
   isActiveError?: boolean;
   localFileRefs: readonly KnownLocalFileRef[];
   /** Bot 对话:assistant 气泡左侧的伙伴头像。普通任务不传。 */
@@ -7305,10 +7306,10 @@ const MessageItem = memo(function MessageItem({
       // 呈现走 CCAgentSessionView 输入框上方的 InterruptedTurnBanner(与 ErrorBanner
       // 同风格)+ sidebar 'error' 红点,这里渲染 null。
       if (message.errorReason === APP_EXIT_INTERRUPTED_REASON) return null;
-      // error-tail-banner:普通失败行是尾部消息且未被忽略时,由输入框上方的可操作
-      // 红条(重试/关闭)独家承载,流内不重复渲染,避免双红条;被忽略或后续有新
-      // 消息后回落为流内静态历史卡。
-      if (isActiveError || (isLastMessage && !message.errorDismissed)) return null;
+      // The same selector owns this row above the composer, even when a later
+      // location/model/history boundary card follows it. Dismissed or resolved
+      // failures remain available as static history cards.
+      if (isActiveError || isTailError) return null;
       // A live error may be followed by hidden or system rows when history is
       // reloaded. Its exact persisted identity still belongs to the live banner;
       // unrelated failures remain available as compact history cards.

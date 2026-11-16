@@ -8834,7 +8834,8 @@ describe('makerChatStore text delta batching', () => {
     expect(messageService.dismissError).not.toHaveBeenCalled();
   });
 
-  it('dismisses the error tail after a direct-send continue fallback is accepted', async () => {
+  // #10744: a location card after the failure does not change the error acted on.
+  it.each([false, true])('dismisses the error tail after a direct-send continue fallback is accepted (location boundary: %s)', async trailingLocation => {
     const api = window.electronAPI.maker;
     const ackInterrupted = window.electronAPI.localDb.sessions.ackInterrupted;
     vi.mocked(sessionService.get).mockResolvedValueOnce(
@@ -8847,6 +8848,12 @@ describe('makerChatStore text delta batching', () => {
       content: 'interrupted',
       createdAt: '2026-07-23T00:00:00.000Z',
     });
+    if (trailingLocation) emitDbMessageCreated({
+      clientId: 'location-after-error',
+      role: 'agent_switch',
+      content: { fromAgentKind: 'codex', toAgentKind: 'codex', nativeHistory: 'restored' },
+      createdAt: '2026-07-23T00:00:00.500Z',
+    });
 
     await makerChatStore.sendUiTrigger(SESSION_ID, CONTINUE_AFTER_APP_EXIT_PROMPT);
 
@@ -8857,7 +8864,7 @@ describe('makerChatStore text delta batching', () => {
       expect.objectContaining({ ackInterruptedTurnOnDispatch: true }),
     );
     expect(ackInterrupted).not.toHaveBeenCalled();
-    expect(makerChatStore.getSnapshot(SESSION_ID).messages.at(-1)).toEqual(
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.find(message => message.clientId === 'persisted-error-tail-direct')).toEqual(
       expect.objectContaining({
         clientId: 'persisted-error-tail-direct',
         errorDismissed: true,
@@ -8869,7 +8876,7 @@ describe('makerChatStore text delta batching', () => {
     );
   });
 
-  it('keeps a new direct-send continuation failure visible while dismissing the original error', async () => {
+  it.each([false, true])('keeps a new direct-send continuation failure visible while dismissing the original error (location boundary: %s)', async trailingLocation => {
     const api = window.electronAPI.maker;
     vi.mocked(sessionService.get).mockResolvedValueOnce(
       null as unknown as Awaited<ReturnType<typeof sessionService.get>>,
@@ -8879,6 +8886,12 @@ describe('makerChatStore text delta batching', () => {
       role: 'error',
       content: 'interrupted',
       createdAt: '2026-07-23T00:00:00.000Z',
+    });
+    if (trailingLocation) emitDbMessageCreated({
+      clientId: 'location-after-error',
+      role: 'agent_switch',
+      content: { fromAgentKind: 'codex', toAgentKind: 'codex', nativeHistory: 'restored' },
+      createdAt: '2026-07-23T00:00:00.500Z',
     });
     vi.mocked(api.send).mockImplementationOnce(async () => {
       emitDbMessageCreated({
@@ -8900,7 +8913,7 @@ describe('makerChatStore text delta batching', () => {
       SESSION_ID,
       'new-continuation-error',
     );
-    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.filter(message => message.role === 'error')).toEqual([
       expect.objectContaining({
         clientId: 'original-error-tail-direct',
         errorDismissed: true,

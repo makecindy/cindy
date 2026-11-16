@@ -3,6 +3,8 @@ import { mountPage, subscription } from '../../ui-page/harness';
 import { MessageStream } from '../../../src/renderer/components/chat/MessageStream';
 import { ErrorBanner } from '../../../src/renderer/components/chat/ErrorBanner';
 import { makerChatStore, type ChatMessage } from '../../../src/renderer/lib/makerChatStore';
+import { findErrorTailMessage } from '../../../src/renderer/lib/errorTailMessage';
+import { ErrorTailErrorBanner } from '../../../src/renderer/components/chat/InterruptedTurnBanner';
 import type { AgentInputProjection } from '../../../src/shared/agentInputQueue';
 
 const sessionId = 'error-identity-fixture';
@@ -25,6 +27,42 @@ const messages: ChatMessage[] = [
   { ...row('later-system', 'assistant', ''), systemCardType: 'auto-resume',
     systemCardData: { attempt: 1, maxAttempts: 3, sessionTotal: 1 } },
 ];
+const timeoutRows = makerChatStore.__mapServerMessagesForTest([
+  { id: 'request', clientId: 'request', sessionId, role: 'user',
+    content: 'Check the project status.', createdAt: '2026-11-09T00:00:00.000Z' },
+  { id: 'timeout', clientId: 'timeout', sessionId, role: 'error',
+    content: { message: 'The model connection has been retrying for 120s without making progress; the turn was interrupted automatically.',
+      reason: 'codex_reconnect_stalled' }, createdAt: '2026-11-09T00:02:00.000Z' },
+  { id: 'location', clientId: 'location', sessionId, role: 'agent_switch',
+    content: { fromAgentKind: 'codex', toAgentKind: 'codex', nativeHistory: 'restored' },
+    createdAt: '2026-11-09T00:03:00.000Z' },
+]);
+
+function TerminalTask() {
+  const [rows, setRows] = useState(timeoutRows);
+  const error = findErrorTailMessage(rows);
+  return <div className="flex h-screen min-w-0 flex-col bg-[var(--surface)]" data-ui-page-subject>
+    <div data-ui-page-control>
+      <button data-testid="boundary" onClick={() => setRows(current => [...current,
+        { ...timeoutRows[2]!, clientId: `location-${current.length}` },
+      ])}>Append location record</button>
+      <button data-testid="progress" onClick={() => setRows(current => [...current,
+        { clientId: 'reply', role: 'assistant', content: 'The project check is complete.' },
+        { ...timeoutRows[2]!, clientId: 'location-after-reply' },
+      ])}>Resolve with progress</button>
+    </div>
+    <div className="min-h-0 flex-1">
+      <MessageStream workingDir="" historyLoaded messages={rows} />
+    </div>
+    <div className="shrink-0 p-4" data-testid="tail-error">
+      {error && <ErrorTailErrorBanner errorText={error.content} errorReason={error.errorReason}
+        agentKind="codex" onContinue={() => setRows(current => [...current,
+          { clientId: 'retry', role: 'user', content: 'Continue', isSyntheticTrigger: true },
+        ])} onDismiss={() => setRows(current => current.map(row => row.clientId === error.clientId
+          ? { ...row, errorDismissed: true } : row))} />}
+    </div>
+  </div>;
+}
 function Task({ taskId }: { taskId: string }) {
   const state = useSyncExternalStore(
     callback => makerChatStore.subscribeLight(taskId, callback),
@@ -59,7 +97,12 @@ void mountPage({
   route: '/fixture',
   host: () => ({
     agentIsland: { onSessionActivity: subscription('activity') },
-    maker: { polishWorkingStatus: async () => null },
+    maker: {
+      polishWorkingStatus: async () => null,
+      codexRuntimeRouteGet: async () => ({ authInjection: 'env-key' }),
+      onCodexRuntimeRouteChanged: subscription('codexRuntimeRouteChanged'),
+      auth: { onStateChanged: subscription('authStateChanged') },
+    },
   }),
-  render: () => <Subject />,
+  render: (context) => context.data.terminal ? <TerminalTask /> : <Subject />,
 });

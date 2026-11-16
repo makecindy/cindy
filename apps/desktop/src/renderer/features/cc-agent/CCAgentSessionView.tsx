@@ -1,5 +1,6 @@
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
 import type { ChatMessage } from '@/lib/makerChatStore';
+import { findErrorTailMessage } from '@/lib/errorTailMessage';
 import { PendingQueueBubble } from '@/components/chat/PendingQueueBubble';
 import { McpAppPermissionPrompt } from '@/components/chat/McpAppPermissionPrompt';
 import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
@@ -2532,8 +2533,8 @@ function CCAgentSessionContent({
   //   - 中断标记行(reason=app-exit-interrupted,启动扫尾补写)→「继续任务/忽略」
   //   - 普通失败行(process exited / turn-failed 等,重启后 live 报错只剩历史行)
   //     →「重试/关闭」
-  // 后面有新消息 = 任务已被推进,判定自然不命中。此时消息流内不重复渲染该行
-  // (MessageStream 对尾部未忽略 error 行返回 null,由本条独家承载)。
+  // 后面有真实进展 = 任务已被推进；位置/模型/历史边界卡不代表恢复成功。
+  // MessageStream 复用同一尾部判据，避免边界卡让可操作横幅与历史卡双显。
   const scheduleSessionInfo = useAutomationScheduleSessionInfo(sessionId);
   const unreadFailedScheduleRunIds =
     scheduleSessionInfo?.unreadFailedRunIds ?? EMPTY_UNREAD_FAILED_RUN_IDS;
@@ -2551,15 +2552,10 @@ function CCAgentSessionContent({
     );
     return false;
   }, [currentUnreadFailedRunId, remoteDeviceId, t]);
-  const errorTailMsg = useMemo(() => {
-    const last = messages.length > 0 ? messages[messages.length - 1] : undefined;
-    return last &&
-      last.role === 'error' &&
-      !last.errorDismissed &&
-      last.clientId !== disposedErrorPersistId
-      ? last
-      : null;
-  }, [disposedErrorPersistId, messages]);
+  const errorTailMsg = useMemo(
+    () => findErrorTailMessage(messages, disposedErrorPersistId),
+    [disposedErrorPersistId, messages],
+  );
   // 队列里已有合成续跑项 = 用户已点过继续/重试、只是尚未被接受落库(排队被挡 /
   // 凭证切换等待):视为已推进,banner 抑制(review P2)—— 本地 hidden 态在重挂/
   // 重载后丢失,只看 messages 尾部时旧 error 行仍在,banner 会重现并允许对同一

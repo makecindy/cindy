@@ -11,6 +11,7 @@ import {
   formatAsyncQuestionSupplement, isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId,
 } from '@cindy/maker-shared/interaction';
 import { isComposerTypingRecently } from './composerTypingActivity';
+import { findErrorTailMessage } from './errorTailMessage';
 import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { remotePluginSetupErrorCode, type PluginSetupCommandError } from './pluginSetupCommandError';
 export type { PluginSetupCommandError } from './pluginSetupCommandError';
@@ -18696,16 +18697,12 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
   // session when the action started.
   const remoteDeviceId = getStickySessionDeviceId(sessionId);
   const triggerApi = remoteDeviceId ? makerApiForDevice(remoteDeviceId) : makerApiFor(sessionId);
-  const originalTail = state.messages[state.messages.length - 1];
   // Freeze the row the user acted on before session lookup / dispatch. A fast
   // continuation failure may append a new error before send resolves; that new
   // error must keep its retry banner.
-  const continuedErrorTailClientId =
-    syntheticTriggerKind(prompt) === 'continue' &&
-    originalTail?.role === 'error' &&
-    !originalTail.errorDismissed
-      ? originalTail.clientId
-      : null;
+  const continuedErrorTailClientId = syntheticTriggerKind(prompt) === 'continue'
+    ? findErrorTailMessage(state.messages, state.disposedErrorPersistId)?.clientId
+    : null;
   // device-link 远程会话:get/enqueue 都走传输层(getSessionFor 远程读被控 row,
   // makerApiFor(...) 远程隧道到被控端 coordinator)。
   return getSessionFor(sessionId)
