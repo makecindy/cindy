@@ -17,6 +17,20 @@ import { readPluginCatalogAnchor, restorePluginCatalogAnchor, type PluginCatalog
 import { useDelayedPluginLoading } from './lib/useDelayedPluginLoading';
 import { mergePluginSnapshot } from './lib/pluginCatalogMemory';
 
+function dedupeCachedPages(cache: PluginBrowserCache): boolean {
+  const seen = new Set<string>();
+  let changed = false;
+  for (const [index, items] of [...cache.pages].sort(([a], [b]) => a - b)) {
+    const unique = items.filter(item => {
+      if (seen.has(item.pluginId)) return false;
+      seen.add(item.pluginId); return true;
+    });
+    if (unique.length === items.length) continue;
+    cache.pages.set(index, unique); cache.sizes.set(index, unique.length); changed = true;
+  }
+  return changed;
+}
+
 const CatalogCard = memo(function CatalogCard({ item, renderItem }: {
   item: PluginMarketItem; renderItem(item: PluginMarketItem): ReactNode; renderRevision?: unknown;
 }) {
@@ -169,6 +183,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           ? [...new Set([...(current.metadata?.unavailableCustomSourceNames ?? []), ...page.unavailableCustomSourceNames])]
           : page.unavailableCustomSourceNames };
         current.error = page.unavailableReason && page.items.length === 0 ? index : null;
+        dedupeCachedPages(current);
         if (initial) { current.refreshedRevision = requestedRevision; current.refreshedAt = Date.now(); }
       } catch (error) {
         if (index === 0) current.firstPageFlight = undefined;
@@ -331,6 +346,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           if (index === cache.last && cache.hasNext !== (page.nextCursor !== null)) { cache.hasNext = page.nextCursor !== null; changed = true; }
         }
         while (cache.pages.size > 6) cache.pages.delete(cache.pages.keys().next().value!);
+        if (dedupeCachedPages(cache)) changed = true;
         const fresh = pages.values().next().value;
         if (fresh && cache.metadata) {
           const metadata = { ...cache.metadata, customSourceNames: fresh.customSourceNames,

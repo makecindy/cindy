@@ -415,13 +415,41 @@ it('keeps visible batches while rebuilding an invalid continuation in the backgr
   const { cache, view } = fixture(load);
   render(view());
   await screen.findByText('Tool 0');
-  act(() => intersections.forEach(callback => callback()));
+  await waitFor(() => expect(intersections.size).toBe(1));
+  await act(async () => intersections.forEach(callback => callback()));
   await waitFor(() => expect(release).toBeDefined());
   expect(screen.getByText('Tool 0')).toBeTruthy();
   await act(async () => { release!(page(0, 12)); });
   await waitFor(() => expect(cache.current.last).toBe(1));
   expect(cache.current.pages.size).toBe(2);
   expect(cache.current.error).toBeNull();
+});
+
+// Unit / Greptile 4582948698: both old official cursors can carry customOffset
+// zero. During an official outage Main returns the same custom fallback twice;
+// the per-page partial merge previously appended it to both resident batches.
+it('keeps fallback custom plugins unique across resident batches during an outage refresh', async () => {
+  let unavailable = false;
+  const custom = [20, 21].map(index => ({ ...item(index), name: `Custom ${index}`,
+    sourceType: 'local-market' as const, sourceMarketName: 'Working source' }));
+  const load = vi.fn(async (input: PluginMarketQuery) => input.counts ? page(0, 22) : unavailable
+    ? { ...page(0, 2), items: custom, counts: null, unavailableReason: 'official unavailable', customSourceNames: ['Working source'] }
+    : { ...page(Number(input.cursor ?? 0), 22), counts: null, customSourceNames: ['Working source'] });
+  const { cache, view } = fixture(load);
+  render(view());
+  const firstCard = await screen.findByText('Tool 0');
+  await waitFor(() => expect(intersections.size).toBe(1));
+  await act(async () => intersections.forEach(callback => callback()));
+  await waitFor(() => expect(cache.current.last).toBe(1));
+  unavailable = true;
+  await act(async () => { await cache.current.refresh!({ force: true }); });
+  const items = [...cache.current.pages.values()].flat();
+  expect(items.filter(row => row.pluginId === 'plugin-20')).toHaveLength(1);
+  expect(items.filter(row => row.pluginId === 'plugin-21')).toHaveLength(1);
+  expect(items).toHaveLength(22);
+  expect([...cache.current.sizes.values()].reduce((sum, size) => sum + size, 0)).toBe(22);
+  expect(items.filter(row => row.sourceType === 'server')).toHaveLength(20);
+  expect(screen.getByText('Tool 0')).toBe(firstCard);
 });
 
 it('updates source group headings together with refreshed custom cards', async () => {

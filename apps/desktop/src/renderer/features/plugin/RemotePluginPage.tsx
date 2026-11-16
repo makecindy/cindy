@@ -203,18 +203,18 @@ export function RemotePluginPage({
   }, [device.deviceId, i18n.language, invoke, writable, catalogMemory, browserCache, setSnapshot, setCatalogPaging, setTodayPool, setTodayLoaded]);
   usePluginMarketForegroundRefresh(() => { if (active) return refresh(false); }, refreshAt);
   useEffect(() => {
-    let active = true;
-    if (!catalogPaging) return;
+    if (!active || !online || !writable() || !catalogPaging) return;
+    let alive = true;
     if (catalogMemory.todayLoaded && Date.now() - catalogMemory.recommendationsAt < PLUGIN_CATALOG_REFRESH_MS) return;
     void invoke('snapshot', { read: 'recommendations' }).then(value => {
-      if (active && writable()) {
+      if (alive && writable()) {
         const items = parsePluginManagementRecommendations(value);
         setTodayPool(previous => samePluginValue(previous, items) ? previous : items);
         setTodayLoaded(true); catalogMemory.recommendationsAt = Date.now();
       }
-    }).catch(() => { if (active) { setTodayPool([]); setTodayLoaded(true); } });
-    return () => { active = false; };
-  }, [catalogPaging, device.deviceId, invoke, writable, catalogMemory, setTodayPool, setTodayLoaded]);
+    }).catch(() => { if (alive && writable()) setTodayLoaded(true); });
+    return () => { alive = false; };
+  }, [active, online, catalogPaging, device.deviceId, invoke, writable, catalogMemory, setTodayPool, setTodayLoaded]);
   useEffect(() => {
     const sentinel = installedSentinel.current;
     if (!sentinel || !catalogScroller.current || (!query.trim() && catalogTab !== 'installed')) return;

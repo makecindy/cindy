@@ -261,6 +261,46 @@ describe('selected plugin host', () => {
     } else expect(screen.queryByText('settings.ghosts.page.todayRecommendations')).toBeNull();
   });
 
+  // Unit / Codex 4583060230: cached paging capability made a hidden/offline
+  // remount read recommendations and erase them on failure. Foreground-only
+  // tests missed this effect: retain three cached items, then retry on activation.
+  it.each(['hidden', 'offline'] as const)('retains cached recommendations until the remote page is readable: %s', async blocked => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    const normal = invoke.getMockImplementation()!;
+    const items = Array.from({ length: 3 }, (_, index) => ({ pluginId: `rec-${index}`, ghostId: `rec-${index}`, name: `Recommendation ${index}`,
+      scope: 'public', publisherKind: 'official', releaseId: `release-${index}`, installState: 'not-installed' }));
+    let fail = false;
+    const recommendations = vi.fn(async () => {
+      if (fail) throw new Error('Host unavailable');
+      return items;
+    });
+    invoke.mockImplementation(async (device, channel, args) => {
+      if (args?.[0]?.input?.read === 'capabilities') return { effects: [], result: { catalogPaging: true } };
+      if (args?.[0]?.input?.read === 'recommendations') return { effects: [], result: await recommendations() };
+      return normal(device, channel, args);
+    });
+    const view = (readable: boolean) => <RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }}
+      active={blocked !== 'hidden' || readable} online={blocked !== 'offline' || readable} />;
+    const warm = render(view(true));
+    await screen.findByText('Recommendation 0');
+    warm.unmount();
+    clock.mockReturnValue(41_000);
+    fail = true;
+    const mounted = render(view(false));
+    await act(async () => {});
+    expect(recommendations).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Recommendation 0')).toBeTruthy();
+    await act(async () => { mounted.rerender(view(true)); });
+    expect(recommendations).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Recommendation 0')).toBeTruthy();
+    fail = false;
+    items[0] = { ...items[0], name: 'Updated recommendation' };
+    mounted.rerender(view(false));
+    mounted.rerender(view(true));
+    expect(await screen.findByText('Updated recommendation')).toBeTruthy();
+    expect(recommendations).toHaveBeenCalledTimes(3);
+  });
+
   // Unit, #9487: reconnect previously refreshed the snapshot but retained stale market pages.
   // The same installed set with a changed market release must display the new card.
   it('refreshes cached market cards after reconnect when installed versions are unchanged', async () => {
