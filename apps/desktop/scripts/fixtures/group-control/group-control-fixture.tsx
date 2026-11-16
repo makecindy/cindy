@@ -4,7 +4,7 @@ import answerAudio from '../../../native/agent-island/sounds/startup-chime.mp3?u
 import { makerChatStore } from '../../../src/renderer/lib/makerChatStore';
 import { useEffect, useRef } from 'react';
 import { Route, Routes, useSearchParams } from 'react-router-dom';
-import { AppFrame, forbid, mountPage, subscription } from '../../ui-page/harness';
+import { AppFrame, ctx, forbid, mountPage, subscription } from '../../ui-page/harness';
 import type { BotGroupSummary } from '../../../src/shared/botGroupChat';
 import { BotGroupSidebarRow } from '../../../src/renderer/features/bots/BotGroupSidebarRow';
 import { BotGroupChatView } from '../../../src/renderer/features/bots/BotGroupChatView';
@@ -385,7 +385,7 @@ function groupFrom(data: GroupData) {
 }
 
 void mountPage({
-  route: '/bots/groups/fixture-group',
+  route: '/bots/groups/fixture-group' + (ctx.data.direct ? '?conversationKind=direct' : ''),
   host: (ctx) => {
     const data = ctx.data as unknown as GroupData;
     let group = { ...groupFrom(data), ...(data.planRead ? { serverBacked: true, historyRevision: 'fixture-live', organizerBotId: 'b' } : {}) };
