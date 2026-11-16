@@ -34,6 +34,10 @@ describe('passive shared-userData instance auth isolation', () => {
     resolve(process.cwd(), 'src/main/maker-host/auth-adapters.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
+  const sharedSkillsCoreSource = readFileSync(
+    resolve(process.cwd(), 'src/main/maker-host/sharedGlobalSkillsPreparationCore.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
 
   const sliceBody = (startAnchor: string, endAnchor: string): string => {
     const start = authSource.indexOf(startAnchor);
@@ -242,9 +246,12 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(bootstrapSource).not.toContain('await prepareSharedGlobalSkillLinks();');
     expect(bootstrapSource).not.toContain('refreshBuiltInSharedSkillLinks');
 
-    const start = authAdapterSource.indexOf('private async runEnsureSharedGlobalSkills(ownerId:');
-    const end = authAdapterSource.indexOf('\n  async getState(', start);
-    const body = authAdapterSource.slice(start, end);
+    // The body moved unchanged into the shared core (release table row 25, 25b); the adapter delegates.
+    expect(authAdapterSource).toContain('await this.sharedGlobalSkills.ensureSharedGlobalSkills();');
+    const start = sharedSkillsCoreSource.indexOf('async function runEnsureSharedGlobalSkills(ownerId:');
+    const end = sharedSkillsCoreSource.indexOf('\n  return { ensureSharedGlobalSkills };', start);
+    expect(start).toBeGreaterThan(-1);
+    const body = sharedSkillsCoreSource.slice(start, end);
     const ownerBoundary = body.indexOf('withSharedGlobalSkillProjectionMutation(ownerId');
     expect(ownerBoundary).toBeGreaterThan(-1);
     expect(body.indexOf('prepareBuiltInSkills({')).toBeGreaterThan(ownerBoundary);
