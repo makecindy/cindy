@@ -5075,7 +5075,10 @@ function getCatalogMediaConfig(
       kind === 'image'
         ? (providerId) => providerId === 'xd' || (imageRegistry?.isProviderEditReady(providerId) ?? false)
         : undefined,
-      kind === 'image' || kind === 'video' ? isCatalogMediaModelVisible : undefined,
+      kind === 'image' || kind === 'video'
+        ? (providerId, modelId, defaultEnabled) =>
+            isCatalogMediaModelVisible(providerId, modelId, defaultEnabled, undefined, kind)
+        : undefined,
     );
   } catch (err) {
     // 目录读取异常 = 拿不到可用性证明,同「空清单」处理(不静默顶一份旧名单)。
@@ -5165,6 +5168,8 @@ function getMediaPreferenceConfig(capability: GhostMediaCapability): CindyMediaP
         'xd',
         model.id,
         'defaultEnabled' in model ? model.defaultEnabled : undefined,
+        undefined,
+        kind,
       ),
     ),
     kind,
@@ -5310,21 +5315,16 @@ async function getGhostConfigurableMediaModels(
     const availability = await loadPluginMediaAvailability(type, localVideoModels.length, () =>
       listExecutableMediaModels([], { skipGateway: !getAppCapabilities().canUseCindyGateway }),
     );
-    const allModels = [...availability.models, ...localVideoModels]
-      .filter(
-        (model, index, models) =>
-          models.findIndex(
-            (candidate) => candidate.id === model.id && candidate.providerId === model.providerId,
-          ) === index,
-      )
+    const candidates = selectExecutableCoreMediaModels([...availability.models, ...localVideoModels], type)
       .filter((model) =>
         isCatalogMediaModelVisible(
           model.providerId,
           model.id,
           'defaultEnabled' in model ? model.defaultEnabled : undefined,
+          undefined,
+          type,
         ),
       );
-    const candidates = selectExecutableCoreMediaModels(allModels, type);
     const models = isProviderBlindCoreArt(ghost)
       ? collapseProviderBlindMediaModels(candidates, (model) => model.id)
       : candidates;
@@ -5768,7 +5768,7 @@ function resolveImageChannelForModel(
 
 function customMediaAgents(provider: Provider, model: ProviderMediaModel, respectDisplaySwitch: boolean, capabilities: readonly MediaCapability[] = []): AgentKind[] {
   return declaredCustomMediaAgents(provider, model, capabilities).filter(agent => !respectDisplaySwitch ||
-    isCatalogMediaModelVisible(provider.id, model.id, provider.models[agent]?.find(member => member.id === model.id && member.mode === model.mode)?.defaultEnabled, agent));
+    isCatalogMediaModelVisible(provider.id, model.id, provider.models[agent]?.find(member => member.id === model.id && member.mode === model.mode)?.defaultEnabled, agent, model.mode === 'video_generation' ? 'video' : 'image'));
 }
 
 function listLocalProviderMediaModels(respectDisplaySwitch = false, capabilities: readonly MediaCapability[] = []) {
@@ -5790,7 +5790,7 @@ function listLocalProviderMediaModels(respectDisplaySwitch = false, capabilities
         (!guideDriven && !getImageChannelRegistry().isProviderReady(provider.id, model.id)) ||
         isModelDisabled(access, provider.id, model.id) ||
         (respectDisplaySwitch && !guideDriven &&
-          !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled))
+          !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled, undefined, 'image'))
       ) {
         return [];
       }
@@ -5855,7 +5855,7 @@ function listLocalProviderVideoModels(respectDisplaySwitch = false, capabilities
           ? !resolveCustomVideoConnection(provider.id, model.id)
           : !registry?.hasAlias(model.id, provider.id))) ||
         (respectDisplaySwitch && !guideDriven &&
-          !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled))
+          !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled, undefined, 'video'))
       ) {
         return [];
       }
