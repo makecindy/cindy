@@ -94,6 +94,7 @@ import { hostAuthFetch } from './auth-fetch.mjs';
 import type { Effort, PermissionMode } from '@cindy/maker-core';
 import { createRequire } from 'node:module';
 import { readAuthEndpoints } from './auth/endpoints.mjs';
+import { assertHostSessionRegion, HostCrossRegionPersonalAccountError, hostPackageRegion } from './auth/region-policy.js';
 import { logoutHostSession } from './auth/logout.mjs';
 import { listInstalledPlugins } from './plugins.mjs';
 import { createHostGhostManager } from './plugins-installed.ts';
@@ -339,6 +340,15 @@ async function resolveAccountUser(expectedOwner: string | null = runtime.owner):
   const me = await client.getMe(sessionToken);
   const membership = me?.membership;
   if (!membership || typeof membership.id !== 'string' || !membership.id) return null;
+  // H-2, as the Desktop's cold start and runtime refresh: a rotated token stays in the record of its
+  // own region, but a personal session of another region is never adopted (treated as signed out).
+  try {
+    assertHostSessionRegion({ packageRegion: hostPackageRegion(), sessionRealm: realm, membershipKind: membership.kind });
+  } catch (error) {
+    // As the Desktop's resetActiveAuthRealmToBuild: the refused realm is not kept as the account's.
+    account = { authenticated: false, realm: null };
+    throw error;
+  }
   if (expectedOwner && expectedOwner !== membership.id) throw new Error('The signed-in account does not match the active Host profile');
   currentSessionToken = sessionToken;
   currentDeviceId = verifiedDeviceId;
@@ -377,7 +387,7 @@ async function performAuthRefresh(): Promise<boolean> {
     }
     return false;
   } catch (error) {
-    if (isDefinitiveRefreshError(error)) {
+    if (isDefinitiveRefreshError(error) || error instanceof HostCrossRegionPersonalAccountError) {
       // Refresh may belong to an admitted HTTP request. Raise the boundary now,
       // but let that request unwind before waiting for the HTTP drain.
       void invalidateHostSession('account-unavailable').catch(error => {
@@ -1166,7 +1176,8 @@ const serverDeps = {
       voiceInput: profile.voiceInput,
       harness: harnessBinaries.status(),
       auth: account.authenticated && accountUser
-        ? { user: accountUser, ownerId: runtime.owner }
+        // realm: the web shim lets usage statistics leave only for this region (甲-1).
+        ? { user: accountUser, ownerId: runtime.owner, realm: account.realm }
         : {},
       appearance: profile.appearance,
       layout: profile.layout,

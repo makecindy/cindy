@@ -11,6 +11,7 @@ import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { build } from 'esbuild';
+import { WEB_SHIM_DEFINE } from '../src/web-client-build.mjs';
 import { chromium } from 'playwright-core';
 import { clientMigrationContract } from '../src/client-migration-contract.mjs';
 import { selectReleaseHarnesses } from '../src/release-harnesses.mjs';
@@ -244,7 +245,7 @@ try {
     ['apps/host/src/agent/pi-subagent-runner-process.cts', 'pi-subagent-runner.cjs'],
   ]) await build({ ...common, entryPoints: [entry], outfile: path.join(bin, name), format: name.endsWith('.mjs') ? 'esm' : 'cjs' });
   await build({ absWorkingDir: repo, entryPoints: ['apps/web/shim.js'], outfile: path.join(resources, 'web/shim.js'),
-    bundle: true, platform: 'browser', format: 'iife', target: 'es2022', nodePaths: [path.join(host, 'node_modules')] });
+    bundle: true, platform: 'browser', format: 'iife', target: 'es2022', nodePaths: [path.join(host, 'node_modules')], define: WEB_SHIM_DEFINE });
   await build({ absWorkingDir: repo, entryPoints: ['apps/desktop/src/shared/ghostPageBridge.ts'],
     outfile: path.join(resources, 'plugin-bridge.js'), bundle: true, platform: 'browser',
     format: 'iife', globalName: 'CindyPluginBridge', target: 'es2022' });

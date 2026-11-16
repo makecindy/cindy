@@ -15,6 +15,7 @@ import { CindyAuthClient } from '@cindy/auth-client';
 
 import { readAuthEndpoints } from './auth/endpoints.mjs';
 import { runHostLogin } from './auth/login.mjs';
+import { hostPackageRegion } from './auth/region-policy.ts';
 import { createCredentialStore } from './credentials/store.mjs';
 import { resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
 import { hostAuthFetch } from './auth-fetch.mjs';
@@ -74,6 +75,7 @@ export async function runLoginCommand(argv, io = {}) {
     deviceId,
     store,
     region,
+    packageRegion: hostPackageRegion(),
     hostedCallbackUrl: endpoints.authDesktopCallbackUrl,
     openBrowser: async (url) => {
       out(`If it does not open, visit:\n${url}`);

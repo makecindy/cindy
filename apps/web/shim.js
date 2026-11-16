@@ -10,6 +10,8 @@
 
 import { createHostChannelHandlers, unsupportedHostChannel } from '@cindy/maker-shared/host-channel-contract';
 import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
+import { TAPDB_EVENT_URL_BY_REGION } from '../desktop/src/shared/endpoints.ts';
+import { installAnalyticsRegionGuard } from './analytics-region-guard.js';
 
 (function installCindyHostShim() {
   // Polyfill Web Crypto randomUUID in insecure contexts (e.g. plain HTTP over LAN IP).
@@ -83,6 +85,12 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
    * files through the host, which is why this is a mirror and not a store.
    */
   const boot = window.__cindyBoot ?? {};
+  // 甲-1: the prebuilt renderer's usage statistics leave only for the account's own region.
+  installAnalyticsRegionGuard({
+    target: window,
+    eventUrlByRegion: TAPDB_EVENT_URL_BY_REGION,
+    readRealm: () => window.__cindyBoot?.auth?.realm ?? null,
+  });
   const settingsMirror = {
     appearance: boot.appearance ?? {},
     layout: boot.layout ?? null,
@@ -995,6 +1003,9 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
    * subscribers receive them through the same fan-out the preload provides.
    */
   let eventConnection = null;
+  // 甲-1: the account realm only while signed in (as the boot values); signed out blocks every
+  // usage-statistics collector. Host auth states always carry the stored realm.
+  const signedInRealm = (state) => (state?.authenticated === true ? state.realm ?? null : null);
   let connectionState = { status: 'connecting', connection: 0, recovery: 0 };
   function ensureEventStream() {
     if (eventConnection) return;
@@ -1004,7 +1015,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
       beforeEvents: async (signal) => {
         const auth = await requestHost('/api/auth/state', null, 'POST', signal);
         if (signal.aborted) return;
-        (window.__cindyBoot ??= {}).auth = { user: auth.user, ownerId: auth.dataOwnerId };
+        (window.__cindyBoot ??= {}).auth = { user: auth.user, ownerId: auth.dataOwnerId, realm: signedInRealm(auth) };
         emit('onAuthStateChange', auth);
       },
       onState: (state) => {
@@ -1017,7 +1028,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
         // Interaction traffic has its own preload channels; everything
         // else stays on the shared event stream.
         if (parsed.type === 'auth_changed') {
-          (window.__cindyBoot ??= {}).auth = { user: parsed.user, ownerId: parsed.dataOwnerId };
+          (window.__cindyBoot ??= {}).auth = { user: parsed.user, ownerId: parsed.dataOwnerId, realm: signedInRealm(parsed) };
           emit('onAuthStateChange', parsed);
         } else if (parsed.type === 'interaction_request') {
           emit('maker.onInteractionRequest', { sessionId: parsed.sessionId, request: parsed.request });

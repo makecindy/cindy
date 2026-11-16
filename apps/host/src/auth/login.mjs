@@ -19,6 +19,7 @@ import {
   runHostedCallbackPolling,
 } from '../../../desktop/src/main/authHostedCallback.ts';
 import { parseAuthLoopbackCallback } from '../../../desktop/src/main/authLoopbackCallback.ts';
+import { assertHostSessionRegion, hostPackageRegion } from './region-policy.ts';
 
 const BROWSER_AUTH_TIMEOUT_MS = 5 * 60_000;
 
@@ -84,6 +85,7 @@ function listenOnLoopback(server) {
  *   client: any,
  *   store: {write(key: string, value: string): void},
  *   region: 'cn' | 'global',
+ *   packageRegion?: 'cn' | 'global',
  *   hostedCallbackUrl?: string,
  *   openBrowser: (url: string) => Promise<void>,
  *   method?: string,
@@ -105,6 +107,9 @@ export async function runHostLogin(deps) {
 
   const pair = await deps.client.exchangeAuthorizationCode(authorization.code, verifier);
   if (pair?.status !== 'ok') throw new Error(unfinishedLoginMessage(pair));
+  // H-1, as the Desktop: a personal account of another region is refused before anything is saved.
+  assertHostSessionRegion({ packageRegion: deps.packageRegion ?? hostPackageRegion(), sessionRealm: deps.region,
+    membershipKind: pair.membership?.kind });
   deps.store.write(AUTH_SESSION_KEY, deps.deviceId ? serializeHostSession(deps.region, pair.refreshToken, deps.deviceId) : serializeAuthSessionRecord(deps.region, pair.refreshToken));
   return { authenticated: true, realm: deps.region, method: method.providerOrConnectionId ?? method.type };
 }

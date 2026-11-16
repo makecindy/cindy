@@ -7,6 +7,11 @@ import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-ident
 import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.ts';
 import { resolveRuntimeDeviceId } from '../../desktop/src/main/deviceId.ts';
 import { decodeAccessTokenOrgSlug } from '../../desktop/src/main/authTokenClaims.ts';
+import { createServer } from 'node:http';
+import { CindyAuthClient as RealAuthClient, parseAuthSessionRecord, serializeAuthSessionRecord } from '@cindy/auth-client';
+import { assertHostSessionRegion } from './auth/region-policy.ts';
+import { refreshHostSession as realRefreshHostSession } from './auth/refresh.mjs';
+import { projectAdoptedSession } from './credentials/session.mjs';
 
 // Unit regression: run the real startup/auth functions with in-memory network,
 // credentials and storage. A valid login for B must never open A's database.
@@ -46,6 +51,7 @@ function setup(overrides = {}) {
     ACCOUNT_DEFAULT_MODEL: 'test-model', ACCOUNT_DEFAULT_EFFORT: 'medium',
     // The former startup refresh swallowed mismatch errors and still opened storage.
     refreshAuthSession: async () => false,
+    assertHostSessionRegion, hostPackageRegion: () => 'global', hostAuthFetch: () => { throw new Error('no network in this harness'); },
     ...overrides,
   };
   // import.meta.url is only passed to the injected createRequire stub.
@@ -74,4 +80,73 @@ test('an explicit owner cannot open private data without a verified login', asyn
   await assert.rejects(h.start('account-b'), /Sign in/);
   assert.deepEqual(h.opens, []);
   assert.equal(h.token(), null);
+});
+
+/*
+ * H-2 (release table; user decision 2026-11-17 “和桌面版一致”): adopting a stored session (a
+ * Desktop profile's `AUTH_SESSION_KEY` record) applies the Desktop's cold-start and runtime-refresh
+ * rule. Production entry: main.ts's ensureRuntime and resolveAccountUser, with the real
+ * CindyAuthClient, refreshHostSession and session projection against two fake auth servers.
+ * Gap: the cases above stub the auth client and never carry an account kind or a realm.
+ * Minimal failure: global package, stored cn personal session → must stay signed out, no database.
+ * Tier: unit (loopback HTTP only).
+ */
+async function adoptStoredSession(packageRegion, sessionRealm, kind) {
+  const hits = [];
+  const servers = {};
+  const memberId = `fixture-${sessionRealm}-member`;
+  for (const region of ['cn', 'global']) {
+    const server = createServer((request, response) => {
+      hits.push(`${region} ${request.url}`);
+      const membership = { id: memberId, kind, role: 'owner', displayName: 'Fixture', email: null,
+        orgId: kind === 'org' ? 'fixture-org' : null, orgName: kind === 'org' ? 'Fixture Org' : null };
+      const json = (value) => response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value));
+      if (request.url === '/api/auth/refresh') return json({ accessToken: 'fixture-access-value', refreshToken: `fixture-rotated-${region}`, membership });
+      if (request.url === '/api/me') return json({ membership, passportId: 'fixture-passport', identities: [membership] });
+      return response.writeHead(404).end('{}');
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    servers[region] = { server, url: `http://127.0.0.1:${server.address().port}` };
+  }
+  // The record exactly as the Desktop writes it (no Host device binding).
+  const records = new Map([[AUTH_SESSION_KEY, serializeAuthSessionRecord(sessionRealm, 'fixture-desktop-refresh')]]);
+  const store = { read: (key) => records.get(key) ?? null, write: (key, value) => records.set(key, value) };
+  const h = setup({
+    createCredentialStore: async () => store,
+    readAdoptedSessionState: async () => projectAdoptedSession(store),
+    readAuthEndpoints: (realm) => ({ authApiBaseUrl: servers[realm].url }),
+    CindyAuthClient: RealAuthClient, refreshHostSession: realRefreshHostSession, hostAuthFetch: (input, init) => fetch(input, init),
+    hostPackageRegion: () => packageRegion,
+  });
+  const close = () => Promise.all(Object.values(servers).map(({ server }) => new Promise((resolve) => server.close(resolve))));
+  return { h, hits, memberId, stored: () => parseAuthSessionRecord(records.get(AUTH_SESSION_KEY)), close };
+}
+
+test('an adopted cross-region personal session stays signed out; an organization session is used', async () => {
+  for (const [packageRegion, sessionRealm, kind, adopted] of [
+    ['global', 'cn', 'personal', false],
+    ['cn', 'global', 'personal', false],
+    ['global', 'cn', 'org', true],
+    ['cn', 'global', 'org', true],
+    ['global', 'global', 'personal', true],
+  ]) {
+    const label = `package ${packageRegion}, stored ${sessionRealm} ${kind}`;
+    const run = await adoptStoredSession(packageRegion, sessionRealm, kind);
+    try {
+      if (adopted) {
+        await assert.rejects(run.h.start(run.memberId), /database opened/, label);
+        assert.equal(run.h.opens[0]?.ownerId, run.memberId, label);
+        assert.equal(run.h.token(), 'fixture-access-value', label);
+      } else {
+        await assert.rejects(run.h.start(run.memberId), (error) => error.code === 'HOST_CROSS_REGION_PERSONAL_ACCOUNT', label);
+        assert.deepEqual(run.h.opens, [], `${label}: no account database is opened`);
+        assert.equal(run.h.token(), null, `${label}: the session is not adopted`);
+      }
+      // As the Desktop: the rotated token stays in the record of its own region either way.
+      assert.deepEqual([run.stored()?.realm, run.stored()?.refreshToken], [sessionRealm, `fixture-rotated-${sessionRealm}`], label);
+      assert.ok(run.hits.length > 0 && run.hits.every((hit) => hit.startsWith(`${sessionRealm} `)), label);
+    } finally {
+      await run.close();
+    }
+  }
 });
