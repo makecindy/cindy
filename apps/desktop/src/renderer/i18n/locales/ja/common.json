@@ -17227,7 +17227,8 @@
           "jira_read": "Jira の読み取り",
           "jira_comment": "Jira へのコメント",
           "sessions_dispatch": "セッションのディスパッチ",
-          "feishu_read": "Feishu メッセージの読み取り"
+          "feishu_read": "Feishu メッセージの読み取り",
+          "settings_read": "プロバイダーの状態を読み取る"
         },
         "project": "プロジェクトディレクトリ",
         "capabilitiesLabel": "許可する機能",
@@ -17239,7 +17240,8 @@
           "jira_read": "Jira 課題の照会・読み取り（キー指定 / JQL 検索）",
           "jira_comment": "Jira 課題へのコメント追加",
           "sessions_dispatch": "{{appName}} セッションの作成・再開とメッセージ送信",
-          "feishu_read": "最近アクティブなチャットの一覧取得、指定チャット（グループ/DM）の最新メッセージ取得"
+          "feishu_read": "最近アクティブなチャットの一覧取得、指定チャット（グループ/DM）の最新メッセージ取得",
+          "settings_read": "共有メンバー、使用量、プロバイダーグループ、サブスクリプションアカウントを読み取る。設定は変更しない"
         },
         "capabilityWarn": {
           "ghostMissing": "「{{name}}」プラグインが必要ですが未インストールです——実行時にこの機能は失敗します",

@@ -17466,7 +17466,8 @@
           "jira_read": "Leer Jira",
           "jira_comment": "Comentar en Jira",
           "sessions_dispatch": "Enviar sesiones",
-          "feishu_read": "Leer mensajes de Feishu"
+          "feishu_read": "Leer mensajes de Feishu",
+          "settings_read": "Leer el estado de los proveedores"
         },
         "project": "Directorio del proyecto",
         "capabilitiesLabel": "Capacidades permitidas",
@@ -17478,7 +17479,8 @@
           "jira_read": "Leer incidencias de Jira (obtener por clave / búsqueda JQL)",
           "jira_comment": "Agregar comentarios a incidencias de Jira",
           "sessions_dispatch": "Crear o reactivar sesiones de {{appName}} y entregar mensajes",
-          "feishu_read": "Listar chats con actividad reciente; obtener mensajes recientes de un chat (grupal o directo)"
+          "feishu_read": "Listar chats con actividad reciente; obtener mensajes recientes de un chat (grupal o directo)",
+          "settings_read": "Leer miembros con acceso compartido, uso, grupos de proveedores y cuentas de suscripción; no modifica la configuración"
         },
         "capabilityWarn": {
           "ghostMissing": "Requiere el complemento \"{{name}}\", que no está instalado; esta capacidad fallará al ejecutarse",

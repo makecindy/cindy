@@ -17227,7 +17227,8 @@
           "jira_read": "读取 Jira",
           "jira_comment": "评论 Jira",
           "sessions_dispatch": "派发任务",
-          "feishu_read": "读取飞书消息"
+          "feishu_read": "读取飞书消息",
+          "settings_read": "读取供应商状态"
         },
         "project": "项目目录",
         "capabilitiesLabel": "允许调用的能力",
@@ -17239,7 +17240,8 @@
           "jira_read": "读取 Jira Issue（按 key 读取 / JQL 搜索）",
           "jira_comment": "向 Jira Issue 添加评论",
           "sessions_dispatch": "创建或唤醒 {{appName}} 任务并投递消息",
-          "feishu_read": "列出最近活跃的对话；拉取指定对话（群聊或单聊）的最近消息"
+          "feishu_read": "列出最近活跃的对话；拉取指定对话（群聊或单聊）的最近消息",
+          "settings_read": "读取分享成员、用量、供应商组和订阅账号；不修改设置"
         },
         "capabilityWarn": {
           "ghostMissing": "依赖「{{name}}」插件，但该插件未安装——运行时此能力会失败",

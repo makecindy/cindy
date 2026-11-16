@@ -17466,7 +17466,8 @@
           "jira_read": "Ler Jira",
           "jira_comment": "Comentar no Jira",
           "sessions_dispatch": "Despachar sessões",
-          "feishu_read": "Ler mensagens do Feishu"
+          "feishu_read": "Ler mensagens do Feishu",
+          "settings_read": "Ler o estado dos provedores"
         },
         "project": "Diretório do projeto",
         "capabilitiesLabel": "Recursos permitidos",
@@ -17478,7 +17479,8 @@
           "jira_read": "Ler issues do Jira (obter por chave / busca JQL)",
           "jira_comment": "Adicionar comentários a issues do Jira",
           "sessions_dispatch": "Criar ou reativar sessões do {{appName}} e entregar mensagens",
-          "feishu_read": "Listar conversas ativas recentemente; buscar mensagens recentes de uma conversa (grupo ou mensagem direta)"
+          "feishu_read": "Listar conversas ativas recentemente; buscar mensagens recentes de uma conversa (grupo ou mensagem direta)",
+          "settings_read": "Ler membros dos compartilhamentos, uso, grupos de provedores e contas de assinatura; não altera as configurações"
         },
         "capabilityWarn": {
           "ghostMissing": "Requer o plugin \"{{name}}\", que não está instalado — este recurso falhará durante a execução",

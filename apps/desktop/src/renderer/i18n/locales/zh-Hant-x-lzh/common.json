@@ -17227,7 +17227,8 @@
           "jira_read": "讀 Jira",
           "jira_comment": "評 Jira",
           "sessions_dispatch": "派差事",
-          "feishu_read": "讀飛書之訊"
+          "feishu_read": "讀飛書之訊",
+          "settings_read": "讀供方之況"
         },
         "project": "案之目錄",
         "capabilitiesLabel": "許呼之能",
@@ -17239,7 +17240,8 @@
           "jira_read": "查讀 Jira 單（依 key 讀 / JQL 尋）",
           "jira_comment": "於 Jira 單增評",
           "sessions_dispatch": "立或喚 {{appName}} 差事，並遞訊",
-          "feishu_read": "列近日活躍之言談；取指定言談（群/單聊）之近訊"
+          "feishu_read": "列近日活躍之言談；取指定言談（群/單聊）之近訊",
+          "settings_read": "讀分享成員、用量、供方組與訂閱帳號；不改規制"
         },
         "capabilityWarn": {
           "ghostMissing": "依「{{name}}」法器，今未納——差事行時此能必敗",
