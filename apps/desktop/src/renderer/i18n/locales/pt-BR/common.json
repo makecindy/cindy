@@ -14223,7 +14223,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "Criando worktree · entrada desativada",
-      "subtitle": "Branch de destino {{branch}} · a entrada será desbloqueada automaticamente"
+      "subtitle": "Branch de destino {{branch}} · a entrada será desbloqueada automaticamente",
+      "elapsed": "Aguardando há {{duration}}"
     },
     "worktree": {
       "detecting": "Detectando ambiente…",

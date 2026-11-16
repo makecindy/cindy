@@ -14054,7 +14054,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "方建 worktree · 輸入已停",
-      "subtitle": "目標分支 {{branch}} · 畢則自解"
+      "subtitle": "目標分支 {{branch}} · 畢則自解",
+      "elapsed": "已候 {{duration}}"
     },
     "worktree": {
       "detecting": "方察環境…",

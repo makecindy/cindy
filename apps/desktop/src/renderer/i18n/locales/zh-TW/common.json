@@ -14054,7 +14054,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "正在建立 worktree · 輸入已停用",
-      "subtitle": "目標分支 {{branch}} · 完成後自動解鎖"
+      "subtitle": "目標分支 {{branch}} · 完成後自動解鎖",
+      "elapsed": "已等待 {{duration}}"
     },
     "worktree": {
       "detecting": "偵測環境中…",

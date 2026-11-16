@@ -14223,7 +14223,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "Création du worktree · saisie désactivée",
-      "subtitle": "Branche cible {{branch}} · déverrouillage automatique"
+      "subtitle": "Branche cible {{branch}} · déverrouillage automatique",
+      "elapsed": "En attente depuis {{duration}}"
     },
     "worktree": {
       "detecting": "Détection de l'environnement…",

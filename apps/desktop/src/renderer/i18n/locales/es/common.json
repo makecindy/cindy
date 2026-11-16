@@ -14223,7 +14223,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "Creando worktree · entrada deshabilitada",
-      "subtitle": "Rama de destino {{branch}} · se desbloqueará automáticamente"
+      "subtitle": "Rama de destino {{branch}} · se desbloqueará automáticamente",
+      "elapsed": "Esperando desde hace {{duration}}"
     },
     "worktree": {
       "detecting": "Detectando entorno…",

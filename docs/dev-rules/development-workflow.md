@@ -26,6 +26,12 @@ Cindy 创建或重建托管 worktree 时，会尽力向 Git 本地 `info/exclude
 启用选择，不按失败回退：Multibox 报错原样显示给用户，不改用 `git worktree add` 重试。
 同一次创建中途失败的回滚不再逐字节比较 ignored 文件：此时它们全是本次刚从 base 克隆的
 引擎缓存（常见十万级文件、数十 GB），比较只会长时间占住该仓库的创建队列。
+Multibox 建完才返回（2026-11-16 实测 Unity 项目 67–88 秒），所以远程创建（另一台电脑或
+手机发起）的等待上限是 5 分钟（`packages/device-link/src/allowlist.ts` 的 `worktree:create`），
+期间控制端一直显示创建中，建好后才建任务，Agent 不会进入半成品目录；未更新的控制端仍按
+60 秒超时。Desktop 的创建中卡片（`WorktreeCreatingOverlay`）超过 3 秒后显示已等待时长：本机
+新建在任务页替代输入框；远程与 Goal 先建 worktree 再建任务，卡片显示在新建页输入框下方。
+手机新建页暂无同款卡片与计时。
 现状缺口：
 - `git multibox add` 报告的环境变量（如 `UNITY_PROJECT_PATH`）不会注入任务的 Agent 进程
   （Codex 多个任务共用一个后台进程），需要的工具在工作区内运行 `eval "$(git multibox env)"`。

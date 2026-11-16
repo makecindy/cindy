@@ -14054,7 +14054,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "worktree 생성 중 · 입력이 비활성화되었습니다",
-      "subtitle": "대상 브랜치 {{branch}} · 완료 후 자동 잠금 해제"
+      "subtitle": "대상 브랜치 {{branch}} · 완료 후 자동 잠금 해제",
+      "elapsed": "{{duration}} 대기 중"
     },
     "worktree": {
       "detecting": "환경 감지 중…",

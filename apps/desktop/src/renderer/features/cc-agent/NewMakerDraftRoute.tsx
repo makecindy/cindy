@@ -72,6 +72,7 @@ import {
   type FolderPickerSelectSource,
 } from '@/components/new-chat/FolderPickerPopover';
 import { DeviceSwitcherPill } from '@/components/new-chat/DeviceSwitcherPill';
+import { WorktreeCreatingOverlay } from '@/components/new-chat/WorktreeCreatingOverlay';
 import {
   AddRemoteProjectDialog,
   type RemoteProjectTarget,
@@ -921,7 +922,10 @@ export function NewMakerDraftRoute() {
   // 配对驱动 isDragOver,亮全区虚线遮罩 + 透传 ChatInput 卡内提示文案。
   const pageDragCounterRef = useRef(0);
   const [pageDragOver, setPageDragOver] = useState(false);
-  const [wtCreating, setWtCreating] = useState(false);
+  // 远程与 Goal 先建 worktree 再建任务,期间还停在新建页:记下目标分支与开始时刻,在输入框
+  // 下方显示与任务页同款的创建中卡片和已等待时长(Multibox 同步克隆可达一两分钟)。
+  const [wtCreatingInfo, setWtCreatingInfo] = useState<{ branch: string; startedAt: number } | null>(null);
+  const wtCreating = wtCreatingInfo !== null;
   const [wtCheckoutBusy, setWtCheckoutBusy] = useState(false);
   const wtCheckoutBusyRef = useRef(false);
   const wtCheckoutBranchViewRef = useRef<CheckoutBranchView | null>(null);
@@ -4721,7 +4725,7 @@ export function NewMakerDraftRoute() {
                 await forgetPendingRemotePrecreatedWorktree(reservation, isCurrentDataOwner);
                 throw new RemotePrecreatedWorktreeCleanupPendingError();
               }
-              setWtCreating(true);
+              setWtCreatingInfo({ branch: getBranchName(name), startedAt: Date.now() });
               try {
                 const createRequest: RemoteWorktreeCreateRequest = {
                   sessionId: presetSessionId,
@@ -4781,7 +4785,7 @@ export function NewMakerDraftRoute() {
                 // 交给重连/重启恢复；不能把“不知道”展示成普通创建失败后允许重试。
                 throw new RemotePrecreatedWorktreeCleanupPendingError({ cause: err });
               } finally {
-                setWtCreating(false);
+                setWtCreatingInfo(null);
               }
             }
             if (precreatedWorktree && !(await resolveBuiltInSkillForDirectory(remoteWorkingDir))) {
@@ -5636,7 +5640,7 @@ export function NewMakerDraftRoute() {
               : (getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed')),
           );
         } finally {
-          setWtCreating(false);
+          setWtCreatingInfo(null);
           markSendInFlight(false);
         }
       })();
@@ -5951,7 +5955,7 @@ export function NewMakerDraftRoute() {
               await forgetPendingRemotePrecreatedWorktree(reservation, isCurrentDataOwner);
               throw new RemotePrecreatedWorktreeCleanupPendingError();
             }
-            setWtCreating(true);
+            setWtCreatingInfo({ branch: getBranchName(name), startedAt: Date.now() });
             try {
               let resp: ReturnType<typeof parseRemoteWorktreeCreateResult>;
               try {
@@ -5987,7 +5991,7 @@ export function NewMakerDraftRoute() {
                 isCurrentDataOwner,
               );
             } finally {
-              setWtCreating(false);
+              setWtCreatingInfo(null);
             }
           }
           // 与 handleSend 同口径先存一份 args:临时行要按实际提交的值组装(见 commitRemoteSessionHandoff)。
@@ -6214,7 +6218,7 @@ export function NewMakerDraftRoute() {
           // workingDir. Any setup failure soft-deletes that empty session before
           // retry; Goal never starts against the base repository.
           goalWorkingDir = baseRepo;
-          setWtCreating(true);
+          setWtCreatingInfo({ branch: goalWorktreeBranchName, startedAt: Date.now() });
         }
         const newSession = await createSession({
           id: goalSessionId,
@@ -6358,7 +6362,7 @@ export function NewMakerDraftRoute() {
         }
         throw error;
       } finally {
-        setWtCreating(false);
+        setWtCreatingInfo(null);
         markSendInFlight(false);
       }
     },
@@ -7015,6 +7019,14 @@ export function NewMakerDraftRoute() {
                     }
                   />
                   {!newGoalOpen && directoryRecoveryNotice}
+                  {wtCreatingInfo ? (
+                    <div className="mt-3 w-full">
+                      <WorktreeCreatingOverlay
+                        branchName={wtCreatingInfo.branch}
+                        startedAt={wtCreatingInfo.startedAt}
+                      />
+                    </div>
+                  ) : null}
                 </div>
                 {/* device-link:为远程设备项目新建对话时的明显标识。让用户清楚这条对话会建在
                     被控设备上、属于那台机器的项目,而不是本机。放输入框正下方并与其水平居中
