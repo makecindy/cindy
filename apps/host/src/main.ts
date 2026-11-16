@@ -132,6 +132,7 @@ import { readClaudeIdleMinutesFrom } from '../../desktop/src/main/maker-host/cla
 import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
 import { createHostRuntimeSelection } from './agent/runtime-selection.ts';
 import { createDeferredRestartQueueGate } from '../../desktop/src/main/maker-ipc/deferredRestartQueueWiring.ts';
+import { throwIpcError } from '../../desktop/src/main/utils/ipcValidate.js';
 import type { ContextRecoveryKind } from './agent/context-recovery.ts';
 import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring.ts';
 import { lockSessionRoute } from './agent/session-route-lock.mjs';
@@ -1331,15 +1332,36 @@ const serverDeps = {
    */
   setSessionModel: (sessionId: string, model: unknown, providerId: unknown, revision: unknown, selection: unknown) =>
     runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
-  /** An engine change a client asks for: the desktop's switch-session-agent (an intent until the next send). */
+  /**
+   * An engine change a client asks for: the desktop's switch-session-agent (an intent until the next
+   * send), with its arguments: the options (confirmedContextWindow; agentDeviceId) and the thinking
+   * choice. Moving the Agent to another computer is refused as the Host refuses remote execution
+   * (send-preflight.ts); null keeps it on this computer, as on the desktop.
+   */
   switchSessionAgent: async (
     sessionId: string,
     targetAgentKind: string,
     model: string,
     providerId: string | null,
-    effort?: string,
-    fastMode?: boolean | 'ultrafast',
-  ) => runtimeSelection.switchAgent({ sessionId, targetAgentKind, model, providerId, effort, fastMode } as never),
+    effort?: unknown,
+    fastMode?: unknown,
+    options?: unknown,
+    thinking?: unknown,
+  ) => {
+    const record = options && typeof options === 'object' && !Array.isArray(options)
+      ? options as { confirmedContextWindow?: unknown; agentDeviceId?: unknown } : undefined;
+    const confirmedContextWindow = record?.confirmedContextWindow;
+    const agentDeviceId = record && 'agentDeviceId' in record ? record.agentDeviceId : undefined;
+    if (agentDeviceId !== undefined && agentDeviceId !== null) {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'Host does not yet support remote execution');
+    }
+    return runtimeSelection.switchAgent({
+      sessionId, targetAgentKind, model, providerId, effort, fastMode,
+      ...(confirmedContextWindow !== undefined ? { confirmedContextWindow } : {}),
+      ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
+      thinking,
+    });
+  },
   getSessionAgentSwitchIntent: (sessionId: string) => runtimeSelection.projectIntent(sessionId),
   /**
    * Auto-title step 1 (Codex-style immediate placeholder): persist the

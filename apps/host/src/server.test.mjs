@@ -393,8 +393,11 @@ test('thrown values that are not errors are never serialised to the client', asy
 
 test('cross-engine switch returns a deferred intent and exposes it for the renderer', async (t) => {
   let intent = null;
+  let forwarded = null;
   const request = await withServer(t, {
-    switchSessionAgent: (sessionId, targetAgentKind, model, providerId) => {
+    switchSessionAgent: (...args) => {
+      forwarded = args;
+      const [, targetAgentKind, model, providerId] = args;
       intent = { targetAgentKind, model, providerId };
       return { switched: false, agentKind: targetAgentKind, model, engineReady: true, deferred: true };
     },
@@ -411,9 +414,13 @@ test('cross-engine switch returns a deferred intent and exposes it for the rende
       model: 'group/deepseek',
       providerId: 'magpie-debian',
       effort: 'high',
+      options: { confirmedContextWindow: 128_000 },
+      thinking: false,
     }),
   });
   assert.equal(switched.status, 200);
+  // The desktop IPC's arguments reach the entry, including its options and the thinking choice.
+  assert.deepEqual(forwarded, ['s1', 'pi', 'group/deepseek', 'magpie-debian', 'high', undefined, { confirmedContextWindow: 128_000 }, false]);
   assert.equal(switched.body.deferred, true);
   assert.equal(switched.body.switched, false);
   assert.equal(switched.body.agentKind, 'pi');

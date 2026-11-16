@@ -424,7 +424,11 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     },
     /** An engine change a client asks for: the desktop's switch-session-agent, under the task's lock. */
     switchAgent(params: Parameters<typeof performSessionAgentSwitch>[1]) {
-      return withSendToSessionLock(params.sessionId as string, () => performSessionAgentSwitch(agentSwitchDeps, params));
+      // As the desktop's handler: the shared task guard of this entry (no Device Link guest on the
+      // Host), and the task's lock when the session id is a string.
+      const guard = createSharedTaskSettingGuard(undefined, String(params.sessionId), { admitted: false });
+      const run = () => performSessionAgentSwitch(agentSwitchDeps, { ...params, assertSelectionCurrent: guard.admit });
+      return typeof params.sessionId === 'string' && params.sessionId ? withSendToSessionLock(params.sessionId, run) : run();
     },
     /**
      * The send transaction's landing of a picked model or engine, with the steps of the desktop's

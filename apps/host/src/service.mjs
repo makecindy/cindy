@@ -91,7 +91,7 @@ export function createHostService(deps) {
       return { status: 200, body: await deps.setSessionModel(String(body.sessionId ?? ''), body.model, body.providerId, body.revision, body.selection) };
     }
     if (url.pathname === '/api/sessions/switch-agent') {
-        return { status: 200, body: await deps.switchSessionAgent(String(body.sessionId ?? ''), String(body.targetAgentKind ?? ''), String(body.model ?? ''), body.providerId ?? null, body.effort, body.fastMode) };
+        return { status: 200, body: await deps.switchSessionAgent(String(body.sessionId ?? ''), String(body.targetAgentKind ?? ''), String(body.model ?? ''), body.providerId ?? null, body.effort, body.fastMode, body.options, body.thinking) };
     }
     if (url.pathname === '/api/sessions/agent-switch-intent') {
         return { status: 200, body: await deps.getSessionAgentSwitchIntent(String(body.sessionId ?? '')) };

@@ -393,10 +393,12 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
       return rpc('/sessions/set-model', { sessionId, model, providerId, revision, selection });
     },
     'maker.switchSessionAgent': async (args) => {
-      const [sessionId, targetAgentKind, model, providerId, effort, fastMode] = args ?? [];
+      const [sessionId, targetAgentKind, model, providerId, effort, fastMode, options, thinking] = args ?? [];
       if (!sessionId || !model) {
         return { switched: false, agentKind: targetAgentKind, model, engineReady: true };
       }
+      // The desktop IPC's arguments, including its options (agentDeviceId, confirmedContextWindow) and
+      // the thinking choice.
       return rpc('/sessions/switch-agent', {
         sessionId,
         targetAgentKind,
@@ -404,6 +406,8 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
         providerId: providerId ?? null,
         effort,
         fastMode,
+        options,
+        thinking,
       });
     },
     'maker.setEffort': (args) => {
