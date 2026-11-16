@@ -11,6 +11,16 @@
  * - 覆盖缺口：桌面 modelPricing.test.ts 只测桌面壳与 mock 端口；Host 没有任何定价测试。
  * - 最小输入：一个带价格的 XD 模型、一次失败轮、一次账号代际变化、一次 Key 文件替换。
  *   tier：unit，无网络、无子进程、无真实等待。
+ *
+ * 凭据状态（最后两条用例，审核方 2026-11-17 定对齐桌面）：
+ * - 生产入口：model-access.ts 的 createHostModelAccess（桌面 credentialsSync 的 Host 实例），它的
+ *   publish 照 main.ts 交给 listProviders.noteCredentialStatus。
+ * - 规则：桌面 model-access/index.ts 的 onStatusChange 在 failed（437–439）与
+ *   disabled / unsupported / idle（440–441）时传空列表，清掉 XD 报价；ok 时才发起下一轮 /models
+ *   （432）。继续显示已失效账号的价格，用户会以为还能按那个价格用。
+ * - 覆盖缺口：上面三条用例只走 /models 轮次与账号边界；Host 原来不听凭据状态，凭据失败后旧报价照旧答复。
+ * - 最小失败输入：一次成功同步后，一次 failed（新 Key 存不下，SAFE_STORAGE_UNAVAILABLE）或一次
+ *   disabled（503），再一次恢复到 ok。tier：unit。
  * - 实测：Host 的 node --import tsx --import ./src/loaders/register-raw.mjs --test 单文件，
  *   见交付记录。
  */
@@ -23,6 +33,7 @@ import path from 'node:path';
 import { createProviderCatalog } from './providers.mjs';
 import { createHostUsagePricing } from './usage-pricing.ts';
 import { configureHostOwner } from './claude-auth.mjs';
+import { createHostModelAccess } from './model-access.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { resolveOwnerScopedSecretStorageKey } from '../../../desktop/src/main/secrets/providerSecretOwnerKey.ts';
 import { providerSecretStorageKey } from '../../../desktop/src/shared/providerSecrets.ts';
@@ -117,6 +128,55 @@ test('an account boundary clears the prices, and a replaced key file retires the
   assert.deepEqual(env.fed, [1, 0], 'the boundary feeds an empty list');
   assert.deepEqual(await usagePricing.getGatewayModelPricing(), {});
 });
+
+// The two desktop branches: failed (437–439) and disabled / unsupported / idle (440–441).
+for (const state of ['failed', 'disabled']) {
+  test(`credentials ${state}: the last prices stop answering, and come back with the /models round after ok`, async t => {
+    const env = setup(t, `pricing-owner-${state}`);
+    const usagePricing = env.pricing();
+    const listProviders = env.catalog(usagePricing);
+    const endpoint = 'https://gateway.example.test';
+    let key = 'fixture-key-a';
+    let writable = true;
+    let respond = () => ({ endpoint, apiKey: key });
+    const access = createHostModelAccess({ ownerId: `pricing-owner-${state}`, region: 'global',
+      readKey: () => key, writeKey: value => { if (!writable) return false; key = value; return true; },
+      request: async () => respond(),
+      // As main.ts: the status the Host publishes also goes to the catalog.
+      publish: status => listProviders.noteCredentialStatus(status),
+      onKeyChanged: () => {},
+    });
+    t.after(() => access.close());
+    assert.equal((await access.start()).state, 'ok');
+    env.rounds.push(PRICED);
+    await env.list(listProviders);
+    const priced = await usagePricing.getGatewayModelPricing();
+    assert.equal(priced?.xd?.['claude-sonnet-4']?.inputPerMtok, 3);
+
+    if (state === 'failed') {
+      writable = false;
+      respond = () => ({ endpoint, apiKey: 'fixture-key-b' });
+    } else {
+      respond = () => { throw Object.assign(new Error('model access disabled'), { code: 'MODEL_ACCESS_DISABLED', statusCode: 503 }); };
+    }
+    assert.equal((await access.sync.retry()).state, state);
+    assert.deepEqual(await usagePricing.getGatewayModelPricing(), {}, 'the failed account\'s prices are gone');
+    // A /models round that still succeeds before the credentials recover keeps no prices either.
+    env.rounds.push(PRICED);
+    await env.list(listProviders, true);
+    assert.deepEqual(await usagePricing.getGatewayModelPricing(), {});
+
+    writable = true;
+    respond = () => ({ endpoint, apiKey: key });
+    assert.equal((await access.sync.retry()).state, 'ok');
+    assert.deepEqual(await usagePricing.getGatewayModelPricing(), {}, 'ok alone restores no price');
+    // Not forced: ok made the last round stale, so this read runs the next /models round.
+    env.rounds.push(PRICED);
+    await env.list(listProviders);
+    assert.equal(env.rounds.length, 0, 'the read after ok ran a /models round');
+    assert.deepEqual(await usagePricing.getGatewayModelPricing(), priced);
+  });
+}
 
 async function waitForFile(file) {
   // The cache write is fire-and-forget (writeDiskCache); wait for the event, not a fixed delay.

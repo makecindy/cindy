@@ -580,7 +580,12 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       if (!baseUrl) throw new Error('Model access endpoint is unavailable');
       return serverApi(route, { baseUrl, method, redactErrorDetails: true });
     },
-    publish: status => eventHub.publish({ type: 'plugin_push', channel: MODEL_ACCESS_STATUS_CHANNEL, payload: status }),
+    publish: status => {
+      eventHub.publish({ type: 'plugin_push', channel: MODEL_ACCESS_STATUS_CHANNEL, payload: status });
+      // As the desktop's onStatusChange (model-access/index.ts): a failed account's prices go, and
+      // come back with the next /models round after ok. Price changes are not pushed yet (row 13, 3f).
+      listProviders.noteCredentialStatus(status);
+    },
     onKeyChanged: () => agentGraph?.gatewayRestart.schedule(),
   });
   await modelAccess.start();

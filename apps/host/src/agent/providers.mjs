@@ -10,13 +10,18 @@ const CACHE_MS = 5 * 60_000;
  * list). `applyModels` also runs on every read between rounds and after a failed round, where the
  * desktop keeps its last prices. `trackModelsSync` gets each round in flight, as the desktop's
  * trackGatewayModelPricingSync does, so billing waits briefly for it.
+ *
+ * The returned function also takes the account's credential status (`noteCredentialStatus`, fed by
+ * the Host model access as the desktop's credential sync feeds model-access/index.ts onStatusChange).
  */
 export function createProviderCatalog({ readProviders, fetchModels, applyModels, readModels, markModelsUnknown, readOwner, applyPricedModels, trackModelsSync }) {
   let cached = null;
   let flight = null;
   let activeIdentity = null;
   let activeKey = null;
-  return async function listProviders(options) {
+  // Set while the account's credentials are failed, disabled, unsupported or idle; see noteCredentialStatus.
+  let pricesHeld = false;
+  async function listProviders(options) {
     const initial = readOwner?.();
     const owner = { dataOwnerId: options.ownerId ?? null, ownerGeneration: initial?.generation ?? options.ownerGeneration ?? 0 };
     // In-memory identity of this connection, only ever compared for equality.
@@ -61,7 +66,7 @@ export function createProviderCatalog({ readProviders, fetchModels, applyModels,
         pending.promise = Promise.resolve().then(() => fetchModels(options.gateway)).then(models => {
           check();
           cached = { at: Date.now(), models };
-          applyPricedModels?.(models, owner.dataOwnerId ?? undefined);
+          if (!pricesHeld) applyPricedModels?.(models, owner.dataOwnerId ?? undefined);
         }).finally(() => { if (flight === pending) flight = null; });
         flight = pending;
         trackModelsSync?.(pending.promise);
@@ -87,5 +92,25 @@ export function createProviderCatalog({ readProviders, fetchModels, applyModels,
     const providers = await readProviders(Boolean(options.gateway));
     check();
     return { ...owner, providers, providerOrder: providers.map(provider => provider.id), ...(error ? { error } : {}) };
+  }
+  /**
+   * As the desktop's credential status handler (model-access/index.ts getSync onStatusChange): failed,
+   * disabled, unsupported and idle replace the XD prices with an empty list, so a failed account's
+   * prices no longer show; ok brings them back through the next /models round. The desktop starts
+   * that round on ok (scheduleModelsSync); the Host's catalog is read on demand, so ok marks the last
+   * round stale and the next read fetches. Until then a round that succeeds keeps its models but does
+   * not feed prices, as the desktop starts no round before ok.
+   * @param {{ state: string }} status
+   */
+  listProviders.noteCredentialStatus = status => {
+    if (status.state === 'ok') {
+      if (!pricesHeld) return;
+      pricesHeld = false;
+      if (cached) cached = { ...cached, at: -Infinity };
+    } else if (['failed', 'disabled', 'unsupported', 'idle'].includes(status.state)) {
+      pricesHeld = true;
+      applyPricedModels?.([], undefined);
+    }
   };
+  return listProviders;
 }
