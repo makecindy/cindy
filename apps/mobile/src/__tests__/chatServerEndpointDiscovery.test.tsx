@@ -138,7 +138,7 @@ it.each(['cn', 'global'] as const)('release %s discovery feeds HTTP, WS and the 
     const { mobileDurableOutbox } = await import('@/session/mobileDurableOutbox');
     const { createChatOutboxDelivery } = await import('@/chat/chatOutbox');
     await createChatOutboxDelivery({ store: mobileDurableOutbox, client: api.client,
-      current: api.current, canRun: () => true, accessLost: async () => {} }).run();
+      current: api.current, accessLost: async () => {} }).run();
   });
   const sent = h.auth.apiFetch.mock.calls.find(([path, options]) => path.endsWith('/messages') && options.method === 'POST')!;
   expect(sent[1].body).toEqual({ operationId: 'fixture-operation', content: [{ type: 'text', text: 'fixture' }], mentions: [] });

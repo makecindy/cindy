@@ -17,7 +17,6 @@ export function useChatOutboxDelivery(accountId: string) {
     const current = () => active && api.current() && isMobileAuthOwnerCurrent(owner)
       && owner.accountKey === accountId && owner.accountId === api.userId;
     const runner = createChatOutboxDelivery({ store: mobileDurableOutbox, client: api.client, current,
-      canRun: () => AppState.currentState === 'active',
       accessLost: async roomId => {
         if (!current()) return;
         await Promise.all([forgetChatMessages(roomId), forgetRemoteResource(api.userId, roomId)]);
