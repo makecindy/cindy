@@ -1057,6 +1057,59 @@ describe('ModelSelector trigger variants', () => {
     expect(trigger.getAttribute('aria-label')).toContain('超高');
   });
 
+  it('drops the whole tail to keep the model name, and brings it back when the name fits', () => {
+    const composer = document.createElement('div');
+    let composerWidth = 500;
+    Object.defineProperty(composer, 'clientWidth', { get: () => composerWidth });
+    let notifyComposerResize: (() => void) | undefined;
+    const originalResizeObserver = globalThis.ResizeObserver;
+    class MockResizeObserver {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        if (target === composer) notifyComposerResize = () => this.callback([], this as unknown as ResizeObserver);
+      }
+      unobserve() {}
+      disconnect() { notifyComposerResize = undefined; }
+    }
+    Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: MockResizeObserver });
+    const props = {
+      remoteAgent: undefined,
+      modelId: 'claude-opus-4-8',
+      effort: 'xhigh' as Effort,
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc' as const,
+      engineMarkVendor: 'cc' as const,
+      compactToolbar: true,
+      composerRef: { current: composer },
+    };
+    const view = render(React.createElement(ModelSelector, props));
+    const trigger = () => screen.getByRole('button', { name: /Current: Opus 4\.8, effort: 超高/ });
+    try {
+      // 空间够：档名与引擎小标照常显示。
+      expect(within(trigger()).getByText('超高')).toBeTruthy();
+      expect(trigger().querySelector('[data-composer-engine-mark]')).not.toBeNull();
+
+      // jsdom 没有布局：直接给出「名字被截断」的盒子尺寸，模拟工具行挤到极限。
+      const squeezed = within(trigger()).getByText('Opus 4.8');
+      Object.defineProperty(squeezed, 'scrollWidth', { configurable: true, value: 128 });
+      Object.defineProperty(squeezed, 'clientWidth', { configurable: true, value: 72 });
+      view.rerender(React.createElement(ModelSelector, props));
+      expect(within(trigger()).queryByText('超高')).toBeNull();
+      expect(trigger().querySelector('[data-composer-engine-mark]')).toBeNull();
+      // 收起的只是视觉身份组：完整档名仍留在可及名里。
+      expect(trigger().getAttribute('aria-label')).toContain('超高');
+
+      // composer 变宽（≥16px）后名字放得下，尾部自动回来。
+      Object.defineProperty(squeezed, 'clientWidth', { configurable: true, value: 128 });
+      composerWidth = 520;
+      act(() => notifyComposerResize?.());
+      expect(within(trigger()).getByText('超高')).toBeTruthy();
+    } finally {
+      Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: originalResizeObserver });
+    }
+  });
+
   it('closes on composer resize and stays closed after an Agent confirmation settles', async () => {
     const originalResizeObserver = globalThis.ResizeObserver;
     const composer = document.createElement('div');
