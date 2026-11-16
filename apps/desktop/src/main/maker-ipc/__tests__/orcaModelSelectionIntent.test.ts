@@ -8,7 +8,7 @@ import { takeOverLocalAgentVisibleSession } from '../../local-agent/visibleSessi
 import { effectiveSourceIdForModel, findCatalogModel, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
 import { resolveSessionRuntimeAxes, acceptSessionRuntimeMutation, captureSessionRuntimeControlOwnerEpoch,
   sessionRuntimeControlOwnerEpochMatches, getSessionRuntimeControlSnapshot, remapSessionRuntimeProvider,
-  clearSessionRuntimeControlState } from '../sessionRuntimeControl';
+  clearSessionRuntimeControlState, applySessionRuntimeOverrideForStart } from '../sessionRuntimeControl';
 import { parseScheduledModelBaseline } from '../../../shared/scheduledModelBaseline';
 import { createScheduledModelScope, type ScheduledModelSelection } from '../scheduledModelSelection';
 
@@ -25,7 +25,6 @@ let scheduledAccountPreparation = '';
 let scheduledExecutionSelection = '';
 let subscriptionRuntimeRead = '';
 let subscriptionRouteMove = '';
-let bootstrapRuntimeOverride = '';
 let directSendEntry = '';
 let archivedAdmission = '';
 let terminalGuard = '';
@@ -41,9 +40,6 @@ function visit(node: ts.Node) {
       const move = expression.properties.find(prop => ts.isPropertyAssignment(prop) && prop.name.getText(source) === 'moveRoute');
       if (move && ts.isPropertyAssignment(move)) subscriptionRouteMove = move.initializer.getText(source);
     }
-  }
-  if (ts.isIfStatement(node) && node.expression.getText(source) === 'runtimeOverride && runtimeOverride.agentKind === o.agentKind') {
-    bootstrapRuntimeOverride = node.getText(source);
   }
   if (ts.isFunctionDeclaration(node) && node.name?.text === 'acquirePendingAgentSwitchForDirectSend' && node.body) {
     directSendEntry = node.getText(source).replace(/^export /, '');
@@ -246,9 +242,12 @@ describe('complete selection commit boundaries', () => {
       expect(saved).toMatchObject({ model: 'saved-model', providerId: mode === 'saved-alias' ? 'openai' : 'saved-provider' });
       expect(persist).toHaveBeenCalledTimes(mode === 'saved-alias' ? 1 : 0);
       expect(setProvider).toHaveBeenCalledWith(id, 'openai');
-      const bootstrap = compile('(o, runtimeOverride) => { const providerGroupStart = null; ' + bootstrapRuntimeOverride + '; return o; }', {});
-      expect(bootstrap({ ...saved }, getSessionRuntimeControlSnapshot(id).effectiveOverride))
-        .toMatchObject({ ...profile, providerId: 'openai' });
+      // bootstrapSession starts the runtime through the shared step (no provider group here).
+      const started: Parameters<typeof applySessionRuntimeOverrideForStart>[0] = { ...saved, id } as never;
+      expect(applySessionRuntimeOverrideForStart(started, false)).toEqual(getSessionRuntimeControlSnapshot(id).effectiveOverride);
+      expect(started).toMatchObject({ ...profile, providerId: 'openai' });
+      expect(readFileSync(new URL('../register.ts', import.meta.url), 'utf8'))
+        .toContain('const runtimeOverride = applySessionRuntimeOverrideForStart(o, groupDecidesSource);');
       expect(await read(id)).toMatchObject({ model: 'effective-model', providerId: 'openai' });
     } finally { clearSessionRuntimeControlState(id); }
   });
