@@ -563,13 +563,21 @@ export function createTurnExecutor(deps) {
     prepareSendUserMessage: deps.prepareUserMessage ?? prepareHostUserMessage,
     // The trusted /learn Skill of a persisted user turn, as on the desktop (learn-capture.ts).
     captureCindyLearnInvocation: deps.captureCindyLearnInvocation ?? createHostLearnInvocationCapture({ getMaker: deps.getMaker }),
+    // The turn's user row, through the one entry the desktop writes it from (register.ts:17811,
+    // createUserMessageDurably): it recharges the resume budgets for a person's message, registers an
+    // auto-resume's pending outcome, and writes the row behind the task's reply rows with its
+    // transcript anchor. A failed write goes back to the transaction, as on the desktop: it does not
+    // pause the task's reply writes and is not written later (auto-resume.ts).
     createDbMessage: async (id, message, options) => {
-      const history = historyFor(id);
-      await history.drain();
       const turn = turns.get(id);
       turn?.check();
+      const write = deps.getAutoResume?.()?.createUserMessage;
+      const row = { ...message, agentKind: turn?.dbKind };
+      if (write) return write(id, row, options);
+      const history = historyFor(id);
+      await history.drain();
       const transcriptParentUuid = history.getLastAssistantTranscriptUuid(id);
-      return deps.persistMessage(id, { ...message, agentKind: turn?.dbKind,
+      return deps.persistMessage(id, { ...row,
         agentMeta: { ...message.agentMeta, ...(transcriptParentUuid ? { transcriptParentUuid } : {}) } }, options);
     },
     isSessionRunningError,

@@ -153,7 +153,14 @@ export function createHostAutoResume(ports: HostAutoResumePorts) {
       usageLimitAutoResume: { noteUserAction: () => {} },
       // Provider-group tasks are refused at admission (see above).
       getProviderGroupService: () => null,
-      enqueueDurableWrite: history.enqueueDurableWrite,
+      // Behind the task's reply rows, as on the desktop, and with the desktop's failure handling: the
+      // desktop's write FIFO never pauses (it is not given onPersistenceError), so a failed user row goes
+      // back to the caller, which keeps the input as an error with its retry text, and is not written
+      // later. The Host's FIFO pauses and replays a failed write on resume; through it, a user row that
+      // failed would be written after its input was dropped or replaced (release table, section 2).
+      enqueueDurableWrite: (label, write) => history.enqueueDurableWrite(label, scope => Promise.resolve()
+        .then(() => write(scope)).then(value => ({ value }), (error: unknown) => ({ error })))
+        .then(result => { if ('error' in result) throw result.error; return result.value; }),
       getLastAssistantTranscriptUuid: id => history.getLastAssistantTranscriptUuid(id),
       getSessionDbAgentKind: id => history.getSessionDbAgentKind(id),
       createDbMessage: ports.createDbMessage,

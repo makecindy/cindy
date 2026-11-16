@@ -4802,6 +4802,96 @@ test('auto-resume exit 2: interruptions until the budget is spent end the stream
   await r.h.queue.dispose();
 });
 
+// Rule: a person's message is written through the one user-row entry (register.ts
+// createUserMessageDurably, wired into the send transaction at register.ts:17811), which recharges the
+// resume budget. Gap: the Host's send transaction wrote the user row directly, so after a spent
+// budget a person's next message was never resumed. Minimal failing input: spend the budget, send a
+// new message, interrupt its turn.
+test('auto-resume budget: a person\'s message after a spent budget is resumed again', async t => {
+  const r = await resumeHarness(t);
+  let sent = 2;
+  for (; sent < 20; sent += 1) {
+    await r.interrupt();
+    if (r.response.writableEnded) break;
+    await r.backoff(sent);
+  }
+  assert.equal(r.response.writableEnded, true, 'the budget is spent');
+  const before = r.session.sent.length;
+  await r.h.queue.enqueue('r', { clientId: 'b', text: 'try once more' });
+  await settle();
+  assert.equal(r.session.sent.length, before + 1);
+  await r.interrupt();
+  await r.backoff(before + 2);
+  assert.equal(r.session.sent.length, before + 2, 'the new message\'s turn is resumed');
+  t.mock.timers.reset();
+  await r.h.queue.dispose();
+});
+
+// Rule: the user row is written behind the task's reply rows, and a failed one goes back to the
+// caller as on the desktop, whose write FIFO never pauses (messagePersistBroadcaster.ts
+// enqueueDurableWrite without onPersistenceError): the input stays as an error with its retry text,
+// a retry writes and sends it once, and a new message replaces it without its row ever appearing.
+// Gap: through the Host's pausing FIFO the failed row was replayed on resume, so a replaced input
+// left a row it never ran under (and a retried one stayed undispatched). Minimal failing input: a
+// user row that fails once, then a new message, or a retry.
+test('a failed user row leaves its input to retry or replace, and is never written later', async t => {
+  let failUser = true;
+  const attempts = [];
+  const hub = createEventHub();
+  const h = createHarness({ hub, persistMessage: async (sessionId, input) => {
+    if (input.role === 'user') { attempts.push(input.clientId); if (failUser) throw new Error('disk full'); }
+    h.persisted.push({ sessionId, ...input });
+  } });
+  t.after(() => h.queue.dispose());
+  const writes = [];
+  const response = Object.assign(new EventEmitter(), { writableEnded: false, headersSent: false,
+    writeHead() { this.headersSent = true; }, write(chunk) { writes.push(String(chunk)); },
+    end(chunk) { if (chunk) writes.push(String(chunk)); this.writableEnded = true; this.emit('close'); } });
+  const chat = createChatHandler({ events: hub, readSession: async id => ({ id, status: 'active' }),
+    enqueue: (id, input) => h.queue.enqueue(id, input), inputStatus: (id, clientId) => h.queue.inputStatus(id, clientId) });
+  await chat(Readable.from([Buffer.from(JSON.stringify({ sessionId: 'u', clientId: 'a', prompt: 'first' }))]), response);
+  await waitFor(() => h.queue.projection('u').error === 'disk full');
+  const session = () => h.maker.sessions.get('u');
+  const userRows = () => h.persisted.filter(row => row.role === 'user').map(row => row.clientId);
+  // The failed input: not sent, not written, kept with its retry text; its stream ended interrupted.
+  assert.deepEqual(session()?.sent ?? [], []);
+  assert.equal(h.queue.projection('u').queuePaused, false, 'reply writes are not paused');
+  assert.equal(h.queue.projection('u').errorRetryText, 'first');
+  assert.equal(response.writableEnded, true);
+  const streamed = writes.filter(w => w.startsWith('data:')).map(w => JSON.parse(w.slice(5)));
+  assert.ok(streamed.some(e => e.type === 'input_receipt' && e.status === 'interrupted'));
+  assert.equal(await h.queue.inputStatus('u', 'a'), 'interrupted');
+  // A new message replaces it: its row never appears, even after later writes drain.
+  failUser = false;
+  await h.queue.enqueue('u', { clientId: 'b', text: 'instead' });
+  await waitFor(() => session()?.sent.length === 1);
+  session().emit({ type: 'text', data: { text: 'answer', isFinal: true } });
+  session().emit({ type: 'done', data: {} });
+  await waitFor(() => !h.queue.projection('u').turnInProgress);
+  await h.queue.resume('u');
+  await settle();
+  assert.deepEqual(session().sent, ['instead']);
+  assert.deepEqual(userRows(), ['b']);
+  assert.deepEqual(attempts, ['a', 'b']);
+});
+
+test('a retried user row is written and sent once', async t => {
+  let failUser = true;
+  const h = createHarness({ persistMessage: async (sessionId, input) => {
+    if (input.role === 'user' && failUser) throw new Error('disk full');
+    h.persisted.push({ sessionId, ...input });
+  } });
+  t.after(() => h.queue.dispose());
+  await h.queue.enqueue('v', { clientId: 'a', text: 'first' });
+  await waitFor(() => h.queue.projection('v').error === 'disk full');
+  failUser = false;
+  await h.queue.retryLastError('v');
+  await waitFor(() => h.maker.sessions.get('v')?.sent.length === 1);
+  await settle();
+  assert.deepEqual(h.maker.sessions.get('v').sent, ['first']);
+  assert.deepEqual(h.persisted.filter(row => row.role === 'user').map(row => row.clientId), ['a']);
+});
+
 test('auto-resume exit 3: a new message during the wait cancels the resume and ends the stream interrupted', async t => {
   const r = await resumeHarness(t);
   await r.interrupt();
