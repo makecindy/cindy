@@ -118,6 +118,8 @@ function createFakeMaker() {
     async getSessionMeta(id) {
       return { id, agentKind: 'claude-code', model: 'stored-model', workDir: '/tmp' };
     },
+    // As Maker (maker.ts listActiveSessions): the live runtimes; the shared agent switch reads it.
+    listActiveSessions() { return [...sessions.values()]; },
     async closeSession(id) { sessions.delete(id); },
     async closeSessionIfCurrent(session) {
       if (sessions.get(session.id) === session) sessions.delete(session.id);
@@ -4789,9 +4791,14 @@ async function resumeHarness(t, overrides = {}) {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const streamed = () => writes.filter(w => w.startsWith('data:')).map(w => JSON.parse(w.slice(5)));
   const errorRows = () => h.persisted.filter(row => row.role === 'error');
+  // As Maker stamps every event of a turn with the attempt token its send carried (maker-core
+  // session.ts; the resume's send carries it): the guard clears a resume's pending attempt on its
+  // first stamped event, so an unstamped fixture would never resume twice.
   const interrupt = async () => {
-    session.emit({ type: 'text', data: { text: 'half done', isFinal: true } });
-    session.emit({ type: 'error', data: INTERRUPTION });
+    const token = session.sendOptions.at(-1)?.turnAttemptToken;
+    const stamp = typeof token === 'number' ? { turnAttemptToken: token } : {};
+    session.emit({ type: 'text', data: { text: 'half done', isFinal: true }, ...stamp });
+    session.emit({ type: 'error', data: INTERRUPTION, ...stamp });
     await settle();
   };
   const backoff = async (sent) => {
@@ -4825,6 +4832,8 @@ test('auto-resume exit 2: interruptions until the budget is spent end the stream
     await r.backoff(sent);
   }
   assert.equal(r.response.writableEnded, true);
+  // Consecutive interruptions are each resumed until the budget is spent (more than one resume).
+  assert.ok(r.session.sent.length > 2, `resumed ${r.session.sent.length - 1} time(s)`);
   const last = r.streamed().filter(e => e.type === 'error').at(-1);
   assert.equal(last.autoResumePending, undefined);
   assert.equal(r.errorRows().length, 1);
