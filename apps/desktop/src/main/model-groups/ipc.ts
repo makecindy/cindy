@@ -39,7 +39,8 @@ const QUOTA_WAIT_MS = MODEL_GROUP_REMOTE_WAIT_MS;
 /**
  * 额度总览里的订阅窗口：本机的按供应商连接 ID；别的电脑上的按那台的设备 id + 那台的连接 ID(modelGroupQuotaKey)，
  * 只给同一台电脑上的来源用。那台此刻读不到、只剩上次读数的(lastSeenAtMs)不算；与本机是同一个账号、
- * 总览里只列了本机那份的，别的电脑上的来源按读不到额度处理。分享来的来源总览里没有额度，同样按读不到。
+ * 总览里只列了本机那份的，别的电脑上的来源按读不到额度处理。分享来的来源按运行位置 `share:<id>` 取那个分享
+ * 开放给本账号的额度(分享者没开「允许查看剩余额度」或读不到时总览里没有它，按读不到处理)。
  */
 async function quotaWindows() {
   const overview = getQuotaOverviewService();
@@ -48,7 +49,9 @@ async function quotaWindows() {
   const byProvider = new Map<string, (ModelGroupTraceQuota & { scopedTo?: string | null })[]>();
   for (const source of build?.input.sources ?? []) {
     if (source.kind !== 'subscription' || (source.device && source.lastSeenAtMs != null)) continue;
-    byProvider.set(modelGroupQuotaKey(source.device?.id, source.providerId), source.windows.map((window) => ({
+    // 分享来源在总览里的 id 就是它的运行位置 `share:<shareId>`。
+    const location = source.shared ? source.id : source.device?.id;
+    byProvider.set(modelGroupQuotaKey(location, source.providerId), source.windows.map((window) => ({
       usedPercent: window.usedPercent,
       resetAtMs: window.resetsAtMs,
       windowMs: window.windowMinutes * 60_000,

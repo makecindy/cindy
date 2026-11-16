@@ -27,12 +27,13 @@ const h = vi.hoisted(() => ({
   appDataDir: '',
   isPackaged: false,
   dataOwnerId: null as string | null,
+  generation: 1,
 }));
 
 // Mirror this fixture's changing profile/owner through the Host-neutral ports.
 vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => h.userDataDir, userDataPath: (...parts: string[]) => path.join(h.userDataDir, ...parts) }));
 configureOwnerContext({
-  read: () => ({ dataOwnerId: h.dataOwnerId, generation: 1, boundaryPending: false }),
+  read: () => ({ dataOwnerId: h.dataOwnerId, generation: h.generation, boundaryPending: false }),
   fallbackBaseDir: () => h.userDataDir,
 });
 
@@ -71,7 +72,7 @@ vi.mock('../../appSessionState.js', async (importOriginal) => {
     getActiveAppSession: () => ({
       mode: h.dataOwnerId ? ('local' as const) : ('signed-out' as const),
       dataOwnerId: h.dataOwnerId,
-      generation: 1,
+      generation: h.generation,
     }),
   };
 });
@@ -158,6 +159,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   h.dataOwnerId = null;
+  h.generation = 1;
   h.appDataDir = '';
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -271,6 +273,10 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     const releaseStat = fs.statSync(releaseAuth);
     const releaseBindingBytes = fs.readFileSync(releaseBinding);
     h.dataOwnerId = 'owner-a';
+    // P06 unit regression: successive public auth reads used to republish the
+    // same Dev snapshot. Keep all source/owner checks but publish identical bytes
+    // only once; the fixture previously checked source isolation, not repeat writes.
+    const copySnapshot = vi.spyOn(fs.promises, 'copyFile');
     const adapter = new DesktopCodexAuthAdapter();
     // This fixture owns credentials only; asset preparation has separate boundary tests.
     vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
@@ -291,6 +297,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
       accessToken: 'release-token',
       accountId: 'acct-release',
     });
+    expect(copySnapshot).toHaveBeenCalledTimes(1);
     expect(fs.statSync(localAuth).ino).not.toBe(fs.statSync(releaseAuth).ino);
     // Codex may refresh its local auth.json in place; the Release credential must
     // remain byte-for-byte unchanged because Dev receives a snapshot, not a link.
@@ -316,6 +323,57 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.readFileSync(releaseBinding)).toEqual(releaseBindingBytes);
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(true);
   });
+
+  // P06 unit: the public token read must not accept an equal snapshot after an
+  // owner/login/authorization change during comparison, nor grant scope after
+  // its Promise resolves. Earlier isolation cases had no comparison await.
+  it.each(['owner', 'generation', 'login-start', 'login-cancel', 'authorization', 'owner-after-compare'] as const)(
+    'rejects snapshot reuse across a changing authorization boundary (%s)', async (change) => {
+      const { releaseAuth, localAuth } = fixture();
+      fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+      fs.writeFileSync(releaseAuth, JSON.stringify({ tokens: { access_token: 'fixture-token', account_id: 'fixture-account' } }));
+      bindReleaseOpenAi(releaseAuth);
+      h.dataOwnerId = 'owner-a';
+      const adapter = new DesktopCodexAuthAdapter();
+      expect(await adapter.getAccessToken()).toBe('fixture-token');
+      const binding = path.join(h.userDataDir, 'native-provider-auth.json');
+      const originalBinding = fs.readFileSync(binding, 'utf8');
+      const originalLocal = fs.statSync(localAuth, { bigint: true });
+      const copy = vi.spyOn(fs.promises, 'copyFile');
+      const open = fs.promises.open.bind(fs.promises);
+      let comparisonReady = false;
+      vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (String(args[0]) === localAuth) {
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, 'close').mockImplementation(async () => {
+            await close();
+            comparisonReady = true;
+            if (change === 'owner') h.dataOwnerId = 'owner-b';
+            if (change === 'generation') h.generation++;
+            if (change === 'login-start') Object.assign(adapter, { pendingLogin: {} });
+            if (change === 'login-cancel') Object.assign(adapter, { loginCancellationOpen: true });
+            if (change === 'authorization') fs.writeFileSync(binding, `${originalBinding}\n`);
+          });
+        }
+        return handle;
+      });
+      const lstat = fs.lstatSync;
+      vi.spyOn(fs, 'lstatSync').mockImplementation((...args) => {
+        const stat = lstat(...args);
+        if (change === 'owner-after-compare' && comparisonReady && String(args[0]) === localAuth) {
+          comparisonReady = false;
+          queueMicrotask(() => { h.dataOwnerId = 'owner-b'; });
+        }
+        return stat;
+      });
+      await expect(adapter.getAccessToken()).rejects.toThrow('Release auth snapshot authorization changed');
+      expect(copy).not.toHaveBeenCalled();
+      expect(fs.statSync(localAuth, { bigint: true }).ino).toBe(originalLocal.ino);
+      expect(fs.readFileSync(binding, 'utf8')).toBe(change === 'authorization' ? `${originalBinding}\n` : originalBinding);
+      expect(JSON.parse(fs.readFileSync(binding, 'utf8')).openai).toBe('owner-a');
+    },
+  );
 
   // 测试价值（unit）：Release 凭证上挂着升级前 profile 留下的残留硬链(nlink>1)时,只读
   // Dev 的 mode:'local' 重连也不能去清 —— 清残留硬链 = 换掉 Release 的 inode(写操作),

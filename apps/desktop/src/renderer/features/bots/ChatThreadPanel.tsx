@@ -1,3 +1,4 @@
+import { canStopBotGroupSpeaker } from '@cindy/maker-shared/botGroupChat';
 import { interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import { BotGroupProgressStrip, BotGroupSpeakerInteraction, type BotGroupLiveSpeaker } from './BotGroupLiveStatus';
 import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
@@ -183,11 +184,10 @@ export function animateThreadPanelWidth(panel: HTMLElement, from: string, to: st
  * `quoteSources` are the main timeline's verified messages (older pages included), so a
  * 话题 root's quote reads the same as it does in the timeline; without them, the latest page.
  */
-export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping = false, canStopAll = false, quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onClose, resize }: {
+export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping = false, quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onClose, resize }: {
   speakers?: BotGroupLiveSpeaker[];
   onStop?: (scope?: 'all') => void;
   stopping?: boolean;
-  canStopAll?: boolean;
   group: BotGroupDetail; rootId: string; quoteSources?: readonly BotGroupMessageView[];
   /** A reply to bring into view; a new nonce repeats the jump. */
   focus?: { messageId: string; nonce: number } | null;
@@ -681,10 +681,9 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
 
   const liveEntries = interleaveBotGroupWork(replyRows, sharing ? [] : speakers);
   const executionSpeakers = liveEntries.flatMap(entry => entry.kind === 'work' && entry.value.activity !== 'planning' ? [entry.value] : []);
-  const canStopMine = executionSpeakers.some(speaker => speaker.isSelfRequested) && group.round.canStop !== false;
-  const stopSpeaker = [...executionSpeakers].reverse().find(speaker => speaker.isSelfRequested)
-    ?? (canStopAll ? executionSpeakers.at(-1) : undefined);
-  return <ThreadPanel panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
+  const canStopMine = executionSpeakers.some(speaker => canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId })) && group.round.canStop !== false;
+  const stopSpeaker = [...executionSpeakers].reverse().find(speaker => group && canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId }));
+  return <ThreadPanel inlineActions={false} panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
             {following !== undefined ? (
               <Tip text={t(key(following ? 'thread.unfollowTip' : 'thread.followTip'))}>
                 <Button variant="secondary" tone="quiet" size="sm" aria-pressed={following} data-thread-follow=""
@@ -716,8 +715,8 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
                 const speaker = entry.value;
                 return <Fragment key={`work:${speaker.executionId ?? speaker.member.botId}`}>
                   <BotGroupProgressStrip step={null} speakers={[speaker]} onStop={onStop} stopping={stopping}
-                    canStop={canStopMine} canStopAll={canStopAll} showStop={speaker === stopSpeaker}
-                    stopPending={stopping || executionSpeakers.filter(item => item.isSelfRequested || canStopAll).every(item => item.stopping || item.executionStatus === 'stopping')} />
+                    canStop={canStopMine} showStop={speaker === stopSpeaker}
+                    stopPending={stopping || executionSpeakers.filter(item => canStopBotGroupSpeaker(group, { ...item, botId: item.member.botId })).every(item => item.stopping || item.executionStatus === 'stopping')} />
                   <BotGroupSpeakerInteraction speaker={speaker} />
                 </Fragment>;
               }

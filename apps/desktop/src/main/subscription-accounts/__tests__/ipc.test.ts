@@ -112,16 +112,30 @@ import { mapIpcErrorToI18nKey } from '../../../shared/ipcError.js';
 import { legacyCodexAccountCanRun, openAiRouteAllowsModel, setLegacyCodexAccountPaused } from '../legacyAccountAccess.js';
 import {
   normalizePlacementFile,
+  accountProviderId,
+  createSubscriptionProvider,
+  placeSubscriptionAccount,
   readMergedLegacyCodexAccountId,
   readOpenAiMergedLegacyAccountsIfReadable,
   readSharedOpenAiLegacyAccountsIfReadable,
   restoreAutoMergedLegacyCodexAccounts,
   restoreUnplacedSubscriptionAccounts,
-  placeSubscriptionAccount,
-  createSubscriptionProvider,
 } from '../placement.js';
 registerSubscriptionAccountsIpc();
 const invoke = (command: unknown) => h.handlers.get(SUBSCRIPTION_ACCOUNTS_CHANNEL)!({}, command);
+
+// Unit: CLI-origin accounts were rejected by the actual placement writer. Moving out and back
+// must persist like any account while the official CLI home and history remain unchanged.
+it.each(['anthropic', 'openai'] as const)('persists CLI-origin %s placement without relocating its home', async kind => {
+  const directory = accountDirectory(kind, 'default');
+  const provider = await createSubscriptionProvider(kind, 'default', 'Account', () => '12345678');
+  expect(accountProviderId(kind, 'default')).toBe(provider);
+  expect(normalizePlacementFile({ accounts: h.placement, providers: h.created }).providers[provider].account).toBe('default');
+  expect(accountDirectory(kind, 'default')).toBe(directory);
+  await placeSubscriptionAccount(kind, 'default', kind);
+  expect(accountProviderId(kind, 'default')).toBe(kind);
+  expect(accountDirectory(kind, 'default')).toBe(directory);
+});
 
 // #10286 review: preserve the exact reset target through the real owner push
 // adapter; ordinary pool/load events retain their original payload.
@@ -131,6 +145,10 @@ it('forwards scoped reset invalidation without marking ordinary pool changes', (
   expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai', resetAccountId: 'second' });
   listener('openai');
   expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai' });
+  listener('openai', undefined, 'usage');
+  expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai', change: 'usage' });
+  listener('anthropic', undefined, 'load');
+  expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'anthropic', change: 'load' });
 });
 beforeEach(() => {
   h.context = null;
@@ -178,7 +196,7 @@ it('moves and takes out all homes of an account atomically, including failed wri
   expect(h.placement).toEqual({ [`openai:${first}`]: target, [`openai:${second}`]: target });
   expect(h.created[target].account).toBe(first);
   expect(writes).toBe(2);
-  await expect(placeSubscriptionAccount('openai', [first, 'default'], 'openai')).rejects.toThrow('Account cannot be moved');
+  await expect(placeSubscriptionAccount('openai', [first, '../escape'], 'openai')).rejects.toThrow('Account cannot be moved');
   expect(writes).toBe(2);
 });
 
@@ -351,11 +369,11 @@ describe('legacy Codex account upgrade', () => {
     await restoreAutoMergedLegacyCodexAccounts(connections, { disable, isDisabled });
     expect(readMergedLegacyCodexAccountId('openai-e')).toBeUndefined();
     expect(readMergedLegacyCodexAccountId('openai-d')).toBe(ids.d);
-    // Persisted placement never moves the CLI default account or accepts a malformed entry.
+    // CLI-origin profiles can move like every other account; malformed entries still fail closed.
     expect(normalizePlacementFile({ accounts: {
       'openai:default': 'openai-a', 'openai:../escape': 'openai-a', [`openai:${ids.a}`]: 'Not An Id',
       [`anthropic:${ids.a}`]: 'claude-work',
-    } })).toEqual({ accounts: { [`anthropic:${ids.a}`]: 'claude-work' }, providers: {}, strategies: {} });
+    } })).toEqual({ accounts: { 'openai:default': 'openai-a', [`anthropic:${ids.a}`]: 'claude-work' }, providers: {}, strategies: {} });
   });
 });
 describe('old automatically pooled account restoration', () => {

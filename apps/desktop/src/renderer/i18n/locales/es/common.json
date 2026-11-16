@@ -5859,7 +5859,8 @@
             "statusFailed": "la verificación del estado del controlador falló",
             "recoveryFailed": "la conexión de control no se pudo reconstruir",
             "extensionDisconnected": "no hay ninguna extensión de navegador conectada (instala y habilita el complemento Cindy Chrome y su extensión)",
-            "pluginMissing": "el complemento Cindy Chrome no está instalado o habilitado"
+            "pluginMissing": "el complemento Cindy Chrome no está instalado o habilitado",
+            "browserMissing": "Chrome no está instalado en este ordenador"
           },
           "reconnect": "Reconectar el navegador",
           "recover": "Recuperar navegador",
@@ -5879,7 +5880,7 @@
         },
         "userBrowser": {
           "title": "Mi navegador",
-          "description": "Funciona en el Chrome o Edge que estás usando, con tus inicios de sesión existentes. Las páginas nuevas se abren en una ventana en segundo plano y no interfieren."
+          "description": "Tu propio Chrome en este ordenador (Edge también sirve). El Agent trabaja directamente en él, con tus inicios de sesión existentes. Las páginas nuevas se abren en una ventana en segundo plano y no interfieren."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Instala el complemento Cindy Chrome",
@@ -5898,7 +5899,9 @@
           "updatePluginTitle": "Actualiza el complemento Cindy Chrome",
           "updatePluginBody": "El complemento Cindy Chrome instalado es demasiado antiguo para «Mi navegador». Actualízalo a la última versión y luego sigue las indicaciones para agregar la extensión.",
           "updatePlugin": "Actualizar",
-          "storeOpened": "Se abrió la página de la extensión Cindy en tu navegador. Elige Agregar a Chrome y se conectará automáticamente."
+          "storeOpened": "Se abrió la página de la extensión Cindy en tu navegador. Elige Agregar a Chrome y se conectará automáticamente.",
+          "installBrowserTitle": "Instala Chrome primero",
+          "installBrowserBody": "Chrome no está instalado en este ordenador. «Mi navegador» necesita Chrome (o Edge) para la extensión de Cindy. Cuando lo instales, aquí se pasará al siguiente paso automáticamente."
         }
       },
       "android": {
@@ -8027,7 +8030,6 @@
         "install": "Instalar",
         "details": "Detalles",
         "detailsAria": "Ver detalles de {{name}}",
-        "loadingDetails": "Cargando detalles…",
         "update": "Actualizar desde el mercado",
         "updateTo": "Actualizar a v{{version}}",
         "installed": "Instalado",
@@ -8341,6 +8343,8 @@
         "hostTools_controlDetail": "Usar las herramientas de Cindy para editar, archivar, restaurar y controlar tareas y proyectos existentes, e importar archivos de tareas en formato nativo en este ordenador.",
         "hostTools_handoff": "Mensajes a tareas",
         "hostTools_handoffDetail": "Usar las herramientas de Cindy para enviar mensajes a tareas existentes. Las operaciones que necesitan una tarea actual requieren un destino explícito.",
+        "hostTools_usage": "Leer el uso de las suscripciones",
+        "hostTools_usageDetail": "Lee identificadores de cuenta, planes, períodos de cuota y horas de actualización de las suscripciones de Claude y Codex conectadas a tu cuenta actual de Cindy en este equipo. No permite leer correos electrónicos, credenciales, archivos ni datos de otros equipos, ni modificar cuentas.",
         "hostTools_settings": "Ajustes de la aplicación",
         "hostTools_settingsDetail": "Usar las herramientas de Cindy para leer y cambiar la configuración. No se devuelven secretos y los datos privados los introduces tú.",
         "hostTools_scheduler": "Gestión de automatizaciones",
@@ -8628,6 +8632,7 @@
           "workdirClear": "Restablecer carpeta predeterminada",
           "followAuxiliary": "Usar modelo auxiliar del sistema · {{model}}",
           "followAuxiliaryUnset": "Usar modelo auxiliar del sistema",
+          "remoteQuickAnswerHint": "Este modelo no se ejecuta en esta computadora. Las respuestas rápidas se envían desde esta computadora, así que usan el modelo auxiliar del sistema.",
           "restoreModel": "Restablecer modelo"
         },
         "toolsTitle": "Herramientas",
@@ -8963,23 +8968,10 @@
         "projectReadFailed": "No se pudo leer la configuración de los proyectos. Vuelve a intentarlo."
       },
       "usage": {
-        "title": "Tus llamadas",
-        "explanationLabel": "Cómo se contabiliza el uso",
-        "explanation": "Llamadas a herramientas enviadas desde esta computadora por la cuenta actual, incluidos errores, tiempos de espera agotados y cancelaciones. Los últimos 7 días corresponden a un período móvil de 168 horas. Se excluyen los paneles, las habilidades y la depuración. Los registros se conservan hasta que se borren.",
-        "clear": "Borrar registros",
-        "loading": "Cargando registros…",
-        "unavailable": "Registros personales no disponibles",
-        "retry": "Reintentar",
-        "lastUsed": "Última llamada",
-        "last7Days": "Llamadas en los últimos 7 días",
-        "never": "Aún no hay llamadas",
-        "clearTitle": "¿Borrar los registros de uso de este complemento?",
-        "clearDescription": "Elimina los registros de llamadas y los enlaces a sesiones de esta cuenta en esta computadora. Las nuevas llamadas inician un historial nuevo. Los totales compartidos que el servidor ya recibió no se retiran.",
         "downloadExplanation": "Solicitudes acumuladas de URL de descarga. Cada URL de paquete emitida correctamente se cuenta una vez, incluidas las actualizaciones, reinstalaciones y reintentos que solicitan una URL nueva. No es un recuento de instalaciones completadas.",
-        "clearAction": "Borrar",
         "downloadsValue": "{{value}} descargas",
         "usesValue": "{{value}} usos",
-        "usesExplanation": "Llamadas compartidas acumuladas a herramientas en todas las versiones dentro del público autorizado. Tus llamadas a continuación solo contabilizan esta cuenta en esta computadora."
+        "usesExplanation": "Llamadas compartidas acumuladas a herramientas en todas las versiones dentro del público autorizado."
       },
       "contribution": {
         "unreadReview": "Nuevo resultado del complemento",
@@ -11543,6 +11535,8 @@
         "projectDirNote": "Los amigos trabajan aquí cuando se reparten el trabajo. Si lo dejas vacío, usarán la carpeta de esta conversación grupal. Si eliges un proyecto de Git, cada encargo tendrá un worktree y una rama nuevos para no modificar tu código.",
         "autoContinueSaveFailed": "No se pudieron guardar las transiciones entre pasos. Inténtalo de nuevo.",
         "projectDirSaveFailed": "No se pudo guardar la carpeta del proyecto. Asegúrate de que la carpeta aún exista e inténtalo de nuevo.",
+        "allowMemberInvites": "Permitir que todos inviten amigos",
+        "allowMemberInvitesHint": "Al activarlo, todos los miembros del grupo pueden invitar amigos. Solo el dueño del grupo y los administradores pueden cambiarlo.",
         "allowMentionAllBots": "Permitir @todos los amigos",
         "allowMentionAllBotsHint": "Solo el dueño del grupo puede cambiarlo. Todos los amigos podrían responder; cuidado en grupos grandes. No afecta a la IA que responde por ti."
       },
@@ -11650,6 +11644,7 @@
         "threadRecent": "Mensajes recientes del hilo",
         "threadNew": "Mensajes nuevos del hilo",
         "replyingTo": "En respuesta a \"{{name}}\": {{text}}",
+        "filesOutsideWorkingDir": "No se adjuntaron los archivos fuera del directorio de trabajo.",
         "earlierOmitted": "(Mensajes anteriores omitidos)",
         "actingFor": "{{name}} · por {{person}}",
         "checkout": {
@@ -11815,6 +11810,11 @@
           "transferHint": "Pasará a ser el propietario y tú serás administrador.",
           "removeTitle": "¿Quitar a {{name}} de este grupo?",
           "removeHint": "Perderá el acceso a los mensajes. Sus amigos también saldrán del grupo.",
+          "removeOwn": "Quitar del grupo",
+          "removeOwnScope": "Esto solo afecta a este grupo. Tu compañero permanece en tu cuenta.",
+          "removeOwnHint": "{{name}} dejará de recibir mensajes de «{{group}}». Se conserva el historial; los otros grupos y chats privados no se ven afectados.",
+          "removeOwnActiveHint": "Se detendrán sus solicitudes activas en este grupo. Las tareas iniciadas de forma independiente seguirán ejecutándose.",
+          "stopAndRemove": "Detener y quitar",
           "leave": "Dejar grupo",
           "leaveHint": "Saldrás de este grupo junto con tus compañeros. Ya no recibirás mensajes nuevos ni tendrás acceso a su historial.",
           "soleOwnerHint": "Eres el único miembro que queda. Archiva este grupo para conservar su historial y restaurarlo más adelante.",
@@ -14251,7 +14251,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "Creando worktree · entrada deshabilitada",
-      "subtitle": "Rama de destino {{branch}} · se desbloqueará automáticamente"
+      "subtitle": "Rama de destino {{branch}} · se desbloqueará automáticamente",
+      "elapsed": "Esperando desde hace {{duration}}"
     },
     "worktree": {
       "detecting": "Detectando entorno…",
@@ -15847,7 +15848,12 @@
       "REMOTE_PROVIDER_UPDATING": "Las credenciales de este proveedor de modelo se están actualizando. Inténtalo de nuevo en un momento.",
       "REMOTE_WORKDIR_UNAVAILABLE": "El directorio de trabajo remoto no está disponible. Verifica que la carpeta aún exista en esa computadora y vuelve a intentarlo.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "La computadora aún no puede confirmar si se envió este mensaje. Espera un momento y vuelve a intentarlo. No envíes el mismo mensaje dos veces.",
-      "REMOTE_AGENT_UNAVAILABLE": "Se perdió la conexión con la computadora que ejecuta el Agent. Inténtalo de nuevo. Si sigue pasando, asegúrate de que esté en línea y permita el control remoto.",
+      "REMOTE_AGENT_UNAVAILABLE": "No se pudo comunicar con la computadora que ejecuta el Agent. Revisa los detalles del error.",
+      "REMOTE_AGENT_TIMEOUT": "Se agotó el tiempo de espera de la computadora que ejecuta el Agent. El resultado es desconocido. Revisa la tarea antes de volver a intentarlo.",
+      "REMOTE_AGENT_LINK_BUSY": "La comunicación con la computadora que ejecuta el Agent está saturada. Espera un momento antes de volver a intentarlo.",
+      "REMOTE_AGENT_UNRESPONSIVE": "La computadora que ejecuta el Agent no respondió en varios intentos, por lo que las llamadas se pausaron temporalmente. Espera un momento antes de volver a intentarlo.",
+      "REMOTE_AGENT_OFFLINE": "La computadora que ejecuta el Agent está sin conexión. Vuelve a intentarlo cuando se conecte de nuevo.",
+      "REMOTE_AGENT_ACCESS_DENIED": "Se denegó el acceso remoto a la computadora que ejecuta el Agent. Revisa su configuración de acceso antes de volver a intentarlo.",
       "REMOTE_AGENT_PEER_TOO_OLD": "La versión de Cindy en la otra computadora es demasiado antigua para esta acción. Actualiza Cindy allí primero.",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "Este equipo no puede restaurar el estado anterior de la sesión. Selecciona un modelo de otro equipo o proveedor para continuar mediante una transferencia de contexto. Los mensajes existentes se conservan.",
       "REMOTE_AGENT_EXPIRED": "Esta sesión ya finalizó en la computadora que ejecuta el Agent. Envía tu mensaje nuevamente.",

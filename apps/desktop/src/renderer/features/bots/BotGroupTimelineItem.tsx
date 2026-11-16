@@ -6,7 +6,7 @@ import { BotGroupProcess } from './BotGroupProcess';
  *   时刻（text-11），下面是一个卡片底、细边框的气泡。引用、任务卡、分工表、附件与贴回的话题
  *   回复都收在气泡里。同一作者五分钟内的连续消息合并：后续行不再带头像和名字，时刻只在悬停
  *   时出现在左侧槽位。
- * - 气泡宽度由内容决定，上限 720px，并始终给外侧的操作栏留出位置；正文与任务正文同一字号。
+ * - 气泡按内容收窄，基础上限 720px；群聊主栏按可用空间扩展并调整操作栏，自己贴回的话题保持 560px。
  * - 表情回应贴在气泡外上角；消息操作栏（引用回复、话题、表情、更多）悬停时出现在气泡外侧，键盘
  *   聚焦与触屏时常显；话题入口是气泡下方一行。
  * - @ 点名在所有消息里都高亮：正文仍交给 MarkdownRenderer，高亮走 CSS Custom Highlight
@@ -64,6 +64,10 @@ import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
 import { BotGroupLiveTaskCard, BotGroupTaskCard } from './BotGroupTaskCard';
 import type { BotGroupTimelineMessage } from './BotGroupTimelineModel';
 import { ChatMessageHoverActions, ChatMessageReactions } from './ChatServerControls';
+
+// The main group pane may widen these columns. A self-shared thread reply is
+// a separate non-bubble column and deliberately keeps its own 560px cap.
+const GROUP_MESSAGE_COLUMN_CLASS = cn(CHAT_BUBBLE_COLUMN_CLASS, 'bot-group-message-column');
 
 // ---- @ mention highlight ----------------------------------------------------------------
 
@@ -513,7 +517,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
           className={cn('group/message chat-bubble-layout relative flex min-w-0 justify-end rounded-lg py-0.5', sharing && 'ml-10', attribution && 'pr-[42px]')}
         >
           {sharing && shareable ? <ShareMessageCheckbox clientId={message.id} /> : null}
-          <div className={cn('flex min-w-0 flex-col items-end gap-1.5 transition-opacity', share ? 'chat-bubble-column max-w-[min(560px,calc(100%-var(--chat-bubble-gutter,120px)))]' : CHAT_BUBBLE_COLUMN_CLASS, sending && message.outbox?.status !== 'failed' && 'opacity-60')}>
+          <div className={cn('flex min-w-0 flex-col items-end gap-1.5 transition-opacity', share ? 'chat-bubble-column max-w-[min(560px,calc(100%-var(--chat-bubble-gutter,120px)))]' : GROUP_MESSAGE_COLUMN_CLASS, sending && message.outbox?.status !== 'failed' && 'opacity-60')}>
             {/* The toolbar and the reaction corner hang off the message's own content. */}
             <div className={cn("relative flex min-w-0 max-w-full flex-col items-end gap-1.5", threadPreview && "self-stretch")}>
               {share ? <>{reactions}<div className="relative flex w-full min-w-0 max-w-full flex-col items-end gap-1.5">{quote}{shareBody}{actions}</div></> : null}
@@ -557,7 +561,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
       <Row {...rowProps} block="author">
         <div className="chat-bubble-layout flex min-w-0 gap-2.5">
           <span aria-hidden className="w-7 shrink-0" />
-          <div data-testid="bot-group-arrangement" className={cn('w-full min-w-0', CHAT_BUBBLE_COLUMN_CLASS)}>
+          <div data-testid="bot-group-arrangement" className={cn('w-full min-w-0', GROUP_MESSAGE_COLUMN_CLASS)}>
             <div className="w-full min-w-0 max-w-full">
               <BotGroupPlanCard
                 plan={props.plan}
@@ -619,7 +623,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
               ) : null}
             </span>
           ) : null}
-          <div className={cn('relative flex min-w-0 flex-col', CHAT_BUBBLE_COLUMN_CLASS,
+          <div className={cn('relative flex min-w-0 flex-col', GROUP_MESSAGE_COLUMN_CLASS,
             message.authorKind === 'bot' && hasRichAnswer(share?.content ?? message.content) && 'w-full')}>
             <ChatMessageReactions corner groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} onChanged={props.onChanged} />
             {message.process && message.process.groupId === props.reactionGroupId ? <BotGroupProcess process={message.process}

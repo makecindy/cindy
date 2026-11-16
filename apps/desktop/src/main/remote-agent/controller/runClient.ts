@@ -20,6 +20,7 @@ import {
   REMOTE_AGENT_UPLOAD_CHUNK_BYTES,
   parseRemoteAgentCaps,
   parseRemoteAgentStreamItem,
+  shortDeviceRef,
   type RemoteAgentCaps,
   type RemoteAgentErrorInfo,
   type RemoteAgentKind,
@@ -447,7 +448,7 @@ export class RemoteAgentRunClient implements PolledRun {
  * 把设备互联的失败换成带 `[REMOTE_AGENT_*]` 前缀的错误(界面按前缀给出对应文案)，保留原 `code`
  * 供重试判断。对方版本过旧(没有这个通道)单独标出，提示去那台电脑更新。
  */
-export function remoteAgentLinkError(error: { code?: string; message?: string } | unknown): Error {
+export function remoteAgentLinkError(error: { code?: string; message?: string } | unknown, target?: string): Error {
   const code = (error as { code?: unknown })?.code;
   const message = error instanceof Error
     ? error.message
@@ -460,8 +461,31 @@ export function remoteAgentLinkError(error: { code?: string; message?: string } 
       { code: 'REMOTE_AGENT_PEER_TOO_OLD' },
     );
   }
-  const wrapped = new Error(/^\[REMOTE_[A-Z_]+\]/.test(message) ? message : `[REMOTE_AGENT_UNAVAILABLE] ${message}`);
+  // Only refine presentation. Error.code remains the transport's retry/permission
+  // decision, and an existing remote business error keeps its original envelope.
+  const envelopeCode = /^\[([A-Z_]+)\]/.exec(message)?.[1];
+  const causeCode = typeof code === 'string' && code !== 'IPC_ERROR' ? code : envelopeCode;
+  const displayCode = remoteAgentLinkGuidanceCode(causeCode);
+  const diagnostic = displayCode && causeCode && envelopeCode !== causeCode ? `[${causeCode}] ${message}` : message;
+  const keepRemoteError = !displayCode && /^\[REMOTE_[A-Z_]+\]/.test(message);
+  // The requested route may be a share/group rather than a resolved computer.
+  // Report only this known reference and channel, not a guessed name or status.
+  const context = target ? `\nrequestedTarget=${shortDeviceRef(target)}; channel=${REMOTE_AGENT_CHANNEL}` : '';
+  const wrapped = new Error(keepRemoteError
+    ? message : `[${displayCode ?? 'REMOTE_AGENT_UNAVAILABLE'}] ${diagnostic}${context}`);
   return typeof code === 'string' ? Object.assign(wrapped, { code }) : wrapped;
+}
+
+function remoteAgentLinkGuidanceCode(code: string | undefined): string | undefined {
+  switch (code) {
+    case 'TIMEOUT': case 'INVOKE_TIMEOUT': case 'DEVICE_LINK_TIMEOUT': return 'REMOTE_AGENT_TIMEOUT';
+    case 'BACKPRESSURE': case 'DEVICE_LINK_BUSY': return 'REMOTE_AGENT_LINK_BUSY';
+    case 'DEVICE_UNRESPONSIVE': case 'DEVICE_LINK_DEVICE_UNRESPONSIVE': return 'REMOTE_AGENT_UNRESPONSIVE';
+    case 'DEVICE_OFFLINE': case 'DEVICE_LINK_DEVICE_OFFLINE': return 'REMOTE_AGENT_OFFLINE';
+    case 'ACCESS_REVOKED': case 'REMOTE_DISABLED':
+    case 'DEVICE_LINK_ACCESS_REVOKED': case 'DEVICE_LINK_REMOTE_DISABLED': return 'REMOTE_AGENT_ACCESS_DENIED';
+    default: return undefined;
+  }
 }
 
 /** 生产接线：经设备互联后台链路调用某台电脑的远程 Agent 通道。 */
@@ -474,9 +498,9 @@ export function remoteAgentInvoker(
     try {
       result = await invoke(deviceId, REMOTE_AGENT_CHANNEL, args);
     } catch (error) {
-      throw remoteAgentLinkError(error);
+      throw remoteAgentLinkError(error, deviceId);
     }
     if (result.ok) return result.result;
-    throw remoteAgentLinkError(result.error ?? {});
+    throw remoteAgentLinkError(result.error ?? {}, deviceId);
   };
 }

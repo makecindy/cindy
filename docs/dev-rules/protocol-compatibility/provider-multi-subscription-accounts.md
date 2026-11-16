@@ -135,8 +135,17 @@ Codex 所选目录由当前供应商管理认证、无法提供 ChatGPT 账号�
 2026-11-14 起 `preview` 回包可选追加 `defaultAdded: boolean`：默认 CLI 登录已被内置供应商使用，或同一身份已是同类
 未断开的其他账号时为 `true`，新向导据此不再提供默认账号快捷按钮。只读已保存记录与已缓存身份，不额外读取 CLI 或额度。
 旧控制端忽略该字段；新控制端连接旧宿主时字段缺省，按原样提供快捷按钮。沿用原 channel，中转无需适配。
-`subscription-accounts:changed` 普通变化仅推送供应商 id，重置数据刷新可附加上述 `resetAccountId`，
-路由到既有 `sessions` topic 后由当前管理页重读。
+`subscription-accounts:changed` 继续推送供应商类别 `providerId`，重置数据刷新可附加上述 `resetAccountId`，
+路由到既有 `sessions` topic 后由当前管理页重读。2026-11-16 起可选追加 `change: "usage" | "load"`：
+仅分别用于普通额度观察与运行占用变化。缺省或未知值仍是身份／配置可能变化的完整失效通知，
+登录、移除、暂停、归属变动与鉴权失效不得标成普通变化。
+新版组主按来源电脑及该供应商类别（含同类命名账号供应商）失效；用量变化保留同身份在途额度，
+负载变化只刷新目录。旧提供端缺字段时新版仍完整失效该电脑对应类别，缺 `providerId` 则失效该电脑全部额度；
+旧组主忽略新增字段，维持原行为。需要组主升级才能消除跨成员的额度丢弃，提供端升级后还可避免普通变化作废自身在途读取。
+Main 的远程观察者仅收到上述白名单元数据，不接收原始推送正文。
+既有 push channel、sessions topic、allowlist、JSON 帧和鉴权均不变；官方与自建中转透传业务 payload，
+无需服务端或中转升级。回归见 `subscription-accounts/__tests__/ipc.test.ts`、`runtime.test.ts` 及
+`provider-group/__tests__/runtime.test.ts` 的通知竞争与迟到恢复用例。
 `read` 的账号视图以 `usage`（该账号自身的 Claude 窗口快照或 Codex 桶及余额）取代未发布的单条 `quota`。
 同账号 `manage-share` 的 `quota-account` 在池内有多个可分配账号时额外返回 `accounts`（匿名数组），
 顶层仍是首个账号：旧组主只读顶层，新组主遇到无 `accounts` 的旧成员按单账号显示。
@@ -164,7 +173,7 @@ Codex 原生桶不冒充 WHAM：旧 bridge 无法表达按模型的账号池额�
 任务的账号显示（2026-11-11）：`maker:subscription-accounts` 追加只读 action `session`
 （`providerId`、`sessionId?`、`nativeSessionId?`，通常至少一个 id，各 ≤256 字符；旧来源的无原生会话查询见下文），沿用同一 owner 校验，共享任务访客不可用，
 不进入管理命令执行器，Helper 不暴露。执行端按「任务 → 原生会话」顺序读持久绑定，回 `{ providerId, state }`：
-`legacy`（无账号池、只有默认账号或池前旧任务，调用方沿用原 reader）、`unassigned`（下一轮才选账号）、
+`legacy`（无账号池或池前未绑定的旧任务，调用方沿用原 reader）、`unassigned`（下一轮才选账号）、
 `unavailable`（绑定的账号已移出或供应商已断开）、`bound`（附 `account`：`isDefault`、池内序号、身份、套餐、状态与该账号
 自己的 `usage`，形状同 `read` 的账号视图，不含目录与账号 id）。旧宿主以 INVALID_PARAMS 拒绝未知 action（读不懂的回复同样
 处理）时，远程任务的新使用端改用上文任务额度重置查询的 `{ subscriptionSessionId }` 追加参数读原 Claude / Codex 用量 channel，
@@ -172,6 +181,13 @@ Codex 原生桶不冒充 WHAM：旧 bridge 无法表达按模型的账号池额�
 读法——那会把执行端的默认账号当成任务的账号。早于该追加参数的宿主忽略它并返回原单账号。查询失败、回复不可解析，或旧宿主不支持
 新查询且缺少原生会话 id 时，保留同 owner 代次的上次结果；没有已知结果就保持未知并允许后续刷新，不冒用默认账号。
 只有宿主明确返回 `legacy` 才恢复原读取。官方及自建中转只透传原 invoke，无新 channel、allowlist 或服务端字段。
+
+2026-11-16：已绑定官方 CLI 目录的账号也返回 `bound` 并携带自身用量，不再让查看端按 `isDefault`
+选择另一条额度来源。`isDefault` 与旧 `default-subscription-account` scope 仅保留兼容，不能决定管理权限。
+`read` / `session` 的账号投影加性提供 `planTier`（Claude）和 `planType`（Codex），保留旧 `plan`；
+Claude 额度快照加性提供 `planTier`，Codex 原生桶保留 `planType`。旧端忽略新字段，新端遇到缺失字段按
+原套餐名展示，不推测档位。移除与移动仍用原命令；旧执行端可能拒绝官方 CLI 账号的这些操作，明确报错，
+不通过复制登录目录绕过。没有新增 channel 或 relay 行为，官方与自建中转沿用原透传。
 
 远程组先探测池配额；旧电脑不支持时回到原有 Claude/Codex 配额 channel。同一电脑/供应商的
 探测合并、缓存 30 秒并随 owner 代次丢弃。旧控制端忽略新 push，现有调用格式不变。

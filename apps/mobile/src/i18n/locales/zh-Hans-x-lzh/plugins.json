@@ -82,6 +82,7 @@
   "taskPermission": "差事权柄",
   "followDefault": "从常例",
   "taskSettingsHint": "唯及法器此后所开之差事；旧有差事仍守原模型与权柄。",
+  "remoteQuickAnswerHint": "此模型行于他机。速问速答唯自法器所在之机发，故从系统辅助模型。",
   "permissionHint": "择法器新开差事之权柄，不自承今差事之权柄。",
   "autoPermissionHint": "自核将许 Cindy 依所请自断权柄。确用于此后之法器差事乎？",
   "settingsReload": "重读规制，以确原举是否已存",

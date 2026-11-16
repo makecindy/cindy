@@ -41,6 +41,8 @@ export interface SharedQuotaDeps {
   read(shareId: string): Promise<unknown>;
   subscribe(changed: () => void): () => void;
   publish(sources: MenubarSubscriptionInput[]): void;
+  /** Delay before the next read; the quota overview reads more often while a panel is on screen. */
+  pollMs(): number;
 }
 
 interface SharedQuotaReading {
@@ -49,7 +51,10 @@ interface SharedQuotaReading {
   raw: unknown;
 }
 
-/** Visible-panel lease. Closing/revocation clears immediately and rejects every late response. */
+/**
+ * Authorized reads of received shares' quotas, held by the quota overview while it collects.
+ * Closing, revocation or an owner change clears immediately and rejects every late response.
+ */
 export class SharedQuotaReader {
   private revision = 0;
   private open = false;
@@ -58,6 +63,7 @@ export class SharedQuotaReader {
   private identity: string | null = null;
   private directoryIdentity: string | null = null;
   private inFlightRevision: number | null = null;
+  private pending: Promise<void> | null = null;
   private readings: SharedQuotaReading[] = [];
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   constructor(private readonly deps: SharedQuotaDeps) {}
@@ -145,12 +151,19 @@ export class SharedQuotaReader {
     this.startRead(this.revision);
   }
 
+  /** Resolves when the batch now being read has been published; at once when none is. */
+  settled(): Promise<void> {
+    return this.pending ?? Promise.resolve();
+  }
+
   private startRead(revision: number): void {
     this.inFlightRevision = revision;
-    void this.read(revision).finally(() => {
+    const run: Promise<void> = this.read(revision).catch(() => {}).finally(() => {
       // A late previous lease must not release a newer lease's single flight.
       if (this.inFlightRevision === revision) this.inFlightRevision = null;
+      if (this.pending === run) this.pending = null;
     });
+    this.pending = run;
   }
 
   private async read(revision: number): Promise<void> {
@@ -186,7 +199,7 @@ export class SharedQuotaReader {
     this.timer = setTimeout(() => {
       this.timer = null;
       this.startRead(revision);
-    }, 5_000);
+    }, this.deps.pollMs());
   }
 
   private publishReadings(): void {
