@@ -11,7 +11,7 @@ import { createLiziMcpProviders } from '@cindy/mcps';
 import { handlePluginHostToolRequest } from '../../desktop/src/main/cindy-brain/hostToolSlot.ts';
 import { createHostToolRuntime, setHostToolProviders } from '../../desktop/src/main/mcp-integrations/hostToolCaller.ts';
 
-// Unit: an installed plugin has no task to attach approval to. Reuse the Host's
+// Unit: existing installation and business confirmations use the Host's
 // window-bound confirmation bridge; a different paired controller, disconnection
 // or stale owner must never become an affirmative owner decision.
 test('plugin confirmations bind the reply to the selected authenticated controller', async () => {
@@ -63,56 +63,44 @@ test('disconnect, plugin stop and owner change cancel only their own pending con
   } finally { disconnect(); confirmations.close(); }
 });
 
-// Existing gateway tests exercise Desktop ports; this enters Node's production
-// provider assembly, receipt writer and the same helper registry. Minimal input:
-// one declared terminal group with no first-use approval. No PTY is spawned.
-test('Node provider assembly preserves first-use approval, explicit retry and per-call refusal', async () => {
+// Unit: Node's real provider assembly must dispatch installed declarations
+// without a separate approval. Prior coverage required first-use/per-call UI.
+// Minimal input is terminal_list; it creates no PTY or command process.
+test('Node provider assembly uses installation authority without supplementary confirmation', async () => {
   const database = { drizzle: {} };
   setCurrentDbClient(database, 'owner');
-  const ghost = { enabled: true, dir: '/fixture/demo', approvedHostToolGroups: [],
+  const ghost = { enabled: true, dir: '/fixture/demo',
     approval: { state: 'approved', revision: 'r1' },
     manifest: { schemaVersion: 3, id: 'demo', name: 'Demo', version: '1.0.0', kind: 'chip', entry: 'main.js',
       agent: { hostTools: ['terminal'] } } };
   const confirmations = createHostConfirmations({ current: () => true });
-  let deliver;
-  const nextEvent = () => new Promise(resolve => { deliver = resolve; });
-  const disconnect = confirmations.connect('web:owner', event => { if (event.channel.endsWith('request')) deliver?.(event); return true; });
-  let writes = 0;
-  const service = createHostToolService({ profileDir: '/fixture', ownerId: 'owner', current: () => true,
+  let prompts = 0;
+  const disconnect = confirmations.connect('web:owner', () => { prompts++; return true; });
+  confirmations.install = confirmations.confirm = async () => { throw new Error('unexpected supplementary confirmation'); };
+  let ownerCurrent = true;
+  const service = createHostToolService({ profileDir: '/fixture', ownerId: 'owner', current: () => ownerCurrent,
     owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), getGhost: () => ghost,
     getSession: () => undefined, confirmations, t: key => key,
-    manager: { approveTaskCapability: async (id, revision, current, capability) => {
-      assert.equal(id, 'demo'); assert.equal(revision, 'r1'); assert.equal(current(), true);
-      assert.equal(capability, 'host-tools:terminal'); writes++;
-      ghost.approvedHostToolGroups.push('terminal'); return true;
-    } },
   });
-  const call = (tool, args = {}) => service.request('demo', { type: 'host-tool-request', server: 'cindy_helper', tool, args }, () => true);
+  const call = () => service.request('demo', { type: 'host-tool-request', server: 'cindy_helper', tool: 'terminal_list', args: {} }, () => true);
   const body = result => JSON.parse(result.content.find(item => item.type === 'text').text);
   try {
-    let event = nextEvent();
-    const refused = call('terminal_list');
-    const first = await event;
-    assert.equal(first.channel, 'ghosts:install-consent:request');
-    assert.equal(first.payload.facts.added[0].key, 'agent:host-tools:terminal');
-    assert.equal(confirmations.resolve('web:owner', 'install', first.payload.requestId, false), true);
-    assert.equal(body(await refused).errorCode, 'PERMISSION_DENIED');
-    assert.equal(body(await call('terminal_list')).errorCode, 'PERMISSION_DENIED');
-    assert.equal(writes, 0);
-    event = nextEvent();
-    const retry = service.approveGroup('demo', 'terminal', () => true, true);
-    const requested = await event;
-    confirmations.resolve('web:owner', 'install', requested.payload.requestId, true);
-    assert.equal(await retry, true); assert.equal(writes, 1);
-    assert.deepEqual(body(await call('terminal_list')).jobs, []);
-    event = nextEvent();
-    const command = call('terminal_start', { program: { command: 'fixture-command', args: ['value'] } });
-    const prompt = await event;
-    assert.equal(prompt.channel, 'ghosts:confirm-request');
-    assert.match(prompt.payload.body, /fixture-command/);
-    confirmations.resolve('web:owner', 'confirm', prompt.payload.requestId, false);
-    assert.equal(body(await command).errorCode, 'PERMISSION_DENIED');
-    assert.deepEqual(body(await call('terminal_list')).jobs, []);
+    assert.deepEqual(body(await call()).jobs, []);
+    ghost.approvedHostToolGroups = [];
+    assert.deepEqual(body(await call()).jobs, []);
+    ghost.enabled = false;
+    assert.equal(body(await call()).errorCode, 'PERMISSION_DENIED');
+    ghost.enabled = true;
+    ghost.manifest.agent.hostTools = [];
+    ghost.approvedHostToolGroups = ['terminal'];
+    assert.equal(body(await call()).errorCode, 'PERMISSION_DENIED');
+    ghost.manifest.agent.hostTools = ['terminal'];
+    ghost.approval = { state: 'legacy-unapproved' };
+    assert.equal(body(await call()).errorCode, 'PERMISSION_DENIED');
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    ownerCurrent = false;
+    assert.equal(body(await call()).errorCode, 'PERMISSION_DENIED');
+    assert.equal(prompts, 0);
   } finally { disconnect(); confirmations.close(); service.close(); clearCurrentDbClient(database); }
 });
 
@@ -178,7 +166,7 @@ test('Node reports an unavailable scheduler as unsupported by the execution envi
 });
 
 // #9825 A/B, unit: use the production Node gateway and discovery executor, not
-// forwarded caller metadata. Computer cannot attest approvals across processes;
+// forwarded caller metadata. The Node plugin connection is not assembled;
 // no Node observation runtime may be constructed, while Desktop retains its path.
 test('Node plugins cannot create computer snapshots or execute, while Desktop plugins retain the provider', async () => {
   const database = { drizzle: {} };
@@ -201,12 +189,16 @@ test('Node plugins cannot create computer snapshots or execute, while Desktop pl
   const request = { type: 'host-tool-request', server: 'cindy_computer', tool: 'list_windows', args: {} };
   const body = value => JSON.parse(value.content.find(item => item.type === 'text').text);
   try {
-    for (let i = 0; i < 2; i++) assert.equal(body(await service.request('computer', request, () => true)).errorCode, 'UNSUPPORTED_CAPABILITY');
+    for (let i = 0; i < 2; i++) {
+      const result = body(await service.request('computer', request, () => true));
+      assert.equal(result.errorCode, 'UNSUPPORTED_CAPABILITY');
+      assert.match(result.message, /not connected/i);
+    }
     assert.equal(runtimes, 0); assert.equal(prompts, 0); assert.equal(executions, 0);
     const discovery = body(await service.request('computer', { ...request, server: 'cindy_helper', tool: 'host_services' }, () => true));
     assert.equal(discovery.ok, true, JSON.stringify(discovery));
     assert.deepEqual(discovery.services.find(s => s.group === 'computer'), {
-      group: 'computer', server: 'cindy_computer', tools: [], available: false, reason: 'unsupported', declared: true, approved: true,
+      group: 'computer', server: 'cindy_computer', tools: [], available: false, reason: 'unsupported', declared: true,
     });
     assert.equal(service.services.list({ agentKind: 'codex', workingDir: '' }).find(s => s.group === 'computer').available, true);
     const agent = provider.toHostTools({ agentKind: 'codex', workingDir: '', sessionId: 'task' });
@@ -217,7 +209,6 @@ test('Node plugins cannot create computer snapshots or execute, while Desktop pl
     const desktop = await handlePluginHostToolRequest('computer', request, () => true, {
       owner: () => owner, getGhost: () => ghost,
       createRuntime: (server, caller) => createHostToolRuntime(server, caller, '', 'r1'),
-      approveGroup: async () => true, policy: () => 'auto-approve', confirm: async () => true,
     });
     assert.notEqual(desktop.isError, true); assert.equal(executions, 2);
   } finally { service.close(); disconnect(); confirmations.close(); setHostToolProviders([], { ...owner, ownerGeneration: 2 }); clearCurrentDbClient(database); }
@@ -246,20 +237,10 @@ test('negotiated HTTP event streams deliver one live owner dialog without puttin
     onEvent: event => { received.push(event); if (event.channel === 'ghosts:confirm-request') prompted(event.payload); },
   });
   await ready;
-  // Performance regression, unit with loopback HTTP: production Host gateway
-  // must not execute when its new confirmation writer cannot deliver. The
-  // existing stream test covered only a healthy controller. Simulate the two
-  // writable states locally, without timing-dependent slow-network sleeps.
-  const database = { drizzle: {} };
-  setCurrentDbClient(database, 'owner');
-  let spawned = 0;
-  const ghost = { enabled: true, dir: '/fixture/slow', approvedHostToolGroups: ['terminal'],
-    approval: { state: 'approved', revision: 'r1' }, manifest: { id: 'slow', name: 'Slow', agent: { hostTools: ['terminal'] } } };
-  const service = createHostToolService({ profileDir: '/fixture', ownerId: 'owner', current: () => true,
-    owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), getGhost: () => ghost,
-    getSession: () => undefined, confirmations, manager: {}, t: key => key,
-    terminal: { start() { spawned++; throw new Error('UNEXPECTED_EXECUTION'); }, disposeScoped() {} } });
-  t.after(() => { service.close(); clearCurrentDbClient(database); });
+  // Unit with loopback HTTP: a legitimate business confirmation must report
+  // refusal when the writer cannot deliver, even if a reply arrives. Host tool
+  // calls no longer initiate this UI. Exercise both writable states without
+  // timing-dependent slow-network sleeps or executing a command.
   const write = eventResponse.write;
   for (const initial of [1024 * 1024 + 1, 0]) {
     let buffered = initial;
@@ -274,10 +255,8 @@ test('negotiated HTTP event streams deliver one live owner dialog without puttin
       }
       return write.call(this, data, ...rest);
     };
-    const denied = await service.request('slow', { type: 'host-tool-request', server: 'cindy_helper', tool: 'terminal_start', args: {} }, () => true);
-    const result = JSON.parse(denied.content.find(item => item.type === 'text').text);
-    assert.equal(result.errorCode, 'PERMISSION_DENIED');
-    assert.equal(spawned, 0, 'a failed owner dialog must never execute the terminal tool');
+    assert.equal(await confirmations.confirm({ ghostId: 'demo', ghostName: 'Demo', body: 'Confirm selected business operation?',
+      confirmText: null, cancelText: null, danger: false }), false);
   }
   // A false write result whose buffer already drained can still deliver.
   Object.defineProperty(eventResponse, 'writableLength', { configurable: true, get: () => 0 });

@@ -102,6 +102,7 @@ export function createHostClaudeProxyRuntime(options: {
     media: { ...hostBlobStore, ...hostMediaIngest, ...hostMediaJournal } });
   const ports: AnthropicCompatProxyHostPorts = {
     createAttachmentRecovery: (...args) => recovery.createAttachmentRecovery(...args),
+    createRequestSizeController: (...args) => recovery.createRequestSizeController(...args),
     outboundFetch: (...args) => hostOutbound.outboundFetch(...args),
     resolveDesktopOutboundProxy: (...args) => resolveHostOutboundProxy(...args),
     isOpenAiSubscriptionProviderId: providerId => options.isOpenAiSubscriptionProviderId(providerId),

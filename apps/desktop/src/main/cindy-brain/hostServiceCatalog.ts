@@ -97,7 +97,7 @@ export function createHostServiceToolExecutor(catalog: HostServiceCatalog, ports
     return { scope: 'local', services: catalog.list(context).map(service => ({ ...service,
       ...(ports.supportsPluginServer?.(service.server) === false
         ? { available: false, reason: 'unsupported' as const, tools: [], entryTool: undefined } : {}),
-      declared: declared.includes(service.group), approved: hasPluginHostToolGroupApproval(ghost, service.group),
+      declared: declared.includes(service.group),
     })) };
   } };
 }

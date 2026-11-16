@@ -186,7 +186,8 @@
       },
       "note": "产品一级概念，五语统一保留英文原词。zh-CN 现状 44:5 已是主流；zh-TW 沿用同一裁决；ja / ko 实测拉丁 Agent 同样是主流（59:38 / 58:39），故四个目标语言一致（2026-07 修正：此前误按抽样声明为片假名 エージェント / 한글 에이전트，那是少数派）。「代理」一词在中文 UI 里整体废弃——Agent 与 Proxy 都保留英文，不共用这个译名；「代理」按英文源分别登记在 agent / subagent / proxy 三条下（条件禁用），不再统一挂 proxy——统一登记会让自动替换无法确定目标：2026-07 一次批量重放就把 \"Agent\"→「代理」的 4 处和 \"Subagent models\" 的 4 处一并换成了 Proxy，产出「子 Proxy 模型」这种错译。引入术语表时全仓仅 9 处「代理」，已全部清理为 Agent / Subagent / Proxy。豁免 settings.remote 整段：那里的 agent 指 ssh-agent（英文原文即 \"SSH agent\" / \"probe agent\"），是与产品 Agent 同形的另一个概念。",
       "exempt": [
-        "desktop:settings.remote."
+        "desktop:settings.remote.",
+        "desktop:ipcError.SSH_AGENT_UNAVAILABLE"
       ]
     },
     {
@@ -2193,6 +2194,25 @@
       "note": "issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=realtime 的实时多模态模型（如 gpt-realtime-2、gemini-omni-flash-preview）。"
     },
     {
+      "id": "model-category-rerank",
+      "status": "proposed",
+      "en": "Rerank",
+      "translations": {
+        "zh-CN": "重排",
+        "zh-TW": "重排",
+        "ja": "リランキング",
+        "ko": "재순위화",
+        "es": "Reordenación",
+        "fr": "Reclassement",
+        "de": "Neusortierung",
+        "pt-PT": "Reordenação",
+        "pt-BR": "Reordenação",
+        "zh-Hans-x-lzh": "重排",
+        "zh-Hant-x-lzh": "重排"
+      },
+      "note": "模型分类 rerank，对查询的候选文档重新排序，不进入对话模型清单。"
+    },
+    {
       "id": "model-category-stt",
       "status": "proposed",
       "en": "Speech to Text",
@@ -2651,6 +2671,18 @@
         ]
       },
       "note": "Privacy Policy 是同一份法律文件。繁中设置页与日志上传提示已统一使用「隱私政策」，登录文案曾漂移为「隱私協議」，因此在 zh-TW 中统一为「隱私政策」。禁用项按英文源限定，避免误伤真正指 Agreement 的文案；本次只锁定新增繁中 catalog，不借此改写既有简中口径。"
+    },
+    {
+      "id": "privacy-screen",
+      "status": "proposed",
+      "en": "Privacy screen",
+      "translations": {
+        "zh-CN": "隐私屏",
+        "zh-TW": "隱私畫面",
+        "ja": "プライバシースクリーン",
+        "ko": "프라이버시 화면"
+      },
+      "note": "Cindy 用来代替锁屏的遮罩：盖住本机屏幕，有人碰电脑就转系统锁屏，AI 在后面继续工作。用于离开时、远程控制中和远程结束后三种场景（docs/product-rules/privacy-screen.md）。取代旧称「电脑防窥」「防窥遮罩」「黑色遮罩」；不是系统自带的锁屏，也不是显示器防窥膜。"
     },
     {
       "id": "process",

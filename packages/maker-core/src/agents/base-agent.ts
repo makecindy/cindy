@@ -136,6 +136,8 @@ export type McpToolApprovalPolicy =
 /** Pi 内 MCP client 的 server 描述；remote 存在时直接访问外部 Streamable HTTP MCP。 */
 export interface PiMcpServerRef {
   name: string;
+  /** Optional human-readable name used by Pi MCP discovery; `name` remains the stable id. */
+  displayName?: string;
   url: string;
   remote?: {
     /** HTTP header 名 → Pi 父进程 env var 名；描述符里绝不放 header 真值。 */
@@ -1364,6 +1366,8 @@ export interface AgentDeps {
    * 缺省 / no-op → 行为与改动前一致。
    */
   prepareCodexResumeSession?: (threadId: string, context?: { codexHome: string; providerId?: string }) => Promise<string | void>;
+  /** null/absent preserves native policy; sampled at session start/resume. */
+  getCodexServerCompactionPreference?: () => boolean | null;
   recordCodexThreadLocation?: (threadId: string, codexHome: string, rolloutPath?: string) => Promise<void>;
   /** readOnly locates existing storage without invoking resume recovery or copying history. */
   resolveCodexThreadStorage?: (threadId: string, options?: { readOnly?: boolean }) => Promise<{ historyHome: string; sqliteHome: string; rolloutPath?: string } | undefined>;
@@ -2604,6 +2608,16 @@ export interface AgentSessionHandle {
    * 不能把进程关在操作中间。不支持的 agent 留空(Session 层回退 false)。
    */
   hasPendingHostOperation?(): boolean;
+
+  /**
+   * Conservative probe for provider-owned work that can outlive a product turn
+   * but is not represented by listBackgroundTasks (for example Codex native
+   * child agents, yielded exec cells and background terminals). Idle runtime
+   * reclamation calls it before closing; true means busy *or unknown*, so a
+   * failed or unsupported probe keeps the runtime. Not for UI hydration.
+   * Agents whose background work is fully covered by listBackgroundTasks omit it.
+   */
+  hasLiveBackgroundWork?(): Promise<boolean>;
 
   /**
    * Resolve the provider claim attached atomically to a specific `done` event.

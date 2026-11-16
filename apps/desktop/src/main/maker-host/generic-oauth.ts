@@ -863,7 +863,7 @@ async function runGenericOAuthLogin(
  * 约定：Anthropic 兼容端点为 `{base}/v1/models`；OpenAI 兼容 baseUrl 常以 `/v1` 结尾，
  * 此时只追加 `/models`。自定义 OAuth 供应商靠这条推导免去用户手填发现端点。
  */
-function deriveModelsDiscoveryUrl(baseUrl: string): string {
+function deriveModelsDiscoveryUrl(baseUrl: string, options?: { clientVersion?: string }): string {
   const copilot = copilotModelsRequest(baseUrl);
   if (copilot) return copilot.url;
   const url = new URL(baseUrl);
@@ -875,6 +875,7 @@ function deriveModelsDiscoveryUrl(baseUrl: string): string {
   url.pathname = /(?:\/v\d+|\/backend-api\/codex)$/i.test(pathname)
     ? `${pathname}/models`
     : `${pathname === '/' ? '' : pathname}/v1/models`;
+  if (options?.clientVersion) url.searchParams.set('client_version', options.clientVersion);
   return url.toString();
 }
 

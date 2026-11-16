@@ -156,6 +156,24 @@ test('personal shell accepts task URLs, folders and cartridges without claiming 
  assert.throws(()=>personalOpenTypes('unknown'),/Invalid/);
 });
 
+// Regression (2026-11): the personal shell kept Electron's plist without
+// NSLocalNetworkUsageDescription, so macOS silently denied LAN access to it and
+// every child process (SSH hosts, LAN health checks got EHOSTUNREACH even to the
+// gateway). The personal runtime must declare the same usage strings as Forge.
+test('personal shell declares the packaged privacy usage descriptions, including local network', async()=>{
+ const {personalUsageDescriptions}=await import('../personal-build/native-capabilities.mjs');
+ const root=path.resolve(path.dirname(new URL(import.meta.url).pathname),'../..');
+ const usage=personalUsageDescriptions(root);
+ assert.ok(usage.NSLocalNetworkUsageDescription);
+ for(const [key,value] of Object.entries(usage)) assert.match(key,/^NS[A-Za-z]+UsageDescription$/), assert.ok(value.trim(),key);
+ const empty=fs.mkdtempSync(path.join(os.tmpdir(),'personal-usage-test-'));
+ try {
+  fs.mkdirSync(path.join(empty,'apps/desktop/resources'),{recursive:true});
+  fs.writeFileSync(path.join(empty,'apps/desktop/resources/mac-permission-locales.json'),JSON.stringify({en:{NSMicrophoneUsageDescription:'Cindy mic'}}));
+  assert.throws(()=>personalUsageDescriptions(empty),/local network/);
+ } finally { fs.rmSync(empty,{recursive:true,force:true}); }
+});
+
 // Regression: native preparation omitted the input executable, forcing a profile
 // cache build with an unrelated ad-hoc identity. Filesystem integration with a
 // fake compiler checks the production build entry and cleanup on compiler failure.
@@ -170,7 +188,9 @@ test('personal preparation embeds the input helper and propagates build failure'
   preparePersonalInput(root,app,(cmd,args)=>{
    assert.equal(cmd,'xcrun');assert.deepEqual(args.slice(0,4),['swiftc','-D','DESKTOP_INPUT_PERSONAL','-O']);
    temporary=path.dirname(args[4]);assert.equal(fs.readFileSync(args[4],'utf8'),'caller fixture\ninput fixture');
-   fs.writeFileSync(args.at(-1),'compiled fixture');
+   // The owner-verification prompt must name Cindy (docs/product-rules/privacy-screen.md).
+   assert.ok(args.at(-1).endsWith('apps/desktop/native/remote-desktop/macos-input-Info.plist'));
+   fs.writeFileSync(args[args.indexOf('-o')+1],'compiled fixture');
   });
   assert.equal(fs.readFileSync(path.join(app,'Contents/Resources/tools/remote-desktop/cindy-macos-desktop-input'),'utf8'),'compiled fixture');
   assert.equal(fs.existsSync(temporary),false);

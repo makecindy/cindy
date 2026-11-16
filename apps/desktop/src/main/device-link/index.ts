@@ -993,6 +993,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // peer ACK 耗尽时，幂等的 local-db 读请求交给 linkRecovery 快速重开并只重试一次；
     // 写请求与长执行请求保持原有 in-flight 语义，避免重复副作用。
     peerResetReadRetry: true,
+    // A silent execution computer must not reconnect every controller sharing this relay.
+    // The reset listener below reuses the authorized, per-peer reopen loop.
+    peerFailurePolicy: 'isolate-outbound',
     // debug 日志开启时按 channel 统计回包字节，作为流量治理前后的对照。
     invokeMetrics: desktopInvokeTransferMetrics,
   };
@@ -1172,6 +1175,10 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   });
   client.onPeerTransportReset(({ deviceId }) => {
     invalidatePluginOauth(deviceId);
+    if (hasOutboundControlIntent(deviceId)) {
+      transportTimeoutReopen.trigger(deviceId);
+      return;
+    }
     // Mutual control shares one peer link: a locally exhausted inbound stream
     // also invalidates this Desktop's remote view, without reopening other peers.
     broadcast(DEVICE_LINK_PUSH.PEER_LINK_RESET, { deviceId });
@@ -1915,6 +1922,20 @@ export function handleDeviceLinkSystemResume(): void {
   client.restartConnections('system-resume');
 }
 
+/**
+ * 系统即将睡眠:主动、正常地断开 relay,让对端立即看到本机离线，而不是各自等
+ * 可靠层 ACK 超时 + 链路判死 + 弃帧(合计约 1.5 分钟)才发现。睡眠期间不重连，
+ * 唤醒由 handleDeviceLinkSystemResume 重建；平台没发唤醒事件时 client 自带清醒
+ * 时间兜底(SYSTEM_SUSPEND_RECONNECT_HOLD_MS)。持有权 / 登录闸与唤醒一致。
+ */
+export function handleDeviceLinkSystemSuspend(): void {
+  if (!client || linkTornDown) return;
+  if (arbiter && !arbiter.isOwner()) return;
+  if (!authManager.getAuthState().isAuthenticated) return;
+  log.info('system suspend: closing device-link connection until resume');
+  client.suspendConnectionsForSystemSleep('system-suspend');
+}
+
 export function getDeviceLinkConnectionIssue(): DeviceLinkConnectionIssue | null {
   return client?.getConnectionIssue() ?? null;
 }
@@ -2174,10 +2195,9 @@ function assertRemoteControlTargetEnabled(deviceId: string): void {
 
 /**
  * 掉线/重连窗口里发起请求时,先有界等待连接就绪(与 mobile 的
- * ensureOnlineForRequest 同款):online 直接放行;否则 un-park 退避计时器促成
- * 立即重连并有界等待上线。上限够一次健康重连握手完成(通常 <1s),又短到
- * 连不上时快速失败(NOT_CONNECTED,瞬态)交上层重试链/熔断——把「单次请求
- * park 在退避 gap 里干等(最坏 30s)」压成「等一次重连」。
+ * ensureOnlineForRequest 同款):online 直接放行;否则在自己的等待预算内
+ * 共享已有退避与握手，不因新请求提前建连或清零退避次数。
+ * 超时以 NOT_CONNECTED(瞬态)交上层重试链/熔断，共享连接继续按原节奏恢复。
  */
 const CONNECT_READY_TIMEOUT_MS = 1_500;
 
@@ -2348,7 +2368,7 @@ export async function remoteInvoke(
   deviceId: string,
   channel: string,
   args: unknown[],
-  options?: { preSend?: () => void; background?: boolean; diagnosticSource?: 'renderer' | 'main'; liveProviderMetadata?: true },
+  options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main'; liveProviderMetadata?: true },
 ): Promise<InvokeResultPayload> {
   if (options?.liveProviderMetadata) return remoteInvokeLive(deviceId, channel, args, options);
   const closeEpoch = getRemoteLinkCloseEpoch(deviceId);
@@ -2362,7 +2382,7 @@ export async function remoteInvoke(
 
 async function remoteInvokeLive(
   deviceId: string, channel: string, args: unknown[],
-  options?: { preSend?: () => void; background?: boolean; diagnosticSource?: 'renderer' | 'main' },
+  options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' },
 ): Promise<InvokeResultPayload> {
   options?.preSend?.();
   assertNotStandby();

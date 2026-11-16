@@ -17,5 +17,8 @@ export function usePreviewChromeFrame() {
     : { top: insets.top, left: insets.left + spacing.md, right: insets.right + spacing.md, sharedStatusRow: false };
   // Only the chrome row shares the status row; content stays below the status area.
   const contentTop = Math.max(insets.top, row.top + HTML_BROWSER_CONTROL_SIZE + spacing.xs);
-  return { ...row, bottom: insets.bottom, contentTop };
+  const compactDocumentRow = row.sharedStatusRow || (Platform.OS === 'ios' && window.barEdge !== 'none');
+  const documentHeaderHeight = compactDocumentRow ? HTML_BROWSER_CONTROL_SIZE : 64;
+  const documentContentTop = compactDocumentRow ? contentTop : row.top + documentHeaderHeight;
+  return { ...row, bottom: insets.bottom, contentTop, documentHeaderHeight, documentContentTop };
 }

@@ -1,3 +1,5 @@
+import { ResolvedProjectIcon } from './ResolvedProjectIcon';
+import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { SessionTaskMenu } from './SessionTaskMenu';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
@@ -1098,14 +1100,20 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           {sourceLabel ? (
             <span
               title={sourceLabel}
+              data-project-source
               className={cn(
-                'min-w-0 truncate text-xs font-normal',
+                'inline-flex min-w-0 items-center gap-1 text-xs font-normal',
                 isActive
                   ? 'text-sidebar-item-active-foreground/70'
                   : 'text-[var(--cmd-palette-item-meta)]',
               )}
             >
-              {sourceLabel}
+              {session.workspaceKind !== 'dialogue' && sessionProjectDirectory(session) && (
+                <ResolvedProjectIcon directory={sessionProjectDirectory(session)!}
+                  remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
+                  name={sourceLabel} size={14} />
+              )}
+              <span className="truncate">{sourceLabel}</span>
             </span>
           ) : null}
         </span>

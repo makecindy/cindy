@@ -11,7 +11,12 @@ const AWAY_MASK_OPACITY = 0.99;
 export type PrivacyInputWatcher = (
   localInput: () => void,
   failed: () => void,
+  /** Physical pointer movement: brings the dimmed notice back to full brightness. */
+  pointer: () => void,
 ) => Promise<PrivacyInputMonitor>;
+
+/** Reloading the page restarts its full-brightness period; at most this often. */
+const WAKE_INTERVAL_MS = 8_000;
 
 const log = createLogger('remote-desktop:privacy');
 
@@ -22,9 +27,16 @@ const log = createLogger('remote-desktop:privacy');
 export class PrivacyScreen {
   private windows: BrowserWindow[] = [];
   private generation = 0;
+  private inputGeneration = 0;
+  private windowGeneration = 0;
   private partitionConfigured = false;
   private confirming = false;
+  private disconnecting = false;
+  private holdingInput = false;
   private monitor: PrivacyInputMonitor | null = null;
+  /** The page currently shown, reloaded to wake its notice. */
+  private page = '';
+  private wokenAt = Number.NEGATIVE_INFINITY;
   get active(): boolean {
     return this.windows.length > 0;
   }
@@ -33,7 +45,8 @@ export class PrivacyScreen {
     /** Returns false to keep the masks up (the away guard could not lock). */
     private readonly stopped: () => void | false | Promise<void | false>,
     private readonly suspendInput: () => Promise<() => Promise<void>>,
-    private readonly watchInput: PrivacyInputWatcher = watchPrivacyInput,
+    private readonly watchInput: PrivacyInputWatcher = (localInput, failed, pointer) =>
+      watchPrivacyInput(localInput, failed, undefined, pointer),
     private readonly options: {
       /** Page shown on the masks; the away guard uses its own black cover. */
       html?: () => string;
@@ -44,24 +57,32 @@ export class PrivacyScreen {
        * desktop keeps its dialog-capable windows and only restores Dock presence.
        */
       nonActivating?: boolean;
+      /** Local click recovery when the native input watcher cannot be restarted. */
+      heldInput?: () => void;
     } = {},
   ) {}
   private async disconnect(generation: number): Promise<void> {
-    if (generation !== this.generation) return;
+    if (generation !== this.generation || this.disconnecting) return;
+    this.disconnecting = true;
     // Invalidate callbacks immediately, but retain masks and capture exclusions
     // until the controller has finished locking and ended the viewing lease.
     const ending = ++this.generation;
+    this.inputGeneration++;
     let keep = false;
     try {
       // The confirming hook rejects injected input, including our lock shortcut.
       // Keep the masks, but wait for hook teardown before asking the OS to lock.
       await this.monitor?.stop();
+      this.monitor = null;
       if (ending !== this.generation) return;
       keep = (await this.stopped()) === false;
     } catch {
       log.warn('privacy disconnect failed');
     } finally {
-      if (ending === this.generation && !keep) this.stop();
+      if (ending === this.generation) {
+        this.disconnecting = false;
+        if (!keep) this.stop();
+      }
     }
   }
   private async confirmExit(window: BrowserWindow, generation: number): Promise<void> {
@@ -129,6 +150,10 @@ export class PrivacyScreen {
     if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
     if (this.windows.length) return;
     const generation = ++this.generation;
+    const windowGeneration = ++this.windowGeneration;
+    const windowFailed = () => {
+      if (windowGeneration === this.windowGeneration) void this.disconnect(this.generation);
+    };
     const created: BrowserWindow[] = [];
     const partition = session.fromPartition('cindy-desktop-privacy', { cache: false });
     if (!this.partitionConfigured) {
@@ -172,7 +197,10 @@ export class PrivacyScreen {
           // apps then stop drawing, so Agents behind the cover read a frozen screen
           // (2026-11-06: a click behind the mask changed the page, its pixels did not).
           // A transparent window whose page is opaque is still treated as occluding.
-          ...(nonActivating ? { type: 'panel', opacity: AWAY_MASK_OPACITY } : {}),
+          ...(nonActivating ? { type: 'panel' } : {}),
+          // Every macOS privacy screen, including the in-session one: an opaque cover made
+          // remote viewers and Agents read frozen Electron windows.
+          ...(process.platform === 'darwin' ? { opacity: AWAY_MASK_OPACITY } : {}),
           webPreferences: {
             session: partition,
             sandbox: true,
@@ -196,13 +224,13 @@ export class PrivacyScreen {
           try {
             window.setBounds(changed.bounds, false);
           } catch {
-            void this.disconnect(generation);
+            windowFailed();
           }
         };
         screen.on('display-metrics-changed', relayout);
         window.on('closed', () => {
           screen.removeListener('display-metrics-changed', relayout);
-          void this.disconnect(generation);
+          windowFailed();
         });
         window.setMenuBarVisibility(false);
         await window.loadURL(
@@ -210,6 +238,10 @@ export class PrivacyScreen {
         );
         window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
         window.webContents.on('will-navigate', (event) => event.preventDefault());
+        window.webContents.on('before-mouse-event', (_event, input) => {
+          if (windowGeneration === this.windowGeneration && this.holdingInput &&
+              !this.monitor && input.type === 'mouseDown') this.options.heldInput?.();
+        });
         window.setContentProtection(true);
         // Remote system injection must reach the app behind this passive mask.
         // Physical input is identified and consumed by the native hook instead.
@@ -220,7 +252,7 @@ export class PrivacyScreen {
         });
         window.setAlwaysOnTop(true, 'screen-saver', 1);
         window.webContents.on('render-process-gone', () => {
-          void this.disconnect(generation);
+          windowFailed();
         });
       }
       if (!current() || generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
@@ -228,14 +260,8 @@ export class PrivacyScreen {
       if (!ids.length || ids.some((id) => !Number.isSafeInteger(id) || id <= 0))
         throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
       this.excluded(ids);
-      const monitor = await this.watchInput(
-        () => {
-          if (generation === this.generation) void this.confirmExit(this.windows[0], generation);
-        },
-        () => {
-          void this.disconnect(generation);
-        },
-      );
+      this.page = html;
+      const monitor = await this.watch(generation);
       if (!current() || generation !== this.generation) {
         monitor.stop();
         throw new Error('DESKTOP_LEASE_EXPIRED');
@@ -265,8 +291,86 @@ export class PrivacyScreen {
       throw error;
     }
   }
+  private watch(generation: number): Promise<PrivacyInputMonitor> {
+    const inputGeneration = ++this.inputGeneration;
+    const current = () => generation === this.generation && inputGeneration === this.inputGeneration;
+    return this.watchInput(
+      () => {
+        if (current()) void this.confirmExit(this.windows[0], generation);
+      },
+      () => {
+        if (current()) void this.disconnect(generation);
+      },
+      () => {
+        if (current()) this.wake();
+      },
+    );
+  }
+
+  /**
+   * The lock could not be confirmed and the masks stay (docs/product-rules/privacy-screen.md):
+   * clicks land on the masks instead of passing through to apps nobody can see.
+   */
+  holdInput(): void {
+    this.holdingInput = true;
+    for (const window of this.windows) if (!window.isDestroyed()) window.setIgnoreMouseEvents(false);
+  }
+
+  /**
+   * Stop watching physical input while keeping the masks, e.g. so the system's
+   * verification prompt can receive the owner's typing. Not a failure: the helper's end
+   * is detached from this cover first.
+   */
+  async releaseInput(): Promise<void> {
+    const monitor = this.monitor;
+    if (!monitor) return;
+    this.monitor = null;
+    this.inputGeneration++;
+    await monitor.stop();
+  }
+
+  /** Watch physical input again on the masks still up, so the next touch retries the lock. */
+  async rearmInput(): Promise<void> {
+    if (!this.windows.length || this.monitor) return;
+    const generation = this.generation;
+    const monitor = await this.watch(generation);
+    if (generation !== this.generation || !this.windows.length) {
+      void monitor.stop();
+      return;
+    }
+    this.monitor = monitor;
+  }
+
+  /**
+   * Let the system's owner-verification prompt show above the masks while it is open.
+   * The pop-up-menu level stays above the Dock and menu bar (the floating level showed
+   * the Dock during verification) and below the prompt (macOS 27.3, 2026-11-15).
+   */
+  lowerForSystemPrompt(lowered: boolean): void {
+    for (const window of this.windows)
+      if (!window.isDestroyed())
+        window.setAlwaysOnTop(true, lowered ? 'pop-up-menu' : 'screen-saver', 1);
+  }
+
+  /** Native handle Windows anchors its verification prompt to. */
+  nativeWindowHandle(): Buffer | undefined {
+    const window = this.windows.find((candidate) => !candidate.isDestroyed());
+    return window?.getNativeWindowHandle();
+  }
+
+  /**
+   * Someone moved the pointer: reload the page so its notice is at full brightness again
+   * (it dims after ten seconds; docs/product-rules/privacy-screen.md). Never locks.
+   */
+  wake(): void {
+    const now = Date.now();
+    if (!this.windows.length || this.confirming || now - this.wokenAt < WAKE_INTERVAL_MS) return;
+    this.wokenAt = now;
+    void this.replacePage(this.page).catch(() => {});
+  }
   /** Swaps the page on every mask, keeping the masks in place. */
   async replacePage(html: string): Promise<void> {
+    this.page = html;
     const url = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
     await Promise.all(
       this.windows.filter((window) => !window.isDestroyed()).map((window) => window.loadURL(url)),
@@ -275,7 +379,11 @@ export class PrivacyScreen {
 
   stop(): void {
     this.generation++;
+    this.inputGeneration++;
+    this.windowGeneration++;
     this.confirming = false;
+    this.disconnecting = false;
+    this.holdingInput = false;
     this.monitor?.stop();
     this.monitor = null;
     const windows = this.windows;

@@ -95,6 +95,8 @@ export type ModelDiscoveryFailureState = Partial<
 
 /** 供应商 + 连接状态。 */
 export interface ProviderView extends Provider {
+  /** Same-account devices only: complete, host-verified subscription identity set. Display equality, never authorization. */
+  subscriptionAccountKeys?: string[];
   /** Host observed a transient native-account read failure. Optional on older hosts; no credential data. */
   subscriptionReadUnavailable?: true;
   /** Host-owned subscription speed policy; absence means an unrelated provider or older host. */
@@ -120,7 +122,7 @@ export interface ProviderView extends Provider {
   subscriptionAccountPool?: 'openai' | 'anthropic';
   subscriptionAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean };
   /** Public account identity and credential origin, never credential material. */
-  openAiAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean };
+  openAiAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean; accountKey?: string };
   connected: boolean;
   /** Ready media execution channels, independent of chat authorization. Absent on older hosts. */
   availableMediaModelIds?: string[];
@@ -183,7 +185,7 @@ export function buildRegistry(
     // 原引用透传零分配 —— PR #744 review)。前缀误命中(如 'a:' 命中 'a:b:model')只
     // 多做一次无害映射,不影响正确性。
     let models = p.models;
-    let mediaOverrides: Pick<Provider, 'imageModels' | 'videoModels' | 'audioModels' | 'embeddingModels'> = {};
+    let mediaOverrides: Pick<Provider, 'imageModels' | 'videoModels' | 'audioModels' | 'embeddingModels' | 'evaluationModels'> = {};
     if (disabledKeys.length > 0 && disabledKeys.some((k) => k.startsWith(`${p.id}:`))) {
       const mapped: Provider['models'] = {};
       for (const agent of Object.keys(p.models) as AgentKind[]) {
@@ -203,6 +205,7 @@ export function buildRegistry(
         ...(p.imageModels ? { imageModels: mapMedia(p.imageModels) } : {}),
         ...(p.videoModels ? { videoModels: mapMedia(p.videoModels) } : {}),
         ...(p.audioModels ? { audioModels: mapMedia(p.audioModels) } : {}),
+        ...(p.evaluationModels ? { evaluationModels: mapMedia(p.evaluationModels) } : {}),
         ...(p.embeddingModels ? { embeddingModels: mapMedia(p.embeddingModels) } : {}),
       };
     }

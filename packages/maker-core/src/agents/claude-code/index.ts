@@ -1005,11 +1005,18 @@ export class ClaudeCodeAgent extends BaseAgent {
   ): ClaudeSdkEffort | undefined {
     const descriptor = this.capabilities.availableModels.find((m) => m.id === model);
     // 来源不明(null)时不收窄,只保留原有的「无档位模型不下发」判断。
+    const hasRouteResolver = Boolean(this.deps.resolveModelEfforts);
     const routeEfforts = this.routeEffortsForModel(model, providerId);
-    if ((routeEfforts ?? descriptor?.efforts)?.length === 0) return undefined;
+    const efforts = hasRouteResolver ? routeEfforts : descriptor?.efforts;
+    const routeEffortsUnknown = hasRouteResolver && routeEfforts === null;
+    // 自定义来源未声明能力时, efforts=[] 只是占位值; 保留用户显式选择,交由
+    // Claude Code SDK/CLI 裁决。只有明确声明为空的模型才省略 effort。
+    if (!routeEffortsUnknown && (hasRouteResolver || descriptor?.effortsUnknown !== true) && efforts?.length === 0) {
+      return undefined;
+    }
     // 会话档位可能来自上一个模型(如 Claude 的 xhigh),原样下发会被只认目录档位的
     // 上游拒绝(GLM-5.3 收到 xhigh 回 400/1210,#5402)。按目标来源声明的档位收窄。
-    return clampEffortForClaude((clampEffortToSupported(effort, routeEfforts ?? undefined) as Effort | undefined) ?? effort);
+    return clampEffortForClaude((clampEffortToSupported(effort, routeEffortsUnknown ? undefined : efforts ?? undefined) as Effort | undefined) ?? effort);
   }
 
   private sdkMaxEffortFallbackForModel(

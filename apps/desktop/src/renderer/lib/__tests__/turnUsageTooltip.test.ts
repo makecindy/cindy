@@ -358,3 +358,51 @@ describe('normalizeTurnUsageDetails — perModelCost 往返 / 清洗', () => {
     expect(d!.totalTokens).toBe(30);
   });
 });
+
+describe('buildTurnUsageTooltipLines — 回合请求数', () => {
+  it('多步回合显示请求数与每次上下文, 且排在速度行上面', () => {
+    const details = buildTurnUsageDetails({
+      inputTokens: 192_000,
+      outputTokens: 1_200,
+      steps: 3,
+      stepContextTokens: 96_000,
+      turnDurationMs: 60_000,
+    })!;
+    const out = buildTurnUsageTooltipLines({ details, t });
+    expect(out).toContain('usageDetails.stepsLine|{"steps":3,"context":"96.0k"}');
+    const stepsIndex = out.findIndex((line) => line.startsWith('usageDetails.stepsLine'));
+    const speedIndex = out.findIndex((line) =>
+      /^usageDetails\.(performanceRateLine|performanceLine|timeLine)/.test(line),
+    );
+    expect(speedIndex).toBeGreaterThan(stepsIndex);
+  });
+
+  it('单步回合与没有步数记法的旧消息都不显示', () => {
+    const single = buildTurnUsageDetails({
+      outputTokens: 10,
+      steps: 1,
+      stepContextTokens: 4_096,
+    })!;
+    const legacy = buildTurnUsageDetails({ outputTokens: 10 })!;
+    for (const details of [single, legacy]) {
+      expect(
+        buildTurnUsageTooltipLines({ details, t }).some((line) =>
+          line.startsWith('usageDetails.stepsLine'),
+        ),
+      ).toBe(false);
+    }
+  });
+});
+
+describe('normalizeTurnUsageDetails — 步数', () => {
+  it('步数与每次上下文往返保留, 缺字段时不补默认值', () => {
+    const d = normalizeTurnUsageDetails({
+      inputTokens: 10,
+      outputTokens: 20,
+      steps: 4,
+      stepContextTokens: 12_345,
+    });
+    expect(d).toMatchObject({ steps: 4, stepContextTokens: 12_345 });
+    expect(normalizeTurnUsageDetails({ inputTokens: 10, outputTokens: 20 })!.steps).toBeUndefined();
+  });
+});

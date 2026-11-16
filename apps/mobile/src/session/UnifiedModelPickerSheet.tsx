@@ -1,3 +1,4 @@
+import { isModelVisible } from '@cindy/model-providers/sections';
 import { subscriptionQuotaOverview } from '@cindy/maker-shared/subscription-selection';
 import { modelNeedsReselection } from './modelReselection';
 import { mobileProviderAccountTitle } from "./mobileModelRowPresentation";
@@ -15,7 +16,7 @@ import {
 import { useTranslation } from "react-i18next";
 import type { MobileProviderMarkProps } from "./MobileProviderMark";
 import type { AgentKind } from "@cindy/model-providers/types";
-import { resolveStoredModelEntry, type UnifiedModelEntry } from "@cindy/model-providers";
+import { duplicateSubscriptionProviders, sameSubscriptionAccounts, subscriptionModelsCoveredBy, resolveStoredModelEntry, type UnifiedModelEntry } from "@cindy/model-providers";
 import type { MobileAgentCapabilities } from "./agentCapabilities";
 import type { ModelPickerSheetProps } from "./ModelPickerSheet";
 import { buildMobileModelSections } from "./providerModelSections";
@@ -473,6 +474,30 @@ export function UnifiedModelPickerSheet(
       p.existingSessionRoute,
     ],
   );
+  // Presentation only: keep complete catalogs for favorites and the task's saved route.
+  // A phone browsing its computer uses the same verified account identity as desktop.
+  const hiddenSources = useMemo(() => {
+    const host = p.providers.filter(provider => !providerGroups.sizes.has(providerGroupEntryKey(null, provider.id)));
+    const visible = (overrides: Record<string, boolean> | undefined) => (providerId: string, model: { id: string; defaultEnabled?: boolean }, agent: AgentKind) =>
+      overrides === undefined || isModelVisible(overrides[`${agent}:${providerId}:${model.id}`], model.defaultEnabled);
+    const hidden = new Set(duplicateSubscriptionProviders(host, visible(p.modelVisibilityOverrides)).keys());
+    for (const catalog of remoteCatalogs) {
+      if (isProviderShareAgentDeviceId(catalog.deviceId) || catalog.offline) continue;
+      const remote = catalog.providers.filter(provider => !providerGroups.sizes.has(providerGroupEntryKey(catalog.deviceId, provider.id)));
+      for (const [id] of duplicateSubscriptionProviders(remote, visible(catalog.modelVisibilityOverrides))) hidden.add(remoteFilterId(catalog.deviceId, id));
+      for (const provider of host) {
+        if (!provider.connected || provider.suspended || hidden.has(provider.id)) continue;
+        for (const offered of remote) {
+          if (!offered.connected || offered.suspended || !sameSubscriptionAccounts(provider, offered)) continue;
+          // Do not hide an offer with extra models that the host does not have.
+          if (!subscriptionModelsCoveredBy(offered, provider, visible(catalog.modelVisibilityOverrides), visible(p.modelVisibilityOverrides))) continue;
+          hidden.add(remoteFilterId(catalog.deviceId, offered.id));
+        }
+      }
+    }
+    if (p.selectedProviderId) hidden.delete(selectedDeviceId ? remoteFilterId(selectedDeviceId, p.selectedProviderId) : p.selectedProviderId);
+    return hidden;
+  }, [p.providers, p.modelVisibilityOverrides, p.selectedProviderId, providerGroups, remoteCatalogs, selectedDeviceId]);
   const sourceId =
     boundGroup?.deviceId === null
       ? boundGroup.providerId
@@ -783,7 +808,7 @@ export function UnifiedModelPickerSheet(
   const shownFilter = hiddenFilterTarget ?? filter;
   const all = query.trim() || shownFilter === "all";
   const filtered = rows.filter(
-    (row) => matches(row) && (all || shownFilter === row.entry.providerId),
+    (row) => !hiddenSources.has(row.entry.providerId) && matches(row) && (all || shownFilter === row.entry.providerId),
   );
   const groups: UnifiedMobileGroup[] = [];
   const favoriteRows = favorites.filter(matches);
@@ -823,6 +848,7 @@ export function UnifiedModelPickerSheet(
   for (const { catalog, rows: deviceRows } of remoteRows)
     for (const provider of catalog.providers) {
       const id = remoteFilterId(catalog.deviceId, provider.id);
+      if (hiddenSources.has(id)) continue;
       if (!all && shownFilter !== id) continue;
       const group = deviceRows.filter(
         (row) => row.entry.providerId === provider.id && matches(row),
@@ -1209,7 +1235,7 @@ export function UnifiedModelPickerSheet(
   };
   const remoteFilters = remoteDirectories.flatMap(({ catalog, entries }) =>
     catalog.providers
-      .filter((provider) => entries.some((e) => e.providerId === provider.id))
+      .filter((provider) => !hiddenSources.has(remoteFilterId(catalog.deviceId, provider.id)) && entries.some((e) => e.providerId === provider.id))
       .map((provider) => ({
         id: remoteFilterId(catalog.deviceId, provider.id),
         label: remoteProviderLabel(catalog, provider.id),
@@ -1289,7 +1315,7 @@ export function UnifiedModelPickerSheet(
           : []),
         ...p.providers
           .filter((provider) =>
-            entries.some((e) => e.providerId === provider.id),
+            !hiddenSources.has(provider.id) && entries.some((e) => e.providerId === provider.id),
           )
           .map((provider) => ({
             id: provider.id,
