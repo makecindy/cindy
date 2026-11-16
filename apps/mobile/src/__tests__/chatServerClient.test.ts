@@ -239,6 +239,35 @@ describe('direct group plans', () => {
 });
 
 describe('group list activity', () => {
+  // #10822 review / unit: roster refreshes must not download missing plans for
+  // failures excluded by the shared alert time window. Existing cases only use
+  // a recent failure with no latest message, so cannot detect this extra request.
+  it('only fetches missing plans for failures that can still produce an alert', async () => {
+    const value = { ...snapshot(), messages: [{ ...message(1), createdAt: '2026-10-10T00:00:00Z' }] };
+    const executions = [
+      { status: 'failed', plan_id: id(40), updated_at: '2026-10-09T00:00:00Z' },
+      { status: 'failed', plan_id: id(41), updated_at: 'invalid' },
+    ];
+    const request = vi.fn().mockImplementation(async (path: string) => path.endsWith('/executions') ? executions
+      : path.includes('/plans?ids=') ? [{ id: id(42), status: 'stopped' }] : []);
+    const client = createChatServerClient(request);
+    for (let refresh = 0; refresh < 2; refresh++) {
+      request.mockClear();
+      expect(await client.rosterActivity(id(1), value)).toEqual({ phase: 'idle' });
+      expect(request.mock.calls.map(([path]) => path)).toEqual([
+        `/conversations/${id(1)}/executions`, `/conversations/${id(1)}/plans`,
+      ]);
+    }
+    // A failure at the latest message timestamp remains actionable.
+    executions.push({ status: 'failed', plan_id: id(42), updated_at: value.messages[0]!.createdAt });
+    request.mockClear();
+    expect(await client.rosterActivity(id(1), value)).toEqual({ phase: 'idle' });
+    expect(request.mock.calls.map(([path]) => path)).toEqual([
+      `/conversations/${id(1)}/executions`, `/conversations/${id(1)}/plans`,
+      `/conversations/${id(1)}/plans?ids=${id(42)}`,
+    ]);
+  });
+
   // #10822 / unit: use the direct mobile production reader, not a copied status
   // reducer. The existing roster test lacks failed executions with closed plans.
   it('settles a stopped plan from server records even when there is no local Session', async () => {

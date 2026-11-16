@@ -797,17 +797,19 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const executions = results[0].status === 'fulfilled' ? results[0].value : [];
       let plans = results[1].status === 'fulfilled' ? results[1].value : [];
       if (!Array.isArray(executions) || !Array.isArray(plans)) return undefined;
+      const last = latestBotGroupMessage(snapshot.messages);
+      const lastMessageAt = last ? Date.parse(last.createdAt) : 0;
       // Closed plans may no longer be in the server's default window. Only a
-      // failed execution with a missing plan needs this additional bounded read.
+      // failure inside teammateChatActivity's alert time window needs this read.
       const missingPlans = [...new Set(executions.flatMap(row => row.status === 'failed' && row.plan_id
+        && row.updated_at && Number.isFinite(Date.parse(row.updated_at)) && Date.parse(row.updated_at) >= lastMessageAt
         && !plans.some(plan => plan.id === row.plan_id) ? [chatId(row.plan_id)] : []))];
       if (missingPlans.length) {
         const closed = await request<Array<{ id?: string; status: string }>>(`/conversations/${room}/plans?ids=${missingPlans.join(',')}`).catch(() => []);
         if (Array.isArray(closed)) plans = [...plans, ...closed];
       }
-      const last = latestBotGroupMessage(snapshot.messages);
       return teammateChatActivity({ executions, plans, archived: snapshot.room.archived,
-        lastMessageAt: last ? Date.parse(last.createdAt) : 0 });
+        lastMessageAt });
     },
     async snapshot(roomId: string, metadata = false): Promise<ChatSnapshot> {
       const stored = await cache();
