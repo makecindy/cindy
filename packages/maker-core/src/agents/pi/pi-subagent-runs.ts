@@ -890,7 +890,7 @@ export async function* scanPiSubagentRuns(
         status = parseStatus(await readSmallJson(path.join(root, selected.runId, 'status.json')), selected.runId);
       } catch { continue; }
       if (status?.taskId === taskId && status.startedAt === selected.startedAt
-        && !isPiSubagentRunStale(status, Date.now())) yield status;
+        && !await isPiSubagentRunStaleAsync(status, Date.now())) yield status;
     }
     return;
   }
@@ -905,7 +905,7 @@ export async function* scanPiSubagentRuns(
     try {
       status = parseStatus(await readSmallJson(path.join(root, entry.name, 'status.json')), entry.name);
     } catch { continue; }
-    if (status && !isPiSubagentRunStale(status, Date.now())) yield status;
+    if (status && !await isPiSubagentRunStaleAsync(status, Date.now())) yield status;
   }
 }
 
@@ -1287,17 +1287,19 @@ export function piSubagentControlOwnership(
  */
 export type PiSubagentApprovalScope = 'own' | 'adopted' | 'refused';
 
-export function piSubagentApprovalScope(
+export async function piSubagentApprovalScope(
   status: PiSubagentRunStatus,
   runtimeOwnerId: string,
   hostPid: number,
   parentSessionId: string | undefined,
-): PiSubagentApprovalScope {
+): Promise<PiSubagentApprovalScope> {
   if (status.runtimeOwnerId === runtimeOwnerId) return 'own';
   if (!status.runtimeOwnerId) return 'refused';
   if (!parentSessionId || status.parentSessionId !== parentSessionId) return 'refused';
-  const ownership = piSubagentControlOwnership(status, hostPid);
-  return ownership === 'self' || ownership === 'orphaned' ? 'adopted' : 'refused';
+  const identity = piSubagentOwnerIdentity(status.runtimeOwnerId);
+  if (identity === null) return 'refused';
+  const alive = await isOwnerInstanceAliveAsync(identity);
+  return identity.pid === hostPid || !alive ? 'adopted' : 'refused';
 }
 
 /** True when this host may write control requests for the run. */
@@ -1388,6 +1390,52 @@ function probeProcessStartTimeSec(pid: number, now: number): number | null {
  * largest window in which reuse is not observable anyway.
  */
 type ProcessStartTimeMemo = Map<number, number | null>;
+
+// Only share work while the OS query is in flight. Retaining completed answers
+// across polls would let a recycled PID keep proving the previous owner's id.
+const pendingProcessStartTimes = new Map<number, Promise<number | null>>();
+
+function readProcessStartTimeSecAsync(pid: number): Promise<number | null> {
+  const pending = pendingProcessStartTimes.get(pid);
+  if (pending) return pending;
+  const probe = (async (): Promise<number | null> => {
+    try {
+      if (process.platform === 'win32') {
+        const { stdout } = await execFileAsync('powershell.exe', [
+          '-NoProfile', '-NonInteractive', '-Command',
+          `[int64]((Get-Process -Id ${pid}).StartTime.ToUniversalTime() - [datetime]'1970-01-01').TotalSeconds`,
+        ], { encoding: 'utf8', timeout: 15_000, windowsHide: true });
+        const match = stdout.match(/-?\d+/);
+        const seconds = match ? Number(match[0]) : NaN;
+        return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds) : null;
+      }
+      // ps reports elapsed seconds, so take the clock sample after the query.
+      const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'etime='], {
+        encoding: 'utf8', timeout: 5_000,
+      });
+      const elapsed = parseElapsedSeconds(stdout);
+      return elapsed === null ? null : Math.round(Date.now() / 1_000 - elapsed);
+    } catch {
+      return null;
+    }
+  })();
+  pendingProcessStartTimes.set(pid, probe);
+  void probe.finally(() => {
+    if (pendingProcessStartTimes.get(pid) === probe) pendingProcessStartTimes.delete(pid);
+  });
+  return probe;
+}
+
+async function isOwnerInstanceAliveAsync(identity: PiSubagentOwnerIdentity): Promise<boolean> {
+  if (isProcessAlive(identity.pid) === false) return false;
+  if (identity.startTimeSec === undefined) return true;
+  const startTimeSec = identity.pid === process.pid
+    ? ownProcessStartTimeSec()
+    : await readProcessStartTimeSecAsync(identity.pid);
+  if (isProcessAlive(identity.pid) === false) return false;
+  return startTimeSec === null
+    || Math.abs(startTimeSec - identity.startTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC;
+}
 
 function readProcessStartTimeSec(pid: number, memo?: ProcessStartTimeMemo): number | null {
   const cached = memo?.get(pid);
@@ -1512,6 +1560,20 @@ export function isPiSubagentRunStale(
   //    costs an honest failure at the boundary — the kill path answers
   //    `unverifiable` with a refusal too, so the two stay consistent.
   return runnerPresenceForStale(status) === 'gone';
+}
+
+/** Polling must not invoke the synchronous force-quit process probes. */
+async function isPiSubagentRunStaleAsync(
+  status: PiSubagentRunStatus,
+  now: number,
+): Promise<boolean> {
+  if (isPiSubagentTerminal(status.state) || now - status.updatedAt <= STALE_HEARTBEAT_MS) return false;
+  if (status.state === 'queued' && status.runnerInstanceId.startsWith('launch-pending-')
+    && !Number.isSafeInteger(status.runnerPid)) {
+    const identity = piSubagentOwnerIdentity(status.runtimeOwnerId);
+    if (identity !== null && await isOwnerInstanceAliveAsync(identity)) return false;
+  }
+  return await classifyRunnerPresence(status) === 'gone';
 }
 
 async function listRunDirectoryIds(root: string): Promise<string[]> {
