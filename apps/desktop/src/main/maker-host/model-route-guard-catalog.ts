@@ -122,6 +122,27 @@ export async function verdictForModelRouteWithProviders(
 }
 
 /**
+ * pinExclusiveSessionProvider (model-route-guard-live.ts) with the provider listing passed in: the
+ * desktop passes its provider service, the Node Host its own.
+ * Resume 旧会话:只钉死独占来源,不把停用轴 reject 套到已在跑的会话上。
+ */
+export async function pinExclusiveSessionProviderWithProviders(
+  listRouteGuardProviders: () => Promise<ProviderView[]>,
+  agent: AgentKind,
+  model: string,
+  providerId: string | null,
+): Promise<string | undefined> {
+  let views: ProviderView[];
+  try {
+    views = await listRouteGuardProviders();
+  } catch {
+    return undefined;
+  }
+  const exclusive = materializeExclusiveProviderRoute(views, agent, model, providerId);
+  return exclusive.kind === 'pin' ? exclusive.providerId : undefined;
+}
+
+/**
  * resolveLenientSessionRoute (model-route-guard-live.ts) with the provider listing passed in: the
  * desktop passes its provider service, the Node Host its own.
  */

@@ -207,7 +207,7 @@ import { ensureBotCanonicalSession } from './botCanonicalSessionEnsure.js';
  */
 
 import { readCodexContextWindowInfo } from '../maker-host/codex-context-window.js';
-import { readSshCodexModelList, isVerifiedSshCodexResume } from '../remote-ssh/codex-model-list.js';
+import { readSshCodexModelList } from '../remote-ssh/codex-model-list.js';
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
 import { resolveConnectedDefaultProviderIdForModel } from '../maker-host/provider-route.js';
 import { bindGroupFastPolicy } from '../provider-group/fastPolicyRuntime.js';
@@ -967,6 +967,7 @@ import {
 import { onCodexAutoResetRestored, readXaiSubscriptionUsageSnapshotForDeviceLink, readClaudeSubscriptionUsageSnapshotForDeviceLink, readCodexAccountUsageSnapshotWithWebRefresh, readCodexRateLimitsForHost } from './usage.js';
 import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
 import { applyPersistedCindyMakeMarker } from './cindyMakeSessionStart.js';
+import { createLocalRouteAdmission } from './localRouteAdmission.js';
 import { assertCindyMakeEnabled, assertCindyMakeSessionAvailable } from '../cindy-make/featureGate.js';
 import { CINDY_MAKE_SESSION_SOURCE } from '../../shared/cindyMakeSession.js';
 import { cindyMakeManager } from '../cindy-make/manager.js';
@@ -8668,6 +8669,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return assertModelRouteUsableWith({ listSshCodexProviders, verdictForModelRoute }, agent, model, providerId, remoteHostId, unavailableCode);
   }
 
+  /** 本机运行时的启动准入(bootstrapSession 的 admitLocalRoute;判定与续接核实在 localRouteAdmission.ts)。 */
+  const admitLocalSessionRoute = createLocalRouteAdmission({
+    ensureManagedOllamaReadyForSession,
+    getUserDataDir: () => app.getPath('userData'),
+    assertModelRouteUsable,
+    pinExclusiveSessionProvider,
+  });
+
   // 供应商组(docs/product-rules/provider-groups.md)：在 agentSwitchDeps 就绪后装配。
   let providerGroupService: ProviderGroupService | null = null;
 
@@ -8953,51 +8962,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (provider) o.providerId = provider;
     }
     /** 本机运行时的启动准入(Agent 在另一台电脑运行时由那台按它自己的目录裁决)。 */
-    const admitLocalRoute = async (): Promise<void> => {
-      await ensureManagedOllamaReadyForSession({
-        providerId: o.providerId,
-        remoteHostId: o.remoteHostId ?? null,
-        userDataDir: app.getPath('userData'),
-      });
-      // 停用轴准入(PR #744 review):**新建**会话不得路由到用户停用的模型 / 来源。
-      // renderer 选择器已过滤,但 create-session 在 device-link allowlist 内,老控制端
-      // 可直接点名 —— main 必须自己裁决。resume 豁免(运行中的会话不打断)只给
-      // **经核实的原样续跑**:请求路由与本会话 DB 持久化路由一致才算;resumeSessionId
-      // 是调用方可控字段,携带任意非空 id 同时改点停用 model/provider 不能构成绕过
-      // (PR #744 review 第十六轮)。读不到会话行(远端新建等)按非豁免走正常裁决。
-      // 隐式来源的原生默认落点被停用而有启用替代拷贝时,把会话显式改路由过去(下方
-      // persistAndHydrateSessionProvider 会把它落库):实际路由层对隐式来源走原生
-      // 默认、不查停用标志,仅放行等于继续用停用拷贝付费。
-      if (typeof o.model === 'string' && o.model) {
-        let verifiedResume = false;
-        if (o.resumeSessionId && typeof o.id === 'string' && o.id) {
-          try {
-            const [row] = await getDbClient()
-              .drizzle.select({ model: sessions.model, providerId: sessions.providerId,
-                remoteHostId: sessions.remoteHostId, sdkSessionId: sessions.sdkSessionId, agentKind: sessions.agentKind })
-              .from(sessions)
-              .where(eq(sessions.id, o.id))
-              .limit(1);
-            verifiedResume =
-              !!row && row.model === o.model && (row.providerId ?? null) === (o.providerId ?? null);
-            if (o.agentKind === 'codex' && o.remoteHostId) {
-              verifiedResume = isVerifiedSshCodexResume(o, row ? { ...row, agentKind: dbToMakerAgentKind(row.agentKind) } : undefined);
-            }
-          } catch {
-            verifiedResume = false;
-          }
-        }
-        if (!verifiedResume) {
-          const reroute = await assertModelRouteUsable(o.agentKind, o.model, o.providerId ?? null, o.remoteHostId);
-          if (reroute && shouldApplyExclusiveProviderRerouteLive(o.providerId)) {
-            o.providerId = reroute;
-          }
-        } else if (!(o.agentKind === 'codex' && o.remoteHostId) && shouldApplyExclusiveProviderRerouteLive(o.providerId)) {
-          const pin = await pinExclusiveSessionProvider(o.agentKind, o.model, o.providerId ?? null);
-          if (pin) o.providerId = pin;
-        }
-      }
-    };
+    const admitLocalRoute = (): Promise<void> => admitLocalSessionRoute(o);
     if (!agentOnOtherDevice) await admitLocalRoute();
     assertAccess?.();
     let nativeRelocation: Awaited<ReturnType<typeof relocateForFreshStart>> | undefined;
