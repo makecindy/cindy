@@ -617,6 +617,7 @@ describe('mobileAttachmentUpload', () => {
     { name: '403 never uses accelerate route', path: 'file', accelerateUrl: 'https://bucket.oss-accelerate.example/upload', first: 403, urls: ['put'], ok: false },
     { name: 'no accelerate: retry signed URL', path: 'file', accelerateUrl: undefined, first: 'network', urls: ['put', 'put'], ok: true },
     { name: 'malformed accelerate is ignored', path: 'body', accelerateUrl: 'ftp://oss.example/upload', first: 'network', urls: ['put', 'put'], ok: true },
+    { name: 'invalid HTTPS accelerate preserves the normal retry', path: 'file', accelerateUrl: 'https://[bad', first: 'network', urls: ['put', 'put'], ok: true },
   ] as const)('$name', async ({ path, accelerateUrl, first, urls, ok }) => {
     vi.useFakeTimers();
     try {

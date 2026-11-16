@@ -446,8 +446,16 @@ async function putPresignedToOss(
   signal?: AbortSignal,
   assertCurrent?: () => void,
 ): Promise<void> {
-  const accelerateUrl = typeof presigned.accelerateUrl === 'string' && /^https?:\/\//i.test(presigned.accelerateUrl)
-    && presigned.accelerateUrl !== presigned.putUrl ? presigned.accelerateUrl : undefined;
+  let accelerateUrl: string | undefined;
+  if (typeof presigned.accelerateUrl === 'string' && presigned.accelerateUrl !== presigned.putUrl) {
+    try {
+      const parsed = new URL(presigned.accelerateUrl);
+      if ((parsed.protocol === 'https:' || parsed.protocol === 'http:') && parsed.hostname) {
+        // 保留原签名地址，不经 URL 重新序列化。
+        accelerateUrl = presigned.accelerateUrl;
+      }
+    } catch { /* 可选地址无法解析时沿用普通线路。 */ }
+  }
   try {
     await putBytesToOss(presigned.putUrl, bodySource, contentType, signal, assertCurrent);
   } catch (err) {

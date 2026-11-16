@@ -710,6 +710,8 @@ describe('putBytesToOss — 传输栈回退', () => {
       calls: ['undici https://oss.example/put', 'electron-net https://oss.example/put'] },
     { name: '加速地址无效 → 视同没有', accelerateUrl: 'javascript:alert(1)', normal: 'network', outcome: 'OSS 上传失败',
       calls: ['undici https://oss.example/put', 'electron-net https://oss.example/put'] },
+    { name: 'HTTPS 地址解析失败 → 视同没有', accelerateUrl: 'https://[bad', normal: 'network', outcome: 'OSS 上传失败',
+      calls: ['undici https://oss.example/put', 'electron-net https://oss.example/put'] },
   ] as const)('$name', async ({ accelerateUrl, normal, outcome, calls }) => {
     apiFetch.mockImplementation(async (path: string) => {
       if (path === PUT_PATH) return { putUrl: 'https://oss.example/put', key: KEY, expiresAt: 'x', ...(accelerateUrl ? { accelerateUrl } : {}) };

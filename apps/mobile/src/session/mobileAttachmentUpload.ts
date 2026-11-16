@@ -541,8 +541,16 @@ function normalizePresignResult(value: MobileAttachmentPresignResult): MobileAtt
     throw new Error(i18n.t('composer.upload.invalidUploadUrl'));
   }
   // 加速地址是可选的兜底：缺失或形状不对时直接忽略，回到只用 putUrl 的原有行为。
-  const accelerateUrl = typeof value.accelerateUrl === 'string' && /^https?:\/\//i.test(value.accelerateUrl)
-    && value.accelerateUrl !== value.putUrl ? value.accelerateUrl : undefined;
+  let accelerateUrl: string | undefined;
+  if (typeof value.accelerateUrl === 'string' && value.accelerateUrl !== value.putUrl) {
+    try {
+      const parsed = new URL(value.accelerateUrl);
+      if ((parsed.protocol === 'https:' || parsed.protocol === 'http:') && parsed.hostname) {
+        // 保留原签名地址，不经 URL 重新序列化。
+        accelerateUrl = value.accelerateUrl;
+      }
+    } catch { /* 可选地址无法解析时仍重试普通线路。 */ }
+  }
   return {
     putUrl: value.putUrl,
     key: value.key,
