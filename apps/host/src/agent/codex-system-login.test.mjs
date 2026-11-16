@@ -44,6 +44,7 @@ import { createBridgeTokenReader } from './codex-runtime.ts';
 import { bindNativeProviderAuth } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.ts';
 import { currentCodexCredentialGeneration } from '../../../desktop/src/main/maker-host/codexCredentialRead.ts';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
+import { fileSymlinkSkipReason } from '../test-support/file-symlink.mjs';
 
 const authJson = (token) => JSON.stringify({ account: { email: 'fixture@example.test' }, tokens: { access_token: token, account_id: 'workspace-a' } });
 
@@ -68,7 +69,9 @@ function sharedProfile(t, ownerId) {
 
 // Release table row 26: the desktop clears "recovery required" after an account request (2e);
 // before that the Host keeps the mark. The renewed login must still be usable for tasks.
-test('after a system re-login the recovered login is usable on the Host, only marked', { timeout: TEST_TIMEOUT_MS }, async t => {
+test('after a system re-login the recovered login is usable on the Host, only marked', {
+  timeout: TEST_TIMEOUT_MS, skip: fileSymlinkSkipReason,
+}, async t => {
   t = lifoCleanup(t);
   const p = sharedProfile(t, 'recovery-owner');
   await invalidateHostCodexLogin({ codexHome: p.codexHome, systemAuthPath: p.systemAuth, reason: 'token_revoked', hostBound: true,
@@ -86,7 +89,9 @@ test('after a system re-login the recovered login is usable on the Host, only ma
   assert.equal(createHostCodexCredentials(p.profileDir, p.accounts).readAccessToken('openai'), 'system-token-2');
 });
 
-test('a successful Cindy login reconciles before its auth boundary; a failed one does not', { timeout: TEST_TIMEOUT_MS }, async t => {
+test('a successful Cindy login reconciles before its auth boundary; a failed one does not', {
+  timeout: TEST_TIMEOUT_MS, skip: fileSymlinkSkipReason,
+}, async t => {
   t = lifoCleanup(t);
   for (const ok of [true, false]) {
     const p = sharedProfile(t, `login-owner-${ok}`);
