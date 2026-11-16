@@ -1,10 +1,13 @@
 /**
  * Changing a task's permission mode, moved verbatim out of register.ts so the Node Host runs the same
- * steps: commitSessionPermissionMode (ordered per Bot and per task behind the permission queues, the
+ * steps: the SET_PERMISSION_MODE handler's body after its sender check (the argument checks, then the
+ * commit), and commitSessionPermissionMode (ordered per Bot and per task behind the permission queues, the
  * account checked at each step, review tasks refused, the runtime rolled back when the write fails, the
  * shared provider's "always allow for this task" dropped when the mode changes, the Bot's other lanes
- * synced). register.ts keeps its function declaration (the session control service refers to it before
- * its line) and calls this with its ports.
+ * synced). register.ts keeps the IPC registration and its sender check (assertTrustedAppRendererEvent,
+ * before anything else) and calls the moved body; it keeps commitSessionPermissionMode's function
+ * declaration (the session control service refers to it before its line) and calls the moved body with
+ * its ports.
  *
  * Ports are what register.ts held in its own scope or took from modules the Node Host cannot load:
  * the Maker, the review-task check, the patch broadcast, the Bot lane sync (botPermissionSync.ts reaches
@@ -18,8 +21,10 @@ import { sessions } from '../localDb/schema.js';
 import type { Logger } from '../logger.js';
 import { forgetCredentialGrants } from '../remote-agent/executor/credentialGrants.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { withBotPermissionChange } from './botPermissionDispatch.js';
 import { withSessionPermissionChange } from './sessionPermissionChange.js';
+import { isSessionPermissionMode } from './sessionPermissionModes.js';
 
 /** The patch broadcast and the Device Link response mark, as register.ts imports them. */
 type BroadcastSessionPatched = (sessionId: string, patch: Record<string, unknown>) => void;
@@ -94,4 +99,20 @@ export async function commitSessionPermissionModeWith(
     }
     return true;
   }));
+}
+
+/** register.ts's SET_PERMISSION_MODE handler body, after its sender check. */
+export function createSetSessionPermissionMode(ports: {
+  commitSessionPermissionMode: (sessionId: string, mode: string, remote?: boolean) => Promise<unknown>;
+}) {
+  const { commitSessionPermissionMode } = ports;
+  return async (sessionId: unknown, mode: unknown) => {
+    if (typeof sessionId !== 'string' || typeof mode !== 'string') {
+      throwIpcError('INVALID_PARAMS', 'sessionId + mode required');
+    }
+    if (!isSessionPermissionMode(mode)) {
+      throwIpcError('INVALID_PARAMS', 'invalid permission mode');
+    }
+    return commitSessionPermissionMode(sessionId, mode, isDeviceLinkInvoke());
+  };
 }

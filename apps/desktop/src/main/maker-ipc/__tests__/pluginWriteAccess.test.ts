@@ -15,15 +15,24 @@ vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: 
 // Execute the real switch branch with controlled Host boundaries.
 // Git may check out CRLF on Windows; all source boundaries below use LF.
 const registerSource = readFileSync(new URL('../register.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-// commitSessionPermissionMode's body moved verbatim into sessionPermissionSettings.ts; register.ts keeps the
-// function and calls the moved body with its ports. The text run below is register.ts with each moved body
-// put back in place of its call, as it read before the move.
+// commitSessionPermissionMode's body and SET_PERMISSION_MODE's body after its sender check moved verbatim
+// into sessionPermissionSettings.ts; register.ts keeps the function and the registration and calls the
+// moved bodies. The text run below is register.ts with each moved body put back in place of its call, as
+// it read before the move.
 const permissionSettingsSource = readFileSync(new URL('../sessionPermissionSettings.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 function movedBody(fn: string): string {
   const start = permissionSettingsSource.indexOf(`function ${fn}(`);
   const open = permissionSettingsSource.indexOf('  } = ports;\n', start) + '  } = ports;\n'.length;
   const close = permissionSettingsSource.indexOf('\n}\n', open);
   if (start < 0 || close < open) throw new Error(`moved body ${fn} not found`);
+  return permissionSettingsSource.slice(open, close).split('\n').map(line => (line ? `  ${line}` : line)).join('\n');
+}
+function movedHandlerBody(fn: string, params: string): string {
+  const start = permissionSettingsSource.indexOf(`export function ${fn}(`);
+  const head = `  return async (${params}) => {\n`;
+  const open = permissionSettingsSource.indexOf(head, start) + head.length;
+  const close = permissionSettingsSource.indexOf('\n  };\n}', open);
+  if (start < 0 || close < open) throw new Error(`moved handler body ${fn} not found`);
   return permissionSettingsSource.slice(open, close).split('\n').map(line => (line ? `  ${line}` : line)).join('\n');
 }
 function putBack(text: string, call: string, body: string): string {
@@ -33,7 +42,10 @@ function putBack(text: string, call: string, body: string): string {
 const source = putBack(registerSource, `    return commitSessionPermissionModeWith({
       maker, assertReviewSettingsUnlocked, broadcastSessionPatched, syncBotLinkedLanePermissions,
       markRemoteSettingPersistedInsideHandler, log,
-    }, sessionId, mode, remote, beforeMutation);`, movedBody('commitSessionPermissionModeWith'));
+    }, sessionId, mode, remote, beforeMutation);`, movedBody('commitSessionPermissionModeWith'))
+  .split('  const handleSetSessionPermissionMode = createSetSessionPermissionMode({ commitSessionPermissionMode });\n').join('')
+  .replace('      return handleSetSessionPermissionMode(sessionId, mode);',
+    () => movedHandlerBody('createSetSessionPermissionMode', 'sessionId: unknown, mode: unknown'));
 const branch = source.slice(source.indexOf("      case 'requestWriteAccess': {"), source.indexOf("      case 'startTeam': {"));
 const js = ts.transpileModule(`return async function(pluginId, request, explicitWriteAccess = false, assertCallerCurrent = () => {}) { switch(request.kind) { ${branch} } }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const settingSource = source.slice(source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PERMISSION_MODE,'), source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PLAN_MODE,'));

@@ -755,8 +755,8 @@ import { syncBotLanePermission, syncBotLinkedLanePermissions } from './botPermis
 import { ensureBotGroupLaneSession } from '../localDb/ipc/bots.js';
 import { restartBotRuntime } from './botRuntimeRestart.js';
 import { registerBotLifecycleHandlers } from './botLifecycleService.js';
-import { isSessionPermissionMode, persistPermissionModeWithoutRuntime } from './sessionPermissionPersistence.js';
-import { commitSessionPermissionModeWith } from './sessionPermissionSettings.js';
+import { persistPermissionModeWithoutRuntime } from './sessionPermissionPersistence.js';
+import { commitSessionPermissionModeWith, createSetSessionPermissionMode } from './sessionPermissionSettings.js';
 import { withSessionPermissionChange } from './sessionPermissionChange.js';
 import { withBotPermissionChange } from './botPermissionDispatch.js';
 import { getPluginHostToolCaller } from '../mcp-integrations/hostToolCaller.js';
@@ -22185,6 +22185,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }, sessionId, mode, remote, beforeMutation);
   }
 
+  const handleSetSessionPermissionMode = createSetSessionPermissionMode({ commitSessionPermissionMode });
   ipcMain.handle(
     MAKER_INVOKE.SET_PERMISSION_MODE,
     async (event, sessionId: unknown, mode: unknown) => {
@@ -22196,13 +22197,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!isDeviceLinkInvoke()) {
         assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
       }
-      if (typeof sessionId !== 'string' || typeof mode !== 'string') {
-        throwIpcError('INVALID_PARAMS', 'sessionId + mode required');
-      }
-      if (!isSessionPermissionMode(mode)) {
-        throwIpcError('INVALID_PARAMS', 'invalid permission mode');
-      }
-      return commitSessionPermissionMode(sessionId, mode, isDeviceLinkInvoke());
+      return handleSetSessionPermissionMode(sessionId, mode);
     },
   );
 
