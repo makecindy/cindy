@@ -1318,7 +1318,6 @@ const serverDeps = {
   },
   updateSession: lockSessionRoute(createHostSessionUpdate({
     restoreTaskToActive: taskRestore.restoreTaskToActive,
-    getLiveSession: (sessionId: string) => agentGraph?.maker.getSession(sessionId),
     readSessionForRun,
     publish: event => eventHub.publish(event),
     setModel: (sessionId, model, providerId, revision, selection) =>

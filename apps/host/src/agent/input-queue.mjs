@@ -34,8 +34,9 @@ function composeInput(item, stored) {
   if (!item || typeof item.clientId !== 'string' || !item.clientId.trim()) throw new Error('clientId is required');
   const text = typeof item.text === 'string' ? item.text : item.content;
   if (typeof text !== 'string' || !text.trim()) throw new Error('message text is required');
-  // Picker changes already persist through /sessions/update. Input fields are
-  // snapshots for presentation, not another authority over task settings.
+  // Picker changes already persist through their own entries (set-model, set-effort,
+  // set-permission-mode and the like). Input fields are snapshots for presentation,
+  // not another authority over task settings.
   const agentKind = makerKind(stored.agentKind);
   if (!['claude-code', 'codex', 'pi'].includes(agentKind)) throw new Error('invalid agent kind');
   const model = stored.model || '';

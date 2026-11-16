@@ -27,6 +27,7 @@ import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionSt
 import { sessions } from '../../../desktop/src/main/localDb/schema.ts';
 import { setSessionProvider, getSessionProvider, clearSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { createHostSessionUpdate } from './session-update.ts';
+import { setModelWithWindowConfirmation } from '../../../desktop/src/renderer/features/cc-agent/lib/modelWindowConfirmation.ts';
 import { createHostTaskRestore } from './task-restore.ts';
 import { setSessionRouteLockImplementation } from '../../../desktop/src/main/localDb/sessionRouteLock.ts';
 import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
@@ -94,7 +95,6 @@ async function fixture(t) {
   });
   const update = createHostSessionUpdate({
     restoreTaskToActive,
-    getLiveSession: id => live.get(id),
     readSessionForRun: async id => (await database.drizzle.select().from(sessions).where(eq(sessions.id, id)))[0],
     publish: event => events.push(event),
     setModel: (...args) => selection.setModel(...args),
@@ -174,6 +174,108 @@ test('model change: a task that does not exist is "session not found", as before
   await assert.rejects(f.update('window-orphan', { model: 'small' }), { message: 'session not found' });
   assert.deepEqual(orphan.setModelCalls, []);
 });
+
+/**
+ * The old path for runtime settings (A8): /sessions/update refuses them and names their entry.
+ * - Rule: effort, fast mode, permission mode and Plan mode each have an entry that runs the desktop's
+ *   handler (runtime-selection.ts); a second path here would be a second implementation. Refused as
+ *   the desktop's updateSessionInDb refuses directory grants: UNSUPPORTED_CAPABILITY naming the entry.
+ *   A field this entry does not write (an engine switch included) is INVALID_PARAMS naming it. The
+ *   patch is checked before anything is read or changed, and refused whole.
+ * - Gap: the Host wrote these fields to the row and the running Agent directly, beside their entries,
+ *   and an unknown field answered a plain error (500).
+ * - Minimal failing input: one field each; a field with a user's pick pending; a mixed patch.
+ * - Tier: unit, through the real entries over a migrated profile database.
+ */
+const DEDICATED = [['effort', 'low', /set-effort/], ['fastMode', true, /set-fast-mode/],
+  ['permissionMode', 'bypassPermissions', /set-permission-mode/], ['planModeEnabled', true, /set-plan-mode/]];
+const sessionPatchEvents = (f, id) => f.events.filter(event => event.type === 'session_changed' && event.sessionId === id);
+// A runtime that records every setting call made on it.
+function recordingRuntime(f, id) {
+  const session = f.runtime(id);
+  session.calls = [];
+  for (const name of ['setEffort', 'setFastMode', 'setPermissionMode', 'setPlanMode']) {
+    session[name] = async value => { session.calls.push([name, value]); };
+  }
+  return session;
+}
+
+test('runtime settings: /sessions/update refuses each one, naming its entry, and changes nothing', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await f.task('old-path');
+  const session = recordingRuntime(f, 'old-path');
+  const before = await f.row('old-path');
+  for (const [field, value, entry] of DEDICATED) {
+    await assert.rejects(f.update('old-path', { [field]: value }), error =>
+      error.code === 'UNSUPPORTED_CAPABILITY' && entry.test(error.message) && error.message.includes(field), field);
+  }
+  assert.deepEqual(session.calls, [], 'the running Agent is not touched');
+  assert.deepEqual(await f.row('old-path'), before, 'the task row is not written');
+  assert.deepEqual(sessionPatchEvents(f, 'old-path'), []);
+});
+
+test('runtime settings: with a user\'s pick pending, an effort through /sessions/update is refused and the pick keeps its effort', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await f.task('old-path-pending');
+  const session = recordingRuntime(f, 'old-path-pending');
+  await f.update('old-path-pending', { model: 'small' });
+  const intent = f.selection.projectIntent('old-path-pending');
+  await assert.rejects(f.update('old-path-pending', { effort: 'low' }), { code: 'UNSUPPORTED_CAPABILITY' });
+  assert.deepEqual(f.selection.projectIntent('old-path-pending'), intent);
+  assert.equal(intent.model, 'small');
+  assert.deepEqual(session.calls, []);
+  assert.equal((await f.row('old-path-pending')).effort, 'high');
+});
+
+test('/sessions/update: an engine switch or an unknown field is INVALID_PARAMS naming the fields', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await f.task('old-path-unknown');
+  const before = await f.row('old-path-unknown');
+  await assert.rejects(f.update('old-path-unknown', { agentKind: 'codex' }), error =>
+    error.code === 'INVALID_PARAMS' && /agentKind/.test(error.message));
+  await assert.rejects(f.update('old-path-unknown', { title: 'Renamed', workingDir: '/tmp', colour: 'red' }), error =>
+    error.code === 'INVALID_PARAMS' && /workingDir, colour/.test(error.message));
+  assert.deepEqual(await f.row('old-path-unknown'), before);
+  assert.deepEqual(sessionPatchEvents(f, 'old-path-unknown'), []);
+});
+
+test('/sessions/update: a mixed patch is refused whole, before any read or model pick', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await f.task('old-path-mixed');
+  const session = recordingRuntime(f, 'old-path-mixed');
+  const before = await f.row('old-path-mixed');
+  await assert.rejects(f.update('old-path-mixed', { title: 'Renamed', permissionMode: 'bypassPermissions' }),
+    { code: 'UNSUPPORTED_CAPABILITY' });
+  await assert.rejects(f.update('old-path-mixed', { model: 'small', effort: 'low' }), { code: 'UNSUPPORTED_CAPABILITY' });
+  assert.deepEqual(await f.row('old-path-mixed'), before, 'the title is not written');
+  assert.equal(f.selection.projectIntent('old-path-mixed'), null, 'no model pick is registered');
+  assert.equal(intentOf(f), undefined);
+  assert.deepEqual(session.calls, []);
+  assert.deepEqual(sessionPatchEvents(f, 'old-path-mixed'), []);
+  // Nothing is read first either: a task that does not exist is refused for its fields, not "not found".
+  await assert.rejects(f.update('old-path-missing', { model: 'small', effort: 'low' }), { code: 'UNSUPPORTED_CAPABILITY' });
+});
+
+// The renderer's switch to the Claude subscription (CCAgentSessionView handleSwitchToClaudeSubscription)
+// writes the route with sessionService.update({ model, providerId }) only when the switch answers
+// 'applied' (setModelWithWindowConfirmation). On the Host a user's pick always answers pendingUntilSend
+// (or superseded, or an error), so that write never runs and no second intent follows; were it called,
+// /sessions/update would register the pick again (the "picking the current model again" test above).
+// This pins today's answer, in and out of a turn, through the renderer's own helper.
+for (const inTurn of [false, true]) {
+  test(`model change: the Claude subscription switch answers 'pending' on the Host ${inTurn ? 'during a turn' : 'while idle'}, so the renderer writes no route`, { timeout: 30_000 }, async t => {
+    const f = await fixture(t);
+    await f.task('subscription-switch');
+    f.runtime('subscription-switch', { inTurn });
+    const answer = await setModelWithWindowConfirmation({
+      invoke: () => f.selection.setModel('subscription-switch', 'big', 'prov-b', undefined, undefined),
+      confirm: async () => { throw new Error('no window confirmation for a pick'); },
+    });
+    assert.equal(answer, 'pending');
+    assert.equal(f.selection.projectIntent('subscription-switch')?.providerId, 'prov-b');
+    assert.equal((await f.row('subscription-switch')).providerId, 'prov-a', 'the row keeps its route until the send');
+  });
+}
 
 /**
  * Making an archived task active (task-restore.ts): the task list's restore and a send to the task

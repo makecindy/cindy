@@ -535,7 +535,7 @@ for (const cold of [false, true]) for (const queuedPlan of [false, true]) {
     await enqueue(h, 'settings', { clientId: 'first', text: 'one' });
     const first = h.maker.getSession('settings');
     await h.queue.enqueue('settings', { clientId: 'second', text: 'two', model: 'model-a', permissionMode: 'bypassPermissions' });
-    // This represents the existing /sessions/update picker endpoint, not input metadata.
+    // This represents a picker change through its own entry, not input metadata.
     Object.assign(settings, { model: 'model-b', providerId: 'provider-b', permissionMode: 'ask',
       effort: 'high', fastMode: false, planModeEnabled: !queuedPlan });
     await applyLiveSessionSettings(first, { planModeEnabled: settings.planModeEnabled }, settings);
