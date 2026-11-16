@@ -38,6 +38,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: mocks.getSessionRowSnapshot,
+  getSessionFsSnapshot: mocks.getSessionRowSnapshot,
   touchUserSendInDb: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -62,6 +63,11 @@ vi.mock('../runners/_shared', () => ({
 
 import { MakerScheduleRunner } from '../runner.desktop';
 import type { MakerScheduleRunnerDeps } from '../runner';
+import { Session as RuntimeSession } from '../../../../../../packages/maker-core/src/session.js';
+import { createAsyncQueue } from '../../../../../../packages/maker-core/src/agents/shared/async-queue.js';
+import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator.js';
+import { createGhostAgentTurnRunner } from '../../maker-ipc/ghostAgentTurnRunner.js';
+import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
@@ -168,6 +174,7 @@ function createRunnerHarness(session: Session, extraDeps: Partial<MakerScheduleR
     closeSession,
     recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
+  const actualMaker = extraDeps.maker ?? maker;
   const runner = new MakerScheduleRunner({
     maker,
     getDb: () => ({}) as never,
@@ -181,7 +188,7 @@ function createRunnerHarness(session: Session, extraDeps: Partial<MakerScheduleR
     isRunSilenced: () => false,
     isRunAbandoned: () => false,
   } as unknown as Scheduler);
-  return { runner, maker, closeSession, logger };
+  return { runner, maker: actualMaker, closeSession: actualMaker.closeSession as typeof closeSession, logger };
 }
 
 async function fireToCompletion(
@@ -297,6 +304,139 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
 
     expect(closeSession).not.toHaveBeenCalled();
   });
+
+  // #10742: existing close tests only model an already-running takeover. Exercise
+  // the accepted queue -> preparing boundary with real Session/Coordinator/Ghost
+  // runners. Provider and DB ports are in-memory; no model, mail or native I/O.
+  it.each(['plugin', 'user'] as const)(
+    'hands the runtime to accepted %s input before its next turn starts', async source => {
+      const deferred = () => {
+        let resolve!: () => void;
+        const promise = new Promise<void>(r => { resolve = r; });
+        return { promise, resolve };
+      };
+      const events = createAsyncQueue<AgentEvent>();
+      const firstSend = deferred();
+      const preparing = deferred();
+      const allowDispatch = deferred();
+      const dispatched = deferred();
+      const handle = {
+        id: 'fixture-provider', agentKind: 'pi' as const, model: 'fixture-model',
+        send: vi.fn(async () => {}),
+        events: () => events, close: async () => { events.end(); },
+        isTurnRunning: () => false, setInteractionResolver: () => {},
+      };
+      const logger = { trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: () => logger };
+      const session = new RuntimeSession({
+        id: 'scheduler-session', agentKind: 'pi', workDir: process.cwd(),
+        handle: handle as never, capabilities: {} as never, logger: logger as never, turnStallMs: 0,
+        permissionMode: 'bypassPermissions',
+      });
+      const discarded = vi.fn();
+      const terminalErrors = vi.fn();
+      const coordinator = new AgentInputCoordinator({
+        sendToAgent: async (_id, message, _opts, sendOpts) => {
+          const text = typeof message === 'string' ? message : message.content;
+          if (typeof text !== 'string') throw new Error('This fixture only sends text');
+          const result = await session.send(text, {
+            signal: sendOpts.signal, onTurnReserved: sendOpts.onVendorTurnReserved,
+            onAccepted: async () => {
+              sendOpts.persistUserMessage?.onPersisting?.();
+              await sendOpts.persistUserMessage?.onPersisted?.();
+            },
+          });
+          expect(result.accepted).not.toBe(false);
+          dispatched.resolve();
+          return { kind: 'session-dispatch', source: 'local', dispatched: true } as const;
+        },
+        steerToAgent: async () => {}, abortSession: async () => {},
+        isTurnRunning: () => session.isTurnRunning(), isLiveTurnRunning: () => session.isTurnRunning(),
+        isLiveSessionPresent: () => true, hasPendingInteraction: () => false,
+        getTurnGeneration: () => session.getTurnGeneration(), getTurnSessionIdentity: () => session,
+        getAgentKind: () => 'pi', getSdkSessionId: async () => handle.id,
+        createUserMessage: async () => ({} as never), touchUserSend: async () => {},
+        emitProjection: () => {}, persistTerminalSendError: terminalErrors,
+        onDiscardedQueuedMessage: discarded,
+        screenUserMessage: async () => {
+          preparing.resolve();
+          await allowDispatch.promise;
+          return { action: 'allow' };
+        },
+      });
+      session.onEvent(event => {
+        if (event.type === 'done') coordinator.onTurnEvent(session.id, 'done');
+      });
+      session.onStatusChange(status => { if (status === 'closed') coordinator.onSessionClosed(session.id); });
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', permissionMode: 'bypassPermissions', planModeEnabled: false });
+      const { runner, closeSession } = createRunnerHarness(session, {
+        applyPiModelSelectionUnderLock: async () => ({ status: 'applied' }),
+        maker: {
+          createSession: async () => session, getSession: () => session,
+          getSessionMeta: async () => ({ model: 'fixture-model', agentKind: 'pi' }),
+          isSessionAlive: () => true, recyclePiRuntimeIfResourcesDrifted: async () => false,
+          closeSession: vi.fn(() => session.close()),
+        } as unknown as Maker,
+        schedulerQueue: {
+          isSessionBusy: id => coordinator.shouldQueueNewTurn(id),
+          hasQueuedPrompt: () => false, isPromptTracked: () => true,
+          removeQueuedPrompt: () => {},
+          enqueuePrompt: async req => {
+            await req.onPreparing?.();
+            await session.send(req.text, { origin: req.origin, onAccepted: () => req.onAccepted({ permissionMode: 'bypassPermissions', planMode: false }) });
+            firstSend.resolve();
+            return { clientId: 'scheduled-input' };
+          },
+        },
+      });
+      const enqueue = (text: string, sourcePlugin?: AgentInputQueuedMessage['sourcePlugin']) => {
+        coordinator.enqueue(session.id, {
+          clientId: 'follow-up', text, persistedContent: text, model: 'fixture-model',
+          effort: 'medium', permissionMode: 'default', workingDir: process.cwd(),
+          chatMessage: { clientId: 'follow-up', role: 'user', content: text, createdAt: new Date().toISOString() },
+          createOpts: { agentKind: 'pi', workingDir: process.cwd(), model: 'fixture-model',
+            effort: 'medium', permissionMode: 'default', userPrompt: '' },
+          ...(sourcePlugin ? { sourcePlugin } : {}),
+        });
+      };
+      const fire = runner.fire(baseSchedule({ agentKind: 'pi', model: 'fixture-model' }), createFireContext());
+      void fire.catch(() => {});
+      try {
+        await Promise.race([firstSend.promise, fire.then(() => { throw new Error('fire ended before send'); })]);
+        if (source === 'plugin') {
+          const ghost = createGhostAgentTurnRunner({
+            readSessionMeta: async () => ({}), admitLocalSession: async () => {},
+            readPluginName: () => 'Fixture plugin',
+            send: async params => {
+              enqueue(params.message, params.sourcePlugin);
+              return { ok: true, targetSessionId: session.id, wakeKind: 'queued' };
+            },
+            readLatestAssistant: async () => undefined, forkSessionAtMessage: async () => ({ id: 'unused' }),
+            broadcastSessionCreated: () => {},
+          });
+          expect(await ghost({ ghostId: 'fixture-plugin', ghostVersion: '1', sourceSessionId: session.id,
+            mode: 'continue', prompt: 'Completion receipt', persistedContent: 'Completion receipt' }))
+            .toMatchObject({ ok: true, disposition: 'queued' });
+        } else enqueue('Follow-up question');
+        events.push({ type: 'text', data: 'Report complete', source: 'pi' });
+        events.push({ type: 'done', data: { stopReason: 'stop' }, source: 'pi' });
+        await preparing.promise;
+        await fire;
+        // The original turn is settled but the next input is still preparing.
+        expect(session.isTurnRunning()).toBe(false);
+        expect(closeSession).not.toHaveBeenCalled();
+        allowDispatch.resolve();
+        await dispatched.promise;
+        expect(handle.send).toHaveBeenCalledTimes(2);
+        expect(coordinator.getProjection(session.id).error).toBeNull();
+        expect(discarded).not.toHaveBeenCalled();
+        expect(terminalErrors).not.toHaveBeenCalled();
+      } finally {
+        allowDispatch.resolve();
+        await fire.catch(() => {});
+        await session.close();
+      }
+    },
+  );
 
   it('closeSession 抛错不影响 fire 结果(仅 warn)', async () => {
     const h = createSessionHarness();

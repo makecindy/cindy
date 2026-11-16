@@ -879,8 +879,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
    * 不关的两类:
    *   - heartbeat(复用 targetSessionId):用户既有会话,生命周期不归 runner 管。
    *   - persistentSession:产品语义就是「持续会话」,跨 fire 复用同一 session。
-   * 另外收尾时会话上若有**新的** turn 在跑(用户从运行历史点开会话接管了对话),
-   * 让位不关 —— 该会话已转为用户驱动。
+   * 另外收尾时会话上若有新的 turn 或已接受的排队/派发中输入，
+   * 让位不关 —— 后续输入已接管会话，不能在其下一轮开始前拆掉运行时。
    *
    * 用 wrapper + holder 而非在 fireInner 内部套 try/finally:fireInner 里 createSession
    * 之后仍有未捕获 throw 点(backfillSessionMeta / wireSessionToIpc 等),wrapper 的
@@ -920,7 +920,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (
         holder.sessionId &&
         !holder.keepAlive &&
-        (holder.closeOnAbort || !this.runtime.isSessionInTurn(holder.sessionId))
+        (holder.closeOnAbort || (
+          !this.runtime.isSessionInTurn(holder.sessionId) &&
+          // A successful done can precede the coordinator's queued dispatch.
+          // Include preparing/recovery work, not just the current vendor turn.
+          !this.deps.schedulerQueue?.isSessionBusy(holder.sessionId)
+        ))
       ) {
         try {
           await this.deps.maker.closeSession(holder.sessionId);
