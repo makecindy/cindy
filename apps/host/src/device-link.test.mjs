@@ -8,7 +8,8 @@ import WebSocket, { WebSocketServer } from 'ws';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getTableColumns, getTableName } from 'drizzle-orm';
-import { DeviceLinkClient, PROTOCOL_VERSION } from '@cindy/device-link';
+import { DeviceLinkClient, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
+  PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer } from '@cindy/device-link';
 import { readDeviceLinkInvokeSourceDevice } from '../../desktop/src/main/device-link/invoke-context.ts';
 import { createHostDeviceLink } from './device-link.ts';
 import { createHostService } from './service.mjs';
@@ -192,4 +193,100 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   release();
   await stopping;
   clients[1].stop(); await inFlight;
+});
+
+// Test value (engineering-conventions §3.2)
+// - Production entry and observable result: createHostDeviceLink (the dispatcher the Host starts
+//   after sign-in, main.ts startDeviceLink), reached by real DeviceLinkClients through a local
+//   relay. A provider-share guest gets the typed ACCESS_REVOKED result on any channel and never
+//   reaches the Host service; a same-account controller asking for a file peer or remote desktop
+//   gets a typed refusal instead of a session.
+// - Rule: release table row 乙 6. The Host never calls setProviderShareAccess, so the first gate of
+//   runProviderShareInvoke (dispatch.ts providerShareGuestAccess) is always empty; requestFilePeer and
+//   requestRemoteDesktop are not passed, so the dispatcher's unavailable() defaults apply
+//   (dispatch.ts:494-496). Passing either port later must be a decision, not an accident.
+// - Coverage gap: the test above only drives same-account controllers on the contract channels;
+//   nothing ran a share-guest peer or these two platform channels against the Host assembly.
+// - Minimal failing input: a share access port that admits the guest, or a requestRemoteDesktop
+//   that resolves, in the Host's createInboundDispatch ports.
+// - Tier: unit with loopback sockets in-process, as the test above (no relay, no network, no model).
+test('Host device-link refuses provider-share guests and the platform features it does not wire', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-remote-refusals-'));
+  configureAppDataDir(profile);
+  configureHostOwner({ userDataDir: profile, ownerId: 'test-refusal-owner' });
+  const hostKey = providerShareHostPeer('share-fixture', 'host');
+  const guestKey = providerShareGuestPeer('share-fixture', 'member-fixture', 'guest');
+  assert.ok(isProviderSharePeer(guestKey));
+  const sockets = new Map();
+  const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  const reached = [];
+  let host, desktop, guest;
+  t.after(async () => {
+    desktop?.stop(); guest?.stop();
+    await host?.stop();
+    for (const socket of wss.clients) socket.terminate();
+    await new Promise(resolve => wss.close(resolve));
+    commitVolatileAppSession('signed-out', null, true);
+    fs.rmSync(profile, { recursive: true, force: true });
+  });
+  // The relay stamps src (and the share source for scoped frames); the guest belongs to another account.
+  wss.on('connection', (socket, request) => {
+    const id = /^Bearer synthetic-(host|desktop|guest)$/.exec(request.headers.authorization ?? '')?.[1];
+    if (!id) { socket.close(1008); return; }
+    sockets.set(id, socket);
+    socket.on('message', raw => {
+      const frame = JSON.parse(raw.toString());
+      if (frame.kind === 'hello') {
+        socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
+          serverProtocolVersion: PROTOCOL_VERSION, deviceId: id, userId: `synthetic-${id === 'guest' ? 'other' : 'same'}-user`,
+          capabilities: [PROVIDER_SHARE_RELAY_CAPABILITY],
+        } }));
+        if (id === 'desktop') sockets.get('host')?.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'presence-changed',
+          payload: { deviceId: 'desktop', platform: 'darwin', online: true, remoteControlEnabled: true } }));
+      } else if (frame.kind === 'ping') socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'pong' }));
+      else if (frame.dst && sockets.get(frame.dst)?.readyState === WebSocket.OPEN) {
+        // Like the relay, author the share source from the sender's identity; never trust the client's.
+        const providerShare = frame.providerShare && { ...frame.providerShare,
+          source: id === 'guest' ? { role: 'guest', memberId: 'member-fixture' } : { role: 'host' } };
+        sockets.get(frame.dst).send(JSON.stringify({ ...frame, src: id, ...(providerShare ? { providerShare } : {}) }));
+      }
+    });
+  });
+  await once(wss, 'listening');
+  const url = `ws://127.0.0.1:${wss.address().port}`;
+  host = createHostDeviceLink({ profileDir: profile, version: 'test', getWsUrl: () => url,
+    getToken: async () => 'synthetic-host', canRegister: () => true,
+    invoke: async route => { reached.push(route); return { status: 404, body: { message: `unexpected ${route}` } }; },
+    subscribe: () => () => {},
+    createRuntimeSession: async () => { throw new Error('Not part of this test'); },
+    disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
+  });
+  await host.setEnabled(true);
+  await waitFor(() => host.state().status === 'online');
+  const client = id => {
+    const value = new DeviceLinkClient({ getWsUrl: () => url, getToken: async () => `synthetic-${id}`,
+      getHello: () => ({ deviceName: id, platform: 'darwin', appVersion: 'test', remoteControlEnabled: false }),
+      createWebSocket: (address, headers) => new WebSocket(address, { headers }),
+    });
+    value.start();
+    return value;
+  };
+  desktop = client('desktop');
+  guest = client('guest');
+  await waitFor(() => desktop.getStatus() === 'online' && guest.getStatus() === 'online');
+  await desktop.openLink('host', { controllerName: 'desktop', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+
+  const filePeer = await desktop.invoke('host', { channel: FILE_PEER_CHANNEL, args: [{}] });
+  assert.deepEqual(filePeer, { ok: false, error: { code: 'IPC_ERROR', message: 'FILE_PEER_UNAVAILABLE' } });
+  const remoteDesktop = await desktop.invoke('host', { channel: REMOTE_DESKTOP_CHANNEL, args: [{}] });
+  assert.equal(remoteDesktop.ok, false, JSON.stringify(remoteDesktop));
+  assert.equal(remoteDesktop.error.code, 'IPC_ERROR');
+  assert.match(remoteDesktop.error.message, /^\[NOT_SUPPORTED\] requestRemoteDesktop /);
+
+  for (const channel of [REMOTE_AGENT_CHANNEL, 'local-db:sessions:list', 'host:execute-arbitrary']) {
+    const reply = await guest.invoke(hostKey, { channel, args: [] });
+    assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
+    assert.equal(reply.error.code, 'ACCESS_REVOKED', `${channel}: ${JSON.stringify(reply)}`);
+  }
+  assert.deepEqual(reached, [], 'neither refusal may reach the Host service');
 });
