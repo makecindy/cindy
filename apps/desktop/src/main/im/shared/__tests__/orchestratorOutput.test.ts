@@ -168,3 +168,10 @@ describe('background output route recovery', () => {
     expect(mocks.attach).not.toHaveBeenCalled();
   });
 });
+
+// Unit: a rejected provider dispatch must revoke any reply-media lease before another tool call.
+it('clears background reply authority when provider dispatch is rejected', async () => {
+  await publishChannelTurn(session, 'undispatched');
+  expect(mocks.note).toHaveBeenCalledWith(session, undefined);
+  expect(mocks.attach).not.toHaveBeenCalled();
+});

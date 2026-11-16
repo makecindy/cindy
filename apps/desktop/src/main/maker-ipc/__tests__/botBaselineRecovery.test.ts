@@ -9,6 +9,10 @@ import { applyScheduledModelSelection, createScheduledModelScope, createSchedule
 import { readSshCodexModelList } from '../../remote-ssh/codex-model-list';
 import type { BotModelRoute } from '../../../shared/botModelChain';
 import { projectSessionRuntimeControl } from '../sessionRuntimeControl';
+import { createSessionRuntimeProjection } from '../sessionRuntimeProjection';
+import { assertModelRouteUsableWith, type ModelRouteAdmissionPorts } from '../modelRouteAdmission';
+import type { ModelRouteVerdict } from '../../maker-host/model-route-guard';
+import type { AgentKind } from '@cindy/maker-core';
 
 // Regression for #7177/#7428: an unavailable frozen selection used to reject
 // every input before dispatch, despite a usable saved companion configuration.
@@ -255,14 +259,15 @@ it.each(['same-harness', 'same-harness-staged', 'cross-harness', 'back-to-task-d
   }
 });
 it.each(['claude-code', 'codex', 'pi'] as const)('restores all projected axes after recovering a legacy baseline to %s', (agentKind) => {
-  const project = registeredFunction('projectScheduledPreferences', {
-    projectSessionRuntimeControl, makerToDbAgentKind: (kind: string) => kind,
-  });
+  // projectScheduledPreferences moved out of register.ts (sessionRuntimeProjection.ts): call it directly.
+  const { projectScheduledPreferences: project } = createSessionRuntimeProjection({ broadcastSessionPatched: () => {} });
   const baseline = { agentKind: 'codex' as const, model: 'old', providerId: 'removed', effort: null, fastMode: false };
-  const legacy = project('projection-test', baseline);
+  // A saved baseline always has its scope id (parseScheduledModelBaseline requires one); the projection ignores it.
+  const saved = { ...baseline, scopeId: 'projection-scope' };
+  const legacy = project('projection-test', saved);
   expect(legacy.runtimeBaselineRecoveryPending).toBe(true);
   expect(legacy.runtimeEffective).toEqual(baseline); // Does not assert a different/available source.
-  expect(project('projection-test', { ...baseline, pendingBotProfileVersion: 2 }).runtimeBaselineRecoveryPending).toBe(false);
+  expect(project('projection-test', { ...saved, pendingBotProfileVersion: 2 }).runtimeBaselineRecoveryPending).toBe(false);
   const recovered = { ...baseline, agentKind, model: 'saved-model', providerId: 'saved' };
   const cleared = { ...legacy, ...projectSessionRuntimeControl('projection-test', recovered) };
   expect(cleared.runtimeBaselineRecoveryPending).toBe(false); // Shallow-merged patches cannot retain the offer.
@@ -286,7 +291,14 @@ describe('SSH baseline restoration through production profile application', () =
       return views;
     });
     const local = vi.fn(async () => { throw createIpcError('MODEL_SELECTION_UNAVAILABLE', 'not in local catalog'); });
+    // Execute the new production preparation too: SSH must retain its saved route
+    // before the ordinary SSH catalog/payment/offline checks below, not skip it in a stub.
+    const resolveScheduledExecutionSelection = registeredFunction('resolveScheduledExecutionSelection', {
+      getSessionRowSnapshotStrict: async () => ({ providerId: 'openai', agentKind: 'codex',
+        remoteHostId: 'ssh-builder', agentDeviceId: 'stale-device' }),
+    });
     const apply = registeredFunction('applyScheduledProfile', {
+      resolveScheduledExecutionSelection,
       applyScheduledModelSelection, createScheduledModelSelectionResolver, resolveScheduledModelSelection,
       readSshCodexModelList, listSshCodexProviders: ssh,
       agentSwitchDeps: { getSessionRow: async () => ({ agentKind: 'codex', status: 'active', remoteHostId: 'ssh-builder', agentDeviceId: 'stale-device' }) },
@@ -375,8 +387,11 @@ it.each([
 describe('production restoration rejection classification', () => {
   const throwIpcError = (code: Parameters<typeof createIpcError>[0], message: string): never => { throw createIpcError(code, message); };
   it.each(['explicit-source-unavailable', 'explicit-source-disabled', 'model-retired', 'payment-required'])('%s retains ordinary semantics and marks only recoverable restoration failures', async (reason) => {
-    const guard = registeredFunction('assertModelRouteUsable', { throwIpcError,
-      verdictForModelRoute: async () => ({ kind: 'reject', reason }), describeModelRouteRejection: () => reason });
+    // assertModelRouteUsable moved out of register.ts (modelRouteAdmission.ts): call it with the verdict as its port.
+    const ports: ModelRouteAdmissionPorts = { listSshCodexProviders: vi.fn(),
+      verdictForModelRoute: async () => ({ kind: 'reject', reason } as ModelRouteVerdict) };
+    const guard = (agent: AgentKind, model: string, providerId: string | null, remoteHostId?: string | null,
+      unavailableCode?: 'MODEL_SELECTION_UNAVAILABLE') => assertModelRouteUsableWith(ports, agent, model, providerId, remoteHostId, unavailableCode);
     await expect(guard('pi', 'saved', 'old')).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
     await expect(guard('pi', 'saved', 'old', undefined, 'MODEL_SELECTION_UNAVAILABLE')).rejects.toMatchObject({
       code: reason === 'payment-required' ? 'INVALID_PARAMS' : 'MODEL_SELECTION_UNAVAILABLE',

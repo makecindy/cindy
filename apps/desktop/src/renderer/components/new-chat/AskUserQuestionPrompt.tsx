@@ -47,10 +47,12 @@ import { formatVoiceInputShortcut, isVoiceInputShortcutMatch } from '@/voice-inp
 import { createComposerLongPressVoiceGesture, isComposerLongPressVoiceReady } from '@/voice-input/composerLongPressGesture';
 import { nextAskUserVoiceShortcutOrder, registerAskUserVoiceShortcutCard } from './askUserVoiceShortcutOwner';
 import { CreateAgentSendIcon } from './SendButton';
+import { useAnswerComposerExpanded } from './useAnswerComposerExpanded';
 import { useAskUserDictation } from './useAskUserDictation';
 import { parseVoiceQuestionSelection, type VoiceQuestionBridge, type VoiceQuestionTarget } from './voiceQuestionSelection';
 
 const ASK_USER_ANSWER_MAX_HEIGHT_PX = 148;
+const askAnswerMaxHeight = () => ASK_USER_ANSWER_MAX_HEIGHT_PX;
 
 interface AutoGrowingAnswerTextareaProps extends Omit<
   TextareaHTMLAttributes<HTMLTextAreaElement>,
@@ -344,6 +346,7 @@ function AskUserQuestionForm({
   // mount order is the order in which cards appeared.
   const [voiceShortcutOrder] = useState(nextAskUserVoiceShortcutOrder);
   const answerValue = dictation.liveText ?? customInput;
+  const composerExpanded = useAnswerComposerExpanded(inputRef, answerValue, askAnswerMaxHeight);
   const voiceShortcutLabel = formatVoiceInputShortcut(getVoiceInputSettings().shortcut);
   const voiceProcessing = dictation.state === 'submitting' || dictation.state === 'refining';
   const voiceButtonLabel = voiceProcessing ? voiceSubmitLabel : dictation.isBusy
@@ -988,7 +991,13 @@ function AskUserQuestionForm({
     options.length > 0 && !currentQ?.answerConstraints?.choices ? (
       <div className="overflow-hidden rounded-[12px] border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
         {showCustomInput ? (
-          <div data-testid="interaction-answer-composer" className="flex w-full min-w-0 flex-col gap-2 p-3">
+          <div
+            data-testid="interaction-answer-composer"
+            className={cn(
+              'flex w-full min-w-0 gap-2',
+              composerExpanded ? 'flex-col p-3' : 'items-end px-[16px] py-[8px]',
+            )}
+          >
             <AutoGrowingAnswerTextarea
               textareaRef={inputRef}
               voice={voiceBridge ? undefined : dictation}
@@ -1013,15 +1022,16 @@ function AskUserQuestionForm({
               }}
               placeholder={t('chat.askUserQuestion.answerPlaceholder')}
               className={cn(
-                'min-h-[44px] w-full min-w-0 bg-transparent text-14 font-normal leading-[1.571] outline-none',
+                'min-h-[22px] min-w-0 bg-transparent text-14 font-normal leading-[1.571] outline-none',
+                // One line beside the 32px actions; centred on them by the margin.
+                composerExpanded ? 'w-full' : 'my-[5px] flex-1',
                 'text-[var(--ask-input-text)] placeholder:text-[var(--ask-input-placeholder)]',
                 'select-text',
               )}
             />
-            {/* Voice and submit stay in one bottom-pinned cluster: as the answer
-                grows, both keep the same center line instead of the mic drifting
-                up to the top of the box. */}
-            <div className="flex w-full items-center justify-end gap-2">
+            {/* Voice and submit stay in one cluster: beside a single-line answer,
+                then below the full-width text once it wraps. */}
+            <div className={cn('flex items-center justify-end gap-2', composerExpanded ? 'w-full' : 'shrink-0')}>
               {!voiceBridge && (<AskUserVoiceButton
                 size="md"
                 label={voiceButtonLabel}
@@ -1247,7 +1257,13 @@ function AskUserQuestionForm({
 
         {/* Free-text input when no options */}
         {options.length === 0 && (
-          <div data-testid="interaction-answer-composer" className="flex w-full min-w-0 flex-col gap-2 rounded-[8px] border border-[var(--ask-input-border)] bg-[var(--ask-input-bg)] p-3 focus-within:border-[var(--chat-input-border-focus)]">
+          <div
+            data-testid="interaction-answer-composer"
+            className={cn(
+              'flex w-full min-w-0 gap-2 rounded-[8px] border border-[var(--ask-input-border)] bg-[var(--ask-input-bg)] focus-within:border-[var(--chat-input-border-focus)]',
+              composerExpanded ? 'flex-col p-3' : 'items-end py-2 pl-3 pr-2',
+            )}
+          >
             <AutoGrowingAnswerTextarea
               textareaRef={inputRef}
               voice={voiceBridge ? undefined : dictation}
@@ -1269,12 +1285,13 @@ function AskUserQuestionForm({
               placeholder={t('chat.askUserQuestion.answerPlaceholder')}
               autoFocus
               className={cn(
-                'min-h-[44px] w-full min-w-0 bg-transparent text-14 leading-[1.571] outline-none',
+                'min-h-[22px] min-w-0 bg-transparent text-14 leading-[1.571] outline-none',
+                composerExpanded ? 'w-full' : 'my-[5px] flex-1',
                 'text-[var(--ask-input-text)]',
                 'placeholder:text-[var(--ask-input-placeholder)]',
               )}
             />
-            <div className="flex w-full items-center justify-end gap-2">
+            <div className={cn('flex items-center justify-end gap-2', composerExpanded ? 'w-full' : 'shrink-0')}>
               {!voiceBridge && (<AskUserVoiceButton
                 size="md"
                 label={voiceButtonLabel}

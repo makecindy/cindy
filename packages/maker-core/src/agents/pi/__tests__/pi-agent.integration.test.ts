@@ -297,7 +297,11 @@ function chatCompletionsStreamBody(text: string, model: string): string {
 }
 
 /** 让"模型"发起一次工具调用的 SSE 流(stop_reason=tool_use)。 */
-function anthropicToolUseBody(toolName: string, input: Record<string, unknown>): string {
+function anthropicToolUseBody(
+  toolName: string,
+  input: Record<string, unknown>,
+  options: { inputTokens?: number; toolCallId?: string } = {},
+): string {
   return sse([
     {
       event: 'message_start',
@@ -310,7 +314,7 @@ function anthropicToolUseBody(toolName: string, input: Record<string, unknown>):
           model: 'pi-test-model',
           content: [],
           stop_reason: null,
-          usage: { input_tokens: 42, output_tokens: 0 },
+          usage: { input_tokens: options.inputTokens ?? 42, output_tokens: 0 },
         },
       },
     },
@@ -319,7 +323,7 @@ function anthropicToolUseBody(toolName: string, input: Record<string, unknown>):
       data: {
         type: 'content_block_start',
         index: 0,
-        content_block: { type: 'tool_use', id: 'toolu_itest_1', name: toolName, input: {} },
+        content_block: { type: 'tool_use', id: options.toolCallId ?? 'toolu_itest_1', name: toolName, input: {} },
       },
     },
     {
@@ -751,6 +755,89 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       rmSync(workingDir, { recursive: true, force: true });
     }
   });
+
+  // #10198, integration: PiAgent's real native compactor must publish a lower
+  // running watermark before the next tool, and resume from its compacted history.
+  // Translator fixtures inject compaction_end; the existing native tests only
+  // cover policy changes/no-op compaction. Two history spans allow a native cut
+  // outside its default keep-recent budget; a tool turn then exceeds the threshold.
+  it('publishes native automatic compaction usage before continuing tools and resumes compacted history',
+    { timeout: 30_000 }, async () => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-compact-usage-'));
+      const fixtureFile = path.join(workingDir, 'fixture.txt');
+      const outputFile = path.join(workingDir, 'continued.txt');
+      writeFileSync(fixtureFile, 'tool payload '.repeat(3_600));
+      const deps = buildDeps();
+      deps.resolveModelContextLimit = () => 32_000;
+      deps.runtimeConfig.piAutoCompactThresholdPct = 85;
+      const agent = new PiAgent(deps);
+      let handle: AgentSessionHandle | undefined;
+      const options = { sessionId: 'native-compact-usage', workingDir,
+        model: 'pi-test-model', permissionMode: 'bypassPermissions' as const };
+      const send = async (content: string) => {
+        const events: AgentEvent[] = [];
+        const done = (async () => {
+          for await (const event of handle!.events()) {
+            events.push(event);
+            if (event.type === 'done') break;
+          }
+        })();
+        await handle!.send({ type: 'user', content });
+        await done;
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(events.at(-1)).toMatchObject({ type: 'done', data: { status: 'completed' } });
+        return events;
+      };
+      try {
+        handle = await agent.startSession(options);
+        await send('OLD_HISTORY_TO_SUMMARIZE '.repeat(1_920));
+        await send('RECENT_HISTORY '.repeat(3_200));
+        const summary = '## Goal\nCOMPACT_HISTORY_CANARY: read fixture.txt, then write continued.txt.';
+        const before = seenRequests.length;
+        scriptedResponses.push(
+          anthropicToolUseBody('read', { path: fixtureFile }, { inputTokens: 579_216 }),
+          anthropicStreamBody(summary),
+          anthropicToolUseBody('write', { path: outputFile, content: 'continued after compaction' },
+            { toolCallId: 'toolu_after_compaction' }),
+          anthropicStreamBody('finished after compaction'),
+        );
+        const events = await send('Read fixture.txt, then write continued.txt.');
+        const boundaryIndex = events.findIndex(event => event.type === 'compact_boundary');
+        expect(boundaryIndex).toBeGreaterThanOrEqual(0);
+        const boundary = events[boundaryIndex]!;
+        expect(boundary).toMatchObject({ type: 'compact_boundary', data: { trigger: 'auto' } });
+        const { preTokens, postTokens } = boundary.data as { preTokens: number; postTokens: number };
+        expect(postTokens).toBeGreaterThan(0);
+        expect(postTokens).toBeLessThan(preTokens);
+        expect(postTokens).toBeLessThan(32_000);
+        expect(events[boundaryIndex + 1]).toMatchObject({ type: 'status', data: {
+          isRunning: true, contextTokens: postTokens, contextWindow: 32_000,
+          contextSnapshotAuthoritative: true,
+        } });
+        const continuedTool = events.findIndex(event => event.type === 'tool_use'
+          && (event.data as { toolUseId?: string }).toolUseId === 'toolu_after_compaction');
+        expect(continuedTool).toBeGreaterThan(boundaryIndex + 1);
+        expect(events.slice(boundaryIndex, continuedTool).some(event => event.type === 'status'
+          && (event.data as { isRunning?: boolean }).isRunning === false)).toBe(false);
+        expect(readFileSync(outputFile, 'utf8')).toBe('continued after compaction');
+        expect(seenRequests.slice(before).some(request => request.body.includes('COMPACT_HISTORY_CANARY'))).toBe(true);
+        expect(scriptedResponses).toHaveLength(0);
+
+        const nativeId = handle.id;
+        await handle.close();
+        handle = await agent.startSession({ ...options, resumeSessionId: nativeId });
+        expect(handle.id).toBe(nativeId);
+        expect(handle.getUsageSnapshot().contextWindow).toBe(32_000);
+        const resumedRequest = seenRequests.length;
+        await send('Continue using the saved summary.');
+        expect(seenRequests[resumedRequest]!.body).toContain('COMPACT_HISTORY_CANARY');
+        expect(seenRequests[resumedRequest]!.body).not.toContain('OLD_HISTORY_TO_SUMMARIZE');
+      } finally {
+        await handle?.close();
+        scriptedResponses.length = 0;
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    });
 
   it('applies configured windows on creation and same-history resume, then restores the default',
     { timeout: 60_000 }, async () => {

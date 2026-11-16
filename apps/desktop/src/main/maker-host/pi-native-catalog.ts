@@ -108,6 +108,16 @@ export function urlOrigin(value: string | undefined): string | null {
   }
 }
 
+function isOfficialGoogleChatEndpoint(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.origin === 'https://generativelanguage.googleapis.com' &&
+      /^\/v1(?:beta)?\/openai\/*$/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
 export function resolvePiBundledModelById(
   catalog: PiBundledModelCatalog | undefined,
   modelId: string,
@@ -526,6 +536,14 @@ export function buildPiNativeProvidersFromConfigs(
             ? { samplingParams: structuredClone(bundledModel.samplingParams) }
             : {}),
         };
+        // Google's Chat endpoint rejects even store:false (#10200). Dynamic
+        // models may have no bundled compat; apply this to the final endpoint,
+        // without changing the selected API, other compat, or custom proxies.
+        // A discarded legacy route must not suppress the effective endpoint's compat.
+        if (modelApi === 'openai-completions' && !explicitRoute?.requestPath && !rt.requestPath &&
+          isOfficialGoogleChatEndpoint(modelBaseUrl ?? rt.baseUrl)) {
+          spec.compat = { ...spec.compat, supportsStore: false };
+        }
         return managedOllama && shouldApplyQwen38Overlay(m.id)
           ? applyQwen38NativeOverlay(spec)
           : spec;

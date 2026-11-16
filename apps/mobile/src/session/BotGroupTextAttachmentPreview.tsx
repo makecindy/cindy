@@ -1,3 +1,4 @@
+import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import { TextDocumentPreview } from "./TextDocumentPreview";
 import {
   useCallback,
@@ -71,6 +72,7 @@ export function BotGroupTextAttachmentPreview({ attachmentId, fileName, kind, re
   const { t } = useTranslation();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  const previewChrome = usePreviewChromeFrame();
   const [source, setSource] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [state, setState] = useState<PreviewState>({ status: 'loading' });
@@ -197,7 +199,7 @@ export function BotGroupTextAttachmentPreview({ attachmentId, fileName, kind, re
           // 流程图与图片一样是画布,铺满整屏、浮动按钮盖在图上;文字类正文仍让出顶栏与底栏,首行不被挡。
           edges={canvas ? [] : ['bottom', 'left', 'right']}
           style={[styles.fill, { backgroundColor: colors.surface,
-              paddingTop: canvas ? 0 : insets.top + 64,
+              paddingTop: canvas ? 0 : previewChrome.documentContentTop,
               paddingBottom: 0,
             }]}>
           <PreviewHeader

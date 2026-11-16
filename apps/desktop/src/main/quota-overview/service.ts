@@ -286,7 +286,8 @@ export class QuotaOverviewService {
           if (!provider.connected || provider.suspended || provider.removed) continue;
           // Pool reads below own their refresh; the legacy readers update a
           // different cache and may refer to a migrated provider alias.
-          if (provider.subscriptionPoolAlias || (isSubscriptionProvider(provider.id) && readPool(provider.id))) continue;
+          if (provider.subscriptionPoolAlias || provider.subscriptionPool || provider.subscriptionAccountPool
+            || (isSubscriptionProvider(provider.id) && readPool(provider.id))) continue;
           const kind = providerWeeklyQuotaSource(provider);
           if (kind === 'codex') triggerCodexAccountUsageRefresh(provider.id);
           else if (kind === 'claude') triggerClaudeSubscriptionUsageRefresh(provider.id);
@@ -431,8 +432,7 @@ export class QuotaOverviewService {
     const collected = await collectMenubarInputs({
       nowMs,
       listProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: false }),
-      readSubscriptionPool: (providerId) => !readPool(providerId) ? Promise.resolve(null)
-        : force ? refreshSubscriptionPool(providerId, true) : readSubscriptionPool(providerId),
+      readSubscriptionPool: (providerId) => force ? refreshSubscriptionPool(providerId, true) : readSubscriptionPool(providerId),
       readKimi: (providerId) => readKimiCodingAccountUsage({ providerId, forceRefresh: force }),
       readOpenCodeGo: (providerId) => readOpenCodeGoAccountUsage({ providerId, forceRefresh: force }),
       readCodex: (providerId) => readCodexAccountUsageSnapshot(providerId),

@@ -266,6 +266,8 @@
     "transferProgress": "Transferido {{sent}} / {{total}} · Média de {{speed}}/s",
     "thisComputer": "este computador",
     "selectedComputer": "computador selecionado",
+    "sourceComputer": "o computador de origem",
+    "waitingForSource": "Aguardando {{name}} voltar a ficar online. A cópia continuará em seguida.",
     "estimating": "Contando arquivos e calculando o tamanho…",
     "fileSummary": "Arquivos do projeto: {{count}}, totalizando {{size}}",
     "estimateNote": "Estimativa antes da cópia, incluindo arquivos ocultos. O histórico Git, a conversa e os anexos são copiados separadamente e não estão incluídos neste tamanho. Os arquivos podem mudar antes da cópia.",
@@ -1131,19 +1133,23 @@
   },
   "privacyExit": {
     "status": "Este computador está sendo controlado remotamente pelo Cindy",
-    "hint": "Para mostrar esta tela, desative Tela de privacidade do computador em Segurança no dispositivo que o controla. Ou clique ou pressione qualquer tecla neste computador e selecione Desconectar.",
+    "hint": "Para mostrar esta tela, desative “Tela de privacidade durante a conexão” em Segurança no dispositivo que está controlando. Ou clique ou pressione qualquer tecla neste computador e escolha Desconectar.",
     "title": "Desconectar a área de trabalho remota?",
-    "detail": "Isso encerrará o controle remoto e restaurará a tela deste computador. O computador será bloqueado se a opção de bloquear ao sair estiver ativada.",
+    "detail": "Isso encerra o controle remoto e remove a tela de privacidade. Se “Proteger computador ao sair” estiver ativado, o computador também é bloqueado.",
     "cancel": "Manter conectado",
     "disconnect": "Desconectar"
   },
   "awayGuard": {
     "status": "O Cindy está trabalhando",
-    "hint": "Pressione qualquer tecla para bloquear e desbloqueie com Touch ID ou sua senha.",
+    "hint": "Pressione qualquer tecla ou a tecla Touch ID para bloquear e depois desbloqueie com a digital ou a senha",
     "lockFailed": {
       "status": "O Cindy não conseguiu bloquear este Mac",
-      "hint": "Pressione Control-Command-Q para bloquear. A tela também será bloqueada sozinha depois de um tempo."
-    }
+      "hint": "Toque no computador para tentar bloquear de novo. Se ainda não bloquear, confirme com Touch ID ou sua senha para remover a tela. Você também pode fechar a tampa ou apertar o botão de energia.",
+      "hintWindows": "Toque no computador para tentar bloquear de novo. Se ainda não bloquear, confirme com o Windows Hello ou seu PIN para remover a tela. Você também pode pressionar a tecla do logotipo do Windows + L."
+    },
+    "hintWindows": "Pressione qualquer tecla para bloquear; desbloqueie com o Windows Hello ou sua senha",
+    "hintLinux": "Pressione qualquer tecla para bloquear; desbloqueie com sua senha",
+    "verifyReason": "remover a tela de privacidade"
   },
   "appBadge": {
     "attentionCount": "Tarefas que precisam de atenção: {{count}}"
@@ -1294,10 +1300,10 @@
       "resolutionHint": "As alterações de resolução afetam o monitor físico remoto."
     },
     "settingUnsupported": "Este computador ainda não oferece suporte a esta configuração",
-    "privacyScreen": "Tela de privacidade do computador",
-    "privacyScreenHint": "Oculte as telas do computador. Clique ou pressione uma tecla no computador e confirme para desconectar. O bloqueio ao sair será aplicado se estiver ativado.",
-    "privacyActive": "A tela de privacidade está ativada. Clique ou pressione uma tecla no computador e confirme para desconectar. O bloqueio ao sair será aplicado se estiver ativado.",
-    "privacyFailed": "Não foi possível ativar a tela de privacidade. As telas do computador ainda podem estar visíveis.",
+    "privacyScreen": "Tela de privacidade durante a conexão",
+    "privacyScreenHint": "Cobre a tela deste computador durante o controle remoto. Se alguém clicar ou pressionar uma tecla no computador, pergunta antes de desconectar.",
+    "privacyActive": "A tela de privacidade está ativada. Se alguém clicar ou pressionar uma tecla no computador, pergunta antes de desconectar.",
+    "privacyFailed": "Não foi possível ativar a tela de privacidade. A tela do computador ainda pode estar visível.",
     "hostMute": "Silenciar computador controlado",
     "hostMuteHint": "Silenciar o computador controlado enquanto estiver conectado",
     "hostMuteFailed": "Não foi possível alterar o estado de áudio do computador controlado",
@@ -1313,7 +1319,7 @@
     "idleMinutes_one": "{{count}} minuto",
     "idleMinutes_other": "{{count}} minutos",
     "idleDisconnected": "Desconectado por inatividade. Reconecte quando estiver pronto.",
-    "lockOnExit": "Bloquear computador ao sair",
+    "lockOnExit": "Proteger computador ao sair",
     "lockOnExitHint": "Bloqueia o computador ao sair da área de trabalho remota.",
     "lockOnExitFailed": "Não foi possível confirmar que o computador foi bloqueado. Verifique o computador antes de deixá-lo sem supervisão.",
     "nativeResolution": "Nativa",
@@ -1357,7 +1363,9 @@
         "body": "Esta tarefa está com {{device}} aberto em outro computador. Atualize o plugin “{{plugin}}” neste computador para ver e operar o dispositivo na barra lateral direita.",
         "action": "Atualizar"
       }
-    }
+    },
+    "lockOnExitHintPrivacy": "Mostra a tela de privacidade ao sair, para a IA continuar trabalhando; tocar no computador o bloqueia.",
+    "lockedEnablePrivacyHint": "Para a IA continuar usando este computador enquanto você está fora, ative a tela de privacidade nas Configurações dele → Geral → Quando você está fora."
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1394,7 +1402,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "A configuração SSH foi salva, mas Cindy não conseguiu atualizá-la. Recarregue a configuração SSH.",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy não consegue gerenciar esta configuração SSH com segurança. Recarregue-a e verifique o marcador de propriedade do Cindy e se o alias do host é único.",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy não consegue reproduzir com segurança algumas regras de configuração SSH deste host. O SSH no terminal ainda pode funcionar; revise Match, Include condicional, IdentityAgent, IdentitiesOnly e as configurações de chave pública.",
-    "SSH_AGENT_UNAVAILABLE": "O SSH Agent está indisponível. Inicie-o, carregue a chave privada correspondente com ssh-add e tente novamente.",
+    "SSH_AGENT_UNAVAILABLE": "O agente local de chaves SSH (ssh-agent) está indisponível. Confira se está em execução e se ssh-add -l lista a chave necessária. Veja as orientações em Gerenciar chaves.",
     "SSH_HOST_PREFS_WRITE_FAILED": "O host continua salvo, mas não foi possível salvar seu nome de exibição ou as configurações de Agent Proxy. Verifique as permissões de armazenamento local e tente novamente.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "Esta tarefa atingiu o limite de abas. Feche algumas abas primeiro",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "O conteúdo da aba é grande demais para adicionar",
@@ -1485,6 +1493,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "Para revisar",
+      "summaryInProgress": "Em andamento",
+      "summaryPending": "Requer sua atenção",
+      "summaryUnread": "Resultados não lidos",
       "markRead": "Marcar como lida",
       "archive": "Arquivar",
       "actionFailed": "Não foi possível concluir a ação. A notificação foi mantida. Tente novamente.",
@@ -1942,7 +1954,8 @@
       "windowBehavior": "Comportamento do aplicativo",
       "shortcuts": "Atalhos de teclado",
       "mcpServers": "MCP personalizado",
-      "bots": "Amigos"
+      "bots": "Amigos",
+      "awayFromComputer": "Quando você está fora"
     },
     "remote": {
       "title": "Máquinas remotas",
@@ -1958,6 +1971,12 @@
       "footnote": "Fase A: apenas gerenciamento de conexões SSH. A execução de Agents na máquina remota chegará em uma atualização futura.",
       "viaAuth": "via {{label}}",
       "readOnlyFromSshConfig": "Os detalhes da conexão vêm da configuração SSH",
+      "importedAgentHint": "Autentica por meio do agente local de chaves SSH (ssh-agent). Uma conexão ssh bem-sucedida no terminal não garante que o agente esteja pronto.",
+      "agentError": {
+        "environmentUnset": "A variável de ambiente referenciada por IdentityAgent não está definida para o Cindy. Defina-a ou corrija IdentityAgent na configuração SSH.",
+        "endpointEmpty": "IdentityAgent resulta em um endpoint vazio. Corrija IdentityAgent na configuração SSH.",
+        "endpointUnavailable": "O endpoint do agente de chaves SSH configurado por IdentityAgent está indisponível. Verifique esse endpoint e seu agente; o ssh-agent padrão pode usar outro endpoint."
+      },
       "configWarning": "Cindy não consegue avaliar algumas regras de configuração SSH. A lista de hosts ou os detalhes da conexão podem diferir dos do SSH no terminal.",
       "configDiagnostic": {
         "io": "Cindy não conseguiu ler sua configuração SSH. Os últimos hosts carregados com sucesso continuam sendo exibidos. Verifique as permissões do arquivo e recarregue.",
@@ -2055,7 +2074,7 @@
           "tryThis": "Tente isto no seu terminal",
           "close": "Fechar",
           "fallbackTitle": "Ou dispense completamente o agent",
-          "fallbackBody": "Você pode adicionar este host usando a autenticação por \"Arquivo de identidade\" — {{appName}} passará o arquivo de chave diretamente ao ssh e a frase secreta será solicitada a cada conexão. Não é necessário um agent. Implicação de segurança: a frase secreta é digitada a cada conexão, mas não há cache de chaves na memória.",
+          "fallbackBody": "Você também pode escolher \"Arquivo de identidade\" ao adicionar um host. O {{appName}} lê a chave privada para a memória do processo sem ssh-agent. Atualmente, apenas chaves privadas sem criptografia são compatíveis; a senha da chave não é solicitada ao conectar. Use ssh-agent para chaves criptografadas.",
           "reason": {
             "agent_unavailable": "O ssh-add não conseguiu acessar seu ssh-agent (binário ausente, agent não está em execução ou SSH_AUTH_SOCK não definida).",
             "bad_passphrase": "O ssh-add rejeitou a frase secreta.",
@@ -2502,21 +2521,23 @@
       "swallowActivationClickAria": "Ativar ou desativar proteção contra cliques acidentais ao retornar à janela",
       "macRestartNote": "No macOS, reinicie o app para aplicar as alterações.",
       "awayGuard": {
-        "label": "Continuar trabalhando enquanto você está fora",
-        "hint": "Quando ativado, este Mac não desliga a tela nem bloqueia sozinho, para que a IA possa usá-lo a qualquer momento. Depois de um tempo longe, uma camada preta cobre a tela e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com Touch ID ou sua senha.",
+        "label": "Usar tela de privacidade em vez de bloquear",
+        "hint": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com Touch ID ou sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador.",
         "permission": "Permita o Cindy em Ajustes do Sistema > Privacidade e Segurança > Acessibilidade para que ele bloqueie a tela assim que alguém tocar neste Mac. Até lá, a tela apaga e é bloqueada normalmente.",
         "preview": "Testar agora",
-        "previewStarting": "Solte o mouse e o teclado. A tela será coberta em 3 segundos; pressione qualquer tecla para bloqueá-la e depois desbloqueie.",
-        "previewUnavailable": "Não foi possível cobrir a tela. Reinicie o Cindy e tente novamente.",
+        "previewStarting": "Solte o mouse e o teclado. Em 3 segundos a tela de privacidade aparece; pressione qualquer tecla para bloquear e depois desbloqueie para testar.",
+        "previewUnavailable": "Não foi possível mostrar a tela de privacidade. Reinicie o Cindy e tente de novo.",
         "delay": {
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
-          "label": "Cobrir a tela após",
-          "hint": "Tempo sem tocar no teclado e no mouse até a camada aparecer. Por padrão, o mesmo do repouso da tela.",
+          "label": "Mostrar tela de privacidade após",
+          "hint": "Tempo sem tocar no teclado ou no mouse enquanto a IA trabalha. Por padrão, o tempo em que o sistema desliga a tela.",
           "system": "Sistema"
-        }
+        },
+        "hintWindows": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com o Windows Hello ou sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador.",
+        "hintLinux": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador."
       }
     },
     "agentIsland": {
@@ -2640,7 +2661,7 @@
           "hant": "繁體"
         },
         "styles": {
-          "prose": "Prosa clássica (padrão)",
+          "prose": "Prosa clássica",
           "tang-poetry": "Poesia Tang",
           "song-ci": "Ci dos Song",
           "yuan-qu": "Qu dos Yuan",
@@ -4007,6 +4028,7 @@
           "unsupportedProtocol": "O teste de conexão não oferece suporte ao protocolo deste modelo",
           "inconclusive": "Não foi possível confirmar a conexão. Verifique o endereço ou a rede antes de tentar novamente; a requisição anterior pode ter sido executada.",
           "exhausted": "Todas as interfaces candidatas foram testadas. Nenhuma conexão funcional foi encontrada.",
+          "model": "Modelo testado: {{model}}",
           "costHint": "O teste envia requisições curtas de geração e pode gerar uma pequena cobrança.",
           "details": "Ver tentativas",
           "stop": "Parar teste"
@@ -4385,7 +4407,9 @@
           "inline": "Executa em",
           "signInHere": "Fazer login neste computador",
           "writeFailed": "Não foi possível salvar onde este provedor é executado. Tente novamente."
-        }
+        },
+        "sameAccountConnections": "Conexões salvas desta conta",
+        "sameAccountConnectionsHint": "A conta aparece apenas uma vez. Escolher uma conexão altera apenas as configurações a gerenciar; as tarefas existentes mantêm sua conexão."
       },
       "detect": {
         "groupLabel": "Detectado neste dispositivo",
@@ -5410,6 +5434,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Compressão do Codex no servidor",
+        "description": "Quando ativada, prioriza a compressão no servidor. Quando desativada, o Codex usa o resumo local nativo, que continua chamando o modelo atual.",
+        "hint": "Aplica-se quando o Codex iniciar ou retomar uma tarefa neste computador. Os provedores sem compressão no servidor mantêm o comportamento atual.",
+        "loadFailed": "Não foi possível carregar as configurações de compressão do Codex",
+        "saveFailed": "Não foi possível salvar as configurações de compressão do Codex"
+      },
       "title": "Compactação de contexto",
       "description": "Ajuste aqui as taxas de compactação do Claude Code e do Pi. O Codex calcula seu limite a partir da configuração de contexto do modelo. Se a compactação remota falhar, ele muda automaticamente para a compactação por resumo e continua usando-a na tarefa atual.",
       "card": {
@@ -6503,7 +6534,7 @@
         "hook": "Bots de mensagens do Cindy"
       },
       "hook": {
-        "description": "Conecte Slack, Telegram, Feishu / Lark e outros canais ao mesmo Cindy. As mensagens são encaminhadas a este dispositivo e compartilham sua lista de projetos e seu executor de sessões; cada canal mantém sua própria conta e preferências.",
+        "description": "Conecte Slack, Telegram, Feishu / Lark e outros canais ao mesmo Cindy. As mensagens são encaminhadas a este dispositivo e compartilham sua lista de projetos e seu executor de sessões; o modelo e as permissões de cada projeto são compartilhados por todos os canais, e cada canal mantém sua própria vinculação de conta.",
         "slackDescription": "Vincule espaços de trabalho do Slack e atribua tarefas ao Cindy pelo Slack.",
         "slackDisabledHint": "Ative a opção para iniciar a autorização do Slack; após a vinculação, você poderá encaminhar tarefas pelo Slack.",
         "slackBoundHint": "Vinculação concluída. Desativar a opção desvincula este dispositivo; reativá-la exige uma nova autorização.",
@@ -6522,33 +6553,21 @@
           "error": "Falha na conexão"
         },
         "form": {
-          "workspacesCardTitle": "Mapeamentos de diretórios de trabalho",
-          "workspacesCardDescription": "Alias → caminho absoluto local; a lista de diretórios é compartilhada entre os canais, enquanto as preferências de execução são específicas de cada canal.",
-          "workspacesBoundCount_one": "{{count}} diretório de trabalho local vinculado",
-          "workspacesBoundCount_other": "{{count}} diretórios de trabalho locais vinculados",
+          "workspacesCardTitle": "Projetos e modelos",
+          "workspacesCardDescription": "Compartilhado por todos os bots oficiais. Os projetos vêm da barra lateral: crie, renomeie ou remova por lá. Alterações feitas com /model em uma conversa também aparecem aqui.",
+          "workspacesBoundCount_one": "{{count}} projeto",
+          "workspacesBoundCount_other": "{{count}} projetos",
           "aliasPlaceholder": "Alias, ex.: my-server",
-          "addWorkspace": "Adicionar diretório de trabalho",
-          "removeWorkspace": "Remover este diretório de trabalho",
-          "changeDir": "Clique para alterar o diretório (alias e preferências mantidos)",
+          "addProject": "Adicionar projeto",
           "defaultWorkspaceChip": "Padrão: {{name}}",
-          "defaultWorkspaceAria": "Escolha o diretório de trabalho padrão para tarefas encaminhadas",
-          "defaultWorkspaceRadioAria": "Definir \"{{name}}\" como diretório de trabalho padrão",
-          "defaultWorkspaceRowHint": "O diretório selecionado é o diretório de trabalho padrão: qualquer conversa por mensagem direta, grupo ou tópico do Telegram que não tenha escolhido seu próprio projeto executa suas tarefas nele (conversas que escolheram um com /workspace mantêm sua escolha). Atenção ao modo de permissão na linha do diretório selecionado — se estiver definido como Acesso total, uma @mention de qualquer grupo será executada com acesso total dentro desse repositório.",
-          "legacyDefaultsTitle": "Os padrões antigos de “nova conversa” ainda estão em vigor",
-          "legacyDefaultsDescription": "Este dispositivo salvou padrões antigos do bot oficial que ainda servem como alternativa para diretórios sem configurações próprias (o Telegram oficial e o X compartilham uma cópia). Agora esses valores são definidos por diretório. Restaurar os padrões limpa todos os itens a seguir:",
-          "legacyDefaultsRow": {
-            "agentKind": "Agent padrão: {{current}} → {{fallback}}",
-            "permissionMode": "Modo de permissão: {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsRowAgent": "{{agent}}: {{fields}}",
-          "legacyDefaultsField": {
-            "model": "modelo {{current}} → {{fallback}}",
-            "effort": "esforço de raciocínio {{current}} → {{fallback}}",
-            "source": "origem do modelo {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsFieldSeparator": ", ",
-          "legacyDefaultsSourceFollowsGlobal": "segue as configurações globais",
-          "workspacesBoundCount_many": "{{count}} diretórios de trabalho locais vinculados"
+          "defaultWorkspaceAria": "Escolha o projeto padrão para tarefas encaminhadas",
+          "defaultWorkspaceRadioAria": "Definir \"{{name}}\" como projeto padrão",
+          "defaultWorkspaceRowHint": "O projeto selecionado é o padrão: conversas do Telegram, Feishu / Lark e X que não escolheram um projeto executam suas tarefas nele.",
+          "defaultProjectTag": "Padrão",
+          "defaultProjectFullAccessWarning": "O projeto padrão “{{name}}” está com Acesso total: uma @mention de qualquer grupo é executada nele com acesso total.",
+          "sharedSettingsPointer": "Projetos, modelos e permissões são compartilhados por todos os bots oficiais.",
+          "sharedSettingsPointerAction": "Abrir configurações",
+          "workspacesBoundCount_many": "{{count}} projetos"
         },
         "binding": {
           "copyLink": "Copiar link",
@@ -6566,7 +6585,8 @@
         "toast": {
           "saveFailed": "Falha ao salvar",
           "toggleFailed": "Falha ao alternar",
-          "actionFailed": "Falha na operação"
+          "actionFailed": "Falha na operação",
+          "addProjectFailed": "Falha ao adicionar o projeto"
         },
         "loginRequired": "Primeiro, entre na sua conta do {{appName}}; a conexão será retomada automaticamente após o login.",
         "standbyHint": "Outra instância do Cindy neste computador está usando a conexão com o Slack. Feche-a e ative esta opção novamente para assumir a conexão.",
@@ -6700,7 +6720,7 @@
             "usageBody": "Publique no X mencionando @askmycindy e a tarefa será encaminhada a este dispositivo para execução aqui; o resultado será enviado como resposta.",
             "riskLabel": "As respostas são públicas",
             "riskPublicBody": "As respostas são públicas e visíveis para qualquer pessoa. Use este recurso para perguntas e problemas públicos, não para assuntos particulares que possam expor sua privacidade.",
-            "riskWorkdirBody": "Todas as tarefas do X são executadas no diretório de trabalho padrão definido nas configurações de conexão com o X. O Agent pode ler e gravar arquivos nele, e sua conclusão é tornada pública — se esse diretório apontar para um repositório privado, o conteúdo dos arquivos também poderá se tornar público.",
+            "riskWorkdirBody": "Todas as tarefas do X são executadas no projeto padrão definido nas configurações de conexão com o X. O Agent pode ler e gravar arquivos nele, e sua conclusão é tornada pública — se esse projeto apontar para um repositório privado, o conteúdo dos arquivos também poderá se tornar público.",
             "withdrawLabel": "Como remover uma resposta",
             "withdrawBody": "A pessoa que fez a pergunta pode excluir a resposta respondendo a ela com “@askmycindy /delete”. Inclua @askmycindy no texto da resposta. Apenas a resposta pública é excluída; o registro local da tarefa é mantido.",
             "ackTitle": "X vinculado — como funciona e quais cuidados tomar",
@@ -6780,8 +6800,8 @@
           "botFallback": "Bot Cindy",
           "bridgeTitle": "Bots do Feishu / Lark",
           "bridgeDescription": "Os bots apenas repassam suas mensagens do Feishu / Lark para o Cindy. As mensagens de cada conta vinculada vão para o computador de trabalho dela, e as sessões ficam separadas por bot e por conta.",
-          "settingsTitle": "Diretórios de trabalho e modelos",
-          "settingsDescription": "Pertencem à sua conta Cindy neste computador, não a um bot nem a uma conta do Feishu / Lark: todos os bots do Feishu / Lark usam os mesmos. A lista de diretórios também é compartilhada com outros canais.",
+          "settingsTitle": "Projetos e modelos",
+          "settingsDescription": "Pertencem à sua conta Cindy neste computador, não a um bot nem a uma conta do Feishu / Lark: todos os bots do Feishu / Lark usam os mesmos. Os projetos são os projetos locais da barra lateral e também são compartilhados com outros canais.",
           "workingDeviceLabel": "Computador de trabalho: {{name}}",
           "workingDeviceThisComputer": "Este computador",
           "workingDeviceUnknown": "Computador de trabalho ainda não sincronizado",
@@ -6804,7 +6824,7 @@
         "sectionTitle": "Rede experimental de Agent",
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "Mostra a topologia das conexões e a atividade recente. A conexão é criptografada quando os dois dispositivos ativam o Agent-Net e foram pareados pelo Agent-Net. Os demais dispositivos usam a conexão habitual. Aplica-se apenas a este computador."
+          "hint": "Recurso experimental. O uso não é recomendado no momento. Mostra a topologia das conexões e a atividade recente. A conexão é criptografada quando os dois dispositivos ativam o Agent-Net e foram pareados pelo Agent-Net. Os demais dispositivos usam a conexão habitual. Aplica-se apenas a este computador."
         },
         "empty": "Ainda não há outros dispositivos. Entre com a mesma conta em outro computador ou celular e ele aparecerá aqui.",
         "stats": {
@@ -6995,9 +7015,10 @@
         "offlineLocal": "{{provider}} está offline. As alterações são salvas neste computador e sincronizadas com o cartão de modelo da conversa quando ele se reconectar.",
         "requireBinding": "Primeiro, conclua a vinculação da conta de {{provider}}.",
         "serverUnsupported": "O servidor é muito antigo ou não está respondendo; não é possível carregar as preferências.",
+        "loadFailed": "Não foi possível carregar as configurações dos projetos.",
         "retry": "Tentar novamente",
         "toast": {
-          "saveFailed": "Falha ao salvar preferências do diretório"
+          "saveFailed": "Falha ao salvar as configurações do projeto"
         },
         "teamChipAria": "Escolha a qual espaço de trabalho do Slack estas preferências pertencem"
       }
@@ -7070,7 +7091,12 @@
         "remoteSessionEnded": "O dispositivo remoto encerrou esta sessão"
       },
       "control": "Controle",
-      "standbyHint": "Outra instância do Cindy neste computador está usando a conexão remota. Feche-a e esta instância assumirá automaticamente."
+      "standbyHint": "Outra instância do Cindy neste computador está usando a conexão remota. Feche-a e esta instância assumirá automaticamente.",
+      "apps": {
+        "cindy": "Cindy",
+        "cindyFriend": "Cindy Friend"
+      },
+      "keepAwakeIncluded": "Incluído na tela de privacidade: este computador não entra em repouso."
     },
     "imBot": {
       "beta": "Beta",
@@ -7973,6 +7999,7 @@
         "install": "Instalar",
         "details": "Detalhes",
         "detailsAria": "Ver detalhes de {{name}}",
+        "loadingDetails": "Carregando detalhes…",
         "update": "Atualizar pelo marketplace",
         "updateTo": "Atualizar para v{{version}}",
         "installed": "Instalado",
@@ -8257,6 +8284,8 @@
         "cindyTextOneshot": "Pode fazer uma pergunta ao canal rápido da Cindy e receber uma resposta em texto",
         "cindyTextOneshotDetail": "Usa a cadeia de modelos utilitários leves do sistema (o mesmo canal dos títulos automáticos). Não envolve Agent nem acesso a arquivos. Pode haver cobrança pelo uso do modelo.",
         "cindyEmbedText": "Pode enviar texto para ser convertido em vetores (para busca semântica)",
+        "cindyModelsDecisions": "Pode usar modelos de decisão (consome sua cota de modelos)",
+        "cindyModelsRerank": "Pode usar modelos de reordenação (consome sua cota de modelos)",
         "cindyEmbedTextDetail": "O texto é enviado ao modelo de embeddings do sistema e convertido em números, com até {{max}} itens por chamada. Pode haver cobrança pelo uso do modelo. Os vetores vão apenas para o plugin — nada é gravado na sua biblioteca.",
         "cindySearchWeb": "Pode pesquisar na web pública com Cindy AI",
         "cindySearchWebDetail": "As solicitações de pesquisa acessam a web pública e podem consumir a cota do Cindy AI.",
@@ -8278,6 +8307,37 @@
         "agentCompanions": "Pode ver os amigos, o status e a conversa recente deles",
         "agentCompanionsDetail": "Pode ver todos os amigos, inclusive os que rodam nos seus outros computadores: nome, descrição, avatar, status (trabalhando, aguardando você, inativo, offline), o tipo de etapa em que cada um está (como pensando ou executando uma ferramenta), as solicitações que aguardam você do jeito que os cartões as mostram (perguntas, comandos a executar, planos) e a conversa recente do chat principal (até 50 das suas mensagens e das respostas deles, sem as etapas de ferramentas); e abrir a conversa de um amigo na janela principal. Com a permissão de entregar mensagens também, pode repassar as respostas que você der no plugin: responder perguntas, recusar solicitações e comentar planos. Para permitir uma etapa, você ainda clica na confirmação do próprio Cindy. Não pode ler arquivos, etapas de ferramentas nem raciocínios.",
         "agentCompanionsRequest": "Revisar permissão para ver amigos",
+        "hostTools_history": "Histórico de tarefas",
+        "hostTools_historyDetail": "Usar as ferramentas da Cindy para listar tarefas existentes, ler mensagens completas e pesquisar o histórico, incluindo outros computadores acessíveis que você selecionar explicitamente. Exportar tarefas locais em arquivos de formato nativo. Os plugins usam as permissões concedidas na instalação; as chamadas do Agent seguem suas próprias permissões em tempo de execução.",
+        "hostTools_control": "Gerenciamento de tarefas",
+        "hostTools_controlDetail": "Usar as ferramentas da Cindy para editar, arquivar, restaurar e controlar tarefas e projetos existentes, e importar arquivos de tarefas em formato nativo neste computador.",
+        "hostTools_handoff": "Mensagens para tarefas",
+        "hostTools_handoffDetail": "Usar as ferramentas da Cindy para enviar mensagens para tarefas existentes. Operações que precisam da tarefa atual exigem um destino explícito.",
+        "hostTools_settings": "Configurações do aplicativo",
+        "hostTools_settingsDetail": "Usar as ferramentas da Cindy para ler e alterar a configuração. Os segredos não são retornados e os dados confidenciais são preenchidos por você.",
+        "hostTools_scheduler": "Gerenciamento de automações",
+        "hostTools_schedulerDetail": "Após a aprovação, o plugin pode criar, consultar, editar, pausar, retomar, excluir e executar tarefas automáticas e consultar o histórico. As tarefas agendadas executadas pelo Agent usam as permissões padrão da tarefa, incluindo Acesso total.",
+        "hostTools_terminal": "Terminal e comandos",
+        "codeDetailFiles": "A página do plugin permanece isolada. A Cindy executa as operações de arquivos autorizadas nos diretórios que você selecionar.",
+        "hostTools_discovery": "Ver capacidades do host",
+        "hostTools_discoveryDetail": "Consultar os serviços do computador executor e os grupos declarados e aprovados deste plugin. Não permite instalar, desativar nem revogar outros plugins.",
+        "hostTools_browser": "Controle do navegador",
+        "hostTools_browserDetail": "Ler e operar páginas no navegador selecionado na Cindy. Pode mudar para Meu navegador, acessar páginas com sessão iniciada e enviar arquivos.",
+        "hostTools_computer": "Controle do computador",
+        "hostTools_computerDetail": "Ver janelas e usar teclado e mouse pelas ferramentas da Cindy. Continuam valendo as permissões do sistema, a proteção de entradas sensíveis e as regras de risco.",
+        "hostTools_ssh": "Conexões SSH",
+        "hostTools_sshDetail": "Executar comandos e gerenciar suas conexões SSH configuradas. As credenciais ficam na Cindy.",
+        "hostTools_docs": "Ler e criar documentos",
+        "hostTools_docsDetail": "Usar as ferramentas de documentos da Cindy no diretório privado deste plugin.",
+        "codeDetailHostServices": "As páginas do plugin continuam isoladas. Ferramentas autorizadas operam navegadores, computadores, conexões ou documentos conforme cada permissão.",
+        "hostTools_storage": "Armazenamento e compartilhamento entre plugins",
+        "hostTools_storageDetail": "Usar o armazenamento, a Library e as mídias autorizadas deste plugin. O compartilhamento entrega uma cópia apenas entre plugins ativados que declarem storage e pertençam à mesma conta e organização. Não permite ler o armazenamento de outros plugins.",
+        "codeDetailStorage": "As operações se limitam aos dados deste plugin. O compartilhamento entrega cópias entre plugins ativados que declarem storage e pertençam à mesma conta e organização.",
+        "hostTools_files": "Arquivos em diretórios autorizados",
+        "hostTools_filesDetail": "Ler, gravar, listar e excluir arquivos e observar alterações nos diretórios que você selecionar explicitamente. Seleções anteriores não concedem acesso. Desativar o plugin encerra o acesso.",
+        "filesPickMessage": "O plugin “{{name}}” poderá ler, gravar, listar e excluir arquivos no diretório escolhido e observar alterações. Selecione um diretório ao qual você permita o acesso.",
+        "codeDetailTerminal": "As páginas do plugin são executadas em uma sandbox isolada. Os comandos autorizados são executados com suas permissões e podem acessar arquivos locais, aplicativos e redes.",
+        "hostTools_terminalDetail": "Iniciar comandos e terminais interativos com suas permissões neste computador, ler a saída, enviar entradas e parar os processos deste plugin. Os comandos podem acessar seus arquivos e aplicativos.",
         "agentHiddenTasks": "Pode criar tarefas em segundo plano ocultas da lista de tarefas",
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da busca e das notificações. Você sempre pode visualizá-las, abri-las ou exibi-las na lista de tarefas em Tarefas em segundo plano, na página deste plugin; desinstalar o plugin volta a exibi-las.",
         "agentErrand": "Criar tarefas, executar trabalho e ler resultados",
@@ -8306,6 +8366,10 @@
         "resident": "Sempre ativo (inicia ao ser ativado e mantém um processo em segundo plano mesmo quando ocioso)",
         "residentDetail": "Usa uma pequena quantidade de memória enquanto está ocioso; o processo para imediatamente quando o plugin é desativado ou desinstalado.",
         "subscribeTopics": "Observa a atividade da sua sessão (eventos de turnos e sessões, sem conteúdo das mensagens)",
+        "subscribeMessage": "Eventos de conteúdo de mensagens",
+        "subscribeMessageDetail": "Recebe mensagens salvas do usuário e respostas da IA. Os anexos são lidos e transferidos separadamente.",
+        "subscribeTaskState": "Eventos de estado de tarefas",
+        "subscribeTaskStateDetail": "Recebe alterações de execução, espera, conclusão, arquivamento e ocultação de tarefas.",
         "subscribeActivity": "Observa quando a IA está pensando e quando está esperando por você",
         "subscribeActivityDetail": "Vê apenas os momentos: quando o pensamento começa e termina e quando a IA espera sua aprovação ou resposta. Nunca vê o texto do raciocínio, a ação que aguarda aprovação, o comando ou arquivo envolvido, o plano, a pergunta ou sua resposta — e não pode aprovar nada em seu nome.",
         "subscribeHooks": "Pode ler, bloquear ou reescrever as mensagens que você envia",
@@ -8337,13 +8401,13 @@
         "badgeDetail": "Quando houver novidades, pode mostrar um ponto verde na entrada Plugins da navegação à esquerda e no próprio cartão, com um resumo de uma linha. Abrir o painel remove o ponto. O ponto não emite som, não vibra, nunca aparece na central de notificações do sistema e é uma permissão separada das dicas do sistema.",
         "confirm": "Pode pedir sua confirmação em uma caixa de diálogo",
         "confirmDetail": "Antes de agir, ele pode abrir uma caixa de diálogo com a aparência da Cindy para fazer uma pergunta. A pergunta vem do plugin, identificado pelo nome na caixa de diálogo. Só você pode confirmar ou cancelar; o plugin não pode. Só pode haver uma caixa de diálogo por vez, e perguntas frequentes demais são bloqueadas.",
-        "fsWrite": "Pode gravar arquivos (criar / modificar)",
-        "fsWriteDetail": "Sua própria pasta de dados privados sempre permite gravação. Gravações no diretório de trabalho da sessão atual seguem o modo de permissão da sessão (modos de aprovação automática gravam diretamente; modos por ação pedem sua autorização primeiro). Qualquer outra pasta sempre exige sua confirmação. Os arquivos são sempre gravados pelo host — o plugin em si nunca acessa seu sistema de arquivos.",
+        "fsWrite": "Pode gerenciar seus arquivos privados",
+        "fsWriteDetail": "Pode ler, gravar, listar e excluir seus próprios dados privados. Durante uma chamada ativa do Agent também pode ler, listar e monitorar o diretório de trabalho da tarefa. Gravações e exclusões seguem as permissões da tarefa; permitir uma gravação não permite excluir. O monitoramento termina com a chamada. O host executa todas as operações.",
         "deviceSync": "Sincronizar dados do plugin entre seus computadores",
         "deviceSyncDetail": "Troca dados deste plugin com o mesmo plugin nos seus outros computadores online conectados à mesma conta Cindy. As transferências são criptografadas. O plugin controla a mesclagem e as exclusões; nenhuma credencial ou dado de outros plugins é compartilhado.",
         "libraryPersist": "Pode usar uma biblioteca persistente (arquivos grandes e bancos de dados)",
         "libraryPersistDetail": "Recebe uma área de armazenamento gerenciada pela Cindy para seu trabalho (telas, imagens, bancos de dados), sem a cota normal de dados de plugins. Todas as operações de arquivos e bancos de dados são executadas pelo host; o plugin usa apenas caminhos relativos dentro da própria biblioteca e não pode acessar seus outros arquivos. Também pode pedir à Cindy para mostrar um arquivo da biblioteca no Finder ou Explorer, ou abrir a caixa de diálogo Salvar como do sistema para você escolher onde salvar uma cópia; cancelar Salvar como não copia nada. Também pode gravar uma imagem bitmap PNG na área de transferência do sistema sem caixa de diálogo de confirmação; isso substitui o conteúdo atual da área de transferência. Desinstalar o plugin não exclui esses dados; a exclusão exige uma confirmação separada nas configurações da Cindy.",
-        "networkHost": "Acessa o domínio de rede {{host}}",
+        "networkHost": "Acessa o destino de rede {{host}}",
         "networkSecret": "Precisa de uma credencial sua: \"{{name}}\"",
         "networkSecretGhostInputDetail": "Coletada pela interface de configurações do próprio plugin — a página do plugin vê o valor no momento da entrada. Em seguida, ele é entregue ao host em uma única etapa para armazenamento criptografado; depois de armazenado, o plugin nunca mais pode lê-lo, e o host só o injeta nos domínios declarados pelo plugin.",
         "networkSecretIdentity": "Usará seu e-mail de login como credencial \"{{name}}\"",
@@ -8352,8 +8416,8 @@
         "networkSecretGhCliDetail": "O host lê o token de login local do gh apenas quando necessário e o injeta somente em solicitações à API do GitHub; o código do plugin não pode ler nem armazenar o token. Se o gh não estiver disponível, você pode configurar um Personal Access Token alternativo nas configurações do plugin.",
         "networkSecretOrganizationIdentity": "Usará sua identidade da organização Cindy como credencial \"{{name}}\"",
         "networkSecretOrganizationIdentityDetail": "A Cindy emite uma declaração de identidade de curta duração quando necessário, e o host a envia apenas aos hosts de serviço explicitamente listados. O código do plugin não pode ler nem armazenar o token.",
-        "networkSecretOauth": "Guiará você pela autorização OAuth em {{host}} ({{name}})",
-        "networkSecretOauthDetail": "O fluxo de autorização e todos os tokens são gerenciados pelo host e nunca podem ser lidos pelo código do plugin; você fornece as credenciais do cliente na página de detalhes do plugin. Os escopos de permissão solicitados estão listados literalmente abaixo — revise-os antes de aprovar.",
+        "networkSecretOauth": "Autorizar {{name}} ou usar uma conta conectada em {{host}}",
+        "networkSecretOauthDetail": "O Cindy gerencia o login e os tokens. Você pode autorizar uma nova conta ou escolher uma conta conectada compatível. Confira os escopos abaixo; as contas conectadas mantêm suas permissões existentes.",
         "networkConnections": "Pode se conectar aos endereços de {{label}} que você adicionar",
         "networkConnectionsDetail": "Os endereços são adicionados na interface de configurações deste plugin; cada novo endereço exige sua confirmação, e a credencial fornecida é injetada apenas para o respectivo endereço.",
         "codeDetailNetwork": "É executado em uma sandbox isolada, sem acesso aos seus arquivos; o acesso à rede é limitado aos domínios listados acima, intermediado pelo host.",
@@ -8566,6 +8630,16 @@
         "browserSwitchTitle": "Trocar a conexão da extensão?",
         "browserSwitchMessage": "Usar “{{name}}” nesta conexão?",
         "browserSwitchDetail": "Instância: {{instance}}\nRegistro: {{host}}\nIsso substitui o registro atual. A extensão se conectará a este plugin.",
+        "reuseAccountTitle": "Usar uma conta ou credencial",
+        "reuseAccountDescription": "Use uma conta ou credencial salva no Cindy. O Cindy a adiciona às solicitações sem revelar o valor original ao plugin.",
+        "reuseAccountChoose": "Escolher uma conta ou credencial",
+        "reuseAccountUse": "Usar esta seleção",
+        "reuseAccountStop": "Parar de usar",
+        "reuseAccountEmpty": "Não há contas ou credenciais compatíveis salvas. Conecte uma conta ou salve uma chave nas configurações do plugin de origem.",
+        "reuseAccountUnavailable": "A conta ou credencial original está indisponível. Escolha outra origem.",
+        "reuseAccountLoadFailed": "Não foi possível carregar contas e credenciais",
+        "reuseAccountChangeFailed": "Não foi possível alterar esta seleção",
+        "reuseAccountRefresh": "Atualizar",
         "portReclaimTitle": "Encerrar o programa que usa a porta de retorno?",
         "portReclaimMessage": "“{{name}}” precisa da porta {{port}}. Encerrar o programa abaixo?",
         "portReclaimDetail": "Encerrá-lo pode interromper o trabalho do programa ou causar a perda de dados não salvos. Você pode cancelar e fechar o programa manualmente.",
@@ -9286,6 +9360,12 @@
         "failed": "Não foi possível concluir a limpeza",
         "pending": "Na fila"
       }
+    },
+    "awayFromComputer": {
+      "title": "Quando você está fora"
+    },
+    "navigation": {
+      "unavailable": "Não foi possível abrir as configurações do computador de destino. Verifique se está online e permite controle remoto; atualize o Cindy se estiver em uma versão antiga."
     }
   },
   "remoteDevice": {
@@ -9401,6 +9481,7 @@
     "backToLogin": "Voltar ao login"
   },
   "login": {
+    "networkResponseHint": "O serviço de login retornou uma resposta inesperada. Um intermediário de rede ou proxy pode estar bloqueando a solicitação. Verifique as configurações de rede e proxy.",
     "title": "Boas-vindas ao Cindy",
     "subtitle": "Escolha uma forma segura de entrar",
     "savedLoginPreserved": "A recuperação mantém seus dados de login salvos",
@@ -9747,6 +9828,7 @@
     "tokenLine": "Tokens: {{total}} no total · entrada {{input}} · saída {{output}}",
     "cacheLine": "Detalhamento do cache: leitura {{read}} · gravação {{create}} · taxa de acertos {{rate}}",
     "cacheLineNoRate": "Detalhamento do cache: leitura {{read}} · gravação {{create}}",
+    "stepsLine": "Solicitações neste turno: {{steps}} · ~{{context}} de contexto cada uma",
     "modelLine": "Modelo: {{model}}",
     "multipleModels": "{{count}} modelos",
     "costBreakdownHeader": "Por modelo:",
@@ -10509,7 +10591,7 @@
         "control-requested": "Uma solicitação de controle foi enviada pela tarefa principal.",
         "transcript-truncated": "Limite de armazenamento da transcrição atingido.",
         "turn-ended": "Turno do Subagent encerrado.",
-        "command-refused": "PI rejeitou um comando do Subagent filho.",
+        "command-refused": "PI rejeitou um comando para o Subagent filho.",
         "generation-unreadable": "Não foi possível ler uma parte anterior desta conversa."
       },
       "activityKinds": {
@@ -10873,6 +10955,15 @@
       "contents": "Contém SOUL.md, USER.md, system_prompt.md, skills/ e memories/. Modelos, permissões e conexões continuam sendo gerenciados pelo Cindy.",
       "open": "Abrir pasta",
       "openFailed": "Não foi possível abrir a pasta do amigo.",
+      "repository": {
+        "ready": "O Git está pronto",
+        "notReadyTitle": "O Git ainda não está pronto",
+        "needsIdentity": "No computador deste Amigo, abra a pasta dele e depois a subpasta workspace. Configure user.name e user.email do Git nessa pasta e tente novamente.",
+        "notReady": "A primeira versão ainda não foi salva. Tente novamente para concluir a configuração do Git.",
+        "unavailable": "Instale o Git no computador deste Amigo e tente novamente.",
+        "failed": "O Git não conseguiu ler ou salvar a primeira versão. Verifique o repositório no computador deste Amigo e tente novamente.",
+        "keepUsing": "Você pode continuar usando seu Amigo. Os arquivos e as configurações do Git existentes são preservados."
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · Organizar memória",
         "carryover": {
@@ -11222,6 +11313,9 @@
         "step": "Etapa {{step}}/{{total}}",
         "speaking": "{{name}} está respondendo…",
         "elapsed": "{{time}} até agora",
+        "onDevice": "em {{device}}",
+        "onOtherComputer": "em outro computador",
+        "onThisComputer": "neste computador",
         "viewProcess": "Mostrar trabalho",
         "hideProcess": "Ocultar trabalho",
         "stop": "Parar",
@@ -11428,6 +11522,7 @@
         "memberLimit": "Uma conversa em grupo precisa de 2 a 6 amigos",
         "memberUnavailable": "Um destes amigos está indisponível. Escolha outro e tente novamente.",
         "mentionUnavailable": "Um membro mencionado não está mais disponível. Escolha quem mencionar antes de enviar novamente.",
+        "mentionAmbiguous": "Há mais de um membro chamado “{{name}}”. Escolha quem você quer na lista de @.",
         "notFound": "Esta conversa em grupo não existe mais",
         "hostNotReady": "Cindy ainda está se preparando. Tente novamente em instantes.",
         "planOpen": "Uma divisão de trabalho está em andamento. Conclua ou pare antes de iniciar outra.",
@@ -11530,10 +11625,12 @@
         "earlierOmitted": "(Mensagens anteriores omitidas)",
         "actingFor": "{{name}} · por {{person}}",
         "checkout": {
+          "preparing": "(Cindy) O projeto {{repo}} deste grupo está sendo baixado para esta pasta neste computador e deve ficar pronto em alguns minutos. Até lá a pasta pode estar vazia: responda na hora se for só conversa; para trabalho que precise do código, espere os arquivos do projeto aparecerem.",
           "gitMissing": "(Cindy) O projeto {{repo}} do grupo ainda não está neste computador: o git não está instalado. {{guide}} Depois de instalar, mencione @Cindy de novo e o Cindy baixará o projeto e trabalhará nele.",
           "signInOpened": "(Cindy) O projeto {{repo}} do grupo ainda não está neste computador: conecte primeiro sua conta do GitHub. O Cindy abriu o login do GitHub neste computador; depois de entrar, mencione @Cindy de novo e o projeto será baixado.",
           "signIn": "(Cindy) O projeto {{repo}} do grupo ainda não está neste computador: conecte primeiro sua conta do GitHub. Entre no GitHub pelo Cindy neste computador e mencione @Cindy de novo.",
           "unavailable": "(Cindy) Não foi possível baixar o projeto {{repo}} do grupo neste computador: sua conta do GitHub talvez não tenha acesso a ele, ou a rede está indisponível. Confira se você consegue abrir o repositório no GitHub e mencione @Cindy de novo.",
+          "accessRequired": "(Cindy) Não foi possível baixar o projeto do grupo {{repo}} neste computador: o git deste computador ainda não acessa {{host}}. Clone o repositório uma vez com git neste computador (ou configure um token de acesso) e chame @Cindy de novo.",
           "installGit": {
             "darwin": "No Terminal, execute xcode-select --install e siga as instruções.",
             "win32": "Baixe o Git em https://git-scm.com/download/win e instale com as opções padrão.",
@@ -11747,7 +11844,12 @@
           "projectCaption": "Os amigos respondem e fazem as divisões do trabalho neste projeto. O repositório é compartilhado com o grupo; a pasta fica neste computador.",
           "githubRepo": "Repositório do GitHub",
           "githubRepoHint": "Digite owner/name. Computadores sem pasta escolhida usam a própria cópia deste projeto ou baixam uma.",
+          "repository": "Repositório",
+          "repositoryHint": "GitHub: digite owner/name. GitLab (inclusive próprio da empresa), CNB e outros: cole o link do repositório. Computadores sem pasta escolhida usam a própria cópia deste projeto ou baixam uma.",
+          "repositoryPlaceholder": "owner/name ou link do repositório",
           "githubRepoSaveFailed": "O repositório não foi salvo. Confira e tente de novo.",
+          "folderRepoFilled": "O repositório {{repo}} foi preenchido a partir desta pasta. Os computadores dos outros membros também vão usá-lo.",
+          "folderRepoDiffers": "Esta pasta é um projeto de {{repo}}, diferente do repositório do grupo. Este computador continua trabalhando nesta pasta.",
           "projectFolder": "Pasta neste computador",
           "projectDirAutoHint": "Encontrada entre seus projetos pelo repositório.",
           "organizerHint": "Decide quem executa cada etapa. Por padrão, essa função fica com o primeiro amigo.",
@@ -12599,7 +12701,7 @@
         "expiredCardNotice": "Este cartão expirou",
         "slash": {
           "new": "🌱 Começando do zero — limpei a conversa anterior. Vamos lá!",
-          "help": "🤖 Veja o que eu posso fazer:\n\n/new         Começar do zero (limpa o contexto da conversa atual)\n/model       Trocar de modelo\n/permission  Ajustar o modo de permissão (auto / bypass / ask etc.)\n/ctr         Controlar remotamente um espaço de trabalho no desktop (envie de novo durante o controle para trocar de sessão)\n/exctr       Encerrar o controle remoto e voltar para nossa DM no Discord\n/help        Ver o que eu posso fazer\n\nTem algo rodando que você quer parar? É só enviar `!stop` — eu interrompo a execução atual na hora e descarto também as mensagens na fila. A sessão continua lá para você retomar depois.\n\nNo mais, é só mandar mensagem. Estou ouvindo!",
+          "help": "🤖 Veja o que eu posso fazer:\n\n/new         Começar do zero (limpa o contexto da conversa atual)\n/model       Trocar de modelo\n/permission  Ajustar o modo de permissão (auto / bypass / ask etc.)\n/ctr         Controlar remotamente um projeto no desktop (envie de novo durante o controle para trocar de sessão)\n/exctr       Encerrar o controle remoto e voltar para nossa DM no Discord\n/help        Ver o que eu posso fazer\n\nTem algo rodando que você quer parar? É só enviar `!stop` — eu interrompo a execução atual na hora e descarto também as mensagens na fila. A sessão continua lá para você retomar depois.\n\nNo mais, é só mandar mensagem. Estou ouvindo!",
           "unknownCommand": "Não reconheci o comando `{{cmd}}` 🤔\nComandos que eu entendo: /new, /model, /permission, /ctr, /exctr, /help",
           "localTaskAccessUnavailable": "🔒 `{{cmd}}` não funciona em canais de servidor — ele exporia em público as sessões / projetos privados do seu desktop. Para usar, envie numa mensagem direta para mim.",
           "detachedBySlash": "🚪 Controle remoto encerrado — voltamos para nossa DM no Discord. Quando quiser controlar o desktop de novo, é só enviar /ctr.",
@@ -12679,15 +12781,15 @@
             "fullAccessCancelled": "Cancelado — as permissões atuais foram mantidas"
           },
           "control": {
-            "title": "🎮 Escolha um espaço de trabalho",
-            "emptyBody": "_Ainda não há espaços de trabalho para controlar. Abra ou crie uma sessão no desktop e volte aqui._",
-            "hint": "Escolha um espaço de trabalho para continuar; 🚪 Sair cancela.",
+            "title": "🎮 Escolha um projeto",
+            "emptyBody": "_Ainda não há projetos para controlar. Abra ou crie uma sessão no desktop e volte aqui._",
+            "hint": "Escolha um projeto para continuar; 🚪 Sair cancela.",
             "attachedSwitchHint": "🎮 Controlando agora: **{{sessionTitle}}**\nEscolha outra sessão para trocar direto; 🚪 Sair mantém tudo como está.",
             "btnExit": "🚪 Sair",
             "resolvedExit": "🚪 Saí. Quando quiser controlar remotamente de novo, é só mandar /ctr.",
             "sessionPickerTitle": "🎮 Sessões em {{displayName}}",
-            "sessionPickerHint": "Escolha uma sessão para continuar · ➕ Nova cria outra · ↩️ Voltar troca de espaço de trabalho · 🚪 Sair cancela",
-            "sessionPickerEmptyBody": "_Ainda não há sessões ativas no espaço de trabalho **{{displayName}}**. Que tal criar uma com ➕ Nova?_",
+            "sessionPickerHint": "Escolha uma sessão para continuar · ➕ Nova cria outra · ↩️ Voltar troca de projeto · 🚪 Sair cancela",
+            "sessionPickerEmptyBody": "_Ainda não há sessões ativas no projeto **{{displayName}}**. Que tal criar uma com ➕ Nova?_",
             "btnNew": "➕ Nova",
             "btnBack": "↩️ Voltar",
             "resolvedSessionPick": "🎯 Conectado: **{{sessionTitle}}** ({{workspaceName}})\nSuas mensagens agora vão direto para esta sessão. Para sair, mande `/exctr` a qualquer momento.",
@@ -12802,7 +12904,7 @@
         "slash": {
           "start": "👋 Oi, eu sou seu assistente pessoal do Cindy!\n\nNo chat privado, é só me mandar uma mensagem. Nos grupos, eu só respondo quando você me menciona com @ ou responde a uma das minhas mensagens. Envie /help para ver todos os comandos.",
           "new": "🌱 Nova sessão criada — ela já aparece na sua lista de sessões. Vamos começar do zero!",
-          "help": "🤖 Veja o que eu posso fazer por você:\n\n/new         Criar uma nova sessão (as antigas são mantidas; nos grupos, é criada para o tópico atual do grupo)\n/project     Trabalhar em uma pasta de projeto (roda aqui no bot, sem assumir o desktop)\n/session     Listar as sessões recentes do desktop; toque em uma para assumir e continuar a conversa\n/model       Colocar outro modelo em campo\n/permission  Ajustar o modo de permissão (auto / bypass / ask etc.)\n/settings    Ver o projeto, o Agent, o modelo, o esforço de raciocínio e as permissões atuais\n/ctr         Assumir remotamente um espaço de trabalho do desktop (envie de novo durante o controle para trocar de sessão)\n/exctr       Encerrar o controle e voltar para a conversa do Telegram\n/help        Ver o que eu sei fazer\n\nTem algo rodando que você quer parar? Envie /stop (ou `!stop`) — eu interrompo a execução atual na hora e também retiro as mensagens na fila. A sessão é mantida para você continuar.\n\nNo chat privado, é só me mandar uma mensagem. Nos grupos, eu só respondo quando você me menciona com @ ou responde a uma das minhas mensagens — e também lembro das mensagens recentes do grupo como contexto.",
+          "help": "🤖 Veja o que eu posso fazer por você:\n\n/new         Criar uma nova sessão (as antigas são mantidas; nos grupos, é criada para o tópico atual do grupo)\n/project     Trabalhar em uma pasta de projeto (roda aqui no bot, sem assumir o desktop)\n/session     Listar as sessões recentes do desktop; toque em uma para assumir e continuar a conversa\n/model       Colocar outro modelo em campo\n/permission  Ajustar o modo de permissão (auto / bypass / ask etc.)\n/settings    Ver o projeto, o Agent, o modelo, o esforço de raciocínio e as permissões atuais\n/ctr         Assumir remotamente um projeto do desktop (envie de novo durante o controle para trocar de sessão)\n/exctr       Encerrar o controle e voltar para a conversa do Telegram\n/help        Ver o que eu sei fazer\n\nTem algo rodando que você quer parar? Envie /stop (ou `!stop`) — eu interrompo a execução atual na hora e também retiro as mensagens na fila. A sessão é mantida para você continuar.\n\nNo chat privado, é só me mandar uma mensagem. Nos grupos, eu só respondo quando você me menciona com @ ou responde a uma das minhas mensagens — e também lembro das mensagens recentes do grupo como contexto.",
           "unknownCommand": "Não reconheci o comando `{{cmd}}` 🤔\nComandos que eu entendo: /new, /session, /project, /model, /permission, /settings, /ctr, /exctr, /stop, /help",
           "settings": "⚙️ Configurações atuais\n\nProjeto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nEsforço de raciocínio: {{effort}}\nPermissões: {{permission}}\n\nPara mudar, envie /project, /model ou /permission.",
           "settingsCompanion": "⚙️ Configurações atuais (colega)\n\nProjeto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nEsforço de raciocínio: {{effort}}\nPermissões: {{permission}}\n\nO modelo, as permissões e o diretório de trabalho seguem as configurações do colega. Altere-os nas configurações do colega no Cindy.",
@@ -12905,15 +13007,15 @@
             "dialogueName": "Conversa (pasta gerenciada)"
           },
           "control": {
-            "title": "🎮 Escolha um espaço de trabalho",
-            "emptyBody": "_Ainda não há espaços de trabalho para assumir. Abra ou crie uma sessão no desktop e depois volte._",
-            "hint": "Toque em um espaço de trabalho para seguir; toque em 🚪 Sair para cancelar",
+            "title": "🎮 Escolha um projeto",
+            "emptyBody": "_Ainda não há projetos para assumir. Abra ou crie uma sessão no desktop e depois volte._",
+            "hint": "Toque em um projeto para seguir; toque em 🚪 Sair para cancelar",
             "attachedSwitchHint": "🎮 Controlando agora: **{{title}}**\nEscolha outra sessão para trocar direto; toque em 🚪 Sair para deixar como está",
             "btnExit": "🚪 Sair",
             "resolvedExit": "🚪 Saí. Da próxima vez que quiser controle remoto, envie /ctr",
             "sessionPickerTitle": "🎮 Sessões em {{name}}",
-            "sessionPickerHint": "Escolha uma sessão para continuar · ➕ Nova para uma nova sessão · ↩️ Voltar para trocar de espaço de trabalho · 🚪 Sair para cancelar",
-            "sessionPickerEmptyBody": "_O espaço de trabalho **{{name}}** ainda não tem sessões ativas. Que tal tocar em ➕ Nova para abrir uma?_",
+            "sessionPickerHint": "Escolha uma sessão para continuar · ➕ Nova para uma nova sessão · ↩️ Voltar para trocar de projeto · 🚪 Sair para cancelar",
+            "sessionPickerEmptyBody": "_O projeto **{{name}}** ainda não tem sessões ativas. Que tal tocar em ➕ Nova para abrir uma?_",
             "btnNew": "➕ Nova",
             "btnBack": "↩️ Voltar",
             "resolvedSessionPick": "🎯 Você entrou: **{{title}}** ({{workspace}})\nSuas mensagens agora vão direto para esta sessão; para sair, envie `/exctr` quando quiser",
@@ -12922,7 +13024,7 @@
             "sessionBusyOldCardPlaceholder": "⏳ Essa sessão ainda está rodando — abaixo tem um cartão novo, escolha de novo",
             "recentSessions": {
               "title": "🕑 Sessões recentes",
-              "hint": "Toque em uma para assumir e continuar a conversa (ordenadas por data entre espaços de trabalho) · Para escolher por espaço de trabalho, use /ctr · 🚪 Sair para cancelar",
+              "hint": "Toque em uma para assumir e continuar a conversa (ordenadas por data entre projetos) · Para escolher por projeto, use /ctr · 🚪 Sair para cancelar",
               "emptyBody": "_Ainda não há sessões ativas no desktop. Comece uma lá primeiro e depois volte._"
             },
             "sessionBusyPrompts": {
@@ -13080,18 +13182,18 @@
           "permissionTimeout": "O tempo de espera pela autorização esgotou. A solicitação de permissão foi negada."
         },
         "run": {
-          "routeReselectHint": ". Escolha novamente um modelo para o diretório de trabalho deste canal em Configurações → Bots de mensagens.",
+          "routeReselectHint": ". Escolha novamente um modelo para o projeto deste canal em Configurações → Bots de mensagens.",
           "awaitingPermission": "Aguardando autorização · precisa da sua confirmação",
           "awaitingAnswer": "Aguardando resposta · precisa da sua escolha",
           "awaitingPlan": "Aguardando revisão · você precisa confirmar o plano",
           "awaitingFallback": "Aguardando sua confirmação",
           "cancelledBeforeRun": "A tarefa foi interrompida pelo usuário, então esta mensagem não foi executada.",
-          "liveSessionDirUnmapped": "Esta tarefa está sendo executada em um diretório que não está mais nos mapeamentos de diretórios de trabalho, então esta mensagem não foi executada. Adicione esse diretório em Configurações → Conexão remota → Mapeamentos de diretórios de trabalho, ou feche esta tarefa no app para desktop e reenvie.",
+          "liveSessionDirUnmapped": "Esta tarefa está sendo executada em um diretório que não pertence mais a nenhum projeto, então esta mensagem não foi executada. Adicione esse diretório como projeto na barra lateral, ou feche esta tarefa no app para desktop e reenvie.",
           "interactionExpired": "A tarefa terminou, então esta interação não é mais válida.",
           "telegramOfficialBot": "bot oficial do Telegram"
         },
         "dispatch": {
-          "dirUnmapped": "O diretório desta tarefa não está mais nos mapeamentos de diretórios de trabalho, então esta mensagem não foi executada. Adicione o diretório em Configurações → Conexão remota → Mapeamentos de diretórios de trabalho e depois envie-a novamente."
+          "dirUnmapped": "O diretório desta tarefa não pertence mais a nenhum projeto, então esta mensagem não foi executada. Adicione o diretório como projeto na barra lateral e depois envie-a novamente."
         }
       },
       "wecom": {
@@ -13177,9 +13279,9 @@
             "fullAccessCancelled": "Cancelado. As permissões atuais foram mantidas"
           },
           "control": {
-            "title": "🎮 Escolher espaço de trabalho",
-            "emptyBody": "_Ainda não há espaços de trabalho para controlar. Crie primeiro uma tarefa no Cindy Desktop._",
-            "hint": "Escolha um espaço de trabalho para continuar ou saia.",
+            "title": "🎮 Escolher projeto",
+            "emptyBody": "_Ainda não há projetos para controlar. Crie primeiro uma tarefa no Cindy Desktop._",
+            "hint": "Escolha um projeto para continuar ou saia.",
             "attachedSwitchHint": "Controlando agora: **{{sessionTitle}}**",
             "btnExit": "🚪 Sair",
             "resolvedExit": "🚪 Você saiu do controle remoto",
@@ -13241,7 +13343,7 @@
       "feishu": {
         "slash": {
           "new": "🌱 Novo começo — apaguei a conversa anterior. Vamos recomeçar!",
-          "help": "🤖 Veja o que eu posso fazer:\n\n/new         Começar do zero (limpa o contexto da conversa atual)\n/model       Trocar de modelo\n/permission  Ajustar o modo de permissão (auto / bypass / ask etc.)\n/ctr         Controlar remotamente um espaço de trabalho do app desktop (envie de novo durante o controle para trocar de sessão)\n/exctr       Encerrar o controle remoto e voltar para a nossa conversa privada\n/help        Ver o que eu sei fazer\n\nQuer parar algo que está rodando? É só enviar `!stop`: eu interrompo a execução atual na hora e descarto as mensagens na fila. A sessão continua lá para você retomar.\n\nNo mais, é só mandar mensagem — estou ouvindo~",
+          "help": "🤖 Veja o que eu posso fazer:\n\n/new         Começar do zero (limpa o contexto da conversa atual)\n/project     Trabalhar em uma pasta de projeto (roda aqui no bot, sem assumir o desktop)\n/model       Trocar de modelo\n/permission  Ajustar o modo de permissão (auto / bypass / ask etc.)\n/ctr         Controlar remotamente um projeto do app desktop (envie de novo durante o controle para trocar de sessão)\n/exctr       Encerrar o controle remoto e voltar para a nossa conversa privada\n/help        Ver o que eu sei fazer\n\nQuer parar algo que está rodando? É só enviar `!stop`: eu interrompo a execução atual na hora e descarto as mensagens na fila. A sessão continua lá para você retomar.\n\nNo mais, é só mandar mensagem — estou ouvindo~",
           "unknownCommand": "Não reconheci o comando `{{cmd}}` 🤔\nComandos que eu entendo: /new, /model, /permission, /ctr, /exctr, /help",
           "detachedBySlash": "🚪 Controle remoto encerrado — voltamos para a nossa conversa privada. Quando quiser controlar o app desktop de novo, é só mandar /ctr",
           "detachedByRevoke": "⚠️ Você encerrou o controle remoto no app desktop. As próximas mensagens voltam para a nossa conversa privada.",
@@ -13339,15 +13441,28 @@
             "resolved": "✅ Trocado para “Revisão automática” — volte ao grupo e continue mandando mensagens~",
             "failed": "❌ Não foi possível trocar: {{reason}}. Você pode enviar /permission auto para trocar manualmente"
           },
+          "project": {
+            "title": "📂 Trocar a pasta do projeto",
+            "hint": "**Atual**: {{name}}\nEscolha um projeto e as próximas mensagens vão trabalhar nessa pasta (o contexto recomeça; as configurações de modelo e permissão são mantidas)",
+            "emptyBody": "_Ainda não há espaços de trabalho de projeto ativos no desktop. Abra um projeto no desktop primeiro e depois volte._",
+            "btnDialogue": "💬 Voltar à conversa",
+            "btnCancel": "🚪 Deixa pra lá",
+            "resolvedPick": "📂 Trocado para **{{name}}** — o novo contexto está pronto, envie uma instrução para começar. Para voltar à conversa normal, envie /project e escolha “Voltar à conversa”",
+            "resolvedDialogue": "💬 De volta à pasta de conversa, o contexto recomeça.",
+            "resolvedCancel": "🚪 Nada mudou, tudo continua como estava",
+            "switchFailed": "❌ Não foi possível trocar: {{reason}} (a pasta pode ter sido movida ou excluída)",
+            "attachedUnsupported": "🎮 Você está controlando uma sessão do desktop pelo /ctr — durante o controle, as mensagens vão direto para essa sessão, então não precisa de /project. Para trocar de projeto, saia primeiro do controle com `/exctr`",
+            "dialogueName": "Conversa (pasta gerenciada)"
+          },
           "control": {
-            "title": "🎮 Escolha um espaço de trabalho",
-            "emptyBody": "_Ainda não há espaços de trabalho para controlar~ Abra ou crie uma sessão no app desktop e volte aqui_",
-            "hint": "Toque em um espaço de trabalho para continuar; toque em 🚪 Sair para cancelar",
+            "title": "🎮 Escolha um projeto",
+            "emptyBody": "_Ainda não há projetos para controlar~ Abra ou crie uma sessão no app desktop e volte aqui_",
+            "hint": "Toque em um projeto para continuar; toque em 🚪 Sair para cancelar",
             "attachedSwitchHint": "🎮 Controlando agora: **{{title}}**\nEscolha outra sessão para trocar direto; toque em 🚪 Sair para manter como está",
             "btnExit": "🚪 Sair",
             "resolvedExit": "🚪 Saí. Na próxima vez que quiser controlar remotamente, é só mandar /ctr",
             "sessionPickerTitle": "🎮 Sessões em {{workspace}}",
-            "sessionPickerHint": "Escolha uma sessão para continuar · ➕ Nova para criar outra · ↩️ Voltar para trocar de espaço de trabalho · 🚪 Sair para cancelar",
+            "sessionPickerHint": "Escolha uma sessão para continuar · ➕ Nova para criar outra · ↩️ Voltar para trocar de projeto · 🚪 Sair para cancelar",
             "sessionPickerEmptyBody": "_Ainda não há sessões ativas em **{{workspace}}**~ Que tal tocar em ➕ Nova para abrir uma?_",
             "btnNew": "➕ Nova",
             "btnBack": "↩️ Voltar",
@@ -13392,7 +13507,7 @@
       "wechat": {
         "slash": {
           "new": "🌱 Novo começo — a conversa anterior foi apagada. Vamos começar do zero~",
-          "help": "🤖 Veja o que eu posso fazer:\n\n/new         Começar do zero (limpa o contexto da conversa atual)\n/model       Trocar de modelo\n/permission  Ajustar o modo de permissão (auto / bypass / ask etc.)\n/ctr         Controlar remotamente um espaço de trabalho no app desktop (envie de novo durante o controle para trocar de sessão)\n/exctr       Encerrar o controle e voltar para a nossa conversa privada no WeChat\n/help        Ver o que eu sei fazer\n\nTem algo rodando que você quer parar? É só enviar `!stop`: eu interrompo a execução atual na hora e descarto as mensagens na fila. A sessão continua, então você pode retomar depois.\n\nNo mais, é só mandar mensagem. Estou ouvindo~",
+          "help": "🤖 Veja o que eu posso fazer:\n\n/new         Começar do zero (limpa o contexto da conversa atual)\n/model       Trocar de modelo\n/permission  Ajustar o modo de permissão (auto / bypass / ask etc.)\n/ctr         Controlar remotamente um projeto no app desktop (envie de novo durante o controle para trocar de sessão)\n/exctr       Encerrar o controle e voltar para a nossa conversa privada no WeChat\n/help        Ver o que eu sei fazer\n\nTem algo rodando que você quer parar? É só enviar `!stop`: eu interrompo a execução atual na hora e descarto as mensagens na fila. A sessão continua, então você pode retomar depois.\n\nNo mais, é só mandar mensagem. Estou ouvindo~",
           "unknownCommand": "Não reconheci o comando `{{cmd}}` 🤔\nComandos que eu entendo: /new, /model, /permission, /ctr, /exctr, /help",
           "detachedBySlash": "🚪 Controle remoto encerrado — voltamos à nossa conversa privada no WeChat. Quando quiser controlar o app desktop de novo, envie /ctr",
           "detachedByRevoke": "⚠️ Você retomou o controle no app desktop. As próximas mensagens voltam para a nossa conversa privada no WeChat.",
@@ -13476,14 +13591,14 @@
             "fullAccessCancelled": "Cancelado. As permissões atuais foram mantidas"
           },
           "control": {
-            "title": "🎮 Escolha um espaço de trabalho",
-            "emptyBody": "_Ainda não há espaços de trabalho para assumir~ Abra ou crie uma sessão no app desktop e volte depois_",
-            "hint": "Toque em um espaço de trabalho para continuar; toque em 🚪 Sair para cancelar",
+            "title": "🎮 Escolha um projeto",
+            "emptyBody": "_Ainda não há projetos para assumir~ Abra ou crie uma sessão no app desktop e volte depois_",
+            "hint": "Toque em um projeto para continuar; toque em 🚪 Sair para cancelar",
             "attachedSwitchHint": "🎮 Controlando agora: **{{sessionTitle}}**\nEscolha uma nova sessão para trocar; toque em 🚪 Sair para manter como está",
             "btnExit": "🚪 Sair",
             "resolvedExit": "🚪 Saí. Envie /ctr quando quiser controlar remotamente de novo",
             "sessionPickerTitle": "🎮 Sessões em {{displayName}}",
-            "sessionPickerHint": "Escolha uma sessão para continuar · ➕ Nova para começar outra · ↩️ Voltar para trocar de espaço de trabalho · 🚪 Sair para cancelar",
+            "sessionPickerHint": "Escolha uma sessão para continuar · ➕ Nova para começar outra · ↩️ Voltar para trocar de projeto · 🚪 Sair para cancelar",
             "sessionPickerEmptyBody": "_Ainda não há sessões ativas em **{{displayName}}**~ Que tal tocar em ➕ Nova para criar uma?_",
             "btnNew": "➕ Nova",
             "btnBack": "↩️ Voltar",
@@ -13534,6 +13649,15 @@
           "askNoQuestion": "O Agent está esperando sua resposta, mas não há nenhuma pergunta para mostrar. Responda “continuar”.",
           "askQuestion": "O Agent precisa da sua resposta:\n{{question}}\n{{options}}\nResponda com o número de uma opção ou digite sua resposta."
         }
+      },
+      "questions": {
+        "cardHint": "Só quem fez o pedido pode responder. Toque em uma opção; para várias perguntas ou seleções, envie ao terminar. Você também pode responder a esta mensagem com texto. Para várias perguntas, responda “número: resposta” (ex.: “2: Português”) e depois envie.",
+        "submitLabel": "Enviar respostas",
+        "multiSelectHint": " (pode escolher mais de uma)",
+        "resolved": "✅ Selecionado: {{option}}",
+        "expired": "Este cartão expirou",
+        "textHint": "Só quem fez a consulta pode responder. Envie {{code}} seguido da resposta. Para várias perguntas: {{code}} 2: resposta; depois {{code}} OK para enviar.",
+        "replyHint": "Só quem fez o pedido pode responder. Toque em uma opção; para várias perguntas ou seleções, envie ao terminar.\nEnvie {{code}} seguido da resposta. Para várias perguntas: {{code}} 2: resposta; depois {{code}} OK para enviar."
       }
     }
   },
@@ -13960,6 +14084,7 @@
         "realtime": "Áudio em tempo real",
         "embedding": "Embeddings",
         "decision": "Decisão",
+        "rerank": "Reordenação",
         "compression": "Compressão",
         "ungrouped": "Sem grupo",
         "other": "Outro"
@@ -14107,7 +14232,7 @@
       "notGitRepo": "O diretório atual não é um repositório git",
       "alreadyInWorktree": "Já está dentro de um worktree; não é permitido aninhar",
       "toggleAria": "Usar isolamento por worktree",
-      "chipTooltip": "Iniciar esta conversa em um worktree isolado sem alterar a branch atual"
+      "chipTooltip": "Comece em uma cópia separada do projeto sem afetar seus arquivos, alterações ou outras sessões"
     },
     "branchChip": {
       "label": "Branch",
@@ -14489,6 +14614,81 @@
       "later": "Mais tarde",
       "ready": "As páginas interativas estão ativadas para a próxima chamada de ferramenta do plugin.",
       "updateHost": "Atualize o Cindy no computador de execução para aprovar páginas interativas aqui."
+    },
+    "checkout": {
+      "useWorktree": "Usar worktree",
+      "switched": "Alterado para {{branch}}",
+      "stashed": " · Alterações salvas",
+      "carried": " · Alterações transferidas",
+      "fetched": "{{count}} novos commits obtidos de {{branch}}",
+      "sessionsContinue": "{{names}} também continuará em {{branch}} na próxima vez.",
+      "undo": "Desfazer",
+      "savedChanges": "Há alterações guardadas para {{branch}}.",
+      "restore": "Restaurar alterações",
+      "undone": "Mudança de branch desfeita",
+      "restored": "Alterações guardadas restauradas",
+      "title": "Mudar para {{branch}}",
+      "dirtyDescription": "{{branch}} tem alterações sem commit em {{count}} arquivos",
+      "dirtyDescription_one": "{{branch}} tem alterações sem commit em {{count}} arquivo",
+      "dirtyDescription_other": "{{branch}} tem alterações sem commit em {{count}} arquivos",
+      "dirtyDescription_many": "{{branch}} tem alterações sem commit em {{count}} arquivos",
+      "carry": "Levar as alterações para {{branch}}",
+      "stash": "Salvar primeiro",
+      "idleSessions": "{{count}} sessões seguirão a mudança de branch",
+      "errors": {
+        "busy": "Há uma sessão em execução aqui. Não é possível alternar o branch agora",
+        "operation": "As alterações dos branches estão sendo combinadas. Conclua essa operação antes de alternar",
+        "occupied": "{{branch}} já está aberto em outro Worktree e não pode ser usado aqui",
+        "changed": "A branch ou as alterações mudaram. Verifique o diretório antes de tentar novamente",
+        "undoChanged": "A branch ou as alterações mudaram. Verifique o diretório. Só é possível desfazer enquanto estiver na branch de destino.",
+        "restoreChanged": "A branch atual mudou. Volte à branch onde salvou essas alterações antes de restaurá-las",
+        "conflict": "Estas alterações entram em conflito com a branch de destino. Guarde-as primeiro ou use worktree.",
+        "ignored": "Mudar para {{branch}} sobrescreveria arquivos ou pastas locais, incluindo {{file}} ({{count}} no total). A mudança foi interrompida.",
+        "dirty": "Há novas alterações sem commit. Resolva-as antes de restaurar.",
+        "diverged": "As branches local e remota têm alterações diferentes. Resolva as diferenças antes de mudar de branch.",
+        "missing": "A branch selecionada não existe mais. Atualize a lista.",
+        "git": "Não foi possível concluir. Confira o branch atual e as alterações salvas antes de tentar novamente",
+        "savedMissing": "Estas alterações salvas não estão mais disponíveis",
+        "undoUnavailable": "Esta troca de branch não pode mais ser desfeita"
+      },
+      "carryDescription": "Levar as alterações e continuar editando em {{branch}}",
+      "stashDescription": "Salvar as alterações para deixar {{branch}} limpo; restaurá-las ao voltar para {{current}}",
+      "carryConflict": "As alterações entram em conflito com {{branch}} e não podem ser levadas",
+      "newFile": "Novo arquivo",
+      "deletedFile": "Excluído",
+      "dialogSessions": "“{{name}}” e {{count}} sessões no total usam este diretório e continuarão em {{branch}}",
+      "dialogSessions_one": "“{{name}}” também usa este diretório e continuará em {{branch}}",
+      "dialogSessions_other": "“{{name}}” e {{count}} sessões no total usam este diretório e continuarão em {{branch}}",
+      "dialogSessions_many": "“{{name}}” e {{count}} sessões no total usam este diretório e continuarão em {{branch}}",
+      "moreFiles": "Mais {{count}} arquivos",
+      "moreFiles_one": "Mais {{count}} arquivo",
+      "moreFiles_other": "Mais {{count}} arquivos",
+      "moreFiles_many": "Mais {{count}} arquivos",
+      "question": "O que fazer com as alterações?",
+      "noLoss": "As alterações serão mantidas",
+      "worktree": "Manter tudo, usar worktree",
+      "worktreeDescription": "Começar de {{branch}} em uma cópia separada, sem alterar esta",
+      "carryConfirm": "Mudar com as alterações",
+      "stashConfirm": "Salvar e mudar",
+      "startWorktree": "Começar com worktree",
+      "showFiles": "Ver",
+      "hideFiles": "Recolher",
+      "running": "Em execução",
+      "runningTitle": "{{count}} sessões estão em execução aqui",
+      "runningTitle_one": "“{{name}}” está em execução aqui",
+      "runningTitle_other": "{{count}} sessões estão em execução aqui",
+      "runningTitle_many": "{{count}} sessões estão em execução aqui",
+      "runningWait": "Espere todas terminarem para mudar de branch.",
+      "runningWait_one": "Espere terminar para mudar de branch.",
+      "runningWait_other": "Espere todas terminarem para mudar de branch.",
+      "runningWait_many": "Espere todas terminarem para mudar de branch.",
+      "idleSessions_one": "“{{name}}” seguirá a mudança de branch",
+      "idleSessions_other": "{{count}} sessões seguirão a mudança de branch",
+      "idleSessions_many": "{{count}} sessões seguirão a mudança de branch",
+      "runningWithWorktree": "Espere todas terminarem para mudar de branch. Com worktree, comece agora em uma cópia separada, sem interferências.",
+      "runningWithWorktree_one": "Espere terminar para mudar de branch. Com worktree, comece agora em uma cópia separada, sem interferências.",
+      "runningWithWorktree_other": "Espere todas terminarem para mudar de branch. Com worktree, comece agora em uma cópia separada, sem interferências.",
+      "runningWithWorktree_many": "Espere todas terminarem para mudar de branch. Com worktree, comece agora em uma cópia separada, sem interferências."
     }
   },
   "onboarding": {
@@ -15625,7 +15825,9 @@
       "REMOTE_AGENT_NOT_FOUND": "Esta sessão já foi encerrada no computador que executa o Agent. Envie sua mensagem novamente.",
       "REMOTE_AGENT_BUSY": "Há sessões demais em execução no outro computador. Encerre algumas e tente novamente.",
       "REMOTE_AGENT_UNSUPPORTED": "Este Agent não está disponível no outro computador. Instale-o ou entre na conta dele lá, ou escolha outro Agent.",
+      "REMOTE_AGENT_RESUME_UNAVAILABLE": "Este computador não consegue restaurar o estado anterior da sessão. Selecione um modelo de outro computador ou provedor para continuar com uma transferência de contexto. As mensagens existentes são mantidas.",
       "REMOTE_AGENT_INVALID": "Ocorreu um erro na comunicação com o computador que executa o Agent. Tente novamente; se o problema persistir, atualize o Cindy nos dois computadores.",
+      "REMOTE_AGENT_RESUME_REJECTED": "O computador que executa o modelo não consegue retomar esta sessão. Crie uma nova sessão pela lista de sessões e copie o conteúdo necessário para continuar. A sessão original e as mensagens na fila são mantidas.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo atingiu o limite de compartilhamento definido pelo proprietário. Escolha outro modelo disponível para continuar.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não liberou para você este provedor ou o modelo selecionado. Se for seu próprio computador, ative “Permitir que meus outros computadores usem os modelos deste” na conexão remota dele. Se alguém compartilhou com você, peça ao proprietário para ajustar o acesso em Acesso remoto e compartilhamento. Você também pode escolher outro modelo.",
       "REMOTE_AGENT_FORK_FAILED": "O computador que executa o Agent não conseguiu iniciar uma nova sessão a partir daqui. Tente novamente ou tente outra mensagem.",
@@ -16123,6 +16325,8 @@
       "claudeSubscriptionWorkspaceOverride": "As configurações .claude desta pasta alteram para onde o Claude envia solicitações ou como ele faz login, então a assinatura do Claude não pode ser usada aqui. Remova essas configurações ou escolha um modelo com gateway ou chave de API",
       "deviceStillLoading": "O dispositivo remoto ainda está carregando. Aguarde",
       "remoteDefaultsLoadFailed": "Não foi possível carregar as configurações do dispositivo remoto. Verifique a conexão; o Cindy está tentando novamente.",
+      "branchChanged": "O projeto agora está em {{branch}}. Confira e envie novamente.",
+      "branchCheckFailed": "Não foi possível verificar a branch atual. Ative worktree para usar a branch selecionada ou verifique o projeto e tente novamente.",
       "worktreeMissingRepo": "Não é possível criar um worktree: a raiz do repositório do diretório atual está ausente",
       "worktreeRepoHint": "Tente selecionar o diretório de trabalho novamente e tente outra vez quando o indicador de pasta no canto inferior direito for atualizado",
       "sessionInactive": "A sessão não está mais ativa",
@@ -16705,6 +16909,8 @@
             "title": "Eventos dos repositórios",
             "description": "Conecte a GitHub App da Cindy para atualizar os PRs acompanhados quando as revisões ou a CI mudarem.",
             "connected": "Conectado como {{login}} · Repositórios acompanhados: {{count}}",
+            "syncing": "Sincronizando repositórios…",
+            "finishInBrowser": "Conclua a configuração dos repositórios no GitHub e volte ao Cindy.",
             "missing": "Verifique a instalação do App e o acesso a: {{repositories}}",
             "error": "Não foi possível verificar a conexão. Tente novamente.",
             "repositories": "Escolher repositórios",
@@ -17238,7 +17444,9 @@
         "saveAria": "Salvar automação",
         "createAria": "Criar automação",
         "namePlaceholder": "Dê um nome a esta automação",
-        "promptPlaceholder": "Exemplo: encontre novas falhas no Sentry e resuma as principais regressões."
+        "promptPlaceholder": "Exemplo: encontre novas falhas no Sentry e resuma as principais regressões.",
+        "expandPrompt": "Editar em grande",
+        "collapsePrompt": "Recolher"
       },
       "executionMode": {
         "label": "Execução",
@@ -17286,9 +17494,8 @@
         "automatic": "Automática",
         "manually": "Manualmente",
         "session": "Sessão",
-        "silentRun": "Não notificar quando as verificações não encontrarem nada",
-        "silentRunTooltip": "Relate apenas alterações ou problemas. Desative para lembretes e mensagens agendadas.",
-        "silentRunInfoAria": "Ver regras de execução silenciosa",
+        "silentRun": "Execução silenciosa",
+        "silentRunTooltip": "Quando ativada, execuções bem-sucedidas não notificam por padrão. Se o prompt da tarefa pedir aviso em condições específicas, a IA avisará quando elas forem atendidas. Falhas e erros continuam sendo notificados.",
         "finishSendToFeishu": "Enviar ao FeishuBot ao concluir",
         "finishSendToWecomGroup": "Enviar resultado ao grupo do WeCom",
         "configWecomGroup": "Configurar notificações do grupo do WeCom",
@@ -17398,10 +17605,7 @@
       },
       "layout": {
         "content": "O que executar",
-        "notifications": "Notificações e execução silenciosa",
-        "contentTab": "Conteúdo e gatilho",
-        "optionsTab": "Opções de execução",
-        "sections": "Configurações de automação"
+        "notifications": "Notificações e execução silenciosa"
       },
       "webhook": {
         "quotaHint": "Os recebimentos de Webhook têm limite diário, e filtrar aqui não reduz a contagem. No remetente, como o GitHub, selecione apenas os eventos necessários.",
@@ -17477,6 +17681,19 @@
         "repositoriesLabel": "Repositórios",
         "repositoriesHint": "Insira owner/repository, um por linha. Apenas os repositórios autorizados para esta GitHub App podem iniciar a tarefa.",
         "repositoriesInvalid": "Insira de 1 a 50 nomes de repositório válidos no formato owner/repository.",
+        "connectAccount": "Conectar conta",
+        "connectionLabel": "Método de conexão",
+        "cindyConnection": "Conectar pela Cindy (recomendado)",
+        "manualConnection": "Configurar Webhook manualmente",
+        "cindyConnectionHint": "Receba eventos pela GitHub App. Conecte sua conta e autorize repositórios, sem copiar um URL de recebimento ou segredo.",
+        "manualConnectionHint": "Insira o URL de recebimento e o segredo fornecidos pela Cindy nas configurações do repositório GitHub.",
+        "manualSetupHint": "Depois de salvar, obtenha o URL de recebimento e o segredo nos detalhes da automação e conclua a conexão nas configurações do repositório GitHub.",
+        "accountLabel": "Conta GitHub",
+        "accountDisconnected": "O GitHub não está conectado. Conecte sua conta primeiro.",
+        "authorizeRepositories": "Autorizar repositórios",
+        "appUnavailable": "A conexão com a GitHub App não está disponível aqui. Você pode configurar um Webhook manualmente.",
+        "cindyConnectionTitle": "GitHub · Conexão pela Cindy",
+        "manualConnectionTitle": "GitHub · Webhook manual",
         "githubAppHint": "Conecte a GitHub App no computador que executa esta tarefa e autorize esses repositórios. Não é necessário um URL de Webhook ou segredo separado.",
         "githubAppPaused": "Esta tarefa está pausada. Os eventos não a iniciarão."
       },
@@ -17700,6 +17917,7 @@
       "copied": "{{label}} copiado",
       "copyFailed": "Não foi possível copiar {{label}}. Selecione o conteúdo e copie manualmente.",
       "urlUnavailable": "O endereço de recebimento não está disponível agora.",
+      "unsupportedFormat": "Esta versão não oferece suporte ao formato deste remetente.",
       "quotaNotifyTitle": "Limite de recebimentos de Webhook atingido",
       "quotaExhausted": "Os {{limit}} recebimentos de Webhook de hoje acabaram e voltam às {{time}}. Até lá, eventos externos não acionarão tarefas. Execuções agendadas e o uso do modelo não são afetados.",
       "signedOut": "Entre na sua conta Cindy para retomar o recebimento. Suas configurações foram mantidas.",
@@ -19112,6 +19330,8 @@
       "agentLabel": "Agent",
       "permissionLabel": "Modo de permissão",
       "noAvailableModels": "Nenhum modelo {{agent}} disponível. Verifique a conexão e as credenciais do provedor em Configurações.",
+      "savedModelUnavailable": "O modelo salvo ou sua origem não está disponível.",
+      "reselectModel": "Escolher um modelo",
       "effortLabel": "Esforço de raciocínio",
       "initialTaskLabel": "Tarefa inicial",
       "initialTaskPlaceholder": "Escreva a primeira coisa a passar para ele ou deixe em branco para o Lead distribuir o trabalho",
@@ -21008,6 +21228,10 @@
       "description": "Escolha o que transferir de “{{name}}” para este computador. As configurações que você já mudou neste computador são mantidas.",
       "partial": "Parte do conteúdo daquele computador não pôde ser lida desta vez. Abaixo aparece apenas o que foi lido.",
       "groupCount": "{{selected}} de {{total}} selecionados",
+      "groupCount_one": "{{selected}} de {{total}} selecionado",
+      "groupCount_zero": "{{selected}} de {{total}} selecionados",
+      "groupCount_many": "{{selected}} de {{total}} selecionados",
+      "groupCount_other": "{{selected}} de {{total}} selecionados",
       "present_one": "Mais {{count}} item já é igual aqui",
       "present_other": "Mais {{count}} itens já são iguais aqui",
       "present_many": "Mais {{count}} itens já são iguais aqui",
@@ -21495,6 +21719,30 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "placement": {
+      "needsUpdate": "É preciso atualizar o Cindy no computador que executa esta operação para mover contas assim.",
+      "moveTo": "Mover para…",
+      "separate": "Provedor separado",
+      "moveTitle": "Mover {{name}} para {{target}}?",
+      "takeOutTitle": "Transformar {{name}} em um provedor separado?",
+      "moveDescription": "Só muda o provedor ao qual esta conta pertence. O acesso e o histórico são mantidos, e as tarefas existentes continuam usando esta conta.",
+      "moveConfirm": "Mover",
+      "failed": "Não foi possível mudar o provedor da conta. Tente novamente mais tarde.",
+      "mergeInto": "Juntar a…",
+      "mergeTitle": "Juntar {{name}} a {{target}}?",
+      "mergeDescription": "Todas as contas deste provedor passam para o outro provedor, e este deixa de aparecer na lista de provedores e para novas tarefas. As tarefas existentes mantêm suas contas.",
+      "mergeConfirm": "Juntar",
+      "deleteTitle": "Excluir {{name}}?",
+      "deleteDescription": "O Cindy deixa de usar as contas deste provedor. Os acessos pela CLI e o histórico de conversas continuam neste computador.",
+      "deleteConfirm": "Excluir",
+      "deleteInUse": "Uma tarefa está usando uma conta deste provedor. Exclua-o quando a tarefa terminar.",
+      "signInQuestion": "Onde colocar a nova conta?",
+      "signInSeparate": "Como provedor separado",
+      "signInSeparateHint": "Escolha-o em uma nova tarefa para sempre usar esta conta.",
+      "signInInto": "Adicionar a {{name}}",
+      "signInContinue": "Continuar para o login",
+      "signInBack": "Voltar"
+    },
     "loginIdentityUnknown": "Não foi possível confirmar a identidade original desta conta. Use Adicionar conta para conectar uma nova conta.",
     "loginExpiresInDays": "O login expira em cerca de {{days}} dias",
     "loginExpiresSoon": "O login expira em breve",
@@ -21509,10 +21757,9 @@
     "providerManagedAuth": "O provedor atual do Codex não disponibiliza informações da conta do ChatGPT. Ao adicionar o provedor, selecione “$t(subscriptionAccounts.signIn.anotherAccount)” para usar uma pasta separada.",
     "signIn": {
       "checking": "Verificando a conta local…",
-      "detected": "Conta conectada encontrada",
-      "useAccount": "Usar esta conta",
+      "useAccount": "Usar a conta do {{cli}} neste computador",
       "anotherAccount": "Entrar com outra conta",
-      "keepExisting": "A nova conta será adicionada a este provedor. Os acessos existentes serão mantidos.",
+      "keepExisting": "A nova conta vira um provedor separado, a menos que você escolha um para juntá-la. Os acessos existentes serão mantidos.",
       "checkFailed": "Não foi possível verificar a conta local. Tente novamente.",
       "retry": "Tentar novamente",
       "useCodex": "Entrar com o Codex"
@@ -21520,7 +21767,6 @@
     "title": "Contas de assinatura",
     "strategy": "Balanceamento de carga",
     "add": "Adicionar conta",
-    "default": "Pasta padrão",
     "defaultTag": "Padrão",
     "ready": "Conectada",
     "signedOut": "Login necessário",
@@ -21595,8 +21841,8 @@
   "modelGroups": {
     "title": "Grupos de modelos",
     "description": "Combine várias fontes que já tem em Provedores em uma única opção. Escolha-a em “Grupos de modelos” no seletor de modelos e a Cindy decide qual fonte usar.",
-    "routes": "Rotas",
-    "routesDescription": "Uma rota contém várias fontes. Cada nova tarefa escolhe uma segundo a regra da rota.",
+    "routes": "Modos",
+    "routesDescription": "Um modo contém várias fontes. Cada nova tarefa escolhe uma segundo a regra do modo.",
     "sourceCount_one": "{{count}} fonte",
     "sourceCount_many": "{{count}} fontes",
     "sourceCount_other": "{{count}} fontes",
@@ -21619,8 +21865,10 @@
       }
     },
     "picker": {
-      "empty": "Ainda não há grupos de modelos. Combine várias fontes em uma rota nas Configurações para a escolher aqui.",
-      "manage": "Gerenciar grupos de modelos"
+      "empty": "Ainda não há grupos de modelos. Combine várias fontes em um modo nas Configurações para escolhê-lo aqui.",
+      "manage": "Gerenciar grupos de modelos",
+      "switched": "“{{name}}” trocou esta tarefa para {{model}}",
+      "switchUnavailable": "“{{name}}” não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado."
     },
     "why": {
       "expiringQuota": "Restam {{left}}% da cota, redefinida a {{reset}}, por isso vai primeiro",
@@ -21632,7 +21880,7 @@
       "soonestUntil": "Todas as fontes esgotaram a cota; esta recupera primeiro ({{reset}})",
       "standby": "Desta vez não é a vez dela",
       "standbyQuota": "Restam {{left}}% da cota, redefinida só a {{reset}}, por isso fica reservada",
-      "off": "Desativada nesta rota",
+      "off": "Desativada neste modo",
       "unavailable": "Sem conexão, ou este modelo não pode ser escolhido agora",
       "limited": "Cota esgotada",
       "limitedUntil": "Cota esgotada até {{reset}}",
@@ -21646,10 +21894,10 @@
       "separator": "; "
     },
     "settings": {
-      "newRoute": "Nova rota",
-      "newRouteName": "Nova rota",
-      "routesEmpty": "Ainda não há rotas. Crie uma e adicione várias fontes.",
-      "scopeNote": "Os grupos de modelos aplicam-se às novas tarefas iniciadas neste computador. A fonte é escolhida no início e não muda durante a tarefa.",
+      "newRoute": "Novo modo",
+      "newRouteName": "Novo modo",
+      "routesEmpty": "Ainda não há modos. Crie um e adicione várias fontes.",
+      "scopeNote": "Os grupos de modelos aplicam-se às tarefas deste computador. Uma nova tarefa escolhe uma fonte ao começar. Escolher um numa tarefa em andamento troca uma vez, na hora; depois ela não troca sozinha.",
       "back": "Voltar aos grupos de modelos",
       "name": "Nome",
       "nameHint": "Aparece no seletor de modelos.",
@@ -21661,14 +21909,14 @@
       "sources": "Fontes que pode usar",
       "sourcesHint": "Podem coexistir modelos diferentes. A tarefa indica qual foi usado.",
       "sourcesEmpty": "Ainda não há fontes. Adicione abaixo um modelo conectado.",
-      "sourcesFull": "Uma rota aceita até {{count}} fontes.",
+      "sourcesFull": "Um modo aceita até {{count}} fontes.",
       "addSource": "Adicionar fonte",
       "chooseModel": "Escolher um modelo",
       "notConnected": "Sem conexão",
       "moveUp": "Mover para cima",
       "moveDown": "Mover para baixo",
-      "remove": "Remover desta rota",
-      "useSource": "Permitir que esta rota use {{name}}",
+      "remove": "Remover deste modo",
+      "useSource": "Permitir que este modo use {{name}}",
       "try": {
         "title": "Experimentar",
         "hint": "Veja qual fonte uma nova tarefa usaria agora. Nada é enviado e não se gasta cota.",
@@ -21676,11 +21924,11 @@
         "picked": "Usar esta",
         "standby": "De reserva",
         "skipped": "Ignorada",
-        "unavailable": "Nenhuma fonte desta rota pode ser usada agora. Uma nova tarefa usará o modelo que tinha selecionado."
+        "unavailable": "Nenhuma fonte deste modo pode ser usada agora. Uma nova tarefa usará o modelo que tinha selecionado."
       },
-      "deleteRoute": "Excluir esta rota",
+      "deleteRoute": "Excluir este modo",
       "deleteRouteConfirmTitle": "Excluir “{{name}}”?",
-      "deleteRouteConfirmDescription": "As exceções por horário de outras rotas que mudam para ela também são excluídas. As tarefas já iniciadas não são afetadas.",
+      "deleteRouteConfirmDescription": "As exceções por horário de outros modos que mudam para ele também são excluídas. As tarefas já iniciadas não são afetadas.",
       "delete": "Excluir",
       "cancel": "Cancelar",
       "saveFailed": "Não foi possível salvar. Tente novamente.",
@@ -21701,17 +21949,17 @@
         "addHours": "Adicionar",
         "sameHour": "O início e o fim não podem ser a mesma hora.",
         "full": "Até {{count}} exceções.",
-        "needOtherRoute": "Crie outra rota para poder mudar para ela por horário."
+        "needOtherRoute": "Crie outro modo para poder mudar para ele por horário."
       }
     },
     "overview": {
       "mapTitle": "Como as novas tarefas escolhem um modelo",
-      "mapDescription": "Da esquerda para a direita: a rota que segue e a fonte em que termina. Clique em uma rota para alterá-la.",
+      "mapDescription": "Da esquerda para a direita: o modo que segue e a fonte em que termina. Clique em um modo para alterá-lo.",
       "columnSources": "Fontes",
       "columnEmpty": "Nenhum ainda",
-      "openRoute": "Abrir a rota “{{name}}”",
+      "openRoute": "Abrir o modo “{{name}}”",
       "recentTitle": "Escolhas recentes",
-      "recentEmpty": "Nenhuma tarefa usou uma rota ainda.",
+      "recentEmpty": "Nenhuma tarefa usou um modo ainda.",
       "keptOriginal": "Não havia nenhum modelo disponível, então a tarefa manteve o modelo que você tinha escolhido.",
       "keptOriginalShort": "Seu modelo foi mantido",
       "latest": "O caminho que a última tarefa seguiu"
@@ -21719,5 +21967,73 @@
     "switchOffer": {
       "action": "Continuar com {{model}}"
     }
+  },
+  "projectSettings": {
+    "autoLoading": "Buscando ícone…",
+    "autoNone": "Usando as iniciais do nome do projeto.",
+    "autoSource": "Origem",
+    "githubAvatar": "Usar avatar do GitHub",
+    "title": "Configurações do projeto",
+    "name": "Nome de exibição",
+    "saveName": "Salvar nome",
+    "reset": "Restaurar padrão",
+    "icon": "Ícone",
+    "directory": "Pasta do projeto",
+    "done": "Concluído",
+    "failed": "Não foi possível salvar. Tente novamente.",
+    "unavailable": "Configurações indisponíveis. Conecte um computador atualizado e tente novamente.",
+    "back": "Voltar",
+    "cancel": "Cancelar",
+    "changeIcon": "Alterar ícone",
+    "chooseIcon": "Escolher ícone",
+    "save": "Salvar",
+    "symbols": "Ícones",
+    "emoji": "Emoji",
+    "letters": "Letras",
+    "image": "Imagem",
+    "upload": "Enviar imagem",
+    "imageHint": "PNG, JPG ou WebP · corte quadrado",
+    "imageError": "Não foi possível ler a imagem. Tente um PNG ou JPG menor.",
+    "search": "Buscar ícones",
+    "customEmoji": "Ou cole um emoji",
+    "lettersHint": "Use uma ou duas letras ou números.",
+    "thisComputer": "Este computador",
+    "nameHint": "Nome na lista de projetos. A pasta não será renomeada.",
+    "copy": "Copiar caminho",
+    "copied": "Copiado",
+    "applyIcon": "Usar ícone",
+    "noResults": "Nenhum ícone encontrado",
+    "discardHint": "Descartar alterações não salvas?",
+    "keepEditing": "Continuar editando",
+    "discard": "Descartar",
+    "colors": {
+      "default": "Padrão (seguir tema)"
+    }
+  },
+  "taskManagement": {
+    "scope": "Apenas para esta conta neste computador.",
+    "archive": "Arquivamento automático",
+    "enabled": "Arquivar tarefas inativas automaticamente",
+    "description": "Arquive automaticamente tarefas inativas. O histórico continua disponível.",
+    "days": "Dias de inatividade",
+    "daysHint": "Desde a última mensagem enviada ou recebida, ou o fim de uma execução.",
+    "days7": "7 dias",
+    "days14": "14 dias",
+    "days30": "30 dias",
+    "customDays": "Dias personalizados",
+    "invalidDays": "Insira um inteiro de 1 a 365.",
+    "reset": "Restaurar padrões",
+    "archiveHint": "Tarefas em uso são mantidas. Você pode restaurar as arquivadas a qualquer momento.",
+    "preview": "Prévia do arquivamento",
+    "loadFailed": "Não foi possível carregar as configurações.",
+    "loading": "Carregando configurações…",
+    "candidateCount": "Tarefas elegíveis: {{count}}",
+    "keptCount": "Mantidas: {{count}}",
+    "lastCheck": "Última verificação: {{date}}",
+    "notChecked": "Ainda não houve verificação automática",
+    "saveFailed": "As configurações não foram salvas. Tente novamente.",
+    "archivedNotice": "Tarefas inativas arquivadas automaticamente: {{count}}",
+    "undo": "Desfazer",
+    "undoFailed": "Não foi possível desfazer. Restaure as tarefas arquivadas."
   }
 }

@@ -10,3 +10,8 @@
 
 "activity.waitingForUpdate" = "等待更新";
 "activity.lastUpdated" = "上次更新";
+
+"activity.toReview" = "待查看";
+"activity.inProgress" = "进行中";
+"activity.pendingCount %lld" = "等你处理 %lld";
+"activity.unreadCount %lld" = "未读结果 %lld";

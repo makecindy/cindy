@@ -30,9 +30,9 @@ export function createScheduledModelScope(deps: {
     baseline: string | null;
     profileRevision?: string | null;
   } | null>;
-  write: (sessionId: string, baseline: ScheduledModelBaseline | null, profileRevision?: string | null, expectedBaseline?: string | null) => Promise<void | boolean>;
+  write: (sessionId: string, baseline: ScheduledModelBaseline | null, profileRevision?: string | null, expectedBaseline?: string | null, restoredProfile?: ScheduledModelSelection) => Promise<void | boolean>;
   isBusy: (sessionId: string) => boolean;
-  apply: (sessionId: string, profile: ScheduledModelSelection) => Promise<void>;
+  apply: (sessionId: string, profile: ScheduledModelSelection) => Promise<void | ScheduledModelSelection>;
   createId: () => string;
   ownerEpoch?: () => string;
   prepareBaseline?: (sessionId: string) => Promise<void>;
@@ -99,8 +99,9 @@ export function createScheduledModelScope(deps: {
       // A permanent save owns the next selection, including across restart.
       // Keep its old baseline for retries until reconciliation accepts the save.
       if (baseline.pendingBotProfileVersion) return;
+      let restoredProfile: void | ScheduledModelSelection;
       try {
-        await deps.apply(sessionId, baseline);
+        restoredProfile = await deps.apply(sessionId, baseline);
       } catch (error) {
         assertOwner(owner);
         // Only catalog/route validation marks a selection unavailable. Network,
@@ -113,7 +114,7 @@ export function createScheduledModelScope(deps: {
         throw error;
       }
       assertOwner(owner);
-      const written = await deps.write(sessionId, null, row!.profileRevision, row!.baseline);
+      const written = await deps.write(sessionId, null, row!.profileRevision, row!.baseline, restoredProfile || undefined);
       assertOwner(owner);
       if (written === false) throw new ScheduledModelSelectionBusyError('Scheduled model selection changed before scope cleanup');
     },

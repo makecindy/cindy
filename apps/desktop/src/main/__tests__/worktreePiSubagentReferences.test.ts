@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   metas: [] as WorktreeMeta[],
 }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
+vi.mock('../userDataPath', () => ({ getUserDataDir: () => state.root }));
 vi.mock('../logger', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('../localDb/client/current', () => ({
   getDbClient: () => ({ readLocalWorktreeReferences: async () => state.rows }),

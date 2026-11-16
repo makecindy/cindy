@@ -4,7 +4,7 @@ import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { publishHomeTaskSnapshot, readTeammateTasks, restoreActivityForInstalledRows } from '@/session/readTeammateTasks';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { createHomeListFreshness } from '@/session/homeListFreshness';
-import { normalizeTaskTeammateSelection, taskTeammateKey, taskTeammateOptions } from '@/session/teammateTaskSource';
+import { normalizeTaskTeammateSelection, taskTeammateKey, taskTeammateOptions, parseTaskCompanion, isTeammateTask } from '@/session/teammateTaskSource';
 import type { RemoteSession } from '@/session/types';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 
@@ -241,4 +241,12 @@ it('restores lost lane alerts when history-only lanes are installed after the ac
   expect(remoteSessionStore.getSessionLiveActivity('lost', 'mac')).toMatchObject({ phase: 'error', attention: true });
   expect(remoteSessionStore.getSessionLiveActivity('cleared', 'mac')).toBeNull();
   remoteSessionStore.clear();
+});
+
+// Unit: wire/cache parsing must preserve group membership without guessing missing ownership.
+it('keeps owner-project membership across mobile parsing and rejects unresolved ownership', () => {
+  const companion = parseTaskCompanion({ id: 'buddy', role: 'group', taskProjectDir: '/buddy/workspace' });
+  expect(companion?.taskProjectDir).toBe('/buddy/workspace');
+  expect(isTeammateTask(task('group', { source: 'bot', companion }))).toBe(true);
+  expect(isTeammateTask(task('unresolved', { source: 'bot', companion: { id: 'buddy', role: 'group' } }))).toBe(false);
 });

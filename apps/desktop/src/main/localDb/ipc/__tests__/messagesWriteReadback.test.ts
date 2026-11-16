@@ -21,7 +21,13 @@ const h = vi.hoisted(() => ({
   client: null as any,
   queries: [] as string[],
   mediaRefCalls: [] as Array<{ sessionId: string; role: string; content: unknown }>,
+  nextIds: [] as string[],
 }));
+
+vi.mock('@paralleldrive/cuid2', async importOriginal => {
+  const original = await importOriginal<typeof import('@paralleldrive/cuid2')>();
+  return { ...original, createId: () => h.nextIds.shift() ?? original.createId() };
+});
 
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
@@ -38,10 +44,6 @@ vi.mock('../../../session-import/legacy', () => ({
 }));
 vi.mock('../../../embedders/chat-history-embedder', () => ({
   onMessageCreated: vi.fn(async () => undefined),
-}));
-vi.mock('../../../git-context/prRefsStore', () => ({
-  recomputePrRefsForSession: vi.fn(async () => undefined),
-  recordPrRefsForMessage: vi.fn(async () => undefined),
 }));
 vi.mock('../../../cindy-media/chatAttachments', () => ({
   commitMessageMediaRefs: vi.fn(async (params: { sessionId: string; role: string; content: unknown }) => {
@@ -64,10 +66,18 @@ vi.mock('../../../device-link/broadcast-tap', () => ({
 }));
 vi.mock('../../client/current', () => ({
   getDbClient: () => h.client,
+  tryGetDbClient: () => h.client,
 }));
 
 import { broadcastMessageRow, createMessage, updateMessageContent } from '../messages';
 import { messageToCamel } from '../../mapper';
+import { getMessagesForHistory } from '../../chatHistoryReader';
+import { setTaskChangeListener } from '../../taskEvents';
+import { GhostTaskEventIndex } from '../../../cindy-brain/taskEventIndex';
+import type { GhostSubscriptionGateway } from '../../../cindy-brain/subscriptionGateway';
+import type { InstalledGhost } from '../../../../shared/ghost';
+import { getSafeDataOwnerPushStamp } from '../../../device-link/broadcast-tap';
+import { decodeCursor } from '@cindy/mcps/history-cursor';
 
 function setupDb(): void {
   const sqlite = new Database(':memory:', { verbose: (sql) => h.queries.push(String(sql)) });
@@ -78,6 +88,9 @@ function setupDb(): void {
       list_preview_role TEXT,
       list_message_count INTEGER,
       cleared_at INTEGER,
+      working_dir TEXT,
+      agent_kind TEXT NOT NULL DEFAULT 'cc',
+      title TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'active'
     );
     CREATE TABLE messages (
@@ -107,16 +120,56 @@ function setupDb(): void {
     }),
     exec: vi.fn(async (sql: string, params: unknown[] = []) => h.sqlite!.prepare(sql).run(...params)),
     query: vi.fn(async (sql: string, params: unknown[] = []) => h.sqlite!.prepare(sql).all(...params)),
+    queryOne: vi.fn(async (sql: string, params: unknown[] = []) => h.sqlite!.prepare(sql).get(...params)),
   };
 }
 
-afterEach(() => { h.sqlite?.close(); });
+afterEach(() => {
+  setTaskChangeListener(undefined);
+  vi.mocked(getSafeDataOwnerPushStamp).mockReset();
+  h.nextIds.length = 0;
+  h.sqlite?.close();
+});
 
 describe('message write paths avoid large-content readback', () => {
   beforeEach(() => {
     h.queries.length = 0;
     h.mediaRefCalls.length = 0;
     setupDb();
+  });
+
+  // Unit, #9801 performance contract: the existing tests only checked the index,
+  // after the producer had already resolved an extra owner stamp for no listener.
+  it('does no extra owner lookup or DB work for an unsubscribed message broadcast', () => {
+    const stamp = vi.mocked(getSafeDataOwnerPushStamp);
+    stamp.mockClear();
+    const queriesBefore = h.queries.length;
+    broadcastMessageRow('s1', { id: 'unused', clientId: 'unused', role: 'assistant', content: 'reply' } as never);
+    expect(stamp).toHaveBeenCalledOnce(); // The original window/device broadcast only.
+    expect(h.queries).toHaveLength(queriesBefore);
+  });
+
+  // Unit, #9801: the earlier index fixture supplied a rowid manually. Exercise
+  // createMessage -> content event -> shared history query with same-ms reversed IDs.
+  it('resumes history after a committed message event without losing a later same-ms row', async () => {
+    const owner = { dataOwnerId: 'owner', ownerGeneration: 1 };
+    vi.mocked(getSafeDataOwnerPushStamp).mockReturnValue(owner);
+    h.nextIds.push('z-first', 'a-second');
+    const index = new GhostTaskEventIndex();
+    index.replace([{ enabled: true, manifest: { subscribe: { topics: ['message'] } },
+      approval: { state: 'approved', revision: 'r1' } } as InstalledGhost], owner);
+    const publishIndexed = vi.fn();
+    setTaskChangeListener((event, stamp) => index.publish(event, stamp,
+      () => ({ publishIndexed }) as unknown as GhostSubscriptionGateway));
+    await createMessage('s1', { clientId: 'first', role: 'assistant', content: 'first', createdAt: 1_000 });
+    await createMessage('s1', { clientId: 'second', role: 'assistant', content: 'second', createdAt: 1_000 });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(publishIndexed).toHaveBeenCalledTimes(2);
+    const event = publishIndexed.mock.calls[0]![3] as { historyCursor: string };
+    const page = await getMessagesForHistory({ sessionIds: ['s1'], workdir: null, fromMs: null, toMs: null,
+      agentKind: null, roles: ['assistant'], includeRewound: false, limit: 10,
+      cursor: decodeCursor(event.historyCursor), order: 'asc' });
+    expect(page.items.map(item => item.clientId)).toEqual(['second']);
   });
 
   it('keeps View-only MCP App data out of create, reload and owner broadcasts', async () => {
@@ -149,10 +202,8 @@ describe('message write paths avoid large-content readback', () => {
   it.each([false, true])('publishes only after the post-write guard succeeds (revoked=%s)', async revoked => {
     const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
     const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
-    const { recordPrRefsForMessage } = await import('../../../git-context/prRefsStore');
     vi.mocked(tapWindowBroadcast).mockClear();
     vi.mocked(onMessageCreated).mockClear();
-    vi.mocked(recordPrRefsForMessage).mockClear();
     const beforePublish = vi.fn(async () => {
       const published = beforePublish.mock.calls.length === 2;
       expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(published ? 1 : 0);
@@ -160,7 +211,6 @@ describe('message write paths avoid large-content readback', () => {
       expect(tapWindowBroadcast).not.toHaveBeenCalled();
       expect(h.mediaRefCalls).toEqual([]);
       expect(onMessageCreated).not.toHaveBeenCalled();
-      expect(recordPrRefsForMessage).not.toHaveBeenCalled();
       if (revoked) throw new Error('revoked at server');
     });
     const sending = createMessage('s1', { clientId: 'private-message', role: 'assistant', content: 'Private result' }, { beforePublish });
@@ -170,7 +220,6 @@ describe('message write paths avoid large-content readback', () => {
       expect(tapWindowBroadcast).not.toHaveBeenCalled();
       expect(h.mediaRefCalls).toEqual([]);
       expect(onMessageCreated).not.toHaveBeenCalled();
-      expect(recordPrRefsForMessage).not.toHaveBeenCalled();
     } else {
       await expect(sending).resolves.toMatchObject({ clientId: 'private-message', content: 'Private result' });
       expect(h.sqlite!.prepare('SELECT client_id, rewind_at FROM messages').get()).toEqual({ client_id: 'private-message', rewind_at: null });
@@ -199,10 +248,8 @@ describe('message write paths avoid large-content readback', () => {
   it.each([false, true])('rolls back a publication revoked during commit before delivery hooks (lostReceipt=%s)', async lostReceipt => {
     const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
     const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
-    const { recordPrRefsForMessage } = await import('../../../git-context/prRefsStore');
     vi.mocked(tapWindowBroadcast).mockClear();
     vi.mocked(onMessageCreated).mockClear();
-    vi.mocked(recordPrRefsForMessage).mockClear();
     let revoked = false;
     h.client.tx.mockImplementation(async (name: string, args: { publication?: string }) => {
       const result = runInprocTx(h.sqlite!, { name, args });
@@ -223,7 +270,6 @@ describe('message write paths avoid large-content readback', () => {
     expect(tapWindowBroadcast).not.toHaveBeenCalled();
     expect(h.mediaRefCalls).toEqual([]);
     expect(onMessageCreated).not.toHaveBeenCalled();
-    expect(recordPrRefsForMessage).not.toHaveBeenCalled();
     // The same client receipt can be retried once permission is available again.
     h.client.tx.mockImplementation(async (name: string, args: unknown) => runInprocTx(h.sqlite!, { name, args }));
     revoked = false;
@@ -235,10 +281,8 @@ describe('message write paths avoid large-content readback', () => {
   it.each(['committed', 'not-committed', 'mismatched'] as const)('recovers only an exact committed publication after a lost receipt: %s', async outcome => {
     const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
     const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
-    const { recordPrRefsForMessage } = await import('../../../git-context/prRefsStore');
     vi.mocked(tapWindowBroadcast).mockClear();
     vi.mocked(onMessageCreated).mockClear();
-    vi.mocked(recordPrRefsForMessage).mockClear();
     h.client.tx.mockImplementation(async (name: string, args: { publication?: string }) => {
       if (args.publication !== 'publish') return runInprocTx(h.sqlite!, { name, args });
       if (outcome !== 'not-committed') {
@@ -258,13 +302,11 @@ describe('message write paths avoid large-content readback', () => {
       expect(vi.mocked(tapWindowBroadcast).mock.calls.filter(([channel]) => channel === 'local-db:messages:created')).toHaveLength(1);
       expect(h.mediaRefCalls).toHaveLength(1);
       expect(onMessageCreated).toHaveBeenCalledOnce();
-      expect(recordPrRefsForMessage).toHaveBeenCalledOnce();
     } else {
       await expect(sending).rejects.toThrow('Publication receipt lost');
       expect(tapWindowBroadcast).not.toHaveBeenCalled();
       expect(h.mediaRefCalls).toEqual([]);
       expect(onMessageCreated).not.toHaveBeenCalled();
-      expect(recordPrRefsForMessage).not.toHaveBeenCalled();
     }
     expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(outcome === 'not-committed' ? 0 : 1);
     expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(0);

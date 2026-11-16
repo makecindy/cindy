@@ -16,7 +16,6 @@ import { createHostPluginGateway } from '../src/plugins/gateway.ts';
 import { createHostMcpRuntime } from '../src/agent/mcp-runtime.ts';
 import { createCustomMcpStore } from '../../desktop/src/main/maker-host/custom-mcp-store.ts';
 import { startMockAppServer } from '../../desktop/scripts/mcp-apps-mock.mjs';
-import { createMakerLogger } from '../../desktop/src/main/maker-host/logger-adapter.ts';
 import { hostRuntimeLayout } from '../src/runtime-layout.mjs';
 import { createHostMessageStore } from '../src/message-store.ts';
 import { GhostGrantConfirmBridge } from '../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.ts';
@@ -122,6 +121,11 @@ try {
     const result = JSON.parse(wire.content.find(item => item.type === 'text').text);
     assert.equal(result.ok, true, JSON.stringify(result)); return result.result;
   };
+  // The roster the desktop gives each engine lists this installed plugin for a task's workdir.
+  const roster = gateway.rosterPrompt({ workingDir: profile });
+  assert.ok(roster.includes(`"id":"${result.ghost.manifest.id}"`), 'the Host plugin roster lists the installed plugin');
+  assert.equal(gateway.rosterPrompt({}), '', 'no workdir, no roster (as on the desktop)');
+  console.log('PASS Host plugin roster lists the installed plugin for a task workdir');
   const panel = await runtime.openPage(id, '/panel.html');
   assert.deepEqual(await panel.evaluate(async () => {
     const kv = await fetch('/kv', { method: 'PUT', body: JSON.stringify({ saved: 'before restart' }) });
@@ -161,7 +165,8 @@ try {
   nativeMcp.codexDeps.registerCodexMcpThreadContext({ threadId: 'fixture-thread', sessionId: taskId,
     sessionInstanceId: 'codex-fixture-instance', workingDir: profile, vendorOptions: {} });
   const codexUrl = new URL(codexMcp.buildSessionMcpConfig('codex-fixture-instance')['mcp_servers.cindy.url']);
-  const piMcp = await nativeMcp.preparePiMcpBridge(providers, createMakerLogger('fixture-mcp'), {
+  // The function PiAgent receives (AgentDeps.preparePiExtraSpawnConfig), called the way PiAgent calls it.
+  const piMcp = await nativeMcp.piDeps.preparePiExtraSpawnConfig(providers, {
     sessionId: taskId, sessionInstanceId: 'pi-fixture-instance', workingDir: profile, vendorOptions: {},
   });
   const piServer = piMcp.mcpBridge.servers.find(server => server.name === 'cindy');

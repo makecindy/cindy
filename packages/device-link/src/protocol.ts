@@ -263,6 +263,7 @@ export interface DeviceView {
   selfName?: string | null;
   deviceInfo?: DeviceInfo | null;
   platform: string | null;
+  app?: string;
   appVersion: string | null;
   /** ISO 字符串;从未上线过的离线设备可能为 null */
   lastSeenAt: string | null;

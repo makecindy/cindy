@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveRemoteText } from '@cindy/device-link';
 import { i18n } from '@/i18n';
-import { botGroupNewMessageCount } from '@cindy/maker-shared/botGroupPresentation';
+import { botGroupNewMessageCount, interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import { createChatHistory, type ChatHistoryState } from '@cindy/maker-shared/chat-history';
 import { chatGroupView, chatRoomRow, chatReadAt, createChatServerClient, type ChatMessage, type ChatPage, type ChatRoom, type ChatSnapshot } from '@/chat/chatServerClient';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
@@ -196,6 +196,18 @@ describe('direct group plans', () => {
     await expect(client.actPlan(id(1), { ...page.plans![0], supportsPendingSkip: undefined },
       { action: 'skip', position: 1 }, 'old-server')).rejects.toThrow('PLAN_CLOSED');
   });
+  it('projects live Cindy requester names from members rather than companion ownership', async () => {
+    const { client } = fixture();
+    const page = await client.load(id(1));
+    page.snapshot.members.push({ ...page.snapshot.members[0]!, id: id(12), kind: 'bot', name: 'Cindy', assistant: true });
+    const requester = page.snapshot.members.find(member => member.id === id(10))!;
+    requester.name = 'Ann'; requester.displayName = 'Ann'; requester.nickname = null;
+    page.executions = [{ id: id(50), bot_id: id(12), requester_id: id(10), source_message_id: id(20), threadRootId: null, epoch: 1, status: 'running' }];
+    expect(chatGroupView(page, id(10)).round.speakers[0]).toMatchObject({ requesterName: 'Ann', isSelfRequested: true });
+    page.snapshot.members.at(-1)!.assistant = false;
+    expect(chatGroupView(page, id(10)).round.speakers[0]).not.toHaveProperty('requesterName');
+  });
+
   it('projects the exact queued attempt and sends it with the displayed revision', async () => {
     const { client, state, request } = fixture();
     Object.assign(state.plan, { kind: 'talk', status: 'running', current_step: 0,
@@ -316,7 +328,7 @@ describe('direct Chat Server client', () => {
     const request = vi.fn().mockImplementation(async (path: string) => {
       if (path === '/me') return { actor: { id: id(10), kind: 'human' } };
       if (path.endsWith('/snapshot')) return snapshot();
-      if (path.endsWith('/executions')) return [{ id: id(30), bot_id: id(12), status: executionStatus, epoch: 1, source_message_id: id(20) }];
+      if (path.endsWith('/executions')) return [{ id: id(30), bot_id: id(12), status: executionStatus, epoch: 1, source_message_id: id(21) }];
       if (path.endsWith(`/messages/${id(20)}`)) return message(20);
       if (path.includes('/messages?')) return [{ ...message(21), threadRootId: id(20) }];
       return [];
@@ -771,7 +783,7 @@ describe('group lifecycle contract', () => {
 });
 
 // Missing mobile stop path: preserve server revision and actor ownership; unit tier.
-it('stops my requests and companions without stopping another member’s work', async () => {
+it('stops only my requests even when my companion works for another member', async () => {
   const ownBot = { ...snapshot().members[0], id: id(12), kind: 'bot', ownerActorId: id(11) };
   const planId = id(40);
   const execution = (n: number, bot: number, requester: number, plan_id: string | null = null) => ({ id: id(n), bot_id: id(bot), requester_id: id(requester), status: 'running', plan_id });
@@ -787,22 +799,38 @@ it('stops my requests and companions without stopping another member’s work', 
   const writes = request.mock.calls.filter(([, method]) => method === 'POST');
   expect(writes).toEqual([
     [`/conversations/${id(1)}/plans/${planId}`, 'POST', { operationId: `stop-operation:plan:${planId}`, expectedRevision: 7, action: 'stop' }, undefined],
-    [`/conversations/${id(1)}/executions/${id(30)}/control`, 'POST', { operationId: `stop-operation:execution:${id(30)}`, action: 'stop' }, id(12)],
     [`/conversations/${id(1)}/executions/${id(31)}/control`, 'POST', { operationId: `stop-operation:execution:${id(31)}`, action: 'stop' }, undefined],
   ]);
 });
 
 it('projects waiting and stopping executions without inventing task IDs or losing concurrent turns', () => {
   const common = { source_message_id: id(20), bot_id: id(12), epoch: 1 };
-  const page = { snapshot: snapshot(), messages: [], before: null, executions: [
-    { ...common, id: id(30), status: 'needs_input' }, { ...common, id: id(31), status: 'stopping' },
+  const page = { snapshot: snapshot(), messages: [message(20)], before: null, executions: [
+    { ...common, id: id(30), status: 'needs_input', requester_id: id(11), created_at: '2026-11-13T00:00:00Z' }, { ...common, id: id(31), status: 'stopping' },
     { ...common, id: id(32), status: 'succeeded' },
   ] };
   const view = chatGroupView(page, id(11));
+  expect(view.round.speakers[0]).toMatchObject({ sourceMessageId: id(20), isSelfRequested: true, timelineAt: Date.parse('2026-11-13T00:00:00Z') });
+  expect(view.round.speakers[1]?.isSelfRequested).toBe(false);
   expect(view.round.status).toBe('running');
   expect(view.round.speakers.map(speaker => [speaker.executionId, speaker.executionStatus, speaker.sessionId])).toEqual([
     [id(30), 'needs_input', null], [id(31), 'stopping', null],
   ]);
+});
+
+// Unit / #10345: direct-server executions had no elapsed start and disappeared above loaded history.
+it('positions direct-server work by enqueue time without inventing elapsed time across refreshes', () => {
+  const messages = [message(20), message(21), message(22)].map((row, index) => ({ ...row,
+    createdAt: new Date([10_000, 30_000, 50_000][index]!).toISOString() }));
+  const execution = { source_message_id: id(21), bot_id: id(12), epoch: 1, id: id(30),
+    status: 'queued', created_at: new Date(40_000).toISOString() };
+  for (const status of ['queued', 'running', 'needs_input', 'stopping']) {
+    const view = chatGroupView({ snapshot: snapshot(), messages, before: null,
+      executions: [{ ...execution, status, updated_at: new Date(100_000).toISOString() }] }, id(11));
+    expect(view.round.speakers[0]?.startedAt).toBeUndefined();
+    expect(interleaveBotGroupWork(view.messages, view.round.speakers).map(row =>
+      row.kind === 'work' ? row.value.executionId : row.value.id)).toEqual([id(20), id(21), id(30), id(22)]);
+  }
 });
 
 // Unit: cross-device Cindy filters use profile identity, including exact legacy presets.
@@ -1196,4 +1224,62 @@ it('uses my admin companion actor for an explicit all, preserving server plan re
     [`/conversations/${id(1)}/plans/${id(40)}`, 'POST', { operationId: `all-op:plan:${id(40)}`, expectedRevision: 7, action: 'stop' }, id(12)],
     [`/conversations/${id(1)}/executions/${id(30)}/control`, 'POST', { operationId: `all-op:execution:${id(30)}`, action: 'stop' }, id(12)],
   ]);
+});
+
+// Unit regression: mixed main/topic executions used to appear together in the main group.
+// Existing waiting-state coverage had only one source; assert the public projection per scope.
+it('keeps main and two topics isolated including waiting work and unknown sources', () => {
+  const messages = [message(20), { ...message(21), threadRootId: id(20) }, { ...message(22), threadRootId: id(19) }];
+  const page = { snapshot: snapshot(), messages, before: null, executions: [20, 21, 22, 99].map(n => ({
+    id: id(n + 100), bot_id: id(12), source_message_id: id(n), epoch: 1, status: 'needs_input',
+  })) };
+  expect(chatGroupView(page, id(10)).round.speakers.map(s => s.executionId)).toEqual([id(120)]);
+  expect(chatGroupView({ ...page, threadRootId: id(20) }, id(10)).round.speakers.map(s => s.executionId)).toEqual([id(121)]);
+  expect(chatGroupView({ ...page, threadRootId: id(19) }, id(10)).round.speakers.map(s => s.executionId)).toEqual([id(122)]);
+  expect(chatGroupView({ ...page, threadRootId: id(18) }, id(10)).round).toMatchObject({ status: 'running', speakers: [] });
+});
+
+// Unit: source-level denials used to reject a readable room; existing coverage only had
+// MESSAGE_NOT_FOUND. Keep history and per-load dedup for 403/404/410, but propagate outages.
+it.each([
+  { label: 'message not found', error: { status: 404, code: 'MESSAGE_NOT_FOUND' }, unavailable: true },
+  { label: 'forbidden source', error: { status: 403, code: 'FORBIDDEN' }, unavailable: true },
+  { label: 'gone source', error: { status: 410, code: 'MESSAGE_GONE' }, unavailable: true },
+  { label: 'generic not found', error: { status: 404, code: 'NOT_FOUND' }, unavailable: true },
+  { label: 'server outage', error: { status: 503, code: 'UNAVAILABLE' }, unavailable: false },
+  { label: 'network outage', error: new Error('source offline'), unavailable: false },
+])('keeps execution source failures scoped: $label', async ({ error, unavailable }) => {
+  const visible = message(21);
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith('/snapshot')) return snapshot();
+    if (path.includes('/messages?')) return [visible];
+    if (path.includes('/execution-failures?') || path.endsWith('/plans')) return [];
+    if (path.endsWith('/executions')) return [30, 31].map(n => ({ id: id(n), bot_id: id(12), status: 'running', epoch: 1, source_message_id: id(20) }));
+    if (path.endsWith(`/messages/${id(20)}`)) throw error;
+    throw new Error(path);
+  });
+  const client = createChatServerClient(request as any);
+  if (!unavailable) {
+    await expect(client.load(id(1))).rejects.toBe(error);
+    return;
+  }
+  for (let count = 1; count <= 2; count++) {
+    const page = await client.load(id(1));
+    expect(page.messages).toEqual([visible]);
+    expect(chatGroupView(page, id(10)).round.speakers).toEqual([]);
+    expect(request.mock.calls.filter(([path]) => path.endsWith(`/messages/${id(20)}`))).toHaveLength(count);
+  }
+});
+
+// Unit regression: public execution rows must survive denial of the stop affordance.
+// Earlier projection coverage did not distinguish request ownership.
+// Stopping own work plus a running peer exposed a stop that the real route cannot act on.
+it.each([10, 11].flatMap(requester => ['running', 'stopping'].map(status => ({ requester, status }))))('keeps public work visible while projecting stop permission for $requester ($status)', ({ requester, status }) => {
+  const page = { snapshot: snapshot(), messages: [message(20), message(21)], before: null, executions: [
+    { id: id(30), source_message_id: id(20), bot_id: id(12), epoch: 1, status, requester_id: id(requester) },
+    { id: id(31), source_message_id: id(21), bot_id: id(12), epoch: 1, status: 'running', requester_id: id(10) },
+  ] };
+  const view = chatGroupView(page, id(11));
+  expect(view.round.speakers.map(s => s.executionStatus)).toEqual([status, 'running']);
+  expect(view.round.canStop).toBe(requester === 11 && status === 'running');
 });

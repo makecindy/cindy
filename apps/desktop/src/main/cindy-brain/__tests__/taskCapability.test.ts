@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, PluginTaskApprovalGate } from '../taskCapability.js';
+import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, hasPluginHostToolGroupApproval, PluginTaskApprovalGate } from '../taskCapability.js';
 import { handlePluginTaskRequest } from '../taskSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import type { GhostInstallConsentFacts } from '../../../shared/ghostInstallConsent.js';
@@ -31,6 +31,20 @@ describe('explicit task capability approval', () => {
     const retry = vi.fn(async () => true);
     expect(await gate.request('p', 'owner:revision', true, retry)).toBe(true);
     expect(retry).toHaveBeenCalledOnce();
+  });
+
+  // Unit, installation authority: current declarations are effective without a
+  // per-group receipt grant; install/enable/declaration failures still deny.
+  it.each(['installed', 'undeclared', 'disabled', 'unapproved', 'uninstalled'] as const)('checks installed Host authority: %s', scenario => {
+    const ghost = legacy();
+    ghost.manifest.agent = { hostTools: ['history', 'control'] };
+    if (scenario === 'undeclared') ghost.manifest.agent.hostTools = [];
+    if (scenario === 'disabled') ghost.enabled = false;
+    if (scenario === 'unapproved') ghost.approval = { state: 'legacy-unapproved' };
+    const selected = scenario === 'uninstalled' ? null : ghost;
+    expect(hasPluginHostToolGroupApproval(selected, 'history')).toBe(scenario === 'installed');
+    expect(hasPluginHostToolGroupApproval(selected, 'control')).toBe(scenario === 'installed');
+    expect(hasPluginHostToolGroupApproval(selected, 'settings')).toBe(false);
   });
   it('does not bypass pending confirmation, and isolates owner/revision and plugin identities', async () => {
     const gate = new PluginTaskApprovalGate();

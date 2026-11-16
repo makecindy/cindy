@@ -56,6 +56,7 @@ export interface ChatRoom {
   response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential'; organizer_id?: string | null;
 }
 export interface ChatMember {
+  assistant?: boolean;
   id: string; kind: 'human' | 'bot' | 'integration'; name: string; state: string;
   ownerActorId: string; ownerName: string; avatar: string | null;
   role: 'owner' | 'admin' | 'member' | 'guest';
@@ -77,7 +78,7 @@ export interface ChatExecutionFailure {
   id: string; conversation_id?: string; source_message_id: string; bot_id: string; epoch: number; status?: string;
   failure_code?: unknown; updated_at?: string; plan_id?: string | null;
 }
-export interface ChatExecution extends ChatExecutionFailure { requester_id?: string; created_at?: string; status: string }
+export interface ChatExecution extends ChatExecutionFailure { threadRootId?: string | null; requester_id?: string; created_at?: string; status: string }
 /** Existing Chat Server plan contract, also consumed by Desktop's chatServer adapter. */
 export interface ChatPlan {
   activeExecution?: { id: string; status: string };
@@ -438,11 +439,19 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     return [{ ...failure, botName: member ? memberName(member, ownerMembers) : '' }];
   });
   const executions = (page.executions ?? []).filter(row => ['queued', 'running', 'needs_input', 'stopping'].includes(row.status));
-  // No server-provided start time here: created_at is the enqueue time, so omit startedAt
-  // rather than presenting queued time as elapsed work.
-  const speakers = executions.map(row => ({ botId: row.bot_id, sessionId: null, executionId: row.id,
+  // Enqueue time anchors history; it is not an elapsed-work start.
+  const speakers = executions.map(row => {
+    const bot = page.snapshot.members.find(member => member.id === row.bot_id);
+    const requester = page.snapshot.members.find(member => member.id === row.requester_id);
+    const source = [...page.messages, ...page.snapshot.messages].find(message => message.id === row.source_message_id);
+    const threadRootId = row.plan_id ? null : row.threadRootId !== undefined ? row.threadRootId : source ? source.threadRootId ?? null : undefined;
+    return { sourceMessageId: row.source_message_id, ...(threadRootId !== undefined ? { threadRootId } : {}), botId: row.bot_id, sessionId: null, executionId: row.id,
+    isSelfRequested: row.requester_id === selfId,
+    ...(bot?.kind === 'bot' && bot.assistant === true && requester ? { requesterName: memberName(requester, ownerMembers) } : {}),
+    ...(row.created_at && Number.isFinite(Date.parse(row.created_at)) ? { timelineAt: Date.parse(row.created_at) } : {}),
     executionStatus: row.status as 'queued' | 'running' | 'needs_input' | 'stopping', stopping: row.status === 'stopping',
-    activity: row.plan_id ? 'step' as const : 'reply' as const }));
+    activity: row.plan_id ? 'step' as const : 'reply' as const };
+  }).filter(speaker => speaker.threadRootId === (page.threadRootId ?? null));
   const plans = (page.plans ?? []).map(plan => chatPlanView(plan, page.snapshot, selfId));
   const open = plans.find(plan => ['proposed', 'running', 'waiting'].includes(plan.status));
   const currentStep = open?.steps.find(step => step.position === open.currentStep);
@@ -463,9 +472,10 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     openPlan: open ? { id: open.id, status: open.status, currentStep: open.currentStep, stepCount: open.steps.length,
       currentBotName: currentStep?.botName ?? null, currentStepStatus: currentStep?.status ?? null, ...(open.kind ? { kind: open.kind } : {}) } : null,
     plans, messages: projectBotGroupExecutionFailures(messages, failures),
-    hasMoreBefore: page.before !== null, round: { status: speakers.length ? 'running' : 'idle', speakers, canContinue: false,
+    hasMoreBefore: page.before !== null, round: { canStop: (page.plans ?? []).some(p => p.creator_id === selfId && ['proposed', 'running', 'waiting'].includes(p.status)) || executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status)
+        && e.requester_id === selfId), status: executions.length ? 'running' : 'idle', speakers, canContinue: false,
       othersActive: executions.some(execution => ['queued', 'running', 'needs_input'].includes(execution.status)
-        && execution.requester_id !== selfId && !members.some(member => member.id === execution.bot_id && member.ownerActorId === selfId)) }, supportsAttachments: true };
+        && execution.requester_id !== selfId) }, supportsAttachments: true };
 }
 
 export function createChatServerClient(request: ChatRequest, personalList = createConversationListState(),
@@ -833,6 +843,20 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       }
       // Use the same execution snapshot for running status and stop controls.
       const executions = await request<ChatExecution[]>(`/conversations/${room}/executions`);
+      const sourceMessages = new Map<string, ChatMessage | undefined>([...snapshot.messages, ...messages].map(message => [message.id, message]));
+      for (const execution of Array.isArray(executions) ? executions : []) {
+        if (execution.plan_id || !['queued', 'running', 'needs_input', 'stopping'].includes(execution.status)) continue;
+        let source = sourceMessages.get(execution.source_message_id);
+        if (!sourceMessages.has(execution.source_message_id)) {
+          try { source = await this.message(room, execution.source_message_id); }
+          catch (error) {
+            // Source-level denial leaves this execution unresolved, not the readable room.
+            if (![403, 404, 410].includes((error as { status?: number })?.status ?? 0)) throw error;
+          }
+          sourceMessages.set(execution.source_message_id, source);
+        }
+        if (source) execution.threadRootId = source.threadRootId ?? null;
+      }
       const executionFailures = await failures(room, messages);
       const plans = snapshot.room.kind === 'group' && !threadRootId ? await readPlans(room, messages) : undefined;
       const projection = await stored?.projection<ChatMessage>(room, []);
@@ -906,7 +930,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const everything = scope === 'all';
       const asManager = manager?.id === self ? undefined : manager?.id;
       const humanIsManager = snapshot.members.some(member => member.id === self && member.state === 'joined' && ['owner', 'admin'].includes(member.role));
-      const ownBots = new Set(snapshot.members.filter(member => member.state === 'joined' && member.kind === 'bot' && member.ownerActorId === self).map(member => member.id));
+
       const plans = await call<ChatPlan[]>(`/conversations/${room}/plans`);
       const stoppedPlans = new Set<string>();
       const refusedPlans = new Map<string, unknown>();
@@ -928,15 +952,15 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       }
       const executions = await call<ChatExecution[]>(`/conversations/${room}/executions`);
       for (const execution of executions.filter(execution => ['queued', 'running', 'needs_input'].includes(execution.status) && !(execution.plan_id && stoppedPlans.has(execution.plan_id)))) {
-        const asBot = !everything && execution.requester_id !== self && ownBots.has(execution.bot_id);
-        if (!everything && execution.requester_id !== self && !asBot) {
+
+        if (!everything && execution.requester_id !== self) {
           if (execution.requester_id) continue;
           if (humanIsManager) { unknownRequester = true; continue; }
         }
         try {
           await call(`/conversations/${room}/executions/${chatId(execution.id)}/control`, 'POST',
             { operationId: `${operationId}:execution:${execution.id}`, action: 'stop' },
-            asBot ? execution.bot_id : everything && execution.requester_id !== self ? asManager : undefined);
+            everything && execution.requester_id !== self ? asManager : undefined);
           stopped = true;
         } catch (error) { if (!refused(error)) throw error; refusedExecutions.set(execution.id, error); }
       }

@@ -276,7 +276,7 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
     expect(slot.getPageControl()).toBeNull();
   });
 
-  // 2026-10-30: only the official Cindy Chrome takes over My browser; another plugin's declaration is ignored.
+  // The shared provider seam accepts any approved pageControl implementation.
   it('普通插件声明 pageControl 后可成为「我的浏览器」', async () => {
     const ghosts = [extGhost({ id: 'other-browser', nativeHost: false })];
     const { slot, bridges, settle } = await makeSlot({}, ghosts);

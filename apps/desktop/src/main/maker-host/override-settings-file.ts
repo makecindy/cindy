@@ -16,6 +16,8 @@ export interface OverrideSettingsState<T> {
 
 export interface OverrideSettingsFile<T> {
   read(): T;
+  /** Fresh read for durable decisions: only ENOENT counts as absence. */
+  readStrict(): T;
   readState(): OverrideSettingsState<T>;
   writePatch(patch: Partial<T>, options?: { preserveDefaults?: boolean }): void;
   /** 跨进程锁内强制现读盘上 overrides，再合并 patch 并原子替换文件。 */
@@ -42,6 +44,23 @@ export interface OverrideSettingsFile<T> {
 interface CachedState<T> extends OverrideSettingsState<T> {
   overrides: Record<string, unknown>;
   readStatus: 'missing' | 'readable' | 'unreadable';
+}
+
+/**
+ * The process-wide value of `preserveUnreadableFile` for stores that do not set it. The desktop
+ * never changes it, so an unreadable file is deleted as before. The Host sets it once at boot:
+ * while it shares a settings directory with the desktop window process, it must not delete a
+ * user settings file it cannot read. A store's own `preserveUnreadableFile` takes precedence.
+ */
+let preserveUnreadableFilesByDefault = false;
+
+export function setPreserveUnreadableSettingsFilesByDefault(preserve: boolean): void {
+  preserveUnreadableFilesByDefault = preserve;
+}
+
+/** The same default, for the settings files read outside createOverrideSettingsFile. */
+export function isPreservingUnreadableSettingsFilesByDefault(): boolean {
+  return preserveUnreadableFilesByDefault;
 }
 
 /**
@@ -93,21 +112,33 @@ export function createOverrideSettingsFile<T>(options: {
     }
   }
 
-  function readState(): OverrideSettingsState<T> {
+  function readState(strict = false): OverrideSettingsState<T> {
     invalidateIfPathChanged();
+    if (strict) {
+      cached = null;
+      cachedFileIdentity = null;
+    }
     if (cached) return toPublicState(cached);
     const file = options.filePath();
     cachedResolvedPath = file;
     let readStatus: CachedState<T>['readStatus'] = 'missing';
+    const preserveUnreadableFile = options.preserveUnreadableFile ?? preserveUnreadableFilesByDefault;
     try {
-      if (fs.existsSync(file)) {
-        const stat = fs.statSync(file, { bigint: true });
+      let stat: fs.BigIntStats | null;
+      if (strict) {
+        try { stat = fs.statSync(file, { bigint: true }); }
+        catch (err) {
+          if ((err as { code?: string })?.code !== 'ENOENT') throw err;
+          stat = null;
+        }
+      } else stat = fs.existsSync(file) ? fs.statSync(file, { bigint: true }) : null;
+      if (stat) {
         if (options.maxBytes !== undefined && Number(stat.size) > options.maxBytes) {
           throw new Error(`file exceeds ${options.maxBytes} byte limit`);
         }
         const text = fs.readFileSync(file, 'utf-8');
         const parsed = JSON.parse(text);
-        if (options.preserveUnreadableFile && !isLoggableObject(parsed)) {
+        if (preserveUnreadableFile && !isLoggableObject(parsed)) {
           throw new Error('settings file root must be an object');
         }
         const overrides = isLoggableObject(parsed) ? parsed : {};
@@ -132,14 +163,15 @@ export function createOverrideSettingsFile<T>(options: {
         return toPublicState(cached);
       }
     } catch (err) {
-      if (options.preserveUnreadableFile) readStatus = 'unreadable';
+      if (strict) throw new Error(`${options.label} settings file is unavailable`);
+      if (preserveUnreadableFile) readStatus = 'unreadable';
       options.log.warn(`${options.label} settings read failed; falling back to defaults`, {
         ...(options.logReadErrorDetails === false
           ? {}
           : { error: err instanceof Error ? err.message : String(err) }),
         path: file,
       });
-      if (!options.preserveUnreadableFile) {
+      if (!preserveUnreadableFile) {
         try {
           fs.unlinkSync(file);
         } catch {
@@ -330,6 +362,7 @@ export function createOverrideSettingsFile<T>(options: {
 
   return {
     read: () => readState().value,
+    readStrict: () => readState(true).value,
     readState,
     writePatch,
     writePatchAtomic,

@@ -64,6 +64,10 @@ export function createHostService(deps) {
     if (url.pathname === '/api/sessions/list') {
         return { status: 200, body: await deps.listSessions(body) };
     }
+    if (url.pathname === '/api/project-info/auto-icon') return { status: 200, body: await deps.resolveAutomaticProjectIcon(body) };
+    if (url.pathname === '/api/project-info/image') return { status: 200, body: await deps.readProjectIconImage(body) };
+    if (url.pathname === '/api/project-info/get') return { status: 200, body: await deps.readProjectInfo() };
+    if (url.pathname === '/api/project-info/set') return { status: 200, body: await deps.updateProjectInfo(body) };
     if (url.pathname === '/api/project-aliases/list') {
         return { status: 200, body: await deps.listProjectAliases() };
     }
@@ -156,6 +160,13 @@ export function createHostService(deps) {
           || (body.expectedInstalledApproval !== undefined && typeof body.expectedInstalledApproval !== 'string'))
             return { status: 400, body: { error: 'invalid_plugin_enable_request' } };
         return { status: 200, body: await deps.setPluginEnabled(body.id, body.enabled, body.expectedInstalledApproval) };
+    }
+    if (url.pathname === '/api/ghosts/confirm/resolve' || url.pathname === '/api/ghosts/install-consent/resolve') {
+        if (!context.caller) return { status: 403, body: { error: 'authenticated_controller_required' } };
+        if (typeof body.requestId !== 'string' || typeof body.confirmed !== 'boolean')
+            return { status: 400, body: { error: 'invalid_confirmation' } };
+        return { status: 200, body: { handled: deps.resolvePluginConfirmation(context.caller,
+            url.pathname === '/api/ghosts/confirm/resolve' ? 'confirm' : 'install', body.requestId, body.confirmed) } };
     }
     if (url.pathname === '/api/plugins/list') {
         return { status: 200, body: await deps.listPlugins() };

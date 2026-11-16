@@ -65,6 +65,16 @@ describe('aggregateTurnUsageDetails', () => {
     expect(aggregateTurnUsageDetails([timed, inputOnly])).toMatchObject({ durationMs: 1_000 });
   });
 
+  it('weighs per-step context by each segment step count', () => {
+    const first = buildTurnUsageDetails({ outputTokens: 10, steps: 2, stepContextTokens: 100_000 });
+    const second = buildTurnUsageDetails({ outputTokens: 10, steps: 4, stepContextTokens: 40_000 });
+
+    expect(aggregateTurnUsageDetails([first, second])).toMatchObject({
+      steps: 6,
+      stepContextTokens: 60_000,
+    });
+  });
+
   it('keeps a complete wall clock from a tokenless terminal segment', () => {
     const generated = buildTurnUsageDetails({
       outputTokens: 20,

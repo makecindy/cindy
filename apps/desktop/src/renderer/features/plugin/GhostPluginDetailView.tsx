@@ -45,6 +45,7 @@ import { pluginPresentationOrigin, type PluginPresentationOrigin } from './lib/p
 import type { PluginMarketItem } from '../../../shared/pluginMarket';
 import { GhostLibrarySection } from './GhostLibrarySection';
 import { GhostHandoffFilesSection } from './GhostHandoffFilesSection';
+import { GhostAccountReuseSection } from './GhostAccountReuseSection';
 import { PluginBackgroundTasksSection } from './PluginBackgroundTasksSection';
 import { PluginControlPointsSection } from './PluginControlPointsSection';
 import { PluginTaskPrefs } from '@/cindy-brain/PluginTaskPrefs';
@@ -64,7 +65,7 @@ import { cn } from '@/lib/utils';
 import {
   declaredGhostControlPoints,
   ghostDeclaresHiddenTasks,
-  ghostHostUiNeedsApproval,
+  ghostInstallApprovalToken,
   ghostToolDeclaresHandoff,
   ghostTrustLabelKey,
   type GhostPermissionItem,
@@ -567,7 +568,7 @@ export function GhostPluginDetailView({
             <p>{tool.name}</p>
             <p className="break-all text-12">{getPluginToolUi(ghost.manifest)?.tools[tool.name].visibility && !getPluginToolUi(ghost.manifest)?.tools[tool.name].visibility!.includes('model') ? t('settings.ghosts.perm.mcpAppOnly') : `ghost_call: ${tool.name}`}</p>
           </div>)}
-          {!remote && enabled && (ghost.uiCapabilityApproved !== true || ghostHostUiNeedsApproval(ghost)) && <Button variant="secondary" size="sm" disabled={taskApprovalPending} onClick={async () => {
+          {!remote && enabled && ghost.uiCapabilityApproved !== true && <Button variant="secondary" size="sm" disabled={taskApprovalPending} onClick={async () => {
             setTaskApprovalPending(true);
             try { await window.electronAPI.ghosts.requestUiApproval(detail.id); }
             catch { toast.error(t('settings.ghosts.errors.generic')); }
@@ -618,6 +619,7 @@ export function GhostPluginDetailView({
           </Button>
         ) : null}
 
+        {!remote ? <GhostAccountReuseSection key={`${detail.id}:${ghostInstallApprovalToken(ghost?.approval)}`} ghostId={detail.id} enabled={enabled} declared={ghost?.manifest.network?.secrets?.some(secret => !secret.source || secret.source === 'user' || secret.source === 'oauth') === true} /> : null}
         {!remote ? <GhostLibrarySection ghostId={detail.id} enabled={ghost?.manifest.library === true} /> : null}
         {!remote ? (
           <GhostHandoffFilesSection

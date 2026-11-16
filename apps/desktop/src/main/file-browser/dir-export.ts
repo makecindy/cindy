@@ -57,6 +57,8 @@ export interface DirExportStatus {
 interface Job extends DirExportStatus {
   polledAt: number;
   abort: AbortController;
+  /** The existing background chain, including terminal status and cleanup. */
+  settled?: Promise<void>;
 }
 
 export interface DirExportDeps {
@@ -99,7 +101,7 @@ export function startDirExport(dir: string, controller: string, deps: DirExportD
     if (Date.now() - job.polledAt > ABANDON_MS) job.abort.abort();
   }, ABANDON_MS / 4);
   watchdog.unref?.();
-  void runDirExport(job, dir, controller, deps)
+  job.settled = runDirExport(job, dir, controller, deps)
     .then((file) => finish(id, job, { state: 'done', file }))
     .catch((err) => {
       log.warn('dir export failed', { id, aborted: job.abort.signal.aborted }, err);
