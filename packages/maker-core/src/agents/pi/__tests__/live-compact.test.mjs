@@ -979,6 +979,38 @@ describe('live compact 1.1.x: 卡片地板与长 read 独占一刀', () => {
     expect(picked.pointerOnly).toBeUndefined();
   });
 
+  it('retries the long-read candidate when the larger ordinary span fails its card (1.1.11 fix for #60)', () => {
+    // 1.1.9 竞争取大让普通候选先赢;若它的卡片翻车(段里有未解决的助手决策行,
+    // 覆盖核对必拒),1.1.11 之前直接返回 null,已选出的长读候选白白丢弃 ——
+    // 本仓报的 dsh-live-compact#60。现在带 forceLongRead 回试,长读候选(纯正文,
+    // 超预算走备份)接住整刀。
+    const decisionText = Array.from({ length: 5 }, (_, i) => `决定采用方案-${i}:切换到 region keep-${i}`).join('\n');
+    const entries = [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...readRound('r0', 'file '.repeat(1500)),
+      entry('assistant', decisionText),
+      ...round('c1', 'tiny '.repeat(100)),
+    ];
+    const picked = selectNewestChunk(entries, undefined, { drain: true, totalTokens: 70000 });
+    expect(picked).toMatchObject({ start: 2, end: 3 });
+  });
+
+  it('keeps hard tool facts once in the block: no budget double-count (1.1.11 fix for #61)', () => {
+    // 1.1.7 把硬事实行挂进工具块前缀后,正文仍原样再放一遍:两份重复一起计入
+    // TOOL_BUDGET=2400,失败诊断被截短 → 整卡不可执行 —— 本仓报的 #61。
+    // 1.1.11 起正文去重,硬事实只进前缀一次。
+    const hardLines = Array.from({ length: 30 }, (_, i) => `必须 keep decision-${i} pinned to the plan`);
+    const diagLines = Array.from({ length: 30 }, (_, i) => `Trace: frame ${i} in crashed worker`);
+    const tools = toolExcerpt([
+      { role: 'tool', text: [...hardLines, ...diagLines].join('\n'), isError: true, toolCallId: 'c0', name: 'bash' },
+    ], '');
+    expect(tools.failureDiagnosticsComplete).toBe(true);
+    expect(tools.text.split(hardLines[0]).length - 1).toBe(1);
+    expect(tools.text).toContain('Trace: frame 0');
+    expect(tools.needsBackup).toBe(true);
+  });
+
   it('pointer-cuts the only long read round when its single result is oversized', () => {
     const entries = [
       entry('system', 'sys'),
