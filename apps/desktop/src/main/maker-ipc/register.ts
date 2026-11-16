@@ -277,6 +277,13 @@ import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'dri
 import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
 import { parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import {
+  createRecoverRemoteRuntimeAxisPersistence,
+  createSetSessionEffort,
+  createSetSessionThinkingEnabled,
+  createStagePendingUserRuntimeAxis,
+  createUpdateSavedScheduledAxis,
+} from './sessionRuntimeAxisSettings.js';
+import {
   createCanApplyAutomaticRuntimeSelection,
   createReadSessionRuntimeProfiles,
   createRecoverRenamedSessionModelOnSend,
@@ -963,7 +970,7 @@ import {
   interruptUpstreamMergeTurn,
   prepareUpstreamMergeTurn,
 } from '../cindy-make/upstreamMergeRuntime.js';
-import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
+import { type IpcErrorCode } from '../../shared/ipc-errors.js';
 import { piPackageCommandDiagnostic } from '../maker-host/pi-package-diagnostic.js';
 import {
   runPiPackageListIpcBoundary,
@@ -1205,7 +1212,6 @@ import {
   relocateForFreshStart,
   settleSystemRouteSwitchIntent,
   type MakerSessionAgentSwitchHandlerDeps,
-  type PendingAgentSwitchIntent,
 } from './sessionAgentSwitchHandler.js';
 import { setSessionRuntimeHarness } from './sessionRuntimeHarnessSelection.js';
 import {
@@ -1449,7 +1455,6 @@ import {
   projectSessionRuntimeControl,
   isPendingSessionRuntimeRouteExplicit,
   mergeSessionRuntimeProfilePatch,
-  recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
   recordUserSessionRuntimeMutation,
   remapSessionRuntimeProvider,
@@ -1459,7 +1464,6 @@ import {
   type SessionRuntimeAxisPatch,
   type SessionRuntimeProfile,
 } from './sessionRuntimeControl.js';
-import { applyRuntimeEffortWithRecovery } from './runtimeSetEffort.js';
 import {
   createHandleSetModel,
   type ApplySessionRuntimeSelection,
@@ -11830,37 +11834,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       reconcileBotModelRoute.recoverUnavailableBaseline(sessionId, expectedBaseline),
   });
   const updateScheduledPreference = createUpdateScheduledPreference({ broadcastSessionRuntimeProjection });
-  const updateSavedScheduledAxis = async (
-    sessionId: string,
-    patch: { effort?: ScheduledModelSelection['effort']; fastMode?: ScheduledModelSelection['fastMode'] },
-    assertCurrent: () => void,
-  ): Promise<boolean> => {
-    const [row] = await getDbClient().drizzle.select({ baseline: sessions.scheduledModelBaseline })
-      .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-    const baseline = parseScheduledModelBaseline(row?.baseline);
-    if (!baseline) return false;
-    const providers = baseline.agentDeviceId
-      ? await readUsableAgentDeviceProviders(baseline.agentDeviceId, baseline.agentKind, baseline.model, baseline.providerId)
-      : await getDesktopProviderService().listProviders({
-        allowSideEffects: false, catalog: getActiveCatalog(),
-      });
-    const providerId = baseline.providerId ??
-      effectiveSourceIdForModel(providers, null, baseline.model, baseline.agentKind);
-    const model = findCatalogModel(providers.find(p => p.id === providerId),
-      baseline.model, baseline.agentKind, { exact: true });
-    if (!model) throwIpcError('INVALID_PARAMS', `model "${baseline.model}" is unavailable`);
-    const axes = resolveSessionRuntimeAxes({
-      model, effort: patch.effort ?? baseline.effort,
-      fastMode: patch.fastMode ?? baseline.fastMode,
-      effortExplicit: patch.effort !== undefined, fastExplicit: patch.fastMode !== undefined,
-      allowFixedEffortPlaceholder: true,
-    });
-    if (!axes.ok) throwIpcError('INVALID_PARAMS', `setting is unavailable for model "${baseline.model}"`);
-    assertCurrent();
-    // The picker describes the owner's next turn, not the automation currently running.
-    await updateScheduledPreference(sessionId, patch);
-    return true;
-  };
+  const updateSavedScheduledAxis = createUpdateSavedScheduledAxis({
+    readUsableAgentDeviceProviders, updateScheduledPreference, getDesktopProviderService,
+  });
   prepareScheduledModelPreferencesHolder = async (sessionId, override) => {
     if (override) await scheduledModelScope.begin(sessionId);
     else await scheduledModelScope.restore(sessionId);
@@ -22143,101 +22119,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   });
 
-  const recoverRemoteRuntimeAxisPersistence = async (
-    sessionId: string,
-    previousProfile: SessionRuntimeProfile,
-    patch: Pick<Partial<SessionRuntimeProfile>, 'effort' | 'fastMode'>,
-    runtimeOwnerEpoch: string,
-  ): Promise<void> => {
-    if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return;
-    try {
-      await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
-    } catch (recoveryError) {
-      if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return;
-      const retainedSession = maker.getSession(sessionId);
-      if (retainedSession) {
-        const retainedProfile: SessionRuntimeProfile = {
-          ...previousProfile,
-          agentKind: retainedSession.agentKind,
-          model: retainedSession.model,
-          ...patch,
-        };
-        if (patch.effort !== undefined) {
-          setSessionEffort(sessionId, patch.effort);
-        }
-        if (patch.fastMode !== undefined) {
-          setSessionFastMode(sessionId, patch.fastMode);
-        }
-        recordRecoveredSessionRuntimeAxisMutation(sessionId, retainedProfile);
-        await broadcastSessionRuntimeProjection(sessionId).catch((error) => {
-          log.debug('recovered runtime axis projection broadcast failed', {
-            sessionId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      }
-      throw recoveryError;
-    }
-  };
+  const recoverRemoteRuntimeAxisPersistence = createRecoverRemoteRuntimeAxisPersistence({
+    maker, broadcastSessionRuntimeProjection, log,
+  });
 
   // Called under the existing send lock after owner/shared-task admission.
   // Keep the selected route intact: cross-engine/device intents must not pass
   // through SET_MODEL, which would reinterpret them as the current harness.
-  const stagePendingUserRuntimeAxis = async (
-    sessionId: string,
-    intent: PendingAgentSwitchIntent,
-    patch: Pick<PendingAgentSwitchIntent, 'effort' | 'fastMode'>,
-    assertCurrent: () => void,
-  ) => {
-    let updated = { ...intent, ...patch };
-    const row = await agentSwitchDeps.getSessionRow(sessionId);
-    if (!row) throwIpcError('PRECONDITION_FAILED', 'session is unavailable during runtime axis update');
-    const targetDeviceId = intent.targetAgentDeviceId === undefined
-      ? row.agentDeviceId : intent.targetAgentDeviceId;
-    // Local same-engine selection already validates in SET_MODEL. Its remote
-    // branch only checks route availability, so admit its axes here as well.
-    if (!intent.sameAgentSelection || targetDeviceId) {
-      const providers = targetDeviceId
-        ? await readUsableAgentDeviceProviders(targetDeviceId, intent.targetAgentKind, intent.model, intent.providerId ?? null)
-        : await getDesktopProviderService().listProviders({ allowSideEffects: false, catalog: getActiveCatalog() });
-      const providerId = intent.providerId ?? effectiveSourceIdForModel(providers, null, intent.model, intent.targetAgentKind);
-      const provider = providers.find(candidate => candidate.id === providerId);
-      const model = findCatalogModel(provider, intent.model, intent.targetAgentKind, { exact: true });
-      if (!provider?.connected || !model) {
-        throwIpcError('INVALID_PARAMS', `model "${intent.model}" is unavailable from provider "${providerId ?? 'default'}"`);
-      }
-      const axes = resolveSessionRuntimeAxes({
-        model,
-        effort: (updated.effort ?? null) as SessionRuntimeProfile['effort'],
-        fastMode: updated.fastMode ?? false,
-        effortExplicit: patch.effort !== undefined,
-        fastExplicit: patch.fastMode !== undefined,
-        allowFixedEffortPlaceholder: true,
-      });
-      if (!axes.ok) {
-        throwIpcError('INVALID_PARAMS', axes.reason === 'effort-unavailable'
-          ? `effort "${patch.effort}" is unavailable for model "${intent.model}"`
-          : `Fast is unavailable for model "${intent.model}"`);
-      }
-      updated = { ...updated, effort: axes.effort ?? undefined, fastMode: axes.fastMode };
-    }
-    // Row/catalog reads can cross an account/shared-task ownership change.
-    assertCurrent();
-    // Recovery is a post-commit tail: its target route already owns the DB
-    // fields and the next bootstrap reads them. The tail itself only repairs
-    // the resume boundary/handoff, so it cannot consume newly staged axes.
-    if (intent.resumeFallbackRecovery) {
-      await persistSessionFields(sessionId, { effort: updated.effort, fastMode: updated.fastMode });
-      assertCurrent();
-    }
-    if (intent.sameAgentSelection) {
-      return agentSwitchDeps.selectSameAgentModel!(sessionId, updated, false);
-    }
-    agentSwitchPending.set(sessionId, updated);
-    agentSwitchDeps.onPendingSwitchChanged?.(sessionId, projectPendingAgentSwitchIntent(updated));
-    wakeSessionInputAfterCredentialSwitch(sessionId);
-    return { deferred: true, pendingUntilSend: true };
-  };
+  const stagePendingUserRuntimeAxis = createStagePendingUserRuntimeAxis({
+    agentSwitchDeps, readUsableAgentDeviceProviders, agentSwitchPending, getDesktopProviderService,
+    persistSessionFields, wakeSessionInputAfterCredentialSwitch,
+  });
+  const handleSetSessionEffort = createSetSessionEffort({
+    maker, updateScheduledPreference, agentSwitchPending, stagePendingUserRuntimeAxis, updateSavedScheduledAxis,
+    resolvePendingRuntimeAxisPatch, readSessionRuntimeProfiles, recoverRemoteRuntimeAxisPersistence,
+    assertReviewSettingsUnlocked, broadcastSessionRuntimeProjection, captureSharedTaskSettingGuard,
+    markRemoteSettingPersistedInsideHandler, persistSessionFields,
+    getPendingCredentialSwitchHolder: () => pendingCredentialSwitchHolder, log,
+  });
+  const handleSetSessionThinkingEnabled = createSetSessionThinkingEnabled({
+    maker, assertReviewSettingsUnlocked, captureSharedTaskSettingGuard,
+  });
 
   ipcMain.handle(MAKER_INVOKE.SET_EFFORT, async (event, sessionId: unknown, effort: unknown) => {
     // 轮 24-I3 HIGH:会话变更型 IPC 统一 sender 校验(对齐 SET_PERMISSION_MODE)——
@@ -22245,164 +22147,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!isDeviceLinkInvoke()) {
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
     }
-    if (typeof sessionId !== 'string' || typeof effort !== 'string') {
-      throwIpcError('INVALID_PARAMS', 'sessionId + effort required');
-    }
-    const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
-    const assertSharedTaskCurrent = captureSharedTaskSettingGuard(sessionId);
-    const assertOwnerCurrent = () => {
-      assertSharedTaskCurrent();
-      if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
-        throwIpcError(
-          'PRECONDITION_FAILED',
-          'app session changed during runtime effort update; request dropped',
-        );
-      }
-    };
-    const remoteInvoke = isDeviceLinkInvoke();
-    const remoteResponse = remoteInvoke ? {} : undefined;
-    const persistEffort = async () => {
-      assertOwnerCurrent();
-      assertSharedTaskCurrent.admit();
-      await persistSessionFields(sessionId, { effort });
-      await updateScheduledPreference(sessionId, { effort: effort as ScheduledModelSelection['effort'] });
-      if (remoteResponse) markRemoteSettingPersistedInsideHandler(remoteResponse);
-    };
-    const applyEffort = async () => {
-      const [runtimeStatus] = await getDbClient()
-        .drizzle.select({ status: sessions.status })
-        .from(sessions)
-        .where(eq(sessions.id, sessionId))
-        .limit(1);
-      if (!runtimeStatus) {
-        if (remoteResponse) markRemoteSettingPersistedInsideHandler(remoteResponse);
-        return remoteResponse;
-      }
-      if (runtimeStatus.status !== 'active' && runtimeStatus.status !== 'archived') {
-        throwIpcError(
-          'PRECONDITION_FAILED',
-          'deleted task cannot change runtime effort',
-        );
-      }
-      const userIntent = agentSwitchPending.get(sessionId);
-      if (isUserPendingAgentSwitchIntent(userIntent)) {
-        assertOwnerCurrent();
-        assertSharedTaskCurrent.admit();
-        const result = await stagePendingUserRuntimeAxis(sessionId, userIntent, { effort }, assertOwnerCurrent);
-        if (remoteResponse) markRemoteSettingPersistedInsideHandler(remoteResponse);
-        return remoteResponse ?? result;
-      }
-      if (await updateSavedScheduledAxis(sessionId, { effort: effort as ScheduledModelSelection['effort'] }, () => {
-        assertOwnerCurrent();
-        assertSharedTaskCurrent.admit();
-      })) {
-        if (remoteResponse) markRemoteSettingPersistedInsideHandler(remoteResponse);
-        return remoteResponse;
-      }
-      if (runtimeStatus.status === 'archived') {
-        // Main owns both local and remote commits; Renderer must not write a
-        // target axis onto the old route while an intent is still pending.
-        await persistEffort();
-        return remoteResponse;
-      }
-      const livePatch: SessionRuntimeAxisPatch = {
-        effort: effort as SessionRuntimeProfile['effort'],
-      };
-      const pendingPatch = await resolvePendingRuntimeAxisPatch(sessionId, livePatch);
-      const commitEffort = () => {
-        recordUserSessionRuntimeAxisMutation(sessionId, livePatch, pendingPatch);
-        // 记下会话 effort:responses-bridge 模型(chatgpt/ / xai/)的 effort 无法经请求体流到 bridge,
-        // 由 compat-proxy 路由决策从这里读出、闭包进订阅直连 handler 的 prefs(不影响 session 是否在跑)。
-        setSessionEffort(sessionId, effort);
-      };
-      const sess = maker.getSession(sessionId);
-      if (!sess) {
-        await commitRuntimeAxisAfterPersistence({
-          persist: persistEffort,
-          commit: commitEffort,
-          assertCanCommit: assertOwnerCurrent,
-        });
-        log.debug('set-effort: session not found, no-op', { sessionId });
-        return remoteResponse;
-      }
-      // 有 pending 凭证切换 = 本会话的 model/effort 变更已整体延迟到 turn 结束重建:
-      // 跳过对仍在跑的旧 turn 的 runtime 推送(与 renderer 本地分支的 deferred 守卫同因,
-      // 这里是唯一 choke point,同时覆盖 device-link 远程入口;review P2 2026-07-04)。
-      // 本地与设备互联均由此 handler 等待落盘，重建时再应用。
-      if (pendingCredentialSwitchHolder?.has(sessionId)) {
-        await commitRuntimeAxisAfterPersistence({
-          persist: persistEffort,
-          commit: commitEffort,
-          assertCanCommit: assertOwnerCurrent,
-        });
-        log.debug('set-effort: skipped live push (pending credential switch)', { sessionId });
-        return remoteResponse;
-      }
-      try {
-        const previousProfile = (await readSessionRuntimeProfiles(sessionId))?.effective;
-        const result = await applyRuntimeEffortWithRecovery({
-          applyRuntime: () => {
-            assertOwnerCurrent();
-            assertSharedTaskCurrent.admit();
-            return sess.setEffort(
-              effort as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra',
-            );
-          },
-          // 远程 Agent 正在跑一轮、那台只是回得慢：不当场关(会把这一轮杀掉，且不是那台电脑的问题，供应商组也
-          // 不会换电脑)，这一轮结束后再按已落库的档位重建(provider-groups.md §6.1「本机的操作不打断进行中的远程一轮」)。
-          terminateSession: async () => {
-            if (sess.agentDeviceId && sess.isTurnRunning()) {
-              await maker.closeSessionIfCurrent(sess, 'runtime-refresh', { afterCurrentTurn: true });
-              return;
-            }
-            await maker.closeSession(sessionId);
-          },
-        });
-        if (result === 'session-terminated') {
-          log.warn('set-effort: timed-out runtime session terminated for lazy rebuild', {
-            sessionId,
-          });
-        }
-        await commitRuntimeAxisAfterPersistence({
-          persist: persistEffort,
-          commit: commitEffort,
-          assertCanCommit: assertOwnerCurrent,
-          ...(result === 'applied' && previousProfile
-            ? {
-                recoverAfterPersistenceFailure: () =>
-                  recoverRemoteRuntimeAxisPersistence(
-                    sessionId,
-                    previousProfile,
-                    { effort: effort as SessionRuntimeProfile['effort'] },
-                    runtimeOwnerEpoch,
-                  ),
-              }
-            : {}),
-        });
-        return remoteResponse;
-      } catch (error) {
-        if (isIpcError(error)) throw error;
-        log.warn('set-effort runtime update failed', {
-          sessionId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        throwIpcError('INTERNAL', 'Runtime effort update failed');
-      }
-    };
-    return withSendToSessionLock(sessionId, async () => {
-      await assertReviewSettingsUnlocked(sessionId);
-      assertOwnerCurrent();
-      try {
-        return await applyEffort();
-      } finally {
-        await broadcastSessionRuntimeProjection(sessionId).catch((error) => {
-          log.debug('set-effort runtime projection broadcast failed', {
-            sessionId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      }
-    });
+    return handleSetSessionEffort(sessionId, effort);
   });
 
   ipcMain.handle(
@@ -23026,16 +22771,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!isDeviceLinkInvoke()) {
         assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
       }
-      if (typeof sessionId !== 'string' || typeof enabled !== 'boolean') {
-        throwIpcError('INVALID_PARAMS', 'sessionId + enabled required');
-      }
-      const assertSharedTaskCurrent = captureSharedTaskSettingGuard(sessionId);
-      await assertReviewSettingsUnlocked(sessionId);
-      assertSharedTaskCurrent();
-      const sess = maker.getSession(sessionId);
-      if (!sess) return;
-      assertSharedTaskCurrent.admit();
-      await sess.setThinkingEnabled(enabled);
+      return handleSetSessionThinkingEnabled(sessionId, enabled);
     },
   );
 
