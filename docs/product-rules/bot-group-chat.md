@@ -393,6 +393,7 @@ Chat Server 声明 `capabilities.groupSingleSpeaker: 1` 时，服务器群按下
   成功回执只清理与此次发送快照一致的附件，关闭重开话题后的新标注保留。「同时发到群聊」沿用现有先回复、再贴回的流程。
   话题内不预留侧边操作栏的空白：共用的消息操作栏常显在气泡底部，正文使用可用列宽；宽表格在自身容器内横向滚动，
   文件 chip 不超出气泡、长文件名省略。群聊与私聊同由 `ThreadPanel.css` 约束（回归：`scripts/fixtures/thread-panels`）。
+- Desktop 主群与话题回复共用普通任务的发送快捷键偏好：默认 Enter 发送；选择 Ctrl/Cmd+Enter 后，Enter 换行，平台修饰键加 Enter 发送。Shift+Enter 始终换行，IME 确认与按住发送键的重复事件不发送；@ 候选导航与听写期间的按键优先保留原行为。
 - 视觉遵循 [`DESIGN.md`](../design-rules/DESIGN.md)；Light 与 Dark 同时实现。
 - 成员卡优先使用消息中的点名身份；服务器消息缺少身份时，只对群成员中唯一匹配的名字显示卡片，重名和广播标签不猜测。表情角标换行时，悬停操作栏仍以实际气泡顶边为基准定位。
 
