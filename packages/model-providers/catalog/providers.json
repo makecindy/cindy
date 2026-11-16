@@ -2420,11 +2420,6 @@
       "docsUrl": "https://open-design.ai",
       "models": [],
       "runtimes": {
-        "claude-code": {
-          "baseUrl": "https://amr-link.open-design.ai",
-          "modelsUrl": "https://amr-link.open-design.ai/v1/models",
-          "wireProtocol": "anthropic-messages"
-        },
         "codex": {
           "baseUrl": "https://amr-link.open-design.ai/v1",
           "modelsUrl": "https://amr-link.open-design.ai/v1/models",
