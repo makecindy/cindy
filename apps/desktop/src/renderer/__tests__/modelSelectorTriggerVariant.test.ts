@@ -1090,11 +1090,13 @@ describe('ModelSelector trigger variants', () => {
       expect(within(trigger()).getByText('超高')).toBeTruthy();
       expect(trigger().querySelector('[data-composer-engine-mark]')).not.toBeNull();
 
-      // jsdom 没有布局：直接给出「名字被截断」的盒子尺寸，模拟工具行挤到极限。
+      // 同档位内把 composer 拖窄（ChatInput 不会重渲）：尺寸回调必须自己发现名字被截断。
+      // jsdom 没有布局，直接给出「名字被截断」的盒子尺寸。
       const squeezed = within(trigger()).getByText('Opus 4.8');
       Object.defineProperty(squeezed, 'scrollWidth', { configurable: true, value: 128 });
       Object.defineProperty(squeezed, 'clientWidth', { configurable: true, value: 72 });
-      view.rerender(React.createElement(ModelSelector, props));
+      composerWidth = 484;
+      act(() => notifyComposerResize?.());
       expect(within(trigger()).queryByText('超高')).toBeNull();
       expect(trigger().querySelector('[data-composer-engine-mark]')).toBeNull();
       // 收起的只是视觉身份组：完整档名仍留在可及名里。
@@ -1105,7 +1107,42 @@ describe('ModelSelector trigger variants', () => {
       composerWidth = 520;
       act(() => notifyComposerResize?.());
       expect(within(trigger()).getByText('超高')).toBeTruthy();
+
+      // 开关 Fast 也会改变尾部宽度：挤着的状态下关掉它，剩下的档名放得下就恢复。
+      Object.defineProperty(squeezed, 'clientWidth', { configurable: true, value: 72 });
+      providersRef.providers = [
+        {
+          id: 'anthropic',
+          name: 'Anthropic',
+          source: 'builtin',
+          connected: true,
+          agents: ['claude-code'],
+          auth: { method: 'oauth' },
+          routing: { 'claude-code': {} },
+          models: {
+            'claude-code': [
+              {
+                id: 'claude-opus-4-8',
+                name: 'Opus 4.8',
+                contextWindow: 200000,
+                efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+                defaultEffort: 'high',
+                supportsFastMode: true,
+              },
+            ],
+          },
+        },
+      ];
+      const fastProps = { ...props, fastMode: true };
+      view.rerender(React.createElement(ModelSelector, fastProps));
+      expect(trigger().querySelector('.lucide-zap')).not.toBeNull();
+      act(() => notifyComposerResize?.());
+      expect(within(trigger()).queryByText('超高')).toBeNull();
+      Object.defineProperty(squeezed, 'clientWidth', { configurable: true, value: 128 });
+      view.rerender(React.createElement(ModelSelector, { ...fastProps, fastMode: false }));
+      expect(within(trigger()).getByText('超高')).toBeTruthy();
     } finally {
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
       Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: originalResizeObserver });
     }
   });

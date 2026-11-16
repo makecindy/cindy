@@ -4235,8 +4235,9 @@ const TAIL_RETRY_WIDTH_DELTA = 16;
  * 工具行真挤时，名字和尾部会一起被压扁：模型名只剩「GPT-…」，档名被挤成半截「超.」。
  * 名字比装饰重要，所以**名字一被截断就整组收起尾部**，把空间全给名字。
  * 收起后 pill 贴着名字变窄，名字本身不再被截断（无法自证空间回来了），所以只在
- * composer 宽度一次变 ≥16px 或内容变化（换模型 / 换档 / 换引擎）时重试；实测截断与否
- * 在 layout 阶段完成，不靠逐像素重渲，试回后若仍放不下会在同一次绘制前再次收起。
+ * composer 宽度一次变 ≥16px 或内容变化（换模型 / 换档 / 换引擎 / 开关 Fast）时重试；
+ * 实测截断与否在 layout / 尺寸回调里完成，不靠逐像素重渲，试回后若仍放不下会在同一次
+ * 绘制前再次收起。
  */
 function useTailCollapse(
   enabled: boolean,
@@ -4252,7 +4253,7 @@ function useTailCollapse(
     collapsedRef.current = next;
     setCollapsedState(next);
   }, []);
-  // 内容变了（换模型 / 换档 / 换引擎）先给尾部一次机会，再由实测决定。
+  // 内容变了（换模型 / 换档 / 换引擎 / 开关 Fast）先给尾部一次机会，再由实测决定。
   useEffect(() => {
     if (enabled) setCollapsed(false);
   }, [enabled, resetKey, setCollapsed]);
@@ -4262,18 +4263,28 @@ function useTailCollapse(
     const label = labelRef.current;
     if (label && label.scrollWidth > label.clientWidth + 1) setCollapsed(true);
   });
+  // 拖动分屏 / 侧栏时 composer 变窄不会让 ChatInput 重渲（它按宽度档位收敛），
+  // 名字被截断这件事只能在这里发现；收起后再按 ≥16px 位移决定要不要试回去。
   useEffect(() => {
     const composer = composerRef?.current;
-    if (!enabled || !collapsed || !composer || typeof ResizeObserver === 'undefined') return;
+    if (!enabled || !composer || typeof ResizeObserver === 'undefined') return;
     let width = composer.clientWidth;
     const observer = new ResizeObserver(() => {
-      if (Math.abs(composer.clientWidth - width) < TAIL_RETRY_WIDTH_DELTA) return;
-      width = composer.clientWidth;
-      setCollapsed(false);
+      const label = labelRef.current;
+      if (!label) return;
+      const nextWidth = composer.clientWidth;
+      const widened = nextWidth - width >= TAIL_RETRY_WIDTH_DELTA;
+      width = nextWidth;
+      if (collapsedRef.current) {
+        // 变窄没有帮助；只有变宽才值得再试一次（试回后放不下会在绘制前再次收起）。
+        if (widened) setCollapsed(false);
+      } else if (label.scrollWidth > label.clientWidth + 1) {
+        setCollapsed(true);
+      }
     });
     observer.observe(composer);
     return () => observer.disconnect();
-  }, [collapsed, composerRef, enabled]);
+  }, [composerRef, enabled, labelRef, setCollapsed]);
   return enabled && collapsed;
 }
 
@@ -4865,7 +4876,7 @@ export function ModelSelector({
     showTriggerTail && !isFieldTrigger && !isSettingsTrigger,
     composerRef,
     pillLabelRef,
-    `${dense}|${compactToolbar}|${ultraCompactToolbar}|${engineMarkVendor ?? ''}|${modelId}|${effort ?? ''}`,
+    `${dense}|${compactToolbar}|${ultraCompactToolbar}|${engineMarkVendor ?? ''}|${modelId}|${effort ?? ''}|${triggerFastOn}`,
   );
   const showTriggerTailContent = showTriggerTail && !collapseTriggerTail;
   const engineMarkNode = engineMarkOption ? (
