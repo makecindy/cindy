@@ -917,8 +917,12 @@ describe('Host macOS system proxy rules', () => {
  * module-level slot (a let/var that starts nullish or as an empty function, or an empty Map/Set/array),
  * and exported empty containers that another file in the graph mutates.
  * Failure: a new setter (or a newly loaded module with one) that the table does not classify, or a table
- * entry whose setter is gone, turns this red until the table is updated. Setters not named this way,
- * closure state of factories and modules loaded at run time through createRequire are not seen.
+ * entry whose setter is gone, turns this red until the table is updated. A `bound` entry must bind it in
+ * the Host file it names (bindsIn: a call, a container mutation, or the setter handed over as a value).
+ * Not seen: slots that start as a working function, the fallback itself (uiText.ts configureUiText,
+ * whose default returns the English text); setters not named this way; closure state of factories;
+ * modules loaded at run time through createRequire; and, for a setter handed over as a port value,
+ * whether the receiving code really calls it.
  */
 describe('module-level port setters the Host loads, classified for the Host', () => {
   const tableFile = path.join(hostSrc, 'desktop-module-setters.ts');
@@ -998,6 +1002,22 @@ describe('module-level port setters the Host loads, classified for the Host', ()
     return { setters, containers };
   }
 
+  /** Whether a Host file binds `name`: calls it (`name(…)`, `x.name(…)`), mutates the container
+   * (`name.set(…)`, …), or hands it over as a port value (a call argument or an object property). */
+  function bindsIn(file: string, name: string): boolean {
+    const sf = ts.createSourceFile(file, read(path.join(repo, file)), ts.ScriptTarget.Latest, true);
+    const isName = (n: ts.Node) => (ts.isIdentifier(n) && n.text === name) || (ts.isPropertyAccessExpression(n) && n.name.text === name);
+    let binds = false;
+    const visit = (n: ts.Node): void => {
+      if (ts.isCallExpression(n) && (isName(n.expression) || n.arguments.some(isName)
+        || (ts.isPropertyAccessExpression(n.expression) && MUTATORS.has(n.expression.name.text) && isName(n.expression.expression)))) binds = true;
+      if ((ts.isShorthandPropertyAssignment(n) && n.name.text === name) || (ts.isPropertyAssignment(n) && isName(n.initializer))) binds = true;
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    return binds;
+  }
+
   /** The table as written: key, entry, and whether the entry sits on one line. */
   function table(): Array<{ key: string; entry: Entry; oneLine: boolean }> {
     const sf = ts.createSourceFile(tableFile, read(tableFile), ts.ScriptTarget.Latest, true);
@@ -1049,11 +1069,14 @@ describe('module-level port setters the Host loads, classified for the Host', ()
     for (const { key, entry } of rows) {
       expect(['bound', 'pending', 'not-applicable', 'internal'], key).toContain(entry.status);
       if (entry.status === 'bound') {
-        // The Host file named must really mention the setter (or container) it is said to bind.
+        // The Host file named must really bind it: a mention in a comment, string, type or import does not count.
         expect(entry.where, key).toMatch(/^apps\/host\//);
-        expect(new RegExp(`\\b${key.split('#')[1]}\\b`).test(read(path.join(repo, entry.where!))), `${key} not in ${entry.where}`).toBe(true);
+        expect(bindsIn(entry.where!, key.split('#')[1]), `${key} not bound in ${entry.where}`).toBe(true);
       } else {
         expect(entry.reason?.trim(), key).toBeTruthy();
+        // Release table file lines drift with every edit; point at row ids, 甲/乙 gaps or section names.
+        expect(entry.reason, key).not.toMatch(/release table[^)]*\bline\s*\d/);
+        if (entry.status === 'pending') expect(entry.reason, key).toMatch(/\brow \w+|[甲乙]/);
       }
     }
   });
