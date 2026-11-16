@@ -63,6 +63,7 @@ export class SharedQuotaReader {
   private identity: string | null = null;
   private directoryIdentity: string | null = null;
   private inFlightRevision: number | null = null;
+  private pending: Promise<void> | null = null;
   private readings: SharedQuotaReading[] = [];
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   constructor(private readonly deps: SharedQuotaDeps) {}
@@ -150,12 +151,19 @@ export class SharedQuotaReader {
     this.startRead(this.revision);
   }
 
+  /** Resolves when the batch now being read has been published; at once when none is. */
+  settled(): Promise<void> {
+    return this.pending ?? Promise.resolve();
+  }
+
   private startRead(revision: number): void {
     this.inFlightRevision = revision;
-    void this.read(revision).finally(() => {
+    const run: Promise<void> = this.read(revision).catch(() => {}).finally(() => {
       // A late previous lease must not release a newer lease's single flight.
       if (this.inFlightRevision === revision) this.inFlightRevision = null;
+      if (this.pending === run) this.pending = null;
     });
+    this.pending = run;
   }
 
   private async read(revision: number): Promise<void> {

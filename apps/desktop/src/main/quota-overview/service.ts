@@ -261,8 +261,25 @@ export class QuotaOverviewService {
     this.scheduleRebuild(0);
   }
 
-  /** A recent settled build, building one if needed; resolves with whatever exists after `timeoutMs`. */
+  /**
+   * A recent settled build, building one if needed; resolves with whatever exists after `timeoutMs`.
+   * Received shares are read apart from the collection, so the same wait also covers the share batch
+   * in flight (the first one when collection has just started) rather than answering without it.
+   */
   async fresh(timeoutMs: number): Promise<QuotaOverviewBuild | null> {
+    const deadline = Date.now() + timeoutMs;
+    const build = await this.freshCollection(timeoutMs);
+    const shared = this.sharedReader?.settled();
+    const remaining = deadline - Date.now();
+    if (!build || !shared || remaining <= 0) return build;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([shared, new Promise<void>((resolve) => { timer = setTimeout(resolve, remaining); })]);
+    clearTimeout(timer);
+    // The share batch republishes the build it lands in; an owner switch meanwhile yields nothing.
+    return this.currentBuild();
+  }
+
+  private async freshCollection(timeoutMs: number): Promise<QuotaOverviewBuild | null> {
     const build = this.currentBuild();
     if (build && !build.stale && Date.now() - build.builtAtMs < FRESH_BUILD_MS) return build;
     if (!this.started) return null;

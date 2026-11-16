@@ -432,6 +432,25 @@ it('collects authorized shared quota into the overview for every consumer and dr
   expect(mocks.sharedRead).toHaveBeenCalledTimes(calls);
 });
 
+// #10851 review (P1): a model group starting the overview cold took the first collection,
+// published before the share batch, so that one pick ranked the share as unknown. The same
+// bounded wait now covers the share batch; a reply slower than the wait still returns on time.
+it.each([[500, true], [5_000, false]])('waits for the share batch within the fresh() limit (reply %ims)', async (delayMs, included) => {
+  mocks.collect.mockResolvedValue(emptyMenubarInputs(Date.now(), 'Fixture'));
+  mocks.sharedRead.mockImplementation(() => new Promise(done => setTimeout(() => done({ version: 1,
+    capabilities: { quota: true, usage: false }, status: { quota: 'ready', usage: 'disabled' }, usage: null,
+    quota: { group: false, partial: false, accounts: [{ state: 'ready', updatedAt: Date.now(), balance: null,
+      windows: [{ kind: 'week', remainingPercent: 82, resetsAt: Date.now() + 60 * 60_000, windowMinutes: 10080, label: null }] }] },
+  }), delayMs)));
+  overview.lease(60_000);
+  let result: Awaited<ReturnType<QuotaOverviewService['fresh']>> | undefined;
+  void overview.fresh(2_000).then(build => { result = build; });
+  await vi.advanceTimersByTimeAsync(Math.min(delayMs, 2_000) + 1);
+  expect(result).toBeDefined();
+  expect(result!.input.sources.some(source => source.id === 'share:share-one')).toBe(included);
+  await vi.advanceTimersByTimeAsync(60_000);
+});
+
 // Unit regression for provider-sharing §7.5: the reader cleared memory on auth changes,
 // but a null overview suppressed the native update. Hold an old collection unresolved.
 // A pending boundary always starts with the real invalidation signal ('session-invalidated').
