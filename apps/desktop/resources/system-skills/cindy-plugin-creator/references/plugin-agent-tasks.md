@@ -258,6 +258,34 @@ autoTitle 与 title 互斥，task/bot
 项目名称。新模式参与幂等摘要；旧字段组合的摘要及重放行为保持，不需要重新批准或配置。
 旧 Host 未宣告支持时，应明确提示所需客户端能力，不能静默丢弃资料或假称已经自动命名。
 
+### 转发 IM 消息的出处（可选）
+
+插件把它代管的 IM 消息（如微信群里的提问）转进任务时，先检查 `tasks.capabilities().messageRelay === true`，
+再给 `tasks.send` 另传 `relay`，Cindy 会把这条消息显示成与自带 IM 渠道相同的卡片：
+
+```js
+await cindy.tasks.send({ taskId, requestKey, expectedRevision, text, context, relay: {
+  platform: 'wechat',            // 1–32 字符（去首尾空白后），不含换行等控制字符
+  chatType: 'group',             // 'group' | 'direct'
+  chatName: '产品群',            // 可选，≤100 字符
+  sender: { id: 'wxid_xxx', name: 'Chris', isOwner: false }, // id ≤128，name ≤64，isOwner 必须是布尔值
+} });
+```
+
+- 各层只接受上面这些键，多一个、类型或长度不对都返回 `INVALID_REQUEST`。`targets.send` 不接受 `relay`。
+- `text` 只放发言人的原话，卡片正文只显示它。群聊背景放进 `context`：Cindy 只把其中第一个
+  `<group_chat_context>\n[群里最近的消息]（或 [自你上次请求后群里新增的消息]）\n…\n</group_chat_context>` 块显示为
+  「群聊背景」，块外的说明（例如给 Agent 的回复方式说明）照常交给 Agent，但不显示。
+- 平台 id 用 Cindy 已知的写法（`wechat`、`wecom`、`dingtalk`、`feishu`、`lark`、`slack`、`telegram`、`discord`、
+  `imessage`、`x`）才显示平台名和手机端卡片；其它值在电脑端原样显示、手机端保持普通插件消息。
+- `isOwner: true` 时卡头为「Cindy · 来自 微信」，否则写出发言人与群名。手机端对所有 IM 都只显示「Cindy · 来自 X」。
+- **来源标签不变**：卡片上方仍显示「由插件「你的插件名」发送」，Agent 收到的 `[消息来源]` 写明是本插件转发、
+  发言人是谁、是否由插件标明为主人本人。`relay` 只是展示上下文：不改变权限、Auto 审阅或任务归属，也不让消息变成
+  用户本人在 Cindy 里的输入。共享任务的访客看不到 `relay`。
+- 宿主会清洗这些字符串（去换行、限长、替换书名号）后保存；`relay` 参与幂等摘要，同键重试必须带相同的 `relay`。
+  不带 `relay` 的请求与旧版完全一样，已有 requestKey 照常重放。
+- 旧 Host 没有 `messageRelay` 时不要传 `relay`（会被当作未知字段拒绝）；照旧只发 `text` 和 `context`，消息显示为普通插件消息。
+
 ### 新建任务的权限选择（可选）
 
 先检查 `tasks.capabilities().createPermissionMode === true`。`tasks.create` 和 project 的

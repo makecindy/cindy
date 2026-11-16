@@ -53,6 +53,36 @@ describe('plugin task pipe', () => {
     expect(validPluginTaskRequest({ ...send, context: { system: 'not allowed' } })).toBe(false);
     expect(validPluginTaskRequest({ ...send, context: 'x'.repeat(32769) })).toBe(false);
   });
+  // unit: message-source.md「插件转发的 IM 消息」(2026-11-16). tasks.send gains an optional relay that the
+  // pipe must bound exactly (no extra keys at any level) and advertise; targets.send stays unchanged.
+  it('accepts a bounded tasks.send relay, advertises it, and rejects every other shape', async () => {
+    const send = { type: 'tasks-request', kind: 'send', taskId: 'task', requestKey: 'send', expectedRevision: 1, text: '发布时间定了吗？' };
+    const relay = { platform: 'wechat', chatType: 'group', chatName: '产品群', sender: { id: 'wxid_a', name: 'Chris', isOwner: false } };
+    const handler = vi.fn(async () => ({ runId: 'r' }));
+    const deps = { getGhost: () => ghost, handler, isCurrent: () => true };
+    expect(await handlePluginTaskRequest('p', { ...send, relay }, deps)).toEqual({ ok: true, data: { runId: 'r' } });
+    expect(handler).toHaveBeenLastCalledWith('p', { ...send, relay });
+    expect(await handlePluginTaskRequest('p', { type: 'tasks-request', kind: 'capabilities' }, deps))
+      .toMatchObject({ ok: true, data: { messageRelay: true, messageContext: true } });
+    const { chatName: _omitted, ...withoutChatName } = relay;
+    expect(validPluginTaskRequest({ ...send, relay: { ...withoutChatName, chatType: 'direct' } })).toBe(true);
+    expect(validPluginTaskRequest({ ...send, relay: { ...relay, platform: ` ${'w'.repeat(32)} ` } })).toBe(true);
+    for (const invalid of [
+      null, 'wechat', { ...relay, extra: 1 }, { ...relay, sender: { ...relay.sender, extra: 1 } },
+      { ...relay, platform: '' }, { ...relay, platform: '  ' }, { ...relay, platform: 'w'.repeat(33) }, { ...relay, platform: 'we\nchat' },
+      { ...relay, chatType: 'channel' }, { ...relay, chatName: 'x'.repeat(101) }, { ...relay, chatName: 1 },
+      { ...relay, sender: { ...relay.sender, id: '' } }, { ...relay, sender: { ...relay.sender, id: 'x'.repeat(129) } },
+      { ...relay, sender: { ...relay.sender, name: ' ' } }, { ...relay, sender: { ...relay.sender, name: 'x'.repeat(65) } },
+      { ...relay, sender: { id: 'wxid_a', name: 'Chris' } }, { ...relay, sender: { ...relay.sender, isOwner: 'true' } },
+    ]) {
+      expect(validPluginTaskRequest({ ...send, relay: invalid })).toBe(false);
+    }
+    expect(await handlePluginTaskRequest('p', { ...send, relay: { ...relay, extra: 1 } }, deps))
+      .toMatchObject({ ok: false, error: { code: 'INVALID_REQUEST' } });
+    expect(handler).toHaveBeenCalledOnce();
+    // Only tasks.send accepts relay.
+    expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'create', requestKey: 'new', title: 'T', relay })).toBe(false);
+  });
   it('bounds the complete JSON plan without truncating scope or breaking representative 200-item batches', () => {
     const item = {label:'sample',workingDir:'/answer',route:{agentKind:'pi',providerId:'p',model:'m',effort:'high',fastMode:false},task:'测'.repeat(2600)};
     const plan = {concurrency:4,task:'c'.repeat(8000),items:Array.from({length:200},(_,i)=>({...item,label:'w'+i}))};
