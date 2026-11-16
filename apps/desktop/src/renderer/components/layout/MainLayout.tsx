@@ -332,13 +332,6 @@ export function MainLayout() {
   // 实例）会经 Outlet context 的 setRightSidebarAvailable 置 true，卸载时置 false。
   // 据此决定是否渲染右栏面板：离开聊天视图 → 面板卸载，不会卡在展开态且无入口关闭。
   const [rightSidebarAvailable, setRightSidebarAvailable] = useState(false);
-  // 经过不声明右栏的路由时保持挂载并强制折叠，避免销毁内置浏览器 guest（#6485）。
-  const { mounted: rightSidebarMounted, forceCollapsed: rightSidebarForceCollapsed } =
-    useRetainedRightSidebarMount({
-      available: rightSidebarAvailable,
-      loaded: rsbWindow.loaded,
-      detached: rsbDetached,
-    });
   // 当前 cc-agent session id —— 由 CCAgentSessionView 的路由主实例(ownsRoute=true)经 outlet context
   // 推上来,Shell 据此从 module-level store 拉对应桶的 tab 列表持久化数据。null = 不在聊天会话内。
   const [rightSidebarSessionId, setRightSidebarSessionId] = useState<string | null>(null);
@@ -1119,7 +1112,7 @@ export function MainLayout() {
     setIsRightSidebarMaximized((v) => !v);
   }, []);
   // 左 / 上 / 下边页签组:按「组里有没有可见页签」注册 / 注销 pane,并保证树里有它。
-  useTabGroupPanes({
+  const globalRightViewAvailable = useTabGroupPanes({
     sessionId: rightSidebarSessionId,
     enabled: rsbWindow.loaded && !rsbDetached && !isSettingsRoute,
     // 离开聊天页(如 /plugins)时在聊天页出现过的组停放而不卸载,webview 不重载(#8081)。
@@ -1128,6 +1121,14 @@ export function MainLayout() {
     deviceLinkDeviceId: rightSidebarWorkdirInfo.deviceLinkDeviceId,
     subagentsAvailable: rightSidebarSubagentsAvailable,
   });
+  const rightSidebarPaneAvailable = rightSidebarAvailable || globalRightViewAvailable;
+  // 全局具名页可以从 /plugins 等非任务路由打开；其余页签仍按原规则保留并强制折叠。
+  const { mounted: rightSidebarMounted, forceCollapsed: rightSidebarForceCollapsed } =
+    useRetainedRightSidebarMount({
+      available: rightSidebarPaneAvailable,
+      loaded: rsbWindow.loaded,
+      detached: rsbDetached,
+    });
   useEffect(() => {
     if (!isRightSidebarMaximized) return;
     const handler = (e: KeyboardEvent) => {
@@ -1153,10 +1154,10 @@ export function MainLayout() {
     }
   }, [isRightSidebarCollapsed, isRightSidebarMaximized]);
   useEffect(() => {
-    if (!rightSidebarAvailable && isRightSidebarMaximized) {
+    if (!rightSidebarPaneAvailable && isRightSidebarMaximized) {
       setIsRightSidebarMaximized(false);
     }
-  }, [rightSidebarAvailable, isRightSidebarMaximized]);
+  }, [rightSidebarPaneAvailable, isRightSidebarMaximized]);
 
   // ── 侧边栏子窗口(detached)联动 ─────────────────────────────────────────
   // 1) 上下文上推:sessionId / workdir / available 变化时无条件推给 main
@@ -1958,7 +1959,7 @@ export function MainLayout() {
                   </FadeSwitcher>
                 </ContentHeaderSlot>
                 {/* 开关属于聊天区；窗口向右扩宽时留在原地，再次点击收起侧栏。 */}
-                {isMac && rightSidebarAvailable && rsbWindow.loaded && (
+                {isMac && rightSidebarPaneAvailable && rsbWindow.loaded && (
                   <div
                     data-testid="right-sidebar-fixed-trigger"
                     className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
@@ -2018,7 +2019,7 @@ export function MainLayout() {
             <LayoutRoot
               onInstalledGhostsChange={handleInstalledGhostsChange}
               suppressNonChatPanels={isSettingsRoute}
-              sidebarExpansionReady={rightSidebarAvailable && rsbWindow.loaded && !rsbDetached}
+              sidebarExpansionReady={rightSidebarPaneAvailable && rsbWindow.loaded && !rsbDetached}
               rightTabsCollapsed={
                 !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed
               }
