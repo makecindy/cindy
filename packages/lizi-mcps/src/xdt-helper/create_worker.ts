@@ -32,7 +32,9 @@ type CreateWorkerErrorCode =
   | 'REMOTE_AGENT_SHARE_REMOVED'
   | 'REMOTE_AGENT_SHARE_UNAVAILABLE'
   | 'REMOTE_AGENT_SHARE_LEGACY_DISABLED'
-  | 'UNSUPPORTED_CAPABILITY';
+  | 'UNSUPPORTED_CAPABILITY'
+  | 'MODEL_GROUP_NOT_FOUND'
+  | 'MODEL_GROUP_UNAVAILABLE';
 
 /** agent_device_id 里表示「这台电脑」(任务所在电脑)的取值。 */
 export const LOCAL_AGENT_DEVICE = 'local';
@@ -53,13 +55,23 @@ export interface WorkerCreationResolved {
   fastMode: boolean | 'ultrafast';
 }
 export interface WorkerCreationDefaults {
-  source: 'memory' | 'original-policy' | 'explicit';
+  source: 'memory' | 'original-policy' | 'explicit' | 'model-group';
   fallbackReason?: string;
+}
+/** 经模型组(模式)创建时，宿主选中的来源与原因。 */
+export interface WorkerCreationModelGroup {
+  routeId: string;
+  groupName: string;
+  why: string;
+  modelName: string;
+  sourceName: string;
+  exceptions?: Array<{ type: string; viaRouteName?: string }>;
 }
 export interface CreateWorkerSuccessData {
   worktreeSource?: { sourceBranch: string; source: 'memory' | 'current' | 'explicit'; fallbackReason?: string };
   resolved?: WorkerCreationResolved;
   defaults?: WorkerCreationDefaults;
+  modelGroup?: WorkerCreationModelGroup;
   executionDeviceId?: string;
   workerId: string;
   workerSessionId: string;
@@ -98,6 +110,8 @@ export interface CreateWorkerDeps {
     agentDeviceId?: string | null;
     initialTask?: string;
     initialTaskImages?: string[];
+    /** 模型组里模式的 id(list_model_groups 的 routes[].id)；宿主按模式选来源。 */
+    modelGroupId?: string;
   }) => Promise<CreateWorkerControlResult>;
 }
 
@@ -185,6 +199,8 @@ export const createWorkerSpecSchema = z.object({
     .describe('可选，运行设备：同账号另一台电脑的设备 id，只能取 get_workspace_info 返回的 execution_devices 中 supported=true 的 device_id。指定后 Worker 的任务、目录、命令与文件都在那台电脑；省略则与 Lead 同一台。那台离线、未开启远程控制或版本过旧时创建失败，不会回退到本机。'),
   agent_device_id: z.string().trim().min(1).max(128).optional()
     .describe('可选，Worker 的 Agent 位置：取 list_available_models 的 locations[].agent_device_id；"local" 为 Worker 工作电脑。指定 execution_device_id 时省略用那台的默认；否则优先使用适用的手工组合，没有适用记忆时跟 Lead。'),
+  model_group_id: z.string().trim().min(1).max(64).optional()
+    .describe('可选，用户在设置「模型组」里建的模式 id，取 cindy_helper list_model_groups 返回的 routes[].id。传入后由宿主按该模式的选法当场选一个来源(引擎、模型、供应商、Agent 位置与推理强度)，不能同时传 agent / model / provider_id / agent_device_id / effort / execution_device_id；fast 可传。没有能用的来源时返回 MODEL_GROUP_UNAVAILABLE，不回退到别的模型。'),
 }).strict();
 
 export type CreateWorkerSpec = z.infer<typeof createWorkerSpecSchema>;
@@ -217,6 +233,7 @@ const DESCRIPTION = [
   '- new_worktree: 可选对象，为 Worker 新建自有 worktree；source_branch 可省略，与 Lead 同一仓库时默认目标目录当前分支或提交，其他仓库优先使用该仓库的新任务源分支记忆，再回退当前分支或提交。仅本机有提交的 Git 项目可用；SSH / execution_device_id 不支持，对话 Lead 需显式指定其他项目。返回 working_dir 为实际启动目录，worktree 包含自有检出目录和新分支；worktree_source 返回实际源分支与记忆失效/读取失败时的回退原因。归档按普通任务规则回收，未提交改动先快照。',
   '- execution_device_id: 可选，运行设备(同账号另一台电脑)的 device_id，只能取 get_workspace_info 的 execution_devices 里 supported=true 的值；指定后 Worker 的任务、目录、命令与文件都在那台电脑，结果仍自动回报给你。用户没有要求放到别的电脑时不要传。',
   '- agent_device_id: 可选，Agent 使用哪台电脑的远程供应商；"local" 为 Worker 工作电脑。指定 execution_device_id 时先用同参数的 list_available_models 查 model / provider_id / locations；省略位置优先使用适用的手工组合，否则按原策略跟 Lead（运行设备使用工作电脑默认）。',
+  '- model_group_id: 可选，用户在设置「模型组」里建的模式 id(先用 cindy_helper 的 list_model_groups 查 routes[].id 与名称)。用户要求「用某个模式 / 模型组开 Worker」时传它，不要自己挑模型。宿主在创建时按模式规则选一次来源，Worker 的任务与文件仍在 Lead 这台电脑，只有 Agent 在选中来源的位置运行；与 agent / model / provider_id / agent_device_id / effort / execution_device_id 同传返回 INVALID_PARAMS；SSH Lead 不支持。成功时返回 model_group(模式、选中的模型与来源、原因)和实际 agent/model/provider_id/agent_device_id，defaults.source=model-group。',
   '- initial_task 的正文要自包含：目标、背景、边界与交付要求写进正文，文件只作补充并给绝对路径。返回的 file_access 说明这个 worker 能看到什么：lead_working_directory = 与你同一目录；own_worktree / explicit_directory = 同一台电脑的另一个目录（没有你未提交的文件，代码用提交或分支交接）；other_computer = 另一台电脑，读不到这台电脑的任何文件。',
   '- 返回的 initial_task_state 说明首条任务的真实状态：delivered = 已送达并开始处理；queued = 已排队、尚未开始；not_delivered = worker 已创建但任务没送到；none = 没有附任务。创建成功不等于任务已完成，向用户汇报时按这个状态如实说。',
   "- initial_task: 可选, 创建后立即派给 worker 的第一条消息；dispatch_outcome.wakeKind=queued 表示首条任务已成功入队(此时回传 queued_message_id, 被消费前可用 get_worker_queue_status / update_queued_message / cancel_queued_message / merge_queued_messages 管理)；dispatch_outcome.kind='session-dispatch' 且 dispatched=false，或 kind='host-send' 且 accepted=false，表示 worker 已创建但首条任务未送达 / 派发失败",
@@ -233,6 +250,7 @@ const DESCRIPTION = [
   '- 该 agent 没有任何已连接的模型供应商 (provider) → 返 NO_PROVIDER_FOR_AGENT: 应如实把 message 转告用户 (去「设置 → 模型供应商」连接一个支持该 agent 的供应商), 或按 message 建议改用「已连接供应商的另一个 agent」创建 worker; 不要反复重试同一 agent。',
   '- Worker 解析出的精确 provider + model 路由当前不可用 → 返 PROVIDER_ROUTE_UNAVAILABLE: 应如实把 message 转告用户并调整模型或供应商; 不要按“完全没有供应商”处理，也不要反复重试同一路由。',
   '- 指定的运行设备或 agent_device_id 那台离线 / 未开启远程控制 → 返 REMOTE_AGENT_DEVICE_UNREACHABLE(分享来的供应商不可用 → REMOTE_AGENT_SHARE_*)；运行设备版本过旧 → 返 UNSUPPORTED_CAPABILITY。都不会改在本机创建：如实告知用户，由用户决定换设备或改在本机。',
+  '- model_group_id 指向的模式不存在 → 返 MODEL_GROUP_NOT_FOUND；模式里此刻没有能用的来源 → 返 MODEL_GROUP_UNAVAILABLE。都不会改用别的模型创建：如实告知用户，由用户决定换模式或指定模型。',
 ].join('\n');
 
 export function registerCreateWorkerTool(
@@ -244,7 +262,7 @@ export function registerCreateWorkerTool(
     category: 'control',
     description: DESCRIPTION,
     inputShape: createWorkerSpecSchema.shape,
-    handler: async ({ role, agent, model, provider_id, effort, fast, label, initial_task, images, working_dir, new_worktree, execution_device_id, agent_device_id }) => {
+    handler: async ({ role, agent, model, provider_id, effort, fast, label, initial_task, images, working_dir, new_worktree, execution_device_id, agent_device_id, model_group_id }) => {
       const ctx = deps.getSessionContext?.() ?? deps;
       if (!ctx.sessionId) {
         return errorPayload('LEAD_NOT_SUPPORTED', '当前 session 类型不支持作为 Lead。');
@@ -269,6 +287,7 @@ export function registerCreateWorkerTool(
         ...(new_worktree !== undefined ? { worktree: new_worktree.source_branch === undefined ? {} : { sourceBranch: new_worktree.source_branch } } : {}),
         ...(execution_device_id !== undefined ? { executionDeviceId: execution_device_id } : {}),
         ...toHostAgentDeviceId(agent_device_id),
+        ...(model_group_id !== undefined ? { modelGroupId: model_group_id } : {}),
         initialTask: initial_task,
       });
       if (!result.ok) {
@@ -367,5 +386,11 @@ export function workerCreationRoutePayload(result: CreateWorkerSuccessData, requ
     ...(result.executionDeviceId ? { execution_device_id: result.executionDeviceId } : {}),
     ...(result.defaults ? { defaults: { source: result.defaults.source,
       ...(result.defaults.fallbackReason ? { fallback_reason: result.defaults.fallbackReason } : {}) } } : {}),
+    ...(result.modelGroup ? { model_group: {
+      id: result.modelGroup.routeId, name: result.modelGroup.groupName, why: result.modelGroup.why,
+      model_name: result.modelGroup.modelName, source_name: result.modelGroup.sourceName,
+      ...(result.modelGroup.exceptions ? { exceptions: result.modelGroup.exceptions.map((item) => ({
+        type: item.type, ...(item.viaRouteName ? { via_route_name: item.viaRouteName } : {}) })) } : {}),
+    } } : {}),
   };
 }

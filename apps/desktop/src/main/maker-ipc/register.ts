@@ -1157,6 +1157,7 @@ import {
 } from './orcaRemoteWorkerHost.js';
 import { createOrcaRemoteWorkers, invokeDeviceValue, type OrcaRemoteWorkers } from './orcaRemoteWorkers.js';
 import { listWorkerAgentLocations, readWorkerAgentLocations } from './workerAgentLocations.js';
+import { modelGroupResolver } from '../model-groups/runtime.js';
 import { createControlledModelCatalogReader } from './controlledModelCatalog.js';
 import { CONTROLLED_MODEL_CATALOG_CHANNEL } from '../../shared/controlledModelCatalog.js';
 import {
@@ -2882,6 +2883,8 @@ interface OrcaCollabService {
   createWorker: (params: {
     /** Host-only marker set at the MCP adapter; never accepted from its schema. */
     useCreationPrefs?: boolean;
+    /** create_worker 的 model_group_id：按这个模式选来源(model-groups.md §6.2)。 */
+    modelGroupId?: string;
     leadSessionId: string;
     role: string;
     agent?: AgentKind;
@@ -2904,6 +2907,7 @@ interface OrcaCollabService {
         worktreeSource?: import('../../shared/orca-worker-project').WorkerWorktreeSourceSelection;
         resolved?: Extract<import('./orcaWorkerCreationService').OrcaWorkerCreationResult, { ok: true }>['resolved'];
         defaults?: import('./orcaWorkerDefaults').WorkerDefaultsResolution;
+        modelGroup?: import('./orcaWorkerModelGroup').WorkerModelGroupResolution;
         executionDeviceId?: string;
         workerId: string;
         workerSessionId: string;
@@ -16411,6 +16415,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getWorkerDefaults: getWorkerDefaultsFromNewMaker,
     getCreationSelection: () => isAppSessionBoundaryPending() ? null : getWorkerCreationSelection(getActiveDataOwnerPushStamp()),
+    // 与新任务同一个 resolver：轮流位置与账号范围共用。账号切换未完成时不读任何账号的模式。
+    resolveModelGroup: async (request) => isAppSessionBoundaryPending()
+      ? { outcome: 'unavailable', groupName: request.selection.id, trace: [] }
+      : modelGroupResolver.resolve(request),
+    isSharedTaskSession: isSessionSharedTaskActive,
     getWorkerPermissionMode: getWorkerPermissionModeFromCreationPrefs,
     resolveWorkerWorkingDir: async (dir, lead) => {
       let resolved: string;
@@ -16562,6 +16571,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         context,
       });
     },
+    commitModelGroupDecision: (decisionId) => modelGroupResolver.commit(decisionId),
     rollbackCreatedWorker: async ({ workerId, workerSessionId }) => {
       if (await orcaRemoteWorkers.rollbackCreatedWorker(workerSessionId)) return;
       const workerSession = maker.getSession(workerSessionId);

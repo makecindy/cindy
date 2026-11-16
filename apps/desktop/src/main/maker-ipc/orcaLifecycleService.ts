@@ -1,4 +1,5 @@
 import type { OrcaWorkerCreateRequest } from './orcaWorkerDefaults';
+import { withoutModelGroupDecision } from './orcaWorkerModelGroup';
 import type { AgentKind } from '@cindy/maker-core';
 
 import { normalizeOrcaWorkerLabel } from '@cindy/maker-shared/orca-team';
@@ -129,6 +130,11 @@ export interface OrcaLifecycleDeps {
     context: string;
   }, assertCurrent?: () => Promise<void>): Promise<void>;
   rollbackCreatedWorker(params: { workerId: string; workerSessionId: string }): Promise<void>;
+  /**
+   * 经模式创建的 Worker 落定(建好且没有回滚；首条任务送出失败但 Worker 保留也算，它已用上这个来源)后提交一次
+   * 选路：推进「轮流」、记「最近的选择」。选不到、创建失败与回滚都不提交；enable_collab_mode 不经过模式。
+   */
+  commitModelGroupDecision?(decisionId: string): boolean;
   broadcastSessionCreated(sessionId: string): void;
   broadcastOrcaWorkerChanged(leadSessionId: string): void;
 }
@@ -309,10 +315,14 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       await deps.rollbackCreatedWorker(created).catch(() => undefined);
       return internalFailure(err);
     }
+    const { modelGroup, ...createdRoute } = created;
+    if (modelGroup?.decisionId) deps.commitModelGroupDecision?.(modelGroup.decisionId);
     deps.broadcastSessionCreated(created.workerSessionId);
     deps.broadcastOrcaWorkerChanged(params.leadSessionId);
     return {
-      ...created,
+      ...createdRoute,
+      // 选路凭据只在宿主内部使用，不随结果交给工具或界面。
+      ...(modelGroup ? { modelGroup: withoutModelGroupDecision(modelGroup) } : {}),
       ...(initialTask ? { dispatched: dispatchResult?.dispatched ?? false } : {}),
       ...(dispatchResult ? { dispatchOutcome: dispatchResult.dispatchOutcome } : {}),
       ...(dispatchResult?.queued === true ? { queuedMessageId: dispatchResult.queuedMessageId } : {}),

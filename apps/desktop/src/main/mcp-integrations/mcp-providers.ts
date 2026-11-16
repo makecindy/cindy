@@ -1,3 +1,5 @@
+import { modelGroupsAgentView } from '../model-groups/agentView.js';
+import { readModelGroupsConfig } from '../model-groups/store.js';
 import { resolveAutomaticProjectIcon } from '../projectAutomaticIcon.desktop.js';
 import { parseProjectSymbol, parseProjectLetters } from '@cindy/maker-shared/project-alias-sync';
 import { readProjectInfo } from '../projectInfoCore.js';
@@ -1405,6 +1407,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             }, deps.getLiveSessionGrantState),
           });
         }),
+      },
+      modelGroups: {
+        list: async ({ callerSessionId }) => {
+          // 共享中的任务由访客驱动：不把主人的模式列给它(与 list_available_models 同一边界)。
+          if (callerSessionId && isSessionSharedTaskActive(callerSessionId))
+            throw Object.assign(new Error('Not available in a shared task'), { code: 'PERMISSION_DENIED' });
+          return withAccountDataAccess(callerSessionId, async () => modelGroupsAgentView(readModelGroupsConfig()));
+        },
       },
       appSettings: {
         navigationDeviceId: () => getDeviceId(),

@@ -20,6 +20,8 @@ import { isActiveWorkerStatus } from '../../../shared/orca-worker-status';
 import { deviceAvailableModels, deviceWorkerRoutingContext, sshCodexWorkerRoutingContext } from '../orcaProviderRoutingContext';
 import type { ProviderView } from '@cindy/model-providers';
 import { resolveSessionGitDir, resolveWorkerInheritedDirectory } from '../../git-context/sessionDirResolver';
+import { createModelGroupResolver } from '../../model-groups/resolver';
+import type { ModelGroupResolveResult } from '../../../shared/modelGroups';
 
 vi.mock('electron-store', () => ({ default: class {} }));
 
@@ -3490,5 +3492,144 @@ describe('Worker tool defaults follow the submitted panel route atomically', () 
       await service.createWorker({ ...request, agent: 'codex', ...(kind === 'execution' ? { executionDeviceId: 'device' } : {}), useCreationPrefs: kind !== 'manual' });
       expect(getCreationSelection).not.toHaveBeenCalled();
     }
+  });
+});
+
+/**
+ * 测试价值(经模型组创建 Worker)
+ * - 生产入口与可观察结果：createOrcaWorkerCreationService().createWorker 带 modelGroupId——Worker 实际用的
+ *   引擎、模型、来源与 Agent 位置，以及冲突 / 选不到时的错误码。
+ * - 规则依据：docs/product-rules/model-groups.md §6.2(参数冲突、不换工作电脑、共享任务不用主人的模式、选不到即失败、只在落定后提交)。
+ * - 现有覆盖缺口：此前 Worker 创建不经过模型组；相邻用例只覆盖记忆、显式来源与供应商组跟随。
+ * - 最小失败输入：模式的推理强度该模型不支持(当成显式参数会让创建失败)；Lead 的 Agent 在另一台电脑而模式选中本机来源(省略位置会改跟 Lead 查错目录)；Lead 归在供应商组而
+ *   模式选中 Lead 现用来源(会被改成组那一项)；未提交的选路被当成已采用，「轮流」提前前进。
+ * - tier：unit，注入依赖，真实 resolver 只配内存 fake。
+ */
+describe('Worker created through a model group mode', () => {
+  const routed = (route: Partial<{ agentKind: 'cc' | 'codex' | 'pi'; providerId: string; model: string; agentDeviceId: string; effort: string }> = {}) =>
+    vi.fn(async (): Promise<ModelGroupResolveResult> => ({
+      outcome: 'routed', groupName: '主力编程', decisionId: 'decision-1',
+      route: { agentKind: 'codex', providerId: 'xd', model: 'gpt-5.4', ...route },
+      modelName: 'GPT-5.4', sourceName: 'XD Gateway', why: 'order', quota: null, trace: [],
+    }));
+  const create = (service: ReturnType<typeof createDeps>['service'], patch: Record<string, unknown> = {}) =>
+    service.createWorker({ leadSessionId: 'lead-1', role: 'developer', label: 'dev', modelGroupId: 'r1', ...patch });
+
+  it.each([
+    ['agent', { agent: 'codex' }],
+    ['model', { model: 'gpt-5.5' }],
+    ['provider_id', { providerId: 'xd' }],
+    ['agent_device_id', { agentDeviceId: null }],
+    ['effort', { effort: 'high' }],
+    ['execution_device_id', { executionDeviceId: 'mac-mini' }],
+  ])('rejects %s next to model_group_id before routing', async (_name, patch) => {
+    const resolveModelGroup = routed();
+    const openRemoteWorker = vi.fn();
+    const { deps, service } = createDeps({ resolveModelGroup, openRemoteWorker });
+    await expect(create(service, patch)).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(resolveModelGroup).not.toHaveBeenCalled();
+    expect(openRemoteWorker).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
+  it('does not route a mode for an SSH Lead', async () => {
+    const resolveModelGroup = routed();
+    const { deps, service } = createDeps({
+      resolveModelGroup,
+      getLeadSessionRow: vi.fn(async () => ({ id: 'lead-1', agentKind: 'codex' as const, workspaceKind: 'project' as const,
+        workingDir: '/srv/repo', model: 'gpt-5.5', effort: 'low', permissionMode: 'default', fastMode: false,
+        providerId: 'xd', remoteHostId: 'builder' })),
+    });
+    await expect(create(service)).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(resolveModelGroup).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
+  it("does not route the owner's mode for a shared task Lead", async () => {
+    const resolveModelGroup = routed();
+    const { deps, service } = createDeps({ resolveModelGroup, isSharedTaskSession: vi.fn((id: string) => id === 'lead-1') });
+    await expect(create(service)).resolves.toMatchObject({ ok: false, errorCode: 'MODEL_GROUP_UNAVAILABLE' });
+    expect(resolveModelGroup).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing', 'MODEL_GROUP_NOT_FOUND'],
+    ['unavailable', 'MODEL_GROUP_UNAVAILABLE'],
+  ] as const)('fails a %s mode without falling back to memory or defaults', async (outcome, errorCode) => {
+    const getCreationSelection = vi.fn(() => ({ agent: 'codex' as const, model: 'gpt-5.5', providerId: 'xd', agentDeviceId: null, effort: '', fast: false }));
+    const { deps, service } = createDeps({
+      getCreationSelection,
+      resolveModelGroup: vi.fn(async () => ({ outcome, groupName: '主力编程', trace: [] })),
+    });
+    await expect(create(service, { useCreationPrefs: true })).resolves.toMatchObject({ ok: false, errorCode });
+    expect(getCreationSelection).not.toHaveBeenCalled();
+    expect(deps.getProviderRoutingContext).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps a local pick local when the Lead's Agent runs on another computer, and reports the mode", async () => {
+    const resolveModelGroup = routed({ effort: 'xhigh' });
+    const { deps, service } = createDeps({
+      resolveModelGroup,
+      getLeadSessionRow: vi.fn(async () => ({ id: 'lead-1', agentKind: 'codex' as const, workspaceKind: 'project' as const,
+        workingDir: 'C:\\repo', model: 'studio-model', effort: 'medium', permissionMode: 'default', fastMode: false,
+        providerId: 'studio-xd', remoteHostId: null, agentDeviceId: 'mac-studio' })),
+    });
+    const result = await create(service, { initialTaskImages: ['/tmp/a.png'] });
+    expect(resolveModelGroup).toHaveBeenCalledWith({ selection: { type: 'route', id: 'r1' }, context: { hasImages: true } });
+    expect(result).toMatchObject({
+      ok: true,
+      defaults: { source: 'model-group' },
+      modelGroup: { routeId: 'r1', groupName: '主力编程', modelName: 'GPT-5.4', sourceName: 'XD Gateway', decisionId: 'decision-1' },
+      resolved: { agent: 'codex', model: 'gpt-5.4', providerId: 'xd', effort: 'xhigh', agentDeviceId: null },
+    });
+    expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('codex', null);
+    expect(deps.getProviderRoutingContext).not.toHaveBeenCalledWith('codex', null, 'mac-studio');
+    expect(vi.mocked(deps.bootstrapSession).mock.calls[0]![0]).not.toHaveProperty('agentDeviceId');
+  });
+
+  it.each([
+    ['an effort the model lacks falls back like a new task', 'max', 'xhigh'],
+    ['no mode effort keeps the original Worker default (Lead effort)', undefined, 'medium'],
+  ])('%s', async (_name, effort, expected) => {
+    const { service } = createDeps({ resolveModelGroup: routed(effort ? { effort } : {}) });
+    await expect(create(service)).resolves.toMatchObject({ ok: true, resolved: { model: 'gpt-5.4', effort: expected } });
+  });
+
+  it("does not let the Lead's provider group replace the source the mode picked", async () => {
+    const { deps, service } = createDeps({
+      resolveModelGroup: routed({ model: 'gpt-5.5' }),
+      getLeadSessionRow: vi.fn(async () => ({ id: 'lead-1', agentKind: 'codex' as const, workspaceKind: 'project' as const,
+        workingDir: 'C:\\repo', model: 'gpt-5.5', effort: 'medium', permissionMode: 'default', fastMode: false,
+        providerId: 'xd', remoteHostId: null, providerGroupEntry: { agentDeviceId: 'device-g', providerId: 'spark' } })),
+    });
+    await expect(create(service)).resolves.toMatchObject({ ok: true, resolved: { providerId: 'xd', agentDeviceId: null } });
+    expect(deps.getProviderRoutingContext).not.toHaveBeenCalledWith('codex', null, 'device-g');
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'xd', model: 'gpt-5.5' }));
+  });
+
+  it('advances a rotating mode only for a committed Worker', async () => {
+    const view = { id: 'xd', name: 'XD Gateway', source: 'user', connected: true, agents: ['codex'],
+      routing: { codex: { enabled: true } },
+      models: { codex: ['gpt-5.5', 'gpt-5.4'].map((id) => ({ id, name: id, mode: 'chat', efforts: ['low', 'high'] })) },
+    } as unknown as ProviderView;
+    const resolver = createModelGroupResolver({
+      config: () => ({ routes: [{ id: 'r1', name: '轮流', strategy: 'rotate', candidates: ['gpt-5.5', 'gpt-5.4']
+        .map((model) => ({ agentKind: 'codex' as const, providerId: 'xd', model })) }] }),
+      views: async () => [view], agents: () => ['codex'], harnessInstalled: async () => true,
+      quotaWindows: async () => new Map(), scope: () => 'owner', now: () => Date.UTC(2026, 10, 16),
+    });
+    const { service } = createDeps({ resolveModelGroup: resolver.resolve });
+    const models = async (label: string) => {
+      const result = await create(service, { label });
+      if (!result.ok) throw new Error(result.message);
+      return result;
+    };
+    const first = await models('a');
+    const uncommitted = await models('b');
+    expect(resolver.commit(first.modelGroup!.decisionId!)).toBe(true);
+    const next = await models('c');
+    expect([first, uncommitted, next].map((result) => result.resolved.model)).toEqual(['gpt-5.5', 'gpt-5.5', 'gpt-5.4']);
   });
 });

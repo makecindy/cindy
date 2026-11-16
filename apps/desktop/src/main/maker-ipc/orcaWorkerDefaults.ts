@@ -12,9 +12,11 @@ export type OrcaWorkerCreateRequest = Omit<OrcaWorkerCreateParams, 'agent'> & {
   agent?: AgentKind;
   /** Host-only: MCP creation opts in; manual UI and enableTeam retain their own choices. */
   useCreationPrefs?: boolean;
+  /** MCP only: pick the route from this model group mode (routes[].id) instead of memory or defaults. */
+  modelGroupId?: string;
 };
 export interface WorkerDefaultsResolution {
-  source: 'memory' | 'original-policy' | 'explicit';
+  source: 'memory' | 'original-policy' | 'explicit' | 'model-group';
   fallbackReason?: string;
 }
 
