@@ -223,9 +223,12 @@ function isLongLivedSegment(rawTokens: string[], depth: number): boolean {
         const option = tokens[i]!;
         if (option === '--') { i += 1; break; }
         if (option === '-u' || option === '--unset' || option === '-C' || option === '--chdir') {
-          if (i + 1 >= tokens.length) return false;
+          // tokenize splits on whitespace, including inside quotes and escaped spaces.
+          // Do not mistake a fragment of an option value for the program name.
+          if (i + 1 >= tokens.length || /['"\\]/.test(tokens[i + 1]!)) return false;
           i += 2;
-        } else if (/^(?:--unset=.+|--chdir=.+|-u.+|-C.+|-i|--ignore-environment|-0|--null|-v|--debug)$/.test(option)) {
+        } else if (/^(?:--unset=.+|--chdir=.+|-u.+|-C.+|-|-i|--ignore-environment|-0|--null|-v|--debug)$/.test(option)) {
+          if (/['"\\]/.test(option)) return false;
           i += 1;
         } else if (option.startsWith('-')) {
           // Unknown options and split-string need shell parsing; do not guess.
