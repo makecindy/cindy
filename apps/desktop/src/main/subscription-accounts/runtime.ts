@@ -1138,17 +1138,18 @@ export async function readSubscriptionSessionAccount(
     return { providerId: provider, state: 'legacy', ...routeEcho };
   // The task keeps its account wherever that account belongs now; number it among its own provider.
   const config = pool.accounts.find((a) => a.id === binding.accountId);
+  // This fallback number identifies the retained native history slot; computing a logical
+  // account ordinal would depend on unrelated cached identities (or require quota fan-out).
+  const index = config ? accountSiblings(provider, pool.accounts, config.id).findIndex(a => a.id === config.id) : -1;
   if (disconnectedFor(pool, provider, binding.accountId)) return { providerId: provider, state: 'unavailable' };
   if (
-    !config ||
+    !config || index < 0 ||
     (binding.accountId === 'default' && !defaultAccountBound(provider))
   )
     return { providerId: provider, state: 'unavailable', ...routeEcho,
       ...(pinnedLegacyAccountId && await canReplace(binding.accountId) ? { replacementProviderId: accountProviderId(provider, binding.accountId) } : {}) };
   const info = await snapshot(state, provider, config.id);
   assertOwner(state);
-  const index = accountProfileGroups(state, provider, accountSiblings(provider, pool.accounts, config.id))
-    .findIndex(group => group.some(account => account.id === config.id));
   const usage = providerGroupMemberUsageState(
     info.usage ?? {},
     undefined,
@@ -2056,14 +2057,21 @@ export async function runSubscriptionAccountCommand(
       ),
     }));
     assertOwner(state);
-    const imported = provider === 'openai' && command.accountId ? readLegacyCodexProviderId(command.accountId) : undefined;
     // A legacy connection that now hosts other accounts has a provider-wide switch of its own.
     // Pausing its original account must not disable those other accounts as well.
-    const importedMembers = imported ? providerAccounts(provider, readPool(provider)?.accounts ?? [], imported) : [];
-    if (imported && command.paused !== undefined && !importedMembers.some(account => account.id !== command.accountId)) {
-      const { setLegacyCodexAccountPaused } = await import('./legacyAccountAccess.js');
-      assertOwner(state);
-      setLegacyCodexAccountPaused(imported, command.paused);
+    if (provider === 'openai' && command.paused !== undefined) {
+      const imported = new Set([...managed].flatMap(id => {
+        const connection = readLegacyCodexProviderId(id);
+        return connection ? [connection] : [];
+      }));
+      if (imported.size) {
+        const { setLegacyCodexAccountPaused } = await import('./legacyAccountAccess.js');
+        assertOwner(state);
+        for (const connection of imported) {
+          const members = providerAccounts(provider, readPool(provider)?.accounts ?? [], connection);
+          if (!members.some(account => !managed.has(account.id))) setLegacyCodexAccountPaused(connection, command.paused);
+        }
+      }
     }
   } else if (command.action === 'remove') {
     if (managed.has('default')) throw new Error('The default CLI account cannot be removed');

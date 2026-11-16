@@ -408,7 +408,7 @@ describe('duplicate subscription account profiles', () => {
     next?.release();
     h.bindings.set('task:b', { providerId: 'openai', accountId: 'other' });
     expect(await readSubscriptionSessionAccount('openai', { sessionId: 'b' }))
-      .toMatchObject({ state: 'bound', account: { number: 2 } });
+      .toMatchObject({ state: 'bound', account: { number: 3 } });
     h.pools.openai!.accounts = h.pools.openai!.accounts.filter(a => a.id !== 'other');
     expect(readSubscriptionAccountBlocked('openai', 'duplicate', 'gpt-6')).toBe(false);
     h.tokens.mockResolvedValue({ canDispatch: () => false });
@@ -439,6 +439,42 @@ describe('duplicate subscription account profiles', () => {
       expect(view.accounts.map(a => a.id)).toEqual(['default', 'other']);
       expect(view.accounts[0].accountKey).not.toBe(view.accounts[1].accountKey);
     } finally { finishOther({}); clock.mockRestore(); }
+  });
+
+  // Review regression: the visible native home can hide a legacy home whose own switch is
+  // disabled. Pool flags alone must not leave that home's unique model permanently unusable.
+  it('restores a hidden legacy home and preserves switches of providers hosting other accounts', async () => {
+    let legacyPaused = true;
+    h.pools.openai!.accounts[1].paused = true;
+    h.pools.openai!.legacyCodexAccounts = { 'codex-old': 'duplicate' };
+    h.importedRead.mockResolvedValue({ authenticated: true, identity: 'account' });
+    h.accountAllowed.mockImplementation(() => !legacyPaused);
+    h.setLegacyPaused.mockImplementation((_id: string, paused: boolean) => { legacyPaused = paused; });
+    h.rpc.mockImplementation(async (directory: string) => ({
+      data: [{ id: directory.endsWith('/duplicate') ? 'special-model' : 'gpt-6' }], nextCursor: null,
+    }));
+    await expect(acquireSubscriptionAccount('openai', 'special-model', [])).rejects.toThrow('No subscription account is available');
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: 'openai', accountId: 'default', paused: false });
+    expect(h.setLegacyPaused).toHaveBeenCalledWith('codex-old', false);
+    const lease = await acquireSubscriptionAccount('openai', 'special-model', []);
+    expect(lease?.accountId).toBe('duplicate');
+    lease?.release();
+    h.placement['openai:other'] = 'codex-old';
+    h.setLegacyPaused.mockClear();
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: 'openai', accountId: 'default', paused: true });
+    expect(h.setLegacyPaused).not.toHaveBeenCalled();
+  });
+
+  // Task reads can precede settings reads. Preserve the native history slot (used only when
+  // identity is unknown) without scanning unrelated accounts' quota to compute a display index.
+  it('numbers a bound account consistently when the task is read before the pool on a cold cache', async () => {
+    h.bindings.set('task:cold', { providerId: 'openai', accountId: 'other' });
+    expect(await readSubscriptionSessionAccount('openai', { sessionId: 'cold' }))
+      .toMatchObject({ state: 'bound', account: { number: 3 } });
+    expect(h.usage).toHaveBeenCalledExactlyOnceWith('openai', 'openai/other');
+    expect((await readSubscriptionPool('openai')).accounts.map(a => a.id)).toEqual(['default', 'other']);
+    expect(await readSubscriptionSessionAccount('openai', { sessionId: 'cold' }))
+      .toMatchObject({ state: 'bound', account: { number: 3 } });
   });
 });
 
