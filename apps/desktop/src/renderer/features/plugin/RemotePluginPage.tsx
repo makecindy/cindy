@@ -1009,7 +1009,7 @@ export function RemotePluginPage({
                     if (root && tabs && tabs.getBoundingClientRect().top < root.getBoundingClientRect().top)
                       root.scrollTop += tabs.getBoundingClientRect().top - root.getBoundingClientRect().top;
                   }} showOrganization={true}
-                  visible={!!query.trim() || catalogTab === 'market'} scrollRef={catalogScroller}
+                  visible={active && (!!query.trim() || catalogTab === 'market')} scrollRef={catalogScroller}
                   loadPage={readMarketPage} onCounts={counts => setMarketTotal(counts?.all ?? null)} renderRevision={busy}
                   renderItem={item => <MarketPluginCard key={item.pluginId} item={item} busy={busy}
                     onSelect={() => void selectMarket(item)}

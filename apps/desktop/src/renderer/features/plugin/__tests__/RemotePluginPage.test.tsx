@@ -301,6 +301,48 @@ describe('selected plugin host', () => {
     expect(recommendations).toHaveBeenCalledTimes(3);
   });
 
+  // Unit / Codex 4583482682: hidden remounts previously tested the installed
+  // tab only. A cached market tab older than 30 seconds must retain its data
+  // without catalog/count reads, then refresh each once through activation.
+  it('defers stale market pages and counts on a hidden remount until activation', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(100_000);
+    const normal = invoke.getMockImplementation()!;
+    let name = 'Cached remote market';
+    const catalog = vi.fn(async (query: { counts?: boolean }) => ({
+      ...snapshot('computer-a').market, nextCursor: null,
+      items: [{ pluginId: 'market-one', ghostId: 'market-one', releaseId: 'release-one', name,
+        scope: 'public', publisherKind: 'official', sourceType: 'server', installState: 'not-installed' }],
+      counts: query.counts ? { all: 1, public: 1, organization: 0, personal: 0, custom: 0 } : null,
+    }));
+    invoke.mockImplementation(async (device, channel, args) => {
+      const input = args?.[0]?.input;
+      if (input?.read === 'capabilities') return { effects: [], result: { catalogPaging: true } };
+      if (input?.read === 'recommendations') return { effects: [], result: [] };
+      if (input?.read === 'catalog') return { effects: [], result: await catalog(input.query) };
+      return normal(device, channel, args);
+    });
+    const view = (active: boolean) => <RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online active={active} />;
+    const warm = render(view(true));
+    await screen.findByText('computer-a');
+    fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
+    await screen.findByText(name);
+    await waitFor(() => expect(catalog).toHaveBeenCalledTimes(2));
+    warm.unmount();
+    catalog.mockClear();
+    clock.mockReturnValue(131_000);
+    vi.useFakeTimers();
+    const mounted = render(view(false));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(catalog).not.toHaveBeenCalled();
+    name = 'Fresh remote market';
+    mounted.rerender(view(true));
+    expect(screen.getByText('Cached remote market')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText(name)).toBeTruthy();
+    expect(catalog.mock.calls.filter(([query]) => !query.counts)).toHaveLength(1);
+    expect(catalog.mock.calls.filter(([query]) => query.counts)).toHaveLength(1);
+  });
+
   // Unit, #9487: reconnect previously refreshed the snapshot but retained stale market pages.
   // The same installed set with a changed market release must display the new card.
   it('refreshes cached market cards after reconnect when installed versions are unchanged', async () => {
