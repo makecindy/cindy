@@ -4,16 +4,22 @@
  * 断言的是判定边界: 只有过载类非终止 error 才出提示, 其它非终止 error 保持既有
  * 静默(它们的 message 是内部英文串, 外发等于把裸英文推给渠道用户)。
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { setMainLocale } from '../../../i18n.desktop';
 
 import {
   isQuotaExhaustionFailure,
   overloadFailureNotice,
   overloadRetryNotice,
-  QUOTA_FAILURE_NOTICE_PREFIX,
+  quotaFailureNoticePrefix,
   terminalErrorText,
   turnRetryNotice,
 } from '../turnRetryNotice';
+
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('turnRetryNotice', () => {
   it('终态 429 外层重投 → 渠道侧限流进度', () => {
@@ -301,7 +307,7 @@ describe('额度类终态错误', () => {
   it('花费上限: 定位 bot、任务、模型和供应商，只给当前任务的恢复动作', () => {
     const text = terminalErrorText({ message: SPEND_CAP }, { ...PERSONAL, providerLabel: 'OpenAI',
       botLabel: 'Telegram 个人 bot · 测试助手', modelLabel: 'GPT-6 Astra', taskLabel: '我的任务（12345678）' });
-    expect(text.startsWith(QUOTA_FAILURE_NOTICE_PREFIX)).toBe(true);
+    expect(text.startsWith(quotaFailureNoticePrefix())).toBe(true);
     expect(text).toContain('「OpenAI」已达到工作区所有者设置的花费上限');
     expect(text).toContain('Telegram 个人 bot · 测试助手');
     expect(text).toContain('GPT-6 Astra');
@@ -388,5 +394,39 @@ describe('output-limit usage guidance', () => {
     expect(text).toContain('1000');
     expect(text).toContain('可以发送新消息继续');
     expect(terminalErrorText({ reason: 'output-limit' })).not.toContain('tokens');
+  });
+});
+
+describe('控制文案跟随界面语言', () => {
+  beforeEach(() => setMainLocale('en'));
+
+  it('English UI yields English retry progress with interpolated counts', () => {
+    expect(
+      overloadRetryNotice({ message: 'Selected model is at capacity. (auto-retry 2/4)' }),
+    ).toBe('The model service is busy. Retrying automatically (2/4)…');
+    expect(overloadRetryNotice({ message: 'Selected model is at capacity.' }))
+      .toBe('The model service is busy. Retrying automatically…');
+  });
+
+  it('English quota failure keeps provider, bot and recovery hint in English', () => {
+    const text = terminalErrorText(
+      { message: 'You hit your spend cap set by the owner of your workspace.' },
+      { surface: 'official', providerLabel: 'OpenAI', taskLabel: 'Fix login (12345678)' },
+    );
+    expect(text.split('\n')).toEqual([
+      '⚠️ Provider limit reached: “OpenAI” has reached the spending cap set by the workspace owner, so this task can\'t continue for now.',
+      'Source: official bot',
+      'Task: Fix login (12345678)',
+      'Ask a workspace admin to adjust the spending cap, or switch to another provider.',
+      'Open this task in Cindy, switch the provider or model, then come back and resend this message.',
+    ]);
+    expect(text.startsWith(quotaFailureNoticePrefix())).toBe(true);
+  });
+
+  it('switching language takes effect on the next message', () => {
+    const data = { message: 'Selected model is at capacity. (auto-retry 1/3)' };
+    expect(overloadRetryNotice(data)).toBe('The model service is busy. Retrying automatically (1/3)…');
+    setMainLocale('ja');
+    expect(overloadRetryNotice(data)).toBe('モデルサービスが混雑しています。自動で再試行しています（1/3）…');
   });
 });

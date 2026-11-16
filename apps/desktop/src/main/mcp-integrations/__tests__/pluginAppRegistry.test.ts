@@ -7,7 +7,6 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { sharedPluginConnection, type AppServerConfig } from '../../mcp-apps/connection.js';
 import { McpAppsHost, appServerRevision } from '../../mcp-apps/host.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
-import { ghostHostUiApprovalTokens } from '../../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import type { McpAppRecord } from '../../../shared/mcpApps.js';
 import { publishPluginAppResult } from '../../mcp-apps/pluginCards.js';
@@ -94,6 +93,25 @@ function fixture() {
   };
 }
 
+// Registered native settings do not imply approval for an MCP App transport.
+// Minimal failure: a settings-approved plugin with UI approval absent (unit).
+it('projects all installed Host declarations while keeping unapproved legacy pages out of their registry', () => {
+  const f = fixture();
+  f.ghost.manifest.mcpApps = { ui: getPluginToolUi(f.ghost.manifest), host: {
+    views: [{ id: 'view', title: 'View', resourceUri: 'ui://form' }],
+    settings: [{ id: 'enabled', title: 'Enabled', type: 'boolean', default: true }] } };
+
+  const instance = installedGhostStoragePart(f.ghost);
+  f.refresh();
+  const old = readPluginHostUi(instance)!;
+  f.setGhost({ ...f.ghost, uiCapabilityApproved: undefined });
+  expect(() => old.config.plugin!.assertCurrent()).toThrow();
+  f.refresh();
+  expect(readPluginHostUi(instance)?.host.settings).toHaveLength(1);
+  expect(readPluginHostUi(instance)?.host.views).toHaveLength(1);
+  expect(state.configs.size).toBe(0);
+});
+
 // Stable binding identity is part of View lifecycle: list/localization updates
 // cannot reload a live resource, while actual approval changes must revoke it (unit).
 it('preserves Host UI bindings across unchanged directory refreshes and revokes changed approval', () => {
@@ -101,7 +119,7 @@ it('preserves Host UI bindings across unchanged directory refreshes and revokes 
   f.ghost.manifest.mcpApps = { ui: getPluginToolUi(f.ghost.manifest), host: {
     views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://form' }], capabilities: ['context'],
   } };
-  f.ghost.approvedHostUi = ghostHostUiApprovalTokens(f.ghost.manifest);
+
   const instance = installedGhostStoragePart(f.ghost);
   f.refresh();
   const binding = readPluginHostUi(instance);

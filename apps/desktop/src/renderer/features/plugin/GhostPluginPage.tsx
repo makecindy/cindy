@@ -10,6 +10,7 @@ import { PluginPublishDialog, type PluginPublishDialogRequest } from './PluginPu
 import { featureRetirementById, type FeatureRetirement } from '../../../shared/featureRetirements';
 import { RetiredFeatureDetail } from './RetiredFeatureDetail';
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 import { PluginCatalogBrowser, emptyPluginBrowserCache, PLUGIN_PAGE_SIZE } from './PluginCatalogBrowser';
 import { PluginVirtualGrid, emptyPluginGridCache } from './PluginVirtualGrid';
 /**
@@ -74,7 +75,8 @@ import {
 } from '@/lib/composerDraftStore';
 import { getDraft as getWorkspaceDraft, resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
-import { installGhostFromFile, pickAndUpdateGhost } from '@/cindy-brain/installFlow';
+import { pickAndUpdateGhost } from '@/cindy-brain/installFlow';
+import { importCindyFile } from '@/cindy-brain/importCindyFile';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn, basename } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
@@ -639,22 +641,25 @@ function LocalGhostPluginPage({
     requestRestore: requestPluginCatalogScrollRestore,
     clearPendingRestore: clearPluginCatalogScrollRestore,
   } = usePluginListScrollRestoration(pluginCatalogVisible);
-  const [marketBusyId, setMarketBusyId] = useState<string | null>(null);
+  const [marketBusy, setMarketBusy] = useState<{ pluginId: string; intent: 'detail' | 'install' } | null>(null);
+  const marketBusyId = marketBusy?.pluginId ?? null;
+  const marketInstallBusyId = marketBusy?.intent === 'install' ? marketBusy.pluginId : null;
+  const marketDetailBusyId = marketBusy?.intent === 'detail' ? marketBusy.pluginId : null;
   // 市场操作的同步互斥锁。React state 在提交前有窗口期,快速连点会让多个回调
   // 都读到 null;ref 先到先得,state 只驱动按钮禁用等 UI 展示。每次占锁都返回
   // 唯一 lease,避免账号/模式切换后的旧异步流程误释放新流程持有的同 pluginId 锁。
   const marketBusyLockRef = useRef<{ pluginId: string } | null>(null);
-  const acquireMarketBusy = useCallback((pluginId: string) => {
+  const acquireMarketBusy = useCallback((pluginId: string, intent: 'detail' | 'install' = 'install') => {
     if (marketBusyLockRef.current !== null) return null;
-    const lease = { pluginId };
+    const lease = { pluginId, intent };
     marketBusyLockRef.current = lease;
-    setMarketBusyId(pluginId);
+    setMarketBusy(lease);
     return lease;
   }, []);
   const releaseMarketBusy = useCallback((lease: { pluginId: string }) => {
     if (marketBusyLockRef.current !== lease) return;
     marketBusyLockRef.current = null;
-    setMarketBusyId((current) => (current === lease.pluginId ? null : current));
+    setMarketBusy((current) => (current === lease ? null : current));
   }, []);
   const isMarketBusyLeaseActive = useCallback(
     (lease: { pluginId: string }) => marketBusyLockRef.current === lease,
@@ -706,7 +711,7 @@ function LocalGhostPluginPage({
     setMarketSnapshot(null);
     setMarketDetail(null);
     marketBusyLockRef.current = null;
-    setMarketBusyId(null);
+    setMarketBusy(null);
     marketDetailRequestRef.current += 1;
     void refreshMarket();
   }, [clearPluginCatalogScrollRestore, refreshMarket, mode, dataOwnerId, dataOwnerGeneration]);
@@ -1241,15 +1246,16 @@ function LocalGhostPluginPage({
   const handleInstall = useCallback(async () => {
     const picked = await window.electronAPI.ghosts.pickFile().catch(() => null);
     if (!picked || 'canceled' in picked) return;
-    await installGhostFromFile(picked.filePath, {
+    await importCindyFile(picked.filePath, {
       t,
+      openThemes: () => navigate('/settings?tab=appearance'),
       // 已在插件页:tab 型插件安装后原地打开面板。
       openPluginPanel: (instanceId) => {
         setSelectedId(null);
         setOpenPanelId(instanceId);
       },
     });
-  }, [t]);
+  }, [navigate, t]);
 
   const handleRetryLegacyRecovery = useCallback(async () => {
     legacyRecoveryStatusRequestRef.current += 1;
@@ -1438,7 +1444,7 @@ function LocalGhostPluginPage({
   const handleSelectMarket = useCallback(
     async (pluginId: string, preferInstalled = false) => {
       // 与 handleMarketUpdate 共用同一互斥锁:更新进行中不叠加其它市场操作。
-      const marketBusyLease = acquireMarketBusy(pluginId);
+      const marketBusyLease = acquireMarketBusy(pluginId, 'detail');
       if (!marketBusyLease) return;
       capturePluginCatalogScroll();
       const requestId = ++marketDetailRequestRef.current;
@@ -2055,7 +2061,8 @@ function LocalGhostPluginPage({
               <h2 className="mb-4 text-20 font-medium text-[var(--text-primary)]">{t('settings.ghosts.page.todayRecommendations')}</h2>
               <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,220px),1fr))] gap-3">
                 {todayItems.map(item => <MarketPluginCard compact key={item.pluginId} item={item}
-                  busy={marketBusyId !== null} pending={marketBusyId === item.pluginId}
+                  busy={marketBusyId !== null} pending={marketInstallBusyId === item.pluginId}
+                  detailPending={marketDetailBusyId === item.pluginId}
                   onSelect={() => void handleSelectMarket(item.pluginId)}
                   onInstall={canOfferMarketInstall(mode, item.ghostId) ? () => void handleInstallMarketItem(item.pluginId) : undefined}
                   onIconLoadError={handleMarketIconLoadError} />)}
@@ -2142,7 +2149,7 @@ function LocalGhostPluginPage({
                     <Button
                       variant="cta"
                       size="lg"
-                      loading={marketBusyId !== null}
+                      loading={marketInstallBusyId !== null}
                     type="button"
                     onClick={handleUpdateAll}
                     disabled={marketBusyId !== null}
@@ -2169,7 +2176,7 @@ function LocalGhostPluginPage({
                         updateBusy={
                           (item.marketUpdate !== null && marketBusyId !== null) || batchRunning
                         }
-                        updatePending={item.marketUpdate?.pluginId === marketBusyId}
+                        updatePending={item.marketUpdate?.pluginId === marketInstallBusyId}
                         onUpdate={
                           item.marketUpdate ? () => void handleMarketUpdate(item.id) : undefined
                         }
@@ -2211,7 +2218,8 @@ function LocalGhostPluginPage({
               scrollRef={pluginCatalogListRef} loadPage={window.electronAPI.pluginMarket.query}
               onCounts={counts => setMarketTotal(counts?.all ?? null)}
               renderItem={item => <MarketPluginCard key={item.pluginId} item={item}
-                busy={marketBusyId !== null} pending={marketBusyId === item.pluginId}
+                busy={marketBusyId !== null} pending={marketInstallBusyId === item.pluginId}
+                detailPending={marketDetailBusyId === item.pluginId}
                 onSelect={() => void handleSelectMarket(item.pluginId)}
                 onInstall={canOfferMarketInstall(mode, item.ghostId) && item.installState !== 'installed' && item.installState !== 'update-available'
                   ? () => void handleInstallMarketItem(item.pluginId) : undefined}
@@ -2288,6 +2296,7 @@ export function MarketPluginCard({
   compact = false,
   busy,
   pending = false,
+  detailPending = false,
   onSelect,
   onInstall,
   onIconLoadError,
@@ -2297,6 +2306,8 @@ export function MarketPluginCard({
   busy: boolean;
   /** 本卡正在安装:主按钮换成 Spinner。 */
   pending?: boolean;
+  /** 只读取详情时，反馈留在卡片内容中，不投影成安装。 */
+  detailPending?: boolean;
   onSelect: () => void;
   /** 卡片直接安装；卡片正文、右侧空白与右上角箭头都进入详情。 */
   onInstall?: () => void;
@@ -2311,29 +2322,38 @@ export function MarketPluginCard({
   const replacementDescriptionId = useId();
   const replacementDescription =
     item.installState === 'conflict' ? t('settings.ghosts.market.replaceDescription') : undefined;
+  const loadingDetails = detailPending ? (
+    <span role="status" className="inline-flex items-center gap-1.5">
+      <Spinner size={14} aria-hidden="true" />
+      {t('settings.ghosts.market.loadingDetails')}
+    </span>
+  ) : null;
   if (compact) return <article className="relative min-w-0 rounded-xl border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 py-3">
     <button type="button" className="absolute inset-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-      disabled={unavailable} onClick={onSelect} aria-label={item.name} aria-describedby={metadataId} />
-    <div className="pointer-events-none flex min-w-0 items-center gap-2.5">
+      disabled={unavailable} onClick={onSelect} aria-label={item.name} aria-describedby={metadataId}
+      aria-busy={detailPending || undefined} />
+    <div className="pointer-events-none flex min-w-0 items-start gap-3">
       <GhostPluginIcon size="sm" iconContainerRef={marketIcon.containerRef} iconDataUrl={marketIcon.iconDataUrl}
         iconId={item.ghostId} iconName={item.name} onIconLoad={marketIcon.onIconLoad}
         onIconLoadError={() => marketIcon.onIconLoadError(onIconLoadError)} />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
-          <p className="truncate text-14 font-medium text-[var(--text-primary)]" title={item.name}>{item.name}</p>
+          <p className="truncate text-15 font-medium text-[var(--text-primary)]" title={item.name}>{item.name}</p>
           <PluginPublisherBadge origin={origin} kind={item.publisherKind} />
         </div>
-        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-11 text-[var(--text-tertiary)]">
-          <span>{t(`settings.ghosts.page.origin.${origin}`)}</span>
-          {author ? <><span aria-hidden="true">·</span><span className="min-w-0 max-w-[120px] truncate">{author}</span></> : null}
-          <PluginSharedUsage detail={item} variant="list" />
+        <div className="mt-1 flex min-w-0 items-center gap-3">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 text-11 text-[var(--text-tertiary)]">
+            <span>{t(`settings.ghosts.page.origin.${origin}`)}</span>
+            {author ? <><span aria-hidden="true">·</span><span className="min-w-0 max-w-[120px] truncate">{author}</span></> : null}
+            <PluginSharedUsage detail={item} variant="list" onClick={unavailable ? undefined : onSelect} />
+          </div>
+          {onInstall ? <Button className="pointer-events-auto relative z-[1] shrink-0" variant="secondary" size="sm" compact
+            loading={pending} disabled={unavailable} onClick={onInstall}
+            aria-label={t('settings.ghosts.page.installAria', { name: item.name })}>{t('settings.ghosts.market.install')}</Button> : null}
         </div>
       </div>
-      {onInstall ? <Button className="pointer-events-auto relative z-[1] shrink-0" size="sm" compact
-        loading={pending} disabled={unavailable} onClick={onInstall}
-        aria-label={t('settings.ghosts.page.installAria', { name: item.name })}>{t('settings.ghosts.market.install')}</Button> : null}
     </div>
-    <p id={metadataId} className="pointer-events-none mt-2 line-clamp-2 text-13 leading-5 text-[var(--text-secondary)]">{item.description || item.ghostId}</p>
+    <p id={metadataId} className="pointer-events-none mt-2 line-clamp-2 text-13 leading-5 text-[var(--text-secondary)]">{loadingDetails ?? (item.description || item.ghostId)}</p>
   </article>;
   return (
     <article
@@ -2349,6 +2369,7 @@ export function MarketPluginCard({
         onClick={onSelect}
         disabled={unavailable}
         aria-label={item.name}
+        aria-busy={detailPending || undefined}
         aria-describedby={replacementDescription ? `${metadataId} ${replacementDescriptionId}` : metadataId}
         className={cn(
           'flex min-w-0 flex-1 items-start gap-4 self-stretch text-left',
@@ -2385,7 +2406,7 @@ export function MarketPluginCard({
             id={replacementDescription ? replacementDescriptionId : undefined}
             className="mt-1.5 line-clamp-2 text-13 leading-5 text-[var(--text-secondary)]"
           >
-            {replacementDescription ?? (item.description || item.ghostId)}
+            {loadingDetails ?? replacementDescription ?? (item.description || item.ghostId)}
           </span>
         </span>
       </button>
@@ -2395,6 +2416,7 @@ export function MarketPluginCard({
           onClick={onSelect}
           disabled={unavailable}
           aria-label={t('settings.ghosts.market.detailsAria', { name: item.name })}
+          aria-busy={detailPending || undefined}
           aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
           className={cn(
             'group/market-details absolute inset-0 flex items-start justify-end rounded-xl text-[var(--text-tertiary)]',

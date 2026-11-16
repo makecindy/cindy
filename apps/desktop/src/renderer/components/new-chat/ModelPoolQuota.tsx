@@ -26,7 +26,7 @@ export function useModelPoolQuota(providerId: string, deviceId?: string | null, 
         })),
       } } : null;
   const accounts = account?.members ?? (account?.usage ? [account] : legacyUsage ? [{ usage: legacyUsage, identity: providerId }] : []);
-  const quotaProviderId = legacy?.source === 'codex' ? 'openai' : legacy?.source === 'claude' ? 'anthropic' : providerId;
+  const quotaProviderId = account?.kind ?? (legacy?.source === 'codex' ? 'openai' : legacy?.source === 'claude' ? 'anthropic' : providerId);
   const members = accounts.map((member, index) => {
     const quota = pickerAccountWeeklyQuota(quotaProviderId, member, now);
     const status = modelAccountQuotaStatus(quotaProviderId, member.usage, now);

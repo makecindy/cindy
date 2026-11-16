@@ -1,5 +1,5 @@
 {
-  "remoteBusy": "The remote computer is busy. Please try again shortly.",
+  "remoteBusy": "The remote computer is busy. Try again shortly.",
   "title": "Tags",
   "more": "More tags",
   "settings": "Tag settings",
@@ -18,7 +18,7 @@
   "retry": "Retry",
   "unavailable": "This computer needs an update to support tags.",
   "offline": "Connect to the source computer to edit tags.",
-  "failed": "Could not save. Please try again.",
+  "failed": "Could not save. Try again.",
   "conflict": "Tags changed elsewhere. Reload and try again.",
   "favoritesFull": "Only seven favorite tags are allowed.",
   "alreadyExists": "A tag with this name already exists.",

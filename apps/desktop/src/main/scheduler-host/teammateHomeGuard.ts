@@ -22,11 +22,11 @@ export function withTeammateHomeGuard(runner: ScheduleRunner, demotedBotIds: () 
   return {
     fire: async (schedule, ctx) => {
       if (isTeammateProjectElsewhere(schedule.workingDir, demotedBotIds())) {
-        return skip('Skipped: this teammate runs on another computer now');
+        return skip('Skipped: this buddy runs on another computer now');
       }
       const state = teammateFolderOfProjectPath(schedule.workingDir) ? await teammateState(schedule.workingDir) : null;
-      if (state === 'stopped') return skip('Skipped: this teammate is paused');
-      if (state === 'deleted') return skip('Skipped: this teammate was deleted');
+      if (state === 'stopped') return skip('Skipped: this buddy is paused');
+      if (state === 'deleted') return skip('Skipped: this buddy was deleted');
       return runner.fire(schedule, ctx);
     },
   };

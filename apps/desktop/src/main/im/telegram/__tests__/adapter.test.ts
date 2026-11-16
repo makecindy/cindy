@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { IMMessageEvent } from '@cindy/im';
 
+import { setMainLocale } from '../../../i18n.desktop';
 import { buildTelegramAdapter, TELEGRAM_TOOLS_HINT } from '../adapter';
 import { ui } from '../uiText';
 import { buildTelegramGroupContextPrefix } from '../groupWindow';
@@ -130,13 +131,28 @@ describe('Telegram group history access scope', () => {
   });
 
   it('explains an unsupported permission mode without exposing the internal error code', () => {
-    const message = ui.error.permissionModeUnsupported('bypassPermissions');
-    expect(message).toContain('其他群成员');
-    expect(message).toContain('机器人绑定的用户');
-    expect(message).toContain('尚未执行');
-    expect(message).toContain('自动审批');
-    expect(message).toContain('/permission');
-    expect(message).not.toContain('TURN_PERMISSION_POLICY_UNSUPPORTED');
+    setMainLocale('zh-CN');
+    try {
+      const message = ui.error.permissionModeUnsupported('bypassPermissions');
+      expect(message).toContain('其他群成员');
+      expect(message).toContain('机器人绑定的用户');
+      expect(message).toContain('尚未执行');
+      expect(message).toContain('自动审批');
+      expect(message).toContain('/permission');
+      expect(message).not.toContain('TURN_PERMISSION_POLICY_UNSUPPORTED');
+    } finally {
+      setMainLocale('en');
+    }
+  });
+
+  it('localizes the expired-card notice when it is read, not when the adapter is built', () => {
+    setMainLocale('zh-CN');
+    try {
+      expect(adapter.interactionExpiredNotice).toBe('卡片已过期');
+    } finally {
+      setMainLocale('en');
+    }
+    expect(adapter.interactionExpiredNotice).toBe('This card has expired');
   });
 
   it('keeps every group turn lane-only — owner-triggered included (injection hardening)', () => {

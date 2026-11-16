@@ -111,7 +111,7 @@
     "empty": "没有待接收的分享",
     "file": "文件",
     "fileCount": "{{count}} 个文件",
-    "hint": "选择去向后，可以补充交代再发送。",
+    "hint": "选择去向后，可以补充说明再发送。",
     "search": "搜索任务和伙伴",
     "newTask": "新建任务",
     "companions": "伙伴",
@@ -122,6 +122,6 @@
     "retry": "部分内容未能读取，点此重试。",
     "noMatches": "没有匹配的去向",
     "clearSearch": "清除搜索",
-    "loadingDevices": "正在读取电脑…"
+    "loadingDevices": "正在加载电脑列表…"
   }
 }

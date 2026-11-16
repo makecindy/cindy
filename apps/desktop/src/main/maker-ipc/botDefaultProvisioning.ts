@@ -19,7 +19,7 @@ export async function withDefaultBotProvisioningLock<T>(
   const receipt = path.join(ownerRoot, 'bots', '.initial-companion');
   await fs.mkdir(path.dirname(receipt), { recursive: true });
   return withCrossProcessLock(`${receipt}.lock`, { label: 'initial-companion' }, async lock => {
-    if (!lock.held) throw new Error(`Default teammate initialization lock ${lock.reason}`);
+    if (!lock.held) throw new Error(`Default buddy initialization lock ${lock.reason}`);
     assertOwner();
     return action();
   });

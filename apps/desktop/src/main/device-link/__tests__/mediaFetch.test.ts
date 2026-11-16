@@ -59,6 +59,14 @@ beforeEach(() => {
   assertSharedTaskMedia.mockReset();
   __testing.uploadCache.clear();
   statMock.mockResolvedValue({ isFile: () => true, size: 42, mtimeMs: 1000 });
+  openMock.mockReset().mockImplementation(async () => ({
+    stat: () => statMock(),
+    read: async (bytes: Buffer, offset: number, length: number) => {
+      bytes.fill(7, offset, offset + length);
+      return { bytesRead: length };
+    },
+    close: vi.fn(),
+  }));
   realpathMock.mockImplementation(async (p: string) => p);
   // 默认上传回显 contentType,便于断言 result.mimeType 来源
   uploadLocalFile.mockImplementation(async (_p: string, opts?: { contentType?: string }) => ({
@@ -106,10 +114,17 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it('does not cache an OSS upload under a version when the source changed during upload', async () => {
+it.each(['metadata', 'content'])('does not cache an OSS upload when source %s changed during upload', async (change) => {
   const url = 'xdt-file://local?path=' + encodeURIComponent(path.resolve('work/report.pdf'));
+  let content = 7;
+  openMock.mockImplementation(async () => ({
+    stat: () => statMock(),
+    read: async (bytes: Buffer) => { bytes.fill(content); return { bytesRead: bytes.length }; },
+    close: vi.fn(),
+  }));
   uploadLocalFile.mockImplementation(async () => {
-    statMock.mockResolvedValue({ isFile: () => true, size: 42, mtimeMs: 2000 });
+    if (change === 'metadata') statMock.mockResolvedValue({ isFile: () => true, size: 42, mtimeMs: 2000 });
+    else content = 9;
     return { key: 'changed-source', size: 42, contentType: 'application/pdf' };
   });
   const result = await fetchLocalMediaToOss({ url });
@@ -197,16 +212,25 @@ describe('fetchLocalMediaToOss — scheme 路由', () => {
       expect(logDebug.mock.calls.flat().join('\n')).not.toMatch(/xdt-|path=|\/cache\//);
     },
   );
-  it('returns only authorized metadata for small files when requested', async () => {
-    const read = vi.fn(), close = vi.fn();
+  // Unit: metadata-only must still distinguish same-stat small-file rewrites,
+  // without sending their bytes. The previous fixture assumed stat was sufficient.
+  it('versions small-file contents while returning only authorized metadata', async () => {
+    let content = 'hello';
+    const read = vi.fn(async (bytes: Buffer) => {
+      bytes.write(content);
+      return { bytesRead: bytes.length };
+    }), close = vi.fn();
     openMock.mockResolvedValue({ stat: async () => ({ isFile: () => true, size: 5, mtimeMs: 1 }), read, close });
     imageResolve.mockReturnValue({ absPath: '/cache/a.png', mimeType: 'image/png' });
     const result = await fetchLocalMediaToOss({ url: 'xdt-image://sess/a.png', prepareOnly: true, metadataOnly: true });
     expect(result).toMatchObject({ size: 5, transferRequired: true, version: expect.stringMatching(/^[a-f0-9]{64}$/) });
     expect(result.inlineBase64).toBeUndefined();
-    expect(read).not.toHaveBeenCalled();
+    expect(read).toHaveBeenCalledOnce();
     expect(uploadLocalFile).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledOnce();
+    content = 'world';
+    const changed = await fetchLocalMediaToOss({ url: 'xdt-image://sess/a.png', prepareOnly: true, metadataOnly: true });
+    expect(changed.version).not.toBe(result.version);
   });
   it('revalidates source identity without reading/uploading bytes, including restored mtime', async () => {
     let ctimeMs = 1;
@@ -223,6 +247,32 @@ describe('fetchLocalMediaToOss — scheme 路由', () => {
     ctimeMs++;
     expect((await fetchLocalMediaToOss(args)).version).not.toBe(first.version);
     expect(read).not.toHaveBeenCalled(); expect(uploadLocalFile).not.toHaveBeenCalled();
+  });
+  // Unit: versioning must finish short reads and refuse EOF or metadata changes
+  // during the bounded read. Otherwise prepare could publish an unchecked version.
+  it.each(['partial', 'truncated', 'changed'])('handles %s reads while preparing a small-file version', async (mode) => {
+    let mtimeMs = 1;
+    const close = vi.fn();
+    openMock.mockResolvedValue({
+      stat: async () => ({ isFile: () => true, size: 5, mtimeMs }),
+      read: async (bytes: Buffer, offset: number, length: number, position: number) => {
+        if (mode === 'truncated' && position > 0) return { bytesRead: 0 };
+        if (mode === 'changed') mtimeMs++;
+        const count = Math.min(2, length);
+        Buffer.from('hello').copy(bytes, offset, position, position + count);
+        return { bytesRead: count };
+      },
+      close,
+    });
+    imageResolve.mockReturnValue({ absPath: '/cache/a.png', mimeType: 'image/png' });
+    const prepared = fetchLocalMediaToOss({ url: 'xdt-image://sess/a.png', prepareOnly: true });
+    if (mode === 'partial') {
+      expect((await prepared).inlineBase64).toBe(Buffer.from('hello').toString('base64'));
+    } else {
+      await expect(prepared).rejects.toThrow('FILE_PEER_CHANGED');
+    }
+    expect(close).toHaveBeenCalledOnce();
+    expect(uploadLocalFile).not.toHaveBeenCalled();
   });
   it('xdt-image:// → imageCacheStore.resolveSafe,mime 透传给上传', async () => {
     imageResolve.mockReturnValue({ absPath: '/cache/a.png', mimeType: 'image/png' });

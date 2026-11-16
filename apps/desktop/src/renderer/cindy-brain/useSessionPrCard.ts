@@ -12,7 +12,7 @@ import { findInstalledGhostByInstanceId } from '../../shared/pluginIdentity';
 
 /** Only cards belonging to this task may operate its follow-up. Never borrow another task's card. */
 export function findSessionPrCard(snapshot: GhostCardSnapshot, sessionId: string, prKey: string) {
-  let match: { callId: string; ghostId: string; html: string } | null = null;
+  let match: { callId: string; ghostId: string; html: string; remote: boolean } | null = null;
   for (const [callId, entry] of snapshot.byCallId) {
     if (
       entry.status !== 'ready' ||
@@ -21,7 +21,7 @@ export function findSessionPrCard(snapshot: GhostCardSnapshot, sessionId: string
       readGhostCardSupersededBy(entry.html)
     )
       continue;
-    match = { callId, ghostId: entry.ghostId, html: entry.html };
+    match = { callId, ghostId: entry.ghostId, html: entry.html, remote: !!entry.remote };
   }
   if (!match) return null;
   return { ...match, ...projectPrCard(match.html) };
@@ -122,6 +122,8 @@ export function useSessionPrCard(sessionId: string, prKey: string, enabled: bool
     if (!enabled) return null;
     const card = findSessionPrCard(snapshot, sessionId, prKey);
     if (!card?.summaryHtml) return null;
+    // A remote task's card belongs to the plugin on that computer, which checks every click itself.
+    if (card.remote) return card;
     const ghost = findInstalledGhostByInstanceId(ghosts, card.ghostId);
     return ghost?.enabled && ghost.approval.state === 'approved' ? card : null;
   }, [snapshot, sessionId, prKey, enabled, ghosts]);

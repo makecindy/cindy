@@ -53,6 +53,25 @@ implementations. Protocol bridges remain bridges; they are not replaced with Ope
 configuration files, or account manager. Cindy's collision-safe `exec` conversion is retained ahead
 of upstream's generic conversion, with reverse transforms applied in reverse order.
 
+## xAI tool-result attachments
+
+The xAI ModelInput sanitizer preserves `input_image` and `input_file` parts in
+`function_call_output.output`, alongside text and the original `call_id`. The same
+normalization applies to Codex custom-tool results and legacy tool-role messages.
+It uses the existing message attachment normalization and remains idempotent for
+subscription forwarding and 422 recovery; text-only results retain their string form.
+This follows the [xAI Responses input schema](https://docs.x.ai/developers/rest-api-reference/inference/responses).
+Regression coverage lives in `anthropic-compat-proxy/src/xai-model-input.test.ts`.
+
+Claude Code's Messages → Responses bridge also maps Anthropic tool-result images
+(base64 or URL sources) into `input_image` parts before provider normalization.
+Images remain tool output under the original `call_id`; no user message is invented.
+The bridge keeps text-only results as strings and reports missing image sources as text.
+Its request translator and HTTP handler tests cover this path, including the OpenAI
+subscription route. Desktop's `codexProxyHost.test.ts` checks Codex's configured
+transform chain, and `piNativeSubscriptionForwarding.test.ts` checks Pi's native
+forwarding request bytes.
+
 ## Responses initial item repair
 
 The existing uncompressed SSE passthrough repair also fills absent initialization fields on
@@ -77,6 +96,13 @@ reasoning replay/placeholder and automatic-tool-choice capabilities; Moonshot fu
 Responses verbosity/reasoning policy; DeepSeek adjacency, empty result annotation, search history
 query fields and item IDs; xAI Responses web-search fields and subscription-only function schemas;
 OpenCode Go additional-tool declarations; and Codex custom/namespace/tool-search round trips.
+
+Kimi `k3` / `k3[1m]` Codex replay uses `normalizeKimiToolHistory` on the resolved
+`kimi` / `kimi-code` Chat route. The host invokes it in the local bridge, which bypasses
+the proxy's gateway transform chain. Only complete, uniquely paired tool batches may move
+results ahead of interleaved assistant messages; user, developer and reasoning boundaries,
+ambiguous or incomplete batches, and compact requests remain unchanged. Model IDs, item
+payloads and tool call IDs are preserved. This does not add bare `k3` to the gateway allowlist.
 
 The imported declarations also retain upstream transport metadata (`modelWireDefaults`,
 `responsesPath`, `googleMode`, `authKind`) and policies owned by OpenCodex's transport

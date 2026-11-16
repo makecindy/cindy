@@ -3,6 +3,7 @@ import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
 import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandlers/chatCacheTx.js';
 
 export type DbTxName =
+  | 'mcpApps.viewState.save'
   | 'usage.recordPiUsage'
   | 'chatCache.execute'
   | 'usage.recordMediaSpend'
@@ -53,6 +54,7 @@ export type DbTxName =
   | 'bots.pauseLifecycle'
   | 'bots.resumeLifecycle'
   | 'bots.archiveLifecycle'
+  | 'bots.retireCloudCopy'
   | 'bots.deleteProfile'
   | 'bots.prepareProfileDeletion'
   | 'bots.reconcileLanePermission'
@@ -369,6 +371,8 @@ export interface SessionsSetStatusArgs {
 export interface SessionsSetTerminalStatusArgs {
   sessionId: string;
   status: 'archived' | 'deleted';
+  /** Internal automatic housekeeping only; never accepted as renderer metadata. */
+  idleArchiveCutoff?: number;
 }
 
 export interface SessionsSetTerminalStatusResult extends Omit<SessionsSetStatusResultItem, 'status'> {
@@ -394,6 +398,8 @@ export interface ContextRebuildArgs {
   updatedAt: number;
   /** 读历史时看到的 sessions.cleared_at；提交时必须仍相同，否则 /clear 竞态整单回滚。 */
   expectedClearedAt?: number | null;
+  /** Resume recovery clears only this rejected native ID; it never rewrites route settings. */
+  expectedSdkSessionId?: string;
   /** Same transaction as the durable handoff; source SDK ownership must still match. */
   replacementRoute?: {
     expectedSdkSessionId: string;
@@ -783,11 +789,18 @@ export interface BotGroupsCreateLaneArgs {
   groupId: string;
   routeKey: string;
   session: BotsReplaceCanonicalSessionArgs['session'];
+  /**
+   * The lane must work in `session.workingDir` (the group's project folder, or back in the
+   * Home workspace): an active lane elsewhere is archived and replaced by this one.
+   */
+  replaceOtherWorkingDir?: boolean;
 }
 
 export interface BotGroupsCreateLaneResult {
   sessionId: string;
   created: boolean;
+  /** The lane archived because it worked in another folder. */
+  replacedSessionId?: string;
   /** Existing runtimes must follow a canonical permission repaired during creation. */
   permissionRepairCanonicalSessionId?: string;
 }
@@ -1305,6 +1318,7 @@ export type SkillUsageApplyMutationArgs =
   | { kind: 'promote'; analyzerVersion: string };
 
 export interface MediaSpendArgs {
+  approximate?: boolean;
   providerName?: string;
   day: string;
   model: string;
@@ -1316,6 +1330,7 @@ export interface MediaSpendArgs {
 }
 
 export type DbTxArgsByName = {
+  'mcpApps.viewState.save': { binding: import('../../worker/opHandlers/mcpAppViewState.js').ViewStateBinding; json: string | null; bytes: number };
   'usage.recordMediaSpend': MediaSpendArgs;
   'usage.recordPiUsage': import('../../worker/opHandlers/piUsageTx.js').PiUsageWrite[];
   'authorization.readProjection': { sessionId: string; leadId: string };
@@ -1366,6 +1381,7 @@ export type DbTxArgsByName = {
   'bots.pauseLifecycle': BotsLifecycleTransitionArgs;
   'bots.resumeLifecycle': BotsLifecycleTransitionArgs;
   'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
+  'bots.retireCloudCopy': { botId: string; at: number };
   'bots.deleteProfile': BotsDeleteProfileArgs;
   'bots.prepareProfileDeletion': { botId: string };
   'bots.reconcileLanePermission': { sessionId: string };
@@ -1405,6 +1421,7 @@ export type DbTxArgsByName = {
 };
 
 export type DbTxResultByName = {
+  'mcpApps.viewState.save': void;
   'usage.recordPiUsage': { changed: boolean };
   'usage.recordMediaSpend': {
     legacyUsd: number;
@@ -1464,6 +1481,7 @@ export type DbTxResultByName = {
   'bots.pauseLifecycle': undefined;
   'bots.resumeLifecycle': undefined;
   'bots.archiveLifecycle': { sessions: number };
+  'bots.retireCloudCopy': { changed: boolean };
   'bots.deleteProfile': { sessionIds: string[]; status: 'archived' | 'deleted' };
   'bots.prepareProfileDeletion': undefined;
   'bots.reconcileLanePermission': { mode: string | null; changed: boolean; canonicalSessionId?: string };

@@ -338,6 +338,26 @@ describe('buildClaudeEnv', () => {
     expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined();
   });
 
+  // 回归:CLI 用 CLAUDE_SECURESTORAGE_CONFIG_DIR 决定读哪条钥匙串登录,且优先于
+  // CLAUDE_CONFIG_DIR(空串还会回到默认条目)。继承残留会让默认账号或供应商内订阅账号
+  // 读到另一份登录,所以和 CLAUDE_CONFIG_DIR 一样必须进 strip 名单。
+  it.each([
+    ['default account', undefined],
+    ['added subscription account', '/fixture/.claude-second'],
+  ] as const)('drops an inherited CLAUDE_SECURESTORAGE_CONFIG_DIR for the %s', async (_label, configDir) => {
+    expect(SENSITIVE_ANTHROPIC_ENV_KEYS).toContain('CLAUDE_SECURESTORAGE_CONFIG_DIR');
+    vi.stubEnv('CLAUDE_SECURESTORAGE_CONFIG_DIR', '');
+    const nativeSubscriptionAccount = configDir
+      ? { id: 'fixture', configDir, assertCurrent() {}, readState: async () => ({ authenticated: true }) }
+      : undefined;
+    const auth = createAuthAdapter(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {});
+
+    const env = await buildClaudeEnv(auth, {}, { nativeCliAuth: true, nativeSubscriptionAccount });
+
+    expect('CLAUDE_SECURESTORAGE_CONFIG_DIR' in env).toBe(false);
+    expect(env.CLAUDE_CONFIG_DIR).toBe(configDir);
+  });
+
   it('null 决定要**删掉** behaviorFlags 带进来的同名键(只跳过赋值不够)', async () => {
     delete process.env.CLAUDE_CODE_SUBAGENT_MODEL;
 

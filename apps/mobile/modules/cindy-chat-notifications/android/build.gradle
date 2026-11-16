@@ -10,6 +10,7 @@ android {
 }
 dependencies {
   implementation expoModule.getExpoDependency('expo-notifications')
+  implementation 'me.leolin:ShortcutBadger:1.1.22@aar'
   implementation 'androidx.core:core:1.15.0'
   implementation 'com.squareup.okhttp3:okhttp:4.12.0'
   implementation 'com.google.firebase:firebase-messaging:25.0.1'

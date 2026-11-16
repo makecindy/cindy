@@ -333,7 +333,7 @@ export function AudiencePicker({
         <FieldLabel>{t('skillhub.publishDialog.audienceLabel')}</FieldLabel>
       ) : null}
       <ScopeDropdown
-        summary={summaryNames.length > 0 ? summaryNames.join('、') : null}
+        summary={summaryNames.length > 0 ? summaryNames.join(t('commonUi.listSeparator')) : null}
         placeholder={t('skillhub.publishDialog.audiencePlaceholder')}
         disabled={disabled}
       >

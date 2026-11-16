@@ -5,6 +5,23 @@ import {
 
 afterEach(() => setRemoteBotSessionLookup(null));
 
+// Unit, #9801: the existing history boundary accepted only sessions/hits,
+// rejecting both new successful source-query shapes. Repeated delivery must
+// still revoke a hidden profile/session and preserve pagination as one page.
+it('projects new directory and relationship results with fresh source visibility', async () => {
+  let hidden = false;
+  setRemoteBotSessionLookup(async (_id, kind) => hidden ? 'hidden' : kind === 'bot' ? 'visible' : 'background');
+  const directory = { ok: true, teammates: [{ id: 'teammate', name: 'Companion' }], nextCursor: 'next', hasMore: true };
+  const relationships = { ok: true, teammateId: 'teammate', relationships: [{ sessionId: 'task', role: 'history' }], nextCursor: null, hasMore: false };
+  for (const result of [directory, relationships]) {
+    expect(await projectRemoteSessionResult('local-db:history:query', result)).toEqual(result);
+  }
+  hidden = true;
+  for (const result of [directory, relationships]) {
+    await expect(projectRemoteSessionResult('local-db:history:query', result)).rejects.toThrow('[NOT_FOUND]');
+  }
+});
+
 it.each([false, true])('rechecks parent references on repeated history delivery (batch=%s)', async (useBatch) => {
   let parentAccess: 'visible' | 'hidden' | 'missing' = 'visible';
   const single = vi.fn(async (id: string) => id === 'parent' ? parentAccess : 'ordinary' as const);

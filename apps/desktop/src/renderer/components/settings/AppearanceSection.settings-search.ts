@@ -126,6 +126,15 @@ export const appearanceSettings = defineSettings({
     titleKey: 'settings.appearance.themeLabel',
     sectionKey: 'settings.appearance.themeLabel',
   },
+  createTheme: {
+    id: 'appearance.createTheme',
+    tab: 'appearance',
+    targetId: 'settings-search-target-appearance-create-theme',
+    fallbackTargetId: 'settings-search-target-appearance-theme',
+    titleKey: 'settings.appearance.createTheme.label',
+    descriptionKey: 'settings.appearance.createTheme.hint',
+    sectionKey: 'settings.appearance.themeLabel',
+  },
   wallpaperTitle: {
     id: 'settings.appearance.wallpaper.title',
     fallbackTargetId: 'settings-search-target-appearance-wallpaper',

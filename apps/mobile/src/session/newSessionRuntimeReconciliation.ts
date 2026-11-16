@@ -6,6 +6,7 @@ import {
   assertSubmitModelResolved,
   reconcileEffortAfterFallback,
   resolveRecentModelAndProvider,
+  validateModelProviderId,
   type NewSessionDraft,
   type SubmitGuardCatalog,
 } from "./newSession";
@@ -19,7 +20,7 @@ import type { draftModelMemoryFor } from "./draftModelMemory";
 
 type HiddenModelText = (key: string, options: { model: string }) => string;
 
-/** Background catalog refresh preserves an untouched selection unless its source moved. */
+/** Refresh preserves a chosen account; only an authorized Cindy Auto relocation may change it. */
 export function reconcileNewSessionCatalogDraft(
   current: NewSessionDraft,
   modelRows: readonly ProviderModelRow[],
@@ -37,6 +38,7 @@ export function reconcileNewSessionCatalogDraft(
     true,
     deviceProviders.providers,
     deviceProviders.modelVisibilityOverrides,
+    { preserveExplicitProvider: true },
   );
   const pairChanged =
     resolved.model !== current.model ||
@@ -79,8 +81,18 @@ export function reconcileNewSessionSubmitDraft(
     g.catalogKnown,
     g.providers,
     g.visibilityOverrides,
+    { preserveExplicitProvider: true },
   );
   assertSubmitModelResolved(resolved, effectiveDraft.model);
+  if (
+    g.catalogKnown &&
+    resolved.providerId &&
+    !validateModelProviderId(g.rows, resolved.providerId, resolved.model, true)
+  ) {
+    throw new Error(
+      t("session.common.modelUnavailableReselect", { model: resolved.model }),
+    );
+  }
   const pairChanged =
     resolved.model !== effectiveDraft.model ||
     resolved.providerId !== effectiveDraft.providerId;

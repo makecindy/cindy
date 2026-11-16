@@ -3,6 +3,8 @@ import { getRandomBytes } from "expo-crypto";
 import {
   mcpAppSandboxDocument,
   HOST_APP_SDK_PATH,
+  CINDY_VIEW_STATE_SDK_PATH,
+  CINDY_VIEW_STATE_REACT_SDK_PATH,
   type McpAppDocument,
 } from "@cindy/maker-shared/mcp-apps";
 import native from "../../modules/cindy-html-preview/src/CindyHtmlPreviewModule";
@@ -90,6 +92,14 @@ export async function prepareMcpAppNativeDocument(
       sdk.writeSync(sdkSource);
       entries.push([HOST_APP_SDK_PATH.slice(1), "3", "text/javascript"]);
     }
+    const candidate = document.sdk?.addons?.['cindy/view-state'];
+    const addon = sdkSource !== undefined && typeof candidate?.source === 'string' && typeof candidate?.reactSource === 'string'
+      ? candidate : undefined;
+    if (addon) {
+      const core = new File(directory, "4"); core.create(); core.writeSync(addon.source);
+      const react = new File(directory, "5"); react.create(); react.writeSync(addon.reactSource);
+      entries.push([CINDY_VIEW_STATE_SDK_PATH.slice(1), "4", "text/javascript"], [CINDY_VIEW_STATE_REACT_SDK_PATH.slice(1), "5", "text/javascript"]);
+    }
     const bootstrap = new File(directory, "2");
     bootstrap.create();
     bootstrap.writeSync(MCP_APP_STORAGE_BOOTSTRAP);
@@ -103,6 +113,7 @@ export async function prepareMcpAppNativeDocument(
     );
     const html = (await import("@cindy/maker-shared/mcp-app-sdk")).withHostAppSdk(
       document.html, new URL(HOST_APP_SDK_PATH, resourceUrl).href,
+      addon ? { coreUrl: new URL(CINDY_VIEW_STATE_SDK_PATH, resourceUrl).href, reactUrl: new URL(CINDY_VIEW_STATE_REACT_SDK_PATH, resourceUrl).href } : undefined,
     );
     resource.writeSync(html);
     const resourceOrigin = new URL(resourceUrl).origin;

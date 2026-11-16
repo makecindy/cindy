@@ -236,10 +236,16 @@ export function isShareableThreadReply(message: ThreadMessage): boolean {
     && !message.content.some(block => block.namespace === 'cindy.group-notice' || block.namespace === 'cindy.local-history');
 }
 
+const THREAD_PREVIEW_TEXT_MAX = 280;
+
 /** Reply text for a one-line preview; files are listed separately. */
 export function threadPreviewText(message: ThreadMessage): string {
-  return message.content.flatMap(block => block.type === 'media' ? [] : [block.text ?? block.fallback ?? '']).join(' ')
-    .replace(/\s+/g, ' ').trim().slice(0, 280);
+  const text = message.content.flatMap(block => block.type === 'media' ? [] : [block.text ?? block.fallback ?? '']).join(' ')
+    .replace(/\s+/g, ' ').trim();
+  if (text.length <= THREAD_PREVIEW_TEXT_MAX) return text;
+  // Never split a surrogate pair (emoji and other astral characters are two UTF-16 units).
+  const high = text.charCodeAt(THREAD_PREVIEW_TEXT_MAX - 1);
+  return text.slice(0, high >= 0xd800 && high <= 0xdbff ? THREAD_PREVIEW_TEXT_MAX - 1 : THREAD_PREVIEW_TEXT_MAX);
 }
 
 export function threadPreviewAttachments(message: ThreadMessage, attachmentName: (block: ThreadMessage['content'][number]) => string) {

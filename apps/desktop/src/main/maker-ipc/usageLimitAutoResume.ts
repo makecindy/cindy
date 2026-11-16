@@ -35,6 +35,12 @@ export const USAGE_LIMIT_ACCOUNT_SWITCH_DELAY_MS = 2_000;
 
 export type UsageLimitContinueOutcome = 'resumed' | 'superseded' | 'no-progress' | 'capacity-wait';
 
+/** Host-only evidence for this error, never persisted or read from provider signals. */
+export interface UsageLimitRecoveryOptions {
+  /** The group already checked accounts without changing the task's route/runtime. */
+  accountSwitchChecked?: true;
+}
+
 export interface UsageLimitAutoResumeDeps {
   now(): number;
   random(): number;
@@ -78,6 +84,7 @@ export class UsageLimitAutoResume {
     sessionId: string,
     signals: InterruptedTurnErrorSignals,
     candidateToken: number,
+    options: UsageLimitRecoveryOptions = {},
   ): Promise<boolean> {
     if (this.disposed || !isAccountUsageLimitError(signals)) return false;
     const used = this.consecutive.get(sessionId) ?? 0;
@@ -88,7 +95,7 @@ export class UsageLimitAutoResume {
     }
     const generation = this.bumpGeneration(sessionId);
     try {
-      const armed = await this.schedule(sessionId, signals, candidateToken, generation);
+      const armed = await this.schedule(sessionId, signals, candidateToken, generation, options);
       if (!armed) this.deps.cancel(sessionId, candidateToken);
       return armed;
     } catch (err) {
@@ -112,10 +119,12 @@ export class UsageLimitAutoResume {
     signals: InterruptedTurnErrorSignals,
     token: number,
     generation: number,
+    options: UsageLimitRecoveryOptions,
   ): Promise<boolean> {
     if (!(await this.deps.isEligible(sessionId))) return false;
     // A group-verified limit already covers every member; only an ordinary account task switches here.
     const switchAccount = signals.providerGroupUsageLimit === undefined
+      && !options.accountSwitchChecked
       && (await this.deps.canSwitchAccount?.(sessionId).catch(() => false) ?? false);
     const resetAt = switchAccount ? null : await this.deps.resolveResetAt(sessionId, signals);
     if (this.disposed || this.generations.get(sessionId) !== generation) return false;

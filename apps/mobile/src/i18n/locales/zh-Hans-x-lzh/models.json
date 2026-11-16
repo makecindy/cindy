@@ -74,7 +74,7 @@
     "cancel": "仍旧"
   },
   "unified": {
-    "accountUnassigned": "账号待定",
+    "accountUnassigned": "名籍待定",
     "accountCount_other": "{{count}} 个名籍",
     "accountFallback": "名籍 {{index}}",
     "favoriteConfiguration": "藏此设置",
@@ -121,7 +121,7 @@
     "quotaUpdating": "余量待新",
     "quotaResetSoon": "将重置",
     "quotaResetIn": "{{duration}}后复初",
-    "quotaAverageHint": "周限额 · 诸账号等权均值",
-    "quotaResetHint": "依今耗速，重置或尚有余：距二十四时以内示黄，六时以内示红。"
+    "quotaAverageHint": "周限额 · 诸名籍等权均值",
+    "quotaResetHint": "依今耗速，重置或尚有余：距 24 小时以内示黄，6 小时以内示红。"
   }
 }

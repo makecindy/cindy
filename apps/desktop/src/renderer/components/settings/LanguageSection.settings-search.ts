@@ -41,7 +41,7 @@ export const languageSettings = defineSettings({
       { value: 'zh-Hans-x-lzh', labelKey: 'settings.language.classical.script.hans' },
       { value: 'zh-Hant-x-lzh', labelKey: 'settings.language.classical.script.hant' },
     ],
-    keywordKeys: classicalStyleOptions.map(({ labelKey }) => labelKey),
+    keywordKeys: ['settings.language.classical.styleAriaLabel', ...classicalStyleOptions.map(({ labelKey }) => labelKey)],
   },
 });
 

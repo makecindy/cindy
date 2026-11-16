@@ -3,7 +3,9 @@ import { pluginHasToolUi } from '@cindy/plugin-protocol';
 import type { PreparedPluginContribution } from '../../../shared/pluginContributions';
 import { PluginShareButton } from './PluginShareButton';
 import { PluginUiMenu } from '@/cindy-brain/PluginUiContributions';
+import { permissionItemDetail } from '../../../shared/ghostPermissionDetail';
 import { Button } from '@/components/ui/button';
+import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
 import { GithubAccountCard } from '@/features/cc-agent/GithubAccountCard';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
@@ -62,7 +64,6 @@ import { cn } from '@/lib/utils';
 import {
   declaredGhostControlPoints,
   ghostDeclaresHiddenTasks,
-  ghostHostUiNeedsApproval,
   ghostToolDeclaresHandoff,
   ghostTrustLabelKey,
   type GhostPermissionItem,
@@ -494,9 +495,10 @@ export function GhostPluginDetailView({
                       reloadKey={githubConnectionVersion}
                       account={
                         hasGithubConnection ? (
-                          <GithubAccountCard
-                            onConnected={() => setGithubConnectionVersion((version) => version + 1)}
-                          />
+                          <div>
+                            <GithubAccountCard onConnected={() => setGithubConnectionVersion((version) => version + 1)} />
+                            {ghost.manifest.id === 'cindy-github' && ghost.namespace === null && <GithubAppCard />}
+                          </div>
                         ) : undefined
                       }
                       ghost={ghost}
@@ -564,7 +566,7 @@ export function GhostPluginDetailView({
             <p>{tool.name}</p>
             <p className="break-all text-12">{getPluginToolUi(ghost.manifest)?.tools[tool.name].visibility && !getPluginToolUi(ghost.manifest)?.tools[tool.name].visibility!.includes('model') ? t('settings.ghosts.perm.mcpAppOnly') : `ghost_call: ${tool.name}`}</p>
           </div>)}
-          {!remote && enabled && (ghost.uiCapabilityApproved !== true || ghostHostUiNeedsApproval(ghost)) && <Button variant="secondary" size="sm" disabled={taskApprovalPending} onClick={async () => {
+          {!remote && enabled && ghost.uiCapabilityApproved !== true && <Button variant="secondary" size="sm" disabled={taskApprovalPending} onClick={async () => {
             setTaskApprovalPending(true);
             try { await window.electronAPI.ghosts.requestUiApproval(detail.id); }
             catch { toast.error(t('settings.ghosts.errors.generic')); }
@@ -935,7 +937,7 @@ export function PermissionSummary({ items }: { items: readonly GhostPermissionIt
           key: item.key,
           title: t('settings.ghosts.perm.' + item.labelKey, item.labelArgs),
           descriptions: [
-            item.detailKey ? t('settings.ghosts.perm.' + item.detailKey, item.detailArgs) : '',
+            permissionItemDetail(item, t) ?? '',
             item.detail ?? '',
           ].filter(Boolean),
           icon: permissionItemIcon(item),

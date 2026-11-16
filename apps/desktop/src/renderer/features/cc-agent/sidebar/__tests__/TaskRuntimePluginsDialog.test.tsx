@@ -7,17 +7,29 @@ import { TaskRuntimePluginsDialog } from '../TaskRuntimePluginsDialog';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 const runtimePlugins = vi.fn();
+const candidates = vi.fn();
 const dismiss = vi.fn();
 beforeEach(() => {
   vi.clearAllMocks();
   setDataOwnerGeneration('owner');
   runtimePlugins.mockResolvedValue({});
+  candidates.mockImplementation(async (point: string) => [{ pluginId: point, name: point }]);
   Object.assign(window, { electronAPI: { ghosts: { runtimePlugins,
-    listControlPointCandidates: async (point: string) => [{ pluginId: point, name: point }],
+    listControlPointCandidates: candidates,
   } } });
 });
 afterEach(cleanup);
 const session = { id: 'task', agentKind: 'pi', status: 'active' } as Session;
+
+// Unit, production dialog: empty controls must not turn into five placeholder
+// sections. Existing coverage gave every control a candidate and missed this case.
+it('does not render empty runtime control groups', async () => {
+  candidates.mockImplementation(async (point: string) => point === 'will-compose-context'
+    ? [{ pluginId: 'reference', name: 'Reference provider' }] : []);
+  render(<TaskRuntimePluginsDialog session={session} onDismiss={dismiss} />);
+  await screen.findByRole('checkbox', { name: 'Reference provider' });
+  expect(screen.getAllByRole('group')).toHaveLength(1);
+});
 
 // Unit, real dialog/checkbox/save path: installation does not opt tasks in.
 // The saved IPC payload must contain only explicit choices, with no extra calls.

@@ -8,7 +8,8 @@ vi.mock('electron', () => ({ webContents: { fromId: (id: number) => ({ ...bounda
     webContents: { ...boundary.contents, id: contents.id, send: boundary.send } }) } }));
 vi.mock('../../deepLink.js', () => ({ getDeepLinkMainWindow: () => ({ isDestroyed: () => false,
   webContents: { ...boundary.contents, send: boundary.send } }) }));
-vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => boundary.owner }));
+vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => boundary.owner,
+  getActiveDataOwnerPushStamp: () => ({ dataOwnerId: boundary.owner, ownerGeneration: 1 }) }));
 vi.mock('../../device-link/broadcast-tap.js', () => ({ getSafeDataOwnerPushStamp: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }) }));
 vi.mock('../../mcp-integrations/plugin-app-registry.js', () => ({ readPluginHostUi: () => boundary.entry }));
 vi.mock('../../appearance-settings-store.js', () => ({ readAppearanceSettings: () => ({}) }));
@@ -19,6 +20,7 @@ import { markRsbWindowWebContentsId } from '../../right-sidebar-window/registry'
 import { pagePermissionSessionChanged } from '../pagePermissions';
 import { McpAppsHost } from '../host';
 import type { AppConnection, AppServerConfig } from '../connection';
+import { configurePluginSettings } from '../../app-settings/plugins';
 
 // 生产入口：Main 的资源来源绑定和真实宿主工具，观察给所属编辑器的命令与拒绝结果。
 // 规则：页面不能自选任务/操作、缺能力不开放、任务清空/owner 切换撤权。
@@ -81,6 +83,26 @@ it('keeps the declared source scope and omits task-only tools from a global view
   expect(() => bindPluginUiResource('renderer:1', 'task-a', 'plugin', 'global', () => 'rev')).toThrow('MCP_APP_INVALID_SCOPE');
   const global = bindPluginUiResource('renderer:1', null, 'plugin', 'global', () => 'rev');
   expect(global.hostTools?.map(tool => tool.name)).toEqual(['cindy.ui.open']);
+});
+
+// New host settings tool: a page cannot choose a different instance namespace.
+// Existing draft/appearance tests do not cross the unified settings service (unit).
+it('exposes only approved registered settings and ignores a forged namespace', async () => {
+  const entry = boundary.entry as { host: { settings?: { id: string; title: string; type: 'boolean'; default: boolean }[] }; config: AppServerConfig };
+  const settings = [{ id: 'enabled', title: 'Enabled', type: 'boolean' as const, default: true }];
+  entry.host.settings = settings;
+  entry.config.plugin!.instance = 'local__example';
+  let stored: Record<string, unknown> = { private: 'keep' };
+  configurePluginSettings({ entries: () => [{ instance: 'local__example', title: 'Example', settings, assertCurrent() {} }],
+    read: () => stored, write: (_instance, value) => { stored = value; } });
+  const binding = bindPluginUiResource('renderer:1', null, 'local__example', 'global', () => 'rev');
+  expect(binding.hostTools?.some(tool => tool.name === 'cindy.ui.settings')).toBe(true);
+  const signal = new AbortController().signal;
+  const result = await binding.callHostTool!('cindy.ui.settings', {
+    operation: 'update', section: 'plugins.other', patch: { enabled: false },
+  }, signal);
+  expect(result).toMatchObject({ content: [{ type: 'text', text: expect.stringContaining('plugins.local__example') }] });
+  expect(stored).toEqual({ private: 'keep', enabled: false });
 });
 
 it('does not let a page override the bound task or the operation through tool arguments', async () => {

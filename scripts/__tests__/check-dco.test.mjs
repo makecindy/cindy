@@ -392,7 +392,6 @@ test('resolvePosixShell preserves Unix PATH lookup and locates Git for Windows s
   assert.equal(
     resolvePosixShell('sh', {
       platform: 'linux',
-      spawnSyncImpl: mustNotProbe,
       existsSync: mustNotProbe,
     }),
     'sh',
@@ -400,7 +399,6 @@ test('resolvePosixShell preserves Unix PATH lookup and locates Git for Windows s
   assert.equal(
     resolvePosixShell('bash', {
       platform: 'darwin',
-      spawnSyncImpl: mustNotProbe,
       existsSync: mustNotProbe,
     }),
     'bash',
@@ -410,12 +408,11 @@ test('resolvePosixShell preserves Unix PATH lookup and locates Git for Windows s
   assert.equal(
     resolvePosixShell('sh', {
       platform: 'win32',
-      env: {},
-      spawnSyncImpl: () => ({
-        status: 0,
-        stdout: 'D:\\Tools\\Git\\cmd\\git.exe\r\n',
-      }),
-      existsSync: (candidate) => candidate === expected,
+      env: { Path: 'D:\\Tools\\Git\\cmd' },
+      existsSync: (candidate) => [
+        path.win32.join('D:\\Tools\\Git', 'cmd', 'git.exe'),
+        expected,
+      ].includes(candidate),
     }),
     expected,
   );
@@ -427,11 +424,11 @@ test('resolvePosixShell never probes relative candidates from blank or invalid W
     resolvePosixShell('sh', {
       platform: 'win32',
       env: {
+        PATH: ';relative;"relative path"; ',
         ProgramFiles: '',
         'ProgramFiles(x86)': 'relative',
         LOCALAPPDATA: ' ',
       },
-      spawnSyncImpl: () => ({ status: 1, stdout: '' }),
       existsSync: (candidate) => {
         candidates.push(candidate);
         return false;
@@ -444,6 +441,57 @@ test('resolvePosixShell never probes relative candidates from blank or invalid W
     path.win32.join('C:\\Program Files (x86)', 'Git', 'bin', 'sh.exe'),
   ]);
   assert.ok(candidates.every((candidate) => path.win32.isAbsolute(candidate)));
+});
+
+test('resolvePosixShell follows quoted Windows PATH order and skips Git entries without a shell', () => {
+  const files = new Set([
+    'D:\\MissingShell\\cmd\\git.exe',
+    'D:\\First Git\\cmd\\git.exe',
+    'D:\\First Git\\bin\\bash.exe',
+    'D:\\SecondGit\\bin\\git.exe',
+    'D:\\SecondGit\\bin\\bash.exe',
+    'C:\\Program Files\\Git\\bin\\bash.exe',
+  ]);
+  assert.equal(
+    resolvePosixShell('bash', {
+      platform: 'win32',
+      env: { PATH: 'D:\\MissingShell\\cmd;"D:\\First Git\\cmd";D:\\SecondGit\\bin' },
+      existsSync: (candidate) => files.has(candidate),
+    }),
+    'D:\\First Git\\bin\\bash.exe',
+  );
+});
+
+test('resolvePosixShell finds standard and per-user Git installs when Git is not on PATH', () => {
+  for (const root of [
+    'C:\\Program Files\\Git',
+    'C:\\Program Files (x86)\\Git',
+    'D:\\User\\AppData\\Local\\Programs\\Git',
+  ]) {
+    const expected = path.win32.join(root, 'bin', 'bash.exe');
+    assert.equal(
+      resolvePosixShell('bash', {
+        platform: 'win32',
+        env: { LOCALAPPDATA: 'D:\\User\\AppData\\Local' },
+        existsSync: (candidate) => candidate === expected,
+      }),
+      expected,
+    );
+  }
+});
+
+test('resolvePosixShell does not select the Windows WSL launcher or a shell without Git', () => {
+  assert.equal(
+    resolvePosixShell('bash', {
+      platform: 'win32',
+      env: { Path: 'C:\\Windows\\System32;D:\\OtherShell\\bin' },
+      existsSync: (candidate) => [
+        'C:\\Windows\\System32\\bash.exe',
+        'D:\\OtherShell\\bin\\bash.exe',
+      ].includes(candidate),
+    }),
+    null,
+  );
 });
 
 // --- 端到端：真 git 仓库 ---

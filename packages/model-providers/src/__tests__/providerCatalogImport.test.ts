@@ -19,6 +19,70 @@ const shard = (value: string) =>
   `// ../ai/src/providers/data/new-vendor.json\nvar vendor_default = ${value};\nstartApplication();`;
 
 describe("Pi source import", () => {
+  // #10356 review, unit: the pinned Pi tariff's zero cacheRead overwrote our
+  // corrected snapshot on refresh. Existing generic cost tests do not cover
+  // this channel contract. Exercise fresh imports and same-route regeneration.
+  it('keeps the Cerebras cached-input tariff when importing stale Pi data', () => {
+    const stale = { ...model, provider: 'cerebras', id: 'gpt-oss-120b',
+      baseUrl: 'https://api.cerebras.ai/v1', cost: { input: 0.35, output: 0.75, cacheRead: 0, cacheWrite: 0 } };
+    const before = structuredClone(stale);
+    const previous = toCindyCatalog({ cerebras: [{ ...stale, cost: { ...stale.cost, cacheRead: 0.35 } }] }, 'before');
+    for (const options of [{}, { previous }]) {
+      const imported = toCindyCatalog({ cerebras: [stale] }, 'after', options);
+      expect(imported.providers.cerebras).toEqual(previous.providers.cerebras);
+      expect(imported.source).toBe('pi');
+    }
+    expect(stale).toEqual(before);
+  });
+
+  it('does not rewrite other Cerebras routes or a new upstream tariff', () => {
+    const stale = { ...model, provider: 'cerebras', id: 'gpt-oss-120b',
+      baseUrl: 'https://api.cerebras.ai/v1', cost: { input: 0.35, output: 0.75, cacheRead: 0, cacheWrite: 0 } };
+    for (const input of [
+      { ...stale, provider: 'other-provider' },
+      { ...stale, id: 'other-model' },
+      { ...stale, baseUrl: 'https://proxy.example/v1' },
+      { ...stale, api: 'openai-responses' },
+      { ...stale, cost: { ...stale.cost, input: 0 } },
+      { ...stale, cost: { ...stale.cost, output: 0.5 } },
+      { ...stale, cost: { ...stale.cost, cacheRead: 0.1 } },
+      { ...stale, cost: { input: 0.35, output: 0.75 } },
+    ]) {
+      const imported = toCindyCatalog({ [input.provider]: [input] }, 'fixture');
+      expect(imported.providers[input.provider][0].cost).toEqual(input.cost);
+    }
+  });
+
+  // #10269, unit: regeneration must preserve the verified Carbon transport
+  // while reusing Argon's maintained IDE identity, not its unverified capacity.
+  it('supplements Copilot Carbon from the same source Chat adapter only', () => {
+    const argon = { ...model, id: 'gemini-4-argon', provider: 'github-copilot',
+      baseUrl: 'https://api.individual.githubcopilot.com',
+      headers: { 'Editor-Version': 'fixture-editor', Authorization: 'invalid-fixture-secret' },
+      compat: { supportsStore: false, supportsReasoningEffort: false },
+    };
+    const before = structuredClone(argon);
+    const errors: unknown[] = [];
+    // Malformed external JSON bypasses the compile-time PiImportModel contract.
+    const source = JSON.parse(JSON.stringify([null, argon]));
+    const imported = toCindyCatalog({ 'github-copilot': source }, 'fixture', { onError: error => errors.push(error) });
+    expect(errors).toHaveLength(1);
+    const carbon = imported.providers['github-copilot'].find(row => row.id === 'gemini-4-carbon');
+    expect(carbon).toEqual({ id: 'gemini-4-carbon', name: 'Gemini 4 Carbon', upstream: argon.baseUrl,
+      execution: { pi: { api: 'openai-completions', headers: { 'Editor-Version': 'fixture-editor' }, compat: argon.compat } },
+    });
+    expect(argon).toEqual(before);
+    for (const changed of [{ ...argon, baseUrl: 'https://proxy.example' },
+      { ...argon, api: 'anthropic-messages' }, { ...argon, provider: 'another-provider' }]) {
+      expect(toCindyCatalog({ [changed.provider]: [changed] }, 'fixture').providers[changed.provider])
+        .not.toContainEqual(expect.objectContaining({ id: 'gemini-4-carbon' }));
+    }
+    const explicit = { ...argon, id: 'gemini-4-carbon', api: 'openai-responses', headers: {}, compat: {} };
+    const refreshed = toCindyCatalog({ 'github-copilot': [argon, explicit] }, 'fixture', { previous: imported });
+    expect(refreshed.providers['github-copilot'].find(row => row.id === explicit.id)?.execution.pi)
+      .toMatchObject({ api: 'openai-responses', headers: {}, compat: {} });
+  });
+
   // #9863: the pinned source labels Copilot Astra as Chat; regeneration must retain
   // its Responses contract. Existing import cases only cover generic conversion.
   it('corrects only the exact Copilot Astra Chat source during import', () => {
