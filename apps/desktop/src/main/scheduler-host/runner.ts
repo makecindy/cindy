@@ -875,14 +875,27 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // The fire is finished, but accepted follow-ups still own this runtime.
     // Retain cleanup ownership across preparing, pauses and recoveries; queue
     // removal need not emit a vendor event, so an unref'ed poll also covers it.
+    const busy = () => this.runtime.isSessionInTurn(sessionId)
+      || this.deps.schedulerQueue?.hasPendingInput?.(sessionId)
+      || session.listBackgroundTasks().length > 0
+      || session.countPendingWakeContinuations() > 0
+      || (session.manageAsyncUserQuestions({ action: 'list' }).questions?.length ?? 0) > 0;
     const poll = async (): Promise<void> => {
       try {
         holder.assertOwner?.();
-        if (this.deps.maker.getSession(sessionId) !== session) return;
-        if (!this.runtime.isSessionInTurn(sessionId)
-          && !this.deps.schedulerQueue?.hasPendingInput?.(sessionId)) {
-          const result = await this.deps.maker.closeSessionIfCurrent(session, 'requested', { onlyIfIdle: true });
-          if (result === 'closed') return;
+        if (this.deps.maker.getSession(sessionId) !== session || session.getStatus() !== 'active') return;
+        // A completed turn may still own answerable questions, native children,
+        // background terminals, or a wake continuation. Use the same product
+        // facts as idle release rather than equating turn completion with idle.
+        if (!busy() && !await session.hasLiveBackgroundWork()) {
+          // The provider probe yields: recheck account, instance and all live
+          // facts before the synchronous close-if-idle reservation.
+          holder.assertOwner?.();
+          if (this.deps.maker.getSession(sessionId) !== session || session.getStatus() !== 'active') return;
+          if (!busy()) {
+            const result = await this.deps.maker.closeSessionIfCurrent(session, 'requested', { onlyIfIdle: true });
+            if (result === 'closed') return;
+          }
         }
       } catch (error) {
         // A changed owner must never touch the next account's queue or runtime.

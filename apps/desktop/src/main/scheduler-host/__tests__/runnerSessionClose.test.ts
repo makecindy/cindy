@@ -10,6 +10,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import type {
   AgentEvent,
+  InteractionDecision,
   Maker,
   Session,
   SessionSendResult,
@@ -329,7 +330,7 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
       const logger = { trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: () => logger };
       const session = new RuntimeSession({
         id: 'scheduler-session', agentKind: 'pi', workDir: process.cwd(),
-        handle: handle as never, capabilities: {} as never, logger: logger as never, turnStallMs: 0,
+        handle: handle as never, capabilities: { sameTurnSteer: { supported: true } } as never, logger: logger as never, turnStallMs: 0,
         permissionMode: 'bypassPermissions',
       });
       const discarded = vi.fn();
@@ -434,9 +435,31 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
         expect(coordinator.getProjection(session.id).error).toBeNull();
         expect(discarded).not.toHaveBeenCalled();
         expect(terminalErrors).not.toHaveBeenCalled();
-        // The finished fire retains cleanup ownership until the follow-up ends.
+        // Async questions intentionally outlive done; cleanup must keep them answerable.
+        let answerQuestion!: (answer: InteractionDecision) => void;
+        session.setInteractionListener(() => new Promise(resolve => { answerQuestion = resolve; }));
+        const question = session.askUserQuestionAsync([{ question: 'Which follow-up scope?' }]);
         events.push({ type: 'done', data: { stopReason: 'stop' }, source: 'pi' });
         await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(session.getStatus()).toBe('active');
+        expect(session.manageAsyncUserQuestions({ action: 'list' }).questions).toHaveLength(1);
+        if (source === 'plugin') {
+          // A late answer must actually reach the provider in a third turn.
+          const answer: InteractionDecision = {
+            kind: 'ask_user_question', answers: { 'Which follow-up scope?': 'Keep the original scope' },
+          };
+          await expect(session.submitAsyncQuestionAnswer(question.request_id, answer)).resolves.toBe(true);
+          answerQuestion(answer);
+          await vi.waitFor(() => expect(session.manageAsyncUserQuestions({ action: 'list' }).questions).toHaveLength(0));
+          expect(handle.send).toHaveBeenCalledTimes(3);
+          events.push({ type: 'done', data: { stopReason: 'stop' }, source: 'pi' });
+          await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
+        } else {
+          expect(session.manageAsyncUserQuestions({ action: 'withdraw',
+            request_ids: [question.request_id], reason: 'No longer needed' }).results)
+            .toEqual([{ request_id: question.request_id, status: 'withdrawn' }]);
+        }
         await vi.advanceTimersByTimeAsync(1_000);
         expect(session.getStatus()).toBe('closed');
       } finally {
@@ -448,12 +471,32 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
     },
   );
 
-  it.each(['removed', 'owner-changed', 'runtime-replaced'] as const)(
+  it.each(['removed', 'owner-changed', 'runtime-replaced', 'probe-new-input', 'probe-owner-changed', 'probe-runtime-replaced'] as const)(
     'deferred cleanup respects %s after queued input takes ownership', async outcome => {
       vi.useFakeTimers();
       const h = createSessionHarness();
       let pending = true;
       let inTurn = false;
+      let background = false;
+      let wakes = 0;
+      let nativeWork = false;
+      let probeRaceApplied = false;
+      Object.assign(h.session, {
+        getStatus: () => 'active',
+        listBackgroundTasks: () => background ? [{}] : [],
+        countPendingWakeContinuations: () => wakes,
+        manageAsyncUserQuestions: () => ({ questions: [] }),
+        hasLiveBackgroundWork: async () => {
+          await Promise.resolve();
+          if (!probeRaceApplied) {
+            probeRaceApplied = true;
+            if (outcome === 'probe-new-input') pending = true;
+            if (outcome === 'probe-owner-changed') owner = false;
+            if (outcome === 'probe-runtime-replaced') current = { ...h.session } as Session;
+          }
+          return nativeWork;
+        },
+      });
       let owner = true;
       let current: Session | null = h.session;
       const retire = vi.fn(async () => 'closed' as const);
@@ -483,11 +526,30 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
         await vi.advanceTimersByTimeAsync(1_000);
         expect(retire).not.toHaveBeenCalled();
         inTurn = false;
+        if (outcome === 'removed') {
+          background = true;
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(retire).not.toHaveBeenCalled();
+          background = false;
+          wakes = 1;
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(retire).not.toHaveBeenCalled();
+          wakes = 0;
+          nativeWork = true;
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(retire).not.toHaveBeenCalled();
+          nativeWork = false;
+        }
         if (outcome === 'owner-changed') owner = false;
         if (outcome === 'runtime-replaced') current = { ...h.session } as Session;
         await vi.advanceTimersByTimeAsync(1_000);
         expect(closeSession).not.toHaveBeenCalled();
-        if (outcome === 'removed') {
+        if (outcome === 'probe-new-input') {
+          expect(retire).not.toHaveBeenCalled();
+          pending = false;
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+        if (outcome === 'removed' || outcome === 'probe-new-input') {
           expect(retire).toHaveBeenCalledExactlyOnceWith(h.session, 'requested', { onlyIfIdle: true });
         } else expect(retire).not.toHaveBeenCalled();
         expect(vi.getTimerCount()).toBe(0);
