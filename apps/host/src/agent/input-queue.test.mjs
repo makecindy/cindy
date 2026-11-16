@@ -3042,7 +3042,7 @@ const SWITCH_WINDOWS = { big: 200_000, small: 100_000, 'xai/big': 200_000 };
 const switchModel = id => ({ id, efforts: [], defaultEffort: null, supportsFastMode: false });
 const switchViews = agent => [{ id: 'prov-a', connected: true, agents: [agent], source: 'user',
   routing: { [agent]: {} }, models: { [agent]: ['big', 'small'].map(switchModel) } }];
-async function modelChangeRuntime(t, { agent = 'claude-code' } = {}) {
+async function modelChangeRuntime(t, { agent = 'claude-code', queue = {} } = {}) {
   // The queue's owner is the account's database (as main.ts): close the queue before the database.
   t = lifoCleanup(t);
   const SWITCH_VIEWS = switchViews(agent);
@@ -3068,6 +3068,7 @@ async function modelChangeRuntime(t, { agent = 'claude-code' } = {}) {
     applyPendingAgentSwitch: (id, options) => { landings.push(id); return queueHooks.applyPendingAgentSwitch(id, options); },
     // As main.ts: the queue's owner is the current account's database.
     getOwner: getCurrentDbClientSnapshot,
+    ...queue,
   }, {
     // As main.ts: the context rollover uses the runtime selection's cold Pi window check.
     rehydrateColdPiRuntimeForWindowVerification: id => selection.rehydrateColdPiRuntimeForWindowVerification(id),
@@ -5010,6 +5011,49 @@ test('auto-resume exit 6: a Host shutdown during the wait gives the resume up fi
   t.mock.timers.tick(30_000); await settle();
   assert.equal(r.session.sent.length, 1);
   t.mock.timers.reset();
+});
+
+// Rule (register.ts wires sessionRuntimeFallback.ts into the interrupted-turn resume, and its
+// bootstrapSession starts the next runtime on the accepted override): with the user's route fallback
+// setting on, the second interruption of an episode moves the task to another provider's candidate,
+// and the resume runs on that route. Gap: the Host accepted the fallback but started the rebuilt
+// runtime from the task row (which a fallback does not write), so the resume ran on the failing route
+// again. Minimal failing input: two interruptions in a row on a task whose provider has a sibling.
+test('auto-resume route switch: the second interruption resumes on another provider when the setting is on', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t, { queue: { hasAssistantProgressAfter: async () => true } });
+  const twoProviders = ['prov-a', 'prov-b'].map(id => ({ ...switchViews('claude-code')[0], id }));
+  r.views.current = twoProviders;
+  writeFileSync(path.join(r.db.root, 'profile', 'session-runtime-fallback-settings.json'), JSON.stringify({ enabled: true }));
+  await r.createTask('fb');
+  await r.h.queue.enqueue('fb', { clientId: 'fb-1', text: 'long job' });
+  await waitFor(() => r.h.maker.sessions.get('fb')?.sent.length === 1);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(() => t.mock.timers.reset());
+  const interrupt = async session => {
+    const token = session.sendOptions.at(-1)?.turnAttemptToken;
+    const stamp = { sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId,
+      ...(typeof token === 'number' ? { turnAttemptToken: token } : {}) };
+    session.emit({ type: 'text', data: { text: 'half done', isFinal: true }, ...stamp });
+    session.emit({ type: 'error', data: INTERRUPTION, ...stamp });
+    await settle();
+  };
+  const resumed = async (before, sent) => {
+    for (let i = 0; i < 200; i += 1) {
+      const now = r.h.maker.sessions.get('fb');
+      if (now && (now !== before ? now.sent.length >= 1 : now.sent.length >= sent)) return now;
+      t.mock.timers.tick(500); await settle();
+    }
+    throw new Error('no resume');
+  };
+  const first = r.h.maker.sessions.get('fb');
+  await interrupt(first);
+  const second = await resumed(first, 2);
+  assert.equal(second, first, 'the first resume stays on the route');
+  assert.equal(second.options.providerId, 'prov-a');
+  await interrupt(second);
+  const third = await resumed(second, 3);
+  assert.notEqual(third, second, 'the second resume runs on a rebuilt runtime');
+  assert.equal(third.options.providerId, 'prov-b', 'the resume runs on the sibling provider');
 });
 
 // Working-directory move (A5, session-move.ts with the executor's own close):

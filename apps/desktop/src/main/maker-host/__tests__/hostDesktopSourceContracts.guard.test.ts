@@ -417,6 +417,33 @@ describe('Host copies of desktop expressions', () => {
   // 失效后果：桌面收紧了检查而 Host 没跟上，Host 的记忆工具悄悄比桌面松（换账号后上一个账号的任务读写数据）。
   // 缺口：Host 的行为测试（memory.test.mjs）只验证现有的几种拒绝，看不到桌面以后加的检查。
   // 最小失败输入：Host 副本里任一行与桌面不同。比较去掉缩进、空行与注释；session_search 只允许检索那一处不同。
+  // 规则：任务运行时启动前，已接受、未延期的运行时调整（自动换路线等）盖过任务行的路线，是桌面
+  // bootstrapSession 里 runtimeOverride 那一段；Host 照抄（runtime-override.ts），只去掉供应商组那两行
+  // （Host 在准入时拒绝供应商组任务）。失效后果：桌面改了这段而 Host 没跟，自动换路线后的续跑在 Host
+  // 上又回到出问题的路线，或带上桌面已不再覆盖的字段。
+  it('starts a runtime on the accepted runtime override with the desktop lines, except the provider group', () => {
+    const lines = (text: string) => text.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('//'));
+    const cut = (text: string, from: string, to: string) => {
+      const start = text.indexOf(from); assert.ok(start >= 0, from);
+      const end = text.indexOf(to, start); assert.ok(end > start, to);
+      return text.slice(start, end + to.length);
+    };
+    const desktop = lines(cut(read(path.join(desktopMain, 'maker-ipc/register.ts')),
+      'const runtimeOverride =', 'o.fastMode = runtimeOverride.fastMode;'));
+    const host = lines(cut(read(path.join(hostAgent, 'runtime-override.ts')),
+      'const runtimeOverride =', 'o.fastMode = runtimeOverride.fastMode;'));
+    assert.deepEqual(desktop.filter(line => !host.includes(line)), [
+      'const groupDecidesSource = providerGroupStart !== null',
+      '&& (providerGroupStart.overrideRoute || providerGroupStart.route.agentDeviceId !== null);',
+      'if (!groupDecidesSource) o.providerId = runtimeOverride.providerId;',
+    ]);
+    assert.deepEqual(host.filter(line => !desktop.includes(line)), ['o.providerId = runtimeOverride.providerId;']);
+    // Both Host runtime starts apply it before the start admission.
+    const executor = read(path.join(hostAgent, 'turn-executor.mjs'));
+    assert.match(executor, /applyRuntimeOverrideForStart\(opts\);\s*await deps\.admitLocalRoute\(opts\);/);
+    assert.match(executor, /applyRuntimeOverrideForStart\(start\);\s*await deps\.admitLocalRoute\(start\);/);
+  });
+
   it('keeps the cindy_memory caller checks line for line with the desktop closures', () => {
     const fn = (file: string, pick: (node: ts.Node) => ts.Node | undefined) => {
       const source = ts.createSourceFile(file, read(file), ts.ScriptTarget.ESNext, true);

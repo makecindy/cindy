@@ -44,6 +44,7 @@ import { recordHostContextSnapshot } from './context-usage.ts';
 import { readTerminalTurnErrorSignals } from '../../../desktop/src/main/maker-ipc/terminalTurnErrorSignals.ts';
 import { isForegroundRunningStatus, noteAutoResumeProgress, noteForegroundTurnStarted, settleAutoResumeAttemptOnDone,
   settleAutoResumeAttemptOnTerminalError } from '../../../desktop/src/main/maker-ipc/sessionEventAutoResumeSteps.ts';
+import { applyRuntimeOverrideForStart } from './runtime-override.ts';
 
 const makerKind = kind => kind === 'cc' ? 'claude-code' : kind;
 const dbKind = kind => kind === 'claude-code' ? 'cc' : kind;
@@ -542,6 +543,9 @@ export function createTurnExecutor(deps) {
         // reconciler, the cold Pi check, the engine switch, storedSessionOptions), so the fallback to
         // stored.sdkSessionId takes no different value; for that reason no test covers this step alone.
         opts.resumeSessionId = opts.resumeSessionId ?? (opts.agentKind === makerKind(stored.agentKind) ? stored.sdkSessionId || undefined : undefined);
+        // The accepted runtime mutation (an automatic route fallback) wins over the stored route,
+        // before the start admission, as in the desktop's bootstrapSession (runtime-override.ts).
+        applyRuntimeOverrideForStart(opts);
         await deps.admitLocalRoute(opts);
         assertAccess?.();
         turn?.check();
@@ -959,6 +963,8 @@ export function createTurnExecutor(deps) {
         // As every runtime start (the bootstrap above): the start admission, then the start's provider
         // on the task row.
         const start = { ...options, id };
+        // As the bootstrap above (the desktop restores through bootstrapSession too).
+        applyRuntimeOverrideForStart(start);
         await deps.admitLocalRoute(start);
         deps.assertCurrent(); await assertCurrent();
         session = await maker.createSession({ ...start });
