@@ -36,7 +36,7 @@ import { openOwnerDatabase } from '../../../desktop/src/main/localDb/startupCore
 import { createDbClientForHandle } from '../../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.ts';
 import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionStorageAdapter.ts';
-import { createHostRuntimeSelection } from './runtime-selection.ts';
+import { createHostRuntimeSelection, HOST_RUNTIME_SELECTION_QUEUE_MEMBERS, HOST_RUNTIME_START_PORTS } from './runtime-selection.ts';
 import { getThinkingEnabledFromMemory } from '../../../desktop/src/main/maker-host/newMakerDefaultsCache.ts';
 import { createHostMessageStore, createHostMessageRecovery } from '../message-store.ts';
 import { resolveSessionReferencesWithPorts } from '../../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
@@ -3174,6 +3174,17 @@ test('model change at send: an engine switch keeps its thinking choice for the n
   const pushed = r.h.events.filter(event => event.type === 'plugin_push' && event.channel === 'maker:draft-pref:apply');
   assert.deepEqual(pushed.map(event => event.payload),
     [{ agent: 'codex', providerId: 'prov-a', modelId: 'gpt-think', active: false, thinking: false }]);
+});
+
+// Guard: main.ts casts the untyped queue api to the runtime selection's inputQueue port. Every member
+// that port declares (listed in runtime-selection.ts, checked complete at compile time) is a function
+// of a real queue, and startPorts() gives every runtime start function.
+test('the queue api has every member the runtime selection calls', { timeout: 30_000 }, async t => {
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  for (const member of HOST_RUNTIME_SELECTION_QUEUE_MEMBERS) assert.equal(typeof h.queue[member], 'function', member);
+  const startPorts = h.queue.startPorts();
+  for (const port of HOST_RUNTIME_START_PORTS) assert.equal(typeof startPorts[port], 'function', port);
 });
 
 test('context recovery assembly: an overflow rebuilds the task and replays the message on a new runtime, with no error left', { timeout: 30_000 }, async t => {

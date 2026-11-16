@@ -410,25 +410,17 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
         thinking,
       });
     },
-    'maker.setEffort': (args) => {
-      const sessionId = args?.[0];
-      const effort = args?.[1];
-      if (!sessionId) return Promise.resolve();
-      return rpc('/sessions/update', { sessionId, patch: { effort } });
-    },
-    'maker.setFastMode': (args) => {
-      const sessionId = args?.[0];
-      const fastMode = args?.[1];
-      if (!sessionId) return Promise.resolve();
-      return rpc('/sessions/update', { sessionId, patch: { fastMode } });
-    },
+    // The desktop's set-effort and set-fast-mode, with their IPC arguments (the Host runs the shared
+    // handler bodies: a live change, or a change staged into a pending pick).
+    'maker.setEffort': (args) => rpc('/sessions/set-effort', { sessionId: args?.[0], effort: args?.[1] }),
+    'maker.setFastMode': (args) => rpc('/sessions/set-fast-mode', { sessionId: args?.[0], fastMode: args?.[1] }),
     'maker.setPlanMode': (args) => {
       const sessionId = args?.[0];
       const planModeEnabled = args?.[1];
       if (!sessionId) return Promise.resolve();
       return rpc('/sessions/update', { sessionId, patch: { planModeEnabled } });
     },
-    'maker.setThinkingEnabled': () => unsupported('maker.setThinkingEnabled'),
+    'maker.setThinkingEnabled': (args) => rpc('/sessions/set-thinking-enabled', { sessionId: args?.[0], enabled: args?.[1] }),
     'maker.listDesktopCommands': () => ({ success: true, commands: STATIC.emptyList }),
     'maker.claimLegacyModelVisibilityOwner': () => ({
       dataOwnerId: window.__cindyBoot?.auth?.ownerId ?? null,

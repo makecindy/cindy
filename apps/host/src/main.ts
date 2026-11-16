@@ -1040,6 +1040,8 @@ const runtimeSelection = createHostRuntimeSelection({
   codexProxyAuthInjectionState: () => codexRuntime?.proxy.getCodexProxyAuthInjectionState() ?? null,
   // The input queue's API is the current owner runtime's, forwarded by name (input-queue.mjs).
   inputQueue: inputQueue as unknown as Parameters<typeof createHostRuntimeSelection>[0]['inputQueue'],
+  readProviderGroupBinding: sessionId => hostProviderBindings.readProviderGroupBinding(sessionId),
+  readProviderGroup: providerId => hostProviderGroups.readProviderGroup(providerId),
   log: createLogger('runtime-selection'),
 });
 
@@ -1332,6 +1334,13 @@ const serverDeps = {
    */
   setSessionModel: (sessionId: string, model: unknown, providerId: unknown, revision: unknown, selection: unknown) =>
     runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
+  /**
+   * The desktop's set-effort, set-fast-mode and set-thinking-enabled (runtime-selection.ts, the shared
+   * handler bodies of sessionRuntimeAxisSettings.ts), with the desktop IPC's arguments.
+   */
+  setSessionEffort: (sessionId: unknown, effort: unknown) => runtimeSelection.setEffort(sessionId, effort),
+  setSessionFastMode: (sessionId: unknown, requestedSpeed: unknown) => runtimeSelection.setFastMode(sessionId, requestedSpeed),
+  setSessionThinkingEnabled: (sessionId: unknown, enabled: unknown) => runtimeSelection.setThinkingEnabled(sessionId, enabled),
   /**
    * An engine change a client asks for: the desktop's switch-session-agent (an intent until the next
    * send), with its arguments: the options (confirmedContextWindow; agentDeviceId) and the thinking

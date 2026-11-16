@@ -42,6 +42,16 @@ import {
   type PendingCredentialSwitchAccessPorts,
 } from '../../../desktop/src/main/maker-ipc/pendingCredentialSwitchAccess.ts';
 import { createColdPiRehydrationForWindowVerification } from '../../../desktop/src/main/maker-ipc/coldPiRehydration.ts';
+import {
+  createRecoverRemoteRuntimeAxisPersistence,
+  createSetSessionEffort,
+  createSetSessionFastMode,
+  createSetSessionThinkingEnabled,
+  createStagePendingUserRuntimeAxis,
+  createUpdateSavedScheduledAxis,
+  type ReadUsableAgentDeviceProviders,
+} from '../../../desktop/src/main/maker-ipc/sessionRuntimeAxisSettings.ts';
+import { createSubscriptionFastPolicies } from '../../../desktop/src/main/maker-host/subscriptionFastPolicyCore.ts';
 import { directoryGrantsForRuntime } from '../../../desktop/src/main/maker-ipc/extraDirsValidator.ts';
 import { setPendingCredentialSwitchReader } from '../../../desktop/src/main/maker-host/provider-route.ts';
 import { setThinkingEnabledInMemory } from '../../../desktop/src/main/maker-host/newMakerDefaultsCache.ts';
@@ -106,8 +116,32 @@ export interface HostRuntimeSelectionDeps {
     /** Starting a task's runtime outside a turn, as a send starts it (turn-executor.mjs startPorts). */
     startPorts(): HostRuntimeStartPorts;
   };
+  /** A task's provider group binding and a group (the Host's provider group stores, main.ts). */
+  readProviderGroupBinding: Parameters<typeof createSubscriptionFastPolicies>[0]['readProviderGroupBinding'];
+  readProviderGroup: Parameters<typeof createSubscriptionFastPolicies>[0]['readProviderGroup'];
   log: Logger;
 }
+
+/**
+ * The input queue members the runtime selection calls. input-queue.mjs has no types, so main.ts casts
+ * its api to HostRuntimeSelectionDeps['inputQueue']; this list must name every one of those members
+ * (the type below fails to compile otherwise), and input-queue.test.mjs checks a real queue has each.
+ */
+export const HOST_RUNTIME_SELECTION_QUEUE_MEMBERS = [
+  'contextRecoveryRollover', 'sessionDbAgentKind', 'isTurnRunning', 'wakeSession', 'refreshQueuedRoute',
+  'cancelUsageLimitWait', 'startPorts',
+] as const satisfies readonly (keyof HostRuntimeSelectionDeps['inputQueue'])[];
+type UnlistedQueueMembers = Exclude<keyof HostRuntimeSelectionDeps['inputQueue'], typeof HOST_RUNTIME_SELECTION_QUEUE_MEMBERS[number]>;
+const everyQueueMemberListed: [UnlistedQueueMembers] extends [never] ? true : never = true;
+void everyQueueMemberListed;
+/** The runtime start functions startPorts() returns (HostRuntimeStartPorts), checked the same way. */
+export const HOST_RUNTIME_START_PORTS = [
+  'buildCreateOptsWithStderr', 'checkWorkDirExists', 'synthesizeOrcaVendorOptionsFromDb', 'readSessionExtraDirsFromDb',
+  'readSessionWritableDirsFromDb', 'ensureRemoteReadyForSessionStart', 'bootstrapSession', 'broadcastSessionCreated',
+] as const satisfies readonly (keyof HostRuntimeStartPorts)[];
+type UnlistedStartPorts = Exclude<keyof HostRuntimeStartPorts, typeof HOST_RUNTIME_START_PORTS[number]>;
+const everyStartPortListed: [UnlistedStartPorts] extends [never] ? true : never = true;
+void everyStartPortListed;
 
 /** The executor's runtime start functions (turn-executor.mjs startPorts), as the desktop's send transaction has them. */
 export interface HostRuntimeStartPorts {
@@ -339,17 +373,26 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     log: deps.log,
   };
 
+  // As the desktop: a review task's settings follow its source task. Taking over a local Agent's
+  // visible session is the desktop's local-agent (release table, gap A 6); the Host has no such runtime.
+  const assertReviewSettingsUnlocked: SessionRuntimeSelectionPorts['assertReviewSettingsUnlocked'] = async sessionId => {
+    if ((await readSessionSource(sessionId)) === 'review') {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'Review task settings are fixed to the source task');
+    }
+  };
+  // The Host's entries are not a shared task's guest (no Device Link invoke context).
+  const captureSharedTaskSettingGuard: SessionRuntimeSelectionPorts['captureSharedTaskSettingGuard'] =
+    sessionId => createSharedTaskSettingGuard(undefined, sessionId, { admitted: false });
+  const persistSessionFields: SessionRuntimeSelectionPorts['persistSessionFields'] = (sessionId, patch) => persistSessionFieldsWith({
+    captureOwnerScope, isOwnerScopeCurrent, broadcastSessionPatched,
+    // The window budget hook of the session settings: checkpoint 3b-2 (the window budget).
+    applyContextWindowBudget: () => undefined,
+  }, sessionId, patch);
   const ports = (): SessionRuntimeSelectionPorts => ({
     maker: maker(),
     agentSwitchPending: pendingSwitches,
     broadcastSessionRuntimeProjection,
-    // As the desktop: a review task's settings follow its source task. Taking over a local Agent's
-    // visible session is the desktop's local-agent (second batch); the Host has no such runtime.
-    assertReviewSettingsUnlocked: async sessionId => {
-      if ((await readSessionSource(sessionId)) === 'review') {
-        throwIpcError('UNSUPPORTED_CAPABILITY', 'Review task settings are fixed to the source task');
-      }
-    },
+    assertReviewSettingsUnlocked,
     canApplyAutomaticRuntimeSelection,
     // Tasks whose Agent runs on another computer are refused on the Host (send-preflight.ts).
     applyAgentDeviceRuntimeSelection: async () => throwIpcError('UNSUPPORTED_CAPABILITY', 'Host does not yet support remote execution'),
@@ -369,18 +412,13 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     isSessionInTurn,
     contextOverflowRolloverHolder: deps.inputQueue.contextRecoveryRollover(),
     getPendingCredentialSwitchTarget: sessionId => getPendingCredentialSwitchTargetWith(accessPorts(), sessionId),
-    // The Host's entries are not a shared task's guest (no Device Link invoke context).
-    captureSharedTaskSettingGuard: sessionId => createSharedTaskSettingGuard(undefined, sessionId, { admitted: false }),
+    captureSharedTaskSettingGuard,
     registerPendingCredentialSwitchForSession: (sessionId, target) =>
       registerPendingCredentialSwitchWith(accessPorts(), sessionId, target),
     agentInputCoordinatorHolder: coordinatorRoute,
     getSessionDbAgentKind: sessionId => deps.inputQueue.sessionDbAgentKind(sessionId),
     broadcastSessionPatched,
-    persistSessionFields: (sessionId, patch) => persistSessionFieldsWith({
-      captureOwnerScope, isOwnerScopeCurrent, broadcastSessionPatched,
-      // The window budget hook of the session settings; a model change never carries a budget.
-      applyContextWindowBudget: () => undefined,
-    }, sessionId, patch),
+    persistSessionFields,
     // A Device Link set-model's write-back marker: the Host has no Device Link set-model.
     markRemoteSettingPersistedInsideHandler: () => {},
     getDesktopProviderService: providerService,
@@ -400,6 +438,50 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   const recoverRenamedSessionModelOnSend = createRecoverRenamedSessionModelOnSend({
     agentSwitchPending: pendingSwitches, getDesktopProviderService: providerService, readSessionRuntimeProfiles, handleSetModel,
   });
+  // The desktop's effort, Fast mode and thinking handlers (register.ts SET_EFFORT, SET_FAST_MODE,
+  // SET_THINKING_ENABLED) and the closures they use, from sessionRuntimeAxisSettings.ts. The desktop
+  // checks the IPC sender first; the Host's entries authenticate their caller themselves.
+  // An Agent on another computer: refused as the Host refuses remote execution (send-preflight.ts).
+  const readUsableAgentDeviceProviders: ReadUsableAgentDeviceProviders = async () =>
+    throwIpcError('UNSUPPORTED_CAPABILITY', 'Host does not yet support remote execution');
+  // The Maker members the handlers call; the owner runtime's Maker at each call.
+  const axisMaker = {
+    getSession: (sessionId: string) => maker().getSession(sessionId),
+    closeSession: (...args: Parameters<Maker['closeSession']>) => maker().closeSession(...args),
+    closeSessionIfCurrent: (...args: Parameters<Maker['closeSessionIfCurrent']>) => maker().closeSessionIfCurrent(...args),
+  };
+  const { createSubscriptionFastPolicy } = createSubscriptionFastPolicies({
+    readProviderGroupBinding: deps.readProviderGroupBinding,
+    readProviderGroup: deps.readProviderGroup,
+  });
+  const updateSavedScheduledAxis = createUpdateSavedScheduledAxis({
+    readUsableAgentDeviceProviders, updateScheduledPreference, getDesktopProviderService: providerService,
+  });
+  const recoverRemoteRuntimeAxisPersistence = createRecoverRemoteRuntimeAxisPersistence({
+    maker: axisMaker, broadcastSessionRuntimeProjection, log: deps.log,
+  });
+  const stagePendingUserRuntimeAxis = createStagePendingUserRuntimeAxis({
+    agentSwitchDeps, readUsableAgentDeviceProviders, agentSwitchPending: pendingSwitches,
+    getDesktopProviderService: providerService, persistSessionFields,
+    wakeSessionInputAfterCredentialSwitch: sessionId => wakeSessionInputAfterCredentialSwitchWith(accessPorts(), sessionId),
+  });
+  const axisPorts = {
+    maker: axisMaker, updateScheduledPreference, agentSwitchPending: pendingSwitches, stagePendingUserRuntimeAxis,
+    updateSavedScheduledAxis, resolvePendingRuntimeAxisPatch, readSessionRuntimeProfiles, recoverRemoteRuntimeAxisPersistence,
+    assertReviewSettingsUnlocked, broadcastSessionRuntimeProjection, captureSharedTaskSettingGuard,
+    // Called only inside a Device Link invoke (remoteResponse); the Host's entries are never one.
+    markRemoteSettingPersistedInsideHandler: () => {},
+    persistSessionFields,
+    getPendingCredentialSwitchHolder: () => pendingCredentialSwitchService,
+    log: deps.log,
+  };
+  const setSessionEffort = createSetSessionEffort(axisPorts);
+  const setSessionFastMode = createSetSessionFastMode({
+    ...axisPorts, readUsableAgentDeviceProviders, getDesktopProviderService: providerService, createSubscriptionFastPolicy,
+  });
+  const setSessionThinkingEnabled = createSetSessionThinkingEnabled({
+    maker: axisMaker, assertReviewSettingsUnlocked, captureSharedTaskSettingGuard,
+  });
   /**
    * A runtime of a task closed (the Maker's session:closed, from the session's own close), finalized
    * in the desktop's order: finalizeClosedSession keeps its last live usage for a cold Pi model
@@ -416,6 +498,12 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     agentSwitchDeps,
     /** The intent of a task as clients see it (session_changed, the task snapshot). */
     projectIntent: (sessionId: string) => projectPendingAgentSwitchIntent(pendingSwitches.get(sessionId)),
+    /** The desktop's set-effort (an effort change of a task, live or staged into a pending pick). */
+    setEffort: (sessionId: unknown, effort: unknown) => setSessionEffort(sessionId, effort),
+    /** The desktop's set-fast-mode. */
+    setFastMode: (sessionId: unknown, requestedSpeed: unknown) => setSessionFastMode(sessionId, requestedSpeed),
+    /** The desktop's set-thinking-enabled. */
+    setThinkingEnabled: (sessionId: unknown, enabled: unknown) => setSessionThinkingEnabled(sessionId, enabled),
     /** A model change a client asks for: the desktop's set-model (source 'user'). */
     setModel(sessionId: string, model: unknown, providerId: unknown, revision: unknown, selection: unknown) {
       deps.inputQueue.cancelUsageLimitWait(sessionId);

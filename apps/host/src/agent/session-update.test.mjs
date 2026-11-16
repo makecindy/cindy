@@ -37,7 +37,8 @@ import { getSessionLastLiveUsage, _resetSessionLastLiveUsageForTests } from '../
 
 // Route windows of the fixture providers; a model they do not list has no verified window.
 const WINDOWS = { big: 200_000, small: 100_000, huge: 300_000 };
-const model = id => ({ id, efforts: [], defaultEffort: null, supportsFastMode: false });
+// Each model offers two efforts, so an effort change has a value to keep (resolveSessionRuntimeAxes).
+const model = id => ({ id, efforts: ['low', 'high'], defaultEffort: 'high', supportsFastMode: false });
 const VIEWS = ['prov-a', 'prov-b'].map(id => ({ id, connected: true, agents: ['claude-code'], source: 'user',
   routing: { 'claude-code': {} }, models: { 'claude-code': Object.keys(WINDOWS).map(model) } }));
 const quiet = { debug() {}, info() {}, warn() {}, error() {} };
@@ -403,4 +404,51 @@ test('model change: a task whose Agent runs on another computer is refused as re
     error.code === 'UNSUPPORTED_CAPABILITY' && /remote execution/.test(error.message));
   assert.equal((await f.row('on-device')).model, 'big');
   assert.equal(intentOf(f), undefined);
+});
+
+// Effort and thinking changes (checkpoint 3b, the desktop's SET_EFFORT and SET_THINKING_ENABLED bodies
+// from sessionRuntimeAxisSettings.ts):
+// - Rule: with no pick pending, an effort change applies to the task's runtime and row at once; with a
+//   user's pick pending, it goes into that pick (stagePendingUserRuntimeAxis) and the running model is
+//   left alone. A thinking change applies to the runtime, after the Review check.
+// - Gap: the Host applied an effort change to the running model and row even with a pick pending, and
+//   had no thinking entry.
+test('effort: with no pick pending, the change applies to the task\'s runtime and row at once', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await f.task('effort-live');
+  const live = f.runtime('effort-live');
+  const applied = [];
+  live.setEffort = async effort => { applied.push(effort); };
+  await f.selection.setEffort('effort-live', 'low');
+  assert.deepEqual(applied, ['low']);
+  assert.equal((await f.row('effort-live')).effort, 'low');
+});
+
+test('effort: with a user\'s pick pending, the change goes into the pick and the running model is left alone', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await f.task('effort-pending');
+  const live = f.runtime('effort-pending');
+  const applied = [];
+  live.setEffort = async effort => { applied.push(effort); };
+  await f.update('effort-pending', { model: 'small' });
+  const answer = await f.selection.setEffort('effort-pending', 'low');
+  assert.deepEqual(answer, { deferred: true, superseded: false, pendingUntilSend: true });
+  assert.deepEqual(applied, [], 'the running model keeps its effort');
+  assert.equal((await f.row('effort-pending')).effort, 'high', 'the task row keeps its effort until the pick lands');
+  assert.equal(f.selection.projectIntent('effort-pending')?.effort, 'low', 'the pick carries the new effort');
+  assert.equal(f.selection.projectIntent('effort-pending')?.model, 'small');
+});
+
+test('thinking: a change applies to the runtime, and a Review task is refused before it', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await f.task('thinking-live');
+  const live = f.runtime('thinking-live');
+  const changes = [];
+  live.setThinkingEnabled = async enabled => { changes.push(enabled); };
+  await f.selection.setThinkingEnabled('thinking-live', false);
+  assert.deepEqual(changes, [false]);
+  await f.database.drizzle.update(sessions).set({ source: 'review' }).where(eq(sessions.id, 'thinking-live'));
+  await assert.rejects(f.selection.setThinkingEnabled('thinking-live', true),
+    error => error.code === 'UNSUPPORTED_CAPABILITY' && /Review task settings/.test(error.message));
+  assert.deepEqual(changes, [false], 'the Review task\'s runtime is not touched');
 });

@@ -86,6 +86,16 @@ export function createHostService(deps) {
     if (url.pathname === '/api/sessions/update') {
         return { status: 200, body: await deps.updateSession(String(body.sessionId ?? ''), body.patch ?? {}) };
     }
+    if (url.pathname === '/api/sessions/set-effort') {
+      // The desktop's set-effort, set-fast-mode and set-thinking-enabled, with their IPC arguments.
+      return { status: 200, body: (await deps.setSessionEffort(body.sessionId, body.effort)) ?? null };
+    }
+    if (url.pathname === '/api/sessions/set-fast-mode') {
+      return { status: 200, body: (await deps.setSessionFastMode(body.sessionId, body.fastMode)) ?? null };
+    }
+    if (url.pathname === '/api/sessions/set-thinking-enabled') {
+      return { status: 200, body: (await deps.setSessionThinkingEnabled(body.sessionId, body.enabled)) ?? null };
+    }
     if (url.pathname === '/api/sessions/set-model') {
       // The desktop's set-model, with its IPC arguments (the web client passes them through).
       return { status: 200, body: await deps.setSessionModel(String(body.sessionId ?? ''), body.model, body.providerId, body.revision, body.selection) };
