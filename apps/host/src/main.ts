@@ -139,6 +139,7 @@ import { lockSessionRoute } from './agent/session-route-lock.mjs';
 import { createHostSessionUpdate } from './agent/session-update.ts';
 import { createHostTaskRestore } from './agent/task-restore.ts';
 import { resolveSessionReferencesWithPorts } from '../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
+import { readSwitchOptionsAgentDeviceId, readSwitchOptionsConfirmedContextWindow } from '../../desktop/src/main/maker-ipc/sessionAgentSwitchHandler.ts';
 import { setSessionRouteLockImplementation } from '../../desktop/src/main/localDb/sessionRouteLock.ts';
 import { withSendToSessionLock } from '../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
@@ -1357,10 +1358,9 @@ const serverDeps = {
     options?: unknown,
     thinking?: unknown,
   ) => {
-    const record = options && typeof options === 'object' && !Array.isArray(options)
-      ? options as { confirmedContextWindow?: unknown; agentDeviceId?: unknown } : undefined;
-    const confirmedContextWindow = record?.confirmedContextWindow;
-    const agentDeviceId = record && 'agentDeviceId' in record ? record.agentDeviceId : undefined;
+    // The desktop handler's readers of its 7th argument (sessionAgentSwitchHandler.ts).
+    const confirmedContextWindow = readSwitchOptionsConfirmedContextWindow(options);
+    const agentDeviceId = readSwitchOptionsAgentDeviceId(options);
     if (agentDeviceId !== undefined && agentDeviceId !== null) {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'Host does not yet support remote execution');
     }
