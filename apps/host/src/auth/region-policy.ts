@@ -11,8 +11,10 @@ import { resolveHostRegion } from '../profile-path.mjs';
 export type HostRegion = 'cn' | 'global';
 
 /**
- * The region of this Host package. Until the per-region package lands (the region unit), it is
- * `CINDY_HOST_REGION`, and a source run without it is global. Switch the source here only.
+ * The region of this Host package: the region unit's edition (release table 甲 20). A release answers
+ * the region it was built for (`release.json`, `scripts/build.mjs --region`), and refuses a
+ * `CINDY_HOST_REGION` naming the other edition; from source it is `CINDY_HOST_REGION`, global when
+ * unset (development only). The one place the sign-in rule reads it.
  */
 export function hostPackageRegion(): HostRegion {
   return resolveHostRegion() as HostRegion;
