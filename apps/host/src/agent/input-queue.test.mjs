@@ -36,6 +36,7 @@ import { openOwnerDatabase } from '../../../desktop/src/main/localDb/startupCore
 import { createDbClientForHandle } from '../../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.ts';
 import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionStorageAdapter.ts';
+import { createHostRuntimeSelection } from './runtime-selection.ts';
 import { createHostMessageStore, createHostMessageRecovery } from '../message-store.ts';
 import { resolveSessionReferencesWithPorts } from '../../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
 import { listErrorTailPendingRows } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
@@ -2766,6 +2767,98 @@ test('context usage: a Done status arriving after the turn ended still writes th
   session.emit({ type: 'status', data: { isRunning: false, status: 'Done', contextTokens: 42_000, contextWindow: 128_000 }, ...stamp });
   await waitFor(() => row().context_tokens !== 0);
   assert.deepEqual(row(), { context_tokens: 42_000, context_window: 128_000 });
+});
+
+// A model picked in the client lands at the next send (checkpoint 3): runtime-selection.ts wired as
+// main.ts wires it (the send transaction's applyPendingAgentSwitch, the owner runtime's rollover).
+const SWITCH_WINDOWS = { big: 200_000, small: 100_000 };
+const switchModel = id => ({ id, efforts: [], defaultEffort: null, supportsFastMode: false });
+const SWITCH_VIEWS = [{ id: 'prov-a', connected: true, agents: ['claude-code'], source: 'user',
+  routing: { 'claude-code': {} }, models: { 'claude-code': Object.keys(SWITCH_WINDOWS).map(switchModel) } }];
+async function modelChangeRuntime(t) {
+  const db = await recoveryDatabase(t);
+  const row = id => db.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id);
+  let selection;
+  const { h, handoffs } = assembledRuntime(t, db, {
+    readSession: async id => {
+      const stored = row(id);
+      return { id, status: stored.status, agentKind: 'claude-code', model: stored.model, workingDir: db.root,
+        providerId: stored.provider_id, permissionMode: 'ask', planModeEnabled: false, sdkSessionId: stored.sdk_session_id };
+    },
+    applyPendingAgentSwitch: (id, options) => selection.applyPendingAgentSwitch(id, options),
+  });
+  h.maker.getSessionMeta = async id => ({ id, agentKind: 'claude-code', model: row(id)?.model, workDir: db.root });
+  selection = createHostRuntimeSelection({
+    getMaker: () => h.maker,
+    publish: event => h.events.push(event),
+    createDbMessage: db.persistMessage,
+    pendingHandoff: handoffs,
+    listProviderViews: async () => SWITCH_VIEWS,
+    resolveConfiguredContextWindow: (_catalog, _agentKind, _providerId, modelId) => SWITCH_WINDOWS[modelId] ?? null,
+    readStoredSessionContextWindowBudget: () => null,
+    codexProxyAuthInjectionState: () => null,
+    inputQueue: h.queue,
+    log: { debug() {}, info() {}, warn() {}, error() {} },
+  });
+  const createTask = id => new OwnerSessionStorage({ db: () => getCurrentDbClientSnapshot().client }).create({
+    id, title: 'Model change fixture', agentKind: 'claude-code', model: 'big', providerId: 'prov-a', workDir: db.root });
+  // One turn on the task's runtime that ends with this usage, then the runtime is released.
+  const runTurn = async (id, clientId, usage) => {
+    await h.queue.enqueue(id, { clientId, text: `work ${clientId}` });
+    await waitFor(() => h.maker.sessions.get(id)?.sent.length >= 1);
+    const session = h.maker.sessions.get(id);
+    // Maker writes the runtime's native session id to the task row when it creates the runtime
+    // (maker.ts, createSession's metadata write); this fake Maker does not, so the fixture does.
+    db.db.prepare('UPDATE sessions SET sdk_session_id = ? WHERE id = ?').run(`native-${clientId}`, id);
+    const stamp = { sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId };
+    session.emit({ type: 'status', data: { isRunning: true }, ...stamp });
+    if (usage) session.emit({ type: 'status', data: { isRunning: false, status: 'Done', ...usage }, ...stamp });
+    session.emit({ type: 'done', data: {}, ...stamp });
+    await waitFor(() => h.queue.projection(id).active === null || h.queue.projection(id).active === undefined);
+    return session;
+  };
+  const rebuilds = id => db.db.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'context_rebuild'").all(id)
+    .map(entry => JSON.parse(entry.content));
+  return { db, h, selection, row, createTask, runTurn, rebuilds };
+}
+
+// Rule (the desktop's send-time landing, sessionRuntimeSelectionApply.ts: a user's pick applied on send
+// has confirmedTargetPressure, so prepareModelWindowSwitch rebuilds without asking): a task with real
+// usage at danger for the picked smaller window rebuilds its context when the pick lands, even after
+// its runtime was released. Gap: the Host never wrote the usage, so a released task was judged on its
+// default 0 and the smaller window landed with no rebuild.
+test('model change at send: a released task with usage at danger rebuilds before the smaller window lands', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await r.createTask('danger');
+  const first = await r.runTurn('danger', 'danger-1', { contextTokens: 95_000, contextWindow: 200_000 });
+  // The turn's end writes its usage without anyone waiting on it (as on the desktop); let that work
+  // run, without waiting on the row itself, so that a missing write fails at the landing below.
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  await r.h.maker.closeSession('danger'); // idle release
+  const picked = await r.selection.setModel('danger', 'small', undefined, undefined, undefined);
+  assert.equal(picked.pendingUntilSend, true);
+  assert.equal(r.row('danger').model, 'big', 'the pick waits for the send');
+  await r.h.queue.enqueue('danger', { clientId: 'danger-2', text: 'next' });
+  await waitFor(() => { const next = r.h.maker.sessions.get('danger'); return next && next !== first && next.sent.length === 1; });
+  assert.equal(r.row('danger').model, 'small');
+  const rebuilt = r.rebuilds('danger');
+  assert.equal(rebuilt.length, 1, 'the context was rebuilt for the smaller window');
+  assert.equal(rebuilt[0].reason, 'model-window-switch');
+  const next = r.h.maker.sessions.get('danger');
+  assert.equal(next.options.model, 'small');
+  assert.equal(next.options.resumeSessionId, undefined, 'the new runtime does not resume the rebuilt context');
+});
+
+// Control: the same pick on a task whose usage is truly 0 lands with no rebuild.
+test('model change at send: a task with no usage takes the smaller window with no rebuild', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await r.createTask('empty');
+  await r.selection.setModel('empty', 'small', undefined, undefined, undefined);
+  await r.h.queue.enqueue('empty', { clientId: 'empty-1', text: 'first' });
+  await waitFor(() => r.h.maker.sessions.get('empty')?.sent.length === 1);
+  assert.equal(r.row('empty').model, 'small');
+  assert.equal(r.rebuilds('empty').length, 0);
+  assert.equal(r.h.maker.sessions.get('empty').options.model, 'small');
 });
 
 test('context recovery assembly: an overflow rebuilds the task and replays the message on a new runtime, with no error left', { timeout: 30_000 }, async t => {

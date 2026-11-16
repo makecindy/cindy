@@ -217,7 +217,10 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     clearPendingCredentialSwitchForSession: (sessionId, opts) => {
       if (opts?.wake !== false) deps.inputQueue.wakeSession(sessionId, 'pending-credential-switch-cancelled');
     },
-    isSessionInTurn: sessionId => deps.inputQueue.isTurnRunning(sessionId),
+    // The desktop's sessionTurnActivityTracker: in a turn from the runtime's foreground running status
+    // to its end. The executor's own turn record is open for the very send a pick lands in, so it is
+    // not that; the task's runtime reports the same as the tracker here.
+    isSessionInTurn: sessionId => maker().getSession(sessionId)?.isTurnRunning?.() === true,
     contextOverflowRolloverHolder: deps.inputQueue.contextRecoveryRollover(),
     getPendingCredentialSwitchTarget: () => undefined,
     // The Host's entries are not a shared task's guest (no Device Link invoke context).
