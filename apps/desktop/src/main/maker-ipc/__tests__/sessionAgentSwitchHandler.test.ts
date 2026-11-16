@@ -118,6 +118,10 @@ describe('same-harness native relocation', () => {
     '[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] remote task limit for this device reached',
     '[REMOTE_AGENT_DEVICE_UNREACHABLE] the other computer is offline',
     '[REMOTE_AGENT_MODEL_UNAVAILABLE] model is not offered',
+    // #10833, unit: presentation prefixes must not turn a transport failure into
+    // a native-history failure and offer a lossy summary after rollback.
+    ...['INVOKE_TIMEOUT', 'BACKPRESSURE', 'DEVICE_UNRESPONSIVE', 'DEVICE_OFFLINE', 'ACCESS_REVOKED']
+      .map(code => remoteAgentLinkError(Object.assign(new Error('transport failed'), { code })).message),
   ])('stays on the source without asking when the target cannot take the task: %s', async message => {
     let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native', agentDeviceId: null });
     const original = { ...row };

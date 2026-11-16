@@ -133,6 +133,21 @@ export const UI_MOCK_TASKS: readonly UiMockTask[] = [
   ...UI_MOCK_SHOWCASE_TASKS,
   UI_MOCK_BIDI_TASK,
   {
+    id: 'ui-mock-remote-communication',
+    title: '远程通信错误指引',
+    project: 'cindy-demo',
+    agentKind: 'codex', model: 'gpt-6-astra', effort: 'xhigh',
+    status: 'active', source: 'desktop', minutesAgo: 0,
+    messages: [
+      { role: 'user', text: '查看合成的通信错误，检查错误详情与恢复指引。' },
+      { role: 'error', text: '[REMOTE_AGENT_OFFLINE] [DEVICE_OFFLINE] synthetic peer offline' },
+      { role: 'error', text: '[REMOTE_AGENT_ACCESS_DENIED] [ACCESS_REVOKED] synthetic access denied' },
+      { role: 'error', text: '[REMOTE_AGENT_LINK_BUSY] [BACKPRESSURE] synthetic send buffer busy' },
+      { role: 'error', text: '[REMOTE_AGENT_UNRESPONSIVE] [DEVICE_UNRESPONSIVE] synthetic circuit open' },
+      { role: 'error', text: '[REMOTE_AGENT_TIMEOUT] [INVOKE_TIMEOUT] no invoke-result within 30000ms after first socket write\nrequestedTarget=mock-peer; channel=maker:remote-agent' },
+    ],
+  },
+  {
     id: 'ui-mock-remote-resume-rejected',
     title: '远程任务无法恢复',
     project: 'cindy-demo',

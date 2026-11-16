@@ -2858,11 +2858,26 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const threadRootId = source.threadRootId ?? undefined;
       const scope = threadRootId ?? 'main';
       const { heading, background } = await assistantRequestBackground(s, source, sessionId, task.delivered[scope]);
-      // The request's own files go with it, like a task message's.
-      const mediaIds = source.content.flatMap(block => block.type === 'media' && block.mediaId ? [block.mediaId] : []).slice(0, BOT_GROUP_ATTACHMENTS_MAX);
-      const downloads = await settleBounded(mediaIds, TURN_DOWNLOAD_CONCURRENCY, mediaId => media.download(roomId, id.parse(mediaId)));
+      // Read only the directly quoted original through the room's authorized endpoint. Never
+      // take media IDs from the quote snapshot, scan history or follow another quote from it.
+      const quote = readBotGroupQuote(source.content);
+      // Quoted files are supplementary: a failed lookup must not discard the current request.
+      // The live/settlement check below still stops account changes and cancelled executions.
+      const quoted = quote ? await readMessage(roomId, quote.messageId).catch(() => undefined) : undefined;
+      const quotedMessage = quoted && !quoted.deleted && quoted.origin !== 'system' && quoted.threadRootId === null
+        && BigInt(quoted.seq) < BigInt(source.seq) ? quoted : undefined;
+      if (!live() || run.settlement) throw new Error('STALE_EXECUTOR');
+      // Current files have priority; both sources share the existing count and download limits.
+      const mediaIds = [...new Set([source, ...(quotedMessage ? [quotedMessage] : [])]
+        .flatMap(message => message.content.flatMap(block => block.type === 'media' && block.mediaId ? [block.mediaId] : [])))];
+      const downloads = await settleBounded(mediaIds.slice(0, BOT_GROUP_ATTACHMENTS_MAX), TURN_DOWNLOAD_CONCURRENCY,
+        mediaId => media.download(roomId, id.parse(mediaId)));
       const attachments = downloads.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
-      if (attachments.length < mediaIds.length) void postCapabilityNotice(run, 'ATTACHMENTS_UNAVAILABLE', threadRootId);
+      if (attachments.length < mediaIds.length || (quote && quote.attachmentCount > 0 && !quotedMessage)) {
+        void postCapabilityNotice(run, 'ATTACHMENTS_UNAVAILABLE', threadRootId);
+        // The model also needs to know that a referenced file was not delivered.
+        background.push(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', () => BOT_GROUP_ASSISTANT_NAME));
+      }
       if (!live()) throw new Error('STALE_EXECUTOR');
       run.sessionId = sessionId;
       run.releaseToolAuthority = registerGroupToolAuthority(sessionId, {
