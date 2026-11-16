@@ -46,6 +46,7 @@ export const INPUT_HANDOFF_TOOL_NAME = 'request_input_handoff';
 const DESCRIPTION =
   'Hand the owner what you must never see on this computer\'s screen: a sign-in, or a password, API key, token or verification code. '
   + 'For non-secret questions (an email address, a name, a choice), use your question tools. '
+  + 'A code you already have in this task, such as the device code a command you ran printed, is not a secret: type it yourself. '
   + 'The owner does a sign-in on the window itself; for other secret fields Cindy shows just those fields, types the answer in and confirms with the page\'s own main button. '
   + 'It follows the flow across windows and browsers while fields keep appearing. '
   + 'A sign-in QR code on screen is handed to the owner to scan, and the task continues once they are signed in. '
