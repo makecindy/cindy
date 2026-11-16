@@ -94,6 +94,44 @@ describe('remote model permissions', () => {
     await expect(make().set('p', [], undefined, () => {})).rejects.toThrow();
     expect(fs.existsSync(filePath())).toBe(false);
   });
+  // Unit: a committed model grant must notify owner-local consumers even when
+  // its caller stops during lock release; the existing tests only revoke before writing.
+  it('finishes a committed grant with the owner guard after its caller stops', async () => {
+    let installed = true;
+    vi.spyOn(locks, 'withCrossProcessLock').mockImplementationOnce(async (_file, _options, task) => {
+      const result = await task({ held: true }); installed = false; return result;
+    });
+    const store = make();
+    const notified = vi.fn();
+    store.subscribe(notified);
+    await expect(store.set('p', [], 'member', () => {
+      if (!installed) throw new Error('REVOKED');
+    }, undefined, () => { if (owner !== 'a') throw new Error('OWNER_CHANGED'); })).resolves.toMatchObject({ models: [] });
+    expect(make().allows('p', 'large', 'member')).toBe(false);
+    expect(notified).toHaveBeenCalledTimes(1);
+  });
+  it('still refuses a stopped caller before the grant is written', async () => {
+    let installed = true;
+    vi.spyOn(locks, 'withCrossProcessLock').mockImplementationOnce(async (_file, _options, task) => {
+      installed = false; return task({ held: true });
+    });
+    await expect(make().set('p', [], 'member', () => {
+      if (!installed) throw new Error('REVOKED');
+    }, undefined, () => undefined)).rejects.toThrow('REVOKED');
+    expect(fs.existsSync(filePath())).toBe(false);
+  });
+  it('does not read or notify a new owner after the committed write', async () => {
+    vi.spyOn(locks, 'withCrossProcessLock').mockImplementationOnce(async (_file, _options, task) => {
+      const result = await task({ held: true }); owner = 'b'; return result;
+    });
+    const store = make();
+    const notified = vi.fn();
+    store.subscribe(notified);
+    await expect(store.set('p', [], 'member', () => undefined, undefined, () => {
+      if (owner !== 'a') throw new Error('OWNER_CHANGED');
+    })).rejects.toThrow('OWNER_CHANGED');
+    expect(notified).not.toHaveBeenCalled();
+  });
   it('persists member budgets atomically, preserves them for older clients, and keeps the owner exempt', async () => {
     const policy = { rules: [{ id: 'a', models: ['astra'], maxPercent: 30 }], recommendedModel: 'terra', basis: 'member-input-output-7d' as const, enabled: false };
     await make().set('p', null, 'alice', () => {}, policy);
