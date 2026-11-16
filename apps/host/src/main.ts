@@ -131,6 +131,7 @@ import { createInputQueue } from './agent/input-queue.mjs';
 import { readClaudeIdleMinutesFrom } from '../../desktop/src/main/maker-host/claudeIdleReleaseSettingsCore.js';
 import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
 import { createHostRuntimeSelection } from './agent/runtime-selection.ts';
+import { createDeferredRestartQueueGate } from '../../desktop/src/main/maker-ipc/deferredRestartQueueWiring.ts';
 import type { ContextRecoveryKind } from './agent/context-recovery.ts';
 import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring.ts';
 import { lockSessionRoute } from './agent/session-route-lock.mjs';
@@ -934,7 +935,8 @@ const contextRecovery = createHostContextRecoveryWiring({
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,
   // A model or engine the user picked lands when the message is sent (runtime-selection.ts).
-  applyPendingAgentSwitch: (sessionId: string) => runtimeSelection.applyPendingAgentSwitch(sessionId),
+  applyPendingAgentSwitch: (sessionId: string, options?: { signal?: AbortSignal; scheduled?: boolean; clientId?: string }) =>
+    runtimeSelection.applyPendingAgentSwitch(sessionId, options),
   restoreArchivedSessionForSend: taskRestore.restoreArchivedSessionForSend,
   // Another device's task is read over Device Link, which the Host does not have: it answers as the
   // desktop does when no link is connected (the reference is reported unavailable).
@@ -957,9 +959,20 @@ const inputQueue = createInputQueue({
   },
   getGitSnapshot: () => gitSnapshot,
   hub: eventHub,
-  hasPendingCredentialSwitch: (id: string) => agentGraph?.gatewayRestart.isSessionRestarting(id) ?? false,
+  // As register.ts: the coordinator holds a task's queue while a credential switch waits for its turn
+  // to end or a gateway Codex restart is running (deferredRestartQueueWiring.ts); idle release only
+  // looks at the pending switch (claudeIdleReleaseWatcher's isHostBusy).
+  hasPendingCredentialSwitch: createDeferredRestartQueueGate({
+    hasPendingCredentialSwitchEntry: (id: string) => runtimeSelection.hasPendingCredentialSwitch(id),
+    isSessionRestarting: (id: string) => agentGraph?.gatewayRestart.isSessionRestarting(id) ?? false,
+  }),
+  hasPendingCredentialSwitchEntry: (id: string) => runtimeSelection.hasPendingCredentialSwitch(id),
   reportAgentCindyGatewayKeyRejected: () => modelAccess?.reportCurrentKeyRejected(),
-  onSessionSettled: () => agentGraph?.gatewayRestart.onSessionSettled(),
+  // As register.ts at a turn's end: the pending credential switch, then the gateway restart.
+  onSessionSettled: (id: string) => {
+    runtimeSelection.onTurnSettled(id);
+    agentGraph?.gatewayRestart.onSessionSettled();
+  },
   readSession: readSessionForRun,
   assertProviderExecutionSupported: (id: string, providerId?: string | null) => {
     if (hostProviderBindings.readProviderGroupBinding(id)

@@ -334,7 +334,7 @@ export function createTurnExecutor(deps) {
     log,
   });
   const statDirectory = workingDirectory.statDirectory;
-  const transaction = createMakerSendTransaction({
+  const transactionDeps = {
     // A model or engine the user picked lands when the message is sent, before the runtime is read
     // (makerSendTransaction.ts), with the desktop's steps (runtime-selection.ts).
     applyPendingAgentSwitch: deps.applyPendingAgentSwitch,
@@ -508,7 +508,8 @@ export function createTurnExecutor(deps) {
       log,
     })(id, clientId),
     log,
-  });
+  };
+  const transaction = createMakerSendTransaction(transactionDeps);
 
   function assertSteerCurrent(id, opts) {
     deps.assertCurrent();
@@ -699,6 +700,20 @@ export function createTurnExecutor(deps) {
 
   return {
     send,
+    /**
+     * What starting a task's runtime outside a turn reads, as the desktop binds the same functions
+     * for the send transaction and for a cold Pi runtime's window check (register.ts
+     * createColdPiRehydrationForWindowVerification): the start options with the stderr capture, the
+     * working directory check, the Orca and directory option preparation, and the bootstrap, which
+     * creates the runtime and listens to it as a send does.
+     */
+    startPorts: {
+      buildCreateOptsWithStderr: transactionDeps.buildCreateOptsWithStderr,
+      checkWorkDirExists: transactionDeps.checkWorkDirExists,
+      synthesizeOrcaVendorOptionsFromDb: transactionDeps.synthesizeOrcaVendorOptionsFromDb,
+      readSessionExtraDirsFromDb: transactionDeps.readSessionExtraDirsFromDb,
+      bootstrapSession: transactionDeps.bootstrapSession,
+    },
     /** The engine of a task as its message persistence knows it (the desktop's getSessionDbAgentKind). */
     sessionDbAgentKind: id => histories.get(id)?.getSessionDbAgentKind(id) ?? null,
     /** On shutdown, before stopping tasks: waits (bounded) for context recoveries in flight to end. */

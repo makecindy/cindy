@@ -35,7 +35,7 @@ const log = createLogger('host-idle-release');
  *
  * The desktop's facts arrive as ports: whether the turn is still settling (the desktop's
  * isSessionTurnPendingCompletion; the Host executor's running turn), whether an Agent interaction
- * is pending, and the pending credential switch, which the Host does not register yet.
+ * is pending, and whether a credential switch waits for the task's turn to end.
  */
 export function createHostIdleRelease(deps: {
   coordinator: IdleReleaseInputCoordinator;

@@ -268,6 +268,8 @@ export function createInputQueue(deps) {
       getMaker: () => { try { return deps.getMaker(); } catch { return null; } },
       isTurnPendingCompletion: executor.isRunning,
       hasPendingInteraction: id => (deps.interactions?.pending(id)?.length ?? 0) > 0,
+      // As register.ts: a credential switch waiting for this task's turn keeps its runtime.
+      hasPendingCredentialSwitch: id => deps.hasPendingCredentialSwitchEntry?.(id) === true,
       readClaudeMinutes: deps.readClaudeIdleMinutes,
       ...(deps.idleReleaseClock ? { clock: deps.idleReleaseClock } : {}),
     }) : null;
@@ -393,6 +395,8 @@ export function createInputQueue(deps) {
       contextRecoveryRollover: () => rollover,
       /** The engine of a task as its message persistence knows it. */
       sessionDbAgentKind: id => executor.sessionDbAgentKind(id),
+      /** Starting a task's runtime outside a turn, as a send starts it (turn-executor.mjs startPorts). */
+      startPorts: () => executor.startPorts,
       cancelUsageLimitWait: id => coordinator.cancelUsageLimitWait(id),
       refreshQueuedRoute: (id, route) => coordinator.refreshQueuedRoute(id, route),
       /** A context recovery's replay was accepted (the recovery factory's onRebuilt). */

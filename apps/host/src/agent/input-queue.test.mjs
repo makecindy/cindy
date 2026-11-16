@@ -2771,11 +2771,12 @@ test('context usage: a Done status arriving after the turn ended still writes th
 
 // A model picked in the client lands at the next send (checkpoint 3): runtime-selection.ts wired as
 // main.ts wires it (the send transaction's applyPendingAgentSwitch, the owner runtime's rollover).
-const SWITCH_WINDOWS = { big: 200_000, small: 100_000 };
+const SWITCH_WINDOWS = { big: 200_000, small: 100_000, 'xai/big': 200_000 };
 const switchModel = id => ({ id, efforts: [], defaultEffort: null, supportsFastMode: false });
-const SWITCH_VIEWS = [{ id: 'prov-a', connected: true, agents: ['claude-code'], source: 'user',
-  routing: { 'claude-code': {} }, models: { 'claude-code': Object.keys(SWITCH_WINDOWS).map(switchModel) } }];
-async function modelChangeRuntime(t) {
+const switchViews = agent => [{ id: 'prov-a', connected: true, agents: [agent], source: 'user',
+  routing: { [agent]: {} }, models: { [agent]: ['big', 'small'].map(switchModel) } }];
+async function modelChangeRuntime(t, { agent = 'claude-code' } = {}) {
+  const SWITCH_VIEWS = switchViews(agent);
   const db = await recoveryDatabase(t);
   const row = id => db.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id);
   let selection;
@@ -2785,12 +2786,13 @@ async function modelChangeRuntime(t) {
   const { h, handoffs } = assembledRuntime(t, db, {
     readSession: async id => {
       const stored = row(id);
-      return { id, status: stored.status, agentKind: 'claude-code', model: stored.model, workingDir: db.root,
+      return { id, status: stored.status, agentKind: agent, model: stored.model, workingDir: db.root,
         providerId: stored.provider_id, permissionMode: 'ask', planModeEnabled: false, sdkSessionId: stored.sdk_session_id };
     },
     applyPendingAgentSwitch: (id, options) => { landings.push(id); return selection.applyPendingAgentSwitch(id, options); },
   });
-  h.maker.getSessionMeta = async id => ({ id, agentKind: 'claude-code', model: row(id)?.model, workDir: db.root });
+  // As Maker: a task's meta is its stored row (maker.ts getSessionMeta reads the session storage).
+  h.maker.getSessionMeta = id => new OwnerSessionStorage({ db: () => getCurrentDbClientSnapshot().client }).get(id);
   selection = createHostRuntimeSelection({
     getMaker: () => h.maker,
     publish: event => h.events.push(event),
@@ -2804,7 +2806,7 @@ async function modelChangeRuntime(t) {
     log: { debug() {}, info() {}, warn() {}, error() {} },
   });
   const createTask = id => new OwnerSessionStorage({ db: () => getCurrentDbClientSnapshot().client }).create({
-    id, title: 'Model change fixture', agentKind: 'claude-code', model: 'big', providerId: 'prov-a', workDir: db.root });
+    id, title: 'Model change fixture', agentKind: agent, model: 'big', providerId: 'prov-a', workDir: db.root });
   // One turn on the task's runtime that ends with this usage, then the runtime is released.
   const runTurn = async (id, clientId, usage) => {
     await h.queue.enqueue(id, { clientId, text: `work ${clientId}` });
@@ -2825,9 +2827,12 @@ async function modelChangeRuntime(t) {
   const userRows = id => db.db.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'user'").all(id);
   // The provider stops offering a model (it is no longer in its list); restore puts the list back.
   const withdraw = modelId => { views.current = SWITCH_VIEWS.map(view => ({ ...view,
-    models: { 'claude-code': view.models['claude-code'].filter(entry => entry.id !== modelId) } })); };
+    models: { [agent]: view.models[agent].filter(entry => entry.id !== modelId) } })); };
   const restoreModels = () => { views.current = SWITCH_VIEWS; };
-  return { db, h, selection, row, createTask, runTurn, rebuilds, userRows, withdraw, restoreModels, landings };
+  // The provider lists a model under a new id whose unified key is the saved one (uniqueRenamedSessionModelId).
+  const rename = (from, to) => { views.current = SWITCH_VIEWS.map(view => ({ ...view,
+    models: { [agent]: view.models[agent].map(entry => (entry.id === from ? switchModel(to) : entry)) } })); };
+  return { db, h, selection, row, createTask, runTurn, rebuilds, userRows, withdraw, restoreModels, rename, landings };
 }
 
 // Rule (the desktop's send-time landing, sessionRuntimeSelectionApply.ts: a user's pick applied on send
@@ -2961,6 +2966,73 @@ test('model change at send: a pick made during a turn that overflows lands on th
   assert.equal(await r.h.queue.inputStatus('combo', 'combo-1'), 'running', 'a reconnecting client sees the input running');
   assert.equal(r.userRows('combo').length, 1, 'the replay writes no second user row');
   assert.equal(r.db.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE session_id = 'combo' AND role = 'error'").get().n, 0);
+});
+
+// Rule (the desktop's send transaction binding, register.ts: after the landing, a send that is not
+// scheduled recovers a renamed model, recoverRenamedSessionModelOnSend): when the provider now lists the
+// task's model under a new id with the same unified key, the send moves the task to that id before the
+// runtime starts. A pick waiting for this send lands first, and then there is nothing to rename. Gap:
+// the Host sent the saved id, which the provider no longer lists.
+test('model change at send: a model the provider renamed moves to its new id before the runtime starts', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await r.createTask('renamed');
+  r.rename('big', 'xai/big');
+  await r.h.queue.enqueue('renamed', { clientId: 'renamed-1', text: 'first' });
+  await waitFor(() => r.h.maker.sessions.get('renamed')?.sent.length === 1);
+  assert.equal(r.row('renamed').model, 'xai/big', 'the task row takes the new id');
+  assert.equal(r.h.maker.sessions.get('renamed').options.model, 'xai/big', 'the runtime starts on the new id');
+  assert.equal(r.userRows('renamed').length, 1);
+  assert.equal(r.h.queue.projection('renamed').error ?? null, null);
+});
+
+test('model change at send: a pick waiting for the send lands before the rename, which then has nothing to do', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await r.createTask('renamed-pick');
+  await r.selection.setModel('renamed-pick', 'small', undefined, undefined, undefined);
+  r.rename('big', 'xai/big');
+  await r.h.queue.enqueue('renamed-pick', { clientId: 'renamed-pick-1', text: 'first' });
+  await waitFor(() => r.h.maker.sessions.get('renamed-pick')?.sent.length === 1);
+  assert.equal(r.row('renamed-pick').model, 'small', 'the pick landed; the saved model was not renamed');
+  assert.equal(r.h.maker.sessions.get('renamed-pick').options.model, 'small');
+  assert.equal(r.selection.projectIntent('renamed-pick') ?? null, null);
+});
+
+// Rule (the desktop's cold Pi window check, register.ts createColdPiRehydrationForWindowVerification
+// bound into handleSetModel): a Pi task whose runtime was released has no live window to check a
+// smaller pick against, so the landing resumes its native session first, reads the live window and
+// usage, and then decides; at danger it rebuilds before the smaller window lands. Gap: the Host threw
+// a plain error there ("not wired on the Host yet"), which the shared code takes as a failed resume and
+// lets through (classifyColdPiRehydrationOutcome 'degraded'): the smaller model resumed the old native
+// session at 95k of a 100k window, with no rebuild and no error.
+test('model change at send: a released Pi task resumes to check its window, then rebuilds for the smaller one', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t, { agent: 'pi' });
+  await r.createTask('cold-pi');
+  const started = [];
+  const create = r.h.maker.createSession.bind(r.h.maker);
+  r.h.maker.createSession = async opts => {
+    started.push({ model: opts.model, resumeSessionId: opts.resumeSessionId });
+    const session = await create(opts);
+    // A Pi runtime reports its usage and previews a switch (session.ts getUsageSnapshot,
+    // previewModelSwitch); this one has used 95k of its 200k window.
+    session.getUsageSnapshot = () => ({ tokenUsage: 0, contextTokens: 95_000, contextWindow: 200_000, costUsd: 0 });
+    session.previewModelSwitch = async model => ({ action: 'hot', targetContextWindow: SWITCH_WINDOWS[model] ?? null, windowVerified: true });
+    return session;
+  };
+  await r.runTurn('cold-pi', 'cold-pi-1', { contextTokens: 95_000, contextWindow: 200_000 });
+  await r.h.maker.closeSession('cold-pi'); // idle release
+  await r.selection.setModel('cold-pi', 'small', undefined, undefined, undefined);
+  await r.h.queue.enqueue('cold-pi', { clientId: 'cold-pi-2', text: 'next' });
+  await waitFor(() => r.h.maker.sessions.get('cold-pi')?.sent.length === 1 || r.h.queue.projection('cold-pi').error);
+  assert.equal(r.h.queue.projection('cold-pi').error ?? null, null);
+  assert.deepEqual(started, [
+    { model: 'big', resumeSessionId: undefined },
+    { model: 'big', resumeSessionId: 'native-cold-pi-1' }, // the window check resumes the released runtime
+    { model: 'small', resumeSessionId: undefined }, // the rebuilt context starts fresh
+  ]);
+  assert.deepEqual(r.rebuilds('cold-pi').map(marker => marker.reason), ['model-window-switch']);
+  assert.equal(r.row('cold-pi').model, 'small');
+  assert.equal(r.h.maker.sessions.get('cold-pi').options.model, 'small');
+  assert.equal(r.selection.projectIntent('cold-pi') ?? null, null);
 });
 
 test('context recovery assembly: an overflow rebuilds the task and replays the message on a new runtime, with no error left', { timeout: 30_000 }, async t => {

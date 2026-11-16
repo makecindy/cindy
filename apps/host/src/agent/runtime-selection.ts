@@ -20,31 +20,52 @@ import {
 import { listMessagesForAgentHandoff } from '../../../desktop/src/main/localDb/agentHandoffHistory.ts';
 import {
   createHandleSetModel,
+  type InternalRuntimeSelectionOptions,
   type SessionRuntimeSelectionPorts,
 } from '../../../desktop/src/main/maker-ipc/sessionRuntimeSelectionApply.ts';
+import {
+  createCanApplyAutomaticRuntimeSelection,
+  createReadSessionRuntimeProfiles,
+  createRecoverRenamedSessionModelOnSend,
+  createSelectSameAgentModel,
+} from '../../../desktop/src/main/maker-ipc/sessionRuntimeSelectionLanding.ts';
+import {
+  createApplyPiPendingSelection,
+  createPendingCredentialSwitchService,
+} from '../../../desktop/src/main/maker-ipc/pendingCredentialSwitchAssembly.ts';
+import {
+  clearPendingCredentialSwitchWith,
+  getPendingCredentialSwitchTargetWith,
+  registerPendingCredentialSwitchWith,
+  wakeSessionInputAfterCredentialSwitchWith,
+  type PendingCredentialSwitchAccessPorts,
+} from '../../../desktop/src/main/maker-ipc/pendingCredentialSwitchAccess.ts';
+import { createColdPiRehydrationForWindowVerification } from '../../../desktop/src/main/maker-ipc/coldPiRehydration.ts';
+import { directoryGrantsForRuntime } from '../../../desktop/src/main/maker-ipc/extraDirsValidator.ts';
+import { setPendingCredentialSwitchReader } from '../../../desktop/src/main/maker-host/provider-route.ts';
+import type { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.desktop.ts';
 import {
   createSessionRuntimeProjection,
   createUpdateScheduledPreference,
 } from '../../../desktop/src/main/maker-ipc/sessionRuntimeProjection.ts';
 import { createResolvePendingRuntimeAxisPatch } from '../../../desktop/src/main/maker-ipc/pendingRuntimeAxisPatch.ts';
 import { assertModelRouteUsableWith } from '../../../desktop/src/main/maker-ipc/modelRouteAdmission.ts';
-import { verdictForModelRouteWithProviders } from '../../../desktop/src/main/maker-host/model-route-guard-catalog.ts';
+import {
+  resolveLenientSessionRouteWithProviders,
+  verdictForModelRouteWithProviders,
+} from '../../../desktop/src/main/maker-host/model-route-guard-catalog.ts';
 import { persistSessionFieldsWith } from '../../../desktop/src/main/localDb/sessionFieldPersistence.ts';
 import { readSessionSource } from '../../../desktop/src/main/localDb/sessionDispatchSnapshot.ts';
-import {
-  recordUserSessionRuntimeMutation,
-  sessionRuntimeGenerationMatches,
-} from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
+import { recordUserSessionRuntimeMutation } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
 import { createSharedTaskSettingGuard } from '../../../desktop/src/main/maker-ipc/sharedTaskSetting.ts';
 import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { withRehydrateCloseSuppressed } from '../../../desktop/src/main/maker-host/rehydrateCloseSuppression.ts';
 import { setSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { and, eq } from 'drizzle-orm';
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
-import { messages } from '../../../desktop/src/main/localDb/schema.ts';
+import { messages, sessions } from '../../../desktop/src/main/localDb/schema.ts';
 import { messageToCamel } from '../../../desktop/src/main/localDb/mapper.ts';
 import { getActiveAppSession } from '../../../desktop/src/main/appSessionState.ts';
-import { CredentialModeSwitchBusyError } from '../../../desktop/src/main/maker-host/codex-credential-switch.ts';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import * as broadcastTap from '../../../desktop/src/main/device-link/broadcast-tap.js';
 import type { Logger } from '../../../desktop/src/main/logger.ts';
@@ -76,11 +97,23 @@ export interface HostRuntimeSelectionDeps {
     contextRecoveryRollover(): SessionRuntimeSelectionPorts['contextOverflowRolloverHolder'];
     sessionDbAgentKind(sessionId: string): 'cc' | 'codex' | 'pi' | null;
     isTurnRunning(sessionId: string): boolean;
-    wakeSession(sessionId: string, reason: string): void;
-    refreshQueuedRoute(sessionId: string, route: Record<string, unknown>): void;
+    wakeSession: AgentInputCoordinator['wakeSession'];
+    refreshQueuedRoute: AgentInputCoordinator['refreshQueuedRoute'];
     cancelUsageLimitWait(sessionId: string): void;
+    /** Starting a task's runtime outside a turn, as a send starts it (turn-executor.mjs startPorts). */
+    startPorts(): HostRuntimeStartPorts;
   };
   log: Logger;
+}
+
+/** The executor's runtime start functions (turn-executor.mjs startPorts), as the desktop's send transaction has them. */
+export interface HostRuntimeStartPorts {
+  /** Returns the options with the stderr capture (the desktop's CreateOpts, whose remoteHostId is optional). */
+  buildCreateOptsWithStderr<O extends object>(opts: O): O & { remoteHostId?: string | null };
+  checkWorkDirExists(sessionId: string, workingDir: string | undefined, agentKind: string, remoteHostId: string | null | undefined): Promise<boolean>;
+  synthesizeOrcaVendorOptionsFromDb(sessionId: string, opts: object): Promise<unknown>;
+  readSessionExtraDirsFromDb(sessionId: string): Promise<string[]>;
+  bootstrapSession(opts: object): Promise<unknown>;
 }
 
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
@@ -99,11 +132,13 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   const captureOwnerScope = (): OwnerScope => broadcastTap.captureDataOwnerBroadcastScope?.() ?? null;
   const isOwnerScopeCurrent = (scope: OwnerScope) =>
     scope === null || broadcastTap.isDataOwnerBroadcastScopeCurrent?.(scope) !== false;
-  const broadcastSessionPatched = (sessionId: string, patch: Record<string, unknown>, ownerScope?: OwnerScope) => {
-    if (ownerScope !== undefined && !isOwnerScopeCurrent(ownerScope)) return;
+  const broadcastSessionPatched: SessionRuntimeSelectionPorts['broadcastSessionPatched'] = (sessionId, patch, ownerScope) => {
+    if (ownerScope !== undefined && !isOwnerScopeCurrent(ownerScope ?? null)) return;
     deps.publish({ type: 'session_changed', sessionId, patch });
   };
-  const providerService = () => ({ listProviders: () => deps.listProviderViews() });
+  // The provider service's member the shared bodies call (listProviders), over the Host's listing.
+  const providerService: SessionRuntimeSelectionPorts['getDesktopProviderService'] =
+    () => ({ listProviders: () => deps.listProviderViews() });
   const verdictForModelRoute = (agent: AgentKind, model: string, providerId: string | null) =>
     verdictForModelRouteWithProviders(() => deps.listProviderViews(), agent, model, providerId);
   const assertModelRouteUsable: SessionRuntimeSelectionPorts['assertModelRouteUsable'] =
@@ -115,8 +150,105 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   const { broadcastSessionRuntimeProjection } = createSessionRuntimeProjection({ broadcastSessionPatched });
   const updateScheduledPreference = createUpdateScheduledPreference({ broadcastSessionRuntimeProjection });
   const resolvePendingRuntimeAxisPatch = createResolvePendingRuntimeAxisPatch({
-    getDesktopProviderService: providerService as unknown as SessionRuntimeSelectionPorts['getDesktopProviderService'],
+    getDesktopProviderService: providerService,
     log: deps.log,
+  });
+  // As register.ts: the same-engine pick an intent lands as, through applySessionRuntimeSelection
+  // (handleSetModel without a revision), read at call time because handleSetModel is assigned below.
+  const applySessionRuntimeSelection: Parameters<typeof createSelectSameAgentModel>[0]['applySessionRuntimeSelection'] =
+    (sessionId, model, providerId, selection, options) =>
+      handleSetModel(sessionId, model, providerId, undefined, selection, options);
+  const canApplyAutomaticRuntimeSelection = createCanApplyAutomaticRuntimeSelection({ agentSwitchPending: pendingSwitches });
+  const coordinatorRoute: Pick<AgentInputCoordinator, 'refreshQueuedRoute'> = {
+    refreshQueuedRoute: (...args) => deps.inputQueue.refreshQueuedRoute(...args),
+  };
+  const coordinatorWake: Pick<AgentInputCoordinator, 'wakeSession'> = {
+    wakeSession: (...args) => deps.inputQueue.wakeSession(...args),
+  };
+  // The Maker members the pending credential switch reads; the owner runtime's Maker at each call.
+  const pendingSwitchMaker = {
+    listActiveSessions: () => maker().listActiveSessions(),
+    closeSession: (sessionId: string, reason?: 'runtime-refresh') => maker().closeSession(sessionId, reason),
+  };
+  // As register.ts: the pending credential switch service, assembled before handleSetModel exists;
+  // its Pi transaction is read at call time (createApplyPiPendingSelection below).
+  let applyPiPendingSelection: ReturnType<typeof createApplyPiPendingSelection> | null = null;
+  const pendingCredentialSwitchService = createPendingCredentialSwitchService({
+    maker: pendingSwitchMaker,
+    isSessionInTurn: sessionId => isSessionInTurn(sessionId),
+    applyPiPendingSelection: (sessionId, target, resolved, isCurrent) => {
+      if (!applyPiPendingSelection) throw new Error('Pi model selection is not ready');
+      return applyPiPendingSelection(sessionId, target, resolved, isCurrent);
+    },
+    // The desktop broadcasts these to its windows; the Host sends them on its event stream.
+    broadcastToAllWindows: (channel, payload) => deps.publish({ type: 'plugin_push', channel, payload }),
+    inputCoordinator: coordinatorWake,
+    resolveLenientSessionRoute: (agent, model, providerId, opts) =>
+      resolveLenientSessionRouteWithProviders(() => deps.listProviderViews(), agent, model, providerId, opts),
+    getSessionDbAgentKind: sessionId => deps.inputQueue.sessionDbAgentKind(sessionId),
+    getDesktopProviderService: providerService,
+    resolveConfiguredContextWindow: deps.resolveConfiguredContextWindow,
+    agentInputCoordinatorHolder: coordinatorRoute,
+    broadcastSessionPatched,
+    log: deps.log,
+  });
+  // As register.ts: the proxy's synchronous routing reads a task's pending switch.
+  setPendingCredentialSwitchReader((sessionId) => {
+    const pending = pendingCredentialSwitchService.get(sessionId);
+    return pending
+      ? {
+          model: pending.model,
+          providerId: pending.providerId,
+          ...(pending.previousRoute?.model ? { previousModel: pending.previousRoute.model } : {}),
+        }
+      : undefined;
+  });
+  // The shared register / clear / wake / read of a pending switch (register.ts pendingCredentialSwitchPorts).
+  const accessPorts = (): PendingCredentialSwitchAccessPorts => ({
+    pendingCredentialSwitchHolder: pendingCredentialSwitchService,
+    agentInputCoordinatorHolder: coordinatorWake,
+    getSessionDbAgentKind: sessionId => deps.inputQueue.sessionDbAgentKind(sessionId),
+    getMaker: maker,
+  });
+  // The desktop's sessionTurnActivityTracker: in a turn from the runtime's foreground running status
+  // to its end. The executor's own turn record is open for the very send a pick lands in, so it is
+  // not that; the task's runtime reports the same as the tracker here.
+  const isSessionInTurn = (sessionId: string) => maker().getSession(sessionId)?.isTurnRunning?.() === true;
+  // As register.ts createColdPiRehydrationForWindowVerification, with the Host's runtime start
+  // functions (the ones its send transaction uses) in place of the desktop's.
+  const rehydrateColdPiRuntimeForWindowVerification = createColdPiRehydrationForWindowVerification({
+    hasLiveSession: (sessionId) => !!maker().getSession(sessionId),
+    loadSessionRow: async (sessionId) => {
+      const [row] = await getDbClient()
+        .drizzle.select()
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      return row;
+    },
+    buildCreateOpts: (sessionId, row) =>
+      deps.inputQueue.startPorts().buildCreateOptsWithStderr({
+        id: sessionId,
+        agentKind: 'pi',
+        workingDir: row.workingDir,
+        model: row.model,
+        providerId: row.providerId,
+        effort: row.effort ?? undefined,
+        fastMode: (row.fastMode ?? false),
+        permissionMode: row.permissionMode ?? 'ask',
+        planMode: !!row.planModeEnabled,
+        title: row.title ?? undefined,
+        resumeSessionId: row.sdkSessionId,
+        orcaRole: row.orcaRole ?? undefined,
+      }),
+    checkWorkDirExists: (sessionId, workingDir, agentKind, remoteHostId) =>
+      deps.inputQueue.startPorts().checkWorkDirExists(sessionId, workingDir, agentKind, remoteHostId),
+    prepareCreateOpts: async (sessionId, createOpts) => {
+      await deps.inputQueue.startPorts().synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
+      const extraDirs = await deps.inputQueue.startPorts().readSessionExtraDirsFromDb(sessionId);
+      Object.assign(createOpts, directoryGrantsForRuntime(extraDirs));
+    },
+    bootstrapSession: (createOpts) => deps.inputQueue.startPorts().bootstrapSession(createOpts),
   });
 
   const agentSwitchDeps: MakerSessionAgentSwitchHandlerDeps = {
@@ -161,21 +293,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     bootstrapSwitchedSession: async () => { throw new Error('Host switches bootstrap at the next send'); },
     withCloseSuppressed: withRehydrateCloseSuppressed,
     pendingSwitches,
-    selectSameAgentModel: async (sessionId, intent, applyNow, assertSelectionCurrent, beforeMutation, pendingSelectionAccess) => {
-      // The desktop's applySessionRuntimeSelection: handleSetModel without a revision.
-      const result = await handleSetModel(sessionId, intent.model, intent.providerId, undefined, {
-        effort: (intent.effort ?? null) as never,
-        fastMode: intent.fastMode ?? false,
-        ...(intent.thinking !== undefined ? { thinking: intent.thinking } : {}),
-        ...(intent.confirmedContextWindow ? { confirmedContextWindow: intent.confirmedContextWindow } : {}),
-      } as never, { source: 'user', sessionLockHeld: true, applyingUserSelectionOnSend: applyNow,
-        runtimeSource: intent.runtimeSource, configStaged: intent.configStaged === true,
-        assertSelectionCurrent, beforeMutation, pendingSelectionAccess } as never);
-      if ((result as { contextWindowConfirmationRequired?: unknown }).contextWindowConfirmationRequired !== undefined) {
-        throwIpcError('PRECONDITION_FAILED', 'Model context window changed or was unknown; select the model again to confirm');
-      }
-      return result;
-    },
+    selectSameAgentModel: createSelectSameAgentModel({ applySessionRuntimeSelection }),
     onPendingSwitchChanged: (sessionId, intent) => {
       if (intent) recordUserSessionRuntimeMutation(sessionId);
       broadcastSessionPatched(sessionId, { agentSwitchIntent: intent });
@@ -183,7 +301,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     // The desktop also marks an IM task as detached from its channel default; the Host has no IM.
     onUserRouteSelectionLanded: async sessionId => { await updateScheduledPreference(sessionId, null); },
     log: deps.log,
-  } as MakerSessionAgentSwitchHandlerDeps;
+  };
 
   const ports = (): SessionRuntimeSelectionPorts => ({
     maker: maker(),
@@ -196,43 +314,32 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
         throwIpcError('UNSUPPORTED_CAPABILITY', 'Review task settings are fixed to the source task');
       }
     },
-    canApplyAutomaticRuntimeSelection: (sessionId, expectedGeneration) =>
-      !pendingSwitches.get(sessionId) && sessionRuntimeGenerationMatches(sessionId, expectedGeneration),
+    canApplyAutomaticRuntimeSelection,
     // Tasks whose Agent runs on another computer are refused on the Host (send-preflight.ts).
     applyAgentDeviceRuntimeSelection: async () => { throw new Error('Host does not run tasks on another computer'); },
     assertModelRouteUsable,
     agentSwitchDeps,
     resolvePendingRuntimeAxisPatch,
-    rehydrateColdPiRuntimeForWindowVerification: async () => {
-      throw new Error('cold Pi window verification is not wired on the Host yet');
-    },
+    rehydrateColdPiRuntimeForWindowVerification,
     updateScheduledPreference,
     // A teammate's task is refused on the Host; the reconciler only acts on teammate tasks.
-    reconcileBotModelRoute: { acceptTaskChoice: async () => {} } as never,
+    reconcileBotModelRoute: { acceptTaskChoice: async () => {} },
     log: deps.log,
     // The Host's entries do not run inside a Device Link invoke (isDeviceLinkInvoke() is false).
     localModelWindowSwitchErrorCode: code => code,
-    wakeSessionInputAfterCredentialSwitch: sessionId => deps.inputQueue.wakeSession(sessionId, 'credential-switch-applied-inline'),
-    // Pending credential switches: not wired yet (checkpoint 3, desktop prep unit in progress).
-    pendingCredentialSwitchHolder: null,
-    clearPendingCredentialSwitchForSession: (sessionId, opts) => {
-      if (opts?.wake !== false) deps.inputQueue.wakeSession(sessionId, 'pending-credential-switch-cancelled');
-    },
-    // The desktop's sessionTurnActivityTracker: in a turn from the runtime's foreground running status
-    // to its end. The executor's own turn record is open for the very send a pick lands in, so it is
-    // not that; the task's runtime reports the same as the tracker here.
-    isSessionInTurn: sessionId => maker().getSession(sessionId)?.isTurnRunning?.() === true,
+    wakeSessionInputAfterCredentialSwitch: sessionId => wakeSessionInputAfterCredentialSwitchWith(accessPorts(), sessionId),
+    pendingCredentialSwitchHolder: pendingCredentialSwitchService,
+    clearPendingCredentialSwitchForSession: (sessionId, opts) => clearPendingCredentialSwitchWith(accessPorts(), sessionId, opts),
+    isSessionInTurn,
     contextOverflowRolloverHolder: deps.inputQueue.contextRecoveryRollover(),
-    getPendingCredentialSwitchTarget: () => undefined,
+    getPendingCredentialSwitchTarget: sessionId => getPendingCredentialSwitchTargetWith(accessPorts(), sessionId),
     // The Host's entries are not a shared task's guest (no Device Link invoke context).
     captureSharedTaskSettingGuard: sessionId => createSharedTaskSettingGuard(undefined, sessionId, { admitted: false }),
-    registerPendingCredentialSwitchForSession: async sessionId => {
-      throw new CredentialModeSwitchBusyError([sessionId], `Cannot switch provider route while the session is busy: ${sessionId}`);
-    },
-    agentInputCoordinatorHolder: { refreshQueuedRoute: (sessionId: string, route: Record<string, unknown>) =>
-      deps.inputQueue.refreshQueuedRoute(sessionId, route) } as never,
+    registerPendingCredentialSwitchForSession: (sessionId, target) =>
+      registerPendingCredentialSwitchWith(accessPorts(), sessionId, target),
+    agentInputCoordinatorHolder: coordinatorRoute,
     getSessionDbAgentKind: sessionId => deps.inputQueue.sessionDbAgentKind(sessionId),
-    broadcastSessionPatched: broadcastSessionPatched as SessionRuntimeSelectionPorts['broadcastSessionPatched'],
+    broadcastSessionPatched,
     persistSessionFields: (sessionId, patch) => persistSessionFieldsWith({
       captureOwnerScope, isOwnerScopeCurrent, broadcastSessionPatched,
       // The window budget hook of the session settings; a model change never carries a budget.
@@ -240,7 +347,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     }, sessionId, patch),
     // A Device Link set-model's write-back marker: the Host has no Device Link set-model.
     markRemoteSettingPersistedInsideHandler: () => {},
-    getDesktopProviderService: providerService as unknown as SessionRuntimeSelectionPorts['getDesktopProviderService'],
+    getDesktopProviderService: providerService,
     resolveConfiguredContextWindow: deps.resolveConfiguredContextWindow,
     readStoredSessionContextWindowBudget: deps.readStoredSessionContextWindowBudget,
     listSshCodexProviders: async () => { throw new Error('Host does not run SSH tasks'); },
@@ -248,13 +355,24 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     recordSessionContextSnapshot: recordHostContextSnapshot,
   });
   const handleSetModel = createHandleSetModel(ports);
+  applyPiPendingSelection = createApplyPiPendingSelection({ handleSetModel });
+  const readSessionRuntimeProfiles = createReadSessionRuntimeProfiles({
+    maker: { getSessionMeta: sessionId => maker().getSessionMeta(sessionId), getSession: sessionId => maker().getSession(sessionId) },
+    agentSwitchPending: pendingSwitches,
+    log: deps.log,
+  });
+  const recoverRenamedSessionModelOnSend = createRecoverRenamedSessionModelOnSend({
+    agentSwitchPending: pendingSwitches, getDesktopProviderService: providerService, readSessionRuntimeProfiles, handleSetModel,
+  });
   /**
-   * A runtime of a task closed (the Maker's session:closed, from the session's own close): the
-   * desktop's finalizeClosedSession keeps its last live usage for a cold Pi model change's window
-   * check (sessionLastLiveUsage.ts), read from the closed session as the desktop reads it.
+   * A runtime of a task closed (the Maker's session:closed, from the session's own close), finalized
+   * in the desktop's order: finalizeClosedSession keeps its last live usage for a cold Pi model
+   * change's window check (sessionLastLiveUsage.ts), read from the closed session as the desktop reads
+   * it; then cleanupClosedSessionRuntime settles its pending credential switch.
    */
   const onSessionClosed = (sessionId: string, session: Pick<Session, 'getUsageSnapshot'>) => {
     rememberSessionLastLiveUsage(sessionId, session.getUsageSnapshot());
+    pendingCredentialSwitchService.onSessionClosed(sessionId);
   };
 
   return {
@@ -265,19 +383,39 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     /** A model change a client asks for: the desktop's set-model (source 'user'). */
     setModel(sessionId: string, model: unknown, providerId: unknown, revision: unknown, selection: unknown) {
       deps.inputQueue.cancelUsageLimitWait(sessionId);
-      return handleSetModel(sessionId, model as never, providerId as never, revision as never, selection as never,
-        { source: 'user' } as never);
+      const options: InternalRuntimeSelectionOptions = { source: 'user' };
+      return handleSetModel(sessionId, model, providerId, revision, selection, options);
     },
     /** An engine change a client asks for: the desktop's switch-session-agent, under the task's lock. */
     switchAgent(params: Parameters<typeof performSessionAgentSwitch>[1]) {
       return withSendToSessionLock(params.sessionId as string, () => performSessionAgentSwitch(agentSwitchDeps, params));
     },
     /**
-     * The send transaction's landing of a picked model or engine: the step the desktop's transaction
-     * binding (register.ts, createMakerSendTransaction's applyPendingAgentSwitch) runs, called as it
-     * calls it, without the send's signal (the desktop passes that only to the provider group check).
+     * The send transaction's landing of a picked model or engine, with the steps of the desktop's
+     * transaction binding (register.ts, createMakerSendTransaction's applyPendingAgentSwitch) in its
+     * order: the landing (called as the desktop calls it, without the send's signal), then, for a send
+     * that is not scheduled, the recovery of a renamed model. The desktop's other steps are not on the
+     * Host yet (release table: the scheduled model scope, the window budget replay, the Orca pending
+     * check, the provider group check).
      */
-    applyPendingAgentSwitch: (sessionId: string) => applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId),
+    async applyPendingAgentSwitch(sessionId: string, options?: { signal?: AbortSignal; scheduled?: boolean; clientId?: string }) {
+      await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId);
+      if (!options?.scheduled) await recoverRenamedSessionModelOnSend(sessionId);
+    },
+    /** A task's turn settled (the desktop's settlePendingCredentialSwitch): a pending switch lands now. */
+    onTurnSettled(sessionId: string) {
+      const pending = pendingCredentialSwitchService.onTurnSettled(sessionId);
+      if (!pending) return;
+      void pending.catch((err) => {
+        deps.log.warn('pending credential switch settle failed', {
+          sessionId,
+          source: 'host-turn-settled',
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    },
+    /** Whether a credential switch waits for this task's turn to end (the coordinator and idle-release gates). */
+    hasPendingCredentialSwitch: (sessionId: string) => pendingCredentialSwitchService.has(sessionId),
     clearIntent(sessionId: string) {
       pendingSwitches.clear(sessionId);
     },
