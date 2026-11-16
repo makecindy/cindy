@@ -375,9 +375,12 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
           getSessionMeta: async () => ({ model: 'fixture-model', agentKind: 'pi' }),
           isSessionAlive: () => true, recyclePiRuntimeIfResourcesDrifted: async () => false,
           closeSession: vi.fn(() => session.close()),
+          closeSessionIfCurrent: vi.fn(async () => await session.closeIfIdle() ? 'closed' : undefined),
         } as unknown as Maker,
         schedulerQueue: {
           isSessionBusy: id => coordinator.shouldQueueNewTurn(id),
+          hasPendingInput: id => coordinator.hasPendingQueuedWork(id)
+            || coordinator.hasQueuedItemWhere(id, () => true, { includeRecovery: true }),
           hasQueuedPrompt: () => false, isPromptTracked: () => true,
           removeQueuedPrompt: () => {},
           enqueuePrompt: async req => {
@@ -420,6 +423,7 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
         events.push({ type: 'text', data: 'Report complete', source: 'pi' });
         events.push({ type: 'done', data: { stopReason: 'stop' }, source: 'pi' });
         await preparing.promise;
+        vi.useFakeTimers();
         await fire;
         // The original turn is settled but the next input is still preparing.
         expect(session.isTurnRunning()).toBe(false);
@@ -430,13 +434,87 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
         expect(coordinator.getProjection(session.id).error).toBeNull();
         expect(discarded).not.toHaveBeenCalled();
         expect(terminalErrors).not.toHaveBeenCalled();
+        // The finished fire retains cleanup ownership until the follow-up ends.
+        events.push({ type: 'done', data: { stopReason: 'stop' }, source: 'pi' });
+        await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(session.getStatus()).toBe('closed');
       } finally {
+        vi.useRealTimers();
         allowDispatch.resolve();
         await fire.catch(() => {});
         await session.close();
       }
     },
   );
+
+  it.each(['removed', 'owner-changed', 'runtime-replaced'] as const)(
+    'deferred cleanup respects %s after queued input takes ownership', async outcome => {
+      vi.useFakeTimers();
+      const h = createSessionHarness();
+      let pending = true;
+      let inTurn = false;
+      let owner = true;
+      let current: Session | null = h.session;
+      const retire = vi.fn(async () => 'closed' as const);
+      const { runner, closeSession } = createRunnerHarness(h.session, {
+        maker: {
+          createSession: async () => h.session, getSession: () => current,
+          getSessionMeta: async () => null, isSessionAlive: () => false,
+          closeSession: vi.fn(), closeSessionIfCurrent: retire,
+          recyclePiRuntimeIfResourcesDrifted: async () => false,
+        } as unknown as Maker,
+        schedulerQueue: {
+          isSessionBusy: () => false, hasPendingInput: () => pending,
+          hasQueuedPrompt: () => false, isPromptTracked: () => false,
+          removeQueuedPrompt: () => {},
+          enqueuePrompt: async () => { throw new Error('initial dispatch failed'); },
+        },
+      });
+      const context = createFireContext();
+      context.assertFireContext = () => { if (!owner) throw new Error('owner changed'); };
+      try {
+        await expect(runner.fire(baseSchedule(), context)).rejects.toThrow('initial dispatch failed');
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(retire).not.toHaveBeenCalled();
+        pending = false;
+        inTurn = true;
+        mocks.isSessionInTurn.mockImplementation(() => inTurn);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(retire).not.toHaveBeenCalled();
+        inTurn = false;
+        if (outcome === 'owner-changed') owner = false;
+        if (outcome === 'runtime-replaced') current = { ...h.session } as Session;
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(closeSession).not.toHaveBeenCalled();
+        if (outcome === 'removed') {
+          expect(retire).toHaveBeenCalledExactlyOnceWith(h.session, 'requested', { onlyIfIdle: true });
+        } else expect(retire).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally { vi.useRealTimers(); }
+    },
+  );
+
+  it('closes a fresh empty runtime when queue restoration fails before acceptance', async () => {
+    const h = createSessionHarness();
+    const coordinator = new AgentInputCoordinator({
+      loadQueueSnapshot: async () => { throw new Error('snapshot unavailable'); },
+    } as never);
+    await expect(coordinator.ensureQueueRestored(h.session.id)).rejects.toThrow('snapshot unavailable');
+    const { runner, closeSession } = createRunnerHarness(h.session, {
+      schedulerQueue: {
+        isSessionBusy: id => coordinator.shouldQueueNewTurn(id),
+        hasPendingInput: id => coordinator.hasPendingQueuedWork(id)
+          || coordinator.hasQueuedItemWhere(id, () => true, { includeRecovery: true }),
+        hasQueuedPrompt: () => false, isPromptTracked: () => false,
+        removeQueuedPrompt: () => {}, enqueuePrompt: async () => ({ retry: true }),
+      },
+    });
+    await runner.fire(baseSchedule(), createFireContext());
+    expect(coordinator.isQueueRestored(h.session.id)).toBe(false);
+    expect(h.session.send).not.toHaveBeenCalled();
+    expect(closeSession).toHaveBeenCalledOnce();
+  });
 
   it('closeSession 抛错不影响 fire 结果(仅 warn)', async () => {
     const h = createSessionHarness();

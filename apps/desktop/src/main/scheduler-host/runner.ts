@@ -238,6 +238,8 @@ export interface SchedulerQueueDeps {
   getLastUserActionAt?(sessionId: string): number | null;
   /** 目标会话当前是否忙(turn 运行中 / 队列有积压 / 凭证切换等待中)。 */
   isSessionBusy(sessionId: string): boolean;
+  /** Actual accepted follow-up work; admission locks/restore-pending alone do not retain a runtime. */
+  hasPendingInput?(sessionId: string): boolean;
   /**
    * 重启后内存还没有读回排队快照时，shouldQueueNewTurn 会把它当成忙。
    * 指定模型的任务会因此直接顺延，永远走不到入队时的恢复。
@@ -866,6 +868,36 @@ export class MakerScheduleRunner implements ScheduleRunner {
     throw new Error(errMsg);
   }
 
+  private closeEphemeralAfterInputs(holder: EphemeralSessionHolder): void {
+    const sessionId = holder.sessionId!;
+    const session = this.deps.maker.getSession(sessionId);
+    if (!session) return;
+    // The fire is finished, but accepted follow-ups still own this runtime.
+    // Retain cleanup ownership across preparing, pauses and recoveries; queue
+    // removal need not emit a vendor event, so an unref'ed poll also covers it.
+    const poll = async (): Promise<void> => {
+      try {
+        holder.assertOwner?.();
+        if (this.deps.maker.getSession(sessionId) !== session) return;
+        if (!this.runtime.isSessionInTurn(sessionId)
+          && !this.deps.schedulerQueue?.hasPendingInput?.(sessionId)) {
+          const result = await this.deps.maker.closeSessionIfCurrent(session, 'requested', { onlyIfIdle: true });
+          if (result === 'closed') return;
+        }
+      } catch (error) {
+        // A changed owner must never touch the next account's queue or runtime.
+        try { holder.assertOwner?.(); } catch { return; }
+        this.deps.logger.warn?.('[runner] deferred ephemeral close failed', { sessionId, error });
+      }
+      arm();
+    };
+    const arm = () => {
+      const timer = setTimeout(() => { void poll(); }, 1_000);
+      timer.unref?.();
+    };
+    arm();
+  }
+
   /**
    * fire 的收尾包装:ephemeral 会话(非 heartbeat、非持续会话)在 run 走到任何终态
    * (成功 / 失败 / 中止 / 中途异常)后关闭 in-memory 句柄。
@@ -880,7 +912,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
    *   - heartbeat(复用 targetSessionId):用户既有会话,生命周期不归 runner 管。
    *   - persistentSession:产品语义就是「持续会话」,跨 fire 复用同一 session。
    * 另外收尾时会话上若有新的 turn 或已接受的排队/派发中输入，
-   * 让位不关 —— 后续输入已接管会话，不能在其下一轮开始前拆掉运行时。
+   * 延后回收 —— 后续输入结束或被移除后，再关闭同一个空闲运行时。
    *
    * 用 wrapper + holder 而非在 fireInner 内部套 try/finally:fireInner 里 createSession
    * 之后仍有未捕获 throw 点(backfillSessionMeta / wireSessionToIpc 等),wrapper 的
@@ -917,6 +949,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
       holder.headlessGhostSetupTurn?.close();
       holder.releaseUnattendedTurn?.();
       holder.releaseUnattendedTurn = undefined;
+      if (holder.sessionId && !holder.keepAlive && !holder.closeOnAbort
+        && this.deps.schedulerQueue?.hasPendingInput?.(holder.sessionId)) {
+        this.closeEphemeralAfterInputs(holder);
+      }
       if (
         holder.sessionId &&
         !holder.keepAlive &&
@@ -924,7 +960,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           !this.runtime.isSessionInTurn(holder.sessionId) &&
           // A successful done can precede the coordinator's queued dispatch.
           // Include preparing/recovery work, not just the current vendor turn.
-          !this.deps.schedulerQueue?.isSessionBusy(holder.sessionId)
+          !this.deps.schedulerQueue?.hasPendingInput?.(holder.sessionId)
         ))
       ) {
         try {

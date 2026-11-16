@@ -36,6 +36,8 @@ export type SchedulerEnqueueResult = { clientId: string } | { duplicate: true } 
 export interface SchedulerQueueBridge {
   ensureQueueRestored(sessionId: string): Promise<boolean>;
   isSessionBusy(sessionId: string): boolean;
+  /** Actual accepted work, including preparing and recovery, independent of admission locks. */
+  hasPendingInput(sessionId: string): boolean;
   hasQueuedPrompt(sessionId: string, scheduleId: string): boolean;
   enqueuePrompt(req: SchedulerQueuedPromptRequest): Promise<SchedulerEnqueueResult>;
   removeQueuedPrompt(sessionId: string, clientId: string): void;
@@ -47,7 +49,7 @@ export interface SchedulerQueueBridge {
 }
 
 interface SchedulerQueueBridgeDeps<Meta> {
-  coordinator: Pick<AgentInputCoordinator, 'ensureQueueRestored' | 'isQueueRestored' | 'isQueuePaused' | 'hasQueuedItemWhere' | 'remove'>;
+  coordinator: Pick<AgentInputCoordinator, 'ensureQueueRestored' | 'isQueueRestored' | 'isQueuePaused' | 'hasPendingQueuedWork' | 'hasQueuedItemWhere' | 'remove'>;
   isSessionBusy(sessionId: string): boolean;
   getSessionMeta(sessionId: string): Promise<Meta | null>;
   getSessionRowSnapshot(sessionId: string): Promise<SessionRowSnapshot | null>;
@@ -99,6 +101,8 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
       if (!recovering) releasePrompt(sessionId, clientId);
     },
     isSessionBusy: deps.isSessionBusy,
+    hasPendingInput: sessionId => inputCoordinator.hasPendingQueuedWork(sessionId)
+      || inputCoordinator.hasQueuedItemWhere(sessionId, () => true, { includeRecovery: true }),
     ensureQueueRestored: async (sessionId) => {
       await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
       return inputCoordinator.isQueueRestored(sessionId);
