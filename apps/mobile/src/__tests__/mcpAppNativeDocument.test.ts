@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { beforeEach, expect, it, vi } from "vitest";
 import { Script } from 'node:vm';
 
@@ -257,4 +258,106 @@ it('reports editable focus geometry and blur through the existing resource bridg
   document.activeElement = { matches: () => false };
   listeners.get('focusout')!(); flush();
   expect(postMessage.mock.calls[1][0].params).toBeNull();
+});
+
+// #10856 review, unit: a 500px textarea cannot fit above a 300px keyboard viewport.
+// The existing whole-field test misses caret movement without input and internal scrolling.
+it('reports the textarea caret line after selection and scroll changes without exposing text', () => {
+  const frame = globalThis.document.createElement('iframe');
+  globalThis.document.body.appendChild(frame);
+  const window = frame.contentWindow as Window & typeof globalThis;
+  window.document.body.innerHTML = '<textarea style="padding:10px;border:2px solid;font:16px/24px sans-serif">private draft</textarea>';
+  const field = window.document.querySelector('textarea')!;
+  field.getBoundingClientRect = () => ({ top: 100, bottom: 600, height: 500 } as DOMRect);
+  Object.defineProperties(field, { clientWidth: { value: 300 }, clientHeight: { value: 496 }, offsetHeight: { value: 500 }, clientTop: { value: 2 } });
+  let lineTop = 450;
+  const prefixes: string[] = [];
+  const createRange = window.document.createRange.bind(window.document);
+  const rangeSpy = vi.spyOn(window.document, 'createRange').mockImplementation(() => {
+    const range = createRange();
+    range.getBoundingClientRect = () => {
+      prefixes.push(range.startContainer.parentElement!.previousSibling!.textContent!);
+      return { top: lineTop, bottom: lineTop + 24, height: 24 } as DOMRect;
+    };
+    return range;
+  });
+  const postMessage = vi.fn();
+  let flush = () => {};
+  new Script(MCP_APP_FOCUS_SCRIPT.slice(MCP_APP_FOCUS_SCRIPT.indexOf('>') + 1, MCP_APP_FOCUS_SCRIPT.lastIndexOf('</script>'))).runInNewContext({ document: window.document, window, getComputedStyle: window.getComputedStyle.bind(window), parent: { postMessage }, requestAnimationFrame: (callback: () => void) => { flush = callback; } });
+  try {
+    field.focus();
+    field.setSelectionRange(13, 13);
+    flush();
+    expect(postMessage.mock.lastCall![0]).toEqual({ jsonrpc: '2.0', method: 'ui/notifications/cindy-mobile-focus', params: { top: 552, bottom: 576 } });
+    expect(prefixes.at(-1)).toBe('private draft');
+    // A backward selection reveals its moving start, not the fixed end.
+    field.setSelectionRange(2, 10, 'backward');
+    lineTop = 210;
+    window.document.dispatchEvent(new window.Event('selectionchange'));
+    flush();
+    expect(prefixes.at(-1)).toBe('pr');
+    expect(postMessage.mock.lastCall![0].params).toEqual({ top: 312, bottom: 336 });
+    field.scrollTop = 100;
+    field.dispatchEvent(new window.Event('scroll'));
+    flush();
+    expect(postMessage.mock.lastCall![0].params).toEqual({ top: 212, bottom: 236 });
+    expect(window.document.body.children).toHaveLength(1);
+  } finally { rangeSpy.mockRestore(); frame.remove(); }
+});
+
+// Unit: rich editable content uses the moving selection endpoint, even for a
+// backward selection. Enter's empty BR line and a completely empty editor must
+// also reveal one line, rather than the entire oversized field.
+it('reveals the contenteditable caret, a new empty line and an empty editor', () => {
+  const frame = globalThis.document.createElement('iframe');
+  globalThis.document.body.appendChild(frame);
+  const window = frame.contentWindow as Window & typeof globalThis;
+  window.document.body.innerHTML = '<div contenteditable="true" tabindex="0" style="font:16px/24px sans-serif;padding:10px;border:2px solid">private rich text</div>';
+  const field = window.document.querySelector('div')!;
+  Object.defineProperty(field, 'isContentEditable', { value: true });
+  field.getBoundingClientRect = () => ({ top: 100, bottom: 600, height: 500 } as DOMRect);
+  Object.defineProperties(field, { clientHeight: { value: 496 }, clientTop: { value: 2 }, offsetHeight: { value: 500 } });
+  let height = 22;
+  let lineTop = 520;
+  let offset: number | undefined;
+  const createRange = window.document.createRange.bind(window.document);
+  const rangeSpy = vi.spyOn(window.document, 'createRange').mockImplementation(() => {
+    const range = createRange();
+    range.getBoundingClientRect = () => {
+      offset = range.startOffset;
+      const lineHeight = range.collapsed ? height : 22;
+      return { top: lineTop, bottom: lineTop + lineHeight, height: lineHeight } as DOMRect;
+    };
+    return range;
+  });
+  const postMessage = vi.fn();
+  let flush = () => {};
+  new Script(MCP_APP_FOCUS_SCRIPT.slice(MCP_APP_FOCUS_SCRIPT.indexOf('>') + 1, MCP_APP_FOCUS_SCRIPT.lastIndexOf('</script>'))).runInNewContext({ document: window.document, window, getComputedStyle: window.getComputedStyle.bind(window), parent: { postMessage }, requestAnimationFrame: (callback: () => void) => { flush = callback; } });
+  try {
+    field.focus();
+    window.getSelection()!.setBaseAndExtent(field.firstChild!, 10, field.firstChild!, 2);
+    window.document.dispatchEvent(new window.Event('selectionchange'));
+    flush();
+    expect(offset).toBe(2);
+    expect(postMessage.mock.lastCall![0].params).toEqual({ top: 520, bottom: 542 });
+    field.style.overflowY = 'auto';
+    lineTop = 820;
+    field.dispatchEvent(new window.Event('scroll'));
+    flush();
+    expect(postMessage.mock.lastCall![0].params).toEqual({ top: 576, bottom: 598 });
+    lineTop = 520;
+    height = 0;
+    field.innerHTML = '<div><br></div>';
+    window.getSelection()!.collapse(field.firstChild!, 0);
+    field.dispatchEvent(new window.Event('input', { bubbles: true }));
+    flush();
+    expect(postMessage.mock.lastCall![0].params).toEqual({ top: 520, bottom: 542 });
+    field.replaceChildren();
+    window.getSelection()!.collapse(field, 0);
+    field.dispatchEvent(new window.Event('input', { bubbles: true }));
+    flush();
+    expect(postMessage.mock.lastCall![0].params).toEqual({ top: 112, bottom: 136 });
+    field.blur(); flush();
+    expect(postMessage.mock.lastCall![0].params).toBeNull();
+  } finally { rangeSpy.mockRestore(); frame.remove(); }
 });
