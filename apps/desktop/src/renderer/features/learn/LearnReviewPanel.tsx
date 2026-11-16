@@ -167,6 +167,7 @@ export function LearnReviewPanel({ open, onClose, run, contextSessionId }: Learn
                 size="md"
                 compact
                 type="button"
+                disabled={acting !== null}
                 onClick={() => setReloadKey((key) => key + 1)}
               >
                 {t('commonUi.retry')}
