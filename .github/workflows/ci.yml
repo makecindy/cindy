@@ -151,15 +151,18 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # desktop 的 tsc 峰值内存已经贴着全局 4096MB 上限(2026-08-03 本地实测
-      # 约 4.2GB,`--extendedDiagnostics` 下 Types ~125 万、Instantiations ~277 万),
-      # 在 runner 上会随机 OOM(FATAL ERROR: Ineffective mark-compacts near heap
-      # limit)。已排除单点热点:移走最大的单个测试文件只省 ~5MB、移走 1400 行的
-      # 插件页组件只省 ~14MB,skipLibCheck 也早已开启——是整仓类型规模的自然结果,
-      # 不是某处写法。这一步单独给更大的堆,其它步骤维持全局值。
+      # desktop 的 tsc 峰值内存随整仓类型规模增长:2026-08-03 本地实测约 4.2GB
+      # (`--extendedDiagnostics` 下 Types ~125 万、Instantiations ~277 万),2026-10
+      # 调到 12288MB;2026-11-17 在 ubuntu x64(Node 22.21.1、tsc 5.9.3)实测
+      # Types ~417 万、Instantiations ~746 万,不限堆时用到约 12.3GiB、最大常驻约
+      # 12.45GiB,12288MB 下实测出现过随机 OOM(FATAL ERROR: Ineffective mark-compacts near
+      # heap limit),现为 14336MB。已排除单点热点:移走最大的单个测试文件只省 ~5MB、
+      # 移走 1400 行的插件页组件只省 ~14MB,skipLibCheck 也早已开启——是整仓类型
+      # 规模的自然结果,不是某处写法。上限由 apps/desktop 的 typecheck 脚本用 cross-env
+      # 设定(会覆盖这里),这里写同一个值只为一致;其它步骤维持全局值。
       - name: Typecheck desktop
         env:
-          NODE_OPTIONS: '--max-old-space-size=6144'
+          NODE_OPTIONS: '--max-old-space-size=14336'
         run: pnpm --filter desktop typecheck
 
       - name: Typecheck mobile
