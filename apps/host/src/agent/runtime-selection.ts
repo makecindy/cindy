@@ -92,6 +92,9 @@ import { recordHostContextSnapshot } from './context-usage.ts';
 import { rememberSessionLastLiveUsage } from '../../../desktop/src/main/maker-ipc/sessionLastLiveUsage.ts';
 import { createSessionContextWindowBudgetReconcile, type SessionContextWindowBudgetReconcilePorts } from '../../../desktop/src/main/maker-ipc/sessionContextWindowBudgetReconcile.js';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from '../../../desktop/src/main/maker-ipc/sessionContextWindowBudgetState.js';
+import { createSessionRuntimeFallback } from '../../../desktop/src/main/maker-ipc/sessionRuntimeFallback.ts';
+import { createSessionRuntimeFallbackSettingsFile } from '../../../desktop/src/main/maker-host/sessionRuntimeFallbackSettingsCore.ts';
+import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { explicitPorts } from './explicit-ports.ts';
 
 /** What the Host's runtime selection reads from the rest of the Host (main.ts binds it). */
@@ -520,9 +523,41 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     pendingSessionContextWindowBudgetReconciles.delete(sessionId);
   };
 
+  // The route change an interrupted-turn auto-resume tries first (sessionRuntimeFallback.ts), as
+  // register.ts assembles it: a task with the user's fallback setting on moves to another provider's
+  // candidate on its second attempt. The rebuild leases it marks are the auto-resume's own (read on an
+  // unexpected close on the desktop; the Host does not tear a resume down when a runtime closes).
+  const pendingSessionRuntimeFallbackRebuilds = new WeakMap<Session, number>();
+  const fallbackSettings = createSessionRuntimeFallbackSettingsFile(() => getUserDataDir());
+  const maybeApplySessionRuntimeFallback = createSessionRuntimeFallback<Session>(explicitPorts<Parameters<typeof createSessionRuntimeFallback<Session>>[0]>({
+    maker: { getSession: sessionId => maker().getSession(sessionId), closeSession: sessionId => maker().closeSession(sessionId) },
+    readSessionRuntimeProfiles, canApplyAutomaticRuntimeSelection,
+    // Teammate tasks are refused at Host admission: no task has a Teammate route to fall back along.
+    readBotFallbackCandidate: async () => ({ isBot: false, candidate: null }),
+    // Agents on another computer are refused at Host admission (send-preflight.ts): every task runs here.
+    readSessionAgentDeviceId: async () => null,
+    readSessionRuntimeFallbackSettings: () => fallbackSettings.read(),
+    getDesktopProviderService: providerService as Parameters<typeof createSessionRuntimeFallback<Session>>[0]['getDesktopProviderService'],
+    pendingSessionRuntimeFallbackRebuilds,
+    applySessionRuntimeSelection,
+    getPendingCredentialSwitchTarget: sessionId => getPendingCredentialSwitchTargetWith(accessPorts(), sessionId),
+    clearPendingCredentialSwitchForSession: (sessionId, options) => clearPendingCredentialSwitchWith(accessPorts(), sessionId, options),
+    broadcastSessionRuntimeProjection,
+    agentSwitchDeps,
+    performSessionAgentSwitch,
+    // As register.ts (runtimeSelectionRequiresModelWindowConfirmation): a pick that needs the user to
+    // confirm a smaller context window is not applied automatically.
+    runtimeSelectionRequiresModelWindowConfirmation: result =>
+      result.contextWindowConfirmationRequired !== undefined || result.contextTokensForConfirmation !== undefined,
+    log: deps.log,
+  }));
+
   return {
     pendingSwitches,
     agentSwitchDeps,
+    /** The interrupted-turn auto-resume's route change (auto-resume.ts), and the rebuild leases it marks. */
+    maybeApplySessionRuntimeFallback,
+    pendingSessionRuntimeFallbackRebuilds,
     /** The intent of a task as clients see it (session_changed, the task snapshot). */
     projectIntent: (sessionId: string) => projectPendingAgentSwitchIntent(pendingSwitches.get(sessionId)),
     /** The desktop's set-effort (an effort change of a task, live or staged into a pending pick). */
@@ -617,7 +652,8 @@ type HostRuntimeSelection = ReturnType<typeof createHostRuntimeSelection>;
  */
 export function hostRuntimeSelectionQueueHooks(
   getSelection: () => Pick<HostRuntimeSelection,
-    'applyPendingAgentSwitch' | 'hasPendingCredentialSwitch' | 'onTurnSettled' | 'persistAgentPlanModeChange'>,
+    'applyPendingAgentSwitch' | 'hasPendingCredentialSwitch' | 'onTurnSettled' | 'persistAgentPlanModeChange'
+    | 'maybeApplySessionRuntimeFallback' | 'pendingSessionRuntimeFallbackRebuilds'>,
   ports: { isSessionRestarting(sessionId: string): boolean; afterTurnSettled?(sessionId: string): void },
 ) {
   return {
@@ -634,6 +670,13 @@ export function hostRuntimeSelectionQueueHooks(
     },
     persistAgentPlanModeChange: (...args: Parameters<HostRuntimeSelection['persistAgentPlanModeChange']>) =>
       getSelection().persistAgentPlanModeChange(...args),
+    // The interrupted-turn auto-resume's route change and its rebuild leases (auto-resume.ts).
+    maybeApplySessionRuntimeFallback: (...args: Parameters<HostRuntimeSelection['maybeApplySessionRuntimeFallback']>) =>
+      getSelection().maybeApplySessionRuntimeFallback(...args),
+    pendingSessionRuntimeFallbackRebuilds: {
+      set: (session: Session, attemptToken: number) => getSelection().pendingSessionRuntimeFallbackRebuilds.set(session, attemptToken),
+      delete: (session: Session) => getSelection().pendingSessionRuntimeFallbackRebuilds.delete(session),
+    },
   };
 }
 
