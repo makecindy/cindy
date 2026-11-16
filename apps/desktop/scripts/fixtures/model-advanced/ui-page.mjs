@@ -11,6 +11,7 @@ export default {
     'image-mixed':{about:'Different engine defaults require an explicit common choice'},
     'image-inherited':{about:'Mixed override provenance with the same effective image capability'},
     default:{about:'GPT-6 Astra with Codex Ultrafast entitlement'},
+    'interface-reset':{about:'Explicit Kimi interface source and reset back to the current catalog default; in-memory save only'},
     narrow:{about:'Model compaction at phone width', viewport:{width:320,height:800}},
     sol:{about:'GPT-6.1 Sol with Codex Ultrafast entitlement'},
     'legacy-sol':{about:'GPT-6 Sol reasoning metadata'},
@@ -18,6 +19,25 @@ export default {
     'owner-repair':{about:'Same-owner generation change recovers an in-flight image capability save'},
   },
   async check(page,ui) {
+    if (ui.case === 'interface-reset') {
+      await page.getByText(await ui.t('settings.providers.models.advanced.protocol.sourceModel'), {exact:true}).waitFor();
+      const button = page.getByRole('combobox', {name: `Codex · ${await ui.t('settings.providers.custom.fields.wireProtocol')}`, exact:true});
+      if (!(await button.textContent()).includes('Chat Completions')) throw Error('Explicit interface label differs from route');
+      await ui.capture('explicit-interface');
+      await button.click();
+      await page.getByRole('option', {name: await ui.t('settings.providers.models.advanced.protocol.automatic'), exact:true}).waitFor();
+      await ui.capture('interface-menu');
+      await page.keyboard.press('Escape');
+      await page.getByRole('button', {name: await ui.t('settings.providers.models.advanced.protocol.restoreRoute'), exact:true}).click();
+      await page.getByText(await ui.t('settings.providers.models.advanced.protocol.sourceCatalog'), {exact:true}).waitFor();
+      const descriptionId = await page.getByRole('switch', {name: /Codex/}).getAttribute('aria-describedby');
+      if (!descriptionId || !(await page.locator(`[id="${descriptionId}"]`).textContent()).includes('Responses')) {
+        throw Error('Reset did not follow the catalog interface');
+      }
+      if (await button.count()) throw Error('The restored catalog interface should be a read-only label');
+      await ui.capture('catalog-restored');
+      return;
+    }
     if (ui.case.startsWith('pricing')) {
       const price = page.getByRole('region', { name: await ui.t('settings.providers.models.advanced.pricing'), exact: true });
       const input = price.getByRole('spinbutton', { name: await ui.t('settings.providers.models.priceOverride.input'), exact: true });

@@ -343,24 +343,27 @@ export function ModelAdvancedDrawer({
     } catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
     finally { setImageCapabilitySaving(false); }
   };
-  const setModelApi = async (agent: AgentKind, api: string) => {
+  const setModelApi = async (agent: AgentKind, api: string | null) => {
     if (protocolSaving || !canEditProtocol || !row?.byAgent[agent]) return;
     const config = providerViewToCustomProviderConfig(provider);
     const runtime = config.runtimes[agent];
     const model = runtime?.models.find(m => m.id === row.byAgent[agent]!.id);
     if (!runtime || !model) return;
     const choice = row.byAgent[agent]?.availableInterfaces?.find(item => item.profileId === api);
-    if (api === 'auto' || choice) {
-      model.interfaceId = api;
+    if (api === null || api === 'auto' || choice) {
+      // Reset removes the whole model-level selection; automatic/interface choices
+      // save intent without freezing today's resolved protocol, address or limits.
+      if (api === null) delete model.interfaceId;
+      else model.interfaceId = api;
       delete model.api;
       delete model.piApi;
       delete model.route;
     } else {
+      const wire = providerWireProtocolForApi(api);
+      if (!wire) return;
       delete model.interfaceId;
       model.api = api as PiModelApi;
       if (agent === 'pi') model.piApi = api as PiModelApi;
-      const wire = providerWireProtocolForApi(api);
-      if (!wire) return;
       // Pi gets the selected API from api/piApi. A same-endpoint generated route
       // would look explicit after refresh and block a later Messages /v1 fix.
       // Keep existing routes and endpoints that change for the selected API.
@@ -838,20 +841,27 @@ export function ModelAdvancedDrawer({
                                         protocolLabel(protocol.outbound) ?? protocol.outbound ?? '',
                                       );
                                       return (
-                                        <Select data-settings-search-action="Choose the wire protocol this engine uses for the model"
-                                          label={`${AGENT_LABEL[agent]} · ${t('settings.providers.custom.fields.wireProtocol')}`}
-                                          size="compact"
-                                          width="sm"
-                                          className="mt-1"
-                                          value={field.value}
-                                          options={field.options}
-                                          disabled={protocolSaving}
-                                          // Automatic keeps showing the protocol it resolves to.
-                                          triggerAdornment={field.value === 'auto' ? (
-                                            <span className="shrink-0 text-[var(--text-tertiary)]">{protocolLabel(protocol.outbound)}</span>
-                                          ) : undefined}
-                                          onValueChange={value => void setModelApi(agent, value)}
-                                        />
+                                        <span className="mt-1 flex flex-wrap items-center gap-2">
+                                          <Select data-settings-search-action="Choose the wire protocol this engine uses for the model"
+                                            label={`${AGENT_LABEL[agent]} · ${t('settings.providers.custom.fields.wireProtocol')}`}
+                                            size="compact"
+                                            width="sm"
+                                            value={field.value}
+                                            options={field.options}
+                                            disabled={protocolSaving}
+                                            // Automatic keeps showing the protocol it resolves to.
+                                            triggerAdornment={field.value === 'auto' ? (
+                                              <span className="shrink-0 text-[var(--text-tertiary)]">{protocolLabel(protocol.outbound)}</span>
+                                            ) : undefined}
+                                            onValueChange={value => void setModelApi(agent, value)}
+                                          />
+                                          <Button data-settings-search-action="Restore the model protocol and route defaults"
+                                            variant="secondary" size="md"
+                                            disabled={protocolSaving || !protocol.customized}
+                                            onClick={() => void setModelApi(agent, null)}>
+                                            {t('settings.providers.models.advanced.protocol.restoreRoute')}
+                                          </Button>
+                                        </span>
                                       );
                                     })()
                                   ) : protocolLabel(protocol.outbound)}
@@ -860,6 +870,18 @@ export function ModelAdvancedDrawer({
                                     <span className="hidden min-[400px]:inline"> · </span>
                                     <span className="block min-[400px]:inline"><ModelCompatibilityNotice /></span>
                                   </>}
+                                  {canEditProtocol && supported && protocol.outbound && (
+                                    <span className="mt-1 block text-[var(--text-secondary)]">
+                                      <span>{t(protocol.source === 'model'
+                                        ? 'settings.providers.models.advanced.protocol.sourceModel'
+                                        : protocol.source === 'catalog'
+                                          ? 'settings.providers.models.advanced.protocol.sourceCatalog'
+                                          : 'settings.providers.models.advanced.protocol.sourceConnection')}</span>
+                                      {protocol.source !== 'connection' && protocol.connection && protocol.connection !== protocol.outbound && <>
+                                        {' · '}{t('settings.providers.models.advanced.protocol.connectionDefault', { protocol: protocolLabel(protocol.connection) })}
+                                      </>}
+                                    </span>
+                                  )}
                                 </p>
                               )}
                             </div>
