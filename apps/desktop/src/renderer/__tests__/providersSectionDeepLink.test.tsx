@@ -388,21 +388,31 @@ describe('ProvidersSection — 深链定位', () => {
   it.each(['subscriptionAccount', 'openAiAccount'] as const)(
     'shows usage windows without a details disclosure across %s changes',
     async (identityField) => {
-      const account = { title: 'ChatGPT', windows: [{ key: 'weekly', title: 'Weekly', window: { utilization: 20 }, detail: 'Weekly usage details' }] };
-      vi.mocked(useProviderSubscriptionCard).mockReturnValue(account);
+      // Each row owns its quota, including the CLI-origin account. A successful empty pool
+      // must never display an unrelated provider-wide card.
+      vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
+        providerId: 'openai', configured: true, strategy: 'least', accounts: [{
+          id: 'default', directory: 'fixture', status: 'ready', paused: false,
+          limit: 1, weight: 1, running: 0, identity: 'first@example.test',
+          usage: { codex: { credits: null, buckets: { codex: {
+            limitId: 'codex', limitName: null, updatedAt: Date.now(), primary: null,
+            secondary: { usedPercent: 20, windowMinutes: 10080, resetsAt: null },
+          } } } },
+        }],
+      });
       const provider = makeProvider('openai', {
         connected: true,
         [identityField]: { source: 'oauth', identity: 'first@example.test' },
       });
       providersState.providers = [provider];
       const view = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
-      const usage = await screen.findByTestId('provider-usage-module');
-      expect(within(usage).getByRole('progressbar', { name: 'Weekly' })).toBeTruthy();
+      const usage = await screen.findByTestId('subscription-account-usage');
+      expect(within(usage).getByRole('progressbar', { name: 'quotaCard.weeklyLabel' })).toBeTruthy();
       expect(within(usage).queryByText('Weekly usage details')).toBeNull();
       expect(screen.queryByRole('button', { name: 'quotaCard.usageTitle' })).toBeNull();
       providersState.providers = [{ ...provider, [identityField]: { source: 'oauth', identity: 'second@example.test' } }];
       view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
-      expect(within(screen.getByTestId('provider-usage-module')).getByRole('progressbar', { name: 'Weekly' })).toBeTruthy();
+      expect(within(screen.getByTestId('subscription-account-usage')).getByRole('progressbar', { name: 'quotaCard.weeklyLabel' })).toBeTruthy();
     },
   );
 
