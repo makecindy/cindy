@@ -23,6 +23,7 @@ import type { TFunction } from 'i18next';
 
 import { registerTabKind } from '../../registry';
 import type { TabKindPlugin } from '../../types';
+import { basename, fileDirectoryLabel } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
 
 const FileBrowserBody = lazy(() =>
   import('./FileBrowserBody').then((module) => ({ default: module.FileBrowserBody })),
@@ -60,20 +61,27 @@ const DEFAULT_STATE: FileBrowserState = {
   selectedFilePath: null,
 };
 
-/** TabPill 上的标题:有选中文件 → 显示 basename;否则 → 走 i18n "文件浏览器"。 */
-function FileBrowserTabPillTitle({
+/** Show enough parent context to distinguish namesakes without unbounded tab widths. */
+export function FileBrowserTabPillTitle({
   state,
+  peerStates,
   t,
 }: {
   state: FileBrowserState;
+  peerStates?: readonly FileBrowserState[];
   t: TFunction;
 }) {
   if (!state.selectedFilePath) {
     return <>{t('rightSidebar.tabs.kinds.fileBrowser')}</>;
   }
-  const slash = state.selectedFilePath.lastIndexOf('/');
-  const basename = slash < 0 ? state.selectedFilePath : state.selectedFilePath.slice(slash + 1);
-  return <>{basename}</>;
+  const path = state.selectedFilePath;
+  const peers = peerStates?.flatMap(peer => peer.selectedFilePath ? [peer.selectedFilePath] : []);
+  return (
+    <span className="inline-flex max-w-full items-baseline gap-1.5 align-bottom" title={path}>
+      <span className="max-w-[120px] shrink-0 truncate">{basename(path)}</span>
+      <span className="min-w-0 truncate text-[var(--text-secondary)]" data-file-tab-directory>{fileDirectoryLabel(path, peers)}</span>
+    </span>
+  );
 }
 
 /** TabPill 上的图标 —— 固定 FolderTree(无须随 selection 切换)。 */

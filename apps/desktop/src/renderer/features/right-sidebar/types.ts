@@ -118,6 +118,8 @@ export interface TabKindBodyProps<TState = unknown> {
 
 export interface TabPillRenderProps<TState = unknown> {
   state: TState;
+  /** Hydrated states of this kind in the same strip; presentation only, never persisted. */
+  peerStates?: readonly TState[];
   sessionId: string | null;
   active: boolean;
   t: TFunction;

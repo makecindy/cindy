@@ -16973,6 +16973,7 @@
         "revealFolder": "Mostrar na pasta"
       },
       "fileBody": {
+        "templateRules": "Regras do projeto · Modelo Cindy",
         "drawioLoading": "A carregar pré-visualização do draw.io…",
         "pdfLoading": "A carregar pré-visualização do PDF…",
         "selectFile": "Selecione um ficheiro para pré-visualizar",

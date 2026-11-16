@@ -16735,6 +16735,7 @@
         "revealFolder": "폴더에서 보기"
       },
       "fileBody": {
+        "templateRules": "프로젝트 규칙 · Cindy 템플릿",
         "drawioLoading": "draw.io 미리보기를 불러오는 중…",
         "pdfLoading": "PDF 미리보기를 불러오는 중…",
         "selectFile": "미리 볼 파일을 선택하세요",

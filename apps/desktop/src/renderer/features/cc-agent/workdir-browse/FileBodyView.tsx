@@ -86,6 +86,7 @@ import { setActiveFileBodyHandle } from './lib/activeFileBodyHandle';
 import { loadFileScroll, saveFileScroll } from './lib/fileScrollStore';
 import { basename, formatBytes, formatMtime } from './lib/fileMeta';
 import { OpenInSystemActions } from './OpenInSystemActions';
+import { FilePathHeader } from './FilePathHeader';
 import { isDrawioPath } from './lib/drawioExt';
 import { isImagePath } from './lib/imageExt';
 import { isPdfPath } from './lib/pdfExt';
@@ -191,7 +192,25 @@ export interface FileBodyHandle {
   save(): Promise<boolean>;
 }
 
-export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(function FileBodyView(
+export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(function FileBodyView(props, ref) {
+  return (
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-col">
+      {props.relPath && (
+        <FilePathHeader
+          workdir={props.workdir}
+          relPath={props.relPath}
+          remoteHostId={props.remoteHostId}
+          deviceId={props.deviceId}
+        />
+      )}
+      <div className="min-h-0 min-w-0 flex-1" data-file-body-content>
+        <FileBodyContent {...props} ref={ref} />
+      </div>
+    </div>
+  );
+});
+
+const FileBodyContent = forwardRef<FileBodyHandle, FileBodyViewProps>(function FileBodyContent(
   {
     workdir,
     remoteHostId = null,
@@ -1394,7 +1413,7 @@ function CachedFileBody({
   }
   if (text !== null && /\.svg$/i.test(stat.relPath) && !isDrawioPath(stat.relPath)) {
     return (
-      <FileBodyView
+      <FileBodyContent
         workdir={cacheDir}
         relPath={cacheBase}
         allowEdit={false}

@@ -16735,6 +16735,7 @@
         "revealFolder": "フォルダーで表示"
       },
       "fileBody": {
+        "templateRules": "プロジェクトのルール · Cindy テンプレート",
         "drawioLoading": "draw.io プレビューを読み込み中…",
         "pdfLoading": "PDF プレビューを読み込み中…",
         "selectFile": "ファイルを選択してプレビュー",

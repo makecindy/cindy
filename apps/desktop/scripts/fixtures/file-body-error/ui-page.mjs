@@ -27,7 +27,7 @@ export default {
   },
   async check(page, ui) {
     const viewport = page.locator('[data-error-viewport]');
-    const error = viewport.locator(':scope > div');
+    const error = viewport.locator('[data-file-body-content] > div');
     const geometry = await error.evaluate(el => {
       const range = document.createRange();
       range.selectNodeContents(el);
@@ -52,7 +52,7 @@ export default {
       await error.hover();
       await page.mouse.wheel(0, 10000);
       await page.waitForFunction(() => {
-        const el = document.querySelector('[data-error-viewport] > div');
+        const el = document.querySelector('[data-error-viewport] [data-file-body-content] > div');
         return el.scrollTop >= el.scrollHeight - el.clientHeight - 1;
       });
       assert.equal(await error.evaluate(el => {

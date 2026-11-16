@@ -35,7 +35,7 @@ import { pickFileIcon } from './lib/fileIcon';
 import { useOpenTabs } from './hooks/useOpenTabs';
 import { getTabs as storeGetTabs } from './lib/openTabsStore';
 import { clearFileScroll } from './lib/fileScrollStore';
-import { toOsAbsolutePath } from './lib/fileMeta';
+import { basename, fileDirectoryLabel, toOsAbsolutePath } from './lib/fileMeta';
 
 const log = createLogger('cc-agent.workdir-browse.file-tabs-bar');
 
@@ -442,7 +442,8 @@ export function FileTabsBar({
         onWheel={handleWheel}
       >
         {tabs.map((relPath, idx) => {
-        const name = relPath.split('/').pop() ?? relPath;
+        const name = basename(relPath);
+        const directory = fileDirectoryLabel(relPath, tabs);
         const Icon = pickFileIcon(name);
         const isActive = relPath === activePath;
         const isDragging = dragSrcIdx === idx;
@@ -457,6 +458,7 @@ export function FileTabsBar({
                 else tabRefs.current.delete(relPath);
               }}
               style={WINDOW_NO_DRAG_STYLE}
+              title={relPath}
               onMouseDown={(e) => handleTabMouseDown(e, idx)}
               onClick={() => handleTabClick(relPath)}
               onContextMenu={(e) => {
@@ -499,11 +501,12 @@ export function FileTabsBar({
                   isActive ? 'text-foreground' : 'text-[var(--cmd-palette-item-meta)]',
                 )}
               />
-              <span className="max-w-[180px] truncate">{name}</span>
+              <span className="max-w-[120px] truncate">{name}</span>
+              <span className="max-w-[160px] truncate text-[var(--text-secondary)]">{directory}</span>
               <button
                 type="button"
                 onClick={(e) => handleClose(e, relPath)}
-                aria-label={t('ccAgent.workdirBrowse.tabClose', { name })}
+                aria-label={t('ccAgent.workdirBrowse.tabClose', { name: relPath })}
                 className={cn(
                   'ml-1 inline-flex size-4 shrink-0 items-center justify-center rounded',
                   'text-[var(--cmd-palette-item-meta)]',
@@ -678,7 +681,7 @@ export function FileTabsBar({
       {dragGhost &&
         createPortal(
           (() => {
-            const name = dragGhost.relPath.split('/').pop() ?? dragGhost.relPath;
+            const name = basename(dragGhost.relPath);
             const Icon = pickFileIcon(name);
             return (
               <div
@@ -698,7 +701,8 @@ export function FileTabsBar({
                   strokeWidth={1.75}
                   className="shrink-0 text-foreground"
                 />
-                <span className="max-w-[180px] truncate">{name}</span>
+                <span className="max-w-[120px] truncate">{name}</span>
+                <span className="max-w-[160px] truncate text-[var(--text-secondary)]">{fileDirectoryLabel(dragGhost.relPath, tabs)}</span>
               </div>
             );
           })(),

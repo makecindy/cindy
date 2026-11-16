@@ -16735,6 +16735,7 @@
         "revealFolder": "示所在卷匣"
       },
       "fileBody": {
+        "templateRules": "案規 · Cindy 範本",
         "drawioLoading": "方載 draw.io 先覽…",
         "pdfLoading": "方載 PDF 先覽…",
         "selectFile": "擇一卷以先覽",

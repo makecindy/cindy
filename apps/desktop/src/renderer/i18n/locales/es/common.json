@@ -16973,6 +16973,7 @@
         "revealFolder": "Mostrar en carpeta"
       },
       "fileBody": {
+        "templateRules": "Reglas del proyecto · Plantilla de Cindy",
         "drawioLoading": "Cargando vista previa de draw.io…",
         "pdfLoading": "Cargando vista previa del PDF…",
         "selectFile": "Selecciona un archivo para obtener una vista previa",

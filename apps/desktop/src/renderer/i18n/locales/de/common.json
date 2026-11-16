@@ -16809,6 +16809,7 @@
         "revealFolder": "Im Ordner anzeigen"
       },
       "fileBody": {
+        "templateRules": "Projektregeln · Cindy-Vorlage",
         "drawioLoading": "draw.io-Vorschau wird geladen…",
         "pdfLoading": "PDF-Vorschau wird geladen…",
         "selectFile": "Wähle eine Datei für die Vorschau aus",

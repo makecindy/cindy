@@ -49,3 +49,47 @@ export function toOsAbsolutePath(workdir: string, relPath: string): string {
   const sep = workdir.endsWith('/') ? '' : '/';
   return `${workdir}${sep}${relPath}`;
 }
+
+/** Display-only logical paths: the file may belong to Windows, SSH or another device. */
+export function fileDirectoryLabel(relPath: string, peers?: readonly string[]): string {
+  const directory = dirname(relPath).replace(/\\/g, '/') || (relPath.startsWith('/') ? '/' : '.');
+  if (!peers) return directory;
+  const otherDirectories = peers
+    .filter((peer) => peer !== relPath && basename(peer) === basename(relPath))
+    .map((peer) => dirname(peer).replace(/\\/g, '/') || '.');
+  const parts = directory.split('/');
+  for (let depth = 1; depth < parts.length; depth++) {
+    const suffix = parts.slice(-depth).join('/');
+    if (!otherDirectories.some((other) => other === suffix || other.endsWith(`/${suffix}`))) {
+      return suffix;
+    }
+  }
+  return directory;
+}
+
+export function fileDisplayPath(workdir: string, relPath: string): string {
+  if (/^(?:[A-Za-z]:[\\/]|[\\/])/.test(relPath)) return relPath;
+  const separator = workdir.includes('\\') ? '\\' : '/';
+  return `${workdir.replace(/[\\/]+$/, '')}${separator}${relPath.replace(/[\\/]/g, separator)}`;
+}
+
+export function isTemplateRulePath(relPath: string): boolean {
+  return relPath === 'AGENTS.md' || relPath === 'CLAUDE.md';
+}
+
+/** Provenance, not filename/content guessing or a claim about active harness instructions. */
+export function hasCindyTemplateRule(relPath: string, recordContent: string): boolean {
+  if (!isTemplateRulePath(relPath)) return false;
+  try {
+    const record: unknown = JSON.parse(recordContent);
+    if (!record || typeof record !== 'object') return false;
+    const { version, files } = record as { version?: unknown; files?: unknown };
+    return typeof version === 'number' && Number.isInteger(version) && version > 0
+      && !!files && typeof files === 'object' && !Array.isArray(files)
+      && Object.hasOwn(files, relPath)
+      && typeof (files as Record<string, unknown>)[relPath] === 'string'
+      && /^[a-f0-9]{64}$/.test((files as Record<string, string>)[relPath]);
+  } catch {
+    return false;
+  }
+}
