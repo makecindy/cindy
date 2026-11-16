@@ -264,6 +264,34 @@ interface DirectoryRefresh {
 /** 全局 stores 表。key 由 storeKey() 算,同 (workdir, options) 共享同一份。 */
 const stores = new Map<string, FileTreeStore>();
 
+/** Share the currently browsed aliases with content-cache invalidation. The
+ * existing stores own their lifetime and endpoint scope; no disk scan or
+ * separate long-lived alias registry is needed. */
+export function fileTreeEventPaths(
+  workdir: string,
+  relPath: string,
+  remoteHostId: string | null,
+  deviceId: string | null,
+): Set<string> {
+  const paths = new Set([relPath]);
+  for (const store of stores.values()) {
+    if (store.workdir !== workdir || store.remoteHostId !== remoteHostId || store.deviceId !== deviceId) continue;
+    for (const entries of store.snapshot.entries.values()) {
+      for (const entry of entries) {
+        const alias = directoryAliasEventPath(entry, relPath);
+        if (alias !== null) paths.add(alias);
+      }
+    }
+  }
+  return paths;
+}
+
+function directoryAliasEventPath(entry: DirEntry, eventRelPath: string): string | null {
+  if (entry.type !== 'directory' || entry.symlinkTarget === undefined) return null;
+  const prefix = entry.symlinkTarget === '' ? '' : `${entry.symlinkTarget}/`;
+  return eventRelPath.startsWith(prefix) ? `${entry.relPath}/${eventRelPath.slice(prefix.length)}` : null;
+}
+
 function storeKey(opts: Required<UseFileTreeOptions>): string {
   const remote = opts.remoteHostId ? `::remote=${opts.remoteHostId}` : '';
   const device = opts.deviceId ? `::device=${opts.deviceId}` : '';
@@ -680,12 +708,9 @@ function queueEventRefresh(store: FileTreeStore, eventRelPath: string): void {
       for (const entry of entries) {
         if (entry.type !== 'directory' || entry.symlinkTarget === undefined) continue;
         const target = entry.symlinkTarget;
-        const prefix = target === '' ? '' : `${target}/`;
         for (const eventRelPath of events) {
-          if (eventRelPath.startsWith(prefix)) {
-            const suffix = eventRelPath.slice(prefix.length);
-            parents.add(parentPath(`${entry.relPath}/${suffix}`));
-          }
+          const alias = directoryAliasEventPath(entry, eventRelPath);
+          if (alias !== null) parents.add(parentPath(alias));
           // A removed target/ancestor hides the link; a retargeted link also needs
           // its cached children refreshed even when its logical name stays put.
           if (eventRelPath === target || target.startsWith(`${eventRelPath}/`)

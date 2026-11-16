@@ -3,7 +3,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-type FileTreeEvent = { workdir: string; relPath: string };
+type FileTreeEvent = { workdir: string; relPath: string; type?: string };
 type Deferred<T> = {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => {
     fileBrowserApiFor: vi.fn(),
     isDeviceTooOldError: vi.fn(() => false),
     listDir: vi.fn(),
+    readFile: vi.fn(),
     loadExpandedSet: vi.fn(
       (_workdir: string, _opts?: { showIgnoredDirs?: boolean }) => new Set<string>(),
     ),
@@ -63,6 +64,7 @@ vi.mock('../../lib/expandedStore', () => ({
 }));
 
 import { useFileTree, type DirEntry } from '../useFileTree';
+import { useFileContent } from '../useFileContent';
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
@@ -76,7 +78,7 @@ describe('useFileTree refresh scheduling', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.eventCallbacks.length = 0;
-    mocks.fileBrowserApiFor.mockReturnValue({ listDir: mocks.listDir });
+    mocks.fileBrowserApiFor.mockReturnValue({ listDir: mocks.listDir, readFile: mocks.readFile });
     // clearAllMocks 不重置实现：用例自设的 loadExpandedSet 行为要在每个用例前复位。
     mocks.loadExpandedSet.mockImplementation(() => new Set<string>());
   });
@@ -278,6 +280,42 @@ describe('useFileTree refresh scheduling', () => {
     } finally {
       view.unmount();
       vi.useRealTimers();
+    }
+  });
+
+  // Same #10863 event chain: tree refresh alone cannot invalidate preview LRU.
+  // Unit through both real hooks; target-path changes must refresh the current
+  // alias and evict a previously opened alias while another file is selected.
+  it('refreshes alias previews and invalidates alias content cached while another file is open', async () => {
+    const workdir = '/alias-content-events';
+    mocks.listDir.mockResolvedValue([
+      { name: 'alias', relPath: 'alias', type: 'directory', size: 0, mtimeMs: 1, symlinkTarget: 'documents' },
+    ]);
+    let text = 'initial';
+    mocks.readFile.mockImplementation(async ({ relPath }: { relPath: string }) => ({
+      ok: true, data: { relPath, content: text, size: text.length, mtimeMs: 1, truncated: false },
+    }));
+    const view = renderHook(({ file }) => {
+      useFileTree({ workdir });
+      return useFileContent(workdir, file);
+    }, { initialProps: { file: 'alias/note.md' } });
+    try {
+      await waitFor(() => expect(view.result.current.content).toMatchObject({ kind: 'text', content: 'initial' }));
+      text = 'live';
+      await act(async () => {
+        for (const cb of [...mocks.eventCallbacks]) cb({ workdir, relPath: 'documents/note.md', type: 'change' });
+      });
+      expect(view.result.current.content).toMatchObject({ kind: 'text', content: 'live', relPath: 'alias/note.md' });
+      view.rerender({ file: 'other.md' });
+      await waitFor(() => expect(view.result.current.content).toMatchObject({ relPath: 'other.md' }));
+      text = 'while-away';
+      await act(async () => {
+        for (const cb of [...mocks.eventCallbacks]) cb({ workdir, relPath: 'documents/note.md', type: 'change' });
+      });
+      view.rerender({ file: 'alias/note.md' });
+      await waitFor(() => expect(view.result.current.content).toMatchObject({ content: 'while-away' }));
+    } finally {
+      view.unmount();
     }
   });
 });

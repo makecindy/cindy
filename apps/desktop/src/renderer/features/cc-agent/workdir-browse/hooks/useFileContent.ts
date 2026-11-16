@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createLogger } from '@/lib/logger';
 import { observeFileTransferProgress } from '@/lib/fileTransferProgress';
 import { fileBrowserApiFor, onFileTreeEventFor } from '@/lib/fileBrowserTransport';
+import { fileTreeEventPaths } from './useFileTree';
 import {
   getCachedFileContent,
   invalidateCachedFile,
@@ -369,12 +370,13 @@ export function useFileContent(
     // 逻辑与本地完全一致。
     const off = onFileTreeEventFor(deviceId, (event) => {
       if (event.workdir !== workdir) return;
+      const changedPaths = fileTreeEventPaths(workdir, event.relPath, remoteHostId, deviceId);
       const contentMayHaveChanged = event.type === 'add' || event.type === 'change';
       if (contentMayHaveChanged || event.type === 'unlink') {
-        invalidateCachedFile(contentCacheScope, event.relPath);
+        for (const changedPath of changedPaths) invalidateCachedFile(contentCacheScope, changedPath);
       }
-      if (contentMayHaveChanged && event.relPath === relPathRef.current) {
-        const targetRelPath = event.relPath;
+      if (contentMayHaveChanged && relPathRef.current && changedPaths.has(relPathRef.current)) {
+        const targetRelPath = relPathRef.current;
         void (async () => {
           try {
             const result = await fileBrowserApiFor(deviceId).readFile({

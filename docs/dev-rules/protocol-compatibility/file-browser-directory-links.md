@@ -6,7 +6,8 @@
 
 目录链接条目追加可选 `symlinkTarget?: string`：目标相对真实工作目录的 POSIX 路径，
 根目录为 `''`，不传宿主绝对路径。Desktop 用它把 watcher 的目标路径事件映射回已缓存的
-链接目录，合并后只刷新受影响目录；访问权限仍由每次文件操作的 realpath 检查决定。
+链接目录，合并后只刷新受影响目录，并让正文预览及其缓存失效共用这些别名映射；
+映射随现有树缓存回收。访问权限仍由每次文件操作的 realpath 检查决定。
 Mobile 现有 watcher 对工作目录事件去抖后刷新当前目录，无需消费此字段。
 
 本地 IPC、SSH file-service 和 `file-browser:remote-op` 透传同一条目。旧控制端忽略
