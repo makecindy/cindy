@@ -258,7 +258,7 @@ test('a codex-home that is a link to the system login directory keeps the system
   const systemAuth = path.join(systemDir, 'auth.json');
   fs.writeFileSync(systemAuth, JSON.stringify({ tokens: { access_token: 'system-token', account_id: 'fixture-workspace' } }), { mode: 0o600 });
   fs.rmSync(p.codexHome, { recursive: true, force: true });
-  fs.symlinkSync(systemDir, p.codexHome, 'dir');
+  fs.symlinkSync(systemDir, p.codexHome, process.platform === 'win32' ? 'junction' : 'dir');
   const before = { bytes: fs.readFileSync(systemAuth, 'utf8'), stat: fs.statSync(systemAuth) };
   const result = await invalidateHostCodexLogin({ codexHome: p.codexHome, systemAuthPath: systemAuth, reason: 'token_revoked',
     credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(systemAuth)), isCodexAccountProvider: () => false });
@@ -288,7 +288,7 @@ test('without a system login path, a codex-home linked to ~/.codex keeps ~/.code
   const systemAuth = path.join(systemDir, 'auth.json');
   fs.writeFileSync(systemAuth, JSON.stringify({ tokens: { access_token: 'system-token', account_id: 'fixture-workspace' } }), { mode: 0o600 });
   fs.rmSync(p.codexHome, { recursive: true, force: true });
-  fs.symlinkSync(systemDir, p.codexHome, 'dir');
+  fs.symlinkSync(systemDir, p.codexHome, process.platform === 'win32' ? 'junction' : 'dir');
   const before = fs.readFileSync(systemAuth, 'utf8');
   assert.equal(await invalidateHostCodexLogin({ codexHome: p.codexHome, systemAuthPath: null, reason: 'token_revoked',
     isCodexAccountProvider: () => false }), 'invalidated');
