@@ -71,13 +71,33 @@ test('memory retained by an old task cannot reopen storage across an account bou
  * cindy_memory on the Host, called the way an Agent calls it: the provider main.ts registers
  * (createHostMemoryMcpProviders), over MCP, with the review agent attached as main.ts attaches the
  * agent graph. The attached agent counts its one-shot calls: in runReview it is the only way to a
- * model once no auxiliary chain is injected.
+ * model once no auxiliary chain is injected. The owner database is open and current, as in main.ts,
+ * with the calling task 'task-memory' in it: every memory call checks its caller against it.
  */
 async function hostMemoryFixture(t, ownerId) {
+  // The database lives in the fixture's profile: close it before the profile is removed.
+  t = lifoCleanup(t);
   // Real path: a teammate project is recognised from its absolute path, which macOS tmp links hide.
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'host-memory-review-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   configureHostOwner({ userDataDir: root, ownerId });
+  t.after(() => configureHostOwner({ userDataDir: root, ownerId: null }));
+  // The development build refuses to migrate what it takes for the official shared profile
+  // (XDT_OFFICIAL_SHARED_PROFILE=1 inside a Cindy task); this is a fixture profile.
+  const sharedProfile = process.env.XDT_OFFICIAL_SHARED_PROFILE;
+  delete process.env.XDT_OFFICIAL_SHARED_PROFILE;
+  t.after(() => { if (sharedProfile !== undefined) process.env.XDT_OFFICIAL_SHARED_PROFILE = sharedProfile; });
+  configureAppDataDir(path.join(root, 'app-data'));
+  const layout = hostRuntimeLayout();
+  const opened = await openOwnerDatabase({ userDataDir: root, ownerId, isPackaged: false,
+    drizzleDir: layout.drizzleDir, sqliteVecExtPath: layout.sqliteVecPath });
+  const database = createDbClientForHandle({ db: opened.db, drizzle: opened.drizzle, dispose: async () => opened.db.close() });
+  setCurrentDbClient(database, ownerId);
+  t.after(async () => { clearCurrentDbClient(); await database.dispose(); });
+  opened.db.exec(`INSERT INTO sessions(id,source,status,created_at,updated_at) VALUES ('task-memory','desktop','active',1,1);`);
+
   const manager = createHostMemoryManager({ userDataDir: root, ownerId });
+  t.after(() => manager.dispose());
   const oneShots = [];
   attachAgentsToMakerMemory(manager, { 'claude-code': { oneShot: async prompt => { oneShots.push(prompt); return 'merge nothing'; } } });
   const helperDecisions = [];
@@ -85,22 +105,15 @@ async function hostMemoryFixture(t, ownerId) {
     readsAccountHistory: async sessionId => { helperDecisions.push(sessionId); return false; },
     deviceId: () => 'host-device',
   }).find(p => p.name === 'cindy_memory');
-  const clients = [];
-  t.after(async () => {
-    for (const close of clients) await close();
-    manager.dispose();
-    configureHostOwner({ userDataDir: root, ownerId: null });
-    fs.rmSync(root, { recursive: true, force: true });
-  });
   const connect = async (workingDir, sessionId = 'task-memory') => {
     const { instance } = provider.toClaudeSdkConfig({ sessionId, agentKind: 'claude-code', workingDir });
     const client = new Client({ name: 'host-memory-test', version: '1' });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await Promise.all([client.connect(a), instance.connect(b)]);
-    clients.push(async () => { await client.close(); await instance.close(); });
+    t.after(async () => { await client.close(); await instance.close(); });
     return (name, args = {}) => client.callTool({ name: 'call_tool', arguments: { name, args } });
   };
-  return { root, oneShots, connect, helperDecisions };
+  return { root, db: opened.db, oneShots, connect, helperDecisions };
 }
 
 const NOTE = { type: 'project', name: 'release-notes', title: 'Release notes', description: 'Where the release notes live', body: 'docs/release.md' };
@@ -143,24 +156,8 @@ test('a memory written from a teammate project lands in the project folder, as o
 // Minimal failing input: one stored message, then session_search from a task of the same account.
 // Tier: unit, real migrated owner database in a temp profile, in-process MCP.
 test('session_search on the Host finds task history, with the desktop checks on the caller', async t => {
-  // The database lives in the fixture's profile: close it before the profile is removed.
-  t = lifoCleanup(t);
-  const ownerId = 'memory-search-owner';
-  const f = await hostMemoryFixture(t, ownerId);
-  // The development build refuses to migrate what it takes for the official shared profile
-  // (XDT_OFFICIAL_SHARED_PROFILE=1 inside a Cindy task); this is a fixture profile.
-  const sharedProfile = process.env.XDT_OFFICIAL_SHARED_PROFILE;
-  delete process.env.XDT_OFFICIAL_SHARED_PROFILE;
-  t.after(() => { if (sharedProfile !== undefined) process.env.XDT_OFFICIAL_SHARED_PROFILE = sharedProfile; });
-  configureAppDataDir(path.join(f.root, 'app-data'));
-  const layout = hostRuntimeLayout();
-  const opened = await openOwnerDatabase({ userDataDir: f.root, ownerId, isPackaged: false,
-    drizzleDir: layout.drizzleDir, sqliteVecExtPath: layout.sqliteVecPath });
-  const database = createDbClientForHandle({ db: opened.db, drizzle: opened.drizzle, dispose: async () => opened.db.close() });
-  setCurrentDbClient(database, ownerId);
-  t.after(async () => { clearCurrentDbClient(); await database.dispose(); });
-  opened.db.exec(`INSERT INTO sessions(id,source,status,created_at,updated_at) VALUES
-      ('task-memory','desktop','active',1,1),('task-earlier','desktop','active',1,1);
+  const f = await hostMemoryFixture(t, 'memory-search-owner');
+  f.db.exec(`INSERT INTO sessions(id,source,status,created_at,updated_at) VALUES ('task-earlier','desktop','active',1,1);
     INSERT INTO messages(id,client_id,session_id,role,content,created_at)
       VALUES ('m-earlier','c-earlier','task-earlier','user','"where is the release checklist"',1);`);
   const workdir = path.join(f.root, 'project');
@@ -177,4 +174,30 @@ test('session_search on the Host finds task history, with the desktop checks on 
   const stranger = await (await f.connect(workdir, 'task-elsewhere'))('session_search', { query: 'checklist' });
   assert.equal(stranger.isError, true);
   assert.match(stranger.content[0].text, /unavailable for this task/);
+});
+
+// The desktop wraps every cindy_memory call in withAccountDataAccess (mcp-providers.ts): the calling
+// task must be in the current database. The Host bound nothing there, so after an account change a
+// task of the previous account still read and wrote memories, now the new account's: only
+// session_search checked its caller. Gap: the tests above call from a task of the current database.
+// Minimal failing input: memory_write from a task id the current database does not have, and from a
+// task whose database is no longer current. Tier: unit, real migrated owner database, in-process MCP.
+test('a memory call from a task outside the current account is refused, as on the desktop', async t => {
+  const f = await hostMemoryFixture(t, 'memory-access-owner');
+  const workdir = path.join(f.root, 'project');
+  fs.mkdirSync(workdir);
+  const refused = { isError: true, content: [{ type: 'text', text: JSON.stringify({
+    ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE', message: 'Account data is unavailable for this task.' }) }] };
+
+  const previousAccountTask = await f.connect(workdir, 'task-previous-account');
+  assert.deepEqual(await previousAccountTask('memory_write', NOTE), refused);
+  assert.deepEqual(await previousAccountTask('memory_search', { query: 'release' }), refused);
+
+  // The account's database is closed for an account change while its task is still running.
+  const task = await f.connect(workdir);
+  clearCurrentDbClient();
+  assert.deepEqual(await task('memory_write', NOTE), refused);
+
+  const stored = fs.readdirSync(f.root, { recursive: true }).filter(name => String(name).includes('release-notes'));
+  assert.deepEqual(stored, []);
 });

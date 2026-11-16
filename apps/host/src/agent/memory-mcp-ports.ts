@@ -13,6 +13,7 @@ import { searchSessionsWithBotScopeCore } from '../../../desktop/src/main/maker-
 import { resolveHelperSurface } from '../../../desktop/src/main/mcp-integrations/helperSurface.ts';
 import { tryGetDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.ts';
+import { getPluginHostToolCaller } from '../../../desktop/src/main/mcp-integrations/hostToolCaller.ts';
 import { explicitPorts } from './explicit-ports.ts';
 import { LOGGER } from './runtime.ts';
 
@@ -52,14 +53,37 @@ export function createHostSessionSearch(input: HostMemoryMcpPortInput): SessionS
   };
 }
 
+/**
+ * The account-data check the desktop wraps every cindy_memory call in (mcp-providers.ts:409-424,
+ * copied: that closure is inline there and pluginTaskHelperScope.test.ts reads it from the source
+ * text, so it cannot move; release table section 7). The calling task must be a task of the current
+ * database, not restricted, and the database must still be current when the call returns. Any
+ * failure reaches the Agent as the provider's CAPABILITY_NOT_AVAILABLE result
+ * (packages/lizi-mcps/src/account-data-access.ts), the same as on the desktop.
+ */
+export async function hostAccountDataAccess<T>(sessionId: string | undefined, operation: (assertCurrent: () => Promise<void>) => Promise<T>): Promise<T> {
+  const dbClient = tryGetDbClient();
+  const plugin = !sessionId ? getPluginHostToolCaller() : undefined;
+  if (!dbClient || (!sessionId && !plugin)) throw new Error('Account data caller unavailable');
+  const assertAccess = async () => {
+    plugin?.assertCurrent();
+    if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) throw new Error('Account changed');
+    if (sessionId && await resolveHelperSurface(dbClient, sessionId) === 'restricted')
+      throw new Error('Account data is unavailable for this task');
+    if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) throw new Error('Account changed');
+  };
+  await assertAccess();
+  const result = await operation(assertAccess);
+  await assertAccess();
+  return result;
+}
+
 export function hostMemoryMcpPorts(manager: MakerMemoryManager, input: HostMemoryMcpPortInput): Omit<MemoryMcpDeps, 'workdir'> {
   return explicitPorts<Omit<MemoryMcpDeps, 'workdir'>>({
     getManager: () => manager,
-    // Not bound on the Host before this change either. The desktop wraps every cindy_memory call in
-    // it (mcp-providers.ts:405-420: current database, task not restricted). session_search makes the
-    // same checks itself (above); for the other memory tools the manager fails closed across an owner
-    // change (memory-manager-ports.ts readSession). Whether that is enough is for the reviewer.
-    withAccountDataAccess: undefined,
+    // As the desktop binds it (mcp-providers.ts:684). session_search keeps its own checks inside, as
+    // the desktop's does.
+    withAccountDataAccess: hostAccountDataAccess,
     // Memories provided by enabled plugins: the Host has no plugin runtime context providers yet
     // (release table row 33).
     searchProviders: undefined,
