@@ -204,9 +204,11 @@ for (const state of ['failed', 'disabled']) {
     }
     assert.equal((await access.sync.retry()).state, state);
     assert.deepEqual(await usagePricing.getGatewayModelPricing(), {}, 'the failed account\'s prices are gone');
-    // A /models round that still succeeds before the credentials recover keeps no prices either.
+    // Until the credentials recover no /models round starts, not even for a forced read (the desktop
+    // starts one only on ok), so no price comes back either.
     env.rounds.push(PRICED);
     await env.list(listProviders, true);
+    assert.equal(env.rounds.length, 1, 'no /models round while the credentials are held');
     assert.deepEqual(await usagePricing.getGatewayModelPricing(), {});
 
     writable = true;
@@ -214,7 +216,6 @@ for (const state of ['failed', 'disabled']) {
     assert.equal((await access.sync.retry()).state, 'ok');
     assert.deepEqual(await usagePricing.getGatewayModelPricing(), {}, 'ok alone restores no price');
     // Not forced: ok made the last round stale, so this read runs the next /models round.
-    env.rounds.push(PRICED);
     await env.list(listProviders);
     assert.equal(env.rounds.length, 0, 'the read after ok ran a /models round');
     assert.deepEqual(await usagePricing.getGatewayModelPricing(), priced);

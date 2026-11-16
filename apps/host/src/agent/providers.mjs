@@ -2,6 +2,17 @@ import { modelsWithoutStalePaymentUpsell } from '../../../desktop/src/main/model
 
 const CACHE_MS = 5 * 60_000;
 
+/**
+ * The XD model list while the credentials are held, as the desktop's onStatusChange applies it
+ * (model-access/index.ts 433–441, applyGatewayModels → setXdGatewayModels): failed clears the list but
+ * keeps the last payment refusals, so a task that was refused cannot pass the route guard through the
+ * failure; disabled, unsupported and idle clear both and do not fall back to the bundled embedding list.
+ */
+const HELD_MODELS = Object.freeze({
+  failed: Object.freeze({ authoritative: false, preservePaymentRequiredRoutes: true }),
+  cleared: Object.freeze({ authoritative: false, suppressEmbeddingFallback: true }),
+});
+
 /** Refresh account facts only. The shared catalog owns provider projection.
  * @param {{ readProviders: (connected: boolean) => Promise<import('@cindy/model-providers').ProviderView[]>, fetchModels: (gateway: {endpoint: string, credential: string}) => Promise<any[]>, applyModels: (models: any[], options: {authoritative: boolean, preservePaymentRequiredRoutes?: boolean, suppressEmbeddingFallback?: boolean}) => void, readModels: () => readonly any[], markModelsUnknown?: () => void, readOwner?: () => { dataOwnerId: string | null, generation: number, pending: boolean }, applyPricedModels?: (models: any[], ownerId: string | undefined) => void, trackModelsSync?: (sync: Promise<unknown>) => void }} deps
  *
@@ -12,15 +23,18 @@ const CACHE_MS = 5 * 60_000;
  * trackGatewayModelPricingSync does, so billing waits briefly for it.
  *
  * The returned function also takes the account's credential status (`noteCredentialStatus`, fed by
- * the Host model access as the desktop's credential sync feeds model-access/index.ts onStatusChange).
+ * the Host model access as the desktop's credential sync feeds model-access/index.ts onStatusChange);
+ * while it holds them, reads apply its empty list instead of the cached one and start no round.
  */
 export function createProviderCatalog({ readProviders, fetchModels, applyModels, readModels, markModelsUnknown, readOwner, applyPricedModels, trackModelsSync }) {
   let cached = null;
   let flight = null;
   let activeIdentity = null;
   let activeKey = null;
-  // Set while the account's credentials are failed, disabled, unsupported or idle; see noteCredentialStatus.
-  let pricesHeld = false;
+  // The account's credentials, as the desktop's onStatusChange reads them (see noteCredentialStatus):
+  // null while usable; 'failed' for a temporary sync failure of the same account (it keeps its local
+  // key and its last payment refusals); 'cleared' for disabled, unsupported or idle (no model access).
+  let credentialHold = null;
   async function listProviders(options) {
     const initial = readOwner?.();
     const owner = { dataOwnerId: options.ownerId ?? null, ownerGeneration: initial?.generation ?? options.ownerGeneration ?? 0 };
@@ -57,7 +71,8 @@ export function createProviderCatalog({ readProviders, fetchModels, applyModels,
       if (activeKey !== key) throw new Error('PROVIDER_CONNECTION_CHANGED');
     };
     let error;
-    if (options.gateway && (!cached || Date.now() - cached.at >= CACHE_MS || options.force)) {
+    // No /models round while the credentials are held: the desktop starts one only on ok.
+    if (options.gateway && !credentialHold && (!cached || Date.now() - cached.at >= CACHE_MS || options.force)) {
       if (flight?.key !== key) {
         // As the desktop's runModelsSync: once a new request starts, the last list still shows but
         // no longer proves that the account lacks a model; only this round's success restores that.
@@ -65,8 +80,11 @@ export function createProviderCatalog({ readProviders, fetchModels, applyModels,
         const pending = { key, promise: null };
         pending.promise = Promise.resolve().then(() => fetchModels(options.gateway)).then(models => {
           check();
+          // A round that ends after the credentials were held proves nothing for them: it is dropped,
+          // and the round after ok replaces it.
+          if (credentialHold) return;
           cached = { at: Date.now(), models };
-          if (!pricesHeld) applyPricedModels?.(models, owner.dataOwnerId ?? undefined);
+          applyPricedModels?.(models, owner.dataOwnerId ?? undefined);
         }).finally(() => { if (flight === pending) flight = null; });
         flight = pending;
         trackModelsSync?.(pending.promise);
@@ -81,7 +99,9 @@ export function createProviderCatalog({ readProviders, fetchModels, applyModels,
       }
     }
     check();
-    if (error) {
+    if (credentialHold) {
+      applyModels([], HELD_MODELS[credentialHold]);
+    } else if (error) {
       // As the desktop's failed runModelsSync: the current list stays for display without stale
       // payment advertising, non-authoritative, with its payment refusals.
       applyModels(modelsWithoutStalePaymentUpsell(readModels()), { authoritative: false, preservePaymentRequiredRoutes: true });
@@ -95,22 +115,29 @@ export function createProviderCatalog({ readProviders, fetchModels, applyModels,
   }
   /**
    * As the desktop's credential status handler (model-access/index.ts getSync onStatusChange): failed,
-   * disabled, unsupported and idle replace the XD prices with an empty list, so a failed account's
-   * prices no longer show; ok brings them back through the next /models round. The desktop starts
-   * that round on ok (scheduleModelsSync); the Host's catalog is read on demand, so ok marks the last
-   * round stale and the next read fetches. Until then a round that succeeds keeps its models but does
-   * not feed prices, as the desktop starts no round before ok.
+   * disabled, unsupported and idle clear the XD models (HELD_MODELS) and replace the XD prices with an
+   * empty list, so a failed account's models and prices no longer show; ok brings them back through the
+   * next /models round. Until ok no round starts (the key may be dead: disabled and unsupported never
+   * come back without a new sync), and a round already in flight is dropped. The desktop starts the
+   * round on ok itself (scheduleModelsSync); the Host's catalog is read on demand, so ok marks the last
+   * round stale and the next read fetches. The desktop also clears its account tier here; the Host
+   * keeps none (it reads only the models of a /models response).
    * @param {{ state: string }} status
    */
   listProviders.noteCredentialStatus = status => {
     if (status.state === 'ok') {
-      if (!pricesHeld) return;
-      pricesHeld = false;
+      if (!credentialHold) return;
+      credentialHold = null;
       if (cached) cached = { ...cached, at: -Infinity };
-    } else if (['failed', 'disabled', 'unsupported', 'idle'].includes(status.state)) {
-      pricesHeld = true;
-      applyPricedModels?.([], undefined);
+      return;
     }
+    const hold = status.state === 'failed' ? 'failed'
+      : ['disabled', 'unsupported', 'idle'].includes(status.state) ? 'cleared' : null;
+    if (!hold) return;
+    credentialHold = hold;
+    cached = null;
+    applyModels([], HELD_MODELS[hold]);
+    applyPricedModels?.([], undefined);
   };
   return listProviders;
 }
