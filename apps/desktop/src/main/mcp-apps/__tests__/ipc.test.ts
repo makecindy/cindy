@@ -1,4 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { createPluginAppTransport } from '../pluginServer.js';
+import { callPluginAttachmentProvider } from '../pluginAttachment.js';
+import { GhostHandoffStore } from '../../cindy-brain/handoffStore.js';
+import * as blobs from '../../cindy-media/blobStore.desktop.js';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import type { SQL } from 'drizzle-orm';
 import type { McpAppsHostDeps } from '../host.js';
@@ -8,6 +15,7 @@ import path from 'node:path';
 import { configurePluginSettings } from '../../app-settings/plugins.js';
 const state = vi.hoisted(() => ({
   owner: null as object | null,
+  userData: '',
   deps: undefined as McpAppsHostDeps | undefined,
   session: {
     id: 'task',
@@ -35,6 +43,7 @@ const state = vi.hoisted(() => ({
     ((event: unknown, session: unknown, input: unknown) => Promise<unknown>) | undefined,
 }));
 vi.mock('electron', () => ({
+  app: { getPath: () => state.userData },
   ipcMain: {
     removeHandler: vi.fn(),
     handle: (_name: string, handler: typeof state.handle) => {
@@ -42,6 +51,12 @@ vi.mock('electron', () => ({
     },
   },
   shell: { openExternal: vi.fn() },
+}));
+// Native input uses explicit Host context, not roster rendering or MCP ALS.
+vi.mock('cindy-tools', () => ({ buildGhostRosterPrompt: vi.fn() }));
+vi.mock('@cindy/mcps', () => ({
+  getLiziMcpSessionContext: () => undefined,
+  resolveLiziMcpSessionContext: (context: unknown) => context,
 }));
 vi.mock('../host.js', () => ({
   appServerRevision: (config: unknown) => JSON.stringify(config),
@@ -92,6 +107,7 @@ import { readAppServer } from '../runtime.js';
 import { pagePermissionGrants, pagePermissionSessionChanged } from '../pagePermissions.js';
 import { registerMcpAppsIpc } from '../ipc.js';
 import { mountRemoteAppDocument } from '../sandboxProtocol.js';
+const { McpAppsHost: NativeHost } = await vi.importActual<typeof import('../host.js')>('../host.js');
 const record = {
   version: 1 as const,
   serverId: 'example',
@@ -163,19 +179,93 @@ beforeEach(() => {
   registerMcpAppsIpc(async () => {}, request);
 });
 describe('MCP App persistence and IPC wiring', () => {
-  // Unit: a selected local file goes through the original Host handoff, not tool JSON.
+  // Security regression #10649, unit: a trusted renderer's path is not proof
+  // that the user supplied its bytes. Reject it before any provider dispatch.
+  it.each([false, true])('rejects a renderer-supplied absolute attachment path before dispatch (with bytes: %s)', async withBytes => {
+    state.plugin = { host: { contributions: [{ id: 'parse', title: 'Parse', position: 'composer.attachment',
+      tool: 'parse', accept: { extensions: ['.txt'] } }] }, config: { id: 'plugin-source', url: '', transport: 'in-process',
+      plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    state.action.mockResolvedValue({ structuredContent: { handled: false } });
+    await expect(state.handle!({ sender: { id: 1, isDestroyed: () => false } }, null, {
+      op: 'plugin-action', instanceId: 'local__demo', id: 'parse', requestId: 'forged-path', input: {
+        attachment: { name: 'private.txt', uri: path.resolve('private.txt'), size: 5, mimeType: 'text/plain',
+          ...(withBytes ? { bytes: new Uint8Array(5) } : {}) },
+      },
+    })).rejects.toThrow('MCP_APP_INVALID_REQUEST');
+    expect(state.action).not.toHaveBeenCalled();
+  });
+  // Unit integration, #9987: real native IPC -> Host -> SDK -> attachment adapter.
+  // Old tests mocked a successful host; an unsent clipboard blob never reached
+  // the provider. Both input paths must deliver real bytes without Agent approval.
+  it.each(['disk', 'cached-paste'] as const)('directly delivers %s input through the native IPC', async kind => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'native-attachment-ipc-'));
+    state.userData = root;
+    const bytes = kind === 'disk' ? Buffer.from('selected file') :
+      Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jP1sAAAAASUVORK5CYII=', 'base64');
+    const image = kind === 'cached-paste' ? await blobs.writeBlob({ buffer: bytes, mimeType: 'image/png' }) : undefined;
+    const disk = path.join(root, 'picked.txt');
+    if (!image) await fs.writeFile(disk, bytes);
+    const handoff = new GhostHandoffStore({ root: () => path.join(root, 'handoff') });
+    const tool = { name: 'parse', description: 'Parse input', parameters: { type: 'object' as const,
+      properties: { cindy_handoff_files: { type: 'array' as const } } } };
+    const authorizeTool = vi.fn(async () => { throw new Error('must not ask Agent policy'); });
+    const delivered = vi.fn(async (args: Record<string, unknown>) => {
+      expect(JSON.stringify(args)).not.toContain(root);
+      if (image) expect(args.attachments).toEqual([image.hash]);
+      else {
+        const [file] = args.cindy_handoff_files as Array<{ ref: string }>;
+        expect(await handoff.read('local__parse', file!.ref)).toMatchObject({ bytes });
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ handled: false }) }] };
+    });
+    const deposit = vi.fn(async (buffer: Buffer) => {
+      expect(buffer).toEqual(bytes);
+      return { hash: image!.hash, cleanup: async () => {} };
+    });
+    const client = new Client({ name: 'native-input', version: '1' });
+    try {
+      await client.connect(createPluginAppTransport({ instance: 'local__parse', revision: 'one', tools: [tool],
+        ui: { resources: [], tools: { parse: { visibility: ['app'] } } }, assertCurrent() {}, readHtml: () => '',
+        call: (grant, args, signal) => callPluginAttachmentProvider({ instance: grant.instance,
+          bytes: grant.attachmentBytes!, args, handoffDeclared: true,
+        }, { signal, assertCurrent: grant.assertCurrent, assertStillValid() {}, handoff,
+          ensureReady: async () => {}, assertReady() {},
+          supportsMedia: blobs.supportedMime, deposit, call: delivered }),
+      }));
+      const config: AppServerConfig = { id: 'parse', transport: 'in-process', url: '',
+        plugin: { instance: 'local__parse', revision: 'one', assertCurrent() {} } as AppServerConfig['plugin'] };
+      state.plugin = { host: { contributions: [{ id: 'parse', title: 'Parse', position: 'composer.attachment', tool: 'parse',
+        accept: { extensions: ['.txt', '.png'] } }] }, config };
+      const host = new NativeHost({ owner: () => state.owner ?? undefined, config: () => config,
+        connection: () => ({ tools: async () => (await client.listTools()).tools, getClient: async () => client }) as never,
+        authorizeTool, readCard: vi.fn(), writeCard: vi.fn(), sendMessage: vi.fn() });
+      state.action.mockImplementation(host.callPluginAction.bind(host));
+      expect(await state.handle!({ sender: { id: 1, isDestroyed: () => false } }, 'task', {
+        op: 'plugin-action', instanceId: 'local__parse', id: 'parse', requestId: 'input', input: { attachment: {
+          name: image ? 'clipboard.png' : 'picked.txt', bytes: new Uint8Array(await new Blob([bytes]).arrayBuffer()), size: bytes.length,
+          mimeType: image ? 'image/png' : 'text/plain',
+        } },
+      })).toEqual({ handled: false });
+      expect(delivered).toHaveBeenCalledOnce();
+      expect(authorizeTool).not.toHaveBeenCalled();
+      expect(deposit).toHaveBeenCalledTimes(image ? 1 : 0);
+      expect(await fs.readFile(image ? blobs.resolveSafe(image.url).absPath : disk)).toEqual(bytes);
+      await host.reset();
+    } finally { await client.close(); await fs.rm(root, { recursive: true, force: true }); state.userData = ''; }
+  });
+  // Unit: selected File bytes go through the Main-owned input, not tool JSON.
   // Existing completion cases have no files; a MIME/extension mismatch must not call it.
-  it('matches added attachments and passes the path only in the Main-owned grant', async () => {
+  it('matches added attachments and passes bytes only in the Main-owned call', async () => {
     state.plugin = { host: { contributions: [{ id: 'parse', title: 'Parse', position: 'composer.attachment',
       tool: 'parse', accept: { extensions: ['.pdf'] } }] }, config: { id: 'plugin-source', url: '', transport: 'in-process',
       plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
     const event = { sender: { id: 1, isDestroyed: () => false } };
     const input = { op: 'plugin-action', instanceId: 'local__demo', id: 'parse', requestId: 'file',
-      input: { attachment: { name: 'input.pdf', uri: path.resolve('input.pdf'), size: 5, mimeType: 'application/pdf' } } };
+      input: { attachment: { name: 'input.pdf', bytes: new Uint8Array(5), size: 5, mimeType: 'application/pdf' } } };
     state.action.mockResolvedValue({ structuredContent: { handled: false } });
     expect(await state.handle!(event, null, input)).toEqual({ handled: false });
     expect(state.action.mock.calls[0].slice(0, 5)).toEqual(['renderer:1', null,
-      expect.objectContaining({ attachments: [path.resolve('input.pdf')] }), 'parse',
+      expect.objectContaining({ attachmentBytes: new Uint8Array(5) }), 'parse',
       { attachment: { name: 'input.pdf', size: 5, mimeType: 'application/pdf' } }]);
     state.action.mockClear();
     await expect(state.handle!(event, null, { ...input, input: { attachment: { ...input.input.attachment,
@@ -203,7 +293,7 @@ describe('MCP App persistence and IPC wiring', () => {
     const rejected = expect(pending).rejects.toThrow('MCP_APP_REQUEST_FAILED');
     await vi.waitFor(() => expect(state.action).toHaveBeenCalledOnce());
     expect(state.action.mock.calls[0].slice(0, 5)).toEqual(['renderer:1', null,
-      expect.objectContaining({ id: 'lookup', serverId: 'plugin-source' }), 'lookup', { scope: 'declared', trigger: '@', query: 'issue' }]);
+      expect.objectContaining({ id: 'lookup', config: state.plugin.config }), 'lookup', { scope: 'declared', trigger: '@', query: 'issue' }]);
     await state.handle!({ sender: { id: 2 } }, null, { op: 'plugin-action-cancel', requestId: 'one' });
     expect(signal!.aborted).toBe(false);
     await state.handle!(event, null, { op: 'plugin-action-cancel', requestId: 'one' });
@@ -234,7 +324,7 @@ describe('MCP App persistence and IPC wiring', () => {
       config: { id: 'plugin-source', url: '', transport: 'in-process', plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
     const event = { sender: { id: 1, isDestroyed: () => false } };
     const input = position === 'composer.completion' ? { trigger: '@', query: 'record' }
-      : { attachment: { name: 'input.pdf', uri: path.resolve('input.pdf'), size: 5, mimeType: 'application/pdf' } };
+      : { attachment: { name: 'input.pdf', bytes: new Uint8Array(5), size: 5, mimeType: 'application/pdf' } };
     state.action.mockResolvedValue({ structuredContent: { handled: false } });
     const pending = state.handle!(event, null, { op: 'plugin-action', instanceId: 'local__demo', id: 'provider', requestId: 'early', input });
     const rejected = expect(pending).rejects.toThrow('MCP_APP_REQUEST_FAILED');
@@ -402,14 +492,19 @@ describe('MCP App persistence and IPC wiring', () => {
       ['task', { op: 'message', viewId: 'remote-view', message }], { preSend: expect.any(Function) });
 
     state.open.mockResolvedValue(document);
-    expect(await state.handle!({ sender: { id: 1 } }, 'task', { op: 'open', clientId: 'card' }))
+    const sdkCacheHashes = ['0'.repeat(64)];
+    expect(await state.handle!({ sender: { id: 1 } }, 'task', { op: 'open', clientId: 'card', sdkCacheHashes }))
       .toEqual({ viewId: 'remote-view', transport: 'sandbox', prefersBorder: true });
+
+    expect(state.open).toHaveBeenLastCalledWith('renderer:1', 'task', 'card', {}, undefined, undefined);
 
     // Mobile still reaches the execution Host over the existing same-account channel.
     state.remote = { controllerDeviceId: 'phone' };
     state.open.mockResolvedValue(document);
     expect(await state.handle!({}, 'task', { op: 'open', clientId: 'card' })).toEqual(document);
-    expect(state.open).toHaveBeenCalledWith('device:phone', 'task', 'card', {}, undefined);
+    expect(state.open).toHaveBeenLastCalledWith('device:phone', 'task', 'card', {}, undefined, undefined);
+    expect(await state.handle!({}, 'task', { op: 'open', clientId: 'card', sdkCacheHashes })).toEqual(document);
+    expect(state.open).toHaveBeenLastCalledWith('device:phone', 'task', 'card', {}, undefined, expect.any(Function));
     await state.handle!({}, 'task', { op: 'message', viewId: 'remote-view', message });
     expect(state.dispatch).toHaveBeenCalledWith('device:phone', 'task', 'remote-view', message);
   });

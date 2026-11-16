@@ -7340,24 +7340,54 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('waitUntilOnline:离线请求有界等待 —— un-park 退避立即重连,上线后 resolve', async () => {
-    // 退避基数 10s:断线后会 park 一个长计时器,模拟"掉线/重连窗口"。
-    const h = makeHarness({ timing: { reconnectBaseMs: 10_000, reconnectMaxMs: 30_000 } });
-    h.client.start();
-    await tick();
-    h.current().ack();
+  // Unit regression: real waitUntilOnline callers could cancel every reconnect
+  // timer after 4429/1012 (or ordinary disconnects). Existing coverage explicitly
+  // expected that bypass and only protected 1013. One waiter after close suffices;
+  // five waves model 80 callers without real waits or private-state assertions.
+  it.each([4429, 1012, 1013, 1006])(
+    'waitUntilOnline:80 callers share backoff and recover after close %i', async (code) => {
+      vi.useFakeTimers();
+      const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+      const h = makeHarness({ timing: {
+        reconnectBaseMs: 1_000, reconnectMaxMs: 8_000,
+        congestionBackoffBaseMs: 1_000, congestionBackoffMaxMs: 8_000,
+      } });
+      const waits: Promise<string>[] = [];
+      const wait = () => waits.push(h.client.waitUntilOnline(10_000).then(
+        () => 'online', (error: DeviceLinkError) => error.code,
+      ));
+      try {
+        h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+        h.current().emit('close', code);
+        for (let wave = 0; wave < 5; wave++) {
+          for (let caller = 0; caller < 16; caller++) wait();
+          await vi.advanceTimersByTimeAsync(0);
+          // A relay still refusing connections closes any premature retry too.
+          if (h.sockets.length > 1) h.current().emit('close', code);
+          await vi.advanceTimersByTimeAsync(50);
+        }
+        expect(h.sockets).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(449);
+        expect(h.sockets).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(h.sockets).toHaveLength(2);
+        const attempt = h.current();
+        wait(); // A new caller must also keep an in-flight handshake.
+        await vi.advanceTimersByTimeAsync(0);
+        expect(h.current()).toBe(attempt);
+        expect(attempt.closed).toBeNull();
 
-    h.current().emit('close', 1006);
-    await tick(20);
-    expect(h.sockets.length).toBe(1); // 退避还没到,park 住,没新建连接
-
-    const p = h.client.waitUntilOnline(1_000);
-    await tick(); // waitUntilOnline 内 connectNow un-park,立刻发起重连
-    expect(h.sockets.length).toBe(2);
-    h.current().ack();
-    await expect(p).resolves.toBeUndefined(); // 上线后放行,而不是干等 10s 退避
-    h.client.stop();
-  });
+        attempt.emit('close', code);
+        wait(); // The next failure doubles the shared delay; callers cannot reset it.
+        await vi.advanceTimersByTimeAsync(1_399);
+        expect(h.sockets).toHaveLength(2);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(h.sockets).toHaveLength(3);
+        h.current().ack();
+        expect(await Promise.all(waits)).toEqual(Array(82).fill('online'));
+      } finally { h.client.stop(); random.mockRestore(); vi.useRealTimers(); }
+    },
+  );
 
   it('waitUntilOnline:超时仍未上线 → NOT_CONNECTED(让上层感知并重试)', async () => {
     // token 恒为 null:永远连不上,status 卡在 connecting。
@@ -8855,27 +8885,27 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
     h.client.stop();
   });
 
-  it('非拥塞断线的 waitUntilOnline un-park 行为不变:立即打断退避重连', async () => {
-    const h = makeHarness({
-      timing: {
-        // 普通退避拉大:不 un-park 的话测试窗口内不会自然重连
-        reconnectBaseMs: 60_000,
-        reconnectMaxMs: 60_000,
-        pingIntervalMs: 60_000,
-      },
-    });
-    h.client.start();
-    await tick();
-    h.current().ack();
-    const socketsBefore = h.sockets.length;
-
-    h.current().emit('close', 1006, 'heartbeat lost');
-    const wait = h.client.waitUntilOnline(2_000);
-    await tick();
-    expect(h.sockets.length).toBe(socketsBefore + 1);
-    h.current().ack();
-    await expect(wait).resolves.toBeUndefined();
-    h.client.stop();
+  it('waitUntilOnline:timeout and stop settle only their waiters without bypassing backoff', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { reconnectBaseMs: 10_000, reconnectMaxMs: 30_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      h.current().emit('close', 4429, 'too many connections');
+      const expired = expect(h.client.waitUntilOnline(100)).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+      const cancelled = h.client.waitUntilOnline(30_000).catch((error: DeviceLinkError) => error);
+      await vi.advanceTimersByTimeAsync(100);
+      await expired;
+      expect(h.sockets).toHaveLength(1);
+      h.client.stop();
+      await expect(cancelled).resolves.toMatchObject({ code: 'NOT_CONNECTED' });
+      await expect(h.client.waitUntilOnline()).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(h.sockets).toHaveLength(1);
+      // A new lifecycle is still reachable, but cannot revive the old waiters.
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      await expect(h.client.waitUntilOnline()).resolves.toBeUndefined();
+      expect(h.sockets).toHaveLength(2);
+    } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
   it('多 peer 拓扑:冷却是连接级的,两个控制端对称受影响、pending 均保留并在重连后各自重放', async () => {
@@ -12396,7 +12426,7 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
     } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
-  it('replays a partially written large head while an older relay tail is still in flight', async () => {
+  it('records migrated pending paths before replaying a partially written direct head over relay', async () => {
     vi.useFakeTimers();
     const info = vi.fn();
     const h = makeHarness({ logger: { info, debug: vi.fn(), warn: vi.fn(), error: vi.fn() }, timing: { pingIntervalMs: 1_000_000, transportRetryIntervalMs: 1_000 } });
@@ -12412,6 +12442,7 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
       });
       const initial = h.current().sent.slice();
       const initialHead = initial.filter(env => env.id === 'head');
+      const initialTail = initial.filter(env => env.id === 'tail');
       let writes = 0;
       h.client.attachDirectPath('dev-b', {
         send() { if (++writes > TRANSPORT_RETRY_PASS_BUDGET) throw new Error('direct write interrupted'); },
@@ -12438,8 +12469,14 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
       // interrupted direct write instead.
       const pathRows = rows.filter(row => row.stage === 'path');
       expect(pathRows[0]).toMatchObject({ reason: 'send-failed' });
-      expect(headOf(pathRows[0])).toEqual(expect.arrayContaining([expect.objectContaining({
-        path: 'direct', sent: true, attempts: expect.any(Number) })]));
+      // After migration the partial head is direct, while the tail has not been
+      // written yet. Assert this before detach resets the pending entries.
+      expect(headOf(pathRows[0])).toEqual([
+        expect.objectContaining({ seq: parseTransportPayload(initialHead[0].payload)?.meta.seq,
+          bytes: expect.any(Number), path: 'direct', sent: true, attempts: expect.any(Number) }),
+        expect.objectContaining({ seq: parseTransportPayload(initialTail[0].payload)?.meta.seq,
+          bytes: expect.any(Number), path: 'unsent', sent: false }),
+      ]);
       const fallbackHead = h.current().sent.slice(initial.length).filter(env => env.id === 'head');
       expect(fallbackHead).toHaveLength(initialHead.length);
       // Reuse the original sequence and every fragment; the receiver can assemble and deduplicate it.

@@ -164,6 +164,46 @@ describe('native mobile card actions', () => {
   });
 });
 
+// Unit: a desktop controlling this computer shows the stored card itself and may answer its
+// model menu. Only that reader gets the markup; mail cards keep their projection; a model choice
+// is accepted only in its declared shape and never with an autosave.
+describe('desktop controller card markup', () => {
+  const desktop = { protocolVersion: 1, primitives: ['plugin-card-actions', 'plugin-card-forms', 'plugin-card-html'] };
+  it('returns the stored card only to readers that ask for it, never for mail cards', async () => {
+    let html = '<div style="color:red"><button data-ghost-action="pick" data-ghost-model-select="">Model</button></div>';
+    const provider = createGhostCardRemoteProvider({
+      readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'cindy-github', html, v: 1, height: 240 }),
+      authorize: async () => {}, captureScope: () => () => true,
+      interactions: { externalLinks: () => true, dispatch: async () => true },
+    });
+    const card = async (client: typeof desktop) =>
+      (((await provider.get!(context, { ...request, client })).blocks?.find(b => b.id === 'actions')?.data) as { card?: unknown } | undefined)?.card;
+    expect(await card(desktop)).toEqual({ html, height: 240, externalLinks: true });
+    expect(await card({ protocolVersion: 1, primitives: ['plugin-card-actions', 'plugin-card-forms', 'plugin-card-rich'] })).toBeUndefined();
+    html = renderMailCard({ accountId: 'a', draftId: 'd', key: '12345678-1234-1234-1234-123456789abc', from: 'self@example.test',
+      state: 'draft', status: 'Ready', sendLabel: 'Send', fromLabel: 'From', attachments: [],
+      fields: ['to', 'subject', 'body'].map(name => ({ name, label: name, value: name })) });
+    expect(await card(desktop)).toBeUndefined();
+  });
+  it('forwards a valid model choice and rejects malformed or autosave choices', async () => {
+    const html = '<button data-ghost-action="pick" data-ghost-model-select="">Model</button><button data-ghost-action="change">x</button>';
+    const dispatch = vi.fn(async () => true);
+    const provider = createGhostCardRemoteProvider({
+      readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'cindy-github', html, v: 1, height: 80 }),
+      authorize: async () => {}, captureScope: () => () => true,
+      interactions: { externalLinks: () => false, dispatch },
+    });
+    const { revision } = await provider.get!(context, { ...request, client: desktop });
+    const route = { agentKind: 'cc', providerId: 'anthropic', model: 'm', effort: 'low', fastMode: false, agentDeviceId: 'controller' };
+    const base = { client: desktop, collectionId: 'plugin-results', resourceRef: request.ref, actionId: 'pick', input: { revision, pageId: 'page', modelSelection: route } };
+    await provider.invoke!({ controllerDeviceId: 'controller' }, base);
+    expect(dispatch).toHaveBeenCalledWith('c', 'pick', undefined, 'page', 'cindy-github', 'controller', undefined, undefined, undefined, route);
+    await expect(provider.invoke!(context, { ...base, input: { ...base.input, modelSelection: { ...route, agentDeviceId: 'local' } } })).rejects.toThrow();
+    await expect(provider.invoke!(context, { ...base, input: { ...base.input, formChange: true } })).rejects.toThrow();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('read-only plugin card projection', () => {
   it('preserves readable text and managed assets, never HTML, styles or executable actions', () => {
     const blocks = projectGhostCardBlocks(`<style>p{color:red}</style><h2>Result &amp; title</h2><p>Done</p><img src="${image}"/><div data-ghost-audio="${audio}"></div><button data-ghost-action="delete">Delete</button><script>secret()</script><img src="file:///secret"/>`);

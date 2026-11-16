@@ -1433,6 +1433,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         revokedByRemote.add(env.src);
         pluginSyncAccess.invalidate(env.src);
         responsivenessTracker?.clearDevice(env.src);
+        notifyRemotePushChannel(env.src, DEVICE_LINK_PUSH.ACCESS_REVOKED);
         broadcast(DEVICE_LINK_PUSH.ACCESS_REVOKED, { deviceId: env.src });
       }
       return;
@@ -1450,7 +1451,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // through this computer, like an ordinary source; the minute-by-minute received
     // poll no longer stands in for it.
     tapRemoteModelCatalogChange(env.src, p?.channel, isDeviceRevoked(env.src), activeShareHost);
-    if (typeof p?.channel === 'string' && !isDeviceRevoked(env.src)) notifyRemotePushChannel(env.src, p.channel);
+    if (typeof p?.channel === 'string' && !isDeviceRevoked(env.src)) notifyRemotePushChannel(env.src, p.channel, p.payload);
     if (sharePeer && p?.channel === 'maker:provider:changed') {
       if (!activeShareHost) return;
       broadcast(DEVICE_LINK_PUSH.REMOTE_PUSH, { deviceId: `share:${sharePeer.shareId}`, channel: p.channel, payload: {} });
@@ -2195,10 +2196,9 @@ function assertRemoteControlTargetEnabled(deviceId: string): void {
 
 /**
  * 掉线/重连窗口里发起请求时,先有界等待连接就绪(与 mobile 的
- * ensureOnlineForRequest 同款):online 直接放行;否则 un-park 退避计时器促成
- * 立即重连并有界等待上线。上限够一次健康重连握手完成(通常 <1s),又短到
- * 连不上时快速失败(NOT_CONNECTED,瞬态)交上层重试链/熔断——把「单次请求
- * park 在退避 gap 里干等(最坏 30s)」压成「等一次重连」。
+ * ensureOnlineForRequest 同款):online 直接放行;否则在自己的等待预算内
+ * 共享已有退避与握手，不因新请求提前建连或清零退避次数。
+ * 超时以 NOT_CONNECTED(瞬态)交上层重试链/熔断，共享连接继续按原节奏恢复。
  */
 const CONNECT_READY_TIMEOUT_MS = 1_500;
 
@@ -2462,15 +2462,25 @@ async function remoteInvokeLive(
  * 若本机仍无控制意图(无订阅)就立即关闭本次建的链路,以 UNSUPPORTED_CAPABILITY 失败,不发请求。
  * 链路已就绪(用户正在控制对端)时直接复用,不产生新的 link-open。
  */
-/** Main-process observers of pushes from other computers: the source and channel only, never the payload. */
-const remotePushChannelListeners = new Set<(deviceId: string, channel: string) => void>();
-export function onRemotePushChannel(listener: (deviceId: string, channel: string) => void): () => void {
+/** Only account invalidation metadata is exposed; never forward raw push content to observers. */
+interface RemotePushChange {
+  providerId?: 'anthropic' | 'openai';
+  change?: 'usage' | 'load';
+}
+const remotePushChannelListeners = new Set<(deviceId: string, channel: string, change?: RemotePushChange) => void>();
+export function onRemotePushChannel(listener: (deviceId: string, channel: string, change?: RemotePushChange) => void): () => void {
   remotePushChannelListeners.add(listener);
   return () => { remotePushChannelListeners.delete(listener); };
 }
-function notifyRemotePushChannel(deviceId: string, channel: string): void {
+function notifyRemotePushChannel(deviceId: string, channel: string, payload?: unknown): void {
+  const raw = channel === 'subscription-accounts:changed' && payload && typeof payload === 'object'
+    ? payload as Record<string, unknown> : null;
+  const detail: RemotePushChange | undefined = raw ? {
+    ...(raw.providerId === 'anthropic' || raw.providerId === 'openai' ? { providerId: raw.providerId } : {}),
+    ...(raw.change === 'usage' || raw.change === 'load' ? { change: raw.change } : {}),
+  } : undefined;
   for (const listener of remotePushChannelListeners) {
-    try { listener(deviceId, channel); } catch { /* An observer never blocks forwarding to the renderer. */ }
+    try { listener(deviceId, channel, detail); } catch { /* An observer never blocks forwarding to the renderer. */ }
   }
 }
 

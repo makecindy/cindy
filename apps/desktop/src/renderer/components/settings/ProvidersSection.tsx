@@ -1,3 +1,6 @@
+import { useRemoteProviderDisable } from '@/lib/remoteProviderDisable';
+import { Select } from '@/components/ui/select';
+import { sameRunLocationProvider, duplicateSubscriptionProviders, subscriptionModelsCoveredBy } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
 import { providersSettings } from './ProvidersSection.settings-search';
 import {
@@ -179,6 +182,7 @@ function providerHasModels(provider: ProviderView): boolean {
     (provider.imageModels?.length ?? 0) > 0 ||
     (provider.videoModels?.length ?? 0) > 0 ||
     (provider.audioModels?.length ?? 0) > 0 ||
+    (provider.evaluationModels?.length ?? 0) > 0 ||
     (provider.embeddingModels?.length ?? 0) > 0
   );
 }
@@ -2659,7 +2663,11 @@ export function ProvidersSection() {
   const selectedShare = selectedShareId
     ? receivedShares.find((share) => share.shareId === selectedShareId) ?? null
     : null;
-  const { entries: ownRemoteProviders, hiddenShareIds: groupedShareIds } = useOwnRemoteProviderList();
+  const providerGroups = useLocalProviderGroupsState();
+  const { entries: offeredRemoteProviders, hiddenShareIds: groupedShareIds } = useOwnRemoteProviderList();
+  const remoteDisable = useRemoteProviderDisable();
+  const ownRemoteProviders = useMemo(() => offeredRemoteProviders.map(entry => remoteDisable.isDisabled(entry.deviceId, entry.provider.id)
+    ? { ...entry, provider: { ...entry.provider, suspended: true } } : entry), [offeredRemoteProviders, remoteDisable]);
   const ownedShares = useOwnedProviderShares(ownRemoteProviders.map(entry => entry.deviceId));
   const selectedRemote = selectedRemoteKey
     ? ownRemoteProviders.find((entry) => entry.key === selectedRemoteKey) ?? null
@@ -2840,12 +2848,14 @@ export function ProvidersSection() {
     [orderedVisibleProviders, pendingProviderOrderIds],
   );
   const sharedLocalProviders = listProviders.filter(provider => ownedShares.get(null)?.has(provider.id));
-  const ordinaryLocalProviders = listProviders.filter(provider => !ownedShares.get(null)?.has(provider.id));
+  const localDuplicates = duplicateSubscriptionProviders(listProviders.filter(provider =>
+    !ownedShares.get(null)?.has(provider.id) && providerGroups.ready && !providerGroups.groups[provider.id]));
+  const ordinaryLocalProviders = listProviders.filter(provider => !ownedShares.get(null)?.has(provider.id) && !localDuplicates.has(provider.id));
   const sharedRemoteProviders = ownRemoteProviders.filter(entry => ownedShares.get(entry.deviceId)?.has(entry.provider.id));
   // The same provider on another computer folds into this computer's listed entry (run location lives there).
-  const localProviderIds = new Set(listProviders.map(item => item.id));
+  const foldsIntoLocal = (remote: ProviderView) => !remote.suspended && ordinaryLocalProviders.some(local => !local.suspended && !providerGroups.groups[local.id] && sameRunLocationProvider(local, remote) && subscriptionModelsCoveredBy(remote, local));
   const ordinaryRemoteProviders = ownRemoteProviders.filter(entry => !ownedShares.get(entry.deviceId)?.has(entry.provider.id)
-    && (entry.group || !localProviderIds.has(entry.provider.id)));
+    && (entry.group || !foldsIntoLocal(entry.provider)));
 
   useEffect(() => {
     if (pendingProviderOrder && pendingProviderOrder.dataOwnerId !== dataOwnerId) {
@@ -3094,6 +3104,8 @@ export function ProvidersSection() {
         }
       : selected;
   }, [selectedId, listProviders, codexAuth.state, openaiPoolState, dataOwnerId]);
+  const selectedAccountRoot = effectiveSelected ? localDuplicates.get(effectiveSelected.id) ?? effectiveSelected.id : null;
+  const selectedAccountConnections = listProviders.filter(provider => provider.id === selectedAccountRoot || localDuplicates.get(provider.id) === selectedAccountRoot);
   const selectedBorrow = useProviderBorrow(effectiveSelected);
   // 借用时模型区整块换成「运行于」那台电脑的清单；本机目录、发现失败与刷新都不适用。
   const selectedBorrowedModels = selectedBorrow.borrowed && selectedBorrow.borrowedCatalog
@@ -3362,7 +3374,7 @@ export function ProvidersSection() {
       renderItem={(provider, index) => (
         <ListRow
           provider={provider}
-          selected={!otherDeviceSelected && !cindySigninActive && effectiveSelected?.id === provider.id}
+          selected={!otherDeviceSelected && !cindySigninActive && (effectiveSelected?.id === provider.id || localDuplicates.get(effectiveSelected?.id ?? '') === provider.id)}
           reconnectRequired={
             (provider.id === 'openai' && openaiReconnectRequired) ||
             provider.openAiAccount?.reconnectRequired === true
@@ -3587,6 +3599,18 @@ export function ProvidersSection() {
               renderDetailHeader(
                 effectiveSelected,
                 <>
+                  {selectedAccountConnections.length > 1 && (
+                    <div className="flex shrink-0 flex-wrap items-center gap-3 border-t px-5 py-3 text-13" style={{ borderColor: 'var(--settings-theme-card-border)' }}>
+                      <div className="min-w-0 flex-1">
+                        <p>{t('settings.providers.detail.sameAccountConnections')}</p>
+                        <p className="text-12 text-[var(--text-secondary)]">{t('settings.providers.detail.sameAccountConnectionsHint')}</p>
+                      </div>
+                      <Select label={t('settings.providers.detail.sameAccountConnections')} value={effectiveSelected.id}
+                        data-settings-search-action="Select which connection for this account is displayed"
+                        groups={[{ options: selectedAccountConnections.map(provider => ({ value: provider.id, label: providerDisplayName(provider, t) })) }]}
+                        onValueChange={selectProvider} />
+                    </div>
+                  )}
                   {/* 供应商已停用:条带讲清「发生了什么 + 下一步」并就地给恢复入口。整个
                     模型区随之收起(2026-07-28 用户反馈:停用了就别再列模型)——停用是
                     盖在上面的一层,凭证与逐模型配置不丢,启用即原样回来。 */}

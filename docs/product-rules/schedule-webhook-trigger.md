@@ -18,6 +18,18 @@ Webhook 表单沿用自动化编辑器的「内容与触发 / 运行选项」分
 
 存储仍是 `event` 或 `event.action` 列表，例如 `check_suite`、`pull_request.closed`、`pullrequest:created`；空列表响应全部。界面不改变接收协议，不收集事件正文。预设目录与交互见 `webhookEventOptions.ts`、`WebhookEventSelect.tsx`，保存行为回归在 `ScheduleFormDialog.test.tsx`。更细的判断交给前置检查脚本，它和脚本模式任务都能收到事件元数据。
 
+## Agent 工具的触发方式
+
+Agent 工具 `schedule_create` / `schedule_update` 接受可选布尔字段 `manual`。
+`manual: true` 关闭定时并清空 `nextFireAt`，保留立即运行；与 `webhookTrigger` 同用即仅事件触发，
+适用于 Agent 和脚本执行方式。`manual: false` 按保存的 cron／间隔恢复定时。
+创建时省略沿用默认 `false`，更新时省略不修改；创建仍须提供合法 `cronExpr` 和 `timezone`。
+定时的一次性任务与 Webhook 不兼容的校验保持不变，已有组合触发不自动改写。
+本机和跨电脑沿用原调用链；跨电脑更新不得同时带 `cronExpr`、`manual`、`notify`，
+否则可能命中目标电脑的旧手机全量表单兼容逻辑。工具在发送前明确报错，可单独更新 `manual`；
+不自动拆分写入，也不先读后复制未修改字段。实现及回归见 `packages/lizi-mcps/src/scheduler/{create,update}.ts`
+与 `cindy_schedulerMcpServer.test.ts`、`schedulerDevices.test.ts`。
+
 ## 账号接收地址管理（2026-11-04）
 
 同一区域的账号默认共用 10 个接收地址，界面使用服务器返回的上限，不写死数字。
@@ -91,7 +103,15 @@ Webhook 配置和详情提供「接收地址 已用 / 上限 · 管理」，管�
 
 ## GitHub App 触发（2026-11-11，测试）
 
-任意普通自动任务（Agent 或脚本）都可在事件来源选择 **GitHub App**，填写一至五十个
+发送方仅显示一个 **GitHub**，其下用「通过 Cindy 连接（推荐）」和「手动配置 Webhook」区分接入方式。
+新建表单默认通过 Cindy 连接；已有任务（包括未显式保存 source 的旧任务）保留原连接方式，不自动迁移。
+通过 Cindy 连接按账号状态、仓库、事件排列，复用现有 GitHub App 连接与仓库授权入口；手动方式提示
+保存后到任务详情获取地址和密钥。账号已连接不代表任务订阅已就绪，详情只有接收状态确认可投递才显示等待事件。
+连接选择及其说明始终可见，详情沿用「GitHub · 通过 Cindy 连接／手动 Webhook」名称。切换方式不清空仓库输入。
+编辑弹窗打开时卸载背景详情中的账号连接卡，由表单独占账号读取与授权操作；关闭后详情重新挂载并复核状态。
+账号状态仅在挂载和返回窗口时复核，合并在途读取；不因输入仓库名发请求，不新增后台轮询。
+
+任意普通自动任务（Agent 或脚本）都可选择 **通过 Cindy 连接**，填写一至五十个
 `owner/repository` 并选择事件或 `event.action`。这些仓库须已安装 App，且运行任务的电脑上已在
 GitHub 插件连接账号并通过仓库权限复核。不为每个任务另建公网地址或密钥。
 

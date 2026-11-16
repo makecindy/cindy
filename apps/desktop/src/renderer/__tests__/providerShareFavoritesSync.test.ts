@@ -13,6 +13,7 @@ import {
 } from '@/features/provider-share/providerShareStore';
 
 vi.mock('@/hooks/useDeviceProviders', () => ({
+  hasDeviceProvidersInterest: () => false,
   getCachedDeviceProviders: () => null,
   // This favorites fixture has no cached subscription catalog to refresh.
   isSubscriptionShareCatalogStale: () => false,

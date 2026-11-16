@@ -36,6 +36,9 @@ const responsesSse = [
   { type: 'response.completed', response: { status: 'completed', usage: { input_tokens: 1, output_tokens: 1 } } },
 ];
 let chatgptRejects = false;
+// The third-party OpenAI-compatible route of a Pi task: refuses a request carrying a long prompt
+// cache retention, as a provider without that option does.
+const rejectsCacheRetention = { requests: [] };
 const upstream = createServer(async (req, res) => {
   let raw = '';
   for await (const chunk of req) raw += chunk;
@@ -43,6 +46,19 @@ const upstream = createServer(async (req, res) => {
   try { body = raw ? JSON.parse(raw) : null; } catch { /* opaque */ }
   requests.push({ url: req.url, apiKey: req.headers['x-api-key'], authorization: req.headers.authorization, model: body?.model,
     accountId: req.headers['chatgpt-account-id'] });
+  if (req.url?.startsWith('/pi-openai/')) {
+    const carries = Object.hasOwn(body ?? {}, 'prompt_cache_retention');
+    rejectsCacheRetention.requests.push({ url: req.url, authorization: req.headers.authorization, carries, body });
+    if (carries) {
+      res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: {
+        message: "Unsupported parameter: 'prompt_cache_retention'.", type: 'invalid_request_error',
+        param: 'prompt_cache_retention', code: 'unsupported_parameter' } }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' });
+    res.end(responsesSse.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
+    return;
+  }
   // The xAI backend (the bridge's https://api.x.ai/ is redirected here): the same Responses stream.
   if (req.url?.startsWith('/xai/')) {
     res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' });
@@ -107,6 +123,15 @@ const { setSessionProvider, clearSessionProvider } = await import('../../desktop
 const { customProviderSecretStorageKey } = await import('../../desktop/src/shared/providerSecrets.ts');
 const { dataOwnerStorageKey } = await import('../../desktop/src/main/dataOwnerPath.ts');
 const { initLogger } = await import('../../desktop/src/main/logger.ts');
+const { getCurrentDbClientSnapshot } = await import('../../desktop/src/main/localDb/client/current.ts');
+const { eq } = await import('drizzle-orm');
+const { sessions, messages: messageTable } = await import('../../desktop/src/main/localDb/schema.ts');
+const { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWrites } = await import('../../desktop/src/main/localDb/sessionActiveTurn.ts');
+const { createInputQueue } = await import('../src/agent/input-queue.mjs');
+const { createEventHub } = await import('../src/events.mjs');
+const { createHostMessageStore } = await import('../src/message-store.ts');
+const { createHostContextRecoveryWiring } = await import('../src/agent/context-recovery-wiring.ts');
+const { createHostAgentHandoffPending } = await import('../src/agent/handoff-pending.ts');
 initLogger({ logDir: path.join(root, 'logs'), isDev: true, level: 'debug' });
 
 const profile = path.join(root, 'profile');
@@ -134,6 +159,10 @@ try {
     runtimes: { 'claude-code': { baseUrl: `${endpoint}/custom`, wireProtocol: 'anthropic-messages',
       models: [{ id: 'fixture-claude-model', name: 'Fixture', contextWindow: 200_000, maxOutput: 1024 }] } } });
   credentials.write(`owner_${dataOwnerStorageKey(ownerId)}_${customProviderSecretStorageKey('cprov-claude', 'claude-code')}`, 'synthetic-custom-key');
+  await createCustomProvider({ id: 'cprov-pi', name: 'Synthetic OpenAI-compatible API', auth: { method: 'apiKey' },
+    runtimes: { pi: { baseUrl: `${endpoint}/pi-openai/v1`, wireProtocol: 'openai-responses',
+      models: [{ id: 'fixture-pi-model', name: 'Fixture', contextWindow: 128_000, maxOutput: 1024 }] } } });
+  credentials.write(`owner_${dataOwnerStorageKey(ownerId)}_${customProviderSecretStorageKey('cprov-pi', 'pi')}`, 'synthetic-pi-key');
   await config.list();
   mcp = createHostMcpRuntime({ appServerIds: () => [], getRemoteMcpBridgeToken: config.remoteBridgeToken });
   // A synthetic ChatGPT login in this profile's own codex-home, as an explicit Cindy login leaves it.
@@ -225,6 +254,59 @@ try {
   assert.equal(requests.slice(before).filter(r => !r.url.startsWith('/xai/')).length, 0, JSON.stringify(requests.slice(before)));
   assert.ok(requests.every(r => r.apiKey !== proxy.inboundSecret() && !String(r.authorization ?? '').includes(proxy.inboundSecret())));
   console.log(`PASS Pi SuperGrok: ${xaiRequests.length} request(s) to xAI with the profile's Grok login, nothing elsewhere`);
+
+  // 3. A Pi task on a third-party route that refuses the long prompt cache retention option, through
+  // the queue as main.ts wires it with that kind of context recovery open. Pi's own cache recovery
+  // (installed by Cindy, cache-recovery-source.ts) retries the refused request without the option in
+  // the same turn and learns the route: the error never reaches the Host, so Cindy's recovery of this
+  // kind is not involved (it is the fallback for a Pi without that recovery; release table).
+  {
+    const task = 'pi-cache-option';
+    await new OwnerSessionStorage({ db: () => database }).create({ id: task,
+      title: 'Cache option fixture', agentKind: 'pi', model: 'fixture-pi-model', workDir: root });
+    await database.drizzle.update(sessions).set({ providerId: 'cprov-pi' }).where(eq(sessions.id, task));
+    const hub = createEventHub();
+    const readSession = async id => (await database.drizzle.select().from(sessions).where(eq(sessions.id, id)).limit(1))[0];
+    const store = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) });
+    const pendingHandoff = createHostAgentHandoffPending({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event), log: console });
+    const queue = createInputQueue({ getMaker: () => graph.maker, hub, readSession,
+      getOwner: getCurrentDbClientSnapshot, persistMessage: store, pendingHandoff,
+      markStarted: async id => { markSessionTurnStarted(id); await drainSessionActiveTurnWrites(id); },
+      markEnded: async (id, at) => { markSessionTurnEnded(id, at); await drainSessionActiveTurnWrites(id); },
+      ...createHostContextRecoveryWiring({ openKinds: new Set(['unsupported-request-option']), getGraph: () => graph,
+        persistMessage: store, publish: event => hub.publish(event), pendingHandoff, log: console }),
+    });
+    const seen = [];
+    const unsubscribe = hub.subscribe(event => { if (event.sessionId === task) seen.push(event); });
+    const doneCount = () => seen.filter(event => event.event?.type === 'done').length;
+    const until = async (predicate, what) => {
+      const deadline = Date.now() + 60_000;
+      // real-wait: the Pi process answers on its own schedule.
+      while (!predicate()) {
+        if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    };
+    try {
+      await queue.enqueue(task, { clientId: 'pi-cache-first', text: 'return synthetic complete' });
+      await until(() => doneCount() === 1, 'the first turn');
+      assert.deepEqual(rejectsCacheRetention.requests.map(r => r.carries), [true, false],
+        'the refused request is retried without the option in the same turn');
+      assert.ok(rejectsCacheRetention.requests.every(r => r.authorization === 'Bearer synthetic-pi-key'));
+      await queue.enqueue(task, { clientId: 'pi-cache-second', text: 'again' });
+      await until(() => doneCount() === 2, 'the second turn');
+      assert.deepEqual(rejectsCacheRetention.requests.map(r => r.carries), [true, false, false], 'the next message goes without the option');
+      assert.equal(seen.filter(event => event.event?.type === 'error').length, 0, 'the client sees no error');
+      const rows = await database.drizzle.select().from(messageTable).where(eq(messageTable.sessionId, task));
+      assert.deepEqual(rows.map(row => row.role).sort(), ['assistant', 'assistant', 'user', 'user']);
+      assert.equal(rows.filter(row => row.role === 'context_rebuild').length, 0, 'Cindy\'s recovery did not rebuild the task');
+    } finally {
+      unsubscribe();
+      await queue.dispose();
+      await graph.maker.closeSession(task).catch(() => {});
+    }
+    console.log('PASS Pi third-party route refusing the cache retention option: Pi retries without it in the turn and learns the route; no client error, no rebuild; the next message goes without it');
+  }
 } catch (error) {
   process.exitCode = 1;
   throw error;

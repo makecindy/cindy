@@ -314,7 +314,9 @@ describe('browserExtensionSlot · 更新来源收敛', () => {
     ghosts[0] = { ...ghosts[0], publishingSource: { kind: 'public-market', pluginId: 'market-browser' } };
     complete();
     h.slot.reconcile(ghosts);
-    await h.settle();
+    // PR #10357 Windows CI: restoring the saved pairings can outlast a 25 ms sleep.
+    // The public status request waits for startup, including the real cache read.
+    expect(await h.slot.handleRequest('_root__my-browser', { kind: 'status' })).toMatchObject({ ok: true });
     expect(h.slot.getPageControl()?.instanceId).toBe('_root__my-browser');
     expect(h.bridges.at(-1)?.calls).toContainEqual(['setTrustedClients', [clients]]);
     await h.slot.dispose();

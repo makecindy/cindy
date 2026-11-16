@@ -475,7 +475,7 @@ export function recordSessionClaudeTurnUsage(
       })();
     }
     // 与 spend 记账并列的另一个 turn-done side-effect: 刷新 Claude 账号月度配额
-    // (LiteLLM /v2/user/info)。fire-and-forget, 模块内 2s 超时 + 10s 节流。
+    // (Model Access /api/model-access/quota)。fire-and-forget, 模块内 8s 超时 + 10s 节流。
     // 故意放在 cumulative 块外面: spend 走 turn delta, 配额走 HTTP API, 两件事独立;
     // 但仍在 done && claude-code 的 if 内, 不要每个事件都打一次。
     void triggerClaudeAccountUsageRefresh();

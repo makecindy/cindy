@@ -59,7 +59,7 @@ describe("existing remote quota compatibility", () => {
     expect(result).toMatchObject({
       source: "chatgpt",
       accountOnly: true,
-      plan: "pro",
+      plan: "Pro",
       windows: [{ remainingPercent: 75, minutes: 300 }],
     });
     expect(r.getCodexRateLimits).toHaveBeenCalledOnce();
@@ -208,7 +208,7 @@ describe("existing remote quota compatibility", () => {
       r,
     );
     expect(result).toMatchObject({
-      plan: "plus",
+      plan: "Plus",
       accountOnly: false,
       windows: [{ remainingPercent: 80 }],
     });
@@ -386,6 +386,7 @@ describe("subscription quota for every subscription family", () => {
   const nowSec = () => Math.floor(Date.now() / 1000);
   const claudeSnapshot = () => ({
     subscriptionType: "max",
+    planTier: "max_20x",
     updatedAt: 2000,
     fiveHour: { utilization: 30, resetsAt: nowSec() + 3600 },
     sevenDay: { utilization: 55, resetsAt: nowSec() + 86400 },
@@ -407,7 +408,7 @@ describe("subscription quota for every subscription family", () => {
       expect(r.getSubscriptionUsage).toHaveBeenCalledWith("claude", "anthropic");
       expect(result).toMatchObject({
         source: "claude",
-        plan: "max",
+        plan: "Max 20×",
         updatedAt: 2000,
         amounts: [],
       });

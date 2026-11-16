@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { REMOTE_AGENT_MAX_POLL_RUNS, REMOTE_AGENT_READ_MAX_BYTES, REMOTE_AGENT_READ_WAIT_MS, type RemoteAgentErrorInfo } from '@cindy/device-link';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { RemoteAgentPoller, type PolledRun } from '../controller/poller';
+import { isRetryableLinkError, remoteAgentErrorFrom, RemoteAgentPoller, type PolledRun } from '../controller/poller';
 import { remoteAgentInvoker } from '../controller/runClient';
 import { createDeviceUnresponsiveError } from '../../device-link/responsivenessTracker';
 import { EventLog } from '../eventLog';
@@ -526,6 +526,50 @@ describe('multiplexed poll', () => {
 });
 
 describe('link errors', () => {
+  // #10796, unit: exercise production invocation and final poll delivery. Existing
+  // tests covered retry timing but not the cause that reaches live/history banners.
+  it.each([
+    ['INVOKE_TIMEOUT', 'no invoke-result within 30000ms after first socket write', 'REMOTE_AGENT_TIMEOUT', true],
+    ['TIMEOUT', 'request timed out', 'REMOTE_AGENT_TIMEOUT', true],
+    ['BACKPRESSURE', 'request expired before socket write within 10000ms', 'REMOTE_AGENT_LINK_BUSY', true],
+    ['DEVICE_UNRESPONSIVE', 'target device host is unresponsive (circuit open)', 'REMOTE_AGENT_UNRESPONSIVE', true],
+    ['DEVICE_OFFLINE', 'target device is offline', 'REMOTE_AGENT_OFFLINE', true],
+    ['ACCESS_REVOKED', 'access revoked', 'REMOTE_AGENT_ACCESS_DENIED', false],
+    ['REMOTE_DISABLED', 'remote control disabled', 'REMOTE_AGENT_ACCESS_DENIED', false],
+  ] as const)('preserves %s through invocation and terminal polling', async (code, detail, displayCode, retryable) => {
+    vi.useFakeTimers();
+    const transport = vi.fn(async () => ({ ok: false, error: { code, message: detail } }));
+    const invoke = remoteAgentInvoker('host', transport);
+    const error = await invoke([{ op: 'caps' }]).catch((e: unknown) => e);
+    expect(transport).toHaveBeenCalledOnce(); // A failed invocation is not replayed.
+    expect(error).toMatchObject({ code, message: expect.stringContaining(`[${displayCode}]`) });
+    expect((error as Error).message).toContain(detail);
+    expect((error as Error).message).toContain(`[${code}]`);
+    expect(isRetryableLinkError(error)).toBe(retryable);
+    expect(remoteAgentErrorFrom(error).code).toBe(displayCode);
+    const sink = collector(randomUUID());
+    const poller = new RemoteAgentPoller(invoke);
+    poller.register(sink.run);
+    await vi.advanceTimersByTimeAsync(60_000);
+    if (retryable) {
+      expect(sink.lost).toBeNull();
+      await vi.advanceTimersByTimeAsync(70_000);
+    }
+    expect(sink.lost).toMatchObject({
+      reason: retryable ? 'unreachable' : 'read-failed',
+      error: { code: displayCode, message: expect.stringContaining(detail) },
+    });
+  });
+
+  it('classifies a thrown serialized timeout without inventing a transport code', async () => {
+    const invoke = remoteAgentInvoker('host', async () => {
+      throw new Error('[DEVICE_LINK_TIMEOUT] no invoke-result within 30000ms after first socket write');
+    });
+    const error = await invoke([{ op: 'caps' }]).catch((e: unknown) => e);
+    expect(error).toMatchObject({ message: expect.stringMatching(/^\[REMOTE_AGENT_TIMEOUT\] \[DEVICE_LINK_TIMEOUT\]/) });
+    expect((error as { code?: string }).code).toBeUndefined();
+  });
+
   it('names an outdated other computer and keeps link codes for retry decisions', async () => {
     const { remoteAgentInvoker } = await import('../controller/runClient');
     const { isRetryableLinkError } = await import('../controller/poller');

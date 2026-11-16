@@ -131,6 +131,42 @@ function deps(overrides: Partial<ProviderGroupRemoteHandlerDeps> = {}) {
 const PICK = { action: 'pick', sessionId: 's1', providerId: 'anthropic', agentKind: 'claude-code', model: 'opus', exclude: ['local'] };
 
 describe('provider-group:remote', () => {
+  // PR #10910 / unit: real same-account handler → router → external load. Earlier
+  // provisional coverage used local reserveFor only; busy unrelated accounts hid
+  // the first four remote picks. Two controllers must share the pending count.
+  it('balances concurrent external picks independently of busy sibling accounts', async () => {
+    let clock = 1_000;
+    const second = { ...MINI, key: 'device:second:anthropic-2', agentDeviceId: 'second', providerId: 'anthropic-2' };
+    const config = { ...CONFIG, members: [MINI, second] };
+    const externalLoad = createProviderGroupExternalLoad({ now: () => clock });
+    const directory = createProviderGroupDirectory({
+      listLocalProviders: async () => [], localDeviceName: () => 'O',
+      listDevices: async () => config.members.map(m => ({ deviceId: m.agentDeviceId!, name: m.key, platform: 'darwin',
+        online: true, remoteControlEnabled: true, controlEnabled: true, isSelf: false, busy: false, appVersion: null, lastSeenAt: null })),
+      readDeviceProviders: async id => [{ id: id === 'mini' ? MINI.providerId : second.providerId, connected: true,
+        agents: ['claude-code'], models: { 'claude-code': [{ id: 'opus' }] }, routing: { 'claude-code': {} },
+        runningTurns: id === 'mini' ? 4 : 3 } as unknown as ProviderView],
+      listReceivedShares: () => [], isMobilePlatform: () => false, now: () => clock,
+    });
+    const router = createProviderGroupRouter({ directory, readGroup: () => config, listBindings: () => ({}),
+      isTurnRunning: () => false, now: () => clock, random: () => 0,
+      externalRunning: (p, m) => externalLoad.running(p, m), externalPending: (p, m) => externalLoad.pending(p, m),
+      readPoolScheduling: async m => ({ version: 1, accounts: m.key === MINI.key ? 2 : 1,
+        running: m.key === MINI.key ? 0 : 3, totalRunning: m.key === MINI.key ? 4 : 3,
+        full: false, urgency: null, fiveHourTight: false }),
+    });
+    const d = deps({ scope: () => ({ router, externalLoad, isCurrent: () => true }), readGroup: () => config });
+    const picks = await Promise.all(Array.from({ length: 5 }, (_, i) => handleProviderGroupRemote(d,
+      i % 2 ? 'phone' : 'laptop', { ...PICK, sessionId: `parallel-${i}`, exclude: [] })));
+    expect(picks.map(pick => pick && 'member' in pick ? pick.member.key : null)).toEqual([MINI.key, MINI.key, MINI.key, MINI.key, second.key]);
+    expect(externalLoad.pending('anthropic', MINI.key)).toBe(4);
+    await handleProviderGroupRemote(d, 'laptop', { action: 'leases', seq: 1,
+      entries: [{ sessionId: 'parallel-0', providerId: 'anthropic', memberKey: MINI.key }] });
+    expect(externalLoad.pending('anthropic', MINI.key)).toBe(3);
+    clock += PROVIDER_GROUP_PROVISIONAL_MS;
+    expect(externalLoad.pending('anthropic', MINI.key)).toBe(0);
+    expect(externalLoad.running('anthropic', MINI.key)).toBe(1);
+  });
   // Unit/protocol, §6.2：手机/远控写任务所在电脑；未装配与坏请求不可伪报成功。
   it('saves a task balancing preference on its host and rejects invalid requests', async () => {
     const rebalancePreference = vi.fn(async () => true);
