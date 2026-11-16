@@ -2,6 +2,8 @@ import { modelRouteLocationKey } from '@cindy/maker-shared/model-route';
 import type { AgentKind, Effort } from '@cindy/maker-core';
 import type { Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import { makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import { clearAllSessionProviders } from '../maker-host/session-provider-store.js';
+import { clearAllSessionRuntimeAxes } from '../maker-host/session-effort-store.js';
 import {
   connectedProvidersForAgent,
   isModelSelectableForNewRoute,
@@ -463,6 +465,17 @@ export function clearSessionRuntimeControlState(sessionId: string): void {
 export function clearAllSessionRuntimeControlStates(): void {
   ownerEpoch += 1;
   states.clear();
+}
+
+/**
+ * The owner-scoped runtime selection a committed account change drops (the app session commit
+ * boundary): every task's provider, its runtime axes, and the runtime control states (which also
+ * advance the owner epoch). The desktop's boundary hook and the Node Host's both call it.
+ */
+export function clearOwnerScopedSessionRuntimeSelection(): void {
+  clearAllSessionProviders();
+  clearAllSessionRuntimeAxes();
+  clearAllSessionRuntimeControlStates();
 }
 
 export function captureSessionRuntimeControlOwnerEpoch(): string {

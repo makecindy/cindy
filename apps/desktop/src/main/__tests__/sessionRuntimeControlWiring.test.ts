@@ -531,16 +531,24 @@ describe('session runtime control wiring', () => {
     expect(body.indexOf('clearAllSessionAttention();')).toBeLessThan(
       body.indexOf('authManager.setStableOwnerPostCommitTask('),
     );
-    expect(body).toContain('clearAllSessionProviders();');
-    expect(body).toContain('clearAllSessionRuntimeAxes();');
-    expect(body.indexOf('clearAllSessionProviders();')).toBeLessThan(
-      body.indexOf('clearAllSessionRuntimeControlStates();'),
-    );
-    expect(body.indexOf('clearAllSessionRuntimeAxes();')).toBeLessThan(
-      body.indexOf('clearAllSessionRuntimeControlStates();'),
-    );
-    expect(body.indexOf('clearAllSessionRuntimeControlStates();')).toBeLessThan(
+    // The owner-scoped runtime selection is cleared through the shared step (the Node Host's boundary
+    // hook calls the same one), before the post-commit task is registered.
+    expect(body).toContain('clearOwnerScopedSessionRuntimeSelection();');
+    expect(body.indexOf('clearOwnerScopedSessionRuntimeSelection();')).toBeLessThan(
       body.indexOf('authManager.setStableOwnerPostCommitTask('),
+    );
+    const sharedClear = handlerBody(
+      readFileSync(resolve(mainRoot, 'maker-ipc/sessionRuntimeControl.ts'), 'utf8').replace(/\r\n/g, '\n'),
+      'export function clearOwnerScopedSessionRuntimeSelection(): void {',
+      '\n}\n',
+    );
+    expect(sharedClear).toContain('clearAllSessionProviders();');
+    expect(sharedClear).toContain('clearAllSessionRuntimeAxes();');
+    expect(sharedClear.indexOf('clearAllSessionProviders();')).toBeLessThan(
+      sharedClear.indexOf('clearAllSessionRuntimeControlStates();'),
+    );
+    expect(sharedClear.indexOf('clearAllSessionRuntimeAxes();')).toBeLessThan(
+      sharedClear.indexOf('clearAllSessionRuntimeControlStates();'),
     );
     expect(registerWithRuntimeSelectionSource).toContain('effort: resolveRetainedRuntimeEffort({');
     expect(registerWithRuntimeSelectionSource).toContain('targetModelHasFixedEffort,');

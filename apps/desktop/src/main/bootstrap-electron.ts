@@ -993,9 +993,7 @@ import {
   resetSessionRuntimeFallbackSettings,
   writeSessionRuntimeFallbackEnabled,
 } from './maker-host/session-runtime-fallback-store.js';
-import { clearAllSessionProviders } from './maker-host/session-provider-store.js';
-import { clearAllSessionRuntimeAxes } from './maker-host/session-effort-store.js';
-import { clearAllSessionRuntimeControlStates } from './maker-ipc/sessionRuntimeControl.js';
+import { clearOwnerScopedSessionRuntimeSelection } from './maker-ipc/sessionRuntimeControl.js';
 import {
   resolveOwnerScopedSecretStorageKey,
   getProviderSecretStore,
@@ -3065,9 +3063,7 @@ setAppSessionCommitBoundaryHook(() => {
   remoteDesktopViewerWindows.reset();
   // 弹出的页签窗口带着旧 owner 的任务指派与 renderer 本地页签缓存:同步销毁,不让新 owner 看到旧内容。
   sidebarTabWindowsController.destroyAllWindows();
-  clearAllSessionProviders();
-  clearAllSessionRuntimeAxes();
-  clearAllSessionRuntimeControlStates();
+  clearOwnerScopedSessionRuntimeSelection();
 });
 const ownerBackgroundLog = createLogger('owner-background');
 const builtinPostCommitStep = new StableOwnerPostCommitStep({
