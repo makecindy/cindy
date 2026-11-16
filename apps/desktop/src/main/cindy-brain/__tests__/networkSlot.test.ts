@@ -12,6 +12,8 @@ import { afterAll, describe, it, expect, vi } from 'vitest';
 
 import { GhostNetworkSlot, type NetworkSlotDeps } from '../networkSlot';
 import { HostNetworkConnections } from '../networkConnections';
+import { GhostConnectionManager } from '../ghostConnections';
+import { GhostSavedCredentialManager } from '../ghostSavedCredentials';
 import { createMcpAppsManualResolver } from '../mcpAppsManualHeaders';
 import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../../shared/pluginAccountReuse';
 import {
@@ -434,7 +436,9 @@ describe('host network connections', () => {
 
   // #10130 / 4577903614, unit: buffered fetches and reference guards do not
   // cover a direct key deleted after an HTTP stream has been handed off.
-  it.each(['user', 'gh-cli'] as const)('closes a stream on the next read after its directly stored key is removed: %s', async source => {
+  it.each([
+    ['user', 'removed'], ['user', 'replaced'], ['gh-cli', 'removed'], ['gh-cli', 'replaced'],
+  ] as const)('closes a stream on the next read after its directly stored %s key is %s', async (source, change) => {
     const keys = new Map([['brave_api_key', 'synthetic-direct-key']]);
     const ghost = fakeGhost();
     ghost.manifest.network!.secrets![0]!.source = source;
@@ -448,13 +452,93 @@ describe('host network connections', () => {
       const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'stream' });
       expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
       if (!opened.ok || !('connectionId' in opened)) return;
-      keys.delete('brave_api_key');
+      if (change === 'removed') keys.delete('brave_api_key');
+      else keys.set('brave_api_key', 'synthetic-replacement-key');
       expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId }))
         .toMatchObject({ ok: false, errorCode: 'NETWORK_CONNECTION_UNAVAILABLE' });
       expect(slot.hasInFlightRequests('web-search')).toBe(false);
     } finally {
       await slot.disposeAll();
     }
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  // #10130 / 4581530111, unit: deletion-only guards missed rotation to a
+  // nonempty value. Real source managers must close the old stream, while a
+  // fresh request through the same selected reference uses the replacement.
+  it.each(['secret', 'connection'] as const)('closes a stream when a reused %s rotates without invalidating its reference', async kind => {
+    const data = new Map<string, string>();
+    const vault = {
+      read: (id: string, key: string) => data.get(`${id}\0${key}`) ?? null,
+      store: (id: string, key: string, value: string) => { data.set(`${id}\0${key}`, value); return true; },
+      remove: (id: string, key: string) => { data.delete(`${id}\0${key}`); }, readTail: () => null,
+    };
+    const target = fakeGhost({ network: { hosts: ['api.search.brave.com'], secrets: [{ key: 'token', label: 'PAT',
+      inject: { header: 'Authorization', format: 'Bearer {value}' } }] } });
+    const source = fakeGhost({ id: 'source', network: kind === 'secret' ? target.manifest.network : {
+      hosts: [], connections: [{ key: 'token', label: 'PAT', inject: { header: 'Authorization', format: 'Bearer {value}' } }],
+    } });
+    const sources = [target, source].map(ghost => ({ instanceKey: ghost.manifest.id, name: ghost.manifest.name, manifest: ghost.manifest }));
+    const connections = new GhostConnectionManager({ vault });
+    const manager = new GhostSavedCredentialManager({ vault, connections, connectionSources: () => sources,
+      connectionSource: id => sources.find(item => item.instanceKey === id) ?? null,
+      captureTarget: id => id, withMutationLock: async (_id, task) => task(),
+    });
+    let accountId = 'saved';
+    if (kind === 'secret') vault.store('source', 'token', 'synthetic-original');
+    else {
+      const added = connections.upsert('source', 'token', { host: 'api.search.brave.com', token: 'synthetic-original', max: 5 });
+      if (!added.ok) throw new Error('fixture connection');
+      accountId = added.connection.id;
+    }
+    expect(await manager.reuse('web-search', 'token', { kind, instanceKey: 'source', secretKey: 'token', accountId })).toEqual({ ok: true });
+    const cancel = vi.fn();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(new Response(new ReadableStream({ cancel }), { headers: { 'content-type': 'text/plain' } }))
+      .mockImplementation(async () => new Response('fresh', { headers: { 'content-type': 'text/plain' } }));
+    const { slot } = makeSlot({ getGhost: () => target, readSecret: vault.read,
+      resolveSavedCredential: (id, key) => manager.resolve(id, key), fetchImpl });
+    try {
+      const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'stream' });
+      expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+      if (!opened.ok || !('connectionId' in opened)) return;
+      if (kind === 'secret') vault.store('source', 'token', 'synthetic-replacement');
+      else connections.upsert('source', 'token', { host: 'api.search.brave.com', token: 'synthetic-replacement', max: 5 });
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId }))
+        .toMatchObject({ ok: false, errorCode: 'NETWORK_CONNECTION_UNAVAILABLE' });
+      expect(slot.hasInFlightRequests('web-search')).toBe(false);
+      expect(await slot.handleFetchRequest('web-search', { url: BRAVE_URL })).toMatchObject({ ok: true, body: 'fresh' });
+      expect(fetchImpl.mock.calls[1]![1].headers.Authorization).toBe('Bearer synthetic-replacement');
+      expect(manager.list('web-search', 'token').accounts).toMatchObject([{ status: 'connected' }]);
+    } finally { await slot.disposeAll(); }
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  // Same lifetime invariant for existing synchronous Host identity sources:
+  // a changed membership/audience/host or email must reject the next read.
+  it.each(['membership', 'audience', 'host', 'login-email'] as const)('closes an identity stream after its %s changes', async change => {
+    const resolution = { membershipId: 'original', audience: 'service', allowedHosts: ['api.search.brave.com'] };
+    let email = 'original@example.test';
+    const cancel = vi.fn();
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: { hosts: ['api.search.brave.com'], secrets: [{ key: 'token', label: 'Identity',
+        source: change === 'login-email' ? 'login-email' : 'oidc-token',
+        inject: { header: 'Authorization', format: 'Bearer {value}' } }] } }),
+      getLoginEmail: () => email,
+      connectionTokens: { resolve: () => ({ ...resolution }), getToken: async () => 'synthetic-identity', invalidate: vi.fn() },
+      fetchImpl: async () => new Response(new ReadableStream({ cancel }), { headers: { 'content-type': 'text/plain' } }),
+    });
+    try {
+      const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'stream' });
+      expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+      if (!opened.ok || !('connectionId' in opened)) return;
+      if (change === 'membership') resolution.membershipId = 'replacement';
+      if (change === 'audience') resolution.audience = 'replacement';
+      if (change === 'host') resolution.allowedHosts = [];
+      if (change === 'login-email') email = 'replacement@example.test';
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId }))
+        .toMatchObject({ ok: false, errorCode: 'NETWORK_CONNECTION_UNAVAILABLE' });
+      expect(slot.hasInFlightRequests('web-search')).toBe(false);
+    } finally { await slot.disposeAll(); }
     expect(cancel).toHaveBeenCalledOnce();
   });
 
@@ -2666,6 +2750,36 @@ describe('networkSlot · 多连接(connections,动态白名单 + 按 host 注入
       const value = tokens[hostname];
       return value === null || value === undefined ? null : { value, ...inject };
     },
+  });
+
+  // #10130 / 4581505306, unit: the buffered connection tests cannot observe
+  // a PAT removed/replaced after stream handoff. Next read must cancel the
+  // original response; a replacement remains usable by a fresh request.
+  it.each(['removed', 'replaced'] as const)('closes a dynamic PAT stream when its connection is %s', async change => {
+    const tokens: Record<string, string | null> = { 'gitlab.example.com': 'synthetic-original' };
+    const connections = connDeps(tokens, CONN_ONLY_NETWORK.connections![0]!.inject);
+    const tokenFor = vi.spyOn(connections, 'tokenFor');
+    const cancel = vi.fn();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(new Response(new ReadableStream({ cancel }), { headers: { 'content-type': 'text/plain' } }))
+      .mockImplementation(async () => new Response('fresh', { headers: { 'content-type': 'text/plain' } }));
+    const { slot } = makeSlot({ getGhost: () => fakeGhost({ network: CONN_ONLY_NETWORK }), connections, fetchImpl });
+    try {
+      const opened = await slot.handleFetchRequest('web-search', { url: 'https://gitlab.example.com/events', as: 'stream' });
+      expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+      if (!opened.ok || !('connectionId' in opened)) return;
+      if (change === 'removed') delete tokens['gitlab.example.com'];
+      else tokens['gitlab.example.com'] = 'synthetic-replacement';
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId }))
+        .toMatchObject({ ok: false, errorCode: 'NETWORK_CONNECTION_UNAVAILABLE' });
+      expect(slot.hasInFlightRequests('web-search')).toBe(false);
+      if (change === 'replaced') {
+        tokenFor.mockClear();
+        expect(await slot.handleFetchRequest('web-search', { url: 'https://gitlab.example.com/events' })).toMatchObject({ ok: true, body: 'fresh' });
+        expect(fetchImpl.mock.calls[1]![1].headers['Private-Token']).toBe('Bearer synthetic-replacement');
+        expect(tokenFor).toHaveBeenCalledOnce();
+      }
+    } finally { await slot.disposeAll(); }
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it('用户添加的连接地址放行并注入该地址自己的 token;意识伪造的同名头被覆盖', async () => {

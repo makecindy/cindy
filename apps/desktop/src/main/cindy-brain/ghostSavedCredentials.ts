@@ -132,9 +132,10 @@ export class GhostSavedCredentialManager {
     const target = this.deps.captureTarget(id);
     const source = ref ? this.deps.captureTarget(ref.instanceKey) : null;
     if (!ref || !candidate || !target || !source) return null;
-    return { value: candidate.value, assertCurrent: () => {
+    const { value } = candidate;
+    return { value, assertCurrent: () => {
       if (target !== this.deps.captureTarget(id) || source !== this.deps.captureTarget(ref.instanceKey) ||
-          !isDeepStrictEqual(ref, this.reference(id, key)) || !this.candidate(id, key, ref)) throw new Error('CREDENTIAL_REFERENCE_CHANGED');
+          !isDeepStrictEqual(ref, this.reference(id, key)) || this.candidate(id, key, ref)?.value !== value) throw new Error('CREDENTIAL_REFERENCE_CHANGED');
     } };
   }
 

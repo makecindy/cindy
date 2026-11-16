@@ -1900,10 +1900,11 @@ export class GhostNetworkSlot {
     // 连接地址时,注入那条连接自己的 token(按声明的 header/format)。命中
     // 地址但 token 读不到 = 半身位(理论上不该出现:入库先 token 后清单),
     // 与 secrets 同款快速失败,不发一个注定 401 的请求。
-    if (defaultTls && connectionDecls.length > 0 && this.deps.connections) {
-      const connHosts = this.deps.connections.hostsFor(instanceKey);
+    const connections = this.deps.connections;
+    if (defaultTls && connectionDecls.length > 0 && connections) {
+      const connHosts = connections.hostsFor(instanceKey);
       if (connHosts.includes(hostname)) {
-        const tok = this.deps.connections.tokenFor(instanceKey, hostname);
+        const tok = connections.tokenFor(instanceKey, hostname);
         if (!tok) {
           return {
             error: `连接地址 ${hostname} 的凭证读取失败——请到主界面侧边栏「插件」的本插件详情页重新添加该连接`,
@@ -1914,6 +1915,15 @@ export class GhostNetworkSlot {
         }
         deleteHeaderVariants(headers, tok.header);
         headers[tok.header] = tok.format.replace('{value}', () => tok.value);
+        if (retainDirectCredential) {
+          const { value, header, format } = tok;
+          credentialGuards.push(() => {
+            const current = connections.tokenFor(instanceKey, hostname);
+            if (!current || current.value !== value || current.header !== header || current.format !== format) {
+              throw new Error('CREDENTIAL_CHANGED');
+            }
+          });
+        }
       }
     }
     return { error: null, usedExchange, oauthInjected, connectionInjected };
@@ -1995,6 +2005,11 @@ export class GhostNetworkSlot {
         return {
           value: token,
           connectionTokenKey: { ...tokenInput, hostname },
+          assertCurrent: retainDirectCredential ? () => {
+            const current = manager.resolve(instanceKey);
+            if (!current || current.membershipId !== tokenInput.membershipId || current.audience !== tokenInput.audience ||
+                !current.allowedHosts.includes(hostname)) throw new Error('CREDENTIAL_CHANGED');
+          } : undefined,
         };
       } catch (error) {
         this.deps.log?.warn('ghost Connection token issuance failed', { ghostId: instanceKey,
@@ -2040,6 +2055,10 @@ export class GhostNetworkSlot {
       const resolved = this.resolveLoginEmail(secret);
       if ('error' in resolved) return resolved;
       raw = resolved.value;
+      if (retainDirectCredential) assertCurrent = () => {
+        const current = this.resolveLoginEmail(secret);
+        if ('error' in current || current.value !== raw) throw new Error('CREDENTIAL_CHANGED');
+      };
     } else {
       const stored = this.deps.readSecret(instanceKey, secret.key);
       if (stored === null || stored.length === 0) {
