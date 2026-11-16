@@ -763,6 +763,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'worktree:list-branches',
   // Sync status is local-only; sync mutates only by explicit fetch + fast-forward.
   // sync-branch baseRepo also passes dispatch PATH_GUARDED_CHANNELS.
+  'worktree:checkout',
   'worktree:branch-sync-status',
   'worktree:sync-branch',
   'worktree:suggest-name',
@@ -950,9 +951,12 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   "device-link:remote-desktop:v1": REMOTE_DESKTOP_INVOKE_MS,
   // 被控端 CMD_TIMEOUT_MS(30s)+ CMD_KILL_GRACE_MS(5s)+ 5s 回程余量
   'desktop-cmd:run': 40_000,
-  // 被控端 worktree:create 含 git worktree add(--no-checkout)+ 白名单文件选择性
-  // checkout + .claude/.sivi 拷贝;大仓库 / 慢盘上可能超默认 30s,给足执行预算 + 回程余量。
-  'worktree:create': 60_000,
+  // 被控端 worktree:create 原生路径含 git worktree add(--no-checkout)+ 白名单文件选择性
+  // checkout + .claude/.sivi 拷贝,数秒返回;仓库使用 Multibox 时同步克隆整个工作区与引擎
+  // 缓存才返回(2026-11-16 实测 Unity 项目 28 万文件 67–88s,Multibox 文档同规模最慢 103s,
+  // NTFS 复制模式更慢)。控制端在此期间显示创建中,给 5 分钟执行预算 + 回程余量。
+  // 旧控制端仍按 60s 超时,超时后走既有预创建补偿;被控端执行不受此值影响。
+  'worktree:create': 300_000,
   // User-triggered fetch (30s) plus local probes and process cleanup. Never replay.
   'worktree:sync-branch': 90_000,
   // 可能先等待同 sessionId 的晚到 create 释放互斥锁，再执行 git worktree remove。

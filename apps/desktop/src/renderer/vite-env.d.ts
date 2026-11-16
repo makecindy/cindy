@@ -1577,6 +1577,13 @@ interface ElectronAPI {
     getCard: (callId: string) => Promise<{
       card: { callId: string; ghostId: string; html: string; height: number; v: number } | null;
     }>;
+    /** A card of a task on another computer, sanitized again on this one. Null: no card, an
+     *  older host or a card kind shown only on its own computer; failed: the read itself failed. */
+    getRemoteCard: (deviceId: string, sessionId: string, callId: string) => Promise<{
+      card: { ghostId: string; html: string; height: number; revision: string; externalLinks: boolean } | null;
+      unsupported?: true;
+      failed?: true;
+    }>;
     /** 权威实测高回填:GhostToolCard 量出内容真实高度后写回卡片库,历史
      *  回放据此零动画首帧贴合(行不存在主机静默跳过)。 */
     reportCardHeight: (callId: string, height: number) => Promise<{ ok: true }>;
@@ -1739,6 +1746,8 @@ interface ElectronAPI {
     clearUsage: (subjectId: string | null) => Promise<void>;
     readme: (id: string, locale?: string) => Promise<import('@cindy/plugin-protocol').GhostReadmeContent | null>;
     libraryOverview: (id: string) => Promise<import('../shared/ghost').GhostLibraryOverview>;
+    reusableAccounts: (id: string) => Promise<import('../shared/pluginAccountReuse').GhostAccountReuseGroup[]>;
+    reuseAccount: (id: string, request: import('../shared/pluginAccountReuse').GhostAccountReuseAction) => Promise<import('../shared/pluginAccountReuse').GhostAccountReuseResult>;
     handoffList: (id: string) => Promise<import('../shared/ghost').GhostHandoffFile[]>;
     handoffFolder: (id: string) => Promise<string | null>;
     handoffDelete: (id: string, ref: string) => Promise<{ existed: boolean }>;
@@ -4646,6 +4655,7 @@ interface ElectronAPI {
   worktreeSuggestName: (req: {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').SuggestNameResp>;
+  worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest) => Promise<import('../shared/worktreeCheckout').CheckoutReply>;
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncStatus>;
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncReply>;
   worktreeListBranches: (req: {

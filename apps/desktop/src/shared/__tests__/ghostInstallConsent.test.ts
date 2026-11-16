@@ -38,7 +38,7 @@ function installed(
 }
 
 describe('plugin install consent', () => {
-  it.each(['browser', 'computer', 'ssh', 'docs', 'discovery'] as const)('retains an installed %s declaration and confirms newly added declarations', group => {
+  it.each(['browser', 'computer', 'ssh', 'docs', 'discovery', 'usage'] as const)('retains an installed %s declaration and confirms newly added declarations', group => {
     const next = manifest({ agent: { hostTools: [group] } });
     const old = installed(next);
     expect(evaluateGhostInstallConsent(old, next)).toBeNull();

@@ -217,12 +217,26 @@ describe('piProjectResourcesDrifted', () => {
   });
 
   it('detects a dangling prompt symlink whose target lands later', () => {
-    mkdirSync(path.join(project, '.pi', 'prompts'), { recursive: true });
-    const target = path.join(project, 'later.md');
-    symlinkSync(target, path.join(project, '.pi', 'prompts', 'opsx.md'));
+    const prompts = path.join(project, '.pi', 'prompts');
+    const target = process.platform === 'win32'
+      ? path.join(project, 'later', 'opsx.md')
+      : path.join(project, 'later.md');
+    if (process.platform === 'win32') {
+      // A dangling directory junction exercises late-arriving linked prompts
+      // without requiring the file-symlink privilege. Do not use a hard link:
+      // its target must already exist and would erase the missing-target case.
+      mkdirSync(path.dirname(prompts), { recursive: true });
+      linkDir(path.dirname(target), prompts);
+    } else {
+      mkdirSync(prompts, { recursive: true });
+      symlinkSync(target, path.join(prompts, 'opsx.md'), 'file');
+    }
     const baseline = snapshot();
+    expect(baseline.paths.promptTemplates).toEqual([]);
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
+    mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, '---\ndescription: t\n---\n');
+    expect(collectPiProjectResourceCliPaths(project).promptTemplates).toEqual([real(target)]);
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 

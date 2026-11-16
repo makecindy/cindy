@@ -41,6 +41,7 @@ interface SubscriptionCodexUsageWindow {
 }
 /** One Codex app-server quota bucket, keyed by its limit id. */
 export interface SubscriptionCodexUsageBucket {
+  planType?: string;
   limitId: string | null;
   limitName: string | null;
   updatedAt: number | null;
@@ -51,6 +52,7 @@ export interface SubscriptionCodexUsageBucket {
 export interface SubscriptionAccountUsage {
   claude?: ClaudeSubscriptionUsageSnapshot;
   codex?: {
+    planType?: string;
     buckets: Record<string, SubscriptionCodexUsageBucket>;
     credits: { hasCredits: boolean; unlimited: boolean; balance: string | null } | null;
   };
@@ -61,6 +63,8 @@ export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig,
   legacy?: boolean;
   identity?: string;
   plan?: string;
+  planTier?: string;
+  planType?: string;
   /** Advisory ISO date reported by this account's official CLI; older hosts omit it. */
   loginExpiresAt?: string;
   /** Host-selected reset target. Imported accounts retain their original connection and settings. */
@@ -155,6 +159,8 @@ export interface SubscriptionSessionAccount {
   number: number;
   identity?: string;
   plan?: string;
+  planTier?: string;
+  planType?: string;
   paused: boolean;
   status: SubscriptionAccountView['status'];
   usage?: SubscriptionAccountUsage;
@@ -228,6 +234,8 @@ export function parseSubscriptionSessionAccountView(
       number: account.number as number,
       ...(text(account.identity) ? { identity: text(account.identity) } : {}),
       ...(text(account.plan) ? { plan: text(account.plan) } : {}),
+      ...(text(account.planTier) ? { planTier: text(account.planTier) } : {}),
+      ...(text(account.planType) ? { planType: text(account.planType) } : {}),
       paused: account.paused === true,
       status: account.status as SubscriptionAccountView['status'],
       ...(usage && typeof usage === 'object' && !Array.isArray(usage)

@@ -37,6 +37,7 @@ import type {
   InstalledGhost,
 } from '../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../shared/pluginAccountReuse.js';
 import {
   GHOST_NODE_CHILD_MODE_FLAG,
   GHOST_NODE_MAX_CHILDREN_PER_GHOST,
@@ -164,6 +165,7 @@ export interface GhostNodeRuntimeBrokerDeps {
   hostToolRequest?: (ghostId: string, payload: unknown, current: () => boolean) => Promise<unknown>;
   /** Explicit disable/update/uninstall releases Host-owned resources; idle worker exit does not. */
   onStopped?(ghostId: string): void;
+  networkRequest?: (ghostId: string, payload: Record<string, unknown>) => Promise<unknown>;
   secretSaved?: (ghostId: string, secretKey: string) => boolean;
   /** 只解析本插件显式引用的 OAuth 槽；不交付 refresh token。 */
   resolveOauthSecret?: (ghostId: string, secretKey: string, accountId?: string) => Promise<
@@ -357,6 +359,7 @@ interface WorkerEntry {
   pending: Map<string, PendingRpc>;
   /** Autonomous Host calls can wait for native consent without an Agent RPC. */
   hostToolRequests: number;
+  networkRequests: number;
   /** 本 worker 名下代启的子进程(childId → 记账;级联生死)。 */
   children: Map<string, ChildProcEntry>;
   idleTimer: NodeJS.Timeout | null;
@@ -800,11 +803,16 @@ export class GhostNodeRuntimeBroker {
             }
             if (!resolved.ok) {
               clearHostSecrets(hostSecrets);
+              if (resolved.error === 'HOST_INJECTION_REQUIRED') return errorResult('HOST_INJECTION_REQUIRED', 'Use cindy.fetch for reused accounts');
               return errorResult('PERMISSION_DENIED', '账号不可用，请在插件详情页检查授权');
             }
             value = resolved.accessToken;
           } else {
             value = this.deps.readSecret?.(ghostId, binding.key) ?? null;
+            if (value === GHOST_SAVED_CREDENTIAL_MARKER) {
+              clearHostSecrets(hostSecrets);
+              return errorResult('HOST_INJECTION_REQUIRED', 'Use cindy.fetch for reused credentials');
+            }
           }
           if (value === null) {
             clearHostSecrets(hostSecrets);
@@ -907,6 +915,9 @@ export class GhostNodeRuntimeBroker {
     if (!this.ownerScopeUsable(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.ownerScopeSnapshot)) return;
     const message = parseGhostNodeChildToHostMessage(raw);
     if (!message) return;
+    if (message.type === 'network-request') {
+      void this.handleNetworkRequest(entry, message); return;
+    }
     if (message.type === 'host-tool-request') {
       void this.handleHostToolRequest(entry, message); return;
     }
@@ -932,14 +943,38 @@ export class GhostNodeRuntimeBroker {
     }
   }
 
+  private workerHostCurrent(entry: WorkerEntry): boolean {
+    const id = GhostNodeRuntimeBroker.instanceId(entry.ghost);
+    const ghost = this.deps.getGhost(id);
+    return !entry.stopping && this.workers.get(GhostNodeRuntimeBroker.keyOf(id, entry.entryRel)) === entry &&
+      this.ownerScopeUsable(id, entry.ownerScopeSnapshot) && ghost?.enabled === true && ghost.dir === entry.hostToolIdentity.dir &&
+      ghost.approval?.state === 'approved' && ghost.approval.revision === entry.hostToolIdentity.approvalRevision;
+  }
+
+  private async handleNetworkRequest(entry: WorkerEntry, message: Extract<GhostNodeChildToHostMessage, { type: 'network-request' }>) {
+    let acquired = false;
+    try {
+      if (!this.workerHostCurrent(entry) || !this.deps.networkRequest) throw new Error('NODE_HOST_UNAVAILABLE');
+      if (entry.networkRequests >= 8) throw new Error('NODE_HOST_BUSY');
+      this.clearIdleTimer(entry);
+      entry.networkRequests += 1;
+      acquired = true;
+      const result = await this.deps.networkRequest(GhostNodeRuntimeBroker.instanceId(entry.ghost), { ...message.request, callId: undefined });
+      if (!this.workerHostCurrent(entry)) throw new Error('NODE_HOST_UNAVAILABLE');
+      this.replyToWorker(entry, { type: 'node-host-result', reqId: message.reqId, ok: true, result });
+    } catch {
+      this.replyToWorker(entry, { type: 'node-host-result', reqId: message.reqId, ok: false });
+    } finally {
+      if (acquired) {
+        entry.networkRequests -= 1;
+        this.scheduleIdleStop(entry);
+      }
+    }
+  }
+
   private async handleHostToolRequest(entry: WorkerEntry, message: Extract<GhostNodeChildToHostMessage, { type: 'host-tool-request' }>) {
     const id = GhostNodeRuntimeBroker.instanceId(entry.ghost);
-    const current = () => {
-      const ghost = this.deps.getGhost(id);
-      return this.workers.get(GhostNodeRuntimeBroker.keyOf(id, entry.entryRel)) === entry &&
-        this.ownerScopeUsable(id, entry.ownerScopeSnapshot) && ghost?.enabled === true && ghost.dir === entry.hostToolIdentity.dir &&
-        ghost.approval?.state === 'approved' && ghost.approval.revision === entry.hostToolIdentity.approvalRevision;
-    };
+    const current = () => this.workerHostCurrent(entry);
     const denied = { isError: true, content: [{ type: 'text', text: '{"ok":false,"errorCode":"PERMISSION_DENIED"}' }] };
     this.clearIdleTimer(entry);
     entry.hostToolRequests += 1;
@@ -1711,6 +1746,7 @@ export class GhostNodeRuntimeBroker {
       nextId: 1,
       pending: new Map(),
       hostToolRequests: 0,
+      networkRequests: 0,
       children: new Map(),
       idleTimer: null,
       hardKillTimer: null,
@@ -2413,7 +2449,7 @@ export class GhostNodeRuntimeBroker {
   private scheduleIdleStop(entry: WorkerEntry): void {
     const key = GhostNodeRuntimeBroker.keyOf(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.entryRel);
     if (this.workers.get(key) !== entry) return;
-    if (entry.ghost.manifest.node?.lifecycle === 'resident' || entry.pending.size > 0 || entry.hostToolRequests > 0) return;
+    if (entry.ghost.manifest.node?.lifecycle === 'resident' || entry.pending.size > 0 || entry.hostToolRequests > 0 || entry.networkRequests > 0) return;
     // 有代启子进程在世时不空闲回收——收 worker 会级联杀掉正在干活的代理。
     if (entry.children.size > 0) return;
     this.clearIdleTimer(entry);

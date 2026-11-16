@@ -4,7 +4,7 @@
  * @vitest-environment jsdom
  */
 
-import { act, cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const authState = vi.hoisted(() => ({
@@ -104,6 +104,28 @@ function renderSettings(settingsHeight?: number, measuredHeight?: number) {
 }
 
 describe('GhostSettingsWebview layout ownership', () => {
+  // Unit / UX-05: the theme/layout readiness barrier may exceed 300ms. Existing
+  // opacity/height cases did not verify a readable wait inside that same space.
+  it.each([true, false])('shows delayed loading only while a settings guest is still preparing: slow=%s', async slow => {
+    vi.useFakeTimers();
+    const { host, webview, executeJavaScript } = renderSettings(undefined, 80);
+    let finish!: (value: number) => void;
+    if (slow) executeJavaScript.mockImplementation(() => new Promise<number>(resolve => { finish = resolve; }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(299); });
+    expect(screen.queryByRole('status')).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    if (slow) {
+      const status = screen.getByRole('status');
+      expect(status.textContent).toContain('ccAgent.common.loading');
+      expect(status.closest('[data-ghost-webview]')).toBe(host);
+      expect(host.style.height).toBe('160px');
+      executeJavaScript.mockResolvedValue(80);
+      await act(async () => { finish(80); });
+    }
+    expect(screen.queryByRole('status')).toBeNull();
+    expect((webview as HTMLElement).style.opacity).toBe('1');
+  });
+
   it('keeps the target page and directory picker bound to B, and closes the lease on unmount', async () => {
     let receive!: (value: { viewId: string; request: { id: string; expiresAt: number } }) => void;
     const unsubscribe = vi.fn(),

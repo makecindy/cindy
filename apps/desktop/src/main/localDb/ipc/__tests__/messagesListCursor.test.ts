@@ -193,6 +193,41 @@ function insertCostMessage(
 }
 
 describe('local-db:messages:list cursor', () => {
+  // DB regression: sealing a six-message page previously used 15 reads,
+  // including separate full-body reads for both already-loaded endpoints.
+  // Exercise the production handler and retain projected legacy round costs.
+  it('seals a text history page with a bounded batch without losing round costs', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    for (let i = 0; i < 6; i++) {
+      insertCostMessage(sqlite, { id: String(i), role: i % 2 ? 'assistant' : 'user',
+        createdAt: 1000 + i, agentMeta: i % 2 ? { turnCostUsd: 0.25, turnCompleted: true } : undefined });
+      sqlite.prepare('UPDATE messages SET content = ? WHERE id = ?').run(JSON.stringify(`fixture-${i}`), String(i));
+    }
+    const queries: string[] = [];
+    const prepare = sqlite.prepare.bind(sqlite);
+    const spy = vi.spyOn(sqlite, 'prepare').mockImplementation(((query: string) => {
+      queries.push(query);
+      return prepare(query);
+    }) as typeof sqlite.prepare);
+    try {
+      registerMessageIpc();
+      const channel = 'local-db:messages:view';
+      const page = await runDeviceLinkInvokeContext({ controllerDeviceId: 'fixture', channel },
+        () => h.handlers.get(channel)!({}, 's1', { lazyDetails: true })) as HistoryViewPage<HistoryMessageSource>;
+      expect(JSON.stringify(page)).toContain('fixture-5');
+      const answers = historyViewLeaves(page.items).flatMap(item => item.type === 'messages' ? item.messages : [])
+        .filter(message => message.role === 'assistant');
+      expect(answers).toHaveLength(3);
+      expect(answers.every(message => (message.agentMeta as { userTurnCostUsd: number }).userTurnCostUsd === 0.25)).toBe(true);
+      expect(queries.length).toBeLessThanOrEqual(11);
+      expect(queries.filter(query => query.includes('from "sessions"'))).toHaveLength(5);
+    } finally {
+      spy.mockRestore();
+      sqlite.close();
+    }
+  });
+
   it('serves a lightweight SQLite view, hydrates visible text, then reads only the expanded subagent', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
@@ -667,9 +702,9 @@ describe('local-db:messages:list cursor', () => {
     expect(JSON.parse(stored.agent_meta)).toEqual({
       turnCostUsd: 0.777042,
     });
-    // list/session + prior-user lookup + bounded visibility scan
-    // (plus the direct storage assertion); never one SQLite query set per SDK segment.
-    expect(prepareSpy).toHaveBeenCalledTimes(6);
+    // The visible real user is already the boundary: no prior-user lookup.
+    // Includes the direct storage assertion; never a query set per SDK segment.
+    expect(prepareSpy).toHaveBeenCalledTimes(5);
   });
 
   it('does not scan older user rounds when projecting legacy turn cost', async () => {
