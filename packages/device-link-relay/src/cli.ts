@@ -6,7 +6,7 @@
  *               --relay-id <UUID> --owner-public-key <公钥> --owner-cert <证书 JSON 的 base64url>
  *   relay serve --data <目录> [--host 127.0.0.1] [--port 47820]
  *               [--tls-cert <PEM> --tls-key <PEM>] [--public-url <https://...>] [--trust-proxy]
- *               [--acme-identifier <域名或IP> [--acme-http-port 80] [--acme-directory <URL>]]
+ *               [--acme-identifier <域名或IP> [--acme-http-host 0.0.0.0] [--acme-http-port 80] [--acme-directory <URL>]]
  *
  * `--acme-identifier`:自动向 Let's Encrypt 申请并续期证书(http-01 验证走 `--acme-http-port`),
  * 拿到证书后才开始提供 HTTPS;申请失败按退避重试,状态写进数据目录的 status.json。
@@ -43,7 +43,7 @@ function parsePort(value: string | undefined, fallback: number, name: string): n
 }
 
 /** 自动证书:先在 80 端口提供验证,拿到(或读到)有效证书后返回;之后由调用方定时续期。 */
-async function prepareAcme(flags: Map<string, string>, dataDir: string, host: string) {
+async function prepareAcme(flags: Map<string, string>, dataDir: string) {
   const identifier = identifierFor(required(flags, 'acme-identifier'));
   const manager = new CertificateManager({
     dataDir,
@@ -51,7 +51,7 @@ async function prepareAcme(flags: Map<string, string>, dataDir: string, host: st
     directoryUrl: flags.get('acme-directory'),
     logger: stderrLogger,
   });
-  await startChallengeServer({ host, port: parsePort(flags.get('acme-http-port'), 80, 'acme-http-port'), challenges: manager.challenges });
+  await startChallengeServer({ host: flags.get('acme-http-host') ?? '0.0.0.0', port: parsePort(flags.get('acme-http-port'), 80, 'acme-http-port'), challenges: manager.challenges });
   let material: TlsMaterial | null = await manager.load();
   if (material && manager.needsRenewal(material)) material = null;
   let failures = 0;
@@ -174,7 +174,7 @@ async function main(): Promise<void> {
     const port = parsePort(flags.get('port'), 47820, 'port');
     const dataDir = required(flags, 'data');
     const host = flags.get('host') ?? '127.0.0.1';
-    const acme = flags.has('acme-identifier') ? await prepareAcme(flags, dataDir, host) : null;
+    const acme = flags.has('acme-identifier') ? await prepareAcme(flags, dataDir) : null;
     let material = acme?.material ?? null;
     const handle = await startRelayServer({
       dataDir,
