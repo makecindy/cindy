@@ -418,6 +418,28 @@ test('a cancelled scheduler acceptance rolls back before vendor dispatch', async
   assert.equal(h.maker.getSession('scheduled-task').sent.length, 0);
 });
 
+// #10803 / unit: the Host uses the same queue bridge after the user row is
+// durable. A failed snapshot must report its cause, not look like a lost queue row.
+test('persisted scheduler snapshot failure reaches its run with the original error', async t => {
+  t = lifoCleanup(t);
+  const message = 'Snapshot operation deadline exceeded';
+  const h = createHarness({ getGitSnapshot: () => ({
+    onTurnStart() { throw new Error(message); }, onTurnAbort() {}, onTurnEnd() {}, onSessionClosed() {},
+  }) });
+  t.after(() => h.queue.dispose());
+  let failure;
+  const bridge = h.queue.schedulerQueue();
+  const result = await bridge.enqueuePrompt(scheduledInput({
+    onPersistedFailure: (error, recovering) => { failure = { error, recovering }; },
+    onAccepted() { assert.fail('snapshot failed before acceptance'); },
+  }));
+  await waitFor(() => failure);
+  assert.deepEqual(failure, { error: message, recovering: false });
+  assert.equal(h.persisted.some(row => row.clientId === result.clientId), true);
+  assert.equal(bridge.isPromptTracked('scheduled-task', result.clientId), false);
+  assert.equal(h.maker.getSession('scheduled-task').sent.length, 0);
+});
+
 test('an outgoing scheduler cannot restore queues after its input runtime is disposed', async t => {
   t = lifoCleanup(t);
   let restored = 0;

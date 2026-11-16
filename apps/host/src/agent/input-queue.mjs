@@ -249,11 +249,16 @@ export function createInputQueue(deps) {
         const recovery = coordinator.getProjection(id).recovery;
         executor.persistTerminalSendError(id, message, recovery?.kind === 'active-turn' ? recovery.item?.clientId : undefined);
       },
-      onPersistedSendRejected: (id, message) => executor.onPersistedSendRejected(id, message),
+      // As register.ts: the scheduler bridge first (a scheduled prompt's persisted failure), then the
+      // Pi prompt timeout's runtime close (turn-executor).
+      onPersistedSendRejected: (id, message, item, recovering) => {
+        scheduleBridge.onPersistedSendRejected(id, message, item, recovering);
+        executor.onPersistedSendRejected(id, message);
+      },
       onAcceptedQueuedMessage: async (id, item) => {
         schedulePreparations.delete(item.clientId);
         scheduleDiscardWatchers.delete(item.clientId);
-        await acceptedCallbacks.run(id, item);
+        await acceptedCallbacks.run(id, item, scheduleBridge.recoverySourceClientId(id, item));
       },
       onDiscardedQueuedMessage: (id, item) => {
         afterSnapshot(id, () => attachmentOwnership.discardClient(id, item.clientId));
@@ -284,6 +289,7 @@ export function createInputQueue(deps) {
       createId: randomUUID,
       preparations: schedulePreparations,
       discardWatchers: scheduleDiscardWatchers,
+      discardAcceptedCallback: acceptedCallbacks.discard,
       enqueue: async req => {
         const id = req.targetSessionId;
         const state = stateFor(id);
