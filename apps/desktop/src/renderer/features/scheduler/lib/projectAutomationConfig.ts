@@ -78,7 +78,12 @@ export function scheduleToProjectConfig(
     useWorktree: schedule.useWorktree,
     persistentSession: schedule.persistentSession,
     silentWhenIdle: schedule.silentWhenIdle,
-    programChangeGate: schedule.programChangeGate || undefined,
+    // 项目配置文件保存前置脚本、不保存插件。只靠插件给信号的检查提升后没有信号来源，
+    // 门照搬会让项目里的副本每轮空跳，所以这种情况不保留门（与复制为个人自动化一致）。
+    programChangeGate:
+      (schedule.programChangeGate === true &&
+        !(schedule.preRunPlugin && !schedule.preRunHook?.command?.trim())) ||
+      undefined,
     preRunHook: schedule.preRunHook?.command
       ? { command: schedule.preRunHook.command, timeoutMs: schedule.preRunHook.timeoutMs }
       : undefined,
