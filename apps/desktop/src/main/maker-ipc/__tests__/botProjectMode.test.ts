@@ -82,12 +82,13 @@ describe('ensureBotProjectAutomations', () => {
     const route = { harness: 'pi' as const, model: 'm1', providerId: 'p1', effort: 'medium', fastMode: false };
     await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir, route })).resolves.toBe(true);
     expect(loader.upsertSchedule).toHaveBeenCalledWith(workingDir, expect.objectContaining({
-      id: BOT_PROJECT_MEMORY_REVIEW_ID, agentKind: 'pi', model: 'm1', providerId: 'p1',
+      id: BOT_PROJECT_MEMORY_REVIEW_ID, followTeammateModel: true,
       name: 'Mimi · Review memory', persistentSession: true, silentWhenIdle: true,
       prompt: expect.stringContaining('teammate id bot-1'),
     }), { keepUnreadable: true });
 
     const supplied = loader.upsertSchedule.mock.calls[0]![1];
+    expect(supplied.model).toBeUndefined();
     // Restoring an already-upgraded project on this computer recreates only its local check.
     const checkFile = path.join(root, '.memory-review-check-v1.cjs');
     await fs.rm(checkFile);

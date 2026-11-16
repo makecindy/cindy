@@ -13,6 +13,8 @@ import {
   type ScheduleWebhookPresetId,
 } from '@cindy/maker-scheduler/webhook-formats';
 import { PreRunPluginFields } from './PreRunPluginFields';
+import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../../../shared/projectAutomationPaths';
+import { teammateFolderOfProjectPath } from '@cindy/maker-shared/teammate-project';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import * as sessionService from '@/lib/sessionService';
@@ -313,6 +315,12 @@ export function ScheduleFormDialog({
   const triggerMode = form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
   const webhookSettingsVisible = !isProjectAutomationMode && webhookReceiverReady && form.webhookEnabled;
 
+  const maybeTeammateReview = isProjectAutomationMode && initial?.projectConfigId === 'teammate-memory-review'
+    && !!teammateFolderOfProjectPath(projectWorkingDir);
+  const [ownReviewProject, setOwnReviewProject] = useState<string | null>(null);
+  const isTeammateReview = maybeTeammateReview && ownReviewProject === projectWorkingDir;
+  const [reviewModelReady, setReviewModelReady] = useState(false);
+  const [reviewModelReadError, setReviewModelReadError] = useState(false);
   const initialId = initial?.id;
   useEffect(() => {
     if (!open) return;
@@ -345,6 +353,42 @@ export function ScheduleFormDialog({
     initialWorkingDir,
     setField,
   ]);
+
+  const reviewModelReadFailedText = t('scheduler.editor.reviewModelReadFailed');
+  // Read the durable opt-in, never infer it from an empty model or a matching snapshot.
+  useEffect(() => {
+    if (!open || !maybeTeammateReview || !projectWorkingDir) return;
+    let current = true;
+    setOwnReviewProject(null);
+    setReviewModelReady(false);
+    setReviewModelReadError(false);
+    void window.electronAPI.localDb.bots.list().then(async bots => {
+      if (!current) return;
+      // The shape is only a hint. The active account's host-owned roster proves ownership.
+      const normalize = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '');
+      const ownsProject = bots.some(value => {
+        if (!value || typeof value !== 'object') return false;
+        const bot = value as { homeDir?: unknown };
+        return typeof bot.homeDir === 'string' && normalize(`${bot.homeDir}/workspace`) === normalize(projectWorkingDir);
+      });
+      if (!ownsProject) { setReviewModelReady(true); return; }
+      const result = await window.electronAPI.fileBrowser.readFile({
+        workdir: projectWorkingDir, relPath: PROJECT_AUTOMATION_REL_SEGMENTS.join('/'),
+      });
+      if (!result.ok || result.data.truncated) throw new Error('unreadable config');
+      const file = JSON.parse(result.data.content);
+      const config = file.version === 1 && Array.isArray(file.schedules)
+        ? file.schedules.find((item: { id?: string }) => item.id === initial?.projectConfigId) : null;
+      if (!config) throw new Error('missing review');
+      if (!current) return;
+      setOwnReviewProject(projectWorkingDir);
+      setField('followTeammateModel', config.followTeammateModel === true && !config.model?.trim());
+      setReviewModelReady(true);
+    }).catch(() => {
+      if (current) setReviewModelReadError(true);
+    });
+    return () => { current = false; };
+  }, [open, maybeTeammateReview, projectWorkingDir, initial, initialId, initial?.projectConfigId, setField]);
 
   /** 前置检查「AI 生成」:描述 → utility model 生成脚本落盘 → 命令回填输入框。 */
   const runHookGenerate = useCallback(async () => {
@@ -669,7 +713,7 @@ export function ScheduleFormDialog({
     && (!modelCatalogReady || defaultCapabilitiesLoading || (!agentsLoaded && agentsLoading));
 
   const handleSubmit = async () => {
-    if (awaitingNewModelCatalog) return;
+    if (awaitingNewModelCatalog || (maybeTeammateReview && !reviewModelReady)) return;
     setSubmitError(null);
     const err = validate();
     if (err) {
@@ -861,6 +905,7 @@ export function ScheduleFormDialog({
                     })}
                   />
                 )}
+                {maybeTeammateReview && reviewModelReadError && <ErrorNotice message={reviewModelReadFailedText} />}
                 {submitError && (
                   <ErrorNotice
                     message={t(`chat.remoteError.${parseAgentErrorCode(submitError)?.code}`)}
@@ -974,6 +1019,15 @@ export function ScheduleFormDialog({
                                 )}
                                 <div className="min-w-0 flex-1" />
                                 <ModelEffortChip
+                                  disabled={maybeTeammateReview && !reviewModelReady}
+                                  followModel={isTeammateReview ? {
+                                    active: form.followTeammateModel === true && !form.model.trim(),
+                                    label: t('scheduler.chips.model.followTeammate'),
+                                    onFollow: () => {
+                                      selectModelConfiguration(null);
+                                      setField('followTeammateModel', true);
+                                    },
+                                  } : undefined}
                                   onSelect={({
                                     engine,
                                     modelId,
@@ -1002,7 +1056,7 @@ export function ScheduleFormDialog({
                                   agentKind={form.agentKind}
                                   agentDeviceId={selectedAgentDeviceId ?? undefined}
                                   modelValue={form.model}
-                                  onChangeModel={(v) => setField('model', v)}
+                                  onChangeModel={(v) => { setField('model', v); setField('followTeammateModel', false); }}
                                   effortValue={form.effort}
                                   onChangeEffort={(v) => setField('effort', v)}
                                   followSession={isBound}
@@ -1713,7 +1767,7 @@ export function ScheduleFormDialog({
                     : t('scheduler.editor.promptDialog.createAria')
                 }
                 onClick={() => void handleSubmit()}
-                disabled={submitting || awaitingNewModelCatalog}
+                disabled={submitting || awaitingNewModelCatalog || (maybeTeammateReview && !reviewModelReady)}
                 className="min-w-[68px] shrink-0"
               >
                 {submitLabel}

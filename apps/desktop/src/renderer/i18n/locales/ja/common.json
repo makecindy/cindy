@@ -17193,6 +17193,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "自動化のモデル設定を読み込めませんでした。エディターを閉じて開き直してください。",
       "promptDialog": {
         "titleEdit": "自動化を編集",
         "titleCreate": "自動化を作成",
@@ -17531,6 +17532,7 @@
         "effortHeading": "推論強度",
         "effortDefault": "デフォルト",
         "followSession": "セッションに従う",
+        "followTeammate": "仲間のメインモデルに従う",
         "modelListAria": "モデル一覧",
         "modelSelectorAria": "モデルセレクター",
         "categoryListAria": "{{category}} モデル",

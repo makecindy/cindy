@@ -94,6 +94,7 @@ vi.mock('../runners/_shared', () => ({
 }));
 
 import { MakerScheduleRunner } from '../runner.desktop';
+import { resolveTeammateMemoryReviewModel } from '../teammateMemoryReviewModel';
 import { applyScheduledModelSelection, createScheduledModelScope, resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
 import type { ProviderView } from '@cindy/model-providers';
 import type { Scheduler } from '@cindy/maker-scheduler';
@@ -252,6 +253,7 @@ function createRunnerHarness(
     sdkSessionId?: string;
   } | null = null,
   opts: {
+    resolveInheritedModel?: ConstructorParameters<typeof MakerScheduleRunner>[0]['resolveInheritedModel'];
     bootstrapSession?: ConstructorParameters<typeof MakerScheduleRunner>[0]['bootstrapSession'];
     sessionAlive?: boolean;
     acquirePendingAgentSwitch?: ConstructorParameters<typeof MakerScheduleRunner>[0]['acquirePendingAgentSwitch'];
@@ -297,6 +299,7 @@ function createRunnerHarness(
   const runner = new MakerScheduleRunner({
     maker,
     bootstrapSession: opts.bootstrapSession,
+    resolveInheritedModel: opts.resolveInheritedModel,
     getDb: () => ({}) as never,
     notifier,
     logger: createLogger(),
@@ -2390,4 +2393,73 @@ describe('MakerScheduleRunner model selection', () => {
       expect(mocks.setSessionFastMode).not.toHaveBeenCalled();
     });
   });
+
+// User decision 2026-11-16 / unit: previous model tests only covered saved snapshots.
+// Minimum failure: opt-in review with an old persistent task after the buddy changes model.
+describe('supplied memory review model inheritance', () => {
+  const review = (overrides: Partial<Schedule> = {}) => baseSchedule({ source: 'project',
+    projectConfigId: 'teammate-memory-review', model: undefined, ...overrides });
+  it('reads A then B on each fire, and respects explicit C without consulting the buddy', async () => {
+    let model = 'model-a';
+    const primaryModel = vi.fn(async () => ({ harness: 'codex' as const, model, providerId: 'openai', effort: '', fastMode: false }));
+    const resolve = (schedule: Schedule) => resolveTeammateMemoryReviewModel(schedule, {
+      isOwnProject: async () => true, follows: async () => true, primaryModel,
+    });
+    const h = createSessionHarness();
+    const harness = createRunnerHarness(h, null, { resolveInheritedModel: resolve, resolveModelSelection: async choice => choice });
+    for (const next of ['model-a', 'model-b']) {
+      model = next;
+      h.send.mockClear();
+      await fireToCompletion(harness, h, review());
+      expect(harness.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ model: next, providerId: 'openai', agentKind: 'codex' }));
+    }
+    h.send.mockClear();
+    await fireToCompletion(harness, h, review({ model: 'model-c', agentKind: 'codex', providerId: 'openai' }));
+    expect(harness.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'model-c' }));
+    expect(primaryModel).toHaveBeenCalledTimes(2);
+  });
+
+  it('resolves the full current route before acquiring a persistent task switch', async () => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', providerId: 'openai' });
+    const h = createSessionHarness();
+    const acquire = vi.fn(async (_id, _signal, selection) => ({ selection, release: vi.fn() }));
+    const harness = createRunnerHarness(h, { model: 'old-model', workDir: '/work', agentKind: 'codex' }, {
+      acquirePendingAgentSwitch: acquire,
+      resolveModelSelection: async choice => choice,
+      resolveInheritedModel: schedule => resolveTeammateMemoryReviewModel(schedule, {
+        isOwnProject: async () => true, follows: async () => true,
+        primaryModel: async () => ({ harness: 'codex', model: 'new-model', providerId: 'openai', effort: 'high', fastMode: false, agentDeviceId: 'remote' }),
+      }),
+    });
+    await fireToCompletion(harness, h, review({ persistentSession: true, targetSessionId: 'scheduler-session' }));
+    expect(acquire).toHaveBeenCalledWith('scheduler-session', expect.any(AbortSignal), expect.objectContaining({
+      agentKind: 'codex', model: 'new-model', providerId: 'openai', agentDeviceId: 'remote', effort: 'high',
+    }));
+  });
+
+  // An ordinary project may use the same ID. Missing project files must keep its old defaults.
+  it('does not read buddy model metadata for an ordinary project with the same config ID', async () => {
+    const follows = vi.fn(async () => { throw new Error('project config was removed'); });
+    const primaryModel = vi.fn(async () => { throw new Error('not a buddy'); });
+    await expect(resolveTeammateMemoryReviewModel(review(), {
+      isOwnProject: async () => false, follows, primaryModel,
+    })).resolves.toBeNull();
+    expect(follows).not.toHaveBeenCalled();
+    expect(primaryModel).not.toHaveBeenCalled();
+  });
+
+  it('fails before creating or sending when the primary route is missing or disabled', async () => {
+    const h = createSessionHarness();
+    const missing = createRunnerHarness(h, null, { resolveInheritedModel: async () => { throw new Error('buddy has no primary model'); } });
+    await expect(missing.runner.fire(review(), createFireContext())).rejects.toThrow('no primary model');
+    expect(missing.createSession).not.toHaveBeenCalled();
+    const disabled = createRunnerHarness(h, null, {
+      resolveInheritedModel: async () => ({ agentKind: 'codex', model: 'disabled', providerId: 'openai' }),
+      checkModelRoute: () => ({ kind: 'reject', reason: 'model-disabled' }) as never,
+    });
+    await expect(disabled.runner.fire(review(), createFireContext())).rejects.toThrow('schedule route unavailable');
+    expect(h.send).not.toHaveBeenCalled();
+  });
+});
+
 });

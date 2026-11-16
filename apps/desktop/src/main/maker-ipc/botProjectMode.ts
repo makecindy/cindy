@@ -38,7 +38,6 @@ import {
 } from './botProjectMemory.js';
 import { setBotProjectSkillsDir } from './botSkillStore.js';
 import { TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate } from './botProjectTemplate.js';
-import { routeModelFields } from './botV2Carryover.js';
 import { ensureMemoryReviewHook, MEMORY_REVIEW_HOOK_COMMAND, LEGACY_MEMORY_REVIEW_HOOK_COMMAND } from './botProjectMemoryReview.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
@@ -424,8 +423,6 @@ export function botProjectMemoryReview(input: {
   title: string;
 }): ProjectScheduleConfig {
   const name = input.displayName.trim() || input.botId;
-  // The teammate's own model, also on another computer; one that cannot be kept uses the default.
-  const model = input.route ? routeModelFields(input.route) ?? {} : {};
   return {
     id: BOT_PROJECT_MEMORY_REVIEW_ID,
     name: input.title.replace('{{name}}', name),
@@ -435,7 +432,7 @@ export function botProjectMemoryReview(input: {
     recurring: true,
     persistentSession: true,
     silentWhenIdle: true,
-    ...model,
+    followTeammateModel: true,
   };
 }
 
@@ -472,7 +469,10 @@ export async function ensureBotProjectAutomations(input: {
     title: t('bots.homeFolder.projectMode.memoryReviewName'),
   });
   await loader.upsertSchedule(input.workingDir, {
-    ...defaults, ...current, prompt: legacyHook ? current!.prompt : defaults.prompt,
+    ...defaults, ...current,
+    // Old snapshots carry no provenance: never infer that a saved choice was a default.
+    followTeammateModel: current ? current.followTeammateModel : true,
+    prompt: legacyHook ? current!.prompt : defaults.prompt,
     preRunHook: { ...preRunHook, ...current?.preRunHook, command: preRunHook.command },
   }, { keepUnreadable: true });
   return true;

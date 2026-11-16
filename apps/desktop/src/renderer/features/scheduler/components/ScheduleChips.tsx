@@ -1052,6 +1052,7 @@ export function ModelEffortChip({
   onChangeEffort,
   disabled,
   followSession,
+  followModel,
   providerId,
   onChangeProviderId,
   onNavigateToProviders,
@@ -1069,6 +1070,7 @@ export function ModelEffortChip({
   disabled?: boolean;
   /** Bound automations may explicitly inherit the session model when modelValue is empty. */
   followSession?: boolean;
+  followModel?: { active: boolean; label: string; onFollow: () => void };
   /** 显式选定来源(供应商)id;'' = 跟随该 agent 原生默认来源(no-break)。 */
   providerId: string;
   /** 用户在来源轨选了某供应商时回调(等于原生默认时归一化为 '')。 */
@@ -1136,7 +1138,7 @@ export function ModelEffortChip({
     providerId,
     effort: effortValue,
   });
-  const followsSessionModel = usesBoundSessionModel({ followSession, model: modelValue });
+  const followsSessionModel = followModel?.active || usesBoundSessionModel({ followSession, model: modelValue });
   // The form owns default resolution. Empty means no selected model, not permission
   // to resolve another default from this chip's independent catalog snapshot.
   const effectiveId = followsSessionModel ? '' : modelValue;
@@ -1149,7 +1151,7 @@ export function ModelEffortChip({
   const modelLabel = catalogModel?.name || current?.displayName || effectiveId || t('scheduler.chips.model.default');
   const agentLabel = t(`newChat.modelSelector.trigger.agent.${agentKind === 'claude-code' ? 'claudeCode' : agentKind}`);
   const effortLabel = (e: EffortValue) => t(`effortLevels.${e}`);
-  const display = followsSessionModel
+  const display = followModel?.active ? followModel.label : followsSessionModel
     ? [
       t('scheduler.chips.model.followSession'),
       providerId.trim()
@@ -1193,7 +1195,7 @@ export function ModelEffortChip({
           'z-[10010] overflow-hidden rounded-[12px] p-0 shadow-[shadow:var(--shadow-menu)]',
           'bg-[var(--model-dropdown-bg)] border border-[var(--model-dropdown-border)]',
           // 宽度由内容自适应(单栏 320;Edit 展开 ~517 向左加宽),与聊天选择器同口径。
-          'w-auto',
+          'w-auto flex max-h-[var(--radix-popover-content-available-height)] flex-col',
         )}
         onWheel={stopWheel}
       >
@@ -1228,7 +1230,7 @@ export function ModelEffortChip({
           overlayContentClassName="z-[10020]"
           discoveringModels={discovery.pending}
           followSession={
-            followSession
+            followModel ?? (followSession
               ? {
                   active: isFollowingSession,
                   label: t('scheduler.chips.model.followSession'),
@@ -1236,7 +1238,7 @@ export function ModelEffortChip({
                     onFollowSession();
                   },
                 }
-              : undefined
+              : undefined)
           }
         />
       </PopoverContent>
