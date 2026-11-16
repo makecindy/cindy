@@ -919,6 +919,32 @@ describe('ScriptScheduleRunner', () => {
     );
   });
 
+  it('reports the end of stderr when debug output exceeds the collection limit', async () => {
+    const child = childProcess();
+    spawnMock.mockReturnValue(child);
+    const notifier = { notify: vi.fn(async () => {}) };
+    const runner = new ScriptScheduleRunner({ broker: { call: vi.fn() }, logger: {}, notifier });
+    const resultPromise = runner.fire(schedule(), {
+      runId: 'run-1', firedAt: 1, signal: new AbortController().signal,
+    });
+
+    child.stderr.write('DEBUG log\n'.repeat(7_000));
+    const error = Buffer.from('fatal: 连接失败\n');
+    child.stderr.write(error.subarray(0, 8));
+    child.stderr.write(error.subarray(8));
+    child.emit('close', 1);
+
+    await expect(resultPromise).rejects.toThrow('fatal: 连接失败');
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ status: 'failed', errorMsg: expect.stringContaining('fatal: 连接失败') }),
+    );
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ errorMsg: expect.stringMatching(/^[\s\S]{0,1030}$/) }),
+    );
+  });
+
   it('still notifies when a genuine failure message happens to contain the word "abort" (codex review 三次发现)', async () => {
     // 只认 ctx.signal.aborted 这个权威信号,不按错误文本猜——脚本自己的失败
     // stderr 恰好含 'abort' 字样(如某工具打印 "operation aborted")不代表这是
