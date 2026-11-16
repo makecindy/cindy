@@ -37,8 +37,8 @@ import { captureProviderManagementScope } from './managementScope.js';
 import { createProviderGroupRouter, type ProviderGroupRouter } from './router.js';
 import type { ProviderGroupRemoteGroups } from './service.js';
 import { readProviderGroup } from './store.js';
-import { onSubscriptionAccountsChanged, readSubscriptionPoolUsage, readSubscriptionPoolModelAvailability } from '../subscription-accounts/runtime.js';
-import { isSubscriptionProvider, type SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
+import { onSubscriptionAccountsChanged, readSubscriptionPoolUsage, readSubscriptionPoolModelAvailability, readSubscriptionPoolScheduling } from '../subscription-accounts/runtime.js';
+import { isSubscriptionProvider, parseSubscriptionPoolScheduling, type SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc.js';
 import { isModelCatalogSourceChange } from '../../shared/controlledModelCatalog.js';
@@ -114,6 +114,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
   };
   const hasPool = (providerId: string, deviceId = '') =>
     isSubscriptionProvider(providerId) || poolProviders.get(deviceId)?.get(providerId)?.pooled === true;
+  const poolScheduling = new Map<string, () => boolean>();
   const poolQuotaReads = new Map<string, { at: number; pending: boolean; result: Promise<unknown>; current: () => boolean }>();
   function readPoolRequest<T>(deviceId: string, providerId: string, model: string | undefined,
     request: () => Promise<T>): Promise<T | null> {
@@ -133,15 +134,21 @@ function runtimeForActiveOwner(): OwnerRuntime {
     poolQuotaReads.set(key, entry);
     return entry.result;
   }
-  const readPoolQuota = async (providerId: string, deviceId?: string) => {
+  const readPoolQuota = async (providerId: string, deviceId?: string): Promise<PoolQuota> => {
     if (!hasPool(providerId, deviceId)) return undefined;
     if (!deviceId) return readSubscriptionPoolUsage(providerId);
     return readPoolRequest(deviceId, providerId, undefined, async (): Promise<PoolQuota> => {
+      const current = captureCurrent({ agentDeviceId: deviceId, providerId });
       const result = await remoteBackgroundInvoke(deviceId, 'maker:subscription-pool:quota', [providerId], {
         preSend: () => { if (!isCurrent()) throw new Error('provider group account changed'); },
       }).catch(() => null);
-      const raw = result?.ok ? result.result as { providerId?: string; pooled?: boolean; usage?: Record<string, unknown> | null } : null;
+      const raw = result?.ok ? result.result as { providerId?: string; pooled?: boolean; usage?: Record<string, unknown> | null; schedulingVersion?: unknown } : null;
       if (raw?.providerId !== providerId || raw.pooled !== true) return undefined;
+      if (current()) {
+        const key = JSON.stringify([deviceId, providerId]);
+        if (raw.schedulingVersion === 1) poolScheduling.set(key, current);
+        else poolScheduling.delete(key);
+      }
       return raw.usage ? {
         claudeUsage: providerGroupUsageSnapshot(raw.usage.claudeUsage, Date.now()),
         codexUsage: providerGroupCodexUsageSnapshot(raw.usage.codexUsage),
@@ -246,6 +253,8 @@ function runtimeForActiveOwner(): OwnerRuntime {
     },
     peekCodexUsage: (member) => mergeCodexUsage(codexUsage.peek(member), codexLimits.peek(member)),
     invalidateUsage: (scope) => {
+      if (!scope?.preservePending) for (const key of poolScheduling.keys())
+        if (providerGroupUsageMatches(key, scope)) poolScheduling.delete(key);
       if (!scope?.preservePending) {
         for (const [deviceId, providers] of poolProviders) for (const [providerId, metadata] of providers) {
           if (!providerGroupUsageMatches(JSON.stringify([deviceId, providerId]), scope)) continue;
@@ -267,6 +276,25 @@ function runtimeForActiveOwner(): OwnerRuntime {
   const applicationLoad = createLocalAgentLoadRegistry();
   const router = createProviderGroupRouter({
     directory,
+    readPoolScheduling: async (member, model, options) => {
+      if (!isCurrent() || !hasPool(member.providerId, member.agentDeviceId ?? '') || member.kind === 'share') return null;
+      const route = JSON.stringify(['scheduling-v1', model, options.remote, options.ownComputer === true]);
+      return readPoolRequest(member.agentDeviceId ?? '', member.providerId, route, async () => {
+        if (member.kind === 'local') return readSubscriptionPoolScheduling(member.providerId, model, options);
+        if (!member.agentDeviceId) return null;
+        // Reuse the existing quota read as the optional capability handshake.
+        // Old peers receive no extra per-pick probes and never imply extra accounts.
+        if (poolScheduling.get(JSON.stringify([member.agentDeviceId, member.providerId]))?.() !== true) return null;
+        const result = await remoteBackgroundInvoke(member.agentDeviceId, 'maker:subscription-pool:quota',
+          [member.providerId, model, { scheduling: 1, ownComputer: options.ownComputer === true }], {
+            preSend: () => { if (!isCurrent()) throw new Error('provider group account changed'); },
+          });
+        if (!isCurrent() || !result.ok) return null;
+        const raw = result.result as { providerId?: unknown; model?: unknown; scheduling?: unknown } | null;
+        return raw?.providerId === member.providerId && raw.model === model
+          ? parseSubscriptionPoolScheduling(raw.scheduling) : null;
+      });
+    },
     readPoolModelAvailability: async (member, model, options) => {
       if (!isCurrent() || !hasPool(member.providerId, member.agentDeviceId ?? '') || member.kind === 'share') return null;
       const route = JSON.stringify([model, options.remote, options.ownComputer === true]);

@@ -150,7 +150,14 @@ vi.mock('../../usage/accountUsageStorage.js', () => ({
     if (current()) h.storedUsage.set(`${kind}:${id}`, structuredClone(value));
   },
 }));
-vi.mock('node:fs/promises', () => ({ mkdir: vi.fn(), readFile: h.modelCacheRead }));
+vi.mock('node:fs/promises', () => ({ mkdir: vi.fn(), readFile: h.modelCacheRead,
+  default: { mkdir: vi.fn(), writeFile: vi.fn(), rm: vi.fn(), readdir: async () => [],
+    readFile: h.modelCacheRead, stat: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } },
+}));
+// The host production dispatcher runs in memory; no listener or personal files.
+vi.mock('../../remote-agent/host/tunnel.js', () => ({ createRunTunnel: async () => ({
+  baseUrl: 'http://tunnel.invalid', token: 'synthetic-token', close: async () => {},
+}) }));
 vi.mock('../legacyAccountAccess.js', () => ({
   legacyCodexAccountCanRun: h.accountAllowed,
   openAiRouteAllowsModel: h.routeAllowed,
@@ -214,6 +221,7 @@ import {
   disconnectSubscriptionPool,
   readSubscriptionPoolUsage,
   readSubscriptionPoolModelAvailability,
+  readSubscriptionPoolScheduling,
   readLegacySubscriptionPoolUsage,
   readSubscriptionSessionUsage,
   readSubscriptionSessionAccount,
@@ -242,6 +250,7 @@ import { createProviderGroupRouter, type ProviderGroupPersistedCooling } from '.
 import { createProviderGroupService, type ProviderGroupSessionRow } from '../../provider-group/service.js';
 import type { ProviderGroupBinding } from '../../provider-group/bindings.js';
 import { normalizeProviderGroupConfig } from '../../../shared/providerGroup.js';
+import { createRemoteAgentHost } from '../../remote-agent/host/runHost.js';
 import type { ProviderView } from '@cindy/model-providers';
 import { subscriptionPoolSources } from '../../menubar/collect.js';
 import { setAnthropicModelProbe, refreshAnthropicModelsFromProbe, syncAnthropicModelsWithClaudeLogin } from '../../maker-host/model-discovery/anthropic.js';
@@ -287,6 +296,142 @@ beforeEach(() => {
   h.strategies = {};
   h.copyOverrides.mockReset();
   h.storedUsage.clear();
+});
+
+// Unit regression 2026-11-16: real router → host.handle(open) → account acquire,
+// synthetic CLI/auth/storage/tunnel only. Previous layer-local tests could not
+// detect the 4+0 vs 3 aggregation error. Same physical/account budgets in both routes.
+it('dispatches to the idle sibling through the real remote host rather than the busier single account', async () => {
+  h.pools.anthropic!.accounts = ['default', 'second', 'third'].map(id => ({ ...account(id), limit: 16 }));
+  h.created['anthropic-single'] = { kind: 'anthropic', name: 'Single', account: 'third' };
+  h.placement['anthropic:third'] = 'anthropic-single';
+  const held = await Promise.all([
+    ...Array.from({ length: 4 }, (_, i) => acquireSubscriptionAccount('anthropic', 'claude-sonnet-5', [`a${i}`], false, { accountId: 'default' })),
+    ...Array.from({ length: 3 }, (_, i) => acquireSubscriptionAccount('anthropic-single', 'claude-sonnet-5', [`b${i}`])),
+  ]);
+  const config = normalizeProviderGroupConfig({ members: [{ kind: 'local' },
+    { kind: 'device', agentDeviceId: 'b', providerId: 'anthropic-single' }] }, 'anthropic')!;
+  const views = (id: string) => [{ id, name: id, connected: true, agents: ['claude-code'],
+    models: { 'claude-code': [{ id: 'claude-sonnet-5', name: 'Sonnet', efforts: [], defaultEffort: null }] },
+    runningTurns: id === 'anthropic' ? 4 : 3, routing: { 'claude-code': {} },
+  } as unknown as ProviderView];
+  const directory = createProviderGroupDirectory({ listLocalProviders: async () => views('anthropic'),
+    localDeviceName: () => 'A', localRunning: async () => 4,
+    listDevices: async () => [{ deviceId: 'b', name: 'B', online: true, platform: 'darwin', appVersion: '1.0.0',
+      lastSeenAt: null, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false }],
+    readDeviceProviders: async () => views('anthropic-single'), listReceivedShares: () => [],
+    isMobilePlatform: () => false, now: () => Date.now(),
+  });
+  const router = createProviderGroupRouter({ directory, readGroup: () => config,
+    listBindings: () => ({}), isTurnRunning: () => false, now: () => Date.now(), random: () => 0,
+    readPoolScheduling: (m, model, options) => readSubscriptionPoolScheduling(m.providerId, model, options),
+  });
+  let selected: string | undefined;
+  const hosted: { lease: Awaited<ReturnType<typeof acquireSubscriptionAccount>> } = { lease: null };
+  const host = createRemoteAgentHost({ isAgentAvailable: () => true, isControllerAuthorized: () => true,
+    captureOwner: () => h.owner, isOwnerCurrent: owner => owner === h.owner, runsRoot: '/synthetic-host',
+    startHosted: async input => {
+      hosted.lease = await acquireSubscriptionAccount(input.options.providerId!, input.options.model, [], false, { remote: true, ownComputer: true });
+      selected = hosted.lease?.accountId;
+      return { id: 'native-synthetic', agentKind: input.kind, model: input.options.model,
+        send: async () => {}, close: async () => { hosted.lease?.release(); }, abort: async () => {},
+        events: async function* () {}, setInteractionResolver() {},
+      } as unknown as AgentSessionHandle;
+    },
+  });
+  try {
+    const pick = await router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: 'claude-sonnet-5', localTask: true });
+    expect(pick.kind).toBe('member');
+    if (pick.kind !== 'member') return;
+    await host.handle('controller', { op: 'open', runId: '11111111-1111-4111-8111-111111111111', agentKind: 'claude-code',
+      payload: { json: { sessionId: 'new-task', options: { providerId: pick.member.providerId, model: 'claude-sonnet-5' },
+        workspace: { workingDir: '/controller/work', platform: 'darwin', shell: 'bash' }, projectFiles: [], ancestorFiles: [],
+        personal: { files: [] }, mcpServers: [] } } });
+    await vi.waitFor(() => expect(selected).toBeDefined());
+    expect(selected).toBe('second');
+    hosted.lease?.release();
+    for (const entry of held) entry?.release();
+    config.strategy = 'round';
+    h.pools.anthropic!.strategy = 'round';
+    const counts: Record<string, number> = { default: 0, second: 0, third: 0 };
+    for (let i = 0; i < 60; i++) {
+      const pick = await router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: 'claude-sonnet-5', localTask: true });
+      expect(pick.kind).toBe('member');
+      if (pick.kind !== 'member') continue;
+      const lease = await acquireSubscriptionAccount(pick.member.providerId, 'claude-sonnet-5', []);
+      expect(lease).not.toBeNull();
+      if (lease) { counts[lease.accountId]++; lease.release(); }
+    }
+    expect(counts).toEqual({ default: 20, second: 20, third: 20 });
+  } finally {
+    await host.dispose();
+    hosted.lease?.release();
+    for (const entry of held) entry?.release();
+  }
+});
+
+// Unit: summaries must use production acquire admission, rather than quota preview
+// eligibility (which intentionally ignores full/cooling accounts). The existing
+// acquire tests did not observe the capacity used by an outer group.
+it.each(['paused', 'removed', 'signed-out', 'unknown', 'exhausted', 'cooling', 'full', 'all-full'] as const)(
+  'excludes %s accounts from scheduling without hiding their quota', async state => {
+    const model = 'claude-sonnet-5';
+    const held: Array<Awaited<ReturnType<typeof acquireSubscriptionAccount>>> = [];
+    if (state === 'paused') h.pools.anthropic!.accounts[0].paused = true;
+    if (state === 'removed') h.pools.anthropic!.accounts.shift();
+    h.read.mockImplementation(async (_kind: string, dir: string) => {
+      if (dir.endsWith('default') && state === 'unknown') throw Error('unavailable');
+      return { authenticated: !(dir.endsWith('default') && state === 'signed-out'), identity: dir };
+    });
+    const now = Date.now();
+    h.usage.mockImplementation(async (_kind: string, dir: string) => ({ claudeUsage: {
+      updatedAt: now, fiveHour: { utilization: state === 'exhausted' && dir.endsWith('default') ? 100 : 10,
+        resetsAt: now / 1000 + 3600 }, sevenDay: null, scoped: [],
+    } }));
+    if (state === 'cooling') h.cooling = { anthropic: { default: { 'claude:sonnet': now + 60_000 } } };
+    if (state === 'full' || state === 'all-full') {
+      held.push(await acquireSubscriptionAccount('anthropic', model, [], false, { accountId: 'default' }));
+      if (state === 'all-full') held.push(await acquireSubscriptionAccount('anthropic', model, [], false, { accountId: 'second' }));
+    }
+    try {
+      expect(await readSubscriptionPoolScheduling('anthropic', model)).toMatchObject({
+        accounts: state === 'all-full' ? 0 : 1, running: 0, totalRunning: held.length, full: state === 'all-full',
+      });
+      if (state === 'full') expect((await readSubscriptionPoolUsage('anthropic'))?.claudeUsage?.fiveHour?.utilization).toBe(10);
+      if (state !== 'all-full') {
+        const next = await acquireSubscriptionAccount('anthropic', model, []);
+        expect(next?.accountId).toBe('second');
+        next?.release();
+      }
+    } finally { for (const lease of held) lease?.release(); }
+  },
+);
+
+it('reads round capacity without advancing the account cursor or reserving a slot', async () => {
+  h.pools.anthropic!.strategy = 'round';
+  for (let i = 0; i < 2; i++) expect(await readSubscriptionPoolScheduling('anthropic', 'claude-sonnet-5'))
+    .toMatchObject({ accounts: 2, running: 0, totalRunning: 0 });
+  const first = await acquireSubscriptionAccount('anthropic', 'claude-sonnet-5', []);
+  expect(first?.accountId).toBe('default');
+  first?.release();
+});
+
+it.each(['full', 'cooling'] as const)('keeps %s account quota visible without using its urgency for new assignments', async state => {
+  const now = Date.now();
+  const model = 'claude-sonnet-5';
+  h.usage.mockImplementation(async (_kind: string, dir: string) => ({ claudeUsage: {
+    updatedAt: now, fiveHour: { utilization: 10, resetsAt: now / 1000 + 3600 },
+    sevenDay: { utilization: dir.endsWith('default') ? 10 : 90, resetsAt: now / 1000 + 86400 }, scoped: [],
+  } }));
+  if (state === 'cooling') h.cooling = { anthropic: { default: { 'claude:sonnet': now + 60_000 } } };
+  const held = state === 'full'
+    ? await acquireSubscriptionAccount('anthropic', model, [], false, { accountId: 'default' }) : null;
+  try {
+    expect((await readSubscriptionPoolUsage('anthropic'))?.claudeUsage?.sevenDay?.utilization).toBe(10);
+    const summary = await readSubscriptionPoolScheduling('anthropic', model);
+    expect(summary).toMatchObject({ accounts: 1, running: 0 });
+    expect(summary?.urgency).toBeLessThan(1);
+  } finally { held?.release(); }
 });
 
 // Unit, 2026-11-16: the real pool reads/commands previously omitted secondary quota persistence
@@ -636,6 +781,16 @@ describe('duplicate subscription account profiles', () => {
     h.tokens.mockImplementation(async (directory: string) => ({
       chatgptAccountId: directory.endsWith('/other') ? 'workspace-b' : 'workspace-a', canDispatch: () => true,
     }));
+  });
+
+  it('counts verified duplicate homes once in anonymous scheduling and respects model membership', async () => {
+    expect(await readSubscriptionPoolScheduling('openai', 'gpt-6')).toMatchObject({ accounts: 2, totalRunning: 0 });
+    // Restart the synthetic owner so model discovery is fresh for this model matrix.
+    h.owner += ':models';
+    h.rpc.mockImplementation(async (directory: string, method: string) => method === 'model/list'
+      ? { data: [{ id: directory.endsWith('/other') ? 'model-b' : 'gpt-6' }], nextCursor: null } : undefined);
+    expect(await readSubscriptionPoolScheduling('openai', 'gpt-6')).toMatchObject({ accounts: 1, totalRunning: 0 });
+    expect(await readSubscriptionPoolScheduling('openai', 'model-b')).toMatchObject({ accounts: 1, totalRunning: 0 });
   });
 
   it('merges into two accounts, empties the source and retains the old task directory', async () => {

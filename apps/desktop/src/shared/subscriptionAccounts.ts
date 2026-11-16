@@ -6,6 +6,33 @@ export const SUBSCRIPTION_ACCOUNTS_CHANGED = 'subscription-accounts:changed';
 /** Appended to legacy remote quota queries when the caller needs the CLI default account itself. */
 export const DEFAULT_ACCOUNT_USAGE_SCOPE = 'default-subscription-account';
 export type SubscriptionProvider = 'anthropic' | 'openai';
+/** Anonymous, advisory new-assignment facts. Never a reservation or a grant. */
+export interface SubscriptionPoolScheduling {
+  version: 1;
+  /** Distinct, currently eligible accounts in the pool's quota band. */
+  accounts: number;
+  /** Load of the account the pool's own policy would select next. */
+  running: number;
+  /** Includes reservations; used to account for group picks not observed by this read yet. */
+  totalRunning: number;
+  full: boolean;
+  urgency: number | null;
+  fiveHourTight: boolean;
+}
+
+/** Unknown/old replies cannot assert extra capacity; project fields explicitly. */
+export function parseSubscriptionPoolScheduling(raw: unknown): SubscriptionPoolScheduling | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  const count = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+  if (value.version !== 1 || !count(value.accounts) || !count(value.running) || !count(value.totalRunning)
+    || value.running > value.totalRunning || typeof value.full !== 'boolean'
+    || typeof value.fiveHourTight !== 'boolean'
+    || !(value.urgency === null || (typeof value.urgency === 'number' && Number.isFinite(value.urgency) && value.urgency >= 0))
+    || (value.accounts > 0 && value.full)) return null;
+  return { version: 1, accounts: value.accounts, running: value.running, totalRunning: value.totalRunning,
+    full: value.full, urgency: value.urgency, fiveHourTight: value.fiveHourTight };
+}
 /** Account-scoped target for the existing Codex reset control plane; never a model route. */
 export const CODEX_POOL_RESET_PREFIX = 'openai-account:';
 export function codexResetScope(accountId: string): string {
