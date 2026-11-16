@@ -13,7 +13,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
@@ -27,6 +27,10 @@ import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionSt
 import { sessions } from '../../../desktop/src/main/localDb/schema.ts';
 import { setSessionProvider, getSessionProvider, clearSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { createHostSessionUpdate } from './session-update.ts';
+import { lockSessionRoute } from './session-route-lock.mjs';
+import { createHostSessionMovePorts } from './session-move.ts';
+import { setLiveCcSessionBridge } from '../../../desktop/src/main/maker-host/claude-transcript-relocation.ts';
+import { listRecentWorkdirs } from '../../../desktop/src/main/localDb/ipc/recentWorkdirsCore.ts';
 import { readSessionContextWindowBudget } from '../../../desktop/src/main/maker-host/session-context-budget-store.js';
 import { createSessionContextBudget } from '../../../desktop/src/main/maker-host/sessionContextBudgetCore.ts';
 import { ownerScopedPath } from '../../../desktop/src/main/ownerContext.ts';
@@ -105,14 +109,29 @@ async function fixture(t) {
       wakeSession() {}, refreshQueuedRoute() {}, cancelUsageLimitWait() {} },
     log: quiet,
   });
+  // The move's ports as main.ts binds them; the executor is the fixture's: its turns still settling, and
+  // its close of an idle runtime (recorded).
+  const settling = new Set();
+  const closedByExecutor = [];
+  const closeGate = { current: null };
+  const sessionMove = createHostSessionMovePorts({
+    profileDir: profile,
+    getMakerIfReady: () => maker,
+    isTurnRunning: id => settling.has(id),
+    closeRuntime: async id => { closedByExecutor.push(id); await closeGate.current; live.delete(id); },
+    publish: event => events.push(event),
+  });
+  setLiveCcSessionBridge(sessionMove.liveCcSessionBridge);
+  t.after(() => setLiveCcSessionBridge(null));
   const update = createHostSessionUpdate({
     restoreTaskToActive,
     persistSessionFields: (...args) => selection.persistSessionFields(...args),
     publish: event => events.push(event),
     setModel: (...args) => selection.setModel(...args),
+    move: sessionMove.move,
   });
-  const task = async (id, { agentKind = 'claude-code', model = 'big', contextTokens = 0 } = {}) => {
-    await storage.create({ id, title: 'Window fixture', agentKind, model, workDir: root, providerId: 'prov-a' });
+  const task = async (id, { agentKind = 'claude-code', model = 'big', contextTokens = 0, workDir = root } = {}) => {
+    await storage.create({ id, title: 'Window fixture', agentKind, model, workDir, providerId: 'prov-a' });
     await database.drizzle.update(sessions).set({ contextTokens }).where(eq(sessions.id, id));
     setSessionProvider(id, 'prov-a');
     t.after(() => clearSessionProvider(id));
@@ -129,7 +148,8 @@ async function fixture(t) {
   const row = async id => (await database.drizzle.select().from(sessions).where(eq(sessions.id, id)))[0];
   const liveSession = id => live.get(id);
   const closeRuntime = async id => { live.delete(id); };
-  return { update, task, runtime, row, events, budgets, database, taskRestore, restoreCalls, selection, liveSession, closeRuntime };
+  return { update, task, runtime, row, events, budgets, database, taskRestore, restoreCalls, selection, liveSession, closeRuntime,
+    root, profile, settling, closedByExecutor, closeGate };
 }
 
 const intentOf = f => f.events.filter(event => event.type === 'session_changed'
@@ -249,8 +269,9 @@ test('/sessions/update: an engine switch or an unknown field is INVALID_PARAMS n
   const before = await f.row('old-path-unknown');
   await assert.rejects(f.update('old-path-unknown', { agentKind: 'codex' }), error =>
     error.code === 'INVALID_PARAMS' && /agentKind/.test(error.message));
+  // The working directory is written here since A5 (the move tests below); only the unknown field is named.
   await assert.rejects(f.update('old-path-unknown', { title: 'Renamed', workingDir: '/tmp', colour: 'red' }), error =>
-    error.code === 'INVALID_PARAMS' && /workingDir, colour/.test(error.message));
+    error.code === 'INVALID_PARAMS' && /: colour$/.test(error.message));
   assert.deepEqual(await f.row('old-path-unknown'), before);
   assert.deepEqual(sessionPatchEvents(f, 'old-path-unknown'), []);
 });
@@ -666,4 +687,171 @@ test('thinking: a change applies to the runtime, and a Review task is refused be
   await assert.rejects(f.selection.setThinkingEnabled('thinking-live', true),
     error => error.code === 'UNSUPPORTED_CAPABILITY' && /Review task settings/.test(error.message));
   assert.deepEqual(changes, [false], 'the Review task\'s runtime is not touched');
+});
+
+// Working-directory move (A5: session-update.ts with the desktop's move steps, sessionWorkingDirMove.ts;
+// the Host's ports, session-move.ts):
+// - Rule: moving a task to another directory or a dialogue is the desktop's updateSessionInDb (its move
+//   steps run as they were moved): the stored form of the directory, the mapper dropping the explicit
+//   project, the worktree ownership guard (the desktop's registry, worktrees.json in the profile root),
+//   an idle Pi/Codex runtime closed and a running one refused, a Claude task's transcripts copied to the
+//   new directory's key, the recent project record, and the patch the steps changed in place published.
+// - Gap: /sessions/update refused workingDir and workspaceKind (INVALID_PARAMS): the web client's "move
+//   to project" failed and its folder pick changed nothing.
+// - Minimal failing input: one move of each kind below; the lock's holder; each registry state.
+// - Tier: unit, through the real entry over a migrated profile database, the real registry file and the
+//   real transcript copy in an isolated Claude config directory; the runtime is a fixture.
+const moveDir = (f, name) => { const dir = path.join(f.root, name); mkdirSync(dir, { recursive: true }); return dir; };
+const movedEvents = (f, id) => f.events.filter(event => event.type === 'session_changed' && event.sessionId === id);
+const recentPushes = f => f.events.filter(event => event.type === 'plugin_push' && event.channel === 'local-db:recent-workdirs:changed');
+
+test('move: an idle Codex task moves to a project; its runtime is closed, and the row, the event and the recent projects follow', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  const from = moveDir(f, 'from');
+  const to = moveDir(f, 'to');
+  await f.task('move-codex', { agentKind: 'codex', workDir: from });
+  await f.database.drizzle.update(sessions).set({ projectDir: from }).where(eq(sessions.id, 'move-codex'));
+  f.runtime('move-codex', { agentKind: 'codex' });
+  const moved = await f.update('move-codex', { workingDir: `${to}/`, workspaceKind: 'project' });
+  assert.equal(moved.workingDir, to);
+  const row = await f.row('move-codex');
+  assert.deepEqual([row.workingDir, row.workspaceKind, row.projectDir], [to, 'project', null]);
+  assert.deepEqual(f.closedByExecutor, ['move-codex'], 'the idle runtime is closed before the new directory is written');
+  assert.equal(f.liveSession('move-codex'), undefined);
+  assert.deepEqual(movedEvents(f, 'move-codex').at(-1).patch, { workingDir: to, workspaceKind: 'project', projectDir: null });
+  // Protocol: the desktop's own push (sessions.ts broadcastRecentWorkdirsChanged sends this channel with
+  // { path }); its renderer listens on it (preload localDb.recentWorkdirs.onChanged), reached here through
+  // the web shim and the client-mode window. Another channel or payload and the recent list goes stale.
+  assert.deepEqual(recentPushes(f), [{ type: 'plugin_push', channel: 'local-db:recent-workdirs:changed', payload: { path: to } }]);
+  assert.ok((await listRecentWorkdirs()).some(entry => entry.path === to));
+});
+
+test('move: a Claude task\'s transcripts follow it, and the resume id the move persisted is in the row and the published patch', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  const claudeConfig = path.join(f.root, 'claude-config');
+  const previous = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = claudeConfig;
+  t.after(() => { if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous; });
+  const from = moveDir(f, 'claude-from');
+  const to = moveDir(f, 'claude-to');
+  const storedId = '11111111-1111-4111-8111-111111111111';
+  const liveId = '22222222-2222-4222-8222-222222222222';
+  await f.task('move-claude', { workDir: from });
+  await f.database.drizzle.update(sessions).set({ sdkSessionId: storedId }).where(eq(sessions.id, 'move-claude'));
+  // The live runtime is ahead of the row (a fork whose rows are not written yet); its transcript is on disk.
+  const session = f.runtime('move-claude');
+  session.sdkSessionId = liveId;
+  const source = path.join(claudeConfig, 'projects', 'old-key');
+  mkdirSync(source, { recursive: true });
+  writeFileSync(path.join(source, `${liveId}.jsonl`), '{"type":"user"}\n');
+  await f.update('move-claude', { workingDir: `${to}/`, workspaceKind: 'project' });
+  const row = await f.row('move-claude');
+  assert.deepEqual([row.workingDir, row.sdkSessionId], [to, liveId]);
+  assert.deepEqual(movedEvents(f, 'move-claude').at(-1).patch,
+    { workingDir: to, workspaceKind: 'project', sdkSessionId: liveId, projectDir: null });
+  assert.equal(f.liveSession('move-claude'), undefined, 'the Claude runtime in the old directory is closed');
+  const copies = readdirSync(path.join(claudeConfig, 'projects'))
+    .filter(key => key !== 'old-key' && existsSync(path.join(claudeConfig, 'projects', key, `${liveId}.jsonl`)));
+  assert.equal(copies.length, 1, 'the transcript is copied under the new directory\'s key');
+});
+
+test('move: inside the task lock the move re-enters it; another holder of the lock waits until the move is done', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  setSessionRouteLockImplementation(withSendToSessionLock);
+  t.after(() => setSessionRouteLockImplementation(null));
+  const to = moveDir(f, 'locked-to');
+  await f.task('move-locked', { agentKind: 'codex', workDir: moveDir(f, 'locked-from') });
+  // As main.ts: the entry runs in the task's send lock, and the move takes the route lock again.
+  await lockSessionRoute(f.update)('move-locked', { workingDir: to, workspaceKind: 'project' });
+  assert.equal((await f.row('move-locked')).workingDir, to);
+
+  // The move holds the lock while it closes the runtime; another holder (a send) waits behind it.
+  f.runtime('move-locked', { agentKind: 'codex' });
+  f.closedByExecutor.length = 0;
+  let open;
+  f.closeGate.current = new Promise(resolve => { open = resolve; });
+  const back = moveDir(f, 'locked-back');
+  const moving = lockSessionRoute(f.update)('move-locked', { workingDir: back, workspaceKind: 'project' });
+  for (let i = 0; i < 200 && !f.closedByExecutor.includes('move-locked'); i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.closedByExecutor, ['move-locked'], 'the move is closing the runtime');
+  let ran = false;
+  const other = withSendToSessionLock('move-locked', async () => { ran = true; return (await f.row('move-locked')).workingDir; });
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ran, false, 'waits while the move holds the task lock');
+  open();
+  await moving;
+  assert.equal(await other, back, 'runs after the move and reads the moved directory');
+});
+
+// The desktop's registry: `{ worktrees: { <task>: { path } } }` in the profile root (worktreeStore.ts).
+const writeRegistry = (f, text) => writeFileSync(path.join(f.profile, 'worktrees.json'), text);
+
+test('move: the worktree registry decides ownership; no registry is no binding, an unreadable one refuses the move', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  const worktree = moveDir(f, path.join('repo', '.cindy-worktrees', 'feature'));
+  const elsewhere = moveDir(f, 'elsewhere');
+  const unchanged = async (id, patch, check) => {
+    const before = await f.row(id);
+    await assert.rejects(f.update(id, patch), check);
+    assert.deepEqual(await f.row(id), before, 'nothing is written');
+  };
+  for (const [name, registry, outcome] of [
+    ['bound', JSON.stringify({ worktrees: { 'wt-bound': { path: worktree } } }), 'blocked'],
+    ['no registry', null, 'moved'],
+    ['registry without the task', JSON.stringify({ worktrees: {} }), 'moved'],
+    ['not JSON', '{"worktrees":', 'failed'],
+    ['not the registry\'s shape', JSON.stringify({ worktrees: [] }), 'failed'],
+    ['an entry without a path', JSON.stringify({ worktrees: { 'wt-entry': {} } }), 'failed'],
+  ]) {
+    const id = { bound: 'wt-bound', 'an entry without a path': 'wt-entry' }[name] ?? `wt-${name.replaceAll(/\W+/g, '-')}`;
+    // The task's directory is a managed worktree path either way: a recycled worktree keeps it (no binding).
+    await f.task(id, { agentKind: 'codex', workDir: worktree });
+    rmSync(path.join(f.profile, 'worktrees.json'), { force: true });
+    if (registry !== null) writeRegistry(f, registry);
+    const patch = { workingDir: elsewhere, workspaceKind: 'project' };
+    if (outcome === 'moved') {
+      await f.update(id, patch);
+      assert.equal((await f.row(id)).workingDir, elsewhere, name);
+    } else if (outcome === 'blocked') {
+      await unchanged(id, patch, error => error.code === 'PRECONDITION_FAILED'
+        && error.message.includes('A worktree session cannot be moved outside its worktree'));
+    } else {
+      await unchanged(id, patch, error => error instanceof Error && !error.message.includes('cannot be moved outside'));
+    }
+  }
+  // A move inside the bound worktree, and a move to a dialogue, stay allowed.
+  writeRegistry(f, JSON.stringify({ worktrees: { 'wt-bound': { path: worktree } } }));
+  await f.update('wt-bound', { workingDir: moveDir(f, path.join('repo', '.cindy-worktrees', 'feature', 'sub')) });
+  await f.update('wt-bound', { workspaceKind: 'dialogue' });
+  assert.equal((await f.row('wt-bound')).workspaceKind, 'dialogue');
+});
+
+test('move: a task in a turn, or whose turn is still settling, is not moved and its runtime is not closed', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  const to = moveDir(f, 'busy-to');
+  for (const [id, state] of [['busy-turn', 'in a turn'], ['busy-settling', 'settling']]) {
+    await f.task(id, { agentKind: 'pi', workDir: moveDir(f, `${id}-from`) });
+    f.runtime(id, { agentKind: 'pi', inTurn: state === 'in a turn' });
+    if (state === 'settling') f.settling.add(id);
+    const before = await f.row(id);
+    await assert.rejects(f.update(id, { workingDir: to, workspaceKind: 'project' }),
+      error => error.code === 'PRECONDITION_FAILED' && error.message.includes('运行中的任务不能移动'), state);
+    assert.deepEqual(await f.row(id), before, state);
+    assert.ok(f.liveSession(id), `${state}: the runtime is kept`);
+  }
+  assert.deepEqual(f.closedByExecutor, []);
+});
+
+test('move and window budget: a Review task refuses both, before anything is written', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await f.task('review-move', { workDir: moveDir(f, 'review-from') });
+  await f.database.drizzle.update(sessions).set({ source: 'review' }).where(eq(sessions.id, 'review-move'));
+  const before = await f.row('review-move');
+  for (const patch of [{ workingDir: moveDir(f, 'review-to'), workspaceKind: 'project' }, { contextWindowBudget: 100_000 }]) {
+    await assert.rejects(f.update('review-move', patch),
+      error => error.code === 'UNSUPPORTED_CAPABILITY' && /Review task settings/.test(error.message), Object.keys(patch).join());
+  }
+  assert.deepEqual(await f.row('review-move'), before);
+  assert.equal(readSessionContextWindowBudget('review-move'), null, 'the budget preference is not written');
+  assert.deepEqual(movedEvents(f, 'review-move'), []);
 });

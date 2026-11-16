@@ -51,6 +51,8 @@ import { createHostMessageStore, createHostMessageRecovery } from '../message-st
 import { resolveSessionReferencesWithPorts } from '../../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
 import { listErrorTailPendingRows } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
 import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
+import { Maker } from '@cindy/maker-core';
+import { createHostSessionMovePorts } from './session-move.ts';
 import { createEventHub } from '../events.mjs';
 import { createChatHandler } from '../chat.mjs';
 import { EventEmitter } from 'node:events';
@@ -4850,4 +4852,82 @@ test('auto-resume exit 6: a Host shutdown during the wait gives the resume up fi
   t.mock.timers.tick(30_000); await settle();
   assert.equal(r.session.sent.length, 1);
   t.mock.timers.reset();
+});
+
+// Working-directory move (A5, session-move.ts with the executor's own close):
+// - Rule: as the desktop (bootstrap-electron.ts closeIdleSessionForMove), a move closes the task's idle
+//   runtime so the next send starts one in the new directory; the executor lets go of the closed
+//   instance (its events no longer reach the task). A Claude task is closed by Maker itself whether or not
+//   a turn runs (register.ts setLiveCcSessionBridge): Maker settles that turn with its terminal before it
+//   drops its listeners, so the executor's turn ends instead of staying "running".
+// - Gap: the Host had no move; the executor binding was released only on a send's own refresh.
+// - Minimal failing input: an idle task moved, a late event from its old runtime, the next send; a Claude
+//   task moved mid-turn.
+// - Tier: unit; the first through the fixture Maker, the second through maker-core's Maker over a fixture
+//   agent handle (its close semantics are the ones under test).
+test('move: an idle runtime closed for a move is let go by the executor, and the next send starts in the new directory with a fresh context', async t => {
+  t = lifoCleanup(t);
+  const workingDir = { current: '/tmp/move-from' };
+  const h = createHarness({ readSession: async id => ({ id, status: 'active', agentKind: 'codex', model: 'stored-model',
+    workingDir: workingDir.current, providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }) });
+  t.after(() => h.queue.dispose());
+  // A remote input: its device note goes to a native context once (see the deduplication test above).
+  const send = (clientId, count) => runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', controllerPlatform: 'ios', channel: 'maker:input:enqueue' },
+    () => h.queue.enqueue('move-idle', { clientId, text: clientId })).then(() => waitFor(() => h.maker.getSession('move-idle')?.sent.length === count));
+  await send('first', 1);
+  const old = h.maker.getSession('move-idle');
+  assert.notEqual(old.sent[0], 'first', 'the first input carries the device note');
+  old.emit({ type: 'done', data: {} });
+  await waitFor(() => !h.queue.isTurnRunning('move-idle'));
+  const ports = createHostSessionMovePorts({ profileDir: '/nonexistent-profile', getMakerIfReady: () => h.maker,
+    isTurnRunning: id => h.queue.isTurnRunning(id), closeRuntime: id => h.queue.closeRuntime(id), publish: () => {} });
+  assert.equal(await ports.move.closeIdleSessionForMove('move-idle'), true);
+  assert.equal(h.maker.getSession('move-idle'), null, 'the runtime is closed');
+  workingDir.current = '/tmp/move-to';
+  await send('second', 1);
+  const next = h.maker.getSession('move-idle');
+  assert.notEqual(next, old);
+  assert.equal(next.workDir, '/tmp/move-to');
+  assert.notEqual(next.sent[0], 'second', 'the new runtime\'s context gets the device note again');
+  assert.match(String(next.sent[0]), /second/);
+});
+
+test('move: a Claude task moved during its turn is closed by Maker, and the executor\'s turn ends', { timeout: 30_000 }, async t => {
+  const handles = [];
+  const agent = {
+    capabilities: Object.fromEntries(['switchModel', 'effort', 'setPermissionModeMidSession', 'rewind', 'memory']
+      .map(key => [key, { supported: false, reason: 'not-implemented' }]).concat([['permissionModes', []]])),
+    startSession: async opts => {
+      const handle = { id: `native-move-${handles.length}`, agentKind: 'claude-code', model: opts.model, closed: false,
+        // The turn runs until the runtime is closed: no terminal of its own.
+        sent: 0, send: async () => { handle.sent += 1; }, steer: async () => {}, abort: async () => {},
+        close: async () => { handle.closed = true; },
+        events: async function* () { await new Promise(() => {}); },
+        getUsageSnapshot: () => undefined, setInteractionResolver: () => {} };
+      handles.push(handle);
+      return handle;
+    },
+    dispose: async () => {},
+  };
+  const rows = new Map();
+  const storage = {
+    create: async meta => { const row = { ...meta, createdAt: Date.now(), updatedAt: Date.now() }; rows.set(row.id, row); return row; },
+    get: async id => rows.get(id) ?? null,
+    list: async () => [...rows.values()],
+    update: async (id, patch) => { const next = { ...rows.get(id), ...patch, updatedAt: Date.now() }; rows.set(id, next); return next; },
+    compareAndClearSdkSessionId: async () => false,
+    delete: async id => { rows.delete(id); },
+  };
+  const silent = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return silent; } };
+  const maker = new Maker({ agents: { 'claude-code': agent }, storage, logger: silent });
+  t.after(() => maker.shutdown());
+  const h = createHarness({ getMaker: () => maker });
+  await h.queue.enqueue('move-claude-turn', { clientId: 'c1', text: 'long work', model: 'stored-model' });
+  await waitFor(() => handles[0]?.sent === 1);
+  assert.equal(h.queue.isTurnRunning('move-claude-turn'), true);
+  const ports = createHostSessionMovePorts({ profileDir: '/nonexistent-profile', getMakerIfReady: () => maker,
+    isTurnRunning: id => h.queue.isTurnRunning(id), closeRuntime: id => h.queue.closeRuntime(id), publish: () => {} });
+  await ports.liveCcSessionBridge.closeSession('move-claude-turn');
+  assert.equal(handles[0].closed, true, 'the runtime in the old directory is closed');
+  await waitFor(() => !h.queue.isTurnRunning('move-claude-turn') && h.queue.projection('move-claude-turn').turnInProgress === false);
 });

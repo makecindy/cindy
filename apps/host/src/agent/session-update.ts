@@ -1,12 +1,26 @@
 import { eq } from 'drizzle-orm';
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { sessions as sessionTable } from '../../../desktop/src/main/localDb/schema.ts';
-import { sessionToCamel } from '../../../desktop/src/main/localDb/mapper.ts';
+import { sessionPatchToRow, sessionToCamel } from '../../../desktop/src/main/localDb/mapper.ts';
+import type { DbClient } from '../../../desktop/src/main/localDb/client/DbClient.ts';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import { assertSessionContextWindowBudgetPatch } from '../../../desktop/src/main/localDb/sessionContextWindowBudgetPatch.js';
+import { upsertRecentWorkdir } from '../../../desktop/src/main/localDb/ipc/recentWorkdirsCore.ts';
+import {
+  assertReviewSessionPatchAllowed,
+  assertSessionWorkspaceKindPatch,
+  normalizeSessionWorkingDirPatch,
+  prepareSessionWorkingDirMove,
+  recordRecentWorkdirForMove,
+  relocateClaudeTranscriptsForMove,
+  withSessionWorkingDirMoveLocks,
+  type SessionWorktreeBindingLookup,
+} from '../../../desktop/src/main/localDb/ipc/sessionWorkingDirMove.ts';
+import { explicitPorts } from './explicit-ports.ts';
 
 /** The fields this entry writes; anything else is INVALID_PARAMS, naming the fields. */
-const UPDATABLE_FIELDS = new Set(['title', 'status', 'pinnedAt', 'notificationsMuted', 'model', 'providerId', 'contextWindowBudget']);
+const UPDATABLE_FIELDS = new Set(['title', 'status', 'pinnedAt', 'notificationsMuted', 'model', 'providerId', 'contextWindowBudget',
+  'workingDir', 'workspaceKind']);
 /**
  * Runtime settings with their own entry, which runs the desktop's handler (runtime-selection.ts). This
  * entry refuses them, as the desktop's updateSessionInDb refuses directory grants (UNSUPPORTED_CAPABILITY
@@ -30,7 +44,14 @@ const DEDICATED_ENTRIES: Record<string, string> = {
  * chip saves through local-db:sessions:update, updateSessionInDb): the same range check, then
  * persistSessionFields (persistSessionFieldsWith with the budget hook). As updateSessionInDb, a missing
  * task is NOT_FOUND before anything is written, and a budget that cannot be saved fails a budget-only
- * update but only drops the budget from a mixed one. The other fields are written here.
+ * update but only drops the budget from a mixed one. Moving a task to another working directory or to a
+ * dialogue runs the desktop's own move steps (sessionWorkingDirMove.ts, moved from updateSessionInDb) at
+ * the places updateSessionInDb runs them: the route and worktree locks around everything (inside the
+ * route lock main.ts already holds, re-entered), the workspaceKind check, the stored form of the
+ * directory, the Review task check (for the whole patch, as the desktop), the worktree ownership guard
+ * and closing an idle Pi/Codex runtime, the Claude transcript move, and the recent project record. The
+ * patch they change in place (the stored directory, a resume id the transcript move persisted) is the
+ * one published. The other fields are written here.
  */
 export function createHostSessionUpdate(deps: {
   /** The session settings write with the budget hook (runtime-selection.ts persistSessionFields). */
@@ -40,17 +61,31 @@ export function createHostSessionUpdate(deps: {
   restoreTaskToActive(sessionId: string, options?: { publish?: boolean }): Promise<void>;
   /** A model or provider change: the desktop's set-model, with the desktop IPC's arguments. */
   setModel(sessionId: string, model: unknown, providerId: unknown, revision: unknown, selection: unknown): Promise<unknown>;
+  /** The working-directory move's ports (session-move.ts). */
+  move: {
+    /** The desktop's worktree registry, read only. */
+    lookupSessionWorktreeBinding: SessionWorktreeBindingLookup;
+    /** False when the task's turn is running; otherwise its runtime is closed (or there is none). */
+    closeIdleSessionForMove(sessionId: string): Promise<boolean>;
+    /** The desktop's local-db:recent-workdirs:changed. */
+    broadcastRecentWorkdirsChanged(path: string): void;
+  };
 }) {
-  return async (sessionId: string, patch: Record<string, unknown>) => {
-    const fields = Object.keys(patch);
-    const unknown = fields.filter(key => !UPDATABLE_FIELDS.has(key) && !Object.hasOwn(DEDICATED_ENTRIES, key));
-    if (unknown.length > 0) throwIpcError('INVALID_PARAMS', `unsupported session field: ${unknown.join(', ')}`);
-    const dedicated = fields.filter(key => Object.hasOwn(DEDICATED_ENTRIES, key));
-    if (dedicated.length > 0) {
-      throwIpcError('UNSUPPORTED_CAPABILITY', dedicated
-        .map(key => `${key} must be changed through ${DEDICATED_ENTRIES[key]}`).join('; '));
-    }
+  // Runs inside the move locks (below), as updateSessionInDb's `update`.
+  const applyUpdate = async (sessionId: string, patch: Record<string, unknown>, fields: string[], dbClient: DbClient) => {
+    const db = dbClient.drizzle;
+    assertSessionWorkspaceKindPatch(patch);
     assertSessionContextWindowBudgetPatch(patch);
+    normalizeSessionWorkingDirPatch(patch);
+    await assertReviewSessionPatchAllowed({ db, sid: sessionId, p: patch });
+    const beforeMove = await prepareSessionWorkingDirMove(explicitPorts<Parameters<typeof prepareSessionWorkingDirMove>[0]>({
+      db, sid: sessionId, p: patch,
+      moveGuard: undefined, // see the entry below
+      opts: explicitPorts<Parameters<typeof prepareSessionWorkingDirMove>[0]['opts']>({
+        closeIdleSessionForMove: deps.move.closeIdleSessionForMove,
+      }),
+      sessionWorktreeBindingLookup: deps.move.lookupSessionWorktreeBinding,
+    }));
     const hasBudget = patch.contextWindowBudget !== undefined;
     const budgetOnly = fields.length > 0 && fields.every(key => key === 'contextWindowBudget');
     if (hasBudget) {
@@ -86,7 +121,16 @@ export function createHostSessionUpdate(deps: {
       if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
       return sessionToCamel({ ...row, messageCount: 0 });
     }
-    const update: Record<string, unknown> = { updatedAt: Date.now() };
+    // The moved fields through the desktop's mapper (a move to a project or a dialogue drops the explicit
+    // project), with a resume id the Claude transcript move persisted.
+    const setObj = sessionPatchToRow({ workingDir: patch.workingDir, workspaceKind: patch.workspaceKind } as
+      Parameters<typeof sessionPatchToRow>[0], { bumpUpdatedAt: false });
+    await relocateClaudeTranscriptsForMove(explicitPorts<Parameters<typeof relocateClaudeTranscriptsForMove>[0]>({
+      sid: sessionId, p: patch, beforeMove,
+      moveGuard: undefined, // see the entry below
+      dbClient, setObj,
+    }));
+    const update: Record<string, unknown> = { updatedAt: Date.now(), ...setObj };
     if (typeof patch.title === 'string') update.title = patch.title;
     // Restoring goes through the shared transaction below; archiving still writes the column (release
     // table: the desktop's archive also checks lanes, recycles the worktree and notifies plugins).
@@ -102,7 +146,15 @@ export function createHostSessionUpdate(deps: {
       .where(eq(sessionTable.id, sessionId)).limit(1);
     const row = rows[0];
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    deps.publish({ type: 'session_changed', action: 'update', sessionId, patch, status: row.status });
+    await recordRecentWorkdirForMove({
+      projectTargetChanged: patch.workspaceKind !== undefined || patch.workingDir !== undefined,
+      row, dbClient, ownerScope: null,
+      upsertRecentWorkdir,
+      broadcastRecentWorkdirsChanged: path => deps.move.broadcastRecentWorkdirsChanged(path),
+    });
+    // As updateSessionInDb's broadcast: the project the mapper dropped goes out with the move.
+    const published = setObj.projectDir !== undefined ? { ...patch, projectDir: row.projectDir } : patch;
+    deps.publish({ type: 'session_changed', action: 'update', sessionId, patch: published, status: row.status });
     if (hasBudget) {
       // A mixed update keeps its other fields when the budget cannot be saved (updateSessionInDb).
       try {
@@ -114,5 +166,26 @@ export function createHostSessionUpdate(deps: {
       }
     }
     return { ...sessionToCamel({ ...row, messageCount: 0 }), ...(routeChange ? { runtimeSelection } : {}) };
+  };
+  return async (sessionId: string, patch: Record<string, unknown>) => {
+    const fields = Object.keys(patch);
+    const unknown = fields.filter(key => !UPDATABLE_FIELDS.has(key) && !Object.hasOwn(DEDICATED_ENTRIES, key));
+    if (unknown.length > 0) throwIpcError('INVALID_PARAMS', `unsupported session field: ${unknown.join(', ')}`);
+    const dedicated = fields.filter(key => Object.hasOwn(DEDICATED_ENTRIES, key));
+    if (dedicated.length > 0) {
+      throwIpcError('UNSUPPORTED_CAPABILITY', dedicated
+        .map(key => `${key} must be changed through ${DEDICATED_ENTRIES[key]}`).join('; '));
+    }
+    const dbClient = getDbClient();
+    // As updateSessionInDb: a working-directory change runs under the task's route lock and its worktree
+    // locks (re-entering the route lock main.ts holds); anything else runs at once.
+    return withSessionWorkingDirMoveLocks(explicitPorts<Parameters<typeof withSessionWorkingDirMoveLocks>[0]>({
+      sid: sessionId, p: patch,
+      // The desktop's MCP move tool's guard (updateSessionInDb's moveGuard); the Host has no MCP move tool
+      // (host-tools.ts creates the MCP providers without moveSession).
+      moveGuard: undefined,
+      db: dbClient.drizzle,
+      update: () => applyUpdate(sessionId, patch, fields, dbClient),
+    }));
   };
 }

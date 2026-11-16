@@ -137,6 +137,8 @@ import type { ContextRecoveryKind } from './agent/context-recovery.ts';
 import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring.ts';
 import { lockSessionRoute } from './agent/session-route-lock.mjs';
 import { createHostSessionUpdate } from './agent/session-update.ts';
+import { createHostSessionMovePorts } from './agent/session-move.ts';
+import { setLiveCcSessionBridge } from '../../desktop/src/main/maker-host/claude-transcript-relocation.ts';
 import { createHostTaskRestore } from './agent/task-restore.ts';
 import { createUserInputEnqueue } from './agent/user-input.ts';
 import { resolveSessionReferencesWithPorts } from '../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
@@ -1106,6 +1108,18 @@ const ipcRoute = createHostIpcRoute({
   log: event => (event.outcome === 'ok' ? ipcLog.debug('ipc call', event) : ipcLog.warn('ipc call', event)),
 });
 
+// The working-directory move's ports (session-move.ts): the desktop's worktree registry (worktrees.json
+// in the profile root, read only), an idle runtime closed through the executor, the recent project push,
+// and the live Claude bridge the shared transcript move reads (register.ts setLiveCcSessionBridge).
+const sessionMove = createHostSessionMovePorts({
+  profileDir,
+  getMakerIfReady: () => agentGraph?.maker ?? null,
+  isTurnRunning: (id: string) => inputQueue.isTurnRunning(id),
+  closeRuntime: (id: string) => inputQueue.closeRuntime(id),
+  publish: event => eventHub.publish(event),
+});
+setLiveCcSessionBridge(sessionMove.liveCcSessionBridge);
+
 const serverDeps = {
   ipcRoute,
   browserBackend: (handler: keyof NonNullable<typeof platformTools>['browserSettings'], payload: unknown) => {
@@ -1335,6 +1349,7 @@ const serverDeps = {
     setModel: (sessionId, model, providerId, revision, selection) =>
       runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
     persistSessionFields: (sessionId, patch) => runtimeSelection.persistSessionFields(sessionId, patch),
+    move: sessionMove.move,
   })),
   /**
    * Cross-engine switch: record the intent and let the next enqueue apply it.

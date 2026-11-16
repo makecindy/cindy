@@ -886,6 +886,12 @@ export function createTurnExecutor(deps) {
     async drainHistories() { await Promise.all([...histories.values()].map(history => history.drain())); },
     /** A rebuilt native context has seen no environment notes (contextRecoveryRebuilt). */
     resetWireNotes: id => wireNotes.reset(id),
+    /**
+     * Closes a task's runtime outside a turn, as a runtime refresh does: the executor lets go of the
+     * instance (interactions, binding, environment notes) before Maker closes it. A working-directory
+     * move closes an idle runtime this way (session-move.ts).
+     */
+    closeRuntime: id => closeRuntime(id),
     async beforeDispatchUserTurn(id, item, signal) {
       const turn = turns.get(id);
       const live = deps.getMaker()?.getSession(id);

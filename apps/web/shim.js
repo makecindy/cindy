@@ -1044,6 +1044,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
             'maker:session-credential-switch-applied': 'maker.onSessionCredentialSwitchApplied',
             'maker:session-credential-switch-failed': 'maker.onSessionCredentialSwitchFailed',
             'maker:draft-pref:apply': 'onMakerDraftPrefApply',
+            'local-db:recent-workdirs:changed': 'localDb.recentWorkdirs.onChanged',
           }[parsed.channel];
           if (subscriber) emit(subscriber, parsed.payload);
         } else if (parsed.type === 'settings_changed') {
