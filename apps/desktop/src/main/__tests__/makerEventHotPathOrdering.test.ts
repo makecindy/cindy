@@ -678,8 +678,7 @@ describe('maker:event hot path ordering', () => {
 
   it('tears down every automatic recovery path before an explicit Stop aborts the session', () => {
     const resetStart = source.indexOf('function resetAutomaticRecoveryForExplicitStop(');
-    const resetEnd =
-      source.indexOf('\n}\n\nfunction settleUndispatchedAutoResumeOutcome', resetStart) + 2;
+    const resetEnd = source.indexOf('\n}\n', resetStart) + 2;
     const resetSource = source.slice(resetStart, resetEnd);
     const coordinatorAbortStart = source.indexOf('abortSession: async (sessionId) => {');
     const coordinatorAbortEnd = source.indexOf('\n    isTurnRunning:', coordinatorAbortStart);

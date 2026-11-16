@@ -294,6 +294,7 @@ import {
 import { createTurnModelAttribution } from './turnModelAttribution.js';
 import { createUserMessageDurableWrite } from './userMessageDurableWrite.js';
 import { createInterruptedTurnAutoResumeHooks } from './interruptedTurnAutoResumeHooks.js';
+import { createAutoResumeRuntime } from './autoResumeRuntime.js';
 import { createSessionRuntimeFallback } from './sessionRuntimeFallback.js';
 import { handleSilentStopTurnEndWithPorts } from './silentStopTurnEnd.js';
 import { createAgentSwitchBoundaryInsert, createAgentSwitchDbApply, createRememberThinkingIntent, createSwitchedSessionBootstrap, readAgentSwitchSessionRow } from './agentSwitchDepsCore.js';
@@ -1582,7 +1583,6 @@ import {
   registerSessionAutoTitleHooks,
   scheduleSessionAutoTitle,
 } from './sessionAutoTitle.js';
-import { SilentStopAutoResumeGuard } from './silentStopAutoResume.js';
 import {
   publishUiContinuation,
   publishUiSessionIntervention,
@@ -1592,12 +1592,10 @@ import {
 import { channelTurnSourceFor, noteChannelTurnSource } from './channelTurnSignal.js';
 import { readSilentStopAutoResumeSettings } from '../maker-host/silent-stop-auto-resume-store.js';
 import {
-  AutoResumeBookkeeping,
   type OrcaSuppressedTerminal,
   type SuppressedTurnError,
 } from './autoResumeBookkeeping.js';
 import {
-  InterruptedTurnAutoResumeGuard,
   shouldPreserveWaitingContinuationOnlyAutoResume,
   shouldPreserveRuntimeFallbackAutoResume,
   type InterruptedTurnErrorSignals,
@@ -1698,25 +1696,6 @@ let orcaTeamServiceForEvents: OrcaTeamService | null = null;
 let orcaWorkerReportQueueForBridge: OrcaWorkerReportQueue | null = null;
 // 协同远端 Worker 的宿主装配；bootstrapSession 据此拒绝在本机启动远端 Worker 的代理任务。
 let orcaRemoteWorkersForHost: OrcaRemoteWorkers | null = null;
-// silent-stop 自动续跑守卫(决策语义与防死循环不变量见 silentStopAutoResume.ts 文件头)。
-// 纯内存、app 级单例:额度按 sessionId 记账,kill switch 每次决策时现读(改配置即生效)。
-const silentStopAutoResumeGuard = new SilentStopAutoResumeGuard({
-  isEnabled: () => readSilentStopAutoResumeSettings().enabled,
-  log: {
-    debug: (message, meta) => log.debug(message, meta),
-    warn: (message, meta) => log.warn(message, meta),
-  },
-});
-// 中断自动续跑守卫(上游把已有产出的 turn 打断 → 自动替用户点一次「继续」)。
-// 与 silent-stop 那份**额度独立记账**,理由见 interruptedTurnAutoResume.ts 文件头。
-const interruptedTurnAutoResumeGuard = new InterruptedTurnAutoResumeGuard({
-  isEnabled: () =>
-    readInterruptedTurnAutoResumeSettings().enabled || readSessionRuntimeFallbackSettings().enabled,
-  log: {
-    debug: (message, meta) => log.debug(message, meta),
-    warn: (message, meta) => log.warn(message, meta),
-  },
-});
 let settlePendingSessionRuntimeControlHolder: ((sessionId: string, reason: string) => void) | null =
   null;
 
@@ -2169,41 +2148,6 @@ function settleDeferredBotGroupTerminal(terminal: BotGroupLaneTerminal): void {
 }
 
 /**
- * 中断自愈的每会话簿记(压住的错误详情 / 待确认的重连记录 / 退避排期)。
- *
- * 状态与生命周期不变量都在 `autoResumeBookkeeping.ts`(有单测);这里只注入副作用:
- * 落库、结果回填、守卫额度回滚、清 coordinator 接管态。
- */
-const autoResumeBookkeeping = new AutoResumeBookkeeping({
-  // agentMeta 传 null:补落时原事件已不在手上(接管决策可能发生在延后结算路径、或退避
-  // 3–20 秒之后),onTurnErrorEvent 无 agentMeta 时按 register 记录的 turnDedupId 做多窗
-  // dedup(saveTurnStartedAtForDeferred 已在压住那一刻存好 turn 开始时刻)。
-  persistSuppressedError: (sessionId, detail) => onTurnErrorEvent(sessionId, detail, null),
-  surfaceSuppressedError: (sessionId, detail) => {
-    surfaceSuppressedAutoResumeErrorInAgentIsland(sessionId, detail);
-    settleDeferredProductTurnFailure(sessionId);
-  },
-  // L3：auto-resume 放弃后，用当初压住的 capture 恰好一次收口 Orca status / auto-bridge。
-  // L2 flush/discard 不会走到这里，避免「还在重试却已经把异常终止桥给 Lead」。
-  finalizeOrcaSuppressedTerminal: settleDeferredOrcaWorkerTerminal,
-  finalizeBotGroupSuppressedTerminal: settleDeferredBotGroupTerminal,
-  markOutcome: (sessionId, clientId, outcome) => {
-    void markAutoResumeOutcome(sessionId, clientId, outcome);
-  },
-  rollbackGuardPendingResume: (sessionId, attemptToken) => {
-    if (typeof attemptToken === 'number') {
-      interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, attemptToken);
-    }
-  },
-  // holder 是可变绑定,必须懒读(模块初始化时 coordinator 还没建)。
-  abandonTakeover: (sessionId, message, attemptToken) =>
-    agentInputCoordinatorHolder?.abandonAutoResume(sessionId, message, attemptToken),
-  onAutoResumeFailed: (sessionId, attemptToken) =>
-    failPendingSchedulerAutoResume(sessionId, attemptToken),
-  log: (message, fields) => log.debug(message, fields),
-});
-
-/**
  * 供应商组自动换电脑期间先不呈现的那次失败(provider-group/heldTurnErrors.ts)：error 行暂存在这里，换成了丢掉，
  * 没换成补落并放出横幅与 Agent Island 提醒。
  */
@@ -2262,6 +2206,60 @@ const {
 const PROVIDER_GROUP_SWITCH_HOLD_MAX_MS = 3 * 60_000;
 
 /**
+ * 自动续跑的进程级运行时:silent-stop 与中断续跑两个守卫、中断自愈的每会话簿记、派出前被丢弃的
+ * 续跑项的收口(装配与不变量见 autoResumeRuntime.ts)。这里只注入桌面的副作用:落库、结果回填、
+ * 清 coordinator 接管态、定时任务的额度等待与供应商组续跑的结算。
+ */
+const {
+  silentStopAutoResumeGuard,
+  interruptedTurnAutoResumeGuard,
+  autoResumeBookkeeping,
+  autoResumeAttemptToken,
+  settleUndispatchedInterruptedAutoResume,
+} = createAutoResumeRuntime({
+  isSilentStopAutoResumeEnabled: () => readSilentStopAutoResumeSettings().enabled,
+  isInterruptedTurnAutoResumeEnabled: () =>
+    readInterruptedTurnAutoResumeSettings().enabled || readSessionRuntimeFallbackSettings().enabled,
+  guardLog: {
+    debug: (message, meta) => log.debug(message, meta),
+    warn: (message, meta) => log.warn(message, meta),
+  },
+  bookkeeping: {
+    // agentMeta 传 null:补落时原事件已不在手上(接管决策可能发生在延后结算路径、或退避
+    // 3–20 秒之后),onTurnErrorEvent 无 agentMeta 时按 register 记录的 turnDedupId 做多窗
+    // dedup(saveTurnStartedAtForDeferred 已在压住那一刻存好 turn 开始时刻)。
+    persistSuppressedError: (sessionId, detail) => onTurnErrorEvent(sessionId, detail, null),
+    surfaceSuppressedError: (sessionId, detail) => {
+      surfaceSuppressedAutoResumeErrorInAgentIsland(sessionId, detail);
+      settleDeferredProductTurnFailure(sessionId);
+    },
+    // L3：auto-resume 放弃后，用当初压住的 capture 恰好一次收口 Orca status / auto-bridge。
+    // L2 flush/discard 不会走到这里，避免「还在重试却已经把异常终止桥给 Lead」。
+    finalizeOrcaSuppressedTerminal: settleDeferredOrcaWorkerTerminal,
+    finalizeBotGroupSuppressedTerminal: settleDeferredBotGroupTerminal,
+    markOutcome: (sessionId, clientId, outcome) => {
+      void markAutoResumeOutcome(sessionId, clientId, outcome);
+    },
+    // holder 是可变绑定,必须懒读(模块初始化时 coordinator 还没建)。
+    abandonTakeover: (sessionId, message, attemptToken) =>
+      agentInputCoordinatorHolder?.abandonAutoResume(sessionId, message, attemptToken),
+    onAutoResumeFailed: (sessionId, attemptToken) =>
+      failPendingSchedulerAutoResume(sessionId, attemptToken),
+    log: (message, fields) => log.debug(message, fields),
+  },
+  // holder 是可变绑定,必须懒读。
+  restoreAutoResumeRecovery: (sessionId, clientId, attemptToken) =>
+    agentInputCoordinatorHolder?.restoreAutoResumeRecovery(sessionId, clientId, attemptToken) === true,
+  finishScheduledUsageLimitWait: (sessionId, retryClientId) => {
+    const pending = pendingSchedulerAutoResumeRunBySession.get(sessionId);
+    if (pending?.usageLimitToken !== undefined && pending.retryClientId === retryClientId) {
+      finishSchedulerUsageLimitWait(sessionId, pending.usageLimitToken);
+    }
+  },
+  settleProviderGroupContinuation,
+});
+
+/**
  * Continuation-only auto-retry is scheduled against the current runtime
  * Session, but stall abort recovery, terminal-error drain, or a Codex
  * interrupt ACK failure may close/rebuild that exact instance before the
@@ -2286,70 +2284,6 @@ function resetAutomaticRecoveryForExplicitStop(sessionId: string): void {
   interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
   autoResumeBookkeeping.teardown(sessionId);
   deferredProductTurnFailureGate.clearSession(sessionId);
-}
-
-function autoResumeAttemptToken(item: AgentInputQueuedMessage): number | null {
-  // 额度重置后的续跑不走中断自愈记账,它的 sessionTotal(0)不是令牌。
-  if (item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON) return null;
-  const value = item.autoResumeInfo?.sessionTotal;
-  return item.autoResume === true && typeof value === 'number' ? value : null;
-}
-
-function settleUndispatchedAutoResumeOutcome(
-  sessionId: string,
-  item: AgentInputQueuedMessage,
-  attemptToken: number,
-): boolean {
-  // markOutcome 复用 durable-write 队列；持久化中取消时，failed patch 会排在
-  // 正在进行的 user row insert 后面，不会出现先 patch、后 insert 的窗口。
-  return autoResumeBookkeeping.settleOutcomeForClient(
-    sessionId,
-    attemptToken,
-    item.clientId,
-    'failed',
-  );
-}
-
-/**
- * 自动续跑项在 vendor dispatch 前被丢弃：恢复 coordinator 的原 recovery，补落被压住的
- * error，并回滚 guard 的 pendingResume。用户已接手 / clearSession 时 coordinator 会返回
- * false，此时只补历史、不重新弹横幅。
- */
-function settleUndispatchedInterruptedAutoResume(
-  sessionId: string,
-  item: AgentInputQueuedMessage,
-): boolean {
-  // 额度重置后的自动继续不走中断自愈记账(sessionTotal 刻意为 0),只需恢复原错误与手动重试入口。
-  if (item.autoResume === true && item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON) {
-    agentInputCoordinatorHolder?.restoreAutoResumeRecovery(sessionId, item.clientId, null);
-    const pending = pendingSchedulerAutoResumeRunBySession.get(sessionId);
-    if (pending?.usageLimitToken !== undefined && pending.retryClientId === item.clientId) {
-      finishSchedulerUsageLimitWait(sessionId, pending.usageLimitToken);
-    }
-    // 供应商组换电脑后的续跑没派出去：协同 Worker 的这次异常终止回报给 Lead。
-    settleProviderGroupContinuation(sessionId, false);
-    return false;
-  }
-  const attemptToken = autoResumeAttemptToken(item);
-  if (attemptToken === null) return false;
-  const ownsAttempt = autoResumeBookkeeping.hasPendingLifecycleForClient(
-    sessionId,
-    attemptToken,
-    item.clientId,
-  );
-  const restored =
-    agentInputCoordinatorHolder?.restoreAutoResumeRecovery(
-      sessionId,
-      item.clientId,
-      attemptToken,
-    ) === true;
-  settleUndispatchedAutoResumeOutcome(sessionId, item, attemptToken);
-  if (!ownsAttempt) return false;
-  interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, attemptToken);
-  autoResumeBookkeeping.finalizeSuppressedError(sessionId, attemptToken, {
-    surfaceBanner: restored,
-  });
-  return true;
 }
 
 /**
