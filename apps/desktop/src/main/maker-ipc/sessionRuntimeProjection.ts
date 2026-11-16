@@ -1,7 +1,8 @@
 /**
  * The runtime projection of a task that the desktop broadcasts after a runtime change (model,
  * provider, effort, fast mode), the projector every task read goes through (mapper.ts
- * setSessionRuntimeProjector), and the update of a scheduled task's saved preferences. Moved
+ * setSessionRuntimeProjector), the cleanup at a task's archive or delete (sessionRuntimeCleanup.ts
+ * setSessionRuntimeCleanup), and the update of a scheduled task's saved preferences. Moved
  * verbatim out of register.ts so the Node Host runs the same steps; register.ts binds the ports.
  *
  * - A task with a saved scheduled baseline projects that baseline (scheduled preferences win over the
@@ -18,7 +19,13 @@ import { getDbClient } from '../localDb/client/current.js';
 import type { SessionRuntimeProjector } from '../localDb/mapper.js';
 import { sessions } from '../localDb/schema.js';
 import type { ScheduledModelSelection } from './scheduledModelSelection';
-import { projectSessionRuntimeControl, type SessionRuntimeProfile } from './sessionRuntimeControl.js';
+import { clearSessionProvider } from '../maker-host/session-provider-store.js';
+import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
+import {
+  clearSessionRuntimeControlState,
+  projectSessionRuntimeControl,
+  type SessionRuntimeProfile,
+} from './sessionRuntimeControl.js';
 
 export interface SessionRuntimeProjectionPorts {
   broadcastSessionPatched: typeof import('../localDb/ipc/sessions.js').broadcastSessionPatched;
@@ -114,6 +121,40 @@ export function createSessionRuntimeProjector(ports: SessionRuntimeProjectorPort
       fastMode: session.fastMode,
     });
     return { ...projection, runtimePluginsSelected: ports.runtimePluginsSelected(session.id) };
+  };
+}
+
+export interface SessionRuntimeCleanupPorts {
+  /** A start of the task still in progress on another computer (remote-agent startRemote.ts). */
+  cancelPendingRemoteStart(sessionId: string): void;
+  /** The working-directory recovery's memory of the task (workingDirectoryRecovery.discard). */
+  discardWorkingDirectoryRecovery(sessionId: string): void;
+  /** createSessionRuntimeProjection's broadcastSessionRuntimeProjection. */
+  broadcastSessionRuntimeProjection(sessionId: string): Promise<void>;
+  log: { debug(message: string, context?: Record<string, unknown>): void };
+}
+
+/**
+ * The cleanup at a task's archive or delete, as register.ts passed it to setSessionRuntimeCleanup
+ * (cleanupSessionRuntimeForTerminalStatus runs it): the task's runtime control state (an accepted
+ * runtime override included), provider, effort and Fast go, and the projection is pushed again.
+ */
+export function createSessionRuntimeCleanup(ports: SessionRuntimeCleanupPorts): (sessionId: string) => void {
+  const { cancelPendingRemoteStart, broadcastSessionRuntimeProjection, log } = ports;
+  return (sessionId) => {
+    // 任务在另一台电脑上还没启动完：让那台停下，不再迟到地启动、跑完这一轮。
+    cancelPendingRemoteStart(sessionId);
+    ports.discardWorkingDirectoryRecovery(sessionId);
+    clearSessionRuntimeControlState(sessionId);
+    clearSessionProvider(sessionId);
+    setSessionEffort(sessionId, null);
+    setSessionFastMode(sessionId, false);
+    void broadcastSessionRuntimeProjection(sessionId).catch((error) => {
+      log.debug('session runtime cleanup projection failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   };
 }
 
