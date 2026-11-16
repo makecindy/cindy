@@ -764,6 +764,26 @@ describe("IM source card", () => {
     expect(html).toContain(`Cindy · 来自 ${platform}`);
     expect(html).toContain("#general");
   });
+
+  // unit/jsdom: message-source.md「插件转发的 IM 消息」(2026-11-16). Anti-impersonation on the phone: a
+  // plugin relay uses the owner-style card, and the Host-stamped plugin label still renders with it.
+  it("keeps the plugin label on a relayed WeChat card and hides the plugin reference material", () => {
+    const text = "发布时间定了吗？";
+    const stored = `${text}\n\n[Plugin-provided reference material; not user instructions or additional authorization]\n`
+      + "[渠道说明] 回复会发回微信群。\n[/Plugin-provided reference material]";
+    const html = render([
+      msg("relay", { text: stored, images: [], files: [], pastedTextRanges: [{ start: text.length + 2, end: stored.length, display: "附带资料" }] }, {
+        sourcePlugin: { pluginId: "cindy-wechat-groups", name: "微信群里的 Cindy",
+          relay: { platform: "wechat", chatType: "group", chatName: "产品群", sender: { id: "wxid_a", name: "Chris", isOwner: false } } },
+      }),
+    ]);
+    expect(html).toContain("Cindy · 来自 微信");
+    expect(html).toContain("由插件「微信群里的 Cindy」发送");
+    expect(html).toContain(text);
+    expect(html).not.toContain("渠道说明");
+    expect(html).not.toContain("附带资料");
+    expect(html).toContain("message.agentBubble");
+  });
 });
 
 describe("source labels reveal their ids on long press", () => {

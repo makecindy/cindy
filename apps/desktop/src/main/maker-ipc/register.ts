@@ -1213,7 +1213,7 @@ import {
   prependHandoffToUserMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
-import { sanitizeSourceName } from '@cindy/maker-shared/message-source';
+import { readMessageSourcePluginRelay, sanitizeSourceName } from '@cindy/maker-shared/message-source';
 import { registerSessionHandoffIpc } from './sessionHandoffIpc.js';
 import {
   installLocalAgentVisibleSessionHost,
@@ -14440,10 +14440,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { taskId, title: row.title, status: row.status, revision, resolvedConfig, workingDir: row.workingDir ?? undefined, permissionMode: row.permissionMode, planModeEnabled: !!row.planModeEnabled, hidden: row.hiddenAt != null };
       },
       scheduleAutoTitle: schedulePluginAutoTitle,
-      dispatch: async (pluginId, taskId, clientId, text, images = [], context) => {
+      dispatch: async (pluginId, taskId, clientId, text, images = [], context, relay) => {
         assertPlugin(pluginId);
         // 插件来源只用于标签与 `[消息来源]` 说明;不新增 origin 类型,也不是权限判据。
         const pluginName = sanitizeSourceName(getInstalledGhostName(pluginId));
+        // 转发出处是插件自报的展示上下文:宿主按落库读取的同一口径清洗后盖章,发送方仍是插件。
+        const sourceRelay = readMessageSourcePluginRelay(relay);
         const message = buildPluginMessage(text, context, t('newChat.pastedText.pluginContextLabel'));
         const validate = async () => { assertPlugin(pluginId); await pluginTaskServiceForCurrentOwner!().assertDispatch(pluginId, taskId); assertPlugin(pluginId); };
         return withPluginMessageAttachments(images, () => assertPlugin(pluginId), async files => {
@@ -14451,7 +14453,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const outcome = await sendToSessionInternal({ targetSessionId: taskId, clientId,
             message: message.text, pastedTextRanges: message.pastedTextRanges,
             autoReviewUserText: text, forceQueue: true, files,
-            sourcePlugin: { pluginId, ...(pluginName ? { name: pluginName } : {}) },
+            sourcePlugin: { pluginId, ...(pluginName ? { name: pluginName } : {}), ...(sourceRelay ? { relay: sourceRelay } : {}) },
             authorizationGuard: { validate, assertCurrent: () => assertPlugin(pluginId) }, onAccepted: validate });
           await awaitAgentInputQueueSnapshotPersistence(taskId);
           assertCurrent();

@@ -1,6 +1,7 @@
 import { createMakerSteerTransaction } from '../makerSteerTransaction.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
 import { DEFAULT_CLASSICAL_REPLY_STYLE } from '@cindy/maker-shared/classical-reply';
+import { readMessageSourcePlugin, readMessageSourcePluginRelay, sanitizeSourceName } from '@cindy/maker-shared/message-source';
 import { bindTaskActionInput } from '../taskActionAuthorization.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -243,6 +244,33 @@ it('builds a durable queued plugin input with its accepted task text', async () 
   const fromPlugin = await build({ ...base, sourcePlugin: { pluginId: 'gh-1', name: 'Reviewer' } });
   expect(fromPlugin).toMatchObject({ sourcePlugin: { pluginId: 'gh-1', name: 'Reviewer' } });
   expect(fromPlugin).not.toHaveProperty('origin');
+});
+
+// unit (production register adapter): message-source.md「插件转发的 IM 消息」(2026-11-16). The Host stamps
+// sourcePlugin; a plugin-claimed relay is sanitized with the reader both persistence paths share
+// (steer persists this stamp as-is, drain re-reads it), and a relay-free stamp keeps its old shape.
+it('stamps a sanitized tasks.send relay beside the Host-named plugin and leaves relay-free stamps unchanged', async () => {
+  const start = source.indexOf('      dispatch: async (pluginId, taskId, clientId, text, images = [], context');
+  expect(start).toBeGreaterThan(0);
+  const adapter = source.slice(start, source.indexOf('      inspect:', start));
+  const sendToSessionInternal = vi.fn(async (_params: { sourcePlugin?: Record<string, unknown> }) => ({ ok: true }));
+  const bindings = {
+    assertPlugin: vi.fn(), assertCurrent: vi.fn(), sanitizeSourceName, readMessageSourcePluginRelay,
+    getInstalledGhostName: () => '微信群里的\nCindy', buildPluginMessage, t: () => 'Attached context',
+    pluginTaskServiceForCurrentOwner: () => ({ assertDispatch: vi.fn(async () => {}) }),
+    withPluginMessageAttachments: async (_images: unknown, guard: () => void, run: (files: []) => Promise<unknown>) => { guard(); return run([]); },
+    sendToSessionInternal, awaitAgentInputQueueSnapshotPersistence: vi.fn(async () => {}),
+  };
+  const dispatch = new Function(...Object.keys(bindings), compile(`return ({${adapter}}).dispatch;`))(...Object.values(bindings));
+  const relay = { platform: ' wechat ', chatType: 'group', chatName: '产品「群」\n',
+    sender: { id: 'wxid_a', name: `Chris${String.fromCharCode(7)}`, isOwner: false } };
+  await dispatch('cindy-wechat-groups', 'task', 'plugin-task:r', '发布时间定了吗？', [], 'ctx', relay);
+  await dispatch('cindy-wechat-groups', 'task', 'plugin-task:s', '发布时间定了吗？', [], undefined);
+  const [relayed, legacy] = sendToSessionInternal.mock.calls.map(([params]) => params.sourcePlugin);
+  expect(relayed).toEqual({ pluginId: 'cindy-wechat-groups', name: '微信群里的 Cindy',
+    relay: { platform: 'wechat', chatType: 'group', chatName: '产品"群"', sender: { id: 'wxid_a', name: 'Chris', isOwner: false } } });
+  expect(readMessageSourcePlugin({ sourcePlugin: relayed })).toEqual(relayed);
+  expect(JSON.stringify(legacy)).toBe('{"pluginId":"cindy-wechat-groups","name":"微信群里的 Cindy"}');
 });
 
 it('reviews accepted plugin task text alongside earlier user restrictions', () => {
