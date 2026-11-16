@@ -8,6 +8,7 @@ import {
   type MakerSessionAgentSwitchHandlerDeps,
 } from '../../../desktop/src/main/maker-ipc/sessionAgentSwitchHandler.ts';
 import {
+  createSwitchedSessionBootstrap,
   createAgentSwitchBoundaryInsert,
   createAgentSwitchDbApply,
   readAgentSwitchSessionRow,
@@ -43,6 +44,8 @@ import {
 import { createColdPiRehydrationForWindowVerification } from '../../../desktop/src/main/maker-ipc/coldPiRehydration.ts';
 import { directoryGrantsForRuntime } from '../../../desktop/src/main/maker-ipc/extraDirsValidator.ts';
 import { setPendingCredentialSwitchReader } from '../../../desktop/src/main/maker-host/provider-route.ts';
+import { setThinkingEnabledInMemory } from '../../../desktop/src/main/maker-host/newMakerDefaultsCache.ts';
+import { MAKER_PUSH } from '../../../desktop/src/main/maker-ipc/channels.ts';
 import type { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.desktop.ts';
 import {
   createSessionRuntimeProjection,
@@ -113,7 +116,10 @@ export interface HostRuntimeStartPorts {
   checkWorkDirExists(sessionId: string, workingDir: string | undefined, agentKind: string, remoteHostId: string | null | undefined): Promise<boolean>;
   synthesizeOrcaVendorOptionsFromDb(sessionId: string, opts: object): Promise<unknown>;
   readSessionExtraDirsFromDb(sessionId: string): Promise<string[]>;
-  bootstrapSession(opts: object): Promise<unknown>;
+  readSessionWritableDirsFromDb(sessionId: string): Promise<string[]>;
+  ensureRemoteReadyForSessionStart(params: { createOpts?: unknown }): Promise<unknown>;
+  bootstrapSession(opts: object, assertAccess?: () => void, nativeHistoryResume?: boolean): Promise<unknown>;
+  broadcastSessionCreated(sessionId: string): void;
 }
 
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
@@ -288,9 +294,39 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
       deps.pendingHandoff.set(sessionId, handoff, expectedGeneration),
     readPendingHandoffGeneration: sessionId => deps.pendingHandoff.readGeneration(sessionId),
-    // A switch the Host commits never bootstraps: the send transaction creates the new runtime from
-    // the committed row (skipBootstrap); only the desktop's direct sends (Goal, IM, scheduler) do.
-    bootstrapSwitchedSession: async () => { throw new Error('Host switches bootstrap at the next send'); },
+    // As register.ts: the committed switch's runtime from its row. A landing at the send skips it
+    // (the send transaction starts the runtime), but a switch back to an engine with a parked native
+    // session starts it at once to see whether the resume holds (sessionAgentSwitchHandler.ts). The
+    // start functions are the executor's (its send transaction's); no IM channel resolves vendor
+    // options on the Host, as on a desktop without IM.
+    bootstrapSwitchedSession: createSwitchedSessionBootstrap({
+      getActiveAppSession,
+      buildCreateOptsWithStderr: opts => deps.inputQueue.startPorts().buildCreateOptsWithStderr(opts),
+      resolveSwitchedSessionVendorOptions: () => undefined,
+      synthesizeOrcaVendorOptionsFromDb: (sessionId, opts) => deps.inputQueue.startPorts().synthesizeOrcaVendorOptionsFromDb(sessionId, opts),
+      readSessionExtraDirsFromDb: sessionId => deps.inputQueue.startPorts().readSessionExtraDirsFromDb(sessionId),
+      directoryGrantsForRuntime,
+      readSessionWritableDirsFromDb: sessionId => deps.inputQueue.startPorts().readSessionWritableDirsFromDb(sessionId),
+      ensureRemoteReadyForSessionStart: params => deps.inputQueue.startPorts().ensureRemoteReadyForSessionStart(params),
+      bootstrapSession: (opts, assertAccess, nativeHistoryResume) =>
+        deps.inputQueue.startPorts().bootstrapSession(opts, assertAccess, nativeHistoryResume),
+      broadcastSessionCreated: sessionId => deps.inputQueue.startPorts().broadcastSessionCreated(sessionId),
+      log: deps.log,
+    }),
+    // As register.ts: an engine pick replaces a credential switch registered before it.
+    supersedePendingCredentialSwitch: sessionId => clearPendingCredentialSwitchWith(accessPorts(), sessionId),
+    // As register.ts: a committed switch's thinking choice goes to the preference mirror the next
+    // runtime start reads (start-options.ts getThinkingEnabledFromMemory), and to the clients' memory.
+    rememberThinkingIntent: ({ agentKind, providerId, model, thinking }) => {
+      setThinkingEnabledInMemory(agentKind, providerId, model, thinking);
+      deps.publish({ type: 'plugin_push', channel: MAKER_PUSH.DRAFT_PREF_APPLY, payload: {
+        agent: agentKind,
+        providerId: providerId ?? '',
+        modelId: model,
+        active: false,
+        thinking,
+      } });
+    },
     withCloseSuppressed: withRehydrateCloseSuppressed,
     pendingSwitches,
     selectSameAgentModel: createSelectSameAgentModel({ applySessionRuntimeSelection }),

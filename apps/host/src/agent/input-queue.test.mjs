@@ -37,6 +37,7 @@ import { createDbClientForHandle } from '../../../desktop/src/main/localDb/clien
 import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.ts';
 import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionStorageAdapter.ts';
 import { createHostRuntimeSelection } from './runtime-selection.ts';
+import { getThinkingEnabledFromMemory } from '../../../desktop/src/main/maker-host/newMakerDefaultsCache.ts';
 import { createHostMessageStore, createHostMessageRecovery } from '../message-store.ts';
 import { resolveSessionReferencesWithPorts } from '../../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
 import { listErrorTailPendingRows } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
@@ -3067,6 +3068,60 @@ test('model change at send: an engine pick that cannot land lets the send go on,
   assert.equal(r.row('cross').agent_kind, 'codex');
   assert.equal(r.selection.projectIntent('cross') ?? null, null);
   assert.equal(r.userRows('cross').length, 2);
+});
+
+// Rule (sessionAgentSwitchHandler.ts: a switch back to an engine whose native session is parked starts
+// that engine at once to see whether the resume holds, through agentSwitchDeps.bootstrapSwitchedSession;
+// the handoff then carries only what happened while it was away): switching back resumes the parked
+// native session. Gap: the Host's bootstrapSwitchedSession threw, which the switch takes as a failed
+// resume and falls back from: the engine started fresh with a full handoff, and the parked session was
+// silently dropped.
+test('model change at send: switching back to an engine resumes its parked native session', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await r.createTask('park');
+  const started = [];
+  const create = r.h.maker.createSession.bind(r.h.maker);
+  r.h.maker.createSession = async opts => { started.push({ agentKind: opts.agentKind, resumeSessionId: opts.resumeSessionId }); return create(opts); };
+  const claude = await r.runTurn('park', 'park-1'); // its native session: native-park-1
+  await r.selection.switchAgent({ sessionId: 'park', targetAgentKind: 'codex', model: 'gpt-x', providerId: 'prov-a' });
+  await r.h.queue.enqueue('park', { clientId: 'park-2', text: 'on codex' });
+  await waitFor(() => { const next = r.h.maker.sessions.get('park'); return next && next !== claude && next.sent.length === 1; });
+  const codex = r.h.maker.sessions.get('park');
+  r.db.db.prepare('UPDATE sessions SET sdk_session_id = ? WHERE id = ?').run('native-codex', 'park');
+  codex.emit({ type: 'done', data: {}, sessionTurnGeneration: codex.generation, sessionInstanceId: codex.instanceId });
+  await waitFor(() => !r.h.queue.projection('park').active);
+  await r.selection.switchAgent({ sessionId: 'park', targetAgentKind: 'claude-code', model: 'big', providerId: 'prov-a' });
+  await r.h.queue.enqueue('park', { clientId: 'park-3', text: 'back' });
+  await waitFor(() => { const next = r.h.maker.sessions.get('park'); return next && next !== codex && next.sent.length === 1; });
+  assert.deepEqual(started, [
+    { agentKind: 'claude-code', resumeSessionId: undefined },
+    { agentKind: 'codex', resumeSessionId: undefined },
+    { agentKind: 'claude-code', resumeSessionId: 'native-park-1' }, // the parked native session resumes
+  ]);
+  const boundaries = r.db.db.prepare("SELECT content FROM messages WHERE session_id = 'park' AND role = 'agent_switch'").all()
+    .map(entry => JSON.parse(entry.content));
+  assert.deepEqual(boundaries.map(entry => [entry.fromAgentKind, entry.toAgentKind, entry.resumed === true]),
+    [['cc', 'codex', false], ['codex', 'cc', true]]);
+  const back = r.h.maker.sessions.get('park');
+  assert.match(back.sent[0], /switching back to you/, 'the handoff carries only what happened while it was away');
+  assert.match(back.sent[0], /back$/, 'followed by the user\'s message');
+  assert.equal(r.h.queue.projection('park').error ?? null, null);
+});
+
+// Rule (register.ts rememberThinkingIntent): an engine switch that commits with a thinking choice puts
+// it in the preference mirror the next runtime start reads (start-options.ts
+// getThinkingEnabledFromMemory) and sends it to the clients' memory (DRAFT_PREF_APPLY). Gap: the Host
+// left the port out, so the choice was dropped once the switch committed.
+test('model change at send: an engine switch keeps its thinking choice for the next runtime start', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await r.createTask('think');
+  await r.selection.switchAgent({ sessionId: 'think', targetAgentKind: 'codex', model: 'gpt-think', providerId: 'prov-a', thinking: false });
+  await r.h.queue.enqueue('think', { clientId: 'think-1', text: 'first' });
+  await waitFor(() => r.h.maker.sessions.get('think')?.agentKind === 'codex');
+  assert.equal(getThinkingEnabledFromMemory('codex', 'prov-a', 'gpt-think'), false);
+  const pushed = r.h.events.filter(event => event.type === 'plugin_push' && event.channel === 'maker:draft-pref:apply');
+  assert.deepEqual(pushed.map(event => event.payload),
+    [{ agent: 'codex', providerId: 'prov-a', modelId: 'gpt-think', active: false, thinking: false }]);
 });
 
 test('context recovery assembly: an overflow rebuilds the task and replays the message on a new runtime, with no error left', { timeout: 30_000 }, async t => {

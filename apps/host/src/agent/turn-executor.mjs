@@ -375,9 +375,15 @@ export function createTurnExecutor(deps) {
     readSessionExtraDirsFromDb: deps.readSessionExtraDirs ?? (async () => []),
     readSessionWritableDirsFromDb: deps.readSessionWritableDirs ?? (async () => []),
     withRehydrateCloseSuppressed,
-    bootstrapSession: async opts => {
+    // assertAccess and nativeHistoryResume as the desktop's bootstrapSession (register.ts) takes them
+    // from a committed engine switch (agentSwitchDepsCore.ts createSwitchedSessionBootstrap): the owner
+    // check before the start, and a parked native session that must resume or fail (the switch then
+    // handles the failure; no fresh start here).
+    bootstrapSession: async (opts, assertAccess, nativeHistoryResume = false) => {
       const turn = turns.get(opts.id);
       turn?.check();
+      assertAccess?.();
+      if (nativeHistoryResume) opts.vendorOptions = { ...opts.vendorOptions, _cindyRequireNativeResume: true };
       const preparing = (async () => {
         const stored = await readExecutionSession(opts.id);
         assertHostTaskExecutionSupported(opts);
@@ -712,7 +718,10 @@ export function createTurnExecutor(deps) {
       checkWorkDirExists: transactionDeps.checkWorkDirExists,
       synthesizeOrcaVendorOptionsFromDb: transactionDeps.synthesizeOrcaVendorOptionsFromDb,
       readSessionExtraDirsFromDb: transactionDeps.readSessionExtraDirsFromDb,
+      readSessionWritableDirsFromDb: transactionDeps.readSessionWritableDirsFromDb,
+      ensureRemoteReadyForSessionStart: transactionDeps.ensureRemoteReadyForSessionStart,
       bootstrapSession: transactionDeps.bootstrapSession,
+      broadcastSessionCreated: transactionDeps.broadcastSessionCreated,
     },
     /** The engine of a task as its message persistence knows it (the desktop's getSessionDbAgentKind). */
     sessionDbAgentKind: id => histories.get(id)?.getSessionDbAgentKind(id) ?? null,

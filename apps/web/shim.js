@@ -1055,6 +1055,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
             'maker:codex-runtime-route-changed': 'maker.onCodexRuntimeRouteChanged',
             'maker:session-credential-switch-applied': 'maker.onSessionCredentialSwitchApplied',
             'maker:session-credential-switch-failed': 'maker.onSessionCredentialSwitchFailed',
+            'maker:draft-pref:apply': 'onMakerDraftPrefApply',
           }[parsed.channel];
           if (subscriber) emit(subscriber, parsed.payload);
         } else if (parsed.type === 'settings_changed') {
