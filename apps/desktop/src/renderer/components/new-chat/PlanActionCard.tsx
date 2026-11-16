@@ -30,6 +30,7 @@ import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { SendButton } from './SendButton';
 import { ListComposerTextarea } from './ListComposerTextarea';
+import { sixAnswerRows, useAnswerComposerExpanded } from './useAnswerComposerExpanded';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -58,6 +59,7 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
   const [submitted, setSubmitted] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const composerExpanded = useAnswerComposerExpanded(inputRef, feedback, sixAnswerRows);
 
   const handleApprove = useCallback(() => {
     if (submitted) return;
@@ -188,7 +190,13 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
       {/* Feedback Row */}
       {isEditing ? (
         <div className="p-3">
-          <div data-testid="interaction-answer-composer" className="flex w-full min-w-0 flex-col gap-2 rounded-[8px] border border-[var(--plan-card-border)] bg-[var(--chat-input-bg)] p-3 focus-within:border-[var(--chat-input-border-focus)]">
+          <div
+            data-testid="interaction-answer-composer"
+            className={cn(
+              'flex w-full min-w-0 gap-2 rounded-[8px] border border-[var(--plan-card-border)] bg-[var(--chat-input-bg)] focus-within:border-[var(--chat-input-border-focus)]',
+              composerExpanded ? 'flex-col p-3' : 'items-end py-2 pl-3 pr-2',
+            )}
+          >
             <ListComposerTextarea
               ref={inputRef}
               value={feedback}
@@ -214,7 +222,9 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
               rows={1}
               disabled={submitted}
               className={cn(
-                'min-h-[44px] w-full min-w-0 resize-none bg-transparent text-14 outline-none',
+                'min-h-[22px] min-w-0 resize-none bg-transparent text-14 outline-none',
+                // One line beside the 28px send button; centred on it by the margin.
+                composerExpanded ? 'w-full' : 'my-[3px] flex-1',
                 'text-[var(--plan-action-fb-text)]',
                 'placeholder:text-[var(--plan-action-fb-placeholder)]',
                 // 22 ÷ 14:与 text-14 等比,随 UI 字号缩放(auto-grow 上限按计算值取)
@@ -222,7 +232,7 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
                 submitted && 'cursor-not-allowed opacity-60',
               )}
             />
-            <div className="flex w-full items-center justify-end gap-2">
+            <div className={cn('flex items-center justify-end gap-2', composerExpanded ? 'w-full' : 'shrink-0')}>
               <Tip text={t('newChat.planReview.submitFeedbackAria')}>
                 <SendButton onClick={handleSubmitFeedback} disabled={submitted || !hasFeedbackText}
                   ariaLabel={t('newChat.planReview.submitFeedbackAria')} />

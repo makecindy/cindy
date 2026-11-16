@@ -173,6 +173,7 @@ export function makeToolProcessEnvironment(
     COREPACK_ENABLE_AUTO_PIN: '0',
     COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
     npm_config_manage_package_manager_versions: 'false',
+    pnpm_config_manage_package_manager_versions: 'false',
     npm_config_managePackageManagerVersions: 'false',
     PNPM_MANAGE_PACKAGE_MANAGER_VERSIONS: 'false',
     PYTHONDONTWRITEBYTECODE: '1',
@@ -186,6 +187,11 @@ export function makeToolProcessEnvironment(
   ];
   // Use the same PATH for resolution and child dependencies (e.g. pnpm's Node).
   for (const key of Object.keys(environment)) {
+    if (
+      key !== 'pnpm_config_manage_package_manager_versions' &&
+      key.toLowerCase() === 'pnpm_config_manage_package_manager_versions'
+    )
+      delete environment[key];
     if (key === 'PATH' || (platform === 'win32' && key.toLowerCase() === 'path'))
       delete environment[key];
   }

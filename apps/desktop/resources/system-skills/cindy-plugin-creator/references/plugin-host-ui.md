@@ -28,19 +28,20 @@
 
 这是清单片段；其余身份字段仍按 [manifest](plugin-manifest.md) 填写。
 页面只需引用 `mcpApps.ui.resources`，允许 `tools:{}`。`scope` 缺省为 `global`，不借台前任务；
-`task` 页面只能从真实本机任务打开。已批准页面和命令可从插件详情、任务标题栏菜单进入。
+`task` 页面只能从真实本机任务打开。已安装并启用插件声明的页面和命令可从插件详情、任务标题栏菜单进入。
 同实例、视图和任务再次打开会聚焦已有页签；更新输入不重建页面。
 
 原生按钮可额外声明 `presentation:"popover"`，在入口旁打开同一 MCP App 资源；缺省仍打开侧栏页签。
 仅适用于 `composer.toolbar/session.header/statusbar/message.actions/turn.footer` 的页面按钮；
 正文位置与更多菜单保持各自承载方式。页面在弹层打开后才加载，关闭、入口离开视口或区域隐藏即释放。
-变更为弹层会进入原批准确认，不继承旧入口的批准。例：
+弹层方式在安装/更新时随声明展示，不需要为入口单独授权。例：
 `{"id":"quick","title":"快捷面板","position":"composer.toolbar","view":"board","presentation":"popover"}`。
 
 入口指定 `view` 或 `tool` 之一。`arguments` 为静态 JSON：页面收到 `hostContext.cindy.input`，
 工具收到对应参数。`kind:"select"` 还会加入用户选择的 `value`，并须声明
 `options:[{"label":"全部","value":"all"}]`。`kind:"status"` 只显示状态，不声明动作。
-工具必须在 `tools[]` 声明，并在 `mcpApps.ui.tools` 开放 `app` 可见性；沿原审批及一次性凭据执行。
+工具必须在 `tools[]` 声明，并在 `mcpApps.ui.tools` 开放 `app` 可见性；沿原插件执行入口及一次性来源凭据执行。
+整版安装/更新批准有效且插件已启用即可使用这些声明，不另建分项授权，不走 Agent MCP 审批或调用时确认。
 
 | position | 位置 |
 | --- | --- |
@@ -66,7 +67,7 @@
 `message.menu` 声明菜单动作，`kind` 缺省或填 `button`，引用 `view` 或 `tool`；
 不在菜单内嵌选择框、状态条或任意页面。`match.roles` 可区分用户消息和 AI 消息。
 例如 `{"id":"open-message","title":"打开任务页面","position":"message.menu","view":"board"}`。
-菜单显示插件来源，点击沿同一页面/工具入口与批准执行；只有菜单打开时才订阅该菜单项状态，关闭立即释放。
+菜单显示插件来源，点击沿同一已安装插件的页面/工具入口执行；只有菜单打开时才订阅该菜单项状态，关闭立即释放。
 
 正文位置只引用页面；`match.roles/tools/plugins` 限定候选。原文默认可读，用户选择后才打开页面，
 不可用时回原文。需要正文内容时声明任务页面及 `context`；内容来自已有展示投影，不另查消息数据库。
@@ -76,7 +77,7 @@
 新增导航和菜单只支持按钮形态。导航适合全局工作台；任务菜单带真实任务身份，工具参数中的
 `cindy_ui.sessionId` 由 Host 填写，插件不能用静态 arguments 改写。菜单只在打开时订阅小状态。
 `settings.section` 必须引用全局 view，页面使用原 AppBridge、CSP 和生命周期。
-这几个位置不支持 `presentation:"popover"`。未批准新位置不会继承原工具栏的批准。
+这几个位置不支持 `presentation:"popover"`。已安装版本声明的位置直接生效，不按位置记录分项批准。
 
 `window.titlebar` 声明 `view` 或 `tool`，仅支持按钮；`icon` 使用原导航图标名，缺省为 puzzle。
 按钮在主窗（含完整任务副窗）和分离侧栏窗口的原标题区内显示，提示带插件来源，沿原页面/工具入口执行。
@@ -97,8 +98,8 @@
 
 `trigger` 只接受 `/` 或 `@`，提供者必须是 app-visible 工具，不接收完整草稿。
 Host 在现有输入触发状态出现后等待 200ms，传入 `{trigger,query}`，与静态 arguments 合并；
-提供者调用沿原工具审批，最长 2 秒。纯本地、无副作用的查询可按原工具契约声明 `approval:"auto"`，
-仍需用户批准。没有贡献时不安装监听或发送 IPC，普通打字不等待插件。
+提供者使用该版本已声明的工具，最长 2 秒，不读取 Agent 的权限模式或另弹确认。
+没有贡献时不安装监听或发送 IPC，普通打字不等待插件。
 面板关闭、切换任务、查询或授权变化后取消/丢弃旧结果；内置命令和资源仍按原方式使用。
 
 工具返回标准 MCP `structuredContent`，或内容为 JSON 的 text block：
@@ -121,8 +122,11 @@ insertText 不超过 32768 字符，description 可选且不超过 2000 字符�
 仅用户本次选取、拖入或粘贴的附件进入此入口，不扫描已有草稿和消息。没有贡献时不订阅或请求。
 多个匹配提供者按声明目录顺序尝试，首个 `handled:true` 结束，`handled:false` 交给下一个。
 
-工具必须 app-visible。Host 填入 `attachment:{name,size,mimeType}` 元数据；文件本体沿原工具审批及
-附件过户，媒体放入原 `attachments` 参数；非媒体工具须声明保留参数 `cindy_handoff_files:{type:"array"}`，
+工具必须 app-visible。插件整体安装/更新批准有效且已启用时，Host 将主人本次主动添加、匹配声明的附件
+直接交给同一插件实例，不再询问文件权限、不写永久 grant，也不套用 Agent 的权限档位。
+本次输入来自浏览器 File 或粘贴 Blob 已有的字节，Host 校验真实大小；原生附件入口不接受绝对路径或缓存 URL 请求主机读盘。
+Host 填入 `attachment:{name,size,mimeType}` 元数据；媒体复用原媒体寄存并放入 `attachments` 哈希参数；
+非媒体工具须声明保留参数 `cindy_handoff_files:{type:"array"}`，
 得到 `handoff:` 引用。插件不能从参数取得本机路径。字节处理仍使用原文件能力（见 `plugin-files-and-library.md` §4.10.3），
 需要联网时也沿原 network 声明；此入口不增添文件或网络权限。
 
@@ -150,7 +154,7 @@ insertText 不超过 32768 字符，description 可选且不超过 2000 字符�
 ```
 
 把这个片段放在 `mcpApps.host`。支持 boolean/string/number、number 的 min/max、string 的 maxLength
-（默认及上限为 32768），以及同类型的有限 options。字段和约束独立参与原批准；标签或默认值更新不要求重批。
+（默认及上限为 32768），以及同类型的有限 options。字段和约束在安装/更新确认中展示，不记录独立批准状态。
 只登记普通偏好，凭证继续走 secrets / OAuth。简单字段不要求声明 MCP 页面或 UI 权限。
 复杂配置用 `settings.section` 全局 view；同一 view 可被多个带不同 arguments 的配置入口复用。
 
@@ -167,8 +171,8 @@ MCP App 页面可调用 `cindy.ui.settings({operation:"get"|"update"|"reset",pat
 
 - `source:{instanceId,viewId,sessionId}`：Host 绑定的来源，全局页面的 sessionId 为 null。
 - `input`：开页输入，不需要 context 权限。
-- `capabilities`：实际已批准能力，用于探测支持情况。
-- `context`、`selection`：仅任务页面获准 context 后提供。正文页面可含 message/tool 投影；task 为开页时的标题、目录、模型快照。
+- `capabilities`：已安装版本声明且宿主支持的能力，用于探测支持情况。
+- `context`、`selection`：仅声明 context 的任务页面提供。正文页面可含 message/tool 投影；task 为开页时的标题、目录、模型快照。
 - `draft:{revision,selection}`：仅获准 draft 后提供；订阅只发版本与选区，不反复复制整份文档。
   `selection` 为当前草稿选区的 `{from,to,text}`，无选区时为 null。
 
@@ -195,8 +199,8 @@ if (app.getHostContext()?.cindy?.capabilities?.includes('draft')) {
 
 | 能力 | 具名页面可用的工具 |
 | --- | --- |
-| 页面批准 | `cindy.ui.open({viewId,input?})`，只打开同插件已批准视图 |
-| 已批准 `settings[]` | `cindy.ui.settings({operation:"get"|"update"|"reset",patch?})`，只操作当前实例登记字段 |
+| 视图声明 | `cindy.ui.open({viewId,input?})`，只打开同插件已安装版本声明的视图 |
+| `settings[]` 声明 | `cindy.ui.settings({operation:"get"|"update"|"reset",patch?})`，只操作当前实例登记字段 |
 | `context` | 向标准 host context 推送获准的任务/正文投影和任务区域选中文字 |
 | `draft` | `cindy.ui.draft({mode:"read",revision?,offset?})` 按需完整读取；`{mode:"append"|"replace"|"replace-selection",text,revision?}` 编辑，替换整份草稿或选区须带最新 revision，冲突拒绝，不发送消息 |
 | `appearance` | `cindy.ui.appearance({patch?,reset?,ifRevision?})`，沿原外观设置读写 |
@@ -208,7 +212,7 @@ if (app.getHostContext()?.cindy?.capabilities?.includes('draft')) {
 
 ### 外观资源与正文样式
 
-在 `mcpApps.host` 额外声明需要的字段和包内资源；每项参与批准，旧批准不会自动授予新资源：
+在 `mcpApps.host` 额外声明需要的字段和包内资源；安装/更新确认展示完整声明，接受该版本即授予这些能力，不另记资源批准：
 
 ```json
 {
@@ -276,5 +280,5 @@ await publish();
 [host-ui 示例](examples/interactive-pages/host-ui/) 包含真实清单、后台和官方 SDK 页面，演示原生入口、折叠侧栏、附件交接与重命名、输入补全、统一设置、
 全局/任务视图、命令、草稿和宿主操作。示例的历史 MCP Apps 版本下限只用于源码自测；发布前按实际新版本修改，
 并让用户提供图标或明确同意生成图标，不能生成占位色块。
-用包含本章实现的宿主执行 `ghost_forge_pack`；安装另需用户指示。验收应覆盖新能力明确批准、旧插件无感兼容、
+用包含本章实现的宿主执行 `ghost_forge_pack`；安装另需用户指示。验收应覆盖安装/更新整版确认、无分项记录的已装插件能力可用、旧插件无感兼容、
 无候选历史消息不通信，以及关闭/撤权后停止投递。

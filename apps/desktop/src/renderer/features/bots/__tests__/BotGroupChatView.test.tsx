@@ -135,6 +135,15 @@ vi.mock('../BotGenerationLabel', () => ({
   BotGenerationLabel: ({ phase }: { phase?: string }) => <span>{`phase:${phase}`}</span>,
 }));
 vi.mock('@/state/agentIslandActivity', () => ({ useAgentIslandActivity: () => mocks.activity }));
+// Voice lifecycle and native shortcut ownership are exercised with the real
+// shared hook in useBotGroupVoiceInput.test.tsx; this suite covers group sends.
+vi.mock('../useBotGroupVoiceInput', () => {
+  const ownsDraft = () => false;
+  return { useBotGroupVoiceInput: ({ text }: { text: string }) => ({
+  ownsDraft,
+  displayText: text, state: 'idle', isBusy: false, isListening: false, isCaptureReady: false,
+  lastError: null, shortcutLabel: '', start: () => false, stop: async () => {}, cancel: async () => {},
+}) }; });
 
 beforeAll(() => {
   // jsdom has no layout; scrolling is a no-op here.
@@ -1862,6 +1871,30 @@ describe('BotGroupChatView', () => {
     expect(mocks.sendBotGroupMessage.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: ['other'] });
   });
 
+  // Incident 2026-11-13 (component): a typed name two members share used to address both.
+  // One @ names one identity, so the draft stays and asks for a pick from the list.
+  it('holds a typed name that two members share until one is picked from the list', async () => {
+    const namesakes = [
+      { ...detail().members[0]!, botId: 'picked', name: 'Ann' },
+      { ...detail().members[1]!, botId: 'other', name: 'Ann' },
+    ];
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ members: namesakes }) });
+    mocks.sendBotGroupMessage.mockResolvedValue({ ok: true, messageId: 'accepted' });
+    renderView();
+    const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '@Ann hello', selectionStart: 10 } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.errors.mentionAmbiguous:Ann');
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    expect(input.value).toBe('@Ann hello');
+    fireEvent.change(input, { target: { value: '@', selectionStart: 1 } });
+    fireEvent.click((await screen.findAllByRole('option'))[2]!);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: ['other'] });
+  });
+
   it.each(['picked', 'manual'])('removes only the %s token identity when same-name mentions coexist', async removed => {
     const namesakes = [
       { ...detail().members[0]!, botId: 'picked', name: 'Ann' },
@@ -2661,7 +2694,7 @@ describe('BotGroupChatView', () => {
       expect(block.textContent).not.toContain('snapshot text');
       await user.click(block);
       const target = document.querySelector('[data-bot-group-message-id="b1"]') as HTMLElement;
-      await waitFor(() => expect(target.className).toContain('search-match-bg'));
+      await waitFor(() => expect(target.className).toContain('surface-hover'));
       expect(document.activeElement).toBe(target);
       expect(screen.queryByRole('complementary')).toBeNull();
     });
@@ -2732,7 +2765,7 @@ describe('BotGroupChatView', () => {
         : { ok: true, group: { ...base, messages: [msg({ id: 'q1', sequence: 50, content: '那就这班', quote: quoteOf('old1', { excerpt: '很早的原文', sequence: 1 }) })] } });
       renderView();
       await user.click(await screen.findByRole('button', { name: 'bots.groupChat.quote.jumpLabel:小满' }));
-      await waitFor(() => expect((document.querySelector('[data-bot-group-message-id="old1"]') as HTMLElement | null)?.className).toContain('search-match-bg'));
+      await waitFor(() => expect((document.querySelector('[data-bot-group-message-id="old1"]') as HTMLElement | null)?.className).toContain('surface-hover'));
       expect(mocks.getBotGroup).toHaveBeenCalledWith('g1', expect.objectContaining({ beforeSequence: 50 }));
     });
 
@@ -2746,7 +2779,7 @@ describe('BotGroupChatView', () => {
         : { ok: true, group: { ...base, messages: [msg({ id: 'q1', sequence: 50, content: '那就这班', quote: quoteOf('old1', { excerpt: '很早的原文', sequence: 1 }) })] } });
       renderView();
       await user.click(await screen.findByRole('button', { name: 'bots.groupChat.quote.jumpLabel:小满' }));
-      await waitFor(() => expect((document.querySelector('[data-bot-group-message-id="old1"]') as HTMLElement | null)?.className).toContain('search-match-bg'));
+      await waitFor(() => expect((document.querySelector('[data-bot-group-message-id="old1"]') as HTMLElement | null)?.className).toContain('surface-hover'));
       // Deleted on another client after it was paged in: the push re-read leaves older pages as they were.
       deleted = true;
       await user.click(screen.getByRole('button', { name: 'bots.groupChat.quote.jumpLabel:小满' }));
@@ -2814,7 +2847,7 @@ describe('BotGroupChatView', () => {
         scroll.scrollTo = vi.fn();
         fireEvent.click(screen.getByRole('button', { name: 'chat.jumpToBottom' }));
         await act(async () => finish([original]));
-        expect(document.querySelector('[class*="search-match-bg"]')).toBeNull();
+        expect(document.querySelector('[data-bot-group-message-id][class*="bg-[var(--surface-hover)]"]')).toBeNull();
         expect(mocks.toastInfo).not.toHaveBeenCalled();
         Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 3000 });
         mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
@@ -2866,7 +2899,7 @@ describe('BotGroupChatView', () => {
         expect(screen.getByTestId('bot-group-quote').textContent).toContain('快照摘要');
         await user.click(screen.getByTestId('bot-group-quote'));
         await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.timeline.loadEarlierFailed'));
-        expect(document.querySelector('[class*="search-match-bg"]')).toBeNull();
+        expect(document.querySelector('[data-bot-group-message-id][class*="bg-[var(--surface-hover)]"]')).toBeNull();
       });
 
       it('re-checks every quoted original across all opened pages on a single push', async () => {
@@ -2951,7 +2984,7 @@ describe('BotGroupChatView', () => {
       renderView();
       await user.click(await screen.findByRole('button', { name: 'bots.groupChat.quote.jumpLabel:小满' }));
       await waitFor(() => expect(mocks.toastInfo).toHaveBeenCalledWith('bots.groupChat.quote.unavailable'));
-      expect(document.querySelector('[class*="search-match-bg"]')).toBeNull();
+      expect(document.querySelector('[data-bot-group-message-id][class*="bg-[var(--surface-hover)]"]')).toBeNull();
     });
 
     it('keeps a quote draft inside its own group', async () => {
@@ -5905,8 +5938,8 @@ it('anchors live work to a confirmed optimistic request before later messages', 
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true,
     messages: [msg({ id: 'later-source', sequence: 2, createdAt: 30, content: 'Later foreign request', isSelf: false })],
     round: { status: 'running', canContinue: false, speakers: [
-      { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'other-work', sourceMessageId: 'later-source', isSelfRequested: false },
-      { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'own-work', sourceMessageId: 'own-source', isSelfRequested: true },
+      { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'other-work', sourceMessageId: 'later-source', threadRootId: null, isSelfRequested: false },
+      { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'own-work', sourceMessageId: 'own-source', threadRootId: null, isSelfRequested: true },
     ] },
   }) });
   await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'round' })));
@@ -5980,4 +6013,23 @@ it('inserts live work before later messages and keeps its element on an incremen
   await screen.findByText('Newest message');
   expect(screen.getByTestId('bot-group-work')).toBe(work);
   expect(work.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+// Topic filtering hides work rows, while the group composer still stops only my requests.
+it.each([true, false])('keeps topic-only stop ownership in the group composer (mine: %s)', async isSelfRequested => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true,
+    round: { status: 'running', canStop: true, canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: null, executionId: 'topic-only', activity: 'reply',
+        sourceMessageId: 'topic-source', threadRootId: 'topic-root', isSelfRequested },
+    ] },
+  }) });
+  renderView();
+  await screen.findByRole('textbox');
+  expect(screen.queryByTestId('bot-group-work')).toBeNull();
+  const stop = screen.queryByRole('button', { name: 'bots.groupChat.composer.stop' });
+  if (isSelfRequested) {
+    expect(stop).not.toBeNull();
+    fireEvent.click(stop!);
+    await waitFor(() => expect(mocks.stopBotGroupRound).toHaveBeenCalled());
+  } else expect(stop).toBeNull();
 });

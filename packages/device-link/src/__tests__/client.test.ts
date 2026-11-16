@@ -6,7 +6,8 @@ import { createHash } from 'node:crypto';
 import { PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY } from '@cindy/device-link-protocol';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { describe, it, expect, vi } from 'vitest';
-import { DeviceLinkClient, computeReconnectDelayMs, type WsLike } from '../client.js';
+import { REMOTE_AGENT_CHANNEL, REMOTE_AGENT_READ_WAIT_MS } from '../remoteAgent.js';
+import { DeviceLinkClient, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
 import {
   PROTOCOL_VERSION,
   DeviceLinkError,
@@ -19,7 +20,9 @@ import {
 import {
   DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
   DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+  DEVICE_LINK_CAPABILITY_TRANSPORT_ACK_V2,
   DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+  TRANSPORT_DELAYED_ACK_MS,
   DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
   MAX_TRANSPORT_PENDING_MESSAGES,
   MAX_TRANSPORT_REASSEMBLIES,
@@ -35,6 +38,14 @@ import {
   parseTransportPayload,
 } from '../transport.js';
 import { PLUGIN_SYNC_CHANNEL } from '../pluginSyncProtocol.js';
+import { deflateRawBase64Sync, inflateRawBase64TextBounded } from '../nodeCompression.js';
+import {
+  DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1,
+  decodePushTransfer,
+  encodePushTransfer,
+  pushDeflateCapabilities,
+  selectPushDeflateDictionary,
+} from '../pushTransfer.js';
 import { BACKLOG_WARN_MESSAGES, summarizeBacklog } from '../transportBacklog.js';
 import { diagnosticRef } from '../stallDiagnostics.js';
 import { sharedTaskGuestPeer } from '../sharedTaskPeer.js';
@@ -216,6 +227,32 @@ describe('outbound invoke admission', () => {
         expect(records).toContainEqual(expect.objectContaining({ stage: 'request', channel: 'maker:remote-resources:invoke',
           operation: actionId === 'PRIVATE_ACTION' ? 'other-resource-action' : actionId }));
         expect(JSON.stringify(info.mock.calls)).not.toContain('PRIVATE_');
+      } finally { h.client.stop(); vi.useRealTimers(); }
+    },
+  );
+
+  // Unit, 2026-11-14 logs: the 10s remote-agent long poll produced ~47k "request slow" debug
+  // lines and ~30k INFO request diagnostics in five days. Its intended hold is not slowness;
+  // time beyond the hold still is.
+  it.each([[REMOTE_AGENT_READ_WAIT_MS, false], [REMOTE_AGENT_READ_WAIT_MS + 1_500, true]] as const)(
+    'remote-agent poll answered after %ims records slow evidence: %s', async (elapsedMs, slow) => {
+      vi.useFakeTimers();
+      const info = vi.fn(); const debug = vi.fn();
+      const h = makeHarness({ logger: { info, debug, warn: vi.fn(), error: vi.fn() },
+        timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000 } });
+      try {
+        h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+        const request = h.client.invoke('abcdef12', { channel: REMOTE_AGENT_CHANNEL,
+          args: [{ op: 'poll', runs: [{ runId: 'run-1', cursor: 0 }] }] });
+        const sent = h.current().sent.find(frame => frame.kind === 'invoke')!;
+        await vi.advanceTimersByTimeAsync(elapsedMs);
+        h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: sent.id, src: sent.dst,
+          payload: { ok: true, result: { runs: [] } } });
+        await expect(request).resolves.toMatchObject({ ok: true });
+        const diagnostics = info.mock.calls.filter(([line]) => String(line).startsWith('device-link diagnostic {"stage":"request"'));
+        const slowLines = debug.mock.calls.filter(([line]) => String(line).startsWith('device-link request slow'));
+        expect(diagnostics.length > 0).toBe(slow);
+        expect(slowLines.length > 0).toBe(slow);
       } finally { h.client.stop(); vi.useRealTimers(); }
     },
   );
@@ -1344,6 +1381,180 @@ function makeRelayClient(
 }
 
 describe('DeviceLinkClient', () => {
+  // Unit: sendInvokeResult must reach the caller when live replies fill a ready
+  // window whose head was retransmitted without ACK. Existing recovery tests
+  // cover link-down or discardable pushes, not this ready/live-only deadlock.
+  it('delivers a new result through a stalled full window without evicting old replies or resetting another peer', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay();
+    const sockets = vi.spyOn(relay, 'makeWebSocket');
+    const host = makeRelayClient(relay, 'desktop', { transportRetryIntervalMs: 2_000 });
+    const a = makeRelayClient(relay, 'viewer-a');
+    const b = makeRelayClient(relay, 'viewer-b');
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const route = relay.route.bind(relay);
+    let blockOldReplies = true;
+    const routing = vi.spyOn(relay, 'route').mockImplementation((sender, ws, env) => {
+      if (blockOldReplies && sender === 'desktop' && env.dst === 'viewer-a'
+        && parseTransportPayload(env.payload)) return;
+      route(sender, ws, env);
+    });
+    const requests: Envelope[] = [];
+    host.onFrame(env => {
+      if (env.kind === 'link-open') host.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') requests.push(env);
+    });
+    try {
+      for (const client of [host, a, b]) client.start();
+      await pump();
+      for (const client of [a, b]) {
+        const opening = client.openLink('desktop', { controllerName: 'Viewer', protocolVersion: 1, appVersion: '1' });
+        await pump(); await opening;
+      }
+      for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+        host.sendInvokeResult('viewer-a', `old-${i}`, { ok: true, result: i });
+      }
+      await vi.advanceTimersByTimeAsync(2_001);
+      await pump();
+      const hostSocket = sockets.mock.results.find(entry => entry.value.ownerId === 'desktop')!.value;
+      expect(hostSocket.sent.filter((env: Envelope) => env.id === 'old-0')).toHaveLength(2);
+      // Fresh foreground traffic from the stuck peer and a healthy neighbor must
+      // not disguise the missing ACK on this peer's send window.
+      const pending = [a, b].map(client => client.invoke('desktop', { channel: 'maker:send', args: [] }));
+      for (const request of pending) void request.catch(() => {});
+      await pump();
+      for (const request of requests) {
+        host.sendInvokeResult(request.src!, request.id!, { ok: true, result: request.src });
+      }
+      await pump();
+      await expect(pending[0]).resolves.toEqual({ ok: true, result: 'viewer-a' });
+      await expect(pending[1]).resolves.toEqual({ ok: true, result: 'viewer-b' });
+      expect(hostSocket.sent.find((env: Envelope) => env.id === requests[0].id)?.payload)
+        .toEqual({ ok: true, result: 'viewer-a' });
+      expect(() => host.sendPush('viewer-a', 'non-discardable-event', {})).toThrow(/buffer is full/);
+
+      blockOldReplies = false;
+      await vi.advanceTimersByTimeAsync(4_001);
+      await pump();
+      const delivered = relay.deliveredTo.get('viewer-a') ?? [];
+      expect(new Set(delivered.filter(env => env.id?.startsWith('old-')).map(env => env.id)).size)
+        .toBe(MAX_TRANSPORT_PENDING_MESSAGES);
+      host.sendInvokeResult('viewer-a', 'after-drain', { ok: true, result: null });
+      const after = hostSocket.sent.find((env: Envelope) => env.id === 'after-drain')!;
+      expect(parseTransportPayload(after.payload)?.meta).toMatchObject({ seq: 65, baseSeq: 65 });
+      expect(requests).toHaveLength(2);
+      expect(sockets).toHaveBeenCalledTimes(3);
+      expect(hostSocket.closed).toBeNull();
+      expect(b.isLinkReady('desktop')).toBe(true);
+    } finally {
+      for (const client of [host, a, b]) client.stop();
+      routing.mockRestore(); sockets.mockRestore(); vi.useRealTimers();
+    }
+  });
+
+  it.each([1, 8])('keeps fresh full windows backpressured with retry limit %i', async transportMaxRetryAttempts => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, transportRetryIntervalMs: 2_000, transportMaxRetryAttempts } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(1); h.current().ack();
+      const opening = establishInboundReliableLink(h, 'fresh-full');
+      await vi.advanceTimersByTimeAsync(1); await opening;
+      for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) h.client.sendInvokeResult('dev-b', `old-${i}`, { ok: true, result: null });
+      expect(() => h.client.sendInvokeResult('dev-b', 'new-result', { ok: true, result: null }))
+        .toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+      expect(h.current().sent.some(env => env.id === 'new-result')).toBe(false);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('preserves size, socket and transport-policy errors on a stalled full window', async () => {
+    vi.useFakeTimers();
+    let allowed = true;
+    let challengeReady = true;
+    const signingSession = {};
+    const h = makeHarness({ transportAllowed: () => allowed,
+      frameAuth: () => ({ sign: () => ({ signature: 'unit' }), verify: () => true,
+        peerChallenge: { session: signingSession, state: () => challengeReady ? 'ready' : 'needed' } }),
+      timing: { pingIntervalMs: 60_000, transportRetryIntervalMs: 2_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(1); h.current().ack();
+      const opening = establishInboundReliableLink(h, 'stalled-errors');
+      await vi.advanceTimersByTimeAsync(1); await opening;
+      for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) h.client.sendInvokeResult('dev-b', `old-${i}`, { ok: true, result: null });
+      await vi.advanceTimersByTimeAsync(2_001);
+      const ws = h.current();
+      const before = ws.sent.length;
+      for (const [mb, code] of [[3, 'BACKPRESSURE'], [5, 'PAYLOAD_TOO_LARGE']] as const) {
+        expect(() => h.client.sendInvokeResult('dev-b', 'large', { ok: true, result: 'x'.repeat(mb * 1024 * 1024) }))
+          .toThrow(expect.objectContaining({ code }));
+      }
+      // Both the hard socket cap and its soft data watermark still apply.
+      for (const bytes of [MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES, 512 * 1024]) {
+        ws.bufferedAmount = bytes;
+        expect(() => h.client.sendInvokeResult('dev-b', 'blocked', { ok: true, result: null }))
+          .toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+      }
+      ws.bufferedAmount = 0;
+      allowed = false;
+      expect(() => h.client.sendInvokeResult('dev-b', 'blocked', { ok: true, result: null }))
+        .toThrow(expect.objectContaining({ code: 'CHANNEL_NOT_ALLOWED' }));
+      allowed = true;
+      const sending = vi.spyOn(ws, 'send').mockImplementationOnce(() => { throw new Error('write failed'); });
+      expect(() => h.client.sendInvokeResult('dev-b', 'blocked', { ok: true, result: null })).toThrow('write failed');
+      sending.mockRestore();
+      expect(ws.sent).toHaveLength(before);
+      h.client.sendInvokeResult('dev-b', 'after-drain', { ok: true, result: null });
+      expect(ws.sent.at(-1)).toMatchObject({ id: 'after-drain', payload: { ok: true, result: null } });
+      challengeReady = false;
+      expect(() => h.client.sendInvokeResult('dev-b', 'needs-auth', { ok: true, result: null }))
+        .toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+      const challenge = ws.sent.at(-1)!;
+      expect(challenge.payload).toMatchObject({ channel: RELAY_AUTH_CHANNEL });
+      challengeReady = true;
+      ws.push({ v: 1, kind: 'push', src: 'dev-b', id: challenge.id,
+        payload: { channel: RELAY_AUTH_CHANNEL, payload: { type: 'response' } } });
+      await vi.advanceTimersByTimeAsync(1);
+      // Failed admission must not secretly enqueue an unretained result.
+      expect(ws.sent.some(env => env.id === 'needs-auth')).toBe(false);
+      h.client.sendInvokeResult('dev-b', 'needs-auth', { ok: true, result: null });
+      expect(ws.sent.at(-1)).toMatchObject({ id: 'needs-auth', auth: { signature: 'unit' } });
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('charges stalled-window replies to the shared relay congestion budget and refunds failed writes', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, transportRetryIntervalMs: 2_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(1); h.current().ack();
+      h.current().emit('close', 1013, 'inbound backpressure');
+      await vi.advanceTimersByTimeAsync(5_001); h.current().ack();
+      for (const peer of ['stalled', 'healthy']) {
+        const opening = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(1); await opening;
+      }
+      for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) h.client.sendInvokeResult('stalled', `old-${i}`, { ok: true, result: null });
+      // Keep a second peer in the shared budget without ACKing its one live reply.
+      h.client.sendInvokeResult('healthy', 'healthy-old', { ok: true, result: null });
+      await vi.advanceTimersByTimeAsync(2_001);
+      const ws = h.current();
+      expect(ws.sent.filter(env => env.id === 'old-0').length).toBeGreaterThanOrEqual(2);
+      // Let the already-sent receive window finish its early retries. The next
+      // budget window is quiet; failed writes must return its four peer credits.
+      await vi.advanceTimersByTimeAsync(1_001);
+      const before = ws.sent.length;
+      const sending = vi.spyOn(ws, 'send').mockImplementationOnce(() => { throw new Error('write failed'); });
+      expect(() => h.client.sendInvokeResult('stalled', 'retry-result', { ok: true, result: null })).toThrow('write failed');
+      sending.mockRestore();
+      for (let i = 0; i < 4; i++) h.client.sendInvokeResult('stalled', `escape-${i}`, { ok: true, result: null });
+      expect(() => h.client.sendInvokeResult('stalled', 'over-budget', { ok: true, result: null }))
+        .toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+      h.client.sendInvokeResult('healthy', 'healthy-new', { ok: true, result: null });
+      expect(ws.sent.slice(before).filter(env => env.id?.startsWith('escape-'))).toHaveLength(4);
+      expect(ws.sent.slice(before).some(env => env.id === 'healthy-new')).toBe(true);
+      expect(ws.closed).toBeNull();
+      expect(h.client.isLinkReady('healthy')).toBe(true);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   it('retains a result completed after the controller disconnects while another controller stays usable', async () => {
     vi.useFakeTimers();
     const relay = new MemoryRelay();
@@ -2475,9 +2686,9 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('Mobile opt-in:出站 peer ACK 超时只复位该 peer,旧 Desktop 可用既有 link-open 恢复且邻居零感知', async () => {
+  it.each(['isolate-peer', 'isolate-outbound'] as const)('%s:出站 peer ACK 超时只复位该 peer,旧 Desktop 可用既有 link-open 恢复且邻居零感知', async (peerFailurePolicy) => {
     const h = makeHarness({
-      peerFailurePolicy: 'isolate-peer',
+      peerFailurePolicy,
       timing: {
         pingIntervalMs: 60_000,
         requestTimeoutMs: 60_000,
@@ -2624,6 +2835,69 @@ describe('DeviceLinkClient', () => {
     });
     await expect(brokenRequest).resolves.toMatchObject({ ok: true, result: ['recovered'] });
     h.client.stop();
+  });
+
+  // Regression: Desktop's pure outbound timeout used to disconnect the shared relay
+  // before checking healthy inbound controllers. Unit tier; fake time/socket, real
+  // openLink/invoke/reset/replay. The two-peer test above did not cover mixed 1:N roles.
+  it('recovers 80 outbound peers without interrupting healthy inbound controllers', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ peerFailurePolicy: 'isolate-outbound', timing: {
+      pingIntervalMs: 600_000, requestTimeoutMs: 60_000,
+      transportRetryIntervalMs: 5, transportMaxRetryAttempts: 2,
+    } });
+    const resets: string[] = [];
+    h.client.onPeerTransportReset(({ deviceId }) => resets.push(deviceId));
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      const socket = h.current();
+      for (const controller of ['controller-a', 'controller-b']) {
+        const linked = establishInboundReliableLink(h, `${controller}-stream`, 1, controller);
+        await vi.advanceTimersByTimeAsync(0); await linked;
+      }
+      const open = async (deviceId: string) => {
+        const linked = h.client.openLink(deviceId, { controllerName: 'Desktop', protocolVersion: 1, appVersion: '1' });
+        const frame = socket.sent.at(-1)!;
+        socket.push({ v: 1, kind: 'link-accept', src: deviceId, id: frame.id, payload: {
+          appVersion: '1', allowlistHash: 'hash', capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+          transportStreamId: `${deviceId}-stream`,
+        } });
+        await linked;
+      };
+      const ids = Array.from({ length: 80 }, (_, i) => `executor-${i}`);
+      for (const id of ids) await open(id);
+      const requests = ids.map(id => h.client.invoke(id, { channel: 'maker:remote-agent:v1', args: [] }, 60_000));
+      for (const request of requests) void request.catch(() => {});
+      const frames = ids.map(id => socket.sent.find(e => e.kind === 'invoke' && e.dst === id)!);
+      const healthy = h.client.invoke('controller-a', { channel: 'local-db:sessions:list', args: [] }, 60_000);
+      void healthy.catch(() => {});
+      const healthyFrame = socket.sent.at(-1)!;
+      const healthyMeta = parseTransportPayload(healthyFrame.payload)!.meta;
+      socket.push({ v: 1, kind: 'push', src: 'controller-a', payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: healthyMeta.streamId, ackSeq: healthyMeta.seq } } });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(new Set(resets)).toEqual(new Set(ids));
+      expect(resets).toHaveLength(80);
+      expect(socket.terminated).toBe(false);
+      expect(socket.closed).toBeNull();
+      expect(h.sockets).toHaveLength(1);
+      expect(h.client.isLinkReady('controller-a')).toBe(true);
+      expect(h.client.isLinkReady('controller-b')).toBe(true);
+      for (const [index, id] of ids.entries()) {
+        const before = socket.sent.length;
+        await open(id);
+        const original = frames[index];
+        const meta = parseTransportPayload(original.payload)!.meta;
+        expect(socket.sent.slice(before).some(e => e.id === original.id && parseTransportPayload(e.payload)?.meta.seq === meta.seq)).toBe(true);
+        socket.push({ v: 1, kind: 'push', src: id, payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: { streamId: meta.streamId, ackSeq: meta.seq } } });
+        socket.push({ v: 1, kind: 'invoke-result', src: id, id: original.id, payload: { ok: true, result: id } });
+      }
+      await expect(Promise.all(requests)).resolves.toEqual(ids.map(id => ({ ok: true, result: id })));
+      socket.push({ v: 1, kind: 'invoke-result', src: 'controller-a', id: healthyFrame.id, payload: { ok: true, result: 'healthy' } });
+      await expect(healthy).resolves.toEqual({ ok: true, result: 'healthy' });
+      expect(h.sockets).toHaveLength(1);
+    } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
   it.each([16, 300 * 1024])('≥2 控制端共享同一被控端:停止 ACK 的 %i 字节响应只复位该 peer,邻居零感知', async (bytes) => {
@@ -3264,8 +3538,9 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('旧控制端(未声明 transport-timeout-close-v1)重试耗尽回退整连接重连,不发新 reason', async () => {
+  it.each(['legacy', 'isolate-outbound'] as const)('%s:旧控制端(未声明 transport-timeout-close-v1)重试耗尽回退整连接重连,不发新 reason', async (peerFailurePolicy) => {
     const h = makeHarness({
+      peerFailurePolicy,
       timing: {
         pingIntervalMs: 1_000,
         reconnectBaseMs: 5,
@@ -5350,6 +5625,51 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  // 2026-11-14 个人版日志：对端整夜离线，侧栏/Git/子代理轮询每笔 invoke 都触网，relay 每小时
+  // 回 DEVICE_OFFLINE 上百次。relay 判定离线后本地按退避窗口回绝，只放行探测；上线信号立即开闸。
+  it('DEVICE_OFFLINE 之后本地回绝同一对端的调用，按窗口放行探测，presence 上线立即恢复', async () => {
+    const h = makeHarness();
+    let now = 1_000_000;
+    vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => now);
+    h.client.start();
+    await tick();
+    h.current().ack();
+    const invokesTo = (dst: string) => h.current().sent.filter((e) => e.kind === 'invoke' && e.dst === dst).length;
+
+    const first = h.client.invoke('dev-b', { channel: 'x', args: [] });
+    const sent = h.current().sent.find((e) => e.kind === 'invoke')!;
+    h.current().push({ v: PROTOCOL_VERSION, kind: 'relay-error', id: sent.id, payload: { code: 'DEVICE_OFFLINE', message: 'offline' } });
+    await expect(first).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+
+    // 窗口内：与 relay 回绝同码，不再写出任何帧；其它对端不受影响。
+    await expect(h.client.invoke('dev-b', { channel: 'y', args: [] })).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    expect(invokesTo('dev-b')).toBe(1);
+    void h.client.invoke('dev-c', { channel: 'x', args: [] }).catch(() => {});
+    await tick();
+    expect(invokesTo('dev-c')).toBe(1);
+
+    // 窗口到期只放行一笔探测，同一时刻的其它调用仍在本地结束。
+    now += 15_000;
+    const probe = h.client.invoke('dev-b', { channel: 'probe', args: [] });
+    await expect(h.client.invoke('dev-b', { channel: 'z', args: [] })).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    await tick();
+    expect(invokesTo('dev-b')).toBe(2);
+    const probeFrame = h.current().sent.filter((e) => e.kind === 'invoke' && e.dst === 'dev-b').at(-1)!;
+    h.current().push({ v: PROTOCOL_VERSION, kind: 'relay-error', id: probeFrame.id, payload: { code: 'DEVICE_OFFLINE', message: 'offline' } });
+    await expect(probe).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    // 探测失败后窗口翻倍：15 s 后仍在本地回绝。
+    now += 15_000;
+    await expect(h.client.invoke('dev-b', { channel: 'y', args: [] })).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    expect(invokesTo('dev-b')).toBe(2);
+
+    // 对端上线：不等窗口，下一笔立即触网。
+    h.current().push({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: { deviceId: 'dev-b', online: true, remoteControlEnabled: true } });
+    void h.client.invoke('dev-b', { channel: 'after-online', args: [] }).catch(() => {});
+    await tick();
+    expect(invokesTo('dev-b')).toBe(3);
+    h.client.stop();
+  });
+
   it('无 pending 的 DEVICE_OFFLINE 也发出单次 peer route offline 事件', async () => {
     const h = makeHarness();
     const routeChanges: unknown[] = [];
@@ -5446,6 +5766,11 @@ describe('DeviceLinkClient', () => {
       linkGeneration: oldGeneration,
     });
     expect(h.client.isLinkReady('dev-b')).toBe(true);
+    // Unit regression #10537: link readiness alone missed the new offline gate.
+    // A late old-generation error must still allow the next public invoke to send.
+    const beforeInvoke = h.current().sent.length;
+    const nextInvoke = h.client.invoke('dev-b', { channel: 'maker:get-capabilities', args: [] }).catch(e => e);
+    expect(h.current().sent.slice(beforeInvoke).some(env => env.kind === 'invoke')).toBe(true);
 
     h.current().push({
       v: PROTOCOL_VERSION,
@@ -5465,6 +5790,7 @@ describe('DeviceLinkClient', () => {
     });
     expect(h.client.isLinkReady('dev-b')).toBe(false);
     h.client.stop();
+    await nextInvoke;
   });
 
   it('路由账本按 peer 限流且不淘汰仍未决的旧代归属', async () => {
@@ -7014,24 +7340,54 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('waitUntilOnline:离线请求有界等待 —— un-park 退避立即重连,上线后 resolve', async () => {
-    // 退避基数 10s:断线后会 park 一个长计时器,模拟"掉线/重连窗口"。
-    const h = makeHarness({ timing: { reconnectBaseMs: 10_000, reconnectMaxMs: 30_000 } });
-    h.client.start();
-    await tick();
-    h.current().ack();
+  // Unit regression: real waitUntilOnline callers could cancel every reconnect
+  // timer after 4429/1012 (or ordinary disconnects). Existing coverage explicitly
+  // expected that bypass and only protected 1013. One waiter after close suffices;
+  // five waves model 80 callers without real waits or private-state assertions.
+  it.each([4429, 1012, 1013, 1006])(
+    'waitUntilOnline:80 callers share backoff and recover after close %i', async (code) => {
+      vi.useFakeTimers();
+      const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+      const h = makeHarness({ timing: {
+        reconnectBaseMs: 1_000, reconnectMaxMs: 8_000,
+        congestionBackoffBaseMs: 1_000, congestionBackoffMaxMs: 8_000,
+      } });
+      const waits: Promise<string>[] = [];
+      const wait = () => waits.push(h.client.waitUntilOnline(10_000).then(
+        () => 'online', (error: DeviceLinkError) => error.code,
+      ));
+      try {
+        h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+        h.current().emit('close', code);
+        for (let wave = 0; wave < 5; wave++) {
+          for (let caller = 0; caller < 16; caller++) wait();
+          await vi.advanceTimersByTimeAsync(0);
+          // A relay still refusing connections closes any premature retry too.
+          if (h.sockets.length > 1) h.current().emit('close', code);
+          await vi.advanceTimersByTimeAsync(50);
+        }
+        expect(h.sockets).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(449);
+        expect(h.sockets).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(h.sockets).toHaveLength(2);
+        const attempt = h.current();
+        wait(); // A new caller must also keep an in-flight handshake.
+        await vi.advanceTimersByTimeAsync(0);
+        expect(h.current()).toBe(attempt);
+        expect(attempt.closed).toBeNull();
 
-    h.current().emit('close', 1006);
-    await tick(20);
-    expect(h.sockets.length).toBe(1); // 退避还没到,park 住,没新建连接
-
-    const p = h.client.waitUntilOnline(1_000);
-    await tick(); // waitUntilOnline 内 connectNow un-park,立刻发起重连
-    expect(h.sockets.length).toBe(2);
-    h.current().ack();
-    await expect(p).resolves.toBeUndefined(); // 上线后放行,而不是干等 10s 退避
-    h.client.stop();
-  });
+        attempt.emit('close', code);
+        wait(); // The next failure doubles the shared delay; callers cannot reset it.
+        await vi.advanceTimersByTimeAsync(1_399);
+        expect(h.sockets).toHaveLength(2);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(h.sockets).toHaveLength(3);
+        h.current().ack();
+        expect(await Promise.all(waits)).toEqual(Array(82).fill('online'));
+      } finally { h.client.stop(); random.mockRestore(); vi.useRealTimers(); }
+    },
+  );
 
   it('waitUntilOnline:超时仍未上线 → NOT_CONNECTED(让上层感知并重试)', async () => {
     // token 恒为 null:永远连不上,status 卡在 connecting。
@@ -7290,6 +7646,37 @@ describe('DeviceLinkClient', () => {
     await tick(20);
     expect(h.sockets.length).toBe(count); // 生命周期仍归 start/stop 管
     expect(h.client.getStatus()).toBe('stopped');
+  });
+
+  // Unit, 2026-11-14 logs: a sleeping laptop stayed "online" to its peers for ~1.5 min per
+  // sleep (ACK timeout, link reset, abandoned frames), every ~15 min DarkWake cycle. Suspend
+  // must close the relay connection normally and hold reconnects until resume.
+  it('suspendConnectionsForSystemSleep 正常关闭 relay、保持期内不重连，唤醒或清醒满保持期后重连', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { reconnectBaseMs: 5, reconnectMaxMs: 10, pingIntervalMs: 600_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      expect(h.client.getStatus()).toBe('online');
+      const asleep = h.current();
+      h.client.suspendConnectionsForSystemSleep('system-suspend');
+      expect(asleep.closed).toEqual({ code: 1001, reason: 'system-suspend' });
+      expect(h.client.getStatus()).toBe('connecting');
+      const count = h.sockets.length;
+      await vi.advanceTimersByTimeAsync(SYSTEM_SUSPEND_RECONNECT_HOLD_MS - 1);
+      expect(h.sockets.length).toBe(count);
+
+      h.client.restartConnections('system-resume');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.sockets.length).toBe(count + 1);
+      h.current().ack();
+      expect(h.client.getStatus()).toBe('online');
+
+      // Sleep vetoed / no resume event: the awake-time hold restores the connection itself.
+      h.client.suspendConnectionsForSystemSleep('system-suspend');
+      const held = h.sockets.length;
+      await vi.advanceTimersByTimeAsync(SYSTEM_SUSPEND_RECONNECT_HOLD_MS);
+      expect(h.sockets.length).toBe(held + 1);
+    } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
   it('stop 后不再重连', async () => {
@@ -8498,27 +8885,27 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
     h.client.stop();
   });
 
-  it('非拥塞断线的 waitUntilOnline un-park 行为不变:立即打断退避重连', async () => {
-    const h = makeHarness({
-      timing: {
-        // 普通退避拉大:不 un-park 的话测试窗口内不会自然重连
-        reconnectBaseMs: 60_000,
-        reconnectMaxMs: 60_000,
-        pingIntervalMs: 60_000,
-      },
-    });
-    h.client.start();
-    await tick();
-    h.current().ack();
-    const socketsBefore = h.sockets.length;
-
-    h.current().emit('close', 1006, 'heartbeat lost');
-    const wait = h.client.waitUntilOnline(2_000);
-    await tick();
-    expect(h.sockets.length).toBe(socketsBefore + 1);
-    h.current().ack();
-    await expect(wait).resolves.toBeUndefined();
-    h.client.stop();
+  it('waitUntilOnline:timeout and stop settle only their waiters without bypassing backoff', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { reconnectBaseMs: 10_000, reconnectMaxMs: 30_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      h.current().emit('close', 4429, 'too many connections');
+      const expired = expect(h.client.waitUntilOnline(100)).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+      const cancelled = h.client.waitUntilOnline(30_000).catch((error: DeviceLinkError) => error);
+      await vi.advanceTimersByTimeAsync(100);
+      await expired;
+      expect(h.sockets).toHaveLength(1);
+      h.client.stop();
+      await expect(cancelled).resolves.toMatchObject({ code: 'NOT_CONNECTED' });
+      await expect(h.client.waitUntilOnline()).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(h.sockets).toHaveLength(1);
+      // A new lifecycle is still reachable, but cannot revive the old waiters.
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      await expect(h.client.waitUntilOnline()).resolves.toBeUndefined();
+      expect(h.sockets).toHaveLength(2);
+    } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
   it('多 peer 拓扑:冷却是连接级的,两个控制端对称受影响、pending 均保留并在重连后各自重放', async () => {
@@ -8702,6 +9089,68 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     controller.stop();
   }, 10_000);
 
+  it('invoke 结果增量:列表只回变化的行,坏增量不带基准重发,退后台停连保留基准', async () => {
+    const codec = {
+      gzipBase64: (text: string) => gzipSync(Buffer.from(text, 'utf8')).toString('base64'),
+      gunzipBase64: (base64: string, maxChars: number) => gunzipSync(Buffer.from(base64, 'base64'), { maxOutputLength: maxChars }).toString('utf8'),
+      contentTag: (text: string) => createHash('sha256').update(text).digest('base64url'),
+    };
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop', undefined, { transferCodec: codec });
+    const controller = makeRelayClient(relay, 'ios', undefined, { transferCodec: codec });
+    // Distinct previews keep gzip honest: the full list cannot shrink to a few hundred bytes.
+    let rows = Array.from({ length: 200 }, (_, i) => ({ id: `session-${i}`, title: `任务 ${i}`,
+      preview: createHash('sha256').update(String(i)).digest('hex'), status: 'idle' }));
+    let corrupt = false;
+    const handled: Envelope[] = [];
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind !== 'invoke' || !env.src || !env.id) return;
+      handled.push(env);
+      const transfer = (env.payload as InvokePayload).transfer;
+      if (corrupt && transfer?.ifNoneMatch) {
+        // A delta against the right base that rebuilds the wrong length.
+        host.sendInvokeResult(env.src, env.id, { ok: true, result: null, transfer: { tag: 'x', delta: { base: transfer.ifNoneMatch, length: 1, sample: 0, patch: { a: [0] } } } });
+      } else host.sendInvokeResult(env.src, env.id, { ok: true, result: rows });
+    });
+    host.start();
+    controller.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+    await Promise.all([controller.openLink('desktop', { controllerName: 'iPhone', protocolVersion: 1, appVersion: '1' }, 500), relay.settle()]);
+    const responseBytes = () => (relay.deliveredTo.get('ios') ?? []).filter((env) => env.kind === 'invoke-result')
+      .map((env) => Buffer.byteLength(JSON.stringify(env.payload)));
+    const call = async () => {
+      const pending = controller.invoke('desktop', { channel: 'local-db:sessions:list', args: [200, 'active'] }, 1_000);
+      await relay.settle();
+      return pending;
+    };
+
+    await expect(call()).resolves.toEqual({ ok: true, result: rows });
+    expect((handled[0]!.payload as InvokePayload).transfer).toEqual({ gzip: 1, delta: 1 });
+    rows = [{ ...rows[7]!, status: 'running' }, ...rows.filter((_, i) => i !== 7)];
+    await expect(call()).resolves.toEqual({ ok: true, result: rows });
+    const [full, delta] = responseBytes();
+    expect(delta).toBeLessThan(full! / 4);
+
+    // Backgrounded phone: the socket stops, the cached base survives, the next read is a delta.
+    controller.stop({ retainResultCache: true });
+    controller.start();
+    await relay.settleUntil(() => controller.getStatus() === 'online');
+    await Promise.all([controller.openLink('desktop', { controllerName: 'iPhone', protocolVersion: 1, appVersion: '1' }, 500), relay.settle()]);
+    rows = rows.map((row, i) => (i === 3 ? { ...row, title: '改名' } : row));
+    await expect(call()).resolves.toEqual({ ok: true, result: rows });
+    expect(responseBytes().at(-1)).toBeLessThan(full! / 4);
+
+    corrupt = true;
+    const before = handled.length;
+    await expect(call()).resolves.toEqual({ ok: true, result: rows });
+    expect(handled.slice(before).map((env) => (env.payload as InvokePayload).transfer?.ifNoneMatch === undefined)).toEqual([false, true]);
+
+    offHost();
+    host.stop();
+    controller.stop();
+  }, 10_000);
+
   it('invoke 结果传输编码:未注入编码器的旧控制端收到的结果与 wire 格式都不变', async () => {
     const relay = new MemoryRelay();
     const host = makeRelayClient(relay, 'desktop', undefined, {
@@ -8742,6 +9191,181 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     offHost();
     host.stop();
     controller.stop();
+  }, 10_000);
+
+  // history-view-delta-v1: callers (both controllers' history views) must only ever see complete
+  // pages; a base the client cannot restore must fall back to one full read, never to an error.
+  it('历史页增量:调用方总拿到完整页,有基页时不上传已知正文,无法还原时自动整页重读', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop');
+    const controller = makeRelayClient(relay, 'ios');
+    const page = (items: unknown[], historyDelta?: unknown) => ({ version: 1, items, hasMore: false, nextCursor: null,
+      ...(historyDelta ? { historyDelta } : {}) });
+    const userItem = { type: 'messages', key: 'c1', messages: [{ id: 'm1', clientId: 'c1', role: 'user', content: 'hello', createdAt: '2026-11-11T00:00:00.000Z' }] };
+    const work = (revision: string, isStreaming = false) => ({ type: 'work', key: isStreaming ? 'work-c4' : 'work-c2', summary: {
+      key: isStreaming ? 'work-c4' : 'work-c2', firstMessageId: 'm2', lastMessageId: 'm3', startedAtMs: 1, endedAtMs: 2,
+      isStreaming, messageCount: 2, toolCount: 1, revision } });
+    const responses = [
+      page([userItem, work('m3:2:9:epoch:1')], { version: 1, token: 't1', revisionSuffix: ':epoch:1' }),
+      page([{ type: 'same', from: 0, count: 2 }, work('m5:1:7:epoch:2', true)],
+        { version: 1, token: 't2', base: 't1', revisionSuffix: ':epoch:2' }),
+      // Names a page this client no longer holds as its base.
+      page([{ type: 'same', from: 0, count: 1 }], { version: 1, token: 't3', base: 't1', revisionSuffix: ':epoch:3' }),
+      page([userItem], { version: 1, token: 't4' }),
+    ];
+    const handled: InvokePayload[] = [];
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      }
+      if (env.kind === 'invoke' && env.src && env.id) {
+        handled.push(env.payload as InvokePayload);
+        host.sendInvokeResult(env.src, env.id, { ok: true, result: responses[handled.length - 1] });
+      }
+    });
+    host.start();
+    controller.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+    await Promise.all([
+      controller.openLink('desktop', { controllerName: 'iPhone', protocolVersion: 1, appVersion: '1' }, 500),
+      relay.settle(),
+    ]);
+    const read = async () => {
+      const pending = controller.invoke('desktop', { channel: 'local-db:messages:view', args: ['s1', { lazyDetails: true, workLines: true }] }, 1_000);
+      await relay.settle();
+      return pending;
+    };
+
+    await expect(read()).resolves.toEqual({ ok: true, result: page([userItem, work('m3:2:9:epoch:1')]) });
+    expect(handled[0].args[1]).toMatchObject({ historyDelta: { version: 1 }, messageBodies: { version: 1 } });
+    expect(handled[0].args[1]).not.toHaveProperty('historyDelta.base');
+
+    await expect(read()).resolves.toEqual({ ok: true,
+      result: page([userItem, work('m3:2:9:epoch:2'), work('m5:1:7:epoch:2', true)]) });
+    expect(handled[1].args[1]).toMatchObject({ lazyDetails: true, workLines: true, historyDelta: { version: 1, base: 't1' } });
+    expect(handled[1].args[1]).not.toHaveProperty('messageBodies');
+
+    await expect(read()).resolves.toEqual({ ok: true, result: page([userItem]) });
+    expect(handled).toHaveLength(4);
+    expect(handled[3].args[1]).toMatchObject({ historyDelta: { version: 1 }, messageBodies: { version: 1 } });
+    expect(handled[3].args[1]).not.toHaveProperty('historyDelta.base');
+
+    offHost();
+    host.stop();
+    controller.stop();
+  }, 10_000);
+
+  // One retry path for both deltas. A list delta that cannot be applied is resent within what is
+  // left of the budget; once the first reply used it all up the failure is returned (the next refresh
+  // reads full). A history page is still read whole: the phone task screen turns a failed
+  // latest-page read into a sync error. Both re-check the caller first, as the first send does.
+  it('增量重发预算:列表只在剩余预算内重发,历史页总整页重读,两者重发前都复核调用方', async () => {
+    const codec = {
+      gzipBase64: (text: string) => gzipSync(Buffer.from(text, 'utf8')).toString('base64'),
+      gunzipBase64: (base64: string, maxChars: number) => gunzipSync(Buffer.from(base64, 'base64'), { maxOutputLength: maxChars }).toString('utf8'),
+      contentTag: (text: string) => createHash('sha256').update(text).digest('base64url'),
+    };
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop', undefined, { transferCodec: codec });
+    const controller = makeRelayClient(relay, 'ios', undefined, { transferCodec: codec });
+    const realNow = performance.now.bind(performance);
+    let skewMs = 0;
+    let deltaCostMs = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => realNow() + skewMs);
+    const rows = Array.from({ length: 100 }, (_, i) => ({ id: `s${i}`, preview: createHash('sha256').update(String(i)).digest('hex') }));
+    const fullPage = { version: 1, items: [{ type: 'messages', key: 'c1', messages: [{ id: 'm1', clientId: 'c1', role: 'user', content: 'hi', createdAt: '2026-11-11T00:00:00.000Z' }] }],
+      hasMore: false, nextCursor: null };
+    let scene: 'list' | 'history' | 'valid-history' | 'broken-history' = 'list';
+    let lastFullToken = '';
+    const handled: InvokePayload[] = [];
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind !== 'invoke' || !env.src || !env.id) return;
+      const invoke = env.payload as InvokePayload;
+      handled.push(invoke);
+      const options = invoke.args[1] as { historyDelta?: { base?: string } } | undefined;
+      if (scene === 'list' && invoke.transfer?.ifNoneMatch) {
+        skewMs += deltaCostMs;
+        host.sendInvokeResult(env.src, env.id, { ok: true, result: null, transfer: { tag: 'x', delta: { base: invoke.transfer.ifNoneMatch, length: 1, sample: 0, patch: { a: [0] } } } });
+      } else if (scene === 'valid-history' && options?.historyDelta?.base) {
+        host.sendInvokeResult(env.src, env.id, { ok: true, result: { ...fullPage, items: [{ type: 'same', from: 0, count: 1 }],
+          historyDelta: { version: 1, token: 'next', base: options.historyDelta.base } } });
+      } else if ((scene === 'history' && options?.historyDelta?.base) || scene === 'broken-history') {
+        skewMs += 5_000;
+        // Names a page this client does not hold.
+        host.sendInvokeResult(env.src, env.id, { ok: true, result: { ...fullPage, items: [{ type: 'same', from: 0, count: 1 }],
+          historyDelta: { version: 1, token: 't9', base: 'unknown' } } });
+      } else if (scene === 'history') {
+        lastFullToken = `t${handled.length}`;
+        host.sendInvokeResult(env.src, env.id, { ok: true, result: { ...fullPage, historyDelta: { version: 1, token: lastFullToken } } });
+      } else host.sendInvokeResult(env.src, env.id, { ok: true, result: rows });
+    });
+    try {
+      host.start();
+      controller.start();
+      await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+      await Promise.all([controller.openLink('desktop', { controllerName: 'iPhone', protocolVersion: 1, appVersion: '1' }, 500), relay.settle()]);
+      let preSends = 0;
+      const call = async (channel: string, args: unknown[]) => {
+        const pending = controller.invoke('desktop', { channel, args }, 1_000, { preSend: () => { preSends += 1; } });
+        await relay.settle();
+        return pending;
+      };
+      const list: [string, unknown[]] = ['local-db:sessions:list', [200, 'active']];
+      const resend = async (channel: string, args: unknown[]) => {
+        preSends = 0;
+        const before = handled.length;
+        const result = await call(channel, args);
+        return { result, sent: handled.length - before, preSends };
+      };
+
+      await expect(call(...list)).resolves.toEqual({ ok: true, result: rows });
+      await expect(resend(...list)).resolves.toEqual({ result: { ok: true, result: rows }, sent: 2, preSends: 2 });
+      deltaCostMs = 5_000;
+      await expect(resend(...list)).resolves.toMatchObject({ result: { ok: false }, sent: 1, preSends: 1 });
+
+      scene = 'history';
+      const view = ['s1', { lazyDetails: true }];
+      await expect(call('local-db:messages:view', view)).resolves.toEqual({ ok: true, result: fullPage });
+      await expect(resend('local-db:messages:view', view)).resolves.toEqual({ result: { ok: true, result: fullPage }, sent: 2, preSends: 2 });
+      const historyBase = () => (handled.at(-1)!.args[1] as { historyDelta?: { base?: string } }).historyDelta?.base;
+      expect(historyBase()).toBeUndefined();
+
+      // The page read whole by the retry is the base of the next read.
+      const rereadToken = lastFullToken;
+      scene = 'valid-history';
+      await expect(resend('local-db:messages:view', view)).resolves.toEqual({ result: { ok: true, result: fullPage }, sent: 1, preSends: 1 });
+      expect(historyBase()).toBe(rereadToken);
+
+      // A caller the re-check rejects gets that error and no full read goes out.
+      scene = 'history';
+      const refused = new DeviceLinkError('REMOTE_DISABLED', 'remote device is unavailable');
+      let checks = 0;
+      let sentBefore = handled.length;
+      const rejectedRead = controller.invoke('desktop', { channel: 'local-db:messages:view', args: view }, 1_000, {
+        preSend: () => { checks += 1; if (checks === 2) throw refused; },
+      });
+      const rejectedAsCaller = expect(rejectedRead).rejects.toBe(refused);
+      await relay.settle();
+      await rejectedAsCaller;
+      expect([handled.length - sentBefore, checks]).toEqual([1, 2]);
+      expect(historyBase()).toBe('next');
+
+      // A Host that answers a full read with a delta again gets one full read, not a loop, and the
+      // caller sees the restore error itself.
+      scene = 'broken-history';
+      sentBefore = handled.length;
+      const broken = controller.invoke('desktop', { channel: 'local-db:messages:view', args: view }, 1_000);
+      const rejected = expect(broken).rejects.toMatchObject({ name: 'HistoryViewDeltaMiss' });
+      await relay.settle();
+      await rejected;
+      expect(handled.length - sentBefore).toBe(2);
+    } finally {
+      clock.mockRestore();
+      offHost();
+      host.stop();
+      controller.stop();
+    }
   }, 10_000);
 
   it('新确认阶段:首个 link-accept 丢失时不提前发可靠帧,同 stream 重开确认后恢复小帧', async () => {
@@ -9057,8 +9681,9 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
         parseTransportAck(env)?.linkRequestId !== undefined
       ));
       expect(confirmationAcks).toHaveLength(3);
+      // 普通累计 ACK 上兜底附带的确认 id 在 transport-ack-v2 下只带前缀（显式确认帧仍是全长）。
       expect(confirmationAcks.every((env) => (
-        parseTransportAck(env)?.linkRequestId === linkRequestId
+        linkRequestId!.startsWith(parseTransportAck(env)?.linkRequestId ?? '\u0000')
       ))).toBe(true);
     } finally {
       offHost();
@@ -11801,7 +12426,7 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
     } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
-  it('replays a partially written large head while an older relay tail is still in flight', async () => {
+  it('records migrated pending paths before replaying a partially written direct head over relay', async () => {
     vi.useFakeTimers();
     const info = vi.fn();
     const h = makeHarness({ logger: { info, debug: vi.fn(), warn: vi.fn(), error: vi.fn() }, timing: { pingIntervalMs: 1_000_000, transportRetryIntervalMs: 1_000 } });
@@ -11817,6 +12442,7 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
       });
       const initial = h.current().sent.slice();
       const initialHead = initial.filter(env => env.id === 'head');
+      const initialTail = initial.filter(env => env.id === 'tail');
       let writes = 0;
       h.client.attachDirectPath('dev-b', {
         send() { if (++writes > TRANSPORT_RETRY_PASS_BUDGET) throw new Error('direct write interrupted'); },
@@ -11843,8 +12469,14 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
       // interrupted direct write instead.
       const pathRows = rows.filter(row => row.stage === 'path');
       expect(pathRows[0]).toMatchObject({ reason: 'send-failed' });
-      expect(headOf(pathRows[0])).toEqual(expect.arrayContaining([expect.objectContaining({
-        path: 'direct', sent: true, attempts: expect.any(Number) })]));
+      // After migration the partial head is direct, while the tail has not been
+      // written yet. Assert this before detach resets the pending entries.
+      expect(headOf(pathRows[0])).toEqual([
+        expect.objectContaining({ seq: parseTransportPayload(initialHead[0].payload)?.meta.seq,
+          bytes: expect.any(Number), path: 'direct', sent: true, attempts: expect.any(Number) }),
+        expect.objectContaining({ seq: parseTransportPayload(initialTail[0].payload)?.meta.seq,
+          bytes: expect.any(Number), path: 'unsent', sent: false }),
+      ]);
       const fallbackHead = h.current().sent.slice(initial.length).filter(env => env.id === 'head');
       expect(fallbackHead).toHaveLength(initialHead.length);
       // Reuse the original sequence and every fragment; the receiver can assemble and deduplicate it.
@@ -12670,4 +13302,372 @@ describe('bounded ordinary direct continuity', () => {
       expect(direct.isOpen()).toBe(false);
     } finally { clock.mockRestore(); owner.stop(); executor.stop(); vi.useRealTimers(); }
   });
+});
+
+/**
+ * 推送传输编码（push-deflate-v1，见 pushTransfer.ts 与 protocol-compatibility/device-link-push-deflate.md）。
+ * 生产入口：被控端 DeviceLinkClient.sendPush → 内存中继 → 控制端 onFrame。协议契约：只对
+ * 在 link-open 声明能力的控制端压缩；交给业务的推送与原 payload 逐字节一致且保序；旧控制端与
+ * 小推送的 wire 不变；控制端换成旧版本重新建链后，积压与后续推送都不再是压缩形状。
+ */
+describe('推送传输编码（push-deflate-v1）', () => {
+  const nodeCodec = {
+    deflateRawBase64: (text: string, dictionary: string) => deflateRawBase64Sync(text, 4, dictionary).compressed.toString('base64'),
+    inflateRawBase64: inflateRawBase64TextBounded,
+  };
+  const openLink = (client: DeviceLinkClient, relay: MemoryRelay) => Promise.all([
+    client.openLink('desktop', { controllerName: 'Controller', protocolVersion: 1, appVersion: '1' }, 500),
+    relay.settle(),
+  ]);
+  /** 中继实际投递的推送（分片按 seq 拼回整条），即线上的逻辑形状。 */
+  const deliveredPushes = (relay: MemoryRelay, dst: string, from = 0) => {
+    const bySeq = new Map<number, string[]>();
+    for (const env of (relay.deliveredTo.get(dst) ?? []).slice(from)) {
+      if (env.kind !== 'push') continue;
+      const parsed = parseTransportPayload(env.payload);
+      if (!parsed) continue;
+      const parts = bySeq.get(parsed.meta.seq) ?? [];
+      parts[parsed.meta.segment?.index ?? 0] = parsed.data;
+      bySeq.set(parsed.meta.seq, parts);
+    }
+    // skip 占位（被换掉的积压推送）没有 channel，不算一条业务推送。
+    return [...bySeq.values()].map((parts) => JSON.parse(parts.join('')) as Record<string, unknown>)
+      .filter((push) => typeof push.channel === 'string' && push.channel !== DEVICE_LINK_TRANSPORT_ACK_CHANNEL);
+  };
+  const isCompressed = (push: Record<string, unknown>) => push.payload === null
+    && typeof (push.transfer as { deflateBase64?: unknown } | undefined)?.deflateBase64 === 'string';
+  const largeBatch = (n: number) => ({
+    sessionId: 'session-1',
+    events: Array.from({ length: 6 }, (_, i) => ({
+      sessionId: 'session-1',
+      event: { type: 'text', data: { text: `第 ${n}-${i} 段：弱网下的流式正文 ✓`, isFinal: false }, source: 'claude-code' },
+      persistId: `persist-${n}`,
+    })),
+  });
+
+  it('只压缩声明能力的控制端收到的较大推送，业务收到的内容与顺序不变；旧控制端 wire 不变', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop', undefined, { transferCodec: nodeCodec });
+    const phone = makeRelayClient(relay, 'ios', undefined, { transferCodec: nodeCodec });
+    const legacy = makeRelayClient(relay, 'android');
+    const offered = new Map<string, unknown>();
+    host.onFrame((env) => {
+      if (env.kind !== 'link-open' || !env.src || !env.id) return;
+      offered.set(env.src, (env.payload as { capabilities?: string[] }).capabilities);
+      host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+    });
+    const received = new Map<string, unknown[]>();
+    for (const [id, client] of [['ios', phone], ['android', legacy]] as const) {
+      received.set(id, []);
+      client.onFrame((env) => { if (env.kind === 'push') received.get(id)!.push(env.payload); });
+    }
+    for (const client of [host, phone, legacy]) client.start();
+    await relay.settleUntil(() => [host, phone, legacy].every((client) => client.getStatus() === 'online'));
+    await openLink(phone, relay);
+    await openLink(legacy, relay);
+    expect(offered.get('ios')).toContain(DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1);
+    expect(offered.get('android')).not.toContain(DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1);
+
+    const pushes = [
+      { channel: 'maker:history-view-changed', payload: { sessionId: 'session-1' } },
+      { channel: 'maker:event:batch', payload: largeBatch(1) },
+      { channel: 'maker:status-changed', payload: { sessionId: 'session-1', status: 'idle' } },
+      { channel: 'maker:event:batch', payload: largeBatch(2) },
+      // 超过 512 KiB 的推送原样走可靠层（分片 / 超限兜底不变），不因压缩后放得下而改变。
+      { channel: 'local-db:messages:created', payload: { sessionId: 'session-1', message: { id: 'm', content: '长'.repeat(200_000) } } },
+    ];
+    for (const dst of ['ios', 'android']) {
+      for (const push of pushes) host.sendPush(dst, push.channel, push.payload, { dataOwnerId: 'owner', ownerGeneration: 3 });
+    }
+    await relay.settle();
+
+    const expected = pushes.map((push) => ({ ...push, ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 3 } }));
+    expect(received.get('ios')).toEqual(expected);
+    expect(received.get('android')).toEqual(expected);
+    const phoneWire = deliveredPushes(relay, 'ios');
+    expect(phoneWire.map(isCompressed)).toEqual([false, true, false, true, false]);
+    // channel / ownerStamp 留在明文：可靠层的丢弃与合并判据只读这两项。
+    expect(phoneWire[1]).toMatchObject({ channel: 'maker:event:batch', ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 3 } });
+    expect(JSON.stringify(phoneWire[1]).length).toBeLessThan(JSON.stringify(expected[1]).length * 0.6);
+    expect(deliveredPushes(relay, 'android')).toEqual(expected);
+    for (const client of [host, phone, legacy]) client.stop();
+  });
+
+  it('控制端换成不认识压缩推送的版本重新建链：积压的压缩推送换成 skip，之后的推送照旧明文', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop', undefined, { transferCodec: nodeCodec });
+    const phone = makeRelayClient(relay, 'ios', undefined, { transferCodec: nodeCodec });
+    const invokes: Envelope[] = [];
+    host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') invokes.push(env);
+    });
+    host.start();
+    phone.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && phone.getStatus() === 'online');
+    await openLink(phone, relay);
+    // 一个已送达、尚未回结果的请求：它的结果是 live 帧，重新建链时挡在可丢弃前缀之前，
+    // 后面的压缩推送因此会留在 pending 里等重放。
+    void phone.invoke('desktop', { channel: 'local-db:sessions:list', args: [] }, 1_000).catch(() => {});
+    await relay.settle();
+    relay.disconnect('ios');
+    phone.stop();
+    host.sendInvokeResult('ios', invokes[0]!.id!, { ok: true, result: [] });
+    host.sendPush('ios', 'maker:event:batch', largeBatch(1));
+    await relay.settle();
+
+    const downgraded = makeRelayClient(relay, 'ios');
+    const received: unknown[] = [];
+    downgraded.onFrame((env) => { if (env.kind === 'push') received.push(env.payload); });
+    downgraded.start();
+    await relay.settleUntil(() => downgraded.getStatus() === 'online');
+    const before = (relay.deliveredTo.get('ios') ?? []).length;
+    await openLink(downgraded, relay);
+    host.sendPush('ios', 'maker:event:batch', largeBatch(2));
+    await relay.settle();
+
+    const replayed = (relay.deliveredTo.get('ios') ?? []).slice(before)
+      .map((env) => parseTransportPayload(env.payload)).filter((parsed) => parsed !== null);
+    expect(replayed.some((parsed) => isTransportSkipPayload(JSON.parse(parsed!.data)))).toBe(true);
+    expect(replayed.some((parsed) => JSON.parse(parsed!.data)?.transfer !== undefined)).toBe(false);
+    expect(received).toEqual([{ channel: 'maker:event:batch', payload: largeBatch(2) }]);
+    host.stop();
+    downgraded.stop();
+  });
+
+  it('字典按能力协商：选双方都有的最大 id，线上标明；不认识的字典 id 不交给业务', () => {
+    // 协议契约：新字典只追加新能力名与 id；未声明新能力的对端继续用旧字典，旧形状（无 dict 字段）不变。
+    expect(pushDeflateCapabilities()).toContain(DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1);
+    expect(selectPushDeflateDictionary([DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1, 'push-deflate-v99'])).toBe(1);
+    expect(selectPushDeflateDictionary(['push-deflate-v99'])).toBeUndefined();
+    const push = { channel: 'maker:event:batch', payload: largeBatch(1) };
+    const encoded = encodePushTransfer(push, nodeCodec, 1);
+    expect(encoded).toMatchObject({ payload: null, transfer: { deflateBase64: expect.any(String) } });
+    expect('dict' in (encoded as { transfer: object }).transfer).toBe(false);
+    expect(decodePushTransfer(encoded as Parameters<typeof decodePushTransfer>[0], nodeCodec)).toEqual({ ok: true, push });
+    for (const dict of [99, '2', 1.5]) {
+      // 未知或形状不对的字典 id 一律拒绝，不能回落到 v1 字典去解。
+      const future = { ...(encoded as object), transfer: { ...(encoded as { transfer: object }).transfer, dict } } as Parameters<typeof decodePushTransfer>[0];
+      expect(decodePushTransfer(future, nodeCodec)).toMatchObject({ ok: false, reason: expect.stringContaining('dictionary') });
+    }
+    // 本端没有的字典 id：不压缩，原样发送。
+    expect(encodePushTransfer(push, nodeCodec, 99)).toBe(push);
+  });
+
+  it('解不开的压缩推送不交给业务、不确认；控制端之后不再声明能力，恢复后推送改为明文送达', async () => {
+    const relay = new MemoryRelay();
+    // 被控端编码器坏了（或字典与对端不一致）：输出不是合法的 raw DEFLATE。
+    const host = makeRelayClient(relay, 'desktop', undefined, { transferCodec: {
+      deflateRawBase64: () => Buffer.from('not a deflate stream').toString('base64'),
+    } });
+    const phone = makeRelayClient(relay, 'ios', undefined, { transferCodec: nodeCodec, logger: { debug() {}, info() {}, warn() {}, error() {} } });
+    const offers: unknown[] = [];
+    host.onFrame((env) => {
+      if (env.kind !== 'link-open' || !env.src || !env.id) return;
+      offers.push((env.payload as { capabilities?: string[] }).capabilities);
+      host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+    });
+    const received: unknown[] = [];
+    phone.onFrame((env) => { if (env.kind === 'push') received.push(env.payload); });
+    host.start();
+    phone.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && phone.getStatus() === 'online');
+    await openLink(phone, relay);
+    host.sendPush('ios', 'maker:event:batch', largeBatch(1));
+    await relay.settle();
+    expect(received).toEqual([]);
+    expect(deliveredPushes(relay, 'ios').map(isCompressed)).toEqual([true]);
+
+    // 恢复路径（生产中由对端重试耗尽触发）：控制端重新建链，这次不再声明能力。
+    await openLink(phone, relay);
+    host.sendPush('ios', 'maker:event:batch', largeBatch(2));
+    await relay.settle();
+    expect(offers.at(0)).toContain(DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1);
+    expect(offers.at(-1)).not.toContain(DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1);
+    expect(received).toEqual([{ channel: 'maker:event:batch', payload: largeBatch(2) }]);
+    host.stop();
+    phone.stop();
+  });
+
+  it('互控时对端在出站 accept 里换了 stream（重启、能力未知）：停止压缩，直到它再以控制端声明', async () => {
+    const relay = new MemoryRelay();
+    const desktop = makeRelayClient(relay, 'desktop', undefined, { transferCodec: nodeCodec });
+    const peer = makeRelayClient(relay, 'peer', undefined, { transferCodec: nodeCodec });
+    const accept = (client: DeviceLinkClient) => client.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) client.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+    });
+    accept(desktop);
+    accept(peer);
+    desktop.start();
+    peer.start();
+    await relay.settleUntil(() => desktop.getStatus() === 'online' && peer.getStatus() === 'online');
+    // peer 控制 desktop（声明能力），desktop 也控制 peer。
+    await openLink(peer, relay);
+    await Promise.all([desktop.openLink('peer', { controllerName: 'Desktop', protocolVersion: 1, appVersion: '1' }, 500), relay.settle()]);
+    desktop.sendPush('peer', 'maker:event:batch', largeBatch(1));
+    await relay.settle();
+    expect(deliveredPushes(relay, 'peer').map(isCompressed)).toEqual([true]);
+
+    // peer 重启成不认识压缩推送的版本，只作为被控端接受 desktop 的出站链路。
+    relay.disconnect('peer');
+    peer.stop();
+    const restarted = makeRelayClient(relay, 'peer');
+    accept(restarted);
+    restarted.start();
+    await relay.settleUntil(() => restarted.getStatus() === 'online');
+    const before = (relay.deliveredTo.get('peer') ?? []).length;
+    await Promise.all([desktop.openLink('peer', { controllerName: 'Desktop', protocolVersion: 1, appVersion: '1' }, 500), relay.settle()]);
+    desktop.sendPush('peer', 'maker:event:batch', largeBatch(2));
+    await relay.settle();
+    expect(deliveredPushes(relay, 'peer', before).map(isCompressed)).toEqual([false]);
+    desktop.stop();
+    restarted.stop();
+  });
+});
+
+/**
+ * 可靠层 ACK 编码（transport-ack-v2，见 transport.ts 与
+ * protocol-compatibility/device-link-transport-ack-v2.md）。生产入口：DeviceLinkClient 的可靠收发。
+ * 协议契约：只对在握手里声明了能力的对端发紧凑与延后 ACK；旧对端（不声明）的 wire 与 ACK 时机
+ * 逐字节不变；新新互通时内容、顺序与确认都不丢。
+ */
+describe('可靠层 ACK 编码（ack-v2）', () => {
+  it.each([false, true])('只对声明了能力的对端发紧凑且延后的 ACK（declared=%s）', async (declared) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const settle = () => vi.advanceTimersByTimeAsync(1);
+    try {
+      h.client.start(); await settle(); h.current().ack();
+      const streamId = 'remote-stream-0123456789';
+      const linked = establishInboundReliableLink(h, streamId, 1, 'dev-b', [
+        DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+        DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+        ...(declared ? [DEVICE_LINK_CAPABILITY_TRANSPORT_ACK_V2] : []),
+      ]);
+      await settle(); await linked;
+      const received: unknown[] = [];
+      h.client.onFrame((env) => { if (env.kind === 'push') received.push(env.payload); });
+      const acks = () => h.current().sent.map(parseTransportAck).filter((ack) => ack && !ack.linkRequestId);
+      for (let seq = 1; seq <= 3; seq++) {
+        encodeReliableFrames({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b',
+          payload: { channel: 'maker:event:batch', payload: { seq } } }, streamId, seq).forEach((frame) => h.current().push(frame));
+        await settle();
+      }
+      expect(received).toEqual([1, 2, 3].map((seq) => ({ channel: 'maker:event:batch', payload: { seq } })));
+      if (declared) {
+        // 每条推送各自一次 drain：按 stream 累计到 2 条即立即确认，第 3 条的零头延后到窗口末尾。
+        // 两条都覆盖过等窗口的消息，带 delayed 标记：发送端不拿它们估 RTT 与交付速度。
+        const prefix = streamId.slice(0, 12);
+        expect(acks()).toEqual([{ streamId: prefix, ackSeq: 2, streamPrefix: true, delayed: true }]);
+        await vi.advanceTimersByTimeAsync(TRANSPORT_DELAYED_ACK_MS);
+        expect(acks()).toEqual([2, 3].map((ackSeq) => ({ streamId: prefix, ackSeq, streamPrefix: true, delayed: true })));
+      } else {
+        // 旧对端：照旧原格式、每次交付后立即确认（第 3 条也立即）。
+        expect(acks()).toEqual([1, 2, 3].map((ackSeq) => ({ streamId, ackSeq })));
+      }
+
+      const reliableFrames = () => h.current().sent.filter((env) => env.kind === 'push' && parseTransportPayload(env.payload));
+      h.client.sendPush('dev-b', 'maker:status-changed', { sessionId: 's', status: 'idle' });
+      const small = reliableFrames().at(-1)!.payload as Record<string, unknown>;
+      // 紧凑 ACK 只认声明过能力的对端：旧对端不会发它，伪造的也不能确认本端的消息。
+      const hostStream = (h.current().sent.find((env) => env.kind === 'link-accept')!.payload as { transportStreamId: string }).transportStreamId;
+      const depth = h.client.getReliableSendQueueDepth('dev-b');
+      const pushSeq = parseTransportPayload(small)!.meta.seq;
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b',
+        payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { s: hostStream.slice(0, 12), a: pushSeq } } });
+      await settle();
+      expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(declared ? depth - 1 : depth);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('新版之间：紧凑 ACK 往返后内容完整，延后窗口到点后发送队列清空', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop');
+    const phone = makeRelayClient(relay, 'ios');
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    try {
+      host.onFrame((env) => {
+        if (env.kind === 'link-open' && env.src && env.id) host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+        if (env.kind === 'invoke' && env.src && env.id) host.sendInvokeResult(env.src, env.id, { ok: true, result: { echo: env.payload } });
+      });
+      const pushes: unknown[] = [];
+      phone.onFrame((env) => { if (env.kind === 'push') pushes.push(env.payload); });
+      host.start();
+      phone.start();
+      await pump();
+      const opening = phone.openLink('desktop', { controllerName: 'iPhone', protocolVersion: 1, appVersion: '1' }, 500);
+      await pump();
+      await opening;
+      const call = phone.invoke('desktop', { channel: 'local-db:sessions:get', args: ['引号 "与" 反斜杠 \\'] }, 1_000);
+      for (let i = 0; i < 3; i++) host.sendPush('ios', 'maker:status-changed', { sessionId: 's', status: `第 ${i} 次 "quoted"` });
+      await pump();
+      await expect(call).resolves.toEqual({ ok: true, result: { echo: { channel: 'local-db:sessions:get', args: ['引号 "与" 反斜杠 \\'] } } });
+      expect(pushes).toEqual([0, 1, 2].map((i) => ({ channel: 'maker:status-changed', payload: { sessionId: 's', status: `第 ${i} 次 "quoted"` } })));
+      // 推送的 ACK 在窗口末尾合并发出；按前缀匹配后被控端的发送队列清空。
+      await vi.advanceTimersByTimeAsync(TRANSPORT_DELAYED_ACK_MS);
+      await pump();
+      expect(host.getReliableSendQueueDepth('ios')).toBe(0);
+      expect(phone.getReliableSendQueueDepth('desktop')).toBe(0);
+    } finally {
+      host.stop();
+      phone.stop();
+      vi.useRealTimers();
+    }
+  });
+});
+
+// Unit: MCP open IDs/cursors must not evict a cached history page from the shared
+// client. Exercise real invoke/encoding/decoding through the existing relay harness.
+it('keeps history validators across twelve uncached MCP opens and polls while retaining gzip', async () => {
+  const codec = {
+    gzipBase64: (text: string) => gzipSync(Buffer.from(text)).toString('base64'),
+    gunzipBase64: (text: string, maxChars: number) => gunzipSync(Buffer.from(text, 'base64'), { maxOutputLength: maxChars }).toString(),
+    contentTag: (text: string) => createHash('sha256').update(text).digest('hex'),
+  };
+  const relay = new MemoryRelay();
+  const host = makeRelayClient(relay, 'desktop', undefined, { transferCodec: codec });
+  const metrics = vi.fn();
+  const viewer = makeRelayClient(relay, 'ios', undefined, { transferCodec: codec, invokeMetrics: { enabled: () => true, record: metrics } });
+  const history = { version: 1, items: [{ type: 'messages', key: 'm1', messages: [{
+    id: 'm1', clientId: 'm1', role: 'user', content: 'history'.repeat(100_000), createdAt: '2026-11-14T00:00:00.000Z',
+  }] }], hasMore: false, nextCursor: null };
+  const app = { viewId: 'view', html: '<body>App', sdk: { source: 'sdk'.repeat(120_000) } };
+  const handled: InvokePayload[] = [];
+  const off = host.onFrame(env => {
+    if (env.kind === 'link-open' && env.src && env.id) host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+    if (env.kind === 'invoke' && env.src && env.id) {
+      const input = env.payload as InvokePayload;
+      handled.push(input);
+      host.sendInvokeResult(env.src, env.id, { ok: true, result: input.channel === 'maker:mcp-apps:v1' ? app : history });
+    }
+  });
+  try {
+    host.start(); viewer.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && viewer.getStatus() === 'online');
+    await Promise.all([viewer.openLink('desktop', { controllerName: 'viewer', protocolVersion: 1, appVersion: '1' }, 500), relay.settle()]);
+    const call = async (payload: InvokePayload, noResultCache?: boolean) => {
+      const pending = viewer.invoke('desktop', payload, 1_000, { noResultCache });
+      await relay.settle();
+      return pending;
+    };
+    const page = { channel: 'local-db:messages:view', args: ['task', { before: 'older' }] };
+    await expect(call(page)).resolves.toMatchObject({ ok: true, result: history });
+    const open = { channel: 'maker:mcp-apps:v1', args: ['task', { op: 'open', openId: 'cached' }] };
+    await call(open); // Defaults still cache, including on this channel.
+    await call(open, false);
+    expect(handled.at(-1)!.transfer?.ifNoneMatch).toEqual(expect.any(String));
+    await call(open, true); // Explicit bypass must not use an existing entry either.
+    expect(handled.at(-1)!.transfer).toEqual({ gzip: 1 });
+    for (let i = 0; i < 12; i++) for (const op of ['open', 'poll']) {
+      await expect(call({ channel: 'maker:mcp-apps:v1', args: ['task', { op, openId: `open-${i}`, after: i }] }, true))
+        .resolves.toEqual({ ok: true, result: app });
+      expect(handled.at(-1)!.transfer).toEqual({ gzip: 1 });
+      expect(handled.at(-1)).not.toHaveProperty('noResultCache');
+      expect(metrics.mock.calls.filter(([event]) => event.phase === 'result').at(-1)![0].gzip).toBe(true);
+    }
+    await expect(call(page)).resolves.toMatchObject({ ok: true, result: history });
+    expect(handled.at(-1)!.transfer?.ifNoneMatch).toEqual(expect.any(String));
+    expect(metrics.mock.calls.filter(([event]) => event.phase === 'result').at(-1)![0].notModified).toBe(true);
+  } finally { off(); viewer.stop(); host.stop(); }
 });

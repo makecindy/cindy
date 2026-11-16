@@ -1,3 +1,4 @@
+import { setDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { mountPage, subscription, ctx } from '../../ui-page/harness';
@@ -6,6 +7,8 @@ import { FolderPickerPopover } from '../../../src/renderer/components/new-chat/F
 import { SessionProjectMoveSubmenu } from '../../../src/renderer/features/cc-agent/sidebar/SessionProjectMoveSubmenu';
 import { Button } from '../../../src/renderer/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '../../../src/renderer/components/ui/dropdown-menu';
+
+setDataOwnerGeneration('fixture', 1);
 
 function PickerFixture() {
   const options = useProjectPickerOptions();
@@ -37,6 +40,10 @@ mountPage({
         { path: 'D:/archive/cindy', exists: true, lastUsedAt: '2026-10-28T00:00:00.000Z' },
       ] },
       projectAliases: {
+        snapshot: async () => ({ aliases: [], icons: ctx.case === 'automatic' ? {} : { 'local:d:/WORK/Cindy': 'text:CY:blue' },
+          platform: 'win32', settingsSupported: true, settingsVersion: 5,
+          ownerStamp: { dataOwnerId: 'fixture', ownerGeneration: 1 } }),
+        autoIcon: async (input: { projectKey: string }) => ({ image: ctx.case === 'automatic' && input.projectKey === 'local:D:/work/cindy' ? ctx.data.avatarData : null, candidate: false, source: 'assets/icon.png', kind: 'local' }),
         list: async () => [{ projectKey: 'local:d:/WORK/Cindy', alias: '项目新名称 · Cindy', updatedAt: '2026-10-29T00:00:00.000Z' }],
         onChanged: subscription('project-aliases-changed'),
       },

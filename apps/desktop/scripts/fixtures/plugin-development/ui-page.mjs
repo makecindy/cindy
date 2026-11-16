@@ -13,7 +13,7 @@ export default {
     authoring: { about: 'Choose the exact local or market instance before submission', viewport: { width: 360, height: 900 } },
     market: { about: 'Market details do not offer in-place file updates' },
     permissions: { about: 'Explicit auto-tool and native-host permission rows', viewport: { width: 360, height: 900 } },
-    'host-tools': { about: 'Independent Host tool group permissions and approval retry' },
+    'host-tools': { about: 'Installed Host tool declarations without supplementary approval' },
     'remote-source': { about: 'Remote plugin provenance without a misleading local detail link', viewport: { width: 360, height: 240 } },
     'host-tool-permissions': { about: 'Install consent for the five Host tool groups', viewport: { width: 360, height: 900 } },
   },
@@ -24,15 +24,11 @@ export default {
     }
     if (ui.case === 'permissions' || ui.case === 'host-tool-permissions') return;
     if (ui.case === 'host-tools') {
-      for (const group of ['history', 'control', 'handoff', 'settings', 'scheduler']) {
-        assert.equal(await page.getByRole('button', { name: await ui.t('settings.ghosts.perm.hostToolsRequest', { group: await ui.t(`settings.ghosts.perm.hostTools_${group}`) }), exact: true }).count(), 1);
-      }
-      for (const key of ['subscribeMessage', 'subscribeTaskState']) {
-        assert.equal(await page.getByRole('button', { name: await ui.t('settings.ghosts.perm.hostToolsRequest', { group: await ui.t(`settings.ghosts.perm.${key}`) }), exact: true }).count(), 1);
-      }
-      await page.getByRole('button', { name: await ui.t('settings.ghosts.perm.hostToolsRequest', { group: await ui.t('settings.ghosts.perm.subscribeTaskState') }), exact: true }).scrollIntoViewIfNeeded();
-      await ui.capture('host-group-approval');
+      await ui.capture('installed-host-capabilities');
       await page.getByRole('button', { name: await ui.t('settings.ghosts.detail.viewAllPermissions'), exact: true }).click();
+      for (const key of ['hostTools_history', 'hostTools_control', 'hostTools_handoff', 'hostTools_settings', 'hostTools_scheduler', 'subscribeMessage', 'subscribeTaskState']) {
+        assert.equal(await page.getByRole('dialog').getByText(await ui.t(`settings.ghosts.perm.${key}`), { exact: true }).count(), 1);
+      }
       await page.getByRole('dialog').getByText(await ui.t('settings.ghosts.perm.hostTools_schedulerDetail'), { exact: true }).scrollIntoViewIfNeeded();
       await ui.capture('scheduler-permission');
       return;

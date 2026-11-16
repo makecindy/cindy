@@ -7,14 +7,25 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const source = fs.readFileSync(path.join(__dirname, '../maker-ipc/register.ts'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../maker-ipc/register.ts'), 'utf8').replace(/\r\n?/g, '\n');
+
+// handleSetModel moved verbatim into sessionRuntimeSelectionApply.ts; register.ts keeps the binding
+// (createHandleSetModel) and what follows it. The handler body is the moved function followed by that
+// register.ts tail, in their former order.
+const runtimeSelectionApplySource = fs
+  .readFileSync(path.join(__dirname, '../maker-ipc/sessionRuntimeSelectionApply.ts'), 'utf8')
+  .replace(/\r\n?/g, '\n');
 
 function handlerBody(): string {
-  const start = source.indexOf('const handleSetModel = async (');
+  const movedStart = runtimeSelectionApplySource.indexOf('const handleSetModel = async (');
+  const movedEnd = runtimeSelectionApplySource.indexOf('  return handleSetModel;', movedStart);
+  const start = source.indexOf('const handleSetModel = createHandleSetModel(');
   const end = source.indexOf('applyPiModelSettingsRefresh = async', start);
+  expect(movedStart).toBeGreaterThan(0);
+  expect(movedEnd).toBeGreaterThan(movedStart);
   expect(start).toBeGreaterThan(0);
   expect(end).toBeGreaterThan(start);
-  return source.slice(start, end);
+  return runtimeSelectionApplySource.slice(movedStart, movedEnd) + source.slice(start, end);
 }
 
 describe('agent-device model selection wiring', () => {
@@ -34,7 +45,7 @@ describe('agent-device model selection wiring', () => {
   it('keeps picker clicks as intents and applies them through the live session at send time', () => {
     const body = handlerBody();
     const start = source.indexOf('const applyAgentDeviceRuntimeSelection = async');
-    const end = source.indexOf('const handleSetModel = async (', start);
+    const end = source.indexOf('const handleSetModel = createHandleSetModel(', start);
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
     const branch = source.slice(start, end);

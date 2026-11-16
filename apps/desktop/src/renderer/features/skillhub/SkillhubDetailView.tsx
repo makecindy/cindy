@@ -777,7 +777,7 @@ function DiagnosisAgentPickerDialog({
           )}
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         >
-          <Dialog.Title className="text-base font-semibold text-[var(--msg-assistant-text)]">
+          <Dialog.Title className="text-base font-medium text-[var(--msg-assistant-text)]">
             {t('skillhub.detail.usageDiagnosisAgentTitle')}
           </Dialog.Title>
           <Dialog.Description className="mt-2 text-sm leading-relaxed text-[var(--cmd-palette-item-meta)]">

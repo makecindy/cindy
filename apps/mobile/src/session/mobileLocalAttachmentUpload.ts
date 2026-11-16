@@ -61,7 +61,10 @@ export interface MobileLocalAttachmentUploadCandidate {
   cleanupLocalUris?: (uris: readonly string[]) => Promise<void>;
   /** 宿主侧溯源 id(相册 asset.id → attachment 映射用),管线不消费。 */
   sourceId?: string;
-  /** Source position within one external share; retained across retries. */
+  /**
+   * Source position within one batch added together (an external share, or recent photos
+   * picked together); retained across retries.
+   */
   incomingShareOrder?: { batchId: string; index: number };
   /**
    * 圈点标注元数据(uri 已是烧录产物时携带;管线不消费,onUploaded 原样回传,

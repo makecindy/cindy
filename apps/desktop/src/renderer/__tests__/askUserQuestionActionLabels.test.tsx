@@ -11,6 +11,10 @@ import { _clearSmartResolveCache } from '@/lib/localPathResolver';
 import { AskUserQuestionPrompt } from '../components/new-chat/AskUserQuestionPrompt';
 import { BotGroupPendingInteraction } from '../features/bots/BotGroupPendingInteraction';
 import { Tooltip } from '@/components/ui/tooltip';
+// This test exercises keyboard ownership in the real preview, not its cold
+// bundle load. Preload once before rendering: React may start the lazy import
+// only when async act commits, after dynamicImportSettled has already returned.
+import '@/components/chat/TextLightbox';
 
 const links = vi.hoisted(() => ({ html: vi.fn(), url: vi.fn(), lane: {} as Record<string, unknown>, answer: vi.fn() }));
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: {

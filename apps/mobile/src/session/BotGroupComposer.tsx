@@ -36,6 +36,7 @@ import { useTranslation } from 'react-i18next';
 import { useConfirmLeaveWhileUploading } from '@/session/useConfirmLeaveWhileUploading';
 import { BOT_GROUP_MESSAGE_MAX_CHARS, type BotGroupMemberView, type BotGroupMention } from '@cindy/maker-shared/botGroupChat';
 import {
+  ambiguousBotGroupMentionLabels,
   filterBotGroupMentionCandidates,
   findBotGroupMentionQuery,
   insertBotGroupMention,
@@ -59,6 +60,7 @@ import type { BotGroupIdentityLookup } from './BotGroupPlan';
 import { ComposerAttachmentCollapsedBadge, ComposerAttachmentTray } from './ComposerAttachmentTray';
 import { useComposerPendingImagePreview } from './useComposerPendingImagePreview';
 import { ContextSheet, ContextSheetGroup, ContextSheetRow } from './ContextSheet';
+import { ContextSheetMediaAddButton, useContextSheetMediaSelection } from './ContextSheetMediaSelection';
 import { RecentPhotosStrip } from './ContextSheetMediaViews';
 import { ImageLightbox } from './ImageLightbox';
 import { ComposerToolbarLeftGroup, ComposerToolbarSpacer } from './MobileComposerInputRow';
@@ -154,6 +156,13 @@ export function BotGroupComposer({
     upload: uploadAttachment,
     onPicked: () => { setSheetOpen(false); focusInput(); },
   });
+  // Photos picked with their selection circles wait in the sheet until its bottom button adds them.
+  const mediaSelection = useContextSheetMediaSelection({
+    open: sheetOpen,
+    getRemainingSlots: tray.getRemainingSlots,
+    onLimitReached: tray.reportLimit,
+    onChanged: () => tray.setError(null),
+  });
   const pendingImagePreview = useComposerPendingImagePreview(tray);
   const attachmentsEnabled = attachmentsSupported && online;
   // Paste handlers stay mounted for the whole screen (the input would remount otherwise); they
@@ -247,6 +256,15 @@ export function BotGroupComposer({
     const draftText = trimmed;
     const draftTracked = tracked;
     const draftDivision = division;
+    // One @ names one member: a typed name several members share stays in the draft to be picked.
+    const [ambiguousName] = ambiguousBotGroupMentionLabels(draft, {
+      members: mentionMembers.map((member) => ({ botId: member.botId, name: member.name })),
+      allLabels: [allLabel], allBotLabels, tracked: draftTracked,
+    });
+    if (ambiguousName) {
+      Alert.alert(t('groupChat.errors.mentionAmbiguous', { name: ambiguousName }));
+      return;
+    }
     sendingRef.current = true;
     setSending(true);
     // Clear at once like any chat; a failed send puts the draft back if nothing new was typed.
@@ -475,7 +493,11 @@ export function BotGroupComposer({
       // If attachment access goes away while open, keep only supported group actions.
       media={mediaLibraryEnabled && attachmentsEnabled ? <RecentPhotosStrip busyAssetIds={tray.busyAssetIds}
         enabled={sheetOpen} onToggleAsset={tray.toggleMediaAsset} selectedAssetIds={tray.selectedAssetIds}
-        testID="botGroup.contextSheetPhotos" /> : null}
+        selection={mediaSelection} testID="botGroup.contextSheetPhotos" /> : null}
+      footer={mediaLibraryEnabled && attachmentsEnabled && mediaSelection.assets.length > 0
+        ? <ContextSheetMediaAddButton onAddAssets={tray.addMediaAssets} selection={mediaSelection}
+          testID="botGroup.contextSheetAddPhotosButton" />
+        : undefined}
       testID="botGroup.contextSheet"
     >
       {attachmentsEnabled ? <ContextSheetGroup label={Platform.OS === 'ios' && mediaLibraryEnabled ? '' : t('session.common.groupAdd')}>

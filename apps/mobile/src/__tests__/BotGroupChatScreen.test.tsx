@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createContext, createElement as el, useContext, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { act, createContext, createElement as el, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildBotGroupCapabilityNotice, BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
@@ -46,6 +46,9 @@ const h = vi.hoisted(() => ({
   cloudRows: null as any[] | null,
   uuid: 0,
   scroll: null as any,
+  placeCell: new Map<string, (y: number) => void>(),
+  rowWindow: null as null | [number, number],
+  scrollToItem: vi.fn(),
   scrolls: {} as Record<string, any>,
   speakerDisclosure: false,
   scrollToEnd: vi.fn(),
@@ -83,11 +86,28 @@ vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null })
 vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: 'file:///test-cache' } }));
 vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
 vi.mock('@/components/ChatReplyIcon', () => ({ ChatReplyIcon: () => null }));
+vi.mock('@legendapp/list/react-native', () => ({ LegendList: ({ ref, data, renderItem, ListHeaderComponent, ListFooterComponent, ...props }: any) => {
+  h.scroll = props; h.scrolls[props.testID] = props;
+  const positions = useMemo(() => new Map<string, number>(), []);
+  const state = useMemo(() => ({ data, positionByKey: (key: string) => positions.get(key),
+    listen: () => () => {}, listenToPosition: () => () => {}, }), [positions]);
+  state.data = data;
+  const style = Object.assign({}, ...[props.contentContainerStyle].flat(Infinity).filter(Boolean));
+  // Test layouts specify content coordinates; native virtual cells report local Y=0.
+  for (const [index, item] of data.entries()) if (item.kind === 'message') h.placeCell.set('botGroup.row.' + item.value.id,
+    (y: number) => positions.set(props.keyExtractor(item, index), y - (style.paddingTop ?? style.paddingVertical ?? 0)));
+  useImperativeHandle(ref, () => ({ getState: () => state, scrollToEnd: h.scrollToEnd,
+    scrollToOffset: ({ offset, animated }: any) => h.scrollTo({ y: offset, animated }), scrollToItem: h.scrollToItem, }));
+  const cells = useMemo(() => data.flatMap((item: any, index: number) =>
+    h.rowWindow && (index < h.rowWindow[0] || index >= h.rowWindow[1]) ? [] : [el('div',
+      { key: props.keyExtractor(item, index) }, renderItem({ item, index }))]), [data, renderItem, props.keyExtractor, h.rowWindow]);
+  return el('div', { 'data-testid': props.testID }, ListHeaderComponent, cells, ListFooterComponent);
+} }));
 vi.mock('react-native', () => {
   const box = (tag: string) => ({ children, testID, accessibilityLabel, style, onLayout, onTouchStart, ref }: any) =>
     el(tag, { 'data-testid': testID, 'aria-label': accessibilityLabel,
       onTouchStart, ref: (node: any) => {
-        if (node) { node.nativeLayout = onLayout; node.measureInWindow = (callback: any) => callback(0, 62, 402, 812); }
+        if (node) { node.nativeLayout = onLayout ? (event: any) => { h.placeCell.get(testID)?.(event.nativeEvent.layout.y); onLayout(event); } : undefined; node.measureInWindow = (callback: any) => callback(0, 62, 402, 812); }
         if (typeof ref === 'function') ref(node); else if (ref) ref.current = node;
       },
       style: { paddingBottom: [style].flat().filter(Boolean).findLast((item: any) => item.paddingBottom !== undefined)?.paddingBottom,
@@ -304,6 +324,7 @@ vi.mock('@/session/useMobileLocalAttachments', () => ({
       beginPastePlaceholders: vi.fn(), failPastePlaceholders: vi.fn(), enqueueUploads: h.local.enqueueUploads,
       removePendingUpload: h.local.removePendingUpload, retryPendingUpload: vi.fn(),
       waitForPendingUploads: h.local.wait, releaseUploadedSources: h.local.release, getPendingUploadCount: () => pendingUploads.length,
+      insertUploadedAttachment: (current: any[], attachment: any) => [...current, attachment],
     };
   },
 }));
@@ -460,7 +481,7 @@ async function render(data: BotGroupRemoteChatData | null = group(), kind: 'read
 
 beforeEach(() => {
   h.translate = null; h.themeMode = 'light';
-  h.scrolls = {}; h.speakerDisclosure = false;
+  h.scrolls = {}; h.placeCell.clear(); h.rowWindow = null; h.speakerDisclosure = false;
   h.nativeMenus = true;
   shareSelectionStore.exit();
   h.management = null;
@@ -1680,6 +1701,23 @@ describe('group composer', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
   });
 
+  // Incident 2026-11-13 (component): a typed name two members share used to address both.
+  // One @ names one identity, so the draft stays and asks for a pick from the list.
+  it('holds a typed name that two members share until one is picked from the list', async () => {
+    const data = group({ openPlan: null });
+    const namesakes = [{ ...data.members[0]!, name: 'Ann' }, { ...data.members[1]!, name: 'Ann' }];
+    await render(group({ openPlan: null, members: namesakes }));
+    await type('@Ann hello');
+    await click('botGroup.composer.send');
+    expect(h.alert).toHaveBeenCalledWith('groupChat.errors.mentionAmbiguous(name=Ann)');
+    expect(h.chat.act).not.toHaveBeenCalled();
+    expect(h.row.value).toBe('@Ann hello');
+    await type('@');
+    await click('botGroup.mention.abu');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+  });
+
   it('keeps the current human in the group but excludes it from mention choices and typed mentions', async () => {
     h.chat.server = true;
     const data = group({ openPlan: null });
@@ -2479,8 +2517,8 @@ describe('direct server group presentation', () => {
     await render(group({ messages: [message('other', 1, { authorKind: 'user', authorName: 'Other member', isSelf: false, content: 'hello' })], plans: [], openPlan: null, hasMoreBefore: true }));
     expect(all('botGroup.message.user')).toHaveLength(0);
     expect(node.textContent).toContain('Other member');
-    // Skip the leading-space marker and load-older control when anchoring history.
-    expect(h.scroll.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 2 });
+    // Keep the visible message anchored across older-page inserts and row resizes.
+    expect(h.scroll.maintainVisibleContentPosition).toEqual({ data: true, size: true });
     await click('botGroup.loadOlder'); expect(h.chat.loadOlder).toHaveBeenCalledOnce();
     await click('botGroup.settingsButton');
     expect(byId('botGroup.settings.delete')?.disabled).toBe(true);
@@ -3387,6 +3425,31 @@ it('keeps a shared rich thread answer readable without inheriting the main group
 });
 
 // Behavior/performance: UI-only rerenders must not regroup the whole history; new data must.
+// Unit: virtualization can unmount a previously measured quote target. A stale
+// coordinate must not replace the list's locate operation when that target returns.
+it('locates unmounted rows and forgets their old content coordinates', async () => {
+  const first = message('first', 1, { content: 'First reply' });
+  const target = message('target', 2, { content: 'Target reply' });
+  const data = group({ messages: [first, target], plans: [], openPlan: null, hasMoreBefore: false });
+  h.chat = { ...h.chat, state: { kind: 'ready', group: data } };
+  h.rowWindow = [0, 1];
+  const props = { groupId: 'g1', deviceId: 'mac', deviceName: 'Mac', messageId: 'target' };
+  await act(async () => root.render(el(BotGroupChatScreen, props)));
+  expect(byId('botGroup.row.target')).toBeNull();
+  expect(h.scrollToItem).toHaveBeenCalledWith(expect.objectContaining({ item: expect.objectContaining({ kind: 'message', value: target }), animated: false }));
+  await act(async () => (byId('botGroup.row.first') as any).nativeLayout({ nativeEvent: { layout: { y: 100, height: 100 } } }));
+  h.rowWindow = [1, 2];
+  h.chat = { ...h.chat, state: { kind: 'ready', group: { ...data } } };
+  await act(async () => root.render(el(BotGroupChatScreen, props)));
+  expect(byId('botGroup.row.first')).toBeNull();
+  await act(async () => (byId('botGroup.row.target') as any).nativeLayout({ nativeEvent: { layout: { y: 1000, height: 100 } } }));
+  expect(h.scrollTo).toHaveBeenCalledWith(expect.objectContaining({ animated: false }));
+  h.scrollToItem.mockClear(); h.scrollTo.mockClear();
+  await act(async () => root.render(el(BotGroupChatScreen, { ...props, messageId: 'first' })));
+  expect(h.scrollToItem).toHaveBeenCalledWith(expect.objectContaining({ item: expect.objectContaining({ kind: 'message', value: first }), animated: false }));
+  expect(h.scrollTo).not.toHaveBeenCalled();
+});
+
 it('reuses history time grouping across unrelated UI renders and invalidates for messages', async () => {
   const timeline = await import('@cindy/maker-shared/botTimeline');
   const grouping = vi.spyOn(timeline, 'collectBotMessageTimeGroups');
@@ -3545,7 +3608,7 @@ it('anchors receipt-backed work before the next pending send', async () => {
     chat: { after: at, messageId: `server-${at}`, input: { text: `request-${at}`, mentions: { all: false, botIds: [] } } },
   }));
   await render(group({ serverBacked: true, messages: [], round: { status: 'running', canContinue: false, speakers: [
-    { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'own', sourceMessageId: 'server-10', isSelfRequested: true },
+    { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'own', sourceMessageId: 'server-10', threadRootId: null, isSelfRequested: true },
   ] } }));
   const work = byId('speaker.mimi.reply')!;
   expect(work.compareDocumentPosition(byId('botGroup.row.local:send-30')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -3555,8 +3618,8 @@ it('anchors receipt-backed work before the next pending send', async () => {
 it('resolves separated work anchors once per host on mount and notification', async () => {
   const data = group({ serverBacked: true, messages: [message('a', 1, {}), message('b', 2, {})], round: {
     status: 'running', canContinue: false, speakers: [
-      { botId: 'mimi', sessionId: null, executionId: 'a-work', activity: 'reply', sourceMessageId: 'a', isSelfRequested: true },
-      { botId: 'abu', sessionId: null, executionId: 'b-work', activity: 'reply', sourceMessageId: 'b', isSelfRequested: true },
+      { botId: 'mimi', sessionId: null, executionId: 'a-work', activity: 'reply', sourceMessageId: 'a', threadRootId: null, isSelfRequested: true },
+      { botId: 'abu', sessionId: null, executionId: 'b-work', activity: 'reply', sourceMessageId: 'b', threadRootId: null, isSelfRequested: true },
     ],
   } });
   data.members = data.members.map(member => ({ ...member, isOwned: true, homeDeviceId: 'studio' }));
@@ -3580,4 +3643,27 @@ it('keeps legacy server work read-only even when the host reports aggregate stop
   expect(byId('speaker.mimi.reply')).not.toBeNull();
   expect(byId('botGroup.work.stop')).toBeNull();
   expect(byId('botGroup.composer.stop')).toBeNull();
+});
+
+// Unit regression: filtering topic speakers must not remove the original group stop controls.
+it.each([undefined, 'topic-a'])('keeps group stopping when only topic work exists (page=%s)', async threadRootId => {
+  h.chat.server = true;
+  const active = group({ serverBacked: true, supportsScopedStop: true, canStopAll: true, round: { status: 'running', canContinue: false, canStop: true,
+    othersActive: true, speakers: [
+      { botId: 'abu', sessionId: 's-abu', activity: 'reply', sourceMessageId: 'source-a', threadRootId: 'topic-a', executionStatus: 'running', isSelfRequested: true },
+      { botId: 'mimi', sessionId: 's-mimi', activity: 'reply', sourceMessageId: 'source-b', threadRootId: 'topic-b', executionStatus: 'running' },
+    ] } });
+  await render(active, 'ready', threadRootId, '');
+  if (!threadRootId) {
+    expect(byId('botGroup.work')).toBeNull();
+    await click('botGroup.composer.stop');
+    expect(h.chat.act).toHaveBeenLastCalledWith('stop');
+  } else {
+    expect(byId('speaker.abu.reply')).not.toBeNull();
+    expect(byId('speaker.mimi.reply')).toBeNull();
+    await click('botGroup.work.stopMenu.action.mine');
+    expect(h.chat.act).toHaveBeenLastCalledWith('stop');
+    await click('botGroup.work.stopMenu.action.all');
+    expect(h.chat.act).toHaveBeenLastCalledWith('stop', { scope: 'all' });
+  }
 });

@@ -1,12 +1,12 @@
 import type { AuthState } from '../authManager.js';
 import type { ModelAccessStatus } from '../../shared/modelAccess.js';
 
-// Process-local readiness only: persisted credentials never count as a successful
-// sync in this process. No keys or endpoint values leave the main process.
+// Process-local quota source invalidation. Credential sync changes the source
+// generation, but quota reads never require a successful sync or an inference Key.
+// No keys or endpoint values leave the main process.
 let owner: string | null = null;
 let endpoint: string | null = null;
 let source: ModelAccessStatus['source'] = null;
-let ready = false;
 let synchronized = false;
 let generation = 0;
 const listeners = new Set<(ownerKey: string | null) => void>();
@@ -20,7 +20,6 @@ export function noteQuotaCredentialStatus(ownerKey: string | null, status: Model
   const changed = sourceChanged || (!synchronized && nextReady);
   if (nextReady) synchronized = true;
   owner = ownerKey;
-  ready = nextReady;
   source = status.source;
   endpoint = nextEndpoint;
   if (reset || changed) {
@@ -29,9 +28,6 @@ export function noteQuotaCredentialStatus(ownerKey: string | null, status: Model
   }
 }
 
-export function quotaCredentialsReady(ownerKey: string, effectiveEndpoint: string): boolean {
-  return ready && owner === ownerKey && endpoint === effectiveEndpoint.trim().replace(/\/+$/, '');
-}
 export function quotaCredentialGeneration(): number { return generation; }
 export function onQuotaCredentialSourceChanged(listener: (ownerKey: string | null) => void): () => void {
   listeners.add(listener);
@@ -59,8 +55,7 @@ export function __resetQuotaCredentialStateForTesting(
   owner = ownerKey;
   endpoint = status.endpoint?.trim().replace(/\/+$/, '') || null;
   source = status.source;
-  ready = status.state === 'ok' && status.source === 'server' && !!endpoint;
-  synchronized = ready;
+  synchronized = status.state === 'ok' && status.source === 'server' && !!endpoint;
   generation = 0;
   readCurrentCredentialStatus = null;
 }

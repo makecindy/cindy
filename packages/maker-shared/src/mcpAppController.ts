@@ -9,6 +9,7 @@ export type AppRpc = {
 };
 export type AppInvoker = (sessionId: string | null, input: Record<string, unknown>) => Promise<unknown>;
 let nextOpenId = 0;
+const closeSafeMethods = new Set(['cindy/view-state/set', 'ui/set-view-state']);
 
 /** The UI is a transport only; official negotiation, schemas and permissions live on the Host. */
 export class McpAppController {
@@ -93,7 +94,9 @@ export class McpAppController {
         clearTimeout(this.startupTimer);
         this.startupTimer = undefined;
       }
-      if (['ui/notifications/initialized', 'ui/notifications/size-changed', 'ui/notifications/host-context-changed'].includes(message.method ?? ''))
+      if (['ui/notifications/initialized', 'ui/notifications/size-changed', 'ui/notifications/host-context-changed',
+        'ui/notifications/sandbox-handshake-started', 'ui/notifications/sandbox-result-delivered',
+        'ui/notifications/sandbox-escape'].includes(message.method ?? ''))
         this.onState(message);
       return;
     }
@@ -104,10 +107,11 @@ export class McpAppController {
     }
     if (message.method === 'ui/notifications/sandbox-escape') {
       void this.displayMode('inline').catch((error) => this.fail(error));
+      this.onState(message);
       return;
     }
     if (message.method?.startsWith('ui/notifications/sandbox-')) return;
-    if (this.closing && message.method) return;
+    if (this.closing && message.method && !closeSafeMethods.has(message.method)) return;
     if (message.method === 'ui/initialize') {
       if (this.initialized) {
         this.generation++;
@@ -127,7 +131,7 @@ export class McpAppController {
     const generation = this.generation;
     const handshake = message.method === 'ui/initialize' || message.method === 'ui/notifications/initialized';
     const send = async () => {
-      if (this.stopped || (this.closing && message.method)) return;
+      if (this.stopped || (this.closing && message.method && !closeSafeMethods.has(message.method))) return;
       if (!handshake && this.generation !== generation) return;
       await this.invoke(this.sessionId, { op: 'message', viewId, message });
     };
@@ -144,12 +148,31 @@ export class McpAppController {
   }
 
   async context(context: Record<string, unknown>): Promise<void> {
-    if (this.document && !this.closing)
+    if (this.document && !this.closing && !this.suspended)
       await this.invoke(this.sessionId, { op: 'context', viewId: this.document.viewId, context });
   }
   async displayMode(mode: 'inline' | 'fullscreen' | 'pip'): Promise<void> {
     if (this.document && !this.closing)
       await this.invoke(this.sessionId, { op: 'display-mode', viewId: this.document.viewId, mode });
+  }
+  private suspended = false;
+  private visibilityDelivery: Promise<void> = Promise.resolve();
+  /** Same-computer Renderer control; never issue this operation over device-link. */
+  suspend(): Promise<void> {
+    if (this.document?.transport !== 'sandbox' || this.closing || this.suspended) return this.visibilityDelivery;
+    this.suspended = true;
+    const viewId = this.document.viewId;
+    return this.visibilityDelivery = this.visibilityDelivery.then(async () => {
+      if (!this.closing) await this.invoke(this.sessionId, { op: 'suspend', viewId });
+    });
+  }
+  resume(): Promise<void> {
+    if (!this.suspended || this.closing) return this.visibilityDelivery;
+    this.suspended = false;
+    const viewId = this.document!.viewId;
+    return this.visibilityDelivery = this.visibilityDelivery.then(async () => {
+      if (!this.closing) await this.invoke(this.sessionId, { op: 'resume', viewId });
+    });
   }
   private fail(error: unknown): void {
     if (this.closing) return;
@@ -283,6 +306,7 @@ export class McpAppController {
         alreadyNotified: !!this.teardownId,
       });
     } finally {
+      this.suspended = false;
       this.stopped = true;
       this.outbound = [];
     }

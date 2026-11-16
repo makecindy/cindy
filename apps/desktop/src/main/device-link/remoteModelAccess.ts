@@ -1,5 +1,6 @@
 import { withAvailabilityPolicyMutation } from './providerShareAvailabilityPolicy.js';
 import fs from 'node:fs';
+import { isProviderRouteSuspended } from '../maker-host/model-route-availability.js';
 import { isProviderShareMemberBudget, type ProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
@@ -13,7 +14,7 @@ interface Settings { providers: Record<string, ProviderRule> | null }
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const selection = (value: unknown): string[] => isRemoteModelSelection(value) && value !== null ? value : [];
 
-/** Remote-only authorization; local model preferences and supplier credentials never pass through this store. */
+/** Remote grants stay independent of local preferences; invocation also respects local provider suspension. */
 export function createRemoteModelAccessStore(options: { filePath(): string; scopeKey(): string; withMutation?<T>(providerId: string, work: () => Promise<T>): Promise<T> }) {
   const listeners = new Set<() => void>();
   const log = createLogger('remote-model-access');
@@ -64,6 +65,7 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
     },
     allows(providerId: string, model: string, memberId?: string): boolean {
       try {
+        if (isProviderRouteSuspended(providerId)) return false;
         const { models, providerModels } = read(providerId, memberId);
         return Boolean(model) && (providerModels === null || providerModels.includes(model)) && (models === null || models.includes(model));
       } catch { return false; }
@@ -71,6 +73,7 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
     /** Offline direct leases cannot enforce O's live per-member usage budget. */
     allowsDelegatedExecution(providerId: string, model: string, memberId: string): boolean {
       try {
+        if (isProviderRouteSuspended(providerId)) return false;
         const { models, providerModels, memberBudget } = read(providerId, memberId);
         return Boolean(model) && (providerModels === null || providerModels.includes(model))
           && (models === null || models.includes(model))

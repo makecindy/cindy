@@ -53,6 +53,8 @@ interface Props {
    * 此时 detail pane 的 Run Now 按钮也应禁用，防止双发。
    */
   runNowBusy?: boolean;
+  /** The editor owns connection setup while its modal covers this pane. */
+  connectionSetupVisible?: boolean;
 }
 
 export function RunHistoryPane({
@@ -62,6 +64,7 @@ export function RunHistoryPane({
   onEdit,
   onDelete,
   runNowBusy = false,
+  connectionSetupVisible = true,
 }: Props) {
   const { t } = useTranslation();
   const projectLabel = useProjectLabel();
@@ -311,7 +314,7 @@ export function RunHistoryPane({
 
       {/* 连接引导与执行结果一起滚动，较小窗口仍能看完密钥和测试步骤。 */}
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
-        {s.webhookTrigger && <WebhookTriggerPanel key={s.id} schedule={s} />}
+        {s.webhookTrigger && <WebhookTriggerPanel key={s.id} schedule={s} connectionSetupVisible={connectionSetupVisible} />}
 
         {hasLoaded && (
           <div className="pb-3 pt-5 text-13 font-medium text-[var(--text-primary)]">
