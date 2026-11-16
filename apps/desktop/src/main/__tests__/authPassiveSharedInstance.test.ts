@@ -427,6 +427,38 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(passiveBranch).not.toContain('clearReloginFlag();');
   });
 
+  /**
+   * Skill projection boundary (release table row 25, step 25a). authBoundaryQuarantine.ts no
+   * longer reads Electron, so it can load in the Node Host. Its passive test is injected, and the
+   * default is "not passive". If the desktop stops injecting it, or injects after
+   * bootstrap-electron loads the first reader, a passive dev instance sharing another process's
+   * userData acts as a primary and writes the shared Skill roots and the owner boundary. Its
+   * unit test injects the predicate itself and cannot see this, hence a guard.
+   * Minimal failure: delete the configureProjectionBoundaryPassive line from index.ts, or move it
+   * below dispatch().
+   */
+  it('Skill projection boundary: the passive check is injected before bootstrap-electron loads', () => {
+    const indexSource = readFileSync(resolve(process.cwd(), 'src/main/index.ts'), 'utf8').replace(
+      /\r\n/g,
+      '\n',
+    );
+    const injection =
+      "configureProjectionBoundaryPassive(() => !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1');";
+    const injectionIdx = indexSource.indexOf(injection);
+    expect(injectionIdx).toBeGreaterThan(-1);
+    expect(indexSource.indexOf(injection, injectionIdx + 1)).toBe(-1);
+    // After the last userData override is pinned (the boundary file path follows getUserDataDir).
+    const pinIdx = indexSource.indexOf("configureUserDataDir(app.getPath('userData'));");
+    expect(pinIdx).toBeGreaterThan(-1);
+    expect(injectionIdx).toBeGreaterThan(pinIdx);
+    // A top-level statement that runs before dispatch(), so before the bootstrap import.
+    expect(injectionIdx).toBeLessThan(indexSource.indexOf('async function dispatch(): Promise<void> {'));
+    expect(indexSource.indexOf("await import('./bootstrap-electron.js')")).toBeGreaterThan(injectionIdx);
+    expect(indexSource).toContain(
+      "import { configureProjectionBoundaryPassive } from './authBoundaryQuarantine.js';",
+    );
+  });
+
   it('keeps a renderer fail-closed when it initializes during an owner boundary', () => {
     const initializeStart = authSource.indexOf(
       'export async function initialize(options: AuthInitializeOptions = {}): Promise<AuthState> {',
