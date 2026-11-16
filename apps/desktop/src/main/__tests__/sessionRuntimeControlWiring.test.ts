@@ -70,7 +70,7 @@ const runtimeSelectionLandingSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/sessionRuntimeSelectionLanding.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
-// SET_EFFORT and SET_THINKING_ENABLED's bodies after their sender check moved verbatim into
+// SET_EFFORT, SET_FAST_MODE and SET_THINKING_ENABLED's bodies after their sender check moved verbatim into
 // sessionRuntimeAxisSettings.ts; register.ts keeps each registration and its sender check and calls the
 // moved body. Slices of those handlers read register.ts with each body put back in place of that call.
 const runtimeAxisSettingsSource = readFileSync(
@@ -89,6 +89,8 @@ function movedHandlerBody(factory: string, params: string): string {
 const registerWithAxisBodiesSource = registerSource
   .replace('    return handleSetSessionEffort(sessionId, effort);',
     movedHandlerBody('createSetSessionEffort', 'sessionId: unknown, effort: unknown'))
+  .replace('      return handleSetSessionFastMode(sessionId, requestedSpeed);',
+    movedHandlerBody('createSetSessionFastMode', 'sessionId: unknown, requestedSpeed: unknown'))
   .replace('      return handleSetSessionThinkingEnabled(sessionId, enabled);',
     movedHandlerBody('createSetSessionThinkingEnabled', 'sessionId: unknown, enabled: unknown'));
 // What register.ts held before handleSetModel moved out: the assertions that searched the whole of
@@ -314,7 +316,8 @@ describe('active Claude subscription Fast setting', () => {
       resolvePendingRuntimeAxisPatch: async (_id: string, patch: object) => ({ ...patch }),
       recordUserSessionRuntimeAxisMutation: vi.fn(), setSessionFastMode: vi.fn(),
       maker: { getSession: () => ({ agentKind: 'claude-code', setFastMode: handle.setFastMode, getFastMode: handle.getFastMode }) },
-      persistFastMode, commitRuntimeAxisAfterPersistence, pendingCredentialSwitchHolder: null,
+      // The moved body reads the holder through its port (sessionRuntimeAxisSettings.ts); no switch is pending.
+      persistFastMode, commitRuntimeAxisAfterPersistence, getPendingCredentialSwitchHolder: () => null,
       remoteResponse: undefined, log: { debug: vi.fn() },
     };
     const run = new Function(...Object.keys(bindings), axisHandlers.get('applyFastMode')!)(...Object.values(bindings));
@@ -541,7 +544,7 @@ describe('session runtime control wiring', () => {
       'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
@@ -984,7 +987,7 @@ describe('session runtime control wiring', () => {
       'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
@@ -1038,7 +1041,7 @@ describe('session runtime control wiring', () => {
       'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
@@ -1164,7 +1167,7 @@ describe('session runtime control wiring', () => {
       'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
