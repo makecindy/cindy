@@ -28,13 +28,16 @@ return { start: ensureRuntime, resolve: resolveAccountUser, token: () => current
 
 function setup(overrides = {}) {
   const opens = [];
+  const steps = [];
   const deps = {
     mapMembershipToAuthUser, decodeAccessTokenOrgSlug, resolveRuntimeDeviceId, resolveSessionDevice, canRegisterHostDevice, AUTH_SESSION_KEY,
     resolveHostDataDir: () => 'isolated-test-profile',
-    configureHostOwner: () => {},
+    configureHostOwner: ({ ownerId }) => { steps.push(`owner:${ownerId}`); },
+    // Row 25 (25a): the Host reads the Skill projection boundary for the owner it just configured.
+    observeSkillProjectionBoundary: (ownerId) => { steps.push(`boundary:${ownerId}`); return 'stable'; },
     acquireHostRuntimeLease: () => ({ held: true, release() {} }),
     readAdoptedSessionState: async () => ({ authenticated: true, realm: 'global' }),
-    openOwnerDatabase: async (args) => { opens.push(args); throw new Error('database opened'); },
+    openOwnerDatabase: async (args) => { opens.push(args); steps.push('open'); throw new Error('database opened'); },
     path: { join: (...parts) => parts.join('/') }, layout: { packaged: false, drizzleDir: 'desktop/drizzle', sqliteVecPath: 'desktop/vec0' }, process,
     resolveHostRegion: () => 'global', readAuthEndpoints: () => ({ authApiBaseUrl: 'https://example.invalid' }),
     createCredentialStore: async () => ({ read: () => null }), createRequire: () => () => ({ machineIdSync: () => 'test-device' }),
@@ -47,7 +50,7 @@ function setup(overrides = {}) {
   };
   // import.meta.url is only passed to the injected createRequire stub.
   const code = compiled.replaceAll('import.meta.url', "'file:///test/main.ts'");
-  return { ...new Function(...Object.keys(deps), code)(...Object.values(deps)), opens };
+  return { ...new Function(...Object.keys(deps), code)(...Object.values(deps)), opens, steps };
 }
 
 test('startup rejects a different signed-in owner before opening storage', async () => {
@@ -62,6 +65,8 @@ test('matching owner authentication proceeds to its own database', async () => {
   await assert.rejects(h.start('account-b'), /database opened/);
   assert.equal(h.opens.length, 1);
   assert.equal(h.opens[0].ownerId, 'account-b');
+  // Read after the owner is configured (the boundary path follows that profile), before storage.
+  assert.deepEqual(h.steps, ['owner:account-b', 'boundary:account-b', 'open']);
 });
 
 test('an explicit owner cannot open private data without a verified login', async () => {

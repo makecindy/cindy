@@ -29,6 +29,7 @@ import { createHostService } from './service.mjs';
 import { createHostRuntimeSession, type HostRuntimeSessionCreatePorts } from './agent/create-runtime-session.js';
 import { createHostProviderExecutionCheck } from './agent/send-preflight.js';
 import { explicitPorts } from './agent/explicit-ports.js';
+import { createSkillProjectionBoundaryObserver } from './agent/skill-projection-boundary.js';
 import { resolveRuntimeDeviceId } from '../../desktop/src/main/deviceId.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -275,6 +276,8 @@ interface RuntimeState {
 }
 
 const runtime: RuntimeState = { state: 'uninitialized', owner: null, storage: 'unopened' };
+// Row 25 (25a): read-only diagnostic of the Skill projection owner boundary, read per call.
+const observeSkillProjectionBoundary = createSkillProjectionBoundaryObserver(createLogger('host-skill-projection'));
 
 /**
  * The engine binary of each harness, chosen once when an owner runtime starts with the desktop's rules
@@ -518,6 +521,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   }
 
   configureHostOwner({ userDataDir: dataDir, ownerId });
+  // Option A: the window commits the owner, the Host only reads it (logs when it is not stable).
+  observeSkillProjectionBoundary(ownerId);
   const opened = await openOwnerDatabase({
     userDataDir: dataDir,
     ownerId,
@@ -1192,7 +1197,9 @@ const serverDeps = {
     pid: process.pid,
     region: resolveHostRegion(),
     dataDir: resolveHostDataDir(),
-    runtime,
+    runtime: activeOwner === null
+      ? runtime
+      : { ...runtime, skillProjectionBoundary: observeSkillProjectionBoundary(activeOwner) },
     remote: deviceLink?.state() ?? { enabled: false, status: 'offline' },
     account,
     harness: harnessBinaries.status(),
