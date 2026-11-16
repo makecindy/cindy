@@ -367,6 +367,15 @@ bundle id 投递打开链接事件，外部链接会落到 Cindy 的实例。采
 `health-service.test.ts` 与设置页的 `ComputerUseSection.browserHealth.test.tsx`，覆盖过期空列表、
 首次读取前已过期、恢复、等待到期、未配对及探测失败。
 
+### 没有 Chrome 时先装浏览器（2026-11-16）
+
+「我的浏览器」对用户就是本机的 Chrome（Edge、Brave、Chromium 同样可用，扩展从 Chrome 网上应用店安装）。
+未连接时，若 `listInstalledChromium` 一个也找不到，健康状态报 `browser-missing`：设置页先显示
+「先安装 Chrome」与「下载 Chrome」（打开 Chrome 官方下载页），装好后原有轮询自动进入装插件／
+装扩展的步骤。该判断只替换 `plugin-missing` 与 `extension-disconnected`；`plugin-updating`、
+`plugin-selection-required` 与 `status-failed` 保持原样；安装位置读取异常时按“已安装”处理，
+不挡住后续指引。回归在 `health-service.test.ts` 与 `ComputerUseSection.browserHealth.test.tsx`。
+
 ## 插件更新时的浏览器连接（2026-11-07）
 
 市场与本地插件更新在替换包之前暂停接收新的浏览器作业，等待已接受作业按原有结果或超时结束，
