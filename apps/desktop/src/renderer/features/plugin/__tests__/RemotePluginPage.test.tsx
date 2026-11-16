@@ -317,6 +317,32 @@ describe('selected plugin host', () => {
     }
   });
 
+  // Unit / Codex C3 (approved convergence): Settings keeps this page mounted
+  // under a hidden Skills tab. Online/mounted tests missed background focus
+  // reads; initial-hidden and subsequently-hidden paths share the same guard.
+  it.each(['initially-hidden', 'hidden-after-read'] as const)('does not read a hidden remote Host on foreground: %s', async path => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    const normal = invoke.getMockImplementation()!;
+    let name = 'Original Host';
+    invoke.mockImplementation(async (device, channel, args) => args[0]?.actionId === 'management:snapshot'
+      && Object.keys(args[0].input ?? {}).length === 0 ? { effects: [], result: snapshot(name) } : normal(device, channel, args));
+    const view = (active: boolean, online = true) => <RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online={online} active={active} />;
+    const mounted = render(view(path === 'hidden-after-read'));
+    if (path === 'hidden-after-read') await screen.findByText(name);
+    mounted.rerender(view(false));
+    const reads = invoke.mock.calls.length;
+    clock.mockReturnValue(41_000);
+    await act(async () => { window.dispatchEvent(new Event('focus')); document.dispatchEvent(new Event('visibilitychange')); });
+    expect(invoke).toHaveBeenCalledTimes(reads);
+    mounted.rerender(view(false, false));
+    mounted.rerender(view(false, true));
+    expect(invoke).toHaveBeenCalledTimes(reads);
+    name = 'Activated Host';
+    mounted.rerender(view(true));
+    expect(await screen.findByText(name)).toBeTruthy();
+    expect(invoke.mock.calls.length).toBeGreaterThan(reads);
+  });
+
   it.each(['cancelled', 'changed'] as const)('presents the %s receipt with the existing notice', async outcome => {
     const normal = invoke.getMockImplementation()!;
     invoke.mockImplementation(async (device, channel, args) =>

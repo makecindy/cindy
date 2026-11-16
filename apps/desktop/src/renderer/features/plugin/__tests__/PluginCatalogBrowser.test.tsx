@@ -214,6 +214,55 @@ it.each([
   if (transition !== 'unmount') expect(screen.getByText('Tool 0')).toBeTruthy();
 });
 
+// Unit / Codex C2 (approved convergence): joining a pre-change flight does
+// not cover an install/source invalidation. Previous cancellation tests changed
+// the cache key; here three revisions share one live cache and a pending read.
+it.each(['resolved', 'rejected', 'list-changed', 'latest-failed', 'departed'] as const)(
+  'coalesces revisions received during a catalog refresh: %s', async outcome => {
+    vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    let phase: 'initial' | 'old' | 'latest' = 'initial';
+    let finishOld!: (value: PluginMarketPage) => void, failOld!: (error: Error) => void;
+    let finishLatest!: (value: PluginMarketPage) => void, failLatest!: (error: Error) => void;
+    const old = new Promise<PluginMarketPage>((resolve, reject) => { finishOld = resolve; failOld = reject; });
+    const latest = new Promise<PluginMarketPage>((resolve, reject) => { finishLatest = resolve; failLatest = reject; });
+    const load = vi.fn(async (input: PluginMarketQuery) => input.counts ? page(0, 2)
+      : phase === 'initial' ? page(0, 1) : phase === 'old' ? old : latest);
+    const { cache, view } = fixture(load);
+    const mounted = render(view());
+    await screen.findByText('Tool 0');
+    phase = 'old';
+    let reading!: Promise<void>;
+    await act(async () => { reading = cache.current.refresh!({ force: true }); });
+    const reads = () => load.mock.calls.filter(([input]) => !input.counts).length;
+    const before = reads();
+    phase = 'latest';
+    for (const revision of ['uninstall-1', 'source-2', 'uninstall-3']) mounted.rerender(view('', true, 'all', revision));
+    expect(reads()).toBe(before);
+    if (outcome === 'departed') mounted.rerender(view('', false, 'all', 'uninstall-3'));
+    await act(async () => {
+      if (outcome === 'rejected' || outcome === 'list-changed') failOld(new Error(outcome === 'list-changed'
+        ? '[PLUGIN_LIST_CHANGED] old cursor invalidated' : 'old request failed'));
+      else finishOld({ ...page(0, 1), items: [{ ...item(0), name: 'Obsolete response' }] });
+    });
+    expect(cache.current.refreshedAt).toBe(0);
+    expect(screen.queryByText('Obsolete response')).toBeNull();
+    if (outcome === 'departed') {
+      expect(reads()).toBe(before);
+      await reading;
+      return;
+    }
+    expect(reads()).toBe(before + 1);
+    await act(async () => {
+      if (outcome === 'latest-failed') failLatest(new Error('latest request failed'));
+      else finishLatest(page(0, 2));
+      await reading;
+    });
+    expect(reads()).toBe(before + 1); // Failure must not turn coalescing into retries.
+    expect(screen.getByText('Tool 0')).toBeTruthy();
+    if (outcome === 'latest-failed') expect(cache.current.refreshedAt).toBe(0);
+    else { expect(screen.getByText('Tool 1')).toBeTruthy(); expect(cache.current.refreshedAt).toBe(10_000); }
+  });
+
 it('shows first-page cards without waiting for the independent count', async () => {
   const load = vi.fn((input: PluginMarketQuery) => input.counts
     ? new Promise<PluginMarketPage>(() => {})

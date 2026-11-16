@@ -735,7 +735,9 @@ function LocalGhostPluginPage({
     marketBusyLockRef.current = null;
     setMarketBusy(null);
     marketDetailRequestRef.current += 1;
-    void refreshMarket(false, true);
+    // The retained bucket may have missed installation changes off-route.
+    // Show it immediately, but revalidate once through the existing reader.
+    void refreshMarket();
   }, [clearPluginCatalogScrollRestore, refreshMarket, mode, dataOwnerId, dataOwnerGeneration]);
   const refreshMarketOnForeground = useCallback(async () => {
     await Promise.all([refreshMarket(true), foregroundDetailRefresh.current?.()]);

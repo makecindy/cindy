@@ -683,6 +683,60 @@ describe('plugin page return navigation', () => {
     expect(memory.snapshot?.unavailableReason).toBe('official offline');
   });
 
+  // Unit / Codex C1 (approved convergence): the retained catalog can miss
+  // ghosts:changed while its route is closed. Warm-page tests did not change
+  // the installed set off-route. Both directions must re-read within the TTL,
+  // retain the usable page while pending, and preserve it on a failed read.
+  it.each([
+    ['install', 'success'], ['uninstall', 'success'],
+    ['install', 'failure'], ['uninstall', 'failure'],
+  ] as const)('revalidates a local warm remount after an off-page %s: %s', async (change, outcome) => {
+    type Snapshot = Awaited<ReturnType<typeof window.electronAPI.pluginMarket.snapshot>>;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    const stable: PluginMarketDetail = { ...detail, pluginId: 'stable-market', ghostId: 'stable-tool', name: 'Stable warm card',
+      manifest: { ...detail.manifest, id: 'stable-tool', name: 'Stable warm card' } };
+    const ghost: InstalledGhost = { manifest: detail.manifest, dir: '/fixture/installed', namespace: null, enabled: true,
+      approval: { state: 'approved', revision: 'remount-test' }, publishingSource: { kind: 'public-market', pluginId: detail.pluginId } };
+    let installed = change === 'uninstall';
+    const listeners = new Set<Parameters<typeof window.electronAPI.ghosts.onChanged>[0]>();
+    window.electronAPI.ghosts.listSync = () => ({ ghosts: installed ? [ghost] : [] });
+    window.electronAPI.ghosts.onChanged = listener => { listeners.add(listener); return () => { listeners.delete(listener); }; };
+    const value = (): Snapshot => ({ items: [{ ...detail, installState: installed ? 'installed' : 'not-installed' }, stable],
+      unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] });
+    const snapshots = vi.fn(async () => value());
+    window.electronAPI.pluginMarket.snapshot = snapshots;
+    window.electronAPI.pluginMarket.query = async () => ({ ...value(), items: installed ? [stable] : [detail, stable],
+      nextCursor: null, counts: { all: installed ? 1 : 2, public: installed ? 1 : 2, organization: 0, personal: 0, custom: 0 } });
+    const first = render(page('/plugins'));
+    fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+    await screen.findByText(stable.name);
+    const memory = pluginCatalogMemory(pluginCatalogOwnerKey('local', auth.dataOwnerId, auth.dataOwnerGeneration, 'en'), 'local');
+    await waitFor(() => expect(memory.localeReady && !memory.snapshotFlight).toBe(true));
+    const pages = memory.browser.current.pages;
+    first.unmount();
+    installed = !installed;
+    act(() => listeners.forEach(listener => listener({ ghosts: installed ? [ghost] : [] })));
+    clock.mockReturnValue(10_001);
+    let finish!: (next: Snapshot) => void, fail!: (error: Error) => void;
+    const pending = new Promise<Snapshot>((resolve, reject) => { finish = resolve; fail = reject; });
+    snapshots.mockReturnValueOnce(pending);
+    const reads = snapshots.mock.calls.length;
+    render(page('/plugins'));
+    expect(screen.getByText(stable.name)).toBeTruthy();
+    expect(memory.browser.current.pages).toBe(pages);
+    expect(snapshots).toHaveBeenCalledTimes(reads + 1);
+    await act(async () => { if (outcome === 'success') finish(value()); else fail(new Error('temporary snapshot failure')); });
+    if (outcome === 'success') {
+      await waitFor(() => expect(memory.snapshot?.items.find(item => item.pluginId === detail.pluginId)?.installState)
+        .toBe(installed ? 'installed' : 'not-installed'));
+      await waitFor(() => expect([...memory.browser.current.pages.values()].flat().some(item => item.pluginId === detail.pluginId)).toBe(!installed));
+      const list = screen.getByText(stable.name).closest('section')!;
+      await waitFor(() => expect(Boolean(within(list).queryByText(detail.name))).toBe(!installed));
+    }
+    expect(screen.getByText(stable.name)).toBeTruthy();
+    expect(screen.queryByText('ccAgent.common.loading')).toBeNull();
+  });
+
   // Unit / review finding 3: settled partition-switch tests miss a pending old
   // locale. Snapshot success/error and recommendations may only publish to their
   // initiating bucket; the new language still waits for Main's locale sync.

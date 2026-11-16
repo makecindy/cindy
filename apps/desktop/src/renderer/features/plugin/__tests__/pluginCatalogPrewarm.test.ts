@@ -73,3 +73,17 @@ it('accepts successful custom sources while retaining unavailable source project
   expect(recovered.items.map(item => item.pluginId)).toEqual(['official']);
   expect(recovered.items[0].version).toBe('3.0.0');
 });
+
+// Unit / C1 convergence: locale sync can read immediately after a forced
+// request settles but before the page publishes it. A fresh timestamp must
+// never make that second reader receive the previous snapshot.
+it('publishes a completed snapshot with its freshness before a warm reader can reuse it', async () => {
+  const memory = pluginCatalogMemory('atomic-snapshot', 'local');
+  memory.snapshot = { items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] };
+  const next = { ...memory.snapshot, customSourceNames: ['changed-off-page'] };
+  const snapshot = vi.fn().mockResolvedValue(next);
+  vi.stubGlobal('window', { electronAPI: { pluginMarket: { snapshot } } });
+  const updated = await readLocalPluginSnapshot(memory, true);
+  expect(await readLocalPluginSnapshot(memory)).toBe(updated);
+  expect(snapshot).toHaveBeenCalledOnce();
+});

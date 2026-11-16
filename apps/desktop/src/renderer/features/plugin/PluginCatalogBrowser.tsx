@@ -217,15 +217,26 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
     countQueue.current = flight;
     await flight;
   }, [cache, cacheRef, countsKey, query]);
-  const refreshFlight = useRef<{ cache: PluginBrowserCache; promise: Promise<void> } | null>(null);
+  const refreshFlight = useRef<{ cache: PluginBrowserCache; revision: string; promise: Promise<void> } | null>(null);
   useEffect(() => {
     if (!visible && !prewarm) return;
     let active = true;
     const current = () => active && alive.current && cacheRef.current === cache;
     const refresh = async (options?: { force?: boolean; renewIcons?: boolean }) => {
       if (!current()) return;
-      if (refreshFlight.current?.cache === cache) return refreshFlight.current.promise;
+      const pending = refreshFlight.current;
+      if (pending?.cache === cache) {
+        await pending.promise;
+        // Reuse the flight as the queue: only invalidations newer than that
+        // read need a follow-up. Concurrent callers join that one latest read.
+        if (current() && pending.revision !== latestRevision.current && cache.refreshedAt === 0) {
+          await refresh({ ...options, force: true });
+        }
+        return;
+      }
       if (!cache.metadata || !options?.force && Date.now() - cache.refreshedAt < PLUGIN_CATALOG_REFRESH_MS) return;
+      const requestedRevision = latestRevision.current;
+      const coversRevision = () => current() && requestedRevision === latestRevision.current;
       const flight = (async () => {
         const pages = new Map<number, PluginMarketPage>();
         const rebuiltSizes = new Map<number, number>();
@@ -240,13 +251,13 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           // Rebuild off-screen. An invalid cursor restarts this bounded resident
           // window from the beginning; visible batches stay intact until ready.
           for (const index of [...cache.pages.keys()].sort((a, b) => a - b)) {
-            if (!current()) return;
+            if (!coversRevision()) return;
             pages.set(index, await loader.current({ query: query.trim().slice(0, 100), scope,
               cursor: cache.cursors.get(index), limit: PLUGIN_PAGE_SIZE, excludeInstalled: true, counts: false }));
-            if (!current()) return;
+            if (!coversRevision()) return;
           }
         } catch (error) {
-          if (!current() || extractIpcError(error)?.code !== 'PLUGIN_LIST_CHANGED') return;
+          if (!coversRevision() || extractIpcError(error)?.code !== 'PLUGIN_LIST_CHANGED') return;
           pages.clear(); rebuilt = true;
           anchor.current = scrollRef.current ? readPluginCatalogAnchor(scrollRef.current) : null;
           const viewport = visiblePages.current;
@@ -265,10 +276,10 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           // Walk only as far as the user had loaded, plus the failed next page.
           // Keep six batches resident while rebuilding cursor metadata.
           for (let index = 0; index <= cache.last + 1; index++) {
-            if (!current()) return;
+            if (!coversRevision()) return;
             const page = await loader.current({ query: query.trim().slice(0, 100), scope,
               cursor, limit: PLUGIN_PAGE_SIZE, excludeInstalled: true, counts: false });
-            if (!current()) return;
+            if (!coversRevision()) return;
             pages.set(index, page); cursor = page.nextCursor;
             rebuiltHasNext = cursor !== null;
             if (page.items.some(item => item.pluginId === anchor.current?.id)) anchorPage = index;
@@ -282,16 +293,16 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           const first = firstVisiblePage();
           const last = Math.min(first + visiblePages.current.last - visiblePages.current.first, rebuiltSizes.size - 1);
           for (let index = first; index <= last; index++) {
-            if (!current()) return;
+            if (!coversRevision()) return;
             if (pages.has(index) || !rebuiltCursors.has(index)) continue;
             pages.set(index, await loader.current({ query: query.trim().slice(0, 100), scope,
               cursor: rebuiltCursors.get(index), limit: PLUGIN_PAGE_SIZE, excludeInstalled: true, counts: false }));
-            if (!current()) return;
+            if (!coversRevision()) return;
             retainVisiblePages();
           }
           if (visiblePages.current !== viewport) anchor.current = scrollRef.current ? readPluginCatalogAnchor(scrollRef.current) : null;
         }
-        if (!current()) return;
+        if (!coversRevision()) return;
         if ([...pages.values()].some(page => page.unavailableReason)) return;
         let changed = cache.error !== null;
         if (rebuilt) {
@@ -353,7 +364,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           rerender();
         }
       })().catch(() => undefined).finally(() => { if (refreshFlight.current?.promise === flight) refreshFlight.current = null; });
-      refreshFlight.current = { cache, promise: flight };
+      refreshFlight.current = { cache, revision: requestedRevision, promise: flight };
       await flight;
     };
     cache.refresh = async options => { await Promise.all([refresh(options), Date.now() - cache.countsAt >= PLUGIN_CATALOG_REFRESH_MS ? count() : Promise.resolve()]); };

@@ -83,8 +83,11 @@ export function readLocalPluginSnapshot(memory: CatalogMemory, force = false, re
   if (memory.snapshotFlight) return memory.snapshotFlight;
   if (!force && memory.snapshot && Date.now() - memory.snapshotAt < PLUGIN_CATALOG_REFRESH_MS) return Promise.resolve(memory.snapshot);
   const flight = window.electronAPI.pluginMarket.snapshot().then(next => {
+    // Publish data and freshness together in the initiating partition. A locale
+    // refresh joining immediately after settlement must not reuse the old data.
+    memory.snapshot = mergePluginSnapshot(memory.snapshot, next, renewIcons);
     memory.snapshotAt = Date.now();
-    return mergePluginSnapshot(memory.snapshot, next, renewIcons);
+    return memory.snapshot;
   }).finally(() => { if (memory.snapshotFlight === flight) memory.snapshotFlight = null; });
   memory.snapshotFlight = flight;
   return flight;

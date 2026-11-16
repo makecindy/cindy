@@ -201,7 +201,7 @@ export function RemotePluginPage({
       if (writable() && revision === readRevision.current) setStatus('readFailed');
     }
   }, [device.deviceId, i18n.language, invoke, writable, catalogMemory, browserCache, setSnapshot, setCatalogPaging, setTodayPool, setTodayLoaded]);
-  usePluginMarketForegroundRefresh(() => refresh(false), refreshAt);
+  usePluginMarketForegroundRefresh(() => { if (active) return refresh(false); }, refreshAt);
   useEffect(() => {
     let active = true;
     if (!catalogPaging) return;
