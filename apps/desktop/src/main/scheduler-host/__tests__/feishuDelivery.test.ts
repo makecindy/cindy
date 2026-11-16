@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 import { FeishuScheduleDelivery, renderFeishuDeliveryCard, type FeishuDeliveryState,
-  type FeishuDeliveryTransport } from '../feishuDelivery.js';
+  type FeishuDeliveryTransport, type FeishuDeliveryDeps } from '../feishuDelivery.js';
 
 // Value: exercise the real publish/configure/flush entry, not temporary IM scopes.
 // Regression: scheduled/cross-task turns have NO_ACTIVE_FEISHU_SCOPE. No existing
@@ -21,17 +21,46 @@ function harness() {
   const transport: FeishuDeliveryTransport = { identity: { appId: 'app_hihi', ownerOpenId: 'owner', service: 'feishu' },
     assertCurrent: () => {}, send, checkChat };
   const resolve = vi.fn(async () => transport);
-  const getSchedule = vi.fn(async () => schedule);
+  const getSchedule = vi.fn<FeishuDeliveryDeps['getSchedule']>(async () => schedule);
   const store = { read: () => structuredClone(state), update: async (fn: (s: FeishuDeliveryState) => FeishuDeliveryState) => {
     state = structuredClone(fn(structuredClone(state)));
   } };
-  const create = () => new FeishuScheduleDelivery({ store, resolve, getSchedule, now: () => now,
-    captureGuard: () => { const captured = generation; return () => { if (captured !== generation) throw new Error('account changed'); }; } });
+  const create = (extra: Partial<FeishuDeliveryDeps> = {}) => new FeishuScheduleDelivery({ store, resolve, getSchedule, now: () => now,
+    captureGuard: () => { const captured = generation; return () => { if (captured !== generation) throw new Error('account changed'); }; }, ...extra });
   return { service: create(), create, send, resolve, transport, checkChat, getSchedule, store,
     advance: (ms: number) => { now += ms; }, switchAccount: () => { generation++; } };
 }
 
 describe('scheduled Feishu group delivery', () => {
+  it('allows revocation after the target or schedule is unavailable and clears pending content', async () => {
+    const h = harness();
+    await h.service.configure('daily', ['oc_a']);
+    h.send.mockRejectedValue(new Error('offline'));
+    await h.service.publish(schedule, run);
+    h.getSchedule.mockResolvedValue(null);
+    await expect(h.service.configure('daily', [])).resolves.toBeNull();
+    expect(h.service.status('daily')).toMatchObject({ binding: null,
+      receipts: [expect.objectContaining({ state: 'failed', error: 'DELIVERY_REVOKED' })] });
+    expect(Object.values(h.store.read().receipts)[0].card).toBeUndefined();
+  });
+
+  it('refuses a configuration whose call authorization expires while waiting for the store lock', async () => {
+    const h = harness();
+    let active = true;
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const locked = new Promise<void>(resolve => { release = resolve; });
+    const service = h.create({
+      captureConfigurationGuard: () => () => { if (!active) throw new Error('call revoked'); },
+      store: { ...h.store, update: async fn => { entered(); await locked; await h.store.update(fn); } },
+    });
+    const pending = service.configure('daily', ['oc_a']);
+    await waiting; active = false; release();
+    await expect(pending).rejects.toThrow('call revoked');
+    expect(service.status('daily').binding).toBeNull();
+  });
+
   it('verifies targets, pins identity, and exposes receipts without the report body', async () => {
     const h = harness();
     const binding = await h.service.configure('daily', ['oc_a', 'oc_b', 'oc_a']);

@@ -33,6 +33,8 @@ export interface FeishuDeliveryDeps {
   store: FeishuDeliveryStore;
   /** Captured synchronously; every await boundary must remain in the same owner/account. */
   captureGuard(): () => void;
+  /** Capture the configuration call's live authority only; never retain it for background sends. */
+  captureConfigurationGuard?(): (() => void) | undefined;
   resolve(sessionId: string): Promise<FeishuDeliveryTransport>;
   getSchedule(id: string): Promise<Schedule | null>;
   now?: () => number;
@@ -53,14 +55,17 @@ export class FeishuScheduleDelivery {
   constructor(private readonly deps: FeishuDeliveryDeps) { this.now = deps.now ?? Date.now; }
 
   async configure(scheduleId: string, chatIds: string[]): Promise<FeishuDeliveryBinding | null> {
-    const guard = this.deps.captureGuard();
-    const schedule = await this.deps.getSchedule(scheduleId);
+    const assertOwner = this.deps.captureGuard();
+    const assertConfiguration = this.deps.captureConfigurationGuard?.();
+    const guard = () => { assertOwner(); assertConfiguration?.(); };
     guard();
-    if (!schedule) throw new Error('Schedule not found');
     if (chatIds.length > 10 || chatIds.some(id => !/^oc_[A-Za-z0-9_-]{1,128}$/.test(id)))
       throw new Error('Invalid Feishu chat targets');
     let binding: FeishuDeliveryBinding | null = null;
     if (chatIds.length) {
+      const schedule = await this.deps.getSchedule(scheduleId);
+      guard();
+      if (!schedule) throw new Error('Schedule not found');
       if (!schedule.targetSessionId) throw new Error('Bind the schedule to a task before enabling group delivery');
       const transport = await this.deps.resolve(schedule.targetSessionId);
       guard(); transport.assertCurrent();

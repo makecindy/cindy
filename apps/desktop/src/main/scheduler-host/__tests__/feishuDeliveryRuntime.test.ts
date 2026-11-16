@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeishuIM } from '@cindy/im';
 import type { Schedule, ScheduleRun, Scheduler } from '@cindy/maker-scheduler';
 import { getFeishuScheduleDelivery, startFeishuScheduleDelivery, stopFeishuScheduleDelivery } from '../feishuDeliveryRuntime.desktop.js';
+import { admitTaskAction, admitPluginTaskAction } from '../../maker-ipc/taskActionAuthorization.js';
 
 // Separate adapter environment: real atomic file store, fake host/account/transport.
 // Production entry: scheduler startup + configured delivery. Rule: account isolation
@@ -49,8 +50,32 @@ beforeEach(() => {
 afterEach(() => { stopFeishuScheduleDelivery(); fs.rmSync(host.root, { recursive: true, force: true }); });
 
 describe('Feishu delivery Desktop adapter', () => {
+  it.each(['task', 'plugin'] as const)('rejects an admitted %s configuration revoked during chat validation', async kind => {
+    let active = true;
+    const assertCurrent = () => { if (!active) throw new Error('call revoked'); };
+    const input = { server: 'cindy_scheduler' as const, tool: 'schedule_set_feishu_delivery', args: { id: 'daily', chatIds: ['oc_authorized'] } };
+    const admission = kind === 'task'
+      ? await admitTaskAction({ ...input, sessionId: 'task' }, { key: 'input', ownerInput: true, delegated: true,
+        assertCurrent: async () => assertCurrent(), assertCurrentSync: assertCurrent })
+      : admitPluginTaskAction({ ...input, sessionId: undefined,
+        caller: { kind: 'plugin', pluginId: 'fake-plugin', dataOwnerId: 'owner', ownerGeneration: 1 } }, assertCurrent);
+    if (!admission.ok || !admission.run) throw new Error('expected real action admission');
+    host.getChatInfo.mockImplementationOnce(async () => { active = false; return {}; });
+    await expect(admission.run(() => getFeishuScheduleDelivery().configure('daily', ['oc_authorized']))).rejects.toThrow();
+    expect(getFeishuScheduleDelivery().status('daily').binding).toBeNull();
+    expect(host.callApi).not.toHaveBeenCalled();
+  });
+
   it('sends via the pinned bot with an explicit chat_id and persists a real receipt across restart', async () => {
-    await getFeishuScheduleDelivery().configure('daily', ['oc_authorized']);
+    let active = true;
+    const guard = () => { if (!active) throw new Error('original input ended'); };
+    const admission = await admitTaskAction({ server: 'cindy_scheduler', tool: 'schedule_set_feishu_delivery',
+      sessionId: 'task', args: { id: 'daily', chatIds: ['oc_authorized'] } },
+    { key: 'input', ownerInput: true, delegated: true, assertCurrent: async () => guard(), assertCurrentSync: guard });
+    if (!admission.ok || !admission.run) throw new Error('expected real action admission');
+    await admission.run(() => getFeishuScheduleDelivery().configure('daily', ['oc_authorized']));
+    // Future authorized background runs must survive the configuring input ending.
+    active = false;
     await getFeishuScheduleDelivery().publish(schedule, run);
     expect(host.callApi).toHaveBeenCalledExactlyOnceWith({ method: 'POST', path: '/open-apis/im/v1/messages',
       params: { receive_id_type: 'chat_id' }, data: { receive_id: 'oc_authorized', msg_type: 'interactive',

@@ -7,6 +7,7 @@ import { createOverrideSettingsFile } from '../maker-host/override-settings-file
 import { createLogger } from '../logger.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
+import { captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
 import { captureImAccountGeneration, isImAccountGenerationCurrent, runInImAccountGeneration } from '../im/accountBoundary.js';
 import { getBotFeishuTransport } from '../im/shared/botImConnectionRuntime.js';
 import { createFeishuTransportResolver } from '../mcp-integrations/feishuTransportRouting.js';
@@ -43,6 +44,7 @@ export function startFeishuScheduleDelivery(scheduler: Scheduler, personalIm: Fe
   const resolver = createFeishuTransportResolver({ readTurnScope: () => null,
     getCompanionTransport: getBotFeishuTransport, personalIm, includeBotLanes: true });
   service = new FeishuScheduleDelivery({
+    captureConfigurationGuard: captureTaskActionSyncGuard,
     store: { read: () => store.readStrict(), update: async fn => {
       await store.updateAtomic(({ value }) => fn(value));
     } },
