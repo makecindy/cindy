@@ -314,12 +314,12 @@ describe('sender-chosen steering into an active turn', () => {
       await coordinator.ensureQueueRestored(sid);
       coordinator.setExecutionPaused(sid, true);
       if (mode === 'merged') {
-        const first = await provider.invokeTool(ctx, 'send_to_lead', { worker_id: 'worker-1', message: 'Report A' },
+        const first = await provider.invokeTool(ctx, 'send_to_lead', { worker_id: 'worker-1', message: 'Report A', report: { state: 'ready' } },
           { manageWorkerStatus: false, reportClientId: 'capture-a' });
         expect(first.isError).not.toBe(true);
       }
       delayFailure = true;
-      const sending = provider.invokeTool(ctx, 'send_to_lead', { worker_id: 'worker-1', message: 'Report B' },
+      const sending = provider.invokeTool(ctx, 'send_to_lead', { worker_id: 'worker-1', message: 'Report B', report: { state: 'ready' } },
         { manageWorkerStatus: false, reportClientId: 'capture-b' });
       await admission;
       if (mode === 'merged') {

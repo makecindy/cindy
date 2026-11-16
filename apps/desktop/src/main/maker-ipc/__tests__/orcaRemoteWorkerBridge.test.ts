@@ -126,7 +126,7 @@ function setup(deliverReport?: OrcaRemoteWorkerBridgeDeps['deliverReport']) {
     sessionId: 'remote-1',
     leadSessionId: 'lead-1',
     tool: 'send_to_lead',
-    args: { worker_id: 'worker-1', message: 'verified result' },
+    args: { worker_id: 'worker-1', message: 'verified result', report: { state: 'ready' } },
   };
   return {
     executionProvider,
@@ -204,7 +204,7 @@ describe('cross-device Worker bridge', () => {
       targetSessionId: 'lead-1',
       source: 'worker',
       workerId: 'worker-1',
-      rawContent: 'verified result',
+      rawContent: 'verified result\n\n[Orca Worker report: ready]',
     });
     expect(s.worker.status).toBe('done');
     expect(s.settled).toHaveBeenCalledTimes(1);
