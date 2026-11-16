@@ -5371,6 +5371,10 @@ export function removeQueuedSchedulerPrompt(sessionId: string, clientId: string)
   schedulerQueueBridgeHolder?.removeQueuedPrompt(sessionId, clientId);
 }
 
+export function releaseQueuedSchedulerPrompt(sessionId: string, clientId: string): void {
+  schedulerQueueBridgeHolder?.releasePrompt(sessionId, clientId);
+}
+
 function sessionMetaForIsland(session: {
   id: string;
   agentKind?: unknown;
@@ -19684,7 +19688,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       schedulerQueuedPromptPreparations.delete(item.clientId);
       // 返回 promise 让 coordinator 在 onPersisted 链路里 await —— worker 运行态与
       // pending auto-bridge 副作用必须先于 turn 启动完成；失败仍吞错落日志，不拦派发。
-      await orcaInterAgentDispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item, restoredFromSnapshot);
+      await orcaInterAgentDispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item, restoredFromSnapshot,
+        schedulerQueueBridgeHolder?.recoverySourceClientId(sessionId, item));
       const pluginTaskSession = maker.getSession(sessionId);
       if (pluginTaskSession && pluginTaskServiceForCurrentOwner) {
         await pluginTaskServiceForCurrentOwner().accept(sessionId, item, { instanceId: pluginTaskSession.instanceId, generation: pluginTaskSession.getTurnGeneration() });
@@ -19824,7 +19829,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'rejected');
       interruptedTurnAutoResumeHooks.onRejectedUserTurn(sessionId, item);
     },
-    persistTerminalSendError: (sessionId, message) => {
+    persistTerminalSendError: (sessionId, message, attemptToken) => {
+      if (attemptToken !== undefined) {
+        autoResumeBookkeeping.stashSuppressedError(sessionId, { message }, attemptToken);
+        return;
+      }
       onTurnErrorEvent(
         sessionId,
         {
@@ -19835,7 +19844,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       );
     },
     onUnconfirmedAutoResumeTurn: interruptedTurnAutoResumeHooks.onUnconfirmedAutoResumeTurn,
-    onPersistedSendRejected: (sessionId, message) => {
+    onPersistedSendRejected: (sessionId, message, item, recovering) => {
+      schedulerQueueBridgeHolder?.onPersistedSendRejected(sessionId, message, item, recovering);
       if (!isPiPromptRpcTimeoutError({ message })) return;
       // 第一次 timeout：只关掉卡住的原生进程，不自动 replay。用户重试时再 hidden rebuild。
       void maker.closeSession(sessionId).catch((error) => {
@@ -20101,6 +20111,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     createId,
     discardWatchers: schedulerQueuedPromptDiscardWatchers,
     preparations: schedulerQueuedPromptPreparations,
+    discardAcceptedCallback: orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback,
     enqueue: enqueueSendToSessionMessage,
   });
 
