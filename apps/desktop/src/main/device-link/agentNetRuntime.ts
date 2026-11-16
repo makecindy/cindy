@@ -16,7 +16,10 @@ import * as authManager from '../authManager.js';
 import { currentOfficialAgentNetClient, ensureOfficialAgentNetClient, officialAgentNetBase, officialAgentNetSlot, outgoingOfficialAgentNetClient } from './agentNetOfficial.js';
 import { deviceName } from './deviceName.js';
 import { authorizeAgentNetSharingRequest, prepareAgentNetSharingPrimary } from './agentNetSharingPolicy.js';
+import { createLogger } from '../logger';
 
+/** Relay connection lifecycle, keepalive and per-peer route changes (local log only). */
+const agentNetLog = createLogger('agent-net');
 let current: AgentNetAppSocket | null = null;
 let socketAttempt = 0;
 let coreModule: Promise<WebAssembly.Module> | null = null;
@@ -239,7 +242,7 @@ export async function openScopedAgentNetAppSocket(api: AgentNetClient, assertCur
   if (!workerFile) throw new Error('AGENT_NET_WORKER_BUNDLE_MISSING');
   const approver = api.delegation ? null : createDelegationApprover(api, assertCurrent, authorizeAgentNetSharingRequest);
   try {
-    const socket = await AgentNetWorkerSocket.open({ workerFile, client: api, assertCurrent, module,
+    const socket = await AgentNetWorkerSocket.open({ workerFile, client: api, assertCurrent, module, log: agentNetLog,
       userId: authManager.getCurrentUserId() ?? '', scoped: true,
       onDelegationRequests: requests => approver?.update(requests) });
     try { assertCurrent(); } catch (error) { socket.close(); throw error; }
@@ -291,7 +294,7 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
   if (!workerFile) throw new Error('AGENT_NET_WORKER_BUNDLE_MISSING');
   let approver = createDelegationApprover(api, assertOwner, authorizeAgentNetSharingRequest);
   let socket: AgentNetAppSocket;
-  try { socket = await AgentNetWorkerSocket.open({ workerFile, assertCurrent: assertOwner, client: api, module, userId: api.certificate.subject, cachedDirectory, directoryExpiresAt, stunServers,
+  try { socket = await AgentNetWorkerSocket.open({ workerFile, assertCurrent: assertOwner, client: api, module, log: agentNetLog, userId: api.certificate.subject, cachedDirectory, directoryExpiresAt, stunServers,
     scoped: true, onDelegationRequests: requests => approver.update(requests),
     onDirectory(directory) {
       assertOwner();

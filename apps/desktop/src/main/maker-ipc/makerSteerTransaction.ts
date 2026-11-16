@@ -197,7 +197,6 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
     const steerNotePlan = steerAllowsEnvironmentNotes
       ? wireNoteMemory.plan(sessionId, {
           'client-environment': steerNote,
-          'ui-language': steerLanguageNote,
           'side-chat': meta?.parentSessionId && (await readSessionSource(sessionId)) === 'side-chat' ? SIDE_CHAT_CONTEXT : null,
         }, { force: false })
       : null;
@@ -205,8 +204,9 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
     const withSteerNote = steerPlannedNotes['client-environment']
       ? prependNoteToWireUserMessage(withSteerSourceNote as HandoffWireMessage, steerPlannedNotes['client-environment'])
       : withSteerSourceNote;
-    let steerPayload = steerPlannedNotes['ui-language']
-      ? prependNoteToWireUserMessage(withSteerNote as HandoffWireMessage, steerPlannedNotes['ui-language'])
+    // Literary styles apply to this input only; do not deduplicate them across turns.
+    let steerPayload = steerLanguageNote
+      ? prependNoteToWireUserMessage(withSteerNote as HandoffWireMessage, steerLanguageNote)
       : withSteerNote;
     // The owner's message closed a waiting 代输入 card: tell the agent, on this message only.
     // Same owner test as the queue's: this runs outside the context that told a guest apart at enqueue.

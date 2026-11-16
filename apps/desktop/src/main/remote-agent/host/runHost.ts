@@ -296,7 +296,7 @@ export interface RemoteAgentHostDeps {
     allocate(controller: string, request: Extract<RemoteAgentRequest, { op: 'allocate' }>): Promise<{ deviceId: string; generation: string; leaseDurationMs?: number } | null>;
     status(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-status' }>): void;
     release(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-release' }>): Promise<void>;
-    switch(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-switch' }>): Promise<{ token?: string }>;
+    switch(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-switch' }>): Promise<{ token?: string; generation?: string }>;
     switched?(controller: string, sessionId: string, token: string): Promise<void>;
     sessionAllowed(controller: string, sessionId: string): boolean;
     /** Unlike sessionAllowed, true only for a current, local G→M delegation. */
@@ -671,6 +671,9 @@ function describeHandle(handle: AgentSessionHandle, shadowDir: string, mirrorRoo
 export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   const now = deps.now ?? Date.now;
   const runs = new Map<string, Run>();
+  // A close can finish before native startup returns its handle. Keep that
+  // reservation until startup has disposed any resources that arrived late.
+  const startingRuns = new WeakSet<Run>();
   // Completion receipts outlive a closed/purged run until the original owner can acknowledge them.
   const pendingStandbyCompletions = new Set<Run>();
   const uploads = new Map<string, Upload>();
@@ -690,7 +693,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     const counts = new Map<string, number>();
     for (const run of runs.values()) {
       // 清理完成前仍占名额，包括正在关闭的实例。
-      if (run.closedAt !== undefined) continue;
+      if (run.closedAt !== undefined && !startingRuns.has(run)) continue;
       const device = limitDeviceOf(run.controller);
       counts.set(device, (counts.get(device) ?? 0) + 1);
     }
@@ -1625,8 +1628,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           },
         }),
       );
+      if (run.closing) {
+        // finishRun may already have closed the log before this async listener
+        // was available. Startup owns late resources until it settles.
+        await tunnel.close();
+        return;
+      }
       run.tunnel = tunnel;
-      if (run.closing) return;
       // 必须先发布映射，再启动 Agent。Codex startSession 会在 started 之前读取 exec-server 环境。
       if (payload.virtualWorkspace) append(run, { t: 'state', state: {
         workspaceProjection: { shadowDir, mirrorRoot, extraDirs, writableDirs, virtualWorkspace: true, ...(previousMirrorRoots.length ? { previousMirrorRoots } : {}) },
@@ -2160,13 +2168,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   }
 
   /** 受邀者交接后重新打开时带回的凭证：短期内幂等，失败重开仍避开原电脑。只认同一受邀者和任务。 */
-  function takeGroupSwitchToken(controller: string, hostSessionId: string, token: string | undefined): string[] {
-    if (!token) return [];
+  function takeGroupSwitchToken(controller: string, hostSessionId: string, token: string | undefined): string[] | undefined {
+    if (!token) return undefined;
     const entry = groupSwitchTokens.get(token);
-    if (!entry || entry.controller !== controller || entry.hostSessionId !== hostSessionId) return [];
+    if (!entry || entry.controller !== controller || entry.hostSessionId !== hostSessionId) return undefined;
     if (entry.expiresAt > now()) return entry.exclude;
     groupSwitchTokens.delete(token);
-    return [];
+    return undefined;
   }
 
   /**
@@ -3557,12 +3565,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             // 在本机运行过的会话接着在本机运行：计入本机这一台的负载。
             if (!relayTo) reserved = deps.groupRelay.trackRun(providerId, PROVIDER_GROUP_LOCAL_MEMBER_KEY);
           } else {
-            avoid = takeGroupSwitchToken(
+            const switchExclusion = takeGroupSwitchToken(
               controller,
               hostSessionIdFor(controller, payload.sessionId),
               payload.groupSwitchToken,
             );
-            if (avoid.length && payload.groupSwitchToken) {
+            avoid = switchExclusion ?? [];
+            if (switchExclusion && payload.groupSwitchToken) {
               // A valid token binds this guest and task to the move. Retire its
               // old direct assignment before planning a new executor, so a
               // failed open can retry with the token without reviving old M.
@@ -3665,6 +3674,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           ...(reserved && !relayTo ? { groupLoad: reserved } : {}),
         };
         runs.set(key(controller, request.runId), run);
+        startingRuns.add(run);
         ensureSweep();
         deps.log?.info('remote agent run opened', { runId: run.id, agent: run.kind, ...(relayTo ? { relayed: true } : {}) });
         if (groupRouted && payload.options.resumeSessionId) run.groupResumed = true;
@@ -3680,13 +3690,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               load?.release();
               append(run, { t: 'start-failed', error: relayErrorInfoFrom(error) });
               await finishRun(run, 'start-failed', 'navigation', false);
-            });
+            }).finally(() => { startingRuns.delete(run); });
           runStarts.set(run, starting);
           void starting;
         } else {
           // 组为受邀者的全新任务选中了本机这一台：本机起不来时与组内电脑一样换下一台。
           if (groupRouted && !payload.options.resumeSessionId) run.groupFreshStart = { avoid };
-          const starting = startRun(run, payload);
+          const starting = startRun(run, payload).finally(() => { startingRuns.delete(run); });
           runStarts.set(run, starting);
           void starting;
         }
@@ -3797,17 +3807,21 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   return {
     handle,
     /** O alone may issue a one-use switch token after validating a direct guest assignment. */
-    issueDirectGroupSwitchToken(controller: string, sessionId: string, exclude: ReadonlySet<string>): string | null {
+    issueDirectGroupSwitchToken(controller: string, sessionId: string, exclude: ReadonlySet<string>, retryAccount = false): string | null {
       const peer = parseProviderSharePeer(controller);
       if (disposed || peer?.role !== 'guest' || !deps.isControllerAuthorized(controller)
         || !/^[A-Za-z0-9_-]{1,128}$/.test(sessionId) || exclude.size === 0 || exclude.size > 32) return null;
       const hostSessionId = hostSessionIdFor(controller, sessionId);
       const roundKey = key(controller, hostSessionId);
       const previous = groupSwitchRounds.get(roundKey);
-      const tried = new Set([...(previous && now() - previous.at <= GROUP_SWITCH_ROUND_MS ? previous.tried : []), ...exclude]);
+      const earlier = new Set(previous && now() - previous.at <= GROUP_SWITCH_ROUND_MS ? previous.tried : []);
+      // One same-computer account handoff per recovery round. A later failure
+      // must exclude M, even if another stale account probe still looks healthy.
+      if (retryAccount && [...exclude].some(member => earlier.has(member))) return null;
+      const tried = new Set([...earlier, ...exclude]);
       if (tried.size > 32) return null;
       groupSwitchRounds.set(roundKey, { tried, at: now() });
-      return issueGroupSwitchTokenFor(controller, hostSessionId, tried);
+      return issueGroupSwitchTokenFor(controller, hostSessionId, retryAccount ? earlier : tried);
     },
     limitUsage(): RemoteAgentLimitUsage {
       const counts = [...usageByDevice().values()];

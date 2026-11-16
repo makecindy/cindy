@@ -10,6 +10,7 @@ import { COMPUTER_TOOLS } from '@cindy/mcps/computer';
 import { readForRecovery } from '../../../../../../packages/lizi-mcps/src/computer/recovery';
 import { HumanDesktopInput, HUMAN_INPUT_QUIET_MS } from '../../remote-desktop/inputOwnership';
 import * as inputOwnership from '../../remote-desktop/inputOwnership';
+import { runPluginHostToolCall } from '../hostToolCaller.js';
 
 const {
   existsSyncMock,
@@ -1220,6 +1221,26 @@ describe('computer mcp integration', () => {
 
     expect(mcpConnectMock).not.toHaveBeenCalled();
     expect(mcpCallToolMock).not.toHaveBeenCalled();
+  });
+
+  // Item 26, unit: the real driver adapter previously required a task even
+  // after the public plugin gateway approved computer access. MCP-only fakes
+  // missed this boundary. One attested plugin must get its own native connection.
+  it('binds an approved plugin to its own driver connection and closes that connection', async () => {
+    const caller = { kind: 'plugin' as const, pluginId: 'driver-plugin', dataOwnerId: 'owner', ownerGeneration: 3 };
+    const context = { hostCaller: caller, agentKind: 'claude-code' };
+    const deps = getComputerMcpDeps();
+    mcpCallToolMock.mockResolvedValue({ content: [{ type: 'text', text: '{"ok":true,"windows":[]}' }] });
+    await expect(deps.callTool('list_windows', {}, context)).rejects.toThrow('PERMISSION_DENIED');
+    const run = () => runPluginHostToolCall({ caller, server: 'cindy_computer', tool: 'list_windows', argsJson: '{}', assertCurrent() {} },
+      () => deps.callTool('list_windows', {}, context));
+    await expect(run()).resolves.toEqual({ ok: true, windows: [] });
+    await expect(run()).resolves.toEqual({ ok: true, windows: [] });
+    expect(mcpConnectMock).toHaveBeenCalledOnce();
+    await deps.closeContext?.(context);
+    expect(mcpCloseMock).toHaveBeenCalledOnce();
+    await expect(run()).resolves.toEqual({ ok: true, windows: [] });
+    expect(mcpConnectMock).toHaveBeenCalledTimes(2);
   });
 
   it('writes get_window_state screenshots to a temp file by default', async () => {

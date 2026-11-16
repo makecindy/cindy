@@ -43,11 +43,9 @@ function refreshPluginApps(
   const previousHostEntries = new Map(hostEntries);
   hostEntries.clear();
   for (const ghost of ghosts) {
-    const approvedHost = getApprovedGhostHostUi(ghost);
+    const host = getApprovedGhostHostUi(ghost);
     const hasUi = hasGhostUiPermission(ghost);
-    const settingsOnly = ghost.enabled && !!approvedHost?.settings?.length;
-    const host = hasUi ? approvedHost : settingsOnly ? { settings: approvedHost!.settings } : undefined;
-    if ((!hasUi && !settingsOnly) || !deps.available() || ghost.approval.state !== 'approved')
+    if ((!hasUi && !host) || !deps.available() || ghost.approval.state !== 'approved')
       continue;
     const instance = installedGhostStoragePart(ghost),
       revision = ghost.approval.revision;
@@ -61,7 +59,7 @@ function refreshPluginApps(
         owner !== activeOwnerScopeKey() ||
         !deps.available() ||
         !latest ||
-        (hasUi ? !hasGhostUiPermission(latest) : !(latest.enabled && getApprovedGhostHostUi(latest)?.settings?.length)) ||
+        (hasUi ? !hasGhostUiPermission(latest) : !getApprovedGhostHostUi(latest)) ||
         latest.approval.state !== 'approved' ||
         latest.approval.revision !== revision ||
         path.resolve(latest.dir) !== directory ||
@@ -119,7 +117,7 @@ function refreshPluginApps(
       return config;
     });
     if (host) {
-      const fingerprint = JSON.stringify([revision, packageSha256, directory, ghost.approvedHostUi, hasUi]);
+      const fingerprint = JSON.stringify([revision, packageSha256, directory, hasUi]);
       const previous = previousHostEntries.get(instance);
       hostEntries.set(instance, previous?.owner === owner && previous.fingerprint === fingerprint
         ? previous : { ghost, host, config, owner, fingerprint });

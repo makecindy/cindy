@@ -33,8 +33,8 @@ function mount(active: boolean) {
   const [enabled, onPrevent] = h.prevent.mock.calls.at(-1)!;
   const action = { type: 'GO_BACK' };
   const leave = () => onPrevent({ data: { action } });
-  const choose = (style: 'cancel' | 'destructive') => h.alert.mock.calls.at(-1)![2]
-    .find((button: { style?: string }) => button.style === style).onPress();
+  const choose = (style: 'cancel' | 'destructive') => act(() => h.alert.mock.calls.at(-1)![2]
+    .find((button: { style?: string }) => button.style === style).onPress());
   return { enabled, leave, choose, action, waitForLeaveDecision, dismiss: () => h.alert.mock.calls.at(-1)![3].onDismiss() };
 }
 
@@ -68,6 +68,39 @@ describe('useConfirmLeaveWhileUploading', () => {
     await expect(discarding).resolves.toBe(true);
     expect(h.dispatch).toHaveBeenCalledWith(discard.action);
     await expect(discard.waitForLeaveDecision()).resolves.toBe(true);
+  });
+
+  // Regression: dispatch alone left the upload guard enabled, so another remove
+  // event reopened the alert. Unit tier: mount the real hook with pending uploads.
+  it('disables the guard before replaying a confirmed departure with uploads still pending', async () => {
+    const harness = mount(true);
+    h.dispatch.mockImplementationOnce(() => {
+      const [enabled, onPrevent] = h.prevent.mock.calls.at(-1)!;
+      if (enabled) onPrevent({ data: { action: harness.action } });
+      expect(enabled).toBe(false);
+    });
+    harness.leave();
+    const waiting = harness.waitForLeaveDecision();
+    harness.choose('destructive');
+    await expect(waiting).resolves.toBe(true);
+    expect(h.dispatch).toHaveBeenCalledExactlyOnceWith(harness.action);
+    expect(h.alert).toHaveBeenCalledTimes(1);
+    await expect(harness.waitForLeaveDecision()).resolves.toBe(true);
+  });
+
+  it('ignores a late dismissal from an already answered dialog', async () => {
+    const harness = mount(true);
+    harness.leave();
+    const dismissOldDialog = h.alert.mock.calls.at(-1)![3].onDismiss;
+    harness.choose('cancel');
+    harness.leave();
+    dismissOldDialog();
+    let resolved = false;
+    const waiting = harness.waitForLeaveDecision().then((value) => { resolved = true; return value; });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    harness.choose('destructive');
+    await expect(waiting).resolves.toBe(true);
   });
 
   it('treats dismissing the dialog as keep waiting, and never stacks a second dialog', async () => {

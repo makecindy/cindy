@@ -745,6 +745,8 @@
     "memoryDeleteFailed": "Impossible de supprimer la mémoire",
     "create": "Nouvel ami",
     "createFailed": "La création n'est pas encore confirmée. Réessayez pour vérifier.",
+    "createHostUnsupported": "Cet ordinateur ne peut pas créer d'ami pour le moment. Mettez à jour Cindy sur cet ordinateur ou créez-le depuis celui-ci.",
+    "createNeedsDetails": "Saisissez un nom et choisissez un portrait pour créer un ami.",
     "title": "Ami",
     "profile": "Profil et personnalité",
     "memory": "Mémoire",

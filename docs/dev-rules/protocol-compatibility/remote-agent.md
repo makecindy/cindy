@@ -517,3 +517,16 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
     第二期加上「等名额」的排队后，连回不再因为名额被直接拒绝，这种情况会少很多。
     回归见 `remote-agent/__tests__/connectionPool.test.ts`、`execServerProjection.e2e.test.ts`(中继忙闲)，以及真实 Claude Code / Codex / Pi 的
     `claudeHosted` / `codexHosted` / `piHosted.e2e.test.ts`(共用 `poolHarness.ts`)。
+
+## 项目文件记忆（2026-11-13）
+
+`RemoteAgentWireStartOptions.makerMemoryProjectDir?: string` 是任务电脑的普通 Markdown 目录定位，
+发送端对项目内存储发送定位和空 `makerMemoryIndexSnapshot`，不发送完整索引。
+`wire.ts` 两侧共用字符串编解码，host 按已有 `projectText` 路径投影后透传；
+三个 Harness 通过共享 `loadMemoryContext` 按需读文件，不打开运行电脑的记忆库。
+文件访问仍经既有执行器及授权目录，不增加服务器、数据库、MCP 服务或新的 relay 消息。
+
+旧发送端不带该字段，保持原有快照行为；旧执行端丢弃该字段，仍可经原有工具查询任务电脑的记忆，
+但不会获得新的文件优先提示。此兼容退化不丢记录；只有两端均升级才具备新提示行为。
+共享任务的虚拟路径映射复用 runHost 对所有字符串选项的投影。实机跨电脑/跨账号验证须单独记录，
+本次只验证编解码和现有宿主回归，不能据此宣称全矩阵实测。

@@ -10,10 +10,12 @@ vi.mock('@/contexts/AuthContext', () => ({
   }),
 }));
 vi.mock('@/hooks/useAgentCapabilities', () => ({
+  getInterestedDeviceCapabilityTargets: () => [],
   prefetchDeviceCapabilities: vi.fn(),
   evictDeviceCapabilities: vi.fn(),
 }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
+  getInterestedDeviceProviderTargets: () => [],
   prefetchDeviceProviders: vi.fn(),
   evictDeviceProviders: vi.fn(() => 1),
   isDeviceProvidersGenerationCurrent: vi.fn(() => true),

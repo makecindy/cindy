@@ -18,6 +18,7 @@
  *   1. 每次调用用**唯一** sidecar 名 (pid + 自增计数), 同进程内并发调用各用各的, 从根上消除撞名。
  *   2. rename 失败且 myAuth 已不在时, 尽力用 symlink 把 myAuth 从 systemAuth 重建回来 ——
  *      不能建共享链接时由调用方进入独立登录, 不复制 refresh token。
+ *   3. Windows 同一目标的 relink 在进程内串行到恢复/清理结束，避免另一轮删除刚建好的链接。
  *
  * 注意: 本模块只管"安全替换"这一件事, 不做账号比对 / inode 短路 / suppress 标记等判定 ——
  * 那些仍由 auth-adapters 的 reconcile 主流程负责。
@@ -143,17 +144,49 @@ export interface CodexAuthLinkDiagnostics {
 /** 同进程内自增, 保证并发调用拿到互不相同的 sidecar 路径。 */
 let sidecarCounter = 0;
 
+/** Pending Windows relinks only; entries are released after the final waiter. */
+const windowsRelinks = new Map<string, Promise<void>>();
+
 /**
- * 原子地把 myAuth 替换成指向 systemAuth 的共享链接。
+ * 把 myAuth 替换成指向 systemAuth 的共享链接。
  *
  * 调用方需自行保证 systemAuth 存在、且两边是同账号 (本函数不做账号比对)。
- * 并发安全: 每次调用使用唯一 sidecar, 不会和同进程内其它调用撞同名临时文件。
+ * POSIX 原子覆盖；Windows 按目标目录项串行到恢复结束（不阻塞其它 home）。
+ * 这是进程内 relink 的协调，不是跨进程锁；本机 Codex 仍可独立刷新凭证。
  */
 export async function relinkSharedCodexAuth(
   systemAuth: string,
   myAuth: string,
   platform: NodeJS.Platform = process.platform,
   execFileImpl: typeof execFileP = execFileP,
+): Promise<RelinkOutcome> {
+  if (platform !== 'win32') {
+    return relinkSharedCodexAuthUnlocked(systemAuth, myAuth, platform, execFileImpl);
+  }
+
+  // Resolve the parent, never auth.json itself: a file symlink is the entry we
+  // replace, while directory junctions and case aliases must share the queue.
+  const parent = path.dirname(path.resolve(myAuth));
+  const realParent = await fsp.realpath(parent).catch(() => parent);
+  const key = path.join(realParent, path.basename(myAuth)).toLowerCase();
+  const previous = windowsRelinks.get(key) ?? Promise.resolve();
+  const result = previous.then(() =>
+    relinkSharedCodexAuthUnlocked(systemAuth, myAuth, platform, execFileImpl),
+  );
+  const settled = result.then(() => undefined, () => undefined);
+  windowsRelinks.set(key, settled);
+  try {
+    return await result;
+  } finally {
+    if (windowsRelinks.get(key) === settled) windowsRelinks.delete(key);
+  }
+}
+
+async function relinkSharedCodexAuthUnlocked(
+  systemAuth: string,
+  myAuth: string,
+  platform: NodeJS.Platform,
+  execFileImpl: typeof execFileP,
 ): Promise<RelinkOutcome> {
   // 唯一 sidecar 名 (pid + 自增计数): 同进程内并发 reconcile 各用各的, 不再撞 EEXIST / ENOENT。
   const sidecar = `${myAuth}.${process.pid}.${sidecarCounter++}.linktmp`;

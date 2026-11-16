@@ -53,6 +53,11 @@ export interface RemoteDraftDefaults {
    * 不参与 resolveDeviceLinkDraftDefaults 的 per-vendor 解析(消费方直接读)。
    */
   worktreeEnabled?: boolean;
+  /**
+   * 被控端新建任务当前选中的引擎(vendor 无关根字段)。控制端进入「到这台电脑新建任务」时
+   * 切到这个引擎;旧版被控端不回 → undefined → 保持控制端当前引擎。
+   */
+  selectedAgentKind?: AgentKind;
 }
 
 /** 校准后可直接 seed 控制端草稿 holder 的一组值。 */

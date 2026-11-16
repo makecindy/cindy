@@ -9,6 +9,7 @@ import {
 const NOW_MS = Date.UTC(2026, 6, 22, 12, 0, 0);
 const KEY = '018f4ec7-c6d8-7f10-8d43-9f8791d33000';
 const NEXT_KEY = '018f4ec7-c6d8-7f10-8d43-9f8791d33001';
+const ACCOUNT = { email: 'person@example.com', accountId: 'workspace-123456789' };
 
 function response(over: Partial<AccountRateLimitsResponse> = {}): AccountRateLimitsResponse {
   return {
@@ -48,10 +49,7 @@ function harness(over: Partial<Parameters<typeof createCodexRateLimitResetServic
   const deps = {
     readRateLimits: vi.fn().mockResolvedValue(response()),
     consumeResetCredit: vi.fn().mockResolvedValue({ outcome: 'reset' as const }),
-    readAccountIdentity: vi.fn().mockResolvedValue({
-      email: 'person@example.com',
-      accountId: 'workspace-123456789',
-    }),
+    readAccountIdentity: vi.fn().mockResolvedValue(ACCOUNT),
     recordRateLimitSnapshot: vi.fn().mockResolvedValue(undefined),
     now: () => NOW_MS,
     createIdempotencyKey: vi.fn()
@@ -94,13 +92,14 @@ describe('Codex rate-limit reset control plane', () => {
     expect(snapshot.rateLimitResetCredits?.credits?.[0]).not.toHaveProperty('id');
     expect(deps.recordRateLimitSnapshot).toHaveBeenCalledWith(expect.objectContaining({
       primary: expect.objectContaining({ windowMinutes: 300 }),
-    }));
+    }), ACCOUNT);
 
     await service.consume(KEY);
     expect(deps.consumeResetCredit).toHaveBeenCalledWith({
       idempotencyKey: KEY,
       creditId: 'earlier',
-    });
+    }, ACCOUNT);
+    expect(vi.mocked(deps.consumeResetCredit).mock.calls[0][1]).toBe(ACCOUNT);
   });
 
   function detailedHarness(over: Partial<Parameters<typeof createCodexRateLimitResetService>[0]> = {}) {
@@ -127,7 +126,7 @@ describe('Codex rate-limit reset control plane', () => {
     await service.consume(later.resetOffer!.idempotencyKey);
     expect(deps.consumeResetCredit).toHaveBeenCalledExactlyOnceWith({
       idempotencyKey: later.resetOffer!.idempotencyKey, creditId: 'later',
-    });
+    }, ACCOUNT);
   });
 
   it('joins retries of the selected row and blocks another row during the same attempt', async () => {
@@ -160,7 +159,7 @@ describe('Codex rate-limit reset control plane', () => {
     await expect(service.consume(snapshot.resetOffer!.idempotencyKey)).rejects.toMatchObject({ reason: 'RESET_IN_PROGRESS' });
     await service.consume(key);
     expect(consumeResetCredit.mock.calls).toEqual([
-      [{ idempotencyKey: key, creditId: 'later' }], [{ idempotencyKey: key, creditId: 'later' }],
+      [{ idempotencyKey: key, creditId: 'later' }, ACCOUNT], [{ idempotencyKey: key, creditId: 'later' }, ACCOUNT],
     ]);
   });
 
@@ -179,7 +178,7 @@ describe('Codex rate-limit reset control plane', () => {
     expect(refreshed.resetOffer).toMatchObject({ idempotencyKey: key, retryOnly: true });
     await expect(service.consume(refreshed.resetOffer!.idempotencyKey)).resolves.toMatchObject({ outcome: 'alreadyRedeemed' });
     expect(consumeResetCredit.mock.calls).toEqual([
-      [{ idempotencyKey: key, creditId: 'later' }], [{ idempotencyKey: key, creditId: 'later' }],
+      [{ idempotencyKey: key, creditId: 'later' }, ACCOUNT], [{ idempotencyKey: key, creditId: 'later' }, ACCOUNT],
     ]);
   });
 
@@ -227,7 +226,7 @@ describe('Codex rate-limit reset control plane', () => {
     expect(deps.recordRateLimitSnapshot).toHaveBeenCalledWith(expect.objectContaining({
       primary: expect.objectContaining({ windowMinutes: 300 }),
       credits: { hasCredits: false, unlimited: false, balance: null },
-    }));
+    }), ACCOUNT);
   });
 
   it('reuses a count-only offer and lets app-server select the credit', async () => {
@@ -255,7 +254,7 @@ describe('Codex rate-limit reset control plane', () => {
     expect(createIdempotencyKey).toHaveBeenCalledOnce();
 
     await service.consume(KEY);
-    expect(deps.consumeResetCredit).toHaveBeenCalledWith({ idempotencyKey: KEY });
+    expect(deps.consumeResetCredit).toHaveBeenCalledWith({ idempotencyKey: KEY }, ACCOUNT);
   });
 
   it('replaces an unused offer when a fresh read selects a different credit', async () => {
@@ -286,7 +285,7 @@ describe('Codex rate-limit reset control plane', () => {
     expect(deps.consumeResetCredit).toHaveBeenCalledWith({
       idempotencyKey: NEXT_KEY,
       creditId: 'replacement',
-    });
+    }, ACCOUNT);
   });
 
   it('coalesces concurrent consumes and caches the terminal result for retries', async () => {
@@ -346,11 +345,11 @@ describe('Codex rate-limit reset control plane', () => {
     expect(deps.consumeResetCredit).toHaveBeenNthCalledWith(1, {
       idempotencyKey: KEY,
       creditId: 'earlier',
-    });
+    }, ACCOUNT);
     expect(deps.consumeResetCredit).toHaveBeenNthCalledWith(2, {
       idempotencyKey: NEXT_KEY,
       creditId: 'later',
-    });
+    }, ACCOUNT);
   });
 
   it('does not evict an in-flight offer when the registry reaches its soft limit', async () => {

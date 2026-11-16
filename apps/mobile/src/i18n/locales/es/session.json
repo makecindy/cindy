@@ -712,6 +712,7 @@
     "REMOTE_AGENT_DEVICE_LIMIT": "Este dispositivo alcanzó su límite de sesiones remotas. Archiva las sesiones que no uses o pide al propietario del proveedor que aumente el límite en Remoto y compartido.",
     "REMOTE_AGENT_TOTAL_LIMIT": "La computadora del proveedor alcanzó su límite total de sesiones remotas. Pídele al propietario que libere las sesiones que no use o que aumente el límite en Remoto y compartido.",
     "REMOTE_AGENT_RESUME_LOST": "No se pudo reconectar con la conversación anterior en la otra computadora. El Agent continúa sin ese contexto.",
+    "REMOTE_AGENT_RESUME_UNAVAILABLE": "Este equipo no puede restaurar el estado anterior de la sesión. Selecciona un modelo de otro equipo o proveedor para continuar mediante una transferencia de contexto. Los mensajes existentes se conservan.",
     "REMOTE_AGENT_UNSUPPORTED": "Este Agent no está disponible en la otra computadora. Instálalo o inicia sesión allí, o elige otro Agent.",
     "REMOTE_AGENT_INVALID": "Algo salió mal al comunicarse con la computadora que ejecuta el Agent. Vuelve a intentarlo; si sigue pasando, actualiza Cindy en ambas computadoras.",
     "REMOTE_AGENT_RESUME_REJECTED": "El ordenador que ejecuta el modelo no puede reanudar esta sesión. Crea una nueva sesión desde la lista de sesiones y copia el contenido que necesites para continuar. La sesión original y los mensajes en cola se conservan.",

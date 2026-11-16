@@ -1,3 +1,4 @@
+import { setSessionEffort, setSessionFastMode } from '../../../desktop/src/main/maker-host/session-effort-store.js';
 const appliedSettings = new WeakMap();
 
 /** Initial facts come from the same options that constructed the live Session. */
@@ -41,12 +42,17 @@ export async function applyLiveSessionSettings(live, patch, stored) {
     remember({ model: patch.model ?? stored.model,
       ...(Object.hasOwn(patch, 'providerId') ? { providerId: patch.providerId } : {}),
       ...(typeof patch.effort === 'string' ? { effort: patch.effort } : {}) });
+    // The proxy's provider bridges read this store, as on the desktop (register.ts).
+    if (typeof patch.effort === 'string' && typeof live.id === 'string') setSessionEffort(live.id, patch.effort);
   } else if (typeof patch.effort === 'string') {
     await live.setEffort(patch.effort);
+    if (typeof live.id === 'string') setSessionEffort(live.id, patch.effort);
     remember({ effort: patch.effort });
   }
   if (typeof patch.fastMode === 'boolean' || patch.fastMode === 'ultrafast') {
     await live.setFastMode(patch.fastMode);
+    // Pi's price tier reads this store, as on the desktop (start-options.ts).
+    if (typeof live.id === 'string') setSessionFastMode(live.id, patch.fastMode);
     remember({ fastMode: patch.fastMode });
   }
   if (typeof patch.planModeEnabled === 'boolean') {

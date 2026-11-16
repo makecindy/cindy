@@ -1,3 +1,8 @@
+import { ProjectSettingsSheet } from '@/session/ProjectSettingsSheet';
+import { useRemoteProjectAliases } from '@/session/remoteProjectAliases';
+import { projectAliasComparisonKey, projectDirectoryName } from '@cindy/maker-shared/project-alias-sync';
+import { ProjectPickerIcon } from '@/session/ProjectPickerIcon';
+import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { playHaptic } from '@/platform/haptics';
 import { parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
 import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
@@ -30,7 +35,7 @@ import { HomeNewTaskButton } from '@/session/HomeNewTaskButton';
 import { RecentMessageHistories, MessageHistoryOverlay } from '@/session/RecentMessageHistories';
 import { rememberRecentTask } from '@/session/recentTasks';
 import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
-import { keyboardControlRegion, sharedStatusRowDrawerTop, sharedStatusRowTrailingReserve, type LayoutRect } from '@/platform/windowGeometry';
+import { floatingTopRow, keyboardControlRegion, sharedStatusRowDrawerTop, sharedStatusRowTrailingReserve, type LayoutRect } from '@/platform/windowGeometry';
 import { useAdaptiveWindow, useAdaptiveWindowDimensions, PaneViewportProvider } from '@/platform/AdaptiveWindowContext';
 import { useSessionHeaderHeight } from '@/session/useSessionHeaderHeight';
 import { useDoubleTap } from '@/session/useDoubleTap';
@@ -326,6 +331,8 @@ import { OrcaTeamPanelView, OrcaWorkerFormView } from '@/session/ContextSheetCol
 import { OrcaWorkerDirectoryPicker } from '@/session/OrcaWorkerDirectoryPicker';
 import { useSessionOrcaCollab } from '@/session/useSessionOrcaCollab';
 import { orcaWorkerProvidersForLead, subscribeOrcaStartFailure, takeOrcaStartFailure } from '@/session/orcaTeam';
+import { ContextSheetMediaAddButton, useContextSheetMediaSelection } from '@/session/ContextSheetMediaSelection';
+import { contextSheetMediaUploadCandidates } from '@/session/contextSheetMediaUpload';
 import { RecentPhotosStrip } from '@/session/ContextSheetMediaViews';
 import { ContextSheetGoalView, goalStatusLabel } from '@/session/ContextSheetGoalView';
 import { parseGoalLimitsRouteParam } from '@/session/goalLimitsRouteParam';
@@ -355,7 +362,6 @@ import type { MobileMessageGalleryImage } from '@/session/messageGallery';
 import { canBrowsePhotoLibraryDirectly } from '@/session/photoLibraryPolicy';
 import {
   prefetchContextSheetMediaAssets,
-  resolveContextSheetMediaAssetForUpload,
   type ContextSheetMediaAsset,
 } from '@/session/useContextSheetMediaAssets';
 import { sessionCollaborationLabel } from '@/session/collaboration';
@@ -512,7 +518,7 @@ import { ComposerFrame, nativeComposerFrameAvailable } from '@/session/ComposerF
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
 import { VoicePillWidthFrame } from '@/session/voicePillWidthMotion';
 import { useMobileVoiceProcessingIndicator } from '@/session/useMobileVoiceProcessingIndicator';
-import { useHandheldVoiceKey } from '@/handheld/handheldMode';
+import { useHandheldSessionControls, useHandheldVoiceKey } from '@/handheld/handheldMode';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
 import { useComposerResize } from '@/session/useComposerResize';
@@ -520,7 +526,6 @@ import { ComposerPullThroughScrollView, useComposerPullThroughBridge, type Compo
 import { useMobileKeyboardState } from '@/session/useMobileKeyboardState';
 import { buildSessionComposerLayout } from '@/session/sessionComposerLayout';
 import { discardMobileUploadedAttachment } from '@/session/mobileAttachmentUpload';
-import { buildMobileImageAttachmentCandidate } from '@/session/mobileImageAttachment';
 import { useMobileLocalAttachments } from '@/session/useMobileLocalAttachments';
 import {
   getSentMessageImagePreview,
@@ -3180,8 +3185,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 留在遮罩下原地不动,不随抽屉开合收起。
   // Duo shares the status area with its native toolbar. Its measured height
   // already includes that area; safeArea.top + 44 would count the toolbar twice.
+  // With the native toolbar on the side, the content owns its top row and
+  // needs breathing room even when UIKit reports no top safe-area inset.
+  const sessionHeaderTop = horizontalSystemHeader ? nativeHeaderHeight
+    : adaptiveWindow.barEdge !== 'none' ? Math.max(
+      floatingTopRow(adaptiveWindow, navigationChrome.target).top,
+      insets.top + (paneLayout.persistent ? spacing.lg : 0))
+    : insets.top + (paneLayout.persistent ? spacing.lg : 0);
   const topChromeHeight = Math.max(topOverlayHeight,
-    horizontalSystemHeader ? nativeHeaderHeight : insets.top + navigationChrome.target);
+    horizontalSystemHeader ? nativeHeaderHeight : sessionHeaderTop + navigationChrome.target);
   // The drawer covers that toolbar; put the drawer's own header in the same row instead of
   // below the whole status area.
   const sessionListDrawerTopInset = horizontalSystemHeader
@@ -7484,6 +7496,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     sendLatestRef.current = send;
   });
 
+  const handheldSendTarget = useHandheldSessionControls(sessionId, () => {
+    if (!navigation.isFocused() || !canUseComposer || !composerSendTargetEnabledRef.current
+      || !draftRef.current.trim() || !composerDraftHydrated
+      || sendInFlightRef.current || messageEditSubmittingRef.current
+      || voiceRecordingActiveRef.current || voiceStartupInFlightRef.current
+      || voiceStopInFlightRef.current || voiceState === 'listening' || voiceIsProcessing) return;
+    playHaptic('commit');
+    void sendLatestRef.current?.();
+  }, !(contextSheetOpen || modelSheetOpen || permissionSheetOpen || settingsOpen || sideChatsOpen
+    || searchOpen || extraDirBrowseOpen || sessionListDrawerOverlayMounted || shareSelectionActive));
+
   const applyProjectionIfCurrent = useCallback((projection: InputProjection, expectedEpoch: number) => {
     remoteSessionStore.setInputProjectionIfCurrent(sessionId, projection, expectedEpoch);
   }, [sessionId]);
@@ -7879,6 +7902,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ) : composerShowSendButton ? (
         <RouteActionButton
           ref={sendButtonRef}
+          nativeID={handheldSendTarget}
           accessibilityLabel={voiceIsListening ? t('session.screen.voiceStopAndSend') : t('session.screen.sendMessage')}
           accessibilityHint={composerLayout.send.disabledReason ?? composerLayout.guidanceText}
           disabled={composerSendDisabled}
@@ -8875,38 +8899,20 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     }
     return ids;
   }, [pendingUploads]);
-  // 单张点按即同步入队，再关闭面板；不等待鉴权或上传才占用附件槽位。
-  const toggleMediaAssetAttachment = useCallback((asset: ContextSheetMediaAsset, dismiss?: (afterClose: () => void) => void) => {
-    if (mediaTapAcceptedRef.current || mediaAssetAttachments[asset.id] || uploadingMediaAssetIds.has(asset.id)) return;
-    if (attachments.length + getPendingUploadCount() >= MOBILE_MAX_ATTACHMENTS) {
+  // 点照片是一张、底部「加入对话」是选择圈选中的多张：都同步入队，再关闭面板；
+  // 不等待鉴权或上传才占用附件槽位。
+  const addMediaAssetAttachments = useCallback((assets: readonly ContextSheetMediaAsset[], dismiss?: (afterClose: () => void) => void) => {
+    if (mediaTapAcceptedRef.current) return;
+    const fresh = assets.filter((asset) => !mediaAssetAttachments[asset.id] && !uploadingMediaAssetIds.has(asset.id));
+    if (fresh.length === 0) return;
+    if (attachments.length + getPendingUploadCount() + fresh.length > MOBILE_MAX_ATTACHMENTS) {
       setAttachmentError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS }));
       return;
     }
     mediaTapAcceptedRef.current = true;
     setAttachmentError(null);
-    enqueueUploads([{
-      kind: 'image' as const,
-      uri: asset.uri,
-      name: asset.filename,
-      size: 0,
-      sourceId: asset.id,
-      resolve: async () => {
-        const resolved = await resolveContextSheetMediaAssetForUpload(asset);
-        const candidate = buildMobileImageAttachmentCandidate({
-          fileName: resolved.filename,
-          uri: resolved.uri,
-        }, 0);
-        return {
-          uri: candidate.uri,
-          name: candidate.name,
-          mimeType: candidate.mimeType,
-          width: resolved.width,
-          height: resolved.height,
-          // HEIC 已在 resolve 阶段一次性转码 + 缩边,跳过 preprocess 防二次有损。
-          skipPreprocess: resolved.optimized === true,
-        };
-      },
-    }], { token: auth.getAccessToken() });
+    // 候选带上选中序号:并发上传谁先传完都按选中顺序进托盘。
+    enqueueUploads(contextSheetMediaUploadCandidates(fresh), { token: auth.getAccessToken() });
     const restoreEditing = () => {
       // The sheet hides the keyboard while WebView can retain DOM focus.
       // Release it after dismissal so focus() can open the keyboard again.
@@ -8919,6 +8925,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       restoreEditing();
     }
   }, [auth, enqueueUploads, attachments.length, getPendingUploadCount, mediaAssetAttachments, uploadingMediaAssetIds, t]);
+  const toggleMediaAssetAttachment = useCallback(
+    (asset: ContextSheetMediaAsset, dismiss?: (afterClose: () => void) => void) => addMediaAssetAttachments([asset], dismiss),
+    [addMediaAssetAttachments],
+  );
+  // 选择圈多选的待选集：留在面板里，点底部按钮才一起加入；没提交就关掉面板即放弃。
+  const mediaSelection = useContextSheetMediaSelection({
+    open: contextSheetOpen,
+    getRemainingSlots: () => MOBILE_MAX_ATTACHMENTS - attachments.length - getPendingUploadCount(),
+    onLimitReached: () => setAttachmentError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS })),
+    onChanged: () => setAttachmentError(null),
+  });
   // 勾选态按「映射的附件仍在列表里」现算,附件被单独移除 / 发送清空后角标自动消失。
   const selectedMediaAssetIds = useMemo(() => {
     const attachmentIds = new Set(attachments.map((item) => item.id));
@@ -10364,6 +10381,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     </>
       ) : (
         <SessionHeaderBar
+              deviceId={deviceId}
               horizontalSystemHeader={horizontalSystemHeader}
               currentSession={currentSession}
               diffCount={diffCount}
@@ -10465,7 +10483,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             </View>
           ) : null}
           {/* iOS chat headers sit on the task header's feathered blur; an opaque band left a hard edge. */}
-          <View style={[styles.sessionChromeContent, { paddingTop: horizontalSystemHeader ? nativeHeaderHeight : insets.top + (paneLayout.persistent ? spacing.lg : 0) }, companionChat && Platform.OS !== 'ios' && { backgroundColor: colors.surface }]}>
+          <View style={[styles.sessionChromeContent, { paddingTop: sessionHeaderTop }, companionChat && Platform.OS !== 'ios' && { backgroundColor: colors.surface }]}>
             {headerNode}
 
             {cloudHomeActor && cloudHomeUnreachable ? (
@@ -10644,7 +10662,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 disabled={!canUseComposer}
                 enabled={contextSheetOpen}
                 onToggleAsset={toggleMediaAssetAttachment}
-
+                selection={mediaSelection}
                 selectedAssetIds={selectedMediaAssetIds}
                 testID="session.contextSheetPhotos"
               />
@@ -10670,6 +10688,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
               label={t('session.collab.createWorkerSubmit')}
               onPress={() => void collab.submitCreate()}
               testID="session.collabCreateWorkerButton"
+            />
+          ) : contextSheetView === 'main' && contextSheetMediaLibraryEnabled && mediaSelection.assets.length > 0 ? (
+            <ContextSheetMediaAddButton
+              disabled={!canUseComposer}
+              onAddAssets={addMediaAssetAttachments}
+              selection={mediaSelection}
+              testID="session.contextSheetAddPhotosButton"
             />
           ) : undefined}
           testID="session.contextSheet"
@@ -11805,6 +11830,7 @@ function SessionChromeLayer({
 type SessionHeaderIcon = typeof Folder;
 
 function SessionHeaderBar({
+  deviceId,
   horizontalSystemHeader,
   noticeOverride,
   currentSession,
@@ -11834,6 +11860,7 @@ function SessionHeaderBar({
   searchOpen,
   title,
 }: {
+  deviceId: string;
   horizontalSystemHeader: boolean;
   noticeOverride?: string;
   currentSession: RemoteSession | null;
@@ -11874,6 +11901,39 @@ function SessionHeaderBar({
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
+  const projectDirectory = currentSession && sessionProjectDirectory(currentSession);
+  const hostProjectKey = projectDirectory
+    ? currentSession?.remoteHostId
+      ? `remote:${encodeURIComponent(currentSession.remoteHostId)}:${projectDirectory}`
+      : `local:${projectDirectory}`
+    : null;
+  const projectInfo = useRemoteProjectAliases().get(deviceId);
+  const projectComparison = projectInfo && hostProjectKey && projectAliasComparisonKey(hostProjectKey, projectInfo.platform);
+  const projectName = projectInfo?.aliases.find(row => projectAliasComparisonKey(row.projectKey, projectInfo.platform) === projectComparison)?.alias
+    || (projectDirectory ? projectDirectoryName(projectDirectory) : '');
+  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
+  useEffect(() => setProjectSettingsOpen(false), [deviceId, hostProjectKey]);
+  const canShowProject = !messageOnly && !isDeviceAccessRevoked && !sharedTaskEnded
+    && !isSharedTaskPeer(deviceId) && currentSession?.workspaceKind !== 'dialogue' && !!projectDirectory;
+  const projectSettings = projectSettingsOpen && canShowProject && hostProjectKey && projectDirectory ? (
+    <ProjectSettingsSheet key={`${deviceId}:${hostProjectKey}`} deviceId={deviceId}
+      projectKey={hostProjectKey} directory={projectDirectory} title={projectName} deviceName={deviceDisplayName(deviceId)}
+      visible onClose={() => setProjectSettingsOpen(false)} />
+  ) : null;
+  const projectIcon = useMemo(() => !messageOnly && !isDeviceAccessRevoked && !sharedTaskEnded
+    ? currentSession?.workspaceKind === 'dialogue'
+      ? <View style={{ width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}>
+          <MessagesSquare size={iconSize.md} strokeWidth={iconStroke.thin} color={colors.textSecondary} />
+        </View>
+      : canShowProject && projectDirectory
+        ? <Pressable accessibilityRole="button" accessibilityLabel={t('settings.projectInfo.title')}
+            onPress={() => setProjectSettingsOpen(true)} hitSlop={12}
+            style={{ width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}>
+            <ProjectPickerIcon deviceId={deviceId} workingDir={projectDirectory}
+              remoteHostId={currentSession?.remoteHostId} size={iconSize.action} />
+          </Pressable>
+        : null
+    : null, [messageOnly, isDeviceAccessRevoked, sharedTaskEnded, currentSession?.workspaceKind, currentSession?.remoteHostId, canShowProject, projectDirectory, colors.textSecondary, deviceId, t]);
   const overview = currentSession
     ? summarizeSessionOverview({
         diffCount,
@@ -11930,14 +11990,14 @@ function SessionHeaderBar({
   // Let UINavigationBar align controls with the system status area, including Duo portrait.
   if (horizontalSystemHeader) {
     const files = overview?.actions.find((action) => action.id === 'files');
-    return <SessionStackHeader titleMaxWidth={nativeTitleMaxWidth}
+    return <>{projectSettings}<SessionStackHeader projectIcon={projectIcon} titleMaxWidth={nativeTitleMaxWidth}
       title={title} pinned={!messageOnly && !!currentSession?.pinnedAt}
       tags={isDeviceAccessRevoked ? undefined : currentSession?.tags} onTagsPress={onOpenSettings}
       onTitleDoubleTap={titleDoubleTap} syncing={syncing} syncingImmediately={syncingImmediately} notice={notice}
       available={!!currentSession} detailsOnly={workerHeader}
       filesDisabled={!files || files.disabled} filesDisabledReason={files?.disabledReason}
       onFiles={onOpenFiles} onDetails={onOpenSettings} onDesktop={onOpenRemoteDesktop}
-      screen={liveScreen} onBack={onBack} onOpenSessionList={onOpenSessionList} />;
+      screen={liveScreen} onBack={onBack} onOpenSessionList={onOpenSessionList} /></>;
   }
 
   // 分享选择模式只保留全选；底部关闭按钮负责退出。
@@ -11958,6 +12018,7 @@ function SessionHeaderBar({
   }
   return (
     <View style={[styles.sessionHeaderBar, nativeHeader && styles.sessionHeaderBarNative]} testID="session.summary">
+      {projectSettings}
       <SystemNavigationBack label={t('shared.back')} onPress={onBack} />
       {sessionListButton}
       {systemBack ? (
@@ -11978,6 +12039,7 @@ function SessionHeaderBar({
 
       {nativeHeader ? <SessionHeaderNativeTitle
         title={sharedTaskEnded ? t('sharedTask.ended') : title}
+        projectIcon={projectIcon}
           tags={isDeviceAccessRevoked ? undefined : currentSession?.tags}
           onTagsPress={onOpenSettings}
           onTitleDoubleTap={titleDoubleTap}
@@ -11987,8 +12049,7 @@ function SessionHeaderBar({
         notice={notice}
       /> : (
       // 双击标题改名;不参与读屏焦点,读屏用户从「任务详情」进入重命名。
-      <Pressable accessible={false} disabled={!titleDoubleTap} onPress={handleTitlePress}
-        style={styles.sessionHeaderTextBlock} testID="session.titleArea">
+      <View style={styles.sessionHeaderTextBlock}>
         <View style={styles.sessionHeaderTitleRow}>
           {!messageOnly && currentSession?.pinnedAt ? (
             <Pin
@@ -11997,9 +12058,13 @@ function SessionHeaderBar({
               strokeWidth={iconStroke.regular}
             />
           ) : null}
+          {projectIcon}
+          <Pressable accessible={false} disabled={!titleDoubleTap} onPress={handleTitlePress}
+            style={{ flexShrink: 1, minWidth: 0, minHeight: 44, justifyContent: 'center' }} testID="session.titleArea">
           <Text numberOfLines={1} style={styles.sessionHeaderTitle} testID="session.title">
             {sharedTaskEnded ? t('sharedTask.ended') : title}
           </Text>
+          </Pressable>
           <TaskTagDots
               tags={isDeviceAccessRevoked ? undefined : currentSession?.tags}
               maxVisible={7}
@@ -12012,7 +12077,7 @@ function SessionHeaderBar({
             {notice}
           </Text>
         ) : null}
-      </Pressable>
+      </View>
       )}
 
       {sharedTaskEnded || systemBack ? null : nativeHeader ? (
@@ -13339,6 +13404,7 @@ interface RouteActionButtonProps {
   disabled?: boolean;
   disabledStyle?: StyleProp<ViewStyle>;
   hitSlop?: PressableProps['hitSlop'];
+  nativeID?: string;
   onLayout?: PressableProps['onLayout'];
   onLongPress?: () => void;
   onPress?: () => void;
@@ -13367,6 +13433,7 @@ const RouteActionButton = forwardRef<ViewInstance, RouteActionButtonProps>(funct
   disabled = false,
   disabledStyle,
   hitSlop,
+  nativeID,
   onLayout,
   onLongPress,
   onPress,
@@ -13418,6 +13485,7 @@ const RouteActionButton = forwardRef<ViewInstance, RouteActionButtonProps>(funct
       delayLongPress={delayLongPress}
       disabled={interactionDisabled}
       hitSlop={hitSlop}
+      nativeID={nativeID}
       onLayout={onLayout}
       onLongPress={interactionDisabled ? undefined : onLongPress}
       onPress={interactionDisabled ? undefined : handlePress}

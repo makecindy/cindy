@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { groupWorkRuns, type MessageRenderItem, type ToolSegmentRenderItem, type RenderItem } from '@/components/chat/messageWorkGroups';
 import { readBotGroupProcessMessages, projectBotGroupProcess, type BotGroupProcessMessage } from '@cindy/maker-shared/botGroupChat';
-import { botProcessItems, botTurnContinuations, latestSettledAssistantMs, simplifyBotRenderItems, tailReplyClientIds } from '../botConversationPresentation';
+import { botProcessItems, botTurnContinuations, botUnreadBoundaryItemKey, latestSettledAssistantMs, simplifyBotRenderItems, tailReplyClientIds } from '../botConversationPresentation';
+import { findFirstUnreadBotReplyClientId } from '../botConversationTimeline';
 
 const message = (id: string, role: ChatMessage['role'], content = id,
   extra: Partial<ChatMessage> = {}): MessageRenderItem => ({
@@ -53,6 +54,74 @@ it('keeps working prose through streaming metadata and tools, folding only after
 });
 
 describe('teammate final-result presentation', () => {
+  // User screenshot: NEW split one portrait's process from its result. The old
+  // unread tests only selected a message ID, never its production render group.
+  // Unit tier: group real process/reply items, then assert the displayed boundary.
+  const unreadKey = (rows: RenderItem[], boundary = 5_000, streaming = false) => {
+    const items = botProcessItems(groupWorkRuns(rows, streaming), streaming);
+    const unread = findFirstUnreadBotReplyClientId(items.flatMap(item =>
+      item.type === 'message' ? [item.message] : []), boundary);
+    return { items, key: botUnreadBoundaryItemKey(items, unread, botTurnContinuations(items)) };
+  };
+
+  it('puts NEW before the same-turn process, including intervening media', () => {
+    const rows: RenderItem[] = [message('u', 'user'), tool('one'),
+      { type: 'tool_media', key: 'media-one', items: [{ kind: 'image', url: 'xdt-image://fixture.png' }] },
+      message('answer', 'assistant', 'Result', { createdAt: new Date(7_000).toISOString(), turnCompleted: true })];
+    const { items, key } = unreadKey(rows);
+    expect(key).toBe(items.find(item => item.type === 'work_group')?.key);
+    expect(key).not.toBe('msg-answer');
+  });
+
+  it.each([true, false])('does not cross a completed reply into a previous turn (user boundary=%s)', userBoundary => {
+    const { items, key } = unreadKey([message('u', 'user'), tool('one'),
+      message('old', 'assistant', 'Read result', { createdAt: new Date(4_000).toISOString(), turnCompleted: true }),
+      ...(userBoundary ? [message('u2', 'user')] : []), tool('two'),
+      message('answer', 'assistant', 'New result', { createdAt: new Date(7_000).toISOString(), turnCompleted: true })]);
+    const replyIndex = items.findIndex(item => item.key === 'msg-answer');
+    expect(key).toBe(items[replyIndex - 1]?.key);
+    expect(items[replyIndex - 1]?.type).toBe('work_group');
+  });
+
+  it('keeps NEW outside the process when live commentary folds on completion', () => {
+    const prefix = [message('u', 'user'), tool('one'), message('progress', 'assistant', 'Working', {
+      assistantPhase: 'commentary', createdAt: new Date(6_000).toISOString(),
+    })];
+    for (const streaming of [true, false]) {
+      const { items, key } = unreadKey([...prefix, message('answer', 'assistant', 'Result', {
+        assistantPhase: 'final_answer', createdAt: new Date(7_000).toISOString(),
+        isStreaming: streaming, turnCompleted: !streaming,
+      })], 5_000, streaming);
+      expect(key).toBe(items.find(item => item.type === 'work_group')?.key);
+    }
+  });
+
+  it('keeps a reply at its own boundary across an unloaded history gap or without a process', () => {
+    const answer = message('answer', 'assistant', 'Result', { createdAt: new Date(4_000_000).toISOString(), turnCompleted: true });
+    const oldTool = tool('old');
+    oldTool.toolCalls[0].createdAt = new Date(1_000).toISOString();
+    for (const rows of [[answer], [message('u', 'user'), oldTool, answer]]) {
+      expect(unreadKey(rows).key).toBe('msg-answer');
+    }
+    expect(unreadKey([answer], 5_000_000).key).toBeNull();
+  });
+
+  it('keeps NEW visible if the process was cropped out of the render window', () => {
+    const { items } = unreadKey([message('u', 'user'), tool('one'),
+      message('answer', 'assistant', 'Result', { createdAt: new Date(7_000).toISOString(), turnCompleted: true })]);
+    const reply = items.find(item => item.key === 'msg-answer')!;
+    expect(botUnreadBoundaryItemKey([reply], 'answer', botTurnContinuations(items))).toBe('msg-answer');
+    const first = message('first', 'assistant', 'First part', { createdAt: new Date(6_000).toISOString() });
+    const continuation = [items[1]!, first, reply];
+    expect(botUnreadBoundaryItemKey([first, reply], 'answer', botTurnContinuations(continuation))).toBe('msg-first');
+  });
+
+  it('does not pull an unread system-card result into the preceding process', () => {
+    const { key } = unreadKey([message('u', 'user'), tool('one'),
+      message('receipt', 'assistant', 'Delivered', { createdAt: new Date(7_000).toISOString(), systemCardType: 'bot-session-task-message' })]);
+    expect(key).toBe('msg-receipt');
+  });
+
   // #8864: the production projection must keep the process and answer under one
   // portrait without joining separate user/proactive turns. Existing UI fixtures
   // only covered a single turn. Unit tier; two tools and sealed answers suffice.

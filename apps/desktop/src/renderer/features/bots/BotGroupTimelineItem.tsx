@@ -31,6 +31,7 @@ import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from '@/components/chat/ChatBubble';
 import { SessionQuickSendProvider } from '@/components/chat/SessionQuickSendContext';
 import { ShareMessageCheckbox } from '@/components/chat/ShareMessageCheckbox';
+import { CHAT_MESSAGE_LOCATE_TRANSITION_CLASS, CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS } from '@/components/chat/chatChrome';
 import { Button } from '@/components/ui/button';
 import { SHARE_EXCLUDE_ATTR, SHARE_MESSAGE_ATTR, SHARE_SESSION_ATTR } from '@/lib/shareConversationImage';
 import { ChatReadReceipt } from './ChatMessageReaders';
@@ -358,10 +359,11 @@ function Row({ message, highlighted, focusable, entering, block, children }: {
       data-bot-group-message-id={message.id}
       tabIndex={focusable ? -1 : undefined}
       className={cn(
-        'rounded-lg outline-none transition-colors first:mt-0',
+        'rounded-lg outline-none first:mt-0',
+        CHAT_MESSAGE_LOCATE_TRANSITION_CLASS,
         block === 'continued' ? 'mt-0.5' : block === 'author' ? 'mt-3.5' : 'mt-3',
         entering && 'animate-fade-in motion-reduce:animate-none',
-        highlighted && 'bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)]',
+        highlighted && CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS,
       )}
     >
       {children}

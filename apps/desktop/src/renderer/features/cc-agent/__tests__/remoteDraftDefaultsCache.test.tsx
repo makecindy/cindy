@@ -1,3 +1,4 @@
+import { nextRemoteDraftEngine, resetRemoteDraftEngineFollow } from '../remoteDraftEngineFollow';
 // @vitest-environment jsdom
 import { useRemoteDraftDefaults, useRemoteDraftSelection, useRemoteDraftPush } from '../useRemoteDraftDefaults';
 import type { AgentKind, AgentCapabilities } from '@/hooks/useAgentCapabilities';
@@ -146,4 +147,21 @@ it('refreshes after relay reconnection without hiding the cached choice', async 
   expect(page.invoke).toHaveBeenCalledTimes(2);
   expect(page.state.remoteDraftState.status).toBe('ready');
   expect(page.state.dlSel?.model).toBe('new-choice');
+});
+
+// #10731 P1，unit：缓存已就绪不代表本次引擎已确认；旧用例只验证模型配置缓存。
+// 最小失败时序：缓存 Claude，重新进入后本次 RPC 返回 Codex。
+it('follows the freshly confirmed engine rather than settling on a cached engine', async () => {
+  resetRemoteDraftEngineFollow();
+  rememberRemoteDraftDefaults('engine-refresh', 'pi', { ...defaults('chosen'), selectedAgentKind: 'claude-code' });
+  const page = mount('engine-refresh', 'pi');
+  const follow = () => nextRemoteDraftEngine({
+    ownerId: getDataOwnerGeneration().dataOwnerId, deviceId: 'engine-refresh', currentVendor: 'pi',
+    defaultsReady: page.state.confirmedEngineRef.current !== null,
+    selectedAgentKind: page.state.confirmedEngineRef.current?.selectedAgentKind,
+  });
+  expect(follow()).toBeNull();
+  await act(async () => page.resolveRead({ ...defaults('chosen'), selectedAgentKind: 'codex' }));
+  expect(follow()).toBe('codex');
+  resetRemoteDraftEngineFollow();
 });
