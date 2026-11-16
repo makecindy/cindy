@@ -240,7 +240,10 @@ describe('Chat Server result delivery and refresh', () => {
       }
       if (route.includes('/plans')) return { body: route.includes(planId) || plan.status === 'waiting' ? [plan] : [] };
       if (route.endsWith('/executions')) return { body: executions };
-      if (route.endsWith('/snapshot')) return { body: { ...response(route).body, reads: [{ thread_key: 'main', read_seq: '1' }] } };
+      if (route.endsWith('/snapshot')) return { body: { ...response(route).body,
+        // Stopping the plan requires an owned companion under the Nov 16 ownership rule.
+        members: [{ id: botId, kind: 'bot', name: 'Bot', state: 'joined', role: 'member', ownerActorId: selfId, ownerName: 'Me', guestAccess: 'chat' }],
+        reads: [{ thread_key: 'main', read_seq: '1' }] } };
       return response(route);
     });
     const waiting = await service.getGroup(roomId);
