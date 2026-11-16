@@ -763,8 +763,8 @@ export type GhostMessageHook = (typeof GHOST_MESSAGE_HOOKS)[number];
  * - 插件只能收紧：`allow` 只表示"不反对"，不能替用户批准本来需要确认的事；
  * - 只问用户在该任务里选定的插件(任务的 preRunPlugin)，不是装了就管所有任务；
  * - 出错(没装/停用/超时/崩溃/熔断)怎么办由用户在任务里设置(onFailure)，插件不能自报；
- * - 只有用户在安装/更新确认里看到过的节点才可被选用(receipt approvedControlPoints)，
- *   防止插件提前写上 Host 还不认识的节点名、Host 升级后静默获得拦截权。
+ * - 旧控制节点沿用 receipt approvedControlPoints；任务运行时五点只依赖整包安装批准，
+ *   并在任务里选择提供者，不额外批准节点。
  * 新增节点 = 在本目录加一项 + 在 Host 对应流程按任务配置调用 screenControlPoint。
  */
 export const GHOST_CONTROL_POINT_FAILURE_ACTIONS = ['allow', 'skip', 'block'] as const;
@@ -872,13 +872,20 @@ export function declaredGhostControlPoints(manifest: Pick<GhostManifest, 'subscr
   return manifest.systemPrompt?.length ? [...points, 'system-prompt'] : points;
 }
 
-/** 某个已装插件在该控制节点上是否生效:声明 + 用户确认过。 */
+/** 任务运行时五点随整包安装批准，不维护节点级批准记录。 */
+export function isGhostRuntimeControlPoint(point: string): boolean {
+  return point === 'will-start-turn' || point === 'will-model-request' || point === 'will-compose-context'
+    || point === 'will-search-memory' || point === 'system-prompt';
+}
+
+/** 任务运行时五点只检查整包安装；旧控制节点保留原有名单语义。 */
 export function ghostControlPointActive(
-  ghost: Pick<InstalledGhost, 'enabled' | 'manifest' | 'approvedControlPoints'>,
+  ghost: Pick<InstalledGhost, 'enabled' | 'manifest' | 'approval' | 'approvedControlPoints'>,
   point: GhostControlPointId,
 ): boolean {
   return ghost.enabled && declaredGhostControlPoints(ghost.manifest).includes(point) &&
-    ghost.approvedControlPoints?.includes(point) === true;
+    (isGhostRuntimeControlPoint(point) ? ghost.approval?.state === 'approved'
+      : ghost.approvedControlPoints?.includes(point) === true);
 }
 
 /** 当前 Host 认识的全部 will- 钩子(消息钩子 + 控制节点)。 */
@@ -3018,7 +3025,7 @@ function withoutUnapprovedControlPoints(installed: InstalledGhost): GhostManifes
   const subscribe = installed.manifest.subscribe;
   if (!subscribe?.hooks) return subscribe;
   const hooks = subscribe.hooks.filter((hook) =>
-    !isGhostControlPointId(hook) || installed.approvedControlPoints?.includes(hook) === true);
+    !isGhostControlPointId(hook) || isGhostRuntimeControlPoint(hook) || installed.approvedControlPoints?.includes(hook) === true);
   return { ...subscribe, hooks: hooks.length ? hooks : undefined };
 }
 
@@ -3050,9 +3057,8 @@ export function diffInstalledGhostPermissionItems(
       cindy: installed.manifest.cindy ? { ...installed.manifest.cindy,
         models: declaredGhostCindyModelActions(installed.manifest).filter(action => installed.approvedCindyModelActions?.includes(action)),
       } : undefined,
-      // 同理：声明了但用户从没确认过的控制节点不算旧权限，更新时作为新增项复核。
+      // 仅旧控制节点沿用分项批准；任务运行时五点以已安装 manifest 为比较基线。
       subscribe: withoutUnapprovedControlPoints(installed),
-      systemPrompt: installed.approvedControlPoints?.includes('system-prompt') ? installed.manifest.systemPrompt : undefined,
       tools: withoutUnapprovedAutoTools(installed),
     };
     // Host declarations belong to the installed version, even when the legacy

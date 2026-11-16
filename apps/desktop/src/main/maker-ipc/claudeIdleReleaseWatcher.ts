@@ -1,4 +1,5 @@
-import type { Session } from '@cindy/maker-core';
+import type { Maker, Session } from '@cindy/maker-core';
+import type { DbClient } from '../localDb/client/DbClient.js';
 
 /** Only live runtime capabilities; persistent task state is never modified here. */
 export type IdleClaudeSession = Pick<Session, 'id' | 'agentKind' | 'remoteHostId' | 'agentDeviceId' | 'sdkSessionId'
@@ -38,6 +39,27 @@ AND NOT EXISTS (SELECT 1 FROM session_goals g WHERE g.session_id = s.id AND g.st
 export const ORDINARY_CLAUDE_TASK_SQL = ordinaryTaskSql('cc');
 /** Same ordinary-task scope for Codex: bots, Orca, Goals, remote and hidden tasks keep their own lifecycle. */
 export const ORDINARY_CODEX_TASK_SQL = ordinaryTaskSql('codex');
+
+/** Whether a task is in the ordinary scope, by the given SQL against the database the caller reads now. */
+export function createOrdinaryIdleReleaseTaskCheck(
+  getDbClient: () => Pick<DbClient, 'queryOne'>,
+  ordinaryTaskSql: string,
+): ClaudeIdleReleaseDeps['isOrdinaryTask'] {
+  return async (id, sdkSessionId) => Boolean(
+    await getDbClient().queryOne(ordinaryTaskSql, [id, sdkSessionId]),
+  );
+}
+
+/** Retires only the current runtime: idle-only, unless retrying a close that failed into error. */
+export function createIdleReleaseRuntimeClose(
+  maker: Pick<Maker, 'closeSessionIfCurrent'>,
+  withRehydrateCloseSuppressed: <T>(sessionId: string, task: () => Promise<T>) => Promise<T>,
+): ClaudeIdleReleaseDeps['close'] {
+  return (session, retryFailedClose) => withRehydrateCloseSuppressed(session.id, async () =>
+    await maker.closeSessionIfCurrent(session as Session, 'runtime-refresh',
+      retryFailedClose && session.getStatus() === 'error' ? undefined : { onlyIfIdle: true }) === 'closed',
+  );
+}
 
 /** Single-flight scans reuse the send lock and Session's atomic close-if-idle boundary. */
 export function createClaudeIdleReleaseWatcher(deps: ClaudeIdleReleaseDeps) {

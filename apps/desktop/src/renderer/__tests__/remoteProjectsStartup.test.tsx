@@ -34,10 +34,12 @@ vi.mock('@/features/device-link/mirrorCacheClient', () => ({
   clearCachedDevice: vi.fn(),
 }));
 vi.mock('@/hooks/useAgentCapabilities', () => ({
+  getInterestedDeviceCapabilityTargets: () => [],
   prefetchDeviceCapabilities: vi.fn(),
   evictDeviceCapabilities: vi.fn(),
 }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
+  getInterestedDeviceProviderTargets: () => [],
   prefetchDeviceProviders: vi.fn(),
   evictDeviceProviders: vi.fn(),
 }));
