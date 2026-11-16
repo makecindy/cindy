@@ -113,18 +113,12 @@ export function ComposerAttachmentTray({
               accessibilityRole="button"
               accessibilityLabel={attachmentDisplayLabel(attachment)}
               onPress={() => onPreview(attachment.id)}
-              style={{
-                flex: 1,
-                flexDirection: "row",
-                alignItems: "center",
-                minHeight: 48,
-                gap: 8,
-              }}
+              style={styles.chipPreview}
             >
               <FileTypeIcon name={attachment.name} mimeType={attachment.mimeType} />
-            <Text numberOfLines={1} style={styles.chipText}>
-              {attachmentDisplayLabel(attachment)}
-            </Text>
+              <Text numberOfLines={1} style={styles.chipText}>
+                {attachmentDisplayLabel(attachment)}
+              </Text>
             </Pressable>
             <Pressable
               accessibilityHint={removeDisabledReason}
@@ -385,18 +379,30 @@ function makeTrayStyles(colors: ThemeColors) {
       borderRadius: radius.pill,
       flexDirection: 'row' as const,
       gap: spacing.sm,
+      maxWidth: '100%' as const,
       paddingLeft: spacing.lg,
       paddingRight: spacing.md,
       paddingVertical: 8,
     },
+    // Keep the preview's intrinsic width; flex: 1 gives it a zero basis in the wrapping tray.
+    chipPreview: {
+      alignItems: 'center' as const,
+      flexDirection: 'row' as const,
+      flexShrink: 1,
+      gap: spacing.sm,
+      minHeight: 48,
+      minWidth: 0,
+    },
     chipText: {
       color: colors.textPrimary,
+      flexShrink: 1,
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
       maxWidth: 220,
     },
     chipRemove: {
       alignItems: 'center' as const,
+      flexShrink: 0,
       justifyContent: 'center' as const,
     },
     pressed: {
