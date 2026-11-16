@@ -80,7 +80,7 @@ describe('openPluginTaskTab', () => {
         mcpApps: { ui: { resources: [{ uri: 'ui://board', file: 'board.html' }, { uri: 'ui://panel', file: 'panel.html' }], tools: {} },
           host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board' },
             { id: 'panel', title: 'Panel', resourceUri: 'ui://panel', scope: 'task' }] } } } };
-    ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); installed.ghosts = [ghost];
+    installed.ghosts = [ghost];
     await openPluginUiView('sim', 'board', null, undefined, { userInitiated: false });
     expect(visibility).toHaveBeenCalledWith('open', { userInitiated: false });
     // 任务页同一条来源：只落页签，不把弹出窗口叫到前台。
