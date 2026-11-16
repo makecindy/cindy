@@ -244,7 +244,7 @@ it.each(['resolved', 'rejected', 'list-changed', 'latest-failed', 'departed'] as
         ? '[PLUGIN_LIST_CHANGED] old cursor invalidated' : 'old request failed'));
       else finishOld({ ...page(0, 1), items: [{ ...item(0), name: 'Obsolete response' }] });
     });
-    expect(cache.current.refreshedAt).toBe(0);
+    expect(cache.current.refreshedRevision).not.toBe('uninstall-3');
     expect(screen.queryByText('Obsolete response')).toBeNull();
     if (outcome === 'departed') {
       expect(reads()).toBe(before);
@@ -259,9 +259,98 @@ it.each(['resolved', 'rejected', 'list-changed', 'latest-failed', 'departed'] as
     });
     expect(reads()).toBe(before + 1); // Failure must not turn coalescing into retries.
     expect(screen.getByText('Tool 0')).toBeTruthy();
-    if (outcome === 'latest-failed') expect(cache.current.refreshedAt).toBe(0);
-    else { expect(screen.getByText('Tool 1')).toBeTruthy(); expect(cache.current.refreshedAt).toBe(10_000); }
+    if (outcome === 'latest-failed') expect(cache.current.refreshedRevision).not.toBe('uninstall-3');
+    else { expect(screen.getByText('Tool 1')).toBeTruthy(); expect(cache.current.refreshedRevision).toBe('uninstall-3'); }
   });
+
+// Unit / Greptile 4582423581: a new scroll page is not proof that the other
+// resident batches cover an invalidation. Existing revision tests had no
+// simultaneous scroll read, so a page timestamp could consume the follow-up.
+it('refreshes resident batches after invalidation even when a scroll page finishes first', async () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(10_000);
+  let phase: 'initial' | 'old-refresh' | 'latest' = 'initial';
+  let finish!: (value: PluginMarketPage) => void;
+  const old = new Promise<PluginMarketPage>(resolve => { finish = resolve; });
+  const freshPage = (offset: number): PluginMarketPage => ({ ...page(offset, 31),
+    items: [item(99), ...Array.from({ length: 30 }, (_, index) => item(index))].slice(offset, offset + 10) });
+  const load = vi.fn(async (input: PluginMarketQuery) => {
+    if (input.counts) return page(0, 31);
+    const offset = Number(input.cursor ?? 0);
+    if (phase === 'old-refresh' && offset === 0) return old;
+    return phase === 'latest' ? freshPage(offset) : page(offset, 31);
+  });
+  const { cache, view } = fixture(load);
+  const mounted = render(view());
+  await screen.findByText('Tool 0');
+  await waitFor(() => expect(intersections.size).toBe(1));
+  await act(async () => intersections.forEach(callback => callback()));
+  await waitFor(() => expect(cache.current.last).toBe(1));
+  phase = 'old-refresh';
+  let refreshing!: Promise<void>;
+  await act(async () => { refreshing = cache.current.refresh!({ force: true }); });
+  for (const revision of ['uninstall-1', 'sources-2', 'uninstall-3']) mounted.rerender(view('', true, 'all', revision));
+  phase = 'latest'; clock.mockReturnValue(20_000);
+  await act(async () => intersections.forEach(callback => callback()));
+  await waitFor(() => expect(cache.current.pages.has(2)).toBe(true));
+  await act(async () => { finish(page(0, 31)); await refreshing; });
+  await waitFor(() => expect(cache.current.pages.get(0)?.some(row => row.pluginId === 'plugin-99')).toBe(true));
+  expect(cache.current.pages.get(1)?.map(row => row.pluginId)).toEqual(freshPage(10).items.map(row => row.pluginId));
+  expect(load.mock.calls.filter(([input]) => !input.counts && !input.cursor)).toHaveLength(3);
+  expect(screen.getByText('Tool 99')).toBeTruthy();
+});
+
+// Unit / Codex 4582498653: metadata is absent during a cold read, so refreshing
+// only warm pages loses its invalidation. Both resolve and reject must let one
+// current-revision read replace that obsolete first request.
+it.each(['resolved', 'rejected'] as const)('rechecks an invalidated first batch once after it is %s', async outcome => {
+  let finish!: (value: PluginMarketPage) => void, fail!: (error: Error) => void;
+  const first = new Promise<PluginMarketPage>((resolve, reject) => { finish = resolve; fail = reject; });
+  let initial = true;
+  const load = vi.fn(async (input: PluginMarketQuery) => {
+    if (input.counts) return page(0, 2);
+    if (initial) { initial = false; return first; }
+    return page(0, 2);
+  });
+  const { cache, view } = fixture(load);
+  const mounted = render(view());
+  await waitFor(() => expect(load.mock.calls.filter(([input]) => !input.counts)).toHaveLength(1));
+  for (const revision of ['installed-1', 'source-2', 'uninstalled-3']) mounted.rerender(view('', true, 'all', revision));
+  expect(load.mock.calls.filter(([input]) => !input.counts)).toHaveLength(1);
+  await act(async () => { if (outcome === 'resolved') finish(page(0, 1)); else fail(new Error('obsolete first read failed')); });
+  expect(await screen.findByText('Tool 1')).toBeTruthy();
+  expect(load.mock.calls.filter(([input]) => !input.counts)).toHaveLength(2);
+  expect(cache.current.pages.get(0)?.map(row => row.pluginId)).toEqual(['plugin-0', 'plugin-1']);
+});
+
+// Unit / Codex 4582498662: Main returns successful custom items together with
+// per-source failures. Snapshot tests did not exercise the independent paging
+// writer; it must preserve only failed sources, update metadata, then recover.
+it('merges successful custom page results while retaining only failed sources', async () => {
+  const official = item(0);
+  const custom = (index: number, source: string, name: string) => ({ ...item(index), sourceType: 'local-market' as const, sourceMarketName: source, name });
+  let response: PluginMarketPage = { ...page(0, 4), counts: null,
+    items: [official, custom(1, 'working', 'Working old'), custom(2, 'removed', 'Removed source'), custom(3, 'failed', 'Failed source')],
+    customSourceNames: ['working', 'removed', 'failed'] };
+  const load = vi.fn(async () => response);
+  const { cache, view } = fixture(load);
+  render(view());
+  const officialCard = await screen.findByText('Tool 0');
+  response = { ...response, items: [custom(1, 'working', 'Working updated'), custom(4, 'new-source', 'Added source')],
+    unavailableReason: 'official unavailable', customSourceNames: ['working', 'failed', 'new-source'], unavailableCustomSourceNames: ['failed'] };
+  await act(async () => { await cache.current.refresh!({ force: true }); });
+  expect(screen.getByText('Working updated')).toBeTruthy();
+  expect(screen.getByText('Added source')).toBeTruthy();
+  expect(screen.getByText('Failed source')).toBeTruthy();
+  expect(screen.queryByText('Removed source')).toBeNull();
+  expect(screen.getByText('Tool 0')).toBe(officialCard);
+  expect(cache.current.metadata?.customSourceNames).toEqual(response.customSourceNames);
+  expect(cache.current.metadata?.unavailableReason).toBe('official unavailable');
+  response = { ...page(0, 1), counts: null, items: [{ ...official, name: 'Recovered official' }] };
+  await act(async () => { await cache.current.refresh!({ force: true }); });
+  expect(screen.getByText('Recovered official')).toBeTruthy();
+  expect(screen.queryByText('Failed source')).toBeNull();
+  expect(cache.current.metadata?.customSourceNames).toEqual([]);
+});
 
 it('shows first-page cards without waiting for the independent count', async () => {
   const load = vi.fn((input: PluginMarketQuery) => input.counts

@@ -15,6 +15,7 @@ import { emptyPluginBrowserCache, mergePluginItems, pluginBrowserKey, samePlugin
 export { emptyPluginBrowserCache, PLUGIN_PAGE_SIZE, type PluginBrowserCache } from './lib/pluginBrowserCache';
 import { readPluginCatalogAnchor, restorePluginCatalogAnchor, type PluginCatalogAnchor } from './lib/pluginCatalogAnchor';
 import { useDelayedPluginLoading } from './lib/useDelayedPluginLoading';
+import { mergePluginSnapshot } from './lib/pluginCatalogMemory';
 
 const CatalogCard = memo(function CatalogCard({ item, renderItem }: {
   item: PluginMarketItem; renderItem(item: PluginMarketItem): ReactNode; renderRevision?: unknown;
@@ -76,10 +77,6 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
     variants.delete(oldest);
   }
   cacheRef.current = cache;
-  if (cache.installationRevision !== undefined && cache.installationRevision !== revision) {
-    cache.countsAt = 0; cache.refreshedAt = 0; cache.countsFlight = undefined;
-  }
-  cache.installationRevision = revision;
   // A pending source/search keeps the last usable projection, never another
   // owner/locale. The LRU still owns the only copies of loaded batches.
   if (cache.metadata || displayed.current.partitionKey !== partitionKey) displayed.current = cache;
@@ -122,6 +119,8 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
   const alive = useRef(true);
   const loader = useRef(loadPage);
   loader.current = loadPage;
+  const latestRevision = useRef(revision);
+  latestRevision.current = revision;
   const countListener = useRef(onCounts);
   countListener.current = onCounts;
   const read = useCallback((index: number): Promise<void> => {
@@ -131,17 +130,22 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
     if (existing?.cache === current) return existing.promise;
     if (!current.cursors.has(index)) return Promise.resolve();
     const previous = readQueue.current;
+    let requestedRevision: string | undefined;
     const request = (async () => {
       try {
         await previous;
         // A slow count must not fan out more obsolete searches while the user types.
         if (!alive.current || cacheRef.current !== current) return;
+        requestedRevision = latestRevision.current;
         const response = await (index === 0 && current.firstPageFlight ? current.firstPageFlight : loader.current({ query: query.trim().slice(0, 100), scope,
           cursor: current.cursors.get(index), limit: PLUGIN_PAGE_SIZE, excludeInstalled: true,
           counts: false }));
-        const page = { ...response, items: response.items.filter(item => !isInstalled.current(item)) };
         if (index === 0) current.firstPageFlight = undefined;
-        if (!alive.current || cacheRef.current !== current) return;
+        if (!alive.current || cacheRef.current !== current || requestedRevision !== latestRevision.current) return;
+        const initial = current.metadata === null;
+        const prior = current.pages.get(index);
+        const page = { ...response, items: mergePluginSnapshot(prior && current.metadata ? { ...current.metadata, items: prior } : null,
+          response).items.filter(item => !isInstalled.current(item)) };
         const previousItems = current.pages.get(index) ?? (index === 0 && displayed.current.partitionKey === partitionKey
           ? [...displayed.current.pages.values()].flat() : []);
         current.pages.delete(index);
@@ -164,18 +168,22 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
         current.metadata = { ...page, items: [], unavailableCustomSourceNames: index > 0
           ? [...new Set([...(current.metadata?.unavailableCustomSourceNames ?? []), ...page.unavailableCustomSourceNames])]
           : page.unavailableCustomSourceNames };
-        current.error = page.unavailableReason ? index : null;
-        current.refreshedAt = Date.now();
+        current.error = page.unavailableReason && page.items.length === 0 ? index : null;
+        if (initial) { current.refreshedRevision = requestedRevision; current.refreshedAt = Date.now(); }
       } catch (error) {
-        if (!alive.current || cacheRef.current !== current) return;
+        if (index === 0) current.firstPageFlight = undefined;
+        if (!alive.current || cacheRef.current !== current || requestedRevision !== latestRevision.current) return;
         if (index > 0 && extractIpcError(error)?.code === 'PLUGIN_LIST_CHANGED') {
-          current.refreshedAt = 0;
+          current.refreshedRevision = undefined;
           restartCursors.current = true;
-          void current.refresh?.();
+          void current.refresh?.({ force: true });
         } else current.error = index;
       } finally {
         if (inFlight.current.get(flightKey)?.cache === current) inFlight.current.delete(flightKey);
         if (alive.current) rerender();
+        if (alive.current && cacheRef.current === current && requestedRevision !== undefined && requestedRevision !== latestRevision.current) {
+          void current.refresh?.({ force: true });
+        }
       }
     })();
     readQueue.current = request;
@@ -194,8 +202,6 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
     return () => { alive.current = false; };
   }, [key, cacheRef, read, visible, prewarm]);
   const countQueue = useRef(Promise.resolve());
-  const latestRevision = useRef(revision);
-  latestRevision.current = revision;
   const count = useCallback(async () => {
     const previous = countQueue.current;
     const flight = (async () => {
@@ -229,15 +235,19 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
         await pending.promise;
         // Reuse the flight as the queue: only invalidations newer than that
         // read need a follow-up. Concurrent callers join that one latest read.
-        if (current() && pending.revision !== latestRevision.current && cache.refreshedAt === 0) {
+        if (current() && pending.revision !== latestRevision.current && cache.refreshedRevision !== latestRevision.current) {
           await refresh({ ...options, force: true });
         }
         return;
       }
-      if (!cache.metadata || !options?.force && Date.now() - cache.refreshedAt < PLUGIN_CATALOG_REFRESH_MS) return;
-      const requestedRevision = latestRevision.current;
-      const coversRevision = () => current() && requestedRevision === latestRevision.current;
       const flight = (async () => {
+        await readQueue.current;
+        if (!current()) return;
+        if (!options?.force && cache.refreshedRevision === latestRevision.current && Date.now() - cache.refreshedAt < PLUGIN_CATALOG_REFRESH_MS) return;
+        const requestedRevision = latestRevision.current;
+        if (refreshFlight.current?.cache === cache) refreshFlight.current.revision = requestedRevision;
+        if (!cache.metadata) { if (cache.error === null || options?.force) await read(0); return; }
+        const coversRevision = () => current() && requestedRevision === latestRevision.current;
         const pages = new Map<number, PluginMarketPage>();
         const rebuiltSizes = new Map<number, number>();
         const rebuiltCursors = new Map<number, string | null>([[0, null]]);
@@ -303,7 +313,6 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           if (visiblePages.current !== viewport) anchor.current = scrollRef.current ? readPluginCatalogAnchor(scrollRef.current) : null;
         }
         if (!coversRevision()) return;
-        if ([...pages.values()].some(page => page.unavailableReason)) return;
         let changed = cache.error !== null;
         if (rebuilt) {
           anchor.current ??= scrollRef.current ? readPluginCatalogAnchor(scrollRef.current) : null;
@@ -313,9 +322,9 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           cache.pages.clear(); restartCursors.current = false; changed = true;
         }
         for (const [index, page] of pages) {
-          if (page.unavailableReason) continue;
           const previous = previousPages.get(index) ?? [];
-          const next = page.items.filter(item => !isInstalled.current(item));
+          const next = mergePluginSnapshot(cache.metadata ? { ...cache.metadata, items: previous } : null,
+            page, options?.renewIcons).items.filter(item => !isInstalled.current(item));
           const merged = mergePluginItems(previous, next, options?.renewIcons);
           if (rebuilt || merged !== previous) { cache.pages.set(index, merged); cache.sizes.set(index, merged.length); changed = true; }
           if (page.nextCursor) cache.cursors.set(index + 1, page.nextCursor);
@@ -350,6 +359,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           cache.groups = groups;
         }
         cache.error = null;
+        cache.refreshedRevision = requestedRevision;
         cache.refreshedAt = Date.now();
         if (changed) {
           anchor.current ??= scrollRef.current ? readPluginCatalogAnchor(scrollRef.current) : null;
@@ -364,9 +374,10 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           rerender();
         }
       })().catch(() => undefined).finally(() => { if (refreshFlight.current?.promise === flight) refreshFlight.current = null; });
-      refreshFlight.current = { cache, revision: requestedRevision, promise: flight };
+      refreshFlight.current = { cache, revision: latestRevision.current, promise: flight };
       await flight;
     };
+    if (cache.metadata && cache.refreshedRevision !== latestRevision.current) { cache.countsAt = 0; cache.countsFlight = undefined; }
     cache.refresh = async options => { await Promise.all([refresh(options), Date.now() - cache.countsAt >= PLUGIN_CATALOG_REFRESH_MS ? count() : Promise.resolve()]); };
     const timer = setTimeout(() => {
       if (cache.countsFlight || cache.countsKey !== countsKey || Date.now() - cache.countsAt >= PLUGIN_CATALOG_REFRESH_MS) void count();
@@ -377,12 +388,12 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
       clearTimeout(timer); cache.refresh = undefined;
       if (refreshFlight.current?.cache === cache) refreshFlight.current = null;
     };
-  }, [cache, countsKey, query, scope, visible, prewarm, count, scrollRef]);
+  }, [cache, countsKey, query, scope, visible, prewarm, count, scrollRef, read]);
   const previousRevision = useRef(revision);
   useEffect(() => {
     if (previousRevision.current === revision) return;
     previousRevision.current = revision;
-    cache.countsAt = 0;
+    cache.countsAt = 0; cache.countsFlight = undefined;
     if (visible || prewarm) void cache.refresh?.({ force: true });
   }, [revision, cache, visible, prewarm]);
   const sentinel = useRef<HTMLDivElement>(null);

@@ -21,7 +21,7 @@ export interface PluginBrowserCache {
   lastSource: Map<number, string | null>;
   refreshedAt: number;
   countsAt: number;
-  installationRevision?: string;
+  refreshedRevision?: string;
   firstPageFlight?: Promise<PluginMarketPage>;
   countsFlight?: Promise<PluginMarketPage>;
   refresh?: (options?: { force?: boolean; renewIcons?: boolean }) => Promise<void>;
