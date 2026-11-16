@@ -1,4 +1,5 @@
 import { readContextRecoverySessionWithPorts, classifyCodexHistoryWithPorts, commitContextRecoveryWithPorts, replayContextRecoveryWithPorts, contextRecoveryRebuilt, contextRecoveryAbortSignal } from './contextRecoveryAssembly.js';
+import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from './sessionContextWindowBudgetState.js';
 import { needsSubscriptionAccountHandoff, hasRestoredPooledCodexQuota } from '../subscription-accounts/runtime.js';
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { accountProviderId, readMergedProviderAccount, resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef } from '../subscription-accounts/placement.js';
@@ -4329,23 +4330,6 @@ function unpricedSubscriptionValueMarker(): RegionalMoney {
  * (日/会话总额不受影响,PR #485 review)。turn start 清残留,防错配到下一轮。
  */
 const pendingFailedTurnAssistantPersistId = new Map<string, string>();
-/**
- * 已按某个预算值重建过活实例的会话：并发通知（双窗口/连点）会带着**同一个终值**进来，
- * 没有这层去重就会对同一值连续冷重建两次。会话关闭（含删除/归档/取消切换）时清理 ——
- * 否则条目常驻内存，且「关掉期间改了预算、重开后再改回旧值」会被旧条目挡掉一次。
- * 模块级而非闭包内：会话关闭的清理在 registerMakerIpc 之外。
- */
-const appliedContextWindowBudgets = new Map<string, number | null>();
-
-/**
- * 已登记、但还没真正落到活实例的预算重建意图。
- *
- * 只在这条集合里重放（发送边界），而不是「dedup 缺失就重放」：任务启动时
- * `applySessionContextWindowBudgetToCreateOpts` 已把偏好预算带给引擎，此时 dedup 里
- * 还没有条目，靠「缺失」判断会误判窗口变化，把刚配置好的实例再关一次
- * （首条直发多等一次冷启动；Greptile P2，2026-10-24）。
- */
-const pendingSessionContextWindowBudgetReconciles = new Set<string>();
 
 /**
  * 跟踪每个 session 的逻辑 turn 与后台节流 keepalive。外部 running guard
