@@ -6,7 +6,6 @@ import type { InteractionRequest, InteractionDecision, AutoReviewDecision } from
 import { messages, sessions } from '../localDb/schema.js';
 import type { CurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { messageToCamel } from '../localDb/mapper.js';
-import { recomputePrRefsForSession } from '../git-context/prRefsStore.js';
 import { createLogger } from '../logger.js';
 import { getDesktopMcpToolApprovalPolicy } from '../maker-host/mcp-tool-approval-policy.js';
 import { pagePermissionGrants, onPagePermissionSessionChanged } from './pagePermissions.js';
@@ -26,7 +25,6 @@ export interface McpAppsServicePorts {
   review?(sessionId: string, serverId: string, tool: string, args: Record<string, unknown>,
     originDescription?: string, toolDefinition?: Pick<Tool, 'name' | 'description' | 'inputSchema'>): Promise<AutoReviewDecision>;
   allowPendingPage?(sessionId: string, requestId: string): void;
-  authorizeGlobalTool?: McpAppsHostDeps['authorizeTool'];
   send: McpAppsHostDeps['sendMessage'];
   pluginFiles?: McpAppsHostDeps['pluginFiles'];
   downloadFile?: McpAppsHostDeps['downloadFile'];
@@ -127,10 +125,6 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
           .returning();
         if (currentOwner() !== owner || !updated[0]) throw new Error('MCP_APP_CARD_UNAVAILABLE');
         ports.publishMessage(owner, sessionId, messageToCamel(updated[0]));
-        await recomputePrRefsForSession(sessionId, {
-          dbClient: owner.client,
-          isCurrent: () => currentOwner() === owner,
-        });
       } else {
         // Only the pending card may be inserted. Completion cannot resurrect a deleted grant.
         if (record.result !== undefined || record.cancelled !== undefined)
@@ -149,10 +143,6 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
       }
     },
     authorizeTool: async (sessionId, tool, args, signal, source) => {
-      if (sessionId === null) {
-        if (!ports.authorizeGlobalTool) throw new Error('MCP_APP_OWNER_ONLY');
-        return ports.authorizeGlobalTool(sessionId, tool, args, signal, source);
-      }
       const { owner, session } = await assertSession(sessionId);
       signal.throwIfAborted();
       if (session.planModeEnabled || session.permissionMode === 'plan')

@@ -127,7 +127,7 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
     visible: { type: 'boolean' }, regions: { type: 'object', additionalProperties: { type: 'boolean' } },
   }));
   return {
-    id: `${instance}:${viewId}`, title: view.title, serverId: entry.config.id,
+    config: entry.config, id: `${instance}:${viewId}`, title: view.title, serverId: entry.config.id,
     serverRevision: revision(entry.config), resourceUri: view.resourceUri, assertCurrent, assertOperation, hostTools: tools,
     ...(watching ? {
       async observeContext(changed: () => void, signal: AbortSignal) {

@@ -3,7 +3,7 @@ import {
   liveScreenCapabilities,
   isRemoteDesktopChannelRequest,
   parseRemoteDesktopRequest,
-  REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
+  remoteDesktopChannelTimeoutMs,
   remoteDesktopVideoSettingsWire,
   isDesktopAttemptId,
   REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS,
@@ -441,6 +441,7 @@ export class RemoteViewerConnection {
     if (
       !this.deps.channel ||
       this.caps?.channelRequests !== true ||
+      (request.op === 'heartbeat' && this.caps.signalingContinuity !== true) ||
       !('lease' in request) ||
       request.lease !== this.lease ||
       !isRemoteDesktopChannelRequest(request)
@@ -452,7 +453,7 @@ export class RemoteViewerConnection {
     const outcome = await new Promise<RemoteViewerChannelOutcome>((resolve) => {
       const timer = setTimeout(
         () => settle({ kind: 'error', code: 'INVOKE_TIMEOUT' }),
-        REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
+        remoteDesktopChannelTimeoutMs(request),
       );
       const settle = (value: RemoteViewerChannelOutcome) => {
         if (this.channelRequests.get(id) !== settle) return;

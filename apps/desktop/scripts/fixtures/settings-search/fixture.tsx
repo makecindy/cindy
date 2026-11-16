@@ -24,7 +24,7 @@ const visibilityWrites: unknown[] = [];
 Object.assign(window, { visibilityWrites });
 
 void mountPage({
-  route: `/settings?tab=${ctx.data.tab}`,
+  route: `/settings?tab=${ctx.data.routeTab ?? ctx.data.tab}`,
   host: {
     ...(ctx.data.hiddenBackground || ctx.data.glassBackground || ctx.data.previewBackground ? {
       appearanceSettings: {
@@ -39,6 +39,8 @@ void mountPage({
     platform: ctx.data.tab === 'agent-island' ? 'darwin' : ctx.platform, osRelease: '24.0.0',
     agentIsland: { getDisplayOptions: read([]) },
     appVersion: '0.0.0', appDisplayVersion: 'UI fixture', supportsBetaUpdateChannel: true,
+    taskManagement: { read: read({ enabled: ctx.data.tab === 'storage' || !!ctx.data.archiveEnabled, days: 7 }),
+      onChanged: subscription('task-management'), onArchived: subscription('task-archive-notice') },
     windowBehavior: { getWindowsCloseBehavior: read('minimize'), getLinuxCloseBehavior: read('minimize') },
     onUpdateChannelSettings: subscription('update-channel'),
     getUpdateChannelSettings: read({ channel: 'stable', isCustomized: false }),

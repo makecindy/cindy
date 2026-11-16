@@ -8,8 +8,22 @@ vi.mock('../maker-host/logger-adapter.js', () => ({ desktopMakerLogger: {
   child: () => ({ info: vi.fn(), warn: vi.fn() }),
 } }));
 import { normalizeClaudeIdleSettings, readClaudeIdleMinutes } from '../maker-host/claude-idle-release-settings';
+import { readClaudeIdleMinutesFrom } from '../maker-host/claudeIdleReleaseSettingsCore';
 
 describe('Claude idle release override', () => {
+  // The Node Host reads the same override from its profile root, without Electron's app.
+  it('reads the override from the profile root it is given', () => {
+    const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-idle-profile-'));
+    state.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-idle-settings-'));
+    try {
+      fs.writeFileSync(path.join(profile, 'claude-idle-release.json'), '{"minutes":5}');
+      expect(readClaudeIdleMinutesFrom(profile)).toBe(5);
+      expect(readClaudeIdleMinutes()).toBe(30);
+    } finally {
+      fs.rmSync(profile, { recursive: true, force: true });
+      fs.rmSync(state.dir, { recursive: true, force: true });
+    }
+  });
   it.each([undefined, null, {}, { minutes: -1 }, { minutes: 1.5 }, { minutes: 1441 },
     { minutes: '0' }, { minutes: NaN }, { minutes: Infinity }])('rejects malformed settings %j', raw => {
     expect(normalizeClaudeIdleSettings(raw)).toEqual({ minutes: 30 });

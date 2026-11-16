@@ -1,3 +1,4 @@
+import { buildPiRuntimeConfig } from '../../maker-host/runtimeConfigsCore';
 import { expect, it } from 'vitest';
 import { buildDesktopClaudeRuntimeConfig, desktopCodexRuntimeConfig } from '../../maker-host/runtime-configs.js';
 import hostPrompt from '../../maker-host/host-system-prompt.md?raw';
@@ -19,5 +20,22 @@ it('keeps the upstream Desktop system prompt unchanged by remote authorization',
     expect(config.systemPrompt).toBe([hostPrompt, ownership, precedence, harnessPrompt]
       .map(section => section.trim()).filter(Boolean).join('\n\n'));
     expect(config.systemPrompt).not.toContain('Plugin accounts and remote authorization');
+  }
+});
+
+// Guard: the approved settings-navigation rule must reach every production engine once.
+// This verifies assembly, not live model compliance or real prompt-cache hit rates.
+it('includes device-bound settings guidance in Claude, Codex and Pi', () => {
+  const configs = [
+    buildDesktopClaudeRuntimeConfig(() => 'https://model.example'), desktopCodexRuntimeConfig,
+    buildPiRuntimeConfig({ ripgrepPath: '/fixture/rg', userDataPath: '/fixture/data',
+      endpoint: () => 'https://model.example', remoteEndpoint: () => 'https://model.example' }),
+  ];
+  for (const config of configs) {
+    expect(config.systemPrompt?.match(/host-generated settings link from get_settings_link/g)).toHaveLength(1);
+    expect(config.systemPrompt).toContain('use connect_account with the discovered plugin identity to present its native connection button');
+    expect(config.systemPrompt).toContain('use a settings link only if the Host reports no supported setup action');
+    expect(config.systemPrompt).toContain('Preserve the target device.');
+    expect(config.systemPrompt).toContain('Opening settings does not mean configuration or sign-in is complete.');
   }
 });

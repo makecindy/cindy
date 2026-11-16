@@ -1133,19 +1133,23 @@
   },
   "privacyExit": {
     "status": "Este computador está sendo controlado remotamente pelo Cindy",
-    "hint": "Para mostrar esta tela, desative Tela de privacidade do computador em Segurança no dispositivo que o controla. Ou clique ou pressione qualquer tecla neste computador e selecione Desconectar.",
+    "hint": "Para mostrar esta tela, desative “Tela de privacidade durante a conexão” em Segurança no dispositivo que está controlando. Ou clique ou pressione qualquer tecla neste computador e escolha Desconectar.",
     "title": "Desconectar a área de trabalho remota?",
-    "detail": "Isso encerrará o controle remoto e restaurará a tela deste computador. O computador será bloqueado se a opção de bloquear ao sair estiver ativada.",
+    "detail": "Isso encerra o controle remoto e remove a tela de privacidade. Se “Proteger computador ao sair” estiver ativado, o computador também é bloqueado.",
     "cancel": "Manter conectado",
     "disconnect": "Desconectar"
   },
   "awayGuard": {
     "status": "O Cindy está trabalhando",
-    "hint": "Pressione qualquer tecla para bloquear e desbloqueie com Touch ID ou sua senha.",
+    "hint": "Pressione qualquer tecla ou a tecla Touch ID para bloquear e depois desbloqueie com a digital ou a senha",
     "lockFailed": {
       "status": "O Cindy não conseguiu bloquear este Mac",
-      "hint": "Pressione Control-Command-Q para bloquear. A tela também será bloqueada sozinha depois de um tempo."
-    }
+      "hint": "Toque no computador para tentar bloquear de novo. Se ainda não bloquear, confirme com Touch ID ou sua senha para remover a tela. Você também pode fechar a tampa ou apertar o botão de energia.",
+      "hintWindows": "Toque no computador para tentar bloquear de novo. Se ainda não bloquear, confirme com o Windows Hello ou seu PIN para remover a tela. Você também pode pressionar a tecla do logotipo do Windows + L."
+    },
+    "hintWindows": "Pressione qualquer tecla para bloquear; desbloqueie com o Windows Hello ou sua senha",
+    "hintLinux": "Pressione qualquer tecla para bloquear; desbloqueie com sua senha",
+    "verifyReason": "remover a tela de privacidade"
   },
   "appBadge": {
     "attentionCount": "Tarefas que precisam de atenção: {{count}}"
@@ -1296,10 +1300,10 @@
       "resolutionHint": "As alterações de resolução afetam o monitor físico remoto."
     },
     "settingUnsupported": "Este computador ainda não oferece suporte a esta configuração",
-    "privacyScreen": "Tela de privacidade do computador",
-    "privacyScreenHint": "Oculte as telas do computador. Clique ou pressione uma tecla no computador e confirme para desconectar. O bloqueio ao sair será aplicado se estiver ativado.",
-    "privacyActive": "A tela de privacidade está ativada. Clique ou pressione uma tecla no computador e confirme para desconectar. O bloqueio ao sair será aplicado se estiver ativado.",
-    "privacyFailed": "Não foi possível ativar a tela de privacidade. As telas do computador ainda podem estar visíveis.",
+    "privacyScreen": "Tela de privacidade durante a conexão",
+    "privacyScreenHint": "Cobre a tela deste computador durante o controle remoto. Se alguém clicar ou pressionar uma tecla no computador, pergunta antes de desconectar.",
+    "privacyActive": "A tela de privacidade está ativada. Se alguém clicar ou pressionar uma tecla no computador, pergunta antes de desconectar.",
+    "privacyFailed": "Não foi possível ativar a tela de privacidade. A tela do computador ainda pode estar visível.",
     "hostMute": "Silenciar computador controlado",
     "hostMuteHint": "Silenciar o computador controlado enquanto estiver conectado",
     "hostMuteFailed": "Não foi possível alterar o estado de áudio do computador controlado",
@@ -1315,7 +1319,7 @@
     "idleMinutes_one": "{{count}} minuto",
     "idleMinutes_other": "{{count}} minutos",
     "idleDisconnected": "Desconectado por inatividade. Reconecte quando estiver pronto.",
-    "lockOnExit": "Bloquear computador ao sair",
+    "lockOnExit": "Proteger computador ao sair",
     "lockOnExitHint": "Bloqueia o computador ao sair da área de trabalho remota.",
     "lockOnExitFailed": "Não foi possível confirmar que o computador foi bloqueado. Verifique o computador antes de deixá-lo sem supervisão.",
     "nativeResolution": "Nativa",
@@ -1359,7 +1363,9 @@
         "body": "Esta tarefa está com {{device}} aberto em outro computador. Atualize o plugin “{{plugin}}” neste computador para ver e operar o dispositivo na barra lateral direita.",
         "action": "Atualizar"
       }
-    }
+    },
+    "lockOnExitHintPrivacy": "Mostra a tela de privacidade ao sair, para a IA continuar trabalhando; tocar no computador o bloqueia.",
+    "lockedEnablePrivacyHint": "Para a IA continuar usando este computador enquanto você está fora, ative a tela de privacidade nas Configurações dele → Geral → Quando você está fora."
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1948,7 +1954,8 @@
       "windowBehavior": "Comportamento do aplicativo",
       "shortcuts": "Atalhos de teclado",
       "mcpServers": "MCP personalizado",
-      "bots": "Amigos"
+      "bots": "Amigos",
+      "awayFromComputer": "Quando você está fora"
     },
     "remote": {
       "title": "Máquinas remotas",
@@ -2514,21 +2521,23 @@
       "swallowActivationClickAria": "Ativar ou desativar proteção contra cliques acidentais ao retornar à janela",
       "macRestartNote": "No macOS, reinicie o app para aplicar as alterações.",
       "awayGuard": {
-        "label": "Continuar trabalhando enquanto você está fora",
-        "hint": "Quando ativado, este Mac não desliga a tela nem bloqueia sozinho, para que a IA possa usá-lo a qualquer momento. Depois de um tempo longe, uma camada preta cobre a tela e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com Touch ID ou sua senha.",
+        "label": "Usar tela de privacidade em vez de bloquear",
+        "hint": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com Touch ID ou sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador.",
         "permission": "Permita o Cindy em Ajustes do Sistema > Privacidade e Segurança > Acessibilidade para que ele bloqueie a tela assim que alguém tocar neste Mac. Até lá, a tela apaga e é bloqueada normalmente.",
         "preview": "Testar agora",
-        "previewStarting": "Solte o mouse e o teclado. A tela será coberta em 3 segundos; pressione qualquer tecla para bloqueá-la e depois desbloqueie.",
-        "previewUnavailable": "Não foi possível cobrir a tela. Reinicie o Cindy e tente novamente.",
+        "previewStarting": "Solte o mouse e o teclado. Em 3 segundos a tela de privacidade aparece; pressione qualquer tecla para bloquear e depois desbloqueie para testar.",
+        "previewUnavailable": "Não foi possível mostrar a tela de privacidade. Reinicie o Cindy e tente de novo.",
         "delay": {
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
-          "label": "Cobrir a tela após",
-          "hint": "Tempo sem tocar no teclado e no mouse até a camada aparecer. Por padrão, o mesmo do repouso da tela.",
+          "label": "Mostrar tela de privacidade após",
+          "hint": "Tempo sem tocar no teclado ou no mouse enquanto a IA trabalha. Por padrão, o tempo em que o sistema desliga a tela.",
           "system": "Sistema"
-        }
+        },
+        "hintWindows": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com o Windows Hello ou sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador.",
+        "hintLinux": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador."
       }
     },
     "agentIsland": {
@@ -4398,7 +4407,9 @@
           "inline": "Executa em",
           "signInHere": "Fazer login neste computador",
           "writeFailed": "Não foi possível salvar onde este provedor é executado. Tente novamente."
-        }
+        },
+        "sameAccountConnections": "Conexões salvas desta conta",
+        "sameAccountConnectionsHint": "A conta aparece apenas uma vez. Escolher uma conexão altera apenas as configurações a gerenciar; as tarefas existentes mantêm sua conexão."
       },
       "detect": {
         "groupLabel": "Detectado neste dispositivo",
@@ -5423,6 +5434,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Compressão do Codex no servidor",
+        "description": "Quando ativada, prioriza a compressão no servidor. Quando desativada, o Codex usa o resumo local nativo, que continua chamando o modelo atual.",
+        "hint": "Aplica-se quando o Codex iniciar ou retomar uma tarefa neste computador. Os provedores sem compressão no servidor mantêm o comportamento atual.",
+        "loadFailed": "Não foi possível carregar as configurações de compressão do Codex",
+        "saveFailed": "Não foi possível salvar as configurações de compressão do Codex"
+      },
       "title": "Compactação de contexto",
       "description": "Ajuste aqui as taxas de compactação do Claude Code e do Pi. O Codex calcula seu limite a partir da configuração de contexto do modelo. Se a compactação remota falhar, ele muda automaticamente para a compactação por resumo e continua usando-a na tarefa atual.",
       "card": {
@@ -7077,7 +7095,8 @@
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
-      }
+      },
+      "keepAwakeIncluded": "Incluído na tela de privacidade: este computador não entra em repouso."
     },
     "imBot": {
       "beta": "Beta",
@@ -8265,6 +8284,8 @@
         "cindyTextOneshot": "Pode fazer uma pergunta ao canal rápido da Cindy e receber uma resposta em texto",
         "cindyTextOneshotDetail": "Usa a cadeia de modelos utilitários leves do sistema (o mesmo canal dos títulos automáticos). Não envolve Agent nem acesso a arquivos. Pode haver cobrança pelo uso do modelo.",
         "cindyEmbedText": "Pode enviar texto para ser convertido em vetores (para busca semântica)",
+        "cindyModelsDecisions": "Pode usar modelos de decisão (consome sua cota de modelos)",
+        "cindyModelsRerank": "Pode usar modelos de reordenação (consome sua cota de modelos)",
         "cindyEmbedTextDetail": "O texto é enviado ao modelo de embeddings do sistema e convertido em números, com até {{max}} itens por chamada. Pode haver cobrança pelo uso do modelo. Os vetores vão apenas para o plugin — nada é gravado na sua biblioteca.",
         "cindySearchWeb": "Pode pesquisar na web pública com Cindy AI",
         "cindySearchWebDetail": "As solicitações de pesquisa acessam a web pública e podem consumir a cota do Cindy AI.",
@@ -8287,41 +8308,36 @@
         "agentCompanionsDetail": "Pode ver todos os amigos, inclusive os que rodam nos seus outros computadores: nome, descrição, avatar, status (trabalhando, aguardando você, inativo, offline), o tipo de etapa em que cada um está (como pensando ou executando uma ferramenta), as solicitações que aguardam você do jeito que os cartões as mostram (perguntas, comandos a executar, planos) e a conversa recente do chat principal (até 50 das suas mensagens e das respostas deles, sem as etapas de ferramentas); e abrir a conversa de um amigo na janela principal. Com a permissão de entregar mensagens também, pode repassar as respostas que você der no plugin: responder perguntas, recusar solicitações e comentar planos. Para permitir uma etapa, você ainda clica na confirmação do próprio Cindy. Não pode ler arquivos, etapas de ferramentas nem raciocínios.",
         "agentCompanionsRequest": "Revisar permissão para ver amigos",
         "hostTools_history": "Histórico de tarefas",
-        "hostTools_historyDetail": "Usar as ferramentas da Cindy para listar tarefas existentes, ler mensagens completas e pesquisar o histórico, incluindo outros computadores acessíveis que você selecionar explicitamente.",
+        "hostTools_historyDetail": "Usar as ferramentas da Cindy para listar tarefas existentes, ler mensagens completas e pesquisar o histórico, incluindo outros computadores acessíveis que você selecionar explicitamente. Exportar tarefas locais em arquivos de formato nativo. Os plugins usam as permissões concedidas na instalação; as chamadas do Agent seguem suas próprias permissões em tempo de execução.",
         "hostTools_control": "Gerenciamento de tarefas",
-        "hostTools_controlDetail": "Usar as ferramentas da Cindy para editar, arquivar, restaurar e controlar tarefas e projetos existentes. Operações de alto risco exigem confirmação na Cindy a cada vez.",
+        "hostTools_controlDetail": "Usar as ferramentas da Cindy para editar, arquivar, restaurar e controlar tarefas e projetos existentes, e importar arquivos de tarefas em formato nativo neste computador.",
         "hostTools_handoff": "Mensagens para tarefas",
         "hostTools_handoffDetail": "Usar as ferramentas da Cindy para enviar mensagens para tarefas existentes. Operações que precisam da tarefa atual exigem um destino explícito.",
         "hostTools_settings": "Configurações do aplicativo",
         "hostTools_settingsDetail": "Usar as ferramentas da Cindy para ler e alterar a configuração. Os segredos não são retornados e os dados confidenciais são preenchidos por você.",
         "hostTools_scheduler": "Gerenciamento de automações",
-        "hostTools_schedulerDetail": "Após a aprovação, o plugin pode criar, consultar, editar, pausar, retomar, excluir e executar tarefas automáticas e consultar o histórico. As tarefas agendadas executadas pelo Agent usam as permissões padrão da tarefa, incluindo Acesso total. As operações de alto risco do sistema anfitrião exigem confirmação a cada vez.",
+        "hostTools_schedulerDetail": "Após a aprovação, o plugin pode criar, consultar, editar, pausar, retomar, excluir e executar tarefas automáticas e consultar o histórico. As tarefas agendadas executadas pelo Agent usam as permissões padrão da tarefa, incluindo Acesso total.",
         "hostTools_terminal": "Terminal e comandos",
         "codeDetailFiles": "A página do plugin permanece isolada. A Cindy executa as operações de arquivos autorizadas nos diretórios que você selecionar.",
         "hostTools_discovery": "Ver capacidades do host",
         "hostTools_discoveryDetail": "Consultar os serviços do computador executor e os grupos declarados e aprovados deste plugin. Não permite instalar, desativar nem revogar outros plugins.",
         "hostTools_browser": "Controle do navegador",
-        "hostTools_browserDetail": "Ler e operar páginas no navegador selecionado na Cindy. Mudar para Meu navegador, enviar arquivos e outras ações sensíveis mantêm as confirmações da Cindy.",
+        "hostTools_browserDetail": "Ler e operar páginas no navegador selecionado na Cindy. Pode mudar para Meu navegador, acessar páginas com sessão iniciada e enviar arquivos.",
         "hostTools_computer": "Controle do computador",
         "hostTools_computerDetail": "Ver janelas e usar teclado e mouse pelas ferramentas da Cindy. Continuam valendo as permissões do sistema, a proteção de entradas sensíveis e as regras de risco.",
         "hostTools_ssh": "Conexões SSH",
-        "hostTools_sshDetail": "Executar comandos e gerenciar suas conexões SSH configuradas. As credenciais ficam na Cindy. Ações que exigem confirmação são confirmadas a cada vez.",
+        "hostTools_sshDetail": "Executar comandos e gerenciar suas conexões SSH configuradas. As credenciais ficam na Cindy.",
         "hostTools_docs": "Ler e criar documentos",
-        "hostTools_docsDetail": "Usar as ferramentas de documentos da Cindy no diretório privado deste plugin. Criar e converter documentos exige confirmação na Cindy.",
+        "hostTools_docsDetail": "Usar as ferramentas de documentos da Cindy no diretório privado deste plugin.",
         "codeDetailHostServices": "As páginas do plugin continuam isoladas. Ferramentas autorizadas operam navegadores, computadores, conexões ou documentos conforme cada permissão.",
         "hostTools_storage": "Armazenamento e compartilhamento entre plugins",
-        "hostTools_storageDetail": "Usar o armazenamento, a Library e as mídias autorizadas deste plugin. A Cindy confirma a origem, o plugin destinatário e a cópia a cada compartilhamento. Não permite ler o armazenamento de outros plugins.",
-        "codeDetailStorage": "As operações se limitam aos dados deste plugin. Você confirma cada compartilhamento com outro plugin.",
-        "storageShareTitle": "Entregar uma cópia a outro plugin",
-        "storageShareMessage": "Copiar “{{file}}” ({{size}}) do plugin “{{name}}” para “{{target}}”. O destinatário recebe uma cópia independente; alterações da origem não são sincronizadas. Conteúdo já lido ou salvo não pode ser recuperado.",
+        "hostTools_storageDetail": "Usar o armazenamento, a Library e as mídias autorizadas deste plugin. O compartilhamento entrega uma cópia apenas entre plugins ativados que declarem storage e pertençam à mesma conta e organização. Não permite ler o armazenamento de outros plugins.",
+        "codeDetailStorage": "As operações se limitam aos dados deste plugin. O compartilhamento entrega cópias entre plugins ativados que declarem storage e pertençam à mesma conta e organização.",
         "hostTools_files": "Arquivos em diretórios autorizados",
         "hostTools_filesDetail": "Ler, gravar, listar e excluir arquivos e observar alterações nos diretórios que você selecionar explicitamente. Seleções anteriores não concedem acesso. Desativar o plugin encerra o acesso.",
         "filesPickMessage": "O plugin “{{name}}” poderá ler, gravar, listar e excluir arquivos no diretório escolhido e observar alterações. Selecione um diretório ao qual você permita o acesso.",
         "codeDetailTerminal": "As páginas do plugin são executadas em uma sandbox isolada. Os comandos autorizados são executados com suas permissões e podem acessar arquivos locais, aplicativos e redes.",
-        "hostTools_terminalDetail": "Iniciar comandos e terminais interativos com suas permissões neste computador, ler a saída, enviar entradas e parar os processos deste plugin. Os comandos podem acessar seus arquivos e aplicativos. Iniciar, digitar e fazer outras alterações exige confirmação na Cindy a cada vez.",
-        "hostToolsRequest": "Revisar permissão de {{group}}",
-        "hostToolCallTitle": "Permitir operação do plugin",
-        "hostToolCallMessage": "O plugin “{{name}}” quer chamar {{server}} / {{tool}}. Esta autorização se aplica apenas aos parâmetros abaixo.",
+        "hostTools_terminalDetail": "Iniciar comandos e terminais interativos com suas permissões neste computador, ler a saída, enviar entradas e parar os processos deste plugin. Os comandos podem acessar seus arquivos e aplicativos.",
         "agentHiddenTasks": "Pode criar tarefas em segundo plano ocultas da lista de tarefas",
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da busca e das notificações. Você sempre pode visualizá-las, abri-las ou exibi-las na lista de tarefas em Tarefas em segundo plano, na página deste plugin; desinstalar o plugin volta a exibi-las.",
         "agentErrand": "Criar tarefas, executar trabalho e ler resultados",
@@ -9334,6 +9350,12 @@
         "failed": "Não foi possível concluir a limpeza",
         "pending": "Na fila"
       }
+    },
+    "awayFromComputer": {
+      "title": "Quando você está fora"
+    },
+    "navigation": {
+      "unavailable": "Não foi possível abrir as configurações do computador de destino. Verifique se está online e permite controle remoto; atualize o Cindy se estiver em uma versão antiga."
     }
   },
   "remoteDevice": {
@@ -9449,6 +9471,7 @@
     "backToLogin": "Voltar ao login"
   },
   "login": {
+    "networkResponseHint": "O serviço de login retornou uma resposta inesperada. Um intermediário de rede ou proxy pode estar bloqueando a solicitação. Verifique as configurações de rede e proxy.",
     "title": "Boas-vindas ao Cindy",
     "subtitle": "Escolha uma forma segura de entrar",
     "savedLoginPreserved": "A recuperação mantém seus dados de login salvos",
@@ -9795,6 +9818,7 @@
     "tokenLine": "Tokens: {{total}} no total · entrada {{input}} · saída {{output}}",
     "cacheLine": "Detalhamento do cache: leitura {{read}} · gravação {{create}} · taxa de acertos {{rate}}",
     "cacheLineNoRate": "Detalhamento do cache: leitura {{read}} · gravação {{create}}",
+    "stepsLine": "Solicitações neste turno: {{steps}} · ~{{context}} de contexto cada uma",
     "modelLine": "Modelo: {{model}}",
     "multipleModels": "{{count}} modelos",
     "costBreakdownHeader": "Por modelo:",
@@ -14050,6 +14074,7 @@
         "realtime": "Áudio em tempo real",
         "embedding": "Embeddings",
         "decision": "Decisão",
+        "rerank": "Reordenação",
         "compression": "Compressão",
         "ungrouped": "Sem grupo",
         "other": "Outro"
@@ -17334,7 +17359,9 @@
         "saveAria": "Salvar automação",
         "createAria": "Criar automação",
         "namePlaceholder": "Dê um nome a esta automação",
-        "promptPlaceholder": "Exemplo: encontre novas falhas no Sentry e resuma as principais regressões."
+        "promptPlaceholder": "Exemplo: encontre novas falhas no Sentry e resuma as principais regressões.",
+        "expandPrompt": "Editar em grande",
+        "collapsePrompt": "Recolher"
       },
       "executionMode": {
         "label": "Execução",
@@ -17382,9 +17409,8 @@
         "automatic": "Automática",
         "manually": "Manualmente",
         "session": "Sessão",
-        "silentRun": "Não notificar quando as verificações não encontrarem nada",
-        "silentRunTooltip": "Relate apenas alterações ou problemas. Desative para lembretes e mensagens agendadas.",
-        "silentRunInfoAria": "Ver regras de execução silenciosa",
+        "silentRun": "Execução silenciosa",
+        "silentRunTooltip": "Quando ativada, execuções bem-sucedidas não notificam por padrão. Se o prompt da tarefa pedir aviso em condições específicas, a IA avisará quando elas forem atendidas. Falhas e erros continuam sendo notificados.",
         "finishSendToFeishu": "Enviar ao FeishuBot ao concluir",
         "finishSendToWecomGroup": "Enviar resultado ao grupo do WeCom",
         "configWecomGroup": "Configurar notificações do grupo do WeCom",
@@ -17494,10 +17520,7 @@
       },
       "layout": {
         "content": "O que executar",
-        "notifications": "Notificações e execução silenciosa",
-        "contentTab": "Conteúdo e gatilho",
-        "optionsTab": "Opções de execução",
-        "sections": "Configurações de automação"
+        "notifications": "Notificações e execução silenciosa"
       },
       "webhook": {
         "quotaHint": "Os recebimentos de Webhook têm limite diário, e filtrar aqui não reduz a contagem. No remetente, como o GitHub, selecione apenas os eventos necessários.",
@@ -17573,6 +17596,19 @@
         "repositoriesLabel": "Repositórios",
         "repositoriesHint": "Insira owner/repository, um por linha. Apenas os repositórios autorizados para esta GitHub App podem iniciar a tarefa.",
         "repositoriesInvalid": "Insira de 1 a 50 nomes de repositório válidos no formato owner/repository.",
+        "connectAccount": "Conectar conta",
+        "connectionLabel": "Método de conexão",
+        "cindyConnection": "Conectar pela Cindy (recomendado)",
+        "manualConnection": "Configurar Webhook manualmente",
+        "cindyConnectionHint": "Receba eventos pela GitHub App. Conecte sua conta e autorize repositórios, sem copiar um URL de recebimento ou segredo.",
+        "manualConnectionHint": "Insira o URL de recebimento e o segredo fornecidos pela Cindy nas configurações do repositório GitHub.",
+        "manualSetupHint": "Depois de salvar, obtenha o URL de recebimento e o segredo nos detalhes da automação e conclua a conexão nas configurações do repositório GitHub.",
+        "accountLabel": "Conta GitHub",
+        "accountDisconnected": "O GitHub não está conectado. Conecte sua conta primeiro.",
+        "authorizeRepositories": "Autorizar repositórios",
+        "appUnavailable": "A conexão com a GitHub App não está disponível aqui. Você pode configurar um Webhook manualmente.",
+        "cindyConnectionTitle": "GitHub · Conexão pela Cindy",
+        "manualConnectionTitle": "GitHub · Webhook manual",
         "githubAppHint": "Conecte a GitHub App no computador que executa esta tarefa e autorize esses repositórios. Não é necessário um URL de Webhook ou segredo separado.",
         "githubAppPaused": "Esta tarefa está pausada. Os eventos não a iniciarão."
       },
@@ -18164,7 +18200,6 @@
       "descriptionSaveDir": "O diretório abaixo está fora do diretório de trabalho desta sessão. Se você permitir, este plugin poderá salvar nele os arquivos baixados (arquivos existentes nunca são sobrescritos).",
       "descriptionRevealPath": "O caminho só é retornado ao Agent atual após sua permissão e passará a fazer parte do registro da conversa; dispositivos pareados podem sincronizar esse registro. Isso não concede a nenhum plugin acesso ao arquivo.",
       "descriptionFsWrite": "Este plugin solicita gravar os arquivos abaixo no diretório de trabalho da sessão atual. Se você permitir, novas gravações no mesmo diretório durante esta sessão não pedirão autorização novamente.",
-      "descriptionFsDelete": "Este plugin solicita excluir os arquivos ou pastas abaixo do diretório de trabalho da tarefa atual. O conteúdo das pastas também será excluído. Esta autorização vale apenas para esta exclusão.",
       "descriptionWorkspace": "Esta pasta está fora do diretório de trabalho desta sessão. Se você permitir, o Cindy criará uma sessão vazia para ela na barra lateral (uma sessão existente será reutilizada), sem ler nenhum arquivo dentro dela.",
       "descriptionForgeSource": "O diretório abaixo está fora do diretório de trabalho desta sessão. Se você permitir, o Forge empacotará ou criará a estrutura do plugin nele (gravando um artefato .cindy ou arquivos de estrutura).",
       "descriptionForgeScaffold": "O diretório abaixo está fora do diretório de trabalho desta sessão. Se você permitir, o Forge criará nele os arquivos-fonte do plugin.",
@@ -21847,5 +21882,73 @@
     "switchOffer": {
       "action": "Continuar com {{model}}"
     }
+  },
+  "projectSettings": {
+    "autoLoading": "Buscando ícone…",
+    "autoNone": "Usando as iniciais do nome do projeto.",
+    "autoSource": "Origem",
+    "githubAvatar": "Usar avatar do GitHub",
+    "title": "Configurações do projeto",
+    "name": "Nome de exibição",
+    "saveName": "Salvar nome",
+    "reset": "Restaurar padrão",
+    "icon": "Ícone",
+    "directory": "Pasta do projeto",
+    "done": "Concluído",
+    "failed": "Não foi possível salvar. Tente novamente.",
+    "unavailable": "Configurações indisponíveis. Conecte um computador atualizado e tente novamente.",
+    "back": "Voltar",
+    "cancel": "Cancelar",
+    "changeIcon": "Alterar ícone",
+    "chooseIcon": "Escolher ícone",
+    "save": "Salvar",
+    "symbols": "Ícones",
+    "emoji": "Emoji",
+    "letters": "Letras",
+    "image": "Imagem",
+    "upload": "Enviar imagem",
+    "imageHint": "PNG, JPG ou WebP · corte quadrado",
+    "imageError": "Não foi possível ler a imagem. Tente um PNG ou JPG menor.",
+    "search": "Buscar ícones",
+    "customEmoji": "Ou cole um emoji",
+    "lettersHint": "Use uma ou duas letras ou números.",
+    "thisComputer": "Este computador",
+    "nameHint": "Nome na lista de projetos. A pasta não será renomeada.",
+    "copy": "Copiar caminho",
+    "copied": "Copiado",
+    "applyIcon": "Usar ícone",
+    "noResults": "Nenhum ícone encontrado",
+    "discardHint": "Descartar alterações não salvas?",
+    "keepEditing": "Continuar editando",
+    "discard": "Descartar",
+    "colors": {
+      "default": "Padrão (seguir tema)"
+    }
+  },
+  "taskManagement": {
+    "scope": "Apenas para esta conta neste computador.",
+    "archive": "Arquivamento automático",
+    "enabled": "Arquivar tarefas inativas automaticamente",
+    "description": "Arquive automaticamente tarefas inativas. O histórico continua disponível.",
+    "days": "Dias de inatividade",
+    "daysHint": "Desde a última mensagem enviada ou recebida, ou o fim de uma execução.",
+    "days7": "7 dias",
+    "days14": "14 dias",
+    "days30": "30 dias",
+    "customDays": "Dias personalizados",
+    "invalidDays": "Insira um inteiro de 1 a 365.",
+    "reset": "Restaurar padrões",
+    "archiveHint": "Tarefas em uso são mantidas. Você pode restaurar as arquivadas a qualquer momento.",
+    "preview": "Prévia do arquivamento",
+    "loadFailed": "Não foi possível carregar as configurações.",
+    "loading": "Carregando configurações…",
+    "candidateCount": "Tarefas elegíveis: {{count}}",
+    "keptCount": "Mantidas: {{count}}",
+    "lastCheck": "Última verificação: {{date}}",
+    "notChecked": "Ainda não houve verificação automática",
+    "saveFailed": "As configurações não foram salvas. Tente novamente.",
+    "archivedNotice": "Tarefas inativas arquivadas automaticamente: {{count}}",
+    "undo": "Desfazer",
+    "undoFailed": "Não foi possível desfazer. Restaure as tarefas arquivadas."
   }
 }

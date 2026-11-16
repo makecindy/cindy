@@ -1,7 +1,7 @@
 ## 4.6 订阅:旁听事件 + 钩子处理消息(subscribe 能力)
 
-新增内容与状态订阅：`subscribe.topics` 可单独声明 `message` / `task-state`，各列一行权限并要求显式批准。
-旧宿主保留过的未知声明不会自动获得内容；安装或更新时确认，缺批准可在插件详情页手动确认，未批准不投递。
+新增内容与状态订阅：`subscribe.topics` 可单独声明 `message` / `task-state`，在安装或更新确认中展示。
+接受即整体授予该版本的全部已知能力。已启用且整体安装批准有效的插件按 manifest 声明接收事件，不另存 topic 批准，也没有详情补批或调用时确认。旧 receipt 的分项批准字段读取时忽略。
 
 ```json
 "subscribe": { "topics": ["message", "task-state"] }
@@ -10,7 +10,7 @@
 `did-message-created` 的 `data` 包含 `{sessionId,messageId,role,content,createdAt,historyCursor}`。
 覆盖宿主已经保存的用户消息和 AI 回复，更新同一行时按 `messageId` 合并，不是逐 token 流。
 结构化内容只包含正文与附件位置 `{attachment_index,name,mimeType?}`；已有宿主授权的本机媒体与交接引用可用
-`cindy.host.call('cindy_helper','read_session_attachment',...)` 读取，另需 `history` 组批准；历史文件路径和跨电脑附件返回 `UNSUPPORTED_CAPABILITY`。
+`cindy.host.call('cindy_helper','read_session_attachment',...)` 读取，manifest 另需声明 `history` 组；历史文件路径和跨电脑附件返回 `UNSUPPORTED_CAPABILITY`。
 `did-task-state-changed` 的 `data` 为 `{sessionId,state}`，只在生命周期变化时发布：一轮开始、结束、出错、等待权限、等待回答、排队或取消，
 以及归档、恢复和删除。归档等变化提供相应状态字段，运行变化提供宿主规范投影的 `activity` 状态字段（或退出活动投影时的 null）及 `changedAtMs`。
 活动摘要、进度、流式输出和仅隐藏状态的变化不触发此主题。
@@ -21,7 +21,7 @@
 它们复用既有 `onHostMessage`、`seq`、100 条缓冲、唤醒与 `dropped` 语义，没有持久事件日志。
 使用原有逐事件投递，不增加合批、进度折叠或 timer；`running → completed → running` 按顺序完整送达。
 每条保留单调 `seq`，熄灯队列最多 100 条，溢出沿用 `dropped` 标记。
-没有已批准订阅者时不投影内容、不取游标、不发事件或唤醒插件。
+没有已启用、整体安装批准有效且声明该主题的订阅者时，不投影内容、不取游标、不发事件或唤醒插件。
 断线、重启或 `dropped` 后，用最后保存的 `historyCursor` 调用 `get_chat_history({session_ids:[sessionId],cursor,order:'asc'})`
 补拉（另需 `history` 组），并按消息 ID 合并；任务当前状态用 `get_session_runtime` 重读（另需 `control` 组）。
 首次连接先分页读取所需历史；事件顺序号只属于当次宿主运行，不能用作跨重启游标。

@@ -93,6 +93,14 @@ Windows 的共享链接替换需要先删除本实例的目标。对同一目标
 实现与回归见 `maker-host/codex-auth-link.ts`、`auth-adapters.ts`、
 `codexAuthLink.test.ts` 和 `codexAuthInvalidation.test.ts`。
 
+Windows 的无覆盖发布子进程保留每次 15 秒的超时。子进程结束后若源目录项已消失、
+目标仍是开始时记录的目录项，则接受已提交结果；否则仅在确认超时、源目录项的
+身份／大小／修改时间未变且目标确实不存在时重试一次。读取状态失败不等于不存在，
+目标存在或来源变化时不重试；第二次超时返回脱敏的 `ETIMEDOUT`，不泄漏子进程命令、
+路径或环境。重试仍用原子无覆盖的 `File.Move`，不使用硬链接或覆盖重命名。
+实现与回归见 `maker-host/codex-auth-file-move.ts`、`codexAuthFileMove.test.ts` 和
+`scripts/check-windows-codex-auth-move.mjs`。
+
 ## Claude 订阅只经 Claude Code 自己的登录
 
 Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**；第三方应用不得提供
@@ -298,6 +306,11 @@ relay 原有 60 秒主动续期节流保持不变。
 
 ## 路径与生命周期
 
+闲置任务自动归档：当前账号本机的 `owners/<owner-key>/task-management.json` 保存显式偏好与
+恢复任务的时间戳（仅任务 ID 和时间，不含消息／草稿）。复用原子 override 设置存储与 owner
+代次隔离；读取损坏文件时不自动归档，不覆盖原文件。恢复默认保留恢复时间，过期记录在下次
+写入时按最长 365 天保留期淘汰。设置不向其他电脑同步，普通归档内容处理不变。
+
 | 数据性质                            | 正确位置                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 引擎二进制后台下载缓存 | `userData/agent-binary-downloads/<vendor>/<归档 SHA-256>/`，只有归档、续传碎片和绑定来源/平台/版本/哈希的就绪记录，不含凭证。每种引擎保留一个候选，切换候选时回收旧候选，超过 7 天的碎片在后续检查时重建。下载与消费共用跨进程缓存锁；启动前复验哈希，复制交给原安装器后回收缓存，解压后的中间包与旧版本仍由原安装器清理。回退旧客户端时这些缓存不会被识别成已安装引擎。见 `agent-binaries/download-cache.ts` |
@@ -349,7 +362,7 @@ relay 原有 60 秒主动续期节流保持不变。
 | 语音输入声纹识别模型 | `userData/voice-models/<哈希前缀>-<文件名>.onnx`，按内容哈希从区域 CDN 下载并在可见前校验 SHA-256；不含个人数据，本机所有账号共用。新版本模型下载完成后删除旧版本文件 |
 | Mobile 语音输入声纹（生物特征） | SecureStore（iOS 钥匙串 / Android Keystore）键 `xdt.voiceSpeakerProfile.v1.<账号 key 的 SHA-256 前 32 位>`，内容同 Desktop：声纹向量、录入时间与模型哈希；开关与灵敏度 override 在 AsyncStorage `cindy.mobile.voice-speaker-filter.v1.<账号 key>`。只在本机，不同步、不上传、不进日志；退出登录时随该账号的其他本机数据一起删除（模型文件保留）。删除前写 AsyncStorage `cindy.mobile.voice-speaker-filter.cleanup.v1.<账号 key>` 重试标记，不含声纹；失败时保留标记，启动、回到前台及该账号下次读写前重试，全部删除成功后才移除。标记落盘也失败时保留进程内重试，无法保证进程终止后的恢复；不因声纹删除失败阻止退出凭证清除。朗读音频只在内存中处理 |
 | Mobile 语音输入声纹识别模型 | `cacheDirectory/voice-models/`，与 Desktop 同一组按内容哈希下载、校验 SHA-256 后才可见的文件；放缓存目录以免进入 iCloud / Android 备份。系统清理缓存后，下次语音输入发现缺失会在后台重新下载，本次不过滤 |
-| Mobile iOS 键盘停靠高度 | AsyncStorage `cindy.mobile.keyboard-docked-height.v2`（设备级，不分账号）：`{ 窗口宽度: 键盘高度 }` 两个整数，只在 iOS 正常停靠键盘、且不在转屏后 1 秒内时更新（取最高），供系统发来异常键盘坐标时沿用（见 `docs/dev-rules/mobile-development.md`「iOS 键盘坐标异常」）。不含用户内容，退出登录不清除。见 `apps/mobile/src/session/keyboardOverlap.ts` |
+| Mobile iOS 键盘停靠高度 | AsyncStorage `cindy.mobile.keyboard-docked-height.v2`（设备级，不分账号）：`{ 窗口宽度: [键盘高度, …] }`，每个宽度保留最近 6 次停稳的高度（整数，由旧到新；旧版本存的是单个历史最高值，读入时当作最旧的一条），只在 iOS 正常停靠键盘、且不在转屏后 1 秒内时更新，供系统发来异常键盘坐标时沿用其中最高值（见 `docs/dev-rules/mobile-development.md`「iOS 键盘坐标异常」）。不含用户内容，退出登录不清除。见 `apps/mobile/src/session/keyboardOverlap.ts` |
 | 新电脑设置：上次迁移记录 | `userData/owners/<账号>/setup-migration-state.json`，只记上次迁移来源电脑的名称、完成时间、一次性清单（类别、显示名称、插件实例键或供应商 / MCP id、完成标记）与是否已关闭首次建议；不含密钥、令牌、凭证或设置值。复用设置文件跨进程锁与原子替换，账号切换按目录隔离，用户「关闭清单」后清空。快照只带「是否已配置」的布尔提示。用户勾选「密钥」且原电脑的人允许后，API Key / PAT 以一次性加密传来，在 Main 内存中解开后写入各自原有的 safeStorage 存储，不落其他文件（`docs/product-rules/new-device-setup-migration.md`） |
 | iOS 桌面小组件数据 | App Group `group.<bundle id>`（与 expo-sharing 共用）里的 `usage-widget-snapshot.json`：每台电脑最近一次的余量与用量快照（已按电脑上「隐藏个人信息」打码，含账号名或邮箱前缀、余量、近 30 天用量与模型名）、「自动」所选电脑 id 与电脑名列表；不含凭证。同一 App Group 的 UserDefaults 键 `usageWidgetPins` 只记组件选中的电脑 id 与时间，超过 2 天的丢弃。App 在前台时整份原子替换写入；切换或退出账号时删除快照文件。见 `apps/mobile/modules/cindy-usage-widgets` 与 `plugins/usage-widgets` |
 | Android 桌面小组件数据 | 应用私有 `noBackupFilesDir/usage-widget-snapshot.json`（不进 Android 自动备份），内容与 iOS 的 App Group 文件相同（已打码的余量与用量快照、「自动」所选电脑 id 与电脑名列表，不含凭证）；SharedPreferences `cindy-usage-widgets` 里 `computer.<组件 id>` 记组件选中的电脑，`usageWidgetPins` 记固定电脑 id 与时间（超过 2 天丢弃），删除组件时清理。切换或退出账号时删除快照文件，并清掉所有 `computer.` / `pinned.` / `hidden.` 与 `usageWidgetPins`（它们含上一个账号的电脑 id 与账号名），再重绘组件。见 `apps/mobile/modules/cindy-usage-widgets/android` |
@@ -475,3 +488,16 @@ Claude 的插件技能不受 `skillOverrides` 控制，因此每个本地 Query 
 
 升级清理只删除可确认由 Cindy 创建的旧软链接，不删除目标内容、不覆盖用户同名
 技能、不修改 Git ignore。旧版本 Cindy 实例仍可能重建旧链接，这是迁移的已知边界。
+
+### 项目图标
+
+`owners/<账号>/project-icons.json` 保存项目身份到 Emoji、`symbol:<名称>`、`text:<缩写>`
+或规范 `cindy-media://blobs/<hash>.png` 地址的显式覆盖，最大 1MiB。
+使用既有 override settings 跨进程锁与原子替换；损坏文件保留且拒绝覆盖。
+名称继续使用现有项目别名表；组合编辑额外使用账号内的 `project-info-write.lock` 串行化，
+别名事务失败补偿旧图标。恢复默认删除项目键，不在项目目录写文件。
+
+用户图片通过统一媒体入库助手写入总仓，挂 `integration-cache` / `project-icon:<projectKey>` 引用，
+`isCache: false` 防止有效用户图片按缓存淘汰。替换／恢复默认成功后释放旧引用，未引用字节交给既有回收器。
+图片不在设置 JSON 内存 base64、不持久化控制端路径；读取只接受当前账号中已登记的项目身份。
+实现：`main/projectIconStore.ts`、`projectInfoCore.ts`、`projectIconMedia.ts`。

@@ -96,3 +96,18 @@ it('hides unconfigured service but makes a connection failure visible', async ()
   fireEvent(window, new Event('focus'));
   expect(await screen.findByText(prefix + 'error')).toBeTruthy();
 });
+
+// Automation setup must not offer account-wide disconnect or imply that an
+// account login confirms this task's subscription. Existing card tests only
+// exercise plugin settings. Minimal input: connected login, unrelated denied repo.
+// Tier: unit/jsdom, production GithubAppCard automation entry.
+it('limits automation setup to account connection and relevant repository authorization', async () => {
+  window.electronAPI = { gitContext: { githubAppStatus: async () => ({ available: true,
+    login: 'example-user', repositories: ['example/project'], unavailable: ['other/private'] }) } } as unknown as typeof window.electronAPI;
+  render(<GithubAppCard automation repositories={['example/project']} />);
+  await screen.findByText('ccAgent.gitContext.pr.setup.account.connected');
+  expect(screen.getByRole('button', { name: 'scheduler.editor.webhook.authorizeRepositories' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: prefix + 'disconnect' })).toBeNull();
+  expect(screen.queryByText(prefix + 'connected')).toBeNull();
+  expect(screen.queryByText(prefix + 'missing')).toBeNull();
+});
