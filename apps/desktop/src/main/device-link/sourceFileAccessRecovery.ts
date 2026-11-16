@@ -24,13 +24,30 @@ export function withSourceFileAccessRecovery<T>(recovery: SourceFileAccessRecove
       return await operation();
     } catch (error) {
       discardUploads();
-      recovery.assertCurrent();
+      // 兜底复查失败只作补充信息(#10852):真实故障(传输超时、离线、附件读失败)
+      // 才是主错误,不能被权限类错误顶替,否则用户无法判断该重试还是查链路。
+      try {
+        recovery.assertCurrent();
+      } catch (assertError) {
+        attachDiagnosticCause(error, assertError);
+      }
       throw error;
     } finally {
       recovery.signal?.removeEventListener('abort', discardUploads);
       discard.clear();
     }
   });
+}
+
+/** 把补充原因挂到原始错误的 cause 上;挂不上就放弃,绝不顶替原始错误。 */
+function attachDiagnosticCause(error: unknown, cause: unknown): void {
+  if (error === null || (typeof error !== 'object' && typeof error !== 'function')) return;
+  try {
+    const current = (error as { cause?: unknown }).cause;
+    if (current === undefined || current === null) (error as { cause?: unknown }).cause = cause;
+  } catch {
+    // 冻结或只读的错误对象附不上 cause;原始错误照常抛出。
+  }
 }
 
 /** Captured by each transfer, so its asynchronous checkpoints retain the initiating scope. */

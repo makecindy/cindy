@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   selectFile: vi.fn(),
   canUseDeviceLink: true,
   diagnosticsInfo: vi.fn(),
+  loggers: {} as Record<string, { warn: ReturnType<typeof vi.fn> }>,
   quitHandlers: new Map<string, { fn: () => void; phase: string }>(),
   cache: {
     readMessages: vi.fn(async () => [] as Record<string, unknown>[]),
@@ -51,7 +52,16 @@ vi.mock('electron', () => ({
   },
 }));
 vi.mock('../../logger', () => ({
-  createLogger: (scope: string) => ({ warn: vi.fn(), error: vi.fn(), info: scope === 'device-link:ipc-diagnostics' ? h.diagnosticsInfo : vi.fn(), debug: vi.fn() }),
+  createLogger: (scope: string) => {
+    const logger = {
+      warn: vi.fn(),
+      error: vi.fn(),
+      info: scope === 'device-link:ipc-diagnostics' ? h.diagnosticsInfo : vi.fn(),
+      debug: vi.fn(),
+    };
+    h.loggers[scope] = logger;
+    return logger;
+  },
 }));
 vi.mock('../../lifecycle', () => ({
   onQuit: (name: string, fn: () => void, phase: string) => {
@@ -312,12 +322,35 @@ describe('attachment access confirmation IPC', () => {
     });
     vi.mocked(rewriteOutboundMedia).mockImplementationOnce(async () => { await readWithSourceFileAccessRecovery(source, read); return []; });
     h.selectFile.mockResolvedValueOnce({ canceled: false, filePaths: [source] });
-    await expect(call(DEVICE_LINK_INVOKE.INVOKE, payload)).rejects.toThrow('PERMISSION_DENIED');
+    // #10852: 兜底复查不再顶替主错误 —— 上传被中止才是这次失败的直接原因,
+    // 作用域复查失败降级成 cause 保留下来,便于事后分辨是谁作废的。
+    const failure = await call(DEVICE_LINK_INVOKE.INVOKE, payload).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain('UPLOAD_CANCELLED');
+    expect(((failure as Error).cause as Error | undefined)?.message).toContain('PERMISSION_DENIED');
     expect(read).toHaveBeenCalledTimes(2);
     expect(remoteInvoke).not.toHaveBeenCalled();
     expect(h.invalidations.size).toBe(0);
     expect(senderEvents.listenerCount('destroyed')).toBe(0);
     expect(senderEvents.listenerCount('did-start-navigation')).toBe(0);
+  });
+
+  // #10852: 传输超时是真实故障原因,不能再被兜底复查的权限错误顶替。
+  it('keeps the transport timeout primary when the scope expired during the transfer', async () => {
+    vi.mocked(remoteInvoke).mockImplementationOnce(async () => {
+      h.ownerGeneration++;            // 传输期间账号边界推进 → 作用域复查也会失败
+      throw new DeviceLinkError('INVOKE_TIMEOUT', 'no invoke-result within 30000ms');
+    });
+    const failure = await call(DEVICE_LINK_INVOKE.INVOKE, payload).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain('DEVICE_LINK_TIMEOUT');
+    expect((failure as Error).message).not.toContain('PERMISSION_DENIED');
+    expect(((failure as Error).cause as Error | undefined)?.message).toContain('PERMISSION_DENIED');
+    // 守卫命中哪一条要能从日志反推。
+    expect(h.loggers['device-link:ipc']?.warn).toHaveBeenCalledWith(
+      'device-link send scope is no longer current',
+      expect.objectContaining({ reason: 'generation-changed' }),
+    );
   });
 
   it.each(['cancel', 'wrong-file', 'owner-change', 'window-closed', 'page-changed'])('does not dispatch after %s', async outcome => {

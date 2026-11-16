@@ -33,3 +33,43 @@ describe('native attachment source selection on Windows', () => {
     }
   });
 });
+
+// #10852: 兜底复查不得顶替真实故障原因。
+// 传输超时/离线/附件读失败才是主错误,守卫复查失败只能作为 cause 补充。
+describe('send failure keeps the original error', () => {
+  const transportError = () => Object.assign(new Error('no invoke-result within 30000ms'), {
+    code: 'DEVICE_LINK_TIMEOUT',
+  });
+  const scopeError = () => Object.assign(new Error('scope is no longer current'), {
+    code: 'PERMISSION_DENIED',
+  });
+
+  it('keeps the transport error primary and records the scope check failure as cause', async () => {
+    const transport = transportError();
+    const scope = scopeError();
+    const result = withSourceFileAccessRecovery({
+      selectFile: async () => null,
+      assertCurrent: () => { throw scope; },
+    }, async () => { throw transport; });
+    await expect(result).rejects.toBe(transport);
+    expect((transport as Error).cause).toBe(scope);
+  });
+
+  it('leaves the original error untouched when the scope is still valid', async () => {
+    const transport = transportError();
+    const result = withSourceFileAccessRecovery({
+      selectFile: async () => null,
+      assertCurrent: () => {},
+    }, async () => { throw transport; });
+    await expect(result).rejects.toBe(transport);
+    expect((transport as Error).cause).toBeUndefined();
+  });
+
+  it('does not crash on a failure that is not an error object', async () => {
+    const result = withSourceFileAccessRecovery({
+      selectFile: async () => null,
+      assertCurrent: () => { throw scopeError(); },
+    }, async () => { throw 'plain failure'; });
+    await expect(result).rejects.toBe('plain failure');
+  });
+});

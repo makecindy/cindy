@@ -98,6 +98,7 @@ import { confirmReviewArtifacts } from '../reviewer/confirmReviewArtifacts.js';
 import { tryUploadPeerAttachment } from './filePeer';
 import { withAgentNetMediaTarget } from './agentNetMediaRouting.js';
 import { withSourceFileAccessRecovery, releaseSourceFileAccessUploads } from './sourceFileAccessRecovery';
+import { describeSendScopeReason, resolveSendScopeReason } from './sendScopeGuard';
 import { parseSharedTaskPeer, scrubSharedProviderCatalog } from '@cindy/device-link';
 import { withSharedTaskMedia } from './sharedTaskMediaContext.js';
 import {
@@ -1863,11 +1864,28 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       const targetWindow = BrowserWindow.fromWebContents(e.sender);
       const assertCurrent = () => {
         const current = getActiveAppSession();
-        if (transfer.signal.aborted || isAppSessionBoundaryPending() || !owner.dataOwnerId
-          || current.dataOwnerId !== owner.dataOwnerId || current.generation !== owner.generation
-          || e.sender.isDestroyed() || !frame || frame.detached || e.sender.mainFrame !== frame
-          || !targetWindow || targetWindow.isDestroyed()) {
-          throwIpcError('PERMISSION_DENIED', 'Attachment confirmation is no longer current');
+        // 命中条件要能从日志反推(#10852 P1):守卫覆盖所有前台发送通道,
+        // 不能再说「附件确认」——没有附件确认的发送也会走到这里。
+        const reason = resolveSendScopeReason({
+          aborted: transfer.signal.aborted,
+          boundaryPending: isAppSessionBoundaryPending(),
+          ownerDataOwnerId: owner.dataOwnerId,
+          ownerGeneration: owner.generation,
+          currentDataOwnerId: current.dataOwnerId,
+          currentGeneration: current.generation,
+          senderDestroyed: e.sender.isDestroyed(),
+          frameMissing: !frame,
+          frameDetached: frame?.detached ?? false,
+          frameIsMainFrame: frame ? e.sender.mainFrame === frame : false,
+          windowMissing: !targetWindow,
+          windowDestroyed: targetWindow?.isDestroyed() ?? false,
+        });
+        if (reason) {
+          log.warn('device-link send scope is no longer current', {
+            reason,
+            channel: String(p.channel),
+          });
+          throwIpcError('PERMISSION_DENIED', describeSendScopeReason(reason));
         }
         assertTrustedAppRendererEvent(e);
       };
