@@ -1004,6 +1004,15 @@ describe('local-db:sessions:update handler wiring', () => {
     await expect(invokeUpdate('cc-local', { contextWindowBudget: 100_000_001 })).rejects.toThrow(
       /contextWindowBudget must be null or an integer/,
     );
+    // A string, and nothing written or broadcast for any refused value (the check runs before both;
+    // the Node Host's /sessions/update runs the same check, assertSessionContextWindowBudgetPatch).
+    const rowBefore = JSON.stringify(h.sqlite!.prepare('SELECT * FROM sessions WHERE id = ?').get('cc-local'));
+    await expect(invokeUpdate('cc-local', { contextWindowBudget: '300000' })).rejects.toThrow(
+      /^\[INVALID_PARAMS\] contextWindowBudget must be null or an integer within \[/,
+    );
+    expect(JSON.stringify(h.sqlite!.prepare('SELECT * FROM sessions WHERE id = ?').get('cc-local'))).toBe(rowBefore);
+    expect(isSessionContextWindowBudgetCustomized('cc-local')).toBe(false);
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
   });
 
   it('persists null and an in-range task context window budget', async () => {
