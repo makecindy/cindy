@@ -965,13 +965,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!upgradedGroups.has(groupId)) {
         // A room also carries a local row for its lane metadata, and that row starts to look like
         // an unimported history once those lanes are gone. An id that answers with a room is the
-        // room; only a history the server has never seen is still pending.
-        const room = await groupSnapshot(groupId).catch(error => {
+        // room; only a history the server has never seen is still pending. Remember it through
+        // resolvedGroups only: upgradedGroups also fans each room change out to its source id.
+        const existing = await groupSnapshot(groupId).catch(error => {
           if (error instanceof ChatResponseError && [403, 404].includes(error.status)) return null;
           throw error;
         });
-        if (!room) throw new Error('IMPORT_PENDING');
-        upgradedGroups.set(groupId, groupId);
+        if (!existing) throw new Error('IMPORT_PENDING');
       }
     }
     const room = upgradedGroups.get(groupId) ?? groupId;
