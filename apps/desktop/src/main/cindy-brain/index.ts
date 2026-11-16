@@ -5991,12 +5991,14 @@ configureProviderMediaRuntime({
 /**
  * 插件详情「模型」字段(与插件新建任务共用 pluginTaskPrefsStore)→ 快问快答的
  * 供应商×agent×模型。每单现读;未选 = null = 跟随身份卡声明/系统辅助模型链。
+ * 选的是其他电脑或分享来的模型时同样返回 null:快问快答是本机直发的一次性请求,
+ * 跑不到那台电脑上,也绝不借本机同名供应商执行计费。
  */
 function getPluginOneshotModelSelection(
   ghostId: string,
 ): { providerId?: string; agentKind: AgentKind; model: string } | null {
   const config = getPluginTaskDefaults(ghostId) ?? {};
-  if (!config.model) return null;
+  if (!config.model || config.agentDeviceId) return null;
   if (!config.agentKind || config.agentKind === 'pi') {
     // 两种情况按目录解析一条快问快答可路由的 供应商×agent×模型:
     // - 手改文件只写了 model;

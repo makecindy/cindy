@@ -20,10 +20,10 @@ import {
   type PluginTaskStore,
   type PluginTaskServiceDeps,
 } from '../pluginTaskService.js';
-import type { PluginTaskView } from '../../../shared/pluginTasks.js';
+import type { PluginTaskRoute, PluginTaskView } from '../../../shared/pluginTasks.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from '../sessionExecutionOwnership.js';
 import { PLUGIN_TEAM_PLAN_MAX_JSON_CHARS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
-import { resolveRemotePluginTaskRoute } from '../pluginTaskModelRoute.js';
+import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from '../pluginTaskModelRoute.js';
 import type { ProviderView } from '@cindy/model-providers';
 
 // PR #9155 P1: a cold/offline remote read held the shared receipt queue, so
@@ -1557,15 +1557,18 @@ it('an open plugin selection without a source session follows the auxiliary chai
   const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
   const resolveStart = source.indexOf('    const resolveRoute = async');
   const resolve = source.slice(resolveStart, source.indexOf('    const readExecution', resolveStart));
-  const run = (candidates: Array<{ agentKind: 'codex'; providerId: string; model: string }>, config = {}, sourceSessionId?: string) => {
+  const run = (candidates: Array<{ agentKind: 'codex'; providerId: string; model: string }>, config = {}, sourceSessionId?: string, requested?: PluginTaskRoute) => {
     const deps = { getPluginTaskDefaults: () => config, getSelectedNewMakerRoute: () => selected,
       activeOwnerScopeKey: () => 'owner', assertPlugin: () => {}, getPluginTaskSourceSessionId: () => sourceSessionId,
       resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
       getEffectiveAuxiliaryModelRefs: () => ['chain'], getEffectiveAuxiliaryModelChainSnapshot: () => 'chain',
       auxiliaryChainSessionCandidates: () => candidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen,
-      isRemoteAuxiliaryModelRef: () => false };
+      isRemoteAuxiliaryModelRef: () => false,
+      savedPluginTaskRemoteRoute, readPluginRouteProviders: async () => [],
+      // Remote catalog admission is covered by resolveRemotePluginTaskRoute's own tests; mark the path taken.
+      resolveRemotePluginTaskRoute: async (route: PluginTaskRoute) => ({ ...route, viaRemoteCatalog: true }) };
     const js = ts.transpileModule(`${resolve}\nreturn resolveRoute;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-    return new Function(...Object.keys(deps), js)(...Object.values(deps))('p') as Promise<{ model: string; effort: string }>;
+    return new Function(...Object.keys(deps), js)(...Object.values(deps))('p', requested) as Promise<{ model: string; effort: string }>;
   };
   // First usable candidate wins, at low effort; a model Pi does not offer stays on the chain's harness.
   await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'missing' }, { agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }]))
@@ -1582,6 +1585,17 @@ it('an open plugin selection without a source session follows the auxiliary chai
   await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'missing' }])).resolves.toMatchObject({ model: 'next', effort: 'high' });
   // An explicit plugin model never consults the chain.
   await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }], { model: 'next' })).resolves.toMatchObject({ model: 'next' });
+  // Rule (2026-11-16): a saved run location applies without an explicit route and is admitted
+  // by that location's catalog, never the local resolver or chain.
+  const savedRemote = { agentKind: 'codex' as const, providerId: 'only-remote', model: 'remote-model', agentDeviceId: 'share:abc' };
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }], savedRemote))
+    .resolves.toEqual({ ...savedRemote, effort: '', fastMode: false, viaRemoteCatalog: true });
+  // An explicit local route replaces the whole saved choice, including its location.
+  const explicitLocal = { agentKind: 'codex' as const, providerId: f.route.providerId, model: 'next', effort: 'high', fastMode: false };
+  const local = await run([], savedRemote, undefined, explicitLocal);
+  expect(local).toMatchObject({ model: 'next', providerId: f.route.providerId });
+  expect(local).not.toHaveProperty('agentDeviceId');
+  expect(local).not.toHaveProperty('viaRemoteCatalog');
 });
 
 it('archives only its own idle task through the host writer and treats archived tasks as done', async () => {
@@ -1659,7 +1673,7 @@ it.each([
     resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
     // No auxiliary chain configured in this scenario: the new-task selection stays the inherited default.
     getEffectiveAuxiliaryModelRefs: () => [], getEffectiveAuxiliaryModelChainSnapshot: () => '',
-    auxiliaryChainSessionCandidates: () => [], pluginTaskRouteAttempts, pluginTaskSelectionIsOpen,
+    auxiliaryChainSessionCandidates: () => [], pluginTaskRouteAttempts, pluginTaskSelectionIsOpen, savedPluginTaskRemoteRoute,
     isRemoteAuxiliaryModelRef: () => false };
   const js = ts.transpileModule(`${resolve}\nreturn {${preference} resolveRoute};`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },

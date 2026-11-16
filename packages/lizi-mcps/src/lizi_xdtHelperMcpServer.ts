@@ -6,6 +6,7 @@ import { registerStorageTools, type StorageToolCallbacks } from './xdt-helper/st
 import { registerHostServiceTools, type HostServicesToolCallbacks } from './xdt-helper/host_services.js';
 import { createControlReader } from './xdt-helper/control-catalog.js';
 import { registerAppModelsTools, type AppModelsCallbacks } from './xdt-helper/app_models.js';
+import { registerProviderSharingTools, type ProviderSharingCallbacks } from './xdt-helper/provider_sharing.js';
 import { registerSubscriptionUsageTools, type SubscriptionUsageCallbacks } from './xdt-helper/subscription_usage.js';
 import { registerAppSettingsTools, type AppSettingsCallbacks } from './xdt-helper/app_settings.js';
 import { registerThemePackageTool, type ThemePackageCallbacks } from './xdt-helper/theme_packages.js';
@@ -559,6 +560,7 @@ export interface XdtHelperMcpDeps {
   themePackages?: ThemePackageCallbacks;
   piRuntime?: PiRuntimeCallbacks;
   modelSettings?: AppModelsCallbacks;
+  providerSharing?: ProviderSharingCallbacks;
   appModels?: Pick<BotCapabilityCallbacks, 'models' | 'setDefaultModel'>;
   botCapabilities?: BotCapabilityCallbacks;
   /** Which computer runs a teammate, and moving it to another (cloud companions). */
@@ -846,6 +848,7 @@ export function createXdtHelperMcpServer(
     });
   }
   if (deps.modelSettings) registerAppModelsTools(registry, deps.modelSettings, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.providerSharing) registerProviderSharingTools(registry, deps.providerSharing, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.piRuntime) registerPiRuntimeTools(registry, deps.piRuntime, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.appSettings) registerAppSettingsTools(registry, deps.appSettings, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.themePackages) registerThemePackageTool(registry, deps.themePackages, () => resolveLiziMcpSessionContext(sessionCtx));

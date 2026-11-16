@@ -48,7 +48,7 @@ import { openSession, setSessionOpeningModelAdmission } from '../localDb/session
 import { createPluginTaskReviewResolver } from './pluginTaskReviewContext.js';
 import { createPluginTargetReviewLoader } from '../cindy-brain/pluginTargetReview.js';
 import { isPluginTaskPermissionAllowed, assertPluginTaskResult, createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
-import { resolveRemotePluginTaskRoute } from './pluginTaskModelRoute.js';
+import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from './pluginTaskModelRoute.js';
 import { resolvePluginWorkerDirectory } from './pluginWorkerDirectory.js';
 import { PluginWriteAccessGate } from './pluginWriteAccessGate.js';
 import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
@@ -7668,9 +7668,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 改用不抛的判定决定「这次读取要不要放行本机绑定自愈 + 清单拉取」。
     isTrustedSender: (event) =>
       isTrustedAppRendererEvent(event as Parameters<typeof isTrustedAppRendererEvent>[0]),
-    // 动态清单重新发现:目前没有需要主动重拉的供应商(anthropic 清单来自 Claude Code
-    // 会话 init 的 SDK 捕获,没有 HTTP 发现通道,也就没有失败态)。
-    rediscoverModels: async () => null,
+    // Independent subscription ids use the same account routing as native refresh;
+    // their editable display names never select a provider or CLI profile.
+    rediscoverModels: async (providerId) => {
+      const ref = resolveSubscriptionPoolProviderRef(providerId);
+      if (ref && !(await getMaker().refreshAgentLocalModels(ref.kind === 'anthropic' ? 'claude-code' : 'codex', {
+        providerId, credentialMode: 'oauth-bearer',
+      }))) throw new Error('Subscription model discovery did not produce a current snapshot');
+      return null;
+    },
     refreshBuiltinModels: refreshProviderModelsManually,
     requestModelsAutoRefresh: requestProviderModelAutoRefresh,
     scanLocalCli: () => scanLocalCliAuth(createLocalCliScanDeps()),
@@ -14134,7 +14140,35 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { ...body, ...execution, effort: execution.effort ?? '',
       agentKind: execution.agentKind === 'claude-code' ? 'cc' : execution.agentKind };
   });
-  setPluginTaskConfigValidator(async config => { await resolveSessionExecution(config); });
+  // A saved run location is checked against that computer's (or share's) catalog, the
+  // same reader explicit remote plugin routes use; it never falls back to a local namesake.
+  const readPluginRouteProviders = (deviceId: string) => readDeviceProviderViews(remoteBackgroundInvoke, deviceId);
+  setPluginTaskConfigValidator(async config => {
+    const remote = savedPluginTaskRemoteRoute(config);
+    if (remote) {
+      await resolveRemotePluginTaskRoute(remote, { readProviders: readPluginRouteProviders, assertCurrent: () => {} });
+      return;
+    }
+    await resolveSessionExecution(config);
+  });
+  /**
+   * Execution for the legacy errand adapter and workspace drafts: the shared resolver,
+   * or the saved run location revalidated against that computer's catalog each time.
+   */
+  const resolvePluginSavedExecution = async (
+    config: Parameters<typeof resolveSessionExecution>[0] & { agentDeviceId?: string | null },
+    sourceSessionId?: string,
+    existing?: Parameters<typeof resolveSessionExecution>[2],
+  ): Promise<Awaited<ReturnType<typeof resolveSessionExecution>> & { agentDeviceId?: string }> => {
+    const remote = savedPluginTaskRemoteRoute(config);
+    if (!remote) return resolveSessionExecution(config, sourceSessionId, existing);
+    const route = await resolveRemotePluginTaskRoute(remote, {
+      readProviders: readPluginRouteProviders, assertCurrent: captureSessionOwner(),
+    });
+    return { agentKind: route.agentKind === 'cc' ? 'claude-code' : route.agentKind, model: route.model,
+      providerId: route.providerId, ...(route.effort ? { effort: route.effort as Effort } : {}),
+      fastMode: route.fastMode, agentDeviceId: route.agentDeviceId };
+  };
 
   // Ghost 的 Agent 槽只负责验证权限和整理 prompt；真正的新回合仍走
   // sendToSessionInternal 这一条主机通路，因此会话恢复、繁忙排队、消息落库与
@@ -14193,13 +14227,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const routeUnavailable = (): never => { throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected provider, model or effort is unavailable'); };
     const resolveRoute = async (pluginId: string, requested?: PluginTaskRoute, callId?: string): Promise<PluginTaskRoute> => {
       assertPlugin(pluginId);
-      if (requested?.agentDeviceId) {
-        return resolveRemotePluginTaskRoute(requested, {
-          readProviders: deviceId => readDeviceProviderViews(remoteBackgroundInvoke, deviceId),
+      const defaults = getPluginTaskDefaults(pluginId);
+      // Without an explicit route the user's saved choice applies together with its run
+      // location; an explicit route (local or remote) replaces the whole saved choice.
+      const remote = requested ? (requested.agentDeviceId ? requested : null) : savedPluginTaskRemoteRoute(defaults ?? {});
+      if (remote) {
+        return resolveRemotePluginTaskRoute(remote, {
+          readProviders: readPluginRouteProviders,
           assertCurrent: () => assertPlugin(pluginId),
         });
       }
-      const selection = { ...getPluginTaskDefaults(pluginId), ...requested };
+      const { agentDeviceId: _savedLocation, ...localDefaults } = defaults ?? {};
+      const selection = { ...localDefaults, ...requested };
       const sourceSessionId = getPluginTaskSourceSessionId(pluginId, callId);
       if (callId && !sourceSessionId && !(selection.agentKind && selection.model && selection.providerId)) throw new PluginTaskError('ROUTE_UNAVAILABLE', '发起任务已不可用，请重新调用，或在面板选择模型后创建任务');
       try {
@@ -14216,7 +14255,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                   agentKind: candidate.agentKind === 'claude-code' ? 'cc' : candidate.agentKind,
                   effort: effort ?? '', fastMode: false,
                 }, {
-                  readProviders: deviceId => readDeviceProviderViews(remoteBackgroundInvoke, deviceId),
+                  readProviders: readPluginRouteProviders,
                   assertCurrent: () => assertPlugin(pluginId),
                 });
                 assertPlugin(pluginId);
@@ -14314,7 +14353,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           return current.workingDir === cfg.workingDir && current.permissionMode === cfg.permissionMode
             && current.agentKind === cfg.agentKind && current.model === cfg.model
             && current.providerId === cfg.providerId && current.effort === cfg.effort
-            && current.fastMode === cfg.fastMode;
+            && current.fastMode === cfg.fastMode && current.agentDeviceId === cfg.agentDeviceId;
         };
         // Receipt persistence/provider lookup can yield after the first resolution.
         // Reuse the resolver with the original request, then guard this configuration
@@ -15060,6 +15099,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             providerId: sessions.providerId,
             effort: sessions.effort,
             fastMode: sessions.fastMode,
+            agentDeviceId: sessions.agentDeviceId,
             permissionMode: sessions.permissionMode,
             workingDir: sessions.workingDir,
             workspaceKind: sessions.workspaceKind,
@@ -15089,7 +15129,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return sessionId;
       },
       getGhostName: getInstalledGhostName,
-      resolveExecution: resolveSessionExecution,
+      resolveExecution: resolvePluginSavedExecution,
       captureOwner: captureSessionOwner,
       normalizeWorkingDir: (dir) => normalizeWorkingDirForStorage(dir),
       isUserPickedDir: isGhostPickedDir,
@@ -15170,7 +15210,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     createDraftSession: async (params) => {
       const assertOwner = captureSessionOwner();
       const config = getPluginTaskDefaults(params.ghostId);
-      const execution = await resolveSessionExecution(config ?? {}, params.sourceSessionId);
+      const execution = await resolvePluginSavedExecution(config ?? {}, params.sourceSessionId);
       assertOwner();
       const sessionId = await createPluginDraftSession({
         ...params,

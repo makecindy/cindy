@@ -735,8 +735,7 @@ export interface RemoteAgentSelectorOptions {
 export type ModelSelectorLocalOnlyReason =
   | 'subagent-in-parent-task'
   | 'vision-bridge-local-proxy'
-  | 'one-shot-local-request'
-  | 'plugin-task-local-route';
+  | 'one-shot-local-request';
 
 /**
  * 每个入口都必须声明模型来源，漏传不能再静默变成只有本机。

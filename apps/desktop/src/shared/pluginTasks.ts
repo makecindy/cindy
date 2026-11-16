@@ -9,6 +9,10 @@ export interface PluginTaskRoute {
   effort: string;
   fastMode: boolean | 'ultrafast';
 }
+/** Same location vocabulary as an explicit route: a paired computer id or share:<id>; never 'local'. */
+export function isPluginTaskAgentDeviceId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value) && value !== 'local';
+}
 export const PLUGIN_TASK_PERMISSION_MODES = ['ask', 'auto', 'bypassPermissions'] as const;
 export type PluginTaskPermissionMode = (typeof PLUGIN_TASK_PERMISSION_MODES)[number];
 export function isPluginTaskPermissionMode(value: unknown): value is PluginTaskPermissionMode {
