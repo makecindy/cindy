@@ -343,6 +343,56 @@ describe('selected plugin host', () => {
     expect(catalog.mock.calls.filter(([query]) => query.counts)).toHaveLength(1);
   });
 
+  // Unit / Greptile 4583847638: activation can finish the catalog before the
+  // installed snapshot. An unchanged late snapshot must not force a second
+  // round; a changed source still replaces already-read cards immediately.
+  it.each(['unchanged', 'source-changed'] as const)('refreshes a returning market once before a slow snapshot: %s', async outcome => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(100_000);
+    const normal = invoke.getMockImplementation()!;
+    let holdSnapshot = false;
+    let finish!: (value: unknown) => void;
+    const pending = new Promise(resolve => { finish = resolve; });
+    let name = 'Cached market';
+    const catalog = vi.fn(async (query: { counts?: boolean }) => ({ ...snapshot('computer-a').market,
+      items: [{ pluginId: 'market-one', ghostId: 'market-one', releaseId: 'release-one', name,
+        scope: 'public', publisherKind: 'official', sourceType: 'server', installState: 'not-installed' }],
+      nextCursor: null, counts: query.counts ? { all: 1, public: 1, organization: 0, personal: 0, custom: 0 } : null,
+    }));
+    invoke.mockImplementation(async (device, channel, args) => {
+      const input = args?.[0]?.input;
+      if (input?.read === 'capabilities') return { effects: [], result: { catalogPaging: true } };
+      if (input?.read === 'recommendations') return { effects: [], result: [] };
+      if (input?.read === 'catalog') return { effects: [], result: await catalog(input.query) };
+      if (input?.read === 'installed' && holdSnapshot) return { effects: [], result: await pending };
+      return normal(device, channel, args);
+    });
+    const view = (active: boolean) => <RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online active={active} />;
+    const mounted = render(view(true));
+    await screen.findByText('computer-a');
+    fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
+    await screen.findByText(name);
+    await waitFor(() => expect(catalog).toHaveBeenCalledTimes(2));
+    mounted.rerender(view(false));
+    catalog.mockClear();
+    clock.mockReturnValue(131_000);
+    vi.useFakeTimers();
+    holdSnapshot = true;
+    name = 'Catalog before snapshot';
+    mounted.rerender(view(true));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText(name)).toBeTruthy();
+    expect(catalog.mock.calls.filter(([query]) => !query.counts)).toHaveLength(1);
+    const next = { ...snapshot('computer-a'), market: { ...snapshot('computer-a').market,
+      customSourceNames: outcome === 'source-changed' ? ['Changed source'] : [] } };
+    if (outcome === 'source-changed') name = 'Catalog after changed source';
+    await act(async () => { finish(next); await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText(name)).toBeTruthy();
+    if (outcome === 'unchanged') {
+      expect(catalog.mock.calls.filter(([query]) => !query.counts)).toHaveLength(1);
+      expect(catalog.mock.calls.filter(([query]) => query.counts)).toHaveLength(1);
+    } else expect(catalog.mock.calls.filter(([query]) => !query.counts).length).toBeGreaterThan(1);
+  });
+
   // Unit, #9487: reconnect previously refreshed the snapshot but retained stale market pages.
   // The same installed set with a changed market release must display the new card.
   it('refreshes cached market cards after reconnect when installed versions are unchanged', async () => {

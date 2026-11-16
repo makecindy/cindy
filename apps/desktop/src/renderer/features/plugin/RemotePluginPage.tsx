@@ -186,6 +186,7 @@ export function RemotePluginPage({
       }
       const next = parsePluginManagementSnapshot(await invoke('snapshot', paging ? { read: 'installed' } : {}));
       if (writable() && revision === readRevision.current) {
+        const previousMarket = catalogMemory.remoteSnapshot?.market;
         setSnapshot(previous => {
           const market = mergePluginSnapshot(previous?.market ?? null, next.market);
           return previous?.market === market && samePluginValue(previous, { ...next, market }) ? previous : { ...next, market };
@@ -195,7 +196,7 @@ export function RemotePluginPage({
         setLegacySelected(null);
         setLegacyDetail(null);
         setStatus(null);
-        await browserCache.current.refresh?.({ force });
+        await browserCache.current.refresh?.({ force: force && !samePluginValue(previousMarket, catalogMemory.remoteSnapshot?.market) });
       }
     } catch {
       if (writable() && revision === readRevision.current) setStatus('readFailed');
