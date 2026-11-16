@@ -654,13 +654,14 @@ export interface GhostExclusiveMutation {
     sourceDir: string,
     options: {
       disabled: boolean;
+      installedRelId?: string;
       trust?: typeof CINDY_OFFICIAL_GHOST_TRUST;
     },
   ): Promise<void>;
   approveTrustedBundledInstall(
     manifest: GhostManifest,
     markerEnabled: boolean,
-    options: { sourceDir: string },
+    options: { sourceDir: string; installedRelId?: string },
   ): Promise<boolean>;
   removeInstallApproval(id: string): Promise<boolean>;
   uninstall(id: string, options?: GhostUninstallOptions): Promise<UninstallResult>;
@@ -2276,10 +2277,10 @@ export class GhostManager {
       const mutation: GhostExclusiveMutation = {
         writeDisabledMarker: (id) => {
           assertCapabilityActive();
-          if (!isValidGhostId(id) || !this.isRealDirChild(this.contentRootDir(), id)) {
+          if (!isValidPluginInstallRelId(id) || !this.isRealDirChildRel(id)) {
             throw new Error('ghost disabled marker target is not a managed plugin directory');
           }
-          this.writeDisabledMarkerSync(path.join(this.contentRootDir(), id));
+          this.writeDisabledMarkerSync(this.contentPath(id));
         },
         publishTrustedBundledSeed: async (id, sourceDir, options) => {
           assertCapabilityActive();
@@ -2287,9 +2288,12 @@ export class GhostManager {
         },
         approveTrustedBundledInstall: async (manifest, markerEnabled, options) => {
           assertCapabilityActive();
-          const pendingNamespace = this.isPendingLegacyNamespace(manifest.id);
+          const relId = this.bundledInstallRelId(manifest.id, options?.installedRelId);
+          const pendingNamespace = relId === manifest.id && this.isPendingLegacyNamespace(manifest.id);
           if (pendingNamespace) this.ensureNamespaceMigrationCensus();
-          const changed = await this.approveTrustedBundledInstallUnlocked(manifest, markerEnabled, options);
+          const changed = await this.approveTrustedBundledInstallUnlocked(manifest, markerEnabled, {
+            ...options, installedRelId: relId,
+          });
           // A proven seed's first receipt must also finish its legacy census;
           // pending identity would still block its existing Host credentials.
           if (pendingNamespace) {
@@ -4939,6 +4943,16 @@ export class GhostManager {
     return { ghost: projected.ghost };
   }
 
+  private bundledInstallRelId(id: string, installedRelId?: string): string {
+    const rootRelId = pluginNewInstallRelId(createPluginLogicalIdentity(null, id));
+    if (!isValidGhostId(id) || (installedRelId !== undefined && installedRelId !== id && installedRelId !== rootRelId)) {
+      throw new Error('builtin target must be the matching legacy or root installation');
+    }
+    // The provisioner supplies its exact target. Keep legacy callers compatible.
+    return installedRelId ?? (this.isRealDirChildRel(id) ? id
+      : this.isRealDirChildRel(rootRelId) ? rootRelId : id);
+  }
+
   /**
    * 随包种子已经由 provisioning 层逐字节对账后，为其建立 Host 安装验证状态。
    * 该入口不得用于市场包或任意本地目录；id 必须落在注入的
@@ -4956,6 +4970,7 @@ export class GhostManager {
     sourceDirInput: string,
     options: {
       disabled: boolean;
+      installedRelId?: string;
       trust?: typeof CINDY_OFFICIAL_GHOST_TRUST;
     },
   ): Promise<void> {
@@ -4972,11 +4987,9 @@ export class GhostManager {
     }
     const packageSha256 = await hashApprovedDirectory(sourceDir);
     const root = this.contentRootDir();
-    const relId = this.isRealDirChildRel(id) ? id
-      : this.isRealDirChildRel(pluginNewInstallRelId(createPluginLogicalIdentity(null, id)))
-        ? pluginNewInstallRelId(createPluginLogicalIdentity(null, id)) : id;
+    const relId = this.bundledInstallRelId(id, options.installedRelId);
     const storagePart = pluginInstallStoragePart(relId);
-    const finalDir = path.join(root, ...relId.split('/'));
+    const finalDir = this.contentPath(relId);
     const rand = crypto.randomBytes(4).toString('hex');
     const stagingDir = path.join(root, `.cindy-installing-${storagePart}-${rand}`);
     const backupDir = path.join(root, `.cindy-updating-${storagePart}-${rand}`);
@@ -5063,7 +5076,7 @@ export class GhostManager {
   async approveTrustedBundledInstall(
     manifest: GhostManifest,
     markerEnabled: boolean,
-    options: { sourceDir: string },
+    options: { sourceDir: string; installedRelId?: string },
   ): Promise<boolean> {
     return this.runExclusiveMutation((mutation) =>
       mutation.approveTrustedBundledInstall(manifest, markerEnabled, options),
@@ -5073,14 +5086,14 @@ export class GhostManager {
   private async approveTrustedBundledInstallUnlocked(
     manifest: GhostManifest,
     markerEnabled: boolean,
-    options: { sourceDir: string },
+    options: { sourceDir: string; installedRelId?: string },
   ): Promise<boolean> {
     if (this.options.isTrustedBundledId?.(manifest.id) !== true) {
       throw new Error(
         `approveTrustedBundledInstall 只服务随包种子插件:${manifest.id} 不在种子清单里`,
       );
     }
-    const relId = this.resolvePhysicalRelId(manifest.id) ?? manifest.id;
+    const relId = this.bundledInstallRelId(manifest.id, options?.installedRelId);
     const dir = this.contentPath(relId);
     if (!options || typeof options.sourceDir !== 'string' || options.sourceDir.trim() === '') {
       throw new Error('approveTrustedBundledInstall requires a verified bundled source directory');

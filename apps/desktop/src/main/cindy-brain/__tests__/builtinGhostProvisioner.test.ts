@@ -215,6 +215,84 @@ describe('builtin provisioning physical market identity', () => {
     expect(fs.readFileSync(path.join(fixture.installedDir, 'main.js'), 'utf8')).toBe('// market content');
   });
 
+  // Review #10309: bare organization + qualified root coexist. The old fixture
+  // only covered the reverse layout and missed both selection and mutation routing (unit).
+  it.each(['update', 'reapprove', 'disable-carry', 'approval-failure', 'audience', 'orphan'])('targets only the coexisting root during %s', async action => {
+    const fixture = await harness();
+    const rootRelId = '_ns/_root/builtin-test';
+    const rootDir = await writeMinimalSeed(path.join(fixture.repoRoot, '_ns', '_root'), 'builtin-test');
+    const rootManifest = validateGhostManifest(JSON.parse(fs.readFileSync(path.join(rootDir, 'ghost.json'), 'utf8')));
+    if (!rootManifest.ok) throw new Error(rootManifest.reason);
+    await fixture.receipts.write(createGhostInstallReceipt({ manifest: rootManifest.manifest,
+      localeResources: {}, enabled: true, trust: CINDY_OFFICIAL_GHOST_TRUST, skillContentSha256: {},
+      namespace: null, packageSha256: (await fingerprintDirContent(rootDir)).hash }), { relId: rootRelId });
+    fixture.manager.list();
+    const orgBefore = fixture.receipts.read(fixture.relId);
+    if (action === 'update') {
+      const seed = JSON.parse(fs.readFileSync(path.join(fixture.seedDir, 'ghost.json'), 'utf8'));
+      fs.writeFileSync(path.join(fixture.seedDir, 'ghost.json'), JSON.stringify({ ...seed, version: '2.0.0' }));
+    } else if (action === 'audience') {
+      fs.writeFileSync(path.join(fixture.seedRoot, 'provisioning.json'),
+        JSON.stringify({ ghosts: { 'builtin-test': { audience: { userIds: ['someone-else'] } } } }));
+    } else if (action === 'orphan') {
+      await writeMinimalSeed(fixture.seedRoot, 'another-seed');
+      fs.renameSync(fixture.seedDir, path.join(path.dirname(fixture.seedRoot), 'withdrawn-seed'));
+    }
+    await fixture.manager.runExclusiveMutation(async mutation => {
+      const outcome = await provisionBuiltinGhosts({ ...fixture.deps,
+        beforeReplace: async (_id, relId) => { await mutation.removeInstallApproval(relId); },
+        beforeRemove: async (_id, relId) => {
+          const result = await mutation.uninstall(relId, { notify: false, recordBuiltinTombstone: false });
+          if ('rejection' in result) throw new Error(result.rejection.reason);
+        },
+        publishSeed: (id, dir, options) => mutation.publishTrustedBundledSeed(id, dir, options) });
+      if (action === 'approval-failure') {
+        const manifest = outcome.approved.find(candidate => candidate.id === 'builtin-test')!;
+        const installedRelId = outcome.approvedInstallRelIds[manifest.id];
+        await expect(mutation.approveTrustedBundledInstall(manifest, true, {
+          sourceDir: rootDir, installedRelId })).rejects.toThrow('mutable installed directory');
+        await mutation.removeInstallApproval(installedRelId);
+        expect(fixture.manager.readApprovedInstallReceipt(rootRelId)).toBeNull();
+      } else if (action !== 'audience' && action !== 'orphan') {
+        expect(outcome.approved.map(manifest => manifest.id)).toContain('builtin-test');
+        for (const manifest of outcome.approved) {
+          const installedRelId = outcome.approvedInstallRelIds[manifest.id];
+          if (action === 'disable-carry') mutation.writeDisabledMarker(installedRelId);
+          await mutation.approveTrustedBundledInstall(manifest, !fs.existsSync(path.join(rootDir, '.disabled')), {
+            sourceDir: outcome.approvedSourceDirs[manifest.id], installedRelId });
+        }
+        expect(fixture.manager.list().find(ghost => ghost.instanceKey === '_root__builtin-test')).toMatchObject({
+          enabled: action !== 'disable-carry', namespace: null, namespaceState: 'confirmed',
+          manifest: { version: action === 'update' ? '2.0.0' : '1.0.0' }, approval: { state: 'approved' } });
+      } else {
+        expect(outcome.removed).toContain('builtin-test');
+        expect(fs.existsSync(rootDir)).toBe(false);
+        expect(fixture.receipts.read(rootRelId).state).toBe('legacy-unapproved');
+      }
+    });
+    expect(fixture.receipts.read(fixture.relId)).toEqual(orgBefore);
+    expect(fs.readFileSync(path.join(fixture.installedDir, 'main.js'), 'utf8')).toBe('// market content');
+    expect(fixture.manager.list().find(ghost => ghost.instanceKey === 'builtin-test')).toMatchObject({
+      enabled: false, namespace: 'xd', namespaceState: 'confirmed', approval: { state: 'approved' } });
+  });
+
+  // The new physical target is Host-only, never an authority to seed another
+  // namespace or plugin. Both publication and approval must reject it (unit).
+  it.each(['_ns/xd/builtin-test', '_ns/_root/another-plugin'])('rejects mismatched bundled target %s', async installedRelId => {
+    const fixture = await harness();
+    const validated = validateGhostManifest(JSON.parse(fs.readFileSync(path.join(fixture.seedDir, 'ghost.json'), 'utf8')));
+    if (!validated.ok) throw new Error(validated.reason);
+    const before = fixture.receipts.read(fixture.relId);
+    await fixture.manager.runExclusiveMutation(async mutation => {
+      await expect(mutation.publishTrustedBundledSeed('builtin-test', fixture.seedDir,
+        { disabled: false, installedRelId })).rejects.toThrow('matching legacy or root installation');
+      await expect(mutation.approveTrustedBundledInstall(validated.manifest, true,
+        { sourceDir: fixture.seedDir, installedRelId })).rejects.toThrow('matching legacy or root installation');
+    });
+    expect(fixture.receipts.read(fixture.relId)).toEqual(before);
+    expect(fs.readFileSync(path.join(fixture.installedDir, 'main.js'), 'utf8')).toBe('// market content');
+  });
+
   // An absent/uninstalled ledger is not positive root evidence. Exercise all
   // destructive seed paths with the pre-namespace receipt and actual registry.
   it.each([
@@ -778,7 +856,7 @@ describe('builtinGhostProvisioner 安装目录被塞入链接时重新播种', (
     });
 
     expect(outcome.updated.map((m) => m.id)).toContain('linked-seed');
-    expect(beforeReplace).toHaveBeenCalledWith('linked-seed');
+    expect(beforeReplace).toHaveBeenCalledWith('linked-seed', 'linked-seed');
     expect(outcome.skipped).not.toContain('linked-seed');
     // 重新播种后安装目录回到随包字节:链接消失,普通文件回来。
     expect((await fs.promises.lstat(path.join(installedDir, 'entry'))).isFile()).toBe(true);
@@ -1052,7 +1130,7 @@ describe('builtinGhostProvisioner 与同名商店安装按版本取新', () => {
 
     expect(outcome.updated.map((m) => m.id)).toEqual(['builtin-test']);
     expect(outcome.installed).toEqual([]);
-    expect(beforeReplace).toHaveBeenCalledWith('builtin-test');
+    expect(beforeReplace).toHaveBeenCalledWith('builtin-test', '_ns/_root/builtin-test');
     expect(await fs.promises.readFile(path.join(storeDir, 'main.js'), 'utf8')).toBe('// brain');
     expect(fs.existsSync(path.join(storeDir, '.disabled'))).toBe(true);
     expect(fs.existsSync(path.join(repoRoot, 'builtin-test'))).toBe(false);

@@ -345,7 +345,6 @@ import {
   readBuiltinTombstones,
   recordBuiltinTombstone,
   renameBuiltinTombstone,
-  resolveBuiltinInstalledDir,
   seedIsNewerThanStore,
   type ProvisionIdentity,
 } from './builtinGhostProvisioner.js';
@@ -1864,6 +1863,9 @@ async function reconcileBuiltinGhostsLocked(
   manager: GhostManager,
   mutation: GhostExclusiveMutation,
 ): Promise<boolean> {
+  // Physical directories may move while runtime/storage keys remain retained.
+  const instanceKeyFor = (relId: string): string =>
+    manager.readInstanceForContent(relId)?.instanceKey ?? pluginInstallStoragePart(relId);
   // 改名前置:用户自主状态(墓碑=卸载过 / .disabled=停用)随改名带到新 id,
   // 不能让"明确卸载/停用过"的用户在升级后被以新 id 重新装上并点亮(播种器
   // "用户自主权豁免"支柱)。墓碑:旧 id 有 → 给新 id 记墓碑并清掉旧墓碑
@@ -1888,14 +1890,15 @@ async function reconcileBuiltinGhostsLocked(
       repoRootDir: brainRootDir(),
       identity: currentProvisionIdentity(),
       // 回收先熄灯沙箱再删目录(Windows 文件锁:运行中的电子脑可能占着句柄)。
-      beforeRemove: async (id) => {
-        getGhostRuntime().stop(id);
-        getGhostNodeRuntimeBroker().stop(id);
-        getGhostAgentSlot().clearGhost(id);
-        getGhostErrandSlot().clearGhost(id);
+      beforeRemove: async (_id, installedRelId) => {
+        const instanceKey = instanceKeyFor(installedRelId);
+        getGhostRuntime().stop(instanceKey);
+        getGhostNodeRuntimeBroker().stop(instanceKey);
+        getGhostAgentSlot().clearGhost(instanceKey);
+        getGhostErrandSlot().clearGhost(instanceKey);
         // 内置回收也必须走 Host 的 uninstall journal；只撤 receipt 再由
         // provisioner 直接 rm 会在 receipt 删除失败+崩溃时留下孤立批准。
-        const removal = await mutation.uninstall(id, {
+        const removal = await mutation.uninstall(installedRelId, {
           notify: false,
           // Audience/orphan reconciliation is Host lifecycle cleanup, not a
           // durable user choice to keep this builtin uninstalled.
@@ -1905,12 +1908,12 @@ async function reconcileBuiltinGhostsLocked(
           throw new Error(`builtin ghost uninstall failed: ${removal.rejection.reason}`);
         }
       },
-      beforeReplace: async (id) => {
+      beforeReplace: async (id, installedRelId) => {
         // Revoke the old receipt before swapping mutable installed bytes. If a
         // crash occurs during provisioning, the new bytes cannot run under the
         // previous approval; the next reconcile mints a receipt from the
         // immutable seed after the swap is complete.
-        if (!(await mutation.removeInstallApproval(id))) {
+        if (!(await mutation.removeInstallApproval(installedRelId))) {
           throw new Error(`builtin ghost approval revoke failed: ${id}`);
         }
       },
@@ -1948,7 +1951,7 @@ async function reconcileBuiltinGhostsLocked(
     for (const manifest of outcome.installed) {
       if (!renameDisabledCarry.get(manifest.id)) continue;
       try {
-        mutation.writeDisabledMarker(manifest.id);
+        mutation.writeDisabledMarker(outcome.approvedInstallRelIds[manifest.id]);
         log.info('builtin ghost disabled state carried over rename', { id: manifest.id });
       } catch (err) {
         log.warn('builtin ghost disabled carry failed', {
@@ -1962,6 +1965,8 @@ async function reconcileBuiltinGhostsLocked(
   let approvalNeedsRetry = outcome.retryPending === true;
   const healedResidentIds: string[] = [];
   for (const manifest of outcome.approved) {
+    const installedRelId = outcome.approvedInstallRelIds[manifest.id];
+    const instanceKey = instanceKeyFor(installedRelId);
     try {
       approvalChanged =
         (await mutation.approveTrustedBundledInstall(
@@ -1969,16 +1974,13 @@ async function reconcileBuiltinGhostsLocked(
           // `.disabled` 镜像的读数只作停用方向的输入:receipt 已钉停用时,镜像被
           // 外部移除不会把插件翻回启用(合并规则见 approveTrustedBundledInstall
           // 头注释;重新启用只有用户显式 setEnabled 一条路)。
-          !hasDisabledMarker(
-            resolveBuiltinInstalledDir(brainRootDir(), manifest.id) ??
-              path.join(brainRootDir(), manifest.id),
-          ),
-          { sourceDir: outcome.approvedSourceDirs[manifest.id] },
+          !hasDisabledMarker(path.join(brainRootDir(), ...installedRelId.split('/'))),
+          { sourceDir: outcome.approvedSourceDirs[manifest.id], installedRelId },
         )) || approvalChanged;
       // 本会话内被撤销熄灯的常驻实例,批准补回即恢复点火(隔离态下批准必然重写,
       // approvalChanged 已为 true,不会被下面的 no-op 早退拦住)。
-      if (quenchedResidentBuiltinIds.delete(manifest.id)) {
-        healedResidentIds.push(manifest.id);
+      if (quenchedResidentBuiltinIds.delete(instanceKey)) {
+        healedResidentIds.push(instanceKey);
       }
     } catch (err) {
       approvalNeedsRetry = true;
@@ -1991,19 +1993,19 @@ async function reconcileBuiltinGhostsLocked(
       // 隔离。所以这里不需要、也不应该再自己判断撤销成不成功:那正是上一版在
       // cleanup 失败时留下 fail-open 的地方。随包插件下一轮启动对账会重新补批准，
       // 自愈，不需要用户介入。
-      await mutation.removeInstallApproval(manifest.id);
+      await mutation.removeInstallApproval(installedRelId);
       // 撤销只让后续的 Host 能力调用与技能落链失效,不会自己结束已经跑起来的沙箱
       // 进程 —— 登录触发对账时插件可能正在运行。与 beforeRemove 同款四连熄灯
       // (含 errand slot:漏掉它会让节流状态与在途任务记录留到同会话的自愈之后,
       // 变成不必要的 rate-limit／"已有在途任务"阻塞),让"撤销后不再被授权运行"
       // 这句话对运行中的实例也成立。
-      getGhostRuntime().stop(manifest.id);
-      getGhostNodeRuntimeBroker().stop(manifest.id);
-      getGhostAgentSlot().clearGhost(manifest.id);
-      getGhostErrandSlot().clearGhost(manifest.id);
-      // 常驻声明的实例被本次撤销熄掉:记下 id,批准自愈那一轮补点火(见 set 头注释)。
+      getGhostRuntime().stop(instanceKey);
+      getGhostNodeRuntimeBroker().stop(instanceKey);
+      getGhostAgentSlot().clearGhost(instanceKey);
+      getGhostErrandSlot().clearGhost(instanceKey);
+      // 常驻声明的实例被本次撤销熄掉:记下实例键,批准自愈那一轮补点火。
       if (isResidentBrowserGhost(manifest) || manifest.node?.lifecycle === 'resident') {
-        quenchedResidentBuiltinIds.add(manifest.id);
+        quenchedResidentBuiltinIds.add(instanceKey);
       }
       approvalChanged = true;
       log.warn('builtin ghost approval receipt failed; approval revoked', {
@@ -2033,13 +2035,13 @@ async function reconcileBuiltinGhostsLocked(
   broadcastGhostsChanged(manager.list(), true);
   for (const manifest of outcome.installed) {
     // 登录触发的对账装上常驻意识时,这里就是它的点火时机(启动那趟扫描早过了)。
-    const ghost = manager.list().find((g) => g.manifest.id === manifest.id);
+    const ghost = manager.findInstalledInstance(instanceKeyFor(outcome.approvedInstallRelIds[manifest.id]));
     if (ghost) spawnIfResident(ghost);
   }
   // 本会话内被撤销熄灯、本轮批准自愈的常驻插件:恢复熄灯前的运行状态。
   // spawnIfResident 自查启用态与会话可用性,停用/不可用的不会被点亮。
   for (const id of healedResidentIds) {
-    const ghost = manager.list().find((g) => g.manifest.id === id);
+    const ghost = manager.findInstalledInstance(id);
     if (ghost) spawnIfResident(ghost);
   }
   return approvalNeedsRetry;
