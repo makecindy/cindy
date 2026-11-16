@@ -12,6 +12,7 @@ import { messageToCamel } from '../../../desktop/src/main/localDb/mapper.js';
 import { messages as messageTable, sessions as sessionTable } from '../../../desktop/src/main/localDb/schema.js';
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.js';
 import type { Message } from '../../../desktop/src/renderer/lib/ccAgent.types.js';
+import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 
 const messageRowid = sql<number>`"messages"."rowid"`;
 
@@ -119,10 +120,21 @@ export function createHostHistoryReader(isSessionRunning: (sessionId: string) =>
         after: opts.after,
       });
     },
+    // The desktop's anchor rule (localDb/ipc/messages.ts:456-471): the task must exist, and the
+    // message must be this task's, not rewound and strictly after the clear line read now. The page
+    // re-anchors its endpoints after the scan (historyViewReader.ts:292-298), so a clear during the
+    // scan also fails the page, as the desktop's validate does.
     anchor: async (sessionId, id) => {
       const dbClient = getDbClient();
       if (!dbClient) throw new Error('DbClient not ready');
       const db = dbClient.drizzle;
+
+      const [session] = await db
+        .select({ clearedAt: sessionTable.clearedAt })
+        .from(sessionTable)
+        .where(eq(sessionTable.id, sessionId))
+        .limit(1);
+      if (!session) throwIpcError('NOT_FOUND', 'History is unavailable');
 
       const [row] = await db
         .select({
@@ -139,10 +151,15 @@ export function createHostHistoryReader(isSessionRunning: (sessionId: string) =>
           rowid: messageRowid,
         })
         .from(messageTable)
-        .where(and(eq(messageTable.sessionId, sessionId), eq(messageTable.id, id), isNull(messageTable.rewindAt)))
+        .where(and(
+          eq(messageTable.sessionId, sessionId),
+          eq(messageTable.id, id),
+          isNull(messageTable.rewindAt),
+          session.clearedAt !== null ? gt(messageTable.createdAt, session.clearedAt) : undefined,
+        ))
         .limit(1);
 
-      if (!row) throw new Error(`Message not found: ${id}`);
+      if (!row) throwIpcError('NOT_FOUND', 'History range changed');
       return {
         ...messageToCamel(row),
         rowid: row.rowid,

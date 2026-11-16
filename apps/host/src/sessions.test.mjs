@@ -8,6 +8,7 @@ import { listActiveSessions, listRunningSessions } from './sessions.mjs';
 import { readHostSessionList, readHostSession } from './session-reads.ts';
 import { createHostMessageStore, createHostMessageRecovery } from './message-store.ts';
 import { createHostEventPersistence } from './agent/event-persistence.ts';
+import { createHostHistoryReader } from './agent/history.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStorageAdapter.ts';
 import { setCurrentDbClient, clearCurrentDbClient, getCurrentDbClientSnapshot } from '../../desktop/src/main/localDb/client/current.ts';
@@ -324,4 +325,49 @@ test('Host Pi recovery preserves message metadata and excludes cleared or rewoun
   sqlite.exec("UPDATE sessions SET cleared_at=NULL WHERE id='task'; UPDATE messages SET rewind_at=200 WHERE id='row'");
   assert.equal(await recovery.readPiUserEntry('task', 'input'), undefined);
   assert.equal(await recovery.linkPiUserEntry('task', 'missing', 'pi-entry'), false);
+});
+
+// Contract of the shared reader (historyViewReader.ts:55): `anchor` must reject anchors in cleared
+// history. The Host's anchor (agent/history.ts createHostHistoryReader) only excludes rewound rows,
+// so a message from before the clear line is still accepted: as a work-details range it hands back
+// the cleared body (the /api/messages/work-details route, main.ts workDetails), as a page cursor
+// it is taken instead of refused. The desktop's anchor (localDb/ipc/messages.ts) answers NOT_FOUND.
+// Existing coverage: none for the Host history reader. Minimal failing input: one message before
+// the task's clear line used as the anchor. Tier: unit, real in-memory SQL through the reader
+// main.ts binds.
+test('Host history refuses a message from before the clear line as an anchor', async t => {
+  const { sqlite, db } = sessionListDb(t);
+  sqlite.exec(`INSERT INTO sessions(id,source,status,created_at,updated_at,cleared_at)
+    VALUES ('task','desktop','active',0,300,200);
+    INSERT INTO messages(id,client_id,session_id,role,content,created_at)
+    VALUES ('old','c-old','task','assistant','"cleared reply"',100),('new','c-new','task','user','"after the clear"',300);`);
+  const client = createDbClientForHandle({ db: sqlite, drizzle: db });
+  setCurrentDbClient(client, 'isolated');
+  t.after(() => clearCurrentDbClient(client));
+  const reader = createHostHistoryReader();
+  const range = id => ({ key: 'work', firstMessageId: id, lastMessageId: id });
+  assert.deepEqual((await reader.details('task', range('new'))).messages.map(row => row.id), ['new']);
+  await assert.rejects(reader.details('task', range('old')), { code: 'NOT_FOUND' });
+  await assert.rejects(reader.page('task', 'old', true), { code: 'NOT_FOUND' });
+});
+
+// A clear while the page is being read: the reader re-anchors the page's endpoints after the scan
+// (historyViewReader.ts, "A clear/rewind during the scan invalidates the whole snapshot"), and the
+// desktop refuses the page then. The Host's anchor ignored the clear line, so the page went out
+// with the rows just cleared. Minimal failing input: the clear lands between the read and the
+// projection (the reader asks whether the task is running in between). Tier: unit, as above.
+test('Host history refuses a page whose rows were cleared while it was read', async t => {
+  const { sqlite, db } = sessionListDb(t);
+  sqlite.exec(`INSERT INTO sessions(id,source,status,created_at,updated_at)
+    VALUES ('task','desktop','active',0,300);
+    INSERT INTO messages(id,client_id,session_id,role,content,created_at)
+    VALUES ('m1','c-1','task','user','"question"',100),('m2','c-2','task','assistant','"answer"',200);`);
+  const client = createDbClientForHandle({ db: sqlite, drizzle: db });
+  setCurrentDbClient(client, 'isolated');
+  t.after(() => clearCurrentDbClient(client));
+  const reader = createHostHistoryReader(() => {
+    sqlite.exec("UPDATE sessions SET cleared_at=250 WHERE id='task'");
+    return false;
+  });
+  await assert.rejects(reader.page('task', undefined, true), { code: 'NOT_FOUND' });
 });
