@@ -435,9 +435,14 @@ test('persisted scheduler snapshot failure reaches its run with the original err
     onAccepted() { assert.fail('snapshot failed before acceptance'); },
   }));
   await waitFor(() => failure);
-  assert.deepEqual(failure, { error: message, recovering: false });
+  // 4b: the snapshot preparation failure is an auto-resume candidate (register.ts canRecoverTurn,
+  // coordinator recoverPersistedSchedulerPreparation), so the run hears that its input is recovering.
+  assert.deepEqual(failure, { error: message, recovering: true });
   assert.equal(h.persisted.some(row => row.clientId === result.clientId), true);
-  assert.equal(bridge.isPromptTracked('scheduled-task', result.clientId), false);
+  // The resume holds the error and keeps the prompt tracked for its retry.
+  assert.equal(bridge.isPromptTracked('scheduled-task', result.clientId), true);
+  assert.ok(h.queue.projection('scheduled-task').autoResumePending);
+  assert.equal(h.queue.projection('scheduled-task').error, null);
   assert.equal(h.maker.getSession('scheduled-task').sent.length, 0);
 });
 
@@ -4557,4 +4562,123 @@ test('/api/chat: a reconnect while context recovery rebuilds stays open and ends
   const streamed = writes.join('').split('\n\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
   assert.ok(streamed.some(event => event.type === 'text' && event.inputClientId === 'reconnect-recovery-input'), 'the replay\'s answer reaches the reconnect');
   assert.equal(streamed.filter(event => event.type === 'input_receipt' && event.status === 'interrupted').length, 0);
+});
+
+
+// ── Checkpoint 4b: interrupted-turn auto-resume through /api/chat ─────────────────────────────────
+// Rule: an automatic resume answers the input whose turn was interrupted (register.ts, the shared
+// hooks); the stream of that input follows the resume and every way the resume ends gives the stream
+// an end, with the held error row written exactly once when it gives up (release table 4b).
+const INTERRUPTION = { message: 'Upstream overloaded', reason: 'upstream-overload', isTerminal: true };
+async function resumeHarness(t, overrides = {}) {
+  const hub = createEventHub();
+  const h = createHarness({ hub, hasAssistantProgressAfter: async () => true, ...overrides });
+  const writes = [];
+  const response = Object.assign(new EventEmitter(), {
+    writableEnded: false, headersSent: false,
+    writeHead() { this.headersSent = true; },
+    write(chunk) { writes.push(String(chunk)); },
+    end(chunk) { if (chunk) writes.push(String(chunk)); this.writableEnded = true; this.emit('close'); },
+  });
+  const chat = createChatHandler({ events: hub, readSession: async id => ({ id, status: 'active' }),
+    enqueue: (id, input) => h.queue.enqueue(id, input), inputStatus: (id, clientId) => h.queue.inputStatus(id, clientId) });
+  await chat(Readable.from([Buffer.from(JSON.stringify({ sessionId: 'r', clientId: 'a', prompt: 'long job' }))]), response);
+  await waitFor(() => h.maker.sessions.get('r')?.sent.length === 1);
+  const session = h.maker.sessions.get('r');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const streamed = () => writes.filter(w => w.startsWith('data:')).map(w => JSON.parse(w.slice(5)));
+  const errorRows = () => h.persisted.filter(row => row.role === 'error');
+  const interrupt = async () => {
+    session.emit({ type: 'text', data: { text: 'half done', isFinal: true } });
+    session.emit({ type: 'error', data: INTERRUPTION });
+    await settle();
+  };
+  const backoff = async (sent) => {
+    for (let i = 0; i < 100 && session.sent.length < sent; i += 1) { t.mock.timers.tick(500); await settle(); }
+  };
+  return { h, session, response, streamed, errorRows, interrupt, backoff };
+}
+
+test('auto-resume exit 1: the resumed turn answers the input and ends its stream, with no error row', async t => {
+  const r = await resumeHarness(t);
+  await r.interrupt();
+  assert.equal(r.response.writableEnded, false, 'the stream follows the resume');
+  assert.ok(r.streamed().some(e => e.type === 'error' && e.autoResumePending?.attempt === 1));
+  assert.equal(await r.h.queue.inputStatus('r', 'a'), 'running');
+  await r.backoff(2);
+  r.session.emit({ type: 'text', data: { text: 'resumed and finished', isFinal: true } });
+  r.session.emit({ type: 'done', data: {} });
+  await settle();
+  assert.equal(r.response.writableEnded, true);
+  assert.ok(r.streamed().some(e => e.type === 'text' && e.autoResumeOf === 'a'));
+  assert.deepEqual(r.errorRows(), []);
+  t.mock.timers.reset();
+  await r.h.queue.dispose();
+});
+
+test('auto-resume exit 2: interruptions until the budget is spent end the stream on the last error, written once', async t => {
+  const r = await resumeHarness(t);
+  for (let sent = 2; sent < 20; sent += 1) {
+    await r.interrupt();
+    if (r.response.writableEnded) break;
+    await r.backoff(sent);
+  }
+  assert.equal(r.response.writableEnded, true);
+  const last = r.streamed().filter(e => e.type === 'error').at(-1);
+  assert.equal(last.autoResumePending, undefined);
+  assert.equal(r.errorRows().length, 1);
+  t.mock.timers.reset();
+  await r.h.queue.dispose();
+});
+
+test('auto-resume exit 3: a new message during the wait cancels the resume and ends the stream interrupted', async t => {
+  const r = await resumeHarness(t);
+  await r.interrupt();
+  await r.h.queue.enqueue('r', { clientId: 'b', text: 'never mind, do this instead' });
+  await settle();
+  assert.equal(r.response.writableEnded, true);
+  assert.ok(r.streamed().some(e => e.type === 'input_receipt' && e.status === 'interrupted'));
+  assert.equal(r.errorRows().length, 1);
+  t.mock.timers.tick(30_000); await settle();
+  assert.deepEqual(r.session.sent, ['long job', 'never mind, do this instead']);
+  assert.notEqual(await r.h.queue.inputStatus('r', 'a'), 'running');
+  t.mock.timers.reset();
+  await r.h.queue.dispose();
+});
+
+test('auto-resume exit 4: a stop during the wait ends the stream interrupted, with the error row once', async t => {
+  const r = await resumeHarness(t);
+  await r.interrupt();
+  await r.h.queue.stop('r');
+  await settle();
+  assert.equal(r.response.writableEnded, true);
+  assert.equal(r.errorRows().length, 1);
+  t.mock.timers.tick(30_000); await settle();
+  assert.equal(r.session.sent.length, 1, 'no resume after the stop');
+  t.mock.timers.reset();
+  await r.h.queue.dispose();
+  assert.equal(r.errorRows().length, 1);
+});
+
+test('auto-resume exit 5: closing the task during the wait ends the stream interrupted, with the error row once', async t => {
+  const r = await resumeHarness(t);
+  await r.interrupt();
+  await r.h.queue.disposeSession('r');
+  await settle();
+  assert.equal(r.response.writableEnded, true);
+  assert.equal(r.errorRows().length, 1);
+  t.mock.timers.tick(30_000); await settle();
+  assert.equal(r.session.sent.length, 1);
+  t.mock.timers.reset();
+  await r.h.queue.dispose();
+});
+
+test('auto-resume exit 6: a Host shutdown during the wait gives the resume up first and writes the error row once', async t => {
+  const r = await resumeHarness(t);
+  await r.interrupt();
+  await r.h.queue.dispose();
+  assert.equal(r.errorRows().length, 1);
+  t.mock.timers.tick(30_000); await settle();
+  assert.equal(r.session.sent.length, 1);
+  t.mock.timers.reset();
 });

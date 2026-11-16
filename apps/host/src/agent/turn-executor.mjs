@@ -38,6 +38,8 @@ import { isGatewayProxyTokenRecoveryErrorEventForProvider } from '../../../deskt
 import { contextSnapshotForStatus, isContextCompactionSnapshot } from '../../../desktop/src/main/maker-ipc/sessionContextSnapshot.ts';
 import { recordHostContextSnapshot } from './context-usage.ts';
 import { readTerminalTurnErrorSignals } from '../../../desktop/src/main/maker-ipc/terminalTurnErrorSignals.ts';
+import { isForegroundRunningStatus, noteAutoResumeProgress, noteForegroundTurnStarted, settleAutoResumeAttemptOnDone,
+  settleAutoResumeAttemptOnTerminalError } from '../../../desktop/src/main/maker-ipc/sessionEventAutoResumeSteps.ts';
 
 const makerKind = kind => kind === 'cc' ? 'claude-code' : kind;
 const dbKind = kind => kind === 'claude-code' ? 'cc' : kind;
@@ -72,6 +74,16 @@ export function createTurnExecutor(deps) {
   const recovery = deps.getRecoveryRollover ? createHostContextRecovery({ getRollover: deps.getRecoveryRollover,
     isRecoverable: deps.isContextRecoveryOpen, isErrorSuppressed: deps.isSessionErrorSuppressed,
     publish: (id, event, fields) => publishAgentEvent(deps.hub, id, event, fields), log }) : null;
+  // The auto-resume bookkeeping steps of the desktop's event preparation (sessionEventAutoResumeSteps.ts),
+  // over the auto-resume runtime (auto-resume.ts). The failed-turn assistant pairing map is the
+  // desktop's; the Host only keeps it so a new turn drops a stale entry, as there.
+  const pendingFailedTurnAssistantPersistId = new Map();
+  function autoResumeStepDeps() {
+    const autoResume = deps.getAutoResume?.();
+    return autoResume ? { autoResumeBookkeeping: autoResume.autoResumeBookkeeping, pendingFailedTurnAssistantPersistId,
+      silentStopAutoResumeGuard: autoResume.silentStopAutoResumeGuard,
+      interruptedTurnAutoResumeGuard: autoResume.interruptedTurnAutoResumeGuard, usageLimitAutoResume: undefined } : null;
+  }
   function historyFor(id) {
     let history = histories.get(id);
     if (!history) {
@@ -134,7 +146,19 @@ export function createTurnExecutor(deps) {
     const history = historyFor(sessionId);
     history.flushAssistantBlock(sessionId);
     history.flushOrphanToolResults(sessionId, event?.agentMeta ?? null);
-    if (error && !recoveryOwnsError) history.onTurnErrorEvent(sessionId, { ...event?.data, message: error }, event?.agentMeta ?? null);
+    if (error && !recoveryOwnsError) {
+      // As the desktop's terminal stage (sessionEventTerminal.ts): while an automatic resume holds this
+      // error (pending or deferred, sessionErrorSuppression.ts), its row is not written; the bookkeeping
+      // keeps it, with the turn's start for the clear cap, and writes it once if the resume gives up.
+      if (event && deps.isSessionErrorSuppressed?.(sessionId, event) === true && deps.holdSuppressedError) {
+        history.saveTurnStartedAtForDeferred(sessionId);
+        deps.holdSuppressedError(sessionId, { ...event.data, message: error });
+      } else {
+        history.onTurnErrorEvent(sessionId, { ...event?.data, message: error }, event?.agentMeta ?? null);
+        // A new terminal replaces an older interruption's replacement (sessionEventTerminal.ts).
+        if (event && isTerminalTurnErrorEvent(event)) autoResumeStepDeps()?.autoResumeBookkeeping.discardReplacementProvenByProviderEvent(sessionId);
+      }
+    }
     if (error) history.persistCodexPlanOnTerminalError(sessionId);
     else if (event) history.persistCodexPlanOnDone(sessionId, event.data);
     history.preserveTurnPersistStateForBackground(sessionId);
@@ -210,6 +234,22 @@ export function createTurnExecutor(deps) {
     return true;
   }
 
+  // The desktop's preparation steps that come before it hands a terminal to the coordinator
+  // (sessionEventPreparation.ts :219, :363, :409, :483): the first event of a resume's attempt, a
+  // foreground running status starting a new attempt, a done or terminal error settling it.
+  function noteAutoResumeEventBeforeTerminal(session, event) {
+    const steps = autoResumeStepDeps();
+    if (!steps) return;
+    if (typeof event.turnAttemptToken === 'number') steps.interruptedTurnAutoResumeGuard.noteAttemptEvent(session.id, event.turnAttemptToken);
+    if (event.type === 'status' && event.data && isForegroundRunningStatus(event.data, event)) {
+      // The turn's start for the clear cap is noted by the Host at dispatch (beginHostTurn, the send
+      // transaction); subagent observation is the desktop's renderer feature.
+      noteForegroundTurnStarted(steps, session, event, { noteTurnStarted: () => {}, noteSubagentObservationTurnStarted: () => {} });
+    }
+    if (event.type === 'done') settleAutoResumeAttemptOnDone(steps, session, event, isTurnContinuationBoundaryEvent(event));
+    if (isTerminalTurnErrorEvent(event)) settleAutoResumeAttemptOnTerminalError(steps, session, event);
+  }
+
   function listen(sessionId, session) {
     if (bindings.get(sessionId)?.session === session) return;
     if (bindings.has(sessionId)) clearPendingTurnChangeSets(sessionId);
@@ -232,7 +272,9 @@ export function createTurnExecutor(deps) {
       // The coordinator gets a terminal before the Host's own turn filters below, which only keep the
       // Host's records, publishing and rows: a follow-up of Session.holdEventStream was handled by the
       // host that held it (as the desktop), and an owner that is not current has its coordinator closing.
-      const handedOver = !event.hostProjection && deps.isCurrent() && handTerminalToCoordinator(sessionId, event);
+      const prepared = !event.hostProjection && deps.isCurrent();
+      if (prepared) noteAutoResumeEventBeforeTerminal(session, event);
+      const handedOver = prepared && handTerminalToCoordinator(sessionId, event);
       const turn = turns.get(sessionId);
       if (!turn || turn.session !== session || !deps.isCurrent()) return;
       // The context usage a status event carries, decided as the desktop decides it
@@ -277,11 +319,21 @@ export function createTurnExecutor(deps) {
       }
       if (turn.changeRecordStarted && isTerminalTurnErrorEvent(event)) void finalizeTurnChangeSet(sessionId, null, 'partial');
       const stream = history.event(session, event);
+      // As the desktop's preparation, after the event's bookkeeping: substantive output proves a resume.
+      const steps = autoResumeStepDeps();
+      if (steps) noteAutoResumeProgress(steps, session, event);
       // As the desktop (sessionEventDelivery.ts): a turn that ended on a rejected Cindy AI Key
       // reports the current key, which resynchronizes the credentials.
       const gatewayKeyRejected = isGatewayProxyTokenRecoveryErrorEventForProvider(getSessionProvider(sessionId), event);
       if (gatewayKeyRejected) deps.reportAgentCindyGatewayKeyRejected?.();
-      const fields = { ...stream, inputClientId: turn.clientId };
+      const fields = { ...stream, inputClientId: turn.clientId, ...(turn.resumeOf ? { autoResumeOf: turn.resumeOf } : {}) };
+      // A terminal error the coordinator took over for an automatic resume (handed over above): its
+      // clients see it with the takeover, as the desktop's window sees the error and the activity row,
+      // and a stream that waits for this input follows the resume instead of ending here.
+      if (handedOver && event.turnScope !== 'background' && isTerminalTurnErrorEvent(event)) {
+        const pending = deps.autoResumePendingOf?.(sessionId, turn.resumeOf ?? turn.clientId);
+        if (pending) fields.autoResumePending = pending;
+      }
       // Recovery claims a turn's terminal error synchronously, after the coordinator has it (above), as on
       // the desktop: its preparation hands it over first, its delivery and terminal stages claim it.
       const recoveryTerminal = recovery && event.type === 'error' && isTerminalTurnErrorEvent(event)
@@ -298,6 +350,8 @@ export function createTurnExecutor(deps) {
         && event.turnScope !== 'background' && !isTurnContinuationBoundaryEvent(event)) {
         turn.terminalMeta = { sessionTurnGeneration: event.sessionTurnGeneration,
           sessionInstanceId: event.sessionInstanceId };
+        // A resumed turn that ended without another takeover answered the input it continued.
+        if (turn.resumeOf !== undefined && !fields.autoResumePending) deps.resumeAnswered?.(sessionId, turn.resumeOf);
         const error = event.type === 'error'
           ? event.data?.message || event.message || (typeof event.data === 'string' ? event.data : 'Agent error')
           : undefined;
@@ -672,6 +726,8 @@ export function createTurnExecutor(deps) {
   async function sendUnlocked(sessionId, message, createOpts, sendOpts) {
     createOpts = { ...createOpts };
     const turn = openTurn(sessionId, createOpts, sendOpts, sendOpts.persistUserMessage?.clientId);
+    // An automatic resume continues an earlier input whose stream (/api/chat) still waits for it.
+    if (sendOpts.persistUserMessage?.autoResume === true) turn.resumeOf = deps.resumeOriginOf?.(sessionId);
     const check = turn.check;
     turn.preparing = (async () => {
       await sendOpts[MCP_APP_MESSAGE_GUARD]?.();
@@ -840,6 +896,8 @@ export function createTurnExecutor(deps) {
       return session;
     },
     enqueueDurableWrite(id, label, fn) { return historyFor(id).enqueueDurableWrite(label, fn); },
+    /** A task's event persistence, for the auto-resume runtime (auto-resume.ts) and the reply anchor. */
+    autoResumeHistory: id => historyFor(id),
     // The coordinator's hooks for a user turn stored but not dispatched, as register.ts passes them:
     // a retryable error row (the desktop's onTurnErrorEvent with the Pi prompt-timeout reason), and
     // for a Pi prompt timeout, closing the stuck native process (no replay; the user retries).

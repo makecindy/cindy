@@ -3,6 +3,8 @@ import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourc
 import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
 import { createTurnExecutor } from './turn-executor.mjs';
 import { hostCoordinatorDeps } from './coordinator-deps.ts';
+import { createHostAutoResume } from './auto-resume.ts';
+import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { createHostIdleRelease } from './idle-release.ts';
 import { createAppMessageSender } from '../../../desktop/src/main/mcp-apps/messageSender.ts';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
@@ -15,6 +17,7 @@ import { createLogger } from '../../../desktop/src/main/logger.ts';
 import { isSessionErrorSuppressed } from '../../../desktop/src/main/maker-ipc/sessionErrorSuppression.ts';
 
 const attachmentLog = createLogger('host-attachments');
+const log = createLogger('host-auto-resume');
 
 /** Create options for every start from a stored task row (send, restore, resume). */
 export function storedSessionOptions(stored) {
@@ -162,7 +165,48 @@ export function createInputQueue(deps) {
     // Context recovery (context-recovery-assembly.ts): one rollover per runtime, so its memory of
     // continued inputs lasts as long as this owner's runtime; a new owner's runtime gets a new one.
     let rollover = null;
+    // The desktop's auto-resume (auto-resume.ts), one per owner runtime with its coordinator.
+    const autoResume = createHostAutoResume({
+      userDataDir: deps.userDataDir ?? getUserDataDir,
+      coordinator: () => coordinator,
+      history: id => executor.autoResumeHistory(id),
+      getSession: id => deps.getMaker()?.getSession(id),
+      createDbMessage: (id, input, options) => deps.persistMessage?.(id, input, options),
+      onTakeoverReleased: id => releaseResumeOrigin(id),
+      maybeApplySessionRuntimeFallback: deps.maybeApplySessionRuntimeFallback,
+      pendingSessionRuntimeFallbackRebuilds: deps.pendingSessionRuntimeFallbackRebuilds,
+      log,
+    });
+    // The input whose stream an automatic resume continues, per task (Host-only: /api/chat follows
+    // the resume's turns, which carry their own client ids). Set when the coordinator takes a terminal
+    // error over; the resume's turns carry it; it ends with the first receipt of an abandoned resume.
+    const resumeOrigins = new Map();
+    // A resume that gives up writes the held error row (once) or drops the takeover: the input it
+    // continued stopped there, so its stream gets the interrupted receipt once that row is stored.
+    function releaseResumeOrigin(id) {
+      const origin = resumeOrigins.get(id);
+      if (origin === undefined) return;
+      resumeOrigins.delete(id);
+      const history = executor.autoResumeHistory(id);
+      void history.drain().then(() => {
+        if (history.hasFailedWrites() || !isCurrent()) return;
+        deps.hub?.publish({ type: 'input_receipt', sessionId: id, inputClientId: origin, clientId: origin, status: 'interrupted' });
+      });
+    }
     const executor = createTurnExecutor({ ...deps,
+      getAutoResume: () => autoResume,
+      resumeOriginOf: id => resumeOrigins.get(id),
+      resumeAnswered: (id, origin) => { if (resumeOrigins.get(id) === origin) resumeOrigins.delete(id); },
+      autoResumePendingOf: (id, origin) => {
+        const pending = coordinator.getProjection(id).autoResumePending;
+        if (!pending) { resumeOrigins.delete(id); return undefined; }
+        resumeOrigins.set(id, origin);
+        return pending;
+      },
+      // The terminal error an automatic resume holds (sessionEventTerminal.ts): kept in its attempt,
+      // with the coordinator's attempt and deferred owner, and written once if the resume gives up.
+      holdSuppressedError: (id, data) => autoResume.autoResumeBookkeeping.stashSuppressedError(id, data,
+        coordinator.getAutoResumeAttemptToken(id), coordinator.getAutoResumeDeferredOwner(id)),
       assertCurrent, isCurrent,
       getRecoveryRollover: deps.createContextRecoveryRollover ? () => rollover : deps.getRecoveryRollover,
       prepareUserMessage: attachments?.prepareUserMessage,
@@ -190,7 +234,7 @@ export function createInputQueue(deps) {
       deps, executor, coordinator: () => coordinator, scheduleBridge: () => scheduleBridge, assertCurrent,
       noteAborting: (id, aborting) => { stateFor(id).aborting = aborting; },
       publish, persist, flushed, afterSnapshot, attachmentOwnership, acceptedCallbacks,
-      schedulePreparations, scheduleDiscardWatchers,
+      schedulePreparations, scheduleDiscardWatchers, autoResume, rollover: () => rollover,
     }));
     // The desktop's idle-runtime release (idle-release.ts), one set of watchers per owner runtime.
     const idleRelease = deps.readClaudeIdleMinutes ? createHostIdleRelease({
@@ -346,6 +390,8 @@ export function createInputQueue(deps) {
         // Before the recovery point below: during context recovery the claimed input is the recovery
         // point too, but it is still being answered.
         if (executor.isInputRunning(id, clientId) || executor.isInputRecovering(id, clientId)) return 'running';
+        // An automatic resume continues this input (waiting for its backoff, or its resumed turn running).
+        if (resumeOrigins.get(id) === clientId) return 'running';
         // A recovery point names its input as clientId (before dispatch) or as item (a stored turn
         // whose dispatch failed): either way the input stopped there.
         if ((projection.recovery?.clientId ?? projection.recovery?.item?.clientId) === clientId) return 'interrupted';

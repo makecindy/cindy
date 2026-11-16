@@ -5,6 +5,8 @@ import { runSchedulerQueuedPreparation } from '../../../desktop/src/main/maker-i
 import type { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/maker-ipc/queuedAcceptedCallbacks.ts';
 import type { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/maker-ipc/queuedAttachmentOwnership.ts';
 import type { createSchedulerQueueBridge } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
+import { settleTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionAuthorization.ts';
+import type { HostAutoResume } from './auto-resume.ts';
 import { explicitPorts } from './explicit-ports.ts';
 
 type Deps = AgentInputCoordinatorDeps;
@@ -31,6 +33,12 @@ export interface HostCoordinatorQueueDeps {
   getPersistedClientIds?: Deps['getPersistedClientIds'];
   resolveSessionReferences?: Deps['resolveSessionReferences'];
   supersedeRetriedUserTurn?: Deps['supersedeRetriedUserTurn'];
+  /**
+   * The task's activity time when a person's turn is dispatched or steered (register.ts
+   * touchSessionActivityInDb). Not given yet: it lands with the updatedAt alignment unit (release
+   * table A5); until then a dispatch leaves the activity time as the send set it.
+   */
+  touchSessionActivity?: (sessionId: string, atMs?: number) => Promise<void>;
 }
 
 /** The turn executor (turn-executor.mjs) as the coordinator's ports read it. */
@@ -44,6 +52,8 @@ export interface HostCoordinatorExecutor {
   beforeDispatchUserTurn: NonNullable<Deps['beforeDispatchUserTurn']>;
   onUndispatchedUserTurn: NonNullable<Deps['onUndispatchedUserTurn']>;
   persistTerminalSendError(sessionId: string, message: string, inputClientId?: string): void;
+  /** The task's event persistence (historyFor), for the reply anchor of a user row. */
+  autoResumeHistory(sessionId: string): { getLastAssistantTranscriptUuid(sessionId: string): string | undefined };
   onPersistedSendRejected(sessionId: string, message: string): void;
 }
 
@@ -67,6 +77,10 @@ export interface HostCoordinatorContext {
   acceptedCallbacks: ReturnType<typeof createQueuedAcceptedCallbacks>;
   schedulePreparations: Parameters<typeof runSchedulerQueuedPreparation>[1];
   scheduleDiscardWatchers: Map<string, () => void>;
+  /** The auto-resume runtime and hooks of this owner runtime (auto-resume.ts). */
+  autoResume: HostAutoResume;
+  /** This owner runtime's context recovery, if assembled; read when a port runs. */
+  rollover(): { cancelRecovery(sessionId: string): void } | null | undefined;
 }
 
 const makerKind = (kind: string | undefined) => kind === 'cc' ? 'claude-code' : kind;
@@ -78,6 +92,15 @@ const makerKind = (kind: string | undefined) => kind === 'cc' ? 'claude-code' : 
  */
 export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoordinatorDeps {
   const { deps, executor } = ctx;
+  /**
+   * An exact retry owner that never crossed vendor dispatch (register.ts
+   * finalizeUndispatchedClaimedRetry): a failure surfaces the held error, a cancellation writes it
+   * quietly. The desktop also closes the Agent Island lifecycle, which the Host does not have.
+   */
+  const finalizeUndispatchedClaimedRetry = (id: string, item: AgentInputQueuedMessage, disposition: 'cancelled' | 'failed') =>
+    disposition === 'failed'
+      ? ctx.autoResume.autoResumeBookkeeping.surfaceSuppressedErrorForRetry(id, item.clientId)
+      : ctx.autoResume.autoResumeBookkeeping.flushSuppressedErrorForRetry(id, item.clientId);
   return explicitPorts<AgentInputCoordinatorDeps>({
     sendToAgent: async (id, message, createOpts, sendOpts) => {
       const clientId = sendOpts.persistUserMessage?.clientId;
@@ -95,6 +118,8 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     },
     steerToAgent: executor.steer,
     abortSession: id => {
+      // As register.ts: an explicit stop withdraws both automatic resumes and their backoff first.
+      ctx.autoResume.resetForExplicitStop(id);
       const promise = executor.abort(id);
       ctx.noteAborting(id, promise);
       return promise;
@@ -117,7 +142,9 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     hasPendingInteraction: id => (deps.interactions?.pending(id)?.length ?? 0) > 0,
     hasPendingCredentialSwitch: deps.hasPendingCredentialSwitch,
     rewindPersistedUserMessageAfterClear: deps.rewindPersistedUserMessageAfterClear,
-    createUserMessage: ((id, input, options) => deps.persistMessage?.(id, input, options)) as Deps['createUserMessage'],
+    // As register.ts (createUserMessageDurably): budgets charged for a person's message, an
+    // auto-resume's outcome registered, the row written behind the task's reply rows.
+    createUserMessage: ctx.autoResume.createUserMessage,
     touchUserSend: deps.touchUserSend ?? (async () => {}) as unknown as Deps['touchUserSend'],
     emitProjection: ctx.publish,
     persistQueueSnapshot: ctx.persist,
@@ -132,9 +159,20 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     },
     // Desktop register.ts (AgentInputCoordinator hooks): after the user row is durable
     // and before vendor dispatch, open the turn change record, then the Git baseline.
-    beforeDispatchUserTurn: executor.beforeDispatchUserTurn,
+    beforeDispatchUserTurn: (id, item, signal) => {
+      ctx.autoResume.autoResumeBookkeeping.markReplacementDispatching(id, item.clientId);
+      return executor.beforeDispatchUserTurn(id, item, signal);
+    },
     // A durable turn that never reached the vendor: drop the record, then the baseline.
-    onUndispatchedUserTurn: executor.onUndispatchedUserTurn,
+    // Then, as register.ts, the auto-resume that item carried hands its error back (exactly once).
+    onUndispatchedUserTurn: (id, item, disposition) => {
+      executor.onUndispatchedUserTurn(id, item, disposition);
+      ctx.autoResume.autoResumeBookkeeping.rollbackReplacementPreview(id, item.clientId);
+      const autoResume = item.autoResume === true;
+      if (autoResume) ctx.autoResume.settleUndispatchedInterruptedAutoResume(id, item);
+      finalizeUndispatchedClaimedRetry(id, item, disposition);
+      if (!autoResume) ctx.autoResume.settleUndispatchedInterruptedAutoResume(id, item);
+    },
     // Session references in the composer (register.ts resolveSessionReferences, with the Host's
     // device identity; reading another device's task needs Device Link, which the Host lacks).
     resolveSessionReferences: deps.resolveSessionReferences,
@@ -148,7 +186,13 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     supersedeRetriedUserTurn: deps.supersedeRetriedUserTurn,
     // The coordinator has just kept this input as the task's recovery point (active-turn) when it
     // stores the error row; that input stopped here, so its receipt follows the row (turn-executor).
-    persistTerminalSendError: (id, message) => {
+    persistTerminalSendError: (id, message, attemptToken) => {
+      // An automatic recovery already owns this input (main 3792724192): its error is held once, in
+      // that attempt, and written when the attempt gives up.
+      if (attemptToken !== undefined) {
+        ctx.autoResume.autoResumeBookkeeping.stashSuppressedError(id, { message }, attemptToken);
+        return;
+      }
       const recovery = ctx.coordinator().getProjection(id).recovery;
       executor.persistTerminalSendError(id, message, recovery?.kind === 'active-turn' ? recovery.item?.clientId : undefined);
     },
@@ -164,30 +208,71 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
       await ctx.acceptedCallbacks.run(id, item, ctx.scheduleBridge().recoverySourceClientId(id, item));
     },
     onDiscardedQueuedMessage: (id, item) => {
+      // As register.ts: settle a task-action input that will not run.
+      void settleTaskActionInput(item).catch(() => undefined);
       ctx.afterSnapshot(id, () => ctx.attachmentOwnership.discardClient(id, item.clientId));
       ctx.acceptedCallbacks.discard(item.clientId);
       ctx.schedulePreparations.delete(item.clientId);
       const discarded = ctx.scheduleDiscardWatchers.get(item.clientId);
       ctx.scheduleDiscardWatchers.delete(item.clientId);
+      // As register.ts: an auto-resume item settles before a claimed retry releases its error.
+      const autoResume = item.autoResume === true;
+      if (autoResume) ctx.autoResume.settleUndispatchedInterruptedAutoResume(id, item);
+      finalizeUndispatchedClaimedRetry(id, item, 'cancelled');
+      if (!autoResume) ctx.autoResume.settleUndispatchedInterruptedAutoResume(id, item);
       discarded?.();
     },
+
+    // ── Interrupted-turn auto-resume (auto-resume.ts), as register.ts binds it ───────────────────
+    isResumableTurnErrorCandidate: ctx.autoResume.canRecoverTurn,
+    claimExternalAutomaticRecovery: id =>
+      ctx.autoResume.interruptedTurnAutoResumeGuard.claimExternalAutomaticRecovery(id).action === 'allow',
+    onResumableTurnErrorDiscarded: ctx.autoResume.onResumableTurnErrorDiscarded,
+    onResumableTurnError: ctx.autoResume.onResumableTurnError,
+    onUnconfirmedAutoResumeTurn: ctx.autoResume.onUnconfirmedAutoResumeTurn,
+    // The desktop also settles Teammate group, plugin-task and welcome receipts and the Agent Island
+    // here; the Host has none of them.
+    onRejectedUserTurn: ctx.autoResume.onRejectedUserTurn,
+    onDispatchedUserTurn: (id, item, preVendorDispatchAt) => {
+      if (!item.autoResume) void deps.touchSessionActivity?.(id, preVendorDispatchAt);
+      void settleTaskActionInput(item).catch(() => undefined);
+      const attemptToken = ctx.autoResume.autoResumeAttemptToken(item);
+      // The vendor accepted the resume: the held error is dropped, unless a newer attempt owns it.
+      if (attemptToken !== null) ctx.autoResume.autoResumeBookkeeping.discardSuppressedError(id, attemptToken);
+    },
+    onSteerAccepted: (id, item) => {
+      if (!item.autoResume) void deps.touchSessionActivity?.(id);
+      void settleTaskActionInput(item).catch(() => undefined);
+      // The desktop also releases the Orca accepted callback; Orca tasks are refused at Host admission.
+    },
+    onUiRetry: (id, clientId, source, attemptToken) => {
+      const bookkeeping = ctx.autoResume.autoResumeBookkeeping;
+      bookkeeping.claimSuppressedErrorForRetry(id, clientId, source);
+      if (source === 'auto' && attemptToken !== undefined) bookkeeping.bindSuppressedErrorToClient(id, attemptToken, clientId);
+      if (source === 'manual') {
+        ctx.rollover()?.cancelRecovery(id);
+        // The click itself is the person's intervention: a fresh budget, before any await.
+        ctx.autoResume.silentStopAutoResumeGuard.noteUserSend(id);
+        ctx.autoResume.interruptedTurnAutoResumeGuard.noteUserSend(id);
+      }
+      // The desktop also retires a scheduled waiter, notes the provider group and publishes the hook
+      // continuation signal; the Host has no scheduler runner, provider groups or hook channels.
+    },
+    // A new message takes the task over: a context recovery in flight and an unclaimed held error give way.
+    onUserEnqueue: id => {
+      ctx.rollover()?.cancelRecovery(id);
+      ctx.autoResume.autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(id);
+    },
+    // An automatic input moves the task on too, without charging the person's budgets.
+    onAutomaticEnqueue: id => {
+      ctx.rollover()?.cancelRecovery(id);
+      ctx.autoResume.autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(id);
+    },
+    getLastAssistantTranscriptUuid: id => executor.autoResumeHistory(id).getLastAssistantTranscriptUuid(id),
 
     // ── Not bound on the Host, and why ─────────────────────────────────────────────────────────
     // Orca tasks are refused at Host admission: no saved report is restored, so none is revalidated.
     canRestoreOrcaReport: undefined,
-    // The interrupted-turn auto-resume (checkpoint 4b) is not assembled yet.
-    onResumableTurnError: undefined,
-    isResumableTurnErrorCandidate: undefined,
-    onResumableTurnErrorDiscarded: undefined,
-    claimExternalAutomaticRecovery: undefined,
-    onUnconfirmedAutoResumeTurn: undefined,
-    onRejectedUserTurn: undefined,
-    onUiRetry: undefined,
-    onUserEnqueue: undefined,
-    onAutomaticEnqueue: undefined,
-    onSteerAccepted: undefined,
-    onDispatchedUserTurn: undefined,
-    getLastAssistantTranscriptUuid: undefined,
     // The usage-limit resume arrives with the third batch (release table).
     onUsageLimitedTurnError: undefined,
     onUserAction: undefined,

@@ -94,12 +94,16 @@ export function createChatHandler(deps) {
         'cache-control': 'no-store', connection: 'keep-alive',
       });
       write({ type: 'session', sessionId, clientId });
+      // Once this input's terminal error is taken over by an automatic resume, the stream follows the
+      // resume's turns (their events name this input as autoResumeOf) and ends with the resume.
+      let followingResume = false;
       unsubscribe = deps.events.subscribe(event => {
         if (event.type === 'auth_changed' && event.canEnterApp === false) { end(); return; }
         if (event.sessionId !== sessionId) return;
         // Queue projections and questions remain task-wide; model events must
         // belong to this exact input, not the turn ahead of it in the queue.
-        if (event.inputClientId && event.inputClientId !== clientId) return;
+        const own = event.inputClientId === clientId || (followingResume && event.autoResumeOf === clientId);
+        if (event.inputClientId && !own) return;
         write(event);
         // Dispatch can fail after admission (session start, pre-send preparation).
         // The queue then keeps this input as the recoverable head and publishes
@@ -116,9 +120,13 @@ export function createChatHandler(deps) {
           end();
           return;
         }
-        if (event.inputClientId === clientId && event.turnScope !== 'background'
+        if (own && event.turnScope !== 'background'
           && !isTurnContinuationBoundaryEvent(event)
-          && (event.type === 'done' || isTerminalTurnErrorEvent(event))) end();
+          && (event.type === 'done' || isTerminalTurnErrorEvent(event))) {
+          // The resume answers this input, or gives up with an interrupted receipt (input-queue.mjs).
+          if (event.type === 'error' && event.autoResumePending) { followingResume = true; return; }
+          end();
+        }
       });
       const projection = await deps.enqueue(sessionId, { clientId, text: payload.prompt });
       write({ type: 'input_projection', sessionId, projection });
