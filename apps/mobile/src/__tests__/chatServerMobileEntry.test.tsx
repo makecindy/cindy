@@ -70,7 +70,7 @@ async function send(input: Record<string, unknown>) {
   await chat.act('send', input);
   const runner = createChatOutboxDelivery({ store: mobileDurableOutbox,
     client: createChatServerClient((path, method = 'GET', body) => h.auth.apiFetch(`/v1${path}`, { method, body, baseUrl: 'https://chat.example.invalid', assertCurrent() {} })),
-    current: () => true, canRun: () => true, accessLost: forgetChatMessages });
+    current: () => true, accessLost: forgetChatMessages });
   await runner.run();
 }
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -1125,7 +1125,7 @@ it.each([
     if (method === 'POST') { posted.push(body); if (posted.length === 1) throw new Error('response lost'); return { id: self } as T; }
     throw new Error('Unexpected request');
   });
-  const delivery = () => createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+  const delivery = () => createChatOutboxDelivery({ store, client, current: () => true, accessLost: async () => {} });
   await delivery().run();
   expect(store.getSnapshot()[0]).toMatchObject({ state: 'queued', enqueueStarted: true, chat: { body: { operationId: 'lost-response', mentions: [id] } } });
   expect(posted[0]).toMatchObject({ content: [{ type: 'text', text: 'saved offline' }, ...(withMedia ? [{ type: 'media', mediaId: id, caption: 'report.pdf' }] : [])] });
@@ -1180,7 +1180,7 @@ it('keeps an uncertain send frozen and uncancellable when a later attempt is rej
     await expect(chat.pendingAction!('uncertain-first', 'cancel')).rejects.toThrow('MESSAGE_ALREADY_SENDING');
     // The background runner retries the already frozen POST using its original ID.
     const client = createChatServerClient((path, method = 'GET', body) => h.auth.apiFetch(`/v1${path}`, { method, body, assertCurrent() {} }));
-    await createChatOutboxDelivery({ store: mobileDurableOutbox, client, current: () => true, canRun: () => true, accessLost: forgetChatMessages }).run();
+    await createChatOutboxDelivery({ store: mobileDurableOutbox, client, current: () => true, accessLost: forgetChatMessages }).run();
   });
   expect(posted).toHaveLength(2); expect(posted[1]).toEqual(posted[0]);
   expect(mobileDurableOutbox.getSnapshot()[0]).toMatchObject({ state: 'failed', enqueueStarted: true });
@@ -1267,7 +1267,7 @@ it('restores a failed share after restart, keeps its body, and does not block la
     }),
     load: async () => ({ snapshot: { room, members: [], messages: [], cursor: '1' }, messages: [], before: null }),
   } as any;
-  const runner = () => createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+  const runner = () => createChatOutboxDelivery({ store, client, current: () => true, accessLost: async () => {} });
   await enqueueChatMessage(store, account, id, { clientId: 'topic-and-main', text: 'reply', threadRootId: self,
     mentions: { all: false, botIds: [] }, alsoSendToMain: true }, 0);
   await runner().run();
@@ -1323,7 +1323,7 @@ it.each([false, true])('recovers an off-window share after restart without resen
     return [];
   });
   const client = createChatServerClient(request as any);
-  const runner = () => createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+  const runner = () => createChatOutboxDelivery({ store, client, current: () => true, accessLost: async () => {} });
   h.historyWriteFails = !alreadyShared;
   await runner().run();
   expect(store.getSnapshot()).toHaveLength(1);
@@ -1362,7 +1362,7 @@ describe('two-stage topic delivery boundaries', () => {
       }), load: async () => ({ snapshot: { room, members: [], messages: [], cursor: '1' }, messages: [], before: null }),
     } as any;
     const accessLost = vi.fn(async () => {});
-    const runner = createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost });
+    const runner = createChatOutboxDelivery({ store, client, current: () => true, accessLost });
     await enqueueChatMessage(store, account, id, { clientId: 'both', text: 'reply', threadRootId: self,
       mentions: { all: false, botIds: [] }, alsoSendToMain: true }, 0);
     return { storage, account, store, client, runner, accessLost };
@@ -1385,7 +1385,7 @@ describe('two-stage topic delivery boundaries', () => {
     const body = { operationId: `thread-share:${reply}`, content: [], mentions: [self] };
     await store.update(row, { chat: { ...row.chat!, shareToMain: { state: 'pending', body } } });
     const restored = createDurableOutbox(storage); await restored.activate(account);
-    const resumed = createChatOutboxDelivery({ store: restored, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+    const resumed = createChatOutboxDelivery({ store: restored, client, current: () => true, accessLost: async () => {} });
     await resumed.run();
     expect(client.send).toHaveBeenCalledTimes(1); expect(client.shareToMain.mock.calls[0][3].body).toEqual(body);
     const { settleChatOutbox } = await import('@/chat/chatOutbox');
