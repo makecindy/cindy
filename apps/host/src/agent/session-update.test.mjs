@@ -283,12 +283,14 @@ const closeAgent = handles => ({
     .map(key => [key, { supported: false, reason: 'not-implemented' }]).concat([['permissionModes', []]])),
   startSession: async opts => {
     let usage = { tokenUsage: 0, contextTokens: 80_000, contextWindow: 200_000, costUsd: 0 };
-    const handle = { id: `native-${opts.sessionId ?? handles.length}`, agentKind: 'claude-code', model: opts.model,
+    let closing = false;
+    const handle = { id: `native-${handles.length}`, agentKind: 'claude-code', model: opts.model, closedReads: 0,
       send: async () => {}, steer: async () => {}, abort: async () => {},
       // The usage is gone one macrotask after the close: only a read at the close itself sees it.
-      close: async () => { setImmediate(() => { usage = undefined; }); },
+      close: async () => { closing = true; setImmediate(() => { usage = undefined; }); },
       events: async function* () { await new Promise(() => {}); },
-      getUsageSnapshot: () => usage,
+      // Maker reads no usage on a close; each read after it began is the convergence's.
+      getUsageSnapshot: () => { if (closing) handle.closedReads += 1; return usage; },
       setInteractionResolver: () => {} };
     handles.push(handle);
     return handle;
@@ -307,7 +309,8 @@ function closeFixture(t) {
     delete: async id => { rows.delete(id); },
   };
   const silent = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return silent; } };
-  const maker = new Maker({ agents: { 'claude-code': closeAgent([]) }, storage, logger: silent });
+  const handles = [];
+  const maker = new Maker({ agents: { 'claude-code': closeAgent(handles) }, storage, logger: silent });
   const selection = createHostRuntimeSelection({
     getMaker: () => maker, publish: () => {}, createDbMessage: async () => {},
     pendingHandoff: { set() {}, readGeneration: () => 0 }, listProviderViews: async () => VIEWS,
@@ -317,12 +320,19 @@ function closeFixture(t) {
       wakeSession() {}, refreshQueuedRoute() {}, cancelUsageLimitWait() {} },
     log: quiet,
   });
-  const seen = [];
-  const remember = selection.onSessionClosed;
-  selection.onSessionClosed = (id, session) => { seen.push(id); remember(id, session); };
-  const off = selection.attachMaker(maker);
+  // Called detached, as a caller may destructure it: the subscription does not depend on `this`.
+  const { attachMaker } = selection;
+  const off = attachMaker(maker);
   t.after(async () => { off(); await maker.shutdown(); _resetSessionLastLiveUsageForTests(); });
-  const start = id => maker.createSession({ id, agentKind: 'claude-code', model: 'big', providerId: 'prov-a', workingDir: os.tmpdir() });
+  // Which task each fixture runtime belongs to, in start order.
+  const runtimes = [];
+  const start = async id => {
+    const session = await maker.createSession({ id, agentKind: 'claude-code', model: 'big', providerId: 'prov-a', workingDir: os.tmpdir() });
+    runtimes.push([id, handles.at(-1)]);
+    return session;
+  };
+  // The closes the convergence saw: one entry per read of a closing runtime's usage.
+  const seen = () => runtimes.flatMap(([id, handle]) => Array(handle.closedReads).fill(id));
   const settle = async () => { for (let i = 0; i < 5; i += 1) await new Promise(resolve => setImmediate(resolve)); };
   const remembered = id => {
     const usage = getSessionLastLiveUsage(id);
@@ -350,7 +360,7 @@ for (const [name, close] of CLOSE_PATHS) {
     const session = await f.start(`close-${name}`);
     await close(f.maker, session.id, session);
     await f.settle();
-    assert.deepEqual(f.seen, [session.id]);
+    assert.deepEqual(f.seen(), [session.id]);
     assert.deepEqual(f.remembered(session.id), { contextTokens: 80_000, contextWindow: 200_000 });
     assert.equal(session.getUsageSnapshot(), undefined, 'the fixture runtime has dropped its usage since');
   });
@@ -361,14 +371,14 @@ test('close convergence: a runtime closed twice, or closed and then shut down, i
   const first = await f.start('close-twice');
   await Promise.all([f.maker.closeSession(first.id), f.maker.closeSession(first.id)]);
   await f.settle();
-  assert.deepEqual(f.seen, ['close-twice']);
+  assert.deepEqual(f.seen(), ['close-twice']);
   const next = await f.start('close-twice');
   assert.notEqual(next, first);
   const other = await f.start('close-then-shutdown');
   await f.maker.closeSession(other.id);
   await f.maker.shutdown();
   await f.settle();
-  assert.deepEqual(f.seen.sort(), ['close-then-shutdown', 'close-twice', 'close-twice']);
+  assert.deepEqual(f.seen().sort(), ['close-then-shutdown', 'close-twice', 'close-twice']);
 });
 
 test('close convergence: after the owner runtime unsubscribes, a close is not seen', { timeout: 30_000 }, async t => {
@@ -377,6 +387,6 @@ test('close convergence: after the owner runtime unsubscribes, a close is not se
   f.off();
   await f.maker.closeSession(session.id);
   await f.settle();
-  assert.deepEqual(f.seen, []);
+  assert.deepEqual(f.seen(), []);
   assert.equal(f.remembered(session.id), undefined);
 });

@@ -1,4 +1,4 @@
-import type { AgentKind, Maker } from '@cindy/maker-core';
+import type { AgentKind, Maker, Session } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import {
   applyPendingAgentSwitchIfIdle,
@@ -248,6 +248,14 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     recordSessionContextSnapshot: recordHostContextSnapshot,
   });
   const handleSetModel = createHandleSetModel(ports);
+  /**
+   * A runtime of a task closed (the Maker's session:closed, from the session's own close): the
+   * desktop's finalizeClosedSession keeps its last live usage for a cold Pi model change's window
+   * check (sessionLastLiveUsage.ts), read from the closed session as the desktop reads it.
+   */
+  const onSessionClosed = (sessionId: string, session: Pick<Session, 'getUsageSnapshot'>) => {
+    rememberSessionLastLiveUsage(sessionId, session.getUsageSnapshot());
+  };
 
   return {
     pendingSwitches,
@@ -273,18 +281,11 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     clearIntent(sessionId: string) {
       pendingSwitches.clear(sessionId);
     },
-    /**
-     * A runtime of a task closed (the Maker's session:closed, from the session's own close): the
-     * desktop's finalizeClosedSession keeps its last live usage for a cold Pi model change's window
-     * check (sessionLastLiveUsage.ts), read from the closed session as the desktop reads it.
-     */
-    onSessionClosed(sessionId: string, session: { getUsageSnapshot?(): { contextTokens?: number; contextWindow?: number } | undefined }) {
-      rememberSessionLastLiveUsage(sessionId, session.getUsageSnapshot?.() as never);
-    },
+    onSessionClosed,
     /** Subscribes to a Maker's session-closed events (each session's own close); returns the unsubscribe. */
     attachMaker(target: Pick<Maker, 'on'>): () => void {
       return target.on(event => {
-        if (event.type === 'session:closed') this.onSessionClosed(event.sessionId, event.session);
+        if (event.type === 'session:closed') onSessionClosed(event.sessionId, event.session);
       });
     },
   };
