@@ -10,10 +10,11 @@ export function FilePathHeader({ workdir, relPath, remoteHostId = null, deviceId
   deviceId?: string | null;
 }) {
   const { t } = useTranslation();
-  // Only root rule candidates need provenance. Reuse the endpoint-scoped reader/cache;
-  // no local filesystem probing for SSH/device-link paths and no filename-only badge.
+  // Only root rule candidates need provenance. Keep the real endpoint/workdir scope
+  // stable: disabling this read must not evict the shared file-body cache.
+  // Reuse the endpoint-scoped reader; never probe SSH/device-link paths locally.
   const { content: record } = useFileContent(
-    isTemplateRulePath(relPath) ? workdir : '',
+    workdir,
     isTemplateRulePath(relPath) ? '.cindy/template.json' : null,
     remoteHostId,
     deviceId,
