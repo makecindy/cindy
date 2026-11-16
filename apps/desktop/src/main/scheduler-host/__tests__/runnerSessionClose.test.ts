@@ -321,10 +321,13 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
       const preparing = deferred();
       const allowDispatch = deferred();
       const dispatched = deferred();
+      const abortEntered = deferred();
+      const allowAbort = deferred();
       const handle = {
         id: 'fixture-provider', agentKind: 'pi' as const, model: 'fixture-model',
         send: vi.fn(async () => {}),
         events: () => events, close: async () => { events.end(); },
+        abort: async () => { abortEntered.resolve(); await allowAbort.promise; },
         isTurnRunning: () => false, setInteractionResolver: () => {},
       };
       const logger = { trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: () => logger };
@@ -456,6 +459,13 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
           events.push({ type: 'done', data: { stopReason: 'stop' }, source: 'pi' });
           await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
         } else {
+          const abort = session.abort();
+          await abortEntered.promise;
+          expect(session.getStatus()).toBe('aborting');
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(session.getStatus()).toBe('aborting');
+          allowAbort.resolve();
+          await abort;
           expect(session.manageAsyncUserQuestions({ action: 'withdraw',
             request_ids: [question.request_id], reason: 'No longer needed' }).results)
             .toEqual([{ request_id: question.request_id, status: 'withdrawn' }]);
@@ -465,13 +475,14 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
       } finally {
         vi.useRealTimers();
         allowDispatch.resolve();
+        allowAbort.resolve();
         await fire.catch(() => {});
         await session.close();
       }
     },
   );
 
-  it.each(['removed', 'owner-changed', 'runtime-replaced', 'probe-new-input', 'probe-owner-changed', 'probe-runtime-replaced'] as const)(
+  it.each(['removed', 'owner-changed', 'runtime-replaced', 'probe-new-input', 'probe-owner-changed', 'probe-runtime-replaced', 'probe-aborting', 'probe-new-turn'] as const)(
     'deferred cleanup respects %s after queued input takes ownership', async outcome => {
       vi.useFakeTimers();
       const h = createSessionHarness();
@@ -481,20 +492,26 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
       let wakes = 0;
       let nativeWork = false;
       let probeRaceApplied = false;
+      let status: 'active' | 'aborting' = 'active';
+      let generation = 0;
       Object.assign(h.session, {
-        getStatus: () => 'active',
+        getStatus: () => status,
+        getTurnGeneration: () => generation,
         listBackgroundTasks: () => background ? [{}] : [],
         countPendingWakeContinuations: () => wakes,
         manageAsyncUserQuestions: () => ({ questions: [] }),
         hasLiveBackgroundWork: async () => {
+          const snapshot = nativeWork;
           await Promise.resolve();
           if (!probeRaceApplied) {
             probeRaceApplied = true;
             if (outcome === 'probe-new-input') pending = true;
+            if (outcome === 'probe-aborting') status = 'aborting';
+            if (outcome === 'probe-new-turn') { generation++; nativeWork = true; }
             if (outcome === 'probe-owner-changed') owner = false;
             if (outcome === 'probe-runtime-replaced') current = { ...h.session } as Session;
           }
-          return nativeWork;
+          return snapshot;
         },
       });
       let owner = true;
@@ -549,7 +566,16 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
           pending = false;
           await vi.advanceTimersByTimeAsync(1_000);
         }
-        if (outcome === 'removed' || outcome === 'probe-new-input') {
+        if (outcome === 'probe-aborting' || outcome === 'probe-new-turn') {
+          expect(retire).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(retire).not.toHaveBeenCalled();
+          status = 'active';
+          nativeWork = false;
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+        if (outcome === 'removed' || outcome === 'probe-new-input'
+          || outcome === 'probe-aborting' || outcome === 'probe-new-turn') {
           expect(retire).toHaveBeenCalledExactlyOnceWith(h.session, 'requested', { onlyIfIdle: true });
         } else expect(retire).not.toHaveBeenCalled();
         expect(vi.getTimerCount()).toBe(0);
