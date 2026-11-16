@@ -5773,7 +5773,8 @@
             "statusFailed": "die Statusprüfung des Controllers ist fehlgeschlagen",
             "recoveryFailed": "die Steuerungsverbindung konnte nicht neu aufgebaut werden",
             "extensionDisconnected": "keine Browsererweiterung ist verbunden (installiere und aktiviere das Cindy Chrome-Plugin und die zugehörige Erweiterung)",
-            "pluginMissing": "das Cindy Chrome-Plugin ist nicht installiert oder aktiviert"
+            "pluginMissing": "das Cindy Chrome-Plugin ist nicht installiert oder aktiviert",
+            "browserMissing": "Chrome ist auf diesem Computer nicht installiert"
           },
           "reconnect": "Browser erneut verbinden",
           "recover": "Browser wiederherstellen",
@@ -5793,7 +5794,7 @@
         },
         "userBrowser": {
           "title": "Mein Browser",
-          "description": "Funktioniert in deinem aktuell verwendeten Chrome oder Edge mit deinen bestehenden Anmeldungen. Neue Seiten öffnen sich in einem Hintergrundfenster und stören dich nicht."
+          "description": "Dein eigenes Chrome auf diesem Computer (Edge funktioniert auch). Der Agent arbeitet direkt darin, mit deinen bestehenden Anmeldungen. Neue Seiten öffnen sich in einem Hintergrundfenster und stören dich nicht."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Cindy Chrome-Plugin installieren",
@@ -5812,7 +5813,9 @@
           "updatePluginTitle": "Cindy Chrome-Plugin aktualisieren",
           "updatePluginBody": "Das installierte Cindy Chrome-Plugin ist für „Mein Browser“ zu alt. Aktualisiere es auf die neueste Version und folge dann der Aufforderung, die Erweiterung hinzuzufügen.",
           "updatePlugin": "Aktualisieren",
-          "storeOpened": "Die Seite der Cindy-Erweiterung wurde in deinem Browser geöffnet. Wähle „Zu Chrome hinzufügen“, dann wird die Verbindung automatisch hergestellt."
+          "storeOpened": "Die Seite der Cindy-Erweiterung wurde in deinem Browser geöffnet. Wähle „Zu Chrome hinzufügen“, dann wird die Verbindung automatisch hergestellt.",
+          "installBrowserTitle": "Zuerst Chrome installieren",
+          "installBrowserBody": "Chrome ist auf diesem Computer nicht installiert. „Mein Browser“ braucht Chrome (oder Edge) für die Cindy-Erweiterung. Sobald es installiert ist, geht es hier automatisch mit dem nächsten Schritt weiter."
         }
       },
       "android": {

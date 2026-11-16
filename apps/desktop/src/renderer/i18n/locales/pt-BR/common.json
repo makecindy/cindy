@@ -5831,7 +5831,8 @@
             "statusFailed": "falha na verificação do status do controlador",
             "recoveryFailed": "não foi possível restabelecer a conexão de controle",
             "extensionDisconnected": "nenhuma extensão de navegador está conectada (instale e ative o plugin Cindy Chrome e sua extensão)",
-            "pluginMissing": "o plugin Cindy Chrome não está instalado ou ativado"
+            "pluginMissing": "o plugin Cindy Chrome não está instalado ou ativado",
+            "browserMissing": "o Chrome não está instalado neste computador"
           },
           "reconnect": "Reconectar navegador",
           "recover": "Recuperar navegador",
@@ -5851,7 +5852,7 @@
         },
         "userBrowser": {
           "title": "Meu navegador",
-          "description": "Funciona no Chrome ou Edge que você está usando, com seus logins existentes. Novas páginas abrem em uma janela em segundo plano, sem atrapalhar."
+          "description": "O seu próprio Chrome neste computador (o Edge também funciona). O Agent trabalha diretamente nele, com seus logins existentes. Novas páginas abrem em uma janela em segundo plano, sem atrapalhar."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Instalar o plugin Cindy Chrome",
@@ -5870,7 +5871,9 @@
           "updatePluginTitle": "Atualizar o plugin Cindy Chrome",
           "updatePluginBody": "O plugin Cindy Chrome instalado é antigo demais para Meu navegador. Atualize-o para a versão mais recente e siga a orientação para adicionar a extensão.",
           "updatePlugin": "Atualizar",
-          "storeOpened": "A página da extensão Cindy foi aberta no seu navegador. Escolha Adicionar ao Chrome e a conexão será feita automaticamente."
+          "storeOpened": "A página da extensão Cindy foi aberta no seu navegador. Escolha Adicionar ao Chrome e a conexão será feita automaticamente.",
+          "installBrowserTitle": "Instale o Chrome primeiro",
+          "installBrowserBody": "O Chrome não está instalado neste computador. “Meu navegador” precisa do Chrome (ou Edge) para a extensão Cindy. Depois de instalar, aqui avança para a próxima etapa automaticamente."
         }
       },
       "android": {

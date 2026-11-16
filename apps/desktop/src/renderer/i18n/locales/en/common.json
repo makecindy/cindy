@@ -5773,7 +5773,8 @@
             "statusFailed": "the controller status check failed",
             "recoveryFailed": "the control connection could not be rebuilt",
             "extensionDisconnected": "no browser extension is connected (install and enable the Cindy Chrome plugin and its extension)",
-            "pluginMissing": "the Cindy Chrome plugin is not installed or enabled"
+            "pluginMissing": "the Cindy Chrome plugin is not installed or enabled",
+            "browserMissing": "Chrome is not installed on this computer"
           },
           "reconnect": "Reconnect Browser",
           "recover": "Recover Browser",
@@ -5793,7 +5794,7 @@
         },
         "userBrowser": {
           "title": "My browser",
-          "description": "Works in the Chrome or Edge you are using, with your existing sign-ins. New pages open in a background window and stay out of your way."
+          "description": "Your own Chrome on this computer (Edge also works). The Agent works in it directly, with your existing sign-ins. New pages open in a background window and stay out of your way."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Install the Cindy Chrome plugin",
@@ -5812,7 +5813,9 @@
           "updatePluginTitle": "Update the Cindy Chrome plugin",
           "updatePluginBody": "The installed Cindy Chrome plugin is too old for “My browser”. Update it to the latest version, then follow its prompt to add the extension.",
           "updatePlugin": "Update",
-          "storeOpened": "Opened the Cindy extension page in your browser. Choose Add to Chrome and it connects on its own."
+          "storeOpened": "Opened the Cindy extension page in your browser. Choose Add to Chrome and it connects on its own.",
+          "installBrowserTitle": "Install Chrome first",
+          "installBrowserBody": "Chrome is not installed on this computer. My browser needs Chrome (or Edge) for the Cindy extension. Once it is installed, this moves on to the next step automatically."
         }
       },
       "android": {
