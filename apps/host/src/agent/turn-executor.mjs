@@ -282,8 +282,8 @@ export function createTurnExecutor(deps) {
       const gatewayKeyRejected = isGatewayProxyTokenRecoveryErrorEventForProvider(getSessionProvider(sessionId), event);
       if (gatewayKeyRejected) deps.reportAgentCindyGatewayKeyRejected?.();
       const fields = { ...stream, inputClientId: turn.clientId };
-      // Recovery claims a turn's terminal error synchronously, before finish hands it to the
-      // coordinator (the desktop's coordinator receives it first; the order differs, release table).
+      // Recovery claims a turn's terminal error synchronously, after the coordinator has it (above), as on
+      // the desktop: its preparation hands it over first, its delivery and terminal stages claim it.
       const recoveryTerminal = recovery && event.type === 'error' && isTerminalTurnErrorEvent(event)
         && event.turnScope !== 'background'
         ? { session, event, history, fields, isStopping: deps.isStoppingRuntime(), isGatewayProxyTokenRecovery: gatewayKeyRejected }
