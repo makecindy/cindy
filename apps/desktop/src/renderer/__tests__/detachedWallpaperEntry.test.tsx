@@ -19,17 +19,6 @@ vi.mock('react-dom/client', async (original) => {
   };
 });
 vi.mock('@/i18n', () => ({}));
-vi.mock('../themes/colors', () => ({}));
-vi.mock('../themes/local-themes', () => ({ bootstrapLocalThemesSync: vi.fn() }));
-vi.mock('../themes/theme-service', () => ({ themeService: { applyTheme: vi.fn() } }));
-vi.mock('../hooks/useTheme', () => ({
-  followLocalThemeChanges: vi.fn(),
-  getInitialThemeVariant: () => ({ theme: 'test' }),
-}));
-vi.mock('../hooks/useFontSettings', () => ({
-  applyFontSettings: vi.fn(),
-  getInitialFontSettings: vi.fn(),
-}));
 vi.mock('../hooks/useLocale', () => ({
   bootstrapInitialLocale: vi.fn(),
   LocaleProvider: ({ children }: { children: ReactNode }) => children,
@@ -44,8 +33,7 @@ vi.mock('../contexts/AuthContext', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock('../cindy-brain/ghostPanels', () => ({ ensureGhostPanelsRegistered: vi.fn() }));
-// This fixture exercises wallpaper boot/live updates with a theme stub. The picker has its
-// own real Host tests; loading its model UI here would consume the intentionally empty theme.
+// Model UI is unrelated to the real entry's palette/font/wallpaper synchronization.
 vi.mock('../cindy-brain/PluginModelPickerHost', () => ({ PluginModelPickerHost: () => null }));
 vi.mock('../components/layout/SidebarWindowLayout', () => ({
   SidebarWindowLayout: () => <div>sidebar host</div>,
@@ -66,6 +54,7 @@ afterEach(async () => {
   gateWindow.__xdtHiddenAnimationGateDisposer?.();
   delete gateWindow.__xdtHiddenAnimationGateLastHidden;
   document.documentElement.classList.remove('dark');
+  localStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -74,6 +63,8 @@ it.each(['sidebar'] as const)(
   'boots %s with a wallpaper using its read-only bridge and follows live changes',
   async (kind) => {
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    localStorage.setItem('theme', 'light');
+    localStorage.setItem('theme.familyId', 'cindy');
     const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
     const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
     vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
@@ -91,11 +82,23 @@ it.each(['sidebar'] as const)(
     document.body.innerHTML = '<div id="root"></div>';
     let changed!: (settings: AppearanceSettings) => void;
     let hiddenChanged!: (hidden: boolean) => void;
+    let snapshot = { ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'cindy-window' as const,
+      wallpaperMotion: 'dynamic' as const } as AppearanceSettings;
+    const getSync = vi.fn(() => snapshot);
+    const addListener = vi.spyOn(window, 'addEventListener');
     // Electron can report visible while a prewarmed native window is hidden.
     vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
     vi.stubGlobal('electronAPI', {
       platform: 'win32',
+      localThemes: {
+        listSync: () => ({ success: true, diagnostics: [], themes: [{
+          id: 'paper-light-local', family: 'paper', name: 'Paper', type: 'light',
+          colors: { surface: '#faf4ed' }, packageSha256: 'a'.repeat(64),
+          appearance: { density: 0.9, uiFont: { family: 'Georgia' } },
+        }] }),
+        onChanged: () => () => {},
+      },
       onWindowHiddenChange: (fn: typeof hiddenChanged) => {
         hiddenChanged = fn;
         fn(true);
@@ -104,11 +107,7 @@ it.each(['sidebar'] as const)(
       appearanceSettings: {
         ensureWallpaperImage: ensureImage,
         ensureWallpaperVideo: ensureVideo,
-        getSync: () => ({
-          ...DEFAULT_APPEARANCE_SETTINGS,
-          wallpaperId: 'cindy-window',
-          wallpaperMotion: 'dynamic',
-        }),
+        getSync,
         onChanged: (fn: typeof changed) => {
           changed = fn;
           return () => {};
@@ -119,6 +118,7 @@ it.each(['sidebar'] as const)(
       await import('../sidebar-window-entry');
     });
     expect(document.body.textContent).toContain('sidebar host');
+    expect(addListener.mock.calls.filter(([event]) => event === 'storage')).toHaveLength(1);
     expect(document.documentElement.dataset.wallpaperActive).toBe('true');
     expect(document.querySelectorAll('video')).toHaveLength(1);
     expect(document.querySelector('video')?.getAttribute('src')).toBe(videoUrl);
@@ -158,5 +158,34 @@ it.each(['sidebar'] as const)(
     expect(document.documentElement.style.getPropertyValue('--app-wallpaper-image')).toContain(url);
     await act(async () => changed(DEFAULT_APPEARANCE_SETTINGS));
     expect(document.documentElement.dataset.wallpaperActive).toBeUndefined();
+
+    // Unit, real sidebar entry/palette/font/presenter/wallpaper. #9817 let live
+    // appearance snapshots update while its palette stayed at the startup family.
+    // Existing entry coverage stubbed themes; one already-open window plus three
+    // storage selections is the minimal input (no module resets or real waits).
+    const reads = getSync.mock.calls.length;
+    for (const [family, expectedTheme, settings] of [
+      ['paper-local', 'paper-light-local', { ...DEFAULT_APPEARANCE_SETTINGS,
+        uiFamily: 'Georgia', density: 0.9, motion: 0, wallpaperId: 'custom', customWallpaperUrl: url }],
+      ['default', 'default-light', DEFAULT_APPEARANCE_SETTINGS],
+      ['cindy', 'cindy-light', DEFAULT_APPEARANCE_SETTINGS],
+    ] as const) {
+      snapshot = settings;
+      localStorage.setItem('theme.familyId', family);
+      await act(async () => {
+        changed(settings);
+        window.dispatchEvent(new StorageEvent('storage', { key: 'theme.familyId', newValue: family }));
+      });
+      expect.soft(document.documentElement.dataset.theme, family).toBe(expectedTheme);
+      expect(document.documentElement.style.getPropertyValue('--app-font-ui')).toBe(
+        settings.uiFamily ? `${settings.uiFamily}, var(--app-font-ui-default)` : '',
+      );
+      expect(document.documentElement.dataset.wallpaperActive).toBe(family === 'paper-local' ? 'true' : undefined);
+      expect(document.documentElement.dataset.cindyReducedMotion).toBe(family === 'paper-local' ? 'true' : undefined);
+      const appearanceCss = document.querySelector('style[data-cindy-appearance]')?.textContent ?? '';
+      if (family === 'paper-local') expect(appearanceCss).toContain('--space-4:0.9rem');
+      else expect(appearanceCss).toBe('');
+    }
+    expect(getSync).toHaveBeenCalledTimes(reads);
   },
 );

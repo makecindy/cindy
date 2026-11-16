@@ -75,6 +75,50 @@ async function makeHarness(
 }
 
 describe('createComputerMcpServer', () => {
+  // #9887 acceptance: status items are outside AXWindow. Unit coverage through
+  // the real MCP entry; existing tests only cover window-scoped pointer input.
+  it('dispatches explicit desktop capture/click/drag without inventing a window target', async () => {
+    const capture = { capture_id: 'desktop-capture', screenshot_frame_valid: true };
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn(async () => capture) };
+    const h = await makeHarness(deps, { sessionId: 'desktop-test' });
+    try {
+      for (const [name, args] of [
+        ['get_desktop_state', { max_image_dimension: 1600 }],
+        ['click', { target: { kind: 'desktop', display_id: 'primary' }, capture_id: capture.capture_id, delivery_mode: 'foreground', x: 12, y: 8 }],
+        ['drag', { target: { kind: 'desktop', display_id: 'primary' }, capture_id: capture.capture_id, delivery_mode: 'foreground', from_x: 12, from_y: 8, to_x: 40, to_y: 8, modifier: ['cmd'] }],
+      ] as const) {
+        expect(textPayload(await h.client.callTool({ name: 'call_tool', arguments: { name, args } }))).toMatchObject({ ok: true });
+        expect(deps.callTool).toHaveBeenLastCalledWith(name, { ...args, session: 'desktop-test' }, expect.objectContaining({ sessionId: 'desktop-test' }));
+      }
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([
+    { pid: 42 }, { window_id: 7 }, { element_token: 's00000001:3' },
+    { snapshot_id: 'ws-old' }, { from_zoom: true }, { action: 'press' },
+    { capture_id: undefined }, { delivery_mode: 'background' }, { delivery_mode: undefined },
+    { observe: {} }, { x: undefined },
+  ])('rejects ambiguous or ungrounded desktop click before input: %j', async (extra) => {
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn() };
+    const h = await makeHarness(deps);
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: { name: 'click', args: {
+        target: { kind: 'desktop', display_id: 'primary' }, capture_id: 'desktop-capture',
+        delivery_mode: 'foreground', x: 12, y: 8, ...extra,
+      } } });
+      expect(textPayload(result)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+      expect(deps.callTool).not.toHaveBeenCalled();
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([{ screenshot_frame_valid: false, capture_id: 'failed' }, {}])('does not report an unusable desktop capture as success: %j', async (data) => {
+    const h = await makeHarness({ getStatus: vi.fn(), callTool: vi.fn(async () => data) });
+    try {
+      expect(textPayload(await h.client.callTool({ name: 'call_tool', arguments: { name: 'get_desktop_state', args: {} } })))
+        .toMatchObject({ ok: false, errorCode: 'CUA_UNAVAILABLE' });
+    } finally { await h.cleanup(); }
+  });
+
   // Audit regression: discovery returned every schema even when only one was
   // needed. Exercise the real MCP list entry with no driver/process side effects.
   it('returns only requested schemas for focused discovery', async () => {

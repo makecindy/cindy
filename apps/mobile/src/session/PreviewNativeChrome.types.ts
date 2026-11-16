@@ -30,6 +30,7 @@ export interface NativePreviewMenuAction {
 }
 
 export interface NativePreviewHeaderProps {
+  standalone?: boolean;
   name: string;
   onClose: () => void;
   closeLabel: string;

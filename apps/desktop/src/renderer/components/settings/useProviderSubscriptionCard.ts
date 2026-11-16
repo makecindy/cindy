@@ -109,7 +109,7 @@ export function useProviderSubscriptionCard(
   // Suspension only disables routing; settings must still show the saved account.
   const source = provider ? providerWeeklyQuotaSource({ ...provider, suspended: false }) : null;
   const providerId = provider?.id ?? 'openai';
-  const { snapshot } = useCodexRateLimits(source === 'codex', providerId, options);
+  const { snapshot, failed, refreshing, refresh } = useCodexRateLimits(source === 'codex', providerId, options);
   const account = useAccountUsage(
     undefined,
     source === 'codex' ? 'codex' : undefined,
@@ -129,14 +129,17 @@ export function useProviderSubscriptionCard(
   useEffect(() => {
     if (!options.live && source === 'xai' && !isXaiWeeklyUsageCurrent(xai, nowMs)) requestXaiSubscriptionRefresh(providerId);
   }, [source, xai, nowMs, providerId, options.live]);
-  if (source === 'codex' && (snapshot || account))
-    return buildSettingsCodexUsageCard(
+  if (source === 'codex' && (snapshot || account || failed)) {
+    const card = buildSettingsCodexUsageCard(
       snapshot,
       account,
       t,
       nowMs,
       i18n?.resolvedLanguage ?? i18n?.language,
     );
+    if (failed) card.refreshFailure = { retry: refresh, retrying: refreshing };
+    return card;
+  }
   if (source === 'claude' && claude) return buildClaudeUsageCard(claude, t);
   if (source === 'xai' && xai) return buildXaiUsageCard(xai, null, t, nowMs);
   return null;

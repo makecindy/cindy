@@ -12,6 +12,8 @@ export const RUN_LOCATION_LOCAL = 'local';
 export interface RunLocationCandidate {
   deviceId: string;
   name: string;
+  /** Actual route on that computer, which can differ after independent sign-in. */
+  providerId: string;
 }
 
 export interface RunLocationProvider {

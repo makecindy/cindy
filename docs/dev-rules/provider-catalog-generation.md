@@ -59,7 +59,41 @@
 仍是 0.85.1 资料，整表同步随 Pi 版本升级另做。新地址与原供应商记录不同的行（OpenCode Zen/Go 已改到
 `/inference`）没有合并，否则会悄悄改掉已有连接的请求地址。
 
+2026-11-11：[#9863](https://github.com/makecindy/cindy/issues/9863) 的 Copilot Astra
+在官方个人端点拒绝 Chat Completions。`tools/pi/catalog-format.mjs` 对精确供应商、型号、
+地址及旧 API 做具名纠正为 Responses，随包条目同步；在线刷新与 bundle 导入共用该入口。
+按 [Pi #9253](https://github.com/earendil-works/pi/pull/9253) 的生成规则同时替换适配字段：
+禁止 `off` / `minimal`，保留 `low` 至 `max`，启用语法约束工具并移除旧 Chat 兼容标记。
+不把 `nativeApi` 当通用路由覆盖，不改用户显式接口、其他地址或已有任务的接口快照。
+回归覆盖生成、三引擎预设/ID-only 导入及 Pi 启动描述符；真实 Copilot 账号推理仍需验收。
+
+2026-11-11 再次读取 Pi 公共目录：43 个供应商成功，旧 `azure-openai-responses` 端点不可用。
+本轮仅补入已有 39 个供应商中、已有上游地址上的新 ID，共 28 个供应商、394 条记录；
+所有原有记录逐项保持不变。Copilot 新增 9 条，包括 Gemini 4 Argon、GPT-6.1 Sol/Terra。
+来源快照时间为 `2026-11-10T13:56:48.000Z`，记录在 `supplementalSources`。
+复核方法：先用 `sync-model-catalog.mjs` 获取完整候选，再按旧供应商 ID、旧 upstream 集合、
+新增模型 ID 筛选；以旧记录为正本合并，不能把完整候选直接覆盖当前文件。
+未采用上游对既有型号的参数、协议与价格改写或删除；旧地址迁移（包括 OpenCode）、
+新增供应商 Azure / Meta / Radius / Qwen individual CN 未接入，不能视为本轮已更新。
+全目录解析、已有预设三引擎投影与路由回归属于离线验证，不代表各账号实际可调用。
+Server Registry 与运行时二进制未修改；原生订阅的账号准入仍由原生发现控制。
+
+Copilot 发现使用官方账号主机的 `/models`，不依赖推理使用 Messages、Responses 还是 Chat。
+登录后的地址推导、手动获取和旧连接 `/v1/models` 读取共用
+`maker-host/copilot-account-url.ts`，客户端标识取已有渠道目录；不写回用户连接，不重置登录。
+自定义主机和自定义路径保留原义。回归见 `genericOAuth.test.ts`、`providerModelFetch.test.ts`。
+发现失败仍沿用现有备用目录，成功发现仍沿用现有合并规则；备用条目不是账号权限声明。
+
 ## 用户实测后的补充验收
+
+2026-11-13：[#10269](https://github.com/makecindy/cindy/issues/10269) 的 Copilot
+`gemini-4-carbon` 仅发现 ID 时曾继承连接的 Messages 默认值，缺少 IDE 身份头。
+标准目录补入精确 Carbon 的 Chat 适配；生成入口从同来源、同官方个人端点的 Argon
+记录复用 headers / compat，不另存版本头常量，也不通过型号代际猜协议。上游已有 Carbon
+记录时优先保留上游。补充记录只声明已验证的传输字段，不借用 Argon 的容量、价格、
+模态或推理能力；发现及用户显式配置继续按原优先级覆盖。来源登记在 supplementalSources。
+回归覆盖三引擎 ID-only 导入、Pi 启动描述符、Codex 账号主机路由及真实 SDK / Claude
+桥接的模拟文本与工具往返；不等于真实账号、图片或长上下文验收。Server Registry 未修改。
 
 最初审计把三引擎都构造成 Chat 路由，没有覆盖实际添加请求。OpenRouter 的公开模型接口
 带 Bearer 与 `anthropic-version` 时返回 20 条重写 ID 的兼容视图；普通目录返回 445 条。
@@ -70,6 +104,22 @@
 BYOK 导入报价进入实际参考价发布链；用户价格覆盖仍最后应用。
 添加页只对明确默认开启项标推荐，完整目录成功后清除下架的预设候选；刷新可纠正
 经完整 OpenRouter 目录确认的发现结果错误前缀，保留手填 ID 与显式模型参数。
+
+### MiMo V2.6 思考开关
+
+MiMo 官方 Chat 路由的 `high` 是 Pi 开启思考时使用的内部级别，不是界面上的推理强度。
+`tools/pi/catalog-format.mjs` 在导入与在线刷新时，对确切的 V2.6 Pro / Flash / Pro UltraSpeed
+及 API、CN/AMS/SGP Token Plan 路由投影 `thinkingToggle: true`、空 `efforts` 和 `defaultEffort: null`，
+保留 `execution.pi.thinkingLevelMap`。连接投影只在精确路由上补该开关，保留用户覆盖且不写回存储；
+Pi 启动配置保留内部级别与 off 映射。新旧连接共用该路径。
+
+统一模型面板也须传递该能力：Pi 参数浮层显示思考开关，当前模型复用调用方的思考设置入口，
+未选模型只写其所属来源的模型记忆；失败不得提前改写当前值或模型记忆。
+收藏与最近使用的配置副本尚不保存该字段，其浮层不提供会改变模型默认或当前任务的思考开关。
+
+共享兼容层的 Chat 开关映射独立于固定上游快照，不套用到原生 Responses / Anthropic。
+回归分别经过实际连接投影、目录转换、Pi 启动配置及真实 Pi 进程的本地 HTTP 请求，
+验证开启→关闭→开启；不代表 Server 目录已修改、生产已部署或真实服务请求已验收。
 
 ### OpenCode mixed-protocol regression
 

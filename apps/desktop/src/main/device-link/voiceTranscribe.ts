@@ -7,7 +7,7 @@
 import {
   downloadToBuffer,
   removeRemote,
-} from './mediaTransfer.js';
+} from './mediaTransfer.desktop.js';
 import {
   transcribeVoiceInputAudioFile,
   type VoiceInputAudioFileTranscriptionResult,

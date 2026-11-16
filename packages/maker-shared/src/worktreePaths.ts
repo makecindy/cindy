@@ -174,3 +174,14 @@ export function sessionProjectDirectory(session: {
 }): string | null {
   return session.projectDir ?? session.workingDir ?? null;
 }
+
+/** Owner task-list grouping, independent of the lane's execution/project context. */
+export function sessionTaskProjectDirectory(session: {
+  /** Search summaries carry the resolved display membership without chat attribution. */
+  taskProjectDir?: string | null;
+  projectDir?: string | null;
+  workingDir?: string | null;
+  companion?: { id?: string; role?: string; taskProjectDir?: string | null } | null;
+}): string | null {
+  return session.taskProjectDir ?? session.companion?.taskProjectDir ?? sessionProjectDirectory(session);
+}

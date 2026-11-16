@@ -9,6 +9,11 @@ export interface SchedulableMember {
   usable: boolean;
   paused: boolean;
   running: number;
+  /** Account-level comparison only. `running` still enforces the physical member limit. */
+  selectionRunning?: number;
+  /** One turn per currently eligible account. Omitted on single-account/old peers. */
+  roundSlots?: number;
+  /** 实际并发上限(effectiveConcurrencyLimit)；不限制为 Infinity。 */
   limit: number;
   weight: number;
   /**
@@ -24,6 +29,8 @@ export interface PickOptions {
   exclude?: ReadonlySet<string>;
   /** 轮询游标：上一次选中的键。 */
   lastPicked?: string | null;
+  /** Number of consecutive round picks already given to lastPicked. */
+  roundPicks?: number;
   /** [0, 1) 随机数，按权重时使用。 */
   random?: () => number;
 }
@@ -32,25 +39,24 @@ export interface PickOptions {
 export const PROVIDER_GROUP_SIMILAR_URGENCY = 0.9;
 
 /**
- * 只分给可用、未暂停、没试过的电脑；优先未满载的，都满了时分给相对最空的一台(并发上限只用来
- * 分摊，不因满载拒绝用户的消息)。先按配额排(byQuota)，组策略只在剩下的几台里挑；都满了时同样先按配额排，
- * 再选最空的。没有可分的电脑返回 null。
+ * 只分给可用、未暂停、没试过、未达到并发上限的电脑(2026-11-11 用户裁决：满了就不再分，取代「并发上限只用来分摊」；
+ * limit 传 effectiveConcurrencyLimit，不限制为 Infinity)。先按配额排(byQuota)，组策略只在剩下的几台里挑。
+ * 没有可分的电脑返回 null；是否因为全部满载，用 providerGroupMembersFull 区分。
  */
 export function pickProviderGroupMember(
   members: readonly SchedulableMember[],
   strategy: ProviderGroupStrategy,
   options: PickOptions = {},
 ): string | null {
-  const eligible = members.filter((m) => m.usable && !m.paused && !options.exclude?.has(m.key));
-  if (eligible.length === 0) return null;
-  const open = eligible.filter((m) => m.running < m.limit);
-  if (open.length === 0) return leastBusy(byQuota(eligible)).key;
-  const candidates = byQuota(open);
+  const candidates = providerGroupSchedulingCandidates(members, options);
+  if (candidates.length === 0) return null;
   switch (strategy) {
     case 'order':
       return candidates[0].key;
     case 'round': {
       const lastIndex = options.lastPicked ? members.findIndex((m) => m.key === options.lastPicked) : -1;
+      const last = candidates.find(m => m.key === options.lastPicked);
+      if (last && (options.roundPicks ?? 1) < (last.roundSlots ?? 1)) return last.key;
       const next = candidates.find((m) => members.indexOf(m) > lastIndex) ?? candidates[0];
       return next.key;
     }
@@ -71,6 +77,11 @@ export function pickProviderGroupMember(
   }
 }
 
+/** The same admission/quota band used by actual selection and anonymous pool summaries. */
+export function providerGroupSchedulingCandidates(members: readonly SchedulableMember[], options: PickOptions = {}) {
+  return byQuota(eligibleMembers(members, options).filter(m => m.running < m.limit));
+}
+
 /**
  * 配额先比，对所有组策略生效(2026-10-21 用户裁决：快作废的额度最优先，其次各账号平均)：先避开 5 小时配额
  * 快满、离重置还早的(都是这样时不避开)，再只留最急的那几台(不低于最急那台的 90%)。读不到用量的电脑(别人分享的、
@@ -85,7 +96,20 @@ function byQuota(open: readonly SchedulableMember[]): readonly SchedulableMember
   return known.filter((member) => member.urgency! >= top * PROVIDER_GROUP_SIMILAR_URGENCY);
 }
 
+function eligibleMembers(members: readonly SchedulableMember[], options: Pick<PickOptions, 'exclude'>) {
+  return members.filter((m) => m.usable && !m.paused && !options.exclude?.has(m.key));
+}
+
+/** 有能接的电脑(可用、未暂停、没试过)，但全部达到并发上限：调用方据此提示「已满载」，而不是「没有能用的」。 */
+export function providerGroupMembersFull(
+  members: readonly SchedulableMember[],
+  options: Pick<PickOptions, 'exclude'> = {},
+): boolean {
+  const eligible = eligibleMembers(members, options);
+  return eligible.length > 0 && eligible.every((m) => m.running >= m.limit);
+}
+
 /** 正在运行最少的一台；相同时按组里的顺序。 */
 function leastBusy(members: readonly SchedulableMember[]): SchedulableMember {
-  return members.reduce((best, m) => (m.running < best.running ? m : best));
+  return members.reduce((best, m) => ((m.selectionRunning ?? m.running) < (best.selectionRunning ?? best.running) ? m : best));
 }

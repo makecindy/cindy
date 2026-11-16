@@ -63,6 +63,7 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     filter: {
       creators: 'all', creatorOptions: [], toggleCreator: vi.fn(), setCreatorsAll: vi.fn(), setCreatorsNone: vi.fn(),
       groupBy: 'project', groupDialogue: true, groupDevice, sortBy: 'recency',
+      pinnedSortBy: 'manual', setPinnedSortBy: vi.fn(),
       projectOrder: 'activity', manualProjectOrder: [], projects: 'all', status: 'active', isFilterActive: false,
       projectsAsSet: null, isSessionContentFiltered: false, vendor: 'all', lastActivity: 'all', manualPinnedOrder: [],
       setStatus: vi.fn(), toggleProject: vi.fn(), ensureProjectIncluded: vi.fn(), setProjectsAll: vi.fn(), gc: vi.fn(),

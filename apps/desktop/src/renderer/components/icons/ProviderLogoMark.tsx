@@ -1,8 +1,8 @@
 /**
- * ProviderLogoMark —— 模型供应商的单色官方 Logo。
+ * ProviderLogoMark —— 模型供应商的品牌 Logo。
  *
  * 品牌路径与 provider id/upstream 识别由 @cindy/model-providers/branding 在 Desktop / Mobile
- * 间共享；本组件只负责把共享品牌数据渲染成 currentColor SVG。
+ * 间共享；本组件负责渲染共享品牌数据；单色 mark 跟随 currentColor，品牌彩图单独处理。
  */
 
 import {
@@ -15,6 +15,7 @@ import {
 } from '@cindy/model-providers/branding';
 
 import { AnthropicMark } from './AnthropicMark';
+import { OpenAISpectrumMark } from './OpenAISpectrumMark';
 import { OpenAIMark } from './OpenAIMark';
 import { XDIncMark } from './XDIncMark';
 import { CindyMark } from './CindyMark';
@@ -44,6 +45,7 @@ export function ProviderLogoMark({
     : resolveProviderLogoKind(providerId, routing);
   if (!kind) return null;
   if (kind === 'anthropic') return <AnthropicMark size={size} className={className} />;
+  if (kind === 'openai-spectrum') return <OpenAISpectrumMark size={size} className={className} />;
   if (kind === 'openai') return <OpenAIMark size={size} className={className} />;
   if (kind === 'cindy') return <CindyMark size={size} className={className} />;
   if (kind === 'xd') return <XDIncMark size={size} className={className} />;

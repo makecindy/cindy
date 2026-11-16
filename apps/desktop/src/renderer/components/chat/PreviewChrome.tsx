@@ -176,7 +176,7 @@ export function PreviewHeader({
 }
 
 const PREVIEW_BUTTON_CLASS =
-  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--text-primary)] disabled:opacity-40 disabled:pointer-events-none';
+  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-40 disabled:pointer-events-none';
 
 export function PreviewButton({
   label,

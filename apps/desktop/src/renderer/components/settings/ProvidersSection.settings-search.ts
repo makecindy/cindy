@@ -28,7 +28,12 @@ export const providersSettings = defineSettings({
     fallbackTargetId: 'settings-panel-providers',
     titleKey: 'subscriptionAccounts.title',
     sectionKey: 'settings.tabs.providers',
-    keywordKeys: ['subscriptionAccounts.add', 'subscriptionAccounts.strategy'],
+    keywordKeys: [
+      'subscriptionAccounts.add',
+      'subscriptionAccounts.strategy',
+      'settings.providers.detail.sameAccountConnections',
+      'settings.providers.detail.sameAccountConnectionsHint',
+    ],
     aliases: [
       '多账号',
       '订阅账号',
@@ -91,6 +96,22 @@ export const providersSettings = defineSettings({
     targetId: 'settings-panel-providers',
     titleKey: TAB_LABEL_KEY['providers'],
     sectionKey: 'settings.sections.providers',
+    keywordKeys: ['settings.providers.remote.modelsTitle'],
+  },
+  videoApi: {
+    id: 'providers.videoApi',
+    tab: 'providers',
+    targetId: 'settings-panel-providers',
+    titleKey: 'settings.providers.custom.fields.openaiVideos',
+    sectionKey: 'settings.tabs.providers',
+    keywordKeys: [
+      'settings.providers.custom.fields.openaiVideosHint',
+      'settings.providers.custom.fields.minimaxVideos',
+      'settings.providers.custom.fields.minimaxVideosHint',
+      'settings.providers.custom.fields.xaiVideos',
+      'settings.providers.custom.fields.xaiVideosHint',
+    ],
+    aliases: ['视频接口', '视频生成', 'MiniMax-H3', '/v1/videos', 'video API', 'video generation'],
   },
   addProvider: {
     id: 'settings.providers.addProvider',

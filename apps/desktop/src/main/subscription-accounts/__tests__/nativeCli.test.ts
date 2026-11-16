@@ -39,17 +39,88 @@ vi.mock('../../maker-host/claude-native-cli.desktop.js', () => ({
 import {
   codexAccountRpc,
   readNativeAccount,
+  readNativeAccountUsage,
   loginNativeAccount,
   readNativeCodexTokens,
   readLegacyCodexProviderAccount,
   loginLegacyCodexProviderAccount,
 } from '../nativeCli.js';
+import { refreshClaudeCliLoginStatus, runClaudeCliLogin } from '../../maker-host/claude-native-cli.desktop.js';
 
 const children: (EventEmitter & {
   stdin: EventEmitter & { write: ReturnType<typeof vi.fn> };
   stdout: EventEmitter;
   kill: ReturnType<typeof vi.fn>;
 })[] = [];
+
+// Unit regression: account replacement during CLI startup must prevent the
+// reset request itself, not merely reject its already-consumed response.
+it('does not dispatch a reset after its credential guard expires during startup', async () => {
+  await expect(codexAccountRpc('/second', 'account/rateLimitResetCredit/consume',
+    { idempotencyKey: 'key' }, () => false)).rejects.toThrow('changed before dispatch');
+  const methods = children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line).method);
+  expect(methods).toEqual(['initialize', 'initialized']);
+});
+
+// Existing pooled accounts use synchronous proofs. Do not insert a new yield between proof and write.
+it('preserves synchronous guarded dispatch before the next microtask', async () => {
+  let methodsAtNextMicrotask: string[] = [];
+  await codexAccountRpc('/second', 'account/rateLimitResetCredit/consume', { idempotencyKey: 'key' }, () => {
+    queueMicrotask(() => {
+      methodsAtNextMicrotask = children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line).method);
+    });
+    return true;
+  });
+  expect(methodsAtNextMicrotask).toEqual(['initialize', 'initialized', 'account/rateLimitResetCredit/consume']);
+});
+
+// #10408, unit: filesystem/source checks are asynchronous. A Promise is not authorization;
+// inspect actual CLI writes, including connection termination while the proof is pending.
+it.each([true, false])('waits for an asynchronous dispatch proof (allowed: %s)', async (allowed) => {
+  let decide!: (allowed: boolean) => void;
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const proof = new Promise<boolean>(resolve => { decide = resolve; });
+  const pending = codexAccountRpc('/second', 'account/rateLimitResetCredit/consume',
+    { idempotencyKey: 'key' }, () => { entered(); return proof; });
+  const observed = allowed ? expect(pending).resolves.toBeDefined()
+    : expect(pending).rejects.toThrow('changed before dispatch');
+  await started;
+  try {
+    expect(children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line).method))
+      .toEqual(['initialize', 'initialized']);
+  } finally {
+    decide(allowed);
+    await observed;
+  }
+  expect(children[0].stdin.write.mock.calls.some(([line]) =>
+    JSON.parse(line).method === 'account/rateLimitResetCredit/consume')).toBe(allowed);
+});
+
+it('does not dispatch after the connection closes while an asynchronous proof is pending', async () => {
+  let decide!: (allowed: boolean) => void;
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const proof = new Promise<boolean>(resolve => { decide = resolve; });
+  const pending = expect(codexAccountRpc('/second', 'account/rateLimitResetCredit/consume',
+    { idempotencyKey: 'key' }, () => { entered(); return proof; })).rejects.toThrow('connection closed');
+  await started;
+  children[0].emit('close', null);
+  await pending;
+  decide(true);
+  await Promise.resolve();
+  expect(children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line).method))
+    .toEqual(['initialize', 'initialized']);
+});
+
+it('rejects a failed asynchronous proof without sending or exposing its error details', async () => {
+  await expect(codexAccountRpc('/second', 'account/rateLimitResetCredit/consume',
+    { idempotencyKey: 'key' }, async () => { throw new Error('fixture-secret-must-not-leak'); }))
+    .rejects.toThrow('Codex account changed before dispatch');
+  expect(children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line).method))
+    .toEqual(['initialize', 'initialized']);
+});
+
 beforeEach(() => {
   h.binary = '/fixture/codex';
   h.error = false;
@@ -101,7 +172,37 @@ beforeEach(() => {
   });
 });
 afterEach(() => vi.useRealTimers());
+// Standard: expiry and renewal belong to the selected native profile, never the
+// system default. Previous coverage exercised only Codex's RPC account reader.
+describe('Claude profile renewal', () => {
+  it('reads the selected profile expiry and forwards a verified renewal request', async () => {
+    vi.mocked(refreshClaudeCliLoginStatus).mockResolvedValueOnce({ loggedIn: true,
+      email: 'second@example.test', loginExpiresAt: '2030-01-05T00:00:00.000Z' });
+    expect(await readNativeAccount('anthropic', '/fixture/claude-second', { force: true })).toMatchObject({
+      authenticated: true, identity: 'second@example.test', loginExpiresAt: '2030-01-05T00:00:00.000Z',
+    });
+    expect(refreshClaudeCliLoginStatus).toHaveBeenLastCalledWith({ configDir: '/fixture/claude-second', force: true, requireFresh: true });
+    const signal = new AbortController().signal;
+    vi.mocked(runClaudeCliLogin).mockResolvedValueOnce({ ok: true, status: { loggedIn: true, email: 'second@example.test' } });
+    await loginNativeAccount('anthropic', '/fixture/claude-second', signal, { renew: true, expectedEmail: 'second@example.test' });
+    expect(runClaudeCliLogin).toHaveBeenLastCalledWith(signal, '/fixture/claude-second', { renew: true, expectedEmail: 'second@example.test' });
+    vi.mocked(runClaudeCliLogin).mockResolvedValueOnce({ ok: false, reason: 'account_mismatch' });
+    await expect(loginNativeAccount('anthropic', '/fixture/claude-second', signal, { renew: true, expectedEmail: 'second@example.test' }))
+      .rejects.toThrow('account_mismatch');
+  });
+});
 describe('official Codex profiles', () => {
+  // #10110 review, unit: legacy auth has no plan. Keep the plan returned by the
+  // selected profile's quota RPC; the old test fixtures only read account/read.
+  it('preserves the selected profile plan alongside its sanitized Codex quota', async () => {
+    h.accountResult = { rateLimits: { planType: 'pro', primary: {
+      usedPercent: 20, windowDurationMins: 300, resetsAt: Date.now() / 1000 + 3600,
+    } } };
+    expect(await readNativeAccountUsage('openai', '/fixture/legacy')).toMatchObject({
+      codexPlan: 'pro', codexUsage: { appServerBuckets: { __default__: { primary: { usedPercent: 20 } } } },
+    });
+    expect(h.spawn.mock.calls[0][2].env.CODEX_HOME).toBe('/fixture/legacy');
+  });
   // Upgrade 2026-11-11, standard: a revoked imported login cannot be resurrected
   // by reading its still-present token file; successful reads keep the old native profile.
   it('honors the old connection revocation before reading its native account', async () => {

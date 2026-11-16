@@ -19,14 +19,16 @@ const discovered = (id: string, metadata = {}) => mergeDiscoveredRuntimeModels([
 describe('new model generation defaults', () => {
   it('imports future GPT generations across all engines without requiring the old model in the account', () => {
     for (const id of ['gpt-7-sol', 'gpt-8-sol', 'openai/gpt-9-luna']) {
-      const oldId = id.includes('luna') ? 'gpt-6-luna' : 'gpt-6-sol';
+      const oldId = id.includes('luna') ? 'gpt-6-luna' : 'gpt-6.1-sol';
       const previous = build(discovered(oldId)).models.codex![0]!;
       const saved = discovered(id);
       const provider = build(saved);
       for (const agent of ['codex', 'pi', 'claude-code'] as const) {
         const model = provider.models[agent]![0]!;
         expect(model).toMatchObject({ id, name: id, efforts: previous.efforts,
-          defaultEffort: previous.defaultEffort, contextWindow: previous.contextWindow,
+          // New upstream 6/6.1 API records declare a 272K working window; the
+          // Registry's exact-model 1M override is not a promise for future IDs.
+          defaultEffort: previous.defaultEffort, contextWindow: 272000,
           maxOutput: previous.maxOutput, supportsImageInput: true, contextWindowVerified: false });
         expect(model.cost).toBeUndefined();
         expect(model.userModelConfig).toEqual(saved[0]);
@@ -270,9 +272,9 @@ describe('new model generation defaults', () => {
   });
 
   it('reuses serializer mappings without copying the predecessor identity, prices, endpoint or headers', () => {
-    const source = providerModelRecord('gpt-5.6-sol', 'https://api.openai.com/v1', 'openai-responses')!;
+    const source = providerModelRecord('gpt-6.1-sol', 'https://api.openai.com/v1', 'openai-responses')!;
     const inherited = providerModelGenerationRecord('gpt-9-sol', 'https://relay.example/v1', 'openai-responses')!;
-    expect(inherited).toMatchObject({ id: 'gpt-9-sol', name: 'gpt-9-sol', upstream: 'https://relay.example/v1', inheritedFrom: 'gpt-5.6-sol' });
+    expect(inherited).toMatchObject({ id: 'gpt-9-sol', name: 'gpt-9-sol', upstream: 'https://relay.example/v1', inheritedFrom: 'gpt-6.1-sol' });
     expect(inherited.execution.pi.thinkingLevelMap).toEqual(source.execution.pi.thinkingLevelMap);
     expect(inherited.execution.pi.compat).toEqual(source.execution.pi.compat);
     expect(inherited.cost).toBeUndefined();

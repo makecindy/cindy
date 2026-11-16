@@ -14,7 +14,7 @@ import { CLAUDE_QUOTA_STATE_READ, isClaudeQuotaClear } from '../../shared/claude
  *     payload(顶层 app-server 兼容位 + appServerBuckets 桶表 + webSnapshot WHAM 槽),
  *     push 'usage:codex-account-changed' 同形;槽 / 桶选择复用 useAccountUsage 导出的
  *     纯函数,在消费点按会话形态与模型执行(与本机同口径,绝不显示别的桶)。
- *   - Claude 网关配额(LiteLLM daily/monthly):invoke 同 channel(agentKind=
+ *   - Cindy AI 企业账号配额（Model Access 周期/日额度）:invoke 同 channel(agentKind=
  *     'claude-code'),push 'usage:claude-account-changed'。
  *   - xAI 订阅周用量:invoke 'maker:usage:xai-subscription'(被控端 dispatch 拦截
  *     执行),push 'usage:xai-subscription-changed'。
@@ -59,6 +59,13 @@ const codexAccountMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUsage
 const codexNativeRateLimitsMirror = createRemoteDeviceUsageMirror<MobileCodexRateLimitsResult>({
   refreshOnReconnect: true,
   invokeChannel: 'maker:usage:codex-rate-limits',
+  // Group cards use this richer native result for the default account. An
+  // unscoped read returns usable pool quota and can borrow another account.
+  read: (deviceId, providerId = 'openai', scheduling) => window.electronAPI.deviceLink.invoke(
+    deviceId, 'maker:usage:codex-rate-limits', providerId === 'openai'
+      ? [providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : [providerId],
+    ...(scheduling ? [scheduling] : []),
+  ),
   pushChannel: 'usage:codex-account-changed',
   defaultProviderId: 'openai',
   providerPushChannel: 'usage:codex-provider-account-changed',
@@ -199,7 +206,7 @@ export function useRemoteCodexRateLimits(
 
 export const requestRemoteCodexRateLimitsRefresh = codexNativeRateLimitsMirror.request;
 
-/** 被控端 Claude 网关配额(LiteLLM daily/monthly)镜像(远程网关形态会话 chip 用)。 */
+/** 被控端 Cindy AI 企业账号配额（Model Access 周期/日额度）镜像(远程网关形态会话 chip 用)。 */
 export function useRemoteClaudeAccountUsage(
   deviceId: string | null,
 ): ClaudeAccountUsageSnapshot | null {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  USAGE_LIMIT_ACCOUNT_SWITCH_DELAY_MS,
   USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES,
   USAGE_LIMIT_RESUME_BUFFER_MS,
   UsageLimitAutoResume,
@@ -74,6 +75,22 @@ describe('isAccountUsageLimitError', () => {
 });
 
 describe('UsageLimitAutoResume', () => {
+  // Unit regression: real classifier + reset parser + timer. Earlier cases supplied
+  // sdkError; text-only Claude limits never armed automatic continuation.
+  it('schedules and continues a text-only five-hour limit at the stated reset time', async () => {
+    const now = Date.parse('2026-11-11T10:00:00Z');
+    const resumeAt = Date.parse('2026-11-11T13:30:00Z') + USAGE_LIMIT_RESUME_BUFFER_MS;
+    const h = harness({ now: () => now, resolveResetAt: async (_id, signals) => readTurnUsageResetAt(signals, now) });
+    expect(await h.guard.onTurnError('five-hour', {
+      message: "You've hit your 5-hour limit · resets 2:30am (Pacific/Auckland)",
+    })).toBe(true);
+    expect(h.deps.arm).toHaveBeenCalledWith('five-hour', 1, resumeAt);
+    expect(h.timers.at(-1)?.delayMs).toBe(resumeAt - now);
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    await h.fireLast();
+    expect(h.deps.continueSession).toHaveBeenCalledOnce();
+  });
+
   // Unit: real quota classifier + timer callback, using the Fable SDK envelope.
   // No wall-clock wait or model request; normal errors previously used generic text.
   it('waits for the structured Fable deadline and continues once when its timer fires', async () => {
@@ -191,6 +208,25 @@ describe('UsageLimitAutoResume', () => {
       maxAttempts: USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES,
       sessionTotal: 0,
     });
+  });
+
+  // Unit, 2026-11-11: another account of the same provider can take the task now (provider group
+  // §6.1 switches at once). Minimal input: an account limit with a switchable pool; then a group-verified
+  // limit, which already covers every member and keeps waiting for the reset.
+  it('continues almost at once when another subscription account can take the task', async () => {
+    const h = harness({ canSwitchAccount: vi.fn(async () => true) });
+    h.guard.onTurnError('s1', LIMIT);
+    await h.flush();
+    expect(h.deps.resolveResetAt).not.toHaveBeenCalled();
+    expect(h.deps.arm).toHaveBeenCalledWith('s1', 1, NOW + USAGE_LIMIT_ACCOUNT_SWITCH_DELAY_MS);
+    await h.fireLast();
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(1);
+
+    const group = harness({ canSwitchAccount: vi.fn(async () => true) });
+    group.guard.onTurnError('s1', { ...LIMIT, providerGroupUsageLimit: { resetAtMs: RESET_AT } });
+    await group.flush();
+    expect(group.deps.canSwitchAccount).not.toHaveBeenCalled();
+    expect(group.deps.arm).toHaveBeenCalledWith('s1', 1, RESET_AT + USAGE_LIMIT_RESUME_BUFFER_MS);
   });
 
   it('does not wait without a usable reset time or for an ineligible session', async () => {

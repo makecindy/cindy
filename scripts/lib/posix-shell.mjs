@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 
 /**
  * Locate a shell bundled with Git for Windows without falling back to the WSL
@@ -11,7 +10,6 @@ export function resolvePosixShell(
   {
     platform = process.platform,
     env = process.env,
-    spawnSyncImpl = spawnSync,
     existsSync = fs.existsSync,
   } = {},
 ) {
@@ -24,13 +22,14 @@ export function resolvePosixShell(
     const normalized = typeof value === 'string' ? value.trim() : '';
     return normalized && winPath.isAbsolute(normalized) ? normalized : fallback;
   };
-  const probe = spawnSyncImpl('where.exe', ['git.exe'], { encoding: 'utf8' });
-  if (probe.status === 0 && typeof probe.stdout === 'string') {
-    for (const line of probe.stdout.split(/\r?\n/)) {
-      const gitExe = line.trim();
-      if (!gitExe) continue;
-      candidates.push(winPath.join(winPath.dirname(winPath.dirname(gitExe)), 'bin', executable));
-    }
+  // Resolve Git's PATH entries directly: starting where.exe synchronously adds
+  // an unbounded process launch to callers such as test fixture initialization.
+  // Never search the working directory or use the System32 WSL shell launcher.
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path');
+  for (const entry of (pathKey ? env[pathKey] ?? '' : '').split(';')) {
+    const directory = absoluteEnvDir(entry.trim().replace(/^"(.*)"$/, '$1'));
+    if (!directory || !existsSync(winPath.join(directory, 'git.exe'))) continue;
+    candidates.push(winPath.join(winPath.dirname(directory), 'bin', executable));
   }
 
   const programFiles = absoluteEnvDir(env.ProgramFiles, 'C:\\Program Files');

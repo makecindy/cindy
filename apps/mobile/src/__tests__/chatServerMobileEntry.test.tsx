@@ -34,7 +34,7 @@ vi.mock('expo-router', async () => { const { useEffect } = await import('react')
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
 vi.mock('@/i18n', () => ({ default: { t: (key: string) => key } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
-vi.mock('@/config/env', () => ({ getActiveMobileSessionRealm: () => 'global', getMobileEndpointForRealm: () => 'https://chat.example.invalid', loadMobileEndpointsForRealm: vi.fn() }));
+vi.mock('@/config/env', () => ({ BUILD_AUTH_REGION: 'global', getActiveMobileSessionRealm: () => 'global', getMobileEndpointForRealm: () => 'https://chat.example.invalid', loadMobileEndpointsForRealm: vi.fn() }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
 vi.mock('@/device-link/revokedDevicesStore', () => ({ useRevokedDevices: () => new Set() }));
 vi.mock('@/session/useRemoteResourceList', () => ({ useRemoteResourceList: () => h.legacy }));
@@ -147,28 +147,41 @@ it('does not show one account\'s saved group to another account', async () => {
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllGlobals(); vi.useRealTimers(); });
 
-// #5759, unit: exercise the actual direct hook/client, not the remote-resource
-// mock. A human-signed proposal previously rendered as text and rejected plan-start.
-// The blur cases retain the original group in the navigation stack while its snapshot is pending.
-it('sends a future skip from the mobile hook without requiring a nonexistent execution', async () => {
+// Unit / PR #10861: exercise the real hook/client with a bot and its authenticated owner.
+// The old fixture used a human as the target; cover both an owned future skip and a refused foreign one.
+it.each([true, false])('sends a future skip only for an owned companion (owned=%s)', async owned => {
   const planId = '00000000-0000-4000-8000-000000000040';
-  const plan = { id: planId, revision: 2, creator_id: self, organizer_id: self, source_message_id: self,
+  const companion = { id: '00000000-0000-4000-8000-000000000003', kind: 'bot', state: 'joined', name: 'Bot',
+    ownerActorId: owned ? self : '00000000-0000-4000-8000-000000000004', ownerName: 'Owner', role: 'member', avatar: null };
+  const plan = { id: planId, revision: 2, creator_id: self, organizer_id: companion.id, source_message_id: self,
     request_text: 'Talk', kind: 'talk', status: 'running', current_step: 0, supportsPendingSkip: true,
     activeExecution: { id: self, status: 'running' }, created_at: '2026-10-09', updated_at: '2026-10-09',
-    steps: [0, 1].map(position => ({ position, botId: self, botName: 'Bot', task: '', status: position === 0 ? 'running' : 'pending' })) };
+    steps: [0, 1].map(position => ({ position, botId: companion.id, botName: 'Bot', task: '', status: position === 0 ? 'running' : 'pending' })) };
   const writes: unknown[] = [];
   const original = h.auth.apiFetch.getMockImplementation()!;
   h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/snapshot')) {
+      const snapshot = await original(path, options);
+      return { ...snapshot, members: [...snapshot.members, companion] };
+    }
     if (path.includes('/plans') && options.method === 'POST') { writes.push(options.body); return { ok: true }; }
     if (path.includes('/plans')) return [plan];
     return original(path, options);
   });
   showChat = true; await render();
+  if (!owned) {
+    await act(async () => { await expect(chat.act('plan-edit', { planId, expectedRevision: 2, action: 'skip', position: 1 })).rejects.toThrow('ROLE_REQUIRED'); });
+    expect(writes).toEqual([]);
+    return;
+  }
   await act(async () => { await chat.act('plan-edit', { planId, expectedRevision: 2, action: 'skip', position: 1 }); });
   expect(writes).toEqual([expect.objectContaining({ expectedRevision: 2, action: 'skip', position: 1 })]);
   expect(writes[0]).not.toHaveProperty('executionId');
 });
 
+// #5759, unit: exercise the actual direct hook/client, not the remote-resource
+// mock. A human-signed proposal previously rendered as text and rejected plan-start.
+// The blur cases retain the original group in the navigation stack while its snapshot is pending.
 it.each(['receipt', 'leave', 'unmount', 'blur', 'refocus', 'blur-before-submit'])('handles a direct plan action across %s without a duplicate or stale write', async transition => {
   const planId = '00000000-0000-4000-8000-000000000040';
   let plan = { id: planId, revision: 2, creator_id: self, organizer_id: self, source_message_id: self,

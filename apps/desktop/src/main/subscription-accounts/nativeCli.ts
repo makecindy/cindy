@@ -77,16 +77,20 @@ function codexProfileEnv(directory: string): Record<string, string> {
 export async function readNativeAccount(
   provider: SubscriptionProvider,
   directory: string,
-): Promise<AuthState & { plan?: string }> {
+  options?: { force?: boolean },
+): Promise<AuthState & { plan?: string; planTier?: string; planType?: string; loginExpiresAt?: string }> {
   if (provider === 'anthropic') {
     const result = await refreshClaudeCliLoginStatus({
       configDir: directory === path.join(homedir(), '.claude') ? undefined : directory,
+      ...(options?.force ? { force: true, requireFresh: true } : {}),
     });
     return {
       authenticated: result.loggedIn,
       identity: result.email,
       authSource: 'oauth',
       plan: result.subscriptionType,
+      planTier: result.planTier,
+      ...(result.loginExpiresAt ? { loginExpiresAt: result.loginExpiresAt } : {}),
     };
   }
   const result = (await codexAccountRpc(directory, 'account/read', { refreshToken: false })) as {
@@ -97,6 +101,7 @@ export async function readNativeAccount(
     authenticated: result.account?.type === 'chatgpt',
     identity: result.account?.email,
     plan: result.account?.planType,
+    planType: result.account?.planType,
     authSource: 'oauth',
     // The CLI can hide an existing ChatGPT login when its active provider owns
     // authentication. Repeating login cannot make that provider expose the account.
@@ -115,10 +120,16 @@ export async function readNativeAccountUsage(provider: SubscriptionProvider, dir
       claudeUsage: usage ? parseClaudeOAuthUsageResponse(usage.rateLimits, Date.now()) : null,
     };
   }
-  const rateLimits = await codexAccountRpc(directory, 'account/rateLimits/read', {});
+  const rateLimits = await codexAccountRpc(directory, 'account/rateLimits/read', {}) as {
+    rateLimits?: { planType?: unknown };
+  } | null;
   return {
     codexUsage: providerGroupCodexUsageFromReads(null, rateLimits, Date.now()),
     codexCredits: codexCredits(rateLimits),
+    // Legacy auth adapters expose identity but no plan. Preserve metadata from
+    // this same profile's quota response before the scheduler sanitizes it.
+    codexPlan: typeof rateLimits?.rateLimits?.planType === 'string'
+      ? rateLimits.rateLimits.planType.trim() || undefined : undefined,
   };
 }
 
@@ -195,6 +206,7 @@ export function codexAccountRpc(
   directory: string,
   method: string,
   params: unknown,
+  canDispatch?: () => boolean | Promise<boolean>,
 ): Promise<unknown> {
   const binary = getReadyBinaryPath('codex');
   if (!binary) return Promise.reject(new Error('Codex CLI unavailable'));
@@ -217,6 +229,20 @@ export function codexAccountRpc(
     };
     const timer = setTimeout(() => finish(new Error('Codex account read timed out')), 15_000);
     const send = (message: unknown) => child.stdin.write(JSON.stringify(message) + '\n');
+    const dispatch = async () => {
+      try {
+        if (canDispatch) {
+          const allowed = canDispatch();
+          // Existing synchronous proofs and the write must stay in the same synchronous segment.
+          if (!(typeof allowed === 'boolean' ? allowed : await allowed))
+            return finish(new Error('Codex account changed before dispatch'));
+        }
+        // An asynchronous credential/source check can outlive this control connection.
+        if (!settled) send({ id: 2, method, params });
+      } catch {
+        finish(new Error('Codex account changed before dispatch'));
+      }
+    };
     child.stdin.on('error', () => finish(new Error('Codex account connection closed')));
     child.on('error', () => finish(new Error('Codex CLI unavailable')));
     child.on('close', () => finish(new Error('Codex account connection closed')));
@@ -236,7 +262,9 @@ export function codexAccountRpc(
         if (message.error) return finish(new Error('Codex account request failed'));
         if (message.id === 1) {
           send({ method: 'initialized', params: {} });
-          send({ id: 2, method, params });
+          // Startup may await configuration/auth refresh. A reset must still use
+          // the exact credential observed before spawning this control connection.
+          void dispatch();
         } else if (message.id === 2) finish(undefined, message.result);
       }
     });
@@ -255,11 +283,13 @@ export async function loginNativeAccount(
   provider: SubscriptionProvider,
   directory: string,
   signal: AbortSignal,
+  options?: { renew?: boolean; expectedEmail?: string },
 ): Promise<void> {
   if (provider === 'anthropic') {
     const result = await runClaudeCliLogin(
       signal,
       directory === path.join(homedir(), '.claude') ? undefined : directory,
+      options,
     );
     if (!result.ok) throw new Error(result.reason);
     return;

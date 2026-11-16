@@ -51,6 +51,24 @@ const projectForCurrentController = (result: unknown) =>
     modelVisibilityOverrides?: Record<string, boolean>;
   };
 
+// #10405, unit: folding must name the actual merged destination without disclosing
+// a destination that the peer cannot use. Old coverage only tested built-in OpenAI.
+it.each(['allowed', 'disabled', 'missing-model', 'guest'] as const)('projects a named pool target only when permitted (%s)', mode => {
+  const models = { codex: [{ id: 'model-a', name: 'A', efforts: [], contextWindow: 1000 }] };
+  const result = { providers: [
+    { id: 'target', name: 'Target', agents: ['codex'], models: mode === 'missing-model' ? { codex: [] } : models,
+      remoteInvocationEnabled: mode !== 'disabled' },
+    { id: 'original', name: 'Original', agents: ['codex'], models, remoteInvocationEnabled: true,
+      subscriptionPoolAlias: true, subscriptionPoolTarget: 'target' },
+  ] };
+  const projected = __testing.projectInvokeResultForTunnel('maker:provider:list', result, false, [], mode !== 'guest') as {
+    providers: Record<string, unknown>[];
+  };
+  const original = projected.providers.find(provider => provider.id === 'original');
+  expect(original?.subscriptionPoolTarget).toBe(mode === 'allowed' ? 'target' : undefined);
+  if (mode !== 'guest') expect(original?.subscriptionPoolAlias).toBe(mode === 'allowed' ? true : undefined);
+});
+
 // Upgrade 2026-11-11, standard: folding the local list must not remove an old remote grant.
 it.each([false, true])('retains the old remote source unless the complete pool is offered (%s)', offered => {
   const projected = project({ providers: [
@@ -475,6 +493,30 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
 
     expect(providers[0].logoKind).toBe('vercel');
     expect(providers[0].routing).toEqual({ codex: {} });
+  });
+
+  // PR #9941 review, unit: the enterprise artwork set by the host reaches this account's
+  // current controllers only. Other accounts (shared-task / provider-share guests), legacy
+  // controllers and non-organization sources never receive it.
+  it('企业专属图标只透传给同账号的当前控制端，且只认企业来源', () => {
+    const enterprise = {
+      ...xdProviderWithFullRouting(),
+      id: 'byok-1b2c3d4e',
+      source: 'organization',
+      logoKind: 'openai-spectrum',
+      routing: { codex: { upstream: 'https://gateway.example.invalid/v1' } },
+    };
+    const forged = { ...enterprise, id: 'custom-provider', source: 'user' };
+    const projectFor = (supportsFullLogoKinds: boolean, sameAccount: boolean) =>
+      (__testing.projectInvokeResultForTunnel(
+        'maker:provider:list', { providers: [enterprise, forged] }, supportsFullLogoKinds, [], sameAccount,
+      ) as { providers: Record<string, unknown>[] }).providers;
+
+    const own = projectFor(true, true);
+    expect(own[0].logoKind).toBe('openai-spectrum');
+    expect(own[1]).not.toHaveProperty('logoKind');
+    expect(projectFor(true, false)[0]).not.toHaveProperty('logoKind');
+    expect(projectFor(false, true)[0]).not.toHaveProperty('logoKind');
   });
 
   it('混合品牌 routing 不产生 logoKind,也不透传伪造值', () => {

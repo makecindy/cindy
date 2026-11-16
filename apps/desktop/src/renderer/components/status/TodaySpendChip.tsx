@@ -445,6 +445,22 @@ function getCodexApiEmptyState(
 // 主 chip 方案 B: 5h 剩余% · 当前模型周限剩余% (weekly_scoped 按模型家族匹配, 匹配
 // 不到回退总周限并标注口径) · 本会话价值 $。utilization 语义 = 已用百分比 (0-100)。
 
+/** Account-wide rejection must not leak another model's exhausted quota into this task. */
+function isClaudeSessionRejected(
+  snapshot: ClaudeSubscriptionUsageSnapshot | null,
+  modelId: string | null | undefined,
+): boolean {
+  if (snapshot?.rateLimitStatus?.trim().toLowerCase() !== 'rejected') return false;
+  // An explicit rejection of a shared window still applies even before its usage reaches 100%.
+  if (snapshot.representativeClaim === 'five_hour' || snapshot.representativeClaim === 'seven_day') return true;
+  const exhausted = (window: ClaudeUsageWindow | null | undefined) =>
+    !!window && Number.isFinite(window.utilization) && window.utilization >= 100;
+  const scoped = matchScopedWindowForModel(snapshot.scoped, modelId);
+  if ([snapshot.fiveHour, snapshot.sevenDay, scoped].some(exhausted)) return true;
+  // Retain unclassified rejections when there is no model-specific exhaustion to explain them.
+  return !snapshot.scoped?.some(exhausted);
+}
+
 /**
  * 当前会话生效的周限窗口: 命中当前模型的 weekly_scoped 条目优先 (label 带模型名,
  * 如 "Fable 周限"), 否则回退总周限 —— 两种 label 口径可区分, 绝不臆造数字。
@@ -917,7 +933,7 @@ export function TodaySpendChip({
   });
   // cc 订阅判定对齐 main 的 isClaudeSubscriptionSession(register.ts)+ proxy 实际路由:
   //   - 显式选 Anthropic 供应商 → 订阅直连(Claude 模型直连 api.anthropic.com,
-  //     LiteLLM 看不到, gateway quota 不代表真实花费, 抑制 daily/monthly 展示);
+  //     这类消费不计入 Cindy AI 账号额度, gateway quota 不代表真实花费, 抑制 daily/monthly 展示);
   //   - 默认路由(providerId=null)→ **优先用 proxy 观察到的会话生效路由**
   //     (claude-session-route-registry, 每请求真值):cc 子进程凭证在 spawn 时冻结,
   //     用全局活性凭证状态重算会与实际路由发散(典型:gateway-spawn 会话跑着时
@@ -1070,7 +1086,7 @@ export function TodaySpendChip({
   const providerAccountSnapshot =
     providerAccountUsage.result?.status === 'ready' ? providerAccountUsage.result.snapshot : null;
   // Model Access 配额只属于实际走 XD/Cindy AI Gateway 的本地会话。显式自定义供应商即使
-  // 复用了 env-key / oauth-bearer host，也不能据 host 的启动凭证把 /v2/user/info 串进来。
+  // 复用了 env-key / oauth-bearer host，也不能据 host 的启动凭证读取企业账号额度。
   const isClaudeGateway =
     vendorKey === 'cc' &&
     !isAnyRemoteSession &&
@@ -1092,7 +1108,7 @@ export function TodaySpendChip({
           (codexAuthInjection === 'provider-oauth' && hasGatewayKey))));
   const usesGatewayQuota = isClaudeGateway || isCodexGateway || isPiGateway;
   // device-link 远程网关形态:显式 XD / codex 折扣模型 / pi 默认(provider 创建时固化,
-  // 空即 XD)直接判;cc 默认路由用被控端路由观察镜像。数据走被控端 LiteLLM 配额镜像,
+  // 空即 XD)直接判;cc 默认路由用被控端路由观察镜像。数据走被控端 Cindy AI 企业账号配额镜像,
   // 本机 quota hook(usesGatewayQuota)对远程保持关闭;credit 三池 handler 绑定主窗口
   // sender 不镜像 —— 按本机「拿不到就隐藏」的既有降级语义,credit 行远程不显示。
   const isDeviceLinkRemoteGateway =
@@ -1174,7 +1190,12 @@ export function TodaySpendChip({
         )
       : localAccountUsage;
   // 重置次数属于默认账号；任务用的是账号池里的其他账号时不显示。
-  const { snapshot: codexRateLimits, refresh: refreshCodexRateLimits } = useCodexRateLimits(
+  const {
+    snapshot: codexRateLimits,
+    refresh: refreshCodexRateLimits,
+    failed: codexQuotaReadFailed,
+    refreshing: codexQuotaRefreshing,
+  } = useCodexRateLimits(
     usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage,
     providerId ?? 'openai',
   );
@@ -1738,7 +1759,7 @@ export function TodaySpendChip({
       ...(usesDeepSeekAccountForm && deepSeekBalanceSegment ? [deepSeekBalanceSegment] : []),
       ...windowSegments,
     ];
-    if (isClaudeSubscription && claudeSubscriptionUsage?.rateLimitStatus?.trim().toLowerCase() === 'rejected') {
+    if (isClaudeSubscription && isClaudeSessionRejected(claudeSubscriptionUsage, modelId)) {
       chipSegments.push(
         <span key="claude-rejected" className="text-[var(--error-fg)]">
           {t('todaySpend.claude.temporarilyLimited')}
@@ -1822,7 +1843,7 @@ export function TodaySpendChip({
       );
     }
     // Account quota is separate from lifetime task cost. API and SSH-remote routes never borrow it;
-    // device-link 网关形态用被控端 LiteLLM 配额镜像(claudeQuota 已切换),credit 三池不镜像。
+    // device-link 网关形态用被控端 Cindy AI 企业账号配额镜像(claudeQuota 已切换),credit 三池不镜像。
     if (usesGatewayQuota || isDeviceLinkRemoteGateway) {
       account.title = providerDisplayNameById('xd', quotaProviders, t);
       if (creditTotals) {
@@ -1934,7 +1955,11 @@ export function TodaySpendChip({
       ref={chipRef}
       className={cn('inline-flex items-center gap-3', isClaudeSubscription ? 'min-h-5 min-w-0 max-w-full' : 'h-5 shrink-0')}
       onMouseEnter={refreshCodexRateLimits}
-      onFocusCapture={refreshCodexRateLimits}
+      onFocusCapture={(event) => {
+        // Focusing Retry inside the portal must not start a read and disable
+        // that button before the user can activate it.
+        if (event.target === quotaPopoverTriggerRef.current) refreshCodexRateLimits();
+      }}
     >
       <Popover
         open={quotaPopoverOpen && !resetListOpen}
@@ -2035,7 +2060,10 @@ export function TodaySpendChip({
           className="w-auto max-w-[calc(100vw-16px)] border-0 bg-transparent p-0 shadow-none"
         >
           <QuotaHoverCard
-            account={account}
+            account={codexQuotaReadFailed ? {
+              ...account,
+              refreshFailure: { retry: refreshCodexRateLimits, retrying: codexQuotaRefreshing },
+            } : account}
             nowMs={windowLabelNowMs}
             sessionUsage={quotaCardSessionUsage}
             turnUsage={quotaCardTurnUsage}

@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { DeviceLinkError, type InvokeResultPayload } from '@cindy/device-link';
 import { createSchedulerRemoteDeps } from '../schedulerDevices.js';
+import { getPluginHostToolCaller, runPluginHostToolCall } from '../hostToolCaller.js';
 
 type Invoke = (
   deviceId: string,
@@ -27,6 +28,25 @@ function setup(invoke = vi.fn<Invoke>(async () => ({ ok: true, result: [] }))) {
 }
 
 describe('desktop scheduler cross-device transport', () => {
+  // Unit, #9801: account-only preSend allowed a plugin revoked while connecting
+  // to send a destructive operation. Preserve the real caller frame and final fence.
+  it('refuses a remote write revoked while the connection is pending', async () => {
+    let enabled = true, connect!: () => void;
+    const waiting = new Promise<void>(resolve => { connect = resolve; });
+    const sent = vi.fn();
+    const invoke = vi.fn<Invoke>(async (_device, _channel, _args, options) => {
+      await waiting; options?.preSend?.(); sent(); return { ok: true, result: null };
+    });
+    const remote = createSchedulerRemoteDeps({ invoke, captureAccess: () => () => {}, listDevices: async () => [],
+      captureInvocationGuard: () => getPluginHostToolCaller()?.assertCurrent });
+    const result = runPluginHostToolCall({ caller: { kind: 'plugin', pluginId: 'reader', dataOwnerId: 'owner', ownerGeneration: 1 },
+      server: 'cindy_scheduler', tool: 'schedule_delete', argsJson: '["schedule"]',
+      assertCurrent: () => { if (!enabled) throw new Error('PERMISSION_DENIED'); } }, () => remote.invoke('other', 'delete', ['schedule']));
+    enabled = false; connect();
+    await expect(result).rejects.toThrow('PERMISSION_DENIED');
+    expect(sent).not.toHaveBeenCalled();
+  });
+
   // PR #8470 / discussion_r4488542876, unit: remote get skipped the local
   // webhook-status callback. Existing get coverage only used plain schedules.
   // The adapter must return the receiver URL, report failed reads, and reject

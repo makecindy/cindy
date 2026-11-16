@@ -164,7 +164,7 @@ export function createBotImAuthorizationAdapter(options: {
           return { ok: false, errorCode: 'INLINE_INVALID' };
         }
         await options.assertSession();
-        if ((await options.currentBotId()) !== bot.id) throw new Error('Authorization teammate changed');
+        if ((await options.currentBotId()) !== bot.id) throw new Error('Authorization buddy changed');
         assertCurrent?.();
         try {
           await addBotImConnection(input);

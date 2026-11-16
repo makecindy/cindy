@@ -200,7 +200,7 @@ vi.mock('../../i18n.desktop.js', () => ({
   getResolvedMainLocale: vi.fn(() => 'ja'),
 }));
 
-vi.mock('../../mcp-integrations/computer.js', () => ({
+vi.mock('../../mcp-integrations/computer.desktop.js', () => ({
   getComputerDriverAppBundlePath: vi.fn(() => '/Applications/CuaDriver.app'),
   getComputerDriverStatus: harness.getComputerDriverStatus,
   isComputerDriverPermissionProbePaused: harness.isComputerDriverPermissionProbePaused,

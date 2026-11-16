@@ -293,7 +293,6 @@ function BotGroupSettingsBody({ group }: { group: BotGroupSummary }) {
   const deleteGroup = async () => {
     if (busy) return;
     const confirmed = await confirm({
-      presentation: 'standard',
       title: t('bots.groupChat.settings.deleteConfirmTitle', { name: group.name }),
       description: t('bots.groupChat.settings.deleteNote'),
       confirmText: t('bots.groupChat.settings.delete'),

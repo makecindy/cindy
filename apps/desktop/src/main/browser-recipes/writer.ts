@@ -13,13 +13,21 @@
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import path from 'node:path';
-
-import { shell } from 'electron';
 import type { Recipe, SiteGuide } from '@cindy/mcps';
 
 import { createLogger } from '../logger.js';
-import { userRecipesDir } from './loader.js';
 import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
+
+
+export interface WriteUserRecipeResult {
+  ok: boolean;
+  path?: string;
+  message?: string;
+}
+export function createUserRecipeWriter(ports: { userRecipesDir(): string; openPath(path: string): Promise<unknown> }) {
+const { userRecipesDir } = ports;
+const shell = ports;
+
 
 const log = createLogger('browser-recipes');
 
@@ -36,14 +44,8 @@ function safeSiteSegment(site: string): string | null {
   return trimmed;
 }
 
-export interface WriteUserRecipeResult {
-  ok: boolean;
-  path?: string;
-  message?: string;
-}
-
 /** Write (overwrite) the L2 recipe + optional siteguide for a site. */
-export async function writeUserRecipe(
+async function writeUserRecipe(
   input: { site: string; recipe: Recipe; siteGuide?: SiteGuide },
   dir = userRecipesDir(),
 ): Promise<WriteUserRecipeResult> {
@@ -76,7 +78,7 @@ export async function writeUserRecipe(
  * "open folder" affordances were deferred. Kept as a documented self-grow
  * primitive (the inverse of `saveRecipe`), not forgotten dead code.
  */
-export async function resetSiteRecipe(site: string, dir = userRecipesDir()): Promise<{ ok: boolean; message?: string }> {
+async function resetSiteRecipe(site: string, dir = userRecipesDir()): Promise<{ ok: boolean; message?: string }> {
   const seg = safeSiteSegment(site);
   if (!seg) return { ok: false, message: `invalid site "${site}"` };
   try {
@@ -94,7 +96,9 @@ export async function resetSiteRecipe(site: string, dir = userRecipesDir()): Pro
  * affordance was deferred. Kept as a documented self-grow primitive, not
  * forgotten dead code.
  */
-export async function openUserRecipesDir(dir = userRecipesDir()): Promise<void> {
+async function openUserRecipesDir(dir = userRecipesDir()): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
   await shell.openPath(dir);
+}
+return { writeUserRecipe, resetSiteRecipe, openUserRecipesDir };
 }

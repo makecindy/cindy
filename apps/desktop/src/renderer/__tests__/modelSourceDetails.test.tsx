@@ -168,15 +168,36 @@ describe('model source second line', () => {
     expect(view.container.textContent).toContain('100%');
     expect(view.container.textContent).not.toContain('a@example.test');
     expect(command).toHaveBeenCalledTimes(2);
-    // Pausing B removes its identity, plan and quota together, before the read returns.
+    // Refresh keeps the complete previous display until the replacement arrives.
     pool = { ...pool, accounts: pool.accounts.map(account => ({ ...account, paused: true })) };
     act(() => changed?.({ providerId: 'anthropic' }));
-    expect(view.container.textContent).not.toContain('b@example.test');
+    expect(view.container.textContent).toContain('b@example.test · Max');
     await act(async () => {});
     expect(view.container.textContent).toContain('subscriptionAccounts.unassigned');
     expect(view.container.textContent).not.toMatch(/Pro|Max|%|@/);
     view.unmount();
     expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  // Isolated-sandbox finding (2026-11-13, subscription-account-pools.md 合并与拿出由用户决定): a
+  // provider Cindy created for one account showed no account or quota in the picker, because only
+  // the built-in ids were read. It reads its own accounts (there is no CLI default to preview).
+  it.each(['subscriptionPool', 'subscriptionAccountPool'] as const)('shows the own account of a provider marked by %s', async (marker) => {
+    const created = { ...provider('openai-sub-fixture', 'codex'), [marker]: 'openai' as const };
+    const command = vi.fn(async () => ({
+      providerId: 'openai-sub-fixture', kind: 'openai', configured: true, strategy: 'least',
+      accounts: [{ id: 'cindy-x', identity: 'two@example.test', plan: 'pro', paused: false, status: 'ready',
+        running: 0, limit: 4, weight: 1, directory: '' }],
+    } satisfies SubscriptionPoolView));
+    Object.assign(window, { electronAPI: { subscriptionAccounts: { command, onChanged: () => () => {} } } });
+    const view = render(
+      <ModelSourceUsageProvider providers={[created]} scope={{ deviceId: null }}>
+        <ModelSourceDetails providerId="openai-sub-fixture" label="OpenAI · two" modelId="gpt-5" />
+      </ModelSourceUsageProvider>,
+    );
+    await act(async () => {});
+    expect(command).toHaveBeenCalledExactlyOnceWith({ action: 'read', providerId: 'openai-sub-fixture' });
+    expect(view.container.textContent).toContain('two@example.test');
   });
 
   it.each(['multiple', 'signed-out', 'unavailable', 'limited', 'busy', 'unknown-identity'] as const)(

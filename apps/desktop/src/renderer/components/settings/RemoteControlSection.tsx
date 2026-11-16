@@ -24,7 +24,7 @@ import { remoteControlSettings } from './RemoteControlSection.settings-search';
  * SSH 主机摘要由本组件自取轻量快照(list + onStatusChanged),不侵入 RemoteSection。
  */
 
-import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation } from 'react-router-dom';
 
@@ -33,6 +33,7 @@ import { Switch } from '@/components/ui/switch';
 import { MyDevicesPanel } from './MyDevicesPanel';
 import { RelayServicePanel, useSelfHostedRelayState } from './RelayServicePanel';
 import { RemoteDesktopSetting } from './RemoteDesktopSetting';
+import { OwnComputerModelAccessSetting } from './OwnComputerModelAccessSetting';
 import { RemoteSection } from './RemoteSection';
 import { CollapsibleSubSection } from './CollapsibleSubSection';
 import { useRemoteDevicesDeepLink } from './useRemoteDevicesDeepLink';
@@ -41,7 +42,7 @@ import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { useRemoteConnectionV2 } from '@/features/remote-connection-v2/useRemoteConnectionV2';
 import { RemoteConnectionV2Section } from '@/features/remote-connection-v2/RemoteConnectionV2Section';
 import { toast } from '@/lib/toast';
-import { SETTINGS_SECTION_TITLE_CLASS, SettingsCard, SettingsPageHeader, SettingsRow } from '@/components/ui/settings-rows';
+import { SETTINGS_SECTION_TITLE_CLASS, SettingsCard, SettingsPageHeader, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
 export { CollapsibleSubSection } from './CollapsibleSubSection';
 
@@ -97,7 +98,7 @@ function sshSummary(
   return { text: parts.join(' · '), dot };
 }
 
-export function RemoteControlSection() {
+export function RemoteControlSection({ children }: { children?: ReactNode }) {
   const { entry, activation } = useSettingsSearchNavigation();
   const { t } = useTranslation();
   const { mode } = useAuth();
@@ -174,31 +175,6 @@ export function RemoteControlSection() {
       />
 
       <div className="mt-4 flex flex-col gap-6">
-        {deviceLinkAvailable ? (
-          <SettingsCard id={remoteControlSettings.v2.targetId}>
-            <SettingsRow
-              title={t(remoteControlSettings.v2.titleKey)}
-              hint={t(remoteControlSettings.v2.descriptionKey)}
-              trailing={
-                <Switch
-                  data-setting-id={remoteControlSettings.v2.id}
-                  checked={v2.enabled}
-                  onCheckedChange={v2.setEnabled}
-                  aria-label={t(remoteControlSettings.v2.titleKey)}
-                />
-              }
-            />
-            {v2.enabled ? (
-              <SettingsRow
-                id={remoteControlSettings.onlyEncrypted.targetId}
-                title={t(remoteControlSettings.onlyEncrypted.titleKey)}
-                hint={t(remoteControlSettings.onlyEncrypted.descriptionKey)}
-                trailing={<Switch data-setting-id={remoteControlSettings.onlyEncrypted.id} checked={v2.onlyEncrypted} onCheckedChange={v2.setOnlyEncrypted} aria-label={t(remoteControlSettings.onlyEncrypted.titleKey)} />}
-              />
-            ) : null}
-          </SettingsCard>
-        ) : null}
-
         {deviceLinkAvailable && v2.enabled ? (
           <>
             {/* Agent-Net:「我的设备」只留本机卡片,其它设备在下面的拓扑里看 */}
@@ -207,7 +183,7 @@ export function RemoteControlSection() {
               <MyDevicesPanel
                 s={s}
                 variant="self"
-                selfSettings={<RemoteDesktopSetting />}
+                selfSettings={<div className="flex flex-col gap-2"><OwnComputerModelAccessSetting /><RemoteDesktopSetting /></div>}
                 focusDeviceId={deepLink.focusDeviceId}
                 focusRequestKey={deepLink.focusRequestKey}
               />
@@ -230,7 +206,7 @@ export function RemoteControlSection() {
                   <MyDevicesPanel
                     s={s}
                     variant="self"
-                    selfSettings={<RemoteDesktopSetting />}
+                    selfSettings={<div className="flex flex-col gap-2"><OwnComputerModelAccessSetting /><RemoteDesktopSetting /></div>}
                     focusDeviceId={deepLink.focusDeviceId}
                     focusRequestKey={deepLink.focusRequestKey}
                   />
@@ -270,6 +246,50 @@ export function RemoteControlSection() {
         >
           <RemoteSection showTitle={false} />
         </CollapsibleSubSection>
+
+        {children}
+
+        {deviceLinkAvailable ? (
+          <SettingsSection title={t(remoteControlSettings.v2.sectionKey)} headingLevel={3}>
+            <SettingsCard id={remoteControlSettings.v2.targetId}>
+              <SettingsRow
+                title={t(remoteControlSettings.v2.titleKey)}
+                hint={
+                  v2.changedBy && v2.changedBy.enabled === v2.enabled ? (
+                    <>
+                      {t(remoteControlSettings.v2.descriptionKey)}
+                      {/* 原型:别的设备远程改了这个开关时，写明是谁、几点(agent-net.md「远程切换其他电脑的连接方式」) */}
+                      <span className="mt-1 block text-[var(--text-secondary)]">
+                        {t(v2.changedBy.enabled ? 'settings.remoteControl.v2.peerSwitch.changedBy.on' : 'settings.remoteControl.v2.peerSwitch.changedBy.off', {
+                          name: v2.changedBy.deviceName,
+                          time: new Date(v2.changedBy.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        })}
+                      </span>
+                    </>
+                  ) : (
+                    t(remoteControlSettings.v2.descriptionKey)
+                  )
+                }
+                trailing={
+                  <Switch
+                    data-setting-id={remoteControlSettings.v2.id}
+                    checked={v2.enabled}
+                    onCheckedChange={v2.setEnabled}
+                    aria-label={t(remoteControlSettings.v2.titleKey)}
+                  />
+                }
+              />
+              {v2.enabled ? (
+                <SettingsRow
+                  id={remoteControlSettings.onlyEncrypted.targetId}
+                  title={t(remoteControlSettings.onlyEncrypted.titleKey)}
+                  hint={t(remoteControlSettings.onlyEncrypted.descriptionKey)}
+                  trailing={<Switch data-setting-id={remoteControlSettings.onlyEncrypted.id} checked={v2.onlyEncrypted} onCheckedChange={v2.setOnlyEncrypted} aria-label={t(remoteControlSettings.onlyEncrypted.titleKey)} />}
+                />
+              ) : null}
+            </SettingsCard>
+          </SettingsSection>
+        ) : null}
       </div>
     </div>
   );

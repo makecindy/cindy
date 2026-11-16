@@ -7,16 +7,25 @@ import { createLogger } from './logger.js';
 import manifest from '../shared/wallpaper-video-manifest.json';
 import { blobUrl } from './cindy-media/blobStore.desktop.js';
 import { readBoundedFileNoFollowSync } from './utils/readBoundedFile.js';
+import { parsePluginAppearanceSource, type PluginAppearanceSource } from '../shared/pluginAppearance.js';
 
 const filePath = () => path.join(app.getPath('userData'), 'custom-wallpaper.json');
+let appearanceWallpaperReferences: () => string[] = () => [];
+/** The appearance owner supplies selected and in-flight theme media references. */
+export function configureAppearanceWallpaperReferences(read: () => string[]): void {
+  appearanceWallpaperReferences = read;
+}
 
 // Like theme preferences, the media is shared by accounts in this Desktop profile.
-export const customWallpaperStore = createOverrideSettingsFile<{ url: string }>({
+export const customWallpaperStore = createOverrideSettingsFile<{ url: string; fallbackUrl?: string; pluginSource?: PluginAppearanceSource }>({
   filePath,
   defaults: { url: '' },
-  normalize: (raw) => ({
-    url: normalizeCustomWallpaperUrl((raw as { url?: unknown })?.url),
-  }),
+  normalize: (raw) => {
+    const value = raw as { url?: unknown; fallbackUrl?: unknown; pluginSource?: unknown };
+    const fallbackUrl = normalizeCustomWallpaperUrl(value?.fallbackUrl);
+    const pluginSource = parsePluginAppearanceSource(value?.pluginSource);
+    return { url: normalizeCustomWallpaperUrl(value?.url), ...(fallbackUrl ? { fallbackUrl } : {}), ...(pluginSource ? { pluginSource } : {}) };
+  },
   log: createLogger('custom-wallpaper-settings'),
   label: 'custom-wallpaper',
   maxBytes: 4096,
@@ -35,6 +44,7 @@ export function readReferencedClientWallpaperUrls(): string[] {
   // Display reads may fall back to defaults; recycling must never interpret a
   // corrupt/unreadable preference as permission to delete the user's video.
   let customUrl = '';
+  let fallbackUrl = '';
   let exists = true;
   try {
     fs.lstatSync(filePath());
@@ -52,9 +62,14 @@ export function readReferencedClientWallpaperUrls(): string[] {
     customUrl = normalizeCustomWallpaperUrl(url);
     if (url !== undefined && url !== '' && !customUrl)
       throw new Error('Invalid client wallpaper reference');
+    const fallback = (raw as { fallbackUrl?: unknown }).fallbackUrl;
+    fallbackUrl = normalizeCustomWallpaperUrl(fallback);
+    if (fallback !== undefined && fallback !== '' && !fallbackUrl) throw new Error('Invalid client wallpaper fallback');
   }
   return [
     customUrl,
+    fallbackUrl,
+    ...appearanceWallpaperReferences(),
     ...Object.values(manifest)
       .filter((item) => item.delivery === 'cdn')
       .flatMap((item) => [

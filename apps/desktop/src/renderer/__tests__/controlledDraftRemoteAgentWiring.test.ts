@@ -93,9 +93,14 @@ describe('草稿页:建到被控电脑的任务也能选第三台电脑', () => 
     // 两次提交给被控电脑 + 默认来源解析。
     expect(draftRouteSource.split('deviceProviders: agentCatalogProviders,').length - 1).toBe(2);
     const initialProvider = draftRouteSource.indexOf('const chatInitialProviderId = useMemo');
-    expect(
-      draftRouteSource.slice(initialProvider, initialProvider + 400),
-    ).toContain('effectiveSourceIdForModel(\n      agentCatalogProviders,');
+    expect(initialProvider).toBeGreaterThan(0);
+    // 取整个 memo 块(到下一个顶层声明为止),不按固定长度截:块里多几行说明,
+    // 断言就会因为窗口不够而误报,那份接线本身没变。
+    const providerMemo = draftRouteSource.slice(
+      initialProvider,
+      draftRouteSource.indexOf('\n  const ', initialProvider),
+    );
+    expect(providerMemo).toContain('effectiveSourceIdForModel(\n      targetSelectableProviders,');
     // 远程协同(普通发送与新建目标)按同一份收窄。
     expect(
       draftRouteSource.match(/draftEnableOrcaOptions\(\s*effectiveCollab,\s*agentCatalogProviders,/g),

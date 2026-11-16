@@ -300,11 +300,11 @@ export class RemoteAgentPoller {
     if (this.now() - this.unreachableSince > REMOTE_AGENT_READ_GIVE_UP_MS) {
       this.unreachableSince = null;
       this.attempt = 0;
+      // The outage deadline does not prove the peer is offline. Keep the final
+      // timeout/backpressure/breaker cause for both live and persisted errors.
+      const info = remoteAgentErrorFrom(error);
       for (const entry of [...this.entries.values()]) {
-        this.lose(entry, 'unreachable', {
-          code: 'REMOTE_AGENT_UNAVAILABLE',
-          message: '[REMOTE_AGENT_UNAVAILABLE] The computer running this agent is unreachable.',
-        });
+        this.lose(entry, 'unreachable', info);
       }
       return;
     }

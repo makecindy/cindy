@@ -446,6 +446,8 @@ export async function loadAllCommands(
   agentKind: AgentKind,
   workingDir: string | null | undefined,
   opts?: {
+    /** False while an existing task is still resolving its engine and scope. */
+    contextReady?: boolean;
     forceReload?: boolean;
     skipAgentSkills?: boolean;
     sessionId?: string;
@@ -454,6 +456,7 @@ export async function loadAllCommands(
   },
   deviceId?: string,
 ): Promise<UnifiedCommand[]> {
+  if (opts?.contextReady === false) return [];
   const api = window.electronAPI.maker;
   // 用 unknown[] 收口三源的不同原生形状(隧道返 unknown、本地返各自命令/技能类型),
   // 末尾统一 `as UnifiedCommand[]`(与改造前同款收口)。

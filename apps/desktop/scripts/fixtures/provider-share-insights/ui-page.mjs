@@ -9,15 +9,18 @@ export default {
     'Live cross-account transport, persisted permissions, real upstream quota, Windows. All numbers and names are fixture data.',
   stubs: {
     'src/renderer/hooks/useProviders': {
-      partial: 'export const useProviders = () => ({ providers: [], loading: false });',
+      partial: `export const useProviders = () => ({ providers: [{ id: 'xd', name: 'Cindy AI', source: 'builtin', auth: { method: 'oauth', native: 'claude' }, routing: {}, models: {}, subscriptionFastPolicy: { allowFast: true } }], loading: false });`,
     },
     'src/renderer/hooks/useDeviceProviders': {
-      partial: `export const useDeviceProviders = () => ({ providers: [{ id: 'xd', name: 'Cindy AI', routing: {}, models: { 'claude-code': [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }, { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' }], codex: [{ id: 'gpt-5.5', name: 'GPT-5.5' }] } }], loading: false, error: null, unsupported: false });`,
+      partial: `export const useDeviceProviders = () => ({ providers: [{ id: 'xd', name: 'Cindy AI', source: 'builtin', auth: { method: 'oauth', native: 'claude' }, subscriptionFastPolicy: { allowFast: true }, routing: {}, models: { 'claude-code': [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }, { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' }], codex: [{ id: 'gpt-5.5', name: 'GPT-5.5' }] } }], loading: false, error: null, unsupported: false });`,
     },
   },
   cases: {
     owner: {
-      about: 'Owner detail with two independent switches; writes affect fixture memory only',
+      about: 'Owner detail with a two-computer subscription group and independent visibility switches; writes affect fixture memory only',
+    },
+    'owner-remote': {
+      about: 'Same-account remote group management retains a visible, uncompressed account Fast setting',
     },
     default: { about: 'Both capabilities; usage collapsed, models visible at desktop height' },
     expanded: {
@@ -57,7 +60,20 @@ export default {
       .waitFor();
   },
   async check(page, ui) {
-    if (ui.case === 'owner') {
+    if (ui.case.startsWith('owner')) {
+      // 2026-11-11: a duplicate account Fast card shrank into a line below the page title.
+      // Render the real page with a subscription group (previous fixture had no provider).
+      // UI tier: local account control stays in provider details; remote management keeps its account control.
+      const fast = page.getByRole('switch', { name: await ui.t('subscriptionFastPolicy.label'), exact: true });
+      assert.equal(await fast.count(), ui.case === 'owner-remote' ? 2 : 1);
+      if (ui.case === 'owner-remote') {
+        // A switch inside the collapsed card still has a box, but cannot actually be hit.
+        assert.equal(await fast.first().evaluate(element => {
+          const box = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+          return hit === element || element.contains(hit);
+        }), true);
+      }
       // The owner page reads run limits (including idle reclaim) on mount. A missing fixture
       // reply would turn that read into a forbidden operation and render an error.
       const idleMinutes = page.getByTestId('remote-agent-limit-idleMinutes');

@@ -149,13 +149,20 @@ async function start(page, ui) {
 export default {
   name: 'setup-migration',
   entry: './setup-migration-fixture.tsx',
+  // The window host now watches sign-ins to start the get-started guide. A session already
+  // signed in at startup is not a new sign-in, so the guide stays closed in these scenes.
+  stubs: {
+    'src/renderer/contexts/AuthContext': {
+      partial: "export const useAuth = () => ({ mode: 'cloud', dataOwnerId: 'fixture', isAuthenticated: true, isInitializing: false });",
+    },
+  },
   viewport: { width: 1040, height: 760 },
   real: 'SetupMigrationDialog (computer picker, review groups, batch plugin permissions with GhostInstallConsentContent, result and one-time checklist), SetupMigrationSection, translations and themes',
   notCovered: 'Main-side snapshot, plan, plugin/skill installers, settings writes, key copy and SSH authorization (unit-tested in src/main/setup-migration and src/main/remote-ssh), the confirmation dialog on the other computer (native), device-link transport, login behavior and two real computers',
   cases: {
     'settings-entry': {
       about: 'Opening Settings stays quiet; the explicit migration action opens an unselected source list',
-      data: { surface: 'settings', sources, plan, applyResponse, tools, state: { lastRun: null, suggestion: null } },
+      data: { surface: 'settings', sources, plan, applyResponse, tools, state: { lastRun: null } },
     },
     'same-name': {
       about: 'Same-name development devices are distinguishable without a default selection',
@@ -171,7 +178,7 @@ export default {
       data: {
         surface: 'walkthrough',
         walkthroughIds: checklistAfter.filter((item) => !item.done).map((item) => item.id),
-        state: { lastRun: { sourceName: 'MacBook Pro', finishedAt: 0, checklist: checklistAfter }, suggestion: null },
+        state: { lastRun: { sourceName: 'MacBook Pro', finishedAt: 0, checklist: checklistAfter } },
       },
       viewport: { width: 900, height: 400 },
     },
@@ -180,7 +187,7 @@ export default {
       about: 'Settings → General entry with the remaining checklist',
       data: {
         surface: 'settings',
-        state: { lastRun: { sourceName: 'MacBook Pro', finishedAt: 0, checklist: checklistAfter.map((item, index) => (index === 1 ? { ...item, done: true } : item)) }, suggestion: null },
+        state: { lastRun: { sourceName: 'MacBook Pro', finishedAt: 0, checklist: checklistAfter.map((item, index) => (index === 1 ? { ...item, done: true } : item)) } },
       },
       viewport: { width: 900, height: 760 },
     },

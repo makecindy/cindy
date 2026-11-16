@@ -6,6 +6,7 @@
  */
 import type { ProviderView } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
+import { readTurnUsageResetAt } from '../../goal-host/usageLimit';
 import { createAutomaticContinueEligibility, type CompanionFailoverSnapshot } from '../../maker-ipc/automaticContinueEligibility';
 
 import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
@@ -44,7 +45,8 @@ function view(id: string, model: Record<string, unknown> = {}): ProviderView {
 
 function member(kind: ProviderGroupMember['kind'], agentDeviceId: string | null, providerId: string): ProviderGroupMember {
   const key = kind === 'local' ? 'local' : `${kind}:${agentDeviceId!.replace(/^share:/, '')}:${providerId}`;
-  return { key, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false };
+  // An explicit limit: unset limits are unlimited, and these fixtures exercise a full target.
+  return { key, kind, agentDeviceId, providerId, limit: 4, limitSet: true, weight: 1, paused: false };
 }
 
 const LEASE = { recovery: 'lease' };
@@ -70,6 +72,7 @@ function harness(options: {
   codexUsage?: Record<string, ProviderGroupCodexUsageSnapshot>;
   /** 这些组内电脑按「那台用不了」报；stale 表示这条判定来自有界快照，不是现读。 */
   cachedUnavailable?: { members: string[]; stale: boolean };
+  stale?: string[];
 } = {}) {
   let now = 1_000_000;
   const config: ProviderGroupConfig = {
@@ -97,6 +100,7 @@ function harness(options: {
           ? { member: m, label: `${m.key}-name`, state: 'unavailable',
             ...(options.cachedUnavailable.stale ? { providerContinuity: { stale: true, remainingMs: 600_000 } } : {}) }
           : { member: m, label: `${m.key}-name`, state: 'ok', view: view(m.providerId, options.unusableModel?.[m.key]),
+            ...(options.stale?.includes(m.key) ? { providerContinuity: { stale: true, remainingMs: 600_000 } } : {}),
             claudeUsage: options.usage?.[m.key], codexUsage: options.codexUsage?.[m.key] });
     },
     async listCandidates() {
@@ -162,7 +166,7 @@ function harness(options: {
     hasLiveSession: vi.fn((_id: string) => true),
     continueSession: vi.fn(async () => 'resumed' as const),
     fallback: vi.fn(),
-    readResetAt: vi.fn(() => null),
+    readResetAt: vi.fn<ProviderGroupServiceDeps['readResetAt']>(() => null),
     readAutoRebalance: vi.fn((id: string) => autoRebalance.has(id)),
     readRebalanceDisabled: vi.fn((id: string) => disabledRebalance.has(id)),
     writeRebalanceEnabled: vi.fn(async (id: string, enabled: boolean) => {
@@ -539,6 +543,46 @@ describe('assignBeforeStart', () => {
 });
 
 describe('nextAfterStartFailure', () => {
+  // Unit, PR #10223: stable subscription-limit errors must retain their reset
+  // across startup and both handoff paths. Existing cases only used generic
+  // startup failures, so dropping resetAt silently imposed the 30-minute fallback.
+  // Minimum: a member reports resetAtMs five minutes away; the real router must
+  // select it again at that time. Use the production error parser, not a stubbed date.
+  it.each(['start', 'before-send-target', 'running-target'] as const)(
+    'expires subscription cooling at the reported reset after %s failure', async phase => {
+      const h = harness({ members: phase === 'start' ? [LOCAL] : [LOCAL, MINI, STUDIO] });
+      const now = Date.parse('2026-11-12T13:00:00Z');
+      h.advance(now - h.deps.now());
+      h.deps.readResetAt.mockImplementation(signals => readTurnUsageResetAt(signals, now, { localTimeZoneTrusted: false }));
+      const resetAt = now + 5 * 60_000;
+      const error = new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] The task subscription account is waiting for its usage window to reset'
+        + `\nresetAtMs=${resetAt}`);
+      const failedMember = phase === 'start' ? LOCAL : MINI;
+      if (phase === 'start') {
+        const context = await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL });
+        expect(await h.service.nextAfterStartFailure(context!, error)).toBeNull();
+      } else {
+        h.bindings.set('s1', { providerId: 'anthropic', memberKey: LOCAL.key, at: now });
+        h.deps.switchAgentLocation.mockRejectedValueOnce(error);
+        if (phase === 'before-send-target') {
+          h.router.markCooling('anthropic', LOCAL.key, now + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, MODEL);
+          await h.service.beforeSend('s1');
+        } else {
+          await h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1);
+        }
+        expect(h.bindings.get('s1')?.memberKey).toBe(STUDIO.key);
+      }
+      expect(h.router.coolingUntil('anthropic', failedMember.key, MODEL)).toBe(resetAt);
+      expect(h.router.coolingUntil('anthropic', failedMember.key, 'claude-sonnet-5')).toBeNull();
+      h.advance(resetAt - now);
+      const retry = await h.router.pick({
+        providerId: 'anthropic',
+        agentKind: 'claude-code', model: MODEL, exclude: new Set(),
+      });
+      expect(retry.kind === 'member' && retry.member.key).toBe(failedMember.key);
+    },
+  );
+
   it('moves to the next computer when the assigned one could not start the agent', async () => {
     const h = harness({ offline: ['local'] });
     const context = await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL });
@@ -793,13 +837,24 @@ describe('onTurnError (automatic switch)', () => {
     expect(h.deps.fallback).not.toHaveBeenCalled();
   });
 
-  it('never switches between two accounts on the same computer', async () => {
+  // #10893, unit: a connection failure must not exclude a healthy account on
+  // the same host. The previous regression required skipping that connection.
+  it('switches to another independent connection on the same computer', async () => {
     const MINI2 = member('device', 'mini', 'anthropic-9f9f9f9f');
-    const h = harness({ members: [MINI, MINI2, LOCAL], row: { agentDeviceId: 'mini', providerId: MINI.providerId } });
+    const h = harness({ members: [MINI, MINI2], row: { agentDeviceId: 'mini', providerId: MINI.providerId } });
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    expect(h.service.mayHandleTurnError('s1', { sdkError: 'rate_limit' })).toBe(true);
     h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1);
     await flush();
-    expect(h.deps.switchAgentLocation).toHaveBeenCalledWith('s1', expect.objectContaining({ agentDeviceId: null }), expect.anything());
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentDeviceId: 'mini', providerId: MINI2.providerId,
+    }), expect.anything());
+    expect(h.row.providerId).toBe(MINI2.providerId);
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI2.key);
+    expect(h.router.coolingUntil('anthropic', MINI.key, MODEL)).not.toBeNull();
+    expect(h.router.coolingUntil('anthropic', MINI2.key, MODEL)).toBeNull();
+    expect(h.deps.continueSession).toHaveBeenCalledOnce();
+    expect(h.deps.fallback).not.toHaveBeenCalled();
   });
 
   it('reports the group of a task bound to this computer’s group', async () => {
@@ -1320,6 +1375,24 @@ describe('beforeSend', () => {
     expect(h.router.coolingUntil('anthropic', 'local')).toBeNull();
   });
 
+  // Unit: bounded directory fallback cannot relocate an existing task using old
+  // quota (provider-groups.md, continuity contract). Existing cases only covered
+  // stale unavailable state, not a usable directory plus an exhausted quota.
+  it('ignores stale quota before sending but still honors a real failure cooldown', async () => {
+    const h = harness({ members: [MINI, LOCAL], stale: [MINI.key],
+      row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' },
+      usage: { [MINI.key]: { updatedAt: 1_000_000, fiveHour: { utilization: 100, resetsAt: 3_000 } } },
+    });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    await h.service.beforeSend('s1');
+    expect(h.row.agentDeviceId).toBe('mini');
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    h.router.markCooling('anthropic', MINI.key, 2_000_000, MODEL);
+    await h.service.beforeSend('s1');
+    expect(h.row.agentDeviceId).toBeNull();
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledOnce();
+  });
+
   // Unit: beforeSend must use the task's bridge quota, not the unrelated native Codex bucket.
   // Router-only coverage cannot detect dropping agentKind between the session and this check.
   it.each([[100, 20, 'mini'], [20, 100, null]])('checks the OpenAI bridge quota before sending (web=%s, native=%s)', async (web, native, device) => {
@@ -1416,6 +1489,56 @@ describe('switching accounts between messages to balance quota', () => {
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1_000_000 });
     return { ...h, usage };
   }
+
+  // #10893: physical-device equality must not hide a more urgent independent
+  // account. The accepted message must retain that exact connection binding.
+  it('balances quota between two independent connections on the same computer', async () => {
+    const second = member('device', 'mini', 'anthropic-second');
+    const usage = paceUsage(1_000_000);
+    const h = harness({ members: [MINI, second],
+      row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' },
+      usage: { [MINI.key]: usage.local, [second.key]: usage[MINI.key] },
+    });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ memberKey: second.key });
+    expect(await h.service.rebalanceDecision('s1', second.key, false, 'message-a')).toBe(true);
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.row).toMatchObject({ agentDeviceId: 'mini', providerId: second.providerId });
+    expect(h.bindings.get('s1')?.memberKey).toBe(second.key);
+  });
+
+  // Unit: both sides of quota balancing must be live. The original fixtures
+  // always returned live members and missed stale origins/targets and expiry
+  // between the suggestion and the actual send.
+  const backup = member('device', 'backup', 'anthropic-backup');
+  function remotePaced(stale: string[]) {
+    const usage = paceUsage(1_000_000);
+    const h = harness({ members: [MINI, backup, LOCAL], stale,
+      row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' },
+      usage: { [MINI.key]: usage.local, [backup.key]: usage[MINI.key] },
+    });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    return h;
+  }
+
+  it.each([MINI.key, backup.key])('does not propose balancing with a stale member: %s', async key => {
+    const stale = [key];
+    const h = remotePaced(stale);
+    expect(await h.service.rebalanceSuggestion('s1')).toBeNull();
+    stale.length = 0;
+    expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ memberKey: backup.key });
+  });
+
+  it.each([MINI.key, backup.key])('rechecks stale evidence after a balancing suggestion was accepted: %s', async key => {
+    const stale: string[] = [];
+    const h = remotePaced(stale);
+    expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ memberKey: backup.key });
+    expect(await h.service.rebalanceDecision('s1', backup.key, false, 'message-a')).toBe(true);
+    stale.push(key);
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.row.agentDeviceId).toBe('mini');
+  });
 
   it('automatically offers native relocation and binds the move to the next user message', async () => {
     const h = paced();
@@ -1980,6 +2103,18 @@ describe('using the state the group keeps (2026-10-11)', () => {
 });
 
 describe('moving a task into a group on this computer from the model list (2026-10-11)', () => {
+  it('preserves a selected connection on the current computer instead of falling back to the group provider', async () => {
+    const h = harness({ members: [MINI], row: { agentDeviceId: 'mini', providerId: 'anthropic-other' } });
+    const route = await h.service.resolveSwitchTarget('s1', {
+      agentKind: 'claude-code', model: MODEL, providerId: 'anthropic', agentDeviceId: null,
+      current: { agentDeviceId: 'mini', providerId: 'anthropic-other' },
+    });
+    expect(route).toMatchObject({ agentDeviceId: 'mini', providerId: MINI.providerId });
+    expect(h.bindings.size).toBe(0);
+    await route?.commitBinding();
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
+  });
+
   it('picks a computer by the group state, skipping one that is cooling down', async () => {
     const h = harness({ members: [LOCAL, MINI, STUDIO], row: { agentDeviceId: 'elsewhere', providerId: 'openai', sdkSessionId: 'native' } });
     h.router.markCooling('anthropic', 'local', 2_000_000);

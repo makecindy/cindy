@@ -7,6 +7,333 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// Unit, provider-sharing.md §7 / agent-user-parity.md: the real registry must
+// expose owner management to an installed plugin without borrowing a task.
+// Existing model/settings tests do not exercise member operations or their schema.
+it('offers provider share member tools to plugins without a Session and validates writes', async () => {
+  const call = vi.fn(async () => ({ members: [{ memberId: 'member', status: 'paused' }] }));
+  const server = createXdtHelperMcpServer({ providerSharing: { call } }, {
+    agentKind: 'codex', workingDir: '',
+    hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  const client = new Client({ name: 'provider-sharing-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    expect(server.hostTools.describe('list_provider_share_members')).toMatchObject({ category: 'settings' });
+    expect(parsePayload(await server.hostTools.call('list_provider_share_members', {})))
+      .toMatchObject({ ok: true, members: [{ memberId: 'member' }] });
+    expect(call).toHaveBeenLastCalledWith({ action: 'members', callerSessionId: undefined });
+    expect(parsePayload(await server.hostTools.call('set_provider_share_member_status', {
+      device: 'other-computer', memberId: 'member', status: 'pause',
+    }))).toMatchObject({ ok: true });
+    expect(call).toHaveBeenLastCalledWith({ callerSessionId: undefined, action: 'status', device: 'other-computer',
+      memberId: 'member', status: 'pause' });
+    expect(parsePayload(await server.hostTools.call('set_provider_share_member_status', {
+      memberId: 'member', status: 'remove',
+    }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(parsePayload(await server.hostTools.call('set_provider_share_model_access', {
+      providerId: 'anthropic', memberId: 'member', models: ['model-a'], ownerId: 'someone-else',
+    }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).toHaveBeenCalledTimes(2);
+    const found = parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '供应商分享成员' } }));
+    expect(JSON.stringify(found)).toContain('models.provider-sharing');
+  } finally { await client.close(); await server.close(); }
+});
+
+// Unit, capability list #10/#15: the existing registry had no native package
+// transfer. A named task or file is enough to exercise discovery, caller identity
+// and scope rejection; no filesystem, network or engine process is needed.
+it('offers native package transfer to Agents and plugins through the same registry', async () => {
+  const sessionShare = {
+    export: vi.fn(async () => ({ ok: true as const, status: 'ok', attachment_ref: 'handoff:00000000-0000-4000-8000-000000000000' })),
+    import: vi.fn(async () => ({ ok: true as const, status: 'imported', session_id: 'imported' })),
+  };
+  const plugin = { agentKind: 'codex' as const, workingDir: '',
+    hostCaller: { kind: 'plugin' as const, pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1 } };
+  const server = createXdtHelperMcpServer({ sessionShare } as Parameters<typeof createXdtHelperMcpServer>[0], plugin);
+  expect(server.hostTools.describe('export_session')).toMatchObject({ category: 'history' });
+  expect(server.hostTools.describe('import_session')).toMatchObject({ category: 'control' });
+  expect(parsePayload(await server.hostTools.call('export_session', { session_id: 'local::target' })))
+    .toMatchObject({ ok: true, attachment_ref: expect.stringMatching(/^handoff:/) });
+  expect(sessionShare.export).toHaveBeenCalledWith({ sessionId: 'target', excludeMedia: false }, plugin);
+  expect(parsePayload(await server.hostTools.call('import_session', { attachment_ref: 'handoff:00000000-0000-4000-8000-000000000000' })))
+    .toMatchObject({ ok: true, session_id: 'imported' });
+  expect(parsePayload(await server.hostTools.call('export_session', { session_id: 'target', output_path: '/private/export.cshare' })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  expect(parsePayload(await server.hostTools.call('import_session', { file_path: '/private/import.cshare' })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  expect(parsePayload(await server.hostTools.call('export_session', { session_id: 'other::task' })))
+    .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+  expect(sessionShare.export).toHaveBeenCalledOnce();
+  expect(sessionShare.import).toHaveBeenCalledOnce();
+  await server.close();
+
+  const agent = { agentKind: 'codex' as const, workingDir: '/workspace', sessionId: 'caller' };
+  const native = createXdtHelperMcpServer({ sessionShare } as Parameters<typeof createXdtHelperMcpServer>[0], agent);
+  expect(parsePayload(await native.hostTools.call('import_session', { file_path: 'task.cshare' })))
+    .toMatchObject({ ok: true, session_id: 'imported' });
+  expect(sessionShare.import).toHaveBeenLastCalledWith(expect.objectContaining({ filePath: 'task.cshare', overwrite: false }), agent);
+  await native.close();
+});
+
+it('denies native package export outside the existing history scope before file I/O', async () => {
+  const sessionShare = { export: vi.fn(), import: vi.fn() };
+  const history = { resolveSessionScope: async () => ({ ok: true as const, sessionIds: ['allowed'] }),
+    listWorkdirs: vi.fn(), listSessions: vi.fn(), getMessages: vi.fn(), searchChatHistory: vi.fn() };
+  const server = createXdtHelperMcpServer({ sessionShare, history } as Parameters<typeof createXdtHelperMcpServer>[0],
+    { agentKind: 'codex', workingDir: '', sessionId: 'caller' });
+  expect(parsePayload(await server.hostTools.call('export_session', { session_id: 'denied' })))
+    .toMatchObject({ ok: false, errorCode: 'HISTORY_SCOPE_DENIED' });
+  expect(sessionShare.export).not.toHaveBeenCalled();
+  await server.close();
+});
+
+// Item 28, unit: the ordinary helper registry and public plugin entry must
+// expose the same read-only catalog, with no self-reported caller fields.
+it('discovers Host services through the common validated registry', async () => {
+  const list = vi.fn(() => ({ scope: 'local', services: [{ group: 'scheduler', available: false }] }));
+  const server = createXdtHelperMcpServer({ hostServices: { list } }, { agentKind: 'codex', workingDir: '' });
+  try {
+    expect(server.hostTools.describe('host_services')).toMatchObject({ category: 'discovery' });
+    expect(parsePayload(await server.hostTools.call('host_services', {}))).toMatchObject({ ok: true, services: [{ available: false }] });
+    expect(parsePayload(await server.hostTools.call('host_services', { pluginId: 'someone-else' }))).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    expect(list).toHaveBeenCalledOnce();
+  } finally { await server.close(); }
+});
+// Unit: plugin callers have no Session; the new usage entry must use their attested
+// context and reject arbitrary owner/path/refresh parameters before touching host data.
+it('exposes read-only subscription usage to the common validated tool registry', async () => {
+  const read = vi.fn(async () => ({ scope: 'local', accounts: [{ accountId: 'second', windows: [] }] }));
+  const hostCaller = { kind: 'plugin' as const, pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 };
+  const server = createXdtHelperMcpServer({ subscriptionUsage: { read } }, { agentKind: 'codex', workingDir: '', hostCaller });
+  try {
+    expect(server.hostTools.describe('get_subscription_usage')).toMatchObject({ category: 'usage' });
+    expect(parsePayload(await server.hostTools.call('get_subscription_usage', { providerId: 'anthropic' })))
+      .toMatchObject({ ok: true, accounts: [{ accountId: 'second' }] });
+    expect(read.mock.calls[0]).toEqual([expect.objectContaining({ hostCaller }), 'anthropic']);
+    for (const key of ['ownerId', 'accountPath', 'refresh', 'deviceId', 'sessionId']) {
+      expect(parsePayload(await server.hostTools.call('get_subscription_usage', { [key]: 'other' }))).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    }
+    expect(read).toHaveBeenCalledOnce();
+    read.mockRejectedValueOnce(new Error('secret host path'));
+    const failed = await server.hostTools.call('get_subscription_usage', {});
+    expect(parsePayload(failed)).toMatchObject({ errorCode: 'SUBSCRIPTION_USAGE_UNAVAILABLE' });
+    expect(JSON.stringify(failed)).not.toContain('secret host path');
+  } finally { await server.close(); }
+});
+
+// Unit, #9801 / 4537273680: external-history scan/status callbacks also recover
+// interrupted imports. Existing task tests did not cover a plugin caller. The
+// real shared dispatcher must reject all three tools before any callback (and
+// therefore recovery or source scan) runs, while preserving Agent behavior.
+it('rejects plugin external-history imports without invoking recovery callbacks', async () => {
+  const job = { requestId: 'import-1', status: 'running', items: [] };
+  const sessionImport = {
+    scan: vi.fn(async () => ({ candidates: [], hiddenCounts: {}, sources: [], sourceErrors: [] })),
+    start: vi.fn(async () => job),
+    status: vi.fn(async () => job),
+  };
+  const calls = [
+    { tool: 'scan_importable_sessions', args: {} },
+    { tool: 'get_session_import_status', args: { request_id: job.requestId } },
+    { tool: 'import_sessions', args: { keys: ['codex:session'] } },
+  ];
+  const plugin = createXdtHelperMcpServer({ sessionImport }, { agentKind: 'codex', workingDir: '',
+    hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 } });
+  try {
+    for (const { tool, args } of calls) {
+      expect(parsePayload(await plugin.hostTools.call(tool, args)))
+        .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    }
+    for (const callback of Object.values(sessionImport)) expect(callback).not.toHaveBeenCalled();
+  } finally { await plugin.close(); }
+  const agent = createXdtHelperMcpServer({ sessionImport }, { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' });
+  try {
+    for (const { tool, args } of calls) expect(parsePayload(await agent.hostTools.call(tool, args))).toMatchObject({ ok: true, scope: 'local' });
+    for (const callback of Object.values(sessionImport)) expect(callback).toHaveBeenCalledOnce();
+  } finally { await agent.close(); }
+});
+
+// Unit production dispatcher, parity #13: deletion was absent. An explicit target must
+// reach the same Host operation for task/plugin callers, while the current task stays protected.
+it('deletes an explicit target through the shared lifecycle handler and protects the caller', async () => {
+  const deleteSession = vi.fn(async ({ sessionId }: { sessionId: string }) => ({ ok: true as const, sessionId, status: 'deleted' as const }));
+  for (const context of [
+    { agentKind: 'codex' as const, workingDir: '', sessionId: 'ordinary' },
+    { agentKind: 'codex' as const, workingDir: '', hostCaller: { kind: 'plugin' as const, pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 } },
+  ]) {
+    const server = createXdtHelperMcpServer({ deleteSession } as Parameters<typeof createXdtHelperMcpServer>[0], context);
+    expect(parsePayload(await server.hostTools.call('delete_session', { session_id: TARGET_SESSION_ID }))).toMatchObject({ ok: true, status: 'deleted' });
+    expect(parsePayload(await server.hostTools.call('delete_session', {}))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    if (context.sessionId) expect(parsePayload(await server.hostTools.call('delete_session', { session_id: 'local::ordinary' }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    await server.close();
+  }
+  expect(deleteSession).toHaveBeenCalledTimes(2);
+});
+
+// Unit: the real MCP registry validates terminal parameters and resolves caller identity per call.
+// Existing helper tests cover history/control, not Host-managed commands (requirement 22).
+it('discovers and dispatches terminal jobs through the shared schema for tasks and plugins', async () => {
+  const caller = { kind: 'plugin' as const, pluginId: 'console', dataOwnerId: 'owner', ownerGeneration: 1 };
+  let context: LiziMcpSessionContext = { agentKind: 'codex', workingDir: '/task', sessionId: 'task' };
+  const call = vi.fn(async (_context: LiziMcpSessionContext, _method: string, _args: Record<string, unknown>, _signal?: AbortSignal) => ({ scope: 'local', jobs: [] }));
+  const server = createXdtHelperMcpServer({ terminal: { call } }, { agentKind: 'codex', workingDir: '', getSessionContext: () => context });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'terminal-test', version: '1' });
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    expect(parsePayload(await client.callTool({ name: 'list_tools', arguments: {} })).categories)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ name: 'terminal' })]));
+    expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'terminal_start', args: { program: { command: '/bin/sh', args: ['-c', 'printf ready'] } } } }))).toMatchObject({ ok: true });
+    expect(call.mock.calls[0]).toMatchObject([context, 'terminal_start', { program: { command: '/bin/sh', args: ['-c', 'printf ready'] } }, expect.any(AbortSignal)]);
+    context = { agentKind: 'codex', workingDir: '', hostCaller: caller };
+    expect(parsePayload(await server.hostTools.call('terminal_list', {}))).toMatchObject({ ok: true, scope: 'local' });
+    expect(call.mock.calls[1][0]).toEqual(context);
+    expect(parsePayload(await server.hostTools.call('terminal_resize', { id: 'job', cols: 0, rows: 20 }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(parsePayload(await server.hostTools.call('terminal_start', { owner: 'other' }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).toHaveBeenCalledTimes(2);
+  } finally { await client.close(); await server.close(); }
+});
+
+// Unit: a managed-job admission failure must survive the shared MCP dispatcher;
+// earlier dispatch tests only returned success, losing actionable capacity data.
+it('returns the stable managed-job limit and capacity through the shared terminal tool', async () => {
+  const call = vi.fn(async () => { throw Object.assign(new Error('TERMINAL_JOB_LIMIT'), { current: 10, limit: 10 }); });
+  const server = createXdtHelperMcpServer({ terminal: { call } }, { agentKind: 'codex', workingDir: '' });
+  try {
+    const result = await server.hostTools.call('terminal_start', {});
+    expect(result.isError).toBe(true);
+    expect(parsePayload(result)).toMatchObject({ ok: false, errorCode: 'TERMINAL_JOB_LIMIT', data: { current: 10, limit: 10 } });
+  } finally { await server.close(); }
+});
+
+// §21 unit: production registry discovery and schema validation were missing
+// for authorized directory IO. One plugin reference must be forwarded intact;
+// malformed operations must be rejected before the Host touches any files.
+it('discovers the shared files service and validates its opaque directory requests', async () => {
+  const context = { agentKind: 'codex' as const, workingDir: '', hostCaller: {
+    kind: 'plugin' as const, pluginId: 'files', dataOwnerId: 'owner', ownerGeneration: 1,
+  } };
+  const call = vi.fn(async () => ({ ok: true, op: 'read', content: 'selected' }));
+  const server = createXdtHelperMcpServer({ files: { call } }, context);
+  try {
+    expect(server.hostTools.describe('file_request')).toMatchObject({ category: 'files' });
+    expect(parsePayload(await server.hostTools.call('file_request', { op: 'read', directoryRef: 'selected', path: 'a.txt' })))
+      .toMatchObject({ ok: true, content: 'selected' });
+    expect(call).toHaveBeenCalledExactlyOnceWith(context, { op: 'read', directoryRef: 'selected', path: 'a.txt' }, undefined);
+    expect(parsePayload(await server.hostTools.call('file_request', { op: 'exec', directoryRef: 'selected' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).toHaveBeenCalledOnce();
+  } finally { await server.close(); }
+});
+
+// §27 unit: provider selection and explicit snapshot sharing must use the same
+// public registry. Existing directory tests do not cover storage providers.
+it('discovers storage providers through the public tool and rejects undeclared request shapes', async () => {
+  const call = vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true, providers: [{ id: 'library' }] }));
+  const server = createXdtHelperMcpServer({ storage: { call } }, { agentKind: 'codex', workingDir: '' });
+  try {
+    expect(server.hostTools.describe('storage_request')).toMatchObject({ category: 'storage' });
+    expect(parsePayload(await server.hostTools.call('storage_request', { op: 'providers' })))
+      .toMatchObject({ ok: true, providers: [{ id: 'library' }] });
+    expect(parsePayload(await server.hostTools.call('storage_request', { op: 'share', targetPluginId: 'other' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).toHaveBeenCalledOnce();
+    const file = { name: 'business.json', size: 3, sha256: 'a'.repeat(64) };
+    call.mockResolvedValueOnce({ ok: false, errorCode: 'SHARE_RESULT_UNKNOWN', targetPluginId: 'receiver', file });
+    const uncertain = await server.hostTools.call('storage_request', { op: 'share', targetPluginId: 'receiver', source: { provider: 'kv', key: 'record' } });
+    expect(uncertain.isError).toBe(true);
+    expect(parsePayload(uncertain)).toMatchObject({ ok: false, errorCode: 'SHARE_RESULT_UNKNOWN', targetPluginId: 'receiver', file });
+  } finally { await server.close(); }
+});
+
+it('validates attachment reads against the same history scope before host I/O', async () => {
+  let denied = false;
+  const readSessionAttachment = vi.fn(async () => ({ ok: true as const, base64: 'dGV4dA==', nextOffset: null }));
+  const history = { readSessionAttachment, resolveSessionScope: async () => ({ ok: true as const, sessionIds: denied ? [] : null }),
+    listWorkdirs: vi.fn(), listSessions: vi.fn(), getMessages: vi.fn(), searchChatHistory: vi.fn() };
+  const server = createXdtHelperMcpServer({ history }, { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' });
+  expect(parsePayload(await server.hostTools.call('read_session_attachment', { session_id: 'target', message_id: 'm', attachment_index: 0, mediaHash: 'a'.repeat(64) })))
+    .toMatchObject({ ok: true, base64: 'dGV4dA==' });
+  expect(readSessionAttachment).toHaveBeenCalledWith(expect.objectContaining({ mediaHash: 'a'.repeat(64) }), expect.any(Object));
+  // Scope reduction: remote attachments must not enter any history/file transport.
+  expect(parsePayload(await server.hostTools.call('read_session_attachment', { session_id: 'device::target', message_id: 'm', attachment_index: 0 })))
+    .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+  expect(parsePayload(await server.hostTools.call('read_session_attachment', { session_id: 'target', message_id: 'm', attachment_index: 0, mediaHash: 'invalid' })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  expect(parsePayload(await server.hostTools.call('read_session_attachment', { message_id: 'm', attachment_index: 0 })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  denied = true;
+  expect(parsePayload(await server.hostTools.call('read_session_attachment', { session_id: 'target', message_id: 'm', attachment_index: 0 })))
+    .toMatchObject({ ok: false, errorCode: 'HISTORY_SCOPE_DENIED' });
+  expect(readSessionAttachment).toHaveBeenCalledOnce();
+  await server.close();
+});
+
+// Unit: explicit remote targets need a plugin actor, never a fabricated dispatcher Session.
+it('sends a plugin message to an explicit remote task without borrowing a sender task', async () => {
+  const sendToRemoteSession = vi.fn(async () => ({ ok: true as const, agentKind: 'codex' as const, wakeKind: 'queued' as const, targetTitle: null, targetLastUserSendAt: null }));
+  const server = createXdtHelperMcpServer({ sendToRemoteSession, sendToSession: vi.fn() }, { agentKind: 'codex', workingDir: '',
+    hostCaller: { kind: 'plugin', pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1 } });
+  expect(parsePayload(await server.hostTools.call('send_to_session', { target_session_id: 'device::task', message: 'Continue' }))).toMatchObject({ ok: true, wake_kind: 'queued' });
+  expect(sendToRemoteSession).toHaveBeenCalledWith({ deviceId: 'device', sessionId: 'task', message: 'Continue', dispatcherSessionId: undefined });
+  await server.close();
+});
+
+// Unit via real registry: parity #15 adds exact message boundaries; old task controls
+// cannot invoke fork/rewind. Plugins must name a target and never inherit a session.
+it.each(['fork_session', 'rewind_session'] as const)('routes %s to the existing Host history operation', async tool => {
+  const sessionHistory = vi.fn(async () => ({ ok: true as const, sessionId: 'result-task' }));
+  const server = createXdtHelperMcpServer({ sessionHistory } as Parameters<typeof createXdtHelperMcpServer>[0], {
+    agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  expect(parsePayload(await server.hostTools.call(tool, { session_id: 'target', message_client_id: 'boundary' })))
+    .toMatchObject({ ok: true, session_id: 'result-task' });
+  expect(sessionHistory).toHaveBeenCalledWith(expect.objectContaining({ kind: tool === 'fork_session' ? 'fork' : 'rewind', sessionId: 'target', messageClientId: 'boundary', callerSessionId: undefined }));
+  expect(parsePayload(await server.hostTools.call(tool, { message_client_id: 'boundary' })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  await server.close();
+});
+
+// Unit, real shared handler: ordinary tasks and plugins need the account directory,
+// including paused/hidden companions and stored relationships, without a bot identity.
+it('discovers the complete teammate directory through history for task and plugin callers', async () => {
+  const listTeammates = vi.fn(async () => ({ ok: true as const, page: { items: [{ id: 'paused', status: 'paused', hiddenAt: 1 }],
+    hasMore: true, nextCursor: { createdAt: 0, id: 'paused' } } }));
+  const history = { listTeammates, listWorkdirs: vi.fn(), listSessions: vi.fn(), getMessages: vi.fn(), searchChatHistory: vi.fn() };
+  const server = createXdtHelperMcpServer({ history }, { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' });
+  expect(server.hostTools.describe('list_teammates')).toMatchObject({ category: 'history' });
+  expect(parsePayload(await server.hostTools.call('list_teammates', {}))).toMatchObject({ ok: true,
+    teammates: [{ id: 'paused', status: 'paused', hiddenAt: 1 }], hasMore: true, nextCursor: expect.any(String) });
+  expect(listTeammates).toHaveBeenCalledWith({ limit: 100, cursor: null }, 'ordinary');
+  const result = parsePayload(await server.hostTools.call('list_teammates', { teammate_id: 'paused', limit: 1,
+    cursor: Buffer.from(JSON.stringify({ c: 0, i: 'routine', r: 7 })).toString('base64url') }));
+  expect(result).toMatchObject({ ok: true, teammateId: 'paused', relationships: expect.any(Array) });
+  expect(listTeammates).toHaveBeenLastCalledWith({ teammateId: 'paused', limit: 1,
+    cursor: { createdAt: 0, id: 'routine', rowid: 7 } }, 'ordinary');
+  expect(parsePayload(await server.hostTools.call('list_teammates', { limit: 1001 }))).toMatchObject({ ok: false });
+  await server.close();
+});
+
+// §1.2 Host tools: a plugin is a caller, never an impersonated Session. Native MCP and
+// in-process callers must execute the same schema, handler, result and authorization path.
+it('offers the same in-process handler to a plugin without borrowing a Session', async () => {
+  const setSessionsStatus = vi.fn(async ({ sessionIds, status }) => ({ ok: true as const,
+    changed: sessionIds.map((sessionId: string) => ({ sessionId, title: 'Task', workingDir: null, status })) }));
+  const server = createXdtHelperMcpServer({ setSessionsStatus }, {
+    agentKind: 'claude-code', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  expect(server.hostTools.describe('archive_sessions')).toMatchObject({ name: 'archive_sessions', category: 'control' });
+  expect(parsePayload(await server.hostTools.call('archive_sessions', { session_ids: [TARGET_SESSION_ID] })))
+    .toMatchObject({ ok: true, count: 1 });
+  expect(parsePayload(await server.hostTools.call('archive_sessions', { sessionIds: [TARGET_SESSION_ID] })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  expect(setSessionsStatus).toHaveBeenCalledOnce();
+  expect(server.hostTools.describe('request_input_handoff')).toBeUndefined();
+  await server.close();
+});
+
 // Unit, real MCP wire: three harness contexts discover one shared capability.
 // A read must never dispatch an association write; shared guests cannot use it.
 it('exposes GitHub to all harnesses without implicit association', async () => {
@@ -210,11 +537,19 @@ describe("cindy_helper MCP server", () => {
       name: 'call_tool', arguments: { name, args: {} },
     }));
     try {
+      // Unit regression: natural update requests must discover the existing
+      // install path without executing it; previously "更新 Cindy" returned none.
+      for (const query of ['更新 Cindy', '升级 Cindy', 'update Cindy', 'upgrade Cindy']) {
+        expect(parsePayload(await client.callTool({ name: 'list_tools', arguments: { query } })))
+          .toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ key: 'application.update' })]) });
+      }
       const tools = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'app_update' } }));
       expect((tools.tools as Array<{ name: string }>).map((tool) => tool.name)).toEqual([
         'check_app_update',
       ]);
       expect(await call('check_app_update')).toMatchObject({ status: 'available', targetVersion: '0.1.90' });
+      const detail = parsePayload(await client.callTool({ name: 'list_tools', arguments: { key: 'application.update' } }));
+      expect(detail).toMatchObject({ control: { missingOperations: ['install_app_update'], notes: expect.any(String) } });
       expect(await call('install_app_update')).toMatchObject({ ok: false, errorCode: 'UNKNOWN_TOOL' });
       expect(check).toHaveBeenCalledOnce();
       current = false;
@@ -231,7 +566,7 @@ describe("cindy_helper MCP server", () => {
     let current = true;
     const caller = { sessionId: 'local-task', sessionInstanceId: 'instance-1' };
     const check = vi.fn(async () => ({ status: 'available', currentVersion: '0.1.86', targetVersion: '0.1.90' }));
-    const install = vi.fn(async () => ({ status: 'started', targetVersion: '0.1.90' }));
+    const install = vi.fn(async (): Promise<Record<string, unknown>> => ({ status: 'started', targetVersion: '0.1.90' }));
     const setAutoUpdate = vi.fn(async (_caller: unknown, enabled: boolean) => enabled
       ? { status: 'updated', autoUpdateEnabled: true }
       : { ok: false, errorCode: 'OWNER_TURN_REQUIRED', message: 'owner only' });
@@ -262,9 +597,23 @@ describe("cindy_helper MCP server", () => {
         ok: false, errorCode: 'OWNER_TURN_REQUIRED', data: { hint: 'owner only' },
       });
       expect(setAutoUpdate).toHaveBeenNthCalledWith(1, caller, true);
+      // The update receipt carries recovery guidance after the global prompt
+      // removal, preserving the host's status/reason and actual error code.
+      check.mockImplementationOnce(async () => ({ status: 'idle', currentVersion: '0.1.90', targetVersion: '0.1.90', reason: 'channel_current' }));
+      expect(await call('check_app_update')).toMatchObject({
+        status: 'idle', reason: 'channel_current', guidance: expect.any(String),
+      });
+      install.mockResolvedValueOnce({ status: 'unsupported', reason: 'installation_unsupported' });
+      expect(await call('install_app_update')).toMatchObject({
+        status: 'unsupported', reason: 'installation_unsupported', guidance: expect.any(String),
+      });
+      install.mockResolvedValueOnce({ ok: false, errorCode: 'UPDATE_UNAVAILABLE', message: 'no installer' });
+      expect(await call('install_app_update')).toMatchObject({
+        ok: false, errorCode: 'UPDATE_UNAVAILABLE', data: { hint: 'no installer', guidance: expect.any(String) },
+      });
       current = false;
       expect(await call('install_app_update')).toMatchObject({ ok: false, errorCode: 'STALE_SESSION' });
-      expect(install).toHaveBeenCalledOnce();
+      expect(install).toHaveBeenCalledTimes(3);
     } finally {
       await client.close();
       await server.close();
@@ -1224,13 +1573,75 @@ it('discovers native app settings in all three harnesses and rejects invalid or 
       expect(models).not.toHaveBeenCalled();
       await call('configure_model_connection', { change: { action: 'presets' } });
       expect(models).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'settings-owner', operation: 'connection', change: { action: 'presets' } }, expect.any(AbortSignal));
+      // Unit, real MCP: unknown image/video models were rejected by the public
+      // connection schema, so agents could only repair them through SQLite.
+      const mediaChange = { action: 'setModels', providerId: 'relay', agent: 'pi', models: [
+        { id: 'new-image', mode: 'image_generation', modalities: { input: ['text', 'image'], output: ['image'] } },
+        { id: 'new-video', mode: 'video_generation', modalities: { input: ['text', 'image'], output: ['video'] } },
+      ] };
+      expect((await call('configure_model_connection', { change: mediaChange })).isError).not.toBe(true);
+      expect(models).toHaveBeenLastCalledWith({ callerSessionId: 'settings-owner', operation: 'connection', change: mediaChange }, expect.any(AbortSignal));
+      const guideTarget = { providerId: 'relay', agent: 'pi', modelId: 'new-image' };
+      await call('manage_media_guide', { target: guideTarget, change: { action: 'get' } });
+      expect(models).toHaveBeenLastCalledWith({ callerSessionId: 'settings-owner', operation: 'mediaGuide', target: guideTarget, change: { action: 'get' } }, expect.any(AbortSignal));
       restricted = true;
       expect(parsePayload(await call('configure_model_connection', { change: { action: 'presets' } })).ok).toBe(false);
-      expect(models).toHaveBeenCalledTimes(1);
+      expect(parsePayload(await call('manage_media_guide', { target: guideTarget, change: { action: 'save', guide: {}, expectedRevision: null } })).ok).toBe(false);
+      expect(models).toHaveBeenCalledTimes(3);
       expect(parsePayload(await call('update_app_settings', { section: 'appearance', patch: { uiSize: 17 } })).ok).toBe(false);
       expect(settings).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }
   }
+});
+
+// Real MCP wire: evidence describes a source type; raw examples (which may
+// contain credentials) must be rejected before the settings callback runs.
+it.each(['codex', 'claude-code', 'pi'] as const)('accepts kind-only media evidence and rejects raw references in %s', async agentKind => {
+  const models = vi.fn(async () => ({ ok: true as const, saved: true }));
+  const server = createXdtHelperMcpServer({ modelSettings: { call: models } },
+    { agentKind, workingDir: '/fixture', sessionId: 'guide-evidence-owner' });
+  const client = new Client({ name: 'guide-evidence-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const target = { providerId: 'relay', agent: 'pi', modelId: 'new-image' };
+    const change = { action: 'save', guide: {}, expectedRevision: null, evidence: { kind: 'curl' } };
+    const call = (value: typeof change) => client.callTool({ name: 'call_tool', arguments: {
+      name: 'manage_media_guide', args: { target, change: value },
+    } });
+    const evidence = { kind: 'curl', reference: "curl -H 'Authorization: Bearer invalid-test-mcp-evidence-key' https://example.test/render" };
+    expect((await call({ ...change, evidence })).isError).toBe(true);
+    expect(models).not.toHaveBeenCalled();
+    expect(parsePayload(await call(change))).toMatchObject({ ok: true, saved: true });
+    expect(models).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'guide-evidence-owner',
+      operation: 'mediaGuide', target, change }, expect.any(AbortSignal));
+  } finally { await client.close(); await server.close(); }
+});
+
+// Unit, parity #7: plugins use the existing settings callbacks with no current task.
+// The task-only MCP case above would miss CAPABILITY_NOT_AVAILABLE for this caller.
+// Minimal input: list/get/update via Host handlers, with no sessionId in the context.
+it('reads and updates app settings through the shared handler for a plugin caller', async () => {
+  let state = { uiSize: 16, animation: true };
+  const settings = vi.fn(async (input: { callerSessionId?: string; operation: string; patch?: Record<string, unknown> }) => {
+    if (input.operation === 'update') state = { ...state, ...input.patch };
+    return input.operation === 'list' ? { sections: [{ id: 'appearance' }] } : { state: { ...state } };
+  });
+  const server = createXdtHelperMcpServer({ appSettings: { call: settings } }, {
+    agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  try {
+    expect(server.hostTools.describe('update_app_settings')).toMatchObject({ category: 'settings' });
+    expect(parsePayload(await server.hostTools.call('list_app_settings', {}))).toMatchObject({ ok: true, sections: [{ id: 'appearance' }] });
+    expect(parsePayload(await server.hostTools.call('get_app_settings', { section: 'appearance' }))).toMatchObject({ ok: true, state });
+    expect(parsePayload(await server.hostTools.call('update_app_settings', { section: 'appearance', patch: { uiSize: 18 } })))
+      .toMatchObject({ ok: true, state: { uiSize: 18, animation: true } });
+    expect(settings).toHaveBeenLastCalledWith({ callerSessionId: undefined, operation: 'update', section: 'appearance', patch: { uiSize: 18 } });
+    expect(settings.mock.calls.every(([input]) => input.callerSessionId === undefined)).toBe(true);
+    expect(parsePayload(await server.hostTools.call('update_app_settings', { patch: { uiSize: 20 } })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(settings).toHaveBeenCalledTimes(3);
+  } finally { await server.close(); }
 });
 
 // #9276, unit real MCP: cancellation previously stopped the caller but left Main
@@ -1260,6 +1671,46 @@ it('forwards connection tool cancellation to the host in all three harnesses', a
       controller.abort();
       await rejected;
       await aborted;
+    } finally { await client.close(); await server.close(); }
+  }
+});
+
+// Screenshot regression: an authored theme could be dropped into the UI, but
+// its task could not discover an importer and launched another Cindy instead.
+// Unit, real MCP wire: existing settings tests never import theme files. One
+// .cindy path must be discoverable/callable; wrong types, SSH and guests cannot write.
+it('discovers theme imports in each harness and keeps them on the authorized local host', async () => {
+  for (const agentKind of ['codex', 'claude-code', 'pi'] as const) {
+    let restricted = false;
+    let remoteHostId: string | undefined;
+    const install = vi.fn(async () => ({ status: 'installed', refreshed: true, names: ['Mist'] }));
+    const server = createXdtHelperMcpServer({ themePackages: { import: install },
+      resolveSurface: async () => restricted ? 'restricted' : 'default' }, {
+      agentKind, workingDir: '/fixture', sessionId: 'theme-owner',
+      getSessionContext: () => ({ agentKind, workingDir: '/fixture', sessionId: 'theme-owner', remoteHostId }),
+    });
+    const client = new Client({ name: 'theme-import-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    const call = (filePath: string) => client.callTool({ name: 'call_tool', arguments: { name: 'import_theme_package', args: { filePath } } });
+    try {
+      const search = parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '导入主题' } }));
+      const item = (search.items as any[]).find(item => item.key === 'appearance.themes');
+      expect(item).toMatchObject({ availability: 'available' });
+      const detail = parsePayload(await client.callTool({ name: 'list_tools', arguments: { key: item.key } })).control as any;
+      expect(detail.operations).toEqual([expect.objectContaining({ name: 'import_theme_package' })]);
+      expect(install).not.toHaveBeenCalled();
+      expect(parsePayload(await call('/fixture/mist.cindy'))).toMatchObject({ ok: true, status: 'installed', refreshed: true });
+      expect(install).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'theme-owner', workingDir: '/fixture', agentKind }), '/fixture/mist.cindy');
+      expect(parsePayload(await call('/fixture/mist.json'))).toMatchObject({ ok: false });
+      expect(install).toHaveBeenCalledTimes(1);
+      remoteHostId = 'ssh-host';
+      expect(parsePayload(await call('/fixture/mist.cindy'))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(install).toHaveBeenCalledTimes(1);
+      remoteHostId = undefined;
+      restricted = true;
+      expect(parsePayload(await call('/fixture/mist.cindy'))).toMatchObject({ ok: false });
+      expect(install).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }
   }
 });
@@ -1367,4 +1818,21 @@ it('routes Pi version checks and exact-version installs to the managed runtime',
     expect(await invoke('update_pi_runtime', { source: 'upstream', version: '1.4.0' })).toMatchObject({ ok: false });
     expect(call).toHaveBeenCalledTimes(2);
   } finally { await client.close(); await server.close(); }
+});
+
+// Unit: the public discovery/Host tool must return a real, device-bound navigation link,
+// not mutate settings or claim that the user has already completed setup.
+it('discovers and generates settings links on the task computer', async () => {
+  const call = vi.fn();
+  const server = createXdtHelperMcpServer({ appSettings: { call, navigationDeviceId: () => 'computer-a' } }, {
+    agentKind: 'codex', workingDir: '/repo', sessionId: 'task-a',
+  });
+  try {
+    const result = parsePayload(await server.hostTools.call('get_settings_link', { page: 'voice-input', query: '词典' }));
+    expect(result).toMatchObject({ ok: true, deviceId: 'computer-a', page: 'voice-input' });
+    expect(result.markdown).toContain('cindy://settings-link/voice-input?device=computer-a');
+    expect(call).not.toHaveBeenCalled();
+    expect(parsePayload(await server.hostTools.call('get_settings_link', { page: 'slack' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  } finally { await server.close(); }
 });

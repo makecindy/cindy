@@ -67,7 +67,7 @@ export interface BrowserExtensionSlotDeps {
   confirmNativeTakeover?(ghost: InstalledGhost): Promise<boolean>;
   getGhost(id: string): InstalledGhost | null;
   /** 把转交事件投到插件逻辑页;false = 逻辑页不在线。 */
-  sendToGhost(ghostId: string, payload: unknown): boolean;
+  sendToGhost(ghostId: string, payload: unknown): boolean | Promise<boolean>;
   /** 逻辑页不在线时拉起它(订阅网关同款);缺省不拉起。 */
   wake?(ghostId: string): Promise<boolean>;
   /** 配对缓存目录(owner 私有);切换账号后目录变化,桥接按新目录重启。 */
@@ -340,6 +340,7 @@ export class GhostBrowserExtensionSlot {
   async dispose(): Promise<void> {
     this.disposed = true;
     await Promise.all([...this.entries.keys()].map((id) => this.stop(id)));
+    await Promise.all(this.stopping.values());
   }
 
   // ── 转交:扩展 → 插件 ────────────────────────────────────────────────────
@@ -355,18 +356,38 @@ export class GhostBrowserExtensionSlot {
       request: notice.request,
       ts: (this.deps.now ?? Date.now)(),
     };
-    let delivered = this.deps.sendToGhost(instanceId, payload);
-    if (!delivered && this.deps.wake) {
-      try {
-        delivered =
-          (await this.deps.wake(instanceId)) && this.deps.sendToGhost(instanceId, payload);
-      } catch (err) {
-        this.deps.log?.warn('browser extension relay wake failed', {
-          instanceId,
-          error: errorText(err),
-        });
+    const stillLive = () => {
+      if (this.isLive(entry)) return true;
+      // Owner changes can precede reconcile/close. Finish this old bridge's
+      // pending request now; never leave it waiting for a new account's plugin.
+      entry.bridge.relayResult(notice.id, { ok: false, error: 'BRIDGE_STOPPED' });
+      return false;
+    };
+    if (!stillLive()) return;
+    let delivered = false;
+    try {
+      delivered = await this.deps.sendToGhost(instanceId, payload);
+      if (!stillLive()) return;
+      if (!delivered && this.deps.wake) {
+        let awake = false;
+        try { awake = await this.deps.wake(instanceId); }
+        catch (err) {
+          // The first send explicitly reported offline. A failed wake cannot
+          // have delivered this request; retain the desktop failure contract.
+          this.deps.log?.warn('browser extension relay wake failed', {
+            instanceId, error: errorText(err),
+          });
+        }
+        if (!stillLive()) return;
+        if (awake) delivered = await this.deps.sendToGhost(instanceId, payload);
       }
+    } catch {
+      // An asynchronous transport error may follow delivery. Do not replay it.
+      if (!stillLive()) return;
+      entry.bridge.relayResult(notice.id, { ok: false, error: 'PLUGIN_DELIVERY_UNKNOWN' });
+      return;
     }
+    if (!stillLive()) return;
     if (delivered)
       this.deps.log?.info('browser extension relay delivered to plugin', {
         instanceId,
@@ -663,12 +684,21 @@ export class GhostBrowserExtensionSlot {
    * Ask the plugin to push its paired browsers: wake it when offline, else send the request. The event
    * keeps its published name; plugins answer it with their pairings (and a site list that is ignored).
    */
+  private isLive(entry: Entry): boolean {
+    const ghost = this.deps.getGhost(entry.instanceId);
+    return !this.disposed && !entry.closing && this.entries.get(entry.instanceId) === entry &&
+      ghost?.enabled === true && entry.signature === entrySignature(ghost, this.deps.ownerScopeKey());
+  }
+
   private async requestPairings(instanceId: string): Promise<void> {
+    const entry = this.entries.get(instanceId);
+    if (!entry || !this.isLive(entry)) return;
     const payload = { type: 'event', name: 'browser-extension-policy-request' };
     try {
-      if (this.deps.sendToGhost(instanceId, payload)) return;
-      if (this.deps.wake && (await this.deps.wake(instanceId)))
-        this.deps.sendToGhost(instanceId, payload);
+      if (await this.deps.sendToGhost(instanceId, payload)) return;
+      if (!this.isLive(entry)) return;
+      if (this.deps.wake && await this.deps.wake(instanceId) && this.isLive(entry))
+        await this.deps.sendToGhost(instanceId, payload);
     } catch (err) {
       this.deps.log?.warn('browser extension pairing request failed', {
         instanceId,
@@ -676,6 +706,7 @@ export class GhostBrowserExtensionSlot {
       });
     }
   }
+
 }
 
 function errorText(err: unknown): string {

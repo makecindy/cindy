@@ -13,7 +13,7 @@ import { app, type BrowserWindow } from 'electron';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createComputerMcpServer } from '@cindy/mcps/computer';
-import { cleanupComputerDriverSession, getComputerMcpDeps } from '../mcp-integrations/computer.js';
+import { cleanupComputerDriverSession, getComputerMcpDeps } from '../mcp-integrations/computer.desktop.js';
 
 export async function runFolderPickerWheelSmoke(window: BrowserWindow): Promise<void> {
   if (app.isPackaged || process.env.XDT_ISOLATED !== '1' || process.env.XDT_UI_MOCK !== '1') return;

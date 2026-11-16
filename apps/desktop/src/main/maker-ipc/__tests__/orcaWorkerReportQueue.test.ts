@@ -55,6 +55,16 @@ const otherWorkerReport = (clientId: string, text: string) =>
     senderSessionId: 'other-worker-session',
   });
 const typedByUser = (clientId: string, text: string) => queued(clientId, text, undefined);
+// 系统合批产物：首条 senderSessionId 仍是首个 Worker，但整批含多个 Worker 的报告。
+const ownBatch = (clientId: string, text: string) =>
+  queued(clientId, text, {
+    kind: 'orca',
+    senderLabel: '',
+    displayText: text,
+    senderSessionId: WORKER.workerSessionId,
+    autoBridge: true,
+    autoBridgeBatchCount: 2,
+  });
 
 /** The Lead's queue with the coordinator's documented rules: identity-preserving replace, merge of consecutive rows only. */
 function makeLeadQueue(
@@ -132,6 +142,22 @@ describe('Worker management of its own reports queued at the Lead', () => {
         { queuedMessageId: 'r2', position: 3, content: 'Verdict unchanged', consuming: false },
       ],
     });
+  });
+
+  it('does not let the first Worker view, rewrite, withdraw or merge a multi-Worker batch', async () => {
+    const batch = ownBatch('b1', '[From Orca Worker reviewer]\nA\n\n---\n\n[From Orca Worker developer]\nB');
+    const { service, leadReads } = makeLeadQueue([batch, ownReport('r1', 'single')]);
+    const status = await service.list(WORKER);
+    expect(status.reports.map((r) => r.queuedMessageId)).toEqual(['r1']);
+    const updated = await service.update({ ...WORKER, queuedMessageId: 'b1', message: 'clobber' });
+    expect(updated.ok).toBe(false);
+    if (!updated.ok) expect(updated.errorCode).toBe('NOT_YOUR_MESSAGE');
+    const cancelled = await service.cancel({ ...WORKER, queuedMessageId: 'b1' });
+    expect(cancelled.ok).toBe(false);
+    if (!cancelled.ok) expect(cancelled.errorCode).toBe('NOT_YOUR_MESSAGE');
+    const merged = await service.merge({ ...WORKER, queuedMessageIds: ['b1', 'r1'], message: 'combined' });
+    expect(merged.ok).toBe(false);
+    expect(leadReads()[0]).toContain('b1:');
   });
 
   it('rewrites an own report in place and refuses anyone else\'s message', async () => {

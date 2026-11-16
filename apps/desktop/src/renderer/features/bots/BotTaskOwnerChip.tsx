@@ -27,7 +27,7 @@ export function BotTaskOwnerChip({ session }: { session: Session }) {
       onClick={() => navigate(`/bots/${encodeURIComponent(bot.id)}`)}
       aria-label={t('bots.session.backToBot', { name: bot.name })}
       title={t('bots.session.backToBot', { name: bot.name })}
-      className="ml-1.5 inline-flex h-6 min-w-0 max-w-[200px] shrink items-center gap-1.5 rounded-full px-2 text-12 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
+      className="ml-1.5 inline-flex h-6 min-w-0 max-w-[200px] shrink items-center gap-1.5 rounded-full px-2 text-12 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
       style={WINDOW_NO_DRAG_STYLE}
     >
       <BotAvatar bot={bot} size="xs" />

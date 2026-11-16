@@ -6,17 +6,20 @@ import WebSocket from 'ws';
 import { AgentNetWorkerSocket, type AgentNetAppSocket } from '@cindy/agent-net';
 import { approveJoin, identityFromSeed, issueCertificate, publicBytes, signTenantJoinRequest, verifyCertificate, type Bootstrap, type Identity, type JoinRequest, type DeviceCertificate, type TenantJoinRequest } from '@cindy/agent-net-relay';
 import { AgentNetClient, createDelegationApprover, createTransportModeProof, verifyTransportModeProof } from '@cindy/agent-net-relay/client';
-import { CERT_LIFETIME_MS, type DeviceView } from '@cindy/agent-net-protocol';
+import { CERT_LIFETIME_MS, agentNetStunServer, type DeviceView } from '@cindy/agent-net-protocol';
 import { createOutboundHttpAgent, outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { readDeviceLinkSettings } from './settings-store.desktop.js';
 import { activeSelfHostedRelay, isAgentNetOnlyRelay } from './selfHostedRelayRouting.js';
 import { readRelaySecrets, writeRelaySecrets, relayDataPath, readRelayConfig } from './selfHostedRelayConfig.js';
 import * as authManager from '../authManager.js';
-import { currentOfficialAgentNetClient, ensureOfficialAgentNetClient, officialAgentNetBase, officialAgentNetSlot } from './agentNetOfficial.js';
+import { currentOfficialAgentNetClient, ensureOfficialAgentNetClient, officialAgentNetBase, officialAgentNetSlot, outgoingOfficialAgentNetClient } from './agentNetOfficial.js';
 import { deviceName } from './deviceName.js';
 import { authorizeAgentNetSharingRequest, prepareAgentNetSharingPrimary } from './agentNetSharingPolicy.js';
+import { createLogger } from '../logger';
 
+/** Relay connection lifecycle, keepalive and per-peer route changes (local log only). */
+const agentNetLog = createLogger('agent-net');
 let current: AgentNetAppSocket | null = null;
 let socketAttempt = 0;
 let coreModule: Promise<WebAssembly.Module> | null = null;
@@ -176,9 +179,16 @@ export function agentNetPrefersPrimary(payload: unknown): boolean {
   return typeof mode === 'boolean' ? mode : value?.capabilities?.includes('agent-net-node-v2') === true;
 }
 export function agentNetClientForRelay(relayId: string, baseUrl: string): AgentNetClient {
+  if (isAppSessionBoundaryPending()) throw new Error('AGENT_NET_IDENTITY_MISMATCH');
+  return outgoingAgentNetClientForRelay(relayId, baseUrl);
+}
+/** Account-handover close only: the boundary is pending but the outgoing owner
+ * has not been replaced yet. The caller must verify the outgoing scope is still
+ * current and capture the client synchronously, before the owner commit. */
+export function outgoingAgentNetClientForRelay(relayId: string, baseUrl: string): AgentNetClient {
   const secrets = readRelaySecrets(relayId), stored = secrets?.agentNet;
   if (!secrets || !stored || stored.certificate.subject !== authManager.getCurrentUserId()
-    || stored.certificate.networkId !== 'private:' + relayId || isAppSessionBoundaryPending()) throw new Error('AGENT_NET_IDENTITY_MISMATCH');
+    || stored.certificate.networkId !== 'private:' + relayId) throw new Error('AGENT_NET_IDENTITY_MISMATCH');
   return new AgentNetClient(baseUrl, decodeIdentity(secrets), stored.certificate, stored.rootPublicKey, undefined, {
     ownerPinnedHttp: true, fetch: outboundFetch,
     createWebSocket: async (url, options) => new WebSocket(url, { ...options, agent: await createOutboundHttpAgent(url) }),
@@ -195,7 +205,17 @@ export function currentAgentNetClient(): AgentNetClient | null {
   const stored = secrets.agentNet!;
   if (stored.rootPublicKey !== relay.ownerPublicKey || stored.certificate.networkId !== 'private:' + relay.relayId
     || stored.certificate.deviceId !== relay.deviceId) throw new Error('AGENT_NET_IDENTITY_MISMATCH');
-  return agentNetClientForRelay(relay.relayId, relay.baseUrl);
+  return outgoingAgentNetClientForRelay(relay.relayId, relay.baseUrl);
+}
+/** The selected network's client for the outgoing owner while the account
+ * boundary is pending. Read-only: never bootstraps or writes identity. */
+export function outgoingAgentNetClient(): AgentNetClient | null {
+  const relay = activeSelfHostedRelay();
+  if (!relay) return outgoingOfficialAgentNetClient();
+  const stored = readRelaySecrets(relay.relayId)?.agentNet;
+  if (!stored || stored.rootPublicKey !== relay.ownerPublicKey || stored.certificate.networkId !== 'private:' + relay.relayId
+    || stored.certificate.deviceId !== relay.deviceId) return null;
+  return outgoingAgentNetClientForRelay(relay.relayId, relay.baseUrl);
 }
 async function loadCore(): Promise<WebAssembly.Module> {
   if (coreModule) return coreModule;
@@ -222,7 +242,7 @@ export async function openScopedAgentNetAppSocket(api: AgentNetClient, assertCur
   if (!workerFile) throw new Error('AGENT_NET_WORKER_BUNDLE_MISSING');
   const approver = api.delegation ? null : createDelegationApprover(api, assertCurrent, authorizeAgentNetSharingRequest);
   try {
-    const socket = await AgentNetWorkerSocket.open({ workerFile, client: api, assertCurrent, module,
+    const socket = await AgentNetWorkerSocket.open({ workerFile, client: api, assertCurrent, module, log: agentNetLog,
       userId: authManager.getCurrentUserId() ?? '', scoped: true,
       onDelegationRequests: requests => approver?.update(requests) });
     try { assertCurrent(); } catch (error) { socket.close(); throw error; }
@@ -263,10 +283,10 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
   const stunServers: string[] = [];
   try {
     const response = await outboundFetch(api.base + '/api/agent-net/info', { signal: AbortSignal.timeout(5000) });
-    const info = await response.json() as { udpPort?: unknown }; assertOwner();
-    if (response.ok && Number.isInteger(info.udpPort) && Number(info.udpPort) > 0 && Number(info.udpPort) < 65536) {
-      stunServers.push(new URL(api.base).hostname + ':' + info.udpPort);
-    }
+    const info: unknown = await response.json(); assertOwner();
+    // UDP may be published on its own host (e.g. NLB beside an HTTPS ALB); relays without one keep the API host.
+    const server = response.ok ? agentNetStunServer(api.base, info) : null;
+    if (server) stunServers.push(server);
   } catch { assertOwner(); }
   const workerFile = [path.join(process.resourcesPath ?? '', 'agent-net', 'node-worker.mjs'),
     path.join(app.getAppPath(), 'resources', 'agent-net', 'node-worker.mjs'),
@@ -274,7 +294,7 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
   if (!workerFile) throw new Error('AGENT_NET_WORKER_BUNDLE_MISSING');
   let approver = createDelegationApprover(api, assertOwner, authorizeAgentNetSharingRequest);
   let socket: AgentNetAppSocket;
-  try { socket = await AgentNetWorkerSocket.open({ workerFile, assertCurrent: assertOwner, client: api, module, userId: api.certificate.subject, cachedDirectory, directoryExpiresAt, stunServers,
+  try { socket = await AgentNetWorkerSocket.open({ workerFile, assertCurrent: assertOwner, client: api, module, log: agentNetLog, userId: api.certificate.subject, cachedDirectory, directoryExpiresAt, stunServers,
     scoped: true, onDelegationRequests: requests => approver.update(requests),
     onDirectory(directory) {
       assertOwner();

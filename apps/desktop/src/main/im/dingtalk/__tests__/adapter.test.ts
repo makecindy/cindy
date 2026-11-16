@@ -21,6 +21,11 @@ import {
   dingtalkSessionIdFor,
 } from '../adapter';
 import { DINGTALK_PERSONAL_GROUP_WINDOW } from '../../shared/channelGroupWindow';
+import { setMainLocale } from '../../../i18n.desktop';
+
+// 断言中文控制文案:显式锁定界面语言,结束后还原默认。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 const CONFIG = {
   agentKind: 'claude-code' as const,

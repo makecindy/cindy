@@ -87,6 +87,7 @@ function harness() {
     accessEpoch: id => accessEpochs.get(id) ?? 0,
     subscribe: callback => { changed = callback; return () => { changed = () => {}; }; },
     publish: value => { sources = value; publications.push(value); },
+    pollMs: () => 5_000,
   });
   return { reader, read, publications, get sources() { return sources; },
     changeShares(value: ProviderShareReceived[]) { shares = value; changed(); },

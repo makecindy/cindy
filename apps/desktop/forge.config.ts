@@ -1146,7 +1146,11 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
         dest,
         arch,
         MACOS_REMOTE_DESKTOP_INPUT_DEPLOYMENT_TARGET,
-        [],
+        // Names Cindy in the system owner-verification prompt; identifier unchanged.
+        [
+          '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist',
+          '-Xlinker', path.join(__dirname, 'native', 'remote-desktop', 'macos-input-Info.plist'),
+        ],
         'remote desktop input',
       );
     } finally {
@@ -1749,13 +1753,20 @@ function buildMacMenubarHelper(platform: ForgePlatform, arch: ForgeArch): void {
     }
   }
   fs.mkdirSync(destDir, { recursive: true });
+  // A single-file AppKit tool still needs an application identity for defaults
+  // (including NSStatusItem.autosaveName). Embed it before the normal signing pass.
+  const infoPlistPath = `${dest}.Info.plist`;
+  const infoPlist = fs.readFileSync(path.join(srcDir, 'Info.plist'), 'utf8')
+    .replace('$(PRODUCT_BUNDLE_IDENTIFIER)', `${CINDY_APP_ID}.menubar`);
+  fs.writeFileSync(infoPlistPath, infoPlist, 'utf8');
   buildSwiftHelperForForgeArch(
     src,
     dest,
     arch,
     MACOS_MENUBAR_HELPER_DEPLOYMENT_TARGET,
     // The helper uses @main, which requires library parsing mode.
-    ['-O', '-parse-as-library'],
+    ['-O', '-parse-as-library',
+      '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist', '-Xlinker', infoPlistPath],
     'menu bar helper',
   );
   for (const asset of assets) fs.copyFileSync(path.join(srcDir, asset), path.join(destDir, asset));

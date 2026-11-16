@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { HOST_CONTRACT_CHANNELS } from '../hostChannelContract';
+import { HOST_CONTRACT_CHANNELS, createHostChannelHandlers } from '../hostChannelContract';
 
 describe('HOST_CONTRACT_CHANNELS', () => {
   it('has unique desktop channels and web paths', () => {
@@ -54,4 +54,15 @@ it('preserves the steer projection while accepting legacy Host replies', () => {
   expect(entry.map?.({ ok: true, projection })).toEqual(projection);
   expect(entry.map?.({ ok: true })).toBe(true);
   expect(entry.map?.({ ok: false })).toBe(false);
+});
+
+// Trusted Desktop settings must not silently become privileged Web shim calls.
+// Exercise dispatch, not only channel declarations; no network or timers.
+it('keeps privileged browser settings out of the web adapter', async () => {
+  const requests: string[] = [];
+  const handlers = createHostChannelHandlers(async path => { requests.push(path); return { ok: true }; });
+  expect(handlers['browserBackend.setKind']).toBeUndefined();
+  expect(handlers['browserBackend.openExtensionStore']).toBeUndefined();
+  await handlers['auth.logout']();
+  expect(requests).toEqual(['/api/auth/logout']);
 });

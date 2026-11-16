@@ -6,6 +6,7 @@ vi.mock('@/session/SessionProjectMoveSheet', () => ({
 }));
 vi.mock('@/session/TaskTags', () => ({ TaskTagsPanel: () => <div data-testid="session.testTags" /> }));
 vi.mock('@/session/SessionPrLinks', () => ({ SessionPrLinks: () => null }));
+vi.mock('@/session/SessionMenuPrLinks', () => ({ SessionMenuPrLinks: () => null }));
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";

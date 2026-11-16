@@ -740,7 +740,7 @@ describe('mobile home desktop-first surface', () => {
     const source = readSource('src/session/HomeSurface.tsx');
 
     expect(source).toContain('void loadHome({ visible: false });');
-    expect(source).toMatch(/startBoundedStartupRead\(\s*getCachedHomeListSnapshot\(homeCacheUserId\)/);
+    expect(source).toMatch(/startBoundedStartupRead\(\s*getCachedHomeListState\(homeCacheUserId\)/);
     expect(source).toContain('await syncInFlightRef.current;');
     expect(source).toMatch(/startBoundedStartupRead\(\s*loadDeviceIdentityCache\(\)/);
     expect(source).toMatch(/startBoundedStartupRead<HomeViewPreferences \| null>\(\s*readHomeViewPreferences\(preferenceOwnerRef\.current\)/);
@@ -787,7 +787,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('collectFreshPresenceDeviceIds(presenceFreshnessRef.current, presenceEpochAtFetchStart)');
     expect(source).toContain('progressViewOffset={residentList.enabled ? 0 : chromeHeight}');
     // 下拉刷新与同步按钮都走可见的 loadHome,并一起刷新伙伴段。
-    expect(source).toMatch(/const refreshHome = useCallback\(\(\) => \{\n    void loadHome\(\{ visible: true \}\);/);
+    expect(source).toMatch(/const refreshHome = useCallback\(\(\) => \{\n    const owner = accountGeneration;\n    const scope = displayOrderScopeRef.current;\n    void loadHome\(\{ visible: true \}\)\.then/);
     expect(source).toContain('onRefresh={refreshHome}');
     expect(source).toContain('onPress={refreshHome}');
     expect(source).toContain('patchDeviceViewsWithPresence(');

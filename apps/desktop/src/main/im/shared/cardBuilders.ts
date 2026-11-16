@@ -40,6 +40,7 @@ import {
   MAX_PLAN_LEN,
 } from './interactionCardModel';
 import type { ControlProject, ControlSession, RecentControlSession } from './controlProjects';
+import { projectToken } from './projectToken';
 
 /** IM 卡片文本截断(实现见 interactionCardModel.truncateBlock)。 */
 const truncate = truncateBlock;
@@ -191,7 +192,7 @@ export function createCardBuilders(
       type: 'primary',
       payload: { requestId: args.requestId },
     });
-    return { title, body: bodyLines.join('\n\n'), buttons };
+    return { title, body: bodyLines.join('\n\n'), buttons, buttonLayout: 'list' };
   }
 
   return {
@@ -281,6 +282,7 @@ export function createCardBuilders(
       return {
         title: ui.cards.ask.title(headerText),
         body: bodyExtra || ' ',
+        buttonLayout: 'list',
         buttons: model.choices.map((choice) => ({
           id: 'ask:pick',
           label: truncate(choice.label ?? '', BTN_LABEL_MAX),
@@ -333,6 +335,7 @@ export function createCardBuilders(
 
       return {
         title: ui.cards.model.title,
+        buttonLayout: 'list',
         body:
           ui.cards.model.currentLine(currentLabel, currentEffort, '') +
           `\n\n${ui.cards.model.hint}`,
@@ -429,6 +432,7 @@ export function createCardBuilders(
       return {
         title: ui.cards.control.title,
         body: bodyPrefix + ui.cards.control.hint,
+        buttonLayout: 'list',
         buttons: [
           ...projects.map((p) => ({
             id: 'control:pick',
@@ -501,6 +505,7 @@ export function createCardBuilders(
       return {
         title: ui.cards.control.sessionPickerTitle(displayName),
         body: ui.cards.control.sessionPickerHint,
+        buttonLayout: 'list',
         buttons: [
           ...sessions.map((s) => ({
             id: 'control:session-pick',
@@ -546,6 +551,7 @@ export function createCardBuilders(
       return {
         title: recentUi.title,
         body: recentUi.hint,
+        buttonLayout: 'list',
         buttons: [
           ...sessions.map((s) => ({
             id: 'control:session-pick',
@@ -599,15 +605,17 @@ export function createCardBuilders(
       return {
         title: projectUi.title,
         body: projectUi.hint(currentName),
+        buttonLayout: 'list',
         buttons: [
           ...projects.map((p) => ({
             id: 'project:pick',
             label: truncate(p.displayName, 30),
             type: 'default' as const,
+            // 只带不透明标记, 不带本机路径(见 projectToken.ts); 回调时按当前项目清单找回目录。
             payload: {
-              requestId: `project-pick:${p.workingDir}`,
+              requestId: `project-pick:${projectToken(p.workingDir)}`,
               botAppId,
-              workingDir: p.workingDir,
+              projectToken: projectToken(p.workingDir),
               displayName: p.displayName,
             },
           })),

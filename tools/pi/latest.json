@@ -1,38 +1,38 @@
 {
-  "version": "1.5.0",
-  "tag_name": "v1.5.0",
-  "name": "v1.5.0",
-  "published_at": "2026-11-02T11:05:31Z",
+  "version": "1.5.2",
+  "tag_name": "v1.5.2",
+  "name": "v1.5.2",
+  "published_at": "2026-11-10T12:25:43Z",
   "runtimeAssets": {
     "darwin-arm64": {
-      "url": "https://github.com/earendil-works/pi/releases/download/v1.5.0/pi-darwin-arm64.tar.gz",
-      "sha256": "a9bf0d82d58d2a7d337f4ae4171b5fc9ebffe42509527a831364c4b65adf2cdf",
-      "size": 48027930
+      "url": "https://github.com/earendil-works/pi/releases/download/v1.5.2/pi-darwin-arm64.tar.gz",
+      "sha256": "56b5e194d485ced555667b8ba3276157a8272e9ecde9e001e428af80985bdd9b",
+      "size": 48068183
     },
     "darwin-x64": {
-      "url": "https://github.com/earendil-works/pi/releases/download/v1.5.0/pi-darwin-x64.tar.gz",
-      "sha256": "f41b26cd9a1754abe259e05a421fb33b00936779cb0783c893a6389d1bd2ee0d",
-      "size": 50541720
+      "url": "https://github.com/earendil-works/pi/releases/download/v1.5.2/pi-darwin-x64.tar.gz",
+      "sha256": "f997a088613514ac97d913aeea7642094d84fe6d46854ff7e64e2c12e536dc50",
+      "size": 50580945
     },
     "linux-x64": {
-      "url": "https://github.com/earendil-works/pi/releases/download/v1.5.0/pi-linux-x64.tar.gz",
-      "sha256": "df870ba0e344cb7b3358d8d8f19397b8b8d225a8669784736ad68a5c2169d53b",
-      "size": 58876253
+      "url": "https://github.com/earendil-works/pi/releases/download/v1.5.2/pi-linux-x64.tar.gz",
+      "sha256": "811c6f2c9e7aaee252b5404252e556fb713aa209c1f7f924226aa77d4ef70cb5",
+      "size": 58922566
     },
     "linux-arm64": {
-      "url": "https://github.com/earendil-works/pi/releases/download/v1.5.0/pi-linux-arm64.tar.gz",
-      "sha256": "5d5711b48600756473682e86360b026b11abf7591e5d112eb411d4da2c100d9a",
-      "size": 58742522
+      "url": "https://github.com/earendil-works/pi/releases/download/v1.5.2/pi-linux-arm64.tar.gz",
+      "sha256": "42805cd5615952fcbbfc9c56b04f8feb84395134952e169a6cdc8d7676975666",
+      "size": 58790707
     },
     "win32-x64": {
-      "url": "https://github.com/earendil-works/pi/releases/download/v1.5.0/pi-windows-x64.zip",
-      "sha256": "12d58a70e80b16ba9f764950b7a42bdeb07959495c0db68396cf2988c0b71af3",
-      "size": 61890147
+      "url": "https://github.com/earendil-works/pi/releases/download/v1.5.2/pi-windows-x64.zip",
+      "sha256": "e6adb8cb8c84eca14391ad24b363de9d2be98a89ca3ba3fdee1fa4de32b7f2e8",
+      "size": 61940631
     },
     "win32-arm64": {
-      "url": "https://github.com/earendil-works/pi/releases/download/v1.5.0/pi-windows-arm64.zip",
-      "sha256": "9843e4241b6935a85d49b704562cdcb6fdc78a8ec643410f32b3876a87414283",
-      "size": 56568696
+      "url": "https://github.com/earendil-works/pi/releases/download/v1.5.2/pi-windows-arm64.zip",
+      "sha256": "e83404bc5a6003ac950683edd9b6cf499dac91ec890d8439a8c32528de534a77",
+      "size": 56616843
     }
   }
 }

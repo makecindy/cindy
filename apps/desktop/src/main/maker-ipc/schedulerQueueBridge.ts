@@ -1,6 +1,7 @@
 import type { AgentInputCoordinator } from './agent-input-coordinator.js';
 import type { SessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import type { SchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
+import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 
 export interface SchedulerQueuedPromptRequest {
   sessionId: string;
@@ -15,6 +16,8 @@ export interface SchedulerQueuedPromptRequest {
   onPreparing?: () => Promise<void>;
   /** Reject the queued run if preparation fails before dispatch. */
   onPreparationFailed?: (error: unknown) => void;
+  /** The row exists but preparation/send failed; recovering retains this run. */
+  onPersistedFailure?: (message: string, recovering: boolean) => void;
   /** 排队项被 drain 派发、turn 已被会话接受时回调(等价直发路径的 send onAccepted)。 */
   onAccepted: (queuedPermissions?: { permissionMode?: string; planMode?: boolean }) => void | Promise<void>;
   /** 派发已 accept 但最终未成为运行 turn(取消/回滚)时回调。 */
@@ -33,21 +36,27 @@ export type SchedulerEnqueueResult = { clientId: string } | { duplicate: true } 
 export interface SchedulerQueueBridge {
   ensureQueueRestored(sessionId: string): Promise<boolean>;
   isSessionBusy(sessionId: string): boolean;
+  /** Actual accepted work, including preparing and recovery, independent of admission locks. */
+  hasPendingInput(sessionId: string): boolean;
   hasQueuedPrompt(sessionId: string, scheduleId: string): boolean;
   enqueuePrompt(req: SchedulerQueuedPromptRequest): Promise<SchedulerEnqueueResult>;
   removeQueuedPrompt(sessionId: string, clientId: string): void;
   /** 排队项(含派发中 / 可重试 recovery)是否仍被 coordinator 跟踪 —— runner 派发等待的存活探测。 */
   isPromptTracked(sessionId: string, clientId: string): boolean;
+  recoverySourceClientId(sessionId: string, item: AgentInputQueuedMessage): string | undefined;
+  onPersistedSendRejected(sessionId: string, message: string, item?: AgentInputQueuedMessage, recovering?: boolean): void;
+  releasePrompt(sessionId: string, clientId: string): void;
 }
 
 interface SchedulerQueueBridgeDeps<Meta> {
-  coordinator: Pick<AgentInputCoordinator, 'ensureQueueRestored' | 'isQueueRestored' | 'isQueuePaused' | 'hasQueuedItemWhere' | 'remove'>;
+  coordinator: Pick<AgentInputCoordinator, 'ensureQueueRestored' | 'isQueueRestored' | 'isQueuePaused' | 'hasPendingQueuedWork' | 'hasQueuedItemWhere' | 'remove'>;
   isSessionBusy(sessionId: string): boolean;
   getSessionMeta(sessionId: string): Promise<Meta | null>;
   getSessionRowSnapshot(sessionId: string): Promise<SessionRowSnapshot | null>;
   createId(): string;
   discardWatchers: Map<string, () => void>;
   preparations: Map<string, SchedulerQueuedPreparation>;
+  discardAcceptedCallback?(clientId: string): void;
   enqueue(req: {
     targetSessionId: string; message: string; persistedContent: string; clientId: string;
     inheritTargetPlanMode?: boolean; meta: NonNullable<Meta>; dbRow: SessionRowSnapshot;
@@ -62,8 +71,38 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
   const inputCoordinator = deps.coordinator;
   const schedulerQueuedPromptDiscardWatchers = deps.discardWatchers;
   const schedulerQueuedPromptPreparations = deps.preparations;
+  // Callback ownership only; recovery and its lifetime remain in the coordinator.
+  const awaitingAcceptance = new Map<string, SchedulerQueuedPromptRequest>();
+  const recoverySourceClientId = (sessionId: string, item: AgentInputQueuedMessage): string | undefined => {
+    if (!item.autoResume || !item.retrySourceClientId || item.origin?.kind !== 'scheduler') return;
+    const req = awaitingAcceptance.get(item.retrySourceClientId);
+    if (req?.sessionId === sessionId && req.origin.runId && req.origin.runId === item.origin.runId
+      && req.origin.scheduleId === item.origin.scheduleId) return item.retrySourceClientId;
+  };
+  const releasePrompt = (sessionId: string, clientId: string): void => {
+    if (awaitingAcceptance.get(clientId)?.sessionId !== sessionId) return;
+    awaitingAcceptance.delete(clientId);
+    schedulerQueuedPromptDiscardWatchers.delete(clientId);
+    schedulerQueuedPromptPreparations.delete(clientId);
+    // A timeout may race an original active send: keep its cancellation gate.
+    if (!inputCoordinator.hasQueuedItemWhere(sessionId, item => item.clientId === clientId, { includeRecovery: true })) {
+      deps.discardAcceptedCallback?.(clientId);
+    }
+  };
   return {
+    recoverySourceClientId,
+    releasePrompt,
+    onPersistedSendRejected: (sessionId, message, item, recovering = false) => {
+      if (!item) return;
+      const clientId = recoverySourceClientId(sessionId, item) ?? item.clientId;
+      const req = awaitingAcceptance.get(clientId);
+      if (req?.sessionId !== sessionId) return;
+      req.onPersistedFailure?.(message, recovering);
+      if (!recovering) releasePrompt(sessionId, clientId);
+    },
     isSessionBusy: deps.isSessionBusy,
+    hasPendingInput: sessionId => inputCoordinator.hasPendingQueuedWork(sessionId)
+      || inputCoordinator.hasQueuedItemWhere(sessionId, () => true, { includeRecovery: true }),
     ensureQueueRestored: async (sessionId) => {
       await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
       return inputCoordinator.isQueueRestored(sessionId);
@@ -112,13 +151,19 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
         return { duplicate: true as const };
       }
       const clientId = deps.createId();
-      if (req.onDiscarded) {
-        schedulerQueuedPromptDiscardWatchers.set(clientId, req.onDiscarded);
-      }
+      awaitingAcceptance.set(clientId, req);
+      schedulerQueuedPromptDiscardWatchers.set(clientId, () => {
+        awaitingAcceptance.delete(clientId);
+        req.onDiscarded?.();
+      });
       if (req.onPreparing) {
         schedulerQueuedPromptPreparations.set(clientId, {
           onPreparing: req.onPreparing,
-          onPreparationFailed: req.onPreparationFailed,
+          onPreparationFailed: error => {
+            awaitingAcceptance.delete(clientId);
+            deps.discardAcceptedCallback?.(clientId);
+            req.onPreparationFailed?.(error);
+          },
         });
       }
       try {
@@ -130,11 +175,17 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
           clientId,
           meta,
           dbRow,
-          onAccepted: req.onAccepted,
+          onAccepted: async permissions => {
+            awaitingAcceptance.delete(clientId);
+            schedulerQueuedPromptDiscardWatchers.delete(clientId);
+            schedulerQueuedPromptPreparations.delete(clientId);
+            await req.onAccepted(permissions);
+          },
           onAcceptedRollback: req.onAcceptedRollback,
           origin: req.origin,
         });
       } catch (err) {
+        awaitingAcceptance.delete(clientId);
         schedulerQueuedPromptDiscardWatchers.delete(clientId);
         schedulerQueuedPromptPreparations.delete(clientId);
         throw err;
@@ -146,11 +197,9 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
       // (runner abort 路径)对此已有兜底(转 session.abort)。
       inputCoordinator.remove(sessionId, clientId);
     },
-    // 存活探测刻意**不含** recovery:项转入 active-turn recovery 后,Retry 走
-    // "克隆已受理 turn"路径,不会再触发 onAcceptedQueuedMessage,排队方注册的
-    // 回调永远等不到 —— 视为不存活,让 runner 的 run 以失败收口而非永久挂起。
     isPromptTracked: (sessionId, clientId) =>
-      inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId),
+      inputCoordinator.hasQueuedItemWhere(sessionId, item => item.clientId === clientId
+        || recoverySourceClientId(sessionId, item) === clientId, { includeRecovery: true }),
   };
 
 }

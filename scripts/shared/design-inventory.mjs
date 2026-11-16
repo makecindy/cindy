@@ -1556,6 +1556,7 @@ export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces())
     ['splash-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED preview; not production UI'],
     ['group-execution-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED group execution fixture; not production UI'],
     ['plugin-management-preview.tsx', 'gated plugin settings visual fixture; not production UI'],
+    ['plugin-preview-regression.tsx', 'MOBILE_VISUAL_MOCK_ENABLED card preview fixture; not production UI'],
     ['listperf.tsx', '__DEV__ list performance harness; not production UI'],
   ]);
   const owners = new Map(catalog.flatMap(s => (s.mobileRoutes ?? []).map(r => [r, s.id])));
@@ -1565,7 +1566,7 @@ export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces())
     const source = stripJsComments(fs.readFileSync(path.join(repoRoot, ...file.split('/')), 'utf8'));
     if (excluded.has(route)) {
       // Keep dev exclusions honest: removing their gate cannot silently hide a screen.
-      if ((route === 'splash-preview.tsx' || route === 'group-execution-preview.tsx') &&
+      if ((route === 'splash-preview.tsx' || route === 'group-execution-preview.tsx' || route === 'plugin-preview-regression.tsx') &&
         !source.includes('if (!MOBILE_VISUAL_MOCK_ENABLED)')) missing.push(file);
       if (route === 'plugin-management-preview.tsx' &&
         (!source.includes('if (!MOBILE_VISUAL_MOCK_ENABLED && !demosEnabled)') ||

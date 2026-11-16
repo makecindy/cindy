@@ -3,9 +3,9 @@
   "status": "frozen",
   "profileId": "cindy-production-pi",
   "profileFile": "profile.example.json",
-  "profileFileSha256": "c7075816984220be3f21b226c686d5f3a5ffc529ee919a71de1d604013b597e0",
-  "profileDigest": "57c34e1c42a59fb5ad667ce3e5eb0b3ce6fb94dd489c5c9599945b0ea98cefd6",
-  "systemPromptDigest": "8c30f6d0acb69279f7cfaa172366c0f9071f70dd80f4c3de1a32cdd9d2e20772",
-  "agentBinaryVersion": "1.5.0",
+  "profileFileSha256": "7cc0829a1f262fc378d3e733d81120f78227c9ebba078f0e72de8764aa031f9a",
+  "profileDigest": "e7604113ac42937ea081884e052c2fc19b42451255dfd8a1311e20f5a6887c2a",
+  "systemPromptDigest": "aee51802ca84a81eab8ffb1b90291d5d74f1156a53c089637b1f4cd2a8769c76",
+  "agentBinaryVersion": "1.5.2",
   "cindyUpstreamCommit": "fa3fc88d37d205ea993a67d85612fa9a5436fae5"
 }

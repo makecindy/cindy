@@ -25,6 +25,19 @@ describe('dispatched model boundaries', () => {
       fromModel: 'owner-model', toModel: 'automation-model', modelOnly: true,
     });
   });
+  // Unit regression: fallback resumes use hidden UI triggers; the former
+  // dispatch gate skipped their model boundary even after a successful switch.
+  it.each([true, false])('records a hidden recovery dispatch only when autoResume=%s', async (autoResume) => {
+    const publish = vi.fn(async () => {});
+    const record = vi.fn(async () => true);
+    await recordTurnModelChange({ ...previous, model: 'backup-model' }, {
+      input: { content: '[UI_ACTION_TRIGGER] Continue.', autoResume },
+      readPrevious: async () => previous, record, publish,
+    });
+    expect(record).toHaveBeenCalledTimes(autoResume ? 1 : 0);
+    expect(publish.mock.calls).toEqual(autoResume
+      ? [[{ fromModel: 'owner-model', toModel: 'backup-model', modelOnly: true }]] : []);
+  });
   it('does not publish a separator when its input disappeared before persistence', async () => {
     const publish = vi.fn(async () => {});
     await recordTurnModelChange({ ...previous, model: 'other' }, {

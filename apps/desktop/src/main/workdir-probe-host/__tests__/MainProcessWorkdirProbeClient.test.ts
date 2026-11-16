@@ -144,4 +144,30 @@ describe('MainProcessWorkdirProbeClient', () => {
     resolveSlow({ isDirectory: () => true });
     await Promise.resolve();
   });
+
+  // #10553, unit tier: path-only deduplication would couple recovery generations.
+  it('keeps guarded writes independent while preserving the shared I/O limit', async () => {
+    const slot = Promise.withResolvers<{ isDirectory(): boolean }>();
+    const mkdir = vi.fn(async () => {});
+    const client = new MainProcessWorkdirProbeClient({
+      log, maxInFlight: 1,
+      fs: { stat: () => slot.promise, mkdir, realpath: async (dir) => dir, readdir: async () => [] },
+    });
+    let current = true;
+    const blocker = client.probe('/busy', '/busy', 5_000);
+    const stale = client.probe('/project', '/project', 5_000, 'mkdir', () => current);
+    current = false;
+    const replacement = client.probe('/project', '/project', 5_000, 'mkdir', () => true);
+    try {
+      expect(mkdir).not.toHaveBeenCalled();
+      slot.resolve({ isDirectory: () => true });
+      await expect(stale).resolves.toEqual({ ok: false, code: 'WORKDIR_PROBE_UNAVAILABLE' });
+      await expect(replacement).resolves.toEqual({ ok: true, isDirectory: true });
+      expect(mkdir).toHaveBeenCalledExactlyOnceWith('/project');
+    } finally {
+      slot.resolve({ isDirectory: () => true });
+      client.dispose();
+      await blocker;
+    }
+  });
 });

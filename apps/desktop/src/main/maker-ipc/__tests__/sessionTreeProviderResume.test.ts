@@ -1,3 +1,6 @@
+import { createSessionOptionsReconciler } from '../sessionOptionsReconciler.js';
+import { hydrateProviderIdBeforeSessionStart } from '../sessionProviderBootstrap.js';
+import type { MakerSessionCreateOpts } from '../sessionRequest.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -57,22 +60,21 @@ describe('Pi session-tree lazy resume provider route', () => {
     expect(lazyResume).toContain('bootstrapSession(createOpts, assertCurrent, true)');
   });
 
-  it('keeps the same three-state route contract across every persisted-session bootstrap', () => {
-    const preHydrate = sourceBetween(
-      'async function hydrateProviderIdBeforeSessionStart',
-      'async function markOrcaRoleIfNeeded',
-    );
-    const reconcile = sourceBetween(
-      'async function reconcileCreateOptsAgainstDb',
-      'const agentSwitchDeps:',
-    );
+  it('keeps the same three-state route contract across every persisted-session bootstrap', async () => {
     const queued = sourceBetween(
       'async function buildCreateOptsForQueuedSession',
       'async function enqueueSendToSessionMessage',
     );
 
-    expect(preHydrate).toContain('o.providerId = row.providerId?.trim() || null;');
-    expect(reconcile).toContain('co.providerId = row.providerId;');
+    for (const providerId of [null, undefined, 'selected-provider']) {
+      const options: { id: string; providerId?: string | null } = { id: 'task' };
+      await hydrateProviderIdBeforeSessionStart(options, async () => providerId);
+      expect(options.providerId).toBe(providerId);
+      const co = { agentKind: 'pi', providerId: 'stale' } as MakerSessionCreateOpts;
+      await createSessionOptionsReconciler({ log: { warn() {} },
+        readSession: async () => ({ model: 'm', agentKind: 'pi', providerId }) })('task', co);
+      expect(co.providerId).toBe(providerId);
+    }
     expect(queued).toContain('providerId: row.providerId,');
     expect(registerSource).toContain('providerId: row?.providerId,');
     expect(registerSource).toContain('providerId: inherited.providerId,');

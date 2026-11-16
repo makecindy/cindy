@@ -1,4 +1,4 @@
-import { pickModelMetadata, MODEL_METADATA_FIELDS, validDiscoveredModelSource } from '@cindy/model-providers';
+import { pickModelMetadata, MODEL_METADATA_FIELDS, PROVIDER_VIDEO_APIS, isProviderVideoApi, validDiscoveredModelSource } from '@cindy/model-providers';
 import {
   mergeDiscoveredRuntimeModels,
   validModelMetadata,
@@ -234,8 +234,8 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
   if (r.imageApi !== undefined && r.imageApi !== 'openai-images') {
     return invalid(`runtime '${agent}' imageApi must be openai-images`);
   }
-  if (r.videoApi !== undefined && r.videoApi !== 'xai-videos') {
-    return invalid(`runtime '${agent}' videoApi must be xai-videos`);
+  if (r.videoApi !== undefined && !isProviderVideoApi(r.videoApi)) {
+    return invalid(`runtime '${agent}' videoApi must be one of ${PROVIDER_VIDEO_APIS.join(', ')}`);
   }
   if (!Array.isArray(r.models)) return invalid(`runtime '${agent}' models must be an array`);
   for (const m of r.models) {
@@ -651,7 +651,7 @@ function normalizeRuntime(
     out.supportsImageGeneration = true;
   }
   if (rt.imageApi === 'openai-images') out.imageApi = rt.imageApi;
-  if (rt.videoApi === 'xai-videos') out.videoApi = rt.videoApi;
+  if (isProviderVideoApi(rt.videoApi)) out.videoApi = rt.videoApi;
   if (agent !== 'pi' && rt.requestPath && rt.requestPath.trim()) {
     out.requestPath = rt.requestPath.trim();
   }
@@ -909,7 +909,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
       entry.supportsImageGeneration = true;
     }
     if (r.imageApi === 'openai-images') entry.imageApi = r.imageApi;
-    if (r.videoApi === 'xai-videos') entry.videoApi = r.videoApi;
+    if (isProviderVideoApi(r.videoApi)) entry.videoApi = r.videoApi;
     if (agent !== 'pi' && isProviderRequestPath(r.requestPath)) {
       entry.requestPath = r.requestPath;
     }

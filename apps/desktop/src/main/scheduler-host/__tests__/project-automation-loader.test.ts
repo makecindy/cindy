@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 
-import type { CreateScheduleInput, Schedule } from '@cindy/maker-scheduler';
+import { Scheduler, type CreateScheduleInput, type Schedule, type ScheduleStorage } from '@cindy/maker-scheduler';
 
 import {
   __testing,
@@ -15,6 +15,166 @@ import { scheduleCreateToRow, schedulePatchToRow, scheduleToCamel } from '../../
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../../shared/projectAutomationPaths';
 
 const workingDir = 'C:\\project';
+
+// #10520 / unit: real loader and Scheduler CRUD, with in-memory disk/storage so
+// an event-loop turn drains all work except the explicitly held model validation.
+// Existing tests only rejected saves; they never interleaved successful creates
+// or permanent project deletion with an unfinished create.
+async function withConcurrentProject(
+  run: (h: {
+    dir: string;
+    loader: ProjectAutomationLoader;
+    stored: Map<string, Schedule>;
+    validate: ReturnType<typeof vi.fn<(schedule: Schedule) => Promise<void>>>;
+    setDeleted: () => void;
+    files: Map<string, string>;
+    fileKey: (file: string) => string;
+  }) => Promise<void>,
+): Promise<void> {
+  const dir = await fs.mkdtemp(path.join(tmpdir(), 'cindy-project-concurrency-'));
+  const fileKey = (file: string) => process.platform === 'win32'
+    ? path.resolve(file).toLowerCase() : path.resolve(file);
+  const files = new Map([[fileKey(path.join(dir, ...PROJECT_AUTOMATION_REL_SEGMENTS)),
+    JSON.stringify({ version: 1, schedules: [projectConfig()] })]]);
+  const stored = new Map<string, Schedule>();
+  const validate = vi.fn<(schedule: Schedule) => Promise<void>>().mockResolvedValue();
+  const storage = {
+    list: async () => [...stored.values()].map((s) => ({ ...s })),
+    get: async (id: string) => stored.has(id) ? { ...stored.get(id)! } : null,
+    insert: async (schedule: Schedule) => { stored.set(schedule.id, { ...schedule }); return schedule; },
+    update: async (id: string, patch: Partial<Schedule>) => {
+      const current = stored.get(id);
+      if (!current) return null;
+      const updated = { ...current, ...patch };
+      stored.set(id, updated);
+      return updated;
+    },
+    delete: async (id: string) => { stored.delete(id); },
+  };
+  let id = 0;
+  const scheduler = new Scheduler({
+    storage: storage as ScheduleStorage,
+    runner: { fire: vi.fn() },
+    generateId: () => `schedule-${++id}`,
+    validateModelSelection: validate,
+  });
+  let deleted = false;
+  const loader = new ProjectAutomationLoader({
+    scheduler,
+    storage: storage as ConstructorParameters<typeof ProjectAutomationLoader>[0]['storage'],
+    getDb: () => ({
+      select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
+      insert: () => ({ values: () => ({ onConflictDoUpdate: async () => {} }) }),
+    }) as unknown as ReturnType<ConstructorParameters<typeof ProjectAutomationLoader>[0]['getDb']>,
+    logger: { warn: vi.fn() },
+    getTeammateProjectState: async (folder: string) => fileKey(folder) === fileKey(dir)
+      ? deleted ? 'deleted' as const : 'active' as const : null,
+  });
+  try {
+    vi.spyOn(fs, 'stat').mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+    vi.spyOn(fs, 'readFile').mockImplementation(async (file) => {
+      const content = files.get(fileKey(String(file)));
+      if (content === undefined) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      return content;
+    });
+    vi.spyOn(fs, 'mkdir').mockResolvedValue(undefined);
+    vi.spyOn(fs, 'writeFile').mockImplementation(async (file, content) => { files.set(fileKey(String(file)), String(content)); });
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      files.set(fileKey(String(to)), files.get(fileKey(String(from)))!);
+      files.delete(fileKey(String(from)));
+    });
+    vi.spyOn(fs, 'rm').mockImplementation(async (file) => { files.delete(fileKey(String(file))); });
+    await run({ dir, loader, stored, validate, setDeleted: () => { deleted = true; }, files, fileKey });
+  } finally {
+    vi.restoreAllMocks();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+function deferredValidation() {
+  let entered!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  return { started, release, validate: async () => { entered(); await pending; } };
+}
+
+describe('project automation concurrent mutations', () => {
+  it.each(['upsert', 'reconcile'].flatMap((first) =>
+    ['upsert', 'reconcile'].map((second) => ({ first, second }))))(
+    'creates one schedule for concurrent $first / $second', async ({ first, second }) => {
+      await withConcurrentProject(async ({ dir, loader, stored, validate }) => {
+        const gate = deferredValidation();
+        validate.mockImplementationOnce(gate.validate);
+        const invoke = (kind: string, folder: string) => kind === 'upsert'
+          ? loader.upsertSchedule(folder, projectConfig()) : loader.reconcile(folder);
+        const saving = invoke(first, dir);
+        await gate.started;
+        const alias = process.platform === 'win32' ? dir.toUpperCase() + path.sep : dir + path.sep;
+        const concurrent = invoke(second, alias);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        gate.release();
+        const results = await Promise.all([saving, concurrent]);
+        expect([...stored.values()]).toHaveLength(1);
+        expect([...stored.values()][0]).toMatchObject({ source: 'project', projectConfigId: 'daily', status: 'active' });
+        expect(results.reduce((sum, result) => sum + result.inserted, 0)).toBe(1);
+      });
+    },
+  );
+
+  it.each(['upsert', 'reconcile'])('drains an in-flight %s before deleting only that project', async (kind) => {
+    await withConcurrentProject(async ({ dir, loader, stored, validate, setDeleted, files, fileKey }) => {
+      const gate = deferredValidation();
+      validate.mockImplementationOnce(gate.validate);
+      const saving = kind === 'upsert' ? loader.upsertSchedule(dir, projectConfig()) : loader.reconcile(dir);
+      await gate.started;
+      // Another project can progress while this one's model validation waits.
+      const otherDir = path.join(dir, 'other-project');
+      await loader.upsertSchedule(otherDir, projectConfig());
+      stored.set('user-schedule', { ...projectSchedule({ desktop: false, feishu: false }), id: 'user-schedule', workingDir: dir, source: 'user' });
+      const queuedDiscovery = loader.reconcile(dir);
+      const queuedSave = expect(loader.upsertSchedule(dir, projectConfig({ id: 'late' })))
+        .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      setDeleted(); // The lifecycle deletes the profile before calling this cleanup entry.
+      const deleting = loader.deleteProjectSchedules(dir);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      gate.release();
+      await saving;
+      await queuedSave;
+      expect(await queuedDiscovery).toMatchObject({ inserted: 0, updated: 0, deleted: 0 });
+      expect(await deleting).toBe(1);
+      expect([...stored.values()].map((s) => s.id)).toEqual(['schedule-2', 'user-schedule']);
+      // Even if folder cleanup has not finished, late writers cannot recreate it.
+      const alias = process.platform === 'win32' ? dir.toUpperCase() : dir;
+      await expect(loader.upsertSchedule(alias, projectConfig())).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      expect(await loader.reconcile(dir)).toMatchObject({ inserted: 0, updated: 0, deleted: 0 });
+      expect(stored.size).toBe(2);
+      expect(files.has(fileKey(path.join(otherDir, ...PROJECT_AUTOMATION_REL_SEGMENTS)))).toBe(true);
+    });
+  });
+
+  it('keeps both concurrent file edits and allows an ordinary project to be imported again', async () => {
+    await withConcurrentProject(async ({ dir, loader, stored, validate }) => {
+      const ordinary = path.join(dir, 'ordinary');
+      const gate = deferredValidation();
+      validate.mockImplementationOnce(gate.validate);
+      const first = loader.upsertSchedule(ordinary, projectConfig());
+      await gate.started;
+      const second = loader.upsertSchedule(ordinary, projectConfig({ id: 'second' }));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      gate.release();
+      await Promise.all([first, second]);
+      expect((await loader.loadProjectSchedules(ordinary))?.map((config) => config.id)).toEqual(['daily', 'second']);
+      expect(await loader.deleteProjectSchedules(ordinary)).toBe(2);
+      expect(stored.size).toBe(0);
+      const preview = await loader.reconcile(ordinary);
+      expect(preview.pendingImport?.schedules).toHaveLength(2);
+      expect(stored.size).toBe(0);
+      expect(await loader.reconcile(ordinary, preview.pendingImport!.configHash)).toMatchObject({ inserted: 2 });
+      expect(stored.size).toBe(2);
+    });
+  });
+});
 
 // #8237, unit: actual disk -> loader -> scheduler inputs. Existing reconciliation
 // tests did not distinguish repository discovery from an explicit editor save.
@@ -118,7 +278,7 @@ describe('project automation import approval', () => {
           insert: () => ({ values: () => ({ onConflictDoUpdate: async () => {} }) }),
         }) as unknown as ReturnType<ConstructorParameters<typeof ProjectAutomationLoader>[0]['getDb']>,
         logger: { warn: vi.fn(), debug: vi.fn() },
-        isOwnTeammateProject: async (workingDir) => workingDir === dir,
+        getTeammateProjectState: async (workingDir) => path.relative(workingDir, dir) === '' ? 'active' : null,
       });
       for (const folder of [dir, lookalike]) {
         const file = path.join(folder, ...PROJECT_AUTOMATION_REL_SEGMENTS);
@@ -340,19 +500,24 @@ describe('project automation provider reconciliation', () => {
         await validating;
         // Cache the pending write too: a skipped restoration must invalidate this read.
         await loader.loadProjectSchedules(dir);
-        if (change === 'save') await loader.upsertSchedule(dir, projectConfig({ id: 'other' }));
-        else if (change === 'remove') await loader.removeSchedule(dir, 'daily');
+        // Loader writes now wait behind validation; raw disk edits remain external.
+        let later: Promise<unknown> | undefined;
+        if (change === 'save') later = loader.upsertSchedule(dir, projectConfig({ id: 'other' }));
+        else if (change === 'remove') later = loader.removeSchedule(dir, 'daily');
         else if (change === 'edit') await fs.writeFile(file, '{editing in progress');
         else await fs.rm(file);
         const latest = change === 'delete-file' ? null : await fs.readFile(file, 'utf8');
         reject(new Error('model unavailable'));
         await rejected;
-        if (latest === null) await expect(fs.access(file)).rejects.toThrow();
+        await later;
+        const expected = change === 'save'
+          ? [...(existing ? [projectConfig()] : []), projectConfig({ id: 'other' })]
+          : change === 'remove' ? existing ? [] : null : null;
+        if (later) expect(await loader.loadProjectSchedules(dir)).toEqual(expected);
+        else if (latest === null) await expect(fs.access(file)).rejects.toThrow();
         else expect(await fs.readFile(file, 'utf8')).toBe(latest);
         expect((await fs.readdir(path.dirname(file))).filter((name) => name.includes('.tmp.'))).toEqual([]);
-        expect(await loader.loadProjectSchedules(dir)).toEqual(
-          change === 'edit' || change === 'delete-file' ? null : JSON.parse(latest!).schedules,
-        );
+        if (!later) expect(await loader.loadProjectSchedules(dir)).toBeNull();
         if (change === 'save') expect(stored.find((s) => s.projectConfigId === 'other')).toBeDefined();
         if (change === 'remove') expect(stored).toHaveLength(0);
       } finally {

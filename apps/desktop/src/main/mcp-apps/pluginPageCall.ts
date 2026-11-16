@@ -10,9 +10,11 @@ export interface PluginPageCall {
   onProgress?: (progress: PluginPageProgress) => void;
   instance: string;
   revision: string;
-  sessionId: string;
+  sessionId: string | null;
   clientId: string;
   tool: string;
+  /** Native File bytes copied by Main; the plugin receives only the normal handoff. */
+  attachmentBytes?: Uint8Array;
   assertCurrent(): Promise<void>;
 }
 
