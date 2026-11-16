@@ -707,3 +707,75 @@ describe('the Host\'s grouping of AgentDeps ports by the engines that read them'
     expect(ports.filter(port => readers.get(port)!.size === 0)).toEqual([]);
   });
 });
+
+// 测试价值
+// - 生产入口与可观察结果：桌面的 XD 报价投影（usage/modelPricing.ts）与账本币种存储
+//   （usage/accountCurrencyStore.ts）。这两个壳在模块加载时各建一个工厂实例，桌面的用量记账、价格显示
+//   与币种读写都经这一个实例。
+// - 规则依据：放行表第 13 行 3a（7727009edb）。这次把 modelPricing / accountCurrencyStore 的模块级状态
+//   （内存报价、磁盘缓存作用域、在途同步、当前账号与币种）搬进 createModelPricing /
+//   createAccountCurrencyStore。搬移前后等价的前提是，整个桌面进程里各只有一个实例。
+// - 现有覆盖缺口：modelPricing.test.ts 与 accountCurrencyStore.test.ts 只测壳建出的那个实例，测不到
+//   别处再建一个。这是算钱的代码：第二个实例有自己的报价与币种，按它记的账会悄悄用旧价或错币种，
+//   而且没有测试会失败。
+// - 最小失败输入：桌面生产代码（apps/desktop/src，不含 __tests__、__mocks__、*.test.*、*.spec.*）里任意
+//   一处多出的调用，包括：
+//   - 别名导入；
+//   - 命名空间导入后再调用；
+//   - 把工厂当作值传出去；
+//   - 在壳里的函数体内调用（每调用那个函数一次就多一个实例）。
+// - tier：guard。读生产源码文本，属于跨文件静态契约，不能从生产入口隔离。
+// - 实测耗时：见交付记录。
+describe('the desktop builds one instance of each usage pricing factory', () => {
+  const desktopSrc = path.join(repo, 'apps/desktop/src');
+  const FACTORIES: Record<string, string> = {
+    createModelPricing: 'main/usage/modelPricing.ts',
+    createAccountCurrencyStore: 'main/usage/accountCurrencyStore.ts',
+  };
+  const names = Object.keys(FACTORIES);
+
+  function productionFiles(dir: string, out: string[] = []): string[] {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!['__tests__', '__mocks__', 'node_modules'].includes(entry.name)) productionFiles(full, out);
+      } else if (/\.[cm]?[jt]sx?$/.test(entry.name) && !/\.(test|spec)\.[cm]?[jt]sx?$/.test(entry.name)
+        && !entry.name.endsWith('.d.ts')) {
+        out.push(full);
+      }
+    }
+    return out;
+  }
+
+  it('calls createModelPricing and createAccountCurrencyStore once each, at the top level of their shells', () => {
+    const calls: Record<string, string[]> = Object.fromEntries(names.map(name => [name, []]));
+    const strays: string[] = [];
+    for (const file of productionFiles(desktopSrc)) {
+      const text = read(file);
+      if (!names.some(name => text.includes(name))) continue;
+      const rel = path.relative(desktopSrc, file).split(path.sep).join('/');
+      const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true,
+        /x$/.test(file) ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+      const visit = (node: ts.Node, inFunction: boolean) => {
+        if (ts.isIdentifier(node) && names.includes(node.text)) {
+          const parent = node.parent;
+          const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+          if ((ts.isCallExpression(parent) && parent.expression === node)
+            || (ts.isPropertyAccessExpression(parent) && parent.name === node
+              && ts.isCallExpression(parent.parent) && parent.parent.expression === parent)) {
+            calls[node.text].push(inFunction ? `${rel}:${line} (inside a function)` : rel);
+          } else if ((ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent))
+            && (parent.propertyName === undefined || parent.propertyName.text === parent.name.text)) {
+            // An unrenamed import or re-export: calls through it are counted above.
+          } else if (!(ts.isFunctionDeclaration(parent) && parent.name === node) && !ts.isTypeQueryNode(parent)) {
+            strays.push(`${rel}:${line} ${parent.getText(source).split('\n')[0]}`);
+          }
+        }
+        ts.forEachChild(node, child => visit(child, inFunction || ts.isFunctionLike(node)));
+      };
+      visit(source, false);
+    }
+    expect(strays, 'a factory renamed or passed on as a value').toEqual([]);
+    for (const name of names) expect(calls[name], name).toEqual([FACTORIES[name]]);
+  });
+});
