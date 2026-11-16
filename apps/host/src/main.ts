@@ -26,8 +26,8 @@ import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-ident
 import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.js';
 import { createHostDeviceLink } from './device-link.js';
 import { createHostService } from './service.mjs';
-import { readHostCreateSessionOpts } from './create-session-request.js';
-import { ensureDialogueWorkspaceDir } from '../../desktop/src/main/localDb/dialogueWorkspace.js';
+import { createHostRuntimeSession, type HostRuntimeSessionCreatePorts } from './agent/create-runtime-session.js';
+import { explicitPorts } from './agent/explicit-ports.js';
 import { resolveRuntimeDeviceId } from '../../desktop/src/main/deviceId.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -1040,6 +1040,7 @@ const runtimeSelection = createHostRuntimeSelection({
   createDbMessage: (sessionId, body) => insertSessionMessage(sessionId, body),
   pendingHandoff,
   listProviderViews: async () => (await listProviders({ gateway: currentGateway(), ownerId: runtime.owner })).providers,
+  userDataDir: profileDir,
   resolveConfiguredContextWindow: (...args) => {
     if (!agentGraph) throw new Error('agent runtime is not ready');
     return agentGraph.modelWindow.resolveConfiguredContextWindow(...args);
@@ -1735,26 +1736,12 @@ function startDeviceLink(): void {
     refreshToken: async () => { await refreshAuthSession(); },
     canRegister: () => remoteIdentityReady && account.authenticated && !authClosed,
     invoke: service, subscribe: eventHub.subscribe,
-    createRuntimeSession: async input => {
-      const scope = activeOwnerScopeKey();
-      const opts = readHostCreateSessionOpts(input, ensureDialogueWorkspaceDir);
-      // These routes need separate execution services; never reinterpret a remote
-      // task or Orca worker as an ordinary local task.
-      if (opts.remoteHostId || opts.agentDeviceId || opts.orcaRole)
-        throw new Error('[NOT_SUPPORTED] This execution route is not assembled in the Host yet');
-      const row = await serverDeps.createSession({
-        id: opts.id, agentKind: opts.agentKind, workingDir: opts.workingDir,
-        workspaceKind: opts.workspaceKind, model: opts.model,
-        permissionMode: opts.permissionMode, effort: opts.effort, providerId: opts.providerId,
-        fastMode: opts.fastMode, planModeEnabled: opts.planMode,
-        extraDirs: opts.extraDirs, writableDirs: opts.writableDirs,
-      });
-      if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending() || !agentGraph) throw new Error('Host account changed');
-      const session = await agentGraph.maker.createSession({ ...opts, id: row.id });
-      if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending()) throw new Error('Host account changed');
-      return { sessionId: session.id, agentKind: session.agentKind, workDir: session.workDir,
-        capabilities: session.capabilities, usedProjectContext: false };
-    },
+    // The Device Link create entry, with the runtime start admission (agent/create-runtime-session.ts).
+    createRuntimeSession: input => createHostRuntimeSession(explicitPorts<HostRuntimeSessionCreatePorts>({
+      serverDeps,
+      getAgentGraph: () => agentGraph,
+      admitLocalRoute: opts => runtimeSelection.admitLocalRoute(opts),
+    }), input),
     availabilityPolicy: availabilityPolicy ?? undefined,
     disableShareAvailability,
 

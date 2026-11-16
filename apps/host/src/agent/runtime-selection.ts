@@ -74,9 +74,12 @@ import {
 import { createResolvePendingRuntimeAxisPatch } from '../../../desktop/src/main/maker-ipc/pendingRuntimeAxisPatch.ts';
 import { assertModelRouteUsableWith } from '../../../desktop/src/main/maker-ipc/modelRouteAdmission.ts';
 import {
+  pinExclusiveSessionProviderWithProviders,
   resolveLenientSessionRouteWithProviders,
   verdictForModelRouteWithProviders,
 } from '../../../desktop/src/main/maker-host/model-route-guard-catalog.ts';
+import { createLocalRouteAdmission } from '../../../desktop/src/main/maker-ipc/localRouteAdmission.ts';
+import { hostManagedLocalModelNotReady } from './pi-native-providers.ts';
 import { persistSessionFieldsWith } from '../../../desktop/src/main/localDb/sessionFieldPersistence.ts';
 import { readSessionSource } from '../../../desktop/src/main/localDb/sessionDispatchSnapshot.ts';
 import { recordUserSessionRuntimeMutation } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
@@ -114,6 +117,8 @@ export interface HostRuntimeSelectionDeps {
   };
   /** The providers the Host can route to, as its model settings list them. */
   listProviderViews(): Promise<ProviderView[]>;
+  /** The Host's profile directory (the desktop's app.getPath('userData')). */
+  userDataDir: string;
   /** A route's configured window with a task's window budget (start-options). */
   resolveConfiguredContextWindow: SessionRuntimeSelectionPorts['resolveConfiguredContextWindow'];
   readStoredSessionContextWindowBudget: SessionRuntimeSelectionPorts['readStoredSessionContextWindowBudget'];
@@ -203,6 +208,18 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
       listSshCodexProviders: async () => throwIpcError('UNSUPPORTED_CAPABILITY', 'Host does not yet support remote execution'),
       verdictForModelRoute,
     }), agent, model, providerId, remoteHostId, unavailableCode);
+  // register.ts bootstrapSession's start admission of a runtime (localRouteAdmission.ts), with the
+  // route check above and the Host's provider listing.
+  const admitLocalRoute = createLocalRouteAdmission(explicitPorts<Parameters<typeof createLocalRouteAdmission>[0]>({
+    // The Host has no managed local model runtime (Ollama, llama.cpp): it answers as the desktop's
+    // preflight answers when that runtime is not ready (pi-native-providers.ts).
+    ensureManagedOllamaReadyForSession: input =>
+      hostManagedLocalModelNotReady({ providerId: input.providerId ?? '', remoteHostId: input.remoteHostId ?? null }),
+    getUserDataDir: () => deps.userDataDir,
+    assertModelRouteUsable,
+    pinExclusiveSessionProvider: (agent, model, providerId) =>
+      pinExclusiveSessionProviderWithProviders(() => deps.listProviderViews(), agent, model, providerId),
+  }));
   const { broadcastSessionRuntimeProjection } = createSessionRuntimeProjection(explicitPorts<Parameters<typeof createSessionRuntimeProjection>[0]>({ broadcastSessionPatched }));
   const updateScheduledPreference = createUpdateScheduledPreference(explicitPorts<Parameters<typeof createUpdateScheduledPreference>[0]>({ broadcastSessionRuntimeProjection }));
   const resolvePendingRuntimeAxisPatch = createResolvePendingRuntimeAxisPatch(explicitPorts<Parameters<typeof createResolvePendingRuntimeAxisPatch>[0]>({
@@ -558,6 +575,12 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     /** The interrupted-turn auto-resume's route change (auto-resume.ts), and the rebuild leases it marks. */
     maybeApplySessionRuntimeFallback,
     pendingSessionRuntimeFallbackRebuilds,
+    /**
+     * The start admission of a task runtime (register.ts bootstrapSession's admitLocalRoute): a start
+     * that is not a verified resume of the task's stored route is refused on a disabled, retired or
+     * payment-required route, or rerouted to an enabled copy; it changes `providerId` in place.
+     */
+    admitLocalRoute,
     /** The intent of a task as clients see it (session_changed, the task snapshot). */
     projectIntent: (sessionId: string) => projectPendingAgentSwitchIntent(pendingSwitches.get(sessionId)),
     /** The desktop's set-effort (an effort change of a task, live or staged into a pending pick). */
@@ -647,13 +670,14 @@ type HostRuntimeSelection = ReturnType<typeof createHostRuntimeSelection>;
  * The input queue's hooks the runtime selection answers (main.ts passes them to createInputQueue; the
  * input-queue tests use the same function): a pick lands at the send, the coordinator and idle-release
  * gates of a pending credential switch (with the gateway restart, deferredRestartQueueWiring.ts), a
- * turn's end landing that switch before the rest of the settle work, and a runtime's own Plan change.
+ * turn's end landing that switch before the rest of the settle work, a runtime's own Plan change, and
+ * the start admission of a runtime.
  * The selection is read at call time: main.ts creates it after the queue.
  */
 export function hostRuntimeSelectionQueueHooks(
   getSelection: () => Pick<HostRuntimeSelection,
     'applyPendingAgentSwitch' | 'hasPendingCredentialSwitch' | 'onTurnSettled' | 'persistAgentPlanModeChange'
-    | 'maybeApplySessionRuntimeFallback' | 'pendingSessionRuntimeFallbackRebuilds'>,
+    | 'maybeApplySessionRuntimeFallback' | 'pendingSessionRuntimeFallbackRebuilds' | 'admitLocalRoute'>,
   ports: { isSessionRestarting(sessionId: string): boolean; afterTurnSettled?(sessionId: string): void },
 ) {
   return {
@@ -677,6 +701,8 @@ export function hostRuntimeSelectionQueueHooks(
       set: (session: Session, attemptToken: number) => getSelection().pendingSessionRuntimeFallbackRebuilds.set(session, attemptToken),
       delete: (session: Session) => getSelection().pendingSessionRuntimeFallbackRebuilds.delete(session),
     },
+    /** Every runtime start of the executor takes this admission before its runtime is created. */
+    admitLocalRoute: (...args: Parameters<HostRuntimeSelection['admitLocalRoute']>) => getSelection().admitLocalRoute(...args),
   };
 }
 

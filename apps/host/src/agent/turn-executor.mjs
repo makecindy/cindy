@@ -22,6 +22,10 @@ import { peekGoalInactiveNote } from '../../../desktop/src/main/goal-host/inacti
 import { createTurnModelAttribution } from '../../../desktop/src/main/maker-ipc/turnModelAttribution.ts';
 import { patchMessageAgentMetaWithResultRow } from '../../../desktop/src/main/localDb/messageMutations.ts';
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
+import { sessions } from '../../../desktop/src/main/localDb/schema.ts';
+import { persistAndHydrateSessionProvider } from '../../../desktop/src/main/maker-ipc/sessionProviderBootstrap.ts';
+import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.ts';
+import { eq } from 'drizzle-orm';
 import { isPiPromptRpcTimeoutError } from '../../../desktop/src/shared/inputError.ts';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
@@ -29,7 +33,7 @@ import { noteClaudeSessionTurnState } from '../../../desktop/src/main/maker-host
 import { syncBackgroundCommandWork } from '../../../desktop/src/main/maker-host/claude-background-command-work-sync.ts';
 import { clearPendingTurnChangeSets, finalizeTurnChangeSet, noteTurnDiffEvent } from '../../../desktop/src/main/turn-change-set/store.ts';
 import { beginTurnChangeSetAtDispatch } from '../../../desktop/src/main/turn-change-set/dispatchBoundary.ts';
-import { setSessionProvider, clearSessionProvider, getSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
+import { setSessionProvider, clearSessionProvider, getSessionProvider, hydrateSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { setSessionEffort } from '../../../desktop/src/main/maker-host/session-effort-store.ts';
 import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './session-settings.mjs';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
@@ -376,6 +380,44 @@ export function createTurnExecutor(deps) {
     return row;
   }
 
+  // As the desktop's bootstrapSession (register.ts) once the runtime has started: the task row takes the
+  // start's provider (a route the start admission rerouted or pinned included), and a failed write
+  // refuses the start. The Host has no temporary runtime override, so the start's provider is written.
+  async function persistStartedSessionProvider(session, opts, assertAccess) {
+    try {
+      const db = getDbClient().drizzle;
+      await persistAndHydrateSessionProvider({
+        sessionId: session.id,
+        providerId: opts.providerId,
+        updateProviderId: async (targetSessionId, providerId) => {
+          deps.assertCurrent();
+          await db.update(sessions).set({ providerId }).where(eq(sessions.id, targetSessionId));
+        },
+        readProviderId: async (targetSessionId) => {
+          const [pRow] = await db
+            .select({ providerId: sessions.providerId })
+            .from(sessions)
+            .where(eq(sessions.id, targetSessionId))
+            .limit(1);
+          return pRow?.providerId;
+        },
+        hydrateSessionProvider: (...args) => { assertAccess?.(); hydrateSessionProvider(...args); },
+      });
+    } catch (err) {
+      log.warn('session provider persistence failed; refusing task startup', {
+        sessionId: session.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // A duplicate create can reuse a running Session; do not interrupt its turn.
+      await deps.getMaker().closeSessionIfCurrent(session, 'requested', { onlyIfIdle: true }).catch((closeError) => {
+        log.warn('failed to close task after provider persistence failure', {
+          sessionId: session.id, error: String(closeError),
+        });
+      });
+      throwIpcError('PRECONDITION_FAILED', 'Could not save the selected model provider. Retry the task.');
+    }
+  }
+
   async function readAutoReviewHistory(id) {
     deps.assertCurrent();
     await historyFor(id).drain();
@@ -492,9 +534,20 @@ export function createTurnExecutor(deps) {
           persistExistingSession: async () => { throw new Error('Host must not rewrite directory grants at startup'); },
         });
         turn?.check();
-        const session = await deps.getMaker().createSession({ ...opts,
-          resumeSessionId: opts.resumeSessionId ?? (opts.agentKind === makerKind(stored.agentKind) ? stored.sdkSessionId || undefined : undefined),
-        }, turn?.sendOpts.signal);
+        // The resume id is known before the start admission reads it: a verified resume of the task's
+        // stored route keeps that route (register.ts admitLocalRoute). The admission may reroute
+        // `providerId` before createSession freezes it (start-options.ts).
+        // Kept for the flow of o.resumeSessionId in the desktop's bootstrapSession, which the admission
+        // reads already set. Every current caller brings the task row's id (the shared options
+        // reconciler, the cold Pi check, the engine switch, storedSessionOptions), so the fallback to
+        // stored.sdkSessionId takes no different value; for that reason no test covers this step alone.
+        opts.resumeSessionId = opts.resumeSessionId ?? (opts.agentKind === makerKind(stored.agentKind) ? stored.sdkSessionId || undefined : undefined);
+        await deps.admitLocalRoute(opts);
+        assertAccess?.();
+        turn?.check();
+        const session = await deps.getMaker().createSession({ ...opts }, turn?.sendOpts.signal);
+        turn?.check();
+        await persistStartedSessionProvider(session, opts, assertAccess);
         turn?.check();
         rememberLiveSessionSettings(session, opts);
         setSessionProvider(opts.id, opts.providerId ?? null);
@@ -888,8 +941,14 @@ export function createTurnExecutor(deps) {
       const maker = deps.getMaker();
       let session = maker.getSession(id);
       if (!session) {
-        session = await maker.createSession({ ...options, id });
-        rememberLiveSessionSettings(session, options);
+        // As every runtime start (the bootstrap above): the start admission, then the start's provider
+        // on the task row.
+        const start = { ...options, id };
+        await deps.admitLocalRoute(start);
+        deps.assertCurrent(); await assertCurrent();
+        session = await maker.createSession({ ...start });
+        await persistStartedSessionProvider(session, start);
+        rememberLiveSessionSettings(session, start);
       }
       deps.assertCurrent(); await assertCurrent();
       listen(id, session);

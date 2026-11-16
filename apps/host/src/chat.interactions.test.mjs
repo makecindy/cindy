@@ -88,6 +88,8 @@ test('chat uses the durable queue and approvals reach the client once', async (t
       createSession: async () => { live = true; return session; }, closeSession: async () => { live = false; } }),
     persistMessage: async (_id, message) => { saved.push(message); },
     interactions: broker,
+    // Fixture does not test admission (夹具不测准入): the runtime start admission lets every start through.
+    admitLocalRoute: async () => {},
   });
   t.after(() => queue.dispose());
   const handler = createChatHandler({ readSession, events: hub,

@@ -37,6 +37,7 @@ import { openOwnerDatabase } from '../../../desktop/src/main/localDb/startupCore
 import { createDbClientForHandle } from '../../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.ts';
 import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionStorageAdapter.ts';
+import { createHostRuntimeSession } from './create-runtime-session.ts';
 import { createHostRuntimeSelection, hostRuntimeSelectionQueueHooks, HOST_RUNTIME_SELECTION_QUEUE_MEMBERS, HOST_RUNTIME_START_PORTS } from './runtime-selection.ts';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from '../../../desktop/src/main/maker-ipc/sessionContextWindowBudgetState.js';
 import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
@@ -206,6 +207,8 @@ function createHarness(overrides = {}) {
     },
     readAuthorizationHistory: async id => persisted.filter(row => row.sessionId === id),
     sent: () => {},
+    // Fixture does not test admission (夹具不测准入): the runtime start admission lets every start through.
+    admitLocalRoute: async () => {},
     ...overrides,
   });
   return { maker, events, persisted, queue };
@@ -670,7 +673,8 @@ for (const writeFails of [false, true]) {
 test('production startup marker failure prevents dispatch and leaves input recoverable', async t => {
   t = lifoCleanup(t);
   const sqlite = new Database(':memory:');
-  sqlite.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY, active_turn_started_at INTEGER);
+  // The runtime start writes the task's provider (as the desktop's bootstrapSession): the column it writes.
+  sqlite.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY, active_turn_started_at INTEGER, provider_id TEXT);
     INSERT INTO sessions(id) VALUES ('marker-failure');
     CREATE TRIGGER reject_start BEFORE UPDATE OF active_turn_started_at ON sessions
     BEGIN SELECT RAISE(ABORT, 'startup marker storage unavailable'); END;`);
@@ -1771,6 +1775,8 @@ test('an admission read failure rejects input before acknowledging acceptance', 
   ensureUnitOwner();
   const queue = createInputQueue({ getMaker: () => maker, hub: { publish() {} }, sent() {},
     readSession: async () => { if (fail) throw new Error('storage unavailable'); return { agentKind: 'claude-code' }; },
+    // Fixture does not test admission (夹具不测准入): the runtime start admission lets every start through.
+    admitLocalRoute: async () => {},
   });
   await assert.rejects(queue.enqueue('s', { clientId: 'a', text: 'A' }), /storage unavailable/);
   assert.equal(queue.projection('s').turnInProgress, false);
@@ -1788,6 +1794,8 @@ test('stop during admission prevents a late model startup', async () => {
   ensureUnitOwner();
   const queue = createInputQueue({ getMaker: () => maker, hub: { publish() {} }, sent() {},
     readSession: async () => { await gate; return { agentKind: 'cc', workingDir: '/tmp' }; },
+    // Fixture does not test admission (夹具不测准入): the runtime start admission lets every start through.
+    admitLocalRoute: async () => {},
   });
   const enqueue = queue.enqueue('s', { clientId: 'a', text: 'first' });
   const stopped = queue.stop('s');
@@ -1834,11 +1842,13 @@ test('restart restores a paused durable queue and deduplicates accepted input', 
   let sqlite;
   const reopen = () => {
     sqlite = new Database(path.join(root, 'queue.sqlite'));
+    // The runtime start writes the task's provider (as the desktop's bootstrapSession): the column it writes.
     sqlite.exec(`CREATE TABLE IF NOT EXISTS messages(client_id TEXT, session_id TEXT,
       PRIMARY KEY(session_id, client_id));
       CREATE TABLE IF NOT EXISTS agent_input_queue_snapshots(session_id TEXT PRIMARY KEY,
       payload TEXT NOT NULL, updated_at INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, active_turn_started_at INTEGER, last_turn_ended_at INTEGER);
+      CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, active_turn_started_at INTEGER, last_turn_ended_at INTEGER,
+      provider_id TEXT);
       INSERT OR IGNORE INTO sessions(id) VALUES ('durable')`);
     setCurrentDbClient({ drizzle: drizzle(sqlite) }, 'isolated-test');
   };
@@ -3289,7 +3299,10 @@ test('model change at send: an engine pick that cannot land lets the send go on,
   const picked = await r.selection.switchAgent({ sessionId: 'cross', targetAgentKind: 'codex', model: 'gpt-x', providerId: 'prov-a' });
   assert.equal(picked.deferred, true, 'an engine pick waits for the send');
   const views = r.views.current;
-  r.views.current = []; // the picked provider is gone when the send lands the pick
+  // The picked route is unusable when the send lands the pick: its copy is disabled. The task's current
+  // route stays usable, so the runtime start's admission (register.ts admitLocalRoute) lets the send go on.
+  r.views.current = views.map(view => ({ ...view, agents: [...view.agents, 'codex'],
+    models: { ...view.models, codex: [{ ...switchModel('gpt-x'), disabled: true }] } }));
   await r.h.queue.enqueue('cross', { clientId: 'cross-1', text: 'first' });
   await waitFor(() => r.h.maker.sessions.get('cross')?.sent.length === 1);
   const first = r.h.maker.sessions.get('cross');
@@ -3309,6 +3322,117 @@ test('model change at send: an engine pick that cannot land lets the send go on,
   assert.equal(r.row('cross').agent_kind, 'codex');
   assert.equal(r.selection.projectIntent('cross') ?? null, null);
   assert.equal(r.userRows('cross').length, 2);
+});
+
+// The runtime start admission (register.ts bootstrapSession's admitLocalRoute, shared as
+// localRouteAdmission.ts). Gap: the Host started a task's runtime with no admission, so a task could run
+// on a model or source the user disabled. Provider lists: a copy of a model disabled on a source, and the
+// native default (xd) disabled with an enabled copy on another source.
+const withDisabledCopy = (views, agent, providerId, modelId) => views.map(view => (view.id !== providerId ? view : {
+  ...view, models: { ...view.models, [agent]: view.models[agent].map(entry => (entry.id === modelId ? { ...entry, disabled: true } : entry)) },
+}));
+const nativeDefaultDisabledViews = agent => [
+  ...withDisabledCopy(switchViews(agent).map(view => ({ ...view, id: 'xd' })), agent, 'xd', 'big'),
+  ...switchViews(agent),
+];
+const createTaskOn = (id, providerId) => new OwnerSessionStorage({ db: () => getCurrentDbClientSnapshot().client }).create({
+  id, title: 'Route admission fixture', agentKind: 'claude-code', model: 'big', providerId, workDir: process.cwd() });
+
+// Rule (admitLocalRoute: a start that is not a verified resume takes the route verdict; a disabled copy
+// on the task's explicit source is refused with INVALID_PARAMS): the send is refused before any runtime
+// starts, and the input stays at the queue head.
+test('route admission: a send to a task whose model copy is disabled starts no runtime', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await r.createTask('disabled');
+  r.views.current = withDisabledCopy(r.views.current, 'claude-code', 'prov-a', 'big');
+  await r.h.queue.enqueue('disabled', { clientId: 'disabled-1', text: 'first' });
+  await waitFor(() => r.h.queue.projection('disabled').error);
+  assert.match(r.h.queue.projection('disabled').error, /\[INVALID_PARAMS\] provider "prov-a" is disabled for model "big"/);
+  assert.equal(r.h.maker.sessions.get('disabled'), undefined, 'no runtime started');
+  assert.deepEqual(r.h.queue.projection('disabled').pendingQueue.map(item => item.clientId), ['disabled-1']);
+});
+
+// Rule (admitLocalRoute: a verified resume, the request's route equal to the task's stored route, is not
+// refused; a running task is not cut off by a later disable): a released task resumes its native session.
+test('route admission: a verified resume of the stored route starts although its copy was disabled later', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await r.createTask('resume');
+  const first = await r.runTurn('resume', 'resume-1'); // its native session: native-resume-1
+  await r.h.maker.closeSession('resume'); // idle release
+  r.views.current = withDisabledCopy(r.views.current, 'claude-code', 'prov-a', 'big');
+  await r.h.queue.enqueue('resume', { clientId: 'resume-2', text: 'next' });
+  await waitFor(() => { const next = r.h.maker.sessions.get('resume'); return next && next !== first && next.sent.length === 1; });
+  const next = r.h.maker.sessions.get('resume');
+  assert.equal(next.options.resumeSessionId, 'native-resume-1');
+  assert.equal(next.options.providerId, 'prov-a');
+  assert.equal(r.h.queue.projection('resume').error ?? null, null);
+});
+
+// Rule (admitLocalRoute: an implicit source whose native default copy is disabled is rerouted to the
+// enabled copy before the start; register.ts persistAndHydrateSessionProvider writes the start's provider
+// to the task row): the runtime starts on the enabled copy (the provider frozen at the start), the task row
+// takes it, a later send to the live runtime keeps it, and a later resume starts on it.
+test('route admission: a disabled native default is rerouted before the start, saved, and kept', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  r.views.current = nativeDefaultDisabledViews('claude-code');
+  await createTaskOn('reroute', null);
+  const first = await r.runTurn('reroute', 'reroute-1');
+  assert.equal(first.options.providerId, 'prov-a', 'the runtime starts on the enabled copy');
+  assert.equal(getSessionProvider('reroute'), 'prov-a', 'the provider frozen at the start');
+  assert.equal(r.row('reroute').provider_id, 'prov-a', 'the task row takes the start provider');
+  // The next send to the live runtime: the stored route equals the runtime's, so nothing moves it back.
+  await r.h.queue.enqueue('reroute', { clientId: 'reroute-2', text: 'again' });
+  await waitFor(() => first.sent.length === 2);
+  assert.equal(first.options.providerId, 'prov-a', 'the live runtime keeps the enabled copy');
+  first.emit({ type: 'done', data: {}, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
+  await waitFor(() => !r.h.queue.projection('reroute').active);
+  await r.h.maker.closeSession('reroute'); // idle release
+  await r.h.queue.enqueue('reroute', { clientId: 'reroute-3', text: 'later' });
+  await waitFor(() => { const next = r.h.maker.sessions.get('reroute'); return next && next !== first && next.sent.length === 1; });
+  const next = r.h.maker.sessions.get('reroute');
+  assert.equal(next.options.resumeSessionId, 'native-reroute-1');
+  assert.equal(next.options.providerId, 'prov-a', 'the resume starts on the enabled copy');
+});
+
+// Rule (register.ts 18359: a plugin page's task restore starts through bootstrapSession, so its admission
+// and the provider write apply): restoring a task that never ran, whose model copy is disabled, is refused
+// and starts nothing; restoring one on a disabled native default starts on the enabled copy and saves it.
+test('route admission: a plugin page restore is refused on a disabled copy, or started and saved on the rerouted copy', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await r.createTask('restore');
+  r.views.current = withDisabledCopy(r.views.current, 'claude-code', 'prov-a', 'big');
+  await assert.rejects(r.h.queue.restoreSession('restore', async () => {}),
+    /\[INVALID_PARAMS\] provider "prov-a" is disabled for model "big"/);
+  assert.equal(r.h.maker.sessions.get('restore'), undefined);
+  r.views.current = nativeDefaultDisabledViews('claude-code');
+  await createTaskOn('restore-reroute', null);
+  const restored = await r.h.queue.restoreSession('restore-reroute', async () => {});
+  assert.equal(restored.options.providerId, 'prov-a');
+  assert.equal(r.row('restore-reroute').provider_id, 'prov-a');
+});
+
+// Rule (the desktop's maker:create-session starts the runtime through bootstrapSession, whose admission
+// runs before the task row is inserted): a Device Link create on a disabled copy writes no task row and
+// starts nothing; a create on a disabled native default writes the row with the enabled copy.
+test('route admission: a Device Link create is refused before its row, or created on the rerouted copy', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  const rows = [];
+  const started = [];
+  const ports = {
+    serverDeps: { createSession: async input => { rows.push(input); await createTaskOn('created', input.providerId ?? null); return { id: 'created' }; } },
+    getAgentGraph: () => ({ maker: { createSession: async opts => { started.push(opts); return r.h.maker.createSession(opts); } } }),
+    admitLocalRoute: opts => r.selection.admitLocalRoute(opts),
+  };
+  const input = providerId => ({ agentKind: 'claude-code', model: 'big', workingDir: process.cwd(), providerId });
+  r.views.current = withDisabledCopy(r.views.current, 'claude-code', 'prov-a', 'big');
+  await assert.rejects(createHostRuntimeSession(ports, input('prov-a')), /\[INVALID_PARAMS\] provider "prov-a" is disabled for model "big"/);
+  assert.equal(rows.length, 0, 'no task row');
+  assert.equal(started.length, 0, 'no runtime');
+  r.views.current = nativeDefaultDisabledViews('claude-code');
+  await createHostRuntimeSession(ports, input(null));
+  assert.equal(rows[0].providerId, 'prov-a', 'the row is created with the enabled copy');
+  assert.equal(r.row('created').provider_id, 'prov-a');
+  assert.equal(started[0].providerId, 'prov-a');
 });
 
 // Rule (sessionAgentSwitchHandler.ts: a switch back to an engine whose native session is parked starts
