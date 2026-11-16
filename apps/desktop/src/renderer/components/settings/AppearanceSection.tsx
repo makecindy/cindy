@@ -1,22 +1,22 @@
 import { appearanceSettings, UI_FONT_PRESETS, CODE_FONT_PRESETS, TERMINAL_FONT_PRESETS } from './AppearanceSection.settings-search';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { SelectParts as Select } from '@/components/ui/select';
+import { Select } from '@/components/ui/select';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import {
-  ChevronDown,
-  Check,
   Copy,
   FolderOpen,
   Import as ImportIcon,
+  Palette,
   RefreshCw,
-  RotateCcw,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { basename, cn } from '@/lib/utils';
 import { createLogger } from '@/lib/logger';
+import { prefillThemeCreatorDraft } from '@/lib/themeCreatorDraft';
 import { resolveIsDark, useTheme } from '@/hooks/useTheme';
 import {
   clampFontSize,
@@ -37,8 +37,10 @@ import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
 import { Slider } from '@/components/ui/slider';
 import { extractIpcError } from '@/utils/ipcError';
+import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { DockIconPicker } from './DockIconPicker';
-import { FontFamilyPicker, FontFamilyResetButton } from './FontFamilyPicker';
+import { SettingsTextInput } from './SettingsTextInput';
+import { FontFamilyPicker } from './FontFamilyPicker';
 import { LayoutResetControl } from './LayoutResetControl';
 import { SETTINGS_PAGE_TITLE_CLASS, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { WallpaperSection } from './WallpaperSection';
@@ -260,6 +262,7 @@ function LocalThemeIconButton({
 
 interface FamilyDropdownProps {
   label: string;
+  createAction: ReactNode;
   ariaLabel: string;
   families: ThemeFamily[];
   selectedId: string;
@@ -290,6 +293,7 @@ function VariantBadge({ text }: { text: string | null }) {
  */
 function FamilyDropdown({
   label,
+  createAction,
   ariaLabel,
   families,
   selectedId,
@@ -302,79 +306,32 @@ function FamilyDropdown({
   return (
     <SettingsRow
       className="gap-6"
-      title={label}
+      title={<span className="flex min-w-0 flex-wrap items-center gap-2">{label}{createAction}</span>}
       trailing={
-      <Select.Root value={selected.id} onValueChange={onSelect}>
-        <Select.Trigger data-setting-id={appearanceSettings.themeLabel.id}
-          aria-label={ariaLabel}
-          className={cn(
-            'flex h-9 w-[320px] max-w-full shrink-0 items-center justify-between gap-3 rounded-full border px-3.5 text-13 outline-none transition-colors',
-            'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-            'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-          )}
-        >
-          <span className="flex min-w-0 items-center gap-2 text-left">
-            <span className="min-w-0 truncate">
-              <Select.Value>{getLabel(selected)}</Select.Value>
-            </span>
-            <VariantBadge text={getVariantBadge(selected)} />
-          </span>
-          <Select.Icon asChild>
-            <ChevronDown
-              size={14}
-              className="shrink-0 text-[var(--settings-eye-icon)]"
-              aria-hidden="true"
-            />
-          </Select.Icon>
-        </Select.Trigger>
-        <Select.Portal>
-          <Select.Content
-            position="popper"
-            side="bottom"
-            align="start"
-            sideOffset={6}
-            className={cn(
-              'z-[10010] max-h-[min(18rem,var(--radix-select-content-available-height))] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl p-2',
-              'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)]',
-            )}
-          >
-            <Select.Viewport className="flex flex-col gap-[2px]">
-              {families.map((family) => (
-                <Select.Item
-                  key={family.id}
-                  value={family.id}
-                  className={cn(
-                    'flex h-9 w-full cursor-pointer select-none items-center justify-between gap-3 rounded-[8px] px-3 text-left text-13 outline-none transition-colors',
-                    'text-[var(--settings-input-text)]',
-                    'data-[state=checked]:text-[var(--settings-menu-text-selected)]',
-                  )}
-                >
-                  <span className="flex min-w-0 items-center gap-2">
-                    <Select.ItemText className="min-w-0 truncate">
-                      {getLabel(family)}
-                    </Select.ItemText>
-                    <VariantBadge text={getVariantBadge(family)} />
-                  </span>
-                  <Select.ItemIndicator>
-                    <Check
-                      size={16}
-                      className="shrink-0 text-[var(--settings-theme-icon-active)]"
-                    />
-                  </Select.ItemIndicator>
-                </Select.Item>
-              ))}
-            </Select.Viewport>
-          </Select.Content>
-        </Select.Portal>
-      </Select.Root>
+      <Select data-setting-id={appearanceSettings.themeLabel.id}
+        label={ariaLabel}
+        value={selected.id}
+        options={families.map((family) => ({
+          value: family.id,
+          label: getLabel(family),
+          endAdornment: getVariantBadge(family) ? <VariantBadge text={getVariantBadge(family)} /> : undefined,
+        }))}
+        triggerAdornment={getVariantBadge(selected) ? <VariantBadge text={getVariantBadge(selected)} /> : undefined}
+        truncateOptions
+        onValueChange={onSelect}
+        width="md"
+        className="shrink-0"
+      />
       }
     />
   );
 }
 
 export function AppearanceSection() {
+  const navigate = useNavigate();
   const { theme, setTheme, familyId, setFamily } = useTheme();
   const {
+    customizedKeys,
     uiFamily,
     codeFamily,
     uiSize,
@@ -394,9 +351,11 @@ export function AppearanceSection() {
     resetTerminalFamily,
     resetTerminalSize,
   } = useFontSettings();
+  const customized = (key: string, legacy: boolean) => customizedKeys ? customizedKeys.includes(key) : legacy;
   const { mode: sidebarViewMode, setMode: setSidebarViewMode } = useSidebarCardMode();
   const { mode: sidebarMainViewMode, setMode: setSidebarMainViewMode } = useSidebarMainViewMode();
   const { t } = useTranslation();
+  const [creatingTheme, setCreatingTheme] = useState(false);
   const [localThemesVersion, setLocalThemesVersion] = useState(0);
   const [uiSizeInput, setUiSizeInput] = useState(String(uiSize));
   const [codeSizeInput, setCodeSizeInput] = useState(String(codeSize));
@@ -458,6 +417,21 @@ export function AppearanceSection() {
         : family.name,
     [t],
   );
+
+  const handleCreateTheme = useCallback(async () => {
+    if (creatingTheme) return;
+    setCreatingTheme(true);
+    try {
+      const result = await prefillThemeCreatorDraft(t('settings.appearance.createTheme.prompt'));
+      if (result === 'prepared') navigate('/cc-agent/new');
+      else if (result === 'unavailable') toast.error(t('settings.appearance.createTheme.unavailable'));
+    } catch (error) {
+      log.warn('Failed to prepare theme creation draft:', error);
+      toast.error(t('settings.appearance.createTheme.startFailed'));
+    } finally {
+      setCreatingTheme(false);
+    }
+  }, [creatingTheme, navigate, t]);
 
   const handleExport = useCallback(async () => {
     const isDark = resolveIsDark(theme);
@@ -605,6 +579,23 @@ export function AppearanceSection() {
           <SettingsCard id={appearanceSettings.themeLabel.targetId}>
             <FamilyDropdown
               label={t(appearanceSettings.themeLabel.titleKey)}
+              createAction={
+                <Tip text={t(appearanceSettings.createTheme.descriptionKey)}>
+                  <Button
+                    id={appearanceSettings.createTheme.targetId}
+                    data-setting-id={appearanceSettings.createTheme.id}
+                    variant="secondary"
+                    size="sm"
+                    compact
+                    type="button"
+                    loading={creatingTheme}
+                    onClick={() => { void handleCreateTheme(); }}
+                  >
+                    <Palette size={14} aria-hidden="true" />
+                    {t(appearanceSettings.createTheme.titleKey)}
+                  </Button>
+                </Tip>
+              }
               ariaLabel={t('settings.appearance.themeAriaLabel')}
               families={families}
               selectedId={familyId}
@@ -727,7 +718,7 @@ export function AppearanceSection() {
               id={appearanceSettings.fontUiFamilyLabel.targetId}
               title={t(appearanceSettings.fontUiFamilyLabel.titleKey)}
               hint={t(appearanceSettings.fontUiFamilyLabel.descriptionKey)}
-              action={<FontFamilyResetButton value={uiFamily} onReset={resetUiFamily} />}
+              action={<DefaultOverrideControls isCustomized={customized('uiFamily', Boolean(uiFamily.trim()))} onReset={resetUiFamily} />}
             >
               <FontFamilyPicker data-setting-id={appearanceSettings.fontUiFamilyLabel.id}
                 ariaLabel={t('settings.appearance.font.uiFamily.aria')}
@@ -742,20 +733,7 @@ export function AppearanceSection() {
             <SettingsField
               title={<span id={appearanceSettings.fontUiSizeLabel.targetId}>{t(appearanceSettings.fontUiSizeLabel.titleKey)}</span>}
               hint={t(appearanceSettings.fontUiSizeLabel.descriptionKey)}
-              action={(
-                <Tip text={t('settings.appearance.font.reset')}>
-                  <Button data-setting-id={appearanceSettings.fontUiSizeLabel.id}
-                    variant="secondary"
-                    className="w-8 px-0"
-                    type="button"
-                    aria-label={t('settings.appearance.font.reset')}
-                    onClick={resetUiSize}
-                    disabled={uiSize === DEFAULT_UI_FONT_SIZE}
-                  >
-                    <RotateCcw size={14} />
-                  </Button>
-                </Tip>
-              )}
+              action={<DefaultOverrideControls isCustomized={customized('uiSize', uiSize !== DEFAULT_UI_FONT_SIZE)} onReset={resetUiSize} />}
             >
               <div className="flex items-center gap-3">
                 <Slider data-setting-id={appearanceSettings.fontUiSizeLabel.id}
@@ -768,14 +746,14 @@ export function AppearanceSection() {
                   }}
                   aria-label={t('settings.appearance.font.uiSize.aria')}
                 />
-                <input data-setting-id={appearanceSettings.fontUiSizeLabel.id}
+                <SettingsTextInput data-setting-id={appearanceSettings.fontUiSizeLabel.id}
                   type="number"
                   aria-label={t(appearanceSettings.fontUiSizeLabel.titleKey)}
                   min={12}
                   max={24}
                   step={1}
                   value={uiSizeInput}
-                  onChange={(e) => setUiSizeInput(e.target.value)}
+                  onChange={setUiSizeInput}
                   onBlur={commitUiSizeInput}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
@@ -783,12 +761,10 @@ export function AppearanceSection() {
                       e.currentTarget.blur();
                     }
                   }}
-                  className={cn(
-                    'h-9 w-[72px] rounded-xl border px-3 text-right text-13 outline-none',
-                    'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
-                    'font-mono text-[var(--settings-input-text)]',
-                    'focus:border-[var(--settings-input-border-focus)]',
-                  )}
+                  size="md"
+                  mono
+                  className="w-[72px] shrink-0"
+                  inputClassName="px-3 text-right"
                 />
               </div>
             </SettingsField>
@@ -797,7 +773,7 @@ export function AppearanceSection() {
               id={appearanceSettings.fontCodeFamilyLabel.targetId}
               title={t(appearanceSettings.fontCodeFamilyLabel.titleKey)}
               hint={t(appearanceSettings.fontCodeFamilyLabel.descriptionKey)}
-              action={<FontFamilyResetButton value={codeFamily} onReset={resetCodeFamily} />}
+              action={<DefaultOverrideControls isCustomized={customized('codeFamily', Boolean(codeFamily.trim()))} onReset={resetCodeFamily} />}
             >
               <FontFamilyPicker data-setting-id={appearanceSettings.fontCodeFamilyLabel.id}
                 ariaLabel={t('settings.appearance.font.codeFamily.aria')}
@@ -813,20 +789,7 @@ export function AppearanceSection() {
             <SettingsField
               title={<span id={appearanceSettings.fontCodeSizeLabel.targetId}>{t(appearanceSettings.fontCodeSizeLabel.titleKey)}</span>}
               hint={t(appearanceSettings.fontCodeSizeLabel.descriptionKey)}
-              action={(
-                <Tip text={t('settings.appearance.font.reset')}>
-                  <Button data-setting-id={appearanceSettings.fontCodeSizeLabel.id}
-                    variant="secondary"
-                    className="w-8 px-0"
-                    type="button"
-                    aria-label={t('settings.appearance.font.reset')}
-                    onClick={resetCodeSize}
-                    disabled={codeSize === DEFAULT_CODE_FONT_SIZE}
-                  >
-                    <RotateCcw size={14} />
-                  </Button>
-                </Tip>
-              )}
+              action={<DefaultOverrideControls isCustomized={customized('codeSize', codeSize !== DEFAULT_CODE_FONT_SIZE)} onReset={resetCodeSize} />}
             >
               <div className="flex items-center gap-3">
                 <Slider data-setting-id={appearanceSettings.fontCodeSizeLabel.id}
@@ -839,14 +802,14 @@ export function AppearanceSection() {
                   }}
                   aria-label={t('settings.appearance.font.codeSize.aria')}
                 />
-                <input data-setting-id={appearanceSettings.fontCodeSizeLabel.id}
+                <SettingsTextInput data-setting-id={appearanceSettings.fontCodeSizeLabel.id}
                   type="number"
                   aria-label={t(appearanceSettings.fontCodeSizeLabel.titleKey)}
                   min={10}
                   max={24}
                   step={1}
                   value={codeSizeInput}
-                  onChange={(e) => setCodeSizeInput(e.target.value)}
+                  onChange={setCodeSizeInput}
                   onBlur={commitCodeSizeInput}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
@@ -854,12 +817,10 @@ export function AppearanceSection() {
                       e.currentTarget.blur();
                     }
                   }}
-                  className={cn(
-                    'h-9 w-[72px] rounded-xl border px-3 text-right text-13 outline-none',
-                    'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
-                    'font-mono text-[var(--settings-input-text)]',
-                    'focus:border-[var(--settings-input-border-focus)]',
-                  )}
+                  size="md"
+                  mono
+                  className="w-[72px] shrink-0"
+                  inputClassName="px-3 text-right"
                 />
               </div>
             </SettingsField>
@@ -868,7 +829,7 @@ export function AppearanceSection() {
               id={appearanceSettings.fontTerminalFamilyLabel.targetId}
               title={t(appearanceSettings.fontTerminalFamilyLabel.titleKey)}
               hint={t(appearanceSettings.fontTerminalFamilyLabel.descriptionKey)}
-              action={<FontFamilyResetButton value={terminalFamily} onReset={resetTerminalFamily} />}
+              action={<DefaultOverrideControls isCustomized={customized('terminalFamily', Boolean(terminalFamily.trim()))} onReset={resetTerminalFamily} />}
             >
               <FontFamilyPicker data-setting-id={appearanceSettings.fontTerminalFamilyLabel.id}
                 ariaLabel={t('settings.appearance.font.terminalFamily.aria')}
@@ -883,20 +844,7 @@ export function AppearanceSection() {
             <SettingsField
               title={<span id={appearanceSettings.fontTerminalSizeLabel.targetId}>{t(appearanceSettings.fontTerminalSizeLabel.titleKey)}</span>}
               hint={t(appearanceSettings.fontTerminalSizeLabel.descriptionKey)}
-              action={(
-                <Tip text={t('settings.appearance.font.reset')}>
-                  <Button data-setting-id={appearanceSettings.fontTerminalSizeLabel.id}
-                    variant="secondary"
-                    className="w-8 px-0"
-                    type="button"
-                    aria-label={t('settings.appearance.font.reset')}
-                    onClick={resetTerminalSize}
-                    disabled={terminalSize === DEFAULT_TERMINAL_FONT_SIZE}
-                  >
-                    <RotateCcw size={14} />
-                  </Button>
-                </Tip>
-              )}
+              action={<DefaultOverrideControls isCustomized={customized('terminalSize', terminalSize !== DEFAULT_TERMINAL_FONT_SIZE)} onReset={resetTerminalSize} />}
             >
               <div className="flex items-center gap-3">
                 <Slider data-setting-id={appearanceSettings.fontTerminalSizeLabel.id}
@@ -909,14 +857,14 @@ export function AppearanceSection() {
                   }}
                   aria-label={t('settings.appearance.font.terminalSize.aria')}
                 />
-                <input data-setting-id={appearanceSettings.fontTerminalSizeLabel.id}
+                <SettingsTextInput data-setting-id={appearanceSettings.fontTerminalSizeLabel.id}
                   type="number"
                   aria-label={t(appearanceSettings.fontTerminalSizeLabel.titleKey)}
                   min={APPEARANCE_LIMITS.terminalSize.min}
                   max={APPEARANCE_LIMITS.terminalSize.max}
                   step={1}
                   value={terminalSizeInput}
-                  onChange={(e) => setTerminalSizeInput(e.target.value)}
+                  onChange={setTerminalSizeInput}
                   onBlur={commitTerminalSizeInput}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
@@ -924,12 +872,10 @@ export function AppearanceSection() {
                       e.currentTarget.blur();
                     }
                   }}
-                  className={cn(
-                    'h-9 w-[72px] rounded-xl border px-3 text-right text-13 outline-none',
-                    'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
-                    'font-mono text-[var(--settings-input-text)]',
-                    'focus:border-[var(--settings-input-border-focus)]',
-                  )}
+                  size="md"
+                  mono
+                  className="w-[72px] shrink-0"
+                  inputClassName="px-3 text-right"
                 />
               </div>
             </SettingsField>

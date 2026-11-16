@@ -9,7 +9,7 @@ const mock = vi.hoisted(() => ({
 }));
 vi.mock('electron', () => ({ app: { getPath: () => 'videos' }, dialog: { showSaveDialog: mock.saveDialog, showMessageBox: vi.fn() } }));
 vi.mock('node:fs/promises', () => ({ default: { writeFile: mock.write } }));
-vi.mock('../../i18n', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop', () => ({ t: (key: string) => key }));
 vi.mock('node:child_process', () => ({ execFile: mock.exec }));
 vi.mock('../../cindy-media/integrationCache', () => ({ integrationCachePut: mock.put }));
 vi.mock('../../cindy-media/ledger', () => ({ removeRefsExceptHash: mock.cleanup }));

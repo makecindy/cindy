@@ -58,7 +58,7 @@ vi.mock('../storage', () => ({
   },
 }));
 
-import { resetGoalController, startGoalController } from '../index';
+import { resetGoalController, startGoalController, waitForGoalController } from '../index';
 
 const NOW = Date.parse('2026-10-29T10:00:00Z');
 const RESET = NOW + 7 * 24 * 60 * 60 * 1000;
@@ -169,5 +169,36 @@ describe('ChatGPT goal admission', () => {
     await vi.advanceTimersByTimeAsync(200);
     expect(await h.controller.getStatus('s1')).toMatchObject({ status: 'usageLimited', usageResetAt: RESET });
     expect(h.send).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 2026-11-10 startup regression, unit: real host readiness must release pending
+// reads only for its own controller lifetime. Prior tests always started first.
+describe('Goal startup readiness', () => {
+  it('releases a queued query when Goal starts, independently of Scheduler readiness', async () => {
+    let finished = false;
+    const pending = waitForGoalController().then(controller => { finished = true; return controller; });
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    const { controller } = await start();
+    expect(await pending).toBe(controller);
+  });
+
+  it('rejects an old owner waiter on reset and allows a new waiter to reach the next controller', async () => {
+    const rejected = expect(waitForGoalController()).rejects.toMatchObject({ name: 'GoalControllerDisposedError' });
+    await resetGoalController();
+    await rejected;
+    const pending = waitForGoalController();
+    const { controller } = await start();
+    expect(await pending).toBe(controller);
+  });
+
+  it('times out without dispatching late work when startup never completes', async () => {
+    const pending = waitForGoalController();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await pending).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    const { controller } = await start();
+    expect(await waitForGoalController()).toBe(controller);
   });
 });

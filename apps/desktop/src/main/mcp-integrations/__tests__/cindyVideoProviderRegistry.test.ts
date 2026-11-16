@@ -5,7 +5,7 @@ const state = vi.hoisted(() => ({ baseUrl: '', createService: vi.fn(), createSto
 vi.mock('../../model-access/effectiveEndpoint.js', () => ({ effectiveXdGatewayBaseUrl: () => state.baseUrl }));
 vi.mock('../../cindy-proxy-media/service.js', () => ({ createCindyProxyMediaService: state.createService }));
 vi.mock('../../cindy-media/generatedMedia.js', () => ({ createBlobImageStorage: state.createStorage, createBlobVideoStorage: state.createStorage }));
-vi.mock('../../imageCacheStore.js', () => ({ resolveSafe: vi.fn() }));
+vi.mock('../../imageCacheStore.desktop.js', () => ({ resolveSafe: vi.fn() }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({ getProviderSecretStore: () => { throw new Error('Discovery must not read credentials'); } }));
 vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyGateway: false }) }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));

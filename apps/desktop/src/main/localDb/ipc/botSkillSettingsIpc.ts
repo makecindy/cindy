@@ -44,7 +44,7 @@ async function canonicalSessionOf(botId: string, scope: BotSkillSettingsScope): 
 
 /** The shared core file every teammate on this computer mounts (it does not state per-teammate switches). */
 export function readBotCoreSkill(): BotCoreSkill {
-  return { name: TEAMMATE_GUIDE_NAME, description: TEAMMATE_GUIDE_DESCRIPTION, body: buildTeammateGuide({ shared: true }) };
+  return { name: TEAMMATE_GUIDE_NAME, description: TEAMMATE_GUIDE_DESCRIPTION, body: buildTeammateGuide() };
 }
 
 export async function readBotSkillForSettings(botId: string, slug: string, scope: BotSkillSettingsScope = {}): Promise<BotSkillDetail | null> {
@@ -61,7 +61,7 @@ export async function saveBotSkillForSettings(botId: string, input: BotSkillSave
   const canonical = await canonicalSessionOf(botId, scope);
   const source = await readBotSkillSourceForBot(botId, input.slug);
   owner.assertCurrent();
-  if (!canonical) throwIpcError('PRECONDITION_FAILED', 'Teammate unavailable');
+  if (!canonical) throwIpcError('PRECONDITION_FAILED', 'Buddy unavailable');
   // An imported skill keeps its own frontmatter (allowed-tools and the like); name, description and body change.
   let patched: string | null = null;
   try { patched = source === null ? null : patchCustomBotSkillSource(source, { ...input, updatedAt: new Date().toISOString() }); }

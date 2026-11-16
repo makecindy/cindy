@@ -251,4 +251,17 @@ describe('PR popover presentation', () => {
     expect(pending.summaryHtml).toContain('正在开启跟进…');
     expect(pending.settingsHtml).toBeNull();
   });
+  // A PR followed by another task used to leave the popover without any follow state,
+  // which read as a missing feature. Its card has no open-only controls, so the cases
+  // above never reached it. Unit tier, sanitized plugin snapshot as input.
+  it('shows the state and task link of a PR followed by another task', async () => {
+    const { default: cards } = await import('../../../scripts/fixtures/pr-popover/cards.json');
+    const reference = projectPrCard(cards['reference-task']);
+    const row = document.createElement('div');
+    row.innerHTML = reference.summaryHtml!;
+    expect(row.querySelector('.pr-summary-actions')?.textContent).toBe('其他任务正在跟进打开跟进任务 ↗');
+    expect(row.querySelector('[data-ghost-action="pr:open-task"]')?.getAttribute('data-ghost-session-link'))
+      .toBe('cindy://session/follow-task');
+    expect(reference.settingsLabel).toBeNull();
+  });
 });

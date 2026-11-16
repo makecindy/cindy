@@ -15,11 +15,16 @@ import {
 } from '@cindy/device-link';
 import { isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { DeviceLinkProvider, useDeviceLink, type DeviceLinkContextValue } from '../device-link/DeviceLinkContext';
+import { waitForMobileAgentNetPreferences } from '../device-link/agentNetPreferences';
 // Platform process lifecycle is covered in fileWebViewTermination.test.tsx.
 const directTransport = vi.hoisted(() => ({ enabled: false, owner: '' }));
 vi.mock('../device-link/DirectLinkTransport', () => ({ DirectLinkTransport: (props: typeof directTransport) => {
   Object.assign(directTransport, props); return null;
 } }));
+// The existing V1 provider path has no Agent-Net binary or OS notification bridge.
+vi.mock('../../modules/cindy-agent-net/src', () => ({ agentNetNative: null }));
+vi.mock('@/notifications/nativeNotifications', () => ({ default: {} }));
+vi.mock('@/notifications/nativePushEnvironment', () => ({ readIosPushEnvironment: async () => undefined }));
 import { useMobileMakerTransport } from '../device-link/useMobileMakerTransport';
 import type { MobileMakerTransport } from '../device-link/mobileMakerTransport';
 import { acquireDeviceSendSlot, resetDeviceResponsivenessTracking, settleDeviceSend, unresponsiveDevicesStore } from '../device-link/unresponsiveDevicesStore';
@@ -101,6 +106,8 @@ const transport = vi.hoisted(() => {
     restartConnection = vi.fn();
     notifyNetworkChanged = vi.fn();
     getStatus = () => this.status;
+    getConnectionIssue = () => null;
+    hasOnlineConnection = () => this.status === 'online' || this.separate?.status === 'online';
     separate: Client | null = null;
     scopedPeers = new Set<string>();
     connectionFor(deviceId: string) { return this.scopedPeers.has(deviceId) ? this.separate ?? this : this; }
@@ -119,6 +126,7 @@ const transport = vi.hoisted(() => {
     onReliableFrameBeforeLink = () => () => {};
     onSeparateCrossAccountStatus(listener: Client['crossAccountStatusChanged']) { this.crossAccountStatusChanged = listener; return () => {}; }
     onSeparateCrossAccountIssue = () => () => {};
+    onScopedConnectionStatus = () => () => {};
     retainedPeers = new Set<string>();
     readyPeers = new Set<string>();
     isLinkReady = (deviceId: string) => this.readyPeers.has(deviceId) || this.retainedPeers.has(deviceId);
@@ -179,6 +187,8 @@ async function readHistory() {
 }
 
 beforeEach(async () => {
+  // The fake client bypasses the real socket factory that initializes preferences.
+  await waitForMobileAgentNetPreferences();
   networkEvents.read.mockReset().mockRejectedValue(new Error('native lookup unavailable'));
   networkEvents.state = 'active';
   auth.accountGeneration = 1;
@@ -523,6 +533,30 @@ describe('Provider retained foreground direct paths', () => {
     expect(context.getPresenceAvailability('host')).toBe(false);
     expect(directTransport.enabled).toBe(false);
     expect(client.restartConnection).not.toHaveBeenCalled();
+  });
+
+  /** 测试价值：手机自己的中继断线后直连也断开，不是电脑离线的证据。
+   * 生产入口：Provider 的 onPeerPathChanged → getPresenceAvailability / invoke。
+   * Bug 依据：2026-11-16 回到 App 或网络抖动时电脑被标成离线、请求按 DEVICE_OFFLINE 失败，
+   * 稍后才恢复。覆盖缺口：上一条只覆盖中继已明确通知离线的情况。
+   * 最小失败输入：中继 connecting、未收到离线 presence、直连回落 relay。tier：unit。 */
+  it('does not declare the computer offline when the phone loses its relay and then the direct path', async () => {
+    const client = transport.clients[0];
+    client.openLink.mockResolvedValue(accepted(supported));
+    scopedPeer = 'host';
+    await act(async () => { render(); await context.invoke('host', historyChannel); });
+    await act(async () => {
+      client.retainedPeers.add('host');
+      client.status = 'connecting'; client.statusChanged('connecting');
+    });
+    expect(scopedContext.status).toBe('online');
+    await act(async () => { client.retainedPeers.clear(); client.peerPath({ deviceId: 'host', path: 'relay' }); });
+    expect(scopedContext.status).toBe('connecting');
+    expect(context.getPresenceAvailability('host')).not.toBe(false);
+    expect(directTransport.enabled).toBe(false);
+    // The request waits for the phone's own reconnect instead of blaming the computer.
+    const { result } = await readHistory();
+    expect(await result).toMatchObject({ code: 'NOT_CONNECTED' });
   });
 
   it('keeps a disabled verdict across relay restart and masked offline presence until online enabled', async () => {

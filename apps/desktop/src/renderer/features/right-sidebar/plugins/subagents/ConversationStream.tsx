@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 
 import { AssistantMessage } from '@/components/chat/AssistantMessage';
 import { UserMessage } from '@/components/chat/UserMessage';
+import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import type { SubagentConversationItem } from './subagentConversation';
 import { SubagentToolCard } from './SubagentToolCard';
 
@@ -44,6 +45,7 @@ export function ConversationStream({
   actionBarItemId = null,
 }: ConversationStreamProps) {
   const { t } = useTranslation();
+  const pluginUi = usePluginUiMessageCandidates();
   return (
     <>
       {items.map((item) => {
@@ -71,6 +73,7 @@ export function ConversationStream({
                 </div>
               ) : null}
               <UserMessage
+                pluginUi={pluginUi}
                 workingDir={workdir}
                 allowPrivilegedLinks={allowPrivilegedLinks}
                 content={item.content}
@@ -81,6 +84,7 @@ export function ConversationStream({
         }
         return (
           <AssistantMessage
+            pluginUi={pluginUi}
             key={item.id}
             workingDir={workdir}
             allowPrivilegedLinks={allowPrivilegedLinks}

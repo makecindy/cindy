@@ -15,11 +15,13 @@ import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { RotateCcw, Sparkles } from 'lucide-react';
+import { Eraser, Sparkles } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
+import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import { Tip } from '@/components/ui/tooltip';
 import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
@@ -308,21 +310,21 @@ export function MemorySection() {
                 onCheckedChange={(v) => void handleMakerToggle(v)}
                 aria-label={t('settings.memory.maker.toggleAria')}
               />
-              <button data-setting-id={personalizationDetailsSettings.memoryMakerLabel.id}
-                type="button"
-                onClick={() => void handleMakerReset()}
-                disabled={makerResetPending || makerTogglePending}
-                aria-label={t('settings.memory.maker.resetAria')}
-                className={cn(
-                  'flex h-[30px] w-[30px] items-center justify-center rounded-lg',
-                  'text-[var(--settings-section-desc)]',
-                  'hover:bg-[var(--settings-input-bg)] hover:text-[var(--settings-section-title)]',
-                  'transition-colors',
-                  'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
-                )}
-              >
-                <RotateCcw size={16} />
-              </button>
+              {/* Clearing memories is irreversible (CONTROLS decision 4): danger icon Button + Tip. */}
+              <Tip text={t('settings.memory.maker.resetAria')}>
+                <Button data-setting-id={personalizationDetailsSettings.memoryMakerLabel.id}
+                  variant="secondary"
+                  tone="danger"
+                  size="sm"
+                  type="button"
+                  className="w-7 px-0"
+                  onClick={() => void handleMakerReset()}
+                  disabled={makerResetPending || makerTogglePending}
+                  aria-label={t('settings.memory.maker.resetAria')}
+                >
+                  <Eraser size={15} aria-hidden />
+                </Button>
+              </Tip>
             </div>
           }
         />
@@ -363,21 +365,20 @@ export function MemorySection() {
                     onCheckedChange={(v) => void handleToggle(agent.kind, v, label)}
                     aria-label={t('settings.memory.agent.toggleAria', { label })}
                   />
-                  <button data-settings-search-action="Restore the selected memory preference"
-                    type="button"
-                    onClick={() => void handleReset(agent.kind, label)}
-                    disabled={disabled}
-                    aria-label={t('settings.memory.agent.resetAria', { label })}
-                    className={cn(
-                      'flex h-[30px] w-[30px] items-center justify-center rounded-lg',
-                      'text-[var(--settings-section-desc)]',
-                      'hover:bg-[var(--settings-input-bg)] hover:text-[var(--settings-section-title)]',
-                      'transition-colors',
-                      'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
-                    )}
-                  >
-                    <RotateCcw size={16} />
-                  </button>
+                  <Tip text={t('settings.memory.agent.resetAria', { label })}>
+                    <Button data-settings-search-action="Restore the selected memory preference"
+                      variant="secondary"
+                      tone="danger"
+                      size="sm"
+                      type="button"
+                      className="w-7 px-0"
+                      onClick={() => void handleReset(agent.kind, label)}
+                      disabled={disabled}
+                      aria-label={t('settings.memory.agent.resetAria', { label })}
+                    >
+                      <Eraser size={15} aria-hidden />
+                    </Button>
+                  </Tip>
                 </div>
               }
             />

@@ -20,6 +20,7 @@ import {
 } from '@cindy/model-providers';
 
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { Collapse } from '@/components/ui/collapse';
 import { SETTINGS_HINT, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { useProviders } from '@/hooks/useProviders';
@@ -363,6 +364,9 @@ export function VisionBridgeSection() {
         />
       </SettingsCard>
 
+      {/* 关闭时收起明细，保留已保存选择；外层 gap 与负 margin 相消，14px 间距放在裁剪内容里随高度动画。 */}
+      <Collapse open={enabled} className="-mt-[14px]">
+      <div className="flex flex-col gap-[14px] pt-[14px]">
       {/* ── 卡 1：目标模型（走视觉桥的纯文本模型） ────────────────────── */}
       <SettingsCard>
         <SettingsField
@@ -534,6 +538,8 @@ export function VisionBridgeSection() {
           </p>
         </SettingsField>
       </SettingsCard>
+      </div>
+      </Collapse>
     </SettingsSection>
   );
 }

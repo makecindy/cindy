@@ -1,6 +1,6 @@
 {
-  "officialRelayNote": "你正在使用自建中转，共享任务的内容仍经 {{appName}} 官方中转。",
-  "selfJoin": "这是你发起的共享任务，无需加入。请从“我发起的”打开",
+  "officialRelayNote": "Agent-Net 分享使用邀请指定的中转；旧版分享仍经 {{appName}} 官方中转。",
+  "selfJoin": "这是你发起的共享任务，无需加入。请从“我发起的”打开。",
   "waitingHost": "等待房主处理，你可以继续发送消息。",
   "join": "加入共享任务",
   "joinHint": "粘贴邀请链接，进入同一个共享任务。",
@@ -10,7 +10,7 @@
   "invitation": "邀请链接或邀请码",
   "invalid": "请粘贴有效的邀请链接或邀请码",
   "requestJoin": "加入",
-  "dismiss": "关闭窗口",
+  "dismiss": "关闭弹窗",
   "title": "共享任务",
   "hostLimit": "开启的共享任务已达当前上限，请关闭共享任务，直到数量低于上限后再试。",
   "joinLimit": "加入的共享任务已达当前上限，请退出共享任务，直到数量低于上限后再试。",
@@ -103,7 +103,7 @@
   "cancelOperation": "取消",
   "leaveShort": "退出",
   "returnToTasks": "返回任务列表",
-  "closeAllLabel": "取消全部共享",
+  "closeAllLabel": "关闭全部共享",
   "closeAllDescription": "所有访客将无法继续访问，任务记录保留。",
   "joinedManageIntro": "退出后将无法继续访问该共享；房主和其他成员不受影响。"
 }

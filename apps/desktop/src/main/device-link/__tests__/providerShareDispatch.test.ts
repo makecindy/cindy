@@ -18,8 +18,8 @@ const warn = vi.hoisted(() => vi.fn());
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn, error: vi.fn() }),
 }));
-vi.mock('../settings-store', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../settings-store')>()),
+vi.mock('../settings-store.desktop', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../settings-store.desktop')>()),
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, keepAwake: false, revokedControllers: [], disabledControlDeviceIds: [] }),
 }));
 
@@ -33,7 +33,7 @@ import {
   setRemoteAgentHandler,
   setRemoteSubscriptionPoolQuotaReader,
   setRemoteClaudeSubscriptionUsageReader,
-} from '../dispatch';
+} from '../dispatch.desktop';
 import { readLegacySubscriptionQuota } from '../../subscription-accounts/legacyQuota';
 
 const GUEST = providerShareGuestPeer('share-1', 'member-1', 'laptop');
@@ -250,11 +250,12 @@ describe('provider share invoke', () => {
     registry.register('maker:provider:list', async () => ({ providers: [{
       id: 'anthropic', remoteInvocationEnabled: true,
       models: { 'claude-code': [{ id: 'small' }, { id: 'large' }] },
+      evaluationModels: [{ id: 'small', mode: 'evaluation' }, { id: 'large', mode: 'rerank' }],
     }] }));
     try {
       for (const [src, model] of [[GUEST, 'small'], [second, 'large']]) {
         await expect(runInvoke(src, { channel: 'maker:provider:list', args: [] })).resolves.toMatchObject({
-          ok: true, result: { providers: [{ models: { 'claude-code': [{ id: model }] } }] },
+          ok: true, result: { providers: [{ models: { 'claude-code': [{ id: model }] }, evaluationModels: [{ id: model }] }] },
         });
       }
     } finally { registry.reset(); }

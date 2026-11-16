@@ -23,7 +23,7 @@ export function resumableCompose(repo, selection, worktree, stateFile, exec = ru
     const name = git(repo.checkout, 'config', 'user.name'), email = git(repo.checkout, 'config', 'user.email');
     check(name && email, 'Set Git identity before composing');
     const steps = selection.selected.map(p => ({ ...p, label: `PR #${p.number}` }));
-    for (const ref of repo.localRefs || []) steps.push({ ref, label: `local ${ref}`, sha: git(repo.checkout, 'rev-parse', '--verify', `${ref}^{commit}`) });
+    for (const entry of selection.localRefs ?? (repo.localRefs || []).map(ref => ({ref, sha:git(repo.checkout, 'rev-parse', '--verify', `${ref}^{commit}`)}))) steps.push({...entry, label:`local ${entry.ref}`});
     for (const commit of [selection.baseSha, ...selection.selected.map(p => p.sha)]) git(repo.checkout, 'fetch', '--no-tags', '--no-write-fetch-head', `https://github.com/${repo.repository}.git`, commit);
     git(repo.checkout, 'worktree', 'add', '--detach', worktree, selection.baseSha);
     state = { repository: repo.repository, base: selection.base, baseSha: selection.baseSha, worktree, steps, completed: [], name, email, excluded: selection.excluded };

@@ -3,12 +3,11 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
 import { botProfileDir } from './botProfileFolder.js';
-import { signalBotAutonomyBotsChanged } from '../bot-autonomy/botsChangedSignal.js';
 
-/** Per-task responsibility, independent of directories and Todo.
- * Releases override creation evidence; nothing is inferred from conversation text.
+/** Per-task record of the tasks a teammate opened (`created`). `responsible` stays in the format so
+ * older readers parse it; a release (false) is kept as written. Nothing is inferred from conversation text.
  */
-export type TaskResponsibilities = Record<string, { responsible: boolean; updatedAt: string }>;
+export type TaskResponsibilities = Record<string, { responsible: boolean; updatedAt: string; created?: boolean }>;
 const MAX_RECORDS = 10_000;
 const MAX_BYTES = 4 * 1024 * 1024;
 
@@ -28,7 +27,8 @@ export async function readTaskResponsibilities(root: string, botId: string): Pro
     if (entries.length > MAX_RECORDS || entries.some(([id, value]) => {
       const entry = value as TaskResponsibilities[string] | null;
       return !id || id.length > 256 || !entry || typeof entry.responsible !== 'boolean'
-        || typeof entry.updatedAt !== 'string' || !Number.isFinite(Date.parse(entry.updatedAt));
+        || typeof entry.updatedAt !== 'string' || !Number.isFinite(Date.parse(entry.updatedAt))
+        || (entry.created !== undefined && typeof entry.created !== 'boolean');
     })) throw new Error('Invalid task responsibility record');
     return Object.fromEntries(entries) as TaskResponsibilities;
   } catch (error) {
@@ -46,9 +46,15 @@ export function responsibleSessionIds(createdIds: Iterable<string>, records: Tas
   return [...ids].sort();
 }
 
+/** Tasks this Bot opened through ordinary task tools; releasing one does not erase who opened it. */
+export function createdSessionIds(records: TaskResponsibilities): string[] {
+  return Object.entries(records).filter(([, entry]) => entry.created === true).map(([id]) => id).sort();
+}
+
 /** Atomic, cross-process update; preserve tombstones and reject capacity overflow. */
 export async function setTaskResponsibility(
   root: string, botId: string, sessionId: string, responsible: boolean, assertCurrent: () => void,
+  opts: { created?: boolean } = {},
 ): Promise<void> {
   if (!sessionId || sessionId.length > 256 || typeof responsible !== 'boolean') throw new Error('Invalid task responsibility');
   const file = filePath(root, botId);
@@ -59,7 +65,11 @@ export async function setTaskResponsibility(
     assertCurrent();
     const tasks = await readTaskResponsibilities(root, botId);
     if (!Object.hasOwn(tasks, sessionId) && Object.keys(tasks).length >= MAX_RECORDS) throw new Error('Task responsibility store full');
-    const next = { ...tasks, [sessionId]: { responsible, updatedAt: new Date().toISOString() } };
+    const created = opts.created === true || tasks[sessionId]?.created === true;
+    const next = {
+      ...tasks,
+      [sessionId]: { responsible, updatedAt: new Date().toISOString(), ...(created ? { created: true } : {}) },
+    };
     const temp = file + '.' + randomUUID() + '.tmp';
     try {
       await fs.writeFile(temp, JSON.stringify({ version: 1, tasks: next }) + '\n', { encoding: 'utf8', mode: 0o600 });
@@ -70,8 +80,6 @@ export async function setTaskResponsibility(
     }
     assertCurrent();
   });
-  // 接手 / 解除立即让自主跟进重读归属：工作台与跟进者不必等 60 秒的定时重读。
-  signalBotAutonomyBotsChanged();
 }
 
 export interface TaskResponsibilityScope {

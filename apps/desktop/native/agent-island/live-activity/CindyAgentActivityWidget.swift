@@ -137,7 +137,7 @@ private struct Identity: View {
   }
 }
 
-/// `attention · running` counts in Agent Island colors; a check for unread results.
+/// Agent Notch's `attention · running` counts, including unread finished work.
 private struct CountRuns: View {
   let state: CindyAgentActivityAttributes.ContentState
   let size: CGFloat
@@ -145,21 +145,78 @@ private struct CountRuns: View {
 
   var body: some View {
     HStack(spacing: size * 0.25) {
-      if state.attentionCount > 0 {
-        Text("\(state.attentionCount)").foregroundStyle(Palette.attention)
+      if state.badgeAttentionCount > 0 {
+        Text("\(state.badgeAttentionCount)")
+          .foregroundStyle(state.attentionCount > 0 ? Palette.attention : Palette.completed)
       }
-      if state.attentionCount > 0 && state.runningCount > 0 {
+      if state.badgeAttentionCount > 0 && state.runningCount > 0 {
         Text("·").foregroundStyle(separator)
       }
       if state.runningCount > 0 {
         Text("\(state.runningCount)").foregroundStyle(Palette.running)
       }
-      if state.attentionCount == 0 && state.runningCount == 0 {
+      if state.badgeAttentionCount == 0 && state.runningCount == 0 {
         Image(systemName: "checkmark").foregroundStyle(Palette.completed)
       }
     }
     .font(.system(size: size, weight: .semibold, design: .rounded))
     .monospacedDigit()
+  }
+}
+
+/// Keep the two original numbers and colors, explain them only after expansion.
+private struct ExpandedCounts: View {
+  let state: CindyAgentActivityAttributes.ContentState
+  let size: CGFloat
+  var secondary: Color = Palette.islandSecondary
+
+  var body: some View {
+    if let labels = state.countLabels,
+       state.badgeAttentionCount > 0 || state.runningCount > 0 {
+      HStack(alignment: .top, spacing: 8) {
+        if state.badgeAttentionCount > 0 {
+          item(state.badgeAttentionCount, label: labels.attention,
+            tint: state.attentionCount > 0 ? Palette.attention : Palette.completed)
+        }
+        if state.badgeAttentionCount > 0 && state.runningCount > 0 {
+          Text("·").font(.system(size: size)).foregroundStyle(secondary)
+        }
+        if state.runningCount > 0 {
+          item(state.runningCount, label: labels.inProgress, tint: Palette.running)
+        }
+      }
+    } else {
+      CountRuns(state: state, size: size, separator: secondary)
+    }
+  }
+
+  private func item(_ value: Int, label: String, tint: Color) -> some View {
+    VStack(spacing: 2) {
+      Text("\(value)").font(.system(size: size, weight: .semibold, design: .rounded))
+        .monospacedDigit().foregroundStyle(tint)
+      Text(label).font(.system(size: 10)).foregroundStyle(secondary)
+        .multilineTextAlignment(.center)
+    }
+  }
+}
+
+private struct AttentionBreakdown: View {
+  let state: CindyAgentActivityAttributes.ContentState
+  var secondary: Color = Palette.islandSecondary
+
+  var body: some View {
+    if let labels = state.countLabels, state.badgeAttentionCount > 0 {
+      let pending = min(state.badgeAttentionCount, max(0, state.attentionCount))
+      let unread = state.badgeAttentionCount - pending
+      let parts = [
+        pending > 0 ? "\(labels.pending) \(pending)" : nil,
+        unread > 0 ? "\(labels.unread) \(unread)" : nil,
+      ].compactMap { $0 }
+      Text(parts.joined(separator: " · "))
+        .font(.system(size: 11)).foregroundStyle(secondary)
+        .lineLimit(1)
+        .truncationMode(.tail)
+    }
   }
 }
 
@@ -185,13 +242,36 @@ private struct StatusLine: View {
   var body: some View {
     HStack(spacing: 5) {
       Text(state.detail).foregroundStyle(state.tint)
-      if !state.summary.isEmpty {
+      if state.countLabels == nil && !state.summary.isEmpty {
         Text("·").foregroundStyle(secondary)
         Text(state.summary).foregroundStyle(secondary)
       }
     }
     .font(.system(size: 12, weight: .medium))
     .lineLimit(1)
+  }
+}
+
+/// One subtitle line: explain the pending count without adding a third row.
+/// Preserve completion/error or running detail when it is the surfaced task's status.
+private struct ExpandedStatusLine: View {
+  let state: CindyAgentActivityAttributes.ContentState
+  let secondary: Color
+
+  var body: some View {
+    if state.countLabels != nil && state.badgeAttentionCount > 0 {
+      HStack(spacing: 5) {
+        if state.status != "attention" {
+          Text(state.detail).foregroundStyle(state.tint)
+          Text("·").foregroundStyle(secondary)
+        }
+        AttentionBreakdown(state: state, secondary: secondary)
+      }
+      .font(.system(size: 11))
+      .lineLimit(1)
+    } else {
+      StatusLine(state: state, secondary: secondary)
+    }
   }
 }
 
@@ -209,10 +289,10 @@ private struct ActivityBanner: View {
           .font(.system(size: 14, weight: .semibold))
           .foregroundStyle(.primary)
           .lineLimit(1)
-        StatusLine(state: state, secondary: .secondary)
+        ExpandedStatusLine(state: state, secondary: .secondary)
       }
       Spacer(minLength: 8)
-      CountRuns(state: state, size: 18, separator: .secondary)
+      ExpandedCounts(state: state, size: 18, secondary: .secondary)
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 12)
@@ -231,7 +311,7 @@ struct CindyAgentActivityWidget: Widget {
             .padding(.leading, 4)
         }
         DynamicIslandExpandedRegion(.trailing) {
-          CountRuns(state: context.state, size: 20)
+          ExpandedCounts(state: context.state, size: 20)
             .padding(.trailing, 4)
         }
         // Title and status share the center region so the avatar keeps the leading
@@ -242,7 +322,7 @@ struct CindyAgentActivityWidget: Widget {
               .font(.system(size: 15, weight: .semibold))
               .foregroundStyle(Palette.islandText)
               .lineLimit(1)
-            StatusLine(state: context.state, secondary: Palette.islandSecondary)
+            ExpandedStatusLine(state: context.state, secondary: Palette.islandSecondary)
           }
           .frame(maxWidth: .infinity, alignment: .leading)
         }

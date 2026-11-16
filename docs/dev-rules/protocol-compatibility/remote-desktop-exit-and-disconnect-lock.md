@@ -1,0 +1,74 @@
+# 远程桌面退出与断线锁屏
+
+> 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
+
+远程桌面的 `start` / `heartbeat` 可追加布尔 `lockOnExit`。新版 Desktop 与 Mobile
+提前同步退出保护策略，被控端在主动退出、本机断开、信令断开或现有心跳过期时本地执行保护；
+存活连接的 resume / takeover 和显示器切换不触发。锁屏期间重复断开或心跳过期
+不能取消锁屏，撤权与认证身份变化仍可取消。旧请求缺少字段时保留原行为（旧手机的
+`privacyScreen.lockOnExit` 继续兼容），新字段优先于该隐私屏幕附带偏好。
+旧被控端忽略新字段，主动退出仍发送原 `stop.lockScreen`；断网兜底需要被控端升级。
+不带 `lockScreen` 的协议 `stop` 仍用于重连和切显示器的清理，不执行锁屏。
+Desktop 本地关窗不等待远端停止回执，后台清理只作用于原 peer / lease，不重置共享链路。
+此扩展沿用已有业务通道，不改变 relay、服务端协议或权限范围。
+
+## 退出改用隐私屏（2026-11-11）
+
+macOS 14+ 与 Windows 10 build 19041+ 被控端复用 `AwayGuardController.coverRemoteExit`：先遮住所有本地显示器，
+再清理远程连接。它与远控期间的遮罩分开持有，连接清理不会撤掉退出后的隐私屏；
+即使设置里的「离开后继续工作」关闭也生效，不修改该设置。已有预览转成持续保护，
+不再随两分钟预览到期撤罩。空闲超时也走同一流程，仍拒绝自动恢复原连接。
+macOS 离开遮罩的窗口 ID 与会话遮罩、控制提示条一起进入原生采集排除列表，
+直到对应遮罩销毁才移除；重新连接不会把仍保留的离开遮罩采集给远端。
+
+沿用原生隐私屏的本地操作判据：点击、按键、有效滚动才进入系统锁屏，鼠标漂移不会误锁；
+Agent 注入的操作继续放行。本地确认退出远控隐私屏仍直接锁屏，不能又换成另一层遮罩。
+Cindy 退出、遮罩失效、显示器新增等原有故障保护继续锁屏。遮罩无法建立时退回原生锁屏；
+未支持离开隐私屏的平台维持原锁屏路径（前提是该环境已有锁屏能力），已经锁住的电脑不会被解锁。
+
+`lockOnExit` / `stop.lockScreen` 保留名称与请求结构，表示开启退出保护；旧被控端仍立即
+锁屏，新被控端接收旧客户端请求时也能使用隐私屏。无需修改 relay 或自建中转：未新增
+消息、字段、路由或重连请求，改变仅在被控端结束已有 lease 时的本地动作。
+
+Windows 的原生 helper 增加 `--away-guard`、`--lock-screen` 和 `--lock-state`：
+物理输入触发 `LockWorkStation`，通过当前用户会话的 WTS 状态确认锁定；UAC 安全桌面
+不当作锁屏成功。退出保护不要求安装 SYSTEM 服务，后台输入仍走原有权限边界。
+
+Linux 在已有 Hyprland 0.56.2 / 匹配 ABI 的隐私后端上接入持续保护：`away` 把同一
+原生 token 转成离开遮罩，`stopSession` 不撤罩，`lock` 用于退出；真实锁屏归属由合成器
+确认。本地输入或 Main 心跳丢失时原生侧请求系统锁屏，确认前不释放遮罩。远端开关不能
+撤掉该持续遮罩。GNOME、KDE、X11 尚无此隐私后端，继续原锁屏兜底，不能声明已实现
+持续隐私屏。此处新增命令只在本机 helper 与其匹配的 Main 之间使用，不跨 device-link。
+
+### 尚未解决：Hyprland 插件被外部卸载
+
+持续遮罩依赖正在加载的合成器插件。Hyprland 0.56.2 的
+[`CPluginSystem::unloadPlugin`](https://github.com/hyprwm/Hyprland/blob/v0.56.2/src/plugins/PluginSystem.cpp)
+在同步调用 `PLUGIN_EXIT` 后无条件移除 hooks 并 `dlclose`，没有异步锁屏交接或取消卸载接口。
+因此当前卸载回调的锁屏请求不代表锁屏已完成，外部卸载仍可能提前露出桌面；
+不能在该回调里阻塞等待依赖同一合成器事件循环的确认。这是未解决的保护缺口，
+不能把现有 watchdog 的锁屏保证扩展到外部插件卸载。
+
+## 统一隐私屏与被控端空闲规则（2026-11-14）
+
+产品规则见 [隐私屏](../../product-rules/privacy-screen.md)。协议只增加两个可选的能力字段，
+不新增消息、路由或重连请求，relay 与自建中转无需改动：
+
+- `capabilities.hostIdle: true`：被控端用本机的离开时长处理无人操作的连接，忽略 `start` /
+  `heartbeat` 里的 `idleTimeoutMinutes`。只在规则此刻真正生效时声明（Hyprland 后端可用前、
+  其他 Linux 桌面不声明）。新遥控端对声明了它的被控端隐藏自己的空闲设置；对未声明的旧被控端
+  照旧发送 `idleTimeoutMinutes`（默认 5 分钟），旧行为不变。旧遥控端连接新被控端时发送的分钟数
+  被忽略，由被控端规则保护。
+- `capabilities.exitProtection: 'privacy-screen' | 'lock'`：只在被控端提供隐私屏时声明，表示
+  受保护的结束会盖隐私屏还是真锁屏，供遥控端显示说明与开启引导。缺省按 `lock` 理解。
+
+行为变化：退出改用隐私屏不再“即使设置关闭也生效”，而是只在被控端开启「用隐私屏代替锁屏」
+时使用，否则真锁屏。声明 `hostIdle` 的连接到达离开时长时由被控端真锁屏并结束（不使用隐私屏），
+仍拒绝自动恢复；隐私屏开着且 AI 正在工作时保持连接。失联（`heartbeat-expired`、`peer-offline`、
+`signaling-lost`）后只盖了隐私屏、而且隐私屏仍在、电脑没锁时，被控端接受同一遥控端的 `start.resume`
+（2026-11-15）；隐私屏转成锁屏或退回锁屏后仍返回 `DESKTOP_STOPPED`。遥控端沿用已有的自动恢复，不需要新字段。新增的输入 helper 状态词 `pointer`
+（物理鼠标移动）只在本机 Main 与随包 helper 之间使用，不经过 device-link。
+
+Windows（2026-11-14）：上文 #9899 的 Windows 退出锁屏、锁定确认与离开遮罩随统一隐私屏一起保留在代码中，但在
+Windows 真机验证前由 `WINDOWS_PRIVACY_SCREEN_ENABLED` 关闭。此时 Windows 被控端与之前一样不声明 `lockOnExit`、
+`idleLock`、`hostIdle` 与 `exitProtection`，遥控端按“不支持”显示，不改变协议。

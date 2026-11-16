@@ -82,7 +82,7 @@ vi.mock('../worktree/WorktreeManager.js', () => ({
   detectCwd: detectCwdMock,
 }));
 
-vi.mock('../messagePersistBroadcaster.js', () => ({
+vi.mock('../messagePersistBroadcaster.desktop.js', () => ({
   setLastAssistantTranscriptUuid: vi.fn(),
 }));
 

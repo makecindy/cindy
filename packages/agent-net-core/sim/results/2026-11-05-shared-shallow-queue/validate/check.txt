@@ -1,0 +1,5 @@
+    Checking agent-net-core v0.0.0 (<repo>\packages\agent-net-core)
+   Compiling ring v0.17.14
+    Checking agent-net-udp v0.0.0 (<repo>\packages\agent-net-core\udp)
+   Compiling agent-net-sim v0.0.0 (<repo>\packages\agent-net-core\sim)
+    Finished `sim` profile [optimized] target(s) in 9.77s

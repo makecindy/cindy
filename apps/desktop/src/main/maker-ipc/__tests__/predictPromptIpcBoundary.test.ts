@@ -281,7 +281,7 @@ vi.mock('../promptPrediction.js', () => ({
 vi.mock('../../maker-host/index.js', () => ({
   getMaker: vi.fn(() => ({})),
 }));
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   drainPersistQueue: h.drainPersistQueue,
 }));
 vi.mock('../../localDb/latestMessageText.js', () => ({

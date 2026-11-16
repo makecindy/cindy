@@ -10,6 +10,7 @@ import { getBotLastReadAtMap, getBotReadStateSyncStatus, resetBotReadStateForTes
   seedBotGroupReadState, seedMissingBotReadState } from '@/features/bots/botReadState';
 import { botReadStateFixture } from '@/features/bots/__tests__/botReadStateFixture';
 
+vi.mock('@/contexts/AppShellCoverContext', () => ({ useAppShellCover: () => ({ localDbGateStatus: 'ready' }) }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ canEnterApp: true, dataOwnerId: 'owner-1' }) }));
 vi.mock('@/lib/secondaryWindow', () => ({ isSecondaryWindow: () => true }));
 vi.mock('@/lib/sidebarWindow', () => ({ isSidebarWindow: () => false }));

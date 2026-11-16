@@ -7,13 +7,14 @@ import {
 } from '@cindy/orca-workflow';
 import type { OrcaRemoteLead } from '../../../shared/orcaRemoteWorker.js';
 import { createOrcaRemoteWorkerBridge } from '../orcaRemoteWorkerBridge.js';
+import type { OrcaRemoteWorkerBridgeDeps } from '../orcaRemoteWorkerBridge.js';
 import type { OrcaWorkerRecord } from '../../localDb/orcaTeamStore.js';
 
 // Value: production MCP handlers → execution-device route → attested Lead handler. The live
 // 2026-10-21 probe failed for a valid remote session with no local orcaRole. Existing tests
 // covered local links only. Minimal input: one remote Worker, one queued report. Unit tier;
 // no sockets, Electron app or real account is needed. Also protects device/team/child isolation.
-function setup() {
+function setup(deliverReport?: OrcaRemoteWorkerBridgeDeps['deliverReport']) {
   let owner = 1;
   let activeTeam: string | null = 'team-1';
   const remoteLead: OrcaRemoteLead = {
@@ -86,7 +87,8 @@ function setup() {
     readSession: vi.fn(),
     listWorkers: async () => [worker],
     remoteInvoke: vi.fn(),
-    invokeTool: (ctx, tool, args) => provider.invokeTool(ctx, tool, args, { manageWorkerStatus: false }),
+    invokeTool: (ctx, tool, args, reportClientId, onReportRejected) => provider.invokeTool(ctx, tool, args, { manageWorkerStatus: false, reportClientId, onReportRejected }),
+    ...(deliverReport ? { deliverReport } : {}),
     captureReportSettlement: captureSettlement,
   });
   const remoteInvoke = vi.fn(async (_device: string, _channel: string, args: unknown[]) => ({
@@ -152,6 +154,21 @@ function setup() {
 const json = (result: { content: Array<{ text: string }> }) => JSON.parse(result.content[0].text);
 
 describe('cross-device Worker bridge', () => {
+  // #9346: only the host can supply the persisted handoff ID. Exercise the full
+  // remote route and provider schema; model arguments must not choose that ID.
+  it('passes the host report identity through the manual remote bridge', async () => {
+    const deliver = vi.fn<NonNullable<OrcaRemoteWorkerBridgeDeps['deliverReport']>>(
+      async (_session, _ids, send) => send('host-report-id', () => {}),
+    );
+    const s = setup(deliver);
+    const result = await s.executionProvider.invokeTool(s.ctx, 'send_to_lead', {
+      ...s.request.args, reportClientId: 'model-controlled-id',
+    });
+    expect(result.isError).toBe(false);
+    expect(deliver).toHaveBeenCalledWith('proxy-1', ['input-a'], expect.any(Function));
+    expect(s.dispatch).toHaveBeenCalledWith(expect.objectContaining({ reportClientId: 'host-report-id' }));
+    expect(s.captureSettlement).not.toHaveBeenCalled();
+  });
   // PR #6659 discussion_r4336139384: a persisted remote link does not authorize
   // execution-device user turns. Existing tests checked root Agent identity only.
   // Unit: real MCP/bridge handlers must reject before dispatch or settlement, even
@@ -192,6 +209,19 @@ describe('cross-device Worker bridge', () => {
     expect(s.worker.status).toBe('done');
     expect(s.settled).toHaveBeenCalledTimes(1);
     expect(s.captureSettlement).toHaveBeenCalledWith('proxy-1', ['input-a']);
+  });
+
+  // 2026-11-10: the four queued-report tools are registered for every Worker, but only the four
+  // allowlisted tools cross devices. Before this check an unknown tool failed protocol validation
+  // with an opaque error. Unit tier: the production execution-device handler, no remote call.
+  it('tells a Worker on another computer that queued-report tools are not available there', async () => {
+    const s = setup();
+    const result = await s.executionProvider.invokeTool(s.ctx, 'cancel_queued_report', {
+      worker_id: 'worker-1', queued_message_id: 'report-1',
+    });
+    expect(result.isError).toBe(true);
+    expect(json(result)).toMatchObject({ code: 'REMOTE_WORKER_NOT_SUPPORTED' });
+    expect(s.remoteInvoke).not.toHaveBeenCalled();
   });
 
   // Review regression: A reports while B is pending. Runtime keeps B, so shared MCP

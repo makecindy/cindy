@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  interleaveBotGroupWork,
   botGroupBodyParts,
   botGroupComposerPlanState,
   botGroupErrorVariant,
@@ -125,6 +126,21 @@ describe('execution failures are a projection of the current snapshot', () => {
     const pages = mergeBotGroupMessages([source], [{ ...source, id: 'latest', sequence: 100 }]);
     expect(projectBotGroupExecutionFailures(pages, [failure])).toHaveLength(3);
     expect(projectBotGroupExecutionFailures(pages, []).map(item => item.id)).toEqual(['source', 'latest']);
+  });
+
+  // Unit: a late failure beside an old request must not pull newer work before its request.
+  it('anchors live work to real history when projected failures update or disappear', () => {
+    const pages = [{ ...source, createdAt: 10 },
+      { ...source, id: 'request', sequence: 5, createdAt: 30 },
+      { ...source, id: 'later', sequence: 6, createdAt: 50 }];
+    const work = [{ id: 'work', startedAt: 40 }];
+    for (const updatedAt of [100, 200]) {
+      const rows = projectBotGroupExecutionFailures(pages, [{ ...failure, updatedAt }]);
+      expect(interleaveBotGroupWork(rows, work).map(row => row.value.id))
+        .toEqual(['source', 'execution-failure:run:1', 'request', 'work', 'later']);
+    }
+    expect(interleaveBotGroupWork(projectBotGroupExecutionFailures(pages, []), work).map(row => row.value.id))
+      .toEqual(['source', 'request', 'work', 'later']);
   });
 
   it('does not anchor a notice on a tombstone even if an older server returns that execution', () => {
@@ -400,4 +416,34 @@ describe('unclaimed talk turn controls', () => {
     expect(botGroupPlanFollowUp(value)?.kind).toBe('continue');
     expect(botGroupPlanFollowUp({ ...value, kind: 'work' })).toBeNull();
   });
+
+  // #9909: a discussion turn that answered NO_REPLY publishes no group message at all, so the
+  // queue card must show it as skipped rather than spoken. Only an explicit `null` means "no
+  // message": a legacy projection omits the field and keeps the plain done state.
+  it('shows a discussion turn that published nothing as skipped', () => {
+    const value = plan({ kind: 'talk', steps: [
+      { position: 0, botId: 'a', botName: 'A', task: '', status: 'done', resultMessageId: null },
+      { position: 1, botId: 'b', botName: 'B', task: '', status: 'done', resultMessageId: '90000000-0000-4000-8000-000000000001' },
+      { position: 2, botId: 'a', botName: 'A', task: '', status: 'done' },
+    ] });
+    expect(botGroupPlanStepState(value, value.steps[0])).toBe('skipped');
+    expect(botGroupPlanStepState(value, value.steps[1])).toBe('done');
+    expect(botGroupPlanStepState(value, value.steps[2])).toBe('done');
+    // A division step hands work over; it is never a spoken turn.
+    expect(botGroupPlanStepState({ ...value, kind: 'work' }, value.steps[0])).toBe('done');
+  });
+});
+
+// Unit: live executions were appended after newer chat messages on both clients.
+// Their original timestamps, independent identities and removal must survive refreshes.
+it('keeps concurrent execution updates between their original neighboring messages', () => {
+  const messages = [{ id: 'request', createdAt: 10 }, { id: 'later', createdAt: 30 }];
+  const first = { id: 'first', startedAt: 20, status: 'running' };
+  const second = { id: 'second', startedAt: 25, status: 'queued' };
+  const ids = (work: typeof first[], rows = messages) => interleaveBotGroupWork(rows, work).map(row => row.value.id);
+  expect(ids([second, first])).toEqual(['request', 'first', 'second', 'later']);
+  expect(ids([{ ...first, status: 'stopping' }, second], [...messages, { id: 'newest', createdAt: 40 }]))
+    .toEqual(['request', 'first', 'second', 'later', 'newest']);
+  expect(ids([second])).toEqual(['request', 'second', 'later']);
+  expect(ids([])).toEqual(['request', 'later']);
 });

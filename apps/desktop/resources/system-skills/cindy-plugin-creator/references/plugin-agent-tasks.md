@@ -215,6 +215,7 @@ const r = await cindy.agent.requestSchedule({
 
 - `list({targetKind:'project'|'task'|'bot'})`：返回 `{targets:[{kind,id,label,detail}]}`，只含本机可用目标的名称和目录/说明，不含消息历史。插件可自行搜索和展示列表，最近活动只用于排序。
 - `resolve({target:{kind,id}})`：复核已保存或本次选择的目标，返回最新 `{kind,id,label,detail}`。只查询，不创建任务、不打开 UI、不保存绑定；固定目标失效返回 TARGET_UNAVAILABLE，不自动替换。插件可将 `{kind,id}` 存入自己的配置。project 的 id 是 Cindy 已有项目目录，task/bot 的 id 是任务/伙伴标识。
+- `resolve({session:sessionId})`：按会话查询同样的目标元数据。普通可用任务返回 `kind:'task'`，伙伴主对话返回 `kind:'bot'` 且 `id` 为伙伴 ID；伙伴的其他会话、失效或不可用会话返回 `TARGET_UNAVAILABLE`。`session` 与 `target` 必须二选一，同时传入返回 `INVALID_PARAMS`；只查询，不创建或切换会话。
 - `send({target:{kind,id},requestKey,text,context?,title?,autoTitle?,route?,permissionMode?,delivery?,attachments?})`：直接指定目标，Host 当次复核。project 在目录中新建普通任务，可传统一模型目录的 route 和已授权范围内的 permissionMode；task/bot 沿用接收方模型、权限、目录，不接受 route 或 permissionMode。`delivery` 为 `queue | steer`，缺省 queue；project 不接受 steer。steer 尝试同轮注入，不停止当前轮，空闲或插话暂不可用时入队。返回 `{taskId,accepted:true,delivery:"queue"|"steer"}` 表示实际接受路径，不表示执行完成。筛查拒绝返回 DELIVERY_REJECTED，不入队重试；ACK 未知返回 DELIVERY_UNCERTAIN，不得换键重发。不开放读取任意任务历史或改模。
 - 同一次 send 重试沿用相同 requestKey、target、内容和 delivery（缺省与 queue 等价）；同键参数变化返回 REQUEST_KEY_CONFLICT。Host 在执行前持久保留投递回执，重启后已接受的请求返回原结果，未确定结果的请求返回 DELIVERY_UNCERTAIN，不再次创建或投递。普通投递回执不保存正文或附件字节；显式委派另保存下述有界执行范围。不要通过更换 requestKey 绕过未知结果，应先让用户在 Cindy 检查。
 - `cancel({requestKey})`：使本次请求及迟到的发送失效，仅撤回本插件该请求尚未执行的输入；不会停止接收方其他输入，也不保证撤销已经开始的工作。新操作使用新的 requestKey。

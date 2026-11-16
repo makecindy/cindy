@@ -2,7 +2,7 @@ import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { getSessionProvider } from '../maker-host/session-provider-store.js';
 import { isUserProviderSession } from '../maker-host/provider-route.js';
 import { getSessionFastMode } from '../maker-host/session-effort-store.js';
-import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.js';
+import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.desktop.js';
 import type { UsageBillingSource } from '@cindy/maker-shared/usage-cost-details';
 import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from '../maker-host/subscription-account-auth.js';
 

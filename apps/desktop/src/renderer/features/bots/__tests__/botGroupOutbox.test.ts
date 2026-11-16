@@ -9,7 +9,7 @@ import type { BotGroupOutboxCommandRequest, BotGroupOutboxCommandResult, BotGrou
 vi.mock('../../../../main/appSessionState.js', () => ({ getActiveAppSession: () => ({ dataOwnerId: null, generation: 0 }),
   isAppSessionBoundaryPending: () => false, ownerScopedUserDataPath: () => '', onAppSessionInvalidated: () => () => {} }));
 vi.mock('../../../../main/localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: {} }) }));
-vi.mock('../../../../main/cindy-media/blobStore.js', () => ({ parseBlobUrl: () => null }));
+vi.mock('../../../../main/cindy-media/blobStore.desktop.js', () => ({ parseBlobUrl: () => null }));
 vi.mock('../../../../main/cindy-media/ledger.js', () => ({}));
 import { createBotGroupOutboxStorage } from '../../../../main/maker-ipc/botGroupOutboxStorage';
 import * as atomic from '../../../../main/utils/atomicWriteFile';

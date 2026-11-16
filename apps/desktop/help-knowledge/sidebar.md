@@ -4,7 +4,7 @@ title: Finding and organizing sessions
 summary: Browse, group, sort, filter, search, tag, and pin sessions or projects in the left sidebar, and find and restore archived sessions.
 ---
 
-The left sidebar lists your sessions. It's the main way to navigate and organize. The top of the sidebar has navigation rows (**New** — ⌘N / Ctrl+N starts a new session — then **Automations**, **Plugins**, **Search**; use **More → Customize** to show, hide, or reorder them). **Teammates** have their own section above **Pinned** (see the Teammates topic). Below them is the main session list.
+The left sidebar lists your sessions. It's the main way to navigate and organize. The top of the sidebar has navigation rows (**New** — ⌘N / Ctrl+N starts a new session — then **Automations**, **Plugins**, **Search**; use **More → Customize** to show, hide, or reorder them). **Buddies** have their own section above **Pinned** (see the Buddies topic). Below them is the main session list.
 
 **Finding and restoring an archived session:**
 
@@ -51,6 +51,12 @@ The left sidebar lists your sessions. It's the main way to navigate and organize
 - Right-click a session and choose **Pin** / **Unpin**. There's no limit; a new pin goes to the front.
 - In a project's **⋮** menu, choose **Pin project** / **Unpin project** to pin the whole project. Pinned projects and sessions share one draggable order.
 - The **Pinned** header has its own view-style button: **Text**, **Cards**, or **List** (Cards is only available in Pinned).
+
+**Automatic task groups:**
+
+- When expanded, the history includes the task opened by the group header, whether read or unread. When collapsed, that task is omitted from the unread child rows because it is already represented by the header. Pinned tasks stay out of the ordinary list.
+
+- Collapsed automatic task groups still show every unread run that is not silent, including successfully completed runs, plus failures and runs waiting for your reply. These rows are not limited to the first five. Silent successful runs and read history stay hidden; reading a run removes it from this list once it no longer needs attention.
 
 **Collapse / expand all groups:**
 

@@ -56,7 +56,7 @@ const uploadMock = vi.fn(async (p: string, _opts?: unknown) => ({
   size: 4,
   contentType: 'text/plain',
 }));
-vi.mock('../../device-link/mediaTransfer.js', () => ({
+vi.mock('../../device-link/mediaTransfer.desktop.js', () => ({
   uploadLocalFile: (p: string, opts: unknown) => uploadMock(p, opts),
 }));
 vi.mock('../../device-link/remote-workdir-guard.js', async (importOriginal) => {
@@ -69,7 +69,7 @@ vi.mock('../../device-link/remote-workdir-guard.js', async (importOriginal) => {
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: () => ownerStampState.current,
 }));
-vi.mock('../../device-link/dispatch.js', () => ({
+vi.mock('../../device-link/dispatch.desktop.js', () => ({
   pushToTopicSubscribers: (channel: string, payload: unknown, ownerStamp?: unknown) =>
     pushSpy(channel, payload, ownerStamp),
 }));

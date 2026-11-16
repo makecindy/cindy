@@ -61,3 +61,13 @@
 
 按机器执行（`shell` / `read_file` / `await_shell` / `copy_file`）、账号级模型资源、失败时换到另一台、大脑租约按顺序另行交付，
 不在当前实现内。
+
+## 请求远程控制授权（2026-11-10）
+
+`request_remote_control` 使用 `list_machines` 返回的精确设备 ID 和工作目的，向同账号在线
+电脑发起本机确认。CC/Codex 顶层可见，统一 helper 目录也提供 `devices.remote-consent`
+发现与 `call_tool` 入口（包含 Pi）。共享任务拒绝；手机、SSH、离线与撤权设备不可请求。
+用户点「开启远程控制」后复用现有持久设置与 presence 广播；提示说明运行任务、访问文件
+及持续有效的范围。Agent 等明确 enabled 后继续原工作，其余结果不授予权限。
+旧版／网络无响应如实报告，不猜测已批准，也不自动重复弹窗。拒绝、到期、并发请求与重复
+请求的处理见 [协议说明](../dev-rules/protocol-compatibility/device-link-remote-control-consent.md)。

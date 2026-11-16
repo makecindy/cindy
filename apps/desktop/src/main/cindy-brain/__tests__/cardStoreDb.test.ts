@@ -5,7 +5,7 @@
  * 取件 null 语义、GC 上限按最旧淘汰。
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import fs from 'node:fs';
@@ -18,6 +18,10 @@ import { GHOST_CARD_REOPEN_WINDOW_MS, type InstalledGhost } from '../../../share
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/never-used-here' },
 }));
+
+import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current';
+import type { DbClient } from '../../localDb/client/DbClient';
+import { createOwnerEnsureCoordinator } from '../../localDb/ipc/ownerEnsureCoordinator';
 
 const schema = await import('../../localDb/schema');
 const store = await import('../cardStoreDb');
@@ -53,7 +57,67 @@ beforeEach(() => {
   db = freshDb();
 });
 
+afterEach(() => { clearCurrentDbClient(); vi.restoreAllMocks(); });
+
 describe('cardStoreDb', () => {
+  // 2026-11-10: plugin provisioning discarded DbClient-not-ready, so aliases
+  // remained on old cards. Existing relocation tests had an already-open DB.
+  // Unit/in-memory SQLite: run the real owner coordinator + DB repair after a
+  // controlled slow open; inspect persisted rows, including idempotent replay.
+  it('completes renamed builtin card repair after slow DB readiness without changing card contents', async () => {
+    await store.upsertGhostCard(row('mivo', { ghostId: 'cindy-mivo', sessionId: 'task' }), db);
+    await store.upsertGhostCard(row('feishu', { ghostId: 'cindy-feishu' }), db);
+    await store.upsertGhostCard(row('other', { ghostId: 'other' }), db);
+    const original = await store.getGhostCard('mivo', db);
+    let release!: () => void;
+    const opened = new Promise<void>(resolve => { release = resolve; });
+    const ensure = createOwnerEnsureCoordinator({
+      isOwnerCurrent: () => true,
+      ensureReady: async () => {
+        await opened;
+        setCurrentDbClient({ drizzle: db } as DbClient, 'owner');
+        return { ready: true };
+      },
+      onReady: store.reconcileRenamedBuiltinGhostCards,
+      discardReadyOwner: () => clearCurrentDbClient(),
+    });
+    let completed = false;
+    const result = ensure('owner').then(value => { completed = true; return value; });
+    expect(await store.getGhostCard('mivo', db)).toEqual(original);
+    expect(completed).toBe(false);
+    release();
+    await expect(result).resolves.toEqual({ ready: true });
+    await expect(ensure('owner')).resolves.toEqual({ ready: true });
+    expect(await store.getGhostCard('mivo', db)).toEqual({ ...original, ghostId: 'xd-mivo' });
+    expect((await store.getGhostCard('feishu', db))?.ghostId).toBe('xd-feishu');
+    expect((await store.getGhostCard('other', db))?.ghostId).toBe('other');
+  });
+
+  it('does not declare startup complete after a failed card repair and repairs it on the next ensure', async () => {
+    await store.upsertGhostCard(row('old', { ghostId: 'cindy-mivo' }), db);
+    const ensure = createOwnerEnsureCoordinator({
+      isOwnerCurrent: () => true,
+      ensureReady: async () => {
+        setCurrentDbClient({ drizzle: db } as DbClient, 'owner');
+        return { ready: true };
+      },
+      onReady: store.reconcileRenamedBuiltinGhostCards,
+      discardReadyOwner: () => clearCurrentDbClient(),
+    });
+    vi.spyOn(db, 'update').mockImplementationOnce(() => { throw new Error('database busy'); });
+    await expect(ensure('owner')).resolves.toMatchObject({ ready: false, error: { code: 'DB_INIT_FAILED' } });
+    expect((await store.getGhostCard('old', db))?.ghostId).toBe('cindy-mivo');
+    await expect(ensure('owner')).resolves.toEqual({ ready: true });
+    expect((await store.getGhostCard('old', db))?.ghostId).toBe('xd-mivo');
+  });
+
+  it('rejects a repair for a different database owner without changing historical cards', async () => {
+    await store.upsertGhostCard(row('old', { ghostId: 'cindy-mivo' }), db);
+    setCurrentDbClient({ drizzle: db } as DbClient, 'new-owner');
+    await expect(store.reconcileRenamedBuiltinGhostCards('old-owner')).rejects.toThrow('owner is not ready');
+    expect((await store.getGhostCard('old', db))?.ghostId).toBe('cindy-mivo');
+  });
+
   it.each(['_ns__acme__helper', '_archive_helper'])('drains queued inserts before reassigning live and historical actions: %s', async (target) => {
     let releaseWrite!: () => void;
     let now = 1_000_000;

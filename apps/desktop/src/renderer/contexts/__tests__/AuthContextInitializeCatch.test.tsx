@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { openFirstRunGuide, parkFirstRunGuide, getFirstRunGuideState } from '@/features/first-run-guide/firstRunGuideStore';
 
 import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react';
 import type { AuthState, DesktopLoginActionResult } from '@/lib/authService';
@@ -171,7 +172,14 @@ describe('login recovery ignores abandoned IPC results', () => {
     }));
     expect(catalog.result.current.providers.providers).toHaveLength(1);
     expect(catalog.result.current.capabilities.capabilities?.availableModels[0].id).toBe('member-a');
+    // PR #9997: a parked guide must not survive the real AuthProvider logout boundary.
+    // Existing tests only covered model snapshots, not the guide's module-local state.
+    act(() => {
+      openFirstRunGuide({ manual: true, migration: true, legacyMigrated: true });
+      parkFirstRunGuide();
+    });
     await act(async () => { await auth.result.current.logout(); });
+    expect(getFirstRunGuideState()).toMatchObject({ open: false, parked: false });
     expect(mocks.service.logout).toHaveBeenCalledOnce();
     expect(catalog.result.current.providers.providers).toEqual([]);
     expect(catalog.result.current.capabilities.capabilities).toBeNull();

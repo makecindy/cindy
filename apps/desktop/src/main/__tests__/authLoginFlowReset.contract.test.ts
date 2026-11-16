@@ -1,3 +1,4 @@
+import { AUTH_ACCOUNT_VAULT_KEY, LEGACY_ACCOUNT_REFRESH_TOKEN_KEY, AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY } from '../authCredentialKeys';
 // Guard tier: engineering-conventions section 3.2. Existing cross-file
 // credential, permission, protocol, race, and design contracts are isolated
 // from runtime unit tests. No new input or assertion is introduced here.
@@ -197,12 +198,10 @@ describe('auth login-flow reset', () => {
   });
 
   it('keeps account access tokens in memory while persisting only encrypted refresh sessions', () => {
-    expect(source).toContain(
-      "const LEGACY_ACCOUNT_REFRESH_TOKEN_KEY = 'cindy_auth_account_refresh_token';",
-    );
+    expect(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY).toBe('cindy_auth_account_refresh_token');
     expect(source).toContain('let pendingAccountToken: string | null = null;');
     expect(source).toContain('client.exchangeAccountMembership(accountToken, action.accountId)');
-    expect(source).toContain("const AUTH_ACCOUNT_VAULT_KEY = 'cindy_auth_accounts_v1';");
+    expect(AUTH_ACCOUNT_VAULT_KEY).toBe('cindy_auth_accounts_v1');
     expect(source).toContain('client.refreshAccount(current.accountRefreshToken)');
     expect(source).toContain('client.logoutAccount(pair.accountToken)');
     expect(source).toContain('writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY');
@@ -232,9 +231,7 @@ describe('auth login-flow reset', () => {
 
   it('keeps saved account metadata fresh after profile edits and Passport sync', () => {
     expect(source).toContain('const AUTH_ACCOUNT_VAULT_VERSION = 2 as const;');
-    expect(source).toContain(
-      "const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY = 'cindy_auth_account_logout_tombstones_v1';",
-    );
+    expect(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY).toBe('cindy_auth_account_logout_tombstones_v1');
     expect(source).toContain('const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION = 1 as const;');
     expect(source).toContain('const logoutAuthEpoch = authStateEpoch;');
     expect(source).toContain("'Logout was superseded by a newer auth action'");

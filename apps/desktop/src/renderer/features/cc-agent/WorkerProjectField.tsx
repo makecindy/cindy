@@ -20,6 +20,11 @@ const basename = (value: string) =>
     .split(/[\\/]/)
     .pop() || value;
 
+/** 选中项目的显示名:主仓目录名,不带 worktree 后缀。 */
+export function workerProjectName(context: WorkerProjectContext): string {
+  return basename(context.selected.baseRepo ?? context.selected.directory);
+}
+
 export function useWorkerProjectSelection(
   open: boolean,
   leadSessionId: string | undefined,
@@ -202,9 +207,7 @@ export function WorkerProjectField({
         if (request === branchRequest.current) setBranchLoading(false);
       });
   };
-  const selectedName = context
-    ? basename(context.selected.baseRepo ?? context.selected.directory)
-    : '';
+  const selectedName = context ? workerProjectName(context) : '';
   const sharedName = context
     ? `${selectedName}${context.selected.isWorktree ? ` (${context.selected.worktreeName ?? basename(context.selected.directory)})` : ''}`
     : '';

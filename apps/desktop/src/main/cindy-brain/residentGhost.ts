@@ -1,8 +1,8 @@
 import type { GhostManifest, InstalledGhost } from '../../shared/ghost.js';
 
-/** Event publishers must listen after startup even when launch was omitted/on-demand. */
+/** Only `launch: 'resident'` keeps a plugin running; `routineEvents` no longer does (routines were removed). */
 export function isResidentBrowserGhost(manifest: GhostManifest): boolean {
-  return manifest.launch === 'resident' || manifest.routineEvents !== undefined;
+  return manifest.launch === 'resident';
 }
 
 /** Shared startup/enable/recovery path; runtime spawn retains its own authorization checks. */
@@ -15,7 +15,7 @@ export function spawnResidentGhost(ghost: InstalledGhost, deps: {
 }): void {
   // Pending confirmation keeps the old install running.
   if (!ghost.enabled || !deps.isAvailable(ghost.manifest.id)) return;
-  // Node residency remains an independent declaration; routine events do not expand it.
+  // Node residency remains an independent declaration.
   if (ghost.manifest.node?.lifecycle === 'resident') {
     void deps.startNode(ghost).catch((error) => {
       deps.warn('resident ghost node spawn error', { id: ghost.manifest.id, error: String(error) });

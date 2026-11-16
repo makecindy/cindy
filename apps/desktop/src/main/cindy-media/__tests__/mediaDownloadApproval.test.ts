@@ -3,7 +3,7 @@ import type { Session } from '@cindy/maker-core';
 import { createMediaDownloadContext } from '../mediaDownloadApproval.js';
 
 const mocks = vi.hoisted(() => ({ request: vi.fn() }));
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 vi.mock('../../maker-ipc/interactionRouter.js', () => ({ requestHostInteraction: mocks.request }));
 
 function hostSession() {

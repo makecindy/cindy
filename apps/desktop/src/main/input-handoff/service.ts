@@ -163,7 +163,7 @@ export function buildInputHandoffContinuation(result: HandoffResult): string {
     : result.scanned && result.status === 'succeeded'
     ? 'The owner says they scanned the code. Check yourself whether the sign-in finished; if the code had expired, take a fresh screenshot and ask again.'
     : result.failure === 'nothing_to_fill'
-    ? 'The screen has no field for the owner to type into. Press its buttons or pick its options yourself; request input handoff again only when a field appears that needs the owner.'
+    ? 'The screen has no field for the owner to type into. Press its buttons or pick its options yourself; request input handoff again only when a field appears that needs the owner. If it waits for a passkey, Touch ID, a security key or an approval on a phone, ask the owner in the conversation to finish it on this computer.'
     : result.status === 'succeeded' && result.steps === 0 && result.reason === 'detected'
     ? 'The owner finished on the window itself: the fields you asked about are gone. Check the current screen yourself and continue; ask again only if something still needs them.'
     : result.status === 'succeeded'
@@ -269,7 +269,7 @@ export class InputHandoffService {
         errorCode: 'TARGET_IS_CINDY',
         message: (frontIsHost ? 'Cindy itself is in front, and ' : '')
           + 'Cindy\'s own window cannot be handed off. A screen shown inside Cindy (such as the device simulator) is not a '
-          + 'window here: for a sign-in QR code on it, ask again with kind="scan" and `image` set to a fresh screenshot; '
+          + 'window here: for a sign-in QR code on it, call request_input_handoff with `image` set to a fresh screenshot; '
           + 'for other fields there, tell the owner what is needed.',
       };
     }

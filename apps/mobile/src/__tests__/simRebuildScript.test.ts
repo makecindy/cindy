@@ -218,13 +218,19 @@ describe('sim-rebuild workflow', () => {
     expect(result.execFileSync.mock.calls.some(([, args]) => args.includes('install'))).toBe(false);
   });
 
-  it.each([true, false])('checks Metro after Windows installation and before launch (healthy=%s)', async (healthy) => {
+  // Unit regression: SDK 58 defaults CMAKE_OBJECT_PATH_MAX to 1024, exceeding
+  // the bundled Windows Ninja's path limit. Execute the real CLI workflow and
+  // inspect its external Gradle invocation; the existing Windows install cases
+  // did not require opting out of that default. App codegen also needs the
+  // short-staging init script because its fixed target prefix exceeds the
+  // remaining path budget. platform=win32 is sufficient.
+  it.each([true, false])('keeps Windows CMake path shortening and checks Metro before launch (healthy=%s)', async (healthy) => {
     const result = await rebuild({ platform: 'win32', metroHealthy: healthy });
     expect(result.error).toEqual(new Error(`exit:${healthy ? 0 : 1}`));
     expect(result.resolveAndroidSdkTools).toHaveBeenCalledWith(expect.objectContaining({ platform: 'win32', requireTools: true }));
     expect(result.resolveJavaRuntimeEnv).toHaveBeenCalledWith(expect.objectContaining({ ANDROID_SDK_ROOT: '/sdk', ANDROID_HOME: '/sdk', CINDY_USE_LOCAL_REGION_CONFIG: '1' }));
     expect(result.execFileSync).toHaveBeenCalledWith('/node', ['/tools/pnpm.cjs', 'exec', 'expo', 'prebuild', '--platform', 'android', '--no-install'], expect.any(Object));
-    expect(result.execFileSync).toHaveBeenCalledWith('cmd.exe', ['/d', '/s', '/c', '.\\gradlew.bat assembleDebug'], expect.objectContaining({ cwd: `${mobileDir}/android`, env: result.javaEnv, windowsVerbatimArguments: true }));
+    expect(result.execFileSync).toHaveBeenCalledWith('cmd.exe', ['/d', '/s', '/c', '.\\gradlew.bat assembleDebug -Pexpo.android.cmakeObjectPathMax=0 --init-script ..\\scripts\\sim-windows-native.gradle'], expect.objectContaining({ cwd: `${mobileDir}/android`, env: result.javaEnv, windowsVerbatimArguments: true }));
     const install = result.execFileSync.mock.calls.findIndex(([, args]) => args.includes('install'));
     const launch = result.execFileSync.mock.calls.findIndex(([, args]) => args.includes('monkey'));
     expect(install).toBeGreaterThanOrEqual(0);

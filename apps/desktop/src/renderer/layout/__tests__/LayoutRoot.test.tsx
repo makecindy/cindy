@@ -605,11 +605,11 @@ describe('LayoutRoot sidebar window growth', () => {
       .mockReturnValue({ width: 800 } as DOMRect);
     expect(expand).not.toHaveBeenCalled();
     rendered.rerender(view(false));
-    expect(expand).toHaveBeenLastCalledWith(802, undefined);
+    expect(expand).toHaveBeenLastCalledWith(802);
     rendered.rerender(view(false));
     expect(expand).toHaveBeenCalledTimes(1);
     await act(async () => { rendered.rerender(view(true)); });
-    expect(expand).toHaveBeenLastCalledWith(0, undefined);
+    expect(expand).toHaveBeenLastCalledWith(0);
   });
   it('does not grow rightwards for a panel docked on the left', () => {
     if (currentLayout.content.type === 'split') currentLayout.content.children.reverse();
@@ -627,7 +627,7 @@ describe('LayoutRoot sidebar window growth', () => {
 });
 
 
-it('does not re-expand while restoring the initial session', () => {
+it('expands the saved standalone window when the initial session restores an open sidebar', async () => {
   const expand = vi.fn(async () => undefined);
   window.electronAPI.windowSidebarExpansion = expand;
   const view = (ready: boolean) => (
@@ -638,6 +638,6 @@ it('does not re-expand while restoring the initial session', () => {
   const rendered = render(view(false));
   vi.spyOn(screen.getByTestId('layout-root-content'), 'getBoundingClientRect')
     .mockReturnValue({ width: 800 } as DOMRect);
-  rendered.rerender(view(true));
-  expect(expand).not.toHaveBeenCalled();
+  await act(async () => { rendered.rerender(view(true)); });
+  expect(expand).toHaveBeenCalledExactlyOnceWith(802);
 });

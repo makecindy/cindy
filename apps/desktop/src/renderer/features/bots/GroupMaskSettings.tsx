@@ -13,7 +13,7 @@ import { Reply } from 'lucide-react';
 
 /** A setting row whose choice sits on the right, in the group settings' row look. */
 function SelectRow(props: SelectProps) {
-  return <SettingsRow wrap title={props.label} trailing={<Select {...props} className="h-8 max-w-[220px]" />} />;
+  return <SettingsRow wrap title={props.label} trailing={<Select {...props} size="compact" className="max-w-[220px]" />} />;
 }
 
 const key = (name: string) => `bots.groupChat.mask.${name}`;
@@ -47,7 +47,7 @@ export function GroupMaskSettings({ groupId }: { groupId: string }) {
           options={(['chat', 'tools'] as const).map(value => ({ value, label: t(`bots.groupChat.server.settings.${value === 'tools' ? 'accessTools' : 'accessChat'}`) }))}
           onValueChange={async access => {
             const owner = getDataOwnerGeneration(), companionId = config.companionId;
-            if (access === 'tools' && !await confirm({ presentation: 'standard',
+            if (access === 'tools' && !await confirm({
               title: t('bots.groupChat.server.settings.authorizeTitle', { name: mask.companions.find(c => c.id === config.companionId)?.name ?? '' }),
               description: t('bots.groupChat.server.settings.toolsHint'), confirmText: t('bots.groupChat.server.settings.confirm'),
               cancelText: t('bots.cancel'), confirmVariant: 'destructive' })) return;

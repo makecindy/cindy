@@ -1,8 +1,8 @@
 import { addProviderSecretsClearedListener } from '../secrets/providerSecretStore.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { subscriptionAccountKind } from '../maker-host/subscription-account-auth.js';
-import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.desktop.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
 import { createXaiSubscriptionUsageReader } from './xaiSubscriptionUsageRefresh.js';
 import {

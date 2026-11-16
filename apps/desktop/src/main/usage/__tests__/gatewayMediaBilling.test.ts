@@ -37,7 +37,7 @@ vi.mock('../mediaTurnCost.js', () => ({
   captureMediaUserTurn: mocks.captureTurn,
   refreshMediaUserTurnCost: mocks.refreshTurn,
 }));
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   enqueueDurableWrite: (_label: string, fn: () => unknown) => Promise.resolve(fn()),
 }));
 vi.mock('../../turnCostBroadcaster.js', () => ({ broadcastTurnCostPayload: mocks.turnPush }));
@@ -187,4 +187,19 @@ describe('Gateway media billing', () => {
       'database unavailable',
     );
   });
+
+// Unit: token estimates are a fallback; an explicit stable Gateway bill remains authoritative.
+// Existing tests only exercised header billing and could not detect estimate-overrides-actual.
+it('prefers exact Gateway billing over a supplied token estimate', async () => {
+  const record = await prepareGatewayMediaBilling({ model: 'example-rerank', estimatedBilling: () => ({ amount: 1, currency: 'USD' }) });
+  await record(response({ cost: 0.25 }));
+  expect(mocks.tx).toHaveBeenCalledWith('usage.recordMediaSpend', expect.objectContaining({ amount: 0.25, currency: 'CNY' }));
+  expect(mocks.tx.mock.calls.at(-1)?.[1]).not.toHaveProperty('approximate');
+});
+it('records the token estimate when the stable Gateway bill is absent', async () => {
+  const record = await prepareGatewayMediaBilling({ model: 'example-rerank', estimatedBilling: () => ({ amount: 1, currency: 'CNY' }) });
+  await record(new Response('{}'));
+  expect(mocks.tx).toHaveBeenCalledWith('usage.recordMediaSpend', expect.objectContaining({ amount: 1, currency: 'CNY', approximate: true }));
+});
+
 });

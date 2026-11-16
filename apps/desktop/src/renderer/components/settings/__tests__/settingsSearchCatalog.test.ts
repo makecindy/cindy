@@ -46,6 +46,17 @@ const searchContext = { platform: 'win32', region: 'cn', mode: 'cloud', membersh
 } as const;
 
 describe('settings discoverability regressions', () => {
+  it('finds the local API import entry by its titles and source app names before mounting settings', () => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, searchContext);
+    for (const query of [
+      searchI18n.t('settings.providers.import.local.title'),
+      searchI18n.t('settings.providers.import.local.title', { lng: 'en' }),
+      'Alma', 'CC Switch', 'OpenCode',
+    ]) {
+      const result = searchSettings(documents, query).find(({ entry }) => entry.id === 'providers.localImport');
+      expect(result?.entry, query).toMatchObject({ tab: 'providers', targetId: 'settings-provider-local-import' });
+    }
+  });
   // Unit regression (#8481): automatic mode renders no slot explanations.
   // Existing catalog tests did not query those hidden descriptions.
   it('does not advertise custom-only auxiliary slot explanations', () => {
@@ -158,13 +169,16 @@ describe('settings discoverability regressions', () => {
   });
   // Unit regression (#8481): script/style controls mount only for an explicitly
   // selected classical locale; ordinary and system preferences leave them absent.
-  it.each(['en', 'zh-CN', 'system', 'zh-Hans-x-lzh', 'zh-Hant-x-lzh'])(
+  it.each(['en', 'zh-CN', 'zh-TW', 'system', 'zh-Hans-x-lzh', 'zh-Hant-x-lzh'])(
     'finds classical controls only when mounted for %s', (locale) => {
       const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, locale });
       expect(searchSettings(documents, '唐诗').some(({ entry }) => entry.id === 'general.classicalLanguage')).toBe(locale.endsWith('-x-lzh'));
       for (const lng of ['zh-CN', 'en']) {
         const matches = searchSettings(documents, searchI18n.t('settings.language.classical.label', { lng }));
         expect(matches.some(({ entry }) => entry.id === 'general.classicalLanguage')).toBe(locale.endsWith('-x-lzh'));
+        const styles = searchSettings(documents, searchI18n.t('settings.language.classical.styleAriaLabel', { lng }));
+        expect(styles.some(({ entry }) => entry.id === 'general.classicalLanguage')).toBe(locale.endsWith('-x-lzh'));
+        expect(styles.some(({ entry }) => entry.id === 'general.replyStyle')).toBe(false);
         const language = searchSettings(documents, searchI18n.t('settings.language.options.classical', { lng }));
         expect(language.some(({ entry }) => entry.id === 'general.displayLanguage')).toBe(true);
       }
@@ -216,7 +230,6 @@ describe('settings discoverability regressions', () => {
     ['我的浏览器', 'computerUse.browserTarget'],
     ['恢复默认布局', 'appearance.layout'],
     ['对话工作区', 'storage.dialogueDirectory'],
-    ['伙伴默认模型', 'general.botModel'],
     ['供应商组', 'providers.sharing'],
     ['字体大小', 'settings.appearance.font.uiSize.label'],
     ['自动更新', 'settings.about.autoUpdateLabel'],

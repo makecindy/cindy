@@ -6,9 +6,10 @@ import { getProviderGroupDirectory } from '../provider-group/runtime.js';
 import { findReceivedShare } from './providerShareGuest.js';
 import { knownStandbyGuests, reconcileStandbyGuest } from './providerShareAvailabilityGuests.js';
 import { withAvailabilityPolicyLock, rememberAvailabilityShare } from './providerShareAvailabilityPolicy.js';
+import { consistentShareAvailabilityModels, type ShareAvailabilityModel as Model } from './providerShareAvailabilityModels.js';
 /** Offline-owner admission. This contains public identities and grants, never provider credentials. */
 import { parseProviderSharePeer, ProviderShareScopeChangedError, type ProviderShareOwned } from '@cindy/device-link';
-import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
+import { remoteInvocationModels, type AgentKind, type CatalogModel, type ProviderView } from '@cindy/model-providers';
 import { getDeviceId } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { captureProviderManagementScope } from '../provider-group/managementScope.js';
@@ -17,12 +18,11 @@ import { groupFastPolicyStore } from '../provider-group/fastPolicyStore.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import { getProviderShareUsageStore } from './providerShareUsageStore.js';
 import { remoteModelAccess } from './remoteModelAccess.js';
-import { readDeviceLinkSettings } from './settings-store.js';
+import { readDeviceLinkSettings } from './settings-store.desktop.js';
 import { providerShareOwnerKey } from './providerShareApi.js';
 import { applyProviderShareDelegation, delegatedProviderShareLeases, invalidateProviderShareDelegation } from './providerShareDelegatedAccess.js';
 
 export const PROVIDER_SHARE_AVAILABILITY_CAPABILITY = 'provider-share-availability-v1';
-interface Model extends Pick<CatalogModel, 'id' | 'name' | 'contextWindow' | 'efforts' | 'defaultEffort'> { kind: AgentKind; metadata?: Partial<CatalogModel> }
 interface Executor { deviceId: string; providerId: string; models: Model[]; limit: number }
 interface Policy { revision: number; executors: Executor[]; members: Array<{ memberId: string; joinedAt: number; models: string[] }>;
   allowFast: boolean; fastRevision: number; blockedGuestDeviceIds?: string[] }
@@ -69,7 +69,8 @@ async function publishUnlocked(shares: readonly ProviderShareOwned[]): Promise<v
         }
         if (row.state !== 'ok' || !row.view?.connected || row.view.suspended || row.providerContinuity?.stale) continue;
         const models: Model[] = [];
-        for (const kind of ['claude-code', 'codex', 'pi'] as const) for (const model of row.view.models[kind] ?? []) {
+        const effectiveView = remoteInvocationModels(row.view);
+        for (const kind of ['claude-code', 'codex', 'pi'] as const) for (const model of effectiveView.models[kind] ?? []) {
           if (!model.disabled && model.availability !== 'requires_payment'
             && (!row.view.remoteModelIds || row.view.remoteModelIds.includes(model.id))) {
             const metadata = Object.fromEntries(['supportsToolCalls', 'reasoningRequired', 'supportsImageInput', 'supportsFastMode', 'supportsUltrafastMode', 'thinkingToggle', 'effortsUnknown', 'defaultEnabled', 'group', 'mode', 'family', 'icon', 'status', 'modalities'].flatMap(key => {
@@ -80,6 +81,7 @@ async function publishUnlocked(shares: readonly ProviderShareOwned[]): Promise<v
         }
         if (models.length) policy.executors.push({ deviceId: member.agentDeviceId, providerId: member.providerId, models, limit: member.limit });
       }
+      policy.executors = consistentShareAvailabilityModels(policy.executors);
       const ids = [...new Set(policy.executors.flatMap(row => row.models.map(model => model.id)))];
       policy.members = share.members.filter(member => member.status === 'active'
         && getProviderShareUsageStore()?.memberGenerationReady({ ownerScope: providerShareOwnerKey(),
@@ -144,7 +146,9 @@ export async function prepareShareAvailability(controller: string): Promise<void
         for (const item of delegatedProviderShareLeases()) if (item.peer === controller && item.lease.availability) {
           invalidateProviderShareDelegation(item.peer, item.sessionId, item.lease.nonce);
         }
-        await reconcileStandbyGuest(controller, null);
+        // An absent standby policy/endpoint does not prove that the share member
+        // was removed. Direct owner grants use the same guest history: retain it
+        // until verified membership reapproval or an authenticated owner forget.
       }
       throw error;
     }

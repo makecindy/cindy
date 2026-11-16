@@ -31,7 +31,7 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
   isDataOwnerBroadcastScopeCurrent: (scope: { ownerScopeKey: string }) =>
     scope.ownerScopeKey === String(h.owner),
 }));
-vi.mock('../../i18n.js', () => ({ t: (key: string, locale: string) => locale + ':' + key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string, locale: string) => locale + ':' + key }));
 vi.mock('../manager.js', () => ({
   cindyMakeManager: {
     getState: () => ({ tasks: h.prep ? { run: h.prep } : {} }),

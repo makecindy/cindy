@@ -8,7 +8,7 @@
 import type { AgentKind } from '@cindy/maker-core';
 
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
-import { getResolvedMainLocale } from '../i18n.js';
+import { getResolvedMainLocale } from '../i18n.desktop.js';
 import { getMaker } from '../maker-host/index.js';
 import { validateTitleOutput } from '../maker-host/title-output-validation.js';
 import { requestUtilityText, type UtilityTextRequestOptions } from '../utility-model/oneShotCandidates.js';

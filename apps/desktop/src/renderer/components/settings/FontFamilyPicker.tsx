@@ -1,14 +1,15 @@
 import { Button } from '@/components/ui/button';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown, RotateCcw } from 'lucide-react';
+import { Check, ChevronDown } from 'lucide-react';
 import hljs from 'highlight.js/lib/core';
 import typescript from 'highlight.js/lib/languages/typescript';
 
 import { cn } from '@/lib/utils';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Tip } from '@/components/ui/tooltip';
+import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { unquoteFontFamily } from './fontFamilyValue';
+import { SettingsTextInput } from './SettingsTextInput';
 
 export interface FontPreset {
   id: string;
@@ -35,28 +36,9 @@ interface FontFamilyPickerProps {
   onChange: (family: string) => void;
 }
 
-/** 字体选择的「恢复默认」：没有自定义字体时禁用。 */
+/** 字体选择的「恢复默认」：只在有自定义字体时出现（单项还原，见 DefaultOverrideControls）。 */
 export function FontFamilyResetButton({ value, onReset }: { value: string; onReset: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <Tip text={t('settings.appearance.font.reset')}>
-      <button
-        type="button"
-        aria-label={t('settings.appearance.font.reset')}
-        onClick={onReset}
-        disabled={!value.trim()}
-        className={cn(
-          'flex h-8 w-8 shrink-0 items-center justify-center rounded-xl',
-          'border border-[var(--settings-input-border)]',
-          'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-          'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-          'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-[var(--settings-input-bg)]',
-        )}
-      >
-        <RotateCcw size={14} />
-      </button>
-    </Tip>
-  );
+  return <DefaultOverrideControls isCustomized={Boolean(value.trim())} onReset={onReset} />;
 }
 
 export function FontFamilyPicker({
@@ -128,22 +110,20 @@ export function FontFamilyPicker({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
+        {/* Same frame as the shared Select trigger: 36px secondary pill. */}
+        <Button
+          variant="secondary"
+          size="lg"
+          pressFeedback={false}
           aria-label={ariaLabel}
           data-setting-id={settingId}
-          className={cn(
-            'flex h-10 w-full items-center justify-between rounded-xl px-3',
-            'border border-[var(--settings-input-border)]',
-            'bg-[var(--settings-input-bg)] text-left',
-            'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-          )}
+          className="w-full min-w-0 justify-between gap-2 px-3 font-normal"
         >
-          <span className="truncate text-13 text-[var(--settings-input-text)]">
+          <span className="min-w-0 truncate text-left">
             {selectedLabel}
           </span>
-          <ChevronDown size={14} className="shrink-0 text-[var(--settings-eye-icon)]" />
-        </button>
+          <ChevronDown size={14} className="shrink-0" aria-hidden="true" />
+        </Button>
       </PopoverTrigger>
       <PopoverContent
         side="bottom"
@@ -225,16 +205,14 @@ export function FontFamilyPicker({
               {t('settings.appearance.font.custom')}
             </div>
             <div className="flex gap-2">
-              <input
+              <SettingsTextInput
+                data-setting-id={settingId}
                 value={customValue}
-                onChange={(e) => setCustomValue(e.target.value)}
+                onChange={setCustomValue}
                 placeholder={t('settings.appearance.font.customPlaceholder')}
-                className={cn(
-                  'h-9 min-w-0 flex-1 rounded-xl border px-3 text-13 outline-none',
-                  'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
-                  'font-mono text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
-                  'focus:border-[var(--settings-input-border-focus)]',
-                )}
+                size="md"
+                mono
+                className="min-w-0 flex-1"
               />
               <Button
                 variant="secondary"

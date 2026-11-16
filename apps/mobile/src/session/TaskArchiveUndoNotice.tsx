@@ -1,8 +1,8 @@
 /**
  * 卡片「离开后自动归档」成功后的可撤销提示(与电脑端同样停留 8 秒)。归档发生在用户离开任务页之后,
- * 提示挂在应用根部,落到首页或另一个任务上都看得到。同一时间只显示最近一次。
+ * 计时留在应用根部；有输入框时提示嵌入其上方，没有输入框时由根浮层承接。同一时间只显示最近一次。
  */
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -17,6 +17,7 @@ interface Notice { id: number; title: string; undo: () => void }
 
 let current: Notice | null = null;
 let nextId = 0;
+const composerSlots = new Set<symbol>();
 const listeners = new Set<() => void>();
 const emit = () => { for (const listener of listeners) listener(); };
 const subscribe = (listener: () => void) => {
@@ -37,31 +38,64 @@ function dismiss(id: number): void {
 
 export function TaskArchiveUndoHost() {
   const notice = useSyncExternalStore(subscribe, () => current);
+  const hasComposer = useSyncExternalStore(subscribe, () => composerSlots.size > 0);
   const insets = useSafeAreaInsets();
   const styles = useThemedStyles(makeStyles);
-  const { t } = useTranslation();
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => dismiss(notice.id), TASK_ARCHIVE_UNDO_MS);
     return () => clearTimeout(timer);
   }, [notice]);
-  if (!notice) return null;
+  if (!notice || hasComposer) return null;
   return (
     <View pointerEvents="box-none" style={[styles.host, { bottom: insets.bottom + spacing.lg }]}>
-      <View style={styles.pill} accessibilityLiveRegion="polite" testID="taskArchiveUndo">
-        <Text style={styles.text} numberOfLines={2}>{t('plugins.taskArchive.archived', { title: notice.title })}</Text>
-        <Pressable accessibilityRole="button" accessibilityLabel={t('plugins.taskArchive.undo')}
-          hitSlop={spacing.sm}
-          style={({ pressed }) => [styles.undo, pressed && styles.pressed]}
-          onPress={() => { dismiss(notice.id); notice.undo(); }}>
-          <Text style={styles.undoLabel}>{t('plugins.taskArchive.undo')}</Text>
-        </Pressable>
-      </View>
+      <ArchiveUndoPill notice={notice} />
+    </View>
+  );
+}
+
+/** In normal layout above the focused composer: keyboard and multiline height follow for free.
+ * The root host retains the timer across route changes and covers screens without a composer. */
+export function TaskArchiveUndoSlot({ active }: { active: boolean }) {
+  const notice = useSyncExternalStore(subscribe, () => current);
+  const styles = useThemedStyles(makeStyles);
+  useLayoutEffect(() => {
+    if (!active) return;
+    const slot = Symbol();
+    composerSlots.add(slot);
+    emit();
+    return () => { composerSlots.delete(slot); emit(); };
+  }, [active]);
+  if (!active || !notice) return null;
+  return (
+    <View pointerEvents="box-none" style={styles.slot}>
+      <ArchiveUndoPill notice={notice} />
+    </View>
+  );
+}
+
+function ArchiveUndoPill({ notice }: { notice: Notice }) {
+  const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
+  return (
+    <View style={styles.pill} accessibilityLiveRegion="polite" testID="taskArchiveUndo">
+      <Text style={styles.text} numberOfLines={1} ellipsizeMode="tail">{t('plugins.taskArchive.archived', { title: notice.title })}</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel={t('plugins.taskArchive.undo')}
+        hitSlop={spacing.sm}
+        style={({ pressed }) => [styles.undo, pressed && styles.pressed]}
+        onPress={() => { dismiss(notice.id); notice.undo(); }}>
+        <Text style={styles.undoLabel}>{t('plugins.taskArchive.undo')}</Text>
+      </Pressable>
     </View>
   );
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
+  slot: {
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+  },
   host: {
     alignItems: 'center',
     left: 0,
@@ -78,6 +112,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.md,
     maxWidth: 480,
+    width: '100%',
     paddingLeft: spacing.lg,
     paddingRight: spacing.sm,
     paddingVertical: spacing.xs,
@@ -85,11 +120,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   text: {
     color: colors.textPrimary,
     flexShrink: 1,
+    flexGrow: 1,
+    minWidth: 0,
     fontSize: typeScale.footnote,
     fontWeight: fontWeight.regular,
     lineHeight: lineHeight.caption,
   },
   undo: {
+    flexShrink: 0,
     borderRadius: radius.pill,
     justifyContent: 'center',
     minHeight: 36,

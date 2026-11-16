@@ -69,7 +69,7 @@ export function ProjectsRootSection() {
           <div className="flex shrink-0 items-center gap-2">
             {state?.source === 'setting' && (
               <Tip text={t('settings.about.storage.projectsRootReset')}>
-                <Button variant="secondary" size="md" className="w-8 border-transparent bg-transparent px-0" disabled={busy} aria-label={t('settings.about.storage.projectsRootReset')} onClick={() => void update('reset')}>
+                <Button data-settings-search-action="Restore the suggested projects folder" variant="secondary" tone="quiet" size="sm" className="w-7 px-0" disabled={busy} aria-label={t('settings.about.storage.projectsRootReset')} onClick={() => void update('reset')}>
                   <RotateCcw size={15} aria-hidden />
                 </Button>
               </Tip>

@@ -18,7 +18,7 @@ export function checklistRoute(item: SetupMigrationChecklistItem): string {
     case 'market-source':
       return '/settings?tab=ghosts';
     case 'skill-manual':
-      return '/skillhub/local';
+      return '/skillhub/local?tab=local';
     case 'provider-key':
     case 'provider-connection':
     case 'provider-sign-in':
@@ -41,8 +41,15 @@ export function checklistRoute(item: SetupMigrationChecklistItem): string {
   }
 }
 
-export function openChecklistRoute(item: SetupMigrationChecklistItem): void {
-  window.location.hash = checklistRoute(item);
+export async function openChecklistRoute(item: SetupMigrationChecklistItem): Promise<void> {
+  // The global migration host lives outside RouterProvider. Read the app router on
+  // demand to avoid an eager cycle through its Settings route and this checklist.
+  const { router } = await import('@/router');
+  const target = checklistRoute(item);
+  const { pathname, search, hash } = router.state.location;
+  // Reopen even at the same URL: saved tab/search state must not override the
+  // explicit destination, and repeated steps should not add browser-Back stops.
+  await router.navigate(target, { replace: target === `${pathname}${search}${hash}`, state: null });
 }
 
 /** Display names for presence-only hints; ids come from the other computer. */

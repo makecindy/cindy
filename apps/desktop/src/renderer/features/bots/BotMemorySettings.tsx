@@ -376,7 +376,6 @@ function MemoryDetail({
   const remove = async () => {
     if (!detail || busy) return;
     const ok = await confirm({
-      presentation: 'standard',
       title: t('bots.memory.deleteTitle'),
       description: t('bots.memory.deleteDescription', { name: botName, title: detail.title }),
       confirmText: t('bots.memory.delete'),
@@ -450,7 +449,7 @@ function MemoryDetail({
         <span className="flex-1" />
         <Button
           variant="secondary"
-          tone="quiet"
+          tone="danger"
           size="md"
           onClick={() => void remove()}
           loading={busy}
@@ -564,7 +563,6 @@ function MemoryEditor({
   const settle = useCallback(async (): Promise<boolean> => {
     if (await save()) return true;
     return confirm({
-      presentation: 'standard',
       title: t('bots.memory.unsavedTitle'),
       description: t('bots.memory.unsavedDescription'),
       confirmText: t('bots.memory.discard'),

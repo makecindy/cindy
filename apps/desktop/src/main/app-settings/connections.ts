@@ -36,7 +36,12 @@ function describeRuntimes(runtimes: CustomProviderConfig['runtimes']) {
         ...(runtime.modelsUrl ? { modelsUrl: publicEndpoint(runtime.modelsUrl) } : {}),
         wireProtocol: runtime.wireProtocol,
         supportsImageGeneration: runtime.supportsImageGeneration,
-        models: runtime.models.map((model) => ({ id: model.id, name: model.name })),
+        imageApi: runtime.imageApi,
+        videoApi: runtime.videoApi,
+        models: runtime.models.map((model) => ({ id: model.id, name: model.name,
+          ...(model.mode ? { mode: model.mode } : {}),
+          ...(model.modalities ? { modalities: model.modalities } : {}),
+        })),
       },
     ]),
   );

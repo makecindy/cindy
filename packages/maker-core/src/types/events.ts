@@ -132,6 +132,11 @@ export interface AgentTaskUpdateEventData {
   usage?: AgentTaskUsage;
   lastToolName?: string;
   taskType?: string;
+  /**
+   * 后台命令（taskType=local_bash）是会自己结束的工作，还是长驻服务。宿主按启动它的
+   * 命令写法判断（见 claude-code/background-command-kind.ts）；只用于展示，缺省按 work。
+   */
+  backgroundCommandKind?: 'work' | 'service';
   subagentParentContext?: 'none' | 'snapshot' | 'live';
   workflowName?: string;
   /**
@@ -462,7 +467,7 @@ export interface UsageSnapshot {
   generationActive?: boolean;
   /** False when live TPS must be hidden. Omitted on placeholder status frames. */
   generationReliable?: boolean;
-  /** Host-measured live tok/s (Pi extension algorithm). Display only. */
+  /** Host-measured live tok/s. Display only. */
   tokenSpeed?: TokenSpeedSnapshot;
   /**
    * Host/bridge 自动 compact 已确定性失败，下次 send 应换干净原生窗口。

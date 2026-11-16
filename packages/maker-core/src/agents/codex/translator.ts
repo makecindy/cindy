@@ -33,7 +33,13 @@ import {
   stripInternalWebCitations,
 } from '@cindy/maker-shared/internal-citation';
 
-import { UsageTokenSpeedMeter } from '../shared/token-speed.js';
+import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
+import { sampleGenerationDuration } from '../shared/live-generation-snapshot.js';
+import {
+  CalibratedTokenSpeedMeter,
+  estimateWordTokens,
+  type SpeedCalibrationReport,
+} from '../shared/calibrated-token-speed.js';
 import type { AgentEvent, AgentTaskStatus, AgentTaskUpdateEventData, GeneratedImageEventData } from '../../types/events.js';
 import { normalizeAccountRateLimitSnapshot } from '../../types/account-rate-limits.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
@@ -84,8 +90,14 @@ export interface CodexRuntimeState {
   reasoningTextLen: Map<string, number>;
   /** item.id → agentMessage 已 emit 文本字符长度(citation 归一化后的空间,见 handleAgentMessage)。 */
   itemTextLen: Map<string, number>;
-  /** Live tok/s from accepted usage and its paired generation time. */
-  tokenSpeed: UsageTokenSpeedMeter;
+  /** Live tok/s: the streamed answer, corrected by the usage each response reports. */
+  tokenSpeed: CalibratedTokenSpeedMeter;
+  /** Real output of the product turn so far, across native continuations; the meter's numerator. */
+  speedOutputTokens: number;
+  /** False once output arrived while tools owned the turn: it has no generation time of its own. */
+  generationSegmentComplete: boolean;
+  /** False from such output until the next response the generation clock can pair. */
+  speedPaired: boolean;
   /** Current model-active interval start; null while tools/approvals own the turn. */
   generationStartedAt: number | null;
   /** Tool/approval boundaries currently owning the turn. Generation resumes after all finish. */
@@ -142,7 +154,10 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     reasoningStartedAt: new Map(),
     reasoningTextLen: new Map(),
     itemTextLen: new Map(),
-    tokenSpeed: new UsageTokenSpeedMeter(),
+    tokenSpeed: new CalibratedTokenSpeedMeter({ estimate: estimateWordTokens }),
+    speedOutputTokens: 0,
+    generationSegmentComplete: true,
+    speedPaired: true,
     generationStartedAt: null,
     generationPendingToolIds: new Set(),
     generationDurationMs: 0,
@@ -196,11 +211,57 @@ function startCodexGenerationHeartbeat(rt: CodexRuntimeState): void {
   rt.generationHeartbeatTimer = timer;
 }
 
+/** A new user turn: the speed measurement starts over. */
+export function resetCodexSpeed(rt: CodexRuntimeState): void {
+  rt.tokenSpeed.reset();
+  rt.speedOutputTokens = 0;
+  rt.speedPaired = true;
+}
+
+/** The speed to publish: none while the clock is unreliable or the latest output is unpaired. */
+export function codexSpeedSnapshot(rt: CodexRuntimeState, now = Date.now()): TokenSpeedSnapshot | undefined {
+  return rt.generationTimingReliable && rt.speedPaired ? rt.tokenSpeed.snapshot(now) : undefined;
+}
+
+/**
+ * A response finished and reported its real output: pair it with the model time it
+ * took, wait for the first byte included, and replace what the stream could only
+ * estimate. Output that arrives while tools own the turn (code mode, background
+ * tools) has no model time of its own: it stays out of the speed, and no speed is
+ * shown until a response is paired again.
+ */
+export function settleCodexSpeedUsage(
+  rt: CodexRuntimeState,
+  last: { outputTokens: number; reasoningOutputTokens?: number },
+  now = Date.now(),
+): SpeedCalibrationReport | undefined {
+  rt.generationOutputTokens += last.outputTokens;
+  const pairedDurationMs = sampleGenerationDuration(rt.generationDurationMs, rt.generationStartedAt, now);
+  const responseWallMs = pairedDurationMs - rt.generationOutputDurationMs;
+  rt.generationOutputDurationMs = pairedDurationMs;
+  if (responseWallMs <= 0) rt.generationSegmentComplete = false;
+  if (!rt.generationTimingReliable) {
+    rt.tokenSpeed.invalidate();
+    return undefined;
+  }
+  rt.speedPaired = responseWallMs > 0;
+  if (!rt.speedPaired) {
+    // Whatever streamed meanwhile and the tool wait in between stay out of the next response.
+    rt.tokenSpeed.discardRequest(now);
+    return undefined;
+  }
+  rt.speedOutputTokens += last.outputTokens;
+  return rt.tokenSpeed.settle(rt.speedOutputTokens, now, last.reasoningOutputTokens, responseWallMs);
+}
+
 /** Reset per-turn model-generation timing; turn wall-clock is tracked separately by the host. */
 export function resetCodexGenerationTiming(rt: CodexRuntimeState, preserveSpeed = false): void {
   stopCodexGenerationHeartbeat(rt);
-  if (preserveSpeed) rt.tokenSpeed.startSegment();
-  else rt.tokenSpeed.reset();
+  // A native continuation keeps measuring the same product turn.
+  if (preserveSpeed) rt.tokenSpeed.reopen();
+  else resetCodexSpeed(rt);
+  rt.generationSegmentComplete = true;
+  rt.speedPaired = true;
   rt.generationStartedAt = null;
   rt.generationPendingToolIds.clear();
   rt.generationDurationMs = 0;
@@ -279,6 +340,8 @@ export function pauseCodexGeneration(
   if (rt.generationPendingToolIds.has(pauseId)) return;
   if (rt.generationPendingToolIds.size === 0) closeCodexGenerationInterval(rt, pausedAt);
   rt.generationPendingToolIds.add(pauseId);
+  // Tool execution, approvals and answers the user owes are not generation time either.
+  rt.tokenSpeed.pause(pausedAt);
 }
 
 export function resumeCodexGeneration(
@@ -332,6 +395,9 @@ function noteCodexGenerationBoundary(
     // for pause pairing but fail closed for TPS.
     rt.generationTimingReliable = false;
   }
+  // The speed clock runs from the response's first streamed item, not from the request.
+  if (phase === 'started' && item.type === 'reasoning') rt.tokenSpeed.start(receivedAt, 'thinking');
+  else if (phase === 'started' && item.type === 'agentMessage') rt.tokenSpeed.start(receivedAt, 'visible');
   if (
     typeof item.type !== 'string' ||
     !CODEX_GENERATION_PAUSE_ITEM_TYPES.has(item.type)
@@ -373,6 +439,7 @@ export interface CodexTranslateContext {
    * 缺省 = 不回调 (makerMemoryEnabled 关时 agent 不注入)。
    */
   onCompactBoundary?: () => void;
+  compactTrigger?: 'auto' | 'manual';
   /**
    * 服务过载错误的重投接管钩子 (由 agent 层注入)。
    *
@@ -1379,6 +1446,7 @@ export function translateAgentMessageDelta(
   ctx: CodexTranslateContext,
 ): void {
   if (!params.delta) return;
+  ctx.rt.tokenSpeed.recordDelta(params.delta);
   samplingSegment(ctx.rt, params.threadId, params.turnId).itemIds.add(params.itemId);
   const currentText = ctx.rt.itemRawText.get(params.itemId) ?? '';
   const previousDeltaText = ctx.rt.itemDeltaText.get(params.itemId) ?? '';
@@ -2439,7 +2507,7 @@ function handleImageGeneration(
 
 // ── contextCompaction → compact_boundary ─────────────────────────────────────
 // codex auto-compact 边界 — 协议只给 id, 没有 trigger / pre/post tokens / duration。
-// trigger 一律 'auto' (codex 没暴露手动 compact 入口给 UI), 其他字段 0 占位。
+// 手动请求由 adapter 标记 trigger，其他字段由原生协议决定，缺省以 0 占位。
 // 与 claude-code translator handleSystem (subtype=compact_boundary) 形状对齐。
 
 function handleContextCompaction(
@@ -2452,9 +2520,10 @@ function handleContextCompaction(
   ctx.log.info('codex ◾ contextCompaction', { id: item.id });
   queue.push({
     type: 'compact_boundary',
+    ...(ctx.compactTrigger === 'manual' ? { turnScope: 'background' as const } : {}),
     data: {
       boundaryId: item.id,
-      trigger: 'auto',
+      trigger: ctx.compactTrigger ?? 'auto',
       preTokens: 0,
       postTokens: 0,
       durationMs: 0,

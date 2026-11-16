@@ -270,10 +270,11 @@ export class SharedTaskHost {
     const failedCreates = this.failedCreates;
     const active = await this.options.api.list();
     this.assertCurrent();
+    const unavailable = new Set(active.unavailableSharedTaskIds ?? []);
     const owned = active.filter((item) => item.ownerAccountId === this.options.ownerAccountId && item.hostDeviceId === this.options.hostDeviceId);
     for (const item of journal) {
       if (item.terminal) this.markClosed(item.sharedTaskId, item.sessionId);
-      else if (item.snapshot && !owned.some((sharedTask) => sharedTask.sharedTaskId === item.sharedTaskId)) {
+      else if (item.snapshot && !unavailable.has(item.sharedTaskId) && !owned.some((sharedTask) => sharedTask.sharedTaskId === item.sharedTaskId)) {
         this.markClosed(item.sharedTaskId, item.sessionId);
         this.entries.get(item.sharedTaskId)?.access.close();
         this.options.revoke(item.sharedTaskId);
@@ -284,7 +285,7 @@ export class SharedTaskHost {
     // An open share stays unsettled; the entry check keeps polling it.
     const ownedIds = new Set(owned.map((item) => item.sharedTaskId));
     for (const id of candidates) {
-      if (!ownedIds.has(id) && (this.closed.has(id) || !this.entries.has(id))) this.settled.add(id);
+      if (!unavailable.has(id) && !ownedIds.has(id) && (this.closed.has(id) || !this.entries.has(id))) this.settled.add(id);
     }
     for (const item of owned) {
       this.assertCurrent();
@@ -305,7 +306,7 @@ export class SharedTaskHost {
       } else await this.refresh(item.sharedTaskId);
     }
     // The owned list above included any orphan of those failed creates.
-    this.listedAfterFailedCreates = failedCreates;
+    if (unavailable.size === 0 && !active.authorityIncomplete) this.listedAfterFailedCreates = failedCreates;
   }
 
   /** A tool invocation cannot reopen sharing after an intervening owner closure.

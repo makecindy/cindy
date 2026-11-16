@@ -20,7 +20,7 @@ import { companionHomes } from '../companion-cloud/homes.js';
 import { readLatestMirrorRows, readMirrorRowsBefore } from '../companion-cloud/host.js';
 import { mirrorMessageText, type CompanionMirrorRow } from '../companion-cloud/mirror.js';
 import { companionAvatarThumbnail } from '../agent-island/companionIdentity.js';
-import { summarizeInteraction } from '../bot-autonomy/phase.js';
+import { summarizeInteraction } from '../mcp-integrations/taskPhase.js';
 
 /** Longest reply text handed to a plugin; longer replies are cut and marked truncated. */
 export const PLUGIN_COMPANION_REPLY_MAX = 8000;

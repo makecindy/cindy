@@ -12,12 +12,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { CONTINUE_AFTER_ERROR_PROMPT } from '../../../shared/interruptedTurn';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
-import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator';
+import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator.desktop';
 import { shouldPreserveWaitingContinuationOnlyAutoResume } from '../../maker-ipc/interruptedTurnAutoResume';
 import { createSessionBindingLifecycle, runSessionCloseCleanup } from '../../maker-ipc/sessionBindingLifecycle';
 import type { IpcHandler } from '../../maker-ipc/ipcHandlerRegistry';
 import { registerStopSessionBackgroundTasksHandler } from '../../maker-ipc/stopSessionBackgroundTasksHandler';
-import type { ProviderGroupBinding } from '../bindings';
+import type { ProviderGroupBinding } from '../bindings.desktop';
 import type { ProviderGroupDirectory, ResolvedMemberState, ResolvedProviderGroupMember } from '../directory';
 import { createProviderGroupRouter } from '../router';
 import {
@@ -199,7 +199,11 @@ function setup(options: { bComesBack?: boolean } = {}) {
         hasQueuedAutoResume: coordinator.hasQueuedAutoResume(session.id),
         isContinuationOnly: coordinator.isContinuationOnlyAutoResume(session.id),
       });
-      const context = { closeReason: session.closeReason, preserveAutoResumeIntent };
+      const context = {
+        closeReason: session.closeReason,
+        preserveAutoResumeIntent: preserveAutoResumeIntent ||
+          (session.closeReason === 'agent-switch' && coordinator.hasProviderGroupSwitchHold(session.id)),
+      };
       closeContexts.push(context);
       return context;
     },
@@ -524,6 +528,7 @@ describe('provider group failover vs. the terminal-error drain close (#5880)', (
     expect(h.router.coolingUntil('anthropic', MAC_B.key, MODEL)).not.toBeNull();
     expect(h.markTried).toHaveBeenCalledWith(SID, MAC_B.key);
     expectSwitchedToLocalAndContinued(h);
+    expect(h.closeContexts.at(-1)).toEqual({ closeReason: 'agent-switch', preserveAutoResumeIntent: true });
   });
 
   it('a new message sent while the checks are pending stops before cooling or marking B tried', async () => {

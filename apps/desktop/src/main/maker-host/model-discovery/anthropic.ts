@@ -120,7 +120,8 @@ const unresolvedAliasLogged = new Set<string>();
 /**
  * SDK 条目 → 目录模型 id;无法确定时返回 null(该条目不进清单)。
  *
- * 显式 `claude-*` id 原样归一化。SDK 对每个系列的当前型号常只报简称
+ * SDK resolvedModel 优先提供真实型号；显式 `claude-*` id 原样归一化。
+ * 旧 SDK 对每个系列的当前型号常只报简称
  * (`default` / `opus` / `sonnet` …),具体版本只写在 description 开头
  * (如 "Opus 5.5 · …" / "Opus 4.7 with 1M context · …")。简称按说明里的系列与版本
  * 拼出 `claude-<系列>-<主>-<次>`(Anthropic 的 id 规则)。目录尚未登记的新版本
@@ -277,6 +278,7 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
     if (!entry || typeof entry !== 'object') continue;
     const e = entry as {
       value?: unknown;
+      resolvedModel?: unknown;
       displayName?: unknown;
       description?: unknown;
       supportsEffort?: unknown;
@@ -284,7 +286,12 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
       supportsFastMode?: unknown;
     };
     if (typeof e.value !== 'string' || e.value.length === 0) continue;
-    const id = resolveSdkModelId(e.value, e.description);
+    // Claude Code 2.1.321 的说明不再包含版本；使用 SDK 明示的执行型号。
+    // 未提供真实 Claude id 时保留旧版 value/description 解析路径。
+    const resolved = typeof e.resolvedModel === 'string' ? normalizeModelId(e.resolvedModel) : null;
+    const id = resolved?.startsWith('claude-')
+      ? resolved
+      : resolveSdkModelId(e.value, e.description);
     if (!id || seen.has(id)) continue;
     seen.add(id);
     const reportedName =

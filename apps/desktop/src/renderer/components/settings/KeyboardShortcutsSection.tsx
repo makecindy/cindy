@@ -1,6 +1,7 @@
 import { appShortcutSettings, keyboardShortcutsSettings } from './KeyboardShortcutsSection.settings-search';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { Button } from '@/components/ui/button';
+import { Tip } from '@/components/ui/tooltip';
 /**
  * KeyboardShortcutsSection — Settings「键盘快捷键」tab 的主区块。
  *
@@ -365,8 +366,8 @@ export function KeyboardShortcutsSection() {
     [beginShortcutAction, reportMutationError],
   );
 
-  const iconButtonClass =
-    'inline-flex h-[26px] w-[26px] items-center justify-center rounded-md text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-chip)] transition-colors';
+  // Row icon actions share the per-setting reset geometry: 28px quiet pill Button + Tip (§14.6).
+  const iconButtonClass = 'w-7 px-0';
 
   if (isWorkLouderModel(hardwarePane)) {
     return (
@@ -424,13 +425,16 @@ export function KeyboardShortcutsSection() {
       variant="page"
       title={t('settings.shortcuts.title')}
       action={hasAnyOverride && (
-        <button data-setting-id={keyboardShortcutsSettings.shortcuts.id}
+        <Button data-setting-id={keyboardShortcutsSettings.shortcuts.id}
+          variant="secondary"
+          size="sm"
+          compact
           type="button"
           onClick={handleResetAll}
-          className="shrink-0 text-12 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
         >
+          <RotateCcw size={14} aria-hidden />
           {t('settings.shortcuts.resetAll')}
-        </button>
+        </Button>
       )}
     >
       {/* 快捷键页的内容同属一组，彼此 14px */}
@@ -492,6 +496,23 @@ export function KeyboardShortcutsSection() {
                   <span className="text-12 text-[var(--error-fg)]">{rowError}</span>
                 )}
 
+                {/* 单项恢复默认在控件左侧 (CONTROLS decision 3), 仅已自定义时出现 */}
+                {customized && !isRecording && (
+                  <Tip text={t('settings.shortcuts.reset')}>
+                    <Button data-setting-id={controlSetting.id}
+                      variant="secondary"
+                      tone="quiet"
+                      size="sm"
+                      type="button"
+                      onClick={() => handleResetOne(def.id)}
+                      className={iconButtonClass}
+                      aria-label={t('settings.shortcuts.reset')}
+                    >
+                      <RotateCcw size={15} aria-hidden />
+                    </Button>
+                  </Tip>
+                )}
+
                 {/* 组合键展示位: 录制中显示提示, 无绑定显示"未设置" */}
                 <span
                   className={cn(
@@ -528,47 +549,38 @@ export function KeyboardShortcutsSection() {
                   </Button>
                 ) : (
                   <div className="flex shrink-0 items-center gap-1">
-                    <button data-setting-id={controlSetting.id}
-                      type="button"
-                      disabled={!def.rebindable}
-                      onClick={() => {
-                        beginShortcutAction();
-                        setRecordingId(def.id);
-                      }}
-                      className={cn(
-                        iconButtonClass,
-                        !def.rebindable && 'opacity-50 pointer-events-none',
-                      )}
-                      aria-label={t('settings.shortcuts.editAria', { name: itemLabel(def) })}
-                      title={t('settings.shortcuts.edit')}
-                    >
-                      <Pencil size={13} />
-                    </button>
-                    {combos.length > 0 && (
-                      <button data-setting-id={controlSetting.id}
+                    <Tip text={t('settings.shortcuts.edit')} disabled={!def.rebindable}>
+                      <Button data-setting-id={controlSetting.id}
+                        variant="secondary"
+                        tone="quiet"
+                        size="sm"
                         type="button"
                         disabled={!def.rebindable}
-                        onClick={() => handleDeleteOne(def.id)}
-                        className={cn(
-                          iconButtonClass,
-                          !def.rebindable && 'opacity-50 pointer-events-none',
-                        )}
-                        aria-label={t('settings.shortcuts.deleteAria', { name: itemLabel(def) })}
-                        title={t('settings.shortcuts.delete')}
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                    )}
-                    {customized && (
-                      <button data-setting-id={controlSetting.id}
-                        type="button"
-                        onClick={() => handleResetOne(def.id)}
+                        onClick={() => {
+                          beginShortcutAction();
+                          setRecordingId(def.id);
+                        }}
                         className={iconButtonClass}
-                        aria-label={t('settings.shortcuts.reset')}
-                        title={t('settings.shortcuts.reset')}
+                        aria-label={t('settings.shortcuts.editAria', { name: itemLabel(def) })}
                       >
-                        <RotateCcw size={13} />
-                      </button>
+                        <Pencil size={15} aria-hidden />
+                      </Button>
+                    </Tip>
+                    {combos.length > 0 && (
+                      <Tip text={t('settings.shortcuts.delete')} disabled={!def.rebindable}>
+                        <Button data-setting-id={controlSetting.id}
+                          variant="secondary"
+                          tone="quiet"
+                          size="sm"
+                          type="button"
+                          disabled={!def.rebindable}
+                          onClick={() => handleDeleteOne(def.id)}
+                          className={iconButtonClass}
+                          aria-label={t('settings.shortcuts.deleteAria', { name: itemLabel(def) })}
+                        >
+                          <Trash2 size={15} aria-hidden />
+                        </Button>
+                      </Tip>
                     )}
                   </div>
                 )}

@@ -471,6 +471,13 @@ let pendingConfirmResolver: (() => void) | null = null;
 /** 并发防重入:beforeEnsureReady 可能被重复触发,共享同一个 in-flight promise。 */
 let inFlight: Promise<LegacyUserDataMigrationResult> | null = null;
 
+/** The successful copy belongs only to the account that ran it, never the last UI phase. */
+let migratedUserId: string | null = null;
+
+export function didMigrateLegacyDataForUser(userId: string | null): boolean {
+  return userId !== null && migratedUserId === userId;
+}
+
 function broadcastPhase(phase: LegacyMigrationPhase): void {
   currentPhase = phase;
   for (const win of BrowserWindow.getAllWindows()) {
@@ -629,7 +636,8 @@ export async function runLegacyUserDataMigrationForUser(userId: string): Promise
     ui: electronUiDeps,
   });
   try {
-    await inFlight;
+    const result = await inFlight;
+    if (result.status === 'migrated') migratedUserId = userId;
   } finally {
     inFlight = null;
   }

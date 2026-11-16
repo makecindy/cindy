@@ -19,6 +19,7 @@ export default {
       `export const usePrStatuses=()=>({statuses}); export const useTaskPrArchiveEligibility=()=>({eligible:false}); export const usePrActions=()=>({});`,
   },
   cases: {
+    click: { about: 'Click and keyboard open a persistent summary; only its link navigates' },
     default: { about: 'Compact PR footer and separate settings with real plugin HTML' },
     idle: {
       about: 'Following, pointer outside the follow row',
@@ -27,14 +28,55 @@ export default {
     hover: { about: 'Following, pointer over the follow row', data: { stopAfter: 'following' } },
     settings: { about: 'Separate PR settings dialog', data: { stopAfter: 'settings' } },
     uninstalled: { about: 'Historical PR card remains but its plugin is uninstalled' },
+    reference: { about: 'Another task follows this PR: its state and the link to that task' },
   },
   async ready(page) {
-    await page.locator('[data-pr-chip]').hover();
+    const name = await page.evaluate(() => window.__uiPage.ctx.case);
+    if (name === 'click') await page.locator('[data-pr-chip]').click();
+    else await page.locator('[data-pr-chip]').hover();
     await page.locator('[data-pr-manage]').waitFor();
-    if ((await page.evaluate(() => window.__uiPage.ctx.case)) !== 'uninstalled')
-      await page.frameLocator('iframe').locator('[data-ghost-action="pr:follow"]').waitFor();
+    if (name !== 'uninstalled')
+      await page
+        .frameLocator('iframe')
+        .locator(`[data-ghost-action="${name === 'reference' ? 'pr:open-task' : 'pr:follow'}"]`)
+        .waitFor();
   },
   async check(page, ui) {
+    if ((await page.evaluate(() => window.__uiPage.ctx.case)) === 'click') {
+      const chip = page.locator('[data-pr-chip]');
+      const panel = page.getByRole('dialog');
+      await page.mouse.move(800, 800);
+      // real-wait: browser-level check that pointer leave cannot expire a clicked summary.
+      await page.waitForTimeout(400);
+      assert.equal(await panel.isVisible(), true);
+      assert.deepEqual(await page.evaluate(() => window.__prOpenedUrls), []);
+      await panel.getByRole('link').click();
+      assert.deepEqual(await page.evaluate(() => window.__prOpenedUrls), [
+        'https://github.com/makecindy/cindy/pull/9261',
+      ]);
+      await page.mouse.click(800, 800);
+      await panel.waitFor({ state: 'hidden' });
+      await chip.focus();
+      await chip.press('Enter');
+      await chip.press('Tab');
+      assert.equal(
+        await panel.getByRole('link').evaluate((el) => el === document.activeElement),
+        true,
+      );
+      await page.keyboard.press('Escape');
+      await panel.waitFor({ state: 'hidden' });
+      await chip.press('Space');
+      await panel.waitFor();
+      await ui.capture('clicked-summary');
+      return;
+    }
+    if ((await page.evaluate(() => window.__uiPage.ctx.case)) === 'reference') {
+      const frame = page.frameLocator('iframe');
+      await frame.getByText('其他任务正在跟进', { exact: true }).waitFor();
+      assert.equal(await frame.locator('[data-ghost-action="pr:follow"]').count(), 0);
+      await ui.capture('reference');
+      return;
+    }
     if ((await page.evaluate(() => window.__uiPage.ctx.case)) === 'uninstalled') {
       assert.equal(await page.locator('iframe').count(), 0);
       await ui.capture('uninstalled');

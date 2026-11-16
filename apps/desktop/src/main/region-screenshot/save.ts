@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { createLogger } from '../logger';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 import { encodeScreenshotImage } from './encodeImage';
 
 const log = createLogger('region-screenshot:save');

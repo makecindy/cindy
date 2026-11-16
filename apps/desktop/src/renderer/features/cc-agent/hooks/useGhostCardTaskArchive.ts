@@ -25,7 +25,7 @@ import { useSessionLifecycleActions } from './useSessionLifecycleActions';
  * - 点按钮:用 archive(与标题栏、快捷键同一套归档流程,带确认)归档这个任务。
  * - 合并后自动归档(只对本机任务):离开任务时,如果已合并的卡片在用户眼前显示过、本次没被取消,而且这个任务
  *   没有在运行、没被接管、确认没绑着定时任务(没读到也算不确认)、输入框里没有草稿、worktree
- *   确认干净,就静默归档,并给一个可撤销的提示。任一条件不满足都不归档,也不弹确认:任务留在列表里。
+ *   确认干净,就静默归档,并给一个可撤销的提示。任一条件不满足都不归档,也不弹确认:任务留在列表里。工作区有改动时提示保留原因。
  * - 这里还把任务里最后一条用户发的消息报告给 ghostCardTaskArchive:待生效之后用户发了消息,
  *   本次自动归档就取消。
  */
@@ -154,7 +154,12 @@ async function autoArchiveLeftTask(
       if (!bound || (bound.get(sessionId)?.length ?? 0) > 0) return false;
       const preflight = await resolveWorktreeRemovalPreflight(sessionId);
       // 检查期间用户又回到这个任务:不在眼前收走它。输入框里还有没发的草稿时也留着(归档会丢掉草稿)。
-      return checkEligibility() && preflight === 'clean' && isCurrent() && !isSessionRemovalRouteCurrent(sessionId) && !getDraftPresence(sessionId);
+      if (!checkEligibility() || !isCurrent() || isSessionRemovalRouteCurrent(sessionId)) return false;
+      if (preflight === 'dirty') {
+        toast.info(t('chat.ghostCall.taskAutoArchiveBlockedDirty', { title: session.title }), { duration: 8000 });
+        return false;
+      }
+      return preflight === 'clean' && !getDraftPresence(sessionId);
     },
   });
   if (archived !== true) return;

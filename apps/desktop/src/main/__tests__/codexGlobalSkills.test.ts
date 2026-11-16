@@ -10,6 +10,7 @@ import {
   codexManagedSkillLinkName,
   prepareCodexGlobalSkillsLinks,
 } from '../maker-host/codex-global-skills';
+import { removeManagedLink } from '../maker-host/managed-dir-links';
 
 let tmpDirs: string[] = [];
 
@@ -135,10 +136,10 @@ describe('prepareCodexGlobalSkillsLinks', () => {
           link,
           process.platform === 'win32' ? 'junction' : 'dir',
         );
-        const rm = fs.rm;
-        vi.spyOn(fs, 'rm').mockImplementation(async (target, options) => {
-          if (target === link) throw Object.assign(new Error('locked entry'), { code: 'EPERM' });
-          return rm(target, options);
+        const unlink = fs.unlink;
+        vi.spyOn(fs, 'unlink').mockImplementation(async (target) => {
+          if (target === link) throw Object.assign(new Error('locked entry'), { code: 'EACCES' });
+          return unlink(target);
         });
       } else if (failure === 'create-error') {
         vi.spyOn(fs, 'symlink').mockRejectedValue(
@@ -185,6 +186,62 @@ describe('prepareCodexGlobalSkillsLinks', () => {
     expect(path.basename(paths.sharedAgentsSkillsLink)).toBe(CODEX_SHARED_AGENTS_SKILLS_LINK_NAME);
     expect(await sameRealPath(paths.legacyCodexSkillsLink, legacySkills)).toBe(true);
     expect(await sameRealPath(paths.sharedAgentsSkillsLink, agentsSkills)).toBe(true);
+  });
+
+  it('removes a managed junction without deleting its real skill directory', async () => {
+    const root = await makeTmpDir();
+    const source = path.join(root, 'home', '.agents', 'skills');
+    const link = path.join(root, 'codex', 'skills', 'xdt-agents');
+    await writeSkill(source, 'keep');
+    await fs.writeFile(path.join(source, '.git'), 'gitdir: separate-worktree');
+    await fs.mkdir(path.dirname(link), { recursive: true });
+    await fs.symlink(source, link, process.platform === 'win32' ? 'junction' : 'dir');
+    // #9548: recursive removal can fail or follow a Windows junction on affected runtimes.
+    const rm = fs.rm;
+    vi.spyOn(fs, 'rm').mockImplementation(async (target, options) => {
+      if (target === link && options?.recursive) {
+        throw Object.assign(new Error('unsafe recursive junction removal'), { code: 'EPERM' });
+      }
+      return rm(target, options);
+    });
+    if (process.platform === 'win32') {
+      const unlink = fs.unlink;
+      vi.spyOn(fs, 'unlink').mockImplementation(async (target) => {
+        if (target === link) throw Object.assign(new Error('junction unlink denied'), { code: 'EPERM' });
+        return unlink(target);
+      });
+    }
+
+    expect(await removeManagedLink(link)).toBe(true);
+    await expect(fs.lstat(link)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(source, 'keep', 'SKILL.md'), 'utf8')).toContain('body');
+    expect(await fs.readFile(path.join(source, '.git'), 'utf8')).toBe('gitdir: separate-worktree');
+  });
+
+  it('retires legacy aggregate junctions without deleting their skill sources', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const codexHome = path.join(root, 'codex');
+    const source = path.join(homeDir, '.agents', 'skills');
+    const legacyAggregate = path.join(codexHome, 'global_skills');
+    await writeSkill(source, 'keep');
+    await fs.writeFile(path.join(source, '.git'), 'gitdir: separate-worktree');
+    await fs.mkdir(legacyAggregate, { recursive: true });
+    const legacyLink = path.join(legacyAggregate, 'agents');
+    await fs.symlink(source, legacyLink, process.platform === 'win32' ? 'junction' : 'dir');
+    const rm = fs.rm;
+    vi.spyOn(fs, 'rm').mockImplementation(async (target, options) => {
+      if (target === legacyLink && options?.recursive) {
+        throw Object.assign(new Error('unsafe recursive junction removal'), { code: 'EPERM' });
+      }
+      return rm(target, options);
+    });
+
+    await prepareCodexGlobalSkillsLinks(codexHome, { homeDir });
+
+    await expect(fs.lstat(legacyAggregate)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(source, 'keep', 'SKILL.md'), 'utf8')).toContain('body');
+    expect(await fs.readFile(path.join(source, '.git'), 'utf8')).toBe('gitdir: separate-worktree');
   });
 
   it('skips missing source roots without failing the scan-entry setup', async () => {

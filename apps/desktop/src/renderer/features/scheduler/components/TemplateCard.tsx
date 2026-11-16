@@ -17,7 +17,7 @@ import {
 import type { ScheduleTemplate, TemplateCapability } from '@cindy/maker-scheduler';
 
 import { cn } from '@/lib/utils';
-import { cronToHuman } from '../lib/cronToHuman';
+import { cronToHuman } from '../../../../shared/scheduleCronLabel';
 
 interface TemplateCardProps {
   template: ScheduleTemplate;

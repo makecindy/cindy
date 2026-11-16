@@ -1,3 +1,4 @@
+import { atomicReplaceWindowsDirectoryEntry } from '../windowsAtomicRename.js';
 import { rename } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -8,7 +9,6 @@ export async function replaceFile(source: string, destination: string): Promise<
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (process.platform !== 'win32' || (code !== 'EEXIST' && code !== 'EPERM')) throw error;
-    const { atomicReplaceWindowsDirectoryEntry } = await import('../windowsAtomicRename.js');
     await atomicReplaceWindowsDirectoryEntry(path.resolve(source), path.resolve(destination));
   }
 }

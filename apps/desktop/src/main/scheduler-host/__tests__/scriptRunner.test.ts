@@ -53,7 +53,7 @@ vi.mock('../proc-util', async (importOriginal) => {
   return { ...actual, killProcessTree: killProcessTreeMock };
 });
 
-import { ScriptScheduleRunner, buildScriptEnv } from '../script-runner';
+import { ScriptScheduleRunner, buildScriptEnv } from '../script-runner.desktop';
 
 function childProcess() {
   const child = new EventEmitter() as EventEmitter & {

@@ -532,7 +532,7 @@ describe('ComputerUseSection browser backend health loading', () => {
       installState: 'not-installed',
     };
     // Market ids are opaque: the plugin has to be found by the ghost id it installs as.
-    const snapshot = vi.fn().mockResolvedValue({
+    const lookup = vi.fn().mockResolvedValue({
       items: [
         { pluginId: 'other-id', ghostId: 'other-plugin' },
         { pluginId: 'market-opaque-id', ghostId: 'my-browser' },
@@ -540,7 +540,7 @@ describe('ComputerUseSection browser backend health loading', () => {
     });
     const marketDetail = vi.fn().mockResolvedValue(detail);
     const install = vi.fn().mockResolvedValue({ ghost: { manifest: { name: 'Cindy Chrome' } } });
-    Object.assign(window.electronAPI, { pluginMarket: { snapshot, detail: marketDetail, install } });
+    Object.assign(window.electronAPI, { pluginMarket: { lookup, detail: marketDetail, install } });
     api.getBackendState.mockResolvedValue({ active: 'user-browser' });
     api.getBackendHealth
       .mockResolvedValueOnce({ active: 'user-browser', status: 'error', reason: 'plugin-missing', canRecover: false })

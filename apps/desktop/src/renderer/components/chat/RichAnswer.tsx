@@ -1,3 +1,4 @@
+import '@/styles/chatContentDirection.css';
 import {
   Mail,
   CalendarDays,

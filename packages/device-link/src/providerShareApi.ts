@@ -75,6 +75,14 @@ export interface ProviderShareReceived {
   standbyOnline?: boolean;
   hostCapable: boolean;
 }
+export type ProviderShareListing<T> = T[] & { unavailableShareIds?: readonly string[]; authorityIncomplete?: true };
+function listing<T>(value: Record<string, unknown>, parse: (value: unknown) => T): ProviderShareListing<T> {
+  const result: ProviderShareListing<T> = list(value.shares).map(parse);
+  if (value.unavailableShareIds !== undefined) Object.defineProperty(result, 'unavailableShareIds', {
+    value: list(value.unavailableShareIds).map(providerShareIdentifier), enumerable: false });
+  if (value.authorityIncomplete === true) Object.defineProperty(result, 'authorityIncomplete', { value: true, enumerable: false });
+  return result;
+}
 
 export interface ProviderShareApiOptions {
   /** Desktop serverApiFetch / Mobile apiFetch; no independent auth or retry stack. */
@@ -239,9 +247,9 @@ export function createProviderShareApi(options: ProviderShareApiOptions) {
   }
   const segment = (value: string) => `/${encodeURIComponent(providerShareIdentifier(value))}`;
   return {
-    async listOwned(): Promise<ProviderShareOwned[]> {
+    async listOwned(): Promise<ProviderShareListing<ProviderShareOwned>> {
       const value = await request('');
-      return list(value.shares).map(parseOwned);
+      return listing(value, parseOwned);
     },
     async createLink(input: { providerId: string; providerLabel: string; deviceName: string; identityCard: string }) {
       const value = await request('/links', 'POST', {
@@ -279,9 +287,9 @@ export function createProviderShareApi(options: ProviderShareApiOptions) {
     async withdraw(requestId: string) {
       await request(`/requests${segment(requestId)}/withdraw`, 'POST', {});
     },
-    async listReceived(): Promise<ProviderShareReceived[]> {
+    async listReceived(): Promise<ProviderShareListing<ProviderShareReceived>> {
       const value = await request('/received');
-      return list(value.shares).map(parseReceived);
+      return listing(value, parseReceived);
     },
     async leave(memberId: string) {
       await request(`/received${segment(memberId)}/leave`, 'POST', {});

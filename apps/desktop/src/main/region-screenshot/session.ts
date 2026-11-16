@@ -10,7 +10,7 @@ import {
 import { randomUUID } from 'node:crypto';
 
 import { createLogger } from '../logger';
-import { getResolvedMainLocale } from '../i18n';
+import { getResolvedMainLocale } from '../i18n.desktop';
 import { onScreenshotTranslationPreferenceChanged, readScreenshotTranslationPreference, writeScreenshotTranslationPreference } from './translationPreferences';
 import { isScreenshotTranslationLanguage, resolveScreenshotTranslationLanguage, type ScreenshotTranslationLanguage } from '../../shared/screenshotTranslation';
 import { acquireOverlayEscape } from '../overlayEscape';

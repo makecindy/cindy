@@ -1,4 +1,4 @@
-import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 /**
  * useAccountUsage — 订阅 codex 账号配额 (rate limits) 实时推送。
  *
@@ -83,6 +83,12 @@ interface CodexAccountUsageSlots {
 }
 
 interface AccountUsageState {
+  owner: ReturnType<typeof getDataOwnerGeneration>;
+  pendingReads: Set<{ retain: boolean }>;
+  liveListeners: Set<() => void>;
+  liveObservers: number;
+  hasLiveObservation: boolean;
+  liveQueued: Set<object>;
   slots: CodexAccountUsageSlots;
   latestBucketKey: string | null;
   generation: number;
@@ -101,7 +107,8 @@ function accountUsageState(providerId: string): AccountUsageState {
   }
   let state = accountUsageStates.get(providerId);
   if (!state) {
-    state = { slots: { appServer: null, appServerBuckets: emptyBucketTable(), web: null },
+    state = { owner, pendingReads: new Set(), liveListeners: new Set(), liveObservers: 0,
+      hasLiveObservation: false, liveQueued: new Set(), slots: { appServer: null, appServerBuckets: emptyBucketTable(), web: null },
       latestBucketKey: null, generation: 0, revision: 0, subscribed: false };
     accountUsageStates.set(providerId, state);
   }
@@ -402,8 +409,49 @@ function ensureModuleSubscription(providerId: string, state: AccountUsageState):
   if (!api?.onCodexAccountChanged) return;
   state.subscribed = true;
   state.unsubscribe = api.onCodexAccountChanged((payload: unknown) => {
-    applyCodexAccountUsageSnapshot(state, payload, () => {});
+    state.liveQueued.clear();
+    applyCodexAccountUsageSnapshot(state, payload, () => {
+      for (const notify of state.liveListeners) notify();
+    });
   }, providerId);
+}
+
+/** Keep a live card's warm start through an observation gap. Ordinary warm
+ * starts retain their cancellation/revision rules unless a live card shares it.
+ * Pushes invalidate pending results and queues; a successful read does not
+ * invalidate its own queued recovery, and transient failures retain the cache.
+ */
+function readAccountUsage(
+  state: AccountUsageState,
+  providerId: string,
+  onApplied: () => void = () => {},
+  cancelled: () => boolean = () => false,
+  retain = false,
+): void {
+  const api = readUsageApi();
+  if (!api?.getAccount) return;
+  const request = { retain };
+  state.pendingReads.add(request);
+  const revision = state.revision;
+  void api.getAccount('codex', providerId).then(persisted => {
+    if ((cancelled() && !request.retain) || state.revision !== revision ||
+      !isDataOwnerGenerationCurrent(state.owner)) return;
+    if (providerId !== 'openai' && persisted && (persisted as { providerId?: string }).providerId !== providerId) return;
+    applyCodexAccountUsageSnapshot(state, persisted, () => {
+      if (!cancelled()) onApplied();
+      for (const notify of state.liveListeners) notify();
+    }, { clearOnNull: false });
+  }).catch(() => {
+    /* Best-effort warm start; account-scoped pushes still update the chip. */
+  }).finally(() => {
+    state.pendingReads.delete(request);
+    if (state.pendingReads.size !== 0) return;
+    const queued = state.liveQueued.size > 0;
+    state.liveQueued.clear();
+    if (queued && state.liveListeners.size > 0 && isDataOwnerGenerationCurrent(state.owner)) {
+      readAccountUsage(state, providerId, undefined, undefined, true);
+    }
+  });
 }
 
 /**
@@ -412,7 +460,13 @@ function ensureModuleSubscription(providerId: string, state: AccountUsageState):
  * in-flight 去重), 重复调用安全;新快照经 usage:codex-account-changed push 回流,
  * 这里不消费返回值。
  */
-export function requestCodexAccountRefresh(providerId?: string): void {
+export function requestCodexAccountRefresh(providerId?: string, shareIfPending = false): void {
+  if (shareIfPending) {
+    const state = accountUsageState(providerId ?? 'openai');
+    if (state.pendingReads.size === 0) readAccountUsage(state, providerId ?? 'openai', undefined, undefined, true);
+    return;
+  }
+  accountUsageStates.get(providerId ?? 'openai')?.liveQueued.clear();
   const api = readUsageApi();
   if (!api?.getAccount) return;
   void api.getAccount('codex', providerId).catch(() => {
@@ -427,8 +481,11 @@ export function useAccountUsage(
   /** 当前会话模型 —— app-server 形态下据它匹配限额桶(见 matchCodexBucketForModel)。 */
   modelId?: string | null,
   providerId = 'openai',
+  options: { live?: boolean } = {},
 ): RateLimitSnapshot | null {
   const state = accountUsageState(providerId);
+  const live = options.live === true;
+  const lastLiveState = useRef<AccountUsageState | null>(null);
   // 幂等; 首个 codex 实例装上 module 常驻订阅, 保证之后卸载窗口内的广播(尤其
   // 换号清空)不丢。非 codex 会话不装 —— 从没有 codex chip 消费过就没有可残留
   // 的缓存, 常驻监听纯属白耗(review 反馈)。
@@ -478,33 +535,33 @@ export function useAccountUsage(
 
   useEffect(() => {
     if (vendorKey !== 'codex') return;
-    const api = readUsageApi();
-    if (!api?.getAccount) return;
-
+    if (live) {
+      const resumed = lastLiveState.current === state || (state.hasLiveObservation && state.liveObservers === 0);
+      lastLiveState.current = state;
+      state.hasLiveObservation = true;
+      state.liveObservers++;
+      state.liveListeners.add(reselect);
+      let token: object | undefined;
+      if (state.pendingReads.size > 0) {
+        for (const pending of state.pendingReads) pending.retain = true;
+        if (resumed) {
+          token = {};
+          state.liveQueued.add(token);
+        }
+      } else readAccountUsage(state, providerId, undefined, undefined, true);
+      return () => {
+        state.liveObservers--;
+        state.liveListeners.delete(reselect);
+        if (token) state.liveQueued.delete(token);
+      };
+    }
     let cancelled = false;
-    const revision = state.revision;
-    void api
-      .getAccount('codex', providerId)
-      .then((persisted) => {
-        if (cancelled || state.revision !== revision) return;
-        if (providerId !== 'openai' && persisted && (persisted as { providerId?: string }).providerId !== providerId) return;
-        applyCodexAccountUsageSnapshot(
-          state, persisted,
-          reselect,
-          { clearOnNull: false },
-        );
-      })
-      .catch(() => {
-        /* Best-effort warm start; account-scoped pushes still update the chip. */
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [vendorKey, quotaSource, reselect, providerId, state]);
+    readAccountUsage(state, providerId, reselect, () => cancelled);
+    return () => { cancelled = true; };
+  }, [vendorKey, quotaSource, reselect, providerId, state, live]);
 
   useEffect(() => {
-    if (vendorKey !== 'codex') return;
+    if (vendorKey !== 'codex' || live) return;
     const api = readUsageApi();
     if (!api?.onCodexAccountChanged) return;
 
@@ -517,7 +574,7 @@ export function useAccountUsage(
       cancelled = true;
       unsubscribe();
     };
-  }, [vendorKey, quotaSource, reselect, providerId, state]);
+  }, [vendorKey, quotaSource, reselect, providerId, state, live]);
 
   // 不直接消费无 providerId 的 maker:account_usage：同一 session 的待生效账号
   // 可能已切换，事件仍属于旧回合。Main 归档后发出的账号级推送是唯一实时入口。

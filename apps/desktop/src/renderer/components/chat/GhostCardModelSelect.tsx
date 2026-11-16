@@ -78,6 +78,8 @@ export function GhostCardModelSelect({
         )}
       >
         <ModelSelectorContent
+          // Configuration is portaled to body too; keep it above the dialog and model list.
+          overlayContentClassName={inDialog ? 'z-[10002]' : undefined}
           preferenceStore={preferenceStore}
           modelId={route?.model ?? ''}
           currentProviderId={route?.providerId ?? null}

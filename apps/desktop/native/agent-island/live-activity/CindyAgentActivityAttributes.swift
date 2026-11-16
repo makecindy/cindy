@@ -11,6 +11,10 @@ struct CindyAgentActivityAttributes: ActivityAttributes {
     var runningCount: Int
     /// Tasks waiting on the user (question / permission).
     var attentionCount: Int
+    /// Full Agent Notch badge count (waiting + unread results/chats). Optional so
+    /// activities from older app versions still decode with their waiting count.
+    var attentionTotal: Int?
+    var badgeAttentionCount: Int { attentionTotal ?? attentionCount }
     /// Title of the task the island would surface first.
     var title: String
     /// Click destination, optional so existing activity payloads still decode.
@@ -24,6 +28,15 @@ struct CindyAgentActivityAttributes: ActivityAttributes {
     var companion: Companion?
     /// Agent Island mascot skin id; the extension falls back to `cindy`.
     var mascot: String
+    /// Optional presentation labels; old saved activities keep their original layout.
+    var countLabels: CountLabels?
+  }
+
+  struct CountLabels: Codable, Hashable {
+    var attention: String
+    var inProgress: String
+    var pending: String
+    var unread: String
   }
 
   var appName: String

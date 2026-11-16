@@ -19,8 +19,10 @@ import {
   type ReactNode,
 } from 'react';
 import { Check, ChevronDown, Volume2 } from 'lucide-react';
+import { Tip } from '@/components/ui/tooltip';
 
 import { SettingsBlock, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -344,40 +346,25 @@ export function AgentIslandSection() {
                 title={<span id={agentIslandSettings.displayLabel.targetId}>{t(agentIslandSettings.displayLabel.titleKey)}</span>}
                 hint={t(agentIslandSettings.displayLabel.descriptionKey)}
               >
-                <div className="relative min-w-0">
-                  <select data-setting-id={agentIslandSettings.displayLabel.id}
-                    value={displayTargetToOptionValue(displayTarget)}
-                    onChange={(event) => setDisplayTarget(displayTargetFromOptionValue(event.target.value))}
-                    className={cn(
-                      'h-9 w-full min-w-0 appearance-none rounded-full border py-0 pl-3 pr-9 text-12 outline-none',
-                      'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                      'border-[var(--settings-input-border)] focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
-                    )}
-                    aria-label={t('settings.agentIsland.displaySelectAria')}
-                  >
-                    <option value={DISPLAY_ALL_OPTION_VALUE}>
-                      {t('settings.agentIsland.displayAll')}
-                    </option>
-                    {displayOptions.map((option) => (
-                      <option
-                        key={option.id}
-                        value={displayTargetToOptionValue({ mode: 'display', displayId: option.id })}
-                      >
-                        {displayOptionLabels.get(option.id)}
-                      </option>
-                    ))}
-                    {selectedDisplayMissing && (
-                      <option value={displayTargetToOptionValue(displayTarget)}>
-                        {t('settings.agentIsland.displayMissing', { id: displayTarget.displayId })}
-                      </option>
-                    )}
-                  </select>
-                  <ChevronDown
-                    size={15}
-                    className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--text-secondary-mid)]"
-                    aria-hidden="true"
-                  />
-                </div>
+                <Select data-setting-id={agentIslandSettings.displayLabel.id}
+                  width="full"
+                  value={displayTargetToOptionValue(displayTarget)}
+                  onValueChange={(value) => setDisplayTarget(displayTargetFromOptionValue(value))}
+                  label={t('settings.agentIsland.displaySelectAria')}
+                  options={[
+                    { value: DISPLAY_ALL_OPTION_VALUE, label: t('settings.agentIsland.displayAll') },
+                    ...displayOptions.map((option) => ({
+                      value: displayTargetToOptionValue({ mode: 'display', displayId: option.id }),
+                      label: displayOptionLabels.get(option.id) ?? '',
+                    })),
+                    ...(selectedDisplayMissing
+                      ? [{
+                          value: displayTargetToOptionValue(displayTarget),
+                          label: t('settings.agentIsland.displayMissing', { id: displayTarget.displayId }),
+                        }]
+                      : []),
+                  ]}
+                />
               </SettingsField>
             </>
           )}
@@ -761,60 +748,59 @@ function AgentIslandSoundRow({
       >
         {t(`settings.agentIsland.soundEvents.${event}`)}
       </label>
-      <div className="relative min-w-0">
-        <select data-setting-id={agentIslandSettings.soundLabel.id}
-          id={`agent-island-sound-${event}`}
-          value={selectValue}
-          onChange={async (e) => {
-            const next = e.target.value;
-            if (next === CUSTOM_SOUND_OPTION_VALUE) {
-              const customSound = await onSelectCustom();
-              if (customSound) onChange(customSound);
-              return;
-            }
-            onChange({ type: 'builtin', id: next as AgentIslandSoundId });
-          }}
+      {/* Dense per-event list: compact 32px trigger filling its grid column. */}
+      <Select data-setting-id={agentIslandSettings.soundLabel.id}
+        id={`agent-island-sound-${event}`}
+        size="compact"
+        width="full"
+        truncateOptions
+        value={selectValue}
+        onValueChange={async (next) => {
+          if (next === CUSTOM_SOUND_OPTION_VALUE) {
+            const customSound = await onSelectCustom();
+            if (customSound) onChange(customSound);
+            return;
+          }
+          onChange({ type: 'builtin', id: next as AgentIslandSoundId });
+        }}
+        label={t('settings.agentIsland.soundSelectAria', {
+          event: t(`settings.agentIsland.soundEvents.${event}`),
+        })}
+        options={[
+          ...AGENT_ISLAND_SOUND_OPTIONS.map((option) => ({
+            value: option,
+            label: t(`settings.agentIsland.soundOptions.${option}`),
+          })),
+          {
+            value: CUSTOM_SOUND_OPTION_VALUE,
+            label: value.type === 'custom'
+              ? t('settings.agentIsland.soundOptions.customSelected', { name: value.name })
+              : t('settings.agentIsland.soundOptions.custom'),
+          },
+        ]}
+      />
+      <Tip
+        text={t('settings.agentIsland.soundPreviewAria', {
+          event: t(`settings.agentIsland.soundEvents.${event}`),
+        })}
+        side="top"
+      >
+        <button data-settings-search-action="Preview the selected notification sound"
+          type="button"
           className={cn(
-            'h-8 w-full min-w-0 appearance-none rounded-full border py-0 pl-3 pr-8 text-12 outline-none',
-            'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-            'border-[var(--settings-input-border)] focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
+            'flex h-8 w-8 items-center justify-center rounded-full border transition-colors',
+            'border-[var(--settings-input-border)] text-[var(--settings-section-sublabel)]',
+            'hover:bg-[var(--surface-chip)] disabled:cursor-default disabled:opacity-35',
           )}
-          aria-label={t('settings.agentIsland.soundSelectAria', {
+          disabled={isSilentAgentIslandSoundChoice(value)}
+          onClick={() => onPreview(value)}
+          aria-label={t('settings.agentIsland.soundPreviewAria', {
             event: t(`settings.agentIsland.soundEvents.${event}`),
           })}
         >
-          {AGENT_ISLAND_SOUND_OPTIONS.map((option) => (
-            <option key={option} value={option}>
-              {t(`settings.agentIsland.soundOptions.${option}`)}
-            </option>
-          ))}
-          <option value={CUSTOM_SOUND_OPTION_VALUE}>
-            {value.type === 'custom'
-              ? t('settings.agentIsland.soundOptions.customSelected', { name: value.name })
-              : t('settings.agentIsland.soundOptions.custom')}
-          </option>
-        </select>
-        <ChevronDown
-          size={14}
-          className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-secondary-mid)]"
-          aria-hidden="true"
-        />
-      </div>
-      <button data-settings-search-action="Preview the selected notification sound"
-        type="button"
-        className={cn(
-          'flex h-8 w-8 items-center justify-center rounded-full border transition-colors',
-          'border-[var(--settings-input-border)] text-[var(--settings-section-sublabel)]',
-          'hover:bg-[var(--surface-chip)] disabled:cursor-default disabled:opacity-35',
-        )}
-        disabled={isSilentAgentIslandSoundChoice(value)}
-        onClick={() => onPreview(value)}
-        aria-label={t('settings.agentIsland.soundPreviewAria', {
-          event: t(`settings.agentIsland.soundEvents.${event}`),
-        })}
-      >
-        <Volume2 size={14} />
-      </button>
+          <Volume2 size={14} aria-hidden />
+        </button>
+      </Tip>
     </div>
   );
 }

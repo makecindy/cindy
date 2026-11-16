@@ -46,6 +46,8 @@ export function GitSafetySection() {
           hint={t(gitSafetySettings.autoSnapshotTitle.descriptionKey)}
           trailing={
             <div className="cindy-segmented-row-actions">
+              {/* Per-setting reset sits left of the control (CONTROLS decision 3). */}
+              <DefaultOverrideControls isCustomized={isCustomized} disabled={saving} onReset={handleReset} />
               <SegmentedControl data-setting-id={gitSafetySettings.autoSnapshotTitle.id}
                 value={mode}
                 onValueChange={handleModeChange}
@@ -53,7 +55,6 @@ export function GitSafetySection() {
                 aria-label={t('settings.gitSafety.modeAria')}
                 options={gitSafetySettings.autoSnapshotTitle.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
               />
-              <DefaultOverrideControls isCustomized={isCustomized} disabled={saving} onReset={handleReset} />
             </div>
           }
         />

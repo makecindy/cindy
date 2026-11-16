@@ -414,6 +414,14 @@ describe('interactionModel', () => {
       collapsed: true,
       planViewerState: 'expanded',
     })).toBe(false);
+    // The feedback footer must stay outside the scrolling body, but collapsing
+    // must still release the fixed-height surface (unit; simulator regression).
+    expect(shouldUseFullHeightPendingInteractionSurface({
+      activeKind: 'issue_confirm', planViewerState: 'half',
+    })).toBe(true);
+    expect(shouldUseFullHeightPendingInteractionSurface({
+      activeKind: 'issue_confirm', planViewerState: 'half', collapsed: true,
+    })).toBe(false);
   });
 
   it('keeps the pending collapse intent per request and survives list churn', () => {

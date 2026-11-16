@@ -21,6 +21,8 @@ const h = vi.hoisted(() => {
   const webContentsSend = vi.fn();
   return {
     webContentsSend,
+    ownerScope: 'owner-a:1',
+    boundaryPending: false,
     getAllWindows: vi.fn(() => [
       { isDestroyed: () => false, webContents: { send: webContentsSend } },
     ]),
@@ -28,6 +30,15 @@ const h = vi.hoisted(() => {
     handleScheduleEvent: vi.fn(),
   };
 });
+
+vi.mock('../../appSessionState.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../appSessionState.js')>(),
+  activeOwnerScopeKey: () => h.ownerScope,
+  isAppSessionBoundaryPending: () => h.boundaryPending,
+}));
+
+// Readiness tests do not execute plugin or hook tools; keep their runtime out of this fixture.
+vi.mock('../../cindy-brain/index.js', () => ({ getGhostManager: vi.fn() }));
 
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
@@ -53,6 +64,7 @@ import {
   setSchedulerReady,
   resetSchedulerReady,
   awaitReadyWithTimeout,
+  awaitAccountSchedulerReady,
   attachSchedulerEventListeners,
   __resetReadinessForTest,
 } from '../schedule';
@@ -65,6 +77,8 @@ const storage2 = { id: 'storage-2' } as never;
 
 beforeEach(() => {
   __resetReadinessForTest();
+  h.ownerScope = 'owner-a:1';
+  h.boundaryPending = false;
   h.webContentsSend.mockClear();
   h.getAllWindows.mockClear();
   h.tapWindowBroadcast.mockClear();
@@ -76,6 +90,28 @@ afterEach(() => {
 });
 
 describe('scheduler readiness holder', () => {
+  // 2026-11-10, unit: project/goal calls wait on this existing gate. The
+  // original holder tests did not protect calls queued across an owner change.
+  it('waits for startup but rejects a continuation into another owner', async () => {
+    const waiting = awaitAccountSchedulerReady();
+    h.ownerScope = 'owner-b:2';
+    setSchedulerReady(scheduler2, storage2);
+    await expect(waiting).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    await expect(awaitAccountSchedulerReady()).resolves.toBeUndefined();
+  });
+
+  it('keeps readiness waiting bounded and does not admit calls during an account boundary', async () => {
+    vi.useFakeTimers();
+    h.boundaryPending = true;
+    await expect(awaitAccountSchedulerReady()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(vi.getTimerCount()).toBe(0);
+    h.boundaryPending = false;
+    const failure = expect(awaitAccountSchedulerReady()).rejects.toMatchObject({ code: 'INTERNAL' });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await failure;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('cold-start: setSchedulerReady drains in-flight awaits with that instance', async () => {
     const p1 = awaitReadyWithTimeout();
     const p2 = awaitReadyWithTimeout();

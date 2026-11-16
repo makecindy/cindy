@@ -8,7 +8,7 @@ import {
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
 // type-only import:编译期擦除,不会把 codex-proxy-host 的运行时依赖拖进本模块/单测。
-import type { CodexProxyAuthInjection } from '../maker-host/codex-proxy-host.js';
+import type { CodexProxyAuthInjection } from '../maker-host/codex-proxy-host.desktop.js';
 import {
   CredentialModeSwitchBusyError,
   isCredentialModeSwitchBusyError,

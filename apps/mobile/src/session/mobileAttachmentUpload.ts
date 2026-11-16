@@ -1,4 +1,6 @@
 import { apiFetchRaw } from '@/api/client';
+import { assertMobileLegacyMediaAllowed, canUploadEncryptedMobileMedia, tryUploadEncryptedMobileMedia } from '@/device-link/agentNetMediaRegistry';
+import { fromBase64Url } from '@cindy/agent-net/portable';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { canMobilePeerUpload, tryMobilePeerUpload } from '@/device-link/peerFileRegistry';
 import { DEVICE_LINK_API_BASE_URL, getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
@@ -63,6 +65,7 @@ export async function presignMobileAttachmentUpload(
   candidate: MobileAttachmentUploadCandidate,
   options: { token: string | null; sharedTaskId?: string; deps?: UploadDeps },
 ): Promise<MobileAttachmentPresignResult> {
+  assertMobileLegacyMediaAllowed();
   const apiFetch = options.deps?.apiFetch ?? apiFetchRaw;
   const result = await withTransientRemoteRetry(
     () => apiFetch<MobileAttachmentPresignResult>('/api/device-link/media/presign-put', {
@@ -293,11 +296,23 @@ export async function statMobileAttachmentFileSize(uri: string): Promise<number>
 export async function uploadMobileAttachment(
   candidate: MobileAttachmentUploadCandidate,
   body: MobileAttachmentUploadBody,
-  options: { token: string | null; sharedTaskId?: string; id?: string; deps?: UploadDeps },
+  options: { token: string | null; sharedTaskId?: string; deviceId?: string; id?: string; deps?: UploadDeps },
 ): Promise<RemoteSerializedAttachment> {
   // presign 前先校验体积:超出 OSS 上限的文件若先 presign + PUT、再在
   // buildMobileUploadedAttachment 处被拒,会在 device-link OSS 桶里留下永不被引用的孤儿对象。
   assertMobileDocumentSize(candidate.size);
+  const encrypted = await tryUploadEncryptedMobileMedia({ deviceId: options.deviceId,
+    size: candidate.size, contentType: effectiveUploadMimeType(candidate.mimeType), read: async (offset, length) => {
+      if (body instanceof Blob) return new Uint8Array(await body.slice(offset, offset + length).arrayBuffer());
+      if (body instanceof ArrayBuffer) return new Uint8Array(body, offset, length);
+      if (ArrayBuffer.isView(body)) return new Uint8Array(body.buffer, body.byteOffset + offset, length);
+      throw new Error('AGENT_NET_NATIVE_FILE_SOURCE_REQUIRED');
+    } });
+  if (encrypted) {
+    const attachment = buildMobileUploadedAttachment({ ...candidate, id: options.id, ossKey: encrypted.key, sha256: encrypted.sha256 });
+    if (!attachment) throw new Error(i18n.t('composer.upload.noFileRead'));
+    return attachment;
+  }
   assertMobileOssAttachmentSize(candidate.size);
   const sha256 = await sha256MobileAttachmentBody(body, candidate.size);
   const presigned = await presignMobileAttachmentUpload(candidate, options);
@@ -340,6 +355,7 @@ export async function uploadMobileAttachmentFromFile(
   const peerCandidate = !!options.deviceId && !options.sharedTaskId;
   if (
     !isWithinMobileOssAttachmentLimit(candidate.size) &&
+    !canUploadEncryptedMobileMedia(options.deviceId) &&
     !(peerCandidate && await canMobilePeerUpload(options.deviceId!, candidate.size))
   ) {
     assertMobileOssAttachmentSize(candidate.size);
@@ -367,6 +383,19 @@ export async function uploadMobileAttachmentFromFile(
   try {
     if (snapshot.size !== candidate.size) {
       throw new Error(`Attachment size changed: expected ${candidate.size}, actual ${snapshot.size}`);
+    }
+    const encrypted = await tryUploadEncryptedMobileMedia({ deviceId: options.deviceId,
+      size: candidate.size, contentType: effectiveUploadMimeType(candidate.mimeType), signal: options.signal,
+      assertCurrent: () => { if (!isActive()) throw new Error('AGENT_NET_OWNER_CHANGED'); },
+      read: async (offset, length) => {
+        const base64 = options.deps?.readFileChunk ? await options.deps.readFileChunk(snapshot.uri, offset, length)
+          : await (await import('expo-file-system/legacy')).readAsStringAsync(snapshot.uri, { encoding: 'base64', position: offset, length });
+        return fromBase64Url(base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''));
+      } });
+    if (encrypted) {
+      const attachment = buildMobileUploadedAttachment({ ...candidate, id: options.id, ossKey: encrypted.key, sha256: encrypted.sha256 });
+      if (!attachment) throw new Error(i18n.t('composer.upload.noFileRead'));
+      return await retain(attachment);
     }
     const sha256 = await sha256MobileAttachmentFile(snapshot.uri, candidate.size, {
       readChunk: options.deps?.readFileChunk,

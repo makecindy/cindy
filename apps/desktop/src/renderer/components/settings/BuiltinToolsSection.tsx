@@ -33,12 +33,8 @@ import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
 import { recentWorkdirsStore, type RecentWorkdirEntry } from '@/lib/recentWorkdirsStore';
 import { normalizeWorkingDirForProjectSettings } from '../../../shared/workingDir';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { Button } from '@/components/ui/button';
+import { SelectParts, SELECT_WIDTHS } from '@/components/ui/select';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
 const log = createLogger('BuiltinToolsSection');
@@ -334,6 +330,10 @@ export function BuiltinToolRow({
   );
 }
 
+const USER_DEFAULT_SCOPE = '__user-default';
+const SCOPE_ITEM_CLASS =
+  'relative flex min-h-8 w-full cursor-pointer select-none items-center rounded-lg py-1.5 pl-2 pr-6 text-left outline-none';
+
 /** Scope picker — switches between user defaults and a project's overrides. */
 function ScopePicker({
   effectiveWorkingDir,
@@ -367,80 +367,74 @@ function ScopePicker({
     return out;
   }, [effectiveWorkingDir, activeSessionWorkingDir, recentWorkdirs]);
 
-  const triggerLabel = effectiveWorkingDir
-    ? basename(effectiveWorkingDir)
-    : t('settings.builtinTools.scopePicker.userDefault');
-
+  // A single-value field (DESIGN.md §4): shared Select trigger and equal-width panel.
+  // SelectParts keeps the two-line rows (name + description / full path).
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button data-setting-id={builtinToolsSettings.title.id}
-          type="button"
+    <SelectParts.Root
+      value={effectiveWorkingDir ?? USER_DEFAULT_SCOPE}
+      onValueChange={(value) => onPick(value === USER_DEFAULT_SCOPE ? null : value)}
+    >
+      <SelectParts.Trigger asChild>
+        <Button
+          data-setting-id={builtinToolsSettings.title.id}
+          pressFeedback={false}
+          variant="secondary"
+          size="md"
           aria-label={t('settings.builtinTools.scopePicker.ariaLabel')}
           title={effectiveWorkingDir ?? undefined}
-          className={cn(
-            'flex items-center gap-1.5 shrink-0 max-w-[200px]',
-            'h-7 px-2.5 rounded-full',
-            'bg-[var(--settings-input-bg)] text-[var(--settings-section-title)]',
-            'text-12 font-medium',
-            'hover:bg-[var(--surface-chip)]',
-            'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-            'transition-colors',
-          )}
+          className={cn(SELECT_WIDTHS.sm, 'min-w-0 max-w-full shrink-0 justify-between gap-1.5 px-3 font-normal')}
         >
           {effectiveWorkingDir ? (
-            <Folder size={12} className="shrink-0" />
+            <Folder size={14} className="shrink-0" aria-hidden />
           ) : (
-            <UserRound size={12} className="shrink-0" />
+            <UserRound size={14} className="shrink-0" aria-hidden />
           )}
-          <span className="truncate">{triggerLabel}</span>
-          <ChevronDown size={12} className="shrink-0 opacity-60" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-max min-w-0 max-w-[calc(100vw-32px)]">
-        <DropdownMenuItem
-          onClick={() => onPick(null)}
-          className="grid w-full grid-cols-[14px_max-content] items-center gap-x-2.5 pr-4 cursor-pointer"
+          <span className="min-w-0 flex-1 truncate text-left">
+            <SelectParts.Value />
+          </span>
+          <SelectParts.Icon asChild>
+            <ChevronDown size={14} className="shrink-0" aria-hidden="true" />
+          </SelectParts.Icon>
+        </Button>
+      </SelectParts.Trigger>
+      <SelectParts.Portal>
+        <SelectParts.Content
+          side="bottom"
+          align="end"
+          className="border border-[var(--border-default)] bg-[var(--surface-elevated)] text-13 text-[var(--text-primary)]"
         >
-          <Check
-            size={14}
-            className={cn('shrink-0', !effectiveWorkingDir ? 'opacity-100' : 'opacity-0')}
-          />
-          <div className="flex flex-col gap-0.5">
-            <span className="whitespace-nowrap">
-              {t('settings.builtinTools.scopePicker.userDefault')}
-            </span>
-            <span className="whitespace-nowrap text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
-              {t('settings.builtinTools.scopePicker.userDefaultDescription')}
-            </span>
-          </div>
-        </DropdownMenuItem>
-        {candidates.map((dir) => {
-          const isCurrent = dir === effectiveWorkingDir;
-          return (
-            <DropdownMenuItem
-              key={dir}
-              onClick={() => onPick(dir)}
-              // minmax(0,max-content):菜单仍按内容自适应宽,但路径超过菜单
-              // max-w 上限时列可收缩、由 truncate 出省略号,不再水平溢出。
-              className="grid w-full grid-cols-[14px_minmax(0,max-content)] items-center gap-x-2.5 pr-4 cursor-pointer"
-            >
-              <Check
-                size={14}
-                className={cn('shrink-0', isCurrent ? 'opacity-100' : 'opacity-0')}
-              />
-              <div className="flex min-w-0 flex-col gap-0.5">
-                <div className="flex items-center gap-1.5">
-                  <span className="truncate">{basename(dir)}</span>
-                </div>
-                <span title={dir} className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
-                  {dir}
+          <SelectParts.Viewport className="max-h-64 min-w-0">
+            <SelectParts.Item value={USER_DEFAULT_SCOPE} className={SCOPE_ITEM_CLASS}>
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <span className="truncate">
+                  <SelectParts.ItemText>{t('settings.builtinTools.scopePicker.userDefault')}</SelectParts.ItemText>
                 </span>
-              </div>
-            </DropdownMenuItem>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
+                <span className="whitespace-normal break-words text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
+                  {t('settings.builtinTools.scopePicker.userDefaultDescription')}
+                </span>
+              </span>
+              <SelectParts.ItemIndicator className="absolute right-1 flex">
+                <Check size={14} aria-hidden="true" />
+              </SelectParts.ItemIndicator>
+            </SelectParts.Item>
+            {candidates.map((dir) => (
+              <SelectParts.Item key={dir} value={dir} title={dir} className={SCOPE_ITEM_CLASS}>
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="truncate">
+                    <SelectParts.ItemText>{basename(dir)}</SelectParts.ItemText>
+                  </span>
+                  <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
+                    {dir}
+                  </span>
+                </span>
+                <SelectParts.ItemIndicator className="absolute right-1 flex">
+                  <Check size={14} aria-hidden="true" />
+                </SelectParts.ItemIndicator>
+              </SelectParts.Item>
+            ))}
+          </SelectParts.Viewport>
+        </SelectParts.Content>
+      </SelectParts.Portal>
+    </SelectParts.Root>
   );
 }

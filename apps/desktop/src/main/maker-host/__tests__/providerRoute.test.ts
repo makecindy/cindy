@@ -37,6 +37,7 @@ import {
   resolveSessionRouteDecision,
   resolveFrozenProviderRouteDecision,
   resolveImplicitLocalBridgeRoute,
+  resolveConnectedDefaultProviderIdForModel,
   inferProviderIdForModel,
   isUserProviderSession,
   setCustomProviderKeyReader,
@@ -47,6 +48,7 @@ import {
   setProviderViewsReader,
   resolveImplicitProviderOAuthRouteDecision,
   providerRoutingForModel,
+  sessionProviderRoutingForModel,
   resolveVisionBackendRoute,
   rewriteImplicitModelIdForRoute,
   rewriteSessionModelIdForRoute,
@@ -202,6 +204,31 @@ describe('Codex local auth policy', () => {
   });
 });
 
+// Unit: per-model Responses selection used to skip exec adaptation on Chat
+// connections. Explicit capabilities and native subscription routes must survive.
+describe('Codex per-model custom-tool capability', () => {
+  it.each([
+    { capability: undefined, authStrategy: 'oauth-token', source: 'user', expected: false },
+    { capability: true, authStrategy: 'api-key-header', source: 'user', expected: true },
+    { capability: false, authStrategy: 'api-key-header', source: 'user', expected: false },
+    { capability: undefined, authStrategy: 'oauth-passthrough', source: 'user', expected: undefined },
+    { capability: undefined, authStrategy: 'api-key-header', source: 'builtin', expected: undefined },
+  ] as const)('keeps $source / $authStrategy / $capability scoped to the effective protocol', ({ capability, authStrategy, source, expected }) => {
+    const provider = buildUserProvider({ id: 'protocol-override', name: 'Protocol override', runtimes: { codex: {
+      baseUrl: 'https://provider.example/v1', wireProtocol: 'openai-chat', models: [
+        { id: 'responses', name: 'Responses', route: { baseUrl: 'https://provider.example/v1', wireProtocol: 'openai-responses' } },
+        { id: 'chat', name: 'Chat' },
+      ],
+    } } });
+    provider.source = source;
+    provider.routing.codex!.authStrategy = authStrategy;
+    provider.routing.codex!.supportsResponsesCustomTools = capability;
+    expect(providerRoutingForModel(provider, 'codex', 'responses')?.supportsResponsesCustomTools).toBe(expected);
+    expect(providerRoutingForModel(provider, 'codex', 'chat')?.supportsResponsesCustomTools).toBe(capability);
+    expect(provider.routing.codex!.supportsResponsesCustomTools).toBe(capability);
+  });
+});
+
 describe('Pi per-model protocol routing', () => {
   const provider = buildUserProvider({
     id: 'pi-overrides',
@@ -285,6 +312,22 @@ describe('Pi per-model protocol routing', () => {
 });
 
 describe('implicit local bridge resume routing', () => {
+  // PR #9998 review, unit: catalog uniqueness is not the connected default.
+  // Two connected custom sources sharing one model used to be mistaken for OpenAI.
+  it('uses the same connected default for account selection and an implicit Codex bridge', async () => {
+    setCustomProviders(['account-a', 'account-b'].map(id => buildUserProvider({
+      id, name: id, auth: { method: 'apiKey' }, runtimes: { codex: {
+        baseUrl: `https://${id}.example.test/v1`, wireProtocol: 'openai-chat',
+        models: [{ id: 'shared-custom-model', name: 'Shared Custom Model' }],
+      } },
+    })));
+    setProviderViewsReader(async () => buildRegistry(getActiveCatalog(), { 'account-a': true, 'account-b': true }, {}));
+    try {
+      expect(inferProviderIdForModel('shared-custom-model', 'codex')).toBeNull();
+      await expect(resolveConnectedDefaultProviderIdForModel('shared-custom-model', 'codex')).resolves.toBe('account-a');
+      expect((await resolveImplicitLocalBridgeRoute('shared-custom-model', 'codex'))?.providerId).toBe('account-a');
+    } finally { setCustomProviders([]); }
+  });
   it('never resolves a Codex session to the Claude subscription, even for a retired Claude model', async () => {
     setAnthropicDiscoveredModels([
       {
@@ -399,6 +442,23 @@ describe('pi: provider-aware Anthropic wire routing', () => {
       headerOverride: { 'x-api-key': KEY, authorization: `Bearer ${KEY}` },
     });
   });
+
+  it.each(['anthropic-messages', 'openai-chat', 'openai-responses'] as const)(
+    'removes the Pi placeholder API key when injecting generic OAuth over %s',
+    (wireProtocol) => {
+      const decision = buildRouteDecision({
+        upstream: 'https://api.kimi.com/coding',
+        authStrategy: 'oauth-token',
+        wireProtocol,
+        headerDelete: ['x-test-private'],
+      }, null, 'pi', null, 'test-kimi-oauth-token');
+      expect(decision).toMatchObject({
+        upstreamOverride: 'https://api.kimi.com/coding',
+        headerOverride: { authorization: 'Bearer test-kimi-oauth-token' },
+        headerDelete: ['x-test-private', 'x-api-key'],
+      });
+    },
+  );
 
   it('Pi 会话选 Claude 订阅 → 无路由(不注入 host OAuth,调用方本地拒绝)', async () => {
     setSessionProvider('s-pi', 'anthropic');
@@ -2079,11 +2139,20 @@ describe('task interface snapshot', () => {
       const initial = buildUserProvider(config, { modelRegistry: registry }).models.codex![0];
       const first = sessionModelInterface('task', config.id, 'codex', initial, registry)!;
       expect(first.api).toBe('openai-responses');
+      // The connection defaults to Chat, but this selected model dispatches
+      // Responses: exec must still reach the existing function adapter.
+      expect(providerRoutingForModel(buildUserProvider(config, { modelRegistry: registry }), 'codex', 'k3.1-pro'))
+        .toMatchObject({ wireProtocol: 'openai-responses', supportsResponsesCustomTools: false });
       expect(first.defaults).toMatchObject({ contextWindow: 262144, maxOutputTokens: 262144 });
       registry.models.flatMap(e => e.routes).find(r => r.providerId === 'moonshot-kimi-code' && r.modelId === 'k3.1-pro')!.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-completions'];
       const next = buildUserProvider(config, { modelRegistry: registry }).models.codex![0];
       configureSessionModelInterfaceStorage(() => directory); // real disk restore
       expect(sessionModelInterface('task', config.id, 'codex', next, registry)).toEqual(first);
+      const refreshed = buildUserProvider(config, { modelRegistry: registry });
+      expect(sessionProviderRoutingForModel('task', refreshed, 'codex', 'k3.1-pro'))
+        .toMatchObject({ wireProtocol: 'openai-responses', supportsResponsesCustomTools: false });
+      expect(sessionProviderRoutingForModel('new-task', refreshed, 'codex', 'k3.1-pro'))
+        .toMatchObject({ wireProtocol: 'openai-chat' });
       expect(sessionModelInterface('new-task', config.id, 'codex', next, registry)?.api).toBe('openai-completions');
       // Explicit image edits override pinned metadata, never the saved interface.
       // Reset removes the override rather than permanently rewriting the snapshot.

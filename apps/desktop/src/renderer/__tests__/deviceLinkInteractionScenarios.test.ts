@@ -442,6 +442,19 @@ describe('device-link 远程交互往返 — plan_review', () => {
 });
 
 describe('device-link Desktop-only 确认 — 控制端只读投影', () => {
+  // 第21项不再产生删除确认，旧 lane 不能恢复成新的插件权限卡，tier=unit。
+  it('不把已移除的插件删除确认恢复为权限卡', async () => {
+    const s = sid();
+    local.localGetPendingInteractions.mockResolvedValue([{ request: {
+      kind: 'ghost_grant_confirm', requestId: 'delete-confirm', ghostId: 'file-smoke', ghostName: 'File smoke',
+      lane: 'fs_delete', items: [{ name: 'reports', absPath: '/workspace/reports', size: 128, isDirectory: true }],
+    } }]);
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s).pendingGhostGrantConfirm).toBeNull();
+    expect(local.localResolveInteraction).not.toHaveBeenCalled();
+    expect(host.resolved).toHaveLength(0);
+  });
+
   it('只读提示展示期间保留 ChatInput，不把控制端锁死', () => {
     const src = readFileSync(
       resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSessionView.tsx'),
@@ -1213,8 +1226,6 @@ describe('远程交互接线不变式', () => {
     expect(src).not.toContain(
       'await window.electronAPI.maker.setPermissionMode(sessionId, previousMode);',
     );
-    expect(src).toContain('requiresFullAccessConfirmation(previousMode, newMode)');
-    expect(src).toContain('if (!confirmed) return;');
     expect(src).toContain("toast.error(t('newChat.chatInput.permissionSwitchFailed'))");
   });
 
@@ -1510,8 +1521,11 @@ describe('远程交互接线不变式', () => {
     expect(pushStart).toBeGreaterThan(-1);
     const pushBody = src.slice(pushStart, pushEnd);
     expect(pushBody).toContain('target?: {');
+    // 没有显式目标时写穿的型号必须是**当前显示的那一个**(draftInitialModel):播种型号在
+    // 目标目录里路由不出去、被换成目录里的另一个型号时,写旧型号等于把新型号的改动写到
+    // 旧型号的远端草稿记忆上(Codex review #9369)。
     expect(pushBody).toContain(
-      'const model = target?.modelId ?? dlSel?.model ?? deviceLinkInitial?.model;',
+      'const model = target?.modelId ?? draftInitialModel ?? dlSel?.model ?? deviceLinkInitial?.model;',
     );
     expect(pushBody).toContain('agent: target?.agent ?? capabilityAgentKind');
     expect(pushBody).toMatch(/providerId: target\s*\r?\n?\s*\?\s*\(target\.providerId \?\? ''\)/);
@@ -1671,7 +1685,7 @@ describe('远程交互接线不变式', () => {
 
   it('F6: scheduler 新会话在首条消息落库后广播 created 给 device-link 列表订阅者', () => {
     const runnerSrc = mainSrc('scheduler-host/runner.ts');
-    const hostSrc = mainSrc('scheduler-host/index.ts');
+    const hostSrc = mainSrc('scheduler-host/index.desktop.ts');
     expect(runnerSrc).toContain('this.deps.onSessionCreated?.(session.id)');
     expect(hostSrc).toContain('onSessionCreated: broadcastSessionCreated');
   });

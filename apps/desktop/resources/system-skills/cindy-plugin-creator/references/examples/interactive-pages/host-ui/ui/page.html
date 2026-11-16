@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>插件界面示例</title>
+<style>
+:root{color-scheme:light dark}*{box-sizing:border-box}
+body{margin:0;padding:20px;font:14px/1.5 var(--font-sans,system-ui);color:var(--color-text-primary,CanvasText);background:var(--color-background-primary,Canvas)}
+textarea,button{font:inherit;color:inherit;background:var(--color-background-secondary,Canvas);border:1px solid var(--color-border-primary,GrayText);border-radius:8px;padding:10px;min-height:44px;max-width:100%}
+textarea{width:100%;min-height:100px}button{margin:8px 8px 0 0}p{overflow-wrap:anywhere}button:disabled{opacity:.5}
+details{margin-top:16px}summary{cursor:pointer}h1{font-size:24px;margin-top:0}#status{white-space:pre-wrap}
+</style>
+<h1>插件界面示例</h1><p id="scope"></p>
+<label>草稿内容<textarea id="draft" maxlength="128000"></textarea></label>
+<div><button id="append" disabled>追加到草稿</button><button id="replace" disabled>替换草稿选区</button><button id="refresh" disabled>刷新示例状态</button></div>
+<p id="selection">请先在任务输入框选中文字，再打开快捷面板。</p>
+<details open><summary>外观</summary>
+<div><button id="style" disabled>预览正文样式与字体</button><button id="wallpaper" disabled>使用示例壁纸</button></div>
+<div><button id="appearance" disabled>读取外观设置</button><button id="reset" disabled>恢复外观默认值</button></div>
+</details>
+<details><summary>区域显隐</summary><div id="regions"></div><button id="regions-reset" disabled>显示全部区域</button></details>
+<details><summary>插件设置</summary><button id="settings-read" disabled>读取统一插件设置</button></details>
+<p id="status" role="status">正在连接…</p>
+<script type="module">
+import { App } from '@modelcontextprotocol/ext-apps';
+const app = new App({ name: '插件界面示例', version: '1.2.0' }, {}, { autoResize: true });
+const status = document.querySelector('#status');
+const regions = ['workspace','sidebar','header','messages','composer','tools','windowControls'];
+for (const region of regions) {
+  const button = document.createElement('button'); button.textContent = `隐藏 ${region}`;
+  button.dataset.region = region; button.disabled = true;
+  button.onclick = () => call('cindy.ui.visibility', { regions: { [region]: false } });
+  document.querySelector('#regions').append(button);
+}
+function update() {
+  const context = app.getHostContext() ?? {};
+  if (context.theme) document.documentElement.style.colorScheme = context.theme;
+  for (const [key, value] of Object.entries(context.styles?.variables ?? {})) document.documentElement.style.setProperty(key, value);
+  const cindy = context.cindy ?? {}, capabilities = cindy.capabilities ?? [];
+  document.querySelector('#scope').textContent = cindy.source?.sessionId
+    ? `当前任务：${cindy.context?.task?.title ?? cindy.source.sessionId}` : '跨任务的全局工作台';
+  document.querySelector('#append').disabled = !cindy.source?.sessionId || !capabilities.includes('draft');
+  const selection = cindy.draft?.selection;
+  document.querySelector('#replace').disabled = !cindy.source?.sessionId || !capabilities.includes('draft') || !selection;
+  document.querySelector('#selection').textContent = selection ? `草稿选区：${selection.text}` : '请先在任务输入框选中文字，再打开快捷面板。';
+  for (const id of ['appearance','style','wallpaper','reset']) document.querySelector(`#${id}`).disabled = !capabilities.includes('appearance');
+  for (const button of document.querySelectorAll('[data-region],#regions-reset')) button.disabled = !capabilities.includes('visibility');
+}
+async function call(name, args) {
+  try {
+    const result = await app.callServerTool({ name, arguments: args });
+    status.textContent = result.content?.filter(block => block.type === 'text').map(block => block.text).join('\n') || '已完成。';
+    return result;
+  } catch { status.textContent = '操作未完成，请重试。'; }
+}
+app.onhostcontextchanged = update;
+app.onteardown = async () => ({});
+document.querySelector('#append').onclick = () => call('cindy.ui.draft', { mode: 'append', text: document.querySelector('#draft').value });
+document.querySelector('#replace').onclick = () => call('cindy.ui.draft', { mode: 'replace-selection',
+  text: document.querySelector('#draft').value, revision: app.getHostContext()?.cindy?.draft?.revision });
+document.querySelector('#refresh').onclick = () => call('refresh', {});
+document.querySelector('#appearance').onclick = () => call('cindy.ui.appearance', {});
+document.querySelector('#style').onclick = () => call('cindy.ui.appearance', { patch: {
+  codeFont: { resource: 'asset:mono', size: 15 }, bodyFont: { size: 17 }, reading: { bodyLineHeight: 1.8 },
+  contentStyle: { messagePadding: 12, messageRadius: 18, messageGap: 10 },
+  theme: { light: { userBubble: '#edf3ff', userText: '#18365c' }, dark: { userBubble: '#24334a', userText: '#edf3ff' } }
+} });
+document.querySelector('#wallpaper').onclick = () => call('cindy.ui.appearance', { patch: { wallpaper: { resource: 'asset:art', visibility: 0.2 } } });
+document.querySelector('#reset').onclick = () => call('cindy.ui.appearance', { reset: ['uiFont','codeFont','bodyFont','wallpaper','theme','reading','contentStyle'] });
+document.querySelector('#regions-reset').onclick = () => call('cindy.ui.visibility', { regions: Object.fromEntries(regions.map(region => [region,true])) });
+document.querySelector('#settings-read').onclick = () => call('cindy.ui.settings', { operation: 'get' });
+try { await app.connect(); update(); document.querySelector('#refresh').disabled = false; document.querySelector('#settings-read').disabled = false; status.textContent = '可以操作。'; }
+catch { status.textContent = '页面未连接，请重新打开。'; }
+</script>
+</html>

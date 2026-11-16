@@ -1,3 +1,8 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { configureUserDataDir } from '../../userDataPath.js';
+import { configureOwnerContext } from '../../ownerContext.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 /**
@@ -14,7 +19,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
  * getPiExtraSpawnConfig 内部起真 codexHttpBridge,故这里做真 HTTP 往返。
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { PluginRegistry } from '../../maker-host/plugins/plugin-registry';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createLiziMcpProviders, getLiziMcpSessionContext } from '@cindy/mcps';
@@ -38,7 +43,7 @@ import {
   getPiExtraSpawnConfig,
   invalidatePiEnvironment,
   shutdownPiEnvironment,
-} from '../piEnvironment.js';
+} from '../piEnvironment.desktop.js';
 
 function noopLogger(): Logger {
   const logger: Logger = {
@@ -132,9 +137,10 @@ function createTestServer(name: string): McpServer {
  * name 默认 'cindy_orca'(→ collab,首方内置且被策略 gate 覆盖);传非内置名(如
  * 'custom_probe')可绕过 gate,单测 ctx 流通本身不受策略阻断干扰。
  */
-function makeProvider(name = 'cindy_orca'): McpProvider {
+function makeProvider(name = 'cindy_orca', displayName?: string): McpProvider {
   return {
     name,
+    ...(displayName ? { displayName } : {}),
     toClaudeSdkConfig: () => ({ type: 'sdk', instance: createTestServer(name) }),
   };
 }
@@ -161,8 +167,18 @@ async function readRpcText(resp: Response): Promise<unknown> {
 }
 
 describe('piEnvironment per-session identity', () => {
+  let profile: string;
+  beforeEach(() => {
+    profile = mkdtempSync(path.join(os.tmpdir(), 'cindy-pi-env-'));
+    configureUserDataDir(profile);
+    configureOwnerContext({
+      read: () => ({ dataOwnerId: null, generation: 0, boundaryPending: false }),
+      fallbackBaseDir: () => profile,
+    });
+  });
   afterEach(async () => {
     await shutdownPiEnvironment();
+    rmSync(profile, { recursive: true, force: true });
   });
 
   it('recovers Slack binding in the existing Pi bridge while another session holds its lease', async () => {
@@ -192,7 +208,7 @@ describe('piEnvironment per-session identity', () => {
   });
 
   it('registers a pi session ctx and routes it through session + instance identity', async () => {
-    const config = await getPiExtraSpawnConfig([makeProvider()], noopLogger(), {
+    const config = await getPiExtraSpawnConfig([makeProvider('cindy_orca', 'Readable Orca')], noopLogger(), {
       sessionId: 'pi-lead-1',
       sessionInstanceId: 'pi-instance-1',
       workingDir: '/repo',
@@ -202,6 +218,7 @@ describe('piEnvironment per-session identity', () => {
     });
     expect(config?.mcpBridge).toBeTruthy();
     const server = config!.mcpBridge!.servers[0]!;
+    expect(server.displayName).toBe('Readable Orca');
     const token = config!.mcpBridge!.token;
     const routeUrl = new URL(server.url);
     expect(routeUrl.searchParams.get('session')).toBe('pi-lead-1');
@@ -1079,7 +1096,7 @@ describe('piEnvironment per-session identity', () => {
       { id: 'other-loopback', transport: 'http' as const, url: 'http://127.0.0.2:4321/mcp' },
       { id: 'credentials', transport: 'http' as const, url: 'https://user:canary@example.test/mcp' },
       { id: 'invalid-url', transport: 'http' as const, url: 'not a url' },
-    ].map((config) => ({ ...config, name: config.id, headers: {}, updatedAt: 1 }));
+    ].map((config) => ({ ...config, name: config.id === 'https' ? 'Readable HTTPS' : config.id, headers: {}, updatedAt: 1 }));
     const builtin = makeProvider('cindy_memory');
     const sdkFactory = vi.spyOn(builtin, 'toClaudeSdkConfig');
     const providers = [builtin, ...configs.map((config) => new CustomMcpProvider(config, () => 'TOKEN_CANARY'))];
@@ -1093,6 +1110,8 @@ describe('piEnvironment per-session identity', () => {
     const config = await getPiExtraSpawnConfig(providers, noopLogger(), { workingDir: '', memoryEnabled: true });
     try {
       expect(config?.mcpBridge?.servers.map((server) => server.name)).toEqual(available);
+      expect(config?.mcpBridge?.servers.find((server) => server.name === 'https')?.displayName)
+        .toBe('Readable HTTPS');
     } finally {
       config?.disposeSessionCtx?.();
     }

@@ -66,6 +66,29 @@ export interface PluginMarketSnapshot {
   organizationAccessError?: string | null;
 }
 
+export interface PluginMarketQuery {
+  query?: string;
+  scope?: 'all' | PluginMarketScope | 'custom';
+  cursor?: string | null;
+  limit?: number;
+  excludeInstalled?: boolean;
+  /** Readers that only need items/cursors can omit the complete first-page count. */
+  counts?: boolean;
+}
+export interface PluginMarketCounts {
+  all: number;
+  public: number;
+  organization: number;
+  personal: number;
+  custom: number;
+}
+export interface PluginMarketPage extends PluginMarketSnapshot {
+  customSourceCounts?: Array<{ name: string; count: number }>;
+  nextCursor: string | null;
+  /** Complete query counts on the first page; subsequent pages reuse them. */
+  counts: PluginMarketCounts | null;
+}
+
 /** 服务端清理的一次性汇总提示：按 owner 缓存，consume 前跨多轮对账累加，consume 后即清。 */
 export interface PluginRemovalUserNotice {
   count: number;

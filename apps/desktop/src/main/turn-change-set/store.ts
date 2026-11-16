@@ -1,4 +1,3 @@
-import { app, BrowserWindow } from 'electron';
 import { createId } from '@paralleldrive/cuid2';
 import { createTwoFilesPatch, formatPatch, parsePatch, reversePatch } from 'diff';
 import { realpathSync } from 'node:fs';
@@ -25,6 +24,7 @@ import type { FileDiff } from '../../shared/gitReviewWire.js';
 import { parseGitDiffs } from '../git-review/diffParser.js';
 import { GitRunError, runGit } from '../git-review/gitRunner.js';
 import { getDbClient } from '../localDb/client/current.js';
+import { userDataPath } from '../userDataPath.js';
 import { createLogger } from '../logger.js';
 import { detectSensitivePath } from '../security/sensitivePath.js';
 import * as broadcastTap from '../device-link/broadcast-tap.js';
@@ -166,11 +166,11 @@ function assertSafeSegment(value: string, label: string): void {
 }
 
 function storageRoot(): string {
-  return turnChangeSetStorageRoot(app.getPath('userData'));
+  return turnChangeSetStorageRoot(userDataPath());
 }
 
 function sessionDir(sessionId: string): string {
-  return turnChangeSetSessionDirectory(app.getPath('userData'), sessionId);
+  return turnChangeSetSessionDirectory(userDataPath(), sessionId);
 }
 
 function detailPath(sessionId: string, id: string): string {
@@ -760,19 +760,25 @@ async function persistValue(value: PersistedTurnChangeSetV1): Promise<void> {
   });
 }
 
+/** The desktop injects its window fan-out; the host leaves it unset. */
+let windowBroadcast: ((payload: TurnChangeSetUpdatedPayload, ownerStamp?: unknown) => void) | null = null;
+
+export function setTurnChangeSetWindowBroadcast(
+  broadcast: ((payload: TurnChangeSetUpdatedPayload, ownerStamp?: unknown) => void) | null,
+): void {
+  windowBroadcast = broadcast;
+}
+
 function broadcastUpdated(
   payload: TurnChangeSetUpdatedPayload,
   ownerScope = broadcastTap.captureDataOwnerBroadcastScope(),
 ): void {
   if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
   broadcastTap.tapWindowBroadcast(MAKER_PUSH.TURN_CHANGE_SET_UPDATED, payload, ownerScope.ownerStamp);
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed()) continue;
-    try {
-      win.webContents.send(MAKER_PUSH.TURN_CHANGE_SET_UPDATED, payload, ownerScope.ownerStamp);
-    } catch (error) {
-      log.warn('renderer turn change-set broadcast failed', { error });
-    }
+  try {
+    windowBroadcast?.(payload, ownerScope.ownerStamp);
+  } catch (error) {
+    log.warn('renderer turn change-set broadcast failed', { error });
   }
 }
 

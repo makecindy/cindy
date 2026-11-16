@@ -242,8 +242,11 @@ export function snapshotManagedPiPackageSkills(
 }
 
 function classifyExplicitRpcFailure(raw: string): Pick<PiRuntimeCapabilityError, 'code' | 'message'> {
-  const text = raw.toLowerCase();
-  if (text.includes('unknown command') || text.includes('unsupported') || text.includes('not supported')) {
+  // Pi answers an unrecognized RPC type with exactly `Unknown command: ${type}`
+  // (coding-agent rpc-mode.ts). That is the only "this build has no get_commands"
+  // signal. Matching "unsupported" or "not supported" anywhere also catches
+  // provider parameter errors and extension UI failures.
+  if (raw.trim().toLowerCase() === 'unknown command: get_commands') {
     return { code: 'unsupported', message: 'Pi does not support runtime command discovery' };
   }
   return { code: 'rpc_failed', message: 'Pi runtime command discovery was rejected' };

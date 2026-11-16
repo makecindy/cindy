@@ -58,14 +58,10 @@ describe('ChatInput 的入口门控与调用路由', () => {
 
   it('lazy-create 从 DB 对齐原子模型选择的 effort 与 Fast,不复用旧排队快照', () => {
     const hostSource = readFileSync(
-      resolve(process.cwd(), 'src/main/maker-ipc/register.ts'),
+      resolve(process.cwd(), 'src/main/maker-ipc/sessionOptionsReconciler.ts'),
       'utf8',
     );
-    const start = hostSource.indexOf('async function reconcileCreateOptsAgainstDb(');
-    const end = hostSource.indexOf('const agentSwitchDeps:', start);
-    expect(start).toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
-    const body = hostSource.slice(start, end);
+    const body = hostSource;
     expect(body).toContain('effort: sessions.effort,');
     expect(body).toContain('fastMode: sessions.fastMode,');
     expect(body).toContain('permissionMode: sessions.permissionMode,');
@@ -482,18 +478,18 @@ describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#192
     'utf8',
   ).replace(/\r\n/g, '\n');
 
-  it('onCompact 门控:通道存在 + pi 排除 SSH 远程(remoteHostId) + pi running 禁用,codex 无通道不开放', () => {
+  it('onCompact 门控:通道存在 + compact-session 排除 SSH 远程及 running', () => {
     // 门控不再硬编码 agentKind 排除列表:以 compactChannel(能力判定)为准;
-    // pi 的 SSH 远程会话(remoteHostId)无 compact-session 路由 → 显式排除
+    // Pi / Codex 的 SSH 远程会话(remoteHostId)无 compact-session 路由 → 显式排除
     // (与 SessionContentHeader 压缩菜单仅本地/device-link 一致,Copilot P2)。
     expect(viewSource).toContain('compactChannel !== null');
-    expect(viewSource).toContain("!(realAgentKind === 'pi' && !!session?.remoteHostId)");
+    expect(viewSource).toContain("!(compactChannel === 'compact-session' && !!session?.remoteHostId)");
     // pi 回合运行中会拒绝压缩 → compact-session 通道 running 时禁用(与
     // SessionContentHeader 的 runningSessionIds 一致,codex P1);claude-input 保留旧行为。
     expect(viewSource).toContain(
       "!(compactChannel === 'compact-session' && agentStatus.isRunning)",
     );
-    // codex(无 manualCompact)→ compactChannel null → 不开放(纯展示)。
+    // 未声明 manualCompact 的 agent → compactChannel null → 不开放。
   });
 
   it('compact-session 分支:粘滞路由 + 确认框后重新分流 + 失败反馈', () => {

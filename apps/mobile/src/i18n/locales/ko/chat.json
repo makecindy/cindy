@@ -1,6 +1,42 @@
 {
-  "teammateProcess": {"retry": "다시 시도",
-    "empty": "이 응답에 표시할 처리 기록이 없습니다","unavailable": "처리 기록을 불러오지 못했습니다","record":"작업 내역","operations":"작업 기록","elapsed":"처리 중 {{duration}}","took":"소요 시간 {{duration}}","processing":"처리 중","worked":"작업 내역","thinking":"생각 중","thought":"생각함","failed_one":"호출 {{count}}회 실패","failed_other":"호출 {{count}}회 실패","separator":" · ","actions":{"running":{"read":"파일 확인 중","edit":"파일 수정 중","search":"검색 중","web":"웹 확인 중","command":"명령 실행 중","tools":"도구 사용 중","delegate":"작업 위임 중","plan":"계획 정리 중"},"done":{"read":"파일 확인함","edit":"파일 수정함","search":"검색함","web":"웹 확인함","command":"명령 실행함","tools":"도구 사용함","delegate":"작업 위임함","plan":"계획 정리함"}}},
+  "teammateProcess": {
+    "retry": "다시 시도",
+    "empty": "이 응답에 표시할 처리 기록이 없습니다",
+    "unavailable": "처리 기록을 불러오지 못했습니다",
+    "record": "작업 내역",
+    "operations": "작업 기록",
+    "elapsed": "처리 중 {{duration}}",
+    "took": "소요 시간 {{duration}}",
+    "processing": "처리 중",
+    "worked": "작업 내역",
+    "thinking": "생각 중",
+    "thought": "생각함",
+    "failed_one": "호출 {{count}}회 실패",
+    "failed_other": "호출 {{count}}회 실패",
+    "separator": " · ",
+    "actions": {
+      "running": {
+        "read": "파일 확인 중",
+        "edit": "파일 수정 중",
+        "search": "검색 중",
+        "web": "웹 확인 중",
+        "command": "명령 실행 중",
+        "tools": "도구 사용 중",
+        "delegate": "작업 위임 중",
+        "plan": "계획 정리 중"
+      },
+      "done": {
+        "read": "파일 확인함",
+        "edit": "파일 수정함",
+        "search": "검색함",
+        "web": "웹 확인함",
+        "command": "명령 실행함",
+        "tools": "도구 사용함",
+        "delegate": "작업 위임함",
+        "plan": "계획 정리함"
+      }
+    }
+  },
   "imageDelivery": {
     "stored": "이미지 전달 완료",
     "failed": "이미지 전달에 실패했습니다. 기존 이미지 전송을 다시 시도할 수 있습니다.",
@@ -68,7 +104,7 @@
       "gitRebase": "브랜치 리베이스",
       "gitMerge": "브랜치 병합",
       "gitCherryPick": "커밋 체리픽",
-      "gitStash": "작업 내용 스태시",
+      "gitStash": "스태시 관리",
       "gitRestore": "파일 복원",
       "gitSubmodule": "서브모듈 관리",
       "gitRemote": "Git 원격 저장소 확인",
@@ -121,7 +157,7 @@
       "ghApiCall": "GitHub API 호출"
     },
     "status": {
-      "running": "진행 중",
+      "running": "실행 중",
       "done": "완료"
     }
   },
@@ -153,5 +189,13 @@
     "working": "작업 중…",
     "worked": "{{duration}} 동안 작업함",
     "workDetails": "작업 내역"
+  },
+  "subscriptionAccountError": {
+    "limited": "이 작업에서 사용하는 구독 계정의 사용 한도에 도달했습니다. 한도가 초기화된 후 다시 시도하거나 다른 모델 연결을 선택하세요. 계정은 자동으로 변경되지 않습니다.",
+    "limitedUntil": "이 작업에서 사용하는 구독 계정의 사용 한도에 도달했습니다. 초기화 예정: {{resetAt}}. 초기화 후 다시 시도하거나 다른 모델 연결을 선택하세요. 계정은 자동으로 변경되지 않습니다.",
+    "loginRequired": "이 작업에서 사용하는 구독 계정에 다시 로그인해야 합니다. 작업을 실행하는 컴퓨터에서 해당 계정에 다시 로그인한 후 다시 시도하세요.",
+    "signingIn": "이 작업에서 사용하는 구독 계정에 로그인 중입니다. 로그인이 완료된 후 다시 시도하세요.",
+    "unavailable": "이 작업에 지정된 구독 계정을 이번 요청에 사용할 수 없습니다. 작업을 실행하는 컴퓨터의 모델 제공자 설정에서 계정을 확인하거나 다른 모델 연결을 선택하세요.",
+    "legacy": "이 작업에 지정된 구독 계정을 사용할 수 없습니다. 작업을 실행하는 컴퓨터에서 계정의 로그인 및 사용 상태를 확인하거나 다른 모델 연결을 선택하세요. 계정은 자동으로 변경되지 않습니다."
   }
 }

@@ -6,7 +6,6 @@ import type { MessageRenderOptions } from '@cindy/maker-shared/message-render';
 import { isPlanUserBoundary } from '@cindy/maker-shared/message-render';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import { extractPayloadToolResultMedia } from '@cindy/maker-shared/payload-summary';
-import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 import {
   buildMobileMessageRenderItems,
   type MobileMessageRenderItem,
@@ -15,7 +14,7 @@ import { collectMobileMarkdownImages } from '@/session/messageMarkdown';
 import { countMobileRenderItemDiffs } from '@/session/messagePresentation';
 import type { RemoteMessage } from '@/session/types';
 import { contentToPreview } from '@/utils/contentPreview';
-import { remoteMessageCompletesTurn } from '@/session/messageNormalize';
+import { remoteMessageCompletesTurn, remoteUserMessageIsSynthetic } from '@/session/messageNormalize';
 
 export interface MobileStreamingRenderPrefixCache {
   boundaryMessage?: RemoteMessage;
@@ -44,6 +43,8 @@ export interface MobileStreamingRenderPrefixCacheRef {
 }
 
 interface BuildMobileStreamingRenderWindowInput {
+  /** History outlines fold recovery work across assistant boundaries. */
+  allowTruncatedTurn?: boolean;
   cacheKey: string;
   messages: readonly RemoteMessage[];
   messageStructureChangedIndexes?: ReadonlySet<number>;
@@ -53,6 +54,7 @@ interface BuildMobileStreamingRenderWindowInput {
     preserveSourceOrder?: boolean;
     sessionId?: string;
     sessionSource?: string | null;
+    pendingQuestionIds?: ReadonlySet<string>;
   };
   prefixCache?: MobileStreamingRenderPrefixCacheRef;
   previousPrefix?: MobileStreamingRenderPrefixCache | null;
@@ -102,7 +104,7 @@ export function buildMobileStreamingRenderWindow(
   input: BuildMobileStreamingRenderWindowInput,
 ): MobileStreamingRenderWindowResult {
   const {
-    cacheKey,
+    cacheKey: baseCacheKey,
     messages,
     messageStructureChangedIndexes,
     messageStructureToken,
@@ -111,6 +113,8 @@ export function buildMobileStreamingRenderWindow(
     previousPrefix = prefixCache?.current,
     taskUpdates,
   } = input;
+  const cacheKey = options.pendingQuestionIds === undefined ? baseCacheKey
+    : `${baseCacheKey}:questions:${JSON.stringify([...options.pendingQuestionIds].sort())}`;
   const sessionId = options.sessionId ?? messages[0]?.sessionId ?? '';
   const trustedPreviousBoundary = trustedStreamingBoundaryPrefix({
     changedIndexes: messageStructureChangedIndexes,
@@ -124,8 +128,8 @@ export function buildMobileStreamingRenderWindow(
       ? trustedPreviousBoundary.messages.length
       : trustedPreviousBoundary?.mode === 'truncated-turn'
         ? -1
-        : findLastRootUserMessageIndex(messages);
-  const stableAssistantBoundary = options.isSessionStreaming !== true
+        : findLastRootUserMessageIndex(messages, input.allowTruncatedTurn !== false);
+  const stableAssistantBoundary = options.isSessionStreaming !== true || input.allowTruncatedTurn === false
     ? -1
     : trustedPreviousBoundary?.mode === 'truncated-turn'
       ? trustedPreviousBoundary.messages.length - 1
@@ -682,13 +686,14 @@ function remoteToolUseId(message: RemoteMessage): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-function findLastRootUserMessageIndex(messages: readonly RemoteMessage[]): number {
+function findLastRootUserMessageIndex(messages: readonly RemoteMessage[], includeSteering = true): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (
       message.role === 'user'
+      && (includeSteering || message.agentMeta?.delivery !== 'steer')
       && isPlanUserBoundary(message)
-      && !isSyntheticTriggerText(contentToPreview(message.content))
+      && !remoteUserMessageIsSynthetic(message.content)
     ) {
       return index;
     }
