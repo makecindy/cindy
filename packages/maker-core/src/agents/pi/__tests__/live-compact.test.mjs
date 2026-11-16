@@ -1596,6 +1596,54 @@ describe('live compact 1.1.6: 切点对齐、本地屏障、决策收窄与快�
     expect(picked.pointerOnly).toBeUndefined();
   });
 
+  it('does not persist raws planned for the rejected candidate when the #60 retry rescues the cut', () => {
+    // Greptile 反驳成立:1.1.11(#60) 重试在同一次 attemptCut 里共享 rawPlanner —— 普通候选
+    // 卡片构建时 spanPieces 已把它的工具结果 lookup 进缓存,回试换段后这些记录仍被
+    // planned() 统一落盘、referenced() 纳入保护,违背「被拒的轮次一律不落盘」。
+    // planned()/referenced() 现在按最终段过滤;被拒候选(c0/c9)的快照不得出现。
+    const decisionText = Array.from({ length: 5 }, (_, i) => `决定采用方案-${i}:切换到 region keep-${i}`).join('\n');
+    // 直呼校验(est 形态):普通段(含决策行)先赢先翻车,重试后落在长读轮。
+    const mk = () => [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...round('r0', 'file', 2000, 'read'),
+      ...round('c0', 'tail', 2000),
+      entry('assistant', decisionText),
+      ...round('c9', 'tail', 2000),
+      ...round('k1', 'tiny', 100),
+      ...round('k2', 'tiny', 100),
+      ...round('k3', 'tiny', 100),
+    ];
+    const picked = selectNewestChunk(mk(), undefined, { engine: 'cloud', drain: true, totalTokens: 60000 });
+    expect(picked).not.toBeNull();
+    expect(picked.start).toBe(2);
+    expect(picked.end).toBe(3);
+    // settle 用 messages 形态的 contextEntries,形状等价于上面的 mk。
+    const contextEntries = [
+      { messages: [{ role: 'system', content: 'sys', provider: 'minimax' }], sourceEntry: { id: 's1' } },
+      { messages: [{ role: 'user', content: 'go', provider: 'minimax' }], sourceEntry: { id: 'u1' } },
+      toolCall('r0', 'read'), toolResult('r0', 'file '.repeat(2000)),
+      toolCall('c0'), toolResult('c0', 'tail '.repeat(2000)),
+      { messages: [{ role: 'assistant', content: decisionText, provider: 'minimax' }], sourceEntry: { id: 'a-dec' } },
+      toolCall('c9'), toolResult('c9', 'tail '.repeat(2000)),
+      ...small('k1'), ...small('k2'), ...small('k3'),
+    ];
+    const root = mkdtempSync(join(tmpdir(), 'spine-orphan-'));
+    const previous = process.env.SPINE_SHADOW_DIR;
+    process.env.SPINE_SHADOW_DIR = root;
+    try {
+      settle(root, 'session-orphan-raws', contextEntries);
+      const files = readdirSync(join(root, 'shadow'), { recursive: true });
+      const rawFiles = files.filter((f) => /raw-.+\.txt$/.test(String(f)));
+      // 只有最终段(r0)的快照:重试前被拒候选(c0/c9)的 lookup 不得落盘。
+      expect(rawFiles.length).toBe(1);
+      expect(readFileSync(join(root, 'shadow', String(rawFiles[0])), 'utf8')).toContain('file file');
+    } finally {
+      if (previous === undefined) delete process.env.SPINE_SHADOW_DIR; else process.env.SPINE_SHADOW_DIR = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('refuses a duplicated tool-call id whose body changed', () => {    // 上游 #46:同一 toolCallId 换了内容是异常复用;静默沿用旧备份会让指针指向错误正文。
     const dir = mkdtempSync(join(tmpdir(), 'spine-dup-'));
     try {

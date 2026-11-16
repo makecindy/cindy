@@ -2742,31 +2742,37 @@ export function planRawEntries(state: SpineState, entries: SpineEntry[]): Map<st
 /**
  * 懒执行:只有卡片真的要算某个工具块时才为那一条算指针;不切、被拒的轮次一律不落盘。
  * 返回的 planned() 是本次卡片引用到的、还没写的原文,切割被接受后才统一落盘。
+ * 1.1.11(#60) 的 forceLongRead 回试复用同一个 planner,被拒候选的 lookup 也进了缓存 ——
+ * planned()/referenced() 因此按最终选中段过滤,孤儿记录只留在缓存里,不写盘、不进保护清单。
  */
 function rawPlanner(state: SpineState, entries: SpineEntry[]) {
   const dir = shadowDirectory(state.key);
   const cache = new Map<string, RawRecord>();
-  let index: Map<string, { entry: SpineEntry; call?: { name: string; command: string; filePath: string; jobId: string; hiddenArgs: boolean } }> | null = null;
+  // 记录每个条目在上下文数组里的位置:forceLongRead 回试会复用同一个 planner(Greptile 2026-11-16),
+  // 被拒候选查过的原文也进了缓存 —— 落盘/保护清单必须按最终选中段过滤,否则孤儿快照一轮轮堆积。
+  const posOf = new Map<string, number>();
+  let index: Map<string, { entry: SpineEntry; pos: number; call?: { name: string; command: string; filePath: string; jobId: string; hiddenArgs: boolean } }> | null = null;
   const lookup = (id: string): RawRecord | undefined => {
     const hit = cache.get(id);
     if (hit) return hit;
     if (index === null) {
       index = new Map();
-      for (const entry of entries) {
+      for (const [entryPos, entry] of entries.entries()) {
         for (const resultId of entry.results) {
           const slot = index.get(resultId);
           if (slot) slot.entry = entry;
-          else index.set(resultId, { entry });
+          else index.set(resultId, { entry, pos: entryPos });
         }
         for (const [metaId, info] of entry.callMeta ?? []) {
           const slot = index.get(metaId);
           if (slot) slot.call = info;
-          else index.set(metaId, { entry: undefined as unknown as SpineEntry, call: info });
+          else index.set(metaId, { entry: undefined as unknown as SpineEntry, pos: entryPos, call: info });
         }
       }
     }
     const slot = index.get(id);
     if (!slot?.entry) return undefined;
+    posOf.set(id, slot.pos);
     const record = planRawEntry({
       dir,
       toolCallId: id,
@@ -2778,10 +2784,21 @@ function rawPlanner(state: SpineState, entries: SpineEntry[]) {
     cache.set(id, record);
     return record;
   };
-  const planned = () => [...cache.values()].filter((record) => record.ok && record.pending);
+  const inChunk = (id: string, chunk?: { start: number; end: number }) => {
+    if (!chunk) return true;
+    const pos = posOf.get(id);
+    return pos !== undefined && pos >= chunk.start && pos <= chunk.end;
+  };
+  const planned = (chunk?: { start: number; end: number }) =>
+    [...cache.entries()]
+      .filter(([id, record]) => record.ok && record.pending && inChunk(id, chunk))
+      .map(([, record]) => record);
   // 卡片引用到的原文可能早就落过盘(恢复/分叉的会话会命中同一个 toolCallId)。
   // 这类路径不在 planned() 里,但轮换删掉它,卡片就成了空指针 —— 保护清单要按「引用到」算。
-  const referenced = () => [...cache.values()].filter((record) => record.ok && record.path);
+  const referenced = (chunk?: { start: number; end: number }) =>
+    [...cache.entries()]
+      .filter(([id, record]) => record.ok && record.path && inChunk(id, chunk))
+      .map(([, record]) => record);
   return { lookup, planned, referenced };
 }
 
@@ -3394,9 +3411,9 @@ function attemptCut(options: {
     tightenShadow(shadow);
     // 卡片引用的原文快照先落盘:写不进去就不切——否则卡片会指向一个不存在的文件。
     // 快照已经写在磁盘上,所以不再重复计入待写字节;仍要加入保护清单。
-    const pending = raws.planned();
+    const pending = raws.planned(chunk);
     // 卡片真正引用到的原文都要保护:新规划的要写,恢复会话里早就存在的会被复用。
-    const ownPaths = [file, ...raws.referenced().map((record) => record.path || "").filter(Boolean)];
+    const ownPaths = [file, ...raws.referenced(chunk).map((record) => record.path || "").filter(Boolean)];
     // 前面几刀的卡片也还没提交,它们引用的文件同样不许被这一刀的轮换删掉。
     const protectPaths = [...ownPaths, ...(options.batchProtectPaths ?? [])];
     // 这些快照在卡片被接受之前就落盘了;这一刀随后被拒的话,它们没有任何卡片引用,
