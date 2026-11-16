@@ -87,13 +87,16 @@ vi.mock('../placement.js', () => {
       const legacy = Object.entries(h.pools.openai?.legacyCodexAccounts ?? {}).find(([, id]) => id === accountId);
       return kind === 'openai' ? legacy?.[0] : undefined;
     },
-    placeSubscriptionAccount: async (kind: string, accountId: string, providerId: string) => place(kind, accountId, providerId),
+    placeSubscriptionAccount: async (kind: string, accountId: string | readonly string[], providerId: string) => {
+      for (const id of typeof accountId === 'string' ? [accountId] : accountId) place(kind, id, providerId);
+    },
     discardUnusedSubscriptionAccountPlacement: async (kind: string, id: string) => { delete h.placement[`${kind}:${id}`]; },
-    createSubscriptionProvider: async (kind: Kind, accountId: string, name: string, createId: () => string, prepare?: (id: string) => void) => {
+    createSubscriptionProvider: async (kind: Kind, accountId: string, name: string, createId: () => string, prepare?: (id: string) => void, additionalAccountIds: readonly string[] = []) => {
       const providerId = `${kind}-sub-${createId()}`;
       prepare?.(providerId);
       h.created[providerId] = { kind, name, account: accountId };
       place(kind, accountId, providerId);
+      for (const id of additionalAccountIds) place(kind, id, providerId);
       return providerId;
     },
     deleteCreatedSubscriptionProvider: async (providerId: string) => {
@@ -304,6 +307,138 @@ describe('owner-only subscription identity', () => {
     expect(JSON.stringify(keys)).not.toContain('secret-token');
     h.pools.openai.accounts[1].paused = true;
     expect(subscriptionProviderAccountKeys('openai')).toBeUndefined();
+  });
+});
+
+// Unit regression: merging two profiles of the same verified ChatGPT account counted it twice.
+// Existing merge tests use distinct workspace ids. Exercise the production command/read/lease
+// entry points with A + another login of A + B; retain native history, permissions and placement.
+describe('duplicate subscription account profiles', () => {
+  beforeEach(() => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), account('duplicate'), account('other')] };
+    h.tokens.mockImplementation(async (directory: string) => ({
+      chatgptAccountId: directory.endsWith('/other') ? 'workspace-b' : 'workspace-a', canDispatch: () => true,
+    }));
+  });
+
+  it('merges into two accounts, empties the source and retains the old task directory', async () => {
+    const source = 'openai-sub-duplicate';
+    h.created[source] = { kind: 'openai', name: 'Original', account: 'duplicate' };
+    h.placement['openai:duplicate'] = source;
+    h.bindings.set('task:old', { providerId: 'openai', accountId: 'duplicate', via: source });
+    const old = await acquireSubscriptionAccount(source, 'gpt-6', ['task:old'], false, { resuming: true });
+    try {
+      const merged = await runSubscriptionAccountCommand({ action: 'merge', providerId: source, target: 'openai' });
+      expect(merged.accounts.map(a => a.id)).toEqual(['default', 'other']);
+      expect(merged.accounts[0].running).toBe(1);
+      expect((await readSubscriptionPool(source)).accounts).toEqual([]);
+      expect(h.pools.openai!.accounts.map(a => a.id)).toEqual(['default', 'duplicate', 'other']);
+      const taskView = await readSubscriptionPool('openai', false, 'old');
+      expect(taskView.boundAccountId).toBe('duplicate');
+      expect(taskView.accounts.map(a => a.id)).toEqual(['duplicate', 'other']);
+      h.bindings.set('native:old-only', { providerId: 'openai', accountId: 'duplicate', via: source });
+      const nativeView = await readSubscriptionPool('openai', false, 'unrecorded-task', 'old-only');
+      expect(nativeView.boundAccountId).toBe('duplicate');
+      expect(nativeView.accounts.map(a => a.id)).toEqual(['duplicate', 'other']);
+      const resumed = await acquireSubscriptionAccount(source, 'gpt-6', ['task:old'], false, { resuming: true });
+      expect(resumed?.account.configDir).toBe('openai/duplicate');
+      resumed?.release();
+      expect(await readSubscriptionPoolAccountUsages('openai')).toHaveLength(2);
+    } finally { old?.release(); }
+  });
+
+  it.each(['least', 'round', 'weight'] as const)('counts identity once for %s distribution and capacity', async strategy => {
+    h.pools.openai!.strategy = strategy;
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.6);
+    const first = await acquireSubscriptionAccount('openai', 'gpt-6', []);
+    try {
+      // With equal weights A and B each get half, despite A having two login directories.
+      expect(first?.accountId).toBe(strategy === 'weight' ? 'other' : 'default');
+      const second = await acquireSubscriptionAccount('openai', 'gpt-6', []);
+      try {
+        expect(second?.accountId).toBe(strategy === 'weight' ? 'default' : 'other');
+        await expect(acquireSubscriptionAccount('openai', 'gpt-6', [])).rejects.toThrow('SUBSCRIPTION_ACCOUNTS_FULL');
+      } finally { second?.release(); }
+    } finally { first?.release(); random.mockRestore(); }
+  });
+
+  it('excludes all copies on retry and does not inherit another profile\'s remote permission', async () => {
+    const retry = await acquireSubscriptionAccount('openai', 'gpt-6', [], false, { exclude: new Set(['default']) });
+    expect(retry?.accountId).toBe('other');
+    retry?.release();
+    h.pools.openai!.legacyCodexAccounts = { 'codex-old': 'duplicate' };
+    h.importedRead.mockResolvedValue({ authenticated: true, identity: 'account' });
+    h.accountAllowed.mockReturnValue(false);
+    h.rpc.mockImplementation(async (directory: string) => ({
+      data: directory.endsWith('/duplicate') ? [{ id: 'special-model' }] : [{ id: 'gpt-6' }], nextCursor: null,
+    }));
+    await refreshSubscriptionPoolCodexModels(true);
+    await expect(acquireSubscriptionAccount('openai', 'special-model', [], false, { remote: true }))
+      .rejects.toThrow('No subscription account is available');
+  });
+
+  it('applies account controls to all copies and moves them together without merging independent providers', async () => {
+    h.pools.openai!.accounts = [account('first'), account('duplicate'), account('other'), account('independent')];
+    const destination = 'openai-sub-target';
+    h.created[destination] = { kind: 'openai', name: 'Target', account: 'other' };
+    h.placement['openai:other'] = destination;
+    h.placement['openai:independent'] = destination;
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: 'openai', accountId: 'first', paused: true, limit: 3 });
+    expect(h.pools.openai!.accounts.slice(0, 2).map(a => [a.paused, a.limit])).toEqual([[true, 3], [true, 3]]);
+    expect(h.pools.openai!.accounts[2].paused).toBe(false);
+    expect(h.pools.openai!.accounts[3].paused).toBe(false);
+    await runSubscriptionAccountCommand({ action: 'place', providerId: 'openai', accountId: 'first', target: null });
+    const separate = h.placement['openai:first'];
+    expect(h.placement['openai:duplicate']).toBe(separate);
+    expect((await readSubscriptionPool(separate)).accounts.map(a => a.id)).toEqual(['first']);
+    await runSubscriptionAccountCommand({ action: 'place', providerId: separate, accountId: 'first', target: destination });
+    expect((await readSubscriptionPool('openai')).accounts).toEqual([]);
+    expect((await readSubscriptionPool(destination)).accounts.map(a => a.id)).toEqual(['first', 'other']);
+    await runSubscriptionAccountCommand({ action: 'remove', providerId: destination, accountId: 'first' });
+    expect(h.pools.openai!.accounts.map(a => a.id)).toEqual(['other']);
+  });
+
+  it('shares real failure cooling, preserves bound-account numbering and keeps unknown identities separate', async () => {
+    const lease = await acquireSubscriptionAccount('openai', 'gpt-6', []);
+    lease!.observeFailure(new Error('usage limit exceeded'), 'gpt-6', 'run');
+    lease!.release();
+    expect(readSubscriptionAccountBlocked('openai', 'duplicate', 'gpt-6')).toBe(true);
+    const next = await acquireSubscriptionAccount('openai', 'gpt-6', []);
+    expect(next?.accountId).toBe('other');
+    next?.release();
+    h.bindings.set('task:b', { providerId: 'openai', accountId: 'other' });
+    expect(await readSubscriptionSessionAccount('openai', { sessionId: 'b' }))
+      .toMatchObject({ state: 'bound', account: { number: 2 } });
+    h.pools.openai!.accounts = h.pools.openai!.accounts.filter(a => a.id !== 'other');
+    expect(readSubscriptionAccountBlocked('openai', 'duplicate', 'gpt-6')).toBe(false);
+    h.tokens.mockResolvedValue({ canDispatch: () => false });
+    expect((await refreshSubscriptionPool('openai', true)).accounts).toHaveLength(2);
+  });
+
+  it('does not fold a different workspace when a concurrent refresh changes the cached identity', async () => {
+    h.pools.openai!.accounts = [account('default'), account('other')];
+    let finishOther!: (usage: object) => void;
+    let otherStarted!: () => void;
+    const started = new Promise<void>(resolve => { otherStarted = resolve; });
+    h.usage.mockImplementation(async (_kind: string, directory: string) => {
+      if (directory.endsWith('/other')) {
+        otherStarted();
+        return new Promise(resolve => { finishOther = resolve; });
+      }
+      return {};
+    });
+    const pending = readSubscriptionPool('openai');
+    await started;
+    h.tokens.mockResolvedValue({ chatgptAccountId: 'workspace-b', canDispatch: () => true });
+    h.bindings.set('task:changed', { providerId: 'openai', accountId: 'default' });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000);
+    try {
+      await readSubscriptionSessionAccount('openai', { sessionId: 'changed' });
+      finishOther({});
+      const view = await pending;
+      expect(view.accounts.map(a => a.id)).toEqual(['default', 'other']);
+      expect(view.accounts[0].accountKey).not.toBe(view.accounts[1].accountKey);
+    } finally { finishOther({}); clock.mockRestore(); }
   });
 });
 
