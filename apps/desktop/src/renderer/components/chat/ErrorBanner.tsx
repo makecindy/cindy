@@ -667,7 +667,13 @@ export function ErrorBanner({
     hasSpecialGuidance = false;
   }
   const showUnwrappedRaw = !hasSpecialGuidance || isResponsesLiteParallelToolCallsError(error);
-  if (sharedRecoveryReason && remoteErrorCode !== 'REMOTE_AGENT_RESUME_UNAVAILABLE') {
+  // Keep the share's route-choice action without replacing the more specific
+  // communication guidance (especially the timeout's unknown-result warning).
+  const keepRemoteGuidance = !!remoteGuidance && [
+    'REMOTE_AGENT_RESUME_UNAVAILABLE', 'REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY',
+    'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED',
+  ].includes(remoteErrorCode ?? '');
+  if (sharedRecoveryReason && !keepRemoteGuidance) {
     displayError = t(`sharedTaskRecovery.reason.${sharedRecoveryReason}`);
   }
   const canShowErrorDetails =

@@ -77,6 +77,8 @@ export interface BuiltinProvisionerLogger {
 export interface BuiltinStoreInstallFact {
   version: string;
   ownsInstalledBytes: boolean;
+  /** A legacy physical directory belongs to another namespace, not the root seed. */
+  preserveInstance?: boolean;
 }
 
 export interface ProvisionIdentity {
@@ -125,15 +127,16 @@ export interface ProvisionDeps {
   /** 当前登录身份(登出传 null;缺省 null)。 */
   identity?: ProvisionIdentity | null;
   /** 回收删除某个意识目录之前的钩子(index.ts 用它先熄灯沙箱,防 Windows 文件锁)。 */
-  beforeRemove?: (id: string) => void | Promise<void>;
+  beforeRemove?: (id: string, installedRelId: string) => void | Promise<void>;
   /** Replacing existing bundled bytes must revoke the old Host receipt first. */
-  beforeReplace?: (id: string) => void | Promise<void>;
+  beforeReplace?: (id: string, installedRelId: string) => void | Promise<void>;
   /** Production path publishes through GhostManager's durable pending journal. */
   publishSeed?: (
     id: string,
     seedDir: string,
     options: {
       disabled: boolean;
+      installedRelId: string;
       trust?: typeof CINDY_OFFICIAL_GHOST_TRUST;
     },
   ) => void | Promise<void>;
@@ -146,7 +149,8 @@ export interface ProvisionDeps {
    * 已装实例对应的商店安装(null = 没有已装的商店记录;抛错 = 账本读不了,本轮不动它)。
    * 缺省 = 不看商店,行为与旧版一致。
    */
-  storeInstall?: (id: string, installedDir: string) => BuiltinStoreInstallFact | null;
+  storeInstall?: (id: string, installedDir: string, seedDir?: string) =>
+    BuiltinStoreInstallFact | null | Promise<BuiltinStoreInstallFact | null>;
   log?: BuiltinProvisionerLogger;
 }
 
@@ -155,6 +159,8 @@ export interface ProvisionOutcome {
   approved: GhostManifest[];
   /** Immutable seed source for each approved manifest; receipt baselines must use it. */
   approvedSourceDirs: Record<string, string>;
+  /** Exact physical targets; a bare id can belong to a coexisting enterprise instance. */
+  approvedInstallRelIds: Record<string, string>;
   /** 本次首装的意识(装完默认唤醒;调用方负责停靠面板 + 广播 + 常驻点火)。 */
   installed: GhostManifest[];
   /** 本次覆盖更新的意识(`.disabled` 已保留;调用方负责广播)。 */
@@ -243,11 +249,11 @@ function isExternalTempAncestor(segment: string, target: string): boolean {
 }
 
 /**
- * 根 namespace 实例的已装目录:旧布局 `<id>` 优先(与 GhostManager 的物理定位一致),
- * 其次新布局 `_ns/_root/<id>`;都没有 ghost.json 时返回 null。
+ * 优先选择明确的 root 布局；旧布局可能属于同名企业实例，由 storeInstall 核对。
+ * 都没有 ghost.json 时返回 null。选中的物理目录必须贯穿后续写入与批准。
  */
 export function resolveBuiltinInstalledDir(repoRootDir: string, id: string): string | null {
-  for (const dir of [path.join(repoRootDir, id), path.join(repoRootDir, ...PLUGIN_ROOT_INSTALL_ROOT.split('/'), id)]) {
+  for (const dir of [path.join(repoRootDir, ...PLUGIN_ROOT_INSTALL_ROOT.split('/'), id), path.join(repoRootDir, id)]) {
     if (!isRealDirectoryPath(dir)) continue;
     try {
       if (classifyGhostDirEntrySync(path.join(dir, GHOST_MANIFEST_FILE)) === 'file') return dir;
@@ -619,6 +625,7 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
   const outcome: ProvisionOutcome = {
     approved: [],
     approvedSourceDirs: {},
+    approvedInstallRelIds: {},
     installed: [],
     updated: [],
     removed: [],
@@ -703,8 +710,9 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
         await withGhostInstallLock(id, async () => {
           const existingDir = resolveBuiltinInstalledDir(repoRootDir, id);
           const installedDir = existingDir ?? path.join(repoRootDir, id);
+          const installedRelId = path.relative(repoRootDir, installedDir).split(path.sep).join('/');
           const installedExists = existingDir !== null;
-          const store = existingDir ? (deps.storeInstall?.(id, existingDir) ?? null) : null;
+          const store = existingDir ? (await deps.storeInstall?.(id, existingDir, seedDir) ?? null) : null;
 
           // 3) 受众:不命中 → 回收"播种装的"(seeded 台账内),手动装的不动。
           //    同 id 有商店安装时交给商店,不删(已是商店字节就摘台账)。
@@ -714,7 +722,7 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
               outcome.skipped.push(id);
             } else if (seeded.has(id) && installedExists) {
               markApplyStart();
-              await deps.beforeRemove?.(id);
+              await deps.beforeRemove?.(id, installedRelId);
               await fs.promises.rm(installedDir, { recursive: true, force: true });
               seeded.delete(id);
               outcome.removed.push(id);
@@ -725,10 +733,10 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
             return;
           }
 
-          // 4) 商店同名安装:种子版本更新才覆盖;相同或更旧让给商店,不动它的字节。
+          // 4) 物理目录属于非 root 市场实例时不播种；root 种子版本严格更新才覆盖。
           //    已装的是商店字节就摘台账(此后是普通商店插件);仍是种子字节时保留台账,
           //    等商店自动更新覆盖回来。
-          if (store && !seedIsNewerThanStore(manifest.version, store.version)) {
+          if (store && (store.preserveInstance || !seedIsNewerThanStore(manifest.version, store.version))) {
             if (store.ownsInstalledBytes) seeded.delete(id);
             outcome.skipped.push(id);
             log?.info('builtin seed yields to the store install', {
@@ -757,6 +765,7 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
             if (contentMatches && !trustNeedsRepair) {
               outcome.approved.push(manifest);
               outcome.approvedSourceDirs[id] = seedDir;
+              outcome.approvedInstallRelIds[id] = installedRelId;
               outcome.skipped.push(id);
               return;
             }
@@ -778,15 +787,17 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
               throw new Error('builtin seeded ledger could not be persisted before replacement');
             }
             ownershipClaimPersisted = true;
-            if (!contentMatches) await deps.beforeReplace?.(id);
+            if (!contentMatches) await deps.beforeReplace?.(id, installedRelId);
             const options = {
               disabled: wasDisabled,
+              installedRelId,
               ...(trust ? { trust } : {}),
             };
             if (deps.publishSeed) await deps.publishSeed(id, seedDir, options);
             else await swapInSeed(seedDir, installedDir, repoRootDir, id, options);
             outcome.approved.push(manifest);
             outcome.approvedSourceDirs[id] = seedDir;
+            outcome.approvedInstallRelIds[id] = installedRelId;
             if (contentMatches) {
               outcome.skipped.push(id);
             } else {
@@ -805,12 +816,14 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
           ownershipClaimPersisted = true;
           const options = {
             disabled: false,
+            installedRelId,
             ...(trust ? { trust } : {}),
           };
           if (deps.publishSeed) await deps.publishSeed(id, seedDir, options);
           else await swapInSeed(seedDir, installedDir, repoRootDir, id, options);
           outcome.approved.push(manifest);
           outcome.approvedSourceDirs[id] = seedDir;
+          outcome.approvedInstallRelIds[id] = installedRelId;
           outcome.installed.push(manifest);
           log?.info('builtin ghost installed', { id, version: manifest.version });
         });
@@ -857,7 +870,7 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
         // 保留台账,等商店自动更新覆盖回来后下一轮再摘。
         let store: BuiltinStoreInstallFact | null;
         try {
-          store = deps.storeInstall?.(id, installedDir) ?? null;
+          store = await deps.storeInstall?.(id, installedDir) ?? null;
         } catch (err) {
           outcome.retryPending = true;
           log?.warn('builtin ghost orphan store lookup failed', {
@@ -872,7 +885,7 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
         }
         try {
           markApplyStart();
-          await deps.beforeRemove?.(id);
+          await deps.beforeRemove?.(id, path.relative(repoRootDir, installedDir).split(path.sep).join('/'));
           await fs.promises.rm(installedDir, { recursive: true, force: true });
           outcome.removed.push(id);
           log?.info('builtin ghost removed: seed no longer bundled', { id });

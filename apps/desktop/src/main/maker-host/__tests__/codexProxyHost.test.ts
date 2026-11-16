@@ -245,6 +245,71 @@ async function runLocalRefusal(decision: unknown): Promise<{ status: number; bod
   return { status, body: JSON.parse(raw) };
 }
 
+describe('standalone Codex web search routing', () => {
+  // #10747: exercise the production router with alpha/search's metadata-only
+  // identity. Existing routing cases use thread-id and cannot detect this fallthrough.
+  // Unit tier: one in-memory fixture, no upstream requests or user credentials.
+  it('routes registered metadata threads without crossing providers or overriding explicit identities', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const model = 'codex/gpt-6.1-sol';
+    const providers = [
+      { id: 'search-magpie', session: 'search-session-a', thread: 'search-thread-a', upstream: 'https://magpie.example/v1' },
+      { id: 'search-other', session: 'search-session-b', thread: 'search-thread-b', upstream: 'https://other.example/v1' },
+    ];
+    setCustomProviders(providers.map(({ id, upstream }) => buildUserProvider({
+      id, name: id, runtimes: { codex: { baseUrl: upstream, models: [{ id: model, name: model }] } },
+    })));
+    setCustomProviderKeyReader(() => 'synthetic-search-test-key');
+    for (const provider of providers) {
+      host.registerComposed(provider.session, provider.thread, 'SYNTHETIC_TEST_INSTRUCTION');
+      setSessionProvider(provider.session, provider.id);
+    }
+    host.registerChildThread(providers[1].thread, 'search-child-b');
+    host.setCodexProxyAuthInjection('env-key');
+    const metadata = (thread: string) => ({ 'x-codex-turn-metadata': JSON.stringify({ thread_id: thread }) });
+    const cases: Array<[string, Record<string, string>, string | null]> = [
+      ['metadata-only search', metadata('search-thread-a'), providers[0].upstream],
+      ['same model, second provider', metadata('search-thread-b'), providers[1].upstream],
+      ['child thread, not body id', metadata('search-child-b'), providers[1].upstream],
+      ['explicit thread wins', { ...metadata('search-thread-b'), 'thread-id': 'search-thread-a' }, providers[0].upstream],
+      ['registered request id wins', { ...metadata('search-thread-b'), 'x-client-request-id': 'search-thread-a' }, providers[0].upstream],
+      ['random request id does not hide metadata', { ...metadata('search-thread-a'), 'x-client-request-id': 'random-request-id' }, providers[0].upstream],
+      ['case-insensitive header', { 'X-Codex-Turn-Metadata': JSON.stringify({ thread_id: 'search-thread-a' }) }, providers[0].upstream],
+      ['unknown explicit thread wins', { ...metadata('search-thread-a'), 'thread-id': 'unregistered-thread' }, null],
+      ['unregistered metadata', metadata('unregistered-thread'), null],
+      ['invalid JSON', { 'x-codex-turn-metadata': '{' }, null],
+      ['non-string thread', { 'x-codex-turn-metadata': JSON.stringify({ thread_id: 42 }) }, null],
+      ['null metadata', { 'x-codex-turn-metadata': 'null' }, null],
+      ['array metadata', { 'x-codex-turn-metadata': '[]' }, null],
+      ['legacy thread header', { 'thread-id': 'search-thread-a' }, providers[0].upstream],
+      ['legacy request id', { 'x-client-request-id': 'search-thread-b' }, providers[1].upstream],
+      ['no identity', {}, null],
+    ];
+    try {
+      const route = host.createModelRoutingTransform();
+      for (const [name, headers, expected] of cases) {
+        const decision = await route({
+          // A child search can carry the root session id; it must not select a provider.
+          id: 'search-thread-a', model, input: [], commands: { search_query: [{ q: 'public query' }] },
+        }, { reqId: 1, method: 'POST', url: '/alpha/search', headers });
+        expect(decision?.upstreamOverride ?? null, name).toBe(expected);
+      }
+    } finally {
+      for (const provider of providers) {
+        clearSessionProvider(provider.session);
+        host.unregister(provider.session);
+      }
+      host.clearCodexProxyAuthInjection();
+      setCustomProviders([]);
+      setCustomProviderKeyReader(() => null);
+    }
+  });
+});
+
 describe('withCodexUpstreamRecording', () => {
   const DEFAULT_UPSTREAM = 'https://gateway.example/v1';
   const ctxFor = (threadId?: string) => ({
@@ -8742,14 +8807,20 @@ describe('codex proxy host', () => {
     expect(host.isCodexProxyHandleReady()).toBe(true);
   });
 
-  it('keeps handle not-ready when proxy fails to start (degrade safety, no naked)', async () => {
+  it('keeps failed warmup not-ready and permits the next explicit startup attempt', async () => {
     const host = await freshCodexProxyHost();
     mockState.createAnthropicCompatProxy.mockRejectedValueOnce(new Error('port in use'));
 
     await host.ensureCodexProxyReady();
 
-    // proxy 起不来 → handle 不就绪 → spawn 据此 setActive(false) → maker-core 发 dev,不裸奔
+    // The spawn materializer rejects this state; metadata getters may still fall back.
     expect(host.isCodexProxyHandleReady()).toBe(false);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    expect(host.isCodexProxyHandleReady()).toBe(true);
+    expect(host.getCodexProxyEndpoint()).toBe('http://127.0.0.1:43210');
   });
 
   it('deduplicates concurrent proxy startup calls', async () => {

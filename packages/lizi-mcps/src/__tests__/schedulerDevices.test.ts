@@ -457,10 +457,10 @@ describe("cindy_scheduler cross-device routing", () => {
     expect(s.invoke).not.toHaveBeenCalled();
   });
 
-  it("cannot produce the legacy full-form patch that the remote IPC entry rewrites", async () => {
+  it("rejects the ambiguous legacy full-form patch before remote writes", async () => {
     // 对方电脑的 maker:schedule:update 把「device-link 来源 + 带 manual 与 notify、不带
-    // intervalMs」认作旧版手机的全量表单并清空间隔 / 重写模型选择。本工具的 schema 不收
-    // manual，因此 partial patch 到不了那个形状；若要给本工具加 manual，必须先处理这一点。
+    // intervalMs」认作旧版手机的全量表单并清空间隔 / 重写模型选择。#10791 开放 manual 后
+    // 仍须在发送前明确拒绝这一歧义组合，不能把 partial patch 当旧表单写入。
     const s = setup();
     const result = await s.registry.call("schedule_update", {
       id: "r1",
@@ -471,7 +471,7 @@ describe("cindy_scheduler cross-device routing", () => {
     });
     expect(parse(result)).toMatchObject({
       ok: false,
-      errorCode: "INVALID_ARGS",
+      code: "INVALID_PARAMS",
     });
     await s.registry.call("schedule_update", {
       id: "r1",
@@ -577,17 +577,29 @@ describe('remote schedule create', () => {
 
   // PR #8470, unit: the host adapter negotiates target capabilities; the MCP
   // must forward non-secret configuration instead of rejecting every remote target.
-  it('forwards webhook creation without touching the local scheduler', async () => {
+  it('forwards event-only webhook creation without touching the local scheduler', async () => {
     const s = setup();
     const result = parse(await s.registry.call('schedule_create', {
       device: 'spark', name: 'n', prompt: 'p', cronExpr: '0 9 * * *',
-      timezone: 'Asia/Shanghai', recurring: true, agentKind: 'pi', useWorktree: false,
+      timezone: 'Asia/Shanghai', recurring: true, manual: true, agentKind: 'pi', useWorktree: false,
       notify: { desktop: true, feishu: false }, webhookTrigger: { events: ['issues.opened'] },
     }));
     expect(result.ok).toBe(true);
-    expect(s.invoke).toHaveBeenCalledWith('spark', 'create', [expect.objectContaining({ webhookTrigger: { events: ['issues.opened'] } })]);
+    expect(s.invoke).toHaveBeenCalledWith('spark', 'create', [expect.objectContaining({ manual: true, webhookTrigger: { events: ['issues.opened'] } })]);
     expect(s.scheduler.create).not.toHaveBeenCalled();
   });
+});
+
+// #10791, unit: manual must survive the actual registry/JSON route as a partial
+// write; omitted interval/model fields must not be synthesized or read then copied.
+it.each([true, false])('forwards remote manual=%s without changing omitted fields', async (manual) => {
+  const s = setup();
+  const result = parse(await s.registry.call('schedule_update', { id: 'r1', device: 'mbp', manual }));
+  expect(result.ok).toBe(true);
+  expect(JSON.parse(JSON.stringify(s.invoke.mock.calls))).toEqual([
+    ['mbp', 'update', ['r1', { manual }]],
+  ]);
+  expect(s.scheduler.updateFromCurrent).not.toHaveBeenCalled();
 });
 
 it.each([{ events: ['issues.opened'] }, null])('forwards remote webhook update/clear through the target host: %j', async (webhookTrigger) => {

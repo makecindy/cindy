@@ -1,4 +1,5 @@
 import { isSafeGhostRelativePath } from './internal/ghostPath.js';
+import { GHOST_TOOLS_MAX } from './internal/toolsLimit.js';
 import { validateWithStoredMcpApps, parseGhostMcpApps, type GhostMcpApps } from './toolUi.js';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.js';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
@@ -19,6 +20,9 @@ export const GHOST_MANIFEST_SCHEMA_VERSION = 3 as const;
 
 /** ghost.json 的 description / whenToUse 字符上限。 */
 export const GHOST_MANIFEST_SUMMARY_MAX_CHARS = 300;
+
+/** tools 声明条数上限,见 internal/toolsLimit.ts。 */
+export { GHOST_TOOLS_MAX };
 
 /** Cindy host locales supported by Plugin manifest resources. */
 export type GhostManifestLocales = {
@@ -241,7 +245,7 @@ export interface GhostCardNeeds {
  * 声明 `agent` 默认只允许消费宿主在真实用户点击插件卡片时签发的
  * 一次性通行票；可选加档由 Desktop 如实展示，并由 Host 在运行时守门。
  */
-export const GHOST_HOST_TOOL_GROUPS = ['history', 'control', 'handoff', 'settings', 'scheduler', 'terminal', 'files', 'storage', 'browser', 'computer', 'ssh', 'docs', 'discovery'] as const;
+export const GHOST_HOST_TOOL_GROUPS = ['history', 'control', 'handoff', 'settings', 'scheduler', 'terminal', 'files', 'storage', 'browser', 'computer', 'ssh', 'docs', 'discovery', 'usage'] as const;
 export type GhostHostToolGroup = (typeof GHOST_HOST_TOOL_GROUPS)[number];
 
 /** Unknown groups survive normalization but never become runtime authority. */
@@ -478,11 +482,18 @@ export const GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL = 8;
 
 /**
  * 域名白名单条目格式:小写域名,至少两段(拒绝裸 TLD / 单段内网名),
- * 通配只允许最左一段(`*.example.com`);不收 IP、端口、路径、协议。
+ * 通配只允许最左一段(`*.example.com`)；也可声明精确 HTTP(S)/WS(S) origin，包含端口或内网地址。
  */
 const GHOST_NETWORK_LABEL_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 export function isValidGhostNetworkHostPattern(p: unknown): p is string {
   if (typeof p !== 'string' || p.length === 0 || p.length > 253) return false;
+  if (p.includes('://')) {
+    try {
+      const url = new URL(p);
+      return ['http:', 'https:', 'ws:', 'wss:'].includes(url.protocol) && url.origin === p
+        && !url.hostname.includes('*') && !url.username && !url.password;
+    } catch { return false; }
+  }
   const bare = p.startsWith('*.') ? p.slice(2) : p;
   const labels = bare.split('.');
   // 至少两段:`*.com` / `localhost` / 裸 TLD 全部拒绝,命中面必须是具体域。
@@ -490,6 +501,12 @@ export function isValidGhostNetworkHostPattern(p: unknown): p is string {
   // 纯数字四段视作 IP,拒收(白名单只认域名)。
   if (labels.every((l) => /^\d+$/.test(l))) return false;
   return labels.every((l) => GHOST_NETWORK_LABEL_RE.test(l));
+}
+
+/** Existing domain declarations retain HTTPS:443; an origin grants exactly one protocol/host/port. */
+export function ghostNetworkTargetMatches(pattern: string, url: URL): boolean {
+  return pattern.includes('://') ? pattern === url.origin
+    : url.protocol === 'https:' && url.port === '' && ghostNetworkHostMatches(pattern, url.hostname);
 }
 
 /**
@@ -1938,8 +1955,8 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
   // 工具声明(卡槽②):与 slots 含 'tool' 严格成对,规则同 panel。
   let tools: GhostToolDecl[] | undefined;
   if (raw.tools !== undefined) {
-    if (!Array.isArray(raw.tools) || raw.tools.length === 0 || raw.tools.length > 16) {
-      return { ok: false, reason: 'tools 必须是 1–16 项的数组' };
+    if (!Array.isArray(raw.tools) || raw.tools.length === 0 || raw.tools.length > GHOST_TOOLS_MAX) {
+      return { ok: false, reason: `tools 必须是 1–${GHOST_TOOLS_MAX} 项的数组` };
     }
     tools = [];
     const seenNames = new Set<string>();
@@ -2234,7 +2251,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       if (typeof h !== 'string' || !isValidGhostNetworkHostPattern(h.trim().toLowerCase())) {
         return {
           ok: false,
-          reason: `network.hosts 含非法条目 ${JSON.stringify(h)}(小写域名、至少两段、通配只允许最左 "*.";不收 IP / 端口 / 路径 / 协议)`,
+          reason: `network.hosts 含非法条目 ${JSON.stringify(h)}(填写域名模式或精确 HTTP(S)/WS(S) origin，不含路径、查询或内嵌凭证)`,
         };
       }
       const host = h.trim().toLowerCase();
@@ -2466,7 +2483,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
               reason: 'network.secrets[].source 为 oidc-token 时必须显式声明非空 inject.hosts',
             };
           }
-          if (injectHosts.some((host) => host.startsWith('*.'))) {
+          if (injectHosts.some((host) => host.startsWith('*.') || host.includes('://'))) {
             return {
               ok: false,
               reason:
@@ -3577,7 +3594,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     const seenPreviewHosts = new Set<string>();
     for (const host of previewRaw.hosts) {
       if (
-        !isValidGhostNetworkHostPattern(host) &&
+        (!isValidGhostNetworkHostPattern(host) || (typeof host === 'string' && host.includes('://'))) &&
         !(typeof host === 'string' && GHOST_PREVIEW_LOOPBACK_HOSTS.has(host))
       ) {
         return {

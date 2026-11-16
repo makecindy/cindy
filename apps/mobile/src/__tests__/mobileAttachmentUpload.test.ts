@@ -608,6 +608,54 @@ describe('mobileAttachmentUpload', () => {
     expect(uploadFile).toHaveBeenCalledTimes(2);
   });
 
+  // Overseas accelerate fallback: presign-put may return an optional accelerateUrl (same bucket/key).
+  // Only the existing retry switches to it, for both production upload entries; a non-retryable
+  // rejection never touches it, and a missing/malformed one keeps the original same-URL retry.
+  it.each([
+    { name: 'file: retry via accelerate route', path: 'file', accelerateUrl: 'https://bucket.oss-accelerate.example/upload', first: 'network', urls: ['put', 'accelerate'], ok: true },
+    { name: 'memory: retry via accelerate route', path: 'body', accelerateUrl: 'https://bucket.oss-accelerate.example/upload', first: 'network', urls: ['put', 'accelerate'], ok: true },
+    { name: '403 never uses accelerate route', path: 'file', accelerateUrl: 'https://bucket.oss-accelerate.example/upload', first: 403, urls: ['put'], ok: false },
+    { name: 'no accelerate: retry signed URL', path: 'file', accelerateUrl: undefined, first: 'network', urls: ['put', 'put'], ok: true },
+    { name: 'malformed accelerate is ignored', path: 'body', accelerateUrl: 'ftp://oss.example/upload', first: 'network', urls: ['put', 'put'], ok: true },
+    { name: 'invalid HTTPS accelerate preserves the normal retry', path: 'file', accelerateUrl: 'https://[bad', first: 'network', urls: ['put', 'put'], ok: true },
+  ] as const)('$name', async ({ path, accelerateUrl, first, urls, ok }) => {
+    vi.useFakeTimers();
+    try {
+      const putUrl = 'https://oss.example/upload';
+      const key = 'cindy/device-link/u/accelerate.txt';
+      const apiFetch = vi.fn(async (endpoint: string) => endpoint === '/api/device-link/media/presign-put'
+        ? { putUrl, key, expiresAt: 'x', ...(accelerateUrl ? { accelerateUrl } : {}) }
+        : { deleted: true });
+      const seen: string[] = [];
+      const respond = (url: string) => {
+        seen.push(url === putUrl ? 'put' : url === accelerateUrl ? 'accelerate' : url);
+        if (seen.length > 1) return 200;
+        if (first === 'network') throw new Error('The network connection was lost.');
+        return first;
+      };
+      const uploadFile = vi.fn(async (url: string) => ({ status: respond(url) }));
+      const fetchPut = vi.fn(async (url: string) => {
+        const status = respond(url);
+        return { ok: status === 200, status, text: async () => '' } as unknown as Response;
+      });
+      const candidate = { name: 'accelerate.txt', size: 3, mimeType: 'text/plain' };
+      const options = { token: 'token', deps: { apiFetch: apiFetch as unknown as typeof apiFetchRaw, uploadFile, fetch: fetchPut as unknown as typeof fetch, readFileChunk: async () => 'eHh4' } };
+      const pending = path === 'file'
+        ? uploadMobileAttachmentFromFile(candidate, 'file:///accelerate.txt', options)
+        : uploadMobileAttachment(candidate, new Uint8Array([120, 120, 120]).buffer, options);
+      const settled = pending.then((attachment) => ({ attachment }), (error: Error) => ({ error }));
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await settled;
+      if (ok) {
+        expect('attachment' in result && parseAttachmentOssRef(result.attachment.path)?.ossKey).toBe(key);
+      } else {
+        expect('error' in result && result.error.message).toContain('HTTP 403');
+        expect(apiFetch).toHaveBeenCalledWith('/api/device-link/media', expect.objectContaining({ body: { key } }));
+      }
+      expect(seen).toEqual(urls);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('bounds Blob uploads even when fetch ignores abort', async () => {
     vi.useFakeTimers();
     try {

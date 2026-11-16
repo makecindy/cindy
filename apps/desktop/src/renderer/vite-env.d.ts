@@ -1746,6 +1746,8 @@ interface ElectronAPI {
     clearUsage: (subjectId: string | null) => Promise<void>;
     readme: (id: string, locale?: string) => Promise<import('@cindy/plugin-protocol').GhostReadmeContent | null>;
     libraryOverview: (id: string) => Promise<import('../shared/ghost').GhostLibraryOverview>;
+    reusableAccounts: (id: string) => Promise<import('../shared/pluginAccountReuse').GhostAccountReuseGroup[]>;
+    reuseAccount: (id: string, request: import('../shared/pluginAccountReuse').GhostAccountReuseAction) => Promise<import('../shared/pluginAccountReuse').GhostAccountReuseResult>;
     handoffList: (id: string) => Promise<import('../shared/ghost').GhostHandoffFile[]>;
     handoffFolder: (id: string) => Promise<string | null>;
     handoffDelete: (id: string, ref: string) => Promise<{ existed: boolean }>;
@@ -4653,6 +4655,7 @@ interface ElectronAPI {
   worktreeSuggestName: (req: {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').SuggestNameResp>;
+  worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest) => Promise<import('../shared/worktreeCheckout').CheckoutReply>;
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncStatus>;
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncReply>;
   worktreeListBranches: (req: {

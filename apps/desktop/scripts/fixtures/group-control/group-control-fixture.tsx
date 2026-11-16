@@ -4,7 +4,7 @@ import answerAudio from '../../../native/agent-island/sounds/startup-chime.mp3?u
 import { makerChatStore } from '../../../src/renderer/lib/makerChatStore';
 import { useEffect, useRef } from 'react';
 import { Route, Routes, useSearchParams } from 'react-router-dom';
-import { AppFrame, forbid, mountPage, subscription } from '../../ui-page/harness';
+import { AppFrame, ctx, forbid, mountPage, subscription } from '../../ui-page/harness';
 import type { BotGroupSummary } from '../../../src/shared/botGroupChat';
 import { BotGroupSidebarRow } from '../../../src/renderer/features/bots/BotGroupSidebarRow';
 import { BotGroupChatView } from '../../../src/renderer/features/bots/BotGroupChatView';
@@ -38,6 +38,8 @@ interface GroupData {
   workRemote?: boolean;
   canStop?: boolean;
   workParallel?: boolean;
+  workRequesterNames?: string[];
+  workReadonly?: boolean;
   workQueuedStep?: boolean;
   workLastStopping?: boolean;
   workNoStart?: boolean;
@@ -376,14 +378,14 @@ function groupFrom(data: GroupData) {
       createdAt: data.workState ? Date.now() - 90_000 + i * 60_000 : 1700000000000 + i,
     })),
     hasMoreBefore: false,
-    round: data.workState ? { canStop: data.canStop, status: 'running', speakers: [{ botId: 'a', executionId: 'fixture-execution', sessionId: data.workRemote || data.workState === 'unknown' || data.workState === 'queued' ? null : 'fixture-work', activity: data.workQueuedStep ? 'step' : 'reply', executionStatus: data.workState === 'queued' ? 'queued' : data.workState === 'waiting' ? 'needs_input' : 'running', startedAt: data.workNoStart ? undefined : Date.now() - 83_000, stopping: data.workState === 'stopping' },
-      ...(data.workParallel ? [{ botId: 'b', executionId: 'fixture-second', sessionId: 'fixture-second-work', activity: 'reply', startedAt: Date.now() - 41_000, stopping: !!data.workLastStopping, executionStatus: data.workLastStopping ? 'stopping' : 'running' }] : [])], canContinue: false }
+    round: data.workState ? { canStop: data.canStop, status: 'running', speakers: [{ botId: 'a', executionId: 'fixture-execution', requesterName: data.workRequesterNames?.[0], isSelfRequested: true, timelineAt: Date.now() - 83_000, sessionId: data.workRemote || data.workState === 'unknown' || data.workState === 'queued' ? null : 'fixture-work', activity: data.workQueuedStep ? 'step' : 'reply', executionStatus: data.workState === 'queued' ? 'queued' : data.workState === 'waiting' ? 'needs_input' : 'running', startedAt: data.workNoStart ? undefined : Date.now() - 83_000, stopping: data.workState === 'stopping' },
+      ...(data.workParallel ? [{ botId: 'b', executionId: 'fixture-second', requesterName: data.workRequesterNames?.[1], isSelfRequested: !data.workReadonly, timelineAt: Date.now() - 20_000, sessionId: 'fixture-second-work', activity: 'reply', startedAt: Date.now() - 20_000, stopping: !!data.workLastStopping, executionStatus: data.workLastStopping ? 'stopping' : 'running' }] : [])], canContinue: false }
       : { status: 'idle', speakers: [], canContinue: false },
   };
 }
 
 void mountPage({
-  route: '/bots/groups/fixture-group',
+  route: '/bots/groups/fixture-group' + (ctx.data.direct ? '?conversationKind=direct' : ''),
   host: (ctx) => {
     const data = ctx.data as unknown as GroupData;
     let group = { ...groupFrom(data), ...(data.planRead ? { serverBacked: true, historyRevision: 'fixture-live', organizerBotId: 'b' } : {}) };
