@@ -54,6 +54,7 @@ vi.mock('../proc-util', async (importOriginal) => {
 });
 
 import { ScriptScheduleRunner, buildScriptEnv } from '../script-runner.desktop';
+import { ScheduleNotifier } from '../notifier';
 
 function childProcess() {
   const child = new EventEmitter() as EventEmitter & {
@@ -943,6 +944,33 @@ describe('ScriptScheduleRunner', () => {
       expect.anything(),
       expect.objectContaining({ errorMsg: expect.stringMatching(/^[\s\S]{0,1030}$/) }),
     );
+  });
+
+  // Issue #10698 / integration: the external notification must retain the actual
+  // error after a long stderr stream, for both channels sharing the formatter.
+  it('delivers the script error tail to Feishu and WeCom', async () => {
+    const child = childProcess();
+    spawnMock.mockReturnValue(child);
+    const sendMarkdownText = vi.fn(async (_owner: string, _text: string) => ({}));
+    const publishMarkdown = vi.fn(async (_text: string) => undefined);
+    const notifier = new ScheduleNotifier({
+      feishuIm: { getOwnerOpenId: () => 'owner', sendMarkdownText } as never,
+      wecomGroupPublisher: { publishMarkdown } as never,
+      logger: {}, shouldNotifyDesktop: () => false, isRunAlertShownElsewhere: () => false,
+    }, {
+      getMobileNotifyGeneration: () => 0, isSessionNotificationsMutedSync: () => false,
+      showSessionNotification: () => {}, sendMobileSessionNotify: () => {},
+    });
+    const runner = new ScriptScheduleRunner({ broker: { call: vi.fn() }, logger: {}, notifier });
+    const result = runner.fire({ ...schedule(), notify: { desktop: false, feishu: true, wecomGroup: true } }, {
+      runId: 'run-1', firedAt: 1, signal: new AbortController().signal,
+    });
+    child.stderr.write('DEBUG log\n'.repeat(7000) + 'fatal: connection failed\n');
+    child.emit('close', 1);
+    await expect(result).rejects.toThrow('fatal: connection failed');
+    await vi.waitFor(() => expect(publishMarkdown).toHaveBeenCalledOnce());
+    expect(sendMarkdownText.mock.calls[0]?.[1]).toContain('fatal: connection failed');
+    expect(publishMarkdown.mock.calls[0]?.[0]).toContain('fatal: connection failed');
   });
 
   it('still notifies when a genuine failure message happens to contain the word "abort" (codex review 三次发现)', async () => {
