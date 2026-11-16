@@ -52,6 +52,12 @@ import { lifoCleanup } from '../test-support/cleanup.mjs';
 import { GIT_SETTLEMENT_SEQUENCES } from '../../../desktop/src/main/maker-ipc/__tests__/gitBaselineSettlementSequences.ts';
 import { GitSnapshotCoordinator } from '../../../desktop/src/main/git-snapshot/gitSnapshotCoordinator.ts';
 
+function assertOwnerChangedDisposal(disposal) {
+  return assert.rejects(disposal, error =>
+    error instanceof AggregateError && error.errors.length > 0 && error.errors.every(cause =>
+      cause instanceof Error && cause.message === 'input runtime owner changed'));
+}
+
 /** Minimal Maker stand-in: one live session per id, driven by the test. */
 function createFakeMaker() {
   const sessions = new Map();
@@ -1101,7 +1107,12 @@ for (const invalidation of ['owner', 'turn', 'app-context']) {
         if (!valid) throw new Error('APP_CONTEXT_REVOKED');
       }, consume() { consumed++; } };
     } });
-    t.after(() => h.queue.dispose());
+    t.after(async () => {
+      // The intentionally invalidated owner must also fence teardown writes;
+      // do not restore its authority or hide any unrelated persistence error.
+      if (invalidation === 'owner') await assertOwnerChangedDisposal(h.queue.dispose());
+      else await h.queue.dispose();
+    });
     await enqueue(h, 'steer-race', { clientId: 'first', text: 'start' });
     const session = h.maker.getSession('steer-race');
     preparing = true;
@@ -1727,6 +1738,47 @@ test('failed snapshot rejects acceptance and blocks dispatch until persistence r
   await waitFor(() => h.maker.getSession('s')?.sent.length === 1);
   assert.deepEqual(h.maker.getSession('s').sent, ['must be durable']);
   await h.queue.dispose();
+});
+
+// Unit, real Host adapter with injected IO: a restored edited report must
+// wait for its next snapshot and remain sendable after that save.
+test('restored edited report waits for the Host persistence fence before sending', async t => {
+  let armed = false, releaseWrite, enteredWrite, finish;
+  const writing = new Promise(resolve => { enteredWrite = resolve; });
+  const gate = new Promise(resolve => { releaseWrite = resolve; });
+  const outcome = new Promise(resolve => { finish = resolve; });
+  const h = createHarness({
+    loadQueueSnapshot: async () => [{ clientId: 'edited-report', text: 'edited report',
+      durableDelivery: true, orcaReportDeliveryFence: true,
+      chatMessage: { clientId: 'edited-report', role: 'user', content: 'edited report' },
+      createOpts: { agentKind: 'claude-code', model: 'stored-model', workingDir: '/tmp' } }],
+    persistQueueSnapshot: async () => { if (armed) { enteredWrite(); await gate; } },
+    hub: { publish: event => { if (event.projection?.error) finish('error:' + event.projection.error); } },
+  });
+  const create = h.maker.createSession;
+  h.maker.createSession = async options => {
+    const session = await create(options);
+    const send = session.send;
+    session.send = async (...args) => { const result = await send(...args); finish('sent'); return result; };
+    return session;
+  };
+  t.after(async () => { releaseWrite(); await h.queue.dispose(); });
+  {
+    const restored = await h.queue.getProjection('edited-report-task');
+    assert.equal(restored.queuePaused, true);
+    assert.equal(restored.pendingQueue[0].orcaReportDeliveryFence, undefined);
+    assert.equal(h.maker.sessions.size, 0);
+    armed = true;
+    const editing = h.queue.updateText('edited-report-task', 'edited-report', 'owner edited report');
+    const resuming = h.queue.resume('edited-report-task');
+    await writing;
+    assert.equal(h.maker.sessions.size, 0);
+    releaseWrite();
+    await editing;
+    await resuming;
+    assert.equal(await outcome, 'sent');
+    assert.deepEqual(h.maker.getSession('edited-report-task').sent, ['owner edited report']);
+  }
 });
 
 test('a model startup failure keeps the accepted queue head for explicit retry', async () => {
@@ -3010,7 +3062,7 @@ test('context recovery assembly: onRebuilt changes nothing once the runtime is c
   owner = { id: 'owner-a' };
   clear('rebuilt-owner');
   assert.match(r.h.queue.projection('rebuilt-owner').error, /prompt is too long/, 'a closing runtime keeps its state');
-  await disposing;
+  await assertOwnerChangedDisposal(disposing);
 });
 
 test('context recovery assembly: input queued while the replayed turn runs waits for it', { timeout: 30_000 }, async t => {
