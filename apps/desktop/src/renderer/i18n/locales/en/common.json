@@ -21701,7 +21701,14 @@
     "createNamePlaceholder": "Project name",
     "createNameHint": "Give your project a name to get started.",
     "createFromRepository": "Create from a code repository",
-    "createBlank": "Switch to a blank project"
+    "createBlank": "Switch to a blank project",
+    "source_blank": "New blank project",
+    "source_existing": "Open existing folder",
+    "source_repository": "Import code repository",
+    "sourceHint_blank": "Enter a name. The project folder is created automatically.",
+    "sourceHint_existing": "Choose an existing project folder on this computer.",
+    "sourceHint_repository": "Paste a repository link to download it to this computer.",
+    "source": "Project source"
   },
   "taskManagement": {
     "scope": "Applies to this account on this computer only.",

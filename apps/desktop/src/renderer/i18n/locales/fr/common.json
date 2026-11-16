@@ -21906,7 +21906,14 @@
     "createNamePlaceholder": "Nom du projet",
     "createNameHint": "Donnez un nom à votre projet pour commencer.",
     "createFromRepository": "Créer depuis un dépôt de code",
-    "createBlank": "Passer à un projet vide"
+    "createBlank": "Passer à un projet vide",
+    "source_blank": "Projet vide",
+    "source_existing": "Ouvrir un dossier existant",
+    "source_repository": "Importer un dépôt de code",
+    "sourceHint_blank": "Saisissez un nom. Le dossier sera créé automatiquement.",
+    "sourceHint_existing": "Choisissez un dossier de projet sur cet ordinateur.",
+    "sourceHint_repository": "Collez un lien de dépôt pour le télécharger sur cet ordinateur.",
+    "source": "Origine du projet"
   },
   "taskManagement": {
     "scope": "Uniquement pour ce compte sur cet ordinateur.",

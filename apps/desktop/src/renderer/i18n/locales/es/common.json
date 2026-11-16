@@ -21906,7 +21906,14 @@
     "createNamePlaceholder": "Nombre del proyecto",
     "createNameHint": "Dale un nombre a tu proyecto para empezar.",
     "createFromRepository": "Crear desde un repositorio de código",
-    "createBlank": "Cambiar a un proyecto vacío"
+    "createBlank": "Cambiar a un proyecto vacío",
+    "source_blank": "Proyecto vacío",
+    "source_existing": "Abrir carpeta existente",
+    "source_repository": "Importar repositorio",
+    "sourceHint_blank": "Escribe un nombre. La carpeta se creará automáticamente.",
+    "sourceHint_existing": "Elige una carpeta de proyecto en este equipo.",
+    "sourceHint_repository": "Pega el enlace del repositorio para descargarlo en este equipo.",
+    "source": "Origen del proyecto"
   },
   "taskManagement": {
     "scope": "Solo se aplica a esta cuenta en este ordenador.",

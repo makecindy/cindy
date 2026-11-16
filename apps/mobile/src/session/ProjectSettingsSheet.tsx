@@ -118,7 +118,16 @@ export function ProjectSettingsSheet({
   const defaultName = projectDirectoryName(directory);
   const [name, setName] = useState(title);
   const [repositoryUrl, setRepositoryUrl] = useState("");
-  const [repositoryExpanded, setRepositoryExpanded] = useState(false);
+  const [source, setSource] = useState<'blank' | 'existing' | 'repository'>('blank');
+  const repositoryExpanded = source === 'repository';
+  const chooseSource = (next: 'blank' | 'existing' | 'repository') => {
+    if (next === source) return;
+    setSource(next);
+    setRepositoryUrl('');
+    setDirectory('');
+    setDirectories([]);
+    setError(null);
+  };
   const repositoryCreation = create && (snapshot?.settingsVersion ?? 0) >= 7;
   const changeRepository = (value: string) => {
     const previous = parseProjectRepository(repositoryUrl);
@@ -132,14 +141,13 @@ export function ProjectSettingsSheet({
     const address = /^(?:https?:\/\/|ssh:\/\/|[\w.-]+@[\w.-]+:|[\w.-]+\.[\w.-]+\/)/i.test(value.trim());
     const repository = repositoryCreation && address ? parseProjectRepository(value) : null;
     if (repository) {
-      setRepositoryExpanded(true);
+      if (source !== 'repository') chooseSource('repository');
       setError(null);
       setRepositoryUrl(value.trim());
       setName(repository.name.slice(0, 80));
     } else setName(value.slice(0, 80));
   };
 
-  const [editingName, setEditingName] = useState(create);
   const [directories, setDirectories] = useState<readonly ProjectDirectory[]>(
     [],
   );
@@ -269,7 +277,7 @@ export function ProjectSettingsSheet({
       lock.current ||
       !available ||
       !dirty ||
-      (create && (snapshot?.settingsVersion ?? 0) < 7 && !directory.trim()) ||
+      (create && ((snapshot?.settingsVersion ?? 0) < 7 || source === 'existing') && !directory.trim()) ||
       !snapshot?.ownerStamp ||
       !isMobileAuthOwnerCurrent(owner)
     )
@@ -485,7 +493,7 @@ export function ProjectSettingsSheet({
             (stage === "profile"
               ? !dirty ||
                 (create &&
-                  (snapshot?.settingsVersion ?? 0) < 7 &&
+                  ((snapshot?.settingsVersion ?? 0) < 7 || source === 'existing') &&
                   !directory.trim())
               : pickerInvalid),
           onPress: () => {
@@ -506,6 +514,21 @@ export function ProjectSettingsSheet({
           ) : null}
           {stage === "profile" ? (
             <>
+              {repositoryCreation && (
+                <View style={{ gap: spacing.sm }}>
+                  {(['blank', 'existing', 'repository'] as const).map((item) => (
+                    <Pressable key={item} accessibilityRole="button"
+                      accessibilityState={{ selected: source === item }} disabled={disabled}
+                      onPress={() => chooseSource(item)}
+                      style={[styles.colorRow, { paddingHorizontal: spacing.sm }]}>
+                      <View style={{ width: iconSize.md }}>{source === item && <Check size={iconSize.md} color={colors.textPrimary} />}</View>
+                      <Text style={[styles.path, textColor, { fontWeight: fontWeight.medium }]}>{label(`source_${item}`)}</Text>
+                    </Pressable>
+                  ))}
+                  <Text style={[styles.note, noteColor]}>{label(`sourceHint_${source}`)}</Text>
+                </View>
+              )}
+
               <View style={styles.hero}>
                 <Pressable
                   accessibilityRole="button"
@@ -513,7 +536,6 @@ export function ProjectSettingsSheet({
                   disabled={disabled}
                   onPress={() => {
                     Keyboard.dismiss();
-                    setEditingName(false);
                     setPickerIcon(icon);
                     setPickerColor(
                       (snapshot?.settingsVersion ?? 0) >= 3
@@ -557,8 +579,7 @@ export function ProjectSettingsSheet({
                   </View>
                 </Pressable>
                 <View style={styles.grow}>
-                  {create || editingName ? (
-                    <TextInput
+                  <TextInput
                       accessibilityLabel={label("name")}
                       value={name}
                       onChangeText={changeName}
@@ -573,11 +594,9 @@ export function ProjectSettingsSheet({
                       autoFocus
                       selectTextOnFocus
                       returnKeyType="done"
-                      onBlur={() => setEditingName(false)}
                       onSubmitEditing={() => {
                         Keyboard.dismiss();
-                        setEditingName(false);
-                      }}
+                          }}
                       style={[
                         styles.nameInput,
                         styles.title,
@@ -585,23 +604,6 @@ export function ProjectSettingsSheet({
                         { borderColor: colors.border },
                       ]}
                     />
-                  ) : (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={label("name")}
-                      disabled={disabled}
-                      onPress={() => setEditingName(true)}
-                      style={styles.nameButton}
-                    >
-                      <Text
-                        numberOfLines={2}
-                        style={[styles.title, textColor, { flexShrink: 1 }]}
-                      >
-                        {name.trim() || defaultName}
-                      </Text>
-                      <Pencil size={iconSize.sm} color={colors.textSecondary} />
-                    </Pressable>
-                  )}
                   {(!create || !!directory) && name !== defaultName && (
                     <Pressable
                       disabled={disabled}
@@ -616,9 +618,7 @@ export function ProjectSettingsSheet({
                   )}
                 </View>
               </View>
-              <Text style={[styles.note, noteColor]}>
-                {label(repositoryCreation ? "createNameHint" : "nameHint")}
-              </Text>
+              {!create && <Text style={[styles.note, noteColor]}>{label("nameHint")}</Text>}
               {!!directory && (snapshot?.settingsVersion ?? 0) >= 4 &&
                 (icon === null || automatic.result?.candidate) && (
                   <View style={{ gap: spacing.sm }}>
@@ -678,7 +678,7 @@ export function ProjectSettingsSheet({
                     {deviceName || label("thisComputer")}
                   </Text>
                 </View>
-                  {repositoryCreation && !directory && (
+                  {repositoryCreation && source !== 'existing' && !directory && (
                     <Text selectable style={[styles.note, noteColor]}>
                       {t("settings.projectInfo.autoDirectory", {
                         path: `${snapshot?.creationRoot ?? ""}/${projectCreationFolderName(name || parseProjectRepository(repositoryUrl)?.name || "Project")}`,
@@ -689,7 +689,7 @@ export function ProjectSettingsSheet({
                   mainDirectory={directory}
                   showHint={!create}
                   copied={copied}
-                  onMainDirectoryChange={create ? setDirectory : undefined}
+                  onMainDirectoryChange={create ? (path) => { setDirectory(path); if (path && source === 'blank') setSource('existing'); } : undefined}
                   onCopy={() =>
                     void Clipboard.setStringAsync(directory)
                       .then(() => setCopied(true))
@@ -706,22 +706,7 @@ export function ProjectSettingsSheet({
                   }
                 />
               </View>
-              {repositoryCreation && (
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={disabled}
-                  onPress={() => {
-                    setRepositoryExpanded(!repositoryExpanded);
-                    if (repositoryExpanded) setRepositoryUrl("");
-                    setError(null);
-                  }}
-                  style={[styles.reset, { alignSelf: "flex-start" }]}
-                >
-                  <Text style={[styles.path, textColor, { fontWeight: fontWeight.medium }]}>
-                    {label(repositoryExpanded ? "createBlank" : "createFromRepository")}
-                  </Text>
-                </Pressable>
-              )}
+
             </>
           ) : (
             <>

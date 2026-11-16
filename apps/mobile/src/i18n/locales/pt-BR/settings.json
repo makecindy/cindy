@@ -497,6 +497,13 @@
     "createNamePlaceholder": "Nome do projeto",
     "createNameHint": "Dê um nome ao projeto para começar.",
     "createFromRepository": "Criar de um repositório de código",
-    "createBlank": "Mudar para um projeto vazio"
+    "createBlank": "Mudar para um projeto vazio",
+    "source_blank": "Projeto vazio",
+    "source_existing": "Abrir pasta existente",
+    "source_repository": "Importar repositório",
+    "sourceHint_blank": "Digite um nome. A pasta será criada automaticamente.",
+    "sourceHint_existing": "Escolha uma pasta de projeto neste computador.",
+    "sourceHint_repository": "Cole o link do repositório para baixar neste computador.",
+    "source": "Origem do projeto"
   }
 }

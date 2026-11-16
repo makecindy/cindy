@@ -21619,7 +21619,14 @@
     "createNamePlaceholder": "專案名稱",
     "createNameHint": "取個名字，就可以開始了。",
     "createFromRepository": "從程式碼儲存庫建立",
-    "createBlank": "改為空白專案"
+    "createBlank": "改為空白專案",
+    "source_blank": "建立空白專案",
+    "source_existing": "開啟現有資料夾",
+    "source_repository": "從程式碼儲存庫匯入",
+    "sourceHint_blank": "填寫名稱，自動建立專案目錄。",
+    "sourceHint_existing": "選擇這台電腦上現有的專案目錄。",
+    "sourceHint_repository": "貼上儲存庫連結，下載到這台電腦。",
+    "source": "專案來源"
   },
   "taskManagement": {
     "scope": "僅用於本機當前名籍之差事。",

@@ -497,6 +497,13 @@
     "createNamePlaceholder": "プロジェクト名",
     "createNameHint": "プロジェクトに名前を付けて始めましょう。",
     "createFromRepository": "コードリポジトリから作成",
-    "createBlank": "空のプロジェクトに切り替え"
+    "createBlank": "空のプロジェクトに切り替え",
+    "source_blank": "空のプロジェクト",
+    "source_existing": "既存フォルダを開く",
+    "source_repository": "リポジトリからインポート",
+    "sourceHint_blank": "名前を入力するとフォルダが自動作成されます。",
+    "sourceHint_existing": "このコンピュータの既存フォルダを選択します。",
+    "sourceHint_repository": "リンクを貼り付けてこのコンピュータにダウンロードします。",
+    "source": "作成方法"
   }
 }

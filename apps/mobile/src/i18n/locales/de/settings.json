@@ -497,6 +497,13 @@
     "createNamePlaceholder": "Projektname",
     "createNameHint": "Gib deinem Projekt einen Namen, um loszulegen.",
     "createFromRepository": "Aus einem Code-Repository erstellen",
-    "createBlank": "Zu einem leeren Projekt wechseln"
+    "createBlank": "Zu einem leeren Projekt wechseln",
+    "source_blank": "Leeres Projekt",
+    "source_existing": "Vorhandenen Ordner öffnen",
+    "source_repository": "Code-Repository importieren",
+    "sourceHint_blank": "Name eingeben. Der Projektordner wird automatisch erstellt.",
+    "sourceHint_existing": "Einen vorhandenen Projektordner auf diesem Computer wählen.",
+    "sourceHint_repository": "Repository-Link einfügen und auf diesen Computer herunterladen.",
+    "source": "Projektquelle"
   }
 }

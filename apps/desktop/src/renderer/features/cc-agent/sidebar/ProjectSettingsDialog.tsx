@@ -99,7 +99,16 @@ export function ProjectSettingsDialog({
   const defaultName = projectDirectoryName(directory);
   const [name, setName] = useState(project.displayName);
   const [repositoryUrl, setRepositoryUrl] = useState('');
-  const [repositoryExpanded, setRepositoryExpanded] = useState(false);
+  const [source, setSource] = useState<'blank' | 'existing' | 'repository'>('blank');
+  const repositoryExpanded = source === 'repository';
+  const chooseSource = (next: 'blank' | 'existing' | 'repository') => {
+    if (next === source) return;
+    setSource(next);
+    setRepositoryUrl('');
+    setDirectory('');
+    setDirectories([]);
+    setError(null);
+  };
   const repositoryCreation = create && (snapshot?.settingsVersion ?? 0) >= 7;
   const changeRepository = (value: string) => {
     const previous = parseProjectRepository(repositoryUrl);
@@ -115,20 +124,13 @@ export function ProjectSettingsDialog({
     );
     const repository = repositoryCreation && address ? parseProjectRepository(value) : null;
     if (repository) {
-      setRepositoryExpanded(true);
+      if (source !== 'repository') chooseSource('repository');
       setError(null);
       setRepositoryUrl(value.trim());
       setName(repository.name.slice(0, 80));
     } else setName(value.slice(0, 80));
   };
 
-  const [editingName, setEditingName] = useState(create);
-  const nameBeforeEdit = useRef(name);
-  const nameButton = useRef<HTMLButtonElement>(null);
-  const finishNameEditing = () => {
-    setEditingName(false);
-    requestAnimationFrame(() => nameButton.current?.focus());
-  };
   const [directories, setDirectories] = useState<readonly ProjectDirectory[]>([]);
   const [initialDirectories, setInitialDirectories] = useState<readonly ProjectDirectory[]>([]);
   const [icon, setIcon] = useState<string | null>(null);
@@ -202,7 +204,9 @@ export function ProjectSettingsDialog({
       lock.current ||
       !available ||
       !dirty ||
-      (create && (snapshot?.settingsVersion ?? 0) < 7 && !directory.trim()) ||
+      (create &&
+        ((snapshot?.settingsVersion ?? 0) < 7 || source === 'existing') &&
+        !directory.trim()) ||
       !snapshot?.ownerStamp ||
       !isDataOwnerGenerationCurrent(owner)
     )
@@ -308,7 +312,6 @@ export function ProjectSettingsDialog({
     }
   };
   const openPicker = () => {
-    setEditingName(false);
     setPickerIcon(icon);
     setPickerColor(
       (snapshot?.settingsVersion ?? 0) >= 3
@@ -363,13 +366,6 @@ export function ProjectSettingsDialog({
           <Dialog.Overlay className="modal-scrim fixed inset-0 z-50" />
           <Dialog.Content
             onInteractOutside={(event) => event.preventDefault()}
-            onEscapeKeyDown={(event) => {
-              if (editingName) {
-                event.preventDefault();
-                setName(nameBeforeEdit.current);
-                finishNameEditing();
-              }
-            }}
             onOpenAutoFocus={(event) => {
               event.preventDefault();
             }}
@@ -402,7 +398,7 @@ export function ProjectSettingsDialog({
               </Button>
             </div>
             <Dialog.Description className="sr-only">
-              {label(repositoryCreation ? 'createNameHint' : 'nameHint')}
+              {label(repositoryCreation ? `sourceHint_${source}` : 'nameHint')}
             </Dialog.Description>
             <div className="min-h-0 overflow-y-auto px-4 pb-6">
               {discard ? (
@@ -417,6 +413,30 @@ export function ProjectSettingsDialog({
                 </div>
               ) : stage === 'profile' ? (
                 <div className="flex flex-col gap-6">
+                  {repositoryCreation && (
+                    <div className="flex flex-col gap-2">
+                      <div
+                        className="flex flex-col gap-2 sm:flex-row sm:flex-wrap"
+                        role="group"
+                        aria-label={label('source')}
+                      >
+                        {(['blank', 'existing', 'repository'] as const).map((item) => (
+                          <Button
+                            key={item}
+                            variant={source === item ? 'primary' : 'secondary'}
+                            aria-pressed={source === item}
+                            disabled={busy || !available}
+                            onClick={() => chooseSource(item)}
+                          >
+                            {label(`source_${item}`)}
+                          </Button>
+                        ))}
+                      </div>
+                      <p className="text-12 text-[var(--text-secondary)]">
+                        {label(`sourceHint_${source}`)}
+                      </p>
+                    </div>
+                  )}
                   <div className="flex items-center gap-4 py-2">
                     <button
                       type="button"
@@ -434,51 +454,27 @@ export function ProjectSettingsDialog({
                       </span>
                     </button>
                     <div className="min-w-0 flex-1">
-                      {create || editingName ? (
-                        <Input
-                          aria-label={label('name')}
-                          value={name}
-                          placeholder={
-                            repositoryCreation
-                              ? label('createNamePlaceholder')
-                              : defaultName || label('name')
+                      <Input
+                        aria-label={label('name')}
+                        value={name}
+                        placeholder={
+                          repositoryCreation
+                            ? label('createNamePlaceholder')
+                            : defaultName || label('name')
+                        }
+                        maxLength={repositoryCreation ? 4096 : 80}
+                        disabled={busy || !available}
+                        onChange={changeName}
+                        autoFocus
+                        onFocus={(event) => event.currentTarget.select()}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                            event.preventDefault();
+                            event.currentTarget.blur();
                           }
-                          maxLength={repositoryCreation ? 4096 : 80}
-                          disabled={busy || !available}
-                          onChange={changeName}
-                          autoFocus
-                          onFocus={(event) => event.currentTarget.select()}
-                          onBlur={() => setEditingName(false)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
-                              event.preventDefault();
-                              finishNameEditing();
-                            }
-                          }}
-                          inputClassName="text-20 font-medium"
-                        />
-                      ) : (
-                        <button
-                          ref={nameButton}
-                          type="button"
-                          aria-label={label('name')}
-                          disabled={busy || !available}
-                          onClick={() => {
-                            nameBeforeEdit.current = name;
-                            setEditingName(true);
-                          }}
-                          className="group flex min-h-9 max-w-full items-center gap-2 rounded-md text-left text-20 font-medium text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-                        >
-                          <span className="truncate">
-                            {name.trim() || defaultName || label('createNamePlaceholder')}
-                          </span>
-                          <Pencil
-                            size={14}
-                            aria-hidden="true"
-                            className="shrink-0 text-[var(--text-secondary)] opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
-                          />
-                        </button>
-                      )}
+                        }}
+                        inputClassName="text-20 font-medium"
+                      />
                       {(!create || !!directory) && name !== defaultName && (
                         <Button
                           variant="secondary"
@@ -494,9 +490,9 @@ export function ProjectSettingsDialog({
                       )}
                     </div>
                   </div>
-                  <p className="text-12 text-[var(--text-secondary)]">
-                    {label(repositoryCreation ? 'createNameHint' : 'nameHint')}
-                  </p>
+                  {!create && (
+                    <p className="text-12 text-[var(--text-secondary)]">{label('nameHint')}</p>
+                  )}
                   {!!directory &&
                     (snapshot?.settingsVersion ?? 0) >= 4 &&
                     (icon === null || automatic.result?.candidate) && (
@@ -550,7 +546,7 @@ export function ProjectSettingsDialog({
                       <Monitor size={15} />
                       <span>{project.deviceLinkDeviceName || label('thisComputer')}</span>
                     </div>
-                    {repositoryCreation && !directory && (
+                    {repositoryCreation && source !== 'existing' && !directory && (
                       <p className="select-text break-all text-12 text-[var(--text-secondary)]">
                         {t('projectSettings.autoDirectory', {
                           path: `${snapshot?.creationRoot ?? ''}/${projectCreationFolderName(name || parseProjectRepository(repositoryUrl)?.name || 'Project')}`,
@@ -561,7 +557,14 @@ export function ProjectSettingsDialog({
                       mainDirectory={directory}
                       showHint={!create}
                       copied={copied}
-                      onMainDirectoryChange={create ? setDirectory : undefined}
+                      onMainDirectoryChange={
+                        create
+                          ? (path) => {
+                              setDirectory(path);
+                              if (path && source === 'blank') setSource('existing');
+                            }
+                          : undefined
+                      }
                       onCopy={() =>
                         void navigator.clipboard
                           .writeText(directory)
@@ -580,22 +583,6 @@ export function ProjectSettingsDialog({
                       }
                     />
                   </div>
-                  {repositoryCreation && (
-                    <Button
-                      variant="secondary"
-                      tone="quiet"
-                      size="sm"
-                      className="self-start"
-                      disabled={busy || !available}
-                      onClick={() => {
-                        setRepositoryExpanded(!repositoryExpanded);
-                        if (repositoryExpanded) setRepositoryUrl('');
-                        setError(null);
-                      }}
-                    >
-                      {label(repositoryExpanded ? 'createBlank' : 'createFromRepository')}
-                    </Button>
-                  )}
                 </div>
               ) : (
                 <div className="flex min-h-[436px] flex-col gap-4">
@@ -853,7 +840,9 @@ export function ProjectSettingsDialog({
                     !available ||
                     (stage === 'profile'
                       ? !dirty ||
-                        (create && (snapshot?.settingsVersion ?? 0) < 7 && !directory.trim())
+                        (create &&
+                          ((snapshot?.settingsVersion ?? 0) < 7 || source === 'existing') &&
+                          !directory.trim())
                       : pickerInvalid)
                   }
                   onClick={() => {

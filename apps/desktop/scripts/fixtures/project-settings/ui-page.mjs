@@ -99,14 +99,14 @@ export default {
         .fill(repository ? 'https://gitlab.example.com/engineering/platform/client/applications/project-management/demo' : 'Demo');
       if (repository && !(await repositoryInput.isVisible())) throw new Error('Pasted URL did not reveal repository options');
       if (ui.case === 'create-blank') {
-        await page.getByRole('button', { name: await ui.t('projectSettings.createFromRepository'), exact: true }).click();
+        await page.getByRole('button', { name: await ui.t('projectSettings.source_repository'), exact: true }).click();
         await repositoryInput.waitFor();
         await page.getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true }).click();
         if (await page.evaluate(() => window.projectSettingsWrites.length)) throw new Error('Empty repository mode created a blank project');
         await repositoryInput.fill('https://github.com/example/Demo');
         if (await page.getByText(await ui.t('projectSettings.invalidRepository'), { exact: true }).count()) throw new Error('Repository error persisted after editing');
         await ui.capture('repository-options');
-        await page.getByRole('button', { name: await ui.t('projectSettings.createBlank'), exact: true }).click();
+        await page.getByRole('button', { name: await ui.t('projectSettings.source_blank'), exact: true }).click();
         if (await repositoryInput.count()) throw new Error('Repository field remained after switching to blank');
       }
       await ui.capture('automatic-location');
@@ -153,6 +153,8 @@ export default {
       return;
     }
     if (ui.case === 'create-existing') {
+      await page.getByRole('button', { name: await ui.t('projectSettings.source_existing'), exact: true }).click();
+      if (!(await page.getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true }).isDisabled())) throw new Error('Existing mode requires a folder');
       await page.evaluate((path) => {
         window.projectPickerPath = path;
       }, '/Projects/Cindy');
@@ -274,7 +276,6 @@ export default {
       });
     };
     const editName = async (value, blur = false) => {
-      await (await button('name')).click();
       const input = page.getByRole('textbox', {
         name: await ui.t('projectSettings.name'),
         exact: true,
@@ -286,8 +287,7 @@ export default {
           .getByRole('heading', { name: await ui.t('projectSettings.title'), exact: true })
           .click();
       else await input.press('Enter');
-      await (await button('name')).waitFor();
-      if ((await (await button('name')).textContent()).trim() !== value)
+      if ((await input.inputValue()) !== value)
         throw new Error('Inline edit did not update the displayed name');
       if (await page.evaluate(() => window.projectSettingsWrites.length))
         throw new Error('Inline rename persisted before Save');
@@ -320,7 +320,6 @@ export default {
       return;
     }
     if (ui.case === 'default') {
-      await (await button('name')).click();
       const input = page.getByRole('textbox', {
         name: await ui.t('projectSettings.name'),
         exact: true,
@@ -328,9 +327,9 @@ export default {
       const original = await input.inputValue();
       await input.fill('Discard this name');
       await input.press('Escape');
-      await (await button('name')).waitFor();
-      if ((await (await button('name')).textContent()).trim() !== original)
-        throw new Error('Escape did not restore the name');
+      await (await button('keepEditing')).click();
+      if (await input.inputValue() !== 'Discard this name') throw new Error('Continuing editing lost the name draft');
+      await input.fill(original);
       if (await (await button('save')).isEnabled())
         throw new Error('Cancelled inline rename left an unsaved change');
     }

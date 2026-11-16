@@ -21619,7 +21619,14 @@
     "createNamePlaceholder": "项目名称",
     "createNameHint": "起个名字，就可以开始了。",
     "createFromRepository": "从代码仓库创建",
-    "createBlank": "改为空白项目"
+    "createBlank": "改为空白项目",
+    "source_blank": "新建空白项目",
+    "source_existing": "打开已有文件夹",
+    "source_repository": "从代码仓库导入",
+    "sourceHint_blank": "填写名称，自动创建项目目录。",
+    "sourceHint_existing": "选择这台电脑上已有的项目目录。",
+    "sourceHint_repository": "粘贴仓库链接，下载到这台电脑。",
+    "source": "项目来源"
   },
   "taskManagement": {
     "scope": "仅应用于当前账号在这台电脑上的任务。",
