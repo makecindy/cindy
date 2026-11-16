@@ -5,6 +5,15 @@
 > 伙伴身份、Profile、主任务与后台任务的通用契约仍以 [`cindy-bots-runtime.md`](cindy-bots-runtime.md) 为准。
 > 当前数据链路与后续优化提案见第 11 节；本地表结构见 [多账号数据库架构](../dev-rules/multi-account-database-architecture.md) 第 11 节，私聊衔接见 [云端伙伴](cloud-companions.md) 第 4.1 节。首批分支实现与后续目标在第 11.0 节分开登记，尚未发布；现行产品规则按该节注明的边界衔接。
 
+## 成员邀请朋友的权限
+
+服务端群的「群管理」提供「允许所有成员邀请朋友」，仅群主和管理员可修改，默认关闭。
+开启后，已加入成员可创建邀请朋友的链接；关闭后仅群主和管理员可创建，普通成员创建的链接在关闭期间不可预览或接受。
+成员仍可邀请自己的伙伴，不受此开关影响；群成员管理、封禁和伙伴使用授权不因此放宽。
+群主和管理员可撤销本群链接，获邀权限的普通成员仅可撤销自己创建的链接。
+邀请者离群、被移出或封禁后，其链接不可用。桌面与手机沿用服务端快照和群版本更新；旧服务端不显示新开关。
+实现与回归：`chatServer.ts`、`ChatGroupSettings.tsx`、`ChatGroupSettingsSheet.tsx`、`chatServerMembership.test.ts`、`useBotGroupSettingsManagement.test.tsx`。
+
 ## 1. 定位与分期
 
 ### 服务器群生命周期
