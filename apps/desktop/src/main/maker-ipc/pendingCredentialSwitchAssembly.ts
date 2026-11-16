@@ -18,6 +18,7 @@ import { effectiveSourceIdForModel, findCatalogModel } from '@cindy/model-provid
 import { eq } from 'drizzle-orm';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { getDbClient } from '../localDb/client/current.js';
+import { persistableSessionEffort } from '../localDb/mapper.js';
 import { sessions } from '../localDb/schema.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
@@ -149,9 +150,13 @@ export function createPendingCredentialSwitchService(ports: PendingCredentialSwi
       }
       const patch: Record<string, unknown> = {
         providerId: route.providerId,
-        effort: finalEffort,
         fastMode: finalFastMode,
       };
+      // sessions.effort is NOT NULL. A target model without effort levels resolves to null: keep the
+      // column's last value, as persistSessionFieldsWith does (persistableSessionEffort). Writing null
+      // failed the write, so the switch never landed and the task's queue stayed gated.
+      const persistableEffort = persistableSessionEffort(finalEffort);
+      if (persistableEffort !== undefined) patch.effort = persistableEffort;
       if (route.model) patch.model = route.model;
       if (route.model && agentKind) {
         const verifiedWindow = lookupVerifiedContextWindow(
