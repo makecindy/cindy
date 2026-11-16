@@ -362,15 +362,8 @@ export function ScheduleFormDialog({
     setOwnReviewProject(null);
     setReviewModelReady(false);
     setReviewModelReadError(false);
-    void window.electronAPI.localDb.bots.list().then(async bots => {
+    void window.electronAPI.localDb.bots.ownsProject(projectWorkingDir).then(async ownsProject => {
       if (!current) return;
-      // The shape is only a hint. The active account's host-owned roster proves ownership.
-      const normalize = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '');
-      const ownsProject = bots.some(value => {
-        if (!value || typeof value !== 'object') return false;
-        const bot = value as { homeDir?: unknown };
-        return typeof bot.homeDir === 'string' && normalize(`${bot.homeDir}/workspace`) === normalize(projectWorkingDir);
-      });
       if (!ownsProject) { setReviewModelReady(true); return; }
       const result = await window.electronAPI.fileBrowser.readFile({
         workdir: projectWorkingDir, relPath: PROJECT_AUTOMATION_REL_SEGMENTS.join('/'),

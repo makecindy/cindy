@@ -141,7 +141,11 @@ beforeEach(() => {
   state.pendingCapabilities.clear();
   state.vendors = new Set(['cc', 'codex', 'pi']);
   localStorage.clear();
-  vi.stubGlobal('electronAPI', { localDb: { bots: { list: async () => [{ homeDir: '/data/owners/owner/bots/mia' }] } }, gitContext: { githubAppStatus: async () => ({ available: true, login: null }) }, maker: { schedule: {
+  vi.stubGlobal('electronAPI', { localDb: { bots: {
+    // Opening the editor must work without loading profiles or resuming invitations (#10847).
+    list: vi.fn(async () => { throw new Error('full roster unavailable'); }),
+    ownsProject: async () => true,
+  } }, gitContext: { githubAppStatus: async () => ({ available: true, login: null }) }, maker: { schedule: {
     webhookReceiver: async () => 'cloud', scriptCapabilityStatus: async () => ({ statuses: [] }),
   } } });
   resetDraft();
@@ -720,7 +724,10 @@ it('reads a saved buddy-follow marker without inferring it from an empty model',
 });
 
 // Partial project metadata must never turn an unreadable saved choice into a default.
-it('keeps saving disabled when the review model marker cannot be read completely', async () => {
+it.each(['ownership', 'config'])('keeps saving disabled when review %s cannot be read completely', async (failure) => {
+  if (failure === 'ownership') {
+    Object.assign(window.electronAPI.localDb.bots, { ownsProject: async () => { throw new Error('query failed'); } });
+  }
   Object.assign(window.electronAPI, { fileBrowser: { readFile: vi.fn(async () => ({ ok: true,
     data: { content: '{', truncated: true } })) } });
   const initial = schedule({ source: 'project', projectConfigId: 'teammate-memory-review',
@@ -731,7 +738,7 @@ it('keeps saving disabled when the review model marker cannot be read completely
 });
 
 it('does not offer buddy inheritance for a lookalike project outside the active account roster', async () => {
-  Object.assign(window.electronAPI.localDb.bots, { list: async () => [] });
+  Object.assign(window.electronAPI.localDb.bots, { ownsProject: async () => false });
   const readFile = vi.fn();
   Object.assign(window.electronAPI, { fileBrowser: { readFile } });
   const initial = schedule({ source: 'project', projectConfigId: 'teammate-memory-review',

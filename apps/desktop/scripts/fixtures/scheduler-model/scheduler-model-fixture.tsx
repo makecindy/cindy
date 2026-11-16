@@ -53,7 +53,7 @@ void mountPage({
   route: '/cc-agent/scheduled',
   host: {
     worktreeDetectCwd: async ({ cwd }: { cwd: string }) => ({ gitInstalled: true, isGitRepo: true, repoRoot: cwd }),
-    localDb: { bots: { list: async () => [{ homeDir: '/fixture/owners/owner/bots/mia' }] } },
+    localDb: { bots: { ownsProject: async () => true } },
     fileBrowser: { readFile: async () => ({ ok: true, data: { content: JSON.stringify({ version: 1, schedules: [reviewConfig] }), truncated: false } }) },
     maker: {
     projectAutomation: { upsertSchedule: async ({ config }: { config: ProjectScheduleConfig }) => { reviewConfig = JSON.parse(JSON.stringify(config)); return {}; } },
