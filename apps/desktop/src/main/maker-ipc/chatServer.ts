@@ -4354,7 +4354,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       try {
         for (const plan of plans.filter(p => ['proposed','running','waiting'].includes(p.status) && canStopBotGroupPlan(p, selfId, (bot, requester) => mayStopWork(s.members, bot, requester)))) {
           try { await actPlan({ groupId: room, planId: plan.id }, 'stop'); stoppedPlans.add(plan.id); stopped = true; }
-          catch (error) { if (!refused(error) && !(error instanceof Error && error.message === 'PLAN_CLOSED')) throw error; refusedPlans.set(plan.id, error); }
+          catch (error) {
+            if (!refused(error) && !(error instanceof Error && ['PLAN_CLOSED', 'ROLE_REQUIRED'].includes(error.message))) throw error;
+            refusedPlans.set(plan.id, error);
+          }
         }
         const executions = await api<Execution[]>(`/conversations/${room}/executions`);
         for (const e of executions.filter(e => ['queued', 'running', 'needs_input'].includes(e.status) && !(e.plan_id && stoppedPlans.has(e.plan_id)))) {

@@ -3848,6 +3848,36 @@ describe('Chat Server result delivery and refresh', () => {
         .toContain(`/conversations/${roomId}/executions/${secondId}/control`);
     });
 
+    // Unit / PR #10861: HTTP rejection coverage misses actPlan's local ownership recheck.
+    // Reassigning the first plan between list and detail must not strand later owned work.
+    it('continues stopping owned work after a plan is reassigned before its local permission check', async () => {
+      const reassignedId = '80000000-0000-4000-8000-000000000002';
+      const ownedId = '80000000-0000-4000-8000-000000000003';
+      const plan = { id: reassignedId, creator_id: selfId, status: 'proposed', revision: 1,
+        steps: [{ position: 0, botId: otherBot, status: 'pending' }] };
+      const owned = { ...plan, id: ownedId };
+      let reassigned = false;
+      singleSpeaker((route, method) => {
+        if (route === `/conversations/${roomId}/plans?ids=${reassignedId}`) {
+          reassigned = true;
+          return { body: [{ ...plan, revision: 2, steps: [{ position: 0, botId: foreignBot, status: 'pending' }] }] };
+        }
+        if (route === `/conversations/${roomId}/plans?ids=${ownedId}`) return { body: [owned] };
+        if (route === `/conversations/${roomId}/plans`) return { body: [
+          { ...plan, ...(reassigned ? { revision: 2, steps: [{ position: 0, botId: foreignBot, status: 'pending' }] } : {}) }, owned,
+        ] };
+        if (route === `/conversations/${roomId}/plans/${ownedId}` && method === 'POST') return { body: { ok: true } };
+        if (route === `/conversations/${roomId}/executions`) return { body: [
+          { ...execution, status: 'queued', bot_id: otherBot, requester_id: selfId },
+        ] };
+      });
+      expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      const controls = fixture.handle.mock.calls.filter(([, method, body]) => method === 'POST' && body?.action === 'stop')
+        .map(([route]) => route);
+      expect(controls).toEqual([`/conversations/${roomId}/plans/${ownedId}`, `/conversations/${roomId}/executions/${execution.id}/control`]);
+      expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/plans`)).toHaveLength(2);
+    });
+
     it.each(['running', 'stopped'])('does not hide a rejected plan stop when the plan remains %s', async status => {
       const planId = '80000000-0000-4000-8000-000000000002';
       let rejected = false;
