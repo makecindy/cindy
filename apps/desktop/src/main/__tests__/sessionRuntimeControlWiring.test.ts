@@ -24,6 +24,18 @@ const coldPiRehydrationSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/coldPiRehydration.ts'),
   'utf8',
 );
+// register.ts's binding of the cold Pi window check moved verbatim into coldPiRehydrationBinding.ts;
+// register.ts calls createColdPiRehydrationBinding where it bound it.
+const coldPiRehydrationBindingSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/coldPiRehydrationBinding.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+// The agent switch deps' rememberThinkingIntent moved verbatim into agentSwitchDepsCore.ts;
+// register.ts passes createRememberThinkingIntent's result where it defined it.
+const agentSwitchDepsCoreSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/agentSwitchDepsCore.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 const coldPiRehydrationFailureSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/coldPiRehydrationFailure.ts'),
   'utf8',
@@ -1127,9 +1139,13 @@ describe('session runtime control wiring', () => {
     );
     // 提交写入镜像后同步本机 renderer 记忆：renderer 的全量快照才会带上该选择，
     // 镜像里的钉子得以撤销（否则会长期压住被控端后来的显式改动）。
-    const rememberThinking = registerWithRuntimeSelectionSource.slice(
-      registerWithRuntimeSelectionSource.indexOf('rememberThinkingIntent: ({'),
-      registerWithRuntimeSelectionSource.indexOf('bootstrapSwitchedSession: async (sessionId, opts)'),
+    // register.ts passes the moved closure to the agent switch deps.
+    expect(handlerBody(registerSource, 'const agentSwitchDeps:', 'bootstrapSwitchedSession:'))
+      .toContain('rememberThinkingIntent: createRememberThinkingIntent({ broadcastToAllWindows }),');
+    const rememberThinking = handlerBody(
+      agentSwitchDepsCoreSource,
+      'export function createRememberThinkingIntent(',
+      '\n  };\n}',
     );
     expect(rememberThinking).toContain(
       'setThinkingEnabledInMemory(agentKind, providerId, model, thinking)',
@@ -1361,10 +1377,16 @@ describe('session runtime control wiring', () => {
   });
 
   it('rehydrates a cold Pi runtime before model-window assessment', () => {
-    const rehydrate = handlerBody(
+    // register.ts still binds it before the agent switch deps; the binding's text is in the moved file.
+    expect(handlerBody(
       registerSource,
-      'const rehydrateColdPiRuntimeForWindowVerification = createColdPiRehydrationForWindowVerification({',
+      'const rehydrateColdPiRuntimeForWindowVerification = createColdPiRehydrationBinding({',
       'const agentSwitchDeps:',
+    )).toContain('readSessionExtraDirsFromDb, bootstrapSession,');
+    const rehydrate = handlerBody(
+      coldPiRehydrationBindingSource,
+      'const rehydrateColdPiRuntimeForWindowVerification = createColdPiRehydrationForWindowVerification({',
+      '  return rehydrateColdPiRuntimeForWindowVerification;',
     );
     const rolloverWiring = handlerBody(
       registerSource,

@@ -1,4 +1,5 @@
 import { commitContextRebuildWithPorts } from '../contextRebuildPersistence.js';
+import { rebroadcastAgentSwitchBoundaryWith } from '../agentSwitchRows.js';
 import { parseAgentMetaRecord, patchMessageAgentMetaWithResultRow, findVisibleToolUseMessageByAliasesRow,
   writeMessageContentRow, rollbackAssistantMessageRow, readVisiblePiUserEntry } from '../messageMutations.js';
 import type { MessageAgentMetaPatchResult, VisibleToolUseMessageLink } from '../messageMutations.js';
@@ -2185,13 +2186,5 @@ export async function rebroadcastAgentSwitchBoundary(
   boundaryClientId: string,
   ownerScope: DataOwnerBroadcastScope | null = captureOwnerBroadcastScope(),
 ): Promise<void> {
-  const db = getDbClient().drizzle;
-  const [row] = await db
-    .select()
-    .from(messages)
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, boundaryClientId)))
-    .limit(1);
-  if (row && isOwnerBroadcastScopeCurrent(ownerScope)) {
-    broadcastMessageRow(sessionId, messageToCamel(row), ownerScope);
-  }
+  return rebroadcastAgentSwitchBoundaryWith({ isOwnerBroadcastScopeCurrent, broadcastMessageRow }, sessionId, boundaryClientId, ownerScope);
 }
