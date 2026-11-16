@@ -30,6 +30,7 @@ import { createModelGroupResolver, modelGroupQuotaKey, MODEL_GROUP_REMOTE_WAIT_M
 import { bindModelGroupSession, readModelGroupSessionBinding } from './sessionBindings.js';
 import { readModelGroupsConfig, writeModelGroupsConfig } from './store.js';
 import { computeModelGroupSwitchOffer } from './switchOffer.js';
+import { registerModelGroupsRemoteHandler } from './remoteRegistration.js';
 
 /** 选路时让额度总览保持采集这么久；面板没开时它平时不采集。 */
 const QUOTA_LEASE_MS = 5 * 60_000;
@@ -102,6 +103,8 @@ function sessionIdOf(value: Record<string, unknown>): string {
 }
 
 export function registerModelGroupsIpc(): void {
+  // 同账号的另一台电脑在这台开新任务时，用这台的模式与同一个选路实例。
+  registerModelGroupsRemoteHandler(resolver);
   ipcMain.handle(MODEL_GROUPS_IPC.GET, (event) => {
     assertTrustedAppRendererEvent(event);
     return readModelGroupsConfig();

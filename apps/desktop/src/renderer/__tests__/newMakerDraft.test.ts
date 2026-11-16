@@ -681,6 +681,20 @@ describe('newMakerDraft store', () => {
     expect(wc?.initialTask).toBeUndefined();
   });
 
+  // model-groups.md「在另一台电脑上开的新任务」：模式按电脑存，换了任务所在电脑不能把上一台的模式 id 带过去。
+  it('换任务所在电脑时清掉上一台的模式，显式一起给的新值保留', async () => {
+    const { getDraft, patchDraft } = await loadModule();
+    patchDraft({ modelGroup: { type: 'route', id: 'local-route' } });
+    patchDraft({ deviceLinkDeviceId: 'henrik-pc', deviceLinkDeviceName: 'Henrik-PC', workingDir: null });
+    expect(getDraft().modelGroup).toBeNull();
+
+    patchDraft({ modelGroup: { type: 'route', id: 'pc-route' } });
+    patchDraft({ extraDirs: [] });
+    expect(getDraft().modelGroup).toEqual({ type: 'route', id: 'pc-route' });
+    patchDraft({ deviceLinkDeviceId: 'mac-mini', deviceLinkDeviceName: 'Mac mini', modelGroup: { type: 'route', id: 'mini-route' } });
+    expect(getDraft().modelGroup).toEqual({ type: 'route', id: 'mini-route' });
+  });
+
   it('另起干净任务时只关闭协同，不覆盖 Worker 创建偏好', async () => {
     const { getDraft, patchDraft, resetDraftWorkspaceTargets } = await loadModule();
     patchDraft({

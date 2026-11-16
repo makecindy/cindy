@@ -18,8 +18,13 @@ export interface ModelGroupsPickerProps {
   /** 当前选中的模式；null = 用普通模型(进行中的任务里总是 null：选一次换一次，不留选中态)。 */
   active: ModelGroupSelection | null;
   onSelect(selection: ModelGroupSelection): void;
-  /** 打开设置里的「模型组」。 */
-  onManage(): void;
+  /** 打开设置里的「模型组」。模式在另一台电脑上时不提供：这台的设置管不到那台的模式。 */
+  onManage?(): void;
+  /**
+   * 模式来自要建任务的另一台电脑(model-groups.md「在另一台电脑上开的新任务」)：不显示 ☆，
+   * 模式的收藏只记在这台、只认这台的模式。
+   */
+  remote?: boolean;
 }
 
 interface PickerRow {
@@ -79,7 +84,7 @@ export function ModelGroupsPickerSection({
   const rows = useModelGroupPickerRows(picker.config);
   const favorites = useModelGroupFavorites();
   const shown = variant === 'favorites'
-    ? favorites.flatMap((id) => rows.filter((row) => row.selection.id === id))
+    ? (picker.remote ? [] : favorites.flatMap((id) => rows.filter((row) => row.selection.id === id)))
     : matches(rows, query);
   const groups = [
     { key: 'modes', label: t('modelGroups.title'), rows: shown },
@@ -87,7 +92,7 @@ export function ModelGroupsPickerSection({
   // 只有「模型组」一格显示空态与管理入口；其余位置没有可列的就不占地方。
   const searchOnly = variant !== 'rail';
   const manage = () => {
-    picker.onManage();
+    picker.onManage?.();
     onPicked();
   };
   if (searchOnly && groups.length === 0) return null;
@@ -140,7 +145,7 @@ export function ModelGroupsPickerSection({
                   </span>
                   <span className="min-w-0 truncate font-medium leading-5">{row.name}</span>
                   {/* 与模型行的 ☆ 同一个样子：收藏后常亮，未收藏的悬停或键盘聚焦时出现。 */}
-                  <button
+                  {!picker.remote && <button
                     type="button"
                     data-model-group-favorite={row.selection.id}
                     aria-pressed={favorite}
@@ -159,7 +164,7 @@ export function ModelGroupsPickerSection({
                     )}
                   >
                     <Star size={14} fill={favorite ? 'currentColor' : 'none'} aria-hidden />
-                  </button>
+                  </button>}
                 </div>
                 {row.hint && (
                   <div title={row.hint} className="min-w-0 max-w-[36ch] truncate pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]">
@@ -171,7 +176,7 @@ export function ModelGroupsPickerSection({
           })}
         </div>
       ))}
-      {!searchOnly && (
+      {!searchOnly && picker.onManage && (
         <div
           role="option"
           aria-selected={false}

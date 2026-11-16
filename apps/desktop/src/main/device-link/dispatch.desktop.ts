@@ -59,6 +59,7 @@ export const {
   revalidateRemoteModelAccess,
   setRemoteAgentHandler,
   setProviderGroupRemoteHandler,
+  setModelGroupsRemoteHandler,
   setSetupSnapshotRemoteHandler,
   setSetupTransferRemoteHandler,
   setAgentNetSwitchRemoteHandler,

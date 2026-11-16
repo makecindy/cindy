@@ -59,6 +59,7 @@ export * from "./providerShareCatalog.js";
 export * from "./metadataContinuity.js";
 export * from "./providerShareEnvelope.js";
 export * from "./providerGroup.js";
+export * from "./modelGroups.js";
 export * from "./modelFavorites.js";
 export * from "./orcaWorkerRoles.js";
 export * from "./sessionListTransport.js";

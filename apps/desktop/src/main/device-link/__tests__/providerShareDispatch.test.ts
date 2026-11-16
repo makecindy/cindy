@@ -28,6 +28,7 @@ import {
   providerShareActiveControllers,
   revokeProviderShareControllers,
   runInvoke,
+  setModelGroupsRemoteHandler,
   setProviderGroupRemoteHandler,
   setProviderShareAccess,
   setRemoteAgentHandler,
@@ -375,6 +376,32 @@ describe('provider share invoke', () => {
     } finally {
       registry.reset();
     }
+  });
+});
+
+describe('model groups channel', () => {
+  afterEach(() => setModelGroupsRemoteHandler(null));
+
+  it('serves same-account computers only and never leaks unexpected failures', async () => {
+    const request = { action: 'list' };
+    await expect(runInvoke('same-account-mac', { channel: 'model-groups:remote', args: [request] }))
+      .resolves.toMatchObject({ ok: false, error: { code: 'IPC_ERROR', message: '[UNAVAILABLE] model groups are not ready yet' } });
+
+    const handle = vi.fn(async () => ({ config: { routes: [] } }));
+    setModelGroupsRemoteHandler({ handle });
+    await expect(runInvoke('same-account-mac', { channel: 'model-groups:remote', args: [request] }))
+      .resolves.toEqual({ ok: true, result: { config: { routes: [] } } });
+    expect(handle).toHaveBeenCalledWith(request);
+
+    state.access = ACCESS;
+    handle.mockClear();
+    await expect(runInvoke(GUEST, { channel: 'model-groups:remote', args: [request] }))
+      .resolves.toMatchObject({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED' } });
+    expect(handle).not.toHaveBeenCalled();
+
+    handle.mockRejectedValueOnce(new Error('/Users/someone/model-groups.json: EACCES'));
+    await expect(runInvoke('same-account-mac', { channel: 'model-groups:remote', args: [request] }))
+      .resolves.toMatchObject({ ok: false, error: { message: '[INTERNAL] model group request failed' } });
   });
 });
 

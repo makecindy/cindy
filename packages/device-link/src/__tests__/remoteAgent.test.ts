@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MODEL_GROUPS_REMOTE_CHANNEL,
   PROVIDER_GROUP_REMOTE_CHANNEL,
   REMOTE_AGENT_CHANNEL,
   REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS,
@@ -122,6 +123,9 @@ describe('remote agent channel', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has(REMOTE_AGENT_CHANNEL)).toBe(true);
     // 供应商组：同账号电脑问组所在电脑该用哪台(受邀者在 Desktop dispatch 被拒)。
     expect(REMOTE_INVOKE_ALLOWLIST.has(PROVIDER_GROUP_REMOTE_CHANNEL)).toBe(true);
+    // 模型组：同账号电脑用被控电脑自己的模式开新任务；选路会推进「轮流」，所以不进断线重放的只读集合。
+    expect(REMOTE_INVOKE_ALLOWLIST.has(MODEL_GROUPS_REMOTE_CHANNEL)).toBe(true);
+    expect(isPeerResetRetryableInvoke(MODEL_GROUPS_REMOTE_CHANNEL, [{ action: 'resolve', selection: { type: 'route', id: 'r' } }])).toBe(false);
   });
 
   it('parses the provider group forget op and the guest relay capability', () => {

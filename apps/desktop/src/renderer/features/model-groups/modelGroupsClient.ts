@@ -279,18 +279,18 @@ export function modelGroupExceptionText(exceptions: readonly ModelGroupAppliedEx
 
 /**
  * 第一条消息下方的一行说明，沿用「让插件选」的说明卡(手机端同样能读)：routed 写用了哪个模型和来源、为什么，
- * 来源在另一台电脑或是分享来的时连同位置一起写；里面没有能用的模型时写明沿用了原来的模型。组已被删除时不写。
+ * 来源在另一台电脑或是分享来的时连同位置一起写；里面没有能用的模型时写明沿用了原来的模型。组已被删除时不写(null)。
+ * 本机任务由下方 writeModelGroupRouteNote 写进本机记录；建在另一台电脑上的任务交给那台写(remoteModelGroups)。
  */
-export function writeModelGroupRouteNote(
-  sessionId: string,
+export function buildModelGroupRouteNote(
   result: ModelGroupResolveResult | null,
   keptModelName: string,
   t: TFunction,
   locale: string,
   locationName: ModelGroupLocationName,
-): void {
-  if (!result || result.outcome === 'missing') return;
-  const note: PluginModelRouteNote = result.outcome === 'routed'
+): PluginModelRouteNote | null {
+  if (!result || result.outcome === 'missing') return null;
+  return result.outcome === 'routed'
     ? {
         pluginName: result.groupName,
         outcome: 'routed',
@@ -303,6 +303,18 @@ export function writeModelGroupRouteNote(
         source: 'model-group',
       }
     : { pluginName: result.groupName, outcome: 'kept', modelName: keptModelName, why: 'unavailable-route', source: 'model-group' };
+}
+
+export function writeModelGroupRouteNote(
+  sessionId: string,
+  result: ModelGroupResolveResult | null,
+  keptModelName: string,
+  t: TFunction,
+  locale: string,
+  locationName: ModelGroupLocationName,
+): void {
+  const note = buildModelGroupRouteNote(result, keptModelName, t, locale, locationName);
+  if (!note) return;
   const { messages } = window.electronAPI.localDb;
   void (async () => {
     // 首条消息由 main 在开跑时才落库：等到后把说明定在它之后 1ms，排在首条消息下面、回复上面。
