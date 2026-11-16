@@ -308,6 +308,7 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | 测试纪律：会碰到 Codex 登录的运行 | host-usage 沙箱的 codex-home/auth.json 链着本机真实的 Codex 登录，Host 在那里走到 Codex、订阅桥或作废逻辑就可能经链接改写它。凡是会让这些跑起来的运行，一律用 HOME 隔离、假登录的 profile；host-usage 只做不触发这些路径的只读检查，拿不准就不用 |
 | 合并 main 之后的核对 | 每次合并 main，检查这次合并改到的桌面函数里有没有 Host 重写过的对应实现（范围是 C3 盘点的丙类清单），有就在汇报里列出并跟上（审核方 m1-cp18e 定）。m1-cp18e 对本分支已有的合并补查：`d142106052` 已跟上，`b1c5d88705` 见第二节「引擎二进制的路径」，`c783b679b9` 属 M2 的供应商视图，`73270d8f06`（Codex 线程历史目录）归 m1-cp18d |
 | 验证纪律：Host 类型检查的堆 | 本机跑 `NODE_OPTIONS=--max-old-space-size=8192 pnpm --filter @cindy/host typecheck`（与 CI 相同；12288 也可）；不设时默认堆会 OOM（rc 134）。CI（`.github/workflows/ci.yml`）的 Host 作业不单独设，靠工作流全局的 `NODE_OPTIONS: '--max-old-space-size=8192'`；发布 Host PR 前若工作流的全局值改了，要回头核 |
+| 验证纪律：改坏能红之前先保存本单元的改动 | 做“故意改坏、看测试变红”之前，先把本单元的改动提交成一个本地临时提交，或存一份补丁文件；还原只用“回到那个提交 / 应用那份补丁”（或事先复制的备份文件），不对有未提交改动的文件用 `git checkout --`。3b-2 时曾用它还原改坏的文件，连带还原了自己未提交的改动，重新应用后逐字核对（`git diff` 与备份相同）才没有后果（审核方 3b-2 定） |
 | 测试纪律：用发布构建跑 Host | 发布构建（带发布清单）会被认成安装版，与运行它的系统用户的 `~/.codex/auth.json` 对账、链接（与打包后的桌面在沙箱 profile 里的行为相同；m1-cp13 之前 Host 不读系统登录）。凡是用发布构建跑 Host 的测试（验证安装包、M4 的联合验收等），HOME 必须隔离 |
 | 移交交接任务：发布构建与系统 Codex 登录 | 上一行的情况由审核方在 M1 发布时通知交接任务 |
 | 基线抖动：`apps/desktop/src/main/__tests__/worktreeRecycleJournalFilesystem.test.ts`“detects atomic replacements from an independent file writer” | m1-cp18c 门禁里失败一次（文件监听在负载下 1 秒内没收到变更通知）；文件与被测代码本分支没有改动，单文件重跑 5 次全过，整组桌面测试重跑全过。以后门禁里它再失败，先单文件重跑，过了按基线记（审核方 m1-cp18c 复核时定） |
