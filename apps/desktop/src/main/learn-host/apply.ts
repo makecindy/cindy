@@ -23,7 +23,7 @@ import {
 import { registryService } from '../skillhub/registry';
 import { computeFolderHash } from '../skillhub/folderHash';
 import { ensureSymlinkToShared } from '../skillhub/installService';
-import { prepareSharedGlobalSkillLinks } from '../maker-host/shared-global-skills.js';
+import { prepareSharedGlobalSkillLinks, shouldProjectToClaudeSkills } from '../maker-host/shared-global-skills.js';
 import { stripUnreviewedEntries } from './staging';
 import type { LearnProvenance } from '../../shared/learnTypes';
 
@@ -281,7 +281,9 @@ export async function applyProposal(params: ApplyProposalParams): Promise<ApplyP
   }
 
   // ── best-effort links(与 installService 同语义,失败只 warn) ─────────────
-  if (!claudeRealDirBackup) {
+  // #9282: 未 opt-in 且本地没有 ~/.claude 时不主动创建 Claude 侧链接;
+  // 上方 claudeRealDirBackup 分支是存量链接复位,不在此列。
+  if (!claudeRealDirBackup && await shouldProjectToClaudeSkills()) {
     try {
       await ensureSymlinkToShared(claudeLink, finalDir);
     } catch (err) {

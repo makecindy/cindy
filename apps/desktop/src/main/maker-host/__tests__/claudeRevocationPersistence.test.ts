@@ -4,10 +4,14 @@ import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({ directory: '', failWrite: false }));
-vi.mock('electron', () => ({ app: { getPath: () => h.directory } }));
-vi.mock('../../appSessionState.js', () => ({
-  getActiveAppSession: () => ({ dataOwnerId: 'test-owner', generation: 1 }),
-  isAppSessionBoundaryPending: () => false,
+vi.mock('../../userDataPath.js', () => ({ userDataPath: (...parts: string[]) => path.join(h.directory, ...parts) }));
+vi.mock('../../ownerContext.js', () => ({
+  configureOwnerContext: () => {},
+  activeDataOwnerId: () => 'test-owner',
+  isOwnerBoundaryPending: () => false,
+  ownerGeneration: () => 1,
+  ownerScopedPath: (...parts: string[]) => path.join(h.directory, ...parts),
+  hasCommittedOwner: () => true,
 }));
 vi.mock('../../utils/atomicWriteFile.js', async (original) => {
   const actual = await original<typeof import('../../utils/atomicWriteFile.js')>();

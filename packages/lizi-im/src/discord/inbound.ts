@@ -22,6 +22,21 @@ export interface MessageLike {
   type?: string | number;
 }
 
+/** 服务器频道 / thread 消息（在 MessageLike 之上多了 guild、父频道、提及与成员信息）。 */
+export type GuildMessageLike = MessageLike & {
+  guildId?: string | null;
+  guild?: { name?: string } | null;
+  channel?: {
+    id?: string;
+    name?: string;
+    type?: number;
+    parentId?: string | null;
+    parent?: { name?: string } | null;
+  };
+  member?: { displayName?: string | null } | null;
+  mentions?: { has(user: string, options?: Record<string, boolean>): boolean };
+};
+
 export interface AttachmentLike {
   id?: string;
   name?: string;
@@ -36,25 +51,35 @@ export interface StickerLike {
   name?: string;
 }
 
-export async function normalizeDmMessage(
+/** 服务器频道消息的路由信息；缺省 = 私聊（senderId 取发言人）。 */
+export interface InboundRoute {
+  /** 编排层路由键：频道是 lane id（`g/...`），私聊缺省为发言人 id。 */
+  senderId: string;
+  /** 覆盖正文（频道里已去掉对机器人的 @）。 */
+  text: string;
+  interactionSource: NonNullable<IMMessageEvent['interactionSource']>;
+  speaker: NonNullable<IMMessageEvent['speaker']>;
+}
+
+export interface InboundContext {
+  contextId: string;
+  download: (url: string) => Promise<Uint8Array>;
+  /** host 媒体总仓: 图片与音视频入内容寻址仓; 缺省时这类附件标不支持。 */
+  media?: IMHostMediaCache;
+  /** host 文件暂存: 非媒体文件; 缺省时标不支持。均不写 legacy 目录。 */
+  files?: IMHostFileStaging;
+  /** 暂存成功后的回滚句柄 — 下载期间配置换代时由调用方逐个调用。 */
+  stagedDiscards?: Array<() => Promise<void>>;
+}
+
+export async function normalizeInboundMessage(
   m: MessageLike,
-  ctx: {
-    contextId: string;
-    download: (url: string) => Promise<Uint8Array>;
-    /** host 媒体总仓: 图片与音视频入内容寻址仓; 缺省时这类附件标不支持。 */
-    media?: IMHostMediaCache;
-    /** host 文件暂存: 非媒体文件; 缺省时标不支持。均不写 legacy 目录。 */
-    files?: IMHostFileStaging;
-    /** 暂存成功后的回滚句柄 — 下载期间配置换代时由调用方逐个调用。 */
-    stagedDiscards?: Array<() => Promise<void>>;
-  },
+  ctx: InboundContext,
+  route?: InboundRoute,
 ): Promise<IMMessageEvent | null> {
   const chatId = m.channelId ?? m.channel?.id ?? '';
   if (!chatId) {
-    // Malformed event without a resolvable channel (e.g. partial presence
-    // or guild event leaking through the DM filter). Return null so the
-    // transport suppresses it entirely — emitting an event with an empty
-    // chatId could inject non-DM content into the owner's agent session.
+    // 缺少频道的 partial 事件不能投递，避免把未知来源内容路由进会话。
     return null;
   }
   const attachments: IMAttachment[] = [];
@@ -137,16 +162,17 @@ export async function normalizeDmMessage(
 
   return {
     channelName: 'discord',
-    interactionSource: {
+    interactionSource: route?.interactionSource ?? {
       chatName: m.channel?.name ?? m.author.globalName ?? m.author.username,
       senderName: m.author.globalName ?? m.author.username ?? m.author.id,
       messageUrl: `https://discord.com/channels/@me/${chatId}/${m.id}`,
     },
-    senderId: m.author.id,
+    senderId: route?.senderId ?? m.author.id,
     chatId,
     contextId: ctx.contextId,
     messageId: encodeMessageId(chatId, m.id),
-    text: m.content ?? '',
+    text: route ? route.text : (m.content ?? ''),
+    ...(route ? { invoked: true, speaker: route.speaker } : {}),
     attachments,
     unsupported,
     threadTs: undefined,
@@ -172,4 +198,22 @@ function hasValues<T>(source: unknown): source is { values(): IterableIterator<T
 
 function isVoiceMessage(m: MessageLike): boolean {
   return m.type === 'voice' || m.type === 'VoiceMessage';
+}
+
+/**
+ * 消息是否直接 @ 了机器人本人。@everyone / @here / 角色提及不算召唤；
+ * 回复机器人且带提醒时 Discord 会把机器人放进 mentions，等同于 @。
+ */
+export function isBotMentioned(
+  m: { mentions?: { has(user: string, options?: Record<string, boolean>): boolean } },
+  botUserId: string,
+): boolean {
+  if (!botUserId || !m.mentions) return false;
+  return m.mentions.has(botUserId, { ignoreRoles: true, ignoreEveryone: true });
+}
+
+/** 去掉正文里对机器人的 @（`<@id>` / `<@!id>`），其他人的 @ 保持原样。 */
+export function stripBotMention(content: string, botUserId: string): string {
+  if (!botUserId) return content.trim();
+  return content.split(`<@${botUserId}>`).join('').split(`<@!${botUserId}>`).join('').trim();
 }

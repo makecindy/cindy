@@ -1,3 +1,4 @@
+import { setSearchDraft } from '@/features/cc-agent/sidebar/conversationSearchDraft';
 // @vitest-environment jsdom
 
 /**
@@ -33,6 +34,7 @@ vi.mock('@/lib/orcaSessionIdentity', () => ({
 }));
 
 beforeEach(() => {
+  setSearchDraft('');
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: { platform: 'linux' },

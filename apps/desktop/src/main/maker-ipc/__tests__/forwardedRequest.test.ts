@@ -1,5 +1,5 @@
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
-import { setMainLocale } from '../../i18n.js';
+import { setMainLocale } from '../../i18n.desktop.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { captureAgentRequest, ownerChannelInputEvidence } from '../forwardedRequest.js';
 import { beginChannelToolScope, readChannelToolScope } from '../../im/shared/channelToolScope.js';
@@ -105,15 +105,11 @@ describe('host-owned forwarded request', () => {
     expect(matchesForwardedRequest(first.autoReviewUserText.request!, first.message)).toBe(false);
   });
 
-  // 2026-11-05: owner authority travels only after the sender checked the hand-off itself
-  // (Claude Code's delegation check). The receiver reviews the delegated text, not a bare
-  // owner sentence, and nothing is sent when the sender's review refuses the hand-off.
-  it('lets only a checked hand-off speak for the owner', async () => {
-    const authorize = vi.fn(async () => ({ kind: 'authorized' as const }));
+  // 2026-11-08: a turn that speaks for the owner hands its request on without a second review;
+  // any task can already open a Full Access task. The receiver reviews the delegated text.
+  it('lets a hand-off from an owner turn speak for the owner', async () => {
     const owner = { clientId: 'u1', authoredText: '修好就合进去' };
-    const checked = await captureAgentRequest('lead', 'Fix #12 and merge it after checks pass.', owner, async () => [], true, true,
-      { targetSessionId: 'worker', authorize });
-    expect(authorize).toHaveBeenCalledTimes(1);
+    const checked = await captureAgentRequest('lead', 'Fix #12 and merge it after checks pass.', owner, async () => [], true, true, 'worker');
     expect(checked.message).toBe('Fix #12 and merge it after checks pass.');
     expect(checked.autoReviewUserText.request).toEqual({ sessionId: 'lead', clientId: 'u1',
       plainBody: true, delegatedText: 'Fix #12 and merge it after checks pass.' });
@@ -129,42 +125,29 @@ describe('host-owned forwarded request', () => {
     expect(checked.legacy!.autoReviewUserText.request).toEqual({ userText: '修好就合进去', sessionId: 'lead', clientId: 'u1', ownerVerified: true });
     expect(verifiedOwnerRequestText(checked.legacy!.autoReviewUserText)).toBe('修好就合进去');
 
-    const refused = await captureAgentRequest('lead', 'Delete the release branch.', owner, async () => [], true, true,
-      { targetSessionId: 'worker', authorize: async () => ({ kind: 'blocked', reason: 'not requested' }) });
-    expect(refused.blocked).toBe('not requested');
-    const unchecked = await captureAgentRequest('lead', 'background', owner, async () => [], true, true,
-      { authorize: async () => ({ kind: 'none' }) });
-    expect(unchecked.blocked).toBeUndefined();
-    expect(verifiedOwnerRequestText(unchecked.autoReviewUserText)).toBeUndefined();
-    const noCheck = await captureAgentRequest('lead', 'background', owner, async () => [], true, true);
-    expect(verifiedOwnerRequestText(noCheck.autoReviewUserText)).toBeUndefined();
-    const notOwner = vi.fn(async () => ({ kind: 'authorized' as const }));
-    const plain = await captureAgentRequest('lead', 'background', owner, async () => [], true, false, { authorize: notOwner });
-    expect(notOwner).not.toHaveBeenCalled();
+    const plain = await captureAgentRequest('lead', 'background', owner, async () => [], true, false);
     expect(verifiedOwnerRequestText(plain.autoReviewUserText)).toBeUndefined();
 
-    // The worker continues under the checked request: its next hand-off is checked again, and a
+    // The worker continues under the delegated request and may hand it on; a
     // result back to the task the owner spoke in never speaks for the owner (2026-11-05 data:
     // 18 worker reports reached the lead as owner requests).
     const delegated = checked.autoReviewUserText.request;
     const grandchild = await captureAgentRequest('worker', 'Run the Windows build.', { clientId: 'w1', delegatedRequest: delegated },
-      async () => [], true, false, { targetSessionId: 'builder', authorize });
+      async () => [], true, false, 'builder');
     expect(grandchild.autoReviewUserText.request).toEqual({ sessionId: 'lead', clientId: 'u1',
       plainBody: true, delegatedText: 'Run the Windows build.' });
     // A relayed hand-off has no owner words at hand, so an older peer gets plain text.
     expect(grandchild.legacy).toEqual({ message: 'Run the Windows build.', autoReviewUserText: { kind: 'agent-request' } });
-    const reportCheck = vi.fn(async () => ({ kind: 'authorized' as const }));
     const report = await captureAgentRequest('worker', 'Merged #12.', { clientId: 'w1', delegatedRequest: delegated },
-      async () => [], true, false, { targetSessionId: 'lead', authorize: reportCheck });
-    expect(reportCheck).not.toHaveBeenCalled();
+      async () => [], true, false, 'lead');
     expect(report.message).toBe('Merged #12.');
     expect(verifiedOwnerRequestText(report.autoReviewUserText)).toBeUndefined();
     const historical = await captureAgentRequest('worker', 'more', null, async () => [{
       clientId: 'w1', role: 'user', content: checked.message,
       agentMeta: { autoReviewUserText: checked.autoReviewUserText },
-    }], true, false, { authorize });
+    }], true, false);
     expect(verifiedOwnerRequestText(historical.autoReviewUserText)).toBeUndefined();
-    const missing = await captureAgentRequest('caller', 'analysis', null, async () => [], true, true, { authorize });
+    const missing = await captureAgentRequest('caller', 'analysis', null, async () => [], true, true);
     expect(missing.autoReviewUserText.request).toEqual({ userText: null });
   });
 
@@ -177,8 +160,7 @@ describe('host-owned forwarded request', () => {
     try {
       const read = vi.fn(async (clientId: string) => clientId === 'im-row' ? '可以提交 pr' : null);
       const evidence = await ownerChannelInputEvidence(readChannelToolScope({ sessionId: 'lane', sessionInstanceId: 'instance' }), read);
-      const result = await captureAgentRequest('lane', 'background', evidence, async () => [], true, true,
-        { authorize: async () => ({ kind: 'authorized' }) });
+      const result = await captureAgentRequest('lane', 'background', evidence, async () => [], true, true);
       if (requesterIsOwner) {
         expect(result.autoReviewUserText.request).toEqual({ sessionId: 'lane', clientId: 'im-row',
           plainBody: true, delegatedText: 'background' });

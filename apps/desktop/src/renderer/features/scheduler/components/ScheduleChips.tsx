@@ -1,5 +1,6 @@
 import { deviceDisplayName } from '@/lib/deviceName';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import * as React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -109,7 +110,7 @@ export const ChipButton = React.forwardRef<HTMLButtonElement, ChipButtonProps>(f
 });
 
 const POPOVER_BASE = cn(
-  'z-[10010] rounded-xl border p-2 shadow-lg',
+  'z-[10010] rounded-xl border p-2 shadow-[shadow:var(--shadow-menu)]',
   'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]',
 );
 
@@ -239,35 +240,24 @@ export function ScheduleSettingsButton({
 
         {!lockEnabled && (
         <Tip text={switchDisabled && cantUseReason ? cantUseReason : null} side="top" contentClassName="z-[10020]">
-          <button
-            type="button"
-            onClick={() => !switchDisabled && onEnabledChange(!enabled)}
-            disabled={switchDisabled}
+          <label
             className={cn(
               'flex h-8 w-full items-center gap-2 rounded-md px-2 text-13 transition-colors',
-              'hover:bg-[var(--surface-hover)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-              'disabled:cursor-not-allowed disabled:opacity-50',
+              switchDisabled
+                ? 'cursor-not-allowed opacity-50'
+                : 'cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
               enabled ? 'text-[var(--msg-assistant-text)] dark:text-[var(--msg-assistant-text)]' : 'text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]',
             )}
-            aria-pressed={enabled}
-            aria-label={t('scheduler.chips.useWorktreeAria')}
           >
-            <span
-              className={cn(
-                'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded border-[1.5px] transition-colors',
-                enabled
-                  ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
-                  : 'border-[var(--cmd-palette-item-meta)] bg-transparent',
-              )}
-            >
-              {enabled && (
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2.5} className="h-[10px] w-[10px]">
-                  <path d="M3 8l3.5 3.5L13 5" />
-                </svg>
-              )}
-            </span>
+            <Checkbox
+              checked={enabled}
+              disabled={switchDisabled}
+              onChange={() => onEnabledChange(!enabled)}
+              aria-label={t('scheduler.chips.useWorktreeAria')}
+              className="disabled:opacity-100"
+            />
             <span>{t('scheduler.chips.worktree')}</span>
-          </button>
+          </label>
         </Tip>
         )}
       </PopoverContent>
@@ -427,7 +417,7 @@ export function ScheduleChip({
             if (e.target === e.currentTarget) setOpen(false);
           }}
         >
-          <div className="rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
+          <div className="rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
             <div className="flex h-[34px] items-center gap-1 rounded-lg bg-[var(--chat-input-chip-bg)] p-[3px]">
               {(['cron', 'interval'] as const).map((mode) => {
                 const active = timingMode === mode;
@@ -458,7 +448,7 @@ export function ScheduleChip({
             </p>
           </div>
           <div className="flex items-start gap-2">
-            <div className="w-[260px] shrink-0 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
+            <div className="w-[260px] shrink-0 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
               <div className="flex flex-col gap-[2px]">
                 {availableModes.map((mode) => {
                 const active = activeMode === mode;
@@ -502,7 +492,7 @@ export function ScheduleChip({
 function ExactIntervalPanel({ summary }: { summary: string }) {
   const { t } = useTranslation();
   return (
-    <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-3 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
+    <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-3 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
       <div className="text-13 font-medium text-[var(--msg-assistant-text)]">
         {t('scheduler.chips.timingMode.currentExact', { schedule: summary })}
       </div>
@@ -531,7 +521,7 @@ function ScheduleConfigPanel({
   };
 
   return (
-    <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
+    <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
       <div className="flex flex-col gap-2">
         {mode === 'intervalMinutes' && (
           <>
@@ -1200,7 +1190,7 @@ export function ModelEffortChip({
         className={cn(
           // z-[10010]:本 chip 在 ScheduleFormDialog 内,弹层必须盖过对话框(沿用原
           // POPOVER_BASE 的层级——丢了它会渲染在对话框下层、点了"没反应")。
-          'z-[10010] overflow-hidden rounded-[12px] p-0 shadow-lg',
+          'z-[10010] overflow-hidden rounded-[12px] p-0 shadow-[shadow:var(--shadow-menu)]',
           'bg-[var(--model-dropdown-bg)] border border-[var(--model-dropdown-border)]',
           // 宽度由内容自适应(单栏 320;Edit 展开 ~517 向左加宽),与聊天选择器同口径。
           'w-auto',

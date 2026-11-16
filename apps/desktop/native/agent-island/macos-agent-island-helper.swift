@@ -146,9 +146,6 @@ struct PululuMascotView: View {
   private static let eyeC = Color(red: 0.96, green: 0.97, blue: 1.0)
   private static let alertC = Color(red: 0.0, green: 0.85, blue: 0.77)
   private static let approvalGlowC = Color(red: 1.0, green: 0.72, blue: 0.20)
-  private static let kbBase = Color(red: 0.16, green: 0.18, blue: 0.23)
-  private static let kbKey = Color(red: 0.44, green: 0.49, blue: 0.58)
-  private static let kbHi = Color.white
   private static let idleCycleDuration: Double = 4.8
   private static let idleSleepStart: Double = 1.15
 
@@ -225,13 +222,6 @@ struct PululuMascotView: View {
 
   private func rounded(_ rect: CGRect, radius: CGFloat) -> Path {
     Path(roundedRect: rect, cornerRadius: radius)
-  }
-
-  private func drawShadow(_ c: GraphicsContext, v: V, width: CGFloat, opacity: Double, dy: CGFloat = 0) {
-    c.fill(
-      Path(ellipseIn: v.ellipse(cx: 8, cy: 14.0, rx: width / 2, ry: 0.55, dy: dy)),
-      with: .color(.black.opacity(opacity))
-    )
   }
 
   private func drawPululu(
@@ -313,23 +303,6 @@ struct PululuMascotView: View {
 
     c.fill(rounded(left, radius: radius), with: .color(color.opacity(opacity)))
     c.fill(rounded(right, radius: radius), with: .color(color.opacity(opacity)))
-  }
-
-  private func drawKeyboard(_ c: GraphicsContext, v: V, phase: Int, dy: CGFloat) {
-    c.fill(Path(v.rect(0.5, 12.0, 15, 3, dy: dy)), with: .color(Self.kbBase))
-    for row in 0..<2 {
-      let ky = 12.5 + CGFloat(row) * 1.2
-      for col in 0..<6 {
-        let kx = 1.0 + CGFloat(col) * 2.4
-        c.fill(Path(v.rect(kx, ky, 1.8, 0.7, dy: dy)), with: .color(Self.kbKey))
-      }
-    }
-
-    let flashRow = phase / 3
-    let flashCol = phase % 6
-    let fkx = 1.0 + CGFloat(flashCol) * 2.4
-    let fky = 12.5 + CGFloat(flashRow) * 1.2
-    c.fill(Path(v.rect(fkx, fky, 1.8, 0.7, dy: dy)), with: .color(Self.kbHi.opacity(0.9)))
   }
 
   private func drawBang(_ c: GraphicsContext, v: V, pct: CGFloat, jumpY: CGFloat) {
@@ -440,7 +413,6 @@ struct PululuMascotView: View {
 
     return Canvas(rendersAsynchronously: true) { c, sz in
       let v = V(sz)
-      drawShadow(c, v: v, width: 8.2 - abs(float) * 0.25, opacity: 0.22)
       drawPululu(
         c,
         v: v,
@@ -462,7 +434,6 @@ struct PululuMascotView: View {
   private func workCanvas(t: Double) -> some View {
     let bounce = sin(t * 2 * .pi / 0.38) * 0.75
     let breathe = sin(t * 2 * .pi / 2.6)
-    let keyPhase = Int(t / 0.1) % 6
     let blinkPhase = t.truncatingRemainder(dividingBy: 3.2)
     let eyeScale: CGFloat = blinkPhase > 1.15 && blinkPhase < 1.26 ? 0.0 : 1.0
     let headTurn = CGFloat(sin(t * 2 * .pi / 0.86)) * 0.26
@@ -472,9 +443,6 @@ struct PululuMascotView: View {
       let dy = CGFloat(bounce - 0.25)
       let squashY: CGFloat = dy > 0.25 ? 0.98 : 1.0
 
-      drawShadow(c, v: v, width: 8.1 - abs(dy) * 0.32, opacity: 0.30)
-      // 键盘先画：角色要挡在键盘前面，而不是被键盘条横切。
-      drawKeyboard(c, v: v, phase: keyPhase, dy: -0.05)
       drawPululu(
         c,
         v: v,
@@ -529,7 +497,6 @@ struct PululuMascotView: View {
 
     return Canvas(rendersAsynchronously: true) { c, sz in
       let v = V(sz)
-      drawShadow(c, v: v, width: 8.4 - abs(min(0, jumpY)) * 0.42, opacity: 0.36)
       var body = c
       body.translateBy(x: shakeX * v.s, y: 0)
       drawPululu(
@@ -576,7 +543,6 @@ struct PululuMascotView: View {
       let v = V(sz)
       if mascotPct < 1 {
         let dy = hop
-        drawShadow(c, v: v, width: 8.0 - abs(dy) * 0.36, opacity: 0.26 * Double(disappear))
         var mascot = c
         let center = CGPoint(x: v.ox + 8 * v.s, y: v.oy + 8.15 * v.s)
         mascot.translateBy(x: center.x, y: center.y)
@@ -611,8 +577,6 @@ struct SpriteMascotConfig {
   let completionBadgeColor: Color
   let eyeColor: Color
   let approvalGlowColor: Color
-  let keyboardBaseColor: Color
-  let keyboardKeyColor: Color
   let bodyScale: CGFloat
   let eyeLeftX: CGFloat
   let eyeRightX: CGFloat
@@ -630,8 +594,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.0, green: 0.85, blue: 0.77),
     eyeColor: Color(red: 0.239, green: 0.447, blue: 0.894),
     approvalGlowColor: Color(red: 0.0, green: 0.85, blue: 0.77),
-    keyboardBaseColor: Color(red: 0.00, green: 0.38, blue: 0.34),
-    keyboardKeyColor: Color(red: 0.00, green: 0.85, blue: 0.77),
     bodyScale: 1.0,
     eyeLeftX: 6.9,
     eyeRightX: 9.7,
@@ -650,8 +612,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.620, green: 0.761, blue: 0.961),
     eyeColor: .black,
     approvalGlowColor: Color(red: 0.949, green: 0.988, blue: 0.463),
-    keyboardBaseColor: Color(red: 0.16, green: 0.18, blue: 0.23),
-    keyboardKeyColor: Color(red: 0.44, green: 0.49, blue: 0.58),
     bodyScale: 0.80,
     eyeLeftX: 5.63,
     eyeRightX: 10.63,
@@ -670,8 +630,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.569, green: 0.682, blue: 0.373),
     eyeColor: .black,
     approvalGlowColor: Color(red: 0.976, green: 0.882, blue: 0.345),
-    keyboardBaseColor: Color(red: 0.16, green: 0.18, blue: 0.23),
-    keyboardKeyColor: Color(red: 0.44, green: 0.49, blue: 0.58),
     bodyScale: 1.0,
     eyeLeftX: 6.86,
     eyeRightX: 9.50,
@@ -690,8 +648,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.467, green: 0.769, blue: 0.918),
     eyeColor: Color(red: 0.682, green: 0.129, blue: 0.275),
     approvalGlowColor: Color(red: 0.992, green: 0.388, blue: 0.549),
-    keyboardBaseColor: Color(red: 0.18, green: 0.42, blue: 0.56),
-    keyboardKeyColor: Color(red: 0.467, green: 0.769, blue: 0.918),
     bodyScale: 1.0,
     eyeLeftX: 6.31,
     eyeRightX: 9.56,
@@ -710,8 +666,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.129, green: 0.741, blue: 0.682),
     eyeColor: Color(red: 0.992, green: 0.812, blue: 0.271),
     approvalGlowColor: Color(red: 0.992, green: 0.812, blue: 0.271),
-    keyboardBaseColor: Color(red: 0.45, green: 0.32, blue: 0.03),
-    keyboardKeyColor: Color(red: 0.992, green: 0.812, blue: 0.271),
     bodyScale: 1.0,
     eyeLeftX: 6.19,
     eyeRightX: 9.69,
@@ -730,8 +684,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.490, green: 0.600, blue: 0.835),
     eyeColor: .black,
     approvalGlowColor: Color(red: 1.0, green: 0.306, blue: 0.192),
-    keyboardBaseColor: Color(red: 0.19, green: 0.24, blue: 0.38),
-    keyboardKeyColor: Color(red: 0.490, green: 0.600, blue: 0.835),
     bodyScale: 1.0,
     eyeLeftX: 5.56,
     eyeRightX: 10.56,
@@ -755,8 +707,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.404, green: 0.463, blue: 0.941),
     eyeColor: Color(red: 0.420, green: 0.239, blue: 0.196),
     approvalGlowColor: Color(red: 0.875, green: 0.180, blue: 0.153),
-    keyboardBaseColor: Color(red: 0.149, green: 0.169, blue: 0.271),
-    keyboardKeyColor: Color(red: 0.404, green: 0.463, blue: 0.941),
     bodyScale: 1.0,
     eyeLeftX: 6.71,
     eyeRightX: 9.30,
@@ -778,8 +728,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.404, green: 0.463, blue: 0.941),
     eyeColor: Color(red: 0.992, green: 0.812, blue: 0.271),
     approvalGlowColor: Color(red: 0.875, green: 0.180, blue: 0.153),
-    keyboardBaseColor: Color(red: 0.122, green: 0.141, blue: 0.161),
-    keyboardKeyColor: Color(red: 0.404, green: 0.463, blue: 0.941),
     bodyScale: 1.0,
     eyeLeftX: 5.95,
     eyeRightX: 10.05,
@@ -799,8 +747,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.353, green: 0.612, blue: 0.667),
     eyeColor: Color(red: 0.529, green: 0.365, blue: 0.259),
     approvalGlowColor: Color(red: 0.953, green: 0.796, blue: 0.314),
-    keyboardBaseColor: Color(red: 0.200, green: 0.278, blue: 0.302),
-    keyboardKeyColor: Color(red: 0.353, green: 0.612, blue: 0.667),
     bodyScale: 1.0,
     eyeLeftX: 6.84,
     eyeRightX: 9.16,
@@ -858,7 +804,6 @@ struct SpriteMascotView: View {
   @State private var timelineStart = Date().timeIntervalSinceReferenceDate
   @Environment(\.agentIslandMascotAnimationsActive) private var animationsActive
   @Environment(\.agentIslandMascotAnimationEpoch) private var animationEpoch
-  private static let keyboardHighlightColor = Color.white
   private static let idleCycleDuration: Double = 4.9
   private static let idleSleepStart: Double = 1.15
 
@@ -941,13 +886,6 @@ struct SpriteMascotView: View {
     Path(roundedRect: rect, cornerRadius: radius)
   }
 
-  private func drawShadow(_ c: GraphicsContext, v: V, width: CGFloat, opacity: Double, dy: CGFloat = 0) {
-    c.fill(
-      Path(ellipseIn: v.ellipse(cx: 8, cy: 14.3, rx: width / 2, ry: 0.48, dy: dy)),
-      with: .color(.black.opacity(opacity))
-    )
-  }
-
   private func drawSprite(
     _ c: GraphicsContext,
     v: V,
@@ -1000,21 +938,6 @@ struct SpriteMascotView: View {
     c.fill(
       Path(ellipseIn: v.ellipse(cx: config.eyeRightX + x, cy: cy, rx: rx, ry: ry, dy: dy)),
       with: .color(config.eyeColor.opacity(opacity))
-    )
-  }
-
-  private func drawKeyboard(_ c: GraphicsContext, v: V, phase: Int, dy: CGFloat) {
-    c.fill(Path(v.rect(0.5, 13.0, 15, 3, dy: dy)), with: .color(config.keyboardBaseColor))
-    for row in 0..<2 {
-      let ky = 13.5 + CGFloat(row) * 1.2
-      for col in 0..<6 {
-        let kx = 1.0 + CGFloat(col) * 2.4
-        c.fill(Path(v.rect(kx, ky, 1.8, 0.7, dy: dy)), with: .color(config.keyboardKeyColor))
-      }
-    }
-    c.fill(
-      Path(v.rect(1.0 + CGFloat(phase % 6) * 2.4, 13.5 + CGFloat(phase / 3) * 1.2, 1.8, 0.7, dy: dy)),
-      with: .color(Self.keyboardHighlightColor.opacity(0.9))
     )
   }
 
@@ -1125,7 +1048,6 @@ struct SpriteMascotView: View {
 
     return Canvas(rendersAsynchronously: true) { c, sz in
       let v = V(sz)
-      drawShadow(c, v: v, width: 8.8 - abs(float) * 0.22, opacity: 0.23)
       drawSprite(
         c,
         v: v,
@@ -1148,7 +1070,6 @@ struct SpriteMascotView: View {
   private func workCanvas(t: Double) -> some View {
     let bounce = sin(t * 2 * .pi / 0.38) * 0.72
     let breathe = sin(t * 2 * .pi / 2.5)
-    let keyPhase = Int(t / 0.1) % 6
     let blinkPhase = t.truncatingRemainder(dividingBy: 3.1)
     let eyeScale: CGFloat = blinkPhase > 1.12 && blinkPhase < 1.23 ? 0.0 : 1.0
     let headTurn = CGFloat(sin(t * 2 * .pi / 0.84)) * 0.22
@@ -1157,9 +1078,6 @@ struct SpriteMascotView: View {
     return Canvas(rendersAsynchronously: true) { c, sz in
       let v = V(sz)
       let dy = bounce - 0.25
-      drawShadow(c, v: v, width: 8.4 - abs(dy) * 0.32, opacity: 0.30)
-      // 键盘先画：角色要挡在键盘前面，而不是被键盘条横切。
-      drawKeyboard(c, v: v, phase: keyPhase, dy: -0.05)
       drawSprite(
         c,
         v: v,
@@ -1211,7 +1129,6 @@ struct SpriteMascotView: View {
 
     return Canvas(rendersAsynchronously: true) { c, sz in
       let v = V(sz)
-      drawShadow(c, v: v, width: 8.6 - abs(min(0, jumpY)) * 0.42, opacity: 0.36)
       drawSprite(
         c,
         v: v,
@@ -1252,7 +1169,6 @@ struct SpriteMascotView: View {
       let v = V(sz)
       if mascotPct < 1 {
         let dy = hop
-        drawShadow(c, v: v, width: 8.4 - abs(dy) * 0.36, opacity: 0.26 * Double(disappear))
         drawSprite(
           c,
           v: v,
@@ -1294,6 +1210,10 @@ struct AgentIslandScreenMetrics: Codable, Equatable {
   let displayId: Int
   let frame: AgentIslandRect
   let hasNotch: Bool
+  /// The display hosts the macOS Dynamic Island (MenuBarAgent's CenterHUD): the
+  /// PROLED MacBook Pro's hole-punch camera. The system island draws above our
+  /// panel and does not swallow clicks, so the island avoids the screen center.
+  let hasSystemIsland: Bool
   let notchWidth: Double
   let topBarHeight: Double
   let menuBarHeight: Double
@@ -1305,6 +1225,7 @@ struct AgentIslandScreenMetrics: Codable, Equatable {
     displayId: 0,
     frame: AgentIslandRect(x: 0, y: 0, width: 1728, height: 1117),
     hasNotch: false,
+    hasSystemIsland: false,
     notchWidth: 210,
     topBarHeight: 24,
     menuBarHeight: 24,
@@ -1323,6 +1244,7 @@ struct AgentIslandScreenMetrics: Codable, Equatable {
         "height": frame.height,
       ],
       "hasNotch": hasNotch,
+      "hasSystemIsland": hasSystemIsland,
       "notchWidth": notchWidth,
       "topBarHeight": topBarHeight,
       "menuBarHeight": menuBarHeight,
@@ -1344,6 +1266,7 @@ struct AgentIslandScreenMetrics: Codable, Equatable {
       displayId: displayId,
       frame: frame,
       hasNotch: false,
+      hasSystemIsland: hasSystemIsland,
       notchWidth: simulatedNotchWidth,
       topBarHeight: topBarHeight,
       menuBarHeight: menuBarHeight,
@@ -1464,9 +1387,9 @@ struct AgentIslandStrings: Codable, Equatable {
     appName: "Cindy",
     newConversationTitle: "New Session",
     newConversationHint: "Start a new session",
-    muteSound: "Mute Agent Island",
-    enableSound: "Enable Agent Island sound",
-    settings: "Agent Island settings",
+    muteSound: "Mute Agent Notch",
+    enableSound: "Enable Agent Notch sound",
+    settings: "Agent Notch settings",
     newMessage: "New message",
     review: "Review",
     needsInput: "Needs input",
@@ -1936,6 +1859,9 @@ private enum AgentIslandScreenMetricsProvider {
     } else {
       safeAreaTop = 0
     }
+    // A camera hole-punch may report auxiliary top areas, but there is no notch
+    // to hide behind: lay the island out like any notchless screen.
+    let hasSystemIsland = screenHasSystemIsland(screen)
     return AgentIslandScreenMetrics(
       displayId: displayId(for: screen),
       frame: AgentIslandRect(
@@ -1944,8 +1870,9 @@ private enum AgentIslandScreenMetricsProvider {
         width: Double(frame.width),
         height: Double(frame.height)
       ),
-      hasNotch: screenHasNotch(screen),
-      notchWidth: Double(notchWidth(for: screen)),
+      hasNotch: !hasSystemIsland && screenHasNotch(screen),
+      hasSystemIsland: hasSystemIsland,
+      notchWidth: Double(hasSystemIsland ? simulatedNotchWidth(for: screen) : notchWidth(for: screen)),
       topBarHeight: Double(topBarHeight(menuBarHeight: menuBarHeight, safeAreaTop: safeAreaTop)),
       menuBarHeight: Double(menuBarHeight),
       safeAreaTop: Double(safeAreaTop),
@@ -1966,6 +1893,34 @@ private enum AgentIslandScreenMetricsProvider {
       return screen.auxiliaryTopLeftArea != nil || screen.auxiliaryTopRightArea != nil
     }
     return false
+  }
+
+  /// Built-in touch screens are the Dynamic Island MacBook Pros. Both signals are
+  /// read through the runtime so older SDKs still compile: `touchCapabilities`
+  /// is public from macOS 27; `_centerHUDDefaultFrame` is AppKit's private
+  /// CenterHUD geometry (macOS 27.3), used only as a corroborating signal.
+  /// `XDT_AGENT_ISLAND_SIMULATE_SYSTEM_ISLAND=1` treats the main screen as one,
+  /// for testing in a VM with MenuBarAgent's emulated island.
+  static func screenHasSystemIsland(_ screen: NSScreen) -> Bool {
+    if ProcessInfo.processInfo.environment["XDT_AGENT_ISLAND_SIMULATE_SYSTEM_ISLAND"] == "1" {
+      return screen == NSScreen.screens.first
+    }
+    let hudSelector = NSSelectorFromString("_centerHUDDefaultFrame")
+    if screen.responds(to: hudSelector),
+       let value = screen.value(forKey: "_centerHUDDefaultFrame") as? NSValue,
+       !value.rectValue.isEmpty {
+      return true
+    }
+    let displayNumber = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+    guard displayNumber != 0, CGDisplayIsBuiltin(displayNumber) != 0 else {
+      return false
+    }
+    let touchSelector = NSSelectorFromString("touchCapabilities")
+    guard screen.responds(to: touchSelector),
+          let capabilities = screen.value(forKey: "touchCapabilities") as? NSNumber else {
+      return false
+    }
+    return capabilities.uintValue & 1 != 0
   }
 
   static func notchWidth(for screen: NSScreen) -> CGFloat {
@@ -2042,7 +1997,7 @@ private enum AgentIslandScreenMetricsProvider {
         return bestOverlap.0
       }
     }
-    if let notchedScreen = screens.first(where: { screenHasNotch($0) }) {
+    if let notchedScreen = screens.first(where: { screenHasNotch($0) || screenHasSystemIsland($0) }) {
       return notchedScreen
     }
     return NSScreen.main ?? screens.first
@@ -6562,6 +6517,10 @@ final class AgentIslandController {
       return constrainedCenterX(desiredCenterX, contentWidth: contentWidth)
     }
     let constrained = constrainedCenterX(desiredCenterX, contentWidth: contentWidth)
+    // The center belongs to the system Dynamic Island there; do not pull toward it.
+    if AgentIslandScreenMetricsProvider.screenHasSystemIsland(screen) {
+      return constrained
+    }
     if abs(constrained - screen.frame.midX) <= expandedIslandCenterSnapDistance {
       return constrainedCenterX(screen.frame.midX, contentWidth: contentWidth)
     }
@@ -7008,8 +6967,14 @@ enum AgentIslandDebugHarness {
       width: Double(screenFrame.width),
       height: Double(screenFrame.height)
     )
+    // Mirrors main's default on Dynamic Island displays (computeAgentIslandSystemIslandDefaultCenterXRatio):
+    // right of the system island's expanded footprint, clamped to the screen.
+    var centerX = screenFrame.midX
+    if let screen, AgentIslandScreenMetricsProvider.screenHasSystemIsland(screen) {
+      centerX = min(screenFrame.maxX - frameWidth / 2, screenFrame.midX + 131 + 12 + 298 / 2)
+    }
     let frame = AgentIslandCarrierFrame(
-      x: Double(screenFrame.minX + (screenFrame.width - frameWidth) / 2),
+      x: Double(centerX - frameWidth / 2),
       y: 0,
       width: Double(frameWidth),
       height: 640,
@@ -7464,11 +7429,57 @@ private enum AgentIslandMascotPreview {
   }
 }
 
+/// `--export-mascots <dir>`: writes a still of every skin in each Live Activity status
+/// (`<skin>-running.png`, `-attention.png`, `-completed.png`, 128px) for the widget extension's
+/// asset catalog (native/agent-island/live-activity/build.mjs). The sprite PNGs carry no eyes —
+/// this view draws them — so the extension must use these stills, not the raw sprites.
+private enum AgentIslandMascotExport {
+  static let flag = "--export-mascots"
+
+  static var outputDirectory: URL? {
+    let args = Array(CommandLine.arguments.dropFirst())
+    guard let index = args.firstIndex(of: flag), index + 1 < args.count else { return nil }
+    return URL(fileURLWithPath: args[index + 1], isDirectory: true)
+  }
+
+  @MainActor
+  static func run(to directory: URL) -> Bool {
+    let poses: [(String, AgentIslandMascotAnimationState)] = [
+      ("running", .working), ("attention", .waitingApproval), ("completed", .completed),
+    ]
+    do {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      for skin in AgentIslandMascotCatalog.skins {
+        for (status, state) in poses {
+          let view = AgentIslandMascotView(skin: skin, state: state, size: 64)
+            .agentIslandMascotAnimationsActive(false)
+          let renderer = ImageRenderer(content: view)
+          renderer.scale = 2
+          guard let image = renderer.cgImage,
+                let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+          else {
+            FileHandle.standardError.write(Data("could not render \(skin) \(status)\n".utf8))
+            return false
+          }
+          try png.write(to: directory.appendingPathComponent("\(skin)-\(status).png"))
+        }
+      }
+      return true
+    } catch {
+      FileHandle.standardError.write(Data("\(error)\n".utf8))
+      return false
+    }
+  }
+}
+
 final class AgentIslandAppDelegate: NSObject, NSApplicationDelegate {
   private let controllerManager = AgentIslandDisplayControllerManager()
   private let decoder = JSONDecoder()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    if let directory = AgentIslandMascotExport.outputDirectory {
+      exit(AgentIslandMascotExport.run(to: directory) ? 0 : 1)
+    }
     if AgentIslandMascotPreview.isEnabled {
       AgentIslandMascotPreview.present()
       return

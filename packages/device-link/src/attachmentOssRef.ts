@@ -12,8 +12,8 @@ export const LEGACY_ATTACH_OSS_SCHEME = 'xdt-oss-attach';
 const SHARED_TASK_MEDIA_KEY_PREFIX = 'cindy/device-link/shared-task/';
 
 /**
- * 共享任务附件的对象 key(服务端按 sharedTaskId 与成员授权)。这类对象只存在于官方存储,
- * 本机中转走自建时也要向官方换取地址。
+ * 共享任务附件的资源命名空间。V1 普通对象由原官方媒体接口授权；
+ * V2 的 an3- 不透明回执由 Agent-Net 媒体后端截获，不能送进普通 OSS 请求。
  */
 export function isSharedTaskMediaKey(key: unknown): boolean {
   return typeof key === 'string' && key.startsWith(SHARED_TASK_MEDIA_KEY_PREFIX);

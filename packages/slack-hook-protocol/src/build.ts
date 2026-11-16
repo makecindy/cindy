@@ -36,6 +36,8 @@ import {
   type HookPrefsStateMessage,
   type HookProviderBindCancelMessage,
   type HookProviderBindRevokeMessage,
+  type HookProviderBindSelectMessage,
+  type HookProviderBindSelectionMessage,
   type HookProviderBindStartMessage,
   type HookProviderBindStateMessage,
   type HookProviderBindUpdateMessage,
@@ -77,6 +79,8 @@ import {
   type ProviderBehaviorStatePayload,
   type ProviderBindCancelPayload,
   type ProviderBindRevokePayload,
+  type ProviderBindSelectPayload,
+  type ProviderBindSelectionPayload,
   type ProviderBindStartPayload,
   type ProviderBindStatePayload,
   type ProviderBindUpdatePayload,
@@ -256,6 +260,13 @@ export function makeProviderBindRevoke(
   payload: ProviderBindRevokePayload,
 ): HookProviderBindRevokeMessage {
   return envelope('provider.bind.revoke', payload);
+}
+
+export function makeProviderBindSelect(payload: ProviderBindSelectPayload): HookProviderBindSelectMessage {
+  return envelope('provider.bind.select', payload);
+}
+export function makeProviderBindSelection(payload: ProviderBindSelectionPayload): HookProviderBindSelectionMessage {
+  return envelope('provider.bind.selection', payload);
 }
 
 export function makeProviderBindUpdate(

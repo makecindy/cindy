@@ -202,7 +202,7 @@ it.each([true, false])(
     expect(trigger.className).toContain(
       selected
         ? 'hover:[--button-face-bg:color-mix(in_srgb,currentColor_10%,transparent)]'
-        : 'hover:[--button-face-bg:var(--sidebar-item-hover)]',
+        : 'hover:[--button-face-bg:hsl(var(--sidebar-item-hover))]',
     );
     fireEvent.keyDown(trigger, { key: 'ArrowDown' });
     fireEvent.click(await screen.findByRole('option', { name: /Mac mini/ }));

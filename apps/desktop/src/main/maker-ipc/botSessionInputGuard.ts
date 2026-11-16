@@ -21,7 +21,7 @@ export function botSessionInputBlockReason(
 }
 
 export const SHADOWED_COMPANION_INPUT_MESSAGE =
-  'This teammate now runs on its main computer; continue it there or take it over on this computer';
+  'This buddy now runs on its main computer; continue it there or take it over on this computer';
 
 /**
  * A demoted copy's companion runs on another computer (cloud-companions.md §3): its main

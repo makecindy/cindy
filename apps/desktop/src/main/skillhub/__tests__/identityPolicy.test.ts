@@ -10,7 +10,7 @@ vi.mock('../../authManager', () => ({
   getAuthState: () => ({ user: state.user }),
 }));
 
-vi.mock('../../serverApiClient', () => ({
+vi.mock('../../serverApiClient.desktop', () => ({
   ServerApiError: class ServerApiError extends Error {
     constructor(
       public readonly code: string,

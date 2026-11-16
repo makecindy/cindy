@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { sharedTaskGuestPeer } from '@cindy/device-link';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { __resetTabGroupsForTest, getTabGroup } from '../../tabGroups';
 
 const mocks = vi.hoisted(() => ({
   create: vi.fn(), list: vi.fn(), pin: vi.fn(), merge: vi.fn(), add: vi.fn(), getWindow: vi.fn(),
   status: vi.fn(), save: vi.fn(), quote: vi.fn(), discard: vi.fn(), reveal: vi.fn(),
-  close: vi.fn(), activate: vi.fn(), cache: vi.fn(), clear: vi.fn(), patch: vi.fn(),
+  close: vi.fn(), activate: vi.fn(), cache: vi.fn(), clear: vi.fn(), patch: vi.fn(), info: vi.fn(),
   device: null as string | null, tabs: [] as Array<{ id: string; kind: string; state: unknown }>,
   created: new Set<(payload: any, stamp?: any) => void>(),
   patched: new Set<(payload: any, stamp?: any) => void>(),
@@ -20,7 +21,7 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({ remoteProjectsSto
 vi.mock('@/lib/composerDraftStore', () => ({ saveDraft: mocks.save, appendQuoteToDraft: mocks.quote, discardDraft: mocks.discard, clearDraft: mocks.clear }));
 vi.mock('@/components/chat/useForkAtMessage', () => ({ textToTiptapDoc: (text: string) => ({ type: 'doc', text }) }));
 vi.mock('@/lib/sessionService', () => ({ setStatus: mocks.status }));
-vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
+vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), info: mocks.info } }));
 vi.mock('@/i18n', () => ({ default: { t: (key: string) => key } }));
 vi.mock('../../store', () => ({
   addTab: mocks.add, closeTab: mocks.close, setActiveTab: mocks.activate,
@@ -32,7 +33,8 @@ vi.mock('../../store', () => ({
 vi.mock('../mergeSidebarWindowBack', () => ({ mergeSidebarWindowBack: mocks.merge }));
 vi.mock('../sidebarCommands', () => ({ requestRightSidebarVisibility: mocks.reveal }));
 
-import { openSideChatTab, restoreSideChatTabs, watchSideChatTabs } from '../openSideChatTab';
+import type { Session } from '@/lib/ccAgent.types';
+import { openSideChatTab, restoreSideChatTabs, sideChatUnavailableKey, watchSideChatTabs } from '../openSideChatTab';
 
 // Unit: the user entry must not leave unreachable children or route a remote child locally.
 // Existing sidebar openers do not create task branches; minimal failures are a rejected tab write
@@ -149,6 +151,31 @@ describe('side chat task entry', () => {
     expect(mocks.merge).toHaveBeenCalledWith('parent');
     expect(mocks.create).toHaveBeenCalledTimes(1);
     expect(mocks.merge.mock.invocationCallOrder[0]).toBeLessThan(mocks.create.mock.invocationCallOrder[0]);
+  });
+
+  // Unit, #9136: the host denies maker:side-chat:v1 / list:v1 to shared-task
+  // guests and the UI fell back to the generic "try again" toast. Missed entry
+  // gates must answer locally with the real reason and send nothing. Recovery
+  // re-checks per read: a watcher can start before the guest origin resolves.
+  it('answers shared-task guests locally without asking the host', async () => {
+    mocks.device = sharedTaskGuestPeer('task', 'member', 'host');
+    expect(await openSideChatTab('parent', { quote: 'selected answer' })).toBe(false);
+    expect(mocks.info).toHaveBeenCalledExactlyOnceWith('chat.sideChat.sharedTaskUnavailable');
+    await restoreSideChatTabs('parent');
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.list).not.toHaveBeenCalled();
+  });
+
+  // Unit, #9136 review: /side shows this reason. An archived main task used to
+  // be told to "open from the main task"; a guest whose list snapshot lacks the
+  // origin must still be recognised from the caller's resolved device.
+  it.each([
+    [{ status: 'active' }, undefined, null],
+    [{ status: 'active' }, sharedTaskGuestPeer('task', 'member', 'host'), 'chat.sideChat.sharedTaskUnavailable'],
+    [{ status: 'archived' }, null, 'chat.sideChat.archivedTask'],
+    [{ status: 'active', source: 'review' }, null, 'chat.sideChat.mainTaskOnly'],
+  ])('explains why %o on %s cannot open a side chat', (patch, deviceId, expected) => {
+    expect(sideChatUnavailableKey({ id: 'parent', ...patch } as Session, deviceId)).toBe(expected);
   });
 
   it('recovers remote branches after restart without stealing the active tab', async () => {

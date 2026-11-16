@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { App } from '@modelcontextprotocol/ext-apps';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { McpAppsHost, appServerRevision } from '../host.js';
 import type { AppConnection } from '../connection.js';
 
@@ -20,11 +22,15 @@ function fixture() {
     tools: async () => [tool], resource, listen: () => () => {}, close: vi.fn(async () => {}),
   } as unknown as AppConnection;
   const disposeDocument = vi.fn();
-  const host = new McpAppsHost({ owner: () => owner, config: () => config, readCard: async () => record,
-    writeCard: async () => {}, authorizeTool: async () => {}, sendMessage: async () => {},
+  const readCard = vi.fn(async () => record);
+  const writeCard = vi.fn(async () => {});
+  const host = new McpAppsHost({ owner: () => owner, config: () => config, readCard,
+    writeCard, authorizeTool: async () => {}, sendMessage: async () => {},
     connection: () => connection, disposeDocument });
   hosts.push(host);
-  return { host, resource, disposeDocument, connection };
+  const binding = { id: 'workspace', title: 'Workspace', serverId: config.id,
+    serverRevision: record.serverRevision, resourceUri: record.resourceUri, assertCurrent: vi.fn(() => {}) };
+  return { host, resource, disposeDocument, connection, readCard, writeCard, binding };
 }
 async function initialize(host: McpAppsHost, viewId: string) {
   await host.dispatch('device:phone', 'task', viewId, {
@@ -36,6 +42,124 @@ async function initialize(host: McpAppsHost, viewId: string) {
   await vi.advanceTimersByTimeAsync(0);
 }
 describe('MCP App open cancellation', () => {
+  // UI extension contract: independently opened resources share the real Host,
+  // never fabricate a task/card or replay a tool to obtain a document (unit).
+  it('opens an authorized resource without reading or writing a tool card', async () => {
+    const f = fixture();
+    const document = await f.host.openResource('renderer:1', null, f.binding, {});
+    expect(document.html).toContain('form');
+    expect(f.readCard).not.toHaveBeenCalled();
+    expect(f.writeCard).not.toHaveBeenCalled();
+    await expect(f.host.assertViewAuthorized('renderer:1', null, document.viewId)).resolves.toBeUndefined();
+    expect(f.binding.assertCurrent).toHaveBeenCalled();
+    expect(f.readCard).not.toHaveBeenCalled();
+    await f.host.releaseCaller('renderer:1');
+    expect(() => f.host.context('renderer:1', null, document.viewId, {})).toThrow('MCP_APP_VIEW_UNAVAILABLE');
+  });
+
+  it('refuses a resource whose binding was revoked while HTML was loading', async () => {
+    const f = fixture();
+    const data = await f.resource(f.binding.resourceUri);
+    let finish!: () => void;
+    f.resource.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(data); }));
+    const pending = f.host.openResource('renderer:1', null, f.binding, {});
+    const rejected = expect(pending).rejects.toThrow('MCP_APP_SOURCE_UNAVAILABLE');
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    f.binding.assertCurrent.mockImplementation(() => { throw new Error('MCP_APP_SOURCE_UNAVAILABLE'); });
+    finish();
+    await rejected;
+    expect(f.readCard).not.toHaveBeenCalled();
+    expect(f.writeCard).not.toHaveBeenCalled();
+  });
+
+  it('initializes a standalone resource with the standard bridge and no fabricated tool identity', async () => {
+    const f = fixture();
+    const document = await f.host.openResource('renderer:1', null, f.binding, {
+      toolInfo: { id: 'forged', tool: { name: 'forged', inputSchema: { type: 'object' } } },
+    });
+    await f.host.dispatch('renderer:1', null, document.viewId, {
+      jsonrpc: '2.0', id: 1, method: 'ui/initialize', params: {
+        protocolVersion: '2026-01-26', appInfo: { name: 'Workspace', version: '1' }, appCapabilities: {},
+      },
+    });
+    const events = await f.host.poll('renderer:1', null, document.viewId, 0);
+    const initialized = events.find(event => event.message && 'id' in event.message && event.message.id === 1);
+    expect(initialized?.message).toMatchObject({ result: { protocolVersion: '2026-01-26' } });
+    expect((initialized?.message as { result: { hostContext?: { toolInfo?: unknown } } }).result.hostContext?.toolInfo).toBeUndefined();
+    expect(f.readCard).not.toHaveBeenCalled();
+    expect(f.writeCard).not.toHaveBeenCalled();
+  });
+
+  it('initializes from the authoritative context source and keeps it until the View closes', async () => {
+    const f = fixture();
+    let changed!: () => void;
+    let draft = { revision: 'original' };
+    const stop = vi.fn();
+    const observeContext = vi.fn(async (notify: () => void) => { changed = notify; notify(); return stop; });
+    const document = await f.host.openResource('renderer:1', null, { ...f.binding,
+      observeContext, projectContext: () => ({ draft }),
+    }, {});
+    vi.useFakeTimers();
+    const initialize = async (id: number) => {
+      await f.host.dispatch('renderer:1', null, document.viewId, {
+        jsonrpc: '2.0', id, method: 'ui/initialize', params: {
+          protocolVersion: '2026-01-26', appInfo: { name: 'Workspace', version: '1' }, appCapabilities: {},
+        },
+      });
+      await f.host.dispatch('renderer:1', null, document.viewId, { jsonrpc: '2.0', method: 'ui/notifications/initialized' });
+      await vi.advanceTimersByTimeAsync(0);
+      return f.host.poll('renderer:1', null, document.viewId, 0);
+    };
+    expect(await initialize(1)).toContainEqual(expect.objectContaining({
+      message: expect.objectContaining({ id: 1, result: expect.objectContaining({ hostContext: expect.objectContaining({ cindy: { draft } }) }) }),
+    }));
+    draft = { revision: 'after-edit' }; changed();
+    expect(await initialize(2)).toContainEqual(expect.objectContaining({
+      message: expect.objectContaining({ id: 2, result: expect.objectContaining({ hostContext: expect.objectContaining({ cindy: { draft } }) }) }),
+    }));
+    expect(observeContext).toHaveBeenCalledTimes(1);
+    expect(stop).not.toHaveBeenCalled();
+    expect(f.readCard).not.toHaveBeenCalled();
+    expect(f.writeCard).not.toHaveBeenCalled();
+    await f.host.releaseCaller('renderer:1');
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(() => changed()).not.toThrow();
+  });
+
+  it('calls a standalone resource host tool through the official App SDK without a task or tool card', async () => {
+    const f = fixture();
+    const callHostTool = vi.fn(async () => ({ content: [{ type: 'text' as const, text: '{"opened":true}' }] }));
+    const document = await f.host.openResource('renderer:1', null, { ...f.binding,
+      hostTools: [{ name: 'cindy.ui.open', inputSchema: { type: 'object', properties: { viewId: { type: 'string' } }, required: ['viewId'] } }],
+      callHostTool,
+    }, {});
+    let active = true;
+    const transport: Transport = {
+      async start() {
+        void (async () => {
+          let after = 0;
+          while (active) {
+            try {
+              const events = await f.host.poll('renderer:1', null, document.viewId, after);
+              for (const event of events) { after = event.seq; if (event.message) transport.onmessage?.(event.message); }
+            } catch (error) { if (active) transport.onerror?.(error as Error); return; }
+          }
+        })();
+      },
+      send: message => f.host.dispatch('renderer:1', null, document.viewId, message),
+      async close() { active = false; transport.onclose?.(); },
+    };
+    const app = new App({ name: 'Standalone View', version: '1' }, {}, { autoResize: false });
+    try {
+      await app.connect(transport);
+      expect(await app.callServerTool({ name: 'cindy.ui.open', arguments: { viewId: 'workspace' } }))
+        .toMatchObject({ content: [{ type: 'text', text: '{"opened":true}' }] });
+      expect(callHostTool).toHaveBeenCalledWith('cindy.ui.open', { viewId: 'workspace' }, expect.any(AbortSignal));
+      expect(f.readCard).not.toHaveBeenCalled();
+      expect(f.writeCard).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+
   it('reserves a pending link before its original timeout and accepts its delayed result once', async () => {
     const f = fixture();
     const doc = await f.host.open('device:phone', 'task', 'card', {});

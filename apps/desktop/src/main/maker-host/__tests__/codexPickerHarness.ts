@@ -1,3 +1,5 @@
+import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop.js';
+import { mcpAppModelContext } from '../../mcp-apps/runtime.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -31,17 +33,21 @@ import { createSharedTaskSettingGuard } from '../../maker-ipc/sharedTaskSetting.
 // pending selection, runtime replacement, native fork and SQLite CAS stay real.
 const source = fs.readFileSync(path.resolve(__dirname, '../../maker-ipc/register.ts'), 'utf8');
 const ast = ts.createSourceFile('register.ts', source, ts.ScriptTarget.Latest, true);
-function closure(name: string): string {
+// handleSetModel moved verbatim into sessionRuntimeSelectionApply.ts; it reads its register.ts names
+// through bindPorts(), which this harness answers with the same evaluation scope.
+const applySource = fs.readFileSync(path.resolve(__dirname, '../../maker-ipc/sessionRuntimeSelectionApply.ts'), 'utf8');
+const applyAst = ts.createSourceFile('sessionRuntimeSelectionApply.ts', applySource, ts.ScriptTarget.Latest, true);
+function closure(name: string, tree: ts.SourceFile = ast): string {
   let expression: ts.Expression | undefined;
   const visit = (node: ts.Node) => {
-    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === name) expression = node.initializer;
-    if (ts.isPropertyAssignment(node) && node.name.getText(ast) === name && ts.isArrowFunction(node.initializer)) expression = node.initializer;
-    if (ts.isBinaryExpression(node) && node.left.getText(ast) === name && ts.isArrowFunction(node.right)) expression = node.right;
+    if (ts.isVariableDeclaration(node) && node.name.getText(tree) === name) expression = node.initializer;
+    if (ts.isPropertyAssignment(node) && node.name.getText(tree) === name && ts.isArrowFunction(node.initializer)) expression = node.initializer;
+    if (ts.isBinaryExpression(node) && node.left.getText(tree) === name && ts.isArrowFunction(node.right)) expression = node.right;
     ts.forEachChild(node, visit);
   };
-  visit(ast);
+  visit(tree);
   if (!expression) throw new Error(`Missing production closure ${name}`);
-  return ts.transpileModule(`(${expression.getText(ast)})`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  return ts.transpileModule(`(${expression.getText(tree)})`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 }
 
 export function createCodexPickerHarness(input: {
@@ -96,7 +102,8 @@ export function createCodexPickerHarness(input: {
   };
   const context = vm.createContext(env);
   type Apply = (id: string, model: string, providerId: string | null | undefined, revision: unknown, selection: unknown, options: Record<string, unknown>) => Promise<{ deferred?: boolean; superseded?: boolean }>;
-  const apply = vm.runInContext(closure('handleSetModel'), context) as Apply;
+  env.bindPorts = () => env;
+  const apply = vm.runInContext(closure('handleSetModel', applyAst), context) as Apply;
   env.applySessionRuntimeSelection = (id: string, model: string, providerId: string | null | undefined, selection: unknown, options: Record<string, unknown>) => apply(id, model, providerId, undefined, selection, options);
   const switchDeps = {
     pendingSwitches: pending, getLiveSession: (id: string) => maker.getSession(id),
@@ -106,8 +113,11 @@ export function createCodexPickerHarness(input: {
   env.agentSwitchDeps = switchDeps;
   const beforeSend = vm.runInContext(closure('pendingAgentSwitchApplyHolder'), context) as (id: string) => Promise<{ release(): void }>;
   const transactionDeps: MakerSendTransactionDeps = {
+    getMainClassicalStyle, getResolvedMainLocale, readMcpAppModelContext: id => mcpAppModelContext(id),
     statDirectory: async () => ({ isDirectory: () => true }),
-    getSession: id => maker.getSession(id), closeSession: id => maker.closeSession(id), getSessionMeta: id => maker.getSessionMeta(id),
+    getSession: id => maker.getSession(id), closeSession: id => maker.closeSession(id),
+    closeSessionIfCurrent: async id => { const s = maker.getSession(id); if (s) await maker.closeSessionIfCurrent(s, 'runtime-refresh'); },
+    getSessionMeta: id => maker.getSessionMeta(id),
     preflightBotRuntimeResources: asyncNoop, ensureRemoteReadyForSessionStart: asyncNoop,
     checkWorkDirExists: async () => true, readSessionWorkingDirFromDb: async () => workingDir,
     readWorkingDirectoryRecoveryCreateOpts: async id => {

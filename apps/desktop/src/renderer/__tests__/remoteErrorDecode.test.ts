@@ -5,6 +5,23 @@ import { sharedTaskRecoveryError, sharedTaskRecoveryFor } from '../../shared/sha
 import { i18n } from '@/i18n';
 
 describe('decodeRemoteErrorMessage', () => {
+  // Unit: a real lazy-create rejection must retain the account code and reset
+  // metadata until the banner translates them in its active locale.
+  it('preserves subscription guidance through the actual enqueue rejection', async () => {
+    const raw = 'LAZY_CREATE_FAILED: [SUBSCRIPTION_ACCOUNT_LIMITED] waiting for reset\nresetAtMs=1900000000000';
+    const enqueue = vi.fn().mockRejectedValue(new Error(raw));
+    vi.stubGlobal('window', { dispatchEvent: vi.fn(), electronAPI: { maker: { input: { enqueue },
+      autoTitle: vi.fn().mockResolvedValue({ applied: true, done: true }) } } });
+    try {
+      const id = 'local-task-subscription-reject';
+      expect(await makerChatStore.sendMessage(id, 'continue', 'test-model', 'medium', 'auto', '/test')).toBe(false);
+      expect(makerChatStore.getSnapshot(id).error).toBe(raw);
+      expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t('chat.subscriptionAccountError.limitedUntil', {
+        resetAt: new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium', timeStyle: 'short' }).format(1900000000000),
+      }));
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   // Unit: local task storage can run a shared provider through main. Its
   // lazy-create rejection does not use the device-link optimistic outbox.
   it('preserves recovery reason and stage through the actual enqueue rejection', async () => {
@@ -79,6 +96,13 @@ describe('decodeRemoteErrorMessage', () => {
     expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t('chat.remoteError.REMOTE_COMPAT_MODE_UNSUPPORTED'));
   });
 
+  // #9855, unit: keep the metadata diagnostic marker through the real store's
+  // decoder so ErrorBanner can show recovery before raw details are expanded.
+  it('preserves the Pi cloud-file startup diagnostic through lazy-create decoding', () => {
+    const raw = 'LAZY_CREATE_FAILED: [PI_STARTUP_CLOUD_CONTEXT_FILE] Download ~/Desktop/AGENTS.md in Finder.\npi rpc timeout after 30000ms: set_thinking_level';
+    expect(remoteErrorMessageForBanner(raw)).toBe(raw);
+  });
+
   it('maps a missing auto-review confirmation to i18n text, not a user rejection', () => {
     expect(
       decodeRemoteErrorMessage(
@@ -96,4 +120,23 @@ describe('remote session limit guidance', () => {
     expect(decodeRemoteErrorMessage(message)).toBe(i18n.t('chat.remoteError.REMOTE_AGENT_' + reason));
     expect(remoteErrorMessageForBanner(message)).toBe(message);
   });
+});
+
+// #10187: exercise the actual queue rejection projection. The old code kept
+// reporting a communication/update error and never offered shared-task recovery.
+it('preserves rejected shared history and exposes context handoff recovery', async () => {
+  const raw = 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
+  const enqueue = vi.fn().mockRejectedValue(new Error(raw));
+  vi.stubGlobal('window', { dispatchEvent: vi.fn(), electronAPI: { maker: { input: { enqueue },
+    autoTitle: vi.fn().mockResolvedValue({ applied: true, done: true }) } } });
+  try {
+    const id = 'shared-history-10187';
+    expect(await makerChatStore.sendMessage(id, 'continue', 'test-model', 'medium', 'auto', '/test')).toBe(false);
+    expect(makerChatStore.getSnapshot(id).error).toBe(raw);
+    expect(sharedTaskRecoveryFor(raw, 'share:provider')).toBe('history');
+    expect(sharedTaskRecoveryFor(raw, 'same-account-device')).toBeUndefined();
+    expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t('chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE'));
+    expect(decodeRemoteErrorMessage(raw)).not.toBe(i18n.t('chat.remoteError.REMOTE_AGENT_INVALID'));
+    expect(enqueue).toHaveBeenCalledOnce();
+  } finally { vi.unstubAllGlobals(); }
 });

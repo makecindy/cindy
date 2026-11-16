@@ -27,24 +27,27 @@ export interface PushTokenRegistrationBody {
 
 /**
  * 组装 PUT /push-token 的 body；空 token 返回 null。
- * apnsEnv:dev client(Xcode debug 签名)走 sandbox APNs,TestFlight / App Store /
- * 自建 release 走 prod —— 与 __DEV__ 语义一致。
+ * APNs 环境来自原生签名；Release 也可能使用 development 签名。
+ * iOS 无法识别签名环境时拒绝注册，不猜测生产环境。Android 不使用 APNs。
  */
 export function buildPushTokenRegistrationBody(opts: {
   token: string;
   region: 'cn' | 'global' | 'dev';
-  isDevBuild: boolean;
+  apnsEnvironment?: string | null;
   platform?: 'ios' | 'android';
 }): PushTokenRegistrationBody | null {
   const appVariant = resolvePushAppVariant(opts.region);
   const token = opts.token.trim();
   if (!token) return null;
+  if (opts.platform !== 'android' && !['development', 'production'].includes(opts.apnsEnvironment ?? '')) {
+    throw new Error('Cannot register push token: unknown APNs signing environment');
+  }
   return {
     token,
     platform: opts.platform ?? 'ios',
     provider: opts.platform === 'android' ? 'fcm' : 'apns',
     appVariant,
-    ...(opts.platform === 'android' ? {} : { apnsEnv: opts.isDevBuild ? 'sandbox' as const : 'prod' as const }),
+    ...(opts.platform === 'android' ? {} : { apnsEnv: opts.apnsEnvironment === 'development' ? 'sandbox' as const : 'prod' as const }),
   };
 }
 

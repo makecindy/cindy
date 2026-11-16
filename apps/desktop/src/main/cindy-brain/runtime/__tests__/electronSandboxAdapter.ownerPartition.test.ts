@@ -97,7 +97,7 @@ vi.mock('../../../appSessionState', () => ({
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../../../cindy-media/blobStore', () => ({
+vi.mock('../../../cindy-media/blobStore.desktop', () => ({
   readBlob: vi.fn(),
   resolveHashRef: vi.fn(),
 }));

@@ -15,7 +15,7 @@
  *   - h-8 / px-3 py-1.5 / rounded-full
  *   - text-12 font-medium
  *   - icon size=14,**放在文字前**(与 NewMessageIndicator 一致)
- *   - shadow-md / 同色 token (--content-area / --msg-tool-card-border / --msg-tool-text)
+ *   - --shadow-menu / 同色 token (--content-area / --msg-tool-card-border / --msg-tool-text)
  *
  * 与 NewMessageIndicator 的关系:
  *   两者都在底部居中。NewMessageIndicator 是有未读时的"消息计数",信息密度
@@ -65,7 +65,7 @@ export function JumpToBottomChip({
           // 与 NewMessageIndicator 同款 pill 外形 (h-8 / px-3 py-1.5)
           'flex h-8 items-center gap-1.5 rounded-full px-3 py-1.5',
           'border border-[var(--msg-tool-card-border)]',
-          'bg-[hsl(var(--content-area))] shadow-md',
+          'bg-[hsl(var(--content-area))] shadow-[shadow:var(--shadow-menu)]',
           'text-12 font-medium leading-none text-[var(--msg-tool-text)]',
           'transition-colors duration-150 ease-out',
           // hover:用项目通用 list-item hover token(与 SlashCommandPalette /

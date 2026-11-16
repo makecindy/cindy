@@ -7,14 +7,25 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const source = fs.readFileSync(path.join(__dirname, '../maker-ipc/register.ts'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../maker-ipc/register.ts'), 'utf8').replace(/\r\n?/g, '\n');
+
+// handleSetModel moved verbatim into sessionRuntimeSelectionApply.ts; register.ts keeps the binding
+// (createHandleSetModel) and what follows it. The handler body is the moved function followed by that
+// register.ts tail, in their former order.
+const runtimeSelectionApplySource = fs
+  .readFileSync(path.join(__dirname, '../maker-ipc/sessionRuntimeSelectionApply.ts'), 'utf8')
+  .replace(/\r\n?/g, '\n');
 
 function handlerBody(): string {
-  const start = source.indexOf('const handleSetModel = async (');
+  const movedStart = runtimeSelectionApplySource.indexOf('const handleSetModel = async (');
+  const movedEnd = runtimeSelectionApplySource.indexOf('  return handleSetModel;', movedStart);
+  const start = source.indexOf('const handleSetModel = createHandleSetModel(');
   const end = source.indexOf('applyPiModelSettingsRefresh = async', start);
+  expect(movedStart).toBeGreaterThan(0);
+  expect(movedEnd).toBeGreaterThan(movedStart);
   expect(start).toBeGreaterThan(0);
   expect(end).toBeGreaterThan(start);
-  return source.slice(start, end);
+  return runtimeSelectionApplySource.slice(movedStart, movedEnd) + source.slice(start, end);
 }
 
 describe('agent-device model selection wiring', () => {
@@ -34,7 +45,7 @@ describe('agent-device model selection wiring', () => {
   it('keeps picker clicks as intents and applies them through the live session at send time', () => {
     const body = handlerBody();
     const start = source.indexOf('const applyAgentDeviceRuntimeSelection = async');
-    const end = source.indexOf('const handleSetModel = async (', start);
+    const end = source.indexOf('const handleSetModel = createHandleSetModel(', start);
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
     const branch = source.slice(start, end);
@@ -79,11 +90,14 @@ describe('agent-device model selection wiring', () => {
   it('keeps tasks created from these tasks on the same computer', () => {
     const start = source.indexOf('async function sendToSessionInternal(');
     const body = source.slice(start, source.indexOf('assertDesktopSendDispatched(sendResult', start));
-    expect(body).toContain('if (meta.agentDeviceId && !meta.remoteHostId) inheritedAgentDeviceId = meta.agentDeviceId;');
+    // 来源位置(SSH 除外)交给 resolveSendToSessionCreateRoute；不指定 agent_device_id 时原样继承(单测见
+    // sendToSessionExecutionConfig.test.ts)，解析出的位置写进新任务。
+    expect(body).toContain('const sourceAgentDeviceId = meta.agentDeviceId && !meta.remoteHostId ? meta.agentDeviceId : null;');
+    expect(body).toContain('inheritedAgentDeviceId = route.agentDeviceId ?? undefined;');
     expect(body).toContain('...(inheritedAgentDeviceId ? { agentDeviceId: inheritedAgentDeviceId } : {}),');
-    // 换模型时按那台的目录校验，而不是本机目录。
-    expect(body).toContain('availableModels: deviceRouting?.remoteCodexModels ?? maker.getCapabilities(targetAgent).availableModels,');
-    expect(body).toContain('providerRouting: deviceRouting ?? await getProviderRoutingContext(),');
+    // 换模型或换电脑时按那台的目录校验，而不是本机目录。
+    expect(body).toContain('availableModels: deviceRouting.remoteCodexModels ?? maker.getCapabilities(agentKind).availableModels,');
+    expect(body).toContain('providerRouting: deviceRouting,');
   });
 
   it("lists the other computer's models for Orca leads whose agent runs there", () => {

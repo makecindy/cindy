@@ -1,9 +1,11 @@
-import { createContext, useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import type { ViewInstance } from 'react-native';
+import { createContext, useCallback, useContext, useId, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { AppState, StyleSheet, View } from 'react-native';
 import { useGlobalSearchParams, useSegments } from 'expo-router';
 import { NavigationContext, NavigationRouteContext, useIsFocused } from 'expo-router/react-navigation';
 import { PaneViewportProvider, usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import { useTheme } from '@/theme';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getRecentTasks, recentTaskKey, subscribeRecentTasks } from './recentTasks';
 import { NativeHistoryHost, NativeHistorySlot, needsResidentHistoryUpgrade } from './NativeResidentHistory';
 import { useResidentHomeListContextBridge } from './ResidentHomeList';
@@ -15,8 +17,9 @@ type Frame = { left: number; top: number; width: number; height: number };
 type Entry = { key: string; owner: string; children: ReactNode; frame: Frame;
   focused: boolean; ready: boolean; topInset: number; bottomInset: number; interactive: boolean };
 const Context = createContext<{
-  host: React.RefObject<View | null>;
+  host: React.RefObject<ViewInstance | null>;
   namespace: string;
+  foreground: boolean;
   publish(entry: Entry): void;
   release(owner: string): void;
   setOverlay(owner: string, children: ReactNode): void;
@@ -27,8 +30,13 @@ const Context = createContext<{
  * native content container docks into the route without moving React ownership. */
 export function RecentMessageHistoriesProvider({ children }: { children: ReactNode }) {
   const { colors } = useTheme();
-  const host = useRef<View>(null);
+  const host = useRef<ViewInstance>(null);
   const namespace = useId();
+  const [foreground, setForeground] = useState(AppState.currentState === 'active');
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => setForeground(state === 'active'));
+    return () => subscription.remove();
+  }, []);
   const [overlays, setOverlays] = useState<Map<string, ReactNode>>(() => new Map());
   const setOverlay = useCallback((owner: string, content: ReactNode) => {
     setOverlays(previous => {
@@ -80,7 +88,7 @@ export function RecentMessageHistoriesProvider({ children }: { children: ReactNo
       return next.size === previous.size ? previous : next;
     });
   }, [allowed]);
-  const context = useMemo(() => ({ host, namespace, publish, release, setOverlay }), [namespace, publish, release, setOverlay]);
+  const context = useMemo(() => ({ host, namespace, foreground, publish, release, setOverlay }), [namespace, foreground, publish, release, setOverlay]);
   return <Context.Provider value={context}>
     <View ref={host} collapsable={false} style={styles.container}>
       {children}
@@ -89,8 +97,10 @@ export function RecentMessageHistoriesProvider({ children }: { children: ReactNo
         // Retained histories outlive their route, so no route-level gate covers
         // them. Pause their store subscriptions while hidden; otherwise every
         // task-list change re-renders all retained message trees.
-        const content = <RemoteSessionStoreSubscriptionGate enabled={active}>
-          <MessageHistoryPositioning.Provider value={active && entry.ready}>
+        // App inactivity suspends positioning, not route identity or presentation:
+        // native pickers/menus may make the app inactive without dismissing the task.
+        const content = <RemoteSessionStoreSubscriptionGate enabled={active && foreground}>
+          <MessageHistoryPositioning.Provider value={active && entry.ready && foreground}>
             <MessageHistoryActive.Provider value={active && entry.ready}>{entry.children}</MessageHistoryActive.Provider>
           </MessageHistoryPositioning.Provider>
         </RemoteSessionStoreSubscriptionGate>;
@@ -131,7 +141,7 @@ export function RecentMessageHistories({ activeKey, children, topInset = 0, bott
   const navigation = useContext(NavigationContext);
   const route = useContext(NavigationRouteContext);
   const viewport = usePaneViewport();
-  const anchor = useRef<View>(null);
+  const anchor = useRef<ViewInstance>(null);
   const [frame, setFrame] = useState<Frame | null>(null);
   const revision = useRef(0);
   const measure = useCallback(() => {
@@ -145,6 +155,18 @@ export function RecentMessageHistories({ activeKey, children, topInset = 0, bott
     });
   }, [host]);
   useLayoutEffect(() => { measure(); return () => { ++revision.current; }; }, [measure, focused, viewport.width, viewport.height]);
+  useLayoutEffect(() => {
+    // This is the requested native surface state, not proof of UIKit attachment.
+    // Keep children/message bodies and full task/device identities out of logs.
+    const task = getRecentTasks().find(task => recentTaskKey(task.params) === activeKey);
+    mobileDebugLog('debug', 'recovery', 'message history surface', {
+      hostRef: task?.params.deviceId.slice(0, 8), sessionRef: task?.params.sessionId.slice(0, 8),
+      owner, focused, ready, interactive,
+      nativeSlot: !!NativeHistorySlot, inlineFallback: needsResidentHistoryUpgrade,
+      measured: frame !== null, width: frame?.width, height: frame?.height,
+      left: frame?.left, top: frame?.top, topInset, bottomInset,
+    });
+  }, [activeKey, owner, focused, ready, interactive, frame, topInset, bottomInset]);
   useLayoutEffect(() => () => release(owner), [release, owner]);
   useLayoutEffect(() => {
     if (!frame || needsResidentHistoryUpgrade) return;
@@ -156,7 +178,9 @@ export function RecentMessageHistories({ activeKey, children, topInset = 0, bott
       </NavigationContext.Provider> });
   }, [publish, activeKey, owner, frame, focused, ready, topInset, bottomInset, interactive, navigation, route, viewport.width, viewport.height, children]);
   if (needsResidentHistoryUpgrade) return <View style={styles.container}>
-    <MessageHistoryActive.Provider value={focused}>{children}</MessageHistoryActive.Provider>
+    <MessageHistoryPositioning.Provider value={focused && context.foreground}>
+      <MessageHistoryActive.Provider value={focused}>{children}</MessageHistoryActive.Provider>
+    </MessageHistoryPositioning.Provider>
   </View>;
   return <View ref={anchor} collapsable={false} pointerEvents={NativeHistorySlot ? 'auto' : 'none'} onLayout={measure} style={styles.container}>
     {/* Dock retained content immediately. `ready` gates new props and positioning,

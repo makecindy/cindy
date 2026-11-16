@@ -20,6 +20,8 @@ export async function watchPrivacyInput(
     spawn: (binary: string): ChildProcessWithoutNullStreams =>
       spawn(binary, ['--privacy-input'], { stdio: 'pipe', windowsHide: true }),
   },
+  /** Physical pointer movement (never a lock trigger): the screen's notice brightens. */
+  pointer: () => void = () => {},
 ): Promise<PrivacyInputMonitor> {
   const child = runtime.spawn(await runtime.resolveBinary());
   // Process close proves the OS has removed its hooks, unlike merely sending EOF.
@@ -73,6 +75,7 @@ export async function watchPrivacyInput(
       buffer = buffer.slice(end + 1);
       if (line === pending?.expected) pending.done();
       else if (line === 'local-input') localInput();
+      else if (line === 'pointer') pointer();
       else return fail();
     }
   });
@@ -91,4 +94,149 @@ export async function watchPrivacyInput(
     stop();
     throw error;
   }
+}
+
+export interface AwayGuardInputMonitor extends PrivacyInputMonitor {
+  /** Ask the helper to lock now. Resolves true only once the OS reported the lock. */
+  lock(): Promise<boolean>;
+  /** Best-effort synchronous lock request for app shutdown; the helper also locks on EOF. */
+  lockOnExit(): void;
+}
+
+/** `--away-guard`: the helper itself turns physical input, a missed heartbeat or a
+ * dead Main into the system lock. `stop()` releases it without a lock (the screen is
+ * already locked, or remote desktop takes over the display). `ended` runs once: on the
+ * confirmed lock, or when the helper is gone. The helper stops reading input as soon
+ * as the lock is up and then exits.
+ */
+export async function watchAwayGuardInput(
+  /** `failure` is the helper's fixed word when it reported an unconfirmed lock. */
+  ended: (locked: boolean, failure?: string) => void,
+  /** Fixed word naming what made the helper lock (key, click, heartbeat, …), for logs. */
+  lockingBecause: (reason: string) => void = () => {},
+  runtime = {
+    resolveBinary: resolveDesktopInputBinary,
+    spawn: (binary: string): ChildProcessWithoutNullStreams =>
+      spawn(binary, ['--away-guard'], { stdio: 'pipe', windowsHide: true }),
+  },
+  /** Physical pointer movement (never a lock trigger): the screen's notice brightens. */
+  pointer: () => void = () => {},
+): Promise<AwayGuardInputMonitor> {
+  const child = runtime.spawn(await runtime.resolveBinary());
+  let finished = false;
+  const closed = new Promise<void>((resolve) => child.once('close', () => {
+    finished = true;
+    resolve();
+  }));
+  let locked = false;
+  let failure: string | undefined;
+  let watching = false;
+  let reported = false;
+  let lockedNow: (() => void) | undefined;
+  const lockConfirmed = new Promise<void>((resolve) => {
+    lockedNow = resolve;
+  });
+  const report = () => {
+    if (reported || !watching) return;
+    reported = true;
+    clearInterval(heartbeat);
+    if (!locked && failure) ended(false, failure);
+    else ended(locked);
+  };
+  let buffer = '';
+  let settleReady: ((error?: Error) => void) | undefined;
+  const readyPromise = new Promise<void>((resolve, reject) => {
+    settleReady = (error) => {
+      settleReady = undefined;
+      if (error) reject(error);
+      else resolve();
+    };
+  });
+  const readyTimer = setTimeout(
+    () => settleReady?.(new Error('DESKTOP_PRIVACY_UNAVAILABLE')),
+    5000,
+  );
+  const write = (command: string) => {
+    if (child.stdin.writable) child.stdin.write(`${command}\n`);
+  };
+  const heartbeat = setInterval(() => write('ping'), 1000);
+  child.stderr.resume();
+  child.stdin.on('error', () => {});
+  child.on('error', () => settleReady?.(new Error('DESKTOP_PRIVACY_UNAVAILABLE')));
+  child.stdout.on('data', (data: Buffer) => {
+    buffer += data.toString();
+    if (buffer.length > 1024) buffer = '';
+    let end: number;
+    while ((end = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, end).trim();
+      buffer = buffer.slice(end + 1);
+      // Old Windows helpers treat unknown switches as ordinary input mode and
+      // also print ready; require a mode-specific acknowledgement before masking.
+      if (line === (process.platform === 'win32' ? 'away-ready' : 'ready')) {
+        settleReady?.();
+      } else if (/^reason [a-z-]{1,16}$/.test(line)) {
+        lockingBecause(line.slice('reason '.length));
+      } else if (line === 'pointer') {
+        if (!locked) pointer();
+      } else if (/^lock-failed( [a-z-]{1,16})?$/.test(line)) {
+        failure = line.slice('lock-failed '.length) || 'unknown';
+        // macOS exits after failure; Windows retains its physical-input fence.
+        if (process.platform !== 'win32') finished = true;
+      } else if (line === 'locked') {
+        finished = true;
+        locked = true;
+        lockedNow?.();
+        report();
+      } else if (['permission', 'error', 'released'].includes(line)) {
+        finished = true;
+      }
+      // Windows lock-failed retains the helper and its input hooks; the bounded
+      // lock() call reports failure without removing them.
+    }
+  });
+  void closed.then(() => {
+    clearTimeout(readyTimer);
+    clearInterval(heartbeat);
+    settleReady?.(new Error('DESKTOP_PRIVACY_UNAVAILABLE'));
+    report();
+  });
+  const finish = (command: 'lock' | 'release', timeoutMs: number): Promise<void> => {
+    // Once locked, the helper has stopped reading input and is exiting by itself.
+    if (locked) return Promise.resolve();
+    write(command);
+    let timer: ReturnType<typeof setTimeout>;
+    const timedOut = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        // Windows keeps its physical-input hooks when locking fails. Killing it
+        // here would undo that protection while the desktop remains unlocked.
+        if (process.platform === 'win32' && command === 'lock') resolve();
+        else child.kill();
+      }, timeoutMs);
+      timer.unref();
+    });
+    return Promise.race([closed, lockConfirmed, timedOut]).finally(() => clearTimeout(timer));
+  };
+  try {
+    await readyPromise;
+    // Main can resume after the helper has already locked/exited. Do not publish
+    // that dead input shield or call ended before the caller has its monitor.
+    if (finished) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+  } catch (error) {
+    child.kill();
+    await closed;
+    throw error;
+  }
+  watching = true;
+  return {
+    confirm: () => Promise.reject(new Error('DESKTOP_PRIVACY_UNAVAILABLE')),
+    resume: () => Promise.reject(new Error('DESKTOP_PRIVACY_UNAVAILABLE')),
+    stop: () => finish('release', 2000),
+    lock: async () => {
+      // A timeout returns failure; Windows keeps its hooks until confirmed lock.
+      // macOS tries the system lock, then the shortcut: about 5 s at worst.
+      await finish('lock', 8000);
+      return locked;
+    },
+    lockOnExit: () => write('lock'),
+  };
 }

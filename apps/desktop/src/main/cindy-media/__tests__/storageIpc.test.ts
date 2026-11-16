@@ -25,7 +25,7 @@ vi.mock('electron', () => ({
 
 const schema = await import('../../localDb/schema');
 const ledger = await import('../ledger');
-const blobStore = await import('../blobStore');
+const blobStore = await import('../blobStore.desktop');
 const { scanCache, evictCacheBlobs } = await import('../recycler');
 const { createStorageIpcHandlers } = await import('../storageIpc');
 

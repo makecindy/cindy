@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../outbound-fetch.js', () => ({ outboundFetch: vi.fn() }));
+vi.mock('../outbound-fetch.desktop.js', () => ({ outboundFetch: vi.fn() }));
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: true }),
 }));

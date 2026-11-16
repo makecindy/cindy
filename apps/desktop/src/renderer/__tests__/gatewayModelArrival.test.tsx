@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 it.each(['google/gemini-3.8-flash', 'google/gemini-99-pro-preview'])(
-  'projects the actual Responses-hinted Gateway payload for %s as Google on Pi and served doors elsewhere',
+  'projects the actual Gateway payload for %s with Google identity and the declared Pi Responses route',
   (id) => {
     setActiveCatalog(BUNDLED_CATALOG);
     const parsed = parseModelsSyncPayload({ schemaVersion: 5, accountTier: 'paid', models: [{
@@ -48,9 +48,9 @@ it.each(['google/gemini-3.8-flash', 'google/gemini-99-pro-preview'])(
     const provider = getActiveCatalog().providers.find((p) => p.id === 'xd')!;
     const models = Object.fromEntries(provider.agents.map((agent) => [agent, provider.models[agent]?.find((m) => m.id === id)]));
     const comparison = modelProtocolComparison(provider, models);
-    expect(models.pi).toMatchObject({ id, piApi: 'google-generative-ai', contextWindow: 1_048_576 });
+    expect(models.pi).toMatchObject({ id, nativeApi: 'google-generative-ai', piApi: 'openai-responses', contextWindow: 1_048_576 });
     expect(comparison.reference).toBe('google-generative-ai');
-    expect(comparison.forAgent('pi')).toMatchObject({ outbound: 'google-generative-ai', mode: 'matching' });
+    expect(comparison.forAgent('pi')).toMatchObject({ outbound: 'openai-responses', mode: 'matching' });
     // Cindy AI serves Responses and Messages itself; only Cindy's local conversion is compatibility.
     expect(comparison.forAgent('codex')).toMatchObject({ outbound: 'openai-responses', mode: 'matching' });
     expect(comparison.forAgent('claude-code')).toMatchObject({ outbound: 'anthropic-messages', mode: 'matching' });

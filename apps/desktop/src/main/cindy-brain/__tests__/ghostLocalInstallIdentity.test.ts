@@ -1,5 +1,5 @@
 import { pluginHasToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
-import { ghostPermissionItems, hasGhostUiPermission } from '../../../shared/ghost.js';
+import { ghostPermissionItems, hasGhostUiPermission, ghostCindyModelActionApproved } from '../../../shared/ghost.js';
 import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -327,6 +327,49 @@ it('keeps remote share installation separate from later page capability approval
   }
 });
 
+// #7408 P1, unit: the real stored-release install/update and receipt reload must
+// preserve legacy multibyte schemas; the same package remains invalid as a new package.
+it('keeps historical multibyte parameters usable across market install, update and restart', async () => {
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-parameter-history-')));
+  try {
+    const parameters = { type: 'object', description: '汉'.repeat(6_000) };
+    expect(JSON.stringify(parameters).length).toBeLessThan(16_384);
+    expect(new TextEncoder().encode(JSON.stringify(parameters)).length).toBeGreaterThan(16_384);
+    const raw = {
+      schemaVersion: 3, minCindyVersion: '0.0.0', id: 'historical-parameters',
+      name: 'Historical parameters', version: '1.0.0', entry: 'main.js',
+      tools: [{ name: 'run', description: 'Original tool', parameters }],
+    };
+    const options: GhostManagerOptions = {
+      getRootDir: () => path.join(directory, 'plugins'),
+      mutateSnapshot: async ({ parentDir, ...request }) => runGhostSnapshotWorkerRequest(request, parentDir),
+    };
+    const manager = new GhostManager(options);
+    const file = await writeTestCindyPackage(path.join(directory, 'historical.cindy'), raw);
+    expect(await manager.inspect(file)).toHaveProperty('rejection.code', 'file-invalid');
+    expect(await manager.install(file)).toHaveProperty('rejection.code', 'file-invalid');
+    const inspected = await manager.inspect(file, 'stored-release');
+    expect(inspected).not.toHaveProperty('rejection');
+    const installed = await manager.install(file, { manifestSource: 'stored-release', registrySource: 'market' });
+    if ('rejection' in installed) throw new Error(installed.rejection.reason);
+    const token = ghostInstallApprovalToken(installed.ghost.approval);
+    const next = await writeTestCindyPackage(path.join(directory, 'update.cindy'), { ...raw, version: '2.0.0' });
+    expect(await manager.update(next, { expectedInstalledApproval: token })).toHaveProperty('rejection.code', 'file-invalid');
+    const updated = await manager.update(next, { manifestSource: 'stored-release', expectedInstalledApproval: token });
+    expect(updated).toHaveProperty('ghost');
+    const restarted = new GhostManager(options);
+    expect(restarted.list()).toHaveLength(1);
+    const ghost = restarted.list()[0]!;
+    expect(ghost).toMatchObject({
+      enabled: true, approval: { state: 'approved' }, manifest: { version: '2.0.0', tools: raw.tools },
+    });
+    expect(pluginToolVisible(ghost.manifest, 'run', 'model')).toBe(true);
+    expect(restarted.readApprovedInstallReceipt(installedGhostStoragePart(ghost))?.manifest.tools).toEqual(raw.tools);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 // #7924 / 4420763926 compatibility: real stored-release install/update and startup
 // scan must keep ordinary tools enabled when a syntactically valid UI loses HTML.
 // Existing legacy tests cover malformed declarations only. Unit: absent package page.
@@ -392,6 +435,31 @@ it.each(['missing', 'directory', 'symlink', 'oversized'] as const)('installs and
 
 // Startup must also ignore a missing UI in an older receipt with no availability
 // marker. Keep existing approval and ordinary tools; no forced migration/reinstall.
+// Unit: a stored release installed by an older Host must reload with its original
+// image capability, while model APIs require a separately confirmed update.
+it.each([{}, ['rerank']])('reloads historical model declarations without revoking or expanding permissions: %j', async models => {
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-model-consent-')));
+  try {
+    const raw = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'old-models', name: 'Old', version: '1.0.0', entry: 'main.js',
+      cindy: { image: ['generate'], models } };
+    const file = await writeTestCindyPackage(path.join(directory, 'old.cindy'), raw, { 'main.js': '// ok\n' });
+    const options: GhostManagerOptions = { getRootDir: () => path.join(directory, 'plugins'),
+      mutateSnapshot: async ({ parentDir, ...request }) => runGhostSnapshotWorkerRequest(request, parentDir) };
+    const installed = await new GhostManager(options).install(file, { manifestSource: 'stored-release' });
+    if ('rejection' in installed) throw new Error(installed.rejection.reason);
+    const restarted = new GhostManager(options);
+    const old = restarted.list()[0]!;
+    expect(old).toMatchObject({ enabled: true, approval: installed.ghost.approval, manifest: { cindy: { image: ['generate'] } } });
+    expect(ghostCindyModelActionApproved(old, 'rerank')).toBe(false);
+    const next = await writeTestCindyPackage(path.join(directory, 'next.cindy'), { ...raw, version: '2.0.0',
+      cindy: { ...raw.cindy, models: ['rerank'] } }, { 'main.js': '// ok\n' });
+    const updated = await restarted.update(next, { expectedInstalledApproval: ghostInstallApprovalToken(old.approval),
+      approvedCindyModelActions: ['rerank'] });
+    if ('rejection' in updated) throw new Error(updated.rejection.reason);
+    expect(ghostCindyModelActionApproved(new GhostManager(options).list()[0], 'rerank')).toBe(true);
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
+});
+
 it('keeps an already installed plugin enabled when its page is absent at startup', async () => {
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-old-ui-')));
   try {

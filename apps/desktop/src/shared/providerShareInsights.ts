@@ -3,6 +3,7 @@ import type { ProviderShareBudgetStatus } from './providerShareBudget';
 import type { ProviderUsageDayView } from './providerShare';
 
 export const PROVIDER_SHARE_INSIGHTS_CHANNEL = 'provider-share:insights:v1';
+export const MAX_PROVIDER_SHARE_QUOTA_ACCOUNTS = 512;
 
 export interface ProviderShareVisibility {
   quota: boolean;
@@ -31,6 +32,11 @@ export interface ProviderShareQuotaAccount {
     }>;
   } | null;
 }
+
+/** Member computers also list each pooled subscription account; older ones send one account. */
+export type ProviderShareQuotaAccountResult = ProviderShareQuotaAccount & {
+  accounts?: ProviderShareQuotaAccount[];
+};
 
 export type ProviderShareUsageDay = Omit<ProviderUsageDayView, 'providerId' | 'memberKey'>;
 
@@ -118,7 +124,11 @@ const schema = z.object({
     usage: z.enum(['disabled', 'not-requested', 'ready', 'unavailable']),
   }),
   quota: z
-    .object({ group: z.boolean(), partial: z.boolean(), accounts: z.array(quotaAccount).max(512) })
+    .object({
+      group: z.boolean(),
+      partial: z.boolean(),
+      accounts: z.array(quotaAccount).max(MAX_PROVIDER_SHARE_QUOTA_ACCOUNTS),
+    })
     .nullable(),
   usage: z
     .object({

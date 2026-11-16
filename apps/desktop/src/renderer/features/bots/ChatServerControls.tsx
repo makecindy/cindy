@@ -8,11 +8,19 @@ import { SHARE_EXCLUDE_ATTR } from '@/lib/shareConversationImage';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import type { PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import type { BotGroupDetail, BotGroupMemberView, BotGroupMessageView } from '../../../shared/botGroupChat';
 
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
-const emojiChoices = ['👍', '❤️', '😂', '🎉', '👀', '🙏', '✅', '🤔', '🔥', '👏', '🚀', '💯'];
+const emojiChoices = [
+  '👍', '❤️', '😂', '🎉', '👀', '🙏',
+  '✅', '🤔', '🔥', '👏', '🚀', '💯',
+  '😀', '😄', '😊', '😍', '🥰', '😎',
+  '🤣', '😅', '🥹', '😭', '😮', '😱',
+  '😢', '😡', '🤯', '😴', '🤦', '🤷',
+  '👌', '🤝', '💪', '🙌', '👋', '✨',
+];
 const iconClass = 'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-50';
 export { chatErrorKey } from './chatError';
 
@@ -41,6 +49,7 @@ function useChatReaction(groupId: string | undefined, messageId: string, onChang
 }
 
 interface ChatMessageActionProps {
+  pluginUi: PluginUiMessageCandidates;
   groupId?: string; shareScope: string; message: BotGroupMessageView; align?: 'left' | 'right';
   /** Who can be named on a reaction badge, and the message's reaction version (see `messageReactionRevision`). */
   members?: readonly BotGroupMemberView[]; reactionRevision?: string | number;
@@ -76,13 +85,13 @@ export function ChatMessageReactions({ groupId, message, members, reactionRevisi
   );
 }
 
-function ChatMessageToolbar({ groupId, shareScope, message, align = 'left', onQuote, onReply, replyCountShown, copyText, menuActions, onChanged, picker, onPickerChange, compact = false }: ChatMessageActionProps & {
+function ChatMessageToolbar({ groupId, shareScope, message, align = 'left', onQuote, onReply, replyCountShown, copyText, menuActions, onChanged, picker, onPickerChange, compact = false, pluginUi }: ChatMessageActionProps & {
   picker: boolean; onPickerChange: (open: boolean) => void; compact?: boolean;
 }) {
   const { t } = useTranslation();
   const { busy, react } = useChatReaction(groupId, message.id, onChanged);
   return (
-    <MessageActionBar copyText={copyText ?? message.content} menuActions={menuActions} createdAt={message.createdAt ? new Date(message.createdAt).toISOString() : undefined}
+    <MessageActionBar pluginUi={pluginUi} copyText={copyText ?? message.content} menuActions={menuActions} createdAt={message.createdAt ? new Date(message.createdAt).toISOString() : undefined}
       align={align} hovered simplifiedBotConversation compact={compact}
       onShareAsImage={() => shareSelectionStore.enter(shareScope, message.id)}
       quoteAction={onQuote ? { onClick: onQuote, label: t(key('quoteReply')) } : undefined}
@@ -91,7 +100,10 @@ function ChatMessageToolbar({ groupId, shareScope, message, align = 'left', onQu
       reactionAction={groupId ? { label: t(key('addReaction')), open: picker, onOpenChange: onPickerChange, disabled: busy,
         content: <div className="grid grid-cols-6 gap-1">{emojiChoices.map(emoji =>
           <button type="button" key={emoji} className={iconClass} aria-label={emoji}
-            onClick={() => { onPickerChange(false); void react(emoji, !message.reactions?.some(r => r.emoji === emoji && r.me)); }}>{emoji}</button>)}</div>,
+            onClick={() => { onPickerChange(false); void react(emoji, !message.reactions?.some(r => r.emoji === emoji && r.me)); }}>
+            {/* Color emoji inherit the text color's alpha; keep their native colors fully opaque. */}
+            <span className="text-[color:rgb(from_var(--text-primary)_r_g_b_/_1)]">{emoji}</span>
+          </button>)}</div>,
       } : undefined} />
   );
 }

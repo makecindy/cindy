@@ -39,6 +39,10 @@ export default {
     'src/renderer/features/device-link/useDeviceLinkDeviceList': `export const useDeviceLinkDeviceList=()=>${data}.devices;`,
   },
   cases: {
+    'unselected-hover': {
+      about: 'On an unselected row the trigger hover shows the sidebar hover fill',
+      data: { ...roster, currentIndex: 0, selected: false },
+    },
     default: {
       about: 'This device is current and the row is selected; trigger stays compact',
       data: { ...roster, currentIndex: 0, selected: true },
@@ -52,6 +56,15 @@ export default {
     await page.getByTestId('cindy-device-row').getByRole('combobox').waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'unselected-hover') {
+      const trigger = page.getByTestId('cindy-device-row').getByRole('combobox');
+      await trigger.hover();
+      await page.waitForTimeout(260);
+      const fill = await trigger.evaluate((el) => getComputedStyle(el, '::before').backgroundColor);
+      await ui.capture('trigger-hover');
+      assert.notEqual(fill, 'rgba(0, 0, 0, 0)', 'Trigger hover shows the sidebar hover fill');
+      return;
+    }
     const long = ui.case === 'long-name';
     const local = await ui.t('bots.devicePicker.local');
     const row = page.getByTestId('cindy-device-row');

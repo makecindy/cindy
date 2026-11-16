@@ -17,7 +17,7 @@ const state = vi.hoisted(() => ({
 const peer = vi.hoisted(() => vi.fn());
 const fetchMedia = vi.hoisted(() => vi.fn());
 vi.mock('../filePeer', () => ({ tryPeerFile: peer }));
-vi.mock('../mediaTransfer', () => ({ removeRemote: vi.fn() }));
+vi.mock('../mediaTransfer.desktop', () => ({ removeRemote: vi.fn() }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root }, net: { fetch: fetchMedia } }));
 vi.mock('../../appSessionState', () => ({
   getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: state.owner }),
@@ -32,8 +32,8 @@ vi.mock('../broadcast-tap', () => ({
 
 import * as schema from '../../localDb/schema';
 import { listAllBlobRecords, listCacheBlobsByLru } from '../../cindy-media/ledger';
-import { resolveHashRef } from '../../cindy-media/blobStore';
-import * as blobStore from '../../cindy-media/blobStore';
+import { resolveHashRef } from '../../cindy-media/blobStore.desktop';
+import * as blobStore from '../../cindy-media/blobStore.desktop';
 import { evictCacheBlobs, scanCache } from '../../cindy-media/recycler';
 import { createStorageIpcHandlers } from '../../cindy-media/storageIpc';
 import {

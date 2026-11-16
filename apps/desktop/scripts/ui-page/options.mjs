@@ -30,7 +30,7 @@ const VALUE_OPTIONS = new Set([
   'compare',
   'focus',
 ]);
-const FLAGS = new Set(['preview', 'list', 'help', 'json']);
+const FLAGS = new Set(['preview', 'list', 'help', 'json', 'motion']);
 
 function list(value, all, name) {
   const items = value === 'all' ? all : value.split(',').map((item) => item.trim());
@@ -115,6 +115,10 @@ export function parseOptions(argv) {
     throw new Error(
       '--preview runs one explicit page; it cannot be combined with --changed/--compare',
     );
+  // Checks always render with reduced motion so captures are stable; only a person watching a
+  // preview window may turn the page's real motion back on.
+  if (options.motion && options.mode !== 'preview')
+    throw new Error('--motion only applies to ui:preview; checks always render with reduced motion');
   return options;
 }
 

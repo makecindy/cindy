@@ -1,3 +1,4 @@
+import { REMOTE_DISPLAY_REUSE_MS } from '@/device-link/remoteResourceAvailability';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
@@ -25,7 +26,7 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
   const revoked = useRevokedDevices();
   const { t, i18n } = useTranslation();
   const { connectionEpoch, status, presenceVersion, getPresenceAvailability, invoke, openLink,
-    onRemoteResourceChanged, subscribe, unsubscribe } = useDeviceLink();
+    onRemoteResourceChanged, subscribe, unsubscribe, getSubscriptionIdentity } = useDeviceLink();
   useSyncExternalStore(subscribeRemoteResourceCache, remoteResourceCacheRevision);
   const owner = `${user?.id ?? ''}:${accountGeneration}`;
   const binding = JSON.stringify([owner, collectionId]);
@@ -47,6 +48,18 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
   const settledRef = useRef(false);
   settledRef.current = state.binding === binding && state.settled;
   const presenceKey = targets.map((target) => `${target.deviceId}:${getPresenceAvailability(target.deviceId)}`).join('|');
+  const readKey = JSON.stringify([binding, connectionEpoch, status, presenceKey, targets, i18n.language]);
+  const validatedRead = useRef<string | null>(null);
+  const subscriptionReader = useRef(getSubscriptionIdentity); subscriptionReader.current = getSubscriptionIdentity;
+  const subscriptionStamp = () => {
+    if (!targets.length) return 'empty';
+    const stamps = targets.map(host => subscriptionReader.current?.(host.deviceId, ['sessions']) ?? null);
+    return stamps.some(stamp => stamp === null) ? null : JSON.stringify(stamps);
+  };
+  const validatedSubscription = useRef<string | null>(null);
+  const validatedAt = useRef(0);
+  const changes = useRef(0);
+  const validatedChanges = useRef(-1);
   void presenceVersion;
   useEffect(() => {
     generation.current += 1;
@@ -92,6 +105,9 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
     // dependency will schedule the same read once the relay is online.
     if ((status === 'stopped' || status === 'connecting') && !settledRef.current) return;
     const expected = ++generation.current;
+    const changeAtStart = changes.current;
+    const subscriptionAtStart = subscriptionStamp();
+    validatedRead.current = null;
     const signal = focusController.current.signal;
     const current = () => !run.isStale() && !signal.aborted && generation.current === expected
       && bindingRef.current === binding && active.current && AppState.currentState === 'active';
@@ -140,9 +156,12 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
       settled: true, loading: false, refreshing: false,
       error: failures.length ? failures.slice(0, 2).map(formatRemoteError).join('\n') : targets.length ? null : t('devices.resources.noHosts'),
     }));
-    if (!failures.length) recovery.current?.succeeded();
+    if (!failures.length) {
+      validatedRead.current = readKey; validatedChanges.current = changeAtStart; validatedAt.current = Date.now(); validatedSubscription.current = subscriptionAtStart === subscriptionStamp() ? subscriptionAtStart : null;
+      recovery.current?.succeeded();
+    }
     else failures.forEach(error => recovery.current?.failed(error));
-  }, [binding, collectionId, connectionEpoch, enabled, getPresenceAvailability, hydrated, i18n.language, invoke, openLink, presenceKey, status, t, targets]);
+  }, [binding, collectionId, connectionEpoch, enabled, getPresenceAvailability, hydrated, i18n.language, invoke, openLink, presenceKey, readKey, status, t, targets]);
 
   // Phase pushes can arrive faster than a roster RPC. Keep one active read and
   // one latest follow-up, using the same coordinator as other remote snapshots.
@@ -150,6 +169,17 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
     read, JSON.stringify([binding, connectionEpoch, status, presenceKey, targets, enabled, hydrated]),
   );
   const refresh = useCallback((visible = true) => requestRefresh({ reason: visible ? 'visible' : 'changed' }), [read, requestRefresh]);
+
+  // Keep invalidation listening while hidden, but do no network work until visible.
+  useEffect(() => {
+    const off = onRemoteResourceChanged((deviceId, payload) => {
+      if (payload.collectionId !== collectionId || !targets.some(host => host.deviceId === deviceId)) return;
+      changes.current++;
+      if (active.current && AppState.currentState === 'active') void refresh(false);
+    });
+    const app = AppState.addEventListener('change', next => { if (next !== 'active') changes.current++; });
+    return () => { off(); app.remove(); };
+  }, [collectionId, onRemoteResourceChanged, refresh, targets]);
 
   // Persist after commit, never from a React state updater (which may be replayed).
   useEffect(() => {
@@ -164,21 +194,18 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
       focusController.current = new AbortController();
       recovery.current = createRemoteReadRecovery(() => { void requestRefresh({ reason: 'retry' }); },
         () => active.current && status === 'online' && AppState.currentState === 'active');
-      if (active.current) void refresh(false);
+      if (active.current && (validatedRead.current !== readKey || validatedChanges.current !== changes.current || validatedSubscription.current === null || validatedSubscription.current !== subscriptionStamp() || Date.now() - validatedAt.current >= REMOTE_DISPLAY_REUSE_MS)) void refresh(false);
     };
     const stop = () => { active.current = false; generation.current += 1;
       focusController.current.abort(); recovery.current?.dispose(); };
     start();
     const foreground = AppState.addEventListener('change', (value) => { stop(); if (value === 'active') start(); });
-    const off = onRemoteResourceChanged((deviceId, payload) => {
-      if (AppState.currentState === 'active' && payload.collectionId === collectionId && targets.some((host) => host.deviceId === deviceId)) void refresh(false);
-    });
     const cleanups = targets.map((target) => startFocusedTopicSubscription({
       deviceId: target.deviceId, owner: `remote-collection:${collectionId}:${target.deviceId}`,
       subscribe, topic: 'sessions', unsubscribe,
     }));
-    return () => { stop(); foreground.remove(); off(); cleanups.forEach((cleanup) => cleanup()); };
-  }, [collectionId, enabled, onRemoteResourceChanged, refresh, requestRefresh, status, subscribe, targets, unsubscribe]));
+    return () => { stop(); foreground.remove(); cleanups.forEach((cleanup) => cleanup()); };
+  }, [collectionId, enabled, readKey, refresh, requestRefresh, status, subscribe, targets, unsubscribe]));
   const ownState = state.binding === binding;
   const visibleItems = useMemo(() => revoked.size ? state.items.filter(row => !revoked.has(row.host.deviceId)) : state.items, [state.items, revoked]);
   const isOnline = useCallback((host: RemoteResourceHostTarget) => ownState && isRemoteResourceHostOnline(

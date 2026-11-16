@@ -2,9 +2,9 @@
  * RightSidebarToggle — 工具面板开关按钮（纯图标，无选中底色）
  * ---------------------------------------------------------------------------
  * 单一一份裸图标按钮，多处复用，两平台同款样式、不同落点：
- *   - Mac：由 MainLayout 钉在窗口右上角。
- *   - Windows：内嵌展开时位于右栏 TabBar 末端；收起或分离时由 MainLayout
- *     放在内容区靠面板一侧的角上。入口不依赖具体路由页面渲染。
+ *   - Mac：显示入口钉在聊天区右上角；关闭入口跟随侧栏。
+ *   - Windows：显示入口始终在聊天区靠面板一侧的角上；关闭入口位于 TabBar 末端。
+ *     入口不依赖具体路由页面渲染。
  * `action="show"` 是单向显示 / 聚焦语义，关闭或收起由面板自己的按钮负责。
  * resting 无底无边、仅 hover 底色（用户明确这个开关不要圆底；chip 栈里下方两个
  * chip 保留圆底，裸图标 + 圆底 chip 连成一列）。尺寸 h-7 / 图标 15 / 圆形，与左栏折叠按钮
@@ -15,7 +15,7 @@
  * ——图标画的就是"面板贴哪条边",跟着面板走才不说谎。
  */
 
-import { PanelLeft, PanelRight } from 'lucide-react';
+import { PanelLeft, PanelRight, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Tip } from '@/components/ui/tooltip';
@@ -27,8 +27,8 @@ interface RightSidebarToggleProps {
   onToggle: () => void;
   /** 面板当前贴哪条边(B2b:由布局树推导,经 MainLayout 下发);决定图标方向。默认 'right'。 */
   side?: 'left' | 'right';
-  /** toggle 表达展开 / 收起；show 是主窗口里固定保留的显示 / 聚焦入口。 */
-  action?: 'toggle' | 'show';
+  /** toggle 表达展开 / 收起；show 是聊天区的显示入口；close 是侧栏的关闭入口。 */
+  action?: 'toggle' | 'show' | 'close';
 }
 
 export function RightSidebarToggle({
@@ -38,11 +38,13 @@ export function RightSidebarToggle({
   action = 'toggle',
 }: RightSidebarToggleProps) {
   const { t } = useTranslation();
-  const Icon = side === 'left' ? PanelLeft : PanelRight;
+  const Icon = action === 'close' ? X : side === 'left' ? PanelLeft : PanelRight;
   // B2c:文案只说动作(折叠/展开),不提"右栏"等方位名词 —— 按钮按位置寻址,
   // 管的是"贴这条缘的面板",绑定方位词会在面板换侧后说谎。
   const label = t(
-    action === 'show'
+    action === 'close'
+      ? 'rightSidebar.tabs.controls.closeAria'
+      : action === 'show'
       ? 'rightSidebar.tabs.controls.showAria'
       : collapsed
         ? 'contentHeader.expandPanel'
@@ -61,7 +63,7 @@ export function RightSidebarToggle({
         )}
         onClick={onToggle}
         aria-label={label}
-        aria-expanded={!collapsed}
+        aria-expanded={action === 'close' ? undefined : !collapsed}
       >
         <Icon size={15} />
       </button>

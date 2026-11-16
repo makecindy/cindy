@@ -8,8 +8,10 @@ import type { BotProfile } from './botStore';
 import { useBotSettingsTarget } from './useBotSettingsTarget';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { BotDeleteDialog } from './BotDeleteDialog';
 import { withoutBotHiddenLanes } from './botGroupLane';
+import appI18n from 'i18next';
 
 /**
  * User-facing Bot management only. Health counters, delivery queues, Routes and
@@ -109,42 +111,32 @@ export function BotLifecycleSettings({
     >
       {mode !== 'history' ? (
         <>
-          <div className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+          <SettingsCard>
             {isPaused ? (
-              <button
-                type="button"
+              <SettingsRow
+                lead={<PlayCircle size={16} aria-hidden className="text-[var(--text-secondary)]" />}
+                title={t(actionBusy === 'resume' ? 'bots.lifecycle.working' : 'bots.lifecycle.resume')}
                 disabled={actionBusy !== null}
                 onClick={() => void runLifecycleAction('resume')}
-                className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-default)] px-4 py-3 text-left text-14 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
-              >
-                <PlayCircle size={18} />
-                {t(actionBusy === 'resume' ? 'bots.lifecycle.working' : 'bots.lifecycle.resume')}
-              </button>
+              />
             ) : null}
             {!isArchived && !isPaused && bot.status !== 'deleting' ? (
-              <button
-                type="button"
-                onClick={() => void runLifecycleAction('restart')}
+              <SettingsRow
+                lead={<RotateCcw size={16} aria-hidden className="text-[var(--text-secondary)]" />}
+                title={t(actionBusy === 'restart' ? 'bots.lifecycle.restarting' : 'bots.lifecycle.restart')}
                 disabled={actionBusy !== null}
                 aria-busy={actionBusy === 'restart'}
-                className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-default)] px-4 py-3 text-left text-14 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
-              >
-                <RotateCcw size={18} />
-                {t(
-                  actionBusy === 'restart' ? 'bots.lifecycle.restarting' : 'bots.lifecycle.restart',
-                )}
-              </button>
+                onClick={() => void runLifecycleAction('restart')}
+              />
             ) : null}
-            <button
-              type="button"
+            <SettingsRow
+              danger
+              lead={<Trash2 size={16} aria-hidden className="text-[var(--text-danger)]" />}
+              title={t('bots.lifecycle.deleteTitle')}
               disabled={actionBusy !== null || bot.status === 'deleting'}
               onClick={() => void requestDelete()}
-              className="flex min-h-12 w-full items-center gap-3 px-4 py-3 text-left text-14 text-[var(--text-danger)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
-            >
-              <Trash2 size={18} />
-              {t('bots.lifecycle.deleteTitle')}
-            </button>
-          </div>
+            />
+          </SettingsCard>
           {restarted ? (
             <p className="mt-3 text-12 text-[var(--text-secondary)]" role="status">
               {t('bots.lifecycle.restarted')}
@@ -234,7 +226,7 @@ export function BotLifecycleSettings({
                           </span>
                         ) : null}
                         <span className="mt-1 block text-10 text-[var(--text-tertiary)]">
-                          {new Date(hit?.createdAt ?? item.session.updatedAt).toLocaleString()}
+                          {new Date(hit?.createdAt ?? item.session.updatedAt).toLocaleString(appI18n.language)}
                         </span>
                       </button>
                     );
@@ -269,7 +261,7 @@ export function BotLifecycleSettings({
                         {item.title}
                       </span>
                       <span className="block text-10 text-[var(--text-tertiary)]">
-                        {new Date(item.updatedAt).toLocaleString()}
+                        {new Date(item.updatedAt).toLocaleString(appI18n.language)}
                       </span>
                     </span>
                     <span className="text-11 text-[var(--text-secondary)]">{t('bots.open')}</span>

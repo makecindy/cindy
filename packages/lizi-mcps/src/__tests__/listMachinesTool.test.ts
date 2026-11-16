@@ -41,4 +41,32 @@ describe('list_machines', () => {
     expect(await call('list_machines')).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
     expect(list).not.toHaveBeenCalled();
   });
+  // New pre-control entry: the real MCP surface must bind the caller identity and
+  // preserve a denial. Existing listing tests cannot cover this write-intent path (unit).
+  it('lists the consent tool and returns the target decision without treating refusal as a grant', async () => {
+    const list = vi.fn(async () => ({ ok: true as const, machines: {} }));
+    const requestRemoteControl = vi.fn(async () => ({ ok: true as const, status: 'declined' }));
+    const { names, call } = await connect(list, { machines: { list, requestRemoteControl } });
+    expect(await names()).toContain('request_remote_control');
+    const discovery = await call('list_tools', { key: 'devices.remote-consent' });
+    const relay = await call('list_tools', { query: '中转' });
+    expect(relay.items).toEqual(expect.arrayContaining([expect.objectContaining({ key: 'devices.remote-settings' })]));
+    expect(discovery.control.operations).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'request_remote_control' })]));
+    expect(await call('request_remote_control', { device_id: 'target', purpose: 'Download source' }))
+      .toMatchObject({ ok: true, device_id: 'target', status: 'declined' });
+    expect(requestRemoteControl).toHaveBeenCalledWith({ callerSessionId: 's1', deviceId: 'target', purpose: 'Download source' });
+    expect(await call('call_tool', { name: 'request_remote_control', args: { device_id: 'target', purpose: 'Download source' } }))
+      .toMatchObject({ ok: true, status: 'declined' });
+  });
+
+  it('does not send consent requests from a restricted task', async () => {
+    const list = vi.fn(async () => ({ ok: true as const, machines: {} }));
+    const requestRemoteControl = vi.fn();
+    const { names, call } = await connect(list, { machines: { list, requestRemoteControl }, resolveSurface: async () => 'restricted' });
+    expect(await names()).not.toContain('request_remote_control');
+    expect(await call('request_remote_control', { device_id: 'target', purpose: 'Download source' }))
+      .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+    expect(requestRemoteControl).not.toHaveBeenCalled();
+  });
+
 });

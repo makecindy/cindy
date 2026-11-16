@@ -12,7 +12,13 @@ const local = vi.fn();
 const remote = vi.fn();
 const value = (): RemoteModelAccessView => ({ version: 1, models: null, providerModels: null,
   availableModels: [{ id: 'small', name: 'Small' }, { id: 'large', name: 'Large' }] });
+// Budget fields are shared Selects: open with the keyboard, then pick the option.
+async function chooseOption(field: string, option: string) {
+  fireEvent.keyDown(screen.getByRole('combobox', { name: field }), { key: 'ArrowDown' });
+  fireEvent.click(await screen.findByRole('option', { name: option }));
+}
 beforeEach(() => {
+  Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
   local.mockReset().mockImplementation(async () => value());
   remote.mockReset().mockImplementation(async (cmd) => local(cmd.request.command));
   Object.assign(window, { electronAPI: {
@@ -89,7 +95,7 @@ describe('remote model settings', () => {
     render(<RemoteModelAccessDialog providerId="p" memberId="alice" onClose={() => {}} />);
     fireEvent.click(await screen.findByRole('button', { name: 'providerShare.memberBudget.addGroup' }));
     expect(screen.getByText('providerShare.memberBudget.used 20.00')).toBeTruthy();
-    fireEvent.change(screen.getByRole('combobox', { name: 'providerShare.memberBudget.chooseModels' }), { target: { value: 'large' } });
+    await chooseOption('providerShare.memberBudget.chooseModels', 'Large');
     expect(screen.getByText('providerShare.memberBudget.used 80.00')).toBeTruthy();
     expect(screen.getByText('providerShare.memberBudget.draftExceeded')).toBeTruthy();
     expect((screen.getByRole('checkbox', { name: 'providerShare.memberBudget.enable' }) as HTMLInputElement).checked).toBe(false);
@@ -147,7 +153,7 @@ describe('remote model settings', () => {
     render(<RemoteModelAccessDialog providerId="p" memberId="alice" onClose={closed} />);
     const percent = await screen.findByLabelText('providerShare.memberBudget.maxPercent');
     fireEvent.change(percent, { target: { value: '25' } });
-    fireEvent.change(screen.getByRole('combobox', { name: 'providerShare.memberBudget.recommended' }), { target: { value: 'large' } });
+    await chooseOption('providerShare.memberBudget.recommended', 'Large');
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
     await screen.findByRole('alert');
     expect((percent as HTMLInputElement).value).toBe('25');

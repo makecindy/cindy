@@ -31,12 +31,14 @@ export function buildAgentIslandQuota(view: MenubarView | null): AgentIslandQuot
   const lowestText = view.statusTextByMode.lowest;
   const readings = view.sources.flatMap((cell) => {
     if (cell.kind === 'payg' || cell.fill === null) return [];
-    const text = cell.value !== null ? `${cell.value}${cell.valueUnit ?? ''}` : (cell.valueLabel ?? '');
+    const unit = cell.valueUnit ?? '';
+    const separator = unit && unit !== '%' ? ' ' : '';
+    const text = cell.value !== null ? `${cell.value}${separator}${unit}` : (cell.valueLabel ?? '');
     return text ? [{ cell, text }] : [];
   });
   // Plans at the same percentage read alike; the first in the user's order stands for them.
   // When every subscription is used up the menu bar says "0%" while plans that only have extra
-  // credits left show a label, so the first of those stands for it instead.
+  // credits left show their balance, so the first of those stands for it instead.
   const lowestCell = lowestText
     ? (readings.find(({ cell, text }) => cell.kind === 'subscription' && cell.value !== null && text === lowestText)
       ?? readings.find(({ cell }) => cell.kind === 'subscription' && cell.reserve))?.cell

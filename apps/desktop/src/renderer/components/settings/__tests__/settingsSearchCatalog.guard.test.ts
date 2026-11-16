@@ -48,7 +48,7 @@ describe('settings search anchor contract', () => {
             definitions.set(local, namespace[exported] as Record<string, SettingsSearchEntry>);
         }
       }
-      for (const match of text.matchAll(/id=\{(\w+)\.(\w+)\.targetId\}/g)) {
+      for (const match of text.matchAll(/\b(?:id|titleId)=\{(\w+)\.(\w+)\.targetId\}/g)) {
         const definition = definitions.get(match[1])?.[match[2]];
         if (definition) definitionTargets.add(definition.targetId);
       }
@@ -79,7 +79,7 @@ describe('settings search anchor contract', () => {
       if (target === 'personal-im-wechat') continue;
       if (target) {
         const dynamicProviderAnchor =
-          /^cindy-im-(slack|telegram|x)$/.test(target) &&
+          /^cindy-im-(slack|telegram|x|feishu)$/.test(target) &&
           source.includes('id={`cindy-im-${provider}`}');
         expect(
           source.includes('id="' + target + '"') ||

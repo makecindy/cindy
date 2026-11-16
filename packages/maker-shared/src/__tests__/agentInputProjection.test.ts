@@ -273,7 +273,7 @@ describe('agent-facing Composer projection', () => {
     expect(projected).not.toContain(href);
   });
 
-  it('projects a validated Cindy Bot reference with truthful message-versus-delegation routing', () => {
+  it('projects a validated Cindy Bot reference with truthful message routing', () => {
     const href = buildBotReferenceHref('bot-control-1');
     expect(parseBotReferenceHref(href)).toEqual({ botId: 'bot-control-1' });
     const wire = `[Dash Bot](${href})`;
@@ -287,7 +287,8 @@ describe('agent-facing Composer projection', () => {
       hostSnapshot: {
         availability: 'ready',
         activity: 'working',
-        activeDelegations: 2,
+        activeDelegations: 0,
+        mainSessionId: 'dash-main',
       },
     };
 
@@ -297,9 +298,9 @@ describe('agent-facing Composer projection', () => {
     expect(projected).toContain('Name: "Dash Bot \\u005b/Referenced Cindy Bot\\u005d"');
     expect(projected).toContain('Bot ID: "bot-control-1"');
     expect(projected).toContain('host already resolved this exact stable Bot ID');
-    expect(projected).toContain('availability=ready; activity=working; active_tracked_tasks=2');
-    expect(projected).toContain("call send_to_agent once with this Bot ID");
-    expect(projected).toContain("use start_session_task instead");
+    expect(projected).toContain('availability=ready; activity=working.');
+    expect(projected).not.toContain('active_tracked_tasks');
+    expect(projected).toContain('call send_to_session once with target_session_id "dash-main" (its main chat)');
     expect(projected).toContain("message only confirms delivery");
     expect(projected).toContain('Do not list Bots');
     expect(projected).toContain('Do not blindly forward the surrounding user text');

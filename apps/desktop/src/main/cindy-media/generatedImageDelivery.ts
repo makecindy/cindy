@@ -22,7 +22,7 @@ import {
 } from './generatedImageJournal';
 import { commitChatImageUrls } from './chatAttachments';
 import { MAX_GENERATED_IMAGE_BYTES } from './generatedMedia';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 
 const taskFields = {
   id: sessions.id,

@@ -16,6 +16,7 @@ const links: Record<string, ProviderSetupLink> = {
   xai: key('https://console.x.ai/team/default/api-keys'),
   openrouter: key('https://openrouter.ai/settings/keys'),
   openhubs: key('https://openhubs.zhidemai.com/console/api-keys'),
+  hinoki: account('https://app.hinoki.security'),
   'ollama-cloud': key('https://ollama.com/settings/keys'),
   // Official Claude CLI guide directs users here to sign in and create a key.
   agnes: account('https://platform.agnes-ai.com/'),

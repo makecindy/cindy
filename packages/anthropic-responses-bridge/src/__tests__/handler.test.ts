@@ -95,6 +95,39 @@ afterEach(() => {
 });
 
 describe('createResponsesHandler', () => {
+  // #9469: translator-only tests cannot detect a later provider rewrite dropping
+  // tool images. Capture the serialized upstream request after all normalization.
+  it.each([
+    { prefix: 'xai/', model: 'grok-4.7', upstreamBase: 'https://api.x.ai/v1' },
+    { prefix: 'chatgpt/', model: 'gpt-5.5', upstreamBase: 'https://chatgpt.com/backend-api/codex' },
+  ])('delivers Claude Code tool images to $prefix Responses', async ({ prefix, model, upstreamBase }) => {
+    const seen: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+      seen.push({ url: String(url), body: JSON.parse(String(init.body)) });
+      return new Response(sse(OK_SSE), { headers: { 'content-type': 'text/event-stream' } });
+    }));
+    const result = await invoke(createResponsesHandler({ providers: [providerConfig({ prefix, upstreamBase })] }), {
+      model: prefix + model, stream: true, messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'read_image', name: 'Read', input: { file_path: '/fixture.png' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read_image', content: [
+          { type: 'text', text: 'image loaded' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AA==' } },
+        ] }] },
+      ],
+    });
+    expect(result.status).toBe(200);
+    expect(result.text).toContain('message_stop');
+    expect(seen).toHaveLength(1);
+    expect(seen[0].url).toBe(upstreamBase + '/responses');
+    expect(seen[0].body.input).toEqual([
+      { type: 'function_call', call_id: 'read_image', name: 'Read', arguments: '{"file_path":"/fixture.png"}' },
+      { type: 'function_call_output', call_id: 'read_image', output: [
+        { type: 'input_text', text: 'image loaded' },
+        { type: 'input_image', image_url: 'data:image/png;base64,AA==' },
+      ] },
+    ]);
+  });
+
   it.each(['max', 'ultra'])('honors declared %s capability without changing legacy providers', async (effort) => {
     const seen: Array<{ reasoning: { effort: string } }> = [];
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {

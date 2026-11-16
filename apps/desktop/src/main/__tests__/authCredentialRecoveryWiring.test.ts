@@ -72,9 +72,9 @@ describe('production credential recovery wiring', () => {
     { rejects: false, versionLaunchPending: true },
     { rejects: true, versionLaunchPending: false },
     { rejects: true, versionLaunchPending: true },
-  ])(
-    'requests recovery when initialization rejects=$rejects and versionLaunchPending=$versionLaunchPending without replacing its outcome',
-    async ({ rejects, versionLaunchPending }) => {
+  ].flatMap(row => [false, true].map(hostClientMode => ({ ...row, hostClientMode }))))(
+    'preserves recovery owner and outcome: rejects=$rejects, pending=$versionLaunchPending, client=$hostClientMode',
+    async ({ rejects, versionLaunchPending, hostClientMode }) => {
       const start = bootstrap.indexOf("ipcMain.handle('auth:initialize',");
       const end = bootstrap.indexOf("ipcMain.handle('auth:get-login-state',", start);
       expect(start).toBeGreaterThan(-1);
@@ -88,6 +88,7 @@ describe('production credential recovery wiring', () => {
       const recordStartupResult = vi.fn();
       const getAuthState = vi.fn(() => outcome);
       const deps = {
+        hostClientMode,
         ipcMain: {
           handle: (_channel: string, callback: typeof handler) => {
             handler = callback;
@@ -107,7 +108,7 @@ describe('production credential recovery wiring', () => {
       new Function(...Object.keys(deps), compiled)(...Object.values(deps));
       if (rejects) await expect(handler()).rejects.toBe(outcome);
       else await expect(handler()).resolves.toBe(outcome);
-      expect(request).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenCalledTimes(hostClientMode ? 0 : 1);
       if (!rejects && versionLaunchPending) {
         expect(recordStartupResult).toHaveBeenCalledExactlyOnceWith(
           outcome,

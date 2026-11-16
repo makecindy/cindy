@@ -16,6 +16,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { compileFunction, constants as vmConstants } from 'node:vm';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPrivateNetwork } from '@cindy/agent-net-relay';
 
 const appRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-relay-deploy-test-'));
 const appPath = path.join(appRoot, 'apps', 'desktop');
@@ -23,6 +24,8 @@ const bundleDir = path.join(appRoot, 'packages', 'device-link-relay', 'dist');
 fs.mkdirSync(appPath, { recursive: true });
 fs.mkdirSync(bundleDir, { recursive: true });
 fs.writeFileSync(path.join(bundleDir, 'relay.mjs'), 'export {};\n');
+const v2BundleDir = path.join(appRoot, 'packages', 'agent-net-relay', 'dist');
+fs.mkdirSync(v2BundleDir, { recursive: true }); fs.writeFileSync(path.join(v2BundleDir, 'relay.mjs'), 'export {};\n');
 
 type Exec = { stdout: string; stderr: string; exitCode: number | null };
 const mocks = vi.hoisted(() => ({
@@ -43,7 +46,7 @@ vi.mock('../../remote-ssh/index.js', () => ({
       execStream: mocks.stream,
       exec: vi.fn(async (command: string, options: { label: string; input?: Buffer }) => {
         mocks.commands.push({ label: options.label, command });
-        if (options.label === 'relay-deploy-upload') {
+        if (options.label === 'relay-deploy-upload' || options.label === 'relay-deploy-agent-net-upload') {
           mocks.responses[options.label]?.(command, options.input);
           const { createHash } = await import('node:crypto');
           return {
@@ -53,7 +56,7 @@ vi.mock('../../remote-ssh/index.js', () => ({
           };
         }
         const respond = mocks.responses[options.label];
-        return respond ? respond(command) : { stdout: '', stderr: '', exitCode: 0 };
+        return respond ? respond(command, options.input) : { stdout: '', stderr: '', exitCode: 0 };
       }),
     }),
   }),
@@ -147,6 +150,30 @@ describe('deployRelayToServer', () => {
     expect(privileged.length).toBeGreaterThan(0);
     expect(privileged.every((c) => c.command.startsWith('sudo -n bash -c '))).toBe(true);
     expect(fetch).toHaveBeenCalledWith('https://203.0.113.10/api/device-link/relay/info', expect.anything());
+  });
+  // The V2 process must receive only public bootstrap material, and authenticated reachability must precede a successful receipt.
+  it('deploys an independent V2 process using the existing owner vault and verifies its pinned directory', async () => {
+    const { bootstrap } = createPrivateNetwork('Unit private network');
+    const order: string[] = [], verifyAgentNet = vi.fn(async () => { order.push('verify'); });
+    let uploaded: Buffer | undefined;
+    mocks.responses['relay-deploy-agent-net-configure'] = (_command, input) => { uploaded = input; return ok(''); };
+    const testInit = { ...init, relayId: bootstrap.networkId.slice(8), ownerPublicKey: bootstrap.rootPublicKey };
+    vi.mocked(fetch).mockImplementation(async () => new Response(JSON.stringify({ relayId: testInit.relayId }), { status: 200 }));
+    const result = await run({ init: testInit, onServerChange: () => order.push('persist'),
+      agentNetBootstrap: () => { order.push('bootstrap'); return bootstrap; }, agentNetAuthIssuer: 'https://auth.example.test', verifyAgentNet });
+    expect(result.error).toBeNull(); expect(order).toEqual(['persist', 'bootstrap', 'verify']);
+    expect(JSON.parse(uploaded!.toString())).toEqual(bootstrap);
+    expect(uploaded!.toString()).not.toContain('PRIVATE KEY');
+    expect(mocks.commands.find((c) => c.label === 'relay-deploy-agent-net-configure')?.command).toContain('cindy-agent-net.service');
+    expect(mocks.commands.find((c) => c.label === 'relay-deploy-agent-net-configure')?.command).toContain('https://auth.example.test');
+    expect(verifyAgentNet).toHaveBeenCalledWith('https://203.0.113.10');
+    verifyAgentNet.mockRejectedValueOnce(new Error('unit-test-untrusted-directory'));
+    // 2026-11-08: a failed V2 directory check was incorrectly reported as a blocked HTTPS port.
+    expect((await run({ init: testInit, agentNetBootstrap: () => bootstrap, verifyAgentNet })).error).toMatchObject({ code: 'AGENT_NET_VERIFY_FAILED' });
+    verifyAgentNet.mockClear();
+    mocks.responses['relay-deploy-agent-net-configure'] = () => ({ stdout: '', stderr: '', exitCode: 24 });
+    expect((await run({ init: testInit, agentNetBootstrap: () => bootstrap, verifyAgentNet })).error).toMatchObject({ code: 'AGENT_NET_START_FAILED' });
+    expect(verifyAgentNet).not.toHaveBeenCalled();
   });
 
   // 2026-10-29：下载中界面没有反馈；旧 exec 等待命令结束才拿到输出。

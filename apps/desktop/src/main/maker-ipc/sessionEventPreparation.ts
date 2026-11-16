@@ -1,8 +1,10 @@
 import { parseOutputLimitDetails } from '@cindy/maker-shared';
+import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { isQuietScheduledOutput, revealScheduledOutput } from '../scheduler-host/silent-output.js';
 import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
+import { contextSnapshotForStatus, isContextCompactionSnapshot } from './sessionContextSnapshot.js';
 import type { BotCompactRuntimeRefreshCoordinator } from './botCompactRuntimeRefresh.js';
 import type {
   AgentEvent,
@@ -19,7 +21,7 @@ import { parseAgentInputToolLoopDetails } from '../../shared/agentInputQueue.js'
 import { noteSubagentObservationTurnStarted } from '../subagentObservationRewindFence.js';
 
 import { createLogger } from '../logger.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import type { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordinator.js';
 import { markSessionTurnStarted } from '../localDb/sessionActiveTurn.js';
 import {
@@ -27,9 +29,9 @@ import {
   noteAgentMeta,
   noteTurnStarted,
   onStandaloneTextEvent,
-} from '../messagePersistBroadcaster.js';
+} from '../messagePersistBroadcaster.desktop.js';
 import { isCcMgrUpgradeInFlight } from '../remote-ssh/index.js';
-import { AgentInputCoordinator } from './agent-input-coordinator.js';
+import { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import { clearPromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
 import { MAKER_PUSH } from './channels.js';
 import { finalizeTurnChangeSet } from '../turn-change-set/store.js';
@@ -47,8 +49,15 @@ import { createWorkerTurnStartSequencer } from './workerTurnStartSequencer.js';
 import { SilentStopAutoResumeGuard } from './silentStopAutoResume.js';
 import { AutoResumeBookkeeping } from './autoResumeBookkeeping.js';
 import {
+  endsForegroundTurnByStatus,
+  isForegroundRunningStatus,
+  noteAutoResumeProgress,
+  noteForegroundTurnStarted,
+  settleAutoResumeAttemptOnDone,
+  settleAutoResumeAttemptOnTerminalError,
+} from './sessionEventAutoResumeSteps.js';
+import {
   InterruptedTurnAutoResumeGuard,
-  isSubstantiveProgressEvent,
 } from './interruptedTurnAutoResume.js';
 import type { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
@@ -130,11 +139,6 @@ export interface PrepareSessionEventDeps {
   ) => boolean;
   readonly isGatewayProxyTokenRecoveryErrorEvent: (sessionId: string, event: AgentEvent) => boolean;
   /**
-   * 伙伴工作记忆刷新登记(botWorkingMemory):原生自动压缩后,下一次发送前置一次账本。
-   * 对所有会话登记,发送时再按伙伴主对话 / 有无账本决定是否真的注入。
-   */
-  readonly workingMemoryRefresh?: { markCompacted(sessionId: string): void };
-  /**
    * 逐轮环境说明的去重记忆(wireNoteMemory.ts)。原生自动压缩后摘要可能已丢掉旧说明,
    * 下一轮要整体重发一次;缺省(未注入)不去重,行为同旧版。
    */
@@ -153,9 +157,6 @@ export function prepareSessionEvent(
   // on-demand detail IPC; forwarding the raw diff through maker:event would duplicate a
   // potentially multi-megabyte payload to every renderer and device-link controller.
   if (event.type === 'turn_diff') return;
-  // Native compaction keeps its current runtime. Only explicit resource/configuration
-  // changes register a companion refresh; compaction itself is not such a change.
-  if (event.type === 'compact_boundary') deps.workingMemoryRefresh?.markCompacted(session.id);
   if (event.type === 'compact_boundary') deps.wireNoteMemory?.reset(session.id);
   if (
     event.turnScope === 'background' &&
@@ -283,7 +284,7 @@ export function prepareSessionEvent(
   }
   const broadcastEvent = deps.redactEventForRenderer(attributedEvent);
   if (event.type === 'interaction_dismissed') {
-    const data = event.data as { requestId?: unknown; reason?: unknown };
+    const data = event.data as { requestId?: unknown; reason?: unknown; withdrawalReason?: unknown };
     if (typeof data.requestId === 'string') {
       deps.handleAgentIslandInteractionDismissed(session.id, data.requestId);
       const entry = deps.clearPendingInteraction(data.requestId);
@@ -292,13 +293,16 @@ export function prepareSessionEvent(
           entry.kind,
           typeof data.reason === 'string' ? data.reason : 'dismissed',
         );
+        const persistedDecision = data.reason === 'question_withdrawn' && entry.kind === 'ask_user_question'
+          && typeof data.withdrawalReason === 'string'
+          ? { ...decision, withdrawalReason: data.withdrawalReason } : decision;
         entry.resolve(decision);
         deps.persistInteractionDecision(
           session.id,
           entry.persistId,
           entry.kind,
           entry.request,
-          decision,
+          persistedDecision,
         );
       }
     }
@@ -317,12 +321,12 @@ export function prepareSessionEvent(
     }
     return;
   }
-  // turn 结束的 status event (isRunning=false + status='Done') 携带 endSnapshot。
+  // Terminal status and confirmed Pi compaction status carry their own snapshot.
   // contextTokens / contextWindow 的持久化统一在 main 端做，避免多 window 竞写；
   // 但不能挡在 EVENT broadcast 前面，否则 final/done 已到 main 后还会被同步 SQLite
   // 和 usage 广播拖住。这里先记录待写快照，广播后再执行。
   // Claude / Codex 同形 (usageTracker.snapshot() 两边都给 contextTokens / contextWindow),
-  // 不按 source 分支 —— 之前漏接 codex 导致重启后圆环归零。
+  // 终态不按 source 分支 —— 之前漏接 codex 导致重启后圆环归零。
   let pendingContextSnapshot: { contextTokens: number; contextWindow: number } | null = null;
   let pendingCodexAccountUsageSnapshot: unknown | null = null;
   let shouldMarkTurnStatusIdleAfterBroadcast = false;
@@ -338,7 +342,8 @@ export function prepareSessionEvent(
       turnContinuationId: event.turnContinuationId,
     });
   }
-  if (event.type === 'account_usage' && event.source === 'codex' && !session.remoteHostId) {
+  if (event.type === 'account_usage' && event.source === 'codex' && !session.remoteHostId && !session.agentDeviceId
+      && !(event.data as { [NATIVE_SUBSCRIPTION_ACCOUNT]?: boolean })?.[NATIVE_SUBSCRIPTION_ACCOUNT]) {
     pendingCodexAccountUsageSnapshot = event.data;
   }
   if (event.type === 'status') {
@@ -347,30 +352,16 @@ export function prepareSessionEvent(
       status?: string;
       contextTokens?: number;
       contextWindow?: number;
+      contextSnapshotAuthoritative?: boolean;
     };
+    // Remote event and state records can arrive in different poll chunks. Use
+    // the confirmed status payload, never the proxy cache at compact_boundary.
+    // A replayed boundary alone therefore cannot write an older watermark.
+    const isCompactionSnapshot = isContextCompactionSnapshot(session, event, data);
     // Idle compact / late background work may still send isRunning for UI
     // copy. It must not latch the product turn tracker or idle bookkeeping.
-    if (data.isRunning === true && event.turnScope !== 'background') {
-      // replacement 已进入 vendor 后，running 是新 attempt 的权威起点。不要依赖
-      // sendToAgent 返回后的 onDispatched 回调：provider 可同步发事件并先清 activeTurn。
-      deps.autoResumeBookkeeping.discardReplacementProvenByProviderEvent(session.id);
-      // 新 turn 启动: 上一轮未配对的失败记账交接 id 已无归属, 丢弃防错配。
-      deps.pendingFailedTurnAssistantPersistId.delete(session.id);
-      // Tokenless status(true) can be a delayed tail of the failed turn.
-      // Only a token-bearing running event proves a new attempt started.
-      if (typeof event.turnAttemptToken === 'number') {
-        deps.autoResumeBookkeeping.clearFailedTurnCompletionTail(session.id);
-      }
-      // 记录 turn 开始时刻，供 onTurnErrorEvent 判断 error 是否属于 /clear 之前的旧 turn。
-      noteTurnStarted(session.id, event.turnAttemptToken);
-      noteSubagentObservationTurnStarted(session.id);
-      // silent-stop 守卫:新 turn 开始 → 清 pendingResume + 记录时刻(陈旧判定)。
-      deps.silentStopAutoResumeGuard.noteTurnStarted(session.id);
-      deps.interruptedTurnAutoResumeGuard.noteTurnStarted(session.id, {
-        // A tokenless status(true) can be a delayed tail from the failed turn. It
-        // must not consume the pending token of the next scheduled auto-resume.
-        clearPending: typeof event.turnAttemptToken === 'number',
-      });
+    if (isForegroundRunningStatus(data, event)) {
+      noteForegroundTurnStarted(deps, session, event, { noteTurnStarted, noteSubagentObservationTurnStarted });
       const wasInTurn = deps.sessionTurnActivityTracker.isSessionInTurn(session.id);
       if (!wasInTurn || event.sessionTurnGeneration !== undefined) {
         deps.sessionListActivityTracker.start(session.id, event.sessionTurnGeneration === undefined
@@ -409,30 +400,14 @@ export function prepareSessionEvent(
         && (!wasInTurn || !deps.turnUsageContextBySession.has(session.id))) {
         deps.turnUsageContextBySession.set(session.id, captureTurnUsageContext(session.id));
       }
-    } else if (
-      data.isRunning === false &&
-      !isContinuationBoundary &&
-      event.turnScope !== 'background'
-    ) {
+    } else if (endsForegroundTurnByStatus(data, isContinuationBoundary, event)) {
       shouldMarkTurnStatusIdleAfterBroadcast = true;
     }
-    if (
-      data.isRunning === false &&
-      data.status === 'Done' &&
-      typeof data.contextTokens === 'number'
-    ) {
-      pendingContextSnapshot = {
-        contextTokens: data.contextTokens,
-        contextWindow: data.contextWindow ?? 0,
-      };
-    }
+    const contextSnapshot = contextSnapshotForStatus(isCompactionSnapshot, data);
+    if (contextSnapshot) pendingContextSnapshot = contextSnapshot;
   }
   if (event.type === 'done') {
-    const doneAttemptToken = event.turnAttemptToken;
-    if (typeof doneAttemptToken === 'number' && !isContinuationBoundary) {
-      deps.autoResumeBookkeeping.settleOutcome(session.id, doneAttemptToken, 'failed');
-      deps.interruptedTurnAutoResumeGuard.noteAttemptSettled(session.id, doneAttemptToken);
-    }
+    settleAutoResumeAttemptOnDone(deps, session, event, isContinuationBoundary);
     const rawTurn = (event.data as { raw?: { id?: unknown; status?: unknown } } | null)?.raw;
     const carriesSilentStop =
       (event.data as { silentStop?: boolean } | null | undefined)?.silentStop === true;
@@ -506,15 +481,7 @@ export function prepareSessionEvent(
   let isGatewayProxyTokenRecovery = false;
   if (isTerminalTurnErrorEvent(event)) {
     finalizeTurnChangeSet(session.id, null, 'partial');
-    // **任何**终态失败都先把上一条重连记录钉成失败 —— 不管这次错误本身是否值得自愈。
-    // 只在"命中白名单、准备再接管"时才 settle 的话,非白名单的终态(认证 / 计费 /
-    // invalid-request)会让记录悬空,随后一个无关 turn 的首个产出事件就把它标成
-    // 「已重新连接」(codex P1)。
-    const failedAttemptToken = event.turnAttemptToken;
-    if (typeof failedAttemptToken === 'number') {
-      deps.autoResumeBookkeeping.settleOutcome(session.id, failedAttemptToken, 'failed');
-      deps.interruptedTurnAutoResumeGuard.noteAttemptSettled(session.id, failedAttemptToken);
-    }
+    settleAutoResumeAttemptOnTerminalError(deps, session, event);
     // 终止型 error 可能没有后续 status/done（SDK/event loop crash 等），需要在
     // EVENT broadcast 后结束逻辑 turn，并保留 terminal grace 给 renderer 收尾；
     // 可重试 error 保持 running。
@@ -615,20 +582,7 @@ export function prepareSessionEvent(
   // 连续失败计数归零；人工介入周期的硬总上限不归零，保证始终有限。
   // 刻意只认这两类事件:thinking / status / 空消息都不算产出;guard 侧是 O(1)、
   // 无 IO、无日志,放在热路径安全。
-  // 晚到 background 事件仍需广播和持久化,但不能给当前中断回合充值。
-  if (event.turnScope !== 'background' && isSubstantiveProgressEvent(event)) {
-    const progressAttemptToken = event.turnAttemptToken;
-    const accepted = deps.interruptedTurnAutoResumeGuard.noteProgress(
-      session.id,
-      progressAttemptToken ?? undefined,
-    );
-    // 同一个信号也是「上一次重连真的成功了」的唯一证据；旧 attempt 的迟到事件
-    // token 不匹配时不会结算当前新 attempt。
-    if (accepted && typeof progressAttemptToken === 'number') {
-      deps.autoResumeBookkeeping.settleOutcome(session.id, progressAttemptToken, 'succeeded');
-    }
-    deps.usageLimitAutoResume?.noteProgress(session.id);
-  }
+  noteAutoResumeProgress(deps, session, event);
   return {
     event,
     attributedEvent,

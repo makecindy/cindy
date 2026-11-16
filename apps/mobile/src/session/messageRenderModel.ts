@@ -84,6 +84,7 @@ export function buildMobileMessageRenderItems(
     sessionId?: string;
     preserveSourceOrder?: boolean;
     sessionSource?: string | null;
+    pendingQuestionIds?: ReadonlySet<string>;
   } = {},
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
 ): MobileMessageRenderItem[] {

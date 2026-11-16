@@ -158,7 +158,7 @@ function emitAskUserRequest(
   });
 }
 
-function emitDone(source: 'codex' | 'claude-code'): void {
+function emitDone(source: 'codex' | 'claude-code' | 'pi'): void {
   onEvent?.({
     sessionId: SESSION_ID,
     event: {
@@ -192,6 +192,53 @@ describe('ask_user 与 done 的时序', () => {
     vi.restoreAllMocks();
   });
 
+  // Regression: withdrawal must preserve a draft, show its reason, and keep supplemental sending explicit.
+  // Entry: real IPC subscription -> store -> input receipt path. Tier: unit.
+  it.each([false, true])('withdraws an async card with edited=%s', async (edited) => {
+    emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');
+    const draft = { requestId: 'async-1', currentIndex: 0, answers: {}, started: true, customInput: 'Finished' };
+    if (edited) makerChatStore.setAskUserDraft(SESSION_ID, draft);
+    onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: 'async-1',
+      reason: 'question_withdrawn', withdrawalReason: '已从日志确认' });
+    const state = makerChatStore.getLightSnapshot(SESSION_ID);
+    expect(state.pendingAskUser?.withdrawalReason).toBe(edited ? '已从日志确认' : undefined);
+    expect(state.askUserDraft).toEqual(edited ? draft : null);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.find((m) => m.askUserRequestId === 'async-1'))
+      .toMatchObject({ askUserStatus: 'expired', askUserWithdrawalReason: '已从日志确认' });
+    expect(window.electronAPI.maker.input.enqueue).not.toHaveBeenCalled();
+    if (edited) {
+      vi.mocked(window.electronAPI.maker.resolveInteraction).mockResolvedValueOnce({ accepted: false });
+      makerChatStore.answerUserQuestion(SESSION_ID, 'async-1', { 'Original?': 'Finished' });
+      await vi.waitFor(() => expect(window.electronAPI.maker.input.enqueue).toHaveBeenCalledOnce());
+      expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser).toBeNull();
+    }
+  });
+
+  // Regression: a withdrawn question's unsent supplement must outlive a question switch or a blocking preemption.
+  // Entry: real IPC subscription -> store. Tier: unit.
+  it.each(['switched-away', 'preempted'] as const)('keeps a withdrawn supplement draft when %s', (mode) => {
+    emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');
+    const draft = { requestId: 'async-1', currentIndex: 0, answers: {}, started: true, customInput: 'Finished' };
+    makerChatStore.setAskUserDraft(SESSION_ID, draft);
+    let other = 'async-2';
+    if (mode === 'switched-away') {
+      emitAskUserRequest('async-2', [{ question: 'Next?' }], 'async');
+      makerChatStore.selectAskUserQuestion(SESSION_ID, 'async-2');
+    } else {
+      other = 'blocking-1';
+      onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: 'async-1', reason: 'question_withdrawn', withdrawalReason: '已确认' });
+      emitAskUserRequest(other, [{ question: 'Now?' }]);
+    }
+    if (mode === 'switched-away') {
+      onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: 'async-1', reason: 'question_withdrawn', withdrawalReason: '已确认' });
+    }
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe(other);
+    onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: other, reason: 'resolved' });
+    const restored = makerChatStore.getLightSnapshot(SESSION_ID);
+    expect(restored.pendingAskUser).toMatchObject({ requestId: 'async-1', withdrawalReason: '已确认' });
+    expect(restored.askUserDraft).toEqual(draft);
+  });
+
   it.each(['codex', 'claude-code', 'pi'] as const)('%s keeps an edited async draft after expiry and replacement, then sends the original question', async (agentKind) => {
     makerChatStore.setSessionRuntime(SESSION_ID, { agentKind });
     emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');
@@ -205,7 +252,12 @@ describe('ask_user 与 done 的时序', () => {
     makerChatStore.answerUserQuestion(SESSION_ID, 'async-1', { 'Original?': 'Finished' });
     await vi.waitFor(() => expect(window.electronAPI.maker.input.enqueue).toHaveBeenCalledOnce());
     const queued = vi.mocked(window.electronAPI.maker.input.enqueue).mock.calls[0][1];
-    expect(queued.text).toBe('> Original?\n\nFinished');
+    expect(queued.text.split('\n\n<cindy_question_context>')[0]).toBe('> Original?\n\nFinished');
+    expect(queued.text).toContain('This is a delayed answer');
+    expect(queued.text).toContain('do not repeat work already completed');
+    // The note is for the model only: the message people see is the question and the answer.
+    expect(queued.chatMessage.content).toBe('> Original?\n\nFinished');
+    expect(queued.persistedContent).not.toContain('cindy_question_context');
     expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('async-2');
   });
 
@@ -243,6 +295,38 @@ describe('ask_user 与 done 的时序', () => {
       expect(makerChatStore.getSnapshot(SESSION_ID).queuePaused).toBe(false);
     },
   );
+
+  it('opens new async questions, preserves manual collapse, and snoozes only a matching nonblocking RPC', async () => {
+    // Regression: async delivery does not make a question optional or initially hidden.
+    emitAskUserRequest('async-visible', [{ id: 'q', question: 'Continue?' }], 'async');
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).askUserViewerState).toBe('expanded');
+    makerChatStore.setAskUserViewerState(SESSION_ID, 'minimized');
+    emitAskUserRequest('async-visible', [{ id: 'q', question: 'Continue?' }], 'async');
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).askUserViewerState).toBe('minimized');
+    emitAskUserRequest('async-next', [{ id: 'q', question: 'Continue?' }], 'async');
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).askUserViewerState).toBe('minimized');
+    makerChatStore.selectAskUserQuestion(SESSION_ID, 'async-next');
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).askUserViewerState).toBe('expanded');
+    onInteractionRequest?.({ sessionId: SESSION_ID, request: { kind: 'ask_user_question', requestId: 'rpc',
+      isBlocking: false, questions: [{ id: 'q', question: 'Continue?' }] } });
+    makerChatStore.setAskUserDraft(SESSION_ID, { requestId: 'rpc', currentIndex: 0, answers: {}, started: true });
+    await vi.waitFor(() => expect(window.electronAPI.maker.resolveInteraction).toHaveBeenCalledWith('rpc', {
+      kind: 'ask_user_question', answers: {}, inProgress: true,
+    }));
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('rpc');
+  });
+
+  it('keeps a collapsed protected async question collapsed when the next one arrives', () => {
+    emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');
+    makerChatStore.setAskUserDraft(SESSION_ID, {
+      requestId: 'async-1', currentIndex: 0, answers: {}, started: true, customInput: 'Typing',
+    });
+    makerChatStore.setAskUserViewerState(SESSION_ID, 'minimized');
+    emitAskUserRequest('async-2', [{ question: 'Next?' }], 'async');
+    const snapshot = makerChatStore.getLightSnapshot(SESSION_ID);
+    expect(snapshot.pendingAskUser?.requestId).toBe('async-1');
+    expect(snapshot.askUserViewerState).toBe('minimized');
+  });
 
   it('does not send a protected supplement after its task is purged', async () => {
     emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');
@@ -328,10 +412,34 @@ describe('ask_user 与 done 的时序', () => {
     makerChatStore.answerUserQuestion(SESSION_ID, 'async-1', { 'Original?': 'Finished' });
     await vi.waitFor(() => expect(window.electronAPI.maker.input.enqueue).toHaveBeenCalledOnce());
     expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('async-1');
+    onEvent?.({ sessionId: SESSION_ID, event: { type: 'status', source: 'codex', data: { isRunning: true } } });
     makerChatStore.answerUserQuestion(SESSION_ID, 'async-1', { 'Original?': 'Finished' });
     await vi.waitFor(() => expect(window.electronAPI.maker.input.enqueue).toHaveBeenCalledTimes(2));
     const calls = vi.mocked(window.electronAPI.maker.input.enqueue).mock.calls;
+    expect(calls[0][1].text).not.toBe(calls[1][1].text);
     expect(calls[0][1].clientId).toBe(calls[1][1].clientId);
+  });
+
+  it.each(['codex', 'claude-code', 'pi'] as const)('%s preserves each live question and draft across completion and navigation', async (agentKind) => {
+    makerChatStore.setSessionRuntime(SESSION_ID, { agentKind });
+    emitAskUserRequest('first', [{ question: 'Same title?' }], 'async');
+    const draft = { requestId: 'first', currentIndex: 0, answers: {}, started: true, customInput: 'First draft' };
+    makerChatStore.setAskUserDraft(SESSION_ID, draft);
+    emitAskUserRequest('second', [{ question: 'Same title?' }], 'async');
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingAskUserQueue).toHaveLength(2);
+    makerChatStore.selectAskUserQuestion(SESSION_ID, 'second');
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).askUserDraft).toBeNull();
+    // Replaying an inactive request must not erase its saved draft.
+    emitAskUserRequest('first', [{ question: 'Same title?' }], 'async');
+    makerChatStore.selectAskUserQuestion(SESSION_ID, 'first');
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).askUserDraft).toBe(draft);
+    emitDone(agentKind);
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('first');
+    onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: 'first', reason: 'resolved',
+      decision: { kind: 'ask_user_question', answers: { 'Same title?': 'First answer' } } });
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('second');
+    onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: 'second', reason: 'superseded' });
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser).toBeNull();
   });
 
   it('codex:done 不吞掉未答提问卡', () => {

@@ -1,5 +1,5 @@
-import { GHOST_CARD_ACTION_ID_RE, isGhostCardLinkAllowed } from '../../shared/ghost.js';
-import { readMailCard, readGhostCardSupersededBy, isLegacyMailCard, readGhostCardFormChange, readGhostCardForm, parseGhostCardFormValues, omitGhostCardFormPreview } from '@cindy/maker-shared/ghost-card-form';
+import { GHOST_CARD_ACTION_ID_RE, isGhostCardLinkAllowed, isGhostCardModelSelection, type GhostCardModelSelection } from '../../shared/ghost.js';
+import { readMailCard, readGhostCardSupersededBy, isLegacyMailCard, readGhostCardFormChange, readGhostCardForm, parseGhostCardFormValues, omitGhostCardFormPreview, ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import type { GhostCardRow } from './cardService.js';
 import { createHash } from 'node:crypto';
 import { REMOTE_RESOURCE_CHANGED_CHANNEL, type RemoteResourceBlock } from '@cindy/device-link';
@@ -15,6 +15,12 @@ import { parseMailAttachmentUpload, type MailAttachmentUpload } from './mailAtta
 
 const COLLECTION = 'plugin-results';
 const KIND = 'card';
+/**
+ * Desktop controllers that declare this primitive receive the stored, already sanitized card
+ * markup in the actions block (`data.card`), so a remote task shows the same card a local one
+ * does. The controller sanitizes it again before display. Mail cards keep their own projection.
+ */
+export const PLUGIN_CARD_HTML_PRIMITIVE = 'plugin-card-html';
 
 export function findGhostForRemotePluginIdentity<T extends { manifest: { id: string }; namespace?: string | null }>(
   ghosts: readonly T[], id: string,
@@ -216,6 +222,18 @@ export function projectRichCardParts(html: string): RichCardParts {
   return { textHtml, toggles, ...(live ? { live } : {}), prStatus: prStatus.slice(0, 4) };
 }
 
+/**
+ * The card's task archive button (`button[data-ghost-task-archive="owner/repo#N"]`, see cardSanitizer). It has no
+ * action and no text of its own, so the plain projection never carried it; newer phones draw it from `taskArchive`.
+ */
+export function readTaskArchiveButton(html: string): { key: string; auto: boolean } | undefined {
+  for (const match of stripStyleAndScript(html).matchAll(/<button\b([^>]*)>/gi)) {
+    const key = prSlotKey(readAttr(match[1], 'data-ghost-task-archive') ?? '');
+    if (key) return { key, auto: /(?:^|\s)data-ghost-task-archive-auto(?:=|\s|$)/.test(match[1]) };
+  }
+  return undefined;
+}
+
 export interface RemotePluginCardAction {
   id: string; label: string; prompt?: string; url?: string; disabled: boolean; submit?: boolean;
   /** Phone hints (only for `plugin-card-rich` clients). */
@@ -235,13 +253,17 @@ export function projectGhostCardActions(
   html: string,
   externalLinks: boolean,
   rich?: { toggles: Map<string, { title: string; hint?: string }> },
+  sessionLinks = false,
 ): RemotePluginCardAction[] {
   const source = stripStyleAndScript(html);
   const items: RemotePluginCardAction[] = [];
   for (const match of source.matchAll(/<([a-z][a-z0-9]*)\b([^>]*)>/gi)) {
     const attrs = match[2];
     const read = (name: string) => readAttr(attrs, name);
-    const action = read('data-ghost-action'), url = read('data-ghost-link');
+    const sessionLink = read('data-ghost-session-link');
+    const nativeSessionLink = sessionLinks && externalLinks && ghostCardSessionLinkId(sessionLink ?? '') ? sessionLink : undefined;
+    const action = nativeSessionLink ? undefined : read('data-ghost-action');
+    const url = nativeSessionLink ?? read('data-ghost-link');
     if (!(action && GHOST_CARD_ACTION_ID_RE.test(action)) && !(externalLinks && url && isGhostCardLinkAllowed(url))) continue;
     const after = source.slice(match.index! + match[0].length);
     const label = read('aria-label') ?? decodeText(after.slice(0, after.indexOf(`</${match[1]}>`) < 0 ? 256 : after.indexOf(`</${match[1]}>`)).replace(/<[^>]+>/g, '')).trim().slice(0, 512);
@@ -259,7 +281,7 @@ export function projectGhostCardActions(
 }
 interface CardInteractions {
   externalLinks(ghostId: string): boolean;
-  dispatch(callId: string, actionId: string, prompt: string | undefined, pageId: string, ghostId: string, controllerId: string, formValues?: Record<string, string>, formChange?: boolean, upload?: MailAttachmentUpload): Promise<boolean>;
+  dispatch(callId: string, actionId: string, prompt: string | undefined, pageId: string, ghostId: string, controllerId: string, formValues?: Record<string, string>, formChange?: boolean, upload?: MailAttachmentUpload, modelSelection?: GhostCardModelSelection): Promise<boolean>;
 }
 function mailUploadAction(html: string): RemotePluginCardAction | undefined {
   const mail = readMailCard(html);
@@ -274,6 +296,11 @@ export function createGhostCardRemoteProvider(deps: {
   interactions?: CardInteractions;
   /** Same session-scoped PR status the task's title bar shows; undefined keeps the plugin's snapshot. */
   prStatus?: (sessionId: string, key: string) => Promise<PrStatusResult | undefined>;
+  /**
+   * The desktop task page's archive facts: every PR linked to the task is merged (areAllTaskPrsMerged), and whether
+   * an IM channel has taken the task over (only this computer can tell, so it is decided here for the phone).
+   */
+  taskArchive?: (sessionId: string) => Promise<{ allMerged: boolean; attached: boolean }>;
 }): RemoteResourceProvider {
   const read = async (id: string) => {
     const valid = deps.captureScope();
@@ -317,18 +344,33 @@ export function createGhostCardRemoteProvider(deps: {
         const status = await deps.prStatus?.(card.sessionId!, slot.key).catch(() => undefined);
         return { ...slot, ...(status?.ok ? { status } : {}) };
       })) : undefined;
-      const items = obsolete ? [] : await Promise.all(projectGhostCardActions(html, externalLinks, rich).map(async (action) => {
+      // The archive button shows only when this card's PR and every other PR of the task are merged (desktop's rule).
+      // `auto` adds the leave-time auto-archive, which a task taken over by an IM channel never gets.
+      const archiveButton = rich && !obsolete && deps.taskArchive ? readTaskArchiveButton(card.html) : undefined;
+      const taskArchive = archiveButton ? await (async () => {
+        const status = await deps.prStatus?.(card.sessionId!, archiveButton.key).catch(() => undefined);
+        if (status?.ok !== true || status.status !== 'merged') return undefined;
+        const facts = await deps.taskArchive!(card.sessionId!).catch(() => undefined);
+        return facts?.allMerged ? { auto: archiveButton.auto && !facts.attached } : undefined;
+      })() : undefined;
+      const items = obsolete ? [] : await Promise.all(projectGhostCardActions(html, externalLinks, rich,
+        request.client.primitives.includes('plugin-card-session-links')).map(async (action) => {
         const prKey = rich && action.url ? githubPrKey(action.url) : undefined;
         const status = prKey ? await deps.prStatus?.(card.sessionId!, prKey).catch(() => undefined) : undefined;
         const next = action.submit && !supportsForms ? { ...action, disabled: true } : action;
         return status?.ok ? { ...next, prState: status.status } : next;
       }));
+      // The same markup the task's own window renders; title-bar PR states are applied by the controller.
+      const markup = request.client.primitives.includes(PLUGIN_CARD_HTML_PRIMITIVE) && !mail && !legacyMail
+        ? { html: card.html, height: card.height, externalLinks } : undefined;
       if (deps.interactions && request.client.primitives.includes('plugin-card-actions')) blocks.push({
         id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '',
         data: { pluginId: card.ghostId, revision, mail, legacyMail, ...(supersededBy && !mail ? { supersededBy } : {}), mailUpload: supportsForms && !!mailUploadAction(card.html), changeAction: supportsForms && !obsolete ? readGhostCardFormChange(card.html) : undefined, form: supportsForms ? readGhostCardForm(card.html) : null,
+          ...(markup ? { card: markup } : {}),
           items,
           ...(rich?.live ? { live: rich.live } : {}),
-          ...(prStatus?.length ? { prStatus } : {}) },
+          ...(prStatus?.length ? { prStatus } : {}),
+          ...(taskArchive ? { taskArchive } : {}) },
       });
       return { ref: request.ref, display: { title: card.ghostId }, links: [], revision, blocks };
     },
@@ -342,6 +384,11 @@ export function createGhostCardRemoteProvider(deps: {
       const upload = parseMailAttachmentUpload(request.input?.mailAttachment);
       if (attaching ? !upload : request.input?.mailAttachment !== undefined)
         throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Invalid mail attachment');
+      // A choice from the card's model menu, relative to this computer. The dispatcher accepts it only
+      // for a button that declares the menu and only when this computer can run that model.
+      const modelSelection = request.input?.modelSelection;
+      if (modelSelection !== undefined && (change || attaching || !isGhostCardModelSelection(modelSelection)))
+        throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Invalid model selection');
       const action = change && readGhostCardFormChange(card.html) === request.actionId
         ? { id: request.actionId, submit: true, disabled: false, prompt: undefined }
         : change ? undefined : attaching ? uploadAction : projectGhostCardActions(card.html, false).find(item => item.id === request.actionId && !item.url);
@@ -354,7 +401,9 @@ export function createGhostCardRemoteProvider(deps: {
         || (action.prompt !== undefined && (typeof input.prompt !== 'string' || !input.prompt.trim() || input.prompt.length > 2000))
         || (action.prompt === undefined && input.prompt !== undefined) || !valid())
         throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Card action is no longer available');
-      const extra: [boolean?, MailAttachmentUpload?] = upload ? [false, upload] : change ? [true] : [];
+      // A model choice never comes with an autosave or an upload (rejected above).
+      const extra: [boolean?, MailAttachmentUpload?, GhostCardModelSelection?] = upload ? [false, upload] : change ? [true]
+        : modelSelection !== undefined ? [undefined, undefined, modelSelection as GhostCardModelSelection] : [];
       const delivered = await deps.interactions.dispatch(callId, action.id, input.prompt as string | undefined, input.pageId, card.ghostId, context.controllerDeviceId, values ?? undefined, ...extra);
       if (!valid() || !delivered) throw new RemoteResourceRegistryError('INTERNAL', 'Card action could not be delivered');
       return { effects: [] };
@@ -367,12 +416,14 @@ export function registerGhostCardRemoteProvider(
   readIdentity: (id: string) => { name: string; iconDataUrl?: string } | undefined,
   interactions?: CardInteractions,
   prStatus?: (sessionId: string, key: string) => Promise<PrStatusResult | undefined>,
+  taskArchive?: (sessionId: string) => Promise<{ allMerged: boolean; attached: boolean }>,
 ): void {
   if (registered) return;
   remoteResourceRegistry.register(createGhostCardRemoteProvider({
     readCard: getGhostCard,
     interactions,
     prStatus,
+    taskArchive,
     authorize: (sessionId) => assertRemoteBotInvocationAllowed([sessionId]),
     captureScope: () => { const scope = captureDataOwnerBroadcastScope(); return () => isDataOwnerBroadcastScopeCurrent(scope); },
   }));

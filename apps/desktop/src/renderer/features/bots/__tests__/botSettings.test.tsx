@@ -59,6 +59,7 @@ const mocks = vi.hoisted(() => {
     avatarColor: 'violet',
   })),
   openPath: vi.fn(async (): Promise<{ success: boolean; error?: string }> => ({ success: true })),
+  projectRepository: vi.fn(),
   };
 });
 
@@ -99,9 +100,6 @@ vi.mock('../botStore', () => ({
     mocks.modelListeners.add(listener);
     return () => mocks.modelListeners.delete(listener);
   },
-  useBotAutonomySettings: () => null,
-  setBotSchedulerBotId: vi.fn(),
-  resetBotAutonomySettings: vi.fn(),
 }));
 vi.mock('../BotLifecycleSettings', () => ({
   BotLifecycleSettings: () => <div data-testid="bot-lifecycle-settings" />,
@@ -247,6 +245,7 @@ beforeEach(() => {
   mocks.profiles = [];
   mocks.profilesLoaded = true;
   mocks.params = {};
+  mocks.projectRepository.mockReset().mockResolvedValue('ready');
   mocks.availableVendors = new Set(['cc', 'codex', 'pi']);
   mocks.defaultModelChain = [];
   mocks.modelListeners.clear();
@@ -270,7 +269,7 @@ beforeEach(() => {
   ] }));
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     openPath: mocks.openPath,
-    localDb: { sessionsPush: { onPatched: mocks.onSessionPatched }, bots: { listSkills: vi.fn().mockResolvedValue([]) } },
+    localDb: { sessionsPush: { onPatched: mocks.onSessionPatched }, bots: { listSkills: vi.fn().mockResolvedValue([]), projectRepository: mocks.projectRepository } },
     maker: {
       onMcpChanged: mocks.onMcpChanged,
       listAgentSkills: mocks.listAgentSkills,
@@ -512,24 +511,6 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('saves a task route with its own harness and restores inheritance without changing the primary', async () => {
-    mocks.defaultModelChain = capabilities().modelChain;
-    renderSettings();
-    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsTabs.model' }));
-    const task = within(screen.getByTestId('bot-task-model-controls'));
-    await act(async () => { fireEvent.click(task.getByTestId('codex-model-selector')); });
-    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalled());
-    const saved = mocks.updateBotProfile.mock.calls.at(-1)![1].capabilities;
-    expect(saved).toHaveProperty('taskModelOverride', { harness: 'codex', providerId: 'custom', model: 'custom-model', effort: 'high', fastMode: false });
-    expect(saved).not.toHaveProperty('modelChainOverride');
-    expect(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('current-model').textContent).toBe('claude-x');
-    mocks.updateBotProfile.mockClear();
-    await act(async () => { fireEvent.click(task.getByRole('button', { name: 'bots.model.inheritPrimary' })); });
-    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalled());
-    expect(mocks.updateBotProfile.mock.calls.at(-1)![1].capabilities).toHaveProperty('taskModelOverride', null);
-    expect(task.getByTestId('current-model').textContent).toBe('claude-x');
-  });
-
   // Unit regression: edit the actual form, pass its patch through the host's real
   // admission/normalization, and reopen the saved profile. Picker-only tests missed
   // the extra primary mirror rejected by the remote settings field contract.
@@ -563,6 +544,14 @@ describe('Bot settings profile consolidation', () => {
     expect(saved.agentDeviceId ?? null).toBeNull();
     expect(saved.modelChain[1 - index]).toEqual(index === 0 ? fallback : primary);
     reopened.unmount();
+  });
+
+  // 2026-11-09: the task model setting is retired. An older controller's autosave that still carries
+  // it applies its other changes; the retired field alone is refused as an empty patch.
+  it('drops an older controller\'s retired task model from a settings patch', () => {
+    const route = { harness: 'codex', model: 'm', providerId: 'p', effort: 'high', fastMode: false };
+    expect(readBotSettingsPatch({ capabilities: { memory: false, taskModelOverride: route } })).toEqual({ capabilities: { memory: false } });
+    expect(() => readBotSettingsPatch({ capabilities: { taskModelOverride: route } })).toThrow();
   });
 
   it('clears the remote primary mirror when restoring local defaults', async () => {
@@ -650,6 +639,26 @@ describe('Bot settings profile consolidation', () => {
     await waitFor(() => expect(mocks.openPath).toHaveBeenCalledWith('/managed/bots/bot-1'));
   });
 
+  // #10216 unit: the actual settings entry must read without writing, explain
+  // missing identity, and finish an explicit retry without duplicate writes.
+  it('shows the Git identity problem and retries only when requested', async () => {
+    let finish!: (value: string) => void;
+    mocks.projectRepository.mockResolvedValueOnce('needs-identity')
+      .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.homeFolder.title' }));
+    await screen.findByText('bots.homeFolder.repository.needsIdentity');
+    expect(mocks.projectRepository).toHaveBeenCalledExactlyOnceWith('bot-1', false);
+    const retry = screen.getByRole('button', { name: 'bots.retry' });
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+    expect(mocks.projectRepository).toHaveBeenLastCalledWith('bot-1', true);
+    expect(mocks.projectRepository).toHaveBeenCalledTimes(2);
+    await act(async () => finish('ready'));
+    expect(screen.getByText('bots.homeFolder.repository.ready')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'bots.retry' })).toBeNull();
+  });
+
   it('shows the open-folder failure in place', async () => {
     mocks.openPath.mockResolvedValue({ success: false, error: 'missing' });
     renderSettings();
@@ -658,27 +667,10 @@ describe('Bot settings profile consolidation', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('missing');
   });
 
-  it('keeps todos out of the routines page now that they live in 近况', async () => {
-    // 2026-10-21：待办只在聊天头部的近况里看、在对话里改；设置里的例行任务页不再列待办。
-    const api = window.electronAPI as unknown as Record<string, Record<string, unknown>>;
-    api.routines = {
-      list: vi.fn(async () => []), sources: vi.fn(async () => []),
-      history: vi.fn(async () => []), onChanged: vi.fn(() => () => undefined),
-    };
-    const list = vi.fn(async () => ({ items: [] }));
-    (api.localDb.bots as Record<string, unknown>).todos = { list };
-    mocks.initialSearch = 'settings=1&tab=growth';
-    render(<ConfirmDialogProvider><BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} /></ConfirmDialogProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'routines.title' }));
-    await waitFor(() => expect(api.routines.list).toHaveBeenCalled());
-    expect(screen.queryByRole('region', { name: 'teammateTodo.title' })).toBeNull();
-    expect(list).not.toHaveBeenCalled();
-  });
-
   it('starts at grouped settings and opens real inner pages without exposing hidden inputs', async () => {
     renderSettings({}, 'settings=1&tab=growth');
     expect(screen.queryByRole('textbox')).toBeNull();
-    expect(screen.getByRole('button', { name: 'routines.title' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'bots.historySearch.title' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
     expect(screen.getByRole('textbox', { name: 'bots.nameLabel' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'bots.profile.changeAvatar' })).toBeTruthy();
@@ -885,7 +877,7 @@ describe('Bot settings unified autosave', () => {
     });
     renderSettings({ capabilities: capabilities({ memory: false }) });
     fireEvent.click(screen.getByRole('button', { name: 'bots.homeFolder.title' }));
-    expect(screen.queryByRole('switch')).toBeNull();
+    expect(screen.queryByRole('switch', { name: 'bots.memory.enabled' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
     fireEvent.click(screen.getByRole('button', { name: 'bots.memory.title' }));
     expect(screen.getByText('bots.memory.disabledHint')).toBeTruthy();

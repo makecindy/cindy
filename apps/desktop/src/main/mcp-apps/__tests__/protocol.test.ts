@@ -12,7 +12,8 @@ import {
   MCP_APPS_MAX_CARD_BYTES,
 } from '../protocol.js';
 
-vi.mock('../../i18n.js', () => ({ t: (key: string) => ({ 'mcpApps.pluginTrust.unverified': '未验证', 'mcpApps.pluginTrust.reviewed': '已审核' })[key] ?? key }));
+import { configureUiText } from '../../uiText.js';
+configureUiText((key, fallback) => ({ 'mcpApps.pluginTrust.unverified': '未验证', 'mcpApps.pluginTrust.reviewed': '已审核' })[key] ?? fallback);
 import { projectMcpAppHistory } from '../history.js';
 
 const tool = (ui: unknown): Tool => ({

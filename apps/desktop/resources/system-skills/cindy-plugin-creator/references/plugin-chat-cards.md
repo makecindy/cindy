@@ -50,7 +50,7 @@ cindy.onHostMessage(async function (msg) {
   收集文字(textarea,回车发送/Esc 取消),card-action 事件多带 `prompt` 字段
   (≤2000 字)——输入交互由主机代管;
 - **App 图标**:`span` / `div` 加 `data-ghost-icon="settings"`,主机换成 App 里同一个设置图标(Lucide,
-  颜色跟随 `currentColor`,尺寸跟随你给这个位置的宽高)。目前只登记了 `settings`;位置里写一个兜底图形,
+  颜色跟随 `currentColor`,尺寸跟随你给这个位置的宽高)。目前登记了 `settings` 和 `copy`;位置里写一个兜底图形,
   旧版客户端会照常显示它;
 - **模型下拉框**(如「用哪个模型跟进」):按钮上再加 `data-ghost-model-select="当前模型 JSON"`
   (`{agentKind,providerId,model,effort,fastMode}`,与 `cindy.pickModel` 返回的 route 同形,经 HTML
@@ -76,6 +76,21 @@ cindy.onHostMessage(async function (msg) {
   新版 Host 给旧卡打宿主标记，桌面和新手机整张隐去（插件 html 伪造不了标记）；旧 Host 和旧手机忽略它，显示这次更新的 html，
   所以仍要给旧卡一段指向新位置的简短文字（如「最新状态在下方」）。
   表单动作活动归原 callId，完成后原地更新；不用额外画空的 spawnCallId 卡片。
+- **卡片内打开已有任务**：声明 `card.externalLinks` 后可写
+  `<a href="cindy://session/<任务ID>">打开原任务</a>`。仅接受 1–128 位字母、数字、
+  下划线或连字符组成的任务 ID，不接受 query、hash、路径穿越或其它 Cindy 命令。
+  宿主将它变成任务导航，鼠标点击、Enter 和空格均可打开；不会交给插件或 Agent，
+  也不会用系统浏览器打开。手机版沿当前任务的原有任务链接导航入口处理。
+  旧版本会保留文字但不能点击。需要兼容旧客户端时，使用带降级动作的按钮：
+  `<button data-ghost-action="open-task" data-ghost-session-link="cindy://session/<任务ID>">打开原任务</button>`。
+  新版 Desktop 和声明 `plugin-card-session-links` 的手机走原生导航，不派发插件动作；
+  旧 Desktop 会忽略新属性，旧手机由宿主投影为原来的 `open-task` 动作。
+  插件收到降级动作后，可通过已有的用户点击 Agent 入口仅请求显示正文 Markdown 任务链接；
+  不要将导航理解为开始任务或跟进。旧端因此会多一步点击，但入口保持可用。
+  新属性仅用于合法动作的 button，不与 prompt、submit 或模型选择器混用；
+  原生导航仍要求 `card.externalLinks`。禁用按钮不可导航。
+  有已验证的降级路径时不必为此增强抬高最低版本；没有降级时需等支持它的实际宿主 release。
+
 - **可放外部链接**(外链 v3,经宿主确认):写 `<a href="https://…">官网</a>`,或在
   任意可用标签上挂 `data-ghost-link="https://…"`(整块可点)。仅收**整串**
   http/https URL(≤2048 字,不合法只丢属性——文字保留、点不动)。用户点击时主机
@@ -116,6 +131,10 @@ cindy.onHostMessage(async function (msg) {
   PR 已合并或关闭时露出它(查不到状态时看 `data-ghost-task-archive-state="merged|closed"` 快照),点击由主机
   走标准归档流程,插件收不到这次点击。用户开了自动归档时再加空值 `data-ghost-task-archive-auto`:主机自己确认
   已合并、用户看过并离开、且归档不会丢东西时才归档。旧版主机和手机不显示这颗按钮。
+- **复制链接按钮**:`button` 加 `data-ghost-copy-link="https://…"`(只认整串 http/https),不要再加
+  `data-ghost-action` / `data-ghost-link` / `data-ghost-task-archive`(加了主机就不认这个标记)。写成
+  `display:none`,里面放 `<span data-ghost-icon="copy">` 图标位;主机认得时把它露成 `inline-flex`,按钮名
+  换成 App 的「复制链接」,点击由主机把链接写进剪贴板并提示,插件收不到这次点击。旧版主机和手机不显示这颗按钮。
 - **手机端呈现提示**(手机不跑卡片 HTML,只收文字和原生按钮;这几个属性让它画得更像卡片):
   - 主操作 `button` 加空值属性 `data-ghost-primary`,手机画成主按钮;
   - 开关型设置的 `button` 加 `data-ghost-toggle="on|off"`,按钮里第一行文字是标题、其余是说明,

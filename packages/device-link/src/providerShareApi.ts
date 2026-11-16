@@ -70,7 +70,18 @@ export interface ProviderShareReceived {
   owner: ProviderSharePerson;
   status: 'active' | 'paused';
   hostOnline: boolean;
+  /** Original device presence, separate from an authorized standby. */
+  hostDeviceOnline?: boolean;
+  standbyOnline?: boolean;
   hostCapable: boolean;
+}
+export type ProviderShareListing<T> = T[] & { unavailableShareIds?: readonly string[]; authorityIncomplete?: true };
+function listing<T>(value: Record<string, unknown>, parse: (value: unknown) => T): ProviderShareListing<T> {
+  const result: ProviderShareListing<T> = list(value.shares).map(parse);
+  if (value.unavailableShareIds !== undefined) Object.defineProperty(result, 'unavailableShareIds', {
+    value: list(value.unavailableShareIds).map(providerShareIdentifier), enumerable: false });
+  if (value.authorityIncomplete === true) Object.defineProperty(result, 'authorityIncomplete', { value: true, enumerable: false });
+  return result;
 }
 
 export interface ProviderShareApiOptions {
@@ -216,8 +227,9 @@ function parseReceived(value: unknown): ProviderShareReceived {
     deviceName: text(item.deviceName, 256),
     owner: person(item.owner),
     status: oneOf(item.status, ['active', 'paused'] as const),
-    hostOnline: bool(item.hostOnline),
-    hostCapable: bool(item.hostCapable),
+    hostOnline: bool(item.hostOnline) || item.standbyOnline === true,
+    ...(typeof item.standbyOnline === 'boolean' ? { hostDeviceOnline: bool(item.hostOnline), standbyOnline: item.standbyOnline } : {}),
+    hostCapable: bool(item.hostCapable) || item.standbyOnline === true,
   };
 }
 
@@ -235,9 +247,9 @@ export function createProviderShareApi(options: ProviderShareApiOptions) {
   }
   const segment = (value: string) => `/${encodeURIComponent(providerShareIdentifier(value))}`;
   return {
-    async listOwned(): Promise<ProviderShareOwned[]> {
+    async listOwned(): Promise<ProviderShareListing<ProviderShareOwned>> {
       const value = await request('');
-      return list(value.shares).map(parseOwned);
+      return listing(value, parseOwned);
     },
     async createLink(input: { providerId: string; providerLabel: string; deviceName: string; identityCard: string }) {
       const value = await request('/links', 'POST', {
@@ -275,9 +287,9 @@ export function createProviderShareApi(options: ProviderShareApiOptions) {
     async withdraw(requestId: string) {
       await request(`/requests${segment(requestId)}/withdraw`, 'POST', {});
     },
-    async listReceived(): Promise<ProviderShareReceived[]> {
+    async listReceived(): Promise<ProviderShareListing<ProviderShareReceived>> {
       const value = await request('/received');
-      return list(value.shares).map(parseReceived);
+      return listing(value, parseReceived);
     },
     async leave(memberId: string) {
       await request(`/received${segment(memberId)}/leave`, 'POST', {});

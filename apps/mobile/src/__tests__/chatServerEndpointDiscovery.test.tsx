@@ -116,6 +116,18 @@ it.each(['cn', 'global'] as const)('release %s discovery feeds HTTP, WS and the 
   });
   const sent = h.auth.apiFetch.mock.calls.find(([path, options]) => path.endsWith('/messages') && options.method === 'POST')!;
   expect(sent[1].body).toEqual({ operationId: 'fixture-operation', content: [{ type: 'text', text: 'fixture' }], mentions: [] });
+  // #8386 missed phone-created shares. Unit: exercise the real hook/client and
+  // endpoint/auth adapter, not just a fake share callback. One reusable invite
+  // must yield a web URL from the phone's realm-specific Share Server.
+  const token = 'A'.repeat(43), shareId = 'b'.repeat(32);
+  const shareBase = env.getMobileEndpointForRealm(region, 'shareBaseUrl').replace(/\/$/, '');
+  const link = `${shareBase}/chat-invite/${shareId}`;
+  h.auth.apiFetch.mockResolvedValueOnce({ token, expiresAt: null, reusable: true })
+    .mockResolvedValueOnce({ schemaVersion: 1, kind: 'chat-invite', includeAttribution: true, shareId, url: link });
+  await expect(api.client.createInvite(roomId, self, 'invite-operation')).resolves.toEqual({ link, expiresAt: null, reusable: true });
+  const shared = h.auth.apiFetch.mock.calls.find(([path]) => path === '/api/shares')!;
+  expect(shared[1]).toMatchObject({ baseUrl: shareBase, method: 'POST', redirect: 'error',
+    body: { kind: 'chat-invite', reference: roomId, token, actorId: self, region, authRealm: region, includeAttribution: true } });
   // PR #7145: exercise the real group hook/client/HTTP adapter, not only a fake resolver.
   const controller = new AbortController();
   h.auth.apiFetch.mockImplementationOnce(async (_path, options) => {
@@ -133,6 +145,15 @@ it.each(['cn', 'global'] as const)('release %s discovery feeds HTTP, WS and the 
   expect(h.auth.apiFetch.mock.calls.every(([, options]) => options.baseUrl === JSON.parse(texts[other]).chatApiBaseUrl)).toBe(true);
   await act(async () => h.sockets.filter(socket => !oldSockets.includes(socket)).forEach(socket => socket.onopen({})));
   expect(h.sockets.at(-1).send).toHaveBeenCalledWith(JSON.stringify({ type: 'auth', token: 'fixture-token:another-phone-owner' }));
+  // Cross-realm account regression: the installed edition owns the public share
+  // origin/region; changing accounts changes authRealm, not that public origin.
+  const editionShareBase = JSON.parse(texts[region]).shareBaseUrl.replace(/\/$/, '');
+  const editionLink = `${editionShareBase}/chat-invite/${shareId}`;
+  h.auth.apiFetch.mockResolvedValueOnce({ token, expiresAt: null, reusable: true })
+    .mockResolvedValueOnce({ schemaVersion: 1, kind: 'chat-invite', includeAttribution: true, shareId, url: editionLink });
+  await expect(api.client.createInvite(roomId, self, 'cross-realm-invite')).resolves.toMatchObject({ link: editionLink });
+  const crossRealmShare = h.auth.apiFetch.mock.calls.findLast(([path]) => path === '/api/shares')!;
+  expect(crossRealmShare[1]).toMatchObject({ baseUrl: editionShareBase, body: { region, authRealm: other } });
 });
 
 it('old cached discovery without chat reports configuration failure and retries the trusted source', async () => {

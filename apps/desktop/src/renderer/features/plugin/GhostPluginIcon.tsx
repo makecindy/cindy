@@ -34,11 +34,12 @@ const FALLBACK_ICONS: Record<GhostFallbackIconKind, LucideIcon> = {
   generic: Puzzle,
 };
 
-type GhostPluginIconSize = 'mini' | 'menu' | 'md' | 'detail';
+type GhostPluginIconSize = 'mini' | 'menu' | 'sm' | 'md' | 'detail';
 
 const CONTAINER_CLASSES: Record<GhostPluginIconSize, string> = {
   mini: 'size-full rounded-[5px] border-0 shadow-none',
   menu: 'size-5 rounded-[7px] border-0 shadow-none',
+  sm: 'size-8 rounded-[22%]',
   md: 'size-12 rounded-[22%]',
   detail: 'size-16 rounded-xl',
 };
@@ -46,6 +47,7 @@ const CONTAINER_CLASSES: Record<GhostPluginIconSize, string> = {
 const SVG_ICON_CLASSES: Record<GhostPluginIconSize, string> = {
   mini: 'size-2.5 object-contain',
   menu: 'size-3 object-contain',
+  sm: 'size-5 object-contain',
   md: 'size-8 object-contain',
   detail: 'size-10 object-contain',
 };
@@ -53,6 +55,7 @@ const SVG_ICON_CLASSES: Record<GhostPluginIconSize, string> = {
 const FALLBACK_ICON_CLASSES: Record<GhostPluginIconSize, string> = {
   mini: 'size-3',
   menu: 'size-3',
+  sm: 'size-4',
   md: 'size-5',
   detail: 'size-7',
 };
@@ -93,8 +96,8 @@ export function GhostPluginIcon({
       className={cn(
         'inline-flex shrink-0 items-center justify-center overflow-hidden border-[0.5px] border-[var(--border-default)]',
         resolvedIconDataUrl
-          ? 'bg-[var(--plugin-icon-surface)] shadow-[var(--plugin-icon-shadow)]'
-          : 'bg-[var(--surface-elevated)] text-[var(--text-secondary)] shadow-none',
+          ? 'bg-[var(--plugin-icon-surface)]'
+          : 'bg-[var(--surface-elevated)] text-[var(--text-secondary)]',
         CONTAINER_CLASSES[size],
       )}
     >

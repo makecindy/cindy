@@ -1358,6 +1358,18 @@ describe("registry visibility & sources(运行时注入 fixture)", () => {
     );
   });
 
+  // 2026-11-11 upgrade regression, unit: the display marker must not disconnect saved routes.
+  it("keeps imported connection IDs available to saved-route validators", () => {
+    const connected = buildRegistry(runtimeCatalog(), { openai: true });
+    const original = connected.find(provider => provider.id === "openai")!;
+    const alias = { ...original, id: "openai-old", subscriptionPoolAlias: true as const };
+    const upgraded = [...connected, alias];
+    expect(connectedProvidersForAgent(upgraded, "codex").map(provider => provider.id)).toEqual(["openai", "openai-old"]);
+    expect(connectedProvidersForAgent(upgraded, "codex", { includeSuspended: true }).map(provider => provider.id))
+      .toEqual(["openai", "openai-old"]);
+    expect(sourcesForModel(upgraded, "gpt-5.5", "codex").some(provider => provider.id === "openai-old")).toBe(true);
+  });
+
   it("agent selectors and model sources exclude disabled runtimes", () => {
     const catalog = runtimeCatalog();
     const xd = catalog.providers.find((provider) => provider.id === "xd")!;

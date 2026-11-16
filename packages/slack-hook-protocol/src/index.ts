@@ -32,6 +32,8 @@ export {
   makeProviderBindStart,
   makeProviderBindCancel,
   makeProviderBindRevoke,
+  makeProviderBindSelect,
+  makeProviderBindSelection,
   makeProviderBindUpdate,
   makeProviderBindState,
   makeQueryRequest,
@@ -58,3 +60,5 @@ export {
   serializeHookMessage,
   type HelloInput,
 } from './build';
+
+export * from './channelHistory';

@@ -14,7 +14,9 @@ import {
   buildClaudeSkillOverrides,
   mergeClaudeHookSets,
   CLAUDE_ASK_USER_QUESTION_TOOL_NAME,
-  CINDY_ASK_OWNER_TOOL_NAME,
+  CINDY_INPUT_HANDOFF_TOOL_NAME,
+  CINDY_ASYNC_QUESTION_TOOL_NAME,
+  CINDY_MANAGE_QUESTIONS_TOOL_NAME,
   CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON,
   ORCA_SEND_TO_LEAD_TOOL_NAME,
 } from '../capability-routing.js';
@@ -53,7 +55,7 @@ describe('Claude Orca caller provenance', () => {
     expect(buildClaudeRemoteOrcaCallerGuards(false)).toEqual([]);
   });
 
-  it.each([CLAUDE_ASK_USER_QUESTION_TOOL_NAME, CINDY_ASK_OWNER_TOOL_NAME])('allows only the root to ask using %s', async (toolName) => {
+  it.each([CINDY_MANAGE_QUESTIONS_TOOL_NAME, CLAUDE_ASK_USER_QUESTION_TOOL_NAME, CINDY_INPUT_HANDOFF_TOOL_NAME, CINDY_ASYNC_QUESTION_TOOL_NAME])('allows only the root to ask using %s', async (toolName) => {
     const hook = buildClaudeAskUserQuestionCallerProvenanceHooks().PreToolUse?.find((entry) => entry.matcher === toolName)?.hooks[0];
     if (!hook) throw new Error('expected AskUserQuestion caller provenance hook');
     const input = {
@@ -81,12 +83,22 @@ describe('Claude Orca caller provenance', () => {
 
   it('serializes the native AskUserQuestion root-only guard for remote Claude', () => {
     expect(buildClaudeRemoteRootOnlyToolGuards()).toEqual([{
+      toolNamePrefix: CINDY_MANAGE_QUESTIONS_TOOL_NAME,
+      sourceServerId: 'cindy_helper',
+      invocation: 'root-only',
+      denialMessage: CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON,
+    }, {
+      toolNamePrefix: CINDY_ASYNC_QUESTION_TOOL_NAME,
+      sourceServerId: 'cindy_helper',
+      invocation: 'root-only',
+      denialMessage: CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON,
+    }, {
       toolNamePrefix: CLAUDE_ASK_USER_QUESTION_TOOL_NAME,
       sourceServerId: 'claude-code',
       invocation: 'root-only',
       denialMessage: CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON,
     }, {
-      toolNamePrefix: CINDY_ASK_OWNER_TOOL_NAME,
+      toolNamePrefix: CINDY_INPUT_HANDOFF_TOOL_NAME,
       sourceServerId: 'cindy_helper',
       invocation: 'root-only',
       denialMessage: CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON,

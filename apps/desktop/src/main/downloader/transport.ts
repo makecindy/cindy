@@ -1,6 +1,5 @@
 /** One HTTP attempt. Callers supply policy; queueing/retries live in scheduler.
  * Await disk writes to bound memory even for multi-gigabyte runtime archives. */
-import { requestResponse } from './http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DownloadError, type DownloadOptions, type DownloadRequest, type Logger } from './types';
@@ -45,9 +44,8 @@ export function assertDownloadUrl(url: string, opts: DownloadOptions): void {
   }
 }
 
-const electronRequest: DownloadRequest = async (url, init) => ({
-  response: await requestResponse(url, init),
-});
+let defaultRequest: DownloadRequest | undefined;
+export function configureDefaultDownloadRequest(request: DownloadRequest): void { defaultRequest = request; }
 
 /** Resume validators come from the server; cap them before persisting or echoing back. */
 function boundedHeader(response: Response, name: string, max: number): string | null {
@@ -58,7 +56,8 @@ function boundedHeader(response: Response, name: string, max: number): string | 
 export async function executeOnce(ctx: TransportContext): Promise<TransportResult> {
   const { opts } = ctx;
   const signal = ctx.signal ?? opts.signal;
-  const send = opts.request ?? electronRequest;
+  const send = opts.request ?? defaultRequest;
+  if (!send) throw new DownloadError('INVALID_ARG', 'Download transport is not configured');
   const controller = new AbortController();
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;

@@ -43,10 +43,6 @@ export type BotDirectMessageThreadResult =
   | { ok: true; thread: BotDirectMessageThreadView }
   | { ok: false; errorCode: string; message: string };
 
-export interface BotDirectMessageChangedPayload {
-  threadId: string;
-  participantBotIds: [string, string];
-}
 
 export function readBotDirectMessageMeta(value: unknown): BotDirectMessageMeta | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;

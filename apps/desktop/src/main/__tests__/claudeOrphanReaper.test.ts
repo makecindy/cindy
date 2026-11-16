@@ -1,7 +1,7 @@
 /**
  * claudeOrphanReaper.test.ts
  * ---------------------------------------------------------------------------
- * 单测只覆盖同步 reaper 的识别 / 容错语义。真实 taskkill / pgrep / kill 由
+ * 单测只覆盖同步 reaper 与启动期异步清扫的识别 / 容错语义。真实 taskkill / pgrep / kill 由
  * 平台集成验证兜底，避免测试环境误碰本机进程树。
  */
 
@@ -37,6 +37,7 @@ function restorePlatform(): void {
 
 async function importReaper(options: {
   platform: NodeJS.Platform;
+  execFile?: ReturnType<typeof vi.fn>;
   execFileSync?: ExecFileSyncMock;
   spawnSync?: SpawnSyncMock;
 }) {
@@ -46,6 +47,7 @@ async function importReaper(options: {
     createLogger: () => logger,
   }));
   vi.doMock('node:child_process', () => ({
+    execFile: options.execFile ?? vi.fn(),
     execFileSync: options.execFileSync ?? vi.fn(),
     spawnSync: options.spawnSync ?? vi.fn(),
   }));
@@ -355,4 +357,66 @@ describe('reapClaudeOrphansSync', () => {
     // pgrep is no longer used — the old recursive walk is gone.
     expect(spawnSync).not.toHaveBeenCalledWith('pgrep', expect.anything(), expect.anything());
   });
+});
+
+describe('reapHistoricalClaudeOrphans', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.doUnmock('../logger');
+    vi.doUnmock('node:child_process');
+    restorePlatform();
+  });
+
+  // Startup no longer blocks on the scan, so a task this instance launches
+  // before the scan returns shows up as a current-process child. Reaping it
+  // like the quit path does would kill the user's freshly started task.
+  it.each([
+    [
+      'win32',
+      (pid: number, ppid: number, bin: string) => `${pid}|${ppid}|${bin}`,
+      'C:\\src\\cindy\\apps\\claude-code-bin\\win32-x64\\claude.exe',
+      (pid: number) => ['taskkill', ['/T', '/F', '/PID', String(pid)]],
+    ],
+    [
+      'darwin',
+      (pid: number, ppid: number, bin: string) => `${pid} ${ppid} ${bin}`,
+      '/src/cindy/apps/claude-code-bin/darwin-arm64/claude',
+      (pid: number) => ['kill', ['-9', String(pid)]],
+    ],
+  ] as const)(
+    'on %s scans without blocking and spares current-process children',
+    async (platform, row, bin, killCall) => {
+      const liveChildPid = process.pid + 40;
+      const orphanPid = process.pid + 41;
+      const execFile = vi.fn(
+        (file: string, _args: readonly string[], _opts: unknown, cb: Function) => {
+          const scan = file === 'powershell.exe' || file === 'ps';
+          cb(
+            null,
+            scan ? [row(liveChildPid, process.pid, bin), row(orphanPid, 99999, bin)].join('\n') : '',
+          );
+        },
+      );
+      const execFileSync = vi.fn();
+      const spawnSync = vi.fn();
+      vi.spyOn(process, 'kill').mockImplementation(((pid: number) => {
+        if (pid !== 99999) return true;
+        throw Object.assign(new Error('missing'), { code: 'ESRCH' });
+      }) as typeof process.kill);
+      const { reapHistoricalClaudeOrphans } = await importReaper({
+        platform,
+        execFile,
+        execFileSync,
+        spawnSync,
+      });
+
+      const result = await reapHistoricalClaudeOrphans();
+
+      expect(result).toMatchObject({ scannedTotal: 2, killedSelfSpawned: 0, killedHistoricalOrphans: 1 });
+      const [file, args] = killCall(orphanPid);
+      expect(execFile.mock.calls.filter(([f]) => f === file).map(([, a]) => a)).toEqual([args]);
+      expect(execFileSync).not.toHaveBeenCalled();
+      expect(spawnSync).not.toHaveBeenCalled();
+    },
+  );
 });

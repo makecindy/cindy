@@ -1,7 +1,7 @@
 import { detectDeploymentProviders, enrichDetectedModels, providerDeploymentRoot, type DeploymentProvider, type ProviderEvidence } from '@cindy/model-providers';
 import { fetchProviderModels, type ProviderModelsFetchSpec } from './provider-model-fetch.js';
 import type { DeploymentDetectionResult } from '../../shared/providerDetection.js';
-import { outboundFetch } from './outbound-fetch.js';
+import { outboundFetch } from './outbound-fetch.desktop.js';
 
 type Probe = { id: keyof ProviderEvidence; system: DeploymentProvider; path: string; auth?: 'required' | 'optional' };
 const PROBES: readonly Probe[] = [

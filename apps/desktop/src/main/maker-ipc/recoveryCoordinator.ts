@@ -37,7 +37,8 @@ export type RecoveryMode = RecoveryCheckpoint['mode'];
  * must become stateful before the next turn is forced to compact again.
  */
 export const RECOVERY_CHECKPOINT_CONTEXT_RATIO = 0.72;
-export const RECOVERY_CHECKPOINT_MARKER = '\n\n[CINDY_RECOVERY_CHECKPOINT v1]';
+import { RECOVERY_CHECKPOINT_MARKER } from './recoveryMarker.js';
+export { RECOVERY_CHECKPOINT_MARKER };
 
 export function decideRecoveryMode(input: RecoveryDecisionInput): RecoveryMode {
   if (input.progressCount <= 0) return 'fast';

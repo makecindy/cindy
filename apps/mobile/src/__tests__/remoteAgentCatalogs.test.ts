@@ -149,6 +149,15 @@ describe('provider shares in the remote Agent catalogs', () => {
     expect(isProviderShareAgentDeviceId(null)).toBe(false);
   });
 
+  it('carries the share and member identity used to favorite the shared provider', () => {
+    const favoriteSource = {
+      shareId: 'one', memberId: 'member-1', providerId: 'anthropic', owner: { region: 'global' as const },
+    };
+    const [catalog] = build({ shares: [share('one', { favoriteSource })] });
+    expect(catalog.favoriteSource).toEqual(favoriteSource);
+    expect(build({ shares: [share('one')] })[0].favoriteSource).toBeUndefined();
+  });
+
   it('lists each reachable share as one more computer with only the shared provider', () => {
     const [catalog] = build({ shares: [share('one')] });
     expect(catalog).toEqual({

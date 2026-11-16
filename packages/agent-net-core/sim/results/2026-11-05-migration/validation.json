@@ -1,0 +1,499 @@
+[
+  {
+    "step": "check",
+    "command": [
+      "cargo",
+      "check",
+      "--profile",
+      "sim",
+      "--workspace",
+      "--all-targets",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 43.469,
+    "output": "validate/check.txt"
+  },
+  {
+    "step": "tests-default",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "--workspace",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 44.194,
+    "output": "validate/tests-default.txt"
+  },
+  {
+    "step": "tests-10000",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "--workspace",
+      "--locked",
+      "--offline"
+    ],
+    "env": {
+      "AGENT_NET_SEEDS": "10000"
+    },
+    "exit": 0,
+    "seconds": 1101.616,
+    "output": "validate/tests-10000.txt"
+  },
+  {
+    "step": "unit-kcp",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--features",
+      "kcp",
+      "--lib",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 3.704,
+    "output": "validate/unit-kcp.txt"
+  },
+  {
+    "step": "fresh-every_seed_delivers_an_intact_ordered_stream",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "reliability",
+      "--locked",
+      "--offline",
+      "every_seed_delivers_an_intact_ordered_stream",
+      "--",
+      "--exact"
+    ],
+    "env": {
+      "AGENT_NET_SEEDS": "1000",
+      "AGENT_NET_SEED_START": "900000"
+    },
+    "exit": 0,
+    "seconds": 7.732,
+    "output": "validate/fresh-every_seed_delivers_an_intact_ordered_stream.txt"
+  },
+  {
+    "step": "fresh-recovery_policies_keep_streams_intact_and_make_progress",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "reliability",
+      "--locked",
+      "--offline",
+      "recovery_policies_keep_streams_intact_and_make_progress",
+      "--",
+      "--exact"
+    ],
+    "env": {
+      "AGENT_NET_SEEDS": "1000",
+      "AGENT_NET_SEED_START": "900000"
+    },
+    "exit": 0,
+    "seconds": 24.347,
+    "output": "validate/fresh-recovery_policies_keep_streams_intact_and_make_progress.txt"
+  },
+  {
+    "step": "fresh-encrypted_seeds_deliver_intact_streams",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "secure",
+      "--locked",
+      "--offline",
+      "encrypted_seeds_deliver_intact_streams",
+      "--",
+      "--exact"
+    ],
+    "env": {
+      "AGENT_NET_SEEDS": "1000",
+      "AGENT_NET_SEED_START": "900000"
+    },
+    "exit": 0,
+    "seconds": 5.039,
+    "output": "validate/fresh-encrypted_seeds_deliver_intact_streams.txt"
+  },
+  {
+    "step": "fresh-random_moves_deliver_intact_streams",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "migration",
+      "--locked",
+      "--offline",
+      "random_moves_deliver_intact_streams",
+      "--",
+      "--exact"
+    ],
+    "env": {
+      "AGENT_NET_SEEDS": "2000",
+      "AGENT_NET_SEED_START": "900000"
+    },
+    "exit": 0,
+    "seconds": 73.297,
+    "output": "validate/fresh-random_moves_deliver_intact_streams.txt"
+  },
+  {
+    "step": "time-migration",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "migration",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 5.797,
+    "output": "validate/time-migration.txt"
+  },
+  {
+    "step": "time-udp",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "udp",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 0.256,
+    "output": "validate/time-udp.txt"
+  },
+  {
+    "step": "time-secure",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "secure",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 1.854,
+    "output": "validate/time-secure.txt"
+  },
+  {
+    "step": "secure-cost",
+    "command": [
+      "cargo",
+      "run",
+      "--release",
+      "-p",
+      "agent-net-sim",
+      "--example",
+      "secure_cost",
+      "--locked",
+      "--offline",
+      "--",
+      "8",
+      "2"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 26.185,
+    "output": "validate/secure-cost.txt"
+  },
+  {
+    "step": "build",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "agent-net-sim",
+      "--features",
+      "kcp",
+      "--bin",
+      "compare",
+      "--bin",
+      "share",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 5.464,
+    "output": "build.txt"
+  },
+  {
+    "step": "simulation-lean",
+    "command": [
+      "<repo>/packages/agent-net-core/target/release/compare.exe"
+    ],
+    "env": {
+      "AGENT_NET_KCP": "none",
+      "AGENT_NET_NO_CPU": "1",
+      "AGENT_NET_POLICY": "lean"
+    },
+    "exit": 0,
+    "seconds": 16.307,
+    "output": "simulation-lean.txt"
+  },
+  {
+    "step": "simulation-auto",
+    "command": [
+      "<repo>/packages/agent-net-core/target/release/compare.exe"
+    ],
+    "env": {
+      "AGENT_NET_KCP": "none",
+      "AGENT_NET_NO_CPU": "1",
+      "AGENT_NET_POLICY": "auto"
+    },
+    "exit": 0,
+    "seconds": 59.513,
+    "output": "simulation-auto.txt"
+  },
+  {
+    "step": "simulation-fast",
+    "command": [
+      "<repo>/packages/agent-net-core/target/release/compare.exe"
+    ],
+    "env": {
+      "AGENT_NET_KCP": "none",
+      "AGENT_NET_NO_CPU": "1",
+      "AGENT_NET_POLICY": "fast"
+    },
+    "exit": 0,
+    "seconds": 65.039,
+    "output": "simulation-fast.txt"
+  },
+  {
+    "step": "matrix-fair-timer1ms",
+    "command": [
+      "<repo>/packages/agent-net-core/target/release/share.exe"
+    ],
+    "env": {
+      "SHARE_MODE": "fair",
+      "SHARE_TIMER_US": "1000"
+    },
+    "exit": 0,
+    "seconds": 86.851,
+    "output": "matrix-fair-timer1ms.txt"
+  },
+  {
+    "step": "matrix-full-timer1ms",
+    "command": [
+      "<repo>/packages/agent-net-core/target/release/share.exe"
+    ],
+    "env": {
+      "SHARE_MODE": "full",
+      "SHARE_TIMER_US": "1000"
+    },
+    "exit": 0,
+    "seconds": 90.914,
+    "output": "matrix-full-timer1ms.txt"
+  },
+  {
+    "step": "matrix-fair-precise",
+    "command": [
+      "<repo>/packages/agent-net-core/target/release/share.exe"
+    ],
+    "env": {
+      "SHARE_MODE": "fair",
+      "SHARE_TIMER_US": "1"
+    },
+    "exit": 0,
+    "seconds": 142.633,
+    "output": "matrix-fair-precise.txt"
+  },
+  {
+    "step": "matrix-full-precise",
+    "command": [
+      "<repo>/packages/agent-net-core/target/release/share.exe"
+    ],
+    "env": {
+      "SHARE_MODE": "full",
+      "SHARE_TIMER_US": "1"
+    },
+    "exit": 0,
+    "seconds": 168.061,
+    "output": "matrix-full-precise.txt"
+  },
+  {
+    "step": "matrix-full-precise-clock-offset",
+    "command": [
+      "<repo>/packages/agent-net-core/target/release/share.exe"
+    ],
+    "env": {
+      "SHARE_MODE": "full",
+      "SHARE_TIMER_US": "1",
+      "SHARE_CLOCK_OFFSET_US": "1700000000000000"
+    },
+    "exit": 0,
+    "seconds": 168.121,
+    "output": "matrix-full-precise-clock-offset.txt"
+  },
+  {
+    "step": "seed-scan",
+    "command": [
+      "<scratch>/hunt.exe",
+      "<起点>",
+      "2500"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": null,
+    "output": null,
+    "note": "release 构建，8 个进程并行扫 0–9999、900000–909999 共 20000 个 random_scenario 种子，全部传完。工具是仓库外的临时程序，逻辑同 random_moves_deliver_intact_streams，只多了 catch_unwind"
+  },
+  {
+    "step": "scenarios",
+    "command": [
+      "<scratch>/explore.exe"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": null,
+    "output": "scenarios.md",
+    "note": "源码见 scenarios.rs，仓库外的临时程序，依赖本仓的 agent-net-sim"
+  },
+  {
+    "step": "public-migrate",
+    "command": [
+      "migrate",
+      "client",
+      "--server",
+      "<上海云主机>:47812",
+      "--direction",
+      "up|down",
+      "--bytes",
+      "120000000|15000000",
+      "--rebind-at",
+      "3,6",
+      "--notice",
+      "yes|no"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": null,
+    "output": "public/client.txt / public/server.txt / public/summary.md",
+    "note": "服务端 migrate server --bind 0.0.0.0:47812 --seconds 3000。客户端是这台 Windows 电脑，服务端是 Linux 构建（rust:1.97-slim-bookworm 容器里离线构建，依赖经 cargo vendor 带进去）。drive.sh 是驱动脚本"
+  },
+  {
+    "step": "mutants-full",
+    "command": [
+      "py",
+      "-3",
+      "sim/mutants.py"
+    ],
+    "env": {
+      "AGENT_NET_MUTANT_SHARD": "0/4 | 1/4 | 2/4 | 3/4",
+      "PYTHONIOENCODING": "utf-8"
+    },
+    "exit": 1,
+    "seconds": 4271,
+    "output": "mutants-full.txt",
+    "note": "四个分片同时跑，墙钟时间；166 个里 163 个被抓到，退出码 1 因为有 3 个没抓到，处理见 README 问题 3、11、12。跑的时候 sharing.rs 还没加新场景"
+  },
+  {
+    "step": "tests-sharing-after-edit",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "sharing",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 3.86,
+    "output": "validate/tests-sharing-after-edit.txt",
+    "note": "只计测试本身，编译另需 36.5 秒"
+  },
+  {
+    "step": "mutant-saturated-cap-after-edit",
+    "command": [
+      "py",
+      "-3",
+      "sim/mutants.py",
+      "持续满发时补偿不收紧"
+    ],
+    "env": {
+      "PYTHONIOENCODING": "utf-8"
+    },
+    "exit": 0,
+    "seconds": 41,
+    "output": "mutant-saturated-cap-after-edit.txt",
+    "note": "含编译"
+  },
+  {
+    "step": "shallow-sweep",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "shallow-sweep",
+      "--",
+      "--nocapture"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 23.5,
+    "output": "shallow-sweep.txt",
+    "note": "一次性测试，源码 shallow-sweep.rs；三列分别在上一版（bf8b28ee9f）、本轮、本轮放宽补偿上限的临时副本上跑"
+  }
+]

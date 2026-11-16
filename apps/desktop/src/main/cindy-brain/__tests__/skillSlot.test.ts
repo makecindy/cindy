@@ -2,7 +2,8 @@ import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { app } from 'electron';
+import { app, utilityProcess } from 'electron';
+import { configureGhostSnapshotProcess } from '../ghostSnapshotCapability.js';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -29,6 +30,7 @@ function packGhostDir(dir: string) {
 }
 
 beforeEach(async () => {
+  configureGhostSnapshotProcess((parentDir) => utilityProcess.fork('test-snapshot-worker', [], { cwd: parentDir }));
   workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-skill-slot-test-'));
   homeDir = path.join(workDir, 'home');
   brainRoot = path.join(workDir, 'owners', 'aaa', 'cindy-brain');

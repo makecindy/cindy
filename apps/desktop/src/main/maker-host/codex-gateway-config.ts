@@ -19,7 +19,7 @@
  * (见 auth-adapters.ts getAuthEnv 的 API 模式分支)。
  */
 
-import { claudeUpstreamEndpoint } from './runtime-configs.js';
+
 
 /** 内部 provider id(codex config 里的 key)。仅 codex 子进程配置的本地标签,不外发。 */
 export const CODEX_GATEWAY_PROVIDER_ID = 'cindy_gateway';
@@ -67,7 +67,7 @@ export type CodexProxySpawnAuthMode = 'oauth-bearer' | 'env-key' | 'provider-oau
  */
 export const CODEX_OAUTH_UPSTREAM = 'https://chatgpt.com/backend-api/codex';
 
-export function buildCodexGatewayBaseUrl(upstream = claudeUpstreamEndpoint()): string {
+export function buildCodexGatewayBaseUrl(upstream: string): string {
   return `${upstream.replace(/\/+$/, '')}/v1`;
 }
 

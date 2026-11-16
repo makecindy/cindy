@@ -57,7 +57,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
 
 function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
   return {
@@ -100,6 +100,7 @@ function createRunner(getSessionMeta: Maker['getSessionMeta']) {
     getSessionMeta,
     isSessionAlive: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,

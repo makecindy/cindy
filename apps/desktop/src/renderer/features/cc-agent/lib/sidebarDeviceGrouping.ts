@@ -9,7 +9,9 @@ export function buildSidebarDeviceIndex(
     if (device.status === 'rejected') continue;
     index.set(device.deviceId, {
       name: device.name,
-      online: device.status === 'connected',
+      // 用设备 presence,不拿同步状态顶替:「在线但还没同步出任务」不是离线,
+      // 否则侧栏分组标题会给一台明明在线的设备挂上「离线」。
+      online: device.online,
     });
   }
   return index;

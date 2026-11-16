@@ -1,9 +1,9 @@
 /**
- * PtyManager —— 管理一组 PTY session（一个 tab 一个 session）。
+ * PtyManager —— 界面终端与宿主命令/作业共用的 PTY 实现。
  *
  * 设计要点（对照 Codex Desktop `main-cC-d0ezP.js:60513-60647` 的 s1 + h1 class）:
  *
- *   - **session 生命周期 = tab 生命周期 = main 进程生命周期**：
+ *   - **session 生命周期绑定创建者**（界面 tab 或宿主托管 owner）：
  *     PTY 在 `create(id, opts)` 时 spawn，在 `dispose(id)` 时 kill；中间用户 `exit`
  *     或程序 crash 触发 onExit，session 保留在 Map 里（`exitState` 填上退出码），
  *     渲染端 overlay 显示 "Process exited with code N" + Restart 按钮。用户点 Restart
@@ -28,6 +28,7 @@
  */
 
 import { StringDecoder } from 'node:string_decoder';
+import { randomUUID } from 'node:crypto';
 import type { IPty, IPtyForkOptions, IWindowsPtyForkOptions } from 'node-pty';
 import type { WebContents } from 'electron';
 
@@ -44,6 +45,17 @@ const log = createLogger('terminal/pty-manager');
 const TERMINAL_NAME = 'xterm-256color';
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
+// DSH jobs-local/src/index.ts:37/40; only retainOutput managed jobs use these rings.
+const OUTPUT_BYTES = 256 * 1024;
+const SETTLED_OUTPUT_BYTES = 16 * 1024;
+const OUTPUT_CHUNKS = 256;
+const READ_BYTES = 64 * 1024;
+
+/** A window or a Host-owned lifetime; a detached reader never owns the process. */
+export interface PtyOwner {
+  isDestroyed(): boolean;
+  once(event: 'destroyed', listener: () => void): unknown;
+}
 
 /**
  * 必须从父 env 删掉的变量集合。对照 Codex Desktop `buildTerminalEnv` 的做法
@@ -90,7 +102,7 @@ const ENV_KEYS_TO_STRIP: readonly string[] = [
   'GIT_ASKPASS', // VSCode 注入的 askpass shim,装了会导致 git 走 VSCode 弹窗
 ];
 
-export interface CreateOptions {
+export interface CreateOptions<Owner extends PtyOwner = WebContents> {
   /** PTY session id，对应 RSB tab id（1:1 关系）。 */
   id: string;
   /** 工作目录；不存在或为空时主调方应自己 fallback 到 home。 */
@@ -99,14 +111,20 @@ export interface CreateOptions {
   rows?: number;
   /** Settings 中的用户偏好（'auto' / 具体 id / null）。 */
   shellPref?: ShellId | null;
-  /** 创建者 webContents，session destroyed 时自动 dispose 该 owner 所有 session。 */
-  owner: WebContents;
+  /** 创建者生命周期；窗口或宿主 owner 销毁时释放它的全部进程。 */
+  owner: Owner;
   /** 额外 env 覆盖（不强制）。会跟 process.env 浅合并。 */
   env?: Record<string, string | undefined>;
+  /** Host command service supplies an exact, already filtered environment. */
+  inheritEnv?: boolean;
+  /** Omit for the existing interactive shell; args are passed without shell interpolation. */
+  program?: { command: string; args: string[] };
+  /** Managed jobs opt into cursor retention; ordinary UI output stays push-only. */
+  retainOutput?: boolean;
 }
 
 export interface CreateResult {
-  shellId: Exclude<ShellId, 'auto'>;
+  shellId: Exclude<ShellId, 'auto'> | 'program';
   shellDisplayName: string;
   pid: number;
 }
@@ -127,21 +145,54 @@ export interface ExitPayload {
 }
 
 /** 主进程对外暴露的事件接收器。生产代码 → 走 webContents.send；测试 → 自定义收集。 */
-export interface PtyEventSink {
-  emitData: (target: WebContents, payload: DataPayload) => void;
-  emitExit: (target: WebContents, payload: ExitPayload) => void;
+export interface PtyEventSink<Owner extends PtyOwner = WebContents> {
+  emitData: (target: Owner, payload: DataPayload) => void;
+  emitExit: (target: Owner, payload: ExitPayload) => void;
 }
 
-interface PtySession {
+interface OutputChunk { sequence: number; data: string }
+
+export interface PtySnapshot extends CreateResult {
+  id: string;
+  generation: string;
+  cwd: string;
+  cols: number;
+  rows: number;
+  startedAt: number;
+  status: 'running' | 'stopping' | 'exited';
+  exit: ExitInfo | null;
+}
+
+export interface PtyOutput {
+  generation: string;
+  chunks: OutputChunk[];
+  cursor: number;
+  hasMore: boolean;
+  resetRequired: boolean;
+  exit: ExitInfo | null;
+}
+
+interface PtySession<Owner extends PtyOwner> {
   id: string;
   pty: IPty;
-  resolved: ResolvedShell;
+  resolved: Omit<ResolvedShell, 'id'> & { id: CreateResult['shellId'] };
   cwd: string;
   cols: number;
   rows: number;
   shellPref: ShellId | null;
   exit: ExitInfo | null;
-  owner: WebContents;
+  owner: Owner;
+  env?: CreateOptions['env'];
+  inheritEnv?: boolean;
+  program?: CreateOptions['program'];
+  retainOutput?: boolean;
+  active: boolean;
+  stopping: boolean;
+  generation: string;
+  startedAt: number;
+  output: OutputChunk[];
+  outputBytes: number;
+  sequence: number;
   /** 累积待发的 input；flush 完清空。 */
   pendingInput: string;
   /** flush 用的 microtask 是否已经 schedule。 */
@@ -154,9 +205,9 @@ interface PtySession {
   decoder: StringDecoder;
 }
 
-export interface PtyManagerDeps {
+export interface PtyManagerDeps<Owner extends PtyOwner = WebContents> {
   spawn?: PtySpawnFn;
-  sink: PtyEventSink;
+  sink: PtyEventSink<Owner>;
   /** 仅供测试注入平台；生产代码默认使用当前 Node 平台。 */
   platform?: NodeJS.Platform;
   /**
@@ -170,18 +221,18 @@ export interface PtyManagerDeps {
    * 不杀,两种形态语义必须一致)。主窗销毁(app 退出)时 fallback 解析不到
    * 活 webContents,仍走 dispose,不会泄漏 PTY。
    */
-  resolveFallbackOwner?: (deadOwner: WebContents) => WebContents | null;
+  resolveFallbackOwner?: (deadOwner: Owner) => Owner | null;
 }
 
-export class PtyManager {
-  private readonly sessions = new Map<string, PtySession>();
-  private readonly trackedOwners = new WeakSet<WebContents>();
+export class PtyManager<Owner extends PtyOwner = WebContents> {
+  private readonly sessions = new Map<string, PtySession<Owner>>();
+  private readonly trackedOwners = new WeakSet<Owner>();
   private readonly spawnFn: PtySpawnFn;
-  private readonly sink: PtyEventSink;
+  private readonly sink: PtyEventSink<Owner>;
   private readonly platform: NodeJS.Platform;
-  private readonly resolveFallbackOwner?: (deadOwner: WebContents) => WebContents | null;
+  private readonly resolveFallbackOwner?: (deadOwner: Owner) => Owner | null;
 
-  constructor(deps: PtyManagerDeps) {
+  constructor(deps: PtyManagerDeps<Owner>) {
     this.spawnFn = deps.spawn ?? defaultPtySpawn;
     this.sink = deps.sink;
     this.platform = deps.platform ?? process.platform;
@@ -190,6 +241,52 @@ export class PtyManager {
 
   has(id: string): boolean {
     return this.sessions.has(id);
+  }
+
+  isOwned(id: string, owner: Owner): boolean {
+    return this.sessions.get(id)?.owner === owner;
+  }
+
+  /** The same registry serves UI, Agent and plugin callers; authorization stays at their boundaries. */
+  list(owner?: Owner): PtySnapshot[] {
+    return [...this.sessions.values()].filter(session => owner === undefined || session.owner === owner).map(session => ({
+      id: session.id, generation: session.generation, pid: session.pty.pid, cwd: session.cwd,
+      shellId: session.resolved.id, shellDisplayName: session.resolved.displayName,
+      cols: session.cols, rows: session.rows, startedAt: session.startedAt,
+      status: session.exit ? 'exited' : session.stopping ? 'stopping' : 'running',
+      exit: session.exit ? { ...session.exit } : null,
+    }));
+  }
+
+  /** Non-consuming cursor: reconnecting readers cannot steal each other's output. */
+  read(id: string, cursor = 0, generation?: string): PtyOutput {
+    if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Error('invalid terminal cursor');
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`terminal session not found: ${id}`);
+    const oldest = session.output[0]?.sequence ?? session.sequence + 1;
+    const resetRequired = (generation !== undefined && generation !== session.generation) || cursor < oldest - 1 || cursor > session.sequence;
+    let next = resetRequired ? oldest - 1 : cursor;
+    let bytes = 0;
+    const chunks: OutputChunk[] = [];
+    for (const chunk of session.output) {
+      if (chunk.sequence <= next) continue;
+      const size = Buffer.byteLength(chunk.data);
+      if (bytes + size > READ_BYTES) break;
+      chunks.push({ ...chunk }); bytes += size; next = chunk.sequence;
+    }
+    return { generation: session.generation, chunks, cursor: next, hasMore: next < session.sequence,
+      resetRequired, exit: session.exit ? { ...session.exit } : null };
+  }
+
+  /** Request termination without discarding retained output and the eventual exit receipt. */
+  stop(id: string): void {
+    const session = this.sessions.get(id);
+    if (!session || session.exit || session.stopping) return;
+    session.stopping = true; session.pendingInput = '';
+    try {
+      if (this.platform === 'win32') session.pty.kill();
+      else session.pty.kill('SIGKILL');
+    } catch (error) { session.stopping = false; throw error; }
   }
 
   /**
@@ -211,7 +308,7 @@ export class PtyManager {
    *     renderer 知道要走 restart 路径); 但目前 plugin 在 exited 状态会渲染 overlay,
    *     用户点 Restart 后才会调 restart() IPC,不会再调 create。
    */
-  create(opts: CreateOptions): CreateResult {
+  create(opts: CreateOptions<Owner>): CreateResult {
     const existing = this.sessions.get(opts.id);
     if (existing) {
       if (existing.exit) {
@@ -259,7 +356,7 @@ export class PtyManager {
   /** xterm.js 的 onData 透传过来的用户输入。微任务级批处理。 */
   write(id: string, data: string): void {
     const session = this.sessions.get(id);
-    if (!session || session.exit) return;
+    if (!session || session.exit || session.stopping) return;
     session.pendingInput += data;
     if (session.flushScheduled) return;
     session.flushScheduled = true;
@@ -270,7 +367,7 @@ export class PtyManager {
     const session = this.sessions.get(id);
     if (!session) return;
     session.flushScheduled = false;
-    if (session.exit || session.pendingInput.length === 0) return;
+    if (session.exit || session.stopping || session.pendingInput.length === 0) return;
     const chunk = session.pendingInput;
     session.pendingInput = '';
     try {
@@ -305,13 +402,14 @@ export class PtyManager {
     const session = this.sessions.get(id);
     if (!session) return;
     this.sessions.delete(id);
+    session.active = false;
     try {
       session.dataDisposer.dispose();
       session.exitDisposer.dispose();
     } catch {
       /* swallow */
     }
-    if (!session.exit) {
+    if (!session.exit && !session.stopping) {
       try {
         session.pty.kill();
       } catch (err) {
@@ -325,7 +423,7 @@ export class PtyManager {
   }
 
   /** 在已 exit 的 session 上重启；id 保留，PTY 实例替换。 */
-  restart(id: string, owner: WebContents): CreateResult {
+  restart(id: string, owner: Owner): CreateResult {
     const old = this.sessions.get(id);
     if (!old) throw new Error(`terminal session not found: ${id}`);
     if (!old.exit) throw new Error(`terminal session still running: ${id}`);
@@ -337,12 +435,16 @@ export class PtyManager {
       cols: old.cols,
       rows: old.rows,
       shellPref: old.shellPref,
+      env: old.env,
+      inheritEnv: old.inheritEnv,
+      program: old.program,
+      retainOutput: old.retainOutput,
       owner,
     });
   }
 
   /** 触发某 owner 的全部 session 关闭，用于 webContents destroyed。 */
-  disposeOwner(owner: WebContents): void {
+  disposeOwner(owner: Owner): void {
     for (const [id, session] of this.sessions) {
       if (session.owner === owner) this.dispose(id);
     }
@@ -367,15 +469,17 @@ export class PtyManager {
     }));
   }
 
-  private spawnSession(opts: CreateOptions): PtySession {
+  private spawnSession(opts: CreateOptions<Owner>): PtySession<Owner> {
     const cols = opts.cols && opts.cols > 0 ? opts.cols : DEFAULT_COLS;
     const rows = opts.rows && opts.rows > 0 ? opts.rows : DEFAULT_ROWS;
-    const resolved = resolveShellForCreate(opts.shellPref ?? null);
+    const program = opts.program ? { command: opts.program.command, args: [...opts.program.args] } : undefined;
+    const resolved = program ? { id: 'program' as const, ...program, displayName: 'Program' }
+      : resolveShellForCreate(opts.shellPref ?? null);
 
     // 合并 env:先复制父进程环境,做平台兜底,再应用调用方显式覆盖。
     // ENV_KEYS_TO_STRIP 与 TERM 仍在下方强制执行,不允许 opts.env 改写。
     const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
+    for (const [k, v] of Object.entries(opts.inheritEnv === false ? {} : process.env)) {
       if (typeof v === 'string') env[k] = v;
     }
     ensureMacTerminalUtf8Locale(env, this.platform);
@@ -402,7 +506,7 @@ export class PtyManager {
     };
 
     const pty = this.spawnFn(resolved.command, resolved.args, spawnOpts);
-    const session: PtySession = {
+    const session: PtySession<Owner> = {
       id: opts.id,
       pty,
       resolved,
@@ -412,6 +516,17 @@ export class PtyManager {
       shellPref: opts.shellPref ?? null,
       exit: null,
       owner: opts.owner,
+      env: opts.env ? { ...opts.env } : undefined,
+      inheritEnv: opts.inheritEnv,
+      program,
+      retainOutput: opts.retainOutput,
+      active: true,
+      stopping: false,
+      generation: opts.retainOutput ? randomUUID() : '',
+      startedAt: Date.now(),
+      output: [],
+      outputBytes: 0,
+      sequence: 0,
       pendingInput: '',
       flushScheduled: false,
       decoder: new StringDecoder('utf8'),
@@ -420,21 +535,44 @@ export class PtyManager {
       exitDisposer: { dispose() {} },
     };
 
-    session.dataDisposer = pty.onData((chunk: string) => {
-      // node-pty 在 utf8 模式下已经按 UTF-8 边界切，再走 decoder 主要是对 Buffer
-      // 兜底（极端情况下出现 surrogate pair 跨 chunk）。这里 chunk 是 string，
-      // 直接转发即可，decoder.write 仅在某些异常路径上有意义。
+    const emitData = (chunk: string) => {
+      if (!session.active) return;
       if (!session.owner.isDestroyed()) {
         this.sink.emitData(session.owner, { id: session.id, chunk });
       }
-    });
+    };
+    session.dataDisposer = pty.onData(opts.retainOutput ? (chunk: string) => {
+      if (!session.active) return;
+      // Bound both memory and frame count; split without breaking surrogate pairs.
+      for (let start = 0; start < chunk.length;) {
+        // Each frame also fits the settled ring, including non-ASCII output.
+        let end = Math.min(chunk.length, start + 4 * 1024);
+        if (end < chunk.length && /[\uD800-\uDBFF]/.test(chunk[end - 1])) end--;
+        const data = chunk.slice(start, end); start = end;
+        session.output.push({ sequence: ++session.sequence, data });
+        session.outputBytes += Buffer.byteLength(data);
+        while (session.outputBytes > OUTPUT_BYTES || session.output.length > OUTPUT_CHUNKS) {
+          session.outputBytes -= Buffer.byteLength(session.output.shift()!.data);
+        }
+      }
+      // node-pty 在 utf8 模式下已经按 UTF-8 边界切，再走 decoder 主要是对 Buffer
+      // 兜底（极端情况下出现 surrogate pair 跨 chunk）。这里 chunk 是 string，
+      // 直接转发即可，decoder.write 仅在某些异常路径上有意义。
+      emitData(chunk);
+    } : emitData);
 
     session.exitDisposer = pty.onExit(({ exitCode, signal }) => {
+      if (!session.active) return;
       const exitInfo: ExitInfo = {
         code: typeof exitCode === 'number' ? exitCode : null,
         signal: signal != null ? String(signal) : null,
       };
       session.exit = exitInfo;
+      if (session.retainOutput) {
+        while (session.outputBytes > SETTLED_OUTPUT_BYTES) {
+          session.outputBytes -= Buffer.byteLength(session.output.shift()!.data);
+        }
+      }
       // flush 一下残留输入（exit 后写无意义，但保持状态干净）
       session.pendingInput = '';
       log.info('pty exit', {
@@ -448,7 +586,7 @@ export class PtyManager {
     return session;
   }
 
-  private trackOwner(owner: WebContents): void {
+  private trackOwner(owner: Owner): void {
     if (this.trackedOwners.has(owner)) return;
     this.trackedOwners.add(owner);
     owner.once('destroyed', () => {
@@ -460,7 +598,7 @@ export class PtyManager {
    * owner destroyed 的处理:能解析到活的 fallback owner(主窗)就整体转移
    * session(PTY 保活,sink 改推 fallback),否则 dispose(app 退出 / 主窗没了)。
    */
-  private handleOwnerDestroyed(owner: WebContents): void {
+  private handleOwnerDestroyed(owner: Owner): void {
     const fallback = this.resolveFallbackOwner?.(owner) ?? null;
     if (!fallback || fallback === owner || fallback.isDestroyed()) {
       this.disposeOwner(owner);

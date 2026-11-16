@@ -154,6 +154,9 @@ export function deriveModelList(opts: DeriveModelListOptions): ModelListEntry[] 
     for (const m of provider.models[agent] ?? []) {
       if (excludeModel?.(m, provider)) continue;
       const selected = matchesSelected(keepSelected, provider.id, m.id);
+      // Account aliases stay connected for saved routes. Only list presentation
+      // hides duplicate suppliers, retaining the exact current historical row.
+      if (provider.subscriptionPoolAlias && !(selected && keepSelected?.providerId === provider.id)) continue;
       // entry 构造延后到确定要用时(push / 替换):被 first-wins 丢弃的重复行不做无谓 spread。
       const makeEntry = (): ModelListEntry => {
         const entry: ModelListEntry = {

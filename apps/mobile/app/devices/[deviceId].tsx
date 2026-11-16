@@ -492,7 +492,10 @@ function DeviceDetailScreenContent() {
     if (automationScopeKey || !shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status)) {
       return sections;
     }
-    return [{ key: 'search', title: '', data: indexedSearch.results }];
+    // An empty section still contributes header/footer cells and hides ListEmptyComponent.
+    return indexedSearch.results.length > 0
+      ? [{ key: 'search', title: '', data: indexedSearch.results }]
+      : [];
   }, [automationScopeKey, indexedSearch.results, indexedSearch.status, searchQuery, sections]);
   const listContext = useMemo(
     () => buildRemoteSessionListContext({
@@ -829,7 +832,7 @@ function DeviceDetailScreenContent() {
               testID={`deviceDetail.automationRunRow.${item.session.id}`}
             />
           )}
-          ListEmptyComponent={suppressListEmptyState ? (
+          ListEmptyComponent={(suppressListEmptyState ? (
             effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.automationSyncing" />
           ) : (
             <MainWindowEmptyState
@@ -843,7 +846,7 @@ function DeviceDetailScreenContent() {
               testID="deviceDetail.automationEmpty"
               title={t('devices.detail.automationScope.emptyTitle')}
             />
-          )}
+          )) ?? undefined}
         />
         {actionOverlays}
       </SafeAreaView>
@@ -894,7 +897,7 @@ function DeviceDetailScreenContent() {
         />
         {/* 连接提示只是零高度锚点;iOS 内容区从屏幕顶开始,锚点挪到顶栏下沿。 */}
         {usesNativeStackHeader()
-          ? <View pointerEvents="box-none" style={[styles.projectConnectionAnchor, { top: headerHeight }]}>{connectionBanner}</View>
+          ? <View pointerEvents="box-none" style={[styles.projectConnectionAnchor, { top: headerHeight, left: insets.left, right: insets.right }]}>{connectionBanner}</View>
           : connectionBanner}
         <ListDisclosureScope controller={disclosure.controller}>
           <SectionList
@@ -968,7 +971,7 @@ function DeviceDetailScreenContent() {
                 testID={`deviceDetail.projectSessionRow.${item.session.id}`}
               />
             )}
-            ListEmptyComponent={suppressListEmptyState ? (
+            ListEmptyComponent={(suppressListEmptyState ? (
               effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.projectSyncing" />
             ) : (
               <MainWindowEmptyState
@@ -982,7 +985,7 @@ function DeviceDetailScreenContent() {
                 testID="deviceDetail.projectEmpty"
                 title={searchQuery.trim() ? deviceSessionEmptyState(statusFilter, searchQuery).title : t('devices.detail.projectScope.emptyTitle')}
               />
-            )}
+            )) ?? undefined}
           />
         </ListDisclosureScope>
         {actionOverlays}
@@ -1315,7 +1318,7 @@ function DeviceDetailScreenContent() {
           renderSectionHeader={({ section }) => (
             section.title ? <Text style={styles.sectionTitle}>{section.title}</Text> : null
           )}
-          ListEmptyComponent={suppressListEmptyState ? (
+          ListEmptyComponent={(suppressListEmptyState ? (
             effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.syncing" />
           ) : (
             <MainWindowEmptyState
@@ -1329,7 +1332,7 @@ function DeviceDetailScreenContent() {
               testID="deviceDetail.empty"
               title={emptyState.title}
             />
-          )}
+          )) ?? undefined}
           renderItem={({ item }) => (
             <DeviceDetailSessionRow
               expandedAutomationGroups={expandedAutomationGroups}

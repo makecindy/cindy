@@ -279,6 +279,26 @@ describe('native task invitation helper', () => {
 });
 
 describe('task host sharedTask lifecycle', () => {
+  // V2 private-authority outage must not permanently close a V1/V2 journal row.
+  // Existing restore tests assumed all rows came from one authoritative service.
+  // Minimal input: a successful partial list omits one unavailable resource.
+  // Unit tier; public Host restore/authorize/journal, no real waits.
+  it('preserves an unavailable share and still reconciles another authority that closed its share', async () => {
+    await host.open('session');
+    const other = { ...detail(), sharedTaskId: 'other-share', sessionId: 'other-session' };
+    records.set('other-share', { sharedTaskId: other.sharedTaskId, sessionId: other.sessionId,
+      terminal: false, snapshot: parseSharedTaskSnapshot(other) });
+    const partial = Object.assign([], { unavailableSharedTaskIds: ['sharedTask'], authorityIncomplete: true as const });
+    api.list.mockResolvedValue(partial);
+    await host.restore();
+    expect(records.get('sharedTask')?.terminal).toBe(false);
+    expect(canRead()).toBe(true);
+    expect(records.get('other-share')?.terminal).toBe(true);
+    api.list.mockResolvedValue([]);
+    await host.restore();
+    expect(records.get('sharedTask')?.terminal).toBe(true);
+    expect(canRead()).toBe(false);
+  });
   it.each(['cindy-make', 'cindy-make-merge'])('closes an upgraded %s share and removes it from owner and guest directories', async (source) => {
     records.set('sharedTask', { sharedTaskId: 'sharedTask', sessionId: 'session', terminal: false, snapshot: parseSharedTaskSnapshot(detail()) });
     options.readSession = vi.fn(async id => ({ id, title: 'Task', status: 'active', source }));

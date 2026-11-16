@@ -107,6 +107,20 @@ describe('PermissionPrompt i18n', () => {
     expect(screen.getByText('add_repo_collaborator {"username":"octo"}')).toBeTruthy();
   });
 
+  // The shared MCP classifier used to overwrite this Host-owned title with “plugin”.
+  // Real permission card, unit tier: preserve the title, exact operation and allow-once response.
+  it('preserves the Host title and operation for an internal MCP confirmation', () => {
+    const onRespond = vi.fn();
+    render(<PermissionPrompt permission={{ requestId: 'mcp-permission',
+      toolName: 'mcp__cindy_scheduler__schedule_delete', title: '确认任务操作',
+      input: { id: 'completed-followup' } }} onRespond={onRespond} />);
+    expect(screen.getByText('确认任务操作')).toBeTruthy();
+    expect(screen.getByText('schedule_delete {"id":"completed-followup"}')).toBeTruthy();
+    expect(screen.queryByText(/允许使用插件/)).toBeNull();
+    fireEvent.click(screen.getByText('允许一次'));
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith({ behavior: 'allow' });
+  });
+
   it('keeps the session boundary explicit in the English approval label', async () => {
     await i18n.changeLanguage('en');
 

@@ -1,5 +1,7 @@
 # Cindy Mobile V1 Source-Based Implementation Plan
 
+> 反馈范围修订（2026-11-11）：本文旧有的 Issue Confirm「desktop-only／不做手机表单」限制及全屏表单方案仅作历史记录，已由[当前反馈卡片范围](remote-control-plan.md#反馈卡片当前范围)替代。
+
 > 自动化范围修订（2026-09-27）：手机已移除旧 Scheduler 管理页和 Routines，包括「所有任务」下拉及伙伴资料入口；不再把查看、创建、编辑或运行规则列为手机交付、后续计划或验收项。PC 管理与执行、已有任务数据和运行历史保留。本文所有旧自动化管理实现、原型验证和计划记录仅作历史背景，不代表待恢复功能；当前边界以[伙伴运行时合同](../../../docs/product-rules/cindy-bots-runtime.md)为准。
 
 > 日期: 2026-06-18
@@ -1393,7 +1395,7 @@ Shared core 迁移并不是额外阶段,而是 1-13 每个阶段的实现约束:
 
 本轮补充 16:`ControlActionButton` 现在会把缺少 handler 的入口视为 disabled,避免 controls sheet 中的重命名、复制、置顶、归档、删除确认、模型切换、Fast、extraDirs 和 context 刷新动作出现“可点但无动作”的状态。controls overview、远程调用、capability projection 和 testID 不变;mobile shell 只收口 controls sheet action 的不可交互事实源。
 
-本轮补充 17:shared `buildSessionComposerLayout` 已新增 `input` 与 `attachment.remove` presentation,让发送中/附件处理中/语音转写中的输入框、附件工具、附件移除和语音入口都由同一 composer model 输出 disabled reason。移动端会话页只消费该模型渲染 TextInput、附件 chip 和 route action,避免发送中继续编辑或调整附件后被完成态清空;远程 enqueue、附件上传、语音转写、testID 和 device-link 协议不变。
+本轮补充 17:shared `buildSessionComposerLayout` 已新增 `input` 与 `attachment.remove` presentation,让发送中/附件处理中/语音转写中的输入框、附件工具、附件移除和语音入口都由同一 composer model 输出 disabled reason。移动端会话页只消费该模型渲染 TextInput、附件 chip 和 route action,发送期间附件仍受保护；输入框在 2026-11-07 修正为保持可编辑与键盘焦点，完成态仅清除匹配的发送快照，见 `docs/dev-rules/mobile-development.md`「Android 组字与发送快照」;远程 enqueue、附件上传、语音转写、testID 和 device-link 协议不变。
 
 本轮补充 18:`ScreenHeader` 的左侧返回入口已抽成内部 `ScreenBackButton`,与主窗口 action primitive 使用同一套 pressed / disabled / accessibility state 规则,覆盖设备详情、新建会话、会话详情、文件和自动化这些主窗口 header。返回箭头视觉、原 testID、`router.back()` 路由语义和右侧 header action 保持不变;mobile shell 只消除 header navigation 的裸 `Pressable` 分叉。
 

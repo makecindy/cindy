@@ -12,7 +12,7 @@ export function SkillIcon({ url }: { url?: string }) {
     && !DEFAULT_SKILL_ICON_URL.test(normalizedUrl);
 
   return (
-    <span className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-[22%] border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--plugin-card-shadow)]">
+    <span className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-[22%] border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]">
       {useRemoteIcon ? (
         <img
           src={normalizedUrl}

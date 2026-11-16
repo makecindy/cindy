@@ -1,5 +1,5 @@
 import { createLogger } from '../logger.js';
-import { drainPersistQueue } from '../messagePersistBroadcaster.js';
+import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import type { DbClient } from './client/DbClient.js';
 
 const log = createLogger('localDb/toolResultCompaction');

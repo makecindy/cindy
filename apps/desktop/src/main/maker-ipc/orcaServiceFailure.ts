@@ -58,6 +58,8 @@ export function throwOrcaServiceFailure(result: { ok: false; errorCode: string; 
       return throwIpcError('REMOTE_AGENT_SHARE_REMOVED', result.message);
     case 'REMOTE_AGENT_SHARE_UNAVAILABLE':
       return throwIpcError('REMOTE_AGENT_SHARE_UNAVAILABLE', result.message);
+    case 'REMOTE_AGENT_SHARE_LEGACY_DISABLED':
+      return throwIpcError('REMOTE_AGENT_SHARE_LEGACY_DISABLED', result.message);
     case 'UNSUPPORTED_CAPABILITY':
       return throwIpcError('UNSUPPORTED_CAPABILITY', result.message);
     default:

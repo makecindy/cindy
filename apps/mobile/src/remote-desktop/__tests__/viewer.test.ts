@@ -569,7 +569,25 @@ describe("remote desktop viewport", () => {
     expect(v.messages.filter((m) => m.type === 'input')).toHaveLength(0);
     expect(v.messages.filter((m) => m.type === 'inputOverflow')).toHaveLength(1);
   });
-  it.each([0, 59])(
+  // Unit regression: the orientation policy can arrive after ResizeObserver and
+  // rail insets. The parent needs the final measurement even without another
+  // DOM resize, otherwise automatic fitting keeps the previous narrow width.
+  it("reports the final usable width when orientation policy arrives last", () => {
+    const v = viewer();
+    v.send({ type: "init", epoch: "one", width: 800, height: 1000, fillHeight: true });
+    v.send({ type: "mouseButtons", fitToInsets: true, topInset: 60, bottomInset: 40, rightInset: 50 });
+    expect(v.messages.findLast(m => m.type === "viewportChanged"))
+      .toMatchObject({ width: 350, height: 500 });
+    for (let turn = 0; turn < 3; turn++) {
+      v.send({ type: "viewport", fillHeight: false });
+      expect(v.messages.findLast(m => m.type === "viewportChanged"))
+        .toMatchObject({ width: 400, height: 500 });
+      v.send({ type: "viewport", fillHeight: true });
+      expect(v.messages.findLast(m => m.type === "viewportChanged"))
+        .toMatchObject({ width: 350, height: 500 });
+    }
+  });
+  it.each([0, 59, 123])(
     "fits between the top safe area (%s) and toolbar with correct touch coordinates",
     (topInset) => {
       const v = viewer();
@@ -1187,6 +1205,153 @@ describe("remote desktop viewport", () => {
       expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([]);
     },
   );
+  // Unit: the user's fit size is a recoverable resting point, not a lower
+  // zoom/pan boundary. Existing pinch tests only exercised zooming above fit.
+  it.each([false, true])("keeps a smaller, moved picture and correct touch coordinates (native=%s)", (native) => {
+    const v = viewer(false, true, native);
+    v.send({ type: "init", epoch: "free", width: 1920, height: 1080 });
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "mode", mode: "touch" });
+    v.flush(); v.ack();
+    const measurements = () => v.messages.filter(m => m.type === "viewportChanged").length;
+    const before = measurements();
+    v.pointer("pointerdown", 1, 100, 300);
+    v.pointer("pointerdown", 2, 300, 300);
+    v.pointer("pointermove", 1, 150, 300);
+    v.pointer("pointermove", 2, 250, 300);
+    v.frame(); v.frame(40);
+    v.pointer("pointerup", 1, 150, 300);
+    v.pointer("pointerup", 2, 250, 300);
+    for (let i = 0; i < 20; i++) v.frame(20);
+    expect(parseFloat(v.elements.image.style.width)).toBeCloseTo(200);
+    v.pointer("pointerdown", 1, 200, 300);
+    v.pointer("pointermove", 1, 260, 270);
+    v.pointer("pointerup", 1, 260, 270);
+    for (let i = 0; i < 20; i++) v.frame(20);
+    const r = v.elements.image.style;
+    expect(parseFloat(r.left)).toBeCloseTo(160);
+    expect(parseFloat(r.top)).toBeCloseTo(213.75);
+    expect(parseFloat(r.width)).toBeCloseTo(200);
+    // Manual camera gestures must not ask automatic resolution fitting to undo them.
+    expect(measurements()).toBe(before);
+    const x = parseFloat(r.left) + parseFloat(r.width) * 0.25;
+    const y = parseFloat(r.top) + parseFloat(r.height) * 0.75;
+    v.pointer("pointerdown", 1, x, y);
+    v.pointer("pointerup", 1, x, y);
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toContainEqual({
+      kind: "button", button: 0, down: true, x: 0.25, y: 0.75,
+    });
+    // The fingers can start in the newly exposed space beside the picture.
+    // Keep their actual anchor instead of jumping to the nearest picture edge.
+    v.pointer("pointerdown", 1, 60, 300);
+    v.pointer("pointerdown", 2, 140, 300);
+    v.pointer("pointermove", 1, 50, 300);
+    v.pointer("pointermove", 2, 150, 300);
+    v.frame(); v.frame(40);
+    expect(parseFloat(r.width)).toBeCloseTo(250);
+    expect(parseFloat(r.left)).toBeCloseTo(175);
+    v.pointer("pointerup", 1, 50, 300);
+    v.pointer("pointerup", 2, 150, 300);
+    v.send({ type: "fit" });
+    expect(r.width).toBe("400px");
+    expect(r.left).toBe("0px");
+  });
+  // Unit: real pointer gestures must recover center from a visible offset,
+  // not only the previous 8pt zone, while preserving deliberate distant pans.
+  it("lets the fitted picture move freely and snaps a nearby release to center", () => {
+    const v = viewer();
+    const drag = (dx: number, dy: number) => {
+      v.pointer("pointerdown", 1, 200, 300);
+      v.pointer("pointermove", 1, 200 + dx, 300 + dy);
+      const before = { ...v.elements.image.style };
+      v.pointer("pointerup", 1, 200 + dx, 300 + dy);
+      expect(v.elements.image.style.left).toBe(before.left);
+      expect(v.elements.image.style.top).toBe(before.top);
+      for (let i = 0; i < 20; i++) v.frame(20);
+    };
+    drag(120, 140);
+    expect(parseFloat(v.elements.image.style.left)).toBeCloseTo(120);
+    expect(parseFloat(v.elements.image.style.top)).toBeCloseTo(327.5);
+    drag(-70, -100);
+    expect(parseFloat(v.elements.image.style.left)).toBeCloseTo(0);
+    expect(parseFloat(v.elements.image.style.top)).toBeCloseTo(187.5);
+    drag(-50, -40);
+    expect(parseFloat(v.elements.image.style.left)).toBeCloseTo(0);
+    expect(parseFloat(v.elements.image.style.top)).toBeCloseTo(187.5);
+    drag(120, 40);
+    expect(parseFloat(v.elements.image.style.left)).toBeCloseTo(120);
+    expect(parseFloat(v.elements.image.style.top)).toBeCloseTo(187.5);
+  });
+  // User trial: pinch stays continuous through fit in either direction. Only
+  // after both fingers lift does a nearby size animate back to centered fit.
+  it.each([
+    [1.5, 1.15, true], [1.5, 0.85, true], [1.5, 0.7, false],
+    [0.6, 0.85, true], [0.6, 1.15, true], [0.6, 1.3, false],
+  ])("settles near fit only on release (%s → %s, snap=%s)", (initial, target, snaps) => {
+    const v = viewer();
+    const begin = () => {
+      v.pointer("pointerdown", 1, 100, 250);
+      v.pointer("pointerdown", 2, 300, 250);
+    };
+    const move = (span: number) => {
+      v.pointer("pointermove", 1, 200 - span / 2, 250);
+      v.pointer("pointermove", 2, 200 + span / 2, 250);
+      v.frame(); v.frame(40);
+    };
+    begin(); move(200 * initial);
+    v.pointer("pointerup", 1, 200 - 100 * initial, 250);
+    v.pointer("pointerup", 2, 200 + 100 * initial, 250);
+    v.frame(400);
+    v.pointer("pointerdown", 1, 200, 300);
+    v.pointer("pointermove", 1, 240, 320);
+    v.pointer("pointerup", 1, 240, 320);
+    v.frame(400);
+    begin();
+    const span = 200 * target / initial;
+    move(span);
+    const style = v.elements.image.style;
+    expect(parseFloat(style.width)).toBeCloseTo(400 * target);
+    const left = parseFloat(style.left), top = parseFloat(style.top);
+    v.pointer("pointerup", 1, 200 - span / 2, 250);
+    v.frame(400);
+    // A remaining finger still owns the picture; no magnetic jump yet.
+    expect(parseFloat(style.width)).toBeCloseTo(400 * target);
+    expect(parseFloat(style.left)).toBeCloseTo(left);
+    v.pointer("pointerup", 2, 200 + span / 2, 250);
+    expect(parseFloat(style.width)).toBeCloseTo(400 * target);
+    v.frame(140);
+    if (snaps) {
+      expect(parseFloat(style.width)).toBeGreaterThan(Math.min(400, 400 * target));
+      expect(parseFloat(style.width)).toBeLessThan(Math.max(400, 400 * target));
+    }
+    v.frame(140);
+    expect(parseFloat(style.width)).toBeCloseTo(snaps ? 400 : 400 * target);
+    expect(parseFloat(style.left)).toBeCloseTo(snaps ? 0 : left);
+    expect(parseFloat(style.top)).toBeCloseTo(snaps ? 187.5 : top);
+  });
+  it("lets a new touch interrupt the release snap without a later jump", () => {
+    const v = viewer();
+    v.pointer("pointerdown", 1, 100, 300);
+    v.pointer("pointerdown", 2, 300, 300);
+    v.pointer("pointermove", 1, 92, 300);
+    v.pointer("pointermove", 2, 308, 300);
+    v.frame(); v.frame(40);
+    v.pointer("pointerup", 1, 92, 300);
+    v.pointer("pointerup", 2, 308, 300);
+    v.frame(100);
+    const width = parseFloat(v.elements.image.style.width);
+    expect(width).toBeGreaterThan(400);
+    expect(width).toBeLessThan(432);
+    v.pointer("pointerdown", 1, 100, 300);
+    v.frame(400);
+    expect(parseFloat(v.elements.image.style.width)).toBeCloseTo(width);
+    v.pointer("pointerdown", 2, 300, 300);
+    v.pointer("pointermove", 1, 150, 300);
+    v.pointer("pointermove", 2, 250, 300);
+    v.frame(); v.frame(40);
+    expect(parseFloat(v.elements.image.style.width)).toBeCloseTo(width / 2);
+  });
   it("stops a real pinch at 2x and resumes from the new limit after a viewport change", () => {
     const v = viewer();
     const width = () => parseFloat(v.elements.image.style.width);
@@ -1767,6 +1932,17 @@ describe("remote desktop three-segment backdrop", () => {
     v.frame();
     expect(v.elements.bg.style.display).toBe("none");
     expect(drawsOf(v)).toHaveLength(0);
+    // Shrinking exposes the same ambient background even at matching ratios.
+    v.pointer("pointerdown", 1, 100, 200);
+    v.pointer("pointerdown", 2, 300, 200);
+    v.pointer("pointermove", 1, 150, 200);
+    v.pointer("pointermove", 2, 250, 200);
+    v.frame(); v.frame(40);
+    expect(v.elements.bg.style.display).toBe("block");
+    v.pointer("pointerup", 1, 150, 200);
+    v.pointer("pointerup", 2, 250, 200);
+    v.send({ type: "fit" });
+    expect(v.elements.bg.style.display).toBe("none");
   });
 
   it("draws JPEG fallback frames into the backdrop canvas", () => {

@@ -84,6 +84,7 @@ function harness(overrides: Partial<SetupMigrationServiceDeps> = {}) {
     },
     checklistItemDone: () => null,
     looksNew: async () => true,
+    legacyMigrated: () => false,
     source: {
       platform: 'darwin',
       now: () => 5,
@@ -114,6 +115,38 @@ function harness(overrides: Partial<SetupMigrationServiceDeps> = {}) {
 }
 
 describe('setup migration service', () => {
+  // Unit tier, real preview: a stale picker must not bypass the fresh directory's
+  // availability facts, contact another source, or require a second directory read.
+  it.each([
+    ['missing', null, 'NOT_FOUND'],
+    ['offline', { online: false }, 'SETUP_SOURCE_UNAVAILABLE'],
+    ['remote control off', { remoteControlEnabled: false }, 'SETUP_SOURCE_UNAVAILABLE'],
+    ['control disabled', { controlEnabled: false }, 'SETUP_SOURCE_UNAVAILABLE'],
+    ['self', { isSelf: true }, 'NOT_FOUND'],
+    ['mobile', { platform: 'ios' }, 'NOT_FOUND'],
+  ] as const)('rejects a %s source before remote reads', async (_name, changes, code) => {
+    const listDevices = vi.fn(async () => [
+      ...(changes === null ? [] : [device(changes)]),
+      device({ deviceId: 'another', name: 'Another Mac' }),
+    ]);
+    const { service, remote } = harness({ listDevices });
+    await expect(service.preview('dev-old', 1)).rejects.toMatchObject({ code });
+    expect(listDevices).toHaveBeenCalledTimes(1);
+    expect(remote).not.toHaveBeenCalled();
+  });
+
+  it('uses one directory read to validate and preview exactly the chosen source', async () => {
+    const listDevices = vi.fn(async () => [device({ deviceId: 'another' }), device()]);
+    const { service, remote } = harness({ listDevices });
+    const plan = await service.preview('dev-old', 1);
+    expect(listDevices).toHaveBeenCalledTimes(1);
+    expect(plan.source.deviceId).toBe('dev-old');
+    expect(remote.mock.calls).toEqual([
+      ['dev-old', { action: 'caps' }],
+      ['dev-old', { action: 'snapshot' }],
+    ]);
+  });
+
   it('lists other desktops of the account, readable ones first, with why the rest are not', async () => {
     const { service } = harness();
     expect(await service.sources()).toEqual([
@@ -181,21 +214,35 @@ describe('setup migration service', () => {
     await expect(service.handleRemote({ action: 'write' })).rejects.toThrow('SETUP_SNAPSHOT_INVALID');
   });
 
-  it('suggests setup once on a new computer and stops after the user dismisses it', async () => {
-    const { service } = harness();
-    expect((await service.state()).suggestion).toEqual({ deviceId: 'dev-old', name: 'Mac mini' });
-    const after = await service.dismiss({ kind: 'suggestion' });
-    expect(after.suggestion).toBeNull();
+  // Rule: first-run-guide.md §2 (when the guide is shown). Gap: the once-only decision and its
+  // two paths had no caller-level coverage. Tier: unit, through the service entry.
+  it('shows the guide once on a new computer and leads with migration when another computer has something to bring', async () => {
+    const { service, state } = harness();
+    expect(await service.firstRunGuide()).toEqual({ show: true, migration: true, legacyMigrated: false });
+    expect(state().suggestionDismissed).toBe(true);
+    expect(await service.firstRunGuide()).toEqual({ show: false, migration: false, legacyMigrated: false });
   });
 
-  it('does not suggest setup on a computer the user already set up', async () => {
-    const { service } = harness({ looksNew: async () => false });
-    expect((await service.state()).suggestion).toBeNull();
+  it('shows the guide without migration when no other computer has anything to bring', async () => {
+    const { service } = harness({
+      invokeRemote: async (_deviceId, request) =>
+        request.action === 'caps' ? { setupSnapshot: 1 } : snapshot({ settings: [{ id: 'appearance', values: { theme: 'dark' } }] }),
+    });
+    expect(await service.firstRunGuide()).toEqual({ show: true, migration: false, legacyMigrated: false });
+  });
+
+  it('stays hidden on a computer that is already set up, unless earlier-version data was just brought over', async () => {
+    const used = harness({ looksNew: async () => false });
+    expect(await used.service.firstRunGuide()).toEqual({ show: false, migration: false, legacyMigrated: false });
+    expect(used.remote).not.toHaveBeenCalled();
+    expect(used.state().suggestionDismissed).toBe(false);
+
+    const upgraded = harness({ looksNew: async () => false, legacyMigrated: () => true });
+    expect(await upgraded.service.firstRunGuide()).toMatchObject({ show: true, legacyMigrated: true });
   });
 
   it('marks checklist items done from live state or by the user', async () => {
     const seeded = harness({ checklistItemDone: (item) => (item.kind === 'plugin-setup' ? true : null) });
-    await seeded.service.dismiss({ kind: 'suggestion' });
     seeded.state().lastRun = {
       sourceName: 'Mac mini',
       finishedAt: 1,

@@ -14,7 +14,7 @@ const h = vi.hoisted(() => ({
 }));
 vi.mock('electron', () => ({ app: { getPath: () => h.dir }, protocol: { handle: h.handle } }));
 vi.mock('../ledger', () => ({ touchBlob: h.touch, recordBlob: h.record, addRef: h.ref }));
-import * as store from '../blobStore';
+import * as store from '../blobStore.desktop';
 import { ingestClientWallpaper } from '../ingest';
 import { recycleClientWallpapers } from '../recycler';
 import { registerCindyMediaProtocolHandler } from '../cindyMediaProtocol';

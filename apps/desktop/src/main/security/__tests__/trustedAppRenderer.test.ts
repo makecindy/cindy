@@ -158,4 +158,31 @@ describe('trustedAppRenderer · 窗口级判据(出站推送用)', () => {
     expect(isTrustedAppRendererWindowForLocation(null, packagedOptions)).toBe(false);
     expect(isTrustedAppRendererWindowForLocation(undefined, packagedOptions)).toBe(false);
   });
+
+  // NZWG-9FC9：renderer 被系统 kill 后窗口与 WebContents 都还没销毁，读取 mainFrame
+  // 抛错；聚焦触发的权限广播把它变成主进程 uncaughtException。
+  it('renderer 已退出、读取 frame 抛错时判为不可信，不向外抛', () => {
+    const disposed = {
+      isDestroyed: () => false,
+      webContents: {
+        isDestroyed: () => false,
+        get mainFrame(): never {
+          throw new Error('Render frame was disposed before WebFrameMain could be accessed');
+        },
+      },
+    } as never;
+    markAppContentWindow(disposed);
+    expect(isTrustedCindyRendererWindowForLocation(disposed, packagedOptions)).toBe(false);
+    expect(isTrustedAppRendererWindowForLocation(disposed, packagedOptions)).toBe(false);
+
+    const disposedEvent = {
+      get senderFrame(): never {
+        throw new Error('Render frame was disposed before WebFrameMain could be accessed');
+      },
+      sender: {},
+    } as never;
+    expect(
+      isTrustedTopLevelCindyRendererEventForLocation(disposedEvent, packagedOptions),
+    ).toBe(false);
+  });
 });

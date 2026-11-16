@@ -166,6 +166,22 @@ it('reads OpenCode Go quota from the selected computer on its own allowlisted ch
   expect(fetchUsage).not.toHaveBeenCalled();
 });
 
+// Unit r4480935567: pooling automatic live reads must not change explicit
+// refresh's existing newer-request-wins behavior for a mounted observer.
+it('keeps an explicit OpenCode refresh newer than an automatic pending read', async () => {
+  let finish!: (value: ProviderAccountUsageResult) => void;
+  const fresh = { ...opencodeGoReady, snapshot: { ...opencodeGoReady.snapshot, fetchedAt: 99 } } as ProviderAccountUsageResult;
+  fetchUsage.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue(fresh);
+  const hook = renderHook(() => useProviderAccountUsage(opencodeGoProvider, 'codex', null, { live: true }));
+  await act(async () => {});
+  act(() => hook.result.current.refresh());
+  await act(async () => {});
+  expect(fetchUsage).toHaveBeenCalledTimes(2);
+  expect(hook.result.current.result).toEqual(fresh);
+  await act(async () => finish(opencodeGoReady));
+  expect(hook.result.current.result).toEqual(fresh);
+});
+
 it('clears Kimi quota when the host broadcasts a credential change on the same connection', async () => {
   let changed!: () => void;
   Object.assign(window.electronAPI.maker, { onProvidersChanged: (callback: () => void) => { changed = callback; return () => {}; } });
@@ -176,4 +192,21 @@ it('clears Kimi quota when the host broadcasts a credential change on the same c
   act(() => changed());
   expect(hook.result.current.result).toBeNull();
   expect(fetchUsage).toHaveBeenCalledTimes(2);
+});
+
+// Unit: live pending coalescing must survive StrictMode's observation replay;
+// ordinary cancellation tests do not retain the first pending request. Minimal
+// input: one pending read during replay, followed by a successful fresh read.
+it('settles live Kimi quota after StrictMode replays the observation', async () => {
+  let finish!: (result: ProviderAccountUsageResult) => void;
+  fetchUsage.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValue(kimiReady);
+  const hook = renderHook(() => useProviderAccountUsage(kimiProvider, 'pi', null, { live: true }), {
+    reactStrictMode: true,
+  });
+  await act(async () => {});
+  expect(fetchUsage).toHaveBeenCalledTimes(1);
+  await act(async () => finish(kimiReady));
+  expect(fetchUsage).toHaveBeenCalledTimes(2);
+  expect(hook.result.current.result).toEqual(kimiReady);
 });

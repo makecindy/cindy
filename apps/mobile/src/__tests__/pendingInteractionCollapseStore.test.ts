@@ -23,6 +23,21 @@ afterEach(() => {
 });
 
 describe('pendingInteractionCollapseStore', () => {
+  it('starts async questions expanded and preserves only explicit collapse', () => {
+    // Regression: the first async snapshot must expose the question, not hide it.
+    const card = askCard('async-visible');
+    card.request.delivery = 'async';
+    prunePendingInteractionCollapse('session', [card], AUTHORITATIVE);
+    expect(getCollapsedPendingRequestIds('session')).toEqual([]);
+    togglePendingInteractionCollapse('session', 'async-visible');
+    const next = askCard('async-next');
+    next.request.delivery = 'async';
+    prunePendingInteractionCollapse('session', [card, next], AUTHORITATIVE);
+    expect(getCollapsedPendingRequestIds('session')).toEqual(['async-visible']);
+    togglePendingInteractionCollapse('session', 'async-visible');
+    prunePendingInteractionCollapse('session', [card, next], AUTHORITATIVE);
+    expect(getCollapsedPendingRequestIds('session')).toEqual([]);
+  });
   it('keeps the collapse intent across page unmount and remount', () => {
     // 「收起 → 离开任务(页面卸载) → 再进来」在 store 层就是「写入 → 重新读取」:
     // 契约要求同一条仍在 pending 的请求依旧是收起的,不能因为页面重挂载又展开占满屏。

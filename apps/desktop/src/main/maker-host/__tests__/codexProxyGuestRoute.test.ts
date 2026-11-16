@@ -5,6 +5,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Proxy routing does not perform standby-share cloud mutations. Keep this
+// external writer outside the test process rather than booting the whole app.
+vi.mock('../../device-link/providerShareAvailabilityTransport.js', () => ({
+  disableShareAvailability: () => { throw new Error('Unexpected standby-share mutation in proxy test'); },
+}));
+
 vi.mock('electron', () => ({
   app: { isPackaged: false, getPath: vi.fn(() => '/tmp/cindy-codex-guest-test'), getAppPath: vi.fn(() => process.cwd()) },
 }));
@@ -30,7 +36,7 @@ import { buildUserProvider } from '@cindy/model-providers';
 import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 
 import { getActiveCatalog, setCustomProviders, setDiscoveredCodexModels } from '../active-catalog';
-import { createCodexGuestRoutingGuard, createModelRoutingTransform, registerComposed, registerReviewerRouteContext, unregister } from '../codex-proxy-host';
+import { createCodexGuestRoutingGuard, createModelRoutingTransform, registerComposed, registerReviewerRouteContext, unregister } from '../codex-proxy-host.desktop';
 import { CODEX_CUSTOM_PROVIDER_ROUTE_ROOT, deriveCodexCustomProviderRoutes } from '../codex-custom-provider-route';
 import { captureGuestRequestUsage, registerGuestProviderRoute, resetGuestProviderRoutesForTest } from '../guest-provider-route-store';
 import { bindHostedSessionProvider, clearAllSessionProviders, setSessionProvider } from '../session-provider-store';

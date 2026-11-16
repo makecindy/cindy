@@ -336,11 +336,29 @@ describe('资格审(结构化错误分类)', () => {
 });
 
 describe('toolNotFoundMessage(纯函数直测)', () => {
+  // Validate opener selection independently of the ghost_call setup mocks.
+  // The old formatter only knew a filtered tool list. Unit; minimal visibility map.
+  it.each([true, false])('页面工具优先提示开页面入口，无入口时只列模型工具（opener=%s）', opener => {
+    const manifest = { tools: ['read_page', 'open_view', 'call_tool', 'list_tools'].map(name => ({ name, description: name })),
+      mcpApps: { ui: { resources: [{ uri: 'ui://records', file: 'ui/page.html' }], tools: {
+        read_page: { visibility: ['app' as const], resourceUri: 'ui://records' },
+        open_view: { visibility: [opener ? 'model' as const : 'app' as const], resourceUri: 'ui://records' },
+        call_tool: { visibility: ['app' as const] },
+      } } } };
+    const message = toolNotFoundMessage('records', 'read_page', manifest, 'model');
+    expect(message).toContain('只供插件页面调用');
+    expect(message).toContain(opener ? '开页面工具: open_view' : '模型可见的工具: list_tools');
+    expect(message).not.toContain('二级分派');
+    expect(message).not.toContain('没有工具');
+    expect(toolNotFoundMessage('records', 'missing', manifest, 'model')).not.toContain('call_tool');
+    // A page calling a model-only tool must not get the opposite audience's hint.
+    expect(toolNotFoundMessage('records', 'list_tools', manifest, 'app')).not.toContain('只供插件页面调用');
+  });
   it('分派型插件:回填 agent 想调的名字并给出 call_tool 形态', () => {
-    const msg = toolNotFoundMessage('cindy-github', 'create_pull_request', [
+    const msg = toolNotFoundMessage('cindy-github', 'create_pull_request', { tools: [
       { name: 'list_tools', description: '' },
       { name: 'call_tool', description: '' },
-    ]);
+    ] });
     expect(msg).toContain('cindy-github');
     expect(msg).toContain('create_pull_request');
     expect(msg).toContain('tool:"call_tool"');
@@ -349,14 +367,14 @@ describe('toolNotFoundMessage(纯函数直测)', () => {
   });
 
   it('普通插件:列出可用工具名', () => {
-    const msg = toolNotFoundMessage('art', 'nope', [{ name: 'gen_image', description: '' }]);
+    const msg = toolNotFoundMessage('art', 'nope', { tools: [{ name: 'gen_image', description: '' }] });
     expect(msg).toContain('gen_image');
     expect(msg).not.toContain('call_tool');
   });
 
   it('tools 缺省/空:不崩,提示未声明任何工具', () => {
-    expect(toolNotFoundMessage('art', 'nope', undefined)).toContain('(未声明任何工具)');
-    expect(toolNotFoundMessage('art', 'nope', [])).toContain('(未声明任何工具)');
+    expect(toolNotFoundMessage('art', 'nope', {})).toContain('(未声明任何工具)');
+    expect(toolNotFoundMessage('art', 'nope', { tools: [] })).toContain('(未声明任何工具)');
   });
 });
 
@@ -996,4 +1014,50 @@ it('forwards validated progress only within the owning call, retaining heartbeat
   transfer(100, 100, 'Reading');
   expect(onProgress).toHaveBeenCalledTimes(3);
   expect(h.dispatcher.handleToolProgress('art', { callId, progress: 3 }).accepted).toBe(false);
+});
+
+// Integration adapter boundary, unit tier: headless delivery has an async ACK.
+// Existing fake/IPC transports return a boolean; they cannot reveal a rejected
+// Promise being mistaken for successful dispatch, or owner changes before ACK.
+describe('asynchronous sandbox delivery', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it.each(['false', 'reject', 'throw'] as const)('settles immediately when delivery reports %s', async mode => {
+    const h = makeHarness();
+    h.deps.sendToGhost.mockImplementation(() => {
+      if (mode === 'throw') throw new Error('closed');
+      return mode === 'reject' ? Promise.reject(new Error('closed')) : Promise.resolve(false);
+    });
+    expect(await h.dispatcher.callGhostTool(CALL)).toMatchObject({ ok: false, errorCode: 'GHOST_CRASHED' });
+    expect(h.dispatcher.pendingCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('rejects an owner switch before the acknowledgement without accepting usage', async () => {
+    let current = true;
+    let acknowledge!: (value: boolean) => void;
+    const accepted = vi.fn();
+    const h = makeHarness({ ownerScope: { capture: () => 'owner-1', isCurrent: () => current, isStable: () => current },
+      prepareUsage: () => ({ accepted, settled: vi.fn() }) });
+    h.deps.sendToGhost.mockImplementation(() => new Promise<boolean>(resolve => { acknowledge = resolve; }));
+    const result = h.dispatcher.callGhostTool(CALL);
+    current = false; acknowledge(true);
+    expect(await result).toMatchObject({ ok: false, errorCode: 'GHOST_ASLEEP' });
+    expect(accepted).not.toHaveBeenCalled();
+    expect(h.dispatcher.pendingCount()).toBe(0);
+  });
+
+  it('observes a result that arrives before the transport acknowledgement exactly once', async () => {
+    const accepted = vi.fn(), settled = vi.fn();
+    const h = makeHarness({ prepareUsage: () => ({ accepted, settled }) });
+    h.deps.sendToGhost.mockImplementation((_id, payload) => {
+      h.dispatcher.handleToolResult('art', { callId: payload.callId, ok: true, result: 'done' });
+      return Promise.resolve(true);
+    });
+    expect(await h.dispatcher.callGhostTool(CALL)).toEqual({ ok: true, result: 'done' });
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(settled).toHaveBeenCalledExactlyOnceWith('succeeded');
+    expect(h.dispatcher.pendingCount()).toBe(0);
+  });
 });

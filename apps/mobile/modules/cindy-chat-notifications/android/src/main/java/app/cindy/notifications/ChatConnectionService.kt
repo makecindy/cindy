@@ -24,7 +24,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 internal data class ChatConnection(val owner: String, val actor: String, val base: String, val token: String,
-  val title: String, val stopLabel: String, val preview: Boolean, val language: String = "en")
+  val title: String, val stopLabel: String, val preview: Boolean, val language: String = "en",
+  val taskBase: String = "", val taskUser: String = "")
 
 /** User-visible, opt-in socket. No boot receiver, hidden restart or stored access token. */
 class ChatConnectionService : Service() {
@@ -32,8 +33,12 @@ class ChatConnectionService : Service() {
     @Volatile private var configuration: ChatConnection? = null
     @Volatile var running = false; private set
     @Volatile var refreshRequested: (() -> Unit)? = null
-    internal fun configure(value: ChatConnection) { configuration = value }
-    fun clear() { configuration = null }
+    private var configurationChanged: (() -> Unit)? = null
+    internal fun configure(value: ChatConnection) {
+      if (configuration == value) return
+      configuration = value; configurationChanged?.invoke()
+    }
+    fun clear() { configuration = null; running = false }
     private const val CHANNEL = "chat-background"
     private const val ID = 7041
     private const val STOP = "app.cindy.notifications.STOP"
@@ -41,8 +46,9 @@ class ChatConnectionService : Service() {
   private val handler = Handler(Looper.getMainLooper())
   private val executor = Executors.newSingleThreadExecutor()
   private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS)
-    .callTimeout(25, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
+    .pingInterval(25, TimeUnit.SECONDS).callTimeout(25, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
   private var socket: WebSocket? = null
+  private val tasks by lazy { TaskNotificationConnection(this) }
   @Volatile private var active: ChatConnection? = null
   @Volatile private var stopped = false
   private var retry = 1000L
@@ -69,12 +75,15 @@ class ChatConnectionService : Service() {
       refreshRequested?.invoke() // JS AuthContext owns rotation and secure credential storage.
       val next = configuration
       if (next == null) { stopSelf(); return }
-      if (next != active) executor.execute { connect(next) }
+      if (next != active) { tasks.configure(next); executor.execute { connect(next) } }
       handler.postDelayed(this, 60000)
     }
   }
   override fun onBind(intent: Intent?): IBinder? = null
-  override fun onCreate() { super.onCreate(); running = true }
+  override fun onCreate() {
+    super.onCreate(); running = true
+    configurationChanged = { handler.removeCallbacks(refresh); handler.post(refresh) }
+  }
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (intent?.action == STOP) {
       getSharedPreferences("cindy-chat-background", MODE_PRIVATE).edit().putBoolean("paused", true).apply()
@@ -99,7 +108,9 @@ class ChatConnectionService : Service() {
     return START_NOT_STICKY
   }
   override fun onDestroy() {
-    stopped = true; running = false; active = null; clear()
+    // stopService and a new foreground configure can be queued together. The old
+    // instance must not erase the replacement account/configuration.
+    stopped = true; running = false; active = null; configurationChanged = null; tasks.close()
     handler.removeCallbacksAndMessages(null); socket?.cancel(); socket = null
     http.dispatcher.cancelAll(); executor.shutdownNow()
     stopForeground(STOP_FOREGROUND_REMOVE)
@@ -128,6 +139,7 @@ class ChatConnectionService : Service() {
   private fun connect(config: ChatConnection) {
     if (stopped || configuration?.owner != config.owner) return
     val old = active; active = config; socket?.cancel()
+    if (config.base.isEmpty() || config.actor.isEmpty()) return
     if (old?.owner != config.owner) { cursor = Instant.now().minusSeconds(60).toString(); cursorId = "00000000-0000-0000-0000-000000000000" }
     val request = Request.Builder().url(config.base.replaceFirst("https:", "wss:") + "/v1/ws").build()
     socket = http.newWebSocket(request, object : WebSocketListener() {

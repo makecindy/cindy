@@ -52,7 +52,7 @@ vi.mock('../../plugin-oauth/runtime.js', () => ({
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: () => ({ dataOwnerId: 'owner' }),
 }));
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 import {
   openRemotePluginSettings,
   closeRemotePluginSettings,

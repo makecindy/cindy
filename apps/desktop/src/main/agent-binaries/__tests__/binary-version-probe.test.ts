@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { existsSync } from 'node:fs';
+
+const h = vi.hoisted(() => ({ execFile: vi.fn() }));
+vi.mock('node:child_process', () => ({ execFile: h.execFile }));
 
 import {
   isBinaryVersionNotOlder,
@@ -33,16 +37,33 @@ describe('binary version probe', () => {
   });
 
   it('returns null instead of throwing when the executable cannot be spawned', async () => {
+    h.execFile.mockImplementation(() => { throw new Error('spawn failed'); });
     await expect(probeBinaryVersion('/definitely/missing/cindy-runtime')).resolves.toBeNull();
   });
 
   it('returns null when the host cancels the startup probe', async () => {
+    h.execFile.mockImplementation((_file, _args, options, callback) => {
+      callback(options.signal.aborted ? new Error('aborted') : null, '', '');
+    });
     const controller = new AbortController();
     controller.abort();
     await expect(probeBinaryVersion(process.execPath, controller.signal)).resolves.toBeNull();
   });
 
-  it('executes a cross-platform binary with a bounded --version probe', async () => {
-    await expect(probeBinaryVersion(process.execPath)).resolves.toMatch(/^\d+\.\d+\.\d+/);
+  // Unit regression: --version itself writes Codex helper files. Previous tests only
+  // checked parsing/spawn failure, not the child environment or temporary-home lifetime.
+  it.each([false, true])('isolates and cleans the Codex home even on failure=%s', async (fails) => {
+    let home = '';
+    h.execFile.mockImplementation((_file, args, options, callback) => {
+      expect(args).toEqual(['--version']);
+      home = options.env?.CODEX_HOME;
+      expect(home).toBeTruthy();
+      expect(home).not.toBe(process.env.CODEX_HOME);
+      expect(existsSync(home)).toBe(true);
+      callback(fails ? new Error('probe failed') : null, 'codex-cli 0.166.0', '');
+    });
+    await expect(probeBinaryVersion('/managed/codex')).resolves.toBe(fails ? null : '0.166.0');
+    expect(home).toBeTruthy();
+    expect(existsSync(home)).toBe(false);
   });
 });

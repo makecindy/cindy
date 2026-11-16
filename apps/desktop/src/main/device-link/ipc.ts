@@ -18,7 +18,7 @@ import {
   isProviderSharePeer,
 } from '@cindy/device-link';
 import { confirmRemoteSkillMutation, isRemoteSkillApproval } from './remoteSkillConfirmation';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 import { createHash, randomBytes } from 'node:crypto';
 import { ipcMain, shell, clipboard, dialog, BrowserWindow } from 'electron';
 import { MCP_APPS_INVOKE } from '../../shared/mcpApps.js';
@@ -40,8 +40,8 @@ import {
   type LinkAcceptPayload,
 } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
-import { ServerApiError } from '../serverApiClient';
-import { deviceLinkApiFetch } from './deviceLinkApi.js';
+import { ServerApiError } from '../serverApiClient.desktop';
+import { deviceLinkApiFetch } from './deviceLinkApi.desktop.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
@@ -52,6 +52,7 @@ import {
   DEVICE_LINK_PUSH,
   type DeviceLinkDeviceView,
   type DeviceLinkState,
+  type DeviceLinkPeerLinksSnapshot,
 } from '../../shared/deviceLinkIpc';
 import {
   getDeviceLinkStatus,
@@ -77,6 +78,7 @@ import {
   disconnectAllControllers,
   revokeController,
   restoreController,
+  setControllerModelUse,
   broadcast,
   applyControllerDisplayNameListSnapshot,
   applyControllerPresenceListSnapshot,
@@ -86,13 +88,15 @@ import {
   isLatestControllerDisplayNameDirectoryRefresh,
   readControllerDisplayNameFreshnessSince,
   waitForNewerControllerDisplayNameDirectoryRefresh,
+  getDeviceLinkPeerLinks,
 } from './index';
-import { getActiveControllers } from './dispatch';
+import { getActiveControllers } from './dispatch.desktop';
 import { rewriteOutboundMedia, withPeerAttachmentUpload } from './outboundMedia';
 import { createSentImageRetainer } from './remoteMediaPersistentCache';
 import { withOutboundReviewConfirmation } from '../maker-ipc/reviewOutboundInput.js';
 import { confirmReviewArtifacts } from '../reviewer/confirmReviewArtifacts.js';
 import { tryUploadPeerAttachment } from './filePeer';
+import { withAgentNetMediaTarget } from './agentNetMediaRouting.js';
 import { withSourceFileAccessRecovery, releaseSourceFileAccessUploads } from './sourceFileAccessRecovery';
 import { parseSharedTaskPeer, scrubSharedProviderCatalog } from '@cindy/device-link';
 import { withSharedTaskMedia } from './sharedTaskMediaContext.js';
@@ -118,7 +122,7 @@ import {
   readLastKnownDeviceNames,
   rememberLastKnownDeviceName,
   setDeviceControlEnabled,
-} from './settings-store';
+} from './settings-store.desktop';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState';
 import {
   coerceCachedSession,
@@ -166,6 +170,8 @@ export interface DeviceLinkIpcDeps {
   /** Whether a presence delta is newer than this directory request. */
   isPresenceFreshAfterRequest?(deviceId: string, requestEpoch: number): boolean;
   getState(): DeviceLinkState;
+  /** 远程连接拓扑:本机链路快照(只读) */
+  getPeerLinks(): DeviceLinkPeerLinksSnapshot;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
   apiFetch<T>(path: string, opts?: { method?: string; body?: unknown }): Promise<T>;
@@ -179,6 +185,7 @@ export interface DeviceLinkIpcDeps {
   disconnectAll(): void;
   revoke(deviceId: string): Promise<void>;
   restore(deviceId: string): Promise<void>;
+  setModelUse(deviceId: string, allowed: boolean): Promise<void>;
   setDeviceControlEnabled(deviceId: string, enabled: boolean): Promise<string[]>;
   /** 清理本机禁用目标的响应性熔断状态。 */
   clearDeviceResponsiveness?(deviceId: string): void;
@@ -230,10 +237,12 @@ export function defaultDeps(): DeviceLinkIpcDeps {
         standby: isDeviceLinkStandby(),
         controlledBy: getActiveControllers(),
         revokedControllers: s.revokedControllers,
+        modelUseRevokedControllers: s.modelUseRevokedControllers,
         disabledControlDeviceIds: s.disabledControlDeviceIds,
         unresponsiveDeviceIds: getUnresponsiveDeviceIds(),
       };
     },
+    getPeerLinks: getDeviceLinkPeerLinks,
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
     // 官方中转或自建中转(凭证与 401 语义不同,见 deviceLinkApi.ts)。
@@ -250,6 +259,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     disconnectAll: disconnectAllControllers,
     revoke: revokeController,
     restore: restoreController,
+    setModelUse: setControllerModelUse,
     setDeviceControlEnabled,
     clearDeviceResponsiveness,
     broadcast,
@@ -336,6 +346,11 @@ function rethrowServerError(err: unknown): never {
 
 // ─── handler bodies(纯函数,可注入依赖)──────────────────────────────────────
 
+/** 远程连接拓扑快照:纯转发,门禁在注册处(trusted renderer + 账号能力)。 */
+export function handleGetPeerLinks(deps: DeviceLinkIpcDeps): DeviceLinkPeerLinksSnapshot {
+  return deps.getPeerLinks();
+}
+
 export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
   const state = deps.getState();
   if (getAppCapabilities().canUseDeviceLink) return state;
@@ -351,6 +366,7 @@ export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
     standby: false,
     controlledBy: [],
     revokedControllers: [],
+    modelUseRevokedControllers: [],
     disabledControlDeviceIds: [],
     unresponsiveDeviceIds: [],
   };
@@ -855,8 +871,8 @@ export async function handleInvoke(
         throwIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'Queued content editing is not supported by the target device');
       }
       callArgs = await withPeerAttachmentUpload((source, mime, signal) => peer ? Promise.resolve(null) : tryUploadPeerAttachment(normalizedDeviceId, source, mime, deps.invoke, undefined, signal), () =>
-        withSharedTaskMedia(peer?.role === 'host' ? peer.sharedTaskId : undefined,
-          () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs)),
+        withAgentNetMediaTarget(normalizedDeviceId, () => withSharedTaskMedia(peer?.role === 'host' ? peer.sharedTaskId : undefined,
+          () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs))),
         createSentImageRetainer(normalizedDeviceId));
      } catch (err) {
        if (isIpcError(err) && (err.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED'
@@ -1025,18 +1041,19 @@ export async function handleSubscribe(
   // unsubscribe 先跑见不到 ref → no-op,subscribe 回来后才记下一个**永不被释放的 phantom ref**
   // (后续其它窗口对同 (deviceId, topic) 的 unsubscribe 因计数非零而不向 relay 转发 → 被控端
   // 持续推送 → 推送泄漏,直到窗口销毁)。
-  recordSubscribe(windowId, normalizedDeviceId, topicList);
+  const registration = Symbol();
+  recordSubscribe(windowId, normalizedDeviceId, topicList, registration);
   let result: InvokeResultPayload;
   try {
     result = await deps.subscribe(normalizedDeviceId, topicList);
   } catch (err) {
-    // 订阅失败 → 撤掉刚记的本窗口 ref(满足「失败不留 ref」);并发 unsubscribe 已移除则为幂等
-    // no-op。失败时本就没订上,忽略 recordUnsubscribe 的降零返回(不向 relay 转发 unsubscribe)。
-    recordUnsubscribe(windowId, normalizedDeviceId, topicList);
+    // 失败只撤掉本次登记；并发退订或更新的 subscribe 已替换它时不动当前 ref。
+    // 失败时本就没订上,忽略降零返回(不向 relay 转发 unsubscribe)。
+    recordUnsubscribe(windowId, normalizedDeviceId, topicList, registration);
     rethrowDeviceLinkError(err);
   }
   // 错误结果(非异常,如 ACCESS_REVOKED / REMOTE_DISABLED / CHANNEL_NOT_ALLOWED)同样视作未订上 → 撤 ref。
-  if (!result.ok) recordUnsubscribe(windowId, normalizedDeviceId, topicList);
+  if (!result.ok) recordUnsubscribe(windowId, normalizedDeviceId, topicList, registration);
   return unwrapSubscribeResult(result);
 }
 
@@ -1795,6 +1812,11 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     DEVICE_LINK_INVOKE.LIST_DEVICES,
     gated(() => handleListDevices(deps)),
   );
+  ipcMain.handle(DEVICE_LINK_INVOKE.GET_PEER_LINKS, (e) => {
+    // 新增的特权只读(本账号设备的链路拓扑):先拒外来 frame,再看账号能力。
+    assertTrustedAppRendererEvent(e);
+    return gated(() => handleGetPeerLinks(deps))();
+  });
   ipcMain.handle(DEVICE_LINK_INVOKE.RENAME_DEVICE, (_e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; name?: unknown };
@@ -1935,6 +1957,16 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleRevoke(deps, p.deviceId);
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.SET_MODEL_USE, async (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    const p = (payload ?? {}) as { deviceId?: unknown; allowed?: unknown };
+    if (typeof p.deviceId !== 'string' || !p.deviceId.trim() || typeof p.allowed !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'deviceId and allowed are required');
+    }
+    await deps.setModelUse(p.deviceId, p.allowed);
+    return { ok: true };
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.RESTORE, (e, payload: unknown) => {
     assertTrustedAppRendererEvent(e);

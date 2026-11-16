@@ -47,6 +47,16 @@ export {
   type ImageResizerLogger,
 } from './shared/image-resizer.js';
 export {
+  compressImageBuffer,
+  detectSupportedImageMime,
+  imageCompressionCacheKey,
+  type ImageCompressionBudget,
+  type ImageCompressionRequest,
+  type ImageCompressionResult,
+  type ImageCompressionRoute,
+  type SupportedImageMime,
+} from './shared/image-compressor.js';
+export {
   parseReconnectAttemptMessage,
   type ReconnectAttempt,
 } from './shared/network-error.js';
@@ -126,6 +136,8 @@ export {
   isAutoReviewUnavailableNotice,
   isSystemPermissionDenialReason,
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
+  MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS,
+  type AutoReviewAgentContext,
   type AutoReviewDecision,
   type AutoReviewDelegate,
   type AutoReviewRequest,

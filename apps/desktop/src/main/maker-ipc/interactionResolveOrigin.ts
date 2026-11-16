@@ -2,7 +2,7 @@
  * Source boundary for the generic interaction resolver.
  *
  * Device-link intentionally reuses maker:resolve-interaction for permission,
- * ask and plan decisions. Plugin setup's primary actions and Host-owned
+ * ask, plan and pending issue decisions. Plugin setup's primary actions and other Host-owned
  * confirmations must remain local even when a remote controller guesses or
  * learned a pending request id. Plugin setup cancel only detaches the caller's
  * waiter and remains remotely available.
@@ -25,6 +25,7 @@ export function isPluginSetupInteractionDecision(
 export function assertResolveInteractionOrigin(
   decision: unknown,
   desktopOnlyConfirmationPending = false,
+  issueConfirmationPending = false,
 ): void {
   if (!isDeviceLinkInvoke()) return;
   const kind =
@@ -33,7 +34,7 @@ export function assertResolveInteractionOrigin(
       : undefined;
   if (
     desktopOnlyConfirmationPending ||
-    kind === 'issue_confirm' ||
+    (kind === 'issue_confirm' && !issueConfirmationPending) ||
     kind === 'rename_sessions_confirm' ||
     kind === 'ghost_grant_confirm'
   ) {

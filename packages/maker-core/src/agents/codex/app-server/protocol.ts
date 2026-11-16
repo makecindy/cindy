@@ -632,6 +632,9 @@ export interface SkillsListResponse {
 //   - FileChange:        { threadId, turnId, itemId, reason?, grantRoot? }
 
 export interface CommandExecutionRequestApprovalParams {
+  kind?: 'command' | 'humanCommand' | 'writeStdin';
+  environmentId?: string | null;
+  networkApprovalContext?: { host: string; protocol: string } | null;
   threadId: string;
   turnId: string;
   itemId: string;
@@ -682,7 +685,7 @@ export type McpServerElicitationRequestParams = {
   serverName: string;
 } & (
   | {
-      mode: 'form';
+      mode: 'form' | 'openai/form' | 'openaiForm';
       _meta: unknown | null;
       message: string;
       requestedSchema: unknown;
@@ -753,6 +756,9 @@ export interface ToolRequestUserInputParams {
   turnId: string;
   itemId: string;
   questions: ToolRequestUserInputQuestion[];
+  /** Missing on older servers; only explicit false permits idle resolution. */
+  isBlocking?: boolean;
+  autoResolutionMs?: number | null;
 }
 
 export interface ToolRequestUserInputAnswer {
@@ -1222,6 +1228,12 @@ export type ServerNotification =
   | WarningNotification
   | ErrorNotification;
 
+/** v2 ThreadBackgroundTerminalsListResponse — only the field idle reclamation reads. */
+export interface ThreadBackgroundTerminalsListResponse {
+  data: Array<{ itemId: string; processId: string }>;
+  nextCursor: string | null;
+}
+
 // ── 方法名常量 (避免 string typo) ────────────────────────────────────────────
 
 export const Method = {
@@ -1234,8 +1246,11 @@ export const Method = {
   ThreadInjectItems: 'thread/inject_items',
   ThreadFork: 'thread/fork',
   ThreadRollback: 'thread/rollback',
+  ThreadCompactStart: 'thread/compact/start',
   ThreadTurnsList: 'thread/turns/list',
   ThreadUnsubscribe: 'thread/unsubscribe',
+  /** EXPERIMENTAL (experimentalApi is always on). Lists unified-exec processes still alive for a thread. */
+  ThreadBackgroundTerminalsList: 'thread/backgroundTerminals/list',
   ThreadSettingsUpdate: 'thread/settings/update',
   TurnStart: 'turn/start',
   TurnSteer: 'turn/steer',

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Redirect, useIsFocused } from 'expo-router';
 import { AppState } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -35,7 +35,6 @@ export function CindyMakeSessionGate({ sessionId, deviceId: routeDeviceId, child
     const subscription = AppState.addEventListener('change', state => setForeground(state === 'active'));
     return () => subscription.remove();
   }, []);
-  const sessions = useSyncExternalStore(remoteSessionStore.subscribe, remoteSessionStore.getSessions);
   const deviceId = routeDeviceId ?? remoteSessionStore.getSessionDeviceId(sessionId) ?? '';
   const cachedCompanion = useCachedCompanionSession(deviceId, sessionId);
   const cachedRef = useRef(cachedCompanion); cachedRef.current = cachedCompanion;
@@ -47,9 +46,11 @@ export function CindyMakeSessionGate({ sessionId, deviceId: routeDeviceId, child
     if (!ownsSessionSubscription || !deviceId || !sessionId) return;
     void unsubscribe(`session:${sessionId}`, deviceId, ['sessions', `session:${sessionId}`]).catch(() => undefined);
   }, [deviceId, sessionId, unsubscribe, ownsSessionSubscription]);
-  const knownSession = sessions.find(session => session.id === sessionId
-    && (!deviceId || session.deviceLinkDeviceId === deviceId));
-  const knownSource = knownSession?.source;
+  // Entry only depends on this task's source. A roster refresh or another task's
+  // token update must not rerender the gate or its whole chat subtree.
+  const readSource = useCallback(() => remoteSessionStore.getSessions().find(session => session.id === sessionId
+    && (!deviceId || session.deviceLinkDeviceId === deviceId))?.source, [deviceId, sessionId]);
+  const knownSource = useSyncExternalStore(remoteSessionStore.subscribe, readSource);
   const task = useNewSessionCreationTask(sessionId);
   const localCreation = task?.sessionId === sessionId && task.deviceId === deviceId
     && (task.status === 'running' || task.status === 'create-failed') ? task : null;

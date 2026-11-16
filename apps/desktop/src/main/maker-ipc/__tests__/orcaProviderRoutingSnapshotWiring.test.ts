@@ -47,14 +47,15 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(lazyResume).toContain('...(dbRow.providerId ? { providerId: dbRow.providerId } : {})');
   });
 
-  it('validates explicit execution config before allocating a handoff worktree', () => {
+  // 位置(agent_device_id)与执行配置一起在同一次解析里校验，失败时不留 worktree。
+  it('validates explicit execution config and agent location before allocating a handoff worktree', () => {
     const start = registerSource.indexOf('async function sendToSessionInternal(params: {');
     const end = registerSource.indexOf('const newTitle =', start);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     const createSetup = registerSource.slice(start, end);
     const validation = createSetup.indexOf(
-      'const resolvedExecution = resolveSendToSessionExecutionConfig({',
+      'const route = await resolveSendToSessionCreateRoute({',
     );
     const worktreeAllocation = createSetup.indexOf(
       'const prep = await prepareHandoffWorktree(',
@@ -93,15 +94,6 @@ describe('Orca provider routing snapshot wiring', () => {
     }
     // 远端任务不能用 Claude 订阅(它只在本机 Claude Code 的登录里),SSH worker 不选它。
     expect(routing.availability['claude-code'].find((provider) => provider.id === 'anthropic')?.localOnlyForSsh).toBe(true);
-  });
-
-  it('rejects SSH account switching before deferring or replacing the running route', () => {
-    const guard = registerSource.indexOf("throwIpcError('INVALID_PARAMS', 'This provider requires local execution')");
-    expect(guard).toBeGreaterThan(-1);
-    expect(registerSource.slice(guard - 450, guard)).toContain('runtimeStatus.remoteHostId');
-    expect(registerSource.slice(guard - 300, guard)).toContain('isLocalOnlyProviderForAgent');
-    expect(registerSource.indexOf('const deferLockedSelection =', guard)).toBeGreaterThan(guard);
-    expect(registerSource.indexOf('const previousRuntime =', guard)).toBeGreaterThan(guard);
   });
 
   it('waits for the first Anthropic claim and routes the discovered model from the same full snapshot', async () => {

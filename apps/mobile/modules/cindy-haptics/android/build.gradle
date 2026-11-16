@@ -1,0 +1,10 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'app.cindy.haptics'
+version = '0.1.0'
+android {
+  namespace 'app.cindy.haptics'
+  defaultConfig { minSdkVersion 24 }
+}

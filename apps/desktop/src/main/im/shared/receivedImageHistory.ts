@@ -1,5 +1,5 @@
 import type { IMAttachment } from '@cindy/im';
-import { parseBlobUrl } from '../../cindy-media/blobStore';
+import { parseBlobUrl } from '../../cindy-media/blobStore.desktop';
 import type { GroupHistoryAccessScope } from './groupHistoryAccess';
 import { DEFAULT_GROUP_WINDOW_RETENTION, recordGroupWindowEntry } from './groupWindowCore';
 

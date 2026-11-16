@@ -138,7 +138,7 @@ describe('authManager credential-store escalation wiring', () => {
       'fs',
       'path',
       'SAFE_STORAGE_DIR',
-      ...keys,
+      'PERSISTED_AUTH_CREDENTIAL_KEYS',
       body!.replace(' as NodeJS.ErrnoException', ''),
     );
     const probe = (exists: string | null, errorCode = 'ENOENT') =>
@@ -151,7 +151,7 @@ describe('authManager credential-store escalation wiring', () => {
         },
         { join: (...parts: string[]) => parts.join('/') },
         () => '/fake',
-        ...keys,
+        keys,
       );
     expect(probe(null)).toBe(false);
     for (const key of keys) {

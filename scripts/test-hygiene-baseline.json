@@ -34,9 +34,6 @@
     "apps/desktop/src/main/__tests__/chatAttachmentIpcOwnerBoundary.test.ts": {
       "sourceReads": 1
     },
-    "apps/desktop/src/main/__tests__/claudeAccountUsageSource.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/main/__tests__/claudeOrphanReaper.test.ts": {
       "resetModules": 1
     },
@@ -44,7 +41,7 @@
       "resetModules": 1
     },
     "apps/desktop/src/main/__tests__/computerUsePluginIpc.test.ts": {
-      "sourceReads": 11
+      "sourceReads": 10
     },
     "apps/desktop/src/main/__tests__/deviceLinkSettingsStore.test.ts": {
       "resetModules": 1
@@ -98,9 +95,6 @@
     "apps/desktop/src/main/__tests__/projectOrderStore.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/main/__tests__/providerImportWiring.test.ts": {
-      "sourceReads": 5
-    },
     "apps/desktop/src/main/__tests__/releaseNotesService.test.ts": {
       "resetModules": 1
     },
@@ -112,9 +106,6 @@
     },
     "apps/desktop/src/main/__tests__/sessionDragReleaseNativeHost.test.ts": {
       "resetModules": 1
-    },
-    "apps/desktop/src/main/__tests__/sessionRuntimeFallbackIntent.test.ts": {
-      "sourceReads": 1
     },
     "apps/desktop/src/main/__tests__/sessionTaskSummary.test.ts": {
       "sourceReads": 2
@@ -156,9 +147,6 @@
       "resetModules": 1,
       "realWaits": 2
     },
-    "apps/desktop/src/main/__tests__/worktreeSessionTransfer.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/main/__tests__/worktreeStore.test.ts": {
       "resetModules": 1
     },
@@ -191,9 +179,6 @@
     },
     "apps/desktop/src/main/cindy-brain/__tests__/ghostUserDataRelocation.test.ts": {
       "sourceReads": 1
-    },
-    "apps/desktop/src/main/cindy-brain/__tests__/nodeRuntimePackaging.test.ts": {
-      "sourceReads": 14
     },
     "apps/desktop/src/main/cindy-brain/__tests__/pluginModelPrefsIpc.test.ts": {
       "sourceReads": 1
@@ -256,9 +241,6 @@
     "apps/desktop/src/main/localDb/__tests__/sessionListMessageCount.test.ts": {
       "sourceReads": 1
     },
-    "apps/desktop/src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/main/localDb/ipc/__tests__/ownerEnsureCoordinator.test.ts": {
       "sourceReads": 1
     },
@@ -284,10 +266,10 @@
       "resetModules": 1
     },
     "apps/desktop/src/main/maker-host/__tests__/pi-package-store-security.test.ts": {
-      "resetModules": 17
+      "resetModules": 1
     },
     "apps/desktop/src/main/maker-host/__tests__/piBinaryDistribution.test.ts": {
-      "sourceReads": 8
+      "sourceReads": 6
     },
     "apps/desktop/src/main/maker-host/__tests__/piNativeAdapterRuntime.test.ts": {
       "realWaits": 1
@@ -316,14 +298,8 @@
     "apps/desktop/src/main/maker-ipc/__tests__/bootstrapDirectoryGrants.test.ts": {
       "sourceReads": 1
     },
-    "apps/desktop/src/main/maker-ipc/__tests__/botDirectMessageService.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/main/maker-ipc/__tests__/botInvitation.test.ts": {
       "resetModules": 1
-    },
-    "apps/desktop/src/main/maker-ipc/__tests__/botTaskCoordination.test.ts": {
-      "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/deferredRestartQueueDrain.test.ts": {
       "sourceReads": 1
@@ -335,9 +311,6 @@
       "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/orcaLifecycleService.test.ts": {
-      "sourceReads": 1
-    },
-    "apps/desktop/src/main/maker-ipc/__tests__/orcaModelSelectionIntent.test.ts": {
       "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/orcaProviderRoutingSnapshotWiring.test.ts": {
@@ -383,7 +356,7 @@
       "sourceReads": 1
     },
     "apps/desktop/src/main/remote-agent/executor/__tests__/executor.test.ts": {
-      "realWaits": 5
+      "realWaits": 4
     },
     "apps/desktop/src/main/remote-desktop/__tests__/backgroundActivity.test.ts": {
       "sourceReads": 3
@@ -484,9 +457,6 @@
     "apps/desktop/src/preload/__tests__/appearanceSnapshot.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/preload/__tests__/browserCommentPreload.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/preload/__tests__/ghostPanelMedia.test.ts": {
       "sourceReads": 1
     },
@@ -543,9 +513,6 @@
     },
     "apps/desktop/src/renderer/__tests__/composerListIndentDecoration.test.ts": {
       "sourceReads": 3
-    },
-    "apps/desktop/src/renderer/__tests__/composerStructuredLists.test.ts": {
-      "sourceReads": 1
     },
     "apps/desktop/src/renderer/__tests__/conversationSearchBox.test.ts": {
       "sourceReads": 4
@@ -666,10 +633,6 @@
       "resetModules": 18
     },
     "apps/desktop/src/renderer/__tests__/morphPopover.test.tsx": {
-      "realWaits": 1
-    },
-    "apps/desktop/src/renderer/__tests__/newMakerDraft.test.ts": {
-      "resetModules": 54,
       "realWaits": 1
     },
     "apps/desktop/src/renderer/__tests__/newMakerDraftRemoteHost.test.ts": {
@@ -891,9 +854,6 @@
     "apps/desktop/src/renderer/state/__tests__/agentIslandActivity.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/renderer/themes/__tests__/generatedEffortInitialization.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/renderer/voice-input/__tests__/dictionaryLearningSettings.test.ts": {
       "resetModules": 1
     },
@@ -1032,11 +992,7 @@
     "packages/maker-core/src/agents/pi/__tests__/pi-auto-review-dispatch.test.ts": {
       "sourceReads": 1
     },
-    "packages/maker-core/src/agents/pi/__tests__/pi-extra-dirs-prompt.test.ts": {
-      "sourceReads": 1
-    },
     "packages/maker-core/src/agents/pi/__tests__/pi-startsession-cleanup.test.ts": {
-      "realWaits": 21,
       "sourceReads": 3
     },
     "packages/maker-core/src/agents/pi/__tests__/pi-subagent-runs.test.ts": {

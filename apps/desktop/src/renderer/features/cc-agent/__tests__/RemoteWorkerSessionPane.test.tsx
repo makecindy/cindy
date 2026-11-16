@@ -7,6 +7,7 @@ import { RemoteWorkerSessionPane } from '../RemoteWorkerSessionPane';
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
+  localDeviceId: 'this-mac' as string | null,
   sessionViewProps: null as Record<string, unknown> | null,
   store: {
     getSessionDeviceId: vi.fn<(id: string) => string | undefined>(() => undefined),
@@ -27,6 +28,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ remoteProjectsStore: mocks.store }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthDeviceId: () => mocks.localDeviceId }));
 vi.mock('../CCAgentSessionView', () => ({
   CCAgentSessionView: (props: Record<string, unknown>) => {
     mocks.sessionViewProps = props;
@@ -46,6 +48,7 @@ describe('RemoteWorkerSessionPane', () => {
   beforeEach(() => {
     mocks.invoke.mockReset();
     mocks.sessionViewProps = null;
+    mocks.localDeviceId = 'this-mac';
     Object.values(mocks.store).forEach((fn) => fn.mockClear());
     mocks.store.getSessionDeviceId.mockReturnValue(undefined);
     mocks.store.getDeviceSessions.mockReturnValue([]);
@@ -141,5 +144,44 @@ describe('RemoteWorkerSessionPane', () => {
     await screen.findByTestId('session-view');
     expect(mocks.invoke).toHaveBeenCalledTimes(2);
     expect(mocks.sessionViewProps?.readOnly).toBe(false);
+  });
+
+  it('opens a worker that runs on this computer as a local task, never as a remote mirror', async () => {
+    render(
+      <RemoteWorkerSessionPane
+        leadSessionId="lead-1"
+        device={{ ...device, deviceId: 'this-mac', reachable: null }}
+        viewVisible
+        chatRealtime
+      />,
+    );
+    await screen.findByTestId('session-view');
+    expect(mocks.sessionViewProps).toMatchObject({ sessionIdProp: 'remote-1', readOnly: false });
+    // 本机任务一旦钉成「本机这台设备上的远程任务」，侧栏会多出一条同 id 的远程行，归档也会绕隧道写回本机。
+    expect(mocks.store.pinSessionOrigin).not.toHaveBeenCalled();
+    expect(mocks.store.mergeDeviceSessions).not.toHaveBeenCalled();
+    expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it('waits for the local device id before registering an execution device', async () => {
+    mocks.localDeviceId = null;
+    mocks.invoke.mockResolvedValue({ id: 'remote-1', status: 'active' });
+    const offline = { ...device, reachable: false };
+    const { rerender } = render(
+      <RemoteWorkerSessionPane leadSessionId="lead-1" device={offline} viewVisible chatRealtime />,
+    );
+    expect(screen.getByText('orca.split.remoteWorkerLoading:Mac mini')).toBeTruthy();
+    // 还不知道任务在不在本机时，不能先闪一下「连不上」。
+    expect(screen.queryByText('orca.rolePill.deviceUnreachable')).toBeNull();
+    expect(mocks.store.pinSessionOrigin).not.toHaveBeenCalled();
+    expect(mocks.invoke).not.toHaveBeenCalled();
+
+    mocks.localDeviceId = 'this-mac';
+    rerender(
+      <RemoteWorkerSessionPane leadSessionId="lead-1" device={offline} viewVisible chatRealtime />,
+    );
+    await screen.findByText('orca.split.remoteWorkerUnreachable:Mac mini');
+    expect(mocks.store.pinSessionOrigin).toHaveBeenCalledWith('mac-mini', 'remote-1');
+    expect(screen.getByText('orca.rolePill.deviceUnreachable')).toBeTruthy();
   });
 });

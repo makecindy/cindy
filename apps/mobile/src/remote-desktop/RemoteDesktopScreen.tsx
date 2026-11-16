@@ -54,6 +54,7 @@ import {
   Languages,
   LayoutGrid,
   Monitor,
+  Smartphone,
   Search,
   type LucideIcon,
 } from "lucide-react-native";
@@ -97,7 +98,7 @@ import {
   type RemoteDesktopDisplayMode,
   isRemoteDesktopChannelRequest,
   parseRemoteDesktopChannelReply,
-  REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
+  remoteDesktopChannelTimeoutMs,
 } from "@cindy/device-link";
 import { useDeviceLink } from "@/device-link/DeviceLinkContext";
 import { BACKGROUND_TRANSITION_TIMEOUT_MS } from "@/device-link/backgroundConnection";
@@ -109,6 +110,7 @@ import {
   resolveDesktopIceServers,
 } from "@cindy/device-link";
 import { Text } from "@/components/AppText";
+import { ErrorNotice } from "@/components/ErrorNotice";
 import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
 import { useScreenEdgePadding } from "@/components/screenEdgeInsets";
 import { goBackGuarded } from "@/utils/backGuard";
@@ -312,6 +314,10 @@ export function RemoteDesktopSession({
   const unlockAttempt = useRef<Promise<void>>(Promise.resolve());
   // A remembered fitted size waiting for this lease's viewport measurement.
   const rememberedFit = useRef<{ lease: string; edge: number } | null>(null);
+  // Long edge of the size the phone last asked for. Rotation, folding and
+  // appearance changes only re-derive the ratio, so a smaller or larger
+  // choice from the resolution settings survives them.
+  const fitEdge = useRef<number | null>(null);
   // The computer's own system mode for a lease, read before this phone changes
   // it. Choosing it again forgets the remembered resolution.
   const hostMode = useRef<{ lease: string; modeId?: string } | null>(null);
@@ -428,6 +434,9 @@ export function RemoteDesktopSession({
     delay: 1000,
     displayId: undefined as string | undefined,
     resuming: false,
+    // The user returned after this viewer released its lease (foreground or
+    // screen focus). Cleared once a lease starts; network retries never set it.
+    returned: false,
   });
   const generation = useRef(0);
   const timing = useRef<ReturnType<typeof connectionDiagnostics> | null>(null);
@@ -467,6 +476,9 @@ export function RemoteDesktopSession({
   const windowSizeRef = useRef(windowSize);
   windowSizeRef.current = windowSize;
   const viewportGeneration = useRef(0);
+  // Last attempted viewport, independent of the host's (possibly HiDPI) size.
+  // A failed adjustment waits for a new viewport instead of retrying in a loop.
+  const fittedViewport = useRef({ width: 0, height: 0 });
   const matchesViewer = (
     display: { width: number; height: number },
     width: number,
@@ -475,12 +487,6 @@ export function RemoteDesktopSession({
     width > 0 &&
     height > 0 &&
     Math.abs(display.width / display.height - width / height) < 0.003;
-  const viewerDisplayMatched = Boolean(
-    fittedDisplay &&
-    caps?.viewerDisplayRestore &&
-    lease &&
-    matchesViewer(fittedDisplay, viewerViewport.width, viewerViewport.height),
-  );
   exitLock.current =
     lockOnExitLoaded && lockOnExit && caps?.lockOnExit === true;
   const exitLockPolicy = useRef(false);
@@ -518,12 +524,19 @@ export function RemoteDesktopSession({
     return () => clearTimeout(timer);
   }, [frameReady, showConnectionStatus, deviceId]);
   const connectionLabel = t(
-    showExitLockStatus
+    showExitLockStatus && caps?.exitProtection !== "privacy-screen"
       ? "remoteDesktop.lockingOnExit"
+      : showExitLockStatus
+        ? "remoteDesktop.protectingOnExit"
       : recovery.current.at || status === "reconnecting"
-        ? "remoteDesktop.reconnecting"
-        : "remoteDesktop.connecting",
+        ? screenPlugin
+          ? "remoteDesktop.liveScreenReconnecting"
+          : "remoteDesktop.reconnecting"
+        : screenPlugin
+          ? "remoteDesktop.liveScreenConnecting"
+          : "remoteDesktop.connecting",
   );
+  const ConnectionIcon = screenPlugin ? Smartphone : Monitor;
   const [busy, setBusy] = useState(false);
   const [inputMode, setInputMode] = useInputModePreference();
   const inputModeRef = useRef(inputMode);
@@ -534,6 +547,14 @@ export function RemoteDesktopSession({
   const [controlPage, setControlPage] = useState<
     "controls" | "display" | "security"
   >("controls");
+  const unlockNotice =
+    lease &&
+    security.notice &&
+    !showConnectionStatus &&
+    !showExitLockStatus &&
+    !(operations && controlPage === "security")
+      ? security.notice
+      : null;
   const [toolbarSize, setToolbarSize] = useState({ width: 0, height: 0 });
   const [videoSettings, setVideoSettings, videoPreferencesLoaded] =
     useVideoSettingsPreference();
@@ -624,7 +645,7 @@ export function RemoteDesktopSession({
     foldSkin !== "keyboard" &&
     frameReady &&
     !keyboard &&
-    !operations;
+    (!operations || Boolean(fittedDisplay));
   const keyboardDeck =
     foldSkinAvailable &&
     foldSkin === "keyboard" &&
@@ -662,7 +683,9 @@ export function RemoteDesktopSession({
             : hardwareMedia,
           foldSkin,
           foldLayout.media,
-          lease && lease.display.height > 0
+          // While fitting, the glass opening determines the host resolution.
+          // Feeding the old host ratio back here would lock in its portrait shape.
+          !fittedDisplay && lease && lease.display.height > 0
             ? lease.display.width / lease.display.height
             : undefined,
         )
@@ -755,6 +778,16 @@ export function RemoteDesktopSession({
     >(),
   );
   const channelRequestId = useRef(0);
+  const canRetainMedia = useCallback(
+    () => Boolean(
+      active.current &&
+      streaming.current &&
+      capsRef.current?.deviceId === deviceId &&
+      capsRef.current.value.channelRequests === true &&
+      capsRef.current.value.signalingContinuity === true
+    ),
+    [deviceId],
+  );
   // Requests ride the media peer. Once it is gone their outcome is unknown, so
   // settle them now instead of waiting out the timeout or replaying on the relay.
   const abandonChannelRequests = useCallback(() => {
@@ -765,10 +798,12 @@ export function RemoteDesktopSession({
     (message: RemoteDesktopRequest & { lease: string }, preSend?: () => void) =>
       new Promise<ChannelOutcome>((resolve) => {
         preSend?.();
+        const owner = active.current;
+        const attempt = mediaAttempt.current;
         const id = `${Date.now().toString(36)}-${++channelRequestId.current}`;
         const timer = setTimeout(
           () => settle({ kind: "error", code: "INVOKE_TIMEOUT" }),
-          REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
+          remoteDesktopChannelTimeoutMs(message),
         );
         const settle = (outcome: ChannelOutcome) => {
           if (channelRequests.current.get(id)?.settle !== settle) return;
@@ -778,6 +813,10 @@ export function RemoteDesktopSession({
         };
         channelRequests.current.set(id, { op: message.op, settle });
         const viaWebView = () => {
+          if (active.current !== owner || mediaAttempt.current !== attempt) {
+            settle({ kind: "error", code: "INVOKE_TIMEOUT" });
+            return;
+          }
           // The viewer answers with channelRequestState / channelReply.
           send({ type: "channelRequest", id, request: message });
         };
@@ -818,6 +857,7 @@ export function RemoteDesktopSession({
         !streaming.current ||
         hostCaps?.deviceId !== deviceId ||
         hostCaps.value.channelRequests !== true ||
+        (message.op === "heartbeat" && hostCaps.value.signalingContinuity !== true) ||
         !("lease" in message) ||
         message.lease !== lease.lease ||
         !isRemoteDesktopChannelRequest(message)
@@ -906,6 +946,7 @@ export function RemoteDesktopSession({
             : null;
         },
         onAttempt: (attempt) => {
+          if (mediaAttempt.current !== attempt) abandonChannelRequests();
           mediaAttempt.current = attempt;
         },
         onOfferStart: (lease) =>
@@ -925,7 +966,7 @@ export function RemoteDesktopSession({
           setSettingNotice(t("remoteDesktop.videoSettingsFailed"));
         },
       }),
-    [request, send, t],
+    [request, send, t, abandonChannelRequests],
   );
   const safety = useRemoteDesktopSafety(
     deviceId,
@@ -1286,14 +1327,13 @@ export function RemoteDesktopSession({
     if (
       connecting.current ||
       controlInFlight.current ||
+      (!canControl && controlRestoration.current !== null) ||
       settingInFlight.current ||
       pendingHostControl.current === false
     ) {
       foregroundRestorePending.current = true;
       return;
     }
-    pipPrepared.current = false;
-    foregroundRestorePending.current = false;
     send({
       type: "pipPolicy",
       enabled: pipEnabledRef.current && frameReady,
@@ -1302,14 +1342,30 @@ export function RemoteDesktopSession({
     if (!canControl) {
       // View-only hosts still need to leave background video/lease policy.
       // A new PiP entry must await this reply before authorizing background again.
+      // Until the host confirms, the existing heartbeat still owns recovery.
+      // Keep this lease's intent, but never clear a newer PiP transition's flags.
+      foregroundRestorePending.current = true;
+      const transition = presentationGeneration.current;
       const restoration = request({
         op: "presentation",
         lease: current.lease,
         enabled: false,
       })
-        .then(() => {})
+        .then(() => {
+          if (
+            active.current !== current ||
+            presentationGeneration.current !== transition
+          )
+            return;
+          pipPrepared.current = false;
+          foregroundRestorePending.current = false;
+        })
         .catch((cause) => {
-          if (active.current === current) fail(cause);
+          if (
+            active.current === current &&
+            controlFailureAction(cause) !== "ignore"
+          )
+            fail(cause);
         });
       controlRestoration.current = restoration;
       void restoration.finally(() => {
@@ -1318,6 +1374,8 @@ export function RemoteDesktopSession({
       });
       return;
     }
+    pipPrepared.current = false;
+    foregroundRestorePending.current = false;
     // Capable hosts retain foreground control; view only guards input locally.
     // A temporary release/refusal must not replace that intent. App/route/PiP
     // events restore immediately; heartbeats retry when a transition was busy
@@ -1378,9 +1436,12 @@ export function RemoteDesktopSession({
               setHostCaps({ deviceId, value: result });
               // A window view never unlocks the computer: it shows a window on an unlocked desktop.
               // Automatic recovery must never unlock before the host can reject resume.
-              // A deliberate new connection may still use the saved password.
+              // A deliberate new connection may still use the saved password, and so
+              // may a return after release: macOS waits for the first frame, which
+              // follows the host accepting resume. Linux unlocks before start.
               if (
-                !resuming &&
+                (!resuming ||
+                  (recovery.current.returned && result.platform !== "linux")) &&
                 !handoff &&
                 !screenPlugin &&
                 supportsAutoUnlock(result.platform)
@@ -1422,6 +1483,7 @@ export function RemoteDesktopSession({
           servers: loadIceServers("connect"),
         };
         active.current = next;
+        recovery.current.returned = false;
         receiveWindow.current = {
           since: Date.now(),
           bytes: 0,
@@ -1699,6 +1761,7 @@ export function RemoteDesktopSession({
         !pipPrepared.current
       ) {
         securityRef.current.resetConnectionAttempt();
+        recovery.current.returned = true;
         endBackground();
       } else if (state === "active" && active.current) {
         send({ type: "resume" });
@@ -1738,7 +1801,8 @@ export function RemoteDesktopSession({
         heartbeatBusy === current.lease ||
         (NativeRemoteDesktopView &&
           pipPrepared.current &&
-          linkRef.current.status !== "online") ||
+          linkRef.current.status !== "online" &&
+          !canRetainMedia()) ||
         (presentation.current && AppState.currentState !== "active")
       )
         return;
@@ -1842,6 +1906,16 @@ export function RemoteDesktopSession({
           }
         })
         .catch((cause) => {
+          // A relay screenshot may time out after video has already recovered.
+          // Its missing reply does not revoke that healthy media connection.
+          // Explicit host/permission errors still use the normal failure path.
+          if (
+            streaming.current &&
+            cause &&
+            typeof cause === "object" &&
+            cause.code === "INVOKE_TIMEOUT"
+          )
+            return;
           if (active.current === current) fail(cause);
         })
         .finally(() => {
@@ -1881,7 +1955,7 @@ export function RemoteDesktopSession({
       clearInterval(metrics);
       stop();
     };
-  }, [request, fail, send, stop, pause, releaseControl]);
+  }, [request, fail, send, stop, pause, releaseControl, canRetainMedia]);
   useEffect(() => {
     // Route blur means leaving this desktop (including a native back swipe).
     mobileDebugLog("info", "lifecycle", "remote desktop focus effect", {
@@ -1904,6 +1978,10 @@ export function RemoteDesktopSession({
     } else if (!focused) {
       leaving.current = true;
       setIsLeaving(true);
+      if (active.current) {
+        securityRef.current.resetConnectionAttempt();
+        recovery.current.returned = true;
+      }
       pause(true);
       navigation.current.onEnded?.();
     } else if (focused) {
@@ -1941,14 +2019,27 @@ export function RemoteDesktopSession({
     send({
       type: "mouseButtons",
       native: Platform.OS === "ios",
-      fitToInsets: fullScreenFoldBackground,
-      topInset: retroDesktop
+      // init clears the viewer's transient display-geometry flag. Keep the
+      // remembered fit active across reconnects and native viewer reloads too.
+      fitToInsets: fullScreenFoldBackground || Boolean(fittedDisplay),
+      // Portrait fitting uses the space between Back and the bottom toolbar,
+      // with breathing room on both edges; measurement and rendering share it.
+      // Duo cover and unfolded landscape draw behind system chrome; its
+      // reservations still position controls but do not reduce picture space.
+      topInset: retroDesktop || (systemSideRail && !screenPlugin)
         ? 0
         : fullScreenFoldBackground
           ? foldLayout!.media.y
           : tableRegion
             ? 0
-            : edgePadding.paddingTop,
+            : landscape
+              ? edgePadding.paddingTop
+              : Math.max(
+                  edgePadding.paddingTop,
+                  (sharedStatusRow
+                    ? sharedBackTop
+                    : edgePadding.paddingTop + spacing.xs) + backControlHeight,
+                ) + spacing.lg,
       bottomInset: retroDesktop
         ? 0
         : fullScreenFoldBackground
@@ -1960,16 +2051,20 @@ export function RemoteDesktopSession({
             ? 0
             : keyboard && landscapeKeyboardOverlay
               ? keyboardPanelHeight + keyboardBottom
-              : !keyboard && !landscape && !screenPlugin
-                ? toolbarSize.height
+              : !landscape && !screenPlugin
+                ? (keyboard
+                    ? 0
+                    : Math.max(
+                        toolbarSize.height,
+                        navigationChrome.target +
+                          Math.max(spacing.sm, insets.bottom),
+                      )) + spacing.lg
                 : 0,
       keyboardOpen: keyboard && landscapeKeyboardOverlay,
       portraitKeyboardTopInset:
         keyboard && !landscape && !tableRegion
           ? edgePadding.paddingTop + spacing.xs + backControlHeight + spacing.sm
           : 0,
-      // Side controls float over the desktop; fit against the full canvas width
-      // in either landscape direction, including while the keyboard is open.
       rightInset: 0,
       leftInset: 0,
       enabled:
@@ -1989,6 +2084,9 @@ export function RemoteDesktopSession({
     tableRegion?.first.height,
     tableRegion?.first.width,
     fullScreenFoldBackground,
+    fittedDisplay,
+    systemSideRail,
+    screenPlugin,
     foldLayout?.media.y,
     foldLayout?.media.height,
     geometry.height,
@@ -1996,6 +2094,9 @@ export function RemoteDesktopSession({
     viewerReadyRevision,
     showMouseButtons,
     edgePadding.paddingTop,
+    sharedStatusRow,
+    sharedBackTop,
+    insets.bottom,
     backControlHeight,
     toolbarSize,
     keyboardPanelHeight,
@@ -2012,11 +2113,12 @@ export function RemoteDesktopSession({
   ]);
   useEffect(() => {
     if (link.status !== "online") {
-      // Only a prepared background presentation can survive host signaling loss.
-      // The host stops foreground leases, so discard ours before reconnecting.
+      // A compatible host retains independently live media with the same
+      // bounded lease. Keep renewing it over that channel while relay recovers.
       if (
         presentation.current ||
-        (NativeRemoteDesktopView && pipPrepared.current)
+        (NativeRemoteDesktopView && pipPrepared.current) ||
+        canRetainMedia()
       )
         return;
       pause();
@@ -2024,7 +2126,7 @@ export function RemoteDesktopSession({
     }
     if (!active.current) void connectRef.current();
     else restoreInlinePresentationRef.current();
-  }, [link.status, pause]);
+  }, [link.status, pause, canRetainMedia]);
 
   const onMessage = (
     event:
@@ -2443,6 +2545,7 @@ export function RemoteDesktopSession({
         };
         setNetwork(null);
         setStatus("compatibility");
+        if (linkRef.current.status !== "online" && !presentation.current) pause();
         break;
       case "network": {
         if (
@@ -2715,8 +2818,15 @@ export function RemoteDesktopSession({
     settingInFlight.current = true;
     const startedAt = performance.now();
     const alreadyAuthorized = Boolean(
-      NativeRemoteDesktopView && pipPrepared.current && !restoration,
+      NativeRemoteDesktopView &&
+        pipPrepared.current &&
+        !restoration &&
+        !foregroundRestorePending.current,
     );
+    // The retained flag belongs to the PiP being restored. A new entry must
+    // obtain its own authorization after that request, within its own deadline.
+    if (restoration || foregroundRestorePending.current)
+      pipPrepared.current = false;
     const finishTransition = linkRef.current.beginBackgroundTransition?.();
     finishBackgroundTransition.current = finishTransition ?? null;
     presentationReturnedToActive.current = false;
@@ -2932,6 +3042,7 @@ export function RemoteDesktopSession({
     modeId?: string,
     viewport?: { width: number; height: number },
     remembered = false,
+    restore = false,
   ) => {
     const current = active.current;
     if (
@@ -2946,7 +3057,9 @@ export function RemoteDesktopSession({
     }
     const size = exactResolution
       ? { width, height }
-      : viewerDisplaySize(width, height);
+      : ((fitEdge.current
+          ? viewerDisplaySize(width, height, fitEdge.current)
+          : null) ?? viewerDisplaySize(width, height));
     if (
       !current?.controlling ||
       !(modeId ? caps?.resolutionRestore : caps?.viewerDisplay) ||
@@ -2957,6 +3070,9 @@ export function RemoteDesktopSession({
     )
       return;
     settingInFlight.current = true;
+    fittedViewport.current =
+      viewport ??
+      (exactResolution ? viewerViewportRef.current : { width, height });
     setSettingBusy(true);
     setSettingNotice(null);
     const sourceDisplayId = recovery.current.displayId || current.display.id;
@@ -2966,12 +3082,6 @@ export function RemoteDesktopSession({
     const keepVideo = caps?.liveDisplaySwitch === true;
     try {
       if (!keepVideo) viewerMedia.reset();
-      const restore = Boolean(
-        !exactResolution &&
-        fittedDisplay &&
-        caps?.viewerDisplayRestore &&
-        matchesViewer(fittedDisplay, width, height),
-      );
       const requestGeneration = viewportGeneration.current;
       if (!keepVideo)
         icePrefetch.current = {
@@ -2989,6 +3099,8 @@ export function RemoteDesktopSession({
       if (active.current !== current) return;
       // Reconnect the physical source display after the temporary mirror ends.
       recovery.current.displayId = sourceDisplayId;
+      fitEdge.current =
+        modeId || restore ? null : Math.max(size.width, size.height);
       // The next connection reapplies this choice; restoring or choosing the
       // computer's own mode again forgets it.
       const fittedTo =
@@ -3157,6 +3269,8 @@ export function RemoteDesktopSession({
       if (!isCurrent()) return false;
       rememberedResolutionLease.current = current.lease;
       if (fit) {
+        fitEdge.current = Math.max(remembered.width, remembered.height);
+        fittedViewport.current = remembered.viewport;
         // Same bookkeeping as fitting by hand, so restore is offered.
         setFittedDisplay(
           viewerDisplaySize(
@@ -3239,6 +3353,75 @@ export function RemoteDesktopSession({
     caps?.viewerDisplay,
     fittedDisplay,
   ]);
+  // Rotation, split view, folding and retro skins all report the actual picture
+  // area through viewportChanged. If it changes during a request, the busy flag
+  // settling re-runs this effect with the latest size.
+  useEffect(() => {
+    if (
+      !fittedDisplay ||
+      !caps?.viewerDisplay ||
+      !focused ||
+      appState !== "active" ||
+      !controlReady ||
+      !frameReady ||
+      !lease?.controlling ||
+      settingBusy ||
+      settingInFlight.current ||
+      controlInFlight.current ||
+      // The keyboard only covers part of the picture area; the computer keeps
+      // its size, and closing it returns to the size that was fitted.
+      keyboard ||
+      !viewerDisplaySize(viewerViewport.width, viewerViewport.height) ||
+      (fittedViewport.current.width === viewerViewport.width &&
+        fittedViewport.current.height === viewerViewport.height)
+    )
+      return;
+    // Rotation delivers window bounds, safe areas and toolbar measurements in
+    // separate turns. Apply only the settled area; a new layout or leaving this
+    // screen cancels the pending request. In-flight changes are picked up when
+    // settingBusy clears, using the latest viewport rather than a queued size.
+    const timer = setTimeout(() => {
+      void fitViewerDisplay(viewerViewport.width, viewerViewport.height);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [
+    viewerViewport,
+    fittedDisplay,
+    caps?.viewerDisplay,
+    focused,
+    appState,
+    controlReady,
+    frameReady,
+    lease?.controlling,
+    settingBusy,
+    keyboard,
+  ]);
+
+  const toggleFitDisplay = () => {
+    if (!fittedDisplay) {
+      send({ type: "measureViewport" });
+    } else if (caps?.viewerDisplayRestore) {
+      void fitViewerDisplay(
+        fittedDisplay.width,
+        fittedDisplay.height,
+        false,
+        undefined,
+        undefined,
+        false,
+        true,
+      );
+    } else {
+      setFittedDisplay(null);
+      fitEdge.current = null;
+      const current = active.current;
+      if (current)
+        void rememberResolution(
+          deviceId,
+          recovery.current.displayId || current.display.id,
+          null,
+        );
+    }
+  };
   const shortcut = (keys: string[]) =>
     send({
       type: "events",
@@ -3908,7 +4091,8 @@ export function RemoteDesktopSession({
             )}
           {(showConnectionStatus ||
             showExitLockStatus ||
-            (!lease && error)) && (
+            (!lease && error) ||
+            unlockNotice) && (
             <View
               pointerEvents="box-none"
               style={[
@@ -3929,17 +4113,35 @@ export function RemoteDesktopSession({
             >
               {!frameReady && error !== "permissionHint" && (
                 <View style={styles.waitingComputer}>
-                  <Monitor
+                  <ConnectionIcon
                     size={iconSize.lg}
                     strokeWidth={iconStroke.regular}
                     color={colors.textTertiary}
                   />
                   <Text numberOfLines={2} style={styles.waitingComputerName}>
-                    {deviceName}
+                    {screenPlugin
+                      ? (lease?.screen?.name ??
+                        t("remoteDesktop.liveScreenTitle"))
+                      : deviceName}
                   </Text>
+                  {screenPlugin && (
+                    <Text numberOfLines={2} style={styles.waitingLabel}>
+                      {deviceName}
+                    </Text>
+                  )}
                 </View>
               )}
-              {showConnectionStatus || showExitLockStatus ? (
+              {unlockNotice ? (
+                <ErrorNotice
+                  message={unlockNotice}
+                  testID="remoteDesktop.autoUnlockNotice"
+                  accessibilityRole="alert"
+                  accessibilityLiveRegion="polite"
+                  onDismiss={security.clearNotice}
+                  dismissLabel={t("remoteDesktop.close")}
+                  dismissTestID="remoteDesktop.dismissUnlockNotice"
+                />
+              ) : showConnectionStatus || showExitLockStatus ? (
                 <View
                   style={[
                     styles.connectionBadge,
@@ -4168,6 +4370,7 @@ export function RemoteDesktopSession({
                         : {
                             ...security,
                             ...safety,
+                            notice: security.notice,
                             hostPlatform: caps?.platform,
                             lockOnExit,
                             lockOnExitAvailable:
@@ -4177,6 +4380,8 @@ export function RemoteDesktopSession({
                             idleTimeoutAvailable:
                               idleTimeoutLoaded && caps?.idleLock === true,
                             onIdleTimeout: updateIdleTimeout,
+                            hostIdle: caps?.hostIdle === true,
+                            exitProtection: caps?.exitProtection,
                           }
                     }
                     connected={Boolean(lease) && !connectionPending}
@@ -4185,25 +4390,8 @@ export function RemoteDesktopSession({
                     controlDisabled={controlDisabled}
                     presentation={{
                       enabled: pipEnabled,
-                      canRotate:
-                        typeof remotePresentation?.rotate === "function" &&
-                        !(
-                          geometry.reservedRegionsSupported &&
-                          Platform.OS === "ios" &&
-                          !Platform.isPad &&
-                          geometry.regularWidth &&
-                          geometry.regularHeight
-                        ),
                       canPip: pipAvailable,
                       canAudio: Boolean(caps?.systemAudio),
-                      onRotate: () => {
-                        void remotePresentation
-                          ?.rotate?.(!landscape)
-                          .then(() => setOperations(false))
-                          .catch(() =>
-                            setSettingNotice(t("remoteDesktop.settingFailed")),
-                          );
-                      },
                       onPip: togglePictureInPicture,
                     }}
                     video={{
@@ -4215,8 +4403,8 @@ export function RemoteDesktopSession({
                         ? `${lease.display.id}:${lease.display.width}:${lease.display.height}:${Boolean(fittedDisplay)}`
                         : undefined,
                       viewerDisplaySupported: caps?.viewerDisplay === true,
-                      viewerDisplayMatched,
-                      onFitDisplay: () => send({ type: "measureViewport" }),
+                      autoFitEnabled: Boolean(fittedDisplay),
+                      onFitDisplay: toggleFitDisplay,
                       notice: audioUnavailable.current
                         ? t("remoteDesktop.audioUnavailable")
                         : settingNotice,
@@ -4265,6 +4453,8 @@ export function RemoteDesktopSession({
             {keyboardDeck ? (
               <FoldDesktopKeyboard
                 {...keySurface}
+                skin={foldSkin}
+                onSkinChange={setFoldSkin}
                 onInputMethod={openFoldInputMethod}
                 onOperations={toggleOperations}
                 clipboard={deckClipboard}
@@ -4418,7 +4608,10 @@ export function RemoteDesktopSession({
           </Animated.View>
         )}
       </View>
-      {!screenPlugin && (
+      {(!screenPlugin ||
+        !frameReady ||
+        showConnectionStatus ||
+        Boolean(error)) && (
         <View
           testID="remoteDesktop.backPosition"
           pointerEvents="auto"

@@ -1,0 +1,168 @@
+--- a/src/connection.rs
++++ b/src/connection.rs
+@@ -262,6 +262,7 @@
+     /// 晚到得足以堵住窗口的包占多少，单位百万分之一。
+     late_ppm: u32,
+     bundle_until: u64,
++    copy_backoff_until: u64,
+     /// 丢的包里紧挨着上一个丢包的比例，单位百万分之一。
+     lost_run_ppm: u32,
+     last_lost_packet: u64,
+@@ -352,6 +353,7 @@
+             loss_samples: 0,
+             late_ppm: 0,
+             bundle_until: 0,
++            copy_backoff_until: 0,
+             lost_run_ppm: 0,
+             last_lost_packet: 0,
+             peer_una: sequence,
+@@ -851,6 +853,15 @@
+         self.advance_una(una);
+         self.peer_una = self.peer_una.max(una);
+         self.peer_window = ack.window;
++        let mut index = 0;
++        while index < self.sent.len() {
++            let p = self.sent[index];
++            let repaired = p.segment_count > 0 && p.segments[..p.segment_count as usize].iter().all(|&sn| sn < self.snd_una || self.segments.get((sn - self.snd_una) as usize).is_some_and(|s| s.acked));
++            if repaired && p.app_idle && self.rtt.srtt_us() > 0 && now_us.saturating_sub(p.sent_at) >= self.rtt.loss_delay_us() {
++                self.sent.remove(index);
++                self.declare_lost(now_us, &p);
++            } else { index += 1; }
++        }
+         self.detect_losses(now_us);
+ 
+         if !self.window_blocked() {
+@@ -1021,6 +1032,9 @@
+ 
+     fn declare_lost(&mut self, now_us: u64, packet: &SentPacket) {
+         self.bundle_until = now_us + BUNDLE_HOLD_US;
++        if self.rtt.srtt_us() > 0 && now_us.saturating_sub(self.last_heard) > (3 * self.rtt.srtt_us()).max(250_000) {
++            self.copy_backoff_until = now_us + BUNDLE_HOLD_US;
++        }
+         let run = if packet.number == self.last_lost_packet + 1 { 1_000_000 } else { 0 };
+         self.lost_run_ppm = self.lost_run_ppm - self.lost_run_ppm / LOST_RUN_SMOOTHING + run / LOST_RUN_SMOOTHING;
+         self.last_lost_packet = packet.number;
+@@ -1031,7 +1045,8 @@
+             self.lost.pop_front();
+         }
+         let distance = self.largest_acked.unwrap_or(0).saturating_sub(packet.number);
+-        self.lost.push_back(LostPacket { packet: *packet, declared_at: now_us, distance });
++        let index = self.lost.partition_point(|lost| lost.packet.number < packet.number);
++        self.lost.insert(index, LostPacket { packet: *packet, declared_at: now_us, distance });
+         for &sn in &packet.segments[..packet.segment_count as usize] {
+             // 分片只有在旧包被判丢失后才会重发，所以同一分片不会同时在两个待确认的包里。
+             let Some(segment) = self.segment_mut(sn) else { continue };
+@@ -1145,6 +1160,7 @@
+         if self.timeout_deadline().is_some_and(|at| at <= now_us) {
+             // 一次判完所有超龄的包。只判最老的几个的话，其余的要等退避，整个窗口好几秒才能恢复。
+             let age = self.timeout_age_us();
++            let initial_probe = self.rtt.srtt_us() == 0 && self.consecutive_timeouts < 1;
+             let mut lost_data = false;
+             while let Some(&packet) = self.sent.front() {
+                 if packet.sent_at + age > now_us || self.parity_hold_until(&packet).is_some_and(|at| at > now_us) {
+@@ -1154,6 +1170,7 @@
+                 self.stats.timeout_losses += 1;
+                 lost_data |= packet.segment_count > 0;
+                 self.declare_lost(now_us, &packet);
++                if initial_probe { break; }
+             }
+             if lost_data {
+                 self.consecutive_timeouts += 1;
+@@ -1292,7 +1309,7 @@
+         // 校验包不占发送窗口，但算在途字节。要留出它的位置，否则校验越多能发的数据越少。
+         let cwnd = self.congestion.cwnd();
+         let parity_room = self.parity_interval().map_or(0, |interval| cwnd / interval as u64);
+-        self.in_flight < self.config.send_window && self.bytes_in_flight < cwnd + parity_room
++        self.bytes_in_flight < cwnd + parity_room
+     }
+ 
+     fn may_send(&self, now_us: u64) -> bool {
+@@ -1365,6 +1382,7 @@
+ 
+         while !parity_sent && bundled_count < MAX_BUNDLED_SEGMENTS && self.may_send(now_us) {
+             let Some(sn) = self.next_duplicate() else { break };
++            if bundled[..bundled_count].contains(&sn) { break; }
+             let Some(segment) = self.segment_mut(sn) else { break };
+             if used + wire::DATA_HEADER_LEN + segment.data.len() > out.len() {
+                 break;
+@@ -1378,6 +1396,7 @@
+ 
+         let mut segments = [0u64; MAX_SEGMENTS_PER_PACKET];
+         let mut count = 0usize;
++        let mut small_copied = false;
+         let mut protected_by = 0;
+         // 校验包到期但这个包放不下时先停一下：双向传输时每个包都带确认，继续发新数据的话校验包永远轮不到。
+         while !parity_sent && !self.parity_due(now_us) && count < MAX_SEGMENTS_PER_PACKET && self.may_send(now_us) {
+@@ -1397,7 +1416,7 @@
+                 match self.parity_interval() {
+                     Some(interval) => {
+                         if self.parity_pending == 0 {
+-                            self.parity_flush_at = now_us + self.rtt.srtt_us() / PARITY_FLUSH_RTT_DIVISOR;
++                            self.parity_flush_at = now_us + (self.rtt.srtt_us() / PARITY_FLUSH_RTT_DIVISOR).min(1_000);
+                         }
+                         self.parity_target = interval;
+                         self.parity_pending += 1;
+@@ -1410,6 +1429,16 @@
+                     None => {}
+                 }
+             }
++            if !retransmission && self.segments[(sn - self.snd_una) as usize].data.len() <= self.config.max_packet_size / 4
++                && (self.loss_ppm >= BUNDLE_LOSS_PPM || now_us < self.bundle_until) && !self.congestion.is_rate_limited()
++                && now_us >= self.copy_backoff_until && self.consecutive_timeouts == 0 && self.rtt.srtt_us() > 0 && now_us.saturating_sub(self.last_heard) < self.rtt.loss_delay_us()
++                && self.lost_run_ppm < PARITY_LOST_RUN_PPM {
++                let copies = BUNDLE_COPIES.iter().find(|&&(loss, _)| self.loss_ppm >= loss).map_or(1, |&(_, copies)| copies);
++                if self.duplicates.len() + copies <= MAX_DUPLICATES_QUEUED {
++                    for _ in 0..copies { self.duplicates.push_back(sn); }
++                    small_copied = true;
++                }
++            }
+             if retransmission {
+                 self.stats.retransmitted_segments += 1;
+                 if self.should_duplicate() {
+@@ -1420,7 +1449,7 @@
+             count += 1;
+         }
+         let bundling = self.loss_ppm >= BUNDLE_LOSS_PPM || now_us < self.bundle_until || self.loss_samples < BUNDLE_WARMUP_PACKETS;
+-        if count > 0 && bundling {
++        if count > 0 && bundling && !small_copied {
+             (used, bundled_count) = self.bundle_unacked(out, used, &segments[..count], &mut bundled, bundled_count);
+         }
+ 
+--- a/src/congestion.rs
++++ b/src/congestion.rs
+@@ -129,6 +129,7 @@
+     last_period_rate: u64,
+     /// 第一批包的第一个确认到达时的时间和送达量。
+     train_start: Option<(u64, u64)>,
++    app_idle_estimate: bool,
+ }
+ 
+ impl Bbr {
+@@ -174,6 +175,7 @@
+             period_calm_packets: 0,
+             last_period_rate: 0,
+             train_start: None,
++            app_idle_estimate: false,
+         }
+     }
+ 
+@@ -405,7 +407,10 @@
+         // 排空阶段也不能：抬上去在途量就降不到一个 BDP，连接一直出不了排空，随机丢包率永远测不到。
+         let boost = self.window_limited && self.mode != Mode::Drain && !self.is_below_capacity();
+         let gain = if boost { gain.max(WINDOW_LIMITED_GAIN) } else { gain };
+-        (self.path_rate().saturating_mul(gain) / 1000).max(1)
++        let rate = (self.path_rate().saturating_mul(gain) / 1000).max(1);
++        if self.app_idle_estimate && self.rate_cap == 0 && self.mode != Mode::Drain && self.mode != Mode::ProbeRtt && !self.is_below_capacity() && !self.queue_is_building() {
++            rate.max(INITIAL_RATE.min(self.initial_cwnd.saturating_mul(1_000_000) / self.min_rtt_us.max(1)))
++        } else { rate }
+     }
+ 
+     pub(crate) fn bandwidth_estimate(&self) -> u64 {
+@@ -444,6 +449,7 @@
+ 
+     pub(crate) fn on_ack(&mut self, now_us: u64, sample: &RateSample, delivered: u64, bytes_in_flight: u64) {
+         self.recovering = false;
++        if sample.delivery_rate >= self.btl_bw { self.app_idle_estimate = sample.app_idle; }
+         self.period_idle |= sample.app_idle;
+         let delivery_rate = sample.delivery_rate.max(self.train_rate(now_us, sample, delivered));
+         self.sample_period(now_us, delivered);
