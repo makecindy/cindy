@@ -19135,6 +19135,7 @@
       "layoutMenuLabel": "Worker リストの表示方式",
       "layoutTabs": "タブ",
       "layoutDropdown": "ドロップダウン",
+      "reorderHint": "ドラッグ、または Alt + ← / → で並べ替え。このコンピューターに順序を保存します。",
       "scrollWorkersLeft": "前の Worker を表示",
       "scrollWorkersRight": "次の Worker を表示",
       "scrollWorkersLeftEdge": "すでに先頭の Worker を表示しています",

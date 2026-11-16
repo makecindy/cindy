@@ -19393,6 +19393,7 @@
       "layoutMenuLabel": "Disposição da lista de Workers",
       "layoutTabs": "Separadores",
       "layoutDropdown": "Lista pendente",
+      "reorderHint": "Arraste ou use Alt + ← / → para ordenar. A ordem fica guardada neste computador.",
       "scrollWorkersLeft": "Deslocar para Workers anteriores",
       "scrollWorkersRight": "Deslocar para mais Workers",
       "scrollWorkersLeftEdge": "Já está no primeiro Worker",

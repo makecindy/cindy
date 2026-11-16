@@ -19211,6 +19211,7 @@
       "layoutMenuLabel": "Layout der Worker-Liste",
       "layoutTabs": "Tabs",
       "layoutDropdown": "Dropdown",
+      "reorderHint": "Zum Sortieren ziehen oder Alt + ← / → drücken. Die Reihenfolge wird auf diesem Computer gespeichert.",
       "scrollWorkersLeft": "Zu früheren Workern scrollen",
       "scrollWorkersRight": "Zu weiteren Workern scrollen",
       "scrollWorkersLeftEdge": "Bereits beim ersten Worker",
