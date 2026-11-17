@@ -1,3 +1,4 @@
+import { Sparkles } from 'lucide-react';
 /**
  * VendorIcon — sidebar session 行的 Agent 身份 + running 状态指示器
  * ---------------------------------------------------------------------------
@@ -21,7 +22,7 @@ import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { RemoteSignalOverlay } from '@/components/icons/RemoteSourceMark';
 
-export type VendorIconKind = 'cc' | 'codex' | 'pi';
+export type VendorIconKind = 'cc' | 'codex' | 'pi' | 'antigravity';
 
 /**
  * 各 glyph 笔画右上角在自身方框里的位置(0–1，已留出与波纹点的间隙)。
@@ -32,6 +33,7 @@ const REMOTE_SIGNAL_ANCHOR: Record<VendorIconKind, { x: number; y: number }> = {
   cc: { x: 0.95, y: 0.13 },
   codex: { x: 0.9, y: 0.1 },
   pi: { x: 0.83, y: 0.36 },
+  antigravity: { x: 0.9, y: 0.1 },
 };
 
 /**
@@ -80,7 +82,7 @@ export function VendorIcon({
 
   return (
     <span className={wrapperClassName} title={title}>
-      {vendor === 'codex' ? (
+      {vendor === 'antigravity' ? <Sparkles size={size} /> : vendor === 'codex' ? (
         <CodexMark size={size} />
       ) : vendor === 'pi' ? (
         <span

@@ -105,7 +105,7 @@ export interface CollabWorkerConfig {
 
 export interface CollabDraft {
   enabled: boolean;
-  worker: 'cc' | 'codex' | 'pi';
+  worker: 'cc' | 'codex' | 'pi' | 'antigravity';
   workerConfig?: CollabWorkerConfig;
 }
 
@@ -220,6 +220,7 @@ export interface NewMakerDraft {
  * 在目录里都是默认隐藏的模型 —— 种子默认模型压根不在用户看到的清单里。
  */
 function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
+  if (vendor === 'antigravity') return { model: '', effort: 'medium', permissionMode: 'auto', permissionModeCustomized: false, planMode: false, providerId: 'google-antigravity-subscription' };
   if (vendor === 'pi') {
     return {
       // pi 走 XD 网关(anthropic-messages 可达面),默认给网关中档模型;
@@ -279,6 +280,7 @@ function makeDefault(): NewMakerDraft {
     extraDirs: [],
     writableDirs: [],
     lastByVendor: {
+      antigravity: defaultVendorPrefs('antigravity'),
       cc: defaultVendorPrefs('cc'),
       pi: defaultVendorPrefs('pi'),
       orca: defaultVendorPrefs('orca'),
@@ -427,7 +429,7 @@ function sanitize(raw: unknown): NewMakerDraft {
       ? (r.modelChosenByVendor as Record<string, unknown>)
       : {};
   const modelChosenByVendor: Partial<Record<MakerVendor, boolean>> = {};
-  for (const v of ['cc', 'orca', 'codex', 'pi'] as const) {
+  for (const v of ['cc', 'orca', 'codex', 'pi', 'antigravity'] as const) {
     if (modelChosenRaw[v] === true) modelChosenByVendor[v] = true;
   }
   // 老版本没有独立的组合标记：显式选过模型/来源/思考深度/Fast 都是足够强的
@@ -458,7 +460,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   const legacyCcModel =
     legacyCcModelCandidate &&
     (r.defaultTupleCustomized === undefined || !isKnownProductTuple('cc', legacyCcPrefs));
-  const legacySourceSelection = (['cc', 'orca', 'codex', 'pi'] as const).some((slotVendor) => {
+  const legacySourceSelection = (['cc', 'orca', 'codex', 'pi', 'antigravity'] as const).some((slotVendor) => {
     const prefs = lastByVendorRaw[slotVendor];
     if (
       !prefs ||
@@ -520,6 +522,7 @@ function sanitize(raw: unknown): NewMakerDraft {
     extraDirs,
     writableDirs,
     lastByVendor: {
+      antigravity: sanitizeVendorPrefs(lastByVendorRaw.antigravity, 'antigravity'),
       cc: sanitizeVendorPrefs(lastByVendorRaw.cc, 'cc'),
       pi: sanitizeVendorPrefs(lastByVendorRaw.pi, 'pi'),
       orca: sanitizeVendorPrefs(lastByVendorRaw.orca, 'orca'),
@@ -896,7 +899,7 @@ export function setNewChatDefaultPermissionMode(mode: PermissionMode | null): vo
   if (mode !== null && mode !== 'auto' && mode !== 'bypassPermissions') return;
   rebaseStoredDefaultTuplePreference();
   const lastByVendor = { ...currentDraft.lastByVendor };
-  for (const vendor of ['cc', 'pi', 'codex', 'orca'] as const) {
+  for (const vendor of ['cc', 'pi', 'codex', 'orca', 'antigravity'] as const) {
     if (!lastByVendor[vendor].permissionModeCustomized) {
       lastByVendor[vendor] = { ...lastByVendor[vendor], permissionMode: mode ?? 'auto', permissionModeCustomized: false };
     }
@@ -1090,7 +1093,7 @@ export function fallbackUnavailableVendor(availableVendors: ReadonlySet<MakerVen
 }
 
 export interface SuggestedDefaultTuple {
-  vendor: Extract<MakerVendor, 'cc' | 'codex' | 'pi'>;
+  vendor: Extract<MakerVendor, 'cc' | 'codex' | 'pi' | 'antigravity'>;
   providerId: string;
   model: string;
   effort?: Effort | null;

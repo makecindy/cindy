@@ -6,7 +6,7 @@ export interface RemoteModelFavorite {
   uid: string;
   providerId: string;
   modelId: string;
-  agent: "cc" | "codex" | "pi";
+  agent: "cc" | "codex" | "pi" | "antigravity";
   effort?: string;
   fast?: true | "ultrafast";
 }

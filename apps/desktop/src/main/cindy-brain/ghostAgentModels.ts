@@ -16,7 +16,7 @@ export type GhostAgentLocationsReadResult =
 type GhostAgentModelsOk = Extract<GhostAgentModelsResult, { ok: true }>;
 
 /** Project each provider separately: the same model can support different efforts per route. */
-export function projectGhostAgentModels(views: ProviderView[], availableAgents: readonly string[], visibilityOverride: (agent: 'codex' | 'claude-code' | 'pi', providerId: string, modelId: string) => boolean | undefined = () => undefined): GhostAgentModelsResult {
+export function projectGhostAgentModels(views: ProviderView[], availableAgents: readonly string[], visibilityOverride: (agent: 'codex' | 'claude-code' | 'pi' | 'antigravity', providerId: string, modelId: string) => boolean | undefined = () => undefined): GhostAgentModelsResult {
   const models: GhostAgentModelsOk['models'] = [];
   for (const agent of GHOST_REMOTE_AGENT_MODELS) {
     if (!availableAgents.includes(agent)) continue;

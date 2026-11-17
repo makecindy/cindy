@@ -19,6 +19,7 @@ export default {
     'src/renderer/features/provider-share/providerShareStore': { partial: 'export const useProviderShareReceived = () => window.providerSourcesFixture.received;' },
   },
   cases: {
+    'antigravity-subscription': { about: 'Native Antigravity subscription source remains distinct from Google API and offers its official sign-in action' },
     'legacy-upgrade': { about: 'Old connection IDs remain in the host snapshot, while the actual settings rail shows one OpenAI supplier and both migrated accounts' },
     'legacy-upgrade-shared': { about: 'A migrated connection with an existing share keeps its selective revocation entry even when disconnected and paused, without duplicating unshared connections' },
     'subscription-claude-choice': { about: 'An existing Claude Code login is shown before choosing it or another account' },
@@ -55,6 +56,12 @@ export default {
         await page.getByTestId('provider-share-entry').waitFor();
         await ui.capture('legacy-share-controls');
       }
+      return;
+    }
+    if (ui.case === 'antigravity-subscription') {
+      await page.getByText('Google AI · Antigravity', { exact: true }).first().click();
+      await page.getByRole('button', { name: await ui.t('settings.providers.button.authorize'), exact: true }).waitFor();
+      assert.equal(await page.getByText(/仅支持 Codex/).count(), 0);
       return;
     }
     if (/^subscription-(claude|codex)-(choice|added|long)$/.test(ui.case)) {

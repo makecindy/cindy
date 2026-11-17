@@ -101,6 +101,69 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     );
   });
 
+  it('unconfigured Antigravity never blocks the cold local catalog for existing engines', async () => {
+    const harness = stubLocalCatalog();
+    const listAvailableAgents = vi.fn(async () => ['claude-code', 'codex', 'pi']);
+    Object.assign(window.electronAPI.maker, { listAvailableAgents });
+    harness.setSnapshot('openai', 'gpt-existing');
+    harness.setUnavailableAgent('antigravity');
+    const catalog = await import('@/lib/localCatalogSnapshot');
+    const providers = await import('@/lib/providersSnapshotStore');
+    const capabilities = await import('@/hooks/useAgentCapabilities');
+
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+    expect(listAvailableAgents).toHaveBeenCalledOnce();
+    expect(harness.getCapabilities).not.toHaveBeenCalledWith('antigravity');
+    expect(providers.getCachedProvidersSnapshot()?.providers).toEqual([{ id: 'openai' }]);
+    expect(capabilities.getCachedCapabilities('codex')?.availableModels[0].displayName).toBe('gpt-existing:codex');
+    expect(capabilities.getCachedCapabilities('antigravity')).toBeNull();
+  });
+
+  it('registered optional engines participate in the same local capability snapshot', async () => {
+    const { getCapabilities } = stubElectron();
+    Object.assign(window.electronAPI.maker, { listAvailableAgents: async () => ['claude-code', 'codex', 'pi', 'antigravity'] });
+    getCapabilities.mockImplementation(async agent => caps(`local:${agent}`, agent === 'antigravity' ? 0 : 1));
+    const capabilities = await import('@/hooks/useAgentCapabilities');
+    await capabilities.preloadAllCapabilities();
+    expect(getCapabilities).toHaveBeenCalledWith('antigravity');
+    expect(capabilities.getCachedCapabilities('antigravity')?.availableModels[0].displayName).toBe('local:antigravity');
+    expect((await capabilities.loadLocalCapabilitiesSnapshot()).find(([agent]) => agent === 'antigravity')?.[1].availableModels[0].contextWindow).toBe(0);
+  });
+
+  it('an optional registered engine IPC failure cannot masquerade as an unconfigured engine', async () => {
+    const { getCapabilities } = stubElectron();
+    Object.assign(window.electronAPI.maker, { listAvailableAgents: async () => ['claude-code', 'codex', 'pi', 'antigravity'] });
+    getCapabilities.mockImplementation(async agent => {
+      if (agent === 'antigravity') throw new Error('upstream transport disconnected');
+      return caps(`local:${agent}`);
+    });
+    const capabilities = await import('@/hooks/useAgentCapabilities');
+    await expect(capabilities.loadLocalCapabilitiesSnapshot()).rejects.toThrow('upstream transport disconnected');
+  });
+
+  it('a removed optional engine clears its capability cache without removing existing models', async () => {
+    const harness = stubLocalCatalog();
+    let registered = ['claude-code', 'codex', 'pi', 'antigravity'];
+    Object.assign(window.electronAPI.maker, { listAvailableAgents: async () => registered });
+    const catalog = await import('@/lib/localCatalogSnapshot');
+    const capabilities = await import('@/hooks/useAgentCapabilities');
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+    expect(capabilities.getCachedCapabilities('antigravity')).not.toBeNull();
+    registered = ['claude-code', 'codex', 'pi'];
+    harness.setUnavailableAgent('antigravity');
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+    expect(capabilities.getCachedCapabilities('antigravity')).toBeNull();
+    expect(capabilities.getCachedCapabilities('codex')).not.toBeNull();
+  });
+
+  it('registration discovery failure does not guess available engines or replace the catalog', async () => {
+    const harness = stubLocalCatalog();
+    Object.assign(window.electronAPI.maker, { listAvailableAgents: async () => { throw new Error('IPC unavailable'); } });
+    const capabilities = await import('@/hooks/useAgentCapabilities');
+    await expect(capabilities.loadLocalCapabilitiesSnapshot()).rejects.toThrow('IPC unavailable');
+    expect(harness.getCapabilities).not.toHaveBeenCalled();
+  });
+
   it('本机目录热刷新会原子替换核心 agent 的缓存快照', async () => {
     const { getCapabilities } = stubElectron();
     const mod = await import('@/hooks/useAgentCapabilities');

@@ -34,7 +34,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { onPatch as onSessionPatch } from '@/lib/sessionsBus';
 
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity' | 'media';
   model: string;
   money: RegionalMoney;
   estimatedMoney: RegionalMoney | null;
@@ -47,7 +47,7 @@ export interface UsageHistoryModel {
 /** 每日 × 模型明细 — 右栏堆叠柱状图分段。 */
 export interface UsageHistoryModelDay {
   day: string;
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity' | 'media';
   model: string;
   money: RegionalMoney;
   apiMoney: RegionalMoney;

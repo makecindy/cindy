@@ -36,14 +36,14 @@ function resolveAvailableLocalRoute(
 export function availableAppDefaultModels(input: {
   providers: readonly ProviderView[];
   currentRoute?: BotModelRoute | null;
-  tuning?: (agent: 'claude-code' | 'codex' | 'pi', providerId: string, model: string) => { effort?: string; fastMode?: boolean | 'ultrafast' };
-  availableAgents: ReadonlySet<'cc' | 'codex' | 'pi'>;
+  tuning?: (agent: 'claude-code' | 'codex' | 'pi' | 'antigravity', providerId: string, model: string) => { effort?: string; fastMode?: boolean | 'ultrafast' };
+  availableAgents: ReadonlySet<'cc' | 'codex' | 'pi' | 'antigravity'>;
   enabled: NonNullable<Parameters<typeof resolveAvailableLocalRoute>[0]['isModelEnabled']>;
 }) {
   const current = resolveAvailableLocalRoute({ providers: input.providers, providersLoading: false,
     availableAgents: input.availableAgents, availableAgentsLoaded: true,
     preferredRoute: input.currentRoute ?? undefined, isModelEnabled: input.enabled });
-  return input.providers.flatMap(provider => (['claude-code', 'codex', 'pi'] as const).flatMap(agent =>
+  return input.providers.flatMap(provider => (['claude-code', 'codex', 'pi', 'antigravity'] as const).flatMap(agent =>
     (provider.models[agent] ?? []).flatMap(model => {
       const remembered = input.tuning?.(agent, provider.id, model.id);
       const route: BotModelRoute = { harness: agent === 'claude-code' ? 'claude' : agent,

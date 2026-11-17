@@ -12,7 +12,7 @@ export interface MessageWriteBody {
   content: unknown;
   toolUseId?: string;
   agentMeta?: AgentMeta | null;
-  agentKind?: 'cc' | 'codex' | 'pi' | null;
+  agentKind?: 'cc' | 'codex' | 'pi' | 'antigravity' | null;
   createdAt?: number;
 }
 export interface MessageWriteOptions {

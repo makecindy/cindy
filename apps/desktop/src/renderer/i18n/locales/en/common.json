@@ -1,4 +1,16 @@
 {
+  "googleSubscription": {
+    "usage": "Google usage",
+    "quotaUnavailable": "Account quota is currently unavailable",
+    "quotaGuide": "This ACP version does not expose account quota or reset times. View them with /usage in the official Antigravity CLI.",
+    "openQuotaGuide": "How to view official quota",
+    "moneyUnavailable": "Credits balance and cash charges are not reported by this interface.",
+    "context": "Session context (latest report)",
+    "lastTurnTokens": "Last turn tokens",
+    "unavailable": "Unavailable",
+    "modelControlsThinking": "Reasoning effort is managed by this model.",
+    "noFastMode": "This source does not expose a separate Fast / Standard switch."
+  },
   "runtimePlugins": {
     "save": "Save",
     "promptUnsupported": "This Pi execution location does not support system prompt fragments.",
@@ -14035,6 +14047,24 @@
       "listAria": "Permission modes",
       "autoFallback": "Auto-review is temporarily unavailable. Switched to Default permissions and will ask when needed.",
       "modes": {
+        "antigravity": {
+          "ask": {
+            "label": "Default permissions",
+            "description": "You approve edits and commands when needed."
+          },
+          "acceptEdits": {
+            "label": "Auto accept edits",
+            "description": "File edits are allowed directly; you approve other actions when needed."
+          },
+          "auto": {
+            "label": "Auto-review",
+            "description": "Automatically edit the workspace and run safe commands; high-risk actions still ask for approval."
+          },
+          "bypassPermissions": {
+            "label": "Full access",
+            "description": "Routine actions are allowed directly, including files outside the workspace and network commands."
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "Default permissions",

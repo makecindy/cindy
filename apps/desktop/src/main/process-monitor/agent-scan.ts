@@ -100,7 +100,7 @@ export function classifyMonitoredAgentCommandLine(
   cmdLineLower: string,
 ): MonitoredAgentKind | null {
   const base = classifyAgentCommandLine(cmdLineLower);
-  if (base) return base;
+  if (base && base !== 'antigravity') return base;
   if (
     PI_MARKERS.some((m) => cmdLineLower.includes(m)) ||
     runtimePiMarkers.some((m) => cmdLineLower.includes(m))

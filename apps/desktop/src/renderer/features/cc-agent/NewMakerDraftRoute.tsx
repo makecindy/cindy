@@ -492,7 +492,7 @@ function draftEnableOrcaOptions(
   /** `providers` 是哪一处的目录(Agent 所在位置)；null = 任务所在电脑。 */
   providersAgentDeviceId: string | null = null,
 ) {
-  const preferredAgent: 'claude-code' | 'codex' | 'pi' =
+  const preferredAgent: 'claude-code' | 'codex' | 'pi' | 'antigravity' =
     collab.worker === 'codex' ? 'codex' : collab.worker === 'pi' ? 'pi' : 'claude-code';
   // Worker 类型也是**设备作用域**的(codex review P2):在只连了 Codex 的设备 A 选了 Codex
   // Worker,切到只连 Claude 的设备 B 时,workerConfig 虽然被清了,collab.worker 仍是 codex,
@@ -501,7 +501,7 @@ function draftEnableOrcaOptions(
   // 没有已连接供应商、而另一个有,就改用另一个;两个都没有则原样透传,由 main 的精确
   // preflight 报可操作错误(不在这里编一个同样跑不起来的值)。
   // 仅在目录就绪时收窄,理由同下方 providerId:未就绪的空快照会误判成"都没有"。
-  const workerAgent: 'claude-code' | 'codex' | 'pi' = (() => {
+  const workerAgent: 'claude-code' | 'codex' | 'pi' | 'antigravity' = (() => {
     if (!providersReady) return preferredAgent;
     if (connectedProvidersForAgent(providers, preferredAgent).length > 0) return preferredAgent;
     const fallback = (['claude-code', 'codex', 'pi'] as const).find(
@@ -905,8 +905,8 @@ export function NewMakerDraftRoute() {
    * 并清掉 —— 持久化之后那等于一切引擎只能记住最后一次选择。
    */
   const draftFavoriteAnchor = useDraftFavoriteAnchor(normalizeDbAgentKind(draft.vendor));
-  const persistedAgentKind: 'cc' | 'codex' | 'pi' = normalizeDbAgentKind(draft.vendor);
-  const authVendor: 'cc' | 'codex' | 'pi' = persistedAgentKind;
+  const persistedAgentKind: 'cc' | 'codex' | 'pi' | 'antigravity' = normalizeDbAgentKind(draft.vendor);
+  const authVendor: 'cc' | 'codex' | 'pi' | 'antigravity' = persistedAgentKind;
   const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
 
   // 品牌区跟随当前主题；icon / logo 的固定布局统一由 ThemeBrandLockup 负责。
@@ -2859,7 +2859,7 @@ export function NewMakerDraftRoute() {
   const carryDraftFavoriteAnchorToSession = useCallback(
     (
       newSessionId: string,
-      engine: 'cc' | 'codex' | 'pi',
+      engine: 'cc' | 'codex' | 'pi' | 'antigravity',
       model: string,
       providerId: string | null,
     ): void => {
@@ -3134,7 +3134,7 @@ export function NewMakerDraftRoute() {
   const handleRemoteProjectAdded = useCallback(
     async (target: RemoteProjectTarget) => {
       // vendor 由外层 VendorSegmentedSwitcher (draft.vendor) 单一决策 —— dialog 不再让用户选。
-      const draftVendor: 'cc' | 'codex' | 'pi' = normalizeDbAgentKind(draft.vendor);
+      const draftVendor: 'cc' | 'codex' | 'pi' | 'antigravity' = normalizeDbAgentKind(draft.vendor);
 
       if (target.kind === 'device-link') {
         // device-link:**不**像 SSH 立即建会话(会在被控端留空会话)。改为把当前草稿指向该被控
@@ -5097,7 +5097,7 @@ export function NewMakerDraftRoute() {
           // agent 启动时看到的工作区已是迁移后的状态。fail-soft：检测错误只 warn，不阻塞 send。
           try {
             const wd = effectiveWorkingDir;
-            if (wd && !isRemoteProjectDraft && persistedAgentKind !== 'pi') {
+            if (wd && !isRemoteProjectDraft && persistedAgentKind !== 'pi' && persistedAgentKind !== 'antigravity') {
               const r = await crossAgentConvertService.detect(
                 wd,
                 persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,

@@ -126,6 +126,9 @@ describe('task digest assembly', () => {
   });
 
   it('turns stored session rows and PR results into the digest vocabulary', () => {
+    expect(sessionFactsFromRow({ title: 'Google teammate', agentKind: 'antigravity', model: 'gemini-4-hydrogen',
+      providerId: 'google-antigravity-subscription' })?.route).toMatchObject({ harness: 'antigravity',
+      model: 'gemini-4-hydrogen', provider_id: 'google-antigravity-subscription' });
     expect(
       sessionFactsFromRow({
         title: 't',

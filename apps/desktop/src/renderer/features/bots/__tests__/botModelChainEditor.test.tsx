@@ -28,7 +28,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       providerId: string;
       modelId: string;
       effort?: string;
-      engine: 'cc' | 'codex' | 'pi';
+      engine: 'cc' | 'codex' | 'pi' | 'antigravity';
       fast: boolean;
       favoriteUid: string | null;
     }) => void;
@@ -36,6 +36,8 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     modelSelectorProps(props);
     return (
       <div data-testid={`model-selector-${props.modelId}`}>
+        <button type="button" onClick={() => props.onUnifiedSelect({ providerId: 'google-antigravity-subscription',
+          modelId: 'gemini-4-hydrogen', engine: 'antigravity', fast: false, favoriteUid: null })}>choose-google-model</button>
         <button onClick={() => props.onEffortChange("high")}>set-high-effort</button>
         <button onClick={() => props.onFastModeChange(true)}>enable-fast-mode</button>
         <button
@@ -102,6 +104,19 @@ describe('BotModelChainEditor', () => {
   const primary = { harness: 'codex' as const, model: 'primary-model', providerId: 'openai', effort: 'medium', fastMode: false };
   const firstFallback = { ...primary, model: 'first-fallback' };
   const secondFallback = { ...primary, model: 'second-fallback' };
+  it('allows a local teammate to select Google while retaining the native route and clearing Codex controls', () => {
+    const onChange = vi.fn();
+    render(<BotModelChainEditor value={[{ ...primary, fastMode: true }]} onChange={onChange} />);
+    fireEvent.click(screen.getByText('choose-google-model'));
+    expect(onChange).toHaveBeenCalledWith([{ harness: 'antigravity', providerId: 'google-antigravity-subscription',
+      model: 'gemini-4-hydrogen', effort: '', fastMode: false }]);
+  });
+  it.each([{ remote: true }, { deviceId: 'another-computer' }])('does not offer an unsupported remote Google route (%j)', props => {
+    const onChange = vi.fn();
+    render(<BotModelChainEditor value={[primary]} onChange={onChange} {...props} />);
+    fireEvent.click(screen.getByText('choose-google-model'));
+    expect(onChange).not.toHaveBeenCalled();
+  });
 
   it.each(['inline', 'settings'] as const)('keeps the caller setting ID on the %s editor', (layout) => {
     render(<BotModelChainEditor data-setting-id="general.botModelChain" layout={layout}
@@ -194,7 +209,7 @@ describe('BotModelChainEditor', () => {
       configurationEnabled: true,
       vendorKey: 'pi',
       unifiedPanel: true,
-      unifiedAgents: ['pi', 'claude-code'],
+      unifiedAgents: ['pi', 'claude-code', 'antigravity'],
       triggerVariant: 'settings',
     });
   });
@@ -234,7 +249,7 @@ describe('BotModelChainEditor', () => {
     const onChange = vi.fn();
     const view = render(<BotModelChainEditor value={[]} onChange={onChange} />);
     const props = modelSelectorProps.mock.lastCall?.[0];
-    expect(props).toMatchObject({ disabled: false, unifiedAgents: ['pi', 'codex', 'claude-code'],
+    expect(props).toMatchObject({ disabled: false, unifiedAgents: ['pi', 'codex', 'claude-code', 'antigravity'],
       remoteAgent: { devices: [{ deviceId: 'share:one', name: 'Shared account' }] } });
     props.onUnifiedSelect({ engine: 'codex', modelId: 'remote-model', providerId: 'openai', effort: 'medium', fast: false,
       agentDevice: { deviceId: 'share:one', name: 'Shared account' } });

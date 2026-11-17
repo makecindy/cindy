@@ -13,9 +13,9 @@ export function isConfiguredPresetRuntime(
   return runtime !== undefined && (agent !== 'pi' || runtime.wireProtocol !== undefined);
 }
 
-export function configuredPresetAgents(preset: ProviderPreset): AgentKind[] {
-  return (Object.keys(preset.runtimes) as AgentKind[]).filter((agent) =>
-    isConfiguredPresetRuntime(agent, preset.runtimes[agent]),
+export function configuredPresetAgents(preset: ProviderPreset): Exclude<AgentKind, 'antigravity'>[] {
+  return (Object.keys(preset.runtimes) as AgentKind[]).filter((agent): agent is Exclude<AgentKind, 'antigravity'> =>
+    agent !== 'antigravity' && isConfiguredPresetRuntime(agent, preset.runtimes[agent]),
   );
 }
 

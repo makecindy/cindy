@@ -14,7 +14,7 @@ import type { DbClient } from '../localDb/client/DbClient.js';
 import { normalizeRemoteHostId } from '../localDb/mapper.js';
 import { sessions } from '../localDb/schema.js';
 
-type DbAgentKind = 'cc' | 'codex' | 'pi';
+type DbAgentKind = 'cc' | 'codex' | 'pi' | 'antigravity';
 
 function toDbKind(k: AgentKind): DbAgentKind {
   return makerToDbAgentKind(k);

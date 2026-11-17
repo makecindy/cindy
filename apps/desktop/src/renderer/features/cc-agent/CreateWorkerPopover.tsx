@@ -1427,6 +1427,7 @@ export function CreateWorkerPopover({
                 fastModeConfigurable={['codex', 'pi']}
                 unifiedAgents={pickerAgents}
                 onUnifiedSelect={deviceId && remoteProviders.unsupported ? undefined : (selection) => {
+                  if (selection.engine === 'antigravity') return;
                   if (selection.agentDevice !== undefined && executionDeviceId && !agentLocationSelectable) return;
                   modelSelectionChosenRef.current = true;
                   restoredModelSelectionRef.current = false;

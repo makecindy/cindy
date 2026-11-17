@@ -113,6 +113,7 @@ export async function generateMakerSessionTitle(
 ): Promise<string | null> {
   // 空消息(如仅图片/附件的首条输入)不发标题请求:LLM 收到空素材会把
   // "请提供用户消息内容"式回复当标题返回。直接放弃,调用方保留默认名。
+  if (agentKind === 'antigravity') return null;
   const trimmed = message.trim();
   if (!trimmed) return null;
   return generateTitleWithAuxiliaryModel(
@@ -264,7 +265,7 @@ const AUTO_TITLE_TEXT_MAX = 2000;
 /** sessionId 长度上限(UUID / cuid 都远小于此)。 */
 const SESSION_ID_MAX = 128;
 
-const TITLE_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const satisfies readonly AgentKind[];
+const TITLE_AGENT_KINDS = ['claude-code', 'codex', 'pi', 'antigravity'] as const satisfies readonly AgentKind[];
 
 interface GenerateTitleRequest {
   message: string;

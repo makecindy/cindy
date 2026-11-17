@@ -46,7 +46,7 @@ const DEFAULT_INTERVAL_MS = 15_000;
 
 export interface AgentProcessRow {
   pid: number;
-  kind: 'claude' | 'codex' | 'pi';
+  kind: 'claude' | 'codex' | 'pi' | 'antigravity';
 }
 
 /**
@@ -173,7 +173,7 @@ const runtimeUserDataMarkers: { claude: string[]; codex: string[]; pi: string[] 
 };
 
 export function registerUserDataMarkers(userDataPath: string): void {
-  const markersFor = (kind: 'claude-code' | 'codex' | 'pi'): string[] => {
+  const markersFor = (kind: 'claude-code' | 'codex' | 'pi' | 'antigravity'): string[] => {
     const lower = userDataPath.toLowerCase();
     // 命令行里的分隔符形态可能与 app.getPath 返回值不同(Windows 下 / 与 \ 混用),
     // 两种形态都登记;非本平台形态的变体永不命中,无害。
@@ -197,7 +197,7 @@ export function registerUserDataMarkers(userDataPath: string): void {
 /** 命令行(已小写)→ agent 种类;不命中任何 marker = 不是我们的 agent 进程。 */
 export function classifyAgentCommandLine(
   cmdLineLower: string,
-): 'claude' | 'codex' | 'pi' | null {
+): 'claude' | 'codex' | 'pi' | 'antigravity' | null {
   if (
     CLAUDE_MARKERS.some((m) => cmdLineLower.includes(m)) ||
     runtimeUserDataMarkers.claude.some((m) => cmdLineLower.includes(m))

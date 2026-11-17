@@ -1694,7 +1694,7 @@ it('an open plugin selection without a source session follows the auxiliary chai
     availableAgents: () => ['codex', 'pi'],
     availableModels: () => [{ id: 'next', efforts: ['high'] }, { id: 'cheap', efforts: ['low', 'high'] }, { id: 'nolow', efforts: ['high'] }, { id: 'onpi', efforts: ['medium', 'high'] }],
     hasCindyAiApiKey: () => true,
-    readProviderRouting: async () => ({ availability: { 'claude-code': [],
+    readProviderRouting: async () => ({ availability: { antigravity: [], 'claude-code': [],
       pi: [{ id: f.route.providerId, name: 'provider', models: ['onpi'] }],
       codex: [{ id: f.route.providerId, name: 'provider', models: ['next', 'cheap', 'nolow', 'onpi'] }] },
       resolveDefaultProviderIdForModel: () => f.route.providerId }),
@@ -1802,7 +1802,7 @@ it.each([
     hasCindyAiApiKey: () => true,
     readProviderRouting: async () => {
       await wait('provider');
-      return { availability: { 'claude-code': [], pi: [],
+      return { availability: { antigravity: [], 'claude-code': [], pi: [],
         codex: [{ id: f.route.providerId, name: 'provider', models: ['model', 'next', 'latest'] }] },
         resolveDefaultProviderIdForModel: () => f.route.providerId };
     },

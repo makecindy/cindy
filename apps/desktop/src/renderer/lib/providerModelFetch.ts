@@ -46,7 +46,7 @@ export function firstProviderChatModel<T extends { id: string; mode?: string; di
   ));
 }
 
-type ProviderProbeAgent = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
+type ProviderProbeAgent = Extract<AgentKind, 'claude-code' | 'codex' | 'pi' | 'antigravity'>;
 
 export interface ProviderConnectionProbeRoute {
   api?: PiModelApi;

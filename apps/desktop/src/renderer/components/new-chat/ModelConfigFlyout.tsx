@@ -196,6 +196,13 @@ export function ModelConfigFlyout({
           />
         </div>
       )}
+      {config.agent === 'antigravity' && (
+        <p className="pt-1.5 text-11 leading-relaxed text-[var(--text-tertiary)]">
+          {!showSlider && <>{t('googleSubscription.modelControlsThinking')} </>}
+          {t('googleSubscription.noFastMode')}
+        </p>
+      )}
+
       {(showSlider || config.fastCapable) && (
         // 设计稿 .fly-ctrl:first-of-type:第一个控件行上距 14px。
         <div className="flex items-center gap-2 pt-3.5">

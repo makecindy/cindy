@@ -247,7 +247,7 @@ interface SourceSession {
   status: string;
   source: string;
   orcaRole: string | null;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'antigravity';
   updatedAt: number;
 }
 async function assertSource(
@@ -1232,7 +1232,7 @@ async function receive(
             getMakerIfReady()
               ?.getCapabilities(agentKind)
               .availableModels.find((m) => m.id === route.model)?.defaultEffort ?? 'high';
-          const agentPrefs: Partial<Record<'cc' | 'codex' | 'pi', ShareImportDraftPrefs>> = {};
+          const agentPrefs: Partial<Record<'cc' | 'codex' | 'pi' | 'antigravity', ShareImportDraftPrefs>> = {};
           for (const agent of ['cc', 'codex', 'pi'] as const) {
             const kind = agent === 'cc' ? 'claude-code' : agent;
             const selected = pickEnabledFallbackModel(providers, kind);

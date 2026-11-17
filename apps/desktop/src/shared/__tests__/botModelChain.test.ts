@@ -10,6 +10,13 @@ import {
 } from '../botModelChain';
 
 describe('Bot model chain', () => {
+  it('round-trips the local Google subscription without falling back to Claude or a paid API', () => {
+    const google = { harness: 'antigravity' as const, model: 'gemini-4-hydrogen', providerId: 'google-antigravity-subscription', effort: '', fastMode: false };
+    expect(normalizeBotModelChain(JSON.parse(serializeModelRoutes([google])))).toEqual([google]);
+    expect(normalizeBotModelChain([{ ...google, providerId: 'gemini-api' }])).toEqual([]);
+    expect(normalizeBotModelChain([{ ...google, agentDeviceId: 'other-device' }])).toEqual([]);
+    expect(nextBotModelRoute([google], google)).toBeNull();
+  });
   it('keeps a legacy single-model Bot as a one-route chain', () => {
     expect(
       normalizeBotModelChain(undefined, {

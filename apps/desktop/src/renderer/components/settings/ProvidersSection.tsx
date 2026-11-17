@@ -451,7 +451,7 @@ function supportsBuiltinConnectionManagement(provider: ProviderView): boolean {
     provider.id !== 'xd' &&
     // A provider created for subscription accounts is managed through its accounts (2026-11-13).
     !provider.subscriptionPool &&
-    (['openai', 'anthropic', 'xai'].includes(provider.id) ||
+    (['openai', 'anthropic', 'xai', 'google-antigravity-subscription'].includes(provider.id) ||
       (provider.auth.method === 'oauth' && !!provider.auth.oauth) ||
       (provider.auth.method === 'apiKey' && isBuiltinApiKeyProviderId(provider.id)))
   );
@@ -498,7 +498,8 @@ async function disconnectProvider(
       action: 'restore',
       ...scope,
     });
-    if (provider.id === 'openai') await window.electronAPI.maker.auth.logout('codex', scope);
+    if (provider.id === 'google-antigravity-subscription') await window.electronAPI.maker.auth.logout('antigravity', scope);
+    else if (provider.id === 'openai') await window.electronAPI.maker.auth.logout('codex', scope);
     else if (provider.id === 'anthropic') await window.electronAPI.maker.claudeOAuthLogout(scope);
     else if (provider.id === 'xai') await window.electronAPI.maker.xaiOAuthLogout(scope);
     else if (provider.auth.method === 'oauth')
@@ -742,7 +743,9 @@ function DetailHeader({
     provider && provider.agents.length === 1
       ? t('settings.providers.detail.singleAgentNote', {
           agent:
-            provider.agents[0] === 'claude-code'
+            provider.agents[0] === 'antigravity'
+              ? 'Antigravity'
+              : provider.agents[0] === 'claude-code'
               ? 'Claude Code'
               : provider.agents[0] === 'pi'
                 ? 'Pi'
@@ -1541,6 +1544,31 @@ function XaiHeader({
 // ---------------------------------------------------------------------------
 // 通用 OAuth —— 目录 auth.oauth 描述符驱动的供应商(非 bespoke 四家)。
 // ---------------------------------------------------------------------------
+
+function AntigravitySubscriptionHeader({ provider, onChanged, children }: { provider: ProviderView; onChanged(): void; children?: ReactNode }) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const login = async () => {
+    setBusy(true);
+    try {
+      const state = await window.electronAPI.maker.auth.triggerLogin('antigravity');
+      if (!state.authenticated) throw new Error('AUTHENTICATION_REQUIRED');
+      onChanged();
+    } catch {
+      toast.error(t('settings.providers.genericOAuth.toast.loginFailed', { name: 'Antigravity' }));
+    } finally { setBusy(false); }
+  };
+  const disconnect = async () => {
+    try { await window.electronAPI.maker.auth.logout('antigravity'); onChanged(); }
+    catch { toast.error(t('settings.providers.genericOAuth.toast.loginFailed', { name: 'Antigravity' })); }
+  };
+  return <DetailHeader provider={provider} icon={providerIcon(provider, 18)} title={provider.name}
+    subtitle={t('settings.providers.genericOAuth.subtitle')}
+    status={{ kind: provider.connected ? 'connected' : 'neutral' }}
+    primaryAction={{ label: busy ? t('settings.providers.button.cancel') : provider.connected ? t('settings.providers.button.disconnect') : t('settings.providers.button.authorize'), onClick: () => { if (busy) void window.electronAPI.maker.auth.cancelLogin('antigravity'); else if (provider.connected) void disconnect(); else void login(); } }}>
+    {children}
+  </DetailHeader>;
+}
 
 function GenericOAuthHeader({
   children,
@@ -2804,7 +2832,7 @@ export function ProvidersSection() {
         // 即使未做 OAuth 登录也需占行以便配置 / 管理图像 key。
         const openaiHasImageCap = p.id === 'openai' && (p.imageModels?.length ?? 0) > 0;
         if (
-          p.id === 'xd' ||
+          p.id === 'xd' || p.id === 'google-antigravity-subscription' ||
           p.connected ||
           // A provider created for subscription accounts stays listed while signed out, so its
           // accounts can be signed in again or the provider deleted (2026-11-13).
@@ -3305,6 +3333,7 @@ export function ProvidersSection() {
       return <NativeSubscriptionHeader key={p.id} children={children} provider={p} providerId="anthropic" onChanged={refetch} />;
     if (p.id === 'openai')
       return <NativeSubscriptionHeader key={p.id} children={children} provider={p} providerId="openai" onChanged={refetch} onPoolConnectionChange={onOpenaiPoolConnectionChange} />;
+    if (p.id === 'google-antigravity-subscription') return <AntigravitySubscriptionHeader provider={p} onChanged={refetch} children={children} />;
     if (p.id === 'xai') return <XaiHeader children={children} provider={p} onChanged={refetch} />;
     // Created subscription providers copy their built-in's fields; never treat them as that connection.
     if (p.subscriptionPool)

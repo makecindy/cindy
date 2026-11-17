@@ -1182,6 +1182,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const result = await remoteSessionHandoff({ deviceId: device, sessionId: id }, {
             message, sender: () => remoteHandoffSender(dispatcherSessionId),
             create: async () => {
+              if (agentKind === 'antigravity') throw new Error('ANTIGRAVITY_LOCAL_ONLY');
               if (isSessionSharedTaskActive(dispatcherSessionId)) throw new Error('Shared tasks cannot create remote tasks');
               const [source] = await getDbClient().drizzle.select({ permissionMode: sessions.permissionMode })
                 .from(sessions).where(eq(sessions.id, dispatcherSessionId)).limit(1);

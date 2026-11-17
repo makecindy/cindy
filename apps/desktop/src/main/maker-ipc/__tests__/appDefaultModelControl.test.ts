@@ -1,7 +1,7 @@
 import type { BotModelRoute } from '../../../shared/botModelChain';
 import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { changeAppDefaultModel, configureAppDefaultModelSelection, inspectAppDefaultModel, validateTaskModel, resolveAvailableTaskModels, resolveTaskModelSelection } from '../appDefaultModelControl';
+import { availableAppDefaultModels, changeAppDefaultModel, configureAppDefaultModelSelection, inspectAppDefaultModel, validateTaskModel, resolveAvailableTaskModels, resolveTaskModelSelection } from '../appDefaultModelControl';
 import { setNewMakerDraftCache, syncNewMakerDraftCache } from '../../maker-host/newMakerDefaultsCache';
 
 const host = vi.hoisted(() => ({ owner: 'owner:1', enabled: true, connected: true, agents: ['codex'],
@@ -34,6 +34,16 @@ beforeEach(() => {
 afterEach(() => { configureAppDefaultModelSelection(null); vi.useRealTimers(); });
 
 describe('Bot control of the real Cindy default', () => {
+  it('includes an authenticated native Google route in formal task and teammate model discovery', () => {
+    const google = { id: 'google-antigravity-subscription', name: 'Google AI', source: 'builtin', connected: true, agents: ['antigravity'],
+      auth: { method: 'oauth' }, access: { kind: 'subscription', product: 'Google AI Pro' },
+      routing: { antigravity: { transport: 'acp', upstream: '', authStrategy: 'oauth-passthrough' } },
+      models: { antigravity: [{ id: 'gemini-4-hydrogen', name: 'Gemini 4 Hydrogen', contextWindow: 0, efforts: [], defaultEffort: null }] } } satisfies ProviderView;
+    const choices = availableAppDefaultModels({ providers: [google], availableAgents: new Set(['antigravity']), enabled: () => true });
+    expect(choices).toMatchObject([{ id: JSON.stringify(['antigravity', google.id, 'gemini-4-hydrogen']),
+      route: { harness: 'antigravity', providerId: google.id, model: 'gemini-4-hydrogen', effort: '', fastMode: false } }]);
+    expect(availableAppDefaultModels({ providers: [{ ...google, connected: false }], availableAgents: new Set(['antigravity']), enabled: () => true })).toEqual([]);
+  });
   it('only lists the enabled connected model, even if another model is in the catalog', async () => {
     expect(await inspectAppDefaultModel()).toMatchObject({ current: route, available: [{ id, route }] });
     expect((await inspectAppDefaultModel()).available).toHaveLength(1);

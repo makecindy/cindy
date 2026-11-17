@@ -158,8 +158,8 @@ export interface ScheduleFormState {
   webhookSigned?: boolean;
   /** 自定义格式的 JSON 文本，原样保留用户输入。 */
   webhookFormat?: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
-  modelAgentKind?: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
+  modelAgentKind?: 'claude-code' | 'codex' | 'pi' | 'antigravity';
   modelAgentDeviceId?: string;
   /** The bound task's baseline, independent of the editable model choice. Form-only. */
   boundAgent?: { sessionId: string; agentKind: ScheduleFormState['agentKind'] };
@@ -418,7 +418,7 @@ export function applyRunMode(
 
 /** renderer Session.agentKind('cc'|'codex')→ schedule agentKind 映射。 */
 export function sessionAgentKindToScheduleAgentKind(
-  kind: 'cc' | 'codex' | 'pi',
+  kind: 'cc' | 'codex' | 'pi' | 'antigravity',
 ): ScheduleFormState['agentKind'] {
   if (kind === 'codex') return 'codex';
   if (kind === 'pi') return 'pi';

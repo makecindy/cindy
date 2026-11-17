@@ -55,6 +55,13 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('send_to_session tool', () => {
+  it('passes an exact native Google subscription route to task dispatch', async () => {
+    const { registry, sendToSession } = setup();
+    expect(parse(await registry.call('send_to_session', { message: 'Read the validation file', agent_kind: 'antigravity',
+      model: 'gemini-4-hydrogen' }))).toMatchObject({ ok: true });
+    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'antigravity',
+      model: 'gemini-4-hydrogen' }));
+  });
   // Unit contract: task host and provider location are independent; conflicting aliases
   // must fail before host dispatch, and uncertain creation returns an address to inspect.
   it('routes creation locations independently and preserves a recovery address', async () => {

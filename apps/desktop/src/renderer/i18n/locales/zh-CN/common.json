@@ -1,4 +1,16 @@
 {
+  "googleSubscription": {
+    "usage": "Google 用量",
+    "quotaUnavailable": "账号剩余额度暂无法获取",
+    "quotaGuide": "此版本 ACP 未提供账号额度及重置时间，可在官方 Antigravity CLI 输入 /usage 查看。",
+    "openQuotaGuide": "查看官方额度查询方法",
+    "moneyUnavailable": "当前接口未提供 credits 余额及实际费用。",
+    "context": "本会话上下文（最近上报）",
+    "lastTurnTokens": "最近一轮 Tokens",
+    "unavailable": "暂无法获取",
+    "modelControlsThinking": "此模型自行控制推理强度。",
+    "noFastMode": "此来源未提供独立的 Fast / Standard 切换。"
+  },
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "当前 Pi 运行位置不支持系统提示词片段。",
@@ -13981,6 +13993,24 @@
       "listAria": "权限模式",
       "autoFallback": "自动审批暂时不可用，已切换为默认权限；需要时会询问你。",
       "modes": {
+        "antigravity": {
+          "ask": {
+            "label": "默认权限",
+            "description": "编辑和命令操作按需由你审批。"
+          },
+          "acceptEdits": {
+            "label": "允许编辑",
+            "description": "文件编辑直接允许，其他操作按需由你审批。"
+          },
+          "auto": {
+            "label": "自动审批",
+            "description": "工作区内自动编辑并执行安全命令；高风险操作仍需确认。"
+          },
+          "bypassPermissions": {
+            "label": "完全访问",
+            "description": "常规操作直接允许，可访问工作区外文件和联网执行命令。"
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "默认权限",

@@ -65,7 +65,7 @@ export async function setSessionRuntimeHarness(
   },
 ): Promise<SessionRuntimeSetResult> {
   const { targetSessionId: id, expectedGeneration, patch } = params;
-  if (!['claude-code', 'codex', 'pi'].includes(patch.harness) || !patch.model?.trim()) {
+  if (!['claude-code', 'codex', 'pi', 'antigravity'].includes(patch.harness) || !patch.model?.trim()) {
     return {
       ok: false,
       errorCode: 'INVALID_ARGS',

@@ -3115,7 +3115,7 @@ function CCAgentSessionContent({
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
   // 切换协同走 IPC enableOrca / disableOrca,失败时 toast。
-  const [collabWorker, setCollabWorker] = useState<'cc' | 'codex' | 'pi'>('codex');
+  const [collabWorker, setCollabWorker] = useState<'cc' | 'codex' | 'pi' | 'antigravity'>('codex');
   // enableBusy 只盖"开启协同"路径;关闭走 useStopOrcaCollab hook 自己管 busy。
   const [enableBusy, setEnableBusy] = useState(false);
   const [createWorkerOpen, setCreateWorkerOpen] = useState(false);
@@ -6559,6 +6559,8 @@ function CCAgentSessionContent({
                       </Tip>
                     )}
                     <TodaySpendChip
+                      contextUsage={agentStatus.contextWindowFromRuntime ? { used: agentStatus.contextTokens, size: agentStatus.contextWindow } : undefined}
+                      turnTokens={agentStatus.tokenUsage}
                       vendorKey={normalizeDbAgentKind(displayAgentKind)}
                       modelId={agentSwitchIntent?.model ?? session?.model ?? null}
                       providerId={usageChipProviderId}

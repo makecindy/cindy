@@ -18,7 +18,7 @@ export async function commitContextRebuildWithPorts(
       | 'native-session-recovery'
       | 'idle-gap';
     sourceUserClientId: string | null;
-    sourceAgentKind?: 'cc' | 'codex' | 'pi';
+    sourceAgentKind?: 'cc' | 'codex' | 'pi' | 'antigravity';
     sourceModel?: string | null;
     sourceProviderId?: string | null;
     expectedClearedAt?: number | null;

@@ -31,7 +31,7 @@ export interface RemoteSessionHandoffRequest {
 export type RemoteSessionHandoffResult =
   | ({
       ok: true;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
       wakeKind: 'resumed' | 'already-active' | 'queued' | 'created';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
@@ -286,7 +286,7 @@ export function createRemoteSessionHandoff(deps: {
         fastMode: remoteSessionCreationSchema.shape.fast.safeParse(result.fastMode).data ?? false,
       } : {}),
       ok: true,
-      agentKind: result.agentKind as 'claude-code' | 'codex' | 'pi',
+      agentKind: result.agentKind as 'claude-code' | 'codex' | 'pi' | 'antigravity',
       wakeKind: result.wakeKind as 'resumed' | 'already-active' | 'queued' | 'created',
       targetTitle: typeof result.targetTitle === 'string' ? result.targetTitle : null,
       targetLastUserSendAt:

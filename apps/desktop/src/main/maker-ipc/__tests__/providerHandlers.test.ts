@@ -4990,6 +4990,18 @@ describe('model context limit IPC', () => {
   const related = { providerId: 'openai', agent: 'claude-code' as const, modelId: 'chatgpt/gpt-6' };
   const stamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
 
+  it('reads the Google subscription context settings without accepting an unknown engine', async () => {
+    const harness = new IpcHarness();
+    const readModelContextLimit = vi.fn(() => ({ limit: null, isCustomized: false }));
+    registerProviderHandlers(harness, makeDeps({ readModelContextLimit, writeModelContextLimit: vi.fn() }));
+    const target = { providerId: 'google-antigravity-subscription', agent: 'antigravity', modelId: 'gemini-3.8-flash' };
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, target))
+      .resolves.toMatchObject({ limit: null, isCustomized: false });
+    expect(readModelContextLimit).toHaveBeenCalledWith(target, 0, [target]);
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, { ...target, agent: 'unknown' }))
+      .rejects.toThrow();
+  });
+
   // Unit: capability writes use the real IPC handler; no prior coverage of its owner/membership gate.
   // A stale owner or unknown alias must not reach the persistent writer.
   it('writes explicit false for all aliases and rejects stale owners, missing models and invalid values', async () => {

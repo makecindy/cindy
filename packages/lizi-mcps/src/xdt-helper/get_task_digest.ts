@@ -25,7 +25,7 @@ export type TaskDigestPhase =
   | 'idle';
 
 export interface TaskDigestRoute {
-  harness: 'claude-code' | 'codex' | 'pi';
+  harness: 'claude-code' | 'codex' | 'pi' | 'antigravity';
   provider_id: string | null;
   model: string;
   effort: string | null;

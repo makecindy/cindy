@@ -8,7 +8,7 @@ const caller = { agentKind: 'codex' as const, model: 'gpt-6-astra', providerId: 
 const panel = { agentKind: 'pi' as const, model: 'z-ai/glm-5.3-flash', providerId: 'xd', effort: 'medium' as const, fastMode: false };
 const metadata = (id: string) => ({ id, efforts: ['medium', 'high'], defaultEffort: 'medium', supportsFastMode: false });
 const routing = {
-  availability: {
+  availability: { antigravity: [],
     codex: [{ id: 'openai', name: 'OpenAI', models: [caller.model] }],
     pi: [{ id: 'xd', name: 'Cindy AI', models: [panel.model] }],
     'claude-code': [{ id: 'xd', name: 'Cindy AI', models: [panel.model] }, { id: 'glm', name: 'GLM', models: ['glm-5.3'] }],
@@ -81,8 +81,7 @@ describe('ordinary Session model selection', () => {
     // 复现 #5535:自定义来源模型只有 id/name,草稿 effort 预填 medium,之前被当成 valid: none 拒绝。
     const model = 'custom/step-5-preview';
     const custom = {
-      availability: {
-        ...routing.availability,
+      availability: { ...routing.availability,
         'claude-code': [{
           id: 'custom-anthropic', name: 'Custom Anthropic Messages', models: [model],
           effortMetaByModel: { [model]: { efforts: [], defaultEffort: null, effortsUnknown: true } },

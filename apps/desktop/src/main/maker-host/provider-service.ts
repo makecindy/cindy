@@ -1,3 +1,4 @@
+import { ANTIGRAVITY_PROVIDER_ID, antigravityConnected } from './antigravity-state.js';
 /**
  * provider-service —— 把当前生效目录与连接状态合成「供应商视图」。
  *
@@ -170,7 +171,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     ]);
     const sourceCatalog = opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
     const catalog = deps.projectCatalog?.(sourceCatalog, !!(opts?.getCatalog || opts?.catalog)) ?? sourceCatalog;
-    const connected: ConnectionState = { xd, anthropic, openai, xai };
+    const connected: ConnectionState = { xd, anthropic, openai, xai, [ANTIGRAVITY_PROVIDER_ID]: antigravityConnected() };
     for (const p of catalog.providers) {
       // 无鉴权供应商无需任何登录或密钥：只要目录声明有效，就可立即参与模型选择。
       // 该规则与 source 无关，覆盖远端目录下发的 built-in/self-hosted 条目。
