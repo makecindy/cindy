@@ -471,7 +471,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     } };
     try {
       scriptedResponses.push(anthropicToolUseBody('read', { path: path.join(workingDir, 'missing.txt') }), anthropicStreamBody('done'));
-      await runPermissionTurn({ sessionId: 'native-tool-hooks', workingDir, permissionMode: 'bypassPermissions', resolverBehavior: 'deny', deps });
+      await runPermissionTurn({ sessionId: 'native-tool-hooks', workingDir,
+        permissionMode: mode === 'prototype-input' ? 'ask' : 'bypassPermissions', resolverBehavior: 'deny', deps });
       const last = seenRequests.slice(before).at(-1)?.body ?? '';
       expect(calls[0]).toMatchObject({ phase: 'call', input: { path: path.join(workingDir, 'missing.txt') } });
       if (mode === 'prototype-input') {
