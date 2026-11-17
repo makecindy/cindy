@@ -986,18 +986,41 @@ function hostImportGraph(): Promise<string[]> {
  * acceptance scripts, resolved by esbuild without running any module (workspace packages followed,
  * third-party packages external). In its desktop and package sources (generated and vendored code
  * excluded): exported functions named set|register|bind|configure|install|init… that write a
- * module-level slot (a let/var that starts nullish or as any function, including a working default such as
- * uiText.ts's English fallback or a function declared in the module, or an empty Map/Set/array), and
- * exported empty containers that another file in the graph mutates.
+ * module-level slot, and exported empty containers that another file in the graph mutates.
+ * A slot is a module-level let/var whose initial value is any of (functionLike): absent, null, undefined or a
+ * nullable type; a function or class literal; a function declared in the module or a binding of the module
+ * that starts as one (sessionRouteLock.ts `= passthroughLock`); an import of any kind, its type unseen
+ * (guest-provider-route-store.ts `= getActiveCatalog`, active-catalog.ts `= EMPTY_MODEL_CATALOG_OVERRIDES`)
+ * or a property of one; any call, since its result may be a function (including `fn.bind(…)`), or an await;
+ * a `new` instance, its methods being the port; a choice among those (`a ?? b`, `a || b`, `c ? a : b`);
+ * an object literal holding one (a method, a function-valued or shorthand property). Wrapped forms
+ * (`as`, `satisfies`, `!`, `<T>`, parentheses) are unwrapped. Also a slot: an empty Map/Set/WeakMap/WeakSet or
+ * array (const too), and any module-level object literal whose properties a setter replaces (logger.ts
+ * `mainSlot.dir = …`, projectAutomaticIcon.ts `Object.assign(runtime, ports)`).
+ * A write is `=`, `??=`, `||=` or `&&=` to the slot or to a property of an object slot, a container mutation, or
+ * `Object.assign(slot, …)`, anywhere in the setter including its callbacks, or in a module function it calls
+ * (followed transitively: active-catalog.ts setters through markChanged, codex-process-registry.ts
+ * registerCodexProcessRole through registerAgentProcess). This reaches some setters that are not ports in
+ * practice (read_sheet.ts: the tool's worker pool); the table records them as internal with why.
  * Failure: a new setter (or a newly loaded module with one) that the table does not classify, or a table
  * entry whose setter is gone, turns this red until the table is updated. A `bound` entry must bind it in
  * the Host file it names (bindsIn: a call, a container mutation, or the setter handed over as a value);
  * `where: '<file>#<function>'` narrows that to one function of the file, for a file that binds the same
  * setter more than once (skill-projection-owner.ts: serve refuses, `cindy-host login` allows).
- * Not seen: slots that start as some other value (an object, a number); setters not named this way;
- * closure state of factories; modules loaded at run time through createRequire; for a setter handed
- * over as a port value, whether the receiving code really calls it; and, for `<file>#<function>`,
- * whether the Host calls that function.
+ * Not seen, by form:
+ * - slots that start as a plain value: a string, number, boolean, bigint, template, regular expression, a
+ *   non-empty array, or an object literal no setter writes a property of (configuration values, not ports;
+ *   a setter of one still shows up when it also writes a slot above, as setChatEmbeddingEnabled does);
+ * - slots declared other than at module level (inside a block, an IIFE, a namespace or a class body,
+ *   static fields included) or through destructuring (`let [a, b] = …`, `let { a } = …`);
+ * - writes through destructuring assignment (`({ a: slot } = x)`), through an alias (`const s = state; s.x = …`),
+ *   through a function the module imports from another file, or through Reflect/defineProperty;
+ * - state on globalThis or process, or reached through createRequire or a dynamic import at run time;
+ * - setters not exported as a function: a method of an exported object or class, a default export,
+ *   a setter not named this way;
+ * - closure state of factories;
+ * and, for a setter handed over as a port value, whether the receiving code really calls it; for
+ * `<file>#<function>`, whether the Host calls that function.
  */
 describe('module-level port setters the Host loads, classified for the Host', () => {
   const tableFile = path.join(hostSrc, 'desktop-module-setters.ts');
@@ -1017,22 +1040,68 @@ describe('module-level port setters the Host loads, classified for the Host', ()
     const functions: Array<{ name: string; node: ts.Node }> = [];
     const containers: string[] = [];
     const declaredFunctions = new Set(sf.statements.flatMap(s => (ts.isFunctionDeclaration(s) && s.name ? [s.name.text] : [])));
+    // Imported bindings (named, default, namespace): their kind is not visible here, so a slot that starts
+    // as one counts (setGuestProviderModelCatalogReader: `= getActiveCatalog`).
+    const imported = new Set<string>();
+    for (const statement of sf.statements) {
+      const clause = ts.isImportDeclaration(statement) ? statement.importClause : undefined;
+      if (!clause || clause.isTypeOnly) continue;
+      if (clause.name) imported.add(clause.name.text);
+      const bindings = clause.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings)) imported.add(bindings.name.text);
+      if (bindings && ts.isNamedImports(bindings)) for (const element of bindings.elements) if (!element.isTypeOnly) imported.add(element.name.text);
+    }
+    const initializers = new Map<string, ts.Expression | undefined>();
+    for (const statement of sf.statements) {
+      if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations)
+        if (ts.isIdentifier(declaration.name)) initializers.set(declaration.name.text, declaration.initializer);
+    }
+    const unwrap = (n: ts.Expression | undefined): ts.Expression | undefined => {
+      while (n && (ts.isAsExpression(n) || ts.isSatisfiesExpression(n) || ts.isParenthesizedExpression(n)
+        || ts.isNonNullExpression(n) || ts.isTypeAssertionExpression(n))) n = n.expression;
+      return n;
+    };
+    /** Whether a module-level initializer can be a function: a literal, a function or function-valued binding of
+     * this module, an import, a bound function, any call (its result may be a function), a choice between those
+     * (`a ?? b`, `c ? a : b`), or an object literal holding one. */
+    const functionLike = (raw: ts.Expression | undefined, seen = new Set<string>()): boolean => {
+      const n = unwrap(raw);
+      if (!n) return false;
+      if (ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isClassExpression(n) || ts.isCallExpression(n)
+        || ts.isAwaitExpression(n)) return true;
+      // An instance carries methods (`new DefaultStore()`); empty collections are containers, below.
+      if (ts.isNewExpression(n)) return !(ts.isIdentifier(n.expression) && /^(Map|Set|WeakMap|WeakSet|Array)$/.test(n.expression.text)
+        && !n.arguments?.length);
+      if (ts.isIdentifier(n)) {
+        if (declaredFunctions.has(n.text) || imported.has(n.text)) return true;
+        if (seen.has(n.text) || !initializers.has(n.text)) return false;
+        return functionLike(initializers.get(n.text), new Set([...seen, n.text]));
+      }
+      if (ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n)) return functionLike(n.expression, seen);
+      if (ts.isConditionalExpression(n)) return functionLike(n.whenTrue, seen) || functionLike(n.whenFalse, seen);
+      if (ts.isBinaryExpression(n) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken]
+        .includes(n.operatorToken.kind)) return functionLike(n.left, seen) || functionLike(n.right, seen);
+      if (ts.isObjectLiteralExpression(n)) return n.properties.some(property => ts.isMethodDeclaration(property)
+        || (ts.isPropertyAssignment(property) && functionLike(property.initializer, seen))
+        || (ts.isShorthandPropertyAssignment(property) && functionLike(property.name, seen)));
+      return false;
+    };
+    const objectSlots = new Set<string>(); // module-level object literals whose properties a setter may replace
     for (const statement of sf.statements) {
       if (ts.isVariableStatement(statement)) {
         const isConst = (statement.declarationList.flags & ts.NodeFlags.Const) !== 0;
         for (const declaration of statement.declarationList.declarations) {
           if (!ts.isIdentifier(declaration.name)) continue;
           const name = declaration.name.text;
-          let init = declaration.initializer;
-          while (init && (ts.isAsExpression(init) || ts.isSatisfiesExpression(init) || ts.isParenthesizedExpression(init))) init = init.expression;
+          const init = unwrap(declaration.initializer);
           const isFunction = !!init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init));
           if (isFunction && (isExported(statement) || exported.has(name))) {
             functions.push({ name, node: init! });
             continue;
           }
-          // A slot that starts as a function, empty or a working default (uiText.ts: the English fallback),
-          // or as a function declared in the module: the desktop may replace it and the Host may not.
-          const functionDefault = isFunction || (!!init && ts.isIdentifier(init) && declaredFunctions.has(init.text));
+          // A slot that starts empty, as a function, or as anything that may hold one (functionLike), including a
+          // working default (uiText.ts: the English fallback): the desktop may replace it and the Host may not.
+          const functionDefault = functionLike(init);
           const emptyContainer = !!init && ((ts.isNewExpression(init) && ts.isIdentifier(init.expression)
             && /^(Map|Set|WeakMap|WeakSet)$/.test(init.expression.text) && !init.arguments?.length)
             || (ts.isArrayLiteralExpression(init) && init.elements.length === 0));
@@ -1040,24 +1109,61 @@ describe('module-level port setters the Host loads, classified for the Host', ()
             || /\b(null|undefined)\b/.test(declaration.type?.getText(sf) ?? '');
           if ((!isConst && (nullish || functionDefault)) || emptyContainer) slots.set(name, !isConst);
           if (isExported(statement) && isConst && emptyContainer) containers.push(name);
+          if (init && ts.isObjectLiteralExpression(init)) objectSlots.add(name);
         }
       } else if (ts.isFunctionDeclaration(statement) && statement.name && (isExported(statement) || exported.has(statement.name.text))) {
         functions.push({ name: statement.name.text, node: statement });
       }
     }
-    const setters = functions.filter(({ name, node }) => {
-      if (!SETTER.test(name) || /ForTest|ForTesting|^__/.test(name)) return false;
+    const ASSIGN = new Set([ts.SyntaxKind.EqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken, ts.SyntaxKind.BarBarEqualsToken,
+      ts.SyntaxKind.AmpersandAmpersandEqualsToken]);
+    const isSlotTarget = (raw: ts.Expression | undefined, reassign: boolean): boolean => {
+      const n = unwrap(raw);
+      if (!n) return false;
+      if (ts.isIdentifier(n)) return reassign ? slots.get(n.text) === true : slots.has(n.text) || objectSlots.has(n.text);
+      // `state.reader = impl` on a module-level object literal (const or let).
+      if (ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n)) {
+        const target = unwrap(n.expression);
+        return !!target && ts.isIdentifier(target) && objectSlots.has(target.text);
+      }
+      return false;
+    };
+    /** Direct writes in a function body: assignment (`=`, `??=`, `||=`, `&&=`), a container mutation, or
+     * `Object.assign(slot, …)`; plus calls to module functions that write (a private `apply(impl)` helper). */
+    const moduleFunctions = new Map<string, ts.Node>();
+    for (const statement of sf.statements) {
+      if (ts.isFunctionDeclaration(statement) && statement.name) moduleFunctions.set(statement.name.text, statement);
+      if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) {
+        const init = unwrap(declaration.initializer);
+        if (ts.isIdentifier(declaration.name) && init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init)))
+          moduleFunctions.set(declaration.name.text, init);
+      }
+    }
+    const writesMemo = new Map<string, boolean>();
+    const writesSlot = (node: ts.Node, seen: Set<string>): boolean => {
       let writes = false;
       const visit = (n: ts.Node): void => {
-        if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(n.left)
-          && slots.get(n.left.text) === true) writes = true;
-        if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && ts.isIdentifier(n.expression.expression)
-          && MUTATORS.has(n.expression.name.text) && slots.has(n.expression.expression.text)) writes = true;
+        if (writes) return;
+        if (ts.isBinaryExpression(n) && ASSIGN.has(n.operatorToken.kind) && isSlotTarget(n.left, true)) writes = true;
+        if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression)) {
+          const callee = n.expression;
+          if (ts.isIdentifier(callee.expression) && MUTATORS.has(callee.name.text) && slots.has(callee.expression.text)) writes = true;
+          if (ts.isIdentifier(callee.expression) && callee.expression.text === 'Object' && callee.name.text === 'assign'
+            && isSlotTarget(n.arguments[0], false)) writes = true;
+        }
+        if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && moduleFunctions.has(n.expression.text) && !seen.has(n.expression.text)) {
+          const helper = n.expression.text;
+          if (!writesMemo.has(helper)) writesMemo.set(helper, writesSlot(moduleFunctions.get(helper)!, new Set([...seen, helper])));
+          if (writesMemo.get(helper)) writes = true;
+        }
         ts.forEachChild(n, visit);
       };
       visit(node);
       return writes;
-    }).map(({ name }) => name);
+    };
+    const setters = functions
+      .filter(({ name, node }) => SETTER.test(name) && !/ForTest|ForTesting|^__/.test(name) && writesSlot(node, new Set([name])))
+      .map(({ name }) => name);
     return { setters, containers };
   }
 
