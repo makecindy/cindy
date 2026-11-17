@@ -1081,6 +1081,47 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--verify-own
   RunLoop.main.run()
   exit(2)
 }
+// `--owner-prompt <reason>`: while the privacy screen itself keeps the display awake,
+// the system's Touch ID check stays armed so the owner can rest a finger on the sensor
+// instead of pressing a key, which locks (docs/product-rules/privacy-screen.md).
+// Main takes the prompt down with `stop` on stdin; a closed stdin means Main is gone.
+// Fixed words on stdout: ready, verified, denied, unavailable, locked, stopped.
+if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prompt" {
+  guard inputCaller.code() != nil, ownedConsoleSession() != nil else { print("unavailable"); exit(2) }
+  if (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false {
+    print("locked"); exit(0)
+  }
+  let context = LAContext()
+  // Biometrics only: physical keys stay consumed by the input guard, so a password
+  // fallback here could not be typed. No enrolled Touch ID means no prompt at all.
+  context.localizedFallbackTitle = ""
+  var problem: NSError?
+  guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &problem) else {
+    print("unavailable"); exit(0)
+  }
+  let reason = String(CommandLine.arguments[2].prefix(200))
+  var answered = false
+  context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, _ in
+    guard !answered else { return }
+    answered = true
+    print(success ? "verified" : "denied"); fflush(stdout); exit(0)
+  }
+  print("ready"); fflush(stdout)
+  DispatchQueue.global().async {
+    while let command = readLine() {
+      guard command.utf8.count <= 16 else { exit(2) }
+      if command == "stop" { break }
+    }
+    // Killing this process alone leaves the prompt on screen for about ten seconds.
+    DispatchQueue.main.async {
+      answered = true
+      context.invalidate()
+      print("stopped"); fflush(stdout); exit(0)
+    }
+  }
+  RunLoop.main.run()
+  exit(0)
+}
 if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--lock-screen" {
   if let failure = lockOwnedSession(requireCaller: true) {
     print("lock-failed \(failure.rawValue)"); exit(2)

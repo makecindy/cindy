@@ -170,7 +170,12 @@ The helper consumes all physical input; only a deliberate press (key down, mouse
 button down, a modifier going down, or a real scroll of 30+ points within a second)
 turns into the system lock. Releases, pointer drift, Caps Lock and stray
 scroll ticks are swallowed without locking, because idle mice, wireless receivers and
-some keypads emit them on their own (`AwayInputGate`). The owner unlocks with
+some keypads emit them on their own (`AwayInputGate`). While the cover itself keeps the
+display awake, Main also arms the system's own Touch ID prompt (`--owner-prompt`):
+resting a finger on the sensor verifies the owner and uncovers without locking, while
+keys and clicks still turn into the lock. The prompt lives only as long as the cover
+holds the display awake, and goes when the cover locks, ends, or enters the lock-failed
+state; it never unlocks a locked Mac. The owner unlocks with
 Touch ID or password through macOS itself, and the tap is disabled as soon as the lock
 is up. Covering every Space briefly makes Electron a background app, so Main brings the
 Cindy window that was focused back to the front after unlock. Away masks are

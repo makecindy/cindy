@@ -16,6 +16,7 @@ import {
   requestDesktopInputPermission,
 } from './inputHost';
 import { watchAwayGuardInput, type AwayGuardInputMonitor } from './privacyInput';
+import { watchOwnerPrompt, type OwnerPrompt } from './ownerPrompt';
 import { keepAwakeController } from '../device-link/power-blocker';
 import { PrivacyScreen } from './privacyScreen';
 import { privacyScreenHtml } from './privacyScreenHtml';
@@ -202,6 +203,7 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   let lockScreenUp = false;
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
   const stopMasksUnderLockScreen = () => {
+    disarmOwnerPrompt();
     if (settleTimer) return;
     settleTimer = setTimeout(() => {
       settleTimer = null;
@@ -277,9 +279,74 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   // masks also go once the system locks by itself or the owner locks.
   let heldUntilLocked = false;
   let verifying = false;
+  // While the cover itself keeps the display awake, the system's own Touch ID check stays
+  // armed: resting a finger on the sensor uncovers without locking (user decision
+  // 2026-11-17, docs/product-rules/privacy-screen.md). Keys and clicks still lock.
+  let ownerPrompt: OwnerPrompt | null = null;
+  let ownerPromptBusy = false;
+  // One answer per cover: a failed or cancelled check is not turned into a prompt loop.
+  let ownerPromptAnswered = false;
+  let ownerPromptGeneration = 0;
+  const disarmOwnerPrompt = () => {
+    ownerPromptGeneration++;
+    const prompt = ownerPrompt;
+    ownerPrompt = null;
+    if (!prompt) return;
+    masks.lowerForSystemPrompt(false);
+    void prompt.stop();
+  };
+  const armOwnerPrompt = () => {
+    if (
+      process.platform !== 'darwin' ||
+      ownerPromptAnswered ||
+      ownerPromptBusy ||
+      ownerPrompt ||
+      heldUntilLocked ||
+      verifying
+    )
+      return;
+    // Only while the cover itself guards physical input; never during its startup.
+    if (controller?.inputShielded !== true || deps.screenLocked()) return;
+    ownerPromptBusy = true;
+    const generation = ++ownerPromptGeneration;
+    // The prompt sits above the masks; the lowered level still covers the Dock and menu bar.
+    masks.lowerForSystemPrompt(true);
+    void watchOwnerPrompt(
+      (answer) => {
+        if (generation !== ownerPromptGeneration) return;
+        ownerPrompt = null;
+        ownerPromptGeneration++;
+        masks.lowerForSystemPrompt(false);
+        // One answer per cover: a failed or cancelled check must not become a prompt loop.
+        ownerPromptAnswered = answer !== 'verified';
+        if (answer !== 'verified') return;
+        log.info('away guard owner verified');
+        controller?.ownerPresent();
+      },
+      t('awayGuard.verifyReason'),
+    )
+      .then((prompt) => {
+        if (generation === ownerPromptGeneration) ownerPrompt = prompt;
+        else void prompt.stop();
+      })
+      .catch(() => {
+        // No prompt is possible here (no Touch ID, locked session, unusable helper):
+        // keep the cover guarded instead of retrying on every tick.
+        ownerPromptAnswered = true;
+        if (generation === ownerPromptGeneration) masks.lowerForSystemPrompt(false);
+      })
+      .finally(() => {
+        ownerPromptBusy = false;
+      });
+  };
+  const syncOwnerPrompt = (awake: boolean) => {
+    if (awake) armOwnerPrompt();
+    else disarmOwnerPrompt();
+  };
   const verifyOwnerOrRetry = async () => {
     if (verifying || !heldUntilLocked) return;
     verifying = true;
+    disarmOwnerPrompt();
     try {
       // The prompt needs the owner's typing; the input guard would swallow it.
       await masks.releaseInput();
@@ -302,6 +369,7 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   };
   const holdUntilLocked = () => {
     heldUntilLocked = true;
+    disarmOwnerPrompt();
     masks.holdInput();
     void masks
       .replacePage(privacyScreenHtml(
@@ -407,12 +475,15 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
         powerSaveBlocker.stop(displayAwake);
         displayAwake = null;
       }
+      // The Touch ID prompt only lives as long as the cover holds the display awake.
+      syncOwnerPrompt(awake);
     },
     showMasks: async () => {
       if (heldUntilLocked) {
         if (!deps.screenLocked()) throw new Error('DESKTOP_LOCK_PENDING');
         releaseHeld();
       }
+      ownerPromptAnswered = false;
       const current = ++generation;
       coverLockTransition = lockTransition;
       restoreWindow = BrowserWindow.getFocusedWindow();
@@ -425,6 +496,7 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     },
     lockAndHideMasks: async () => {
       generation++;
+      disarmOwnerPrompt();
       const transition = coverLockTransition;
       // Do not send another lock shortcut after an intervening OS unlock.
       const locked =
@@ -442,6 +514,7 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     },
     hideMasks: () => {
       generation++;
+      disarmOwnerPrompt();
       // Locked by other means (Touch ID / power key, the system): uncover under the lock
       // screen. Otherwise (a preview ran out) the owner was here: uncover now.
       if (lockScreenUp || deps.screenLocked()) return stopMasksUnderLockScreen();
