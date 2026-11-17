@@ -9,6 +9,10 @@
  *   （警告和错误都需要用户读完，太短根本来不及看清）；0 表示永久显示
  * - hover 悬停时暂停自动关闭（pauseAutoDismiss / resumeAutoDismiss），移开后按剩余时长继续
  * - 退出动画完成后（200ms）才真正从 state 移除
+ * - 同一条错误／警告文案仍在显示或排队时不重复弹出，只把原条目的停留时间重新计时
+ *   （多个窗口部件同时失败时常会各弹一条一模一样的错误）
+ * - 错误／警告文案先经启动时注入的改写函数（见 ipcErrorToastText.ts），把调用方直接
+ *   透传的原始 IPC 异常换成用户能读懂的文案；本模块不依赖 i18n
  *
  * 不要把视觉组件混在这里 —— Toast.tsx / ToastContainer.tsx 另外放。
  */
@@ -260,7 +264,50 @@ function finalizeRemove(id: string) {
 // 对外命令式 API
 // ============================================================
 
-function createItem(variant: ToastVariant, message: string, options?: ToastOptions): string {
+let alertTextFormatter: ((message: string) => string) | null = null;
+
+/** 启动时注入错误／警告文案的改写函数；传 null 取消。 */
+export function setToastAlertTextFormatter(formatter: ((message: string) => string) | null): void {
+  alertTextFormatter = formatter;
+}
+
+function formatAlertText(message: string): string {
+  if (!alertTextFormatter) return message;
+  try {
+    return alertTextFormatter(message) || message;
+  } catch {
+    return message;
+  }
+}
+
+/** 正在显示或排队、文案相同且没有附加操作的同类提示。 */
+function findDuplicateAlert(variant: ToastVariant, message: string): ToastItem | undefined {
+  const same = (item: ToastItem) =>
+    !item.exiting &&
+    item.variant === variant &&
+    item.message === message &&
+    !item.action &&
+    !item.source &&
+    !item.title &&
+    !item.onClose;
+  return activeItems.find(same) ?? queue.find(same);
+}
+
+function createItem(variant: ToastVariant, rawMessage: string, options?: ToastOptions): string {
+  const alert = variant === 'error' || variant === 'warning';
+  const message = alert ? formatAlertText(rawMessage) : rawMessage;
+  // 调用方要自己的关闭回调或操作时不合并，保证回调与按钮各归其主。
+  if (alert && !options?.action && !options?.source && !options?.title && !options?.onClose) {
+    const duplicate = findDuplicateAlert(variant, message);
+    if (duplicate) {
+      // 已在显示：重新计时；仍在排队：入场时自然按完整时长计时。
+      if (timers.has(duplicate.id) || expireAtMs.has(duplicate.id)) {
+        clearItemTimer(duplicate.id);
+        startTimer(duplicate.id, duplicate.duration);
+      }
+      return duplicate.id;
+    }
+  }
   const id = generateId();
   const item: ToastItem = {
     id,

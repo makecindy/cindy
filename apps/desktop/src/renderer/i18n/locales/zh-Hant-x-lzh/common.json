@@ -1361,7 +1361,7 @@
     "REMOTE_PROVIDER_UPDATING": "供方憑證方更新，請稍後再試",
     "REMOTE_PROVIDER_UNSUPPORTED": "此供方不支援 SSH 遠端會話，請易來源",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "遠端差事不可用 Claude 訂閱，請擇閘道器或 API Key 模型",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "目標裝置久無回應，請察遠端裝置而後再試",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "目標裝置暫無回應，或網路遲滯，或裝置繁忙。Cindy 自當續察，待連線復通而後再試",
     "INTERNAL": "操作未成，請稍後再試。",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "SSH 設定已於磁碟上變更，請重載而後再試。",
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定已存，然 Cindy 重整未成。請重載 SSH 設定。",

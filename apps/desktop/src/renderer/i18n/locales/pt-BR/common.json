@@ -1396,7 +1396,7 @@
     "REMOTE_PROVIDER_UPDATING": "As credenciais do provedor estão sendo atualizadas — tente novamente em instantes",
     "REMOTE_PROVIDER_UNSUPPORTED": "Este provedor não é compatível com sessões remotas SSH — escolha outra fonte",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Tarefas remotas não podem usar uma assinatura do Claude — escolha um modelo via gateway ou chave de API",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "O dispositivo de destino não está respondendo. Verifique o dispositivo remoto e tente novamente.",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "O dispositivo de destino não está respondendo no momento. A rede pode estar lenta ou o dispositivo ocupado. O Cindy verifica automaticamente; tente novamente quando a conexão se recuperar.",
     "INTERNAL": "A operação falhou. Tente novamente mais tarde.",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "A configuração SSH foi alterada no disco. Recarregue-a e tente novamente.",
     "SSH_CONFIG_RELOAD_REQUIRED": "A configuração SSH foi salva, mas Cindy não conseguiu atualizá-la. Recarregue a configuração SSH.",

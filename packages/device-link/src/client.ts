@@ -1285,6 +1285,8 @@ export class DeviceLinkClient {
    * Repeated hints coalesce without postponing detection indefinitely. Foreground
    * and explicit network transitions bypass the successful-probe cooldown. */
   notifyNetworkChanged(options?: { urgent?: boolean }): void {
+    // An urgent hint comes from a peer timeout, not a local network change.
+    if (!this.stopped && !options?.urgent) this.directNegotiator?.networkChanged();
     if (this.stopped || this.networkProbeTimer) return;
     this.networkChangeHintedAt = this.monotonicNow();
     if (this.networkChangeTimer) {
