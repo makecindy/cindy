@@ -9538,7 +9538,6 @@
     "unavailable": "Inicio de sesión no disponible ahora",
     "hostUnavailable": {
       "title": "Servicio en segundo plano de Cindy",
-      "checkAgain": "Comprobar de nuevo",
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {
           "body": "Estos datos pertenecen a una cuenta distinta del inicio de sesión guardado por el servicio en segundo plano de Cindy.",

@@ -1,7 +1,6 @@
 import type { AuthFlowState } from '@cindy/auth-client';
 import {
   readHostUnavailableReason,
-  type HostStartFailureReason,
   type HostUnavailable,
 } from '../../shared/hostStartFailure';
 import type {
@@ -68,11 +67,6 @@ export interface AuthStateObserver {
 
 export interface AuthService extends AuthStateObserver {
   initialize(): Promise<AuthState>;
-  /**
-   * Client mode: read the Host's start-failure reason again, without asking it to renew or restart. Null when
-   * the Host reports none (or outside client mode); Main's own push stays the authoritative auth state.
-   */
-  readHostUnavailableReason(): Promise<HostStartFailureReason | null>;
   getLoginState(): Promise<DesktopLoginActionResult>;
   dispatchLoginAction(action: DesktopLoginAction): Promise<DesktopLoginActionResult>;
   logout(): Promise<void>;
@@ -177,11 +171,6 @@ export function createAuthService(): AuthService {
 
     getSnapshot() {
       return snapshot;
-    },
-
-    async readHostUnavailableReason(): Promise<HostStartFailureReason | null> {
-      const read = window.electronAPI.authGetHostState;
-      return read ? readHostUnavailableReason(await read()) : null;
     },
 
     getLoginState(): Promise<DesktopLoginActionResult> {

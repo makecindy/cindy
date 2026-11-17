@@ -134,7 +134,6 @@ export function LoginPage({
     loginState,
     credentialStoreUnavailable = false,
     hostUnavailableReason = null,
-    recheckHostUnavailable,
     hasAccountDeletionReceipt = false,
     getAccountDeletionStatus,
     clearAccountDeletionReceipt,
@@ -148,7 +147,6 @@ export function LoginPage({
   // Client mode: the Host serving this window did not start. The window shows why and offers no sign-in or
   // skip sign-in of its own (Main refuses both too, authManager.ts hostNotStartedInClientMode).
   const hostNotStarted = hostUnavailableReason !== null;
-  const [hostRecheckPending, setHostRecheckPending] = useState(false);
   const credentialStoreFailed =
     credentialStoreUnavailable ||
     errorCode === 'CREDENTIAL_STORE_UNAVAILABLE' ||
@@ -1304,17 +1302,6 @@ export function LoginPage({
     };
     if (hostUnavailableReason !== null) {
       const keys = hostStartFailureMessageKeys(hostUnavailableReason);
-      const recheck = async () => {
-        if (hostRecheckPending || !recheckHostUnavailable) return;
-        setHostRecheckPending(true);
-        try {
-          await recheckHostUnavailable();
-        } catch (error) {
-          log.warn('re-reading the Host state failed', error);
-        } finally {
-          setHostRecheckPending(false);
-        }
-      };
       return {
         ssoOrgGroupY: false,
         node: (
@@ -1334,14 +1321,6 @@ export function LoginPage({
                 </>
               }
             />
-            <LoginPrimaryButton
-              disabled={hostRecheckPending}
-              loading={hostRecheckPending}
-              onClick={() => void recheck()}
-              testId="login-host-unavailable-recheck"
-            >
-              {t('login.hostUnavailable.checkAgain')}
-            </LoginPrimaryButton>
           </LoginPanel>
         ),
       };

@@ -9538,7 +9538,6 @@
     "unavailable": "Connexion indisponible pour l'instant",
     "hostUnavailable": {
       "title": "Service d’arrière-plan Cindy arrêté",
-      "checkAgain": "Vérifier à nouveau",
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {
           "body": "Ces données appartiennent à un autre compte que la connexion enregistrée par le service d’arrière-plan Cindy.",

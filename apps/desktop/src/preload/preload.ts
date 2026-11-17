@@ -2507,11 +2507,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     hasAccountDeletionReceipt: boolean;
     accountDeletionRestored: boolean;
   }> => ipcRenderer.invoke('auth:initialize'),
-  /**
-   * Client mode only: read the Host's auth state again (the proxied `auth:get-state`, a plain read of
-   * `/api/auth/state`). Used by the login page's "Check Again" while the Host reports it did not start.
-   */
-  authGetHostState: (): Promise<{ hostUnavailable?: unknown } | null> => ipcRenderer.invoke('auth:get-state'),
   authGetLoginState: (): Promise<DesktopLoginActionResult> =>
     ipcRenderer.invoke('auth:get-login-state'),
   authDispatchLoginAction: (action: DesktopLoginAction): Promise<DesktopLoginActionResult> =>

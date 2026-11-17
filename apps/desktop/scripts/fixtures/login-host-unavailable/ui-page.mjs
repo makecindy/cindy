@@ -14,11 +14,11 @@ export default {
   entry: './fixture.tsx',
   viewport: { width: 1040, height: 760 },
   real: 'LoginPage, LoginStage, the error panel for a Host that did not start, and its localized reasons',
-  notCovered: 'The Host auth state, Check Again and the window refusal are replaced by a synthetic reason; their behaviour is covered by vitest',
+  notCovered: 'The Host auth state and the window refusal are replaced by a synthetic reason; their behaviour is covered by vitest',
   stubs: {
     'src/renderer/hooks/useLogin': `export const useLogin = () => ({
       isLoading: false, errorCode: null, loginState: { step: 'entry' },
-      hostUnavailableReason: window.__uiPage.ctx.data.reason, recheckHostUnavailable: async () => {},
+      hostUnavailableReason: window.__uiPage.ctx.data.reason,
       dispatch: async () => false, dispatchWithResult: async () => ({ success: false, code: null }),
       clearError: () => {},
     });`,
@@ -34,6 +34,8 @@ export default {
     await page.getByText(await ui.t('login.hostUnavailable.title'), { exact: true }).waitFor();
     assert.equal(await page.getByTestId('login-skip-entry').count(), 0);
     assert.equal(await page.getByTestId('login-local-mode').count(), 0);
+    // No action under the text: the panel lays out with its title and body only.
+    assert.equal(await panel.getByRole('button').count(), 0);
     await ui.capture('panel', { locator: panel });
   },
 };

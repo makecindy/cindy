@@ -9423,7 +9423,6 @@
     "unavailable": "일시적으로 로그인할 수 없습니다",
     "hostUnavailable": {
       "title": "Cindy 백그라운드 서비스가 시작되지 않았습니다",
-      "checkAgain": "다시 확인",
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {
           "body": "이 데이터는 Cindy 백그라운드 서비스에 저장된 로그인과 다른 계정의 데이터입니다.",

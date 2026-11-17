@@ -9423,7 +9423,6 @@
     "unavailable": "暫時無法登入",
     "hostUnavailable": {
       "title": "Cindy 後台服務沒有啟動",
-      "checkAgain": "重新檢查",
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {
           "body": "這份資料屬於另一個帳號，和 Cindy 後台服務儲存的登入不一致。",

@@ -156,11 +156,6 @@ describe('renderer auth service', () => {
       undefined,
     ]);
     expect(listener.mock.calls[2][0]).toEqual(signedOut);
-
-    await expect(service.readHostUnavailableReason()).resolves.toBeNull();
-    (window.electronAPI as unknown as { authGetHostState: () => Promise<unknown> }).authGetHostState =
-      async () => ({ ...signedOut, hostUnavailable: { reason: 'HOST_ACCOUNT_MISMATCH' } });
-    await expect(service.readHostUnavailableReason()).resolves.toBe('HOST_ACCOUNT_MISMATCH');
   });
 
   it('propagates a real initialization failure without inventing an auth snapshot', async () => {

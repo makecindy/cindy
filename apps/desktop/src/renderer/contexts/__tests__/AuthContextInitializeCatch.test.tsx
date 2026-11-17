@@ -25,7 +25,6 @@ const mocks = vi.hoisted(() => ({
     cancelAddAccount: vi.fn(async () => {}),
     logout: vi.fn(async () => {}),
     enterLocalMode: vi.fn<() => Promise<never>>(),
-    readHostUnavailableReason: vi.fn<() => Promise<string | null>>(async () => null),
   },
   logError: vi.fn(),
   unhandled: [] as unknown[],
@@ -100,7 +99,7 @@ describe('initial auth decision', () => {
     accountDeletionRestored: false, credentialStoreUnavailable: false,
   };
   // unit, real Provider (甲 2026-11-17): the Host's start-failure reason reaches the login page through this
-  // context; a later Host state without one clears it, and "Check Again" only re-reads the reason.
+  // context; a later Host state without one clears it.
   it('passes the Host start-failure reason through and clears it with the next state', async () => {
     let push!: (state: AuthState) => void;
     mocks.service.onAuthStateChange.mockImplementation((listener) => {
@@ -110,10 +109,6 @@ describe('initial auth decision', () => {
     mocks.service.initialize.mockResolvedValue({ ...signedOut, hostUnavailable: { reason: 'HOST_ACCOUNT_MISMATCH' } });
     const hook = renderHook(() => useAuth(), { wrapper: AuthProvider });
     await waitFor(() => expect(hook.result.current.hostUnavailableReason).toBe('HOST_ACCOUNT_MISMATCH'));
-
-    mocks.service.readHostUnavailableReason.mockResolvedValueOnce('HOST_DATABASE_LOCKED');
-    await act(async () => hook.result.current.recheckHostUnavailable());
-    expect(hook.result.current.hostUnavailableReason).toBe('HOST_DATABASE_LOCKED');
 
     act(() => push({ ...signedOut, ownerGeneration: 2 }));
     expect(hook.result.current.hostUnavailableReason).toBeNull();

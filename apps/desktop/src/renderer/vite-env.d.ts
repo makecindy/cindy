@@ -2345,8 +2345,6 @@ interface ElectronAPI {
     /** Client mode only: why the Host serving this window did not start (shared/hostStartFailure.ts). */
     hostUnavailable?: { reason: string } | null;
   }>;
-  /** Client mode only: read the Host's auth state again (proxied `auth:get-state`). */
-  authGetHostState?: () => Promise<{ hostUnavailable?: unknown } | null>;
   authGetLoginState: () => Promise<DesktopLoginActionResult>;
   authDispatchLoginAction: (action: DesktopLoginAction) => Promise<DesktopLoginActionResult>;
   /** 登录 captcha 托管挑战页地址(不含 query);LoginCaptchaOverlay 装载 webview 用。 */

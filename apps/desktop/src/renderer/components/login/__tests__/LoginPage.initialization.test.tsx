@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { useState } from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { CindyAuthClient, reduceAuthFlow, type AuthFlowState } from '@cindy/auth-client';
@@ -25,7 +25,6 @@ const auth = vi.hoisted(() => ({
   enterLocalMode: vi.fn(async () => undefined),
   acceptPrivacyConsent: vi.fn(async () => undefined),
   dispatchLoginAction: vi.fn<(action: DesktopLoginAction) => Promise<DesktopLoginActionResult>>(),
-  recheckHostUnavailable: vi.fn(async () => undefined),
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => auth.value }));
@@ -66,7 +65,7 @@ function Harness({
     loginState,
     credentialStoreUnavailable,
     ...(hostUnavailableReason !== undefined
-      ? { hostUnavailableReason, recheckHostUnavailable: auth.recheckHostUnavailable }
+      ? { hostUnavailableReason }
       : {}),
     loadLoginState: auth.loadLoginState,
     beginAddAccount: auth.beginAddAccount,
@@ -304,8 +303,8 @@ describe('login while the Host serving this window did not start', () => {
     expect(screen.queryByTestId('login-local-mode')).toBeNull();
     expect(screen.queryByTestId('login-skip-entry')).toBeNull();
 
-    fireEvent.click(screen.getByTestId('login-host-unavailable-recheck'));
-    await waitFor(() => expect(auth.recheckHostUnavailable).toHaveBeenCalledOnce());
+    // The panel offers nothing to press: in this state no action of the window can succeed.
+    expect(within(panel).queryAllByRole('button')).toEqual([]);
     expect(auth.dispatchLoginAction).not.toHaveBeenCalled();
     expect(auth.enterLocalMode).not.toHaveBeenCalled();
   });

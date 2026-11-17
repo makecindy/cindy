@@ -9466,7 +9466,6 @@
     "unavailable": "Anmeldung derzeit nicht möglich",
     "hostUnavailable": {
       "title": "Cindy-Hintergrunddienst startet nicht",
-      "checkAgain": "Erneut prüfen",
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {
           "body": "Diese Daten gehören zu einem anderen Konto als die Anmeldung, die der Cindy-Hintergrunddienst gespeichert hat.",

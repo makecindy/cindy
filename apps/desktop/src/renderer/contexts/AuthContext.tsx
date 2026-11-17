@@ -124,8 +124,6 @@ export interface AuthContextValue {
   credentialStoreUnavailable: boolean;
   /** Client mode only: why the Host serving this window did not start; null otherwise. */
   hostUnavailableReason: HostStartFailureReason | null;
-  /** Read the Host's start-failure reason again (the login page's "Check Again"); a plain read. */
-  recheckHostUnavailable: () => Promise<void>;
   getAccountDeletionAvailability: ReturnType<
     typeof createAuthService
   >['getAccountDeletionAvailability'];
@@ -631,13 +629,6 @@ export function AuthProvider({
     if (operation === loginOperationRef.current) setLoginState(null);
   }, []);
 
-  // Only refreshes the reason shown while the Host still reports one. A Host that started since then
-  // reaches Main through its own push (auth_changed, or the event stream's reconnect), which clears it.
-  const recheckHostUnavailable = useCallback(async () => {
-    const reason = await authServiceRef.current!.readHostUnavailableReason();
-    if (reason) setHostUnavailableReason(reason);
-  }, []);
-
   const enterLocalMode = useCallback(async () => {
     const operation = ++loginOperationRef.current;
     // 本地模式也是一次 dataOwnerId 切换。必须走 applyIncomingState,不能自己拼半套
@@ -729,7 +720,6 @@ export function AuthProvider({
       accountDeletionRestored,
       credentialStoreUnavailable,
       hostUnavailableReason,
-      recheckHostUnavailable,
       getAccountDeletionAvailability,
       requestAccountDeletionChallenge,
       confirmAccountDeletion,
@@ -764,7 +754,6 @@ export function AuthProvider({
       accountDeletionRestored,
       credentialStoreUnavailable,
       hostUnavailableReason,
-      recheckHostUnavailable,
       getAccountDeletionAvailability,
       requestAccountDeletionChallenge,
       confirmAccountDeletion,

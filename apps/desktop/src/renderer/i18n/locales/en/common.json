@@ -9466,7 +9466,6 @@
     "unavailable": "Sign-in is temporarily unavailable",
     "hostUnavailable": {
       "title": "Cindy background service didn't start",
-      "checkAgain": "Check Again",
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {
           "body": "This data belongs to a different account than the sign-in the Cindy background service saved.",
