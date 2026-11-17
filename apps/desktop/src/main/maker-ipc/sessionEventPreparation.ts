@@ -55,6 +55,7 @@ import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import {
   claudeOpusPlanTerminalErrorData,
   handleInteractionDismissedEvent,
+  localizeRuntimeRecoveryEvent,
   routeStandaloneTextEvent,
   type InteractionDismissedDeps,
 } from './sessionEventPreparationSteps.js';
@@ -150,17 +151,7 @@ export function prepareSessionEvent(
     });
     return;
   }
-  // Post-terminal Host recovery bypasses the model. Localize before both
-  // persistence and renderer delivery, without mutating the internal receipt.
-  if (event.runtimeRecovery && event.source === 'pi' && event.type === 'text') {
-    event = {
-      ...event,
-      data: {
-        ...(event.data as Record<string, unknown>),
-        text: t('settings.piPackages.failure.runtimeRetirementFailed'),
-      },
-    };
-  }
+  event = localizeRuntimeRecoveryEvent(event, t);
   if (event.turnScope !== 'background'
     && deps.agentInputCoordinatorHolder?.isActiveInputOwnerAuthored?.(session.id, event.sessionTurnGeneration)) {
     revealScheduledOutput(event.turnOrigin);

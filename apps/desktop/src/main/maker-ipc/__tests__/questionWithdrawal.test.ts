@@ -15,14 +15,15 @@ function declaration(file: string, name: string) {
 // The preparation calls its shared steps (sessionEventPreparationSteps.ts); the withdrawal runs in one of them.
 const code = ts.transpileModule([
   declaration('../sessionEventPreparation.ts', 'prepareSessionEvent'),
+  declaration('../sessionEventPreparationSteps.ts', 'localizeRuntimeRecoveryEvent'),
   declaration('../sessionEventPreparationSteps.ts', 'routeStandaloneTextEvent'),
   declaration('../sessionEventPreparationSteps.ts', 'claudeOpusPlanTerminalErrorData'),
   declaration('../sessionEventPreparationSteps.ts', 'handleInteractionDismissedEvent'),
   declaration('../sessionEventPreparationSteps.ts', 'defaultDecisionForPending'),
   'return { prepareSessionEvent, defaultDecisionForPending };',
 ].join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-const runtime = new Function('readChannelToolScope', 'MAKER_PUSH', 'onStandaloneTextEvent', code)(() => null,
-  { INTERACTION_DISMISSED: 'maker:interaction-dismissed' }, () => undefined);
+const runtime = new Function('readChannelToolScope', 'MAKER_PUSH', 'onStandaloneTextEvent', 't', code)(() => null,
+  { INTERACTION_DISMISSED: 'maker:interaction-dismissed' }, () => undefined, (key: string) => key);
 
 it('persists and broadcasts withdrawal without turning it into a user answer', () => {
   const request = { kind: 'ask_user_question', requestId: 'q1', delivery: 'async', questions: [{ question: 'Logged in?' }] };

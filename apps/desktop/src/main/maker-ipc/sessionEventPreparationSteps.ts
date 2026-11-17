@@ -35,6 +35,22 @@ export function defaultDecisionForPending(
   return { kind, behavior: 'deny', reason } as InteractionDecision;
 }
 
+/** A post-terminal runtime recovery receipt, in the user's language; other events unchanged. */
+export function localizeRuntimeRecoveryEvent(event: AgentEvent, t: (key: string) => string): AgentEvent {
+  // Post-terminal Host recovery bypasses the model. Localize before both
+  // persistence and renderer delivery, without mutating the internal receipt.
+  if (event.runtimeRecovery && event.source === 'pi' && event.type === 'text') {
+    event = {
+      ...event,
+      data: {
+        ...(event.data as Record<string, unknown>),
+        text: t('settings.piPackages.failure.runtimeRetirementFailed'),
+      },
+    };
+  }
+  return event;
+}
+
 export interface InteractionDismissedDeps {
   readonly handleAgentIslandInteractionDismissed: (sessionId: string, requestId: string) => void;
   readonly clearPendingInteraction: (requestId: string) => DismissedInteraction | null;
