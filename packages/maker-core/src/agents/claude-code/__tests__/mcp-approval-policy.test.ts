@@ -1104,6 +1104,41 @@ describe('a custom server cannot take over a builtin name', () => {
     await handle.close();
   });
 
+  // Unit regression: observe the actual SSH factory payload after next-turn rebuild.
+  // Legacy controller paths were deliberately omitted; validated project paths were omitted too.
+  it('sends only matching-host project grants to SSH and removes revoked roots on the next Query', async () => {
+    process.env.CLAUDE_CONFIG_DIR = await makeTempDir();
+    const deps = createDeps();
+    const starts: Record<string, unknown>[] = [];
+    deps.remoteCcQueryFactory = async ({ startParams }) => {
+      starts.push(startParams as unknown as Record<string, unknown>);
+      return createFakeQuery() as never;
+    };
+    const handle = await new ClaudeCodeAgent(deps).startSession({
+      sessionId: 'ssh-project-directories', model: 'claude-opus-4-6', resumeSessionId: 'ssh-sdk-existing',
+      workingDir: '/srv/project', remoteHostId: 'ssh-1', permissionMode: 'ask',
+      extraDirs: ['/controller/legacy'], writableDirs: ['/controller/output'],
+    });
+    try {
+      expect(starts.at(-1)?.additionalDirectories).toBeUndefined();
+      await handle.setExtraDirs?.(['/controller/legacy', '/srv/reference'], null,
+        { hostId: 'ssh-1', directories: ['/srv/reference'] });
+      await handle.setWritableDirs?.(['/controller/output', '/srv/output'],
+        { hostId: 'ssh-1', directories: ['/srv/output'] });
+      await handle.send({ type: 'user', content: 'Read the project.' });
+      expect(starts).toHaveLength(2);
+      expect(starts.at(-1)?.additionalDirectories).toEqual(['/srv/reference', '/srv/output']);
+      expect(starts.at(-1)?.resumeSdkSessionId).toBe('ssh-sdk-existing');
+      expect(starts.at(-1)).not.toHaveProperty('forkSession');
+      await handle.setExtraDirs?.(['/srv/reference'], null,
+        { hostId: 'wrong-host', directories: ['/srv/reference'] });
+      await handle.setWritableDirs?.([],{ hostId: 'ssh-1', directories: [] });
+      await handle.send({ type: 'user', content: 'Continue.' });
+      expect(starts).toHaveLength(3);
+      expect(starts.at(-1)?.additionalDirectories).toBeUndefined();
+    } finally { await handle.close(); }
+  });
+
   it('passes the runtime session instance id into Claude MCP provider context', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;

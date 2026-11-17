@@ -2386,7 +2386,7 @@ export class Session {
    * 不写 DB —— 持久化由调用方 (main IPC 协调 local-db:sessions:update) 负责,
    * 跟 setModel/setEffort 双 IPC 协调先例一致。
    */
-  async setExtraDirs(dirs: string[], libraryRoot?: string | null): Promise<void> {
+  async setExtraDirs(dirs: string[], libraryRoot?: string | null, remote?: { hostId: string; directories: string[] }): Promise<void> {
     this.ensureActive();
     if (!this.capabilities.extraDirs.supported) {
       throw new NotSupportedError('extraDirs', this.capabilities.extraDirs);
@@ -2394,13 +2394,13 @@ export class Session {
     if (!this.handle.setExtraDirs) {
       throw new NotSupportedError('extraDirs', { supported: false, reason: 'not-implemented' });
     }
-    await this.handle.setExtraDirs(dirs, libraryRoot);
+    await this.handle.setExtraDirs(dirs, libraryRoot, remote);
   }
 
   /**
    * 运行时覆盖附加可读写目录。不写 DB；持久化由 host 与 setExtraDirs 相同地协调。
    */
-  async setWritableDirs(dirs: string[]): Promise<void> {
+  async setWritableDirs(dirs: string[], remote?: { hostId: string; directories: string[] }): Promise<void> {
     this.ensureActive();
     const capability = this.capabilities.writableDirs;
     if (!capability?.supported) {
@@ -2412,7 +2412,7 @@ export class Session {
     if (!this.handle.setWritableDirs) {
       throw new NotSupportedError('writableDirs', { supported: false, reason: 'not-implemented' });
     }
-    await this.handle.setWritableDirs(dirs);
+    await this.handle.setWritableDirs(dirs, remote);
   }
 
   // ── Rewind (Stage 2 C2) ────────────────────────────────────────────────────

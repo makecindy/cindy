@@ -324,7 +324,8 @@ test('Node AI tools create, inspect and edit the complete project profile in the
   const created = await call('create_project', { name: 'Demo', icon: '🌿', directories: [{ path: first }, { path: second }], device: 'this-host' });
   assert.equal(created.ok, true, JSON.stringify(created));
   assert.equal(created.device, 'this-host');
-  assert.equal(created.project_key, `local:${path.join(root, 'Demo')}`);
+  const normalized = value => value.replace(/\\/g, '/');
+  assert.equal(created.project_key, `local:${normalized(path.join(root, 'Demo'))}`);
   assert.equal((await fs.stat(created.working_dir)).isDirectory(), true);
   const project = await call('get_project_info', { project_key: created.project_key });
   assert.equal(project.project.name, 'Demo');

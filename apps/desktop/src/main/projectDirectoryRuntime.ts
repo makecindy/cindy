@@ -104,10 +104,16 @@ export async function applyProjectDirectoriesForTurn(session: Session): Promise<
   const runtime = directoryGrantsForRuntime(read);
   // Install the new write scope first: removed writable roots cannot survive a write → read change.
   if (write.length || session.capabilities.writableDirs?.supported)
-    await session.setWritableDirs(write);
+    await session.setWritableDirs(write, row.remoteHostId ? {
+      hostId: row.remoteHostId,
+      directories: write.filter(dir => projectDefaults.some(item => item.access === 'write' && item.path === dir)),
+    } : undefined);
   assertCurrent();
   if (runtime.extraDirs.length || session.capabilities.extraDirs.supported)
-    await session.setExtraDirs(runtime.extraDirs, libraryRootForRuntime(read));
+    await session.setExtraDirs(runtime.extraDirs, libraryRootForRuntime(read), row.remoteHostId ? {
+      hostId: row.remoteHostId,
+      directories: read.filter(dir => projectDefaults.some(item => item.access === 'read' && item.path === dir)),
+    } : undefined);
   assertCurrent();
   inheritedSessions.add(session);
 }

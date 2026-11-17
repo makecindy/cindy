@@ -163,3 +163,22 @@ it('old hosts remain compatible while malformed directory payloads cannot become
   ]);
   expect(resolveProjectDirectories(snapshot!, 'local:/bad')).toBeUndefined();
 });
+
+// Unit regression: legacy paths on the controller must not be relabeled as SSH grants.
+it('labels only the saved project subset for the matching SSH host, including revocation', async () => {
+  h.row = { ...h.row, projectDir: '/srv/project', workingDir: '/srv/project',
+    remoteHostId: 'ssh-1', extraDirs: '["/controller/reference"]', writableDirs: '["/controller/output"]' };
+  const key = 'remote:ssh-1:/srv/project';
+  await setProjectDirectories(key, [{ path: '/srv/reference', access: 'read' }, { path: '/srv/output', access: 'write' }], () => {});
+  const setExtraDirs = vi.fn(async () => {}), setWritableDirs = vi.fn(async () => {});
+  const session = { id: 'ssh-task', capabilities, setExtraDirs, setWritableDirs } as unknown as Session;
+  await applyProjectDirectoriesForTurn(session);
+  expect(setExtraDirs).toHaveBeenLastCalledWith(expect.any(Array), null,
+    { hostId: 'ssh-1', directories: ['/srv/reference'] });
+  expect(setWritableDirs).toHaveBeenLastCalledWith(expect.any(Array),
+    { hostId: 'ssh-1', directories: ['/srv/output'] });
+  await setProjectDirectories(key, [], () => {});
+  await applyProjectDirectoriesForTurn(session);
+  expect(setExtraDirs).toHaveBeenLastCalledWith(expect.any(Array), null, { hostId: 'ssh-1', directories: [] });
+  expect(setWritableDirs).toHaveBeenLastCalledWith(expect.any(Array), { hostId: 'ssh-1', directories: [] });
+});

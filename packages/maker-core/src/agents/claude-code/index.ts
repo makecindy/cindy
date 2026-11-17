@@ -3290,6 +3290,9 @@ export class ClaudeCodeAgent extends BaseAgent {
     let mutableLibraryRoot: string | null | undefined = opts.remoteHostId || reviewMode ? undefined : (opts[LIBRARY_READ_ROOT] ?? undefined);
     let mutableExtraDirs: string[] = Array.isArray(opts.extraDirs) ? [...opts.extraDirs] : [];
     let mutableWritableDirs: string[] = Array.isArray(opts.writableDirs) ? [...opts.writableDirs] : [];
+    // Only the host-validated project subset may cross SSH; legacy controller paths stay local.
+    let remoteExtraDirs: string[] = [];
+    let remoteWritableDirs: string[] = [];
     let autoReviewDirectoryGeneration = 0;
     let activeQueryDirectoryGeneration = autoReviewDirectoryGeneration;
     let activeQueryReadonlyDirs = [...mutableExtraDirs];
@@ -3951,6 +3954,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...buildClaudeRemoteOrcaCallerGuards(vo.orcaRole === 'worker'),
         ];
 
+        activeQueryDirectoryGeneration = autoReviewDirectoryGeneration;
+        activeQueryReadonlyDirs = [...remoteExtraDirs];
+        activeQueryHasDirectoryGrants = remoteExtraDirs.length > 0 || remoteWritableDirs.length > 0;
         activeQueryModelEnvGeneration = applyModelOutputEnv();
         const startParams: Record<string, unknown> = {
           cwd: opts.workingDir,
@@ -3993,12 +3999,9 @@ export class ClaudeCodeAgent extends BaseAgent {
               ...(appendText ? { append: appendText } : {}),
             };
           })(),
-          // **不透传 extraDirs 到远端**: mutableExtraDirs 由 desktop session/draft
-          // 提供, 路径基于 desktop 本地文件系统 (用户拖进来的文件夹), 跟远端机器
-          // 上的路径毫无关系。SDK 把 additionalDirectories 当 cwd 之外的允许范围,
-          // 用 desktop 路径只会让远端 SDK 报"路径不存在 / 不在允许范围"或者更糟,
-          // 误把同名远端路径加进允许范围。远端 cwd 在 startParams.cwd 已传, 别处
-          // 想加额外目录要由远端用户在远端机器上配置, 不在本 PR scope。
+          ...((remoteExtraDirs.length || remoteWritableDirs.length)
+            ? { additionalDirectories: [...new Set([...remoteExtraDirs, ...remoteWritableDirs])] }
+            : {}),
           ...(remoteMcpServers && Object.keys(remoteMcpServers).length > 0 ? { mcpServers: remoteMcpServers } : {}),
           ...(resumeSdkSid ? { resumeSdkSessionId: resumeSdkSid } : {}),
           // includePartialMessages 必须跟本地分支保持一致 — 否则 daemon 端 SDK
@@ -6975,7 +6978,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           if (directoryGrantRebuild) {
             rewindTransitionQueries.add(q);
             try {
-              q.close();
+              await q.close();
             } catch (e) {
               log.warn('rewind rebuild: q.close threw', { error: String(e) });
             }
@@ -6985,7 +6988,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           for (;;) {
             q = await buildQuery({
               ...(directoryGrantRebuild ? {} : { resumeSessionAt: resumeAt }),
-              forkSession: true,
+              ...(!opts.remoteHostId || !directoryGrantRebuild ? { forkSession: true } : {}),
               permissionMode: snapSdkPermissionMode,
             });
             if (resolveMaxOutputTokens(mutableModel) === appliedMaxOutputTokens || sendOpts?.signal?.aborted || closed) break;
@@ -8110,8 +8113,14 @@ export class ClaudeCodeAgent extends BaseAgent {
         return mutablePlanMode || planTurnActive || sdkInPlanMode;
       },
 
-      async setExtraDirs(newDirs: string[], libraryRoot?: string | null) {
+      async setExtraDirs(newDirs: string[], libraryRoot?: string | null, remote?: { hostId: string; directories: string[] }) {
         if (reviewMode) return;
+        const remoteDirs = remote && remote.hostId === opts.remoteHostId && opts.remoteHostId
+          ? remote.directories.filter(dir => newDirs.includes(dir)) : [];
+        if (remoteExtraDirs.length !== remoteDirs.length || remoteExtraDirs.some((dir, i) => dir !== remoteDirs[i])) {
+          remoteExtraDirs = [...remoteDirs];
+          autoReviewDirectoryGeneration++;
+        }
         // 只覆盖 closure。SDK 没有运行时 setAdditionalDirectories 入口, 但 buildQuery
         // 是 turn-by-turn 装配的 (rewind 重启 / fork 都走 buildQuery), 改完下一 turn
         // 自动用新值。当前 in-flight turn 不会变 (允许的 — 用户在 turn 中加目录
@@ -8127,8 +8136,16 @@ export class ClaudeCodeAgent extends BaseAgent {
         extraDirsRebuildAttempted = false;
       },
 
-      async setWritableDirs(newDirs: string[]) {
+      async setWritableDirs(newDirs: string[], remote?: { hostId: string; directories: string[] }) {
         if (reviewMode) return;
+        const remoteDirs = remote && remote.hostId === opts.remoteHostId && opts.remoteHostId
+          ? remote.directories.filter(dir => newDirs.includes(dir)) : [];
+        if (remoteWritableDirs.length !== remoteDirs.length || remoteWritableDirs.some((dir, i) => dir !== remoteDirs[i])) {
+          if (remoteWritableDirs.some(dir => !remoteDirs.includes(dir)))
+            dismissDirectorySensitivePending('writable_dirs_revoked');
+          remoteWritableDirs = [...remoteDirs];
+          autoReviewDirectoryGeneration++;
+        }
         if (
           mutableWritableDirs.length === newDirs.length
           && mutableWritableDirs.every((dir, index) => dir === newDirs[index])
