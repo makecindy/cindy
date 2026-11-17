@@ -233,6 +233,53 @@ describe('companion group failover eligibility', () => {
     },
   );
 
+  // Unit regression (#11111): restart bypasses normal group lookup, while a
+  // one-member group's reconnect has no switch candidate. Exercise the real
+  // policy + service; shared recovery must require a live selected group.
+  it.each(['remote_agent_restarted', 'remote_agent_lost'])(
+    'reconnects a shared one-member group after %s', async reason => {
+      const h = companionHarness();
+      h.state.source = 'desktop';
+      h.eligibilityDeps.isShared = () => true;
+      h.config.members = [MINI];
+      Object.assign(h.row, { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId });
+      h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+      await h.service.onTurnError('s1', { reason }, 1);
+      expect(h.deps.continueSession).toHaveBeenCalledExactlyOnceWith('s1', 99,
+        expect.objectContaining({ agentReconnect: expect.any(Object) }));
+      expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+      expect(h.deps.fallback).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['unbound', 'removed-member', 'disabled-group'])(
+    'does not restart a shared remote task with %s', async condition => {
+      const h = companionHarness();
+      h.state.source = 'desktop';
+      h.eligibilityDeps.isShared = () => true;
+      Object.assign(h.row, { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId });
+      if (condition === 'unbound') h.bindings.delete('s1');
+      else h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+      if (condition === 'removed-member') h.config.members = [LOCAL];
+      if (condition === 'disabled-group') h.config.autoSwitch = false;
+      await h.service.onTurnError('s1', { reason: 'remote_agent_restarted' }, 1);
+      expect(h.deps.continueSession).not.toHaveBeenCalled();
+      expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+      expect(h.deps.fallback).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('does not use ungrouped reconnect when a shared task cannot read its selected group', async () => {
+    const h = companionHarness();
+    h.state.source = 'desktop';
+    h.eligibilityDeps.isShared = () => true;
+    Object.assign(h.row, { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId });
+    h.bindings.set('s1', { providerId: 'anthropic', groupDeviceId: 'unreachable-owner', memberKey: MINI.key, at: 1 });
+    await h.service.onTurnError('s1', { reason: 'remote_agent_lost' }, 1);
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledOnce();
+  });
+
   it('moves a retry away from the exhausted member before sending, without balancing healthy inputs', async () => {
     const h = companionHarness();
     await h.service.beforeSend('s1', { clientId: 'retry' });

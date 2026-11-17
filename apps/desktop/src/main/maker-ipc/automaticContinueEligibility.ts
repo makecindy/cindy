@@ -48,7 +48,8 @@ export function createAutomaticContinueEligibility(deps: {
     }
     // Sharing must not disable recovery within the owner's selected group.
     // Delayed quota waits and proactive rebalancing still require owner control.
-    if (deps.isShared(sessionId) && (!context || context.kind === 'rebalance' || row.source === 'bot')) return false;
+    if (deps.isShared(sessionId) && (!context || context.kind === 'rebalance' || context.kind === 'reconnect'
+      || (context.kind === 'restart' && !context.verifiedGroup) || row.source === 'bot')) return false;
     if (await deps.goalOwnsRecovery(sessionId)) return false;
     return row.source !== 'bot' || (deps.ownerEpoch() === owner && !deps.isPaused(sessionId)
       && !deps.isShared(sessionId) && !!context && deps.ownsCompanionInput(sessionId, context));

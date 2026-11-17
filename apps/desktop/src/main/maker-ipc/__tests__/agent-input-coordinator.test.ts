@@ -17097,12 +17097,14 @@ describe('usage-limit wait (ordinary tasks)', () => {
     h.setRunning(false);
     h.coordinator.onTurnEvent(sid, 'error', "You've hit your session limit", LIMIT_SIGNALS);
     await flush();
-    // 授权可能在等待期间被撤销:不自动续,错误与房主手动处理保留。
-    expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
+    // 授权可能在等待期间被撤销:可交给即时组恢复，但不能挂额度重置等待。
+    expect(h.onUsageLimitedTurnError).toHaveBeenCalledOnce();
+    const token = h.onUsageLimitedTurnError.mock.calls[0][3];
+    expect(h.coordinator.armUsageLimitWait(sid, token, 9_000_000)).toBe(false);
     expect(latestProjection(h.projections).error).toBe("You've hit your session limit");
   });
 
-  // 访客 steer 的两种时序都不得挂等待:ACK 先到时本轮归属换成访客 steer 项(被访客判据挡住);
+  // 访客 steer 的两种时序都不得挂等待:ACK 先到时本轮归属换成访客 steer 项(仅可即时组恢复);
   // 终态先到时 steer 仍在途、不形成可续的 recovery,也就不会报告候选。
   it('does not offer a wait once a guest steer joined the turn, even before its ack', async () => {
     const guest = (sid: string, clientId: string) => ({
@@ -17140,7 +17142,11 @@ describe('usage-limit wait (ordinary tasks)', () => {
         await steering;
         await flush();
       }
-      expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
+      expect(h.onUsageLimitedTurnError).toHaveBeenCalledTimes(ackBeforeError ? 1 : 0);
+      if (ackBeforeError) {
+        const token = h.onUsageLimitedTurnError.mock.calls[0][3];
+        expect(h.coordinator.armUsageLimitWait(sid, token, 9_000_000)).toBe(false);
+      }
     }
 
     // 房主自己的 steer 不影响。
@@ -17187,26 +17193,34 @@ describe('usage-limit wait (ordinary tasks)', () => {
 describe('provider group computer switch hold', () => {
   // Unit regression: accepted guest turns must reach group recovery and retain
   // their attribution, but must never become a persisted, delayed quota wait.
-  it.each([false, true])('recovers a shared guest turn through the group (output=%s)', async hasOutput => {
+  // A single-member reconnect has no synchronous switch hint (#11111); this
+  // minimum input previously never reached the recovery callback.
+  it.each([
+    { hasOutput: false, candidate: 'usage-limit' as const },
+    { hasOutput: true, candidate: 'usage-limit' as const },
+    { hasOutput: false, candidate: null },
+  ])('recovers a shared guest turn through the group (%j)', async ({ hasOutput, candidate }) => {
     const sid = 'shared-group-recovery';
-    const h = createHarness({ providerGroupSwitchCandidate: () => 'usage-limit' });
+    const h = createHarness({ providerGroupSwitchCandidate: () => candidate });
     const author = { sharedTaskId: 'st', sessionId: sid, memberId: 'm', accountId: 'guest', displayName: 'Guest' };
     h.coordinator.enqueue(sid, { ...makeItem('guest-original', 'guest request'), sharedTaskAuthor: author });
     await flush();
     h.setHasAssistantProgressAfter(async () => hasOutput);
     h.setRunning(false);
-    h.coordinator.onTurnEvent(sid, 'error', "You've hit your session limit", { sdkError: 'rate_limit' });
+    h.coordinator.onTurnEvent(sid, 'error', candidate ? "You've hit your session limit" : 'remote agent disconnected',
+      candidate ? { sdkError: 'rate_limit' } : { reason: 'remote_agent_lost' });
     await flush();
     expect(h.onUsageLimitedTurnError).toHaveBeenCalledOnce();
     const token = h.onUsageLimitedTurnError.mock.calls[0][3];
-    expect(h.coordinator.getProviderGroupSwitchHoldId(sid)).not.toBeNull();
+    expect(h.coordinator.getProviderGroupSwitchHoldId(sid) !== null).toBe(candidate !== null);
     expect(h.coordinator.armUsageLimitWait(sid, token, 9_000_000)).toBe(false);
     expect(h.coordinator.snapshotUsageLimitRecovery(sid, token)).toBeNull();
     const lease = h.coordinator.leaseUsageLimitRecovery(sid, token)!;
     const continueToken = h.coordinator.rearmUsageLimitWait(sid, lease, Date.now())!;
     await h.coordinator.continueAfterProviderGroupRecovery(sid, continueToken, {
       reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON, attempt: 1, maxAttempts: 1, sessionTotal: 0,
-      agentSwitch: { from: 'A', to: 'B', cause: 'usage-limit' },
+      ...(candidate ? { agentSwitch: { from: 'A', to: 'B', cause: 'usage-limit' as const } }
+        : { agentReconnect: { computer: 'A' } }),
     });
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);

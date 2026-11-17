@@ -7457,14 +7457,12 @@ export class AgentInputCoordinator {
     state: SessionInputState,
     item: AgentInputQueuedMessage,
     beforeDispatch = false,
-    allowSharedGroupRecovery = false,
   ): boolean {
     // 真实 Schedule 由 runId 绑定 runner；复用 scheduler origin 的 Hook 仍由渠道收尾。
     // 访客已接受的回合只交给组内故障恢复；不挂额度重置后的长时间等待。
     return Boolean(
       this.deps.onUsageLimitedTurnError &&
         (!isSchedulerOriginItem(item) || Boolean(item.origin?.kind === 'scheduler' && item.origin.runId)) &&
-        (!item.sharedTaskAuthor || allowSharedGroupRecovery) &&
         (state.recovery?.kind === 'active-turn' || (beforeDispatch && state.recovery?.kind === 'queue-head')) &&
         state.error !== null,
     );
@@ -7477,9 +7475,9 @@ export class AgentInputCoordinator {
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
   ): void {
     const state = this.states.get(sessionId);
-    const sharedGroupRecovery = Boolean(item.sharedTaskAuthor &&
-      this.getProviderGroupSwitchCandidate(sessionId, item, message, signals));
-    if (!state || !this.willNotifyUsageLimitedTurnError(state, item, signals?.providerGroupUsageLimit !== undefined, sharedGroupRecovery)) return;
+    // The synchronous switch hint only controls error presentation. Recovery
+    // eligibility belongs to the service, including reconnect-only groups.
+    if (!state || !this.willNotifyUsageLimitedTurnError(state, item, signals?.providerGroupUsageLimit !== undefined)) return;
     const token = ++this.usageLimitWaitSeq;
     state.usageLimitWait = {
       resumeAt: null, token, recovery: state.recovery!,
@@ -7509,7 +7507,7 @@ export class AgentInputCoordinator {
     // Scheduled quota waits belong to the runner; do not hide their error behind
     // a provider-group takeover that this scheduled path does not start.
     if (isSchedulerOriginItem(item)) return;
-    if (!this.willNotifyUsageLimitedTurnError(state, item, false, true)) return;
+    if (!this.willNotifyUsageLimitedTurnError(state, item)) return;
     const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals, true);
     if (!cause) return;
     state.providerGroupSwitchHold = {
