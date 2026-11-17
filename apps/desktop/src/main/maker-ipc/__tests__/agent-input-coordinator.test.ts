@@ -13834,6 +13834,7 @@ describe('Orca report durable recovery', () => {
   // a hand-written retry timer would miss pending-token and retry-budget bugs.
   function wireHostReportRecovery(h: ReturnType<typeof createHarness>) {
     const botFallbackInputs = new WeakSet<object>();
+    const scheduledQuotaInputs = new WeakSet<object>();
     const runtimeFallback = vi.fn(async () => ({ session: null, outcome: 'unchanged' as const }));
     const guard = new InterruptedTurnAutoResumeGuard({ isEnabled: () => true, log: mocks.logger, random: () => 0.5 });
     const book = new AutoResumeBookkeeping({
@@ -13843,7 +13844,7 @@ describe('Orca report durable recovery', () => {
     });
     const host = createInterruptedTurnAutoResumeHooks<Session>({
       inputCoordinator: h.coordinator, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
-      botFallbackInputs, saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
+      botFallbackInputs, scheduledQuotaInputs, saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
       getStableSessionForTurnBoundary: () => null,
       pendingContinuationOnlyAutoResumeRebuilds: new Map<Session, number>(),
       maybeApplySessionRuntimeFallback: runtimeFallback,
@@ -13853,6 +13854,7 @@ describe('Orca report durable recovery', () => {
       autoResumeAttemptToken: () => null, log: mocks.logger,
     });
     h.onResumableTurnError.mockImplementation(host.onResumableTurnError);
+    h.isResumableTurnErrorCandidate.mockImplementation(host.canRecoverTurn);
     const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
     const deps = {
       autoResumeBookkeeping: book, contextOverflowRolloverHolder: undefined, providerGroupService: undefined,
@@ -13864,8 +13866,28 @@ describe('Orca report durable recovery', () => {
       `return ({${source.slice(automaticStart, automaticEnd)}}).onAutomaticEnqueue;`,
       { compilerOptions: { target: ScriptTarget.ES2022 } },
     ).outputText)(...Object.values(deps)));
-    return { runtimeFallback, botFallbackInputs };
+    return { runtimeFallback, botFallbackInputs, scheduledQuotaInputs };
   }
+
+  // Unit regression: the real coordinator must give a remote Bot Schedule quota
+  // terminal to its wait owner before candidate fallback can switch suppliers.
+  it('hands scheduled companion quota failure to waiting instead of candidate fallback', async () => {
+    const h = createHarness();
+    const recovery = wireHostReportRecovery(h);
+    const item = makeItem('daily', 'continue daily work', {
+      origin: { kind: 'scheduler', scheduleId: 'daily', scheduleName: 'Daily', runId: 'run' },
+    });
+    recovery.botFallbackInputs.add(item.createOpts);
+    recovery.scheduledQuotaInputs.add(item.createOpts);
+    h.coordinator.enqueue('bot', item);
+    await flush(); h.setRunning(false);
+    h.coordinator.onTurnEvent('bot', 'error', 'usage limit', { usageLimit: true, usageResetAt: 5_000_000 });
+    h.coordinator.onTurnEvent('bot', 'done');
+    expect(h.onUsageLimitedTurnError).toHaveBeenCalledOnce();
+    expect(h.coordinator.getProjection('bot').autoResumePending).toBeUndefined();
+    expect(recovery.runtimeFallback).not.toHaveBeenCalled();
+    expect(h.coordinator.scheduledQuotaOrigin('bot')).toEqual(item.origin);
+  });
 
   it('retries the same Bot report without eager fallback and stops at its existing budget', async () => {
     vi.useFakeTimers();
@@ -16674,6 +16696,16 @@ describe('usage-limit wait (ordinary tasks)', () => {
       await flush();
     }
     const restored = restarted.coordinator.restoreUsageLimitRecovery(sid, snapshot, restarted.coordinator.getGeneration(sid))!;
+    // The host must still validate the original schedule on restart, without
+    // sending the expired runId back to the runner. A manual retry owns no lease.
+    expect(restarted.coordinator.scheduledQuotaOrigin(sid)).toEqual(snapshot.item.origin);
+    expect(restarted.coordinator.snapshotUsageLimitRecovery(sid, restored)?.item.origin).toEqual(snapshot.item.origin);
+    const realSend = restarted.sendToAgent.getMockImplementation()!;
+    restarted.sendToAgent.mockImplementationOnce(async (...args) => {
+      expect(restarted.coordinator.scheduledQuotaOrigin(sid, args[3].persistUserMessage?.clientId))
+        .toEqual(action === 'auto' ? snapshot.item.origin : undefined);
+      return realSend(...args);
+    });
     restarted.coordinator.setInteractionLock(sid, 'restore-test', false);
     // The saved record still owns schedule deduplication until it is consumed.
     expect(snapshot.item.origin).toMatchObject({ runId: 'old-run' });
