@@ -6,7 +6,7 @@
  *   自建中转的 401 只表示中转凭证失效,不能把 Cindy 账号登出。
  * - 只走 V2 的网络(别人分享的中转,§5.5):设备目录、改名、移除走 V2 的签名请求;没有旧版 REST。
  */
-import type { ApiFetchOptions } from '../serverApiClient.js';
+import { ServerApiError, type ApiFetchOptions } from '../serverApiClient.js';
 import { isAgentNetOnlyRelay, type ActiveSelfHostedRelay } from './selfHostedRelayRouting.js';
 
 export interface DeviceLinkApiPorts {
@@ -124,12 +124,25 @@ async function deviceLinkApiFetch<T>(
         }
       }
       assertCurrent();
-      const result = await serverApiFetch<T>(apiPath, {
-        ...opts,
-        // The legacy client may refresh and retry. Its resolver runs outside
-        // network-error wrapping and before token lookup on every actual send.
-        baseUrl: () => { assertCurrent(); return base; },
-      });
+      let result: T;
+      try {
+        result = await serverApiFetch<T>(apiPath, {
+          ...opts,
+          // The legacy client may refresh and retry. Its resolver runs outside
+          // network-error wrapping and before token lookup on every actual send.
+          baseUrl: () => { assertCurrent(); return base; },
+        });
+      } catch (error) {
+        assertCurrent();
+        // Official V2 enrollment does not require a V1 device row. Only its
+        // explicit absence permits removal of the verified V2 member; denials
+        // and unavailable legacy services must still stop before revocation.
+        if (!api || !deleteEncryptedMember || !(error instanceof ServerApiError)
+          || error.statusCode !== 404 || error.code !== 'NOT_FOUND') throw error;
+        const removed = await api.request('DELETE', '/devices/' + encodeURIComponent(target), undefined);
+        assertCurrent();
+        return removed as T;
+      }
       assertCurrent();
       const deletion = result as { deviceId?: unknown; deleted?: unknown } | null;
       if (api && deleteEncryptedMember && deletion?.deleted === true && deletion.deviceId === target) {
