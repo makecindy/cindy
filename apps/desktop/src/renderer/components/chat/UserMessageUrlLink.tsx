@@ -10,7 +10,8 @@ import type { MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
-import { activateMessageUrl, useOpenWithMenu } from './useOpenWithMenu';
+import { useOpenWithMenu } from './useOpenWithMenu';
+import { activateMessageUrl } from './messageLinkActions';
 import { activateInlineLinkFromKeyboard } from './linkInteraction';
 
 export function UserMessageUrlLink({ url, sessionId }: { url: string; sessionId?: string }) {

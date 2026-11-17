@@ -66,7 +66,7 @@ import { activateInlineLinkFromKeyboard } from './linkInteraction';
 import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ModelLightbox } from './ModelLightbox';
-import { isHtmlFilePath, openHtmlFileByPreference } from './useOpenWithMenu';
+import { isHtmlFilePath, openHtmlFileByPreference } from './messageLinkActions';
 
 function formatArtifactSummaryValue(summary: DocumentArtifactMetadata['summary']): number | string {
   if (!summary || summary.kind !== 'bytes') return summary?.value ?? '';
