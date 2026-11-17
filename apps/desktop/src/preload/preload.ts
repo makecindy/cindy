@@ -1726,8 +1726,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       unsupported?: true;
       failed?: true;
     }> => ipcRenderer.invoke('ghosts:card:get-remote', deviceId, sessionId, callId),
-    uploadRemoteMailAttachment: (): Promise<{ ok: boolean; attachment: { url: string; name: string } | null }> =>
-      ipcRenderer.invoke('ghosts:card:remote-mail-attachment'),
+    uploadRemoteMailAttachment: (deviceId: string): Promise<{ ok: boolean; attachment: { url: string; name: string } | null }> =>
+      ipcRenderer.invoke('ghosts:card:remote-mail-attachment', deviceId),
     // 会话切换上报(订阅槽① did-session-switched 的数据源):路由 effect 每次
     // 路由变化调,单向 send 零等待;去重/资格门全在 main。
     noteSessionFocused: (sessionId: string | null): void =>

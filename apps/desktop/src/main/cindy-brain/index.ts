@@ -10434,20 +10434,28 @@ export function registerGhostIpc(): void {
 
   // Attachment for a mail card of a task on another computer: chosen and uploaded here; only the
   // transfer reference and file name go to that computer, as with a phone upload.
-  ipcMain.handle('ghosts:card:remote-mail-attachment', async (event) => {
+  ipcMain.handle('ghosts:card:remote-mail-attachment', async (event, deviceId: unknown) => {
     assertTrustedAppRendererEvent(event);
     try {
-      const [{ uploadRemoteMailAttachment }, { uploadLocalFile, mimeOf }] = await Promise.all([
+      const [{ uploadRemoteMailAttachment }, { uploadLocalFile, mimeOf }, { withAgentNetMediaTarget }, { readDeviceLinkSettings }] = await Promise.all([
         import('./remoteMailAttachment.js'), import('../device-link/mediaTransfer.desktop.js'),
+        import('../device-link/agentNetMediaRouting.js'),
+        import('../device-link/settings-store.desktop.js'),
       ]);
-      const { attachment } = await uploadRemoteMailAttachment({
+      if (typeof deviceId !== 'string' || !/^[a-f0-9]{64}$/.test(deviceId)) throw new Error('INVALID_DEVICE_ID');
+      const target = deviceId;
+      const assertTarget = () => {
+        if (readDeviceLinkSettings().disabledControlDeviceIds.includes(target)) throw new Error('DEVICE_LINK_CONTROL_DISABLED');
+      };
+      assertTarget();
+      const { attachment } = await withAgentNetMediaTarget(target, () => uploadRemoteMailAttachment({
         pick: async () => {
           const result = await dialog.showOpenDialog({ properties: ['openFile'] });
           return result.canceled ? null : result.filePaths[0] ?? null;
         },
-        upload: (file, options) => uploadLocalFile(file, options),
+        upload: (file, options) => { assertTarget(); return uploadLocalFile(file, { ...options, assertCurrent: assertTarget }); },
         mimeOf,
-      });
+      }));
       return { ok: true, attachment };
     } catch (err) {
       // Transfer errors can quote the chosen file's path; keep only known codes in the log.

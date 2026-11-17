@@ -45,8 +45,8 @@ export function MailCardBody({ state, ctx }: TabKindBodyProps<{ callId: string }
   useEffect(() => remoteDevice ? retainRemoteCardSession(remoteDevice, ctx.sessionId) : undefined, [remoteDevice, ctx.sessionId]);
   useEffect(() => {
     if (!remoteDevice) return;
-    ensureRemoteCard(remoteDevice, ctx.sessionId, state.callId);
-    if (missing) ensureRemoteCard(remoteDevice, ctx.sessionId, missing);
+    ensureRemoteCard(remoteDevice, ctx.sessionId, state.callId, { force: attempt > 0 });
+    if (missing) ensureRemoteCard(remoteDevice, ctx.sessionId, missing, { force: attempt > 0 });
   }, [remoteDevice, ctx.sessionId, state.callId, missing, attempt]);
   useEffect(() => {
     let active = true;

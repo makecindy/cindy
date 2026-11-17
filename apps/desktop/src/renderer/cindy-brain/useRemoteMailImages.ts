@@ -7,7 +7,8 @@
  * as `data:` URLs. Only the content addresses already validated in the card's mail data are asked
  * for; the saved draft keeps its `cid:` references (the editor restores them by CID).
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, type DataOwnerGeneration } from '../contexts/dataOwnerGeneration';
 import { buildRemoteMediaUrl } from '../../shared/remoteMediaUrl';
 
 const MAIL_IMAGE = /^cindy-media:\/\/blobs\/[a-f0-9]{64}\.(png|jpg|jpeg|gif|webp)$/;
@@ -18,17 +19,10 @@ const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 async function readAsDataUrl(deviceId: string, url: string): Promise<string | null> {
   const ext = MAIL_IMAGE.exec(url)?.[1];
   if (!ext) return null;
-  const response = await fetch(buildRemoteMediaUrl({ kind: 'device', deviceId }, url));
-  if (!response.ok) return null;
-  const bytes = await response.arrayBuffer();
-  if (!bytes.byteLength || bytes.byteLength > MAX_IMAGE_BYTES) return null;
-  // The preview accepts only these image data URLs, so the type comes from the address, not the reply.
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
-    reader.onerror = () => resolve(null);
-    reader.readAsDataURL(new Blob([bytes], { type: MIME[ext] }));
-  });
+  const { base64 } = await window.electronAPI.readImageBytes({ url: buildRemoteMediaUrl({ kind: 'device', deviceId }, url) });
+  if (!base64 || base64.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4) return null;
+  // The preview accepts only image data URLs; use the validated address's MIME.
+  return `data:${MIME[ext]};base64,${base64}`;
 }
 
 /**
@@ -37,33 +31,29 @@ async function readAsDataUrl(deviceId: string, url: string): Promise<string | nu
  * the card's own addresses apply.
  */
 export function useRemoteMailImages(deviceId: string | undefined, urls: readonly string[]): ((url: string) => string | undefined) | null {
-  const [loaded, setLoaded] = useState<{ deviceId?: string; byUrl: ReadonlyMap<string, string> }>({ byUrl: new Map() });
-  const requested = useRef<{ deviceId?: string; urls: Set<string> }>({ urls: new Set() });
+  const owner = getDataOwnerGeneration();
+  const [loaded, setLoaded] = useState<{ owner?: DataOwnerGeneration; deviceId?: string; byUrl: ReadonlyMap<string, string> }>({ byUrl: new Map() });
   const wanted = deviceId ? [...new Set(urls.filter((url) => MAIL_IMAGE.test(url)))].sort().join('\n') : '';
   useEffect(() => {
     if (!deviceId || !wanted) return;
-    if (requested.current.deviceId !== deviceId) requested.current = { deviceId, urls: new Set() };
-    const asked = requested.current;
     let active = true;
+    // Each effect owns its reads. A changed image list starts fresh reads through the existing
+    // main-process media cache, so cleanup cannot strand an image as already requested.
     for (const url of wanted.split('\n')) {
-      if (asked.urls.has(url)) continue;
-      asked.urls.add(url);
       void readAsDataUrl(deviceId, url).catch(() => null).then((data) => {
-        // A failed read may be tried again when the card is shown next time.
-        if (!data) { asked.urls.delete(url); return; }
-        if (!active) { asked.urls.delete(url); return; }
+        if (!data || !active || !isDataOwnerGenerationCurrent(owner)) return;
         setLoaded((prev) => {
-          const byUrl = new Map(prev.deviceId === deviceId ? prev.byUrl : []);
+          const byUrl = new Map(prev.owner === owner && prev.deviceId === deviceId ? prev.byUrl : []);
           byUrl.set(url, data);
-          return { deviceId, byUrl };
+          return { owner, deviceId, byUrl };
         });
       });
     }
     return () => { active = false; };
-  }, [deviceId, wanted]);
+  }, [owner, deviceId, wanted]);
   const resolve = useCallback(
-    (url: string) => (loaded.deviceId === deviceId ? loaded.byUrl.get(url) : undefined),
-    [loaded, deviceId],
+    (url: string) => (loaded.owner === owner && loaded.deviceId === deviceId ? loaded.byUrl.get(url) : undefined),
+    [loaded, owner, deviceId],
   );
   return deviceId ? resolve : null;
 }

@@ -110,6 +110,21 @@ describe('remote plugin cards', () => {
     expect(api.ghosts.getRemoteCard).toHaveBeenCalledTimes(4);
   });
 
+  // #11099 review: default lookups reuse misses (including permanent null); explicit user
+  // retry must re-read immediately. Prior tests only exercised recovery via host notices. Unit.
+  it.each([true, false])('explicit retry bypasses a cached miss (failed=%s)', async (failed) => {
+    const { api } = stubApi();
+    api.ghosts.getRemoteCard.mockResolvedValueOnce({ card: null, ...(failed ? { failed: true } : {}) } as never);
+    ensureRemoteCard('host', 'session', 'retry');
+    await flush();
+    ensureRemoteCard('host', 'session', 'retry');
+    expect(api.ghosts.getRemoteCard).toHaveBeenCalledTimes(1);
+    ensureRemoteCard('host', 'session', 'retry', { force: true });
+    await flush();
+    expect(getGhostCardEntry('retry')).toMatchObject({ status: 'ready', html: '<p>retry</p>' });
+    expect(api.ghosts.getRemoteCard).toHaveBeenCalledTimes(2);
+  });
+
   it('sends remote clicks to the task computer with its card version and translated model choices', async () => {
     const { api } = stubApi();
     ensureRemoteCard('host', 'session', 'call');

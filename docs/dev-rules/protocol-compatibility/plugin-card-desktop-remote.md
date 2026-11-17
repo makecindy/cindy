@@ -32,12 +32,17 @@
 `plugin-results` invoke（与手机相同的 `formChange`、`formValues`、`formKey`）；放大查看的侧栏
 同样从卡片库读这张远程卡，邮件链接解析出的草稿（`draftCallId`）也在远程任务里打开同一编辑器。
 
+附件上传的本机 IPC 接收目标电脑 id，校验后用 `withAgentNetMediaTarget` 绑定既有加密媒体路由；
+选择框打开期间关闭该电脑控制时仍拒绝上传。仅修改控制端本机 IPC，不改变中转 wire。
+
 附件：宿主声明 `mailUpload` 时，控制端用本机文件选择器选文件，经现有附件中转上传（16 MiB），
 只把带 size／SHA-256 的中转引用和文件名作为 `input.mailAttachment` 随 `mail:attach:<key>` 提交，
 本机文件路径不出本机；本机 IPC `ghosts:card:remote-mail-attachment` 只在控制端进程内使用。
 宿主未声明时不显示附件按钮。正文与附件预览里的图片（`cindy-media://blobs/…`）只在任务所在电脑，
 控制端只为卡片数据里已校验的内容地址经既有 `cindy-remote-media://` 读取字节，转成 `data:` URL
-交给邮件预览；保存的正文仍是 `cid:` 引用。插入内嵌图片按钮本就不出现在卡片上，远程不支持。
+交给邮件预览；字节经主进程的 `readImageBytes` 读取，不从 renderer fetch 自定义协议，
+避免主窗口 `connect-src` 拦截。图片列表变化时由新 effect 读取当前集合，旧 effect 的迟到结果丢弃，
+不保留会阻止补读的 requested 标记。保存的正文仍是 `cid:` 引用。插入内嵌图片按钮本就不出现在卡片上，远程不支持。
 
 只需控制端升级：支持手机邮件卡的宿主已经提供上述数据与动作，不新增 wire 字段。
 

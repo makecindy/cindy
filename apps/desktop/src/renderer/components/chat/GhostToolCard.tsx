@@ -996,7 +996,7 @@ function GhostCardCanvas({
             if (!remoteSource) return dispatchGhostCardAction(callId,
               `mail:${inline ? 'image' : 'attach'}:${mail.key}`, { formValues: formState.current.values }).then(r => r.ok);
             // The file is chosen and uploaded on this computer; only its transfer reference goes over.
-            const picked = await window.electronAPI.ghosts.uploadRemoteMailAttachment();
+            const picked = await window.electronAPI.ghosts.uploadRemoteMailAttachment(remoteSource.deviceId);
             if (!picked.ok) return false;
             if (!picked.attachment) return true;
             return dispatchGhostCardAction(callId, `mail:attach:${mail.key}`,
