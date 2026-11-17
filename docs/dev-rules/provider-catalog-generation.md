@@ -82,7 +82,8 @@ Server Registry 与运行时二进制未修改；原生订阅的账号准入仍�
 它成为 Sol 家族最近的一代；没有对应的 API 记录时，中转上的未来型号会改为继承 Registry 的
 1,050,000 公共容量，而不是 API 记录的 272,000 工作窗口。为保持这条继承约定，只为官方
 `https://api.openai.com/v1` 端点补入一条 `gpt-6.2-sol` 记录：执行参数与工作窗口同 GPT-6.1 Sol
-记录，价格取[官方型号页](https://developers.openai.com/api/docs/models/gpt-6.2-sol)，来源记在
+记录，另写 `contextWindowMax: 1050000`（官方容量），否则已核实的 272,000 会被当作硬上限，用户设置的
+更大任务预算会被夹紧；价格取[官方型号页](https://developers.openai.com/api/docs/models/gpt-6.2-sol)，来源记在
 `supplementalSources`。其它供应商、订阅端点和 GPT-6.2 Astra 未补记录（Astra 的 API 记录本就是
 1,050,000，行为不变）；Pi 上游发布后以上游资料为准。该记录未用 API Key 实测推理。
 

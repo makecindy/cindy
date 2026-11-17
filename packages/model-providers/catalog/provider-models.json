@@ -31613,6 +31613,7 @@
         "name": "GPT-6.2 Sol",
         "upstream": "https://api.openai.com/v1",
         "contextWindow": 272000,
+        "contextWindowMax": 1050000,
         "maxOutput": 128000,
         "modalities": {
           "input": [
