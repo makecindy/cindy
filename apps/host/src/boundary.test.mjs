@@ -575,6 +575,7 @@ test('25b: a login whose commit failed releases every lock, and the next login g
     const bounded = (promise, label) => {
       let timer;
       return Promise.race([promise, new Promise((_resolve, reject) => {
+        // real-wait: a deadline, not a wait; it fires only when a leaked lock blocks the login and is cleared otherwise.
         timer = setTimeout(() => reject(new Error(`${label} is still waiting for a lock after 8 s`)), 8_000);
       })]).finally(() => clearTimeout(timer));
     };
