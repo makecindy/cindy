@@ -93,13 +93,13 @@ export function createHostServer(input) {
   const ownerRequests = new Set();
   let logoutFlight;
   let authDrain;
-  const cancelPendingAuth = () => authDrain ??= Promise.resolve().then(() => deps.cancelPendingAuth?.());
+  const cancelPendingAuth = () => authDrain ??= Promise.resolve().then(() => deps.cancelPendingAuth?.())
+    .finally(() => { authDrain = undefined; });
   const unsubscribeSessions = deps.webAuth.onSessionRevoke?.(caller => deps.releaseAuthCaller?.(caller));
   const logout = () => {
     if (logoutFlight) return logoutFlight;
-    // Revoke browser streams immediately and drain existing database callers
+    // Keep browser pairing while draining existing database callers
     // before the owner runtime closes. Concurrent sign-out clicks share a result.
-    deps.webAuth.clear();
     deps.platformClient?.()?.close();
     logoutFlight = cancelPendingAuth().then(() => Promise.all([...ownerRequests])).then(() => deps.logout())
       .finally(() => { logoutFlight = undefined; });
@@ -142,7 +142,7 @@ export function createHostServer(input) {
         return;
       }
       const ownerRequest = (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/auth/') && url.pathname !== '/api/me')
-        || ['/control/platform', '/control/remote', '/events', '/chat', '/sessions', '/plugins'].includes(url.pathname) || url.pathname.startsWith('/sessions/');
+        || ['/control/platform', '/control/remote', '/chat', '/sessions', '/plugins'].includes(url.pathname) || url.pathname.startsWith('/sessions/');
       if (ownerRequest) {
         if (ownerPaused || logoutFlight || deps.isOwnerReady?.() === false) {
           send(response, 409, { error: 'owner_runtime_unavailable' }); return;
@@ -230,9 +230,12 @@ export function createHostServer(input) {
           send(response, 401, { error: 'unauthorized' }); return;
         }
         const body = await readJson(request);
+        if (url.pathname === '/api/auth/login-action' && (logoutFlight || stopping)) {
+          send(response, 409, { error: 'owner_runtime_unavailable' }); return;
+        }
         if (url.pathname === '/api/auth/logout') {
           const result = await logout();
-          send(response, 200, result, { 'set-cookie': 'cindy_host_web=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
+          send(response, 200, result);
           return;
         }
         const caller = deps.webAuth.caller?.(request.headers.cookie)
@@ -267,20 +270,26 @@ export function createHostServer(input) {
         response.write(': connected\n\n');
         response.flush?.();
 
+        // Signed-out controllers need auth changes, never owner data or replay.
+        const ownerEventsVisible = () => !ownerPaused && !logoutFlight && deps.isOwnerReady?.() !== false;
+        const initiallyVisible = ownerEventsVisible();
+        let hiddenEvents = false;
+        const visible = event => event.type === 'auth_changed' || ownerEventsVisible();
         const sinceHeader = request.headers['last-event-id'];
         const sinceQuery = url.searchParams.get('since') ?? url.searchParams.get('lastEventId') ?? url.searchParams.get('after');
         const sinceVal = sinceHeader ?? sinceQuery;
         if (versioned) {
-          const replay = deps.events.replay({ since: sinceVal, runtime: url.searchParams.get('runtime') });
+          const replay = deps.events.replay(initiallyVisible
+            ? { since: sinceVal, runtime: url.searchParams.get('runtime') } : {});
           const { events, ...cursor } = replay;
           response.write(`data: ${JSON.stringify({ type: 'host_stream', phase: 'start', ...cursor })}\n\n`);
-          for (const item of events) response.write(`id: ${item.seq}\ndata: ${JSON.stringify(item)}\n\n`);
+          for (const item of events.filter(visible)) response.write(`id: ${item.seq}\ndata: ${JSON.stringify(item)}\n\n`);
           response.write(`data: ${JSON.stringify({ type: 'host_stream', phase: 'ready', ...cursor })}\n\n`);
-        } else if (sinceVal !== null && sinceVal !== undefined && sinceVal !== '') {
+        } else if (initiallyVisible && sinceVal !== null && sinceVal !== undefined && sinceVal !== '') {
           const sinceSeq = parseInt(sinceVal, 10);
           if (!Number.isNaN(sinceSeq) && typeof deps.events.getEventsSince === 'function') {
             const missed = deps.events.getEventsSince(sinceSeq);
-            for (const item of missed) {
+            for (const item of missed.filter(visible)) {
               const idLine = item.seq != null ? `id: ${item.seq}\n` : '';
               response.write(`${idLine}data: ${JSON.stringify(item)}\n\n`);
             }
@@ -291,6 +300,12 @@ export function createHostServer(input) {
         const unsubscribe = deps.events.subscribe((event) => {
           if (response.writableEnded) return;
           if (!isWebAuthorized(request, deps)) { response.end(); return; }
+          // Resume with the existing snapshot handshake instead of creating a cursor gap.
+          if (ownerEventsVisible() !== initiallyVisible || (hiddenEvents && event.type === 'auth_changed')) {
+            response.end(); return;
+          }
+          if (event.type === 'auth_changed') syncController();
+          if (!visible(event)) { hiddenEvents = true; return; }
           const idLine = event.seq != null ? `id: ${event.seq}\n` : '';
           response.write(`${idLine}data: ${JSON.stringify(event)}\n\n`);
           response.flush?.();
@@ -300,12 +315,21 @@ export function createHostServer(input) {
         // resurrect an old permission dialog.
         const confirmationCaller = deps.webAuth.caller?.(request.headers.cookie)
           ?? (isAuthorized(request.headers.authorization, deps.token) ? `local-api:${deps.instanceId}` : null);
-        const disconnectController = confirmationCaller && versioned && url.searchParams.get('confirmations') === '1' ? deps.connectController?.(confirmationCaller, event => {
-          if (response.writableEnded || response.destroyed || response.writableLength > HOST_PROMPT_BUFFER_BYTES || !isWebAuthorized(request, deps)) return false;
-          const written = response.write(`data: ${JSON.stringify({ type: 'host_prompt', channel: event.channel, payload: event.payload })}\n\n`);
-          response.flush?.();
-          return written || response.writableLength === 0;
-        }) : undefined;
+        let disconnectController;
+        const syncController = () => {
+          const allowed = confirmationCaller && versioned && url.searchParams.get('confirmations') === '1'
+            && visible({ type: 'host_prompt' });
+          // Periodic auth refresh must not cancel an existing confirmation.
+          if (allowed && disconnectController) return;
+          disconnectController?.();
+          disconnectController = allowed ? deps.connectController?.(confirmationCaller, event => {
+              if (!visible({ type: 'host_prompt' }) || response.writableEnded || response.destroyed || response.writableLength > HOST_PROMPT_BUFFER_BYTES || !isWebAuthorized(request, deps)) return false;
+              const written = response.write(`data: ${JSON.stringify({ type: 'host_prompt', channel: event.channel, payload: event.payload })}\n\n`);
+              response.flush?.();
+              return written || response.writableLength === 0;
+          }) : undefined;
+        };
+        syncController();
         const keepAlive = setInterval(() => {
           if (response.writableEnded) return;
           if (!isWebAuthorized(request, deps)) { response.end(); return; }
@@ -416,11 +440,10 @@ export function createHostServer(input) {
     ownerPaused = true;
     deps.platformClient?.()?.close();
     for (const socket of platformSockets.clients) socket.terminate();
-    deps.webAuth.clear();
     return Promise.all([cancelPendingAuth(), Promise.allSettled([...ownerRequests])]);
   };
   server.once('close', () => unsubscribeSessions?.());
-  return Object.assign(server, { stopAccepting, pauseOwnerRequests });
+  return Object.assign(server, { stopAccepting, pauseOwnerRequests, resumeOwnerRequests: () => { ownerPaused = false; } });
 }
 
 /** Bound request memory before parsing; aborted requests must not hang forever. */

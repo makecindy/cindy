@@ -84,3 +84,28 @@ profile 所有权迁移或开启日常桌面迁移。实现与验证边界见
   `CONNECTION_TIMEOUT`。`maker:session-background-tasks:list` 内嵌时不校验发送方，客户端模式按
   已登记应用窗口校验（主窗口、副窗口、右侧栏窗口都已登记），子 frame 与外部页面被拒。
 - 不改变 Device Link 帧、relay、官方或自建中转 API，没有新增需要中转识别的字段。
+
+## 独立 Host 网页账号登录（#10600，未发布）
+
+共享合同新增 `auth:get-login-state` / `auth.getLoginState` → `POST /api/auth/login-state`，
+以及 `auth:dispatch-login-action` / `auth.dispatchLoginAction` → `POST /api/auth/login-action`。
+后者请求体为 `{ action }`，只接受传输认证得到的 controller；body 中的 caller 没有权限。
+结果沿用 `DesktopLoginActionResult`，启动浏览器授权时额外返回 `authorizeUrl`；仅网页 shim
+负责在当前浏览器打开它，并在等待期间每秒串行读取登录状态，直到完成、取消、失败或离页。
+Host 复用托管回调的 1 秒／2 秒退避、5 分钟期限，PKCE、pollSecret 与各类 ticket 只留在 Host。
+
+`/api/auth/logout` 和账号过期不再撤销 `cindy_host_web` 配对，也不要求回 `/connect`。
+`/events` 允许已配对但尚无 owner 的连接；未就绪、暂停或登出期间，只放行 `auth_changed`，
+历史重放、实时 owner 事件和定向确认均仍受就绪门约束。登录成功清空旧事件历史后推送
+`auth_changed`；本进程不允许切换另一 owner。Host 重启与配对到期语义不变。
+
+不新增游标帧：未就绪的 protocol=2 连接使用既有 `initial` 快照握手，不重放 owner 历史；
+旧版 `getEventsSince` 路径也不重放。可见性改变，或隐藏事件后出现可见账号事件时，Host
+结束 SSE，客户端按现有重连流程先重读账号状态，再用快照握手恢复游标，避免过滤造成
+序号缺口。仅隐藏事件不结束连接，未登录空闲不轮询 `/events`。旧客户端只收到已有帧和
+正常 EOF，无需理解新协议；共享解码器、Mobile 和 Device Link 协议均未改动。
+
+
+该增量面向随 Host 配套提供的网页 shim；旧 Host 不支持新增路径，旧 shim 仍无法网页登录。
+现有 Desktop 普通启动不受影响，不声明已支持 Host 桌面客户端的浏览器授权交接。
+回归入口：`apps/host/src/auth/login.test.mjs`、`server.test.mjs`、`web-shim.test.mjs`。

@@ -66,7 +66,7 @@ describe('Host main.ts wiring', () => {
 
   // 规则：Host 建的每个 Cindy 账号客户端都经 hostAuthFetch（出口代理）。失效后果：账号请求绕过出口代理。
   it('builds every Cindy auth client on hostAuthFetch', () => {
-    for (const [file, count] of [['main.ts', 2], ['login-cli.mjs', 1]] as const) {
+    for (const [file, count] of [['main.ts', 3], ['login-cli.mjs', 1]] as const) {
       const source = read(path.join(hostSrc, file));
       assert.equal(source.split('new CindyAuthClient(').length - 1, count, file);
       assert.equal(source.split('fetch: (input, init) => hostAuthFetch(input, init),').length - 1, count, file);

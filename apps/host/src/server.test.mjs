@@ -10,6 +10,7 @@ import { createPlatformClientBridge } from './platform/client-bridge.ts';
 import { createHostPlatformRpc } from '@cindy/maker-shared/host-platform-rpc';
 
 import { createHostServer } from './server.mjs';
+import { createEventHub } from './events.mjs';
 
 const TOKEN = 'test-token-value';
 
@@ -250,18 +251,18 @@ test('expired browser sessions release only their own authenticated controller',
 
 // Account teardown must not close storage underneath another request or accept
 // more private work while two clients are concurrently signing out.
-test('logout drains owner requests, revokes streams and serializes concurrent callers', async (t) => {
+test('logout drains owner requests, keeps pairing and serializes concurrent callers', async (t) => {
   let enter;
   let release;
   const entered = new Promise(resolve => { enter = resolve; });
   const blocked = new Promise(resolve => { release = resolve; });
   let signOuts = 0;
-  let revoked;
-  const revocation = new Promise(resolve => { revoked = resolve; });
+  let cancelled;
+  const cancellation = new Promise(resolve => { cancelled = resolve; });
   const webAuth = createWebAuth();
-  webAuth.onRevoke(revoked);
   const request = await withServer(t, {
     webAuth,
+    cancelPendingAuth: () => { cancelled(); },
     listSessions: async () => { enter(); await blocked; return []; },
     logout: () => { signOuts++; return { signedOut: true }; },
   });
@@ -270,7 +271,7 @@ test('logout drains owner requests, revokes streams and serializes concurrent ca
   const pending = request('/sessions', { headers });
   await entered;
   const first = request('/logout', { method: 'POST', headers });
-  await revocation;
+  await cancellation;
   const second = request('/logout', { method: 'POST', headers });
   assert.equal((await request('/sessions', { headers })).status, 409);
   assert.equal(signOuts, 0);
@@ -427,7 +428,7 @@ test('browser pairing gates boot data, cookies and API access', async (t) => {
   assert.equal((await request('/api/sessions/list', { method: 'POST', headers: { cookie, origin: 'https://evil.example' } })).status, 403);
   assert.equal((await request('/sessions', { headers: { host: 'evil.example', authorization: `Bearer ${TOKEN}` } })).status, 403);
   await request('/logout', { method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } });
-  assert.equal((await request('/api/sessions/list', { method: 'POST', headers: { cookie } })).status, 401);
+  assert.equal((await request('/api/sessions/list', { method: 'POST', headers: { cookie } })).status, 200);
 });
 
 test('expired pairing codes and browser sessions cannot authorize a client', () => {
@@ -455,7 +456,7 @@ test('remote control changes require the local profile bearer and current instan
   assert.equal(reply.status, 200); assert.equal(reply.body.action, 'enable'); assert.equal(called, 1);
 });
 
-test('expired-account boundary revokes browser access and drains admitted writes', async t => {
+test('expired-account boundary keeps pairing and drains admitted writes', async t => {
   let release, entered;
   const gate = new Promise(resolve => { release = resolve; });
   const started = new Promise(resolve => { entered = resolve; });
@@ -471,7 +472,7 @@ test('expired-account boundary revokes browser access and drains admitted writes
   let drained = false;
   const pause = server.pauseOwnerRequests().then(() => { drained = true; });
   await Promise.resolve(); assert.equal(drained, false);
-  assert.equal(webAuth.accepts(`cindy_host_web=${cookie}`), false);
+  assert.equal(webAuth.accepts(`cindy_host_web=${cookie}`), true);
   assert.equal((await fetch(`${base}/sessions`, { headers: { authorization: `Bearer ${TOKEN}` } })).status, 409);
   assert.equal((await fetch(`${base}/web/pair`, { method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } })).status, 409);
   release(); await first; await pause;
@@ -505,3 +506,76 @@ for (const boundary of ['logout', 'expired-owner', 'stop']) {
     assert.equal(bridge.status().waiting, 0);
   });
 }
+
+// #10600: a paired signed-out browser must receive auth changes, while replay
+// and live traffic must not disclose owner events before the runtime is ready.
+test('signed-out event subscriptions reset cursors without replaying hidden owner events', { timeout: 5000 }, async t => {
+  const events = createEventHub();
+  events.publish({ type: 'session_changed', secret: 'old-owner-replay' });
+  let ready = false;
+  let controllerAttachments = 0;
+  const webAuth = createWebAuth();
+  const cookie = `cindy_host_web=${webAuth.exchange(webAuth.pair())}`;
+  const server = createHostServer({ token: TOKEN, events, webAuth, isOwnerReady: () => ready,
+    connectController: () => { controllerAttachments++; return () => {}; },
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const abort = new AbortController();
+  t.after(() => { abort.abort(); server.closeAllConnections(); server.close(); });
+  async function open() {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/events?protocol=2&confirmations=1&since=0&runtime=${events.replay({}).runtime}`, { headers: { cookie }, signal: abort.signal });
+    assert.equal(response.status, 200);
+    const reader = response.body.getReader();
+    let text = '';
+    const through = async marker => {
+      while (!text.includes(marker)) {
+        const { value, done } = await reader.read();
+        assert.equal(done, false); text += new TextDecoder().decode(value);
+      }
+      return text;
+    };
+    const initial = await through('"phase":"ready"');
+    return { reader, through, initial };
+  }
+  const signedOut = await open();
+  assert.equal(signedOut.initial.includes('old-owner-replay'), false);
+  assert.equal(controllerAttachments, 0);
+  events.publish({ type: 'session_changed', secret: 'unready-live' });
+  events.publish({ type: 'auth_changed', marker: 'live-auth' });
+  assert.equal((await signedOut.reader.read()).done, true);
+  const refreshed = await open();
+  assert.equal(refreshed.initial.includes('unready-live'), false);
+  ready = true;
+  events.clear();
+  events.publish({ type: 'auth_changed', marker: 'ready-auth' });
+  assert.equal((await refreshed.reader.read()).done, true);
+  const signedIn = await open();
+  assert.equal(controllerAttachments, 1);
+  events.publish({ type: 'session_changed', marker: 'ready-live' });
+  await signedIn.through('ready-live');
+  events.publish({ type: 'auth_changed', marker: 'refreshed-auth' });
+  await signedIn.through('refreshed-auth');
+  assert.equal(controllerAttachments, 1);
+  ready = false;
+  events.publish({ type: 'session_changed', secret: 'expired-live' });
+  assert.equal((await signedIn.reader.read()).done, true);
+});
+
+test('web login actions derive their controller from pairing and logout keeps that pairing', async t => {
+  const webAuth = createWebAuth();
+  const cookie = `cindy_host_web=${webAuth.exchange(webAuth.pair())}`;
+  const calls = [];
+  const request = await withServer(t, { webAuth, isOwnerReady: () => false,
+    getLoginState: () => ({ success: true, state: { step: 'identifier' } }),
+    dispatchLoginAction: (action, caller) => { calls.push({ action, caller }); return { success: true }; },
+  });
+  const init = { method: 'POST', headers: { cookie }, body: JSON.stringify({ action: { type: 'reset' }, caller: 'forged' }) };
+  assert.equal((await request('/api/auth/login-action', { ...init, headers: {} })).status, 401);
+  assert.equal((await request('/api/auth/login-state', init)).body.state.step, 'identifier');
+  assert.equal((await request('/api/auth/login-action', init)).status, 200);
+  assert.deepEqual(calls, [{ action: { type: 'reset' }, caller: webAuth.caller(cookie) }]);
+  const logout = await request('/api/auth/logout', { ...init, body: '{}' });
+  assert.equal(logout.status, 200);
+  assert.equal(logout.headers.get('set-cookie'), null);
+  assert.equal((await request('/api/auth/login-state', init)).status, 200);
+});

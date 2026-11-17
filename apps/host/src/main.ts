@@ -98,6 +98,10 @@ import type { Effort, PermissionMode } from '@cindy/maker-core';
 import { createRequire } from 'node:module';
 import { readAuthEndpoints } from './auth/endpoints.mjs';
 import { logoutHostSession } from './auth/logout.mjs';
+import { createHostWebLogin } from './auth/web-login.js';
+import { getOrCreateHostDeviceId } from './auth/device-identity.mjs';
+import { restoreDeviceLinkRegistration } from './auth/device-link-registration.mjs';
+import { persistHostLoginSession } from './auth/login.mjs';
 import { listInstalledPlugins } from './plugins.mjs';
 import { createHostGhostManager } from './plugins-installed.ts';
 import { initializeHostPluginRemoteAuthorization } from './plugins/remote-authorization.js';
@@ -362,6 +366,8 @@ let remoteIdentityReady = false;
 let currentDeviceId: string | null = null;
 let deviceLink: ReturnType<typeof createHostDeviceLink> | null = null;
 let activeOwner: string | null = null;
+// Signing out does not permit switching this running process to another owner.
+let signedInOwner: string | null = null;
 let closeStorage: (() => Promise<void>) | null = null;
 let sessionStorage: OwnerSessionStorage | null = null;
 let runtimeLease: HostRuntimeLease | null = null;
@@ -422,8 +428,9 @@ function invalidateHostSession(_reason: string): Promise<void> {
       commitVolatileAppSession('signed-out', null, true);
       release();
       runtime.state = 'uninitialized'; runtime.owner = null; runtime.storage = 'unopened';
-      runtime.detail = 'Sign-in expired. Stop the Host, sign in again, then start it.';
+      runtime.detail = 'Sign-in expired.';
       eventHub.clear();
+      eventHub.publish({ type: 'auth_changed', ...projectAuthState() });
     }
   }).finally(() => { invalidation = null; });
   return invalidation;
@@ -497,13 +504,13 @@ let account: { authenticated: boolean; realm: string | null; error?: string } = 
  * Initialize storage only after verifying the signed-in membership. An explicit
  * owner selects a profile; it is never evidence of a successful login.
  */
-async function ensureRuntime(ownerId: string): Promise<void> {
+async function ensureRuntime(ownerId: string, heldLease?: HostRuntimeLease): Promise<void> {
   if (activeOwner !== null) {
     if (activeOwner === ownerId) return;
     throw new Error('owner switch is not supported while the host is running');
   }
   const dataDir = resolveHostDataDir();
-  const lease = acquireHostRuntimeLease(dataDir, ownerId);
+  const lease = heldLease ?? acquireHostRuntimeLease(dataDir, ownerId);
   if (!lease.held) {
     runtime.state = 'blocked';
     runtime.owner = ownerId;
@@ -812,6 +819,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   }
   await plugins.reconcile();
   await pluginGateway.refresh();
+  signedInOwner = ownerId;
+  runtime.detail = undefined;
   runtime.state = 'ready';
 }
 
@@ -1139,6 +1148,77 @@ const ipcRoute = createHostIpcRoute({
   log: event => (event.outcome === 'ok' ? ipcLog.debug('ipc call', event) : ipcLog.warn('ipc call', event)),
 });
 
+async function activateAccountRuntime(ownerId: string, lease?: HostRuntimeLease): Promise<void> {
+  await ensureRuntime(ownerId, lease);
+  authClosed = false;
+  server.resumeOwnerRequests();
+  startDeviceLink();
+  if (account.authenticated) schedulePeriodicRefresh();
+  eventHub.clear();
+  eventHub.publish({ type: 'auth_changed', ...projectAuthState() });
+}
+
+let webLogin: Promise<ReturnType<typeof createHostWebLogin>> | null = null;
+function getWebLogin() {
+  return webLogin ??= (async () => {
+    const realm = resolveHostRegion() as 'cn' | 'global';
+    const endpoints = readAuthEndpoints(realm);
+    const hostedCallbackUrl = endpoints.authDesktopCallbackUrl;
+    const deviceLinkApiBaseUrl = endpoints.deviceLinkApiBaseUrl;
+    if (!hostedCallbackUrl) throw new Error('Host web login requires a hosted authorization callback');
+    const store = await createCredentialStore({ userDataDir: resolveHostDataDir(),
+      keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined });
+    const deviceId = getOrCreateHostDeviceId(resolveHostDataDir());
+    const client = new CindyAuthClient({
+      baseUrl: endpoints.authApiBaseUrl,
+      region: realm,
+      deviceId,
+      clientType: 'desktop',
+      fetch: (input, init) => hostAuthFetch(input, init),
+    });
+    return createHostWebLogin({ client, region: realm, hostedCallbackUrl,
+      registerDeviceLink: deviceLinkApiBaseUrl ? async token => {
+        const registration = await restoreDeviceLinkRegistration({ apiBaseUrl: deviceLinkApiBaseUrl, token, version: layout.version });
+        if (registration !== 'registered') console.warn('[host] Device Link registration after web sign-in failed');
+      } : undefined,
+      complete: async (outcome, signal, activate) => {
+        await startup;
+        if (shuttingDown) throw new Error('Host is stopping');
+        const me = await client.getMe(outcome.accessToken);
+        signal.throwIfAborted();
+        const ownerId = me.membership.id;
+        if (ownerId !== outcome.membership.id || (signedInOwner && signedInOwner !== ownerId)) {
+          throw new Error('owner switch is not supported while the host is running');
+        }
+        if (account.authenticated) throw new Error('Host is already signed in');
+        const lease = acquireHostRuntimeLease(resolveHostDataDir(), ownerId);
+        if (!lease.held) throw new Error('Another process owns this Host profile');
+        try {
+          await withCrossProcessLock(path.join(resolveHostDataDir(), '.cindy-auth-accounts-v1.lock'),
+            { label: 'auth-account-vault', waitMs: 5000 }, async lock => {
+              if (!lock.held) throw new Error('Saved account credentials are busy; retry login');
+              signal.throwIfAborted();
+              persistHostLoginSession({ store, region: realm, refreshToken: outcome.refreshToken, deviceId });
+            });
+          await activate(async () => {
+            currentSessionToken = outcome.accessToken;
+            currentDeviceId = deviceId;
+            remoteIdentityReady = true;
+            accountUser = { ...mapMembershipToAuthUser(me.membership, me.passportId), orgSlug: decodeAccessTokenOrgSlug(outcome.accessToken) };
+            account = { authenticated: true, realm };
+            await activateAccountRuntime(ownerId, lease);
+          });
+        } catch (error) {
+          if (runtimeLease !== lease) lease.release();
+          await disposeOwnerRuntime();
+          commitVolatileAppSession('signed-out', null, true);
+          throw error;
+        }
+      },
+    });
+  })().catch(error => { webLogin = null; throw error; });
+}
+
 const serverDeps = {
   ipcRoute,
   browserBackend: (handler: keyof NonNullable<typeof platformTools>['browserSettings'], payload: unknown) => {
@@ -1163,6 +1243,7 @@ const serverDeps = {
   // it boots with is the same one the Desktop renders — never a host-side copy.
   bootValues: () => {
     const profile = currentProfileSettings();
+    const auth = projectAuthState();
     return {
       appVersion: layout.version,
       platform: process.platform,
@@ -1170,9 +1251,7 @@ const serverDeps = {
       locale: Intl.DateTimeFormat().resolvedOptions().locale,
       voiceInput: profile.voiceInput,
       harness: harnessStatus(),
-      auth: account.authenticated && accountUser
-        ? { user: accountUser, ownerId: runtime.owner }
-        : {},
+      auth: { user: auth.user, ownerId: auth.dataOwnerId, ownerGeneration: auth.ownerGeneration },
       appearance: profile.appearance,
       layout: profile.layout,
       sidebar: profile.sidebar,
@@ -1235,6 +1314,13 @@ const serverDeps = {
     user: accountUser,
   }),
   getAuthState: async () => { await startup; return projectAuthState(); },
+  getLoginState: async () => (await getWebLogin()).getLoginState(),
+  dispatchLoginAction: async (action: unknown, caller: string) => {
+    await startup;
+    if (invalidation) await invalidation;
+    if (shuttingDown || account.authenticated) throw new Error('Host login is unavailable');
+    return (await getWebLogin()).dispatchLoginAction(action, caller);
+  },
   agentAuthState: async (kind: 'claude-code' | 'codex' | 'pi') => {
     if (!HARNESS_KINDS.includes(kind)) throw new Error('Invalid agent kind');
     if (!agentGraph?.instances[kind]) return { authenticated: false, errorReason: 'runtime_unavailable' };
@@ -1248,13 +1334,15 @@ const serverDeps = {
     if (!agentAuth) throw new Error('Agent runtime is unavailable');
     return agentAuth.invoke(channel, args, caller);
   },
-  releaseAuthCaller: (caller: string) => { agentAuth?.releaseCaller(caller); hostConfirmations?.cancelCaller(caller); },
+  releaseAuthCaller: (caller: string) => { agentAuth?.releaseCaller(caller); hostConfirmations?.cancelCaller(caller);
+    void webLogin?.then(login => login.releaseCaller(caller)); },
   connectController: (caller: string, send: Parameters<NonNullable<typeof hostConfirmations>['connect']>[1]) =>
     hostConfirmations?.connect(caller, send),
   resolvePluginConfirmation: (caller: string, kind: 'confirm' | 'install', requestId: string, confirmed: boolean) =>
     hostConfirmations?.resolve(caller, kind, requestId, confirmed) ?? false,
   cancelPendingAuth: async () => {
     agentAuth?.close();
+    await (await webLogin)?.cancel();
     await providerConfig?.cancelLogins();
   },
   listRunningSessions: (options: unknown) => listRunningSessions(agentGraph?.maker, options),
@@ -1963,9 +2051,8 @@ server.listen(PORT, '127.0.0.1', () => {
       accountUser = initialUser;
       account = { authenticated: true, realm: account.realm };
     }
-    await ensureRuntime(owner);
-    startDeviceLink();
-    if (account.authenticated) { schedulePeriodicRefresh(); return; }
+    await activateAccountRuntime(owner);
+    if (account.authenticated) return;
     const state = await readAdoptedSessionState({
       userDataDir: resolveHostDataDir(),
       keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,

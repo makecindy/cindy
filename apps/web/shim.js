@@ -83,28 +83,96 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
    * files through the host, which is why this is a mirror and not a store.
    */
   const boot = window.__cindyBoot ?? {};
+  const emptySidebar = { pinnedOrder: [], hiddenProjectKeys: [], hiddenMainViewGhostIds: [] };
+  const emptyVoiceInput = { settings: {}, history: [] };
   const settingsMirror = {
     appearance: boot.appearance ?? {},
     layout: boot.layout ?? null,
     analytics: boot.analytics ?? {},
     appShortcuts: boot.appShortcuts ?? { overrides: {}, platform: 'linux' },
-    sidebar: boot.sidebar ?? { pinnedOrder: [], hiddenProjectKeys: [], hiddenMainViewGhostIds: [] },
-    voiceInput: boot.voiceInput ?? { settings: {}, history: [] },
+    sidebar: boot.sidebar ?? emptySidebar,
+    voiceInput: boot.voiceInput ?? emptyVoiceInput,
   };
   const ownerStamp = () => ({
-    dataOwnerId: boot.auth?.ownerId ?? null,
-    ownerGeneration: 1,
+    dataOwnerId: window.__cindyBoot?.auth?.ownerId ?? null,
+    ownerGeneration: window.__cindyBoot?.auth?.ownerGeneration ?? 0,
   });
+  const sameOwner = (a, b) => (a.dataOwnerId ?? null) === (b.dataOwnerId ?? null)
+    && (a.ownerGeneration ?? 0) === (b.ownerGeneration ?? 0);
+  let ownerSettingsReady = true;
+  let ownerSettingsLoad = null;
+  let ownerSettingsChanged = false;
+
+  function invalidateOwnerSettings() {
+    syncSnapshots.delete('sidebarSettings.loadSnapshot\u0000[]');
+    syncSnapshots.delete('voiceInput.getDataSnapshot\u0000[]');
+  }
+  function notifySidebarChanged(sidebar) {
+    const stamp = ownerStamp();
+    emit('sidebarSettings.onPinnedOrderChanged', sidebar.pinnedOrder ?? [], stamp);
+    emit('sidebarSettings.onHiddenProjectKeysChanged', sidebar.hiddenProjectKeys ?? [], stamp);
+    emit('sidebarSettings.onHiddenMainViewGhostIdsChanged', sidebar.hiddenMainViewGhostIds ?? [], stamp);
+  }
+  async function updateAuthState(auth) {
+    const previous = ownerStamp();
+    const changed = !sameOwner(previous, auth);
+    (window.__cindyBoot ??= {}).auth = { user: auth.user, ownerId: auth.dataOwnerId, ownerGeneration: auth.ownerGeneration ?? 0 };
+    if (changed) {
+      ownerSettingsLoad?.abort.abort();
+      ownerSettingsLoad = null;
+      ownerSettingsReady = !auth.dataOwnerId;
+      settingsMirror.sidebar = emptySidebar;
+      settingsMirror.voiceInput = emptyVoiceInput;
+      syncSnapshots.delete('maker.claimLegacyModelVisibilityOwner\u0000[]');
+      invalidateOwnerSettings();
+      ownerSettingsChanged = true;
+    }
+    if (ownerSettingsReady) return true;
+    if (ownerSettingsLoad) return ownerSettingsLoad.promise;
+    // Keep pushes received while the profile read is in flight.
+    const load = { abort: new AbortController(), sidebar: null };
+    ownerSettingsLoad = load;
+    load.promise = (async () => {
+      try {
+        const profile = await requestHost('/api/profile', null, 'POST', load.abort.signal);
+        if (load.abort.signal.aborted) return false;
+        if (!profile?.sidebar || !profile.voiceInput) throw new Error('Host profile is missing owner settings');
+        settingsMirror.sidebar = load.sidebar ?? profile.sidebar;
+        settingsMirror.voiceInput = profile.voiceInput;
+        ownerSettingsReady = true;
+        invalidateOwnerSettings();
+        return true;
+      } catch (error) {
+        if (load.abort.signal.aborted) return false;
+        throw error;
+      } finally {
+        if (ownerSettingsLoad === load) ownerSettingsLoad = null;
+      }
+    })();
+    return load.promise;
+  }
+  async function publishAuthState(auth, signal) {
+    if (!await updateAuthState(auth) || signal?.aborted || !sameOwner(auth, ownerStamp())) return;
+    emit('onAuthStateChange', auth);
+    if (!ownerSettingsChanged) return;
+    ownerSettingsChanged = false;
+    notifySidebarChanged(settingsMirror.sidebar);
+    emit('voiceInput.onDataChanged', settingsMirror.voiceInput);
+  }
   const pinnedOrder = () => Array.from(settingsMirror.sidebar.pinnedOrder ?? []);
   function saveSidebar(next) {
+    const stamp = ownerStamp();
     settingsMirror.sidebar = { ...settingsMirror.sidebar, ...next };
     return rpc('/settings/sidebar/set', { value: settingsMirror.sidebar }).then((saved) => {
+      if (!sameOwner(stamp, ownerStamp())) throw new Error('sidebar settings owner changed');
       if (saved && typeof saved === 'object') settingsMirror.sidebar = saved;
       return settingsMirror.sidebar;
     });
   }
-  function requireOwner() {
+  function requireOwner(expected) {
     if (!ownerStamp().dataOwnerId) throw new Error('sidebar settings require an active account');
+    if (!ownerSettingsReady) throw new Error('sidebar settings are still loading');
+    if (expected && !sameOwner(expected, ownerStamp())) throw new Error('sidebar settings owner changed');
   }
 
   async function requestHost(path, args, method = 'POST', signal) {
@@ -127,6 +195,36 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
 
   const rpc = (path, args) => requestHost(`/api${path}`, args);
   const hostChannels = createHostChannelHandlers(requestHost);
+  let loginOperation = 0;
+  let reservedLoginPopup = null;
+  let loginPageClosed = false;
+  async function dispatchWebLoginAction([action]) {
+    const operation = ++loginOperation;
+    // Reserve a tab during the click, before asynchronous discovery loses user activation.
+    const needsBrowser = action?.type === 'start-browser' || action?.type === 'discover-sso-org';
+    const popup = needsBrowser ? reservedLoginPopup ?? window.open('about:blank', '_blank') : null;
+    if (!needsBrowser) reservedLoginPopup?.close();
+    reservedLoginPopup = null;
+    if (needsBrowser && !popup) {
+      return { success: false, code: 'BROWSER_OPEN_FAILED', state: { step: 'error', code: 'BROWSER_OPEN_FAILED', recoverTo: 'identifier' } };
+    }
+    if (popup) popup.opener = null;
+    try {
+      let result = await hostChannels['auth.dispatchLoginAction']([action]);
+      if (result.authorizeUrl && popup) popup.location = result.authorizeUrl;
+      else if (action?.type === 'discover-sso-org' && result.success && result.state?.step === 'method-choice'
+        && result.state.methods.length === 1 && result.state.methods[0].type === 'sso') {
+        // AuthContext immediately starts a sole SSO method after discovery, outside user activation.
+        reservedLoginPopup = popup;
+      } else popup?.close();
+      while (result.state?.step === 'browser-redirect' && operation === loginOperation && !loginPageClosed) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        if (operation !== loginOperation || loginPageClosed) break;
+        result = await hostChannels['auth.getLoginState']();
+      }
+      return result;
+    } catch (error) { popup?.close(); throw error; }
+  }
 
   /**
    * Frozen singletons for the channels the host answers with a constant.
@@ -420,8 +518,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     'maker.setThinkingEnabled': () => unsupported('maker.setThinkingEnabled'),
     'maker.listDesktopCommands': () => ({ success: true, commands: STATIC.emptyList }),
     'maker.claimLegacyModelVisibilityOwner': () => ({
-      dataOwnerId: window.__cindyBoot?.auth?.ownerId ?? null,
-      ownerGeneration: 1,
+      ...ownerStamp(),
       canWriteOwnerScoped: Boolean(window.__cindyBoot?.auth?.ownerId),
       claimed: false,
       claimedByOtherOwner: false,
@@ -445,7 +542,6 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     'voiceInput.getHistory': () => STATIC.emptyList,
     'voiceInput.getHistoryForRefinement': () => STATIC.emptyList,
     'voiceInput.getModelSelection': () => STATIC.voiceModelSelection,
-    'voiceInput.onDataChanged': () => () => {},
     'accessibilitySupport.getSync': () => false,
     'ghosts.unreadSync': () => STATIC.ghostsUnread,
     'ghosts.recentUsageSync': () => STATIC.ghostRecentUsage,
@@ -494,9 +590,15 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     // The browser cannot create a local identity; querying auth is not entry.
     'authEnterLocal': () => unsupported('authEnterLocal'),
     'authExitLocal': () => routes['authInitialize'](),
-    // The Host exposes no cloud login surface; keep the signed-out entry step.
-    'authGetLoginState': () => ({ success: true, state: { step: 'entry' } }),
-    'authInitialize': () => hostChannels['auth.getState'](),
+    'authGetLoginState': () => hostChannels['auth.getLoginState'](),
+    'authDispatchLoginAction': dispatchWebLoginAction,
+    'authInitialize': async () => {
+      const previous = ownerStamp();
+      const auth = await hostChannels['auth.getState']();
+      const current = ownerStamp();
+      if (sameOwner(previous, current) || sameOwner(auth, current)) await updateAuthState(auth);
+      return auth;
+    },
     'authRefresh': () => hostChannels['auth.refresh'](),
     'checkEnvironment': () => {
       const harness = window.__cindyBoot?.harness ?? {};
@@ -580,13 +682,13 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     // Sidebar identity state comes from owners/<key>/sidebar-settings.json.
     'sidebarSettings.loadSnapshot': () => ({
       ...ownerStamp(),
-      pinnedOrderIsAuthoritative: true,
+      pinnedOrderIsAuthoritative: ownerSettingsReady,
       pinnedOrder: pinnedOrder(),
       hiddenProjectKeys: Array.from(settingsMirror.sidebar.hiddenProjectKeys ?? []),
       hiddenMainViewGhostIds: Array.from(settingsMirror.sidebar.hiddenMainViewGhostIds ?? []),
     }),
     'sidebarSettings.mutatePinnedOrder': async (args) => {
-      requireOwner();
+      requireOwner(args?.[1]);
       const mutation = args?.[0] ?? {};
       let next = pinnedOrder();
       if (mutation.kind === 'reorder' || mutation.kind === 'migrate-legacy') {
@@ -602,7 +704,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
       return order;
     },
     'sidebarSettings.setProjectHidden': async (args) => {
-      requireOwner();
+      requireOwner(args?.[2]);
       const projectKey = typeof args?.[0] === 'string' ? args[0] : '';
       const hidden = args?.[1] === true;
       if (!projectKey) return false;
@@ -615,7 +717,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
       return hidden;
     },
     'sidebarSettings.setMainViewHidden': async (args) => {
-      requireOwner();
+      requireOwner(args?.[2]);
       const ghostId = typeof args?.[0] === 'string' ? args[0] : '';
       const hidden = args?.[1] === true;
       if (!ghostId) return Array.from(settingsMirror.sidebar.hiddenMainViewGhostIds ?? []);
@@ -724,7 +826,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     'authSwitchAccount': () => unsupported('authSwitchAccount'),
     'authBeginAddAccount': () => ({ success: false, code: 'NOT_SUPPORTED', state: null }),
     'authCancelAddAccount': () => undefined,
-    'authLogout': async () => { const result = await hostChannels['auth.logout'](); location.replace('/connect'); return result; },
+    'authLogout': () => hostChannels['auth.logout'](),
     'authGetAccountDeletionAvailability': () => ({ success: true, value: { available: false, reason: 'not_supported' } }),
     'authRequestAccountDeletionChallenge': () => ({ success: false, code: 'NOT_SUPPORTED' }),
     'authConfirmAccountDeletion': () => ({ success: false, code: 'NOT_SUPPORTED' }),
@@ -1004,8 +1106,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
       beforeEvents: async (signal) => {
         const auth = await requestHost('/api/auth/state', null, 'POST', signal);
         if (signal.aborted) return;
-        (window.__cindyBoot ??= {}).auth = { user: auth.user, ownerId: auth.dataOwnerId };
-        emit('onAuthStateChange', auth);
+        await publishAuthState(auth, signal);
       },
       onState: (state) => {
         connectionState = state;
@@ -1017,8 +1118,8 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
         // Interaction traffic has its own preload channels; everything
         // else stays on the shared event stream.
         if (parsed.type === 'auth_changed') {
-          (window.__cindyBoot ??= {}).auth = { user: parsed.user, ownerId: parsed.dataOwnerId };
-          emit('onAuthStateChange', parsed);
+          if ((parsed.ownerGeneration ?? 0) < ownerStamp().ownerGeneration) return;
+          void publishAuthState(parsed).catch(() => eventConnection?.reconnect());
         } else if (parsed.type === 'interaction_request') {
           emit('maker.onInteractionRequest', { sessionId: parsed.sessionId, request: parsed.request });
         } else if (parsed.type === 'interaction_dismissed') {
@@ -1054,13 +1155,11 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
             settingsMirror.appShortcuts = parsed.value;
             emit('appShortcuts.onChanged', parsed.value);
           } else if (parsed.domain === 'sidebar') {
-            settingsMirror.sidebar = parsed.value;
-            syncSnapshots.delete('sidebarSettings.loadSnapshot\u0000[]');
-            if (Array.isArray(parsed.value?.pinnedOrder)) {
-              emit('sidebarSettings.onPinnedOrderChanged', parsed.value.pinnedOrder, ownerStamp());
-            }
-            if (Array.isArray(parsed.value?.hiddenProjectKeys)) {
-              emit('sidebarSettings.onHiddenProjectKeysChanged', parsed.value.hiddenProjectKeys, ownerStamp());
+            if (ownerSettingsLoad) {
+              ownerSettingsLoad.sidebar = parsed.value;
+            } else if (ownerSettingsReady && ownerStamp().dataOwnerId) {
+              settingsMirror.sidebar = parsed.value;
+              notifySidebarChanged(parsed.value);
             }
           }
         } else if (parsed.type === 'appearance_changed') {
@@ -1265,7 +1364,14 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     };
     window.addEventListener('pagehide', event => { if (!event.persisted) pairing.close(); });
   }
-  window.addEventListener('pagehide', event => { if (!event.persisted) eventConnection?.stop(); });
+  window.addEventListener('pagehide', event => {
+    if (event.persisted) return;
+    loginPageClosed = true;
+    ++loginOperation;
+    reservedLoginPopup?.close();
+    ownerSettingsLoad?.abort.abort();
+    eventConnection?.stop();
+  });
   window.addEventListener('pageshow', event => { if (event.persisted) eventConnection?.reconnect(); });
   // Start event stream immediately on boot
   ensureEventStream();

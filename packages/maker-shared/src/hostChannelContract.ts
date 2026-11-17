@@ -406,6 +406,18 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
 
   // --- Auth (Single Writer) ---
   {
+    desktopChannel: 'auth:get-login-state',
+    webPath: 'auth.getLoginState',
+    hostPath: '/api/auth/login-state',
+    body: () => ({}),
+  },
+  {
+    desktopChannel: 'auth:dispatch-login-action',
+    webPath: 'auth.dispatchLoginAction',
+    hostPath: '/api/auth/login-action',
+    body: ([action]) => ({ action }),
+  },
+  {
     desktopChannel: 'auth:logout',
     webPath: 'auth.logout',
     hostPath: '/api/auth/logout',
