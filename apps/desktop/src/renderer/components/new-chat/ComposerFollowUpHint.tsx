@@ -2,7 +2,7 @@
  * ComposerFollowUpHint — 任务运行中、输入框有内容时的一行轻提示：
  * 说明当前默认是排队还是插话，并可一键切换默认。
  * ---------------------------------------------------------------------------
- * 浮在输入框上方，与附件拒绝条、语音状态条同一浮层位，沿用它们的胶囊外观与语义 token。
+ * 浮在输入框上方，与附件拒绝条、语音状态条同一浮层位；内容容器使用 12px 圆角与语义 token。
  * 关闭状态由调用方通过 useComposerFollowUpHintDismissed 本机记忆，与偏好本身无关。
  */
 import { X } from 'lucide-react';
@@ -30,7 +30,7 @@ export function ComposerFollowUpHint({
       data-composer-follow-up-hint
       className={cn(
         'pointer-events-auto flex max-w-[640px] flex-wrap items-center gap-x-2 gap-y-1.5',
-        'rounded-2xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
+        'rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
         'py-2 pl-4 pr-2 text-13 leading-snug text-[var(--cmd-palette-item-text)]',
         'shadow-[shadow:var(--shadow-menu)]',
       )}
