@@ -14,6 +14,7 @@ import path from 'node:path';
 
 import { isAuthorized } from './api-token.mjs';
 import { clientErrorMessage } from './client-error.mjs';
+import { createLogger } from '../../desktop/src/main/logger.ts';
 import { parseTypedError, typedErrorStatus } from './typed-error.mjs';
 import { createWebAuth, isLoopbackRequest, CONNECT_PAGE, CONNECT_SCRIPT } from './web-auth.mjs';
 import { buildWebShim } from './web-client-build.mjs';
@@ -96,6 +97,16 @@ export function createHostServer(input) {
   let authDrain;
   const cancelPendingAuth = () => authDrain ??= Promise.resolve().then(() => deps.cancelPendingAuth?.());
   const unsubscribeSessions = deps.webAuth.onSessionRevoke?.(caller => deps.releaseAuthCaller?.(caller));
+  const log = deps.serverLog ?? createLogger('host-server');
+  // Only the step and the error's code or name: a message can carry account or sign-in details.
+  const signOutStep = (step, run) => {
+    const warn = (error) => {
+      const code = typeof error?.code === 'string' ? error.code : (error instanceof Error ? error.name : typeof error);
+      log.warn('a sign-out step failed; the sign-out continues', { step, error: code });
+    };
+    try { return Promise.resolve(run()).catch(warn); }
+    catch (error) { warn(error); return Promise.resolve(); }
+  };
   const logout = () => {
     if (logoutFlight) return logoutFlight;
     // The owner boundary's stop comes first (agent/owner-boundary.ts): a turn that fails on the
@@ -103,18 +114,15 @@ export function createHostServer(input) {
     // must reach dispose: whatever fails before it, deps.logout() still runs (its runOwnerBoundary
     // disposes the stopped input runtime, which rebuilds it) and the stop is released.
     const releaseStop = deps.beginOwnerBoundaryStop?.() ?? (() => {});
-    let teardown = Promise.resolve();
-    try {
-      // Revoke browser streams immediately and drain existing database callers
-      // before the owner runtime closes. Concurrent sign-out clicks share a result.
-      deps.webAuth.clear();
-      deps.platformClient?.()?.close();
-    } catch (error) {
-      teardown = Promise.reject(error);
-    }
-    // A step that fails before the logout is not the logout's failure: the user still signs out, and the
-    // logout's own result (or error) is what the caller gets.
-    logoutFlight = teardown.then(() => cancelPendingAuth()).catch(() => undefined)
+    // Revoke browser streams immediately and drain existing database callers before the owner runtime
+    // closes. Concurrent sign-out clicks share a result. As in runOwnerBoundary, each step runs whatever
+    // the one before it did: a failed revoke must not leave the platform client open, nor a sign-in in
+    // progress that completes after the sign-out. A step that fails is not the logout's failure: the user
+    // still signs out, and the logout's own result (or error) is what the caller gets.
+    const revoked = signOutStep('revoke web sessions', () => deps.webAuth.clear());
+    const closed = signOutStep('close platform client', () => deps.platformClient?.()?.close());
+    logoutFlight = Promise.all([revoked, closed])
+      .then(() => signOutStep('cancel pending sign-in', () => cancelPendingAuth()))
       .then(() => Promise.all([...ownerRequests])).then(() => deps.logout())
       .finally(() => { releaseStop(); logoutFlight = undefined; });
     return logoutFlight;

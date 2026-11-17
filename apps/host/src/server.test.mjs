@@ -261,11 +261,14 @@ test('expired browser sessions release only their own authenticated controller',
 // - 规则：放行表第五节“甲：账号边界停止提前置位”与 agent/owner-boundary.ts 的不变式：begin 在关平台客户端之前；
 //   begin 之后必须到达 dispose，压制必须释放。
 // - 现有覆盖缺口：取消挂起的登录被拒、或关平台客户端同步抛错时，不调 deps.logout（停止态的输入运行时不会被重建，
-//   之后每次发送都被拒），或连 release 都不调（之后所有回合都不写结束时间）。
+//   之后每次发送都被拒），或连 release 都不调（之后所有回合都不写结束时间）；撤销网页会话同步抛错时，连带跳过关平台
+//   客户端与取消挂起的登录（进行中的登录可能在退出之后才完成），前置步骤的错误也没有任何日志。
+// - 规则补充：前置三步各自执行，一步失败不跳过后面的步骤（同 runOwnerBoundary）；每步失败记一条 warn，只带步骤名与
+//   错误码或 error.name，不带 message 原文。
 // - 最小失败输入：一次退出登录，前置的一步失败。
 // - tier：unit（真实 HTTP 回环与临时 SQLite，无真实等待）。
-for (const failure of ['cancelPendingAuth rejects', 'platformClient.close throws']) {
-  test(`logout, when ${failure}: the stop begins before the platform client closes, the logout still reaches dispose, and the stop is released`, async t => {
+for (const failure of ['cancelPendingAuth rejects', 'platformClient.close throws', 'webAuth.clear throws']) {
+  test(`logout, when ${failure}: the stop begins before the platform client closes, every other step still runs, the logout still reaches dispose, and the stop is released`, async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-logout-boundary-'));
     const sqlite = new Database(path.join(root, 'markers.sqlite'));
     sqlite.exec('CREATE TABLE sessions(id TEXT PRIMARY KEY, active_turn_started_at INTEGER, last_turn_ended_at INTEGER); INSERT INTO sessions(id) VALUES (\'after\')');
@@ -274,13 +277,26 @@ for (const failure of ['cancelPendingAuth rejects', 'platformClient.close throws
     const order = [];
     let stopping = false;
     const boundary = createOwnerBoundaryStop({ beginStop: () => { stopping = true; order.push('begin'); } });
+    const webAuth = createWebAuth();
+    const clear = webAuth.clear;
+    webAuth.clear = () => {
+      clear();
+      if (failure === 'webAuth.clear throws') throw new Error('revoke failed: secret-detail');
+    };
+    let cancels = 0;
+    const warnings = [];
     const request = await withServer(t, {
+      webAuth,
+      serverLog: { warn: (message, fields) => warnings.push({ message, fields }) },
       beginOwnerBoundaryStop: () => boundary.begin(),
       platformClient: () => ({ close: () => {
         order.push('close');
-        if (failure === 'platformClient.close throws') throw new Error('platform close failed');
+        if (failure === 'platformClient.close throws') throw new Error('platform close failed: secret-detail');
       } }),
-      cancelPendingAuth: async () => { if (failure === 'cancelPendingAuth rejects') throw new Error('login cancel failed'); },
+      cancelPendingAuth: async () => {
+        cancels++;
+        if (failure === 'cancelPendingAuth rejects') throw new Error('login cancel failed: secret-detail');
+      },
       // As main.ts: the logout's own boundary; its dispose replaces the stopped input runtime with a fresh one.
       logout: async () => {
         const { errors } = await runOwnerBoundary(boundary, { dispose: async () => { order.push('dispose'); stopping = false; } });
@@ -292,6 +308,11 @@ for (const failure of ['cancelPendingAuth rejects', 'platformClient.close throws
     assert.equal(response.status, 200);
     assert.equal(response.body.signedOut, true, 'signed out cleanly');
     assert.deepEqual(order, ['begin', 'close', 'begin', 'dispose']);
+    assert.equal(cancels, 1, 'the pending sign-in was cancelled');
+    const step = { 'cancelPendingAuth rejects': 'cancel pending sign-in', 'platformClient.close throws': 'close platform client',
+      'webAuth.clear throws': 'revoke web sessions' }[failure];
+    assert.deepEqual(warnings.map(w => w.fields), [{ step, error: 'Error' }], 'one warning, with the step and the error name');
+    assert.ok(!JSON.stringify(warnings).includes('secret-detail'), 'no error message in the log');
     assert.equal(stopping, false, 'the stopped input runtime was replaced');
     // The suppression is released: the next turn's end is written.
     markSessionTurnEnded('after');

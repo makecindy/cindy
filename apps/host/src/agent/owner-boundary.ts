@@ -24,8 +24,9 @@ import { beginSessionTurnEndedSuppression } from '../../../desktop/src/main/loca
  * 1. main.ts logout, through runOwnerBoundary: dispose runs whatever the steps before it do; release in finally.
  * 2. main.ts invalidateHostSession, through runOwnerBoundary: the same.
  * 3. main.ts stop (shutdown), through runOwnerBoundary: the same.
- * 4. server.mjs logout() (the HTTP logout entry, `beginOwnerBoundaryStop`): its own teardown is in a try,
- *    a failed step does not skip deps.logout() (which is 1), and the release is in the flight's finally.
+ * 4. server.mjs logout() (the HTTP logout entry, `beginOwnerBoundaryStop`): each of its own steps runs on its
+ *    own, a failed one skips neither the others nor deps.logout() (which is 1), and the release is in the
+ *    flight's finally.
  * A new call (the account switch) is added to this list and checked the same way.
  */
 export interface OwnerBoundaryStop {
