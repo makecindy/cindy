@@ -40,7 +40,7 @@ import { createCodexLocalCliAuth } from './runtime.ts';
 import { createHostCodexSystemLogin } from './codex-system-login.ts';
 import { invalidateHostCodexLogin } from './codex-invalidation.ts';
 import { createHostCodexCredentials } from './codex-credentials.ts';
-import { createBridgeTokenReader, createHostBridgeLoginPorts } from './codex-runtime.ts';
+import { createBridgeTokenReader, createHeldLoginRefusals, createHostBridgeLoginPorts, createHostEngineLoginPorts } from './codex-runtime.ts';
 import { createAnthropicResponsesBridgeHost } from '../../../desktop/src/main/maker-host/anthropicResponsesBridgeHostCore.ts';
 import { bindNativeProviderAuth, isNativeProviderAuthBound } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.ts';
 import { currentCodexCredentialGeneration } from '../../../desktop/src/main/maker-host/codexCredentialRead.ts';
@@ -244,12 +244,21 @@ function bridgeFixture(t, ownerId) {
     invalidateCodexAccount: async (...args) => { counts.invalidateAccount.push(args); } };
   const credentials = createHostCodexCredentials(profileDir, accounts);
   const real = createHostCodexSystemLogin({ codexHome, systemAuthPath: systemAuth, loginActive: () => false });
-  const ports = createHostBridgeLoginPorts({
-    check() {}, systemLogin: { ...real, reconcile: (...args) => { counts.reconcile++; return real.reconcile(...args); } },
-    native: credentials, accounts,
-    invalidateNative: async reason => { counts.invalidateNative.push(reason); },
-    isProfileHeld: () => held,
-  });
+  const systemLogin = { ...real, reconcile: (...args) => { counts.reconcile++; return real.reconcile(...args); } };
+  // The runtime's invalidateNative, recorded and real (codex-runtime.ts gives it the same input).
+  const invalidateNative = async (reason, context) => {
+    counts.invalidateNative.push(reason);
+    await invalidateHostCodexLogin({ codexHome, systemAuthPath: systemAuth, reason, ...context, isCodexAccountProvider: id => id === 'acct',
+      hostBound: context !== undefined, loginInProgress: () => false, isCurrent: () => true });
+  };
+  // One memory for the bridge and the engine, as createHostCodexRuntime builds them.
+  const refusals = createHeldLoginRefusals(() => held);
+  const ports = createHostBridgeLoginPorts({ check() {}, systemLogin, native: credentials, accounts, invalidateNative,
+    isProfileHeld: () => held, refusals });
+  const engine = createHostEngineLoginPorts({ native: credentials, accounts, invalidateNative, isProfileHeld: () => held, refusals });
+  // The Codex engine's auth adapter, with the ports runtime.ts createHostAgentGraph passes it.
+  const codexAuth = createCodexLocalCliAuth(null, undefined, codexHome, accounts, undefined,
+    { systemLogin, isProfileHeld: () => held, invalidate: engine.invalidate, assertNativeLoginUsable: engine.assertNativeLoginUsable });
   const bridge = createAnthropicResponsesBridgeHost({
     subscriptionRequestAllowsFast: () => false, isXaiSubscriptionProviderId: () => false, app: { getPath: () => profileDir },
     // The renewal request: answered with a failure, so a test run never writes a renewed login.
@@ -262,7 +271,7 @@ function bridgeFixture(t, ownerId) {
   const now = () => Math.floor(Date.now() / 1000);
   // A new login on disk is read by the next request, as after a login change (the bridge keeps a token up to 30 s).
   const login = (dir, token) => { writeLogin(dir, token); bridge.clearChatgptBridgeCredentialCache(); };
-  return { codexHome, accountHome, jwt, writeLogin: login, snapshot, bridge, counts, now, setHeld: value => { held = value; },
+  return { codexHome, accountHome, jwt, writeLogin: login, snapshot, bridge, codexAuth, counts, now, setHeld: value => { held = value; },
     // What the bridge does with an upstream 401 that names a revoked token.
     reject: (providerId, token) => bridge.invalidateChatgptBridgeAuth({ status: 401,
       body: '{"error":{"code":"token_revoked","message":"Your authentication token has been revoked."}}', failedAccessToken: token }, providerId) };
@@ -328,3 +337,61 @@ for (const [label, providerId, home] of [['the ChatGPT login', 'openai', 'codexH
     else assert.deepEqual(f.counts.invalidateAccount, [['acct', 'token_revoked', token]]);
   });
 }
+
+/*
+ * 测试价值
+ * - 生产入口：Codex 引擎的认证适配器（runtime.ts createCodexLocalCliAuth，带 createHostAgentGraph 传的
+ *   invalidate 与 assertNativeLoginUsable，来自 codex-runtime.ts createHostEngineLoginPorts）：引擎在回合中途报
+ *   “服务端拒绝了登录”时调 auth.invalidate（maker-core codex/index.ts onAuthInvalidated，带 credentialAttribution
+ *   'unproven'），起本机 Codex 前调 getAuthEnv。作废是真实的 invalidateHostCodexLogin，凭据是临时 profile 里的真实文件。
+ * - 规则：并存方案 A（审核方 2026-11-17 定）。闸门关着时引擎报拒绝：写标记、解绑、删登录文件都不做，只记进程内的拒绝，
+ *   和订阅桥共用同一份记忆——引擎报过，桥的请求带同一原因失败；桥报过，起本机 Codex 也带同一原因失败；
+ *   闸门关着时起本机 Codex 也不对账。放开后同样的拒绝走正常作废。
+ * - 现有覆盖缺口：桥那两条只测了桥自己报的拒绝。
+ * - 最小失败输入：闸门关着时引擎报一次拒绝，再经桥取令牌；反过来桥报一次，再起本机 Codex。
+ * - tier：unit（临时目录里的真实文件；续期请求是桩，不联网）。
+ */
+test('while a desktop uses the profile, an engine-reported rejection writes nothing and the bridge and the engine share it', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
+  const f = bridgeFixture(t, 'engine-reject');
+  const token = f.jwt(f.now() + 3600);
+  f.writeLogin(f.codexHome, token);
+  const before = f.snapshot();
+  // Held, the engine reports a rejection mid-turn: no marker, no unbinding, auth.json kept as it was.
+  await f.codexAuth.invalidate('token_revoked', { credentialAttribution: 'unproven' });
+  assert.deepEqual(f.counts.invalidateNative, []);
+  assert.deepEqual(f.snapshot(), before);
+  assert.equal(isNativeProviderAuthBound('openai'), true);
+  // The bridge's next request fails before the upstream with that reason, and so does a native spawn.
+  const refusal = /^Error: HOST_PROFILE_IN_USE_BY_DESKTOP: OpenAI rejected this ChatGPT sign-in \(token_revoked\)/;
+  await assert.rejects(f.bridge.getChatgptBridgeAuth('openai'), refusal);
+  await assert.rejects(f.codexAuth.getAuthEnv({ credentialMode: 'oauth-bearer' }), refusal);
+  assert.deepEqual([f.counts.reconcile, f.counts.renew], [0, 0]);
+  assert.deepEqual(f.snapshot(), before);
+  // Released: the same report takes the real invalidation, which writes its marker.
+  f.setHeld(false);
+  await f.codexAuth.invalidate('token_revoked', { credentialAttribution: 'unproven' });
+  assert.deepEqual(f.counts.invalidateNative, ['token_revoked']);
+  assert.notDeepEqual(f.snapshot(), before);
+});
+
+test('while a desktop uses the profile, a bridge-reported rejection also stops a native Codex spawn, which does not reconcile', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
+  const f = bridgeFixture(t, 'bridge-then-engine');
+  const token = f.jwt(f.now() + 3600);
+  f.writeLogin(f.codexHome, token);
+  // Held, a spawn on the login is allowed and does not reconcile.
+  assert.deepEqual(await f.codexAuth.getAuthEnv({ credentialMode: 'oauth-bearer' }), { CODEX_HOME: f.codexHome });
+  assert.equal(f.counts.reconcile, 0);
+  await f.bridge.getChatgptBridgeAuth('openai');
+  const before = f.snapshot();
+  await f.reject('openai', token);
+  await assert.rejects(f.codexAuth.getAuthEnv({ credentialMode: 'oauth-bearer' }),
+    /^Error: HOST_PROFILE_IN_USE_BY_DESKTOP: OpenAI rejected this ChatGPT sign-in \(token_revoked\)/);
+  assert.deepEqual([f.counts.reconcile, f.counts.invalidateNative], [0, []]);
+  assert.deepEqual(f.snapshot(), before);
+  // Released: the spawn reconciles again and the remembered rejection is gone.
+  f.setHeld(false);
+  assert.deepEqual(await f.codexAuth.getAuthEnv({ credentialMode: 'oauth-bearer' }), { CODEX_HOME: f.codexHome });
+  assert.ok(f.counts.reconcile > 0);
+});

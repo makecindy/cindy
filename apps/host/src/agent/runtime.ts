@@ -384,6 +384,8 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
     systemLogin?: ReturnType<typeof createHostCodexSystemLogin>;
     /** Coexistence plan A: while a desktop uses this profile, reading the state does not reconcile. */
     isProfileHeld?: () => boolean;
+    /** Before a spawn on the default login: a rejection remembered while held (codex-runtime.ts). */
+    assertNativeLoginUsable?: () => void;
   }) {
   const invalidate = native?.invalidate;
   const isProfileHeld = native?.isProfileHeld ?? notHeld;
@@ -532,8 +534,14 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       // gateway-key and provider-oauth spawns and independent accounts, which it never reconciles for.
       const reconcileForSpawn = opts?.credentialMode !== 'gateway-key' && opts?.credentialMode !== 'provider-oauth'
         && !(opts?.providerId && accounts?.isCodexAccountProvider(opts.providerId));
-      if (reconcileForSpawn && !readHostCodexInvalidation(codexHome, systemAuthPath)) await systemLogin.reconcile();
-      if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer') return { CODEX_HOME: codexHome };
+      // Coexistence plan A: not while a desktop uses this profile (the reconciliation can relink
+      // auth.json and bind the login, both that desktop's too); the spawn uses the files as they are.
+      if (reconcileForSpawn && !isProfileHeld() && !readHostCodexInvalidation(codexHome, systemAuthPath)) await systemLogin.reconcile();
+      if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer') {
+        // Coexistence plan A: a login the upstream rejected while held fails with that reason.
+        native?.assertNativeLoginUsable?.();
+        return { CODEX_HOME: codexHome };
+      }
       if (opts?.providerId && !['xd', 'cindy', 'openai'].includes(opts.providerId)) {
         // The proxy injects the selected provider's exact credential and headers.
         // Do not place a different provider's key into the shared native process.
@@ -556,6 +564,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
       afterLogout: () => options.codexRuntime!.authBoundary.afterLogout(),
       systemLogin: options.codexRuntime!.systemLogin,
       isProfileHeld: options.isProfileHeld,
+      assertNativeLoginUsable: () => options.codexRuntime!.assertNativeLoginUsable(),
     } : { isProfileHeld: options.isProfileHeld });
   // Match Desktop: default-auth invalidation preserves separately selected subscription accounts.
   options.codexRuntime?.setLocalHostRetirement(async (reason, preserveSubscriptionAccounts) => {

@@ -139,9 +139,11 @@ export function createHostBridgeLoginPorts(options: {
   accounts: Pick<ReturnType<typeof createHostProviderConfig>['codexAccounts'], 'codexAccountHome' | 'codexAccountState' | 'invalidateCodexAccount'>;
   invalidateNative(reason: string): Promise<void>;
   isProfileHeld?: () => boolean;
+  /** The rejections remembered while held, shared with the engine's ports (createHostEngineLoginPorts). */
+  refusals?: ReturnType<typeof createHeldLoginRefusals>;
 }) {
   const held = () => options.isProfileHeld?.() === true;
-  const refusals = createHeldLoginRefusals(held);
+  const refusals = options.refusals ?? createHeldLoginRefusals(held);
   const accountToken = (home: string): string | null => {
     try {
       const token = JSON.parse(fs.readFileSync(path.join(home, 'auth.json'), 'utf8')).tokens?.access_token;
@@ -176,6 +178,39 @@ export function createHostBridgeLoginPorts(options: {
     invalidateCodexAccount: async (providerId: string, reason: string, failedAccessToken: string) => {
       if (held()) { refusals.note(providerId, failedAccessToken, reason); return; }
       await options.accounts.invalidateCodexAccount(providerId, reason, failedAccessToken);
+    },
+  };
+}
+
+/**
+ * The login ports the Host gives the Codex engine (runtime.ts createCodexLocalCliAuth): its
+ * report that the server rejected the default login mid-turn (maker-core codex/index.ts
+ * onAuthInvalidated → auth.invalidate), and a check before a task spawns on that login. Released,
+ * the report is the runtime's invalidateNative. While a desktop uses this profile it writes nothing
+ * (no suppression or invalidation marker, no unbinding, no removed auth.json) and is remembered in
+ * the same refusals as the subscription bridge's: after either side saw a rejection, both the
+ * bridge's requests and a native spawn fail with that reason until the token changes or the profile
+ * is released.
+ */
+export function createHostEngineLoginPorts(options: {
+  native: Pick<ReturnType<typeof createHostCodexCredentials>, 'readAccessToken'>;
+  accounts: Pick<ReturnType<typeof createHostProviderConfig>['codexAccounts'], 'isCodexAccountProvider'>;
+  invalidateNative(reason: string, context?: { providerId?: string; credentialGeneration?: string | null; credentialAttribution?: 'unproven' }): Promise<unknown>;
+  isProfileHeld?: () => boolean;
+  refusals: ReturnType<typeof createHeldLoginRefusals>;
+}) {
+  const held = () => options.isProfileHeld?.() === true;
+  return {
+    async invalidate(reason: string, context?: { providerId?: string; credentialGeneration?: string | null; credentialAttribution?: 'unproven' }): Promise<void> {
+      if (!held()) { await options.invalidateNative(reason, context); return; }
+      // An independent account is never invalidated here (invalidateHostCodexLogin 'not-native').
+      if (context?.providerId && context.providerId !== 'openai' && options.accounts.isCodexAccountProvider(context.providerId)) return;
+      options.refusals.note('openai', options.native.readAccessToken('openai'), reason);
+    },
+    /** Before a task spawns on the default login: the remembered refusal, if any (forgotten once released). */
+    assertNativeLoginUsable(): void {
+      const token = options.native.readAccessToken('openai');
+      if (token) options.refusals.assertUsable('openai', token);
     },
   };
 }
@@ -238,6 +273,8 @@ export function createHostCodexRuntime(options: {
   // (desktop: anthropic-responses-bridge-host.ts, pi-subscription-websocket.ts), with this
   // profile's credentials. Ports resolve at call time.
   const accounts = options.config.codexAccounts;
+  // One memory of the rejections seen while held, for the bridge and the engine alike.
+  const heldLogins = createHeldLoginRefusals(() => options.isProfileHeld?.() === true);
   const bridge = createAnthropicResponsesBridgeHost({
     subscriptionRequestAllowsFast: (...args) => requestPolicy.subscriptionRequestAllowsFast(...args),
     isXaiSubscriptionProviderId: (...args) => isXaiSubscriptionProviderId(...args),
@@ -249,7 +286,7 @@ export function createHostCodexRuntime(options: {
     chatgptAccountIdFromTokens: (...args) => chatgptAccountIdFromTokens(...args),
     // The default login and independently added Codex accounts, with the coexistence hold.
     ...createHostBridgeLoginPorts({ check, systemLogin, native, accounts, invalidateNative: reason => invalidateNative(reason),
-      isProfileHeld: options.isProfileHeld }),
+      isProfileHeld: options.isProfileHeld, refusals: heldLogins }),
     isOpenAiSubscriptionProviderId: (...args) => accounts.isOpenAiSubscriptionProviderId(...args),
     recordXaiRateLimitSnapshot: (...args) => usage.recordXaiRateLimitSnapshot(...args),
   });
@@ -283,6 +320,10 @@ export function createHostCodexRuntime(options: {
       // The desktop's invalidation runs logout(), whose cleanup calls onLogoutSuccess.
       disposeLocalHost: () => authBoundary.afterLogout(),
       onInvalidated: credentialScope => authBoundary.afterInvalidation(reason, credentialScope) });
+  };
+  const engineLogins = () => {
+    const ports = createHostEngineLoginPorts({ native, accounts, invalidateNative, isProfileHeld: options.isProfileHeld, refusals: heldLogins });
+    return { invalidateNative: ports.invalidate, assertNativeLoginUsable: ports.assertNativeLoginUsable };
   };
   const readRoute = () => {
     check();
@@ -368,7 +409,8 @@ export function createHostCodexRuntime(options: {
     },
     /** Whether this runtime still belongs to the current owner (the agent graph's Codex token reader). */
     isCurrent: current, fastPolicies: policies, fastRequestPolicy: requestPolicy, closeSession: proxy.unregister,
-    invalidateNative, authBoundary, systemAuthPath, systemLogin,
+    // The engine's ports (createHostEngineLoginPorts): its rejection report and the spawn check.
+    ...engineLogins(), authBoundary, systemAuthPath, systemLogin,
     /** What this runtime's Codex processes carry to its proxies (tests; never logged). */
     inboundToken: () => inbound.token(),
     /** How this runtime retires the local Codex hosts (the agent graph's CodexAgent). */
