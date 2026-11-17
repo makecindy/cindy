@@ -796,7 +796,6 @@ import {
   writeMemorySetting,
 } from '../maker-host/memory-settings-store.js';
 import { updateMakerMemorySettings, type NativeMemoryPatch } from '../app-settings/memory.js';
-import { GLOBAL_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import {
   assertCollabProjectEnabled,
   resolveLocalCollabPolicyWorkingDir,
@@ -1010,6 +1009,7 @@ import {
   shouldRecycleHandoffWorktreeOnFailure,
 } from './handoffWorktree.js';
 import { validateHandoffWorkingDir } from './handoffWorkingDir.js';
+import { registerPluginEnableHandlers } from './pluginEnableHandlers.js';
 import { registerProjectPluginPolicyHandlers } from './projectPluginPolicyHandlers.js';
 import { registerLocalModelHandlers } from '../local-model-runtime/ipc.js';
 import { beginTurnChangeSetAtDispatch } from '../turn-change-set/dispatchBoundary.js';
@@ -23608,51 +23608,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   );
 
-  ipcMain.handle(MAKER_INVOKE.PLUGINS_SET_ENABLED, async (_e, id: unknown, enabled: unknown) => {
-    if (typeof id !== 'string' || typeof enabled !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'id (string) + enabled (boolean) required');
-    }
-    const ok = await getPluginRegistry().setEnabled(id, enabled);
-    if (!ok) {
-      throwIpcError('PERMISSION_DENIED', `Cannot modify essential plugin: ${id}`);
-    }
-    // Ordinary plugins are user defaults: existing sessions keep their frozen
-    // policy and only new sessions observe changes, so no shared environment
-    // refresh is needed.
-    if (!GLOBAL_PLUGIN_IDS.has(id) && id !== 'browser') {
-      return { codexMcpRefreshed: true };
-    }
-    // Machine-wide tools keep their existing lifecycle. The preference is
-    // already durable at this point, so refresh best-effort; a busy turn must
-    // keep using the existing bridge and must not turn a successful save into
-    // an IPC failure. Renderer surfaces the deferred state explicitly.
-    return refreshCodexMcpEnvironment({
+  registerPluginEnableHandlers(createElectronIpcHandlerRegistry(), {
+    getPluginRegistry,
+    invalidatePiEnvironment,
+    refreshCodexMcpEnvironment: () => refreshCodexMcpEnvironment({
       restartCodex: restartCodexAfterAuthModeChange,
       shutdownCodexEnvironment,
       onDeferred: () =>
         deferredCodexRestartHolder?.schedule('Codex Browser capability routing changed'),
       logger: log,
-    });
-  });
-
-  ipcMain.handle(MAKER_INVOKE.PLUGINS_CLEAR_ENABLED, async (_e, id: unknown) => {
-    if (typeof id !== 'string') {
-      throwIpcError('INVALID_PARAMS', 'id (string) required');
-    }
-    const ok = await getPluginRegistry().clearEnabled(id);
-    if (!ok) {
-      throwIpcError('PERMISSION_DENIED', `Cannot modify essential plugin: ${id}`);
-    }
-    if (!GLOBAL_PLUGIN_IDS.has(id) && id !== 'browser') {
-      return { codexMcpRefreshed: true };
-    }
-    return refreshCodexMcpEnvironment({
-      restartCodex: restartCodexAfterAuthModeChange,
-      shutdownCodexEnvironment,
-      onDeferred: () =>
-        deferredCodexRestartHolder?.schedule('Codex Browser capability routing changed'),
-      logger: log,
-    });
+    }),
   });
 
   registerProjectPluginPolicyHandlers(createElectronIpcHandlerRegistry(), { getPluginRegistry });
