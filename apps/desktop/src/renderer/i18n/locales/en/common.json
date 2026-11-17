@@ -14939,6 +14939,8 @@
       "failed": "Couldn't generate the image — try again"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable.",
+      "codexHelperUnverified": "Could not verify cindy_helper for this task. Task result reporting may be unavailable.",
       "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
       "replyFailed": "Could not complete the reply",
       "retryTitle": "Resend the last message",

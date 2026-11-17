@@ -15035,6 +15035,8 @@
       "subtitle_many": "{{count}} mensagens selecionadas"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "cindy_helper está ativado, mas não está disponível nesta tarefa. Pode não ser possível comunicar o resultado da tarefa.",
+      "codexHelperUnverified": "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Pode não ser possível comunicar o resultado da tarefa.",
       "requestFormatError": "A aplicação enviou um pedido inválido, pelo que não foi possível concluir esta resposta.",
       "replyFailed": "Não foi possível concluir a resposta",
       "retryTitle": "Reenviar a última mensagem",

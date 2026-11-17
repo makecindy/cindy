@@ -14874,6 +14874,8 @@
       "failed": "이미지를 생성하지 못했습니다. 다시 시도해 주세요"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "이 작업에서 cindy_helper가 활성화되어 있지만 사용할 수 없습니다. 작업 결과를 보고하지 못할 수 있습니다.",
+      "codexHelperUnverified": "이 작업에서 cindy_helper를 사용할 수 있는지 확인하지 못했습니다. 작업 결과를 보고하지 못할 수 있습니다.",
       "requestFormatError": "앱이 보낸 요청 형식에 문제가 있어 답변을 완료하지 못했습니다.",
       "replyFailed": "답변을 완료하지 못했습니다",
       "retryTitle": "마지막 메시지 다시 보내기",

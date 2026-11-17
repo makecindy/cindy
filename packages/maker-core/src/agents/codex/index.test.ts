@@ -37270,3 +37270,144 @@ describe('Codex idle reclamation probe', () => {
     await handle.close();
   });
 });
+
+
+describe('expected Cindy helper readiness', () => {
+  it.each([false, true])('reports a missing helper on startup (resume=%s)', async (resume) => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.McpServerStatusList
+      ? { data: [{ name: 'cindy_docs', tools: { list_tools: {}, call_tool: {} } }], nextCursor: null }
+      : undefined, { buildSessionMcpConfig: () => ({
+        'mcp_servers.cindy_helper.url': 'http://127.0.0.1:47100/mcp/cindy_helper',
+      }) });
+    const handle = await agent.startSession({ sessionId: 'helper-check', sessionInstanceId: 'helper-instance',
+      workingDir: '/repo', model: 'gpt-5.4',
+      ...(resume ? { resumeSessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' } : {}),
+    });
+    await handle.close();
+    const events = [];
+    for await (const event of handle.events()) events.push(event);
+    expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'error', data: expect.objectContaining({
+      code: 'CINDY_EXPECTED_HELPER_UNAVAILABLE', message: expect.stringContaining('cindy_helper'), isTerminal: false,
+    }) })]));
+    expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList).map(call => call.slice(0, 2))).toEqual([
+      [Method.McpServerStatusList, expect.objectContaining({ threadId: resume ? 'resume-thread-id' : 'start-thread-id' })],
+    ]);
+    expect(events).toEqual(expect.arrayContaining([expect.objectContaining({
+      type: 'text', standaloneText: true, data: expect.objectContaining({ code: 'CINDY_EXPECTED_HELPER_UNAVAILABLE', text: expect.stringContaining('cindy_helper') }),
+    })]));
+    expect(host.request.mock.calls.some(([method]) => method === Method.TurnStart)).toBe(false);
+    await agent.dispose();
+  });
+});
+
+// #10499: existing MCP inspection tests do not assert task-visible diagnostics.
+// Unit tier: real Agent lifecycle with an in-memory native host; no OS/network I/O.
+describe('expected helper normal and failure boundaries', () => {
+  it.each(['healthy', 'disabled', 'absent', 'partial', 'no-tools', 'probe-error'] as const)(
+    'preserves task startup and distinguishes %s', async (mode) => {
+      const { logger, warn } = createLoggerSpy();
+      const agent = new CodexAgent(createDeps({}, { logger }));
+      const host = installFakeHost(agent, method => {
+        if (method !== Method.McpServerStatusList) return undefined;
+        if (mode === 'probe-error') throw new Error('sensitive transport details');
+        return { data: [{ name: 'cindy_helper', tools: mode === 'healthy'
+          ? { list_tools: {}, call_tool: {} } : mode === 'partial' ? { list_tools: {} } : {} }], nextCursor: null };
+      }, { buildSessionMcpConfig: () => mode === 'absent' ? {} : ({
+        'mcp_servers.cindy_helper.command': 'synthetic-helper',
+        ...(mode === 'disabled' ? { 'mcp_servers.cindy_helper.enabled': false } : {}),
+      }) });
+      const handle = await agent.startSession({ sessionId: 'helper-boundaries',
+        workingDir: '/repo', model: 'gpt-5.4' });
+      await handle.close();
+      const events = [];
+      for await (const event of handle.events()) events.push(event);
+      const errors = events.filter(event => event.type === 'error');
+      expect(errors).toHaveLength(['partial', 'no-tools', 'probe-error'].includes(mode) ? 1 : 0);
+      if (mode === 'probe-error') {
+        expect(errors[0].data).toMatchObject({ code: 'CINDY_EXPECTED_HELPER_UNVERIFIED', message: expect.stringContaining('Could not verify') });
+        expect(JSON.stringify(errors)).not.toContain('sensitive transport details');
+        expect(JSON.stringify(warn.mock.calls)).not.toContain('sensitive transport details');
+      }
+      expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList))
+        .toHaveLength(['disabled', 'absent'].includes(mode) ? 0 : 1);
+      await agent.dispose();
+    });
+});
+
+
+describe('expected helper runtime lifecycle', () => {
+  // #10499 review: scheduler recovery and helper diagnostics share a cold resume.
+  // Unit tier, real Agent lifecycle; no timers/processes. One durable warning per
+  // resume must survive, without checking the same recovered catalog twice.
+  it.each(['missing', 'healthy', 'unverified'] as const)(
+    'checks helper once after scheduler cold recovery (%s)', async (mode) => {
+      const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+      const agent = new CodexAgent(createDeps());
+      let resumeCount = 0;
+      let recoveredChecks = 0;
+      const host = installFakeHost(agent, method => {
+        if (method === Method.ThreadResume) {
+          resumeCount++;
+          return { thread: { id: threadId }, model: 'gpt-5.4', modelProvider: 'openai' };
+        }
+        if (method === Method.McpServerStatusList) {
+          if (resumeCount < 2) return { data: [], nextCursor: null };
+          if (++recoveredChecks > 1 && mode === 'unverified') throw new Error('status unavailable');
+          return { data: [
+            { name: 'cindy_scheduler', tools: { list_tools: {}, call_tool: {} } },
+            ...(mode === 'healthy' ? [{ name: 'cindy_helper', tools: { list_tools: {}, call_tool: {} } }] : []),
+          ], nextCursor: null };
+        }
+        return undefined;
+      }, { buildSessionMcpConfig: () => ({
+        'mcp_servers.cindy_scheduler.command': 'synthetic-scheduler',
+        'mcp_servers.cindy_helper.command': 'synthetic-helper',
+      }) });
+      const handle = await agent.startSession({ sessionId: 'helper-scheduler-recovery',
+        resumeSessionId: threadId, workingDir: '/repo', model: 'gpt-5.4' });
+      await handle.close();
+      const events = [];
+      for await (const event of handle.events()) events.push(event);
+      expect(resumeCount).toBe(2);
+      const notices = events.filter(event => event.standaloneText);
+      expect(notices).toHaveLength(mode === 'healthy' ? 0 : 1);
+      expect(events.filter(event => event.type === 'error')).toHaveLength(mode === 'healthy' ? 0 : 1);
+      if (mode !== 'healthy') expect(notices[0].data).toMatchObject({
+        code: mode === 'unverified' ? 'CINDY_EXPECTED_HELPER_UNVERIFIED' : 'CINDY_EXPECTED_HELPER_UNAVAILABLE',
+      });
+      // Initial scheduler check, recovered scheduler check, then one helper check.
+      expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList)).toHaveLength(3);
+      await agent.dispose();
+    });
+
+  it('checks the replacement thread and does not poll ordinary sends', async () => {
+    const agent = new CodexAgent(createDeps());
+    let threadSeq = 0;
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.ThreadStart) return { thread: { id: `helper-thread-${++threadSeq}` }, model: 'gpt-5.4' };
+      if (method === Method.McpServerStatusList) return { data: [{ name: 'cindy_helper', tools:
+        (params as { threadId: string }).threadId === 'helper-thread-1' ? { list_tools: {}, call_tool: {} } : {} }], nextCursor: null };
+      if (method === Method.TurnStart) return { turn: { id: 'helper-turn' } };
+      return undefined;
+    }, { codexHome: '/tmp/mock-codex-home', userAgent: 'codex/0.166.0', buildSessionMcpConfig: () => ({
+      'mcp_servers.cindy_helper.command': 'synthetic-helper',
+    }) });
+    const handle = await agent.startSession({ sessionId: 'helper-replacement', workingDir: '/repo', model: 'gpt-5.4' });
+    await handle.setExtraDirs?.(['/shared-reference']);
+    await handle.send({ type: 'user', content: 'use references' });
+    expect(handle.id).toBe('helper-thread-2');
+    expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList)
+      .map(([, params]) => (params as { threadId: string }).threadId)).toEqual(['helper-thread-1', 'helper-thread-2']);
+    host.getThreadHandlers()?.turnCompleted?.({ threadId: handle.id, turn: { id: 'helper-turn', status: 'completed' } });
+    await handle.send({ type: 'user', content: 'continue' });
+    expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList)).toHaveLength(2);
+    await handle.close();
+    const events = [];
+    for await (const event of handle.events()) events.push(event);
+    expect(events.filter(event => event.type === 'error')).toEqual([
+      expect.objectContaining({ data: expect.objectContaining({ message: expect.stringContaining('cindy_helper'), isTerminal: false }) }),
+    ]);
+    await agent.dispose();
+  });
+});

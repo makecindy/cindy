@@ -14865,6 +14865,8 @@
       "failed": "圖生成未成，請再試"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "此差事已啟用 cindy_helper，然今不可用；差事結果或無法回傳。",
+      "codexHelperUnverified": "未能核實此差事之 cindy_helper 是否可用；差事結果或無法回傳。",
       "requestFormatError": "應用程式所發請求格式有謬，此答未能竟。",
       "replyFailed": "答未竟",
       "retryTitle": "再遣末一訊",
