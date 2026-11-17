@@ -4989,6 +4989,8 @@ export class AgentInputCoordinator {
     delete projected.mergedDeliveryClientIds;
     delete projected.autoReviewUserText;
     delete projected.botTaskCoordination;
+    // Model-only reference attachments carry Host paths and are not part of the visible message.
+    delete projected.contextFiles;
     delete projected.fromDeviceLinkClient;
     // Main-only wire-assembly hint; renderers mask rows from `text` alone.
     delete projected.agentOmitsTriggerPrefix;

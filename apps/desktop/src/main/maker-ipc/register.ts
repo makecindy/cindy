@@ -12256,6 +12256,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     pastedTextRanges?: AgentInputQueuedMessage['chatMessage']['pastedTextRanges'];
     /** Host-managed images; attachment callers always use the durable queue. */
     files?: AgentInputQueuedMessage['files'];
+    /** Host-stored model-only reference attachments (plugin relays); always queued with the message. */
+    contextFiles?: AgentInputQueuedMessage['contextFiles'];
     clientId?: string;
     dispatcherSessionId?: string;
     title?: string;
@@ -12769,7 +12771,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Pending selections also need the canonical send transaction: it consumes the intent,
       // then refreshes queued createOpts from DB before starting the target harness.
       // enqueue does not await dispatch, so the drain can acquire this lock after we return.
-      if (params.files?.length || params.forceQueue || verifiedOwnerRequestText(params.autoReviewUserText) !== undefined || explicitClientId?.startsWith('bot-dm:') || explicitClientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX) || explicitClientId?.startsWith('bot-authorization-resume:') || inputCoordinator.shouldQueueNewTurn(targetSessionId) || agentSwitchPending.get(targetSessionId)) {
+      if (params.files?.length || params.contextFiles?.length || params.forceQueue || verifiedOwnerRequestText(params.autoReviewUserText) !== undefined || explicitClientId?.startsWith('bot-dm:') || explicitClientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX) || explicitClientId?.startsWith('bot-authorization-resume:') || inputCoordinator.shouldQueueNewTurn(targetSessionId) || agentSwitchPending.get(targetSessionId)) {
         lockStage = 'enqueue-queued-message';
         const qClientId = explicitClientId ?? createId();
         const durableScriptDelivery = qClientId.startsWith('schedule-delivery:');
@@ -12800,6 +12802,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           authorizationGuard: params.authorizationGuard,
           assertDispatchCurrent: params.assertDispatchCurrent,
           files: params.files,
+          contextFiles: params.contextFiles,
           pastedTextRanges: params.pastedTextRanges,
           inheritTargetPlanMode: params.inheritTargetPlanMode,
           taskActionDeliveryGuard: params.taskActionDeliveryGuard,
@@ -14444,7 +14447,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { taskId, title: row.title, status: row.status, revision, resolvedConfig, workingDir: row.workingDir ?? undefined, permissionMode: row.permissionMode, planModeEnabled: !!row.planModeEnabled, hidden: row.hiddenAt != null };
       },
       scheduleAutoTitle: schedulePluginAutoTitle,
-      dispatch: async (pluginId, taskId, clientId, text, images = [], context, relay) => {
+      dispatch: async (pluginId, taskId, clientId, text, images = [], context, relay, contextItems = []) => {
         assertPlugin(pluginId);
         // 插件来源只用于标签与 `[消息来源]` 说明;不新增 origin 类型,也不是权限判据。
         const pluginName = sanitizeSourceName(getInstalledGhostName(pluginId));
@@ -14452,17 +14455,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const sourceRelay = readMessageSourcePluginRelay(relay);
         const message = buildPluginMessage(text, context, t('newChat.pastedText.pluginContextLabel'));
         const validate = async () => { assertPlugin(pluginId); await pluginTaskServiceForCurrentOwner!().assertDispatch(pluginId, taskId); assertPlugin(pluginId); };
-        return withPluginMessageAttachments(images, () => assertPlugin(pluginId), async files => {
+        return withPluginMessageAttachments(images, () => assertPlugin(pluginId), async (files, contextFiles) => {
           await validate();
           const outcome = await sendToSessionInternal({ targetSessionId: taskId, clientId,
             message: message.text, pastedTextRanges: message.pastedTextRanges,
-            autoReviewUserText: text, forceQueue: true, files,
+            autoReviewUserText: text, forceQueue: true, files, contextFiles,
             sourcePlugin: { pluginId, ...(pluginName ? { name: pluginName } : {}), ...(sourceRelay ? { relay: sourceRelay } : {}) },
             authorizationGuard: { validate, assertCurrent: () => assertPlugin(pluginId) }, onAccepted: validate });
           await awaitAgentInputQueueSnapshotPersistence(taskId);
           assertCurrent();
           return outcome;
-        });
+        }, { sessionId: taskId, contextItems });
       },
       inspect: async taskId => {
         assertCurrent(); await inputCoordinator.ensureQueueRestored(taskId); assertCurrent();
@@ -14994,7 +14997,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (!result.ok) throw Object.assign(new Error(result.message), { code: result.errorCode });
         await awaitAgentInputQueueSnapshotPersistence(taskId);
         return 'queue';
-      });
+      }, { sessionId: taskId });
     },
     deliverySettled: async (taskId, clientId, guard) => {
       guard();
@@ -15304,6 +15307,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     persistedContent: string;
     pastedTextRanges?: AgentInputQueuedMessage['chatMessage']['pastedTextRanges'];
     files?: AgentInputQueuedMessage['files'];
+    contextFiles?: AgentInputQueuedMessage['contextFiles'];
     clientId: string;
     meta: NonNullable<Awaited<ReturnType<typeof maker.getSessionMeta>>>;
     dbRow: NonNullable<Awaited<ReturnType<typeof getSessionRowSnapshot>>>;
@@ -15357,6 +15361,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     clientId: string;
     meta: NonNullable<Awaited<ReturnType<typeof maker.getSessionMeta>>>;
     files?: AgentInputQueuedMessage['files'];
+    contextFiles?: AgentInputQueuedMessage['contextFiles'];
     origin?: AgentInputQueuedMessage['origin'];
     sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
     /** Host-accepted task text or a forwarded request receipt. */
@@ -15384,7 +15389,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     }
     const fileAttachments = params.files?.flatMap((file) =>
-      file.category !== 'image' && file.path ? [{ name: file.name, path: file.path }] : []);
+      // Host-stored audio/video keep their media URL so persisting the message pins the blob.
+      file.category !== 'image' && file.path
+        ? [{ name: file.name, path: file.path, ...(file.url ? { url: file.url } : {}) }] : []);
     const persistedContent = params.files?.length || params.pastedTextRanges?.length
       ? JSON.stringify({
           text: params.persistedContent,
@@ -15418,6 +15425,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       workingDir: createOpts.workingDir,
       vendorOptions: createOpts.vendorOptions,
       ...(params.files?.length ? { files: params.files } : {}),
+      ...(params.contextFiles?.length ? { contextFiles: params.contextFiles } : {}),
       chatMessage: {
         clientId: params.clientId,
         role: 'user',
@@ -20540,6 +20548,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     delete normalized.sharedTaskAuthor;
     delete normalized.autoReviewUserText;
     delete normalized.botTaskCoordination;
+    // Only the Host's plugin dispatch may attach model-only references.
+    delete normalized.contextFiles;
     delete normalized.orcaReportDelivery;
     delete normalized.orcaReportDeliveryFence;
     delete normalized.mergedDeliveryClientIds;

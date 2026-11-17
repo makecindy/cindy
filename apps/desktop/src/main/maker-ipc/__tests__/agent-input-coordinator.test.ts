@@ -2973,6 +2973,40 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(restarted.coordinator.isActiveTaskCoordination(sid)).toBe(false);
   });
 
+  // plugin-agent-tasks.md「消息附件」: a plugin's group-history references survive the durable queue
+  // and reach the model after the message's own attachments, but never the visible message or clients.
+  it('sends model-only context attachments after a restart without showing or persisting them', async () => {
+    const h = createHarness();
+    const sid = 'plugin-context';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    const file = (name: string, url: string) => ({ id: name, name, path: '', ext: '.png', size: 8,
+      category: 'image' as const, mimeType: 'image/png', url });
+    h.coordinator.enqueue(sid, makeItem('relay', '这张图什么意思', {
+      files: [file('photo.png', 'cindy-media://blobs/a.png')],
+      contextFiles: [file('earlier.png', 'cindy-media://blobs/b.png')],
+    }));
+    await flush();
+    const snapshot = JSON.parse(JSON.stringify(h.persistQueueSnapshot.mock.calls.at(-1)?.[1] ?? []));
+    expect(h.coordinator.getProjection(sid).pendingQueue[0]).not.toHaveProperty('contextFiles');
+    const restarted = createHarness();
+    restarted.setLoadQueueSnapshot(async () => snapshot);
+    await restarted.coordinator.ensureQueueRestored(sid);
+    restarted.sendToAgent.mockImplementationOnce(async (_id, message, _create, opts) => {
+      expect(message).toEqual({ type: 'user', content: [
+        { type: 'text', text: '这张图什么意思' },
+        { type: 'image', path: 'cindy-media://blobs/a.png', mimeType: 'image/png' },
+        { type: 'image', path: 'cindy-media://blobs/b.png', mimeType: 'image/png' },
+      ] });
+      expect(JSON.stringify(opts?.persistUserMessage)).not.toContain('blobs/b.png');
+      restarted.setRunning(true);
+      return sendSuccess();
+    });
+    restarted.coordinator.resume(sid);
+    await flush();
+    expect(restarted.sendToAgent).toHaveBeenCalledOnce();
+  });
+
   it.each(['policy', 'preparation', 'provider'] as const)(
     'keeps coordination ownership when human steering fails at %s', async (failure) => {
       const h = createHarness(), sid = `coordination-steer-${failure}`;
