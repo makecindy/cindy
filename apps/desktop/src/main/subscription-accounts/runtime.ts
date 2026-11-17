@@ -124,7 +124,7 @@ type Usage = {
 interface AccountSnapshot {
   /** Non-secret equality key; never a credential or execution authorization. */
   accountKey?: string;
-  auth: AuthState & { plan?: string; planTier?: string; planType?: string; loginExpiresAt?: string };
+  auth: AuthState & { plan?: string; planTier?: string; planDisplayName?: string; planType?: string; loginExpiresAt?: string };
   usage?: Usage;
   unavailable?: boolean;
   at: number;
@@ -261,7 +261,7 @@ async function persistUsage(state: OwnerRuntime, provider: SubscriptionProvider,
   const fingerprint = usageFingerprint(provider, info);
   const payload = provider === 'anthropic' ? info.usage.claudeUsage && {
     ...info.usage.claudeUsage, accountFingerprint: fingerprint,
-    subscriptionType: info.auth.plan, planTier: info.auth.planTier,
+    subscriptionType: info.auth.plan, planTier: info.auth.planTier, planDisplayName: info.auth.planDisplayName,
   } : info.usage.codexUsage && {
     ...info.usage.codexUsage, accountFingerprint: fingerprint,
     planType: info.auth.planType ?? info.auth.plan ?? info.usage.codexPlan,
@@ -792,7 +792,8 @@ async function snapshot(
             : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
         };
         observedUsage ||= !!current?.usage && (current.auth.plan !== result.auth.plan
-          || current.auth.planTier !== result.auth.planTier || current.auth.planType !== result.auth.planType);
+          || current.auth.planTier !== result.auth.planTier || current.auth.planDisplayName !== result.auth.planDisplayName
+          || current.auth.planType !== result.auth.planType);
       } catch (error) {
         const account = provider === 'anthropic'
           ? readPool(provider)?.accounts.find((account) => account.id === id) : undefined;
@@ -817,7 +818,8 @@ async function snapshot(
       return state.cache.get(key) ?? { auth: { authenticated: false }, at: 0 };
     if (result.usage?.claudeUsage) result = { ...result, usage: { ...result.usage, claudeUsage: {
       ...result.usage.claudeUsage, subscriptionType: result.auth.plan,
-      planTier: result.auth.planTier, accountFingerprint: usageFingerprint(provider, result),
+      planTier: result.auth.planTier, planDisplayName: result.auth.planDisplayName,
+      accountFingerprint: usageFingerprint(provider, result),
     } } };
     const previous = state.cache.get(key);
     state.cache.set(key, result);
@@ -1445,6 +1447,7 @@ export async function readSubscriptionSessionAccount(
       ...(info.auth.identity ? { identity: info.auth.identity } : {}),
       ...(info.auth.plan ? { plan: info.auth.plan } : {}),
       ...(info.auth.planTier ? { planTier: info.auth.planTier } : {}),
+      ...(info.auth.planDisplayName ? { planDisplayName: info.auth.planDisplayName } : {}),
       ...(info.auth.planType ? { planType: info.auth.planType } : {}),
       paused: config.paused,
       status: info.unavailable
@@ -1627,7 +1630,7 @@ export async function readSubscriptionUsage(providerId?: string) {
       const info = state.cache.get(keyOf(provider, target.id))!;
       return subscriptionUsageView({ providerId: target.providerId, provider, accountId: target.id,
         authenticated: info.auth.authenticated, unavailable: info.unavailable, plan: info.auth.plan,
-        planTier: info.auth.planTier, planType: info.auth.planType,
+        planTier: info.auth.planTier, planDisplayName: info.auth.planDisplayName, planType: info.auth.planType,
         ...accountUsage(info.usage), updatedAt: info.usageAt }, Date.now());
     }));
   return { scope: 'local', accounts };
@@ -1701,6 +1704,7 @@ async function readSubscriptionPoolView(
         ...(info.auth.authenticated && !info.unavailable && info.accountKey ? { accountKey: info.accountKey } : {}),
         plan: info.auth.plan,
         planTier: info.auth.planTier,
+        planDisplayName: info.auth.planDisplayName,
         planType: info.auth.planType,
         ...(provider === 'anthropic' && !disconnectedFor(pool, provider, account.id) && info.auth.authenticated
           && info.auth.loginExpiresAt ? { loginExpiresAt: info.auth.loginExpiresAt } : {}),

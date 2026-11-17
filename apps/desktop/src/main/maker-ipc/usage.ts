@@ -119,7 +119,8 @@ const claudeSubscriptionUsageReader = createClaudeSubscriptionUsageReader({
     if (!snapshot) throw new Error('claude get_usage returned unrecognized rate_limits');
     const subscriptionType = usage.subscriptionType ?? peekClaudeCliLoginStatus()?.subscriptionType;
     const planTier = peekClaudeCliLoginStatus()?.planTier;
-    return { ...snapshot, ...(subscriptionType ? { subscriptionType } : {}), ...(planTier ? { planTier } : {}) };
+    const planDisplayName = peekClaudeCliLoginStatus()?.planDisplayName ?? null;
+    return { ...snapshot, ...(subscriptionType ? { subscriptionType } : {}), ...(planTier ? { planTier } : {}), planDisplayName };
   },
   recordSnapshot: recordClaudeSubscriptionUsageSnapshot,
   clearSnapshot: clearClaudeSubscriptionUsageSnapshot,
@@ -476,11 +477,13 @@ export function registerMakerUsageIpc(maker: Maker): void {
     const fingerprint = currentClaudeAccountFingerprint();
     const subscriptionType = peekClaudeCliLoginStatus()?.subscriptionType;
     const planTier = peekClaudeCliLoginStatus()?.planTier;
+    const planDisplayName = peekClaudeCliLoginStatus()?.planDisplayName ?? null;
     void recordClaudeSubscriptionUsageSnapshot({
       ...snapshot,
       ...(fingerprint ? { accountFingerprint: fingerprint } : {}),
       ...(subscriptionType ? { subscriptionType } : {}),
       ...(planTier ? { planTier } : {}),
+      planDisplayName,
     });
   });
 
