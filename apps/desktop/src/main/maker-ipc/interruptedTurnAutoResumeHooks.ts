@@ -166,12 +166,19 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
         (attempt) => {
           return (async () => {
             let fallbackRebuildSession: RuntimeSession | null = null;
-            const isCurrent = () => attempt.isCurrent() && !inputCoordinator.isExecutionPaused(sessionId)
+            const ownsAttempt = () => attempt.isCurrent()
               && (!startupAdmission || inputCoordinator.isAutoResumeAttemptCurrent(sessionId, decision.attemptToken) === true);
+            const mayContinue = () => {
+              if (!ownsAttempt()) return false;
+              if (!inputCoordinator.isExecutionPaused(sessionId)) return true;
+              interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
+              autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, { surfaceBanner: false });
+              return false;
+            };
             try {
               // Report retries must enter the original queue checkpoint before any
               // allocation. Runtime fallback can eagerly bootstrap a different route.
-              if (!isCurrent()) return;
+              if (!mayContinue()) return;
               const fallback: RuntimeFallbackResult<RuntimeSession> = reportPreparation || localPreparation
                 ? { session: null, outcome: 'unchanged' }
                 : await maybeApplySessionRuntimeFallback(
@@ -179,10 +186,10 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   decision.episodeAttempt,
                   decision.attemptToken,
                   requireRouteChange,
-                  isCurrent,
+                  () => ownsAttempt() && !inputCoordinator.isExecutionPaused(sessionId),
                 );
               fallbackRebuildSession = fallback.session;
-              if (!isCurrent()) return;
+              if (!mayContinue()) return;
               if (!canResumeAfterRuntimeFallback(requireRouteChange, fallback, sameRouteRetryable)) {
                 interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
                 autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
