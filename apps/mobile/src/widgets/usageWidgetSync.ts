@@ -31,9 +31,31 @@ const native = requireOptionalNativeModule<{
   readSnapshot(): string | null;
   clearSnapshot(): void;
   readPinnedDeviceIds(): string[];
+  /** iOS binaries with background refresh (`UsageWidgetBackgroundRefresh.swift`). */
+  finishBackgroundRefresh?(success: boolean): Promise<void>;
+  addListener?(event: 'onBackgroundRefresh', listener: () => void): { remove(): void };
 }>('CindyUsageWidgets');
 
 export const usageWidgetsSupported = native !== null;
+
+/**
+ * Runs `refresh` each time iOS grants the app background time for the widgets (it asks for it
+ * while a widget is placed), and tells iOS when it is done. Android and binaries without the
+ * native support never call it.
+ */
+export function onUsageWidgetBackgroundRefresh(refresh: () => Promise<boolean>): () => void {
+  if (!native?.addListener || !native.finishBackgroundRefresh) return () => {};
+  let running = false;
+  const subscription = native.addListener('onBackgroundRefresh', () => {
+    if (running) return;
+    running = true;
+    void refresh().catch(() => false).then((success) => {
+      running = false;
+      void native.finishBackgroundRefresh?.(success)?.catch(() => undefined);
+    });
+  });
+  return () => subscription.remove();
+}
 
 export function writeUsageWidgetStore(store: UsageWidgetStore): boolean {
   return native?.writeSnapshot(JSON.stringify(store)) ?? false;
