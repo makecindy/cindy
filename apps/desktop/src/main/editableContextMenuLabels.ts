@@ -48,6 +48,15 @@ export const EDITABLE_CONTEXT_MENU_LABELS: Record<SupportedLocale, EditableConte
     pasteAsPlainText: 'Paste as Plain Text',
     selectAll: 'Select All',
   },
+  "id": {
+    "undo": "Urungkan",
+    "redo": "Ulangi",
+    "cut": "Potong",
+    "copy": "Salin",
+    "paste": "Tempel",
+    "pasteAsPlainText": "Tempel sebagai teks biasa",
+    "selectAll": "Pilih semua"
+  },
   ja: {
     undo: '元に戻す',
     redo: 'やり直す',

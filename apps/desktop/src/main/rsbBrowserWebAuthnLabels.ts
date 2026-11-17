@@ -48,6 +48,15 @@ export const RSB_BROWSER_WEBAUTHN_LABELS: Record<
     unknownRelyingParty: 'this website',
     touchIdPromptReason: 'verify your identity on $1',
   },
+  "id": {
+    "title": "Pilih passkey",
+    "message": "Pilih passkey untuk {{relyingPartyId}}",
+    "detail": "Cindy hanya meneruskan pilihanmu ke pengautentikasi; rahasia passkey tetap di pengautentikasi.",
+    "cancel": "Batalkan masuk dengan passkey",
+    "unknownAccount": "Passkey {{index}}",
+    "unknownRelyingParty": "situs web ini",
+    "touchIdPromptReason": "verifikasi identitasmu di $1"
+  },
   ja: {
     title: 'パスキーを選択',
     message: '{{relyingPartyId}} で使用するパスキーを選択',

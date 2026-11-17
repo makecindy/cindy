@@ -3,6 +3,7 @@ import frCommon from '../renderer/i18n/locales/fr/common.json';
 import deCommon from '../renderer/i18n/locales/de/common.json';
 import ptPTCommon from '../renderer/i18n/locales/pt-PT/common.json';
 import ptBRCommon from '../renderer/i18n/locales/pt-BR/common.json';
+import idCommon from '../renderer/i18n/locales/id/common.json';
 import lzhCommon from '../renderer/i18n/locales/zh-Hant-x-lzh/common.json';
 import lzhHansCommon from '../renderer/i18n/locales/zh-Hans-x-lzh/common.json';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
@@ -29,6 +30,7 @@ const resources: Record<SupportedLocale, Record<string, unknown>> = {
   de: deCommon as Record<string, unknown>,
   'pt-PT': ptPTCommon as Record<string, unknown>,
   'pt-BR': ptBRCommon as Record<string, unknown>,
+  id: idCommon as Record<string, unknown>,
   'zh-Hant-x-lzh': lzhCommon as Record<string, unknown>,
   'zh-Hans-x-lzh': lzhHansCommon as Record<string, unknown>,
   en: enCommon as Record<string, unknown>,
@@ -48,6 +50,7 @@ const FALLBACK_CHAIN: Record<SupportedLocale, readonly SupportedLocale[]> = {
   de: ['de', 'en'],
   'pt-PT': ['pt-PT', 'en'],
   'pt-BR': ['pt-BR', 'en'],
+  id: ['id', 'en'],
   // 文言版缺 key 先落其现代底本，再落英文。
   'zh-Hant-x-lzh': ['zh-Hant-x-lzh', 'zh-TW', 'en'],
   'zh-Hans-x-lzh': ['zh-Hans-x-lzh', 'zh-CN', 'en'],
