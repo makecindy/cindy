@@ -436,6 +436,7 @@ import {
 // 协同 mutation 的归属取粘滞值:瞬断窗口内误判本机会在控制端建出/销毁 team,
 // 而入口本身是按粘滞 remoteDeviceId 渲染的。
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { useTaskBotMentions } from './hooks/useTaskBotMentions';
 // fork / orca 在被控端建新 session 后,navigate 前先把该设备会话列表重拉进 store(避免 404 破窗)。
 import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
 import {
@@ -1183,6 +1184,11 @@ function CCAgentSessionContent({
   // 冷启动 / bootstrap 竞态期间宁可暂时禁用系统文件打开，也不能把被控端 file:// 交给控制端。
   const rightSidebarDeviceLinkDeviceId =
     remoteDeviceId ?? session?.deviceLinkDeviceId ?? (session ? null : undefined);
+  const composerBotMentions = useTaskBotMentions(
+    rightSidebarDeviceLinkDeviceId,
+    session?.remoteHostId,
+    botMentions,
+  );
   // Every side chat entry uses the sidebar menu's gate, with the resolved origin
   // so shared-task guests fail it before the list snapshot carries it (#9136).
   // null = available; otherwise the reason shown by /side.
@@ -6458,7 +6464,7 @@ function CCAgentSessionContent({
                         }
                       : undefined
                   }
-                  botMentions={botMentions}
+                  botMentions={composerBotMentions}
                   hideRuntimeControls={Boolean(botChatIdentity)}
                 />
                 </div>

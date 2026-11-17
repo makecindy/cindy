@@ -60,6 +60,7 @@ import { themeService } from '@/themes/theme-service';
 import type { Theme as ColorTheme } from '@/themes/types';
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
 import { ChatInput } from '@/components/new-chat/ChatInput';
+import { useTaskBotMentions } from './hooks/useTaskBotMentions';
 import {
   WorktreeChipsRow,
   type WorktreeDefaultSource,
@@ -1044,6 +1045,10 @@ export function NewMakerDraftRoute() {
   // 归一成 string | undefined(能力 hook / getModelById / ChatInput prop 都按此签名;
   // 下面 isDeviceLinkDraft 与 create 分支的真值收窄对 undefined 同样成立)。
   const effectiveDeviceLinkDeviceId = draft.deviceLinkDeviceId ?? undefined;
+  const composerBotMentions = useTaskBotMentions(
+    effectiveDeviceLinkDeviceId ?? null,
+    effectiveRemoteHostId,
+  );
   const effectiveDeviceLinkDeviceName = draft.deviceLinkDeviceName;
   /**
    * 远程控制下新建任务(建到被控电脑上)时,Agent 同样可以在第三台电脑运行(与手机新建任务、
@@ -6962,6 +6967,7 @@ export function NewMakerDraftRoute() {
                     </div>
                   )}
                   <ChatInput
+                    botMentions={composerBotMentions}
                     onSend={handleSend}
                     onComposerTyping={openProvisionalDraftTask}
                     onComposerVoiceBusyChange={onProvisionalVoiceBusyChange}
