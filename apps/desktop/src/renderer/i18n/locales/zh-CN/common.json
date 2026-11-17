@@ -16764,6 +16764,7 @@
         "openInFileBrowser": "在文件浏览器查看",
         "showInFolder": "在文件夹中显示",
         "copyFilePath": "复制文件路径",
+        "copyFolderPath": "复制文件夹路径",
         "deleteFile": "删除文件"
       },
       "searchPanel": {
@@ -18976,6 +18977,7 @@
       "registrationFailed": "创建失败，请稍后重试",
       "silentStopExhausted": "检测到空响应，自动续跑已暂停。",
       "executionResultUnavailable": "未能取回执行结果，已停止自动续接。可以让助手检查已有的执行结果。",
+      "unexecutedToolMarkup": "模型把工具调用写成了文本，无法确认执行结果，本轮未完成。",
       "outputLimit": "模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。",
       "outputLimitReasoning": "思考已消耗本次输出的大部分预算，回复可能不完整。建议降低推理强度，或先压缩对话记录，再继续。",
       "outputLimitUsage": "本次模型请求已输出 {{outputTokens}} tokens，其中 {{reasoningTokens}} tokens 用于思考。",
