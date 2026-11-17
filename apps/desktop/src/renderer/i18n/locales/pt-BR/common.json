@@ -5587,6 +5587,13 @@
       },
       "toggleAria": "Alternar barra de navegação de perguntas"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Nomear worktrees com um modelo",
+        "description": "Dá ao worktree de uma nova tarefa um nome curto em inglês com base na primeira mensagem (ex.: fix-login-timeout), para que a pasta e a branch mostrem para que servem. Gerado pelos modelos auxiliares; se falhar, usa um nome aleatório. Afeta apenas os worktrees criados a partir de agora."
+      },
+      "toggleAria": "Ativar ou desativar a nomeação de worktrees com um modelo"
+    },
     "promptRecommendation": {
       "label": "Sugestões de entrada",
       "description": "Após uma resposta, o campo de entrada mostra uma sugestão para sua próxima mensagem. Pressione Tab para inseri-la.",
@@ -15636,6 +15643,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "Este arquivo está fora do diretório de trabalho da sessão atual e não pode ser localizado no explorador de arquivos da barra lateral",
       "openInDefaultBrowser": "Abrir no navegador",
       "copyLink": "Copiar link",
+      "addPrToHeader": "Adicionar ao cabeçalho",
+      "prAlreadyInHeader": "Já está no cabeçalho",
+      "prAddedToHeader": "Adicionado ao cabeçalho — o status acompanha esta tarefa.",
+      "prAssociatedNotInHeader": "Vinculado, fora do cabeçalho",
+      "prSavedNotInHeader": "Vínculo salvo. Os três lugares do cabeçalho estão ocupados; fixe este PR no gerenciador de PRs no cabeçalho da tarefa.",
       "linkCopied": "Link copiado",
       "viewSourceFile": "Ver código-fonte",
       "openInSidebarFailed": "Falha ao abrir no navegador da barra lateral",

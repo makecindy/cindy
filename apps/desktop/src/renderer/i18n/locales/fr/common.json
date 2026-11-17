@@ -5587,6 +5587,13 @@
       },
       "toggleAria": "Afficher ou masquer le rail de navigation des questions"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Nommer les worktrees avec un modèle",
+        "description": "Donne au worktree d’une nouvelle tâche un nom court en anglais tiré de son premier message (par ex. fix-login-timeout), pour que le dossier et la branche indiquent leur rôle. Généré par les modèles auxiliaires ; en cas d’échec, un nom aléatoire est utilisé. Ne concerne que les worktrees créés à partir de maintenant."
+      },
+      "toggleAria": "Activer ou désactiver le nommage des worktrees par un modèle"
+    },
     "promptRecommendation": {
       "label": "Suggestions de saisie",
       "description": "Après une réponse, la zone de saisie propose une suggestion pour votre prochain message. Appuyez sur Tab pour l'insérer.",
@@ -15636,6 +15643,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "Ce fichier se trouve en dehors du répertoire de travail de la session actuelle et ne peut pas être localisé dans le navigateur de fichiers de la barre latérale",
       "openInDefaultBrowser": "Ouvrir dans le navigateur",
       "copyLink": "Copier le lien",
+      "addPrToHeader": "Ajouter à l’en-tête",
+      "prAlreadyInHeader": "Déjà dans l’en-tête",
+      "prAddedToHeader": "Ajouté à l’en-tête — le statut accompagne cette tâche.",
+      "prAssociatedNotInHeader": "Liée, absente de l’en-tête",
+      "prSavedNotInHeader": "Lien enregistré. Les trois places de l’en-tête sont prises ; épinglez cette PR dans la gestion des PR de l’en-tête de la tâche.",
       "linkCopied": "Lien copié",
       "viewSourceFile": "Voir la source",
       "openInSidebarFailed": "Impossible d'ouvrir dans le navigateur de la barre latérale",

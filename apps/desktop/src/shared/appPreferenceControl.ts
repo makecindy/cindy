@@ -19,6 +19,7 @@ export const appPreferenceSchema = z.strictObject({
   showIgnoredDirectories: z.boolean().optional(),
   homeUsageDashboard: z.boolean().optional(),
   promptRecommendations: z.boolean().optional(),
+  worktreeModelNaming: z.boolean().optional(),
 });
 export type AppPreferencePatch = z.infer<typeof appPreferenceSchema>;
 export interface AppPreferenceRequest {

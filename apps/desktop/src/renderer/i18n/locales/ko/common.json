@@ -5486,6 +5486,13 @@
       },
       "toggleAria": "질문 내비게이션 레일 전환"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "모델로 worktree 이름 짓기",
+        "description": "새 작업의 worktree에 첫 메시지를 바탕으로 짧은 영어 이름(예: fix-login-timeout)을 붙여 폴더와 브랜치의 용도를 한눈에 알 수 있게 합니다. 보조 모델이 생성하며, 실패하면 무작위 이름을 사용합니다. 앞으로 만드는 worktree에만 적용됩니다."
+      },
+      "toggleAria": "모델로 worktree 이름 짓기 전환"
+    },
     "promptRecommendation": {
       "label": "다음 입력 제안",
       "description": "답변 후 입력창에 다음 메시지를 제안합니다. Tab 키를 누르면 입력됩니다.",
@@ -15467,6 +15474,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "이 파일은 현재 세션 작업 디렉터리 밖에 있어 사이드바 파일 브라우저에서 찾을 수 없습니다",
       "openInDefaultBrowser": "브라우저에서 열기",
       "copyLink": "링크 복사",
+      "addPrToHeader": "상단에 추가",
+      "prAlreadyInHeader": "이미 상단에 표시됨",
+      "prAddedToHeader": "상단에 추가했습니다. 상태도 이 작업과 함께합니다.",
+      "prAssociatedNotInHeader": "연결됨, 상단에는 표시되지 않음",
+      "prSavedNotInHeader": "연결을 저장했습니다. 상단의 세 자리가 모두 찼습니다. 작업 상단의 PR 관리에서 이 PR을 고정할 수 있습니다.",
       "linkCopied": "링크가 복사되었습니다",
       "viewSourceFile": "소스 보기",
       "openInSidebarFailed": "사이드바 브라우저에서 열지 못했습니다",

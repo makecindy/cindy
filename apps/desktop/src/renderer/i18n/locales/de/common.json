@@ -5529,6 +5529,13 @@
       },
       "toggleAria": "Fragen-Navigationsleiste umschalten"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Worktrees per Modell benennen",
+        "description": "Gibt dem Worktree einer neuen Aufgabe einen kurzen englischen Namen auf Basis der ersten Nachricht (z. B. fix-login-timeout), damit Ordner und Branch zeigen, wofür sie da sind. Erzeugt von den Hilfsmodellen; schlägt das fehl, wird ein zufälliger Name verwendet. Gilt nur für ab jetzt erstellte Worktrees."
+      },
+      "toggleAria": "Benennung von Worktrees per Modell umschalten"
+    },
     "promptRecommendation": {
       "label": "Eingabevorschläge",
       "description": "Nach einer Antwort zeigt das Eingabefeld einen Vorschlag für deine nächste Nachricht. Drücke die Tab-Taste, um ihn einzufügen.",
@@ -15495,6 +15502,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "Diese Datei liegt außerhalb des Arbeitsverzeichnisses der aktuellen Sitzung und kann im Dateibrowser der Seitenleiste nicht gefunden werden",
       "openInDefaultBrowser": "Im Browser öffnen",
       "copyLink": "Link kopieren",
+      "addPrToHeader": "Zur Kopfzeile hinzufügen",
+      "prAlreadyInHeader": "Bereits in der Kopfzeile",
+      "prAddedToHeader": "Zur Kopfzeile hinzugefügt – der Status begleitet diese Aufgabe.",
+      "prAssociatedNotInHeader": "Verknüpft, nicht in der Kopfzeile",
+      "prSavedNotInHeader": "Verknüpfung gespeichert. Die drei Plätze in der Kopfzeile sind belegt. Du kannst diesen PR in der PR-Verwaltung der Aufgabe anheften.",
       "linkCopied": "Link kopiert",
       "viewSourceFile": "Quelltext anzeigen",
       "openInSidebarFailed": "Öffnen im Browser der Seitenleiste fehlgeschlagen",

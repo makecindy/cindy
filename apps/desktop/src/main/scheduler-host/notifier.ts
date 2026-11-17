@@ -28,6 +28,7 @@ export interface ScheduleNotifierRuntime {
   showSessionNotification(payload: { sessionId: string; title: string; kind: 'done' | 'error' }): void;
   sendMobileSessionNotify(payload: {
     sessionId: string; title: string; kind: 'done' | 'error'; generation: number; detail?: string;
+    eventId: string; attentionExempt: true;
   }): void;
 }
 
@@ -88,6 +89,8 @@ export class ScheduleNotifier implements Notifier {
           title: schedule.name,
           kind: run.status === 'success' ? 'done' : 'error',
           generation,
+          eventId: `schedule-run:${run.id}`,
+          attentionExempt: true,
           ...(detail ? { detail } : {}),
         });
       } catch (err) {

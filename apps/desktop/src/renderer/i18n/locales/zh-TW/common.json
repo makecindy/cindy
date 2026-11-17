@@ -5486,6 +5486,13 @@
       },
       "toggleAria": "切換提問導覽列"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "用模型為 worktree 命名",
+        "description": "新任務的 worktree 會依第一則訊息取一個英文短名（如 fix-login-timeout），資料夾和分支一看就知道用途。由輔助模型產生，命名失敗時仍使用隨機名稱；只影響之後新建的 worktree。"
+      },
+      "toggleAria": "切換用模型為 worktree 命名"
+    },
     "promptRecommendation": {
       "label": "輸入建議",
       "description": "回覆後建議下一句，按 Tab 填入",
@@ -15466,6 +15473,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "該檔案不在當前任務工作目錄內，無法在側邊欄檔案瀏覽器中定位",
       "openInDefaultBrowser": "在瀏覽器開啟",
       "copyLink": "複製連結",
+      "addPrToHeader": "加入頂欄",
+      "prAlreadyInHeader": "已在頂欄",
+      "prAddedToHeader": "已加入頂欄，狀態會跟著任務走",
+      "prAssociatedNotInHeader": "已關聯，未在頂欄",
+      "prSavedNotInHeader": "已儲存關聯；頂欄前三項已滿，可在任務頂欄的 PR 管理中固定它",
       "linkCopied": "連結已複製",
       "viewSourceFile": "檢視原始碼",
       "openInSidebarFailed": "在側邊欄瀏覽器中開啟失敗",

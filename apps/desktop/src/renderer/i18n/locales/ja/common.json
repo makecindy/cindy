@@ -5486,6 +5486,13 @@
       },
       "toggleAria": "質問ナビゲーションレールを切り替え"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "モデルで worktree に名前を付ける",
+        "description": "新しいタスクの worktree に、最初のメッセージをもとに短い英語名（例：fix-login-timeout）を付け、フォルダとブランチの用途がひと目でわかるようにします。補助モデルで生成し、失敗した場合はランダムな名前を使います。今後作成する worktree にのみ適用されます。"
+      },
+      "toggleAria": "モデルによる worktree の命名を切り替え"
+    },
     "promptRecommendation": {
       "label": "次の入力候補",
       "description": "返信後、入力欄に次のメッセージの候補を表示します。Tab キーで入力できます。",
@@ -15467,6 +15474,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "このファイルは現在のセッション作業ディレクトリ外にあるため、サイドバーのファイルブラウザで特定できません",
       "openInDefaultBrowser": "ブラウザで開く",
       "copyLink": "リンクをコピー",
+      "addPrToHeader": "上部に追加",
+      "prAlreadyInHeader": "上部に追加済み",
+      "prAddedToHeader": "上部に追加しました。ステータスはこのタスクに紐づきます。",
+      "prAssociatedNotInHeader": "関連付け済み・上部には非表示",
+      "prSavedNotInHeader": "関連付けを保存しました。上部の3件は埋まっています。タスク上部の PR 管理からこの PR を固定できます。",
       "linkCopied": "リンクをコピーしました",
       "viewSourceFile": "ソースを表示",
       "openInSidebarFailed": "サイドバーのブラウザで開けませんでした",

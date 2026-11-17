@@ -48,6 +48,11 @@
     `im-attachments/wechat/sessions/<任务ID>/`。
   - 任务删除时，两者与上述四个渠道统一由 `removeImSessionAttachmentDirs` 清理。迁移这两个渠道前，
     先对齐本条规则。
+- 插件经 `cindy.tasks.send` / `cindy.targets.send` 转进任务的附件（例如微信群插件转发的照片、视频、文件）
+  按同一判据分流（`cindy-media/pluginMessageAttachments.ts`）：Host 按真实字节识别，总仓白名单内的图片与音视频
+  进总仓，其余按非媒体文件放进同一棵 `im-attachments/plugin/`（消息本身的文件领养进 `sessions/<任务ID>/`，
+  只给模型的参考文件留在 `staging/` 按龄回收）。细则见
+  [插件任务接口实现](plugin-task-api-implementation.md#消息附件)。
 
 ## 写入与记账
 
