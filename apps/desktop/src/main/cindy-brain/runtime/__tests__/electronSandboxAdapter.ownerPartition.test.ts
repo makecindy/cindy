@@ -1106,4 +1106,24 @@ describe('model favorites and recents (agent.modelPreferences)', () => {
     const unavailable = await call('prefs-declared', 'model-preferences');
     expect([unavailable.status, (await unavailable.json()).errorCode]).toEqual([503, 'NOT_AVAILABLE']);
   });
+
+  // Review 2026-11-17 (Codex P1): an account switch while the write body was still being read
+  // let the old account's page change the new account's favorites, then answered 403.
+  it('does not write favorites when the page went stale while its body was read', async () => {
+    const apply = vi.fn(async () => []);
+    const installed = { ...ghost('prefs-stale'), manifest: { ...ghost('prefs-stale').manifest, agent: { modelPreferences: true } } };
+    setGhostModelPreferencesProvider(createGhostModelPreferencesProvider({
+      getGhost: (id) => (id === installed.manifest.id ? installed : undefined),
+      ownerKey: () => harness.activeOwner.dataOwnerId ?? '', read: vi.fn(), apply,
+    }));
+    ensureGhostProtocolRegistered(installed);
+    let finishBody!: (body: string) => void;
+    kvEndpoint.readBoundedBodyText.mockReturnValueOnce(new Promise<string>((resolve) => { finishBody = resolve; }));
+    const handler = harness.sessions.get(approvedPartition(`cindy-ghost-owner:cloud:opaque-owner-a:${installed.manifest.id}`))!.protocolHandler!;
+    const pending = handler(new Request(`cindy-ghost://${installed.manifest.id}/model-preferences/favorites`, { method: 'POST', body: 'x' }));
+    harness.activeOwner = { mode: 'cloud', dataOwnerId: 'owner-b', generation: 2 };
+    finishBody(JSON.stringify({ kind: 'add', item: { providerId: 'openai', modelId: 'gpt', agent: 'codex' } }));
+    expect((await pending).status).toBe(403);
+    expect(apply).not.toHaveBeenCalled();
+  });
 });

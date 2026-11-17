@@ -186,6 +186,8 @@ export function createGhostPageHandler(ports: GhostPagePorts) {
             let body: string;
             try { body = await readBoundedBodyText(request); }
             catch { return new Response(null, { status: 400, headers }); }
+            // The body read can span an account switch or reinstall; never write for a stale page.
+            if (!isRegistrationCurrent()) return new Response(null, { status: 403, headers });
             result = await provider.applyFavorite(storagePart, body);
           } else {
             result = await provider.read(storagePart);
