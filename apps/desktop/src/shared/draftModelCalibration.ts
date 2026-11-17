@@ -13,6 +13,7 @@
 
 import {
   connectedProvidersForAgent,
+  getModel,
   isCindyAutoModelId,
   effectiveSourceIdForModel,
   isCindyDistributedProvider,
@@ -145,6 +146,108 @@ function markedDefaultModelIdForAgent(
     if (flagged) return flagged.id;
   }
   return null;
+}
+
+/**
+ * 某个目录里,一个型号该走哪家来源:用户为这个目标选过的那家优先,否则**订阅优先**。
+ *
+ * 「只交模型 id」不够:下游的 effectiveSourceIdForModel 会按原生默认重新解析,而
+ * nativeDefaultSourceId 对 claude-code 无条件优先 XD 网关 —— 于是「按订阅优先挑了
+ * anthropic 的订阅型号」在最后一步被推翻,计费走网关而不是用户已经付过钱的订阅额度
+ * (PR #1076 review)。挑中的来源必须一路带到提交。
+ */
+export function pickDraftProviderForModel(
+  sources: readonly ProviderView[],
+  preferredProviderId?: string | null,
+): string | null {
+  if (sources.length === 0) return null;
+  if (preferredProviderId && sources.some((provider) => provider.id === preferredProviderId)) {
+    return preferredProviderId;
+  }
+  // 订阅优先:用户已经付过钱的额度先用,网关(折扣路由)排后面。
+  const subscription = sources.find((provider) => provider.access?.kind === 'subscription');
+  return subscription?.id ?? sources[0]?.id ?? null;
+}
+
+/**
+ * 某个来源在**最终型号**上还能不能路由;不能就返回 null。
+ *
+ * 播种来源(以及实时选择里的来源)只有在目录能证明它**不提供**最终型号时才丢弃:
+ * 播种型号被换成目标目录里的别的型号之后,那个来源可能根本不提供新型号。显式带上它,
+ * 发送侧(resolveDeviceLinkSubmission 会保留显式来源)就会对着一个路由不出该型号的
+ * 来源建任务,首条消息必然失败。
+ *
+ * 但「路由不出去」不等于「不提供」:
+ *   · 来源暂时断连 / runtime 未开 —— 那是连接状态,目录里仍然留着这个型号。丢掉它就会
+ *     静默换成另一家账号 / 计费路径(provider-sharing §5.3:界面不能静默替换用户明确
+ *     选择的来源),执行端按选定来源报不可用才对。
+ *   · 目录里查不到这个来源(旧被控端不支持 maker:provider:list,目录为空;或来源已从
+ *     目录里消失)—— 无法证明它不提供,保留显式身份,让执行端按选定来源报不可用。
+ *
+ * 目录能证明「不提供」的两种:该 agent 下没有这个型号的条目,或条目本身被停用。
+ */
+export function resolveDraftProviderForModel(
+  providerId: string | null | undefined,
+  model: string | null | undefined,
+  providers: readonly ProviderView[],
+  agent: AgentKind,
+): string | null {
+  if (!providerId || !model) return null;
+  const source = providers.find((provider) => provider.id === providerId);
+  // 目录里查不到这个来源(旧被控端不支持 maker:provider:list,目录为空;或来源已从
+  // 目录里消失):无法证明它不提供这个型号 —— 保留用户明确选定的身份。
+  if (!source) return providerId;
+  // 来源在目录里:只有目录能证明它**不提供**这个型号时才丢弃(该 agent 下没有这个
+  // id 的条目,或条目本身被停用)。仅仅断连 / runtime 未开是状态问题 —— 丢掉它就会
+  // 静默换成另一家账号 / 计费路径,执行端按选定来源报不可用才对。
+  const entry = getModel(source, model, agent);
+  if (!entry || entry.disabled === true) return null;
+  return providerId;
+}
+
+/**
+ * 目标目录里「清单发现失败」的来源要剔掉,再谈默认:unauthorized / regionBlocked
+ * 这类确定性失败下,把从没选过模型的用户自动落到这个来源,首条消息必然失败。
+ *
+ * 失败时我们刻意保留上次成功的清单(设置页也已改口径),但那份清单只适合「用户自己
+ * 点进去选」,不适合当成默认值送人 —— 与本机自动路径同一口径。
+ *
+ * 两种例外:
+ *   · 用户为这个目标记下的来源就是它 —— 他选的就该生效;
+ *   · 全部来源都在失败态 —— 那时没有更好的选择,给个陈旧清单也好过一个都挑不出来。
+ */
+export function filterHealthyDraftProviders(
+  providers: readonly ProviderView[],
+  pinnedProviderId?: string | null,
+): ProviderView[] {
+  const kept = providers.filter(
+    (provider) => !provider.modelDiscoveryFailure || provider.id === pinnedProviderId,
+  );
+  return kept.length > 0 ? [...kept] : [...providers];
+}
+
+/**
+ * Fast 能力判定用的来源:必须落在**最终那一对**上。
+ *
+ * Fast 是 per-provider 能力 —— 同一个型号 id,不同来源下结论可能相反。播种来源
+ * (dlSel / deviceLinkInitial)只有在它确实提供**最终型号**时才能拿去判定;播种型号
+ * 被换成目标目录里别的型号之后,按播种那一代算出来的结论是错的:目标上有的 Fast 被
+ * 藏掉,或者别家的 true 被带到一个不支持它的来源上。
+ *
+ * 播种来源作数不了时退回最终算出来的那家(draftInitialProviderId)。
+ */
+export function resolveDraftFastProviderId(
+  seedProviderId: string | null | undefined,
+  model: string | null | undefined,
+  providers: readonly ProviderView[],
+  agent: AgentKind,
+  fallbackProviderId: string | null | undefined,
+): string | null {
+  return (
+    resolveDraftProviderForModel(seedProviderId, model, providers, agent) ??
+    fallbackProviderId ??
+    null
+  );
 }
 
 /**

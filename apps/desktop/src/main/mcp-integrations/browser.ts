@@ -1,5 +1,6 @@
 
 import fs from 'node:fs';
+import os from 'node:os';
 import nodePath from 'node:path';
 import {
   createBrowserControlRuntime,
@@ -37,6 +38,7 @@ import {
   managedConfigPatchBeforeStop,
   FOREIGN_AGENT_BROWSER_ERROR,
   isRealProfileError,
+  listInstalledChromium,
   probeOsSourceProfileReadAccess,
   readCopiedLoginsCdpPort,
   resolveSourceBrowserFromOs,
@@ -363,7 +365,11 @@ const backendController = new BrowserBackendController({
   persistKind: writeBrowserBackendKind,
   logger,
 });
-const browserBackendHealthService = new BrowserBackendHealthService(backendController, logger);
+const browserBackendHealthService = new BrowserBackendHealthService(
+  backendController,
+  logger,
+  () => listInstalledChromium({ platform: process.platform, home: os.homedir() }).length > 0,
+);
 
 /**
  * Switch the active backend. Shared by Settings and browser MCP mode changes.

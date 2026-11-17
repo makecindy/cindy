@@ -1,4 +1,5 @@
 import { isSafeGhostRelativePath } from './internal/ghostPath.js';
+import { GHOST_TOOLS_MAX } from './internal/toolsLimit.js';
 import { validateWithStoredMcpApps, parseGhostMcpApps, type GhostMcpApps } from './toolUi.js';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.js';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
@@ -19,6 +20,9 @@ export const GHOST_MANIFEST_SCHEMA_VERSION = 3 as const;
 
 /** ghost.json 的 description / whenToUse 字符上限。 */
 export const GHOST_MANIFEST_SUMMARY_MAX_CHARS = 300;
+
+/** tools 声明条数上限,见 internal/toolsLimit.ts。 */
+export { GHOST_TOOLS_MAX };
 
 /** Cindy host locales supported by Plugin manifest resources. */
 export type GhostManifestLocales = {
@@ -241,7 +245,7 @@ export interface GhostCardNeeds {
  * 声明 `agent` 默认只允许消费宿主在真实用户点击插件卡片时签发的
  * 一次性通行票；可选加档由 Desktop 如实展示，并由 Host 在运行时守门。
  */
-export const GHOST_HOST_TOOL_GROUPS = ['history', 'control', 'handoff', 'settings', 'scheduler', 'terminal', 'files', 'storage', 'browser', 'computer', 'ssh', 'docs', 'discovery'] as const;
+export const GHOST_HOST_TOOL_GROUPS = ['history', 'control', 'handoff', 'settings', 'scheduler', 'terminal', 'files', 'storage', 'browser', 'computer', 'ssh', 'docs', 'discovery', 'usage'] as const;
 export type GhostHostToolGroup = (typeof GHOST_HOST_TOOL_GROUPS)[number];
 
 /** Unknown groups survive normalization but never become runtime authority. */
@@ -267,6 +271,8 @@ export interface GhostAgentNeeds {
   observe?: boolean;
   /** 只读查看伙伴(含主人其他电脑上的)名单、实时状态、待处理请求摘要与最新回复,并在主窗口打开;需独立批准。 */
   companions?: boolean;
+  /** 读取并修改本机模型收藏、只读最近使用的模型;不依赖 tasks,安装/更新确认中单列。 */
+  modelPreferences?: boolean;
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -382,6 +388,16 @@ export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
  * 分成两档:两者花不同的钱(轻量任务模型链 vs embedding 模型),合成一档
  * 就没法只授权其中一样。
  */
+export const GHOST_CINDY_MODELS_ACTIONS = ['decisions', 'rerank'] as const;
+export type GhostCindyModelsAction = (typeof GHOST_CINDY_MODELS_ACTIONS)[number];
+
+/** Historical unknown data can be retained without being interpreted as a capability. */
+export function isGhostCindyModelActionsDeclaration(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 &&
+    value.every(action => typeof action === 'string' && GHOST_SLOT_NAME_RE.test(action)) &&
+    new Set(value).size === value.length;
+}
+
 export const GHOST_CINDY_EMBED_ACTIONS = ['text'] as const;
 export type GhostCindyEmbedAction = (typeof GHOST_CINDY_EMBED_ACTIONS)[number];
 
@@ -406,6 +422,7 @@ export interface GhostCindyNeeds {
   text?: GhostCindyTextAction[];
   /** 向量类:text=文本转向量(只生成不存储,向量原样递回意识自己保管)。 */
   embed?: GhostCindyEmbedAction[];
+  models?: GhostCindyModelsAction[];
   /** 搜索类:web=Cindy 托管的公网搜索(主机固定路由,插件不经手网关凭证)。 */
   search?: GhostCindySearchAction[];
   /**
@@ -467,11 +484,18 @@ export const GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL = 8;
 
 /**
  * 域名白名单条目格式:小写域名,至少两段(拒绝裸 TLD / 单段内网名),
- * 通配只允许最左一段(`*.example.com`);不收 IP、端口、路径、协议。
+ * 通配只允许最左一段(`*.example.com`)；也可声明精确 HTTP(S)/WS(S) origin，包含端口或内网地址。
  */
 const GHOST_NETWORK_LABEL_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 export function isValidGhostNetworkHostPattern(p: unknown): p is string {
   if (typeof p !== 'string' || p.length === 0 || p.length > 253) return false;
+  if (p.includes('://')) {
+    try {
+      const url = new URL(p);
+      return ['http:', 'https:', 'ws:', 'wss:'].includes(url.protocol) && url.origin === p
+        && !url.hostname.includes('*') && !url.username && !url.password;
+    } catch { return false; }
+  }
   const bare = p.startsWith('*.') ? p.slice(2) : p;
   const labels = bare.split('.');
   // 至少两段:`*.com` / `localhost` / 裸 TLD 全部拒绝,命中面必须是具体域。
@@ -479,6 +503,12 @@ export function isValidGhostNetworkHostPattern(p: unknown): p is string {
   // 纯数字四段视作 IP,拒收(白名单只认域名)。
   if (labels.every((l) => /^\d+$/.test(l))) return false;
   return labels.every((l) => GHOST_NETWORK_LABEL_RE.test(l));
+}
+
+/** Existing domain declarations retain HTTPS:443; an origin grants exactly one protocol/host/port. */
+export function ghostNetworkTargetMatches(pattern: string, url: URL): boolean {
+  return pattern.includes('://') ? pattern === url.origin
+    : url.protocol === 'https:' && url.port === '' && ghostNetworkHostMatches(pattern, url.hostname);
 }
 
 /**
@@ -1927,8 +1957,8 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
   // 工具声明(卡槽②):与 slots 含 'tool' 严格成对,规则同 panel。
   let tools: GhostToolDecl[] | undefined;
   if (raw.tools !== undefined) {
-    if (!Array.isArray(raw.tools) || raw.tools.length === 0 || raw.tools.length > 16) {
-      return { ok: false, reason: 'tools 必须是 1–16 项的数组' };
+    if (!Array.isArray(raw.tools) || raw.tools.length === 0 || raw.tools.length > GHOST_TOOLS_MAX) {
+      return { ok: false, reason: `tools 必须是 1–${GHOST_TOOLS_MAX} 项的数组` };
     }
     tools = [];
     const seenNames = new Set<string>();
@@ -2017,7 +2047,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
         reason: '声明了 cindy 能力详单但 slots 未包含 "cindy"',
       };
     }
-    cindy = unknownDeclarationFields(cindyRaw, ['image', 'video', 'media', 'text', 'embed', 'search', 'oneshotModel']);
+    cindy = unknownDeclarationFields(cindyRaw, ['image', 'video', 'media', 'text', 'embed', 'models', 'search', 'oneshotModel']);
     // 类目 → 合法动作表(image / video / media / text / embed / search;动作集恰好
     // 同名,但按类目查表,未来某类目动作分叉时这里天然承接)。
     const actionTable: Record<string, readonly string[]> = {
@@ -2026,11 +2056,18 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       media: GHOST_CINDY_MEDIA_ACTIONS,
       text: GHOST_CINDY_TEXT_ACTIONS,
       embed: GHOST_CINDY_EMBED_ACTIONS,
+      models: GHOST_CINDY_MODELS_ACTIONS,
       search: GHOST_CINDY_SEARCH_ACTIONS,
     };
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
       if (category === 'oneshotModel') continue; // 标量意图键,不是类目,单独校验
       if (!Object.hasOwn(actionTable, category)) continue;
+      if (category === 'models' && preserveHistoricalParameterSize && !isGhostCindyModelActionsDeclaration(actionsRaw)) {
+        // Keep old opaque bytes for receipt comparisons/downgrades, but never grant them.
+        Object.assign(cindy, { models: actionsRaw });
+        continue;
+      }
+
       if (!Array.isArray(actionsRaw) || actionsRaw.length === 0) {
         return { ok: false, reason: `cindy.${category} 必须是非空数组` };
       }
@@ -2055,6 +2092,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       else if (category === 'media') cindy.media = actions as GhostCindyMediaAction[];
       else if (category === 'text') cindy.text = actions as GhostCindyTextAction[];
       else if (category === 'embed') cindy.embed = actions as GhostCindyEmbedAction[];
+      else if (category === 'models') cindy.models = actions as GhostCindyModelsAction[];
       else if (category === 'search') cindy.search = actions as GhostCindySearchAction[];
       else
         return {
@@ -2215,7 +2253,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       if (typeof h !== 'string' || !isValidGhostNetworkHostPattern(h.trim().toLowerCase())) {
         return {
           ok: false,
-          reason: `network.hosts 含非法条目 ${JSON.stringify(h)}(小写域名、至少两段、通配只允许最左 "*.";不收 IP / 端口 / 路径 / 协议)`,
+          reason: `network.hosts 含非法条目 ${JSON.stringify(h)}(填写域名模式或精确 HTTP(S)/WS(S) origin，不含路径、查询或内嵌凭证)`,
         };
       }
       const host = h.trim().toLowerCase();
@@ -2447,7 +2485,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
               reason: 'network.secrets[].source 为 oidc-token 时必须显式声明非空 inject.hosts',
             };
           }
-          if (injectHosts.some((host) => host.startsWith('*.'))) {
+          if (injectHosts.some((host) => host.startsWith('*.') || host.includes('://'))) {
             return {
               ok: false,
               reason:
@@ -3194,15 +3232,16 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       return { ok: false, reason: 'agent.observe must be boolean' };
     }
     if (agentRaw.companions !== undefined && typeof agentRaw.companions !== 'boolean') return { ok: false, reason: 'agent.companions must be boolean' };
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions'])).length === 0) {
+    if (agentRaw.modelPreferences !== undefined && typeof agentRaw.modelPreferences !== 'boolean') return { ok: false, reason: 'agent.modelPreferences must be boolean' };
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && agentRaw.modelPreferences !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true 六项加档;仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true / modelPreferences: true 七项加档;仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions']),
+      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -3212,6 +3251,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
       ...(agentRaw.observe === true ? { observe: true } : {}),
       ...(agentRaw.companions === true ? { companions: true } : {}),
+      ...(agentRaw.modelPreferences === true ? { modelPreferences: true } : {}),
     };
   }
 
@@ -3558,7 +3598,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     const seenPreviewHosts = new Set<string>();
     for (const host of previewRaw.hosts) {
       if (
-        !isValidGhostNetworkHostPattern(host) &&
+        (!isValidGhostNetworkHostPattern(host) || (typeof host === 'string' && host.includes('://'))) &&
         !(typeof host === 'string' && GHOST_PREVIEW_LOOPBACK_HOSTS.has(host))
       ) {
         return {

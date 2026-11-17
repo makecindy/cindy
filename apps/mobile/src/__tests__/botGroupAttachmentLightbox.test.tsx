@@ -6,6 +6,11 @@ import type { BotGroupAttachment } from '@cindy/maker-shared/botGroupChat';
 import type { ResolveRemoteMediaFn } from '@/session/remoteMedia';
 
 // This suite exercises attachments; MCP App's native WebView is covered by mcpAppCard.test.tsx.
+// Window geometry is a native boundary; preview placement has its own production-hook suite.
+vi.mock('@/session/usePreviewChromeFrame', () => ({ usePreviewChromeFrame: () => ({
+  top: 0, bottom: 0, left: 12, right: 12, contentTop: 48,
+  documentContentTop: 64, documentHeaderHeight: 64, sharedStatusRow: false,
+}) }));
 vi.mock('@/session/McpAppCard', () => ({ McpAppCard: () => null }));
 // Card previews have their own regression suite; do not load Expo's native viewer in this attachment suite.
 vi.mock('@/plugins/PluginNativeIntent', () => ({ PluginNativeIntent: () => null }));

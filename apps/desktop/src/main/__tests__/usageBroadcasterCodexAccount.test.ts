@@ -5,10 +5,13 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+let testOwner = 0;
+function legacyProjection(value: Record<string, any>) { return value.legacySnapshot ?? value; }
 
 const mocks = vi.hoisted(() => ({
   queryOne: vi.fn(),
-  exec: vi.fn(async () => undefined),
+  pool: vi.fn((): { accounts: { id: string }[] } | null => null),
+  exec: vi.fn(async (_sql?: string, _params?: unknown[]) => undefined),
   getCurrentDbClientUserId: vi.fn(() => 'user-1'),
   legacyCurrentUserId: vi.fn(() => null),
   /** 广播到 renderer 的 payload —— 并发用例据此断言不会闪出空快照。 */
@@ -28,6 +31,11 @@ vi.mock('electron', () => ({
 vi.mock('../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
+vi.mock('../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => mocks.getCurrentDbClientUserId() ?? '',
+  isAppSessionBoundaryPending: () => false,
+}));
+vi.mock('../subscription-accounts/store.js', () => ({ readLegacyCodexAccountId: () => undefined, readPool: mocks.pool }));
 vi.mock('../localDb/dailySpend', () => ({
   incrementDailySpend: vi.fn(),
   getTodaySpend: vi.fn(async () => 0),
@@ -65,10 +73,10 @@ const WEB_SNAPSHOT = {
 
 describe('codex account usage source slots', () => {
   beforeEach(() => {
-    vi.resetModules();
+    mocks.pool.mockReset().mockReturnValue(null);
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.legacyCurrentUserId.mockReturnValue(null);
     mocks.broadcasts.length = 0;
   });
@@ -183,6 +191,7 @@ describe('codex account usage source slots', () => {
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
     const persistedJson = lastExecParams[1] as string;
 
+    // reset-modules: restore persisted quota after a simulated process restart.
     vi.resetModules();
     const rehydrated = await import('../usageBroadcaster');
     mocks.queryOne.mockResolvedValue({ snapshot: persistedJson });
@@ -202,10 +211,10 @@ describe('codex account usage source slots', () => {
 
 describe('codex app-server limit buckets', () => {
   beforeEach(() => {
-    vi.resetModules();
+    mocks.pool.mockReset().mockReturnValue(null);
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.broadcasts.length = 0;
   });
 
@@ -295,6 +304,7 @@ describe('codex app-server limit buckets', () => {
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
     const persistedJson = lastExecParams[1] as string;
 
+    // reset-modules: restore persisted quota after a simulated process restart.
     vi.resetModules();
     const rehydrated = await import('../usageBroadcaster');
     mocks.queryOne.mockResolvedValue({ snapshot: persistedJson });
@@ -320,10 +330,10 @@ describe('codex app-server limit buckets', () => {
 
 describe('codex bucket edge cases (review follow-up)', () => {
   beforeEach(() => {
-    vi.resetModules();
+    mocks.pool.mockReset().mockReturnValue(null);
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.broadcasts.length = 0;
   });
 
@@ -350,6 +360,7 @@ describe('codex bucket edge cases (review follow-up)', () => {
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
     const persistedJson = lastExecParams[1] as string;
 
+    // reset-modules: restore persisted quota after a simulated process restart.
     vi.resetModules();
     const rehydrated = await import('../usageBroadcaster');
     mocks.queryOne.mockResolvedValue({ snapshot: persistedJson });
@@ -426,10 +437,10 @@ describe('codex bucket edge cases (review follow-up)', () => {
 
 describe('codex stale bucket pruning', () => {
   beforeEach(() => {
-    vi.resetModules();
+    mocks.pool.mockReset().mockReturnValue(null);
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.broadcasts.length = 0;
   });
 
@@ -468,10 +479,10 @@ describe('codex stale bucket pruning', () => {
 
 describe('empty snapshot must not clobber the persisted row', () => {
   beforeEach(() => {
-    vi.resetModules();
+    mocks.pool.mockReset().mockReturnValue(null);
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.broadcasts.length = 0;
   });
 
@@ -521,7 +532,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
 
     expect(mocks.exec).toHaveBeenCalled();
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.primary?.usedPercent).toBe(91);
   });
 
@@ -546,7 +557,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
     // 且这份观测在下一笔事件时随 payload 一并落库, 不会永久停在内存里。
     await broadcaster.recordCodexAccountUsageSnapshot(NULL_SPARSE_EVENT);
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.primary?.usedPercent).toBe(91);
   });
 
@@ -569,7 +580,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
     // 而且下一笔事件写回库时窗口仍在, 不会把损坏落盘。
     await broadcaster.recordCodexAccountUsageSnapshot(NULL_SPARSE_EVENT);
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.primary?.usedPercent).toBe(82);
   });
 
@@ -585,7 +596,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
     expect(mocks.exec).not.toHaveBeenCalled();
 
     // 用户登录后必须重新查库, 并恢复正常落库。
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.queryOne.mockResolvedValue(null);
     await broadcaster.recordCodexAccountUsageSnapshot(APP_SERVER_SNAPSHOT);
 
@@ -597,14 +608,14 @@ describe('empty snapshot must not clobber the persisted row', () => {
     const broadcaster = await import('../usageBroadcaster');
     // DbClient 接管会关闭 legacy localDb 并清空它的 owner；新 client 仍持有当前用户。
     mocks.legacyCurrentUserId.mockReturnValue(null);
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.queryOne.mockResolvedValue({ snapshot: JSON.stringify(APP_SERVER_SNAPSHOT) });
 
     const payload = await broadcaster.readCodexAccountUsageSnapshot();
 
     expect(mocks.queryOne).toHaveBeenCalledWith(
       'SELECT snapshot FROM account_usage_snapshots WHERE agent_kind = ?',
-      ['codex'],
+      ['codex:default'],
     );
     expect(payload?.primary?.usedPercent).toBe(82);
     expect(payload?.secondary?.usedPercent).toBe(55);
@@ -640,7 +651,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
 
     expect(mocks.exec).toHaveBeenCalled();
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.rateLimitReachedType).toBe('credits_depleted');
   });
 
@@ -663,7 +674,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
 
     expect(mocks.exec).toHaveBeenCalled();
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.primary?.usedPercent).toBe(82);
     expect(persisted.secondary?.usedPercent).toBe(55);
   });
@@ -681,7 +692,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
 
     expect(mocks.exec).toHaveBeenCalled();
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.rateLimitReachedType ?? null).toBeNull();
   });
 
@@ -703,7 +714,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
 
     expect(mocks.exec).toHaveBeenCalled();
     const lastExecParams = (mocks.exec.mock.calls.at(-1) as unknown[] | undefined)?.[1] as unknown[];
-    const persisted = JSON.parse(lastExecParams[1] as string);
+    const persisted = legacyProjection(JSON.parse(lastExecParams[1] as string));
     expect(persisted.webSnapshot?.planType).toBe('prolite');
     expect(persisted.webSnapshot?.credits?.balance).toBe('12.50');
   });
@@ -734,10 +745,10 @@ describe('empty snapshot must not clobber the persisted row', () => {
 
 describe('sparse rate-limit updates without a limitId', () => {
   beforeEach(() => {
-    vi.resetModules();
+    mocks.pool.mockReset().mockReturnValue(null);
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue(`test-owner-${++testOwner}`);
     mocks.broadcasts.length = 0;
   });
 
@@ -774,4 +785,43 @@ describe('sparse rate-limit updates without a limitId', () => {
     const payload = await broadcaster.readCodexAccountUsageSnapshot();
     expect(Object.keys(payload?.appServerBuckets ?? {})).toEqual(['__default__']);
   });
+});
+
+// Unit: an already-started legacy runtime can emit quota after the new pool removes its login.
+// This real legacy writer must neither persist nor return that removed account's late quota.
+it('does not revive a removed CLI-origin account through legacy quota events', async () => {
+  const broadcaster = await import('../usageBroadcaster');
+  mocks.getCurrentDbClientUserId.mockReturnValue('removed-account-owner');
+  mocks.queryOne.mockResolvedValue(null);
+  mocks.pool.mockReturnValue({ accounts: [{ id: 'second' }] });
+  mocks.exec.mockClear();
+  try {
+    await broadcaster.recordCodexAccountUsageSnapshot({ primary: { usedPercent: 42 }, fiveHour: { utilization: 42 }, updatedAt: 1 });
+    expect(mocks.exec).not.toHaveBeenCalled();
+    expect(await broadcaster.readCodexAccountUsageSnapshot()).toBeNull();
+  } finally { mocks.pool.mockReturnValue(null); }
+});
+
+// Unit integration: seed the pool writer's actual stored shape, then use the real old broadcaster
+// and clear. Independent tests of either writer missed removal of the restoration fingerprint.
+it('preserves the verified pool row when a legacy reader updates or clears its quota', async () => {
+  const rows = new Map<string, string>();
+  mocks.getCurrentDbClientUserId.mockReturnValue('mixed-quota-writers');
+  mocks.pool.mockReturnValue({ accounts: [{ id: 'default' }] });
+  mocks.queryOne.mockImplementation(async (_sql, [key]) => rows.has(key) ? { snapshot: rows.get(key) } : null);
+  mocks.exec.mockImplementation(async (_sql, params) => { const [key, value] = params!; rows.set(String(key), String(value)); });
+  const storage = await import('../usage/accountUsageStorage.js');
+  const broadcaster = await import('../usageBroadcaster');
+  const verified = { accountFingerprint: 'same-verified-workspace', planType: 'plus',
+    appServerBuckets: { codex: { primary: { usedPercent: 12 }, updatedAt: Date.now() } }, webSnapshot: null };
+  try {
+    await storage.writeStoredAccountUsage('openai', 'default', verified);
+    await broadcaster.recordCodexAccountUsageSnapshot(APP_SERVER_SNAPSHOT);
+    expect(await storage.readStoredAccountUsage('openai', 'default')).toEqual(verified);
+    expect((await broadcaster.readCodexAccountUsageSnapshot())?.primary?.usedPercent).toBe(82);
+    await broadcaster.clearCodexAccountUsageSnapshot();
+    expect(await storage.readStoredAccountUsage('openai', 'default')).toEqual(verified);
+    expect(await broadcaster.readCodexAccountUsageSnapshot()).toBeNull();
+    expect([...rows.keys()]).toEqual(['codex:default']);
+  } finally { mocks.pool.mockReturnValue(null); }
 });

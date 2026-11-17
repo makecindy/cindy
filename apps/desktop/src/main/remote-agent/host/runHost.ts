@@ -1,3 +1,5 @@
+import { bindHostedAttachmentPreservation } from '../../maker-host/attachmentPreservation.js';
+import { remoteAttachmentPreservation, ATTACHMENT_PRESERVATION_PATH } from '../attachmentPreservation.js';
 import type { GeneratedImageUpstream } from '../../cindy-media/generatedImageJournal';
 import { remoteAgentStartupTiming } from '../startupTiming';
 import { RemoteTurnTerminalOwnership, startsRemoteProductTurn } from '../turnLifecycle';
@@ -467,6 +469,7 @@ interface Run {
   closing: boolean;
   handle?: AgentSessionHandle;
   tunnel?: RunTunnel;
+  releaseAttachmentPreservation?: () => void;
   execStartupBatches?: Map<string, ReturnType<typeof createExecServerStartupBatch>>;
   attachmentsDir: string;
   /** 影子工作区根(按 hostSessionId 复用，任务收尾后清理)。 */
@@ -671,6 +674,9 @@ function describeHandle(handle: AgentSessionHandle, shadowDir: string, mirrorRoo
 export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   const now = deps.now ?? Date.now;
   const runs = new Map<string, Run>();
+  // A close can finish before native startup returns its handle. Keep that
+  // reservation until startup has disposed any resources that arrived late.
+  const startingRuns = new WeakSet<Run>();
   // Completion receipts outlive a closed/purged run until the original owner can acknowledge them.
   const pendingStandbyCompletions = new Set<Run>();
   const uploads = new Map<string, Upload>();
@@ -690,7 +696,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     const counts = new Map<string, number>();
     for (const run of runs.values()) {
       // 清理完成前仍占名额，包括正在关闭的实例。
-      if (run.closedAt !== undefined) continue;
+      if (run.closedAt !== undefined && !startingRuns.has(run)) continue;
       const device = limitDeviceOf(run.controller);
       counts.set(device, (counts.get(device) ?? 0) + 1);
     }
@@ -1625,8 +1631,28 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           },
         }),
       );
+      if (run.closing) {
+        // finishRun may already have closed the log before this async listener
+        // was available. Startup owns late resources until it settles.
+        await tunnel.close();
+        return;
+      }
       run.tunnel = tunnel;
-      if (run.closing) return;
+      if (payload.acceptsAttachmentPreservation && payload.virtualWorkspace && !payload.options.localApplication?.hostToolsOnly) {
+        const assertCurrent = () => {
+          if (run.closing || !deps.isOwnerCurrent(run.owner) || !deps.isControllerAuthorized(run.controller)
+            || !delegatedRunAllowed(run)) throw new Error('Attachment recovery owner changed');
+        };
+        run.releaseAttachmentPreservation = bindHostedAttachmentPreservation(hostSessionId,
+          remoteAttachmentPreservation(async (request, signal) => {
+            assertCurrent();
+            const response = await reverseHttp(run, { method: 'POST', path: ATTACHMENT_PRESERVATION_PATH,
+              headers: [['content-type', 'application/json']], body: Buffer.from(JSON.stringify(request)) }, signal);
+            assertCurrent();
+            if (response.status !== 200 || !response.body) throw new Error('Attachment preservation unavailable');
+            return JSON.parse(response.body.toString('utf8'));
+          }, assertCurrent));
+      }
       // 必须先发布映射，再启动 Agent。Codex startSession 会在 started 之前读取 exec-server 环境。
       if (payload.virtualWorkspace) append(run, { t: 'state', state: {
         workspaceProjection: { shadowDir, mirrorRoot, extraDirs, writableDirs, virtualWorkspace: true, ...(previousMirrorRoots.length ? { previousMirrorRoots } : {}) },
@@ -1794,6 +1820,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     run.guestRoute = undefined;
     run.ownerRoute?.release();
     run.ownerRoute = undefined;
+    run.releaseAttachmentPreservation?.();
+    run.releaseAttachmentPreservation = undefined;
     await run.tunnel?.close().catch(() => undefined);
     run.execStartupBatches?.clear();
     await imagePreparation.get(run);
@@ -2609,6 +2637,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     run.guestRoute = undefined;
     run.ownerRoute?.release();
     run.ownerRoute = undefined;
+    run.releaseAttachmentPreservation?.();
+    run.releaseAttachmentPreservation = undefined;
     await run.tunnel?.close().catch(() => undefined);
     run.execStartupBatches?.clear();
     // Native image materialization must finish before the log becomes unreadable.
@@ -3666,6 +3696,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           ...(reserved && !relayTo ? { groupLoad: reserved } : {}),
         };
         runs.set(key(controller, request.runId), run);
+        startingRuns.add(run);
         ensureSweep();
         deps.log?.info('remote agent run opened', { runId: run.id, agent: run.kind, ...(relayTo ? { relayed: true } : {}) });
         if (groupRouted && payload.options.resumeSessionId) run.groupResumed = true;
@@ -3681,13 +3712,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               load?.release();
               append(run, { t: 'start-failed', error: relayErrorInfoFrom(error) });
               await finishRun(run, 'start-failed', 'navigation', false);
-            });
+            }).finally(() => { startingRuns.delete(run); });
           runStarts.set(run, starting);
           void starting;
         } else {
           // 组为受邀者的全新任务选中了本机这一台：本机起不来时与组内电脑一样换下一台。
           if (groupRouted && !payload.options.resumeSessionId) run.groupFreshStart = { avoid };
-          const starting = startRun(run, payload);
+          const starting = startRun(run, payload).finally(() => { startingRuns.delete(run); });
           runStarts.set(run, starting);
           void starting;
         }

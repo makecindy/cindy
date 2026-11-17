@@ -496,6 +496,50 @@ describe('home PR cache', () => {
     expect(invoke.mock.calls.map(([, channel]) => channel)).toEqual(['git-context:pr-refs:list', 'git-context:pr-status']);
   });
 
+  // Regression (unit): refreshKey is the task's updatedAt, so a running task re-read PR status
+  // every 10 s per visible row (logs: up to 29 status reads a minute from one phone) although
+  // the computer answers from a 60 s cache. Task updates must still re-read references (a new
+  // PR appears), but only read statuses for unchanged references after that cache window.
+  it('re-reads references on task updates but skips status reads inside the computer cache window', async () => {
+    const ref = { id: '1', sessionId: 's', owner: 'a', repo: 'r', prNumber: 7, url: '', firstSeenAt: 1, lastSeenAt: 1 };
+    let refs = [ref];
+    const invoke = vi.fn(async (_device: string, channel: string, args: unknown[]) => {
+      if (channel === 'git-context:pr-refs:list') return refs;
+      const { queries } = args[0] as { queries: Array<{ prNumber: number }> };
+      return queries.map(q => ({ owner: 'a', repo: 'r', prNumber: q.prNumber, ok: true, status: 'open' }));
+    });
+    const key = homeSessionPrCacheKey('reuse', 'd', 's');
+    const listener = vi.fn();
+    subscribeHomeSessionPr(key, listener);
+    const channels = () => invoke.mock.calls.map(([, channel]) => channel);
+    const refresh = async (now: number, refreshKey: string, eventful?: boolean) => {
+      const settled = listener.mock.calls.length;
+      refreshHomeSessionPr(key, (previous, load) => loadHomeSessionPr(invoke as never, 'd', 's', previous, false, load?.reuseStatuses), { now, refreshKey, eventful });
+      await vi.waitFor(() => expect(listener.mock.calls.length).toBe(settled + 1));
+    };
+    await refresh(0, 'a');
+    expect(channels()).toEqual(['git-context:pr-refs:list', 'git-context:pr-status']);
+    invoke.mockClear();
+    // Task update 15 s later: references only.
+    await refresh(15_000, 'b');
+    expect(channels()).toEqual(['git-context:pr-refs:list']);
+    expect(readHomeSessionPr(key)?.status).toMatchObject({ ok: true, status: 'open' });
+    invoke.mockClear();
+    // A newly mentioned PR is still read at once.
+    refs = [ref, { ...ref, id: '2', prNumber: 8, lastSeenAt: 2 }];
+    await refresh(30_000, 'c');
+    expect(channels()).toEqual(['git-context:pr-refs:list', 'git-context:pr-status']);
+    expect(readHomeSessionPr(key)?.ref.prNumber).toBe(8);
+    invoke.mockClear();
+    // Returning to the app always reads statuses again.
+    await refresh(45_000, 'c', true);
+    expect(channels()).toEqual(['git-context:pr-refs:list', 'git-context:pr-status']);
+    invoke.mockClear();
+    // After the cache window a task update reads statuses again.
+    await refresh(106_000, 'd');
+    expect(channels()).toEqual(['git-context:pr-refs:list', 'git-context:pr-status']);
+  });
+
   it('keeps the last known status of the same PR when the status lookup fails', async () => {
     const ref = { id: '1', sessionId: 's', owner: 'a', repo: 'r', prNumber: 7, url: '', firstSeenAt: 1, lastSeenAt: 1 };
     const merged = { owner: 'a', repo: 'r', prNumber: 7, ok: true, status: 'merged' };
@@ -536,7 +580,7 @@ describe('home PR cache', () => {
       // 读回的结果按已过期处理:首次挂载照常在后台重查,并拿上次状态做沿用依据。
       const load = vi.fn(async () => ({ ref, status: merged }));
       expect(refreshHomeSessionPr(key, load, { now: 2_000, persist: { ...persist, scope: '1' } })).toBe(0);
-      expect(load).toHaveBeenCalledWith({ ref, status: merged });
+      expect(load).toHaveBeenCalledWith({ ref, status: merged }, { reuseStatuses: false });
 
       // 冷启动已在线:首查在读回之前就开始,状态查询失败也不能把读回的状态覆盖成空。
       prStoreTesting.reset();

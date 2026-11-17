@@ -12,6 +12,16 @@ describe('shared guest MCP App history projection', () => {
     arguments: { private: 'input' },
   };
 
+  // R3: a shared guest needs the display name, never organization or endpoint identity.
+  it('redacts private organization and connection fields while preserving public card names', () => {
+    const project = (meta: unknown) => redactMessageRowForSharedGuest({ agentMeta: { mcpApp: true },
+      content: { mcpApp: { ...card, tool: { ...card.tool, _meta: meta } } } }).content;
+    const org = project({ 'cindy/plugin': { name: 'Planner', source: { kind: 'organization', namespace: 'acme' } } });
+    expect(org).toEqual({ mcpAppHistory: { version: 1, title: 'Planner', text: '', plugin: { name: 'Planner', source: { kind: 'organization' } } } });
+    const custom = project({ 'cindy/custom-mcp': { name: 'Team reports', url: 'https://private.invalid:8443', serverId: 'private-slug' } });
+    expect(custom).toEqual({ mcpAppHistory: { version: 1, title: 'Team reports · Custom MCP', text: '', customMcp: { name: 'Team reports' } } });
+  });
+
   it.each([false, true])(
     'retains a pending card name without private inputs (serialized=%s)',
     (serialized) => {
@@ -22,7 +32,7 @@ describe('shared guest MCP App history projection', () => {
       };
       const projected = redactMessageRowForSharedGuest(row);
       expect(projected.content).toEqual({
-        mcpAppHistory: { version: 1, title: 'draft', text: '' },
+        mcpAppHistory: { version: 1, customMcp: true, title: 'draft', text: '' },
       });
       expect(parseMcpAppRecord(projected.content)).toBeUndefined();
       expect(row.content).toEqual(serialized ? JSON.stringify(original) : original);

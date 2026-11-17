@@ -214,6 +214,10 @@ export function RemotePluginConfiguration({
                         agentKind: config.agentKind,
                         providerId: config.providerId,
                         model: config.model,
+                        // Null distinguishes an explicit Host choice from a legacy model echo.
+                        ...(preferences.tasks?.remoteRoutes === true
+                          ? { agentDeviceId: config.agentDeviceId ?? null }
+                          : {}),
                         ...(config.effort ? { effort: config.effort } : {}),
                         fastMode: config.fastMode ?? false,
                       }

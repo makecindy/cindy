@@ -42,6 +42,7 @@ import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
 import type {
   AgentKind,
+  InteractionRequest,
   PermissionMode,
   TurnPermissionOrigin,
   UserContentBlock,
@@ -112,7 +113,9 @@ import { readImRemoteAutomaticDefaults, readImRemotePermissionModes, readImRemot
 import { resolveImAutomaticDefaults } from '../im/defaultSessionSettings.js';
 import { getWorkspaceProviderRoute } from './workspaceProviderSourceStore.js';
 import {
+  SHARED_PREFS_CHANNEL,
   getWorkspacePref,
+  isSharedPrefsAdopted,
   isWorkspacePrefsMigrated,
   resolveWorkspacePrefOverrides,
   type HookPrefsChannel,
@@ -121,6 +124,7 @@ import { getDesktopProviderService } from '../maker-host/createDesktopProviderSe
 import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
 import { observeHookTurn, type HookTurnObserver } from './turnObserver.js';
 import { bindRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
+
 import { bindInputHandoffChannelNotice } from '../im/shared/inputHandoffChannelNotice.js';
 import { beginGroupHistoryAccess } from '../im/shared/groupHistoryAccess.js';
 import {
@@ -149,6 +153,7 @@ import { resolveHookSessionConfig, type ResolvedHookSessionConfig } from './defa
 import { resolvedImDefaultFingerprint, usesAutomaticImModel } from '../../shared/imAutomaticModel.js';
 import { decodeAttachments, sanitizeAttachmentName } from './attachments.js';
 import {
+  HOOK_INTERACTION_TIMEOUT_MS,
   cancelHookInteraction,
   composeInteractionCard,
   registerHookInteraction,
@@ -157,7 +162,6 @@ import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from
 import { getResolvedMainLocale, t } from '../i18n.desktop.js';
 import { imText } from '../im/shared/imText.js';
 import { modernLocaleOf } from '../../shared/locale.js';
-import { buildUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote.js';
 
 type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
 
@@ -203,31 +207,39 @@ function hookDefaultInputs(
   overrides: HookDispatchOverrides,
   sourceIm: string | null | undefined,
   workspaceCtx: HookWorkspaceCtx | undefined,
+  sharedProject = false,
 ) {
   const prefsChannel: HookPrefsChannel | null =
     sourceIm === 'telegram' || sourceIm === 'x' || sourceIm === 'slack' || sourceIm === 'feishu'
       ? sourceIm
       : null;
   const workspaceAlias = workspaceCtx?.alias;
+  // 所有官方机器人共用一套项目配置(sharedProjectPrefs.ts): 这个渠道原有的按渠道偏好并入
+  // 之后, 一律读共用的那一份; 并入之前(升级后还没连上过服务端)沿用它自己的那份。
+  const shared = sharedProject || (prefsChannel !== null && isSharedPrefsAdopted(prefsChannel));
   const localPref =
     prefsChannel !== null && workspaceAlias
-      ? getWorkspacePref(prefsChannel, workspaceCtx.teamId, workspaceAlias)
+      ? shared
+        ? getWorkspacePref(SHARED_PREFS_CHANNEL, null, workspaceAlias)
+        : getWorkspacePref(prefsChannel, workspaceCtx.teamId, workspaceAlias)
       : null;
   const mergedOverrides = resolveWorkspacePrefOverrides(
     localPref,
     overrides,
     prefsChannel !== null && workspaceAlias !== undefined && isWorkspacePrefsMigrated(prefsChannel),
   );
-  // 目录级来源偏好(纯本地, 用户在工作目录映射行显式选的来源)优先于草稿默认来源。
+  // 项目级来源偏好(纯本地, 用户在设置页该项目那一行显式选的来源)优先于草稿默认来源。
   const workdirRoute =
     prefsChannel !== null && workspaceAlias
-      ? getWorkspaceProviderRoute(prefsChannel, workspaceCtx.teamId, workspaceAlias)
+      ? shared
+        ? getWorkspaceProviderRoute(SHARED_PREFS_CHANNEL, null, workspaceAlias)
+        : getWorkspaceProviderRoute(prefsChannel, workspaceCtx.teamId, workspaceAlias)
       : null;
   const workdirProviderId = workdirRoute?.providerId ?? null;
-  // 官方 Telegram hook 与个人 Bot 是两个独立入口。个人 Bot 使用
-  // channel='telegram'；官方群继续读取 global，避免任一设置卡静默
-  // 改写另一入口的新会话路由。
-  const imDefaults = readImDefaultSettings(sourceIm === 'slack' ? 'slack' : undefined);
+  // 官方机器人与个人 Bot 是两个独立入口。个人 Bot 各用自己渠道的那份(如 channel='telegram');
+  // 官方机器人(含 Slack)统一读 global —— 没单独配置过的项目在哪个官方机器人里都按同一份
+  // 默认跑, 也避免任一个人 Bot 的设置卡静默改写官方入口的新任务路由。
+  const imDefaults = readImDefaultSettings();
   return { channel: prefsChannel, mergedOverrides, workdirProviderId, workdirRoute, imDefaults };
 }
 
@@ -240,6 +252,17 @@ function hookDefaultsFingerprint(inputs: ReturnType<typeof hookDefaultInputs>): 
   return JSON.stringify(['hook', channel, mergedOverrides.agentKind, mergedOverrides.model,
     mergedOverrides.effort, workdirProviderId, fingerprintImDefaultSettings(imDefaults),
     ...(workdirRoute?.agentDeviceId ? [workdirRoute.agentDeviceId] : [])]);
+}
+
+/** Plugin IM entrances use the same canonical project settings and resolver as official bots. */
+export function sharedImProjectFingerprint(alias: string): string {
+  return JSON.stringify(hookDefaultInputs({ agentKind: null, model: null, effort: null, permissionMode: null },
+    'slack', { alias, teamId: null }, true));
+}
+
+export function resolveSharedImProjectConfig(alias: string, log: { warn(msg: string): void }) {
+  return resolveNewSessionConfig({ agentKind: null, model: null, effort: null, permissionMode: null },
+    log, 'slack', { alias, teamId: null }, undefined, true);
 }
 
 /**
@@ -255,8 +278,9 @@ async function resolveNewSessionConfig(
   sourceIm?: string | null,
   workspaceCtx?: HookWorkspaceCtx,
   providerSnapshot?: ProviderView[],
+  sharedProject = false,
 ): Promise<ResolvedHookSessionConfig & { fingerprint: string }> {
-  const inputs = hookDefaultInputs(overrides, sourceIm, workspaceCtx);
+  const inputs = hookDefaultInputs(overrides, sourceIm, workspaceCtx, sharedProject);
   const fingerprint = hookDefaultsFingerprint(inputs);
   let providers: ProviderView[] | null = null;
   try {
@@ -1396,7 +1420,7 @@ export function createMakerHookSessionRunner(deps: {
       const publicCompanionNote = req.companionBotId
         ? '\n[渠道说明] 本轮是主人通过官方 X 账号绑定发起的公开提问，最终回答将公开回帖。请勿公开伙伴记忆或工作目录中的私人信息。回复由当前 X 通道投递，不要另用 X Manager 发帖。'
         : '';
-      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}${publicCompanionNote}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale(), { replyStyle: false })}`;
+      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}${publicCompanionNote}`;
       let replacementHandoff: string | null = null;
       if (req.isNew && req.replacementOfSessionId && req.source?.im === 'slack') {
         try {
@@ -1591,6 +1615,21 @@ export function createMakerHookSessionRunner(deps: {
                 turnId: randomUUID(),
                 origin: routeOrigin,
                 interactionSurface: req.onInteraction ? 'channel-card' : 'headless',
+                ...(req.onQuestion ? {
+                  questionTimeoutMs: HOOK_INTERACTION_TIMEOUT_MS,
+                  presentQuestion: async (question, controls) => {
+                    if (question.delivery !== 'async') {
+                      pendingInteractionNotices.set(question.requestId, awaitingInteractionNotice(question.kind));
+                      activeObserver?.markInteractionBoundary();
+                      activeObserver?.setNotice(awaitingInteractionNotice(question.kind));
+                      void controls.settled.finally(() => {
+                        pendingInteractionNotices.delete(question.requestId);
+                        activeObserver?.setNotice([...pendingInteractionNotices.values()].at(-1) ?? null);
+                      }).catch(() => undefined);
+                    }
+                    await req.onQuestion!(question, controls);
+                  },
+                } : {}),
                 sourceDescription: describeInteractionSource({
                   channelName: req.source?.im ?? req.origin.connectionName,
                   chatId: req.source?.channelName ?? req.title ?? req.source?.im ?? 'IM',

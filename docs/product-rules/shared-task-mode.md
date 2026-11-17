@@ -1,5 +1,10 @@
 # 共享任务：远程连接的多人版本
 
+> **读取时机**：修改共享任务、跨账号访客邀请、共享上下文或共享成员权限之前
+> **适用路径**：`apps/desktop/src/**/*{SharedTask,sharedTask}*`、`apps/mobile/src/**/*{SharedTask,sharedTask}*`、
+> `packages/**/*{SharedTask,sharedTask}*`、`packages/lizi-mcps/src/xdt-helper/shared_task.ts`、
+> `apps/desktop/help-knowledge/shared-tasks.md`
+
 > 产品裁决更新：2026-10-10。实现与验证进度见文末；本文不代表已上线。
 > 产品、代码、协议与存储统一使用“共享任务 / SharedTask”，开发期旧协议不保留兼容别名。
 

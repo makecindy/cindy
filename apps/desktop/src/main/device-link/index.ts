@@ -78,6 +78,11 @@ import { sanitizeSourceName, type MessageSourceHostDevice } from '@cindy/maker-s
 import * as authManager from '../authManager';
 import { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { setDirectoryThrottleOwnerSource } from './directoryThrottle.js';
+
+// 目录限流账本按 owner 分桶:登记当前账号的桶身份来源,让 deviceLinkApiFetch 的
+// 检查与 handleListDevices 的记账落在同一个桶里(Codex review #9360)。
+setDirectoryThrottleOwnerSource(activeOwnerScopeKey);
 import { createLogger } from '../logger';
 import { markStartupMilestone } from '../startupTimeline';
 import { onQuit } from '../lifecycle';
@@ -196,6 +201,7 @@ import {
   mobileNotificationIdentity,
   buildBotGroupNotifyPayload,
   buildSessionNotifyPayload,
+  shouldSuppressForActivity,
   type MobileSessionEventKind,
   type PermissionAlert,
   type QuestionAlert,
@@ -279,6 +285,11 @@ export function deviceLinkApiBase(): string {
 
 type DeviceDirectoryResponse = {
   devices?: DeviceView[];
+  /**
+   * Only one hybrid discovery leg answered: the rows are fresh but its absence
+   * proves nothing (a device that lives only on the other leg would look gone).
+   */
+  partial?: boolean;
 };
 let controllerDisplayNameRefreshGeneration = 0;
 const controllerDisplayNameFreshness = createControllerDisplayNameFreshnessTracker();
@@ -439,6 +450,10 @@ async function runControllerDisplayNamesFromDirectory(
     ) {
       return;
     }
+    // 只有一条腿读到时,这份目录证明不了缺席:展示名/presence 快照都会把「列表里没有」
+    // 当成「已经不在了」,于是另一条腿上的设备被抹掉(Codex review #9360「Keep one-leg
+    // hybrid results non-authoritative」)。这种回答不落快照,等下一次完整目录。
+    if (result.partial === true) return;
     const cachedNames = readLastKnownDeviceNames();
     applyControllerDisplayNameDirectorySnapshot({
       devices: result.devices ?? [],
@@ -1023,6 +1038,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // peer ACK 耗尽时，幂等的 local-db 读请求交给 linkRecovery 快速重开并只重试一次；
     // 写请求与长执行请求保持原有 in-flight 语义，避免重复副作用。
     peerResetReadRetry: true,
+    // A silent execution computer must not reconnect every controller sharing this relay.
+    // The reset listener below reuses the authorized, per-peer reopen loop.
+    peerFailurePolicy: 'isolate-outbound',
     // debug 日志开启时按 channel 统计回包字节，作为流量治理前后的对照。
     invokeMetrics: desktopInvokeTransferMetrics,
   };
@@ -1202,6 +1220,10 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   });
   client.onPeerTransportReset(({ deviceId }) => {
     invalidatePluginOauth(deviceId);
+    if (hasOutboundControlIntent(deviceId)) {
+      transportTimeoutReopen.trigger(deviceId);
+      return;
+    }
     // Mutual control shares one peer link: a locally exhausted inbound stream
     // also invalidates this Desktop's remote view, without reopening other peers.
     broadcast(DEVICE_LINK_PUSH.PEER_LINK_RESET, { deviceId });
@@ -1456,6 +1478,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         revokedByRemote.add(env.src);
         pluginSyncAccess.invalidate(env.src);
         responsivenessTracker?.clearDevice(env.src);
+        notifyRemotePushChannel(env.src, DEVICE_LINK_PUSH.ACCESS_REVOKED);
         broadcast(DEVICE_LINK_PUSH.ACCESS_REVOKED, { deviceId: env.src });
       }
       return;
@@ -1473,7 +1496,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // through this computer, like an ordinary source; the minute-by-minute received
     // poll no longer stands in for it.
     tapRemoteModelCatalogChange(env.src, p?.channel, isDeviceRevoked(env.src), activeShareHost);
-    if (typeof p?.channel === 'string' && !isDeviceRevoked(env.src)) notifyRemotePushChannel(env.src, p.channel);
+    if (typeof p?.channel === 'string' && !isDeviceRevoked(env.src)) notifyRemotePushChannel(env.src, p.channel, p.payload);
     if (sharePeer && p?.channel === 'maker:provider:changed') {
       if (!activeShareHost) return;
       broadcast(DEVICE_LINK_PUSH.REMOTE_PUSH, { deviceId: `share:${sharePeer.shareId}`, channel: p.channel, payload: {} });
@@ -1945,6 +1968,20 @@ export function handleDeviceLinkSystemResume(): void {
   client.restartConnections('system-resume');
 }
 
+/**
+ * 系统即将睡眠:主动、正常地断开 relay,让对端立即看到本机离线，而不是各自等
+ * 可靠层 ACK 超时 + 链路判死 + 弃帧(合计约 1.5 分钟)才发现。睡眠期间不重连，
+ * 唤醒由 handleDeviceLinkSystemResume 重建；平台没发唤醒事件时 client 自带清醒
+ * 时间兜底(SYSTEM_SUSPEND_RECONNECT_HOLD_MS)。持有权 / 登录闸与唤醒一致。
+ */
+export function handleDeviceLinkSystemSuspend(): void {
+  if (!client || linkTornDown) return;
+  if (arbiter && !arbiter.isOwner()) return;
+  if (!authManager.getAuthState().isAuthenticated) return;
+  log.info('system suspend: closing device-link connection until resume');
+  client.suspendConnectionsForSystemSleep('system-suspend');
+}
+
 export function getDeviceLinkConnectionIssue(): DeviceLinkConnectionIssue | null {
   return client?.getConnectionIssue() ?? null;
 }
@@ -2204,10 +2241,9 @@ function assertRemoteControlTargetEnabled(deviceId: string): void {
 
 /**
  * 掉线/重连窗口里发起请求时,先有界等待连接就绪(与 mobile 的
- * ensureOnlineForRequest 同款):online 直接放行;否则 un-park 退避计时器促成
- * 立即重连并有界等待上线。上限够一次健康重连握手完成(通常 <1s),又短到
- * 连不上时快速失败(NOT_CONNECTED,瞬态)交上层重试链/熔断——把「单次请求
- * park 在退避 gap 里干等(最坏 30s)」压成「等一次重连」。
+ * ensureOnlineForRequest 同款):online 直接放行;否则在自己的等待预算内
+ * 共享已有退避与握手，不因新请求提前建连或清零退避次数。
+ * 超时以 NOT_CONNECTED(瞬态)交上层重试链/熔断，共享连接继续按原节奏恢复。
  */
 const CONNECT_READY_TIMEOUT_MS = 1_500;
 
@@ -2378,7 +2414,7 @@ export async function remoteInvoke(
   deviceId: string,
   channel: string,
   args: unknown[],
-  options?: { preSend?: () => void; background?: boolean; diagnosticSource?: 'renderer' | 'main'; liveProviderMetadata?: true },
+  options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main'; liveProviderMetadata?: true },
 ): Promise<InvokeResultPayload> {
   if (options?.liveProviderMetadata) return remoteInvokeLive(deviceId, channel, args, options);
   const closeEpoch = getRemoteLinkCloseEpoch(deviceId);
@@ -2392,7 +2428,7 @@ export async function remoteInvoke(
 
 async function remoteInvokeLive(
   deviceId: string, channel: string, args: unknown[],
-  options?: { preSend?: () => void; background?: boolean; diagnosticSource?: 'renderer' | 'main' },
+  options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' },
 ): Promise<InvokeResultPayload> {
   options?.preSend?.();
   assertNotStandby();
@@ -2471,15 +2507,25 @@ async function remoteInvokeLive(
  * 若本机仍无控制意图(无订阅)就立即关闭本次建的链路,以 UNSUPPORTED_CAPABILITY 失败,不发请求。
  * 链路已就绪(用户正在控制对端)时直接复用,不产生新的 link-open。
  */
-/** Main-process observers of pushes from other computers: the source and channel only, never the payload. */
-const remotePushChannelListeners = new Set<(deviceId: string, channel: string) => void>();
-export function onRemotePushChannel(listener: (deviceId: string, channel: string) => void): () => void {
+/** Only account invalidation metadata is exposed; never forward raw push content to observers. */
+interface RemotePushChange {
+  providerId?: 'anthropic' | 'openai';
+  change?: 'usage' | 'load';
+}
+const remotePushChannelListeners = new Set<(deviceId: string, channel: string, change?: RemotePushChange) => void>();
+export function onRemotePushChannel(listener: (deviceId: string, channel: string, change?: RemotePushChange) => void): () => void {
   remotePushChannelListeners.add(listener);
   return () => { remotePushChannelListeners.delete(listener); };
 }
-function notifyRemotePushChannel(deviceId: string, channel: string): void {
+function notifyRemotePushChannel(deviceId: string, channel: string, payload?: unknown): void {
+  const raw = channel === 'subscription-accounts:changed' && payload && typeof payload === 'object'
+    ? payload as Record<string, unknown> : null;
+  const detail: RemotePushChange | undefined = raw ? {
+    ...(raw.providerId === 'anthropic' || raw.providerId === 'openai' ? { providerId: raw.providerId } : {}),
+    ...(raw.change === 'usage' || raw.change === 'load' ? { change: raw.change } : {}),
+  } : undefined;
   for (const listener of remotePushChannelListeners) {
-    try { listener(deviceId, channel); } catch { /* An observer never blocks forwarding to the renderer. */ }
+    try { listener(deviceId, channel, detail); } catch { /* An observer never blocks forwarding to the renderer. */ }
   }
 }
 
@@ -2691,6 +2737,8 @@ export function sendMobileSessionNotify(payload: {
    * 那一行的静音标记管不到这条远端事件,不参与手机通道的免打扰判定。
    */
   muteExempt?: boolean;
+  /** Explicit schedule notifications follow the schedule preference, not Agent Island attention. */
+  attentionExempt?: boolean;
   /** Execution host for a remotely mirrored session. */
   remoteDeviceId?: string;
   /** needs-reply only: one waiting tool permission the alert describes and can answer. */
@@ -2726,7 +2774,7 @@ export function sendMobileSessionNotify(payload: {
   const now = Date.now();
   if (!mobileNotifyDeduper.shouldSend(payload.sessionId, payload.kind, now, payload.eventId)) return false;
   const activity = !payload.remoteDeviceId ? notificationActivity?.(payload.sessionId) : undefined;
-  if (!payload.muteExempt && activity && (payload.kind === 'needs-reply' ? activity.phase !== 'needs-interaction' : !activity.attention)) return false;
+  if (!payload.muteExempt && shouldSuppressForActivity(payload.kind, activity, payload.attentionExempt)) return false;
   const sent = client.sendNotify(
     { notificationId, recipientId: authManager.getCurrentUserId() ?? undefined, ...buildSessionNotifyPayload({
       sessionId: payload.sessionId,

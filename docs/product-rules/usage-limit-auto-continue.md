@@ -1,5 +1,12 @@
 # 账号用量上限：等重置后自动继续
 
+> **读取时机**：修改账号用量上限的判定、重置时刻来源，或普通任务／目标模式撞上限额后的等待与自动继续之前
+> **适用路径**：`apps/desktop/src/**/*{usageLimit,UsageLimit}*`、
+> `apps/desktop/src/main/usage/**/{subscriptionAccountUsage,claudeAccountUsage,codexAccountUsageRefresh}*`、
+> `apps/desktop/src/main/maker-ipc/**/{interruptedTurnAutoResume,sessionEventAutoResumeSteps}*`、
+> `apps/desktop/src/renderer/components/chat/**/{ErrorBanner,InterruptedTurnBanner}*`、
+> `apps/desktop/src/main/subscription-accounts/runtime.ts`
+
 2026-10-07 裁决。订阅账号撞上 5 小时 / 周用量上限时，任务不该需要用户守着手动续跑。
 
 ## 行为

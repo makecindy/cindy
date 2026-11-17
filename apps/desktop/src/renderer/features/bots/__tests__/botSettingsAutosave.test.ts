@@ -113,6 +113,60 @@ beforeEach(() => {
   vi.useFakeTimers();
 });
 
+// #10985: unit coverage through the production scheduler. Existing retry tests
+// only cover transient errors; a 12001-unit changed source must never reach IPC,
+// including blur/retry/unmount, while the complete draft remains editable.
+it('blocks oversized edits across save boundaries and resumes after correction', async () => {
+  const h = harness();
+  h.edit({ identitySource: 'x'.repeat(12001) });
+  h.autosave.schedule('text');
+  await vi.runAllTimersAsync();
+  await h.autosave.flush();
+  await h.autosave.retry();
+  expect(h.commits).toHaveLength(0);
+  expect(h.autosave.isDirty()).toBe(true);
+  expect(h.baseline.identitySource).toBe('');
+  h.edit({ identitySource: '' });
+  await h.autosave.flush();
+  expect(h.statuses.at(-1)).toBe('idle');
+  expect(h.commits).toHaveLength(0);
+  h.edit({ identitySource: 'x'.repeat(12000) });
+  await h.autosave.flush();
+  expect(h.commits).toHaveLength(1);
+  expect(h.baseline.identitySource).toHaveLength(12000);
+  h.edit({ userContextSource: 'y'.repeat(12001) });
+  h.autosave.flushDetached();
+  await Promise.resolve();
+  expect(h.commits).toHaveLength(1);
+});
+
+it('leaves an unchanged oversized source intact when other settings change', async () => {
+  let baseline = payload({ identitySource: 'x'.repeat(12001) });
+  let draft = { ...baseline };
+  const commit = vi.fn(async (next: BotSettingsPayload) => { baseline = next; });
+  const autosave = createBotSettingsAutosave({ readPayload: () => draft, readBaseline: () => baseline, commit });
+  await autosave.flush();
+  expect(commit).not.toHaveBeenCalled();
+  draft = { ...draft, name: 'Changed name' };
+  await autosave.flush();
+  expect(commit).toHaveBeenCalledTimes(1);
+  draft = { ...draft, identitySource: 'y' + draft.identitySource.slice(1) };
+  await autosave.flush();
+  expect(commit).toHaveBeenCalledTimes(1);
+  expect(draft.identitySource).toHaveLength(12001);
+});
+
+it.each([
+  ['  ' + 'x'.repeat(12000) + '\n', true],
+  ['😀'.repeat(6000), true],
+  ['😀'.repeat(6000) + 'x', false],
+])('uses the host trim and UTF-16 counting for profile edits', async (value, accepted) => {
+  const h = harness();
+  h.edit({ identitySource: value as string });
+  await h.autosave.flush();
+  expect(h.commits).toHaveLength(accepted ? 1 : 0);
+});
+
 afterEach(() => {
   vi.useRealTimers();
 });

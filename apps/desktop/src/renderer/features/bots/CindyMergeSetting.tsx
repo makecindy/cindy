@@ -103,8 +103,6 @@ export function CindyMergeSetting({ bot, className = 'mt-3' }: { bot: { id: stri
       </SettingsCard>
       <ConfirmDialog
         open={open}
-        presentation="standard"
-        cancelFirst
         onOpenChange={(next) => { if (!next && !inFlight.current) setOpen(false); }}
         title={t('bots.cloud.mergeTitle', { count: copies.length })}
         description={t('bots.cloud.mergeDescription')}

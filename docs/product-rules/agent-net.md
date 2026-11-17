@@ -3,7 +3,12 @@
 > 产品裁决：2026-10-30（用户确认）。本文是产品规则，功能分阶段实施；当前接入范围与验证结果见
 > [`../agent-net-plan.md`](../agent-net-plan.md)，交互稿见
 > [`../design-previews/agent-net/index.html`](../design-previews/agent-net/index.html)。
-> 读取时机：新增或修改 agent-net 的节点模型、能力清单、加密、中继选择、网络分享或拓扑界面之前。
+> **读取时机**：新增或修改 agent-net 的传输核心、节点模型、能力清单、加密、中继选择、网络分享或拓扑界面之前。
+> **适用路径**：`packages/agent-net*/**`、`packages/device-link-relay/src/agentNet.ts`、
+> `packages/device-link/src/agentNetSwitch.ts`、`apps/desktop/src/main/device-link/**/agentNet*`、
+> `apps/desktop/src/renderer/features/remote-connection-v2/**`、`apps/mobile/modules/cindy-agent-net/**`、
+> `apps/mobile/src/**/{agentNet,AgentNet}*`、`prototypes/agent-net-spike/**`、
+> `scripts/check-agent-net-native.mjs`、`.github/workflows/agent-net-native.yml`
 
 ## 定位
 
@@ -16,6 +21,8 @@
    旧版对端无法加密时，界面必须明确标注，并提供“只允许加密连接”开关。
 2. **用户可以用自己的中继。** 用户自建中继是一等能力，不是附加功能。官方中继和自建中继都只转发密文。
    “只用我的中继”打开后，设备间数据不得经过官方中继。
+   附件也只存密文：官方中继存在官方对象存储，新版客户端直接与存储收发；自建中继（一键部署、本机中转）存在中继所在的机器上，
+   不使用官方存储。对端只支持 V1 时按第 3 条继续用 V1 的附件方式；打开“只允许加密连接”后不再回退（2026-11-14 用户确认）。
 3. **现有功能不退化。** device-link 现有能力必须完整保留；老版本客户端继续可用，只更新一端不能让任何功能失效。
 4. **局域网不依赖服务器。** 已登录且互相认识的设备，在同一网段内不连服务器也能发现和通信。
 5. **关闭即回到原路径。** 灰度期间开关关闭时，行为必须与现有 device-link 完全一致。

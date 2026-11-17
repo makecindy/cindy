@@ -136,6 +136,8 @@ export type McpToolApprovalPolicy =
 /** Pi 内 MCP client 的 server 描述；remote 存在时直接访问外部 Streamable HTTP MCP。 */
 export interface PiMcpServerRef {
   name: string;
+  /** Optional human-readable name used by Pi MCP discovery; `name` remains the stable id. */
+  displayName?: string;
   url: string;
   remote?: {
     /** HTTP header 名 → Pi 父进程 env var 名；描述符里绝不放 header 真值。 */
@@ -618,7 +620,7 @@ export function projectPiManagedCommandFailure(value: unknown): import('./pi/man
     phase: data.phase as import('./pi/managed-command.js').PiManagedCommandFailure['phase'],
     packagesUpdated: data.packagesUpdated,
     recovery: data.recovery as import('./pi/managed-command.js').PiManagedCommandFailure['recovery'],
-    ...(typeof data.hostStage === 'string' && ['release-lookup', 'asset-validation', 'prepare', 'download', 'extract', 'version-verification', 'publish'].includes(data.hostStage)
+    ...(typeof data.hostStage === 'string' && ['release-lookup', 'asset-validation', 'prepare', 'download', 'extract', 'version-verification', 'publish', 'unsupported'].includes(data.hostStage)
       ? { hostStage: data.hostStage as import('./pi/managed-command.js').PiBinaryUpdateFailureStage } : {}),
   };
 }
@@ -1364,6 +1366,8 @@ export interface AgentDeps {
    * 缺省 / no-op → 行为与改动前一致。
    */
   prepareCodexResumeSession?: (threadId: string, context?: { codexHome: string; providerId?: string }) => Promise<string | void>;
+  /** null/absent preserves native policy; sampled at session start/resume. */
+  getCodexServerCompactionPreference?: () => boolean | null;
   recordCodexThreadLocation?: (threadId: string, codexHome: string, rolloutPath?: string) => Promise<void>;
   /** readOnly locates existing storage without invoking resume recovery or copying history. */
   resolveCodexThreadStorage?: (threadId: string, options?: { readOnly?: boolean }) => Promise<{ historyHome: string; sqliteHome: string; rolloutPath?: string } | undefined>;
@@ -2414,6 +2418,30 @@ export interface BackgroundTaskSnapshot {
  */
 export type TurnContinuationState = 'awaiting' | 'active' | 'cancelled';
 
+/** Fixed diagnostic codes only; never carry SDK errors, prompts or task output. */
+export type TurnContinuationCancellationReason =
+  | 'all_wake_tasks_stopped'
+  | 'bridge_aborted'
+  | 'graceful_stop'
+  | 'user_stop'
+  | 'wake_contract_unfulfilled';
+
+/** Runtime projection for adapters/consumers whose TypeScript contract may be older. */
+export function safeTurnContinuationCancellationReason(
+  reason: unknown,
+): TurnContinuationCancellationReason | undefined {
+  switch (reason) {
+    case 'all_wake_tasks_stopped':
+    case 'bridge_aborted':
+    case 'graceful_stop':
+    case 'user_stop':
+    case 'wake_contract_unfulfilled':
+      return reason;
+    default:
+      return undefined;
+  }
+}
+
 /**
  * Why a session handle is being torn down.
  *
@@ -2606,6 +2634,16 @@ export interface AgentSessionHandle {
   hasPendingHostOperation?(): boolean;
 
   /**
+   * Conservative probe for provider-owned work that can outlive a product turn
+   * but is not represented by listBackgroundTasks (for example Codex native
+   * child agents, yielded exec cells and background terminals). Idle runtime
+   * reclamation calls it before closing; true means busy *or unknown*, so a
+   * failed or unsupported probe keeps the runtime. Not for UI hydration.
+   * Agents whose background work is fully covered by listBackgroundTasks omit it.
+   */
+  hasLiveBackgroundWork?(): Promise<boolean>;
+
+  /**
    * Resolve the provider claim attached atomically to a specific `done` event.
    * Returns null when that event has no matching continuation boundary.
    */
@@ -2617,8 +2655,11 @@ export interface AgentSessionHandle {
    * wake task does not necessarily produce another provider `done`.
    */
   onTurnContinuationChange?(
-    listener: (continuationId: number, state: TurnContinuationState) => void,
+    listener: (continuationId: number, state: TurnContinuationState, reason?: TurnContinuationCancellationReason) => void,
   ): () => void;
+
+  /** Cause of a retained cancelled claim, including one whose done is still queued. */
+  getTurnContinuationCancellationReason?(continuationId: number): TurnContinuationCancellationReason | undefined;
 
   /** 关闭会话，清理子进程 */
   close(opts?: AgentSessionTeardownOptions): Promise<void>;

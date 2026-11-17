@@ -3,6 +3,10 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改 Settings UI、配置文件、本地偏好存储、运行时 profile，或
 > agent／MCP／provider 相关开关之前
+> **适用路径**：`apps/desktop/src/renderer/components/settings/**`、
+> `apps/desktop/src/main/app-settings/**`、
+> `apps/desktop/src/main/**/*{settings-store,SettingsStore,settingsStore}*`、
+> `apps/mobile/src/settings/**`、`apps/mobile/app/settings/**`、`apps/mobile/app/settings.tsx`
 
 本规则适用于所有用户可配置项。Cindy 允许用户高度定制，但**默认配置承载创作者品味，
 是产品体验的一部分**——不是让每个选项都堆进设置页。产品边界见
@@ -119,6 +123,19 @@ override 仍然优先。供应商／模型停用、退役、付费准入和凭�
 实现与回归：`apps/desktop/src/main/utility-model/directTextRoute.ts`、
 `__tests__/auxiliaryDirectRoutes.test.ts`、`__tests__/oneShotCandidates.test.ts`。
 
+### Codex 服务器压缩
+
+设置 → 个性化 → 上下文压缩提供一个开关，按本机 data owner 保存到
+`codex-compaction-settings.json`。默认 `serverEnabled: null` 保留原生选择与失败后的
+摘要回退；显式 `false` 对现有 OpenAI/Cindy Codex 远程压缩身份选择 `cindy_summary`，
+显式 `true` 允许已保存的摘要任务恢复服务器压缩。恢复默认删除 override。
+设置在本机 Codex 启动/恢复时读取，不打断正在运行的轮，不切模型、不改写历史。
+第三方供应商、SSH 和受托访客任务保持原策略。设备互联执行由执行端读取自己的设置；
+此本机设置不新增远程全局写权限。兼容旧宿主/缺省依赖时保留原行为。
+回归：`compaction-settings-store.test.ts`、Codex `index.test.ts` 的 native compaction
+identity / canonical account history 场景，以及
+`provider-compatibility.integration.test.ts` 的原生开关往返与历史保留验证。
+
 ## 3. 默认值演进与迁移
 
 ### 模型上下文与压缩（2026-10-27）
@@ -161,6 +178,74 @@ Pi 使用逐模型 reserveTokens，Claude Code 同步原生环境与 host 判断
 - 隐藏配置必须有清晰 schema、字段说明、取值约束和安全边界，不能依赖零散分支或隐式
   约定。
 - agent 修改配置时，只有用户明确要求才写入 override，不得把当前默认值固化回用户配置。
+
+### Pi 自定义 Chat 线路的 `store` 能力
+
+当指定连接和型号已确认因 `store` 字段被上游拒绝（#11023），可在执行端当前 owner 的
+`model-catalog-overrides.json` 中合并以下稀疏覆盖；保留该文件的其它内容，不编辑临时
+`models.json`。键使用活动目录的连接 ID（URL 编码）与原始模型 ID，不使用显示名称。
+
+```json
+{"version":1,"patches":{"connection-id:gemini-4-hydrogen":{"perAgent":{"pi":{"supportsStore":false}}}}}
+```
+
+`supportsStore` 只接受布尔值，且只允许写在 `perAgent.pi`；`base`、其它引擎及字符串值
+均会使该条覆盖隔离。只在自定义供应商的 Pi `openai-completions` 启动投影中生效：
+`false` 让 Pi 不发送 `store`，`true` 保留 Pi 对该字段的原生发送行为（不是要求保存回复）。
+该字段与现有兼容元数据合并，显式覆盖优先；不改端点、认证、路由、工具或思考档位。
+未配置的连接和型号保持原行为，不按 TrueFoundry 名称或 Gemini ID 推断兼容性。
+
+手改文件后，先刷新模型目录，再重启该任务的 Pi 运行实例；也可等待在途请求结束后重启
+执行端 Cindy。仅重启 Pi 不会重新读取覆盖文件，仍会使用内存中的旧目录。
+恢复默认删除这一个字段，并按上述步骤重新加载；它随连接/型号 ID 保存，更改该连接的
+上游后应重新核对或删除。
+这不是服务端目录字段，不自动下发或修改用户的故障连接；旧客户端隔离不认识的条目，
+文件原文保留。无需服务端或自建中转改动，手机控制同一执行端时沿用其配置。
+实现为 `localCatalogOverrides.ts` 与 `pi-native-catalog.ts`，持久化、投影和真实 Pi 回归分别见
+`model-catalog-override-store.test.ts`、`piNativeProviders.test.ts`、`piGoogleChat.e2e.test.ts`。
+
+### 请求体积控制
+
+`XDT_REQUEST_SIZE_CONTROL_DISABLE` 是 Desktop／Node Host 宿主进程的隐藏环境开关，不新增
+设置页或持久化 override。默认开启请求体积控制；只有值为字符串 `1` 时才关闭，未设置或其他值
+均保持开启。修改启动环境变量后须重启宿主，新的环境才会进入该进程。
+
+关闭后 HTTP 回到原有入口超限／上游 413 附件恢复路径，不启用新的主动重放和预算学习；
+Codex 的回退上限为 **42 MiB**，不会恢复到原来的 128 MiB，Claude Code／Pi 仍为 32 MiB。
+**图片压缩不受此开关控制**，已注入的图片预处理继续运行。完整阈值、恢复与归属边界以
+[模型请求超限时的附件恢复](media-storage-and-protocols.md#模型请求超限时的附件恢复)为正本；
+实现入口为 `oversizedAttachmentRecoveryCore.ts` 的 `createRequestSizeController`。
+
+### 代理图片压缩
+
+`XDT_IMAGE_COMPRESSION_DISABLE` 是 Desktop 与 Node Host 的隐藏进程环境开关，不进入设置页或
+持久化配置。未设置时默认开启；仅字符串 `1` 关闭，其他值不关闭。移除该环境变量恢复默认。
+
+开关只控制本地代理的图片预处理（`prepare`）及单张图片超限后的进一步压缩（`tighten`）；
+关闭时保留输入图片，不调用编码器，也不复用已缓存的压缩结果。它不控制附件的
+`image-resizer` 缩图，与 `XDT_REQUEST_SIZE_CONTROL_DISABLE` 控制的请求体积恢复互不替代。
+每次调用都读取宿主进程当前的环境值；从外部修改启动环境后，需要重新启动宿主才能带入新值。
+
+实现与回归见 `apps/desktop/src/main/maker-host/inlineImagePreprocessor.ts` 及
+`__tests__/inlineImagePreprocessor.test.ts`。
+
+### 全局快捷键
+
+`XDT_DISABLE_GLOBAL_SHORTCUTS` 是 Desktop 的隐藏进程环境开关，适用于开发版（含
+`--isolated` 沙箱）与打包版，不进入设置页或持久化配置。只有值为字符串 `1` 时才跳过
+语音输入与区域截图的全局快捷键注册，未设置或其他值均保持原有行为。修改启动环境后
+需重启进程；移除开关后重启即恢复用户已保存的快捷键，不清空或写回设置。
+经 `restart:desktop:remote` 新开 Terminal 启动时，启动器会将此变量转发给开发进程。
+
+语音输入的 Electron 全局注册、macOS 修饰键／功能键原生监听、Windows 原生监听及其
+功能键保留注册均会跳过；区域截图同样跳过全局注册。主动跳过视为成功，不报快捷键占用、
+不重试恢复或提示重启。每个进程仅记录一行 info 日志，由语音输入初始化入口统一记录。
+输入框麦克风按钮、长按输入框、renderer 内的按键处理与浮层 Escape 等临时快捷键不受影响。
+
+实现入口：`apps/desktop/src/main/voice-input/global.ts` 的 `setVoiceInputGlobalShortcut`、
+`recoverPendingNativeShortcutRegistration` 与 `registerGlobalVoiceInputIpc`，以及
+`apps/desktop/src/main/region-screenshot/index.ts` 的 `syncShortcut`。
+启动环境转发见 `scripts/restart-desktop-remote.mjs` 的 `devEnvEntries`。
 
 ## 6. 设置搜索与页面定义
 
@@ -212,3 +297,15 @@ Pi 使用逐模型 reserveTokens，Claude Code 同步原生环境与 host 判断
 
 实现／PR 说明至少写明：配置层级、默认值及推荐理由、override 如何记录与识别、未自定义
 用户如何跟随新默认、恢复默认会清除什么。
+
+## 作答文风与默认提示词
+
+文风选择仅在显式选中「文言」界面时显示；普通语言忽略旧版保存的特殊文风。
+默认普通作答及文言下的「照常作答」不附加任何语言／文风说明，也不注入取消文风的提示。
+文言默认的「雅正文言」属于主动启用的文学模式，仍附加对应说明。
+
+特殊文风只约束当前轮，普通发送与插话每次带上本轮说明，不走环境说明去重；
+IM 不附加语言／文风说明。固定 system prompt 不因这个设置改变。
+既有原生历史不可事后清除，旧版本留下的跨轮文风指令仍可能影响已有会话；不自动重置会话。
+回归从 `uiLanguageErrorNote.test.ts`、`makerSendTransaction.test.ts` 与
+`hook-control/__tests__/session-runner.test.ts` 进入，验证实际发送文本而非推断模型输出。

@@ -1,9 +1,67 @@
 import { describe, expect, it } from 'vitest';
 import { buildUserProvider } from '../user-provider.js';
 import { alignModelApiRoute, providerInterfaceModelRoute } from '../providerInterfaceRoutes.js';
+import { bindDetectedProvider } from '../providerDetection.js';
 import { BUNDLED_CATALOG, parseCatalog } from '../catalog.js';
 
 describe('documented supplier interfaces', () => {
+  // #8164: the same key can have Coding Plan quota but no pay-as-you-go balance.
+  // Exercise both saved connections and the URL-first connection setup path.
+  describe('Zhipu Pi automatic endpoint selection', () => {
+    const presetId = 'zhipu-glm-cn';
+    const cases = [
+      ['anthropic', 'anthropic-messages'],
+      ['coding/paas/v4', 'openai-completions'],
+      ['paas/v4', 'openai-completions'],
+    ] as const;
+    it.each(cases)('keeps the saved %s endpoint for automatic and legacy ID-only models', (path, api) => {
+      const baseUrl = `https://open.bigmodel.cn/api/${path}`;
+      for (const interfaceId of [undefined, 'auto']) {
+        const config = { id: 'glm', name: 'GLM', runtimes: { pi: {
+          catalogPresetId: presetId, baseUrl: `${baseUrl}/`,
+          wireProtocol: path === 'anthropic' ? 'anthropic-messages' as const : 'openai-chat' as const,
+          models: ['glm-4.7', 'glm-5.3-flash'].map(id => ({ id, name: id, interfaceId, contextWindow: 64000, defaultEnabled: false })),
+        } } };
+        const before = structuredClone(config);
+        const provider = buildUserProvider(config, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+        for (const model of provider.models.pi!) {
+          expect(model).toMatchObject({ api, contextWindow: 64000, defaultEnabled: false,
+            route: { baseUrl }, selectedInterface: { api, route: { baseUrl } } });
+        }
+        expect(config).toEqual(before);
+      }
+    });
+    it.each(cases)('keeps the %s endpoint during URL-first setup and subsequent projection', (path, api) => {
+      const baseUrl = `https://open.bigmodel.cn/api/${path}`;
+      const preset = BUNDLED_CATALOG.presets!.find(p => p.id === presetId)!;
+      const bound = bindDetectedProvider(preset, 'pi', `${baseUrl}/`)!;
+      expect(bound.runtimes.pi!.baseUrl).toBe(baseUrl);
+      const provider = buildUserProvider({ id: 'glm', name: 'GLM', runtimes: { pi: {
+        ...bound.runtimes.pi!, catalogPresetId: presetId, models: [{ id: 'glm-4.7', name: 'GLM', interfaceId: 'auto' }],
+      } } }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      expect(provider.models.pi![0]).toMatchObject({ api, route: { baseUrl } });
+    });
+    it('retains explicit interface and API selections, including intentional endpoint changes', () => {
+      const baseUrl = 'https://open.bigmodel.cn/api/anthropic';
+      for (const selection of [
+        { interfaceId: 'zhipu-glm-cn-openai-completions' },
+        { api: 'openai-completions' as const },
+        { piApi: 'openai-completions' as const },
+      ]) {
+        const model = providerInterfaceModelRoute({ id: 'glm-4.7', name: 'GLM', ...selection }, 'pi', presetId, baseUrl);
+        expect(model).toMatchObject({ api: 'openai-completions', route: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4' } });
+      }
+    });
+    it('leaves the dedicated Coding Plan default, custom URLs and custom model paths intact', () => {
+      const baseUrl = 'https://open.bigmodel.cn/api/anthropic';
+      expect(providerInterfaceModelRoute({ id: 'glm-4.7', name: 'GLM', interfaceId: 'auto' }, 'pi', 'zhipu-coding-plan-cn', baseUrl))
+        .toMatchObject({ api: 'openai-completions', route: { baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4' } });
+      const model = { id: 'glm-4.7', name: 'GLM', interfaceId: 'auto' };
+      expect(providerInterfaceModelRoute(model, 'pi', presetId, 'https://proxy.example/api/anthropic')).toBe(model);
+      const custom = { ...model, route: { baseUrl, wireProtocol: 'anthropic-messages' as const, requestPath: '/custom/messages' } };
+      expect(providerInterfaceModelRoute(custom, 'pi', presetId, baseUrl)).toBe(custom);
+    });
+  });
   // Server #1376: the old bundled profile omitted this discovered model. Unit
   // regression through the saved-connection consumer, preserving user choices.
   it('resolves OpenCode Fable 5.2 through the existing Messages profile', () => {

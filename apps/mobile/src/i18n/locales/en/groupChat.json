@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · for {{person}}"
+  },
   "progress": {
     "stop": "Stop",
     "stopMine": "Stop Mine",
@@ -306,6 +309,8 @@
       "loading": "Loading settings…",
       "unavailable": "Couldn’t load group settings. Try again."
     },
+    "allowMemberInvites": "Let all members invite friends",
+    "allowMemberInvitesHint": "When on, all joined members can invite friends. Only the group owner and admins can change this.",
     "allowMentionAllBots": "Allow @all buddies",
     "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent."
   },
@@ -578,6 +583,11 @@
     "transferHint": "They will become the owner and you will become an admin.",
     "removeTitle": "Remove {{name}} from this group?",
     "removeHint": "They will lose access to messages. Their companions will also leave.",
+    "removeOwn": "Remove from group",
+    "removeOwnScope": "This only affects this group. Your companion stays in your account.",
+    "removeOwnHint": "{{name}} will no longer receive messages from “{{group}}”. Message history stays; other groups and private chats are unaffected.",
+    "removeOwnActiveHint": "Removing this companion stops its active requests in this group. Tasks opened independently keep running.",
+    "stopAndRemove": "Stop and remove",
     "confirm": "Confirm",
     "inviteTitle": "Invite to group",
     "reusableLink": "No expiration · Reusable by multiple people",

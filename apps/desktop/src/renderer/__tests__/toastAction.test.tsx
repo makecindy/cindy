@@ -22,6 +22,18 @@ afterEach(() => {
 });
 
 describe('Toast action', () => {
+  it('blocks disabled recovery actions and enables them when the operation finishes', () => {
+    const onClick = vi.fn();
+    const id = toast.info('Saved changes', { duration: 0, action: { label: 'Restore', onClick, disabled: true } });
+    const view = render(<Toast item={getToastSnapshot().find(item => item.id === id)!} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    expect(onClick).not.toHaveBeenCalled();
+    toast.update(id, 'Saved changes', { action: { label: 'Restore', onClick, disabled: false } });
+    view.rerender(<Toast item={getToastSnapshot().find(item => item.id === id)!} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    expect(onClick).toHaveBeenCalledOnce();
+  });
+
   it.each(['pointer', 'keyboard'])('captures the %s activation point before updating the toast', mode => {
     const onClick = vi.fn();
     render(<Toast item={{ id: 'point', variant: 'info', message: 'Star', duration: 0, createdAt: 0, exiting: false,

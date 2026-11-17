@@ -1,3 +1,4 @@
+import { ProjectPickerIcon } from './ProjectPickerIcon';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -123,7 +124,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
                 key={workspace.workingDir}
                 title={workspace.title}
                 subtitle={workspace.workingDir}
-                leading={icon(Folder)}
+                leading={<ProjectPickerIcon deviceId={p.selectedDeviceId} workingDir={workspace.workingDir} title={workspace.title} />}
                 selected={
                   p.workspaceKind === "project" &&
                   workspacePathsEqual(p.workingDir, workspace.workingDir)

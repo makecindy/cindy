@@ -131,7 +131,11 @@ export async function worktreeContentMatches(
  * snapshot: missing files are fine, while edited or new non-ignored files stop recovery.
  * Nested repositories were never part of a snapshot and are left alone.
  */
-export async function presentFilesMatchSnapshotTree(worktreePath: string, tree: string): Promise<boolean> {
+export async function presentFilesMatchSnapshotTree(
+  worktreePath: string,
+  tree: string,
+  allowExtraFile?: (relative: string) => Promise<boolean>,
+): Promise<boolean> {
   return withTemporaryIndex(async (extraEnv) => {
     await gitExec(['read-tree', tree], worktreePath, { extraEnv });
     await gitExec(['update-index', '-q', '--refresh'], worktreePath, { extraEnv }).catch(() => undefined);
@@ -141,7 +145,11 @@ export async function presentFilesMatchSnapshotTree(worktreePath: string, tree: 
       if (fields[index] !== 'D') return false;
     }
     const { stdout: extra } = await gitExec(['ls-files', '--others', '--exclude-standard', '-z'], worktreePath, { extraEnv });
-    return extra.split('\0').every((entry) => entry === '' || entry.endsWith('/'));
+    for (const entry of extra.split('\0')) {
+      if (entry === '' || entry.endsWith('/')) continue;
+      if (!allowExtraFile || !(await allowExtraFile(entry))) return false;
+    }
+    return true;
   });
 }
 

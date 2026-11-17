@@ -8,7 +8,11 @@ Desktop 在工作过程分组后追加待发项（`pendingQueueItems.ts`），�
 
 定向界面验证：`pnpm ui:check --page pending-queue --theme all`。真实派发仍由现有输入协调器负责。
 
-> **读取时机**：安装、启动、重启、调试或验证 `apps/desktop` 及其共享 packages 时
+> **读取时机**：安装、启动、重启、调试或验证 `apps/desktop` 及其共享 packages 时，
+> 或修改 Desktop 开发启动脚本与单页 UI 验证工具（`ui:check`）之前
+> **适用路径**：`scripts/restart-desktop-remote.mjs`、`scripts/desktop-dev-runner.mjs`、
+> `scripts/desktop-dev-verdict.mjs`、`scripts/shared/desktop-dev-*.mjs`、
+> `apps/desktop/scripts/ui-page/**`
 
 本文是 Desktop 开发命令及其使用条件的权威说明；可执行脚本以当前 checkout 的根
 `package.json` 与 `apps/desktop/package.json` 为代码事实源。
@@ -17,8 +21,8 @@ Desktop 在工作过程分组后追加待发项（`pendingQueueItems.ts`），�
 
 只为检查界面改动（样式、布局、文案、深浅色、多语言）时不必启动 Desktop，先用下文
 「单页 UI 快速验证」；需要真实 IPC、登录、数据库或跨设备行为时再按本节启动。
-需要完整主界面但不想登录或碰真实数据时，加 `--mock` 用免登录的模拟数据启动，见
-[UI 模拟数据](ui-mock-data.md)。
+需要完整主界面但不想登录 Cindy 账号或碰正式数据时，加 `--mock` 用免登录的模拟数据启动，见
+[UI 模拟数据](ui-mock-data.md)。它不阻止真实模型调用：下面说的命令行登录沿用同样适用于模拟沙箱。
 
 Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择目标区域。restart
 命令默认使用固定的 `dev` 命名隔离沙箱（等价于自动附加 `--isolated=dev`），
@@ -131,6 +135,7 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
   把正式版踢下线（2026-08-16）。
 - `--mock`：免登录的 UI 模拟数据。未指定沙箱时使用独立的 `--isolated=ui-mock`，首次启动直接
   进入「未登录」模式并写入两端共用的模拟任务；不能与 `--shared`、`--preserve-running` 组合。
+  它只换界面数据，不关模型：本机命令行登录照样沿用，发送消息或伙伴运行会调用真实模型。
   细节见 [UI 模拟数据](ui-mock-data.md)。
 - `--passive`：定时任务被动模式，本实例不自动触发 schedule。多开导致定时任务重复、
   需要让位给 primary 时用。它可以和 `--isolated` 组合（隔离沙箱只看 UI、不跑定时任务
@@ -294,7 +299,16 @@ main 日志里 scope 为 `memory-usage` 的行是各进程内存采样（正式�
 `arrayBuffers` 谁在涨，区分 JS 对象和 Buffer。`mcpBridgeSessions` 是 Codex / Pi MCP 桥上
 存活的会话数：每个会话持有一整个 MCP server（连同全部工具 schema），它应随运行中的
 Codex / Pi 进程数起落，持续上涨说明有客户端退出后会话没被关闭（见
-`mcp-integrations/codexHttpBridge.ts` 的 `closeSessionOwnedTransports`）。该 scope 只写进程类型与数字，已精确放行进
+`mcp-integrations/codexHttpBridge.ts` 的 `closeSessionOwnedTransports`）。本地 Codex 每个 app-server
+进程连全部内置 MCP（约 16 个），所以这个数约等于 16 × 存活的 Codex app-server 数；要区分「会话
+没关」和「进程本身还活着」，先用 `ps` 数 `codex app-server` 进程、对照它们的启动时刻。
+2026-11 个人版实测：桥会话的新建和关闭一一对应，没有泄漏；涨的是 app-server 本身——Claude
+与 Pi 的普通任务空闲 30 分钟会释放运行时（`claudeIdleReleaseWatcher.ts`、`piIdleReleaseWatcher.ts`），
+Codex 没有对应机制，任务用过之后 app-server 一直存活到任务关闭或应用重启，主进程随之常驻
+1000 个左右 MCP server（同期堆约 1.3–1.6 GB），并出现多秒停顿（与堆大小的因果尚待下面的
+事件循环指标确认）。`eventLoopDelayP99Ms` /
+`eventLoopDelayMaxMs` 是上一个采样窗口内主进程事件循环延迟的 p99 与最大值（毫秒，读数后清零），
+用来确认停顿发生的窗口和长度。该 scope 只写进程类型与数字，已精确放行进
 日志上报，不要往这行里加标题、服务名、pid 或路径。
 
 `getAppMetrics()` 的 GPU 数字不含 IOSurface 等显存，macOS 上要看 GPU 进程真实占用用
@@ -616,3 +630,23 @@ Windows 的贴边／贴满判断仍读真实窗口（程序自己的展开不算
 若打开期间显示器被拔掉或分辨率变小，收起时旧矩形改放回当前工作区内。
 实现见 `main/sidebarWindowExpansion.ts`、`renderer/layout/sidebarPresentation.ts`；
 回归见 `sidebarWindowExpansion.test.ts` 和 `sidebarPresentation.test.tsx`。
+
+## Codex Micro Guard 遗留全局环境恢复
+
+旧版保护通过当前用户的 `launchctl NODE_OPTIONS` 预加载钩子，可能影响企业微信等
+沙盒 Node 应用（#5985）。功能已暂停；恢复仅剥离 Cindy 已知目录格式的预加载参数，
+保留其他 Node 参数，不重新启用保护。
+
+正常恢复沿用跨实例文件锁并清理旧标记。若创建锁之前遇到 `ENOSPC`、`EDQUOT` 或
+`EROFS`，仍通过 launchctl 尝试清理并回读验证全局变量，不依赖分配磁盘空间。
+此应急分支不读取旧快照、不处理文件，仍报告 `recovery-required`；磁盘恢复后使用
+设置中的「恢复环境」完成普通清理。只有旧钩子的值会被 unset；没有磁盘快照时无法恢复
+原先显式设置的空字符串。权限错误、不安全路径和锁竞争不走应急分支。
+
+清理全局环境不能改变已运行应用的环境：须完全退出旧版 Cindy，并重新打开受影响应用。
+不会强制终止应用、删除诊断报告或更改沙盒权限。不要在故障机器上先删除 hook 文件，
+已继承预加载的进程仍可能引用它。现场应记录客户端版本与清理是否成功；本地故障注入
+测试不能替代企业微信现场验证，也不能据此断言每次报告风暴都是磁盘满导致的清理失败。
+
+回归入口：`codexMicroGuardCore.test.ts`、`CodexMicroGuardService.test.ts`；测试通过替身
+模拟 launchctl 和存储故障，不修改测试机的真实全局环境。

@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import ts from 'typescript';
-import { confirmedAutoTools, confirmedHostToolGroups, confirmedEventTopics, confirmedHostUiPermissions } from '../ghostInstallConsent.js';
+import { confirmedAutoTools, confirmedCindyModelActions } from '../ghostInstallConsent.js';
 import { setPluginEnabled } from '../pluginEnableService.js';
 import { createGhostExecutionPipe } from '../executionPipe.js';
 import { setTaskChangeListener } from '../../localDb/taskEvents.js';
 import { ghostInstallTargetContext, resolveForgeInstallTarget } from '../ghostInstallTarget.js';
 import { ghostInstallApprovalToken } from '../../../shared/ghost.js';
+import { isReusableSavedSecret } from '../../../shared/pluginAccountReuse.js';
 import { withPluginSchedulerApproval } from '../pluginSchedulerApproval.js';
 import {
   parsePluginStoragePart,
@@ -18,9 +19,17 @@ import {
   isPluginInstanceKey,
   resolvePluginInstanceQuery,
 } from '../../../shared/pluginIdentity.js';
+import {
+  availableGhostsIn,
+  findGhostForInstanceIdIn,
+  isGhostAvailableForSessionIn,
+  listAvailableGhostsFrom,
+  listInstalledGhostsForOwner,
+} from '../ghostAvailability.js';
 
 const productionIdentityDeps = {
   ghostInstallApprovalToken,
+  isReusableSavedSecret,
   withPluginSchedulerApproval,
   requestPluginHostToolCall: async () => ({ isError: true, content: [{ type: 'text', text: '{"ok":false,"errorCode":"HOST_NOT_READY"}' }] }),
   createGhostExecutionPipe,
@@ -32,15 +41,19 @@ const productionIdentityDeps = {
   LOCAL_PLUGIN_NAMESPACE,
   isOrganizationPluginNamespace,
   confirmedAutoTools,
-  confirmedHostToolGroups,
-  confirmedEventTopics,
-  confirmedHostUiPermissions,
+  confirmedCindyModelActions,
   ghostInstallTargetContext,
   resolveForgeInstallTarget,
   installedGhostPhysicalRelId,
   installedGhostStoragePart,
   isPluginInstanceKey,
   resolvePluginInstanceQuery,
+  // The lookups index.ts delegates to (ghostAvailability.ts).
+  availableGhostsIn,
+  findGhostForInstanceIdIn,
+  isGhostAvailableForSessionIn,
+  listAvailableGhostsFrom,
+  listInstalledGhostsForOwner,
   libraryRestartRequiredReason: (): string | null => null,
 };
 

@@ -7,7 +7,8 @@ import type {
   LlamaCppModel,
   LlamaCppSnapshot,
 } from '../../../shared/llamaCpp';
-import { DownloadMeter, formatDownloadBytes, type DownloadMeterProgress } from './DownloadMeter';
+import { DownloadMeter, formatDownloadBytes } from '@/components/ui/download-meter';
+import type { DownloadProgress } from '../../../shared/downloadProgress';
 import {
   LocalDownloadActions,
   LocalModelBrowser,
@@ -19,8 +20,10 @@ import {
 
 export interface LlamaCppDownloadState {
   input: LlamaCppDownloadInput;
-  progress: DownloadMeterProgress;
+  progress: DownloadProgress;
   failed?: boolean;
+  /** Failure text shown in the meter. */
+  error?: string;
 }
 export const sameLlamaCppDownload = (a: LlamaCppDownloadInput, b: LlamaCppDownloadInput) =>
   a.repo === b.repo && a.file === b.file;
@@ -103,7 +106,7 @@ export function LlamaCppCandidates({
             current && !current.failed ? (
               <LocalDownloadActions
                 active
-                paused={current.progress.paused}
+                paused={current.progress.phase === 'paused'}
                 onCancel={onCancel}
                 onPause={onPause}
                 onResume={onResume}
@@ -117,7 +120,15 @@ export function LlamaCppCandidates({
               />
             )
           }
-          progress={current && <DownloadMeter progress={current.progress} />}
+          progress={
+            current && (
+              <DownloadMeter
+                label={variant.file}
+                progress={current.progress}
+                error={current.error}
+              />
+            )
+          }
         />
       );
     });

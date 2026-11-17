@@ -5,6 +5,7 @@
  * (当前 chat / 触发者是不是主人 / 这条连接自己的 transport), 终态释放
  * (im/shared/channelToolScope.ts)。没有活跃作用域的调用一律 fail closed ——
  * 桌面任务、官方 hook 会话、轮次结束后的迟到调用都调不动任何 chat。
+ * 已接线的后台回报另有发送媒体的租约，不授予上述渠道 API 或请求者身份。
  *
  * 目标 chat 的纪律:
  *   - 具名工具永远发到本轮所在的 chat / topic(不接受 chat_id 参数);
@@ -31,6 +32,7 @@ import { TELEGRAM_OUTBOUND_MEDIA, TelegramApiError, type TgMessage } from '@cind
 import { createLogger } from '../logger.js';
 import {
   readChannelToolScope,
+  readTelegramReplyMediaScope,
   type TelegramToolScope,
 } from '../im/shared/channelToolScope';
 
@@ -259,7 +261,7 @@ export function createTelegramBotMcpServer(deps: TelegramBotMcpDeps): McpServer 
 
   server.tool(
     'send_media',
-    '往当前 Telegram 对话发一条媒体消息: 图片 / 文件 / 视频 / 音频 / 语音 / 动图 / 贴纸 / 圆形视频。来源三选一: 本地绝对路径(上传, 50 MB 内)、公网 URL、或 Telegram file_id(转发已有文件)。',
+    '往当前 Telegram 对话发一条媒体消息: 图片 / 文件 / 视频 / 音频 / 语音 / 动图 / 贴纸 / 圆形视频。来源三选一: 本地绝对路径(上传, 50 MB 内)、公网 URL、或 Telegram file_id(转发已有文件)。后台任务回报也支持上述类型与来源，始终发回原对话。',
     {
       kind: z.enum(Object.keys(TELEGRAM_OUTBOUND_MEDIA) as [string, ...string[]]).describe(
         'photo | document | video | audio | voice | animation | sticker | video_note',
@@ -272,7 +274,11 @@ export function createTelegramBotMcpServer(deps: TelegramBotMcpDeps): McpServer 
     },
     async ({ kind, path: absPath, url, file_id, caption, reply_to_message_id }) => {
       const scope = scopeOf();
-      if (!scope) return noScope();
+      const ctx = deps.getSessionContext();
+      const replyScope = !scope ? readTelegramReplyMediaScope(ctx) : null;
+      // Reply-only authority shares the transport, never requester identity or other Bot API tools.
+      const target = scope ?? replyScope;
+      if (!target) return noScope();
       if (reply_to_message_id !== undefined && nativeMessageId(reply_to_message_id, '') === null) {
         return result({ ok: false, errorCode: 'INVALID_MESSAGE_ID' }, true);
       }
@@ -283,14 +289,14 @@ export function createTelegramBotMcpServer(deps: TelegramBotMcpDeps): McpServer 
         }
         // 非主人触发的轮次只能发本任务工作目录里的文件: 群成员不能借 bot 把本机任意文件发进群。
         // 两端都按 realpath 判定(工作目录里指向外面的 symlink 也拦), 出站用校验过的真实路径。
-        if (!scope.requesterIsOwner) {
+        if (scope && !scope.requesterIsOwner) {
           const real = await realPathWithinDir(deps.getSessionContext().workingDir, absPath);
           if (!real) return denied('非主人触发的轮次只能发送当前任务工作目录内的文件。');
           uploadPath = real;
         }
       }
       try {
-        const sent = await scope.im.sendMedia(scope.laneUserId, {
+        const sent = await target.im.sendMedia(target.laneUserId, {
           kind: kind as keyof typeof TELEGRAM_OUTBOUND_MEDIA,
           ...(uploadPath ? { absPath: uploadPath } : {}),
           ...(url ? { url } : {}),

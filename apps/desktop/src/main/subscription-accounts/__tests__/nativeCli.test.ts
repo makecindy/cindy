@@ -61,6 +61,66 @@ it('does not dispatch a reset after its credential guard expires during startup'
   const methods = children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line).method);
   expect(methods).toEqual(['initialize', 'initialized']);
 });
+
+// Existing pooled accounts use synchronous proofs. Do not insert a new yield between proof and write.
+it('preserves synchronous guarded dispatch before the next microtask', async () => {
+  let methodsAtNextMicrotask: string[] = [];
+  await codexAccountRpc('/second', 'account/rateLimitResetCredit/consume', { idempotencyKey: 'key' }, () => {
+    queueMicrotask(() => {
+      methodsAtNextMicrotask = children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line).method);
+    });
+    return true;
+  });
+  expect(methodsAtNextMicrotask).toEqual(['initialize', 'initialized', 'account/rateLimitResetCredit/consume']);
+});
+
+// #10408, unit: filesystem/source checks are asynchronous. A Promise is not authorization;
+// inspect actual CLI writes, including connection termination while the proof is pending.
+it.each([true, false])('waits for an asynchronous dispatch proof (allowed: %s)', async (allowed) => {
+  let decide!: (allowed: boolean) => void;
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const proof = new Promise<boolean>(resolve => { decide = resolve; });
+  const pending = codexAccountRpc('/second', 'account/rateLimitResetCredit/consume',
+    { idempotencyKey: 'key' }, () => { entered(); return proof; });
+  const observed = allowed ? expect(pending).resolves.toBeDefined()
+    : expect(pending).rejects.toThrow('changed before dispatch');
+  await started;
+  try {
+    expect(children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line).method))
+      .toEqual(['initialize', 'initialized']);
+  } finally {
+    decide(allowed);
+    await observed;
+  }
+  expect(children[0].stdin.write.mock.calls.some(([line]) =>
+    JSON.parse(line).method === 'account/rateLimitResetCredit/consume')).toBe(allowed);
+});
+
+it('does not dispatch after the connection closes while an asynchronous proof is pending', async () => {
+  let decide!: (allowed: boolean) => void;
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const proof = new Promise<boolean>(resolve => { decide = resolve; });
+  const pending = expect(codexAccountRpc('/second', 'account/rateLimitResetCredit/consume',
+    { idempotencyKey: 'key' }, () => { entered(); return proof; })).rejects.toThrow('connection closed');
+  await started;
+  children[0].emit('close', null);
+  await pending;
+  decide(true);
+  await Promise.resolve();
+  expect(children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line).method))
+    .toEqual(['initialize', 'initialized']);
+});
+
+it('rejects a failed asynchronous proof without sending or exposing its error details', async () => {
+  await expect(codexAccountRpc('/second', 'account/rateLimitResetCredit/consume',
+    { idempotencyKey: 'key' }, async () => { throw new Error('fixture-secret-must-not-leak'); }))
+    .rejects.toThrow('Codex account changed before dispatch');
+  expect(children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line).method))
+    .toEqual(['initialize', 'initialized']);
+});
+
 beforeEach(() => {
   h.binary = '/fixture/codex';
   h.error = false;
@@ -117,9 +177,11 @@ afterEach(() => vi.useRealTimers());
 describe('Claude profile renewal', () => {
   it('reads the selected profile expiry and forwards a verified renewal request', async () => {
     vi.mocked(refreshClaudeCliLoginStatus).mockResolvedValueOnce({ loggedIn: true,
-      email: 'second@example.test', loginExpiresAt: '2030-01-05T00:00:00.000Z' });
+      email: 'second@example.test', loginExpiresAt: '2030-01-05T00:00:00.000Z',
+      subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra' });
     expect(await readNativeAccount('anthropic', '/fixture/claude-second', { force: true })).toMatchObject({
       authenticated: true, identity: 'second@example.test', loginExpiresAt: '2030-01-05T00:00:00.000Z',
+      plan: 'pro', planTier: 'pro', planDisplayName: 'Ultra',
     });
     expect(refreshClaudeCliLoginStatus).toHaveBeenLastCalledWith({ configDir: '/fixture/claude-second', force: true, requireFresh: true });
     const signal = new AbortController().signal;

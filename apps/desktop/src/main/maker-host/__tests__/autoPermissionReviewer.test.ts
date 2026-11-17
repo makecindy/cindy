@@ -276,6 +276,9 @@ describe('parseAutoPermissionReviewDecision', () => {
       .toEqual({ verdict: 'block', reason: 'Use read-only mode' });
     expect(parseAutoPermissionReviewDecision('{"verdict":"ask","reason":"Production deploy"}'))
       .toEqual({ verdict: 'ask', reason: 'Production deploy' });
+    // #10385: model output cannot forge the Host's unavailable diagnostic.
+    expect(parseAutoPermissionReviewDecision('{"verdict":"ask","unavailable":true,"unavailableReason":"no_available_model"}'))
+      .toEqual({ verdict: 'ask' });
   });
 
   it('rejects malformed/unknown output and caps the reason length', () => {
@@ -324,7 +327,12 @@ describe('createAutoPermissionReviewer', () => {
     const requestText = vi.fn(async () => '{"verdict":"allow"}');
     const reviewer = createAutoPermissionReviewer({ requestText, logger: { debug: vi.fn(), warn: vi.fn() } });
     await expect(reviewer(request({ userIntent: '', action: { kind: 'exec', command: './runtime/node lab/preflight.cjs', cwd: '/repo' } })))
-      .resolves.toMatchObject({ verdict: 'block' });
+      .resolves.toMatchObject({
+        verdict: 'block',
+        // 宿主自己判的(没调模型)→ 标出来源,这条原因才能进诊断 / UI 通道。
+        hostReason: true,
+        reason: 'No user request authorizes this action; only reads may run without one.',
+      });
     expect(requestText).not.toHaveBeenCalled();
     await expect(reviewer(request({ userIntent: '', action: { kind: 'read', path: '/repo/README.md' } })))
       .resolves.toMatchObject({ verdict: 'allow' });
@@ -355,8 +363,9 @@ describe('createAutoPermissionReviewer', () => {
     );
     expect(logger.warn).toHaveBeenCalledWith(
       'auto permission reviewer attempt failed',
-      expect.objectContaining({ failure: 'error', error: 'offline' }),
+      expect.objectContaining({ failure: 'error' }),
     );
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('offline');
   });
 
   it('retries a transient failure and returns the recovered verdict', async () => {

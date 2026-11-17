@@ -350,3 +350,20 @@ describe('project alias mirror lifecycle', () => {
     expect(mirror.getSnapshot().get('dev-a')).toEqual(snapshot('After'));
   });
 });
+
+// An icon-only update must invalidate the same mirror used by project names.
+it('publishes icon changes and restoration without renaming the project', async () => {
+  const mirror = createProjectAliasMirror();
+  const listener = vi.fn();
+  mirror.subscribe(listener);
+  const base = {aliases: [], platform:'darwin', settingsSupported:true, settingsVersion:3};
+  await mirror.refresh('host', async () => ({...base, icons:{'local:/repo':'🚀'}}));
+  expect(mirror.getSnapshot().get('host')?.icons?.['local:/repo']).toBe('🚀');
+  await mirror.invalidate('host', async () => ({...base, icons:{'local:/repo':'symbol:Rocket:blue'}}));
+  expect(mirror.getSnapshot().get('host')?.icons?.['local:/repo']).toBe('symbol:Rocket:blue');
+  await mirror.invalidate('host', async () => ({...base, icons:{'local:/repo':'symbol:Rocket:purple'}}));
+  expect(mirror.getSnapshot().get('host')?.icons?.['local:/repo']).toBe('symbol:Rocket:purple');
+  await mirror.invalidate('host', async () => ({...base, icons:{}}));
+  expect(mirror.getSnapshot().get('host')?.icons).toEqual({});
+  expect(listener).toHaveBeenCalledTimes(4);
+});

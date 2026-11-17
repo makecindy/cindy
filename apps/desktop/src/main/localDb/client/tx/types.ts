@@ -54,6 +54,7 @@ export type DbTxName =
   | 'bots.pauseLifecycle'
   | 'bots.resumeLifecycle'
   | 'bots.archiveLifecycle'
+  | 'bots.retireCloudCopy'
   | 'bots.deleteProfile'
   | 'bots.prepareProfileDeletion'
   | 'bots.reconcileLanePermission'
@@ -370,6 +371,8 @@ export interface SessionsSetStatusArgs {
 export interface SessionsSetTerminalStatusArgs {
   sessionId: string;
   status: 'archived' | 'deleted';
+  /** Internal automatic housekeeping only; never accepted as renderer metadata. */
+  idleArchiveCutoff?: number;
 }
 
 export interface SessionsSetTerminalStatusResult extends Omit<SessionsSetStatusResultItem, 'status'> {
@@ -1315,6 +1318,7 @@ export type SkillUsageApplyMutationArgs =
   | { kind: 'promote'; analyzerVersion: string };
 
 export interface MediaSpendArgs {
+  approximate?: boolean;
   providerName?: string;
   day: string;
   model: string;
@@ -1377,6 +1381,7 @@ export type DbTxArgsByName = {
   'bots.pauseLifecycle': BotsLifecycleTransitionArgs;
   'bots.resumeLifecycle': BotsLifecycleTransitionArgs;
   'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
+  'bots.retireCloudCopy': { botId: string; at: number };
   'bots.deleteProfile': BotsDeleteProfileArgs;
   'bots.prepareProfileDeletion': { botId: string };
   'bots.reconcileLanePermission': { sessionId: string };
@@ -1476,6 +1481,7 @@ export type DbTxResultByName = {
   'bots.pauseLifecycle': undefined;
   'bots.resumeLifecycle': undefined;
   'bots.archiveLifecycle': { sessions: number };
+  'bots.retireCloudCopy': { changed: boolean };
   'bots.deleteProfile': { sessionIds: string[]; status: 'archived' | 'deleted' };
   'bots.prepareProfileDeletion': undefined;
   'bots.reconcileLanePermission': { mode: string | null; changed: boolean; canonicalSessionId?: string };
