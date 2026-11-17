@@ -38,7 +38,6 @@ import {
 } from './botProjectMemory.js';
 import { setBotProjectSkillsDir } from './botSkillStore.js';
 import { TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate } from './botProjectTemplate.js';
-import { routeModelFields } from './botV2Carryover.js';
 import { ensureMemoryReviewHook, MEMORY_REVIEW_HOOK_COMMAND, LEGACY_MEMORY_REVIEW_HOOK_COMMAND } from './botProjectMemoryReview.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
@@ -415,6 +414,20 @@ function broadcastProjectRegistered(workingDir: string): void {
 /** The project's own nightly review: an ordinary project automation, not a host job. */
 export const BOT_PROJECT_MEMORY_REVIEW_ID = 'teammate-memory-review';
 
+/** Default Bot tasks inherit at creation; their definitions never contain a model snapshot. */
+export type BotDefaultProjectSchedule = Omit<ProjectScheduleConfig,
+  'followTeammateModel' | 'model' | 'agentKind' | 'modelAgentKind' | 'modelAgentDeviceId'
+  | 'providerId' | 'agentDeviceId' | 'effort' | 'fastMode'>;
+
+/** Shared creation policy for every supplied task; existing choices have no inferred provenance. */
+export function createBotDefaultProjectSchedule(
+  defaults: BotDefaultProjectSchedule,
+  current?: ProjectScheduleConfig,
+): ProjectScheduleConfig {
+  return { ...defaults, ...current,
+    followTeammateModel: current ? current.followTeammateModel : true };
+}
+
 export function botProjectMemoryReview(input: {
   botId: string;
   displayName: string;
@@ -422,10 +435,8 @@ export function botProjectMemoryReview(input: {
   timezone: string;
   /** Localized "{{name}} · …" title template. */
   title: string;
-}): ProjectScheduleConfig {
+}): BotDefaultProjectSchedule {
   const name = input.displayName.trim() || input.botId;
-  // The teammate's own model, also on another computer; one that cannot be kept uses the default.
-  const model = input.route ? routeModelFields(input.route) ?? {} : {};
   return {
     id: BOT_PROJECT_MEMORY_REVIEW_ID,
     name: input.title.replace('{{name}}', name),
@@ -435,7 +446,6 @@ export function botProjectMemoryReview(input: {
     recurring: true,
     persistentSession: true,
     silentWhenIdle: true,
-    ...model,
   };
 }
 
@@ -472,7 +482,8 @@ export async function ensureBotProjectAutomations(input: {
     title: t('bots.homeFolder.projectMode.memoryReviewName'),
   });
   await loader.upsertSchedule(input.workingDir, {
-    ...defaults, ...current, prompt: legacyHook ? current!.prompt : defaults.prompt,
+    ...createBotDefaultProjectSchedule(defaults, current),
+    prompt: legacyHook ? current!.prompt : defaults.prompt,
     preRunHook: { ...preRunHook, ...current?.preRunHook, command: preRunHook.command },
   }, { keepUnreadable: true });
   return true;

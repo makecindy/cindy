@@ -95,6 +95,19 @@ describe('project automation providerId serialization', () => {
 });
 
 describe('project automation explicit Harness serialization', () => {
+  // User decision 2026-11-16 / unit: a newly supplied default must not need an ID allowlist
+  // to clear a stale route when the owner selects buddy inheritance.
+  it('serializes buddy inheritance for a new default task ID without retaining its old route', () => {
+    const config = JSON.parse(JSON.stringify(formToProjectConfig(makeForm({
+      followTeammateModel: true, agentKind: 'codex', modelAgentKind: 'codex',
+      model: 'old-model', providerId: 'old-provider', modelAgentDeviceId: 'remote',
+      agentDeviceId: 'remote', effort: 'high', fastMode: 'ultrafast',
+    }), 'future-default-task')));
+    expect(config.followTeammateModel).toBe(true);
+    for (const key of ['model', 'agentKind', 'modelAgentKind', 'modelAgentDeviceId',
+      'providerId', 'agentDeviceId', 'effort', 'fastMode']) expect(config).not.toHaveProperty(key);
+  });
+
   it('preserves the selection through JSON and omits its marker when following', () => {
     const form = makeForm({ agentKind: 'pi', modelAgentKind: 'pi', model: 'test-model',
       providerId: 'custom', effort: 'medium', fastMode: true, persistentSession: true,

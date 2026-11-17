@@ -17279,6 +17279,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Could not read the automation’s model preference. Close and reopen the editor to retry.",
       "promptDialog": {
         "titleEdit": "Edit Automation",
         "titleCreate": "Create Automation",
@@ -17617,6 +17618,7 @@
         "effortHeading": "Reasoning Effort",
         "effortDefault": "Default",
         "followSession": "Follow session",
+        "followTeammate": "Follow buddy’s primary model",
         "modelListAria": "Model list",
         "modelSelectorAria": "Model selector",
         "categoryListAria": "{{category}} models",

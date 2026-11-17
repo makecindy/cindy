@@ -384,7 +384,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         const boundAgent = form.targetSessionId && form.targetSessionId !== PENDING_SESSION_ID &&
           form.boundAgent?.sessionId !== form.targetSessionId
           ? { sessionId: form.targetSessionId, agentKind: form.agentKind } : form.boundAgent;
-        return { ...form, ...selection, boundAgent, modelAgentKind: selection.agentKind };
+        return { ...form, ...selection, followTeammateModel: false, boundAgent, modelAgentKind: selection.agentKind };
       }
       const agentKind = followedAgentKind ??
         (form.boundAgent?.sessionId === form.targetSessionId

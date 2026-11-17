@@ -17205,6 +17205,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "无法读取自动化的模型设置，请关闭编辑器后重新打开重试。",
       "promptDialog": {
         "titleEdit": "编辑自动化",
         "titleCreate": "创建自动化",
@@ -17543,6 +17544,7 @@
         "effortHeading": "推理强度",
         "effortDefault": "默认",
         "followSession": "跟随任务",
+        "followTeammate": "跟随伙伴主模型",
         "modelListAria": "模型列表",
         "modelSelectorAria": "模型选择器",
         "categoryListAria": "{{category}} 模型",

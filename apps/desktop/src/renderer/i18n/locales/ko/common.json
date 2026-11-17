@@ -17205,6 +17205,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "자동화 모델 설정을 읽을 수 없습니다. 편집기를 닫고 다시 열어 주세요.",
       "promptDialog": {
         "titleEdit": "자동화 편집",
         "titleCreate": "자동화 만들기",
@@ -17543,6 +17544,7 @@
         "effortHeading": "추론 강도",
         "effortDefault": "기본값",
         "followSession": "세션 따르기",
+        "followTeammate": "동반자의 기본 모델 따르기",
         "modelListAria": "모델 목록",
         "modelSelectorAria": "모델 선택기",
         "categoryListAria": "{{category}} 모델",

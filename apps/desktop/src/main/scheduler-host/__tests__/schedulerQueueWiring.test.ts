@@ -25,6 +25,7 @@ vi.mock('../../localDb/dialogueWorkspace', () => ({ dialogueWorkspaceRoots: () =
 vi.mock('../../localDb/schema.js', () => ({ sessions: {} }));
 vi.mock('../../localDb/client/current', () => ({ getDbClient: vi.fn() }));
 vi.mock('../../maker-ipc/scheduledModelSelection', () => ({ assertScheduledHarnessSupported: vi.fn() }));
+vi.mock('../../maker-host/bot-model-chain-settings-store.js', () => ({ readEffectiveBotModelChain: vi.fn() }));
 vi.mock('../../maker-host/model-route-guard-live.js', () => ({
   resolveDefaultScheduleRoute: vi.fn(), resolveRouteCopyCapabilities: vi.fn(),
   resolveScheduledModelSelectionLive: vi.fn(), verdictForModelRoute: vi.fn(),

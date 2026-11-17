@@ -80,9 +80,12 @@ vi.mock('../TemplateParamForm', () => ({ TemplateParamForm: () => null }));
 vi.mock('../BoundSessionCard', () => ({ BoundSessionCard: () => null }));
 vi.mock('../ScheduleChips', () => ({
   ProjectChip: () => null, ScheduleChip: () => null, ScheduleSettingsButton: () => null, ThreadPickerInline: () => null,
-  ModelEffortChip: ({ onSelect, ...selection }: { onSelect: (choice: unknown) => void }) => (
+  ModelEffortChip: ({ onSelect, followModel, ...selection }: { onSelect: (choice: unknown) => void; followModel?: { label: string; active: boolean; onFollow: () => void } }) => (
+    <>
+    {followModel && <button data-active={String(followModel.active)} onClick={followModel.onFollow}>{followModel.label}</button>}
     <button data-testid="model-selection" data-selection={JSON.stringify(selection)} onClick={() => onSelect({ engine: 'codex', modelId: 'remote-only', providerId: 'source',
       effort: 'ultra', fast: true, agentDevice: { deviceId: 'studio' } })}>select remote</button>
+    </>
   ),
 }));
 
@@ -138,7 +141,11 @@ beforeEach(() => {
   state.pendingCapabilities.clear();
   state.vendors = new Set(['cc', 'codex', 'pi']);
   localStorage.clear();
-  vi.stubGlobal('electronAPI', { gitContext: { githubAppStatus: async () => ({ available: true, login: null }) }, maker: { schedule: {
+  vi.stubGlobal('electronAPI', { localDb: { bots: {
+    // Opening the editor must work without loading profiles or resuming invitations (PR 10847).
+    list: vi.fn(async () => { throw new Error('full roster unavailable'); }),
+    ownsProject: async () => true,
+  } }, gitContext: { githubAppStatus: async () => ({ available: true, login: null }) }, maker: { schedule: {
     webhookReceiver: async () => 'cloud', scriptCapabilityStatus: async () => ({ statuses: [] }),
   } } });
   resetDraft();
@@ -672,4 +679,72 @@ it('edits a long prompt in the expanded editor and returns focus on collapse', a
   await waitFor(() => expect(h.onSubmit).toHaveBeenCalledWith(
     expect.objectContaining({ prompt: 'rewritten in the expanded editor' }), true,
   ));
+});
+
+// User decision 2026-11-16 / unit: use the real editor save path. Old snapshots
+// must change only after an explicit buddy-inheritance choice, never on opening.
+it.each([false, true])('keeps an old default route unless the owner selects buddy inheritance (%s)', async (chooseFollow) => {
+  const upsertSchedule = vi.fn(async (_input: { config: Record<string, unknown> }) => ({}));
+  Object.assign(window.electronAPI.maker, { projectAutomation: { upsertSchedule } });
+  const initial = schedule({ source: 'project', projectConfigId: 'future-default-task',
+    workingDir: '/data/owners/owner/bots/mia/workspace', workspaceKind: 'project',
+    fastMode: 'ultrafast',
+    persistentSession: true, preRunHook: { command: 'node custom-check.cjs', timeoutMs: 4000 } });
+  Object.assign(window.electronAPI, { fileBrowser: { readFile: vi.fn(async () => ({ ok: true,
+    data: { content: JSON.stringify({ version: 1, schedules: [{ id: initial.projectConfigId, model: 'shared' }] }), truncated: false } })) } });
+  render(<ScheduleFormDialog open initial={initial} editProjectSchedule onOpenChange={() => {}} onSubmit={vi.fn()} />);
+  const save = screen.getByRole('button', { name: 'scheduler.editor.promptDialog.saveAria' });
+  await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false));
+  const follow = screen.getByRole('button', { name: 'scheduler.chips.model.followTeammate' });
+  expect(follow.dataset.active).toBe('false');
+  if (chooseFollow) {
+    fireEvent.click(follow);
+    expect(follow.dataset.active).toBe('true');
+  }
+  fireEvent.click(save);
+  await waitFor(() => expect(upsertSchedule).toHaveBeenCalledTimes(1));
+  const config = upsertSchedule.mock.calls[0]![0].config;
+  expect(config).toMatchObject({ cronExpr: initial.cronExpr, prompt: initial.prompt,
+    preRunHook: initial.preRunHook, persistentSession: true, followTeammateModel: chooseFollow });
+  expect(config.model).toBe(chooseFollow ? undefined : 'shared');
+  expect(config.providerId).toBe(chooseFollow ? undefined : 'source');
+  // Ordinary saves must preserve the saved speed tier; the follow choice clears it.
+  expect(config.fastMode).toBe(chooseFollow ? undefined : 'ultrafast');
+});
+
+it('reads a saved buddy-follow marker without inferring it from an empty model', async () => {
+  const initial = schedule({ source: 'project', projectConfigId: 'teammate-memory-review',
+    model: undefined, providerId: undefined, workingDir: '/data/owners/owner/bots/mia/workspace' });
+  Object.assign(window.electronAPI, { fileBrowser: { readFile: vi.fn(async () => ({ ok: true,
+    data: { content: JSON.stringify({ version: 1, schedules: [{ id: initial.projectConfigId, followTeammateModel: true }] }), truncated: false } })) } });
+  render(<ScheduleFormDialog open initial={initial} editProjectSchedule onOpenChange={() => {}} onSubmit={vi.fn()} />);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'scheduler.chips.model.followTeammate' }).dataset.active).toBe('true'));
+  fireEvent.click(screen.getByTestId('model-selection'));
+  expect(screen.getByRole('button', { name: 'scheduler.chips.model.followTeammate' }).dataset.active).toBe('false');
+});
+
+// Partial project metadata must never turn an unreadable saved choice into a default.
+it.each(['ownership', 'config'])('keeps saving disabled when review %s cannot be read completely', async (failure) => {
+  if (failure === 'ownership') {
+    Object.assign(window.electronAPI.localDb.bots, { ownsProject: async () => { throw new Error('query failed'); } });
+  }
+  Object.assign(window.electronAPI, { fileBrowser: { readFile: vi.fn(async () => ({ ok: true,
+    data: { content: '{', truncated: true } })) } });
+  const initial = schedule({ source: 'project', projectConfigId: 'teammate-memory-review',
+    workingDir: '/data/owners/owner/bots/mia/workspace' });
+  render(<ScheduleFormDialog open initial={initial} editProjectSchedule onOpenChange={() => {}} onSubmit={vi.fn()} />);
+  await screen.findByText('scheduler.editor.reviewModelReadFailed');
+  expect((screen.getByRole('button', { name: 'scheduler.editor.promptDialog.saveAria' }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+it('does not offer buddy inheritance for a lookalike project outside the active account roster', async () => {
+  Object.assign(window.electronAPI.localDb.bots, { ownsProject: async () => false });
+  const readFile = vi.fn();
+  Object.assign(window.electronAPI, { fileBrowser: { readFile } });
+  const initial = schedule({ source: 'project', projectConfigId: 'teammate-memory-review',
+    workingDir: '/data/owners/other/bots/mia/workspace' });
+  render(<ScheduleFormDialog open initial={initial} editProjectSchedule onOpenChange={() => {}} onSubmit={vi.fn()} />);
+  await waitFor(() => expect((screen.getByRole('button', { name: 'scheduler.editor.promptDialog.saveAria' }) as HTMLButtonElement).disabled).toBe(false));
+  expect(screen.queryByRole('button', { name: 'scheduler.chips.model.followTeammate' })).toBeNull();
+  expect(readFile).not.toHaveBeenCalled();
 });

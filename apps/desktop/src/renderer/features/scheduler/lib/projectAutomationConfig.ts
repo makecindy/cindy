@@ -20,6 +20,7 @@ export interface ProjectScheduleConfig {
   /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
   modelAgentDeviceId?: string;
+  followTeammateModel?: boolean;
   model?: string;
   /** 显式来源(供应商)id;省略 = 使用该 Agent 的原生默认来源。 */
   providerId?: string;
@@ -88,6 +89,7 @@ export function formToProjectConfig(
   id: string,
 ): ProjectScheduleConfig {
   const cronExpr = form.cronExpr.trim();
+  const followsBuddy = form.followTeammateModel === true;
   return {
     id,
     name: form.name.trim(),
@@ -98,15 +100,16 @@ export function formToProjectConfig(
     manual: form.manual,
     intervalMs: form.intervalMs,
     expireAt: parseScheduleDeadline(form.deadline ?? '', form.sourceExpireAt) ?? undefined,
-    agentKind: scheduleAgentKindForForm(form),
-    modelAgentKind: form.model.trim() ? form.modelAgentKind : undefined,
-    modelAgentDeviceId: form.model.trim() ? form.modelAgentDeviceId : undefined,
-    model: form.model.trim() || undefined,
-    providerId: form.providerId.trim() || undefined,
-    agentDeviceId: form.model.trim() ? form.agentDeviceId?.trim() || undefined : undefined,
-    effort: form.effort || undefined,
+    followTeammateModel: form.followTeammateModel,
+    agentKind: followsBuddy ? undefined : scheduleAgentKindForForm(form),
+    modelAgentKind: !followsBuddy && form.model.trim() ? form.modelAgentKind : undefined,
+    modelAgentDeviceId: !followsBuddy && form.model.trim() ? form.modelAgentDeviceId : undefined,
+    model: followsBuddy ? undefined : form.model.trim() || undefined,
+    providerId: followsBuddy ? undefined : form.providerId.trim() || undefined,
+    agentDeviceId: !followsBuddy && form.model.trim() ? form.agentDeviceId?.trim() || undefined : undefined,
+    effort: followsBuddy ? undefined : form.effort || undefined,
     // Codex / Pi 都生效(runner.ts:665);只认 codex 会丢弃 Pi 任务的 Fast(codex review)。
-    fastMode: (form.agentKind === 'codex' || form.agentKind === 'pi') && form.fastMode ? true : undefined,
+    fastMode: !followsBuddy && (form.agentKind === 'codex' || form.agentKind === 'pi') && form.fastMode ? form.fastMode : undefined,
     useWorktree: form.useWorktree,
     persistentSession: form.persistentSession,
     silentWhenIdle: form.silentWhenIdle,

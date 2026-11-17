@@ -13,6 +13,8 @@ import {
   type ScheduleWebhookPresetId,
 } from '@cindy/maker-scheduler/webhook-formats';
 import { PreRunPluginFields } from './PreRunPluginFields';
+import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../../../shared/projectAutomationPaths';
+import { teammateFolderOfProjectPath } from '@cindy/maker-shared/teammate-project';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import * as sessionService from '@/lib/sessionService';
@@ -313,6 +315,12 @@ export function ScheduleFormDialog({
   const triggerMode = form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
   const webhookSettingsVisible = !isProjectAutomationMode && webhookReceiverReady && form.webhookEnabled;
 
+  const maybeTeammateSchedule = isProjectAutomationMode && !!initial?.projectConfigId
+    && !!teammateFolderOfProjectPath(projectWorkingDir);
+  const [ownTeammateProject, setOwnTeammateProject] = useState<string | null>(null);
+  const isTeammateSchedule = maybeTeammateSchedule && ownTeammateProject === projectWorkingDir;
+  const [teammateModelReady, setTeammateModelReady] = useState(false);
+  const [teammateModelReadError, setTeammateModelReadError] = useState(false);
   const initialId = initial?.id;
   useEffect(() => {
     if (!open) return;
@@ -345,6 +353,35 @@ export function ScheduleFormDialog({
     initialWorkingDir,
     setField,
   ]);
+
+  const teammateModelReadFailedText = t('scheduler.editor.reviewModelReadFailed');
+  // Read the durable opt-in, never infer it from an empty model or a matching snapshot.
+  useEffect(() => {
+    if (!open || !maybeTeammateSchedule || !projectWorkingDir) return;
+    let current = true;
+    setOwnTeammateProject(null);
+    setTeammateModelReady(false);
+    setTeammateModelReadError(false);
+    void window.electronAPI.localDb.bots.ownsProject(projectWorkingDir).then(async ownsProject => {
+      if (!current) return;
+      if (!ownsProject) { setTeammateModelReady(true); return; }
+      const result = await window.electronAPI.fileBrowser.readFile({
+        workdir: projectWorkingDir, relPath: PROJECT_AUTOMATION_REL_SEGMENTS.join('/'),
+      });
+      if (!result.ok || result.data.truncated) throw new Error('unreadable config');
+      const file = JSON.parse(result.data.content);
+      const config = file.version === 1 && Array.isArray(file.schedules)
+        ? file.schedules.find((item: { id?: string }) => item.id === initial?.projectConfigId) : null;
+      if (!config) throw new Error('missing automation');
+      if (!current) return;
+      setOwnTeammateProject(projectWorkingDir);
+      setField('followTeammateModel', config.followTeammateModel === true && !config.model?.trim());
+      setTeammateModelReady(true);
+    }).catch(() => {
+      if (current) setTeammateModelReadError(true);
+    });
+    return () => { current = false; };
+  }, [open, maybeTeammateSchedule, projectWorkingDir, initial, initialId, initial?.projectConfigId, setField]);
 
   /** 前置检查「AI 生成」:描述 → utility model 生成脚本落盘 → 命令回填输入框。 */
   const runHookGenerate = useCallback(async () => {
@@ -669,7 +706,7 @@ export function ScheduleFormDialog({
     && (!modelCatalogReady || defaultCapabilitiesLoading || (!agentsLoaded && agentsLoading));
 
   const handleSubmit = async () => {
-    if (awaitingNewModelCatalog) return;
+    if (awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)) return;
     setSubmitError(null);
     const err = validate();
     if (err) {
@@ -861,6 +898,7 @@ export function ScheduleFormDialog({
                     })}
                   />
                 )}
+                {maybeTeammateSchedule && teammateModelReadError && <ErrorNotice message={teammateModelReadFailedText} />}
                 {submitError && (
                   <ErrorNotice
                     message={t(`chat.remoteError.${parseAgentErrorCode(submitError)?.code}`)}
@@ -974,6 +1012,15 @@ export function ScheduleFormDialog({
                                 )}
                                 <div className="min-w-0 flex-1" />
                                 <ModelEffortChip
+                                  disabled={maybeTeammateSchedule && !teammateModelReady}
+                                  followModel={isTeammateSchedule ? {
+                                    active: form.followTeammateModel === true && !form.model.trim(),
+                                    label: t('scheduler.chips.model.followTeammate'),
+                                    onFollow: () => {
+                                      selectModelConfiguration(null);
+                                      setField('followTeammateModel', true);
+                                    },
+                                  } : undefined}
                                   onSelect={({
                                     engine,
                                     modelId,
@@ -1002,7 +1049,7 @@ export function ScheduleFormDialog({
                                   agentKind={form.agentKind}
                                   agentDeviceId={selectedAgentDeviceId ?? undefined}
                                   modelValue={form.model}
-                                  onChangeModel={(v) => setField('model', v)}
+                                  onChangeModel={(v) => { setField('model', v); setField('followTeammateModel', false); }}
                                   effortValue={form.effort}
                                   onChangeEffort={(v) => setField('effort', v)}
                                   followSession={isBound}
@@ -1713,7 +1760,7 @@ export function ScheduleFormDialog({
                     : t('scheduler.editor.promptDialog.createAria')
                 }
                 onClick={() => void handleSubmit()}
-                disabled={submitting || awaitingNewModelCatalog}
+                disabled={submitting || awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)}
                 className="min-w-[68px] shrink-0"
               >
                 {submitLabel}
