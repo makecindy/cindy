@@ -1,7 +1,8 @@
 /**
  * 测试价值
  * - 生产入口与可观察结果：withQuietRunArchive（index.desktop.ts 包在 runner 外面）。归档的目标任务被
- *   某一轮自动化恢复后，这一轮被前置检查跳过或静默完成时重新归档；提醒、失败、顺延、中止与续跑不动。
+ *   某一轮自动化恢复后，这一轮被前置检查跳过或静默完成时重新归档；每轮新建任务的自动化，安静的一轮
+ *   归档这次新建的任务（2026-11-18）；提醒、失败、顺延、中止与续跑不动。
  * - 规则依据：archive-pauses-automations.md「安静的一轮不唤回已归档任务」（2026-11-17 用户决定）。
  * - 现有覆盖缺口：此前恢复后一律保持激活，每小时跳过的巡检也会把已归档任务翻回收件箱。
  * - 最小失败输入：目标已归档、前置检查返回 skipped 的一轮。
@@ -63,4 +64,20 @@ it('keeps the round result when re-archiving fails, and lets runner failures pro
   });
   await expect(failing.fire(schedule, ctx())).rejects.toThrow('agent failed');
   expect(archiveIfUntouched).not.toHaveBeenCalled();
+});
+
+// Bug 2026-11-18: each silent round of a per-round automation left an open task in the inbox.
+it('archives the task a quiet round of an unbound automation created, but keeps notified rounds', async () => {
+  const unbound = { id: 's2' } as unknown as Schedule;
+  const silent = setup(null, { sessionId: 'run-task' }, true);
+  await silent.wrapped.fire(unbound, ctx());
+  expect(silent.archiveIfUntouched).toHaveBeenCalledWith('run-task', 1000);
+
+  const notified = setup(null, { sessionId: 'run-task' }, false);
+  await notified.wrapped.fire(unbound, ctx());
+  const persistent = setup(null, { sessionId: 'home' }, true);
+  await persistent.wrapped.fire({ id: 's3', persistentSession: true } as unknown as Schedule, ctx());
+  const noTask = setup(null, { sessionId: '', skipped: true });
+  await noTask.wrapped.fire(unbound, ctx());
+  for (const s of [notified, persistent, noTask]) expect(s.archiveIfUntouched).not.toHaveBeenCalled();
 });

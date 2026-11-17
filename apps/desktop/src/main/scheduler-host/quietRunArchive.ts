@@ -1,8 +1,10 @@
 /**
- * An archived task restored only for a scheduled round goes back to archived when that round
- * leaves nothing for the user: skipped by its pre-run check or silenced by the agent.
- * Notified, failed, deferred and aborted rounds keep it restored, and so does any user
- * activity in the task meanwhile. Rules: docs/product-rules/archive-pauses-automations.md.
+ * A quiet round (skipped by its pre-run check or silenced by the agent) leaves nothing for
+ * the user, so it must not leave an open task behind:
+ * - a bound target that was archived and only restored for this round goes back to archived;
+ * - an automation that creates a new task per round archives that new task.
+ * Notified, failed, deferred and aborted rounds keep their task, and so does any user
+ * activity in it meanwhile. Rules: docs/product-rules/archive-pauses-automations.md.
  */
 import type { ScheduleRunner } from '@cindy/maker-scheduler';
 
@@ -23,10 +25,16 @@ export function withQuietRunArchive(runner: ScheduleRunner, deps: QuietRunArchiv
         ? (await deps.targetStatus(target).catch(() => null)) === 'archived'
         : false;
       const result = await runner.fire(schedule, ctx);
-      if (!target || !wasArchived || result.deferred || ctx.signal.aborted) return result;
+      if (result.deferred || ctx.signal.aborted) return result;
       if (!result.skipped && !deps.isRunSilenced(ctx.runId)) return result;
+      // Per-round task: created by this round of an unbound, non-persistent automation.
+      const perRoundTask = !schedule.targetSessionId && !schedule.persistentSession && !ctx.resumeSessionId
+        ? result.sessionId || undefined
+        : undefined;
+      const quietTask = target && wasArchived ? target : perRoundTask;
+      if (!quietTask) return result;
       try {
-        await deps.archiveIfUntouched(target, ctx.firedAt);
+        await deps.archiveIfUntouched(quietTask, ctx.firedAt);
       } catch (error) {
         deps.warn('[scheduler-host] re-archive after quiet run failed (non-fatal)', {
           scheduleId: schedule.id,

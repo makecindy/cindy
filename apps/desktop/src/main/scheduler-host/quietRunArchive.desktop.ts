@@ -35,8 +35,9 @@ export async function archiveQuietScheduledTarget(sessionId: string, sinceMs: nu
   await withSessionRouteLock(sessionId, async () => {
     const db = getDbClient();
     const row = await db.queryOne<ArchiveCandidateRow>(`${ARCHIVE_CANDIDATE_SELECT} WHERE s.id = ?`, [sessionId]);
+    // Running is judged from the live runtime above: right after a round the persisted
+    // turn-end time may still be landing, so the stored turn columns would read as running.
     if (!row || row.status !== 'active' || row.pinnedAt != null || row.queued) return;
-    if ((row.activeTurnStartedAt ?? 0) > (row.lastTurnEndedAt ?? 0)) return;
     if (await db.queryOne(OWNER_MESSAGE_SINCE_SQL, [sessionId, sinceMs])) return;
     await patchSessionMetaInDb(sessionId, { status: 'archived' }, { routeLockHeld: true });
   });
