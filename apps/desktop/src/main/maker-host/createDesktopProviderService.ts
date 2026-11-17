@@ -32,6 +32,7 @@ import path from 'node:path';
 
 import { subscriptionProviderAccountKeys, hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, refreshSubscriptionPool,
   refreshSubscriptionPoolCodexModels, readSubscriptionPoolCodexModels,
+  refreshSubscriptionPoolClaudeModels, readSubscriptionPoolClaudeModels,
   resetDefaultSubscriptionCodexDiscovery } from '../subscription-accounts/runtime.js';
 import { readPool, readProviderBoundAccountIds } from '../subscription-accounts/store.js';
 import {
@@ -67,6 +68,7 @@ import { codexAccountDisplayKey } from './codex-auth-identity.js';
 import { readNativeCodexTokens } from '../subscription-accounts/nativeCli.js';
 import { getCodexHome } from './codex-home-path.js';
 import { projectSubscriptionPoolCatalog as projectSubscriptionPoolCatalogWith, publishSubscriptionPoolProviders as publishSubscriptionPoolProvidersWith } from './subscriptionPoolCatalog.js';
+import { setGuestProviderModelCatalogReader } from './guest-provider-route-store.js';
 import { listReadyProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
 import { speechModels } from '../voice-conversation/models.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
@@ -83,6 +85,7 @@ import {
   clearDiscoveredProviderModels,
   getActiveCatalog,
   getActiveCatalogWithCodexModels,
+  getActiveCatalogWithClaudeModels,
   getXdGatewayModels,
   getModelPlaneWarnings,
   setActiveCatalog,
@@ -910,11 +913,17 @@ async function refreshSubscriptionPoolsOfKind(kind: 'openai' | 'anthropic'): Pro
 /** Apply account membership to both selectable and full routing snapshots. */
 function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog = false): Catalog {
   return projectSubscriptionPoolCatalogWith(catalog, { readPool, codexAccountState, readSubscriptionPoolCodexModels,
-    getActiveCatalogWithCodexModels, readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds }, routingCatalog);
+    getActiveCatalogWithCodexModels, readSubscriptionPoolClaudeModels, getActiveCatalogWithClaudeModels,
+    readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds }, routingCatalog);
+}
+
+function getDesktopProviderModelAccessCatalog(): Catalog {
+  return projectSubscriptionPoolCatalog(getActiveCatalog(), true);
 }
 
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
 export function getDesktopProviderService(options: { allowSideEffects?: boolean } = {}): ProviderService {
+  setGuestProviderModelCatalogReader(getDesktopProviderModelAccessCatalog);
   const authState = getAuthState();
   const ownerId = getActiveAppSession().dataOwnerId;
   if (
@@ -977,7 +986,14 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       // 只能读取已经由 Cindy OAuth 明确绑定的 token，禁止在连接态读取时自动认领。
       anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly, includeBoundAccounts }) => {
         if (readPool('anthropic')) {
-          if (!snapshotOnly) await refreshSubscriptionPoolsOfKind('anthropic');
+          if (!snapshotOnly) {
+            await refreshSubscriptionPoolsOfKind('anthropic');
+            const discovery = refreshSubscriptionPoolClaudeModels();
+            // Ordinary provider reads also serve Codex/API/remote tasks. Do not make
+            // them wait for Claude's SDK subprocess; explicit discovery may wait.
+            if (waitForDiscovery) await discovery;
+            else void discovery.catch(() => log.warn('Background Claude model discovery unavailable'));
+          }
           return hasConnectedSubscriptionPool('anthropic', { includeBoundAccounts });
         }
         if (snapshotOnly) return hasClaudeNativeLogin();

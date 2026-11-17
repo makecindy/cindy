@@ -23,6 +23,12 @@ import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
 import { manageAppSettings } from '../app-settings/sections.js';
 import { importThemePackageFromTask } from '../local-themes/agent.js';
 import { manageAppModels } from '../app-settings/models.js';
+import { runProviderReadRequest } from './providerReadTools.js';
+import { runProviderSharingRequest } from './providerSharingTools.js';
+import { executeProviderShareManagementCommand } from '../device-link/providerShareRuntime.js';
+import { createProviderGroupCommandDeps, executeProviderGroupCommand } from '../provider-group/ipc.js';
+import { invokeProviderManagement } from '../provider-group/managementClient.js';
+import { remoteInvoke } from '../device-link/index.js';
 import { classifyOrigin } from '../input-handoff/originPolicy.js';
 import { inspectAppDefaultModel, changeAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
 import { hostname } from 'node:os';
@@ -1371,6 +1377,54 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               if (!started.ok) reject(new Error(started.errorCode));
             });
           }, signal);
+        }),
+      },
+      providerReads: {
+        call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async () => {
+          const plugin = !callerSessionId ? getPluginHostToolCaller() : undefined;
+          const owner = activeOwnerScopeKey();
+          const assertCurrent = () => {
+            plugin?.assertCurrent();
+            if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('OWNER_SCOPE_CHANGED');
+          };
+          return runProviderReadRequest({ ...input, device: input.device === getDeviceId() ? 'local' : input.device }, {
+            local: async (request, guard) => {
+              if (request.action === 'manage-share') {
+                guard();
+                return executeProviderShareManagementCommand(request.command);
+              }
+              guard();
+              return executeProviderGroupCommand(createProviderGroupCommandDeps(), request.command);
+            },
+            remote: async (device, request, guard) => {
+              guard();
+              return invokeProviderManagement((target, channel, args, options) =>
+                deps.invokeRemote(target, channel, args, { ...options, preSend: () => { guard(); options?.preSend?.(); } }),
+              device, request);
+            },
+          }, assertCurrent, Boolean(plugin));
+        }),
+      },
+      providerSharing: {
+        call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async assertAccess => {
+          const write = input.action === 'status' || input.action === 'set-models';
+          await assertAccess();
+          if (write) await assertTaskActionCurrent();
+          const actionGuard = write ? captureTaskActionSyncGuard() : undefined;
+          const plugin = !callerSessionId ? getPluginHostToolCaller() : undefined;
+          const owner = activeOwnerScopeKey();
+          const assertCurrent = () => {
+            plugin?.assertCurrent();
+            actionGuard?.();
+            if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('OWNER_SCOPE_CHANGED');
+          };
+          return runProviderSharingRequest({ ...input, device: input.device === getDeviceId() ? 'local' : input.device }, {
+            command: executeProviderShareManagementCommand,
+            remote: (device, command, guard) => invokeProviderManagement(
+              (target, channel, args, options) => remoteInvoke(target, channel, args, { ...options,
+                preSend: () => { guard(); options?.preSend?.(); } }),
+              device, { action: 'manage-share', command }),
+          }, assertCurrent);
         }),
       },
       piRuntime: {

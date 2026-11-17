@@ -431,6 +431,8 @@ interface ComputerDriverUpdateProgress {
   phase: 'downloading' | 'installing' | 'done';
   downloadedBytes: number | null;
   totalBytes: number | null;
+  /** Standard progress (speed, time left) for the shared DownloadMeter. */
+  download?: import('../shared/downloadProgress').DownloadProgress;
 }
 
 /* ── CCD Progress ── */
@@ -452,6 +454,8 @@ interface BinaryDownloadProgressPayload {
   reset?: boolean;
   /** 失败/调试文案使用，标识当前推进度的 vendor。 */
   vendor?: 'claude' | 'codex' | 'pi';
+  /** Standard display progress (phase, retry reason, speed, time left); `progress` stays the bar. */
+  download?: import('../shared/downloadProgress').DownloadProgress;
 }
 
 /* ── App Update Progress ── */
@@ -465,6 +469,8 @@ interface AppUpdateProgressPayload {
   failed?: boolean;
   /** DownloadError code (e.g. 'NETWORK', 'CHECKSUM', 'HTTP_4XX'). */
   error?: string;
+  /** Standard display progress (phase, retry reason, speed, time left). */
+  download?: import('../shared/downloadProgress').DownloadProgress;
 }
 
 /* ── Auth types ── */
@@ -3258,6 +3264,7 @@ interface ElectronAPI {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
+        | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => void,
@@ -3283,6 +3290,7 @@ interface ElectronAPI {
     | { type: 'plugin'; pluginId: string }
     | { type: 'local-plugin-share'; snapshotId: string }
     | { type: 'installed-plugin'; ghostId?: string }
+    | { type: 'gift-card'; code: string }
     | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
     | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' }
     | null
@@ -4044,6 +4052,8 @@ interface ElectronAPI {
           | 'done'
           | 'failed';
         name: string;
+        /** Standard progress while downloading (shared/downloadProgress.ts). */
+        download?: import('../shared/downloadProgress').DownloadProgress;
         version?: string;
         absolutePath?: string;
         errorCode?: string;
@@ -4655,6 +4665,8 @@ interface ElectronAPI {
   worktreeSuggestName: (req: {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').SuggestNameResp>;
+  /** Opt-in model-written name for a new task's worktree; `name: null` keeps the generated one. */
+  worktreeGenerateName: (req: { taskText: string }) => Promise<{ name: string | null }>;
   worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest) => Promise<import('../shared/worktreeCheckout').CheckoutReply>;
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncStatus>;
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncReply>;

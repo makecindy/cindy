@@ -2413,6 +2413,45 @@
           "wireProtocol": "openai-chat"
         }
       }
+    },
+    {
+      "id": "iflytek-maas",
+      "name": "iFLYTEK Astron MaaS",
+      "docsUrl": "https://maas.xfyun.cn/doc/guide/index.html",
+      "models": [
+        {
+          "id": "spark-x2.6",
+          "name": "Spark X2.6"
+        }
+      ],
+      "runtimes": {
+        "codex": {
+          "baseUrl": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+          "wireProtocol": "openai-chat"
+        },
+        "pi": {
+          "baseUrl": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
+      "id": "open-design",
+      "name": "Open Design",
+      "docsUrl": "https://open-design.ai",
+      "models": [],
+      "runtimes": {
+        "codex": {
+          "baseUrl": "https://amr-link.open-design.ai/v1",
+          "modelsUrl": "https://amr-link.open-design.ai/v1/models",
+          "wireProtocol": "openai-chat"
+        },
+        "pi": {
+          "baseUrl": "https://amr-link.open-design.ai/v1",
+          "modelsUrl": "https://amr-link.open-design.ai/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
     }
   ]
 }

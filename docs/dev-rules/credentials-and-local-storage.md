@@ -13,6 +13,21 @@
 
 ## 凭证不入仓
 
+### 本地模式首次云登录：资产交接暂时回退
+
+2026-11-17 回退 #10357 新增的资产交接：它将密钥与插件复制放入登录提交路径，
+复制或 Windows 实例检查失败会阻断已提交登录的后续完成及原生供应商绑定。
+登录继续沿用原数据库与原生供应商绑定流程；本地模式的自定义供应商密钥、请求头、
+插件及偏好暂不自动接续到首个云账号，这是回退恢复的已知限制。
+
+回退只撤销代码，不清理源资料、已复制的目标资料、`.local-profile-assets-v1.json`
+或 `.local-profile-assets-*` 暂存目录，也不撤销原账号认领或修改历史数据库 migration。
+尚未完成的资产计划不再自动续跑；未来恢复交接时必须兼容这些记录，并保留用户后续修改。
+再次接入前须覆盖迁移失败后登录仍可完成、插件初始化不抢占待交接目标，以及重启后的恢复。
+登录回归入口为 `authPostCommitStartup.test.ts`。
+
+### 通用存储要求
+
 - 用户凭证、OAuth 授权、API key、访问令牌、刷新令牌、私钥和 Agent 授权文件不得以
   复制、链接、fixture、日志或生成物等形式进入仓库工作区或任何可能被 Git 跟踪的路径。
 - `.gitignore` 只是误操作兜底，不是凭证存储方案。发现凭证曾进入 Git 历史时，应立即
@@ -107,7 +122,10 @@ Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**；
 Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此只做内置 CLI 的外壳：
 
 - 登录只拉起内置 CLI 的 `claude auth login --claudeai`，登录态只读
-  `claude auth status --json`。凭证留在 CLI 默认凭证库（macOS 钥匙串 / `~/.claude`），
+  `claude auth status --json`。JSON 缺少套餐显示名时，可在同一 binary、env、账号目录和剩余超时
+  预算内读取一次 `auth status --text`，仅在邮箱与组织匹配时补充 `planDisplayName`；文本不作为
+  登录或权限依据，失败仍保留 JSON 登录态，不读取原始 profile／凭证文件。
+  凭证留在 CLI 默认凭证库（macOS 钥匙串 / `~/.claude`），
   Cindy 不读取、不复制、不刷新它。默认账号的会话与登录检查不设 `CLAUDE_CONFIG_DIR`
   （dev 多实例的默认账号也一样），确保仍能看到终端已有登录。
   2026-11-07 起，用户显式添加的[供应商内订阅账号](../product-rules/subscription-account-pools.md)

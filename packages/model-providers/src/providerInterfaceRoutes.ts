@@ -7,6 +7,9 @@ import type { AgentKind, ProviderRuntimeModelConfig, ProviderWireProtocol, Model
 
 const bundledRegistry = bundled as unknown as ModelRegistry;
 const clean = (value: string) => value.replace(/\/+$/, '');
+// Zhipu's Messages, Coding Plan and pay-as-you-go URLs are distinct front doors.
+// Pi auto must not move a saved connection into a different billing channel.
+const keepPiEndpoint = (presetId: string, agent: AgentKind) => presetId === 'zhipu-glm-cn' && agent === 'pi';
 /** Executable behaviors are versioned code; directory data can only select these. */
 export const MODEL_INTERFACE_CAPABILITIES = [
   ...PI_MODEL_APIS.map(api => `api:${api}`), 'kimi-tool-ids-v1', 'chat-image-v1',
@@ -95,9 +98,11 @@ export function availableModelInterfaces(
 }
 
 export function providerInterfaceDefaultRoute(presetId: string, agent: AgentKind, baseUrl: string, registry: ModelRegistry = bundledRegistry) {
-  const profile = (registry.interfaceProfiles ?? []).find(p => p.providerId === presetId &&
-    !p.retired && !p.modelIds && p.defaultFor?.includes(agent) &&
+  const profiles = (registry.interfaceProfiles ?? []).filter(p => p.providerId === presetId &&
+    !p.retired && !p.modelIds &&
     [...p.inputBaseUrls, p.baseUrl].some(input => clean(input) === clean(baseUrl)));
+  const profile = (keepPiEndpoint(presetId, agent) ? profiles.find(p => clean(p.baseUrl) === clean(baseUrl)) : undefined)
+    ?? profiles.find(p => p.defaultFor?.includes(agent));
   const wireProtocol = profile && providerWireProtocolForApi(profile.api);
   return profile && wireProtocol ? { baseUrl: profile.baseUrl, wireProtocol } : undefined;
 }
@@ -134,9 +139,11 @@ export function providerInterfaceModelRoute<T extends ProviderRuntimeModelConfig
   const legacyDefault = explicitApi && (registry.interfaceProfiles ?? []).some(p =>
     p.legacyApis?.includes(explicitApi) && profileMatches(p, presetId, model.id, baseUrl))
     ? choices.find(p => p.preferred) : undefined;
+  const endpointDefault = keepPiEndpoint(presetId, agent)
+    ? choices.find(p => clean(p.route.baseUrl) === clean(baseUrl)) : undefined;
   const selected = model.interfaceId && !automatic ? choices.find(p => p.profileId === model.interfaceId)
     : explicitApi ? legacyDefault ?? choices.find(p => p.api === explicitApi)
-    : choices.find(p => p.preferred) ?? (declared ? choices[0] : undefined);
+    : endpointDefault ?? choices.find(p => p.preferred) ?? (declared ? choices[0] : undefined);
   if (model.interfaceId && !automatic && !selected) return { ...model, interfaceUnavailable: true, availableInterfaces: choices };
   if (!selected) return model;
   return { ...model, ...(managed ? { interfaceId: selected.preferred ? 'auto' : selected.profileId } : {}), api: selected.api, ...(agent === 'pi' ? { piApi: selected.api } : {}),

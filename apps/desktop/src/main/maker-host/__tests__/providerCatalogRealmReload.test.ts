@@ -45,6 +45,8 @@ const h = vi.hoisted(() => ({
   request: vi.fn(),
   catalogIo: null as Parameters<typeof import('@cindy/model-providers').loadCatalog>[1] | null,
   pool: null as import('../../../shared/subscriptionAccounts.js').SubscriptionPoolConfig | null,
+  claudePool: null as import('../../../shared/subscriptionAccounts.js').SubscriptionPoolConfig | null,
+  claudeModelRefresh: vi.fn<() => Promise<boolean>>(async () => false),
   legacyLoggedIn: new Set<string>(),
   /** `${kind}:${accountId}` -> provider the account belongs to (placement.ts); absent = built-in. */
   placement: {} as Record<string, string>,
@@ -65,7 +67,7 @@ vi.mock('../../subscription-accounts/store.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../subscription-accounts/store.js')>();
   return {
     ...actual,
-    readPool: (id: string) => id === 'openai' ? h.pool : null,
+    readPool: (id: string) => id === 'openai' ? h.pool : id === 'anthropic' ? h.claudePool : null,
     readLegacyCodexAccountId: (id: string) => h.pool?.legacyCodexAccounts?.[id],
     readProviderBoundAccountIds: (_kind: string, id: string) => new Set(h.boundAccountIdsByProvider[id] ?? []),
   };
@@ -112,6 +114,8 @@ vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
       return { providerId: id, configured: true, strategy: 'least' as const, accounts: [] };
     },
     refreshSubscriptionPoolCodexModels: async () => undefined,
+    refreshSubscriptionPoolClaudeModels: h.claudeModelRefresh,
+    readSubscriptionPoolClaudeModels: () => null,
     readSubscriptionPoolCodexModels: (providerId = 'openai', options?: { includeBoundAccounts?: boolean }) =>
       (options?.includeBoundAccounts ? h.boundPoolModelsByProvider[providerId] : undefined)
       ?? h.poolModelsByProvider[providerId] ?? h.poolModels,
@@ -337,6 +341,8 @@ import {
   refreshDiscoveredCodexModels,
 } from '../createDesktopProviderService.js';
 import { createGuestProviderRouteBinder, guestProviderModelIds } from '../../remote-agent/host/providerAccess.js';
+import { hostedProviderOffersModel } from '../guest-provider-route-store.js';
+import { bindHostedSessionProvider } from '../session-provider-store.js';
 import {
   buildCodexCustomProviderArgs,
   deriveCodexCustomProviderRoutes,
@@ -361,6 +367,66 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  // Unit: all task/provider consumers share this reader. A pending Claude SDK query
+  // must not hold Codex/API/remote catalog reads; only explicit discovery waits for it.
+  it('keeps ordinary provider reads responsive while Claude discovery is pending', async () => {
+    h.claudePool = { strategy: 'least', accounts: [{ id: 'second', paused: false, limit: 4, weight: 1 }] };
+    let finish!: (value: boolean) => void;
+    const discovery = new Promise<boolean>(resolve => { finish = resolve; });
+    h.claudeModelRefresh.mockReturnValue(discovery);
+    let ordinaryDone = false;
+    let explicitDone = false;
+    const service = getDesktopProviderService({ allowSideEffects: false });
+    const ordinary = service.listProviders({ allowSideEffects: false }).then(result => { ordinaryDone = true; return result; });
+    const explicit = service.listProviders({ allowSideEffects: false, waitForDiscovery: true }).then(() => { explicitDone = true; });
+    try {
+      await vi.waitFor(() => expect(ordinaryDone).toBe(true));
+      expect(h.claudeModelRefresh).toHaveBeenCalled();
+      expect(explicitDone).toBe(false);
+      const calls = h.claudeModelRefresh.mock.calls.length;
+      await service.listProviders({ snapshotOnly: true });
+      expect(h.claudeModelRefresh).toHaveBeenCalledTimes(calls);
+    } finally {
+      finish(false);
+      await Promise.all([ordinary, explicit]);
+      h.claudePool = null;
+      h.claudeModelRefresh.mockReset().mockResolvedValue(false);
+    }
+    expect(explicitDone).toBe(true);
+  });
+  // Unit regression: a pool-only model passes remote admission but the first
+  // inference request reads the empty default-account catalog and returns 403.
+  // Earlier coverage stops at admission. Exercise the live outbound guard too,
+  // including revoked permission and removed membership, without real CLI state.
+  it('uses pooled membership for hosted inference after remote admission', async () => {
+    const previous = getActiveCatalog();
+    const model = { id: 'pool-inference-only', name: 'Pool inference only', contextWindow: 100_000,
+      efforts: [], defaultEffort: null };
+    h.pool = { strategy: 'least', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
+    h.poolModels = [model];
+    let allowed = true;
+    const binding = bindHostedSessionProvider('pool-inference', 'openai', () => allowed);
+    try {
+      setDiscoveredCodexModels([]);
+      const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ snapshotOnly: true });
+      expect(guestProviderModelIds(views, 'openai', 'codex')).toContain(model.id);
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', model.id)).toBe(true);
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', 'not-offered')).toBe(false);
+      allowed = false;
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', model.id)).toBe(false);
+      allowed = true;
+      h.poolModels = [{ ...model, disabled: true }];
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', model.id)).toBe(false);
+      h.poolModels = [];
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', model.id)).toBe(false);
+    } finally {
+      binding.release();
+      h.pool = null;
+      h.poolModels = null;
+      setDiscoveredCodexModels([]);
+      setActiveCatalog(previous);
+    }
+  });
   // #10405, unit: merging A(a1,a2) into B must not remove a2-only m2 from a saved
   // schedule's strict route resolver. Picker/guest membership still cannot borrow B's m3.
   it.each(['healthy', 'origin-signed-out', 'bound-paused', 'builtin-signed-out', 'builtin-disconnected'] as const)(
@@ -671,6 +737,8 @@ describe('provider catalog realm reload', () => {
         readPool: () => h.pool,
         codexAccountState: (id: string) => ({ authenticated: h.legacyLoggedIn.has(id) }),
         readSubscriptionPoolCodexModels: () => null,
+        readSubscriptionPoolClaudeModels: () => null,
+        getActiveCatalogWithClaudeModels: activeCatalogForHostParity.getActiveCatalogWithClaudeModels,
         getActiveCatalogWithCodexModels: activeCatalogForHostParity.getActiveCatalogWithCodexModels,
         accountProviderId: (_kind: string, id: string) => h.placement[`openai:${id}`] ?? 'openai',
         readMergedProviderAccount: (id: string) => h.pool?.legacyCodexAccounts?.[id],

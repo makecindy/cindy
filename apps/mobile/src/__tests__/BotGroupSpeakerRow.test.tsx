@@ -178,7 +178,7 @@ it.each([
 // tier：unit，原生宿主和远端读取用内存 fake，不连接网络。
 // 复验：保留主干消息工作租约回归；工作区用例覆盖离线、折叠与待确认恢复。
 function workGroup(): BotGroupRemoteChatData {
-  return { id: 'group', members: [{ botId: 'abu', name: '阿布', isOwned: true }, { botId: 'other', name: '其他伙伴', isOwned: false }],
+  return { id: 'group', supportsOwnedStop: true, members: [{ botId: 'abu', name: '阿布', isOwned: true }, { botId: 'other', name: '其他伙伴', isOwned: false }],
     round: { status: 'running', speakers: [
       { botId: 'abu', sessionId: 's1', executionId: 'e1', isSelfRequested: true, executionStatus: 'queued', activity: 'reply' },
       { botId: 'other', sessionId: 's2', executionId: 'e2', isSelfRequested: false, executionStatus: 'running', activity: 'reply' },
@@ -318,7 +318,7 @@ it.each([true, false])('labels only an unambiguous current step execution (ident
   expect(rows[2].textContent).not.toContain('Only the current execution');
 });
 
-it('keeps my own companion read-only when someone else requested its work', async () => {
+it('lets me stop my companion without exposing another requester?s pending confirmations', async () => {
   const group = workGroup();
   group.serverBacked = true;
   group.round.speakers[0].isSelfRequested = false;
@@ -326,7 +326,7 @@ it('keeps my own companion read-only when someone else requested its work', asyn
   h.pending.s1 = [{ request: { requestId: 'foreign-request', kind: 'permission' } }];
   await renderWork(group, true, { onStop: vi.fn(async () => undefined) });
   expect(node.querySelectorAll('[data-testid="panel"]')).toHaveLength(0);
-  expect(node.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+  expect(node.querySelector('[data-testid="botGroup.work.stop"]')).not.toBeNull();
   expect(h.subscribe).not.toHaveBeenCalledWith(expect.any(String), 'mac', ['session:s1']);
 });
 

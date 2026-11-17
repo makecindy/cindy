@@ -31,6 +31,7 @@ import {
   findSchedulerUsageLimitWait,
   getSessionLastUserActionAt,
   hasQueuedSchedulerPrompt,
+  hasPendingSchedulerTargetInput,
   isSchedulerAutoResumePending,
   isSchedulerPromptTracked,
   releaseQueuedSchedulerPrompt,
@@ -121,6 +122,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
         getLastUserActionAt: getSessionLastUserActionAt,
         ensureQueueRestored: ensureSchedulerQueueRestored,
         isSessionBusy: isSchedulerTargetSessionBusy,
+        hasPendingInput: hasPendingSchedulerTargetInput,
         hasQueuedPrompt: hasQueuedSchedulerPrompt,
         enqueuePrompt: enqueueSchedulerPrompt,
         removeQueuedPrompt: removeQueuedSchedulerPrompt,
@@ -145,7 +147,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
   // A teammate's project automations run only on its main computer (handed away: skipped here).
   captureFireContext: captureScheduledOwnerGuard,
   wrapRunner: runner => withTeammateHomeGuard(runner, () => companionHomes.snapshot().demotedBotIds, ownTeammateProjectState),
-  isOwnTeammateProject: async workingDir => (await ownTeammateProjectState(workingDir)) !== null,
+  getTeammateProjectState: ownTeammateProjectState,
   isPassive: () => !app.isPackaged && process.env.XDT_SCHEDULER_PASSIVE === '1',
   dialogueWorkspaceRoots: () => dialogueWorkspaceRoots(),
   onStarted(scheduler, deps, passive) {

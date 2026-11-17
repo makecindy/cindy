@@ -40,6 +40,7 @@ import {
 import {
   applyOllamaPullEvent,
   createPullSpeedTracker,
+  createPullDownloadTracker,
   createThrottledEmitter,
 } from './pullProgress.js';
 import { detectLocalConnectPresets } from './localConnectDetect.js';
@@ -360,6 +361,18 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       status: 'paused',
       done: true,
       bytesPerSecond: undefined,
+      // The inner meter state must agree with the paused checkpoint, not the last live frame.
+      ...(progress.download
+        ? {
+            download: {
+              ...progress.download,
+              phase: 'paused' as const,
+              speedBps: 0,
+              etaSeconds: null,
+              retryReason: undefined,
+            },
+          }
+        : {}),
     };
     pausedByName.set(next.name, next);
     await pausedPullStore.write(next, digests);
@@ -604,9 +617,13 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       deps.onStatus?.({ runtime: 'ollama', kind: 'pulling', appInstalled: true });
       const layers = new Map<string, { completed: number; total: number }>();
       const speed = createPullSpeedTracker();
+      const withDownload = createPullDownloadTracker();
+      const publish = (progress: LocalModelPullProgress) => {
+        op.lastProgress = withDownload(progress);
+        deps.onPullProgress?.(op.lastProgress);
+      };
       const emitter = createThrottledEmitter((progress) => {
-        op.lastProgress = progress;
-        deps.onPullProgress?.(progress);
+        publish(progress);
         checkpoint();
       });
       emitter.push(op.lastProgress, true);
@@ -655,8 +672,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
           percent: 100,
           done: true,
         };
-        op.lastProgress = done;
-        deps.onPullProgress?.(done);
+        publish(done);
       } catch (error) {
         disarmCheckpoint();
         const aborted = op.stopReason ?? (isAbortError(error) ? 'cancel' : null);
@@ -670,10 +686,9 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
             done: true,
             bytesPerSecond: undefined,
           };
-          op.lastProgress = stopped;
-          deps.onPullProgress?.(stopped);
+          publish(stopped);
           if (aborted === 'pause') {
-            await rememberPaused(stopped, [...op.digests]);
+            await rememberPaused(op.lastProgress, [...op.digests]);
           } else {
             await forgetPaused(name);
           }
@@ -688,8 +703,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
           done: true,
           error: message,
         };
-        op.lastProgress = failed;
-        deps.onPullProgress?.(failed);
+        publish(failed);
         throw error;
       }
     })().finally(() => {

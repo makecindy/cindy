@@ -2848,6 +2848,43 @@ describe('splash 启动下载 0% 显式广播', () => {
     expect(payloads[payloads.length - 1]).toMatchObject({ progress: 100 });
   });
 
+  // Regression (2026-11-17): retries were only logged, so the splash bar sat still with no
+  // reason. They now reach the splash channel at once as standard `download` progress.
+  it('announces a retry and verification on the splash channel before the next byte', async () => {
+    const { progressSends } = makeProgressCollector();
+    download.mockImplementation(
+      async (opts: {
+        targetPath: string;
+        onProgress: (e: object) => void;
+        onRetry: (e: object) => void;
+        onVerifying: () => void;
+      }) => {
+        opts.onProgress({ loaded: 40, total: 123, percent: 32.5, speedBps: 10 });
+        opts.onRetry({ attempt: 2, delayMs: 1000, cause: new Error('connection reset') });
+        // Bytes flow again without the bar rising a whole percent: "Retrying…" must clear now.
+        opts.onProgress({ loaded: 40, total: 123, percent: 32.5, speedBps: 10 });
+        opts.onVerifying();
+        fs.mkdirSync(path.join(TEST_USER_DATA, 'updates'), { recursive: true });
+        fs.writeFileSync(opts.targetPath, 'update');
+        return { path: opts.targetPath, size: 123 };
+      },
+    );
+
+    const { checkForUpdate } = await freshUpdateService('darwin');
+    expect(await checkForUpdate(updateManifest())).toBe('ready');
+
+    const phases = progressSends().map(
+      (s) => (s.payload as { download?: { phase: string } }).download?.phase,
+    );
+    expect(progressSends().map((s) => s.payload)).toContainEqual(
+      expect.objectContaining({
+        download: expect.objectContaining({ phase: 'retrying', attempt: 2, retryReason: 'network' }),
+      }),
+    );
+    const announced = phases.filter((phase, i) => phase && phase !== phases[i - 1]);
+    expect(announced).toEqual(['downloading', 'retrying', 'downloading', 'verifying', 'completed']);
+  });
+
   it('superseding(wasReady)路径:下载前不向 splash 通道广播 0%', async () => {
     const { sends, progressSends } = makeProgressCollector();
     mockDownloadSuccess();

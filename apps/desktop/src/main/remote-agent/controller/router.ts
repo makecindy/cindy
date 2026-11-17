@@ -1,3 +1,4 @@
+import { ATTACHMENT_PRESERVATION_PATH, type createAttachmentPreservationReceiver } from '../attachmentPreservation.js';
 /**
  * 远程 Agent 反向 HTTP 请求的本机路由(控制端)。
  *
@@ -24,6 +25,7 @@ export interface LocalMcpTarget {
 }
 
 export interface ReverseHttpRouterDeps {
+  attachments?: Pick<ReturnType<typeof createAttachmentPreservationReceiver>, 'handle'>;
   /** The caller granted its own tools only, not access to native file/shell tools. */
   hostToolsOnly?: boolean;
   executor: RemoteExecutor;
@@ -219,6 +221,11 @@ export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
       return json(403, { error: { code: 'EACCES', message: 'Only application tools are available in this session.' } });
     }
     const body = request.body ? Buffer.from(request.body, 'base64') : undefined;
+    if (url.pathname === ATTACHMENT_PRESERVATION_PATH && deps.attachments) {
+      if (request.method !== 'POST') return json(405, { error: 'POST only' });
+      try { return json(200, await deps.attachments.handle(JSON.parse(body?.toString('utf8') ?? '{}'), signal)); }
+      catch { return json(409, { error: 'Attachment preservation failed' }); }
+    }
     const execMatch = /^\/exec\/([a-z]+\.[a-z]+)$/.exec(url.pathname);
     if (execMatch) {
       if (request.method !== 'POST') return json(405, { error: { code: 'INVALID', message: 'POST only' } });

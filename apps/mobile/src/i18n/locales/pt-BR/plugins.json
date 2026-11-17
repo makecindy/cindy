@@ -86,6 +86,7 @@
   "taskPermission": "Permissões da tarefa",
   "followDefault": "Seguir padrões",
   "taskSettingsHint": "Aplica-se às tarefas criadas por este plugin a partir de agora. As tarefas existentes mantêm seus modelos e permissões.",
+  "remoteQuickAnswerHint": "Este modelo roda em outro computador. As respostas rápidas são enviadas do computador do plugin, então usam o modelo auxiliar do sistema.",
   "permissionHint": "Escolha as permissões para novas tarefas do plugin. As permissões da tarefa atual não são herdadas.",
   "autoPermissionHint": "A aprovação automática permite que Cindy avalie solicitações de permissão automaticamente. Usar nas futuras tarefas do plugin?",
   "settingsReload": "Recarregue as configurações para verificar se a ação foi salva",

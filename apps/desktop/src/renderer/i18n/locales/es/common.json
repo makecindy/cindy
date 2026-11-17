@@ -4533,14 +4533,7 @@
         "installCancel": "Cancelar instalación",
         "installFailed": "No se pudo instalar Ollama",
         "installPhase": {
-          "resolving": "Buscando la versión oficial…",
-          "downloading": "Descargando…",
-          "verifying": "Verificando…",
-          "extracting": "Instalando…",
-          "starting": "Iniciando…",
-          "success": "Instalado",
-          "error": "La instalación falló",
-          "cancelled": "Cancelado"
+          "error": "La instalación falló"
         },
         "openWebsite": "Abrir el sitio web Ollama",
         "recheck": "Ya lo instalé, revisa nuevamente",
@@ -4575,20 +4568,6 @@
         "retryDownload": "Reintentar",
         "libraryName": "Nombre exacto de la biblioteca Ollama",
         "pullingTitle": "Descargando {{name}}",
-        "pullIndeterminate": "Preparando",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "Preparando descarga…",
-          "manifest": "Obteniendo manifiesto…",
-          "downloading": "Descargando archivos del modelo",
-          "verifying": "Verificando…",
-          "writing": "Escribiendo…",
-          "success": "Descarga completa",
-          "error": "Descarga fallida",
-          "paused": "En pausa",
-          "cancelled": "Cancelado"
-        },
         "pauseDownload": "Pausar",
         "resumeDownload": "Reanudar descarga",
         "cancelDownload": "Eliminar descarga incompleta",
@@ -5597,6 +5576,13 @@
       },
       "toggleAria": "Alternar barra de navegación de preguntas"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Nombrar worktrees con un modelo",
+        "description": "Da al worktree de una tarea nueva un nombre corto en inglés basado en su primer mensaje (p. ej., fix-login-timeout), para que la carpeta y la rama muestren para qué sirven. Lo generan los modelos auxiliares; si falla, se usa un nombre aleatorio. Solo afecta a los worktrees que se creen a partir de ahora."
+      },
+      "toggleAria": "Activar o desactivar el nombrado de worktrees con un modelo"
+    },
     "promptRecommendation": {
       "label": "Sugerencias de entrada",
       "description": "Tras una respuesta, el cuadro de entrada muestra una sugerencia para tu próximo mensaje. Pulsa Tab para insertarla.",
@@ -5831,7 +5817,8 @@
             "statusFailed": "la verificación del estado del controlador falló",
             "recoveryFailed": "la conexión de control no se pudo reconstruir",
             "extensionDisconnected": "no hay ninguna extensión de navegador conectada (instala y habilita el complemento Cindy Chrome y su extensión)",
-            "pluginMissing": "el complemento Cindy Chrome no está instalado o habilitado"
+            "pluginMissing": "el complemento Cindy Chrome no está instalado o habilitado",
+            "browserMissing": "Chrome no está instalado en este ordenador"
           },
           "reconnect": "Reconectar el navegador",
           "recover": "Recuperar navegador",
@@ -5851,7 +5838,7 @@
         },
         "userBrowser": {
           "title": "Mi navegador",
-          "description": "Funciona en el Chrome o Edge que estás usando, con tus inicios de sesión existentes. Las páginas nuevas se abren en una ventana en segundo plano y no interfieren."
+          "description": "Tu propio Chrome en este ordenador (Edge también sirve). El Agent trabaja directamente en él, con tus inicios de sesión existentes. Las páginas nuevas se abren en una ventana en segundo plano y no interfieren."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Instala el complemento Cindy Chrome",
@@ -5870,7 +5857,9 @@
           "updatePluginTitle": "Actualiza el complemento Cindy Chrome",
           "updatePluginBody": "El complemento Cindy Chrome instalado es demasiado antiguo para «Mi navegador». Actualízalo a la última versión y luego sigue las indicaciones para agregar la extensión.",
           "updatePlugin": "Actualizar",
-          "storeOpened": "Se abrió la página de la extensión Cindy en tu navegador. Elige Agregar a Chrome y se conectará automáticamente."
+          "storeOpened": "Se abrió la página de la extensión Cindy en tu navegador. Elige Agregar a Chrome y se conectará automáticamente.",
+          "installBrowserTitle": "Instala Chrome primero",
+          "installBrowserBody": "Chrome no está instalado en este ordenador. «Mi navegador» necesita Chrome (o Edge) para la extensión de Cindy. Cuando lo instales, aquí se pasará al siguiente paso automáticamente."
         }
       },
       "android": {
@@ -6032,8 +6021,6 @@
           "notChecked": "Aún no comprobado",
           "action": "Actualizar",
           "updating": "Actualizando…",
-          "downloadingPercent": "Descargando {{percent}}% ({{downloaded}}/{{total}} MB)…",
-          "downloadingBytes": "Descargando, {{downloaded}} MB hasta ahora…",
           "installing": "Descarga completa, instalando…",
           "toast": {
             "success": "cua-driver se actualizó a la versión más reciente",
@@ -8312,8 +8299,8 @@
         "hostTools_controlDetail": "Usar las herramientas de Cindy para editar, archivar, restaurar y controlar tareas y proyectos existentes, e importar archivos de tareas en formato nativo en este ordenador.",
         "hostTools_handoff": "Mensajes a tareas",
         "hostTools_handoffDetail": "Usar las herramientas de Cindy para enviar mensajes a tareas existentes. Las operaciones que necesitan una tarea actual requieren un destino explícito.",
-        "hostTools_usage": "Leer el uso de las suscripciones",
-        "hostTools_usageDetail": "Lee identificadores de cuenta, planes, períodos de cuota y horas de actualización de las suscripciones de Claude y Codex conectadas a tu cuenta actual de Cindy en este equipo. No permite leer correos electrónicos, credenciales, archivos ni datos de otros equipos, ni modificar cuentas.",
+        "hostTools_usage": "Leer el uso y el estado de los grupos de proveedores",
+        "hostTools_usageDetail": "Lee los ID, planes, períodos de cuota y horas de actualización de las cuentas locales de Claude/Codex conectadas a tu cuenta de Cindy. Lee el uso diario y por modelo registrado, los costes estimados, la configuración y el estado de los grupos de proveedores y los ID, nombres y avatares visibles de miembros y dispositivos, tanto en este equipo como en otros equipos autorizados de la misma cuenta. No permite leer correos de inicio de sesión de las suscripciones, directorios de cuentas, huellas de identidad internas, credenciales ni archivos, ni modificar cuentas o ajustes.",
         "hostTools_settings": "Ajustes de la aplicación",
         "hostTools_settingsDetail": "Usar las herramientas de Cindy para leer y cambiar la configuración. No se devuelven secretos y los datos privados los introduces tú.",
         "hostTools_scheduler": "Gestión de automatizaciones",
@@ -8503,6 +8490,7 @@
             "contentStyle": "Cambiar el espaciado de los mensajes y las burbujas"
           },
           "positions": {
+            "composer_header": "el área sobre el cuadro de entrada",
             "composer_toolbar": "barra de herramientas de entrada",
             "session_header": "cabecera de la tarea",
             "statusbar": "barra de estado",
@@ -8601,6 +8589,7 @@
           "workdirClear": "Restablecer carpeta predeterminada",
           "followAuxiliary": "Usar modelo auxiliar del sistema · {{model}}",
           "followAuxiliaryUnset": "Usar modelo auxiliar del sistema",
+          "remoteQuickAnswerHint": "Este modelo no se ejecuta en esta computadora. Las respuestas rápidas se envían desde esta computadora, así que usan el modelo auxiliar del sistema.",
           "restoreModel": "Restablecer modelo"
         },
         "toolsTitle": "Herramientas",
@@ -10975,7 +10964,12 @@
       "summary": "Presentación personal",
       "summaryPlaceholder": "Por ejemplo: un novelista al que le encanta la ficción por entregas, tiene un humor seco y siente fascinación por lo que motiva a los personajes.",
       "avatarSelectionFailed": "No se pudo leer la imagen. Elige una imagen PNG, JPEG o WebP de hasta 5 MB.",
-      "personality": "Personalidad y conversación"
+      "personality": "Personalidad y conversación",
+      "sourceLength": "{{length}} / {{limit}} unidades UTF-16 (sin espacios iniciales ni finales).",
+      "sourceExcess": "Supera el límite en {{excess}} unidades. Acorta el texto para guardarlo.",
+      "sourceTooLong": "El texto es demasiado largo para guardarlo. Edítalo para continuar.",
+      "sourceRecovery": "El original guardado no cambia y el borrador completo permanece en esta página. Después de copiarlo, pégalo en un lugar seguro y comprueba que esté completo antes de acortarlo o descartar los cambios.",
+      "sourceCopy": "Copiar texto completo"
     },
     "nameLabel": "¿Cómo deberíamos llamarlo?",
     "close": "Cerrar",
@@ -11001,6 +10995,7 @@
       "duplicate": "Duplicar amigo",
       "moreActions": "Otras acciones para {{name}}",
       "viewIcons": "Iconos",
+      "showCollapsedTeammateAvatars": "Mostrar avatares al contraer",
       "sectionExpand": "Expandir amigos",
       "showLess": "Mostrar menos",
       "sectionCollapse": "Contraer amigos",
@@ -11778,6 +11773,11 @@
           "transferHint": "Pasará a ser el propietario y tú serás administrador.",
           "removeTitle": "¿Quitar a {{name}} de este grupo?",
           "removeHint": "Perderá el acceso a los mensajes. Sus amigos también saldrán del grupo.",
+          "removeOwn": "Quitar del grupo",
+          "removeOwnScope": "Esto solo afecta a este grupo. Tu compañero permanece en tu cuenta.",
+          "removeOwnHint": "{{name}} dejará de recibir mensajes de «{{group}}». Se conserva el historial; los otros grupos y chats privados no se ven afectados.",
+          "removeOwnActiveHint": "Se detendrán sus solicitudes activas en este grupo. Las tareas iniciadas de forma independiente seguirán ejecutándose.",
+          "stopAndRemove": "Detener y quitar",
           "leave": "Dejar grupo",
           "leaveHint": "Saldrás de este grupo junto con tus compañeros. Ya no recibirás mensajes nuevos ni tendrás acceso a su historial.",
           "soleOwnerHint": "Eres el único miembro que queda. Archiva este grupo para conservar su historial y restaurarlo más adelante.",
@@ -13041,6 +13041,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "No hay ningún modelo disponible para la revisión automática. En el ordenador donde se ejecuta el agente, activa y conecta un proveedor de revisión en Proveedores de modelos, o configura los modelos auxiliares en Ajustes. Las acciones que requieren revisión seguirán necesitando tu confirmación.",
           "autoReviewUnavailable": "La revisión automática no pudo tomar una decisión, así que las acciones que requieren revisión ahora necesitan tu confirmación. Cambia esta tarea a Acceso completo si prefieres evitar las interrupciones. Ese modo implica un mayor riesgo.",
           "autoReviewUnavailableWechat": "La revisión automática no pudo tomar una decisión, así que las acciones que requieren revisión ahora necesitan tu confirmación. WeChat personal no puede usar Acceso completo. Confirma esta acción directamente.",
           "autoReviewConfirmUndelivered": "La revisión automática no terminó y la confirmación no se entregó o no se respondió. Este rechazo no lo hiciste tú.",
@@ -13080,7 +13081,7 @@
           "reasoningDominated": "El razonamiento consumió la mayor parte del presupuesto de salida, así que la respuesta puede estar incompleta. Baja la intensidad de razonamiento o compacta antes la conversación y luego continúa.",
           "generic": "El modelo alcanzó el límite de longitud de salida, así que esta respuesta puede estar incompleta. Envía un mensaje nuevo para continuar. Si sigue pasando, baja la intensidad de razonamiento o compacta antes la conversación.",
           "join": "{{usage}} {{guidance}}",
-          "silentStopExhausted": "El modelo devolvió respuestas vacías varias veces seguidas, así que la continuación automática está en pausa."
+          "silentStopExhausted": "Se ha detectado una respuesta vacía. La continuación automática está en pausa."
         },
         "permission": {
           "autoReviewUnavailable": "La revisión automática no terminó. Confirma si quieres permitir esta acción.",
@@ -13840,12 +13841,6 @@
         "TARGET_UNAVAILABLE": "Este complemento está deshabilitado, desinstalado o no disponible. Revisa el complemento y vuelve a intentarlo.",
         "ASSESSMENT_FAILED": "No se pudo actualizar el estado de configuración. Vuelve a intentarlo.",
         "TIMEOUT": "Se agotó el tiempo de configuración. Vuelve a intentarlo."
-      },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "Servicio de modelos de IA",
-          "description": "Conecta un servicio de modelos disponible antes de usar las capacidades de imagen o video declaradas por este complemento."
-        }
       },
       "form": {
         "placeholder": "Ingresa {{label}}",
@@ -15141,6 +15136,7 @@
       "pluginDisabledUnnamed": "Los controles automáticos están bloqueados: un complemento necesario está desactivado. Se reanudarán al activarlo.",
       "installPlugin": "Instalar complemento",
       "openPlugin": "Abrir complemento",
+      "enablePlugin": "Activar complemento",
       "dismissTitle": "Cerrar aviso de error anterior"
     },
     "worktreeRestoreBanner": {
@@ -15630,6 +15626,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "Este archivo está fuera del directorio de trabajo de la sesión actual y no se puede localizar en el explorador de archivos de la barra lateral",
       "openInDefaultBrowser": "Abrir en el navegador",
       "copyLink": "Copiar enlace",
+      "addPrToHeader": "Añadir al encabezado",
+      "prAlreadyInHeader": "Ya está en el encabezado",
+      "prAddedToHeader": "Añadido al encabezado: el estado acompaña a esta tarea.",
+      "prAssociatedNotInHeader": "Enlazado, fuera del encabezado",
+      "prSavedNotInHeader": "Enlace guardado. Los tres espacios del encabezado están ocupados; puedes fijar este PR desde la gestión de PR del encabezado de la tarea.",
       "linkCopied": "Enlace copiado",
       "viewSourceFile": "Ver código fuente",
       "openInSidebarFailed": "No se pudo abrir en el navegador de la barra lateral",
@@ -15791,6 +15792,7 @@
       "DEVICE_LINK_BUSY": "La computadora remota está ocupada. Vuelve a intentarlo en breve.",
       "REMOTE_DAEMON_CLOSED": "La conexión remota se interrumpió, posiblemente durante una actualización. Este turno ha terminado. Envía el mensaje nuevamente.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "No se puede acceder a los archivos o imágenes adjuntos locales en sesiones remotas. En su lugar, pega el contenido directamente.",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "No hay ningún modelo disponible para la revisión automática. En el ordenador donde se ejecuta el agente, activa y conecta un proveedor de revisión en Proveedores de modelos, o configura los modelos auxiliares en Ajustes. Las acciones que requieren revisión seguirán necesitando tu confirmación.",
       "AUTO_REVIEW_UNAVAILABLE": "La revisión automática no pudo tomar una decisión, así que las acciones que requieren revisión ahora necesitan tu confirmación. Cambia esta tarea a Acceso completo si prefieres evitar las interrupciones. Ese modo implica un mayor riesgo.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "La revisión automática no pudo tomar una decisión, así que las acciones que requieren revisión ahora necesitan tu confirmación. WeChat personal no puede usar Acceso completo. Confirma esta acción directamente.",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "La revisión automática no estaba disponible y la solicitud de confirmación no se completó. Esto no constituye un rechazo del usuario.",
@@ -15801,6 +15803,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "El control de este dispositivo está desactivado; no se envió el mensaje.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "La transferencia del archivo adjunto falló; no se envió el mensaje. Vuelve a intentarlo.",
       "MCP_APPROVAL_AUTO_BLOCKED": "La revisión automática de aprobación bloqueó esta llamada a la herramienta. No se recibió ningún rechazo manual.",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "La aprobación automática bloqueó esta llamada de herramienta porque faltan detalles de la acción.",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "La aprobación automática bloqueó esta llamada de herramienta porque tus instrucciones cambiaron o aún no están sincronizadas.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "La aprobación automática bloqueó esta llamada de herramienta porque cambiaron los permisos del directorio.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "La aprobación automática bloqueó esta llamada de herramienta porque cambió la autorización delegada.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "La aprobación automática bloqueó esta llamada de herramienta porque la autorización del complemento o la tarea ya no está activa.",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "La aprobación automática bloqueó esta llamada de herramienta porque ninguna instrucción del usuario autoriza la acción.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "La aprobación automática bloqueó esta llamada de herramienta porque el plan de trabajo supera el tamaño admitido.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "La aprobación automática bloqueó esta llamada de herramienta porque el Agent ejecutor no coincide con el plan de trabajo registrado.",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "La aprobación automática bloqueó esta llamada de herramienta porque cambió el directorio de trabajo de la tarea.",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "La aprobación automática bloqueó esta llamada de herramienta porque falta el alcance de la tarea delegada o no es válido.",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "La solicitud de permiso expiró sin una decisión confirmada. El tiempo de espera agotado no indica si hiciste clic en un botón.",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "No se pudo completar la confirmación del permiso. No se recibió ningún rechazo manual.",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "Este modelo necesita que esta computadora reenvíe las solicitudes y la conexión remota aún no puede hacerlo. Cambia a Cindy AI o usa este modelo en una tarea local.",
@@ -19218,7 +19230,7 @@
       "steerFailed": "Error de redirección: {{message}}",
       "qrExpired": "El código QR venció, empieza de nuevo",
       "registrationFailed": "No se pudo crear, inténtalo de nuevo más tarde",
-      "silentStopExhausted": "El modelo devolvió respuestas vacías repetidamente; la reanudación automática está en pausa. Haz clic en \"Continuar\" para reanudar la tarea.",
+      "silentStopExhausted": "Se ha detectado una respuesta vacía. La continuación automática está en pausa.",
       "executionResultUnavailable": "No se puede recuperar el resultado de la ejecución. La continuación automática se ha detenido. Pídele al asistente que verifique el resultado de la ejecución existente.",
       "outputLimit": "El modelo alcanzó su límite de salida, por lo que esta respuesta puede estar incompleta. Envía un nuevo mensaje para continuar. Si se repite, reduce la intensidad de razonamiento o compacta primero el historial de la conversación.",
       "outputLimitReasoning": "El razonamiento consumió la mayor parte del presupuesto de salida de esta solicitud, por lo que la respuesta puede estar incompleta. Reduce la intensidad de razonamiento o compacta el historial de la conversación antes de continuar.",
@@ -19781,6 +19793,43 @@
       "notSupported": "Esta cuenta no admite consultas de saldo.",
       "unavailable": "El saldo no está disponible temporalmente. Actualiza para intentarlo de nuevo."
     },
+    "giftCard": {
+      "action": "Canjear tarjeta de regalo",
+      "title": "Canjear tarjeta de regalo",
+      "inputLabel": "Código de canje",
+      "inputHint": "Introduce el código de 16 caracteres o pega el enlace de una tarjeta de regalo.",
+      "continue": "Continuar",
+      "confirmTitle": "¿Canjear esta tarjeta de regalo?",
+      "confirmAction": "Canjear",
+      "from": "De {{sender}}",
+      "cardLabel": "Tarjeta de regalo de Cindy, {{amount}}",
+      "fields": {
+        "validity": "Validez",
+        "validityValue_one": "{{count}} día tras el canje",
+        "validityValue_many": "{{count}} de días tras el canje",
+        "validityValue_other": "{{count}} días tras el canje",
+        "claimBy": "Canjear antes del",
+        "destination": "Se añade a"
+      },
+      "doneTitle": "{{amount}} añadidos",
+      "doneDescription": "Se añadió a tu Saldo promocional. Válido hasta el {{date}}.",
+      "doneDescriptionNoDate": "Se añadió a tu Saldo promocional.",
+      "pendingTitle": "Tarjeta de regalo canjeada",
+      "pendingDescription": "{{amount}} se están añadiendo y aparecerán en breve en tu Saldo promocional. No hace falta que la canjees de nuevo.",
+      "alreadyYours": "Ya canjeaste esta tarjeta de regalo.",
+      "done": "Listo",
+      "errors": {
+        "notFound": "El código no es válido. Revísalo e inténtalo de nuevo.",
+        "wrongRegionCn": "Esta tarjeta de regalo es para la edición de China continental de Cindy y no se puede canjear con esta cuenta.",
+        "wrongRegionGlobal": "Esta tarjeta de regalo es para la edición internacional de Cindy y no se puede canjear con esta cuenta.",
+        "alreadyClaimed": "Esta tarjeta de regalo ya se ha canjeado.",
+        "expired": "Esta tarjeta de regalo ya no se puede canjear porque venció su plazo.",
+        "voided": "Esta tarjeta de regalo se ha anulado.",
+        "rateLimited": "Demasiados intentos. Inténtalo de nuevo más tarde.",
+        "failed": "No se pudo canjear la tarjeta de regalo. Inténtalo de nuevo más tarde.",
+        "personalRequired": "Las tarjetas de regalo solo se pueden canjear con una cuenta personal."
+      }
+    },
     "usage": {
       "title": "Uso del saldo",
       "observedAt": "Saldo actualizado el {{date}}",
@@ -19796,6 +19845,7 @@
         "empty": "No hay asignaciones promocionales disponibles.",
         "incomplete": "Hay muchos registros de asignaciones. Solo se muestran los últimos {{count}}.",
         "unnamed": "Asignación promocional",
+        "giftCard": "Tarjeta de regalo · de {{sender}}",
         "original": "Importe original",
         "used": "Usado",
         "remaining": "Restante",
@@ -21157,7 +21207,7 @@
     "loadFailed": "La aplicación no se pudo cargar. Comprueba la conexión y vuelve a cargarla.",
     "updateRequired": "Esta computadora aún no es compatible con las aplicaciones MCP. Actualiza Cindy en esa computadora y vuelve a intentarlo.",
     "appName": "Aplicación MCP",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "Enviado por $t(mcpApps.appName) “{{name}}”",
     "serverId": "ID del servidor MCP: {{id}}",
     "exitFullscreen": "Salir de pantalla completa",
@@ -21171,7 +21221,19 @@
     "pluginCspRejected": "La página solicitó un dominio no declarado y se bloqueó.",
     "filesOnExecutionComputer": "Ver el contenido del archivo en la computadora de ejecución",
     "awaitingApproval": "Esperando tu aprobación",
-    "pendingApprovals": "{{count}} aprobaciones pendientes"
+    "pendingApprovals": "{{count}} aprobaciones pendientes",
+    "source": {
+      "official": "Cindy oficial",
+      "organization": "Organización · {{namespace}}",
+      "market": "Mercado de complementos",
+      "third-party": "Fuente de terceros",
+      "local": "Instalación local",
+      "unknown": "Fuente desconocida"
+    },
+    "customMcp": "MCP personalizado",
+    "sourceLabel": "Fuente",
+    "signatureLabel": "Firma",
+    "fullscreen": "Pantalla completa"
   },
   "richAnswer": {
     "invalidImageReference": "La referencia de esta imagen no es válida.",
@@ -22031,5 +22093,28 @@
     "archivedNotice": "Tareas inactivas archivadas automáticamente: {{count}}",
     "undo": "Deshacer",
     "undoFailed": "No se pudo deshacer. Restaura las tareas desde Archivadas."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "Quedan {{time}}",
+    "attempt": "Intento {{attempt}}",
+    "phase": {
+      "preparing": "Preparando…",
+      "queued": "En cola…",
+      "downloading": "Descargando…",
+      "retrying": "Reintentando…",
+      "verifying": "Verificando…",
+      "installing": "Instalando…",
+      "paused": "En pausa",
+      "completed": "Completado",
+      "failed": "Error en la descarga",
+      "cancelled": "Cancelado"
+    },
+    "retry": {
+      "slow": "Conexión lenta, reconectando…",
+      "network": "Conexión perdida, reintentando…",
+      "timeout": "Tiempo de conexión agotado, reintentando…",
+      "server": "Servidor ocupado, reintentando…"
+    }
   }
 }

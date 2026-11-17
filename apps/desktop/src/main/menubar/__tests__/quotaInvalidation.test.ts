@@ -9,7 +9,7 @@ import { buildUsageWidgetSnapshot } from '../../quota-overview/widgetSnapshot';
 const mocks = vi.hoisted(() => ({
   app: { isPackaged: true },
   auth: { mode: 'cloud', dataOwnerId: 'owner' as string | null, ownerGeneration: 1, user: { id: 'member', membershipKind: 'org' } },
-  authListeners: new Set<(state: { isAuthenticated: boolean }) => void>(), boundaryPending: false,
+  authListeners: new Set<(state: { isAuthenticated: boolean }) => void>(),
   sharedRead: vi.fn(), sharedChanged: null as null | (() => void), sharedAccessEpoch: 0,
   revision: 0, listeners: new Set<() => void>(), refresh: vi.fn(), collect: vi.fn(),
   quota: null as null | { spend: number; maxBudget: number; currency: string; fetchedAt: number; todaySpend: null },
@@ -34,7 +34,6 @@ vi.mock('../../appSessionState.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../../appSessionState.js')>();
   return { ...actual,
     getActiveAppSession: () => ({ dataOwnerId: mocks.auth.dataOwnerId, mode: mocks.auth.mode, generation: mocks.auth.ownerGeneration }),
-    isAppSessionBoundaryPending: () => mocks.boundaryPending || actual.isAppSessionBoundaryPending(),
   };
 });
 vi.mock('../../authManager.js', () => ({ getAuthState: () => mocks.auth, onAuthStateChange: (changed: (state: { isAuthenticated: boolean }) => void) => {
@@ -91,7 +90,7 @@ beforeEach(() => {
   mocks.app.isPackaged = true;
   vi.useFakeTimers(); mocks.revision = 0; mocks.listeners.clear(); mocks.refresh.mockReset(); mocks.collect.mockReset();
   mocks.sharedRead.mockReset(); mocks.sharedChanged = null; mocks.sharedAccessEpoch = 0;
-  mocks.authListeners.clear(); mocks.boundaryPending = false;
+  mocks.authListeners.clear();
   mocks.auth.mode = 'cloud'; mocks.auth.dataOwnerId = 'owner'; mocks.auth.ownerGeneration = 1;
   mocks.activities = []; mocks.attentionListeners.clear(); mocks.publish.mockReset();
   mocks.openOverviewSession.mockReset(); mocks.openLocalSession.mockReset();
@@ -372,13 +371,14 @@ it('never serves a build read for the previous account', async () => {
   }
 });
 
-// Integration of the new reader with the actual panel controller: the panel gets the share,
-// while the reusable overview (also consumed by phone widgets) remains owner-only.
-it('adds the highest shared weekly quota only to the open native panel and clears it on close', async () => {
+// 2026-11-16 user decision: received shares are a standard overview source, so the panel,
+// phone widgets and model groups read one copy. Real panel -> overview -> reader; the old
+// contract kept them panel-only, which left the widget and model-group routing without them.
+it('collects authorized shared quota into the overview for every consumer and drops a revoked share at once', async () => {
   const response = { version: 1, capabilities: { quota: true, usage: false },
     status: { quota: 'ready', usage: 'disabled' }, usage: null,
     quota: { group: true, partial: false, accounts: [{ state: 'ready', updatedAt: Date.now(), balance: null,
-      windows: [{ kind: 'week', remainingPercent: 46, resetsAt: Date.now() + 60_000, windowMinutes: 10080, label: null }] }] },
+      windows: [{ kind: 'week', remainingPercent: 46, resetsAt: Date.now() + 30 * 60_000, windowMinutes: 10080, label: null }] }] },
   };
   response.quota.accounts.push({ ...response.quota.accounts[0], windows: [
     { ...response.quota.accounts[0].windows[0], remainingPercent: 82 },
@@ -388,20 +388,29 @@ it('adds the highest shared weekly quota only to the open native panel and clear
   const service = new MenubarService({ openNewTask() {}, overview });
   service.init();
   await vi.advanceTimersByTimeAsync(0);
-  expect(mocks.sharedRead).not.toHaveBeenCalled();
-  expect(mocks.sharedChanged).toBeNull();
-  mocks.onHelperMessage?.({ type: 'panel', open: true });
-  await vi.advanceTimersByTimeAsync(0);
+  // Collected with the panel closed, into the overview itself.
+  expect(mocks.sharedRead).toHaveBeenCalledTimes(1);
+  expect(overview.latest()?.input.sources).toContainEqual(expect.objectContaining({ id: 'share:share-one', providerId: 'anthropic' }));
   expect(mocks.publish.mock.lastCall?.[0].sources).toContainEqual(expect.objectContaining({ id: 'share:share-one', value: '82' }));
   expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toMatchObject({
     plan: 'menubar.shared.highestWeekly', saySecondary: 'menubar.shared.highestWeeklyNote',
   });
-  expect(overview.latest()?.input.sources).toEqual([]);
+  expect(buildUsageWidgetSnapshot(overview.latest()!.view, Date.now(), () => null)?.sources)
+    .toContainEqual(expect.objectContaining({ id: 'share:share-one', logo: 'claude' }));
+  // Background cadence matches the other computers' reads, not the old 5s panel poll.
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(mocks.sharedRead).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(10 * 60_000);
+  expect(mocks.sharedRead).toHaveBeenCalledTimes(2);
+  // Opening the panel reads at once; a refresh keeps the detail mounted until the reply.
+  mocks.onHelperMessage?.({ type: 'panel', open: true });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(mocks.sharedRead).toHaveBeenCalledTimes(3);
   let finishRefresh!: (value: unknown) => void;
   mocks.sharedRead.mockImplementationOnce(() => new Promise(done => { finishRefresh = done; }));
   const beforeRefresh = mocks.publish.mock.calls.length;
   mocks.onHelperMessage?.({ type: 'refresh' });
-  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(400);
   // The helper resets .detail to .main if any intermediate publication removes this id.
   for (const [view] of mocks.publish.mock.calls.slice(beforeRefresh)) {
     expect(view.details['share:share-one']).toBeDefined();
@@ -409,32 +418,43 @@ it('adds the highest shared weekly quota only to the open native panel and clear
   finishRefresh(response);
   await vi.advanceTimersByTimeAsync(0);
   expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toBeDefined();
-  mocks.onHelperMessage?.({ type: 'panel', open: false });
-  expect(mocks.sharedChanged).toBeNull();
-  expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toBeUndefined();
-  const closedCalls = mocks.sharedRead.mock.calls.length;
-  await vi.advanceTimersByTimeAsync(5000);
-  expect(mocks.sharedRead).toHaveBeenCalledTimes(closedCalls);
-  mocks.onHelperMessage?.({ type: 'panel', open: true });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toBeDefined();
+  // Revocation removes it from the overview and the panel without waiting for a collection.
   mocks.sharedRead.mockRejectedValueOnce(new Error('access denied'));
   mocks.sharedAccessEpoch++;
   mocks.sharedChanged?.();
+  expect(overview.latest()?.input.sources).not.toContainEqual(expect.objectContaining({ id: 'share:share-one' }));
   expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toBeUndefined();
-  await vi.advanceTimersByTimeAsync(0);
-  mocks.onHelperMessage?.({ type: 'panel', open: false });
-  expect(mocks.sharedChanged).toBeNull();
-  expect(mocks.publish.mock.lastCall?.[0].sources).toEqual([]);
-  const calls = mocks.sharedRead.mock.calls.length;
-  await vi.advanceTimersByTimeAsync(5000);
-  expect(mocks.sharedRead).toHaveBeenCalledTimes(calls);
   service.stop();
+  // Released overview: no listener, no further reads.
+  expect(mocks.sharedChanged).toBeNull();
+  const calls = mocks.sharedRead.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(10 * 60_000);
+  expect(mocks.sharedRead).toHaveBeenCalledTimes(calls);
+});
+
+// #10851 review (P1): a model group starting the overview cold took the first collection,
+// published before the share batch, so that one pick ranked the share as unknown. The same
+// bounded wait now covers the share batch; a reply slower than the wait still returns on time.
+it.each([[500, true], [5_000, false]])('waits for the share batch within the fresh() limit (reply %ims)', async (delayMs, included) => {
+  mocks.collect.mockResolvedValue(emptyMenubarInputs(Date.now(), 'Fixture'));
+  mocks.sharedRead.mockImplementation(() => new Promise(done => setTimeout(() => done({ version: 1,
+    capabilities: { quota: true, usage: false }, status: { quota: 'ready', usage: 'disabled' }, usage: null,
+    quota: { group: false, partial: false, accounts: [{ state: 'ready', updatedAt: Date.now(), balance: null,
+      windows: [{ kind: 'week', remainingPercent: 82, resetsAt: Date.now() + 60 * 60_000, windowMinutes: 10080, label: null }] }] },
+  }), delayMs)));
+  overview.lease(60_000);
+  let result: Awaited<ReturnType<QuotaOverviewService['fresh']>> | undefined;
+  void overview.fresh(2_000).then(build => { result = build; });
+  await vi.advanceTimersByTimeAsync(Math.min(delayMs, 2_000) + 1);
+  expect(result).toBeDefined();
+  expect(result!.input.sources.some(source => source.id === 'share:share-one')).toBe(included);
+  await vi.advanceTimersByTimeAsync(60_000);
 });
 
 // Unit regression for provider-sharing §7.5: the reader cleared memory on auth changes,
 // but a null overview suppressed the native update. Hold an old collection unresolved.
-it.each(['logout', 'owner', 'boundary', 'session-invalidated'])('clears the presented share immediately on %s while overview is unavailable', async kind => {
+// A pending boundary always starts with the real invalidation signal ('session-invalidated').
+it.each(['logout', 'owner', 'session-invalidated'])('clears the presented share immediately on %s while overview is unavailable', async kind => {
   const collected = emptyMenubarInputs(Date.now(), 'Fixture');
   mocks.collect.mockResolvedValue(collected);
   mocks.activities = [activity('private-task')];
@@ -449,8 +469,6 @@ it.each(['logout', 'owner', 'boundary', 'session-invalidated'])('clears the pres
   try {
     service.init();
     await vi.advanceTimersByTimeAsync(0);
-    mocks.onHelperMessage?.({ type: 'panel', open: true });
-    await vi.advanceTimersByTimeAsync(0);
     expect(JSON.stringify(mocks.publish.mock.lastCall?.[0])).toContain('Private sharer');
     mocks.collect.mockImplementationOnce(() => new Promise(done => { finishOverview = done; }));
     overview.rebuildSoon();
@@ -462,12 +480,10 @@ it.each(['logout', 'owner', 'boundary', 'session-invalidated'])('clears the pres
       releaseBoundary = beginAppSessionBoundary();
       expect(mocks.sharedRead).toHaveBeenCalledTimes(reads);
     } else {
-      if (kind === 'boundary') mocks.boundaryPending = true;
-      else mocks.auth.dataOwnerId = kind === 'logout' ? null : 'other';
+      mocks.auth.dataOwnerId = kind === 'logout' ? null : 'other';
       if (kind === 'logout') mocks.auth.mode = 'signed-out';
       mocks.auth.ownerGeneration++;
-      if (kind === 'boundary') mocks.sharedChanged?.();
-      else for (const changed of [...mocks.authListeners]) changed({ isAuthenticated: kind !== 'logout' });
+      for (const changed of [...mocks.authListeners]) changed({ isAuthenticated: kind !== 'logout' });
     }
     expect(overview.latest()).toBeNull();
     const cleared = mocks.publish.mock.lastCall?.[0];

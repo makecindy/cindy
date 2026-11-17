@@ -14,6 +14,30 @@ const rawPresets = (
 ).presets;
 
 describe("预设推荐模型单一清单", () => {
+  it("星辰 MaaS 使用官方 /v2 Chat，推荐身份与未知发现边界分开", () => {
+    const source = rawPresets.find(({ id }) => id === "iflytek-maas");
+    expect(source).toMatchObject({ models: [{ id: "spark-x2.6", name: "Spark X2.6" }] });
+    expect(Object.keys(source!.runtimes as object).sort()).toEqual(["codex", "pi"]);
+    expect(source).not.toHaveProperty("authMethod");
+    const preset = BUNDLED_CATALOG.presets?.find(({ id }) => id === "iflytek-maas");
+    for (const agent of ["claude-code", "codex", "pi"] as const) {
+      expect(preset?.runtimes[agent]).toMatchObject({ baseUrl: "https://maas-api.cn-huabei-1.xf-yun.com/v2", wireProtocol: "openai-chat", models: [{ id: "spark-x2.6", name: "Spark X2.6" }] });
+      expect(preset?.runtimes[agent]).not.toHaveProperty("modelsUrl");
+    }
+  });
+  it("Open Design 通过现有 Chat 兼容展开，不声明未经证实的原生协议与型号", () => {
+    const source = rawPresets.find((preset) => preset.id === "open-design");
+    expect(source).toMatchObject({ models: [], runtimes: {
+      codex: { baseUrl: "https://amr-link.open-design.ai/v1", modelsUrl: "https://amr-link.open-design.ai/v1/models", wireProtocol: "openai-chat" },
+      pi: { baseUrl: "https://amr-link.open-design.ai/v1", modelsUrl: "https://amr-link.open-design.ai/v1/models", wireProtocol: "openai-chat" },
+    }});
+    expect(Object.keys(source!.runtimes as object).sort()).toEqual(["codex", "pi"]);
+    expect(source).not.toHaveProperty("authMethod");
+    const preset = BUNDLED_CATALOG.presets?.find(({ id }) => id === "open-design");
+    for (const agent of ["claude-code", "codex", "pi"] as const) {
+      expect(preset?.runtimes[agent]).toMatchObject({ baseUrl: "https://amr-link.open-design.ai/v1", modelsUrl: "https://amr-link.open-design.ai/v1/models", wireProtocol: "openai-chat", models: [] });
+    }
+  });
   it("随包预设只在顶层写一份清单，不再按引擎各写一份", () => {
     const perEngine = rawPresets.filter((preset) =>
       Object.values(

@@ -4434,14 +4434,7 @@
         "installCancel": "설치 취소",
         "installFailed": "Ollama 설치에 실패했습니다",
         "installPhase": {
-          "resolving": "공식 버전을 확인하는 중…",
-          "downloading": "다운로드 중…",
-          "verifying": "확인 중…",
-          "extracting": "설치 중…",
-          "starting": "시작하는 중…",
-          "success": "설치됨",
-          "error": "설치 실패",
-          "cancelled": "취소됨"
+          "error": "설치 실패"
         },
         "openWebsite": "Ollama 웹사이트 열기",
         "recheck": "설치했습니다, 다시 확인",
@@ -4476,20 +4469,6 @@
         "retryDownload": "다시 시도",
         "libraryName": "정확한 Ollama 라이브러리 이름",
         "pullingTitle": "{{name}} 다운로드 중",
-        "pullIndeterminate": "준비 중",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "다운로드 준비 중…",
-          "manifest": "매니페스트 가져오는 중…",
-          "downloading": "모델 파일 다운로드 중",
-          "verifying": "검증 중…",
-          "writing": "쓰는 중…",
-          "success": "다운로드 완료",
-          "error": "다운로드 실패",
-          "paused": "일시 중지됨",
-          "cancelled": "취소됨"
-        },
         "pauseDownload": "일시 중지",
         "resumeDownload": "다운로드 재개",
         "cancelDownload": "미완료 다운로드 삭제",
@@ -5496,6 +5475,13 @@
       },
       "toggleAria": "질문 내비게이션 레일 전환"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "모델로 worktree 이름 짓기",
+        "description": "새 작업의 worktree에 첫 메시지를 바탕으로 짧은 영어 이름(예: fix-login-timeout)을 붙여 폴더와 브랜치의 용도를 한눈에 알 수 있게 합니다. 보조 모델이 생성하며, 실패하면 무작위 이름을 사용합니다. 앞으로 만드는 worktree에만 적용됩니다."
+      },
+      "toggleAria": "모델로 worktree 이름 짓기 전환"
+    },
     "promptRecommendation": {
       "label": "다음 입력 제안",
       "description": "답변 후 입력창에 다음 메시지를 제안합니다. Tab 키를 누르면 입력됩니다.",
@@ -5730,7 +5716,8 @@
             "statusFailed": "제어 프로세스 상태 확인에 실패했습니다",
             "recoveryFailed": "제어 연결을 다시 구성하지 못했습니다",
             "extensionDisconnected": "연결된 브라우저 확장이 없습니다 (Cindy Chrome 플러그인과 확장을 설치하고 활성화하세요)",
-            "pluginMissing": "Cindy Chrome 플러그인이 설치되지 않았거나 꺼져 있습니다"
+            "pluginMissing": "Cindy Chrome 플러그인이 설치되지 않았거나 꺼져 있습니다",
+            "browserMissing": "이 컴퓨터에 Chrome이 설치되어 있지 않습니다"
           },
           "reconnect": "사이드바 브라우저 다시 연결",
           "recover": "사이드바 브라우저 복구",
@@ -5750,7 +5737,7 @@
         },
         "userBrowser": {
           "title": "내 브라우저",
-          "description": "사용 중인 Chrome 또는 Edge를 기존 로그인 그대로 조작합니다. 새 페이지는 백그라운드 창에서 열려 방해하지 않습니다."
+          "description": "이 컴퓨터의 Chrome(Edge도 사용 가능)입니다. Agent가 그 안에서 기존 로그인 그대로 직접 조작합니다. 새 페이지는 백그라운드 창에서 열려 방해하지 않습니다."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Cindy Chrome 플러그인 설치",
@@ -5769,7 +5756,9 @@
           "updatePluginTitle": "Cindy Chrome 플러그인 업데이트",
           "updatePluginBody": "설치된 Cindy Chrome 플러그인이 오래되어 내 브라우저를 지원하지 않습니다. 최신 버전으로 업데이트한 뒤 안내에 따라 확장을 추가하세요.",
           "updatePlugin": "업데이트하러 가기",
-          "storeOpened": "브라우저에서 Cindy 확장 페이지를 열었습니다. ‘Chrome에 추가’를 누르면 자동으로 연결됩니다"
+          "storeOpened": "브라우저에서 Cindy 확장 페이지를 열었습니다. ‘Chrome에 추가’를 누르면 자동으로 연결됩니다",
+          "installBrowserTitle": "먼저 Chrome 설치",
+          "installBrowserBody": "이 컴퓨터에 Chrome이 설치되어 있지 않습니다. '내 브라우저'에는 Cindy 확장 프로그램을 설치할 Chrome(또는 Edge)이 필요합니다. 설치하면 자동으로 다음 단계로 넘어갑니다."
         }
       },
       "android": {
@@ -5931,8 +5920,6 @@
           "notChecked": "아직 확인하지 않음",
           "action": "업데이트",
           "updating": "업데이트 중…",
-          "downloadingPercent": "다운로드 중 {{percent}}%({{downloaded}}/{{total}} MB)…",
-          "downloadingBytes": "다운로드 중, {{downloaded}} MB 완료…",
           "installing": "다운로드 완료, 설치 중…",
           "toast": {
             "success": "cua-driver가 최신 버전으로 업데이트되었습니다",
@@ -8197,8 +8184,8 @@
         "hostTools_controlDetail": "Cindy의 작업 도구로 기존 작업과 프로젝트를 수정, 보관, 복원하고 제어하며 이 컴퓨터에 기본 형식의 작업 파일을 가져올 수 있습니다.",
         "hostTools_handoff": "작업에 메시지 보내기",
         "hostTools_handoffDetail": "Cindy의 작업 도구로 기존 작업에 메시지를 보낼 수 있습니다. 현재 작업 정보가 필요한 작업은 대상 작업을 명시해야 합니다.",
-        "hostTools_usage": "구독 사용량 읽기",
-        "hostTools_usageDetail": "이 컴퓨터에서 현재 Cindy 계정에 연결된 Claude 및 Codex의 계정 식별자, 요금제, 사용 한도 기간, 업데이트 시간을 읽습니다. 이메일 주소, 인증 정보, 파일 또는 다른 컴퓨터의 데이터는 읽을 수 없으며 계정도 변경할 수 없습니다.",
+        "hostTools_usage": "사용량 및 제공자 그룹 상태 읽기",
+        "hostTools_usageDetail": "현재 Cindy 계정에 연결된 이 컴퓨터의 Claude/Codex 계정 ID, 요금제, 할당량 기간과 업데이트 시간을 읽습니다. 이 컴퓨터와 같은 계정에서 허용된 다른 컴퓨터에 기록된 일별·모델별 사용량, 예상 비용, 제공자 그룹 설정과 상태, 볼 수 있는 구성원·기기의 ID, 이름과 아바타도 읽습니다. 구독 로그인 이메일, 계정 디렉터리, 내부 지문, 인증 정보나 파일은 읽을 수 없으며 계정이나 설정도 변경할 수 없습니다.",
         "hostTools_settings": "앱 설정",
         "hostTools_settingsDetail": "Cindy의 설정 도구로 앱 설정을 읽고 변경할 수 있습니다. 비밀 값은 반환되지 않으며 민감한 정보는 직접 입력해야 합니다.",
         "hostTools_scheduler": "자동화 관리",
@@ -8388,6 +8375,7 @@
             "contentStyle": "메시지 간격 및 말풍선 모양 변경"
           },
           "positions": {
+            "composer_header": "입력창 위",
             "composer_toolbar": "입력창 도구 모음",
             "session_header": "작업 머리글",
             "statusbar": "상태 표시줄",
@@ -8486,6 +8474,7 @@
           "workdirClear": "기본 폴더로 되돌리기",
           "followAuxiliary": "시스템 보조 모델 따르기 · {{model}}",
           "followAuxiliaryUnset": "시스템 보조 모델 따르기",
+          "remoteQuickAnswerHint": "이 모델은 이 컴퓨터에서 실행되지 않습니다. 빠른 답변은 이 컴퓨터에서 보내므로 시스템 보조 모델을 사용합니다.",
           "restoreModel": "모델 초기화"
         },
         "toolsTitle": "Tools",
@@ -10846,7 +10835,12 @@
       "summary": "자기소개",
       "summaryPlaceholder": "예: 웹소설 쓰기를 사랑하는 소설가. 유머가 있고 등장인물의 속마음을 상상하는 것을 좋아해요.",
       "avatarSelectionFailed": "이미지를 읽지 못했어요. 5 MB 이하의 PNG, JPEG, WebP 이미지를 선택해 주세요.",
-      "personality": "성격과 대화 방식"
+      "personality": "성격과 대화 방식",
+      "sourceLength": "{{length}} / {{limit}} UTF-16 코드 단위(앞뒤 공백 제외).",
+      "sourceExcess": "한도를 {{excess}}단위 초과했습니다. 내용을 줄여야 저장할 수 있습니다.",
+      "sourceTooLong": "내용이 너무 길어 저장할 수 없습니다. 수정 후 계속하세요.",
+      "sourceRecovery": "저장된 원문은 변경되지 않으며 전체 초안은 이 페이지에 남아 있습니다. 복사한 후 안전한 곳에 붙여넣고 전체 내용이 있는지 확인한 다음 줄이거나 변경 사항을 버리세요.",
+      "sourceCopy": "전체 내용 복사"
     },
     "nameLabel": "어떻게 부를까요?",
     "close": "닫기",
@@ -10872,6 +10866,7 @@
       "duplicate": "동반자 복제",
       "moreActions": "{{name}} 추가 작업",
       "viewIcons": "아이콘",
+      "showCollapsedTeammateAvatars": "접었을 때 아바타 표시",
       "sectionExpand": "동반자 펼치기",
       "showLess": "접기",
       "sectionCollapse": "동반자 접기",
@@ -11649,6 +11644,11 @@
           "transferHint": "상대가 소유자가 되고 본인은 관리자가 됩니다.",
           "removeTitle": "{{name}}을(를) 그룹에서 내보낼까요?",
           "removeHint": "메시지를 읽거나 보낼 수 없게 됩니다. 해당 멤버의 동료도 나갑니다.",
+          "removeOwn": "그룹에서 내보내기",
+          "removeOwnScope": "이 그룹에만 적용됩니다. 파트너는 계정에 유지됩니다.",
+          "removeOwnHint": "{{name}} 파트너가 “{{group}}” 메시지를 더 이상 받지 않습니다. 기록은 유지되며 다른 그룹과 개인 채팅에는 영향을 주지 않습니다.",
+          "removeOwnActiveHint": "이 그룹에서 진행 중인 요청이 중지됩니다. 별도로 시작한 작업은 계속 실행됩니다.",
+          "stopAndRemove": "중지 후 내보내기",
           "leave": "그룹 나가기",
           "leaveHint": "나와 내 동반자가 이 그룹에서 나갑니다. 새 메시지를 받지 못하며 그룹 기록을 볼 수 없게 됩니다.",
           "soleOwnerHint": "그룹에 나만 남았어요. 그룹을 보관하면 기록을 유지하고 나중에 다시 사용할 수 있어요.",
@@ -12881,6 +12881,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "사용 가능한 자동 검토 모델이 없습니다. Agent가 실행되는 컴퓨터에서 모델 제공자를 열어 검토용 제공자를 활성화하고 연결하거나, 설정에서 보조 모델을 직접 구성하세요. 검토가 필요한 작업은 계속 직접 확인해야 합니다.",
           "autoReviewUnavailable": "자동 리뷰가 판단을 내리지 못했습니다. 검토가 필요한 작업은 직접 확인하도록 바뀌었습니다. 중단을 줄이려면 이 세션을 전체 접근으로 전환하세요. 위험도는 더 높습니다.",
           "autoReviewUnavailableWechat": "자동 리뷰가 판단을 내리지 못했습니다. 검토가 필요한 작업은 직접 확인하도록 바뀌었습니다. 개인 WeChat에서는 전체 접근을 사용할 수 없습니다. 이번 작업을 직접 확인하세요.",
           "autoReviewConfirmUndelivered": "자동 리뷰가 끝나지 않았고, 확인 요청도 전달되지 않았거나 응답이 없었습니다. 이번 거부는 직접 선택하신 것이 아닙니다.",
@@ -12920,7 +12921,7 @@
           "reasoningDominated": "사고가 이번 출력 예산의 대부분을 사용해 답장이 불완전할 수 있습니다. 추론 강도를 낮추거나 먼저 대화 기록을 압축한 뒤 계속하세요.",
           "generic": "모델이 출력 길이 한도에 도달해 이번 턴의 답장이 불완전할 수 있습니다. 새 메시지를 보내면 이어서 진행할 수 있습니다. 계속 발생하면 추론 강도를 낮추거나 먼저 대화 기록을 압축하세요.",
           "join": "{{usage}} {{guidance}}",
-          "silentStopExhausted": "모델이 빈 응답을 여러 번 연속으로 반환해 자동 이어서 실행을 일시 중지했습니다."
+          "silentStopExhausted": "빈 응답이 감지되어 자동 이어서 실행을 일시 중지했습니다."
         },
         "permission": {
           "autoReviewUnavailable": "자동 리뷰가 끝나지 않았습니다. 이 작업을 허용할지 확인하세요.",
@@ -13671,12 +13672,6 @@
         "TARGET_UNAVAILABLE": "플러그인이 비활성화되었거나 제거되었거나 사용할 수 없습니다. 플러그인 상태를 확인한 후 다시 시도하세요.",
         "ASSESSMENT_FAILED": "설정 상태를 새로 고칠 수 없습니다. 다시 시도하세요.",
         "TIMEOUT": "설정 대기 시간이 초과되었습니다. 다시 시도하세요."
-      },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "AI 모델 서비스",
-          "description": "플러그인에서 선언한 이미지 또는 동영상 기능을 사용하기 전에 사용 가능한 모델 서비스에 연결하세요."
-        }
       },
       "form": {
         "placeholder": "{{label}} 입력",
@@ -14975,6 +14970,7 @@
       "pluginDisabledUnnamed": "자동 확인이 차단되었습니다: 필요한 플러그인이 비활성화되어 있습니다. 활성화하면 자동으로 재개됩니다.",
       "installPlugin": "플러그인 설치",
       "openPlugin": "플러그인 열기",
+      "enablePlugin": "플러그인 켜기",
       "dismissTitle": "이전 실패 알림 닫기"
     },
     "worktreeRestoreBanner": {
@@ -15461,6 +15457,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "이 파일은 현재 세션 작업 디렉터리 밖에 있어 사이드바 파일 브라우저에서 찾을 수 없습니다",
       "openInDefaultBrowser": "브라우저에서 열기",
       "copyLink": "링크 복사",
+      "addPrToHeader": "상단에 추가",
+      "prAlreadyInHeader": "이미 상단에 표시됨",
+      "prAddedToHeader": "상단에 추가했습니다. 상태도 이 작업과 함께합니다.",
+      "prAssociatedNotInHeader": "연결됨, 상단에는 표시되지 않음",
+      "prSavedNotInHeader": "연결을 저장했습니다. 상단의 세 자리가 모두 찼습니다. 작업 상단의 PR 관리에서 이 PR을 고정할 수 있습니다.",
       "linkCopied": "링크가 복사되었습니다",
       "viewSourceFile": "소스 보기",
       "openInSidebarFailed": "사이드바 브라우저에서 열지 못했습니다",
@@ -15622,6 +15623,7 @@
       "DEVICE_LINK_BUSY": "원격 컴퓨터가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
       "REMOTE_DAEMON_CLOSED": "원격 연결이 끊겼습니다. 업데이트 중일 수 있습니다. 이번 턴은 종료되었으니 메시지를 다시 보내 주세요.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "원격 세션에서는 로컬 파일/이미지 첨부에 접근할 수 없습니다. 내용을 직접 붙여넣으세요.",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "사용 가능한 자동 검토 모델이 없습니다. Agent가 실행되는 컴퓨터에서 모델 제공자를 열어 검토용 제공자를 활성화하고 연결하거나, 설정에서 보조 모델을 직접 구성하세요. 검토가 필요한 작업은 계속 직접 확인해야 합니다.",
       "AUTO_REVIEW_UNAVAILABLE": "자동 리뷰가 판단을 내리지 못했습니다. 검토가 필요한 작업은 직접 확인하도록 바뀌었습니다. 중단을 줄이려면 이 작업을 전체 접근으로 전환하세요. 위험도는 더 높습니다.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "자동 리뷰가 판단을 내리지 못했습니다. 검토가 필요한 작업은 직접 확인하도록 바뀌었습니다. 개인 WeChat에서는 전체 접근을 사용할 수 없습니다. 이번 작업을 직접 확인하세요.",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "자동 리뷰를 끝내지 못했고 확인도 완료되지 않았습니다. 사용자가 거부한 것이 아닙니다.",
@@ -15632,6 +15634,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "이 기기의 제어가 꺼져 있어 메시지가 전송되지 않았습니다.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "첨부 파일 전송에 실패했습니다. 메시지가 전송되지 않았습니다. 다시 시도하세요.",
       "MCP_APPROVAL_AUTO_BLOCKED": "자동 승인 검토가 이 도구 호출을 차단했습니다. 직접 거부한 기록은 없습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "작업 세부 정보가 부족하여 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "지시가 변경되었거나 아직 동기화되지 않아 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "디렉터리 권한이 변경되어 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "위임된 권한이 변경되어 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "플러그인 또는 작업의 승인이 만료되어 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "이 동작을 허용하는 사용자 지시가 없어 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "작업 계획이 지원되는 크기를 초과하여 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "실행하는 Agent가 등록된 작업 계획과 일치하지 않아 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "작업의 작업 디렉터리가 변경되어 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "위임된 작업 범위가 없거나 유효하지 않아 자동 승인이 이 도구 호출을 차단했습니다.",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "권한 확인 시간이 초과되어 유효한 확인 결과를 받지 못했습니다. 시간 초과만으로는 버튼을 클릭했는지 알 수 없습니다.",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "권한 확인을 완료하지 못했습니다. 직접 거부한 기록은 없습니다.",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "이 모델은 컴퓨터에서 요청을 전달해야 하는데, 현재 원격 연결은 전달할 수 없습니다. Cindy AI로 바꾸거나 이 컴퓨터의 작업에서 사용하세요.",
@@ -18961,7 +18973,7 @@
       "steerFailed": "끼어들기 실패: {{message}}",
       "qrExpired": "QR 코드가 만료됨. 다시 시작하세요",
       "registrationFailed": "생성 실패. 잠시 후 다시 시도하세요",
-      "silentStopExhausted": "모델이 빈 응답을 반복해서 반환하여 자동 재개가 일시 중지되었습니다. \"계속\"을 클릭하여 작업을 재개하세요.",
+      "silentStopExhausted": "빈 응답이 감지되어 자동 이어서 실행을 일시 중지했습니다.",
       "executionResultUnavailable": "실행 결과를 가져오지 못해 자동 계속 진행을 중단했습니다. 어시스턴트에게 기존 실행 결과를 확인하도록 요청하세요.",
       "outputLimit": "모델이 출력 한도에 도달하여 이번 응답은 불완전할 수 있습니다. 새 메시지를 보내 계속할 수 있습니다. 반복되면 추론 강도를 낮추거나 먼저 대화 기록을 압축하세요.",
       "outputLimitReasoning": "추론이 이번 출력 예산의 대부분을 소비하여 응답은 불완전할 수 있습니다. 추론 강도를 낮추거나 대화 기록을 압축한 후 계속하세요.",
@@ -19522,6 +19534,41 @@
       "notSupported": "이 계정에서는 잔액 조회를 지원하지 않습니다.",
       "unavailable": "잔액을 불러올 수 없습니다. 새로고침 후 다시 시도하세요."
     },
+    "giftCard": {
+      "action": "기프트 카드 사용",
+      "title": "기프트 카드 사용",
+      "inputLabel": "교환 코드",
+      "inputHint": "16자리 코드를 입력하거나 기프트 카드 링크를 붙여넣으세요.",
+      "continue": "계속",
+      "confirmTitle": "이 기프트 카드를 받으시겠습니까?",
+      "confirmAction": "받기",
+      "from": "{{sender}} 님이 보냄",
+      "cardLabel": "Cindy 기프트 카드, {{amount}}",
+      "fields": {
+        "validity": "유효 기간",
+        "validityValue_other": "받은 후 {{count}}일",
+        "claimBy": "받기 기한",
+        "destination": "추가 위치"
+      },
+      "doneTitle": "{{amount}} 추가됨",
+      "doneDescription": "프로모션 잔액에 추가되었습니다. {{date}}까지 유효합니다.",
+      "doneDescriptionNoDate": "프로모션 잔액에 추가되었습니다.",
+      "pendingTitle": "기프트 카드를 받았습니다",
+      "pendingDescription": "{{amount}}을(를) 추가하는 중이며 곧 프로모션 잔액에 표시됩니다. 다시 받을 필요가 없습니다.",
+      "alreadyYours": "이미 받은 기프트 카드입니다.",
+      "done": "완료",
+      "errors": {
+        "notFound": "코드가 올바르지 않습니다. 확인한 뒤 다시 시도하세요.",
+        "wrongRegionCn": "이 기프트 카드는 Cindy 중국 본토판용이라 이 계정으로 받을 수 없습니다.",
+        "wrongRegionGlobal": "이 기프트 카드는 Cindy 국제판용이라 이 계정으로 받을 수 없습니다.",
+        "alreadyClaimed": "이미 다른 사람이 받은 기프트 카드입니다.",
+        "expired": "이 기프트 카드는 받기 기한이 지났습니다.",
+        "voided": "이 기프트 카드는 무효화되었습니다.",
+        "rateLimited": "시도 횟수가 너무 많습니다. 잠시 후 다시 시도하세요.",
+        "failed": "기프트 카드를 받지 못했습니다. 잠시 후 다시 시도하세요.",
+        "personalRequired": "기프트 카드는 개인 계정으로만 받을 수 있습니다."
+      }
+    },
     "usage": {
       "title": "잔액 사용량",
       "observedAt": "잔액 업데이트: {{date}}",
@@ -19537,6 +19584,7 @@
         "empty": "프로모션 지급 내역이 없습니다.",
         "incomplete": "지급 내역이 많아 최근 {{count}}건만 표시합니다.",
         "unnamed": "프로모션 잔액",
+        "giftCard": "기프트 카드 · {{sender}} 님이 보냄",
         "original": "지급액",
         "used": "사용",
         "remaining": "잔여",
@@ -20887,7 +20935,7 @@
     "loadFailed": "앱을 불러오지 못했습니다. 연결을 확인한 후 다시 불러오세요.",
     "updateRequired": "이 컴퓨터는 아직 MCP Apps를 지원하지 않습니다. 해당 컴퓨터의 Cindy를 업데이트한 후 다시 시도하세요.",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "$t(mcpApps.appName) “{{name}}”에서 전송",
     "serverId": "MCP 서버 ID: {{id}}",
     "exitFullscreen": "전체 화면 종료",
@@ -20901,7 +20949,19 @@
     "pluginCspRejected": "페이지에서 선언되지 않은 도메인을 요청하여 로드를 차단했습니다.",
     "filesOnExecutionComputer": "파일 내용은 실행 컴퓨터에서 확인하세요",
     "awaitingApproval": "승인을 기다리고 있어요",
-    "pendingApprovals": "승인 대기 {{count}}개"
+    "pendingApprovals": "승인 대기 {{count}}개",
+    "source": {
+      "official": "Cindy 공식",
+      "organization": "조직 · {{namespace}}",
+      "market": "플러그인 마켓",
+      "third-party": "타사 출처",
+      "local": "로컬 설치",
+      "unknown": "알 수 없는 출처"
+    },
+    "customMcp": "사용자 지정 MCP",
+    "sourceLabel": "출처",
+    "signatureLabel": "서명",
+    "fullscreen": "전체 화면"
   },
   "richAnswer": {
     "invalidImageReference": "이미지 참조가 올바르지 않아 표시할 수 없습니다.",
@@ -21744,5 +21804,28 @@
     "archivedNotice": "미사용 작업 {{count}}개를 자동 보관했습니다",
     "undo": "실행 취소",
     "undoFailed": "취소할 수 없습니다. 보관된 작업에서 복원하세요."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "{{time}} 남음",
+    "attempt": "{{attempt}}번째 시도",
+    "phase": {
+      "preparing": "준비 중…",
+      "queued": "대기 중…",
+      "downloading": "다운로드 중…",
+      "retrying": "다시 시도 중…",
+      "verifying": "확인 중…",
+      "installing": "설치 중…",
+      "paused": "일시 중지됨",
+      "completed": "완료됨",
+      "failed": "다운로드 실패",
+      "cancelled": "취소됨"
+    },
+    "retry": {
+      "slow": "연결이 느려 다시 연결하는 중…",
+      "network": "연결이 끊겨 다시 시도하는 중…",
+      "timeout": "연결 시간이 초과되어 다시 시도하는 중…",
+      "server": "서버가 혼잡해 다시 시도하는 중…"
+    }
   }
 }
