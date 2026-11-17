@@ -123,6 +123,7 @@ export function createRuntimePluginControl(deps: {
           }));
           for (let i = 0; i < targets.length; i++) await applyResult(targets[i], answers[i]);
         } else for (const target of targets) {
+          if ((point === 'will-tool-call' || point === 'did-tool-result') && turnBudget.remaining() <= 0) break;
           let answer;
           try { answer = { result: await ask(target) }; }
           catch (error) { answer = { error }; }

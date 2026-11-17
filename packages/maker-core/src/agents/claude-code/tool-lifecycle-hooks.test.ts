@@ -41,6 +41,10 @@ describe('Claude plugin tool hooks', () => {
     const f = fixture({ result: { text: 'changed' }, additionalContext: 'reference' });
     expect(await f.run({ ...input, hook_event_name: 'PostToolUse' })).toEqual({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: { text: 'changed' }, additionalContext: 'reference' } });
   });
+  it.each(['PostToolUse', 'PostToolUseFailure'])('stops native continuation when %s is denied', async hook_event_name => {
+    expect(await fixture({ decision: 'deny', reason: 'policy' }).run({ ...input, hook_event_name }))
+      .toMatchObject({ continue: false, stopReason: 'policy' });
+  });
   it('discards answers after cancellation or provider removal', async () => {
     const f = fixture({ decision: 'ask' });
     f.control.run = async () => { f.signal.abort(); return { decision: 'ask' }; };

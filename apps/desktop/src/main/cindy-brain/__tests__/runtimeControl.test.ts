@@ -22,6 +22,32 @@ import * as runtimePreferences from '../../maker-host/runtime-plugin-settings.js
 // host effects. Minimum failure: an empty selection or revocation during an ask.
 // Tier: unit, injected transport, no processes/network/waits.
 describe('task runtime plugin control', () => {
+  // Tool deadlines preserve the native default even when another selected
+  // plugin uses block-on-failure; the generic turn budget has other semantics.
+  it.each(['call', 'result'] as const)('does not deny %s after an earlier plugin exhausts the tool budget', async phase => {
+    let clock = 0;
+    const point = phase === 'call' ? 'will-tool-call' : 'did-tool-result';
+    const settings: RuntimePluginSettings = { [point]: [{ pluginId: 'silent', onFailure: 'block' }, { pluginId: 'later', onFailure: 'block' }] };
+    const screen = vi.fn(async () => { clock += 1000; return { action: 'allow' as const }; });
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true, screen, now: () => clock });
+    expect(await createPluginToolLifecycle({ readSettings: () => settings, control: () => control }).run('task', {
+      engine: 'pi', phase, toolName: 'read', toolCallId: 'call', input: {},
+    })).toEqual({});
+    expect(screen).toHaveBeenCalledTimes(1);
+  });
+  it('retains earlier valid tool effects when the shared budget runs out', async () => {
+    let clock = 0;
+    const settings: RuntimePluginSettings = { 'will-tool-call': ['effect', 'silent', 'later'].map(pluginId => ({ pluginId, onFailure: 'block' })) };
+    const screen = vi.fn(async (_point: unknown, _data: unknown, target: RuntimePluginTarget): Promise<GhostRuntimeControlPointResult> => {
+      clock += target.pluginId === 'effect' ? 600 : 400;
+      return target.pluginId === 'effect' ? { action: 'tool', ghostId: 'effect', ghostName: 'effect', tool: { input: { command: 'valid' } } } : { action: 'allow' };
+    });
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true, screen, now: () => clock });
+    expect(await createPluginToolLifecycle({ readSettings: () => settings, control: () => control }).run('task', {
+      engine: 'pi', phase: 'call', toolName: 'bash', toolCallId: 'call', input: {},
+    })).toEqual({ input: { command: 'valid' } });
+    expect(screen).toHaveBeenCalledTimes(2);
+  });
   // Same live selection/owner checks as existing control points; a tool hook
   // that becomes stale defers to the engine rather than manufacturing denial.
   it.each(['selection', 'owner'] as const)('keeps the native default after an in-flight %s change', async boundary => {

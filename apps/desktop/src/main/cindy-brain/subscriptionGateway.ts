@@ -26,7 +26,7 @@ import { eq } from 'drizzle-orm';
 import { parseGhostModelRoute, parseGhostContextBlocks, parseGhostMemoryEntries, type GhostContextBlock, type GhostMemoryEntry } from '@cindy/plugin-protocol';
 import { isRuntimePluginPoint } from '../../shared/pluginRuntime.js';
 import { parseToolLifecycleVerdict } from '../../shared/pluginToolLifecycle.js';
-import type { ToolLifecycleVerdict } from '@cindy/maker-core';
+import type { ToolLifecycleVerdict } from '@cindy/maker-core/tool-lifecycle';
 
 import {
   GHOST_ASSISTANT_HOOK_TIMEOUT_MS,

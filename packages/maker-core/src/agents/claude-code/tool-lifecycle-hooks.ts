@@ -25,7 +25,7 @@ export function claudeToolLifecycleHooks(
       ...(verdict.additionalContext ? { additionalContext: verdict.additionalContext } : {}),
     } };
     return {
-      ...(verdict.decision === 'deny' ? { decision: 'block' as const, reason: verdict.reason } : {}),
+      ...(verdict.decision === 'deny' ? { continue: false, stopReason: verdict.reason } : {}),
       hookSpecificOutput: { hookEventName: input.hook_event_name as 'PostToolUse' | 'PostToolUseFailure',
         ...('result' in verdict ? { updatedToolOutput: verdict.result } : {}),
         ...(verdict.additionalContext ? { additionalContext: verdict.additionalContext } : {}),

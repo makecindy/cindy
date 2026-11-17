@@ -1,4 +1,4 @@
-import { assertToolLifecycleBudget, assertToolLifecycleVerdict, type ToolLifecycleControl, type ToolLifecycleVerdict } from '@cindy/maker-core';
+import { assertToolLifecycleBudget, assertToolLifecycleVerdict, type ToolLifecycleControl, type ToolLifecycleVerdict } from '@cindy/maker-core/tool-lifecycle';
 import type { GhostToolPointData } from '../../shared/ghost.js';
 import type { RuntimePluginSettings } from '../../shared/pluginRuntime.js';
 import { type createRuntimePluginControl, RuntimePluginControlError } from './runtimeControl.js';

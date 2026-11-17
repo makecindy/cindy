@@ -1,4 +1,4 @@
-import type { ToolLifecycleVerdict } from '@cindy/maker-core';
+import type { ToolLifecycleVerdict } from '@cindy/maker-core/tool-lifecycle';
 
 /** Native tool hook answers contain only supported control fields, never approval. */
 export function parseToolLifecycleVerdict(value: unknown): ToolLifecycleVerdict | undefined {
