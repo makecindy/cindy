@@ -13,6 +13,8 @@ if (ctx.case === 'remote-single') target.pop();
 if (ctx.case === 'remote-distinct') target[1].subscriptionAccountKeys = ['another-fixture-account'];
 if (ctx.case === 'remote-extra-model') target[1].models.codex!.push({ ...target[1].models.codex![0], id: 'extra-model', name: 'Extra model' });
 const local = ctx.case === 'local' ? target : [provider('viewer', 'MBP ONLY', 'viewer-only')];
+// ChatInput omits remoteAgent when the host offers no alternative run locations.
+const deviceOnly = ctx.case === 'remote-device-only';
 const snapshot = (providers: ProviderView[]) => ({ providers, providerOrder: providers.map(p => p.id), loading: false,
   error: null, unsupported: false, refetch: async () => {}, ownerGeneration: 1 });
 Object.assign(window, { selectorRepro: { local: snapshot(local), target: snapshot(target), empty: snapshot([]) } });
@@ -26,7 +28,8 @@ void mountPage({
     <div data-repro-trigger><ModelSelector modelId="gpt-6-astra" currentProviderId={ctx.case === 'remote-current' ? 'openai-old' : 'openai'} agentKind="codex"
       effort="high" onModelChange={() => {}} onEffortChange={() => {}} actualRoute useMorphPopover
       sessionEngineFilter={{ currentAgent: 'codex', onCrossEngineSelect: () => {} }}
-      remoteAgent={{ devices: [], selectedDeviceId: null, ...(ctx.case !== 'local' ? { homeDeviceId: 'studio', homeDeviceName: 'Mac Studio', catalogHostDeviceId: 'studio' } : {}) }}
+      deviceId={deviceOnly ? 'studio' : undefined}
+      remoteAgent={deviceOnly ? undefined : { devices: [], selectedDeviceId: null, ...(ctx.case !== 'local' ? { homeDeviceId: 'studio', homeDeviceName: 'Mac Studio', catalogHostDeviceId: 'studio' } : {}) }}
       />
     </div>
   </main>,

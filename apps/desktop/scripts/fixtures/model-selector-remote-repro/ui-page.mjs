@@ -19,6 +19,7 @@ export default {
   cases: {
     local: { about: 'Task opened on its own computer: equivalent sources fold' },
     default: { about: 'Same task opened remotely: equivalent sources also fold' },
+    'remote-device-only': { about: 'Remote ChatInput without location choices passes only deviceId; target rails and rows still fold' },
     'remote-single': { about: 'A genuinely single-record target catalog stays single when remotely viewed' },
     'remote-current': { about: 'A currently used duplicate route remains visible' },
     'remote-distinct': { about: 'Different verified account identities remain separate despite equal display names' },
