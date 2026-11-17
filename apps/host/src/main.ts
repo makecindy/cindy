@@ -600,6 +600,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   const i18n = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
   hostConfirmations = createHostConfirmations({ current: toolOwnerCurrent });
   hostTools = createHostToolService({ profileDir: dataDir, ownerId,
+    deviceId: () => currentDeviceId ?? 'local',
+    onProjectsChanged: catalogChanged => eventHub.publish({ type: 'project_aliases_changed', catalogChanged }),
     owner: () => ({ dataOwnerId: getActiveAppSession().dataOwnerId, ownerGeneration: getActiveAppSession().generation }),
     current: toolOwnerCurrent, getGhost: id => plugins?.getGhost(id) ?? null,
     files: () => { if (!plugins) throw new Error('UNSUPPORTED_CAPABILITY'); return plugins.fsSlot; },
@@ -1240,8 +1242,9 @@ const serverDeps = {
   readProjectIconImage,
   resolveAutomaticProjectIcon,
   updateProjectInfo: async (input: unknown) => {
-    const result = await updateProjectInfo(input);
-    eventHub.publish({ type: 'project_aliases_changed' });
+    // HTTP and Device Link have already admitted the account's controller.
+    const result = await updateProjectInfo(input, { kind: 'host' });
+    eventHub.publish({ type: 'project_aliases_changed', catalogChanged: !!result.createdProjectKey });
     return result;
   },
   listProjectAliases: async () => {

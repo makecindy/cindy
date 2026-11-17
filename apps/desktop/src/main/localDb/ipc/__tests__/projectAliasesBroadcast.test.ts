@@ -57,6 +57,7 @@ import {
   registerProjectAliasesIpc,
   upsertProjectAlias,
 } from '../projectAliases';
+import { updateProjectInfo as writeCore } from '../../../projectInfoCore.js';
 
 describe('project alias remote snapshot and owner boundary', () => {
   beforeEach(() => {
@@ -66,6 +67,26 @@ describe('project alias remote snapshot and owner boundary', () => {
     h.assertTrusted.mockReset();
     h.read.mockResolvedValue([]);
     h.tx.mockResolvedValue(null);
+  });
+
+  // PR #11126: the IPC adapter, not request data, supplies core authorization.
+  // Unit handler regression; existing snapshot tests did not exercise mutation admission.
+  it('binds local writes to the actual sender and only trusts authenticated remote dispatch', async () => {
+    registerProjectAliasesIpc();
+    const handler = h.handle.mock.calls.find(
+      ([channel]) => channel === 'sidebar-settings:set-project-info',
+    )![1];
+    const input = { projectGrantScope: 'form', authorization: { kind: 'host' }, field: 'profile' };
+    vi.mocked(writeCore).mockResolvedValue({ aliases: [], platform: process.platform });
+    await handler({ sender: { id: 42 } }, input);
+    expect(writeCore).toHaveBeenLastCalledWith(input, {
+      kind: 'renderer',
+      senderId: 42,
+      scope: 'form',
+    });
+    h.remoteInvoke = true;
+    await handler({}, input);
+    expect(writeCore).toHaveBeenLastCalledWith(input, { kind: 'host' });
   });
 
   it('requires a trusted local sender while permitting already-authorized device-link invocations', async () => {

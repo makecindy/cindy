@@ -8,7 +8,7 @@ import {
   hasRecentWorkdir,
   removeRecentWorkdir,
 } from './localDb/ipc/recentWorkdirsCore.js';
-import { restoreLocalProjectVisibility } from './sidebarSettingsStore.js';
+import { restoreLocalProjectVisibility } from './sidebarSettingsStoreCore.js';
 import { readProjectDirectories, setProjectDirectories } from './projectDirectoryStore.js';
 import {
   projectAliasComparisonKey,
@@ -38,6 +38,10 @@ import {
 import * as core from './localDb/ipc/projectAliasesCore.js';
 import { getDbClient } from './localDb/client/current.js';
 import { requireObject, throwIpcError } from './utils/ipcValidate.js';
+import {
+  authorizeProjectDirectoryChanges,
+  type ProjectInfoAuthorization,
+} from './projectInfoAuthorization.js';
 
 export async function readProjectInfo(): Promise<HostProjectAliasesSnapshot> {
   const ownerStamp = getActiveDataOwnerPushStamp();
@@ -68,10 +72,22 @@ export async function readProjectInfo(): Promise<HostProjectAliasesSnapshot> {
   };
 }
 
-export async function updateProjectInfo(input: unknown): Promise<HostProjectAliasesSnapshot> {
+export async function updateProjectInfo(
+  input: unknown,
+  authorization?: ProjectInfoAuthorization,
+): Promise<HostProjectAliasesSnapshot> {
+  return writeProjectInfo(input, authorization);
+}
+
+async function writeProjectInfo(
+  input: unknown,
+  authorization?: ProjectInfoAuthorization,
+  authorizedCreation?: string,
+): Promise<HostProjectAliasesSnapshot> {
   const body = requireObject(input, 'input');
   const owner = getActiveDataOwnerPushStamp();
   const assertCurrent = () => {
+    if (authorization?.kind === 'host') authorization.assertCurrent?.();
     const current = getActiveDataOwnerPushStamp();
     if (
       isAppSessionBoundaryPending() ||
@@ -128,12 +144,32 @@ export async function updateProjectInfo(input: unknown): Promise<HostProjectAlia
     throwIpcError('INVALID_PARAMS', 'Invalid repository URL');
   if ('directories' in changes && parseProjectDirectories(changes.directories) === null)
     throwIpcError('INVALID_PARAMS', 'Invalid project directories');
+  if (body.create && !authorization)
+    throwIpcError(
+      'WRITABLE_DIRECTORY_AUTHORIZATION_REQUIRED',
+      'Project creation was not authorized.',
+    );
   if (automaticCreation) {
     if (body.projectKey !== 'local:') {
       const lexical = validateLocalProjectDirectory((body.projectKey as string).slice(6));
       if (!lexical.ok || projectKey !== `local:${lexical.workingDir}`)
         throwIpcError('INVALID_PARAMS', 'Use the project main directory, not a managed task worktree');
     }
+    // Check every caller-specified root before allocation or credentialed Git access.
+    // The generated directory is admitted only for this invocation, never via wire data.
+    await authorizeProjectDirectoryChanges({
+      projectKey,
+      owner,
+      authorization,
+      requested: [
+        ...(projectKey !== 'local:'
+          ? [{ path: projectKey.slice(6), access: 'write' as const }]
+          : []),
+        ...(parseProjectDirectories(changes.directories) ?? []),
+      ],
+      previous: [],
+    });
+    assertCurrent();
     const prepared = await prepareNewProject(
       {
         directory: projectKey.slice(6),
@@ -155,7 +191,11 @@ export async function updateProjectInfo(input: unknown): Promise<HostProjectAlia
     }
     // A metadata failure can have an uncertain commit. Preserve the completed folder for recovery.
     const { repositoryUrl: _url, ...rest } = body;
-    return updateProjectInfo({ ...rest, projectKey: `local:${prepared.directory}` });
+    return writeProjectInfo(
+      { ...rest, projectKey: `local:${prepared.directory}` },
+      authorization,
+      `local:${prepared.directory}`,
+    );
   }
   if (body.create) {
     const requestedDirectory = (body.projectKey as string).slice(6);
@@ -181,6 +221,26 @@ export async function updateProjectInfo(input: unknown): Promise<HostProjectAlia
     async (status) => {
       if (!status.held) throwIpcError('INTERNAL', 'Project settings are busy');
       assertCurrent();
+      const previousDirectories = resolveProjectDirectories(
+        { aliases: [], platform: process.platform, directories: readProjectDirectories() },
+        projectKey,
+      );
+      const previouslyRegistered = body.create ? await hasRecentWorkdir(projectKey.slice(6)) : true;
+      if (authorizedCreation !== projectKey) {
+        await authorizeProjectDirectoryChanges({
+          projectKey,
+          owner,
+          authorization,
+          requested: [
+            ...(body.create && !previouslyRegistered
+              ? [{ path: projectKey.slice(6), access: 'write' as const }]
+              : []),
+            ...(directories ?? []),
+          ],
+          previous: previousDirectories ?? [],
+        });
+      }
+      assertCurrent();
       const previousIcon = resolveProjectIcon(
         { aliases: [], icons: readProjectIcons(), platform: process.platform },
         projectKey,
@@ -194,10 +254,6 @@ export async function updateProjectInfo(input: unknown): Promise<HostProjectAlia
       if (isProjectImageDraft(icon))
         icon = await importProjectIcon(icon, projectKey, assertCurrent);
       assertCurrent();
-      const previousDirectories = resolveProjectDirectories(
-        { aliases: [], platform: process.platform, directories: readProjectDirectories() },
-        projectKey,
-      );
       const previousAliases = body.create ? await core.listProjectAliases() : [];
       const previousName =
         previousAliases.find(
@@ -205,7 +261,6 @@ export async function updateProjectInfo(input: unknown): Promise<HostProjectAlia
             projectAliasComparisonKey(row.projectKey, process.platform) ===
             projectAliasComparisonKey(projectKey, process.platform),
         )?.alias ?? '';
-      const previouslyRegistered = body.create ? await hasRecentWorkdir(projectKey.slice(6)) : true;
       assertCurrent();
       let nameWritten = false;
       let registered = false;

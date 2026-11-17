@@ -342,7 +342,7 @@ export interface HostEventBridgeInput {
   readonly onErrorPersisted?: (event: unknown) => void;
   readonly onRightSidebarTabsChanged?: (event: unknown) => void;
   readonly onSubagentRunsChanged?: (event: unknown) => void;
-  readonly onProjectAliasesChanged?: () => void;
+  readonly onProjectAliasesChanged?: (event: { catalogChanged?: boolean }) => void;
   readonly onInputProjection?: (projection: unknown) => void;
   readonly onInteractionRequest?: (payload: unknown) => void;
   readonly onInteractionDismissed?: (payload: unknown) => void;
@@ -395,7 +395,7 @@ export function startHostEventBridge(input: HostEventBridgeInput): (() => void) 
       } else if (payload?.type === 'subagent_runs_changed') {
         input.onSubagentRunsChanged?.(payload);
       } else if (payload?.type === 'project_aliases_changed') {
-        input.onProjectAliasesChanged?.();
+        input.onProjectAliasesChanged?.(payload);
       } else {
         input.broadcast(payload);
       }

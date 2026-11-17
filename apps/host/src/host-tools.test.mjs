@@ -1,3 +1,14 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { getTableColumns, getTableName } from 'drizzle-orm';
+import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
+import { sessions, botSessionLinks, botProfiles, projectAliases, recentWorkdirs } from '../../desktop/src/main/localDb/schema.ts';
+import { configureHostOwner } from './agent/claude-auth.mjs';
+import { getActiveDataOwnerPushStamp, commitVolatileAppSession } from '../../desktop/src/main/appSessionState.ts';
+import { writeProjectsRootDirectory } from '../../desktop/src/main/projects-root-settings.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createHostConfirmations } from './host-confirmations.ts';
@@ -271,4 +282,69 @@ test('negotiated HTTP event streams deliver one live owner dialog without puttin
   assert.deepEqual(await reply.json(), { handled: true });
   assert.equal(await answer, true);
   assert.equal(received[0].type, 'plugin_push');
+});
+
+// Integration: the Node provider previously exposed no project callbacks. Exercise
+// its actual MCP dispatch, shared core, isolated SQLite and temporary directories;
+// no Electron shim, credentials, Git service or real user paths are involved.
+test('Node AI tools create, inspect and edit the complete project profile in the current owner', async t => {
+  const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'host-project-tools-'));
+  configureHostOwner({ userDataDir: profile, ownerId: 'projects-owner' });
+  const sqlite = new Database(':memory:');
+  for (const table of [sessions, botSessionLinks, botProfiles, projectAliases, recentWorkdirs]) {
+    sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column =>
+      `"${column.name}" ${column.getSQLType()}${column.primary ? ' PRIMARY KEY' : ''}`).join(',')})`);
+  }
+  sqlite.exec("INSERT INTO sessions(id,title,source,status,workspace_kind,created_at,updated_at) VALUES ('task','Task','desktop','active','dialogue',1,1)");
+  const db = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
+  setCurrentDbClient(db, 'projects-owner');
+  const root = path.join(profile, 'projects'), first = path.join(profile, 'first'), second = path.join(profile, 'second');
+  await Promise.all([root, first, second].map(dir => fs.mkdir(dir)));
+  await writeProjectsRootDirectory(root);
+  let current = true;
+  const changes = [];
+  const confirmations = createHostConfirmations({ current: () => current });
+  const service = createHostToolService({ profileDir: profile, ownerId: 'projects-owner', current: () => current,
+    owner: () => getActiveDataOwnerPushStamp(), deviceId: () => 'this-host', onProjectsChanged: catalogChanged => { changes.push(catalogChanged); },
+    getGhost: () => null, getSession: () => undefined, confirmations, t: key => key,
+    taskActions: { input: () => ({ key: 'input', ownerInput: true, boundary: 'input' }) },
+  });
+  const runtime = service.providers.find(provider => provider.name === 'cindy_helper').toHostTools({
+    agentKind: 'codex', workingDir: profile, sessionId: 'task' });
+  t.after(async () => {
+    await runtime.close(); service.close(); confirmations.close(); clearCurrentDbClient(db); sqlite.close();
+    commitVolatileAppSession('signed-out', null, true);
+    await fs.rm(profile, { recursive: true, force: true });
+  });
+  const body = result => JSON.parse(result.content.find(item => item.type === 'text').text);
+  const call = async (name, args) => body(await runtime.call(name, args));
+  const discovery = { tools: runtime.list() };
+  for (const name of ['create_project', 'list_projects', 'get_project_info', 'get_project_icon', 'update_project_info', 'rename_project', 'remove_project'])
+    assert.ok(discovery.tools.some(tool => tool.name === name), name);
+  const created = await call('create_project', { name: 'Demo', icon: '🌿', directories: [{ path: first }, { path: second }], device: 'this-host' });
+  assert.equal(created.ok, true, JSON.stringify(created));
+  assert.equal(created.device, 'this-host');
+  assert.equal(created.project_key, `local:${path.join(root, 'Demo')}`);
+  assert.equal((await fs.stat(created.working_dir)).isDirectory(), true);
+  const project = await call('get_project_info', { project_key: created.project_key });
+  assert.equal(project.project.name, 'Demo');
+  assert.equal(project.project.icon, '🌿');
+  assert.equal(project.project.main_directory, created.working_dir);
+  assert.deepEqual(project.project.directories, [{ path: first, access: 'write' }, { path: second, access: 'write' }]);
+  const saved = await call('update_project_info', { project_key: created.project_key, field: 'profile',
+    value: { name: 'Updated', icon: 'symbol:Code', directories: [{ path: second, access: 'read' }, { path: first, access: 'write' }] } });
+  assert.equal(saved.ok, true, JSON.stringify(saved));
+  const edited = await call('get_project_info', { project_key: created.project_key });
+  assert.equal(edited.project.name, 'Updated');
+  assert.deepEqual(edited.project.directories, [{ path: second, access: 'read' }, { path: first, access: 'write' }]);
+  assert.deepEqual(changes, [true, false], 'metadata changes do not rescan the directory catalog');
+  const list = await call('list_projects', {});
+  assert.equal(list.ok, true, JSON.stringify(list));
+  assert.ok(list.projects.some(item => item.working_dir === created.working_dir));
+  assert.equal((await call('update_project_info', { project_key: created.project_key, field: 'profile', value: { directories: [] } })).ok, true);
+  assert.deepEqual((await call('get_project_info', { project_key: created.project_key })).project.directories, []);
+  current = false;
+  const stale = await call('update_project_info', { project_key: created.project_key, field: 'name', value: 'Wrong owner' });
+  assert.equal(stale.ok, false);
+  assert.equal(sqlite.prepare('SELECT alias FROM project_aliases WHERE project_key = ?').get(created.project_key).alias, 'Updated');
 });

@@ -283,6 +283,9 @@ export default {
         })
         .click();
       const writes = await page.evaluate(() => window.projectSettingsWrites);
+      const scopes = await page.evaluate(() => window.projectPickerScopes);
+      if (!writes[0]?.projectGrantScope || scopes.some(scope => scope !== writes[0].projectGrantScope))
+        throw new Error('Directory picker and save did not share the same form scope');
       if (writes.length !== 1 || writes[0].value.directories.at(-1).access !== 'write')
         throw new Error('Missing project directory save');
       if (ui.case === 'directories' && writes[0].value.directories[0].access !== 'read')

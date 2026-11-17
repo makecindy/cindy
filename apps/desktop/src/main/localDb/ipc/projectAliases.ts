@@ -26,8 +26,9 @@ import {
 } from '../../device-link/broadcast-tap.js';
 import { assertTrustedAppRendererEvent, isTrustedAppRendererWindow } from '../../security/trustedAppRenderer.js';
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
+import type { ProjectInfoAuthorization } from '../../projectInfoAuthorization.js';
 
-function broadcastProjectAliasesChanged(scope: DataOwnerBroadcastScope): void {
+export function broadcastProjectAliasesChanged(scope: DataOwnerBroadcastScope): void {
   if (!isDataOwnerBroadcastScopeCurrent(scope)) return;
   emitProjectCatalogChanged();
   for (const w of BrowserWindow.getAllWindows()) {
@@ -87,9 +88,12 @@ export async function deleteProjectAlias(
   await upsertProjectAlias(projectKeyRaw, '', localPlatform);
 }
 
-export async function updateProjectInfo(input: unknown): Promise<HostProjectAliasesSnapshot> {
+export async function updateProjectInfo(
+  input: unknown,
+  authorization?: ProjectInfoAuthorization,
+): Promise<HostProjectAliasesSnapshot> {
   const scope = captureDataOwnerBroadcastScope();
-  const result = await updateProjectInfoCore(input);
+  const result = await updateProjectInfoCore(input, authorization);
   broadcastProjectAliasesChanged(scope);
   const body = requireObject(input, 'input');
   if (body.create === true && isDataOwnerBroadcastScopeCurrent(scope)) {
@@ -112,8 +116,14 @@ export function registerProjectAliasesIpc(): void {
     return readProjectIconImage(input);
   });
   ipcMain.handle(PROJECT_SETTINGS_SET_CHANNEL, (event, input: unknown) => {
-    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
-    return updateProjectInfo(input);
+    if (isDeviceLinkInvoke()) return updateProjectInfo(input, { kind: 'host' });
+    assertTrustedAppRendererEvent(event);
+    const body = requireObject(input, 'input');
+    return updateProjectInfo(input, {
+      kind: 'renderer',
+      senderId: event.sender.id,
+      scope: body.projectGrantScope,
+    });
   });
   ipcMain.handle(PROJECT_ALIASES_GET_CHANNEL, async (event) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);

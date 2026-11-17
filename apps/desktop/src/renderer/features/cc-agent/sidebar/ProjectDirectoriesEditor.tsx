@@ -21,6 +21,7 @@ export function ProjectDirectoriesEditor({
   disabled,
   local,
   onBrowse,
+  projectGrantScope,
 }: {
   mainDirectory: string;
   automatic?: boolean;
@@ -35,6 +36,7 @@ export function ProjectDirectoriesEditor({
   disabled: boolean;
   local: boolean;
   onBrowse?: () => void;
+  projectGrantScope: string;
 }) {
   const { t } = useTranslation();
   const label = (key: string) => t(`projectSettings.${key}`);
@@ -169,10 +171,10 @@ export function ProjectDirectoriesEditor({
                     return;
                   }
                   setError(false);
-                  void window.electronAPI
-                    .showOpenDirectoryDialog()
+                  void window.electronAPI.dialog
+                    .showOpenDirectory({ projectGrantScope })
                     .then((result) => {
-                      if (!result.canceled && result.path) add(result.path);
+                      if (result.success && result.path) add(result.path);
                     })
                     .catch(() => setError(true));
                 }}

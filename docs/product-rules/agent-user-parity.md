@@ -145,6 +145,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 定时任务 | 查可选运行位置与模型；设每次新建任务的 Agent 运行位置（其他电脑 / 分享来的供应商） | 有（2026-10-22） | 无 |
 | 定时任务 | 删除单条运行记录、标记已读                                 | 无   | 无               |
 | 项目     | 列出、登记、改名、移除；工作目录列表                       | 有   | 无               |
+| 项目     | 新建（自动目录／仓库导入）、读取与编辑名称／图标／多个目录 | 有（Desktop 与 Node Host 共用工具） | 有（目标 v6／v7；执行宿主须已有出站连接） |
 | 项目     | 查询远程已有项目（`list_projects(device)`，复用目标项目目录与可见性） | 有 | 有（2026-11-11） |
 | 项目     | 查询新项目存放位置（`list_projects.projects_root`，含来源） | 有（只读；修改该设置暂无 Agent 工具，按 #8259 维护者初审意见保留为缺口） | 无 |
 | 外观     | 导入 `.cindy` 主题包并刷新列表；选择主题家族／明暗模式与回读 | 有（`appearance.themes` → `import_theme_package`，选择沿用 `preferences`；同 ID 更新，仅数据主题，额外外观插件仍走插件安装） | 无（在目标电脑的本机任务执行；手机可继续该任务） |
@@ -348,11 +349,13 @@ OAuth 代码、App 密钥或任务签名密钥。`schedule_get.webhookStatus` �
 
 ### 项目资料（2026-11-13）
 
-项目创建（2026-11-16）：`create_project` 与桌面／手机共用创建入口，省略 `working_dir` 按名称或仓库名自动分配目录，`repository_url` 克隆 GitHub／GitLab／Git HTTPS 或 SSH 地址，`device` 指定同账号电脑。第一层 `projects.management` 索引可发现这些用法。远端自动创建／克隆要求 settingsVersion >= 7，旧端保留已有目录注册；失败不回落到本机。现有共享访客与 SSH 任务边界保持不变。
+项目创建（2026-11-16）：`create_project` 与桌面／手机共用创建入口，省略 `working_dir` 按名称或仓库名自动分配目录，`icon` 与 `directories` 可随创建一起保存，返回 `project_key` 和目标 `device`，`repository_url` 克隆 GitHub／GitLab／Git HTTPS 或 SSH 地址，`device` 指定同账号电脑。第一层 `projects.management` 索引可发现这些用法。远端自动创建／克隆要求 settingsVersion >= 7，旧端保留已有目录注册；失败不回落到本机。现有共享访客与 SSH 任务边界保持不变。
 
 `update_project_info` 与桌面／手机共用项目名称和图标保存入口，支持 `device` 指定同账号电脑。
 `projects.management` 第一层索引可发现；共享任务访客沿用既有拒绝规则，未升级的目标明确返回不支持。
 不移动主目录。2026-11-15：`get_project_info` 读回项目资料和目录权限；`update_project_info` 的 profile 支持项目目录完整列表（path/access）；界面统一称目录，不提供权限切换，新目录使用 write，既有授权保留，新建表单与设置共用保存入口，任务从下一轮继承，旧任务单独授权保留。两项工具均在 projects.management 首层索引可发现；远端要求 settingsVersion >= 6。
+
+2026-11-18：目录／仓库操作使用现有任务权限模式（Full Access／Auto／Ask），不继承 helper 的静默授权；手动选择目录沿 Main 的一次性选择凭据，无额外确认。Desktop 与 Node Host 共用项目工具回调；`get_project_info` 补充主目录和版本信息。完整授权矩阵见[项目设置](project-settings.md#授权与-ai-工具2026-11-18)。
 
 项目图标颜色：`update_project_info` 的 icon 接受 `symbol:Rocket:blue` 等白名单颜色，走同一资料保存入口；连接旧主机时检查 v3 能力，默认颜色省略后缀。字母支持 `text:CY:blue` 等相同色板，远端检查 v5，默认仍是 `text:CY`。
 

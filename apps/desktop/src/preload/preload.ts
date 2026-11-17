@@ -4175,6 +4175,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     showOpenDirectory: (params?: {
       defaultPath?: string;
       writableGrantScope?: string;
+      projectGrantScope?: string;
     }): Promise<{
       success: boolean;
       path: string | null;

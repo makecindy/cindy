@@ -686,6 +686,7 @@ import {
   issueWritableDirectoryRecentGrant,
   WritableDirectoryPickerGrantError,
 } from './maker-ipc/writableDirectoryPickerGrant.js';
+import { projectDirectoryGrantScope } from './projectInfoAuthorization.js';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import {
   initDeviceLinkService,
@@ -1553,8 +1554,9 @@ function installHostClientMode(): boolean {
     onErrorPersisted: event => sendToAllWindows('local-db:session:error-persisted', event),
     onRightSidebarTabsChanged: event => sendToAllWindows('maker:right-sidebar-tabs:changed', event),
     onSubagentRunsChanged: event => sendToAllWindows('local-db:subagent-runs:changed', event),
-    onProjectAliasesChanged: () => {
+    onProjectAliasesChanged: event => {
       sendToAllWindows('local-db:project-aliases:changed', {});
+      if (event.catalogChanged) sendToAllWindows('local-db:recent-workdirs:changed', {});
     },
     onError: (error) => {
       console.warn(
@@ -7888,8 +7890,15 @@ const registerIpcHandlers = () => {
       {
         defaultPath,
         writableGrantScope,
-      }: { defaultPath?: string; writableGrantScope?: string } = {},
+        projectGrantScope,
+      }: { defaultPath?: string; writableGrantScope?: string; projectGrantScope?: string } = {},
     ) => {
+      const projectOwner = getActiveDataOwnerPushStamp();
+      const projectScope =
+        projectGrantScope === undefined
+          ? undefined
+          : projectDirectoryGrantScope(projectOwner, projectGrantScope);
+      if (projectScope !== undefined) assertTrustedAppRendererEvent(event);
       if (writableGrantScope !== undefined) {
         assertTrustedAppRendererEvent(event);
         if (!writableGrantScope || writableGrantScope.length > 128) {
@@ -7908,6 +7917,20 @@ const registerIpcHandlers = () => {
         return { success: true, path: null };
       }
       const selectedPath = result.filePaths[0];
+      if (projectScope !== undefined) {
+        const current = getActiveDataOwnerPushStamp();
+        if (
+          isAppSessionBoundaryPending() ||
+          current.dataOwnerId !== projectOwner.dataOwnerId ||
+          current.ownerGeneration !== projectOwner.ownerGeneration
+        )
+          throwIpcError('PRECONDITION_FAILED', 'Project account changed');
+        await issueWritableDirectoryPickerGrant({
+          scopeId: projectScope,
+          senderId: event.sender.id,
+          directory: selectedPath,
+        });
+      }
       if (writableGrantScope !== undefined) {
         await issueWritableDirectoryPickerGrant({
           scopeId: writableGrantScope,

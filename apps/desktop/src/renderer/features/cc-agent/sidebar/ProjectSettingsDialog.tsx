@@ -89,6 +89,7 @@ export function ProjectSettingsDialog({
     }
   };
   const snapshot = useProjectInfo(project.deviceLinkDeviceId);
+  const [projectGrantScope] = useState(() => crypto.randomUUID());
   const [remoteBrowse, setRemoteBrowse] = useState<'main' | 'additional' | null>(null);
   const [directory, setDirectory] = useState(project.workingDir);
   const key = create ? `local:${directory}` : projectHostKey(project);
@@ -247,6 +248,7 @@ export function ProjectSettingsDialog({
         projectKey: key,
         field: 'profile' as const,
         value,
+        projectGrantScope,
         ...snapshot.ownerStamp,
       };
       let result: { createdProjectKey?: string };
@@ -568,9 +570,11 @@ export function ProjectSettingsDialog({
                                 return;
                               }
                               try {
-                                const result = await window.electronAPI.showOpenDirectoryDialog();
+                                const result = await window.electronAPI.dialog.showOpenDirectory({
+                                  projectGrantScope,
+                                });
                                 if (
-                                  !result.canceled &&
+                                  result.success &&
                                   result.path &&
                                   isDataOwnerGenerationCurrent(owner)
                                 )
@@ -598,6 +602,7 @@ export function ProjectSettingsDialog({
                       }
                       allowAdd={(snapshot?.settingsVersion ?? 0) >= 6}
                       value={directories}
+                      projectGrantScope={projectGrantScope}
                       onChange={setDirectories}
                       disabled={busy || !available}
                       local={!project.deviceLinkDeviceId && !key.startsWith('remote:')}

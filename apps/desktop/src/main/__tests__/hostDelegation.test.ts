@@ -432,7 +432,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
           res.write('data: {"seq":1,"type":"settings_changed","domain":"appearance","value":{"theme":"dark"}}\n\n');
           res.write('data: {"seq":2,"type":"session_changed","action":"create","sessionId":"s1"}\n\n');
           res.write('data: {"seq":3,"type":"message_created","sessionId":"s1","messageId":"m1"}\n\n');
-          res.write('data: {"seq":4,"type":"project_aliases_changed"}\n\n');
+          res.write('data: {"seq":4,"type":"project_aliases_changed","catalogChanged":true}\n\n');
           res.write('data: {"seq":5,"type":"input_projection","projection":{"sessionId":"s1","turnInProgress":true}}\n\n');
           res.write('data: {"seq":6,"type":"interaction_request","sessionId":"s1","request":{"requestId":"r1"}}\n\n');
           res.write('data: {"seq":7,"type":"text","sessionId":"s1"}\n\n');
@@ -469,8 +469,8 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
       onErrorPersisted: (event) => historyChanges.push(event),
       onSubagentRunsChanged: (event) => historyChanges.push(event),
       onRightSidebarTabsChanged: (event) => sidebarChanges.push(event),
-      onProjectAliasesChanged: () => {
-        projectAliasesNotified = true;
+      onProjectAliasesChanged: event => {
+        projectAliasesNotified = event.catalogChanged === true;
       },
       onError: (err) => {
         console.error('SSE bridge error:', err);

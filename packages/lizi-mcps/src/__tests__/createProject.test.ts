@@ -62,8 +62,12 @@ describe("create_project MCP", () => {
       expect(
         parse(await call({ working_dir: "/project", create_directory: true })),
       ).toMatchObject({ errorCode: "INVALID_ARGS" });
-      expect(parse(await call({ name: "Demo", repository_url: "https://gitlab.com/team/demo", device: "studio" }))).toMatchObject({ ok: true, project_path: "/project" });
-      expect(createProject).toHaveBeenLastCalledWith({ callerSessionId: "caller", workingDir: undefined, name: "Demo", repositoryUrl: "https://gitlab.com/team/demo", device: "studio" });
+      // Unit protocol regression: the actual tool schema must deliver the complete
+      // creation form to the selected Host; old schema rejected icon/directories.
+      expect(parse(await call({ name: "Demo", repository_url: "https://gitlab.com/team/demo", device: "studio", icon: 'symbol:Rocket', directories: [{ path: '/reference' }] })))
+        .toMatchObject({ ok: true, project_path: "/project", project_key: 'local:/project', device: 'studio' });
+      expect(createProject).toHaveBeenLastCalledWith({ callerSessionId: "caller", workingDir: undefined, name: "Demo", repositoryUrl: "https://gitlab.com/team/demo", device: "studio", icon: 'symbol:Rocket', directories: [{ path: '/reference', access: 'write' }] });
+      expect(parse(await call({ directories: [{ path: '/reference', access: 'admin' }] }))).toMatchObject({ errorCode: 'INVALID_ARGS' });
       expect(parse(await call({ name: "Blank" }))).toMatchObject({ ok: true });
       expect(createProject).toHaveBeenLastCalledWith({ callerSessionId: "caller", workingDir: undefined, name: "Blank" });
       remoteHostId = "ssh";

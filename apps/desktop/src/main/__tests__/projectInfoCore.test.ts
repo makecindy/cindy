@@ -1,7 +1,10 @@
 // Unit tier: project settings mutations must reject stale accounts and controller identities;
 // the old alias tests did not cover icon writes or the new remote entry point.
-import { beforeEach, expect, it, vi } from 'vitest';
-vi.mock('../projectCreation.js', () => ({ projectCreationRoot: async () => '/Projects', prepareNewProject: vi.fn(async () => ({ directory: '/Projects/Created', cleanup: vi.fn() })) }));
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+vi.mock('../projectCreation.js', () => ({
+  projectCreationRoot: async () => '/Projects',
+  prepareNewProject: vi.fn(async () => ({ directory: '/Projects/Created', cleanup: vi.fn() })),
+}));
 const h = vi.hoisted(() => ({
   stamp: { dataOwnerId: 'a', ownerGeneration: 1 },
   pending: false,
@@ -16,6 +19,7 @@ const h = vi.hoisted(() => ({
   validateDirectories: vi.fn(),
   register: vi.fn(),
   validateRoot: vi.fn(),
+  directories: {} as Record<string, Array<{ path: string; access: 'read' | 'write' }>>,
 }));
 vi.mock('../appSessionState.js', () => ({
   ownerScopedUserDataPath: (file: string) => '/mock/' + file,
@@ -30,7 +34,7 @@ vi.mock('../device-link/crossProcessLock.js', () => ({
   ) => fn({ held: true }),
 }));
 vi.mock('../projectDirectoryStore.js', () => ({
-  readProjectDirectories: () => ({}),
+  readProjectDirectories: () => h.directories,
   setProjectDirectories: h.setDirectories,
 }));
 vi.mock('../localDb/ipc/recentWorkdirsCore.js', () => ({
@@ -38,7 +42,7 @@ vi.mock('../localDb/ipc/recentWorkdirsCore.js', () => ({
   hasRecentWorkdir: async () => false,
   removeRecentWorkdir: vi.fn(),
 }));
-vi.mock('../sidebarSettingsStore.js', () => ({ restoreLocalProjectVisibility: vi.fn() }));
+vi.mock('../sidebarSettingsStoreCore.js', () => ({ restoreLocalProjectVisibility: vi.fn() }));
 vi.mock('../projectDirectoryValidation.js', () => ({
   validateProjectDirectories: h.validateDirectories,
 }));
@@ -61,8 +65,20 @@ vi.mock('../localDb/ipc/projectAliasesCore.js', () => ({
 }));
 vi.mock('../localDb/client/current.js', () => ({ getDbClient: () => ({}) }));
 import { readProjectIconImage, readProjectInfo, updateProjectInfo } from '../projectInfoCore';
+import { prepareNewProject } from '../projectCreation.js';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { projectDirectoryGrantScope } from '../projectInfoAuthorization';
+import {
+  clearWritableDirectoryPickerGrantsForTesting,
+  issueWritableDirectoryPickerGrant,
+} from '../maker-ipc/writableDirectoryPickerGrant';
+const saveFromHost = (input: unknown) => updateProjectInfo(input, { kind: 'host' });
+afterEach(() => vi.restoreAllMocks());
 beforeEach(() => {
   vi.resetAllMocks();
+  clearWritableDirectoryPickerGrantsForTesting();
+  h.directories = {};
   h.cleanup.mockResolvedValue(undefined);
   h.register.mockResolvedValue(true);
   h.validateRoot.mockResolvedValue({ ok: true, workingDir: '/repo' });
@@ -78,11 +94,11 @@ beforeEach(() => {
 });
 it('saves and resets only the addressed icon, preserving names', async () => {
   const request = { ...h.stamp, projectKey: 'local:/repo', field: 'icon', value: '🚀' };
-  expect(await updateProjectInfo(request)).toMatchObject({
+  expect(await saveFromHost(request)).toMatchObject({
     settingsSupported: true,
     icons: { 'local:/repo': '🚀' },
   });
-  await updateProjectInfo({ ...request, value: null });
+  await saveFromHost({ ...request, value: null });
   expect(h.set.mock.calls.map((args) => args.slice(0, 2))).toEqual([
     ['local:/repo', '🚀'],
     ['local:/repo', null],
@@ -91,7 +107,7 @@ it('saves and resets only the addressed icon, preserving names', async () => {
 });
 it('rejects stale owners and controller-local identities before any write', async () => {
   await expect(
-    updateProjectInfo({
+    saveFromHost({
       dataOwnerId: 'a',
       ownerGeneration: 0,
       projectKey: 'local:/repo',
@@ -100,7 +116,7 @@ it('rejects stale owners and controller-local identities before any write', asyn
     }),
   ).rejects.toThrow('PRECONDITION_FAILED');
   await expect(
-    updateProjectInfo({ ...h.stamp, projectKey: 'device:other:/repo', field: 'icon', value: null }),
+    saveFromHost({ ...h.stamp, projectKey: 'device:other:/repo', field: 'icon', value: null }),
   ).rejects.toThrow('INVALID_PARAMS');
   expect(h.set).not.toHaveBeenCalled();
 });
@@ -118,13 +134,13 @@ it('rejects an account switch while an icon write waits for the file lock', asyn
     assertCurrent();
   });
   await expect(
-    updateProjectInfo({ ...h.stamp, projectKey: 'local:/repo', field: 'icon', value: '🚀' }),
+    saveFromHost({ ...h.stamp, projectKey: 'local:/repo', field: 'icon', value: '🚀' }),
   ).rejects.toThrow('PRECONDITION_FAILED');
 });
 
 it('validates the entire profile before writing either field', async () => {
   await expect(
-    updateProjectInfo({
+    saveFromHost({
       ...h.stamp,
       projectKey: 'local:/repo',
       field: 'profile',
@@ -137,7 +153,7 @@ it('validates the entire profile before writing either field', async () => {
 it('keeps the name if image ingestion fails', async () => {
   h.importImage.mockRejectedValueOnce(new Error('Invalid image'));
   await expect(
-    updateProjectInfo({
+    saveFromHost({
       ...h.stamp,
       projectKey: 'local:/repo',
       field: 'profile',
@@ -150,7 +166,7 @@ it('keeps the name if image ingestion fails', async () => {
 it('restores the previous icon if the alias transaction fails', async () => {
   h.rename.mockRejectedValueOnce(new Error('DB unavailable'));
   await expect(
-    updateProjectInfo({
+    saveFromHost({
       ...h.stamp,
       projectKey: 'local:/repo',
       field: 'profile',
@@ -165,7 +181,7 @@ it('restores the previous icon if the alias transaction fails', async () => {
 });
 it('rejects a media address from a different project before reading or writing bytes', async () => {
   await expect(
-    updateProjectInfo({
+    saveFromHost({
       ...h.stamp,
       projectKey: 'local:/repo',
       field: 'icon',
@@ -176,7 +192,7 @@ it('rejects a media address from a different project before reading or writing b
   expect(h.importImage).not.toHaveBeenCalled();
 });
 it('stores an uploaded image address together with the name, then releases the old reference', async () => {
-  await updateProjectInfo({
+  await saveFromHost({
     ...h.stamp,
     projectKey: 'local:/repo',
     field: 'profile',
@@ -215,7 +231,7 @@ it('never returns image bytes after the account changes during a read', async ()
 it.each(['symbol:Rocket:blue', 'text:CY:blue', 'text:中A:white', 'text:CY'])(
   'saves %s through the profile endpoint without renaming the project',
   async (icon) => {
-    await updateProjectInfo({
+    await saveFromHost({
       ...h.stamp,
       projectKey: 'local:/repo',
       field: 'profile',
@@ -229,7 +245,7 @@ it.each(['symbol:Rocket:blue', 'text:CY:blue', 'text:中A:white', 'text:CY'])(
 it('validates every directory before changing any profile field', async () => {
   h.validateDirectories.mockRejectedValueOnce(new Error('Project directories must not overlap'));
   await expect(
-    updateProjectInfo({
+    saveFromHost({
       ...h.stamp,
       projectKey: 'local:/repo',
       field: 'profile',
@@ -247,7 +263,7 @@ it('validates every directory before changing any profile field', async () => {
 it('rolls back directory settings if alias save fails', async () => {
   h.rename.mockRejectedValueOnce(new Error('DB unavailable'));
   await expect(
-    updateProjectInfo({
+    saveFromHost({
       ...h.stamp,
       projectKey: 'local:/repo',
       field: 'profile',
@@ -267,7 +283,7 @@ it('creates the project with the saved profile and rejects managed workspaces be
     field: 'profile',
     value: { name: 'Updated', directories: [] },
   };
-  await updateProjectInfo(request);
+  await saveFromHost(request);
   expect(h.register).toHaveBeenCalledWith(
     '/repo',
     expect.any(Number),
@@ -277,14 +293,14 @@ it('creates the project with the saved profile and rejects managed workspaces be
   h.register.mockClear();
   h.setDirectories.mockClear();
   h.validateRoot.mockResolvedValueOnce({ ok: false, message: 'Managed workspace' });
-  await expect(updateProjectInfo(request)).rejects.toThrow('Managed workspace');
+  await expect(saveFromHost(request)).rejects.toThrow('Managed workspace');
   expect(h.register).not.toHaveBeenCalled();
   expect(h.setDirectories).not.toHaveBeenCalled();
 });
 it('compensates the profile when registering the new project fails', async () => {
   h.register.mockResolvedValueOnce(false);
   await expect(
-    updateProjectInfo({
+    saveFromHost({
       ...h.stamp,
       create: true,
       projectKey: 'local:/repo',
@@ -304,7 +320,7 @@ it('compensates the profile when registering the new project fails', async () =>
 
 it('does not silently collapse a selected task worktree into a new project registration', async () => {
   await expect(
-    updateProjectInfo({
+    saveFromHost({
       ...h.stamp,
       create: true,
       projectKey: 'local:/repo/.cindy-worktrees/task',
@@ -317,7 +333,121 @@ it('does not silently collapse a selected task worktree into a new project regis
 });
 
 it('allocates an automatic project and returns its real identity', async () => {
-  const result = await updateProjectInfo({ ...h.stamp, create: true, projectKey: 'local:', field: 'profile', value: { name: 'Created', directories: [] } });
+  const result = await saveFromHost({
+    ...h.stamp,
+    create: true,
+    projectKey: 'local:',
+    field: 'profile',
+    value: { name: 'Created', directories: [] },
+  });
   expect(result.createdProjectKey).toBe('local:/Projects/Created');
   expect(h.register).toHaveBeenCalled();
+});
+
+// PR #11126: actual core writes previously trusted arbitrary Renderer paths.
+// Existing profile tests checked validation/rollback, not caller authority. Unit tier:
+// fake realpath is the filesystem boundary; the real Main picker ledger is exercised.
+it('rejects forged caller flags and clone requests before any side effect', async () => {
+  const request = {
+    ...h.stamp,
+    projectKey: 'local:/repo',
+    field: 'profile',
+    value: { name: 'Changed', directories: [{ path: '/private', access: 'write' }] },
+    source: 'host',
+    authorized: true,
+    projectGrantScope: 'forged',
+  };
+  await expect(updateProjectInfo(request)).rejects.toThrow('AUTHORIZATION_REQUIRED');
+  await expect(
+    updateProjectInfo({
+      ...request,
+      create: true,
+      repositoryUrl: 'https://gitlab.com/team/private',
+    }),
+  ).rejects.toThrow('AUTHORIZATION_REQUIRED');
+  expect(h.setDirectories).not.toHaveBeenCalled();
+  expect(h.rename).not.toHaveBeenCalled();
+  expect(prepareNewProject).not.toHaveBeenCalled();
+});
+
+it('consumes only this window, form and account generation picker proof', async () => {
+  vi.spyOn(fs, 'realpath').mockImplementation(async (value) => String(value));
+  const directory = path.resolve('project-reference');
+  const request = {
+    ...h.stamp,
+    projectKey: 'local:/repo',
+    field: 'profile',
+    value: { directories: [{ path: directory, access: 'write' }] },
+  };
+  const authorization = { kind: 'renderer' as const, senderId: 7, scope: 'form' };
+  const issue = async (stamp = h.stamp) =>
+    issueWritableDirectoryPickerGrant({
+      scopeId: projectDirectoryGrantScope(stamp, 'form'),
+      senderId: 7,
+      directory,
+    });
+  await issue({ ...h.stamp, ownerGeneration: 0 });
+  await expect(updateProjectInfo(request, authorization)).rejects.toThrow('AUTHORIZATION_REQUIRED');
+  await issue();
+  for (const foreign of [
+    { ...authorization, senderId: 8 },
+    { ...authorization, scope: 'other-form' },
+  ])
+    await expect(updateProjectInfo(request, foreign)).rejects.toThrow('AUTHORIZATION_REQUIRED');
+  expect(h.setDirectories).not.toHaveBeenCalled();
+  await updateProjectInfo(request, authorization);
+  expect(h.setDirectories).toHaveBeenCalledWith(
+    'local:/repo',
+    request.value.directories,
+    expect.any(Function),
+  );
+  // The fake store does not retain the directory: a second write needs fresh proof.
+  await expect(updateProjectInfo(request, authorization)).rejects.toThrow('AUTHORIZATION_REQUIRED');
+});
+
+it('retains/revokes existing access without a picker but requires proof for a read-to-write upgrade', async () => {
+  const directory = path.resolve('project-reference');
+  h.directories = { 'local:/repo': [{ path: directory, access: 'read' }] };
+  const request = { ...h.stamp, projectKey: 'local:/repo', field: 'profile' };
+  await updateProjectInfo({ ...request, value: { directories: h.directories['local:/repo'] } });
+  await expect(
+    updateProjectInfo({
+      ...request,
+      value: { directories: [{ path: directory, access: 'write' }] },
+    }),
+  ).rejects.toThrow('AUTHORIZATION_REQUIRED');
+  await updateProjectInfo({ ...request, value: { directories: [] } });
+  expect(h.setDirectories.mock.calls.map((args) => args[1])).toEqual([
+    h.directories['local:/repo'],
+    [],
+  ]);
+});
+
+it('authorizes supplied roots before cloning, then saves the same complete profile', async () => {
+  vi.spyOn(fs, 'realpath').mockImplementation(async (value) => String(value));
+  const directory = path.resolve('project-reference');
+  const authorization = { kind: 'renderer' as const, senderId: 7, scope: 'create' };
+  const request = {
+    ...h.stamp,
+    create: true,
+    projectKey: 'local:',
+    repositoryUrl: 'https://gitlab.com/team/demo',
+    field: 'profile',
+    value: { name: 'Demo', icon: '🚀', directories: [{ path: directory, access: 'write' }] },
+  };
+  await expect(updateProjectInfo(request, authorization)).rejects.toThrow('AUTHORIZATION_REQUIRED');
+  expect(prepareNewProject).not.toHaveBeenCalled();
+  await issueWritableDirectoryPickerGrant({
+    scopeId: projectDirectoryGrantScope(h.stamp, 'create'),
+    senderId: 7,
+    directory,
+  });
+  const result = await updateProjectInfo(request, authorization);
+  expect(result.createdProjectKey).toBe('local:/Projects/Created');
+  expect(h.setDirectories).toHaveBeenCalledWith(
+    result.createdProjectKey,
+    request.value.directories,
+    expect.any(Function),
+  );
+  expect(h.set).toHaveBeenCalledWith(result.createdProjectKey, '🚀', expect.any(Function));
 });

@@ -71,20 +71,25 @@ vi.mock('../../localDb/client/current.js', async () => {
   };
   return { tryGetDbClient: () => (h.ready ? client : null) };
 });
-vi.mock('../../localDb/ipc/recentWorkdirs.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../localDb/ipc/recentWorkdirs.js')>();
+vi.mock('../../localDb/ipc/recentWorkdirsCore.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../localDb/ipc/recentWorkdirsCore.js')>();
   return {
     normalizeRecentWorkdirPath: actual.normalizeRecentWorkdirPath,
     upsertRecentWorkdir: h.upsert,
     listRecentWorkdirs: h.list,
   };
 });
-vi.mock('../../localDb/ipc/projectAliases.js', () => ({
+vi.mock('../../localDb/ipc/projectAliasesCore.js', () => ({
   listProjectAliases: h.aliases,
-  updateProjectInfo: h.updateInfo,
   upsertProjectAlias: h.rename,
 }));
-vi.mock('../../sidebarSettingsStore.js', () => ({
+vi.mock('../../projectInfoCore.js', () => ({ updateProjectInfo: h.updateInfo }));
+vi.mock('../../localDb/ipc/projectAliases.js', () => ({ broadcastProjectAliasesChanged: vi.fn() }));
+vi.mock('node:os', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:os')>()),
+  homedir: () => h.home,
+}));
+vi.mock('../../sidebarSettingsStoreCore.js', () => ({
   restoreLocalProjectVisibility: h.restore,
   setLocalProjectHidden: h.visibility,
   loadSidebarSettingsSnapshot: () => ({ ...h.owner, hiddenProjectKeys: h.hiddenKeys }),
@@ -128,10 +133,36 @@ describe('createProject', () => {
 
   it('creates by name or repository through the form entry and preserves existing settings when naming a selected folder', async () => {
     h.updateInfo.mockResolvedValue({ createdProjectKey: 'local:/Projects/Demo-2' });
-    expect(await createProject({ callerSessionId: 'caller', name: 'Demo', repositoryUrl: 'https://gitlab.com/g/demo' })).toEqual({ ok: true, workingDir: '/Projects/Demo-2' });
-    expect(h.updateInfo).toHaveBeenLastCalledWith({ ...h.owner, create: true, projectKey: 'local:', repositoryUrl: 'https://gitlab.com/g/demo', field: 'profile', value: { name: 'Demo' } });
+    expect(
+      await createProject({
+        callerSessionId: 'caller',
+        name: 'Demo',
+        repositoryUrl: 'https://gitlab.com/g/demo',
+      }),
+    ).toEqual({ ok: true, workingDir: '/Projects/Demo-2' });
+    expect(h.updateInfo).toHaveBeenLastCalledWith(
+      {
+        ...h.owner,
+        create: true,
+        projectKey: 'local:',
+        repositoryUrl: 'https://gitlab.com/g/demo',
+        field: 'profile',
+        value: { name: 'Demo' },
+      },
+      { kind: 'host', assertCurrent: expect.any(Function) },
+    );
     await createProject({ callerSessionId: 'caller', workingDir: directory, name: 'Renamed' });
-    expect(h.updateInfo).toHaveBeenLastCalledWith({ ...h.owner, create: true, projectKey: `local:${directory}`, repositoryUrl: undefined, field: 'profile', value: { name: 'Renamed' } });
+    expect(h.updateInfo).toHaveBeenLastCalledWith(
+      {
+        ...h.owner,
+        create: true,
+        projectKey: `local:${directory}`,
+        repositoryUrl: undefined,
+        field: 'profile',
+        value: { name: 'Renamed' },
+      },
+      { kind: 'host', assertCurrent: expect.any(Function) },
+    );
   });
 
   // Unit: project self-inspection must agree with sidebar membership, including

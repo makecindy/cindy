@@ -7,9 +7,15 @@ import type { Session } from '../../../src/renderer/lib/ccAgent.types';
 import { mountPage, subscription } from '../../ui-page/harness';
 import { ProjectSettingsDialog } from '../../../src/renderer/features/cc-agent/sidebar/ProjectSettingsDialog';
 import { setDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
+// This isolated HTTP fixture lacks secure-context UUID support. Production uses Chromium's crypto.
+if (!crypto.randomUUID) {
+  let sequence = 0;
+  crypto.randomUUID = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`;
+}
 setDataOwnerGeneration('fixture', 1);
 const writes: unknown[] = [];
-Object.assign(window, { projectSettingsWrites: writes });
+const pickerScopes: unknown[] = [];
+Object.assign(window, { projectSettingsWrites: writes, projectPickerScopes: pickerScopes });
 function DeviceEntry({ enabled, children }: { enabled: boolean; children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -26,12 +32,20 @@ function DeviceEntry({ enabled, children }: { enabled: boolean; children: ReactN
 }
 mountPage({
   host: (ctx) => ({
-    showOpenDirectoryDialog: async () => ({
-      canceled: (window as unknown as { projectPickerCancelled?: boolean }).projectPickerCancelled === true,
-      path:
-        (window as unknown as { projectPickerPath?: string }).projectPickerPath ??
-        '/Projects/Reference',
-    }),
+    dialog: {
+      showOpenDirectory: async (options?: { projectGrantScope?: string }) => {
+        pickerScopes.push(options?.projectGrantScope);
+        return ({
+        success: true,
+        path:
+          (window as unknown as { projectPickerCancelled?: boolean }).projectPickerCancelled ===
+          true
+            ? null
+            : ((window as unknown as { projectPickerPath?: string }).projectPickerPath ??
+              '/Projects/Reference'),
+      });
+      },
+    },
     localDb: {
       projectAliases: {
         snapshot: async () => ({
