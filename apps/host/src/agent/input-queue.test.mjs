@@ -28,6 +28,7 @@ import { createInputQueue, holdTaskForProfile, PROFILE_HOLD_LOCK } from './input
 import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../desktop/src/shared/agentInputQueue.ts';
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
 import { createTurnExecutor } from './turn-executor.mjs';
+import { CredentialModeSwitchBusyError } from '../../../desktop/src/main/maker-host/credentialSwitchError.ts';
 import { SILENT_STOP_DECISION_DELAY_MS } from '../../../desktop/src/main/maker-ipc/silentStopAutoResume.ts';
 import { SILENT_STOP_AUTO_RESUME_SETTINGS_FILE } from '../../../desktop/src/main/maker-host/silentStopAutoResumeSettingsCore.ts';
 import { lockSessionRoute } from './session-route-lock.mjs';
@@ -6641,4 +6642,37 @@ test('silent stop: the caller leaving during the decision does not stop the cont
   assert.equal(r.session.sent[1], '继续');
   await r.turn('the rest', { type: 'done', data: {} });
   await settleUntil(() => !r.h.queue.projection('s').turnInProgress, 'the turn ends');
+});
+
+/*
+ * A credential switch that waits for another task's turn (release table, 8g B review item 4).
+ * - Production entries and observable results: the Host's input queue, executor and the shared coordinator;
+ *   observed: whether task B's input reaches its engine once task A's turn ends.
+ * - Rule: the desktop's coordinator keeps B's input at the head while a credential switch waits for A's turn
+ *   (CREDENTIAL_SWITCH_BUSY) and drains it when any task's turn settles (register.ts sessionEventDelivery.ts
+ *   onExternalTurnSettled), or after its 10 s fallback timer.
+ * - Coverage gap: the Host's turn end (finish) does not call onExternalTurnSettled.
+ * - Minimal failing input: A runs, B's start reports A busy, A's turn ends.
+ * - Tier: unit (queue harness, fake runtimes; mocked setTimeout so the fallback timer never fires).
+ */
+test('credential switch: a task waiting for another task\'s turn sends once that turn ends', async t => {
+  const h = createHarness();
+  t.after(async () => { t.mock.timers.reset(); await h.queue.dispose(); });
+  await enqueue(h, 'blocker', { clientId: 'a1', text: 'long job' });
+  const create = h.maker.createSession;
+  let refused = 0;
+  h.maker.createSession = async opts => {
+    if (opts.id === 'waiter' && refused === 0) {
+      refused += 1;
+      throw new CredentialModeSwitchBusyError(['blocker']);
+    }
+    return create(opts);
+  };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  await h.queue.enqueue('waiter', { clientId: 'b1', text: 'needs the switch' });
+  await settleUntil(() => h.queue.projection('waiter').credentialSwitchWait?.clientId === 'b1', 'the input waits for the switch');
+  h.maker.getSession('blocker').emit({ type: 'done', data: {} });
+  await settleUntil(() => !h.queue.projection('blocker').turnInProgress, 'the blocking turn ends');
+  await settle();
+  assert.equal(h.maker.getSession('waiter')?.sent.length, 1, 'the waiting input reaches its engine when the blocking turn ends');
 });
