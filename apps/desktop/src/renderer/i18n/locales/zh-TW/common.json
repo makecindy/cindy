@@ -10838,7 +10838,7 @@
       "sourceLength": "{{length}} / {{limit}} 個 UTF-16 單元（不計首尾空白）。",
       "sourceExcess": "超出 {{excess}} 個單元，縮短後才能儲存。",
       "sourceTooLong": "資料過長，修改後才能儲存。",
-      "sourceRecovery": "已儲存的原文不變，完整草稿仍保留在此頁。請先複製到安全的地方備份，再縮短內容或放棄本次變更。",
+      "sourceRecovery": "已儲存的原文不變，完整草稿仍保留在此頁。複製後，請先貼到安全的地方並確認內容完整，再縮短內容或放棄本次變更。",
       "sourceCopy": "複製完整內容"
     },
     "nameLabel": "怎麼稱呼",

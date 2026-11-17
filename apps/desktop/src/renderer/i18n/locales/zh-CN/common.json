@@ -10838,7 +10838,7 @@
       "sourceLength": "{{length}} / {{limit}} 个 UTF-16 单元（不计首尾空白）。",
       "sourceExcess": "超出 {{excess}} 个单元，缩短后才能保存。",
       "sourceTooLong": "资料过长，修改后才能保存。",
-      "sourceRecovery": "已保存的原文不变，完整草稿仍保留在此页。请先复制到安全的地方备份，再缩短内容或放弃本次更改。",
+      "sourceRecovery": "已保存的原文不变，完整草稿仍保留在此页。复制后，请先粘贴到安全的地方并核对内容完整，再缩短内容或放弃本次更改。",
       "sourceCopy": "复制完整内容"
     },
     "nameLabel": "怎么称呼",

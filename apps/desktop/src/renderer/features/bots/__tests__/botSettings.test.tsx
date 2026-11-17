@@ -289,7 +289,7 @@ afterEach(() => {
 // cancel/discard, or zero invalid host requests. Minimal input: 12001 units.
 it('retains a long original and draft, offers full copy, and resumes saving after correction', async () => {
   const original = 'x'.repeat(12001);
-  const writeText = vi.fn(async () => undefined);
+  const writeText = vi.fn(async (_text: string) => undefined);
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
   const view = renderSettings({ identitySource: original });
   fireEvent.click(screen.getByRole('button', { name: 'bots.profile.personality' }));
@@ -304,6 +304,7 @@ it('retains a long original and draft, offers full copy, and resumes saving afte
   expect(mocks.updateBotProfile).not.toHaveBeenCalled();
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'bots.profile.sourceCopy' })); });
   expect(writeText).toHaveBeenCalledWith(edited);
+  expect(screen.queryByRole('button', { name: 'chat.messageActionBar.copied' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
   fireEvent.click(await screen.findByRole('button', { name: 'bots.memory.continueEditing' }));
   expect(input).toHaveProperty('value', edited);
@@ -312,6 +313,22 @@ it('retains a long original and draft, offers full copy, and resumes saving afte
   expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
   expect(mocks.updateBotProfile).toHaveBeenCalledWith('bot-1', { identitySource: edited.slice(0, 12000) });
   view.unmount();
+});
+
+// A resolved write is not proof of a backup. A silent drop and a rejected write
+// must both leave the draft, without a verified-success claim (#10985 review).
+it.each(['silent-drop', 'denied'] as const)('keeps the draft when clipboard write is %s', async failure => {
+  const original = 'x'.repeat(12001);
+  const writeText = vi.fn(async () => { if (failure === 'denied') throw new Error('write denied'); });
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+  renderSettings({ identitySource: original });
+  fireEvent.click(screen.getByRole('button', { name: 'bots.profile.personality' }));
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'bots.profile.sourceCopy' })); });
+  if (failure === 'denied') expect(screen.getByText('chat.media.copyFailed')).toBeTruthy();
+  expect(writeText).toHaveBeenCalledWith(original);
+  expect(screen.queryByRole('button', { name: 'chat.messageActionBar.copied' })).toBeNull();
+  expect(screen.getByRole('textbox', { name: 'bots.profile.personality' })).toHaveProperty('value', original);
+  expect(mocks.updateBotProfile).not.toHaveBeenCalled();
 });
 
 it('only discards an oversized edit on explicit confirmation and never resubmits on unmount', async () => {

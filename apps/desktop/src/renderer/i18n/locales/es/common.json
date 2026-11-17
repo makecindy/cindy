@@ -10967,7 +10967,7 @@
       "sourceLength": "{{length}} / {{limit}} unidades UTF-16 (sin espacios iniciales ni finales).",
       "sourceExcess": "Supera el límite en {{excess}} unidades. Acorta el texto para guardarlo.",
       "sourceTooLong": "El texto es demasiado largo para guardarlo. Edítalo para continuar.",
-      "sourceRecovery": "El original guardado no ha cambiado. El borrador completo permanece en esta página. Cópialo en un lugar seguro antes de acortarlo o descartar los cambios.",
+      "sourceRecovery": "El original guardado no cambia y el borrador completo permanece en esta página. Después de copiarlo, pégalo en un lugar seguro y comprueba que esté completo antes de acortarlo o descartar los cambios.",
       "sourceCopy": "Copiar texto completo"
     },
     "nameLabel": "¿Cómo deberíamos llamarlo?",

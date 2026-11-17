@@ -10883,7 +10883,7 @@
       "sourceLength": "{{length}} / {{limit}} UTF-16-Einheiten (ohne umgebende Leerzeichen).",
       "sourceExcess": "Das Limit ist um {{excess}} Einheiten überschritten. Kürze den Text vor dem Speichern.",
       "sourceTooLong": "Dieser Text ist zu lang zum Speichern. Bearbeite ihn, um fortzufahren.",
-      "sourceRecovery": "Das gespeicherte Original bleibt unverändert. Der vollständige Entwurf bleibt auf dieser Seite. Kopiere ihn an einen sicheren Ort, bevor du ihn kürzt oder diese Änderungen verwirfst.",
+      "sourceRecovery": "Das gespeicherte Original bleibt unverändert, der vollständige Entwurf auf dieser Seite. Füge den kopierten Text an einem sicheren Ort ein und prüfe seine Vollständigkeit, bevor du ihn kürzt oder Änderungen verwirfst.",
       "sourceCopy": "Vollständigen Text kopieren"
     },
     "nameLabel": "Wie sollen wir den Freund nennen?",

@@ -10967,7 +10967,7 @@
       "sourceLength": "{{length}} / {{limit}} unidades UTF-16 (sem espaços no início e no fim).",
       "sourceExcess": "O limite foi excedido em {{excess}} unidades. Encurte o texto antes de salvar.",
       "sourceTooLong": "Este texto é longo demais para salvar. Edite-o para continuar.",
-      "sourceRecovery": "O original salvo não foi alterado. O rascunho completo permanece nesta página. Copie-o para um local seguro antes de encurtá-lo ou descartar estas alterações.",
+      "sourceRecovery": "O original salvo não muda e o rascunho completo permanece nesta página. Após copiar, cole em um local seguro e confira se o texto está completo antes de encurtá-lo ou descartar as alterações.",
       "sourceCopy": "Copiar texto completo"
     },
     "nameLabel": "Como devemos chamar esse amigo?",

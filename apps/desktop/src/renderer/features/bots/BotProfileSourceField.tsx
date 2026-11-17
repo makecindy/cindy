@@ -9,7 +9,6 @@ import { useBotTranslation } from './botPronounContext';
 export function BotProfileSourceField({ label, ...props }: TextareaProps & { label: string }) {
   const { t } = useBotTranslation();
   const [copyFailed, setCopyFailed] = useState(false);
-  const [copiedText, setCopiedText] = useState<string | null>(null);
   const length = props.value.trim().length;
   const excess = length - BOT_PROFILE_SOURCE_MAX_LENGTH;
   return (
@@ -20,15 +19,19 @@ export function BotProfileSourceField({ label, ...props }: TextareaProps & { lab
         {control => <Textarea {...props} {...control} />}
       </FormField>
       {excess > 0 && <>
-        <p className="text-12 leading-5 text-[var(--text-secondary)]">{t('bots.profile.sourceRecovery')}</p>
+        <p className="text-12 leading-[1.667] text-[var(--text-secondary)]">{t('bots.profile.sourceRecovery')}</p>
         <Button variant="secondary" size="md" data-settings-search-action="copy-profile-source"
           onClick={() => {
             setCopyFailed(false);
-            void navigator.clipboard.writeText(props.value)
-              .then(() => setCopiedText(props.value))
+            // A resolved write is not proof of a backup on every desktop. Keep
+            // the paste-and-check instruction instead of claiming copy success.
+            const text = props.value;
+            void Promise.resolve().then(async () => {
+              await navigator.clipboard.writeText(text);
+            })
               .catch(() => setCopyFailed(true));
           }}>
-          {t(copiedText === props.value ? 'chat.messageActionBar.copied' : 'bots.profile.sourceCopy')}
+          {t('bots.profile.sourceCopy')}
         </Button>
         {copyFailed && <p role="alert" className="text-12 text-[var(--text-danger)]">{t('chat.media.copyFailed')}</p>}
       </>}

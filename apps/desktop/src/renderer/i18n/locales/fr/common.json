@@ -10967,7 +10967,7 @@
       "sourceLength": "{{length}} / {{limit}} unités UTF-16 (hors espaces de début et de fin).",
       "sourceExcess": "Limite dépassée de {{excess}} unités. Raccourcissez le texte pour l’enregistrer.",
       "sourceTooLong": "Ce texte est trop long pour être enregistré. Modifiez-le pour continuer.",
-      "sourceRecovery": "L’original enregistré est inchangé. Le brouillon complet reste sur cette page. Copiez-le en lieu sûr avant de le raccourcir ou d’abandonner ces modifications.",
+      "sourceRecovery": "L’original enregistré reste inchangé et le brouillon complet reste sur cette page. Après la copie, collez-le dans un endroit sûr et vérifiez qu’il est complet avant de le raccourcir ou d’abandonner les modifications.",
       "sourceCopy": "Copier tout le texte"
     },
     "nameLabel": "Comment l'appeler ?",

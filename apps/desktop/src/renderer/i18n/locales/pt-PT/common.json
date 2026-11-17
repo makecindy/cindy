@@ -10967,7 +10967,7 @@
       "sourceLength": "{{length}} / {{limit}} unidades UTF-16 (sem espaços no início e no fim).",
       "sourceExcess": "O limite foi excedido em {{excess}} unidades. Encurta o texto antes de guardar.",
       "sourceTooLong": "Este texto é demasiado longo para guardar. Edita-o para continuar.",
-      "sourceRecovery": "O original guardado não foi alterado. O rascunho completo permanece nesta página. Copia-o para um local seguro antes de o encurtares ou de descartares estas alterações.",
+      "sourceRecovery": "O original guardado não muda e o rascunho completo permanece nesta página. Após copiar, cole num local seguro e confirme que o texto está completo antes de o encurtar ou descartar as alterações.",
       "sourceCopy": "Copiar texto completo"
     },
     "nameLabel": "Como se deve chamar?",

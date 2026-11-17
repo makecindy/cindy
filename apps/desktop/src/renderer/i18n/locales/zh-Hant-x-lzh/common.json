@@ -10838,7 +10838,7 @@
       "sourceLength": "{{length}} / {{limit}} 個 UTF-16 單元（首尾空白不計）。",
       "sourceExcess": "逾限 {{excess}} 個單元，刪簡後方可存。",
       "sourceTooLong": "此文過長，修之方可存。",
-      "sourceRecovery": "已儲存的原文不變，完整草稿仍保留在此頁。請先複製到安全的地方備份，再縮短內容或放棄本次變更。",
+      "sourceRecovery": "已存原文不變，完整草稿仍留此頁。複製後，請先貼至安全處，核對全文無缺，再刪減或放棄本次修改。",
       "sourceCopy": "錄全文"
     },
     "nameLabel": "何以稱之",

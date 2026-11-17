@@ -10883,7 +10883,7 @@
       "sourceLength": "{{length}} / {{limit}} UTF-16 units (surrounding whitespace excluded).",
       "sourceExcess": "{{excess}} units over the limit. Shorten the text before saving.",
       "sourceTooLong": "This text is too long to save. Edit it to continue.",
-      "sourceRecovery": "Your saved original is unchanged. The full draft stays on this page. Copy it somewhere safe before shortening it or discarding these changes.",
+      "sourceRecovery": "The saved original is unchanged and the full draft remains on this page. After copying, paste it somewhere safe and check that the full text is there before shortening it or discarding these changes.",
       "sourceCopy": "Copy full text"
     },
     "nameLabel": "What Should We Call Them?",
