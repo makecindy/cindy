@@ -2694,6 +2694,16 @@ const CINDY_DIRECT_BOT_TOOLS = new Set([
   'get_task_digest',
 ]);
 
+function mcpServerDisplayName(serverName: string, configuredName?: string, protocolName?: string): string {
+  const name = configuredName?.trim() || protocolName?.trim();
+  if (name) return name;
+  // Custom MCP IDs are UUIDs. Keep readable legacy/built-in server names intact,
+  // and use the opaque ID only for routing, disclosure and approval identity.
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(serverName)
+    ? '未命名 MCP (' + serverName.slice(0, 8) + ')'
+    : serverName;
+}
+
 interface ConnectedMcpTool {
   serverName: string;
   displayName: string;
@@ -3372,7 +3382,7 @@ class CindyMcpGateway {
   }
 
   add(serverName: string, client: McpHttpClient, tools: any[], displayName?: string): void {
-    const resolvedDisplayName = displayName?.trim() || client.serverInfoName?.trim() || serverName;
+    const resolvedDisplayName = mcpServerDisplayName(serverName, displayName, client.serverInfoName);
     this.serverDisplayNames.set(serverName, resolvedDisplayName);
     for (const [key, tool] of this.tools) {
       if (tool.serverName === serverName) this.tools.delete(key);
@@ -4352,7 +4362,7 @@ async function connectServer(server: McpServerRef, token: string): Promise<{
   return {
     client,
     tools,
-    displayName: server.displayName?.trim() || client.serverInfoName || server.name,
+    displayName: mcpServerDisplayName(server.name, server.displayName, client.serverInfoName),
   };
 }
 

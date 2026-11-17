@@ -130,3 +130,14 @@ describe('async question choices', () => {
     await vi.waitFor(() => expect(f.frames.at(-1)).toMatchObject({ closed: true, card: { buttons: [] } }));
   });
 });
+
+describe('question card layout', () => {
+  // 飞书: 选项多、文案长时同一行挤多个按钮会压缩文字; 问答卡一行一个满宽按钮。
+  it('lays choices out as a list', async () => {
+    const f = fixture([{ question: 'Pick a long option', options: [
+      { label: 'A fairly long first option label' }, { label: 'Another fairly long option label' },
+    ] }]);
+    await f.card.ready;
+    expect(f.frames[0].card.buttonLayout).toBe('list');
+  });
+});

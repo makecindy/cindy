@@ -431,6 +431,8 @@ interface ComputerDriverUpdateProgress {
   phase: 'downloading' | 'installing' | 'done';
   downloadedBytes: number | null;
   totalBytes: number | null;
+  /** Standard progress (speed, time left) for the shared DownloadMeter. */
+  download?: import('../shared/downloadProgress').DownloadProgress;
 }
 
 /* ── CCD Progress ── */
@@ -452,6 +454,8 @@ interface BinaryDownloadProgressPayload {
   reset?: boolean;
   /** 失败/调试文案使用，标识当前推进度的 vendor。 */
   vendor?: 'claude' | 'codex' | 'pi';
+  /** Standard display progress (phase, retry reason, speed, time left); `progress` stays the bar. */
+  download?: import('../shared/downloadProgress').DownloadProgress;
 }
 
 /* ── App Update Progress ── */
@@ -465,6 +469,8 @@ interface AppUpdateProgressPayload {
   failed?: boolean;
   /** DownloadError code (e.g. 'NETWORK', 'CHECKSUM', 'HTTP_4XX'). */
   error?: string;
+  /** Standard display progress (phase, retry reason, speed, time left). */
+  download?: import('../shared/downloadProgress').DownloadProgress;
 }
 
 /* ── Auth types ── */
@@ -1746,6 +1752,8 @@ interface ElectronAPI {
     clearUsage: (subjectId: string | null) => Promise<void>;
     readme: (id: string, locale?: string) => Promise<import('@cindy/plugin-protocol').GhostReadmeContent | null>;
     libraryOverview: (id: string) => Promise<import('../shared/ghost').GhostLibraryOverview>;
+    reusableAccounts: (id: string) => Promise<import('../shared/pluginAccountReuse').GhostAccountReuseGroup[]>;
+    reuseAccount: (id: string, request: import('../shared/pluginAccountReuse').GhostAccountReuseAction) => Promise<import('../shared/pluginAccountReuse').GhostAccountReuseResult>;
     handoffList: (id: string) => Promise<import('../shared/ghost').GhostHandoffFile[]>;
     handoffFolder: (id: string) => Promise<string | null>;
     handoffDelete: (id: string, ref: string) => Promise<{ existed: boolean }>;
@@ -4042,6 +4050,8 @@ interface ElectronAPI {
           | 'done'
           | 'failed';
         name: string;
+        /** Standard progress while downloading (shared/downloadProgress.ts). */
+        download?: import('../shared/downloadProgress').DownloadProgress;
         version?: string;
         absolutePath?: string;
         errorCode?: string;
@@ -4653,6 +4663,7 @@ interface ElectronAPI {
   worktreeSuggestName: (req: {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').SuggestNameResp>;
+  worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest) => Promise<import('../shared/worktreeCheckout').CheckoutReply>;
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncStatus>;
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncReply>;
   worktreeListBranches: (req: {

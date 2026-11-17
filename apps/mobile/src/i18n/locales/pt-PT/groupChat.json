@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · por {{person}}"
+  },
   "progress": {
     "stop": "Parar",
     "stopMine": "Parar os meus",
@@ -301,6 +304,8 @@
       "loading": "A carregar definições…",
       "unavailable": "Não foi possível carregar as definições do grupo. Tente novamente."
     },
+    "allowMemberInvites": "Permitir que todos convidem amigos",
+    "allowMemberInvitesHint": "Quando ativado, todos os membros do grupo podem convidar amigos. Só o proprietário e os administradores podem alterar esta opção.",
     "allowMentionAllBots": "Permitir @todos os amigos",
     "allowMentionAllBotsHint": "Só o proprietário do grupo pode alterar. Todos os amigos podem responder; cuidado em grupos grandes. Não afeta a IA que responde em seu nome.",
     "notifications": {
@@ -586,6 +591,11 @@
     "transferHint": "Essa pessoa passará a ser a proprietária; quanto a si, passará a administrador.",
     "removeTitle": "Remover {{name}} deste grupo?",
     "removeHint": "Perderá o acesso às mensagens. Os seus amigos também sairão.",
+    "removeOwn": "Remover do grupo",
+    "removeOwnScope": "Isto afeta apenas este grupo. O seu parceiro permanece na sua conta.",
+    "removeOwnHint": "{{name}} deixará de receber mensagens de «{{group}}». O histórico é mantido; os outros grupos e conversas privadas não são afetados.",
+    "removeOwnActiveHint": "Os pedidos ativos neste grupo serão interrompidos. As tarefas iniciadas de forma independente continuarão em execução.",
+    "stopAndRemove": "Parar e remover",
     "confirm": "Confirmar",
     "inviteTitle": "Convidar para o grupo",
     "reusableLink": "Sem expiração · Reutilizável por várias pessoas",

@@ -11,7 +11,10 @@ export default {
       about: 'Main-task capsule, selected-branch details, remote group and successful fetch',
     },
     worker: { about: 'Compact Worker branch-only capsule', viewport: { width: 360, height: 400 } },
-    unchecked: { about: 'Unchecked main-task worktree excludes remote sources' },
+    unchecked: {
+      about: 'Unchecked checkout offers remote selection without a separate sync action',
+    },
+    ahead: { about: 'Checked worktree source retains unpushed commits after refresh' },
     conflict: { about: 'Disabled sync remains focusable and explains overlapping changes' },
     diverged: { about: 'Diverged branches keep local source and explain why sync is unavailable' },
     'old-host': { about: 'Old controlled host has neither refresh button nor remote group' },
@@ -55,9 +58,20 @@ export default {
       name: await ui.t('newChat.branchSync.remoteGroup'),
       exact: true,
     });
-    assert.equal(await remote.count(), ['unchecked', 'old-host'].includes(ui.case) ? 0 : 1);
+    assert.equal(await remote.count(), ui.case === 'old-host' ? 0 : 1);
     await ui.capture('branches');
     if (ui.case === 'unchecked') {
+      const action = page.getByRole('button', {
+        name: await ui.t('newChat.branchSync.action', {
+          remote: 'origin',
+          remoteBranch: 'main',
+        }),
+        exact: false,
+      });
+      await action.waitFor();
+      assert.equal(await action.isDisabled(), false);
+    }
+    if (ui.case === 'ahead') {
       await page.keyboard.press('Escape');
       await page
         .getByRole('button', {

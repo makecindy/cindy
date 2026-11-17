@@ -13,7 +13,7 @@ import { pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from '../pluginTas
 import { createSessionExecutionResolver } from '../sessionExecutionSelection';
 import { createGhostProductionCallbacks } from '../../cindy-brain/__tests__/ghostProductionCallbacksFixture.js';
 import { clampPluginTaskPermissionMode } from '../../cindy-brain/pluginTaskPrefsStore.js';
-import { resolveRemotePluginTaskRoute } from '../pluginTaskModelRoute.js';
+import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from '../pluginTaskModelRoute.js';
 import { readDeviceProviderViews } from '../../remote-agent/controller/deviceCatalog.js';
 import { setSessionRuntimeHarness } from '../sessionRuntimeHarnessSelection.js';
 import { resolveSessionRuntimeAxes } from '../sessionRuntimeControl.js';
@@ -65,7 +65,8 @@ it.each(['other-computer', 'share:provider'])('forwards %s from the production t
   }));
 });
 function compile(text: string, deps: Record<string, unknown>) {
-  deps = { readProviderGroupBinding: () => null, providerGroupService: null, ...deps };
+  // The production route resolver reads the saved run location through this pure helper.
+  deps = { readProviderGroupBinding: () => null, providerGroupService: null, savedPluginTaskRemoteRoute, ...deps };
   return new Function(...Object.keys(deps), ts.transpileModule(text, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText)(...Object.values(deps));

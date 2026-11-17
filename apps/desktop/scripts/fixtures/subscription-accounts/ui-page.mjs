@@ -72,6 +72,11 @@ export default {
       return;
     }
     const codex = ui.case.startsWith('codex') || ui.case === 'narrow-weight';
+    assert.equal(await page.getByTestId('subscription-account').first().getByRole('progressbar').count() > 0, true);
+    if (!codex) {
+      await page.getByText('Max 20×', { exact: true }).waitFor();
+      await page.getByText('Max 5×', { exact: true }).waitFor();
+    }
     if (codex) {
       const rows = page.getByTestId('subscription-account');
       for (let index = 0; index < 3; index++) {
@@ -106,6 +111,7 @@ export default {
     }
     await page.getByRole('button', { name: await ui.t('providerGroup.member.moreAria', { name: 'alex@example.com' }) }).click();
     await page.getByRole('menuitem', { name: await ui.t('subscriptionAccounts.openDirectory') }).waitFor();
+    await page.getByRole('menuitem', { name: await ui.t('subscriptionAccounts.remove'), exact: true }).waitFor();
     await ui.capture('menu');
     await page.keyboard.press('Escape');
     await page.getByRole('switch').first().click();

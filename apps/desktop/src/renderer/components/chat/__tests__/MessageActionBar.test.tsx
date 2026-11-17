@@ -52,6 +52,7 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 import { MessageActionBar } from '../MessageActionBar';
+import * as usageTooltip from '@/lib/turnUsageTooltip';
 import { PluginUiProvider, usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { ChatMessageActions } from '@/features/bots/ChatServerControls';
 import type { GhostMcpApps } from '@cindy/plugin-protocol';
@@ -620,6 +621,28 @@ describe('MessageActionBar', () => {
       totalTokens: 2_107_700,
       cacheHitRate: 0.95,
     };
+
+    // Unit performance regression: hidden usage variants previously formatted full
+    // tooltip data on every render. Existing visibility checks missed that work.
+    // Switching back must still render current usage, so no cross-render cache.
+    it.each([
+      { simplifiedBotConversation: true },
+      { companionFooter: true },
+      { compact: true },
+      { align: 'right' as const },
+    ])('skips hidden usage work and restores current usage when mode changes: %j', (mode) => {
+      const build = vi.spyOn(usageTooltip, 'buildTurnUsageTooltipLines');
+      try {
+        const props = { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, copyText: 'body',
+          align: 'left' as const, hovered: true, turnUsageDetails: details };
+        const { rerender } = render(<MessageActionBar {...props} {...mode} />);
+        expect(screen.queryByText('chat.messageActionBar.turnTokens')).toBeNull();
+        expect(build).not.toHaveBeenCalled();
+        rerender(<MessageActionBar {...props} />);
+        expect(screen.getByText('chat.messageActionBar.turnTokens')).toBeTruthy();
+        expect(build).toHaveBeenCalledWith(expect.objectContaining({ details }));
+      } finally { build.mockRestore(); }
+    });
 
     it('无金额 + 有 token 明细 → 显示 token,tooltip 说明取不到报价', () => {
       render(
