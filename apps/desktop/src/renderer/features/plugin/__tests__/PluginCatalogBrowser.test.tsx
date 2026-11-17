@@ -107,7 +107,9 @@ it('keeps loaded cards and offset visible while refreshing installation or foreg
   const { cache, view } = fixture(load);
   const mounted = render(view());
   await screen.findByText('Tool 0');
-  act(() => intersections.forEach(callback => callback()));
+  // The first card can render before the pagination observer effect mounts.
+  await waitFor(() => expect(intersections.size).toBe(1));
+  await act(async () => intersections.forEach(callback => callback()));
   await waitFor(() => expect(cache.current.last).toBe(1));
   cache.current.grid.offset = 640;
   const pages = cache.current.pages;
