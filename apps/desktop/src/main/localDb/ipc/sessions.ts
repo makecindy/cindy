@@ -16,6 +16,7 @@ import { captureSessionCreationCancellation } from '../sessionRuntimeCleanup.js'
 import { pagePermissionSessionChanged } from '../../mcp-apps/pagePermissions.js';
 import { removeSessionModelInterface } from '../../maker-host/session-model-interface.js';
 import { isEndedWriteSuppressed } from '../sessionActiveTurn.js';
+import { writeSessionListActivity } from '../sessionActivityWrite.js';
 import { ensureOpenedProjectGit, openSession } from '../sessionOpening.js';
 import {
   claimOwnedProvisionalSession,
@@ -833,20 +834,7 @@ export async function touchSessionActivityInDb(
   if (isEndedWriteSuppressed()) return;
   const ownerScope = captureOwnerScope();
   try {
-    const db = getDbClient().drizzle;
-    const updated = await db.update(sessions)
-      .set({
-        lastActivityAt: sql`MAX(COALESCE(${sessions.lastActivityAt}, 0), ${atMs})`,
-        updatedAt: sql`MAX(COALESCE(${sessions.updatedAt}, 0), ${atMs})`,
-      })
-      .where(and(
-        eq(sessions.id, id),
-        sql`COALESCE(${sessions.lastActivityAt}, 0) < ${atMs}`,
-        skipActiveGoal
-          ? sql`NOT EXISTS (SELECT 1 FROM session_goals WHERE session_id = ${id} AND status = 'active')`
-          : undefined,
-      ))
-      .returning({ lastActivityAt: sessions.lastActivityAt, updatedAt: sessions.updatedAt });
+    const updated = await writeSessionListActivity(getDbClient(), id, atMs, skipActiveGoal);
     if (updated[0]?.lastActivityAt != null && isOwnerScopeCurrent(ownerScope)) {
       broadcastSessionPatched(id, {
         lastActivityAt: new Date(updated[0].lastActivityAt).toISOString(),
