@@ -1,3 +1,4 @@
+import { createOneShotUsageRecorder } from '../../../desktop/src/main/usage/auxiliaryUsage.js';
 import { getDesktopClaudeReadOnlyAllowedTools, getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.js';
 import { createHostClaudeSubagentModelAccess } from './subagent-model-access.js';
@@ -804,6 +805,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     Object.entries(agents).map(([kind, instance]) => [kind, instance.capabilities]),
   );
   const maker = new Maker({
+    createOneShotUsageRecorder,
     agents,
     storage: options.storage,
     lifecycleHooks: {

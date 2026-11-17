@@ -9837,6 +9837,40 @@
       },
       "providerTooltip": "Der aktuell für die Sitzung ausgewählte Anbieter; leer, wenn keiner angeheftet ist.",
       "tokensTooltip": "Zählt nur die Tokens, die diese Sitzung in {{range}} verwendet hat."
+    },
+    "auxiliary": {
+      "title": "Hilfsmodellnutzung",
+      "label": "Hilfsanfrage",
+      "purpose": "Zweck",
+      "requests": "Erfasste Anfragen",
+      "description": "In den Gesamttokens enthalten. Nur vom Anbieter gemeldete Nutzung wird erfasst; fehlende Nutzung und frühere Anfragen werden nicht geschätzt.",
+      "sources": {
+        "title": "Titelgenerierung",
+        "task-summary": "Aufgabenzusammenfassungen",
+        "prompt-prediction": "Eingabevorschläge",
+        "working-status": "Arbeitsstatus",
+        "help": "Hilfe",
+        "bot-creation": "Begleiter erstellen",
+        "bot-opening": "Begrüßungen der Begleiter",
+        "group-planning": "Gruppenplanung",
+        "ambient-reply": "Antwortentscheidungen",
+        "auto-review": "Automatische Prüfung",
+        "tool-loop-review": "Prüfung von Werkzeugschleifen",
+        "memory-review": "Speicherprüfung",
+        "git-summary": "Änderungszusammenfassungen",
+        "hook-generation": "Automatisierungsskripte",
+        "automation-verification": "Importprüfung",
+        "plugin-text": "Plugin-Text",
+        "voice-dialogue": "Sprachgespräche",
+        "voice-exit": "Entscheidungen zum Gesprächsende",
+        "voice-refinement": "Überarbeitung von Sprachtext",
+        "dictionary-learning": "Wörterbuchlernen",
+        "embedding-query": "Vektorsuche",
+        "embedding-index": "Vektorindexierung",
+        "web-search": "Websuche",
+        "provider-probe": "Verbindungstests",
+        "auxiliary": "Weitere Hilfsanfragen"
+      }
     }
   },
   "usageDashboard": {

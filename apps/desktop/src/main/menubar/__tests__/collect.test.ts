@@ -153,6 +153,15 @@ describe('collectMenubarInputs', () => {
     };
   }
 
+  it('includes auxiliary task tokens without charging them at the conversation model rate', async () => {
+    const input = usage([task('mixed')]);
+    input.taskDaily![0].tokens = 10100;
+    input.taskDaily![0].auxiliaryTokens = 10000;
+    const collected = await collectMenubarInputs(deps({ readUsage: async () => input }));
+    expect(collected.tasks[0].tokensToday).toBe(10100);
+    expect(collected.tasks[0].valueToday).toBeCloseTo(0.1);
+  });
+
   it('keeps the other sources when one reader fails', async () => {
     const errors: string[] = [];
     const collected = await collectMenubarInputs(deps({ onError: (scope) => errors.push(scope) }));
@@ -681,4 +690,16 @@ it('labels usage with catalog display names and folds route variants together', 
   const series = usageScope(payload, days, [], names).modelSeries!;
   expect(series.models.map((m) => m.name)).toEqual(['Opus 5.5', 'GPT-6 Astra', 'mystery-1']);
   expect(series.tokens[0]).toEqual([200, 100, 100, 0]);
+});
+
+it('includes auxiliary tokens in widget totals without inventing a Claude harness', () => {
+  const money = { amount: 0, currency: 'USD', approximate: false, kind: 'actual-cost' } as const;
+  const payload = { modelDaily: [{ day: '2026-11-17', agentKind: 'auxiliary', model: 'helper',
+    tokens: 1100, money, apiMoney: money, subscriptionEstimateMoney: money }] } as UsageHistoryPayload;
+  const scope = usageScope(payload, ['2026-11-17'], []);
+  expect(scope.daily[0].tokens).toEqual([0, 0, 0, 1100]);
+  expect(scope.daily[0].tokens.reduce((a, b) => a + b, 0)).toBe(1100);
+  expect(scope.models['30']).toEqual([]);
+  expect(scope.modelSeries?.models).toEqual([{ name: 'helper', harness: 'auxiliary' }]);
+  expect(scope.modelSeries?.tokens).toEqual([[1100, 0]]);
 });

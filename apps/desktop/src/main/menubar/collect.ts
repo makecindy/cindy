@@ -663,10 +663,14 @@ export function usageScope(
   for (const row of payload.modelDaily) {
     const index = indexOfDay.get(row.day);
     if (index === undefined) continue;
+    const daily = scope.daily[index];
+    if (row.agentKind === 'auxiliary') {
+      daily.tokens[3] = (daily.tokens[3] ?? 0) + finite(row.tokens);
+      continue;
+    }
     const harness = harnessOf(row.agentKind);
     const slot = HARNESSES.indexOf(harness);
     const money = finite(row.money?.amount);
-    const daily = scope.daily[index];
     daily.money[slot] += money;
     daily.tokens[slot] += finite(row.tokens);
     daily.paid += finite(row.apiMoney?.amount);
@@ -692,14 +696,14 @@ function modelSeries(
   dayCount: number,
   label: (model: string) => string,
 ): MenubarModelSeries {
-  type Entry = { harness: MenubarHarness; money: number[]; tokens: number[]; recent: number };
+  type Entry = { harness: MenubarHarness | 'auxiliary'; money: number[]; tokens: number[]; recent: number };
   const byModel = new Map<string, Entry>();
   for (const row of payload.modelDaily) {
     const index = indexOfDay.get(row.day);
     if (index === undefined) continue;
     const name = label(row.model);
     const entry = byModel.get(name)
-      ?? { harness: harnessOf(row.agentKind), money: new Array<number>(dayCount).fill(0), tokens: new Array<number>(dayCount).fill(0), recent: 0 };
+      ?? { harness: row.agentKind === 'auxiliary' ? 'auxiliary' : harnessOf(row.agentKind), money: new Array<number>(dayCount).fill(0), tokens: new Array<number>(dayCount).fill(0), recent: 0 };
     const tokens = finite(row.tokens);
     entry.money[index] += finite(row.money?.amount);
     entry.tokens[index] += tokens;
@@ -750,16 +754,20 @@ async function collectTasks(
   safe: Safe,
 ): Promise<MenubarTaskInput[]> {
   const tokensBySession = new Map<string, number>();
+  const conversationTokensBySession = new Map<string, number>();
   for (const row of usage?.taskDaily ?? []) {
     if (row.day !== today) continue;
     const [device, ...rest] = row.taskKey.split(':');
     if (device !== 'local') continue;
     const sessionId = rest.join(':');
     tokensBySession.set(sessionId, (tokensBySession.get(sessionId) ?? 0) + finite(row.tokens));
+    conversationTokensBySession.set(sessionId, (conversationTokensBySession.get(sessionId) ?? 0)
+      + Math.max(0, finite(row.tokens) - finite(row.auxiliaryTokens)));
   }
   const meta = new Map((usage?.tasks ?? []).filter((task) => task.deviceId === 'local').map((task) => [task.sessionId, task]));
   const rates = new Map<string, { money: number; tokens: number; harness: MenubarHarness }>();
   for (const row of usage?.modelDaily ?? []) {
+    if (row.agentKind === 'auxiliary') continue;
     if (row.day !== today) continue;
     const rate = rates.get(row.model) ?? { money: 0, tokens: 0, harness: harnessOf(row.agentKind) };
     rate.money += finite(row.money?.amount);
@@ -800,7 +808,7 @@ async function collectTasks(
           harness: harnessOf(row?.agentKind ?? rate?.harness),
           model: model ? formatModelShort(model) : '',
           tokensToday: tokens,
-          valueToday: rate && rate.tokens > 0 ? (tokens * rate.money) / rate.tokens : 0,
+          valueToday: rate && rate.tokens > 0 ? ((conversationTokensBySession.get(sessionId) ?? 0) * rate.money) / rate.tokens : 0,
           contextPercent: info && info.contextWindow > 0 ? clampPercent((info.contextTokens / info.contextWindow) * 100) : null,
           running,
           startedAtMs: running ? (activity?.startedAtMs ?? null) : null,

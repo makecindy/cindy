@@ -1,3 +1,4 @@
+import { createAuxiliaryUsageRecorder } from '../../../desktop/src/main/usage/auxiliaryUsage.js';
 import type { AutoReviewDelegate, Maker } from '@cindy/maker-core';
 import { createOneShotCandidates, DEDICATED_AUTO_REVIEW_CANDIDATES } from '../../../desktop/src/main/utility-model/oneShotCandidatesCore.js';
 import { AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS, createAutoReviewModelRouter } from '../../../desktop/src/main/maker-host/autoReviewModelRouterCore.js';
@@ -47,6 +48,7 @@ export function createHostAutoReview(options: {
   };
   const { chain } = createHostAuxiliaryModelChain({ userDataDir: options.userDataDir });
   const oneShot = createOneShotCandidates({
+    createUsageRecorder: createAuxiliaryUsageRecorder,
     readClaudeApiKey: () => options.gateway?.credential || null,
     getChatgptBridgeAuth: (...args) => bridge().getChatgptBridgeAuth(...args),
     getChatgptBridgeAuthForDispatch: (...args) => bridge().getChatgptBridgeAuthForDispatch(...args),
@@ -73,10 +75,10 @@ export function createHostAutoReview(options: {
     logger: options.logger,
     managesRetries: true,
     resolveRequestTimeoutMs: () => AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
-    requestText: (_request, prompt, { signal }) => requestAutoReviewText(prompt, signal),
+    requestText: (request, prompt, { signal }) => requestAutoReviewText(prompt, signal, request.sessionId),
   });
   const toolLoopReviewer = createToolLoopReviewer({
-    requestText: (prompt, opts) => oneShot.requestUtilityText(options.getMaker(), prompt, opts),
+    requestText: (prompt, opts) => oneShot.requestUtilityText(options.getMaker(), prompt, { ...opts, source: 'tool-loop-review' }),
   });
   let contextResolver: AutoReviewDelegate['prepareRequest'];
   // As the desktop before its resolver is set: no review without the authorization context.

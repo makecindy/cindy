@@ -9794,6 +9794,40 @@
       },
       "providerTooltip": "取该任务当前选定的供应商；未指定时留空。",
       "tokensTooltip": "只统计该任务在{{range}}内产生的 token。"
+    },
+    "auxiliary": {
+      "title": "辅助模型用量",
+      "label": "辅助请求",
+      "purpose": "用途",
+      "requests": "已记录请求",
+      "description": "已计入总 Token。仅记录上游返回的用量；未返回用量的请求和历史遗漏不估填。",
+      "sources": {
+        "title": "生成标题",
+        "task-summary": "任务摘要",
+        "prompt-prediction": "输入建议",
+        "working-status": "工作状态",
+        "help": "帮助问答",
+        "bot-creation": "创建伙伴",
+        "bot-opening": "伙伴开场白",
+        "group-planning": "群内规划",
+        "ambient-reply": "回复判断",
+        "auto-review": "自动审核",
+        "tool-loop-review": "工具循环复核",
+        "memory-review": "记忆复核",
+        "git-summary": "变更摘要",
+        "hook-generation": "自动化脚本",
+        "automation-verification": "导入校验",
+        "plugin-text": "插件文本请求",
+        "voice-dialogue": "语音对话",
+        "voice-exit": "语音退出判断",
+        "voice-refinement": "语音润色",
+        "dictionary-learning": "词典学习",
+        "embedding-query": "向量检索",
+        "embedding-index": "向量索引",
+        "web-search": "网页搜索",
+        "provider-probe": "连接测试",
+        "auxiliary": "其他辅助请求"
+      }
     }
   },
   "usageDashboard": {

@@ -9910,6 +9910,40 @@
       },
       "providerTooltip": "O provedor selecionado atualmente para a sessão; em branco quando nenhum estiver fixado.",
       "tokensTooltip": "Conta apenas os tokens que esta sessão usou em {{range}}."
+    },
+    "auxiliary": {
+      "title": "Uso auxiliar",
+      "label": "Auxiliar",
+      "purpose": "Finalidade",
+      "requests": "Solicitações registradas",
+      "description": "Incluído no total de tokens. Apenas o uso retornado pelo provedor é registrado; dados ausentes e solicitações anteriores não são estimados.",
+      "sources": {
+        "title": "Geração de títulos",
+        "task-summary": "Resumos de tarefas",
+        "prompt-prediction": "Sugestões de entrada",
+        "working-status": "Status do trabalho",
+        "help": "Ajuda",
+        "bot-creation": "Criação de companheiros",
+        "bot-opening": "Saudações de companheiros",
+        "group-planning": "Planejamento do grupo",
+        "ambient-reply": "Decisões de resposta",
+        "auto-review": "Revisão automática",
+        "tool-loop-review": "Revisão de ciclos de ferramentas",
+        "memory-review": "Revisão da memória",
+        "git-summary": "Resumos de alterações",
+        "hook-generation": "Scripts de automação",
+        "automation-verification": "Verificação de importação",
+        "plugin-text": "Texto de plugins",
+        "voice-dialogue": "Conversas de voz",
+        "voice-exit": "Decisões de fim de chamada",
+        "voice-refinement": "Revisão do texto de voz",
+        "dictionary-learning": "Aprendizado do dicionário",
+        "embedding-query": "Busca vetorial",
+        "embedding-index": "Indexação vetorial",
+        "web-search": "Busca na Web",
+        "provider-probe": "Testes de conexão",
+        "auxiliary": "Outras solicitações auxiliares"
+      }
     }
   },
   "usageDashboard": {

@@ -9794,6 +9794,40 @@
       },
       "providerTooltip": "세션에 현재 선택된 제공자입니다. 지정하지 않은 경우 비워 둡니다.",
       "tokensTooltip": "이 세션이 {{range}} 동안 사용한 토큰만 집계합니다."
+    },
+    "auxiliary": {
+      "title": "보조 모델 사용량",
+      "label": "보조 요청",
+      "purpose": "용도",
+      "requests": "기록된 요청",
+      "description": "총 토큰에 포함됩니다. 제공자가 반환한 사용량만 기록하며, 보고되지 않은 사용량과 과거 요청은 추정하지 않습니다.",
+      "sources": {
+        "title": "제목 생성",
+        "task-summary": "작업 요약",
+        "prompt-prediction": "입력 제안",
+        "working-status": "작업 상태",
+        "help": "도움말",
+        "bot-creation": "동료 만들기",
+        "bot-opening": "동료 인사말",
+        "group-planning": "그룹 계획",
+        "ambient-reply": "답장 판단",
+        "auto-review": "자동 검토",
+        "tool-loop-review": "도구 반복 검토",
+        "memory-review": "메모리 검토",
+        "git-summary": "변경 요약",
+        "hook-generation": "자동화 스크립트",
+        "automation-verification": "가져오기 검증",
+        "plugin-text": "플러그인 텍스트",
+        "voice-dialogue": "음성 대화",
+        "voice-exit": "음성 종료 판단",
+        "voice-refinement": "음성 텍스트 다듬기",
+        "dictionary-learning": "사전 학습",
+        "embedding-query": "벡터 검색",
+        "embedding-index": "벡터 색인",
+        "web-search": "웹 검색",
+        "provider-probe": "연결 테스트",
+        "auxiliary": "기타 보조 요청"
+      }
     }
   },
   "usageDashboard": {
