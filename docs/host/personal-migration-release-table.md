@@ -478,6 +478,7 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 
 | 提交 | 改了什么 | 影响谁 | 依据 |
 |---|---|---|---|
+| fix(desktop): settle a paused automatic retry without a banner | 共用续跑回调在选择备用路线之前、之后都检查暂停，仍有效的尝试遇到暂停会把中断写进历史 | 只有后台服务在生产中设置执行暂停 | 主干 `8bcdaae10b`，见下节 |
 | fix(desktop): land a pending model switch to a model without effort levels | 待切到一个没有推理档位的模型时，切换照常落定（原来卡在档位空值上） | 普通桌面用户 | 桌面缺陷修复，审核方已审；累计行对照里单独跳过这个提交 |
 | feat(desktop): add an owner-commit gate to the Skill projection boundary, allowed by default | 边界模块新增 `configureProjectionBoundaryOwnerCommit`；判定为否时 owner 提交在取锁、写任何文件之前拒绝 | 不影响桌面：默认允许、桌面不注入、守护钉住桌面入口不做注入 | 第 25 行 25b，审核方定 (a)：Host 常驻进程注入拒绝 |
 | （待做）第 34 行 O3 | 客户端模式下的引擎版本选择 | 只影响客户端模式 | 待交付 |
@@ -509,6 +510,14 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | refactor(desktop): move the message PR reference hooks into a shared module | 原样搬移，另有新建文件与 4 处调用替换，所以列在这里：新文件 `localDb/messagePrRefs.ts`（`pendingPrRefWrites`、`trackMessagePrRefs`、`reconcileCorrectedMessagePrRefs`、`reconcileUpdatedMessagePrRefs`，logger 用同名 scope `localDb/messages`）；`localDb/ipc/messages.ts` 的替换点：import、`pendingPrRefWrites` 常量、`reconcileAssistantDerivedState` 里的重算段、`updateMessageContent` 无原行分支、`createMessage` 末尾的记录段，逐条见提交说明 | 不影响桌面：调用顺序、是否 await、条件判断都不变，两处 await 只多一层 async 函数；日志行逐字不变 | 甲 24：Host 调同一份代码 |
 | refactor(desktop): move the task list activity write into a shared module | 原样搬移，另有新建文件与 1 处调用替换，所以列在这里：新文件 `localDb/sessionActivityWrite.ts`（`writeSessionListActivity`，`touchSessionActivityInDb` 里那条 update…returning 原样搬过去）；`localDb/ipc/sessions.ts` 的替换点：import 一行，原来的 `const db = getDbClient().drizzle;` 与那条语句换成一次调用，逐条见提交说明 | 不影响桌面：结束写入压制、owner 范围、广播、catch 与 warn 都留在原处，`getDbClient()` 在同一处读，调用方不变 | 甲 10：Host 调同一份写入 |
 | refactor(desktop): move the silent-stop settle into a shared module | 原样搬移，另有新建文件与替换点，所以列在这里：新文件 `maker-ipc/silentStopSettle.ts`（`settleSilentStopDoneWithPorts`，`register.ts` 的 `settleSilentStopDone` 函数体 35 行逐字搬过去，端口在参数里按原名解构，函数体不改一行）；`register.ts` 的替换点：`settleSilentStopDone` 改成调用它并传本文件的追踪器、闸门、租约、`finalizeTurnChangeSet` 等与五个 holder（每次调用时读，与原来相同），import 一行；`silentStopAutoResume.ts` 新增常量 `SILENT_STOP_DECISION_DELAY_MS = 1_500`，`sessionEventPreparation.ts` 的决策定时器用它代替字面量 `1_500`，逐条见提交说明 | 不影响桌面：调用方、顺序与读到的 holder 都不变 | 8g B：Host 走同一份结算 |
+
+### 改到主干已有代码的地方（发准备 PR 时搬进正文）
+
+主干 `8bcdaae10b` 在 `interruptedTurnAutoResumeHooks.ts` 的备用路线选择前后新增了暂停检查。后台服务在等待桌面释放数据或写队列时会暂停执行。自动续跑恰在此时到期，回调提前返回，已被续跑接管的中断便没有写进任务历史。
+
+这两个检查点现共用同一段判断。已过期的尝试直接结束。仍是当前尝试而执行暂停时，先释放续跑守卫，再把中断写入历史一次，不弹横幅；暂停期间不会启动备用路线。短暂的队列写入如果碰巧赶上到期，会失去本次自动续跑机会，中断记录保留，写完后不重新排期。
+
+桌面生产代码从未设置执行暂停。集成代码中 `.setExecutionPaused(` 的七处调用都在后台服务的 `apps/host/src/agent/input-queue.mjs`。桌面测试覆盖未暂停时的正常续跑、暂停时的收口、过期尝试不写历史；后台服务从队列和聊天入口覆盖永久闸门与临时写入。
 
 ## 六、M2 可接（状态已在 Host 上具备，只差通道）
 

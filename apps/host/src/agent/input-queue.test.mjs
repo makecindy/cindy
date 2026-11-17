@@ -66,7 +66,7 @@ import { createHostMessageStore, createHostMessageRecovery } from '../message-st
 import { resolveSessionReferencesWithPorts } from '../../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
 import { listErrorTailPendingRows } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
 import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
-import { Maker } from '@cindy/maker-core';
+import { AgentStartupStoppedError, Maker } from '@cindy/maker-core';
 import { createHostSessionMovePorts } from './session-move.ts';
 import { createEventHub } from '../events.mjs';
 import { createChatHandler } from '../chat.mjs';
@@ -5568,6 +5568,67 @@ test('profile hold: a silent stop decided while held settles without a continuat
   assert.equal(r.session.sent.length, 1, 'no continuation while held');
   assert.ok(r.streamed().some(e => e.type === 'input_receipt' && e.status === 'recorded'));
   assert.equal(r.h.queue.projection('s').turnInProgress, false);
+});
+
+// Regression for 8bcdaae10b, unit tier: the permanent profile hold does not exercise
+// the pause spanning a queue write. Edit a queued message while a retry comes due.
+test('a retry due during a queue write records the interruption without a retry or banner', async t => {
+  const write = Promise.withResolvers();
+  let writing = false;
+  const r = await resumeHarness(t, { persistQueueSnapshot: async (_id, snapshot) => {
+    if (snapshot.some(item => item.text === 'edited tail')) {
+      writing = true;
+      await write.promise;
+    }
+  } });
+  try {
+    await r.h.queue.enqueue('r', { clientId: 'tail', text: 'later' });
+    await r.interrupt();
+    assert.ok(r.h.queue.projection('r').autoResumePending);
+    const editing = r.h.queue.updateText('r', 'tail', 'edited tail');
+    await settleUntil(() => writing, 'the edited snapshot reached persistence');
+    t.mock.timers.tick(30_000);
+    await settle();
+    assert.equal(r.errorRows().length, 1);
+    assert.equal(r.h.queue.projection('r').error, null);
+    assert.deepEqual(r.session.sent, ['long job']);
+    write.resolve();
+    await editing;
+    t.mock.timers.tick(30_000);
+    await settle();
+    assert.equal(r.session.sendOptions.some(options => options.turnAttemptToken != null), false);
+    assert.equal(r.errorRows().length, 1);
+  } finally {
+    write.resolve();
+    t.mock.timers.reset();
+    await r.h.queue.dispose();
+  }
+});
+
+// The generic startup-failure test has no proven stopped-subscription receipt.
+// Unit: send through /chat, then observe the original input's terminal receipt.
+test('a stopped subscription-limited startup rejects the chat input without taking over the retry', async t => {
+  const hub = createEventHub();
+  const h = createHarness({ hub });
+  t.after(() => h.queue.dispose());
+  const failure = new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] waiting for reset');
+  let starts = 0;
+  h.maker.createSession = async () => { starts++; throw new AgentStartupStoppedError(failure); };
+  const writes = [];
+  const response = Object.assign(new EventEmitter(), { writableEnded: false, headersSent: false,
+    writeHead() { this.headersSent = true; }, write(chunk) { writes.push(String(chunk)); },
+    end(chunk) { if (chunk) writes.push(String(chunk)); this.writableEnded = true; this.emit('close'); } });
+  const chat = createChatHandler({ events: hub, readSession: async id => ({ id, status: 'active' }),
+    enqueue: (id, input) => h.queue.enqueue(id, input), inputStatus: (id, clientId) => h.queue.inputStatus(id, clientId) });
+  await chat(Readable.from([Buffer.from(JSON.stringify({ sessionId: 'limited', clientId: 'original', prompt: 'run' }))]), response);
+  await waitFor(() => response.writableEnded);
+  const events = writes.filter(chunk => chunk.startsWith('data:')).map(chunk => JSON.parse(chunk.slice(5)));
+  assert.ok(events.some(e => e.type === 'input_receipt' && e.clientId === 'original' && e.status === 'interrupted'));
+  const projection = h.queue.projection('limited');
+  assert.match(projection.error, /SUBSCRIPTION_ACCOUNT_LIMITED/);
+  assert.equal(projection.autoResumePending ?? null, null);
+  assert.equal(starts, 1);
+  assert.equal(h.persisted.some(row => row.role === 'user'), false);
 });
 
 // The Host does not continue after a usage limit yet (coordinator-deps.ts onUsageLimitedTurnError, the
