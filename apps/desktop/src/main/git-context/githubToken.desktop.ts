@@ -15,4 +15,3 @@ export async function readGithubTokenDetailed(): Promise<GhCliTokenReadResult> {
   if (scope !== activeOwnerScopeKey()) return { ok: false, reason: 'gh-not-logged-in' };
   return token ? { ok: true, token } : local;
 }
-
