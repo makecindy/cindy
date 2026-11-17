@@ -9465,7 +9465,7 @@
     "preparingSubtitle": "Loading the methods available for this region",
     "unavailable": "Sign-in is temporarily unavailable",
     "hostUnavailable": {
-      "title": "The Cindy background service didn't start",
+      "title": "Cindy background service didn't start",
       "checkAgain": "Check Again",
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {

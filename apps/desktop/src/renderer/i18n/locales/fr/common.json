@@ -9537,7 +9537,7 @@
     "preparingSubtitle": "Chargement des méthodes disponibles pour cette région",
     "unavailable": "Connexion indisponible pour l'instant",
     "hostUnavailable": {
-      "title": "Le service d’arrière-plan Cindy n’a pas démarré",
+      "title": "Service d’arrière-plan Cindy arrêté",
       "checkAgain": "Vérifier à nouveau",
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {
@@ -9550,7 +9550,7 @@
         },
         "HOST_DATABASE_UNAVAILABLE": {
           "body": "Les données de ce compte ne peuvent pas être ouvertes.",
-          "action": "Si vous avez récemment utilisé une version plus récente de Cindy, mettez d’abord Cindy à jour vers la dernière version sur cet ordinateur, puis redémarrez le service d’arrière-plan Cindy. Sinon, exécutez cindy-host status pour en voir la raison."
+          "action": "Si vous avez récemment utilisé une version plus récente de Cindy, mettez Cindy à jour sur cet ordinateur, puis redémarrez le service d’arrière-plan Cindy. Sinon, exécutez cindy-host status pour voir pourquoi."
         },
         "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
           "body": "Au démarrage, le service d’arrière-plan Cindy n’a pas pu joindre le service de connexion.",

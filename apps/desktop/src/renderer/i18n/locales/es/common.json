@@ -9537,7 +9537,7 @@
     "preparingSubtitle": "Cargando los métodos disponibles para esta región",
     "unavailable": "Inicio de sesión no disponible ahora",
     "hostUnavailable": {
-      "title": "El servicio en segundo plano de Cindy no se ha iniciado",
+      "title": "Servicio en segundo plano de Cindy",
       "checkAgain": "Comprobar de nuevo",
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {

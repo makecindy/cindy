@@ -9465,7 +9465,7 @@
     "preparingSubtitle": "Verfügbare Methoden für diese Region werden geladen",
     "unavailable": "Anmeldung derzeit nicht möglich",
     "hostUnavailable": {
-      "title": "Der Cindy-Hintergrunddienst wurde nicht gestartet",
+      "title": "Cindy-Hintergrunddienst startet nicht",
       "checkAgain": "Erneut prüfen",
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {

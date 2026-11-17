@@ -9422,7 +9422,7 @@
     "preparingSubtitle": "この地域で利用可能な方法を読み込んでいます",
     "unavailable": "現在ログインできません",
     "hostUnavailable": {
-      "title": "Cindy バックグラウンドサービスが起動しませんでした",
+      "title": "Cindy バックグラウンドサービス未起動",
       "checkAgain": "再確認",
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {
