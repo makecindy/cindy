@@ -29,6 +29,9 @@ export function createHostMessageStore(deps: {
     input: Record<string, unknown>,
     options?: MessageWriteOptions & {
       shouldBroadcast?: () => boolean;
+      /** As the desktop's createMessage: generated-image delivery commits its own media reference
+       * after its guarded content update (generatedImageDelivery.ts). */
+      deferMediaRefs?: boolean;
     },
   ) => {
     const owner = deps.getOwner();
@@ -80,11 +83,13 @@ export function createHostMessageStore(deps: {
     if (!pending) pendingPublication.set(owner.client, (pending = new Set()));
     if (created) pending.add(row.id);
     if (deps.getOwner() !== owner) throw new Error("message owner changed");
-    await (deps.commitMediaRefs ?? hostChatAttachments.commitMessageMediaRefs)(
-      { sessionId, role: row.role, content: row.content },
-      owner.client.drizzle,
-    );
-    if (deps.getOwner() !== owner) throw new Error("message owner changed");
+    if (!options?.deferMediaRefs) {
+      await (deps.commitMediaRefs ?? hostChatAttachments.commitMessageMediaRefs)(
+        { sessionId, role: row.role, content: row.content },
+        owner.client.drizzle,
+      );
+      if (deps.getOwner() !== owner) throw new Error("message owner changed");
+    }
     const message = messageToCamel(row);
     const publishing = pending.has(row.id);
     if (publishing && options?.shouldBroadcast?.() !== false) {

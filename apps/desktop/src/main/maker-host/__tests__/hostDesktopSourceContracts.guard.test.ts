@@ -714,7 +714,7 @@ describe('event types the desktop pipeline acts on, classified for the Host', ()
       host: 'turn-executor.mjs finish: error row, Codex plan failure, change record partial, Git abort; context recovery claim',
       gaps: ['A15 Opus plan error reason', 'checkpoint 4 (terminal to the coordinator first, auto-resume)'],
     },
-    image: { gaps: ['A11 Codex generated images'] },
+    image: { host: 'turn-executor.mjs deliverCodexGeneratedImage (agent/generated-images.ts over the shared generatedImageDelivery.ts)' },
     interaction_dismissed: { gaps: ['A12 runtime interaction_dismissed'] },
     plan_mode_changed: { host: 'turn-executor.mjs persistAgentPlanModeChange (shared persistAgentPlanModeChangeWith)' },
     status: {

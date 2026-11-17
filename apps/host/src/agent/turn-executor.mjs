@@ -40,6 +40,7 @@ import { setSessionEffort } from '../../../desktop/src/main/maker-host/session-e
 import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './session-settings.mjs';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { redactEventForRenderer } from '../../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
+import { isQuietScheduledOutput } from '../../../desktop/src/main/scheduler-host/silent-output.ts';
 import { isGatewayProxyTokenRecoveryErrorEventForProvider } from '../../../desktop/src/main/maker-ipc/gatewayProxyTokenRecovery.ts';
 import { contextSnapshotForStatus, isContextCompactionSnapshot } from '../../../desktop/src/main/maker-ipc/sessionContextSnapshot.ts';
 import { recordHostContextSnapshot } from './context-usage.ts';
@@ -372,6 +373,13 @@ export function createTurnExecutor(deps) {
       // As the desktop (sessionEventPreparation.ts): the diff is kept by the change record only; it is
       // not saved as history or sent to clients (it can be several megabytes).
       if (event.type === 'turn_diff') return;
+      // As the desktop (sessionEventPreparation.ts): a Codex generated image is stored and delivered as
+      // its imagegen tool rows (agent/generated-images.ts), which the stream waits for
+      // (Session.holdEventStream); the raw event, with its bytes, is neither history nor sent to clients.
+      if (event.type === 'image' && event.source === 'codex' && deps.deliverCodexGeneratedImage) {
+        if (!isQuietScheduledOutput(event)) session.holdEventStream(deps.deliverCodexGeneratedImage(sessionId, event));
+        return;
+      }
       if (turn.changeRecordStarted && event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) {
         const rawTurn = event.data?.raw;
         // Desktop settles a silent-stop done once its guard declines to resume

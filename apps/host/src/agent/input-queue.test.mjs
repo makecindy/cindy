@@ -82,6 +82,11 @@ import { AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_SOURCE_CONTENT, ASYNC_QUESTION_ANS
 import { lifoCleanup } from '../test-support/cleanup.mjs';
 import { GIT_SETTLEMENT_SEQUENCES } from '../../../desktop/src/main/maker-ipc/__tests__/gitBaselineSettlementSequences.ts';
 import { GitSnapshotCoordinator } from '../../../desktop/src/main/git-snapshot/gitSnapshotCoordinator.ts';
+import { createHash } from 'node:crypto';
+import { createHostGeneratedImages } from './generated-images.ts';
+import { hostBlobStore } from '../media-store.ts';
+import { bindHostUiText } from '../ui-text.ts';
+import { configureUiText } from '../../../desktop/src/main/uiText.ts';
 
 function assertOwnerChangedDisposal(disposal) {
   return assert.rejects(disposal, error =>
@@ -5876,4 +5881,79 @@ test('list preview: after a done the Host publishes the latest visible message a
   await waitFor(() => previews('preview-done').length === 2);
   assert.match(previews('preview-done')[1], /background words/);
   assert.deepEqual(previews('preview-done')[1], await latestVisiblePreview('preview-done'));
+});
+
+// Unit, over a migrated profile database and the Host's media store: a Codex generated image in a turn
+// (甲 11). Rule: as the desktop (sessionEventPreparation.ts, generatedImageDelivery.ts), the image's bytes
+// go into the media store, the task gets its imagegen tool rows with the stored address and a media
+// reference, and clients get those rows and tool events, never the raw image event or its base64; when
+// storing fails, the rows and events say so (the desktop's failure path), still without the bytes.
+// Gap: the Host listener published the raw event, base64 included, and saved nothing.
+// Minimal input: one image event of a running turn, valid or not an image.
+const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+async function generatedImageFixture(t, id) {
+  t = lifoCleanup(t);
+  const db = await recoveryDatabase(t);
+  const published = [];
+  const hub = { publish: event => published.push(event) };
+  const persistMessage = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) });
+  const images = createHostGeneratedImages({ createMessage: persistMessage, publish: event => hub.publish(event) });
+  const h = createHarness({ hub, persistMessage, getOwner: getCurrentDbClientSnapshot,
+    deliverCodexGeneratedImage: images.deliverCodexGeneratedImage,
+    readSession: async sid => ({ id: sid, status: 'active', agentKind: 'codex', model: 'm', workingDir: db.root,
+      providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }) });
+  t.after(() => h.queue.dispose());
+  await db.createTask(id);
+  await enqueue(h, id, { clientId: `${id}-input`, text: 'draw it' });
+  const session = h.maker.getSession(id);
+  const holds = [];
+  session.holdEventStream = followUps => { holds.push(followUps); return true; };
+  const emitImage = data => session.emit({ type: 'image', source: 'codex', sessionTurnGeneration: session.generation,
+    sessionInstanceId: session.instanceId, data: { kind: 'generation', blockId: 'block-1', threadId: 'thread-1',
+      turnId: 'turn-1', status: 'completed', ...data } });
+  const rows = () => db.db.prepare('SELECT client_id, role, content FROM messages WHERE session_id = ? AND role IN (?, ?) ORDER BY created_at')
+    .all(id, 'tool_use', 'tool_result');
+  // The fixture's database is fresh: every media reference in it is this image's.
+  const refs = () => db.db.prepare('SELECT hash, ref_kind, ref_id FROM media_refs').all();
+  return { published, holds, emitImage, rows, refs };
+}
+const resultOf = row => JSON.parse(JSON.parse(row.content));
+
+test('a Codex generated image is stored, saved as its imagegen rows with a media reference, and published by address, never as base64', { timeout: 30_000 }, async t => {
+  const f = await generatedImageFixture(t, 'image-stored');
+  f.emitImage({ data: PNG_1X1 });
+  assert.equal(f.holds.length, 1, 'the stream waits for the delivery');
+  const followUps = await f.holds[0];
+  assert.deepEqual(followUps.map(event => event.type), ['tool_use', 'tool_result_full', 'tool_result']);
+  const [use, result] = f.rows();
+  assert.equal(use.role, 'tool_use');
+  const content = resultOf(result);
+  assert.equal(content.native_image_delivery.state, 'stored');
+  const hash = createHash('sha256').update(Buffer.from(PNG_1X1, 'base64')).digest('hex');
+  assert.equal(content.xdt_image_url, `cindy-media://blobs/${hash}.png`);
+  assert.ok(existsSync(hostBlobStore.resolveSafe(content.xdt_image_url).absPath), 'the bytes are in the media store');
+  // The delivery's own pin is released once the delivery settles, after the events are out.
+  await waitFor(() => f.refs().length === 1);
+  assert.deepEqual(f.refs(), [{ hash, ref_kind: 'session-attachment', ref_id: 'image-stored' }]);
+  const wire = JSON.stringify(f.published);
+  assert.equal(wire.includes(PNG_1X1), false, 'no published event carries the bytes');
+  assert.equal(f.published.some(event => event.type === 'image'), false);
+  assert.ok(f.published.some(event => event.type === 'tool_result_full' && event.persistId === result.client_id
+    && event.resolvedContent.includes(content.xdt_image_url)));
+});
+
+test('a Codex generated image that cannot be stored is saved and published as a failed delivery, never as base64', { timeout: 30_000 }, async t => {
+  bindHostUiText(() => ['en']);
+  t.after(() => configureUiText((_key, fallback) => fallback));
+  const f = await generatedImageFixture(t, 'image-failed');
+  const notAnImage = Buffer.from('these bytes are not an image').toString('base64');
+  f.emitImage({ data: notAnImage });
+  assert.deepEqual((await f.holds[0]).map(event => event.type), ['tool_use', 'tool_result_full', 'tool_result']);
+  const content = resultOf(f.rows()[1]);
+  assert.deepEqual(content.native_image_delivery, { id: content.native_image_delivery.id, state: 'failed', errorCode: 'INVALID_IMAGE' });
+  assert.equal(content.ok, false);
+  assert.equal(content.text, 'Image delivery failed. Retry transferring the existing image.');
+  assert.deepEqual(f.refs(), []);
+  assert.equal(JSON.stringify(f.published).includes(notAnImage), false, 'no published event carries the bytes');
+  assert.equal(f.published.some(event => event.type === 'image'), false);
 });

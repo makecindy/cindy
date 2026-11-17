@@ -158,6 +158,8 @@ import { createHostTouchUserSend } from './agent/touch-user-send.ts';
 import { setLiveCcSessionBridge } from '../../desktop/src/main/maker-host/claude-transcript-relocation.ts';
 import { bindTaskRestoreRetention, createHostTaskRestore } from './agent/task-restore.ts';
 import { bindHostUiText } from './ui-text.ts';
+import { createHostGeneratedImages } from './agent/generated-images.ts';
+import { reconcileGeneratedImageRecovery, recoverGeneratedImagesForHistory } from '../../desktop/src/main/cindy-media/generatedImageRecovery.js';
 import { bindHostProjectIconRuntime } from './project-icon.ts';
 import { createUserInputEnqueue } from './agent/user-input.ts';
 import { resolveSessionReferencesWithPorts } from '../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
@@ -771,6 +773,9 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   // savepoint refs of tasks this DB marks deleted are removed from their repos.
   void reconcileSavepointRefsForDeletedSessions().catch(error =>
     hostLog.warn('savepoint reconcile postponed', { error: error instanceof Error ? error.message : String(error) }));
+  // As the desktop once the account DB is ready (localDb/ipc/registerAll.ts): generated images' cleanup
+  // receipts resume (agent/generated-images.ts binds the recovery).
+  void reconcileGeneratedImageRecovery().catch(() => hostLog.warn('native image cleanup reconciliation deferred'));
   // As the desktop once the account DB is ready (bootstrap-electron.ts): the account currency and the
   // last price snapshot come back from disk before the first /models round.
   void usagePricing.prewarmModelPricing().catch(error =>
@@ -1149,6 +1154,11 @@ const interactions = {
 };
 const insertSessionMessage = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot,
   publish: (event: unknown) => eventHub.publish(event) });
+// Codex generated images, stored and delivered as on the desktop (agent/generated-images.ts).
+const generatedImages = createHostGeneratedImages({
+  createMessage: (sessionId, body, opts) => insertSessionMessage(sessionId, body, opts),
+  publish: (event: unknown) => eventHub.publish(event),
+});
 
 const messageRecovery = createHostMessageRecovery({ getOwner: getCurrentDbClientSnapshot,
   publish: (event: unknown) => eventHub.publish(event) });
@@ -1227,6 +1237,7 @@ const inputQueue = createInputQueue({
   ackInterruptedTurnDispatched: ackSessionTurnEndedDurable,
   ...messageRecovery,
   persistMessage: insertSessionMessage,
+  deliverCodexGeneratedImage: generatedImages.deliverCodexGeneratedImage,
   persistQueueSnapshot: saveAgentInputQueueSnapshot,
   loadQueueSnapshot: loadAgentInputQueueSnapshot,
   getPersistedClientIds: getPersistedInputClientIds,
@@ -1725,6 +1736,9 @@ const serverDeps = {
     await inputQueue.disposeSession(sessionId);
     runtimeSelection.clearIntent(sessionId);
     await sessionStorage.delete(sessionId);
+    // As the desktop's status writer for a deleted task (localDb/ipc/sessions.ts removeHookAttachmentDir):
+    // its generated images are released.
+    void recoverGeneratedImagesForHistory(sessionId).catch(() => undefined);
     // As the desktop's status writers, under the task's route lock: a deleted task's runtime override and
     // axes go (the runtime cleanup bindHostSessionRuntimeHooks installs).
     cleanupSessionRuntimeForTerminalStatus(sessionId, 'deleted');
