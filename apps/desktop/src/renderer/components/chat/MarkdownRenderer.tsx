@@ -139,8 +139,8 @@ import {
   isHtmlFilePath,
   openHtmlFileByPreference,
   activateMessageUrl,
-  useOpenWithMenu,
-} from './useOpenWithMenu';
+} from './messageLinkActions';
+import { useOpenWithMenu } from './useOpenWithMenu';
 import { activateInlineLinkFromKeyboard } from './linkInteraction';
 import { useLinkContextMenu } from './useLinkContextMenu';
 
