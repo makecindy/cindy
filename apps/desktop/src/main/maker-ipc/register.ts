@@ -1653,6 +1653,7 @@ import {
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { getDeepLinkMainWindow, openMainWindowSession } from '../deepLink.js';
 import { handleSessionEvent, type SessionEventDependencies } from './sessionEventPipeline.js';
+import { defaultDecisionForPending } from './sessionEventPreparationSteps.js';
 import {
   createDeferredProductTurnFailureGate,
   createProductTurnFailureFinalizer,
@@ -4018,21 +4019,6 @@ function isPermissionInteractionDecision(
   return Boolean(
     value && typeof value === 'object' && (value as { kind?: unknown }).kind === 'permission',
   );
-}
-
-function defaultDecisionForPending(
-  kind: InteractionRequest['kind'],
-  reason: string,
-): InteractionDecision {
-  if (kind === 'ask_user_question') {
-    return { kind: 'ask_user_question', answers: {}, dismissed: true };
-  }
-  if (kind === 'plan_review') {
-    // dismissed: 系统性 deny(session_closed / session_aborted / 超时清理等),
-    // reason 是系统代码 —— Codex plan 修订循环据此不把它当用户反馈发修订 turn。
-    return { kind: 'plan_review', behavior: 'deny', reason, dismissed: true };
-  }
-  return { kind, behavior: 'deny', reason } as InteractionDecision;
 }
 
 function cleanupPendingAgentInteractionsForSession(sessionId: string, reason: string): void {

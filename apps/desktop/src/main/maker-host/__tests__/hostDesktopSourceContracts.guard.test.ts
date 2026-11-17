@@ -603,7 +603,7 @@ describe('event types the desktop pipeline acts on, classified for the Host', ()
     expect(wiredStart, 'emitWiredSessionEvent in register.ts').toBeGreaterThan(-1);
     const wired = register.slice(wiredStart, register.indexOf('\n  };\n', wiredStart) + 5);
     const acted = new Set<string>();
-    for (const file of ['sessionEventPreparation.ts', 'sessionEventDelivery.ts', 'sessionEventTerminal.ts']) {
+    for (const file of ['sessionEventPreparation.ts', 'sessionEventPreparationSteps.ts', 'sessionEventDelivery.ts', 'sessionEventTerminal.ts']) {
       for (const type of eventTypesIn(read(path.join(ipc, file)), file)) acted.add(type);
     }
     for (const type of eventTypesIn(wired, 'emitWiredSessionEvent')) acted.add(type);
