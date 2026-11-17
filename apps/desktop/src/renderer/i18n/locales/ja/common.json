@@ -4303,7 +4303,6 @@
           "label": "実行するコンピュータ",
           "optionLocal": "このコンピュータ",
           "notSignedIn": "未ログイン",
-          "autoBorrowing": "このコンピュータは未ログインのため、新しいタスクは {{device}} で実行します。ログインは不要です。",
           "local": "新しいタスクはこのコンピュータで実行します。ログイン済みの別のコンピュータも選べます。",
           "pinned": "新しいタスクは {{device}} で、そのコンピュータのログインを使って実行します。実行中のタスクはそのままです。",
           "inline": "実行先",
@@ -13981,6 +13980,14 @@
         "standard": "標準",
         "fast": "高速",
         "ultrafast": "超高速"
+      },
+      "discoveredCopy": {
+        "title": "「{{device}}」の {{provider}} を使いますか？",
+        "description": "{{unavailable}}続けると「{{device}}」で実行します。ここからいつでも戻せます。",
+        "unavailableHere": "このパソコンの {{provider}} は現在使えません。",
+        "unavailableOn": "「{{device}}」の {{provider}} は現在使えません。",
+        "confirm": "使う",
+        "cancel": "このままにする"
       }
     },
     "permissionSelector": {
@@ -14271,7 +14278,8 @@
         "description": "元のパソコンにある会話の記録は移せないため、引き継ぎの要約から続けます。思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
         "descriptionNativeHistory": "会話の記録をすべてコピーして、続きから再開します。復元できない場合は引き継ぎの要約から続けるため、思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
         "confirm": "パソコンを切り替える",
-        "cancel": "このままにする"
+        "cancel": "このままにする",
+        "discoveredDescription": "{{reason}}{{description}}"
       }
     },
     "agentSelect": {

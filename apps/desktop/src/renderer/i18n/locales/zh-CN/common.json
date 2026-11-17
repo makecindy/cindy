@@ -4303,7 +4303,6 @@
           "label": "在哪台电脑运行",
           "optionLocal": "这台电脑",
           "notSignedIn": "未登录",
-          "autoBorrowing": "这台电脑还没登录，新任务在 {{device}} 上运行，不用再登录。",
           "local": "新任务在这台电脑运行。也可以改选你另一台已登录的电脑。",
           "pinned": "新任务在 {{device}} 上运行，用那台电脑的登录。已在运行的任务不受影响。",
           "inline": "运行于",
@@ -13981,6 +13980,14 @@
         "standard": "标准",
         "fast": "快速",
         "ultrafast": "超快"
+      },
+      "discoveredCopy": {
+        "title": "改用「{{device}}」上的 {{provider}}？",
+        "description": "{{unavailable}}确认后由「{{device}}」运行，之后随时可以在这里换回。",
+        "unavailableHere": "这台电脑上的 {{provider}} 现在用不了。",
+        "unavailableOn": "「{{device}}」上的 {{provider}} 现在用不了。",
+        "confirm": "改用",
+        "cancel": "保持不变"
       }
     },
     "permissionSelector": {
@@ -14271,7 +14278,8 @@
         "description": "原来那台电脑上的对话记录带不过来，会整理成交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
         "descriptionNativeHistory": "完整对话记录会复制过去接着用；如果恢复不了，会改用交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
         "confirm": "换电脑运行",
-        "cancel": "保持不变"
+        "cancel": "保持不变",
+        "discoveredDescription": "{{reason}}{{description}}"
       }
     },
     "agentSelect": {

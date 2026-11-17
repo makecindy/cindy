@@ -4303,7 +4303,6 @@
           "label": "運於何機",
           "optionLocal": "此機",
           "notSignedIn": "未登",
-          "autoBorrowing": "此機未登，新差事借 {{device}} 以運之，無須再登。",
           "local": "新差事運於此機；亦可改擇君之他機已登者。",
           "pinned": "新差事運於 {{device}}，用彼機之登門；方行之差事不移。",
           "inline": "運於",
@@ -13981,6 +13980,14 @@
         "standard": "常",
         "fast": "疾",
         "ultrafast": "極疾"
+      },
+      "discoveredCopy": {
+        "title": "改用「{{device}}」之 {{provider}} 乎？",
+        "description": "{{unavailable}}允之，則由「{{device}}」執行，後可隨時於此復歸。",
+        "unavailableHere": "此機之 {{provider}} 今不可用。",
+        "unavailableOn": "「{{device}}」之 {{provider}} 今不可用。",
+        "confirm": "改用",
+        "cancel": "一仍其舊"
       }
     },
     "permissionSelector": {
@@ -14271,7 +14278,8 @@
         "description": "原機之言談錄不能攜來，將撰為交接摘要以續，思考內容等不保其完美承續。下則訊遣出時生效。",
         "descriptionNativeHistory": "全本言談錄將抄錄而往以續；若不能復原，則改撰交接摘要以續，思考內容等不保其完美承續。下則訊遣出時生效。",
         "confirm": "換機執行",
-        "cancel": "一仍其舊"
+        "cancel": "一仍其舊",
+        "discoveredDescription": "{{reason}}{{description}}"
       }
     },
     "agentSelect": {

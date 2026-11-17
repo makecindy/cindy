@@ -4303,7 +4303,6 @@
           "label": "在哪台電腦執行",
           "optionLocal": "這台電腦",
           "notSignedIn": "未登入",
-          "autoBorrowing": "這台電腦還沒登入，新任務在 {{device}} 上執行，不用再登入。",
           "local": "新任務在這台電腦執行。也可以改選你另一台已登入的電腦。",
           "pinned": "新任務在 {{device}} 上執行，使用那台電腦的登入。已在執行的任務不受影響。",
           "inline": "執行於",
@@ -13981,6 +13980,14 @@
         "standard": "標準",
         "fast": "快速",
         "ultrafast": "超快"
+      },
+      "discoveredCopy": {
+        "title": "改用「{{device}}」上的 {{provider}}？",
+        "description": "{{unavailable}}確認後由「{{device}}」執行，之後隨時可以在這裡換回。",
+        "unavailableHere": "這台電腦上的 {{provider}} 現在無法使用。",
+        "unavailableOn": "「{{device}}」上的 {{provider}} 現在無法使用。",
+        "confirm": "改用",
+        "cancel": "保持不變"
       }
     },
     "permissionSelector": {
@@ -14271,7 +14278,8 @@
         "description": "原來那台電腦上的對話記錄帶不過來，會整理成交接摘要接上，思考內容等不能保證完美繼承。下一則訊息送出時生效。",
         "descriptionNativeHistory": "完整對話記錄會複製過去接著用；如果恢復不了，會改用交接摘要接上，思考內容等不能保證完美繼承。下一則訊息送出時生效。",
         "confirm": "換電腦執行",
-        "cancel": "保持不變"
+        "cancel": "保持不變",
+        "discoveredDescription": "{{reason}}{{description}}"
       }
     },
     "agentSelect": {

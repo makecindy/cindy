@@ -166,6 +166,7 @@ import { captureComposerSendSnapshot, isComposerSendSnapshotCurrent } from './co
 import { useRemoteSessionConnection } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
 
 import {
+  discoveredCopyReason,
   confirmAgentSwitchRisk,
   isAgentSwitchEchoConfigConsistent,
   isAgentSwitchResponseFresh,
@@ -7970,11 +7971,22 @@ export function ChatInput({
   // 标题写那台电脑的名字(「这台电脑」在控制端看来是本机,会读错)。
   const relocationSourceAgent = sessionEngineFilter?.currentAgent;
   const confirmAgentRelocation = useCallback(
-    (target: UnifiedSelectionAgentDevice, targetAgent: string) =>
-      confirmAgentSwitchRisk({
+    (target: UnifiedSelectionAgentDevice, targetAgent: string) => {
+      const description = t(relocationDescriptionKey({
+        fromAgent: relocationSourceAgent,
+        toAgent: targetAgent,
+        fromAgentDeviceId: agentDeviceId,
+        toAgentDeviceId: target?.deviceId,
+      }));
+      // 另一台电脑上那份只是因为任务所在电脑的这一份用不了才列出来：每次都问(不受「不再提示」影响)，
+      // 同一个框里说明原因。不答或取消 = 不换；正在进行的回复和这一份的恢复都不受影响(2026-11-18)。
+      const ask = target?.askBeforeUse;
+      const reason = ask ? discoveredCopyReason(t, ask) : null;
+      return confirmAgentSwitchRisk({
         hasSwitchIntent:
           (target?.deviceId ?? null) === agentDeviceId ||
           (intentAgentDeviceId !== undefined && intentAgentDeviceId === (target?.deviceId ?? null)),
+        alwaysAsk: !!ask,
         confirm: confirmDialog,
         copy: {
           title: target
@@ -7984,17 +7996,15 @@ export function ChatInput({
                   device: deviceDisplayName(deviceLinkDeviceId, deviceLinkDeviceName),
                 })
               : t('newChat.chatInput.agentRelocation.titleLocal'),
-          description: t(relocationDescriptionKey({
-            fromAgent: relocationSourceAgent,
-            toAgent: targetAgent,
-            fromAgentDeviceId: agentDeviceId,
-            toAgentDeviceId: target?.deviceId,
-          })),
+          description: reason
+            ? t('newChat.chatInput.agentRelocation.discoveredDescription', { reason, description })
+            : description,
           confirmText: t('newChat.chatInput.agentRelocation.confirm'),
           cancelText: t('newChat.chatInput.agentRelocation.cancel'),
           dontShowAgainLabel: t('newChat.chatInput.agentSwitch.confirmation.dontShowAgain'),
         },
-      }),
+      });
+    },
     [agentDeviceId, intentAgentDeviceId, deviceLinkDeviceId, deviceLinkDeviceName, relocationSourceAgent, confirmDialog, t],
   );
   const sessionRemoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(() => {
