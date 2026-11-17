@@ -8606,7 +8606,9 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         { deferNotification: isLiveStatusRefreshFrame },
       );
       scheduleWakeBridgeReconciliation(sessionId);
-      if (!isTurnContinuationBoundaryEvent(event) && !update.skipTurnReset
+      // Claude emits status(Done) before done(silentStop); only the latter
+      // distinguishes completion from its automatic continuation window.
+      if (event.source !== 'claude-code' && !isTurnContinuationBoundaryEvent(event) && !update.skipTurnReset
         && !update.isRunning && update.status === 'Done') noteStartingTerminal(sessionId);
       return;
     }

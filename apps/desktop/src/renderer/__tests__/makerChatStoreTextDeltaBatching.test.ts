@@ -708,7 +708,7 @@ describe('makerChatStore text delta batching', () => {
   // #11113 / unit: terminal events can arrive without a running render or text.
   // Exercise the actual event subscription; retained Done and background/SDK tails do not count.
   it.each(['done', 'status'])('records a fresh %s terminal for remote preparation across view absence', (type) => {
-    const event = { type, source: 'claude-code', data: type === 'status'
+    const event = { type, source: type === 'status' ? 'pi' : 'claude-code', data: type === 'status'
       ? { isRunning: false, status: 'Done', tokenUsage: 0 } : {} };
     try {
       onEvent?.({ sessionId: SESSION_ID, event });
@@ -718,6 +718,9 @@ describe('makerChatStore text delta batching', () => {
       onEvent?.({ sessionId: SESSION_ID, event: { ...event, turnContinuationId: 1 } });
       expect(hasStartingTerminal(SESSION_ID)).toBe(false);
       if (type === 'done') {
+        onEvent?.({ sessionId: SESSION_ID, event: { type: 'status', source: 'claude-code',
+          data: { isRunning: false, status: 'Done', tokenUsage: 0 } } });
+        expect(hasStartingTerminal(SESSION_ID)).toBe(false);
         onEvent?.({ sessionId: SESSION_ID, event: { ...event, data: { silentStop: true } } });
         expect(hasStartingTerminal(SESSION_ID)).toBe(false);
       }

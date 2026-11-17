@@ -70,6 +70,7 @@ export function remoteResponsePendingStatus(
 export function hasTurnResponse(messages: readonly Message[]): boolean {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
+    if (message.parentToolUseId && isSubagentParentToolUseId(message.parentToolUseId)) continue;
     // Steers belong to the existing turn, so they must not restart its preparation label.
     if (message.role === 'user' && message.delivery !== 'steer' && !message.isSyntheticTrigger) break;
     // Use transcript boundaries rather than comparing clocks on two computers.

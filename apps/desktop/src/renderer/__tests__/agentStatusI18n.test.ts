@@ -44,6 +44,11 @@ describe('localizeAgentStatus', () => {
       const nextInput = { ...steer, clientId: 'next', delivery: undefined };
       expect(remoteResponsePendingStatus('Thinking...', 'remote', true, [message, nextInput])).toBe('Waiting for remote response');
       expect(hasTurnResponse([message, nextInput])).toBe(false);
+      // A previous turn's background child can continue after the new user boundary.
+      const background = { ...message, parentToolUseId: 'toolu_previous_background' };
+      expect(hasTurnResponse([nextInput, background, steer])).toBe(false);
+      expect(remoteResponsePendingStatus('Thinking...', 'remote', true, [nextInput, background])).toBe('Waiting for remote response');
+      expect(hasTurnResponse([nextInput, background, message])).toBe(true);
     },
   );
 
