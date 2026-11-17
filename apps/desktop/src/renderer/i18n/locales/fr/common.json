@@ -12688,6 +12688,7 @@
       "createOwnApp": "Créer mon application ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ Envoi des pièces jointes incomplet : {{count}} non envoyée(s) ({{names}}).",
+    "outboundAttachmentOverLimit": "{{name}} (dépasse la limite de {{limit}} Mo)",
     "unnamedAttachment": "Pièce jointe sans titre",
     "text": {
       "discord": {

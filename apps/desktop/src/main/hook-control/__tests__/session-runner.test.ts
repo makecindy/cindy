@@ -25,6 +25,7 @@ import { acceptSessionRuntimeMutation, captureSessionRuntimeControlOwnerEpoch, c
   getSessionRuntimeControlSnapshot, remapSessionRuntimeProvider } from '../../maker-ipc/sessionRuntimeControl';
 afterEach(() => clearSessionRuntimeControlState('sess-new'));
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import * as taskImages from '../../cindy-media/taskImageDelivery';
 import { rewriteTaskImageReferences } from '../../cindy-media/taskImageMarkdown';
 import type { AgentEvent, Effort, InteractionRequest, PermissionMode, PermissionModeState } from '@cindy/maker-core';
@@ -4243,6 +4244,36 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
       expect(materialize).toHaveBeenCalledOnce();
       expect(materialize.mock.calls[0][1]).toContain('我先检查。');
     } finally { snapshot.mockRestore(); legacy.mockRestore(); read.mockRestore(); }
+  });
+
+  // 实踩(2026-11-17 官方飞书): 回复里按工作目录写相对路径 `![加载态](evidence/loading-68.png)`, 图片没发出,
+  // 引用原样进了飞书卡片被平台拒绝, 答案没送达。入口: watchContinuation 收口(与 run 共用 collectOutboundForFinalText);
+  // 可观察结果: turn.end 的正文与附件。既有用例只有绝对路径; 相对路径此前不导入(unit, 导入与读盘照旧注入)。
+  it('imports an image referenced relative to the working directory', async () => {
+    const workDir = process.cwd();
+    const relative = 'resources/app-icons/cat.png'; // 仓库里真实存在的图片: 相对路径要落到真文件才算数
+    const absolute = path.resolve(workDir, relative);
+    const url = `cindy-media://blobs/${'c'.repeat(64)}.png`;
+    const materialize = vi.fn(async (_id: string, text: string) => {
+      const replacements = new Map(text.includes(absolute) ? [[absolute, url]] : []);
+      return { text: rewriteTaskImageReferences(text, replacements), replacements, failures: [] };
+    });
+    const snapshot = vi.spyOn(taskImages, 'materializeTaskImageTextResult').mockImplementation(materialize);
+    const read = vi.spyOn(fs, 'readFile').mockImplementation(async () => Buffer.from('cat bytes'));
+    try {
+      fakeMaker.getSession.mockReturnValueOnce({ ...makeManualSession('sess-live'), workDir });
+      const onEnd = vi.fn();
+      createMakerHookSessionRunner({ log }).watchContinuation!(watchReq({ onEnd }).req as never);
+      const emit = h.eventCbs.get('sess-live')!;
+      emit({ type: 'text', data: { text: `结果：![加载态](${relative})`, isFinal: true } });
+      emit({ type: 'done', data: null });
+      await vi.waitFor(() => expect(onEnd).toHaveBeenCalledOnce());
+      const outcome = onEnd.mock.calls[0]![0];
+      expect(materialize.mock.calls[0]![1]).toContain(absolute);
+      expect(outcome.finalText).toBe('结果：🖼️ _加载态_');
+      expect(outcome.attachments).toHaveLength(1);
+      expect(outcome.attachments[0].dataBase64).toBe(Buffer.from('cat bytes').toString('base64'));
+    } finally { snapshot.mockRestore(); read.mockRestore(); }
   });
 
   it.each(['run', 'continuation'].flatMap((entry) =>

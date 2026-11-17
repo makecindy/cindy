@@ -12588,6 +12588,7 @@
       "createOwnApp": "Meine App erstellen ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ Anhänge nicht vollständig zugestellt: {{count}} nicht gesendet ({{names}}).",
+    "outboundAttachmentOverLimit": "{{name}} (über dem Limit von {{limit}} MB)",
     "unnamedAttachment": "Unbenannter Anhang",
     "text": {
       "discord": {

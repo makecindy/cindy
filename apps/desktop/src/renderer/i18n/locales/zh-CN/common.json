@@ -12542,6 +12542,7 @@
       "createOwnApp": "创建我的 App ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ 有 {{count}} 个附件未能发送：{{names}}",
+    "outboundAttachmentOverLimit": "{{name}}（超过 {{limit}} MB 上限）",
     "unnamedAttachment": "未命名附件",
     "text": {
       "discord": {

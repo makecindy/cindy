@@ -12542,6 +12542,7 @@
       "createOwnApp": "自分の App を作成 ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ {{count}} 件の添付ファイルを送信できませんでした：{{names}}",
+    "outboundAttachmentOverLimit": "{{name}}（上限 {{limit}} MB を超過）",
     "unnamedAttachment": "名前のない添付ファイル",
     "text": {
       "discord": {

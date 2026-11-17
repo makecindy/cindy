@@ -12588,6 +12588,7 @@
       "createOwnApp": "Create my App ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ Attachment delivery incomplete: {{count}} not sent ({{names}}).",
+    "outboundAttachmentOverLimit": "{{name}} (over the {{limit}} MB limit)",
     "unnamedAttachment": "Untitled attachment",
     "text": {
       "discord": {

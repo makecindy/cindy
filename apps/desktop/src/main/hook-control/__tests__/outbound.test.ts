@@ -12,6 +12,7 @@ import {
   collectOutboundAttachments,
   hasOutboundRefs,
   guessMime,
+  resolveRelativeImageRefs,
   xdtFileUrlToAbsPath,
 } from '../outbound';
 
@@ -407,6 +408,89 @@ describe('collectOutboundAttachments', () => {
     expect(r.attachments.map((a) => a.name)).toEqual(['report.md']);
     expect(d.readFile).toHaveBeenCalledWith('/repo/sub/report.md');
     expect(r.skipped).toBe(0);
+  });
+});
+
+// 实踩(2026-11-17 官方飞书): 截图超过单图 5 MiB 上限时只提示「未能发送」, 用户不知道原因, 图也看不到。
+// 入口: collectOutboundAttachments; 可观察结果: 发出的附件字节 / 文件名 / MIME, 或正文里的提示。
+// 既有用例没有覆盖超限图片(unit, 压缩器注入, 不依赖 sharp)。
+describe('images over the per-image limit', () => {
+  const big = Buffer.alloc(5 * 1024 * 1024 + 1, 1);
+
+  it('sends a locally compressed copy instead of dropping the image', async () => {
+    const shrinkImage = vi.fn(async () => ({ buffer: Buffer.from('small'), mime: 'image/webp' }));
+    const r = await collectOutboundAttachments('![首页](xdt-image://big.png)', [], {
+      ...deps({ '/cache/big.png': big }), shrinkImage,
+    });
+    // 按引用比对: 对 5 MiB 的缓冲做深比较要好几秒。
+    const [bytes, mimeType, maxBytes] = shrinkImage.mock.calls[0]! as unknown as [Buffer, string, number];
+    expect(bytes).toBe(big);
+    expect([mimeType, maxBytes]).toEqual(['image/png', 5 * 1024 * 1024]);
+    expect(r.skipped).toBe(0);
+    expect(r.attachments).toEqual([
+      { name: 'big.webp', mimeType: 'image/webp', dataBase64: Buffer.from('small').toString('base64') },
+    ]);
+    expect(r.text).toBe('🖼️ _首页_');
+  });
+
+  it('names the image and the limit when it cannot be compressed far enough', async () => {
+    const r = await collectOutboundAttachments('![首页](xdt-image://big.png)', [], {
+      ...deps({ '/cache/big.png': big }),
+      shrinkImage: async () => null,
+      formatIncompleteNotice: (names) => `未发送：${names.join('、')}`,
+      formatOverLimitName: (name, limitMiB) => `${name}（超过 ${limitMiB} MB 上限）`,
+    });
+    expect(r.attachments).toEqual([]);
+    expect(r.text).toContain('未发送：首页（超过 5 MB 上限）');
+  });
+
+  it('leaves animated formats alone and still reports them', async () => {
+    const shrinkImage = vi.fn(async () => ({ buffer: Buffer.from('small'), mime: 'image/webp' }));
+    const r = await collectOutboundAttachments('![动图](xdt-image://big.gif)', [], {
+      ...deps({ '/cache/big.gif': big }), shrinkImage,
+    });
+    expect(shrinkImage).not.toHaveBeenCalled();
+    expect(r.attachments).toEqual([]);
+    expect(r.text).toContain('动图 (over 5 MB)');
+  });
+});
+
+// 实踩(2026-11-17 官方飞书): 回复里写 `![加载态](evidence/loading-68.png)`, 图片没发出, 引用原样进了
+// 飞书卡片, 整张卡被平台拒绝, 答案没送达。入口: resolveRelativeImageRefs(正文, 工作目录); 可观察结果:
+// 哪些引用被补成工作目录内的绝对路径(之后与绝对路径的图片走同一条导入发送流程)。此前只认绝对路径(unit)。
+describe('relative image references', () => {
+  const root = path.resolve('/repo');
+  const inside = (rel: string) => path.resolve(root, rel);
+  const io = (files: string[], realpaths: Record<string, string> = {}) => ({
+    realpath: async (p: string) => {
+      const abs = path.resolve(p);
+      if (abs !== root && !files.includes(abs)) throw new Error('ENOENT');
+      return realpaths[abs] ?? abs;
+    },
+    isFile: async (p: string) => files.includes(path.resolve(p)) || Object.values(realpaths).includes(p),
+  });
+
+  it('resolves images inside the working directory, including percent-encoded names', async () => {
+    const text = '![加载态](evidence/loading-68.png) ![二](./shots/my%20shot.jpg) ![远程](https://example.com/a.png) ![绝对](/tmp/a.png)';
+    const resolved = await resolveRelativeImageRefs(text, [root], io([inside('evidence/loading-68.png'), inside('shots/my shot.jpg')]));
+    expect([...resolved]).toEqual([
+      ['evidence/loading-68.png', inside('evidence/loading-68.png')],
+      ['./shots/my%20shot.jpg', inside('shots/my shot.jpg')],
+    ]);
+  });
+
+  it('ignores missing files, non-images, code examples and anything outside the working directory', async () => {
+    const outside = path.resolve('/secret/key.png');
+    const text = [
+      '![缺失](evidence/missing.png)', '![文档](docs/readme.md)', '`![示例](evidence/loading-68.png)`',
+      '![越界](../secret/key.png)', '![链接](link.png)',
+    ].join('\n');
+    const resolved = await resolveRelativeImageRefs(text, [root], io(
+      [inside('docs/readme.md'), outside, inside('link.png')],
+      { [inside('link.png')]: outside }, // 符号链接指到工作目录之外
+    ));
+    expect([...resolved]).toEqual([]);
+    expect([...(await resolveRelativeImageRefs('![a](evidence/a.png)', [], io([inside('evidence/a.png')])))]).toEqual([]);
   });
 });
 

@@ -206,6 +206,10 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
    `cindy-media` 地址、引用 ID、名称、MIME 与大小，Base64 只存在传输帧和内存中。
    Agent 在远程供应商上运行时，`[名称](xdt-file:///影子路径)` 由远程事件投影先还原成本机路径，
    收集器再按工作目录校验；漏掉这一步，文件会被当作目录外附件跳过。
+   最终回复里按工作目录写的相对路径图片（`![说明](evidence/a.png)`）先由 `resolveRelativeImageRefs`
+   补成工作目录内的绝对路径（解析符号链接后仍须在目录内、文件确实存在），再与绝对路径的图片走同一条
+   导入与发送流程；找不到的引用原样留在正文。超过单图上限的 PNG / JPEG / WebP 先在本机压一份 WebP 副本
+   再发（只影响发给渠道的副本），压不到上限以内才跳过，并在附件提示里点名、写明上限。
    X 仅收 JPEG / PNG / WebP / GIF / MP4 / MOV；单图片 5 MiB、GIF 15 MiB、视频 10 MiB，
    一轮最多 8 项、总计 30 MiB（持久出箱仍按 32 MB 总预算计入媒体的传输大小）。
    server 声明 `x-media-relay-v1` 时，视频不内联：客户端在回帖前把文件分块转传给 X（`hook-control/xMediaRelay.ts`），
