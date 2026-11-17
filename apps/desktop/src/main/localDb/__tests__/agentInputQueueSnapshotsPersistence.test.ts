@@ -174,7 +174,8 @@ describe('agent input queue snapshot durability boundary', () => {
       // 标记不是消息:条数统计与读取仍只认真实排队项。
       expect(await loadAgentInputQueueSnapshotCounts([sid])).toEqual({ [sid]: 1 });
       expect(await loadAgentInputQueueSnapshot(sid)).toEqual([item]);
-      const payload = JSON.parse(String(sqlite.prepare('SELECT payload FROM agent_input_queue_snapshots WHERE session_id = ?').get(sid)?.payload));
+      const row = sqlite.prepare('SELECT payload FROM agent_input_queue_snapshots WHERE session_id = ?').get(sid) as { payload?: string } | undefined;
+      const payload = JSON.parse(String(row?.payload));
       expect(payload).toHaveLength(2);
       expect(payload[1]).toEqual({ type: 'queue-pause-held', version: 1 });
       await saveAgentInputQueueSnapshot(sid, [item]);

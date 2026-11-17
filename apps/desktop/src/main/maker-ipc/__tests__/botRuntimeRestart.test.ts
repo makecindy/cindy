@@ -15,6 +15,7 @@ afterEach(() => vi.useRealTimers());
 function harness() {
   return {
     stopInput: vi.fn(),
+    flushStopPersistence: vi.fn(async () => {}),
     withSessionLock: async <T>(_id: string, run: () => Promise<T>) => run(),
     rebuild: vi.fn(async (_id: string, assertCurrent: () => void) => assertCurrent()),
     onClosed: vi.fn(),
@@ -123,6 +124,29 @@ describe('Bot runtime restart', () => {
     closed();
     await vi.advanceTimersByTimeAsync(1);
     expect(commit).not.toHaveBeenCalled();
+    expect(deps.onClosed).not.toHaveBeenCalled();
+  });
+
+  it('persists the stop cause before rebuilding so a restart never completes without it', async () => {
+    // #7534:「重启伙伴」按住的队列必须先把暂停来源落盘,再重建运行时。
+    // 顺序反了的话,重启报成功时快照里还没有暂停来源,进程随后退出就会把它
+    // 当成崩溃恢复暂停,外部投递会重放用户已经收手的请求。
+    const deps = harness();
+    const order: string[] = [];
+    deps.flushStopPersistence.mockImplementation(async () => { order.push('flush'); });
+    deps.rebuild.mockImplementation(async (_id, assertCurrent) => {
+      order.push('rebuild');
+      assertCurrent();
+    });
+    await restartBotRuntime('canonical', vi.fn(), deps);
+    expect(order).toEqual(['flush', 'rebuild']);
+  });
+
+  it('fails the restart when the stop cause cannot be persisted', async () => {
+    const deps = harness();
+    deps.flushStopPersistence.mockImplementation(async () => { throw new Error('snapshot write failed'); });
+    await expect(restartBotRuntime('canonical', vi.fn(), deps)).rejects.toThrow('snapshot write failed');
+    expect(deps.rebuild).not.toHaveBeenCalled();
     expect(deps.onClosed).not.toHaveBeenCalled();
   });
 
