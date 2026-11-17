@@ -2427,6 +2427,13 @@ function mergeMembershipWithExisting(
   };
 }
 
+const localAssetHandoffPending = new Set<string>();
+
+/** A first cloud owner still owes the local-mode plugin handoff. */
+export function isLocalAssetHandoffPending(ownerId: string | null): boolean {
+  return ownerId !== null && localAssetHandoffPending.has(ownerId);
+}
+
 /** Serialize a verified cloud owner commit with the shared Ghost projection. */
 async function withCloudOwnerCommit<T>(opts: {
   previousOwnerId: string | null;
@@ -2503,7 +2510,11 @@ async function withCloudOwnerCommit<T>(opts: {
                 })
               : undefined,
           });
+          localAssetHandoffPending.delete(opts.nextOwnerId);
         } catch (error) {
+          // Plugin provisioning must not take the paths this handoff publishes:
+          // a target that appears first makes the retry drop the local plugins.
+          localAssetHandoffPending.add(opts.nextOwnerId);
           log.warn('local profile asset adoption deferred', {
             ownerId: opts.nextOwnerId,
             error: error instanceof Error ? error.message : String(error),

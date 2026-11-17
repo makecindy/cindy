@@ -103,6 +103,7 @@ describe('authentication does not wait for optional plugin provisioning', () => 
     let visible: boolean | undefined;
     const rollback = vi.fn();
     const warn = vi.fn();
+    const handoffPending = new Set<string>();
     const deps = {
       isPassiveSharedUserDataInstance: () => false,
       withGhostSkillProjectionOwnerCommit: async (hooks: {
@@ -129,14 +130,32 @@ describe('authentication does not wait for optional plugin provisioning', () => 
       requestStableOwnerPostCommit: vi.fn(),
     };
     const compiled = transpileModule(
-      `${productionFunction('withCloudOwnerCommit')}\nreturn withCloudOwnerCommit;`,
+      [
+        'const localAssetHandoffPending = handoffSet;',
+        productionFunction('isLocalAssetHandoffPending'),
+        productionFunction('withCloudOwnerCommit'),
+        'return { withCloudOwnerCommit, isLocalAssetHandoffPending };',
+      ].join('\n'),
       { compilerOptions: { target: ScriptTarget.ES2022 } },
     ).outputText;
-    const commit = new Function(...Object.keys(deps), compiled)(...Object.values(deps));
+    const { withCloudOwnerCommit: commit, isLocalAssetHandoffPending } = new Function(
+      'handoffSet',
+      ...Object.keys(deps),
+      compiled,
+    )(handoffPending, ...Object.values(deps)) as {
+      withCloudOwnerCommit(opts: {
+        previousOwnerId: string | null;
+        nextOwnerId: string;
+        prepareTransition(): Promise<void>;
+        commit(): unknown;
+      }): Promise<unknown>;
+      isLocalAssetHandoffPending(ownerId: string | null): boolean;
+    };
     const result = commit({ previousOwnerId: 'local-v1', nextOwnerId: 'first-cloud',
       prepareTransition: async () => {}, commit: () => { committed = true; } });
     await result;
     expect(visible).toBe(!fails);
+    expect(isLocalAssetHandoffPending('first-cloud')).toBe(fails);
     if (fails) {
       expect(warn).toHaveBeenCalledWith('local profile asset adoption deferred', {
         ownerId: 'first-cloud', error: 'asset copy unavailable',
@@ -145,6 +164,30 @@ describe('authentication does not wait for optional plugin provisioning', () => 
       expect(warn).not.toHaveBeenCalled();
     }
     expect(rollback).not.toHaveBeenCalled();
+  });
+
+  // Unit: a pending local-mode handoff owns the plugin paths. Provisioning first
+  // would occupy them, and the retry would then retire the local plugins.
+  it('keeps plugin provisioning behind a pending local asset handoff', async () => {
+    let task!: StableOwnerPostCommitTask;
+    const builtin = vi.fn(async () => 'completed' as const);
+    const deps = {
+      authManager: {
+        setStableOwnerPostCommitTask: (callback: StableOwnerPostCommitTask) => { task = callback; },
+        isLocalAssetHandoffPending: (ownerId: string | null) => ownerId === 'first-cloud',
+      },
+      isAppSessionBoundaryPending: () => false,
+      activeOwnerScopeKey: () => 'scope',
+      getActiveAppSession: () => ({ dataOwnerId: 'first-cloud' }),
+      getActiveDataOwnerPushStamp: () => null,
+      getMakerIfReady: () => null,
+      refreshHostToolProviderOwner: vi.fn(),
+      builtinPostCommitStep: { run: builtin },
+    };
+    new Function(...Object.keys(deps), stableTaskCode)(...Object.values(deps));
+    await expect(task({ reason: 'owner-commit', scopeKey: 'scope', dataOwnerId: 'first-cloud' }))
+      .resolves.toBe('deferred');
+    expect(builtin).not.toHaveBeenCalled();
   });
 
   // Unit, #9801: the real stable-owner callback must recover the public provider
@@ -164,7 +207,8 @@ describe('authentication does not wait for optional plugin provisioning', () => 
     hostTools.setHostToolProviders([{ name: 'cindy_helper', toClaudeSdkConfig: () => null, toHostTools: () => runtime }], original);
     let task!: StableOwnerPostCommitTask;
     const deps = {
-      authManager: { setStableOwnerPostCommitTask: (callback: StableOwnerPostCommitTask) => { task = callback; } },
+      authManager: { setStableOwnerPostCommitTask: (callback: StableOwnerPostCommitTask) => { task = callback; },
+        isLocalAssetHandoffPending: () => false },
       isAppSessionBoundaryPending: () => scenario.pending,
       activeOwnerScopeKey: () => 'recovered-scope', getActiveAppSession: () => ({ dataOwnerId: scenario.ownerId }),
       getActiveDataOwnerPushStamp: () => recovered, getMakerIfReady: () => scenario.liveMaker ? {} : null,

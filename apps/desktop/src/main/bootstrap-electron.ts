@@ -3092,6 +3092,9 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
     && activeOwnerScopeKey() === scopeKey
     && getActiveAppSession().dataOwnerId === dataOwnerId;
   if (!isCurrent()) return 'deferred';
+  // A local-mode handoff still owns the plugin paths it is going to publish.
+  // Provisioning first would occupy those targets and retire the local plugins.
+  if (authManager.isLocalAssetHandoffPending(dataOwnerId)) return 'deferred';
   if (getMakerIfReady()) refreshHostToolProviderOwner(getActiveDataOwnerPushStamp());
   const builtinOutcome = await builtinPostCommitStep.run(scopeKey, async () => {
     if (!isCurrent()) return 'deferred';
