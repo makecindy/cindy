@@ -1772,20 +1772,26 @@ export class Session {
    * first and keeps the session open, or observes closePromise and is rejected.
    */
   closeIfIdle(): Promise<boolean> {
+    if (!this.isIdleForRuntimeRecycling()) return Promise.resolve(false);
+    return this.close().then(() => true);
+  }
+
+  /** Shared synchronous predicate for automatic idle and resource-drift teardown. */
+  private isIdleForRuntimeRecycling(): boolean {
     if (this.status !== 'active' || this.closePromise || this.isTurnRunning() || this.hasUnsettledTurn()
       || this.retirementContinuationGeneration === this.turnGeneration
       || this.hasPendingHostOperation()) {
-      return Promise.resolve(false);
+      return false;
     }
     try {
       if (this.listBackgroundTasks().length > 0 || this.countPendingWakeContinuations() > 0) {
-        return Promise.resolve(false);
+        return false;
       }
     } catch {
       // A missing snapshot cannot establish that destructive teardown is safe.
-      return Promise.resolve(false);
+      return false;
     }
-    return this.close().then(() => true);
+    return true;
   }
 
   private async performClose(teardown: AgentSessionTeardownOptions): Promise<void> {
@@ -2429,16 +2435,12 @@ export class Session {
    * 认识的刷新原因 —— 直接 Session.close 绕过 Maker 的 closeReasons 登记,IM
    * runner 会按 unexpected 清掉排队中的回合、丢失已接受的派发。空闲口径与
    * closeIfIdle 一致:turn 运行中、结束未收口的 turn、换代续接、手动压缩 /
-   * rewind 等宿主排他操作进行中绝不回收。回收后由既有 lazy bootstrap 在下次
+   * rewind 等宿主排他操作、后台任务及待续报 continuation 存续时绝不回收。
+   * 回收后由既有 lazy bootstrap 在下次
    * 发送时重扫项目资源、重算 argv。
    */
   hasRecyclableProjectResourceDrift(): boolean {
-    if (this.status !== 'active' || this.closePromise) return false;
-    if (this.isTurnRunning() || this.hasUnsettledTurn()
-      || this.retirementContinuationGeneration === this.turnGeneration
-      || this.hasPendingHostOperation()) {
-      return false;
-    }
+    if (!this.isIdleForRuntimeRecycling()) return false;
     return this.handle.hasProjectResourceDrift?.() === true;
   }
 

@@ -217,16 +217,19 @@ describe('Session close lifecycle', () => {
     'keeps an idle runtime alive while background %s remains', async (kind) => {
       const { session, handle } = liveTurn(false);
       let busy = true;
+      handle.hasProjectResourceDrift = () => true;
       handle.listBackgroundTasks = () => {
         if (busy && kind === 'unavailable') throw new Error('snapshot unavailable');
         return busy && kind === 'task' ? [{ taskId: 'bash', taskType: 'local_bash' }] : [];
       };
       handle.countPendingWakeContinuations = () => busy && kind === 'continuation' ? 1 : 0;
       try {
+        expect(session.hasRecyclableProjectResourceDrift()).toBe(false);
         await expect(session.closeIfIdle()).resolves.toBe(false);
         expect(session.getStatus()).toBe('active');
         expect(handle.close).not.toHaveBeenCalled();
         busy = false;
+        expect(session.hasRecyclableProjectResourceDrift()).toBe(true);
         await expect(session.closeIfIdle()).resolves.toBe(true);
         expect(handle.close).toHaveBeenCalledOnce();
       } finally {
