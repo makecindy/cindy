@@ -18,7 +18,7 @@ function fixture() {
     list: async session => [...rows.values()].filter(r => r.sessionId === session), persist, broadcast });
   const register = (id: string, ghostId = 'gmail', sessionId = 'session') => cards.registerCall(id, { ghostId, sessionId, toolUseId: null });
   const publish = (id: string, draft = snapshot(), sender = 'gmail') => service.handle(sender, { callId: id, draft }, () => true);
-  return { rows, cards, service, register, publish, broadcast };
+  return { rows, cards, service, register, publish, broadcast, persist };
 }
 it('updates autosaves in place; a new view collapses old snapshots and rejects late updates', async () => {
   const f = fixture(); f.register('old'); f.register('new');
@@ -148,4 +148,21 @@ it('publishes undo/send-now only while waiting and removes the deadline after ca
   expect((await f.service.handle('gmail', { callId: 'card', statusOnly: { state: 'draft', status: 'Cancelled' } }, () => true)).ok).toBe(true);
   expect(readMailCard(f.rows.get('card')!.html)?.pendingSend).toBeUndefined();
   expect(f.rows.get('card')!.html).not.toContain('mail:now:');
+});
+
+// Boundary evidence for SDK recovery: broadcast acceptance does not imply DB
+// durability. The existing restore endpoint reads the actual persisted baseline.
+it('restores the durable baseline when an acknowledged card write failed to persist', async () => {
+  const f = fixture(); f.register('card'); f.register('source');
+  const original = snapshot();
+  original.baseValues = Object.fromEntries(original.fields.map(field => [field.name, field.value]));
+  expect(await f.publish('card', original)).toEqual({ ok: true });
+  const changed = snapshot(); changed.fields[4].value = 'Replacement B';
+  changed.baseValues = { ...original.baseValues, body: 'Replacement B' };
+  f.persist.mockRejectedValueOnce(new Error('Synthetic persistent-card failure'));
+  expect(await f.publish('card', changed)).toEqual({ ok: true });
+  const restored = await f.service.restore('gmail', { callId: 'card', sourceCallId: 'source' }, () => true);
+  expect(restored.ok).toBe(true);
+  expect(restored.draft?.baseValues?.body).toBe('Original');
+  expect(restored.draft?.fields[4].value).toBe('Original');
 });

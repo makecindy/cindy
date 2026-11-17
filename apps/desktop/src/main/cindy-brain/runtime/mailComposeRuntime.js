@@ -310,15 +310,25 @@ var cindyMail = (function () {
         return [name, Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, '0')).join('')];
       })));
     }
-    async function completedSaveBase(record, original, remote) {
-      if (!record.completedSaveHashes) return original;
-      const [hashes, originals] = await Promise.all([fieldDigests(remote), fieldDigests(original || {})]);
-      const base = { ...original };
-      for (const name of Object.keys(remote))
-        if (originals[name] && hashes[name] === record.completedSaveHashes[name]?.attempt &&
-            (originals[name] === record.completedSaveHashes[name]?.base ||
-             originals[name] === record.completedSaveHashes[name]?.previous)) base[name] = remote[name];
-      return base;
+    async function completedSaveMerge(record, original, local, remote) {
+      const base = { ...original }, changed = [];
+      if (Object.keys(record.completedSaveHashes || {}).length) {
+        const [hashes, originals] = await Promise.all([fieldDigests(remote), fieldDigests(original || {})]);
+        for (const name of Object.keys(remote)) {
+          const proof = record.completedSaveHashes[name];
+          if (!originals[name] || !proof ||
+              (originals[name] !== proof.base && originals[name] !== proof.previous)) continue;
+          if (hashes[name] === proof.attempt) base[name] = remote[name];
+          else if (originals[name] !== proof.attempt && comparable(name, local[name]) !== comparable(name, remote[name]))
+            changed.push(name); // Includes an explicit remote rollback to the pre-save value.
+        }
+      }
+      const merged = mergeFields(original ? base : undefined, local, remote);
+      for (const name of changed) {
+        merged.fields[name] = local[name];
+        if (!merged.conflicts.includes(name)) merged.conflicts.push(name);
+      }
+      return { ...merged, base: original ? base : undefined };
     }
     // A conservative three-way text merge: identical edits converge; independent
     // replacement ranges combine. Overlapping replacements remain for review.
@@ -387,9 +397,9 @@ var cindyMail = (function () {
         const local = { ...remote, ...Object.fromEntries(card.fields.map(f => [f.name, f.value])) };
         // Legacy clean cards are their own last synchronized snapshot. A legacy
         // error without a base can still converge when both contents are equal.
-        const base = await completedSaveBase(record, card.baseValues || (card.state === 'draft' ? local :
-          ['syncing', 'sending'].includes(card.state) && readBack.fingerprint === record.fingerprint ? remote : undefined), remote);
-        const merged = mergeFields(base, local, remote);
+        const merged = await completedSaveMerge(record, card.baseValues || (card.state === 'draft' ? local :
+          ['syncing', 'sending'].includes(card.state) && readBack.fingerprint === record.fingerprint ? remote : undefined), local, remote);
+        const base = merged.base;
         const active = await mailRecords(records => {
           const current = records[key];
           if (!current || current.callId !== callId || current.state !== 'draft' || current.fingerprint !== record.fingerprint) return false;
@@ -413,6 +423,7 @@ var cindyMail = (function () {
       edits,
       renderOnly,
       unconfirmed,
+      proofRecord,
     ) {
       var copy = await mailCopy();
       if (!readBack || readBack.status !== "read_back") return false;
@@ -512,12 +523,45 @@ var cindyMail = (function () {
           readBack: readBack,
           ...(formatted?.issue ? { error: { ok: false, execution: 'not_executed', format: true, message: copy[formatted.issue] } } : {}),
         });
-      const presented = await cindy.send({ type: "mail-draft-update", callId: message.callId,
-        ...(message.sourceCallId ? { sourceCallId: message.sourceCallId } : {}), draft });
+      const presented = await navigator.locks.request('mail-card:' + key, async () => {
+        // A delayed preview must not replace a newer saved baseline after its
+        // recovery proof has been released. Keep publication and cleanup ordered.
+        const currentBase = activeEdit?.error?.stale && !activeEdit.conflictBase ? undefined : activeEdit?.conflictBase || originalValues;
+        const sameBase = draft.baseValues && currentBase ? sameFields(draft.baseValues, currentBase) : draft.baseValues === currentBase;
+        if (renderOnly && (mailEdits.get(key) !== activeEdit || (activeEdit && (activeEdit.readBack !== readBack || !sameBase)))) return undefined;
+        const result = await cindy.send({ type: "mail-draft-update", callId: message.callId,
+          ...(message.sourceCallId ? { sourceCallId: message.sourceCallId } : {}), draft });
+        await releaseSaveProof(key, proofRecord, activeEdit, result?.ok && draft.state === 'draft', readBack, draft.baseValues, message.sourceCallId);
+        return result;
+      });
       const created = !renderOnly && mailEdits.get(key);
       if (presented?.ok && created && !created.error && created.revision !== created.savedRevision)
         scheduleMailSave(key, message.callId, copy.failed);
       return presented?.ok === true;
+    }
+    async function releaseSaveProof(key, record, edit, presented, readBack, publishedBase, sourceCallId) {
+      if (!presented || !record || !edit || !Object.keys(record.completedSaveHashes || {}).length ||
+          edit.readBack !== readBack || edit.error || edit.conflictBase || !sameFields(publishedBase || {}, draftValues(readBack))) return;
+      // Card broadcasts can acknowledge a failed DB write. Restore reads the
+      // persistent Host row; only that exact draft baseline permits release.
+      let saved;
+      try {
+        saved = await cindy.send({ type: 'mail-draft-read', callId: record.callId,
+          ...(sourceCallId ? { sourceCallId } : {}) });
+      } catch (_) { return; }
+      const durable = saved?.ok && saved.draft;
+      if (!durable || durable.key !== key || durable.accountId !== record.account ||
+          durable.draftId !== record.draftId || durable.state !== 'draft' ||
+          !sameFields(durable.baseValues || {}, draftValues(readBack))) return;
+      await mailRecords(records => {
+        const current = records[key];
+        if (mailEdits.get(key) !== edit || edit.readBack !== readBack || edit.error || edit.conflictBase || current?.state !== 'draft' ||
+            current.callId !== record.callId || current.fingerprint !== readBack.fingerprint) return;
+        // Independent Host DB read confirmed this exact mailbox baseline. Keep only an empty recovery-chain marker for later saves;
+        // their Host publication may fail too, including after sandbox restart.
+        current.completedSaveHashes = {};
+        record.completedSaveHashes = {};
+      });
     }
     async function continueMailTask(message, record, copy, key) {
       var result;
@@ -850,6 +894,8 @@ var cindyMail = (function () {
           key,
           edit.fields,
           true,
+          undefined,
+          record,
         );
         return result;
       });
@@ -1034,6 +1080,11 @@ var cindyMail = (function () {
         const incoming = { ...edit.fields, ...message.formValues };
         const base = edit.error?.stale ? edit.conflictBase : edit.inputFields || edit.fields;
         const merged = mergeFields(base, incoming, edit.error?.stale ? draftValues(edit.readBack) : edit.fields);
+        // Editing an independent field is not a decision to overwrite an
+        // unresolved mailbox rollback/conflict in another field.
+        for (const name of edit.error?.stale ? edit.error.conflicts || [] : [])
+          if (comparable(name, incoming[name]) === comparable(name, edit.fields[name]) && !merged.conflicts.includes(name))
+            merged.conflicts.push(name);
         // The quote text field edits the outgoing quote too. Preserve authored
         // HTML unless that text changed, including an explicit deletion.
         if (adapter.richText && incoming.quote !== base?.quote && incoming.quoteHtml === base?.quoteHtml) {
@@ -1220,8 +1271,8 @@ var cindyMail = (function () {
           const remote = draftValues(readBack);
           // If the mailbox confirms the exact attempted save, later typing is
           // relative to that save rather than an overlapping remote edit.
-          const base = await completedSaveBase(record, draftValues(edit.readBack), remote);
-          const merged = mergeFields(base, edit.fields, remote);
+          const merged = await completedSaveMerge(record, draftValues(edit.readBack), edit.fields, remote);
+          const base = merged.base;
           edit.fields = merged.fields;
           edit.readBack = readBack;
           edit.revision++;
@@ -1243,7 +1294,7 @@ var cindyMail = (function () {
           if (!active) return { ok: false, execution: 'not_executed', message: (await mailCopy()).missing };
           const selected = await adapter.selectAccount(account);
           if (selected.ok) await showMailDraft({ callId: record.callId, sourceCallId }, selected,
-            readBack, edit.error?.message || (edit.savedRevision !== edit.revision ? (await mailCopy()).waiting : undefined), key, edit.fields, true);
+            readBack, edit.error?.message || (edit.savedRevision !== edit.revision ? (await mailCopy()).waiting : undefined), key, edit.fields, true, undefined, record);
           if (!edit.error && edit.savedRevision !== edit.revision)
             scheduleMailSave(key, record.callId, (await mailCopy()).failed);
           return { ...latest, data: { ...latest.data, cardEdits: { ...edit.fields }, conflicts: merged.conflicts } };
@@ -1293,6 +1344,13 @@ var cindyMail = (function () {
               records[key].fingerprint = latest.data.readBack.fingerprint;
               records[key].locator = latest.data.readBack.locator;
             });
+            if (Object.keys(record.completedSaveHashes || {}).length) {
+              // A restored clean editor can still have a pre-save Host base.
+              // Publish the verified baseline before releasing its old digests.
+              const selected = await adapter.selectAccount(record.account);
+              if (selected.ok) await showMailDraft({ callId: record.callId, sourceCallId }, selected,
+                currentEdit.readBack, undefined, key, currentEdit.fields, true, undefined, record);
+            }
             return latest;
           }
           var selected = await adapter.selectAccount(account);

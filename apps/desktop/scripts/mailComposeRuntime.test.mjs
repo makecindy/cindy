@@ -27,15 +27,19 @@ function fixture({
   richText = false,
   allowCardRead = true,
   publish,
+  durablePublish,
   hostRead,
   kvWrite,
+  initialKv = {},
+  draftId = "logical-draft",
 } = {}) {
-  let kv = {},
+  let kv = copy(initialKv),
     revision = 1,
     timerId = 0,
     clock = 100000,
     flow;
   const cards = [],
+    durableCards = [],
     continuations = [],
     writes = [],
     reads = [],
@@ -44,7 +48,7 @@ function fixture({
     locks = new Map();
   let current = {
     status: "read_back",
-    draftId: "logical-draft",
+    draftId,
     fingerprint: "revision-1",
     locator:
       shape === "imap"
@@ -114,17 +118,18 @@ function fixture({
           return { ok: false };
         if (card.type === 'mail-draft-read') {
           if (hostRead) await hostRead(card);
-          const stored = cards.findLast(c => c.draft && c.callId === card.callId);
+          const stored = durableCards.findLast(c => c.draft && c.callId === card.callId);
           if (!stored || (!allowCardRead && card.callId !== card.sourceCallId)) return { ok: false };
           const draft = copy(stored.draft);
           // Host persists status-only patches as part of the same card.
-          for (const update of cards.slice(cards.indexOf(stored) + 1)) {
+          for (const update of durableCards.slice(durableCards.indexOf(stored) + 1)) {
             if (update.callId === card.callId && update.statusOnly) Object.assign(draft, copy(update.statusOnly));
           }
           return { ok: true, draft };
         }
-        if (publish && !publish(card)) return { ok: false };
+        if (publish && !(await publish(card))) return { ok: false };
         cards.push(copy(card));
+        if (!durablePublish || await durablePublish(card)) durableCards.push(copy(card));
         return { ok: acceptCard || !card.statusOnly?.pendingSend };
       },
       agent: {
@@ -230,6 +235,7 @@ function fixture({
   };
   return {
     cards,
+    durableCards,
     continuations,
     writes,
     reads,
@@ -965,7 +971,7 @@ test('an upload arriving during autosave retains its restart lock', async () => 
   assert.equal(f.writes.length, 1);
 });
 
-for (const rejectGet of [false, true]) for (const rejectPreview of [false, true]) test(`verified save retains recovery provenance when Host publication fails: get=${rejectGet}, preview=${rejectPreview}`, async () => {
+for (const restart of [false, true]) for (const rejectGet of [false, true]) for (const rejectPreview of [false, true]) test(`verified save retains recovery provenance when Host publication fails: get=${rejectGet}, preview=${rejectPreview}, restart=${restart}`, async () => {
   let f, rejecting = false, entered, release;
   const started = new Promise(resolve => { entered = resolve; });
   f = fixture({ publish: card => !rejecting || card.type !== 'mail-draft-update', write: async request => {
@@ -987,6 +993,10 @@ for (const rejectGet of [false, true]) for (const rejectPreview of [false, true]
   rejecting = rejectGet;
   await f.tool('get');
   rejecting = rejectPreview;
+  if (restart) {
+    f.restart();
+    await f.card('change', { ...f.values(), body: 'Replacement C' });
+  }
   const saving = f.advance(2000); await started;
   rejecting = false;
   await f.card('change', { ...f.values(), body: 'Replacement D' });
@@ -1001,8 +1011,8 @@ for (const rejectGet of [false, true]) for (const rejectPreview of [false, true]
 // Fault the real SDK boundary after provider confirmation; Host metadata is
 // best effort and cannot reclassify a confirmed save as an unknown operation.
 test('confirmed recovery save survives a rejecting Host baseline lookup', async () => {
-  let f, rejecting = false;
-  f = fixture({ hostRead: () => { if (rejecting) throw new Error('Synthetic IPC rejection'); }, write: request => {
+  let f, rejecting = false, rejectRecovery = false;
+  f = fixture({ publish: card => !rejectRecovery || card.type !== 'mail-draft-update', hostRead: () => { if (rejecting) throw new Error('Synthetic IPC rejection'); }, write: request => {
     if (f.writes.length === 1) {
       f.externalEdit({ body: request.fields.body });
       return { ok: false, execution: 'executed', message: 'Verification failed' };
@@ -1010,7 +1020,7 @@ test('confirmed recovery save survives a rejecting Host baseline lookup', async 
   } });
   await f.present();
   await f.card('change', { ...f.values(), body: 'Replacement B' });
-  await f.tool('update'); await f.tool('get');
+  await f.tool('update'); rejectRecovery = true; await f.tool('get'); rejectRecovery = false;
   await f.card('change', { ...f.values(), body: 'Replacement C' });
   rejecting = true;
   const saved = await f.tool('update').catch(() => ({ ok: false }));
@@ -1042,11 +1052,128 @@ for (const inline of [false, true]) test(`failed upload-lock persistence accepts
   assert.equal(f.writes.at(-1).fields.bodyHtml.includes('cid:synthetic-image'), false);
 });
 
+// A provider rollback after an executed save must not look like unchanged
+// pre-save content; test both live recovery and restored card entry points.
+for (const restart of [false, true]) for (const followup of [false, true]) test(`remote rollback stays a conflict: restart=${restart}, followup=${followup}`, async () => {
+  let f;
+  f = fixture({ write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update');
+  if (followup) await f.card('change', { ...f.values(), body: 'Replacement C' });
+  f.externalEdit({ body: 'Original' });
+  if (restart) f.restart();
+  const read = await f.tool('get');
+  assert.ok(read.data.conflicts.includes('body'));
+  await f.card('change', { ...read.data.cardEdits, subject: 'Unrelated local subject' });
+  await f.advance(2000);
+  assert.equal((await f.tool('send')).ok, false);
+  assert.equal(f.current().editor.body, 'Original');
+  assert.equal(f.writes.length, 1);
+});
+
+// While an old conflict publication is in flight, the user may correct it.
+// If that newer publication is rejected, the old error card still needs proof.
+test('an in-flight conflict card cannot release proof for a rejected correction', async () => {
+  let f, armed = false, correction;
+  f = fixture({ publish: async card => {
+    if (!armed || !card.draft) return true;
+    const body = card.draft.fields.find(field => field.name === 'body').value;
+    if (body === 'Replacement C' && card.draft.state === 'error') {
+      armed = false;
+      correction = f.card('change', { ...f.values(), body: 'Original' });
+      // The correction updates the editor synchronously, then awaits its own
+      // publication behind this one. Do not await that publication here.
+      await Promise.resolve();
+      armed = true;
+      return true;
+    }
+    return body !== 'Original'; // The corrected Host publication is rejected.
+  }, write: request => {
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Replacement C' });
+  f.externalEdit({ body: 'Original' });
+  armed = true;
+  await f.tool('get'); await correction;
+  assert.ok(Object.keys(Object.values(f.kv().mailDraftCards)[0].completedSaveHashes).length);
+  armed = false; f.restart();
+  const read = await f.tool('get');
+  assert.ok(read.data.conflicts.includes('body'));
+  assert.equal(f.writes.length, 1);
+});
+
+// Host accepts/broadcasts an update even when its DB persist fails. Restore
+// reads the durable card, so successful acknowledgement alone cannot release proof.
+for (const rollback of [false, true]) test(`acknowledged but non-durable recovery keeps its proof: rollback=${rollback}`, async () => {
+  let f, drop = false;
+  f = fixture({ durablePublish: card => !drop || card.type !== 'mail-draft-update', write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Replacement C' });
+  drop = true;
+  await f.tool('get');
+  assert.ok(Object.keys(Object.values(f.kv().mailDraftCards)[0].completedSaveHashes).length);
+  if (rollback) f.externalEdit({ body: 'Original' });
+  drop = false; f.restart();
+  const read = await f.tool('get');
+  if (rollback) {
+    assert.ok(read.data.conflicts.includes('body'));
+    assert.equal((await f.tool('send')).ok, false);
+    assert.equal(f.writes.length, 1);
+    assert.equal(f.current().editor.body, 'Original');
+  } else {
+    assert.deepEqual(copy(read.data.conflicts || []), []);
+    assert.equal((await f.tool('send')).ok, true);
+    assert.equal(f.writes.at(-1).fields.body, 'Replacement C');
+  }
+});
+
+// Actual public recovery of 64 unsent drafts must fit the real whole-plugin KV
+// validator; terminal cleanup alone cannot prevent recovery history exhaustion.
+for (const restart of [false, true]) test(`durable recovery cards release provenance for unsent draft history: restart=${restart}`, async () => {
+  let history = {};
+  for (let i = 0; i < 64; i++) {
+    let f;
+    f = fixture({ richText: true, initialKv: history, draftId: 'unsent-' + i, kvWrite: next => {
+      assert.equal(isValidGhostKvValue(next), true, 'whole-plugin KV remains usable');
+    }, write: request => {
+      f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    } });
+    await f.present();
+    await f.card('change', { ...f.values(), body: 'Saved ' + i, bodyHtml: '<p>Saved ' + i + '</p>' });
+    await f.tool('update');
+    if (restart) f.restart();
+    assert.equal((await f.tool('get')).ok, true);
+    history = f.kv();
+    const record = Object.values(history.mailDraftCards).find(r => r.draftId === 'unsent-' + i);
+    assert.equal(record.state, 'draft');
+    assert.deepEqual(record.completedSaveHashes, {});
+  }
+  assert.equal(Object.keys(history.mailDraftCards).length, 64);
+});
+
 // Plugin KV has a whole-document budget. Terminal receipts must release merge
 // metadata; uncertain delivery still needs the original protection/provenance.
 for (const operation of ['send', 'delete', 'send-unknown']) test(`recovery metadata follows the receipt lifecycle: ${operation}`, async () => {
-  let f;
-  f = fixture({ write: async request => {
+  let f, rejectRecovery = false;
+  f = fixture({ publish: card => !rejectRecovery || card.type !== 'mail-draft-update', write: async request => {
     if (f.writes.length === 1) {
       f.externalEdit({ body: request.fields.body });
       return { ok: false, execution: 'executed', message: 'Verification failed' };
@@ -1057,7 +1184,9 @@ for (const operation of ['send', 'delete', 'send-unknown']) test(`recovery metad
   await f.present();
   await f.card('change', { ...f.values(), body: 'Saved replacement' });
   await f.tool('update');
+  rejectRecovery = true;
   await f.tool('get');
+  rejectRecovery = false;
   const before = JSON.stringify(f.kv());
   const metadata = Object.values(f.kv().mailDraftCards)[0].completedSaveHashes;
   assert.ok(metadata);
@@ -1399,7 +1528,7 @@ test('restoring a formatting-only conflict preserves unsaved typing without send
   const base = { ...f.values(), body: 'Original.',
     bodyHtml: '<html><head></head><body><p>Original.</p></body></html>' };
   const local = { ...base, body: 'Original...', bodyHtml: base.bodyHtml.replace('Original.', 'Original...') };
-  const card = f.cards.at(-1).draft;
+  const card = f.durableCards.at(-1).draft; // Seed the persisted pre-restart card.
   card.baseValues = base;
   card.fields.forEach(field => { field.value = local[field.name]; });
   card.state = 'error'; card.status = 'Conflict';
