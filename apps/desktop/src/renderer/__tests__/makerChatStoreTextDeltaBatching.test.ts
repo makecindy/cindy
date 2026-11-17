@@ -706,23 +706,32 @@ describe('makerChatStore text delta batching', () => {
   });
 
   // #11113 / unit: terminal events can arrive without a running render or text.
-  // Exercise the actual event subscription; retained Done and background/SDK tails do not count.
-  it.each(['done', 'status'])('records a fresh %s terminal for remote preparation across view absence', (type) => {
-    const event = { type, source: type === 'status' ? 'pi' : 'claude-code', data: type === 'status'
-      ? { isRunning: false, status: 'Done', tokenUsage: 0 } : {} };
+  // Exercise the actual event subscription. Previous coverage missed Pi's status AFTER
+  // silentStop; neither status ordering may settle preparation before a real done/error.
+  it.each([
+    ['claude-code', 'done'], ['pi', 'done'], ['codex', 'done'], ['pi', 'error'],
+  ])('records a fresh %s %s terminal for remote preparation across view absence', (source, type) => {
+    const event = { type, source, data: type === 'error' ? { message: 'Remote turn failed' } : {} };
+    const status = { type: 'status', source, data: { isRunning: false, status: 'Done', tokenUsage: 0 } };
     try {
       onEvent?.({ sessionId: SESSION_ID, event });
       markSessionStarting(SESSION_ID);
       expect(hasStartingTerminal(SESSION_ID)).toBe(false);
       onEvent?.({ sessionId: SESSION_ID, event: { ...event, turnScope: 'background' } });
-      onEvent?.({ sessionId: SESSION_ID, event: { ...event, turnContinuationId: 1 } });
+      if (type === 'done') onEvent?.({ sessionId: SESSION_ID, event: { ...event, turnContinuationId: 1 } });
       expect(hasStartingTerminal(SESSION_ID)).toBe(false);
       if (type === 'done') {
-        onEvent?.({ sessionId: SESSION_ID, event: { type: 'status', source: 'claude-code',
-          data: { isRunning: false, status: 'Done', tokenUsage: 0 } } });
+        onEvent?.({ sessionId: SESSION_ID, event: status });
         expect(hasStartingTerminal(SESSION_ID)).toBe(false);
         onEvent?.({ sessionId: SESSION_ID, event: { ...event, data: { silentStop: true } } });
         expect(hasStartingTerminal(SESSION_ID)).toBe(false);
+        onEvent?.({ sessionId: SESSION_ID, event: status });
+        expect(hasStartingTerminal(SESSION_ID)).toBe(false);
+      } else {
+        for (const recovery of [{ isTerminal: false }, { willRetry: true }]) {
+          onEvent?.({ sessionId: SESSION_ID, event: { ...event, data: { ...event.data, ...recovery } } });
+          expect(hasStartingTerminal(SESSION_ID)).toBe(false);
+        }
       }
       onEvent?.({ sessionId: SESSION_ID, event });
       expect(hasStartingTerminal(SESSION_ID)).toBe(true);

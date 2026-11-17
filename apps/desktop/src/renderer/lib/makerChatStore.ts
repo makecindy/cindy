@@ -8606,10 +8606,9 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         { deferNotification: isLiveStatusRefreshFrame },
       );
       scheduleWakeBridgeReconciliation(sessionId);
-      // Claude emits status(Done) before done(silentStop); only the latter
-      // distinguishes completion from its automatic continuation window.
-      if (event.source !== 'claude-code' && !isTurnContinuationBoundaryEvent(event) && !update.skipTurnReset
-        && !update.isRunning && update.status === 'Done') noteStartingTerminal(sessionId);
+      // Status labels are not turn completion: Claude emits Done before a
+      // silent-stop done, Pi after it. Only the stream done/error below settles
+      // remote preparation, using the same rule for every agent source.
       return;
     }
 
@@ -8847,7 +8846,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     }
 
     if ((isProductTurnDoneEvent(event) || event.type === 'error') && event.turnScope !== 'background') {
-      if ((event.data as { silentStop?: boolean } | null)?.silentStop !== true) {
+      if ((event.data as { silentStop?: boolean } | null)?.silentStop !== true
+        && (event.type !== 'error' || isTerminalErrorData(event.data))) {
         noteStartingTerminal(sessionId);
       }
       const state = sessions.get(sessionId);

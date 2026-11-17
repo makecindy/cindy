@@ -2529,13 +2529,15 @@ function CCAgentSessionContent({
   const statusAgentDeviceId = statusAgentLocation(session?.agentDeviceId, pendingAgentDeviceId, agentStatus.isRunning);
   const receivedRemoteResponse = useMemo(() => hasTurnResponse(messages), [messages]);
   const receivedTerminalStatus = Boolean(sessionId && hasStartingTerminal(sessionId));
+  // A retained error belongs to the previous turn until running clears it.
+  // Only a newly received terminal event may settle this send's preparation.
   const settledStartingSessions = useMemo(() => new Set(
     statusAgentDeviceId && sessionId && (agentStatus.isRunning || receivedRemoteResponse || receivedTerminalStatus
-      || error || queuePaused || credentialSwitchWait
+      || queuePaused || credentialSwitchWait
       || pendingPermission || pendingAskUser || pendingPluginSetup || pendingPlanReview)
       ? [sessionId] : [],
   ), [statusAgentDeviceId, sessionId, agentStatus.isRunning, receivedRemoteResponse, receivedTerminalStatus,
-    error, queuePaused, credentialSwitchWait,
+    queuePaused, credentialSwitchWait,
     pendingPermission, pendingAskUser, pendingPluginSetup, pendingPlanReview]);
   const startingSessions = useStartingSessionIds(settledStartingSessions);
   const waitingRemoteStart = Boolean(statusAgentDeviceId && sessionId
