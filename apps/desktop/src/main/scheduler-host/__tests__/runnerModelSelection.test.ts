@@ -377,6 +377,46 @@ describe('MakerScheduleRunner model selection', () => {
     expect(harness.closeSession).toHaveBeenCalled();
   });
 
+  // #11134 review / unit: the first persistent fire holds an old snapshot while
+  // createSession yields to an edit. Existing tests edit before fire and cannot
+  // catch the late binding overwriting fresh mode or a newer explicit target.
+  it.each([
+    { persistentSession: false, targetSessionId: undefined, expectedTarget: undefined },
+    { persistentSession: true, targetSessionId: 'newer-task', expectedTarget: 'newer-task' },
+    { persistentSession: true, targetSessionId: undefined, expectedTarget: 'scheduler-session' },
+  ])('preserves the latest binding choice during first creation: %j', async (edit) => {
+    const h = createSessionHarness();
+    const harness = createRunnerHarness(h);
+    const previous = baseSchedule({ source: 'project', projectConfigId: 'daily',
+      persistentSession: true, model: 'claude-opus-5-5', providerId: 'anthropic' });
+    let row = scheduleCreateToRow(previous) as Parameters<typeof scheduleToCamel>[0];
+    const scheduler = new Scheduler({ runner: harness.runner, storage: {
+      get: async () => scheduleToCamel(row),
+      update: async (_id: string, update: Partial<Schedule>) => {
+        row = { ...row, ...schedulePatchToRow(update) };
+        return scheduleToCamel(row);
+      },
+    } as unknown as ScheduleStorage });
+    harness.runner.attachScheduler(scheduler);
+    harness.createSession.mockImplementationOnce(async () => {
+      await scheduler.update(previous.id, {
+        persistentSession: edit.persistentSession, targetSessionId: edit.targetSessionId,
+      });
+      return h.session;
+    });
+    await fireToCompletion(harness, h, previous);
+    const saved = (await scheduler.get(previous.id))!;
+    expect(saved.persistentSession).toBe(edit.persistentSession);
+    expect(saved.targetSessionId).toBe(edit.expectedTarget);
+    if (!edit.persistentSession) {
+      h.send.mockClear();
+      harness.createSession.mockClear();
+      await fireToCompletion(harness, h, saved);
+      expect(harness.createSession.mock.calls[0][0].id).not.toBe(h.session.id);
+      expect(harness.closeSession).toHaveBeenCalled();
+    }
+  });
+
   // Unit regression: a bound task runs on another computer, but an explicit
   // automation model belongs to the host. Saving must use the inherited catalog
   // and reject before starting/switching the task; explicit local must succeed.
@@ -750,10 +790,18 @@ describe('MakerScheduleRunner model selection', () => {
           }),
         }),
       });
-      const update = vi.fn(async () => undefined);
-      harness.runner.attachScheduler({ update, isRunSilenced: () => false } as unknown as Scheduler);
       const schedule = baseSchedule({ agentKind: 'codex', modelAgentKind: 'pi', model: 'shared-model',
         targetSessionId: h.session.id, persistentSession: true, effort: 'ultra', fastMode: true });
+      let row = scheduleCreateToRow(schedule) as Parameters<typeof scheduleToCamel>[0];
+      const scheduler = new Scheduler({ runner: harness.runner, storage: {
+        get: async () => scheduleToCamel(row),
+        update: async (_id: string, patch: Partial<Schedule>) => {
+          row = { ...row, ...schedulePatchToRow(patch) };
+          return scheduleToCamel(row);
+        },
+      } as unknown as ScheduleStorage });
+      const update = vi.spyOn(scheduler, 'update');
+      harness.runner.attachScheduler(scheduler);
       const saved = structuredClone(schedule);
       const opts = await fireToCompletion(harness, h, schedule);
       expect(opts).toMatchObject({ agentKind: 'pi', model: 'shared-model', providerId: 'selected', effort: 'high', fastMode: false });
@@ -767,7 +815,7 @@ describe('MakerScheduleRunner model selection', () => {
       expect(release).toHaveBeenCalledTimes(1);
       if (status !== 'active') {
         expect(update).toHaveBeenCalledWith(schedule.id, { targetSessionId: undefined });
-        expect(update).toHaveBeenCalledWith(schedule.id, { targetSessionId: h.session.id });
+        expect((await scheduler.get(schedule.id))?.targetSessionId).toBe(h.session.id);
         expect(harness.createSession.mock.calls[0][0].id).not.toBe(schedule.targetSessionId);
       }
     });
