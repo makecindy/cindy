@@ -41,7 +41,8 @@ import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './sessi
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { redactEventForRenderer } from '../../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
 import { isQuietScheduledOutput } from '../../../desktop/src/main/scheduler-host/silent-output.ts';
-import { claudeOpusPlanTerminalErrorData, defaultDecisionForPending, handleInteractionDismissedEvent, routeStandaloneTextEvent } from '../../../desktop/src/main/maker-ipc/sessionEventPreparationSteps.ts';
+import { claudeOpusPlanTerminalErrorData, defaultDecisionForPending, handleInteractionDismissedEvent, localizeRuntimeRecoveryEvent, routeStandaloneTextEvent } from '../../../desktop/src/main/maker-ipc/sessionEventPreparationSteps.ts';
+import { uiText } from '../../../desktop/src/main/uiText.ts';
 import { MAKER_PUSH } from '../../../desktop/src/main/maker-ipc/channels.ts';
 import { isGatewayProxyTokenRecoveryErrorEventForProvider } from '../../../desktop/src/main/maker-ipc/gatewayProxyTokenRecovery.ts';
 import { contextSnapshotForStatus, isContextCompactionSnapshot } from '../../../desktop/src/main/maker-ipc/sessionContextSnapshot.ts';
@@ -68,6 +69,9 @@ const errorText = error => error instanceof Error ? error.message : String(error
  * hub). As on the desktop (sessionEventPreparation.ts broadcastEvent), what leaves is the
  * renderer-boundary projection of the event; persistence and bookkeeping keep the original.
  */
+// The English of settings.piPackages.failure.runtimeRetirementFailed, for a main i18n that lacks it (ui-text.ts).
+const RUNTIME_RETIREMENT_FAILED_EN = 'Pi extensions could not be refreshed. Restart Cindy before using Pi again.';
+
 export function publishAgentEvent(hub, sessionId, event, fields) {
   const clientEvent = redactEventForRenderer(event);
   hub.publish({ ...clientEvent, sessionId, event: clientEvent, ...fields });
@@ -555,7 +559,17 @@ export function createTurnExecutor(deps) {
     const unsubscribeStatus = session.onStatusChange?.(status => {
       if (status === 'closed' && bindings.get(sessionId)?.session === session) releaseBinding(sessionId);
     });
-    bindings.set(sessionId, { session, unsubscribe: () => { unsubscribe(); unsubscribeStatus?.(); } });
+    // As the desktop (register.ts passes session.onRuntimeRecovery to its event pipeline): the receipt of
+    // a runtime retirement that failed after its turn (agent/pi-packages.ts retires Pi runtimes) becomes
+    // the localized notice of sessionEventPreparationSteps.ts, saved and published outside any turn, for
+    // the owner and runtime it was wired under only. Its copy is the main i18n (ui-text.ts).
+    const unsubscribeRecovery = session.onRuntimeRecovery?.(event => {
+      if (!deps.isCurrent() || bindings.get(sessionId)?.session !== session) return;
+      const localized = localizeRuntimeRecoveryEvent(event, key => uiText(key, RUNTIME_RETIREMENT_FAILED_EN));
+      const stream = history.event(session, localized);
+      publishAgentEvent(deps.hub, sessionId, localized, stream);
+    });
+    bindings.set(sessionId, { session, unsubscribe: () => { unsubscribe(); unsubscribeStatus?.(); unsubscribeRecovery?.(); } });
     // A runtime that replaces this task's runtime takes over its held failures (register.ts onBind).
     deps.productTurn?.rebind(sessionId, session);
   }

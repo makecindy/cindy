@@ -5981,14 +5981,14 @@ test('a Codex generated image that cannot be stored, arriving after its turn end
 // (and dropped a dismissal outside a turn), kept a notice as reply text, and stored the raw error.
 // Minimal input: one question then its withdrawal after done; two notices around a reply; one
 // observed Opus 400 then the terminal error.
-async function preparationFixture(t, id) {
+async function preparationFixture(t, id, { getOwner = getCurrentDbClientSnapshot } = {}) {
   t = lifoCleanup(t);
   const db = await recoveryDatabase(t);
   const published = [];
   const hub = { publish: event => published.push(event) };
   const interactions = createInteractionBroker({ hub });
   const persistMessage = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) });
-  const h = createHarness({ hub, persistMessage, getOwner: getCurrentDbClientSnapshot, interactions,
+  const h = createHarness({ hub, persistMessage, getOwner, interactions,
     readSession: async sid => ({ id: sid, status: 'active', agentKind: 'claude-code', model: 'm', workingDir: db.root,
       providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }) });
   // As a runtime: the shared interaction router installs its listener on the session.
@@ -5996,6 +5996,10 @@ async function preparationFixture(t, id) {
   h.maker.createSession = async opts => {
     const session = await create(opts);
     session.setInteractionListener = listener => { session.interactionListener = listener; };
+    // As maker-core's Session: a runtime recovery receipt has its own listeners, never onEvent.
+    const recoveryListeners = new Set();
+    session.onRuntimeRecovery = listener => { recoveryListeners.add(listener); return () => recoveryListeners.delete(listener); };
+    session.emitRuntimeRecovery = event => { for (const listener of [...recoveryListeners]) listener(event); };
     return session;
   };
   t.after(() => { interactions.dispose(); return h.queue.dispose(); });
@@ -6178,4 +6182,40 @@ test('list activity: a failing product-turn step still ends the turn and writes 
   await waitFor(() => !h.queue.projection('guarded').turnInProgress);
   assert.equal(h.persisted.filter(row => row.sessionId === 'guarded' && row.role === 'error').length, 1);
   assert.deepEqual(warnings, [['product turn bookkeeping failed', { sessionId: 'guarded', error: 'TypeError' }]]);
+});
+
+// Unit, over a migrated profile database: a runtime retirement that failed after its turn (甲 16). Rule,
+// as the desktop (register.ts wires session.onRuntimeRecovery into its pipeline; the preparation step
+// localizeRuntimeRecoveryEvent): the receipt becomes a notice in the user's language, saved as an
+// assistant row and published, outside any turn, and only for the owner the runtime was wired under.
+// Gap: the Host did not subscribe, so a failed Pi retirement left no notice and no row.
+// Minimal input: the Host's own retirement receipt (pi-package-runtime-invalidation.ts) after done.
+const retirementReceipt = session => ({ type: 'text', source: 'pi', runtimeRecovery: true,
+  data: { isFinal: true, text: 'restart-cindy-to-refresh-packages' },
+  sessionInstanceId: session.instanceId, sessionTurnGeneration: session.generation });
+
+test('a runtime retirement that failed after its turn is saved and published as a notice in the user\'s language', { timeout: 30_000 }, async t => {
+  bindHostUiText(() => ['zh-CN']);
+  t.after(() => configureUiText((_key, fallback) => fallback));
+  const f = await preparationFixture(t, 'retired');
+  await f.endTurn();
+  f.session.emitRuntimeRecovery(retirementReceipt(f.session));
+  const notice = 'Pi 扩展未能完成刷新。请重启 Cindy 后再使用 Pi。';
+  await waitFor(() => f.rows('assistant').includes(notice));
+  assert.deepEqual(f.rows('assistant'), [notice]);
+  assert.deepEqual(f.published.filter(event => event.type === 'text').map(event => event.data.text), [notice]);
+});
+
+test('a runtime retirement receipt after the owner changed saves and publishes nothing', { timeout: 30_000 }, async t => {
+  let otherOwner = null;
+  const f = await preparationFixture(t, 'retired-owner', { getOwner: () => otherOwner ?? getCurrentDbClientSnapshot() });
+  await f.endTurn();
+  const before = f.published.length;
+  // Another account becomes the owner; this task's runtime was wired under the first one.
+  otherOwner = { userId: 'another-owner' };
+  f.session.emitRuntimeRecovery(retirementReceipt(f.session));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.published.length, before);
+  assert.deepEqual(f.rows('assistant'), []);
+  otherOwner = null; // the fixture closes under its own owner
 });
