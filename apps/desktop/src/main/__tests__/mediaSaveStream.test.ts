@@ -92,6 +92,32 @@ describe('saveMediaStream', () => {
     expect(await fs.readdir(directory)).toEqual([]);
   });
 
+  it('allows remote cache materialization before starting body inactivity timing', async () => {
+    const { directory, destination } = await target();
+    vi.useFakeTimers();
+    const started = Promise.withResolvers<void>();
+    const ready = Promise.withResolvers<void>();
+    const p: MediaSaveStreamPorts = {
+      fetchHttp: vi.fn(),
+      fetchRemote: async (_url, signal) => {
+        started.resolve();
+        // SSH materializes an uncached video before returning its response.
+        // Its existing chunk/RPC timeouts govern this phase, not a total save budget.
+        await ready.promise;
+        expect(signal.aborted).toBe(false);
+        return new Response('remote video');
+      },
+    };
+    const saving = saveMediaStream({ ...source, kind: 'remote-media' }, destination, p);
+    const completed = expect(saving).resolves.toBeUndefined();
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(45_000);
+    ready.resolve();
+    await completed;
+    expect(await fs.readFile(destination, 'utf8')).toBe('remote video');
+    expect(await fs.readdir(directory)).toEqual(['clip.mp4']);
+  });
+
   it('cancels a stalled response reader and preserves the prior file', async () => {
     const { directory, destination } = await target();
     await fs.writeFile(destination, 'previous');

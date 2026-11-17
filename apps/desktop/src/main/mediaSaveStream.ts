@@ -36,10 +36,14 @@ export async function saveMediaStream(
   try {
     // Fail an unwritable/missing destination directory before starting the download.
     staging = await fs.mkdtemp(path.join(path.dirname(destination), '.cindy-save-'));
-    progress();
+    // HTTP may stall awaiting headers. Remote sources can first materialize a
+    // large SSH/cache file under their existing per-chunk/RPC timeouts; do not
+    // turn that healthy preparation into a total 30-second download deadline.
+    if (source.kind === 'http') progress();
     response = await (source.kind === 'http' ? ports.fetchHttp : ports.fetchRemote)(
       source.url, controller.signal,
     );
+    progress();
     if (!response.ok || response.status === 206) throw new Error(`HTTP ${response.status}`);
     if (!response.body) throw new Error('empty response body');
     reader = response.body.getReader();
