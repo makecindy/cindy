@@ -12,6 +12,7 @@ import { ipcMain, shell } from 'electron';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { enqueueGitRepoWrite } from '../git-snapshot/gitRepoWriteQueue.js';
 import { isSafeBranchBaseRef, readBranchDiff, readBranchFileDiff } from './branchReader.js';
+import { createCommitMessageDraft } from './commitMessage.js';
 import { commitStagedChanges, GitReviewCommitError } from './commitOps.js';
 import { listBranchCommits, readCommitDiff, readCommitFileDiff } from './commitReader.js';
 import { readCappedFileDiff, readDiffs } from './diffReader.js';
@@ -28,6 +29,7 @@ import type {
   FileDiff,
   GitReviewDeps,
   ReviewCommitDiffData,
+  ReviewCommitMessageDraft,
   ReviewCommitListData,
   ReviewCommitResult,
   ReviewBranchDiffData,
@@ -51,6 +53,7 @@ import type {
 
 export const GIT_REVIEW_INVOKE = {
   GET: 'git-review:get',
+  COMMIT_MESSAGE: 'git-review:commit-message',
   SUMMARY: 'git-review:summary',
   COMMITS: 'git-review:commits',
   COMMIT_DIFF: 'git-review:commit-diff',
@@ -105,7 +108,9 @@ const defaultGitReviewDeps: GitReviewDeps = {
   readDiffs,
 };
 
-type GitReviewIpcOptions = Pick<GitReviewDeps, 'isSessionRunning'>;
+type GitReviewIpcOptions = Pick<GitReviewDeps, 'isSessionRunning'> & {
+  generateCommitMessage?: (prompt: string) => Promise<string>;
+};
 
 function isGitReviewDeps(value: unknown): value is GitReviewDeps {
   return Boolean(value) &&
@@ -145,6 +150,15 @@ export async function readReviewData(
     diffs,
     summary: buildDirtySummary(sessionId, status.scope, status),
   };
+}
+
+export async function readReviewCommitMessageDraft(
+  sessionId: string,
+  generateCommitMessage?: (prompt: string) => Promise<string>,
+  deps: GitReviewDeps = defaultGitReviewDeps,
+): Promise<ReviewCommitMessageDraft> {
+  const data = await readReviewData(sessionId, deps);
+  return createCommitMessageDraft(data, generateCommitMessage);
 }
 
 export async function readReviewSummary(sessionId: string, deps: Pick<GitReviewDeps, 'resolveScope' | 'readStatus'> = {
@@ -701,6 +715,17 @@ export function registerGitReviewIpc(options: GitReviewIpcOptions = {}): void {
     try {
       const { sessionId, options } = parseReviewDataPayload(payload);
       return await withSessionReviewExecution(sessionId, () => readReviewData(sessionId, options));
+    } catch (err) {
+      rethrowReviewIpcError(err);
+    }
+  });
+
+  ipcMain.handle(GIT_REVIEW_INVOKE.COMMIT_MESSAGE, async (_event, payload: unknown) => {
+    try {
+      const sessionId = parseSessionId(payload);
+      return await withSessionReviewExecution(sessionId, () =>
+        readReviewCommitMessageDraft(sessionId, options.generateCommitMessage),
+      );
     } catch (err) {
       rethrowReviewIpcError(err);
     }

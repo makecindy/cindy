@@ -1,3 +1,4 @@
+import path from 'node:path';
 /**
  * Explicit user commit operation for git-review.
  *
@@ -46,6 +47,15 @@ function assertCanCommit(
   return scope.repoRoot;
 }
 
+/** 提交时暂存用的 pathspec：限定在 session workdir 内；workdir 即仓库根时取整个仓库。 */
+function commitPathspec(scope: ReviewScope, repoRoot: string): string[] {
+  const workdir = scope.workdir;
+  if (!workdir) return [':/'];
+  const rel = path.relative(repoRoot, workdir);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return [':/'];
+  return [rel];
+}
+
 export async function commitStagedChanges(
   scope: ReviewScope,
   status: ReviewStatus,
@@ -55,7 +65,10 @@ export async function commitStagedChanges(
   const repoRoot = assertCanCommit(scope, status, message, options);
   try {
     if (options.includeUnstaged) {
-      await runGit(['add', '-A', '--', ':/'], {
+      // 只暂存「列表能看到的范围」：workdir 是仓库子目录时，用 `:/` 会把仓库其它目录的
+      // 未暂存改动一起提交（评审 #10979 P1）。
+      const scopedPaths = commitPathspec(scope, repoRoot);
+      await runGit(['add', '-A', '--', ...scopedPaths], {
         cwd: repoRoot,
         timeoutMs: 120_000,
       });

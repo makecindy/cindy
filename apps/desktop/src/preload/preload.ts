@@ -286,6 +286,7 @@ import type {
   ReviewBranchDiffData,
   ReviewCommitDiffData,
   ReviewCommitListData,
+  ReviewCommitMessageDraft,
   ReviewCommitRequest,
   ReviewCommitResult,
   ReviewData,
@@ -6128,6 +6129,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   gitReview: {
     get: (params: { sessionId: string; ignoreWhitespace?: boolean }): Promise<ReviewData> =>
       ipcRenderer.invoke('git-review:get', params),
+    commitMessage: (params: { sessionId: string }): Promise<ReviewCommitMessageDraft> =>
+      ipcRenderer.invoke('git-review:commit-message', params),
     summary: (params: { sessionId: string }): Promise<ReviewDirtySummary> =>
       ipcRenderer.invoke('git-review:summary', params),
     commits: (params: {
