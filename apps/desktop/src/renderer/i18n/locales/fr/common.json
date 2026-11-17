@@ -16780,7 +16780,7 @@
         "wakeAt": "Date et heure de rappel",
         "timeZone": "Heure locale ({{zone}})",
         "invalidTime": "Choisissez une date et une heure futures dans l’année à venir.",
-        "inbox": "Boîte de réception",
+        "inbox": "À traiter",
         "working": "En cours",
         "snoozed": "Reportées",
         "archived": "Traitées",
@@ -16799,7 +16799,9 @@
       "taskListMode": {
         "heading": "Mode des tâches",
         "tasks": "Liste des tâches",
-        "inbox": "Boîte de réception"
+        "inbox": "Boîte de réception",
+        "enterInbox": "Passer à la boîte de réception",
+        "leaveInbox": "Revenir à la liste des tâches"
       }
     },
     "rename": {

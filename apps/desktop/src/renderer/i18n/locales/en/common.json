@@ -16618,7 +16618,7 @@
         "wakeAt": "Wake-up date and time",
         "timeZone": "Local time ({{zone}})",
         "invalidTime": "Choose a future date and time within one year.",
-        "inbox": "Inbox",
+        "inbox": "Pending",
         "working": "Working",
         "snoozed": "Snoozed",
         "archived": "Processed",
@@ -16636,7 +16636,9 @@
       "taskListMode": {
         "heading": "Task mode",
         "tasks": "Task list",
-        "inbox": "Inbox"
+        "inbox": "Inbox",
+        "enterInbox": "Switch to Inbox",
+        "leaveInbox": "Back to task list"
       }
     },
     "rename": {

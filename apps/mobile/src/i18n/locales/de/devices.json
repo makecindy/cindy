@@ -425,7 +425,7 @@
       "filterHideAllTeammates": "Alle ausblenden",
       "filterSelectedTeammates": "{{count}} ausgewählt",
       "inbox": {
-        "inbox": "Posteingang",
+        "inbox": "Offen",
         "working": "In Arbeit",
         "snoozed": "Zurückgestellt",
         "archived": "Erledigt",

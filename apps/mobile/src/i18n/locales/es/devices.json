@@ -428,7 +428,7 @@
       "filterHideAllTeammates": "Ocultar todo",
       "filterSelectedTeammates": "{{count}} seleccionados",
       "inbox": {
-        "inbox": "Bandeja de entrada",
+        "inbox": "Pendientes",
         "working": "En curso",
         "snoozed": "Pospuestas",
         "archived": "Procesadas",

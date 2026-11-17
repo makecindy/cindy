@@ -16544,7 +16544,7 @@
         "wakeAt": "喚回日期與時間",
         "timeZone": "本地時間（{{zone}}）",
         "invalidTime": "請選擇未來一年內的日期與時間。",
-        "inbox": "收件匣",
+        "inbox": "待處理",
         "working": "進行中",
         "snoozed": "稍後處理",
         "archived": "已處理",
@@ -16562,7 +16562,9 @@
       "taskListMode": {
         "heading": "任務模式",
         "tasks": "任務列表",
-        "inbox": "收件匣"
+        "inbox": "收件匣",
+        "enterInbox": "切換到收件匣",
+        "leaveInbox": "返回任務列表"
       }
     },
     "rename": {

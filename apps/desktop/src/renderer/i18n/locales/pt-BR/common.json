@@ -16780,7 +16780,7 @@
         "wakeAt": "Data e hora de retorno",
         "timeZone": "Hora local ({{zone}})",
         "invalidTime": "Escolha uma data e hora futuras dentro de um ano.",
-        "inbox": "Caixa de entrada",
+        "inbox": "Pendentes",
         "working": "Em andamento",
         "snoozed": "Adiadas",
         "archived": "Tratadas",
@@ -16799,7 +16799,9 @@
       "taskListMode": {
         "heading": "Modo de tarefas",
         "tasks": "Lista de tarefas",
-        "inbox": "Caixa de entrada"
+        "inbox": "Caixa de entrada",
+        "enterInbox": "Mudar para a caixa de entrada",
+        "leaveInbox": "Voltar à lista de tarefas"
       }
     },
     "rename": {

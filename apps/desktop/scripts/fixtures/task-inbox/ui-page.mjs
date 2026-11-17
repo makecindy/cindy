@@ -27,16 +27,16 @@ export default {
       await project.click();
       assert.equal(await inbox.count(), 0);
       await ui.capture('task-list-mode');
+      // The header toggle (top right) switches modes; it stays visible and pressed in the inbox.
       await page.locator('[class~="group/sidebar-header"]').hover();
-      await page.getByRole('button', { name: /侧边栏|sidebar/i }).last().click();
-      await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.taskListMode.heading')) }).hover();
-      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.taskListMode.inbox'), exact: true }).waitFor();
-      await ui.capture('mode-settings');
-      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.taskListMode.inbox'), exact: true }).click();
-      await page.keyboard.press('Escape');
-      await page.keyboard.press('Escape');
+      const toggle = page.locator('[data-task-list-mode-toggle]');
+      assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+      await ui.capture('mode-toggle');
+      await toggle.click();
       await inbox.waitFor();
       assert.equal(await project.count(), 0);
+      assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
+      assert.equal(await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.taskListMode.heading')) }).count(), 0);
       await page
         .locator('section > button')
         .filter({ hasText: await ui.t('ccAgent.sidebar.inbox.archived') })

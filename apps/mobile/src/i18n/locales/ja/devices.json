@@ -425,7 +425,7 @@
       "filterHideAllTeammates": "すべて非表示",
       "filterSelectedTeammates": "{{count}} 人を選択",
       "inbox": {
-        "inbox": "受信トレイ",
+        "inbox": "未処理",
         "working": "実行中",
         "snoozed": "後で処理",
         "archived": "処理済み",

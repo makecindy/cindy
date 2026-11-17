@@ -120,7 +120,6 @@ describe('sidebar display settings menu', () => {
     const root = screen.getByRole('menu');
     const rows = within(root).getAllByRole('menuitem');
     expect(rows.map((row) => row.querySelector('span')?.textContent)).toEqual([
-      '任务模式',
       '分组',
       '任务排序',
       '项目排序',
@@ -130,9 +129,9 @@ describe('sidebar display settings menu', () => {
       '任务信息',
     ]);
     for (const row of rows) expect(row.querySelector('svg')).not.toBeNull();
-    expect(rows[4].querySelector('.lucide-list-checks')).not.toBeNull();
-    expect(rows[1].textContent).toContain('项目、对话、设备');
-    expect(rows[3].textContent).toContain('跟随任务');
+    expect(rows[3].querySelector('.lucide-list-checks')).not.toBeNull();
+    expect(rows[0].textContent).toContain('项目、对话、设备');
+    expect(rows[2].textContent).toContain('跟随任务');
     const submenu = await openSubmenu(/^任务排序/);
     // PR #6196: preserve the historical glass-menu clipping regression through
     // real unit DOM containment; content/click assertions alone miss a lost portal.
@@ -220,11 +219,4 @@ it('keeps the creator submenu open for multiple selections and exposes an all re
   expect(filter.setCreatorsAll).toHaveBeenCalledOnce();
   fireEvent.click(within(submenu).getByRole('menuitem', { name: '都不显示' }));
   expect(filter.setCreatorsNone).toHaveBeenCalledOnce();
-});
-
-it('switches task mode and persists the selection', async () => {
-  render(<Preview filter={makeFilter()} />);
-  const menu = await openSubmenu(/^任务模式/);
-  fireEvent.click(within(menu).getByRole('menuitem', { name: '收件箱' }));
-  expect(localStorage.getItem('sidebar.taskListMode')).toBe('inbox');
 });

@@ -425,7 +425,7 @@
       "filterHideAllTeammates": "都不顯示",
       "filterSelectedTeammates": "已選 {{count}} 位",
       "inbox": {
-        "inbox": "收件匣",
+        "inbox": "待處理",
         "working": "進行中",
         "snoozed": "稍後處理",
         "archived": "已處理",

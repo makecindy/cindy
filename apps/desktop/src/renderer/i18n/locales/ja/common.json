@@ -16544,7 +16544,7 @@
         "wakeAt": "再表示する日時",
         "timeZone": "現地時間（{{zone}}）",
         "invalidTime": "1年以内の未来の日時を選択してください。",
-        "inbox": "受信トレイ",
+        "inbox": "未処理",
         "working": "実行中",
         "snoozed": "後で処理",
         "archived": "処理済み",
@@ -16562,7 +16562,9 @@
       "taskListMode": {
         "heading": "タスクモード",
         "tasks": "タスク一覧",
-        "inbox": "受信トレイ"
+        "inbox": "受信トレイ",
+        "enterInbox": "受信トレイに切り替え",
+        "leaveInbox": "タスク一覧に戻る"
       }
     },
     "rename": {

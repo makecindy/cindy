@@ -3901,7 +3901,26 @@
         "zh-Hant-x-lzh": "收件匣",
         "zh-Hans-x-lzh": "收件箱"
       },
-      "note": "任务列表的收件箱分区，读过的任务仍保留，处理沿用归档。"
+      "note": "按状态整理任务的列表模式，由任务栏右上角按钮切换；分区为待处理、进行中、稍后处理、已处理。"
+    },
+    {
+      "id": "task-pending",
+      "status": "proposed",
+      "en": "Pending",
+      "translations": {
+        "zh-CN": "待处理",
+        "zh-TW": "待處理",
+        "ja": "未処理",
+        "ko": "처리 대기",
+        "fr": "À traiter",
+        "es": "Pendientes",
+        "de": "Offen",
+        "pt-PT": "Pendentes",
+        "pt-BR": "Pendentes",
+        "zh-Hant-x-lzh": "待處理",
+        "zh-Hans-x-lzh": "待处理"
+      },
+      "note": "收件箱模式的第一个分区：需要用户处理的任务（新结果、等待回复、未归档的普通任务）。"
     },
     {
       "id": "task-processed",

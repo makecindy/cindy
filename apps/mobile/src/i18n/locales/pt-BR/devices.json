@@ -428,7 +428,7 @@
       "filterHideAllTeammates": "Ocultar tudo",
       "filterSelectedTeammates": "{{count}} selecionados",
       "inbox": {
-        "inbox": "Caixa de entrada",
+        "inbox": "Pendentes",
         "working": "Em andamento",
         "snoozed": "Adiadas",
         "archived": "Tratadas",

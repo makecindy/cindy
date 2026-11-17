@@ -425,7 +425,7 @@
       "filterHideAllTeammates": "모두 숨기기",
       "filterSelectedTeammates": "{{count}}명 선택",
       "inbox": {
-        "inbox": "받은 편지함",
+        "inbox": "처리 대기",
         "working": "진행 중",
         "snoozed": "나중에 처리",
         "archived": "처리됨",

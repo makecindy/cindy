@@ -7,10 +7,12 @@
  * 无内容或父级占位分支只画这一行。
  */
 import { useState, type ReactNode } from 'react';
-import type { LucideIcon } from 'lucide-react';
+import { ListChecks, type LucideIcon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
+import { useTaskListMode } from '@/hooks/useTaskListMode';
 import { MachineSwitcherMenu } from './MachineSwitcherMenu';
 import { SidebarFilterPopover } from './SidebarFilterPopover';
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
@@ -46,6 +48,10 @@ export function MainListScopeHeader({
   } | null;
 }): ReactNode {
   const [displaySettingsOpen, setDisplaySettingsOpen] = useState(false);
+  const { t } = useTranslation();
+  const { mode: taskListMode, setMode: setTaskListMode } = useTaskListMode();
+  const inbox = taskListMode === 'inbox';
+  const inboxLabel = t(inbox ? 'ccAgent.sidebar.taskListMode.leaveInbox' : 'ccAgent.sidebar.taskListMode.enterInbox');
   return (
     <div className="group/sidebar-header flex h-6 items-center justify-between pr-0 pl-6">
       <div className="flex min-w-0 items-center gap-1">
@@ -83,6 +89,26 @@ export function MainListScopeHeader({
               open={displaySettingsOpen}
               onOpenChange={setDisplaySettingsOpen}
             />
+          </div>
+          {/* 收件箱开关：开启时常驻并带选中底色，关闭时与其他段头按钮一样悬停才出现。 */}
+          <div className={inbox ? undefined : HEADER_HOVER_ACTION_CLASS}>
+            <Tip text={inboxLabel} side="bottom">
+              <button
+                type="button"
+                aria-label={inboxLabel}
+                aria-pressed={inbox}
+                data-task-list-mode-toggle=""
+                onClick={() => setTaskListMode(inbox ? 'tasks' : 'inbox')}
+                className={cn(
+                  'flex h-7 w-7 items-center justify-center rounded-full transition-colors',
+                  inbox
+                    ? 'bg-sidebar-item-hover text-[var(--sidebar-nav-text)]'
+                    : 'text-[var(--sidebar-list-muted)] hover:text-[var(--sidebar-nav-text)]',
+                )}
+              >
+                <ListChecks size={14} strokeWidth={2} />
+              </button>
+            </Tip>
           </div>
         </div>
       </div>

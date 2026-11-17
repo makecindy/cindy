@@ -16618,7 +16618,7 @@
         "wakeAt": "Datum und Uhrzeit der Wiedervorlage",
         "timeZone": "Ortszeit ({{zone}})",
         "invalidTime": "Wähle einen zukünftigen Zeitpunkt innerhalb eines Jahres.",
-        "inbox": "Posteingang",
+        "inbox": "Offen",
         "working": "In Arbeit",
         "snoozed": "Zurückgestellt",
         "archived": "Erledigt",
@@ -16636,7 +16636,9 @@
       "taskListMode": {
         "heading": "Aufgabenmodus",
         "tasks": "Aufgabenliste",
-        "inbox": "Posteingang"
+        "inbox": "Posteingang",
+        "enterInbox": "Zum Posteingang wechseln",
+        "leaveInbox": "Zurück zur Aufgabenliste"
       }
     },
     "rename": {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { ChevronsUpDown } from 'lucide-react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MainListScopeHeader } from '../MainListScopeHeader';
@@ -46,4 +46,20 @@ describe('MainListScopeHeader actions visibility', () => {
     expect(hiddenUntilHover(settings)).toBe(hidden);
     expect(hiddenUntilHover(fold)).toBe(true);
   });
+});
+
+// 2026-11-18 用户要求：收件箱从显示设置菜单移到段头右上角的开关按钮。关闭时与其他段头按钮
+// 一样悬停才出现；开启后常驻并标记为按下，再点一次回到任务列表；选择仍按本机保存。
+it('toggles the inbox mode from the header and keeps the active toggle visible', () => {
+  localStorage.removeItem('sidebar.taskListMode');
+  renderHeader('active');
+  const toggle = () => document.querySelector<HTMLButtonElement>('[data-task-list-mode-toggle]')!;
+  expect(toggle().getAttribute('aria-pressed')).toBe('false');
+  expect(hiddenUntilHover(toggle())).toBe(true);
+  act(() => { fireEvent.click(toggle()); });
+  expect(localStorage.getItem('sidebar.taskListMode')).toBe('inbox');
+  expect(toggle().getAttribute('aria-pressed')).toBe('true');
+  expect(hiddenUntilHover(toggle())).toBe(false);
+  act(() => { fireEvent.click(toggle()); });
+  expect(localStorage.getItem('sidebar.taskListMode')).toBe('tasks');
 });
