@@ -262,7 +262,23 @@ function createCodeMinimap() {
   }));
 }
 
+/**
+ * 缩略图上某一行的纵向位置：画布顶部的行是 `startIndex`（0 基），标签必须按**相对**
+ * 行偏移计算；用绝对行号会让滚动后的标签全堆到底部。纯几何，便于单测。
+ */
+export function minimapMarkTop(input: {
+  rowOffset: number;
+  offsetTop: number;
+  canvasHeight: number;
+  lineHeight: number;
+}): number {
+  const { rowOffset, offsetTop, canvasHeight, lineHeight } = input;
+  return Math.max(6, Math.min(canvasHeight - 6, offsetTop + rowOffset * lineHeight));
+}
+
 function collectMinimapMarks(view: EditorView): MinimapMark[] {
+  // 大文件沿用同一套降级口径：不做全文 MARK 扫描，避免每次输入都逐行重扫。
+  if (view.state.doc.length > LARGE_DOC_BYTES) return [];
   const marks: MinimapMark[] = [];
   for (let lineNumber = 1; lineNumber <= view.state.doc.lines; lineNumber += 1) {
     const label = parseMinimapMarkLabel(view.state.doc.line(lineNumber).text);
@@ -294,7 +310,12 @@ function getMinimapMarkTop(view: EditorView, lineNumber: number): number | null 
   const startIndex = Math.round(Math.max(0, canvasTop - paddingTop) / lineHeight);
   const endIndex = startIndex + Math.round((canvasHeight - offsetTop) / lineHeight);
   if (lineNumber <= startIndex || lineNumber > endIndex) return null;
-  return Math.max(6, Math.min(canvasHeight - 6, offsetTop + (lineNumber - 1) * lineHeight));
+  return minimapMarkTop({
+    rowOffset: lineNumber - 1 - startIndex,
+    offsetTop,
+    canvasHeight,
+    lineHeight,
+  });
 }
 
 /** MARK 标注层：随滚动/缩放重算位置，只在帧内渲染一次。 */
