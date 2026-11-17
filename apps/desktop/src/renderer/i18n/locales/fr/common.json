@@ -16800,8 +16800,8 @@
         "heading": "Mode des tâches",
         "tasks": "Liste des tâches",
         "inbox": "Boîte de réception",
-        "enterInbox": "Passer à la boîte de réception",
-        "leaveInbox": "Revenir à la liste des tâches"
+        "enterInbox": "Passer en mode boîte de réception",
+        "leaveInbox": "Passer en mode liste des tâches"
       }
     },
     "rename": {

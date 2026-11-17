@@ -16563,8 +16563,8 @@
         "heading": "任務模式",
         "tasks": "任務列表",
         "inbox": "收件匣",
-        "enterInbox": "轉至收件匣",
-        "leaveInbox": "返任務列"
+        "enterInbox": "轉至收件匣之式",
+        "leaveInbox": "轉至任務列之式"
       }
     },
     "rename": {

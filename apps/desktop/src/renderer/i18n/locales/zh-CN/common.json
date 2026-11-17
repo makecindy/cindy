@@ -16563,8 +16563,8 @@
         "heading": "任务模式",
         "tasks": "任务列表",
         "inbox": "收件箱",
-        "enterInbox": "切换到收件箱",
-        "leaveInbox": "返回任务列表"
+        "enterInbox": "切换到收件箱模式",
+        "leaveInbox": "切换到任务列表模式"
       }
     },
     "rename": {

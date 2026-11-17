@@ -16637,8 +16637,8 @@
         "heading": "Aufgabenmodus",
         "tasks": "Aufgabenliste",
         "inbox": "Posteingang",
-        "enterInbox": "Zum Posteingang wechseln",
-        "leaveInbox": "Zurück zur Aufgabenliste"
+        "enterInbox": "Zum Posteingangsmodus wechseln",
+        "leaveInbox": "Zum Aufgabenlistenmodus wechseln"
       }
     },
     "rename": {

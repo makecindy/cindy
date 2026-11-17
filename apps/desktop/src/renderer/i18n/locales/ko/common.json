@@ -16563,8 +16563,8 @@
         "heading": "작업 모드",
         "tasks": "작업 목록",
         "inbox": "받은 편지함",
-        "enterInbox": "받은 편지함으로 전환",
-        "leaveInbox": "작업 목록으로 돌아가기"
+        "enterInbox": "받은 편지함 모드로 전환",
+        "leaveInbox": "작업 목록 모드로 전환"
       }
     },
     "rename": {

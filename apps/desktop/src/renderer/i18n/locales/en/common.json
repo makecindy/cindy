@@ -16637,8 +16637,8 @@
         "heading": "Task mode",
         "tasks": "Task list",
         "inbox": "Inbox",
-        "enterInbox": "Switch to Inbox",
-        "leaveInbox": "Back to task list"
+        "enterInbox": "Switch to Inbox mode",
+        "leaveInbox": "Switch to task list mode"
       }
     },
     "rename": {

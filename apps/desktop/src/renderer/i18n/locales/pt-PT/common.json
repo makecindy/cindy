@@ -16800,8 +16800,8 @@
         "heading": "Modo de tarefas",
         "tasks": "Lista de tarefas",
         "inbox": "Caixa de entrada",
-        "enterInbox": "Mudar para a caixa de entrada",
-        "leaveInbox": "Voltar à lista de tarefas"
+        "enterInbox": "Mudar para o modo caixa de entrada",
+        "leaveInbox": "Mudar para o modo lista de tarefas"
       }
     },
     "rename": {

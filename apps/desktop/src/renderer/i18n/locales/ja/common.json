@@ -16563,8 +16563,8 @@
         "heading": "タスクモード",
         "tasks": "タスク一覧",
         "inbox": "受信トレイ",
-        "enterInbox": "受信トレイに切り替え",
-        "leaveInbox": "タスク一覧に戻る"
+        "enterInbox": "受信トレイモードに切り替え",
+        "leaveInbox": "タスク一覧モードに切り替え"
       }
     },
     "rename": {

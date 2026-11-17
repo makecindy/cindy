@@ -16800,8 +16800,8 @@
         "heading": "Modo de tareas",
         "tasks": "Lista de tareas",
         "inbox": "Bandeja de entrada",
-        "enterInbox": "Cambiar a la bandeja de entrada",
-        "leaveInbox": "Volver a la lista de tareas"
+        "enterInbox": "Cambiar al modo bandeja de entrada",
+        "leaveInbox": "Cambiar al modo lista de tareas"
       }
     },
     "rename": {
