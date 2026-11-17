@@ -47,6 +47,8 @@ export interface AccountFailoverDeps {
   readSession(id: string): Promise<AccountFailoverSession | null>;
   /** A running turn, including background work after the main turn, is never moved. */
   isRunning(id: string): boolean;
+  /** Official provider probe for native work not represented by a background card. */
+  hasLiveBackgroundWork?(id: string): Promise<boolean>;
   /**
    * Retires this task's idle runtime and durably saves a context handoff for a fresh native
    * session on the same route. Must call `assertCurrent` before committing.
@@ -205,6 +207,9 @@ export async function prepareSubscriptionAccountFailover(
   if (!blocked && (!recoveryEnabled() || !options.balance || row!.agentKind !== 'codex' || !row!.sdkSessionId
     || row!.source !== 'desktop' || row!.orcaRole)) return false;
   if (bound.previousProviderId && !deps.moveRoute) return false;
+  if (await deps.hasLiveBackgroundWork?.(sessionId)) return false;
+  assertOwner();
+  if (deps.isRunning(sessionId)) return false;
   if (!(await routeAdmits(bound))) return false;
   assertOwner();
   // Reserve the replacement with the same pool policy, limits and quota order as a new task.

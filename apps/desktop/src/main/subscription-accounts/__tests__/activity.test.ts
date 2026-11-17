@@ -8,12 +8,12 @@ import { reconcileLegacySubscriptionAccount } from '../reconcile.js';
 function root(id = 'old') {
   return { id, agentKind: 'codex', requestSessionId: 'native-' + id, remoteHostId: null as string | null,
     agentDeviceId: null as string | null, getStatus: () => 'active', isTurnRunning: () => true,
-    hasBackgroundWork: () => false,
+    hasLiveBackgroundWork: async () => false,
     listBackgroundTasks: () => [] as unknown[] };
 }
 describe('live subscription root provenance', () => {
   it('includes root background work but excludes remote, API and closed sessions before history lookup', async () => {
-    const old = root(); old.isTurnRunning = () => false; old.hasBackgroundWork = () => true;
+    const old = root(); old.isTurnRunning = () => false; old.hasLiveBackgroundWork = async () => true;
     const remote = root('remote'); remote.agentDeviceId = 'device';
     const ssh = root('ssh'); ssh.remoteHostId = 'ssh';
     const api = root('api'); const closed = root('closed'); closed.getStatus = () => 'closed';
@@ -26,8 +26,41 @@ describe('live subscription root provenance', () => {
     expect(unleasedSubscriptionActivity([...result, copy, { ...result[0], sessionId: 'alias' }], () => false).get('openai:second')).toBe(1);
     expect(unleasedSubscriptionActivity(result, () => true).size).toBe(0);
     expect(unleasedSubscriptionActivity([...result, { ...result[0], sessionId: 'alias' }], id => id === 'old').size).toBe(0);
-    old.hasBackgroundWork = () => false;
-    expect(unleasedSubscriptionActivity(result, () => false).size).toBe(0);
+    old.hasLiveBackgroundWork = async () => false;
+    const refreshed = await readLiveSubscriptionActivity({ roots: () => [old], usesOpenai: () => true, accountForRoot: lookup });
+    expect(unleasedSubscriptionActivity(refreshed, () => false).size).toBe(0);
+  });
+  it('bounds parallel idle probes and shares the original RPC across later activity reads', async () => {
+    vi.useFakeTimers();
+    let finish!: (value: boolean) => void;
+    const pending = new Promise<boolean>(resolve => { finish = resolve; });
+    const roots = [root('one'), root('two')];
+    const probes = roots.map(item => {
+      item.isTurnRunning = () => false;
+      item.hasLiveBackgroundWork = vi.fn(() => pending);
+      return item.hasLiveBackgroundWork;
+    });
+    const deps = { roots: () => roots, usesOpenai: () => true, accountForRoot: async (id: string) => id };
+    try {
+      const first = readLiveSubscriptionActivity(deps);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect((await first).filter(item => item.running)).toHaveLength(2);
+      const next = readLiveSubscriptionActivity(deps);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect((await next).filter(item => item.running)).toHaveLength(2);
+      for (const probe of probes) expect(probe).toHaveBeenCalledOnce();
+      finish(false);
+      await Promise.resolve();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { finish(false); vi.useRealTimers(); }
+  });
+  it('counts unknown native liveness as occupied and drops a root replaced during the official probe', async () => {
+    const old = root(); old.isTurnRunning = () => false;
+    old.hasLiveBackgroundWork = async () => { throw new Error('native probe unavailable'); };
+    const deps = { roots: () => [old], usesOpenai: () => true, accountForRoot: async () => 'second' };
+    expect(unleasedSubscriptionActivity(await readLiveSubscriptionActivity(deps), () => false).get('openai:second')).toBe(1);
+    old.hasLiveBackgroundWork = async () => { old.requestSessionId = 'replacement'; return true; };
+    expect(await readLiveSubscriptionActivity(deps)).toEqual([]);
   });
   it('does not infer an unknown account or publish a location lookup after native replacement', async () => {
     const old = root();

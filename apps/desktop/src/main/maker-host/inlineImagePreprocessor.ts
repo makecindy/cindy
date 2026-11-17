@@ -26,11 +26,14 @@ export function createInlineImagePreprocessor(
     // Do this before cache lookup or encoder scheduling; tighten is unaffected.
     if (maxBytes === undefined && detectSupportedImageMime(input.bytes) === 'image/jpeg') return null;
     const denied = input.route.deniedMimeTypes ?? [];
-    const acceptsWebp = Boolean(input.route.providerId?.trim()) && !denied.includes('image/webp') && acceptsWebpImageInput(input.route);
-    const request = { bytes: input.bytes, mimeType: input.mimeType, route: { acceptsWebp }, budget: maxBytes === undefined ? undefined : { maxBytes } };
+    const rejectsWebp = denied.includes('image/webp');
+    const acceptsWebp = Boolean(input.route.providerId?.trim()) && !rejectsWebp && acceptsWebpImageInput(input.route);
+    const request = { bytes: input.bytes, mimeType: input.mimeType, route: { acceptsWebp, rejectsWebp }, budget: maxBytes === undefined ? undefined : { maxBytes } };
     const key = imageCompressionCacheKey(input.bytes, request) + ':' + [...denied].sort().join(',');
     // A result fed back through a later request must never be JPEG-recompressed.
-    if (maxBytes === undefined && isCompressedImageOutput(input.bytes)) return null;
+    // Explicit format rejection may convert our own WebP output losslessly.
+    const convertRejectedWebp = maxBytes === undefined && rejectsWebp && detectSupportedImageMime(input.bytes) === 'image/webp';
+    if (maxBytes === undefined && !convertRejectedWebp && isCompressedImageOutput(input.bytes)) return null;
     if (cache.has(key)) {
       const hit = cache.get(key)!;
       cache.delete(key);

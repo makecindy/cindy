@@ -136,6 +136,27 @@ function group(owned = false): BotGroupSummary {
     { actorId: 'bot', botId: 'bot', actorKind: 'bot', name: 'Partner', role: 'owner', isOwned: owned, guestAccess: 'chat', accessRevision: 1 },
   ] } as BotGroupSummary;
 }
+
+// Unit: the real management page must expose the permission only to managers;
+// invitation-menu tests previously covered read-only canInvite, not changing it.
+it.each(['owner', 'admin'] as const)('lets a %s change member invitations without changing other group rules', async role => {
+  const initial = { ...group(), supportsMemberInvites: true, allowMemberInvites: false,
+    members: group().members.map(member => member.actorId === 'me' ? { ...member, role } : member) };
+  const view = renderAt(initial, 'manage');
+  fireEvent.click(screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: {
+    type: 'update', name: initial.name, topic: '', description: '', expectedRevision: 1, allowMemberInvites: true,
+  } }));
+  view.update({ ...initial, revision: 2, allowMemberInvites: true });
+  expect(screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' }).getAttribute('aria-checked')).toBe('true');
+});
+
+it('hides member invitation controls from ordinary members and on older servers', () => {
+  const view = renderAt({ ...group(), supportsMemberInvites: true }, 'manage');
+  expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' })).toBeNull();
+  view.update({ ...group(true), supportsMemberInvites: false });
+  expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' })).toBeNull();
+});
 function activeProfile(id: string, name: string, status = 'active') {
   return { id, name, status, sessions: [] as Array<{ id: string }>, capabilities: {}, skills: [] as string[] };
 }
@@ -264,6 +285,27 @@ it('lets a member change their own nickname while group management and another o
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'nickname', actorId: 'me', nickname: 'Group name' } }));
   await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('groupSettingsPage'));
 });
+// Unit: real companion page, ordinary member + owned companion. Existing tests covered grants
+// and manager removal only; this checks cancellation, failed retry, and active-request confirmation.
+it('lets an ordinary member withdraw their own companion, keeping failed removal retryable', async () => {
+  const value = group(true); value.members[1]!.role = 'member';
+  value.round = { status: 'running', speakers: [{ botId: 'bot', sessionId: 'lane', activity: 'reply' }], canContinue: false };
+  renderAt(value, 'companion:bot');
+  mocks.confirm.mockResolvedValueOnce(false);
+  fireEvent.click(row(key('removeOwn')));
+  await waitFor(() => expect(mocks.confirm).toHaveBeenCalledOnce());
+  expect(mocks.manage).not.toHaveBeenCalled();
+  mocks.manage.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_FAILED' });
+  fireEvent.click(row(key('removeOwn')));
+  await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+  expect(screen.getByTestId('location').textContent).toContain('companion');
+  expect(mocks.confirm).toHaveBeenLastCalledWith(expect.objectContaining({ confirmText: key('stopAndRemove'),
+    description: `${key('removeOwnHint')}:Partner\n\n${key('removeOwnActiveHint')}` }));
+  fireEvent.click(row(key('removeOwn')));
+  await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('groupSettingsPage'));
+  expect(mocks.manage).toHaveBeenLastCalledWith({ groupId: 'room', action: { type: 'member', actorId: 'bot', action: 'remove' } });
+});
+
 it('lets a companion owner manage a group owned by their companion', async () => {
   const view = renderAt(group(true), 'companion:bot');
   const radios = screen.getAllByRole('radio') as HTMLButtonElement[];

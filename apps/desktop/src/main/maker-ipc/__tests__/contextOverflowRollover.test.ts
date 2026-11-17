@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { CODEX_HISTORY_OVERSIZED_REASON, CONTEXT_OVERFLOW_REASON, UNSUPPORTED_REQUEST_OPTION_REASON } from '@cindy/maker-core';
 
 import {
   CODEX_HISTORY_CONTINUE_MESSAGE,
@@ -7,6 +8,7 @@ import {
   effectiveContextWindow,
   effectivePiContextWindow,
   findLatestRebuildableError,
+  holdsContextRecoveryBroadcast,
   hasModelWindowContextToProtect,
   lookupVerifiedContextWindow,
   isContextOverflowErrorData,
@@ -72,6 +74,26 @@ describe('isContextOverflowErrorData', () => {
           'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content',
       }),
     ).toBe(false);
+  });
+});
+
+// The broadcast hold the desktop's delivery and the Node Host share: only a terminal overflow-class
+// error of a local task is held for recovery; a remote task, a retried error or another error is not.
+describe('holdsContextRecoveryBroadcast', () => {
+  const local = { remoteHostId: null };
+  const error = (data: Record<string, unknown>) => ({ type: 'error', data } as never);
+  it.each([
+    ['context overflow', { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' }],
+    ['oversized history', { reason: CODEX_HISTORY_OVERSIZED_REASON, message: 'history too large' }],
+    ['unsupported request option', { reason: UNSUPPORTED_REQUEST_OPTION_REASON, message: 'option refused' }],
+  ])('holds a terminal %s error of a local task', (_kind, data) => {
+    expect(holdsContextRecoveryBroadcast(local, error(data))).toBe(true);
+  });
+  it('does not hold a remote task, a retried error or another error', () => {
+    const overflow = { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' };
+    expect(holdsContextRecoveryBroadcast({ remoteHostId: 'ssh-host' }, error(overflow))).toBe(false);
+    expect(holdsContextRecoveryBroadcast(local, error({ ...overflow, willRetry: true }))).toBe(false);
+    expect(holdsContextRecoveryBroadcast(local, error({ message: 'boom', reason: 'sdk_crash' }))).toBe(false);
   });
 });
 
@@ -313,6 +335,7 @@ describe('shouldRebuildForModelWindowSwitch', () => {
 
 describe('createContextOverflowRollover', () => {
   function makeDeps(source: OverflowSourceMessage[]) {
+    const live = { isTurnRunning: () => false };
     return {
       getSessionRow: vi.fn(
         async (): Promise<{
@@ -350,13 +373,13 @@ describe('createContextOverflowRollover', () => {
           getTurnGeneration?(): number;
           isTurnRunning(): boolean;
           listBackgroundTasks?(): ReadonlyArray<unknown>;
-          hasBackgroundWork?(): boolean;
+          hasLiveBackgroundWork?(): Promise<boolean>;
           getUsageSnapshot?: () => {
             contextTokens: number;
             contextWindow: number;
             needsRollover?: boolean;
           };
-        } | undefined => ({ isTurnRunning: () => false }),
+        } | undefined => live,
       ),
       rehydrateColdPiRuntimeForWindowVerification: vi.fn(async () => undefined),
       closeSession: vi.fn(async () => undefined),
@@ -632,7 +655,7 @@ describe('createContextOverflowRollover', () => {
     }));
     expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('already finished'), 3);
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
-    expect(assertCurrent).toHaveBeenCalledTimes(2);
+    expect(assertCurrent).toHaveBeenCalledTimes(3);
   });
 
   // Unit; context recovery rules require bounded tool evidence, no thinking and no replay.
@@ -688,15 +711,44 @@ describe('createContextOverflowRollover', () => {
       // commitRebuild owns SDK-id reset; rejecting before it preserves the binding.
       expect(deps.replayUserMessage).not.toHaveBeenCalled();
     });
-  it('does not retire a Codex account while a native descendant outlives the root turn', async () => {
+  // Unit: native work has no task card; a failed probe must also preserve the
+  // account binding. Earlier recovery coverage only modeled task snapshots.
+  it.each(['running', 'unknown'] as const)('does not retire a Codex account with native work (%s)', async state => {
     const deps = makeDeps([msg('user', 'finish the child build', 'u1')]);
     deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), agentKind: 'codex' });
-    deps.getLiveSession.mockReturnValue({ isTurnRunning: () => false, listBackgroundTasks: () => [], hasBackgroundWork: () => true });
+    deps.getLiveSession.mockReturnValue({ isTurnRunning: () => false, listBackgroundTasks: () => [], hasLiveBackgroundWork: async () => {
+      if (state === 'unknown') throw new Error('probe failed');
+      return true;
+    } });
     await expect(createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', 'retain-route', vi.fn())).rejects.toThrow('running');
     expect(deps.closeSession).not.toHaveBeenCalled();
     expect(deps.commitRebuild).not.toHaveBeenCalled();
     expect(deps.setPendingHandoff).not.toHaveBeenCalled();
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  // Unit: a native probe can complete after Stop or a new turn; neither idle
+  // answer authorizes closing/resetting the binding. Earlier mocks never yielded here.
+  it.each(['stop', 'new-turn'] as const)('preserves the runtime when %s wins the native probe', async change => {
+    const deps = makeDeps([msg('user', 'keep working', 'u1')]);
+    const controller = new AbortController();
+    let generation = 1;
+    let release!: (busy: boolean) => void;
+    let started!: () => void;
+    const probing = new Promise<void>(resolve => { started = resolve; });
+    const probe = new Promise<boolean>(resolve => { release = resolve; });
+    deps.getLiveSession.mockReturnValue({ instanceId: 'native-runtime', isTurnRunning: () => false,
+      getTurnGeneration: () => generation, hasLiveBackgroundWork: () => { started(); return probe; } });
+    const pending = createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', 'retain-route', vi.fn(), controller.signal);
+    const rejected = expect(pending).rejects.toThrow();
+    await probing;
+    if (change === 'stop') controller.abort();
+    else generation++;
+    release(false);
+    await rejected;
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
   });
 
   // P1 / unit: authorization may be withdrawn while assembly reads projection metadata.

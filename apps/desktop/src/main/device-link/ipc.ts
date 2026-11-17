@@ -1883,8 +1883,11 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       };
       const unsubscribe = onAppSessionInvalidated(cancel);
       e.sender.on('destroyed', cancel);
-      const onNavigation = (_event: unknown, _url: string, _inPlace: boolean, isMainFrame: boolean) => {
-        if (isMainFrame) cancel();
+      const onNavigation = (_event: unknown, _url: string, inPlace: boolean, isMainFrame: boolean) => {
+        // HashRouter task switches keep the same trusted document and must not
+        // cancel its in-flight sends. Replacing that document still revokes the
+        // transfer, alongside the owner/window/frame checks in assertCurrent.
+        if (isMainFrame && !inPlace) cancel();
       };
       e.sender.on('did-start-navigation', onNavigation);
       return withSourceFileAccessRecovery({

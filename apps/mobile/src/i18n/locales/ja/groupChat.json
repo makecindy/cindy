@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · {{person}} の代わり"
+  },
   "progress": {
     "stop": "停止",
     "stopMine": "自分の依頼を停止",
@@ -306,6 +309,8 @@
       "loading": "設定を読み込み中…",
       "unavailable": "グループ設定を読み込めませんでした。もう一度お試しください。"
     },
+    "allowMemberInvites": "全メンバーによる友達の招待を許可",
+    "allowMemberInvitesHint": "オンにすると、参加済みの全メンバーが友達を招待できます。変更できるのはグループオーナーと管理者のみです。",
     "allowMentionAllBots": "すべての仲間への @ を許可",
     "allowMentionAllBotsHint": "変更できるのはオーナーのみです。全員が返信する可能性があるため、大人数のグループでは慎重に有効にしてください。本人に代わる AI の返信には影響しません。"
   },
@@ -578,6 +583,11 @@
     "transferHint": "相手がオーナーになり、あなたは管理者になります。",
     "removeTitle": "{{name}} をグループから削除しますか？",
     "removeHint": "メッセージの閲覧と送信ができなくなります。そのメンバーの仲間も退出します。",
+    "removeOwn": "グループから退出",
+    "removeOwnScope": "このグループにのみ適用されます。パートナーはアカウントに残ります。",
+    "removeOwnHint": "{{name}} は「{{group}}」のメッセージを受信しなくなります。履歴は保持され、他のグループや個別チャットには影響しません。",
+    "removeOwnActiveHint": "このグループでの処理中のリクエストは停止します。独立して開始したタスクは続行します。",
+    "stopAndRemove": "停止して退出",
     "confirm": "確認",
     "inviteTitle": "グループに招待",
     "reusableLink": "有効期限なし · 複数の人が繰り返し利用可能",

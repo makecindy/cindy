@@ -74,6 +74,7 @@ import type {
   SendOptions,
   StartSessionOptions,
   TurnContinuationState,
+  TurnContinuationCancellationReason,
 } from './agents/base-agent.js';
 import {
   AUTO_REVIEW_SOURCE_CONTENT,
@@ -1604,12 +1605,6 @@ export class Session {
     return this.handle.listBackgroundTasks?.() ?? [];
   }
 
-  /** Includes native descendants that are not represented as background-task cards. */
-  hasBackgroundWork(): boolean {
-    if (this.status === 'closed' || this.status === 'error') return false;
-    return this.handle.hasBackgroundWork?.() === true || this.listBackgroundTasks().length > 0;
-  }
-
   /**
    * 宿主发起的独占 RPC 操作(手动压缩 / rewind / 切模等)在途。这类操作不预约
    * turn,关闭会把它们拦腰截断；空闲回收据此拒绝关闭。会话已关闭 → false。
@@ -1659,9 +1654,15 @@ export class Session {
 
   /** Subscribe to provider-owned continuation lifecycle transitions. */
   onTurnContinuationChange(
-    listener: (continuationId: number, state: TurnContinuationState) => void,
+    listener: (continuationId: number, state: TurnContinuationState, reason?: TurnContinuationCancellationReason) => void,
   ): () => void {
     return this.handle.onTurnContinuationChange?.(listener) ?? (() => undefined);
+  }
+
+  /** Read only the cause belonging to this exact retained continuation claim. */
+  getTurnContinuationCancellationReason(continuationId: number): TurnContinuationCancellationReason | undefined {
+    if (this.status === 'closed' || this.status === 'error') return undefined;
+    return this.handle.getTurnContinuationCancellationReason?.(continuationId);
   }
 
   /** True once teardown has started, including an unconfirmed failed close. */
@@ -1769,7 +1770,7 @@ export class Session {
    * first and keeps the session open, or observes closePromise and is rejected.
    */
   closeIfIdle(): Promise<boolean> {
-    if (this.status !== 'active' || this.closePromise || this.isTurnRunning() || this.hasBackgroundWork() || this.hasUnsettledTurn()
+    if (this.status !== 'active' || this.closePromise || this.isTurnRunning() || this.hasUnsettledTurn()
       || this.retirementContinuationGeneration === this.turnGeneration
       || this.hasPendingHostOperation()) {
       return Promise.resolve(false);
@@ -2423,7 +2424,7 @@ export class Session {
    */
   hasRecyclableProjectResourceDrift(): boolean {
     if (this.status !== 'active' || this.closePromise) return false;
-    if (this.isTurnRunning() || this.hasBackgroundWork() || this.hasUnsettledTurn()
+    if (this.isTurnRunning() || this.hasUnsettledTurn()
       || this.retirementContinuationGeneration === this.turnGeneration
       || this.hasPendingHostOperation()) {
       return false;
@@ -3312,7 +3313,9 @@ export class Session {
       return;
     }
     if (event.type !== 'tool_result_full' || typeof data.fullText !== 'string') return;
-    const verdict = control.toolLoopMonitor.onToolResult(data.toolUseId, data.fullText, data.isError === true);
+    const verdict = control.toolLoopMonitor.onToolResult(
+      data.toolUseId, data.outputOmitted === 'oversized' ? null : data.fullText, data.isError === true,
+    );
     if (verdict.kind !== 'hard') return;
     // Both translators enqueue full text before its summary. Let listeners
     // consume both projections before terminal cleanup clears their pairing.
@@ -3485,7 +3488,7 @@ export class Session {
 
   private hasRunningBackgroundTasks(): boolean {
     try {
-      return this.hasBackgroundWork();
+      return (this.handle.listBackgroundTasks?.() ?? []).length > 0;
     } catch (e) {
       // 查询失败按"没有后台任务"处理:看门狗宁可起表(仍有 45min 缓冲 + 其余排除项),
       // 也不要因为一个诊断查询抛错就永久失效。

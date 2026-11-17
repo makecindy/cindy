@@ -16,7 +16,7 @@ export default {
       `export const useSessionGitContext=()=>({head:null,branchSource:null,prRefs:[{id:'ref',sessionId:'pr-task',owner:'makecindy',repo:'cindy',prNumber:9261}],prStatuses:statuses});`,
     'src/renderer/contexts/PrRefsContext':
       state +
-      `export const usePrStatuses=()=>({statuses}); export const useTaskPrArchiveEligibility=()=>({eligible:false}); export const usePrActions=()=>({});`,
+      `export const usePrRefsForSession=()=>[]; export const usePrStatuses=()=>({statuses}); export const useTaskPrArchiveEligibility=()=>({eligible:false}); export const usePrActions=()=>({});`,
   },
   cases: {
     click: { about: 'Click and keyboard open a persistent summary; only its link navigates' },

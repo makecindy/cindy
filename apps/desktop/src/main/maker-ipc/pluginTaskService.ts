@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Session } from '@cindy/maker-core';
 import { GHOST_ERRAND_PERMISSION_MODES } from '../../shared/ghost.js';
-import type { PluginTaskPermissionMode, PluginTaskRoute, PluginTaskRun, PluginTaskView, PluginTeamPlan } from '../../shared/pluginTasks.js';
+import type { PluginTaskMessageRelay, PluginTaskPermissionMode, PluginTaskRoute, PluginTaskRun, PluginTaskView, PluginTeamPlan } from '../../shared/pluginTasks.js';
 import { isPluginTaskPermissionMode, isPluginTeamPlanWithinBudget, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../shared/pluginTasks.js';
 import type { PluginMessageAttachment } from '../../shared/pluginAttachments.js';
-import { withParsedPluginMessageAttachments, type PluginMessageImage } from '../cindy-media/pluginMessageAttachments.js';
+import { withParsedPluginMessageAttachments, type PluginMessageItem } from '../cindy-media/pluginMessageAttachments.js';
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import {
   isSameSessionExecution,
@@ -111,8 +111,11 @@ export interface PluginTaskServiceDeps {
   assertAuthorized(pluginId: string): void;
   /** Undefined only when this plugin has opted out of its Host task card. */
   readPermissionMode(pluginId: string): unknown;
-  /** Include the inherited new-task selection when the resolver can use it. */
-  readModelPreference(pluginId: string): Partial<PluginTaskRoute> & { inheritedDefault?: string };
+  /** Raw preference fingerprint, including the explicit-local null marker; not an execution route. */
+  readModelPreference(pluginId: string): Omit<Partial<PluginTaskRoute>, 'agentDeviceId'> & {
+    agentDeviceId?: string | null;
+    inheritedDefault?: string;
+  };
   resolveRoute(pluginId: string, route?: PluginTaskRoute, callId?: string): Promise<PluginTaskRoute>;
   createSession(
     pluginId: string,
@@ -153,8 +156,12 @@ export interface PluginTaskServiceDeps {
     taskId: string,
     clientId: string,
     text: string,
-    images?: PluginMessageImage[],
+    images?: PluginMessageItem[],
     context?: string,
+    /** Plugin-claimed IM relay; passed only when the request carried one. Host re-sanitizes it. */
+    relay?: PluginTaskMessageRelay,
+    /** Model-only reference attachments; passed only when the request carried some. */
+    contextItems?: PluginMessageItem[],
   ): Promise<{ ok: boolean; message?: string }>;
   inspect(
     taskId: string,
@@ -528,14 +535,18 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       }),
     send: async (
       pluginId: string,
-      request: { taskId: string; requestKey: string; expectedRevision: number; text: string; context?: string; attachments?: PluginMessageAttachment[]; invocationId?: string },
-    ): Promise<PluginTaskRun> => completeOperation(() => withParsedPluginMessageAttachments(request.attachments, async images => {
+      request: { taskId: string; requestKey: string; expectedRevision: number; text: string; context?: string; attachments?: PluginMessageAttachment[]; contextAttachments?: PluginMessageAttachment[]; invocationId?: string; relay?: PluginTaskMessageRelay },
+    ): Promise<PluginTaskRun> => completeOperation(() => withParsedPluginMessageAttachments(request.attachments, async (images, contextItems) => {
       const admission = await exclusive(async () => {
         const view = await ownTask(pluginId, request.taskId);
         const contentIdentity: unknown[] = images.length
           ? [request.text, request.expectedRevision, images.map(({ hash, name }) => [hash, name])]
           : [request.text, request.expectedRevision];
         if (request.context) contentIdentity.push({ context: request.context });
+        // Only a request that carries relay hashes it, so every relay-free receipt keeps its old digest.
+        if (request.relay) contentIdentity.push({ relay: request.relay });
+        // Likewise for model-only references: without them the digest is the one older Hosts computed.
+        if (contextItems.length) contentIdentity.push({ contextAttachments: contextItems.map(({ hash, name }) => [hash, name]) });
         const fingerprint = hash(request.invocationId === undefined ? contentIdentity : [...contentIdentity, request.invocationId]);
         const previous = replay(
           await deps.store.find(pluginId, 'send', request.taskId, request.requestKey),
@@ -596,21 +607,21 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         await assertDispatch(pluginId, prepared.run.taskId, prepared.assertPlanCurrent);
         prepared.assertPlanCurrent();
         dispatchStarted = true;
-        const outcome = await deps.dispatch(
-          pluginId,
-          prepared.run.taskId,
-          prepared.run.inputMessageId,
-          request.text,
-          images,
-          request.context,
-        );
+        const { taskId, inputMessageId } = prepared.run;
+        // Optional trailing arguments are passed only when the request carried them.
+        const outcome = await (contextItems.length
+          ? deps.dispatch(pluginId, taskId, inputMessageId, request.text, images, request.context, request.relay, contextItems)
+          : request.relay
+            ? deps.dispatch(pluginId, taskId, inputMessageId, request.text, images, request.context, request.relay)
+            : deps.dispatch(pluginId, taskId, inputMessageId, request.text, images, request.context));
         if (!outcome.ok) failure = 'failed';
         else {
           // Usage persistence must never turn an accepted input into a retry.
           if (prepared.run.invocationId) {
             try { deps.acceptInvocation?.(pluginId, prepared.run.invocationId); } catch { /* Best effort, as tool recording. */ }
           }
-          if (prepared.autoTitle) {
+          // An attachment-only message has no words to name the task from.
+          if (prepared.autoTitle && request.text) {
             // Reference material must not consume the title model's limited input budget.
             try { deps.scheduleAutoTitle?.(pluginId, prepared.run.taskId, request.text, request.text); }
             catch { /* Naming failure never retries an accepted message. */ }
@@ -634,7 +645,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         }
         return run;
       });
-    }).catch(error => {
+    }, request.contextAttachments).catch(error => {
       const code = (error as { code?: unknown } | null)?.code;
       if (!(error instanceof PluginTaskError) && (code === 'INVALID_ATTACHMENTS' || code === 'TASK_BUSY'))
         throw new PluginTaskError(code, code, code === 'TASK_BUSY');

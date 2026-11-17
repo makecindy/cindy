@@ -17,6 +17,22 @@ function feed(
 }
 
 describe('ToolLoopGuard', () => {
+  // #8412, unit: unknown results must close pending calls and break equality
+  // windows. Existing changing-output tests always supply an actual body.
+  it.each(['consecutive', 'stable-read'] as const)('does not bridge %s evidence across an omitted result', (mode) => {
+    const guard = new ToolLoopGuard();
+    const count = mode === 'consecutive' ? 3 : 127;
+    const name = mode === 'consecutive' ? 'exec' : 'grep';
+    for (let i = 0; i < count; i++) {
+      const position = mode === 'consecutive' ? 0 : i % 20;
+      feed(guard, String(i), name, { query: position }, `result-${position}`);
+    }
+    guard.onToolUse('unknown', name, { query: 0 });
+    expect(guard.onToolResult('unknown', null).kind).toBe('ok');
+    expect(guard.hasPendingCallOutside(new Set())).toBe(false);
+    expect(feed(guard, 'after', name, { query: 0 }, 'result-0').kind).toBe('ok');
+  });
+
   it.each([6, 20])('detects long stable read rotations with %i distinct calls', (distinct) => {
     const guard = new ToolLoopGuard();
     for (let i = 0; i < 128; i++) {

@@ -745,6 +745,7 @@ const PATH_GUARDED_CHANNELS: ReadonlyMap<string, 'workingDir' | 'baseRepo'> = ne
   [ORCA_REMOTE_WORKER_OPEN_CHANNEL, 'workingDir'],
   ['worktree:create', 'baseRepo'],
   ['worktree:sync-branch', 'baseRepo'],
+  ['worktree:checkout', 'baseRepo'],
 ]);
 
 /** host 注入的 workingDir 校验器(null = 未注入,放行;布尔返回值仅作旧测试兼容) */

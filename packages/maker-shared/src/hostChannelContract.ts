@@ -466,12 +466,6 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     body: ([id, enabled, expectedInstalledApproval]) => ({ id, enabled, expectedInstalledApproval }),
   },
   {
-    desktopChannel: 'ghosts:request-task-approval',
-    webPath: 'ghosts.requestTaskApproval',
-    hostPath: '/api/ghosts/request-task-approval',
-    body: ([id, capability]) => ({ id, capability }),
-  },
-  {
     desktopChannel: 'ghosts:confirm:resolve',
     webPath: 'ghosts.resolveConfirm',
     hostPath: '/api/ghosts/confirm/resolve',

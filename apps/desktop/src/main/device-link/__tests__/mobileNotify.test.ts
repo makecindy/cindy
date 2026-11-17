@@ -1,7 +1,19 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { NOTIFY_TITLE_MAX_LENGTH, NOTIFY_BODY_MAX_LENGTH, NOTIFY_DEEP_LINK_MAX_LENGTH } from '@cindy/device-link';
-import { mobileNotificationIdentity, MobileNotifyDeduper, buildBotGroupNotifyPayload, buildPermissionAlert, buildQuestionAlert, buildSessionNotifyPayload } from '../mobileNotify';
+import { mobileNotificationIdentity, MobileNotifyDeduper, buildBotGroupNotifyPayload, buildPermissionAlert, buildQuestionAlert, buildSessionNotifyPayload, shouldSuppressForActivity } from '../mobileNotify';
+
+// 测试价值：生产入口 sendMobileSessionNotify 使用该判据决定 relay 是否接收通知；
+// Bug #10944；原有 notifier 测试只验证调用分发，不覆盖 Agent Island attention 过滤；
+// 最小失败输入为 completed + attention=false 的已配置调度通知；tier=unit；单独运行 2.06s。
+describe('shouldSuppressForActivity', () => {
+  it('keeps explicit schedule alerts even when the task activity projection has no attention', () => {
+    expect(shouldSuppressForActivity('done', { phase: 'completed', attention: false }, true)).toBe(false);
+    expect(shouldSuppressForActivity('done', { phase: 'completed', attention: false })).toBe(true);
+    expect(shouldSuppressForActivity('needs-reply', { phase: 'running', attention: true })).toBe(true);
+    expect(shouldSuppressForActivity('needs-reply', { phase: 'needs-interaction', attention: true })).toBe(false);
+  });
+});
 
 describe('buildSessionNotifyPayload', () => {
   it('identifies only teammate replies and isolates the same bot on different hosts', () => {

@@ -26,21 +26,19 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe('Session close lifecycle', () => {
-  // Unit regression: Codex descendants have no BackgroundTaskSnapshot. An idle root must not
-  // close while its native children still run; previous close tests only modeled foreground turns.
-  it('keeps native child work alive until the shared account root is actually idle', async () => {
-    let childRunning = true;
+  // Unit: reclamation must treat unknown native activity as busy. Adapter tests
+  // cover RPC failure, but not Session's conservative boundary or closed-runtime bypass.
+  it('reports a failed native activity probe as busy until the runtime closes', async () => {
     const { session, handle } = liveTurn();
-    handle.hasBackgroundWork = () => childRunning;
-    expect(session.listBackgroundTasks()).toEqual([]);
-    expect(session.hasBackgroundWork()).toBe(true);
-    expect(await session.closeIfIdle()).toBe(false);
+    const probe = vi.fn(async () => { throw new Error('probe unavailable'); });
+    handle.hasLiveBackgroundWork = probe;
+    expect(await session.hasLiveBackgroundWork()).toBe(true);
     expect(handle.close).not.toHaveBeenCalled();
-    childRunning = false;
-    expect(await session.closeIfIdle()).toBe(true);
-    expect(session.hasBackgroundWork()).toBe(false);
-    expect(handle.close).toHaveBeenCalledOnce();
+    await session.close();
+    expect(await session.hasLiveBackgroundWork()).toBe(false);
+    expect(probe).toHaveBeenCalledOnce();
   });
+
   function liveTurn(hostContinuation = true, terminalGate?: Promise<void>) {
     const queue = createAsyncQueue<AgentEvent>();
     let running = false;
@@ -263,6 +261,26 @@ describe('Session close lifecycle', () => {
     queue.push({ type: 'done', source: 'pi', data: { status: 'completed', result: 'delivered' } });
     await vi.waitFor(() => expect(session.getStatus()).toBe('closed'));
     expect(handle.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('forwards continuation diagnostics and preserves handles without a reason API (#10547)', async () => {
+    const { session, handle } = liveTurn(false);
+    expect(session.getTurnContinuationCancellationReason(7)).toBeUndefined();
+    expect(session.onTurnContinuationChange(() => undefined)).toBeTypeOf('function');
+    let notify!: Parameters<NonNullable<AgentSessionHandle['onTurnContinuationChange']>>[0];
+    const unsubscribe = vi.fn();
+    handle.onTurnContinuationChange = listener => { notify = listener; return unsubscribe; };
+    handle.getTurnContinuationCancellationReason = id => id === 7 ? 'user_stop' : undefined;
+    const seen = vi.fn();
+    const off = session.onTurnContinuationChange(seen);
+    notify(7, 'cancelled', 'user_stop');
+    expect(seen).toHaveBeenCalledExactlyOnceWith(7, 'cancelled', 'user_stop');
+    expect(session.getTurnContinuationCancellationReason(7)).toBe('user_stop');
+    expect(session.getTurnContinuationCancellationReason(8)).toBeUndefined();
+    off();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    await session.close();
+    expect(session.getTurnContinuationCancellationReason(7)).toBeUndefined();
   });
 
   it('does not retire at a provider boundary with an outstanding continuation claim', async () => {

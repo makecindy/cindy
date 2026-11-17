@@ -22,6 +22,18 @@ describe('private video task download disk budget', () => {
     vi.restoreAllMocks();
   });
 
+  // A custom Guide must not turn a private content read into a credentialed
+  // request outside the connection's API path, including encoded dot segments.
+  it.each(['/../../admin/{taskId}', '/%2e%2e/%2E%2E/admin/{taskId}', '/../v10/{taskId}', '/%2e%2e%2f%2e%2e%2fadmin/{taskId}'])(
+    'rejects an escaping content path before fetching: %s', async contentPath => {
+      fetch.mockResolvedValue(new Response(new Uint8Array(8), { headers: { 'content-type': 'video/mp4' } }));
+      await expect(fetchVideoTaskContent(connection, 'paid-task', undefined, contentPath))
+        .rejects.toMatchObject({ code: 'MEDIA_RESULT_INVALID' });
+      expect(fetch).not.toHaveBeenCalled();
+      expect(directories).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([undefined, '1'])('counts actual streamed bytes with content-length=%s and cancels, cleans up, and does not retry overflow', async contentLength => {
     const cancel = vi.fn();
     const chunks = [new Uint8Array(4), new Uint8Array(5)];

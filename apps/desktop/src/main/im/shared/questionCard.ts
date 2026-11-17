@@ -47,6 +47,8 @@ export function createQuestionCard(
     return {
       title: '❓',
       body: `${body()}\n\n${status ?? hint ?? imText('imBot.text.questions.cardHint')}`,
+      // 选项文案常常较长: 一行一个满宽按钮, 不挤在同一行被压缩。
+      buttonLayout: 'list',
       buttons: closed || submitted ? [] : [
         // Hook interaction.request allows 24 buttons. Oversized forms retain all
         // choices in the numbered body and the same text-answer/submit path.

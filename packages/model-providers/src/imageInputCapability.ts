@@ -49,13 +49,16 @@ export function acceptsWebpImageInput(route: ImageRouteIdentity): boolean {
   const model = normalize(route.modelId);
   if (!provider && !model) return false;
 
+  // Exact identity or a delimiter-separated preset suffix, never arbitrary
+  // startsWith ("openai-impostor" is still only a heuristic, not authorization).
+  const identity = Object.keys(PROVIDER_CAPABILITIES).find((key) => provider === key || provider.startsWith(`${key}-`));
+  const namespace = model.split('/').at(-2);
+  const providerCapability = identity === undefined ? undefined : PROVIDER_CAPABILITIES[identity];
+  const namespaceCapability = namespace === undefined ? undefined : PROVIDER_CAPABILITIES[namespace];
+  if (providerCapability === 'png-jpeg' || namespaceCapability === 'png-jpeg') return false;
+
   const family = model.split('/').at(-1) ?? '';
   if (/^(?:glm-|grok-)/.test(family)) return false;
   if (/^(?:gpt-|o\d+(?:$|[-.])|chatgpt|claude-|gemini-|deepseek|qwen|kimi|moonshot|minimax|abab|doubao|seed|mistral|pixtral)/.test(family)) return true;
-  // Exact identity or a delimiter-separated preset suffix, never arbitrary
-  // startsWith ("openai-impostor" is still only a heuristic, not authorization).
-  const namespace = model.split('/').at(-2);
-  if (namespace && PROVIDER_CAPABILITIES[namespace]) return PROVIDER_CAPABILITIES[namespace] === 'webp';
-  const identity = Object.keys(PROVIDER_CAPABILITIES).find((key) => provider === key || provider.startsWith(`${key}-`));
-  return identity !== undefined && PROVIDER_CAPABILITIES[identity] === 'webp';
+  return namespaceCapability === 'webp' || providerCapability === 'webp';
 }

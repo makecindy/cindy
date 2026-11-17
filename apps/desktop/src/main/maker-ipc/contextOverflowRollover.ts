@@ -41,6 +41,8 @@ import { buildClientEnvironmentNote } from './mobileClientPromptNote.js';
 import { buildWireMessageSourceNote } from './messageSourceNote.js';
 import { isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
 import { isEmptyModelChangeMarker } from './recoveryCoordinator.js';
+import { isTerminalTurnErrorEvent } from './sessionTurnActivityTracker.js';
+import type { AgentEvent, Session } from '@cindy/maker-core';
 export { isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
 
 const SYNTHETIC_TRIGGER_PREFIX = '[UI_ACTION_TRIGGER]';
@@ -111,6 +113,27 @@ export function isUnsupportedRequestOptionErrorData(data: unknown): boolean {
   if (rec.reason === UNSUPPORTED_REQUEST_OPTION_REASON) return true;
   return [rec.message, rec.sdkError].some(
     (value) => typeof value === 'string' && isUnsupportedRequestOptionErrorMessage(value),
+  );
+}
+
+/**
+ * Whether the broadcast of a terminal error is held for context recovery: an overflow-class
+ * terminal error of a local task (sessionEventDelivery.ts holds it and reserves its persist id).
+ */
+export function holdsContextRecoveryBroadcast(
+  session: Pick<Session, 'remoteHostId'>,
+  event: AgentEvent,
+): boolean {
+  return (
+    !session.remoteHostId &&
+    event.type === 'error' &&
+    isTerminalTurnErrorEvent(event) &&
+    (isContextOverflowErrorData(event.data) ||
+      isOversizedHistoryErrorData(event.data) ||
+      // 与 sessionEventTerminal 的 overflowClaim 判据保持一致：PI compat 自愈的终态错误
+      // 也要先压住广播并预留 persistId，否则自愈失败时 surfaceOverflowFailure 拿不到
+      // 预留 id（dedup 已被吃掉），错误行不落库、后台任务历史里看不到失败。
+      isUnsupportedRequestOptionErrorData(event.data))
   );
 }
 
@@ -449,7 +472,7 @@ export interface ContextOverflowRolloverDeps {
     getTurnGeneration?(): number;
     isTurnRunning(): boolean;
     listBackgroundTasks?(): ReadonlyArray<unknown>;
-    hasBackgroundWork?(): boolean;
+    hasLiveBackgroundWork?(): Promise<boolean>;
     getUsageSnapshot?(): { contextTokens: number; contextWindow: number; needsRollover?: boolean };
   } | null | undefined;
   rehydrateColdPiRuntimeForWindowVerification?(sessionId: string): Promise<void>;
@@ -616,6 +639,24 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
 } {
   const inFlight = new Map<string, AbortController | undefined>();
   const claimTurns = new WeakMap<AbortController, RecoveryTurnIdentity>();
+  // Probe provider-owned work, not UI cards alone. Unknown is busy, and a late
+  // answer must never authorize retirement of a replacement runtime or turn.
+  const liveIsBusy = async (sessionId: string, live: ReturnType<ContextOverflowRolloverDeps['getLiveSession']>): Promise<boolean> => {
+    const generation = live?.getTurnGeneration?.();
+    const busy = () => {
+      const current = deps.getLiveSession(sessionId);
+      return (live?.instanceId ? current?.instanceId !== live.instanceId : current !== live)
+        || current?.getTurnGeneration?.() !== generation
+        || !!current?.isTurnRunning() || (current?.listBackgroundTasks?.().length ?? 0) > 0;
+    };
+    if (busy()) return true;
+    try {
+      if (await live?.hasLiveBackgroundWork?.()) return true;
+    } catch {
+      return true;
+    }
+    return busy();
+  };
   // One automatic continuation per source input, not one per replacement thread.
   const continuedInputs = new Map<string, string>();
   // 自愈成功时那一轮的 turn 身份：同身份再次到达 = 同一轮的重复终态投递（丢弃）；
@@ -665,7 +706,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
 
     return deps.withCloseSuppressed(sessionId, async () => {
       const live = deps.getLiveSession(sessionId);
-      if (live?.isTurnRunning() || live?.hasBackgroundWork?.() || (live?.listBackgroundTasks?.().length ?? 0) > 0) {
+      if (await liveIsBusy(sessionId, live)) {
         deps.log.warn('context overflow rollover skipped: turn still running', { sessionId });
         return false;
       }
@@ -722,7 +763,6 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
             && (!turnIdentity?.instanceId || !currentLive?.instanceId || turnIdentity.instanceId === currentLive.instanceId)
             && (turnIdentity?.generation === undefined || !currentLive?.getTurnGeneration || turnIdentity.generation === currentLive.getTurnGeneration())
             && !currentLive?.isTurnRunning()
-            && !currentLive?.hasBackgroundWork?.()
             && !(currentLive?.listBackgroundTasks?.().length);
         };
         if (!sourceUnchanged()) return false;
@@ -754,6 +794,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         const latestUser = [...currentMessages].reverse().find((message) => message.role === 'user' && !isSyntheticUser(message));
         if (!sourceUnchanged() || latestUser?.clientId !== sourceUser?.clientId) return false;
         // Retire the idle stale runtime so the next owner-managed send loads the fix.
+        if (await liveIsBusy(sessionId, live)) return false;
+        signal?.throwIfAborted();
         if (live) await deps.closeSession(sessionId);
         signal?.throwIfAborted();
         // The Pi receipt also covers output not yet flushed to the desktop database.
@@ -838,6 +880,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         return false;
       }
 
+      if (await liveIsBusy(sessionId, live)) return false;
+      signal?.throwIfAborted();
       if (oversized) {
         if (plan.skipGenericReplay || deps.hasExternalRecoveryOwner?.(sessionId)) return false;
         if (continuedInputs.get(sessionId) === plan.sourceUserClientId) return false;
@@ -1040,6 +1084,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       (await deps.findLatestUser?.(sessionId)) ??
       null;
     const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
+    if (await liveIsBusy(sessionId, live)) return 'busy';
     target.assertCanCommit?.();
     target.beforeClose?.();
     if (live) await deps.closeSession(sessionId);
@@ -1080,7 +1125,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // SSH only; device-link 会话在被控桌面是本地 session,继续换窗。
     if (sessionRow.remoteHostId) return false;
     const live = deps.getLiveSession(sessionId);
-    if (live?.isTurnRunning() || live?.hasBackgroundWork?.() || (live?.listBackgroundTasks?.().length ?? 0) > 0) return false;
+    if (await liveIsBusy(sessionId, live)) return false;
     const accountHandoff = await deps.needsNativeSessionHandoff?.(sessionId, sessionRow) ?? false;
     if (!sessionRow.sdkSessionId && !accountHandoff) return false;
     // All companion lanes use the ordinary Session recovery boundary. Healthy
@@ -1162,6 +1207,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
     // 关掉当前 live handle。调用方必须在解析发送目标之前调用 prepare,
     // 再 getSession / createSession;peek 之后对旧对象 send 会打到已关闭实例。
+    if (await liveIsBusy(sessionId, live)) return false;
     signal.throwIfAborted();
     if (live) await deps.closeSession(sessionId);
     signal.throwIfAborted();
@@ -1217,9 +1263,10 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           }
           assertReady();
           const live = deps.getLiveSession(sessionId);
-          if (target && (live?.isTurnRunning() || live?.hasBackgroundWork?.() || (live?.listBackgroundTasks?.().length ?? 0) > 0)) {
+          if (target && await liveIsBusy(sessionId, live)) {
             throw new Error('Native session recovery cannot interrupt a running turn or background task');
           }
+          assertReady();
           // Manual restart closes the broken runtime without asking it to compact.
           if (live) await deps.closeSession(sessionId);
           assertReady();

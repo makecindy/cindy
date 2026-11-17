@@ -22,8 +22,9 @@ const prompts: Record<string, PendingInteraction[]> = {
   ] } }],
 };
 let running = true;
+let othersRunning = true;
 export function groupExecutionVisualFixture(channel: string, args: unknown[]): unknown | undefined {
-  const request = args[0] as { ref?: { id?: string }; resourceRef?: { id?: string }; actionId?: string } | undefined;
+  const request = args[0] as { ref?: { id?: string }; resourceRef?: { id?: string }; actionId?: string; input?: { scope?: string } } | undefined;
   if (channel === 'maker:resolve-interaction' && typeof args[0] === 'string' && args[0].startsWith('qa-')) {
     for (const [session, list] of Object.entries(prompts)) if (list.some(item => item.request.requestId === args[0])) prompts[session] = [];
     return { accepted: true };
@@ -41,9 +42,21 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
       ] : [])];
   }
   const groupId = request?.ref?.id ?? request?.resourceRef?.id;
-  if (!groupId || ![GROUP, `${GROUP}-work`, `${GROUP}-talk`, `${GROUP}-member`, `${GROUP}-legacy`, `${GROUP}-peer`].includes(groupId)) return undefined;
-  if (channel === 'maker:remote-resources:invoke') { if (request?.actionId === 'stop') running = false; return { effects: [] }; }
+  if (!groupId || ![GROUP, `${GROUP}-work`, `${GROUP}-talk`, `${GROUP}-member`, `${GROUP}-legacy`, `${GROUP}-requesters`, `${GROUP}-peer`].includes(groupId)) return undefined;
+  if (channel === 'maker:remote-resources:invoke') { if (request?.actionId === 'stop') { running = false; if (request.input?.scope === 'all') othersRunning = false; } return { effects: [] }; }
   if (channel !== 'maker:remote-resources:get') return undefined;
+  if (groupId.endsWith('-requesters')) return { ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: groupId },
+    revision: 'requester-attribution', display: { title: 'Cindy · 请求归属验收' }, actions: [], links: [], blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: '', data: {
+      id: groupId, name: 'Cindy · 请求归属验收', serverBacked: true, replyMode: 'mentioned', speakingMode: 'auto',
+      members: [{ ...members[0], name: 'Cindy', assistant: true }], plans: [], createdAt: NOW, updatedAt: NOW,
+      messages: [{ id: 'qa-request-ann', sequence: 1, kind: 'message', authorKind: 'user', isSelf: false, authorName: 'Ann', content: '@Cindy 请检查我的请求。', createdAt: NOW - 40_000 },
+        { id: 'qa-request-nana', sequence: 2, kind: 'message', authorKind: 'user', isSelf: true, authorName: 'nana', content: '@Cindy 我也有一项请求。', createdAt: NOW - 20_000 }],
+      round: { status: 'running', canContinue: false, speakers: [
+        { botId: members[0].botId, sessionId: null, activity: 'reply', executionId: 'qa-ann', requesterName: 'Ann', isSelfRequested: false, timelineAt: NOW - 30_000, executionStatus: 'running' },
+        { botId: members[0].botId, sessionId: null, activity: 'reply', executionId: 'qa-nana', requesterName: 'nana', isSelfRequested: true, timelineAt: NOW - 10_000, executionStatus: 'queued' },
+      ] },
+    } }] };
+
   if (groupId.endsWith('-work') || groupId.endsWith('-talk')) {
     const talk = groupId.endsWith('-talk');
     const steps = members.map((member, index) => ({ position: index, botId: member.botId, botName: member.name,
@@ -63,7 +76,7 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
           { id: 'qa-done', sequence: 2, kind: 'message', planId: plan.id, authorKind: 'bot', authorBotId: members[0].botId,
           authorName: members[0].name, content: '调研结果已整理好，可以继续核对。', createdAt: NOW - 25_000 }],
         round: { status: talk ? 'idle' : 'running', canContinue: false, speakers: talk ? [] : [
-          { botId: members[1].botId, sessionId: 'qa-work', activity: 'step', executionId: 'qa-e2-work', executionStatus: 'running', startedAt: NOW - 20_000 },
+          { botId: members[1].botId, sessionId: 'qa-work', activity: 'step', executionId: 'qa-e2-work', isSelfRequested: true, timelineAt: NOW - 20_000, executionStatus: 'running', startedAt: NOW - 20_000 },
         ] },
       } }] };
   }
@@ -72,13 +85,19 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
       id: groupId, name: '群内执行 · 模拟数据', serverBacked: true, replyMode: 'mentioned', speakingMode: 'auto',
       members, plans: [], supportsScopedStop: !groupId.endsWith('-legacy'), canStopAll: !groupId.endsWith('-member'), createdAt: NOW, updatedAt: NOW,
       messages: [{ id: 'qa-start', sequence: 1, kind: 'message', authorKind: 'user', isSelf: true,
-        content: '请一起核对移动端群内执行，确认每位伙伴的进展与等待操作都可以完整阅读。', createdAt: NOW - 40_000 }],
-      round: { status: running ? 'running' : 'idle', canContinue: false, othersActive: true, speakers: running ? [
-        { botId: 'qa-research', sessionId: 'qa-research', activity: 'reply', executionId: 'qa-e1', executionStatus: 'running', startedAt: NOW - 30_000 },
-        { botId: 'qa-design', sessionId: 'qa-permission', activity: 'reply', executionId: 'qa-e2', executionStatus: 'needs_input', startedAt: NOW - 20_000 },
-        { botId: 'qa-check', sessionId: 'qa-question', activity: 'reply', executionId: 'qa-e3', executionStatus: 'needs_input', startedAt: NOW - 10_000 },
-        { botId: 'qa-research', sessionId: null, activity: 'reply', executionId: 'qa-e4', executionStatus: 'queued' },
-      ] : [] },
+        content: '请一起核对移动端群内执行，确认每位伙伴的进展与等待操作都可以完整阅读。', createdAt: NOW - 40_000 },
+        { id: 'qa-followup', sequence: 2, kind: 'message', authorKind: 'user', isSelf: false, authorName: 'Alex',
+          content: '我也有一项需要一起核对。', createdAt: NOW - 25_000 }],
+      round: { status: running || othersRunning ? 'running' : 'idle', canContinue: false, othersActive: othersRunning, speakers: [
+        ...(othersRunning ? [
+        { botId: 'qa-research', sessionId: 'qa-research', activity: 'reply', executionId: 'qa-e1', isSelfRequested: false, timelineAt: NOW - 30_000, executionStatus: 'running', startedAt: NOW - 30_000 },
+        ] : []),
+        ...(running ? [
+        { botId: 'qa-design', sessionId: 'qa-permission', activity: 'reply', executionId: 'qa-e2', isSelfRequested: true, timelineAt: NOW - 20_000, executionStatus: 'needs_input', startedAt: NOW - 20_000 },
+        { botId: 'qa-check', sessionId: 'qa-question', activity: 'reply', executionId: 'qa-e3', isSelfRequested: true, timelineAt: NOW - 10_000, executionStatus: 'needs_input', startedAt: NOW - 10_000 },
+        { botId: 'qa-research', sessionId: null, activity: 'reply', executionId: 'qa-e4', isSelfRequested: true, timelineAt: NOW - 5_000, executionStatus: 'queued' },
+        ] : []),
+      ] },
     } }] };
   if (groupId.endsWith('-peer')) {
     const data = resource.blocks[0].data;

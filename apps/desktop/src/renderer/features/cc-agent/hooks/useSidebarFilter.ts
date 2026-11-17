@@ -69,6 +69,10 @@ import {
   loadGroupDevice,
   loadLastActivity,
   loadSortBy,
+  loadPinnedSortBy,
+  persistPinnedSortBy,
+  PINNED_SORT_BY_KEY,
+  type PinnedSortBy,
   loadProjectOrder,
   loadManualProjectOrder,
   migrateLegacyManualSort,
@@ -151,6 +155,8 @@ export interface UseSidebarFilterReturn {
   groupDevice: boolean;
   /** Sidebar 主列表任务排序。默认 'recency'。 */
   sortBy: FilterSortBy;
+  /** 置顶区独立的显示排序；默认保留手动顺序。 */
+  pinnedSortBy: PinnedSortBy;
   /** 按项目分组时的项目行顺序。默认 'activity'。 */
   projectOrder: FilterProjectOrder;
   /** Project 分组自定义顺序。元素为 normalized workingDir。 */
@@ -183,6 +189,8 @@ export interface UseSidebarFilterReturn {
   setGroupDevice: (groupDevice: boolean) => void;
   /** 设置主列表任务排序，持久化到 localStorage。 */
   setSortBy: (sortBy: FilterSortBy) => void;
+  /** 设置置顶显示排序，保留原有手动顺序。 */
+  setPinnedSortBy: (sortBy: PinnedSortBy) => void;
   /** 设置项目行顺序，持久化到 localStorage。 */
   setProjectOrder: (projectOrder: FilterProjectOrder) => void;
   /** 重置项目 / Harness / 最近活跃筛选；保留独立的任务状态与展示偏好。 */
@@ -277,6 +285,20 @@ export function useSidebarFilter(
   const [projectOrder, setProjectOrderState] = useState<FilterProjectOrder>(() =>
     loadProjectOrder(),
   );
+  const [pinnedSortBy, setPinnedSortByState] = useState(loadPinnedSortBy);
+  const setPinnedSortBy = useCallback((next: PinnedSortBy) => {
+    setPinnedSortByState(next);
+    persistPinnedSortBy(next);
+  }, []);
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === PINNED_SORT_BY_KEY || event.key === null) {
+        setPinnedSortByState(loadPinnedSortBy());
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
   const [manualProjectOrder, setManualProjectOrderState] = useState<string[]>(() =>
     loadManualProjectOrder(ownerId),
   );
@@ -662,6 +684,7 @@ export function useSidebarFilter(
     groupDialogue,
     groupDevice,
     sortBy,
+    pinnedSortBy,
     projectOrder,
     manualProjectOrder,
     manualPinnedOrder,
@@ -676,6 +699,7 @@ export function useSidebarFilter(
     setGroupDialogue,
     setGroupDevice,
     setSortBy,
+    setPinnedSortBy,
     setProjectOrder,
     resetContentFilters,
     setManualProjectOrder,

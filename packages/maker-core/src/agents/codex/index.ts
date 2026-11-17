@@ -210,6 +210,7 @@ import {
   classifyCodexError,
   translateErrorNotification,
   translateItemNotification,
+  translateOmittedItem,
   beginCodexGenerationTurn,
   codexGenerationDurationMs,
   finalizeCodexGenerationTurn,
@@ -3883,6 +3884,9 @@ assertRouteCurrent();
     // different turn ids, but their changes belong to the active root turn;
     // retain each thread's latest snapshot and publish one merged diff.
     const turnDiffSnapshots = new Map<string, string>();
+    // 最近一次累计 diff 超过 app-server 单行上限、被宿主丢弃正文的线程。它们本轮的 diff
+    // 未知, 合并结果不能当成完整改动发布。
+    const oversizedTurnDiffThreads = new Set<string>();
     const splitTurnDiffBlocks = (diff: string): string[] => diff
       .split(/(?=^diff --git )/m)
       .filter((block) => block.startsWith('diff --git '));
@@ -3919,9 +3923,20 @@ assertRouteCurrent();
       }
       return { diff, complete };
     };
-    const publishTurnDiff = (threadKey: string, turnId: string, diff: string): void => {
+    /** `diff` 为 null 表示宿主丢弃了这次超限的累计 diff, 该线程本轮内容未知。 */
+    const publishTurnDiff = (threadKey: string, turnId: string, diff: string | null): void => {
       if (diff) turnDiffSnapshots.set(threadKey, diff);
       else turnDiffSnapshots.delete(threadKey);
+      if (diff === null) oversizedTurnDiffThreads.add(threadKey);
+      else oversizedTurnDiffThreads.delete(threadKey);
+      if (oversizedTurnDiffThreads.size > 0) {
+        eventQueue.push({
+          type: 'turn_diff',
+          data: { turnId, diff: '', cwd: opts.workingDir, omitted: 'oversized' },
+          source: 'codex',
+        });
+        return;
+      }
       const merged = mergeTurnDiffSnapshots();
       eventQueue.push({
         type: 'turn_diff',
@@ -6348,7 +6363,7 @@ assertRouteCurrent();
         }
       }
       if (method === 'turn/diff/updated') {
-        const diffParams = params as { turnId?: unknown; diff?: unknown } | null;
+        const diffParams = params as { turnId?: unknown; diff?: unknown; cindyOmitted?: unknown } | null;
         if (
           currentTurnId
           && !descendantTurnIsTerminal
@@ -6356,7 +6371,11 @@ assertRouteCurrent();
           && typeof diffParams.turnId === 'string'
           && typeof diffParams.diff === 'string'
         ) {
-          publishTurnDiff(childThreadId, currentTurnId, diffParams.diff);
+          publishTurnDiff(
+            childThreadId,
+            currentTurnId,
+            diffParams.cindyOmitted === 'oversized' ? null : diffParams.diff,
+          );
         }
       }
       const update = subagentLiveCards.handleDescendantNotification(childThreadId, method, params);
@@ -8384,7 +8403,7 @@ assertRouteCurrent();
             // 审阅器故障降级来的 ask 提示一次,让用户知道为何突然开始被问。
             // 用户点「允许」只批准当前这一次,不再重新跑审阅器。
             if (decision.unavailable) {
-              autoReviewUnavailableNotice.notify();
+              autoReviewUnavailableNotice.notify(decision);
               unavailableHandoff = true;
             }
             if (approvalRequest.kind === 'permission') {
@@ -8834,6 +8853,7 @@ assertRouteCurrent();
 
       resetCodexGenerationTiming(translatorRt, true);
       turnDiffSnapshots.clear();
+      oversizedTurnDiffThreads.clear();
       translatorRt.samplingSegments.clear();
       proposedPlanText = null;
       translatorRt.lastAuthErrorKey = null;
@@ -10751,6 +10771,19 @@ assertRouteCurrent();
       ) return undefined;
       return `${turnId}:${candidate.id}`;
     };
+
+    const collabTerminalEventQueue = (turnId: string, background: boolean): AsyncQueue<AgentEvent> =>
+      background ? {
+        push: (event: AgentEvent) => eventQueue.push({
+          ...event,
+          turnScope: 'background',
+          backgroundTurnStartedAt: turnOriginByTurnId.get(turnId)?.startedAtMs ?? 0,
+        }),
+        end: () => eventQueue.end(),
+        clear: () => eventQueue.clear(),
+        get pending() { return eventQueue.pending; },
+        [Symbol.asyncIterator]: () => eventQueue[Symbol.asyncIterator](),
+      } : eventQueue;
 
     const collabItemHasRunningAgentState = (item: unknown): boolean => {
       if (!item || typeof item !== 'object') return false;
@@ -12755,7 +12788,7 @@ assertRouteCurrent();
       turnDiffUpdated: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.turnDiffUpdated?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
-        publishTurnDiff(threadId, params.turnId, params.diff);
+        publishTurnDiff(threadId, params.turnId, params.cindyOmitted === 'oversized' ? null : params.diff);
       },
       turnCompleted: (params) => {
         if (ownsManualCompact(params.turn.id)) {
@@ -12950,27 +12983,14 @@ assertRouteCurrent();
           params.turnId,
           'completed',
         );
-        const itemEventQueue = isLateCollabTerminal
-          ? {
-            push: (event: AgentEvent) => eventQueue.push({
-              ...event,
-              turnScope: 'background',
-              // Missing ownership fails closed only if a later /clear exists.
-              backgroundTurnStartedAt:
-                turnOriginByTurnId.get(params.turnId)?.startedAtMs ?? 0,
-            }),
-            end: () => eventQueue.end(),
-            clear: () => eventQueue.clear(),
-            get pending() { return eventQueue.pending; },
-            [Symbol.asyncIterator]: () => eventQueue[Symbol.asyncIterator](),
-          } as AsyncQueue<AgentEvent>
-          : eventQueue;
+        const itemEventQueue = collabTerminalEventQueue(params.turnId, isLateCollabTerminal);
         const denialKey = approvalDenialKey(params.threadId, params.turnId, params.item.id);
         const approvalDenialReason = approvalDenials.get(denialKey)?.reason;
         approvalDenials.delete(denialKey);
         translateItemNotification('completed', translatedParams, itemEventQueue, {
           rt: translatorRt,
           log,
+          background: isLateCollabTerminal,
           approvalDenialReason,
           compactTrigger: manualCompact?.turnId === params.turnId ? 'manual' : 'auto',
           onCompactBoundary: handleCompactBoundary,
@@ -13001,6 +13021,44 @@ assertRouteCurrent();
         // turn/completed 在 turn 结束时会 push 'Done' 终态, 不需要在这里特判。
         // 迟到的旧 turn 收口只允许发 background 结果,不能给当前 turn 注入前台状态。
         if (isTurnInFlight && !isLateCollabTerminal) pushStatus('Generating...');
+      },
+      itemOmitted: (params) => {
+        // 正文超限被宿主丢弃的条目不再展示, 但它仍是这一轮真实发生过的工作 (常见是写过大文件):
+        // 与 itemStarted / itemCompleted 一样记产出, 否则容量 / 429 后会整轮重放、重复副作用。
+        // 读不到 type 时 itemRepresentsModelWork 按有产出处理。
+        const modelWork = itemRepresentsModelWork(params.item);
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemOmitted?.(params), { modelWork })) return;
+        const collabTerminalKey = params.phase === 'completed'
+          ? collabTerminalItemKey(params.turnId, params.item) : undefined;
+        if (collabTerminalKey && handledCollabTerminalItemIds.has(collabTerminalKey)) return;
+        let isLateCollabTerminal = false;
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) {
+          if (!collabTerminalKey || !params.item.id
+            || !translatorRt.collabToolItems.has(params.item.id)
+            || (!completedTurnIds.has(params.turnId) && !terminalErroredTurnIds.has(params.turnId))) return;
+          isLateCollabTerminal = true;
+        }
+        if (collabTerminalKey) handledCollabTerminalItemIds.add(collabTerminalKey);
+        if (modelWork) {
+          producedOutputTurnIds.add(params.turnId);
+          noteRecoveryModelWork(params.turnId, params.item);
+        }
+        if (params.phase === 'completed') completeActiveToolContext(params.item, params.turnId);
+        if (params.phase !== 'updated' && !isLateCollabTerminal) noteToolItemLifecycle(params.item, params.phase);
+        // started 已经出过 tool_use 的工具要补一个不含正文的收尾, 否则会话一直认为它在跑。
+        const terminalCollab = translateOmittedItem(params.phase, params,
+          collabTerminalEventQueue(params.turnId, isLateCollabTerminal), {
+            rt: translatorRt, log, background: isLateCollabTerminal,
+          });
+        if (terminalCollab) {
+          // Closing a spawn tool does not prove its child completed. Reassert
+          // the existing tracker state without inventing omitted agent states.
+          const update = noteSubagentSpawnItem(terminalCollab, params.turnId, 'completed');
+          if (update) emitSubagentCardUpdate(update, isLateCollabTerminal ? {
+            turnScope: 'background',
+            backgroundTurnStartedAt: turnOriginByTurnId.get(params.turnId)?.startedAtMs ?? 0,
+          } : {});
+        }
       },
       agentMessageDelta: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.agentMessageDelta?.(params), {
@@ -13531,12 +13589,11 @@ assertRouteCurrent();
     };
 
     const handle: AgentSessionHandle = {
-      hasBackgroundWork: () => subagentLiveCards.hasRunning,
       disabledSkillPaths: disabledSkillSnapshot,
       getAutoReviewOwner: () => currentApprovalConfig().approvalsReviewer === 'auto_review' ? 'native' : 'cindy',
       reviewAutoPermissionAction: async (action) => {
         const decision = await reviewAutoAction(action);
-        if (decision.unavailable) autoReviewUnavailableNotice.notify();
+        if (decision.unavailable) autoReviewUnavailableNotice.notify(decision);
         return decision;
       },
       get id() { return sdkSessionId ?? '<pending>'; },

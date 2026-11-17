@@ -9,7 +9,27 @@ interface LiveRoot {
   getStatus(): string;
   isTurnRunning(): boolean;
   listBackgroundTasks(): unknown[];
-  hasBackgroundWork?(): boolean;
+  hasLiveBackgroundWork?(): Promise<boolean>;
+}
+
+// Coalesce the official native RPC while a bounded read has already returned busy.
+// No timer loop or follow-up request: only a later actual activity read can use the result.
+const probeFlights = new WeakMap<LiveRoot, Promise<boolean>>();
+async function readNativeBusy(root: LiveRoot, budgetMs: number): Promise<boolean> {
+  if (!root.hasLiveBackgroundWork) return false;
+  let flight = probeFlights.get(root);
+  if (!flight) {
+    flight = Promise.resolve().then(() => root.hasLiveBackgroundWork!()).catch(() => true);
+    probeFlights.set(root, flight);
+    const current = flight;
+    void current.finally(() => { if (probeFlights.get(root) === current) probeFlights.delete(root); });
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([flight, new Promise<boolean>(resolve => {
+      timer = setTimeout(() => resolve(true), budgetMs);
+    })]);
+  } finally { if (timer !== undefined) clearTimeout(timer); }
 }
 
 /** Resolve only live local subscription roots; the launcher owns routing and native storage facts. */
@@ -18,29 +38,34 @@ export async function readLiveSubscriptionActivity(deps: {
   owner?(): string;
   usesOpenai(sessionId: string): boolean;
   accountForRoot(sessionId: string, nativeId: string, root: object): Promise<string | undefined>;
+  probeBudgetMs?: number;
 }): Promise<SubscriptionRootActivity[]> {
   const result: SubscriptionRootActivity[] = [];
   const owner = deps.owner?.();
-  for (const root of deps.roots()) {
+  await Promise.all(deps.roots().map(async root => {
     if (root.agentKind !== 'codex' || root.remoteHostId || root.agentDeviceId
-      || root.getStatus() === 'closed' || !deps.usesOpenai(root.id)) continue;
+      || root.getStatus() === 'closed' || !deps.usesOpenai(root.id)) return;
     const nativeId = root.requestSessionId;
-    if (!nativeId) continue;
+    if (!nativeId) return;
     let accountId: string | undefined;
     try { accountId = await deps.accountForRoot(root.id, nativeId, root); }
     catch (error) {
       if (deps.owner?.() !== owner) throw error;
-      continue; // Unknown history for one root is not failure of the other accounts.
+      return; // Unknown history for one root is not failure of the other accounts.
+    }
+    let nativeBusy = false;
+    if (!root.isTurnRunning() && root.listBackgroundTasks().length === 0) {
+      nativeBusy = await readNativeBusy(root, deps.probeBudgetMs ?? 2_000);
     }
     if (deps.owner?.() !== owner) throw new Error('Subscription activity owner changed');
     // A read may outlive close/replacement or a model/source change. Never publish an old root.
     if (!accountId || !deps.roots().includes(root) || root.getStatus() === 'closed'
-      || !deps.usesOpenai(root.id) || root.requestSessionId !== nativeId) continue;
+      || !deps.usesOpenai(root.id) || root.requestSessionId !== nativeId) return;
     result.push({ sessionId: root.id, nativeId, provider: 'openai', accountId,
-      running: root.isTurnRunning() || root.hasBackgroundWork?.() === true || root.listBackgroundTasks().length > 0,
+      running: root.isTurnRunning() || nativeBusy || root.listBackgroundTasks().length > 0,
       isRunning: () => deps.roots().includes(root) && root.requestSessionId === nativeId && root.getStatus() !== 'closed'
-        && (root.isTurnRunning() || root.hasBackgroundWork?.() === true || root.listBackgroundTasks().length > 0) });
-  }
+        && (root.isTurnRunning() || nativeBusy || root.listBackgroundTasks().length > 0) });
+  }));
   return result;
 }
 

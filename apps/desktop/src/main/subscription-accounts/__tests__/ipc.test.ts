@@ -5,13 +5,15 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { providerShareGuestPeer } from '@cindy/device-link';
 import type { SubscriptionPoolConfig } from '../../../shared/subscriptionAccounts.js';
 const h = vi.hoisted(() => ({
-  handlers: new Map<string, (event: unknown, arg: unknown, model?: unknown) => Promise<unknown>>(),
+  handlers: new Map<string, (event: unknown, arg: unknown, model?: unknown, scope?: unknown) => Promise<unknown>>(),
   context: null as null | { sharedTask?: object; controllerDeviceId?: string },
   trusted: true,
   execute: vi.fn(),
   availability: vi.fn(),
+  scheduling: vi.fn(),
   sessionRead: vi.fn(),
   owner: 'owner-a',
   generation: 1,
@@ -100,6 +102,7 @@ vi.mock('../runtime.js', () => ({
   onSubscriptionAccountsChanged: vi.fn(),
   readSubscriptionPoolUsage: vi.fn(async () => undefined),
   readSubscriptionPoolModelAvailability: h.availability,
+  readSubscriptionPoolScheduling: h.scheduling,
   readLegacySubscriptionPoolUsage: vi.fn(async () => undefined),
   readSubscriptionSessionUsage: vi.fn(async () => undefined),
   readSubscriptionSessionAccount: h.sessionRead,
@@ -117,6 +120,9 @@ import {
   readProviderAutoRejoinRecovered,
   writeProviderAutoRejoinRecovered,
   deleteCreatedSubscriptionProvider,
+  accountProviderId,
+  createSubscriptionProvider,
+  placeSubscriptionAccount,
   readMergedLegacyCodexAccountId,
   readOpenAiMergedLegacyAccountsIfReadable,
   readSharedOpenAiLegacyAccountsIfReadable,
@@ -126,6 +132,19 @@ import {
 registerSubscriptionAccountsIpc();
 const invoke = (command: unknown) => h.handlers.get(SUBSCRIPTION_ACCOUNTS_CHANNEL)!({}, command);
 
+// Unit: CLI-origin accounts were rejected by the actual placement writer. Moving out and back
+// must persist like any account while the official CLI home and history remain unchanged.
+it.each(['anthropic', 'openai'] as const)('persists CLI-origin %s placement without relocating its home', async kind => {
+  const directory = accountDirectory(kind, 'default');
+  const provider = await createSubscriptionProvider(kind, 'default', 'Account', () => '12345678');
+  expect(accountProviderId(kind, 'default')).toBe(provider);
+  expect(normalizePlacementFile({ accounts: h.placement, providers: h.created }).providers[provider].account).toBe('default');
+  expect(accountDirectory(kind, 'default')).toBe(directory);
+  await placeSubscriptionAccount(kind, 'default', kind);
+  expect(accountProviderId(kind, 'default')).toBe(kind);
+  expect(accountDirectory(kind, 'default')).toBe(directory);
+});
+
 // #10286 review: preserve the exact reset target through the real owner push
 // adapter; ordinary pool/load events retain their original payload.
 it('forwards scoped reset invalidation without marking ordinary pool changes', () => {
@@ -134,6 +153,10 @@ it('forwards scoped reset invalidation without marking ordinary pool changes', (
   expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai', resetAccountId: 'second' });
   listener('openai');
   expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai' });
+  listener('openai', undefined, 'usage');
+  expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai', change: 'usage' });
+  listener('anthropic', undefined, 'load');
+  expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'anthropic', change: 'load' });
 });
 beforeEach(() => {
   h.context = null;
@@ -156,6 +179,34 @@ beforeEach(() => {
   h.execute.mockReset().mockResolvedValue({ accounts: [] });
   h.availability.mockReset().mockResolvedValue(true);
   h.sessionRead.mockReset().mockResolvedValue({ providerId: 'anthropic', state: 'legacy' });
+});
+
+// Unit, duplicate-account regression: one account can retain two native homes. The production
+// placement entry must commit their move/take-out together; prior cases only moved one home.
+it('moves and takes out all homes of an account atomically, including failed writes', async () => {
+  const first = `cindy-${accountOwnerPrefix()}-11111111-1111-4111-8111-111111111111`;
+  const second = `cindy-${accountOwnerPrefix()}-22222222-2222-4222-8222-222222222222`;
+  h.placement = { [`openai:${first}`]: 'openai', [`openai:${second}`]: 'openai' };
+  const before = structuredClone(h.placement);
+  h.placementWriteFails = true;
+  await expect(placeSubscriptionAccount('openai', [first, second], 'openai-target')).rejects.toThrow('placement write unavailable');
+  expect(h.placement).toEqual(before);
+  await expect(createSubscriptionProvider('openai', first, 'Account', () => '12345678', undefined, [second]))
+    .rejects.toThrow('placement write unavailable');
+  expect(h.placement).toEqual(before);
+  expect(h.created).toEqual({});
+  h.placementWriteFails = false;
+  let writes = 0;
+  h.beforeWrite = () => { writes++; };
+  await placeSubscriptionAccount('openai', [first, second], 'openai-target');
+  expect(h.placement).toEqual({ [`openai:${first}`]: 'openai-target', [`openai:${second}`]: 'openai-target' });
+  expect(writes).toBe(1);
+  const target = await createSubscriptionProvider('openai', first, 'Account', () => '12345678', undefined, [second]);
+  expect(h.placement).toEqual({ [`openai:${first}`]: target, [`openai:${second}`]: target });
+  expect(h.created[target].account).toBe(first);
+  expect(writes).toBe(2);
+  await expect(placeSubscriptionAccount('openai', [first, '../escape'], 'openai')).rejects.toThrow('Account cannot be moved');
+  expect(writes).toBe(2);
 });
 
 describe('legacy Codex account upgrade', () => {
@@ -327,11 +378,11 @@ describe('legacy Codex account upgrade', () => {
     await restoreAutoMergedLegacyCodexAccounts(connections, { disable, isDisabled });
     expect(readMergedLegacyCodexAccountId('openai-e')).toBeUndefined();
     expect(readMergedLegacyCodexAccountId('openai-d')).toBe(ids.d);
-    // Persisted placement never moves the CLI default account or accepts a malformed entry.
+    // CLI-origin profiles can move like every other account; malformed entries still fail closed.
     expect(normalizePlacementFile({ accounts: {
       'openai:default': 'openai-a', 'openai:../escape': 'openai-a', [`openai:${ids.a}`]: 'Not An Id',
       [`anthropic:${ids.a}`]: 'claude-work',
-    } })).toEqual({ accounts: { [`anthropic:${ids.a}`]: 'claude-work' }, providers: {}, strategies: {}, autoRejoinRecovered: {} });
+    } })).toEqual({ accounts: { 'openai:default': 'openai-a', [`anthropic:${ids.a}`]: 'claude-work' }, providers: {}, strategies: {}, autoRejoinRecovered: {} });
   });
 });
 describe('old automatically pooled account restoration', () => {
@@ -498,6 +549,28 @@ describe('subscription recovery configuration', () => {
 });
 
 describe('subscription management boundary', () => {
+  // Unit: the optional query is additive and owner-only, including named pools;
+  // old quota and availability replies were covered, anonymous scheduling was not.
+  it('scopes anonymous scheduling to the owner and never accepts a path as a pool', async () => {
+    const quota = h.handlers.get('maker:subscription-pool:quota')!;
+    const summary = { version: 1, accounts: 2, running: 0, totalRunning: 4, full: false, urgency: null, fiveHourTight: false };
+    h.scheduling.mockResolvedValue(summary);
+    h.context = { controllerDeviceId: 'own-mac' };
+    expect(await quota({}, 'openai-sub-pool', 'gpt-model', { scheduling: 1, ownComputer: false }))
+      .toEqual({ providerId: 'openai-sub-pool', model: 'gpt-model', scheduling: summary });
+    expect(h.scheduling).toHaveBeenLastCalledWith('openai-sub-pool', 'gpt-model', { remote: true, ownComputer: false });
+    await quota({}, 'openai', 'gpt-model', { scheduling: 1, ownComputer: true });
+    expect(h.scheduling).toHaveBeenLastCalledWith('openai', 'gpt-model', { remote: true, ownComputer: true });
+    for (const provider of ['../openai', '/private/home', 'x'.repeat(41)])
+      await expect(quota({}, provider, 'gpt-model', { scheduling: 1, ownComputer: true })).rejects.toThrow('INVALID_PARAMS');
+    for (const model of ['', ' ', {}, 'x'.repeat(513)])
+      await expect(quota({}, 'openai', model, { scheduling: 1, ownComputer: true })).rejects.toThrow('INVALID_PARAMS');
+    h.context = { sharedTask: {} };
+    await expect(quota({}, 'openai', 'gpt-model', { scheduling: 1, ownComputer: true })).rejects.toThrow('PERMISSION_DENIED');
+    h.context = { controllerDeviceId: providerShareGuestPeer('share', 'member', 'device') };
+    await expect(quota({}, 'openai', 'gpt-model', { scheduling: 1, ownComputer: true })).rejects.toThrow('PERMISSION_DENIED');
+    expect(h.scheduling).toHaveBeenCalledTimes(2);
+  });
   // #9833, unit: new optional model query keeps old caller shape and the
   // owner-only boundary. An aggregate/guest reply cannot authorize recovery.
   // PR #9837 review: local grants cannot authorize a remote cooldown recovery.
