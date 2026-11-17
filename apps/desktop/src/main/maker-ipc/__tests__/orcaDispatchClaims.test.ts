@@ -44,6 +44,13 @@ describe('lead dispatch claim reading', () => {
     expect(reading.quote).toContain('已派给研究员');
   });
 
+  it('keeps the cited identifier and drops heading lines when quoting the claim', () => {
+    const reading = readDispatchClaim('## 排期\n\n已派小修批（`wake_kind=already-active`）。', ROSTER);
+    expect(reading.claimed).toBe(true);
+    expect(reading.quote).toContain('wake_kind=already-active');
+    expect(reading.quote).not.toContain('##');
+  });
+
   it('does not treat plans, negations, or quoted text as a claim', () => {
     for (const text of [
       '我准备派给研究员，先确认一下。',
