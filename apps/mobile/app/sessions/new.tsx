@@ -5732,7 +5732,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                 accessibilityLabel={t('settings.projectInfo.createTitle')}
                 accessibilityRole="button"
                 disabled={creating}
-                onPress={() => { setWorkspacePickerOpen(false); if ((projectInfo?.settingsVersion ?? 0) >= 6) setCreateProjectOpen(true); else setBrowseOpen(true); }}
+                onPress={() => { setWorkspacePickerOpen(false); if ((projectInfo?.settingsVersion ?? 0) >= 6) setCreateProjectOpen(true); else openProjectBrowse(); }}
                 style={({ pressed }) => [styles.workspaceOptionRow, pressed && styles.pressed]}
                 testID="newSession.workspaceBrowseOption"
               >
@@ -5957,7 +5957,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         onDialogue={selectDialogueWorkspace}
         onProject={selectRecentProject}
         browseLabel={t('settings.projectInfo.createTitle')}
-        onBrowse={() => { if ((projectInfo?.settingsVersion ?? 0) >= 6) { createProjectPending.current = true; setWorkspacePickerOpen(false); } else setBrowseOpen(true); }}
+        onBrowse={() => { if ((projectInfo?.settingsVersion ?? 0) >= 6) { createProjectPending.current = true; setWorkspacePickerOpen(false); } else openProjectBrowse(); }}
         onClosed={() => {
           if (createProjectPending.current) {
             createProjectPending.current = false;
