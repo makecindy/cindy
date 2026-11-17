@@ -334,7 +334,7 @@ interface RuntimeState {
   /**
    * Why the last start failed or was refused (start-failure.ts), the code the windows are given in the auth
    * state and the 409 of an owner request; never the text of `detail`. Null for an ordinary signed-out start,
-   * and cleared once a runtime opens or the account signs out.
+   * and cleared once a runtime opens, the account signs out or a sign-in completes; a disposal does not clear it.
    */
   unavailable?: HostStartFailureReason | null;
 }
@@ -1554,6 +1554,8 @@ const serverDeps = {
         }
       }
       finally {
+        // An explicit sign-out ends what the last failed start reported (disposal keeps it).
+        if (loggedOut) runtime.unavailable = null;
         commitVolatileAppSession('signed-out', null, true);
         releaseBoundary();
         eventHub.clear();
@@ -2001,8 +2003,11 @@ async function disposeOwnerRuntime(): Promise<void> {
     runtime.state = 'uninitialized';
     runtime.storage = 'unopened';
     runtime.owner = null;
-    // A sign-out or a new start ends what the last failed start reported; a start that fails again sets it anew.
-    runtime.unavailable = null;
+    // runtime.unavailable is not cleared here (甲, 2026-11-18): a refresh that ends a session the failed start
+    // never adopted (none saved, or rejected) disposes again, and the window must keep seeing why the start
+    // failed instead of a sign-in form. It ends only when the database opens (ensureRuntime), at an explicit
+    // sign-out (logout below), or at a completed sign-in; sign-in completes outside serve today (cindy-host
+    // login), so the next start reports anew.
   }
   if (errors.length) throw new AggregateError(errors, 'Owner runtime cleanup failed');
 }

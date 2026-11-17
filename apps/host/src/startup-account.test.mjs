@@ -450,3 +450,69 @@ for (const [name, start] of [
     assert.equal(response.body.mode, 'signed-out');
   });
 }
+
+/*
+ * Test value (甲, reviewer 2026-11-18): the reason of a failed start survives a refresh.
+ * - Bug: a window in client mode calls /api/auth/refresh as it starts (authManager initialize). With no
+ *   saved session that refresh ends the session (HostSessionMissingError), and the session's teardown
+ *   disposed the runtime again and cleared the reason: the window was given a sign-in form while the Host
+ *   stayed down (walked through on 2026-11-18). A session the server rejects takes the same branch of
+ *   performAuthRefresh (the renewal case above asserts it reaches invalidateHostSession).
+ * - Production entry: the real `cindy-host serve` (main.ts) in a child process on a temporary profile, its
+ *   runtime lease held by this process, so the start is refused as HOST_DATABASE_LOCKED.
+ * - Gap: the cases above build the state from a classified error; none runs a refresh after a failed start.
+ * - Not covered: a rejected saved session end to end. A saved session needs the system credential store
+ *   (keychain or keyring) and the auth endpoint must be https; neither belongs in a unit run.
+ * - Tier: unit (loopback HTTP and one child process; no network, nothing outside the temporary directory).
+ */
+test('a refresh after a failed start keeps the start-failure reason (no saved session)', async t => {
+  const { acquireHostRuntimeLease } = await import('./runtime-lock.ts');
+  const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-reason-'));
+  const profile = path.join(root, 'profile');
+  const home = path.join(root, 'home');
+  mkdirSync(profile, { recursive: true, mode: 0o700 });
+  mkdirSync(home, { recursive: true });
+  const lease = acquireHostRuntimeLease(profile, 'owner-locked');
+  assert.equal(lease.held, true);
+  const hostDir = path.resolve(new URL('..', import.meta.url).pathname);
+  const child = spawn(process.execPath, ['--import', 'tsx', '--import', './src/loaders/register-raw.mjs', 'src/main.ts', 'serve'], {
+    cwd: hostDir, stdio: ['ignore', 'ignore', 'pipe'],
+    env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home, TMPDIR: root, CINDY_HOST_DATA_DIR: profile,
+      CINDY_HOST_OWNER: 'owner-locked', CINDY_HOST_PORT: '0', CINDY_HOST_KEYRING_APPLICATION: 'cindy-host-start-reason-test',
+      // Anything that leaves the machine fails at once.
+      HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost', NODE_USE_ENV_PROXY: '1' },
+  });
+  let stderr = '';
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  t.after(async () => {
+    if (child.exitCode === null) { child.kill('SIGTERM'); await once(child, 'exit'); }
+    lease.release();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const until = async (read, what) => {
+    for (let i = 0; i < 600; i++) {
+      if (child.exitCode !== null) assert.fail(`cindy-host exited (${child.exitCode}) while waiting for ${what}: ${stderr}`);
+      const value = await read().catch(() => null);
+      if (value) return value;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    assert.fail(`timed out waiting for ${what}`);
+  };
+  const { baseUrl } = await until(async () => JSON.parse(readFileSync(path.join(profile, 'host-endpoint.json'), 'utf8')), 'the endpoint');
+  const token = readFileSync(path.join(profile, 'host-api-token'), 'utf8').trim();
+  const call = async (method, pathname) => {
+    const response = await fetch(`${baseUrl}${pathname}`, { method, headers: { authorization: `Bearer ${token}`,
+      'content-type': 'application/json' }, ...(method === 'POST' ? { body: '{}' } : {}) });
+    return { status: response.status, body: await response.json() };
+  };
+  await until(async () => (await call('POST', '/api/auth/state')).body.hostUnavailable, 'the start to fail');
+
+  const refreshed = await call('POST', '/api/auth/refresh');
+  assert.equal(refreshed.status, 200);
+  assert.equal(refreshed.body.ok, false);
+  // The refresh ends the session in the background: wait until its teardown has finished.
+  await until(async () => /^Sign-in expired/.test((await call('GET', '/health')).body.runtime?.detail ?? ''), 'the session teardown');
+  const state = await call('POST', '/api/auth/state');
+  assert.deepEqual(state.body.hostUnavailable, { reason: 'HOST_DATABASE_LOCKED' });
+  assert.equal(state.body.authenticated, false);
+});
