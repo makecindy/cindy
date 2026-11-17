@@ -411,8 +411,10 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     if (this.closed || !deviceId) { channel.close(); return; }
     const previous = this.peers.get(deviceId);
     const preferredOutbound = this.deviceId < deviceId;
-    // Concurrent dials must agree on the same physical connection, rather than each closing the other's winner.
-    if (previous && (previous.outbound === preferredOutbound || outbound !== preferredOutbound)) { channel.close({ drain: false }); return; }
+    // Opposite-direction concurrent dials must agree on one connection. A new
+    // authenticated channel in the same direction replaces the old one: after
+    // a peer restarts, its old channel may not have reported closure yet.
+    if (previous && previous.outbound !== outbound && outbound !== preferredOutbound) { channel.close({ drain: false }); return; }
     const peer: Peer = { deviceId, key: channel.remoteId, channel, outbound };
     this.peers.set(deviceId, peer); previous?.channel.close();
     const frames = new Frames();
