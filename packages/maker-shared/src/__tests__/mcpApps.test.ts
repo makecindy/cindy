@@ -4,7 +4,7 @@ const parserLoads = vi.hoisted(() => ({ count: 0 }));
 vi.mock('parse5', async original => { parserLoads.count++; return original(); });
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { Script } from 'node:vm';
-import { mcpAppSandboxDocument, mcpAppFrameUrlAllowed, mcpAppHistoryText, parseMcpAppRecord, parseMcpAppHistory, projectMcpAppContent } from '../mcpApps.js';
+import { mcpAppSandboxDocument, mcpAppFrameUrlAllowed, mcpAppHistoryText, parseMcpAppRecord, parseMcpAppHistory, projectMcpAppContent, parsePluginInstallationSource } from '../mcpApps.js';
 const coreParserLoads = parserLoads.count;
 let withHostAppSdk: typeof import('../mcpAppSdk.js').withHostAppSdk;
 let parse: typeof import('parse5').parse;
@@ -403,4 +403,30 @@ it('starts with an empty SDK declaration after process-local cache replacement',
   const send = vi.fn(async (_request: Record<string, unknown>) => doc);
   await expect(restarted.open(owner, 'host', input, send, () => {})).resolves.toEqual(doc);
   expect(send).toHaveBeenCalledExactlyOnceWith({ ...input, sdkCacheHashes: [] });
+});
+
+// Public card provenance / unit: legacy readers retain title/text and private
+// plugin metadata never escapes; unknown future source must keep its warning.
+it('preserves optional source snapshots and normalizes unknown provenance without private fields', () => {
+  const content = { mcpAppHistory: { version: 1, title: 'Planner · Local installation', text: 'Saved',
+    plugin: { name: 'Planner', source: { kind: 'future-market', token: 'private' }, trust: 'private' } } };
+  expect(projectMcpAppContent(content, true)).toEqual({ mcpAppHistory: { version: 1, title: content.mcpAppHistory.title, text: 'Saved',
+    plugin: { name: 'Planner', source: { kind: 'unknown' } } } });
+  expect(parseMcpAppHistory({ mcpAppHistory: { version: 1, title: 'Planner', text: 'Saved', plugin: { name: 'Planner' } } }))
+    .toEqual({ title: 'Planner', text: 'Saved', plugin: { name: 'Planner' } });
+});
+
+// R3 / unit: public source parsing must not weaken installation-fact validation.
+it('strips organization namespace from history while retaining strict Host source validation', () => {
+  for (const source of [{ kind: 'organization', namespace: 'acme' }, { kind: 'organization' }]) {
+    const value = { mcpAppHistory: { version: 1, title: 'Planner', text: '', plugin: { name: 'Planner', source } } };
+    expect(projectMcpAppContent(value, true)).toEqual({ mcpAppHistory: { version: 1, title: 'Planner', text: '',
+      plugin: { name: 'Planner', source: { kind: 'organization' } } } });
+  }
+  expect(parsePluginInstallationSource({ kind: 'organization' })).toEqual({ kind: 'unknown' });
+  expect(parsePluginInstallationSource({ kind: 'organization', namespace: 'acme' })).toEqual({ kind: 'organization', namespace: 'acme' });
+});
+it.each([true, {}, { name: 42 }, { name: 'Team reports', serverId: 'private' }])('tolerates old or malformed custom MCP identity (%j)', customMcp => {
+  const parsed = parseMcpAppHistory({ mcpAppHistory: { version: 1, title: 'Tool title', text: '', customMcp } });
+  expect(parsed).toEqual({ title: 'Tool title', text: '', customMcp: typeof customMcp === 'object' && customMcp.name === 'Team reports' ? { name: 'Team reports' } : true });
 });

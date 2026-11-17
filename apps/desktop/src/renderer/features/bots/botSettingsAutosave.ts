@@ -25,13 +25,16 @@
 import type { BotCapabilities, BotProfileUpdatePatch } from './botStore';
 import { reconcileBotCapabilityList } from '../../../shared/botCapabilitySelection';
 import { extractIpcError } from '../../../shared/ipcError';
+import { readBotProfileSource, BotProfileSourceTooLong } from '../../../shared/botProfileSources';
 
 /** Only recognized causes become localized copy; never display raw host errors. */
 export function botSettingsSaveErrorKey(error: unknown): string | null {
+  if (error instanceof BotProfileSourceTooLong) return 'bots.profile.sourceTooLong';
   const failure = extractIpcError(error);
   if (!failure) return null;
   switch (failure.code) {
     case 'INVALID_PARAMS':
+      if (/(identitySource|userContextSource) 超过长度上限/.test(failure.message)) return 'bots.profile.sourceTooLong';
       return /Model route unavailable|任务模型不可用/.test(failure.message)
         ? 'ipcError.MODEL_SELECTION_UNAVAILABLE' : 'ipcError.INVALID_PARAMS';
     case 'MODEL_SELECTION_UNAVAILABLE':
@@ -253,6 +256,8 @@ export interface BotSettingsAutosaveHandle {
   flushDetached(): void;
   /** 取消未触发的计时,不提交。 */
   cancel(): void;
+  /** Explicitly abandon pending intent after confirmation; caller restores its draft. */
+  discard(): void;
   /** 是否有已改但未落库的内容。 */
   isDirty(): boolean;
   hasPendingModelSelection(): boolean;
@@ -269,12 +274,14 @@ export function createBotSettingsAutosave(
   let instantPending = false;
   let inFlight: Promise<void> | null = null;
   let detached = false;
+  let lastStatus: BotAutosaveStatus = 'idle';
   // An explicit model choice is an action even when its configured value is unchanged.
   let modelSelectionRevision = 0;
   let savedModelSelectionRevision = 0;
 
   const emit = (status: BotAutosaveStatus, error?: unknown): void => {
     if (detached) return;
+    lastStatus = status;
     options.onStatusChange?.(status, error);
   };
 
@@ -291,6 +298,12 @@ export function createBotSettingsAutosave(
     !botSettingsPayloadEqual(options.readPayload(), options.readBaseline());
 
   const commit = async (payload: BotSettingsPayload): Promise<void> => {
+    // Validate only the fields that the patch sends. Imported long originals may
+    // still be read and unrelated settings edited, without rewriting the source.
+    const baseline = options.readBaseline();
+    for (const field of ['identitySource', 'userContextSource'] as const) {
+      if (payload[field] !== baseline[field]) readBotProfileSource(payload[field], field);
+    }
     const revision = modelSelectionRevision;
     await options.commit(payload, revision !== savedModelSelectionRevision);
     // A second choice made during this request still needs its own acceptance.
@@ -308,6 +321,7 @@ export function createBotSettingsAutosave(
     const payload = options.readPayload();
     if (!isDirty()) {
       // 无实际变化 —— 不发 IPC。
+      if (lastStatus === 'error') emit('idle');
       return;
     }
     emit('saving');
@@ -379,6 +393,10 @@ export function createBotSettingsAutosave(
     },
     cancel() {
       clearTimer();
+    },
+    discard() {
+      clearTimer();
+      savedModelSelectionRevision = modelSelectionRevision;
     },
     isDirty,
     hasPendingModelSelection: () => modelSelectionRevision !== savedModelSelectionRevision,

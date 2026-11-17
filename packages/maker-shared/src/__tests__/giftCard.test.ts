@@ -83,8 +83,10 @@ describe('gift card server responses', () => {
     expect(giftCardFailureForError('GIFT_CARD_WRONG_REGION', 409)).toBe('WRONG_REGION');
     expect(giftCardFailureForError('GIFT_CARD_NOT_FOUND', 404)).toBe('NOT_FOUND');
     expect(giftCardFailureForError('ANYTHING', 429)).toBe('RATE_LIMITED');
-    // 鉴权、服务故障和不认识的业务码都不是卡片状态。
-    for (const [code, status] of [['INTERNAL', 500], ['TOKEN_EXPIRED', 401], ['PERSONAL_ACCOUNT_REQUIRED', 403], ['toString', 400]] as const) {
+    // 组织身份领不了礼品卡：这是明确的结果，要告诉用户「仅限个人用户领取」，而不是让他「稍后重试」。
+    expect(giftCardFailureForError('PERSONAL_ACCOUNT_REQUIRED', 403)).toBe('PERSONAL_REQUIRED');
+    // 登录失效、服务故障和不认识的业务码都不是卡片状态。
+    for (const [code, status] of [['INTERNAL', 500], ['TOKEN_EXPIRED', 401], ['FORBIDDEN', 403], ['toString', 400]] as const) {
       expect(giftCardFailureForError(code, status)).toBeNull();
     }
   });

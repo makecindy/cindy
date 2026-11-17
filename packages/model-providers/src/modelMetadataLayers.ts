@@ -503,10 +503,16 @@ export function mergeDiscoveredRuntimeModels(
     const accountCapabilities = model.supportsUltrafastMode !== undefined ||
       (index >= 0 && models[index].supportsUltrafastMode !== undefined)
       ? { supportsUltrafastMode: model.supportsUltrafastMode === true } : {};
-    const discoveredMetadata = mergeModelMetadata(
-      index >= 0 ? models[index].discoveredMetadata : undefined,
-      pickModelMetadata(model.discoveredMetadata ?? model),
-    );
+    const previousMetadata = index >= 0 ? models[index].discoveredMetadata : undefined;
+    const incomingMetadata = pickModelMetadata(model.discoveredMetadata ?? model);
+    const discoveredMetadata = mergeModelMetadata(previousMetadata, incomingMetadata);
+    // Older parsers inferred [] from incomplete supported_parameters. There is no
+    // provenance to distinguish that from a real denial in the saved snapshot.
+    // Require a refreshed declaration to retain an empty discovered effort list;
+    // user overrides live outside this layer and are never removed here.
+    if (previousMetadata?.efforts?.length === 0 && incomingMetadata.efforts === undefined) {
+      delete discoveredMetadata.efforts;
+    }
     // Sparse refreshes can supply either half of this pair. Validate after merging
     // with the last snapshot, without shrinking its working window to a bad maximum.
     if (discoveredMetadata.contextWindow !== undefined &&
