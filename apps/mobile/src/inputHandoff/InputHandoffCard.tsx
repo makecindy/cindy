@@ -82,8 +82,8 @@ export function InputHandoffCard({
   const [draft, setDraft] = useState<InputHandoffValues>({});
   const [sending, setSending] = useState(false);
   // The sealed receipt can arrive before the next screen snapshot. Never
-  // reopen a cleared form for the step the Host already accepted.
-  const [acceptedStep, setAcceptedStep] = useState<string | null>(null);
+  // reopen a cleared form until a new step or an explicit retry arrives.
+  const [acceptedStep, setAcceptedStep] = useState<{ key: string; revision: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Stays wanted across steps: after Continue the sheet hides while the
   // computer types and comes back by itself for the next screen to fill.
@@ -116,7 +116,9 @@ export function InputHandoffCard({
     setDraft((d) => ({ ...d, [id]: value }));
   };
 
-  const awaitingNextStep = acceptedStep === stepKey;
+  const retryRequested = snapshot.phase === "ready" && !!snapshot.failure &&
+    acceptedStep !== null && snapshot.revision > acceptedStep.revision;
+  const awaitingNextStep = acceptedStep?.key === stepKey && !retryRequested;
   const busy = decisionBusy || sending;
   const decide = (action: Decision) => {
     if (action === "picture")
@@ -138,7 +140,7 @@ export function InputHandoffCard({
         values,
         action,
       });
-      setAcceptedStep(stepKey);
+      setAcceptedStep({ key: stepKey, revision: snapshot.revision });
       setDraft({});
       setFieldEpoch((n) => n + 1);
     } catch (e) {

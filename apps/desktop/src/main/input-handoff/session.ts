@@ -1347,13 +1347,13 @@ export class InputHandoffSession {
     return extractStep(raw).source.origin === step.source.origin;
   }
 
-  /** Ignore scrolling, values and tree indices; require the same complete, unambiguous fields. */
+  /** Ignore scrolling and values; require the same complete field-to-target mapping. */
   private async sameFields(step: ExtractedStep): Promise<boolean | 'origin_changed'> {
     if (!this.target) return false;
     const raw = await this.options.driver.snapshot(this.target.pid, this.target.window);
     if ('error' in raw) return false;
     const identities = (candidate: ExtractedStep) => [...candidate.bindings.values()].flatMap(binding =>
-      binding.kind !== 'text' ? [] : (binding.segments ?? [binding]).map(field => JSON.stringify([field.fp, 'nativeSecure' in field ? field.nativeSecure : field.secure])),
+      binding.kind !== 'text' ? [] : (binding.segments ?? [binding]).map(field => JSON.stringify([field.identity, 'nativeSecure' in field ? field.nativeSecure : field.secure])),
     ).sort();
     const expected = identities(step);
     const current = extractStep(raw);

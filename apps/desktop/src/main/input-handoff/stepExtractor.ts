@@ -252,7 +252,10 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
       };
       controls.push(control);
       lastTextControl = control;
-      bindings.set(controlId, { kind: 'text', ref: node.ref, fp: node.fp, secure: !!node.secure });
+      // AX fingerprints can be identical for adjacent unlabelled inputs. Bind
+      // their exact locations and resolved labels too, so a swap cannot reuse answers.
+      const identity = JSON.stringify([node.ref, node.fp, node.domId, label]);
+      bindings.set(controlId, { kind: 'text', ref: node.ref, fp: node.fp, identity, secure: !!node.secure });
       refs.set(controlId, node.ref);
       return;
     }

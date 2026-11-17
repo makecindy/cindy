@@ -234,6 +234,36 @@ it("keeps an accepted form closed until the next step arrives", async () => {
   expect((container.querySelector("input") as HTMLInputElement).value).toBe("");
 });
 
+// Unit: Host can publish ready/origin_changed without increasing stepNumber.
+// Exercise both receipt/push orders through the production card, including a second retry.
+it.each(["before", "after"])("reopens a retryable form when the Host update arrives %s the receipt", async (order) => {
+  let accept!: () => void;
+  submit.mockImplementationOnce(() => new Promise<undefined>(resolve => { accept = () => resolve(undefined); }));
+  const { container, render } = mount(step());
+  await press(container, "interaction.inputHandoff.action.fill");
+  type(container.querySelector("input")!, "old-account");
+  await press(container, "interaction.inputHandoff.action.continue");
+  const retry = step({ revision: 4, failure: "origin_changed", source: { app: "Google Chrome", origin: "https://other.example.com" } });
+  if (order === "before") render(retry);
+  await act(async () => accept());
+  if (order === "after") {
+    expect(sheet(container)).toBeNull();
+    render(retry);
+  }
+  expect(sheet(container)).not.toBeNull();
+  expect(container.textContent).toContain("interaction.inputHandoff.failure.origin_changed");
+  expect((container.querySelector("input") as HTMLInputElement).value).toBe("");
+  type(container.querySelector("input")!, "new-account");
+  await press(container, "interaction.inputHandoff.action.continue");
+  expect(submit).toHaveBeenCalledTimes(2);
+  expect(submit).toHaveBeenLastCalledWith(retry, {
+    expectedRevision: 4, values: { c0: "new-account" }, action: { kind: "submit" },
+  });
+  expect(sheet(container)).toBeNull(); // The previous failure is not a new retry receipt.
+  render({ ...retry, revision: 6 });
+  expect(sheet(container)).not.toBeNull();
+});
+
 it("offers handing back when nothing is left to type, and a countdown when it looks done", async () => {
   const { container, onDecision, render } = mount(step({ controls: [] }));
   expect(container.textContent).toContain("interaction.inputHandoff.nothingLeft");

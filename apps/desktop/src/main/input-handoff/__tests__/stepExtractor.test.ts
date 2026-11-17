@@ -127,7 +127,7 @@ describe('extractStep', () => {
     expect(next.primary).toBe(true);
     expect(step.controls[0]).toEqual({ id: expect.any(String), kind: 'note', tone: 'heading', text: 'Sign in' });
     expect(step.hasSecure).toBe(true);
-    expect(step.bindings.get(password.id)).toEqual({ kind: 'text', ref: '2.3', fp: expect.any(String), secure: true });
+    expect(step.bindings.get(password.id)).toMatchObject({ kind: 'text', ref: '2.3', fp: expect.any(String), secure: true });
     expect(JSON.stringify(step.controls)).not.toContain('Address and search bar');
     // The owner sees only the fields to type.
     expect(step.shown.map((control) => control.kind === 'text' && control.label)).toEqual(['Email', 'Password']);

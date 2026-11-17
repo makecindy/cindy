@@ -95,7 +95,7 @@ export type NativeActResult =
  */
 export type ControlBinding =
   | { kind: 'press'; ref: string; fp: string }
-  | { kind: 'text'; ref: string; fp: string; secure: boolean; nativeSecure?: boolean; segments?: Array<{ ref: string; fp: string; secure: boolean; length: number }> };
+  | { kind: 'text'; ref: string; fp: string; identity: string; secure: boolean; nativeSecure?: boolean; segments?: Array<{ ref: string; fp: string; identity: string; secure: boolean; length: number }> };
 
 /** One step photographed for the owner. In memory only; never written to disk. */
 export interface WindowCapture {

@@ -116,6 +116,36 @@ function answer(step: InputHandoffSnapshot) {
 }
 
 describe('代输入 secrets', () => {
+  // Unit: native fingerprints omit nearby labels and DOM ids. Existing fixtures
+  // all had distinct native titles; equal fingerprints must still fill the right targets.
+  it.each([false, true])('distinguishes nearby-labelled fields with equal fingerprints (reordered: %s)', async (reordered) => {
+    const page = loginPage();
+    const read = page.driver.snapshot;
+    let swap = false;
+    page.driver.snapshot = async (...args) => {
+      const raw = await read(...args);
+      if ('error' in raw) return raw;
+      const labels = swap ? ['Last name', 'First name'] : ['First name', 'Last name'];
+      raw.nodes = [raw.nodes[0], ...labels.flatMap((label, i) => [
+        node(`0.${i * 2}`, 'AXStaticText', { value: label, frame: [10, 60 + i * 80, 100, 20] }),
+        node(`0.${i * 2 + 1}`, 'AXTextField', { frame: [10, 85 + i * 80, 100, 20] }),
+      ]), node('0.4', 'AXButton', { title: 'Continue' })];
+      return raw;
+    };
+    const { session, latest } = start(page.driver);
+    await session.start();
+    const fields = latest().controls.filter(c => c.kind === 'text');
+    expect(fields.map(c => c.label)).toEqual(['First name', 'Last name']);
+    swap = reordered;
+    await session.submit({ expectedRevision: latest().revision, values: {
+      [fields[0].id]: 'Ada', [fields[1].id]: 'Lovelace',
+    }, action: { kind: 'submit' } });
+    expect(page.acts.filter(a => a.kind === 'text').map(a => [a.ref, a.value])).toEqual(
+      reordered ? [] : [['0.1', 'Ada'], ['0.3', 'Lovelace']],
+    );
+    session.cancel();
+  });
+
   // Unit regression: a logical password plan can upgrade a custom text field.
   // Existing tests only use native secure fields; submit must still fill and shield this field.
   it('submits a planned password in a native plain field', async () => {
