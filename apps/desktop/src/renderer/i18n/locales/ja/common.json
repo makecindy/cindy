@@ -4434,14 +4434,7 @@
         "installCancel": "インストールをキャンセル",
         "installFailed": "Ollama のインストールに失敗しました",
         "installPhase": {
-          "resolving": "公式リリースを確認中…",
-          "downloading": "ダウンロード中…",
-          "verifying": "検証中…",
-          "extracting": "インストール中…",
-          "starting": "起動中…",
-          "success": "インストール済み",
-          "error": "インストール失敗",
-          "cancelled": "キャンセル済み"
+          "error": "インストール失敗"
         },
         "openWebsite": "Ollama のサイトを開く",
         "recheck": "インストール済み、再検出",
@@ -4476,20 +4469,6 @@
         "retryDownload": "再試行",
         "libraryName": "正確な Ollama ライブラリ名",
         "pullingTitle": "{{name}} をダウンロード中",
-        "pullIndeterminate": "準備中",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "ダウンロードを準備しています…",
-          "manifest": "マニフェストを取得しています…",
-          "downloading": "モデルファイルをダウンロードしています",
-          "verifying": "検証しています…",
-          "writing": "書き込んでいます…",
-          "success": "ダウンロード完了",
-          "error": "ダウンロードに失敗しました",
-          "paused": "一時停止中",
-          "cancelled": "キャンセル済み"
-        },
         "pauseDownload": "一時停止",
         "resumeDownload": "ダウンロードを再開",
         "cancelDownload": "未完了のダウンロードを削除",
@@ -5934,8 +5913,6 @@
           "notChecked": "未確認",
           "action": "更新",
           "updating": "更新中…",
-          "downloadingPercent": "ダウンロード中 {{percent}}%（{{downloaded}}/{{total}} MB）…",
-          "downloadingBytes": "ダウンロード中、{{downloaded}} MB 完了…",
           "installing": "ダウンロード完了、インストール中…",
           "toast": {
             "success": "cua-driver を最新バージョンに更新しました",
@@ -15472,6 +15449,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "このファイルは現在のセッション作業ディレクトリ外にあるため、サイドバーのファイルブラウザで特定できません",
       "openInDefaultBrowser": "ブラウザで開く",
       "copyLink": "リンクをコピー",
+      "addPrToHeader": "上部に追加",
+      "prAlreadyInHeader": "上部に追加済み",
+      "prAddedToHeader": "上部に追加しました。ステータスはこのタスクに紐づきます。",
+      "prAssociatedNotInHeader": "関連付け済み・上部には非表示",
+      "prSavedNotInHeader": "関連付けを保存しました。上部の3件は埋まっています。タスク上部の PR 管理からこの PR を固定できます。",
       "linkCopied": "リンクをコピーしました",
       "viewSourceFile": "ソースを表示",
       "openInSidebarFailed": "サイドバーのブラウザで開けませんでした",
@@ -21759,5 +21741,28 @@
     "archivedNotice": "未使用のタスクを自動アーカイブしました：{{count}}",
     "undo": "取り消す",
     "undoFailed": "取り消せませんでした。アーカイブ済みのタスクから復元してください。"
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "残り {{time}}",
+    "attempt": "{{attempt}} 回目",
+    "phase": {
+      "preparing": "準備中…",
+      "queued": "待機中…",
+      "downloading": "ダウンロード中…",
+      "retrying": "再試行中…",
+      "verifying": "検証中…",
+      "installing": "インストール中…",
+      "paused": "一時停止中",
+      "completed": "完了",
+      "failed": "ダウンロードに失敗しました",
+      "cancelled": "キャンセルしました"
+    },
+    "retry": {
+      "slow": "通信が遅いため再接続しています…",
+      "network": "接続が切れました。再試行しています…",
+      "timeout": "接続がタイムアウトしました。再試行しています…",
+      "server": "サーバーが混雑しています。再試行しています…"
+    }
   }
 }

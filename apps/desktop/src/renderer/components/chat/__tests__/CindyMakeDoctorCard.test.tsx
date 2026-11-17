@@ -22,6 +22,7 @@ import { useCindyMakeState } from '@/lib/cindyMakeState';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { MAKE_DOCTOR_CHECK_IDS, type MakeDoctorReport } from '../../../../shared/cindyMakeDoctor';
+import { initialDownloadProgress } from '../../../../shared/downloadProgress';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 const opening = vi.hoisted(() => ({
   get: vi.fn(),
@@ -869,6 +870,35 @@ describe('doctor card interactions', () => {
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('50');
     expect(screen.getByText('cindyMake.prepare.stop')).toBeTruthy();
     expect(screen.queryByText('cindyMakeDoctor.scope')).toBeNull();
+    // Live reports carry the shared progress: a stalled bar explains the reconnect.
+    view.rerender(
+      <MakeDoctorReportCard
+        report={{
+          ...report,
+          mode: 'prepare',
+          status: 'running',
+          checks: [
+            {
+              id: 'node',
+              status: 'downloading',
+              progress: { loaded: 50, total: 100, percent: 50 },
+              download: {
+                ...initialDownloadProgress('retrying', 100),
+                loaded: 50,
+                percent: 50,
+                attempt: 2,
+                retryReason: 'slow',
+              },
+            },
+          ],
+        }}
+        onStop={vi.fn()}
+        onRecheck={retry}
+      />,
+    );
+    expect(screen.getAllByRole('progressbar')).toHaveLength(1);
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('50');
+    expect(screen.getByText('downloadProgress.retry.slow')).toBeTruthy();
     view.rerender(
       <MakeDoctorReportCard
         report={{

@@ -4533,14 +4533,7 @@
         "installCancel": "Cancelar instalación",
         "installFailed": "No se pudo instalar Ollama",
         "installPhase": {
-          "resolving": "Buscando la versión oficial…",
-          "downloading": "Descargando…",
-          "verifying": "Verificando…",
-          "extracting": "Instalando…",
-          "starting": "Iniciando…",
-          "success": "Instalado",
-          "error": "La instalación falló",
-          "cancelled": "Cancelado"
+          "error": "La instalación falló"
         },
         "openWebsite": "Abrir el sitio web Ollama",
         "recheck": "Ya lo instalé, revisa nuevamente",
@@ -4575,20 +4568,6 @@
         "retryDownload": "Reintentar",
         "libraryName": "Nombre exacto de la biblioteca Ollama",
         "pullingTitle": "Descargando {{name}}",
-        "pullIndeterminate": "Preparando",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "Preparando descarga…",
-          "manifest": "Obteniendo manifiesto…",
-          "downloading": "Descargando archivos del modelo",
-          "verifying": "Verificando…",
-          "writing": "Escribiendo…",
-          "success": "Descarga completa",
-          "error": "Descarga fallida",
-          "paused": "En pausa",
-          "cancelled": "Cancelado"
-        },
         "pauseDownload": "Pausar",
         "resumeDownload": "Reanudar descarga",
         "cancelDownload": "Eliminar descarga incompleta",
@@ -6035,8 +6014,6 @@
           "notChecked": "Aún no comprobado",
           "action": "Actualizar",
           "updating": "Actualizando…",
-          "downloadingPercent": "Descargando {{percent}}% ({{downloaded}}/{{total}} MB)…",
-          "downloadingBytes": "Descargando, {{downloaded}} MB hasta ahora…",
           "installing": "Descarga completa, instalando…",
           "toast": {
             "success": "cua-driver se actualizó a la versión más reciente",
@@ -15641,6 +15618,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "Este archivo está fuera del directorio de trabajo de la sesión actual y no se puede localizar en el explorador de archivos de la barra lateral",
       "openInDefaultBrowser": "Abrir en el navegador",
       "copyLink": "Copiar enlace",
+      "addPrToHeader": "Añadir al encabezado",
+      "prAlreadyInHeader": "Ya está en el encabezado",
+      "prAddedToHeader": "Añadido al encabezado: el estado acompaña a esta tarea.",
+      "prAssociatedNotInHeader": "Enlazado, fuera del encabezado",
+      "prSavedNotInHeader": "Enlace guardado. Los tres espacios del encabezado están ocupados; puedes fijar este PR desde la gestión de PR del encabezado de la tarea.",
       "linkCopied": "Enlace copiado",
       "viewSourceFile": "Ver código fuente",
       "openInSidebarFailed": "No se pudo abrir en el navegador de la barra lateral",
@@ -22046,5 +22028,28 @@
     "archivedNotice": "Tareas inactivas archivadas automáticamente: {{count}}",
     "undo": "Deshacer",
     "undoFailed": "No se pudo deshacer. Restaura las tareas desde Archivadas."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "Quedan {{time}}",
+    "attempt": "Intento {{attempt}}",
+    "phase": {
+      "preparing": "Preparando…",
+      "queued": "En cola…",
+      "downloading": "Descargando…",
+      "retrying": "Reintentando…",
+      "verifying": "Verificando…",
+      "installing": "Instalando…",
+      "paused": "En pausa",
+      "completed": "Completado",
+      "failed": "Error en la descarga",
+      "cancelled": "Cancelado"
+    },
+    "retry": {
+      "slow": "Conexión lenta, reconectando…",
+      "network": "Conexión perdida, reintentando…",
+      "timeout": "Tiempo de conexión agotado, reintentando…",
+      "server": "Servidor ocupado, reintentando…"
+    }
   }
 }
