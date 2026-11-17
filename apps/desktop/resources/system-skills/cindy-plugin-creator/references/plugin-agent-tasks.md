@@ -314,6 +314,20 @@ await cindy.tasks.send({ taskId, requestKey, expectedRevision, text, context, re
 
 `models()` 返回统一目录可选项的完整 route、efforts 和 supportsFastMode。用户明确选择后将 route 原样传给 create，或用 `setModel({taskId, expectedRevision, route})` 修改已有自有任务。运行中按普通任务的安全边界切换，不修改应用默认。两方法使用前检查 capabilities.operations。
 
+**IM 共用项目与模型**：检查 `capabilities().imProjects === true`，并声明、获批
+`agent.tasks` 与 `agent.targets`。`imProjects()` 返回 `{projects:[{id,label,directory?}]}`，包含
+内置 `chat` 与宿主电脑侧栏项目；id 原样使用，不构造路径。项目选择与聊天绑定由插件保存。
+`create({requestKey,title,imProject:id})` 同时读取该项目的模型、来源、推理档与权限；不能再带
+route、permissionMode、callId、isolatedWorkspace。共用配置的插件可声明 `showTaskPreferences:false`
+隐藏重复的任务设置卡，历史偏好保留。
+
+接续前用 `followImProject({taskId,expectedRevision,imProject:id})`，返回 `{status,task}`，然后以
+返回的 revision 发送新输入。只适用于插件自己空闲的任务，TASK_BUSY 时等待，STALE_REVISION 时重新读取；
+PROJECT_MISMATCH 表示换了项目或任务被移动，应新建任务并保留旧任务。归档后同样新建。
+发送已受理或结果不确定时，先按原请求键查回执，不重新选项目或改写原输入。旧 Host 缺能力时提示升级，
+不能改投插件默认模型。权限收紧与项目移除会在派发时再检查，插件不能绕过。项目属于插件宿主电脑，
+远程模型来源不把项目搬到另一台电脑。
+
 **远程模型执行**：`capabilities().remoteRoutes === true` 时，
 `create` 和 `setModel` 的完整 route 可带 `agentDeviceId`（同账号其他电脑或 `share:<shareId>`）。
 省略表示插件运行电脑；它选择 Agent 执行来源，任务记录、文件、权限和结果仍归插件运行电脑。

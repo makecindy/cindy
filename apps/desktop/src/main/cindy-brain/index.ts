@@ -10186,6 +10186,7 @@ export function registerGhostIpc(): void {
       const result = await handlePluginTaskRequest(id, type === 'targets-request' ? { type: 'tasks-request', kind: 'capabilities' } : payload, {
         getGhost: findGhostForInstanceId, handler: pluginTaskHandler, isCurrent,
         ensureAuthorized: () => requestPluginTaskApproval(id, isCurrent, confirmCapability),
+        ensureTargetsAuthorized: () => requestPluginTaskApproval(id, isCurrent, confirmCapability, false, 'targets'),
       });
       if (type !== 'targets-request' || !result.ok) return result;
       try {

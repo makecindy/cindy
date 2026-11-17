@@ -514,6 +514,19 @@ function forgetReleasedProjectSettings(names: readonly string[]): void {
   }
 }
 
+/** Same local project catalogue for approved plugin IM entrances; no credentials or remote paths. */
+export async function readPluginImProjectCatalog() {
+  const { store: current } = ensureInstances();
+  await projectWorkspaceSync.run();
+  if (store !== current) throw new Error('IM project owner changed');
+  return { workspaces: { ...current.get().workspaces },
+    isCurrent: () => store === current,
+    currentWorkspaces: () => current.get().workspaces };
+}
+export function currentPluginImProjectWorkspaces(): Readonly<Record<string, string>> {
+  return store?.get().workspaces ?? {};
+}
+
 /** 官方 IM 机器人可选的项目跟随侧栏项目(见 projectWorkspaces.ts)。 */
 const projectWorkspaceSync = createProjectWorkspaceSync({
   getStore: () => store,

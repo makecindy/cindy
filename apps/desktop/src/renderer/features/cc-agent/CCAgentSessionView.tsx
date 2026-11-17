@@ -1,5 +1,6 @@
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
-import type { ChatMessage } from '@/lib/makerChatStore';
+import { getLiveErrorMessageClientId, type ChatMessage } from '@/lib/makerChatStore';
+import { findErrorTailMessage } from '@/lib/errorTailMessage';
 import { PendingQueueBubble } from '@/components/chat/PendingQueueBubble';
 import { McpAppPermissionPrompt } from '@/components/chat/McpAppPermissionPrompt';
 import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
@@ -2533,8 +2534,8 @@ function CCAgentSessionContent({
   //   - 中断标记行(reason=app-exit-interrupted,启动扫尾补写)→「继续任务/忽略」
   //   - 普通失败行(process exited / turn-failed 等,重启后 live 报错只剩历史行)
   //     →「重试/关闭」
-  // 后面有新消息 = 任务已被推进,判定自然不命中。此时消息流内不重复渲染该行
-  // (MessageStream 对尾部未忽略 error 行返回 null,由本条独家承载)。
+  // 后面有真实进展 = 任务已被推进；位置/模型/历史边界卡不代表恢复成功。
+  // 只有实际渲染的横幅才认领 MessageStream 中同一条错误，避免双显或只读时丢失原因。
   const scheduleSessionInfo = useAutomationScheduleSessionInfo(sessionId);
   const unreadFailedScheduleRunIds =
     scheduleSessionInfo?.unreadFailedRunIds ?? EMPTY_UNREAD_FAILED_RUN_IDS;
@@ -2552,15 +2553,10 @@ function CCAgentSessionContent({
     );
     return false;
   }, [currentUnreadFailedRunId, remoteDeviceId, t]);
-  const errorTailMsg = useMemo(() => {
-    const last = messages.length > 0 ? messages[messages.length - 1] : undefined;
-    return last &&
-      last.role === 'error' &&
-      !last.errorDismissed &&
-      last.clientId !== disposedErrorPersistId
-      ? last
-      : null;
-  }, [disposedErrorPersistId, messages]);
+  const errorTailMsg = useMemo(
+    () => findErrorTailMessage(messages, disposedErrorPersistId),
+    [disposedErrorPersistId, messages],
+  );
   // 队列里已有合成续跑项 = 用户已点过继续/重试、只是尚未被接受落库(排队被挡 /
   // 凭证切换等待):视为已推进,banner 抑制(review P2)—— 本地 hidden 态在重挂/
   // 重载后丢失,只看 messages 尾部时旧 error 行仍在,banner 会重现并允许对同一
@@ -5463,6 +5459,15 @@ function CCAgentSessionContent({
       simplifiedBotConversation={Boolean(botChatIdentity)} localSend={isLocalUserSend(entry.clientId)} onEdit={beginQueueComposerEdit}
       onSteer={steerQueuedMessage} onRemove={removeFromQueue} onMove={moveQueueItem} /> : null;
   };
+  const showErrorTailBanner = !readOnly && !!errorTailMsg && !errorTailBannerHidden
+    && !syntheticContinuationPending && !error && !credentialSwitchWait
+    && !isStreaming && !agentStatus.isRunning && !!sessionId;
+  const showLiveErrorBanner = !readOnly && !!error && !hasInlineOverloadRetry({
+    error, errorReason, isRecoverable: errorIsRecoverable, messages, continuationTurnClientId,
+  });
+  const bannerErrorClientId = showLiveErrorBanner
+    ? getLiveErrorMessageClientId({ error, errorPersistId, historyLoaded, messages, disposedErrorPersistId })
+    : showErrorTailBanner ? errorTailMsg!.clientId : null;
   const queueNotices = <>
             {/* Error display.
               - agentKind 传到 ErrorBanner 让 codex 401 / Missing bearer 不仅在远端
@@ -5494,16 +5499,7 @@ function CCAgentSessionContent({
                 Retry 门控与恢复路径(同步登录态 / fork 剥离),此前的简化红条
                 一律显示重试会把用户带进同样的失败循环。onRetry 忽略 retryText
                 (typed token),发隐藏续跑指令;onCancel = dismiss 持久化。 */}
-            {!readOnly &&
-              errorTailMsg &&
-              !errorTailBannerHidden &&
-              !syntheticContinuationPending &&
-              !error &&
-              !credentialSwitchWait &&
-              !isStreaming &&
-              !agentStatus.isRunning &&
-              sessionId &&
-              (errorTailKind === 'interrupted' ? (
+            {showErrorTailBanner && (errorTailKind === 'interrupted' ? (
                 <InterruptedTurnBanner
                   onContinue={handleErrorTailContinue}
                   onDismiss={handleErrorTailDismiss}
@@ -5579,13 +5575,7 @@ function CCAgentSessionContent({
               )}
 
             {/* 只隐藏已有同一错误活动行的过载重试；认证、额度等操作入口照常保留。 */}
-            {!readOnly && error && !hasInlineOverloadRetry({
-              error,
-              errorReason,
-              isRecoverable: errorIsRecoverable,
-              messages,
-              continuationTurnClientId,
-            }) && (
+            {showLiveErrorBanner && (
               <ErrorBanner
                 onChooseComputer={sharedTaskRecovery.askAgain}
                 error={error}
@@ -5665,7 +5655,7 @@ function CCAgentSessionContent({
       botUnreadBoundaryAt={botChatIdentity ? botUnreadBoundaryAt : null}
       onBotReadThrough={viewVisible ? onBotReadThrough : undefined}
       messages={timelineMessages}
-      activeErrorClientId={!readOnly && error ? errorPersistId : null}
+      activeErrorClientId={bannerErrorClientId}
       activeVoiceCallId={activeVoiceCallId}
       historyVisibleAfter={session?.source === 'side-chat' ? new Date(session.createdAt).getTime() : undefined}
       onAskInSideChat={!readOnly && sessionId && !sideChatBlockedKey
