@@ -148,8 +148,8 @@ it('waits for a cold skill before saving a queue edit and rebases its metadata',
   }) }));
 });
 
-it('resumes directory selection with the pending model and rewritten skill', async () => {
-  const h = harness();
+it.each([undefined, 'controlled-device'])('resumes directory selection with the pending model and rewritten skill (device: %s)', async remoteDeviceId => {
+  const h = harness('pi', remoteDeviceId);
   let completed!: () => void;
   const submission = new Promise<void>(resolve => { completed = resolve; });
   Object.assign(h.environment, {
@@ -167,5 +167,8 @@ it('resumes directory selection with the pending model and rewritten skill', asy
   expect(h.send.mock.calls[0][0]).toBe('/skill:demo hello');
   expect(h.send.mock.calls[0][4]).toBe('/selected-project');
   expect(h.send.mock.calls[0][7].pastedTextRanges).toEqual([{ start: 12, end: 17 }]);
-  expect(h.create.mock.calls[0][0]).toMatchObject({ model: 'pending-model', workingDir: '/selected-project' });
+  const createOpts = expect.objectContaining({ model: 'pending-model', effort: 'medium', permissionMode: 'ask', workingDir: '/selected-project' });
+  expect(h.create.mock.calls[0]).toEqual(remoteDeviceId
+    ? [remoteDeviceId, 'maker:create-session', [createOpts]]
+    : [createOpts]);
 });
