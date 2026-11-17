@@ -15,7 +15,13 @@ import { createImageCacheStore } from '../../../desktop/src/main/imageCacheStore
 import { createHostAttachments } from '../attachments.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { saveAgentInputQueueSnapshot, loadAgentInputQueueSnapshot, getPersistedInputClientIds } from '../../../desktop/src/main/localDb/agentInputQueueSnapshots.ts';
-import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
+import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, listInterruptedPendingRows,
+  _setBootAtMsForTests } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
+import { getSessionInterruptionBootAt } from '../../../desktop/src/main/localDb/sessionInterruptionBoot.ts';
+import { createOwnerBoundaryStop, runOwnerBoundary } from './owner-boundary.ts';
+import { logoutHostSession } from '../auth/logout.mjs';
+import { serializeAuthSessionRecord } from '@cindy/auth-client';
+import { AUTH_SESSION_KEY } from '../../../desktop/src/main/authCredentialKeys.ts';
 
 import { createHostHistoryReader } from './history.ts';
 import { createInputQueue, holdTaskForProfile, PROFILE_HOLD_LOCK } from './input-queue.mjs';
@@ -5539,4 +5545,162 @@ test('profile hold: a usage-limit continuation that comes due is not sent', asyn
   await coordinator.continueAfterUsageLimitReset('quota-task', token, info);
   await settle();
   assert.deepEqual(sent, [], 'held: not sent');
+});
+
+// ── Owner boundary: the stop comes first (agent/owner-boundary.ts) ─────────────────────────────────
+// 测试价值
+// - 生产入口：runOwnerBoundary / createOwnerBoundaryStop（main.ts 的退出登录、会话失效、有序关闭都经它，server.mjs 的
+//   HTTP 退出登录先调 begin），配真实的输入队列、执行器、迁移过的 owner 库与回合标记写入（markSessionTurnEnded），
+//   退出登录配真实的 logoutHostSession，/chat 配真实的 createChatHandler 与事件中心。
+// - 规则：放行表第五节甲（账号边界停止提前置位，2026-11-17 审核方定）。边界一开始，在跑的回合就成为中断：不写结束时间，
+//   下次启动列入中断；退出登录先停运行时、再吊销，吊销失败不让退出登录失败；/chat 流以中断回执收尾。照桌面
+//   （bootstrap-electron.ts 账号边界的 beginSessionTurnEndedSuppression，退出时 freezeSessionActiveTurnMarkers）。
+// - 现有覆盖缺口：停止态要到 inputQueue.dispose 才置位；之前拆依赖（暂停请求、关确认窗与插件、服务端吊销）时失败收尾的
+//   回合写下结束时间与错误行，显示成错误；/chat 流在边界时收不到任何回执。
+// - 最小失败输入：一个在跑的回合，在边界开始之后、dispose 之前失败（确定性地在 beforeDispose 里发错误事件）。
+// - tier：unit（内存假 Maker 与迁移过的临时 owner 库，无真实等待）。
+async function boundaryTask(t, id) {
+  ensureUnitOwner();
+  await new OwnerSessionStorage({ db: () => getCurrentDbClientSnapshot().client }).create({
+    id, title: 'Owner boundary fixture', agentKind: 'claude-code', model: 'stored-model', providerId: 'xd', workDir: process.cwd() });
+  const ended = [];
+  const hub = createEventHub();
+  const h = createHarness({
+    hub,
+    markStarted: markSessionTurnStartedDurable,
+    markEnded: async (sessionId, at) => { ended.push(sessionId); markSessionTurnEnded(sessionId, at); await drainSessionActiveTurnWrites(sessionId); },
+  });
+  t.after(() => h.queue.dispose());
+  const boundary = createOwnerBoundaryStop({ beginStop: () => h.queue.beginStop() });
+  const markers = () => getCurrentDbClientSnapshot().client.queryOne(
+    'SELECT active_turn_started_at AS startedAt, last_turn_ended_at AS endedAt FROM sessions WHERE id = ?', [id]);
+  const errorRows = () => h.persisted.filter(row => row.sessionId === id && row.role === 'error');
+  /** The next Host start: its boot time is after this turn started (sessionInterruptionBoot.ts). */
+  const interruptedAtNextStart = async () => {
+    const boot = getSessionInterruptionBootAt();
+    _setBootAtMsForTests(Date.now() + 1);
+    try { return (await listInterruptedPendingRows()).map(row => row.sessionId).includes(id); }
+    finally { _setBootAtMsForTests(boot); }
+  };
+  const startTurn = async (clientId = `${id}-input`) => {
+    await h.queue.enqueue(id, { clientId, text: 'long job' });
+    await waitFor(() => h.maker.sessions.get(id)?.sent.length === 1);
+    await drainSessionActiveTurnWrites(id);
+    return h.maker.sessions.get(id);
+  };
+  return { h, hub, boundary, ended, markers, errorRows, interruptedAtNextStart, startTurn };
+}
+
+/** A failure of the running turn caused by the boundary's own teardown (a revoke, a closed confirmation). */
+const failRunningTurn = async session => {
+  session.emit({ type: 'error', data: { message: 'torn down under the turn', isTerminal: true } });
+  await settle();
+};
+
+const signOutStore = () => {
+  const records = new Map([[AUTH_SESSION_KEY, serializeAuthSessionRecord('global', 'boundary-refresh')]]);
+  return { records, store: { read: key => records.get(key) ?? null, write: (key, value) => records.set(key, value), remove: key => records.delete(key) } };
+};
+
+test('owner boundary, logout: the running turn stops before the revoke, stays interrupted with no error row, and a failed revoke still signs out', async t => {
+  const b = await boundaryTask(t, 'boundary-logout');
+  const session = await b.startTurn();
+  const { records, store } = signOutStore();
+  const { result, errors } = await runOwnerBoundary(b.boundary, {
+    beforeDispose: async () => {},
+    dispose: () => b.h.queue.dispose(),
+    afterDispose: () => logoutHostSession({ store,
+      refresh: async () => { await failRunningTurn(session); return { accessToken: 'boundary-access' }; },
+      logout: async () => { throw new Error('revoke unavailable'); } }),
+  });
+  assert.deepEqual(errors, [], 'a failed revoke does not fail the logout');
+  assert.equal(result.signedOut, true);
+  assert.equal(result.serverRevoked, false);
+  assert.equal(records.has(AUTH_SESSION_KEY), false, 'signed out locally');
+  assert.equal(session.aborted, 1, 'stopped before the revoke');
+  assert.deepEqual(b.errorRows(), [], 'the revoke reached no running turn');
+  assert.deepEqual(b.ended, []);
+  const markers = await b.markers();
+  assert.equal(typeof markers.startedAt, 'number');
+  assert.equal(markers.endedAt, null);
+  assert.equal(await b.interruptedAtNextStart(), true);
+});
+
+for (const [path, steps] of [
+  // Session invalidation: requests paused, confirmations and plugins closed before the runtime (main.ts).
+  ['session invalidation', session => ({ beforeDispose: () => failRunningTurn(session) })],
+  // Shutdown: the server stops accepting, codex tool trees are reaped, writers drain (main.ts stop).
+  ['shutdown', session => ({ beforeDispose: () => failRunningTurn(session) })],
+  // Logout: the in-flight refresh settles first (main.ts logout).
+  ['logout', session => ({ beforeDispose: () => failRunningTurn(session), afterDispose: async () => ({ signedOut: true }) })],
+]) {
+  test(`owner boundary, ${path}: a turn that ends on the teardown before dispose writes no end and is interrupted at the next start`, async t => {
+    const b = await boundaryTask(t, `boundary-teardown-${path.replace(/\W+/g, '-')}`);
+    const session = await b.startTurn();
+    const { errors } = await runOwnerBoundary(b.boundary, { ...steps(session), dispose: () => b.h.queue.dispose() });
+    assert.deepEqual(errors, []);
+    assert.deepEqual(b.ended, [], 'the executor marks no end once the boundary began');
+    assert.equal((await b.markers()).endedAt, null);
+    assert.equal(await b.interruptedAtNextStart(), true);
+  });
+}
+
+test('owner boundary: no input is accepted once it began, and the shared turn-end suppression holds until the teardown ends', async t => {
+  const b = await boundaryTask(t, 'boundary-suppression');
+  await b.startTurn();
+  let suppressedEnd;
+  const { errors } = await runOwnerBoundary(b.boundary, {
+    beforeDispose: async () => {
+      await assert.rejects(b.h.queue.enqueue('boundary-suppression', { clientId: 'late', text: 'after the boundary' }), /session is closed/);
+      // Any other turn-end write in the boundary (the desktop's second line): not written.
+      markSessionTurnEnded('boundary-suppression');
+      await drainSessionActiveTurnWrites('boundary-suppression');
+      suppressedEnd = (await b.markers()).endedAt;
+    },
+    dispose: () => b.h.queue.dispose(),
+  });
+  assert.deepEqual(errors, []);
+  assert.equal(suppressedEnd, null);
+  // Released once the boundary's teardown ended: writes go through again.
+  markSessionTurnEnded('boundary-suppression');
+  await drainSessionActiveTurnWrites('boundary-suppression');
+  assert.equal(typeof (await b.markers()).endedAt, 'number');
+});
+
+/** A /chat stream into the boundary fixture's queue, as main.ts wires it (onBoundaryStop). */
+async function boundaryChat(b, sessionId, clientId) {
+  const writes = [];
+  const response = Object.assign(new EventEmitter(), { writableEnded: false, headersSent: false, destroyed: false,
+    writeHead() { this.headersSent = true; }, write(chunk) { writes.push(String(chunk)); },
+    end(chunk) { if (chunk) writes.push(String(chunk)); this.writableEnded = true; this.emit('close'); } });
+  const chat = createChatHandler({ events: b.hub, readSession: async id => ({ id, status: 'active' }),
+    enqueue: (id, input) => b.h.queue.enqueue(id, input), inputStatus: (id, input) => b.h.queue.inputStatus(id, input),
+    onBoundaryStop: b.boundary.onStop });
+  await chat(Readable.from([Buffer.from(JSON.stringify({ sessionId, clientId, prompt: 'via chat' }))]), response);
+  await waitFor(() => b.h.maker.sessions.get(sessionId)?.sent.length === 1);
+  const events = () => writes.filter(chunk => chunk.startsWith('data: ')).map(chunk => JSON.parse(chunk.slice(6)));
+  return { response, events };
+}
+
+test('owner boundary, /chat: the stream ends with the interrupted receipt when the boundary begins, the same receipt a stopped turn gets', async t => {
+  const b = await boundaryTask(t, 'boundary-chat');
+  const stopped = await boundaryChat(b, 'boundary-chat', 'chat-stopped');
+  // A turn the user stops: the executor publishes its interrupted receipt, and the stream ends on it.
+  await b.h.queue.stop('boundary-chat');
+  await waitFor(() => stopped.response.writableEnded);
+  const stoppedReceipt = stopped.events().at(-1);
+
+  const running = await boundaryChat(b, 'boundary-chat-2', 'chat-boundary');
+  const teardown = runOwnerBoundary(b.boundary, { dispose: () => b.h.queue.dispose() });
+  // Ended as the boundary began, not when the turn would have finished on its own.
+  assert.equal(running.response.writableEnded, true);
+  await teardown;
+  const boundaryReceipt = running.events().at(-1);
+  const { seq, ...stoppedFields } = stoppedReceipt;
+  assert.equal(typeof seq, 'number', 'the stopped turn\'s receipt went through the event hub');
+  assert.deepEqual(stoppedFields, { type: 'input_receipt', sessionId: 'boundary-chat', inputClientId: 'chat-stopped',
+    clientId: 'chat-stopped', status: 'interrupted' });
+  // The same receipt, written by the stream itself (as its queue-head and reconnect receipts): no hub sequence.
+  assert.deepEqual(boundaryReceipt, { type: 'input_receipt', sessionId: 'boundary-chat-2', inputClientId: 'chat-boundary',
+    clientId: 'chat-boundary', status: 'interrupted' });
 });

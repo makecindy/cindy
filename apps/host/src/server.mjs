@@ -98,12 +98,15 @@ export function createHostServer(input) {
   const unsubscribeSessions = deps.webAuth.onSessionRevoke?.(caller => deps.releaseAuthCaller?.(caller));
   const logout = () => {
     if (logoutFlight) return logoutFlight;
+    // The owner boundary's stop comes first (agent/owner-boundary.ts): a turn that fails on the
+    // teardown below is an interruption, not an ended turn with an error row.
+    const releaseStop = deps.beginOwnerBoundaryStop?.() ?? (() => {});
     // Revoke browser streams immediately and drain existing database callers
     // before the owner runtime closes. Concurrent sign-out clicks share a result.
     deps.webAuth.clear();
     deps.platformClient?.()?.close();
     logoutFlight = cancelPendingAuth().then(() => Promise.all([...ownerRequests])).then(() => deps.logout())
-      .finally(() => { logoutFlight = undefined; });
+      .finally(() => { releaseStop(); logoutFlight = undefined; });
     return logoutFlight;
   };
   const server = createServer(async (request, response) => {

@@ -136,6 +136,7 @@ import { createSnapshotProcess } from './snapshot-process.mjs';
 import { configureGhostSnapshotProcess } from '../../desktop/src/main/cindy-brain/ghostSnapshotCapability.js';
 import { withCrossProcessLock } from '../../desktop/src/main/device-link/crossProcessLock.js';
 import { createChatHandler } from './chat.mjs';
+import { createOwnerBoundaryStop, runOwnerBoundary } from './agent/owner-boundary.ts';
 import { createEventHub } from './events.mjs';
 import { createTaskTagService } from '../../desktop/src/main/localDb/ipc/taskTagService.js';
 import { executeConversationSearch } from '../../desktop/src/main/localDb/ipc/search.js';
@@ -555,13 +556,18 @@ async function performAuthRefresh(): Promise<boolean> {
 let invalidation: Promise<void> | null = null;
 function invalidateHostSession(_reason: string): Promise<void> {
   if (invalidation) return invalidation;
-  const release = beginAppSessionBoundary();
-  account = { authenticated: false, realm: account.realm, error: 'Sign in again with cindy-host login' };
-  endAuthRefreshes();
-  currentSessionToken = null;
-  remoteIdentityReady = false;
-  invalidation = Promise.resolve().then(async () => {
-    try {
+  let release = () => {};
+  // The owner boundary's stop first (agent/owner-boundary.ts), then this path's teardown. Everything before
+  // the first await below runs before this returns: the boundary is raised synchronously, as before.
+  invalidation = runOwnerBoundary(ownerBoundary, {
+    beforeDispose: async () => {
+      release = beginAppSessionBoundary();
+      account = { authenticated: false, realm: account.realm, error: 'Sign in again with cindy-host login' };
+      endAuthRefreshes();
+      currentSessionToken = null;
+      remoteIdentityReady = false;
+      // A refresh that called this belongs to an admitted request: let it unwind before the drain.
+      await Promise.resolve();
       const requestsDrained = server.pauseOwnerRequests();
       // Cancel user waits before draining HTTP handlers. A pending confirmation
       // must not keep expired-account requests (and their database) alive forever.
@@ -572,14 +578,14 @@ function invalidateHostSession(_reason: string): Promise<void> {
       interactionBroker.dispose();
       await pluginGateway?.host.reset();
       await requestsDrained;
-      await disposeOwnerRuntime();
-    } finally {
-      commitVolatileAppSession('signed-out', null, true);
-      release();
-      runtime.state = 'uninitialized'; runtime.owner = null; runtime.storage = 'unopened';
-      runtime.detail = 'Sign-in expired. Stop the Host, sign in again, then start it.';
-      eventHub.clear();
-    }
+    },
+    dispose: disposeOwnerRuntime,
+  }).then(({ errors }) => { if (errors.length) throw errors[0]; }).finally(() => {
+    commitVolatileAppSession('signed-out', null, true);
+    release();
+    runtime.state = 'uninitialized'; runtime.owner = null; runtime.storage = 'unopened';
+    runtime.detail = 'Sign-in expired. Stop the Host, sign in again, then start it.';
+    eventHub.clear();
   }).finally(() => { invalidation = null; });
   return invalidation;
 }
@@ -1230,6 +1236,8 @@ const inputQueue = createInputQueue({
   }),
   sent: (sessionId: string) => commitProvisionalSession(sessionId, sessionDraftPorts),
 });
+// The first step of every owner boundary: logout, session invalidation, shutdown (agent/owner-boundary.ts).
+const ownerBoundary = createOwnerBoundaryStop({ beginStop: () => inputQueue.beginStop() });
 // The history view and work details: the desktop's reader, with the turn state and the in-flight rows
 // of this input queue (agent/history.ts).
 const hostHistoryReader = createHostHistoryReader({
@@ -1341,6 +1349,8 @@ setLiveCcSessionBridge(sessionMove.liveCcSessionBridge);
 
 const serverDeps = {
   ipcRoute,
+  // The HTTP logout's first step, before it closes the platform client and drains requests (server.mjs).
+  beginOwnerBoundaryStop: () => ownerBoundary.begin(),
   // Coexistence plan A: while a desktop uses this profile, only reads, stops and answers reach the
   // handlers (service.mjs HOST_PATHS_ALLOWED_WHILE_HELD); the rest get this refusal.
   profileHold: () => (inputQueue.isHeldForDesktop() ? profileInUseMessage() : null),
@@ -1477,41 +1487,51 @@ const serverDeps = {
     const outgoingOwner = activeOwner;
     // Read before the runtime is disposed (disposal releases the hold with the input queue).
     const heldAtLogout = inputQueue.isHeldForDesktop();
+    // The signed-in account, read before disposal clears it: signing out names it in the saved accounts.
+    const outgoingUser = accountUser;
     let loggedOut = false;
     const releaseBoundary = beginAppSessionBoundary();
     try {
-    await authRefreshFlight;
-    const realm = (account.realm ?? resolveHostRegion()) as 'cn' | 'global';
-    const endpoints = readAuthEndpoints(realm);
-    const store = await createCredentialStore({
-      userDataDir: resolveHostDataDir(),
-      keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
-    });
-    const { machineIdSync } = createRequire(import.meta.url)('node-machine-id');
-    const client = new CindyAuthClient({
-      baseUrl: endpoints.authApiBaseUrl,
-      region: realm,
-      deviceId: resolveSessionDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, '')),
-      clientType: 'desktop',
-      fetch: (input, init) => hostAuthFetch(input, init),
-    });
-    const result = await withCrossProcessLock(
-      path.join(resolveHostDataDir(), AUTH_ACCOUNT_VAULT_LOCK_FILE),
-      { label: 'auth-account-vault', waitMs: 5000 },
-      async (lock) => {
-        if (!lock.held) throw new Error('Saved account credentials are busy; retry logout');
-        return logoutHostSession({
-          store, ownerId: accountUser?.id, passportId: accountUser?.passportId,
-          refresh: (token) => client.refresh(token),
-          logout: (accessToken) => client.logout(accessToken),
-        });
-      },
-    );
-    loggedOut = true;
-    return result;
+      // As the desktop's logout (authManager.ts): stop and tear down locally first, then sign out the stored
+      // session; the server revoke is best effort (auth/logout.mjs), a failed revoke does not fail the logout.
+      const { result, errors } = await runOwnerBoundary(ownerBoundary, {
+        beforeDispose: () => authRefreshFlight,
+        dispose: disposeOwnerRuntime,
+        afterDispose: async () => {
+          const realm = (account.realm ?? resolveHostRegion()) as 'cn' | 'global';
+          const endpoints = readAuthEndpoints(realm);
+          const store = await createCredentialStore({
+            userDataDir: resolveHostDataDir(),
+            keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
+          });
+          const { machineIdSync } = createRequire(import.meta.url)('node-machine-id');
+          const client = new CindyAuthClient({
+            baseUrl: endpoints.authApiBaseUrl,
+            region: realm,
+            deviceId: resolveSessionDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, '')),
+            clientType: 'desktop',
+            fetch: (input, init) => hostAuthFetch(input, init),
+          });
+          const signedOut = await withCrossProcessLock(
+            path.join(resolveHostDataDir(), AUTH_ACCOUNT_VAULT_LOCK_FILE),
+            { label: 'auth-account-vault', waitMs: 5000 },
+            async (lock) => {
+              if (!lock.held) throw new Error('Saved account credentials are busy; retry logout');
+              return logoutHostSession({
+                store, ownerId: outgoingUser?.id, passportId: outgoingUser?.passportId,
+                refresh: (token) => client.refresh(token),
+                logout: (accessToken) => client.logout(accessToken),
+              });
+            },
+          );
+          loggedOut = true;
+          return signedOut;
+        },
+      });
+      if (errors.length) throw errors.length === 1 ? errors[0] : new AggregateError(errors, 'Logout did not complete cleanly');
+      return result;
     } finally {
       try {
-        await disposeOwnerRuntime();
         // Row 25 (25b, decision (ii)): clear the outgoing owner's Skill projections as the desktop does at
         // sign-out, without a commit; skipped while a desktop holds the profile. Never fails the logout.
         if (loggedOut && outgoingOwner) {
@@ -1747,6 +1767,8 @@ const serverDeps = {
     inputStatus: (id: string, clientId: string) => inputQueue.inputStatus(id, clientId),
     events: eventHub,
     defaultModel: process.env.CINDY_HOST_MODEL?.trim(),
+    // An owner boundary ends the open streams with the interrupted receipt (agent/owner-boundary.ts).
+    onBoundaryStop: ownerBoundary.onStop,
   }),
   providers: () => listProviders({ gateway: currentGateway(), ownerId: runtime.owner }),
   // The agent's own capability descriptor; no second catalog is invented here.
@@ -2093,20 +2115,31 @@ const stop = () => {
   shuttingDown = true;
   authClosed = true;
   endAuthRefreshes();
-  const requestsDrained = server.stopAccepting();
-  const releaseOwnerBoundary = beginAppSessionBoundary();
-  // As the desktop's quit ('reap-codex-tool-trees', a sync step before the Maker shutdown):
-  // once the app-servers close, the parent chain proving these trees are the Host's is gone.
-  // Only on this exit; an owner change or a window handoff leaves the Host running.
-  try { reapCodexToolTreesSync(); }
-  catch (error) { console.error('cindy-host codex tool tree reap failed:', error instanceof Error ? error.message : String(error)); }
-  void (async () => {
-    try {
+  let releaseOwnerBoundary = () => {};
+  const errors: unknown[] = [];
+  // The owner boundary's stop first (agent/owner-boundary.ts): as the desktop's quit freezes the turn markers,
+  // a turn still running ends as an interruption. Everything before the first await in beforeDispose runs
+  // synchronously here, in the previous order.
+  const boundary = runOwnerBoundary(ownerBoundary, {
+    beforeDispose: async () => {
+      const requestsDrained = server.stopAccepting();
+      releaseOwnerBoundary = beginAppSessionBoundary();
+      // As the desktop's quit ('reap-codex-tool-trees', a sync step before the Maker shutdown):
+      // once the app-servers close, the parent chain proving these trees are the Host's is gone.
+      // Only on this exit; an owner change or a window handoff leaves the Host running.
+      try { reapCodexToolTreesSync(); }
+      catch (error) { console.error('cindy-host codex tool tree reap failed:', error instanceof Error ? error.message : String(error)); }
       // Always drain every in-flight writer before releasing the profile lease,
       // including when another startup/auth operation rejected.
       const settled = await Promise.allSettled([startup, authRefreshFlight, requestsDrained]);
-      const errors = settled.filter(result => result.status === 'rejected').map(result => result.reason);
-      try { await disposeOwnerRuntime(); } catch (error) { errors.push(error); }
+      errors.push(...settled.filter(result => result.status === 'rejected').map(result => result.reason));
+    },
+    // After the reap above (the guard in hostDesktopSourceContracts.guard.test.ts pins the order).
+    dispose: async () => { await disposeOwnerRuntime(); },
+  });
+  void (async () => {
+    try {
+      errors.push(...(await boundary).errors);
       if (errors.length) throw new AggregateError(errors, 'Host shutdown did not complete cleanly');
     } finally {
       server.closeAllConnections();

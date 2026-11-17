@@ -571,6 +571,12 @@ export function createInputQueue(deps) {
       hasRunningTurns: () => [...states.keys()].some(id => executor.isRunning(id) || executor.isRecovering(id)),
       /** One scan of every idle-release watcher, for tests. */
       scanIdleRelease: async () => { await idleRelease?.scanNow(); },
+      /**
+       * The owner boundary began (agent/owner-boundary.ts): the runtime is stopping before dispose()
+       * runs. No new input is accepted, and a turn that ends from now on is an interruption (the
+       * executor writes no turn end for it). Only `closing` is set; dispose() still stops and drains.
+       */
+      beginStop() { closing = true; },
       async dispose() {
         closing = true;
         // No runtime is released while this owner's runtime drains and stops.

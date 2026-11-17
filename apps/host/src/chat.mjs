@@ -72,7 +72,8 @@ export function createChatHandler(deps) {
     const sessionId = payload.sessionId ?? randomUUID();
     const clientId = payload.clientId ?? randomUUID();
     let unsubscribe = () => {};
-    const cleanup = () => { unsubscribe(); unsubscribe = () => {}; };
+    let offBoundaryStop = () => {};
+    const cleanup = () => { unsubscribe(); unsubscribe = () => {}; offBoundaryStop(); offBoundaryStop = () => {}; };
     response.once('close', cleanup);
     const write = event => {
       if (!response.destroyed && !response.writableEnded) response.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -94,6 +95,13 @@ export function createChatHandler(deps) {
         'cache-control': 'no-store', connection: 'keep-alive',
       });
       write({ type: 'session', sessionId, clientId });
+      // An owner boundary (logout, session invalidation, shutdown; agent/owner-boundary.ts) stops this
+      // input's turn as an interruption and the executor publishes no receipt for it: the stream ends here
+      // with the receipt a stopped turn gets (turn-executor.mjs, an abort without a terminal event).
+      offBoundaryStop = deps.onBoundaryStop?.(() => {
+        write({ type: 'input_receipt', sessionId, inputClientId: clientId, clientId, status: 'interrupted' });
+        end();
+      }) ?? (() => {});
       // Once this input's terminal error is taken over by an automatic resume, the stream follows the
       // resume's turns (their events name this input as autoResumeOf) and ends with the resume.
       let followingResume = false;
