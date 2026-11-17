@@ -130,6 +130,18 @@ test('Node device API isolates relay credentials and rechecks prepared routes', 
  * Every case runs under a temporary HOME and profile, and checks the lock paths are inside them
  * before touching anything, so ~/.agents/skills, ~/.claude/skills and ~/.cindy are never reached.
  */
+/** Restore owner write and search permission on every directory, then remove the tree. */
+function removeTemporaryTree(root) {
+  const makeWritable = (dir) => {
+    try { fs.chmodSync(dir, 0o700); } catch { /* removed or not ours */ }
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) if (entry.isDirectory()) makeWritable(path.join(dir, entry.name));
+  };
+  makeWritable(root);
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
 async function skillBoundaryProfile(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-skill-boundary-')));
   const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
@@ -158,7 +170,10 @@ async function skillBoundaryProfile(t) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    fs.rmSync(root, { recursive: true, force: true });
+    // A case may leave a directory unreadable (the sweep blockers). A throwing after-hook would skip
+    // every hook registered after this one (node:test runs them in order), so never throw here.
+    try { removeTemporaryTree(root); }
+    catch (error) { t.diagnostic(`temporary profile not removed: ${root} (${error?.code ?? error})`); }
   });
   for (const file of [boundary.__testing.filePath(), boundary.__testing.lockPath(), boundary.__testing.sharedSkillRootsLockPath()]) {
     assert.ok(file.startsWith(root + path.sep), `boundary path escapes the temporary profile: ${file}`);
@@ -302,7 +317,7 @@ test('25b: serve refuses to publish the projection owner and writes no state', a
   assert.equal(fs.existsSync(boundary.__testing.quarantinePath()), false);
 });
 
-async function fakeLoginAuth(t) {
+async function fakeLoginAuth() {
   const { createServer } = await import('node:http');
   const hits = [];
   let member = 'member-a';
@@ -318,9 +333,9 @@ async function fakeLoginAuth(t) {
     return response.writeHead(404).end('{}');
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise((resolve) => { server.closeAllConnections?.(); server.close(resolve); }));
   const port = server.address().port;
-  return { hits, port, setMember: (id) => { member = id; }, setKind: (value) => { kind = value; } };
+  const close = () => new Promise((resolve) => { server.closeAllConnections?.(); server.close(resolve); });
+  return { hits, port, close, setMember: (id) => { member = id; }, setKind: (value) => { kind = value; } };
 }
 
 async function loginEnvironment(t, root, profile, port) {
@@ -348,70 +363,84 @@ async function loginEnvironment(t, root, profile, port) {
 
 test('25b: cindy-host login publishes the owner that serve then reads as stable, and sweeps the previous account', async (t) => {
   const { root, home, profile, observer, boundary } = await skillBoundaryProfile(t);
-  const auth = await fakeLoginAuth(t);
-  const { login, records } = await loginEnvironment(t, root, profile, auth.port);
-  const { AUTH_SESSION_KEY } = await import('../../desktop/src/main/authCredentialKeys.ts');
-  const { parseAuthSessionRecord } = await import('@cindy/auth-client');
+  const auth = await fakeLoginAuth();
+  try {
+    const { login, records } = await loginEnvironment(t, root, profile, auth.port);
+    const { AUTH_SESSION_KEY } = await import('../../desktop/src/main/authCredentialKeys.ts');
+    const { parseAuthSessionRecord } = await import('@cindy/auth-client');
 
-  await login();
-  assert.equal(observer.readSkillProjectionBoundaryStatus('member-a'), 'stable');
-  assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY))?.refreshToken, 'fixture-refresh-member-a');
+    await login();
+    assert.equal(observer.readSkillProjectionBoundaryStatus('member-a'), 'stable');
+    assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY))?.refreshToken, 'fixture-refresh-member-a');
 
-  // Switching to B revokes A's shared and private Ghost Skill links before B becomes visible.
-  const links = await plantOwnerSkillLinks(profile, home, 'member-a');
-  auth.setMember('member-b');
-  await login();
-  assert.equal(observer.readSkillProjectionBoundaryStatus('member-b'), 'stable');
-  assert.equal(linkExists(links.shared), false);
-  assert.equal(linkExists(links.privateLink), false);
+    // Switching to B revokes A's shared and private Ghost Skill links before B becomes visible.
+    const links = await plantOwnerSkillLinks(profile, home, 'member-a');
+    auth.setMember('member-b');
+    await login();
+    assert.equal(observer.readSkillProjectionBoundaryStatus('member-b'), 'stable');
+    assert.equal(linkExists(links.shared), false);
+    assert.equal(linkExists(links.privateLink), false);
 
-  // A sweep blocker aborts the switch: B is not published, the boundary stays pending, and B's
-  // session is rolled back to the previous record. Fixing it and running login again recovers.
-  const again = await plantOwnerSkillLinks(profile, home, 'member-b');
-  const sharedDir = path.dirname(again.shared);
-  fs.chmodSync(sharedDir, 0o000);
-  t.after(() => { try { fs.chmodSync(sharedDir, 0o755); } catch { /* removed */ } });
-  auth.setMember('member-c');
-  await assert.rejects(login(), /cleanup incomplete/);
-  assert.equal(boundary.readGhostSkillProjectionBoundaryState()?.phase, 'pending');
-  assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY))?.refreshToken, 'fixture-refresh-member-b');
-  fs.chmodSync(sharedDir, 0o755);
-  await login();
-  assert.equal(observer.readSkillProjectionBoundaryStatus('member-c'), 'stable');
-  assert.equal(linkExists(again.shared), false);
+    // A sweep blocker aborts the switch: B is not published, the boundary stays pending, and B's
+    // session is rolled back to the previous record. Fixing it and running login again recovers.
+    const again = await plantOwnerSkillLinks(profile, home, 'member-b');
+    const sharedDir = path.dirname(again.shared);
+    fs.chmodSync(sharedDir, 0o000);
+    try {
+      auth.setMember('member-c');
+      await assert.rejects(login(), /cleanup incomplete/);
+      assert.equal(boundary.readGhostSkillProjectionBoundaryState()?.phase, 'pending');
+      assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY))?.refreshToken, 'fixture-refresh-member-b');
+    } finally {
+      fs.chmodSync(sharedDir, 0o755);
+    }
+    await login();
+    assert.equal(observer.readSkillProjectionBoundaryStatus('member-c'), 'stable');
+    assert.equal(linkExists(again.shared), false);
+  } finally {
+    await auth.close();
+  }
 });
 
 test('25b: login refuses while a desktop uses the profile, or the scan cannot tell, and commits nothing', async (t) => {
   const { root, profile, boundary } = await skillBoundaryProfile(t);
-  const auth = await fakeLoginAuth(t);
-  const { login, records } = await loginEnvironment(t, root, profile, auth.port);
-  await assert.rejects(login({ scanDesktops: async () => [4242] }), /Quit the Cindy desktop app that is using this profile/);
-  await assert.rejects(login({ scanDesktops: async () => { throw Object.assign(new Error('EACCES: registry'), { code: 'EACCES' }); } }),
-    /Cannot tell whether the Cindy desktop app is using this profile \(EACCES: registry\)/);
-  assert.equal(records.size, 0);
-  assert.deepEqual(auth.hits, []);
-  assert.equal(fs.existsSync(boundary.__testing.filePath()), false);
+  const auth = await fakeLoginAuth();
+  try {
+    const { login, records } = await loginEnvironment(t, root, profile, auth.port);
+    await assert.rejects(login({ scanDesktops: async () => [4242] }), /Quit the Cindy desktop app that is using this profile/);
+    await assert.rejects(login({ scanDesktops: async () => { throw Object.assign(new Error('EACCES: registry'), { code: 'EACCES' }); } }),
+      /Cannot tell whether the Cindy desktop app is using this profile \(EACCES: registry\)/);
+    assert.equal(records.size, 0);
+    assert.deepEqual(auth.hits, []);
+    assert.equal(fs.existsSync(boundary.__testing.filePath()), false);
+  } finally {
+    await auth.close();
+  }
 });
 
 test('25b: a running serve admits a first login and the same account, and refuses replacing its account', async (t) => {
   const { root, profile, observer } = await skillBoundaryProfile(t);
-  const auth = await fakeLoginAuth(t);
-  const { login, records } = await loginEnvironment(t, root, profile, auth.port);
-  // Serve running without an account runtime: the first login goes through.
-  await login({ readStatus: async () => ({ running: true, runtime: { state: 'uninitialized', owner: null } }) });
-  assert.equal(observer.readSkillProjectionBoundaryStatus('member-a'), 'stable');
-  // Serve running A: A signs in again.
-  await login({ readStatus: async () => ({ running: true, runtime: { state: 'ready', owner: 'member-a' } }) });
-  // Serve running A: B is refused after the exchange, its session ended and not saved.
-  auth.setMember('member-b');
-  const before = records.get([...records.keys()][0]);
-  await assert.rejects(login({ readStatus: async () => ({ running: true, runtime: { state: 'ready', owner: 'member-a' } }) }),
-    /Cindy Host is running another account/);
-  assert.equal(records.get([...records.keys()][0]), before);
-  assert.equal(auth.hits.filter((hit) => hit === '/api/auth/logout').length, 1);
-  assert.equal(observer.readSkillProjectionBoundaryStatus('member-a'), 'stable');
-  // An unresponsive serve is refused before anything else.
-  await assert.rejects(login({ readStatus: async () => ({ running: null }) }), /Cindy Host is not responding/);
+  const auth = await fakeLoginAuth();
+  try {
+    const { login, records } = await loginEnvironment(t, root, profile, auth.port);
+    // Serve running without an account runtime: the first login goes through.
+    await login({ readStatus: async () => ({ running: true, runtime: { state: 'uninitialized', owner: null } }) });
+    assert.equal(observer.readSkillProjectionBoundaryStatus('member-a'), 'stable');
+    // Serve running A: A signs in again.
+    await login({ readStatus: async () => ({ running: true, runtime: { state: 'ready', owner: 'member-a' } }) });
+    // Serve running A: B is refused after the exchange, its session ended and not saved.
+    auth.setMember('member-b');
+    const before = records.get([...records.keys()][0]);
+    await assert.rejects(login({ readStatus: async () => ({ running: true, runtime: { state: 'ready', owner: 'member-a' } }) }),
+      /Cindy Host is running another account/);
+    assert.equal(records.get([...records.keys()][0]), before);
+    assert.equal(auth.hits.filter((hit) => hit === '/api/auth/logout').length, 1);
+    assert.equal(observer.readSkillProjectionBoundaryStatus('member-a'), 'stable');
+    // An unresponsive serve is refused before anything else.
+    await assert.rejects(login({ readStatus: async () => ({ running: null }) }), /Cindy Host is not responding/);
+  } finally {
+    await auth.close();
+  }
 });
 
 test('25b: serve logout sweeps the outgoing owner once, skips while a desktop holds the profile, and never refuses', async (t) => {
@@ -503,19 +532,23 @@ test('25b L1: /api/agent-skills drops a Skill the user switched off, and only li
 // is ignored; serve running A with an unset boundary loses A's links; a failed commit leaves a session.
 test('25b: login re-checks right before committing, protects a running serve, and ends a session it could not save', async (t) => {
   const { root, home, profile, boundary } = await skillBoundaryProfile(t);
-  const auth = await fakeLoginAuth(t);
-  const { login, records } = await loginEnvironment(t, root, profile, auth.port);
-  // A desktop appears while the browser step runs (the second scan sees it).
-  let scans = 0;
-  await assert.rejects(login({ scanDesktops: async () => (scans++ === 0 ? [] : [4242]) }), /Quit the Cindy desktop app/);
-  assert.equal(records.size, 0);
-  assert.equal(fs.existsSync(boundary.__testing.filePath()), false);
-  assert.equal(auth.hits.filter((hit) => hit === '/api/auth/logout').length, 1, 'the unsaved session is ended');
-  // serve runs A, the boundary is not set yet: A signing in again is refused, A's links stay.
-  const links = await plantOwnerSkillLinks(profile, home, 'member-a');
-  await assert.rejects(login({ readStatus: async () => ({ running: true, runtime: { state: 'ready', owner: 'member-a' } }) }),
-    /Stop Cindy Host \(cindy-host stop\), run cindy-host login again/);
-  assert.equal(linkExists(links.shared), true);
-  assert.equal(records.size, 0);
-  assert.equal(auth.hits.filter((hit) => hit === '/api/auth/logout').length, 2);
+  const auth = await fakeLoginAuth();
+  try {
+    const { login, records } = await loginEnvironment(t, root, profile, auth.port);
+    // A desktop appears while the browser step runs (the second scan sees it).
+    let scans = 0;
+    await assert.rejects(login({ scanDesktops: async () => (scans++ === 0 ? [] : [4242]) }), /Quit the Cindy desktop app/);
+    assert.equal(records.size, 0);
+    assert.equal(fs.existsSync(boundary.__testing.filePath()), false);
+    assert.equal(auth.hits.filter((hit) => hit === '/api/auth/logout').length, 1, 'the unsaved session is ended');
+    // serve runs A, the boundary is not set yet: A signing in again is refused, A's links stay.
+    const links = await plantOwnerSkillLinks(profile, home, 'member-a');
+    await assert.rejects(login({ readStatus: async () => ({ running: true, runtime: { state: 'ready', owner: 'member-a' } }) }),
+      /Stop Cindy Host \(cindy-host stop\), run cindy-host login again/);
+    assert.equal(linkExists(links.shared), true);
+    assert.equal(records.size, 0);
+    assert.equal(auth.hits.filter((hit) => hit === '/api/auth/logout').length, 2);
+  } finally {
+    await auth.close();
+  }
 });
