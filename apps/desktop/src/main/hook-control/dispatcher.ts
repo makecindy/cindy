@@ -1555,7 +1555,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       connectionId: task.connectionId,
       requestId: task.requestId,
       externalKey: task.externalKey,
-      triggerMessageId: task.run.source?.triggerMessageId ?? null,
+      // 只有官方 Telegram 服务端执行桌面端的表情操作。飞书服务端也宣告 msg-op-v1, 但只接进度与
+      // 终稿, 表情由它自己打; 发过去只会每轮被拒三次(UNSUPPORTED_PARAMETERS)。
+      triggerMessageId: task.run.source?.im === 'telegram' ? task.run.source.triggerMessageId ?? null : null,
     };
   }
 
