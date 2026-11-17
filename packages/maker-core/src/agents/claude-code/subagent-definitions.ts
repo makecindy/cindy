@@ -26,6 +26,13 @@
  * 两者都递归子目录 —— 平台允许用 `agents/review/` 这类子目录归类,身份只认 frontmatter
  * 的 `name`,与路径无关。
  *
+ * **只扫本会话真会加载的作用域**:作用域由调用方的 `settingSources` 决定(见
+ * session-setting-sources.ts)。订阅 / 设备托管会话不读用户级设置,CLI 也就不加载
+ * `~/.claude/agents`;若仍扫那里,一份 CLI 根本不加载的全局定义里写着 `model:` 就会被算成
+ * 「有人声明 model」,把「Subagent 模型」默认值对真会加载的内置 / 项目 agent 静默压掉
+ * (PR #8605 P1)。因此被排除的作用域**整段不访问**:不读目录、不参与预算与判定。
+ * 反过来,`settingSources` 为 `[]`(审阅 / 伙伴 / hostToolsOnly)时一个目录都不扫。
+ *
  * **必须传子进程 env**:`CLAUDE_CONFIG_DIR` 在 host boot 期就被 stripSensitiveAnthropicEnv
  * 从 `process.env` 清掉了,host 要重定向配置目录只能由 auth adapter 往**子进程 env** 注入
  * (旧版 dev 多实例曾这样隔离到 `<userData>/claude-home`)。所以调用方要把最终交给 SDK 的
@@ -57,6 +64,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { parseFrontmatter } from '../shared/customization-scanner.js';
+import type { ClaudeSettingSource } from './session-setting-sources.js';
+import { ALL_CLAUDE_SETTING_SOURCES } from './session-setting-sources.js';
 
 /** 扫描到的单个 subagent 定义。 */
 export interface DiscoveredSubagent {
@@ -457,6 +466,14 @@ export interface DiscoverSubagentsOptions {
   env: NodeJS.ProcessEnv;
   /** host 自己的 env;缺省 `process.env`。SDK spawn 会把它合并进子进程,故一并参与解析。 */
   hostEnv?: NodeJS.ProcessEnv;
+  /**
+   * 本会话实际加载的设置来源(SDK `settingSources`;调用方用
+   * `resolveClaudeSettingSources` 判定,不要另写条件)。
+   *
+   * 只扫这些来源会加载的 agent 目录:`.claude/agents` 随 `project`、`~/.claude/agents` 随
+   * `user`。被排除的作用域整段不访问(不读目录、不占预算)。缺省 = 全部三层(既有调用方语义)。
+   */
+  settingSources?: readonly ClaudeSettingSource[];
   /** 整趟扫描的墙钟上限;缺省 {@link MAX_ELAPSED_MS}。测试注入小值验证超时分支。 */
   deadlineMs?: number;
   /** 测试注入起始时刻(避免依赖真实时钟)。 */
@@ -514,10 +531,17 @@ async function scanSubagentDefinitions(
     resolveBudgetLimit(opts.maxDirEntries, MAX_DIR_ENTRIES),
   );
   const visitedDirs = new Set<string>();
+  // 扫描范围与 CLI 实际加载范围同源(见模块头「扫描范围与它的边界」)。被排除的作用域连
+  // 目录都不访问 —— 否则一份不会被加载的定义既能消耗扫描预算,又能把默认值压掉。
+  const settingSources = opts.settingSources ?? ALL_CLAUDE_SETTING_SOURCES;
   const scoped: Array<{ dir: string; scope: DiscoveredSubagent['scope'] }> = [
     // 顺序 = 跨作用域优先级从高到低(项目近者 > 项目远者 > 用户)。
-    ...(await projectAgentsDirs(opts.workingDir)).map((dir) => ({ dir, scope: 'project' as const })),
-    { dir: userAgentsDir(opts.env, opts.hostEnv ?? process.env), scope: 'user' as const },
+    ...(settingSources.includes('project')
+      ? (await projectAgentsDirs(opts.workingDir)).map((dir) => ({ dir, scope: 'project' as const }))
+      : []),
+    ...(settingSources.includes('user')
+      ? [{ dir: userAgentsDir(opts.env, opts.hostEnv ?? process.env), scope: 'user' as const }]
+      : []),
   ];
 
   // 同名去重。分两种情况,因为「平台会选哪一个」的可知性完全不同:

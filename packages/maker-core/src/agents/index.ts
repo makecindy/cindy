@@ -38,6 +38,8 @@ export {
   cleanProcessEnv,
   stripSensitiveAnthropicEnv,
 } from './claude-code/env-builder.js';
+// Claude 订阅链路(host 直接拉起 CLI 的登录 / 余量)不加载用户级设置
+export { CLAUDE_SUBSCRIPTION_CLI_ISOLATION_ARGS } from './claude-code/subscription-settings-isolation.js';
 // host 配置 LLM-context 图片预缩 resizer (注入 logger / 调阈值)
 export {
   ImageResizer,

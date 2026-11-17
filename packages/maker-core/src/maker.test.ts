@@ -255,6 +255,29 @@ describe('Maker Pi managed-package skill boundary', () => {
     await maker.shutdown();
   });
 
+  it('hides user-scope Skills from palettes of sessions that do not load user settings', async () => {
+    const agent = createAgent(async (opts) => ({
+      ...createHandle({ id: opts.sessionId ?? 'fixture', agentKind: 'claude-code' }),
+      omitsUserSkills: opts.sessionId === 'subscription',
+    }), 'claude-code');
+    type SkillLister = (opts: { omitUserScopeSkills?: boolean }) => Promise<{ skills: [] }>;
+    const listAgentSkills = vi.fn<SkillLister>(async () => ({ skills: [] }));
+    const listRuntimeSkills = vi.fn<SkillLister>(async () => ({ skills: [] }));
+    agent.listAgentSkills = listAgentSkills;
+    agent.listRuntimeSkills = listRuntimeSkills;
+    const maker = new Maker({ agents: { 'claude-code': agent }, storage: createStorage(), logger: createLogger() });
+    await maker.createSession({ id: 'subscription', agentKind: 'claude-code', workingDir: '/repo', model: 'm' });
+    await maker.createSession({ id: 'gateway', agentKind: 'claude-code', workingDir: '/repo', model: 'm' });
+
+    // Renderer input cannot opt a session in or out; the live runtime decides.
+    await maker.listAgentSkills('claude-code', { workingDir: '/repo', sessionId: 'subscription', omitUserScopeSkills: false });
+    await maker.listAgentSkills('claude-code', { workingDir: '/repo', sessionId: 'gateway', omitUserScopeSkills: true });
+    await maker.listAgentRuntimeSkills('claude-code', { workingDir: '/repo', sessionId: 'subscription' });
+    expect(listAgentSkills.mock.calls.map(([opts]) => opts.omitUserScopeSkills)).toEqual([true, undefined]);
+    expect(listRuntimeSkills.mock.calls[0]![0].omitUserScopeSkills).toBe(true);
+    await maker.shutdown();
+  });
+
   it.each(['claude-code', 'codex', 'pi'] as const)('keeps %s disabled identities stable after alias retargeting', async (agentKind) => {
     const root = mkdtempSync(path.join(tmpdir(), 'cindy-disabled-snapshot-'));
     const a = path.join(root, 'a');
