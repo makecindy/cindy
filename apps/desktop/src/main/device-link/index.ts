@@ -2622,6 +2622,9 @@ export async function remoteSubscribe(
       liveTopics = liveTopicsNow();
       if (liveTopics.length === 0) return { ok: true, result: null };
     }
+    if ((openLinkCloseEpochs.get(deviceId) ?? 0) !== closeEpoch) {
+      throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while waiting to reconnect');
+    }
     assertRemoteControlTargetEnabledAfterReopen(deviceId);
     if ((openLinkCloseEpochs.get(deviceId) ?? 0) !== closeEpoch) {
       throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while restoring subscriptions');

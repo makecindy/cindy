@@ -115,6 +115,8 @@ const transport = vi.hoisted(() => {
     serverCapabilities: string[] = [];
     hasServerCapability = (capability: string) => this.serverCapabilities.includes(capability);
     isOutboundExplicitlyClosed = vi.fn((_deviceId: string) => false);
+    needsLinkRecovery = (_deviceId: string) => false;
+    closeLink = vi.fn();
     // No background recovery owner; each test explicitly starts the fresh read.
     hasPendingRequestsTo = vi.fn((_deviceId: string) => false);
     onStatusChange(listener: Client['statusChanged']) { this.statusChanged = listener; return () => {}; }
@@ -868,6 +870,48 @@ describe('Provider queued send guards', () => {
     expect(send).not.toHaveBeenCalled();
     expect(unresponsiveDevicesStore.getSnapshot().has('host')).toBe(false);
     resetDeviceResponsivenessTracking();
+  });
+});
+
+// Unit/jsdom through the real Provider invoke and subscribe send paths (remote-and-mobile-adaptation.md
+// 「共享恢复与请求策略」). A host whose reliable link lost its send path after a relay close must be
+// reopened through the peer's handshake single flight before new work is written; another host and the
+// shared relay connection stay untouched. Minimal failure: needsLinkRecovery('host') is true and the
+// request reaches client.invoke without a link-open, or is still written after the user closed the link.
+describe('Provider pre-send link recovery', () => {
+  it.each(['invoke', 'subscribe'] as const)('reopens a previously reliable link before a new %s without touching another host', async kind => {
+    const client = transport.clients[0];
+    let recovering = true;
+    client.needsLinkRecovery = deviceId => deviceId === 'host' && recovering;
+    client.openLink.mockImplementation(async () => { recovering = false; return accepted(supported); });
+    await act(async () => {
+      if (kind === 'invoke') await context.invoke('host', 'maker:send', []);
+      else await context.subscribe('home', 'host', ['sessions']);
+      await context.invoke('other-host', 'maker:send', []);
+    });
+    const firstHostSend = client.invoke.mock.calls.findIndex(([deviceId]) => deviceId === 'host');
+    expect(client.openLink.mock.calls.map(([deviceId]) => deviceId)).toEqual(['host']);
+    expect(client.openLink.mock.invocationCallOrder[0]).toBeLessThan(client.invoke.mock.invocationCallOrder[firstHostSend]);
+    expect(client.invoke.mock.calls.filter(([deviceId]) => deviceId === 'other-host')).toHaveLength(1);
+    expect(client.restartConnection).not.toHaveBeenCalled();
+    expect(client.stop).not.toHaveBeenCalled();
+  });
+
+  it('does not write the request when the user closes the link during recovery', async () => {
+    const client = transport.clients[0];
+    client.needsLinkRecovery = deviceId => deviceId === 'host';
+    const open = deferredAccept();
+    client.openLink.mockReturnValue(open.promise);
+    let result!: Promise<unknown>;
+    await act(async () => { result = context.invoke('host', 'maker:send', []).catch(error => error); });
+    expect(client.openLink).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      context.closeLink('host');
+      client.isOutboundExplicitlyClosed.mockImplementation(deviceId => deviceId === 'host');
+      open.resolve(accepted(supported));
+    });
+    expect(await result).toMatchObject({ code: 'LINK_NOT_OPEN' });
+    expect(client.invoke).not.toHaveBeenCalled();
   });
 });
 
