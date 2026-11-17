@@ -610,7 +610,7 @@ describe('send_to_session model_group_id', () => {
 
   it.each([
     { name: '模式不指定推理强度 → 模型默认档，不继承来源任务的 max', effort: undefined, expected: 'xhigh' },
-    { name: '模式的档位模型不支持 → 模型默认档，不报错', effort: 'minimal' as const, expected: 'xhigh' },
+    { name: '模式的档位模型不支持 → 模型默认档，不报错', effort: 'low' as const, expected: 'xhigh' },
     { name: '模式的档位模型支持 → 按模式', effort: 'high' as const, expected: 'high' },
   ])('固定模式选中的来源：$name', async ({ effort, expected }) => {
     const result = await resolveSendToSessionCreateRoute({

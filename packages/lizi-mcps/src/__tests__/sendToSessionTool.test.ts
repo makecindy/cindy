@@ -316,13 +316,15 @@ describe('send_to_session tool', () => {
   // refused before any host call (ignoring it would report a mode that was never used), and
   // the receipt names the chosen mode/source without any host-internal decision handle.
   it('create: model_group_id 只在新建时交给宿主，回执带选中的模式与来源', async () => {
+    // 宿主内部的选路凭据即使漏进结果，也不能出现在回执里。
+    const hostOnly = { decisionId: 'decision-secret' };
     const { registry, sendToSession } = setup({
       result: {
         ok: true, targetSessionId: 'tgt-mode', agentKind: 'codex', wakeKind: 'created',
         targetTitle: 'mode task', targetLastUserSendAt: null, model: 'gpt-5.6-sol', effort: 'xhigh',
         fastMode: false, providerId: 'codex-sub-2',
         modelGroup: { routeId: 'r-burn', groupName: 'Burn first', why: 'expiring', modelName: 'GPT-5.6 Sol',
-          sourceName: 'Codex 2', agentDeviceId: null, exceptions: [{ type: 'hours', viaRouteName: 'Night' }] },
+          sourceName: 'Codex 2', agentDeviceId: null, exceptions: [{ type: 'hours', viaRouteName: 'Night' }], ...hostOnly },
       },
     });
     const created = parse(await registry.call('send_to_session', { message: 'go', model_group_id: ' r-burn ', fast: true }));
@@ -330,7 +332,7 @@ describe('send_to_session tool', () => {
     expect(created).toMatchObject({ ok: true, model: 'gpt-5.6-sol', provider_id: 'codex-sub-2', model_group: {
       id: 'r-burn', name: 'Burn first', why: 'expiring', model_name: 'GPT-5.6 Sol', source_name: 'Codex 2',
       provider_device_id: 'local', exceptions: [{ type: 'hours', via_route_name: 'Night' }] } });
-    expect(JSON.stringify(created)).not.toContain('decision');
+    expect(JSON.stringify(created)).not.toContain('decision-secret');
 
     sendToSession.mockClear();
     for (const target of ['tgt-1', 'dev-2::tgt-1']) {
