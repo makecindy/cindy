@@ -365,6 +365,29 @@ describe('assigning through a group on another computer', () => {
     }
   });
 
+  // Review #11092, unit: resolving the implicit provider and reading its group
+  // share the documented startup budget; the old explicit-only timeout case missed this.
+  it('shares one startup adoption deadline between the implicit directory and group reads', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ row: { providerId: null, sdkSessionId: 'native-1' }, live: false });
+      h.deps.now = () => Date.now();
+      h.deps.resolveImplicitProvider.mockImplementation(() => new Promise(resolve => setTimeout(() => resolve('anthropic'), 2_000)));
+      let finishGroup!: (config: ProviderGroupConfig) => void;
+      h.remote.readGroup.mockImplementation(() => new Promise(resolve => { finishGroup = resolve; }));
+      const done = vi.fn();
+      void h.service.assignBeforeStart(START).then(done);
+      await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_ADOPT_TIMEOUT_MS - 1);
+      expect(done).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(done).toHaveBeenCalledWith(expect.objectContaining({ pendingGroupAdoption: true }));
+      finishGroup(h.config!);
+      await flush();
+      expect(h.bindings.size).toBe(0);
+      expect(h.deps.persistRoute).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
   it('keeps the binding while the group computer is unreachable and drops it once the group is gone', async () => {
     const unreachable = harness({ config: undefined, row: { agentDeviceId: 'studio', providerId: STUDIO.providerId } });
     unreachable.bindings.set('s1', { providerId: 'anthropic', memberKey: STUDIO.key, groupDeviceId: OWNER, at: 1 });

@@ -49,7 +49,11 @@ export async function resolveSessionUsageReset(
         providerId ??= route.modelId
           ? effectiveSourceIdForModel(views, null, route.modelId, route.agentKind) : null;
         const provider = views.find(view => view.id === providerId);
-        family = provider ? provider.auth.native ?? defaultSubscriptionFamily(provider.id) : null;
+        // Native family also appears on API-key routes; only subscription auth
+        // may turn a rate-limit hint into an automatic continuation.
+        const subscription = provider?.auth.method === 'oauth'
+          && (!provider.access || provider.access.kind === 'subscription');
+        family = subscription ? provider.auth.native ?? defaultSubscriptionFamily(provider.id) : null;
       } catch (error) {
         deps.unavailable(error);
         return null;

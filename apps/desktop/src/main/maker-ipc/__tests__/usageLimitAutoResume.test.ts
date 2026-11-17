@@ -151,6 +151,25 @@ describe('UsageLimitAutoResume', () => {
     expect(h.deps.readRemoteLimit).not.toHaveBeenCalled();
   });
 
+  // Review #11092: auth.native can also describe an API-key route. Exercise the
+  // real resolver + timer; a reset hint must not turn such a route into a subscription.
+  it.each([
+    { method: 'apiKey', access: 'api' },
+    { method: 'apiKey', access: 'subscription' },
+    { method: 'oauth', access: 'api' },
+    { method: 'oauth', access: 'subscription' },
+  ] as const)('checks auth and access before scheduling $method/$access native routes', async ({ method, access }) => {
+    const reset = remoteResetHarness();
+    reset.provider.auth = { method, native: 'codex' };
+    reset.provider.access = access === 'subscription' ? { kind: access, product: 'ChatGPT' } : { kind: access };
+    const h = harness({ resolveResetAt: (_id, signals) => resolveSessionUsageReset(reset.route, signals, reset.deps) });
+    const subscription = method === 'oauth' && access === 'subscription';
+    expect(await h.guard.onTurnError('remote-auth', { ...LIMIT, usageResetAt: RESET_AT })).toBe(subscription);
+    expect(h.timers).toHaveLength(subscription ? 1 : 0);
+    expect(reset.deps.readRemoteLimit).not.toHaveBeenCalled();
+    expect(reset.deps.readLocalLimit).not.toHaveBeenCalled();
+  });
+
   it.each(['stop', 'new-input'] as const)('discards remote directory results after %s', async (action) => {
     const reset = remoteResetHarness();
     let finish!: (views: ProviderView[]) => void;

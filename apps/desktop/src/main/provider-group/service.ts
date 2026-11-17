@@ -1785,6 +1785,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
   ): Promise<ProviderGroupStartContext | null> {
     const ownerDeviceId = row.agentDeviceId;
     if (!deps.remote || !ownerDeviceId || isProviderShareAgentDeviceId(ownerDeviceId)) return null;
+    const adoptionDeadline = deps.now() + PROVIDER_GROUP_ADOPT_TIMEOUT_MS;
     const source = remoteSource(ownerDeviceId);
     const groupProviderId = await remoteProviderId({ ...row, agentKind, model });
     if (!groupProviderId) return null;
@@ -1796,9 +1797,14 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     const hasRun = Boolean(row.sdkSessionId || (await deps.hasAssistantHistory(sessionId)));
     // 已经明确解除过这个组的老任务不再询问组所在电脑，也不自动纳回。
     if (hasRun && deps.isReleased(sessionId, groupOf(source, groupProviderId))) return null;
+    // Resolving an implicit source is part of the same startup adoption budget.
+    const remaining = Math.max(0, adoptionDeadline - deps.now());
+    const groupRead = remaining > 0
+      ? withTimeout(source.readGroup(groupProviderId, hasRun ? undefined : { allowSnapshot: true }), remaining)
+      : Promise.resolve(undefined);
     const config = hasRun
-      ? await withTimeout(source.readGroup(groupProviderId), PROVIDER_GROUP_ADOPT_TIMEOUT_MS)
-      : await withTimeout(source.readGroup(groupProviderId, { allowSnapshot: true }), PROVIDER_GROUP_ADOPT_TIMEOUT_MS)
+      ? await groupRead
+      : await groupRead
         .then(async (live) => {
           if (live !== undefined || !source.readSnapshotGroup) return live;
           // A hung owner directory must neither delay the first assignment nor discard
