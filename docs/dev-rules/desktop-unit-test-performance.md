@@ -1,6 +1,11 @@
 # Desktop 单测性能基准
 
 > **读取时机**：调整 Desktop Vitest worker、测试分池或根级单测资源配额前
+> **适用路径**：`apps/desktop/vitest.config.ts`、
+> `apps/desktop/src/test/vitest/{fileTimingReporter,timingSequencer}.ts`、
+> `scripts/test-workspaces.mjs`、`scripts/test-workspaces.config.mjs`、
+> `scripts/shared/duration-shards.mjs`、`scripts/desktop-worker-benchmark.mjs`、
+> `scripts/check-test-hygiene.mjs`、`scripts/test-hygiene-baseline.json`
 
 ## 可复现命令
 

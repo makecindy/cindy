@@ -4,6 +4,13 @@
 > **读取时机**：新增或修改 library 能力（持久作品库）、binding / 目录选择、迁移、
 > 回收站删除、SQLite 语句门、面板 `/library/` 投影、会话级只读 extraDirs 注入，
 > 或任何触碰 `libraries/` / `libraries-binding.json` / `libraries-trash/` 落盘布局的改动之前
+> **适用路径**：`apps/desktop/src/main/cindy-brain/**/{library,ghostLibrary}*`、
+> `apps/desktop/src/main/maker-ipc/**/libraryExtraDir*`、
+> `apps/desktop/src/renderer/features/plugin/GhostLibrarySection.tsx`、
+> `packages/maker-core/src/agents/shared/**/library-native-read*`、
+> `apps/desktop/vite.library-db-worker.config.ts`、
+> `apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-files-and-library.md`、
+> `apps/desktop/src/main/cindy-brain/**/{fsSlot,pickSlot,storageService}*`
 
 `library: true` 给插件一个**用户作品级**的持久存储区，与 `fs: true` 私有储物柜
 （256MiB/2000 文件配额、卸载即回收）是两个语义：不受配额约束（只受磁盘保留

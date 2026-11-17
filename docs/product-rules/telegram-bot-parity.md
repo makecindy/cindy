@@ -1,5 +1,13 @@
 # 两个 Telegram bot 的能力台账
 
+> **读取时机**：新增或修改任一 Telegram bot 的用户可见行为（命令、消息呈现、收口策略、群行为、权限口径、附件与表情）之前
+> **适用路径**：`packages/lizi-im/src/telegram/**`、`apps/desktop/src/main/im/telegram/**`、
+> `apps/desktop/src/**/{telegram,Telegram,useTelegram}*`、
+> `apps/desktop/src/main/hook-control/**/{dispatcher,session-runner,interactions,backgroundResults,groupWindow,groupHistoryScope,requestLedger,turnObserver,questionPublisher,outbound}*`、
+> `apps/desktop/src/main/im/shared/**/{botCommands,turnPresenter,turnRunner,cardBuilders,interactionCardModel,channelToolPolicy,channelToolScope,localFileLinks,inputHandoffChannelNotice,groupHistoryAccess,groupHistorySearch,groupWindowCore,messageHandler,ambientReplyJudge,turnRetryNotice}*`、
+> `apps/desktop/src/main/mcp-integrations/**/groupHistoryMcpServer*`、
+> `apps/desktop/src/main/hook-control/manager.ts`
+
 2026-11-13 统一提问：普通中断式与 `delivery: async` 共用 Telegram inline keyboard 卡片。
 群里发起的问题留在原群/话题，只接受该轮原提问者点选或引用回复；不转私聊，不允许其他
 成员或个人 bot 账号本人代答。单题单选/文字直接提交，多题/多选填好后提交；不预选，不提交
