@@ -170,6 +170,33 @@ describe('sidebar window expansion', () => {
     expect(keeper.isMaximized()).toBe(true);
     expect(keeper.getBounds()).toEqual(before);
   });
+  // Unit regression (review #11077): quitting with a resized/dragged sidebar
+  // open must persist exactly the close target. Existing tests only moved within
+  // the display; y=450 with an 800px baseline exposes the missing clamp.
+  it.each(['darwin', 'win32'] as const)('persists the same bounded target as closing on %s', (platform) => {
+    const { win, native, area } = fixture();
+    const controller = new SidebarWindowExpansion();
+    let currentArea = area;
+    const screenApi = {
+      getPrimaryDisplay: () => ({ bounds: currentArea, workArea: currentArea }),
+      getDisplayMatching: () => ({ bounds: currentArea, workArea: currentArea }),
+    };
+    let keeper!: PersistableWindow;
+    manageWindowStatePreservingNormalBounds(
+      { manage: (view) => { keeper = view; } },
+      controller.persistenceView(native, screenApi), screenApi, platform,
+    );
+    controller.update(native, 400, area, screenApi);
+    win.setBounds({ x: -1600, y: 450, width: 1300, height: 600 });
+    expect(keeper.getBounds()).toEqual({ x: -1600, y: 280, width: 900, height: 800 });
+    // Screen changes are read live by the saved view, not captured at startup.
+    currentArea = { x: 0, y: 0, width: 1280, height: 720 };
+    win.setBounds({ x: 100, y: 50, width: 1100, height: 600 });
+    const stored = keeper.getBounds();
+    expect(stored).toEqual({ x: 100, y: 1, width: 900, height: 719 });
+    controller.update(native, 0, currentArea, screenApi);
+    expect(win.getBounds()).toEqual(stored);
+  });
   it('keeps a removed display off-screen rectangle inside the work area on close', () => {
     const { win, native, area } = fixture();
     const controller = new SidebarWindowExpansion();

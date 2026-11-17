@@ -19,12 +19,12 @@ export class SidebarWindowExpansion {
    * `getLiveBounds` stays the real window so Snap / work-area fill detection still
    * sees it; our own expansion (live equals what we set) reads as the baseline.
    */
-  persistenceView(win: BrowserWindow) {
+  persistenceView(win: BrowserWindow, screenApi?: WorkAreaScreen) {
     const open = () => this.expanded.get(win);
     return {
       ...windowStateView(win, () => {
         const state = open();
-        return state ? standaloneTarget(state, win.getBounds()) : win.getBounds();
+        return state ? standaloneTarget(state, win.getBounds(), screenApi) : win.getBounds();
       }),
       getLiveBounds: () => {
         const live = win.getBounds();
@@ -45,15 +45,7 @@ export class SidebarWindowExpansion {
         this.lastExpandedWidth.set(win, bounds.width);
         // Divider and native-window size edits while open are temporary allocation only,
         // but a window the user dragged stays where it was dragged to.
-        const target = standaloneTarget(previous, bounds);
-        // A display removed or shrunk while open can leave the target off-screen;
-        // judge it against the display the target belongs to.
-        const home = screenApi?.getDisplayMatching(target).workArea;
-        win.setBounds(
-          screenApi && home && previous.contained && !rectInsideWorkArea(target, home)
-            ? placeOntoLiveDisplay(target, target, screenApi)
-            : target,
-        );
+        win.setBounds(standaloneTarget(previous, bounds, screenApi));
       }
       return win.getBounds().width - bounds.width;
     }
@@ -75,12 +67,22 @@ export class SidebarWindowExpansion {
  * The standalone rectangle to return to: the size from before opening, moved by
  * however far the user dragged the combined window while the sidebar was open.
  */
-function standaloneTarget(state: { before: Rectangle; after: Rectangle }, live: Rectangle): Rectangle {
-  return {
+function standaloneTarget(
+  state: { before: Rectangle; after: Rectangle; contained: boolean },
+  live: Rectangle,
+  screenApi?: WorkAreaScreen,
+): Rectangle {
+  const target = {
     ...state.before,
     x: state.before.x + live.x - state.after.x,
     y: state.before.y + live.y - state.after.y,
   };
+  // Closing and saving must agree even after a drag, resize or display removal.
+  // Preserve intentionally off-screen baselines; only repair formerly contained ones.
+  const home = screenApi?.getDisplayMatching(target).workArea;
+  return screenApi && home && state.contained && !rectInsideWorkArea(target, home)
+    ? placeOntoLiveDisplay(target, target, screenApi)
+    : target;
 }
 
 /** Shared by native IPC and the main-window state keeper. */
