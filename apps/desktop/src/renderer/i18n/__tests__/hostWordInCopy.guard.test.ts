@@ -9,6 +9,9 @@ import { describe, expect, it } from 'vitest';
  * Scope: every value of every locale file, the word "Host" standing alone (also inside compounds such as
  * "Host-Computer"). Not matched: lowercase words (localhost, hostname, ghost, the cindy-host command) and
  * longer words (Hosted, Hosts).
+ * Known blind spot: a standalone lowercase "host" is not matched either, because English copy uses it
+ * for SSH and remote machines far too often to scan every hit. So a string that calls the background
+ * service "host" in lowercase gets past this guard.
  *
  * "Host" with another meaning is frozen below by locale and key, grouped by meaning. The list only
  * shrinks: a new hit fails, and an entry whose key is gone or no longer says "Host" fails too, so the list
