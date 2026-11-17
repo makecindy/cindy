@@ -6162,3 +6162,20 @@ for (const newerTurn of [false, true]) {
     assert.equal(r.errorRows(id).length, 1);
   });
 }
+
+// The product-turn bookkeeping runs in the event callback before the turn's finish (turn-executor.mjs
+// guardProductTurn). Rule (release table 甲 10, reviewer 2026-11-18): a failure there costs at most the
+// turn's activity time, never its end. Gap: an unguarded throw left the turn without its finish.
+// Minimal failing input: a runtime whose turn generation cannot be read, and a terminal error without one.
+test('list activity: a failing product-turn step still ends the turn and writes its error row, with one warning', async t => {
+  const warnings = [];
+  const h = createHarness({ productTurnLog: { warn: (...args) => warnings.push(args) } });
+  t.after(() => h.queue.dispose());
+  await enqueue(h, 'guarded', { clientId: 'guarded-input', text: 'work' });
+  const session = h.maker.getSession('guarded');
+  session.getTurnGeneration = () => { throw new TypeError('generation unavailable'); };
+  session.emit({ type: 'error', data: { message: 'provider failed', isTerminal: true } });
+  await waitFor(() => !h.queue.projection('guarded').turnInProgress);
+  assert.equal(h.persisted.filter(row => row.sessionId === 'guarded' && row.role === 'error').length, 1);
+  assert.deepEqual(warnings, [['product turn bookkeeping failed', { sessionId: 'guarded', error: 'TypeError' }]]);
+});

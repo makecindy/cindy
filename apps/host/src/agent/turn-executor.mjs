@@ -361,6 +361,19 @@ export function createTurnExecutor(deps) {
     };
   }
 
+  // The product-turn bookkeeping runs inside the event callback, before the turn's finish: a throw there
+  // would leave the turn without its end. The desktop has no such guard; the Host adds one, so a failure
+  // costs at most this turn's activity time and is logged (task id and error name only).
+  function guardProductTurn(sessionId, step) {
+    try {
+      return step() ?? null;
+    } catch (error) {
+      // deps.productTurnLog: a test reads the warning there; the Host itself logs as the executor does.
+      (deps.productTurnLog ?? log).warn('product turn bookkeeping failed', { sessionId, error: error instanceof Error ? error.name : typeof error });
+      return null;
+    }
+  }
+
   // The desktop's terminal stage for the product turn (sessionEventTerminal.ts), in its order. A
   // terminal an automatic resume holds (its error row suppressed) defers its owner, as the shared
   // deferContextRecoveryTerminal does; a context recovery that claimed it deferred it already (its
@@ -502,7 +515,7 @@ export function createTurnExecutor(deps) {
       // anything can start the next turn (sessionEventTerminal.ts terminalOwner).
       const productOwner = deps.productTurn && (event.type === 'done' || isTerminalTurnErrorEvent(event))
         && event.turnScope !== 'background' && !isTurnContinuationBoundaryEvent(event)
-        ? deps.productTurn.capture(session, event) : null;
+        ? guardProductTurn(sessionId, () => deps.productTurn.capture(session, event)) : null;
       const recoveryTerminal = recovery && event.type === 'error' && isTerminalTurnErrorEvent(event)
         && event.turnScope !== 'background'
         ? { session, event, history, fields, isStopping: deps.isStoppingRuntime(), isGatewayProxyTokenRecovery: gatewayKeyRejected,
@@ -534,7 +547,7 @@ export function createTurnExecutor(deps) {
           : undefined;
         // The coordinator has this terminal already; finish then only wakes it once the rows settle.
         if (handedOver) turn.terminalHandedOver = true;
-        if (productOwner) settleProductTurn(session, event, productOwner, claim);
+        if (productOwner) guardProductTurn(sessionId, () => settleProductTurn(session, event, productOwner, claim));
         void finish(sessionId, turn, error, event, claim !== 'idle');
         if (claim !== 'idle') recovery.settle(recoveryTerminal, claim, () => turn.settlement);
       }
