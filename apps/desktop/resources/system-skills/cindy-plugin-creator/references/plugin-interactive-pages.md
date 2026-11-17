@@ -432,3 +432,12 @@ JS 可用 `// @ts-check` 和 `/// <reference path="./types/cindy-ext-apps.d.ts" 
 | 文件交接、暂存、预览、确认 | [文件导入说明](examples/interactive-pages/README.md#文件导入) |
 | 文件、下载、进度及其他 SDK 方法 | [files 能力全集](examples/interactive-pages/files/) |
 | 字段限制、方法能力与常见错误 | [按需参考](examples/interactive-pages/REFERENCE.md) |
+
+### 宿主标题和全屏按钮
+
+标题与来源由宿主负责；作者不能通过页面名改变安装来源标签。
+资源的 `hostFullscreenButton?: boolean` 缺省 true，设为 false 只隐藏宿主全屏按钮，
+不限制页面自己的 `requestDisplayMode`。自定义 MCP 对应资源 `_meta["cindy/host-fullscreen-button"]`。
+旧宿主忽略该字段；依赖隐藏行为时先核验实际发布版本再设置 `minCindyVersion`。
+页签/全屏按 `{width,height}` 给固定可用区域，页面须保留内部滚动；
+对话/弹层/折叠区按 `{width,maxHeight}` 自动内容高度。布局与入口细则见 [插件界面扩展](plugin-host-ui.md)。

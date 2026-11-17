@@ -148,7 +148,7 @@ import type {
   GhostSetupStepPhase,
 } from '../../shared/ghost';
 import * as messageService from '@/lib/messageService';
-import { parseMcpAppHistory, parseMcpAppRecord } from '@cindy/maker-shared/mcp-apps';
+import { parseMcpAppHistory } from '@cindy/maker-shared/mcp-apps';
 import * as sessionService from '@/lib/sessionService';
 // device-link 透明传输:远程(被控设备)会话的操作/读取走隧道,本地会话零变化。
 import {
@@ -413,15 +413,16 @@ export function remoteErrorMessageForBanner(msg: string): string {
  * key('empty-response' / 'turn-failed'), message 仅作非 renderer 消费方(IM/orca)的兜底。
  */
 function liveErrorBannerText(message: string, reason: string | undefined): string {
+  // The banner localizes this stable reason. Keep the host's bounded cause in
+  // the raw detail/diagnosis path instead of replacing it with summary copy.
+  if (reason === 'silent-stop-exhausted') return message;
   return reason === 'empty-response'
     ? i18n.t('logic.errors.emptyResponse')
     : reason === 'turn-failed'
       ? i18n.t('logic.errors.turnFailed')
-      : reason === 'silent-stop-exhausted'
-        ? i18n.t('logic.errors.silentStopExhausted')
-        : reason === 'codex-auto-review-unavailable'
-          ? i18n.t('logic.errors.codexAutoReviewUnavailable')
-          : remoteErrorMessageForBanner(message);
+      : reason === 'codex-auto-review-unavailable'
+        ? i18n.t('logic.errors.codexAutoReviewUnavailable')
+        : remoteErrorMessageForBanner(message);
 }
 // 专门给"出现在用户面前的红色 ErrorBanner"打日志,scope 以 `maker/` 开头
 // 是为了让它落在统一 agent 流(agent-*.ndjson,跟 agent runtime 抛出的底层错误同一份,
@@ -20004,7 +20005,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     if (mcpApp) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
       systemCardType: 'mcp-app' as const,
-      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: (parseMcpAppRecord(m.content)?.tool._meta as Record<string, unknown> | undefined)?.['cindy/plugin'] },
+      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: mcpApp.plugin, customMcp: mcpApp.customMcp },
       mcpAppClientId: m.clientId,
     };
     const persistedCindyCard =

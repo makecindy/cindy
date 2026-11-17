@@ -288,6 +288,7 @@ import { createUserMessageDurableWrite } from './userMessageDurableWrite.js';
 import { createInterruptedTurnAutoResumeHooks } from './interruptedTurnAutoResumeHooks.js';
 import { createSessionRuntimeFallback } from './sessionRuntimeFallback.js';
 import { handleSilentStopTurnEndWithPorts } from './silentStopTurnEnd.js';
+import { surfaceSilentStopFailureWithPorts, type SilentStopFailureCause } from './silentStopFailure.js';
 import { createAgentSwitchBoundaryInsert, createAgentSwitchDbApply, createSwitchedSessionBootstrap, readAgentSwitchSessionRow } from './agentSwitchDepsCore.js';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { accessChatDisplayCache } from './chatDisplayCache.js';
@@ -5945,38 +5946,15 @@ async function settleSilentStopDone(
   fireSilentStopSettled(sessionId, reason);
 }
 
-async function surfaceSilentStopExhaustedBanner(sessionId: string): Promise<void> {
-  await createDbMessage(
-    sessionId,
-    {
-      clientId: randomUUID(),
-      role: 'error',
-      content: {
-        message: '模型连续多次返回空响应,自动续跑已暂停。点击「继续」恢复任务。',
-        isTerminal: true,
-        reason: 'silent-stop-exhausted',
-      },
-    },
-    { shouldBroadcast: () => false },
-  ).catch((err) => {
-    log.warn('silent-stop exhausted marker persist failed', {
+async function surfaceSilentStopExhaustedBanner(sessionId: string, cause: SilentStopFailureCause): Promise<void> {
+  await surfaceSilentStopFailureWithPorts(sessionId, cause, {
+    createDbMessage,
+    broadcast: (data) => broadcastToAllWindows(MAKER_PUSH.EVENT, {
       sessionId,
-      error: err instanceof Error ? err.message : String(err),
-    });
+      event: { type: 'error', data, source: 'claude-code' },
+    }),
+    log,
   });
-  broadcastToAllWindows(MAKER_PUSH.EVENT, {
-    sessionId,
-    event: {
-      type: 'error',
-      data: {
-        message: '模型连续多次返回空响应,自动续跑已暂停。点击「继续」恢复任务。',
-        isTerminal: true,
-        reason: 'silent-stop-exhausted',
-      },
-      source: 'claude-code',
-    },
-  });
-  log.warn('silent-stop auto-resume exhausted — surfaced continue banner', { sessionId });
 }
 
 /**

@@ -28,6 +28,7 @@ const PROBLEM_KEYS: Record<Exclude<GiftCardProblem['reason'], 'WRONG_REGION'>, s
   EXPIRED: 'giftCard.errors.expired',
   VOIDED: 'giftCard.errors.voided',
   RATE_LIMITED: 'giftCard.errors.rateLimited',
+  PERSONAL_REQUIRED: 'giftCard.errors.personalRequired',
   FAILED: 'giftCard.errors.failed',
 };
 
