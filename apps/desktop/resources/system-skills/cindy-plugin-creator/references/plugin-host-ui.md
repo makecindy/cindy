@@ -1,8 +1,6 @@
 ## 插件界面扩展：具名页面、原生入口和宿主操作
 
-这是**尚未发布的新能力**。按 §0a 核验执行宿主源码包含 `mcpApps.host` 和 `open-resource`，
-不要将已有 MCP Apps 的 `0.1.122-beta` 下限当成本章能力的发布版本。
-正式发布插件时，填写实际包含所需能力的首个 Cindy 版本；不要猜版本号。
+按 §0a 核验执行宿主源码包含 `mcpApps.host` 和 `open-resource`。
 本章新增入口用于 Desktop 本机。旧工具卡片的手机/远程查看和旧 panel/mainView/taskView 保持原契约。
 
 复杂页面继续使用官方 MCP Apps `App`、资源、主题、CSP 和销毁协议。
