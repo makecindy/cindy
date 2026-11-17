@@ -970,7 +970,7 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 
-/* 开始引导的入场(DESIGN.md §14.4):每一步的内容按 --rise-index 依次淡入并上移,相邻错峰 30ms。
+/* 开始引导与功能介绍的入场(DESIGN.md §14.4):每一步的内容按 --rise-index 依次淡入并上移,相邻错峰 30ms。
    欢迎页(.first-run-cover)是一段约 1.3 秒的编排:各块相隔 45ms 利落到场,随后每张卡片里的
    小场景按 --at 指定的时刻各播放一次(对勾弹出、横条从左画出、圆环让位给对勾)。仅 transform /
    opacity,只在内容出现时播放一次、不循环,减弱动态效果下直落终态。 */
@@ -1017,6 +1017,15 @@ body.resizing-pane [data-ghost-webview] {
     opacity: 1;
   }
 }
+/* 功能介绍的小场景:上一行离开后,下面的行从原位置上移补位(--shift 为移动距离)。 */
+.first-run-shift {
+  animation: first-run-shift var(--motion-base) var(--motion-ease-out) var(--at, 0ms) both;
+}
+@keyframes first-run-shift {
+  from {
+    transform: translateY(var(--shift, 0px));
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
   [data-voice-mic-active='true'] [data-voice-mic-bar],
@@ -1032,7 +1041,8 @@ body.resizing-pane [data-ghost-webview] {
   .first-run-rise,
   .first-run-pop,
   .first-run-draw,
-  .first-run-leave {
+  .first-run-leave,
+  .first-run-shift {
     animation: none !important;
     will-change: auto;
   }

@@ -21513,6 +21513,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "Fechar",
+    "taskInbox": {
+      "title": "Conheça a caixa de entrada",
+      "lead": "As tarefas organizam-se sozinhas em Pendentes, Em curso, Adiadas e Tratadas. Basta acompanhar Pendentes e clicar em Concluído quando terminar.",
+      "pending": {
+        "title": "Pendentes",
+        "body": "Tarefas com resultados novos ou à espera da sua resposta aparecem aqui sozinhas."
+      },
+      "done": {
+        "title": "Concluído",
+        "body": "Terminou uma tarefa? Um clique em Concluído move-a para Tratadas e as restantes sobem."
+      },
+      "snooze": {
+        "title": "Adiadas",
+        "body": "Não é boa altura? Escolha uma hora e a tarefa volta para Pendentes."
+      },
+      "start": "Começar",
+      "note": "Volte à lista de tarefas a qualquer momento com o botão no topo da barra lateral."
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Bem-vindo ao Cindy",

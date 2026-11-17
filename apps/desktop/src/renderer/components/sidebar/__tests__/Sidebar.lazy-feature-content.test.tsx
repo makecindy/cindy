@@ -196,10 +196,13 @@ describe('Sidebar secondary-window lazy feature content', () => {
   });
 
   // 2026-11-18 用户要求：收件箱开关放在侧边栏顶部前进／后退这一排的右端，只属于任务列表
-  // （接管顶部导航的 Feature），设置等页面与窄栏不出现；点击切换并按本机保存。
+  // （接管顶部导航的 Feature），设置等页面与窄栏不出现；点击切换并按本机保存。这台电脑第一次
+  // 开启收件箱时弹出介绍，之后不再出现。
   it('shows the inbox toggle in the top row only for the task list, outside the rail', () => {
     mocks.isSecondaryWindow = false;
     localStorage.removeItem('sidebar.taskListMode');
+    localStorage.removeItem('featureIntro.taskInbox.seen');
+    const intro = () => document.querySelector('[data-feature-intro]');
     const toggle = () => document.querySelector<HTMLButtonElement>('[data-task-list-mode-toggle]');
     const view = render(<Harness isCollapsed={false} />);
     expect(toggle()).toBeNull();
@@ -210,7 +213,12 @@ describe('Sidebar secondary-window lazy feature content', () => {
     act(() => { fireEvent.click(toggle()!); });
     expect(localStorage.getItem('sidebar.taskListMode')).toBe('inbox');
     expect(toggle()!.getAttribute('aria-pressed')).toBe('true');
+    expect(intro()).not.toBeNull();
+    act(() => { fireEvent.keyDown(intro()!, { key: 'Escape' }); });
+    expect(intro()).toBeNull();
     act(() => { fireEvent.click(toggle()!); });
     expect(localStorage.getItem('sidebar.taskListMode')).toBe('tasks');
+    act(() => { fireEvent.click(toggle()!); });
+    expect(intro()).toBeNull();
   });
 });

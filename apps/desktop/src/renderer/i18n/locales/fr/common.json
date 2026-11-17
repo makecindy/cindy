@@ -21513,6 +21513,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "Fermer",
+    "taskInbox": {
+      "title": "Découvrir la boîte de réception",
+      "lead": "Les tâches se rangent d’elles-mêmes dans À traiter, En cours, Reportées et Traitées. Surveillez simplement À traiter et cliquez sur Terminé quand c’est fait.",
+      "pending": {
+        "title": "À traiter",
+        "body": "Les tâches avec de nouveaux résultats ou qui attendent votre réponse arrivent ici automatiquement."
+      },
+      "done": {
+        "title": "Terminé",
+        "body": "Une tâche est finie ? Un clic sur Terminé la place dans Traitées et les suivantes remontent."
+      },
+      "snooze": {
+        "title": "Reportées",
+        "body": "Pas le bon moment ? Choisissez une heure : la tâche reviendra dans À traiter."
+      },
+      "start": "Commencer",
+      "note": "Revenez à la liste des tâches à tout moment avec le bouton en haut de la barre latérale."
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Bienvenue dans Cindy",

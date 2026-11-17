@@ -21308,6 +21308,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "Close",
+    "taskInbox": {
+      "title": "Meet the Inbox",
+      "lead": "Tasks sort themselves into Pending, Working, Snoozed and Processed. Just keep an eye on Pending and click Done when you finish.",
+      "pending": {
+        "title": "Pending",
+        "body": "Tasks with new results or waiting for your answer show up here on their own."
+      },
+      "done": {
+        "title": "Done",
+        "body": "Finished with a task? Click Done once. It moves to Processed and the rest move up."
+      },
+      "snooze": {
+        "title": "Snoozed",
+        "body": "Not a good time? Pick a time and the task comes back to Pending then."
+      },
+      "start": "Get started",
+      "note": "Switch back to the task list anytime with the button at the top of the sidebar."
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Welcome to Cindy",

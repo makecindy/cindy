@@ -18,8 +18,29 @@ export default {
     default: {
       about: 'Read task stays in inbox, waiting task above running, snoozed and processed sections',
     },
+    intro: {
+      about: 'The first switch into the inbox on this computer introduces it once; later switches do not',
+      viewport: { width: 1040, height: 760 },
+    },
   },
   async check(page, ui) {
+    if (ui.case === 'intro') {
+      const toggle = page.locator('[data-task-list-mode-toggle]');
+      await toggle.click();
+      const intro = page.locator('[data-feature-intro]');
+      await page.getByText(await ui.t('featureIntro.taskInbox.lead'), { exact: true }).waitFor();
+      const box = await intro.boundingBox();
+      assert.ok(box && box.height < ui.viewport.height, 'The introduction fits without scrolling');
+      await ui.capture('intro');
+      await page.getByRole('button', { name: await ui.t('featureIntro.taskInbox.start'), exact: true }).click();
+      await intro.waitFor({ state: 'detached' });
+      assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
+      // Shown once: leaving and entering again goes straight to the inbox.
+      await toggle.click();
+      await toggle.click();
+      assert.equal(await intro.count(), 0);
+      return;
+    }
     if (ui.case === 'structure') {
       const project = page.locator('[data-project-header]').first();
       const inbox = page.locator('section > button').first();

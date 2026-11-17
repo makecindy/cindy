@@ -21308,6 +21308,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "Schließen",
+    "taskInbox": {
+      "title": "Der Posteingang",
+      "lead": "Aufgaben ordnen sich selbst in Offen, In Arbeit, Zurückgestellt und Erledigt ein. Behalte einfach Offen im Blick und klicke auf Erledigt, wenn du fertig bist.",
+      "pending": {
+        "title": "Offen",
+        "body": "Aufgaben mit neuen Ergebnissen oder die auf deine Antwort warten, erscheinen hier von selbst."
+      },
+      "done": {
+        "title": "Erledigt",
+        "body": "Fertig mit einer Aufgabe? Ein Klick auf Erledigt verschiebt sie, die übrigen rücken nach oben."
+      },
+      "snooze": {
+        "title": "Zurückgestellt",
+        "body": "Gerade ungünstig? Wähle eine Zeit, dann kommt die Aufgabe zurück nach Offen."
+      },
+      "start": "Los geht’s",
+      "note": "Mit der Schaltfläche oben in der Seitenleiste wechselst du jederzeit zurück zur Aufgabenliste."
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Willkommen bei Cindy",

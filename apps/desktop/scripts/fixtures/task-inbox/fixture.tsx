@@ -79,6 +79,17 @@ function Specimen() {
     </div>
   );
 }
+/** The first switch into the inbox on this computer opens the introduction. */
+function IntroSpecimen() {
+  return (
+    <div className="min-h-screen w-[280px] bg-sidebar text-foreground">
+      <div className="flex h-[46px] items-center justify-end pr-2">
+        <TaskListModeToggle />
+      </div>
+    </div>
+  );
+}
+
 function StructureSpecimen() {
   const filter = useSidebarFilter(hidden, snapshot);
   const task = {
@@ -132,6 +143,8 @@ function StructureSpecimen() {
     </div>
   );
 }
+if (ctx.case !== 'intro') localStorage.setItem('featureIntro.taskInbox.seen', '1');
+
 void mountPage({
   route: '/cc-agent',
   host: {
@@ -180,7 +193,7 @@ void mountPage({
   },
   render: () => (
     <WorktreeProvider>
-      {ctx.case === 'structure' ? <StructureSpecimen /> : <Specimen />}
+      {ctx.case === 'intro' ? <IntroSpecimen /> : ctx.case === 'structure' ? <StructureSpecimen /> : <Specimen />}
     </WorktreeProvider>
   ),
 });

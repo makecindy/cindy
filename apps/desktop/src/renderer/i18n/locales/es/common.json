@@ -21513,6 +21513,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "Cerrar",
+    "taskInbox": {
+      "title": "Conoce la bandeja de entrada",
+      "lead": "Las tareas se ordenan solas en Pendientes, En curso, Pospuestas y Procesadas. Basta con mirar Pendientes y hacer clic en Hecho al terminar.",
+      "pending": {
+        "title": "Pendientes",
+        "body": "Las tareas con resultados nuevos o que esperan tu respuesta aparecen aquí solas."
+      },
+      "done": {
+        "title": "Hecho",
+        "body": "¿Terminaste una tarea? Un clic en Hecho la pasa a Procesadas y las demás suben."
+      },
+      "snooze": {
+        "title": "Pospuestas",
+        "body": "¿No es buen momento? Elige una hora y la tarea volverá a Pendientes."
+      },
+      "start": "Empezar",
+      "note": "Vuelve a la lista de tareas cuando quieras con el botón de la parte superior de la barra lateral."
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Te damos la bienvenida a Cindy",
