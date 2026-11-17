@@ -27,8 +27,7 @@ export default {
       await project.click();
       assert.equal(await inbox.count(), 0);
       await ui.capture('task-list-mode');
-      // The header toggle (top right) switches modes; it stays visible and pressed in the inbox.
-      await page.locator('[class~="group/sidebar-header"]').hover();
+      // The toggle at the right end of the top chrome row switches modes and shows pressed in the inbox.
       const toggle = page.locator('[data-task-list-mode-toggle]');
       assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
       await ui.capture('mode-toggle');

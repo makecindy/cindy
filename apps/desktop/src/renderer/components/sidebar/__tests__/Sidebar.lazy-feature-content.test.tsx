@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
 
 import { useMemo, type ReactNode } from 'react';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { FeatureSidebarSlotProvider, useRegisterSidebarUpper } from '@/features/feature-context';
+import {
+  FeatureSidebarSlotProvider,
+  useOwnTopNavScrollableRows,
+  useRegisterSidebarUpper,
+} from '@/features/feature-context';
 import type { SidebarPeekState } from '@/hooks/useSidebarPeek';
 import { Sidebar } from '../Sidebar';
 
@@ -42,13 +46,20 @@ vi.mock('../UserInfoSection', () => ({
   UserInfoSection: () => null,
 }));
 
+vi.mock('@/components/title-bar/ChromeIconButton', () => ({
+  ChromeIconButton: ({ tooltip: _tooltip, tooltipSide: _side, ...props }: Record<string, unknown>) => (
+    <button type="button" {...props} />
+  ),
+}));
+
 function UpperProbe() {
   return <div data-testid="sidebar-upper" />;
 }
 
-function RegisterUpper() {
+function RegisterUpper({ ownsTopNav = false }: { ownsTopNav?: boolean }) {
   const upper = useMemo(() => <UpperProbe />, []);
   useRegisterSidebarUpper(upper);
+  useOwnTopNavScrollableRows(ownsTopNav);
   return null;
 }
 
@@ -57,6 +68,7 @@ interface HarnessProps {
   isRail?: boolean;
   peekState?: SidebarPeekState | null;
   forceMountFeatureContent?: boolean;
+  ownsTopNav?: boolean;
 }
 
 function Harness({
@@ -64,10 +76,11 @@ function Harness({
   isRail = false,
   peekState = null,
   forceMountFeatureContent = false,
+  ownsTopNav = false,
 }: HarnessProps) {
   return (
     <FeatureSidebarSlotProvider isCollapsed={peekState != null ? false : isCollapsed || isRail}>
-      <RegisterUpper />
+      <RegisterUpper ownsTopNav={ownsTopNav} />
       <Sidebar
         isCollapsed={isCollapsed}
         isRail={isRail}
@@ -180,5 +193,24 @@ describe('Sidebar secondary-window lazy feature content', () => {
     }
     expect(send).toHaveBeenLastCalledWith(0);
     expect(document.documentElement.style.getPropertyValue('--sidebar-visible-width')).toBe('');
+  });
+
+  // 2026-11-18 用户要求：收件箱开关放在侧边栏顶部前进／后退这一排的右端，只属于任务列表
+  // （接管顶部导航的 Feature），设置等页面与窄栏不出现；点击切换并按本机保存。
+  it('shows the inbox toggle in the top row only for the task list, outside the rail', () => {
+    mocks.isSecondaryWindow = false;
+    localStorage.removeItem('sidebar.taskListMode');
+    const toggle = () => document.querySelector<HTMLButtonElement>('[data-task-list-mode-toggle]');
+    const view = render(<Harness isCollapsed={false} />);
+    expect(toggle()).toBeNull();
+    view.rerender(<Harness isCollapsed={false} isRail ownsTopNav />);
+    expect(toggle()).toBeNull();
+    view.rerender(<Harness isCollapsed={false} ownsTopNav />);
+    expect(toggle()!.getAttribute('aria-pressed')).toBe('false');
+    act(() => { fireEvent.click(toggle()!); });
+    expect(localStorage.getItem('sidebar.taskListMode')).toBe('inbox');
+    expect(toggle()!.getAttribute('aria-pressed')).toBe('true');
+    act(() => { fireEvent.click(toggle()!); });
+    expect(localStorage.getItem('sidebar.taskListMode')).toBe('tasks');
   });
 });

@@ -6,6 +6,7 @@ import { ProjectsSection } from '../../../src/renderer/features/cc-agent/sidebar
 import { useSidebarFilter } from '../../../src/renderer/features/cc-agent/hooks/useSidebarFilter';
 import { groupSessions } from '../../../src/renderer/features/cc-agent/lib/projectGrouping';
 import { TaskInbox } from '../../../src/renderer/features/cc-agent/sidebar/TaskInbox';
+import { TaskListModeToggle } from '../../../src/renderer/components/sidebar/TaskListModeToggle';
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
 setDataOwnerGeneration('fixture', 1);
 const noop = () => {};
@@ -88,6 +89,10 @@ function StructureSpecimen() {
   const projects = groupSessions([task]).projects;
   return (
     <div className="min-h-screen w-[320px] bg-sidebar text-foreground p-2">
+      {/* Same placement as the sidebar's top chrome row (back / forward), right end. */}
+      <div data-fixture-top-row="" className="flex h-[46px] items-center justify-end pr-2">
+        <TaskListModeToggle />
+      </div>
       <ProjectsSection
         unclassified={[]}
         projects={projects}
