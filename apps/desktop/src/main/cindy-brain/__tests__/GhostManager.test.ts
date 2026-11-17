@@ -35,7 +35,7 @@ import { installedGhostPhysicalRelId, installedGhostStoragePart, pluginInstallSt
 import { runGhostSnapshotWorkerRequest } from '../ghostSnapshotWorkerProcess';
 import { writeTestCindyPackage } from './cindyPackageFixture';
 import { PluginMarketLedger } from '../../plugin-market/ledger';
-import { projectPluginPublishingSource } from '../pluginPublishingSource';
+import { projectPluginPublishingSource, projectPluginInstallationSource } from '../pluginPublishingSource';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture';
 import { hasPluginHostToolGroupApproval } from '../taskCapability';
 
@@ -4535,6 +4535,7 @@ describe('GhostManager · list', () => {
       getGhostSetupManifestTracker: () => ({ seed: vi.fn() }),
       getPluginMarketLedger: () => ledger,
       projectPluginPublishingSource,
+      projectPluginInstallationSource,
     }).getGhostManager();
     const unavailable = () => { throw Object.assign(new Error('ledger locked'), { code: 'EBUSY' }); };
     const snapshot = vi.spyOn(ledger, 'createListingLookup');

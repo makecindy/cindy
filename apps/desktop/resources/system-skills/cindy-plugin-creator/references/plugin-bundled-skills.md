@@ -44,7 +44,7 @@ namespace 的实例为 `_ns__<namespace>__<插件id>--<技能name>`)不是命令
 在当前会话里直接执行没有问题;要存下来长期使用(例如定时任务的检查命令)时,
 在 SKILL.md 里让 Agent 先对技能目录取 `realpath`,用这个真实路径拼命令。主机保存
 检查命令时,会把它换成该技能跨插件版本不变的入口(路径含 `/agent-skills/skills/`)。
-依赖这一行为的插件版本,`minCindyVersion` 不得低于首个支持它的 Cindy 正式版本。
+依赖这一行为时，按 §2 的规则填写 `minCindyVersion`。
 不要让 Agent 搜索磁盘找技能目录,也不要把系统临时目录下的链接路径存下来。
 
 这些入口仅供 Cindy 管理的 Agent 会话使用,不会自动暴露给外部 CLI,无需为全局

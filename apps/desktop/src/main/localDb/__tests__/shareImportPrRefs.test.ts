@@ -1,7 +1,7 @@
 /**
- * Explicit-only PR ownership: importing a share must not associate quoted links.
+ * #8478: inspect/commit a real share bundle, then read its persisted PR associations.
  * Existing share-import tests fake the DB; store tests bypass the import entry.
- * Minimal failure: one visible PR link in a db-only bundle.
+ * Minimal failure: a visible PR in a db-only bundle after v2 backfill is complete.
  * Tier: db (real SQLite transaction + public projection); separate from the unit
  * import suite so its filesystem/media matrix does not gain a database dependency.
  */
@@ -19,7 +19,7 @@ import { messages, migrationMeta, orcaTeams, orcaWorkers, sessionPrRefs, session
 import { commitShareImport, inspectShareFile } from '../../session-share/sessionShareImport';
 import { buildPlainFile } from '../../session-share/xdtshareCrypto';
 import {
-  listPrRefs, managePrRefs,
+  ensurePrRefsBackfill, listPrRefs, managePrRefs, recordPrRefsForImportedMessages,
   setPrRefsChangedListener,
 } from '../../git-context/prRefsStore';
 
@@ -132,24 +132,27 @@ beforeEach(() => {
 afterAll(() => { sqlite.close(); rmSync(root, { recursive: true, force: true }); });
 
 describe('share import PR associations', () => {
-  it('does not associate PRs mentioned in imported lead and worker messages', async () => {
+  it('publishes only persisted public lead and worker mentions after backfill is complete', async () => {
     const draft = await bundle();
     const result = await commit(draft.draftId);
     const worker = db.select().from(orcaWorkers).get()!;
-    expect(await numbers(result.sessionId)).toEqual([]);
-    expect(await numbers(worker.sessionId)).toEqual([]);
-    expect(h.changed).not.toHaveBeenCalled();
-    expect(db.select().from(sessionPrRefs).all()).toHaveLength(0);
+    expect(await numbers(result.sessionId)).toEqual([100, 101, 105]);
+    expect(await numbers(worker.sessionId)).toEqual([200, 201, 205]);
+    expect(h.changed.mock.calls.map(([id]) => id).sort()).toEqual([result.sessionId, worker.sessionId].sort());
+    await ensurePrRefsBackfill();
+    expect(db.select().from(sessionPrRefs).all()).toHaveLength(6);
     await expect(commit(draft.draftId)).rejects.toMatchObject({ code: 'NOT_FOUND' });
     expect(db.select().from(sessions).all()).toHaveLength(2);
   });
 
-  it('keeps explicitly removed associations hidden after import', async () => {
+  it('keeps manual removals hidden and repeated import reconciliation idempotent', async () => {
     const result = await commit((await bundle()).draftId);
-    const [ref] = await managePrRefs(result.sessionId, { action: 'add', url: 'https://github.com/o/r/pull/1' }, async () => undefined);
+    const [ref] = await listPrRefs(result.sessionId);
     await managePrRefs(result.sessionId, { action: 'remove', id: ref.id }, async () => undefined);
-    expect(await numbers(result.sessionId)).toEqual([]);
-    expect(db.select().from(sessionPrRefs).all()).toHaveLength(1);
+    await recordPrRefsForImportedMessages(result.sessionId);
+    await recordPrRefsForImportedMessages(result.sessionId);
+    expect(await numbers(result.sessionId)).toEqual([100, 101, 105].filter(n => n !== ref.prNumber));
+    expect(db.select().from(sessionPrRefs).all()).toHaveLength(6);
   });
 
   it('rolls back the graph and emits no associations when a worker insert fails, then allows retry', async () => {
@@ -159,17 +162,18 @@ describe('share import PR associations', () => {
     expect(db.select().from(sessionPrRefs).all()).toEqual([]);
     expect(h.changed).not.toHaveBeenCalled();
     const result = await commit((await bundle()).draftId);
-    expect(await numbers(result.sessionId)).toEqual([]);
+    expect(await numbers(result.sessionId)).toEqual([100, 101, 105]);
   });
 
-  it('stops publication on account invalidation after commit', async () => {
+  it.each(['after commit', 'between tasks'])('stops publication on account invalidation %s', async (when) => {
     const invalidate = () => { h.client = { drizzle: db }; };
-    h.afterCommit = invalidate;
+    if (when === 'after commit') h.afterCommit = invalidate;
+    else h.changed.mockImplementationOnce(invalidate);
     const draft = await bundle();
     await expect(commit(draft.draftId)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
     expect(db.select().from(sessions).all()).toHaveLength(2); // committed graph is preserved
-    expect(db.select().from(sessionPrRefs).all()).toHaveLength(0);
-    expect(h.changed).not.toHaveBeenCalled();
+    expect(db.select().from(sessionPrRefs).all()).toHaveLength(when === 'after commit' ? 0 : 3);
+    expect(h.changed).toHaveBeenCalledTimes(when === 'after commit' ? 0 : 1);
     h.client = client;
     await expect(commit(draft.draftId)).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });

@@ -2089,6 +2089,14 @@ describe('interactive page declarations', () => {
             file: 'ui/planner.html',
             csp: { connectDomains: ['https://api.example.com'] }
         }], tools: { help: { resourceUri: "ui://planner", visibility: ['model', 'app'] } } } } };
+  // Host button preference is presentation only, not a display-mode permission.
+  it('preserves the optional Host fullscreen button preference without changing tools', () => {
+    const resources = [{ ...base.mcpApps.ui.resources[0], hostFullscreenButton: false }];
+    const result = validateGhostManifest({ ...base, mcpApps: { ui: { ...base.mcpApps.ui, resources } } });
+    expect(result).toMatchObject({ ok: true, manifest: { mcpApps: { ui: { resources } }, tools: base.tools } });
+    expect(validateGhostManifest({ ...base, mcpApps: { ui: { ...base.mcpApps.ui,
+      resources: [{ ...resources[0], hostFullscreenButton: 'false' }] } } }).ok).toBe(false);
+  });
   it('preserves top-level pages while leaving the original tool declaration unchanged', () => {
     const original = validateGhostManifest({ ...base, mcpApps: undefined });
     const result = validateGhostManifest(base);
@@ -2148,7 +2156,7 @@ describe('interactive page declarations', () => {
     expect(projected).toMatchObject(legacy);
     expect(hostUiApprovalSubjects(projected!)).toEqual(hostUiApprovalSubjects(legacy));
   });
-  it.each(['sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion', 'window.titlebar'])(
+  it.each(['composer.header', 'sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion', 'window.titlebar'])(
     'approves the understood %s placement without changing an existing entry token', position => {
       const old = { id: 'legacy', title: 'Open', position: 'composer.toolbar', tool: 'help' };
       const entry = { id: 'extension', title: 'Extension', position,
