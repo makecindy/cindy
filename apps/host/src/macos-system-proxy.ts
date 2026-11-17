@@ -499,7 +499,7 @@ function parseScutilProxyOutput(text: string): MacSystemProxySettings {
  */
 function systemProxyResultFor(settings: MacSystemProxySettings, upstreamUrl: string): string {
   if (settings.pacUrl) {
-    throw new SystemProxySettingsError('the system proxy settings use a proxy auto-config (PAC) URL, which the Host does not run yet');
+    throw new SystemProxySettingsError('the system proxy settings use a proxy auto-config (PAC) URL, and the Chromium proxy helper had no answer');
   }
   const { http, https, socks } = settings;
   if (!http && !https && !socks) return 'DIRECT';

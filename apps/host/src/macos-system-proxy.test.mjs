@@ -184,13 +184,13 @@ test('exceptions and the implicit rules bypass the proxy as in Chromium', async 
   }
 });
 
-test('PAC is not run: unresolved, direct, with a warn; auto-discovery alone uses the manual settings', async () => {
+test('without the Chromium proxy helper, PAC is unresolved, direct, with a warn; auto-discovery alone uses the manual settings', async () => {
   const PAC = { ProxyAutoConfigEnable: 1, ProxyAutoConfigURLString: 'http://pac.example.test/proxy.pac' };
   assert.equal(await resolveUnder(scutil({ ...PAC, ...HTTPS }), 'https://pac.example.test/'), null);
   assert.deepEqual(snapshotOf('https://pac.example.test'), { source: 'system', kind: 'unknown', reason: 'resolve_failed', upstream: 'https://pac.example.test' });
   assert.equal(await resolveUnder(scutil({ ...PAC, ProxyAutoDiscoveryEnable: 1, ...HTTPS }), 'https://pac-wpad.example.test/'), null);
   assert.equal(snapshotOf('https://pac-wpad.example.test').kind, 'unknown');
-  await logsContaining('proxy auto-config (PAC) URL, which the Host does not run yet');
+  await logsContaining('proxy auto-config (PAC) URL, and the Chromium proxy helper had no answer');
   // Enabled without a URL, or with one that is not a valid URL: Chromium has no PAC URL (has_pac_url) and
   // uses the manual settings.
   assert.equal(await resolveUnder(scutil({ ProxyAutoConfigEnable: 1, ...HTTPS }), 'https://pac-no-url.example.test/'), VIA_HTTPS);

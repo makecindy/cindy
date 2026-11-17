@@ -97,6 +97,7 @@ try {
       await new Promise(resolve => child.once('exit', resolve));
       assert.notEqual(readyAt, null, `run ${run}: ready`);
       const before = answers.slice(0, readyAt);
+      assert.ok(before.length > 0, `run ${run}: received at least one answer before ready`);
       assert.ok(before.every(a => a.error === 'not_ready'), `run ${run}: before ready only not_ready (${JSON.stringify(before.slice(0, 3))})`);
       assert.ok(!answers.some(a => typeof a.result === 'string' && /DIRECT/.test(a.result)), `run ${run}: never DIRECT`);
       assert.ok(answers.some(a => a.result === 'PROXY 127.0.0.1:9'), `run ${run}: the PAC result`);

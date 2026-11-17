@@ -220,6 +220,7 @@ test('closed by its handle: stdin first, then SIGTERM, then SIGKILL; nothing sta
 
 test('the helper\'s environment and command line carry nothing of the Host\'s configuration', () => {
   const env = helperEnv('/tmp/profile/proxy-helper', {
+    OPENAI_API_KEY: 'fixture-key', GH_TOKEN: 'fixture-token', HTTPS_PROXY: 'http://user:pass@proxy.test',
     PATH: '/bin', XDT_OFFICIAL_SHARED_PROFILE: '/should/not/leak', CINDY_HOST_DATA_DIR: '/leak', cindy_lower: 'leak',
     CINDY_PROXY_WORKER_TEST_CONFIG: '{"mode":"direct"}', NODE_OPTIONS: '--inspect', ELECTRON_RUN_AS_NODE: '1',
   });

@@ -77,12 +77,16 @@ export function helperUrl(url: string): string {
   return parsed.href;
 }
 
-/** The helper's environment: the Host's without any XDT_ / CINDY_ variable, Node options or Electron-as-Node. */
+/** Only platform paths and locale reach Chromium. Host environments can carry arbitrary provider credentials. */
+const SYSTEM_ENV = new Set([
+  'HOME', 'PATH', 'TMP', 'TEMP', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE',
+  'SYSTEMROOT', 'WINDIR', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'PROGRAMDATA',
+  'SYSTEMDRIVE', 'HOMEDRIVE', 'HOMEPATH',
+]);
 export function helperEnv(profile: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(base)) {
-    if (/^(XDT_|CINDY_)/i.test(key) || /^(NODE_OPTIONS|NODE_PATH|ELECTRON_RUN_AS_NODE)$/i.test(key)) continue;
-    env[key] = value;
+    if (SYSTEM_ENV.has(key.toUpperCase())) env[key] = value;
   }
   env.CINDY_PROXY_WORKER_PROFILE = profile;
   return env;
@@ -138,36 +142,35 @@ export function createChromiumProxyHelper(options: ChromiumProxyHelperOptions): 
     return target.exited.finally(() => { clearTimeout(terminate); clearTimeout(kill); });
   }
 
-  /** Stop this worker and allow the next start only after the backoff. */
-  function fail(target: Worker, reason: string): void {
-    if (worker !== target) return;
-    void stopWorker(target);
-    if (closed) return;
-    state = 'backoff';
+  function deferRestart(reason: string, nextState: 'backoff' | 'unavailable' = 'backoff'): void {
+    state = nextState;
     retryAt = now() + backoff;
     backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
     warnOnce(reason);
   }
 
+  /** Stop this worker and allow the next start only after the backoff. */
+  function fail(target: Worker, reason: string): void {
+    if (worker !== target) return;
+    void stopWorker(target);
+    if (!closed) deferRestart(reason);
+  }
+
   function start(): Worker | null {
     const found = assets();
     if (!found) {
-      state = 'unavailable';
-      warnOnce('no Electron runtime');
+      deferRestart('no Electron runtime', 'unavailable');
       return null;
     }
     const profile = path.join(options.profileDir, 'proxy-helper');
-    mkdirSync(profile, { recursive: true, mode: 0o700 });
     let child: ChildProcess;
     try {
+      mkdirSync(profile, { recursive: true, mode: 0o700 });
       child = spawnImpl(found.binary, [found.script], {
         env: helperEnv(profile), stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true,
       });
     } catch {
-      state = 'backoff';
-      retryAt = now() + backoff;
-      backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
-      warnOnce('start failed');
+      deferRestart('start failed');
       return null;
     }
     child.unref?.();
@@ -196,7 +199,10 @@ export function createChromiumProxyHelper(options: ChromiumProxyHelperOptions): 
             reject: (error) => { clearTimeout(timer); reject(error); },
           });
           child.stdin?.write(`${JSON.stringify({ id, ...message })}\n`, (error) => {
-            if (error) pending.get(id)?.reject(new ChromiumProxyUnavailableError('write failed'));
+            if (error) {
+              pending.get(id)?.reject(new ChromiumProxyUnavailableError('write failed'));
+              pending.delete(id);
+            }
           });
         });
       },
@@ -216,6 +222,7 @@ export function createChromiumProxyHelper(options: ChromiumProxyHelperOptions): 
       if (line.length > MAX_LINE) return;
       let value: { ready?: unknown; pid?: unknown; id?: unknown; result?: unknown; error?: unknown };
       try { value = JSON.parse(line); } catch { return; }
+      if (worker !== self || !value || typeof value !== 'object') return;
       if (value.ready === true && value.pid === child.pid) {
         ready = true;
         state = 'ready';
@@ -247,7 +254,7 @@ export function createChromiumProxyHelper(options: ChromiumProxyHelperOptions): 
       const deadline = now() + ANSWER_WAIT_MS;
       if (closed) throw new ChromiumProxyUnavailableError('stopped');
       if (!worker) {
-        if (state === 'unavailable') throw new ChromiumProxyUnavailableError('no Electron runtime');
+        if (state === 'unavailable' && now() < retryAt) throw new ChromiumProxyUnavailableError('no Electron runtime');
         if (state === 'backoff' && now() < retryAt) throw new ChromiumProxyUnavailableError('restarting');
         worker = start();
         if (!worker) throw new ChromiumProxyUnavailableError((state as ChromiumProxyHelperState) === 'unavailable' ? 'no Electron runtime' : 'start failed');

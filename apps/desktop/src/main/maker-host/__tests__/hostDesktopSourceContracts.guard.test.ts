@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import { createRequire, isBuiltin } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
@@ -1052,14 +1053,14 @@ describe('Host Chromium proxy helper (row 28, 28c)', () => {
   const launcher = () => read(path.join(hostSrc, 'chromium-proxy.ts'));
   const TEST_SWITCHES = ['use-mock-keychain', 'proxy-pac-url', 'no-proxy-server', 'proxy-server', 'CINDY_PROXY_WORKER_TEST_CONFIG'];
 
-  // 规则：生产启动不带任何测试开关（审核方 2026-11-18）：Host 只以 `[脚本]` 起辅助进程，环境经 helperEnv 去掉全部
-  // XDT_/CINDY_ 变量后只加 profile 目录；测试配置与 Chromium 开关只出现在辅助进程脚本（读测试配置）和验收脚本里。
+  // 规则：生产启动不带任何测试开关（审核方 2026-11-18）：Host 只以 `[脚本]` 起辅助进程，环境经 helperEnv 筛选系统目录和
+  // 语言变量后只加 profile 目录；测试配置与 Chromium 开关只出现在辅助进程脚本（读测试配置）和验收脚本里。
   // 失效后果：生产里的辅助进程用了 mock 钥匙串或固定代理配置，与系统设置不一致，或测试配置经环境漏进生产。
   it('starts the helper the production way: no switch, no test configuration', () => {
     const source = launcher();
     assert.equal(source.split('spawnImpl(').length - 1, 1);
     assert.ok(source.includes('child = spawnImpl(found.binary, [found.script], {\n        env: helperEnv(profile), stdio:'));
-    assert.ok(source.includes("    if (/^(XDT_|CINDY_)/i.test(key) || /^(NODE_OPTIONS|NODE_PATH|ELECTRON_RUN_AS_NODE)$/i.test(key)) continue;"));
+    assert.ok(source.includes("if (SYSTEM_ENV.has(key.toUpperCase())) env[key] = value;"));
     const production = fs.readdirSync(hostSrc, { recursive: true }).map(String)
       .filter(file => /\.(ts|mts|cts|mjs|cjs|js)$/.test(file) && !/\.test\.|[\\/]loaders[\\/]/.test(file) && file !== 'chromium-proxy-worker.cjs')
       .map(file => path.join(hostSrc, file));
@@ -1094,8 +1095,8 @@ describe('Host Chromium proxy helper (row 28, 28c)', () => {
     ]);
   });
 
-  // 规则：Host 包里的 Electron 是 npm 原版（build.mjs 从 desktopRequire('electron') 拷贝），不翻 fuse，cookie 加密
-  // 默认关闭；装了二进制时直接读它的 fuse（CI 的桌面任务不下载二进制，那里只核对源码；macOS/Windows 的比对
+  // 规则：Host 包里的 Electron 是 npm 原版（build.mjs 从 desktopRequire('electron') 拷贝），apps/host 里没有翻 fuse 的代码
+  // （flipFuses；验收脚本只读 fuse），cookie 加密默认关闭；装了二进制时直接读它的 fuse（CI 的桌面任务不下载二进制，那里只核对源码；macOS/Windows 的比对
   // workflow 在验收脚本里读同一个 fuse）。失效后果：换成翻过 fuse 的 Electron 后，辅助进程启动即触发钥匙串。
   it('ships the npm Electron, with cookie encryption off', async () => {
     const build = read(path.join(repo, 'apps/host/scripts/build.mjs'));
@@ -1103,7 +1104,7 @@ describe('Host Chromium proxy helper (row 28, 28c)', () => {
     assert.ok(build.includes("    await fs.copyFile(path.join(host, 'src/chromium-proxy-worker.cjs'), path.join(bin, 'chromium-proxy-worker.cjs'));\n"));
     const hostFiles = fs.readdirSync(path.join(repo, 'apps/host'), { recursive: true }).map(String)
       .filter(file => !file.includes('node_modules') && /\.(ts|mts|cts|mjs|cjs|js|json)$/.test(file));
-    for (const file of hostFiles) assert.equal(read(path.join(repo, 'apps/host', file)).includes('@electron/fuses'), false, file);
+    for (const file of hostFiles) assert.equal(read(path.join(repo, 'apps/host', file)).includes('flipFuses'), false, file);
     let executable: string | null = null;
     try { executable = createRequire(path.join(repo, 'apps/desktop/package.json'))('electron') as string; } catch { executable = null; }
     if (!executable || !fs.existsSync(executable)) return;
@@ -1118,7 +1119,8 @@ describe('Host Chromium proxy helper (row 28, 28c)', () => {
  * apps/host/src/host-network-modules.ts: whether its traffic to other machines takes the outbound proxy resolver
  * (release table row 28). Collection over the Host's import graph (as for the setters below): a value import of
  * node:http, https, net, tls, http2, dgram, undici or ws (import, require or dynamic import), a reference to the
- * global fetch where the file declares no `fetch` of its own, `new WebSocket(…)`. Failure without it: a new
+ * global fetch, a direct fetch call, or `new WebSocket(…)`. Counts also catch additional calls through an
+ * existing network import, fetch or WebSocket constructor in an already classified file. Failure without it: a new
  * outbound call that bypasses the resolver (direct in a network that needs a proxy) lands unnoticed.
  */
 describe('network modules the Host loads, classified for the Host', () => {
@@ -1129,15 +1131,28 @@ describe('network modules the Host loads, classified for the Host', () => {
     const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
     const uses = new Set<string>();
     let declaresFetch = false;
-    let fetchReference = false;
+    let fetchReferences = 0;
+    let qualifiedFetches = 0;
+    let socketConstructors = 0;
+    let fetchCalls = 0;
+    let networkCalls = 0;
+    const importedNames = new Set<string>();
     const declares = (n: ts.Node): n is ts.ParameterDeclaration | ts.VariableDeclaration | ts.BindingElement | ts.FunctionDeclaration =>
       ts.isParameter(n) || ts.isVariableDeclaration(n) || ts.isBindingElement(n) || ts.isFunctionDeclaration(n);
     const visit = (n: ts.Node): void => {
+      if (ts.isTypeNode(n)) return;
       if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier) && NETWORK.has(bare(n.moduleSpecifier.text))) {
         const clause = n.importClause;
         const typeOnly = !!clause && (clause.isTypeOnly || (!clause.name && !!clause.namedBindings && ts.isNamedImports(clause.namedBindings)
           && clause.namedBindings.elements.every(element => element.isTypeOnly)));
-        if (!typeOnly) uses.add(`imports ${bare(n.moduleSpecifier.text)}`);
+        if (!typeOnly) {
+          uses.add(`imports ${bare(n.moduleSpecifier.text)}`);
+          if (clause?.name) importedNames.add(clause.name.text);
+          if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) importedNames.add(clause.namedBindings.name.text);
+          if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+            for (const element of clause.namedBindings.elements) if (!element.isTypeOnly) importedNames.add(element.name.text);
+          }
+        }
       }
       if (ts.isCallExpression(n) && n.arguments[0] && ts.isStringLiteral(n.arguments[0]) && NETWORK.has(bare(n.arguments[0].text))
         && ((ts.isIdentifier(n.expression) && n.expression.text === 'require') || n.expression.kind === ts.SyntaxKind.ImportKeyword)) {
@@ -1150,18 +1165,32 @@ describe('network modules the Host loads, classified for the Host', () => {
           || ((ts.isPropertyAssignment(p) || ts.isMethodDeclaration(p) || ts.isMethodSignature(p) || ts.isPropertySignature(p)
             || ts.isPropertyDeclaration(p)) && p.name === n)
           || ts.isTypeQueryNode(p) || ts.isQualifiedName(p) || (declares(p) && p.name === n) || (ts.isBindingElement(p) && p.propertyName === n);
-        if (!name) fetchReference = true;
+        if (!name) fetchReferences++;
       }
-      if (ts.isNewExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'WebSocket') uses.add('new WebSocket');
+      if (ts.isPropertyAccessExpression(n) && n.name.text === 'fetch' && ts.isIdentifier(n.expression)
+        && ['globalThis', 'global'].includes(n.expression.text)) qualifiedFetches++;
+      if (ts.isElementAccessExpression(n) && ts.isStringLiteral(n.argumentExpression) && n.argumentExpression.text === 'fetch'
+        && ts.isIdentifier(n.expression) && ['globalThis', 'global'].includes(n.expression.text)) qualifiedFetches++;
+      if (ts.isNewExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'WebSocket') socketConstructors++;
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'fetch') fetchCalls++;
+      if (ts.isCallExpression(n) || ts.isNewExpression(n)) {
+        let base: ts.Expression = n.expression;
+        while (ts.isPropertyAccessExpression(base) || ts.isElementAccessExpression(base)) base = base.expression;
+        if (ts.isIdentifier(base) && importedNames.has(base.text)) networkCalls++;
+      }
       ts.forEachChild(n, visit);
     };
     visit(sf);
-    if (fetchReference && !declaresFetch) uses.add('global fetch');
+    const fetchUses = qualifiedFetches + (declaresFetch ? fetchCalls : fetchReferences);
+    if (fetchUses) uses.add(`fetch ×${fetchUses}`);
+    if (socketConstructors) uses.add(`new WebSocket ×${socketConstructors}`);
+    if (networkCalls) uses.add(`network API calls ×${networkCalls}`);
     return [...uses].sort();
   }
 
   it('classifies every network module the Host loads, with exactly what it uses', async () => {
-    const { HOST_NETWORK_MODULES } = await import('../../../../../host/src/host-network-modules.ts');
+    const { HOST_NETWORK_MODULES } = await import(pathToFileURL(path.join(hostSrc, 'host-network-modules.ts')).href) as
+      { HOST_NETWORK_MODULES: Record<string, { uses: readonly string[]; route: string; reason: string }> };
     const found = new Map<string, string[]>();
     for (const file of await hostImportGraph()) {
       if (/^apps\/host\/scripts\//.test(file)) continue;
