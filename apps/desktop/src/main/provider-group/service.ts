@@ -159,7 +159,8 @@ export interface ProviderGroupRemoteGroups {
 export type ProviderGroupEligibilityContext =
   | { kind: 'failure'; token: number; lease?: object | null; reason?: InterruptedTurnErrorSignals['reason'] }
   | { kind: 'before-send'; clientId?: string; scheduled?: boolean }
-  | { kind: 'rebalance' | 'reconnect' | 'restart' };
+  | { kind: 'rebalance' | 'reconnect' }
+  | { kind: 'restart'; verifiedGroup?: true };
 
 export interface ProviderGroupServiceDeps {
   router: ProviderGroupRouter;
@@ -1332,9 +1333,17 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         // A missing run after a supplier restart is not a reason to move the task.
         // Reuse the existing recovery lease, bounded wait, cancellation and UI trail
         // even for suppliers that do not belong to a group.
-        if (!(await deps.isFailoverEligible(sessionId, { kind: 'restart' }))) return false;
+        const restartEligible = await deps.isFailoverEligible(sessionId, { kind: 'restart' });
         const row = await deps.readSessionRow(sessionId);
         if (!row?.agentDeviceId || !row.providerId || row.remoteHostId) return false;
+        if (!restartEligible) {
+          // Shared tasks only opt into recovery inside their selected, enabled
+          // group. A stale binding alone cannot grant the restart exception.
+          const bound = await withTimeout(loadBound(sessionId), PROVIDER_GROUP_ADOPT_TIMEOUT_MS);
+          if (!bound?.config?.autoSwitch
+            || !(await verifyBinding(sessionId, bound.source, bound.binding, bound.config, row))
+            || !(await deps.isFailoverEligible(sessionId, { kind: 'restart', verifiedGroup: true }))) return false;
+        }
         if (!lease) return true;
         await withSwitchRun(sessionId, signals, token, lease, run, hooks, async (isCurrent, handBack) => {
           // Unlike a group relocation, this keeps the local Session alive. Its
