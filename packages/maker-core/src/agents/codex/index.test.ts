@@ -30294,9 +30294,11 @@ describe('CodexAgent turn lifecycle', () => {
   });
 
   // #8412, unit: local client -> host -> agent, unlike normal late-completion coverage.
-  // A previously started collab tool must emit one background terminal update
-  // even when its completed body was dropped, after either parent terminal.
-  it.each(['completed', 'error'] as const)('closes an omitted late collab after parent %s', async (terminal) => {
+  // A previously started collab tool must close its tool boundary even when its
+  // completed body was dropped, after either parent terminal. Control calls
+  // (sendInput here) are ordinary tool steps: the terminal close must not mint
+  // a Subagent card update for them.
+  it.each(['completed', 'error'] as const)('closes an omitted late collab control call after parent %s', async (terminal) => {
     vi.useFakeTimers();
     const agent = new CodexAgent(createDeps());
     const handle = await agent.startSession({ sessionId: 'omitted-late-collab', model: 'gpt-5.4', workingDir: '/repo' });
@@ -30331,9 +30333,7 @@ describe('CodexAgent turn lifecycle', () => {
     expect(late.filter(event => event.type === 'tool_result')).toEqual([
       expect.objectContaining({ turnScope: 'background', data: expect.objectContaining({ toolUseIds: ['late-call'] }) }),
     ]);
-    expect(late.filter(event => event.type === 'agent_task_update')).toEqual([
-      expect.objectContaining({ turnScope: 'background', data: expect.objectContaining({ taskId: 'late-call', status }) }),
-    ]);
+    expect(late.filter(event => event.type === 'agent_task_update')).toEqual([]);
     expect(late.every(event => event.turnScope === 'background')).toBe(true);
     expect(handle.isTurnRunning?.()).toBe(false);
     expect(transport.closed).toBe(false);
