@@ -20,6 +20,7 @@ import { hostPackageRegion } from './auth/region-policy.ts';
 import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.ts';
 import { isGhostSkillProjectionBoundaryStableForOwner, readGhostSkillProjectionBoundaryState, withGhostSkillProjectionOwnerCommit } from '../../desktop/src/main/authBoundaryQuarantine.ts';
 import { withCrossProcessLock } from '../../desktop/src/main/device-link/crossProcessLock.ts';
+import { AUTH_ACCOUNT_VAULT_LOCK_FILE } from '../../desktop/src/main/authRefreshCommit.ts';
 import { configureAppDataDir, configureUserDataDir } from '../../desktop/src/main/userDataPath.ts';
 import { createDesktopScanner } from './agent/profile-coexistence.ts';
 import { allowSkillProjectionOwnerCommit, commitLoginSessionAndOwner } from './agent/skill-projection-owner.ts';
@@ -142,7 +143,7 @@ export async function runLoginCommand(argv, io = {}) {
       const previousOwnerId = stable?.phase === 'stable' ? stable.ownerId : discoverHostOwner(userDataDir).ownerId;
       await commitLoginSessionAndOwner({
         userDataDir, record, nextOwnerId: membership.id, store, sessionKey: AUTH_SESSION_KEY, previousOwnerId,
-        withVaultLock: (task) => withCrossProcessLock(path.join(userDataDir, '.cindy-auth-accounts-v1.lock'),
+        withVaultLock: (task) => withCrossProcessLock(path.join(userDataDir, AUTH_ACCOUNT_VAULT_LOCK_FILE),
           { label: 'auth-account-vault', waitMs: 5000 }, async (lock) => {
             if (!lock.held) throw new Error('Saved account credentials are busy; retry cindy-host login');
             return task();

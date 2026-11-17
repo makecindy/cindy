@@ -13,6 +13,8 @@ import { createHostClaudeProxyRuntime } from './agent/claude-proxy-runtime.js';
 import { createAvailabilityPolicy } from '../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
 import { configureWindowsAtomicRename } from '../../desktop/src/main/windowsAtomicRename.js';
 import { isDefinitiveRefreshError } from '../../desktop/src/main/authRefreshError.js';
+import { AuthRefreshBackoff } from '../../desktop/src/main/authRefreshBackoff.js';
+import { AUTH_ACCOUNT_VAULT_LOCK_FILE } from '../../desktop/src/main/authRefreshCommit.js';
 import { createUserSession } from '../../desktop/src/main/localDb/ipc/createUserSession.js';
 import { setSessionOpeningModelAdmission } from '../../desktop/src/main/localDb/sessionOpening.js';
 import { resolveSessionExecutionSelection } from '../../desktop/src/main/maker-ipc/sessionExecutionSelection.js';
@@ -48,7 +50,7 @@ import { createDefaultLayout } from '../../desktop/src/shared/layoutTree.ts';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { hostRuntimeLayout } from './runtime-layout.mjs';
 import { createHostServerApi } from './server-api.js';
-import { decodeAccessTokenOrgSlug } from '../../desktop/src/main/authTokenClaims.js';
+import { accessTokenRefreshDelayMs, decodeAccessTokenOrgSlug } from '../../desktop/src/main/authTokenClaims.js';
 import { parseGhostSetupInteractionCommand } from '../../desktop/src/main/cindy-brain/ghostSetupInteractionBridge.js';
 import { openSystemBrowser, openHostBrowser } from './browser-open.mjs';
 
@@ -68,7 +70,7 @@ import { discoverHostOwner, ownerDatabasePath, resolveHostDataDir, resolveHostRe
 import { acquireHostRuntimeLease, acquireHostServiceLease, type HostRuntimeLease } from './runtime-lock.js';
 import { publishHostEndpoint, readHostProcessStatus, requestHostStop, requestHostRemote } from './control.mjs';
 import { readAdoptedSessionState } from './credentials/session.mjs';
-import { refreshHostSession } from './auth/refresh.mjs';
+import { hostAccountVaultLock, HostRefreshDeferredError, HostSessionMissingError, refreshHostSession } from './auth/refresh.mjs';
 import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-auth.mjs';
 import { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcpProviders } from './agent/memory.mjs';
 import { createHostAgentGraph } from './agent/runtime.js';
@@ -421,6 +423,8 @@ async function resolveAccountUser(expectedOwner: string | null = runtime.owner):
   const { sessionToken } = await refreshHostSession({
     store,
     refresh: (token) => client.refresh(token),
+    withVaultLock: hostAccountVaultLock(resolveHostDataDir()),
+    buildRegion: hostPackageRegion(),
   });
   const me = await client.getMe(sessionToken);
   const membership = me?.membership;
@@ -455,30 +459,94 @@ let refreshTimer: NodeJS.Timeout | null = null;
 
 let authClosed = false;
 let authRefreshFlight: Promise<boolean> | null = null;
-async function refreshAuthSession(): Promise<boolean> {
+/** Advanced when the session ends or the runtime is disposed: a later timer or result of the old one does nothing. */
+let authRefreshEpoch = 0;
+const authRefreshBackoff = new AuthRefreshBackoff();
+/**
+ * The one renewal of the account session (auth/refresh.mjs). Its callers: the renewal timer
+ * (scheduleAuthRefresh), the server API's 401 retry, Device Link's auth failure, the first startup,
+ * /api/auth/refresh. As the desktop's refresh(): one at a time, a caller during a retry's wait gets
+ * false instead of a request, and the server API's 401 after a network failure may bring the retry
+ * forward (`serverRejectedToken`, AuthRefreshBackoff). Not refused while a desktop holds the profile
+ * (the exception C); only /api/auth/refresh is, by the service gate.
+ */
+async function refreshAuthSession(options?: { serverRejectedToken?: boolean }): Promise<boolean> {
   if (authClosed) return false;
+  const epoch = authRefreshEpoch;
+  if (options?.serverRejectedToken && authRefreshBackoff.serverRejectedToken(epoch))
+    armAuthRefreshTimer(epoch, authRefreshBackoff.runtimeRemaining(epoch));
   if (authRefreshFlight) return authRefreshFlight;
+  if (authRefreshBackoff.runtimeRemaining(epoch) > 0) return false;
+  clearAuthRefreshTimer();
+  authRefreshBackoff.startRuntimeAttempt(epoch);
   authRefreshFlight = performAuthRefresh().finally(() => { authRefreshFlight = null; });
   return authRefreshFlight;
 }
+function clearAuthRefreshTimer(): void {
+  if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+}
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+/** An access token already due when it arrives (a skewed clock) renews after this, not in a loop. */
+const DUE_ACCESS_TOKEN_RENEWAL_DELAY_MS = 60_000;
+/**
+ * The desktop's scheduleRefresh: renew at the access token's exp minus 300 s (authTokenClaims.ts
+ * accessTokenRefreshDelayMs; the token lives about 60 minutes, inferred, not verified on the
+ * server). A token that is not a JWT with an exp schedules nothing, as on the desktop.
+ */
+function scheduleAuthRefresh(epoch = authRefreshEpoch): void {
+  if (authClosed || epoch !== authRefreshEpoch) return;
+  authRefreshBackoff.clear();
+  clearAuthRefreshTimer();
+  if (!currentSessionToken) return;
+  let delay: number;
+  try { delay = accessTokenRefreshDelayMs(currentSessionToken, Date.now()); } catch { return; }
+  if (!Number.isFinite(delay)) return;
+  armAuthRefreshTimer(epoch, delay > 0 ? delay : DUE_ACCESS_TOKEN_RENEWAL_DELAY_MS);
+}
+/** The desktop's scheduleRefreshRetryAfterTransientFailure: retry with its jittered backoff. */
+function deferAuthRefresh(epoch: number, error: unknown): void {
+  if (authClosed || epoch !== authRefreshEpoch) return;
+  const deferred = error instanceof HostRefreshDeferredError ? error : null;
+  const delay = authRefreshBackoff.defer(epoch, deferred?.retryAt, deferred?.networkFailure ?? false);
+  armAuthRefreshTimer(epoch, delay);
+}
+function armAuthRefreshTimer(epoch: number, delay: number): void {
+  clearAuthRefreshTimer();
+  const due = Date.now() + delay;
+  const fire = () => {
+    refreshTimer = null;
+    if (authClosed || epoch !== authRefreshEpoch) return;
+    // A long wait is armed in chunks the timer can hold, without moving its deadline.
+    const remaining = Math.max(due - Date.now(), authRefreshBackoff.runtimeRemaining(epoch));
+    if (remaining > 0) { refreshTimer = setTimeout(fire, Math.min(remaining, MAX_TIMER_DELAY_MS)); refreshTimer.unref(); return; }
+    void refreshAuthSession();
+  };
+  refreshTimer = setTimeout(fire, Math.min(delay, MAX_TIMER_DELAY_MS));
+  refreshTimer.unref();
+}
 async function performAuthRefresh(): Promise<boolean> {
+  const epoch = authRefreshEpoch;
   try {
     const user = await resolveAccountUser();
     if (user) {
       accountUser = user;
       account = { authenticated: true, realm: account.realm ?? resolveHostRegion() };
       eventHub.publish({ type: 'auth_changed', ...projectAuthState() });
+      scheduleAuthRefresh(epoch);
       return true;
     }
+    deferAuthRefresh(epoch, null);
     return false;
   } catch (error) {
-    if (isDefinitiveRefreshError(error) || error instanceof HostCrossRegionPersonalAccountError) {
+    // Only a definitive rejection of the token still stored, or a stored session that is gone, ends
+    // the session (in this process; no stored credential is deleted). Anything else renews again later.
+    if (isDefinitiveRefreshError(error) || error instanceof HostSessionMissingError || error instanceof HostCrossRegionPersonalAccountError) {
       // Refresh may belong to an admitted HTTP request. Raise the boundary now,
       // but let that request unwind before waiting for the HTTP drain.
       void invalidateHostSession('account-unavailable').catch(error => {
         console.warn('[host] expired-account cleanup failed:', error instanceof Error ? error.message : 'cleanup failed');
       });
-    }
+    } else deferAuthRefresh(epoch, error);
     console.warn('[host] auth refresh failed:', error instanceof Error ? error.message : String(error));
     return false;
   }
@@ -489,6 +557,7 @@ function invalidateHostSession(_reason: string): Promise<void> {
   if (invalidation) return invalidation;
   const release = beginAppSessionBoundary();
   account = { authenticated: false, realm: account.realm, error: 'Sign in again with cindy-host login' };
+  endAuthRefreshes();
   currentSessionToken = null;
   remoteIdentityReady = false;
   invalidation = Promise.resolve().then(async () => {
@@ -519,12 +588,11 @@ const serverApi = createHostServerApi({
   invalidate: invalidateHostSession, locale: () => Intl.DateTimeFormat().resolvedOptions().locale,
 });
 
-function schedulePeriodicRefresh(): void {
-  if (refreshTimer) clearInterval(refreshTimer);
-  refreshTimer = setInterval(() => {
-    void refreshAuthSession();
-  }, 30 * 60 * 1000);
-  refreshTimer.unref();
+/** No renewal of the ended session or disposed runtime runs or is armed again. */
+function endAuthRefreshes(): void {
+  authRefreshEpoch += 1;
+  clearAuthRefreshTimer();
+  authRefreshBackoff.clear();
 }
 /** Claude subscription state read once per boot; never on the health path. */
 let claudeState: Record<string, unknown> | null = null;
@@ -1428,7 +1496,7 @@ const serverDeps = {
       fetch: (input, init) => hostAuthFetch(input, init),
     });
     const result = await withCrossProcessLock(
-      path.join(resolveHostDataDir(), '.cindy-auth-accounts-v1.lock'),
+      path.join(resolveHostDataDir(), AUTH_ACCOUNT_VAULT_LOCK_FILE),
       { label: 'auth-account-vault', waitMs: 5000 },
       async (lock) => {
         if (!lock.held) throw new Error('Saved account credentials are busy; retry logout');
@@ -1822,7 +1890,7 @@ async function disposeOwnerRuntime(): Promise<void> {
   const remote = deviceLink;
   deviceLink = null;
   remoteIdentityReady = false;
-  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+  endAuthRefreshes();
   coexistenceMonitor?.stop(); coexistenceMonitor = null;
   const errors: unknown[] = [];
   const attempt = async (operation: () => unknown) => {
@@ -2000,13 +2068,14 @@ server.listen(PORT, '127.0.0.1', () => {
     }
     await ensureRuntime(owner);
     startDeviceLink();
-    if (account.authenticated) { schedulePeriodicRefresh(); return; }
+    if (account.authenticated) { scheduleAuthRefresh(); return; }
     const state = await readAdoptedSessionState({
       userDataDir: resolveHostDataDir(),
       keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
     });
     account = { authenticated: false, realm: state.realm };
-    if (state.authenticated && await refreshAuthSession()) schedulePeriodicRefresh();
+    // A renewal that succeeds schedules the next one; one that fails for now retries with backoff.
+    if (state.authenticated) await refreshAuthSession();
   })().catch(async (error: unknown) => {
     const blocked = runtime.state === 'blocked';
     try { await disposeOwnerRuntime(); }
@@ -2023,7 +2092,7 @@ const stop = () => {
   if (shuttingDown) return;
   shuttingDown = true;
   authClosed = true;
-  if (refreshTimer) clearInterval(refreshTimer);
+  endAuthRefreshes();
   const requestsDrained = server.stopAccepting();
   const releaseOwnerBoundary = beginAppSessionBoundary();
   // As the desktop's quit ('reap-codex-tool-trees', a sync step before the Maker shutdown):

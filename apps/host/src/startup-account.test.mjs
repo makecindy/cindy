@@ -6,11 +6,14 @@ import { mapMembershipToAuthUser } from '../../desktop/src/shared/authUser.ts';
 import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-identity.mjs';
 import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.ts';
 import { resolveRuntimeDeviceId } from '../../desktop/src/main/deviceId.ts';
-import { decodeAccessTokenOrgSlug } from '../../desktop/src/main/authTokenClaims.ts';
+import { accessTokenRefreshDelayMs, decodeAccessTokenOrgSlug } from '../../desktop/src/main/authTokenClaims.ts';
 import { createServer } from 'node:http';
-import { CindyAuthClient as RealAuthClient, parseAuthSessionRecord, serializeAuthSessionRecord } from '@cindy/auth-client';
+import { AuthApiError, CindyAuthClient as RealAuthClient, parseAuthSessionRecord, serializeAuthSessionRecord } from '@cindy/auth-client';
 import { assertHostSessionRegion } from './auth/region-policy.ts';
-import { refreshHostSession as realRefreshHostSession } from './auth/refresh.mjs';
+import { HostRefreshDeferredError, HostSessionMissingError, refreshHostSession as realRefreshHostSession } from './auth/refresh.mjs';
+import { AuthRefreshBackoff } from '../../desktop/src/main/authRefreshBackoff.ts';
+import { isDefinitiveRefreshError } from '../../desktop/src/main/authRefreshError.ts';
+import { HostCrossRegionPersonalAccountError } from './auth/region-policy.ts';
 import { projectAdoptedSession } from './credentials/session.mjs';
 import { OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.ts';
 import { createDesktopScanner, HostProfileInUseError } from './agent/profile-coexistence.ts';
@@ -57,6 +60,8 @@ function setup(overrides = {}) {
     createCredentialStore: async () => ({ read: () => null }), createRequire: () => () => ({ machineIdSync: () => 'test-device' }),
     CindyAuthClient: class { async getMe() { return { membership: { id: 'account-b' } }; } },
     refreshHostSession: async () => ({ sessionToken: 'synthetic-test-value' }),
+    // The account-vault lock of the profile (auth/refresh.mjs); the cases here hold no other process.
+    hostAccountVaultLock: () => task => task(),
     ACCOUNT_DEFAULT_MODEL: 'test-model', ACCOUNT_DEFAULT_EFFORT: 'medium',
     // The former startup refresh swallowed mismatch errors and still opened storage.
     refreshAuthSession: async () => false,
@@ -206,4 +211,134 @@ test('a desktop that opens the profile refuses the start: lease released, blocke
   const allowed = setup(ports);
   await assert.rejects(allowed.start('account-b'), /database opened/);
   assert.equal(allowed.opens.length, 1);
+});
+
+/*
+ * 测试价值（C，审核方 2026-11-17 定的第 6 步与“四个入口走同一个函数”）
+ * - 生产入口：main.ts 的 refreshAuthSession / performAuthRefresh / scheduleAuthRefresh / deferAuthRefresh
+ *   与 resolveAccountUser（按源码取出），用真的 refreshHostSession、AuthRefreshBackoff 与
+ *   accessTokenRefreshDelayMs，内存里的凭据记录，假的账号服务。
+ * - 规则：续期排在 access token 的 exp 减 300 秒（与桌面 scheduleRefresh 同一个函数），不再是固定 30 分钟；
+ *   暂时失败按桌面的退避重试；只有确定失败才结束会话、不再排；同时到来的调用方共用一次续期。
+ * - 现有覆盖缺口：之前每 30 分钟一次，失败后不重排；没有用例看排期。
+ * - 最小失败输入：exp 在一小时后的 access token。tier：unit（node:test 的假时钟）。
+ */
+const renewalSource = ['refreshAuthSession', 'clearAuthRefreshTimer', 'scheduleAuthRefresh', 'deferAuthRefresh',
+  'armAuthRefreshTimer', 'performAuthRefresh', 'endAuthRefreshes', 'resolveAccountUser'];
+const renewalConstants = ['MAX_TIMER_DELAY_MS', 'DUE_ACCESS_TOKEN_RENEWAL_DELAY_MS'];
+const renewalParts = [];
+(function visitRenewal(node) {
+  if (ts.isFunctionDeclaration(node) && renewalSource.includes(node.name?.text)) renewalParts.push(node.getText(source));
+  else if (ts.isVariableStatement(node) && node.declarationList.declarations.some(d => renewalConstants.includes(d.name.getText(source))))
+    renewalParts.push(node.getText(source));
+  else ts.forEachChild(node, visitRenewal);
+})(source);
+assert.equal(renewalParts.length, renewalSource.length + renewalConstants.length, 'every renewal function is found in main.ts');
+const renewalCompiled = ts.transpileModule(`
+let currentSessionToken = null, accountUser = null, currentDeviceId = null, remoteIdentityReady = false;
+let account = { authenticated: true, realm: 'global' };
+const runtime = { owner: null };
+let refreshTimer = null, authClosed = false, authRefreshFlight = null, authRefreshEpoch = 0;
+const authRefreshBackoff = new AuthRefreshBackoff(() => Date.now(), () => 0);
+${renewalParts.join('\n').replaceAll('import.meta.url', "'file:///test/main.ts'")}
+return { refresh: refreshAuthSession, schedule: scheduleAuthRefresh, end: endAuthRefreshes, adopt: (token) => { currentSessionToken = token; },
+  token: () => currentSessionToken, timer: () => refreshTimer };
+`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+
+const fakeJwt = (payload) => ['{"alg":"none"}', JSON.stringify(payload), 'sig'].map((part, i) => (i < 2 ? Buffer.from(part).toString('base64url') : part)).join('.');
+
+function renewalHarness(t, server) {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_800_000_000_000 });
+  const records = new Map([[AUTH_SESSION_KEY, serializeAuthSessionRecord('global', server.current())]]);
+  const store = { read: (key) => records.get(key) ?? null, write: (key, value) => records.set(key, value) };
+  const invalidated = [];
+  const deps = {
+    mapMembershipToAuthUser, decodeAccessTokenOrgSlug, resolveRuntimeDeviceId, resolveSessionDevice, canRegisterHostDevice, AUTH_SESSION_KEY,
+    resolveHostDataDir: () => 'isolated-test-profile', resolveHostRegion: () => 'global', hostPackageRegion: () => 'global',
+    readAuthEndpoints: () => ({ authApiBaseUrl: 'https://example.invalid' }), assertHostSessionRegion, hostAuthFetch: () => assert.fail('no network'),
+    createCredentialStore: async () => store, createRequire: () => () => ({ machineIdSync: () => 'test-device' }),
+    CindyAuthClient: class { refresh(token) { return server.refresh(token); } async getMe() { return { membership: server.membership, passportId: 'passport-a' }; } },
+    refreshHostSession: realRefreshHostSession, hostAccountVaultLock: () => task => task(),
+    AuthRefreshBackoff, accessTokenRefreshDelayMs, isDefinitiveRefreshError, HostSessionMissingError, HostRefreshDeferredError,
+    HostCrossRegionPersonalAccountError,
+    eventHub: { publish() {} }, projectAuthState: () => ({}),
+    invalidateHostSession: async (reason) => { invalidated.push(reason); },
+  };
+  const h = new Function(...Object.keys(deps), renewalCompiled)(...Object.values(deps));
+  const settle = async () => { for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve)); };
+  return { ...h, invalidated, settle, stored: () => parseAuthSessionRecord(records.get(AUTH_SESSION_KEY))?.refreshToken };
+}
+
+/** A fake auth server: each renewal rotates the refresh token and issues an access token valid for an hour. */
+function renewalServer() {
+  let current = 'fixture-r0';
+  let next = 0;
+  let failure = null;
+  const requests = [];
+  return {
+    requests, membership: { id: 'member-a', kind: 'personal', role: 'owner', displayName: 'Fixture', email: null, orgId: null, orgName: null },
+    current: () => current,
+    fail(error) { failure = error; },
+    async refresh(token) {
+      requests.push(Date.now());
+      if (failure) throw failure;
+      if (token !== current) throw new AuthApiError('INVALID_REFRESH_TOKEN', 401, 'rotated');
+      current = `fixture-r${++next}`;
+      return { accessToken: fakeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 }), refreshToken: current, membership: this.membership };
+    },
+  };
+}
+
+test('the next renewal is armed at the access token\'s exp minus 300 s and goes through the one renewal', async (t) => {
+  const server = renewalServer();
+  const h = renewalHarness(t, server);
+  const start = Date.now();
+  h.adopt(fakeJwt({ exp: Math.floor(start / 1000) + 3600 }));
+  h.schedule();
+  t.mock.timers.tick(3300_000 - 1);
+  await h.settle();
+  assert.equal(server.requests.length, 0, 'not before exp - 300 s');
+  t.mock.timers.tick(1);
+  await h.settle();
+  assert.deepEqual(server.requests, [start + 3300_000]);
+  assert.equal(h.stored(), 'fixture-r1');
+  // The new access token arms the next one, again at its exp minus 300 s.
+  t.mock.timers.tick(3300_000);
+  await h.settle();
+  assert.deepEqual(server.requests, [start + 3300_000, start + 6600_000]);
+  // Callers at the same moment (the 401 retry, Device Link, /api/auth/refresh) share one renewal.
+  await Promise.all([h.refresh(), h.refresh(), h.refresh()]);
+  assert.equal(server.requests.length, 3);
+});
+
+test('a renewal failing for now retries with the desktop\'s backoff; a definitive one ends the session and arms nothing', async (t) => {
+  const server = renewalServer();
+  const h = renewalHarness(t, server);
+  server.fail(new AuthApiError('NETWORK_ERROR', 0, 'offline'));
+  assert.equal(await h.refresh(), false);
+  assert.ok(h.timer(), 'a retry is armed');
+  assert.equal(await h.refresh(), false, 'a caller during the wait gets false');
+  assert.equal(server.requests.length, 1, 'and sends nothing');
+  t.mock.timers.tick(60_000);
+  await h.settle();
+  assert.equal(server.requests.length, 2, 'retried after the first backoff step (1 minute here)');
+  // As the desktop: after a network failure, the server API's 401 brings one attempt forward.
+  assert.equal(await h.refresh({ serverRejectedToken: true }), false, 'the network is still down');
+  assert.equal(server.requests.length, 3, 'the 401 evidence sent one attempt at once');
+  assert.equal(await h.refresh(), false, 'without new evidence, the wait holds');
+  assert.equal(server.requests.length, 3);
+  server.fail(null);
+  t.mock.timers.tick(120_000);
+  await h.settle();
+  assert.equal(server.requests.length, 4, 'the second step is 2 minutes');
+  assert.equal(h.stored(), 'fixture-r1');
+  assert.deepEqual(h.invalidated, []);
+
+  server.fail(new AuthApiError('INVALID_REFRESH_TOKEN', 401, 'revoked'));
+  const pending = h.refresh();
+  // The desktop's re-reads of the stored sources before a rejection counts (250 ms, then 1 s).
+  for (const step of [250, 1000]) { await h.settle(); t.mock.timers.tick(step); }
+  assert.equal(await pending, false);
+  assert.deepEqual(h.invalidated, ['account-unavailable']);
+  assert.equal(h.timer(), null, 'nothing is armed after a definitive failure');
 });
