@@ -448,6 +448,33 @@ describe('Host copies of desktop expressions', () => {
       + '(release table section 7, item 32)').toBe(desktop.replaceAll('generatedImageDelivery.start(', 'delivery.start('));
   });
 
+  // 规则：Host 的静默停止排期（apps/host/src/agent/silent-stop.ts 的 schedule）照桌面回合观察的终态分支写：
+  // 当前代次的静默停止终态排一次决策、重复的不再排，并留住这一代次给续跑（放行表第七节第 36 项）。这里钉住桌面那段的
+  // 文本（去掉缩进、空行与注释后的 sha256）。
+  // 失效后果：桌面改了排期或留住代次的条件，Host 那份不跟着改，静默停止在两边续不续、何时被丢弃不同。
+  // 变红时：对照桌面新文本改 Host 的 schedule（或在第 36 项写明为什么不跟），再更新这里的指纹。
+  it('pins the desktop silent-stop terminal scheduling that the Host copy follows', () => {
+    const text = between(read(path.join(desktopMain, 'maker-ipc/sessionTurnObserver.ts')), 'const isSilentStop =',
+      'if (isCurrentGeneration) deps.silentStopTurnLeaseGate.supersede(session.id);');
+    const fingerprint = createHash('sha256').update(text).digest('hex');
+    expect(fingerprint, 'sessionTurnObserver.ts silent-stop terminal changed: compare apps/host/src/agent/silent-stop.ts schedule '
+      + '(release table section 7, item 36), then update this fingerprint').toBe(
+      'c5c91ef223262768c2b9dd12b137e0a70a82711985cc8618646a03c3488bae0b');
+  });
+
+  // 规则：Host 的静默停止决策时机（silent-stop.ts 的 decideLater，以及 turn-executor.mjs 对静默停止 done 不收尾、
+  // 不交给协调器、延后结算改动记录）照桌面事件准备的静默停止分支写（放行表第七节第 36 项）。钉住桌面那段的文本。
+  // 失效后果：桌面改了静默停止 done 的处理或决策的延时，Host 那份不跟着改。
+  // 变红时：对照桌面新文本改 Host 那份（或在第 36 项写明为什么不跟），再更新这里的指纹。
+  it('pins the desktop silent-stop decision timing that the Host copy follows', () => {
+    const text = between(read(path.join(desktopMain, 'maker-ipc/sessionEventPreparation.ts')), 'const carriesSilentStop =',
+      '}, SILENT_STOP_DECISION_DELAY_MS);');
+    const fingerprint = createHash('sha256').update(text).digest('hex');
+    expect(fingerprint, 'sessionEventPreparation.ts silent-stop branch changed: compare apps/host/src/agent/silent-stop.ts decideLater '
+      + 'and the silent-stop done in turn-executor.mjs (release table section 7, item 36), then update this fingerprint').toBe(
+      '26b5e363262ad7e18d1b5f2cc350fe39a6b158ea4af6519ae54e7a290e1f887e');
+  });
+
   // 规则：视觉桥的提示文案与去重时间，是桌面 broadcastVisionBridgeEvent 的同一段。
   // 失效后果：Host 上的视觉桥提示与桌面不同或重复弹出。
   it('sends the vision bridge notices with the desktop text and dedup', () => {
