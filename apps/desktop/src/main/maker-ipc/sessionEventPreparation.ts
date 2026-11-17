@@ -37,7 +37,7 @@ import {
 import { SilentStopTurnLeaseGate } from './sessionTurnLease.js';
 import { ProductTurnUsageTargetTracker, ProductTurnWallClockTracker } from './turnWallClock.js';
 import { createWorkerTurnStartSequencer } from './workerTurnStartSequencer.js';
-import { SilentStopAutoResumeGuard } from './silentStopAutoResume.js';
+import { SILENT_STOP_DECISION_DELAY_MS, SilentStopAutoResumeGuard } from './silentStopAutoResume.js';
 import { AutoResumeBookkeeping } from './autoResumeBookkeeping.js';
 import {
   endsForegroundTurnByStatus,
@@ -374,7 +374,7 @@ export function prepareSessionEvent(
           silentStopTurnLeaseId!,
           silentStopTurnOrigin,
         );
-      }, 1_500);
+      }, SILENT_STOP_DECISION_DELAY_MS);
     }
   }
   // 提前声明在终止型 error 块与 done/terminal 边界块两处均需使用的持久化条件标志。
