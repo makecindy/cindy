@@ -12916,7 +12916,7 @@
           "reasoningDominated": "思考已消耗本次輸出的大部分預算，回覆可能不完整。建議降低推理強度，或先壓縮對話記錄，再繼續。",
           "generic": "模型已達到輸出長度上限，本輪回覆可能不完整。可以傳送新訊息繼續；若反覆觸發，請降低推理強度或先壓縮對話記錄。",
           "join": "{{usage}}{{guidance}}",
-          "silentStopExhausted": "模型連續多次回傳空回應，自動續跑已暫停。"
+          "silentStopExhausted": "偵測到空回應，自動續跑已暫停。"
         },
         "permission": {
           "autoReviewUnavailable": "自動審批沒完成，請確認要不要允許這次操作。",
@@ -18967,7 +18967,7 @@
       "steerFailed": "插話失敗：{{message}}",
       "qrExpired": "QR 碼已過期，請重新開始",
       "registrationFailed": "建立失敗，請稍後重試",
-      "silentStopExhausted": "模型連續多次返回空響應，自動續跑已暫停。點選「繼續」恢復任務。",
+      "silentStopExhausted": "偵測到空回應，自動續跑已暫停。",
       "executionResultUnavailable": "未能取得執行結果，已停止自動接續。可以請助手檢查既有的執行結果。",
       "outputLimit": "模型已達到輸出長度上限，本輪回覆可能不完整。可以傳送新訊息繼續；若反覆觸發，請降低推理強度或先壓縮對話記錄。",
       "outputLimitReasoning": "思考已消耗本次輸出的大部分預算，回覆可能不完整。建議降低推理強度，或先壓縮對話記錄，再繼續。",

@@ -13076,7 +13076,7 @@
           "reasoningDominated": "El razonamiento consumió la mayor parte del presupuesto de salida, así que la respuesta puede estar incompleta. Baja la intensidad de razonamiento o compacta antes la conversación y luego continúa.",
           "generic": "El modelo alcanzó el límite de longitud de salida, así que esta respuesta puede estar incompleta. Envía un mensaje nuevo para continuar. Si sigue pasando, baja la intensidad de razonamiento o compacta antes la conversación.",
           "join": "{{usage}} {{guidance}}",
-          "silentStopExhausted": "El modelo devolvió respuestas vacías varias veces seguidas, así que la continuación automática está en pausa."
+          "silentStopExhausted": "Se ha detectado una respuesta vacía. La continuación automática está en pausa."
         },
         "permission": {
           "autoReviewUnavailable": "La revisión automática no terminó. Confirma si quieres permitir esta acción.",
@@ -19224,7 +19224,7 @@
       "steerFailed": "Error de redirección: {{message}}",
       "qrExpired": "El código QR venció, empieza de nuevo",
       "registrationFailed": "No se pudo crear, inténtalo de nuevo más tarde",
-      "silentStopExhausted": "El modelo devolvió respuestas vacías repetidamente; la reanudación automática está en pausa. Haz clic en \"Continuar\" para reanudar la tarea.",
+      "silentStopExhausted": "Se ha detectado una respuesta vacía. La continuación automática está en pausa.",
       "executionResultUnavailable": "No se puede recuperar el resultado de la ejecución. La continuación automática se ha detenido. Pídele al asistente que verifique el resultado de la ejecución existente.",
       "outputLimit": "El modelo alcanzó su límite de salida, por lo que esta respuesta puede estar incompleta. Envía un nuevo mensaje para continuar. Si se repite, reduce la intensidad de razonamiento o compacta primero el historial de la conversación.",
       "outputLimitReasoning": "El razonamiento consumió la mayor parte del presupuesto de salida de esta solicitud, por lo que la respuesta puede estar incompleta. Reduce la intensidad de razonamiento o compacta el historial de la conversación antes de continuar.",

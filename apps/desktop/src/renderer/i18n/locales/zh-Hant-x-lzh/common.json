@@ -12916,7 +12916,7 @@
           "reasoningDominated": "思已耗此番所出之大半，覆或不全。宜減思之深淺，或先壓縮言談錄，再續。",
           "generic": "模型所出已達長度上限，此輪之覆或不全。可遣新訊以續；若屢見之，請減思之深淺，或先壓縮言談錄。",
           "join": "{{usage}}{{guidance}}",
-          "silentStopExhausted": "模型屢返空應，自動續行已暫止。"
+          "silentStopExhausted": "察得空答，自動續行已暫止。"
         },
         "permission": {
           "autoReviewUnavailable": "自動審批未竟，請確認是否許此操作。",
@@ -18967,7 +18967,7 @@
       "steerFailed": "插話未成：{{message}}",
       "qrExpired": "二維碼已逾時，請重新起始",
       "registrationFailed": "立之未成，請稍後再試",
-      "silentStopExhausted": "模型屢返空答，自動續行已暫止。點「續」以復差事。",
+      "silentStopExhausted": "察得空答，自動續行已暫止。",
       "executionResultUnavailable": "未得行之結果，自動接續已止。可請助手察既有之結果。",
       "outputLimit": "模型已達輸出之限，此答或有不全。可遣新訊以續；若屢至此限，宜減思之深淺，或先壓縮言談錄。",
       "outputLimitReasoning": "思考已耗本次輸出預算之大半，此答或有不全。宜減思之深淺，或先壓縮言談錄，而後續之。",

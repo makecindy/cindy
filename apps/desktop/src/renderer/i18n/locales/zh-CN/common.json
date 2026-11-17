@@ -12916,7 +12916,7 @@
           "reasoningDominated": "思考已消耗本次输出的大部分预算，回复可能不完整。建议降低推理强度，或先压缩对话记录，再继续。",
           "generic": "模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。",
           "join": "{{usage}}{{guidance}}",
-          "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。"
+          "silentStopExhausted": "检测到空响应，自动续跑已暂停。"
         },
         "permission": {
           "autoReviewUnavailable": "自动审批没完成，请确认要不要允许这次操作。",
@@ -18967,7 +18967,7 @@
       "steerFailed": "插话失败：{{message}}",
       "qrExpired": "二维码已过期，请重新开始",
       "registrationFailed": "创建失败，请稍后重试",
-      "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。点击「继续」恢复任务。",
+      "silentStopExhausted": "检测到空响应，自动续跑已暂停。",
       "executionResultUnavailable": "未能取回执行结果，已停止自动续接。可以让助手检查已有的执行结果。",
       "outputLimit": "模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。",
       "outputLimitReasoning": "思考已消耗本次输出的大部分预算，回复可能不完整。建议降低推理强度，或先压缩对话记录，再继续。",

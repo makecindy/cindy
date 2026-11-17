@@ -13076,7 +13076,7 @@
           "reasoningDominated": "O raciocínio consumiu a maior parte do orçamento de saída, pelo que a resposta pode estar incompleta. Reduza o esforço de raciocínio ou compacte primeiro a conversa e, depois, continue.",
           "generic": "O modelo atingiu o limite de comprimento de saída, pelo que esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se voltar a acontecer, reduza o esforço de raciocínio ou compacte primeiro a conversa.",
           "join": "{{usage}} {{guidance}}",
-          "silentStopExhausted": "O modelo devolveu respostas vazias várias vezes seguidas, pelo que a continuação automática está em pausa."
+          "silentStopExhausted": "Foi detetada uma resposta vazia. A continuação automática está em pausa."
         },
         "permission": {
           "autoReviewUnavailable": "A revisão automática não terminou. Confirme se pretende permitir esta ação.",
@@ -19224,7 +19224,7 @@
       "steerFailed": "Falha na orientação: {{message}}",
       "qrExpired": "O código QR expirou, recomece",
       "registrationFailed": "Falha na criação, tente novamente mais tarde",
-      "silentStopExhausted": "O modelo devolveu repetidamente respostas vazias; a retoma automática está em pausa. Clique em \"Continuar\" para retomar a tarefa.",
+      "silentStopExhausted": "Foi detetada uma resposta vazia. A continuação automática está em pausa.",
       "executionResultUnavailable": "Não foi possível obter o resultado da execução. A continuação automática foi interrompida. Peça ao assistente para verificar o resultado da execução existente.",
       "outputLimit": "O modelo atingiu o limite de saída, pelo que esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se isto se repetir, reduza o esforço de raciocínio ou compacte primeiro o histórico da conversa.",
       "outputLimitReasoning": "O raciocínio consumiu a maior parte do orçamento de saída deste pedido, pelo que a resposta pode estar incompleta. Reduza o esforço de raciocínio ou compacte o histórico da conversa antes de continuar.",

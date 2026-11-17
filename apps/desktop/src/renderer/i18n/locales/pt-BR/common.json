@@ -13076,7 +13076,7 @@
           "reasoningDominated": "O raciocínio consumiu a maior parte do orçamento de saída, então a resposta pode estar incompleta. Reduza o esforço de raciocínio ou compacte a conversa primeiro e depois continue.",
           "generic": "O modelo atingiu o limite de tamanho da saída, então esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se continuar acontecendo, reduza o esforço de raciocínio ou compacte a conversa primeiro.",
           "join": "{{usage}} {{guidance}}",
-          "silentStopExhausted": "O modelo retornou respostas vazias várias vezes seguidas, então a continuação automática foi pausada."
+          "silentStopExhausted": "Foi detectada uma resposta vazia. A continuação automática foi pausada."
         },
         "permission": {
           "autoReviewUnavailable": "A revisão automática não terminou. Confirme se você quer permitir esta ação.",
@@ -19224,7 +19224,7 @@
       "steerFailed": "Falha ao redirecionar: {{message}}",
       "qrExpired": "O código QR expirou. Comece novamente",
       "registrationFailed": "Falha na criação. Tente novamente mais tarde",
-      "silentStopExhausted": "O modelo retornou respostas vazias repetidamente; a retomada automática está pausada. Clique em \"Continuar\" para retomar a tarefa.",
+      "silentStopExhausted": "Foi detectada uma resposta vazia. A continuação automática foi pausada.",
       "executionResultUnavailable": "Não foi possível obter o resultado da execução. A continuação automática foi interrompida. Peça ao assistente para verificar o resultado da execução existente.",
       "outputLimit": "O modelo atingiu o limite de saída, então esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se isso se repetir, reduza o esforço de raciocínio ou compacte primeiro o histórico da conversa.",
       "outputLimitReasoning": "O raciocínio consumiu a maior parte do orçamento de saída desta solicitação, então a resposta pode estar incompleta. Reduza o esforço de raciocínio ou compacte o histórico da conversa antes de continuar.",
