@@ -205,7 +205,8 @@ test("protocol compatibility keeps rules on the front page and one record per fi
 	const frontPage = "docs/dev-rules/protocol-compatibility.md";
 	const recordsDir = "docs/dev-rules/protocol-compatibility";
 	const frontPageMaxBytes = 16 * 1024;
-	const frontPageBytes = Buffer.byteLength(readText(frontPage));
+	// Count content, not checkout line endings: a CRLF checkout on Windows must get the same budget.
+	const frontPageBytes = Buffer.byteLength(readText(frontPage).replace(/\r\n/g, "\n"));
 	assert.ok(
 		frontPageBytes <= frontPageMaxBytes,
 		`${frontPage} is the must-read rules page (${frontPageBytes} bytes > ${frontPageMaxBytes}). ` +
@@ -457,7 +458,7 @@ test("rule docs declare when to read them and the generated index is current", (
 		.filter((file) => file && fs.existsSync(path.join(ROOT, file)));
 	assert.deepEqual(ruleProblems(rules, tracked), []);
 	assert.equal(
-		readText(RULE_INDEX_PATH),
+		readText(RULE_INDEX_PATH).replace(/\r\n/g, "\n"),
 		renderIndex(rules),
 		`${RULE_INDEX_PATH} is stale; run pnpm rules:index`,
 	);
@@ -515,7 +516,7 @@ test("rule declarations use anchored, directory-aware path patterns", () => {
 const ROOT_AGENTS_MAX_BYTES = 10_500;
 const ROOT_AGENTS_MAX_ENTRIES = 25;
 test("root AGENTS.md stays within its size and entry budget", () => {
-	const agents = readText("AGENTS.md");
+	const agents = readText("AGENTS.md").replace(/\r\n/g, "\n");
 	const bytes = Buffer.byteLength(agents, "utf8");
 	const entries = agents.split(/\r?\n/).filter((line) => line.startsWith("- ")).length;
 	assert.ok(

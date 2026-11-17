@@ -224,7 +224,7 @@ function main(argv) {
 			.map(toPosix);
 		const problems = ruleProblems(rules, tracked);
 		const current = fs.existsSync(path.join(root, RULE_INDEX_PATH))
-			? fs.readFileSync(path.join(root, RULE_INDEX_PATH), "utf8")
+			? fs.readFileSync(path.join(root, RULE_INDEX_PATH), "utf8").replace(/\r\n/g, "\n")
 			: "";
 		if (current !== renderIndex(rules)) problems.push(`${RULE_INDEX_PATH} 不是最新，运行 pnpm rules:index`);
 		for (const problem of problems) console.error(problem);
