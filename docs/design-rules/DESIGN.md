@@ -22,6 +22,7 @@
 | 开关、滑杆 | `Switch`、`Slider`、`EffortSlider` | §15.17、§15.18 |
 | 复选框 | `components/ui/checkbox.tsx` 的 `Checkbox` | §4 Desktop settings controls |
 | 加载中 | `components/ui/spinner.tsx` 的 `Spinner` | §14.4 |
+| 下载、安装进度 | `components/ui/download-meter.tsx` 的 `DownloadMeter` | §4 Download progress |
 | 错误与通知 | `ErrorNotice`；短通知用 `lib/toast.ts` | §4 Error notices、§4 Toast |
 | 展开收起 | `components/ui/collapse.tsx` 的 `Collapse` | §14.4 |
 | 聊天内容 | `chatChrome.ts`、`activityRowChrome.ts` | §4 Desktop chat and operation authorization |
@@ -674,6 +675,26 @@ Button (user decision, 2026-11-09), and dismissal uses its quiet tone. Eligibili
 独立的加载、保存、执行失败，以及需要用户处理的错误横幅使用卡片；字段校验、列表项状态、消息发送状态、已经有完整容器的内嵌工具结果、短暂 Toast（含 §4 Inputs & Forms 的表单提交服务失败）与系统原生警告保留原有形态，避免卡片套卡片。手机采用紧凑布局：标题下集中放说明，右上角关闭代替重复的「忽略」按钮；重试、Fork 与详情入口共用可换行的操作区。按钮面板操作文字为 15/20、500、`textPrimary`，视觉底板最小 36pt，但点击热区保持至少 44pt。卡片内边距与说明到操作区的间距为 16pt，标题与说明间距为 8pt；按钮内水平留白 12pt、图标到文字 8pt，操作间距 12pt。空间不足时自然换行，不压缩留白来强塞一行。说明与详情入口为 13/18 常规字重、`textSecondary`，红色只用于 `statusError` 图标。iOS 原生表单使用 `NativeErrorNotice`，由现有 Section 提供卡片底色与圆角，不再嵌套第二层边框，保留 SwiftUI 文字换行。错误卡片不自行增加重试、自动恢复或 Fork 的适用范围。
 
 历史恢复操作命名为「在新任务中继续」，说明会保留对话记录与原任务，以及需要重新发送刚才的消息。图标必须与消息 Fork「开启一个新任务」入口一致，使用 `Split`；不使用侧栏新建任务的 `SquarePen`。
+
+### Download progress
+
+Desktop 上用户能看到的下载与安装进度（工具、运行时、模型、更新包、插件、Skill、壁纸等）统一使用
+`components/ui/download-meter.tsx` 的 `DownloadMeter`，数据为 Main 端统一生成的 `DownloadProgress`
+（工程约定见 [校验下载](../dev-rules/verified-downloads.md)「下载进度与界面」）。不在业务界面里另画进度条或
+自行格式化字节、速度与剩余时间。起因：2026-11-17 GitHub CLI 安装在重试与龟速时进度停住且无任何说明，
+用户以为卡死。
+
+- 三行结构：第一行名称（`text-12`、`--text-secondary`，过长截断）与整数百分比（`--text-tertiary`、
+  等宽数字，只有真正完成才显示 100%）；第二行 4px 胶囊进度条，轨道 `--surface-chip`、填充
+  `--text-primary`，宽度变化 150ms；第三行 `text-11` `--text-tertiary`，左侧状态、右侧速度与剩余时间。
+- 进度条不动时必须有文字说明：传输中左侧显示「已下载 / 总大小」，重试显示原因（网络较慢在换连接、
+  连接中断、超时、服务器繁忙）且右侧显示第几次尝试，校验、安装、排队、准备、暂停各有状态文字。
+  速度与剩余时间只在传输中显示，避免停住时残留旧速度。
+- 失败时状态行换成失败说明（`--error-flat`），填充改为 `--remote-status-failed`，并隐藏百分比。
+- 不使用循环动画或不确定进度的动效；大小未知时只显示已下载量。暂停、继续、取消等操作由所在界面
+  提供，组件只负责显示。`role="progressbar"` 的 `aria-valuetext` 汇总状态与速度，供读屏读取。
+- 启动页、壁纸缩略图等已登记的品牌或特定界面若不能放入三行结构，保留原外形，但状态文字与数值
+  仍取自同一份 `DownloadProgress` 和本组件导出的格式化函数。
 
 ### Dialog & Modal
 
