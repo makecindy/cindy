@@ -27,21 +27,22 @@ const message = (clientId: string, role: ChatMessage['role'], content = ''): Cha
   createdAt: timestamp,
 });
 function Subject({ mode }: { mode: string }) {
+  const multi = mode === 'multi' || mode === 'explicit-multi' || mode === 'mention-multi';
   const [stage, setStage] = useState(0);
   const [generation, setGeneration] = useState(0);
   const [turnFinished, setTurnFinished] = useState(false);
   const body =
-    mode === 'explicit' || mode === 'selection'
+    mode === 'explicit' || mode === 'explicit-multi' || mode === 'selection'
       ? '$xd-feishu 帮我读取方案。\n\n' +
         commandDirectiveSegments(directive)
           .map((part) => part.text)
           .join('')
-      : mode === 'mention'
+      : mode === 'mention' || mode === 'mention-multi'
         ? '帮我看看方案。\n\n' +
           mentionDirectiveSegments([{ name: 'XD Feishu', ghostId: '_ns__xd__xd-feishu' }])
             .map((part) => part.text)
             .join('')
-        : mode === 'multi' ? '读取飞书方案，再帮我查看 GitHub 的相关任务。' : '调用下 GitHub 插件。';
+        : multi ? '读取飞书方案，再帮我查看 GitHub 的相关任务。' : '调用下 GitHub 插件。';
   const messages: ChatMessage[] = [
     message('ask', 'user', body),
     ...(mode === 'selection' ? [] : [{
@@ -55,7 +56,7 @@ function Subject({ mode }: { mode: string }) {
         args: { document: 'fixture-plan' },
       },
     }]),
-    ...(mode === 'multi' ? [{
+    ...(multi ? [{
       ...message('github-call', 'tool_use'), toolName: 'mcp:cindy:ghost_call', toolUseId: 'github-call',
       toolInput: { ghost_id: 'cindy-github', namespace: null, tool: 'list_issues', args: {} },
     }] : []),
@@ -71,7 +72,7 @@ function Subject({ mode }: { mode: string }) {
           },
         ]
       : []),
-    ...(stage >= 2 && mode === 'multi' ? [{ ...message('github-result', 'tool_result', '{"ok":true}'), toolUseId: 'github-call' }] : []),
+    ...(stage >= 2 && multi ? [{ ...message('github-result', 'tool_result', '{"ok":true}'), toolUseId: 'github-call' }] : []),
     ...(stage >= 3
       ? [
           {

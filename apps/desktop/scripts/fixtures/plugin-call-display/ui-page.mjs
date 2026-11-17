@@ -28,6 +28,8 @@ export default {
       about: 'Historical mention upgrades only when the owning turn actually calls a plugin',
     },
     multi: { about: 'Original multiple-name row and artwork; finish only when every call has returned' },
+    'explicit-multi': { about: 'Explicit A plus actual A/B calls: retain the directive and wait for both results' },
+    'mention-multi': { about: 'Mention A plus actual A/B calls: show both names and wait for both results' },
     selection: { about: 'Uncalled explicit selection stays static and never claims execution' },
     interrupted: { about: 'Interrupted calls stop without a completion tick, including after history reload' },
   },
@@ -65,15 +67,22 @@ export default {
       await ui.capture('interrupted-without-completion-tick');
       return;
     }
-    const names = ui.case === 'multi' ? 'XD Feishu、GitHub' : ui.case === 'default' ? 'GitHub' : 'XD Feishu';
+    const multi = ['multi', 'explicit-multi', 'mention-multi'].includes(ui.case);
+    const names = multi ? 'XD Feishu、GitHub' : ui.case === 'default' ? 'GitHub' : 'XD Feishu';
     assert.equal(await user.getByText(names, { exact: true }).count(), 1);
     assert.equal(await user.locator('.summon-seal-arc').count(), 2);
     assert.equal(await user.getByText(calling, { exact: true }).count(), 1);
+    const spin = user.locator('.summon-seal-spin');
+    await page.evaluate(() => document.documentElement.setAttribute('data-app-hidden', 'true'));
+    assert.equal(await spin.evaluate(el => getComputedStyle(el).animationPlayState), 'paused');
+    await page.evaluate(() => document.documentElement.removeAttribute('data-app-hidden'));
     await ui.capture('plugin-running');
     await page.getByTestId('finish-call').click();
     await page.getByText('方案已读取，继续整理实现。', { exact: true }).waitFor();
-    if (ui.case === 'multi') {
+    if (multi) {
       assert.equal(await user.getByText(calling, { exact: true }).count(), 1);
+      assert.equal(await user.getByText(names, { exact: true }).count(), 1);
+      assert.equal(await user.locator('.lucide-check').count(), 0);
       await ui.capture('one-plugin-returned-other-running');
       await page.getByTestId('next-turn').click();
     }

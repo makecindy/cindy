@@ -1060,7 +1060,7 @@ body.resizing-pane [data-ghost-webview] {
 
    Tailwind 的 animate-spin / animate-pulse 用 [class*=] 匹配,以覆盖
    motion-safe:animate-pulse 这类变体编译出的转义类名。任意值工具类
-   (animate-[spin_2.4s_linear_infinite] 之类,见 GhostSummonCard)不含 animate-spin
+   (animate-[spin_2.4s_linear_infinite] 之类)不含 animate-spin
    子串,靠 [class*='infinite'] 兜住:Tailwind 把 keyframes 简写原样编进类名,
    循环动画必然带 infinite 字面量,而一次性的 animate-[xxx_200ms_ease-out] 不会。 */
 [data-app-hidden='true'] [data-voice-spinner-arc],
@@ -1070,6 +1070,7 @@ body.resizing-pane [data-ghost-webview] {
 [data-app-hidden='true'] .session-status-breathing,
 [data-app-hidden='true'] .thinking-dot,
 [data-app-hidden='true'] .ghost-card-sweep,
+[data-app-hidden='true'] .summon-seal-spin,
 [data-app-hidden='true'] .brand-loading-mark-sheen::before,
 [data-app-hidden='true'] .ghost-bubble-face,
 [data-app-hidden='true'] .agent-island-mascot-character,

@@ -14,7 +14,7 @@
  *   的、哪些是这段意识填的"(第三方意识的信任边界视图)。
  * - **软提示(语言提及,2026-07-14 起发送期已停止生成,仅服务历史消息)**:
  *   未兑现保持低调描边胶囊(由 UserMessage 放在气泡下方);一旦被真实
- *   ghost_call 兑现(GhostFulfillmentContext),升级为与硬指令完全同形态
+ *   ghost_call(GhostFulfillmentContext),升级为与硬指令完全同形态
  *   的标注行,区别只在展开区内容(软提示原文 vs 硬指令原文)。
  * - **语义自主召唤(semantic,无追加段)**:消息一个触发词都没命中,AI
  *   本轮仍通过 ghost_call 召唤了意识——UserMessage 据兑现关联合成
@@ -48,6 +48,7 @@ import {
   type HostCapabilityDirectiveDisplay,
 } from '@/cindy-brain/hostCapabilityInvocation';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { isValidGhostId } from '../../../shared/ghost';
 import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 import {
@@ -130,16 +131,6 @@ const SEAL_SETTLE_MS = 900;
 type SealPhase = 'running' | 'closing' | 'settling' | 'done';
 
 /**
- * motion-reduce 下终态编舞整段跳过(不只是 CSS 层禁动画):JS 状态机也不走
- * closing/settling 计时,直接落 done 帧——否则 ✓ 要等 600ms 计时器才出现,
- * 与「直接落终态帧」的承诺不符(review 反馈)。jsdom 等无 matchMedia 环境
- * 视为不减动效。
- */
-const prefersReducedMotion = (): boolean =>
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-/**
  * 幽灵印记(召唤法阵):两道反向圆弧环,环心是意识头像(声明了 icon 时),
  * 否则回退通用幽灵图标;圆弧走 currentColor 随主题文本色。
  *
@@ -169,6 +160,7 @@ function SummonSeal({
   /** 实际调用是否全部返回:完成徽标(✓/光晕)的唯一开关,中断只中性闭环。 */
   fulfilled?: boolean;
 }) {
+  const reducedMotion = useReducedMotion();
   const [phase, setPhase] = useState<SealPhase>(running ? 'running' : 'done');
   // 本次挂载期间是否亲历过 running:只有亲历者播终态编舞,历史消息静态落帧。
   const livedRunningRef = useRef(Boolean(running));
@@ -179,7 +171,8 @@ function SummonSeal({
       return;
     }
     if (!livedRunningRef.current) return undefined;
-    if (prefersReducedMotion()) {
+    if (reducedMotion) {
+      livedRunningRef.current = false;
       setPhase('done');
       return undefined;
     }
@@ -190,7 +183,7 @@ function SummonSeal({
       window.clearTimeout(settleTimer);
       window.clearTimeout(doneTimer);
     };
-  }, [running]);
+  }, [running, reducedMotion]);
 
   const spinning = phase === 'running' || phase === 'closing';
   const closed = phase !== 'running';
@@ -331,7 +324,7 @@ export function GhostSummonCard({
   const fulfilledIds = calls?.ghostIds;
   const matchesCall = (ids: ReadonlySet<string> | undefined, ghostId: string) => {
     if (!ids) return false;
-    if (commandIdentity && commandInstanceId) {
+    if (commandIdentity && commandInstanceId && ghostId === commandIdentity.ghostId) {
       if (ids.has(commandInstanceId)) return true;
       if (ids.has(pluginInstallStoragePart(pluginNewInstallRelId(commandIdentity)))) return true;
       const matches = installedGhosts.filter((ghost) => ghost.manifest.id === commandIdentity.ghostId);
@@ -343,13 +336,7 @@ export function GhostSummonCard({
     const ghost = ghostForDirective(ghostId);
     return ghost ? ids.has(pluginStoragePart(installedGhostLogicalIdentity(ghost))) : false;
   };
-  // 软提示的兑现子集(方案 2):AI 真调了才算,只提及没调的不升级(不撒谎)。
-  const fulfilled =
-    directive.kind === 'mention' && fulfilledIds
-      ? directive.ghosts.filter((g) => hasGhostSummonFulfillment(fulfilledIds, g.ghostId))
-      : [];
-
-  if (directive.kind === 'mention' && fulfilled.length === 0) {
+  if (directive.kind === 'mention' && !fulfilledIds?.size) {
     const soloIcon =
       directive.ghosts.length === 1 ? iconByGhostId(directive.ghosts[0].ghostId) : null;
     const names = directive.ghosts.map((g) => g.name).join(t('chat.ghostSummon.listSeparator'));
@@ -406,15 +393,12 @@ export function GhostSummonCard({
   // ── 标注行形态:普通插件调用与 Host capability 共用外观,路由语义分开──
   const isCommand = directive.kind === 'command';
   const isHostCapability = directive.kind === 'host-capability';
-  // 标注承载的意识:硬指令固定一个;兑现态取被真实召唤的子集;semantic 只有
-  // ghostId,名字/指令词从已装清单实时解析(已卸下回退 ghostId)。
-  // 多意识时名字并列、法阵取第一个。
-  const cardGhosts: Array<{ name: string; ghostId: string; command?: string }> = isCommand
+  const selectedGhosts: Array<{ name: string; ghostId: string; command?: string }> = isCommand
     ? [{ name: directive.name, ghostId: directive.ghostId, command: directive.command }]
     : isHostCapability
       ? [{ name: directive.name, ghostId: directive.ghostId }]
       : directive.kind === 'mention'
-        ? fulfilled
+        ? directive.ghosts
         : directive.ghostIds.map((id) => {
             const g = ghostByInstanceId(id);
             return {
@@ -423,20 +407,34 @@ export function GhostSummonCard({
               ...(g?.manifest.command ? { command: g.manifest.command } : {}),
             };
           });
+  // 有调用时展示完整的实际清单;选择只提供匹配身份的历史名称,不能把 A 的
+  // 选择身份套给实际调用的 B。没有调用时继续静态展示原选择。
+  const cardGhosts = !isHostCapability && fulfilledIds?.size
+    ? [...fulfilledIds].map((id) => {
+        const selected = selectedGhosts.find((g) => matchesCall(new Set([id]), g.ghostId));
+        const ghost = selected ? ghostForDirective(selected.ghostId) : ghostByInstanceId(id);
+        return {
+          ...(selected ?? { name: ghost?.manifest.name ?? parsePluginInstanceId(id)?.ghostId ?? id, ghostId: id }),
+          installedGhost: ghost,
+        };
+      })
+    : selectedGhosts.map((g) => ({ ...g, installedGhost: ghostForDirective(g.ghostId) }));
   // 兜底:空清单不渲(semantic 由 UserMessage 保证非空,此处防御性短路)。
   if (cardGhosts.length === 0) return null;
   // 命中已装意识时取实时安装态(头像/版本号);已卸下则都不显示,
   // 与消息文本里固化的 id/名字解耦(不缓存失效数据)。
-  const installedGhost = ghostForDirective(cardGhosts[0].ghostId);
+  const installedGhost = cardGhosts[0].installedGhost;
+  // 抽屉描述原指令,版本归属也保持原选择,不借用其他实际调用的版本。
+  const directiveGhost =
+    selectedGhosts.length === 1 ? ghostForDirective(selectedGhosts[0].ghostId) : undefined;
   // 版本号统一 v 前缀展示(身份卡 version 是自由字符串,作者已带 v 时不重复);
   // 多意识并列时不展示(版本归属不明)。
-  const versionLabel =
-    cardGhosts.length === 1 && installedGhost
-      ? `v${installedGhost.manifest.version.replace(/^v/i, '')}`
-      : null;
+  const versionLabel = directiveGhost
+    ? `v${directiveGhost.manifest.version.replace(/^v/i, '')}`
+    : null;
   const cardNames = cardGhosts.map((g) => g.name).join(t('chat.ghostSummon.listSeparator'));
   // $指令 徽章:单意识且声明了指令词才有(软提示兑现的意识可能没有 command)。
-  const badgeCommand = cardGhosts.length === 1 ? cardGhosts[0].command : undefined;
+  const badgeCommand = selectedGhosts.length === 1 ? selectedGhosts[0].command : undefined;
   // 展开区正文:与实际发送字节同源(commandDirectiveSegments /
   // mentionDirectiveSegments 是各自模板的单一事实源);semantic 没有追加段,
   // 展开区改为如实说明(segments = null)。
@@ -447,13 +445,10 @@ export function GhostSummonCard({
       : directive.kind === 'mention'
         ? mentionDirectiveSegments(directive.ghosts)
         : null;
-  // 未执行的选择保持静态;只有匹配当前插件的真实未返回调用才能转动。
-  const anyFulfilled = isHostCapability
-    ? false
-    : cardGhosts.some((g) => matchesCall(fulfilledIds, g.ghostId));
-  const allReturned = anyFulfilled && !cardGhosts.some((g) => matchesCall(calls?.pendingGhostIds, g.ghostId));
-  const callRunning = Boolean(running) && !isHostCapability &&
-    cardGhosts.some((g) => matchesCall(calls?.pendingGhostIds, g.ghostId));
+  // 未执行的选择保持静态;合排状态由这条消息的全部真实调用共同决定。
+  const anyFulfilled = !isHostCapability && Boolean(fulfilledIds?.size);
+  const allReturned = anyFulfilled && !calls?.pendingGhostIds.size;
+  const callRunning = Boolean(running) && !isHostCapability && Boolean(calls?.pendingGhostIds.size);
   // Host capability selection is not a ghost_call fulfillment event. Until
   // Host MCP fulfillment is tracked separately, report only the fact we know:
   // the user selected this route. Do not show a success tick or "已调用".

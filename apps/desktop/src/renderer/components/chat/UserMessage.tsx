@@ -121,7 +121,6 @@ import { splitHostCapabilityDirective } from '@/cindy-brain/hostCapabilityInvoca
 import {
   GhostFulfillmentContext,
   GhostSummonCard,
-  hasGhostSummonFulfillment,
   type GhostSummonDisplay,
 } from './GhostSummonCard';
 import { MessageSourceLabels } from './MessageSourceLabels';
@@ -989,17 +988,12 @@ export function UserMessage({
   // 触发符恒为 1 个字符($ 或全角变体),token = 触发符 + 指令词。
   const ghostCmdToken = ghostCmd ? bubbleBody.slice(0, 1 + ghostCommandTokenLength(ghostCmd)) : null;
   const ghostPromptBody = ghostCmdToken ? bubbleBody.slice(ghostCmdToken.length).trim() : '';
-  // 软提示兑现(语义调用):本条消息触发的那一轮 AI 真调了被提及的意识时,
-  // 升级为与硬指令同形态的召唤标注行。判据来自 GhostFulfillmentContext
+  // 本条消息出现真实调用时,用标注行展示完整调用摘要,原软提示保留在展开区。
+  // 判据来自 GhostFulfillmentContext
   // (MessageStream 从会话历史现算,重启幂等)。
   const ghostFulfillment = useContext(GhostFulfillmentContext);
   const ghostCalls = messageClientId ? ghostFulfillment.get(messageClientId) : undefined;
   const ghostFulfilledIds = ghostCalls?.ghostIds;
-  const ghostMentionFulfilled =
-    ghostDirective?.kind === 'mention' &&
-    Boolean(
-      ghostDirective.ghosts.some((g) => hasGhostSummonFulfillment(ghostFulfilledIds, g.ghostId)),
-    );
   // 语义自主召唤:消息一个触发词都没命中(无任何追加段),AI 本轮仍真调了
   // ghost_call → 合成 semantic 展示数据,渲染同一行召唤标注(与硬指令/兑现
   // 软提示渲染一致)。orca / hook 消息不参与(它们本就不经意识展开)。
@@ -1015,7 +1009,7 @@ export function UserMessage({
   // - 标注行(chip):硬指令 / 软提示已兑现 / semantic → 嵌进气泡顶部;
   // - 胶囊(pill):软提示未兑现 → 保持原低调形态,留在气泡下方。
   const ghostCardDisplay: GhostSummonDisplay | null = ghostDirective ?? ghostSemanticDisplay;
-  const ghostPillForm = ghostDirective?.kind === 'mention' && !ghostMentionFulfilled;
+  const ghostPillForm = ghostDirective?.kind === 'mention' && !ghostFulfilledIds?.size;
   const ghostChipDisplay = simplifiedBotConversation || ghostPillForm ? null : ghostCardDisplay;
   const ghostPillDisplay = !simplifiedBotConversation && ghostPillForm ? ghostDirective : null;
   // 气泡实际显示的正文与其在原始 content 中的起点(粘贴块/斜杠命令高亮的

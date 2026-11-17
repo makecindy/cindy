@@ -33,6 +33,7 @@ import { UserMessage } from '@/components/chat/UserMessage';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { Tooltip } from '@/components/ui/tooltip';
 import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
+import { AppearanceMotionContext } from '@/appearance/AppearanceMotionContext';
 
 const { installedGhostsMock } = vi.hoisted(() => ({
   installedGhostsMock: vi.fn(() => [] as InstalledGhost[]),
@@ -99,6 +100,89 @@ const ROOT_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAAC
 const ORG_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGOYbPyKJMQwqmFUw/DVAABSy7AQ0SGg2gAAAABJRU5ErkJggg==';
 
 describe('GhostSummonCard(chip 形态)', () => {
+  // Review regression: explicit/mentioned A used to hide other actual calls and
+  // could complete as soon as A returned. Exercise the production user bubble,
+  // including the symmetric case where only B is called; keep A's directive.
+  it.each([
+    { kind: 'command', callSelected: true },
+    { kind: 'mention', callSelected: true },
+    { kind: 'command', callSelected: false },
+    { kind: 'mention', callSelected: false },
+  ] as const)('summarizes all calls for $kind, selected called: $callSelected', async ({ kind, callSelected }) => {
+    stubMatchMedia(true);
+    installedGhostsMock.mockReturnValue([
+      { manifest: { id: 'github', name: 'GitHub', version: '2', command: 'github' },
+        dir: '/tmp/_root/github', instanceKey: '_root__github', namespace: null, iconDataUrl: ROOT_ICON },
+    ] as InstalledGhost[]);
+    const raw = (kind === 'command'
+      ? commandDirectiveSegments(commandDirective)
+      : mentionDirectiveSegments(mentionDirective.ghosts)).map(part => part.text).join('');
+    const content = (kind === 'command' ? '$xd-feishu ' : '') + '帮我看看方案。\n\n' + raw;
+    const messages: ChatMessage[] = [
+      { clientId: 'm1', role: 'user', content },
+      ...(callSelected ? [{ clientId: 'a', role: 'tool_use', toolUseId: 'a',
+        toolName: 'mcp__cindy__ghost_call', toolInput: { ghost_id: 'xd-feishu', tool: 'run' } } as ChatMessage] : []),
+      { clientId: 'b', role: 'tool_use', toolUseId: 'b', toolName: 'mcp__cindy__ghost_call',
+        toolInput: { ghost_id: 'github', namespace: null, tool: 'run' } },
+    ];
+    const bubble = (history: ChatMessage[]) => (
+      <GhostFulfillmentContext.Provider value={collectGhostCallsByUserTurn(history, true)}>
+        <ConfirmDialogProvider><MemoryRouter><Tooltip.Provider>
+          <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} workingDir="/synthetic/plugin-summary"
+            content={content} messageClientId="m1" isLastUserMessage sessionRunning />
+        </Tooltip.Provider></MemoryRouter></ConfirmDialogProvider>
+      </GhostFulfillmentContext.Provider>
+    );
+    const view = await act(async () => render(bubble(messages)));
+    expect(screen.getByText(callSelected ? 'XD Feishu、GitHub' : 'GitHub')).toBeTruthy();
+    expect(screen.getByText('调用中…')).toBeTruthy();
+    if (callSelected) {
+      messages.push({ clientId: 'a-result', role: 'tool_result', toolUseId: 'a', content: 'ok' });
+      view.rerender(bubble(messages));
+      expect(screen.getByText('调用中…')).toBeTruthy();
+      expect(view.container.querySelector('svg.lucide-check')).toBeNull();
+    }
+    messages.push({ clientId: 'b-result', role: 'tool_result', toolUseId: 'b', content: 'ok' });
+    view.rerender(bubble(messages));
+    expect(screen.getByText('已调用')).toBeTruthy();
+    expect(view.container.querySelector('svg.lucide-check')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(screen.getByText(kind === 'command' ? '追加给模型的指令' : '追加给模型的提示')).toBeTruthy();
+    expect(screen.getByText('XD Feishu')).toBeTruthy();
+    if (kind === 'command') expect(screen.getAllByText('$xd-feishu').length).toBeGreaterThan(0);
+    expect(screen.queryByText('v2')).toBeNull();
+  });
+
+  it.each([false, true])('shows completion immediately with application motion disabled, changed during close: %s', (disableDuringClose) => {
+    stubMatchMedia(false);
+    vi.useFakeTimers();
+    const chip = (pending: boolean, reduce: boolean) => (
+      <AppearanceMotionContext.Provider value={reduce}>
+        <GhostFulfillmentContext.Provider value={fulfillmentOf('m1', ['xd-feishu'], pending)}>
+          <GhostSummonCard directive={commandDirective} messageClientId="m1" running={pending} />
+        </GhostFulfillmentContext.Provider>
+      </AppearanceMotionContext.Provider>
+    );
+    const view = render(chip(true, !disableDuringClose));
+    view.rerender(chip(false, !disableDuringClose));
+    if (disableDuringClose) {
+      expect(view.container.querySelector('svg.lucide-check')).toBeNull();
+      view.rerender(chip(false, true));
+    }
+    expect(view.container.querySelector('svg.lucide-check')).toBeTruthy();
+    expect(view.container.querySelector('.summon-seal-spin')).toBeNull();
+    expect(view.container.querySelector('.summon-seal-halo')).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    view.rerender(chip(false, false));
+    expect(view.container.querySelector('svg.lucide-check')).toBeTruthy();
+    expect(view.container.querySelector('.summon-seal-spin')).toBeNull();
+    expect(view.container.querySelector('.summon-seal-halo')).toBeNull();
+    // Collapse also observes this preference and owns a 280ms unmount fallback;
+    // let that finish, while any restarted seal timers would still be pending.
+    act(() => vi.advanceTimersByTime(280));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   // PR #6392 P2 reviews: existing coverage starts with a prebuilt directive and
   // misses persisted directives through UserMessage's pill/chip decision.
   // Unit tier: one user message plus root/org ghost_call messages are parsed and
@@ -165,8 +249,9 @@ describe('GhostSummonCard(chip 形态)', () => {
         directive: legacyCommand,
         body: '$draw help',
         calls: [orgCall],
-        called: false,
-        icon: null,
+        called: true,
+        icon: ORG_ICON,
+        names: 'Installed Organization',
       },
       {
         label: 'old command with root suffix',
@@ -181,8 +266,9 @@ describe('GhostSummonCard(chip 形态)', () => {
         directive: legacyCommand,
         body: '$draw/acme help',
         calls: [rootCall],
-        called: false,
-        icon: ORG_ICON,
+        called: true,
+        icon: ROOT_ICON,
+        names: 'Installed Root',
       },
       {
         label: 'old command with organization suffix / organization',
@@ -205,8 +291,9 @@ describe('GhostSummonCard(chip 形态)', () => {
         directive: { ...legacyCommand, namespace: 'acme' },
         body: '$draw help',
         calls: [rootCall],
-        called: false,
-        icon: ORG_ICON,
+        called: true,
+        icon: ROOT_ICON,
+        names: 'Installed Root',
       },
       {
         label: 'explicit organization command / organization',
@@ -245,8 +332,9 @@ describe('GhostSummonCard(chip 形态)', () => {
         directive: legacyMention,
         body: 'help',
         calls: [orgCall],
-        called: false,
-        icon: null,
+        called: true,
+        icon: ORG_ICON,
+        names: 'Installed Organization',
       },
       {
         label: 'mixed mentions / organization only',
@@ -345,8 +433,8 @@ describe('GhostSummonCard(chip 形态)', () => {
             img.getAttribute('src'),
           ),
         ).toEqual(icon ? [icon] : []);
-        expect(screen.queryByText('Installed Root')).toBeNull();
-        expect(screen.queryByText('Installed Organization')).toBeNull();
+        expect(Boolean(screen.queryByText('Installed Root'))).toBe(names === 'Installed Root');
+        expect(Boolean(screen.queryByText('Installed Organization'))).toBe(names === 'Installed Organization');
       },
     );
   });
@@ -579,8 +667,11 @@ describe('GhostSummonCard(chip 形态)', () => {
         <GhostSummonCard directive={{ kind: 'command', command: 'draw', name: 'Organization', ghostId: 'helper', raw: '' }} commandNamespace='acme' messageClientId='m1' />
       </GhostFulfillmentContext.Provider>,
     );
-    expect(screen.getByText('已选择')).toBeTruthy();
-    expect(screen.queryByText('已调用')).toBeNull();
+    expect(screen.getByText('helper')).toBeTruthy();
+    expect(screen.queryByText('Organization')).toBeNull();
+    expect(screen.getByText('已调用')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(screen.getByText('Organization')).toBeTruthy();
   });
 
   it('does not mark a root command as called by an organization of the same id', () => {
@@ -593,8 +684,11 @@ describe('GhostSummonCard(chip 形态)', () => {
         <GhostSummonCard directive={{ kind: 'command', command: 'draw', name: 'Root', ghostId: 'helper', raw: '' }} messageClientId='m1' />
       </GhostFulfillmentContext.Provider>,
     );
-    expect(screen.getByText('已选择')).toBeTruthy();
-    expect(screen.queryByText('已调用')).toBeNull();
+    expect(screen.getByText('Organization')).toBeTruthy();
+    expect(screen.queryByText('Root')).toBeNull();
+    expect(screen.getByText('已调用')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(screen.getByText('Root')).toBeTruthy();
   });
   it('resolves an explicit root command without attributing an organization call to it', () => {
     installedGhostsMock.mockReturnValue([
@@ -607,9 +701,12 @@ describe('GhostSummonCard(chip 形态)', () => {
         <GhostSummonCard directive={directive} commandNamespace='@root' messageClientId='m1' />
       </GhostFulfillmentContext.Provider>,
     );
-    expect(screen.getByText('已选择')).toBeTruthy();
+    expect(screen.getByText('已调用')).toBeTruthy();
+    expect(screen.getByText('Organization')).toBeTruthy();
+    expect(screen.queryByText('Root')).toBeNull();
     fireEvent.click(screen.getByRole('button', { expanded: false }));
     expect(screen.getByText('v1')).toBeTruthy();
+    expect(screen.getByText('Root')).toBeTruthy();
     rerender(
       <GhostFulfillmentContext.Provider value={fulfillmentOf('m1', ['helper'])}>
         <GhostSummonCard directive={directive} commandNamespace='@root' messageClientId='m1' />
@@ -677,7 +774,7 @@ describe('GhostSummonCard(chip 形态)', () => {
   // an interrupted real call may say it was invoked, but cannot show a completion tick.
   // Existing animation tests supplied visual props only; this unit exercises actual call facts.
   it('keeps an uncalled selection static and does not fake completion after interruption', () => {
-    const selected = render(<GhostFulfillmentContext.Provider value={fulfillmentOf('m1', ['other'], true)}>
+    const selected = render(<GhostFulfillmentContext.Provider value={new Map()}>
       <GhostSummonCard directive={commandDirective} messageClientId="m1" running />
     </GhostFulfillmentContext.Provider>);
     expect(screen.getByText('已选择')).toBeTruthy();
