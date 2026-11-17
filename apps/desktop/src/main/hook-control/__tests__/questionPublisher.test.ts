@@ -107,6 +107,41 @@ describe('sequential Hook question cards', () => {
       answers: { env: '测试环境', lang: JSON.stringify(['中文', '英语']) } });
   });
 
+  // 评审 #11136: 异步多题逐题发时, 本轮一结束(drain)后面的题就再也发不出去(服务端只在轮次运行期间
+  // 受理新卡), 提问永远答不完。入口: open(异步多题) + drain() 后继续作答; 可观察结果: 只有一张卡,
+  // 本轮结束后仍能答完并交给 Host。最小失败输入: 两题的异步提问(unit, 真实协议解析)。
+  it('keeps an async multi-question request on one card so it can be finished after the turn ends', async () => {
+    const h = harness();
+    await h.publisher.open({ ...request, delivery: 'async' }, h.controls);
+    expect(h.cards()).toHaveLength(1);
+    const card = h.cards()[0]!;
+    expect(h.latest(card).body).toContain('发到哪个环境？');
+    expect(h.latest(card).body).toContain('需要哪些语言？');
+
+    await h.publisher.drain();
+    expect(await h.click(card, '测试环境')).toBe(true);
+    expect(await h.click(card, '中文')).toBe(true);
+    expect(await h.click(card, imText('imBot.text.questions.submitLabel'))).toBe(true);
+    expect(h.cards()).toHaveLength(1);
+    expect(h.answer).toHaveBeenCalledExactlyOnceWith({ kind: 'ask_user_question',
+      answers: { env: '测试环境', lang: JSON.stringify(['中文']) } });
+  });
+
+  // 评审 #11136: 单题版式在选项没有说明时不把选项写进正文, 而按钮超过 24 个时又不发选项按钮,
+  // 选项就全部不见了。入口: open(单题 25 个无说明选项); 可观察结果: 正文逐行列出全部选项,
+  // 仍可用编号文字作答(unit, 真实协议解析)。
+  it('lists every option in the body when a single question has too many for buttons', async () => {
+    const h = harness();
+    await h.publisher.open({ kind: 'ask_user_question', requestId: 'q', questions: [{ id: 'pick', question: '选哪个？',
+      options: Array.from({ length: 25 }, (_, i) => ({ label: `选项 ${i + 1}` })) }] }, h.controls);
+    const card = h.cards()[0]!;
+    expect(h.latest(card).buttons).toEqual([]);
+    expect(h.latest(card).body).toContain('1. 选项 1');
+    expect(h.latest(card).body).toContain('25. 选项 25');
+    expect(await h.handlers.get(card)!('question:reply', '25')).toBe(true);
+    expect(h.answer).toHaveBeenCalledExactlyOnceWith({ kind: 'ask_user_question', answers: { pick: '选项 25' } });
+  });
+
   it('stops after the open card when the Host settles first', async () => {
     const h = harness();
     await h.publisher.open(request, h.controls);

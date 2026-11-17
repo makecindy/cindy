@@ -93,9 +93,13 @@ export function createHookQuestionPublisher(deps: {
             controls.answer({ kind: 'ask_user_question', answers: { ...answers } });
             return;
           }
+          // 本轮已收口: 服务端只在轮次运行期间受理新卡, 后面的题发不出去(只有中断式提问会走到这里)。
           if (!accepting) return;
-          void openStep(index + 1).catch(() => {
-            deps.log?.warn(`hook question ${deps.requestId} step ${index + 2}/${total} could not be shown`);
+          // 下一张卡发不出去(连接或账号已失效)时不替用户合成答案: 与首卡发不出去一样, 这道提问
+          // 仍挂在 App 里可答, 中断式提问照常按渠道超时收口。
+          void openStep(index + 1).catch((error: unknown) => {
+            deps.log?.warn(`hook question ${deps.requestId} step ${index + 2}/${total} could not be shown: ${
+              error instanceof Error ? error.message : 'unknown error'}`);
           });
         },
         settled: Promise.race([stepDone, controls.settled]),
@@ -111,7 +115,11 @@ export function createHookQuestionPublisher(deps: {
   return {
     async open(request: QuestionRequest, controls: QuestionControls) {
       if (!accepting) return;
-      if (deps.sequential && request.questions.length > 0) {
+      // 异步的多题提问仍合成一张卡: 异步卡要在本轮结束后继续可答, 而服务端只在轮次运行期间受理新卡,
+      // 逐题发的话本轮一结束后面的题就发不出去, 提问永远答不完。异步单题只有一张卡, 可以用单题版式。
+      const stepByStep = deps.sequential && request.questions.length > 0
+        && (request.delivery !== 'async' || request.questions.length === 1);
+      if (stepByStep) {
         await openSequence(request, controls);
         return;
       }

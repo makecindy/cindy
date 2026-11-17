@@ -8,6 +8,9 @@ import { encodeAskOptionAnswers, formatAskAnswersForDisplay } from './interactio
 
 export type QuestionRequest = Extract<InteractionRequest, { kind: 'ask_user_question' }>;
 
+/** Hook interaction.request 一张卡最多带的按钮数。 */
+const MAX_CARD_BUTTONS = 24;
+
 /**
  * 单题卡的呈现参数（官方飞书 / Lark 一题一张卡）。不传时为多题合卡：题号 + 「题号·选项号」按钮。
  * 只换呈现，答案模型、防旧按钮与提交规则不变。
@@ -60,14 +63,18 @@ export function createQuestionCard(
     ...(q.options ?? []).map((o, j) => `${i + 1}·${j + 1}. ${o.label}${o.description ? ` — ${o.description}` : ''}`),
     ...resolvedLine(i),
   ].join('\n')).join('\n\n');
+  /** 按钮总数超过传输上限时不发选项按钮(见 render): 选项必须逐行写在正文里, 靠编号文字作答。 */
+  const choiceButtonsOmitted = (): boolean =>
+    request.questions.reduce((count, q) => count + (q.options?.length ?? 0), 0) + (requiresSubmit ? 1 : 0)
+      > MAX_CARD_BUTTONS;
   // 单题版式：题干单独成段（不以「1.」开头，避免 Markdown 把后面的行并进同一个列表项）；
-  // 选项只有带说明时才逐行列出，否则按钮已经写全了选项。
+  // 选项只有带说明、或按钮放不下时才逐行列出，否则按钮已经写全了选项。
   const singleBody = (): string => {
     const q = request.questions[0];
     const options = q.options ?? [];
     return [
       withMultiSelectHint(q),
-      ...(options.some(o => o.description)
+      ...(options.some(o => o.description) || choiceButtonsOmitted()
         ? ['', ...options.map((o, j) => `${j + 1}. ${o.label}${o.description ? ` — ${o.description}` : ''}`)]
         : []),
       ...(answerFor(0) ? ['', ...resolvedLine(0)] : []),
@@ -89,7 +96,7 @@ export function createQuestionCard(
       buttons: closed || submitted ? [] : [
         // Hook interaction.request allows 24 buttons. Oversized forms retain all
         // choices in the numbered body and the same text-answer/submit path.
-        ...(choices.length + submit.length <= 24 ? choices : []),
+        ...(choices.length + submit.length <= MAX_CARD_BUTTONS ? choices : []),
         ...submit,
       ],
     };
