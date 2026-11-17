@@ -125,6 +125,9 @@ export function createHostAutoResume(ports: HostAutoResumePorts) {
   const hooks = createInterruptedTurnAutoResumeHooks<Session>(explicitPorts<InterruptedTurnAutoResumeHookPorts<Session>>({
     inputCoordinator: {
       isExecutionPaused: sessionId => ports.coordinator().isExecutionPaused(sessionId),
+      // As the desktop (register.ts): a retry of a proven-stopped startup admission runs only while its
+      // attempt is still the coordinator's current one.
+      isAutoResumeAttemptCurrent: (sessionId, attemptToken) => ports.coordinator().isAutoResumeAttemptCurrent(sessionId, attemptToken),
       autoRetryLastError: (sessionId, attemptToken) => ports.isProfileHeld()
         ? Promise.resolve('superseded' as const)
         : ports.coordinator().autoRetryLastError(sessionId, attemptToken),

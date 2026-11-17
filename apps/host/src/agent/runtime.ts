@@ -694,6 +694,10 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     getManagedSkills: options.getManagedSkills,
     capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
     capabilityAdditions: availableModels('claude-code'),
+    // Plugin tool interception (will-tool-call / did-tool-result; the desktop passes
+    // ghostToolLifecycleControl): not connected on the Host yet (release table row 33, 8i, 甲). Unset,
+    // the agent adds no tool lifecycle hooks: every tool call goes ahead without asking a plugin.
+    toolLifecycleControl: undefined,
     // The turn change record the desktop keeps for Claude and Pi (turn-change-set/store.ts).
     turnChangeCapture: { beforeKnownFileWrite: captureKnownFileBefore, noteOpaqueWrite: noteOpaqueTurnChange },
     // As the desktop: the process registry (read by the quit-time Codex reaper and, from M2, the
@@ -879,6 +883,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         turnChangeCapture: { beforeKnownFileWrite: captureKnownFileBefore, noteOpaqueWrite: noteOpaqueTurnChange },
         registerLocalAgentProcess: ({ pid, kind, role, sessionId }) =>
           registerAgentProcess(pid, kind, role, sessionId),
+        // Plugin tool interception: not connected yet (as the Claude bag above; row 33, 8i, 甲).
+        toolLifecycleControl: undefined,
         getGhostRosterPrompt: options.getGhostRosterPrompt,
         makerMemory: options.makerMemory,
         // As the desktop (pi-host.ts): the cloud-file startup hint and the extension dialog strings.

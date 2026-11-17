@@ -100,6 +100,7 @@ export const PORTS_ONLY_CLAUDE_READS = {
 /** Ports only the Claude and Pi agents read. */
 export const PORTS_ONLY_CLAUDE_AND_PI_READ = {
   registerLocalAgentProcess: undefined,
+  toolLifecycleControl: undefined,
   turnChangeCapture: undefined,
 } as const satisfies UnreadPorts;
 
