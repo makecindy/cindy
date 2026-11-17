@@ -749,7 +749,10 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
    条件关闭正常返回 false 时也须复核原请求授权；回滚之后、捕获延迟授权前后继续复核，
    原授权失效则原样报错，不得把失效请求转成持有新授权的终态重试。
    跨电脑 Worker 当前只提供前台运行状态，不能据此证明后台任务或 continuation 已结束；
-   `orcaRemoteWorkers.wrapTeamDeps` 对自动空闲关闭返回 false，保留 done 和回报状态。
+   `orcaRemoteWorkers.wrapTeamDeps` 对自动完成确认的条件关闭返回 false，保留 done 和回报状态。
+   显式 `archiveWorker({onlyIfIdle:true})`（插件 `releaseWorker`）携带内部 explicit-release 意图，
+   远程适配器保留原前台空闲判断，通过既有发送锁、队列和授权复核后执行 abort/归档；
+   不把自动确认的未知后台保护扩张为禁止显式释放，也不放宽本地运行时的条件关闭判定。
    在通道提供可靠后台证据前，无后台工作的远程 Worker 也不会自动确认到 idle，仍可显式 idle。
    显式 idle、归档与结束团队继续沿原来的关闭路径，不把任意脱管 shell 进程当成已跟踪任务。
    回归见 `session.close.test.ts`、Claude `abort-stops-background-tasks.test.ts`、

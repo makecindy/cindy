@@ -425,7 +425,7 @@ export interface OrcaTeamServiceDeps {
   restoreWorkerDoneIfIdle(workerId: string): Promise<boolean>;
   closeWorkerSession(sessionId: string, beforeClose?: () => Promise<void>): Promise<void>;
   /** 与 Session.send reservation 原子互斥；false 表示 direct send/turn 已先取得会话。 */
-  closeWorkerSessionIfIdle(sessionId: string, sendLockHeld?: boolean): Promise<boolean>;
+  closeWorkerSessionIfIdle(sessionId: string, sendLockHeld?: boolean, options?: { intent: 'explicit-release' }): Promise<boolean>;
   /** pending / dispatch-boundary / recovery 输入任一存在时返回 true。 */
   hasPendingWorkerInput(sessionId: string): Promise<boolean>;
   /** send_to_session 的恢复/直发锁覆盖 bootstrap 到 Session.send reservation 的窗口。 */
@@ -1725,7 +1725,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     const archive = async (): Promise<OrcaOkResult> => {
     await params.beforeArchive?.();
     if (params.onlyIfIdle) {
-      if ((activeWorkerDispatches.get(worker.id) ?? 0)>0 || await deps.hasPendingWorkerInput(worker.sessionId) || !await closeWorkerSessionIfIdleBestEffort(worker.sessionId,'releaseWorker',true,params.beforeArchive)) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has active or queued input'};
+      if ((activeWorkerDispatches.get(worker.id) ?? 0)>0 || await deps.hasPendingWorkerInput(worker.sessionId) || !await closeWorkerSessionIfIdleBestEffort(worker.sessionId,'releaseWorker',true,params.beforeArchive,{ intent: 'explicit-release' })) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has active or queued input'};
       if (await deps.hasPendingWorkerInput(worker.sessionId)) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has queued input'};
     }
     await params.beforeArchive?.();
@@ -2193,6 +2193,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     owner: string,
     sendLockHeld = false,
     beforeClose?: () => Promise<void>,
+    options?: { intent: 'explicit-release' },
   ): Promise<boolean> {
     let authorityRejected = false;
     const assertCloseAuthority = async () => {
@@ -2212,7 +2213,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         if (deps.getLiveSession(sessionId) !== runtime
           || runtime.getTurnGeneration?.() !== generation) return false;
       }
-      return await (sendLockHeld ? deps.closeWorkerSessionIfIdle(sessionId, true) : deps.closeWorkerSessionIfIdle(sessionId));
+      return await (options
+        ? deps.closeWorkerSessionIfIdle(sessionId, sendLockHeld, options)
+        : sendLockHeld ? deps.closeWorkerSessionIfIdle(sessionId, true) : deps.closeWorkerSessionIfIdle(sessionId));
     } catch (err) {
       if (authorityRejected) throw err;
       // A failed provider probe/close is retryable only while the caller's

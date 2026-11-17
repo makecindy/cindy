@@ -722,12 +722,13 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         await beforeClose?.();
         await runtime.abort(sessionId);
       },
-      closeWorkerSessionIfIdle: async (sessionId, sendLockHeld) =>
+      closeWorkerSessionIfIdle: async (sessionId, sendLockHeld, options) =>
         (await isRemoteWorker(sessionId))
           // Remote foreground status cannot prove background tasks or wake
           // continuations are idle. Keep automatic done acknowledgement pending
-          // until that evidence exists; explicit idle/stop still uses abort above.
-          ? false
+          // until that evidence exists. Explicit release retains its foreground
+          // idle gate and then follows archive's guarded abort/release path.
+          ? options?.intent === 'explicit-release' && !runtime.isTurnRunning(sessionId)
           : base.closeWorkerSessionIfIdle(sessionId, sendLockHeld),
       hasPendingWorkerInput: async (sessionId) =>
         (await isRemoteWorker(sessionId))

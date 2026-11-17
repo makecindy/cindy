@@ -4305,7 +4305,7 @@ it('release refuses an occupied send fence without waiting for it',async()=>{
 it('release closes under its own send fence and fails closed on close error',async()=>{
  const {deps,service,setWorker}=createDeps();setWorker(createWorker({status:'done'}));
  await service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true});
- expect(deps.closeWorkerSessionIfIdle).toHaveBeenCalledWith('worker-session-1',true);
+ expect(deps.closeWorkerSessionIfIdle).toHaveBeenCalledWith('worker-session-1',true,{ intent: 'explicit-release' });
  vi.mocked(deps.archiveWorkerSession).mockClear();vi.mocked(deps.closeWorkerSessionIfIdle).mockRejectedValue(new Error('close failed'));
  expect((await service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true})).ok).toBe(false);
  expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
