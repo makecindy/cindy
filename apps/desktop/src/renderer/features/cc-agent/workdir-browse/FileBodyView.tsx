@@ -242,6 +242,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   // 原生 !==,归一化成本挪到基准写入时(setBaseline)一次性支付。
   const initialContentNormalizedRef = useRef('');
   const latestDiskContentRef = useRef('');
+  const latestResolvedPathRef = useRef<string | undefined>(undefined);
 
   /** dirty 比对基准的唯一写入口:同步维护原文与归一化两份。 */
   const setBaseline = useCallback((raw: string, resolvedPath?: string) => {
@@ -363,6 +364,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   useEffect(() => {
     if (content.kind === 'text') {
       latestDiskContentRef.current = content.content;
+      latestResolvedPathRef.current = content.resolvedPath;
     }
   }, [content]);
 
@@ -459,7 +461,12 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
       opts?.guardExternalChange &&
       normalize(latestDiskContentRef.current) !== normalize(original)
     ) {
-      const msg = t('ccAgent.workdirBrowse.fileBody.externalChangeBlocked');
+      const targetChanged = initialResolvedPathRef.current !== undefined &&
+        latestResolvedPathRef.current !== undefined &&
+        initialResolvedPathRef.current !== latestResolvedPathRef.current;
+      const msg = targetChanged
+        ? t('ccAgent.workdirBrowse.fileBody.targetChanged')
+        : t('ccAgent.workdirBrowse.fileBody.externalChangeBlocked');
       setSaveError(msg);
       toast.error(t('ccAgent.workdirBrowse.fileBody.saveFailed', { message: msg }));
       return false;
@@ -481,7 +488,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
       });
       if (!res.ok) {
         const message = res.message.includes('FILE_TARGET_CHANGED')
-          ? t('ccAgent.workdirBrowse.fileBody.externalChangeBlocked') : res.message;
+          ? t('ccAgent.workdirBrowse.fileBody.targetChanged') : res.message;
         setSaveError(message);
         // 写盘失败:toast 立即提示 + saveError banner 持续展示详情,两者互补
         // (toast 1.2s 自动消失,banner 留到下一次保存或切文件)。

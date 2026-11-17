@@ -17076,6 +17076,7 @@
         "menuSave": "Enregistrer",
         "menuInsertTable": "Insérer un tableau",
         "externalChangeBlocked": "Le fichier a été modifié sur le disque. Enregistrement automatique suspendu ; enregistrez manuellement pour l'écraser.",
+        "targetChanged": "Le fichier pointe désormais vers un autre emplacement. Votre brouillon est toujours dans l’éditeur. Copiez-le avant de rouvrir le fichier.",
         "tableMenu": {
           "addRowAbove": "Ajouter une ligne au-dessus",
           "addRowBelow": "Ajouter une ligne en dessous",

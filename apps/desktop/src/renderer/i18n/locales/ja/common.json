@@ -16838,6 +16838,7 @@
         "menuSave": "保存",
         "menuInsertTable": "表を挿入",
         "externalChangeBlocked": "ファイルが外部で変更されました。自動保存を停止しました。手動保存で上書きできます。",
+        "targetChanged": "ファイルの参照先が変わりました。下書きはエディターに残っています。下書きをコピーしてから、ファイルを開き直してください。",
         "tableMenu": {
           "addRowAbove": "上に行を追加",
           "addRowBelow": "下に行を追加",

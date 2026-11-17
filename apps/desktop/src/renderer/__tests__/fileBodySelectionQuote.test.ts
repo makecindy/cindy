@@ -37,7 +37,7 @@ function emitAddToChat() {
 }
 
 vi.mock('react-i18next', () => {
-  const t = (key: string) => key;
+  const t = (key: string, values?: { message?: string }) => values?.message ? `${key}: ${values.message}` : key;
   return { useTranslation: () => ({ t, i18n: { language: 'en' } }) };
 });
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
@@ -59,7 +59,7 @@ const rangeDescriptors = {
 };
 
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame'] });
+  vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame', 'setTimeout', 'clearTimeout'] });
   // Use the real detached-window bridge: a hand-written stub hid Issue #6655.
   vi.stubGlobal('electronAPI', preloadMocks.expose.mock.calls.find(([name]) => name === 'electronAPI')![1]);
   // jsdom has real ranges/selections but no layout. Supply geometry only;
@@ -205,25 +205,38 @@ it('previews SVG by default and retains source edits across preview toggles', ()
 // the target of its dirty baseline rather than adopt a watcher reload's target.
 // Unit through real FileBodyView/CodeMirror/save handle; no existing quote test
 // covered writes. Minimal input: dirty A draft followed by a B content prop.
-it('keeps a dirty draft bound to its original target when a reload points elsewhere', async () => {
+// Windows acceptance also found that the error advised an impossible overwrite.
+// Cover the visible reason for manual saves and autosave's earlier conflict guard.
+it.each([
+  { mode: 'manual', target: 'b/note.md', reason: 'targetChanged' },
+  { mode: 'autosave', target: 'b/note.md', reason: 'targetChanged' },
+  { mode: 'autosave', target: 'a/note.md', reason: 'externalChangeBlocked' },
+])('retains the draft and explains $reason on $mode', async ({ mode, target, reason }) => {
+  preloadMocks.writeFile.mockClear();
   const ref = createRef<import('@/features/cc-agent/workdir-browse/FileBodyView').FileBodyHandle>();
   const props = {
-    workdir, relPath: 'alias/note.txt', ref,
-    content: { kind: 'text' as const, relPath: 'alias/note.txt', content: 'A',
-      size: 1, mtimeMs: 1, truncated: false, resolvedPath: 'a/note.txt' },
+    workdir, relPath: 'alias/note.md', ref,
+    content: { kind: 'text' as const, relPath: 'alias/note.md', content: 'A',
+      size: 1, mtimeMs: 1, truncated: false, resolvedPath: 'a/note.md' },
   };
   const { container, rerender } = render(createElement(FileBodyView, props));
   const editor = EditorView.findFromDOM(container.querySelector<HTMLElement>('.cm-editor')!)!;
   act(() => { editor.dispatch({ changes: { from: 1, insert: ' edited' } }); });
   rerender(createElement(FileBodyView, { ...props,
-    content: { ...props.content, content: 'B', resolvedPath: 'b/note.txt' },
+    content: { ...props.content, content: 'B', resolvedPath: target },
   }));
-  preloadMocks.writeFile.mockResolvedValueOnce({ ok: false, message: 'FILE_TARGET_CHANGED' });
-  await act(async () => { expect(await ref.current!.save()).toBe(false); });
-  expect(preloadMocks.writeFile).toHaveBeenLastCalledWith(expect.objectContaining({
-    content: 'A edited', expectedResolvedPath: 'a/note.txt',
-  }));
+  if (mode === 'manual') {
+    preloadMocks.writeFile.mockResolvedValueOnce({ ok: false, message: 'FILE_TARGET_CHANGED' });
+    await act(async () => { expect(await ref.current!.save()).toBe(false); });
+    expect(preloadMocks.writeFile).toHaveBeenLastCalledWith(expect.objectContaining({
+      content: 'A edited', expectedResolvedPath: 'a/note.md',
+    }));
+  } else {
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(preloadMocks.writeFile).not.toHaveBeenCalled();
+  }
   expect(editor.state.doc.toString()).toBe('A edited');
   expect(ref.current!.isDirty()).toBe(true);
   expect(screen.getByRole('alert').textContent).toContain('ccAgent.workdirBrowse.fileBody.saveFailed');
+  expect(screen.getByRole('alert').textContent).toContain(`ccAgent.workdirBrowse.fileBody.${reason}`);
 });

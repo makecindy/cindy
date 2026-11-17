@@ -16838,6 +16838,7 @@
         "menuSave": "儲存",
         "menuInsertTable": "插入表格",
         "externalChangeBlocked": "檔案已被外部修改，已暫停自動儲存。確認後可手動儲存覆蓋。",
+        "targetChanged": "檔案指向已變更，目前的草稿仍保留在編輯器中。請先複製草稿，再重新開啟檔案",
         "tableMenu": {
           "addRowAbove": "在上方新增列",
           "addRowBelow": "在下方新增列",

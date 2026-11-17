@@ -16838,6 +16838,7 @@
         "menuSave": "存之",
         "menuInsertTable": "插表格",
         "externalChangeBlocked": "卷已为外部所改，自动保存已暂停。确认后可亲手存之以覆盖。",
+        "targetChanged": "档案指向已变更，目前的草稿仍保留在编辑器中。请先复制草稿，再重新开启档案",
         "tableMenu": {
           "addRowAbove": "上增一行",
           "addRowBelow": "下增一行",

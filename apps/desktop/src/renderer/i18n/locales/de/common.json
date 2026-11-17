@@ -16912,6 +16912,7 @@
         "menuSave": "Speichern",
         "menuInsertTable": "Tabelle einfügen",
         "externalChangeBlocked": "Die Datei wurde auf dem Datenträger geändert. Automatisches Speichern pausiert; speichere manuell, um sie zu überschreiben.",
+        "targetChanged": "Die Datei verweist jetzt auf einen anderen Speicherort. Dein Entwurf ist noch im Editor. Kopiere ihn, bevor du die Datei erneut öffnest.",
         "tableMenu": {
           "addRowAbove": "Zeile darüber einfügen",
           "addRowBelow": "Zeile darunter einfügen",
