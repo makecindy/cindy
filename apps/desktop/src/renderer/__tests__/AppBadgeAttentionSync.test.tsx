@@ -93,6 +93,7 @@ vi.mock('@/lib/sessionAttentionStore', () => ({
 vi.mock('@/state/agentIslandActivity', () => ({ useAgentIslandActivityMap: () => state.empty }));
 vi.mock('@/lib/orcaSessionIdentity', () => ({ isOrcaWorkerSession: () => false }));
 
+import { useNavigationAttention } from '../lib/navigationAttentionStore';
 import { AppBadgeAttentionSync } from '../components/layout/AppBadgeAttentionSync';
 import { useSessionDisplayRunningState } from '../features/cc-agent/hooks/useSessionDisplayRunningState';
 
@@ -329,4 +330,38 @@ it('excludes archived group unread state from the app badge', () => {
   botState.unreadGroups = new Set(['active-group', 'archived-group']);
   render(<AppBadgeAttentionSync />);
   expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 4 }));
+});
+
+// #11027, unit: existing coverage checked archive state only. A single unread
+// group with mentions-only/none must not reach Dock or navigation attention.
+// Changing preference/mention state must update both without marking it read.
+it('applies group notification preferences to Dock and navigation attention', () => {
+  vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish });
+  const group = { id: 'group', archived: false, notificationMode: 'mentions',
+    serverUnread: { count: 2, mentioned: false } };
+  botState.groups = [group];
+  botState.unreadGroups = new Set(['group']);
+  const view = render(<AppBadgeAttentionSync />);
+  const navigation = renderHook(useNavigationAttention);
+  const check = (expected: number) => {
+    view.rerender(<AppBadgeAttentionSync />);
+    expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 3 + expected }));
+    expect(navigation.result.current).toEqual({ tasks: 3, teammates: expected });
+    expect(botState.markRead).not.toHaveBeenCalled();
+    expect(group.serverUnread.count).toBe(2);
+  };
+  check(0);
+  group.serverUnread.mentioned = true;
+  check(1);
+  group.notificationMode = 'none';
+  check(0);
+  group.notificationMode = 'all';
+  group.serverUnread.mentioned = false;
+  check(1);
+  group.notificationMode = 'mentions';
+  check(0);
+  botState.groups = [{ id: 'group' }]; // Older hosts omit preferences.
+  check(1);
+  botState.unreadGroups.clear();
+  check(0);
 });

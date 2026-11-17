@@ -40,7 +40,10 @@ export function AppBadgeAttentionSync() {
   useCompanionIslandChats(allBots, bots, unread, remoteBots);
   useSyncExternalStore(subscribeBotReadState, readRevision, readRevision);
   const localTeammates = bots.filter(bot => bot.status !== 'archived' && bot.status !== 'deleting' && !bot.hiddenAt && (unread[bot.id] ?? 0) > 0).length
-    + groups.filter(group => !group.archived && isBotGroupUnread(group)).length;
+    // Global attention follows notification preferences; list unread/read positions stay intact.
+    + groups.filter(group => !group.archived && isBotGroupUnread(group)
+      && group.notificationMode !== 'none'
+      && (group.notificationMode !== 'mentions' || group.serverUnread?.mentioned === true)).length;
   const teammates = localTeammates + remoteBots.filter(isRemoteBotUnread).length;
   const owner = getDataOwnerGeneration();
   const { sessions, isLoading, error } = useCCSessions({ includeArchived: 'active' });
