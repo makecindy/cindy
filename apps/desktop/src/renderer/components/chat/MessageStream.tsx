@@ -1,5 +1,6 @@
 import { appendPendingQueueItems } from './pendingQueueItems';
 import { AttachmentCollectionContext, type AttachmentCollectionItem } from './AttachmentCollection';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { TeammateProcessStatus } from '@/features/bots/TeammateProcessStatus';
 import { usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
@@ -157,6 +158,8 @@ import {
 } from './shareSelectionStore';
 import {
   parsePluginInstanceId,
+  pluginInstallStoragePart,
+  pluginNewInstallRelId,
   pluginStoragePart,
 } from '../../../shared/pluginIdentity';
 import { isValidGhostId } from '../../../shared/ghost';
@@ -363,6 +366,8 @@ import {
 import { CARD_EXPAND_TOGGLE_EVENT, GhostToolCard } from './GhostToolCard';
 import {
   ensureCard,
+  ensureRemoteCard,
+  retainRemoteCardSession,
   ensureSessionCards,
   getGhostCardSnapshot,
   subscribeGhostCards,
@@ -374,6 +379,7 @@ import {
 } from '@/cindy-brain/ghostCardGallery';
 import { ChatImageView } from './ChatImageView';
 import { galleryImagePreviewItem, ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
+import { GhostFulfillmentContext, type GhostCallSummary } from './GhostSummonCard';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
@@ -471,6 +477,7 @@ interface MessageStreamProps {
   ownerDeviceId?: string | null;
   /** Task origin. Personal WeChat must not be told to switch to Full access. */
   sessionSource?: string | null;
+  canConfigureAutoReview?: boolean;
   onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
   /** Session working directory; passed down so MarkdownRenderer / UserMessage
    *  can resolve relative paths in markdown links and inline @-chips
@@ -494,7 +501,7 @@ interface MessageStreamProps {
   botUnreadBoundaryAt?: number | null;
   onBotReadThrough?: (at: number) => void;
   messages: ChatMessage[];
-  /** Persisted row already owned by the live error banner; keep its recovery state there. */
+  /** Exact row owned by a rendered replacement error banner; otherwise keep its history card. */
   activeErrorClientId?: string | null;
   /** The ongoing call appears only in its transcript popover, including history replays. */
   activeVoiceCallId?: string | null;
@@ -804,6 +811,79 @@ function collectAssistantsWithFollowingUserBoundary(messages: readonly ChatMessa
     }
   }
   return out;
+}
+
+/**
+ * 意识"提及 → 兑现"关联(方案 2,渲染期从持久数据推导,重启幂等):
+ * 逐条扫消息,维护"当前轮的 user 消息",遇到 assistant 的 ghost_call 工具
+ * 调用就把其 ghost_id 记到当前 user 名下——即"这条 user 触发的那一轮里,
+ * AI 真的召唤了哪些意识"。软提示徽章据此升级为召唤卡(徽章说'提到了',
+ * 兑现后才敢说'召唤了')。turn 边界 = 下一条非 steer 的 user 消息。
+ * 调用与结果都来自持久消息,结果返回即停止;合成触发和结束标记隔离旧归属,不落
+ * 任何额外状态,重启重算结果一致。
+ */
+export function collectGhostCallsByUserTurn(
+  messages: readonly ChatMessage[],
+  isStreaming = false,
+): Map<string, GhostCallSummary> {
+  const out = new Map<string, { ghostIds: Set<string>; pendingGhostIds: Set<string>; running: boolean }>();
+  // Match the persisted tool-use identity, even when a hidden/empty result arrives
+  // after another user message. This is the same settlement criterion as work logs.
+  const results = new Set(messages.filter((m) => m.role === 'tool_result' && m.toolUseId).map((m) => m.toolUseId));
+  let currentUserClientId: string | null = null;
+  for (const [index, m] of messages.entries()) {
+    if (m.role === 'user' && m.delivery !== 'steer') {
+      // A new autonomous run must not borrow the preceding human's bubble.
+      currentUserClientId = m.isSyntheticTrigger ? null : m.clientId;
+      continue;
+    }
+    if (
+      currentUserClientId &&
+      (m.role === 'tool_use' || m.role === 'assistant') &&
+      isGhostCallToolName(m.toolName) &&
+      m.toolInput &&
+      typeof (m.toolInput as Record<string, unknown>).ghost_id === 'string'
+    ) {
+      const input = m.toolInput as Record<string, unknown>;
+      const gid = ghostSummonInstanceId(input.ghost_id as string, input.namespace);
+      if (!gid) continue;
+      const state = out.get(currentUserClientId) ?? { ghostIds: new Set<string>(), pendingGhostIds: new Set<string>(), running: false };
+      state.ghostIds.add(gid);
+      const returned = m.toolUseId
+        ? results.has(m.toolUseId)
+        : messages[index + 1]?.role === 'tool_result';
+      if (!returned) state.pendingGhostIds.add(gid);
+      out.set(currentUserClientId, state);
+    }
+    if (m.turnCompleted === true || m.role === 'error') currentUserClientId = null;
+  }
+  const active = currentUserClientId ? out.get(currentUserClientId) : undefined;
+  if (active) active.running = isStreaming && active.pendingGhostIds.size > 0;
+  return out;
+}
+
+/**
+ * 兑现关联 map 的结构等价判断:用于给 Provider value 做引用缓存。
+ * messages 数组在流式期间每批 delta 都换新引用,useMemo 会重算出"内容相同
+ * 但身份全新"的 Map;而 UserMessage 顶层订阅该 context(判定合并形态),
+ * context 消费按 Object.is 判变、无视 memo——不做等价缓存的话,每批 token
+ * 都会把全部历史 UserMessage 重渲一遍(规则 10 热路径口径)。摘要只在调用、结果或活动状态变化时更新。
+ */
+export function ghostCallMapsEqual(
+  a: ReadonlyMap<string, GhostCallSummary>,
+  b: ReadonlyMap<string, GhostCallSummary>,
+): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const [key, stateA] of a) {
+    const stateB = b.get(key);
+    if (!stateB || stateA.running !== stateB.running) return false;
+    for (const field of ['ghostIds', 'pendingGhostIds'] as const) {
+      if (stateA[field].size !== stateB[field].size) return false;
+      for (const id of stateA[field]) if (!stateB[field].has(id)) return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -1479,6 +1559,20 @@ function ghostCardInstanceId(ghostId: string, namespace: unknown): string | null
   return typeof namespace === 'string' && isValidPluginNamespace(namespace)
     ? pluginStoragePart({ namespace, ghostId })
     : null;
+}
+
+/** Summon labels retain explicit root identity; card/media anchoring keeps its existing keys. */
+function ghostSummonInstanceId(ghostId: string, namespace: unknown): string | null {
+  const id = ghostCardInstanceId(ghostId, namespace);
+  if (!id) return null;
+  const explicitRoot =
+    namespace === null ||
+    (namespace === undefined &&
+      !isValidGhostId(ghostId) &&
+      parsePluginInstanceId(ghostId)?.namespace === null);
+  return explicitRoot
+    ? pluginInstallStoragePart(pluginNewInstallRelId({ namespace: null, ghostId: id }))
+    : id;
 }
 
 export function buildRenderItems(
@@ -2820,6 +2914,7 @@ function renderWorkGroupChild(
     agentKind?: 'cc' | 'codex' | 'pi';
     remoteHostId?: string | null;
     sessionSource?: string | null;
+    canConfigureAutoReview?: boolean;
     onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
     isSessionStreaming: boolean;
     firstUserMessageClientId: string | null;
@@ -2871,6 +2966,7 @@ function renderWorkGroupChild(
         agentKind={props.agentKind}
         remoteHostId={props.remoteHostId}
         sessionSource={props.sessionSource}
+        canConfigureAutoReview={props.canConfigureAutoReview}
         onDiagnoseError={props.onDiagnoseError}
         sessionRunning={props.isSessionStreaming}
         assistantForkBlocked={shouldBlockAssistantFork(
@@ -2999,6 +3095,7 @@ export function MessageStream({
   remoteHostId,
   ownerDeviceId,
   sessionSource,
+  canConfigureAutoReview,
   onDiagnoseError,
   workingDir,
   assistantAvatar,
@@ -3244,17 +3341,25 @@ export function MessageStream({
   // 出口钩子的 turn 级自绘卡,后者 callId = assistant 消息 clientId),让"该气泡
   // 被自绘替换"的判定在重启/回放后成立;再对 settled 消息里的 xdt_card_id 逐个
   // ensureCard 兜底(幂等,批量已 ready 者直接跳过)。
+  // A task on another computer reads its cards from there (shared-task guests have no card access).
+  const remoteCardDeviceId = ownerDeviceId && !isSharedTaskPeer(ownerDeviceId) ? ownerDeviceId : null;
   useEffect(() => {
-    if (sessionId) ensureSessionCards(sessionId);
-  }, [sessionId]);
+    if (remoteCardDeviceId && sessionId) return retainRemoteCardSession(remoteCardDeviceId, sessionId);
+  }, [remoteCardDeviceId, sessionId]);
+  useEffect(() => {
+    if (sessionId && !ownerDeviceId) ensureSessionCards(sessionId);
+  }, [sessionId, ownerDeviceId]);
   useEffect(() => {
     for (const m of messages) {
       if (m.role === 'tool_result') {
         const cardId = extractGhostCardId(m.content);
-        if (cardId) ensureCard(cardId);
+        if (!cardId) continue;
+        // Anything else (local tasks, shared-task guests) resolves here; a missing card keeps the tool row.
+        if (remoteCardDeviceId && sessionId) ensureRemoteCard(remoteCardDeviceId, sessionId, cardId);
+        else ensureCard(cardId);
       }
     }
-  }, [messages]);
+  }, [messages, remoteCardDeviceId, sessionId]);
 
   const turnChangeSets = useTurnChangeSets(sessionId, remoteHostId);
 
@@ -6374,11 +6479,6 @@ export function MessageStream({
     return collectAssistantTurnUsageDetails(metadataMessages, turnFinalAssistantClientIds);
   }, [metadataMessages, turnFinalAssistantClientIds]);
 
-  // error-tail-banner:尾部未忽略的 error 行由输入框上方红条独家承载,流内需要
-  // 知道"是不是最后一条"来跳过重复渲染。走可见序列:尾部挂着子代理内部行时,
-  // 真实的最后一条可见 error 会因为"不是最后一条"而在流内重复渲染一遍。
-  const lastMessageClientId =
-    visibleMessages.length > 0 ? visibleMessages[visibleMessages.length - 1].clientId : undefined;
   const previousLocalFileRefsRef = useRef<readonly KnownLocalFileRef[]>([]);
   const localFileRefs = useMemo<readonly KnownLocalFileRef[]>(() => {
     return collectStableLocalFileRefs(rawMetadataMessages, previousLocalFileRefsRef.current);
@@ -6412,6 +6512,7 @@ export function MessageStream({
       agentKind,
       remoteHostId,
       sessionSource,
+      canConfigureAutoReview,
       onDiagnoseError,
       isSessionStreaming,
       firstUserMessageClientId,
@@ -6434,6 +6535,7 @@ export function MessageStream({
       agentKind,
       remoteHostId,
       sessionSource,
+      canConfigureAutoReview,
       onDiagnoseError,
       isSessionStreaming,
       firstUserMessageClientId,
@@ -6526,8 +6628,25 @@ export function MessageStream({
     resolvedBottomPadding,
   ]);
 
+  // 「提及 → 兑现」关联(方案 2):从会话历史现算,软提示卡据此升级为召唤卡。
+  // 引用缓存:内容不变时复用上一个 Map 引用——UserMessage 顶层订阅该
+  // context,流式期间 messages 每批 delta 都换引用,不缓存会让全部历史
+  // 消息每批 token 重渲一遍(ghostCallMapsEqual 注释有完整推导)。
+  // 走可见序列:归属键是**可见的**那条 user 消息(软提示卡挂在它上面),被隐藏的
+  // 子代理 user 行不该成为归属键,否则该 turn 的召唤卡升级不到任何可见气泡上。
+  const ghostCallsByUserTurnRaw = useMemo(
+    () => collectGhostCallsByUserTurn(visibleMetadataMessages, isSessionStreaming),
+    [visibleMetadataMessages, isSessionStreaming],
+  );
+  const ghostCallsCacheRef = useRef(ghostCallsByUserTurnRaw);
+  if (!ghostCallMapsEqual(ghostCallsCacheRef.current, ghostCallsByUserTurnRaw)) {
+    ghostCallsCacheRef.current = ghostCallsByUserTurnRaw;
+  }
+  const ghostCallsByUserTurn = ghostCallsCacheRef.current;
+
   return (
     <ChatSessionFileProvider value={sessionFileValue}>
+      <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
         <>
           <div className="relative h-full w-full">
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
@@ -6860,13 +6979,13 @@ export function MessageStream({
                         continuationInFlightProjectionCapability={
                           continuationInFlightProjectionCapability
                         }
-                        isLastMessage={msg.clientId === lastMessageClientId}
                         isActiveError={msg.role === 'error' && msg.clientId === activeErrorClientId}
                         localFileRefs={localFileRefs}
                         assistantAvatar={botContinuationKeys.has(item.key) ? botReplyColumnSpacer : assistantAvatar}
                         simplifiedBotConversation={simplifiedBotConversation}
                         starterOptionsLocked={Boolean(lastUserMessageClientId)}
                         sessionSource={sessionSource}
+                        canConfigureAutoReview={canConfigureAutoReview}
                         onDiagnoseError={onDiagnoseError}
                       />
                     );
@@ -6992,6 +7111,7 @@ export function MessageStream({
               )}
           </div>
         </>
+      </GhostFulfillmentContext.Provider>
     </ChatSessionFileProvider>
   );
 }
@@ -7049,13 +7169,13 @@ const MessageItem = memo(function MessageItem({
   isLastUserInput,
   isContinuationTurnOwner,
   continuationInFlightProjectionCapability,
-  isLastMessage,
   isActiveError,
   localFileRefs,
   assistantAvatar,
   simplifiedBotConversation,
   starterOptionsLocked,
   sessionSource,
+  canConfigureAutoReview,
   onDiagnoseError,
 }: {
   pluginUi: PluginUiMessageCandidates;
@@ -7100,10 +7220,7 @@ const MessageItem = memo(function MessageItem({
   isContinuationTurnOwner?: boolean;
   /** 当前投影对精确续跑边界字段的支持状态；legacy 才允许启用旧端兼容兜底。 */
   continuationInFlightProjectionCapability?: ContinuationInFlightProjectionCapability;
-  /** True iff this message is the last message in the full list —
-   *  error-tail-banner: a trailing un-dismissed error row is rendered by the
-   *  actionable banner above the composer instead of an inline card. */
-  isLastMessage?: boolean;
+  /** The parent actually renders this exact error in a replacement banner. */
   isActiveError?: boolean;
   localFileRefs: readonly KnownLocalFileRef[];
   /** Bot 对话:assistant 气泡左侧的伙伴头像。普通任务不传。 */
@@ -7113,6 +7230,7 @@ const MessageItem = memo(function MessageItem({
   /** True once the user has written anything in this task, which retires the opening's starter buttons. */
   starterOptionsLocked?: boolean;
   sessionSource?: string | null;
+  canConfigureAutoReview?: boolean;
   onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
 }) {
   // silent-stop 自动续跑行(isSyntheticTrigger + systemCardType):渲染成
@@ -7191,7 +7309,7 @@ const MessageItem = memo(function MessageItem({
         return sessionId ? (
           <McpAppCard sessionId={sessionId} clientId={message.clientId}
             title={String(message.systemCardData?.title ?? '')}
-            plugin={message.systemCardData?.plugin}
+            plugin={message.systemCardData?.plugin} customMcp={message.systemCardData?.customMcp}
             fallbackText={String(message.systemCardData?.fallbackText ?? '')} />
         ) : null;
       }
@@ -7294,13 +7412,9 @@ const MessageItem = memo(function MessageItem({
       // 呈现走 CCAgentSessionView 输入框上方的 InterruptedTurnBanner(与 ErrorBanner
       // 同风格)+ sidebar 'error' 红点,这里渲染 null。
       if (message.errorReason === APP_EXIT_INTERRUPTED_REASON) return null;
-      // error-tail-banner:普通失败行是尾部消息且未被忽略时,由输入框上方的可操作
-      // 红条(重试/关闭)独家承载,流内不重复渲染,避免双红条;被忽略或后续有新
-      // 消息后回落为流内静态历史卡。
-      if (isActiveError || (isLastMessage && !message.errorDismissed)) return null;
-      // A live error may be followed by hidden or system rows when history is
-      // reloaded. Its exact persisted identity still belongs to the live banner;
-      // unrelated failures remain available as compact history cards.
+      // Only a rendered alternate UI may own this exact row. Standalone and
+      // read-only streams retain failures, including those before location cards.
+      if (isActiveError) return null;
       return (
         <ErrorMessageCard
           message={message.content}
@@ -7309,6 +7423,7 @@ const MessageItem = memo(function MessageItem({
           toolLoop={message.toolLoop}
           outputLimit={message.outputLimit}
           sessionSource={sessionSource}
+          canConfigureAutoReview={canConfigureAutoReview}
           onDiagnose={onDiagnoseError}
         />
       );

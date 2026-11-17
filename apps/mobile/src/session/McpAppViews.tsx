@@ -74,6 +74,11 @@ function McpAppWebView({ view }: { view: McpAppView }) {
   if (!document || !nativeDocument) return null;
   return <WebView ref={bind} source={nativeDocument.source}
     style={{ height: view.state.height, backgroundColor: colors.surface }}
+    // size-changed owns the viewport height; the message list owns scrolling.
+    // In particular, keyboard insets must not turn an inline card into a scroller.
+    scrollEnabled={false} bounces={false}
+    automaticallyAdjustContentInsets={false} contentInsetAdjustmentBehavior="never"
+    showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false}
     originWhitelist={['*']} allowFileAccess={false} allowUniversalAccessFromFileURLs={false}
     sharedCookiesEnabled={false} thirdPartyCookiesEnabled={false}
     incognito={Platform.OS === 'ios'} cacheEnabled={false} domStorageEnabled

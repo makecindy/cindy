@@ -1,3 +1,4 @@
+import { canStopBotGroupSpeaker } from '@cindy/maker-shared/botGroupChat';
 import { interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
 import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
@@ -54,7 +55,7 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { useAttachments } from '@/hooks/useAttachments';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
-import { discardDraftTree } from '@/lib/composerDraftStore';
+import { captureDraftRecoveryScope, discardDraftTree } from '@/lib/composerDraftStore';
 import {
   classifyUnclassifiedDroppedItems,
   getDroppedFileItems,
@@ -91,7 +92,7 @@ import {
 } from './BotGroupLiveStatus';
 import { messageReactionRevision } from './ChatServerControls';
 import { ChatGroupInviteMenu } from './ChatGroupInviteMenu';
-import { animateThreadPanelWidth, ChatThreadPanel } from './ChatThreadPanel';
+import { animateThreadPanel, ChatThreadPanel } from './ChatThreadPanel';
 import {
   BotGroupPlanFollowUpRow,
   type BotGroupFollowUpAction,
@@ -313,8 +314,25 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const attachmentState = useAttachments(attachmentScope, attachmentScope);
   const [dragOver, setDragOver] = useState(false);
   const dragCounterRef = useRef(0);
+  const quoteDraftScope = useRef(captureDraftRecoveryScope(attachmentScope)).current;
   /** 引用回复 waiting in this group's composer; the page is rebuilt per group. */
-  const [quoteDraft, setQuoteDraft] = useState<BotGroupQuoteView | null>(null);
+  const [quoteDraft, setQuoteDraft] = useState<BotGroupQuoteView | null>(
+    () => quoteDraftScope.get()?.botGroupQuote ?? null,
+  );
+  useEffect(() => {
+    const existing = quoteDraftScope.get();
+    if (!existing && !quoteDraft) return;
+    quoteDraftScope.save({
+      ...existing, text: existing?.text ?? null, attachments: existing?.attachments ?? [],
+      botGroupQuote: quoteDraft ?? undefined,
+    });
+  }, [quoteDraftScope, quoteDraft]);
+  /** The quote went out with a message: clear only that quote, never one picked meanwhile. */
+  const acceptQuote = useCallback((sent: BotGroupQuoteView) => {
+    const existing = quoteDraftScope.get();
+    if (existing?.botGroupQuote === sent) quoteDraftScope.save({ ...existing, botGroupQuote: undefined });
+    setQuoteDraft(current => (current === sent ? null : current));
+  }, [quoteDraftScope]);
   const [jumpTarget, setJumpTarget] = useState<string | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   /** Quoted originals on older pages not re-read since the last push: quotes use their snapshot. */
@@ -779,8 +797,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     threadWasOpenRef.current = !!threadRootId;
     if (!opening) return;
     const panel = threadLayoutRef.current?.querySelector('aside');
-    const animation = panel && animateThreadPanelWidth(panel, '0px',
-      threadResize.width === undefined ? '50%' : `${threadResize.width}px`);
+    const animation = panel && animateThreadPanel(panel, 'open');
     if (!animation) return;
     threadOpenAnimationRef.current = animation;
     void animation.finished.then(() => animation.cancel(), () => {});
@@ -789,7 +806,9 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const closeThread = useCallback(() => {
     if (threadCloseAnimationRef.current) return;
     const panel = threadLayoutRef.current?.querySelector('aside');
-    const animation = panel && animateThreadPanelWidth(panel, `${panel.getBoundingClientRect().width}px`, '0px');
+    const animation = panel && animateThreadPanel(panel, 'close');
+    // The exit starts at the computed transform before releasing an unfinished entrance.
+    threadOpenAnimationRef.current?.cancel();
     threadOpenerRef.current?.focus();
     if (!panel || !animation) { setThreadRootId(null); return; }
     panel.inert = true;
@@ -1249,12 +1268,17 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         // The group's Cindy runs on another of the requester's computers: its task opens there.
         const target = (speaker.executionId ? workTargets.get(speaker.executionId) : undefined)
           ?? (runsOn && !runsOn.here && runsOn.sessionId ? { sessionId: runsOn.sessionId, deviceId: runsOn.deviceId, deviceName, botId: speaker.botId } : undefined);
-        return member ? [{ ...speaker, member, displayName: botGroupMemberDisplayName(member), sessionId: speaker.sessionId || target?.sessionId || null, target,
+        const name = member ? botGroupMemberDisplayName(member) : '';
+        const displayName = speaker.requesterName ? t('bots.groupChat.assistant.actingFor', { name, person: speaker.requesterName }) : name;
+        return member ? [{ ...speaker, isSelfRequested: speaker.isSelfRequested ?? (!group.serverBacked && !speaker.executionId), member, displayName, sessionId: speaker.sessionId || target?.sessionId || null, target,
           executor: runsOn ? { deviceName, ...(runsOn.here ? { here: true } : {}), ...(runsOn.model ? { model: runsOn.model } : {}) } : undefined }] : [];
       })
-    : []), [group, memberById, workTargets, remoteDevices]);
+    : []), [group, memberById, workTargets, remoteDevices, t]);
   const speakers = allSpeakers.filter(speaker => speaker.threadRootId === null || (!speaker.sourceMessageId && !speaker.threadRootId));
-  const stopSpeaker = interleaveBotGroupWork([], speakers.filter(speaker => speaker.activity !== 'planning')).at(-1)?.value;
+  const liveEntries = interleaveBotGroupWork(rows.map(row => row.outbox?.messageId
+    ? { ...row, serverMessageId: row.outbox.messageId } : row), !sharing && !group?.archived && !group?.dissolvedAt ? speakers : []);
+  const orderedSpeakers = liveEntries.flatMap(entry => entry.kind === 'work' && entry.value.activity !== 'planning' ? [entry.value] : []);
+  const stopSpeaker = [...orderedSpeakers].reverse().find(speaker => group && canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId }));
   const stepSpeaker = runningStep
     ? speakers.find((speaker) => speaker.activity === 'step' && speaker.member.botId === runningStep.step.botId)
     : undefined;
@@ -1432,7 +1456,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               </p>
             </div>
           ) : null}
-          {interleaveBotGroupWork(rows, !sharing && !group.archived ? speakers : []).map((entry, timelineIndex, timeline) => {
+          {liveEntries.map((entry, timelineIndex, timeline) => {
             if (entry.kind === 'work') {
               const speaker = entry.value;
               const step = runningStep && speaker === stepSpeaker ? {
@@ -1441,9 +1465,9 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               return <Fragment key={`work:${speaker.executionId ?? `${speaker.member.botId}:${speaker.activity}`}`}>
                 {speaker.activity === 'planning' ? <BotGroupSpeakingLine speaker={speaker} /> : <>
                   <BotGroupProgressStrip step={step} speakers={[speaker]} onStop={scope => void stopRound(scope)}
-                    canStop={group.round.canStop} canStopAll={!!group.canStopAll && !!group.round.othersActive} stopping={stopping}
+                    canStop={group.round.canStop !== false && speakers.some(speaker => canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId }))} stopping={stopping}
                     showStop={speaker === stopSpeaker}
-                    stopPending={stopping || speakers.filter(item => item.activity !== 'planning').every(item => item.stopping || item.executionStatus === 'stopping')} />
+                    stopPending={stopping || speakers.filter(item => item.activity !== 'planning' && canStopBotGroupSpeaker(group, { ...item, botId: item.member.botId })).every(item => item.stopping || item.executionStatus === 'stopping')} />
                   <BotGroupSpeakerInteraction speaker={speaker} />
                 </>}
               </Fragment>;
@@ -1566,7 +1590,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             conversationKind={direct ? 'direct' : undefined}
             draftKey={attachmentScope}
             members={group.members}
-            running={running} canStop={group.round.canStop}
+            running={running} canStop={group.round.canStop !== false && (!group.serverBacked || allSpeakers.some(speaker => canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId })))}
             planState={botGroupComposerPlanState(openPlan, group.replyMode)}
             divisionSteps={!!group.singleSpeaker}
             attachments={attachmentState}
@@ -1574,6 +1598,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             dragOver={dragOver}
             quote={quoteDraft ? { view: quoteDraft, display: resolveBotGroupQuote(quoteDraft, quoteSources) } : null}
             onQuoteChange={setQuoteDraft}
+            onQuoteAccepted={acceptQuote}
             onSending={onSending}
           />}
         </div>
@@ -1591,7 +1616,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         />
       ) : null}
     </BotGroupChatMain>
-    {group.serverBacked && threadRootId && <ChatThreadPanel key={`${group.id}:${threadRootId}`} group={group} rootId={threadRootId} speakers={allSpeakers.filter(speaker => speaker.threadRootId === threadRootId)} onStop={scope => void stopRound(scope)} stopping={stopping} canStopAll={!!group.canStopAll && !!group.round.othersActive} quoteSources={quoteSources}
+    {group.serverBacked && threadRootId && <ChatThreadPanel key={`${group.id}:${threadRootId}`} group={group} rootId={threadRootId} speakers={allSpeakers.filter(speaker => speaker.threadRootId === threadRootId)} onStop={scope => void stopRound(scope)} stopping={stopping} quoteSources={quoteSources}
       focus={threadFocus} sharedReplies={sharedReplies} onPostPending={beginPendingShare} onRevealShare={revealMainMessage} onClose={closeThread} resize={threadResize} />}
     </div>
   );
@@ -1599,6 +1624,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
 
 /** Mount the observer with the ready view, after the loading/error early returns. */
 function BotGroupChatMain(props: ComponentProps<'main'>) {
+  // Share the task/private-chat cap, padding and narrow-pane behavior.
   const { containerRef } = useProportionalWidth(914);
   return <main {...props} ref={containerRef} />;
 }

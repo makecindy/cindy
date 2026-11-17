@@ -47,7 +47,7 @@ import { companionPluginWorkEntries, type PluginInvocation } from './pluginInvoc
 import { useAuth } from '@/auth/AuthContext';
 import { downloadRemoteMediaShareTemp } from './remoteMediaDiskCacheExpo';
 import { usePluginResultCard } from './usePluginResultCard';
-import { MessageListRevealContext } from './messageListReveal';
+import { MessageListRevealContext, MessageListKeepKeyboardContext } from './messageListReveal';
 import { extractPayloadToolResultMedia, managedToolMediaKind } from '@cindy/maker-shared/payload-summary';
 import { AuthorizationMessageCard } from './AuthorizationMessageCard';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime, type BotTimelineMessage } from '@cindy/maker-shared/botTimeline';
@@ -936,6 +936,7 @@ export function MessageRenderer({
     viewportHeight: 0,
   });
   const tailFollowerRef = useRef<MobileTailFollower | null>(null);
+  const inlineEditorCountRef = useRef(0);
   const [processLeadingSpace, setProcessLeadingSpace] = useState<number | null>(null);
   const processViewport = useProcessDisclosureViewport(() => scrollMetricsRef.current, () => {
     // Short lists normally align to the bottom. Freeze that existing leading space while
@@ -1220,7 +1221,7 @@ export function MessageRenderer({
       tailFollowerRef.current = createMobileTailFollower({
         read: () => ({
           metrics: scrollMetricsRef.current,
-          stickToLatest: nearBottomRef.current,
+          stickToLatest: nearBottomRef.current && inlineEditorCountRef.current === 0,
           userControllingScroll: isUserControllingScroll(),
           preservingHistory: readingOlderRef.current || !historyPositioningRef.current,
           layoutSettleAt: mvcpSettleAtRef.current,
@@ -1998,6 +1999,18 @@ export function MessageRenderer({
     scrollToOffsetProgrammatically(Math.max(0, scrollMetricsRef.current.offsetY + delta), true);
   }, [scrollToOffsetProgrammatically]);
   const revealContextValue = useCallback((rect: { top: number; bottom: number }) => { void revealWindowRect(rect); }, [revealWindowRect]);
+  const [inlineEditorCount, setInlineEditorCount] = useState(0);
+  const keepInlineKeyboard = useCallback(() => {
+    inlineEditorCountRef.current++;
+    nearBottomRef.current = false;
+    tailFollowerRef.current?.reset();
+    setIsAwayFromBottom(true);
+    setInlineEditorCount(count => count + 1);
+    return () => {
+      inlineEditorCountRef.current--;
+      setInlineEditorCount(count => count - 1);
+    };
+  }, [setIsAwayFromBottom]);
   const [stickyShareClientId, setStickyShareClientId] = useState<string | null>(null);
   const stickyCheckSeqRef = useRef(0);
   const stickyCheckLastRunAtRef = useRef(0);
@@ -2435,7 +2448,7 @@ export function MessageRenderer({
       // Outside a drag, layout/MVCP corrections cannot prove user intent. Preserve follow;
       // actual momentum retains the existing direction/distance fallback.
       const preserveFollowIntent = nearBottomRef.current && !isMomentumScrollingRef.current;
-      const nearBottom = preserveHistoryBrowseIntent || processViewport.inspecting.current
+      const nearBottom = preserveHistoryBrowseIntent || processViewport.inspecting.current || inlineEditorCountRef.current > 0
         ? false
         : resumedProcessFollow || preserveFollowIntent || resolveMobileNearBottomOnScroll({
           wasNearBottom: nearBottomRef.current,
@@ -2972,6 +2985,7 @@ export function MessageRenderer({
     <MessageListVisibilityContext.Provider value={messageListVisibility}>
     <MarkdownRemoteMediaContext.Provider value={onResolveRemoteMedia}>
     <MessageListRevealContext.Provider value={revealContextValue}>
+    <MessageListKeepKeyboardContext.Provider value={keepInlineKeyboard}>
     <View
       style={styles.messageFrame}
       onTouchStart={handleHistoryTouchStart}
@@ -2983,7 +2997,7 @@ export function MessageRenderer({
         importantForAccessibility={listRevealed ? 'auto' : 'no-hide-descendants'}>
       <LegendList
         keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
+        keyboardDismissMode={inlineEditorCount > 0 ? 'none' : 'on-drag'}
         // 与 main 一致：每个任务用完整历史重挂；首次命令式落底在 opacity 遮罩下完成。
         key={scrollResetKey}
         data={listData}
@@ -3078,7 +3092,7 @@ export function MessageRenderer({
           </View>
         </View>
       ) : null}
-      {hasNewMessages || showJumpToLatest ? (
+      {inlineEditorCount === 0 && (hasNewMessages || showJumpToLatest) ? (
         <MessageScrollToBottomButton hasNewMessages={hasNewMessages} onPress={scrollToBottom}
           style={{ position: 'absolute', bottom: floatingBottomOffset, right: scrollToBottomFabRight }}
           testID={hasNewMessages ? 'message.newMessageButton' : 'message.jumpToLatestButton'}
@@ -3125,6 +3139,7 @@ export function MessageRenderer({
       )}
                 </>
               </View>
+    </MessageListKeepKeyboardContext.Provider>
     </MessageListRevealContext.Provider>
     </MarkdownRemoteMediaContext.Provider>
     </MessageListVisibilityContext.Provider>
@@ -4056,6 +4071,7 @@ function MessageBubble({
       {item.message.systemCardType === 'mcp-app' ? (
         <ViewabilityGatedMcpAppCard deviceId={actions.remoteDeviceId} sessionId={item.message.source.sessionId}
           clientId={item.message.source.clientId} title={String(item.message.systemCardData?.title ?? '')}
+          plugin={item.message.systemCardData?.plugin} customMcp={item.message.systemCardData?.customMcp}
           fallbackText={String(item.message.systemCardData?.fallbackText ?? '')} />
       ) : item.message.systemCardType ? (
         <MobileSystemCard

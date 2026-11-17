@@ -118,7 +118,7 @@ describe('sendToSession ordering', () => {
 
     expect(helperBlock).toContain('const result = await resolveCollabDispatchResult(');
     expect(helperBlock).toMatch(
-      /async \(\) => \{\s+const sendResult = await session\.send\((?:agentMessage|outgoingMessage), \{/,
+      /async \(\) => \{\s+params\.onSendAttempt\(\);\s+const sendResult = await session\.send\((?:agentMessage|outgoingMessage), \{/,
     );
     expect(helperBlock).toContain('planMode: false,');
     expect(helperBlock).toContain('throwOnStartFailure: true,');
@@ -190,7 +190,7 @@ describe('sendToSession ordering', () => {
     const pluginStateBlock = extractBetween(
       source,
       'ipcMain.handle(\n    MAKER_INVOKE.PLUGINS_GET_STATE',
-      'ipcMain.handle(MAKER_INVOKE.PLUGINS_SET_ENABLED',
+      'registerPluginEnableHandlers(',
     );
 
     expect(pluginStateBlock).toContain('resolveLocalCollabPolicyWorkingDir(');
@@ -256,14 +256,14 @@ describe('sendToSession ordering', () => {
     expect(dispatchBlock).toContain('const runAccepted = async (): Promise<void> => {');
     expect(dispatchBlock).toContain('acceptedDidRun = true;');
     expect(dispatchBlock).toMatch(
-      /const failureResult = async \(\s*dispatchOutcome: CollabDispatchFailureOutcome,?\s*\): Promise<DispatchOrcaInterAgentMessageResult> => \{/,
+      /const failureResult = async \(\s*dispatchOutcome: CollabDispatchFailureOutcome, reportRejected = false\): Promise<DispatchOrcaInterAgentMessageResult> => \{/,
     );
     expect(dispatchBlock).toContain('await runAcceptedRollback(params.onAcceptedRollback, params.targetSessionId, clientId, log);');
     expect(dispatchBlock).toContain('onAccepted: runAccepted,');
-    expect(dispatchBlock).toContain('return failureResult(result.dispatchOutcome);');
+    expect(dispatchBlock).toContain('return failureResult(result.dispatchOutcome, result.reportRejected);');
     expectOrder(dispatchBlock, 'const runAccepted = async (): Promise<void> => {', 'sendPersistedUserMessageToSession(deps, {');
     expect(dispatchBlock).toContain('onAccepted: runAccepted,');
-    expect(dispatchBlock).toContain('return failureResult(result.dispatchOutcome);');
+    expect(dispatchBlock).toContain('return failureResult(result.dispatchOutcome, result.reportRejected);');
     expectOrder(
       dispatchBlock,
       'await deps.prepareUnhealthySession?.(params.targetSessionId);',
@@ -320,12 +320,24 @@ describe('sendToSession ordering', () => {
     expect(orcaInterAgentDispatcherSource).toContain('const queuedAccepted = createQueuedAcceptedCallbacks(log);');
     for (const [name, method] of [
       ['register', 'register'], ['rollback', 'rollback'], ['settle', 'settle'],
-      ['run', 'run'], ['discard', 'discard'],
+      ['discard', 'discard'],
     ]) {
       expect(orcaInterAgentDispatcherSource).toContain(
         `const ${name}QueuedOrcaInterAgentAcceptedCallback = queuedAccepted.${method};`,
       );
     }
+    const runQueuedCallback = extractBetween(
+      orcaInterAgentDispatcherSource,
+      'const runQueuedOrcaInterAgentAcceptedCallback = (',
+      'const dispatchOrEnqueueOrcaInterAgentMessage = async (',
+    );
+    // #10803: a persisted scheduler recovery must inherit the original callback
+    // only through the bridge's verified source; otherwise run ownership is lost.
+    // Runtime recovery and cancellation are covered by runnerQueuedDispatch.test.ts.
+    expect(runQueuedCallback).toContain('return queuedAccepted.run(sessionId, item, recoverySourceClientId);');
+    expect(coordinatorBlock).toMatch(
+      /await orcaInterAgentDispatcher\.runQueuedOrcaInterAgentAcceptedCallback\(\s*sessionId,\s*item,\s*restoredFromSnapshot,\s*schedulerQueueBridgeHolder\?\.recoverySourceClientId\(sessionId, item\),?\s*\);/,
+    );
     expect(dispatchBlock).toMatch(
       /registerQueuedOrcaInterAgentAcceptedCallback\(\s*clientId,\s*params\.onAccepted,\s*params\.onAcceptedRollback,\s*params\.onAcceptedCommit,?\s*\);/,
     );
@@ -391,10 +403,10 @@ describe('sendToSession ordering', () => {
 
     expect(source).toContain('assertDesktopSendDispatched');
     expect(orcaInterAgentDispatcherSource).toContain('resolveCollabDispatchResult');
-    expect(helperBlock).toContain('Promise<CollabDirectDispatchResult>');
+    expect(helperBlock).toContain('Promise<(CollabDirectDispatchResult & { reportRejected?: true }) | null>');
     expect(helperBlock).toContain('const result = await resolveCollabDispatchResult(');
     expect(helperBlock).toMatch(
-      /async \(\) => \{\s+const sendResult = await session\.send\((?:agentMessage|outgoingMessage), \{/,
+      /async \(\) => \{\s+params\.onSendAttempt\(\);\s+const sendResult = await session\.send\((?:agentMessage|outgoingMessage), \{/,
     );
     expect(helperBlock).toContain('planMode: false,');
     expect(helperBlock).toContain('throwOnStartFailure: true,');
@@ -568,11 +580,7 @@ describe('sendToSession ordering', () => {
   });
 
   it('serializes SET_MODEL behind the send-time agent switch for the same session', () => {
-    const setModelBlock = extractBetween(
-      source,
-      'const handleSetModel = async (',
-      'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
-    );
+    const setModelBlock = setModelSource();
     const directSendSwitchBlock = extractBetween(
       source,
       'pendingAgentSwitchApplyHolder = async (',
@@ -683,11 +691,7 @@ describe('sendToSession ordering', () => {
   });
 
   it('仅 Device Link 归一化 SET_MODEL 的 JSON null 可选占位,本地仍走严格校验', () => {
-    const setModelBlock = extractBetween(
-      source,
-      'const handleSetModel = async (',
-      'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
-    );
+    const setModelBlock = setModelSource();
     expect(setModelBlock).toContain('normalizeDeviceLinkSetModelWireArgs(');
     expect(setModelBlock).toContain('isDeviceLinkInvoke(),');
     expect(setModelBlock).toContain(
@@ -1221,7 +1225,7 @@ function extractOrcaTeamServiceHandleWorkerTerminalTurnSource(): string {
 
 function extractDispatchOrEnqueueOrcaInterAgentMessageSource(): string {
   const block = orcaInterAgentDispatcherSource.match(
-    /const dispatchOrEnqueueOrcaInterAgentMessage = async \([\s\S]*?return \{\n {4}dispatchOrEnqueueOrcaInterAgentMessage,/,
+    /const dispatchOrEnqueueOrcaInterAgentMessage = async \([\s\S]*?return \{\n {4}dispatchOrEnqueueOrcaInterAgentMessage: async \(params\) => \{/,
   )?.[0];
   expect(block).toBeTruthy();
   if (!block) throw new Error('dispatchOrEnqueueOrcaInterAgentMessage source block not found');
@@ -1233,6 +1237,18 @@ function extractWorkerTerminalHandlerSource(): string {
     resolve(__dirname, '..', 'maker-ipc', 'sessionEventTerminal.ts'),
     'utf8',
   ).replaceAll('deps.', '');
+}
+
+// handleSetModel moved verbatim into sessionRuntimeSelectionApply.ts; register.ts keeps the binding
+// (createHandleSetModel) and what follows it. These blocks read the moved function followed by that
+// register.ts tail, in their former order.
+const runtimeSelectionApplySource = readFileSync(
+  resolve(__dirname, '..', 'maker-ipc', 'sessionRuntimeSelectionApply.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+function setModelSource(): string {
+  return extractBetween(runtimeSelectionApplySource, 'const handleSetModel = async (', '  return handleSetModel;')
+    + extractBetween(source, 'const handleSetModel = createHandleSetModel(', 'ipcMain.handle(MAKER_INVOKE.SET_EFFORT');
 }
 
 function extractBetween(

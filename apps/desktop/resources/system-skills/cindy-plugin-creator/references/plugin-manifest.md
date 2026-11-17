@@ -20,7 +20,7 @@
   },
   "version": "1.0.0",
   "releaseNotes": "新增图片编辑工具。", // 可选；更新说明要求见 §7.3
-  "minCindyVersion": "1.2.3", // 示例；v3 必填:本插件实际依赖的首个 Cindy 正式版本(SemVer)
+  "minCindyVersion": "1.2.3", // 示例；v3 必填，填写规则见下文(SemVer)
   "entry": "main.js",          // 电子脑入口(kind 字段已无需填写:插件只有芯片一种形态,缺省即 chip;写了也只认 "chip")
   "launch": "on-demand",       // 可选:电子脑启动模式。on-demand(缺省)=被需要才拉起;resident=唤醒即常驻(详情页会如实标注"常驻运行",绝大多数插件不需要,仅订阅型/需秒响应的场景用)
   "command": "画图",            // 推荐:用户 $画图 显式点名(与已装插件查重,冲突拒装)。
@@ -64,16 +64,16 @@
 }
 ```
 
-`schemaVersion: 3` 必须填写 `minCindyVersion`。它写本插件实际依赖的首个 Cindy
-正式版本；Manifest schema 本身没有统一的 Cindy 版本下限。不要为了使用某项既有能力随意抬高版本。
+`schemaVersion: 3` 必须填写 `minCindyVersion`。用到新能力时，填开发测试所用的 Cindy 版本；
+Manifest schema 本身没有统一的 Cindy 版本下限。不要为了使用某项既有能力随意抬高版本。
 官方市场会优先向旧客户端投影最近的兼容历史版本，没有兼容版本时不展示该插件。
 Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` 追加筛选或确认弹窗；
 用户主动导入的本地包、以及用户添加的自定义市场也遵循同一安装策略。这个字段仍必须
-准确填写：它供发布服务选择兼容 release，也记录插件真实依赖的首个 Host 版本。
+准确填写：它供发布服务选择兼容 release，也记录插件已验证的 Host 版本下限。
 
 `mcpApps.ui` 声明页面资源与工具可见性，完整写法见[§4.23](plugin-interactive-pages.md)。
 
-`agent.hostTools: string[]` 声明插件直接调用的宿主工具组：`history`、`control`、`handoff`、`settings`、`scheduler`、`terminal`、`files`、`storage`、`browser`、`computer`、`ssh`、`docs`、`discovery`。安装/更新确认整体授予该版本的全部已知声明能力，不另存分项批准；未知组保留但当前宿主不支持。UI 与 Node 均使用 `cindy.host.call`，详见[宿主工具调用](plugin-host-tools.md)。
+`agent.hostTools: string[]` 声明插件直接调用的宿主工具组：`history`、`control`、`handoff`、`settings`、`scheduler`、`terminal`、`files`、`storage`、`browser`、`computer`、`ssh`、`docs`、`discovery`、`usage`（只读本机订阅配额，以及本机/同账号已授权电脑的已记录用量、供应商组状态和可见成员信息）。安装/更新确认整体授予该版本的全部已知声明能力，不另存分项批准；未知组保留但当前宿主不支持。UI 与 Node 均使用 `cindy.host.call`，详见[宿主工具调用](plugin-host-tools.md)。
 
 可选 `mcpApps.host` 声明具名视图、原生位置、命令、补全与附件处理提供者、普通设置字段和宿主能力，见[插件界面扩展](plugin-host-ui.md)。
 已安装版本批准有效且插件已启用时，宿主支持的声明直接生效；未知扩展保留为数据，不另存 Host UI 分项批准。
@@ -82,7 +82,6 @@ Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` �
 `[{ "id": "style", "text": "Use the documented terminology.", "order": 100, "scope": "selected-task", "agentKinds": ["cc", "codex", "pi"] }]`。
 安装确认展示完整原文，用户在任务设置中选择后才生效；不进入其它任务或全局提示词。
 顺序、作用范围、引擎支持与大小限制见[静态系统提示词片段](plugin-control-points.md#静态系统提示词片段)。
-该能力尚未发布，开发示例不能作为正式版版本下限的依据。
 
 ### whenToUse:只写发现线索,不写使用规则
 
@@ -235,7 +234,7 @@ UI 和 Agent 发送都先进入 10 秒倒计时，卡片可撤销或立即发送
 
 v3 未识别的顶层字段会原样保留，但旧版 Cindy 不展示、不给这个未知 Host 能力、也不因此阻止安装。
 当未来 Cindy 识别该字段后，它才会进入正常的能力展示与运行时守门。插件若依赖新能力，
-应同时把 `minCindyVersion` 提高到首个支持版本；仅由插件包自己完成的逻辑不要发明
+应同时按本章规则更新 `minCindyVersion`；仅由插件包自己完成的逻辑不要发明
 Host 能力字段。v2 的 `slots` 只用于存量包兼容，新插件不得再写。
 当前 Agent tool-call 内，插件工具是否执行由外层 `ghost_call` 的 Agent 授权决定；
 普通网络和 workdir 文件操作按上文的 `callId` 绑定复用 Agent 授权。CLI 继续由
@@ -289,7 +288,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
 
 ```json
 "preview": {
-  "hosts": ["*.example.dev", "localhost"]   // 1–4 条;语法同 network.hosts;能在右侧栏打开的预览网站白名单,详情页逐条展示
+  "hosts": ["*.example.dev", "localhost"]   // 1–4 条;只接受普通域名模式或预览允许的回环名；不是完整 origin；详情页逐条展示
 }
 ```
 
@@ -334,7 +333,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
 
 ```json
 "network": {
-  "hosts": ["api.example.com", "*.weather.com"],   // 1–8 条;小写域名至少两段;通配只允许最左 "*.";详情页逐条展示给用户
+  "hosts": ["api.example.com", "*.weather.com"],   // 1–8 条；普通域名仅 HTTPS:443；完整 origin 可声明端口；HTTP/WS 只限字面量私网/回环与 localhost，且不注入凭证
   "secrets": [{                                     // 可选 0–4 条:需要用户填的凭证(你只声明名字和注入位置,值用户填、主机保管)
     "key": "api_token",                             // 小写字母开头,小写/数字/下划线,1–32;禁用宿主保留键(见 §2.1)
     "label": "Example API Token",                   // 给用户看的名称(设置页/详情页)
@@ -344,7 +343,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
     "inject": {                                     // 必填:这条凭证怎么进请求
       "header": "Authorization",                    // 注入的请求头名(Host/Cookie 等协议关键头禁用)
       "format": "Bearer {value}",                   // 恰含一个 {value} 占位,其余静态文本
-      "hosts": ["api.example.com"]                  // 可选:注入范围(hosts 声明条目的子集,逐字);缺省=全部
+      "hosts": ["api.example.com"]                  // 可选:注入范围(hosts 声明条目的子集,逐字);缺省只覆盖普通域名，完整 origin 必须显式写出，凭证只走 HTTPS/WSS
     },
     "exchange": {                                   // 可选:key 换令牌二段式(服务要求先拿 key 换临时令牌时声明,主机照单代办,见 §4.7;与 oauth 互斥)
       "url": "https://api.example.com/token",       // 交换端点(https;域名必须命中 hosts 白名单)

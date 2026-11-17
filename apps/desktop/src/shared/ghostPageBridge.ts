@@ -92,6 +92,9 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     ports.send({ ...req, type: 'host-request' }),
   fetch: (req: Record<string, unknown>): Promise<unknown> =>
     ports.send({ ...req, type: 'fetch-request' }),
+  network: Object.fromEntries(['open', 'read', 'send', 'close'].map(op => [op,
+    (req: Record<string, unknown>): Promise<unknown> => ports.send({ ...req, type: 'network-request', op }),
+  ])),
   downloads: {
     start: (req: Record<string, unknown>): Promise<unknown> => ports.send({ ...req, type: 'download-request', kind: 'start' }),
     cancel: (req: Record<string, unknown>): Promise<unknown> => ports.send({ ...req, type: 'download-request', kind: 'cancel' }),
@@ -127,7 +130,7 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     },
   ])),
   tasks: Object.fromEntries(
-    ['capabilities', 'models', 'setModel', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'create', 'list', 'get', 'send', 'getRun', 'listRuns', 'cancel', 'readMessages', 'setHidden', 'archive'].map(kind => [
+    ['capabilities', 'models', 'imProjects', 'followImProject', 'setModel', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'create', 'list', 'get', 'send', 'getRun', 'listRuns', 'cancel', 'readMessages', 'setHidden', 'archive'].map(kind => [
       kind, async (req: Record<string, unknown> = {}): Promise<unknown> => {
         const result = await ports.send({ ...req, type: 'tasks-request', kind });
         if (result?.ok === true) return result.data;

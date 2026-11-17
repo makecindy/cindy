@@ -1,4 +1,5 @@
 import { parseSettingsNavigationUrl, parseSettingsNavigationTarget, type SettingsNavigationTarget } from '@cindy/maker-shared/settings-navigation';
+import { normalizeGiftCardCode } from '../shared/giftCard.js';
 /**
  * deepLink — cindy:// (+ 历史 xdt-maker://) custom URL scheme + folder-context-menu handoff
  * ---------------------------------------------------------------------------
@@ -6,6 +7,8 @@ import { parseSettingsNavigationUrl, parseSettingsNavigationTarget, type Setting
  * 解析主 + 历史 scheme 都认——存量消息里的 xdt-maker:// 老链接不能死):
  *   cindy://chat-invite/<token>            —— 打开群邀请，自动预览后由用户确认加入;
  *                                             口令残缺时只回报「链接无效」,不带链接内容
+ *   cindy://gift/<code>                     —— 礼品卡兑换码:打开计费页的兑换弹窗并预填;
+ *                                             兑换码等同于可领取的余额,不进日志
  *   cindy://session/<sessionId>             —— sessionId 直接是 string id
  *   cindy://project/<urlencoded-workingDir> —— workingDir 全路径 URL-encoded
  *   cindy://settings/providers[?connect=<providerId>] —— 打开设置「模型供应商」页,
@@ -122,6 +125,8 @@ export type DeepLinkPayload =
    * ghost id 白名单,不合法整条拒绝。
    */
   | { type: 'installed-plugin'; ghostId?: string }
+  /** 礼品卡兑换码(已归一为 16 位规范形式)。 */
+  | { type: 'gift-card'; code: string }
   /**
    * 纯"把窗口拉回前台"意图,不携带导航语义 (典型来源:OAuth 授权成功页的
    * "打开 xdt-maker" 按钮 / 自动唤起)。main 进程内消化,不发给 renderer、
@@ -167,6 +172,16 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
   if (rest.startsWith('chat-invite/')) {
     const token = rest.slice('chat-invite/'.length);
     return /^[A-Za-z0-9_-]{43}$/.test(token) ? { type: 'chat-invite', token } : { type: 'chat-invite-malformed' };
+  }
+  if (rest.startsWith('gift/')) {
+    let raw = rest.slice('gift/'.length).replace(/[/?#].*$/, '');
+    try {
+      raw = decodeURIComponent(raw);
+    } catch {
+      return null;
+    }
+    const code = normalizeGiftCardCode(raw);
+    return code ? { type: 'gift-card', code } : null;
   }
   // provider/import 是双段精确路径，必须在通用 type/value 解析前消费。
   if (rest.startsWith('provider/')) {
@@ -547,7 +562,7 @@ export function sendMainWindowMessage(channel: string, payload: unknown): boolea
 
 function safeDeepLinkLog(payload: DeepLinkPayload) {
   // 口令不进日志。
-  return payload.type === 'chat-invite' || payload.type === 'shared-task-join' || payload.type === 'provider-share-join' || payload.type === 'local-plugin-share' ? { type: payload.type } : payload;
+  return payload.type === 'chat-invite' || payload.type === 'shared-task-join' || payload.type === 'provider-share-join' || payload.type === 'local-plugin-share' || payload.type === 'gift-card' ? { type: payload.type } : payload;
 }
 
 function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true, owner?: DataOwnerBroadcastScope): void {
@@ -569,7 +584,7 @@ function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true, owner?: 
   }
   // A loaded login/LocalDbGate page has no MainLayout listener yet. These intents stay
   // in the existing pending slot until the authenticated consumer takes them.
-  if (!windowReady || payload.type === 'provider-import' || payload.type === 'shared-task-join' || payload.type === 'provider-share-join' || payload.type === 'plugin' || payload.type === 'local-plugin-share') {
+  if (!windowReady || payload.type === 'provider-import' || payload.type === 'shared-task-join' || payload.type === 'provider-share-join' || payload.type === 'plugin' || payload.type === 'local-plugin-share' || payload.type === 'gift-card') {
     // 保留"用户最后意图"语义:同一次冷启动如果先后入站多条 (例如 argv 同时含
     // deep link URL 和 --open-folder, 现实场景极罕见但 bootstrap 两条 scan 都
     // 会触发),后到的覆盖前者。但 warn log 留下排查线索,事后能从日志识别这种

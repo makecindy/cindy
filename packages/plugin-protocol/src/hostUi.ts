@@ -1,7 +1,7 @@
 import { isSafeGhostRelativePath } from './internal/ghostPath.js';
 import { PLUGIN_APPEARANCE_FIELDS, type PluginAppearanceField } from './appearance.js';
 const EXTENDED_HOST_UI_POSITIONS = [
-  'sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion',
+  'composer.header', 'sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion',
   'composer.attachment', 'sidebar.section',
   'window.titlebar',
 ] as const;

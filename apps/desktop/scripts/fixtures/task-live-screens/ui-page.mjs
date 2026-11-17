@@ -3,12 +3,15 @@ export default {
   name: 'task-live-screens',
   entry: './fixture.tsx',
   viewport: { width: 320, height: 640 },
-  real: 'TaskLiveScreenButtons, taskLiveScreenEntries, plugin identity, translations, tooltip and confirm dialog',
+  real: 'TaskLiveScreenButtons, TaskLiveScreenNotices, useAutoOpenTaskLiveScreens, the in-place plugin install, plugin identity, translations and tooltip',
   notCovered:
-    'Static device and installed-plugin lists; no real device transport, plugin installation or opening a task tab',
+    'Static device and installed-plugin lists; no real device transport, Main install confirmation, finished installation or opening a task tab',
+  stubs: {
+    'src/renderer/features/right-sidebar/lib/openPluginTaskTab': 'export async function openPluginTaskTab() {}',
+  },
   cases: {
     default: {
-      about: 'One usable provider and one missing provider, with a duplicate legacy install key',
+      about: 'One usable provider and one missing provider, with a duplicate legacy install key; the ask waits above the composer',
     },
   },
   async check(page, ui) {
@@ -19,9 +22,13 @@ export default {
       plugin: 'Other device plugin',
     });
     await page.getByRole('button', { name: title, exact: true }).waitFor();
-    assert.equal(await page.getByRole('button').count(), 2);
-    await page.getByRole('button', { name: title, exact: true }).click();
-    await page.getByRole('alertdialog').waitFor();
-    await ui.capture('setup');
+    const notice = page.locator('[data-banner-kind="task-live-screen-plugin"]');
+    await notice.waitFor();
+    assert.ok((await notice.innerText()).includes(title));
+    const action = await ui.t('remoteDesktop.liveScreenPlugin.install.action');
+    // One click starts the install right here; nothing leaves the task.
+    await notice.getByRole('button', { name: action, exact: true }).click();
+    await notice.locator('button[aria-busy="true"]').waitFor();
+    await ui.capture('installing');
   },
 };

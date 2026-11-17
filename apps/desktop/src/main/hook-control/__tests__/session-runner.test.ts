@@ -148,6 +148,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     Session: actual.Session,
     hasSessionPermissionUpdates: actual.hasSessionPermissionUpdates,
     isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
+    isAutoReviewNoAvailableModelNotice: actual.isAutoReviewNoAvailableModelNotice,
     isAutoReviewUnavailableMetadata: actual.isAutoReviewUnavailableMetadata,
     autoReviewReasonFromMetadata: actual.autoReviewReasonFromMetadata,
     AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT: actual.AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
@@ -441,7 +442,7 @@ vi.mock('../../im/shared/sessionProviderLabel.js', () => ({
   resolveSessionErrorContext: vi.fn(async () => ({ providerLabel: 'OpenAI', modelLabel: 'GPT-6 Astra', taskLabel: '测试任务（sess-new）' })),
 }));
 
-import { createMakerHookSessionRunner, extractToolResultMediaUrls } from '../session-runner.js';
+import { createMakerHookSessionRunner, extractToolResultMediaUrls, resolveSharedImProjectConfig } from '../session-runner.js';
 import { MAIN_OWNED_SEND_CONTEXT, Session, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
@@ -549,6 +550,22 @@ beforeEach(() => {
 afterEach(() => setMainLocale('en'));
 
 describe('hook task model selection on next send', () => {
+  // Plugin IM must use the canonical row even before an official channel connects.
+  // Existing runner tests only selected adopted channels. Actual shared resolver; unit.
+  it('resolves plugin IM from the shared project row before any official channel adopts it', async () => {
+    h.useActualDefaults = true;
+    h.isSharedPrefsAdopted.mockReturnValue(false);
+    h.getWorkspacePref.mockImplementation((...args: unknown[]) => args[0] === 'shared'
+      ? { workspace: 'chat', agentKind: 'codex', model: 'remote-model', effort: 'high', permissionMode: 'ask' }
+      : { workspace: 'chat', agentKind: 'codex', model: 'wrong-model', effort: 'low', permissionMode: 'bypassPermissions' });
+    h.getWorkspaceProviderSource.mockImplementation((...args: unknown[]) => args[0] === 'shared' ? 'remote-provider' : 'wrong-provider');
+    h.agentDeviceId = 'share:owner';
+    h.readRemoteRoute.mockResolvedValue({ model: catalogModel('remote-model') });
+    const result = await resolveSharedImProjectConfig('chat', log);
+    expect(result).toMatchObject({ agentKind: 'codex', model: 'remote-model', effort: 'high', permissionMode: 'ask',
+      providerId: 'remote-provider', agentDeviceId: 'share:owner' });
+    expect(h.readRemoteRoute).toHaveBeenCalledWith({ agentDeviceId: 'share:owner', agentKind: 'codex', providerId: 'remote-provider', model: 'remote-model' });
+  });
   // PR #7291 unit: automatic selection must use the execution location and still
   // reach the existing stale-source rule; previous coverage used pinned defaults.
   it('creates an automatic remote workspace task and follows its resolved route', async () => {

@@ -124,9 +124,12 @@ beforeEach(() => {
   invoke.mockResolvedValue({ revision: 'a'.repeat(64) });
 });
 describe('remote original settings and target Host controls', () => {
-  it('reuses the target single-model control and persists it without local preferences', async () => {
+  // Mixed-version protocol: only a Host advertising remoteRoutes understands an explicit
+  // null location. Older Hosts must receive the unchanged model payload. tier: unit.
+  it.each([false, true])('persists the target model with remoteRoutes=%s without local preferences', async (remoteRoutes) => {
     const installed = ghost({ image: ['generate'], text: ['oneshot'] });
     let saved = preferences();
+    if (remoteRoutes) saved.tasks!.remoteRoutes = true;
     invoke.mockImplementation(async (_device, action, input) => {
       if (action === 'preferences-set')
         saved = {
@@ -151,6 +154,7 @@ describe('remote original settings and target Host controls', () => {
             agentKind: 'codex',
             providerId: 'target-provider',
             model: 'only-on-target',
+            ...(remoteRoutes ? { agentDeviceId: null } : {}),
             fastMode: false,
           },
           permissionMode: null,

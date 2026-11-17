@@ -2,7 +2,7 @@
  * 已建立任务实际在用的订阅账号(subscription-account-pools.md「任务的账号」，2026-11-11 用户要求)。
  * 账号池里的任务固定在一个账号上：输入框下方的用量、模型列表里这个供应商(含供应商组那一项)的账号名与
  * 用量都按这个账号显示，不拿默认账号或下一个待分配的账号顶替。账号在执行这个任务的电脑上：本机任务问
- * 本机，远程 Agent、远程控制与供应商组问那台。没有账号池、绑的是默认账号或旧任务时沿用原来的读取；
+ * 本机，远程 Agent、远程控制与供应商组问那台。没有账号池或池前未绑定的旧任务沿用原来的读取；
  * 旧执行端通过已有的原生会话用量查询兼容，不借用默认账号的身份。
  */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -90,6 +90,7 @@ async function readOlderHostTaskUsage(
     state: 'usage-only',
     usage: {
       codex: {
+        ...(typeof value.planType === 'string' ? { planType: value.planType } : {}),
         buckets: table as NonNullable<SubscriptionAccountUsage['codex']>['buckets'],
         credits: credits && typeof credits === 'object' ? credits : null,
       },
@@ -297,14 +298,17 @@ export interface SessionAccountDisplay {
   /** 跟在供应商后面的账号名；null = 还不知道，不借用默认账号的名字。 */
   identity: string | null;
   plan?: string;
-  /** false：原来的读取读的就是这个账号(默认账号)，用量照旧。 */
+  planTier?: string;
+  planDisplayName?: string;
+  planType?: string;
+  /** False only for an older host or a task with no account binding. */
   replacesUsage: boolean;
   /** replacesUsage 时这个账号自己的用量；null = 暂无。 */
   usage: SubscriptionAccountUsage | null;
 }
 
 /**
- * 用量读谁：null = 原来的读取就是这个账号(没有账号池、默认账号、旧任务)；否则只用这个账号自己的
+ * 用量读谁：null = 原来的读取就是这个账号(没有账号池、池前旧任务)；否则只用这个账号自己的
  * 用量，还没读到或账号不可用时为 null，不借用默认账号。
  */
 export function sessionAccountUsage(
@@ -313,7 +317,7 @@ export function sessionAccountUsage(
   if (!account || account.state === 'legacy') return null;
   if (account.state === 'usage-only') return { usage: account.usage };
   if (account.state !== 'bound') return { usage: null };
-  return account.account.isDefault ? null : { usage: account.account.usage ?? null };
+  return { usage: account.account.usage ?? null };
 }
 
 /** null = 按原来的读取显示。 */
@@ -330,10 +334,13 @@ export function sessionAccountDisplay(
     return { identity: t('subscriptionAccounts.unassigned'), ...replaces };
   if (account.state === 'unavailable')
     return { identity: t('subscriptionAccounts.boundUnavailable'), ...replaces };
-  const { identity, number, plan } = account.account;
+  const { identity, number, plan, planTier, planDisplayName, planType } = account.account;
   return {
     identity: identity ?? t('providerGroup.member.accountFallback', { index: number }),
     ...(plan ? { plan } : {}),
+    ...(planTier ? { planTier } : {}),
+    ...(planDisplayName ? { planDisplayName } : {}),
+    ...(planType ? { planType } : {}),
     ...replaces,
   };
 }
@@ -353,6 +360,7 @@ export function sessionAccountCodexPayload(
   return {
     ...general,
     ...credits,
+    planType: general?.planType ?? codex.planType,
     source: 'codex-app-server',
     appServerBuckets: buckets,
     // 账号池仅有原生桶，不伪造 WHAM；桥接模型同样按实际模型选择原生桶。

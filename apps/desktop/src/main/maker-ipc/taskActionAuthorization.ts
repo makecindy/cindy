@@ -18,6 +18,8 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'import_theme_package',
   'set_model_configuration',
   'configure_model_provider',
+  'set_provider_share_member_status',
+  'set_provider_share_model_access',
   'configure_model_connection',
   'manage_media_guide',
   'reset_app_settings',

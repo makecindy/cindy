@@ -1,4 +1,5 @@
 import type { ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
+import { formatClaudeSubscriptionPlanLabel, formatCodexPlanLabel } from '@cindy/maker-shared/subscription-usage';
 import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
 import { kimiUsageWindowMinutes } from '../../shared/kimiCodingUsage.js';
 import { opencodeGoUsageWindowMinutes } from '../../shared/opencodeGoUsage.js';
@@ -351,16 +352,6 @@ function accountIdentity(provider: ProviderView): string | null {
   return identity && identity.trim() ? identity.trim() : null;
 }
 
-/** "pro" → "Pro", "max_20x" → "Max 20x"; product names stay as the service writes them. */
-export function planLabel(raw: string | null | undefined): string | null {
-  if (!raw || !raw.trim()) return null;
-  return raw
-    .trim()
-    .split(/[_\s-]+/)
-    .map((word) => (/^[a-z]/.test(word) ? word[0].toUpperCase() + word.slice(1) : word))
-    .join(' ');
-}
-
 /** A window whose reset already passed has unknown usage until the next read. */
 function liveResetMs(resetsAtSeconds: number | null | undefined, nowMs: number): number | null | undefined {
   if (typeof resetsAtSeconds !== 'number' || !Number.isFinite(resetsAtSeconds) || resetsAtSeconds <= 0) return null;
@@ -414,7 +405,7 @@ export function codexSource(
     logoSvg: familyLogo('codex'),
     brand: 'Codex',
     account: accountIdentity(provider),
-    plan: planLabel(bucket?.planType ?? full?.planType),
+    plan: formatCodexPlanLabel(bucket?.planType ?? full?.planType),
     windows,
     credits: creditAmount,
     creditsUnlimited: credits?.unlimited === true,
@@ -439,7 +430,9 @@ export function subscriptionPoolSources(provider: ProviderView, pool: Subscripti
       ...source,
       id: account.id === 'default' ? provider.id : `${provider.id}:account:${account.id}`,
       account: identity,
-      plan: planLabel(account.plan) ?? source.plan,
+      plan: (source.family === 'claude'
+        ? formatClaudeSubscriptionPlanLabel(account.plan, account.planTier, account.planDisplayName)
+        : formatCodexPlanLabel(account.planType ?? account.plan)) ?? source.plan,
       accountKeys: [...(source.accountKeys ?? []), ...(account.accountKey ? [`${source.family}:verified:${account.accountKey}`] : []), ...(identity ? [`${source.family}:identity:${identity.toLowerCase()}`] : [])],
       pooled: true,
       consuming: account.running > 0,
@@ -454,6 +447,7 @@ function codexPoolPayload(usage: SubscriptionAccountUsage['codex']): CodexAccoun
     value && typeof value.usedPercent === 'number' && Number.isFinite(value.usedPercent)
       ? { ...value, usedPercent: value.usedPercent } : null;
   return {
+    planType: usage.planType,
     appServerBuckets: Object.fromEntries(Object.entries(usage.buckets).map(([id, bucket]) => [id, {
       ...bucket, primary: window(bucket.primary), secondary: window(bucket.secondary),
     }])),
@@ -486,7 +480,7 @@ export function claudeSource(
     logoSvg: familyLogo('claude'),
     brand: 'Claude',
     account: provider.id === 'anthropic' ? null : accountIdentity(provider),
-    plan: planLabel(snapshot?.subscriptionType),
+    plan: formatClaudeSubscriptionPlanLabel(snapshot?.subscriptionType, snapshot?.planTier, snapshot?.planDisplayName),
     windows,
     credits: null,
     creditsUnlimited: false,

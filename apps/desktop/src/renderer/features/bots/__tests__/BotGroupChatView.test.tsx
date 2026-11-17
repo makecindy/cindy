@@ -12,7 +12,7 @@ import { MarkdownMermaidBlock } from '@/components/chat/MarkdownMermaidBlock';
 import { prepareShareMessageClone, queryShareableMessageIds } from '@/lib/shareConversationImage';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { captureDraftDiscardToken, clearDraft, getAllDraftAttachmentUrls, getDraft, isDraftDiscardTokenCurrent, saveDraft } from '@/lib/composerDraftStore';
+import { captureDraftDiscardToken, clearDraft, getAllDraftAttachmentUrls, getDraft, getDraftPresence, isDraftDiscardTokenCurrent, saveDraft } from '@/lib/composerDraftStore';
 import { FeatureSidebarSlotProvider, useFeatureContentHeader } from '../../feature-context';
 import { markBotRead, getBotLastReadAt, botGroupReadKey, resetBotReadStateForTests } from '../botReadState';
 import { botGroupAttachmentScope, botGroupDraftDoc, botGroupThreadDraftKey } from '../botGroupAttachments';
@@ -41,7 +41,8 @@ vi.mock('@/components/chat/FileLightbox', () => ({
 const mocks = vi.hoisted(() => ({
   // Keep translation identity stable so attachment effects do not reload on every render.
   t: (key: string, options?: Record<string, unknown>) =>
-    options && 'name' in options ? `${key}:${String(options.name)}`
+    key === 'bots.groupChat.assistant.actingFor' ? `${options?.name} · for ${options?.person}`
+      : options && 'name' in options ? `${key}:${String(options.name)}`
       : key === 'bots.groupChat.memberCount' ? `${key}:${String(options?.count)}` : key,
   groupId: 'g1',
   locationState: null as { createdGroupInvite?: string | null } | null,
@@ -202,13 +203,13 @@ function msg(overrides: Partial<BotGroupMessageView>): BotGroupMessageView {
 
 function detail(overrides: Partial<BotGroupDetail> = {}): BotGroupDetail {
   return {
-    id: 'g1',
+    id: 'g1', supportsOwnedStop: true,
     name: '周末出游',
     replyMode: 'all',
     speakingMode: 'auto',
     members: [
-      { botId: 'mimi', name: '咪咪', avatar: '', avatarColor: 'red', status: 'active' },
-      { botId: 'xiaoman', name: '小满', avatar: '', avatarColor: 'blue', status: 'active' },
+      { botId: 'mimi', name: '咪咪', avatar: '', avatarColor: 'red', status: 'active', isOwned: true },
+      { botId: 'xiaoman', name: '小满', avatar: '', avatarColor: 'blue', status: 'active', isOwned: true },
     ],
     organizerBotId: 'mimi',
     projectDir: null,
@@ -247,13 +248,13 @@ function detail(overrides: Partial<BotGroupDetail> = {}): BotGroupDetail {
 
 function plan(overrides: Partial<BotGroupPlanView> = {}): BotGroupPlanView {
   return {
-    id: 'p1',
+    id: 'p1', canStop: true,
     status: 'proposed',
     organizerBotId: 'mimi',
     organizerName: '咪咪',
     steps: [
-      { position: 0, botId: 'mimi', botName: '咪咪', task: '想清楚这页讲什么', status: 'pending' },
-      { position: 1, botId: 'xiaoman', botName: '小满', task: '画设计稿', status: 'pending' },
+      { position: 0, canStop: true, botId: 'mimi', botName: '咪咪', task: '想清楚这页讲什么', status: 'pending' },
+      { position: 1, canStop: true, botId: 'xiaoman', botName: '小满', task: '画设计稿', status: 'pending' },
     ],
     currentStep: null,
     workDir: null,
@@ -866,7 +867,7 @@ describe('BotGroupChatView', () => {
       await user.click(trigger);
       const panel = screen.getByRole('complementary');
       if (duration === '200ms') {
-        expect(motion.animate).toHaveBeenCalledWith([{ width: '0px' }, { width: '50%' }], { duration: 200, easing: 'linear', fill: 'forwards' });
+        expect(motion.animate).toHaveBeenCalledWith([{ transform: 'translateX(100%)' }, { transform: 'translateX(0)' }], { duration: 200, easing: 'linear', fill: 'forwards' });
         await act(async () => motion.animations[0]!.finish());
       }
       await user.click(within(panel).getByRole('button', { name: 'bots.close' }));
@@ -875,10 +876,31 @@ describe('BotGroupChatView', () => {
         expect(panel.inert).toBe(true);
         expect(screen.getByRole('complementary')).toBe(panel);
         expect(motion.animate).toHaveBeenCalledTimes(2);
+        expect(motion.animate).toHaveBeenLastCalledWith([{ transform: 'none' }, { transform: 'translateX(100%)' }], expect.anything());
         fireEvent.keyDown(trigger, { key: 'Escape' });
         expect(motion.animate).toHaveBeenCalledTimes(2);
         await act(async () => motion.animations[1]!.finish());
       } else expect(motion.animate).not.toHaveBeenCalled();
+      expect(screen.queryByRole('complementary')).toBeNull();
+    } finally { cleanup(); motion.restore(); }
+  });
+
+  it('closes from the visible position when opening is interrupted, without changing layout width', async () => {
+    const motion = mockThreadMotion('200ms');
+    try {
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+      const user = userEvent.setup();
+      renderView();
+      await user.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+      const panel = screen.getByRole('complementary');
+      // jsdom does not interpolate WAAPI: supply the position of an opening mid-frame.
+      panel.style.transform = 'matrix(1, 0, 0, 1, 120, 0)';
+      await user.click(within(panel).getByRole('button', { name: 'bots.close' }));
+      expect(motion.animations[0]!.cancel).toHaveBeenCalled();
+      expect(motion.animate).toHaveBeenLastCalledWith([
+        { transform: 'matrix(1, 0, 0, 1, 120, 0)' }, { transform: 'translateX(100%)' },
+      ], expect.anything());
+      await act(async () => motion.animations[1]!.finish());
       expect(screen.queryByRole('complementary')).toBeNull();
     } finally { cleanup(); motion.restore(); }
   });
@@ -1071,7 +1093,7 @@ describe('BotGroupChatView', () => {
         fireEvent.click(triggers[0]!);
         const reopened = screen.getByRole('complementary');
         expect(reopened.style.width).toBe('464px');
-        expect(motion.animate).toHaveBeenLastCalledWith([{ width: '0px' }, { width: '464px' }], expect.anything());
+        expect(motion.animate).toHaveBeenLastCalledWith([{ transform: 'translateX(100%)' }, { transform: 'translateX(0)' }], expect.anything());
       } finally { cleanup(); motion.restore(); }
     });
   });
@@ -2560,13 +2582,42 @@ describe('BotGroupChatView', () => {
       const row = document.querySelector(`[data-bot-group-message-id="${id}"]`) as HTMLElement;
       return within(row).getByRole('button', { name: 'bots.groupChat.server.quoteReply' });
     };
+    /** Hold main's durable enqueue so the page can be left while the send is still being saved. */
+    const gateEnqueue = (outcome: 'accept' | 'reject' = 'accept') => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const enqueues: Extract<BotGroupOutboxCommandRequest, { action: 'enqueue' }>[] = [];
+      const stored: BotGroupOutboxStoredEntry[] = [];
+      let revision = 0;
+      window.electronAPI.maker.botGroupOutboxCommand = async request => {
+        const result = (extra: Partial<BotGroupOutboxCommandResult> = {}): BotGroupOutboxCommandResult =>
+          ({ ...localResult(request, stored), revision: ++revision, ...extra });
+        if (request.action === 'enqueue') {
+          enqueues.push(request);
+          await gate;
+          if (outcome === 'reject') throw new Error('OUTBOX_SOURCE_CONSUMED');
+          stored.unshift({ ...request.entry, entryRevision: stored.length + 1, queueOrdinal: stored.length + 1 });
+          return result({ accepted: true });
+        }
+        if (request.action === 'claim') {
+          const row = stored.find(candidate => candidate.input.groupId === request.groupId
+            && candidate.input.clientId === request.clientId);
+          return result({ ...(row?.entryRevision === undefined ? {} : { execution: {
+            owner: request.owner, instanceId: 'main-test', groupId: row.input.groupId,
+            clientId: row.input.clientId, entryRevision: row.entryRevision, claimToken: 'claim-test' } }) });
+        }
+        if (request.action === 'prepared') return result({ execution: request.execution });
+        return result();
+      };
+      return { enqueues, release };
+    };
     beforeEach(() => {
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
     });
 
-    it('quotes into the composer without opening a 话题, and removing it keeps the text', async () => {
+    it('quotes into the composer without opening a 话题, and removing it keeps the text across a remount', async () => {
       const user = userEvent.setup();
-      renderView();
+      const view = renderView();
       await user.click(await quoteButton());
       const preview = screen.getByTestId('bot-group-quote-preview');
       expect(preview.textContent).toContain('bots.groupChat.quote.replyingTo:小满');
@@ -2579,6 +2630,10 @@ describe('BotGroupChatView', () => {
       expect(screen.queryByTestId('bot-group-quote-preview')).toBeNull();
       expect((composer as HTMLTextAreaElement).value).toBe('那就这班');
       expect(document.activeElement).toBe(composer);
+      view.unmount();
+      renderView();
+      expect(((await screen.findByRole('textbox')) as HTMLTextAreaElement).value).toBe('那就这班');
+      expect(screen.queryByTestId('bot-group-quote-preview')).toBeNull();
     });
 
     it('Esc takes the quote off before anything else and keeps the draft', async () => {
@@ -2986,11 +3041,21 @@ describe('BotGroupChatView', () => {
       expect(document.querySelector('[data-bot-group-message-id][class*="bg-[var(--surface-hover)]"]')).toBeNull();
     });
 
-    it('keeps a quote draft inside its own group', async () => {
+    // Real view/composer + draft store (unit): the reproduced missing-quote bug
+    // needs g1 -> g2 -> g1, which the original isolation test never exercised.
+    // Both a quote-only draft and one with text must restore and still send the quoted id.
+    it.each(['', '那就这班'])('restores its own unsent quote after switching groups (text: %j)', async (draft) => {
       const user = userEvent.setup();
       let view = renderView();
       await user.click(await quoteButton());
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: draft } });
       expect(screen.getByTestId('bot-group-quote-preview')).toBeTruthy();
+      expect(getDraftPresence(botGroupAttachmentScope('g1'))).toBe(true);
+      if (draft) {
+        pickFiles([diskFile('reply-note.txt', 'text/plain')]);
+        await waitFor(() => expect(getDraft(botGroupAttachmentScope('g1'))?.attachments).toHaveLength(1));
+        expect(getDraft(botGroupAttachmentScope('g1'))?.botGroupQuote?.messageId).toBe('b1');
+      }
       view.unmount();
       mocks.groupId = 'g2';
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ id: 'g2', serverBacked: true }) });
@@ -2999,6 +3064,95 @@ describe('BotGroupChatView', () => {
       expect(screen.queryByTestId('bot-group-quote-preview')).toBeNull();
       await user.keyboard('x');
       expect(screen.queryByTestId('bot-group-quote-preview')).toBeNull();
+      view.unmount();
+      mocks.groupId = 'g1';
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+      view = renderView();
+      const composer = await screen.findByRole('textbox') as HTMLTextAreaElement;
+      expect(composer.value).toBe(draft);
+      expect(screen.queryByTestId('bot-group-quote-preview')?.textContent).toContain('周六 8:10 有票');
+      expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+      if (!draft) fireEvent.change(composer, { target: { value: '那就这班' } });
+      await user.type(composer, '{Enter}');
+      await waitFor(() => expect(lastSend()).toMatchObject({ groupId: 'g1', quote: { messageId: 'b1' } }));
+      await waitFor(() => expect(screen.queryByTestId('bot-group-quote-preview')).toBeNull());
+      view.unmount();
+      renderView();
+      await screen.findByRole('textbox');
+      expect(screen.queryByTestId('bot-group-quote-preview')).toBeNull();
+    });
+
+    it('drops a sent quote from the group draft even when the page was left while main saved it', async () => {
+      const user = userEvent.setup();
+      const { enqueues, release } = gateEnqueue();
+      let view = renderView();
+      await user.click(await quoteButton());
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: '就这班' } });
+      fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+      await waitFor(() => expect(enqueues).toHaveLength(1));
+      expect(getDraft(botGroupAttachmentScope('g1'))?.botGroupQuote?.messageId).toBe('b1');
+      view.unmount();
+      mocks.groupId = 'g2';
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ id: 'g2', serverBacked: true }) });
+      view = renderView();
+      await screen.findByRole('textbox');
+      await act(async () => { release(); });
+      view.unmount();
+      mocks.groupId = 'g1';
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+      view = renderView();
+      const composer = await screen.findByRole('textbox') as HTMLTextAreaElement;
+      expect(screen.queryByTestId('bot-group-quote-preview')).toBeNull();
+      expect(getDraft(botGroupAttachmentScope('g1'))?.botGroupQuote).toBeUndefined();
+      fireEvent.change(composer, { target: { value: '下一句' } });
+      fireEvent.keyDown(composer, { key: 'Enter' });
+      await waitFor(() => expect(lastSend()).toMatchObject({ groupId: 'g1', text: '下一句' }));
+      expect(lastSend().quote).toBeUndefined();
+    });
+
+    it('keeps a quote picked while the earlier send was still being saved', async () => {
+      const user = userEvent.setup();
+      const g1 = detail({ serverBacked: true, messages: [...detail().messages, msg({ id: 'b2', sequence: 5, authorKind: 'bot',
+        authorBotId: 'xiaoman', authorName: '小满', content: '周日 9:00 也有票' })] });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: g1 });
+      const { enqueues, release } = gateEnqueue();
+      let view = renderView();
+      await user.click(await quoteButton());
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: '就这班' } });
+      fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+      await waitFor(() => expect(enqueues).toHaveLength(1));
+      view.unmount();
+      mocks.groupId = 'g2';
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ id: 'g2', serverBacked: true }) });
+      view = renderView();
+      await screen.findByRole('textbox');
+      view.unmount();
+      mocks.groupId = 'g1';
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: g1 });
+      view = renderView();
+      await screen.findByText('周日 9:00 也有票');
+      await user.click(await quoteButton('b2'));
+      expect(screen.getByTestId('bot-group-quote-preview').textContent).toContain('周日 9:00 也有票');
+      await act(async () => { release(); });
+      expect(getDraft(botGroupAttachmentScope('g1'))?.botGroupQuote?.messageId).toBe('b2');
+      expect(screen.getByTestId('bot-group-quote-preview').textContent).toContain('周日 9:00 也有票');
+      fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+      await waitFor(() => expect(lastSend()).toMatchObject({ groupId: 'g1', quote: { messageId: 'b2' } }));
+    });
+
+    it('keeps the quote when the message never entered the outbox', async () => {
+      const user = userEvent.setup();
+      const { enqueues, release } = gateEnqueue('reject');
+      renderView();
+      await user.click(await quoteButton());
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: '就这班' } });
+      fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+      await waitFor(() => expect(enqueues).toHaveLength(1));
+      await act(async () => { release(); });
+      await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.composer.sendFailed'));
+      expect(screen.getByTestId('bot-group-quote-preview')).toBeTruthy();
+      expect(getDraft(botGroupAttachmentScope('g1'))?.botGroupQuote?.messageId).toBe('b1');
+      expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('就这班');
     });
   });
 
@@ -5237,7 +5391,7 @@ it('keeps only the current public progress note between tool calls', () => {
 it('keeps waiting work inspectable without inventing an elapsed time', async () => {
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi'], round: {
     status: 'running', canContinue: false, speakers: [
-      { botId: 'mimi', activity: 'reply', executionId: 'waiting', sessionId: 'lane-mimi', executionStatus: 'needs_input' },
+      { botId: 'mimi', activity: 'reply', executionId: 'waiting', isSelfRequested: true, sessionId: 'lane-mimi', executionStatus: 'needs_input' },
     ],
   } }) });
   renderView();
@@ -5257,11 +5411,11 @@ it('opens the exact remote execution and leaves other members’ private tasks u
     homeDevice: { deviceId: 'studio', name: 'Studio', online: true, isSelf: false, remoteControlEnabled: true },
   }] });
   mocks.remoteInvoke.mockResolvedValue({ ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'g1' }, blocks: [{ primitive: 'bot-group-chat', data: {
-    id: 'g1', round: { speakers: [{ executionId: 'other-thread', sessionId: 'wrong-lane' }, { executionId: 'this-turn', sessionId: 'correct-lane' }] },
+    id: 'g1', round: { speakers: [{ executionId: 'other-thread', sessionId: 'wrong-lane' }, { executionId: 'this-turn', isSelfRequested: true, sessionId: 'correct-lane' }] },
   } }] });
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi', 'xiaoman'], round: {
     status: 'running', canContinue: false, speakers: [
-      { botId: 'mimi', activity: 'reply', executionId: 'this-turn', sessionId: null, startedAt: Date.now() - 10_000 },
+      { botId: 'mimi', activity: 'reply', executionId: 'this-turn', isSelfRequested: true, sessionId: null, startedAt: Date.now() - 10_000 },
       { botId: 'xiaoman', activity: 'reply', executionId: 'theirs', sessionId: null, startedAt: Date.now() - 10_000 },
     ],
   } }) });
@@ -5280,8 +5434,8 @@ it.each([[false, false], [false, true], [true, false], [true, true]])('keeps the
     canStopAll: admin,
     speakingBotIds: ['mimi', 'xiaoman'],
     round: { status: 'running', canContinue: false, othersActive: admin, speakers: [
-      { botId: 'mimi', activity: 'reply', executionId: 'first-running', sessionId: 'lane-mimi', timelineAt: Date.now() - (newestFirst ? 1000 : 10000), startedAt: Date.now() - 10_000, executionStatus: 'running' },
-      { botId: 'xiaoman', activity: 'reply', executionId: 'last-stopping', sessionId: 'lane-xiaoman', timelineAt: Date.now() - (newestFirst ? 10000 : 1000), startedAt: Date.now() - 10_000, executionStatus: 'stopping', stopping: true },
+      { botId: 'mimi', activity: 'reply', executionId: 'first-running', isSelfRequested: true, sessionId: 'lane-mimi', timelineAt: Date.now() - (newestFirst ? 1000 : 10000), startedAt: Date.now() - 10_000, executionStatus: 'running' },
+      { botId: 'xiaoman', activity: 'reply', executionId: 'last-stopping', isSelfRequested: true, sessionId: 'lane-xiaoman', timelineAt: Date.now() - (newestFirst ? 10000 : 1000), startedAt: Date.now() - 10_000, executionStatus: 'stopping', stopping: true },
     ] },
   }) });
   renderView();
@@ -5290,14 +5444,9 @@ it.each([[false, false], [false, true], [true, false], [true, true]])('keeps the
   // Unit / #10345: the latest timeline execution owns the one group-wide control.
   expect(buttons[0]!.closest('[data-testid="bot-group-progress"]')?.textContent).toContain(newestFirst ? '咪咪' : '小满');
   expect((buttons[0] as HTMLButtonElement).disabled).toBe(false);
-  if (admin) {
-    fireEvent.pointerDown(buttons[0]!, { button: 0, ctrlKey: false });
-    fireEvent.click(await screen.findByRole('menuitem', { name: /^bots\.groupChat\.progress\.stopAll/ }));
-    await waitFor(() => expect(mocks.stopBotGroupRound).toHaveBeenCalledWith('g1', 'all'));
-  } else {
-    fireEvent.click(buttons[0]!);
-    await waitFor(() => expect(mocks.stopBotGroupRound).toHaveBeenCalledWith('g1'));
-  }
+  fireEvent.click(buttons[0]!);
+  await waitFor(() => expect(mocks.stopBotGroupRound).toHaveBeenCalledWith('g1'));
+  expect(screen.queryByRole('menuitem', { name: /^bots\.groupChat\.progress\.stopAll/ })).toBeNull();
 });
 
 // #8047: queued is busy, but creation/mount/plan-edit time does not prove work began.
@@ -5308,7 +5457,7 @@ it.each(['reply', 'step'] as const)('shows a queued %s without generation or wor
     ...(activity === 'step' ? withPlan(queuedPlan, []) : {}),
     speakingBotIds: ['mimi'],
     round: { status: 'running', canContinue: false, speakers: [{ botId: 'mimi', activity,
-      executionId: 'queued-execution', executionStatus: 'queued', sessionId: null, startedAt: Date.now() - 120_000 }] },
+      executionId: 'queued-execution', isSelfRequested: true, executionStatus: 'queued', sessionId: null, startedAt: Date.now() - 120_000 }] },
   }) });
   renderView();
   const strip = await screen.findByTestId('bot-group-progress');
@@ -5322,7 +5471,7 @@ it.each(['reply', 'step'] as const)('shows a queued %s without generation or wor
 it('shows newly queued work immediately in the timeline', async () => {
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi'],
     round: { status: 'running', canContinue: false, speakers: [{ botId: 'mimi', activity: 'reply',
-      executionId: 'just-queued', executionStatus: 'queued', sessionId: null, startedAt: Date.now() }] },
+      executionId: 'just-queued', isSelfRequested: true, executionStatus: 'queued', sessionId: null, startedAt: Date.now() }] },
   }) });
   renderView();
   const row = await screen.findByTestId('bot-group-progress');
@@ -5918,6 +6067,104 @@ it('does not reread group history for busy-only online presence', async () => {
   } finally { view.unmount(); vi.useRealTimers(); }
 });
 
+// Multi-member requests retain chronology and controls follow the requester, not bot ownership.
+// Unit regression: a send receipt arrives before its history row; live work must use that row's alias.
+it('anchors live work to a confirmed optimistic request before later messages', async () => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, members: detail().members.map(member => ({ ...member, assistant: true })), messages: [] }) });
+  let stored: BotGroupOutboxStoredEntry[] = [];
+  window.electronAPI.maker.botGroupOutbox = async () => stored;
+  window.electronAPI.maker.botGroupOutboxCommand = async request => {
+    if (request.action === 'enqueue') stored = [{ ...request.entry, status: 'sent', messageId: 'own-source', entryRevision: 1, queueOrdinal: 1 }];
+    return { ok: true, owner: request.owner, instanceId: 'anchor-test', revision: 1, entries: stored, accepted: true };
+  };
+  renderView();
+  await screen.findByRole('textbox');
+  const input = { groupId: 'g1', clientId: 'own-optimistic', text: 'Own optimistic request', mentions: { all: false, botIds: [] } };
+  await act(async () => enqueueBotGroupSend({ input, signature: botGroupSendSignature(input, ''), draft: input.text,
+    tracked: [], files: [], attachmentScope: botGroupAttachmentScope('g1') }));
+  await waitFor(() => expect(getBotGroupOutbox('g1')[0]?.messageId).toBe('own-source'));
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, members: detail().members.map(member => ({ ...member, assistant: true })),
+    messages: [msg({ id: 'later-source', sequence: 2, createdAt: 30, content: 'Later foreign request', isSelf: false })],
+    round: { status: 'running', canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'other-work', sourceMessageId: 'later-source', threadRootId: null, isSelfRequested: false },
+      { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'own-work', sourceMessageId: 'own-source', threadRootId: null, isSelfRequested: true },
+    ] },
+  }) });
+  await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'round' })));
+  const work = await screen.findAllByTestId('bot-group-work');
+  const later = screen.getByText('Later foreign request');
+  expect(work[0]!.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(work[0]!).getByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeTruthy();
+  expect(within(work[1]!).queryByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeNull();
+});
+
+// Unit regression: the same Cindy has concurrent requests; each live row must name its requester.
+it('names the requester on each running and queued Cindy execution', async () => {
+  const group = detail({ serverBacked: true, members: detail().members.map(member => ({ ...member, assistant: true })), round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'ann-work', requesterName: 'Ann', isSelfRequested: false, executionStatus: 'running' },
+    { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'chris-work', requesterName: 'Chris', isSelfRequested: true, executionStatus: 'queued' },
+  ] } });
+  group.members = group.members.map(member => member.botId === 'mimi' ? { ...member, name: 'Cindy', assistant: true } : member);
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group });
+  renderView();
+  const work = await screen.findAllByTestId('bot-group-work');
+  expect(within(work[0]!).getByText('Cindy · for Ann')).toBeTruthy();
+  expect(within(work[1]!).getByText('Cindy · for Chris')).toBeTruthy();
+});
+
+it('places live work before later messages and leaves another request read-only', async () => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, members: detail().members.map(member => ({ ...member, assistant: true })),
+    messages: [msg({ id: 'request', sequence: 1, createdAt: 10, content: 'First request' }), msg({ id: 'later', sequence: 2, createdAt: 30, content: 'Later message' })],
+    round: { status: 'running', canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: 'mine-lane', activity: 'reply', executionId: 'mine-work', timelineAt: 20, isSelfRequested: true },
+      { botId: 'xiaoman', sessionId: 'other-lane', activity: 'reply', executionId: 'other-work', timelineAt: 40, isSelfRequested: false },
+    ] },
+  }) });
+  renderView();
+  const work = await screen.findAllByTestId('bot-group-work');
+  const later = screen.getByText('Later message');
+  expect(work[0]!.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(later.compareDocumentPosition(work[1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(work[0]!).getByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeTruthy();
+  expect(within(work[1]!).queryByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeNull();
+  expect(within(work[1]!).queryByRole('button', { name: 'bots.groupChat.progress.viewProcess' })).toBeNull();
+});
+
+// Unit regression: planning is the requester's local auxiliary work, even with a foreign
+// organizer. Existing planning fixtures were local groups and never exercised this boundary.
+it.each([
+  [true, undefined, true], [false, undefined, false], [true, 'real-execution', false],
+] as const)('keeps my unclaimed planning cancellable with a foreign organizer (mine=%s, execution=%s)', async (isSelfRequested, executionId, allowed) => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true,
+    members: detail().members.map(member => ({ ...member, isOwned: false })),
+    planningBotId: 'mimi',
+    round: { status: 'running', canStop: true, canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: null, activity: 'planning', isSelfRequested, executionId },
+    ] },
+  }) });
+  renderView();
+  await screen.findByTestId('bot-group-speaking');
+  const stop = screen.queryByRole('button', { name: 'bots.groupChat.composer.stop' });
+  if (allowed) {
+    expect(stop).not.toBeNull();
+    fireEvent.click(stop!);
+    await waitFor(() => expect(mocks.stopBotGroupRound).toHaveBeenCalledWith('g1'));
+  } else expect(stop).toBeNull();
+});
+
+// Missing requester metadata on older hosts must not inherit aggregate ownership controls.
+it('keeps legacy server work read-only despite aggregate stop permission', async () => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, supportsOwnedStop: undefined, members: detail().members.map(member => ({ ...member, assistant: true })),
+    round: { status: 'running', canStop: true, canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: null, executionId: 'legacy', activity: 'reply' },
+    ] },
+  }) });
+  renderView();
+  expect(await screen.findByTestId('bot-group-work')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'bots.groupChat.composer.stop' })).toBeNull();
+});
+
 // Unit: an older live execution must not be appended below a later human message.
 it('inserts live work before later messages and keeps its element on an incremental refresh', async () => {
   const startedAt = Date.now() - 20_000;
@@ -5936,4 +6183,44 @@ it('inserts live work before later messages and keeps its element on an incremen
   await screen.findByText('Newest message');
   expect(screen.getByTestId('bot-group-work')).toBe(work);
   expect(work.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+// Topic filtering hides work rows, while the group composer still stops only my requests.
+it.each([true, false])('keeps topic-only stop ownership in the group composer (mine: %s)', async isSelfRequested => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, members: detail().members.map(member => ({ ...member, assistant: true })),
+    round: { status: 'running', canStop: true, canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: null, executionId: 'topic-only', activity: 'reply',
+        sourceMessageId: 'topic-source', threadRootId: 'topic-root', isSelfRequested },
+    ] },
+  }) });
+  renderView();
+  await screen.findByRole('textbox');
+  expect(screen.queryByTestId('bot-group-work')).toBeNull();
+  const stop = screen.queryByRole('button', { name: 'bots.groupChat.composer.stop' });
+  if (isSelfRequested) {
+    expect(stop).not.toBeNull();
+    fireEvent.click(stop!);
+    await waitFor(() => expect(mocks.stopBotGroupRound).toHaveBeenCalled());
+  } else expect(stop).toBeNull();
+});
+
+// Review #4581739975: the topic control must name the same request it can stop.
+it.each([false, undefined])('keeps the topic stop on my execution when the latest request is %s', async isSelfRequested => {
+  const root = msg({ id: 'stop-topic-root', content: 'Topic with concurrent work' });
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, members: detail().members.map(member => ({ ...member, assistant: true })), messages: [root],
+    round: { status: 'running', canStop: true, canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: null, executionId: 'topic-mine', activity: 'reply', threadRootId: root.id, timelineAt: 10, isSelfRequested: true },
+      { botId: 'xiaoman', sessionId: null, executionId: 'topic-other', activity: 'reply', threadRootId: root.id, timelineAt: 20, isSelfRequested },
+    ] },
+  }) });
+  mocks.thread.mockResolvedValue({ ok: true, root, replies: [], hasMore: false });
+  renderView();
+  fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+  const panel = screen.getByRole('complementary');
+  const rows = await within(panel).findAllByTestId('bot-group-progress');
+  expect(rows).toHaveLength(2);
+  expect(within(rows[0]!).queryByRole('button', { name: 'bots.groupChat.progress.stop' })).not.toBeNull();
+  expect(within(rows[1]!).queryByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeNull();
+  fireEvent.click(within(rows[0]!).getByRole('button', { name: 'bots.groupChat.progress.stop' }));
+  await waitFor(() => expect(mocks.stopBotGroupRound).toHaveBeenCalled());
 });

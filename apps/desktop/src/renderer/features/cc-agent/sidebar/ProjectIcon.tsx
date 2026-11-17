@@ -88,7 +88,7 @@ export function ProjectIcon({
         alt=""
         width={size}
         height={size}
-        className="shrink-0 object-cover"
+        className="shrink-0 rounded-[25%] object-cover"
         onError={() => setFailedSource(source)}
       />
     );

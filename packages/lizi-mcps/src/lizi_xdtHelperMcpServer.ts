@@ -6,6 +6,9 @@ import { registerStorageTools, type StorageToolCallbacks } from './xdt-helper/st
 import { registerHostServiceTools, type HostServicesToolCallbacks } from './xdt-helper/host_services.js';
 import { createControlReader } from './xdt-helper/control-catalog.js';
 import { registerAppModelsTools, type AppModelsCallbacks } from './xdt-helper/app_models.js';
+import { registerProviderReadTools, type ProviderReadCallbacks } from './xdt-helper/provider_reads.js';
+import { registerProviderSharingTools, type ProviderSharingCallbacks } from './xdt-helper/provider_sharing.js';
+import { registerSubscriptionUsageTools, type SubscriptionUsageCallbacks } from './xdt-helper/subscription_usage.js';
 import { registerAppSettingsTools, type AppSettingsCallbacks } from './xdt-helper/app_settings.js';
 import { registerThemePackageTool, type ThemePackageCallbacks } from './xdt-helper/theme_packages.js';
 import { registerGithubTools, type GithubToolCallbacks } from './xdt-helper/github.js';
@@ -174,7 +177,7 @@ const CALL_TOOL_INPUT = {
 
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
-const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots', 'github', 'settings', 'terminal', 'files', 'storage', 'discovery'] as const;
+const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots', 'github', 'settings', 'terminal', 'files', 'storage', 'discovery', 'usage'] as const;
 
 /**
  * 类目概览里每个类目的一句话用途 + 作用范围(本机 / 可跨电脑)。只陈述事实:模型在概览
@@ -193,7 +196,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   ].join(''),
   settings: [
     '管理 Cindy 的全局设置、默认模型与 API 供应商连接（添加、安全填写密钥、发现型号、测试连接），普通任务和伙伴共用。',
-    '作用于运行任务的本机；',
+    '供应商分享成员管理可用 device 指定同账号已授权电脑；其它操作按工具说明作用于运行任务的本机。',
     '先查询当前值和可选项，再修改或恢复默认。',
     '密钥通过电脑或手机的加密代输入卡交给宿主。',
     'SSH 主机编辑使用 cindy_ssh。',
@@ -231,6 +234,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   files: '通过同一宿主文件服务访问真实任务工作目录或用户亲选的插件目录；读、写、列举、删除与有界监听。',
   storage: '插件自身 KV、私有文件、作品库、媒体与交接文件的统一调用接口；跨插件快照分享每次经宿主确认，仅同账号本机和同一组织范围。',
   discovery: '只读发现执行宿主实际提供的服务与本插件的批准事实；仅本机，不安装、启停或撤销其他插件。',
+  usage: '只读查询订阅额度、已记录供应商用量与供应组状态。get_subscription_usage 仅查询执行电脑当前 Cindy 账号的本机订阅，返回套餐、额度窗口与更新时间；供应商历史与组状态可用 device 指定同账号已授权电脑，缺省本机。插件需声明 usage 组。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
   handoff: [
     '给已有任务发消息或新建任务。',
@@ -481,6 +485,7 @@ export interface XdtHelperMcpDeps {
   files?: FileToolCallbacks;
   storage?: StorageToolCallbacks;
   hostServices?: HostServicesToolCallbacks;
+  subscriptionUsage?: SubscriptionUsageCallbacks;
   github?: GithubToolCallbacks;
   getSessionProject?: import('./xdt-helper/get_current_session_id.js').GetCurrentSessionIdDeps['getSessionProject'];
   logger?: LiziMcpLogger;
@@ -556,6 +561,8 @@ export interface XdtHelperMcpDeps {
   themePackages?: ThemePackageCallbacks;
   piRuntime?: PiRuntimeCallbacks;
   modelSettings?: AppModelsCallbacks;
+  providerReads?: ProviderReadCallbacks;
+  providerSharing?: ProviderSharingCallbacks;
   appModels?: Pick<BotCapabilityCallbacks, 'models' | 'setDefaultModel'>;
   botCapabilities?: BotCapabilityCallbacks;
   /** Which computer runs a teammate, and moving it to another (cloud companions). */
@@ -632,6 +639,7 @@ export function createXdtHelperMcpServer(
     if (context.remoteHostId) {
       defaultCategories.delete('app_update');
       defaultCategories.delete('settings');
+      defaultCategories.delete('usage');
     }
     const allow = (categories: ReadonlySet<string>): HelperSurfaceAllow => ({
       categories,
@@ -653,6 +661,7 @@ export function createXdtHelperMcpServer(
   if (deps.files) registerFileTools(registry, deps.files, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.storage) registerStorageTools(registry, deps.storage, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.hostServices) registerHostServiceTools(registry, deps.hostServices, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.subscriptionUsage) registerSubscriptionUsageTools(registry, deps.subscriptionUsage, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.github) registerGithubTools(registry, deps.github, () => resolveLiziMcpSessionContext(sessionCtx).sessionId);
 
   // 'cindy' 类: 自省 (无 host 依赖, 始终注册)。
@@ -841,6 +850,8 @@ export function createXdtHelperMcpServer(
     });
   }
   if (deps.modelSettings) registerAppModelsTools(registry, deps.modelSettings, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.providerReads) registerProviderReadTools(registry, deps.providerReads, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.providerSharing) registerProviderSharingTools(registry, deps.providerSharing, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.piRuntime) registerPiRuntimeTools(registry, deps.piRuntime, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.appSettings) registerAppSettingsTools(registry, deps.appSettings, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.themePackages) registerThemePackageTool(registry, deps.themePackages, () => resolveLiziMcpSessionContext(sessionCtx));

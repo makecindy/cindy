@@ -29,6 +29,26 @@ getRun/listRuns/readMessages 复用本机回执和历史、按原插件/账号�
 回归：`taskSlot.test.ts`、`pluginTaskSnapshot.test.ts`、`pluginTaskService.test.ts`、
 `sessionRuntimeHarnessSelection.test.ts`；同时运行原远程往返和 Session 控制回归。
 
+### 插件设置保存运行位置（2026-11-16，未发布）
+
+宿主「模型与任务」卡与普通任务列出相同来源；`ghost-errand-prefs.json` 的插件配置可选保存
+`agentDeviceId`（字符串指定远程来源，`null` 明确选本机；只随完整模型组合保存，
+单独出现按脏数据丢弃，历史缺字段的配置不迁移）。
+保存时 `setPluginTaskConfigValidator` 用 `savedPluginTaskRemoteRoute` 组成完整 route，经
+`resolveRemotePluginTaskRoute` 按那台电脑的目录核对；不读本机目录和本机已装 Harness。
+没有显式 route 的 `tasks.create` 与 `setModel('plugin-default')` 采用保存的位置；显式 route
+（本机或远程）整组替换保存的选择，不把保存的位置拼进显式本机 route。旧 errand 与
+`workspace.ensureSession` 经 `resolvePluginSavedExecution` 同样带位置建任务，errand 复用判定与
+设置变更检查都比较位置；errand 只有设置明确选过位置时才比较任务位置，历史缺字段时
+保留原来复用用户修好任务的语义，其它字段不匹配仍按原方式重建本机任务。
+快问快答（`getPluginOneshotModelSelection`）在有远程位置时返回 null，
+走身份卡声明 / 系统辅助模型链。手机与远程 Desktop 经 `task-settings:set` / `kind:'tasks'` 的
+`model.agentDeviceId` 写入，宿主读取结果带 `remoteRoutes:true`；协议见
+[插件任务设置的运行位置](protocol-compatibility/plugin-task-preferences-remote-route.md)。
+新控制端用 `model.agentDeviceId:null` 明确切回宿主；旧控制端修改权限时回传同一模型组合，
+宿主保留已存运行位置，避免把整卡回传误当作选择本机同名来源。
+旧版客户端读取同一文件会丢掉该字段，降级后按本机同名供应商解析，这是不支持降级的已知边界。
+
 ## 新建任务、继续任务与读取结果
 
 插件调用的是 Cindy 普通任务（Session）能力。界面、工具说明和文档统一使用「新建任务」「打开任务」「继续任务」，不另设 AI 代办或插件专属任务概念。
@@ -421,9 +441,10 @@ DB 中下一条输入的 armed 值为 false 不代表原生执行已退出 Plan�
 - 每次请求固定 owner generation、逻辑页与批准 revision，每个 await 后复核；变化返回 `PERMISSION_DENIED` 并丢弃结果。
   仅本机 Desktop 逻辑页，Mobile 页面返回 `UNSUPPORTED_CAPABILITY`，不新增 device-link 透传。
 
-### 消息图片附件
+### 消息附件
 
-`tasks.send` 与 `targets.send` 支持 `attachments?: Array<{base64:string,name?:string}>`。
+`tasks.send` 与 `targets.send` 支持 `attachments?: Array<{base64:string,name?:string}>`；`tasks.send` 另支持只给模型的
+`contextAttachments`（同形）。2026-11-17 起从只收截图扩展为图片、音视频与文件，对齐 Cindy 自己的 IM 渠道入站附件。
 
 账号范围历史与附件读取使用独立声明的 `agent.hostTools:['history']` 和共用的 `cindy.host.call`。
 `list_teammates` 返回伙伴及保存的任务关系，`read_session_attachment` 按明确的本机任务、消息和附件序号读取已有宿主授权的 Cindy 媒体，或取用既有 grant / deposit / handoff 引用。
@@ -435,15 +456,40 @@ DB 中下一条输入的 armed 值为 false 不代表原生执行已退出 Plan�
 花名册变化时重建 `GhostTaskEventIndex`；热路径只访问该 topic 的订阅者，零订阅不读目录、投影正文或唤醒进程。
 沿用逐事件投递、100 条熄灯队列和 `dropped`，不新增 timer 或进度折叠。
 投递与缓冲补投均核对当前安装、批准和 owner；断线补拉复用历史游标，不新增持久事件账本。
-插件先核对 `tasks.capabilities().messageAttachments`，无此能力时停止发送截图，不能静默丢图或回退文件路径。
+插件先核对 `tasks.capabilities().messageAttachments`，无此能力时停止发送附件，不能静默丢图或回退文件路径；
+`kinds` 只有 `image` 的旧 Host 只收 PNG/JPEG/WebP（最多 4 张、合计 20 MiB）。
 只接受插件自己提供的字节；不接受 Host 路径、URL、其他会话的媒体 URI 或自报 MIME。
-Host 校验规范 base64，嗅探 PNG/JPEG/WebP，最多 4 张、合计 20 MiB；附件字节指纹和名称参与幂等签名，回执不保存 base64。
-两种发送入口在解码前共用 40 MiB 在途字节额度，持有至请求完成；超额返回可重试的 `TASK_BUSY`，成功、失败及取消均在 `finally` 释放额度，不在 Host 内排队保留超额附件。
+Host 校验规范 base64（`shared/pluginAttachments.ts`）：attachments 最多 10 个、contextAttachments 最多 10 个，单个 ≤30 MiB
+（与 IM 渠道入站上限相同），两组合计 ≤50 MiB；附件字节指纹和名称参与幂等签名，回执不保存 base64。
+contextAttachments 只在非空时加入签名，不带它的请求摘要与旧版逐字节相同，已存 requestKey 照常重放。
+`tasks.send` 的 `text` 仅在带 attachments 时可为 `''`（`capabilities().messageAttachments.attachmentOnly`），空正文不触发自动命名。
+两种发送入口在解码前共用 100 MiB 在途字节额度，持有至请求完成；超额返回可重试的 `TASK_BUSY`，成功、失败及取消均在 `finally` 释放额度，不在 Host 内排队保留超额附件。
 
-`pluginMessageAttachments.ts` 复用 `ingestMedia` 和草稿/排队消息提交链路。入库前同步登记内容地址到现有回收器的活引用集合，
-覆盖去重旧 blob 的入库、取消和派发在途窗口。调用方等待既有持久队列写入或插话落库后释放在途保护；
-之后由内存队列、恢复快照和 `createMessage → commitMessageMediaRefs` 的会话附件引用保护。
-失败或取消且未采用的图片不保留永久引用，由既有零引用缓冲与手动回收处理。无新目录、数据表、媒体协议或 media.deposit 授权。
+`pluginMessageAttachments.ts` 用 `sniffMediaMime` + `supportedMime` 对每个附件判一次去处，判据与 IM 渠道相同（真实字节，
+不信自报）：总仓白名单内的图片与音视频走 `ingestMedia`，其余一律按非媒体文件处理（不进总仓）。
+- 消息本身的附件（attachments）：媒体以用户附件写入（`isCache:false`），音视频的队列文件同时带仓内路径与 `url`，
+  `chatMessage.files` 保留 `url` 以便落库时挂会话引用（与 `im/messagePersistence.ts` 的 IM 音视频一致）；
+  文件经 `im/shared/inboundFileStaging.ts` 暂存到 `im-attachments/plugin/staging/` 后立即领养进
+  `im-attachments/plugin/sessions/<任务ID>/`，任务删除时由 `removeImSessionAttachmentDirs` 清理。
+- 只给模型的附件（contextAttachments）：媒体以可回收缓存写入（`isCache:true`），文件留在 `plugin/staging/` 由 24 小时按龄清扫回收，
+  与 IM 群历史附件相同。放进队列项的 `contextFiles`：`buildMakerUserMessage` 把它们接在本条附件之后交给模型；
+  不写入 `chatMessage`、`persistedContent` 或落库消息，`toProjectedItem` 不投影给 Renderer / device-link，
+  `requireQueuedMessage` 剥掉 wire 自报的该字段，只有 Host 的插件派发入口能设置。
+- 入库前同步登记媒体内容地址到现有回收器的活引用集合，覆盖去重旧 blob 的入库、取消和派发在途窗口；之后由内存队列、
+  恢复快照（整项 JSON，含 contextFiles）和 `createMessage → commitMessageMediaRefs` 的会话附件引用保护。
+  交给投递前失败时删掉本次已写的文件；进入投递后即使抛错（含 ACK 未知）也不删，队列可能已持有。
+  失败或取消且未采用的媒体不保留永久引用，由既有零引用缓冲与手动回收处理。无新数据表、媒体协议或 media.deposit 授权。
 
-queue 与 steer 都把托管 URL 写入 files、chatMessage.images 和持久消息信封；模型输入由既有附件装配器生成。
-正文/附件来源仍是插件续行，不把截图变为新用户授权；目标、批准、owner 和取消闸保持不变。
+queue 与 steer 都把托管 URL 写入 files、chatMessage.images / chatMessage.files 和持久消息信封；模型输入由既有附件装配器生成，
+`normalizeAttachments.ts` 把图片与文件块里的 `cindy-media://` 解析成仓内路径。
+正文/附件来源仍是插件续行，不把转发的图片、视频或文件变为新用户授权；目标、批准、owner 和取消闸保持不变。
+
+### 转发 IM 消息的出处（2026-11-16）
+
+`tasks.capabilities().messageRelay` 表示 `tasks.send` 接受可选 `relay:{platform,chatType,chatName?,sender:{id,name,isOwner}}`；
+`taskSlot.ts` 逐层只认这些键并按 `MESSAGE_SOURCE_RELAY_LIMITS` 限长，`targets.send` 不接受。`PluginTaskService.send`
+只在请求带 relay 时把它加进回执摘要（不带时摘要逐字节不变，旧 requestKey 照常重放），并且只在有 relay 时把它作为
+`dispatch` 的第七个参数传下去。`register.ts` 的派发适配器用 `readMessageSourcePluginRelay` 清洗后盖章到
+`sourcePlugin.relay`，插件名与插件 id 仍由宿主决定。展示、`[消息来源]` 与访客脱敏见
+[消息来源](../product-rules/message-source.md)「插件转发的 IM 消息」；只是本机插件管子的增量字段，无 device-link、
+官方或自建 relay 改动，无数据库迁移。

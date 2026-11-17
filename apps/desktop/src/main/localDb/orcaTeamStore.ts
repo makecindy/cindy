@@ -913,7 +913,16 @@ function parsePendingReport(raw: string | null): OrcaRemotePendingReport | null 
     if (!Array.isArray(value.clientIds) || value.clientIds.length === 0 || value.clientIds.length > 64 ||
       !value.clientIds.every((id) => typeof id === 'string' && id.length > 0) ||
       !(value.baselineMessageId === null || typeof value.baselineMessageId === 'string')) return null;
-    return { clientIds: value.clientIds, baselineMessageId: value.baselineMessageId };
+    const delivery = value.delivery;
+    for (let receipt = delivery; receipt !== undefined; receipt = receipt.previous) {
+      if (!receipt || typeof receipt.clientId !== 'string' || !receipt.clientId ||
+        !Array.isArray(receipt.inputClientIds) || !receipt.inputClientIds.length || receipt.inputClientIds.length > 64 ||
+        !receipt.inputClientIds.every(id => typeof id === 'string' && id.length > 0) ||
+        (receipt.kind !== 'manual' && receipt.kind !== 'automatic') ||
+        (receipt.messageId !== undefined && typeof receipt.messageId !== 'string')) return null;
+    }
+    return { clientIds: value.clientIds, baselineMessageId: value.baselineMessageId,
+      ...(delivery ? { delivery } : {}) };
   } catch { return null; }
 }
 

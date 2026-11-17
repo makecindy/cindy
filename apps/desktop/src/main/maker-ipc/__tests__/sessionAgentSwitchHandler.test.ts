@@ -85,6 +85,77 @@ const validParams = {
   providerId: null,
 };
 
+// #10893, unit: same-device group members are distinct provider connections.
+// The old same-engine no-op retained the old provider/native session. Exercise
+// the real transaction with an observable persisted route and bootstrap input.
+it.each([
+  { agentDeviceId: null, resolved: false },
+  { agentDeviceId: 'mini', resolved: false },
+  { agentDeviceId: 'mini', resolved: true },
+])('rebuilds a same-device group route for the selected subscription ($agentDeviceId, resolved=$resolved)', async ({ agentDeviceId, resolved }) => {
+  let row = makeRow({ agentKind: 'codex', model: 'gpt-5.5', agentDeviceId, providerId: 'openai-sub-aaaaaaaa' });
+  const bootstrapRoutes: AgentSwitchSessionRow[] = [];
+  const { deps, calls } = makeDeps({
+    getSessionRow: vi.fn(async () => ({ ...row })),
+    findParkedEngineSession: vi.fn(async () => ({ sdkSessionId: 'wrong-account', watermarkCreatedAt: 1, watermarkRowid: 1 })),
+    relocateNativeHistory: vi.fn(async () => 'wrong-account'),
+    assertAgentDeviceRouteUsable: vi.fn(async () => undefined),
+    ...(resolved ? { resolveProviderGroupTarget: vi.fn(async () => ({ agentDeviceId, providerId: 'openai-sub-bbbbbbbb' })) } : {}),
+    applyAgentSwitchToDb: vi.fn(async (_id, patch) => { row = { ...row, ...patch, providerId: patch.providerId ?? null }; }),
+    bootstrapSwitchedSession: vi.fn(async () => { bootstrapRoutes.push({ ...row }); }),
+  });
+  const result = await performSessionAgentSwitch(deps, {
+    ...validParams, agentDeviceId: resolved ? null : agentDeviceId,
+    providerId: resolved ? 'openai' : 'openai-sub-bbbbbbbb', applyNow: true,
+    ...(!resolved ? { providerGroupRelocation: true } : {}),
+  });
+  expect(result).toMatchObject({ switched: true, engineReady: true });
+  expect(calls[0]).toBe('close');
+  expect(bootstrapRoutes).toEqual([expect.objectContaining({ agentDeviceId, providerId: 'openai-sub-bbbbbbbb', sdkSessionId: null })]);
+  expect(deps.findParkedEngineSession).not.toHaveBeenCalled();
+  expect(deps.relocateNativeHistory).not.toHaveBeenCalled();
+  if (agentDeviceId) {
+    expect(deps.assertAgentDeviceRouteUsable).toHaveBeenCalledWith(agentDeviceId, 'codex', 'gpt-5.5', 'openai-sub-bbbbbbbb');
+    // The DB port uses this to avoid resolving the remote account's window
+    // against the task computer's catalog, even though the device did not move.
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ agentDeviceId }));
+  }
+  const boundary = vi.mocked(deps.insertBoundaryMessage).mock.calls[0]![1];
+  expect(boundary).toMatchObject({ fromProviderId: 'openai-sub-aaaaaaaa', toProviderId: 'openai-sub-bbbbbbbb', resumed: false });
+  expect(boundary).not.toHaveProperty('toAgentDeviceId');
+  expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('你好'), undefined);
+});
+
+it('rejects an unavailable same-device connection before closing or changing the source', async () => {
+  const { deps } = makeDeps({
+    getSessionRow: vi.fn(async () => makeRow({ agentKind: 'codex', model: 'gpt-5.5', agentDeviceId: 'mini', providerId: 'openai-sub-aaaaaaaa' })),
+    assertAgentDeviceRouteUsable: vi.fn(async () => { throw new Error('ACCESS_REVOKED'); }),
+  });
+  await expect(performSessionAgentSwitch(deps, {
+    ...validParams, agentDeviceId: 'mini', providerId: 'openai-sub-bbbbbbbb', applyNow: true, providerGroupRelocation: true,
+  })).rejects.toThrow('ACCESS_REVOKED');
+  expect(deps.closeSession).not.toHaveBeenCalled();
+  expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+  expect(deps.bootstrapSwitchedSession).not.toHaveBeenCalled();
+});
+
+it('keeps the source connection when same-device quota balancing summary is declined', async () => {
+  const row = makeRow({ agentKind: 'codex', model: 'gpt-5.5', agentDeviceId: 'mini', providerId: 'openai-sub-aaaaaaaa' });
+  const { deps } = makeDeps({
+    getSessionRow: vi.fn(async () => row),
+    confirmNativeHistoryFallback: vi.fn(async () => false),
+  });
+  await expect(performSessionAgentSwitch(deps, {
+    ...validParams, agentDeviceId: 'mini', providerId: 'openai-sub-bbbbbbbb', applyNow: true,
+    providerGroupRelocation: true, providerGroupSwitchReason: 'quota-rebalance',
+  })).rejects.toThrow('NATIVE_HISTORY_FALLBACK_DECLINED');
+  expect(deps.confirmNativeHistoryFallback).toHaveBeenCalledWith('s1', 'mini');
+  expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+  expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
+  expect(deps.setSessionProvider).not.toHaveBeenCalled();
+  expect(deps.bootstrapSwitchedSession).not.toHaveBeenCalled();
+});
+
 describe('same-harness native relocation', () => {
   // Quota balancing is now automatic only while native context survives. Exercise the
   // real switch entry: refusal after a failed resume must restore the original route.
@@ -118,6 +189,10 @@ describe('same-harness native relocation', () => {
     '[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] remote task limit for this device reached',
     '[REMOTE_AGENT_DEVICE_UNREACHABLE] the other computer is offline',
     '[REMOTE_AGENT_MODEL_UNAVAILABLE] model is not offered',
+    // #10833, unit: presentation prefixes must not turn a transport failure into
+    // a native-history failure and offer a lossy summary after rollback.
+    ...['INVOKE_TIMEOUT', 'BACKPRESSURE', 'DEVICE_UNRESPONSIVE', 'DEVICE_OFFLINE', 'ACCESS_REVOKED']
+      .map(code => remoteAgentLinkError(Object.assign(new Error('transport failed'), { code })).message),
   ])('stays on the source without asking when the target cannot take the task: %s', async message => {
     let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native', agentDeviceId: null });
     const original = { ...row };

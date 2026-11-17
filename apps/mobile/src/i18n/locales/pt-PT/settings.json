@@ -85,6 +85,16 @@
       "reset": "Repor predefinição",
       "apply": "Aplicar",
       "hex": "Valor da cor"
+    },
+    "appIcon": {
+      "label": "Ícone da app",
+      "saveFailed": "Não foi possível alterar o ícone da app. Tente novamente.",
+      "options": {
+        "default": "Predefinido",
+        "cat": "Gato preto",
+        "wordmark": "Logótipo da Cindy",
+        "mark": "Símbolo da Cindy"
+      }
     }
   },
   "language": {

@@ -10,12 +10,15 @@ import { applyRuntimeSetModelChange } from '../runtimeSetModel.js';
 import { mergeSessionRuntimeProfilePatch } from '../sessionRuntimeControl.js';
 import { clearSessionProvider, getSessionProvider, setSessionProvider } from '../../maker-host/session-provider-store.js';
 
-const source = readFileSync(resolve(__dirname, '../register.ts'), 'utf8');
+const source = readFileSync(resolve(__dirname, '../register.ts'), 'utf8').replace(/\r\n?/g, '\n');
+// handleSetModel (with its runtime mutation and deferLockedSelection) moved verbatim into
+// sessionRuntimeSelectionApply.ts; the setSessionRuntime adapter stays in register.ts.
+const applySource = readFileSync(resolve(__dirname, '../sessionRuntimeSelectionApply.ts'), 'utf8').replace(/\r\n?/g, '\n');
 const start = source.indexOf('    setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) =>');
 const end = source.indexOf('    assertExternalInputAllowed:', start);
-const mutationStart = source.indexOf('? await applyRuntimeSetModelChange({');
-const mutationEnd = source.indexOf('})', source.indexOf('              logger: log,', mutationStart)) + 2;
-const mutation = transpileModule(`return (async () => ${source.slice(mutationStart + 2, mutationEnd)})();`, {
+const mutationStart = applySource.indexOf('? await applyRuntimeSetModelChange({');
+const mutationEnd = applySource.indexOf('})', applySource.indexOf('              logger: log,', mutationStart)) + 2;
+const mutation = transpileModule(`return (async () => ${applySource.slice(mutationStart + 2, mutationEnd)})();`, {
   compilerOptions: { target: ScriptTarget.ES2022 },
 }).outputText;
 const adapter = transpileModule(`return ({${source.slice(start, end)}}).setSessionRuntime;`, {
@@ -118,9 +121,9 @@ it.each(['catalog', 'harness-read', 'native-preview', 'valid-harness', 'valid-mo
 
 it.each([true, false])('refreshes after the final deferred-route read (revoked=%s)', async revoked => {
   // Execute the production deferred commit closure, with its asynchronous metadata boundary.
-  const begin = source.indexOf('      const deferLockedSelection = async () => {');
-  const finish = source.indexOf('      // 远端回合中不能 live', begin);
-  const js = transpileModule(`${source.slice(begin, finish)}\nreturn deferLockedSelection;`, {
+  const begin = applySource.indexOf('      const deferLockedSelection = async () => {');
+  const finish = applySource.indexOf('      // 远端回合中不能 live', begin);
+  const js = transpileModule(`${applySource.slice(begin, finish)}\nreturn deferLockedSelection;`, {
     compilerOptions: { target: ScriptTarget.ES2022 },
   }).outputText;
   let prepared = false;

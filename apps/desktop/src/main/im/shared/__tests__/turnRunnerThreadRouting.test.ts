@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setMainLocale } from '../../../i18n.desktop';
 import path from 'node:path';
+import { readTelegramReplyMediaScope, readChannelToolScope } from '../channelToolScope';
 
 import type { AgentEvent, InteractionDecision, InteractionRequest, InteractionResolver, Session, SessionSendResult } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
@@ -146,6 +147,7 @@ function makeSessionHarness(sessionId: string): SessionHarness {
   );
   const session = {
     id: sessionId,
+    instanceId: `${sessionId}-instance`,
     workDir: '/tmp/slack-wd',
     agentKind: 'claude-code',
     abort: vi.fn(async () => undefined),
@@ -910,7 +912,7 @@ describe('turnRunner 渠道任务后台结果回传', () => {
       h.emit({ type: 'done', data: { silentStop: true }, turnOrigin: origin('exhausted') });
       settle(h.session.id, 'exhausted');
       await vi.waitFor(() => expect(delivered()).toHaveLength(3));
-      expect(delivered()[2]).toContain(slackUi.agent.runtimeError('模型连续多次返回空响应，自动续跑已暂停。'));
+      expect(delivered()[2]).toContain(slackUi.agent.runtimeError('检测到空响应，自动续跑已暂停。'));
     } finally {
       setSilencedRunProbe(null);
       await runner.disposeAllSessions();
@@ -975,6 +977,35 @@ describe('turnRunner 渠道任务后台结果回传', () => {
     runner.attachSessionOutput(h.session, 'U1', undefined, source === 'desktop' ? undefined : source);
     return h;
   }
+
+  // Unit regression: background results acquire only media delivery, and lose it on terminal/local turns.
+  it('后台媒体发送仅随已接线的回报轮次存活', async () => {
+    const h = await channelAndIdle('desktop');
+    let botId = 'bot-1';
+    const transport = { getStatus: () => ({ kind: 'connected' as const, appId: 'bot-1' }) };
+    const adapter = {
+      ...fakeAdapter,
+      im: { ...fakeAdapter.im, ...transport },
+      replyMediaScopeFor: (laneUserId: string) => ({ im: { getBotId: () => botId } as never, laneUserId }),
+    };
+    const mediaRunner = createTurnRunner(adapter, fakeRepo, fakeCards);
+    const ctx = { sessionId: h.session.id, sessionInstanceId: h.session.instanceId };
+    try {
+      mediaRunner.attachSessionOutput(h.session, 'g/-100/7', undefined, 'other-task');
+      expect(readTelegramReplyMediaScope(ctx)?.laneUserId).toBe('g/-100/7');
+      expect(readChannelToolScope(ctx)).toBeNull();
+      h.emit({ type: 'done', data: {} });
+      expect(readTelegramReplyMediaScope(ctx)).toBeNull();
+      mediaRunner.noteChannelTurnSource(h.session, 'provider-wake');
+      expect(readTelegramReplyMediaScope(ctx)).not.toBeNull();
+      botId = 'replacement-bot';
+      expect(readTelegramReplyMediaScope(ctx)).toBeNull();
+      mediaRunner.noteChannelTurnSource(h.session, undefined);
+      expect(readTelegramReplyMediaScope(ctx)).toBeNull();
+      mediaRunner.noteChannelTurnSource(h.session, 'other-task');
+    } finally { await mediaRunner.disposeAllSessions(); }
+    expect(readTelegramReplyMediaScope(ctx)).toBeNull();
+  });
 
   it('桌面输入发起的轮次不回传，下一次其它任务来信仍回传', async () => {
     const h = await channelAndIdle('desktop');

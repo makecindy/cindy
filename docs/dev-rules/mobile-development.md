@@ -751,6 +751,26 @@ Android 原生接收器修改需要新安装包，旧包不能靠 OTA 获得后�
 通过 `CINDY_BADGE_TEST_KOTLINC`、`CINDY_BADGE_TEST_JDK_HOME`、`CINDY_BADGE_TEST_JSON_JAR`
 指定本机工具链，验证真实生产接收器的账号、版本、不完整数据、零值与退出行为。
 
+### 可选应用图标（iOS）
+
+设置 → 外观的「应用图标」与 Desktop 的 Dock 图标共用同一份清单和母版
+（`packages/maker-shared/app-icons`，维护方法见该目录的 README）。增删图标或更换图片只改这一处，
+再运行 `pnpm generate:app-icons`；Desktop 的 Dock 图、手机设置页的预览图和两端的类型清单都由它生成，
+`pnpm generate:app-icons --check` 与 `generate-icons.test.mjs` 在源头变化而未重新生成时报错。
+
+`plugins/with-app-icons.js` 在 prebuild 时把母版直接写成 `AppIcon-<id>.appiconset`，并设置
+`ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES`；`CFBundleAlternateIcons` 由 actool 写入 Info.plist。
+带深色母版的图标在 iOS 18 及以上按主屏幕的图标样式显示：默认样式始终用浅色图，用户在主屏幕「自定义」里选了
+「深色」（或「自动」且系统为深色）才用深色图；更早的系统只显示浅色。`cindy-app-icon` 模块读取
+和切换图标，选择由系统保存，App 不另存一份。设置页每次只执行一次切换，完成后重新读取系统状态，
+选中项只表示已生效的图标；切换失败也读取实际状态，不回滚到尚未生效的点选。
+
+图标随原生包交付：新增或更换的图片必须冷更，清单与母版都是指纹输入（`fingerprint.config.cjs`
+只登记 manifest 与它引用的图片）。JS 清单可能先于原生包经 OTA 到达，所以设置页只显示当前安装包
+里编入的图标，旧包没有该模块时整行不显示。Android 没有稳定的运行时换图标方式（需改桌面入口组件，
+会影响已有的主屏幕图标），目前不提供，与 Desktop 仅 macOS 提供一致。预览跟随 App 的显示模式；
+主屏幕实际用哪一张由上面的图标样式决定，App 读不到这个设置，两者可能不同（系统的更换确认框同样按界面深浅显示）。
+
 ### iOS 桌面与锁屏小组件
 
 `plugins/with-usage-widgets.js` 生成 `CindyHomeWidgets` WidgetKit 扩展（订阅余量、每日用量，iOS 17+），

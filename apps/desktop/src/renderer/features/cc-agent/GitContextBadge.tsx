@@ -199,8 +199,9 @@ function PrChip({
   const canManage = !isSharedTaskPeer(deviceLinkDeviceId ?? '');
   const summaryOpen = summary === prRef.id;
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // A remote task's card is read from its computer by the task page; shared-task guests have none.
   const prCard = useSessionPrCard(session.id, prStatusKey(prRef),
-    (summaryOpen || settingsOpen) && !deviceLinkDeviceId && !readOnly && prRef.provider !== 'gitlab');
+    (summaryOpen || settingsOpen) && canManage && !readOnly && prRef.provider !== 'gitlab');
   useEffect(() => {
     if (!prCard || (status?.ok && (status.status === 'merged' || status.status === 'closed'))) setSettingsOpen(false);
   }, [prCard, status]);

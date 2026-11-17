@@ -31,7 +31,11 @@ vi.mock('../../mcp-integrations/piEnvironment.desktop.js', () => ({
   getPiExtraSpawnConfig: async () => ({ mcpBridge: null, mcpEnv: {} }),
 }));
 vi.mock('../auth-adapters.js', () => ({ desktopCodexAuthAdapter: {}, readClaudeApiKey: () => 'test-key' }));
-vi.mock('../anthropic-compat-proxy-host.js', () => ({ getClaudeEndpoint: () => 'http://127.0.0.1:9' }));
+vi.mock('../anthropic-compat-proxy-host.js', () => ({
+  getClaudeEndpoint: () => 'http://127.0.0.1:9',
+  isAnthropicCompatProxyHandleReady: () => true,
+  resolveClaudeAgentEndpoint: async () => 'http://127.0.0.1:9',
+}));
 vi.mock('../grok-oauth-login.desktop.js', () => ({ hasGrokOAuthLogin: () => false }));
 vi.mock('../custom-provider-header-secrets.js', () => ({ listCustomProvidersWithSecureHeaders: async () => [] }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({ readCustomProviderKey: () => null }));
@@ -64,7 +68,7 @@ const SUBAGENT_ROUTES = [undefined, null, 'xd', 'anthropic', 'openai'].flatMap((
 const CONTEXT_ASSESSMENTS = [[1_000, 200_000], [180_000, 200_000], [250_000, 200_000], [90_000, 128_000]] as const;
 
 /** Every observable value of a runtime config; functions become their outputs over fixed inputs. */
-function observe(config: Config): Record<string, unknown> {
+async function observe(config: Config): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
   for (const key of Reflect.ownKeys(config)) {
     const name = String(key);
@@ -74,6 +78,9 @@ function observe(config: Config): Record<string, unknown> {
       continue;
     }
     switch (name) {
+      case 'resolveLocalEndpoint':
+        out[name] = await (value as () => Promise<string>)();
+        break;
       case 'behaviorFlags':
         out[name] = FLAG_CONTEXTS.map((ctx) => (value as (c: unknown) => unknown)(ctx));
         break;
@@ -93,9 +100,9 @@ function observe(config: Config): Record<string, unknown> {
   return out;
 }
 
-function compare(kind: string, desktop: Config, host: Config): void {
-  const d = observe(desktop);
-  const h = observe(host);
+async function compare(kind: string, desktop: Config, host: Config): Promise<void> {
+  const d = await observe(desktop);
+  const h = await observe(host);
   expect(Object.keys(h).sort(), `${kind}: field set`).toEqual(Object.keys(d).sort());
   const differing = Object.keys(d).filter((key) => JSON.stringify(d[key]) !== JSON.stringify(h[key]));
   expect(differing.filter((key) => !ALLOWED_DIFFERENCES.has(key)), `${kind}: unexpected differences`).toEqual([]);
@@ -115,14 +122,14 @@ describe('Host runtime config parity with the desktop assembly', () => {
     const { commitVolatileAppSession } = await import('../../appSessionState.js');
     commitVolatileAppSession('local');
     const { buildDesktopClaudeRuntimeConfig, desktopCodexRuntimeConfig } = await import('../runtime-configs.js');
-    const { getClaudeEndpoint } = await import('../anthropic-compat-proxy-host.js');
+    const { getClaudeEndpoint, resolveClaudeAgentEndpoint } = await import('../anthropic-compat-proxy-host.js');
     const { buildPiAgent } = await import('../pi-host.js');
     const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
     const piAgent = buildPiAgent({ logger } as never) as unknown as { deps: { runtimeConfig: Config } } | null;
     if (!piAgent) throw new Error('desktop PiAgent was not built');
     desktop = {
       // maker-host/index.ts builds Claude with the compat proxy endpoint.
-      claude: buildDesktopClaudeRuntimeConfig(getClaudeEndpoint) as Config,
+      claude: buildDesktopClaudeRuntimeConfig(getClaudeEndpoint, resolveClaudeAgentEndpoint) as Config,
       codex: desktopCodexRuntimeConfig as Config,
       pi: piAgent.deps.runtimeConfig,
     };
@@ -142,6 +149,7 @@ describe('Host runtime config parity with the desktop assembly', () => {
       piBinaryPath: path.join(root, 'pi'),
       // The Host's loopback proxy (claude-proxy-runtime.ts), reduced to what the graph reads.
       claudeProxy: { endpoint: () => PROXY_ENDPOINT, isReady: () => true, inboundSecret: () => 'fixture-secret',
+        resolveAgentEndpoint: async () => PROXY_ENDPOINT,
         registerPiProxySession: () => () => {}, closeSession() {} },
       mcpRuntime: { codexDeps: {}, piDeps: {}, getActiveCodexBridgeServerNames: () => [] } as never,
       mcpProviders: [],
@@ -176,10 +184,10 @@ describe('Host runtime config parity with the desktop assembly', () => {
     expect(host.claude.systemPrompt).toContain('You are Cindy');
   });
 
-  it('every field matches under the default settings; only the listed fields may differ', () => {
-    compare('claude', desktop.claude, host.claude);
-    compare('codex', desktop.codex, host.codex);
-    compare('pi', desktop.pi, host.pi);
+  it('every field matches under the default settings; only the listed fields may differ', async () => {
+    await compare('claude', desktop.claude, host.claude);
+    await compare('codex', desktop.codex, host.codex);
+    await compare('pi', desktop.pi, host.pi);
   });
 
   it('both read the same user settings at the moment of use', async () => {
@@ -192,13 +200,13 @@ describe('Host runtime config parity with the desktop assembly', () => {
     writeMemorySetting('pi', true);
     writeSubagentModelSettingsPatch({ claudeCode: 'claude-sonnet-4-5' });
     writeAgentResourceSetting('capToolchainThreads', false);
-    compare('claude', desktop.claude, host.claude);
-    compare('codex', desktop.codex, host.codex);
-    compare('pi', desktop.pi, host.pi);
+    await compare('claude', desktop.claude, host.claude);
+    await compare('codex', desktop.codex, host.codex);
+    await compare('pi', desktop.pi, host.pi);
     writeAgentResourceSetting('capToolchainThreads', true);
     writeMemorySetting('maker', false);
-    compare('claude', desktop.claude, host.claude);
-    compare('pi', desktop.pi, host.pi);
+    await compare('claude', desktop.claude, host.claude);
+    await compare('pi', desktop.pi, host.pi);
   });
 
   it('Claude and Pi reach the loopback proxy on both sides, never the gateway directly', () => {

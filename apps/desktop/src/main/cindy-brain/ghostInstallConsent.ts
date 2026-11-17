@@ -180,6 +180,10 @@ export async function obtainGhostInstallConsent(
     confirmed = await policy.prompt({
       initiator: policy.initiator,
       origin: policy.origin,
+      installationSource: policy.origin === 'custom-market' ? { kind: 'third-party' }
+        : policy.origin === 'local-file' || policy.origin === 'forge' ? { kind: 'local' }
+        : policy.target?.namespace && policy.target.namespace !== 'local' ? { kind: 'organization', namespace: policy.target.namespace }
+        : { kind: policy.trust === 'cindy-official' ? 'official' : 'market' },
       ...(policy.trust ? { trust: policy.trust } : {}),
       ...(policy.originLabel ? { originLabel: policy.originLabel } : {}),
       ...(policy.target ? { target: { ...policy.target, ...(policy.target.namespace === 'local' && manifest.network?.secrets?.some(secret => secret.source === 'oidc-token') ? { organizationIdentityUnavailable: true as const } : {}) } } : {}),
