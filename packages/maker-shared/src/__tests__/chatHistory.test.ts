@@ -23,6 +23,64 @@ function fixture() {
   return { disk, store, api, open, message, page, setBatch: (value: ChatHistoryBatch) => { batch = value; }, leave: () => { live = false; } };
 }
 
+// Unit tier, phone group-open latency: a store that rewrites the whole room per commit was
+// asked to commit after every step of one read (delta, metadata, page, each root lookup).
+describe('one commit per room operation (coalesceWrites)', () => {
+  const coalesced = (f: ReturnType<typeof fixture>) => createChatHistory({ api: f.api as <T>(route: string) => Promise<T>, store: f.store,
+    current: () => true, newGeneration: () => 'generation', coalesceWrites: true });
+  it('commits a delta and its metadata refresh together, and nothing for an unchanged room', async () => {
+    const f = fixture(); const cache = coalesced(f);
+    await cache.snapshot('room');
+    expect(f.store.write).toHaveBeenCalledTimes(1);
+    // The same cursor comes back: there is nothing to make durable.
+    cache.invalidate('room'); await cache.snapshot('room');
+    expect(f.store.write).toHaveBeenCalledTimes(1);
+    f.setBatch({ cursor: '11', changes: [{ type: 'message.updated', data: { message: f.message('9', 2) } }, { type: 'conversation.updated' }] });
+    cache.invalidate('room'); await cache.snapshot('room');
+    expect(f.api.mock.calls.filter(([route]) => route.endsWith('/snapshot'))).toHaveLength(2);
+    expect(f.store.write).toHaveBeenCalledTimes(2);
+    expect(f.disk.get('room')).toMatchObject({ cursor: '11', metadataDirty: false, messages: { 9: { revision: 2 } } });
+  });
+  it('keeps a metadata invalidation until the refresh that answers it is durable', async () => {
+    const f = fixture(); const cache = coalesced(f);
+    await cache.snapshot('room');
+    const write = f.store.write as ReturnType<typeof vi.fn>;
+    write.mockRejectedValueOnce(new Error('disk full'));
+    cache.invalidate('room', true);
+    await expect(cache.snapshot('room')).rejects.toThrow('disk full');
+    const before = f.api.mock.calls.filter(([route]) => route.endsWith('/snapshot')).length;
+    // The failed commit consumed nothing: the next read refreshes the metadata again.
+    await cache.snapshot('room');
+    expect(f.api.mock.calls.filter(([route]) => route.endsWith('/snapshot')).length).toBe(before + 1);
+    await cache.snapshot('room');
+    expect(f.api.mock.calls.filter(([route]) => route.endsWith('/snapshot')).length).toBe(before + 1);
+  });
+  it('reads several roots in one operation, keeps a missing one to itself and still rejects a lost room', async () => {
+    const f = fixture(); const cache = coalesced(f);
+    f.api.mockImplementation(async route => {
+      if (route.endsWith('/snapshot')) return { room: { id: 'room', kind: 'group' }, messages: [f.message('9')], cursor: '10' };
+      if (route.startsWith('/changes?')) return { cursor: '10', changes: [] };
+      const id = route.split('/').at(-1)!;
+      if (id === 'gone') throw Object.assign(new Error('gone'), { status: 404, code: 'MESSAGE_NOT_FOUND' });
+      if (id === 'denied') throw Object.assign(new Error('left'), { status: 403, code: 'NOT_MEMBER' });
+      return f.message(id);
+    });
+    await cache.snapshot('room');
+    const found = await cache.lookup('room', ['3', '4', 'gone', '3']);
+    expect([...found.keys()]).toEqual(['3', '4', 'gone']);
+    expect(found.get('3')).toMatchObject({ message: { id: '3' } });
+    expect(found.get('gone')).toMatchObject({ error: { code: 'MESSAGE_NOT_FOUND' } });
+    // Bootstrap, then the whole batch: two commits, and the room's verified state survives the miss.
+    expect(f.store.write).toHaveBeenCalledTimes(2);
+    expect(cache.hasFreshMessages('room')).toBe(true);
+    const calls = f.api.mock.calls.length;
+    expect((await cache.lookup('room', ['3', '4'])).get('4')).toMatchObject({ message: { id: '4' } });
+    expect(f.api.mock.calls.length).toBe(calls);
+    await expect(cache.lookup('room', ['5', 'denied'])).rejects.toMatchObject({ code: 'NOT_MEMBER' });
+    expect(f.disk.has('room')).toBe(false);
+  });
+});
+
 describe('durable chat history', () => {
   // Unit, topic latency reproduction: each new head kept an overlapping page;
   // one reply then re-downloaded every copy of the root before either UI could refresh.
