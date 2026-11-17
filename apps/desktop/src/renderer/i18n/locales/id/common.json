@@ -9373,7 +9373,7 @@
     "localModeEntry": "Lewati masuk",
     "localModeOpening": "Melewati login…",
     "localModeDescription": "Tidak perlu akun Cindy, data disimpan di komputer ini. Model cloud, akses lintas perangkat, dan layanan marketplace tidak tersedia.",
-    "consentStatement": "Sudah membaca dan menyetujui <terms>Ketentuan Layanan</terms> dan <privacy>Kebijakan Privasi</privacy>",
+    "consentStatement": "Setuju dengan <terms>Ketentuan Layanan</terms> dan <privacy>Kebijakan Privasi</privacy>",
     "consentDialog": {
       "title": "Ketentuan Layanan & Kebijakan Privasi",
       "body": "Baca dan setujui ketentuan Cindy berikut untuk melanjutkan: <terms>Ketentuan Layanan</terms>, <privacy>Kebijakan Privasi</privacy>",
