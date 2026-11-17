@@ -17,6 +17,7 @@ import { buildSessionDeepLink } from '@/lib/deepLink';
 import { toast } from '@/lib/toast';
 import { useSessionLinkTarget } from './SessionLinkChip';
 import { parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
+import { canonicalBotSessionId, useBotProfiles } from '@/features/bots/botStore';
 
 import { CHAT_COLOR_TRANSITION_CLASS, CHAT_FOCUS_CLASS } from './chatChrome';
 import type { RenderItem } from './messageWorkGroups';
@@ -76,15 +77,27 @@ export function collectBotStartedTasks(turn: readonly ChatMessage[]): BotStarted
   return [...tasks.values()];
 }
 
+/** Current buddy name when this session is that buddy's own chat. A renamed buddy must not keep the template name. */
+function currentBuddyName(sessionId: string | undefined, bots: ReturnType<typeof useBotProfiles>): string | null {
+  if (!sessionId) return null;
+  const bare = sessionId.includes('::') ? sessionId.slice(sessionId.lastIndexOf('::') + 2) : sessionId;
+  const name = bots.find((bot) => {
+    const canonical = canonicalBotSessionId(bot);
+    return canonical === sessionId || canonical === bare;
+  })?.name.trim();
+  return name || null;
+}
+
 /** The live title of a task this chat refers to; remote chats read that computer's mirror. */
 export function useLinkedTaskTitle(sessionId: string | undefined, hostSessionId: string | undefined, fallback: string | null): string | null {
+  const buddyName = currentBuddyName(sessionId, useBotProfiles());
   const hostDeviceId = getStickySessionDeviceId(hostSessionId);
   const localTitle = useSyncExternalStore(
     (onChange) => sessionsStore.subscribe(onChange),
     () => (hostDeviceId || !sessionId ? null : sessionsStore.getTitleById(sessionId)),
   );
   const remoteTitle = useRemoteSessionTitle(hostDeviceId ? sessionId : undefined);
-  return (hostDeviceId ? remoteTitle : localTitle) || fallback;
+  return buddyName || (hostDeviceId ? remoteTitle : localTitle) || fallback;
 }
 
 /** Opens a task this chat refers to, or null where the chat cannot navigate there. */

@@ -553,6 +553,13 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
         (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role IN ('canonical', 'group', 'channel', 'thread', 'routine') AND archived_at IS NULL)`)
         .run(mode, id);
     }
+    // The canonical chat is the buddy. A later rename must replace the name
+    // captured when the template was installed, or hand-off chips keep the old one.
+    if (p.displayName !== undefined && expectString(p.displayName, 'displayName') !== current.displayName) {
+      db.prepare(`UPDATE sessions SET title = ?, updated_at = ? WHERE id IN
+        (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role = 'canonical' AND archived_at IS NULL)`)
+        .run(expectString(p.displayName, 'displayName'), now, id);
+    }
     return { currentVersion: nextVersion };
   })();
 }
