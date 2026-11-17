@@ -42,9 +42,8 @@ export function MailPreviewBody({ state, ctx, active: tabActive = true, shellVis
   }, [owner, ctx.sessionId, ctx.deviceLinkDeviceId, state.url, visible, current?.providerId]);
   const openMailbox = <Button tone="quiet" compact size="sm" aria-label={t('mailReader.openMailbox')} title={t('mailReader.openMailbox')}
     onClick={() => { void window.electronAPI.openExternal(state.url); }}><ExternalLink className="h-4 w-4" /></Button>;
-  // The local editor dispatches local card actions. Remote Desktop keeps the
-  // readable message and original mailbox link until that editor supports peers.
-  if (current?.draftCallId && ctx.deviceLinkDeviceId === null) return <MailCardBody ctx={ctx} state={{ callId: current.draftCallId }} />;
+  // The card editor sends its actions to the task's computer, local or remote.
+  if (current?.draftCallId && ctx.deviceLinkDeviceId !== undefined) return <MailCardBody ctx={ctx} state={{ callId: current.draftCallId }} />;
   return <div className="h-full min-h-0">
     {mail ? <ChatSessionFileProvider value={{ sessionId: ctx.sessionId, workingDir: ctx.workdir, origin: ctx.deviceLinkDeviceId ? { kind: 'device', deviceId: ctx.deviceLinkDeviceId } : { kind: 'local' } }}>
       <MailConversationView key={binding} mail={mail} openMailbox={openMailbox} read={read} retry={() => setAttempt(n => n + 1)} />

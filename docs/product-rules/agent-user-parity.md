@@ -1,5 +1,13 @@
 # Agent 与用户同权：工具能力不以「Agent 不该做」为由少给
 
+> **读取时机**：新增或修改 Agent 管理用户自己的任务、定时任务、项目、伙伴的工具（`cindy_helper` /
+> `cindy_scheduler` 等），或调整工具索引、工具的作用范围说明之前
+> **适用路径**：`packages/lizi-mcps/src/xdt-helper/**`、`packages/lizi-mcps/src/scheduler/**`、
+> `packages/lizi-mcps/src/{lizi_xdtHelper,cindy_scheduler}*`、
+> `packages/lizi-mcps/src/__tests__/{lizi_xdtHelperMcpServer,cindy_schedulerMcpServer,schedulerDevices}.test.ts`、
+> `apps/desktop/src/main/mcp-integrations/{taskDigest,taskDigestHost,sessionHandoffRemote,schedulerDevices}.ts`、
+> `apps/desktop/src/main/maker-ipc/{taskActionAuthorization,taskActionHost,sessionHandoffIpc,sendToSessionExecutionConfig,remoteSessionCreation,botTaskCreation}.ts`
+
 2026-10-14 裁决。用户本人能对自己的任务、定时任务、项目、伙伴做的操作，Agent 也要有对应工具，
 包括操作用户另一台电脑上的数据。
 
@@ -94,8 +102,11 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 模型供应商 | `configure_model_connection`：查询预设、读取／添加／编辑／删除 API 与免密本机连接、安全填写或更换密钥、发现与设置型号、验证连接 | 有（2026-11-07；复用设置页事务，保存、目录获取与推理验证分别报告） | 在执行电脑的任务中调用；手机及同账号电脑沿原有加密代输入卡填写密钥，不支持指定另一台电脑或 SSH |
 | 媒体模型 | `configure_model_connection` 声明 mode/modalities 与 imageApi/videoApi，读取时保留这些字段；`manage_media_guide` 按需 get、validate、save 自定义调用说明；`media` prepare/request/poll 使用指定连接 | 有（未发布；沿用任务权限，各连接保留自己的 API 声明和凭证，图片／视频各按其来源读取显示开关；保存或校验不等于真实出片，错误原因与后备由 Agent 判断） | 在媒体连接所在电脑的本机任务执行；不新增跨电脑 Guide 同步或 SSH 管理 |
 | 订阅账号 | `configure_model_provider` 的 `subscriptionAccounts`：查看、官方 CLI 登录、暂停、限额、权重与调度策略；2026-11-13 起另含登录为单独供应商（`create`）或加入指定供应商（`add`）、移动／拿出（`place`）、整体并入（`merge`）、删除新建的订阅供应商（`remove-provider`），与设置页共用校验和执行服务 | 有（Claude / Codex；任意同类供应商，每个供应商只用自己的账号；2026-11-16 起所有账号均可移除／移动，读取包含上游已知的 planTier / planType） | 工具按目标电脑的本机任务执行；同账号远控 UI 复用管理 IPC，执行电脑版本过旧时拒绝新操作 |
+| 供应商状态与用量 | `get_provider_usage_history` 原样读取已记录用量与 coverageStart；`get_provider_group` 读取既有组视图、成员/设备显示信息、运行状态与已知 quota，未知不当零，不做宿主聚合 | 有（Agent 与声明 usage 的插件共用原处理器；仅 settings 不授权，未声明 usage 的旧插件权限不变，manifest 新增 usage 走整体安装确认，已有该组批准可调用新增组内读取、不补批；不开放原账号身份/目录/指纹） | 有（device 指定同账号已授权电脑，复用原 manage-share/usage-history 与 manage-group/get；旧端不支持时明确报错） |
+| 脚本读取供应商状态 | 只跑脚本的 `settings.read` 允许分享成员名单及模型范围；`usage.read` 允许 get_subscription_usage、已记录用量和组状态；现有 broker 直接调用相同处理器，不启动模型、不开放写操作或原始账号视图 | 有（未授予时拒绝；保留原完整性及套餐字段，组名称沿原投影去身份，不返回邮箱/目录/内部指纹/凭证） | 成员/用量/组状态沿同账号已授权电脑管理；订阅额度仅执行电脑。未装配服务的Host或旧端明确不支持，不降级执行 |
 | 订阅用量 | `get_subscription_usage`（`usage` 分类；搜索「用量／额度」可发现）：逐账号只读标识、套餐、额度窗口与观测时间；插件通过独立 `agent.hostTools:['usage']` 声明调用同一入口 | 有（本机 Claude / Codex，不返回邮箱、凭证、目录或内部身份指纹） | 仅执行电脑当前 Cindy 账号已连接的本机订阅；不汇总远程／分享供应商，Node Host 未接入时明确不支持 |
-| 任务     | 列出、搜索、读聊天记录、发现电脑                           | 有   | 有               |
+| 任务     | 列出、搜索、读聊天记录、发现电脑；技术消息通过 `get_chat_history.roles` 显式选择，插件 `history` 组共用分页与存储结果限制（作者示例见随包 `plugin-history-and-http.md`） | 有 | 有 |
+| 工具执行过程 | 插件 `subscribe.topics:['tool-execution']` 异步旁听实际 AgentEvent 的工具输入、结果、错误与子任务更新；无订阅不投影，原 message/activity 主题保持 | 有（整体安装授予，原有有界缓冲与 seq/dropped；未进入共享流的引擎原生中间帧不承诺） | 仅执行 Host 实际收到的事件，不主动订阅另一台电脑 |
 | 任务与伙伴 | `list_sessions` 返回隐藏状态；`list_teammates` 分页枚举含隐藏、暂停、归档的伙伴，传 `teammate_id` 分页读取已保存的任务关系（默认100、最多1000） | 有（history 组，普通任务与插件共用） | 有（同账号历史查询；旧端不支持时明确返回未覆盖） |
 | 任务附件 | `read_session_attachment` 只读已有宿主授权的 Cindy 媒体与 grant / deposit / handoff 引用，分块字节与 SHA-256；历史 JSON 文件路径不构成授权，返回 `UNSUPPORTED_CAPABILITY`，不返回宿主路径 | 有（history 组，受上述限制） | 暂不支持，返回 `UNSUPPORTED_CAPABILITY` |
 | 任务包 | `export_session` 原生 `.cshare` 导出、`import_session` 原生任务包导入；插件按安装授权调用，Agent 运行时遵循自身权限流程；Agent 导出由用户在原生保存对话框中选择位置，再返回最终路径，不接受 `output_path`。导入用本机路径，插件用本实例 handoff；加密或需要目录时交原生向导，`awaiting_user` 不算导入完成 | 有（history / control 组；复用原生服务，默认不覆盖） | 暂不支持；沿用已有跨电脑迁移链 |
@@ -123,6 +134,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 协同 / Worker | 单个 / 批量创建、指定已有目录、查询实际目录与自有 worktree | 有 | 有（运行设备；新建 worktree 仅本机） |
 | 协同 / Worker | Lead 使用远程供应商时派发跨设备 Worker；独立选择工作电脑与模型电脑 | 有 | 有（`execution_device_id` + `agent_device_id`；目录查询支持同一工作电脑范围） |
 | 协同 / Worker | 为 Worker 新建 worktree、指定源分支、归档时回收 | 有 | 无 |
+| 协同 / Worker | 给已开始的本机 Worker 换引擎、模型、来源、推理强度与 Fast（Lead 用 `set_worker_runtime`，也可对 Worker 任务用 `set_session_runtime`；下一条 `send_to_worker` 时生效；已有待生效选择时省略 agent／`harness` 即修改那次选择；`get_session_runtime` 能看到用户在面板里登记的选择） | 有（2026-11-17：撞用量上限的休眠 Worker 派活时先落地新路线，不再先按旧路线唤醒；起不来时回执说明原因与下一步） | 无（运行设备 Worker 不适用） |
 | 协同 / Worker | 单个／批量创建默认跟随本机手动面板已提交路线，返回实际路线与回退原因 | 有（按当前账号本机 scope；旧逐 Agent 偏好不算选择） | 运行设备与 SSH 保持原策略；远程供应商路线可记忆 |
 | 协同 / Worker | 其他仓库的新 worktree 默认使用主任务记住的源分支，失效回退当前分支 | 有（返回实际源分支与原因；显式参数优先） | 无 |
 | 定时任务 | 列出、详情、运行记录、修改、暂停、恢复、删除、立即运行     | 有   | 有（V1 / V2 各自实时名册判断可用；仅加密连接不依赖 V1 在线状态） |
@@ -300,13 +312,13 @@ Webhook 跨电脑配置（2026-11-06）：`schedule_create` / `schedule_update` 
 
 伙伴例行任务送达与发现（2026-10-30；2026-11-08 起 V2 不再适用：`routine_save`、`routine_delivery_targets` 与 `routineTools` 已移除）：Pi 直接 `routine_save` 与 helper 同时提供 `modelOverride`、`sessionMode`、`delivery`；伙伴 essential tools 提供 `schedule_list_models` 和 `routine_delivery_targets`。价格与能力来自实际连接来源，保留 unknown；本机位置 `local` 保存为 null。桌面、Agent 和另一电脑上的设置共用 `routineTools`，默认结果直接显示在发起伙伴主任务；显式处理才唤醒模型，IM 只使用已连接机器人的已知收件人。执行和送达失败分开记录，静默检查仍静默。
 
-PR 关联只通过用户手动添加或 Agent 显式调用建立；消息链接、导入与历史回填不自动关联，查询与引用不代表承接 PR。既有关联保留，展示与后台跟进独立。GitHub 查询与关联的独立语义、缓存和游标合同见 [GitHub 状态与关联](github-status-and-associations.md)。
+可见消息提及自动关联，用户和 Agent 仍可显式添加、移除与恢复；查询工具不关联，展示与后台跟进独立。GitHub 查询与关联的独立语义、缓存和游标合同见 [GitHub 状态与关联](github-status-and-associations.md)。
 
 ### 普通提问入口（2026-11-08）
 
 Claude Code／Pi 的非阻塞澄清恢复独立的 `ask_user_question_async`；Pi 同步展示为直接工具，
 无需先检索 MCP。Codex 保持原生提问入口。独立的 `request_input_handoff` 处理窗口与截图二维码，
-三个 Harness 直接可发现；Grok 登录恢复 auth 类目的 `start_grok_device_login`。移除 `ask_owner`，
+三个 Harness 直接可发现。可选 `fields` 描述经过界面与截图确认的逻辑字段，由宿主核对并将分段验证码组织为一个输入框（见 [代输入](input-handoff.md#11-ai-组织当前表单2026-11-16)）；Grok 登录恢复 auth 类目的 `start_grok_device_login`。移除 `ask_owner`，
 既有同步提问、卡片和回答生命周期保持不变。
 
 三种 Harness 都直接列出 `manage_user_questions`，无需先猜能力名称；只管理当前任务的

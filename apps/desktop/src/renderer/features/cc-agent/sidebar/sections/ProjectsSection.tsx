@@ -45,6 +45,7 @@ import {
   MessagesSquare,
   MonitorSmartphone,
   SquarePen,
+  Timer,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -90,7 +91,9 @@ import {
   DIALOGUE_GROUP_ALL_KEY,
 } from '../../hooks/helpers/sidebarFilterCore';
 import {
+  AUTOMATIONS_GROUP_KEY,
   CINDY_MAKE_GROUP_KEY,
+  dialogueGroupActionSessions,
   getMainListEntrySessions,
   holdViewedPriorityRank,
   onlineDeviceSectionIds,
@@ -652,6 +655,7 @@ export function ProjectsSection({
     unclassified: mixedUnclassified,
     groupBy: filter.groupBy,
     groupDialogue: filter.groupDialogue,
+    groupAutomation: filter.groupAutomation,
     sortBy: filter.sortBy,
     projectOrder: displayedProjectOrder.projectOrder,
     manualProjectOrder: displayedProjectOrder.manualProjectOrder,
@@ -811,6 +815,7 @@ export function ProjectsSection({
       entries.flatMap((entry) => {
         if (entry.kind === 'dialogue-group') return [scope];
         if (entry.kind === 'cindy-make-group') return [`${CINDY_MAKE_GROUP_KEY}:${scope}`];
+        if (entry.kind === 'automations-group') return [`${AUTOMATIONS_GROUP_KEY}:${scope}`];
         return [];
       });
     if (!deviceGroupingActive) {
@@ -1025,6 +1030,39 @@ export function ProjectsSection({
         />
       );
     }
+    if (entry.kind === 'automations-group') {
+      const groupKey = `${AUTOMATIONS_GROUP_KEY}:${dialogueGroupKey}`;
+      const isCollapsed = collapsedDialogueGroups.has(groupKey);
+      return (
+        <SessionGroupNode
+          key={`${entry.kind}:${dialogueGroupKey}`}
+          sessions={entry.sessions}
+          lamp={lampAgg(entry.sessions)}
+          foldExemptSessionIds={lampFoldExemptIds}
+          groupTitle={t('ccAgent.layout.automations')}
+          groupIcon={<Timer size={15} strokeWidth={1.8} className="shrink-0" aria-hidden />}
+          collapsed={isCollapsed}
+          onToggle={() => setDialogueCollapsed([groupKey], !isCollapsed)}
+          isCreateDisabled={false}
+          parentSectionCollapsed={false}
+          disableSessionCollapse={disableSessionCollapse}
+          activeSessionId={activeSessionId}
+          runningSessionIds={runningSessionIds}
+          attachedSessionIds={attachedSessionIds}
+          notifications={notifications}
+          scheduleSessionIndex={scheduleSessionIndex}
+          selectedSessionIds={selectedSessionIds}
+          onSessionClick={onSessionClick}
+          onAction={onAction}
+          onRename={onRename}
+          onTogglePin={onTogglePin}
+          onMoveSession={onMoveSession}
+          projectOptions={projectOptions}
+          onScheduleAction={onScheduleAction}
+          sessionVariant={mainSessionVariant}
+        />
+      );
+    }
     if (entry.kind === 'dialogue-group' || entry.kind === 'cindy-make-group') {
       const isMake = entry.kind === 'cindy-make-group';
       const groupKey = isMake ? `${CINDY_MAKE_GROUP_KEY}:${dialogueGroupKey}` : dialogueGroupKey;
@@ -1042,11 +1080,13 @@ export function ProjectsSection({
       const canCreateMake = entry.sessions.some((session) => !session.deviceLinkDeviceId);
       const actionSessions = isMake
         ? entry.sessions
-        : dialogueActionSessions.filter(
+        : dialogueGroupActionSessions(dialogueActionSessions, {
+            groupAutomation: filter.groupAutomation,
+            scheduleSessionIndex,
+          }).filter(
             (session) =>
-              !isCindyMakeFamilySource(session.source) &&
-              (dialogueDeviceTarget === undefined ||
-                (session.deviceLinkDeviceId ?? null) === (dialogueDeviceTarget?.deviceId ?? null)),
+              dialogueDeviceTarget === undefined ||
+              (session.deviceLinkDeviceId ?? null) === (dialogueDeviceTarget?.deviceId ?? null),
           );
       return (
         <SessionGroupNode

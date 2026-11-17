@@ -328,6 +328,7 @@
       "renameDevice": "{{label}} の名前を変更",
       "project": "プロジェクト {{title}}",
       "dialogue": "チャット",
+      "automation": "自動化",
       "openAutomationLatest": "自動化タスク {{title}} の最新セッションを開く",
       "automationTask": "自動化タスク {{title}}",
       "openConversation": "セッション {{title}} を開く",
@@ -353,7 +354,9 @@
     },
     "menu": {
       "groupDialogue": "チャット",
+      "groupAutomation": "自動化",
       "dialogueFolder": "チャット",
+      "automationFolder": "自動化",
       "search": "検索",
       "settings": "設定",
       "remoteSettings": "リモート接続設定",

@@ -331,6 +331,7 @@
       "renameDevice": "Renommer {{label}}",
       "project": "Projet {{title}}",
       "dialogue": "Conversation",
+      "automation": "Automatisations",
       "openAutomationLatest": "Ouvrir la dernière session de l'automatisation {{title}}",
       "automationTask": "Automatisation {{title}}",
       "openConversation": "Ouvrir la session {{title}}",
@@ -356,7 +357,9 @@
     },
     "menu": {
       "groupDialogue": "Conversation",
+      "groupAutomation": "Automatisation",
       "dialogueFolder": "Conversation",
+      "automationFolder": "Automatisations",
       "search": "Rechercher",
       "settings": "Paramètres",
       "remoteSettings": "Paramètres de connexion à distance",

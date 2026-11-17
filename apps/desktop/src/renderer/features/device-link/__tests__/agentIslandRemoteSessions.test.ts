@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { sharedTaskHostPeer } from '@cindy/device-link';
+import { remoteLampOf } from '@/features/cc-agent/lib/sessionLampAggregation';
 
 import type { Session } from '@/lib/ccAgent.types';
 import { buildAgentIslandRemoteSessionInputs } from '../agentIslandRemoteSessions';
-import { applyRemoteSessionActivity, clearRemoteSessionActivity, getRemoteSessionActivity, type RemoteSessionActivity } from '../remoteSessionActivityStore';
+import { acknowledgeSharedTaskCompletion, applyRemoteSessionActivity, clearRemoteSessionActivity, getRemoteSessionActivity, type RemoteSessionActivity } from '../remoteSessionActivityStore';
 import { parseAgentIslandRemoteSessions } from '../../../../shared/agentIsland';
 import { agentIslandCompletionToken, buildAgentIslandDisplayState, createAgentIslandState, syncAgentIslandDeviceSessions } from '../../../../main/agent-island/state';
 import { normalizeActivityText } from '../../../../main/agent-island/activityTextStream';
@@ -50,6 +52,42 @@ const readActivity = (sessionId: string): RemoteSessionActivity | undefined =>
   activities.get(sessionId);
 
 describe('buildAgentIslandRemoteSessionInputs', () => {
+  // PR #11120 regression (unit): the former receipt test checked only attention,
+  // missing consumers that interpret any terminal activity as unread. Exercise
+  // the actual lamp and renderer -> IPC -> island projection after read/reconnect.
+  it('keeps shared replay tombstones out of lamps and island cards after reconnect', () => {
+    clearRemoteSessionActivity();
+    const peer = sharedTaskHostPeer('shared-task', 'host-device');
+    const session = remoteSession('shared-session', peer);
+    const state = createAgentIslandState();
+    const completed = { sessionId: session.id, phase: 'completed', attention: true, compactDetail: 'Done', completionToken: 'turn-1' };
+    const sync = () => syncAgentIslandDeviceSessions(state, parseAgentIslandRemoteSessions(
+      buildAgentIslandRemoteSessionInputs([session], MACHINE_ALL, getRemoteSessionActivity),
+    )!, 2000);
+    try {
+      applyRemoteSessionActivity(peer, completed);
+      sync();
+      expect(state.sessions.get(session.id)?.unread).toBe(true);
+      expect(remoteLampOf(session.id, peer)?.tone).toBe('done');
+      acknowledgeSharedTaskCompletion(session.id, peer);
+      sync();
+      expect(remoteLampOf(session.id, peer)).toBeNull();
+      expect(state.sessions.has(session.id)).toBe(false);
+      session.deviceLinkConnectionStatus = 'connecting';
+      sync();
+      session.deviceLinkConnectionStatus = 'connected';
+      applyRemoteSessionActivity(peer, completed);
+      sync();
+      expect(remoteLampOf(session.id, peer)).toBeNull();
+      expect(state.sessions.has(session.id)).toBe(false);
+      applyRemoteSessionActivity(peer, { ...completed, completionToken: 'turn-2' });
+      sync();
+      expect(remoteLampOf(session.id, peer)?.tone).toBe('done');
+      expect(state.sessions.get(session.id)?.unread).toBe(true);
+    } finally {
+      clearRemoteSessionActivity();
+    }
+  });
   // Unit regression #7972: the selected project must survive renderer -> IPC
   // parsing -> island state, including a later explicit move clearing membership.
   it('carries project membership through the complete remote island projection', () => {

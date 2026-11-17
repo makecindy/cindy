@@ -1,5 +1,6 @@
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
-import type { ChatMessage } from '@/lib/makerChatStore';
+import { getLiveErrorMessageClientId, type ChatMessage } from '@/lib/makerChatStore';
+import { findErrorTailMessage } from '@/lib/errorTailMessage';
 import { PendingQueueBubble } from '@/components/chat/PendingQueueBubble';
 import { McpAppPermissionPrompt } from '@/components/chat/McpAppPermissionPrompt';
 import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
@@ -157,6 +158,7 @@ import {
   InterruptedTurnBanner,
 } from '@/components/chat/InterruptedTurnBanner';
 import { UnreadFailedScheduleBanner } from '@/components/chat/UnreadFailedScheduleBanner';
+import { TaskLiveScreenNotices } from '@/features/remote-desktop/TaskLiveScreenButtons';
 import { useReadFailedScheduleRuns } from '@/features/scheduler/hooks/useReadFailedScheduleRuns';
 import { useAutomationScheduleSessionInfo } from './hooks/useAutomationScheduleSessionIndex';
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
@@ -384,7 +386,8 @@ import {
   type DeferredUiAssignment,
 } from './deferredUiAssignment';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
-import { localizeAgentStatus } from './lib/localizeAgentStatus';
+import { hasTurnResponse, localizeAgentStatus, remoteResponsePendingStatus, statusAgentLocation } from './lib/localizeAgentStatus';
+import { getStartingInputClientId, hasStartingTerminal, useStartingSessionIds } from '@/lib/sessionStartingStore';
 import { findActiveReconnect } from '@/lib/autoResumePresentation';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
 import { hasInlineOverloadRetry } from './lib/inlineRetryError';
@@ -434,6 +437,7 @@ import {
 // 协同 mutation 的归属取粘滞值:瞬断窗口内误判本机会在控制端建出/销毁 team,
 // 而入口本身是按粘滞 remoteDeviceId 渲染的。
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { useTaskBotMentions } from './hooks/useTaskBotMentions';
 // fork / orca 在被控端建新 session 后,navigate 前先把该设备会话列表重拉进 store(避免 404 破窗)。
 import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
 import {
@@ -1181,6 +1185,11 @@ function CCAgentSessionContent({
   // 冷启动 / bootstrap 竞态期间宁可暂时禁用系统文件打开，也不能把被控端 file:// 交给控制端。
   const rightSidebarDeviceLinkDeviceId =
     remoteDeviceId ?? session?.deviceLinkDeviceId ?? (session ? null : undefined);
+  const composerBotMentions = useTaskBotMentions(
+    rightSidebarDeviceLinkDeviceId,
+    session?.remoteHostId,
+    botMentions,
+  );
   // Every side chat entry uses the sidebar menu's gate, with the resolved origin
   // so shared-task guests fail it before the list snapshot carries it (#9136).
   // null = available; otherwise the reason shown by /side.
@@ -2521,11 +2530,35 @@ function CCAgentSessionContent({
         })
       : t('chat.systemCard.autoResumePending.label')
     : null;
+  const taskLocation = statusAgentLocation(session?.agentDeviceId, pendingAgentDeviceId, false);
+  // A pending switch belongs to the next send, never to an already running turn.
+  const statusAgentDeviceId = statusAgentLocation(session?.agentDeviceId, pendingAgentDeviceId, agentStatus.isRunning);
+  const startingInputClientId = sessionId ? getStartingInputClientId(sessionId) : undefined;
+  const receivedRemoteResponse = useMemo(
+    () => hasTurnResponse(messages, startingInputClientId), [messages, startingInputClientId],
+  );
+  const receivedTerminalStatus = Boolean(sessionId && hasStartingTerminal(sessionId));
+  // A retained error belongs to the previous turn until running clears it.
+  // Only a newly received terminal event may settle this send's preparation.
+  const settledStartingSessions = useMemo(() => new Set(
+    statusAgentDeviceId && sessionId && (agentStatus.isRunning || receivedRemoteResponse || receivedTerminalStatus
+      || queuePaused || credentialSwitchWait
+      || pendingPermission || pendingAskUser || pendingPluginSetup || pendingPlanReview)
+      ? [sessionId] : [],
+  ), [statusAgentDeviceId, sessionId, agentStatus.isRunning, receivedRemoteResponse, receivedTerminalStatus,
+    queuePaused, credentialSwitchWait,
+    pendingPermission, pendingAskUser, pendingPluginSetup, pendingPlanReview]);
+  const startingSessions = useStartingSessionIds(settledStartingSessions);
+  const waitingRemoteStart = Boolean(statusAgentDeviceId && sessionId
+    && startingSessions.has(sessionId) && !settledStartingSessions.has(sessionId));
   const composerStatus = runningWorkflow
     ? runningWorkflow.total > 0
       ? t('ccAgent.agentStatus.waitingWorkflowProgress', runningWorkflow)
       : t('ccAgent.agentStatus.waitingWorkflow')
-    : agentStatus.status;
+    : waitingRemoteStart ? 'Waiting for remote response' : remoteResponsePendingStatus(
+        agentStatus.status, statusAgentDeviceId, agentStatus.isRunning,
+        messages,
+      );
 
   // error-tail-banner:会话尾部停在未忽略的 role='error' 行 → 输入框上方显示
   // 可操作红条(与 live ErrorBanner 同风格;2026-07-05 产品决策统一——所有尾部
@@ -2533,8 +2566,8 @@ function CCAgentSessionContent({
   //   - 中断标记行(reason=app-exit-interrupted,启动扫尾补写)→「继续任务/忽略」
   //   - 普通失败行(process exited / turn-failed 等,重启后 live 报错只剩历史行)
   //     →「重试/关闭」
-  // 后面有新消息 = 任务已被推进,判定自然不命中。此时消息流内不重复渲染该行
-  // (MessageStream 对尾部未忽略 error 行返回 null,由本条独家承载)。
+  // 后面有真实进展 = 任务已被推进；位置/模型/历史边界卡不代表恢复成功。
+  // 只有实际渲染的横幅才认领 MessageStream 中同一条错误，避免双显或只读时丢失原因。
   const scheduleSessionInfo = useAutomationScheduleSessionInfo(sessionId);
   const unreadFailedScheduleRunIds =
     scheduleSessionInfo?.unreadFailedRunIds ?? EMPTY_UNREAD_FAILED_RUN_IDS;
@@ -2552,15 +2585,10 @@ function CCAgentSessionContent({
     );
     return false;
   }, [currentUnreadFailedRunId, remoteDeviceId, t]);
-  const errorTailMsg = useMemo(() => {
-    const last = messages.length > 0 ? messages[messages.length - 1] : undefined;
-    return last &&
-      last.role === 'error' &&
-      !last.errorDismissed &&
-      last.clientId !== disposedErrorPersistId
-      ? last
-      : null;
-  }, [disposedErrorPersistId, messages]);
+  const errorTailMsg = useMemo(
+    () => findErrorTailMessage(messages, disposedErrorPersistId),
+    [disposedErrorPersistId, messages],
+  );
   // 队列里已有合成续跑项 = 用户已点过继续/重试、只是尚未被接受落库(排队被挡 /
   // 凭证切换等待):视为已推进,banner 抑制(review P2)—— 本地 hidden 态在重挂/
   // 重载后丢失,只看 messages 尾部时旧 error 行仍在,banner 会重现并允许对同一
@@ -2632,9 +2660,6 @@ function CCAgentSessionContent({
   // 任务视图挂着但看不见(聊天栏收起)时不读配置，重新看得见时再读。
   const { config: modelGroupsConfig } = useModelGroups(modelGroupsInTask && viewVisible);
   // 已挂着「下一条消息换到另一台电脑」时，按那个即将生效的位置挑：换模型时会沿用它，两边必须是同一台。
-  const taskLocation = agentSwitchIntent && agentSwitchIntent.agentDeviceId !== undefined
-    ? agentSwitchIntent.agentDeviceId ?? null
-    : session?.agentDeviceId ?? null;
   const switchTaskByModelGroup = useCallback(async (selection: ModelGroupSelection) => {
     if (!sessionId) return;
     // 和在选择器里点一行同一个顺序保证：已经点了发送就不再换；选路期间占住这个任务的切换门，
@@ -5463,6 +5488,15 @@ function CCAgentSessionContent({
       simplifiedBotConversation={Boolean(botChatIdentity)} localSend={isLocalUserSend(entry.clientId)} onEdit={beginQueueComposerEdit}
       onSteer={steerQueuedMessage} onRemove={removeFromQueue} onMove={moveQueueItem} /> : null;
   };
+  const showErrorTailBanner = !readOnly && !!errorTailMsg && !errorTailBannerHidden
+    && !syntheticContinuationPending && !error && !credentialSwitchWait
+    && !isStreaming && !agentStatus.isRunning && !!sessionId;
+  const showLiveErrorBanner = !readOnly && !!error && !hasInlineOverloadRetry({
+    error, errorReason, isRecoverable: errorIsRecoverable, messages, continuationTurnClientId,
+  });
+  const bannerErrorClientId = showLiveErrorBanner
+    ? getLiveErrorMessageClientId({ error, errorPersistId, historyLoaded, messages, disposedErrorPersistId })
+    : showErrorTailBanner ? errorTailMsg!.clientId : null;
   const queueNotices = <>
             {/* Error display.
               - agentKind 传到 ErrorBanner 让 codex 401 / Missing bearer 不仅在远端
@@ -5494,16 +5528,7 @@ function CCAgentSessionContent({
                 Retry 门控与恢复路径(同步登录态 / fork 剥离),此前的简化红条
                 一律显示重试会把用户带进同样的失败循环。onRetry 忽略 retryText
                 (typed token),发隐藏续跑指令;onCancel = dismiss 持久化。 */}
-            {!readOnly &&
-              errorTailMsg &&
-              !errorTailBannerHidden &&
-              !syntheticContinuationPending &&
-              !error &&
-              !credentialSwitchWait &&
-              !isStreaming &&
-              !agentStatus.isRunning &&
-              sessionId &&
-              (errorTailKind === 'interrupted' ? (
+            {showErrorTailBanner && (errorTailKind === 'interrupted' ? (
                 <InterruptedTurnBanner
                   onContinue={handleErrorTailContinue}
                   onDismiss={handleErrorTailDismiss}
@@ -5560,6 +5585,10 @@ function CCAgentSessionContent({
                 />
               )}
 
+            {!readOnly && sessionId && (
+              <TaskLiveScreenNotices sessionId={sessionId} style={{ width: '100%' }} className="py-1" />
+            )}
+
             {sessionId && scheduleSessionInfo?.latestFailedRun && shouldShowFailedScheduleNotice({
               latestFailedRun: scheduleSessionInfo.hasFailedRun ? scheduleSessionInfo.latestFailedRun : null,
               readOnly, tailError: !!errorTailMsg, interrupted: !!interruptedFromSession,
@@ -5579,13 +5608,7 @@ function CCAgentSessionContent({
               )}
 
             {/* 只隐藏已有同一错误活动行的过载重试；认证、额度等操作入口照常保留。 */}
-            {!readOnly && error && !hasInlineOverloadRetry({
-              error,
-              errorReason,
-              isRecoverable: errorIsRecoverable,
-              messages,
-              continuationTurnClientId,
-            }) && (
+            {showLiveErrorBanner && (
               <ErrorBanner
                 onChooseComputer={sharedTaskRecovery.askAgain}
                 error={error}
@@ -5665,7 +5688,7 @@ function CCAgentSessionContent({
       botUnreadBoundaryAt={botChatIdentity ? botUnreadBoundaryAt : null}
       onBotReadThrough={viewVisible ? onBotReadThrough : undefined}
       messages={timelineMessages}
-      activeErrorClientId={!readOnly && error ? errorPersistId : null}
+      activeErrorClientId={bannerErrorClientId}
       activeVoiceCallId={activeVoiceCallId}
       historyVisibleAfter={session?.source === 'side-chat' ? new Date(session.createdAt).getTime() : undefined}
       onAskInSideChat={!readOnly && sessionId && !sideChatBlockedKey
@@ -5712,7 +5735,7 @@ function CCAgentSessionContent({
 
   const composerRuntimeVisible =
     !pendingPlanReview &&
-    (agentStatus.isRunning || backgroundTasksActive || runningWorkflow !== null);
+    (agentStatus.isRunning || waitingRemoteStart || backgroundTasksActive || runningWorkflow !== null);
 
   const content = (
     // Layout: single scroll container (full height) + sticky input overlay at bottom.
@@ -5982,12 +6005,13 @@ function CCAgentSessionContent({
                   sessionKey={sessionId ?? null}
                   status={composerStatus}
                   reconnectStatus={reconnectStatus}
-                  tokenUsage={agentStatus.tokenUsage}
-                  outputTokens={agentStatus.outputTokens ?? 0}
-                  generationDurationMs={agentStatus.generationDurationMs ?? 0}
-                  generationReliable={agentStatus.generationReliable ?? true}
-                  tokenSpeed={agentStatus.tokenSpeed}
-                  startedAt={agentStatus.startedAt}
+                  preparing={waitingRemoteStart}
+                  tokenUsage={waitingRemoteStart ? 0 : agentStatus.tokenUsage}
+                  outputTokens={waitingRemoteStart ? 0 : agentStatus.outputTokens ?? 0}
+                  generationDurationMs={waitingRemoteStart ? 0 : agentStatus.generationDurationMs ?? 0}
+                  generationReliable={!waitingRemoteStart && (agentStatus.generationReliable ?? true)}
+                  tokenSpeed={waitingRemoteStart ? undefined : agentStatus.tokenSpeed}
+                  startedAt={waitingRemoteStart ? null : agentStatus.startedAt}
                   visible={composerRuntimeVisible || (!pendingPlanReview && activeReconnect !== null)}
                   inputWidth={inputWidth}
                   sideTaskRunning={agentStatus.sideTaskRunning ?? false}
@@ -6008,7 +6032,7 @@ function CCAgentSessionContent({
                     backgroundBash.stopping ||
                     remoteBackground.stopping
                   }
-                  suppressContent={Boolean(pendingPlanReview)}
+                  suppressContent={Boolean(pendingPlanReview) || errorReason === 'unexecuted-tool-markup'}
                   onStopBackgroundTasks={() => {
                     if (remoteDeviceId) void remoteBackground.stopAll();
                     else if (backgroundActivity.active) void backgroundActivity.stopAll();
@@ -6463,7 +6487,7 @@ function CCAgentSessionContent({
                         }
                       : undefined
                   }
-                  botMentions={botMentions}
+                  botMentions={composerBotMentions}
                   hideRuntimeControls={Boolean(botChatIdentity)}
                 />
                 </div>
@@ -6794,8 +6818,9 @@ function HandoffSourcePill({
 const STATUS_BAR_FADE_MS = 400;
 const CONTROLLED_BANNER_MAX_WIDTH = 420;
 
-function RunningStatusBar({
+export function RunningStatusBar({
   status,
+  preparing = false,
   reconnectStatus = null,
   tokenUsage,
   outputTokens = 0,
@@ -6818,6 +6843,8 @@ function RunningStatusBar({
   className,
 }: {
   status: string;
+  /** No current runtime metrics exist while a remote send is still being prepared. */
+  preparing?: boolean;
   /** Same pending row / continuation owner as the message stream; overrides stale agent status. */
   reconnectStatus?: string | null;
   tokenUsage: number;
@@ -6879,8 +6906,8 @@ function RunningStatusBar({
   const [ratePanelPinned, setRatePanelPinned] = useState(false);
   const reconnecting = reconnectStatus !== null;
   useEffect(() => {
-    if (reconnecting) setRatePanelPinned(false);
-  }, [reconnecting]);
+    if (reconnecting || preparing) setRatePanelPinned(false);
+  }, [reconnecting, preparing]);
 
   useEffect(() => {
     if (visible) {
@@ -7123,14 +7150,14 @@ function RunningStatusBar({
           走 LLM, 显示残留 token 计数会误导用户以为也耗了 token。 */}
       <div className="flex min-w-0 items-center justify-self-end gap-2">
         {rightLeadingSlot}
-        {(!suppressContent && (!isHidden || ratePanelPinned)) && (
+        {(!suppressContent && (!preparing || backgroundTasksRunning) && (!isHidden || ratePanelPinned)) && (
           <div
             data-running-status-meta="true"
             className="flex min-w-0 items-center gap-[6px]"
             style={ratePanelPinned ? undefined : fadeStyle}
             aria-hidden={isHidden && !ratePanelPinned}
           >
-            {showRatePanel && (
+            {!preparing && showRatePanel && (
               <RunningTokenRatePopover
                 elapsedText={elapsedText}
                 // 工具执行期间(host 已 pause)没有"当前"速度:latestRate 缓存着生成
@@ -7179,7 +7206,7 @@ function RunningStatusBar({
                   ? t('chat.backgroundActivity.stopping')
                   : t('chat.backgroundActivity.stopAll')}
               </button>
-            ) : workflowWaiting || showRatePanel ? null : (
+            ) : preparing || workflowWaiting || showRatePanel ? null : (
               <>
                 <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                   {elapsedText}

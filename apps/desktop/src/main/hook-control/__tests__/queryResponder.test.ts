@@ -5,8 +5,10 @@
  * 纯函数注入(规则 14), 无 Electron / maker。
  */
 
+import type { CatalogModel, ProviderSource, ProviderView } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
 
+import { hookModelProviderName } from '../modelProviderName';
 import { buildQueryResponse, type QueryResponderDeps } from '../queryResponder';
 
 const DEPS: QueryResponderDeps = {
@@ -42,6 +44,27 @@ const DEPS: QueryResponderDeps = {
 };
 
 describe('buildQueryResponse', () => {
+  it('models: 供应商展示名随模型条目带上, 空串不带', async () => {
+    const res = await buildQueryResponse(
+      {
+        ...DEPS,
+        listAgentModels: () => [{
+          agentKind: 'codex',
+          models: [
+            { id: 'gpt-5.5', displayName: 'GPT-5.5', efforts: [], defaultEffort: null, provider: 'OpenAI' },
+            { id: 'xd/gpt-5.5', displayName: 'GPT-5.5', efforts: [], defaultEffort: null, provider: '' },
+          ],
+          permissionModes: [],
+        }],
+      },
+      { queryId: 'q-provider', kind: 'models' },
+    );
+    expect(res.agents?.[0].models).toEqual([
+      { id: 'gpt-5.5', label: 'GPT-5.5', efforts: [], defaultEffort: null, group: null, provider: 'OpenAI' },
+      { id: 'xd/gpt-5.5', label: 'GPT-5.5', efforts: [], defaultEffort: null, group: null },
+    ]);
+  });
+
   it('workspaces: 透传别名清单', async () => {
     const res = await buildQueryResponse(DEPS, { queryId: 'q1', kind: 'workspaces' });
     expect(res).toEqual({
@@ -75,6 +98,8 @@ describe('buildQueryResponse', () => {
       ],
     });
     expect(res.agents?.[1].models[0].group).toBeNull();
+    // 没有供应商名时不带 provider 键(旧服务端不认识它)。
+    expect(res.agents?.[0].models[0]).not.toHaveProperty('provider');
     expect(res.agents?.[1].permissionModes).toEqual([
       { id: 'ask', label: 'Default permissions' },
       { id: 'bypassPermissions', label: 'Full access' },
@@ -150,5 +175,57 @@ describe('buildQueryResponse', () => {
       { queryId: 'q5', kind: 'models' },
     );
     expect(bad).toMatchObject({ queryId: 'q5', ok: false, error: 'providers unavailable' });
+  });
+});
+
+// models[].provider 的取名规则: 与默认路由同一条(effectiveSourceIdForModel 的未指定来源分支)。
+function model(id: string): CatalogModel {
+  return { id, name: id, contextWindow: 200_000, efforts: [], defaultEffort: null };
+}
+
+function provider(
+  id: string,
+  name: string,
+  source: ProviderSource,
+  modelIds: string[],
+  connected = true,
+): ProviderView {
+  return {
+    id,
+    name,
+    source,
+    agents: ['codex'],
+    auth: { method: source === 'user' ? 'apiKey' : 'managed' },
+    access: source === 'user' ? { kind: 'api' } : { kind: 'managed' },
+    routing: { codex: { upstream: `https://${id}.test`, authStrategy: 'api-key-header' } },
+    models: { codex: modelIds.map(model) },
+    connected,
+  };
+}
+
+describe('hookModelProviderName', () => {
+  const providers = [
+    provider('custom', 'My Relay', 'user', ['gpt-5.5', 'relay-only']),
+    provider('xd', 'Cindy', 'builtin', ['gpt-5.5', 'xd-only']),
+    provider('openai', 'OpenAI', 'builtin', ['gpt-5.5']),
+  ];
+
+  it('只有一家提供时写这一家的展示名(xd 按产品名写成 Cindy AI)', () => {
+    expect(hookModelProviderName(providers, 'codex', 'relay-only')).toBe('My Relay');
+    expect(hookModelProviderName(providers, 'codex', 'xd-only')).toBe('Cindy AI');
+  });
+
+  it('多家都提供同一个模型时, 写未指定来源时默认会走的那一家, 不按清单先后', () => {
+    // codex 的默认来源: openai 优先, 其次 xd, 再兜底首项。
+    expect(hookModelProviderName(providers, 'codex', 'gpt-5.5')).toBe('OpenAI');
+    expect(hookModelProviderName(providers.slice(0, 2), 'codex', 'gpt-5.5')).toBe('Cindy AI');
+    expect(hookModelProviderName(providers.slice(0, 1), 'codex', 'gpt-5.5')).toBe('My Relay');
+  });
+
+  it('没有已连接的来源、模型不存在或名字是空白时不给名字', () => {
+    const disconnected = [provider('custom', 'My Relay', 'user', ['relay-only'], false)];
+    expect(hookModelProviderName(disconnected, 'codex', 'relay-only')).toBeUndefined();
+    expect(hookModelProviderName(providers, 'codex', 'missing')).toBeUndefined();
+    expect(hookModelProviderName([provider('custom', '   ', 'user', ['relay-only'])], 'codex', 'relay-only')).toBeUndefined();
   });
 });

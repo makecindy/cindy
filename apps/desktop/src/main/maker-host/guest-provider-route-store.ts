@@ -10,10 +10,17 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { findCatalogModel, type AgentKind } from '@cindy/model-providers';
+import { findCatalogModel, type AgentKind, type Catalog } from '@cindy/model-providers';
 
 import { getActiveCatalog } from './active-catalog.js';
 import { clearSessionProvider, getSessionProvider, hasHostedSessionModelAccess, hostedSessionModelAllowed, setSessionProvider } from './session-provider-store.js';
+
+// Platform assembly supplies the same live account membership used at remote
+// admission. The base catalog alone can omit every model of a signed-in pool.
+let readProviderModelCatalog: () => Catalog = getActiveCatalog;
+export function setGuestProviderModelCatalogReader(read: () => Catalog): void {
+  readProviderModelCatalog = read;
+}
 
 /**
  * Claude Code 请求带上的路由令牌请求头。与 maker-core 的 DEVICE_HOSTED_GUEST_ROUTE_HEADER 同值
@@ -117,7 +124,7 @@ export function hostedProviderOffersModel(sessionId: string | null | undefined, 
 function providerOffersModel(providerId: string, agent: AgentKind, wireModel: string, allowsModel?: (model: string) => boolean): boolean {
   const requested = bareModelId(wireModel);
   if (!requested) return false;
-  const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
+  const provider = readProviderModelCatalog().providers.find((candidate) => candidate.id === providerId);
   if (agent === 'pi') {
     // Pi native subscriptions send bare wire ids; grants use the catalog's namespaced ids.
     // Keep distinct context profiles exact so one profile cannot borrow another's grant.
@@ -162,6 +169,7 @@ export function resetGuestProviderRoutesForTest(): void {
   for (const binding of bySession.values()) clearSessionProvider(binding.sessionId);
   byToken.clear();
   bySession.clear();
+  readProviderModelCatalog = getActiveCatalog;
 }
 
 /** Only the authenticated, still-current binding may explain a member refusal. */
@@ -170,7 +178,7 @@ export function guestProviderModelDenial(sessionId: string | null | undefined, m
   const binding = bySession.get(sessionId);
   if (!binding || getSessionProvider(sessionId) !== binding.providerId) return null;
   try {
-    const provider = getActiveCatalog().providers.find(item => item.id === binding.providerId);
+    const provider = readProviderModelCatalog().providers.find(item => item.id === binding.providerId);
     const catalogModel = kind ? findCatalogModel(provider, model, kind)?.id ?? model : model;
     return binding.modelDenial?.(catalogModel) ?? null;
   } catch { return null; }

@@ -1,3 +1,4 @@
+import { piToolMarkupProjection } from './tool-markup-projection.js';
 import { estimatePiContext, type PiPromptSource } from './context-estimate.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
 import { getPiExtensionUiCapability } from './extension-ui-capabilities.js';
@@ -4261,6 +4262,7 @@ export class PiAgent extends BaseAgent {
       };
     }
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger, { model: initialWireModel });
+    piToolMarkupProjection(ctx).attachTerminalQueue(queue);
     ctx.getPriceVariant = opts.getPriceVariant;
     ctx.resolveUsagePriceVariant = opts.resolveUsagePriceVariant;
     ctx.workingContextWindow = startupWorkingContextWindow;
@@ -5786,6 +5788,8 @@ export class PiAgent extends BaseAgent {
         ...(hosted ? { [DEVICE_HOSTED_PI_ENV]: deviceHostedPiEnvValue(hosted) } : {}),
         ...(fastModels.length > 0 ? { CINDY_PI_FAST_MODELS: JSON.stringify(fastModels) } : {}),
         CINDY_PI_TURN_TOOL_POLICY: remote ? '' : runtimeInstanceId,
+        CINDY_PI_TOOL_LIFECYCLE: !remote && !hosted && !reviewMode && opts.sessionId
+          ? (['call', 'result'] as const).filter(phase => this.deps.toolLifecycleControl?.enabled(opts.sessionId!, phase)).join(',') : '',
         ...(allowPiPackageManagement ? { [PI_PACKAGE_MANAGEMENT_ENV]: piPackageManagementToken } : {}),
         // 轮 40-w4-t12 HIGH-1:review-only 启动标记 —— 独立于权限文件(文件损坏/
         // 缺失时 bridge 仍保留 reviewOnly 语义, 不降级成普通 ask;见
@@ -5984,6 +5988,12 @@ export class PiAgent extends BaseAgent {
               currentModelIds: [mutableModel, mutableWireModel],
               readNativeFast: (provider, model) => !requestPrefsClosed && nativeFastEnabled &&
                 fastModels.some(candidate => candidate.provider === provider && candidate.id === model),
+              controlToolLifecycle: async input => {
+                if (remote || hosted || reviewMode || closed || accountBoundaryTeardown || !opts.sessionId) throw new Error('Tool hook control unavailable');
+                const result = await this.deps.toolLifecycleControl?.run(opts.sessionId, { ...input, engine: 'pi' });
+                if (closed || accountBoundaryTeardown) throw new Error('Tool hook control expired');
+                return result ?? {};
+              },
               controlModelRequest: async input => {
                 const control = activeModelRequestControl;
                 if (!control || closed || accountBoundaryTeardown) throw new Error('Model request control is unavailable');
@@ -9306,6 +9316,7 @@ export class PiAgent extends BaseAgent {
       permissionMode: 'ask' | 'auto' | 'bypassPermissions';
       currentModelIds: readonly string[];
       readNativeFast?: (provider: string, model: string) => boolean;
+      controlToolLifecycle?: (input: Omit<import('../shared/tool-lifecycle.js').ToolLifecycleEvent, 'engine'>) => Promise<import('../shared/tool-lifecycle.js').ToolLifecycleVerdict>;
       controlModelRequest?: (input: { phase: 'select' | 'payload'; provider: string; model: string;
         request?: Record<string, unknown>; failure?: 'request-too-large' }) => Promise<unknown>;
       workspaceRoots: string[];
@@ -9380,6 +9391,23 @@ export class PiAgent extends BaseAgent {
       return;
     }
 
+    if (method === 'input' && event.title === 'cindy:tool-lifecycle') {
+      const context = getPermissionCtx();
+      void (async () => {
+        try {
+          if (context.isPermissionContextClosed() || context.isAccountBoundaryTornDown() || !context.controlToolLifecycle) throw new Error('Tool hook unavailable');
+          const input = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '');
+          if (!['call', 'result'].includes(input?.phase) || typeof input.toolName !== 'string' || typeof input.toolCallId !== 'string'
+            || !input.input || typeof input.input !== 'object' || Array.isArray(input.input)) throw new Error('Invalid tool hook');
+          const result = await context.controlToolLifecycle(input);
+          if (context.isPermissionContextClosed() || context.isAccountBoundaryTornDown()) throw new Error('Tool hook expired');
+          proc.send({ type: 'extension_ui_response', id, value: JSON.stringify(result) });
+        } catch {
+          proc.send({ type: 'extension_ui_response', id, value: JSON.stringify({ error: 'Tool hook failed' }) });
+        }
+      })();
+      return;
+    }
     // Internal, read-only query over the existing stdio/SSH RPC response channel.
     if (method === 'input' && event.title === 'cindy:model-request-control') {
       const context = getPermissionCtx();

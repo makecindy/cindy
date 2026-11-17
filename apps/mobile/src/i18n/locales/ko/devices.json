@@ -328,6 +328,7 @@
       "renameDevice": "{{label}} 이름 변경",
       "project": "프로젝트 {{title}}",
       "dialogue": "채팅",
+      "automation": "자동화",
       "openAutomationLatest": "자동화 작업 {{title}}의 최근 세션 열기",
       "automationTask": "자동화 작업 {{title}}",
       "openConversation": "세션 {{title}} 열기",
@@ -353,7 +354,9 @@
     },
     "menu": {
       "groupDialogue": "채팅",
+      "groupAutomation": "자동화",
       "dialogueFolder": "채팅",
+      "automationFolder": "자동화",
       "search": "검색",
       "settings": "설정",
       "remoteSettings": "원격 연결 설정",

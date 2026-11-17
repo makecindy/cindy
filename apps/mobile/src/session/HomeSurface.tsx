@@ -78,6 +78,7 @@ import {
   Pin,
   RefreshCw,
   SquarePen,
+  Timer,
   UsersRound,
   X,
 } from 'lucide-react-native';
@@ -783,6 +784,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [inboxNow, setInboxNow] = useState(Date.now);
   const [groupByProject, setGroupByProject] = useRetainedHomeState(viewSession, 'groupByProject', true);
   const [groupDialogue, setGroupDialogue] = useRetainedHomeState(viewSession, 'groupDialogue', false);
+  const [groupAutomation, setGroupAutomation] = useRetainedHomeState(viewSession, 'groupAutomation', false);
   const [sortBy, setSortBy] = useRetainedHomeState<HomeListSortBy>(viewSession, 'sortBy', 'recency');
   const [projectOrder, setProjectOrder] = useRetainedHomeState<HomeProjectOrder>(viewSession, 'projectOrder', 'activity');
   const [manualProjectOrder, setManualProjectOrder] = useRetainedHomeState<string[]>(viewSession, 'manualProjectOrder', []);
@@ -1616,6 +1618,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       ) return;
       setGroupByProject(preferences.groupByProject);
       setGroupDialogue(preferences.groupDialogue);
+      setGroupAutomation(preferences.groupAutomation);
       setSortBy(preferences.sortBy);
       setStatusFilter(preferences.statusFilter);
       setProjectOrder(preferences.projectOrder);
@@ -2428,7 +2431,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const sortedHomeSections = useMemo(
     () => {
       const regular = buildHomeSections(filteredHome, groupByProject, pinnedCollapsed, {
+        automationTitle: t('devices.list.menu.automationFolder'),
         dialogueTitle: t('devices.list.menu.dialogueFolder'),
+        groupAutomation,
         groupDialogue,
         manualProjectOrder: displayedManualProjectOrder,
         priorityContext: sortPriorityContext,
@@ -2440,12 +2445,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         : regular;
     },
     [taskListMode, inboxCollapsed, priorityContext, inboxNow, displayedManualProjectOrder, displayedProjectOrder,
-      filteredHome, filteredInboxHome, groupByProject, groupDialogue, pinnedCollapsed,
+      filteredHome, filteredInboxHome, groupAutomation, groupByProject, groupDialogue, pinnedCollapsed,
       sortPriorityContext, sortBy, t],
   );
   // Sorting metadata may arrive after rows. Only user actions or a new visit release
   // the displayed order; live activity, priority and host-order pushes update content.
-  const displayOrderScope = JSON.stringify([preferenceOwner, selectedDeviceId, taskListMode, groupByProject, groupDialogue,
+  const displayOrderScope = JSON.stringify([preferenceOwner, selectedDeviceId, taskListMode, groupByProject, groupDialogue, groupAutomation,
     sortBy, statusFilter, projectFilter, teammateFilter, vendorFilter, lastActivityFilter, searchQuery]);
   displayOrderScopeRef.current = displayOrderScope;
   const commitDisplayOrder = useCallback((order: HomeDisplayOrder) => {
@@ -2784,6 +2789,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     }
     if (nextPatch.groupByProject !== undefined) setGroupByProject(nextPatch.groupByProject);
     if (nextPatch.groupDialogue !== undefined) setGroupDialogue(nextPatch.groupDialogue);
+    if (nextPatch.groupAutomation !== undefined) setGroupAutomation(nextPatch.groupAutomation);
     if (nextPatch.sortBy !== undefined) setSortBy(nextPatch.sortBy);
     if (nextPatch.statusFilter !== undefined) setStatusFilter(nextPatch.statusFilter);
     if (nextPatch.teammateFilter !== undefined) setTeammateFilter(nextPatch.teammateFilter);
@@ -3034,7 +3040,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
 
   // 自动化组「查看全部 N 次运行」:与项目组「查看全部」一致,进入该任务的专属列表页
   // (设备详情页的自动化任务作用域模式),不在列表里原地铺开。
-  const openAutomationGroup = useCallback((group: RemoteAutomationSessionGroup) => {
+  const openAutomationGroup = useCallback((group: RemoteAutomationSessionGroup, options?: { allProjects?: boolean }) => {
     const session = group.items[0]?.session as RemoteSession | undefined;
     if (!session) return;
     // 设备解析与 openSession 同口径:可达优先(canonicalDeviceId),回退物理 id / store 索引。
@@ -3044,8 +3050,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       return;
     }
     // 项目组内的组行(有 workingDir)带上项目维度:baseKey 不含项目 scope,同一任务跨
-    // 项目时目标页只该显示本项目的 run(与组行标称的 N 一致)。dialogue 组无目录,不带。
-    const workingDir = session.workingDir?.trim();
+    // 项目时目标页只该显示本项目的 run(与组行标称的 N 一致)。dialogue 组无目录,不带;
+    // 总「自动化」目录已跨项目合并,也不带,否则看不到其它目录的运行。
+    const workingDir = options?.allProjects ? undefined : session.workingDir?.trim();
     guardedPush({
       pathname: '/devices/[deviceId]',
       params: {
@@ -3215,6 +3222,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   }, [home.deviceFilters, openRemoteCollection, scopeCollections, selectHomeScope]);
   const displayMenuState = useMemo<HomeDisplayMenuState>(() => ({
     taskListMode,
+    groupAutomation,
     groupByProject,
     groupDialogue,
     lastActivityFilter,
@@ -3227,7 +3235,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     taskInfoFields,
     vendorFilter,
     viewMode,
-  }), [taskListMode, showCollapsedTeammateAvatars, displayedProjectOrder, groupByProject, groupDialogue, lastActivityFilter, projectFilter, effectiveTeammateFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
+  }), [taskListMode, showCollapsedTeammateAvatars, displayedProjectOrder, groupAutomation, groupByProject, groupDialogue, lastActivityFilter, projectFilter, effectiveTeammateFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
   // 在看已归档任务时,顶栏「⋯」带提醒点(iOS 系统顶栏 / 自绘按钮两条路径共用这一个判据),
   // 同时把状态写进无障碍名称,读屏用户不用打开菜单也知道列表不是平常的进行中任务。
   const archivedReminder = statusFilter === 'archived';
@@ -4196,12 +4204,12 @@ function ProjectRow({
   dragging?: boolean;
   expandedAutomationGroups: readonly string[];
   headerRefs?: MutableRefObject<Map<string, ViewInstance>>;
-  kind?: 'project' | 'dialogue' | 'cindy-make';
+  kind?: 'project' | 'dialogue' | 'cindy-make' | 'automation';
   machineIdentity?: HomeProjectMachineIdentity;
   onDragEnd?: () => void;
   onDragMove?: (absoluteY: number) => void;
   onDragStart?: (input: { absoluteY: number; count: number; key: string; title: string }) => void;
-  onOpenAutomationGroup(group: RemoteAutomationSessionGroup): void;
+  onOpenAutomationGroup(group: RemoteAutomationSessionGroup, options?: { allProjects?: boolean }): void;
   onOpenProject(): void;
   onNewTask(): void;
   onSearchProject(): void;
@@ -4229,6 +4237,10 @@ function ProjectRow({
   // PureComponent bail)——以低频首页状态版本兜底感知运行态变化,与 AutomationGroup-
   // Children 同款(否则折叠线以下转入 running 的会话不会被豁免展开,review P1)。
   const homeStatusVersion = useRemoteHomeStatusVersion();
+  const openRowAutomationGroup = useCallback(
+    (group: RemoteAutomationSessionGroup) => onOpenAutomationGroup(group, kind === 'automation' ? { allProjects: true } : undefined),
+    [kind, onOpenAutomationGroup],
+  );
   // 与桌面侧栏项目组同一套折叠策略:前 N 条之外豁免最近 24h 活动 / 需关注 / 运行中的条目
   // (豁免语义见共享层 getRemoteSessionPreviewCollapse 注释)。
   // 自动化折叠后 sessions 是"行"(组行代表多条会话):按钮显隐看隐藏行数(hiddenCount),
@@ -4304,9 +4316,12 @@ function ProjectRow({
   const renderedSessions = windowingEnabled ? visibleSessions.slice(windowStart, windowEnd) : visibleSessions;
   const leadingSpacerHeight = childWindow.leadingSpacerHeight;
   const trailingSpacerHeight = childWindow.trailingSpacerHeight;
-  const groupTestID = kind === 'dialogue' ? 'home.dialogueGroup' : 'home.projectGroup';
-  const rowTestID = kind === 'dialogue' ? 'home.dialogueRow' : 'home.projectRow';
-  const childTestID = kind === 'dialogue' ? 'home.chatRow' : 'home.projectSessionRow';
+  const groupTestID = kind === 'dialogue' ? 'home.dialogueGroup'
+    : kind === 'automation' ? 'home.automationGroup' : 'home.projectGroup';
+  const rowTestID = kind === 'dialogue' ? 'home.dialogueRow'
+    : kind === 'automation' ? 'home.automationRow' : 'home.projectRow';
+  const childTestID = kind === 'dialogue' ? 'home.chatRow'
+    : kind === 'automation' ? 'home.automationSessionRow' : 'home.projectSessionRow';
   const displayTitle = machineIdentity && !machineIdentity.hideLabel
     ? `${project.title} (${machineIdentity.displayLabel})`
     : project.title;
@@ -4345,7 +4360,9 @@ function ProjectRow({
       accessibilityHint={reorderable ? t('devices.list.menu.projectOrderManualTip') : undefined}
       accessibilityLabel={kind === 'dialogue'
         ? t('devices.list.a11y.dialogue')
-        : t('devices.list.a11y.project', { title: displayTitle })}
+        : kind === 'automation'
+          ? t('devices.list.a11y.automation')
+          : t('devices.list.a11y.project', { title: displayTitle })}
       accessibilityRole="button"
       accessibilityActions={actionable ? [
         { name: 'newTask', label: t('devices.list.projectActions.newTask') },
@@ -4392,6 +4409,8 @@ function ProjectRow({
           <MessagesSquare color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
         ) : kind === 'cindy-make' ? (
           <Hammer color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
+        ) : kind === 'automation' ? (
+          <Timer color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
         ) : collapsed ? (
           <Folder color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
         ) : (
@@ -4480,7 +4499,7 @@ function ProjectRow({
                 hideDivider={hiddenRowCount === 0 && index === visibleSessions.length - 1}
                 indented
                 item={item}
-                onOpenAutomationGroup={onOpenAutomationGroup}
+                onOpenAutomationGroup={openRowAutomationGroup}
                 onOpenSession={onOpenSession}
                 onToggleAutomationGroup={onToggleAutomationGroup}
                 swipe={swipe}
@@ -4602,7 +4621,7 @@ function HomeListRowInner({
   machineIdentity?: HomeProjectMachineIdentity;
   nextIsBlock: boolean;
   onArchive(session: RemoteSession): void;
-  onOpenAutomationGroup(group: RemoteAutomationSessionGroup): void;
+  onOpenAutomationGroup(group: RemoteAutomationSessionGroup, options?: { allProjects?: boolean }): void;
   onOpenProjectSessions(project: MobileHomeProjectGroup, search?: boolean): void;
   onNewProjectTask(project: MobileHomeProjectGroup): void;
   onOpenSession(item: RemoteSessionListItem): void;
@@ -4646,8 +4665,10 @@ function HomeListRowInner({
         project={item.project}
         homeScrollY={homeScrollY}
         viewportHeight={viewportHeight}
-        // Cindy Make spans separate workdirs; all tasks stay in this folder.
-        showAll={item.kind === 'cindy-make' || (item.kind === 'dialogue' && showAllDialogue)}
+        // Cindy Make and Automations span separate workdirs; all tasks stay in the folder
+        // (runs of one automation are already one row).
+        showAll={item.kind === 'cindy-make' || item.kind === 'automation'
+          || (item.kind === 'dialogue' && showAllDialogue)}
         suppressTopBorder={prevIsBlock}
         swipe={swipe}
       />

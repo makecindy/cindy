@@ -68,6 +68,8 @@ export interface ModelCatalogOverrideFields {
   defaultEffort?: Effort | null;
   supportsFastMode?: boolean;
   supportsImageInput?: boolean;
+  /** Explicit Pi Chat serializer capability, valid only in perAgent.pi. */
+  supportsStore?: boolean;
   /** 与 Registry 使用同一作者侧 lifecycle 词汇；应用到 CatalogModel 时 preview→alpha。 */
   status?: 'active' | 'preview' | 'deprecated';
 }
@@ -84,6 +86,7 @@ export type ModelCatalogPerAgentOverrideFields = Pick<
   | 'defaultEffort'
   | 'supportsFastMode'
   | 'supportsImageInput'
+  | 'supportsStore'
 >;
 
 export interface ModelCatalogOverrideEntry {
@@ -160,7 +163,8 @@ function sanitizeFields(
       k !== 'efforts' &&
       k !== 'defaultEffort' &&
       k !== 'supportsFastMode' &&
-      k !== 'supportsImageInput'
+      k !== 'supportsImageInput' &&
+      k !== 'supportsStore'
     ) {
       return null;
     }
@@ -204,6 +208,10 @@ function sanitizeFields(
       case 'defaultEffort':
         if (v !== null && (typeof v !== 'string' || !VALID_EFFORTS.has(v))) return null;
         out.defaultEffort = v as Effort | null;
+        break;
+      case 'supportsStore':
+        if (scope !== 'perAgent' || typeof v !== 'boolean') return null;
+        out.supportsStore = v;
         break;
       case 'supportsImageInput':
       case 'supportsFastMode':
@@ -258,6 +266,7 @@ function sanitizeEntry(raw: unknown): ModelCatalogOverrideEntry | null {
         if (agent !== 'claude-code' && agent !== 'codex' && agent !== 'pi') return null;
         const sanitized = sanitizeFields(fields, 'perAgent');
         if (!sanitized) return null;
+        if (agent !== 'pi' && sanitized.supportsStore !== undefined) return null;
         perAgent[agent] = sanitized;
       }
       out.perAgent = perAgent;
@@ -306,6 +315,7 @@ function additionModelFor(
     efforts: f.efforts,
     defaultEffort,
     ...(f.supportsFastMode !== undefined ? { supportsFastMode: f.supportsFastMode } : {}),
+    ...(f.supportsStore !== undefined ? { supportsStore: f.supportsStore } : {}),
     ...(f.supportsImageInput !== undefined ? { supportsImageInput: f.supportsImageInput } : {}),
     ...(f.status !== undefined
       ? { status: f.status === 'preview' ? ('alpha' as const) : f.status }
@@ -463,6 +473,7 @@ function overlayFields(model: ModelImageInputCatalogModel, f: ModelCatalogOverri
     ...(f.efforts !== undefined ? { efforts: f.efforts } : {}),
     ...(f.defaultEffort !== undefined ? { defaultEffort: f.defaultEffort } : {}),
     ...(f.supportsFastMode !== undefined ? { supportsFastMode: f.supportsFastMode } : {}),
+    ...(f.supportsStore !== undefined ? { supportsStore: f.supportsStore } : {}),
     ...(keepDefault ? { imageInputDefault: {
       supportsImageInput: !imageInputPatch && f.supportsImageInput !== undefined
         ? f.supportsImageInput : source.supportsImageInput,

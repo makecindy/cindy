@@ -328,6 +328,7 @@
       "renameDevice": "Rename {{label}}",
       "project": "Project {{title}}",
       "dialogue": "Chat",
+      "automation": "Automations",
       "openAutomationLatest": "Open the latest session of automation {{title}}",
       "automationTask": "Automation {{title}}",
       "openConversation": "Open session {{title}}",
@@ -353,7 +354,9 @@
     },
     "menu": {
       "groupDialogue": "Chat",
+      "groupAutomation": "Automation",
       "dialogueFolder": "Chat",
+      "automationFolder": "Automations",
       "search": "Search",
       "settings": "Settings",
       "remoteSettings": "Remote connection settings",

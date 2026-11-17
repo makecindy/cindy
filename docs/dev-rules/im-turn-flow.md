@@ -4,6 +4,7 @@
 > **读取时机**：修改个人 IM 渠道（`apps/desktop/src/main/im/**`）或官方 hook
 > （`apps/desktop/src/main/hook-control/**`）的找/建任务、命令、排队与插话、输入拼装、
 > 事件观察、表情、交互、收尾或停止逻辑之前
+> **适用路径**：`apps/desktop/src/main/im/**`、`apps/desktop/src/main/hook-control/**`
 
 个人 IM 渠道（Telegram / 飞书 / 微信 / 钉钉 / Discord / 企业微信）与官方 hook（官方
 Telegram / Slack / X / 飞书 / Lark）是同一件事的两套实现：把渠道里的一条消息变成 Cindy 任务里的一轮，
@@ -45,6 +46,10 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 覆盖用户刚固定的模型或切换后的渠道。
 
 ## 0. 项目清单（2026-11-13）
+
+插件 IM 入口可经批准的 `tasks.imProjects/create/followImProject` 使用同一份项目与配置，
+不读私有文件、不另存模型默认值；微信包装插件按群/私聊保存项目选择。具体合同见
+[插件 IM 共用项目与模型](protocol-compatibility/plugin-im-projects.md)。官方渠道原有命令和镜像协议不变。
 
 **侧栏的本机项目就是 IM 机器人用的项目**，不另设「工作目录映射」这一层概念；界面与机器人文案一律叫
 「项目」，「工作目录」只指 Agent 实际干活的那个目录（术语表）。
@@ -201,6 +206,11 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
    `cindy-media` 地址、引用 ID、名称、MIME 与大小，Base64 只存在传输帧和内存中。
    Agent 在远程供应商上运行时，`[名称](xdt-file:///影子路径)` 由远程事件投影先还原成本机路径，
    收集器再按工作目录校验；漏掉这一步，文件会被当作目录外附件跳过。
+   最终回复里按工作目录写的相对路径图片（`![说明](evidence/a.png)`）先由 `resolveRelativeImageRefs`
+   补成工作目录内的绝对路径（解析符号链接后仍须在目录内、文件确实存在），再与绝对路径的图片走同一条
+   导入与发送流程；找不到的引用原样留在正文。超过单图上限的 PNG / JPEG / WebP 先在本机压一份 WebP 副本
+   再发（只影响发给渠道的副本），压不到上限以内才跳过，并在附件提示里点名、写明上限。
+   按本机路径引用的图片先经任务图片导入（单个 20 MiB），超过的不入库、不压缩，提示里同样写明这个上限。
    X 仅收 JPEG / PNG / WebP / GIF / MP4 / MOV；单图片 5 MiB、GIF 15 MiB、视频 10 MiB，
    一轮最多 8 项、总计 30 MiB（持久出箱仍按 32 MB 总预算计入媒体的传输大小）。
    server 声明 `x-media-relay-v1` 时，视频不内联：客户端在回帖前把文件分块转传给 X（`hook-control/xMediaRelay.ts`），
@@ -456,6 +466,21 @@ async 卡跨轮存活、最长 24 小时。重启后旧卡安全失效。
 可选 `questionMode`、`questionCode` 发送／更新同一问题，`interaction.cancel` 收口；
 `interaction.decision` 的 `question:reply`＋`answerText` 回传文字。未协商时沿用旧入口。
 Telegram 继续使用已协商的 `telegram-question-ops-v1`，展示模型与其余 IM 同源。
+官方飞书／Lark 一题一张卡（`createHookQuestionPublisher` 的 `sequential`）：每道题各发一张卡，各有独立的
+`interactionId` 与回复码，答完一题才发下一题，最后一题答完一次性把全部答案交给 Host；Host 先收口
+（App 已答、超时、轮次结束）时当前卡随之关闭，不再发后面的题。官方 Slack 仍是多题合卡；
+异步的多题提问在飞书／Lark 也仍合成一张卡——异步卡要在本轮结束后继续可答，而服务端只在轮次运行期间
+受理新卡，逐题发会在本轮结束后卡在中途。单题卡的选项按钮放不下（超过 24 个）时，选项逐行写进正文。
+必答题没答就点提交时不交答案，卡片正文点名还没答的题、按钮保留（所有渠道同一模型）。
+收口卡上每道题的答案只写一次，并以 Host 的最终答案为准（所有渠道同一模型）：在 App 里答了别的
+选项时，卡片上没提交的勾选不再留在题目下面，末尾也不再追加一行汇总。
+官方飞书／Lark 的单题卡答完后收成回执：标题写结论（`✅ 短标签：答案`，没有短标签时是「✅ 已选：答案」），
+正文只留灰色的原问题，不再列选项、说明和提示；答案超过 60 字或多行时放进正文，标题只留短标签。
+`interaction.cancel` 只带正文，标题要靠 `interaction.request` 才能换：在卡上答的，答完那一帧更新已带上
+回执标题；不是在卡上答的（App 已答）先补一帧更新再收口。没拿到答案就收口（超时、轮次结束）时标题不变，
+正文是原问题加「卡片已过期」。提问时有短标签就用它作标题（`发布环境 1/2`），选项带说明时选项名加粗、
+说明与提示语用灰色字（飞书卡片的 `<font color='grey'>`）。
+官方飞书服务端只接进度与终稿的 `msg.op`，表情由它自己打，本端不向它发表情操作。
 本实现不新增 X 的公开帖问答入口，不改变各渠道原有消息触发／成员准入规则。
 
 ### Telegram 后台回报的媒体发送

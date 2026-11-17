@@ -19,6 +19,7 @@ const OWNER = 'owner-a';
 const defaultPrefs = {
   groupByProject: true,
   groupDialogue: false,
+  groupAutomation: false,
   selectedDevice: null,
   sortBy: 'recency',
   statusFilter: 'active',
@@ -101,6 +102,7 @@ describe('homeViewPreferenceStore', () => {
     await saveHomeViewPreferences({
       groupByProject: true,
       groupDialogue: true,
+      groupAutomation: true,
       sortBy: 'priority',
       statusFilter: 'archived',
       projectOrder: 'custom',
@@ -118,6 +120,7 @@ describe('homeViewPreferenceStore', () => {
     const expected = {
       groupByProject: true,
       groupDialogue: true,
+      groupAutomation: true,
       sortBy: 'created',
       statusFilter: 'archived',
       projectOrder: 'custom',

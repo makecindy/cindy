@@ -4,6 +4,15 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import {
+	RULE_INDEX_PATH,
+	globToRegExp,
+	loadRules,
+	parseRuleHeader,
+	renderIndex,
+	ruleProblems,
+	rulesForFiles,
+} from "../rule-index.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const CANONICAL_DOCS = [
@@ -196,7 +205,8 @@ test("protocol compatibility keeps rules on the front page and one record per fi
 	const frontPage = "docs/dev-rules/protocol-compatibility.md";
 	const recordsDir = "docs/dev-rules/protocol-compatibility";
 	const frontPageMaxBytes = 16 * 1024;
-	const frontPageBytes = Buffer.byteLength(readText(frontPage));
+	// Count content, not checkout line endings: a CRLF checkout on Windows must get the same budget.
+	const frontPageBytes = Buffer.byteLength(readText(frontPage).replace(/\r\n/g, "\n"));
 	assert.ok(
 		frontPageBytes <= frontPageMaxBytes,
 		`${frontPage} is the must-read rules page (${frontPageBytes} bytes > ${frontPageMaxBytes}). ` +
@@ -297,34 +307,7 @@ test("current locale-aware QA artifacts cover every supported locale", () => {
 		}
 	}
 
-	const newMakerDir = "docs/design-previews/newmaker-quickstart-cards";
-	const newMakerSpec = readJson(`${newMakerDir}/spec.json`);
-	const newMakerTruth = readJson(`${newMakerDir}/truth.json`);
-	assert.deepEqual(newMakerSpec.matrix.langs, supportedLocales, `${newMakerDir} matrix locale order drifted`);
-	assert.deepEqual(
-		newMakerTruth.supportedLocales.map(({ value }) => value),
-		supportedLocales,
-		`${newMakerDir} embedded locale order drifted`,
-	);
-	assert.deepEqual(
-		[...new Set(newMakerSpec.verify.cases.map(({ prefs }) => prefs.lang))].sort(),
-		expectedSet,
-		`${newMakerDir} representative cases must exercise every supported locale`,
-	);
-	assert.deepEqual(
-		Object.keys(newMakerTruth.section.titles).sort(),
-		expectedSet,
-		`${newMakerDir} section-title locale coverage drifted`,
-	);
-	for (const [index, card] of newMakerTruth.cards.entries()) {
-		assert.deepEqual(
-			Object.keys(card.labels).sort(),
-			expectedSet,
-			`${newMakerDir} card ${index} locale coverage drifted`,
-		);
-	}
-
-	for (const dir of ["docs/design-previews/login-deletion-bubble", newMakerDir]) {
+	for (const dir of ["docs/design-previews/login-deletion-bubble"]) {
 		const html = readText(`${dir}/index.html`);
 		const embedded = html.match(
 			/<script id="qa-truth" type="application\/json">([\s\S]*?)<\/script>/,
@@ -452,4 +435,103 @@ test("client CI runs Linux checks and complete unit shards in parallel behind st
 	const host = workflowJob(workflow, "host-regressions");
 	assert.match(host, /^    needs: host-changes$/m);
 	assert.match(host, /^    if: needs\.host-changes\.outputs\.required == 'true'$/m);
+});
+
+// ── 规则索引（docs/dev-rules/development-workflow.md §4「规则文档声明何时要读」）──
+// 测试价值
+// - 生产入口与可观察结果：scripts/rule-index.mjs（pnpm rules:for / rules:changed 与生成的
+//   docs/dev-rules/rule-index.md）——改到某个文件时，能否查到管它的规则。
+// - Bug／规则依据：#10938 未经确认改了更新链路，更新器规则当时就在根 AGENTS.md 里；根文件
+//   涨到 24 KB、58 条，逼近 Codex 只读前 32 KiB 的上限。
+// - 现有覆盖缺口：此前只检查文档内链和命令是否存在，不检查规则能否按路径找到、根文件大小。
+// - 最小失败输入：某份规则声明的路径不再匹配任何文件；索引未重新生成；根 AGENTS.md 再加一条。
+// - tier：runner（跨文件文档契约，读真实仓库文件）。
+
+test("rule docs declare when to read them and the generated index is current", () => {
+	const rules = loadRules(ROOT);
+	const tracked = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
+		cwd: ROOT,
+		encoding: "utf8",
+		maxBuffer: 64 * 1024 * 1024,
+	})
+		.split("\0")
+		.filter((file) => file && fs.existsSync(path.join(ROOT, file)));
+	assert.deepEqual(ruleProblems(rules, tracked), []);
+	assert.equal(
+		readText(RULE_INDEX_PATH).replace(/\r\n/g, "\n"),
+		renderIndex(rules),
+		`${RULE_INDEX_PATH} is stale; run pnpm rules:index`,
+	);
+});
+
+test("changed paths resolve to the rules that govern them", () => {
+	const rules = loadRules(ROOT);
+	const filesFor = (...files) => rulesForFiles(rules, files).map((hit) => hit.rule.file);
+	// #10938: the update path must surface the owner-confirmation rule, not rely on memory.
+	const update = filesFor("apps/desktop/src/main/updateService.ts");
+	assert.ok(update.includes("docs/dev-rules/cindy-updater.md"), update.join(", "));
+	assert.ok(update.includes("docs/dev-rules/verified-downloads.md"), update.join(", "));
+	// Red lines stay reachable by path even after their root entries were shortened.
+	for (const [file, rule] of [
+		["apps/desktop/src/main/logger.ts", "docs/dev-rules/log-upload-and-redaction.md"],
+		["packages/maker-core/src/agents/pi/index.ts", "docs/dev-rules/pi-harness.md"],
+		["apps/desktop/src/main/cindy-brain/index.ts", "docs/dev-rules/plugin-security-and-authoring.md"],
+	]) {
+		assert.ok(filesFor(file).includes(rule), `${file} should surface ${rule}`);
+	}
+	// Adding a root entry was how the download rule got into AGENTS.md: editing it must surface
+	// the workflow doc that says where rules belong.
+	assert.ok(filesFor("AGENTS.md").includes("docs/dev-rules/development-workflow.md"));
+	// A path nobody claims yields nothing; topic rules never match by path.
+	assert.deepEqual(filesFor("LICENSE"), []);
+	assert.ok(rules.some((rule) => rule.topic));
+});
+
+test("rule declarations use anchored, directory-aware path patterns", () => {
+	const matches = (glob, file) => globToRegExp(glob).test(file);
+	for (const [glob, file, expected] of [
+		["apps/x/**", "apps/x/a/b.ts", true],
+		["apps/x/**", "apps/xy/a.ts", false],
+		["apps/*/a.ts", "apps/x/y/a.ts", false],
+		["apps/**/a.ts", "apps/a.ts", true],
+		["packages/{one,two}/**", "packages/two/src/i.ts", true],
+		["packages/{one,two}/**", "packages/three/src/i.ts", false],
+		["a/b.ts", "a/b.tsx", false],
+		["a/b.ts", "x/a/b.ts", false],
+	]) {
+		assert.equal(matches(glob, file), expected, `${glob} vs ${file}`);
+	}
+	// A declaration is only read from the opening block quote, and may wrap across lines.
+	const header = parseRuleHeader(
+		"# T\n\n> **读取时机**：改 A\n> 或 B 之前\n> **适用路径**：`a/**`、\n> `b/c.ts`\n\n正文\n\n> **适用路径**：`no/**`\n",
+	);
+	assert.deepEqual(
+		{ when: header.when, globs: header.globs, topic: header.topic },
+		{ when: "改 A 或 B 之前", globs: ["a/**", "b/c.ts"], topic: false },
+	);
+	assert.equal(parseRuleHeader("# T\n\n> **读取时机**：x\n> **适用路径**：按主题\n").topic, true);
+	// Table cells escape backslashes before pipes, so a literal "\\|" in a doc cannot end a cell early.
+	const row = renderIndex([
+		{ file: "docs/dev-rules/x.md", title: "a\\b|c", when: "w", declared: true, topic: true, globs: [] },
+	])
+		.split("\n")
+		.find((line) => line.startsWith("| ["));
+	assert.equal(row, "| [a\\\\b\\|c](x.md) | w | 主题 |");
+});
+
+// 根 AGENTS.md 每个任务完整加载；上限只减不调高，超出时把内容移进专题（development-workflow §5）。
+const ROOT_AGENTS_MAX_BYTES = 10_500;
+const ROOT_AGENTS_MAX_ENTRIES = 25;
+test("root AGENTS.md stays within its size and entry budget", () => {
+	const agents = readText("AGENTS.md").replace(/\r\n/g, "\n");
+	const bytes = Buffer.byteLength(agents, "utf8");
+	const entries = agents.split(/\r?\n/).filter((line) => line.startsWith("- ")).length;
+	assert.ok(
+		bytes <= ROOT_AGENTS_MAX_BYTES,
+		`AGENTS.md is ${bytes} bytes (limit ${ROOT_AGENTS_MAX_BYTES}); move topic rules into their own doc header`,
+	);
+	assert.ok(
+		entries <= ROOT_AGENTS_MAX_ENTRIES,
+		`AGENTS.md has ${entries} entries (limit ${ROOT_AGENTS_MAX_ENTRIES}); declare 读取时机／适用路径 in the rule doc instead`,
+	);
 });

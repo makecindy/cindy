@@ -190,7 +190,7 @@ describe('sendToSession ordering', () => {
     const pluginStateBlock = extractBetween(
       source,
       'ipcMain.handle(\n    MAKER_INVOKE.PLUGINS_GET_STATE',
-      'ipcMain.handle(MAKER_INVOKE.PLUGINS_SET_ENABLED',
+      'registerPluginEnableHandlers(',
     );
 
     expect(pluginStateBlock).toContain('resolveLocalCollabPolicyWorkingDir(');
@@ -1132,7 +1132,7 @@ expect(serviceDepsBlock).toContain('await orcaWorkerResumeScheduler.request(targ
     expectOrder(
       serviceDispatchBlock,
       'const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;',
-      'if (!wasLiveBeforeDispatch) await deps.resumeWorkerSession(target, link);',
+      'if (!wasLiveBeforeDispatch && !deps.hasPendingAgentSwitch?.(target.sessionId)) {',
     );
     expect(serviceDispatchBlock).not.toContain(
       "target.status === 'idle' || target.status === 'done'",

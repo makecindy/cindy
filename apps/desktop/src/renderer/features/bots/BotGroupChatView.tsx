@@ -55,7 +55,6 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { useAttachments } from '@/hooks/useAttachments';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
-import './BotGroupChatView.css';
 import { captureDraftRecoveryScope, discardDraftTree } from '@/lib/composerDraftStore';
 import {
   classifyUnclassifiedDroppedItems,
@@ -93,7 +92,7 @@ import {
 } from './BotGroupLiveStatus';
 import { messageReactionRevision } from './ChatServerControls';
 import { ChatGroupInviteMenu } from './ChatGroupInviteMenu';
-import { animateThreadPanelWidth, ChatThreadPanel } from './ChatThreadPanel';
+import { animateThreadPanel, ChatThreadPanel } from './ChatThreadPanel';
 import {
   BotGroupPlanFollowUpRow,
   type BotGroupFollowUpAction,
@@ -798,8 +797,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     threadWasOpenRef.current = !!threadRootId;
     if (!opening) return;
     const panel = threadLayoutRef.current?.querySelector('aside');
-    const animation = panel && animateThreadPanelWidth(panel, '0px',
-      threadResize.width === undefined ? '50%' : `${threadResize.width}px`);
+    const animation = panel && animateThreadPanel(panel, 'open');
     if (!animation) return;
     threadOpenAnimationRef.current = animation;
     void animation.finished.then(() => animation.cancel(), () => {});
@@ -808,7 +806,9 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const closeThread = useCallback(() => {
     if (threadCloseAnimationRef.current) return;
     const panel = threadLayoutRef.current?.querySelector('aside');
-    const animation = panel && animateThreadPanelWidth(panel, `${panel.getBoundingClientRect().width}px`, '0px');
+    const animation = panel && animateThreadPanel(panel, 'close');
+    // The exit starts at the computed transform before releasing an unfinished entrance.
+    threadOpenAnimationRef.current?.cancel();
     threadOpenerRef.current?.focus();
     if (!panel || !animation) { setThreadRootId(null); return; }
     panel.inert = true;
@@ -1369,7 +1369,6 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   return (
     <div ref={threadLayoutRef} className={cn('flex h-full min-w-0 overflow-hidden', threadResize.isDragging && 'select-none [&_*]:cursor-col-resize')}>
     <BotGroupChatMain
-      direct={direct}
       className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-[var(--surface)]"
       onDragEnter={(event) => {
         if (!isAttachmentDrag(event)) return;
@@ -1624,11 +1623,10 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
 }
 
 /** Mount the observer with the ready view, after the loading/error early returns. */
-function BotGroupChatMain({ direct, className, ...props }: ComponentProps<'main'> & { direct: boolean }) {
-  // Groups use the available pane, including when a topic or sidebar is open.
-  // Keep private conversations on their existing reading width and padding.
-  const { containerRef } = useProportionalWidth(direct ? 914 : 1440, { compact: !direct });
-  return <main {...props} ref={containerRef} className={cn(className, !direct && 'bot-group-adaptive-width')} />;
+function BotGroupChatMain(props: ComponentProps<'main'>) {
+  // Share the task/private-chat cap, padding and narrow-pane behavior.
+  const { containerRef } = useProportionalWidth(914);
+  return <main {...props} ref={containerRef} />;
 }
 
 /** Older shares checked before the latest edit, deletion or reset: they may be out of date. */

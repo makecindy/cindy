@@ -328,6 +328,7 @@
       "renameDevice": "為 {{label}} 易名",
       "project": "案 {{title}}",
       "dialogue": "言談",
+      "automation": "自運",
       "openAutomationLatest": "啟自運 {{title}} 之最新差事",
       "automationTask": "自運 {{title}}",
       "openConversation": "啟差事 {{title}}",
@@ -353,7 +354,9 @@
     },
     "menu": {
       "groupDialogue": "言談",
+      "groupAutomation": "自運",
       "dialogueFolder": "言談",
+      "automationFolder": "自運",
       "search": "尋",
       "settings": "規制",
       "remoteSettings": "遠端連線之規制",

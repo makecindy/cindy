@@ -183,7 +183,7 @@ class NativeChannel implements PeerChannel {
   private nextProbe = 0;
   private disposed = false;
   private closeDeadline = 0;
-  private finishSnapshot: NativeState | null = null;
+  private finished = false;
   constructor(private owner: NativeTransport, private id: number, readonly remoteId: string, private local: Address[]) {}
   async initialize(): Promise<void> {
     this.dataStream = await this.owner.call<number>({ op: 'openStream', id: this.id });
@@ -210,16 +210,18 @@ class NativeChannel implements PeerChannel {
       item.offset += written; this.queuedBytes -= written; this.owner.release(written);
       if (item.offset === item.bytes.length) this.queue.shift();
     }
-    if (this.closeDeadline && !this.queue.length) {
-      if (!this.finishSnapshot) {
-        this.finishSnapshot = this.state;
-        await this.owner.call({ op: 'finish', id: this.id, stream: this.dataStream });
-      } else if (this.state !== this.finishSnapshot && !this.state?.unacked) this.dispose();
+    if (this.closeDeadline && !this.queue.length && !this.finished) {
+      this.finished = true;
+      await this.owner.call({ op: 'finish', id: this.id, stream: this.dataStream });
     }
   }
   receive(state: NativeState): void {
     this.state = state;
-    if (this.events.closed) return;
+    // Retired channels cannot send, but already-written peer frames may arrive
+    // after a replacement handshake. Keep receive alive for the bounded drain;
+    // local send ACK completion alone says nothing about incoming bytes.
+    if (this.disposed) return;
+    if (this.closeDeadline && now() >= this.closeDeadline) { this.dispose(); return; }
     for (const event of state.events) if (event.kind === 'open') {
       if (this.streams.size >= 128) { this.close({ drain: false }); return; }
       this.streams.set(event.stream, { kind: null, text: '' });
@@ -250,7 +252,7 @@ class NativeChannel implements PeerChannel {
       if (this.streams.get(event.stream)?.kind === 0x44) { this.close(); return; }
       this.streams.delete(event.stream);
     }
-    if (now() >= this.nextProbe && this.candidates.length) {
+    if (!this.events.closed && now() >= this.nextProbe && this.candidates.length) {
       this.nextProbe = now() + 10_000;
       const count = Math.min(4, this.candidates.length);
       for (let index = 0; index < count; index++) {

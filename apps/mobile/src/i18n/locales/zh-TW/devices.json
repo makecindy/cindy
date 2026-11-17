@@ -328,6 +328,7 @@
       "renameDevice": "重新命名 {{label}}",
       "project": "專案 {{title}}",
       "dialogue": "對話",
+      "automation": "自動化",
       "openAutomationLatest": "開啟自動化 {{title}} 的最新任務",
       "automationTask": "自動化 {{title}}",
       "openConversation": "開啟任務 {{title}}",
@@ -353,7 +354,9 @@
     },
     "menu": {
       "groupDialogue": "對話",
+      "groupAutomation": "自動化",
       "dialogueFolder": "對話",
+      "automationFolder": "自動化",
       "search": "搜尋",
       "settings": "設定",
       "remoteSettings": "遠端連線設定",

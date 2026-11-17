@@ -1,5 +1,12 @@
 # 伙伴专属能力台账：伙伴的工作方式属于伙伴
 
+> **读取时机**：新增或修改只对伙伴生效的工具、提示词规则、回执、例行任务或定时工作等专属机制之前
+> **适用路径**：`packages/lizi-mcps/src/xdt-helper/{bot_,teammate_,create_teammate,list_teammates}*`、
+> `apps/desktop/src/main/maker-ipc/**/{botSystemPrompt,teammateGuide,botProjectTemplate,botTask,botRoutineAutomations,botMemoryService}*`、
+> `packages/maker-core/src/agents/**/{bot-,teammate-}*`、
+> `apps/desktop/src/main/maker-host/**/{botMcpCatalog,botToolsetAvailability}*`、
+> `apps/desktop/src/main/botTaskReplyResults.ts`
+
 > 新增或修改只对伙伴生效的工具、提示词、回执、例行任务或其它机制前先读本文。
 > 本文是开发引导和讨论底稿，**不是审批门**：新想法照常可以做，先按第 3 节想清楚放在哪一层。
 > 现行行为仍以 [伙伴运行时](cindy-bots-runtime.md) 等专题正文为准；与本方向冲突的条款见第 5 节，裁决前不改行为。

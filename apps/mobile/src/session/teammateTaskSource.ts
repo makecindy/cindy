@@ -9,7 +9,7 @@ export interface TaskTeammate {
   name: string;
   avatar?: RemoteResourceAvatar;
 }
-export type TaskCompanion = { id: string; role: string; taskProjectDir?: string; channel?: string };
+export type TaskCompanion = { id: string; role: string; taskProjectDir?: string; channel?: string; routineId?: string };
 
 export function taskTeammateKey(id: string, deviceId: string, cloudIds: ReadonlySet<string>, cindyIds: ReadonlySet<string> = new Set()): string {
   if (id === 'cindy-default' || cindyIds.has(id)) return JSON.stringify(['teammate', 'cindy']);
@@ -37,7 +37,7 @@ export function parseTaskCompanion(value: unknown): TaskCompanion | undefined {
   if (!value || typeof value !== 'object') return;
   const row = value as Record<string, unknown>;
   if (typeof row.id !== 'string' || !row.id || typeof row.role !== 'string') return;
-  return { id: row.id, role: row.role, ...(typeof row.taskProjectDir === 'string' ? { taskProjectDir: row.taskProjectDir } : {}), ...(typeof row.channel === 'string' ? { channel: row.channel } : {}) };
+  return { id: row.id, role: row.role, ...(typeof row.taskProjectDir === 'string' ? { taskProjectDir: row.taskProjectDir } : {}), ...(typeof row.channel === 'string' ? { channel: row.channel } : {}), ...(typeof row.routineId === 'string' && row.routineId ? { routineId: row.routineId } : {}) };
 }
 
 export function parseTaskTeammate(value: unknown): TaskTeammate | undefined {

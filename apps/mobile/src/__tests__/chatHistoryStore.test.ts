@@ -51,6 +51,17 @@ it('prevents concurrent mounts from overwriting a newer durable cursor', async (
   await a.write('room', null); expect(await b.read('room')).toBeUndefined();
 });
 
+// Unit, group-open latency: every commit used to read and parse the whole room file first.
+it('checks a room it already knows without reading the file again, and still detects another mount', async () => {
+  const a = store(); await a.read('room');
+  io.read.mockClear();
+  await a.write('room', state); await a.write('room', { ...state, cursor: '13' });
+  expect(io.read).not.toHaveBeenCalled();
+  const b = store(); await b.read('room'); await b.write('room', { ...state, cursor: '14' });
+  await expect(a.write('room', { ...state, cursor: '15' })).rejects.toThrow('CHAT_CACHE_CONFLICT');
+  expect(await store().read('room')).toMatchObject({ cursor: '14' });
+});
+
 // Unit regression: each room is below the old per-value cap, but their total exceeds
 // Android AsyncStorage's shared budget and used to break unrelated draft/outbox writes.
 it('persists many room histories without consuming the preferences database', async () => {

@@ -5958,8 +5958,14 @@ assertRouteCurrent();
       let key: string | undefined;
       let pending: Promise<AutoReviewDecision> | undefined;
       return withAutoReviewContext(request, this.deps.reviewAutoPermissionAction, (prepared) => {
+        // 这三处是 Cindy 自己的确定性文案(不含用户数据),标 policyReason 才能进诊断/UI 通道;
+        // 缺标会被当成模型自由文本过滤掉,通知只剩一句通用文案。
         if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)) {
-          return Promise.resolve({ verdict: 'block', reason: 'User instructions changed; retry against the current request.' });
+          return Promise.resolve({
+            verdict: 'block',
+            reason: 'User instructions changed; retry against the current request.',
+            policyReason: true,
+          });
         }
         key = JSON.stringify([prepared, hostAutoApprove, hostShortcutOnly]);
         const cached = autoReviewDecisionCache.get(key);
@@ -5975,10 +5981,18 @@ assertRouteCurrent();
         if (!pending || !key) return decision;
         if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)
             || autoReviewDecisionCache.get(key) !== pending) {
-          return { verdict: 'block', reason: 'User instructions changed; retry against the latest authorization.' };
+          return {
+            verdict: 'block',
+            reason: 'User instructions changed; retry against the latest authorization.',
+            policyReason: true,
+          };
         }
         if (directoryGeneration !== autoReviewDirectoryGeneration) {
-          return { verdict: 'block', reason: 'Directory permissions changed; retry with the current scope.' };
+          return {
+            verdict: 'block',
+            reason: 'Directory permissions changed; retry with the current scope.',
+            policyReason: true,
+          };
         }
         autoReviewActionContext.record(action, decision);
         return decision;
@@ -7220,6 +7234,43 @@ assertRouteCurrent();
       }, run);
     };
 
+    // Configuration proves intent, not that this native thread completed MCP
+    // startup. Observe only explicitly provisioned helpers, after capability
+    // isolation/disabled overrides; never probe the shared host catalog.
+    const reportExpectedHelperAvailability = async (): Promise<void> => {
+      const config = currentThreadWorkspaceConfig().config;
+      if (reviewMode || config?.['mcp_servers.cindy_helper.enabled'] === false
+        || !['url', 'command'].some(key => {
+          const value = config?.[`mcp_servers.cindy_helper.${key}`];
+          return typeof value === 'string' && value.trim().length > 0;
+        })) return;
+      const checkedThreadId = threadId;
+      let state: string;
+      try {
+        const report = await readCodexThreadMcpServerTools(
+          (method, params, requestOpts) => host.request(method, params, requestOpts),
+          checkedThreadId, 'cindy_helper',
+        );
+        if (['list_tools', 'call_tool'].every(name => report.tools.some(tool => tool.name === name))) return;
+        state = report.state;
+      } catch {
+        // A failed probe is not proof of missing tools. Keep that distinction,
+        // and never expose transport errors containing endpoints/credentials.
+        state = 'unverified';
+      }
+      if (closed || threadId !== checkedThreadId || !isCurrentHost()) return;
+      const message = state === 'unverified'
+        ? 'Could not verify cindy_helper for this task. Task result reporting may be unavailable.'
+        : 'cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable.';
+      log.warn('Codex expected helper readiness check failed', { threadId: checkedThreadId, state });
+      const code = state === 'unverified' ? 'CINDY_EXPECTED_HELPER_UNVERIFIED' : 'CINDY_EXPECTED_HELPER_UNAVAILABLE';
+      eventQueue.push({ type: 'error', data: { code, message, isTerminal: false }, source: 'codex' });
+      // Recoverable error banners disappear on the next event. The existing
+      // independent notice channel keeps this diagnostic in task history without
+      // replacing the model's streamed reply or settling its turn.
+      eventQueue.push({ type: 'text', data: { code, text: message, isFinal: true }, standaloneText: true, source: 'codex' });
+    };
+
     /**
      * Start a replacement thread after the exact provider proof that the
      * persisted thread has no rollout. This is intentionally narrower than a
@@ -7799,6 +7850,7 @@ assertRouteCurrent();
           ? replacementProfileFingerprint
           : null;
         threadMayHaveRollout = retainHistory;
+        await reportExpectedHelperAvailability();
         log.debug('thread replaced with workspace permission profile', {
           previousThreadId,
           threadId,
@@ -7876,6 +7928,7 @@ assertRouteCurrent();
             ? resumeProfileFingerprint
             : null;
           threadMayHaveRollout = true;
+          await reportExpectedHelperAvailability();
           log.debug('workspace permission profile restored before turn/start', {
             threadId,
             referenceRoots: mutableExtraDirs.length,
@@ -7886,7 +7939,7 @@ assertRouteCurrent();
 
     // Loaded-thread resume ignores arbitrary config. Release only this thread,
     // then cold-resume its intact rollout before accepting another turn.
-    const ensureContextLimitForNextTurn = (signal?: AbortSignal, forceMcpRefresh = false): Promise<void> | null => {
+    const ensureContextLimitForNextTurn = (signal?: AbortSignal, forceMcpRefresh = false, reportHelperReadiness = true): Promise<void> | null => {
       const desired = currentContextLimit();
       if (desired === appliedContextLimit && !forceMcpRefresh) return null;
       return (async () => {
@@ -7925,6 +7978,7 @@ assertRouteCurrent();
             subscription = host.subscribeThread(threadId, handlers);
             registerRootCodexMcpContext();
             resetAcceptedUsageCursors('context settings refresh');
+            if (reportHelperReadiness) await reportExpectedHelperAvailability();
           } catch (error) {
             // A timed-out resume can still complete later. Close this handle so a
             // retry cannot use that loaded thread with an unconfirmed budget. The
@@ -7990,7 +8044,9 @@ assertRouteCurrent();
         log.warn('expected scheduler MCP is missing from Codex thread; cold-resuming', { threadId });
         // The existing refresh path closes this handle if the cold resume cannot
         // be confirmed. Propagate that failure instead of sending on a stale one.
-        await ensureContextLimitForNextTurn(undefined, true);
+        // startSession checks the final helper catalog after scheduler recovery.
+        // Defer this nested refresh's diagnostic to avoid duplicate durable rows.
+        await ensureContextLimitForNextTurn(undefined, true, false);
         const startupDeadline = Date.now() + 10_000;
         while (!closed && Date.now() < startupDeadline) {
           try {
@@ -8294,19 +8350,31 @@ assertRouteCurrent();
       let denialReason = formatPermissionDenial('system', 'Approval was cancelled or became stale.');
       const decision = await withCodexGenerationPaused<ApprovalDecision>(requestThreadId, turnId, timingPauseId, async () => {
         // Native Codex currently flattens MCP declines to "user rejected" and
-        // discards response content/_meta on that path. Preserve the cause in
-        // Cindy's diagnostic/UI channel; this notice is NOT model context.
-        const reportMcpDenial = (source: 'auto-review' | 'system' | 'user', reason?: string, visible = true) => {
+        // discards response content/_meta on that path (codex-rs
+        // core/src/mcp_tool_call.rs: ElicitationAction::Decline =>
+        // ReviewDecision::denied("user rejected MCP tool call")). The model
+        // facing text is owned by the app-server, so the real cause can only be
+        // preserved in Cindy's diagnostic/UI channel; this notice is NOT model
+        // context. Keep it truthful: it must never claim a user rejection that
+        // did not happen, and it must say why the call never reached the user.
+        const reportMcpDenial = (
+          source: 'auto-review' | 'system' | 'user',
+          reason?: string,
+          visible = true,
+          policyCause?: string,
+        ) => {
           if (kind !== 'mcpServerElicitation') return;
           const timedOut = source === 'system' && isSystemPermissionDenialReason(reason) &&
             (reason === 'timeout' || reason?.endsWith('_timeout'));
           const code = source === 'auto-review' ? 'MCP_APPROVAL_AUTO_BLOCKED'
             : timedOut ? 'MCP_APPROVAL_CONFIRMATION_TIMEOUT' : 'MCP_APPROVAL_CONFIRMATION_UNAVAILABLE';
           // IDs and a closed set of causes only: no arguments, credentials, or
-          // free-text reviewer output may enter the diagnostic log.
+          // free-text reviewer output may enter the diagnostic log. Cindy's own
+          // policy reasons are fixed copy without user data and may be carried.
           log.info('MCP approval denied', {
             threadId: requestThreadId, turnId, requestId, itemId: opts?.itemId,
             source, cause: source === 'user' ? 'user-denied' : code,
+            ...(policyCause ? { causeDetail: policyCause } : {}),
           });
           if (source === 'user' || !visible) return;
           const text = source === 'auto-review'
@@ -8314,8 +8382,15 @@ assertRouteCurrent();
             : timedOut
               ? 'The permission request timed out without a confirmed decision. This does not establish whether the user clicked a button.'
               : 'The permission confirmation could not be completed. No user rejection was received.';
-          emitAutoReviewRuntimeNotice(`[${code}] ${text}`);
+          emitAutoReviewRuntimeNotice(`[${code}] ${text}${policyCause ? ` ${policyCause}` : ''}`);
         };
+        /**
+         * Cindy 自己的确定性判定原因（动作文本超限、证据不足、授权范围变化）。
+         * 这些是固定文案，不含用户数据，可以原样进诊断/UI 通道；审阅模型的自由
+         * 文本可能含参数、路径、片段，一律不进（policyReason 缺省即视为模型文本）。
+         */
+        const policyReason = (decision: AutoReviewDecision): string | undefined =>
+          decision.policyReason === true ? decision.reason : undefined;
         const turnPolicyForcePrompt = req.kind === 'permission'
           && forceTurnConfirmation(req.toolName, req.input);
         let forcePrompt = opts?.forcePrompt === true || turnPolicyForcePrompt;
@@ -8396,7 +8471,10 @@ assertRouteCurrent();
           } else if (reviewPermissionMode === 'auto' && decision.verdict === 'block') {
             denialReason = formatPermissionDenial('auto', decision.reason);
             // Keep the denial, but distinguish it from a user decision in Cindy.
-            reportMcpDenial('auto-review');
+            // Carry Cindy's own reason (oversized action text, missing evidence)
+            // so the banner says why the call never reached the user. Model
+            // free text stays out of the diagnostic channel.
+            reportMcpDenial('auto-review', undefined, true, policyReason(decision));
             return 'decline';
           } else {
             // AI ask decisions reach the user and cannot be remembered.
@@ -8777,6 +8855,7 @@ assertRouteCurrent();
     let reconnectStallTimer: ReturnType<typeof setTimeout> | null = null;
     let reconnectStallTurnId: string | null = null;
     let reconnectStallTurnGeneration = 0;
+    let reconnectStallErrorStatus: number | undefined;
     // Keep the reconnect status visible and the provider turn busy until the
     // bounded interrupt handshake settles; otherwise the Desktop
     // auto-resume backoff can admit a new turn while the old server turn is
@@ -8821,6 +8900,7 @@ assertRouteCurrent();
       }
       reconnectStallTurnId = null;
       reconnectStallTurnGeneration = 0;
+      reconnectStallErrorStatus = undefined;
       reconnectStallRemainingMs = 0;
       reconnectStallSliceStartedAt = 0;
     }
@@ -9041,7 +9121,9 @@ assertRouteCurrent();
             ignorePendingTools: true,
             allowPendingTurnStart,
             logLabel: 'codex reconnect watchdog tripped — interrupting stalled turn',
-            message,
+            message: reconnectStallErrorStatus === undefined
+              ? message : `${message} (HTTP ${reconnectStallErrorStatus})`,
+            errorStatus: reconnectStallErrorStatus,
           });
         };
         // History size does not establish why the connection stalled.
@@ -9115,7 +9197,7 @@ assertRouteCurrent();
     }
 
     function observeReconnectStallEvent(event: AgentEvent): void {
-      const data = event.data as { message?: unknown; isTerminal?: unknown; willRetry?: unknown } | null | undefined;
+      const data = event.data as { message?: unknown; isTerminal?: unknown; willRetry?: unknown; errorStatus?: unknown } | null | undefined;
       const message = typeof data?.message === 'string' ? data.message : null;
       const isReconnectNotice =
         event.type === 'error' &&
@@ -9125,6 +9207,11 @@ assertRouteCurrent();
         parseReconnectAttemptMessage(message) !== null;
       if (isReconnectNotice) {
         armReconnectStall();
+        // The queue probe sees only accepted root-turn events. Keep the latest
+        // known gateway status within this retry episode; progress clears it.
+        if (reconnectStallTurnId && (data?.errorStatus === 502 || data?.errorStatus === 503 || data?.errorStatus === 504)) {
+          reconnectStallErrorStatus = data.errorStatus;
+        }
         return;
       }
       if (isReconnectRecoveryEvent(event)) {
@@ -9146,6 +9233,7 @@ assertRouteCurrent();
       ignorePendingTools?: boolean;
       allowPendingTurnStart?: boolean;
       modelRejectionError?: Parameters<typeof finishCodexSamplingTurn>[4];
+      errorStatus?: number;
     }): void {
       if (closed) return;
       const pendingTurnId =
@@ -9184,6 +9272,7 @@ assertRouteCurrent();
         // reason 与 claude-code 侧共用同一稳定 key(renderer i18n 映射,规则 18);
         // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
         reason: timeoutReason,
+        ...(opts?.errorStatus !== undefined ? { errorStatus: opts.errorStatus } : {}),
         message: opts?.message ??
           (`The upstream response has been silent for ${Math.round(idleMs / 1000)}s; ` +
             'the turn was interrupted automatically to avoid hanging forever. ' +
@@ -9582,6 +9671,30 @@ assertRouteCurrent();
       return input;
     }
 
+    /**
+     * MCP 调用的审阅证据必须是**原始调用**，不是确认卡的渲染结果。
+     *
+     * codex 会把同一份 tool_params 再渲染一份 tool_params_display 一起发给客户端
+     * （codex-rs core/src/mcp_tool_call.rs 的 build_mcp_tool_approval_display_params：
+     * 同一对象的逐字段副本，不是截断版）。两份都进证据等于把同一个动作数两遍 ——
+     * 完整证据按 131,072 字符预算计量（MAX_AUTO_REVIEW_ACTION_TEXT_CHARS；另一个
+     * 4,096 是同步静态解析自己的上限 MAX_AUTO_REVIEW_STATIC_TEXT_CHARS，超了只是
+     * 转完整模型审阅，不是拦截），同一份几 KB 指令的参数被数两遍就凭空多出一倍。
+     *
+     * 这里只去掉**重复的那一份**：原始参数一字不删地保留，审阅模型看到的动作内容
+     * 与之前完全一致，变的只是同一份内容不再被计两次。上下文（elicitation 的
+     * message）本来就在 input 里，也不再重复一份。
+     *
+     * 另外要分清两件事：完整证据**真的**超预算时，裁决是 `ask`（交用户确认，见
+     * 854c36412a），不是静默拦截。所以去掉副本不是为了「让调用通过」，而是让
+     * 预算只按真实动作量计一次，别把普通调用误判成超限。
+     */
+    function mcpToolReviewAction(toolName: string, input: Record<string, unknown>): ReviewableAction {
+      const rawInput: Record<string, unknown> = { ...input };
+      delete rawInput.toolParamsDisplay;
+      return { kind: 'other', description: JSON.stringify({ toolName, input: rawInput }) };
+    }
+
     function mcpToolApprovalContext(params: McpServerElicitationRequestParams) {
       const meta = mcpElicitationMeta(params);
       let toolName = stringFromMeta(meta, 'tool_name');
@@ -9816,9 +9929,12 @@ assertRouteCurrent();
           // Display text is not execution evidence. An absent argument payload
           // must hit the shared missing-evidence denial, never reach AI as a
           // seemingly complete action made only of server/title/message fields.
-          ...(policyPermissionInput.toolParams === undefined
-            ? { autoReviewAction: { kind: 'other' as const, description: undefined } }
-            : {}),
+          // Present arguments are reviewed as the raw call: the confirmation
+          // card's rendering of the same arguments must not be counted twice
+          // against the review budget (see mcpToolReviewAction).
+          autoReviewAction: policyPermissionInput.toolParams === undefined
+            ? { kind: 'other' as const, description: undefined }
+            : mcpToolReviewAction(`mcp:${params.serverName}`, policyPermissionInput),
           ...(toolUseId ? { itemId: toolUseId } : {}),
         },
       );
@@ -14278,6 +14394,7 @@ assertRouteCurrent();
               // every thread on the daemon shares the same process-level
               // cumulative usage source.
               resetAcceptedUsageCursors('thread/resume after stale daemon');
+              await reportExpectedHelperAvailability();
               if (collaborationMode?.mode === 'default') {
                 planModeDefaultMarkerNeeded = true;
                 if (turnParams.collaborationMode?.mode === 'default') {
@@ -14592,6 +14709,7 @@ assertRouteCurrent();
             )
           : null;
         const reconnectGenerationAtStop = reconnectStallTurnGeneration;
+        const reconnectErrorStatusAtStop = reconnectStallErrorStatus;
         let watchdogActivityVersionAtStop = 0;
         let watchdogsRestored = false;
         const restoreWatchdogsIfStillRunning = (): void => {
@@ -14611,12 +14729,16 @@ assertRouteCurrent();
           } else {
             restoreUpstreamIdle(upstreamIdleRemainingAtStop);
           }
-          if (reconnectRemainingAtStop !== null) {
+          // A reconnect notification during the Stop handshake may already
+          // have armed a newer episode (including a status-less one). Restore
+          // the old diagnosis only together with its actually restored timer.
+          if (reconnectRemainingAtStop !== null && !reconnectStallTimer && reconnectStallRemainingMs <= 0) {
             restoreReconnectStall(
               turnId,
               reconnectGenerationAtStop,
               reconnectRemainingAtStop,
             );
+            if (reconnectStallTurnId === turnId) reconnectStallErrorStatus = reconnectErrorStatusAtStop;
           }
         };
         turnInterruptOrigins.set(turnId, { source: 'user-stop' });
@@ -15215,6 +15337,7 @@ assertRouteCurrent();
           refreshCodexAutoReviewerRoute(threadId);
           registerCodexDeveloperInstructions(threadId, registeredDeveloperInstructions);
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
+          await reportExpectedHelperAvailability();
         } else {
           sdkSessionId = threadId;
           threadMayHaveRollout = true;
@@ -15328,6 +15451,7 @@ assertRouteCurrent();
       const schedulerRefresh = ensureSchedulerMcpForResumedThread();
       if (schedulerRefresh) await schedulerRefresh;
     }
+    await reportExpectedHelperAvailability();
     return handle;
   }
 

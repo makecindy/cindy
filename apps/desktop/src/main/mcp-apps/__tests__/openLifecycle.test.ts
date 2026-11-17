@@ -306,3 +306,33 @@ describe('MCP App open cancellation', () => {
     expect(f.connection.close).toHaveBeenCalled();
   });
 });
+
+// Host chrome / unit: independent resource metadata and real initialization.
+// The preference hides only the Host button; App display-mode permission is unchanged.
+it.each([
+  { button: undefined, modes: ['inline', 'fullscreen'], visible: true },
+  { button: false, modes: ['inline', 'fullscreen'], visible: false },
+  { button: true, modes: ['inline'], visible: false },
+])('projects the permitted Host fullscreen button without restricting App modes: %j', async ({ button, modes, visible }) => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const original = await f.resource(f.binding.resourceUri);
+  original.result.contents[0]._meta = { 'cindy/host-fullscreen-button': button };
+  f.resource.mockResolvedValue(original);
+  const doc = await f.host.openResource('renderer:1', null, f.binding, { platform: 'desktop' });
+  await f.host.dispatch('renderer:1', null, doc.viewId, { jsonrpc: '2.0', id: 1, method: 'ui/initialize', params: {
+    protocolVersion: '2026-01-26', appInfo: { name: 'Fixture', version: '1' }, appCapabilities: { availableDisplayModes: modes },
+  } });
+  await f.host.dispatch('renderer:1', null, doc.viewId, { jsonrpc: '2.0', method: 'ui/notifications/initialized' });
+  await vi.advanceTimersByTimeAsync(0);
+  const events = await f.host.poll('renderer:1', null, doc.viewId, 0);
+  expect(events).toContainEqual(expect.objectContaining({ message: expect.objectContaining({
+    method: 'ui/notifications/host-context-changed', params: expect.objectContaining({ 'cindy/host-controls': { fullscreenButton: visible } }),
+  }) }));
+  await f.host.dispatch('renderer:1', null, doc.viewId, { jsonrpc: '2.0', id: 2, method: 'ui/request-display-mode', params: { mode: 'fullscreen' } });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(await f.host.poll('renderer:1', null, doc.viewId, 0)).toContainEqual(expect.objectContaining({ message: {
+    jsonrpc: '2.0', id: 2, result: { mode: modes.includes('fullscreen') ? 'fullscreen' : 'inline' },
+  } }));
+  await f.host.teardown('renderer:1', null, doc.viewId, true);
+});

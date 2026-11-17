@@ -6,11 +6,11 @@ import { SessionTaskMenu } from '../../../src/renderer/features/cc-agent/sidebar
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
 import { forbid, mountPage, subscription } from '../../ui-page/harness';
 
-function Fixture({ removed }: { removed: boolean }) {
+function Fixture({ removed, codex }: { removed: boolean; codex: boolean }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(true);
   const trigger = useRef<HTMLButtonElement>(null);
-  const session = { id: 'fixture-task', title: 'Fixture task', status: 'active', agentKind: 'pi',
+  const session = { id: 'fixture-task', title: 'Fixture task', status: 'active', agentKind: codex ? 'codex' : 'pi',
     runtimePluginsSelected: removed } as Session;
   return <div className="p-8">
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -30,7 +30,7 @@ void mountPage({
   route: '/',
   host: ctx => ({
     ghosts: {
-      listSync: () => ({ ghosts: ctx.case === 'one-control' ? [{ manifest: {
+      listSync: () => ({ ghosts: ctx.case.startsWith('native-tools') ? [{ manifest: { id: 'fixture-tools', subscribe: { hooks: ['will-tool-call', 'did-tool-result'] } } }] : ctx.case === 'one-control' ? [{ manifest: {
         id: 'fixture-context', subscribe: { hooks: ['will-compose-context'] },
       } }] : [] }),
       onChanged: subscription('installedGhosts'),
@@ -39,10 +39,11 @@ void mountPage({
         return ctx.case === 'removed-selection'
           ? { 'will-compose-context': [{ pluginId: 'removed', onFailure: 'block' }] } : {};
       },
-      listControlPointCandidates: async (point: string) => ctx.case === 'one-control' && point === 'will-compose-context'
+      listControlPointCandidates: async (point: string) => ctx.case.startsWith('native-tools') && ['will-tool-call', 'did-tool-result'].includes(point)
+        ? [{ pluginId: 'fixture-tools', name: 'Tool fixture plugin' }] : ctx.case === 'one-control' && point === 'will-compose-context'
         ? [{ pluginId: 'fixture-context', name: 'Context fixture plugin' }] : [],
     },
     sharedTask: { host: async () => ({ available: false, detail: null }) },
   }),
-  render: ctx => <Fixture removed={ctx.case === 'removed-selection'} />,
+  render: ctx => <Fixture removed={ctx.case === 'removed-selection'} codex={ctx.case === 'native-tools-codex'} />,
 });
