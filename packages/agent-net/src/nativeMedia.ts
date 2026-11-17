@@ -10,6 +10,8 @@ export interface NativeMediaApi {
   /** Keep cancellation and the range deadline through the consumer's body read. */
   withMediaResponse<T>(id: string, range: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T>;
 }
+/** Per-read transport activity; progress is cumulative bytes, never a timer heartbeat. */
+export interface NativeMediaReadActivity { (state: 'queued' | 'active', loaded?: number): void; signal?: AbortSignal; }
 export interface NativeMediaOptions { signal?: AbortSignal; assertCurrent?(): void; onProgress?(bytes: number, total: number): void; binding?: string; }
 interface MediaSession { id: number; header: string; size: number; encryptedSize: number; headerSha256: string; binding?: string; }
 function check(options: NativeMediaOptions, engine: NativeEnginePort): void {
@@ -72,7 +74,7 @@ export async function uploadNativeMedia(api: NativeMediaApi, engine: NativeEngin
   } finally { await engine.command({ op: 'mediaClose', id: session.id }).catch(() => undefined); }
 }
 async function range(api: NativeMediaApi, engine: NativeEnginePort, id: string, start: number, end: number,
-  total: number | undefined, options: NativeMediaOptions): Promise<{ bytes: Uint8Array; total: number }> {
+  total: number | undefined, options: NativeMediaOptions, progress?: (bytes: number) => void): Promise<{ bytes: Uint8Array; total: number }> {
   check(options, engine);
   const consume = async (response: Response) => {
     check(options, engine);
@@ -90,7 +92,7 @@ async function range(api: NativeMediaApi, engine: NativeEnginePort, id: string, 
         const chunk = await reader.read(); check(options, engine);
         if (chunk.done) break;
         if (received + chunk.value.length > needed) throw new Error('INVALID_MEDIA_CHUNK');
-        bytes.set(chunk.value, received); received += chunk.value.length;
+        bytes.set(chunk.value, received); received += chunk.value.length; progress?.(received);
       } if (received !== needed) throw new Error('MEDIA_INCOMPLETE'); }
       finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
     } else { bytes = new Uint8Array(await response.arrayBuffer()); check(options, engine); }
@@ -119,16 +121,19 @@ export async function openNativeMediaReader(api: NativeMediaApi | (() => NativeM
     check(options, engine);
     if (!sessionValid(session) || session.encryptedSize !== first.total) throw new Error('INVALID_MEDIA_HEADER');
     if (options.binding !== undefined && session.binding !== options.binding) throw new Error('AGENT_NET_NATIVE_UPDATE_REQUIRED');
-    return { size: session.size, close, async read(start: number, requestedEnd: number, write: (bytes: Uint8Array, offset: number) => Promise<void>) {
+    return { size: session.size, close, async read(start: number, requestedEnd: number, write: (bytes: Uint8Array, offset: number) => Promise<void>, activity?: NativeMediaReadActivity) {
       if (closed) throw new Error('MEDIA_CLOSED'); check(options, engine);
       if (session.size === 0 && start === 0 && requestedEnd === -1) return { size: 0, start: 0, end: -1 };
       const end = Math.min(requestedEnd, session.size - 1);
       if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || start >= session.size) throw new Error('INVALID_MEDIA_RANGE');
+      activity?.('active'); let received = 0;
+      const readOptions = activity?.signal ? { ...options, signal: activity.signal } : options;
       for (let index = Math.floor(start / BLOCK); index <= Math.floor(end / BLOCK); index++) {
         const plainSize = Math.min(BLOCK, session.size - index * BLOCK), cipherStart = HEADER + index * (BLOCK + 16);
         let plain = blocks.get(index);
         if (!plain) {
-          const encrypted = await range(currentApi(), engine, id, cipherStart, cipherStart + plainSize + 15, session.encryptedSize, options);
+          const encrypted = await range(currentApi(), engine, id, cipherStart, cipherStart + plainSize + 15, session.encryptedSize, readOptions,
+            bytes => activity?.('active', received + bytes));
           const decoded = await engine.command<string>({ op: 'mediaDecrypt', id: session.id, index, data: toBase64Url(encrypted.bytes) });
           check(options, engine); if (closed) throw new Error('MEDIA_CLOSED');
           plain = fromBase64Url(decoded);
@@ -137,6 +142,9 @@ export async function openNativeMediaReader(api: NativeMediaApi | (() => NativeM
           blocks.set(index, plain);
           while (blocks.size > 2) { const first = blocks.keys().next().value!; blocks.get(first)!.fill(0); blocks.delete(first); }
         }
+        // Cached plaintext still advances this read. Count whole authenticated
+        // blocks so the next uncached ciphertext chunk cannot move backwards.
+        received += plainSize + 16; activity?.('active', received);
         const from = Math.max(0, start - index * BLOCK), to = Math.min(plain.length, end - index * BLOCK + 1);
         await write(plain.slice(from, to), Math.max(start, index * BLOCK) - start); check(options, engine);
         options.onProgress?.(Math.min(end - start + 1, index * BLOCK + to - start), end - start + 1);
