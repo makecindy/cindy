@@ -108,6 +108,20 @@ export function acknowledgeSharedTaskCompletion(sessionId: string, deviceId: str
   emit(deviceId, sessionId);
 }
 
+/** A connection gap may hide an entire turn. Without a host-issued token,
+ * equal terminal text cannot prove it is the completion the guest read.
+ * Forget only those read tombstones; leave visible activity and other peers alone. */
+export function forgetLegacySharedTaskCompletions(deviceId: string): void {
+  if (!isSharedTaskPeer(deviceId)) return;
+  const activities = activityByDevice.get(deviceId);
+  if (!activities) return;
+  for (const [sessionId, activity] of activities) {
+    if (activity.phase === 'completed' && !activity.attention && !activity.completionToken) {
+      removeRemoteSessionActivityEntry(sessionId, deviceId);
+    }
+  }
+}
+
 /** Hook —— 按 sessionId 精准订阅(本地会话恒为 undefined,零开销)。 */
 export function useRemoteSessionActivity(
   sessionId: string,
@@ -191,7 +205,7 @@ export function applyRemoteSessionActivity(deviceId: string, payload: unknown): 
   }
   const current = activityMap.get(sessionId);
   // Prefer turn identity: delayed notification-policy updates are still the
-  // same completion. Older hosts fall back to the activity snapshot.
+  // same completion. Older hosts use snapshot equality only until a peer reset.
   if (isSharedTaskPeer(deviceId) && current?.phase === 'completed' && !current.attention &&
       next.phase === 'completed' && (current.completionToken
         ? current.completionToken === next.completionToken
