@@ -2213,9 +2213,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         if (deps.getLiveSession(sessionId) !== runtime
           || runtime.getTurnGeneration?.() !== generation) return false;
       }
-      return await (options
+      const didClose = await (options
         ? deps.closeWorkerSessionIfIdle(sessionId, sendLockHeld, options)
         : sendLockHeld ? deps.closeWorkerSessionIfIdle(sessionId, true) : deps.closeWorkerSessionIfIdle(sessionId));
+      // A normal refusal can also outlive the caller's authority, even when
+      // the runtime has no native background probe (remote worker shims).
+      await assertCloseAuthority();
+      return didClose;
     } catch (err) {
       if (authorityRejected) throw err;
       // A failed provider probe/close is retryable only while the caller's

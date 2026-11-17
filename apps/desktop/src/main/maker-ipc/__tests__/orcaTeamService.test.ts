@@ -41,6 +41,23 @@ function createWorker(overrides: Partial<OrcaWorkerRecordSnapshot> = {}): OrcaWo
 }
 
 describe('model Orca cleanup authority', () => {
+  // #11060 P2: unit, archiveWorker's normal close refusal without a native probe
+  // must preserve the caller's expired completion stamp, not report ordinary busy.
+  it('preserves archive authority errors after an idle close normally refuses', async () => {
+    let allowed = true;
+    const revoked = Object.assign(new Error('completion stamp expired'), { code: 'STALE_REVISION' });
+    const { service, deps, setWorker, getWorker } = createDeps({
+      getLiveSession: () => ({ isTurnRunning: () => false }),
+      closeWorkerSessionIfIdle: vi.fn(async () => { allowed = false; return false; }),
+    });
+    setWorker(createWorker({ status: 'done' }));
+    await expect(service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1', onlyIfIdle: true,
+      beforeArchive: async () => { if (!allowed) throw revoked; },
+    })).rejects.toBe(revoked);
+    expect(getWorker().status).toBe('done');
+    expect(deps.closeWorkerSession).not.toHaveBeenCalled();
+    expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
+  });
   // #11060: unit, real idleWorker -> terminal retry. Probe rejection coverage
   // misses a normal false close and the asynchronous rollback/capture afterward.
   // Revoking the original guard at any boundary must not install a fresh retry.
