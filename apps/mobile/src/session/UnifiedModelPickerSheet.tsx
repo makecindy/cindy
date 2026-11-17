@@ -546,8 +546,10 @@ export function UnifiedModelPickerSheet(
   const accountIdentityOf = (providerId: string, sourceDeviceId?: string) => {
     const quota = accountQuotaOf(providerId, sourceDeviceId);
     if (quota?.members?.length) return t('models.unified.accountCount', { count: quota.members.length });
+    // null: still reading, failed, or nothing assignable. The account is assigned when the
+    // message is sent, so name none here; "" also keeps the CLI default account from showing.
     const identity = quota?.accountIdentity;
-    return identity === null ? t("models.unified.accountUnassigned") : identity;
+    return identity === null ? "" : identity;
   };
   const describe = (
     entry: UnifiedModelEntry,
