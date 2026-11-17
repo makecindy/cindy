@@ -1,4 +1,4 @@
-import type { OrcaHostNoticeKind } from '../../../shared/orcaHostNotice';
+import type { OrcaHostNoticeKind } from '../../shared/orcaHostNotice';
 import type {
   MessageAutomationOrigin,
   MessageSchedulerOrigin,
