@@ -4276,6 +4276,29 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     } finally { snapshot.mockRestore(); read.mockRestore(); }
   });
 
+  // 评审 #11136: 回复里引用的本机图片超过导入上限(20 MiB)时不入库, 也走不到压缩, 提示里只有图片名。
+  // 入口: watchContinuation 收口; 可观察结果: 正文末尾的提示写明上限。既有用例只覆盖「文件被删」(unit)。
+  it('says why a local image over the import limit was not sent', async () => {
+    const source = '/private/task/huge.png';
+    const materialize = vi.fn(async (_id: string, text: string) =>
+      ({ text, replacements: new Map<string, string>(), failures: [source] }));
+    const snapshot = vi.spyOn(taskImages, 'materializeTaskImageTextResult').mockImplementation(materialize);
+    const stat = vi.spyOn(fs, 'stat').mockImplementation(async () => ({ size: 21 * 1024 * 1024 }) as never);
+    try {
+      fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+      const onEnd = vi.fn();
+      createMakerHookSessionRunner({ log }).watchContinuation!(watchReq({ onEnd }).req as never);
+      const emit = h.eventCbs.get('sess-live')!;
+      emit({ type: 'text', data: { text: `结果：![大图](${source})`, isFinal: true } });
+      emit({ type: 'done', data: null });
+      await vi.waitFor(() => expect(onEnd).toHaveBeenCalledOnce());
+      const outcome = onEnd.mock.calls[0]![0];
+      expect(outcome.attachments ?? []).toEqual([]);
+      expect(outcome.finalText).toMatch(/大图.*20\s?M[Bo]/);
+      expect(outcome.finalText).not.toContain(source);
+    } finally { snapshot.mockRestore(); stat.mockRestore(); }
+  });
+
   it.each(['run', 'continuation'].flatMap((entry) =>
     [false, true].flatMap((remote) => [false, true].map((outputLimit) => ({ entry, remote, outputLimit }))),
   ))('attachments stay in their runtime ($entry, remote=$remote, outputLimit=$outputLimit)', async ({ entry, remote, outputLimit }) => {

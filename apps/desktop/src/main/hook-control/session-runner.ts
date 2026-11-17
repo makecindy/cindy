@@ -35,8 +35,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { app } from 'electron';
-import { materializeTaskImageTextResult } from '../cindy-media/taskImageDelivery';
-import { rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
+import { materializeTaskImageTextResult, TASK_IMAGE_MAX_BYTES } from '../cindy-media/taskImageDelivery';
+import { localTaskImagePath, rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
@@ -667,6 +667,15 @@ async function collectOutboundForFinalText(
     ? await materializeTaskImageTextResult(sessionId, scanText, log)
     : { text: scanText, replacements: new Map<string, string>() };
   const wholeTurn = materialized.text;
+  // 没导入成功的本机图片里, 哪些是因为超过导入上限: 提示里要写明上限, 而不是只说「未能发送」。
+  const oversizedLocalImages = new Set<string>();
+  for (const failed of 'failures' in materialized ? materialized.failures : []) {
+    const absPath = localTaskImagePath(failed);
+    if (!absPath) continue;
+    try {
+      if ((await fs.stat(absPath)).size > TASK_IMAGE_MAX_BYTES) oversizedLocalImages.add(absPath);
+    } catch { /* 文件已不在: 按普通的未能发送提示 */ }
+  }
   // Recipients cannot open this computer's files: links to local paths keep only their label.
   const publicText = unlinkLocalFileLinks(texts.wholeTurn === texts.publicText ? wholeTurn
     : rewriteTaskImageReferences(
@@ -688,6 +697,8 @@ async function collectOutboundForFinalText(
       formatIncompleteNotice: formatHookIncompleteNotice,
       // 超过单图上限的图片在本机压一份再发; 远程任务读不到本机文件, 不涉及。
       ...(canReadLocal ? { shrinkImage: shrinkOutboundImage } : {}),
+      localImageOverLimitMiB: (absPath) => oversizedLocalImages.has(absPath)
+        ? Math.floor(TASK_IMAGE_MAX_BYTES / (1024 * 1024)) : undefined,
       formatOverLimitName: (name, limitMiB) => t('imBot.outboundAttachmentOverLimit', getResolvedMainLocale())
         .replace('{{name}}', name)
         .replace('{{limit}}', String(limitMiB)),

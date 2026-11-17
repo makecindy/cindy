@@ -444,6 +444,19 @@ describe('images over the per-image limit', () => {
     expect(r.text).toContain('未发送：首页（超过 5 MB 上限）');
   });
 
+  // 评审 #11136: 回复里按本机路径引用的图片超过导入上限(20 MiB)时不会入库, 走不到压缩那一步,
+  // 提示里只有图片名。收集器自己不读没导入的本机路径, 由调用方告知是否超限。
+  it('names the import limit for a local image that was too large to import', async () => {
+    const r = await collectOutboundAttachments('![大图](/work/huge.png) ![丢了](/work/gone.png)', [], {
+      ...deps({}),
+      localImageOverLimitMiB: (absPath) => (absPath === '/work/huge.png' ? 20 : undefined),
+      formatIncompleteNotice: (names) => `未发送：${names.join('、')}`,
+      formatOverLimitName: (name, limitMiB) => `${name}（超过 ${limitMiB} MB 上限）`,
+    });
+    expect(r.attachments).toEqual([]);
+    expect(r.text).toContain('未发送：大图（超过 20 MB 上限）、丢了');
+  });
+
   it('leaves animated formats alone and still reports them', async () => {
     const shrinkImage = vi.fn(async () => ({ buffer: Buffer.from('small'), mime: 'image/webp' }));
     const r = await collectOutboundAttachments('![动图](xdt-image://big.gif)', [], {

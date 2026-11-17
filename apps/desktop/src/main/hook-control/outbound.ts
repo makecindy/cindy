@@ -44,7 +44,11 @@ const MAX_OUT_TOTAL_BYTES = 30 * 1024 * 1024;
 const MAX_X_IMAGES = 4;
 /** 超过单图上限时值得尝试压缩的格式(静态图; GIF 可能是动图, 压了会丢动画)。 */
 const SHRINKABLE_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
-/** 压缩输入的体量上限: 更大的图不整读进内存去压, 直接按超限处理。 */
+/**
+ * 压缩输入的体量上限: 更大的图不整读进内存去压, 直接按超限处理。回复里按本机路径引用的图片先经
+ * 任务图片导入(上限更小, 见 TASK_IMAGE_MAX_BYTES), 能走到这里的不会超过那个上限; 这个上限约束的是
+ * 已在媒体仓里的图和工具结果旁路带来的图。
+ */
 const MAX_SHRINK_INPUT_BYTES = 48 * 1024 * 1024;
 
 /**
@@ -207,6 +211,11 @@ export interface OutboundDeps {
    * 省略 = 不压缩, 超限的图片直接跳过并提示。只影响发给渠道的副本, 不改本机原图。
    */
   shrinkImage?: (bytes: Buffer, mimeType: string, maxBytes: number) => Promise<{ buffer: Buffer; mime: string } | null>;
+  /**
+   * 没能导入的本机图片是否因为超过导入上限: 返回上限(MiB), 不是这个原因返回 undefined。提示里据此
+   * 写明上限。由能读本机文件的调用方提供; 收集器自己不读没导入的本机路径(它可能属于另一台电脑)。
+   */
+  localImageOverLimitMiB?: (absPath: string) => number | undefined;
   /** 因超过大小上限没发出的附件在提示里的写法(点名并说明上限); 省略 = 英文默认写法。 */
   formatOverLimitName?: (name: string, limitMiB: number) => string;
   /** realpath 校验(生产: fs.promises.realpath; 测试注入)。 */
@@ -500,7 +509,10 @@ export async function collectOutboundAttachments(
     visitedImageUrls.add(ref.url);
     // Local images must already have been imported by the task-scoped adapter.
     if (isLocalImage(ref.url)) {
-      skip(attachmentDisplayName(ref.alt, localTaskImagePath(ref.url) ?? ref.url));
+      const localPath = localTaskImagePath(ref.url);
+      const name = attachmentDisplayName(ref.alt, localPath ?? ref.url);
+      const limitMiB = localPath ? deps.localImageOverLimitMiB?.(localPath) : undefined;
+      skip(limitMiB === undefined ? name : overLimitName(name, limitMiB));
       continue;
     }
     try {
