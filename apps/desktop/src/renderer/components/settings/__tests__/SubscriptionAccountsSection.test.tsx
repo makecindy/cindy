@@ -199,6 +199,21 @@ describe('SubscriptionAccountsSection usage', () => {
     expect(screen.getAllByTestId('subscription-account-usage')).toHaveLength(2);
   });
   // Regression: a connected account's menu offered plain "Sign in", reading as if it were signed out.
+  // Unit regression: a first failed account read had no in-place recovery action.
+  // Unlike the refresh-failure case above, no cached account rows exist yet.
+  it('retries a failed initial read in place without creating or replacing accounts', async () => {
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
+    command.mockRejectedValueOnce(new Error('unavailable'));
+    render(<SubscriptionAccountsSection providerId="anthropic" locationLabel="This computer" />);
+    await screen.findByRole('alert');
+    expect(screen.getByText('This computer')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
+    await screen.findByText('first@example.test');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(command.mock.calls.every(([request]) => request.action === 'read')).toBe(true);
+    expect(screen.getAllByTestId('subscription-account')).toHaveLength(2);
+  });
+
   it.each([
     ['ready', 'subscriptionAccounts.loginAgain'],
     ['signed-out', 'subscriptionAccounts.login'],
