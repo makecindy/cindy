@@ -116,6 +116,52 @@ function answer(step: InputHandoffSnapshot) {
 }
 
 describe('代输入 secrets', () => {
+  // Unit: static validation text can shift AX refs after the first fill. Keep
+  // stable targets usable, but do not confuse a removed/replaced field with a shift.
+  it.each(['dom', 'stale-dom', 'fingerprint', 'replaced', 'removed'])('handles a static-node insertion using %s identity', async (mode) => {
+    const page = loginPage();
+    const read = page.driver.snapshot;
+    let changed = false;
+    let lateShift = false;
+    page.driver.snapshot = async (...args) => {
+      const raw = await read(...args);
+      if ('error' in raw) return raw;
+      const offset = changed ? (lateShift ? 2 : 1) : 0;
+      raw.nodes = [raw.nodes[0],
+        ...(changed ? [node('0.0', 'AXStaticText', { value: 'Looks good', frame: [10, 20, 100, 20] })] : []),
+        ...(lateShift ? [node('0.1', 'AXStaticText', { value: 'Still checking', frame: [200, 20, 100, 20] })] : []),
+        ...['First name', 'Last name'].flatMap((label, i) => changed && mode === 'removed' && i === 1 ? [] : [
+          node(`0.${offset + i * 2}`, 'AXStaticText', { value: label, frame: [10, 60 + i * 80, 100, 20] }),
+          node(`0.${offset + i * 2 + 1}`, 'AXTextField', {
+            ...(mode === 'fingerprint' ? { title: label } : { domId: changed && mode === 'replaced' && i === 1 ? 'replacement' : `name-${i}` }),
+            frame: [10, 85 + i * 80, 100, 20],
+          }),
+        ]), node(`0.${offset + 4}`, 'AXButton', { title: 'Continue' })];
+      return raw;
+    };
+    const act = page.driver.act;
+    page.driver.act = async request => {
+      // A final shift can happen after sameFields, before the native action.
+      if (mode === 'stale-dom' && changed && request.kind === 'text') lateShift = true;
+      const raw = await page.driver.snapshot(request.pid, request.window);
+      if ('error' in raw || !raw.nodes.some(n => n.ref === request.ref && n.fp === request.fp)) return { error: 'stale' };
+      const result = await act(request);
+      if (request.kind === 'text') changed = true;
+      return result;
+    };
+    const { session, latest } = start(page.driver);
+    await session.start();
+    const fields = latest().controls.filter(c => c.kind === 'text');
+    await session.submit({ expectedRevision: latest().revision, values: {
+      [fields[0].id]: 'Ada', [fields[1].id]: 'Lovelace',
+    }, action: { kind: 'submit' } });
+    expect(page.acts.map(a => [a.kind, a.ref, a.value])).toEqual(
+      mode === 'removed' || mode === 'replaced' ? [['text', '0.1', 'Ada']] :
+        [['text', '0.1', 'Ada'], ['text', lateShift ? '0.5' : '0.4', 'Lovelace'], ['press', lateShift ? '0.6' : '0.5', undefined]],
+    );
+    session.cancel();
+  });
+
   // Unit: native fingerprints omit nearby labels and DOM ids. Existing fixtures
   // all had distinct native titles; equal fingerprints must still fill the right targets.
   it.each([false, true])('distinguishes nearby-labelled fields with equal fingerprints (reordered: %s)', async (reordered) => {

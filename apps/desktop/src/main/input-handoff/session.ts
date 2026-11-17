@@ -1323,7 +1323,10 @@ export class InputHandoffSession {
       // The screen re-rendered; find the same element by identity and retry once.
       const fresh = await this.options.driver.snapshot(this.target.pid, this.target.window);
       if ('error' in fresh) return false;
-      const matches = fresh.nodes.filter((node) => node.fp === binding.fp);
+      const matches = binding.kind === 'text'
+        ? [...extractStep(fresh).bindings.values()].filter(candidate => candidate.kind === 'text' &&
+          candidate.identity === binding.identity && candidate.secure === (binding.nativeSecure ?? binding.secure))
+        : fresh.nodes.filter((node) => node.fp === binding.fp);
       if (matches.length !== 1 || this.ended) return false;
       result = await this.options.driver.act({ ...request, ref: matches[0].ref, window: { index: fresh.window.index, title: fresh.window.title } });
     }
@@ -1352,14 +1355,23 @@ export class InputHandoffSession {
     if (!this.target) return false;
     const raw = await this.options.driver.snapshot(this.target.pid, this.target.window);
     if ('error' in raw) return false;
-    const identities = (candidate: ExtractedStep) => [...candidate.bindings.values()].flatMap(binding =>
-      binding.kind !== 'text' ? [] : (binding.segments ?? [binding]).map(field => JSON.stringify([field.identity, 'nativeSecure' in field ? field.nativeSecure : field.secure])),
-    ).sort();
-    const expected = identities(step);
+    type FieldTarget = { ref: string; identity: string; secure: boolean; nativeSecure?: boolean };
+    const fields = (candidate: ExtractedStep) => [...candidate.bindings.values()].flatMap<FieldTarget>(binding =>
+      binding.kind !== 'text' ? [] : (binding.segments ?? [binding]),
+    );
+    const identity = (field: FieldTarget) =>
+      JSON.stringify([field.identity, field.nativeSecure ?? field.secure]);
+    const expected = fields(step);
     const current = extractStep(raw);
     if (raw.window.title !== this.target.window.title || current.source.origin !== step.source.origin || current.url !== step.url) return 'origin_changed';
-    const actual = identities(current);
-    return new Set(expected).size === expected.length && JSON.stringify(actual) === JSON.stringify(expected);
+    const actual = fields(current);
+    const byIdentity = new Map(actual.map(field => [identity(field), field]));
+    if (expected.length !== actual.length || byIdentity.size !== actual.length ||
+      new Set(expected.map(identity)).size !== expected.length || expected.some(field => !byIdentity.has(identity(field)))) return false;
+    // Rebind only after the entire form matches. In particular, a reused old
+    // index may now point at a different field with the same native fingerprint.
+    for (const field of expected) field.ref = byIdentity.get(identity(field))!.ref;
+    return true;
   }
 
   private async perform(step: ExtractedStep, submission: InputHandoffSubmission): Promise<boolean | 'origin_changed'> {

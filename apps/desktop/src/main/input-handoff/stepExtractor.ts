@@ -205,6 +205,13 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
   inScope.forEach((node, index) => {
     if (node.role === 'AXStaticText') textNodes.push({ node, index });
   });
+  const domIds = new Map<string, number>();
+  const fingerprints = new Map<string, number>();
+  for (const node of inScope) {
+    if (!TEXT_ROLES.has(node.role) || (node.subrole && SKIPPED_SUBROLES.has(node.subrole))) continue;
+    if (node.domId) domIds.set(node.domId, (domIds.get(node.domId) ?? 0) + 1);
+    fingerprints.set(node.fp, (fingerprints.get(node.fp) ?? 0) + 1);
+  }
 
   const controls: ScreenControl[] = [];
   const bindings = new Map<string, ControlBinding>();
@@ -252,9 +259,10 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
       };
       controls.push(control);
       lastTextControl = control;
-      // AX fingerprints can be identical for adjacent unlabelled inputs. Bind
-      // their exact locations and resolved labels too, so a swap cannot reuse answers.
-      const identity = JSON.stringify([node.ref, node.fp, node.domId, label]);
+      // Static validation text can shift AX indices without changing a field.
+      // Only depend on position when neither DOM id nor fingerprint is unique.
+      const stable = (node.domId && domIds.get(node.domId) === 1) || fingerprints.get(node.fp) === 1;
+      const identity = JSON.stringify([node.domId, node.fp, label, stable ? null : node.ref]);
       bindings.set(controlId, { kind: 'text', ref: node.ref, fp: node.fp, identity, secure: !!node.secure });
       refs.set(controlId, node.ref);
       return;
