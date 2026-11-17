@@ -12332,7 +12332,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             : {}),
         } as AgentMeta
       : undefined;
-    if (!message) {
+    // Plugin messages can consist solely of their own Host-stored attachments.
+    // Model-only context attachments do not turn an empty request into a message.
+    if (!message && !params.files?.length) {
       return { ok: false, errorCode: 'INVALID_ARGS', message: 'message required' };
     }
     const sourcePlugin = params.sourcePlugin;

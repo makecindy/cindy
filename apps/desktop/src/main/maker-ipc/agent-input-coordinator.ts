@@ -150,6 +150,7 @@ function attachmentSourceKey(value: unknown): string | null {
 
 function stripQueuedMessageImages(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
   const remainingFiles = item.files?.filter((file) => !isMakerImageAttachment(file));
+  const remainingContextFiles = item.contextFiles?.filter((file) => !isMakerImageAttachment(file));
   const remainingImageSources = new Set(
     (remainingFiles ?? [])
       .filter((file) => file.category === 'image')
@@ -208,6 +209,8 @@ function stripQueuedMessageImages(item: AgentInputQueuedMessage): AgentInputQueu
   };
   if (remainingFiles && remainingFiles.length > 0) stripped.files = remainingFiles;
   else delete stripped.files;
+  if (remainingContextFiles && remainingContextFiles.length > 0) stripped.contextFiles = remainingContextFiles;
+  else delete stripped.contextFiles;
   return stripped;
 }
 
@@ -215,6 +218,7 @@ function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
   return (
     getAgentFacingText(item).trim().length > 0 ||
     (item.files?.length ?? 0) > 0 ||
+    (item.contextFiles?.length ?? 0) > 0 ||
     (item.mentions?.length ?? 0) > 0 ||
     (item.sessionRefs?.length ?? 0) > 0
   );

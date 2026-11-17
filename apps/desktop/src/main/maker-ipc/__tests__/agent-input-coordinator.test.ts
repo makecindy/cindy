@@ -4891,7 +4891,9 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'manual', undefined);
   });
 
-  it('removes unsupported image blocks but preserves GIF and PDF files on retry', async () => {
+  // Plugin relay regression: hidden reference images must use the same recovery as visible images.
+  // Existing retry coverage only populated files; one PNG plus GIF/PDF references exposes the gap. Tier: unit.
+  it('removes unsupported visible and context image blocks but preserves GIF and PDF files on retry', async () => {
     const h = createHarness();
     const sid = 'retry-unsupported-image-with-text';
     h.setHasAssistantProgressAfter(async () => false);
@@ -4927,6 +4929,7 @@ describe('AgentInputCoordinator send transaction', () => {
         mimeType: 'application/pdf',
       },
     ];
+    item.contextFiles = item.files.map(file => ({ ...file, id: `context-${file.id}` }));
     item.persistedContent = JSON.stringify({
       text: item.text,
       images: [
@@ -4982,9 +4985,15 @@ describe('AgentInputCoordinator send transaction', () => {
         { type: 'text', text: 'describe this' },
         { type: 'file', path: 'xdt-image://session/clip.gif', mimeType: 'image/gif' },
         { type: 'file', path: '/repo/notes.pdf', mimeType: 'application/pdf' },
+        { type: 'file', path: 'xdt-image://session/clip.gif', mimeType: 'image/gif' },
+        { type: 'file', path: '/repo/notes.pdf', mimeType: 'application/pdf' },
       ],
     });
     const retried = h.onDispatchedUserTurn.mock.calls[1]?.[1];
+    expect(retried?.contextFiles).toEqual([
+      expect.objectContaining({ id: 'context-gif-1', ext: '.gif', category: 'image' }),
+      expect.objectContaining({ id: 'context-file-1', category: 'pdf' }),
+    ]);
     expect(retried?.files).toEqual([
       expect.objectContaining({ id: 'gif-1', ext: '.gif', category: 'image' }),
       expect.objectContaining({ id: 'file-1', category: 'pdf' }),
@@ -5020,7 +5029,7 @@ describe('AgentInputCoordinator send transaction', () => {
     });
   });
 
-  it('keeps an unsupported image-only retry recoverable without fabricating text', async () => {
+  it.each([false, true])('retries remaining reference files or keeps image-only recovery without fabricating text (reference=%s)', async withReference => {
     const h = createHarness();
     const sid = 'retry-unsupported-image-only';
     h.setHasAssistantProgressAfter(async () => false);
@@ -5037,6 +5046,10 @@ describe('AgentInputCoordinator send transaction', () => {
         url: 'data:image/png;base64,aW1hZ2U=',
       },
     ];
+    if (withReference) item.contextFiles = [{
+      id: 'reference', name: 'notes.pdf', path: '/repo/notes.pdf', ext: '.pdf', size: 8,
+      category: 'pdf', mimeType: 'application/pdf',
+    }];
     item.persistedContent = JSON.stringify({
       text: '',
       images: [
@@ -5069,6 +5082,13 @@ describe('AgentInputCoordinator send transaction', () => {
     await h.coordinator.retryLastError(sid);
     await flush();
 
+    if (withReference) {
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: [
+        { type: 'file', path: '/repo/notes.pdf', mimeType: 'application/pdf' },
+      ] });
+      return;
+    }
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
     expect(latestProjection(h.projections).error).toBe(error);
     expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
