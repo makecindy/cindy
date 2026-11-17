@@ -211,16 +211,27 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Read the first non-empty SSE data frame so 200-streamed provider errors do not pass the probe. */
-async function readFirstSsePayload(res: Response, observe?: (raw: string) => Promise<void>): Promise<string | null> {
+/** Keep the first payload for protocol validation, while draining later usage frames. */
+async function readFirstSsePayload(
+  res: Response,
+  observe?: (raw: string) => Promise<void>,
+): Promise<string | null> {
   if (!res.body) return null;
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let firstPayload: string | null = null;
+  const observed: string[] = [];
+  let observedChars = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
-      if (value) buffer += decoder.decode(value, { stream: !done });
+      if (value) {
+        const chunk = decoder.decode(value, { stream: !done });
+        observed.push(chunk);
+        observedChars += chunk.length;
+        buffer += chunk;
+      }
       let start = 0;
       let newline: number;
       while ((newline = buffer.indexOf('\n', start)) >= 0) {
@@ -228,23 +239,38 @@ async function readFirstSsePayload(res: Response, observe?: (raw: string) => Pro
         start = newline + 1;
         if (!line.startsWith('data:')) continue;
         const payload = line.slice(5).trim();
-        if (payload) return payload;
+        if (payload && firstPayload === null) {
+          firstPayload = payload;
+          if (payload !== '[DONE]') {
+            try {
+              const event: unknown = JSON.parse(payload);
+              if (isPlainObject(event) && isPlainObject(event.error)) return firstPayload;
+            } catch {
+              return firstPayload;
+            }
+          }
+        }
+        if (payload === '[DONE]') return firstPayload;
       }
       if (start > 0) buffer = buffer.slice(start);
-      if (buffer.length > MAX_ERROR_BODY_BYTES) return null;
+      if (observedChars > MAX_ERROR_BODY_BYTES) return firstPayload;
       if (done) {
         buffer += decoder.decode();
         const line = buffer.replace(/\r$/, '');
-        if (!line.startsWith('data:')) return null;
-        return line.slice(5).trim() || null;
+        if (!line.startsWith('data:')) return firstPayload;
+        return firstPayload ?? (line.slice(5).trim() || null);
       }
     }
   } finally {
-    await observe?.(buffer);
     try {
-      await reader.cancel();
-    } catch {
-      /* no-op */
+      await observe?.(observed.join(''));
+    } finally {
+      try {
+        await reader.cancel();
+      } catch {
+        /* no-op */
+      }
+      reader.releaseLock();
     }
   }
 }
@@ -374,7 +400,8 @@ async function runProviderProbeUnlogged(
       }, AbortSignal.timeout(PROBE_TIMEOUT_MS));
       if (result.usage && [result.usage.input, result.usage.output, result.usage.cacheRead, result.usage.cacheWrite].some(n => n > 0)) {
         await record({ inputTokens: result.usage.input, outputTokens: result.usage.output,
-          cacheReadTokens: result.usage.cacheRead, cacheCreateTokens: result.usage.cacheWrite });
+          cacheReadTokens: result.usage.cacheRead, cacheCreateTokens: result.usage.cacheWrite },
+          result.model ? { model: result.model } : {});
       }
       if (result.stopReason !== 'error' && result.stopReason !== 'aborted') return { ok: true, latencyMs: Date.now() - start };
       const detail = result.errorMessage ?? 'Native provider probe failed';

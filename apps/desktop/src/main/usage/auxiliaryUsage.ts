@@ -22,7 +22,6 @@ export function createAuxiliaryUsageRecorder(
 ): AuxiliaryUsageRecorder {
   const snapshot = getCurrentDbClientSnapshot();
   const release = snapshot ? retainDbClient(snapshot.client) : () => {};
-  const startedAt = Date.now();
   const record = async (
     tokens: AuxiliaryTokens,
     route: AuxiliaryAttribution = {},
@@ -50,7 +49,8 @@ export function createAuxiliaryUsageRecorder(
           source: metadata.source ?? 'auxiliary',
           sessionId: metadata.sessionId ?? null,
           transport: metadata.transport ?? 'unknown',
-          day: localDayKey(startedAt),
+          // Match the normal usage ledger: each received usage fact belongs to its settlement day.
+          day: localDayKey(now),
           recordedAt: now,
           ...facts,
         })

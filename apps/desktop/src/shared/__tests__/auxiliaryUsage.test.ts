@@ -1,7 +1,48 @@
 import { describe, expect, it } from 'vitest';
-import { parseAuxiliaryTokens, parseAuxiliaryResponse } from '../auxiliaryUsage.js';
+import {
+  createAuxiliaryUsageAccumulator,
+  parseAuxiliaryTokens,
+  parseAuxiliaryResponse,
+} from '../auxiliaryUsage.js';
 
 describe('auxiliary protocol usage', () => {
+  it('merges cumulative raw prompt totals before splitting changing cache counters', () => {
+    const usage = createAuxiliaryUsageAccumulator('openai-chat');
+    usage.observe({
+      model: 'actual',
+      usage: {
+        prompt_tokens: 100,
+        prompt_tokens_details: { cached_tokens: 20 },
+        completion_tokens: 1,
+      },
+    });
+    usage.observe({
+      usage: {
+        prompt_tokens: 100,
+        prompt_tokens_details: { cached_tokens: 40 },
+        completion_tokens: 2,
+      },
+    });
+    expect(usage.snapshot()).toEqual({
+      model: 'actual',
+      tokens: {
+        inputTokens: 60,
+        cacheReadTokens: 40,
+        outputTokens: 2,
+        cacheCreateTokens: undefined,
+      },
+    });
+  });
+  it('keeps sparse late cache facts attached to their original prompt total', () => {
+    const usage = createAuxiliaryUsageAccumulator('openai-chat');
+    usage.observe({ usage: { prompt_tokens: 100, completion_tokens: 2 } });
+    usage.observe({ usage: { prompt_tokens_details: { cached_tokens: 40 } } });
+    expect(usage.snapshot().tokens).toMatchObject({
+      inputTokens: 60,
+      cacheReadTokens: 40,
+      outputTokens: 2,
+    });
+  });
   it('counts cached OpenAI input once, including reasoning already in output', () => {
     expect(
       parseAuxiliaryTokens(

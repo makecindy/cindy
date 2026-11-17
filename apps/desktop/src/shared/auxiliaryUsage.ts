@@ -81,12 +81,25 @@ export function parseAuxiliaryResponse(
         .split(/\r?\n/)
         .filter((line) => line.startsWith('data:'))
         .map((line) => line.slice(5).trim());
+  const accumulator = createAuxiliaryUsageAccumulator(wire);
+  for (const part of parts) {
+    try {
+      accumulator.observe(JSON.parse(part));
+    } catch {
+      /* Keep complete earlier usage when the last frame is truncated. */
+    }
+  }
+  return accumulator.snapshot();
+}
+
+/** Merge raw cumulative counters before splitting cached input from prompt totals. */
+export function createAuxiliaryUsageAccumulator(wire: string) {
   let merged: Record<string, unknown> = {};
   let model: string | undefined;
   let google: Record<string, unknown> = {};
-  for (const part of parts) {
-    try {
-      const root = object(JSON.parse(part));
+  return {
+    observe(body: unknown): void {
+      const root = object(body);
       const response = object(root.response ?? root.message ?? root);
       if (typeof response.model === 'string' && response.model) model = response.model;
       google = { ...google, ...object(root.usageMetadata) };
@@ -101,24 +114,12 @@ export function parseAuxiliaryResponse(
           merged[key] = value;
         }
       }
-    } catch {
-      /* Keep complete earlier usage when the last frame is truncated. */
-    }
-  }
-  return { tokens: parseAuxiliaryTokens({ usage: merged, usageMetadata: google }, wire), model };
-}
-
-export function mergeAuxiliaryTokens(
-  previous: AuxiliaryTokens | null,
-  next: AuxiliaryTokens,
-): AuxiliaryTokens {
-  return Object.fromEntries(
-    ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreateTokens'].map((key) => {
-      const field = key as keyof AuxiliaryTokens;
-      const values = [previous?.[field], next[field]].filter(
-        (value): value is number => value !== undefined,
-      );
-      return [field, values.length ? Math.max(...values) : undefined];
-    }),
-  );
+    },
+    snapshot() {
+      return {
+        tokens: parseAuxiliaryTokens({ usage: merged, usageMetadata: google }, wire),
+        model,
+      };
+    },
+  };
 }

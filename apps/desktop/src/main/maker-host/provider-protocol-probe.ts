@@ -1,5 +1,5 @@
 import { createAuxiliaryUsageRecorder } from '../usage/auxiliaryUsage.js';
-import { parseAuxiliaryTokens, mergeAuxiliaryTokens, type AuxiliaryTokens } from '../../shared/auxiliaryUsage.js';
+import { createAuxiliaryUsageAccumulator, type AuxiliaryTokens } from '../../shared/auxiliaryUsage.js';
 import {
   appendProviderRequestPath, isLoopbackProviderUrl, providerProtocolCandidates,
   providerModelRecord, providerPresetModelRecord,
@@ -100,9 +100,13 @@ async function attempt(
   const record = createAuxiliaryUsageRecorder({ source: 'provider-probe', providerId: spec.providerId,
     model: spec.modelId, transport: candidate.wireProtocol });
   let observed: AuxiliaryTokens | null = null;
+  let servedModel: string | undefined;
+  const accumulator = createAuxiliaryUsageAccumulator(candidate.wireProtocol);
   const observe = (body: unknown) => {
-    const tokens = parseAuxiliaryTokens(body, candidate.wireProtocol);
-    if (tokens) observed = mergeAuxiliaryTokens(observed, tokens);
+    accumulator.observe(body);
+    const snapshot = accumulator.snapshot();
+    observed = snapshot.tokens;
+    servedModel = snapshot.model ?? servedModel;
   };
 
   let accepted = false;
@@ -179,6 +183,7 @@ async function attempt(
     } else {
       const result = await probePiProvider({ row, providerId: spec.catalogPresetId ?? 'custom-probe', upstream: candidate.baseUrl,
         apiKey: key, headers, fetchImpl: guardedFetch }, signal, 256);
+      servedModel ??= result.model;
       if (!observed && result.usage && [result.usage.input, result.usage.output, result.usage.cacheRead, result.usage.cacheWrite].some(n => n > 0)) {
         observed = { inputTokens: result.usage.input, outputTokens: result.usage.output,
           cacheReadTokens: result.usage.cacheRead, cacheCreateTokens: result.usage.cacheWrite };
@@ -201,7 +206,7 @@ async function attempt(
     const cls = classifyProviderError({ networkErrorCode: signal.aborted ? 'TimeoutError' : networkCode ?? 'UNKNOWN' });
     return { ok: false, code: cls.code, latencyMs: 0, decision: 'inconclusive' };
   } finally {
-    try { if (observed) await record(observed); }
+    try { if (observed) await record(observed, servedModel ? { model: servedModel } : {}); }
     finally { record.close(); }
   }
 }

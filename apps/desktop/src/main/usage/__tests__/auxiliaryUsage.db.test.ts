@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAuxiliaryUsageRecorder } from '../auxiliaryUsage.js';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
 import { waitForRetainedDbClient } from '../../localDb/client/pendingOperations.js';
@@ -19,11 +19,34 @@ function owner() {
   return { sqlite, client };
 }
 afterEach(() => {
+  vi.useRealTimers();
   clearCurrentDbClient();
   for (const db of databases.splice(0)) db.close();
 });
 
 describe('auxiliary receipts', () => {
+  it('settles each usage receipt on its own day across a midnight retry', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 10, 17, 23, 59, 59, 900));
+    const { sqlite, client } = owner();
+    setCurrentDbClient(client, 'owner');
+    const record = createAuxiliaryUsageRecorder();
+    try {
+      await record({ inputTokens: 10, outputTokens: 1 }, {}, 'attempt-1');
+      vi.setSystemTime(new Date(2026, 10, 18, 0, 0, 1));
+      await record({ inputTokens: 20, outputTokens: 2 }, {}, 'attempt-2');
+      expect(
+        sqlite
+          .prepare('SELECT day, input_tokens FROM auxiliary_usage_receipts ORDER BY receipt_id')
+          .all(),
+      ).toEqual([
+        { day: '2026-11-17', input_tokens: 10 },
+        { day: '2026-11-18', input_tokens: 20 },
+      ]);
+    } finally {
+      record.close();
+    }
+  });
   it('keeps late responses in their original account and retains the client until settlement', async () => {
     const first = owner();
     const second = owner();
