@@ -29,6 +29,7 @@ import { createHostCodexCredentials } from './codex-credentials.js';
 import { createHostCodexThreadStorage } from './codex-thread-storage.js';
 import { invalidateHostCodexLogin } from './codex-invalidation.js';
 import { createHostCodexSystemLogin, resolveHostSystemCodexAuthPath } from './codex-system-login.js';
+import { HOST_PROFILE_IN_USE_BY_DESKTOP } from './profile-coexistence.js';
 import { createCodexAuthBoundary } from './codex-auth-boundary.js';
 import { createCodexProxyInbound } from './codex-proxy-inbound.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
@@ -56,13 +57,39 @@ export function createBridgeTokenReader(options: {
   check(): void;
   systemLogin: { reconcile(): Promise<void> };
   readAccessToken(providerId?: string): Promise<string | null> | string | null;
+  /** Coexistence plan A: whether a Cindy desktop app running on its own uses this profile. */
+  isProfileHeld?: () => boolean;
 }) {
   return async (providerId?: string): Promise<string | null> => {
     options.check();
-    if (!providerId || providerId === 'openai') await options.systemLogin.reconcile();
+    const nativeLogin = !providerId || providerId === 'openai';
+    // While a desktop uses this profile, the reconciliation is skipped: it can relink and rewrite
+    // codex-home/auth.json, the login that desktop uses too (reviewer, 2026-11-17).
+    const held = options.isProfileHeld?.() === true;
+    if (nativeLogin && !held) await options.systemLogin.reconcile();
     options.check();
-    return options.readAccessToken(providerId);
+    const token = await options.readAccessToken(providerId);
+    // The bridge renews a token that expires within its margin and writes the result back to
+    // auth.json (anthropicResponsesBridgeHostCore.ts refreshIfNeeded). Two processes renewing one
+    // login rotate each other's refresh token out, so while held the request fails instead, saying why.
+    if (held && nativeLogin && token && expiresWithinBridgeMargin(token)) {
+      throw new Error(`${HOST_PROFILE_IN_USE_BY_DESKTOP}: the ChatGPT sign-in has expired, and it is not renewed while a Cindy `
+        + 'desktop app running on its own uses this data (both would renew the same sign-in). Quit that app, then try again.');
+    }
+    return token;
   };
+}
+
+/** The bridge's own renewal margin (anthropicResponsesBridgeHostCore.ts REFRESH_MARGIN_SEC). */
+const BRIDGE_REFRESH_MARGIN_SEC = 120;
+/** As the bridge's isExpired: a token whose `exp` cannot be read is not renewed early. */
+function expiresWithinBridgeMargin(token: string): boolean {
+  const part = token.split('.')[1];
+  if (!part) return false;
+  try {
+    const exp = (JSON.parse(Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8')) as { exp?: unknown }).exp;
+    return typeof exp === 'number' && Date.now() / 1000 >= exp - BRIDGE_REFRESH_MARGIN_SEC;
+  } catch { return false; }
 }
 
 /** Same Codex proxy and spawn policy as desktop, assembled with owner-bound Node IO. */
@@ -73,6 +100,8 @@ export function createHostCodexRuntime(options: {
   availabilityPolicy: ReturnType<typeof createAvailabilityPolicy>;
   mcp: ReturnType<typeof createHostMcpRuntime>;
   publish(channel: string, payload: unknown): void;
+  /** Coexistence plan A: whether a Cindy desktop app running on its own uses this profile. */
+  isProfileHeld?: () => boolean;
 }) {
   const owner = activeOwnerScopeKey();
   let closed = false;
@@ -131,7 +160,8 @@ export function createHostCodexRuntime(options: {
     invalidateXaiBridgeAuth: (...args) => xai.invalidateXaiBridgeAuth(...args),
     chatgptAccountIdFromTokens: (...args) => chatgptAccountIdFromTokens(...args),
     desktopCodexAuthAdapter: {
-      getAccessToken: createBridgeTokenReader({ check, systemLogin, readAccessToken: providerId => native.readAccessToken(providerId) }),
+      getAccessToken: createBridgeTokenReader({ check, systemLogin, readAccessToken: providerId => native.readAccessToken(providerId),
+        isProfileHeld: options.isProfileHeld }),
       // The bridge has just matched the rejected token against getAccessToken above.
       invalidate: reason => invalidateNative(reason),
       captureOAuthDispatchProof: (accessToken, accountId, providerId) => native.captureDispatchProof(accessToken, accountId, providerId),

@@ -870,6 +870,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     if (codexBinary) codexRuntime = createHostCodexRuntime({ profileDir: dataDir, binaryPath: codexBinary,
       config: providerConfig, modelAccess: modelAccess!, availabilityPolicy: availabilityPolicy!, mcp: mcpRuntime,
       publish: (channel, payload) => eventHub.publish({ type: 'plugin_push', channel, payload }),
+      // Coexistence plan A: the subscription bridge neither reconciles nor renews (agent/codex-runtime.ts).
+      isProfileHeld: () => inputQueue.isHeldForDesktop(),
     });
     if (claudeBinary || piBinary) {
       claudeProxy = createHostClaudeProxyRuntime({ profileDir: dataDir,

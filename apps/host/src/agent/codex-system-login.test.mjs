@@ -41,6 +41,7 @@ import { createHostCodexSystemLogin } from './codex-system-login.ts';
 import { invalidateHostCodexLogin } from './codex-invalidation.ts';
 import { createHostCodexCredentials } from './codex-credentials.ts';
 import { createBridgeTokenReader } from './codex-runtime.ts';
+import { createAnthropicResponsesBridgeHost } from '../../../desktop/src/main/maker-host/anthropicResponsesBridgeHostCore.ts';
 import { bindNativeProviderAuth, isNativeProviderAuthBound } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.ts';
 import { currentCodexCredentialGeneration } from '../../../desktop/src/main/maker-host/codexCredentialRead.ts';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
@@ -193,4 +194,94 @@ test('while a desktop uses the profile, reading the Codex state does not reconci
   assert.notDeepEqual(snapshot(), before);
   assert.equal(isNativeProviderAuthBound('openai'), true);
   assert.equal(state.authenticated, true);
+});
+
+/*
+ * 测试价值
+ * - 生产入口：订阅桥（共用的 anthropicResponsesBridgeHostCore.ts，Host 在 codex-runtime.ts 里这样装）向
+ *   createBridgeTokenReader 取 ChatGPT 令牌，再读 codex-home/auth.json、必要时续期（getChatgptBridgeAuth，
+ *   请求发出前就走这一步）。对账用真实的 createHostCodexSystemLogin，凭据是临时 profile 里的真实文件。
+ * - 规则：并存方案 A（审核方 2026-11-17 定）。闸门关着时桥读令牌不对账：对账会改写桌面也在用的 auth.json；
+ *   令牌已过期时也不续期（两边各自续期会把对方的 refresh token 挤掉），这次请求以认证失败结束，错误说得出原因。
+ * - 现有覆盖缺口：上面的“reconciles before it reads the native token”只测了放开时的顺序。
+ * - 最小失败输入：闸门关着时取一次令牌，令牌未过期与已过期各一次。
+ * - tier：unit（临时目录里的真实文件；续期请求是记录调用的桩，不联网）。
+ */
+test('while a desktop uses the profile, the subscription bridge neither reconciles nor renews the ChatGPT token', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
+  const { root, profileDir, codexHome } = isolatedProfile(t, 'bridge-held-owner');
+  const systemAuth = path.join(root, 'fake-home', '.codex', 'auth.json');
+  fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+  const jwt = expSec => `h.${Buffer.from(JSON.stringify({ exp: expSec })).toString('base64url')}.s`;
+  const writeLogin = token => {
+    const body = JSON.stringify({ tokens: { access_token: token, refresh_token: 'refresh-fixture', account_id: 'workspace-a' } });
+    fs.writeFileSync(path.join(codexHome, 'auth.json'), body, { mode: 0o600 });
+    // A different system login: a reconciliation would act on it.
+    fs.writeFileSync(systemAuth, authJson('system-token-other'), { mode: 0o600 });
+  };
+  bindNativeProviderAuth('openai', { instanceIsolated: true });
+  const snapshot = () => {
+    const out = {};
+    const walk = dir => { for (const name of fs.readdirSync(dir).sort()) {
+      const file = path.join(dir, name); const stat = fs.lstatSync(file); const key = path.relative(root, file);
+      if (stat.isSymbolicLink()) out[key] = `link:${fs.readlinkSync(file)}`;
+      else if (stat.isDirectory()) { out[key] = 'dir'; walk(file); }
+      else out[key] = fs.readFileSync(file).toString('base64');
+    } };
+    walk(root);
+    return out;
+  };
+  const accounts = { isCodexAccountLoginActive: () => false, isCodexAccountProvider: () => false };
+  const credentials = createHostCodexCredentials(profileDir, accounts);
+  const bridgeWith = held => {
+    const real = createHostCodexSystemLogin({ codexHome, systemAuthPath: systemAuth, loginActive: () => false });
+    const counts = { reconcile: 0, renew: 0 };
+    const systemLogin = { ...real, reconcile: (...args) => { counts.reconcile++; return real.reconcile(...args); } };
+    const bridge = createAnthropicResponsesBridgeHost({
+      subscriptionRequestAllowsFast: () => false, isXaiSubscriptionProviderId: () => false, app: { getPath: () => profileDir },
+      // The renewal request: answered with a failure, so a test run never writes a renewed login.
+      outboundFetch: async () => { counts.renew++; return new Response('{}', { status: 500 }); },
+      getGrokAccessToken: async () => null, peekGrokAccessToken: () => null, invalidateXaiBridgeAuth: async () => false,
+      chatgptAccountIdFromTokens: tokens => tokens?.account_id ?? null,
+      desktopCodexAuthAdapter: {
+        getAccessToken: createBridgeTokenReader({ check() {}, systemLogin, readAccessToken: id => credentials.readAccessToken(id), isProfileHeld: () => held }),
+        invalidate: async () => { throw new Error('not expected'); }, captureOAuthDispatchProof: () => () => true,
+      },
+      codexAccountHome: () => null, codexAccountState: () => ({ authenticated: false }), invalidateCodexAccount: async () => {},
+      isOpenAiSubscriptionProviderId: id => id === 'openai', recordXaiRateLimitSnapshot: () => {},
+    });
+    return { bridge, counts };
+  };
+
+  // Held, a valid token: used as it is.
+  const valid = jwt(Math.floor(Date.now() / 1000) + 3600);
+  writeLogin(valid);
+  let before = snapshot();
+  let held = bridgeWith(true);
+  assert.equal((await held.bridge.getChatgptBridgeAuth('openai')).accessToken, valid);
+  assert.deepEqual(held.counts, { reconcile: 0, renew: 0 });
+  assert.deepEqual(snapshot(), before, 'no file under the profile or the system login changed');
+
+  // Held, an expired token: the request fails, saying why; nothing is renewed or written.
+  writeLogin(jwt(Math.floor(Date.now() / 1000) - 60));
+  before = snapshot();
+  held = bridgeWith(true);
+  await assert.rejects(held.bridge.getChatgptBridgeAuth('openai'),
+    /^Error: HOST_PROFILE_IN_USE_BY_DESKTOP: the ChatGPT sign-in has expired, and it is not renewed while a Cindy desktop app/);
+  assert.deepEqual(held.counts, { reconcile: 0, renew: 0 });
+  assert.deepEqual(snapshot(), before);
+
+  // Held, a token the bridge would renew early (it expires within the bridge's 120 seconds): refused too.
+  writeLogin(jwt(Math.floor(Date.now() / 1000) + 60));
+  before = snapshot();
+  held = bridgeWith(true);
+  await assert.rejects(held.bridge.getChatgptBridgeAuth('openai'), /HOST_PROFILE_IN_USE_BY_DESKTOP: the ChatGPT sign-in has expired/);
+  assert.deepEqual(held.counts, { reconcile: 0, renew: 0 });
+  assert.deepEqual(snapshot(), before);
+
+  // Released, the same read reconciles and tries to renew the expiring token.
+  const open = bridgeWith(false);
+  await open.bridge.getChatgptBridgeAuth('openai').catch(() => {});
+  assert.ok(open.counts.reconcile > 0);
+  assert.equal(open.counts.renew, 1);
 });
