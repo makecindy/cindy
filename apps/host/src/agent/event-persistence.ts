@@ -25,6 +25,10 @@ import {
 } from "../../../desktop/src/main/localDb/messageMutations.js";
 import { createLogger } from "../../../desktop/src/main/logger.js";
 import {
+  reconcileCorrectedMessagePrRefs,
+  reconcileUpdatedMessagePrRefs,
+} from "../../../desktop/src/main/localDb/messagePrRefs.js";
+import {
   hostChatAttachments,
   materializeHostToolMedia,
 } from "../media-store.js";
@@ -96,6 +100,7 @@ export function createHostEventPersistence(deps: {
         (!deps.getOwner || deps.getOwner() === owner) &&
         finalSnapshot?.isCurrent() !== false;
       if (!isCurrent()) return null;
+      let originalRow: { id: string } | undefined;
       if (finalSnapshot) {
         const [original] = await client.drizzle
           .select({ id: messages.id })
@@ -110,6 +115,7 @@ export function createHostEventPersistence(deps: {
           )
           .limit(1);
         if (!original || !isCurrent()) return null;
+        originalRow = original;
       }
       const row = await writeMessageContentRow(
         client,
@@ -118,7 +124,17 @@ export function createHostEventPersistence(deps: {
         content,
         answer,
       );
-      if (!row) return null;
+      // The desktop updateMessageContent (localDb/ipc/messages.ts): a correction of a final answer settles
+      // the original row's PR references even when the row is gone on readback.
+      if (!row) {
+        if (originalRow)
+          await reconcileCorrectedMessagePrRefs(
+            { id: originalRow.id, sessionId, clientId },
+            client,
+            isCurrent,
+          );
+        return null;
+      }
       await hostChatAttachments.commitMessageMediaRefs(
         { sessionId, role: row.role, content: row.content },
         client.drizzle,
@@ -134,19 +150,28 @@ export function createHostEventPersistence(deps: {
           },
         });
       }
+      if (originalRow)
+        await reconcileCorrectedMessagePrRefs(
+          { id: originalRow.id, sessionId, clientId },
+          client,
+          isCurrent,
+        );
+      else if (row.role === "user" || row.role === "assistant")
+        await reconcileUpdatedMessagePrRefs(client, sessionId, row.id, isCurrent);
       return message;
     },
     async discardPersistedAssistantMessage(sessionId, clientId, current) {
       const owner = deps.getOwner?.();
       const client = owner?.client ?? getDbClient();
+      const stillCurrent = () =>
+        current() &&
+        deps.isCurrent() &&
+        (!deps.getOwner || deps.getOwner() === owner);
       const row = await rollbackAssistantMessageRow(
         client,
         sessionId,
         clientId,
-        () =>
-          current() &&
-          deps.isCurrent() &&
-          (!deps.getOwner || deps.getOwner() === owner),
+        stillCurrent,
       );
       if (!row) return false;
       // The deletion has committed. Derived cleanup is best-effort, just as on
@@ -160,6 +185,8 @@ export function createHostEventPersistence(deps: {
             client.drizzle,
           );
         }
+        // The desktop reconcileAssistantDerivedState: settle this row's PR record, then recompute.
+        await reconcileCorrectedMessagePrRefs(row, client, stillCurrent);
         const latest = await latestVisiblePreviewRow(sessionId, client);
         if (deps.isCurrent() && (!deps.getOwner || deps.getOwner() === owner)) {
           publish({

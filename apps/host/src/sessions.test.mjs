@@ -398,3 +398,114 @@ test('Host history reads a task longer than the full-row scan budget', async t =
   assert.equal(details.messages[0].id, 't0');
   assert.equal(details.messages[0].content, 'step 0', 'the body is read when the work is opened');
 });
+
+/*
+ * Task PR references (release table 甲, section 二 item 任务的 PR 关联).
+ * Test value
+ * - Production entries and observable results: createHostMessageStore (the Host's message write) and
+ *   createHostEventPersistence's updateDbMessageContent / discardPersistedAssistantMessage, observed in the
+ *   session_pr_refs rows of a real in-memory database.
+ * - Rule, and which side is right: the desktop's message paths (localDb/ipc/messages.ts createMessage,
+ *   updateMessageContent, discardPersistedAssistantMessage) record and recompute these rows through
+ *   localDb/messagePrRefs.ts; the Host must keep the same rows for the same history.
+ * - Coverage gap: the Host wrote messages without recording PR references and recomputed them only after a
+ *   clear recovery, so a PR a Host task mentioned never reached session_pr_refs.
+ * - Minimal failing input: one user message naming https://github.com/o/r/pull/7 gives no row; an
+ *   assistant reply updated to name pull/9 gives none; a retracted reply keeps its PR.
+ * - Tier: unit (node:test, in-memory SQL, the desktop PR store; no account, network or engine).
+ * The comparison uses the two calls the desktop createMessage makes for PR references (writeMessageRow, then
+ * trackMessagePrRefs): localDb/ipc/messages.ts itself imports Electron and does not load under Node.
+ */
+function prRefsDb(t) {
+  const database = sessionListDb(t);
+  for (const table of [sessionPrRefs, migrationMeta]) {
+    database.sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table))
+      .map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
+  }
+  database.sqlite.exec(`CREATE UNIQUE INDEX pr_identity ON session_pr_refs(session_id,provider,host,owner,repo,pr_number);
+    CREATE UNIQUE INDEX message_delivery ON messages(session_id,client_id);
+    INSERT INTO sessions(id,source,status,created_at,updated_at) VALUES ('task','desktop','active',0,1)`);
+  const client = createDbClientForHandle({ db: database.sqlite, drizzle: database.db });
+  const refs = () => database.sqlite.prepare(`SELECT provider,host,owner,repo,pr_number AS pr,url,association_source AS source
+    FROM session_pr_refs WHERE removed_at IS NULL ORDER BY provider,pr_number`).all();
+  return { ...database, client, refs };
+}
+// The record is fire-and-forget, as on the desktop; better-sqlite3 settles it within a few turns.
+const settle = async () => { for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve)); };
+const prText = 'see https://github.com/o/r/pull/7 and https://gitlab.com/g/p/-/merge_requests/3, again https://github.com/o/r/pull/7';
+
+test('Host message writes record task PR references as the desktop does, only into the writing owner', async t => {
+  const host = prRefsDb(t);
+  setCurrentDbClient(host.client, 'isolated');
+  t.after(() => clearCurrentDbClient(host.client));
+  const write = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: () => {} });
+  await write('task', { clientId: 'u1', role: 'user', content: prText, createdAt: 1000 }, { shouldBroadcast: () => false });
+  await write('task', { clientId: 't1', role: 'tool_result', content: 'https://github.com/o/r/pull/99', createdAt: 1001 });
+  await settle();
+  const hostRows = host.refs();
+  assert.deepEqual(hostRows.map(row => `${row.provider}:${row.owner}/${row.repo}#${row.pr}`), ['github:o/r#7', 'gitlab:g/p#3']);
+
+  // The desktop createMessage's PR steps on the same input, in another database.
+  const desktop = prRefsDb(t);
+  const { writeMessageRow } = await import('../../desktop/src/main/localDb/messageWrite.ts');
+  const { messageToCamel } = await import('../../desktop/src/main/localDb/mapper.ts');
+  const { trackMessagePrRefs } = await import('../../desktop/src/main/localDb/messagePrRefs.ts');
+  clearCurrentDbClient(host.client);
+  setCurrentDbClient(desktop.client, 'isolated');
+  t.after(() => clearCurrentDbClient(desktop.client));
+  for (const input of [{ clientId: 'u1', role: 'user', content: prText, createdAt: 1000 },
+    { clientId: 't1', role: 'tool_result', content: 'https://github.com/o/r/pull/99', createdAt: 1001 }]) {
+    const { row } = await writeMessageRow(desktop.client, 'task', input);
+    trackMessagePrRefs(desktop.client, messageToCamel(row));
+  }
+  await settle();
+  assert.deepEqual(hostRows, desktop.refs());
+
+  // A switch right after the write: the record stays with the owner that wrote, never the next one.
+  const next = prRefsDb(t);
+  clearCurrentDbClient(desktop.client);
+  setCurrentDbClient(host.client, 'isolated');
+  await write('task', { clientId: 'u2', role: 'user', content: 'https://github.com/o/r/pull/8', createdAt: 1002 });
+  clearCurrentDbClient(host.client);
+  setCurrentDbClient(next.client, 'next');
+  t.after(() => clearCurrentDbClient(next.client));
+  await settle();
+  assert.deepEqual(next.refs(), []);
+});
+
+test('Host reply corrections and retractions recompute task PR references as the desktop does', async t => {
+  const db = prRefsDb(t);
+  setCurrentDbClient(db.client, 'isolated');
+  t.after(() => clearCurrentDbClient(db.client));
+  const owner = getCurrentDbClientSnapshot();
+  const publish = () => {};
+  const history = createHostEventPersistence({ getOwner: getCurrentDbClientSnapshot,
+    isCurrent: () => getCurrentDbClientSnapshot() === owner,
+    persistMessage: createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish }),
+    publish, onPersistenceError: error => { throw error; } });
+  history.noteSessionAgentKind('task', 'cc');
+  history.noteTurnStarted('task');
+  const session = { id: 'task', workDir: '/tmp', remoteHostId: null };
+  const emit = (type, data) => history.event(session, { type, data });
+  const numbers = () => db.refs().map(row => row.pr);
+
+  // The streamed draft names no PR (a tool call stores it); the final full text does: a correction of
+  // the original row.
+  emit('text', { text: 'working on it', agentMessageId: 'reply-1' });
+  emit('tool_use', { toolUseId: 'read-1', toolName: 'Read', input: { path: 'file.txt' } });
+  emit('tool_result', { toolUseIds: ['read-1'], summary: 'https://github.com/o/r/pull/99' });
+  await history.drain();
+  assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM messages WHERE role='assistant'").get().n, 1);
+  await settle();
+  assert.deepEqual(numbers(), []);
+  emit('text', { text: 'opened https://github.com/o/r/pull/9', isFinal: true, isFullText: true, agentMessageId: 'reply-1' });
+  await history.drain();
+  assert.deepEqual(numbers(), [9]);
+
+  // An empty authoritative final retracts the reply, and with it the PR only it mentioned.
+  emit('text', { text: '', isFinal: true, isFullText: true, agentMessageId: 'reply-1' });
+  await history.drain();
+  assert.equal(history.hasFailedWrites(), false);
+  assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM messages WHERE role='assistant'").get().n, 0);
+  assert.deepEqual(numbers(), []);
+});

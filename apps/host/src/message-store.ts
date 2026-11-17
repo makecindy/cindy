@@ -3,6 +3,7 @@ import { supersedeRetriedUserTurnWithPorts } from '../../desktop/src/main/localD
 import { readVisiblePiUserEntry, patchMessageAgentMetaWithResultRow } from '../../desktop/src/main/localDb/messageMutations.js';
 import { removeRefs as removeMediaRefs, removeSessionAttachmentRefIfUnreferencedByLiveMessage } from '../../desktop/src/main/cindy-media/ledger.js';
 import { recomputePrRefsForSession } from '../../desktop/src/main/git-context/prRefsStore.js';
+import { trackMessagePrRefs } from '../../desktop/src/main/localDb/messagePrRefs.js';
 import { createLogger } from '../../desktop/src/main/logger.js';
 import { messageToCamel } from "../../desktop/src/main/localDb/mapper.js";
 import {
@@ -85,7 +86,8 @@ export function createHostMessageStore(deps: {
     );
     if (deps.getOwner() !== owner) throw new Error("message owner changed");
     const message = messageToCamel(row);
-    if (pending.has(row.id) && options?.shouldBroadcast?.() !== false) {
+    const publishing = pending.has(row.id);
+    if (publishing && options?.shouldBroadcast?.() !== false) {
       deps.publish({
         type: "message_created",
         sessionId,
@@ -93,6 +95,9 @@ export function createHostMessageStore(deps: {
         message,
       });
     }
+    // The desktop createMessage hook (localDb/ipc/messages.ts): every published row records its PR
+    // references, broadcast or not, without waiting; corrections settle it first (messagePrRefs.ts).
+    if (publishing) trackMessagePrRefs(owner.client, message);
     pending.delete(row.id);
     return message;
   };
