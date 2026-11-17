@@ -20,9 +20,9 @@
  *
  * Ordering: must run AFTER every plugin that creates image / link nodes with
  * local destinations — remarkHtmlImages (single <img> HTML → mdast image) and
- * remarkLocalPathLinks (bare prose paths → link). Keep it last in the remark
- * plugin lists. remarkSessionLinks emits cindy:// deep links, which the
- * scheme check below skips regardless of order.
+ * remarkLocalPathLinks (bare prose paths → link). Run before the final inert
+ * HTML-text recovery, which must not create links or images. remarkSessionLinks
+ * emits cindy:// deep links, which the scheme check below skips.
  */
 
 import type { Image, Link, Root } from 'mdast';

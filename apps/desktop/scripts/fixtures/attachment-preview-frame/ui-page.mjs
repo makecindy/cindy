@@ -2,6 +2,30 @@ import assert from 'node:assert/strict';
 
 const MARGIN = 40;
 
+// PR #10982 source-position regression: later nested content after an omitted
+// multiline script must align to its own source line, not the outer div.
+const lineDocument = [
+  '# HTML 行号核对',
+  '',
+  '  <div>',
+  '    <p>开头正文</p>',
+  '    <script>',
+  '      window.__htmlExecuted = true;',
+  '    </script>',
+  '    <details>',
+  '      <summary>分节标题</summary>',
+  ...Array.from({ length: 32 }, (_, index) => `      <p>上文段落 ${index + 1}</p>`),
+  '      <div>',
+  '        <p>',
+  '          跳转目标：嵌套正文',
+  '        </p>',
+  '      </div>',
+  ...Array.from({ length: 24 }, (_, index) => `      <p>后续段落 ${index + 1}</p>`),
+  '    </details>',
+  '  </div>',
+].join('\n');
+const initialLine = lineDocument.split('\n').findIndex(line => line.trim() === '<p>') + 1;
+
 export default {
   name: 'attachment-preview-frame',
   entry: './preview.tsx',
@@ -19,6 +43,10 @@ export default {
     default: { about: 'A zip that cannot be previewed opens in a compact centered panel over the dimmed conversation' },
     markdown: { about: 'A Markdown document in the same floating panel' },
     'html-content': { about: '#10888: HTML-block text remains readable without executing HTML or loading its resources' },
+    'html-lines': {
+      about: 'Later nested HTML paragraph opens at its original source line after omitted script content',
+      data: { document: lineDocument, initialLine },
+    },
     image: { about: 'An image in the same floating panel' },
   },
   async ready(page) {
@@ -28,6 +56,7 @@ export default {
         ([...document.querySelectorAll('img')].some((i) => i.complete && i.naturalWidth === 1600) ||
           document.body.innerText.includes('核对步骤') ||
           document.body.innerText.includes('HTML 正文核对') ||
+          document.body.innerText.includes('HTML 行号核对') ||
           document.body.innerText.includes('269.4 KB ·')),
     );
     // 入场淡入结束后再截图。
@@ -58,6 +87,19 @@ export default {
       assert.equal(viewport.width - panel.right, MARGIN);
       assert.equal(viewport.height - panel.bottom, MARGIN);
     }
+    if (ui.case === 'html-lines') {
+      const body = page.locator('[data-text-lightbox-search-root]');
+      const target = body.locator('p').filter({ hasText: '跳转目标：嵌套正文' });
+      assert.equal(await target.getAttribute('data-source-line'), String(ui.data.initialLine));
+      await page.waitForFunction(() => {
+        const scroller = document.querySelector('[data-text-lightbox-search-root]');
+        const target = [...scroller.querySelectorAll('p')].find(node => node.textContent.includes('跳转目标：嵌套正文'));
+        return scroller.scrollTop > 0 && Math.abs(target.getBoundingClientRect().top - scroller.getBoundingClientRect().top) < 2;
+      });
+      assert.equal(await page.evaluate(() => window.__htmlExecuted), undefined);
+      await ui.capture('line-jump');
+      return;
+    }
     if (ui.case === 'html-content') {
       const body = page.locator('[data-text-lightbox-search-root]');
       const text = await body.innerText();
@@ -68,6 +110,10 @@ export default {
       assert.equal(await page.evaluate(() => window.__htmlExecuted), undefined);
       assert.equal(await body.locator('strong').innerText(), '普通 Markdown');
       assert.equal(await body.locator('pre code').innerText(), '<div><script>literal_code()</script></div>\n');
+      const inert = body.locator('p').filter({ hasText: 'cindy://session/abc /tmp/review.txt' });
+      assert.equal(await inert.count(), 1);
+      assert.equal(await inert.locator('a, button, [role="button"]').count(), 0);
+      assert.equal(await body.getByRole('link', { name: '普通链接', exact: true }).getAttribute('href'), 'https://example.com/document');
       await ui.capture('html-text-preserved');
       await page.getByRole('button', { name: await ui.t('attachmentPreview.more'), exact: true }).click();
       await page.getByRole('menuitem', { name: await ui.t('attachmentPreview.source'), exact: true }).click();

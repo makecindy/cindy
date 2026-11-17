@@ -22,6 +22,8 @@ const htmlMarkdown = [
   '<div>容器正文<span>与嵌套文字</span></div>',
   '<details><summary>展开标题</summary><div><p>第一段正文</p><p>第二段正文<br>换行内容</p></div></details>',
   '<table><tr><th>名称</th><th>数量</th></tr><tr><td>苹果</td><td>2</td></tr></table>',
+  '<div>cindy://session/abc /tmp/review.txt</div>',
+  '[普通链接](https://example.com/document)',
   '**普通 Markdown** 仍然显示。',
   '```html\n<div><script>literal_code()</script></div>\n```',
   '<div id="html-injection" style="color:red" onclick="window.__htmlExecuted=true">安全正文' +
@@ -70,7 +72,7 @@ function Conversation() {
   );
 }
 
-function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'image' }) {
+function Fixture({ kind, initialLine }: { kind: 'zip' | 'markdown' | 'image'; initialLine?: number }) {
   const [open, setOpen] = useState(true);
   const [image] = useState(sampleImage);
   return (
@@ -78,7 +80,7 @@ function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'image' }) {
       <Conversation />
       {open && kind === 'zip' && <TextLightbox filePath={ZIP} onClose={() => setOpen(false)} />}
       {open && kind === 'markdown' && (
-        <TextLightbox filePath={MARKDOWN} onClose={() => setOpen(false)} />
+        <TextLightbox filePath={MARKDOWN} initialLine={initialLine} onClose={() => setOpen(false)} />
       )}
       {open && kind === 'image' && (
         <ImageLightbox src={image} filename="示例图片.png" onClose={() => setOpen(false)} />
@@ -101,7 +103,9 @@ mountPage({
       onEvent: subscription('file-browser'),
     },
     readTextFilePreview: async () => {
-      const content = ctx.case === 'html-content' ? htmlMarkdown : markdown;
+      const content = typeof ctx.data.document === 'string'
+        ? ctx.data.document
+        : ctx.case === 'html-content' ? htmlMarkdown : markdown;
       return { success: true, data: content, size: content.length };
     },
     showItemInFolder: async () => ({ success: true }),
@@ -109,7 +113,8 @@ mountPage({
   }),
   render: (ctx) => (
     <Fixture
-      kind={ctx.case === 'markdown' || ctx.case === 'html-content' ? 'markdown' : ctx.case === 'image' ? 'image' : 'zip'}
+      kind={ctx.case === 'markdown' || ctx.case.startsWith('html-') ? 'markdown' : ctx.case === 'image' ? 'image' : 'zip'}
+      initialLine={typeof ctx.data.initialLine === 'number' ? ctx.data.initialLine : undefined}
     />
   ),
 });

@@ -9,13 +9,14 @@ import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ReactMarkdown from 'react-markdown';
-import type { Html, Image, Root } from 'mdast';
+import type { Html, Image, Paragraph, Root } from 'mdast';
 import { unified } from 'unified';
+import type { PluggableList } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import { visit } from 'unist-util-visit';
 import remarkHtmlImages from '../components/chat/remarkHtmlImages';
-import remarkHtmlText from '../components/chat/remarkHtmlText';
+import { REMARK_PLUGINS, REMARK_PLUGINS_PRIVILEGED } from '../components/chat/MarkdownRenderer';
 
 const transform = (remarkHtmlImages as () => (tree: Root) => void)();
 
@@ -112,18 +113,25 @@ describe('remarkHtmlImages', () => {
 });
 
 /**
- * #10888 — production remark transforms + react-markdown/skipHtml output.
- * Existing thumbnail tests do not cover prose swallowed by one HTML-block node.
- * Minimal failing input: <div>正文</div>. Unit tier; no DOM/network/host needed.
- * The real TextLightbox → MarkdownRenderer path is also covered by the
- * attachment-preview-frame HTML-content UI scenario.
+ * #10888 — complete production remark chains + react-markdown/skipHtml output.
+ * Existing thumbnail tests did not cover swallowed prose, post-recovery link
+ * discovery, large blocks, or per-paragraph source positions (PR #10982 review).
+ * Minimal inputs: <div>正文</div>, <div>cindy://session/abc</div>, two <p> lines;
+ * argument-limit regression uses the reported 200,000-paragraph input.
+ * Unit tier; parser/AST/rendered output, no host I/O. The real preview's line
+ * jump and inert DOM are additionally checked in attachment-preview-frame.
  */
-function renderHtmlContent(markdown: string): string {
+function renderHtmlContent(markdown: string, plugins: PluggableList = REMARK_PLUGINS_PRIVILEGED): string {
   return renderToStaticMarkup(createElement(ReactMarkdown, {
-    remarkPlugins: [remarkGfm, remarkHtmlImages, remarkHtmlText],
+    remarkPlugins: plugins,
     skipHtml: true,
     children: markdown,
   }));
+}
+
+function productionTree(markdown: string, plugins: PluggableList = REMARK_PLUGINS_PRIVILEGED): Root {
+  const processor = unified().use(remarkParse).use(plugins);
+  return processor.runSync(processor.parse(markdown), markdown) as Root;
 }
 
 describe('HTML content preservation with raw HTML disabled (#10888)', () => {
@@ -176,5 +184,71 @@ describe('HTML content preservation with raw HTML disabled (#10888)', () => {
     expect(html).toContain('<img src="https://example.com/a.png" alt="" width="150"/>');
     expect(html).not.toContain('onerror');
     expect(html).toContain('<td>value</td>');
+  });
+
+  it.each([
+    ['unprivileged', REMARK_PLUGINS],
+    ['privileged', REMARK_PLUGINS_PRIVILEGED],
+  ])('keeps recovered prose inert through the complete %s chain', (_name, plugins) => {
+    const prose = 'cindy://session/abc /tmp/review.txt ![hidden](https://evil.invalid/a.png)';
+    const html = renderHtmlContent([
+      `<div>${prose}</div>`,
+      '',
+      '[Ordinary link](https://example.com/document)',
+      '',
+      '<img src="https://example.com/visible.png" width="150">',
+    ].join('\n'), plugins);
+    expect(html).toContain(`<p>${prose}</p>`);
+    expect(html).toContain('<a href="https://example.com/document">Ordinary link</a>');
+    expect(html).toContain('<img src="https://example.com/visible.png" alt="" width="150"/>');
+    expect(html).not.toContain('href="cindy:');
+    expect(html).not.toContain('href="/tmp/');
+    expect(html).not.toContain('src="https://evil.invalid/');
+  });
+
+  it('preserves every paragraph and following siblings above the engine argument limit', () => {
+    const count = 200_000;
+    const tree = productionTree(`Before\n\n<div>${'<p>x</p>'.repeat(count)}</div>\n\nAfter\n\n<div>Last</div>`);
+    const paragraphs = tree.children as Paragraph[];
+    expect(paragraphs.map(node => node.type).every(type => type === 'paragraph')).toBe(true);
+    expect(paragraphs[0].children).toEqual([{ type: 'text', value: 'Before', position: expect.any(Object) }]);
+    expect(paragraphs.slice(1, count + 1).every(node => node.children.length === 1 && node.children[0].type === 'text' && node.children[0].value === 'x')).toBe(true);
+    expect(paragraphs[count + 1].children[0]).toMatchObject({ type: 'text', value: 'After' });
+    expect(paragraphs[count + 2].children[0]).toMatchObject({ type: 'text', value: 'Last' });
+    expect(paragraphs).toHaveLength(count + 3);
+  });
+
+  it.each(['\n', '\r\n'])('maps nested HTML paragraphs back to original lines, columns and offsets (%j)', (newline) => {
+    const lines = [
+      '# Prefix',
+      '',
+      '> <div>',
+      '>   <p>First</p>',
+      '>   <script>',
+      '>     omitted()',
+      '>   </script>',
+      '>   <div>',
+      '>     <p>',
+      '>       Later <span>nested</span>',
+      '>     </p>',
+      '>   </div>',
+      '>   Tail',
+      '> </div>',
+    ];
+    const markdown = lines.join(newline);
+    const paragraphs: Paragraph[] = [];
+    visit(productionTree(markdown), 'paragraph', node => { paragraphs.push(node); });
+    expect(paragraphs).toHaveLength(3);
+    const offsets = [markdown.indexOf('<p>First'), markdown.indexOf('<p>' + newline), markdown.indexOf('Tail')];
+    expect(paragraphs.map(node => node.position?.start)).toEqual([
+      { line: 4, column: 5, offset: offsets[0] },
+      { line: 9, column: 7, offset: offsets[1] },
+      { line: 13, column: 5, offset: offsets[2] },
+    ]);
+    for (const paragraph of paragraphs) {
+      const position = paragraph.position!;
+      expect(position.end.offset).toBeGreaterThan(position.start.offset!);
+      expect(markdown.slice(position.start.offset, position.end.offset)).not.toContain('omitted()');
+    }
   });
 });
