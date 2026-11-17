@@ -7939,7 +7939,7 @@ assertRouteCurrent();
 
     // Loaded-thread resume ignores arbitrary config. Release only this thread,
     // then cold-resume its intact rollout before accepting another turn.
-    const ensureContextLimitForNextTurn = (signal?: AbortSignal, forceMcpRefresh = false): Promise<void> | null => {
+    const ensureContextLimitForNextTurn = (signal?: AbortSignal, forceMcpRefresh = false, reportHelperReadiness = true): Promise<void> | null => {
       const desired = currentContextLimit();
       if (desired === appliedContextLimit && !forceMcpRefresh) return null;
       return (async () => {
@@ -7978,7 +7978,7 @@ assertRouteCurrent();
             subscription = host.subscribeThread(threadId, handlers);
             registerRootCodexMcpContext();
             resetAcceptedUsageCursors('context settings refresh');
-            await reportExpectedHelperAvailability();
+            if (reportHelperReadiness) await reportExpectedHelperAvailability();
           } catch (error) {
             // A timed-out resume can still complete later. Close this handle so a
             // retry cannot use that loaded thread with an unconfirmed budget. The
@@ -8044,7 +8044,9 @@ assertRouteCurrent();
         log.warn('expected scheduler MCP is missing from Codex thread; cold-resuming', { threadId });
         // The existing refresh path closes this handle if the cold resume cannot
         // be confirmed. Propagate that failure instead of sending on a stale one.
-        await ensureContextLimitForNextTurn(undefined, true);
+        // startSession checks the final helper catalog after scheduler recovery.
+        // Defer this nested refresh's diagnostic to avoid duplicate durable rows.
+        await ensureContextLimitForNextTurn(undefined, true, false);
         const startupDeadline = Date.now() + 10_000;
         while (!closed && Date.now() < startupDeadline) {
           try {

@@ -37199,6 +37199,50 @@ describe('expected helper normal and failure boundaries', () => {
 
 
 describe('expected helper runtime lifecycle', () => {
+  // #10499 review: scheduler recovery and helper diagnostics share a cold resume.
+  // Unit tier, real Agent lifecycle; no timers/processes. One durable warning per
+  // resume must survive, without checking the same recovered catalog twice.
+  it.each(['missing', 'healthy', 'unverified'] as const)(
+    'checks helper once after scheduler cold recovery (%s)', async (mode) => {
+      const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+      const agent = new CodexAgent(createDeps());
+      let resumeCount = 0;
+      let recoveredChecks = 0;
+      const host = installFakeHost(agent, method => {
+        if (method === Method.ThreadResume) {
+          resumeCount++;
+          return { thread: { id: threadId }, model: 'gpt-5.4', modelProvider: 'openai' };
+        }
+        if (method === Method.McpServerStatusList) {
+          if (resumeCount < 2) return { data: [], nextCursor: null };
+          if (++recoveredChecks > 1 && mode === 'unverified') throw new Error('status unavailable');
+          return { data: [
+            { name: 'cindy_scheduler', tools: { list_tools: {}, call_tool: {} } },
+            ...(mode === 'healthy' ? [{ name: 'cindy_helper', tools: { list_tools: {}, call_tool: {} } }] : []),
+          ], nextCursor: null };
+        }
+        return undefined;
+      }, { buildSessionMcpConfig: () => ({
+        'mcp_servers.cindy_scheduler.command': 'synthetic-scheduler',
+        'mcp_servers.cindy_helper.command': 'synthetic-helper',
+      }) });
+      const handle = await agent.startSession({ sessionId: 'helper-scheduler-recovery',
+        resumeSessionId: threadId, workingDir: '/repo', model: 'gpt-5.4' });
+      await handle.close();
+      const events = [];
+      for await (const event of handle.events()) events.push(event);
+      expect(resumeCount).toBe(2);
+      const notices = events.filter(event => event.standaloneText);
+      expect(notices).toHaveLength(mode === 'healthy' ? 0 : 1);
+      expect(events.filter(event => event.type === 'error')).toHaveLength(mode === 'healthy' ? 0 : 1);
+      if (mode !== 'healthy') expect(notices[0].data).toMatchObject({
+        code: mode === 'unverified' ? 'CINDY_EXPECTED_HELPER_UNVERIFIED' : 'CINDY_EXPECTED_HELPER_UNAVAILABLE',
+      });
+      // Initial scheduler check, recovered scheduler check, then one helper check.
+      expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList)).toHaveLength(3);
+      await agent.dispose();
+    });
+
   it('checks the replacement thread and does not poll ordinary sends', async () => {
     const agent = new CodexAgent(createDeps());
     let threadSeq = 0;
