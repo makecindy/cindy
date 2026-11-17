@@ -8230,6 +8230,8 @@
         "subscribeTopics": "旁听君之差事动态(每轮往来与差事事件，不含讯之内容)",
         "subscribeMessage": "讯之内容",
         "subscribeMessageDetail": "收已存之君讯与 AI 之答；附件另循读取与交接之途。",
+        "subscribeToolExecution": "工具行事",
+        "subscribeToolExecutionDetail": "收工具之名、输入、结果与过误；惟观之，不改其行。",
         "subscribeTaskState": "差事状态",
         "subscribeTaskStateDetail": "收差事运行、候答、完毕、归档及隐显之变。",
         "subscribeActivity": "旁听 AI 何时思之、何时候君",

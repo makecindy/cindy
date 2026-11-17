@@ -2957,8 +2957,8 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
         const r = await getGhostRuntime().spawn(ghost);
         if (!r.ok) throw new Error(r.reason);
       },
-      sendToGhost: (ghostId, payload) => {
-        const ghost = findGhostNotificationTarget(ghostId);
+      sendToGhost: (ghostId, payload, synchronousInstall) => {
+        const ghost = synchronousInstall ?? findGhostNotificationTarget(ghostId);
         // 适配:底层返回 false 表示投递失败(网关契约是抛错 → 走缓冲/熔断)。
         if (!ghost?.enabled || ('topic' in payload && !ghost.manifest.subscribe?.topics?.includes(payload.topic))
           || !sendToGhostLogic(installedGhostStoragePart(ghost), payload)) {
@@ -3160,6 +3160,12 @@ export function createGhostSessionTap(sessionId: string): {
   return {
     handleEvent(ev) {
       if (disposed) return;
+      // Tool observers cover all tasks, independently of the legacy primary-task metadata filter.
+      if (taskEventIndex.wantsToolEvent(ev.type)) {
+        const owner = getGhostOwnerPushStamp();
+        try { if (owner) taskEventIndex.publishTool(sessionId, ev, owner, getGhostSubscriptionGateway); }
+        catch { log.warn('tool observation projection failed'); }
+      }
       // 记来源要在过滤**之前**:自动化轮次的事件正是"当前轮次不是用户发起"的唯一线索。
       origin.noteEvent(ev);
       if (ev.turnOrigin?.kind && ev.turnOrigin.kind !== 'user') return;

@@ -2355,6 +2355,20 @@ describe('ghost · subscribe 订阅详单校验(卡槽①,2026-07-12)', () => {
     ...extra,
   });
 
+  // Unit / installation disclosure: the new content topic needs its own visible
+  // capability row; the legacy turn-only manifest must retain its original row.
+  it('discloses tool execution content separately while retaining legacy topic permissions', () => {
+    const result = validateGhostManifest(withSub({ topics: ['turn', 'tool-execution'] }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(ghostPermissionItems(result.manifest)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'subscribe:topics', labelKey: 'subscribeTopics' }),
+      expect.objectContaining({ key: 'subscribe:topics:tool-execution', labelKey: 'subscribeToolExecution', detailKey: 'subscribeToolExecutionDetail' }),
+    ]));
+    const old = validateGhostManifest(withSub({ topics: ['turn'] }));
+    expect(old.ok && ghostPermissionItems(old.manifest).some(item => item.key === 'subscribe:topics:tool-execution')).toBe(false);
+  });
+
   it('topics 合法值放行并归一化进清单', () => {
     const r = validateGhostManifest(withSub({ topics: ['turn', 'session', 'activity'] }));
     expect(r.ok).toBe(true);

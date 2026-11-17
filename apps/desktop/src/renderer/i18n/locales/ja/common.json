@@ -8244,6 +8244,8 @@
         "subscribeTopics": "セッションの動きを把握(ターン・セッションイベント、メッセージ内容は含まない)",
         "subscribeMessage": "メッセージ内容のイベント",
         "subscribeMessageDetail": "保存済みのユーザーメッセージと AI の返信を受信します。添付ファイルは別の読み取りと受け渡しで取得します。",
+        "subscribeToolExecution": "ツール実行イベント",
+        "subscribeToolExecutionDetail": "ツール名、入力、結果、エラーを受信します。実行は変更せず、監視のみ行います。",
         "subscribeTaskState": "タスク状態のイベント",
         "subscribeTaskStateDetail": "タスクの実行、待機、完了、アーカイブ、非表示の状態変更を受信します。",
         "subscribeActivity": "AI が思考中のタイミングと、あなたの操作を待っているタイミングを把握",

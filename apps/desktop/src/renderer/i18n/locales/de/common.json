@@ -8287,6 +8287,8 @@
         "subscribeTopics": "Beobachtet deine Sitzungsaktivität (Runden- und Sitzungsereignisse, keine Nachrichteninhalte)",
         "subscribeMessage": "Ereignisse mit Nachrichteninhalt",
         "subscribeMessageDetail": "Empfängt gespeicherte Nutzernachrichten und KI-Antworten. Anhänge werden separat gelesen und übergeben.",
+        "subscribeToolExecution": "Ereignisse zur Werkzeugausführung",
+        "subscribeToolExecutionDetail": "Empfängt Werkzeugnamen, Eingaben, Ergebnisse und Fehler. Beobachtet, ohne die Ausführung zu ändern.",
         "subscribeTaskState": "Ereignisse zum Aufgabenstatus",
         "subscribeTaskStateDetail": "Empfängt Änderungen bei Ausführung, Warten, Abschluss, Archivierung und ausgeblendeten Aufgaben.",
         "subscribeActivity": "Erkennt, wann die KI nachdenkt und wann sie auf dich wartet",

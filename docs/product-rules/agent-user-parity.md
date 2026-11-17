@@ -106,6 +106,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 脚本读取供应商状态 | 只跑脚本的 `settings.read` 允许分享成员名单及模型范围；`usage.read` 允许 get_subscription_usage、已记录用量和组状态；现有 broker 直接调用相同处理器，不启动模型、不开放写操作或原始账号视图 | 有（未授予时拒绝；保留原完整性及套餐字段，组名称沿原投影去身份，不返回邮箱/目录/内部指纹/凭证） | 成员/用量/组状态沿同账号已授权电脑管理；订阅额度仅执行电脑。未装配服务的Host或旧端明确不支持，不降级执行 |
 | 订阅用量 | `get_subscription_usage`（`usage` 分类；搜索「用量／额度」可发现）：逐账号只读标识、套餐、额度窗口与观测时间；插件通过独立 `agent.hostTools:['usage']` 声明调用同一入口 | 有（本机 Claude / Codex，不返回邮箱、凭证、目录或内部身份指纹） | 仅执行电脑当前 Cindy 账号已连接的本机订阅；不汇总远程／分享供应商，Node Host 未接入时明确不支持 |
 | 任务     | 列出、搜索、读聊天记录、发现电脑；技术消息通过 `get_chat_history.roles` 显式选择，插件 `history` 组共用分页与存储结果限制（作者示例见随包 `plugin-history-and-http.md`） | 有 | 有 |
+| 工具执行过程 | 插件 `subscribe.topics:['tool-execution']` 异步旁听实际 AgentEvent 的工具输入、结果、错误与子任务更新；无订阅不投影，原 message/activity 主题保持 | 有（整体安装授予，原有有界缓冲与 seq/dropped；未进入共享流的引擎原生中间帧不承诺） | 仅执行 Host 实际收到的事件，不主动订阅另一台电脑 |
 | 任务与伙伴 | `list_sessions` 返回隐藏状态；`list_teammates` 分页枚举含隐藏、暂停、归档的伙伴，传 `teammate_id` 分页读取已保存的任务关系（默认100、最多1000） | 有（history 组，普通任务与插件共用） | 有（同账号历史查询；旧端不支持时明确返回未覆盖） |
 | 任务附件 | `read_session_attachment` 只读已有宿主授权的 Cindy 媒体与 grant / deposit / handoff 引用，分块字节与 SHA-256；历史 JSON 文件路径不构成授权，返回 `UNSUPPORTED_CAPABILITY`，不返回宿主路径 | 有（history 组，受上述限制） | 暂不支持，返回 `UNSUPPORTED_CAPABILITY` |
 | 任务包 | `export_session` 原生 `.cshare` 导出、`import_session` 原生任务包导入；插件按安装授权调用，Agent 运行时遵循自身权限流程；Agent 导出由用户在原生保存对话框中选择位置，再返回最终路径，不接受 `output_path`。导入用本机路径，插件用本实例 handoff；加密或需要目录时交原生向导，`awaiting_user` 不算导入完成 | 有（history / control 组；复用原生服务，默认不覆盖） | 暂不支持；沿用已有跨电脑迁移链 |
