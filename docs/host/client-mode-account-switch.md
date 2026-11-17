@@ -13,9 +13,9 @@
 
 客户端模式下，窗口进程只当界面，任务、凭据和 owner 都由 Host 管。现有设计也是这样：
 
-- 窗口不提交 owner：`requestStableOwnerPostCommit`，`apps/desktop/src/main/authManager.ts:318`，Host 是唯一写 owner 的一方；
+- 窗口不提交 owner：`requestStableOwnerPostCommit`，`apps/desktop/src/main/authManager.ts:325`，Host 是唯一写 owner 的一方；
 - 续期交给 Host：`authManager.setAuthRefreshOverride`，`apps/desktop/src/main/bootstrap-electron.ts:1431`；
-- 会话失效时不删凭据：`invalidateSession`，`authManager.ts:3908`。
+- 会话失效时不删凭据：`invalidateSession`，`authManager.ts:3924`。
 
 但窗口里的切换账号、添加账号，以及登录本身，今天仍在窗口本地执行：
 
@@ -28,7 +28,7 @@
 - 登录动作也一样：`auth:get-login-state` :6874、`auth:dispatch-login-action` :6876、`auth:get-captcha-challenge-url` :6885。
 - Host 合同里只有三项：`auth:logout`、`auth:refresh`、`auth:get-state`，见 `packages/maker-shared/src/hostChannelContract.ts:409` 起。
 
-窗口在本地切换到 B，走的是完整的 `completeLogin`（`authManager.ts:5298`），在 Host 读的同一份 profile 里：
+窗口在本地切换到 B，走的是完整的 `completeLogin`（`authManager.ts:5315`），在 Host 读的同一份 profile 里：
 
 - 写当前会话：`writePersistedAuthSessionOrThrow`，:5356；
 - 写账号保管库；
@@ -49,7 +49,7 @@
 - 那样窗口会长期是第二个写方，与客户端模式的设计、也与 C 的单写方前提相反。
 - Host 已经有全部零件：
   - 读写同一份账号保管库，用同一把锁 `AUTH_ACCOUNT_VAULT_LOCK_FILE`；
-  - 运行时拆装：`disposeOwnerRuntime` `apps/host/src/main.ts:1913`，`ensureRuntime` :674；
+  - 运行时拆装：`disposeOwnerRuntime` `apps/host/src/main.ts:1925`，`ensureRuntime` :682；
   - 登录提交：`commitLoginSessionAndOwner`，`apps/host/src/agent/skill-projection-owner.ts:112`；
   - 账号边界停止：`runOwnerBoundary`，见第七节。
 
@@ -58,7 +58,7 @@
 | 窗口通道 | Host 路径 | 说明 |
 |---|---|---|
 | `auth:accounts:list` | `/api/auth/accounts/list` | 只读保管库，返回与 `DesktopAccountSwitcherSnapshot` 同形的 `{ accounts, mutationAllowed }`。当前项按 Host 的账号标，不按窗口本地；闸门关着或切换进行中时 `mutationAllowed` 为 false |
-| `auth:accounts:sync` | `/api/auth/accounts/sync` | passport 续期与成员同步：网络请求在锁外，锁内重读、比对后写（8.4）。这会写凭据，只能由单写方做；主体搬自桌面 `syncSavedAccounts`（`authManager.ts:4074`），成为共用核心 |
+| `auth:accounts:sync` | `/api/auth/accounts/sync` | passport 续期与成员同步：网络请求在锁外，锁内重读、比对后写（8.4）。这会写凭据，只能由单写方做；主体搬自桌面 `syncSavedAccounts`（`authManager.ts:4090`），成为共用核心 |
 | `auth:accounts:switch` | `/api/auth/accounts/switch` | body `{ accountKey }`。确认在窗口那一侧做（第六节），Host 收到请求就执行第八节的顺序 |
 | `auth:accounts:begin-add` | `/api/auth/accounts/add/begin` | Host 开始一个添加账号的登录事务，返回登录状态（与 `DesktopLoginActionResult` 同形，不含令牌）。闸门关着时拒绝，提示同切换（⑥）；没有当前账号时的登录也一样（3.5） |
 | `auth:dispatch-login-action`（客户端模式下的添加账号） | `/api/auth/accounts/add/action` | body 形如桌面的 `DesktopLoginAction`，由 Host 解释 |
@@ -70,14 +70,14 @@
 - 合同项写进 `HOST_CONTRACT_CHANNELS` 的 Auth 段，形状同现有三项，标 `trustedRenderer: true`。
 - 路由写进 `apps/host/src/service.mjs`，与 `/api/auth/state`、`/api/auth/refresh` 同处（:97、:100）。
 - `/api/auth/*` 本来就不算 owner 请求（`apps/host/src/server.mjs:166`），切换进行中仍能调用。
-- 推送沿用现有的 `auth_changed` 事件，例如退出登录收尾时发的那条（`main.ts:1548`）。窗口经 `receiveHostAuthState`（`authManager.ts:485`）换显示。
+- 推送沿用现有的 `auth_changed` 事件，例如退出登录收尾时发的那条（`main.ts:1560`）。窗口经 `receiveHostAuthState`（`authManager.ts:501`）换显示。
 - 不走 device-link：这几个通道不在 device-link 白名单里，远程控制端本来就不能换账号。
 
 ## 三、设计点（审核方已定）
 
 ### 3.1 只给 Host 的账号切换、登录完成用的 owner 提交入口（定 (ii)）
 
-serve 进程在加载前注入“拒绝提交 owner”：`main.ts:293` 调 `refuseSkillProjectionOwnerCommit`，定义在 `skill-projection-owner.ts:30`。只有 `cindy-host login` 放开（`allowSkillProjectionOwnerCommit`，:35）。
+serve 进程在加载前注入“拒绝提交 owner”：`main.ts:295` 调 `refuseSkillProjectionOwnerCommit`，定义在 `skill-projection-owner.ts:30`。只有 `cindy-host login` 放开（`allowSkillProjectionOwnerCommit`，:35）。
 
 serve 要在这几处提交 owner：
 - 账号切换（第八节）；
@@ -112,16 +112,16 @@ serve 要在这几处提交 owner：
 
 `discoverHostOwner`（`apps/host/src/profile-path.mjs:45`）只看 profile 里 `cindy-*.db` 的个数：
 
-- 一个库：启动时直接认它的账号（`main.ts:2074` 起），再拿会话去对；会话是另一个账号时，`resolveAccountUser` 判为不一致而启动失败（`main.ts:444`）。
-- 零个或两个以上的库：读会话记录，会话有效就按会话的账号起（`main.ts:2082–2086`），没有有效会话才停下并报原因（:2085）。
-- 状态命令（`main.ts:202`）只数库文件，两个以上的库时读不出边界状态。
+- 一个库：启动时直接认它的账号（`main.ts:2088` 起），再拿会话去对；会话是另一个账号时，`resolveAccountUser` 判为不一致而启动失败（`main.ts:452`）。
+- 零个或两个以上的库：读会话记录，会话有效就按会话的账号起（`main.ts:2096–2100`），没有有效会话才停下并报原因（:2099）。
+- 状态命令（`main.ts:204`）只数库文件，两个以上的库时读不出边界状态。
 
 所以运行中切换过一次、两个库都在时，今天的启动已经会按会话认 owner。会撞上的是“只有一个库、会话却是另一个账号”，例如新账号的库还没建成就崩溃（8.3 的 (ii)）。改成任何时候都按已提交的会话认 owner，状态命令同样按会话读，与切换同一单元做。
 
 **会话与技能投影的 owner 不一致时谁说了算：照桌面，以会话为准。** 桌面冷启动先续期持久化的会话，再把技能投影的 owner 提交成会话的账号：
 
-- `runColdStartRefreshFlow` 里的 `withCloudOwnerCommit`，`authManager.ts:5117` 起，经 :2354 进 `withGhostSkillProjectionOwnerCommit`（`apps/desktop/src/main/authBoundaryQuarantine.ts:381`）；
-- 进程内已登录的快路径，在投影边界不是这个账号的 stable 时也补提交一次（`authManager.ts:4650–4652`）。
+- `runColdStartRefreshFlow` 里的 `withCloudOwnerCommit`，`authManager.ts:5134` 起，经 :2370 进 `withGhostSkillProjectionOwnerCommit`（`apps/desktop/src/main/authBoundaryQuarantine.ts:381`）；
+- 进程内已登录的快路径，在投影边界不是这个账号的 stable 时也补提交一次（`authManager.ts:4667–4669`）。
 
 Host 照做：
 
@@ -142,15 +142,16 @@ Host 照做：
   2. `ensureRuntime(B)`；
   3. `startDeviceLink()`；
   4. 发 `auth_changed`。
+- **解除窗口本地登录的拦截**：Host 启动失败、auth state 带 `hostUnavailable` 时，客户端模式下的窗口拒绝自己的登录与跳过登录（`apps/desktop/src/main/authManager.ts` 的 `hostNotStartedInClientMode`，用在 `dispatchLoginAction` 与 `enterLocalMode` 开头，固定码 `HOST_NOT_STARTED`）。这一路改由 Host 的登录事务执行之后，去掉这两个条件；原因面板保留，面板上的操作改成走 Host 的登录（error 状态下也能开始，第九节第 7 项）。
 - **与乙 10 的关系**：乙 10 是“serve 运行中不重新采用会话，`cindy-host login` 之后要重启 serve”（放行表第五节）。窗口里的登录经 Host 自己的事务完成，由 serve 直接采用，不需要重启，所以这条路径不再受乙 10 影响。另起进程的 `cindy-host login` 仍要重启，乙 10 那一行保留，只记“窗口登录已不受影响”。
 - **登录失效后重新登录同一账号**：
-  - 会话失效时 `invalidateHostSession` 已经经 `runOwnerBoundary` 拆掉运行时（`main.ts:559` 起），重新登录时没有在跑的运行时；
+  - 会话失效时 `invalidateHostSession` 已经经 `runOwnerBoundary` 拆掉运行时（`main.ts:567` 起），重新登录时没有在跑的运行时；
   - owner 不变：投影边界已是这个账号的 stable，提交是同 owner 的空操作；
   - 运行时要重建（`ensureRuntime`），因为失效时已经拆掉。
 - **登录完成时的区域规则**：
   - Host 在登录完成时按 `apps/host/src/auth/region-policy.ts` 的 `assertHostSessionRegion`（:35）判断，与桌面同一条 `canRestoreAuthSessionForMembership`；`runHostLogin` 已在 `apps/host/src/auth/login.mjs:117` 这样做。
   - 拒绝时回固定码 `REGION_MISMATCH`，窗口显示与桌面相同的提示 `login.errors.REGION_MISMATCH`（zh-CN `:9474` “登录服务区域与当前客户端不匹配”，en `:9517`）。
-  - 桌面登录事务里的“区域确认”一步（`realm-confirmation`，`authManager.ts:5505` 起）属于状态机本身，随登录事务一起搬到 Host，界面不变。
+  - 桌面登录事务里的“区域确认”一步（`realm-confirmation`，`authManager.ts:5522` 起）属于状态机本身，随登录事务一起搬到 Host，界面不变。
 
 ## 四、用户的决定与安全审查结论
 
@@ -170,13 +171,13 @@ Host 照做：
 
 - 类型定义：`packages/auth-client/src/types.ts:174–195`，包括 `accessToken`、`refreshToken`、`membership`，以及可选的 `accountToken`、`accountRefreshToken`。
 - 各路径在桌面上的调用点（`authManager.ts`）：
-  - 浏览器、SSO：`exchangeAuthorizationCode`，:5796，PKCE 的 verifier 在本进程里；
-  - 邮箱或手机验证码：`requestCode` :5723，`verifyCode` :5742；
-  - 选账号：`exchangeAccountMembership` :5814，`selectAccount` :5829；
-  - SSO 二次校验：`requestSsoVerificationCode` :5843，`verifySsoVerification` :5864；
-  - 绑定手机或邮箱：`requestBindingCode` :5874，`verifyBinding` :5890。
-- 落地：`finishFreshLogin`（:5491）→ `completeLogin`（:5298），把 refreshToken 写成当前会话，passport 的刷新令牌进保管库。这些都是**长期凭据**。
-- 设备绑定：桌面签发时用窗口的设备 id（`resolveRuntimeDeviceId`，`authManager.ts:362`）；Host 登录时用自己的设备 id（`getOrCreateHostDeviceId`，`login-cli.mjs:110`），并写进会话记录（`apps/host/src/auth/device-identity.mjs:19`）。
+  - 浏览器、SSO：`exchangeAuthorizationCode`，:5813，PKCE 的 verifier 在本进程里；
+  - 邮箱或手机验证码：`requestCode` :5740，`verifyCode` :5759；
+  - 选账号：`exchangeAccountMembership` :5831，`selectAccount` :5846；
+  - SSO 二次校验：`requestSsoVerificationCode` :5860，`verifySsoVerification` :5881；
+  - 绑定手机或邮箱：`requestBindingCode` :5891，`verifyBinding` :5907。
+- 落地：`finishFreshLogin`（:5508）→ `completeLogin`（:5315），把 refreshToken 写成当前会话，passport 的刷新令牌进保管库。这些都是**长期凭据**。
+- 设备绑定：桌面签发时用窗口的设备 id（`resolveRuntimeDeviceId`，`authManager.ts:369`）；Host 登录时用自己的设备 id（`getOrCreateHostDeviceId`，`login-cli.mjs:110`），并写进会话记录（`apps/host/src/auth/device-identity.mjs:19`）。
   - 用窗口设备 id 签发的会话交给 Host，Host 只能沿用那个 id（`resolveSessionDevice`，:23）；
   - `canRegisterHostDevice`（:30）会判为不可注册，Host 的 device-link 身份就起不来。
 
@@ -191,13 +192,13 @@ Host 照做：
   - 窗口只显示“请在浏览器中完成”和取消按钮，跨进程的只有“开始”“取消”两个动作。
 - 验证码、SSO 二次校验、绑定：窗口交的是用户输入的联系方式和一次性验证码，以及“发码”这个动作。ticket（`loginTicket`、`verificationTicket`、`bindTicket`）只在 Host 内存里。
 - 选账号：窗口只交 `accountId`，`accountToken` 或 `loginTicket` 留在 Host。
-- 人机验证：验证页由窗口的渲染层装载（地址是公开的，见第二节）；窗口把验证结果（`captchaToken`，一次性、短期）随 `request-code` 动作交给 Host（桌面同样在这一步带上，`authManager.ts:5724`）。
+- 人机验证：验证页由窗口的渲染层装载（地址是公开的，见第二节）；窗口把验证结果（`captchaToken`，一次性、短期）随 `request-code` 动作交给 Host（桌面同样在这一步带上，`authManager.ts:5741`）。
 - 跨进程的物品因此只有用户输入的一次性验证码（短期、服务端一次性）、联系方式、账号 id，以及人机验证的结果（一次性、短期），**都不是长期凭据**。渲染层本来就看得到这些，它们是用户自己输入的。
 
 ### S2. 经哪个本机接口
 
 - 渲染层 → preload → 窗口主进程：
-  - `apps/desktop/src/preload/preload.ts:2515–2526` 的 `auth*` 方法；
+  - `apps/desktop/src/preload/preload.ts:2520–2531` 的 `auth*` 方法；
   - 主进程按可信渲染层准入（`assertTrustedAppRendererEvent`）。
 - 窗口主进程 → Host：走客户端模式现有的合同代理。
   - 新通道加进 `HOST_CONTRACT_CHANNELS` 的 Auth 段，标 `trustedRenderer: true`。
@@ -223,10 +224,10 @@ Host 照做：
 
 ### S4. 有效期和一次性
 
-- Host 的登录事务照桌面的 `loginFlowEpoch` 和 `assertLoginFlowCurrent`（`authManager.ts:3678`）：
+- Host 的登录事务照桌面的 `loginFlowEpoch` 和 `assertLoginFlowCurrent`（`authManager.ts:3694`）：
   - 每次 begin 开一个新事务，作废上一个；
   - action 不属于当前事务，以 `AUTH_FLOW_SUPERSEDED` 拒绝；
-  - 事务开始提交（存会话、换 owner）后，cancel 不再生效，同桌面 `isLoginFlowCommitSealed`（:3702）；
+  - 事务开始提交（存会话、换 owner）后，cancel 不再生效，同桌面 `isLoginFlowCommitSealed`（:3718）；
   - 事务结束或超时（与浏览器授权同一上限），清掉 verifier、state、pollSecret 和各种 ticket。
 - 服务端一次性：
   - 授权码换一次就失效；
@@ -262,16 +263,16 @@ Host 照做：
 
 Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `AuthFlowState` 加 `retryAt`、`httpStatus`，`apps/desktop/src/shared/authIpc.ts:32`；`AuthFlowState` 在 `packages/auth-client/src/types.ts:319` 起）：
 
-- **浏览器一路**：只有 `{ step: "browser-redirect"; label }`（:333）。没有授权链接，也就没有 pollSecret 或 state。桌面是在主进程里自己打开授权地址（`shell.openExternal(authUrl)`，`authManager.ts:2967`、:3091），不交给渲染层；Host 照做，由 Host 打开系统浏览器。
-- **完成**：`{ step: "completed"; membership }`（:347），只有成员信息，没有令牌。
-- **联系方式的例外**：验证码一步的状态带回用户刚输入的 `identifier`（:332）；绑定一步可能带 `contact`（:342 起）；SSO 二次校验只带打码后的 `targetMasked`。这是界面回显用户自己的输入，属于设计内的字段。哨兵测试对联系方式的断言因此是：只允许出现在登录状态的这几个回显字段里，不出现在错误消息、日志和其它任何响应字段里。
+- **浏览器一路**：只有 `{ step: "browser-redirect"; label }`（:333）。没有授权链接，也就没有 pollSecret 或 state。桌面是在主进程里自己打开授权地址（`shell.openExternal(authUrl)`，`authManager.ts:2983`、:3107），不交给渲染层；Host 照做，由 Host 打开系统浏览器。
+- **完成**：`{ step: "completed"; membership }`（`types.ts:347`），只有成员信息，没有令牌。
+- **联系方式的例外**：验证码一步的状态带回用户刚输入的 `identifier`（`types.ts:332`）；绑定一步可能带 `contact`（:342 起）；SSO 二次校验只带打码后的 `targetMasked`。这是界面回显用户自己的输入，属于设计内的字段。哨兵测试对联系方式的断言因此是：只允许出现在登录状态的这几个回显字段里，不出现在错误消息、日志和其它任何响应字段里。
 
 ### S6. 失败时窗口不留副本
 
-- 按 S1 的做法，窗口内存里从来没有令牌。用户输入的验证码只在渲染层表单状态和一次 IPC 参数里，表单关闭或重置时随状态丢弃，同桌面的 `resetLoginFlowState`（`authManager.ts:3662`）。
-- 窗口主进程在客户端模式下不能再走本地登录状态机。现在 `auth:dispatch-login-action`、`auth:accounts:begin-add` 在本地注册，本地会持有 `pendingAccountToken` 等变量（`authManager.ts:376`），`completeLogin` 会落盘。桌面 PR 要做到两点：
+- 按 S1 的做法，窗口内存里从来没有令牌。用户输入的验证码只在渲染层表单状态和一次 IPC 参数里，表单关闭或重置时随状态丢弃，同桌面的 `resetLoginFlowState`（`authManager.ts:3678`）。
+- 窗口主进程在客户端模式下不能再走本地登录状态机。现在 `auth:dispatch-login-action`、`auth:accounts:begin-add` 在本地注册，本地会持有 `pendingAccountToken` 等变量（`authManager.ts:383`），`completeLogin` 会落盘。桌面 PR 要做到两点：
   1. 这些通道进合同后由代理接管，本地处理器被去掉；
-  2. **必做项：第二道保险**。客户端模式下 Host 续期接管时，也就是续期 override 已设置时，本地 `completeLogin`、写会话、写保管库一律拒绝，写法同 `requestStableOwnerPostCommit`（:318）。这是桌面 PR，逐行送审。
+  2. **必做项：第二道保险**。客户端模式下 Host 续期接管时，也就是续期 override 已设置时，本地 `completeLogin`、写会话、写保管库一律拒绝，写法同 `requestStableOwnerPostCommit`（:325）。这是桌面 PR，逐行送审。
 - Host 交付失败：窗口显示错误，让用户重试；**不在本地完成登录、不落盘、不做兜底**。
 - Host 侧失败：Host 撤销刚签发的会话，同 `runHostLogin` 的 `endRefusedSession`（`login.mjs:122` 起）；并回滚会话记录，同 `commitLoginSessionAndOwner`。
 
@@ -308,7 +309,7 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
    - 没有确认宿主时不切，见 :104 的注释。
 3. 按当前代码补充：设置页的账号卡片 `components/settings/UserProfileCard.tsx` 也有“添加账号”，即 `openAddAccount`，:146。它用的是同一个确认框（:131 起）。
 
-添加账号的登录页 `components/login/AddAccountLoginPage.tsx:47` 调 `beginAddAccount`。切换的路径是 `AuthContext.switchAccount`（`contexts/AuthContext.tsx:605`）→ preload → `auth:accounts:switch`。
+添加账号的登录页 `components/login/AddAccountLoginPage.tsx:47` 调 `beginAddAccount`。切换的路径是 `AuthContext.switchAccount`（`contexts/AuthContext.tsx:612`）→ preload → `auth:accounts:switch`。
 
 桌面今天的两点行为照旧，登记在此：
 
@@ -317,7 +318,7 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
 
 ## 七、复用账号边界：`runOwnerBoundary`
 
-切换就是一次账号边界，经 `apps/host/src/agent/owner-boundary.ts` 的 `runOwnerBoundary(ownerBoundary, …)` 走。`ownerBoundary` 在 `main.ts:1242` 建立。`begin()` 一开始就做三件事：
+切换就是一次账号边界，经 `apps/host/src/agent/owner-boundary.ts` 的 `runOwnerBoundary(ownerBoundary, …)` 走。`ownerBoundary` 在 `main.ts:1251` 建立。`begin()` 一开始就做三件事：
 
 - 输入运行时进入停止态（`beginStop`，`input-queue.mjs:579`）：不再接新输入，此后结束的回合记作中断；
 - 持有共用的回合结束写入压制，直到拆完；
@@ -340,12 +341,12 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
    - B 与当前账号相同，直接返回；
    - 有任务在跑、而请求没带“已确认中断”时，拒绝并回固定码（8.5）。
 2. **先验 B，不动 A**（全部在 begin 之前）：
-   - **取 B 的资源会话**：先续期，不行再用 passport 兑换。主体搬自桌面 `switchSavedAccount`（`authManager.ts:4105` 起；续期 :4159，兑换 :4184）。
+   - **取 B 的资源会话**：先续期，不行再用 passport 兑换。主体搬自桌面 `switchSavedAccount`（`authManager.ts:4121` 起；续期 :4175，兑换 :4200）。
    - **写回保管库**：续期会轮换 B 的 refresh token，所以拿到后立刻在锁内把 B 轮换后的凭据写回保管库，只写保管库、不标为当前，也不写当前会话。桌面也是这样写回：
-     - 续期成功经 `replaceResourceSessionIfCurrent`（:1410）；
-     - passport 兑换后经 `rememberResourceSession(…, { markActive: false })`（:4187，定义 :1384）。
+     - 续期成功经 `replaceResourceSessionIfCurrent`（:1426）；
+     - passport 兑换后经 `rememberResourceSession(…, { markActive: false })`（:4203，定义 :1400）。
    - **能只读完成的校验都放在这里**：
-     - 区域：按 `assertHostSessionRegion` 判 B 的 membership，同桌面在拿到令牌后、提交前判 `REGION_MISMATCH`（`authManager.ts:4193–4195`）；
+     - 区域：按 `assertHostSessionRegion` 判 B 的 membership，同桌面在拿到令牌后、提交前判 `REGION_MISMATCH`（`authManager.ts:4209–4211`）；
      - 技能投影：用 `readGhostSkillProjectionBoundaryState`（`authBoundaryQuarantine.ts:571`）只读确认投影边界可读、是当前账号的 stable，不在 pending 或隔离状态。“撤销 A 的投影时写盘失败”这类问题做不到只读预检，不提前。
      - B 的库：现有代码没有不改动的可开性检查。库版本比这个 Host 新时，要到开库迁移那一步才以 `MIGRATE_FAILED` 报出（`apps/desktop/src/main/localDb/index.ts:383–385`）。不为此加新机制，不提前，交给 8.2 的第二层。
    - B 不可用、或任一预检不过，就留在 A 并说明原因（④）；这时没有 begin，A 的运行时与会话都不变。
@@ -355,7 +356,7 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
    - afterDispose：
      1. 在 3.1 的入口里调 `commitLoginSessionAndOwner`：锁内写 B 的当前会话记录，再提交 owner；过渡里撤销 A 的技能投影。
      2. 有阻碍就中止，会话记录回滚到 A。
-     3. 然后 `ensureRuntime(B)`。`main.ts:677` 的“运行中不许换 owner”前提是 activeOwner 已被 dispose 清空，所以拆干净后可以调；它会取租约、重做并存扫描、开 B 的库（没有就新建）。
+     3. 然后 `ensureRuntime(B)`。`main.ts:685` 的“运行中不许换 owner”前提是 activeOwner 已被 dispose 清空，所以拆干净后可以调；它会取租约、重做并存扫描、开 B 的库（没有就新建）。
      4. 之后 `startDeviceLink()`，并重新排续期。
 4. **收尾**：成功与失败分开写。两种情况都必须发 `auth_changed`，否则窗口会一直停在“正在切换账号…”。
    - 成功：`commitVolatileAppSession('cloud', B)` → 释放边界 → `eventHub.clear()` → 发 `auth_changed`。窗口经 `receiveHostAuthState` 换到 B，平台客户端重连成 B。
@@ -378,26 +379,26 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
   - 这一支只会在用户已经确认中断之后走到，或者当时本来就没有任务在跑（8.5）。结果是没换成功；刚才在跑的任务显示为中断，可以手动继续；不丢数据。
 - **第三层：B 失败，再用 A 重开也失败**：
   - 会话记录仍是 A，不能停在 B；
-  - 运行时进入与启动失败相同的 error 状态：同 `main.ts:2103–2110`，dispose、`commitVolatileAppSession('signed-out')`、`runtime.state = 'error'`；`runtime.detail` 只放固定错误码（S5）；
+  - 运行时进入与启动失败相同的 error 状态：同 `main.ts:2117–2125`，dispose、`commitVolatileAppSession('signed-out')`、`runtime.state = 'error'`；`runtime.detail` 只放固定错误码（S5）；
   - 发 `auth_changed`；
   - 重启 Host 可以恢复：会话是 A，按 3.3 认 A；如果 owner 停在 B 或 pending，启动时按会话补提交成 A。
-  - **窗口看到什么**（按现在的代码核实）：启动失败的收尾经 `disposeOwnerRuntime` 把账号清成未登录（`main.ts:1982`、:1986），`projectHostAuthState` 因此投影出未登录。窗口看到的是登录页，看不到 error 和原因。原因只在 `/api/probe` 的 `runtime`（`state: 'error'` 与 `detail`，`main.ts:1442`）里，即 `cindy-host status --json` 能看到。这一步今天走不通，见第九节“error 状态下的恢复”。
+  - **窗口看到什么**：启动失败的收尾经 `disposeOwnerRuntime` 把账号清成未登录（`main.ts:1994`、:1998）。原先 `projectHostAuthState` 因此投影出普通的未登录，窗口看到的是登录页，看不到 error 和原因；原因只在 `/api/probe` 的 `runtime`（`main.ts:1454`）里。**已改（甲，2026-11-17）**：启动收尾把原因归成一个固定码（`apps/host/src/start-failure.ts`，存进 `runtime.unavailable`），auth state 带 `hostUnavailable: { reason }`；窗口在登录页显示原因与怎么办，不提供本地登录和跳过登录（`apps/desktop/src/shared/hostStartFailure.ts`，见放行表第五节“甲：Host 启动失败时窗口只看到登录页”）。本例（开 B 的库失败）显示的是 `HOST_DATABASE_UNAVAILABLE`。
 
 **从 error 状态恢复**（以 8.3 的“会话还没写回 A”一行为例：重启后按会话起 B，开库仍失败，Host 停在 error）。按集成分支现在的代码逐步核实：
 
 1. **窗口能连上 Host**：
-   - Host 先开始监听、再启动运行时（`main.ts:2069` 在 :2070 之前），`/api/auth/*` 不算 owner 请求（`server.mjs:166`）；
+   - Host 先开始监听、再启动运行时（`main.ts:2083` 在 :2084 之前），`/api/auth/*` 不算 owner 请求（`server.mjs:166`）；
    - 窗口的事件流连上时读 `/api/auth/state`（`bootstrap-electron.ts:1464`）。
-   - 能连上，但看到的是未登录，看不到错误（见上一条）。
+   - 能连上。原先看到的是未登录、看不到错误；现在看到原因面板（见上一条）。
 2. **退出登录能执行，回到未登录**：
    - `/api/auth/logout` 不受 owner 请求闸门挡（`server.mjs:257`）；
-   - `main.ts` 的 logout 先 `await startup`（:1487），启动失败已被 catch 收住，不会卡住；
-   - `disposeOwnerRuntime` 对已拆掉的运行时再跑一次，末尾把运行时置回 `uninitialized`（:1989）；
+   - `main.ts` 的 logout 先 `await startup`（:1499），启动失败已被 catch 收住，不会卡住；
+   - `disposeOwnerRuntime` 对已拆掉的运行时再跑一次，末尾把运行时置回 `uninitialized`（:2001）；
    - `logoutHostSession` 删掉会话记录 B，并尽力吊销（`apps/host/src/auth/logout.mjs:70`）。
-   - 一处不干净：启动失败时 `accountUser` 已被清空（`main.ts:1982`），logout 取到的 `outgoingUser`（:1493）为空，所以不给 B 写退出墓碑，也不把 B 从保管库移走（`logout.mjs:35` 只在有 ownerId 时做）。B 的凭据仍留在保管库里，没有被标为已退出。
-   - 另外，窗口此时显示的是登录页，界面上本来没有“退出登录”入口。所以这一步能执行，但恢复不需要它。
+   - 一处不干净：启动失败时 `accountUser` 已被清空（`main.ts:1994`），logout 取到的 `outgoingUser`（:1505）为空，所以不给 B 写退出墓碑，也不把 B 从保管库移走（`logout.mjs:35` 只在有 ownerId 时做）。B 的凭据仍留在保管库里，没有被标为已退出。
+   - 另外，窗口此时显示的是原因面板（原先是登录页），界面上没有“退出登录”入口。所以这一步能执行，但恢复不需要它。
 3. **登回 A，A 的数据还在**：
-   - `cindy-host login`（今天就能用）：error 状态下 serve 的运行时 owner 为空，`serveLoginAdmission`（`login-cli.mjs` 的准入）和 :139 的检查都放行。它写会话 A，并把 owner 提交回 A（:144）。serve 不中途采用新会话（乙 10），要重启 Host；重启后两个库都在，按会话认 A（`main.ts:2074–2086`），起 A。
+   - `cindy-host login`（今天就能用）：error 状态下 serve 的运行时 owner 为空，`serveLoginAdmission`（`login-cli.mjs` 的准入）和 :139 的检查都放行。它写会话 A，并把 owner 提交回 A（:144）。serve 不中途采用新会话（乙 10），要重启 Host；重启后两个库都在，按会话认 A（`main.ts:2088–2100`），起 A。
    - 窗口登录（3.5）：今天客户端模式下窗口的登录在本地执行（第十节的测试期限制），不可用。按方案改成 Host 的登录事务以后，登录页直接登 A，Host 提交会话与 owner 到 A 并起 A，不必重启。前提是登录事务在 error 状态下也能开始，列为第九节的必做项。
    - A 的库 `cindy-<A>.db` 在切换、回滚、退出登录、重新登录这几步里都不被删除或改写，数据在。
 
@@ -424,12 +425,12 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
 
 ### 8.4 锁与网络请求
 
-- **照桌面：网络请求不在保管库锁里做**。桌面 `syncSavedAccounts`（`authManager.ts:4074` 起）的做法是：
+- **照桌面：网络请求不在保管库锁里做**。桌面 `syncSavedAccounts`（`authManager.ts:4090` 起）的做法是：
   1. 在锁外读一次保管库；
   2. 在锁外续期、拉成员；
-  3. 进锁后经 `replacePassportSessionIfCurrent`（:1573）重读、与这次请求用的令牌比对，一致才写。
-- 切换时续这个账号也一样，写回走 `replaceResourceSessionIfCurrent`（:1410），同样是锁内重读、比对。
-- 锁只在本地读写时持有，桌面每次等锁 5 秒（`waitMs: 5_000`，`authManager.ts:1219`），Host 的退出登录（`main.ts:1519`）与续期（`apps/host/src/auth/refresh.mjs:86`）也是 5 秒。
+  3. 进锁后经 `replacePassportSessionIfCurrent`（:1589）重读、与这次请求用的令牌比对，一致才写。
+- 切换时续这个账号也一样，写回走 `replaceResourceSessionIfCurrent`（:1426），同样是锁内重读、比对。
+- 锁只在本地读写时持有，桌面每次等锁 5 秒（`waitMs: 5_000`，`authManager.ts:1235`），Host 的退出登录（`main.ts:1531`）与续期（`apps/host/src/auth/refresh.mjs:86`）也是 5 秒。
 - Host 的 `sync` 与第 2 步照这个做法：网络请求在锁外，各自用认证客户端现有的请求超时；锁内不做网络请求。退出登录等锁不会被网络请求拖过 5 秒。
 
 ### 8.5 运行中任务的兜底
@@ -442,14 +443,14 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
 
 今天窗口只经历过 A → 未登录 →（重启后）B；切换由 Host 做以后，窗口会直接收到“另一个账号”。现状：
 
-- **窗口主进程**：`onAuthChanged` → `receiveHostAuthState`（`bootstrap-electron.ts:1517–1519`，`authManager.ts:485–497`）只把内存里的 owner 提交成 B（`commitVolatileAppSession('cloud', B)`），替换转发来的状态并通知渲染层，再重连平台客户端。
+- **窗口主进程**：`onAuthChanged` → `receiveHostAuthState`（`bootstrap-electron.ts:1517–1519`，`authManager.ts:501–513`）只把内存里的 owner 提交成 B（`commitVolatileAppSession('cloud', B)`），替换转发来的状态并通知渲染层，再重连平台客户端。
   - 它不跑桌面本地切换时的账号拆除（`accountSwitchTeardown`，`bootstrap-electron.ts:2690`），也不发“边界进行中”的通知。
   - 客户端模式下窗口主进程还持有哪些按账号的状态，桌面 PR 要逐项列出，并决定在这里清掉。
-- **渲染层**：`AuthContext` 的 `applyIncomingState`（`apps/desktop/src/renderer/contexts/AuthContext.tsx:254` 起）按 `dataOwnerId` 判断换了账号（`ownerBoundaryCommitted`，:330）。换了就：
+- **渲染层**：`AuthContext` 的 `applyIncomingState`（`apps/desktop/src/renderer/contexts/AuthContext.tsx:260` 起）按 `dataOwnerId` 判断换了账号（`ownerBoundaryCommitted`，:336）。换了就：
   - 结束旧账号的会话缓存（`publishDataOwnerGeneration(…, { finalizeSessions: true })`）；
-  - `sessionsStore.reset()`、`clearWorkersCache()`（:344–345）；
-  - 把按账号分区的本地存储换到 B（:357 起）。
-  - 这与桌面本地切换时渲染层的处理是同一段代码。差别只在：本窗口发起的切换先经 `runDataOwnerBoundary`（:214）设一道提交前的围栏；别的客户端发起、或 Host 自己因失败落回 A 的推送没有这道围栏。
+  - `sessionsStore.reset()`、`clearWorkersCache()`（:350–351）；
+  - 把按账号分区的本地存储换到 B（:363 起）。
+  - 这与桌面本地切换时渲染层的处理是同一段代码。差别只在：本窗口发起的切换先经 `runDataOwnerBoundary`（:220）设一道提交前的围栏；别的客户端发起、或 Host 自己因失败落回 A 的推送没有这道围栏。
 - 因为没有那道围栏，在 A 账号下发出、B 的推送到达之后才返回的请求，结果必须丢弃，不能写进 B 的界面状态。
 - 列为桌面侧的必做测试，见第九节。
 
@@ -481,7 +482,7 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
 5. `cindy-host login` 写出与桌面登录相同的存储状态（3.4）；之后去掉 C 的差别 a。
 6. 账号同步 `sync` 的主体搬成共用核心，桌面与 Host 共用；网络请求在锁外，锁内重读比对后写（8.4）。
 7. error 状态下的恢复（8.2 末尾）：
-   - Host 处在启动失败的 error 状态时，投影给窗口的状态带固定原因码，窗口在登录页说明原因（文案待用户定，不带 `runtime.detail` 原文）；
+   - Host 处在启动失败的 error 状态时，投影给窗口的状态带固定原因码，窗口在登录页说明原因（文案待用户定，不带 `runtime.detail` 原文）。**已做**（甲，2026-11-17，放行表第五节“甲：Host 启动失败时窗口只看到登录页”）；
    - 登录事务在 error 状态下也能开始，登回 A 后起 A，不必重启；
    - error 状态下退出登录按会话记录里的账号写退出墓碑、从保管库移走，不依赖已经清空的 `accountUser`。
 
@@ -541,3 +542,5 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
 - 窗口不再提交 owner。
 
 只落 Host 侧不解除：窗口仍会在本地写。
+
+同时解除的还有“Host 启动失败时窗口不在本地登录”的那两个条件（3.5）：3.5 落地后去掉 `dispatchLoginAction` 与 `enterLocalMode` 开头的 `hostNotStartedInClientMode`，原因面板保留。
