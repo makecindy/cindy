@@ -27497,7 +27497,10 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.close();
   });
 
-  it('interrupts a retrying turn when Codex reports that its model is unavailable', async () => {
+  it.each([
+    { additionalDetails: "unexpected status 400 Bad Request: The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.", status: 400 },
+    { additionalDetails: 'unexpected status 403 Forbidden: user not allowed to access model. This user can only access models=[qwen/synthetic]. Tried to access group/synthetic-model', status: 403 },
+  ])('interrupts a retrying turn on explicit model rejection ($status)', async ({ additionalDetails, status }) => {
     const interruptAck = deferred<Record<string, never>>();
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, method => method === Method.TurnInterrupt ? interruptAck.promise : undefined);
@@ -27512,8 +27515,8 @@ describe('CodexAgent turn lifecycle', () => {
       const turnId = 'turn-1';
       const error = {
         message: 'Reconnecting... 1/5',
-        additionalDetails: "unexpected status 400 Bad Request: The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
-        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 400 } },
+        additionalDetails,
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: status } },
       } as const;
 
       handlers.turnStarted?.({ threadId, turn: { id: turnId } });
@@ -27544,7 +27547,10 @@ describe('CodexAgent turn lifecycle', () => {
     }
   });
 
-  it.each([true, false])('marks partial sampling output failed on model rejection with willRetry=%s', async (willRetry) => {
+  it.each([true, false].flatMap(willRetry => [
+    { willRetry, code: 'model_not_found', status: 400 },
+    { willRetry, code: 'user_model_access_denied', status: 403 },
+  ]))('marks partial sampling output failed on model rejection ($status, retry=$willRetry)', async ({ willRetry, code, status }) => {
     const interruptAck = deferred<Record<string, never>>();
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, method => method === Method.TurnInterrupt ? interruptAck.promise : undefined);
@@ -27558,8 +27564,8 @@ describe('CodexAgent turn lifecycle', () => {
       const turnId = 'turn-1';
       const error = {
         message: 'Reconnecting... 1/5',
-        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 400 } },
-        additionalDetails: '{"error":{"code":"model_not_found"}}',
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: status } },
+        additionalDetails: JSON.stringify({ error: { code } }),
       };
 
       handlers.turnStarted?.({ threadId, turn: { id: turnId } });
@@ -27588,6 +27594,38 @@ describe('CodexAgent turn lifecycle', () => {
       await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
     } finally {
       await handle.close();
+    }
+  });
+
+  // #11061: new denial classification must retain the shared ACK/cancellation contract.
+  it.each(['success', 'cancel'] as const)('keeps %s authoritative while a denied-model interrupt is pending', async ending => {
+    const interruptAck = deferred<Record<string, never>>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.TurnInterrupt ? interruptAck.promise
+      : method === Method.TurnStart ? { turn: { id: 'turn-1' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'denial-settlement', model: 'gpt-6.1-sol', workingDir: '/repo' });
+    const cancellation = new AbortController();
+    const events: AgentEvent[] = [];
+    const pump = (async () => { for await (const event of handle.events()) events.push(event); })();
+    try {
+      await handle.send({ type: 'user', content: 'hello' }, { signal: cancellation.signal });
+      const handlers = host.getThreadHandlers()!;
+      const threadId = 'start-thread-id', turnId = 'turn-1';
+      handlers.turnStarted?.({ threadId, turn: { id: turnId } });
+      handlers.error?.({ threadId, turnId, willRetry: true, error: {
+        message: 'Reconnecting... 1/5', additionalDetails: 'HTTP 403: user not allowed to access model',
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 403 } },
+      } });
+      expect(handle.isTurnRunning?.()).toBe(true);
+      if (ending === 'success') handlers.turnCompleted?.({ threadId, turn: { id: turnId, status: 'completed' } });
+      else cancellation.abort();
+      interruptAck.resolve({});
+      await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
+      expect(events.some(e => e.type === 'error' && (e.data as { reason?: string }).reason === 'model_unavailable')).toBe(false);
+      if (ending === 'success') expect(events.filter(e => e.type === 'done')).toHaveLength(1);
+    } finally {
+      await handle.close();
+      await pump;
     }
   });
 
@@ -33414,6 +33452,106 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // #11032: exercise the actual Agent event queue + timed interrupt, not a helper.
+  // Existing watchdog cases omit native structured gateway status (unit, fake clock).
+  it('retains the latest safe upstream status through watchdog settlement and clears it for the next turn', async () => {
+    vi.useFakeTimers();
+    try {
+      const { handle, handlers, seen } = await startReconnectTurn(new CodexAgent(createDeps()), 'gateway-diagnostics');
+      const reconnect = (turnId: string, attempt: number, status?: number) => handlers.error?.({
+        threadId: 'start-thread-id', turnId, willRetry: true,
+        error: { message: `Reconnecting... ${attempt}/5`,
+          ...(status ? { codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: status } } } : {}),
+          additionalDetails: 'https://private.invalid/?token=secret PRIVATE_RESPONSE EOF',
+        },
+      } as never);
+      reconnect('turn-1', 1, 502);
+      await vi.advanceTimersByTimeAsync(60_000);
+      reconnect('turn-1', 2, 503);
+      reconnect('turn-1', 3); // A status-less progress notice must not erase known facts.
+      await vi.advanceTimersByTimeAsync(60_001);
+      expect(seen).toContainEqual(expect.objectContaining({ type: 'error', data: expect.objectContaining({
+        reason: 'codex_reconnect_stalled', errorStatus: 503, isTerminal: true,
+        message: expect.stringContaining('(HTTP 503)'), idleMs: 120_000,
+      }) }));
+      expect(JSON.stringify(seen)).not.toMatch(/private|secret|PRIVATE_RESPONSE|EOF/);
+      const priorEnd = seen.length;
+      await handle.send({ type: 'user', content: 'next' });
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
+      reconnect('turn-1', 4, 504); // A late old turn cannot poison the new turn.
+      reconnect('turn-2', 1);
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      const terminal = seen.slice(priorEnd).find(e => e.type === 'error' && (e.data as { reason?: string }).reason === 'codex_reconnect_stalled');
+      expect(terminal).toBeDefined();
+      expect(terminal!.data).not.toHaveProperty('errorStatus');
+      expect((terminal!.data as { message: string }).message).not.toContain('HTTP');
+      await handle.close();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([false, true])('clears gateway diagnosis on real progress (late success: %s)', async lateSuccess => {
+    vi.useFakeTimers();
+    try {
+      const ack = deferred<unknown>();
+      const { handle, handlers, seen } = await startReconnectTurn(new CodexAgent(createDeps()), 'gateway-recovery', ack.promise);
+      handlers.error?.({ threadId: 'start-thread-id', turnId: 'turn-1', willRetry: true,
+        error: { message: 'Reconnecting... 1/5', codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 502 } } },
+      } as never);
+      handlers.agentMessageDelta?.({ threadId: 'start-thread-id', turnId: 'turn-1', itemId: 'answer', delta: 'Recovered' });
+      handlers.itemCompleted?.({ threadId: 'start-thread-id', turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'answer', text: 'Recovered', phase: 'final_answer' },
+      } as never);
+      emitReconnect(handlers, 1);
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      if (lateSuccess) handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: {
+        id: 'turn-1', status: 'completed', items: [{ type: 'agentMessage', id: 'final', text: 'Recovered', phase: 'final_answer' }],
+      } } as never);
+      ack.resolve({});
+      await vi.advanceTimersByTimeAsync(1);
+      const terminals = seen.filter(e => e.type === 'error' && (e.data as { isTerminal?: boolean }).isTerminal);
+      if (lateSuccess) {
+        expect(terminals).toEqual([]);
+        expect(seen).toContainEqual(expect.objectContaining({ type: 'done', data: expect.objectContaining({ result: 'Recovered' }) }));
+      } else {
+        expect(terminals).toHaveLength(1);
+        expect(terminals[0]!.data).not.toHaveProperty('errorStatus');
+      }
+      await handle.close();
+    } finally { vi.useRealTimers(); }
+  });
+
+  // #11032 review: a failed Stop must not roll a newer native diagnosis back.
+  it.each([
+    { before: undefined, during: 502, expected: 502 },
+    { before: 502, during: 503, expected: 503 },
+    { before: 502, during: undefined, expected: undefined },
+    { before: 502, during: null, expected: 502 },
+  ])('preserves current reconnect facts when Stop fails: %j', async scenario => {
+    vi.useFakeTimers();
+    try {
+      const ack = deferred<unknown>();
+      const { host, handle, handlers, seen } = await startReconnectTurn(new CodexAgent(createDeps()), 'stop-diagnostics', ack.promise);
+      const reconnect = (status?: number) => handlers.error?.({
+        threadId: 'start-thread-id', turnId: 'turn-1', willRetry: true,
+        error: { message: 'Reconnecting... 1/5',
+          ...(status === undefined ? {} : { codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: status } } }),
+        },
+      } as never);
+      reconnect(scenario.before);
+      const stopping = expect(handle.requestGracefulStop?.()).rejects.toThrow('interrupt rejected');
+      // null means no new notification; undefined is a fresh status-less episode.
+      if (scenario.during !== null) reconnect(scenario.during);
+      ack.reject(new Error('interrupt rejected'));
+      await stopping;
+      host.request.mockImplementation(async method => method === Method.TurnInterrupt ? {} : undefined);
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      const terminal = seen.find(e => e.type === 'error' && (e.data as { reason?: string }).reason === 'codex_reconnect_stalled');
+      expect(terminal).toBeDefined();
+      expect((terminal!.data as { errorStatus?: number }).errorStatus).toBe(scenario.expected);
+      await handle.close();
+    } finally { vi.useRealTimers(); }
   });
 
   // #7055: after WebSocket retries Codex uploads the full history over HTTPS and emits

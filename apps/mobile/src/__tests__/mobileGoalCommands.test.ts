@@ -91,7 +91,8 @@ function existingHarness(args = 'target') {
     remoteSessionStore: { setGoalStatus: vi.fn(), acquireSessionMessageWork: vi.fn(() => ({ release })), getSessionDeviceId: () => 'host' }, setContextSheetView: vi.fn(), setContextSheetOpen: vi.fn(),
     setGoalRestore: vi.fn(), router: { setParams: vi.fn() }, composerDocumentRef: { current: initial },
     // Native editors have a mounted handle without the optional WebView flush.
-    composerInputRef: { current: {} },
+    composerInputRef: { current: { blur: vi.fn() } },
+    setComposerVoiceHoldArmed: vi.fn(),
     composerDocumentsEqual: (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b),
     applyComposerDocument: vi.fn(), normalizeComposerDocument, humanizeRemoteError,
     composerDraftHydrated: true, voiceState: 'idle', slashCommandsRef: { current: [] }, queueEditingRef: { current: null }, messageEditingRef: { current: null }, messageEditSubmittingRef: { current: false },
@@ -239,6 +240,8 @@ describe('existing task /goal send boundary', () => {
     expect(h.bindings.mobileDurableOutbox.add).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       item: expect.objectContaining({ sessionId: 'existing-task', text: 'ordinary follow-up' }),
     }));
+    expect(h.bindings.composerInputRef.current.blur).toHaveBeenCalledOnce();
+    expect(h.bindings.setComposerVoiceHoldArmed).toHaveBeenCalledExactlyOnceWith(false);
     expect(h.bindings.sendInFlightRef.current).toBe(false);
     expect(h.bindings.sending).toBe(false);
     expect(h.release).toHaveBeenCalledTimes(2);

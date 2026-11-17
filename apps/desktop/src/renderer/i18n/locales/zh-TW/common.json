@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "儲存",
     "promptUnsupported": "目前 Pi 執行位置不支援系統提示詞片段。",
+    "nativeHooksUnsupported": "工具掛鉤僅支援本機 Claude Code 與 Pi。",
     "title": "任務插件",
     "description": "為這個任務選擇插件。修改從下一則訊息起生效。",
     "unsupported": "每次請求前處理僅支援本機 Pi，目前任務的引擎不支援。",
@@ -1361,7 +1362,7 @@
     "REMOTE_PROVIDER_UPDATING": "供應商憑證正在更新，請稍後重試",
     "REMOTE_PROVIDER_UNSUPPORTED": "該供應商不支援 SSH 遠端會話，請更換來源",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "遠端任務不能使用 Claude 訂閱，請選擇閘道器或 API Key 模型",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "目標裝置長時間沒有回應，請檢查遠端裝置後重試",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "暫時收不到目標裝置的回應，可能是網路較慢或裝置忙碌。Cindy 會自動持續偵測，連線恢復後再試",
     "INTERNAL": "操作失敗，請稍後重試。",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "SSH 設定已在磁碟上變更，請重新載入後再試。",
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定已儲存，但 Cindy 重新整理失敗。請重新載入 SSH 設定。",
@@ -4302,7 +4303,6 @@
           "label": "在哪台電腦執行",
           "optionLocal": "這台電腦",
           "notSignedIn": "未登入",
-          "autoBorrowing": "這台電腦還沒登入，新任務在 {{device}} 上執行，不用再登入。",
           "local": "新任務在這台電腦執行。也可以改選你另一台已登入的電腦。",
           "pinned": "新任務在 {{device}} 上執行，使用那台電腦的登入。已在執行的任務不受影響。",
           "inline": "執行於",
@@ -8250,6 +8250,8 @@
         "subscribeTopics": "旁聽你的任務動態（每輪往來與任務事件，不含訊息內容）",
         "subscribeMessage": "訊息內容事件",
         "subscribeMessageDetail": "接收已儲存的使用者訊息與 AI 回覆；附件透過個別讀取與交接取得。",
+        "subscribeToolExecution": "工具執行過程",
+        "subscribeToolExecutionDetail": "接收工具名稱、輸入、結果與錯誤；僅旁聽，不改變執行。",
         "subscribeTaskState": "任務狀態事件",
         "subscribeTaskStateDetail": "接收任務的執行、等待、完成、封存與隱藏狀態變更。",
         "subscribeActivity": "旁聽 AI 何時在思考、何時在等你",
@@ -8272,6 +8274,10 @@
         "subscribeStartTurnDetail": "僅在你為任務選擇此插件時，讀取本則訊息並選擇已連接的模型、推理強度及 Fast。出錯按該任務的設定處理，不能替你批准操作。",
         "subscribeModelRequest": "可在選定任務中處理每次模型請求",
         "subscribeModelRequestDetail": "僅在你為任務選擇此插件時，讀取並處理傳送給模型的請求內容，調整模型和參數。目前僅支援本機 Pi；出錯按任務設定處理，不包含連接憑證。",
+        "subscribeToolCall": "可處理所選任務的工具呼叫",
+        "subscribeToolCallDetail": "可讀取、修改或拒絕工具參數，實際支援隨引擎而異；不能替你批准操作。",
+        "subscribeToolResult": "可處理所選任務的工具結果",
+        "subscribeToolResultDetail": "可讀取結果，按引擎能力補充上下文或改寫結果；不會撤銷已執行的操作。",
         "subscribeStartTask": "可為新任務選模型",
         "subscribeStartTaskDetail": "新任務選了它提供的模型時，它會看第一則訊息，從你已連接的模型裡選一個。這個節點只在第一則訊息送出前執行一次。",
         "card": "渲染訊息卡片",
@@ -12549,6 +12555,7 @@
       "createOwnApp": "建立我的 App ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ 有 {{count}} 個附件未能傳送：{{names}}",
+    "outboundAttachmentOverLimit": "{{name}}（超過 {{limit}} MB 上限）",
     "unnamedAttachment": "未命名附件",
     "text": {
       "discord": {
@@ -13487,9 +13494,17 @@
         "submitLabel": "送出答案",
         "multiSelectHint": "（可複選）",
         "resolved": "✅ 已選：{{option}}",
+        "resolvedLabeled": "✅ {{label}}：{{option}}",
         "expired": "卡片已過期",
         "textHint": "僅提問者可作答。回覆 {{code}} 加答案；多題用「{{code}} 2：答案」，填好後回覆 {{code}} OK 送出。",
-        "replyHint": "僅提問者可作答。點選選項；多題或複選選好後送出。\n回覆 {{code}} 加答案；多題用「{{code}} 2：答案」，填好後回覆 {{code}} OK 送出。"
+        "replyHint": "僅提問者可作答。點選選項；多題或複選選好後送出。\n回覆 {{code}} 加答案；多題用「{{code}} 2：答案」，填好後回覆 {{code}} OK 送出。",
+        "nextLabel": "下一題",
+        "stepHint": "僅提問者可作答。點選選項即可作答，也可回覆 {{code}} 加文字答案。",
+        "stepSubmitHint": "僅提問者可作答。選好後點「{{action}}」；也可回覆 {{code}} 加文字答案，再回覆 {{code}} OK。",
+        "stepTextHint": "僅提問者可作答。回覆 {{code}} 加你的答案。",
+        "unanswered": "⚠️ 第 {{numbers}} 題尚未作答，全部答完後再送出。",
+        "unansweredSingle": "⚠️ 尚未作答，請先選擇或填寫答案。",
+        "numberSeparator": "、"
       }
     }
   },
@@ -13981,6 +13996,14 @@
         "standard": "標準",
         "fast": "快速",
         "ultrafast": "超快"
+      },
+      "discoveredCopy": {
+        "title": "改用「{{device}}」上的 {{provider}}？",
+        "description": "{{unavailable}}確認後由「{{device}}」執行，之後隨時可以在這裡換回。",
+        "unavailableHere": "這台電腦上的 {{provider}} 現在無法使用。",
+        "unavailableOn": "「{{device}}」上的 {{provider}} 現在無法使用。",
+        "confirm": "改用",
+        "cancel": "保持不變"
       }
     },
     "permissionSelector": {
@@ -14271,7 +14294,8 @@
         "description": "原來那台電腦上的對話記錄帶不過來，會整理成交接摘要接上，思考內容等不能保證完美繼承。下一則訊息送出時生效。",
         "descriptionNativeHistory": "完整對話記錄會複製過去接著用；如果恢復不了，會改用交接摘要接上，思考內容等不能保證完美繼承。下一則訊息送出時生效。",
         "confirm": "換電腦執行",
-        "cancel": "保持不變"
+        "cancel": "保持不變",
+        "discoveredDescription": "{{reason}}{{description}}"
       }
     },
     "agentSelect": {
@@ -15932,6 +15956,7 @@
       "saveFailed": "儲存上下文視窗檔位失敗"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "正在等待遠端回應…",
       "readingMemory": "正在讀取記憶…",
       "savingMemory": "正在儲存記憶…",
       "deletingMemory": "正在刪除記憶…",
@@ -17246,7 +17271,9 @@
           "jira_read": "讀取 Jira",
           "jira_comment": "評論 Jira",
           "sessions_dispatch": "派發任務",
-          "feishu_read": "讀取飛書訊息"
+          "feishu_read": "讀取飛書訊息",
+          "settings_read": "讀取分享成員",
+          "usage_read": "讀取用量與供應商組狀態"
         },
         "project": "專案目錄",
         "capabilitiesLabel": "允許呼叫的能力",
@@ -17258,7 +17285,9 @@
           "jira_read": "查詢與讀取 Jira Issue（按 key 讀取 / JQL 搜尋）",
           "jira_comment": "向 Jira Issue 新增評論",
           "sessions_dispatch": "建立或喚醒 {{appName}} 任務並投遞訊息",
-          "feishu_read": "列出最近活躍的對話；取得指定對話（群組／私訊）的最近訊息"
+          "feishu_read": "列出最近活躍的對話；取得指定對話（群組／私訊）的最近訊息",
+          "settings_read": "讀取自己分享的成員及模型範圍，含同帳號已授權電腦；不修改",
+          "usage_read": "讀取目前 Cindy 帳號在本機已連接的 Claude/Codex 帳號識別碼、方案、配額時段及更新時間，以及本機或同帳號已授權其他電腦上已記錄的每日/型號用量、估算費用、供應商組設定與狀態、可見的成員和裝置識別碼、名稱及頭像。無法讀取訂閱登入電子郵件、帳號目錄、內部指紋、憑證或檔案，也無法修改帳號或設定"
         },
         "capabilityWarn": {
           "ghostMissing": "依賴「{{name}}」插件，目前未安裝——執行時該能力會失敗",

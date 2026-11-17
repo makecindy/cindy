@@ -10,10 +10,29 @@ import {
 } from '../usageLimitAutoResume';
 import { readTurnUsageResetAt } from '../../goal-host/usageLimit';
 import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../shared/agentInputQueue';
+import type { ProviderView } from '@cindy/model-providers';
+import { resolveSessionUsageReset, type SessionUsageRoute, type SessionUsageResetDeps } from '../sessionUsageReset';
 
 const NOW = 1_000_000;
 const RESET_AT = NOW + 60 * 60 * 1000;
 const LIMIT = { sdkError: 'rate_limit', message: "You've hit your session limit" };
+
+function remoteResetHarness() {
+  const provider = { id: 'remote-claude', auth: { method: 'oauth', native: 'claude' }, connected: true,
+    agents: ['claude-code'], models: { 'claude-code': [{ id: 'claude-opus-5-5' }] }, routing: { 'claude-code': {} },
+  } as ProviderView;
+  const route: SessionUsageRoute = { agentKind: 'claude-code', providerId: null, modelId: 'claude-opus-5-5',
+    agentDeviceId: 'target', remoteHostId: null, sdkSessionId: 'native-1' };
+  let owner = 'owner';
+  const deps = {
+    now: () => NOW, scopeKey: () => owner, localFamilyOf: vi.fn<SessionUsageResetDeps['localFamilyOf']>(() => null),
+    readRemoteProviders: vi.fn(async () => [provider]),
+    readLocalLimit: vi.fn(async () => ({ limited: true, resetAtMs: RESET_AT + 9999 })),
+    readRemoteLimit: vi.fn<SessionUsageResetDeps['readRemoteLimit']>(async () => ({ limited: true, resetAtMs: RESET_AT })),
+    unavailable: vi.fn(),
+  } satisfies SessionUsageResetDeps;
+  return { provider, route, deps, changeOwner: () => { owner = 'new-owner'; } };
+}
 
 function harness(overrides: Partial<UsageLimitAutoResumeDeps> = {}) {
   const timers: Array<{ fn: () => void; delayMs: number; cleared: boolean }> = [];
@@ -75,6 +94,97 @@ describe('isAccountUsageLimitError', () => {
 });
 
 describe('UsageLimitAutoResume', () => {
+  // #11088, unit: exercise the production reset resolver and timer together.
+  // Old timer coverage injected a deadline, bypassing remote implicit identity.
+  it('waits and resumes a remote implicit Claude route using its target account', async () => {
+    const { route, provider, deps: resetDeps } = remoteResetHarness();
+    const h = harness({ resolveResetAt: (_id, signals) => resolveSessionUsageReset(route, signals, resetDeps) });
+    expect(await h.guard.onTurnError('remote-implicit', LIMIT)).toBe(true);
+    expect(resetDeps.readRemoteLimit).toHaveBeenCalledWith({ ...route, providerId: provider.id }, 'claude');
+    expect(resetDeps.readLocalLimit).not.toHaveBeenCalled();
+    expect(h.deps.arm).toHaveBeenCalledWith('remote-implicit', 1, RESET_AT + USAGE_LIMIT_RESUME_BUFFER_MS);
+    await h.fireLast();
+    expect(h.deps.continueSession).toHaveBeenCalledOnce();
+  });
+
+  it.each(['structured', 'zoned-text', 'bare-clock', 'unknown'] as const)(
+    'uses only trustworthy remote reset hints: %s', async (kind) => {
+      const { route, deps } = remoteResetHarness();
+      deps.now = () => Date.parse('2026-11-17T10:00:00Z');
+      const reset = Date.parse('2026-11-17T11:00:00Z');
+      deps.readRemoteLimit.mockResolvedValue(null);
+      const signals = kind === 'structured' ? { ...LIMIT, usageResetAt: reset }
+        : { ...LIMIT, message: kind === 'zoned-text' ? "You've hit your limit · resets 7pm (Asia/Shanghai)"
+          : kind === 'bare-clock' ? "You've hit your limit · resets 7pm" : LIMIT.message };
+      expect(await resolveSessionUsageReset(route, signals, deps)).toBe(
+        kind === 'structured' || kind === 'zoned-text' ? reset : null,
+      );
+      expect(deps.readLocalLimit).not.toHaveBeenCalled();
+      if (kind === 'structured') expect(deps.readRemoteLimit).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['gateway', 'missing', 'unavailable', 'owner-changed', 'same-id-local-subscription'] as const)(
+    'does not acquire local subscription semantics for a remote %s', async (kind) => {
+      const h = remoteResetHarness();
+      h.deps.localFamilyOf.mockReturnValue('claude');
+      if (kind === 'gateway' || kind === 'same-id-local-subscription') h.provider.auth = { method: 'apiKey' };
+      if (kind === 'same-id-local-subscription') h.route.providerId = h.provider.id;
+      if (kind === 'missing') h.deps.readRemoteProviders.mockResolvedValue([]);
+      if (kind === 'unavailable') h.deps.readRemoteProviders.mockRejectedValue(new Error('offline'));
+      if (kind === 'owner-changed') h.deps.readRemoteProviders.mockImplementation(async () => { h.changeOwner(); return [h.provider]; });
+      expect(await resolveSessionUsageReset(h.route, { ...LIMIT, usageResetAt: RESET_AT }, h.deps)).toBeNull();
+      expect(h.deps.readLocalLimit).not.toHaveBeenCalled();
+      expect(h.deps.readRemoteLimit).not.toHaveBeenCalled();
+    },
+  );
+
+  it('retains explicit remote builtin hints offline and never queries local quota for SSH', async () => {
+    const h = remoteResetHarness();
+    h.route.providerId = 'anthropic';
+    expect(await resolveSessionUsageReset(h.route, { ...LIMIT, usageResetAt: RESET_AT }, h.deps)).toBe(RESET_AT);
+    expect(h.deps.readRemoteProviders).not.toHaveBeenCalled();
+    h.route.remoteHostId = 'ssh';
+    h.deps.localFamilyOf.mockReturnValue('claude');
+    expect(await resolveSessionUsageReset(h.route, LIMIT, h.deps)).toBeNull();
+    expect(h.deps.readLocalLimit).not.toHaveBeenCalled();
+    expect(h.deps.readRemoteLimit).not.toHaveBeenCalled();
+  });
+
+  // Review #11092: auth.native can also describe an API-key route. Exercise the
+  // real resolver + timer; a reset hint must not turn such a route into a subscription.
+  it.each([
+    { method: 'apiKey', access: 'api' },
+    { method: 'apiKey', access: 'subscription' },
+    { method: 'oauth', access: 'api' },
+    { method: 'oauth', access: 'subscription' },
+  ] as const)('checks auth and access before scheduling $method/$access native routes', async ({ method, access }) => {
+    const reset = remoteResetHarness();
+    reset.provider.auth = { method, native: 'codex' };
+    reset.provider.access = access === 'subscription' ? { kind: access, product: 'ChatGPT' } : { kind: access };
+    const h = harness({ resolveResetAt: (_id, signals) => resolveSessionUsageReset(reset.route, signals, reset.deps) });
+    const subscription = method === 'oauth' && access === 'subscription';
+    expect(await h.guard.onTurnError('remote-auth', { ...LIMIT, usageResetAt: RESET_AT })).toBe(subscription);
+    expect(h.timers).toHaveLength(subscription ? 1 : 0);
+    expect(reset.deps.readRemoteLimit).not.toHaveBeenCalled();
+    expect(reset.deps.readLocalLimit).not.toHaveBeenCalled();
+  });
+
+  it.each(['stop', 'new-input'] as const)('discards remote directory results after %s', async (action) => {
+    const reset = remoteResetHarness();
+    let finish!: (views: ProviderView[]) => void;
+    reset.deps.readRemoteProviders.mockReturnValue(new Promise(r => { finish = r; }));
+    const h = harness({ resolveResetAt: (_id, signals) => resolveSessionUsageReset(reset.route, signals, reset.deps) });
+    const pending = h.guard.onTurnError('remote-implicit', LIMIT);
+    await Promise.resolve();
+    if (action === 'stop') h.guard.noteSessionClosed('remote-implicit');
+    else h.guard.noteUserAction('remote-implicit');
+    finish([reset.provider]);
+    await pending;
+    expect(h.deps.arm).not.toHaveBeenCalled();
+    expect(h.timers).toHaveLength(0);
+  });
+
   // Unit regression: real classifier + reset parser + timer. Earlier cases supplied
   // sdkError; text-only Claude limits never armed automatic continuation.
   it('schedules and continues a text-only five-hour limit at the stated reset time', async () => {

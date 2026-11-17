@@ -74,7 +74,6 @@
     "cancel": "So beibehalten"
   },
   "unified": {
-    "accountUnassigned": "Konto nicht zugewiesen",
     "accountCount_one": "{{count}} Konto",
     "accountCount_other": "{{count}} Konten",
     "accountFallback": "Konto {{index}}",
