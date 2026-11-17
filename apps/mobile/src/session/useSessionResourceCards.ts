@@ -45,7 +45,7 @@ export function useSessionResourceCards(
   deviceId: string,
   deviceName: string,
   sessionId: string,
-  source: string | undefined,
+  source: string | null | undefined,
   running: boolean,
 ) {
   const router = useRouter();

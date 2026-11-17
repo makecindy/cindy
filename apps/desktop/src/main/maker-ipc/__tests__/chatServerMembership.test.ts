@@ -5,6 +5,8 @@ vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'ht
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download }) }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
 vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
+vi.mock('../chatInviteShares.js', () => ({ chatInviteShareBase: () => 'https://share.example',
+  createChatInviteShare: async () => 'https://share.example/chat-invite/test', notifyChatInviteRevoked: vi.fn(), resolveChatInviteShare: vi.fn() }));
 // These transport/lifecycle fixtures isolate native disk IO; actual snapshot and
 // journal persistence is exercised through chatPersistence.test.ts and chatServer.test.ts.
 vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
@@ -250,6 +252,23 @@ describe('Chat Server membership notices', () => {
       archived: false, dissolvedAt, supportsGroupLeave: true, supportsDissolve: true, supportsListRemoval: true,
       canInvite: false, reactionRevision: expect.any(Number), reactionRevisions: {},
     } });
+  });
+  // Unit: the real adapter must use the member actor for link creation, while keeping
+  // the setting itself manager-only. Earlier tests covered only manager invitations.
+  it.each([false, true])('uses the current member invitation setting (%s) for the entry and link request', async enabled => {
+    lifecycle({ role: 'member' });
+    const previous = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, ...args) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupMemberInvites: 1 } } };
+      if (route.endsWith('/invite-links')) return { body: { token: 'a'.repeat(43), expiresAt: null, reusable: true } };
+      const response = previous(route, ...args);
+      if (route.endsWith('/snapshot')) response.body.room.allow_member_invites = enabled;
+      return response;
+    });
+    expect(await service.getGroup(roomId)).toMatchObject({ ok: true, group: { canInvite: enabled, supportsMemberInvites: true, allowMemberInvites: enabled } });
+    expect(await service.chatServer!.createInvite({ groupId: roomId, clientId: 'member-invite-test' })).toMatchObject(enabled
+      ? { ok: true, link: 'https://share.example/chat-invite/test' } : { ok: false, errorCode: 'ROLE_REQUIRED' });
+    expect(fixture.handle.mock.calls.some(([route, method]) => route.endsWith('/invite-links') && method === 'POST')).toBe(enabled);
   });
   it('never substitutes archive or delete on an old server', async () => {
     lifecycle({ supported: false });

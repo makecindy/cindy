@@ -418,7 +418,7 @@ export class ToolLoopGuard {
    */
   onToolResult(
     toolUseId: string,
-    output: string,
+    output: string | null,
     isError = false,
     toolResultBatchId?: string,
   ): ToolLoopGuardVerdict {
@@ -437,8 +437,18 @@ export class ToolLoopGuard {
         && finishedAt - this.lastOrdinaryFinishedAt >= this.pacedIntervalMs);
     this.lastOrdinaryStartedAt = Math.max(this.lastOrdinaryStartedAt ?? toolUse.startedAt, toolUse.startedAt);
     this.lastOrdinaryFinishedAt = finishedAt;
-    this.recordEvidence(toolUse, output, isError);
-    const fullFingerprint = fingerprintToolCall(toolUse.name, toolUse.input, output);
+    // null means the result body is unavailable, not an empty/identical result.
+    // Close the pending call and retain input-based review, but break every
+    // output-equality window; unknown output cannot bridge two known results.
+    this.recordEvidence(toolUse, output ?? '[Tool output omitted; contents unknown]', isError);
+    const fullFingerprint = output === null ? null : fingerprintToolCall(toolUse.name, toolUse.input, output);
+    if (output === null) {
+      this.lastFullFingerprint = null;
+      this.consecutiveStreak = 0;
+      this.streakResults = 0;
+      this.streakStartedAt = 0;
+      this.stableReadWindow = [];
+    }
     const callFingerprint = toolUse.callFingerprint ?? fingerprintToolCall(toolUse.name, toolUse.input, null);
     this.lastResultCallFingerprintValue = callFingerprint;
     const burstRepeat = toolUse.burstRepeat === true;
@@ -449,7 +459,7 @@ export class ToolLoopGuard {
     if (paced) {
       // 写入或命令照常打断长只读窗口,节奏本身不改变这一点。
       if (!READ_ONLY_TOOL_NAMES.has(toolUse.name)) this.stableReadWindow = [];
-      this.observeStreak(fullFingerprint, false);
+      if (fullFingerprint !== null) this.observeStreak(fullFingerprint, false);
       return this.finalVerdict(toolUse.name);
     }
     // 突发重复:不计入任何疑似判据,也不算参与判定(不打破模式,进行中的复核不被它取消)。
@@ -457,7 +467,7 @@ export class ToolLoopGuard {
     if (burstRepeat) {
       this.lastResultObservedValue = false;
       if (!READ_ONLY_TOOL_NAMES.has(toolUse.name)) this.stableReadWindow = [];
-      if (fullFingerprint !== this.lastFullFingerprint) return { kind: 'ok' };
+      if (fullFingerprint === null || fullFingerprint !== this.lastFullFingerprint) return { kind: 'ok' };
       this.observeStreak(fullFingerprint, false);
       return this.finalVerdict(toolUse.name);
     }
@@ -472,7 +482,7 @@ export class ToolLoopGuard {
     // 有 batch id 时按“连续批次”计数, 同一批次每个 key 最多计一次; 成功/其它
     // 工具结果不能因到达顺序把同批次的契约错误抹掉。没有 batch id 的旧调用方
     // 保留原先逐结果计数语义。
-    const contractCategory = isError ? classifyToolContractError(toolUse.name, output) : null;
+    const contractCategory = isError && output !== null ? classifyToolContractError(toolUse.name, output) : null;
     if (toolResultBatchId !== undefined) {
       this.beginContractBatch(toolResultBatchId);
       if (contractCategory !== null) {
@@ -522,7 +532,7 @@ export class ToolLoopGuard {
     }
 
     // 长只读轮转证据已足够强,不经复核
-    if (READ_ONLY_TOOL_NAMES.has(toolUse.name)) {
+    if (fullFingerprint !== null && READ_ONLY_TOOL_NAMES.has(toolUse.name)) {
       this.stableReadWindow.push(fullFingerprint);
       if (this.stableReadWindow.length > STABLE_READ_WINDOW_SIZE) this.stableReadWindow.shift();
       if (this.stableReadWindow.length === STABLE_READ_WINDOW_SIZE) {
@@ -544,7 +554,7 @@ export class ToolLoopGuard {
     }
 
     // 第 1 层: 连续 name+input+output 完全相同
-    this.observeStreak(fullFingerprint, true);
+    if (fullFingerprint !== null) this.observeStreak(fullFingerprint, true);
     const final = this.finalVerdict(toolUse.name);
     if (final.kind === 'hard') return final;
     if (this.consecutiveStreak >= this.consecutiveLimit) {

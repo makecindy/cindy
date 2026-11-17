@@ -1,3 +1,4 @@
+import type { DownloadProgress } from '../../shared/downloadProgress.js';
 import type { Manifest } from '../manifestService.js';
 
 /**
@@ -52,6 +53,8 @@ export interface VendorRuntimeState {
   availableVersion?: string;
   binaryPath?: string;
   downloadProgress?: { received: number; total: number; speedBps: number };
+  /** Standard display progress (retrying / verifying / speed / time left); additive to v1.0. */
+  download?: DownloadProgress;
   error?: { code: string; message: string };
 }
 
@@ -131,6 +134,8 @@ export interface BinaryDownloadProgressPayload {
   totalSteps?: 2 | 3;
   reset?: boolean;
   vendor?: VendorKey;
+  /** Standard display progress for the splash status line; `progress` stays the bar value. */
+  download?: DownloadProgress;
 }
 
 /** 同步 binary 状态快查结果 (DropdownMenu / maker-host 用)。 */

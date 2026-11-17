@@ -1242,15 +1242,23 @@ async function readProfile(
         )
     : [];
   const byId = new Map(sessionRows.map((row) => [row.id, row]));
-  // Runtime snapshots are durable history. The list needs only the latest per
-  // task; fetching every frozen capability JSON grows with months of restarts.
+  // Each batch returns at most one snapshot per linked task. The correlated
+  // lookup uses the session/prepared index inside SQLite; historical capability JSON
+  // stays in the worker instead of crossing one RPC per link (or all at once).
   const runtimeRows: (typeof botRuntimeSnapshots.$inferSelect)[] = [];
-  for (const link of links) {
+  const runtimeSessionIds = [...new Set(links.map(link => link.sessionId))];
+  for (let offset = 0; offset < runtimeSessionIds.length; offset += 100) {
     owner.assertCurrent();
+    const batch = runtimeSessionIds.slice(offset, offset + 100);
     runtimeRows.push(...await db.select().from(botRuntimeSnapshots)
-      .where(eq(botRuntimeSnapshots.sessionId, link.sessionId))
-      .orderBy(desc(botRuntimeSnapshots.preparedAt), desc(botRuntimeSnapshots.appliedAt))
-      .limit(1));
+      .where(inArray(botRuntimeSnapshots.id, db.select({
+        // Keep the outer column qualified: Drizzle strips column qualifiers in
+        // single-table projections, which would otherwise bind to latest.id.
+        id: sql<string>`(SELECT latest.id FROM bot_runtime_snapshots AS latest
+          WHERE latest.session_id = "sessions"."id"
+          ORDER BY latest.prepared_at DESC, latest.applied_at DESC, latest.id DESC LIMIT 1)`,
+      }).from(sessions).where(inArray(sessions.id, batch)))));
+    owner.assertCurrent();
   }
   const runtimeBySession = new Map<string, (typeof runtimeRows)[number]>();
   for (const row of runtimeRows) {

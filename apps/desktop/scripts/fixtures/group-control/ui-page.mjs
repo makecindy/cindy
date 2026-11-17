@@ -83,6 +83,7 @@ export default {
     'work-requesters': { about: 'Cindy progress keeps each requester visible', data: { ...base, members: [{ botId: 'a', name: 'Cindy' }, { botId: 'b', name: 'Cindy' }], messages: 3, workState: 'testing', workParallel: true, workReadonly: true, workRequesterNames: ['nana', 'chris'] } },
     'work-chronology': { about: 'Concurrent work follows request time; another requester remains read-only', data: { ...base, messages: 3, workState: 'testing', workParallel: true, workReadonly: true } },
     'work-parallel-stopping': { about: 'Last execution is stopping while the first still runs: the group stop control remains available', data: { ...base, messages: 2, workState: 'testing', workParallel: true, workLastStopping: true } },
+    'planning-foreign': { about: 'My local arrangement decision remains cancellable when its organizer belongs to someone else', data: { ...base, messages: 2, sidebar: false, planningForeign: true } },
     'body-answer': {
       about: '#6550: component body is readable; literal punctuation and surrounding Markdown are retained',
       viewport: { width: 720, height: 700 },
@@ -227,6 +228,14 @@ export default {
       await reply.waitFor({ state: 'detached' });
       assert.equal(await row.evaluate(el => el.getBoundingClientRect().height), originalHeight, 'row geometry stays stable');
       await ui.capture('main-chat');
+      return;
+    }
+    if (definition.data.planningForeign) {
+      await page.getByTestId('bot-group-speaking').waitFor();
+      const stop = page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true });
+      await stop.waitFor();
+      assert.equal(await stop.isEnabled(), true, 'My local planning stays cancellable with a foreign organizer');
+      await ui.capture('planning');
       return;
     }
     if (ui.case === 'reaction-colors') {
@@ -769,11 +778,8 @@ export default {
         assert.ok(order, 'topic work retains its original timestamp between replies');
         const stop = page.locator('aside.thread-panel').getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true });
         await stop.click();
-        await page.getByRole('menuitem', { name: await ui.t('bots.groupChat.progress.stopMine'), exact: true }).click();
         assert.equal(await page.locator('body').getAttribute('data-fixture-stop-scope'), 'mine');
-        await stop.click();
-        await page.getByRole('menuitem', { name: await ui.t('bots.groupChat.progress.stopAll') }).click();
-        assert.equal(await page.locator('body').getAttribute('data-fixture-stop-scope'), 'all');
+        assert.equal(await page.getByRole('menuitem', { name: await ui.t('bots.groupChat.progress.stopAll') }).count(), 0);
       }
       if (ui.case === 'thread-work-overflow') {
         const panel = page.locator('aside.thread-panel');

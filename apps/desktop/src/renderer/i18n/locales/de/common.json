@@ -4477,14 +4477,7 @@
         "installCancel": "Installation abbrechen",
         "installFailed": "Ollama konnte nicht installiert werden",
         "installPhase": {
-          "resolving": "Offizielle Version wird gesucht…",
-          "downloading": "Wird heruntergeladen…",
-          "verifying": "Wird überprüft…",
-          "extracting": "Wird installiert…",
-          "starting": "Wird gestartet…",
-          "success": "Installiert",
-          "error": "Installation fehlgeschlagen",
-          "cancelled": "Abgebrochen"
+          "error": "Installation fehlgeschlagen"
         },
         "openWebsite": "Ollama-Website öffnen",
         "recheck": "Bereits installiert, erneut prüfen",
@@ -4519,20 +4512,6 @@
         "retryDownload": "Erneut versuchen",
         "libraryName": "Exakter Name in der Ollama-Bibliothek",
         "pullingTitle": "{{name}} wird heruntergeladen",
-        "pullIndeterminate": "Vorbereitung",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "Download wird vorbereitet…",
-          "manifest": "Manifest wird abgerufen…",
-          "downloading": "Modelldateien werden heruntergeladen",
-          "verifying": "Wird überprüft…",
-          "writing": "Wird geschrieben…",
-          "success": "Download abgeschlossen",
-          "error": "Download fehlgeschlagen",
-          "paused": "Pausiert",
-          "cancelled": "Abgebrochen"
-        },
         "pauseDownload": "Pausieren",
         "resumeDownload": "Download fortsetzen",
         "cancelDownload": "Unvollständigen Download löschen",
@@ -5539,6 +5518,13 @@
       },
       "toggleAria": "Fragen-Navigationsleiste umschalten"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Worktrees per Modell benennen",
+        "description": "Gibt dem Worktree einer neuen Aufgabe einen kurzen englischen Namen auf Basis der ersten Nachricht (z. B. fix-login-timeout), damit Ordner und Branch zeigen, wofür sie da sind. Erzeugt von den Hilfsmodellen; schlägt das fehl, wird ein zufälliger Name verwendet. Gilt nur für ab jetzt erstellte Worktrees."
+      },
+      "toggleAria": "Benennung von Worktrees per Modell umschalten"
+    },
     "promptRecommendation": {
       "label": "Eingabevorschläge",
       "description": "Nach einer Antwort zeigt das Eingabefeld einen Vorschlag für deine nächste Nachricht. Drücke die Tab-Taste, um ihn einzufügen.",
@@ -5773,7 +5759,8 @@
             "statusFailed": "die Statusprüfung des Controllers ist fehlgeschlagen",
             "recoveryFailed": "die Steuerungsverbindung konnte nicht neu aufgebaut werden",
             "extensionDisconnected": "keine Browsererweiterung ist verbunden (installiere und aktiviere das Cindy Chrome-Plugin und die zugehörige Erweiterung)",
-            "pluginMissing": "das Cindy Chrome-Plugin ist nicht installiert oder aktiviert"
+            "pluginMissing": "das Cindy Chrome-Plugin ist nicht installiert oder aktiviert",
+            "browserMissing": "Chrome ist auf diesem Computer nicht installiert"
           },
           "reconnect": "Browser erneut verbinden",
           "recover": "Browser wiederherstellen",
@@ -5793,7 +5780,7 @@
         },
         "userBrowser": {
           "title": "Mein Browser",
-          "description": "Funktioniert in deinem aktuell verwendeten Chrome oder Edge mit deinen bestehenden Anmeldungen. Neue Seiten öffnen sich in einem Hintergrundfenster und stören dich nicht."
+          "description": "Dein eigenes Chrome auf diesem Computer (Edge funktioniert auch). Der Agent arbeitet direkt darin, mit deinen bestehenden Anmeldungen. Neue Seiten öffnen sich in einem Hintergrundfenster und stören dich nicht."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Cindy Chrome-Plugin installieren",
@@ -5812,7 +5799,9 @@
           "updatePluginTitle": "Cindy Chrome-Plugin aktualisieren",
           "updatePluginBody": "Das installierte Cindy Chrome-Plugin ist für „Mein Browser“ zu alt. Aktualisiere es auf die neueste Version und folge dann der Aufforderung, die Erweiterung hinzuzufügen.",
           "updatePlugin": "Aktualisieren",
-          "storeOpened": "Die Seite der Cindy-Erweiterung wurde in deinem Browser geöffnet. Wähle „Zu Chrome hinzufügen“, dann wird die Verbindung automatisch hergestellt."
+          "storeOpened": "Die Seite der Cindy-Erweiterung wurde in deinem Browser geöffnet. Wähle „Zu Chrome hinzufügen“, dann wird die Verbindung automatisch hergestellt.",
+          "installBrowserTitle": "Zuerst Chrome installieren",
+          "installBrowserBody": "Chrome ist auf diesem Computer nicht installiert. „Mein Browser“ braucht Chrome (oder Edge) für die Cindy-Erweiterung. Sobald es installiert ist, geht es hier automatisch mit dem nächsten Schritt weiter."
         }
       },
       "android": {
@@ -5974,8 +5963,6 @@
           "notChecked": "Noch nicht geprüft",
           "action": "Aktualisieren",
           "updating": "Wird aktualisiert…",
-          "downloadingPercent": "Wird heruntergeladen: {{percent}} % ({{downloaded}}/{{total}} MB)…",
-          "downloadingBytes": "Wird heruntergeladen, bisher {{downloaded}} MB…",
           "installing": "Download abgeschlossen, Installation läuft…",
           "toast": {
             "success": "cua-driver auf die neueste Version aktualisiert",
@@ -7932,7 +7919,6 @@
         "install": "Installieren",
         "details": "Details",
         "detailsAria": "Details zu {{name}} anzeigen",
-        "loadingDetails": "Details werden geladen…",
         "update": "Aus Marktplatz aktualisieren",
         "updateTo": "Auf v{{version}} aktualisieren",
         "installed": "Installiert",
@@ -8241,6 +8227,8 @@
         "hostTools_controlDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben und Projekte bearbeiten, archivieren, wiederherstellen und steuern sowie native Aufgabendateien auf diesem Computer importieren.",
         "hostTools_handoff": "Aufgabennachrichten",
         "hostTools_handoffDetail": "Mit Cindys Werkzeugen Nachrichten an vorhandene Aufgaben senden. Vorgänge, die eine aktuelle Aufgabe benötigen, erfordern ein ausdrücklich angegebenes Ziel.",
+        "hostTools_usage": "Abonnementnutzung lesen",
+        "hostTools_usageDetail": "Liest Kontokennungen, Tarife, Kontingentzeiträume und Aktualisierungszeiten der Claude- und Codex-Abonnements, die auf diesem Computer mit deinem aktuellen Cindy-Konto verbunden sind. Kein Zugriff auf E-Mail-Adressen, Zugangsdaten, Dateien oder andere Computer. Konten können nicht geändert werden.",
         "hostTools_settings": "App-Einstellungen",
         "hostTools_settingsDetail": "Mit Cindys Werkzeugen die App-Konfiguration lesen und ändern. Geheimnisse werden nicht zurückgegeben; vertrauliche Eingaben machst du selbst.",
         "hostTools_scheduler": "Automatisierungsverwaltung",
@@ -8528,6 +8516,7 @@
           "workdirClear": "Auf Standardordner zurücksetzen",
           "followAuxiliary": "Systemweites Hilfsmodell verwenden · {{model}}",
           "followAuxiliaryUnset": "Systemweites Hilfsmodell verwenden",
+          "remoteQuickAnswerHint": "Dieses Modell läuft nicht auf diesem Computer. Schnellantworten werden von diesem Computer gesendet und verwenden daher das systemweite Hilfsmodell.",
           "restoreModel": "Modell zurücksetzen"
         },
         "toolsTitle": "Tools",
@@ -8863,23 +8852,10 @@
         "projectReadFailed": "Projekteinstellungen konnten nicht gelesen werden. Versuche es erneut."
       },
       "usage": {
-        "title": "Deine Aufrufe",
-        "explanationLabel": "So wird die Nutzung gezählt",
-        "explanation": "Tool-Aufrufe, die das aktuelle Konto auf diesem Computer ausgelöst hat, einschließlich fehlgeschlagener, abgebrochener und wegen Zeitüberschreitung beendeter Aufrufe. Die letzten 7 Tage umfassen die jeweils vergangenen 168 Stunden. Panels, Skills und Debugging sind ausgeschlossen. Einträge bleiben erhalten, bis sie gelöscht werden.",
-        "clear": "Einträge löschen",
-        "loading": "Einträge werden geladen…",
-        "unavailable": "Persönliche Einträge nicht verfügbar",
-        "retry": "Erneut versuchen",
-        "lastUsed": "Letzter Aufruf",
-        "last7Days": "Aufrufe in den letzten 7 Tagen",
-        "never": "Noch keine Aufrufe",
-        "clearTitle": "Nutzungseinträge dieses Plugins löschen?",
-        "clearDescription": "Entfernt Aufrufeinträge und Sitzungslinks für dieses Konto auf diesem Computer. Neue Aufrufe beginnen einen neuen Verlauf. Bereits vom Server empfangene gemeinsame Gesamtzahlen werden nicht zurückgenommen.",
         "downloadExplanation": "Kumulierte Anfragen nach Download-URLs. Jede erfolgreich ausgegebene Paket-URL zählt einmal, einschließlich Updates, Neuinstallationen und erneuter Versuche, die eine neue URL anfordern. Dies ist keine Zählung abgeschlossener Installationen.",
-        "clearAction": "Löschen",
         "downloadsValue": "{{value}} Downloads",
         "usesValue": "{{value}} Nutzungen",
-        "usesExplanation": "Kumulierte gemeinsame Tool-Aufrufe über alle Releases im autorisierten Nutzerkreis. Deine Aufrufe unten zählen nur für dieses Konto auf diesem Computer."
+        "usesExplanation": "Kumulierte gemeinsame Tool-Aufrufe über alle Releases im autorisierten Nutzerkreis."
       },
       "contribution": {
         "unreadReview": "Neues Plugin-Ergebnis",
@@ -10929,6 +10905,7 @@
       "duplicate": "Freund duplizieren",
       "moreActions": "Weitere Aktionen für {{name}}",
       "viewIcons": "Symbole",
+      "showCollapsedTeammateAvatars": "Avatare im eingeklappten Zustand anzeigen",
       "sectionExpand": "Freunde ausklappen",
       "showLess": "Weniger anzeigen",
       "sectionCollapse": "Freunde einklappen",
@@ -11427,6 +11404,8 @@
         "projectDirNote": "Hier arbeiten Freunde bei der Arbeitsaufteilung. Du kannst das Feld leer lassen, dann nutzen sie den eigenen Ordner dieses Gruppenchats. Wenn du ein Git-Projekt auswählst, erhält jede Arbeitsaufteilung einen neuen Worktree und Branch, damit dein eigener Code unverändert bleibt.",
         "autoContinueSaveFailed": "Die Schrittübergabe konnte nicht gespeichert werden. Versuch es erneut.",
         "projectDirSaveFailed": "Der Projektordner konnte nicht gespeichert werden. Prüfe, ob der Ordner noch vorhanden ist, und versuch es erneut.",
+        "allowMemberInvites": "Alle Mitglieder dürfen Freunde einladen",
+        "allowMemberInvitesHint": "Wenn aktiviert, dürfen alle beigetretenen Mitglieder Freunde einladen. Nur Gruppeninhaber und Admins können dies ändern.",
         "allowMentionAllBots": "@Alle Freunde erlauben",
         "allowMentionAllBotsHint": "Nur der Gruppeninhaber kann dies ändern. Alle Teammitglieder können antworten; in großen Gruppen mit Bedacht verwenden. KI-Antworten in deinem Namen sind davon unabhängig."
       },
@@ -11532,6 +11511,7 @@
         "threadRecent": "Neueste Nachrichten im Thread",
         "threadNew": "Neue Nachrichten im Thread",
         "replyingTo": "Antwort an „{{name}}“: {{text}}",
+        "filesOutsideWorkingDir": "Dateien außerhalb des Arbeitsverzeichnisses wurden nicht angehängt.",
         "earlierOmitted": "(Ältere Nachrichten ausgelassen)",
         "actingFor": "{{name}} · für {{person}}",
         "checkout": {
@@ -11694,6 +11674,11 @@
           "transferHint": "Diese Person wird Inhaber und du wirst Admin.",
           "removeTitle": "{{name}} aus dieser Gruppe entfernen?",
           "removeHint": "Diese Person verliert den Zugriff auf Nachrichten. Ihre Freunde verlassen die Gruppe ebenfalls.",
+          "removeOwn": "Aus Gruppe entfernen",
+          "removeOwnScope": "Dies betrifft nur diese Gruppe. Dein Partner bleibt in deinem Konto.",
+          "removeOwnHint": "{{name}} erhält keine Nachrichten mehr aus „{{group}}“. Der Verlauf bleibt erhalten; andere Gruppen und private Chats sind nicht betroffen.",
+          "removeOwnActiveHint": "Aktive Anfragen dieses Partners in dieser Gruppe werden gestoppt. Unabhängig gestartete Aufgaben laufen weiter.",
+          "stopAndRemove": "Stoppen und entfernen",
           "leave": "Gruppe verlassen",
           "leaveHint": "Du und deine Freunde verlassen diese Gruppe. Du erhältst keine neuen Nachrichten mehr und verlierst den Zugriff auf den Verlauf.",
           "soleOwnerHint": "Du bist das einzige verbliebene Mitglied. Archiviere diese Gruppe, um ihren Verlauf zu behalten und sie später wiederherzustellen.",
@@ -12945,6 +12930,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "Kein Modell für die automatische Prüfung verfügbar. Aktiviere und verbinde auf dem Computer, auf dem der Agent läuft, einen Prüfanbieter unter Modellanbieter oder konfiguriere Hilfsmodelle in den Einstellungen. Prüfpflichtige Aktionen benötigen weiterhin deine Bestätigung.",
           "autoReviewUnavailable": "Die automatische Prüfung konnte keine Entscheidung treffen. Aktionen, die eine Prüfung erfordern, brauchen jetzt deine Bestätigung. Stelle diese Aufgabe auf Vollzugriff um, wenn du nicht unterbrochen werden möchtest. Dieser Modus birgt höhere Risiken.",
           "autoReviewUnavailableWechat": "Die automatische Prüfung konnte keine Entscheidung treffen. Aktionen, die eine Prüfung erfordern, brauchen jetzt deine Bestätigung. Persönliches WeChat kann keinen Vollzugriff nutzen. Bestätige diese Aktion direkt.",
           "autoReviewConfirmUndelivered": "Die automatische Prüfung wurde nicht abgeschlossen, und die Bestätigung wurde nicht zugestellt oder nicht beantwortet. Diese Ablehnung kam nicht von dir.",
@@ -14110,7 +14096,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "Worktree wird erstellt · Eingabe deaktiviert",
-      "subtitle": "Zielbranch {{branch}} · wird automatisch freigegeben"
+      "subtitle": "Zielbranch {{branch}} · wird automatisch freigegeben",
+      "elapsed": "Wartet seit {{duration}}"
     },
     "worktree": {
       "detecting": "Umgebung wird erkannt…",
@@ -15499,6 +15486,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "Diese Datei liegt außerhalb des Arbeitsverzeichnisses der aktuellen Sitzung und kann im Dateibrowser der Seitenleiste nicht gefunden werden",
       "openInDefaultBrowser": "Im Browser öffnen",
       "copyLink": "Link kopieren",
+      "addPrToHeader": "Zur Kopfzeile hinzufügen",
+      "prAlreadyInHeader": "Bereits in der Kopfzeile",
+      "prAddedToHeader": "Zur Kopfzeile hinzugefügt – der Status begleitet diese Aufgabe.",
+      "prAssociatedNotInHeader": "Verknüpft, nicht in der Kopfzeile",
+      "prSavedNotInHeader": "Verknüpfung gespeichert. Die drei Plätze in der Kopfzeile sind belegt. Du kannst diesen PR in der PR-Verwaltung der Aufgabe anheften.",
       "linkCopied": "Link kopiert",
       "viewSourceFile": "Quelltext anzeigen",
       "openInSidebarFailed": "Öffnen im Browser der Seitenleiste fehlgeschlagen",
@@ -15660,6 +15652,7 @@
       "DEVICE_LINK_BUSY": "Der Remotecomputer ist ausgelastet. Versuche es in Kürze erneut.",
       "REMOTE_DAEMON_CLOSED": "Die Remote-Verbindung wurde unterbrochen, möglicherweise während eines Updates. Diese Runde wurde beendet. Sende die Nachricht erneut.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Lokale Datei-/Bildanhänge sind in Remote-Sitzungen nicht zugänglich. Füge stattdessen den Inhalt direkt ein.",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "Kein Modell für die automatische Prüfung verfügbar. Aktiviere und verbinde auf dem Computer, auf dem der Agent läuft, einen Prüfanbieter unter Modellanbieter oder konfiguriere Hilfsmodelle in den Einstellungen. Prüfpflichtige Aktionen benötigen weiterhin deine Bestätigung.",
       "AUTO_REVIEW_UNAVAILABLE": "Die automatische Prüfung konnte keine Entscheidung treffen. Aktionen, die eine Prüfung erfordern, brauchen jetzt deine Bestätigung. Stelle diese Aufgabe auf Vollzugriff um, wenn du nicht unterbrochen werden möchtest. Dieser Modus birgt höhere Risiken.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Die automatische Prüfung konnte keine Entscheidung treffen. Aktionen, die eine Prüfung erfordern, brauchen jetzt deine Bestätigung. Persönliches WeChat kann keinen Vollzugriff nutzen. Bestätige diese Aktion direkt.",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "Die automatische Prüfung war nicht verfügbar und die Bestätigungsanfrage wurde nicht abgeschlossen. Dies ist keine Ablehnung durch den Nutzer.",
@@ -15680,7 +15673,12 @@
       "REMOTE_PROVIDER_UPDATING": "Die Zugangsdaten dieses Modellanbieters werden aktualisiert. Versuch es gleich erneut.",
       "REMOTE_WORKDIR_UNAVAILABLE": "Das Remote-Arbeitsverzeichnis ist nicht verfügbar. Prüfe, ob der Ordner auf diesem Computer noch existiert, und versuch es erneut.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "Der Computer kann noch nicht bestätigen, ob diese Nachricht gesendet wurde. Warte kurz und versuch es erneut. Sende dieselbe Nachricht nicht zweimal.",
-      "REMOTE_AGENT_UNAVAILABLE": "Die Verbindung zum Computer, auf dem der Agent läuft, wurde unterbrochen. Versuch es erneut. Wenn das öfter passiert, stelle sicher, dass er online ist und Fernsteuerung erlaubt.",
+      "REMOTE_AGENT_UNAVAILABLE": "Die Kommunikation mit dem Computer, auf dem der Agent läuft, ist fehlgeschlagen. Prüfe die Fehlerdetails.",
+      "REMOTE_AGENT_TIMEOUT": "Zeitüberschreitung beim Warten auf den Computer, auf dem der Agent läuft. Das Ergebnis ist unklar. Prüfe die Aufgabe, bevor du es erneut versuchst.",
+      "REMOTE_AGENT_LINK_BUSY": "Die Kommunikation mit dem Computer, auf dem der Agent läuft, ist ausgelastet. Warte einen Moment, bevor du es erneut versuchst.",
+      "REMOTE_AGENT_UNRESPONSIVE": "Der Computer, auf dem der Agent läuft, hat wiederholt nicht geantwortet. Aufrufe wurden deshalb vorübergehend pausiert. Warte einen Moment, bevor du es erneut versuchst.",
+      "REMOTE_AGENT_OFFLINE": "Der Computer, auf dem der Agent läuft, ist offline. Versuche es erneut, sobald er wieder verbunden ist.",
+      "REMOTE_AGENT_ACCESS_DENIED": "Der Fernzugriff auf den Computer, auf dem der Agent läuft, wurde verweigert. Prüfe vor einem erneuten Versuch dessen Zugriffseinstellungen.",
       "REMOTE_AGENT_PEER_TOO_OLD": "Cindy auf dem anderen Computer ist für diese Aktion zu alt. Aktualisiere Cindy dort zuerst.",
       "REMOTE_AGENT_EXPIRED": "Diese Sitzung wurde auf dem Computer, auf dem der Agent läuft, bereits beendet. Sende deine Nachricht erneut.",
       "REMOTE_AGENT_NOT_FOUND": "Diese Sitzung wurde auf dem Computer, auf dem der Agent läuft, bereits beendet. Sende deine Nachricht erneut.",
@@ -21831,5 +21829,28 @@
     "archivedNotice": "Automatisch archivierte inaktive Aufgaben: {{count}}",
     "undo": "Rückgängig",
     "undoFailed": "Rücknahme fehlgeschlagen. Stelle die Aufgaben im Archiv wieder her."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "Noch {{time}}",
+    "attempt": "Versuch {{attempt}}",
+    "phase": {
+      "preparing": "Wird vorbereitet…",
+      "queued": "In der Warteschlange…",
+      "downloading": "Wird heruntergeladen…",
+      "retrying": "Neuer Versuch…",
+      "verifying": "Wird geprüft…",
+      "installing": "Wird installiert…",
+      "paused": "Pausiert",
+      "completed": "Fertig",
+      "failed": "Download fehlgeschlagen",
+      "cancelled": "Abgebrochen"
+    },
+    "retry": {
+      "slow": "Langsame Verbindung, neu verbinden…",
+      "network": "Verbindung unterbrochen, neuer Versuch…",
+      "timeout": "Zeitüberschreitung, neuer Versuch…",
+      "server": "Server ausgelastet, neuer Versuch…"
+    }
   }
 }

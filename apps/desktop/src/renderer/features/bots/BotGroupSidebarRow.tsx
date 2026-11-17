@@ -233,7 +233,7 @@ export function BotGroupSidebarRow({
       <button type="button" onContextMenu={onContextMenu} onKeyDown={onKeyDown} aria-label={group.name} aria-describedby={subtitleId} aria-current={selected ? 'page' : undefined}
         aria-haspopup={onContextMenu ? 'menu' : undefined}
         className="absolute inset-0 w-full rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" />
-      <span className="pointer-events-none relative flex shrink-0"><BotGroupSidebarAvatar members={group.members} selected={selected} />
+      <span className="pointer-events-none relative flex shrink-0"><BotGroupSidebarAvatar members={group.members} />
       </span>
       <span className="pointer-events-none relative flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-center gap-1.5">

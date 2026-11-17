@@ -15,7 +15,12 @@ import { app } from 'electron';
 
 import claudeLatest from '../../../../../tools/claude/latest.json';
 import codexLatest from '../../../../../tools/codex/latest.json';
-import { download, type ProgressEvent } from '../downloader/index.js';
+import { download, type DownloadOptions } from '../downloader/index.js';
+
+/** Progress hooks forwarded to the shared downloader (bytes, retries, verification). */
+export type FallbackDownloadCallbacks = Partial<
+  Pick<DownloadOptions, 'onProgress' | 'onRetry' | 'onVerifying'>
+>;
 import { parseBinaryVersionOutput, readBinaryVersionOutput } from './binary-version-probe.js';
 
 export type LinuxRuntimeFallbackKind = 'claude-code' | 'codex';
@@ -476,7 +481,7 @@ export async function extractCodexBinaryFromTarGz(
 
 async function installClaudeFromOfficialAsset(
   signal?: AbortSignal,
-  onProgress?: (event: ProgressEvent) => void,
+  callbacks: FallbackDownloadCallbacks = {},
 ): Promise<string> {
   const version = CONFIG['claude-code'].version;
   const descriptor = pinnedOfficialAssetDescriptor('claude-code', version, claudeLatest);
@@ -488,7 +493,7 @@ async function installClaudeFromOfficialAsset(
     sha256: descriptor.sha256,
     expectedSize: descriptor.size,
     signal,
-    onProgress,
+    ...callbacks,
   });
   fs.chmodSync(binaryPath, 0o755);
   const versionOutput = await readExecutableVersion(binaryPath, signal);
@@ -501,7 +506,7 @@ async function installClaudeFromOfficialAsset(
 
 async function installCodexFromOfficialAsset(
   signal?: AbortSignal,
-  onProgress?: (event: ProgressEvent) => void,
+  callbacks: FallbackDownloadCallbacks = {},
 ): Promise<string> {
   const version = CONFIG.codex.version;
   const descriptor = pinnedOfficialAssetDescriptor('codex', version, codexLatest);
@@ -516,7 +521,7 @@ async function installCodexFromOfficialAsset(
       sha256: descriptor.sha256,
       expectedSize: descriptor.size,
       signal,
-      onProgress,
+      ...callbacks,
     });
     await extractCodexBinaryFromTarGz(archivePath, binaryPath);
   } finally {
@@ -545,7 +550,7 @@ export async function findUsableLinuxRuntimeFallbackBinary(
 
 export async function prepareLinuxRuntimeFallback(
   kind: LinuxRuntimeFallbackKind,
-  options: { signal?: AbortSignal; onProgress?: (event: ProgressEvent) => void } = {},
+  options: { signal?: AbortSignal } & FallbackDownloadCallbacks = {},
 ): Promise<{
   ready: boolean;
   binaryPath: string;
@@ -572,8 +577,13 @@ export async function prepareLinuxRuntimeFallback(
   if (systemPath) return { ready: true, binaryPath: systemPath, installed: false, source: 'system' };
 
   if (signal.aborted) throw new Error(`${kind} install cancelled`);
+  const callbacks: FallbackDownloadCallbacks = {
+    onProgress: options.onProgress,
+    onRetry: options.onRetry,
+    onVerifying: options.onVerifying,
+  };
   const binaryPath = kind === 'codex'
-    ? await installCodexFromOfficialAsset(signal, options.onProgress)
-    : await installClaudeFromOfficialAsset(signal, options.onProgress);
+    ? await installCodexFromOfficialAsset(signal, callbacks)
+    : await installClaudeFromOfficialAsset(signal, callbacks);
   return { ready: true, binaryPath, installed: true, source: 'installed' };
 }

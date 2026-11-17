@@ -17,12 +17,24 @@
  */
 
 import { useRef, useState, type ReactElement, type MouseEvent } from 'react';
-import { Globe, Link2, PanelRight } from 'lucide-react';
+import { GitPullRequest, Globe, Link2, PanelRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
 
+import {
+  MAX_STATUS_QUERIES,
+  parseSessionPrUrl,
+  prStatusKey,
+  type SessionPrRef,
+} from '@cindy/maker-shared';
+import { usePrActions, usePrRefsForSession } from '@/contexts/PrRefsContext';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+} from '@/contexts/dataOwnerGeneration';
+import { sessionsStore } from '@/lib/sessionsStore';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { toast } from '@/lib/toast';
-import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { extractIpcError } from '@/utils/ipcError';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,179 +43,16 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import {
-  openUrlInSidebarBrowser,
-  pathToFileUrl,
-} from '@/features/right-sidebar/lib/openInSidebarBrowser';
-import { getLinkOpenPreference, getLinkOpenPreferenceForUrl } from '@/hooks/useLinkOpenPreference';
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
-import type { SessionFileOrigin } from '@/lib/sessionFileOrigin';
-import { isSeparateLinkActivation, linkMenuPosition } from './linkInteraction';
-import { readMailPreview, openMailPreview } from '@/features/right-sidebar/lib/mailPreview';
+import { linkMenuPosition } from './linkInteraction';
+import { openInSidebar } from './messageLinkActions';
 
-/** 左键"按偏好直开"只对浏览器"作为页面渲染"有意义的 html 家族生效;其余本地
- *  文件保持原有"点击即预览"。右键菜单的 BROWSER_OPENABLE_EXTS 也收敛到
- *  HTML,二者保持同一产品语义。 */
-export function isHtmlFilePath(filePath: string): boolean {
-  return /\.(html?|xhtml)$/i.test(filePath);
-}
-
-/** 在侧边栏浏览器打开 url,失败 toast(addTab 上限 / IPC 异常等)。 */
-async function openInSidebar(sessionId: string, url: string, t: TFunction): Promise<void> {
-  try {
-    await openUrlInSidebarBrowser(sessionId, url);
-  } catch {
-    // store 层已 log,这里只给用户反馈。
-    toast.error(t('chat.markdownRenderer.openInSidebarFailed'));
-  }
-}
-
-/** http(s) / file 链接左键:按 URL 属于外部网页还是内部网页选对应偏好直开。 */
-export async function openUrlByPreference(
-  sessionId: string,
-  url: string,
-  t: TFunction,
-): Promise<void> {
-  if (url.startsWith('https://')) {
-    let supported = false;
-    try { supported = (await readMailPreview(sessionId, url, false)).supported; } catch { /* Older hosts retain normal link opening. */ }
-    if (supported) { await openMailPreview(sessionId, url); return; }
-  }
-  if (getLinkOpenPreferenceForUrl(url) === 'sidebar') {
-    await openInSidebar(sessionId, url, t);
-    return;
-  }
-  const res = await window.electronAPI.openExternal(url);
-  if (!res.success) toast.error(t('chat.markdownRenderer.openLinkFailed'));
-}
-
-/** Identical activation for user URLs, assistant Markdown and keyboard/middle clicks. */
-export async function activateMessageUrl(
-  event: Pick<MouseEvent<HTMLElement>, 'preventDefault' | 'stopPropagation' | 'shiftKey' | 'metaKey' | 'ctrlKey' | 'button'>,
-  sessionId: string | undefined,
-  url: string,
-  t: TFunction,
-): Promise<void> {
-  event.preventDefault();
-  event.stopPropagation();
-  try {
-    if (sessionId && !isSeparateLinkActivation(event)) {
-      await openUrlByPreference(sessionId, url, t);
-    } else {
-      const result = await window.electronAPI.openExternal(url);
-      if (!result.success) toast.error(t('chat.markdownRenderer.openLinkFailed'));
-    }
-  } catch {
-    toast.error(t('chat.markdownRenderer.openLinkFailed'));
-  }
-}
-
-// Repeated clicks share preparation and navigation, not a completed-result cache.
-const pendingHtmlPreviews = new Map<string, Promise<void>>();
-
-/** Local HTML opens in place; remote HTML uses the viewer-local HTTP preview. */
-export async function openHtmlFileByPreference(
-  sessionId: string,
-  absPath: string,
-  t: TFunction,
-  context: { origin: SessionFileOrigin; workingDir: string } = {
-    origin: { kind: 'local' },
-    workingDir: '',
-  },
-  target?: 'sidebar' | 'external',
-): Promise<void> {
-  if (context.origin.kind === 'local') {
-    if ((target ?? getLinkOpenPreference('local')) === 'sidebar' && sessionId) {
-      await openInSidebar(sessionId, pathToFileUrl(absPath), t);
-    } else {
-      try {
-        await window.electronAPI.openFileInBrowser(absPath);
-      } catch (error) {
-        toast.error(
-          t(
-            mapIpcErrorToI18nKey(error, {
-              namespace: 'chat.markdownRenderer',
-              fallback: 'chat.markdownRenderer.openInBrowserFailed',
-            }),
-          ),
-        );
-      }
-    }
-    return;
-  }
-  const resolvedTarget = target ?? getLinkOpenPreference('local');
-  const key = JSON.stringify([sessionId, context.origin, context.workingDir, absPath, resolvedTarget]);
-  const pending = pendingHtmlPreviews.get(key);
-  if (pending) return pending;
-  const opening = prepareRemoteHtml().finally(() => {
-    if (pendingHtmlPreviews.get(key) === opening) pendingHtmlPreviews.delete(key);
-  });
-  pendingHtmlPreviews.set(key, opening);
-  return opening;
-
-  async function prepareRemoteHtml(): Promise<void> {
-    const requestId = crypto.randomUUID();
-    let cancelled = false;
-    let finished = false;
-    let loading: string | null = null;
-    const cancel = () => {
-      if (cancelled || finished) return;
-      cancelled = true;
-      pendingHtmlPreviews.delete(key);
-      void window.electronAPI.fileBrowser.cancelHtmlPreview(requestId).catch(() => {});
-      if (loading) toast.dismiss(loading);
-    };
-    window.addEventListener('beforeunload', cancel);
-    const delayed = setTimeout(() => {
-      if (cancelled) return;
-      loading = toast.loading(t('chat.remoteFile.previewFetching'), {
-        action: { label: t('commonUi.confirmDialog.cancel'), onClick: cancel },
-        onClose: cancel,
-      });
-    }, 600);
-    try {
-      const result = await window.electronAPI.fileBrowser.previewHtml({
-        origin: context.origin,
-        workdir: context.workingDir,
-        absPath,
-        requestId,
-      });
-      if (cancelled) return;
-      finished = true;
-      if (resolvedTarget === 'sidebar' && sessionId) {
-        await openInSidebar(sessionId, result.url, t);
-      } else {
-        const opened = await window.electronAPI.openExternal(result.url);
-        if (!opened.success) toast.error(t('chat.markdownRenderer.openInBrowserFailed'));
-      }
-    } catch (error) {
-      const code = extractIpcError(error)?.code;
-      if (cancelled || code === 'HTML_PREVIEW_CANCELLED') return;
-      const key =
-        code === 'DEVICE_LINK_BUSY'
-          ? 'previewConnectionBusy'
-          : code === 'DEVICE_LINK_TIMEOUT'
-            ? 'previewTimeout'
-            : code === 'DEVICE_LINK_NOT_CONNECTED' ||
-                code === 'DEVICE_LINK_DEVICE_OFFLINE' ||
-                code === 'DEVICE_LINK_DEVICE_UNRESPONSIVE'
-              ? 'previewDisconnected'
-              : code === 'HTML_PREVIEW_TOO_LARGE'
-                ? 'previewTooLarge'
-                : code === 'HTML_PREVIEW_UNSUPPORTED'
-                  ? 'previewUnsupported'
-                  : code === 'NOT_FOUND'
-                    ? 'previewNotFound'
-                    : 'previewFailed';
-      toast.error(t(`chat.remoteFile.${key}`));
-    } finally {
-      finished = true;
-      window.removeEventListener('beforeunload', cancel);
-      clearTimeout(delayed);
-      if (loading) toast.dismiss(loading);
-    }
-  }
-}
+export {
+  activateMessageUrl,
+  openUrlByPreference,
+  isHtmlFilePath,
+  openHtmlFileByPreference,
+} from './messageLinkActions';
 
 export interface UseOpenWithMenu {
   openAt: (x: number, y: number, url: string) => void;
@@ -213,12 +62,102 @@ export interface UseOpenWithMenu {
 
 export function useOpenWithMenu({ sessionId }: { sessionId?: string }): UseOpenWithMenu {
   const { t } = useTranslation();
-  const [state, setState] = useState<{ x: number; y: number; url: string } | null>(null);
+  const [state, setState] = useState<{
+    x: number;
+    y: number;
+    url: string;
+    sessionId?: string;
+    owner: ReturnType<typeof getDataOwnerGeneration>;
+  } | null>(null);
   const sidebarTargetSessionId = useSidebarTargetSessionId(sessionId);
   const triggerRef = useRef<HTMLElement | null>(null);
+  const refs = usePrRefsForSession(sessionId ?? '');
+  const { invalidateRemotePrRefs } = usePrActions();
+  const adding = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const pr = state ? parseSessionPrUrl(state.url) : null;
+  const activeRefs = refs.filter(
+    (ref) => ref.removedAt == null && ref.associationSource !== 'legacy',
+  );
+  const associatedIndex = pr
+    ? activeRefs.findIndex((ref) => prStatusKey(ref) === prStatusKey(pr))
+    : -1;
+  const alreadyAdded = associatedIndex >= 0;
+  const inHeader = alreadyAdded && associatedIndex < MAX_STATUS_QUERIES;
+
+  async function handleAddPr(): Promise<void> {
+    if (
+      !sessionId ||
+      !pr ||
+      alreadyAdded ||
+      adding.current ||
+      state?.sessionId !== sessionId ||
+      !isDataOwnerGenerationCurrent(state.owner)
+    )
+      return;
+    const requestSessionId = sessionId;
+    const owner = state.owner;
+    const input = { sessionId: requestSessionId, action: 'add' as const, url: pr.url };
+    adding.current = true;
+    setBusy(true);
+    setState(null);
+    try {
+      let session = sessionsStore.findById(requestSessionId);
+      let deviceId = session?.deviceLinkDeviceId ?? getStickySessionDeviceId(requestSessionId);
+      if (!deviceId && !session) {
+        // Absence from the list is not proof of local ownership. Confirm the row
+        // before any write; a missing/disconnected remote task must not fall back.
+        session = await window.electronAPI.localDb.sessions.get(requestSessionId);
+        if (!session) throw new Error('Task unavailable');
+        deviceId = session.deviceLinkDeviceId ?? getStickySessionDeviceId(requestSessionId);
+      }
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      let result: unknown;
+      if (deviceId) {
+        result = await window.electronAPI.deviceLink.invoke(
+          deviceId,
+          'git-context:pr-refs:manage',
+          [input],
+        );
+        if (isDataOwnerGenerationCurrent(owner)) invalidateRemotePrRefs(requestSessionId);
+      } else {
+        result = await window.electronAPI.gitContext.managePrRefs(input);
+      }
+      if (isDataOwnerGenerationCurrent(owner)) {
+        // Manage returns sorted rows including removed entries, unlike the refs cache.
+        const visible =
+          !Array.isArray(result) ||
+          (result as SessionPrRef[])
+            .filter((ref) => ref.removedAt == null && ref.associationSource !== 'legacy')
+            .slice(0, MAX_STATUS_QUERIES)
+            .some((ref) => prStatusKey(ref) === prStatusKey(pr));
+        if (visible) toast.success(t('chat.markdownRenderer.prAddedToHeader'));
+        else toast.info(t('chat.markdownRenderer.prSavedNotInHeader'));
+      }
+    } catch (error) {
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      const code = extractIpcError(error)?.code;
+      const key =
+        code === 'ALREADY_EXISTS'
+          ? 'duplicate'
+          : code === 'INVALID_PARAMS'
+            ? 'invalidUrl'
+            : code === 'PRECONDITION_FAILED'
+              ? 'verifyFailed'
+              : code === 'UNSUPPORTED_CAPABILITY' || code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED'
+                ? 'unsupported'
+                : code === 'NOT_FOUND'
+                  ? 'notFound'
+                  : 'failed';
+      toast.error(t(`ccAgent.gitContext.pr.manage.errors.${key}`));
+    } finally {
+      adding.current = false;
+      setBusy(false);
+    }
+  }
 
   const openAt = (x: number, y: number, url: string): void => {
-    setState({ x, y, url });
+    setState({ x, y, url, sessionId, owner: getDataOwnerGeneration() });
   };
   const onContextMenu = (event: MouseEvent<HTMLElement>, url: string) => {
     event.preventDefault();
@@ -304,6 +243,18 @@ export function useOpenWithMenu({ sessionId }: { sessionId?: string }): UseOpenW
             {t('chat.markdownRenderer.shiftClick')}
           </DropdownMenuShortcut>
         </DropdownMenuItem>
+        {sessionId && pr ? (
+          <DropdownMenuItem onClick={handleAddPr} disabled={alreadyAdded || busy}>
+            <GitPullRequest className="mr-2 h-4 w-4" />
+            {t(
+              alreadyAdded
+                ? inHeader
+                  ? 'chat.markdownRenderer.prAlreadyInHeader'
+                  : 'chat.markdownRenderer.prAssociatedNotInHeader'
+                : 'chat.markdownRenderer.addPrToHeader',
+            )}
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={handleCopyLink}>
           <Link2 className="mr-2 h-4 w-4" />

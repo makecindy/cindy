@@ -19,7 +19,15 @@ export function sharedTaskRecoveryFor(message: string, agentDeviceId?: string | 
   const detailed = sharedTaskRecoveryReason(message);
   if (detailed) return detailed;
   if (!agentDeviceId?.startsWith('share:')) return undefined;
-  if (parseAgentErrorCode(message)?.code === 'REMOTE_AGENT_RESUME_UNAVAILABLE') return 'history';
+  // Presentation aliases only. Keep the probe/replay policy below based on the
+  // original transport code; these aliases must not authorize another call.
+  switch (parseAgentErrorCode(message)?.code) {
+    case 'REMOTE_AGENT_RESUME_UNAVAILABLE': return 'history';
+    case 'REMOTE_AGENT_TIMEOUT': case 'REMOTE_AGENT_UNRESPONSIVE': return 'timeout';
+    case 'REMOTE_AGENT_LINK_BUSY': return 'rate';
+    case 'REMOTE_AGENT_OFFLINE': return 'offline';
+    case 'REMOTE_AGENT_ACCESS_DENIED': return 'denied';
+  }
   // These errors already explain model/member budget actions precisely.
   if (/\[REMOTE_AGENT_(?:GROUP_USAGE_LIMIT|MEMBER_BUDGET_PAUSED)\]/.test(message)) return undefined;
   if (isQuotaExhaustedErrorMessage(message)) return 'budget';

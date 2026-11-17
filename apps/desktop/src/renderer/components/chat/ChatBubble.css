@@ -4,12 +4,13 @@
 }
 
 @container chat-bubble-layout (max-width: 480px) {
-  .chat-bubble-column {
+  /* Group topics retain their explicitly selected outer toolbar layout. */
+  .chat-bubble-column:not(:where(.thread-panel:not(.thread-panel-inline-actions) *)) {
     --chat-bubble-gutter: 0px;
   }
 
   /* Avoid reserving a side gutter for actions in narrow panes. */
-  .chat-bubble-toolbar {
+  .chat-bubble-toolbar:not(:where(.thread-panel:not(.thread-panel-inline-actions) *)) {
     position: relative;
     inset: auto;
     margin: 8px 0 0 auto;

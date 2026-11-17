@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ loggedIn: false, proxyReady: true, sharedSkillRefreshes: 0 }));
 const ensureLocalReady = vi.hoisted(() => vi.fn());
+const ensureProxyReady = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('../../local-model-runtime/preflight.js', () => ({
   ensureManagedOllamaReadyForSession: ensureLocalReady,
 }));
@@ -76,6 +77,7 @@ vi.mock('../grok-oauth-login.desktop.js', () => ({
 vi.mock('../anthropic-compat-proxy-host.js', () => ({
   getClaudeEndpoint: () => 'http://127.0.0.1:18765',
   isAnthropicCompatProxyHandleReady: () => state.proxyReady,
+  ensureAnthropicCompatProxyReady: ensureProxyReady,
 }));
 
 import { desktopPiAuthAdapter, resolvePiNativeProviders } from '../pi-host.js';
@@ -86,6 +88,7 @@ describe('Pi pure BYOM auth without a Cindy account', () => {
     state.proxyReady = true;
     state.sharedSkillRefreshes = 0;
     ensureLocalReady.mockReset();
+    ensureProxyReady.mockReset();
   });
 
   it.each(['cindy-local-llamacpp', 'cindy-local-ollama'])('starts %s on demand during local Pi provider resolution only', async providerId => {
@@ -105,6 +108,43 @@ describe('Pi pure BYOM auth without a Cindy account', () => {
       providerId: 'xai',
       model: 'grok-4.6',
     })).rejects.toThrow('local compatibility proxy is not ready');
+  });
+
+  // #10523, unit: actual desktop Pi resolver must wait for warmup, reject a
+  // gateway without the proxy, and preserve independently usable BYOM routes.
+  it('waits for proxy warmup and recovers a gateway route on a later attempt', async () => {
+    state.proxyReady = false;
+    const ctx = { workingDir: process.cwd(), providerId: 'xd', model: 'fixture-model' };
+    await expect(resolvePiNativeProviders(ctx)).rejects.toThrow('requires the local compatibility proxy');
+    let complete!: () => void;
+    ensureProxyReady.mockImplementationOnce(() => new Promise(resolve => { complete = () => { state.proxyReady = true; resolve(); }; }));
+    let settled = false;
+    const pending = resolvePiNativeProviders(ctx).then(value => { settled = true; return value; });
+    await vi.waitFor(() => expect(ensureProxyReady).toHaveBeenCalledTimes(2));
+    expect(settled).toBe(false);
+    complete();
+    await expect(pending).resolves.toHaveProperty('providers');
+  });
+
+  it('keeps native keyless BYOM, preview and remote routes usable without the proxy', async () => {
+    state.proxyReady = false;
+    ensureProxyReady.mockImplementation(async () => { throw new Error('unrelated proxy startup'); });
+    const ctx = { workingDir: process.cwd(), providerId: 'local-keyless', model: 'local-model' };
+    const result = await resolvePiNativeProviders(ctx);
+    expect(result.providers).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'local-keyless', baseUrl: 'http://127.0.0.1:11434/v1' })]));
+    expect(ensureProxyReady).not.toHaveBeenCalled();
+    await resolvePiNativeProviders({ ...ctx, purpose: 'preview' });
+    await resolvePiNativeProviders({ ...ctx, remoteHostId: 'remote-fixture' });
+    expect(ensureProxyReady).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { providerId: null, model: 'local-model' },
+    { providerId: 'openrouter-oauth', model: 'google/gemini-test' },
+  ])('does not replace the selected proxy route with a native default: %j', async route => {
+    state.proxyReady = false;
+    await expect(resolvePiNativeProviders({ workingDir: process.cwd(), ...route }))
+      .rejects.toThrow('requires the local compatibility proxy');
   });
 
   it('refreshes local shared skills before provider resolution and skips remote homes', async () => {

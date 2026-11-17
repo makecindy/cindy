@@ -4121,6 +4121,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
           | 'done'
           | 'failed';
         name: string;
+        /** Standard progress while downloading (shared/downloadProgress.ts). */
+        download?: import('../shared/downloadProgress').DownloadProgress;
         version?: string;
         absolutePath?: string;
         errorCode?: string;
@@ -5701,6 +5703,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('worktree:reveal', req),
   worktreeSuggestName: (req: { baseRepo: string }): Promise<unknown> =>
     ipcRenderer.invoke('worktree:suggest-name', req),
+  worktreeGenerateName: (req: { taskText: string }): Promise<unknown> =>
+    ipcRenderer.invoke('worktree:generate-name', req),
   worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest): Promise<import('../shared/worktreeCheckout').CheckoutReply> => ipcRenderer.invoke('worktree:checkout', req),
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest): Promise<import('../shared/worktreeBranchSync').BranchSyncStatus> => ipcRenderer.invoke('worktree:branch-sync-status', req),
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest): Promise<import('../shared/worktreeBranchSync').BranchSyncReply> => ipcRenderer.invoke('worktree:sync-branch', req),

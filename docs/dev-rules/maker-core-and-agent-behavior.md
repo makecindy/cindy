@@ -53,6 +53,11 @@ Claude Code 在原有 per-sidechain 回调里检测所有模型；Pi / Codex 在
 失败、混合执行、重定向或源文件读取不套用该例外。等待调用不清空普通调用的循环轨迹。
 这仍是有界启发式，不是任意长度循环的证明，也不以没有文件改动作为失败依据。
 
+工具结果正文因超限被省略时，`tool_result_full.data.outputOmitted: 'oversized'` 只表示正文未知。
+Session 仍配对收口工具、移除循环检测器的在途调用，但占位文案不参与输出相等指纹；未知结果
+打断完全相同结果与长只读窗口，不算作进展证据。工具名和参数仍参与已有疑似复核。
+回归见 `session.tool-loop.test.ts` 的真实 Codex translator 链路与 `loop-guard.test.ts`。
+
 Codex code mode 下脚本在后台运行，模型同时继续回应；app-server 只逐个上报脚本内部的工具调用，
 不标注调用属于哪段脚本，用量通知与思考 item 也会落在同一段脚本的调用之间，后台脚本与模型采样
 还会交叠，所以不能按“模型回应”分组，也不能凭全局最近一次结果推断调用归属。Codex 的 Guard 只用
@@ -733,6 +738,24 @@ Cindy 审核向 Codex／Claude 原生审核看齐：先判动作本身的风险�
 IM 与官方 Hook 确认卡统一显示为「自动审批需要你决定：…」，故障降级仍只显示固定文案。共用规则在
 `agents/shared/continuation-policy.ts`，真实模型配对比较入口为 `scripts/eval-auto-approval.mts`
 的 `--baseline-bundle`（隔离打包的旧审核器）；只审核合成操作，不执行副作用。
+
+审阅证据只算**一份**。MCP 工具调用的证据取原始调用（server、tool name、原始参数、工具标题
+与描述），不得再带确认卡那份渲染副本：codex 会把同一份 `tool_params` 再渲染一份
+`tool_params_display` 发给客户端（codex-rs `build_mcp_tool_approval_display_params` 是同一对象的
+逐字段副本，不是截断版），两份都进证据等于把同一个动作按完整证据预算
+（`MAX_AUTO_REVIEW_ACTION_TEXT_CHARS` = 131,072 字符）数两遍，普通调用会凭空多出一倍。
+证据里不做截断：参数一字不删，审阅模型看到的内容与之前完全一致，变的只是同一份内容不再被计两次。
+另有一个数不要混用：`MAX_AUTO_REVIEW_STATIC_TEXT_CHARS` = 4,096 是同步静态解析自己的上限，
+超过只是转完整模型审阅，不是拦截；完整证据超预算时裁决是 `ask`（交用户确认），不是静默拦截。
+拦截原因分两类：**Cindy 自己的确定性文案**（动作文本超限、证据不足、审阅器故障、授权范围变化、
+宿主固定的授权失效原因、delegate 根本没调用模型时给出的宿主固定判定）在决定里标 `policyReason`，
+可原样进 UI／日志／诊断通道；**模型自由文本**
+不带该标记，可能含参数、路径、片段，一律不得外泄。delegate 若判定出的是宿主自己的文案
+（没有调用模型），要用 `hostReason` 声明来源，由 maker-core 转成 `policyReason`；委托方解析模型
+输出时必须**新建对象**（不展开模型给的 JSON），模型才无法自己带上这个标记。Codex 的 MCP
+拦截通知只带 policy 原因。
+模型看到的拒绝文案由 codex app-server 决定（`user rejected MCP tool call`，客户端改不动），
+所以真实原因必须先在 Cindy 侧保住，别再让界面只显示一句通用文案。
 
 原生审批已接管的本地工具调用不叠加 Cindy 模型复审，以 Handle 的实时
 `getAutoReviewOwner()` 为准；Codex Guardian 故障切换后恢复 Cindy 负责。

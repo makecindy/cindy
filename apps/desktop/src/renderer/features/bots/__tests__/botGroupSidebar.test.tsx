@@ -177,6 +177,31 @@ afterEach(() => {
 });
 
 describe('TeammatesSection group chats', () => {
+  // #10822 / unit: exercise the real group row with an already-read server
+  // group and a retained hidden error. Earlier sidebar cases omit this overlap.
+  it('uses the server group result after stopping while preserving new failures and decisions', async () => {
+    mocks.profiles = [bot('mimi', '咪咪', [{ id: 'failed-step', kind: 'group', role: 'group', groupId: 'g1' }])];
+    mocks.islandActivity = new Map([['failed-step', { sessionId: 'failed-step', phase: 'error' }]]);
+    mocks.groups = [group({ serverBacked: true, serverUnread: { count: 0, mentioned: false },
+      teammateActivity: { phase: 'error' } })];
+    const view = await renderSidebar();
+    const status = () => view.container.querySelector('[data-bot-group-id="g1"] [data-teammate-status]')?.getAttribute('data-teammate-status');
+    expect(status()).toBe('error');
+    mocks.groups = [{ ...mocks.groups[0]!, teammateActivity: { phase: 'idle' } }];
+    view.rerender(<TeammatesSection />);
+    expect(status()).toBeUndefined();
+    // The original Session may already have disappeared; it is not needed to settle the group.
+    mocks.profiles = [];
+    view.rerender(<TeammatesSection />);
+    expect(status()).toBeUndefined();
+    mocks.groups = [{ ...mocks.groups[0]!, teammateActivity: { phase: 'error' } }];
+    view.rerender(<TeammatesSection />);
+    expect(status()).toBe('error');
+    mocks.groups = [{ ...mocks.groups[0]!, teammateActivity: { phase: 'needs-interaction' } }];
+    view.rerender(<TeammatesSection />);
+    expect(status()).toBe('awaiting');
+  });
+
   // 归档的群不在段内列出,经侧栏总搜索找回(见 teammateSearchResults.test.tsx)。
   it('leaves archived groups out of the section', async () => {
     mocks.groups = [group(), group({ id: 'saved', name: '已完成的旅行', archived: true })];
