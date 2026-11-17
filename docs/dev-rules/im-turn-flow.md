@@ -4,6 +4,7 @@
 > **读取时机**：修改个人 IM 渠道（`apps/desktop/src/main/im/**`）或官方 hook
 > （`apps/desktop/src/main/hook-control/**`）的找/建任务、命令、排队与插话、输入拼装、
 > 事件观察、表情、交互、收尾或停止逻辑之前
+> **适用路径**：`apps/desktop/src/main/im/**`、`apps/desktop/src/main/hook-control/**`
 
 个人 IM 渠道（Telegram / 飞书 / 微信 / 钉钉 / Discord / 企业微信）与官方 hook（官方
 Telegram / Slack / X / 飞书 / Lark）是同一件事的两套实现：把渠道里的一条消息变成 Cindy 任务里的一轮，
@@ -45,6 +46,10 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 覆盖用户刚固定的模型或切换后的渠道。
 
 ## 0. 项目清单（2026-11-13）
+
+插件 IM 入口可经批准的 `tasks.imProjects/create/followImProject` 使用同一份项目与配置，
+不读私有文件、不另存模型默认值；微信包装插件按群/私聊保存项目选择。具体合同见
+[插件 IM 共用项目与模型](protocol-compatibility/plugin-im-projects.md)。官方渠道原有命令和镜像协议不变。
 
 **侧栏的本机项目就是 IM 机器人用的项目**，不另设「工作目录映射」这一层概念；界面与机器人文案一律叫
 「项目」，「工作目录」只指 Agent 实际干活的那个目录（术语表）。

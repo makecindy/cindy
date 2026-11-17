@@ -10,6 +10,13 @@ import { getClientEndpoint } from '../clientEndpointsService.js';
 import { ServerApiError, serverApiFetch, type ApiFetchOptions } from '../serverApiClient.desktop.js';
 import { requireObject, throwIpcError } from '../utils/ipcValidate.js';
 import { isAllowedBillingRedirectUrl } from './paymentRedirect.js';
+import { normalizeGiftCardCode } from '../../shared/giftCard.js';
+import {
+  GIFT_CARD_ERROR_CODES,
+  giftCardFailureOf,
+  projectBillingGiftCardPreview,
+  projectBillingGiftCardRedemption,
+} from './giftCard.js';
 import {
   projectBillingCatalog,
   projectBillingCurrentSubscription,
@@ -231,6 +238,38 @@ export function createBillingHandlers(
     } catch (error) {
       throwBillingFetchError(error);
     }
+  };
+  /**
+   * 礼品卡请求：兑换码只走请求体。服务端明确给出的卡片状态作为结果返回，由
+   * Renderer 逐一说明；其它失败沿用计费请求的统一错误。
+   */
+  const giftCard = async <T extends object>(
+    path: string,
+    raw: unknown,
+    project: (value: unknown) => T,
+  ) => {
+    const payload = requireObject(raw);
+    assertOnlyKeys(payload, ['code'], 'payload');
+    const code = typeof payload.code === 'string' ? normalizeGiftCardCode(payload.code) : null;
+    if (!code) return { ok: false as const, reason: 'NOT_FOUND' as const };
+    let response: unknown;
+    try {
+      response = await fetch<unknown>(path, {
+        method: 'POST',
+        body: { code },
+        timeoutMs: BILLING_REQUEST_TIMEOUT_MS,
+        redactErrorDetails: true,
+        allowedRedactedErrorCodes: GIFT_CARD_ERROR_CODES,
+        // 403 只把「需要个人身份」当成预期结果；其它 403 仍按异常记录。
+        expectedErrors: [{ status: 404 }, { status: 409 }, { status: 429 }, { status: 403, code: 'PERSONAL_ACCOUNT_REQUIRED' }],
+        baseUrl: getBaseUrl,
+      });
+    } catch (error) {
+      const reason = giftCardFailureOf(error);
+      if (reason) return { ok: false as const, reason };
+      throwBillingFetchError(error);
+    }
+    return { ok: true as const, ...projectResponse(response, project) };
   };
   const protect =
     (handler: (payload?: unknown) => Promise<unknown>): BillingHandler =>
@@ -475,6 +514,12 @@ export function createBillingHandlers(
         return { success: false };
       }
     }),
+    [BILLING_INVOKE.PREVIEW_GIFT_CARD]: protect((raw) =>
+      giftCard('/api/gift-cards/preview', raw, projectBillingGiftCardPreview),
+    ),
+    [BILLING_INVOKE.REDEEM_GIFT_CARD]: protect((raw) =>
+      giftCard('/api/gift-cards/redeem', raw, projectBillingGiftCardRedemption),
+    ),
   };
 }
 

@@ -681,3 +681,104 @@ describe('billing IPC', () => {
     expect(openExternal).not.toHaveBeenCalled();
   });
 });
+
+describe('gift card IPC', () => {
+  const card = {
+    status: 'AVAILABLE',
+    source: 'PLATFORM',
+    amount: '20',
+    currency: 'USD',
+    faceCode: 'cindy',
+    senderName: 'Cindy Team',
+    message: null,
+    claimDeadline: '2026-12-31T16:00:00.000Z',
+    validityDays: 90,
+    claimedAt: null,
+  };
+  const projected = {
+    status: 'AVAILABLE',
+    amount: '20',
+    faceCode: 'cindy',
+    senderName: 'Cindy Team',
+    message: null,
+    claimDeadline: '2026-12-31T16:00:00.000Z',
+    validityDays: 90,
+    claimedAt: null,
+  };
+
+  it('sends the normalized code in the request body and returns only the fields the dialog shows', async () => {
+    const { call, fetch } = harness();
+    fetch.mockResolvedValueOnce({ card });
+
+    await expect(call(BILLING_INVOKE.PREVIEW_GIFT_CARD, { code: ' g012-3456-789a-bcde ' }))
+      .resolves.toEqual({ ok: true, card: projected });
+
+    const [path, options] = fetch.mock.calls[0]!;
+    // 兑换码不出现在路径里；上游错误细节脱敏，只放行礼品卡状态码。
+    expect(path).toBe('/api/gift-cards/preview');
+    expect(options).toMatchObject({
+      method: 'POST',
+      body: { code: 'G0123456789ABCDE' },
+      redactErrorDetails: true,
+      allowedRedactedErrorCodes: expect.arrayContaining(['GIFT_CARD_ALREADY_CLAIMED', 'GIFT_CARD_WRONG_REGION']),
+    });
+  });
+
+  it('returns the credit state from redeem so a pending credit is not shown as failed', async () => {
+    const { call, fetch } = harness();
+    fetch.mockResolvedValueOnce({
+      card: { ...card, status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-16T12:00:00.000Z' },
+      credit: { state: 'PENDING', amount: '20', expiresAt: null },
+    });
+
+    await expect(call(BILLING_INVOKE.REDEEM_GIFT_CARD, { code: 'G0123456789ABCDE' })).resolves.toEqual({
+      ok: true,
+      card: { ...projected, status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-16T12:00:00.000Z' },
+      credit: { state: 'PENDING', amount: '20', expiresAt: null },
+    });
+    expect(fetch.mock.calls[0]![0]).toBe('/api/gift-cards/redeem');
+  });
+
+  it.each([
+    ['GIFT_CARD_NOT_FOUND', 404, 'NOT_FOUND'],
+    ['GIFT_CARD_WRONG_REGION', 409, 'WRONG_REGION'],
+    ['GIFT_CARD_ALREADY_CLAIMED', 409, 'ALREADY_CLAIMED'],
+    ['GIFT_CARD_EXPIRED', 409, 'EXPIRED'],
+    ['GIFT_CARD_VOIDED', 409, 'VOIDED'],
+    ['RATE_LIMITED', 429, 'RATE_LIMITED'],
+  ])('reports %s as a card state instead of a generic failure', async (code, status, reason) => {
+    const { call, fetch } = harness();
+    fetch.mockRejectedValueOnce(new ServerApiError(code, status, 'redacted'));
+
+    await expect(call(BILLING_INVOKE.REDEEM_GIFT_CARD, { code: 'G0123456789ABCDE' }))
+      .resolves.toEqual({ ok: false, reason });
+  });
+
+  it('treats text that is not a redeem code as invalid without a network request', async () => {
+    const { call, fetch } = harness();
+
+    await expect(call(BILLING_INVOKE.PREVIEW_GIFT_CARD, { code: 'https://share.cindy.app/gift' }))
+      .resolves.toEqual({ ok: false, reason: 'NOT_FOUND' });
+    await expect(call(BILLING_INVOKE.PREVIEW_GIFT_CARD, { code: 'G0123456789ABCDE', membershipId: 'other' }))
+      .rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps service failures and malformed responses as errors, never as a redeemed card', async () => {
+    const { call, fetch } = harness();
+    fetch.mockRejectedValueOnce(new ServerApiError('INTERNAL_ERROR', 500, 'redacted'));
+    await expect(call(BILLING_INVOKE.REDEEM_GIFT_CARD, { code: 'G0123456789ABCDE' }))
+      .rejects.toMatchObject({ code: 'INTERNAL' });
+
+    fetch.mockResolvedValueOnce({ card: { ...card, status: 'SOMETHING_NEW' }, credit: { state: 'APPLIED', amount: '20', expiresAt: null } });
+    await expect(call(BILLING_INVOKE.REDEEM_GIFT_CARD, { code: 'G0123456789ABCDE' }))
+      .rejects.toMatchObject({ code: 'INTERNAL' });
+  });
+
+  it('is only available to the main window', async () => {
+    const { call, fetch } = harness();
+    await expect(call(BILLING_INVOKE.REDEEM_GIFT_CARD, { code: 'G0123456789ABCDE' }, { id: 2 }))
+      .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});

@@ -4,6 +4,16 @@
 >
 > **状态**：权威（authoritative）。
 > **约束力**：本文「协同运行时行为契约」「坑点与不变量」两节是 Orca 协同代码的约束源，治理范围包括 `apps/desktop` 的 `maker-ipc/orca*` 服务与 `mcp-integrations` codex MCP 集成、`packages/lizi-mcps` 的 `orca` server 与 worker 控制工具、`packages/orca-workflow`、`packages/maker-core` 的 codex MCP context。改这些模块前先读本文；本文与代码实现冲突时以代码为准（遵循「以源码实现为准」原则），但必须同步修正本文。
+>
+> **读取时机**：修改 Orca 多 Agent 协同之前
+> **适用路径**：`apps/desktop/src/main/maker-ipc/**/orca*`、`apps/desktop/src/main/localDb/**/orca*`、
+> `apps/desktop/src/main/maker-host/**/orca*`、
+> `apps/desktop/src/main/mcp-integrations/**/codexMcpThreadContextStore*`、
+> `apps/desktop/src/renderer/features/cc-agent/**/*{Orca,orca}*`、
+> `apps/desktop/src/renderer/features/right-sidebar/plugins/orca-workers/**`、
+> `apps/desktop/src/shared/orca*`、`apps/mobile/src/session/*{Orca,orca}*`、
+> `packages/orca-workflow/**`、`packages/lizi-mcps/src/orca/**`、
+> `packages/lizi-mcps/src/xdt-helper/*worker*`、`packages/{maker-shared,device-link}/src/orca*`
 
 ## 目录
 

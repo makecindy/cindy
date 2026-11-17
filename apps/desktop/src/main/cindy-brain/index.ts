@@ -30,7 +30,7 @@ import { projectPluginWorkdir, resolvePluginWorkdir } from './remotePluginProjec
 import { takePeerAttachment } from '../device-link/peerAttachmentStore.js';
 import { parsePeerAttachmentRef } from '@cindy/device-link';
 import { capturePluginOauthPeer } from '../plugin-oauth/runtime.js';
-import { projectPluginPublishingSource } from './pluginPublishingSource.js';
+import { projectPluginPublishingSource, projectPluginInstallationSource } from './pluginPublishingSource.js';
 import { readMobilePreview } from './mobilePreview.js';
 import { createMailReader, mailReaderRemoteProvider } from './mailReader.js';
 import { resolveForgeInstallTarget, ghostInstallTargetContext } from './ghostInstallTarget.js';
@@ -101,8 +101,12 @@ import { makerStartupGate } from '../maker-host/startup-gate.js';
 import {
   createGhostAgentModelsCache,
   projectGhostAgentModels,
+  withGhostModelDescriptions,
   type GhostAgentLocationsReadResult,
 } from './ghostAgentModels.js';
+import { createGhostModelPreferencesProvider } from './ghostModelPreferences.js';
+import { applyHostModelFavorite, readHostModelPreferences } from '../maker-ipc/modelFavoritesSync.js';
+import { modelDescriptionKey } from '../../shared/modelDescriptionKey.js';
 import { GhostModelPicker, chooseModelPickerWindow, readPluginModelRouteCatalog, getPluginModelPickerAgents, isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, type RemotePluginRouteAgentStatus } from './ghostModelPicker.js';
 import type { PluginModelPickerRoute } from '../../shared/pluginModelPicker.js';
 import { installGhostPageModelPicker } from './ghostPageModelPicker.js';
@@ -215,7 +219,7 @@ export async function requestPluginUiApproval(id: string, sender?: WebContents, 
       return accepted;
     } : createWindowGhostInstallConsentPrompt(target!, confirmed => { declined = !confirmed; });
     const accepted = await confirm({
-      trust: ghost.trust?.level, purpose: 'ui-capability', initiator: 'user', origin: 'local-file', facts: {
+      installationSource: ghost.installationSource ?? { kind: 'unknown' }, trust: ghost.trust?.level, purpose: 'ui-capability', initiator: 'user', origin: 'local-file', facts: {
         kind: 'update', ghostId: id, name: ghost.manifest.name, version: ghost.manifest.version,
         previousVersion: ghost.manifest.version, added: ghostPermissionItems(ghost.manifest).filter(item => item.key === 'ui:pages'),
         removed: [], unchangedCount: 0, builtinOauthClientChanged: false,
@@ -389,6 +393,7 @@ import {
   setGhostModelsHandler,
   setGhostMediaModelsProvider,
   setGhostAgentModelsProvider,
+  setGhostModelPreferencesProvider,
   setGhostModelPickerProvider,
   setGhostOauthHandler,
   setGhostSandboxDevToolsDisabled,
@@ -431,7 +436,7 @@ import { cancelActiveGhostOauthFlow } from './ghostOauthFlow.js';
 import { mapGhostOauthConnectError } from './ghostOauthSetupError.js';
 import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
-import { getResolvedMainLocale, t } from '../i18n.desktop.js';
+import { getResolvedMainLocale, rawMainString, t } from '../i18n.desktop.js';
 import { refreshGhostLocalizationIfChanged } from './ghostLocalizationRefresh.js';
 import type { SupportedLocale } from '../../shared/locale.js';
 import { getDeepLinkMainWindow } from '../deepLink.js';
@@ -806,7 +811,7 @@ import { resolveGhostMediaHandoverTarget } from './ghostMediaHandoverTargetTrack
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { ghostSetupNavigationForAction } from './ghostSetupNavigation.js';
 import { assessPluginSetup, pluginSetupProbes, pluginOauthReauthSuggestion } from './pluginSetupService.js';
-import { isModelAccessReady } from '../model-access/readiness.js';
+import { isModelAccessReady, isModelAccessTransientlyUnavailable } from '../model-access/readiness.js';
 import {
   filterEnabledGatewayMediaModels,
   isMediaModelExecutable,
@@ -2154,6 +2159,7 @@ export function getGhostManager(): GhostManager {
         }
         return {
           publishingSource: projectPluginPublishingSource(record, receipt, lookup),
+          installationSource: projectPluginInstallationSource(record, receipt, lookup),
         };
       },
       prepareListingSources: () => {
@@ -2163,6 +2169,8 @@ export function getGhostManager(): GhostManager {
             project: (record, receipt) => ({
               publishingSource: projectPluginPublishingSource(record, receipt,
                 snapshot.lookup({ ghostId: record.ghostId, namespace: record.namespace })),
+              installationSource: projectPluginInstallationSource(record, receipt,
+                snapshot.lookup({ ghostId: record.ghostId, namespace: record.namespace })),
             }),
             isCurrent: snapshot.isCurrent,
           };
@@ -2170,6 +2178,7 @@ export function getGhostManager(): GhostManager {
           return {
             project: (record, receipt) => ({
               publishingSource: projectPluginPublishingSource(record, receipt, { kind: 'invalid' }),
+              installationSource: projectPluginInstallationSource(record, receipt, { kind: 'invalid' }),
             }),
             // A failed read is not a validated snapshot; let async scans retry.
             isCurrent: () => false,
@@ -6139,6 +6148,8 @@ export function getGhostCindySlot(): GhostCindySlot {
       // model-access 下发值同源，模型别名和 Claude 原生 Web Search 工具定义
       // 留在主机侧，意识只拿规范化结果。
       searchWeb: (params) => getCindyProxySearchService().search(params),
+      isModelAccessReady,
+      isModelAccessTransientlyUnavailable,
       // 快问快答(text.oneshot):走轻量任务模型链(与会话起标题/任务摘要
       // 同一条,用户在设置里配置)。动态 import:utility-model 的传递依赖在
       // 模块顶层读 electron app 路径,静态引入会把这条链拽进所有 import 本
@@ -6185,6 +6196,7 @@ export function getGhostCindySlot(): GhostCindySlot {
           return {
             ok: false,
             reason: 'no_candidate',
+            providerId: r.attempts[0]?.providerId,
             message: '当前没有可用的快速通道模型(用户未配置或凭证不可用),请如实告知用户并优雅降级',
           };
         }
@@ -6654,11 +6666,9 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
   const storeId = installedGhostStoragePart(ghost);
   const runtimeManifest = ghost.manifest;
   return assessPluginSetup({
-    translate: t,
     manifest: runtimeManifest,
     probes: getGhostSetupProbes(storeId, runtimeManifest),
     revision: getGhostSetupChangeBus().currentRevision(storeId),
-    clientConfigReady: configId => configId === 'model-provider' && isModelAccessReady(),
     reauthSuggestion: () => getGhostOauthReauthSuggest(runtimeManifest, storeId),
   });
 }
@@ -9466,6 +9476,11 @@ export function registerGhostIpc(): void {
   setGhostAppContextProvider(currentGhostAppContext);
   setGhostModelPickerProvider((id, options, current, signal) => getGhostModelPicker().request(id, options, current, signal));
   setGhostMediaModelsProvider(getGhostConfigurableMediaModels);
+  // Same localized blurb as the picker row (`localizedModelDescription`), in the Main UI language.
+  const describeGhostModel = (model: { id: string; group?: string }): string | undefined => {
+    const key = modelDescriptionKey(model);
+    return (key && rawMainString(`modelDescriptions.${key}`)) || undefined;
+  };
   setGhostAgentModelsProvider(async (instanceId, agentDeviceId) => {
     const owner = activeOwnerScopeKey();
     if (!findGhostForInstanceId(instanceId)?.enabled) {
@@ -9480,7 +9495,7 @@ export function registerGhostIpc(): void {
       if (owner !== activeOwnerScopeKey() || !findGhostForInstanceId(instanceId)?.enabled) {
         return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Plugin unavailable' };
       }
-      return catalog;
+      return withGhostModelDescriptions(catalog, describeGhostModel);
     }
     const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
     if (owner !== activeOwnerScopeKey() || !findGhostForInstanceId(instanceId)?.enabled) {
@@ -9494,7 +9509,8 @@ export function registerGhostIpc(): void {
     if (owner !== activeOwnerScopeKey() || !findGhostForInstanceId(instanceId)?.enabled || !maker) {
       return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Model runtimes unavailable' };
     }
-    const projected = projectGhostAgentModels(views, maker.listAvailableAgents(), getModelVisibilityOverride);
+    const projected = withGhostModelDescriptions(
+      projectGhostAgentModels(views, maker.listAvailableAgents(), getModelVisibilityOverride), describeGhostModel);
     if (!projected.ok) return projected;
     if (!listGhostAgentLocations) return { ...projected, supportsRemoteRoutes: true };
     const locations = await ghostAgentModelsCache.locations(owner, listGhostAgentLocations);
@@ -9503,6 +9519,14 @@ export function registerGhostIpc(): void {
     }
     return { ...projected, supportsRemoteRoutes: true, ...(locations ? { locations } : {}) };
   });
+  // agent.modelPreferences:收藏读写/最近使用只读,复用 device-link 同一条 owner 围栏的
+  // renderer 收藏桥(maker-ipc/modelFavoritesSync),不建第二份收藏或最近使用存储。
+  setGhostModelPreferencesProvider(createGhostModelPreferencesProvider({
+    getGhost: findGhostForInstanceId,
+    ownerKey: activeOwnerScopeKey,
+    read: readHostModelPreferences,
+    apply: applyHostModelFavorite,
+  }));
   // 面板唤醒电子脑(cindy-ghost://<id>/wake 供片分支):面板零桥,唤醒经它
   // 自己的协议通道进来。只对"已装且唤醒"的意识放行;熔断态不清账(重载 /
   // 重新唤醒才 resetFuse),spawn 幂等所以重复唤醒零成本。
@@ -10186,6 +10210,7 @@ export function registerGhostIpc(): void {
       const result = await handlePluginTaskRequest(id, type === 'targets-request' ? { type: 'tasks-request', kind: 'capabilities' } : payload, {
         getGhost: findGhostForInstanceId, handler: pluginTaskHandler, isCurrent,
         ensureAuthorized: () => requestPluginTaskApproval(id, isCurrent, confirmCapability),
+        ensureTargetsAuthorized: () => requestPluginTaskApproval(id, isCurrent, confirmCapability, false, 'targets'),
       });
       if (type !== 'targets-request' || !result.ok) return result;
       try {

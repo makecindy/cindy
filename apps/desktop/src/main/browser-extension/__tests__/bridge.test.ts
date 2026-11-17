@@ -589,6 +589,25 @@ describe('bridge · 作业生命周期', () => {
     expect((await clicked).ok).toBe(true);
   });
 
+  // 2026-11-17 manual test: the side panel model list was rejected and the picked model dropped
+  // here, so webpage chat silently ran on the plugin default. Relays carry them to the plugin.
+  it('侧边栏的模型名单、收藏修改与所选模型原样转交给插件', async () => {
+    const { ready, relays } = await fixture();
+    const c = await ready();
+    const route = { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5', effort: 'high', fastMode: true };
+    const chat = { op: 'conversation', scenario: 'webpage-chat', instruction: 'q', text: 'page', source: { url: 'https://example.test/' }, route };
+    const favorite = { op: 'model-favorite', mutation: { kind: 'add', item: { providerId: 'openai', modelId: 'gpt-5.5', agent: 'codex', effort: 'none', extra: 1 } } };
+    for (const request of [{ op: 'models' }, favorite, chat])
+      expect((await c.signed('/learning/start', { id: crypto.randomUUID(), request })).ok).toBe(true);
+    expect(relays.map((r) => r.request.op)).toEqual(['models', 'model-favorite', 'conversation']);
+    // Review 2026-11-17 (Codex P2): "Off" (`none`) is a picker effort and must pass validation.
+    expect(relays[1].request.mutation).toEqual({ kind: 'add', item: { providerId: 'openai', modelId: 'gpt-5.5', agent: 'codex', effort: 'none' } });
+    expect(relays[2].request.route).toEqual(route);
+    // Another computer's route, or a route outside webpage chat, never reaches the plugin.
+    for (const request of [{ ...chat, route: { ...route, agentDeviceId: 'other' } }, { op: 'translate', text: 'x', route }])
+      expect((await c.signed('/learning/start', { id: crypto.randomUUID(), request })).status).toBe(400);
+  });
+
   // Review 2026-10-30 (Codex P1): a relayed answer from a plugin is bounded before it is held.
   it('插件返回的转交结果过大时改为结构化失败', async () => {
     const { bridge, ready } = await fixture();
@@ -744,6 +763,15 @@ describe('bridge · 转交请求(翻译/字幕)', () => {
     expect(progress.prompt).toBeUndefined();
     bridge.relayProgress(job.id, { stage: 'untrusted arbitrary text' });
     expect((await c.signed('/learning/result', { id: job.id })).progress.stage).toBe('model');
+    // Side panel streaming (2026-11-17): the partial answer rides along with an allowed stage;
+    // oversized text is dropped (the stage still lands) and an unknown stage carries nothing.
+    bridge.relayProgress(job.id, { stage: 'generating', text: '部分回答' });
+    expect((await c.signed('/learning/result', { id: job.id })).progress).toMatchObject({ stage: 'generating', text: '部分回答' });
+    for (const progress of [{ stage: 'validating', text: 'x'.repeat(32_769) }, { stage: 'not-a-stage', text: 'leak' }]) {
+      bridge.relayProgress(job.id, progress);
+      const { stage, text } = (await c.signed('/learning/result', { id: job.id })).progress;
+      expect([stage, text]).toEqual(['validating', undefined]);
+    }
     expect(bridge.relayResult(job.id, { ok: true, translations: ['你好'] })).toEqual({ ok: true });
     expect(await c.signed('/learning/result', { id: job.id })).toMatchObject({
       done: true,

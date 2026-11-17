@@ -3264,6 +3264,7 @@ interface ElectronAPI {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
+        | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => void,
@@ -3289,6 +3290,7 @@ interface ElectronAPI {
     | { type: 'plugin'; pluginId: string }
     | { type: 'local-plugin-share'; snapshotId: string }
     | { type: 'installed-plugin'; ghostId?: string }
+    | { type: 'gift-card'; code: string }
     | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
     | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' }
     | null
@@ -4371,7 +4373,9 @@ interface ElectronAPI {
       enabled: boolean,
     ) => Promise<{ deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }>;
     listDevices: () => Promise<{ devices: DeviceLinkDeviceView[]; stale?: boolean;
-      displayBudget?: { remainingMs: number } }>;
+      /** Only one hybrid discovery leg answered: absence is not an authoritative removal. */
+      partial?: boolean;
+      displayBudget?: { remainingMs: number }; retryAtMs?: number }>;
     /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照 */
     getPeerLinks: () => Promise<DeviceLinkPeerLinksSnapshot>;
     /** 对端链路拓扑变化,payload 为全量快照 */
@@ -4663,6 +4667,8 @@ interface ElectronAPI {
   worktreeSuggestName: (req: {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').SuggestNameResp>;
+  /** Opt-in model-written name for a new task's worktree; `name: null` keeps the generated one. */
+  worktreeGenerateName: (req: { taskText: string }) => Promise<{ name: string | null }>;
   worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest) => Promise<import('../shared/worktreeCheckout').CheckoutReply>;
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncStatus>;
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncReply>;

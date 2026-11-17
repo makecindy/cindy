@@ -143,3 +143,4 @@ export type {
 } from './types.js';
 
 export { createWebSocketMessageTransform } from './websocket-message-transform.js';
+export { reserveAttachmentTransferDisk } from './oversized-attachments.js';

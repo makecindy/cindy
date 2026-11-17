@@ -5525,6 +5525,13 @@
       },
       "toggleAria": "Toggle question navigation rail"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Name worktrees with a model",
+        "description": "Gives a new task's worktree a short English name based on its first message (e.g. fix-login-timeout), so the folder and branch show what they're for. Uses the auxiliary models; if naming fails, a random name is used. Only affects worktrees created from now on."
+      },
+      "toggleAria": "Toggle naming worktrees with a model"
+    },
     "promptRecommendation": {
       "label": "Input Suggestions",
       "description": "After a reply, the input shows a suggestion for your next message. Press Tab to insert it.",
@@ -8227,8 +8234,8 @@
         "hostTools_controlDetail": "Use Cindy’s task tools to edit, archive, restore and control existing tasks and projects, and import native task files on this computer.",
         "hostTools_handoff": "Task Messaging",
         "hostTools_handoffDetail": "Use Cindy’s task tools to send messages to existing tasks. Operations needing a current task require an explicit task target.",
-        "hostTools_usage": "Read subscription usage",
-        "hostTools_usageDetail": "Read account identifiers, plans, quota windows and update times for Claude and Codex subscriptions connected to your current Cindy account on this computer. Cannot read emails, credentials, files or other computers, or change accounts.",
+        "hostTools_usage": "Read usage and provider group status",
+        "hostTools_usageDetail": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, provider group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings.",
         "hostTools_settings": "App Settings",
         "hostTools_settingsDetail": "Use Cindy’s settings tools to read and change app configuration. Secrets are not returned, and private input remains yours to provide.",
         "hostTools_scheduler": "Automation Management",
@@ -8256,6 +8263,8 @@
         "hostTools_terminalDetail": "Start commands and interactive terminals as your user on this computer, read output, send input and stop this plugin’s processes. Commands can access your files and apps.",
         "agentHiddenTasks": "Can create background tasks hidden from the task list",
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
+        "agentModelPreferences": "Read and edit your model favorites, and read your recently used models",
+        "agentModelPreferencesDetail": "Can read the model favorites and recently used models on this computer, including effort and Fast settings, and add, change or remove favorites. Changes also appear in Cindy’s model picker. Models chosen in the plugin are not added to recently used. Models on your other computers or shared with you are not included, and no credentials are shared.",
         "agentErrand": "Create tasks, perform work, and read results",
         "agentErrandDetail": "Created tasks appear in Cindy’s task list, where you can view progress and continue the conversation.",
         "agentSchedule": "Can ask you to create an automation",
@@ -8418,6 +8427,7 @@
             "contentStyle": "Change message spacing and bubble styling"
           },
           "positions": {
+            "composer_header": "area above the input box",
             "composer_toolbar": "input toolbar",
             "session_header": "task header",
             "statusbar": "status bar",
@@ -10879,7 +10889,12 @@
       "summary": "Self-introduction",
       "summaryPlaceholder": "For example: a novelist who loves serial fiction, has a dry sense of humor, and is fascinated by what makes characters tick.",
       "avatarSelectionFailed": "Couldn’t read the image. Choose a PNG, JPEG, or WebP image up to 5 MB.",
-      "personality": "Personality & conversation"
+      "personality": "Personality & conversation",
+      "sourceLength": "{{length}} / {{limit}} UTF-16 units (surrounding whitespace excluded).",
+      "sourceExcess": "{{excess}} units over the limit. Shorten the text before saving.",
+      "sourceTooLong": "This text is too long to save. Edit it to continue.",
+      "sourceRecovery": "The saved original is unchanged and the full draft remains on this page. After copying, paste it somewhere safe and check that the full text is there before shortening it or discarding these changes.",
+      "sourceCopy": "Copy full text"
     },
     "nameLabel": "What Should We Call Them?",
     "close": "Close",
@@ -12968,7 +12983,7 @@
           "reasoningDominated": "Thinking used up most of the output budget, so the reply may be incomplete. Lower the reasoning effort, or compact the conversation first, then continue.",
           "generic": "The model hit its output length limit, so this reply may be incomplete. Send a new message to continue. If it keeps happening, lower the reasoning effort or compact the conversation first.",
           "join": "{{usage}} {{guidance}}",
-          "silentStopExhausted": "The model returned empty responses several times in a row, so automatic continuation is paused."
+          "silentStopExhausted": "An empty response was detected. Automatic continuation is paused."
         },
         "permission": {
           "autoReviewUnavailable": "Auto-review didn't finish. Confirm whether to allow this action.",
@@ -13720,12 +13735,6 @@
         "TARGET_UNAVAILABLE": "This plugin is disabled, uninstalled, or unavailable. Check the plugin and try again.",
         "ASSESSMENT_FAILED": "Couldn't refresh the setup status. Try again.",
         "TIMEOUT": "Setup timed out. Try again."
-      },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "AI Model Service",
-          "description": "Connect an available model service before using the image or video capabilities declared by this plugin."
-        }
       },
       "form": {
         "placeholder": "Enter {{label}}",
@@ -15035,6 +15044,7 @@
       "pluginDisabledUnnamed": "Automatic checks are blocked: a required plugin is disabled. They resume once it is enabled.",
       "installPlugin": "Install plugin",
       "openPlugin": "Open plugin",
+      "enablePlugin": "Turn on plugin",
       "dismissTitle": "Dismiss past failure notice"
     },
     "worktreeRestoreBanner": {
@@ -15698,6 +15708,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again.",
       "MCP_APPROVAL_AUTO_BLOCKED": "Automatic approval review blocked this tool call. No manual rejection was received.",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "Auto approve blocked this tool call because its action details are incomplete.",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "Auto approve blocked this tool call because your instructions changed or are not yet synchronized.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "Auto approve blocked this tool call because directory permissions changed.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "Auto approve blocked this tool call because its delegated authorization changed.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "Auto approve blocked this tool call because its plugin or task authorization is no longer active.",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "Auto approve blocked this tool call because no user request authorizes the action.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "Auto approve blocked this tool call because the work plan exceeds the supported size.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "Auto approve blocked this tool call because the executing Agent does not match the registered work plan.",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "Auto approve blocked this tool call because the task’s working directory changed.",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "Auto approve blocked this tool call because its delegated task scope is missing or invalid.",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "The permission request timed out without a confirmed decision. A timeout does not show whether you clicked a button.",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "Permission confirmation could not be completed. No manual rejection was received.",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "This model needs this computer to forward requests, and the remote connection cannot do that yet. Switch to Cindy AI, or use this model in a local task.",
@@ -16826,6 +16846,7 @@
         "openInFileBrowser": "Open in file browser",
         "showInFolder": "Show In Folder",
         "copyFilePath": "Copy File Path",
+        "copyFolderPath": "Copy Folder Path",
         "deleteFile": "Delete File"
       },
       "searchPanel": {
@@ -19037,8 +19058,9 @@
       "steerFailed": "Steer failed: {{message}}",
       "qrExpired": "QR code expired. Start again.",
       "registrationFailed": "Creation failed. Try again later.",
-      "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click “Continue” to resume the task.",
+      "silentStopExhausted": "An empty response was detected. Automatic continuation is paused.",
       "executionResultUnavailable": "Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.",
+      "unexecutedToolMarkup": "The model wrote a tool call as text. Execution could not be confirmed, so this turn did not complete.",
       "outputLimit": "The model reached its output limit, so this response may be incomplete. Send a new message to continue; if this repeats, lower the reasoning effort or compact the conversation history first.",
       "outputLimitReasoning": "Reasoning consumed most of this request’s output budget, so the response may be incomplete. Lower the reasoning effort or compact the conversation history before continuing.",
       "outputLimitUsage": "This model request used {{outputTokens}} output tokens, including {{reasoningTokens}} reasoning tokens.",
@@ -19599,6 +19621,42 @@
       "notSupported": "Balance lookup is not supported for this account.",
       "unavailable": "Balance is temporarily unavailable. Refresh to try again."
     },
+    "giftCard": {
+      "action": "Redeem Gift Card",
+      "title": "Redeem gift card",
+      "inputLabel": "Redeem code",
+      "inputHint": "Enter the 16-character code, or paste a gift card link.",
+      "continue": "Continue",
+      "confirmTitle": "Redeem this gift card?",
+      "confirmAction": "Redeem",
+      "from": "From {{sender}}",
+      "cardLabel": "Cindy gift card, {{amount}}",
+      "fields": {
+        "validity": "Valid for",
+        "validityValue_one": "{{count}} day after redeeming",
+        "validityValue_other": "{{count}} days after redeeming",
+        "claimBy": "Redeem by",
+        "destination": "Added to"
+      },
+      "doneTitle": "{{amount}} added",
+      "doneDescription": "Added to your Promotional Balance. Valid until {{date}}.",
+      "doneDescriptionNoDate": "Added to your Promotional Balance.",
+      "pendingTitle": "Gift card redeemed",
+      "pendingDescription": "{{amount}} is being added and will appear in your Promotional Balance shortly. You do not need to redeem it again.",
+      "alreadyYours": "You already redeemed this gift card.",
+      "done": "Done",
+      "errors": {
+        "notFound": "This code is not valid. Check it and try again.",
+        "wrongRegionCn": "This gift card is for the China mainland edition of Cindy and cannot be redeemed with this account.",
+        "wrongRegionGlobal": "This gift card is for the international edition of Cindy and cannot be redeemed with this account.",
+        "alreadyClaimed": "This gift card has already been redeemed.",
+        "expired": "This gift card can no longer be redeemed. Its deadline has passed.",
+        "voided": "This gift card has been voided.",
+        "rateLimited": "Too many attempts. Try again later.",
+        "failed": "Couldn't redeem the gift card. Try again later.",
+        "personalRequired": "Gift cards can only be redeemed by personal accounts."
+      }
+    },
     "usage": {
       "title": "Balance Usage",
       "observedAt": "Balance updated {{date}}",
@@ -19614,6 +19672,7 @@
         "empty": "No promotional grants are available.",
         "incomplete": "There are many grant records. Only the latest {{count}} are shown.",
         "unnamed": "Promotional Grant",
+        "giftCard": "Gift card · from {{sender}}",
         "original": "Original",
         "used": "Used",
         "remaining": "Remaining",
@@ -20968,7 +21027,7 @@
     "loadFailed": "The app could not load. Check the connection and reload.",
     "updateRequired": "This computer does not support MCP Apps yet. Update Cindy on that computer and try again.",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "Sent by $t(mcpApps.appName) “{{name}}”",
     "serverId": "MCP Server ID: {{id}}",
     "exitFullscreen": "Exit Fullscreen",
@@ -20982,7 +21041,19 @@
     "pluginCspRejected": "The page requested an undeclared domain and was blocked.",
     "filesOnExecutionComputer": "View file contents on the execution computer",
     "awaitingApproval": "Waiting for your approval",
-    "pendingApprovals": "{{count}} pending approvals"
+    "pendingApprovals": "{{count}} pending approvals",
+    "source": {
+      "official": "Cindy official",
+      "organization": "Organization · {{namespace}}",
+      "market": "Plugin market",
+      "third-party": "Third-party source",
+      "local": "Locally installed",
+      "unknown": "Unknown source"
+    },
+    "customMcp": "Custom MCP",
+    "sourceLabel": "Source",
+    "signatureLabel": "Signature",
+    "fullscreen": "Fullscreen"
   },
   "richAnswer": {
     "invalidImageReference": "This image reference is invalid.",

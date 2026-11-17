@@ -5577,3 +5577,32 @@ it('shows one account-pool overview and opens reset details without changing the
   expect(onModelChange).not.toHaveBeenCalled();
   expect(command.mock.calls.every(([value])=>['preview','read'].includes((value as any).action))).toBe(true);
 });
+
+// Bug: a one-account source repeated its account under the title that already names it
+// ("OpenAI · a@x" then "a@x · Remaining 14%"). Review #11003: a generated name truncated to
+// 50 characters holds only part of a long account, so the full account line must stay.
+it.each([
+  { identity: 'only@example.test', truncated: false },
+  { identity: 'a-very-long-subscription-account-name@example.test', truncated: true },
+])('shows the full single account exactly once in the source rail tooltip: $identity', async ({ identity, truncated }) => {
+  const originalProviders = providersRef.providers;
+  if (truncated) providersRef.providers = (originalProviders as ProviderView[]).map(provider => provider.id === 'anthropic'
+    ? { ...provider, name: `Anthropic · ${identity}`.slice(0, 50) } : provider);
+  try {
+    const command = vi.fn(async ({providerId}: {providerId:string}) => ({
+      providerId,configured:providerId==='anthropic',accounts:providerId==='anthropic' ? [
+        {id:'a',identity,paused:false,status:'ready',running:0,limit:4,
+          usage:{claude:{sevenDay:{utilization:86,resetsAt:Date.now()/1000+3*3600}}}},
+      ] : [],
+    }));
+    Object.assign(window.electronAPI.subscriptionAccounts,{command});
+    renderPanel();
+    await act(async()=>{});
+    fireEvent.focus(document.querySelector('[data-rail-item="provider:anthropic"]')!);
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip.textContent).toContain('14%');
+    expect(tooltip.textContent!.split(identity)).toHaveLength(2);
+  } finally {
+    providersRef.providers = originalProviders;
+  }
+});

@@ -20,6 +20,7 @@ import { ipcMain as ipcMainType, type IpcMain, shell } from 'electron';
 import * as WorktreeManager from './WorktreeManager';
 import * as worktreeStore from './worktreeStore';
 import { getWorktreeRestoreStatus, restoreWorktreeForSession } from './restore';
+import { generateModelWorktreeName } from './modelName';
 import { createLogger } from '../logger';
 import { throwIpcError } from '../utils/ipcValidate';
 
@@ -159,6 +160,27 @@ export function registerWorktreeIpc(
   ipcMain.handle('worktree:suggest-name', async (_e, req: SuggestNameReq) => ({
     name: await WorktreeManager.suggestName(req.baseRepo),
   }));
+
+  // Opt-in model-written name for a new task's worktree. Local renderer only: it spends
+  // this computer's auxiliary model on the user's own first message. Remote creation gets
+  // the name from the controlling computer and passes it as an ordinary explicit name.
+  ipcMain.handle('worktree:generate-name', async (event, req: unknown) => {
+    if (isDeviceLinkInvoke()) throwIpcError('PERMISSION_DENIED', 'worktree:generate-name is local only');
+    assertTrustedAppRendererEvent(event);
+    const taskText = (req as { taskText?: unknown } | null)?.taskText;
+    if (typeof taskText !== 'string') return { name: null };
+    // Loaded on demand: maker-host imports this module, a static import would be a cycle.
+    const { requestAuxiliaryText } = await import('../maker-host/auxiliary-title-one-shot.js');
+    const name = await generateModelWorktreeName(taskText, (args) => requestAuxiliaryText({
+      ...args,
+      // Only consulted by the session-agent fallback, which is off: a cold agent start
+      // cannot finish inside the naming budget while the user waits.
+      agentKind: 'claude-code',
+      sessionAgentFallback: false,
+    }));
+    if (!name) log.info('model worktree name unavailable; keeping the generated name');
+    return { name };
+  });
 
   ipcMain.handle('worktree:list-branches', async (_e, req: ListBranchesReq) => {
     const branches = await WorktreeManager.listBranches(req.baseRepo);

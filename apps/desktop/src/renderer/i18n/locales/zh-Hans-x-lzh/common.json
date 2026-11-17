@@ -1320,17 +1320,17 @@
       "install": {
         "title": "须装「{{plugin}}」法器",
         "body": "此务于他机开 {{device}}。于本机装「{{plugin}}」法器，即可于右栏观之、操之。",
-        "action": "往装"
+        "action": "装之"
       },
       "enable": {
         "title": "须启「{{plugin}}」法器",
         "body": "此务于他机开 {{device}}。于本机启「{{plugin}}」法器，即可于右栏观之、操之。",
-        "action": "往启"
+        "action": "启之"
       },
       "update": {
         "title": "须更「{{plugin}}」法器",
         "body": "此务于他机开 {{device}}。更本机「{{plugin}}」法器至新版，即可于右栏观之、操之。",
-        "action": "往更"
+        "action": "更之"
       }
     },
     "lockOnExitHintPrivacy": "退出远程桌面后覆以隐私画面，AI 可续作；有人触机即锁屏。",
@@ -5482,6 +5482,13 @@
       },
       "toggleAria": "启闭问目条"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "以模型为 worktree 命名",
+        "description": "新差事之 worktree，依首则讯取一英文短名（如 fix-login-timeout），卷匣与分支一望可知其用。由辅佐模型拟之，不成则仍用随机之名；唯及此后新立之 worktree。"
+      },
+      "toggleAria": "启闭以模型命名 worktree"
+    },
     "promptRecommendation": {
       "label": "输入之议",
       "description": "应答后荐下一句，按 Tab 填入",
@@ -8170,8 +8177,8 @@
         "hostTools_controlDetail": "得循 Cindy 之器改、藏、复及治既有任务与项目，并在本机导入原生任务文件。",
         "hostTools_handoff": "任务传言",
         "hostTools_handoffDetail": "得循 Cindy 之器传消息于既有任务。需当前任务之境者，须明指任务。",
-        "hostTools_usage": "查订阅用量",
-        "hostTools_usageDetail": "可查此机现用 Cindy 账号所接 Claude、Codex 之账号标识、方案、限额时段及更新时刻。不得取邮址、凭证、档案或他机资料，亦不得改账号",
+        "hostTools_usage": "查用量及供应商组状态",
+        "hostTools_usageDetail": "可查现用 Cindy 账号于此机所接 Claude/Codex 之账号标识、方案、配额时段及更新时间，亦可查此机及同账号已授权他机所记每日、型号用量、估算费用、供应商组配置与状态，及可见成员、设备之标识、名称与头像。不得取订阅登录邮址、账号目录、内部指纹、凭证或档案，亦不得改账号或设置",
         "hostTools_settings": "应用设置",
         "hostTools_settingsDetail": "得循 Cindy 之器阅改应用设置；不返密钥，秘文仍由主人亲填。",
         "hostTools_scheduler": "自动化治办",
@@ -8199,6 +8206,8 @@
         "hostTools_terminalDetail": "得于此机以主人身份启命令及交互终端，阅其输出、输入及止本法器之进程。命令可取主人文件与应用。",
         "agentHiddenTasks": "可立不见于差事录之背后差事",
         "agentHiddenTasksDetail": "本法器所立之差事，可不现于差事录、搜索与告中。君可随时于法器详情之「背后差事」中观之、启之，或令显于差事录；卸除法器时，此等差事将复显示。",
+        "agentModelPreferences": "可读改君之模型珍藏，并读君近用之模型",
+        "agentModelPreferencesDetail": "可读此机之模型珍藏与近用之模型（含思之深浅与 Fast），并可增、改、去珍藏，所改亦见于 Cindy 之择模。于法器中所择之模型不记入近用。不含君他机之模型与人所分享者，亦不予凭证。",
         "agentErrand": "可立差事、行事并读结果",
         "agentErrandDetail": "所立差事现于 Cindy 差事录中，可观其历程并续言谈。",
         "agentSchedule": "可请君新立自运",
@@ -8345,6 +8354,7 @@
             "contentStyle": "修改消息间距和气泡样式"
           },
           "positions": {
+            "composer_header": "输入框上方",
             "composer_toolbar": "输入框工具栏",
             "session_header": "任务标题栏",
             "statusbar": "状态栏",
@@ -10834,7 +10844,12 @@
       "summary": "自述",
       "summaryPlaceholder": "如：一嗜作小说之文士，略带诙谐，好揣摩人物之微心。",
       "avatarSelectionFailed": "不能读头像，请择 5 MB 以内之 PNG、JPEG 或 WebP 图",
-      "personality": "性情与言谈之习"
+      "personality": "性情与言谈之习",
+      "sourceLength": "{{length}} / {{limit}} 个 UTF-16 单元（首尾空白不计）。",
+      "sourceExcess": "逾限 {{excess}} 个单元，删简后方可存。",
+      "sourceTooLong": "此文过长，修之方可存。",
+      "sourceRecovery": "已保存的原文不变，完整草稿仍留此页。复制后，请先粘贴到安全处，核对全文无缺，再删减或放弃本次修改。",
+      "sourceCopy": "录全文"
     },
     "nameLabel": "何以称之",
     "close": "阖",
@@ -12915,7 +12930,7 @@
           "reasoningDominated": "思已耗此番所出之大半，覆或不全。宜减思之深浅，或先压缩言谈录，再续。",
           "generic": "模型所出已达长度上限，此轮之覆或不全。可遣新讯以续；若屡见之，请减思之深浅，或先压缩言谈录。",
           "join": "{{usage}}{{guidance}}",
-          "silentStopExhausted": "模型屡返空应，自动续行已暂止。"
+          "silentStopExhausted": "察得空答，自动续行已暂止。"
         },
         "permission": {
           "autoReviewUnavailable": "自动审批未竟，请确认是否许此操作。",
@@ -13666,12 +13681,6 @@
         "TARGET_UNAVAILABLE": "法器已禁用、卸载或不可用，请查法器之状后再试。",
         "ASSESSMENT_FAILED": "暂不能重整配置之状，请再试。",
         "TIMEOUT": "待设逾时，请再试。"
-      },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "AI 模型服务",
-          "description": "用法器所宣之图或影之能前，须先连可用之模型服务"
-        }
       },
       "form": {
         "placeholder": "请输入{{label}}",
@@ -14961,6 +14970,7 @@
       "pluginDisabledUnnamed": "自动查验暂受阻：所需法器未启，启之自复。",
       "installPlugin": "装法器",
       "openPlugin": "观法器",
+      "enablePlugin": "启法器",
       "dismissTitle": "阖往昔未成之示"
     },
     "worktreeRestoreBanner": {
@@ -15624,6 +15634,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "已罢对此设备之控制，讯未遣。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输未成，讯未遣。请再试。",
       "MCP_APPROVAL_AUTO_BLOCKED": "此番工具调用为自动审核所拦，未得君亲手拒绝之纪录。",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "自动审核已拦此番工具调用：操作详情未全。",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "自动审核已拦此番工具调用：君之指令已改，或尚未同步。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "自动审核已拦此番工具调用：目录权柄已改。",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "自动审核已拦此番工具调用：委派之授权已改。",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "自动审核已拦此番工具调用：法器或差事之授权已失效。",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "自动审核已拦此番工具调用：未有君之指令授权此举。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "自动审核已拦此番工具调用：工作计划过大，超出所支持之范围。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "自动审核已拦此番工具调用：行事之 Agent 与所登记之工作计划不符。",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "自动审核已拦此番工具调用：差事之工作目录已改。",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "自动审核已拦此番工具调用：委派差事之范围缺失或无效。",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "权柄确认逾时，未得有效之确认。仅凭逾时，不能断君曾否点钮。",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "此番权柄确认未毕，未得君亲手拒绝之纪录。",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "此模型须机端转送请求，今远程连接尚不能转送。请改用 Cindy AI，或于此机差事中用此模型。",
@@ -16752,6 +16772,7 @@
         "openInFileBrowser": "于卷浏览器览之",
         "showInFolder": "于卷匣中示之",
         "copyFilePath": "录卷路径",
+        "copyFolderPath": "录卷匣路径",
         "deleteFile": "删卷"
       },
       "searchPanel": {
@@ -18962,8 +18983,9 @@
       "steerFailed": "插话未成：{{message}}",
       "qrExpired": "二维码已逾时，请重新起始",
       "registrationFailed": "立之未成，请稍后再试",
-      "silentStopExhausted": "模型屡返空答，自动续行已暂止。点「续」以复差事。",
+      "silentStopExhausted": "察得空答，自动续行已暂止。",
       "executionResultUnavailable": "未得行之结果，自动接续已止。可请助手察既有之结果。",
+      "unexecutedToolMarkup": "模型以文字述工具之调用，未能核其执行结果，此轮未竟。",
       "outputLimit": "模型已达输出之限，此答或有不全。可遣新讯以续；若屡至此限，宜减思之深浅，或先压缩言谈录。",
       "outputLimitReasoning": "思考已耗本次输出预算之大半，此答或有不全。宜减思之深浅，或先压缩言谈录，而后续之。",
       "outputLimitUsage": "本次模型请求已输出 {{outputTokens}} tokens，其中 {{reasoningTokens}} tokens 用于思考。",
@@ -19523,6 +19545,41 @@
       "notSupported": "此帐户暂不支持查余资。",
       "unavailable": "暂不得余资，请重整后再试。"
     },
+    "giftCard": {
+      "action": "兑换礼品卡",
+      "title": "兑换礼品卡",
+      "inputLabel": "兑换码",
+      "inputHint": "输入 16 位兑换码，或粘贴礼品卡链接。",
+      "continue": "继续",
+      "confirmTitle": "领取这张礼品卡？",
+      "confirmAction": "确认领取",
+      "from": "来自 {{sender}}",
+      "cardLabel": "Cindy 礼品卡，{{amount}}",
+      "fields": {
+        "validity": "有效期",
+        "validityValue_other": "领取后 {{count}} 天",
+        "claimBy": "领取截止",
+        "destination": "存入"
+      },
+      "doneTitle": "{{amount}} 已到账",
+      "doneDescription": "已存入赠予余资，{{date}} 前有效。",
+      "doneDescriptionNoDate": "已存入赠予余资。",
+      "pendingTitle": "礼品卡已领取",
+      "pendingDescription": "{{amount}} 正在入账，稍后会出现在赠予余资中，无需再次领取。",
+      "alreadyYours": "你已经领取过这张礼品卡。",
+      "done": "完成",
+      "errors": {
+        "notFound": "兑换码无效，请检查后重试。",
+        "wrongRegionCn": "这张礼品卡属于 Cindy 中国大陆版，当前账号无法领取。",
+        "wrongRegionGlobal": "这张礼品卡属于 Cindy 国际版，当前账号无法领取。",
+        "alreadyClaimed": "这张礼品卡已被领取。",
+        "expired": "这张礼品卡已过领取期限。",
+        "voided": "这张礼品卡已作废。",
+        "rateLimited": "尝试次数过多，请稍后再试。",
+        "failed": "暂时无法兑换，请稍后重试。",
+        "personalRequired": "礼品卡仅限个人用户领取。"
+      }
+    },
     "usage": {
       "title": "余资耗用",
       "observedAt": "余资更于 {{date}}",
@@ -19538,6 +19595,7 @@
         "empty": "今无赠予之记。",
         "incomplete": "赠予之记甚多，今唯示最近 {{count}} 笔。",
         "unnamed": "赠予余资",
+        "giftCard": "礼品卡 · 来自 {{sender}}",
         "original": "原额",
         "used": "已用",
         "remaining": "余",
@@ -20888,7 +20946,7 @@
     "loadFailed": "应用程序加载未成。请察连接后重载。",
     "updateRequired": "此机尚不支持 MCP Apps，请更新该机之 Cindy 后再试。",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "由 $t(mcpApps.appName)「{{name}}」所遣",
     "serverId": "MCP 服务器 ID：{{id}}",
     "exitFullscreen": "离全屏",
@@ -20902,7 +20960,19 @@
     "pluginCspRejected": "此页请求未声明之网域，已拒其加载",
     "filesOnExecutionComputer": "卷之内容请于运行之机览之",
     "awaitingApproval": "候君确认",
-    "pendingApprovals": "{{count}} 项待确"
+    "pendingApprovals": "{{count}} 项待确",
+    "source": {
+      "official": "Cindy 官方",
+      "organization": "组织 · {{namespace}}",
+      "market": "法器市集",
+      "third-party": "他方来源",
+      "local": "本机装入",
+      "unknown": "来源未详"
+    },
+    "customMcp": "自定 MCP",
+    "sourceLabel": "来源",
+    "signatureLabel": "签名",
+    "fullscreen": "满屏"
   },
   "richAnswer": {
     "invalidImageReference": "图之引用无效，未能示之。",

@@ -5583,6 +5583,13 @@
       },
       "toggleAria": "Ativar/desativar barra de navegação de perguntas"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Nomear worktrees com um modelo",
+        "description": "Dá ao worktree de uma nova tarefa um nome curto em inglês com base na primeira mensagem (p. ex., fix-login-timeout), para que a pasta e a branch mostrem para que servem. Gerado pelos modelos auxiliares; se falhar, é usado um nome aleatório. Afeta apenas os worktrees criados a partir de agora."
+      },
+      "toggleAria": "Ativar ou desativar a nomeação de worktrees com um modelo"
+    },
     "promptRecommendation": {
       "label": "Sugestões de escrita",
       "description": "Após uma resposta, o campo de escrita mostra uma sugestão para a próxima mensagem. Prima Tab para a inserir.",
@@ -8299,8 +8306,8 @@
         "hostTools_controlDetail": "Usar as ferramentas da Cindy para editar, arquivar, restaurar e controlar tarefas e projetos existentes, e importar ficheiros de tarefas em formato nativo neste computador.",
         "hostTools_handoff": "Mensagens para tarefas",
         "hostTools_handoffDetail": "Usar as ferramentas da Cindy para enviar mensagens para tarefas existentes. As operações que precisam da tarefa atual exigem um destino explícito.",
-        "hostTools_usage": "Ler a utilização das subscrições",
-        "hostTools_usageDetail": "Lê identificadores de conta, planos, períodos de quota e horas de atualização das subscrições Claude e Codex ligadas à tua conta Cindy atual neste computador. Não permite ler endereços de e-mail, credenciais, ficheiros ou dados de outros computadores, nem alterar contas.",
+        "hostTools_usage": "Ler a utilização e o estado dos grupos de fornecedores",
+        "hostTools_usageDetail": "Lê os identificadores, planos, períodos de quota e horas de atualização das contas locais de Claude/Codex ligadas à tua conta Cindy. Lê a utilização registada por dia e modelo, os custos estimados, a configuração e o estado dos grupos de fornecedores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou noutros computadores autorizados da mesma conta. Não permite ler e-mails de início de sessão das subscrições, diretórios de contas, impressões de identidade internas, credenciais ou ficheiros, nem alterar contas ou definições.",
         "hostTools_settings": "Definições da aplicação",
         "hostTools_settingsDetail": "Usar as ferramentas da Cindy para ler e alterar a configuração. Os segredos não são devolvidos e os dados confidenciais são introduzidos por si.",
         "hostTools_scheduler": "Gestão de automatizações",
@@ -8328,6 +8335,8 @@
         "hostTools_terminalDetail": "Iniciar comandos e terminais interativos com as tuas permissões neste computador, ler a saída, enviar entradas e parar os processos deste plugin. Os comandos podem aceder aos teus ficheiros e aplicações.",
         "agentHiddenTasks": "Pode criar tarefas em segundo plano ocultas da lista de tarefas",
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da pesquisa e das notificações. Pode sempre vê-las, abri-las ou mostrá-las na lista de tarefas a partir de Tarefas em segundo plano na página deste plugin; desinstalar o plugin volta a mostrá-las.",
+        "agentModelPreferences": "Ler e editar os seus modelos favoritos e ler os modelos usados recentemente",
+        "agentModelPreferencesDetail": "Pode ler os modelos favoritos e os usados recentemente neste computador, incluindo o esforço de raciocínio e Fast, e adicionar, alterar ou remover favoritos. As alterações também aparecem no seletor de modelo do Cindy. Os modelos escolhidos no plugin não são adicionados aos recentes. Não inclui modelos dos seus outros computadores nem partilhados consigo, e não são partilhadas credenciais.",
         "agentErrand": "Criar tarefas, realizar trabalho e ler resultados",
         "agentErrandDetail": "As tarefas criadas aparecem na lista de tarefas de Cindy, onde pode acompanhar o progresso e continuar a conversa.",
         "agentSchedule": "Pode pedir-lhe para criar uma automatização",
@@ -8490,6 +8499,7 @@
             "contentStyle": "Alterar o espaçamento das mensagens e os balões"
           },
           "positions": {
+            "composer_header": "uma área acima da caixa de entrada",
             "composer_toolbar": "barra de ferramentas de entrada",
             "session_header": "cabeçalho da tarefa",
             "statusbar": "barra de estado",
@@ -10963,7 +10973,12 @@
       "summary": "Apresentação pessoal",
       "summaryPlaceholder": "Por exemplo: um romancista que adora histórias em série, tem um humor seco e é fascinado pelo que motiva as personagens.",
       "avatarSelectionFailed": "Não foi possível ler a imagem. Escolha uma imagem PNG, JPEG ou WebP até 5 MB.",
-      "personality": "Personalidade e conversa"
+      "personality": "Personalidade e conversa",
+      "sourceLength": "{{length}} / {{limit}} unidades UTF-16 (sem espaços no início e no fim).",
+      "sourceExcess": "O limite foi excedido em {{excess}} unidades. Encurta o texto antes de guardar.",
+      "sourceTooLong": "Este texto é demasiado longo para guardar. Edita-o para continuar.",
+      "sourceRecovery": "O original guardado não muda e o rascunho completo permanece nesta página. Após copiar, cole num local seguro e confirme que o texto está completo antes de o encurtar ou descartar as alterações.",
+      "sourceCopy": "Copiar texto completo"
     },
     "nameLabel": "Como se deve chamar?",
     "close": "Fechar",
@@ -13075,7 +13090,7 @@
           "reasoningDominated": "O raciocínio consumiu a maior parte do orçamento de saída, pelo que a resposta pode estar incompleta. Reduza o esforço de raciocínio ou compacte primeiro a conversa e, depois, continue.",
           "generic": "O modelo atingiu o limite de comprimento de saída, pelo que esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se voltar a acontecer, reduza o esforço de raciocínio ou compacte primeiro a conversa.",
           "join": "{{usage}} {{guidance}}",
-          "silentStopExhausted": "O modelo devolveu respostas vazias várias vezes seguidas, pelo que a continuação automática está em pausa."
+          "silentStopExhausted": "Foi detetada uma resposta vazia. A continuação automática está em pausa."
         },
         "permission": {
           "autoReviewUnavailable": "A revisão automática não terminou. Confirme se pretende permitir esta ação.",
@@ -13835,12 +13850,6 @@
         "TARGET_UNAVAILABLE": "Este plugin está desativado, desinstalado ou indisponível. Verifique o plugin e tente novamente.",
         "ASSESSMENT_FAILED": "Não foi possível atualizar o estado da configuração. Tente novamente.",
         "TIMEOUT": "O tempo limite da configuração foi excedido. Tente novamente."
-      },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "Serviço de modelos de IA",
-          "description": "Ligue um serviço de modelos disponível antes de usar as capacidades de imagem ou vídeo declaradas por este plugin."
-        }
       },
       "form": {
         "placeholder": "Introduza {{label}}",
@@ -15136,6 +15145,7 @@
       "pluginDisabledUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário está desativado. Elas serão retomadas após a ativação.",
       "installPlugin": "Instalar plugin",
       "openPlugin": "Abrir plugin",
+      "enablePlugin": "Ativar plugin",
       "dismissTitle": "Fechar aviso de falha anterior"
     },
     "worktreeRestoreBanner": {
@@ -15802,6 +15812,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "O controlo deste dispositivo está desativado; a mensagem não foi enviada.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "A transferência do anexo falhou; a mensagem não foi enviada. Tente novamente.",
       "MCP_APPROVAL_AUTO_BLOCKED": "A revisão de aprovação automática bloqueou esta chamada de ferramenta. Não foi recebida nenhuma rejeição manual.",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "A aprovação automática bloqueou esta chamada de ferramenta porque faltam detalhes da ação.",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "A aprovação automática bloqueou esta chamada de ferramenta porque as tuas instruções mudaram ou ainda não estão sincronizadas.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "A aprovação automática bloqueou esta chamada de ferramenta porque as permissões do diretório mudaram.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "A aprovação automática bloqueou esta chamada de ferramenta porque a autorização delegada mudou.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "A aprovação automática bloqueou esta chamada de ferramenta porque a autorização do plugin ou da tarefa já não está ativa.",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "A aprovação automática bloqueou esta chamada de ferramenta porque nenhuma instrução do utilizador autoriza a ação.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "A aprovação automática bloqueou esta chamada de ferramenta porque o plano de trabalho excede o tamanho suportado.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "A aprovação automática bloqueou esta chamada de ferramenta porque o Agent executor não corresponde ao plano de trabalho registado.",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "A aprovação automática bloqueou esta chamada de ferramenta porque o diretório de trabalho da tarefa mudou.",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "A aprovação automática bloqueou esta chamada de ferramenta porque o âmbito da tarefa delegada está em falta ou é inválido.",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "O pedido de permissão expirou sem uma decisão confirmada. A expiração não indica se clicou num botão.",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "Não foi possível concluir a confirmação de permissão. Não foi recebida nenhuma rejeição manual.",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "Este modelo precisa que este computador reencaminhe os pedidos, e a ligação remota ainda não o permite. Mude para Cindy AI ou use este modelo numa tarefa local.",
@@ -16988,6 +17008,7 @@
         "openInFileBrowser": "Abrir no gestor de ficheiros",
         "showInFolder": "Mostrar na pasta",
         "copyFilePath": "Copiar caminho do ficheiro",
+        "copyFolderPath": "Copiar caminho da pasta",
         "deleteFile": "Eliminar ficheiro"
       },
       "searchPanel": {
@@ -19219,8 +19240,9 @@
       "steerFailed": "Falha na orientação: {{message}}",
       "qrExpired": "O código QR expirou, recomece",
       "registrationFailed": "Falha na criação, tente novamente mais tarde",
-      "silentStopExhausted": "O modelo devolveu repetidamente respostas vazias; a retoma automática está em pausa. Clique em \"Continuar\" para retomar a tarefa.",
+      "silentStopExhausted": "Foi detetada uma resposta vazia. A continuação automática está em pausa.",
       "executionResultUnavailable": "Não foi possível obter o resultado da execução. A continuação automática foi interrompida. Peça ao assistente para verificar o resultado da execução existente.",
+      "unexecutedToolMarkup": "O modelo escreveu uma chamada de ferramenta como texto. Não foi possível confirmar a execução, pelo que este turno não foi concluído.",
       "outputLimit": "O modelo atingiu o limite de saída, pelo que esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se isto se repetir, reduza o esforço de raciocínio ou compacte primeiro o histórico da conversa.",
       "outputLimitReasoning": "O raciocínio consumiu a maior parte do orçamento de saída deste pedido, pelo que a resposta pode estar incompleta. Reduza o esforço de raciocínio ou compacte o histórico da conversa antes de continuar.",
       "outputLimitUsage": "Este pedido ao modelo utilizou {{outputTokens}} tokens de saída, incluindo {{reasoningTokens}} tokens de raciocínio.",
@@ -19782,6 +19804,43 @@
       "notSupported": "A consulta de saldo não é suportada para esta conta.",
       "unavailable": "O saldo está temporariamente indisponível. Atualize para tentar novamente."
     },
+    "giftCard": {
+      "action": "Utilizar cartão de oferta",
+      "title": "Utilizar cartão de oferta",
+      "inputLabel": "Código do cartão",
+      "inputHint": "Introduza o código de 16 caracteres ou cole a ligação de um cartão de oferta.",
+      "continue": "Continuar",
+      "confirmTitle": "Utilizar este cartão de oferta?",
+      "confirmAction": "Utilizar",
+      "from": "De {{sender}}",
+      "cardLabel": "Cartão de oferta Cindy, {{amount}}",
+      "fields": {
+        "validity": "Validade",
+        "validityValue_one": "{{count}} dia após a utilização",
+        "validityValue_many": "{{count}} de dias após a utilização",
+        "validityValue_other": "{{count}} dias após a utilização",
+        "claimBy": "Utilizar até",
+        "destination": "Adicionado a"
+      },
+      "doneTitle": "{{amount}} adicionados",
+      "doneDescription": "Adicionado ao seu Saldo promocional. Válido até {{date}}.",
+      "doneDescriptionNoDate": "Adicionado ao seu Saldo promocional.",
+      "pendingTitle": "Cartão de oferta utilizado",
+      "pendingDescription": "{{amount}} estão a ser adicionados e vão aparecer em breve no seu Saldo promocional. Não precisa de o utilizar novamente.",
+      "alreadyYours": "Já utilizou este cartão de oferta.",
+      "done": "Concluído",
+      "errors": {
+        "notFound": "Este código não é válido. Verifique-o e tente novamente.",
+        "wrongRegionCn": "Este cartão de oferta destina-se à edição da China continental do Cindy e não pode ser utilizado com esta conta.",
+        "wrongRegionGlobal": "Este cartão de oferta destina-se à edição internacional do Cindy e não pode ser utilizado com esta conta.",
+        "alreadyClaimed": "Este cartão de oferta já foi utilizado.",
+        "expired": "Este cartão de oferta já não pode ser utilizado porque o prazo terminou.",
+        "voided": "Este cartão de oferta foi anulado.",
+        "rateLimited": "Demasiadas tentativas. Tente novamente mais tarde.",
+        "failed": "Não foi possível utilizar o cartão de oferta. Tente novamente mais tarde.",
+        "personalRequired": "Os cartões de oferta só podem ser utilizados com uma conta pessoal."
+      }
+    },
     "usage": {
       "title": "Utilização do saldo",
       "observedAt": "Saldo atualizado em {{date}}",
@@ -19797,6 +19856,7 @@
         "empty": "Não existem atribuições promocionais disponíveis.",
         "incomplete": "Existem muitos registos de atribuições. Apenas são apresentados os {{count}} mais recentes.",
         "unnamed": "Atribuição promocional",
+        "giftCard": "Cartão de oferta · de {{sender}}",
         "original": "Original",
         "used": "Utilizado",
         "remaining": "Restante",
@@ -21158,7 +21218,7 @@
     "loadFailed": "Não foi possível carregar a aplicação. Verifique a ligação e recarregue.",
     "updateRequired": "Este computador ainda não suporta MCP Apps. Atualize o Cindy nesse computador e tente novamente.",
     "appName": "Aplicação MCP",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "Enviado por $t(mcpApps.appName) «{{name}}»",
     "serverId": "ID do servidor MCP: {{id}}",
     "exitFullscreen": "Sair do ecrã inteiro",
@@ -21172,7 +21232,19 @@
     "pluginCspRejected": "A página solicitou um domínio não declarado e foi bloqueada.",
     "filesOnExecutionComputer": "Ver o conteúdo do ficheiro no computador de execução",
     "awaitingApproval": "A aguardar a sua aprovação",
-    "pendingApprovals": "{{count}} aprovações pendentes"
+    "pendingApprovals": "{{count}} aprovações pendentes",
+    "source": {
+      "official": "Cindy oficial",
+      "organization": "Organização · {{namespace}}",
+      "market": "Mercado de plugins",
+      "third-party": "Origem de terceiros",
+      "local": "Instalação local",
+      "unknown": "Origem desconhecida"
+    },
+    "customMcp": "MCP personalizado",
+    "sourceLabel": "Origem",
+    "signatureLabel": "Assinatura",
+    "fullscreen": "Ecrã inteiro"
   },
   "richAnswer": {
     "invalidImageReference": "A referência desta imagem é inválida.",

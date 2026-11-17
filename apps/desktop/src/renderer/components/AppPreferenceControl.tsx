@@ -14,6 +14,7 @@ import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference
 import { useFileBrowserPreference } from '@/hooks/useFileBrowserPreference';
 import { useHomeUsageDashboardPreference } from '@/hooks/useHomeUsageDashboardPreference';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
+import { useWorktreeModelNamingPreference, WORKTREE_MODEL_NAMING_STORAGE_KEY } from '@/hooks/useWorktreeModelNamingPreference';
 import { getThemeFamilies, tryGetFamily } from '@/themes/families';
 import { refreshLocalThemes } from '@/themes/local-themes';
 
@@ -28,6 +29,7 @@ const persisted: Record<keyof AppPreferencePatch, { key: string; absent?: unknow
   showIgnoredDirectories: { key: 'fileBrowser.showIgnoredDirs', absent: false },
   homeUsageDashboard: { key: 'home.usageDashboard.enabled' },
   promptRecommendations: { key: 'prompt-recommendation-enabled' },
+  worktreeModelNaming: { key: WORKTREE_MODEL_NAMING_STORAGE_KEY, absent: false },
 };
 
 /** Mounted once in the main App. Reuses the same setters and subscribers as Settings. */
@@ -37,11 +39,13 @@ export function AppPreferenceControl() {
   const local = useLinkOpenPreference('local'); const fade = useStreamFadePreference();
   const navigation = useMessageNavRailPreference(); const files = useFileBrowserPreference();
   const home = useHomeUsageDashboardPreference(); const recommendations = usePromptRecommendationPreference();
+  const worktreeNaming = useWorktreeModelNamingPreference();
   const state: Required<AppPreferencePatch> = { theme: theme.theme, themeFamily: theme.familyId,
     language: locale.locale, notifications: notifications.enabled, sendShortcut: shortcut.preference,
     webLinks: web.preference, localLinks: local.preference, streamFade: fade.preference,
     messageNavigation: navigation.enabled, showIgnoredDirectories: files.showIgnoredDirs,
-    homeUsageDashboard: home.enabled, promptRecommendations: recommendations.enabled };
+    homeUsageDashboard: home.enabled, promptRecommendations: recommendations.enabled,
+    worktreeModelNaming: worktreeNaming.enabled };
   const current = useRef<{ state: Required<AppPreferencePatch>; apply: (patch: AppPreferencePatch, active: () => boolean) => Promise<void> | undefined }>({ state, apply: () => undefined });
   current.current = { state, apply: (patch, active) => {
     if (patch.themeFamily !== undefined && !tryGetFamily(patch.themeFamily)) throw new Error('UNKNOWN_THEME');
@@ -57,6 +61,7 @@ export function AppPreferenceControl() {
       if (patch.showIgnoredDirectories !== undefined) files.setShowIgnoredDirs(patch.showIgnoredDirectories);
       if (patch.homeUsageDashboard !== undefined) home.setEnabled(patch.homeUsageDashboard);
       if (patch.promptRecommendations !== undefined) recommendations.setEnabled(patch.promptRecommendations);
+      if (patch.worktreeModelNaming !== undefined) worktreeNaming.setEnabled(patch.worktreeModelNaming);
     };
     const pending = patch.theme !== undefined || patch.themeFamily !== undefined
       ? theme.setSelection({ theme: patch.theme, familyId: patch.themeFamily }, active) : undefined;

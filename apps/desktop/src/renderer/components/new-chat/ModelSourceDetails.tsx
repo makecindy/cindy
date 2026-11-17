@@ -215,7 +215,7 @@ function modelSourceQuota(
     const data = usage.claude;
     const weekly = data && (matchScopedWindowForModel(data.scoped, modelId) ?? data.sevenDay);
     return {
-      plan: formatClaudeSubscriptionPlanLabel(data?.subscriptionType, data?.planTier),
+      plan: formatClaudeSubscriptionPlanLabel(data?.subscriptionType, data?.planTier, data?.planDisplayName),
       windows: [
         data?.fiveHour && { window: data.fiveHour, windowMinutes: FIVE_HOUR_WINDOW_MINUTES },
         weekly && { window: weekly, windowMinutes: WEEKLY_WINDOW_MINUTES },
@@ -304,7 +304,7 @@ export function ModelSourceDetails({
     const memberPlan =
       codex
         ? formatCodexPlanLabel(account.planType ?? account.plan)
-        : formatClaudeSubscriptionPlanLabel(account.plan, account.planTier);
+        : formatClaudeSubscriptionPlanLabel(account.plan, account.planTier, account.planDisplayName);
     return { percent, title: [name, memberPlan, detail || '—'].filter(Boolean).join(' · ') };
   });
   const quota = modelSourceQuota(usages.get(providerId), modelId, nowMs);
@@ -312,7 +312,7 @@ export function ModelSourceDetails({
   const plan = pickerAccount
     ? codex
       ? formatCodexPlanLabel(pickerAccount.planType ?? pickerAccount.plan)
-      : formatClaudeSubscriptionPlanLabel(pickerAccount.plan, pickerAccount.planTier)
+      : formatClaudeSubscriptionPlanLabel(pickerAccount.plan, pickerAccount.planTier, pickerAccount.planDisplayName)
     : quota.plan;
   const parts = windows
     .filter((window) => Number.isFinite(window.usedPercent))

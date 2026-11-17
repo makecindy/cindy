@@ -2,7 +2,9 @@ import { useEffect, useState, type ComponentProps } from 'react';
 import { ctx, mountPage, subscription } from '../../ui-page/harness';
 import { ChatInput } from '../../../src/renderer/components/new-chat/ChatInput';
 import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
-import { makerChatStore } from '../../../src/renderer/lib/makerChatStore';
+import { makerChatStore, type QueuedMessage } from '../../../src/renderer/lib/makerChatStore';
+import { GoalIndicator } from '../../../src/renderer/components/new-chat/GoalIndicator';
+import { PendingQueuePanel } from '../../../src/renderer/components/new-chat/PendingQueuePanel';
 import { useAttachments } from '../../../src/renderer/hooks/useAttachments';
 import { getDraft } from '../../../src/renderer/lib/composerDraftStore';
 import { PluginUiProvider } from '../../../src/renderer/cindy-brain/PluginUiContributions';
@@ -33,13 +35,26 @@ const plugin: InstalledGhost = {
   manifest: {
     schemaVersion: 3, id: 'composer-fixture', name: 'Composer fixture', kind: 'chip', entry: 'main.js', version: '1',
     tools: [{ name: 'run', description: 'Run the fixture action' }],
-    mcpApps: { ui: { resources: [], tools: { run: { visibility: ['app'] } } }, host: {
-      contributions: Array.from({ length: Number(ctx.data.pluginToolbar) || 0 }, (_, index) => ({
+    mcpApps: { ui: { resources: ctx.data.headerLong ? [{ uri: 'ui://header', file: 'header.html' }] : [], tools: { run: { visibility: ['app'] } } }, host: {
+      views: ctx.data.headerLong ? [{ id: 'header', title: 'Header panel', resourceUri: 'ui://header' }] : [],
+      contributions: ctx.data.pluginHeader ? [
+        { id: 'refresh', title: ctx.data.headerLong ? 'Refresh with a very long plugin action title that must stay on one line' : 'Refresh', position: 'composer.header', tool: 'run' },
+        { id: 'scope', title: 'Scope', position: 'composer.header', kind: 'select', tool: 'run', options: [{ label: 'All', value: 'all' }] },
+        { id: 'status', title: ctx.data.headerLong ? 'Ready with a very long plugin status that must stay on one line' : 'Ready', position: 'composer.header', kind: 'status' },
+        ...(ctx.data.headerLong ? [
+          { id: 'popup', title: 'Open panel', position: 'composer.header', view: 'header', presentation: 'popover' as const },
+          ...Array.from({ length: 5 }, (_, index) => ({ id: `extra-${index}`, title: `Extra ${index + 1}`, position: 'composer.header', tool: 'run' })),
+        ] : []),
+      ] : Array.from({ length: Number(ctx.data.pluginToolbar) || 0 }, (_, index) => ({
         id: `action-${index}`, title: String(ctx.data.pluginTitle || `Plugin ${index + 1}`), position: 'composer.toolbar' as const, tool: 'run',
       })),
     } },
   },
 };
+
+if (ctx.data.headerNoMatch) {
+  for (const entry of plugin.manifest.mcpApps?.host?.contributions ?? []) entry.match = { roles: ['assistant'] };
+}
 
 function CacheComposer() {
   const attachmentState = useAttachments('fixture-cache-draft');
@@ -114,6 +129,7 @@ function Fixture() {
     <main className="flex h-screen flex-col justify-center gap-6 bg-[var(--surface-base)] p-6 text-[var(--text-primary)]">
       <div className="text-16 font-medium">Cindy</div>
       <div data-fixture-composer>
+        {ctx.data.headerStack && <div data-header-goal><GoalIndicator sessionId="fixture-companion" /></div>}
         <ChatInput
           sessionId="fixture-companion"
           initialWorkingDir="/fixture"
@@ -126,6 +142,12 @@ function Fixture() {
           hideRuntimeControls={!ctx.data.showRuntimeControls}
           showFolderPicker={false}
           disableAutofocus
+          planModeEnabled={Boolean(ctx.data.headerStack)}
+          onPlanModeChange={ctx.data.headerStack ? noop : undefined}
+          topSlot={ctx.data.headerStack ? <PendingQueuePanel expanded={false} onToggle={noop} onRemove={noop} mergedWithBelow
+            queue={[{ clientId: 'queued-header', text: '验收排队消息', persistedContent: '验收排队消息',
+              chatMessage: { clientId: 'queued-header', role: 'user', content: '验收排队消息', isStreaming: false },
+              createOpts: { workingDir: '/fixture' } } as QueuedMessage]} /> : undefined}
           isStreaming={running}
           onStop={() => setRunning(false)}
           onStartVoiceConversation={() => setCallOpen(true)}
@@ -163,6 +185,9 @@ void mountPage({
       imageCache.finish = () => resolve({ url: fixturePhoto });
     }),
     maker: {
+      getGoalStatus: async () => ctx.data.headerStack ? { sessionId: 'fixture-companion', status: 'paused', objective: '验收目标',
+        turnsUsed: 1, tokensUsed: 20, maxTurns: null, noProgressLimit: null, budgetTokens: null, usageResetAt: null, startedAt: 0, lastReason: null } : null,
+      onGoalStatusChanged: subscription('goal-status'),
       onDesktopCommandTriggered: subscription('desktop-command'),
       onSessionCredentialSwitchApplied: subscription('credential-applied'),
       onSessionCredentialSwitchFailed: subscription('credential-failed'),
@@ -186,7 +211,7 @@ void mountPage({
       onGlobalShortcutTrigger: subscription('voice-shortcut'),
     },
     deviceLink: { onRemotePush: subscription('remote-push') },
-    ghosts: { listSync: () => ({ ghosts: ctx.data.pluginToolbar ? [plugin] : [] }), onChanged: subscription('ghosts') },
+    ghosts: { listSync: () => ({ ghosts: ctx.data.pluginToolbar || ctx.data.pluginHeader ? [plugin] : [] }), onChanged: subscription('ghosts') },
   },
   render: () => {
     (window as unknown as { __composerImageCache: typeof imageCache }).__composerImageCache = imageCache;

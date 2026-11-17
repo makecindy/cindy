@@ -3,8 +3,8 @@
  * removed accounts in prepareSend.ts, exhausted or signed-out accounts in failover.ts).
  *
  * Read in the same order a resume uses (agent.ts): the task binding, then its native session,
- * then a merged legacy Codex connection's own account, then the official default home of a
- * pre-pool Claude task. Since 2026-11-13 merged connections move like every other account: after
+ * then proven Codex history ownership or a merged legacy connection's own account, then the
+ * official default home of a pre-pool Claude task. Since 2026-11-13 merged connections move like every other account: after
  * the merge users can no longer pick another connection by hand, so every task must be able to
  * continue on another account (subscription-account-pools.md 账号间自动换号).
  *
@@ -41,7 +41,7 @@ const OPENAI_KINDS = ['codex', 'cc', 'claude-code', 'pi'];
 const CLAUDE_KINDS = ['cc', 'claude-code'];
 
 /** Which pool a local task uses and the account it is on; null when it is not a local pool task. */
-export function readTaskPoolAccount(sessionId: string, row: TaskAccountSession): TaskPoolAccount | null {
+export function readTaskPoolAccount(sessionId: string, row: TaskAccountSession, codexHistoryAccountId?: string): TaskPoolAccount | null {
   if (row.status === 'deleted' || row.remoteHostId || row.agentDeviceId) return null;
   const ref = resolveSubscriptionPoolProvider(row.providerId);
   if (!ref || !(ref.kind === 'openai' ? OPENAI_KINDS : CLAUDE_KINDS).includes(row.agentKind ?? '')) return null;
@@ -53,6 +53,8 @@ export function readTaskPoolAccount(sessionId: string, row: TaskAccountSession):
   if (binding && ref.providerId !== (binding.via ?? provider)
     && accountProviderId(provider, binding.accountId) !== ref.providerId) return null;
   const accountId = binding?.accountId
+    // Only the host-owned history lookup may supply this fallback; never infer pool order.
+    ?? (ref.providerId === 'openai' && row.agentKind === 'codex' && row.sdkSessionId ? codexHistoryAccountId : undefined)
     // A merged connection that has not run since the merge still runs on its own account.
     ?? pinnedOwnAccount(ref)
     // Pre-pool Claude tasks resume the official default home (same as agent.ts).
