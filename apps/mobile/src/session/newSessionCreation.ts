@@ -1395,6 +1395,16 @@ async function runPipeline(task: InternalTask): Promise<void> {
     if (!freshSession && (draftPatch !== null || effectiveFinalDraft !== finalDraft)) {
       remoteSessionStore.upsertDeviceSession(params.deviceId, params.deviceName, sessionForQueue);
     }
+    if (!freshSession) {
+      // createSession 已成功：电脑上建好的是本机发起的普通任务。弱网下没拿到权威行时，
+      // 乐观行也要带上已确认的来源；否则管线收口后任务入口查不到来源，会把正在看的
+      // 会话页切成「正在读取任务」。镜像已带来源时以镜像为准。
+      const row = remoteSessionStore.getSessions()
+        .find((session) => session.id === sessionId && session.deviceLinkDeviceId === params.deviceId);
+      if (row && row.source === undefined) {
+        remoteSessionStore.applySessionPatch(params.deviceId, sessionId, { source: null });
+      }
+    }
     const queuedDraft = attachFirstMessageSessionReferences(buildQueuedTextMessage(
       sessionForQueue,
       effectiveFinalDraft.firstMessage,

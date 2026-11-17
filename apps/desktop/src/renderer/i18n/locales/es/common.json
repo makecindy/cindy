@@ -4534,14 +4534,7 @@
         "installCancel": "Cancelar instalación",
         "installFailed": "No se pudo instalar Ollama",
         "installPhase": {
-          "resolving": "Buscando la versión oficial…",
-          "downloading": "Descargando…",
-          "verifying": "Verificando…",
-          "extracting": "Instalando…",
-          "starting": "Iniciando…",
-          "success": "Instalado",
-          "error": "La instalación falló",
-          "cancelled": "Cancelado"
+          "error": "La instalación falló"
         },
         "openWebsite": "Abrir el sitio web Ollama",
         "recheck": "Ya lo instalé, revisa nuevamente",
@@ -4576,20 +4569,6 @@
         "retryDownload": "Reintentar",
         "libraryName": "Nombre exacto de la biblioteca Ollama",
         "pullingTitle": "Descargando {{name}}",
-        "pullIndeterminate": "Preparando",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "Preparando descarga…",
-          "manifest": "Obteniendo manifiesto…",
-          "downloading": "Descargando archivos del modelo",
-          "verifying": "Verificando…",
-          "writing": "Escribiendo…",
-          "success": "Descarga completa",
-          "error": "Descarga fallida",
-          "paused": "En pausa",
-          "cancelled": "Cancelado"
-        },
         "pauseDownload": "Pausar",
         "resumeDownload": "Reanudar descarga",
         "cancelDownload": "Eliminar descarga incompleta",
@@ -6036,8 +6015,6 @@
           "notChecked": "Aún no comprobado",
           "action": "Actualizar",
           "updating": "Actualizando…",
-          "downloadingPercent": "Descargando {{percent}}% ({{downloaded}}/{{total}} MB)…",
-          "downloadingBytes": "Descargando, {{downloaded}} MB hasta ahora…",
           "installing": "Descarga completa, instalando…",
           "toast": {
             "success": "cua-driver se actualizó a la versión más reciente",
@@ -11006,6 +10983,7 @@
       "duplicate": "Duplicar amigo",
       "moreActions": "Otras acciones para {{name}}",
       "viewIcons": "Iconos",
+      "showCollapsedTeammateAvatars": "Mostrar avatares al contraer",
       "sectionExpand": "Expandir amigos",
       "showLess": "Mostrar menos",
       "sectionCollapse": "Contraer amigos",
@@ -22043,5 +22021,28 @@
     "archivedNotice": "Tareas inactivas archivadas automáticamente: {{count}}",
     "undo": "Deshacer",
     "undoFailed": "No se pudo deshacer. Restaura las tareas desde Archivadas."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "Quedan {{time}}",
+    "attempt": "Intento {{attempt}}",
+    "phase": {
+      "preparing": "Preparando…",
+      "queued": "En cola…",
+      "downloading": "Descargando…",
+      "retrying": "Reintentando…",
+      "verifying": "Verificando…",
+      "installing": "Instalando…",
+      "paused": "En pausa",
+      "completed": "Completado",
+      "failed": "Error en la descarga",
+      "cancelled": "Cancelado"
+    },
+    "retry": {
+      "slow": "Conexión lenta, reconectando…",
+      "network": "Conexión perdida, reintentando…",
+      "timeout": "Tiempo de conexión agotado, reintentando…",
+      "server": "Servidor ocupado, reintentando…"
+    }
   }
 }

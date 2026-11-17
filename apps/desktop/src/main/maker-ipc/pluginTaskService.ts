@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Session } from '@cindy/maker-core';
 import { GHOST_ERRAND_PERMISSION_MODES } from '../../shared/ghost.js';
-import type { PluginTaskPermissionMode, PluginTaskRoute, PluginTaskRun, PluginTaskView, PluginTeamPlan } from '../../shared/pluginTasks.js';
+import type { PluginTaskMessageRelay, PluginTaskPermissionMode, PluginTaskRoute, PluginTaskRun, PluginTaskView, PluginTeamPlan } from '../../shared/pluginTasks.js';
 import { isPluginTaskPermissionMode, isPluginTeamPlanWithinBudget, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../shared/pluginTasks.js';
 import type { PluginMessageAttachment } from '../../shared/pluginAttachments.js';
 import { withParsedPluginMessageAttachments, type PluginMessageImage } from '../cindy-media/pluginMessageAttachments.js';
@@ -158,6 +158,8 @@ export interface PluginTaskServiceDeps {
     text: string,
     images?: PluginMessageImage[],
     context?: string,
+    /** Plugin-claimed IM relay; passed only when the request carried one. Host re-sanitizes it. */
+    relay?: PluginTaskMessageRelay,
   ): Promise<{ ok: boolean; message?: string }>;
   inspect(
     taskId: string,
@@ -531,7 +533,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       }),
     send: async (
       pluginId: string,
-      request: { taskId: string; requestKey: string; expectedRevision: number; text: string; context?: string; attachments?: PluginMessageAttachment[]; invocationId?: string },
+      request: { taskId: string; requestKey: string; expectedRevision: number; text: string; context?: string; attachments?: PluginMessageAttachment[]; invocationId?: string; relay?: PluginTaskMessageRelay },
     ): Promise<PluginTaskRun> => completeOperation(() => withParsedPluginMessageAttachments(request.attachments, async images => {
       const admission = await exclusive(async () => {
         const view = await ownTask(pluginId, request.taskId);
@@ -539,6 +541,8 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           ? [request.text, request.expectedRevision, images.map(({ hash, name }) => [hash, name])]
           : [request.text, request.expectedRevision];
         if (request.context) contentIdentity.push({ context: request.context });
+        // Only a request that carries relay hashes it, so every relay-free receipt keeps its old digest.
+        if (request.relay) contentIdentity.push({ relay: request.relay });
         const fingerprint = hash(request.invocationId === undefined ? contentIdentity : [...contentIdentity, request.invocationId]);
         const previous = replay(
           await deps.store.find(pluginId, 'send', request.taskId, request.requestKey),
@@ -606,6 +610,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           request.text,
           images,
           request.context,
+          ...(request.relay ? [request.relay] as const : [] as const),
         );
         if (!outcome.ok) failure = 'failed';
         else {

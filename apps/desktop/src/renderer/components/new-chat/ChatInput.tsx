@@ -386,7 +386,7 @@ import {
 } from '@/lib/providerModels';
 import {
   clearProviderModelEffort,
-  clearProviderModelFast, editProviderModelMemoryBatch,
+  clearProviderModelFast, clearProviderModelThinking, editProviderModelMemoryBatch,
   getProviderModelEffort,
   setProviderModelChoice,
   setProviderModelEffort,
@@ -988,6 +988,7 @@ const LOCAL_MODEL_MEMORY: ModelMemoryAccessors = {
   setFast: setProviderModelFast,
   getThinking: getProviderModelThinking,
   setThinking: setProviderModelThinking,
+  clearThinking: clearProviderModelThinking,
   // 「恢复推荐」= 删记忆键(跟随目录新默认),不是把这一版的默认快照写回去。
   // device-link 镜像没有这两个入口(隧道协议没有删除那一笔),按各自能力退化。
   clearEffort: clearProviderModelEffort,
@@ -1019,6 +1020,9 @@ const SSH_PROJECT_MODEL_MEMORY: ModelMemoryAccessors = (() => {
       local(agent) ? getProviderModelThinking(agent, providerId, modelId) : undefined,
     setThinking: (agent, providerId, modelId, enabled) => {
       if (local(agent)) setProviderModelThinking(agent, providerId, modelId, enabled);
+    },
+    clearThinking: (agent, providerId, modelId) => {
+      if (local(agent)) clearProviderModelThinking(agent, providerId, modelId);
     },
     clearEffort: (agent, providerId, modelId) => {
       if (local(agent)) clearProviderModelEffort(agent, providerId, modelId);
@@ -10198,7 +10202,28 @@ export function ChatInput({
                         : true
                     }
                     onThinkingChange={async (enabled) => {
-                      if (settingsLocked) return;
+                      if (settingsLocked) return false;
+                      // Apply to the runtime (or the next-message intent) before
+                      // confirming the preference. A rejected write must leave
+                      // the visible switch and its remembered value unchanged.
+                      if (sessionId) {
+                        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
+                        if (intent) {
+                          const applied = await performAgentSwitch(intent.target, intent.model, intent.providerId, {
+                            ...(intent.effort ? { effort: intent.effort as Effort } : {}),
+                            fastMode: intent.fastMode,
+                            thinking: enabled,
+                            axesOnly: true,
+                          });
+                          if (!applied) return false;
+                        } else {
+                          const api = deviceLinkDeviceId
+                            ? makerApiForDevice(deviceLinkDeviceId)
+                            : window.electronAPI.maker;
+                          await api.setThinkingEnabled(sessionId, enabled);
+                        }
+                        if (!isSessionScopeCurrent(sessionId, currentSessionIdRef.current)) return false;
+                      }
                       if (currentModelAgentKind && effectiveSourceId) {
                         if (modelMemory?.setThinking) {
                           modelMemory.setThinking(
@@ -10215,24 +10240,6 @@ export function ChatInput({
                             enabled,
                           );
                         }
-                      }
-                      // 意图期内(点选尚未发送)必须把开关写回 staged 意图：否则结算回放
-                      // 会按登记时的旧快照下发档位，把用户刚关掉的思考又打开(或反之)。
-                      if (sessionId && currentModelAgentKind) {
-                        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
-                        if (intent) {
-                          await performAgentSwitch(intent.target, intent.model, intent.providerId, {
-                            ...(intent.effort ? { effort: intent.effort as Effort } : {}),
-                            fastMode: intent.fastMode,
-                            thinking: enabled,
-                          });
-                        }
-                      }
-                      if (sessionId) {
-                        const api = deviceLinkDeviceId
-                          ? makerApiForDevice(deviceLinkDeviceId)
-                          : window.electronAPI.maker;
-                        await api.setThinkingEnabled(sessionId, enabled);
                       }
                     }}
                     modelMemory={modelMemory}

@@ -4478,14 +4478,7 @@
         "installCancel": "Cancel install",
         "installFailed": "Couldn’t install Ollama",
         "installPhase": {
-          "resolving": "Looking up the official release…",
-          "downloading": "Downloading…",
-          "verifying": "Verifying…",
-          "extracting": "Installing…",
-          "starting": "Starting…",
-          "success": "Installed",
-          "error": "Install failed",
-          "cancelled": "Cancelled"
+          "error": "Install failed"
         },
         "openWebsite": "Open Ollama website",
         "recheck": "I installed it, check again",
@@ -4520,20 +4513,6 @@
         "retryDownload": "Retry",
         "libraryName": "Exact Ollama library name",
         "pullingTitle": "Downloading {{name}}",
-        "pullIndeterminate": "Preparing",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "Preparing download…",
-          "manifest": "Fetching manifest…",
-          "downloading": "Downloading model files",
-          "verifying": "Verifying…",
-          "writing": "Writing…",
-          "success": "Download complete",
-          "error": "Download failed",
-          "paused": "Paused",
-          "cancelled": "Cancelled"
-        },
         "pauseDownload": "Pause",
         "resumeDownload": "Resume Download",
         "cancelDownload": "Delete Incomplete Download",
@@ -5978,8 +5957,6 @@
           "notChecked": "Not checked yet",
           "action": "Update",
           "updating": "Updating…",
-          "downloadingPercent": "Downloading {{percent}}% ({{downloaded}}/{{total}} MB)…",
-          "downloadingBytes": "Downloading, {{downloaded}} MB so far…",
           "installing": "Download complete, installing…",
           "toast": {
             "success": "cua-driver updated to the latest version",
@@ -10922,6 +10899,7 @@
       "duplicate": "Duplicate buddy",
       "moreActions": "More actions for {{name}}",
       "viewIcons": "Icons",
+      "showCollapsedTeammateAvatars": "Show avatars when collapsed",
       "sectionExpand": "Expand buddies",
       "showLess": "Show less",
       "sectionCollapse": "Collapse buddies",
@@ -21838,5 +21816,28 @@
     "archivedNotice": "Automatically archived idle tasks: {{count}}",
     "undo": "Undo",
     "undoFailed": "Could not undo. Restore the tasks from Archived."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "{{time}} left",
+    "attempt": "Attempt {{attempt}}",
+    "phase": {
+      "preparing": "Preparing…",
+      "queued": "Queued…",
+      "downloading": "Downloading…",
+      "retrying": "Retrying…",
+      "verifying": "Verifying…",
+      "installing": "Installing…",
+      "paused": "Paused",
+      "completed": "Done",
+      "failed": "Download failed",
+      "cancelled": "Cancelled"
+    },
+    "retry": {
+      "slow": "Slow connection, reconnecting…",
+      "network": "Connection lost, retrying…",
+      "timeout": "Connection timed out, retrying…",
+      "server": "Server busy, retrying…"
+    }
   }
 }

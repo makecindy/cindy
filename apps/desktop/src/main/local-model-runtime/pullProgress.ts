@@ -1,7 +1,9 @@
 import {
   classifyOllamaPullStatus,
+  downloadPhaseOfPull,
   type LocalModelPullProgress,
 } from '../../shared/localModelRuntime.js';
+import { createDownloadProgressReporter } from '../downloader/index.js';
 import type { OllamaPullEvent } from './ollamaClient.js';
 
 export interface PullLayer {
@@ -147,5 +149,33 @@ export function createThrottledEmitter(
       }
       if (pending) send(pending);
     },
+  };
+}
+
+/**
+ * Attaches the standard `download` shape to each pull snapshot of one pull run. Ollama's own
+ * /api/pull protocol stays in place; only what the meter shows is shared: bytes and percent
+ * never go backwards while layers are discovered, time left comes from the measured speed.
+ */
+export function createPullDownloadTracker(now: () => number = Date.now) {
+  // Ollama reveals each layer's size only when that layer starts: never claim 100% early.
+  const reporter = createDownloadProgressReporter({
+    emit: () => undefined,
+    throttleMs: 0,
+    now,
+    holdCompleteUntilDone: true,
+  });
+  return (progress: LocalModelPullProgress): LocalModelPullProgress => {
+    const phase = downloadPhaseOfPull(progress.phase);
+    if (progress.completed !== undefined) {
+      const total = progress.total && progress.total > 0 ? progress.total : null;
+      reporter.setBytes(
+        progress.completed,
+        total,
+        phase === 'downloading' ? (progress.bytesPerSecond ?? 0) : 0,
+      );
+    }
+    reporter.setPhase(phase);
+    return { ...progress, download: reporter.snapshot() };
   };
 }

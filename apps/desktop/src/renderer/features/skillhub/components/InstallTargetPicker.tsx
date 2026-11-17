@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button } from '@/components/ui/button';
+import { DownloadMeter } from '@/components/ui/download-meter';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronRight, FolderOpen, Globe } from 'lucide-react';
 
@@ -29,6 +30,7 @@ import {
   normalizeInstallPathKey,
 } from '../lib/installTargetPaths';
 import type { SkillhubCatalogScope } from '../../../../shared/skillhubCatalog';
+import type { DownloadProgress } from '../../../../shared/downloadProgress';
 import { useSkillhubTarget } from '../SkillhubTargetContext';
 
 /** Minimal skill identity for the picker (market Clone or local import). */
@@ -110,6 +112,31 @@ export function InstallTargetPicker({
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [installedPaths, setInstalledPaths] = useState<Map<string, string>>(new Map());
+  const [installProgress, setInstallProgress] = useState<DownloadProgress | null>(null);
+
+  // Local installs report download progress; remote targets send none and show no meter.
+  useEffect(() => {
+    setInstallProgress(null);
+    if (!installing || !skill) return;
+    return window.electronAPI.skillhub?.onInstallProgress?.((event) => {
+      if (event.name !== skill.name) return;
+      if (event.download) setInstallProgress(event.download);
+      else if (
+        event.phase === 'verifying' ||
+        event.phase === 'extracting' ||
+        event.phase === 'registering'
+      )
+        setInstallProgress(
+          (prev) =>
+            prev && {
+              ...prev,
+              phase: event.phase === 'verifying' ? 'verifying' : 'installing',
+              speedBps: 0,
+              etaSeconds: null,
+            },
+        );
+    });
+  }, [installing, skill?.name]);
 
   useEffect(() => {
     if (open && target) void target.refresh();
@@ -460,6 +487,11 @@ export function InstallTargetPicker({
             </div>
           )}
         </div>
+          {installing && installProgress && (
+            <div className="px-4 pb-3">
+              <DownloadMeter label={skill.name} progress={installProgress} />
+            </div>
+          )}
           <div className="flex justify-end px-4 pb-4">
             <Button ref={cancelRef} variant="secondary" disabled={installing} onClick={onClose}>
               {t('skillhub.detail.cancel')}
