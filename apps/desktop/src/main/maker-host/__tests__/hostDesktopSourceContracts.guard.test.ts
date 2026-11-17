@@ -123,7 +123,7 @@ describe('Host main.ts wiring', () => {
     const main = read(path.join(hostSrc, 'main.ts'));
     assert.ok(main.includes("import { describeHostOutboundProxy, describeOutboundProxyLine, startHostSystemProxySettings, stopHostSystemProxySettings } from './outbound-proxy.ts';\n"));
     assert.equal(main.split('startHostSystemProxySettings()').length - 1, 1);
-    assert.ok(main.includes("command === undefined || command === 'serve' || command === 'login'\n  ? startHostSystemProxySettings() : undefined;"));
+    assert.ok(main.includes("command === undefined || command === 'serve' || command === 'login'\n  ? startHostSystemProxySettings().catch("));
     assert.ok(main.includes('await proxyWarmup;\n    await runLoginCommand(process.argv.slice(3));'));
     const rules = read(path.join(hostSrc, 'macos-system-proxy.ts'));
     assert.ok(rules.includes("const SCUTIL_PATH = '/usr/sbin/scutil';\n"));

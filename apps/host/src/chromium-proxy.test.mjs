@@ -191,34 +191,25 @@ test('the first login reaches the PAC proxy after a three-second cold start', as
 // Row 28c, integration: run main's command preparation and listen/startup callback together, as
 // startup-account.test.mjs runs the real startup functions. Substitute profile/account storage;
 // exercise the real loopback /health handler, proxy helper protocol and login transport.
-test('serve answers health before the cold PAC is ready and sends its first login through the proxy', async t => {
-  const seen = [];
-  const proxy = createServer((req, res) => { seen.push(req.url); res.end('via PAC'); });
-  await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise(resolve => { proxy.closeAllConnections(); proxy.close(resolve); }));
-  const { spawned, spawnImpl } = standIn({ onRequest: answer(`PROXY 127.0.0.1:${proxy.address().port}`) });
-  const helper = helperFor(spawnImpl);
-  t.after(() => helper.close());
+function launchServe(t, { startHostSystemProxySettings, resolveAccountUser, warn }) {
   const server = createHostServer({ token: 'fixture-token' });
+  // Let early rejections surface before the listener's startup callback runs.
+  const listen = server.listen.bind(server);
+  server.listen = (port, host, onListening) => listen(port, host, () => setImmediate(() => {
+    if (server.listening) onListening();
+  }));
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
 
   const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
   const preparation = source.slice(source.indexOf('const command ='), source.indexOf("if (command === '--help'"));
   const listener = source.slice(source.indexOf("server.on('error'"), source.indexOf('let shuttingDown ='));
-  const loginUrl = 'http://listen-first.example.test/v1/session/refresh';
-  let loginStarted = false;
   const ports = {
     server, PORT: 0, profileDir, instanceId: 'fixture', account: {}, runtime: {}, shuttingDown: false,
     process: { argv: ['node', 'main.ts', 'serve'], env: {}, stdout: { write() {} } },
-    console: { log() {} }, resolveHostRegion() {}, publishHostEndpoint() {}, resolveHostDataDir: () => profileDir,
+    console: { log() {}, warn, error() {} }, resolveHostRegion() {}, publishHostEndpoint() {}, resolveHostDataDir: () => profileDir,
     discoverHostOwner: () => ({}), readAdoptedSessionState: async () => ({ authenticated: true }),
-    startHostSystemProxySettings: () => startHostSystemProxySettings({ platform: 'win32', makeHelper: () => helper }),
-    resolveAccountUser: async () => {
-      loginStarted = true;
-      const response = await hostAuthFetch(loginUrl, { method: 'POST' });
-      await response.text();
-      return null;
-    },
+    startHostSystemProxySettings, resolveAccountUser,
+    disposeOwnerRuntime() {}, commitVolatileAppSession() {}, classifyHostStartFailure() {},
   };
   const body = ts.transpileModule(`return async () => {
     let startup, removeEndpoint;
@@ -227,7 +218,28 @@ test('serve answers health before the cold PAC is ready and sends its first logi
     return () => startup;
   }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const launch = new Function(...Object.keys(ports), body)(...Object.values(ports));
-  const listening = launch();
+  return { server, listening: launch() };
+}
+
+test('serve answers health before the cold PAC is ready and sends its first login through the proxy', async t => {
+  const seen = [];
+  const proxy = createServer((req, res) => { seen.push(req.url); res.end('via PAC'); });
+  await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { proxy.closeAllConnections(); proxy.close(resolve); }));
+  const { spawned, spawnImpl } = standIn({ onRequest: answer(`PROXY 127.0.0.1:${proxy.address().port}`) });
+  const helper = helperFor(spawnImpl);
+  t.after(() => helper.close());
+  const loginUrl = 'http://listen-first.example.test/v1/session/refresh';
+  let loginStarted = false;
+  const { server, listening } = launchServe(t, {
+    startHostSystemProxySettings: () => startHostSystemProxySettings({ platform: 'win32', makeHelper: () => helper }),
+    resolveAccountUser: async () => {
+      loginStarted = true;
+      const response = await hostAuthFetch(loginUrl, { method: 'POST' });
+      await response.text();
+      return null;
+    },
+  });
   await settle();
   assert.ok(server.listening, 'serve must listen while proxy warmup is still pending');
   const startup = await listening;
@@ -243,6 +255,30 @@ test('serve answers health before the cold PAC is ready and sends its first logi
   ready(spawned[0]);
   await startup();
   assert.deepEqual(seen, [loginUrl]);
+});
+
+// Row 28c: a helper factory can throw before startup awaits warmup (for example, a bad profile path).
+test('serve keeps listening and continues startup after proxy warmup rejects', async t => {
+  const warnings = [];
+  let loginRoute;
+  const { server, listening } = launchServe(t, {
+    startHostSystemProxySettings: () => startHostSystemProxySettings({
+      platform: 'darwin',
+      makeHelper: () => { throw new TypeError('private profile path'); },
+      readSettings: async () => '<dictionary> {\n  HTTPSEnable : 1\n  HTTPSProxy : 127.0.0.1\n  HTTPSPort : 3129\n}\n',
+    }),
+    resolveAccountUser: async () => {
+      loginRoute = await resolveHostOutboundProxy('https://warmup-error.example.test/');
+      return null;
+    },
+    warn: (...args) => warnings.push(args),
+  });
+  const startup = await listening;
+  await settle();
+  assert.ok(server.listening);
+  await startup();
+  assert.equal(loginRoute, 'http://127.0.0.1:3129', 'startup reached login using the static fallback');
+  assert.deepEqual(warnings, [['[host] system proxy warmup failed:', 'TypeError']]);
 });
 
 // Removing the 8 s bound leaves startup blocked until the independent 15 s watchdog.

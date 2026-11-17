@@ -68,7 +68,14 @@ export async function startHostSystemProxySettings({
   makeHelper?: () => ChromiumProxyHelper;
 } = {}): Promise<void> {
   if (platform !== 'darwin' && platform !== 'win32') return;
-  const helper = chromiumHelper = makeHelper();
+  let helper: ChromiumProxyHelper;
+  try {
+    helper = chromiumHelper = makeHelper();
+  } catch (error) {
+    // The static macOS settings remain usable even if the helper profile cannot be created.
+    if (platform === 'darwin') useHostSystemProxySettings(readSettings);
+    throw error;
+  }
   if (platform === 'darwin') {
     const session = createMacSystemProxySession(readSettings, helper);
     systemProxySession = session;

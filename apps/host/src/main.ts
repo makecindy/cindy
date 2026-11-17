@@ -217,7 +217,9 @@ try {
 }
 // open, status, stop and remote only contact a local loopback endpoint.
 const proxyWarmup = command === undefined || command === 'serve' || command === 'login'
-  ? startHostSystemProxySettings() : undefined;
+  ? startHostSystemProxySettings().catch((error: unknown) => {
+    console.warn('[host] system proxy warmup failed:', error instanceof Error ? error.name : 'UnknownError');
+  }) : undefined;
 if (command === '--help' || command === '-h') {
   console.log('Usage: cindy-host [serve|login [--region=cn|global] [--method=<id>]|open|status [--json]|remote [status|enable|disable|revoke <device-id>]|stop]');
 } else if (command === 'open') {
