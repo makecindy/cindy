@@ -9,7 +9,6 @@ import type { Html, PhrasingContent, Root, RootContent } from 'mdast';
 import { parseFragment, type DefaultTreeAdapterTypes } from 'parse5';
 import type { Plugin } from 'unified';
 import type { Point } from 'unist';
-import { visit } from 'unist-util-visit';
 
 const OMITTED = new Set('script style iframe object embed template noscript svg math head'.split(' '));
 const BLOCKS = new Set(
@@ -138,14 +137,20 @@ function htmlText(
 const remarkHtmlText: Plugin<[], Root> = () => (tree, file) => {
   const source = String(file);
   let documentLines: number[] | undefined;
-  visit(tree, (parent) => {
-    if (!('children' in parent)) return;
+  // Walk only original nodes. unist-util-visit computes each sibling's index
+  // with indexOf; revisiting a wide recovered block would become quadratic.
+  // Replacements contain final text/break nodes, never more HTML to transform.
+  const pending: (Root | RootContent)[] = [tree];
+  while (pending.length) {
+    const parent = pending.pop()!;
+    if (!('children' in parent)) continue;
     let next: RootContent[] | undefined;
     const children = parent.children;
     for (let index = 0; index < children.length; index++) {
       const child = children[index];
       if (child.type !== 'html') {
         next?.push(child);
+        if ('children' in child) pending.push(child);
         continue;
       }
       next ??= children.slice(0, index);
@@ -162,7 +167,7 @@ const remarkHtmlText: Plugin<[], Root> = () => (tree, file) => {
     // Rebuild each affected parent's array once: no variadic argument limit and
     // no repeated suffix copies when siblings contain multiple HTML nodes.
     if (next) parent.children = next as typeof parent.children;
-  });
+  }
 };
 
 export default remarkHtmlText;
