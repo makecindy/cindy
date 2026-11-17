@@ -16269,7 +16269,8 @@
         "project": "Projekt",
         "flat": "Flache Liste",
         "device": "Gerät",
-        "dialogue": "Chat"
+        "dialogue": "Chat",
+        "automation": "Automatisierung"
       },
       "filterGroupByDeviceManualTip": "Bei manueller Sortierung ist die Gruppierung nach Gerät nicht verfügbar",
       "deviceGroup": {
@@ -16617,6 +16618,7 @@
       "groupSummary": {
         "project": "Projekt",
         "dialogue": "Chat",
+        "automation": "Automatisierung",
         "device": "Gerät"
       },
       "taskStatusHeading": "Sitzungsstatus",

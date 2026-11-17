@@ -1,5 +1,5 @@
 import { i18n } from '@/i18n';
-import { compareSessionListStrings } from '@cindy/maker-shared/session-list';
+import { automationGroupKey, compareSessionListStrings } from '@cindy/maker-shared/session-list';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from './mobileHome';
 import {
   activityMsFromIso,
@@ -20,6 +20,8 @@ export type HomeRow =
   | { key: string; kind: 'project'; project: MobileHomeProjectGroup }
   | { key: string; kind: 'dialogue'; project: MobileHomeProjectGroup }
   | { key: string; kind: 'cindy-make'; project: MobileHomeProjectGroup }
+  /** 「自动化」目录:自动化运行出来的任务(项目里的与对话的),组内同一自动化仍收成一行。 */
+  | { key: string; kind: 'automation'; project: MobileHomeProjectGroup }
   | {
       key: string;
       kind: 'session';
@@ -37,6 +39,9 @@ export const HOME_MAIN_SECTION_KEY = 'main';
 
 export interface HomeSectionOptions {
   groupDialogue?: boolean;
+  /** 自动化运行的任务收进「自动化」目录(与桌面「分组 → 自动化」同口径)。 */
+  groupAutomation?: boolean;
+  automationTitle?: string;
   /** The compact task-switching drawer only renders flat session rows. */
   groupCindyMake?: boolean;
   sortBy?: HomeListSortBy;
@@ -72,10 +77,15 @@ export function buildHomeSections(
     });
   }
 
-  const rows = groupByProject ? buildGroupedHomeRows(home, options) : buildMixedHomeRows(home, options);
+  const partitioned = options.groupAutomation ? partitionAutomationItems(home) : null;
+  const listHome = partitioned?.home ?? home;
+  const rows = groupByProject ? buildGroupedHomeRows(listHome, options) : buildMixedHomeRows(listHome, options);
+  if (partitioned && partitioned.automations.length > 0) {
+    rows.push(buildAutomationGroupRow(partitioned.automations, options));
+  }
   if (rows.length > 0) {
     sections.push({
-      data: rows,
+      data: partitioned ? sortHomeRows(rows, options) : rows,
       key: HOME_MAIN_SECTION_KEY,
       title: null,
     });
@@ -104,8 +114,73 @@ export function homeRowBefore(
   return undefined;
 }
 
-export function isFolderHomeRow(row: HomeRow | undefined): row is Extract<HomeRow, { kind: 'project' | 'dialogue' | 'cindy-make' }> {
-  return !!row && (row.kind === 'project' || row.kind === 'dialogue' || row.kind === 'cindy-make');
+export function isFolderHomeRow(
+  row: HomeRow | undefined,
+): row is Extract<HomeRow, { kind: 'project' | 'dialogue' | 'cindy-make' | 'automation' }> {
+  return !!row && (row.kind === 'project' || row.kind === 'dialogue' || row.kind === 'cindy-make'
+    || row.kind === 'automation');
+}
+
+function isAutomationItem(item: RemoteSessionListItem): boolean {
+  return automationGroupKey(item) !== null;
+}
+
+/**
+ * 按来源(自动化运行)把任务从项目和对话里抽出;只剩自动化任务的项目随之消失,
+ * 与 Cindy Make 目录同口径。Cindy Make 目录不参与。
+ */
+export function partitionAutomationItems(home: MobileHomePresentation): {
+  home: MobileHomePresentation;
+  automations: RemoteSessionListItem[];
+} {
+  const automations: RemoteSessionListItem[] = [];
+  const projects = home.projects.flatMap((project) => {
+    if (project.kind === 'cindy-make') return [project];
+    const sessions = project.sessions.filter((item) => {
+      if (!isAutomationItem(item)) return true;
+      automations.push(item);
+      return false;
+    });
+    if (sessions.length === project.sessions.length) return [project];
+    if (sessions.length === 0) return [];
+    return [{
+      ...project,
+      latestActivityAt: latestActivityAt(sessions),
+      pendingInteractionCount: sessions.reduce((sum, item) => sum + item.pendingInteractionCount, 0),
+      sessionCount: sessions.reduce((sum, item) => sum + (item.automationGroup?.sessionCount ?? 1), 0),
+      sessions,
+    }];
+  });
+  const chats = home.chats.filter((item) => {
+    if (!isAutomationItem(item)) return true;
+    automations.push(item);
+    return false;
+  });
+  return { home: { ...home, chats, projects }, automations };
+}
+
+export function buildAutomationGroupRow(
+  items: readonly RemoteSessionListItem[],
+  options: HomeSectionOptions = {},
+): HomeRow {
+  const title = options.automationTitle ?? i18n.t('devices.list.menu.automationFolder');
+  const sessions = sortSessionItems(items, options);
+  return {
+    key: 'automation',
+    kind: 'automation',
+    project: {
+      deviceId: null,
+      deviceName: '',
+      key: 'automation',
+      latestActivityAt: latestActivityAt(sessions),
+      pendingInteractionCount: sessions.reduce((sum, item) => sum + item.pendingInteractionCount, 0),
+      sessionCount: sessions.reduce((sum, item) => sum + (item.automationGroup?.sessionCount ?? 1), 0),
+      sessions,
+      subtitle: '',
+      title,
+      workingDir: '',
+    },
+  };
 }
 
 /**

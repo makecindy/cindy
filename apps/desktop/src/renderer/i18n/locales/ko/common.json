@@ -16195,7 +16195,8 @@
         "project": "프로젝트",
         "flat": "평면 목록",
         "device": "기기",
-        "dialogue": "대화"
+        "dialogue": "대화",
+        "automation": "자동화"
       },
       "filterGroupByDeviceManualTip": "수동 정렬 중에는 기기별 그룹을 사용할 수 없습니다",
       "deviceGroup": {
@@ -16543,6 +16544,7 @@
       "groupSummary": {
         "project": "프로젝트",
         "dialogue": "대화",
+        "automation": "자동화",
         "device": "기기"
       },
       "taskStatusHeading": "세션 상태",

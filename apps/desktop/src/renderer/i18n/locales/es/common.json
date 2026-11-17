@@ -16425,7 +16425,8 @@
         "project": "Proyecto",
         "flat": "Lista plana",
         "device": "Dispositivo",
-        "dialogue": "Conversación"
+        "dialogue": "Conversación",
+        "automation": "Automatización"
       },
       "filterGroupByDeviceManualTip": "No se puede agrupar por dispositivo con el orden manual",
       "deviceGroup": {
@@ -16779,6 +16780,7 @@
       "groupSummary": {
         "project": "Proyecto",
         "dialogue": "Conversación",
+        "automation": "Automatización",
         "device": "Dispositivo"
       },
       "taskStatusHeading": "Estado de la sesión",

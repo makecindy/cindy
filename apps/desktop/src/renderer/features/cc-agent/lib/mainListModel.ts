@@ -26,6 +26,7 @@
 import type { Session } from '@/lib/ccAgent.types';
 import { withProjectSessions } from './projectGrouping';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
 import {
   MACHINE_ALL,
@@ -37,6 +38,7 @@ import { LIVE_TASK_PRIORITY, liveTaskPriorityRank } from '../../../../shared/liv
 import type { FilterProjectOrder, FilterSortBy } from '../hooks/helpers/sidebarFilterCore';
 import { normalizeManualProjectOrder } from '../hooks/helpers/sidebarFilterCore';
 import {
+  getAutomationSidebarGroupInfo,
   groupAutomationSidebarEntries,
   type AutomationScheduleSessionInfo,
   type SidebarSessionEntry,
@@ -48,6 +50,8 @@ export type MainListEntry =
   | { kind: 'project'; project: ProjectNode }
   | { kind: 'dialogue-group'; sessions: Session[] }
   | { kind: 'cindy-make-group'; sessions: Session[] }
+  /** 「自动化」组:自动化运行出来的任务(项目里的与无项目的),组内再按每条自动化收文件夹。 */
+  | { kind: 'automations-group'; sessions: Session[] }
   | SidebarSessionEntry;
 
 /** 优先级排序的运行时上下文(组装层的运行中 / 需关注集合)。 */
@@ -184,7 +188,13 @@ export function sessionPriorityRecencyMs(session: Session, ctx: MainListPriority
 
 export function getMainListEntrySessions(entry: MainListEntry): readonly Session[] {
   if (entry.kind === 'project') return entry.project.sessions;
-  if (entry.kind === 'dialogue-group' || entry.kind === 'cindy-make-group') return entry.sessions;
+  if (
+    entry.kind === 'dialogue-group' ||
+    entry.kind === 'cindy-make-group' ||
+    entry.kind === 'automations-group'
+  ) {
+    return entry.sessions;
+  }
   if (entry.kind === 'automation-group') return entry.group.sessions;
   return [entry.session];
 }
@@ -286,6 +296,8 @@ export interface BuildMainListEntriesInput {
   groupBy: 'project' | 'flat';
   /** true = 散排对话收进单个「对话组」条目。 */
   groupDialogue: boolean;
+  /** true = 自动化运行的任务从项目 / 散排里抽出,收进单个「自动化」组条目。 */
+  groupAutomation?: boolean;
   sortBy: FilterSortBy;
   projectOrder?: FilterProjectOrder;
   manualProjectOrder: readonly string[];
@@ -297,6 +309,8 @@ export interface BuildMainListEntriesInput {
 const EMPTY_SESSION_ID_SET: ReadonlySet<string> = new Set<string>();
 
 export const CINDY_MAKE_GROUP_KEY = 'cindy-make';
+/** 「自动化」组折叠记忆的命名空间(与对话 / Cindy Make 组同一份折叠偏好)。 */
+export const AUTOMATIONS_GROUP_KEY = 'automations';
 
 /** Group by the task's source, never by a title or a guessed worktree path. */
 export function partitionCindyMakeSessions({
@@ -335,6 +349,55 @@ export function partitionCindyMakeSessions({
   };
 }
 
+/**
+ * 「自动化归为一组」:按来源(自动化运行 / 旧伙伴例行任务专线)抽出任务,不看标题或目录。
+ * 只因抽走任务而变空的项目随之消失(与 Cindy Make 同口径);本机登记过的持久项目
+ * 本来就允许零任务显示,保留。
+ */
+export function partitionAutomationSessions({
+  projects,
+  dialogues,
+  unclassified,
+  scheduleSessionIndex,
+}: {
+  projects: readonly ProjectNode[];
+  dialogues: readonly Session[];
+  unclassified: readonly Session[];
+  scheduleSessionIndex?: ReadonlyMap<string, AutomationScheduleSessionInfo>;
+}): {
+  projects: ProjectNode[];
+  dialogues: Session[];
+  unclassified: Session[];
+  automations: Session[];
+} {
+  const automations = new Map<string, Session>();
+  const regular = (sessions: readonly Session[]) =>
+    sessions.filter((session) => {
+      if (!getAutomationSidebarGroupInfo(session, scheduleSessionIndex)) return true;
+      automations.set(session.id, session);
+      return false;
+    });
+  const regularProjects = projects.flatMap((project) => {
+    const sessions = regular(project.sessions);
+    if (sessions.length === project.sessions.length) return [project];
+    return sessions.length || project.isPersistentLocal ? [{ ...project, sessions }] : [];
+  });
+  return {
+    projects: regularProjects,
+    dialogues: regular(dialogues),
+    unclassified: regular(unclassified),
+    automations: [...automations.values()],
+  };
+}
+
+/**
+ * 伙伴的项目只从伙伴进入(cindy-bots-runtime.md「伙伴的项目在界面上」):没有可见任务时
+ * 不作为空项目行出现;伙伴在里面开了任务时照常显示。
+ */
+function isHiddenEmptyTeammateProject(project: ProjectNode): boolean {
+  return project.sessions.length === 0 && isTeammateProjectPath(project.workingDir);
+}
+
 function buildFlatSessionEntries(
   sessions: readonly Session[],
   sortBy: FilterSortBy,
@@ -353,6 +416,7 @@ export function buildMainListEntries({
   unclassified = [],
   groupBy,
   groupDialogue,
+  groupAutomation = false,
   sortBy,
   projectOrder = 'activity',
   manualProjectOrder,
@@ -381,6 +445,23 @@ export function buildMainListEntries({
       kind: 'cindy-make-group',
       sessions: sortSessionsForMainList(partitioned.cindyMake, sortBy, ctx),
     });
+  }
+  if (groupAutomation) {
+    const automationPartition = partitionAutomationSessions({
+      projects,
+      dialogues,
+      unclassified,
+      scheduleSessionIndex,
+    });
+    projects = automationPartition.projects;
+    dialogues = automationPartition.dialogues;
+    unclassified = automationPartition.unclassified;
+    if (automationPartition.automations.length) {
+      entries.push({
+        kind: 'automations-group',
+        sessions: sortSessionsForMainList(automationPartition.automations, sortBy, ctx),
+      });
+    }
   }
 
   if (groupBy === 'flat') {
@@ -419,6 +500,7 @@ export function buildMainListEntries({
   }
 
   for (const project of projects) {
+    if (isHiddenEmptyTeammateProject(project)) continue;
     entries.push({
       kind: 'project',
       project: withProjectSessions(project, sortSessionsForMainList(project.sessions, sortBy, ctx)),
@@ -551,7 +633,7 @@ function entryDeviceId(entry: MainListEntry): string | null {
   if (entry.kind === 'automation-group') {
     return entry.group.sessions[0]?.deviceLinkDeviceId ?? null;
   }
-  // 对话组已经按成员设备拆分,此时首条会话代表整个片段。
+  // 对话 / 自动化组已经按成员设备拆分,此时首条会话代表整个片段。
   return entry.sessions[0]?.deviceLinkDeviceId ?? null;
 }
 
@@ -577,7 +659,11 @@ export function splitEntriesByDevice(
   // 先把跨设备会话组拆开,再按每个片段的成员计算排序和设备聚合灯。
   const flattened: MainListEntry[] = [];
   for (const entry of entries) {
-    if (entry.kind !== 'dialogue-group' && entry.kind !== 'cindy-make-group') {
+    if (
+      entry.kind !== 'dialogue-group' &&
+      entry.kind !== 'cindy-make-group' &&
+      entry.kind !== 'automations-group'
+    ) {
       flattened.push(entry);
       continue;
     }

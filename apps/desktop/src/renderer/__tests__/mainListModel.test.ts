@@ -81,7 +81,9 @@ function labels(entries: MainListEntry[]): string[] {
           ? `auto:${entry.group.title}`
           : entry.kind === 'cindy-make-group'
             ? 'cindy-make-group'
-            : `s:${entry.session.title}`,
+            : entry.kind === 'automations-group'
+              ? `automations:${entry.sessions.map((session) => session.title).join(',')}`
+              : `s:${entry.session.title}`,
   );
 }
 
@@ -536,6 +538,63 @@ describe('buildMainListEntries — 混排(recency)', () => {
         .slice(2)
         .map((run) => run.id)
         .reverse(),
+    ]);
+  });
+});
+
+describe('automations sidebar group', () => {
+  const teammateDir = '/Users/u/Cindy/owners/acct/bots/bot_1/workspace';
+
+  it('collects automation runs out of projects and chats, hiding a teammate project left empty', () => {
+    const review = session({
+      title: 'review', source: 'scheduler', workspaceKind: 'project',
+      workingDir: teammateDir, updatedAt: '2026-11-17T03:30:00Z',
+    });
+    const report = session({
+      title: 'report', source: 'scheduler', workspaceKind: 'project',
+      workingDir: '/repo', updatedAt: '2026-11-16T09:00:00Z',
+    });
+    const work = session({ title: 'work', workspaceKind: 'project', workingDir: '/repo', updatedAt: '2026-11-15T00:00:00Z' });
+    const digest = session({ title: 'digest', source: 'scheduler', updatedAt: '2026-11-14T00:00:00Z' });
+    const chat = session({ title: 'chat', updatedAt: '2026-11-13T00:00:00Z' });
+    const input = {
+      projects: [
+        project(teammateDir, [review]),
+        project('/repo', [report, work]),
+        { ...project('/saved', [session({ title: 'nightly', source: 'scheduler', workspaceKind: 'project', workingDir: '/saved', updatedAt: '2026-11-12T00:00:00Z' })]), isPersistentLocal: true },
+      ],
+      dialogues: [digest, chat],
+      groupBy: 'project' as const,
+      groupDialogue: true,
+      sortBy: 'recency' as const,
+      manualProjectOrder: [],
+    };
+
+    expect(labels(buildMainListEntries({ ...input, groupAutomation: true }))).toEqual([
+      'automations:review,report,digest,nightly',
+      'p:/repo',
+      'dlg-group',
+      'p:/saved',
+    ]);
+    // Off: runs stay where they ran; a teammate project with tasks is shown as before.
+    expect(labels(buildMainListEntries(input))).toEqual([
+      `p:${teammateDir}`, 'p:/repo', 'dlg-group', 'p:/saved',
+    ]);
+  });
+
+  it('splits the automations group by device like the chat group', () => {
+    const local = session({ title: 'local', source: 'scheduler', updatedAt: '2026-11-17T00:00:00Z' });
+    const remote = session({
+      title: 'remote', source: 'scheduler', deviceLinkDeviceId: 'dev-a', updatedAt: '2026-11-16T00:00:00Z',
+    });
+    const entries = buildMainListEntries({
+      projects: [], dialogues: [local, remote], groupBy: 'project', groupDialogue: true,
+      groupAutomation: true, sortBy: 'recency', manualProjectOrder: [],
+    });
+    expect(splitEntriesByDevice(entries, ['dev-a'], { sortBy: 'recency' })
+      .map((section) => [section.deviceId, labels(section.entries)])).toEqual([
+      [null, ['automations:local']],
+      ['dev-a', ['automations:remote']],
     ]);
   });
 });

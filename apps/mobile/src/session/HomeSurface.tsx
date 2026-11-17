@@ -73,6 +73,7 @@ import {
   Pin,
   RefreshCw,
   SquarePen,
+  Timer,
   UsersRound,
   X,
 } from 'lucide-react-native';
@@ -775,6 +776,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [headerFrosted, setHeaderFrosted] = useState(false);
   const [groupByProject, setGroupByProject] = useRetainedHomeState(viewSession, 'groupByProject', true);
   const [groupDialogue, setGroupDialogue] = useRetainedHomeState(viewSession, 'groupDialogue', false);
+  const [groupAutomation, setGroupAutomation] = useRetainedHomeState(viewSession, 'groupAutomation', false);
   const [sortBy, setSortBy] = useRetainedHomeState<HomeListSortBy>(viewSession, 'sortBy', 'recency');
   const [projectOrder, setProjectOrder] = useRetainedHomeState<HomeProjectOrder>(viewSession, 'projectOrder', 'activity');
   const [manualProjectOrder, setManualProjectOrder] = useRetainedHomeState<string[]>(viewSession, 'manualProjectOrder', []);
@@ -1605,6 +1607,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       ) return;
       setGroupByProject(preferences.groupByProject);
       setGroupDialogue(preferences.groupDialogue);
+      setGroupAutomation(preferences.groupAutomation);
       setSortBy(preferences.sortBy);
       setStatusFilter(preferences.statusFilter);
       setProjectOrder(preferences.projectOrder);
@@ -2387,18 +2390,20 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   );
   const sortedHomeSections = useMemo(
     () => buildHomeSections(filteredHome, groupByProject, pinnedCollapsed, {
+      automationTitle: t('devices.list.menu.automationFolder'),
       dialogueTitle: t('devices.list.menu.dialogueFolder'),
+      groupAutomation,
       groupDialogue,
       manualProjectOrder: displayedManualProjectOrder,
       priorityContext: sortPriorityContext,
       projectOrder: displayedProjectOrder,
       sortBy,
     }),
-    [displayedManualProjectOrder, displayedProjectOrder, filteredHome, groupByProject, groupDialogue, pinnedCollapsed, sortPriorityContext, sortBy, t],
+    [displayedManualProjectOrder, displayedProjectOrder, filteredHome, groupAutomation, groupByProject, groupDialogue, pinnedCollapsed, sortPriorityContext, sortBy, t],
   );
   // Sorting metadata may arrive after rows. Only user actions or a new visit release
   // the displayed order; live activity, priority and host-order pushes update content.
-  const displayOrderScope = JSON.stringify([preferenceOwner, selectedDeviceId, groupByProject, groupDialogue,
+  const displayOrderScope = JSON.stringify([preferenceOwner, selectedDeviceId, groupByProject, groupDialogue, groupAutomation,
     sortBy, statusFilter, projectFilter, teammateFilter, vendorFilter, lastActivityFilter, searchQuery]);
   displayOrderScopeRef.current = displayOrderScope;
   const commitDisplayOrder = useCallback((order: HomeDisplayOrder) => {
@@ -2737,6 +2742,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     }
     if (nextPatch.groupByProject !== undefined) setGroupByProject(nextPatch.groupByProject);
     if (nextPatch.groupDialogue !== undefined) setGroupDialogue(nextPatch.groupDialogue);
+    if (nextPatch.groupAutomation !== undefined) setGroupAutomation(nextPatch.groupAutomation);
     if (nextPatch.sortBy !== undefined) setSortBy(nextPatch.sortBy);
     if (nextPatch.statusFilter !== undefined) setStatusFilter(nextPatch.statusFilter);
     if (nextPatch.teammateFilter !== undefined) setTeammateFilter(nextPatch.teammateFilter);
@@ -3162,6 +3168,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     if (item) selectHomeScope(item);
   }, [home.deviceFilters, openRemoteCollection, scopeCollections, selectHomeScope]);
   const displayMenuState = useMemo<HomeDisplayMenuState>(() => ({
+    groupAutomation,
     groupByProject,
     groupDialogue,
     lastActivityFilter,
@@ -3174,7 +3181,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     taskInfoFields,
     vendorFilter,
     viewMode,
-  }), [showCollapsedTeammateAvatars, displayedProjectOrder, groupByProject, groupDialogue, lastActivityFilter, projectFilter, effectiveTeammateFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
+  }), [showCollapsedTeammateAvatars, displayedProjectOrder, groupAutomation, groupByProject, groupDialogue, lastActivityFilter, projectFilter, effectiveTeammateFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
   // 在看已归档任务时,顶栏「⋯」带提醒点(iOS 系统顶栏 / 自绘按钮两条路径共用这一个判据),
   // 同时把状态写进无障碍名称,读屏用户不用打开菜单也知道列表不是平常的进行中任务。
   const archivedReminder = statusFilter === 'archived';
@@ -4128,7 +4135,7 @@ function ProjectRow({
   dragging?: boolean;
   expandedAutomationGroups: readonly string[];
   headerRefs?: MutableRefObject<Map<string, ViewInstance>>;
-  kind?: 'project' | 'dialogue' | 'cindy-make';
+  kind?: 'project' | 'dialogue' | 'cindy-make' | 'automation';
   machineIdentity?: HomeProjectMachineIdentity;
   onDragEnd?: () => void;
   onDragMove?: (absoluteY: number) => void;
@@ -4236,9 +4243,12 @@ function ProjectRow({
   const renderedSessions = windowingEnabled ? visibleSessions.slice(windowStart, windowEnd) : visibleSessions;
   const leadingSpacerHeight = childWindow.leadingSpacerHeight;
   const trailingSpacerHeight = childWindow.trailingSpacerHeight;
-  const groupTestID = kind === 'dialogue' ? 'home.dialogueGroup' : 'home.projectGroup';
-  const rowTestID = kind === 'dialogue' ? 'home.dialogueRow' : 'home.projectRow';
-  const childTestID = kind === 'dialogue' ? 'home.chatRow' : 'home.projectSessionRow';
+  const groupTestID = kind === 'dialogue' ? 'home.dialogueGroup'
+    : kind === 'automation' ? 'home.automationGroup' : 'home.projectGroup';
+  const rowTestID = kind === 'dialogue' ? 'home.dialogueRow'
+    : kind === 'automation' ? 'home.automationRow' : 'home.projectRow';
+  const childTestID = kind === 'dialogue' ? 'home.chatRow'
+    : kind === 'automation' ? 'home.automationSessionRow' : 'home.projectSessionRow';
   const displayTitle = machineIdentity && !machineIdentity.hideLabel
     ? `${project.title} (${machineIdentity.displayLabel})`
     : project.title;
@@ -4277,7 +4287,9 @@ function ProjectRow({
       accessibilityHint={reorderable ? t('devices.list.menu.projectOrderManualTip') : undefined}
       accessibilityLabel={kind === 'dialogue'
         ? t('devices.list.a11y.dialogue')
-        : t('devices.list.a11y.project', { title: displayTitle })}
+        : kind === 'automation'
+          ? t('devices.list.a11y.automation')
+          : t('devices.list.a11y.project', { title: displayTitle })}
       accessibilityRole="button"
       accessibilityActions={actionable ? [
         { name: 'newTask', label: t('devices.list.projectActions.newTask') },
@@ -4324,6 +4336,8 @@ function ProjectRow({
           <MessagesSquare color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
         ) : kind === 'cindy-make' ? (
           <Hammer color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
+        ) : kind === 'automation' ? (
+          <Timer color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
         ) : collapsed ? (
           <Folder color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
         ) : (
@@ -4576,8 +4590,10 @@ function HomeListRowInner({
         project={item.project}
         homeScrollY={homeScrollY}
         viewportHeight={viewportHeight}
-        // Cindy Make spans separate workdirs; all tasks stay in this folder.
-        showAll={item.kind === 'cindy-make' || (item.kind === 'dialogue' && showAllDialogue)}
+        // Cindy Make and Automations span separate workdirs; all tasks stay in the folder
+        // (runs of one automation are already one row).
+        showAll={item.kind === 'cindy-make' || item.kind === 'automation'
+          || (item.kind === 'dialogue' && showAllDialogue)}
         suppressTopBorder={prevIsBlock}
         swipe={swipe}
       />

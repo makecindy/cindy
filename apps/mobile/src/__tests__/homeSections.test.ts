@@ -123,6 +123,36 @@ describe('buildHomeSections', () => {
   });
 });
 
+describe('自动化归组', () => {
+  function run(id: string, lastActivityAt: string, source?: string): RemoteSessionListItem {
+    return { session: { id, title: '', source }, lastActivityAt, pendingInteractionCount: 0 } as unknown as RemoteSessionListItem;
+  }
+
+  it('把项目和对话里的自动化运行收进一个目录,只剩自动化的项目随之消失', () => {
+    const home = presentation({
+      chats: [run('digest', '2026-11-14T00:00:00Z', 'scheduler'), run('chat', '2026-11-13T00:00:00Z')],
+      projects: [
+        projectGroup('buddy', '2026-11-17T03:30:00Z', [run('review', '2026-11-17T03:30:00Z', 'scheduler')]),
+        projectGroup('repo', '2026-11-16T00:00:00Z', [
+          run('report', '2026-11-16T00:00:00Z', 'scheduler'),
+          run('work', '2026-11-15T00:00:00Z'),
+        ]),
+      ],
+    });
+    const rows = buildHomeSections(home, true, false, { groupAutomation: true, automationTitle: '自动化' })
+      .find((section) => section.key === HOME_MAIN_SECTION_KEY)?.data ?? [];
+    expect(rows.map((row) => row.kind === 'session' ? row.item.session.id : `${row.kind}:${row.project.key}`)).toEqual([
+      'automation:automation',
+      'project:repo',
+      'chat',
+    ]);
+    const folder = rows[0];
+    expect(folder.kind === 'automation' && folder.project.sessions.map((item) => item.session.id))
+      .toEqual(['review', 'report', 'digest']);
+    expect(rows[1].kind === 'project' && rows[1].project.sessionCount).toBe(1);
+  });
+});
+
 describe('homeRowBefore(跨 section 邻接:分割线唯一化的 prevIsBlock 依据)', () => {
   // 分组模式:置顶区 + 按活动时间混排的主列表(首行是自动化组会话 —— 首页里以块呈现,自画顶线)。
   const automationChat = {

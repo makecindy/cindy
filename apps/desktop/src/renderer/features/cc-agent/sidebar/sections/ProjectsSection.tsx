@@ -45,6 +45,7 @@ import {
   MessagesSquare,
   MonitorSmartphone,
   SquarePen,
+  Timer,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -89,6 +90,7 @@ import {
   DIALOGUE_GROUP_ALL_KEY,
 } from '../../hooks/helpers/sidebarFilterCore';
 import {
+  AUTOMATIONS_GROUP_KEY,
   CINDY_MAKE_GROUP_KEY,
   getMainListEntrySessions,
   holdViewedPriorityRank,
@@ -628,6 +630,7 @@ export function ProjectsSection({
     unclassified: mixedUnclassified,
     groupBy: filter.groupBy,
     groupDialogue: filter.groupDialogue,
+    groupAutomation: filter.groupAutomation,
     sortBy: filter.sortBy,
     projectOrder: displayedProjectOrder.projectOrder,
     manualProjectOrder: displayedProjectOrder.manualProjectOrder,
@@ -787,6 +790,7 @@ export function ProjectsSection({
       entries.flatMap((entry) => {
         if (entry.kind === 'dialogue-group') return [scope];
         if (entry.kind === 'cindy-make-group') return [`${CINDY_MAKE_GROUP_KEY}:${scope}`];
+        if (entry.kind === 'automations-group') return [`${AUTOMATIONS_GROUP_KEY}:${scope}`];
         return [];
       });
     if (!deviceGroupingActive) {
@@ -997,6 +1001,39 @@ export function ProjectsSection({
           // 混排下每条散排对话各是一个单条列表,若都补顶线,会与上一行的底线叠成
           // 两根横线(2026-08-12 实机反馈)。底线已覆盖行间分割,这里只关顶线。
           showFirstDivider={false}
+        />
+      );
+    }
+    if (entry.kind === 'automations-group') {
+      const groupKey = `${AUTOMATIONS_GROUP_KEY}:${dialogueGroupKey}`;
+      const isCollapsed = collapsedDialogueGroups.has(groupKey);
+      return (
+        <SessionGroupNode
+          key={`${entry.kind}:${dialogueGroupKey}`}
+          sessions={entry.sessions}
+          lamp={lampAgg(entry.sessions)}
+          foldExemptSessionIds={lampFoldExemptIds}
+          groupTitle={t('ccAgent.layout.automations')}
+          groupIcon={<Timer size={15} strokeWidth={1.8} className="shrink-0" aria-hidden />}
+          collapsed={isCollapsed}
+          onToggle={() => setDialogueCollapsed([groupKey], !isCollapsed)}
+          isCreateDisabled={false}
+          parentSectionCollapsed={false}
+          disableSessionCollapse={disableSessionCollapse}
+          activeSessionId={activeSessionId}
+          runningSessionIds={runningSessionIds}
+          attachedSessionIds={attachedSessionIds}
+          notifications={notifications}
+          scheduleSessionIndex={scheduleSessionIndex}
+          selectedSessionIds={selectedSessionIds}
+          onSessionClick={onSessionClick}
+          onAction={onAction}
+          onRename={onRename}
+          onTogglePin={onTogglePin}
+          onMoveSession={onMoveSession}
+          projectOptions={projectOptions}
+          onScheduleAction={onScheduleAction}
+          sessionVariant={mainSessionVariant}
         />
       );
     }

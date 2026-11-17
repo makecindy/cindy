@@ -16195,7 +16195,8 @@
         "project": "專案",
         "flat": "平鋪",
         "device": "裝置",
-        "dialogue": "對話"
+        "dialogue": "對話",
+        "automation": "自動化"
       },
       "filterGroupByDeviceManualTip": "手動排序時按裝置分組暫不可用",
       "deviceGroup": {
@@ -16543,6 +16544,7 @@
       "groupSummary": {
         "project": "專案",
         "dialogue": "對話",
+        "automation": "自動化",
         "device": "裝置"
       },
       "taskStatusHeading": "任務狀態",
