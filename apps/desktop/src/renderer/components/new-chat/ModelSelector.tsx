@@ -1,5 +1,5 @@
 import { useRemoteProviderDisable } from '@/lib/remoteProviderDisable';
-import { sameRunLocationProvider, duplicateSubscriptionProviders, subscriptionModelsCoveredBy } from '@cindy/model-providers';
+import { listedSourceFolds } from '@cindy/model-providers';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { ProviderShareQuotaViewingContext, useProviderShareQuotaViewing } from '@/features/provider-share/useProviderShareWeeklyQuota';
 import { SpeedIcon } from './SpeedIcon';
@@ -105,7 +105,6 @@ import {
   useDeviceProviders,
 } from '@/hooks/useDeviceProviders';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
-import { effectiveRunLocation, RUN_LOCATION_LOCAL } from '@/lib/providerRunLocation';
 import { modelCatalogKey, type ControlledModelFavoriteSource } from '../../../shared/controlledModelCatalog';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { buildUnifiedRail, remoteAgentProviders } from './unifiedModelSelection';
@@ -1794,77 +1793,45 @@ function ModelSelectorContentView({
   const browsingBoundGroupEntry =
     stayInGroup && boundEntry !== null && (remoteBrowse?.deviceId ?? null) === boundEntry.deviceId;
   /**
-   * 同账号借用(供应商「运行于」)：同一个供应商在本机和自己的其他电脑上都能用时只列一处——本机能用且没改选
-   * 就是本机那一项，否则是「运行于」那台电脑那一项。以任务所在电脑为准（本机任务是本机，被控电脑上的任务是那台），
-   * 只管同账号电脑、不在供应商组里的供应商；
-   * 当前任务此刻正在用的那一项始终保留，免得选中项消失。
+   * 同一个来源只列一次：与设置页、手机选择器用同一条规则（listedSourceFolds）。以任务所在电脑为基准
+   * （本机任务是本机，被控电脑上的任务是那台）；其他电脑上的同一来源收进基准那一项，或按「运行于」
+   * 列在那台电脑；供应商组、不同账号、模型更多的来源各自保留；当前任务正在用的那一项始终保留。
    */
   const runLocationFold = useMemo(() => {
     const hiddenRemote = new Set<string>();
     const hiddenLocal = new Set<string>();
-    // Deduplicate the task computer's catalog even when another computer is viewing it.
-    // Never use the viewer's catalog, visibility preferences or provider groups for that decision.
+    // Never use the viewer's catalog or provider groups for a task on another computer.
     // Without location choices ChatInput supplies only deviceId, not remoteAgent.
     const taskDeviceId = homeDeviceId ?? (!remoteAgent ? deviceId : undefined);
-    const taskCatalog = homeDeviceId ? homeDeviceProviders : remoteProviders;
-    const taskProviders = taskDeviceId ? taskCatalog.providers : localProviders.providers;
-    const taskVisible = taskDeviceId
-      ? (providerId: string, model: { id: string; defaultEnabled?: boolean }, agent: AgentKind) =>
-        isDeviceModelVisible(taskCatalog.modelVisibilityOverrides, agent, providerId, model)
-      : unifiedIsVisible;
-    const ungroupedTaskProviders = taskProviders.filter(provider => taskDeviceId
-      ? !remoteProviderGroups.groups.has(remoteProviderEntryKey(taskDeviceId, provider.id))
-      : !localProviderGroups[provider.id]);
-    for (const [id] of duplicateSubscriptionProviders(ungroupedTaskProviders, taskVisible)) {
-      if (remoteAgentDeviceId || currentProviderId !== id) hiddenLocal.add(id);
-    }
-    if (!remoteAgentDevices) return { hiddenRemote, hiddenLocal };
-    for (const device of remoteAgentDevices) {
-      if (isProviderShareAgentDeviceId(device.deviceId)) continue;
-      for (const provider of remoteDeviceCatalogs.get(device.deviceId)?.providers ?? []) {
+    const taskProviders = taskDeviceId ? (homeDeviceId ? homeDeviceProviders : remoteProviders).providers : localProviders.providers;
+    const others = (remoteAgentDevices ?? []).flatMap((device) => {
+      if (isProviderShareAgentDeviceId(device.deviceId) || device.deviceId === taskDeviceId) return [];
+      const providers = remoteAgentProviders(remoteDeviceCatalogs.get(device.deviceId)?.providers ?? []);
+      for (const provider of providers) {
         if (remoteDisable.isDisabled(device.deviceId, provider.id)
           && !(remoteAgentDeviceId === device.deviceId && currentProviderId === provider.id))
           hiddenRemote.add(remoteProviderEntryKey(device.deviceId, provider.id));
       }
-    }
-    // The task computer's own list is the base, whether it is this computer or a controlled one:
-    // another computer's equal source must not appear beside it a second time.
-    const foldBaseProviders = homeDeviceId ? homeDeviceProviders.providers : localProviders.providers;
-    const homeGrouped = (providerId: string) => homeDeviceId
-      ? remoteProviderGroups.groups.has(remoteProviderEntryKey(homeDeviceId, providerId))
-      : !!localProviderGroups[providerId];
-    const homeVisible = (providerId: string, model: { id: string; defaultEnabled?: boolean }, agent: AgentKind) => homeDeviceId
-      ? isDeviceModelVisible(homeDeviceProviders.modelVisibilityOverrides, agent, providerId, model)
-      : isModelEnabled(agent, providerId, model);
-    for (const provider of foldBaseProviders) {
-      if (homeGrouped(provider.id) || provider.suspended || hiddenLocal.has(provider.id)) continue;
-      const candidates = remoteAgentDevices.flatMap((device) => {
-        if (isProviderShareAgentDeviceId(device.deviceId) || device.deviceId === homeDeviceId) return [];
-        return (remoteDeviceCatalogs.get(device.deviceId)?.providers ?? []).filter(entry => entry.connected && !entry.suspended
-          && entry.remoteInvocationEnabled === true && !(entry as { group?: unknown }).group
-          && !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, entry.id))
-          && !remoteDisable.isDisabled(device.deviceId, entry.id) && sameRunLocationProvider(provider, entry))
-          .map(offered => ({ deviceId: device.deviceId, name: device.name, providerId: offered.id, provider: offered }));
-      });
-      if (candidates.length === 0) continue;
-      const location = effectiveRunLocation(provider as typeof provider & { runLocation?: string }, candidates);
-      const preferred = candidates.find(candidate => candidate.deviceId === location);
-      const representative = preferred?.provider ?? provider;
-      const visibleAt = (deviceId?: string) => (providerId: string, model: { id: string; defaultEnabled?: boolean }, agent: AgentKind) => deviceId
-        ? isDeviceModelVisible(remoteDeviceCatalogs.get(deviceId)?.modelVisibilityOverrides, agent, providerId, model)
-        : homeVisible(providerId, model, agent);
-      for (const candidate of candidates) {
-        const inUse = candidate.deviceId === remoteAgentDeviceId && candidate.providerId === currentProviderId;
-        if (candidate !== preferred && !inUse && subscriptionModelsCoveredBy(candidate.provider, representative, visibleAt(candidate.deviceId), visibleAt(preferred?.deviceId))) hiddenRemote.add(remoteProviderEntryKey(candidate.deviceId, candidate.providerId));
-      }
-      const localInUse = !remoteAgentDeviceId && provider.id === currentProviderId;
-      if (location !== RUN_LOCATION_LOCAL && !localInUse && subscriptionModelsCoveredBy(provider, representative, visibleAt(), visibleAt(preferred?.deviceId))) hiddenLocal.add(provider.id);
-    }
+      return [{ deviceId: device.deviceId, providers: providers.filter(provider =>
+        !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, provider.id))
+        && !hiddenRemote.has(remoteProviderEntryKey(device.deviceId, provider.id))) }];
+    });
+    const folds = listedSourceFolds({
+      base: taskProviders,
+      baseExempt: (providerId) => taskDeviceId
+        ? remoteProviderGroups.groups.has(remoteProviderEntryKey(taskDeviceId, providerId))
+        : !!localProviderGroups[providerId],
+      others,
+      current: currentProviderId ? { deviceId: remoteAgentDeviceId, providerId: currentProviderId } : null,
+      honorRunLocation: true,
+    });
+    for (const id of folds.hiddenBase) hiddenLocal.add(id);
+    for (const [otherDeviceId, ids] of folds.hiddenOther)
+      for (const id of ids) hiddenRemote.add(remoteProviderEntryKey(otherDeviceId, id));
     return { hiddenRemote, hiddenLocal };
-  }, [remoteAgent, deviceId, remoteProviders.providers, remoteProviders.modelVisibilityOverrides,
-    remoteAgentDevices, homeDeviceId, homeDeviceProviders.providers, homeDeviceProviders.modelVisibilityOverrides,
+  }, [remoteAgent, deviceId, remoteProviders.providers, remoteAgentDevices, homeDeviceId, homeDeviceProviders.providers,
     localProviders.providers, localProviderGroups, remoteDeviceCatalogs,
-    remoteAgentDeviceId, currentProviderId, remoteDisable, remoteProviderGroups.hidden, remoteProviderGroups.groups, unifiedIsVisible]);
+    remoteAgentDeviceId, currentProviderId, remoteDisable, remoteProviderGroups.hidden, remoteProviderGroups.groups]);
   const remoteAgentGroups = useMemo(() => {
     if (!remoteAgentDevices) return [];
     return remoteAgentDevices.flatMap((device) => {

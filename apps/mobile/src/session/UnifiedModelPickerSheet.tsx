@@ -1,4 +1,3 @@
-import { isModelVisible } from '@cindy/model-providers/sections';
 import { subscriptionQuotaOverview } from '@cindy/maker-shared/subscription-selection';
 import { modelNeedsReselection } from './modelReselection';
 import { mobileProviderAccountTitle } from "./mobileModelRowPresentation";
@@ -16,7 +15,7 @@ import {
 import { useTranslation } from "react-i18next";
 import type { MobileProviderMarkProps } from "./MobileProviderMark";
 import type { AgentKind } from "@cindy/model-providers/types";
-import { duplicateSubscriptionProviders, sameSubscriptionAccounts, subscriptionModelsCoveredBy, resolveStoredModelEntry, type UnifiedModelEntry } from "@cindy/model-providers";
+import { listedSourceFolds, resolveStoredModelEntry, type UnifiedModelEntry } from "@cindy/model-providers";
 import type { MobileAgentCapabilities } from "./agentCapabilities";
 import type { ModelPickerSheetProps } from "./ModelPickerSheet";
 import { buildMobileModelSections } from "./providerModelSections";
@@ -471,29 +470,26 @@ export function UnifiedModelPickerSheet(
     ],
   );
   // Presentation only: keep complete catalogs for favorites and the task's saved route.
-  // A phone browsing its computer uses the same verified account identity as desktop.
+  // Same rule as desktop Settings and the desktop picker (listedSourceFolds), based on the browsed computer.
   const hiddenSources = useMemo(() => {
-    const host = p.providers.filter(provider => !providerGroups.sizes.has(providerGroupEntryKey(null, provider.id)));
-    const visible = (overrides: Record<string, boolean> | undefined) => (providerId: string, model: { id: string; defaultEnabled?: boolean }, agent: AgentKind) =>
-      overrides === undefined || isModelVisible(overrides[`${agent}:${providerId}:${model.id}`], model.defaultEnabled);
-    const hidden = new Set(duplicateSubscriptionProviders(host, visible(p.modelVisibilityOverrides)).keys());
-    for (const catalog of remoteCatalogs) {
-      if (isProviderShareAgentDeviceId(catalog.deviceId) || catalog.offline) continue;
-      const remote = catalog.providers.filter(provider => !providerGroups.sizes.has(providerGroupEntryKey(catalog.deviceId, provider.id)));
-      for (const [id] of duplicateSubscriptionProviders(remote, visible(catalog.modelVisibilityOverrides))) hidden.add(remoteFilterId(catalog.deviceId, id));
-      for (const provider of host) {
-        if (!provider.connected || provider.suspended || hidden.has(provider.id)) continue;
-        for (const offered of remote) {
-          if (!offered.connected || offered.suspended || !sameSubscriptionAccounts(provider, offered)) continue;
-          // Do not hide an offer with extra models that the host does not have.
-          if (!subscriptionModelsCoveredBy(offered, provider, visible(catalog.modelVisibilityOverrides), visible(p.modelVisibilityOverrides))) continue;
-          hidden.add(remoteFilterId(catalog.deviceId, offered.id));
-        }
-      }
-    }
-    if (p.selectedProviderId) hidden.delete(selectedDeviceId ? remoteFilterId(selectedDeviceId, p.selectedProviderId) : p.selectedProviderId);
+    const folds = listedSourceFolds({
+      base: p.providers,
+      baseExempt: (providerId) => providerGroups.sizes.has(providerGroupEntryKey(null, providerId)),
+      others: remoteCatalogs
+        .filter(catalog => !isProviderShareAgentDeviceId(catalog.deviceId) && !catalog.offline)
+        .map(catalog => ({
+          deviceId: catalog.deviceId,
+          providers: catalog.providers.filter(provider =>
+            !providerGroups.sizes.has(providerGroupEntryKey(catalog.deviceId, provider.id))
+            && !providerGroups.hidden.has(providerGroupEntryKey(catalog.deviceId, provider.id))),
+        })),
+      current: p.selectedProviderId ? { deviceId: selectedDeviceId, providerId: p.selectedProviderId } : null,
+      honorRunLocation: true,
+    });
+    const hidden = new Set(folds.hiddenBase);
+    for (const [deviceId, ids] of folds.hiddenOther) for (const id of ids) hidden.add(remoteFilterId(deviceId, id));
     return hidden;
-  }, [p.providers, p.modelVisibilityOverrides, p.selectedProviderId, providerGroups, remoteCatalogs, selectedDeviceId]);
+  }, [p.providers, p.selectedProviderId, providerGroups, remoteCatalogs, selectedDeviceId]);
   const sourceId =
     boundGroup?.deviceId === null
       ? boundGroup.providerId

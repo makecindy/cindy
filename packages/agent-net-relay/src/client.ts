@@ -140,8 +140,14 @@ export class AgentNetClient {
       return result as T;
     } finally { clearTimeout(timer); options?.signal?.removeEventListener('abort', abort); }
   }
-  async directory(): Promise<DeviceView[]> {
-    const result = await this.request<{ rootPublicKey: string; devices: DeviceView[] }>('GET', '/directory');
+  /**
+   * Read the encrypted directory. `signal` carries the caller's own deadline so a
+   * bounded read does not leave this request running past it: the next retry would
+   * otherwise start a second physical directory read while this one is still in
+   * flight (Codex review #9360).
+   */
+  async directory(signal?: AbortSignal): Promise<DeviceView[]> {
+    const result = await this.request<{ rootPublicKey: string; devices: DeviceView[] }>('GET', '/directory', undefined, signal ? { signal } : undefined);
     if (result.rootPublicKey !== this.rootPublicKey || !Array.isArray(result.devices)
       || result.devices.some((d) => !this.trustedDirectoryEntry(d))) throw new Error('UNTRUSTED_DIRECTORY');
     return result.devices;

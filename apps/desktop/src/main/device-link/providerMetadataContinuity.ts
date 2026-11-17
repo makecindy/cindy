@@ -1,6 +1,7 @@
 /** Read-only, owner-scoped directory continuity. Never used for execution grants or mutations. */
 import { createHash } from 'node:crypto';
 import { MetadataContinuityReader, PROVIDER_GROUP_REMOTE_CHANNEL, readProviderMetadataContinuity, isProviderAccessDeniedError,
+  PROVIDER_METADATA_TRUST_MS,
   type Envelope, type InvokeResultPayload, type MetadataContinuityScope } from '@cindy/device-link';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
@@ -418,12 +419,30 @@ export function invalidateProviderDirectoryContinuity(): void {
 /** Main can distinguish a stale in-flight directory response from a fresh one. */
 export function providerDirectoryGeneration(): number { return directoryGeneration; }
 
+/**
+ * 目录快照的预算 = 它**最旧**那部分行还能信多久。
+ *
+ * 完整目录:每行都是刚读到的 → 满额(30 分钟)。
+ * 部分目录:并进来的旧行来自上一次**完整**目录,只到 `rememberedUntilMs` 为止可信。
+ * 不能让一次部分成功给旧行续一整份预算:「完整目录 29 分钟前 → 部分读 → 两条腿
+ * 都失败」之后,旧设备会被再显示约 30 分钟(Greptile review #9360「旧目录被重新计时」)。
+ */
+function directoryRemainingTrustMs(value: unknown): number {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return PROVIDER_METADATA_TRUST_MS;
+  const rememberedUntilMs = (value as { rememberedUntilMs?: unknown }).rememberedUntilMs;
+  if (typeof rememberedUntilMs === 'number' && Number.isFinite(rememberedUntilMs)) {
+    return Math.max(0, rememberedUntilMs - Date.now());
+  }
+  return PROVIDER_METADATA_TRUST_MS;
+}
+
 function directoryScope(): MetadataContinuityScope {
   const base = scope();
   const captured = directoryGeneration;
   const capturedDenial = directoryDenialGeneration;
   return { ...base, current: () => base.current() && captured === directoryGeneration
-    && capturedDenial === directoryDenialGeneration };
+    && capturedDenial === directoryDenialGeneration,
+  remainingTrustMs: directoryRemainingTrustMs };
 }
 
 /** Other bounded routing snapshots share the same known-permission invalidation fence. */
