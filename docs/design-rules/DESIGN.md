@@ -18,6 +18,7 @@
 | 悬停提示 | `components/ui/tooltip.tsx` 的 `Tip` | §14.6 |
 | 确认弹窗 | `useConfirmDialog`、`ConfirmDialog` | §4 Dialog & Modal |
 | 其他弹窗 | 暂无通用组件：Radix Dialog 加 `.modal-scrim` / `.modal-panel`，结构参考 `confirm-dialog.tsx` | §4 Dialog & Modal |
+| 第一次用到某个功能时的介绍 | `components/feature-intro/` 的 `FeatureIntroDialog` | [功能介绍](./feature-introduction.md) |
 | 分段切换 | `components/ui/segmented-control.tsx` 的 `SegmentedControl` | §4 Desktop segmented controls |
 | 开关、滑杆 | `Switch`、`Slider`、`EffortSlider` | §15.17、§15.18 |
 | 复选框 | `components/ui/checkbox.tsx` 的 `Checkbox` | §4 Desktop settings controls |
@@ -42,6 +43,7 @@
 | 登录、注册与回调页（§16） | [login-flow.md](./login-flow.md) |
 | 聊天正文的链接与可点性（§14.5） | [message-link-clickability.md](./message-link-clickability.md) |
 | 输入框工具栏的容器形变 | [container-transform.md](./container-transform.md) |
+| 功能介绍（第一次用到某个功能时的一页引导） | [feature-introduction.md](./feature-introduction.md) |
 | 应用壁纸 | [wallpaper.md](./wallpaper.md) |
 | macOS 菜单栏额度面板 | [macos-menu-bar-quota.md](./macos-menu-bar-quota.md) |
 | 附件预览 | [attachment-preview.md](./attachment-preview.md) |
@@ -593,20 +595,10 @@ centering commit actions or adding a × elsewhere.
 
 ### Feature introduction (owner-requested, 2026-11-18)
 
-A one-page dialog shown the first time someone opens a feature on a computer, built the way the
-get-started guide's cover is (owner request: "use that way for our feature guides"). Shared
-pieces: `components/feature-intro/GuideCover.tsx` (the cover layout, also used by the guide) and
-`FeatureIntroDialog.tsx`. First use: the task inbox (`features/cc-agent/sidebar/TaskInboxIntro.tsx`).
-
-- **Layout.** The cover above at 640px wide, height fitted to the content (at most 88vh), with a
-  neutral 56px `--surface-chip` tile holding the feature's own lucide icon in place of the brand
-  block — the brand block stays exclusive to the guide. Three cards with scenes, one centered CTA
-  that closes the dialog, one 12px line saying where to switch the feature off again.
-- **Scenes** are assembled from the feature's own elements (task rows, the row's status dots in
-  their real `--card-status-*` colours, the action's own icon) and play once on the guide's
-  timings. They illustrate; they are not live state.
-- **Closing.** The CTA, the × and Esc close it; the scrim does not, so a stray click does not
-  dismiss it unseen. It is shown once per computer and never stacks on another dialog.
+The one-page introduction shown the first time someone uses a feature, built like the get-started
+guide's cover and meant to be reused wherever a feature needs one. When to use it, when it appears,
+the page structure, how to make its scenes and how to add one: [feature-introduction.md](./feature-introduction.md).
+Its motion is registered in §14.4 (get-started guide entrance).
 
 ### Inputs & Forms
 
