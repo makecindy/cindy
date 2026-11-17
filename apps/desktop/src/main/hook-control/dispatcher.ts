@@ -2024,6 +2024,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       : (['slack', 'feishu', 'lark'].includes(task.run.source?.im ?? '')
         && serverFeatures.get(task.connectionId)?.includes(HOOK_FEATURE_IM_QUESTIONS))
         ? createHookQuestionPublisher({ requestId: task.requestId,
+            // 飞书 / Lark 一题一张卡：答完一题再出下一题（Slack 仍是多题合卡）。
+            sequential: task.run.source?.im === 'feishu' || task.run.source?.im === 'lark',
+            log,
             register: (id, click) => {
               questionActions.set(id, { connectionId: task.connectionId, requestId: task.requestId,
                 generation: task.accountGeneration, click });
@@ -3372,9 +3375,18 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       if (!accountActive) return;
       const question = questionActions.get(payload.interactionId);
       if (question) {
-        if (question.connectionId === connectionId && question.requestId === payload.requestId
-          && isCurrentGeneration(question.generation)) {
-          void question.click(payload.buttonId, payload.answerText).catch(() => log.warn('Telegram question update failed'));
+        // 问题卡按钮回流: 归属不符或按钮已过时只记原因, 不报错 —— 用户看到「已收到」却没有反应时靠它排查。
+        if (question.connectionId !== connectionId || question.requestId !== payload.requestId) {
+          log.info(`question answer for ${payload.interactionId} ignored: other connection or request`);
+        } else if (!isCurrentGeneration(question.generation)) {
+          log.info(`question answer for ${payload.interactionId} ignored: account changed`);
+        } else {
+          void question.click(payload.buttonId, payload.answerText).then(
+            (accepted) => {
+              if (!accepted) log.info(`question answer for ${payload.interactionId} not applied: stale button or incomplete answers`);
+            },
+            () => log.warn(`question card update failed for ${payload.interactionId}`),
+          );
         }
         return;
       }

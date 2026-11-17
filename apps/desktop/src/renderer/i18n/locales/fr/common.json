@@ -13651,7 +13651,14 @@
         "resolved": "✅ Choix : {{option}}",
         "expired": "Cette carte a expiré",
         "textHint": "Seule la personne ayant posé la question peut répondre. Écrivez {{code}} puis votre réponse. Pour plusieurs questions : {{code}} 2: réponse, puis {{code}} OK pour envoyer.",
-        "replyHint": "Seule la personne à l’origine de la demande peut répondre. Touchez une option ; pour plusieurs questions ou choix, envoyez après sélection.\nÉcrivez {{code}} puis votre réponse. Pour plusieurs questions : {{code}} 2: réponse, puis {{code}} OK pour envoyer."
+        "replyHint": "Seule la personne à l’origine de la demande peut répondre. Touchez une option ; pour plusieurs questions ou choix, envoyez après sélection.\nÉcrivez {{code}} puis votre réponse. Pour plusieurs questions : {{code}} 2: réponse, puis {{code}} OK pour envoyer.",
+        "nextLabel": "Question suivante",
+        "stepHint": "Seule la personne à l’origine de la demande peut répondre. Touchez une option ou écrivez {{code}} puis votre réponse.",
+        "stepSubmitHint": "Seule la personne à l’origine de la demande peut répondre. Choisissez puis touchez « {{action}} » ; ou écrivez {{code}} puis votre réponse, puis {{code}} OK.",
+        "stepTextHint": "Seule la personne à l’origine de la demande peut répondre. Écrivez {{code}} puis votre réponse.",
+        "unanswered": "⚠️ Pas encore de réponse : question {{numbers}}. Répondez à toutes les questions, puis envoyez.",
+        "unansweredSingle": "⚠️ Pas encore de réponse. Choisissez d’abord une option ou saisissez une réponse.",
+        "numberSeparator": ", "
       }
     }
   },

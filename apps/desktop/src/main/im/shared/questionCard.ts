@@ -8,12 +8,33 @@ import { encodeAskOptionAnswers, formatAskAnswersForDisplay } from './interactio
 
 export type QuestionRequest = Extract<InteractionRequest, { kind: 'ask_user_question' }>;
 
+/**
+ * 单题卡的呈现参数（官方飞书 / Lark 一题一张卡）。不传时为多题合卡：题号 + 「题号·选项号」按钮。
+ * 只换呈现，答案模型、防旧按钮与提交规则不变。
+ */
+export interface QuestionCardLook {
+  /** 卡片标题，默认「❓」。 */
+  title?: string;
+  /** 需要显式提交时的按钮文字，默认「提交答案」。 */
+  submitLabel?: string;
+  /** 单题版式：只渲染第一题，正文不加题号，按钮只写选项文字。 */
+  single?: boolean;
+}
+
+/** 题干已自带「可多选」说明时不再追加（模型常把它写进题干，追加后会重复两遍）。 */
+function withMultiSelectHint(question: QuestionRequest['questions'][number]): string {
+  if (!question.multiSelect) return question.question;
+  const hint = imText('imBot.text.questions.multiSelectHint');
+  return question.question.includes(hint.trim()) ? question.question : `${question.question}${hint}`;
+}
+
 /** One shared choice model for every IM transport. Host owns the final answer. */
 export function createQuestionCard(
   request: QuestionRequest,
   controls: QuestionControls,
   publish: (card: InteractiveCardSpec, closed: boolean) => Promise<void>,
   hint?: string,
+  look: QuestionCardLook = {},
 ) {
   const id = `aq:${randomUUID()}`;
   const selections = new Map<number, Set<number>>();
@@ -31,21 +52,37 @@ export function createQuestionCard(
     return encodeAskOptionAnswers(q.multiSelect === true,
       [...(selections.get(qi) ?? [])].sort((a, b) => a - b).map(oi => q.options![oi].label));
   };
-  const body = () => request.questions.map((q, i) => [
-    `${i + 1}. ${q.question}${q.multiSelect ? imText('imBot.text.questions.multiSelectHint') : ''}`,
+  const resolvedLine = (qi: number): string[] => answerFor(qi)
+    ? [imText('imBot.text.questions.resolved', { option: formatAskAnswersForDisplay({ value: answerFor(qi) }) })]
+    : [];
+  const body = () => look.single ? singleBody() : request.questions.map((q, i) => [
+    `${i + 1}. ${withMultiSelectHint(q)}`,
     ...(q.options ?? []).map((o, j) => `${i + 1}·${j + 1}. ${o.label}${o.description ? ` — ${o.description}` : ''}`),
-    ...(answerFor(i) ? [imText('imBot.text.questions.resolved', { option: formatAskAnswersForDisplay({ value: answerFor(i) }) })] : []),
+    ...resolvedLine(i),
   ].join('\n')).join('\n\n');
+  // 单题版式：题干单独成段（不以「1.」开头，避免 Markdown 把后面的行并进同一个列表项）；
+  // 选项只有带说明时才逐行列出，否则按钮已经写全了选项。
+  const singleBody = (): string => {
+    const q = request.questions[0];
+    const options = q.options ?? [];
+    return [
+      withMultiSelectHint(q),
+      ...(options.some(o => o.description)
+        ? ['', ...options.map((o, j) => `${j + 1}. ${o.label}${o.description ? ` — ${o.description}` : ''}`)]
+        : []),
+      ...(answerFor(0) ? ['', ...resolvedLine(0)] : []),
+    ].join('\n');
+  };
   const render = (status?: string): InteractiveCardSpec => {
     const choices = request.questions.flatMap((q, qi) => (q.options ?? []).map((o, oi) => ({
       id: `${id}:${revision}:${qi}:${oi}`,
-      label: `${selections.get(qi)?.has(oi) ? '✓ ' : ''}${qi + 1}·${oi + 1} ${o.label}`,
+      label: `${selections.get(qi)?.has(oi) ? '✓ ' : ''}${look.single ? '' : `${qi + 1}·${oi + 1} `}${o.label}`,
     })));
     const submit = requiresSubmit ? [{
-      id: `${id}:${revision}:submit`, label: imText('imBot.text.questions.submitLabel'),
+      id: `${id}:${revision}:submit`, label: look.submitLabel ?? imText('imBot.text.questions.submitLabel'),
     }] : [];
     return {
-      title: '❓',
+      title: look.title ?? '❓',
       body: `${body()}\n\n${status ?? hint ?? imText('imBot.text.questions.cardHint')}`,
       // 选项文案常常较长: 一行一个满宽按钮, 不挤在同一行被压缩。
       buttonLayout: 'list',
@@ -108,9 +145,18 @@ export function createQuestionCard(
           const value = answerFor(qi);
           answers[answerKey(q)] = value;
         });
-        if (!Object.keys(answers).length || request.questions.some(q =>
+        // 还有必答题没答(或答案不合约束)时不提交, 但要在卡片上说明缺哪几题 —— 否则用户点了提交、
+        // 渠道已回「已收到」, 卡片却毫无变化, 看起来像点击失效。
+        const missing = request.questions.flatMap((q, qi) =>
           (!answers[answerKey(q)] && q.answerConstraints?.required !== false)
-            || askAnswerError(q, answers[answerKey(q)]!))) return false;
+            || askAnswerError(q, answers[answerKey(q)]!) ? [qi + 1] : []);
+        if (!Object.keys(answers).length || missing.length > 0) {
+          const warning = look.single || request.questions.length === 1
+            ? imText('imBot.text.questions.unansweredSingle')
+            : imText('imBot.text.questions.unanswered', { numbers: missing.join(imText('imBot.text.questions.numberSeparator')) });
+          await update(`${warning}\n${hint ?? imText('imBot.text.questions.cardHint')}`);
+          return false;
+        }
         submitted = true;
         controls.answer({ kind: 'ask_user_question', answers });
         await update();

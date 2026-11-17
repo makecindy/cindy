@@ -13536,7 +13536,14 @@
         "resolved": "✅ Gewählt: {{option}}",
         "expired": "Diese Karte ist abgelaufen",
         "textHint": "Nur die fragende Person kann antworten. Sende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden.",
-        "replyHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option; bei mehreren Fragen oder Mehrfachauswahl anschließend absenden.\nSende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden."
+        "replyHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option; bei mehreren Fragen oder Mehrfachauswahl anschließend absenden.\nSende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden.",
+        "nextLabel": "Nächste Frage",
+        "stepHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option oder sende {{code}} gefolgt von deiner Antwort.",
+        "stepSubmitHint": "Nur die anfragende Person kann antworten. Wähle aus und tippe dann auf „{{action}}“ – oder sende {{code}} gefolgt von deiner Antwort und danach {{code}} OK.",
+        "stepTextHint": "Nur die anfragende Person kann antworten. Sende {{code}} gefolgt von deiner Antwort.",
+        "unanswered": "⚠️ Noch nicht beantwortet: Frage {{numbers}}. Beantworte alle Fragen und sende dann ab.",
+        "unansweredSingle": "⚠️ Noch keine Antwort. Wähle zuerst eine Option oder gib eine Antwort ein.",
+        "numberSeparator": ", "
       }
     }
   },

@@ -461,6 +461,10 @@ async 卡跨轮存活、最长 24 小时。重启后旧卡安全失效。
 可选 `questionMode`、`questionCode` 发送／更新同一问题，`interaction.cancel` 收口；
 `interaction.decision` 的 `question:reply`＋`answerText` 回传文字。未协商时沿用旧入口。
 Telegram 继续使用已协商的 `telegram-question-ops-v1`，展示模型与其余 IM 同源。
+官方飞书／Lark 一题一张卡（`createHookQuestionPublisher` 的 `sequential`）：每道题各发一张卡，各有独立的
+`interactionId` 与回复码，答完一题才发下一题，最后一题答完一次性把全部答案交给 Host；Host 先收口
+（App 已答、超时、轮次结束）时当前卡随之关闭，不再发后面的题。官方 Slack 仍是多题合卡。
+必答题没答就点提交时不交答案，卡片正文点名还没答的题、按钮保留（所有渠道同一模型）。
 本实现不新增 X 的公开帖问答入口，不改变各渠道原有消息触发／成员准入规则。
 
 ### Telegram 后台回报的媒体发送

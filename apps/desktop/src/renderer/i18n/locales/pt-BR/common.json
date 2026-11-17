@@ -13651,7 +13651,14 @@
         "resolved": "✅ Selecionado: {{option}}",
         "expired": "Este cartão expirou",
         "textHint": "Só quem fez a consulta pode responder. Envie {{code}} seguido da resposta. Para várias perguntas: {{code}} 2: resposta; depois {{code}} OK para enviar.",
-        "replyHint": "Só quem fez o pedido pode responder. Toque em uma opção; para várias perguntas ou seleções, envie ao terminar.\nEnvie {{code}} seguido da resposta. Para várias perguntas: {{code}} 2: resposta; depois {{code}} OK para enviar."
+        "replyHint": "Só quem fez o pedido pode responder. Toque em uma opção; para várias perguntas ou seleções, envie ao terminar.\nEnvie {{code}} seguido da resposta. Para várias perguntas: {{code}} 2: resposta; depois {{code}} OK para enviar.",
+        "nextLabel": "Próxima pergunta",
+        "stepHint": "Só quem fez o pedido pode responder. Toque em uma opção ou envie {{code}} seguido da resposta.",
+        "stepSubmitHint": "Só quem fez o pedido pode responder. Escolha e toque em “{{action}}”; ou envie {{code}} seguido da resposta e depois {{code}} OK.",
+        "stepTextHint": "Só quem fez o pedido pode responder. Envie {{code}} seguido da resposta.",
+        "unanswered": "⚠️ Ainda sem resposta: pergunta {{numbers}}. Responda a todas as perguntas e depois envie.",
+        "unansweredSingle": "⚠️ Ainda sem resposta. Escolha uma opção ou digite uma resposta primeiro.",
+        "numberSeparator": ", "
       }
     }
   },

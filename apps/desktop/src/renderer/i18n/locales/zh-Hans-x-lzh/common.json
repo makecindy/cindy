@@ -13482,7 +13482,14 @@
         "resolved": "✅ 已择：{{option}}",
         "expired": "此卡已逾期",
         "textHint": "唯提问者可答。以 {{code}} 接所答；多问用「{{code}} 2：所答」，毕则回 {{code}} OK 呈之。",
-        "replyHint": "唯提问者可答。点选所答，多问多择毕而呈之。\n以 {{code}} 接所答；多问用「{{code}} 2：所答」，毕则回 {{code}} OK 呈之。"
+        "replyHint": "唯提问者可答。点选所答，多问多择毕而呈之。\n以 {{code}} 接所答；多问用「{{code}} 2：所答」，毕则回 {{code}} OK 呈之。",
+        "nextLabel": "次问",
+        "stepHint": "唯提问者可答。点选即答，亦可以 {{code}} 接所答。",
+        "stepSubmitHint": "唯提问者可答。择毕点「{{action}}」；亦可以 {{code}} 接所答，再回 {{code}} OK。",
+        "stepTextHint": "唯提问者可答。以 {{code}} 接所答。",
+        "unanswered": "⚠️ 第 {{numbers}} 问未答，尽答而后呈。",
+        "unansweredSingle": "⚠️ 尚未作答，请先择之或书之。",
+        "numberSeparator": "、"
       }
     }
   },
