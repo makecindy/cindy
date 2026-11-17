@@ -219,8 +219,11 @@ const r = await cindy.agent.requestSchedule({
 - `send({target:{kind,id},requestKey,text,context?,title?,autoTitle?,route?,permissionMode?,delivery?,attachments?})`：直接指定目标，Host 当次复核。project 在目录中新建普通任务，可传统一模型目录的 route 和已授权范围内的 permissionMode；task/bot 沿用接收方模型、权限、目录，不接受 route 或 permissionMode。`delivery` 为 `queue | steer`，缺省 queue；project 不接受 steer。steer 尝试同轮注入，不停止当前轮，空闲或插话暂不可用时入队。返回 `{taskId,accepted:true,delivery:"queue"|"steer"}` 表示实际接受路径，不表示执行完成。筛查拒绝返回 DELIVERY_REJECTED，不入队重试；ACK 未知返回 DELIVERY_UNCERTAIN，不得换键重发。不开放读取任意任务历史或改模。
 - 同一次 send 重试沿用相同 requestKey、target、内容和 delivery（缺省与 queue 等价）；同键参数变化返回 REQUEST_KEY_CONFLICT。Host 在执行前持久保留投递回执，重启后已接受的请求返回原结果，未确定结果的请求返回 DELIVERY_UNCERTAIN，不再次创建或投递。普通投递回执不保存正文或附件字节；显式委派另保存下述有界执行范围。不要通过更换 requestKey 绕过未知结果，应先让用户在 Cindy 检查。
 - `cancel({requestKey})`：使本次请求及迟到的发送失效，仅撤回本插件该请求尚未执行的输入；不会停止接收方其他输入，也不保证撤销已经开始的工作。新操作使用新的 requestKey。
-- `tasks.send` 和 `targets.send` 均支持可选 `attachments:[{base64,name?}]`：只接收插件提供的图片字节，不接受本机路径、URL、媒体 URI 或自报 MIME。Host 检测 PNG/JPEG/WebP，最多 4 张、合计 20 MiB。先检查 `tasks.capabilities().messageAttachments.kinds` 包含 image；旧客户端不支持时停止，不静默丢图或改投临时路径。截图进既有 cindy-media，作为消息附件展示并进入模型输入；不需要额外声明 media.deposit。附件内容及名称参与幂等签名，更换附件不能复用同键。
-- 所有插件的两种发送入口共用 40 MiB 在途附件额度；超额在解码和写回执前返回可重试的 `TASK_BUSY`。等待已有请求结束后沿用原 requestKey 重试，不自动改投或丢图。
+- `tasks.send` 和 `targets.send` 均支持可选 `attachments:[{base64,name?}]`：只接收插件提供的字节，不接受本机路径、URL、媒体 URI 或自报 MIME。去处由 Host 按真实字节判定，与 Cindy 自己的 IM 渠道一致：图片（PNG/JPEG/GIF/WebP）和音视频（MP4/MOV/WebM、MP3/WAV/M4A/OGG）进既有 cindy-media；其余字节（PDF、文档、压缩包、Host 不认识的音视频格式等）按普通文件放进该任务自己的附件目录，`name` 决定显示名和扩展名，请务必传。都作为消息附件展示并交给 Agent；不需要额外声明 media.deposit。附件内容及名称参与幂等签名，更换附件不能复用同键。
+- 能力与上限看 `tasks.capabilities().messageAttachments`：`kinds` 列出可收的种类（旧客户端只有 `['image']`，只收 PNG/JPEG/WebP、最多 4 张、合计 20 MiB；此时只发图片，其余如实告诉用户未转交，不静默丢弃或改投临时路径），`maxCount` 条、单个不超过 `maxItemBytes`、一次发送合计不超过 `maxBytes`（当前 10 个、单个 30 MiB、合计 50 MiB）。
+- `attachmentOnly === true` 时，`tasks.send` 的 `text` 可传空字符串 `''`，前提是带了 `attachments`（例如转发一张没有配文的照片）；不带附件时仍需非空 text。
+- `contextMaxCount` 存在时，`tasks.send` 另可传 `contextAttachments:[{base64,name?}]`（最多 `contextMaxCount` 个，与 attachments 共用 `maxBytes`）：只给 Agent 参考、不显示也不随消息保存的附件，用于转发群聊记录或被引用消息里的图片和文件，相当于 Cindy 频道机器人的「群历史附件」。媒体以可回收缓存保存、文件留在会按时清理的暂存区，任务长时间排队后可能已被回收。它参与幂等签名；不传时签名与旧版相同。`targets.send` 不接受该字段。
+- 所有插件的两种发送入口共用 100 MiB 在途附件额度；超额在解码和写回执前返回可重试的 `TASK_BUSY`。等待已有请求结束后沿用原 requestKey 重试，不自动改投或丢图。
 - 目标只包含本机可见、可用的项目、普通任务或有唯一 canonical 对话的活跃伙伴；不提供 Mobile/device-link 透传。投递仍受当前插件启用、批准、账号和目标权限约束；插件内容不构成新真人授权。
 
 调用统计由 Host 统一确认，不提供插件自报次数或定义计次规则的接口。独立的 `tasks.send` / `targets.send`
@@ -310,6 +313,20 @@ await cindy.tasks.send({ taskId, requestKey, expectedRevision, text, context, re
 插件直接调用 `cindy.tasks` 时仍需当前插件批准和自有任务归属。Agent 使用公共 Orca 工具创建、调度或管理 Worker 时，按普通任务的账号、权限档、团队成员关系和操作凭证检查；任务创建来源、插件输入标签、插件计划与卸载状态不额外设限。Worker 目录、模型和运行位置沿普通 Orca 规则，目录不是持续的 OS 隔离保证。
 
 `models()` 返回统一目录可选项的完整 route、efforts 和 supportsFastMode。用户明确选择后将 route 原样传给 create，或用 `setModel({taskId, expectedRevision, route})` 修改已有自有任务。运行中按普通任务的安全边界切换，不修改应用默认。两方法使用前检查 capabilities.operations。
+
+**IM 共用项目与模型（新增，尚未发布）**：检查 `capabilities().imProjects === true`，并声明、获批
+`agent.tasks` 与 `agent.targets`。`imProjects()` 返回 `{projects:[{id,label,directory?}]}`，包含
+内置 `chat` 与宿主电脑侧栏项目；id 原样使用，不构造路径。项目选择与聊天绑定由插件保存。
+`create({requestKey,title,imProject:id})` 同时读取该项目的模型、来源、推理档与权限；不能再带
+route、permissionMode、callId、isolatedWorkspace。共用配置的插件可声明 `showTaskPreferences:false`
+隐藏重复的任务设置卡，历史偏好保留。
+
+接续前用 `followImProject({taskId,expectedRevision,imProject:id})`，返回 `{status,task}`，然后以
+返回的 revision 发送新输入。只适用于插件自己空闲的任务，TASK_BUSY 时等待，STALE_REVISION 时重新读取；
+PROJECT_MISMATCH 表示换了项目或任务被移动，应新建任务并保留旧任务。归档后同样新建。
+发送已受理或结果不确定时，先按原请求键查回执，不重新选项目或改写原输入。旧 Host 缺能力时提示升级，
+不能改投插件默认模型。权限收紧与项目移除会在派发时再检查，插件不能绕过。项目属于插件宿主电脑，
+远程模型来源不把项目搬到另一台电脑。
 
 **远程模型执行（新增，尚未发布）**：`capabilities().remoteRoutes === true` 时，
 `create` 和 `setModel` 的完整 route 可带 `agentDeviceId`（同账号其他电脑或 `share:<shareId>`）。

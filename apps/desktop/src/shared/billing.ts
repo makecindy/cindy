@@ -5,6 +5,13 @@
  * an HTTP path, target service, or arbitrary headers.
  */
 
+import type {
+  GiftCard,
+  GiftCardCredit,
+  GiftCardFailure,
+  GiftCardStatus,
+} from '@cindy/maker-shared/gift-card';
+
 import type { ModelAccessBalance, ModelAccessCreditUsage } from './modelAccess';
 
 export const BILLING_SUPPORT_EMAIL = 'xd-billing@xd.com';
@@ -74,7 +81,26 @@ export const BILLING_INVOKE = {
   CANCEL_PLAN_CHANGE: 'billing:cancel-plan-change',
   OPEN_SUBSCRIPTION_PORTAL: 'billing:open-subscription-portal',
   OPEN_PAYMENT_REDIRECT: 'billing:open-payment-redirect',
+  PREVIEW_GIFT_CARD: 'billing:preview-gift-card',
+  REDEEM_GIFT_CARD: 'billing:redeem-gift-card',
 } as const;
+
+/**
+ * 礼品卡的卡片、入账结果与不可领取原因：与 Mobile 共用同一份契约，
+ * 字段说明见 `@cindy/maker-shared/gift-card`。
+ */
+export type BillingGiftCardStatus = GiftCardStatus;
+export type BillingGiftCard = GiftCard;
+export type BillingGiftCardCredit = GiftCardCredit;
+/** 服务端明确给出的不可领取原因；网络或服务故障走 IPC 错误，不在此列。 */
+export type BillingGiftCardFailure = GiftCardFailure;
+
+export type BillingGiftCardPreviewResult =
+  { ok: true; card: BillingGiftCard } | { ok: false; reason: BillingGiftCardFailure };
+
+export type BillingGiftCardRedeemResult =
+  | { ok: true; card: BillingGiftCard; credit: BillingGiftCardCredit }
+  | { ok: false; reason: BillingGiftCardFailure };
 
 export type BillingPaymentAction =
   | { type: 'QR_CODE'; value: string; expiresAt: string }
@@ -335,4 +361,6 @@ export interface BillingRendererApi {
   cancelPlanChange: (payload: { planChangeId: string }) => Promise<BillingPlanChange>;
   openSubscriptionPortal: () => Promise<BillingSubscriptionPortalResult>;
   openPaymentRedirect: (payload: { url: string }) => Promise<{ success: boolean }>;
+  previewGiftCard: (payload: { code: string }) => Promise<BillingGiftCardPreviewResult>;
+  redeemGiftCard: (payload: { code: string }) => Promise<BillingGiftCardRedeemResult>;
 }

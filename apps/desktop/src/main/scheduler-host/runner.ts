@@ -47,7 +47,7 @@ import {
 
 import { randomUUID } from 'node:crypto';
 
-import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
+import { isTerminalAgentErrorEvent, safeTurnContinuationCancellationReason } from '@cindy/maker-core';
 import { formatSourceRef } from '@cindy/maker-shared/message-source';
 import {
   restoreAutoReviewUserIntent,
@@ -3853,6 +3853,19 @@ export class MakerScheduleRunner implements ScheduleRunner {
         reject(err);
       };
 
+      const failContinuation = (continuationId: number | undefined, rawReason: unknown): void => {
+        if (settled) return;
+        // Rebuild diagnostic fields from fixed codes/numbers. Never stringify a
+        // provider error or arbitrary callback data into logs or run history.
+        const reason = safeTurnContinuationCancellationReason(rawReason) ?? 'unknown';
+        const id = typeof continuationId === 'number' && Number.isSafeInteger(continuationId) && continuationId > 0
+          ? continuationId : 'unknown';
+        this.deps.logger.warn?.('[runner] turn continuation cancelled', {
+          sessionId, continuationId: id, reason,
+        });
+        fail(new Error(`Scheduled turn continuation was cancelled (reason: ${reason}, continuationId: ${id})`));
+      };
+
       const onSessionStatus = (
         owner: Session,
         status: 'active' | 'aborting' | 'closed' | 'error',
@@ -3965,7 +3978,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
           if (continuationState === 'cancelled') {
             // Provider already observed an explicit stop/teardown. Session
             // gets a separate ordered boundary; this run did not complete.
-            fail(new Error('Scheduled turn continuation was cancelled'));
+            failContinuation(continuationId, continuationId === undefined
+              ? undefined : owner.getTurnContinuationCancellationReason?.(continuationId));
             return;
           }
           if (continuationState === 'awaiting' || continuationState === 'active') {
@@ -3973,7 +3987,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             // turn —— 不定格，等待续 turn 自己的 done。
             pendingContinuationUnsub?.();
             pendingContinuationUnsub = owner.onTurnContinuationChange?.(
-              (changedContinuationId, state) => {
+              (changedContinuationId, state, reason) => {
                 if (
                   state !== 'cancelled' ||
                   (continuationId !== undefined && changedContinuationId !== continuationId)
@@ -3982,7 +3996,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
                 }
                 pendingContinuationUnsub?.();
                 pendingContinuationUnsub = undefined;
-                fail(new Error('Scheduled turn continuation was cancelled'));
+                failContinuation(changedContinuationId, reason);
               },
             );
             this.deps.logger.info?.(
