@@ -230,6 +230,41 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     return { events, transport, handle, nativeFrames };
   }
 
+  // #10651: cover host-only termination as well as translator completion using
+  // the production queue/Session. The fixture never executes markup as a tool.
+  it.each(['completed', 'rpc', 'exit', 'stop'] as const)('handles pending DSML through %s', async outcome => {
+    const { events, transport, nativeFrames } = await start();
+    const raw = '<|DSML|function_calls><|DSML|invoke name="bash"><|DSML|parameter name="command" string="true">echo fixture</|DSML|parameter></|DSML|invoke></|DSML|function_calls>';
+    const write = vi.spyOn(transport, 'writeLine');
+    await transport.writeLine(JSON.stringify({ type: 'fixture_frames', frames: [
+      { type: 'message_start', message: { role: 'assistant', content: [] } },
+      { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: raw } },
+    ] }));
+    await vi.waitFor(() => expect(nativeFrames).toContain('message_update'));
+    if (outcome === 'completed') {
+      await transport.writeLine(JSON.stringify({ type: 'fixture_frames', frames: [
+        { type: 'tool_execution_end', toolCallId: 'build-1', toolName: 'bash', result: { content: [] } },
+        { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: raw }],
+          stopReason: 'stop', usage: { input: 10, output: 3, cacheRead: 2, cacheWrite: 1 } } },
+        { type: 'agent_settled' },
+      ] }));
+    } else if (outcome === 'stop') await session!.abort();
+    else await transport.writeLine(JSON.stringify({ type: outcome === 'rpc' ? 'fixture_lose_rpc' : 'fixture_exit' }));
+    await vi.waitFor(() => expect(events.some(e => e.type === 'done' || e.type === 'error')).toBe(true));
+    const text = events.filter(e => e.type === 'text').map(e => (e.data as { text: string }).text).join('');
+    if (outcome === 'completed') {
+      expect(text).not.toContain('DSML');
+      expect(events.find(e => e.type === 'error')?.data).toMatchObject({ reason: 'unexecuted-tool-markup' });
+      expect(events.find(e => e.type === 'done')?.data).toMatchObject({ status: 'failed', silentStop: false,
+        usage: { inputTokens: 10, outputTokens: 3, cacheReadTokens: 2, cacheCreationTokens: 1 } });
+    } else {
+      expect(text).toContain(raw);
+      expect(events.some(e => (e.data as { reason?: string })?.reason === 'unexecuted-tool-markup')).toBe(false);
+    }
+    expect(events.filter(e => e.type === 'tool_use')).toHaveLength(1); // Only the fixture's pre-existing build.
+    expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).not.toContain('prompt');
+  });
+
   // #8887: real PiAgent/Session and stdio, fake executable only. Two completed
   // requests followed by each lifecycle termination must retain 120 input tokens.
   it.each(['rpc', 'exit', 'exhausted', 'close', 'detach', 'stop'] as const)(

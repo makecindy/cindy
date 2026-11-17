@@ -2,6 +2,13 @@
 
 > 权威工程规则。用于依赖方向、进程职责、多端执行和布局结构的设计决策。
 > 约束新增和正在修改的代码，不要求为形式统一专项重构存量；布局树变换始终保持合法。
+>
+> **读取时机**：修改 package 依赖方向、main 进程模块加载方式、桌面与 Node Host（`apps/host`）共用的
+> 业务主体（`*.desktop.ts` 装配、工厂端口注入），或主界面布局树结构之前
+> **适用路径**：`apps/host/**`、`apps/desktop/src/main/**/*.desktop.ts`、
+> `apps/desktop/src/main/**/*Core.ts`、`apps/desktop/src/main/layout/**`、
+> `apps/desktop/src/shared/layoutTree.ts`、`apps/desktop/src/renderer/panels/registry.ts`、
+> `{apps,packages}/*/package.json`
 
 > 源码注释按 §1 包解耦、§2 main 静态依赖、§3 布局树引用本文，这三个编号不要重排。
 

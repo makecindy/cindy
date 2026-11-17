@@ -1,5 +1,18 @@
 # Cindy 伙伴运行时
 
+> **读取时机**：修改伙伴（Bot）的身份、伙伴项目、Session 生命周期、模型 fallback、工作目录、Skill / MCP 装配、
+> 伙伴间协作、伙伴设置、伙伴消息、后台任务或伙伴提示词之前
+> **适用路径**：`apps/desktop/src/main/maker-ipc/**/{bot,teammate,sessionTeammate,remoteBot}*`、
+> `apps/desktop/src/main/localDb/**/{bot,teammate,legacyTeammate}*`、`apps/desktop/src/shared/**/bot*`、
+> `packages/maker-shared/src/**/{bot,teammate}*`、`apps/desktop/src/renderer/features/bots/**`、
+> `apps/mobile/src/session/**/{Companion,companion,useCompanion,Teammate,teammate,useTeammate,HomeTeammates,useHostTeammates}*`、
+> `packages/maker-core/src/agents/**/{bot-,teammate-}*`、
+> `packages/lizi-mcps/src/xdt-helper/{bot_,teammate_,create_teammate,list_teammates}*`、
+> `apps/desktop/src/main/maker-host/**/{bot-model-chain,botMcpCatalog,botToolsetAvailability}*`、
+> `apps/desktop/src/main/im/shared/**/{botIm,imBotBinding}*`、
+> `apps/desktop/src/main/scheduler-host/**/{ownTeammateProject,teammateHomeGuard}*`、
+> `apps/desktop/src/main/bot-import/**`
+
 > 本文是伙伴（Bot）身份、任务、模型路由、工作目录、Skill / MCP、伙伴消息与后台任务的产品契约。
 > 修改伙伴运行时、伙伴设置、伙伴消息、后台任务或伙伴提示词前必须先读本文。
 > 2026-11-05 方向：伙伴的工作方式属于伙伴自己的规则，宿主只保证来源、权限、上限、状态与运行位置。

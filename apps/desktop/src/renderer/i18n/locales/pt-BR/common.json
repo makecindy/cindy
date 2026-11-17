@@ -8329,6 +8329,8 @@
         "hostTools_terminalDetail": "Iniciar comandos e terminais interativos com suas permissões neste computador, ler a saída, enviar entradas e parar os processos deste plugin. Os comandos podem acessar seus arquivos e aplicativos.",
         "agentHiddenTasks": "Pode criar tarefas em segundo plano ocultas da lista de tarefas",
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da busca e das notificações. Você sempre pode visualizá-las, abri-las ou exibi-las na lista de tarefas em Tarefas em segundo plano, na página deste plugin; desinstalar o plugin volta a exibi-las.",
+        "agentModelPreferences": "Ler e editar seus modelos favoritos e ler seus modelos usados recentemente",
+        "agentModelPreferencesDetail": "Pode ler os modelos favoritos e os usados recentemente neste computador, incluindo o esforço de raciocínio e Fast, e adicionar, alterar ou remover favoritos. As alterações também aparecem no seletor de modelo do Cindy. Os modelos escolhidos no plugin não são adicionados aos recentes. Não inclui modelos dos seus outros computadores nem compartilhados com você, e nenhuma credencial é compartilhada.",
         "agentErrand": "Criar tarefas, executar trabalho e ler resultados",
         "agentErrandDetail": "As tarefas criadas aparecem na lista de tarefas da Cindy, onde você pode acompanhar o progresso e continuar a conversa.",
         "agentSchedule": "Pode pedir que você crie uma automação",
@@ -17004,6 +17006,7 @@
         "openInFileBrowser": "Abrir no gerenciador de arquivos",
         "showInFolder": "Mostrar na pasta",
         "copyFilePath": "Copiar caminho do arquivo",
+        "copyFolderPath": "Copiar caminho da pasta",
         "deleteFile": "Excluir arquivo"
       },
       "searchPanel": {
@@ -19237,6 +19240,7 @@
       "registrationFailed": "Falha na criação. Tente novamente mais tarde",
       "silentStopExhausted": "Foi detectada uma resposta vazia. A continuação automática foi pausada.",
       "executionResultUnavailable": "Não foi possível obter o resultado da execução. A continuação automática foi interrompida. Peça ao assistente para verificar o resultado da execução existente.",
+      "unexecutedToolMarkup": "O modelo escreveu uma chamada de ferramenta como texto. Não foi possível confirmar a execução, por isso este turno não foi concluído.",
       "outputLimit": "O modelo atingiu o limite de saída, então esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se isso se repetir, reduza o esforço de raciocínio ou compacte primeiro o histórico da conversa.",
       "outputLimitReasoning": "O raciocínio consumiu a maior parte do orçamento de saída desta solicitação, então a resposta pode estar incompleta. Reduza o esforço de raciocínio ou compacte o histórico da conversa antes de continuar.",
       "outputLimitUsage": "Esta solicitação ao modelo usou {{outputTokens}} tokens de saída, incluindo {{reasoningTokens}} tokens de raciocínio.",

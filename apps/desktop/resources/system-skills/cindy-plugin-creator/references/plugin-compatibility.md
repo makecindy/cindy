@@ -23,6 +23,7 @@
 - cindy 详单格式错(已知类目的动作不是合法标识、空数组或重复动作)
 - agent 详单格式错(background / errand / schedule 存在但不是 true；基础点击触发请写 `agent: {}`)
   · `hiddenTasks` 不是布尔值,或写了 `hiddenTasks: true` 却没有 `tasks: true`
+  · `modelPreferences` 不是布尔值(旧版 Cindy 把它当未知字段保留,不拒装也不授予)
 - node 详单格式错(entry 不是包内 CommonJS .js/.cjs、protocol 不在 json-rpc-stdio / mcp-stdio、
   resident 又写 idleTimeoutSeconds)；未知 command/args/shell/env 只保留，不传给进程启动器
 - ghost.json 声明了 namespace(包括 null)。namespace 由可信交付及 Host 安装事实决定，作者不能自报

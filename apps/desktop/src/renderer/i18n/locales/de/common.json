@@ -8257,6 +8257,8 @@
         "hostTools_terminalDetail": "Befehle und interaktive Terminals mit deinen Benutzerrechten auf diesem Computer starten, Ausgaben lesen, Eingaben senden und Prozesse dieses Plugins stoppen. Befehle können auf deine Dateien und Apps zugreifen.",
         "agentHiddenTasks": "Kann Hintergrundaufgaben erstellen, die in der Aufgabenliste ausgeblendet sind",
         "agentHiddenTasksDetail": "Von diesem Plugin erstellte Aufgaben können in der Aufgabenliste, der Suche und den Benachrichtigungen ausgeblendet bleiben. Unter „Hintergrundaufgaben“ auf der Seite dieses Plugins kannst du sie jederzeit ansehen, öffnen oder in der Aufgabenliste einblenden; bei der Deinstallation des Plugins werden sie wieder eingeblendet.",
+        "agentModelPreferences": "Deine Modellfavoriten lesen und bearbeiten sowie zuletzt verwendete Modelle lesen",
+        "agentModelPreferencesDetail": "Kann die Modellfavoriten und zuletzt verwendeten Modelle auf diesem Computer lesen, einschließlich Denkintensität und Fast, und Favoriten hinzufügen, ändern oder entfernen. Änderungen erscheinen auch in der Modellauswahl von Cindy. Im Plugin gewählte Modelle werden nicht unter „Zuletzt verwendet“ erfasst. Modelle auf deinen anderen Computern oder mit dir geteilte Modelle sind nicht enthalten, und es werden keine Zugangsdaten weitergegeben.",
         "agentErrand": "Aufgaben erstellen, Arbeiten ausführen und Ergebnisse lesen",
         "agentErrandDetail": "Erstellte Aufgaben erscheinen in der Aufgabenliste von Cindy. Dort kannst du den Fortschritt ansehen und das Gespräch fortsetzen.",
         "agentSchedule": "Kann dich bitten, eine Automatisierung zu erstellen",
@@ -16842,6 +16844,7 @@
         "openInFileBrowser": "Im Dateimanager öffnen",
         "showInFolder": "Im Ordner anzeigen",
         "copyFilePath": "Dateipfad kopieren",
+        "copyFolderPath": "Ordnerpfad kopieren",
         "deleteFile": "Datei löschen"
       },
       "searchPanel": {
@@ -19055,6 +19058,7 @@
       "registrationFailed": "Erstellung fehlgeschlagen, bitte versuche es später erneut",
       "silentStopExhausted": "Eine leere Antwort wurde erkannt. Die automatische Fortsetzung ist pausiert.",
       "executionResultUnavailable": "Das Ausführungsergebnis konnte nicht abgerufen werden. Die automatische Fortsetzung wurde gestoppt. Bitte den Assistenten, das vorhandene Ausführungsergebnis zu prüfen.",
+      "unexecutedToolMarkup": "Das Modell hat einen Werkzeugaufruf als Text ausgegeben. Die Ausführung konnte nicht bestätigt werden, daher wurde dieser Durchgang nicht abgeschlossen.",
       "outputLimit": "Das Modell hat sein Ausgabelimit erreicht. Diese Antwort ist möglicherweise unvollständig. Sende eine neue Nachricht, um fortzufahren. Wenn dies wiederholt auftritt, reduziere die Denkintensität oder komprimiere zuerst den Gesprächsverlauf.",
       "outputLimitReasoning": "Das Denken hat den Großteil des Ausgabebudgets dieser Anfrage verbraucht. Die Antwort ist möglicherweise unvollständig. Reduziere die Denkintensität oder komprimiere den Gesprächsverlauf, bevor du fortfährst.",
       "outputLimitUsage": "Diese Modellanfrage hat {{outputTokens}} Ausgabetokens verwendet, davon {{reasoningTokens}} Denktokens.",

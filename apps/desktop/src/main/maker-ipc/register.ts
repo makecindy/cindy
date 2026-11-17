@@ -14520,6 +14520,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (!inputCoordinator.isQueueRestored(taskId)) throw new PluginTaskError('HOST_NOT_READY', 'Task queue is restoring', true);
         return { execution: readExecution(taskId), pending: inputCoordinator.getQueueControlSnapshot(taskId).pendingQueue };
       },
+      // taskId is the session id; the snapshot is the streaming block only (resets after a tool call).
+      readLivePreview: taskId => ({ execution: readExecution(taskId), text: getSessionTextSnapshot(taskId)?.event.data.text ?? null }),
       cancel: async (pluginId, taskId, inputClientIds, execution) => {
         assertPlugin(pluginId);
         await inputCoordinator.ensureQueueRestored(taskId);

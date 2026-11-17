@@ -8200,6 +8200,8 @@
         "hostTools_terminalDetail": "得於此機以主人身分啟命令及互動終端，閱其輸出、輸入及止本法器之處理程序。命令可取主人檔案與應用程式。",
         "agentHiddenTasks": "可立不見於差事錄之背後差事",
         "agentHiddenTasksDetail": "本法器所立之差事，可不現於差事錄、搜尋與告中。君可隨時於法器詳情之「背後差事」中觀之、啟之，或令顯於差事錄；卸除法器時，此等差事將復顯示。",
+        "agentModelPreferences": "可讀改君之模型珍藏，並讀君近用之模型",
+        "agentModelPreferencesDetail": "可讀此機之模型珍藏與近用之模型（含思之深淺與 Fast），並可增、改、去珍藏，所改亦見於 Cindy 之擇模。於法器中所擇之模型不記入近用。不含君他機之模型與人所分享者，亦不予憑證。",
         "agentErrand": "可立差事、行事並讀結果",
         "agentErrandDetail": "所立差事現於 Cindy 差事錄中，可觀其歷程並續言談。",
         "agentSchedule": "可請君新立自運",
@@ -16768,6 +16770,7 @@
         "openInFileBrowser": "於卷瀏覽器覽之",
         "showInFolder": "於卷匣中示之",
         "copyFilePath": "錄卷路徑",
+        "copyFolderPath": "錄卷匣路徑",
         "deleteFile": "刪卷"
       },
       "searchPanel": {
@@ -18980,6 +18983,7 @@
       "registrationFailed": "立之未成，請稍後再試",
       "silentStopExhausted": "察得空答，自動續行已暫止。",
       "executionResultUnavailable": "未得行之結果，自動接續已止。可請助手察既有之結果。",
+      "unexecutedToolMarkup": "模型以文字述工具之呼叫，未能核其執行結果，此輪未竟。",
       "outputLimit": "模型已達輸出之限，此答或有不全。可遣新訊以續；若屢至此限，宜減思之深淺，或先壓縮言談錄。",
       "outputLimitReasoning": "思考已耗本次輸出預算之大半，此答或有不全。宜減思之深淺，或先壓縮言談錄，而後續之。",
       "outputLimitUsage": "本次模型請求已輸出 {{outputTokens}} tokens，其中 {{reasoningTokens}} tokens 用於思考。",

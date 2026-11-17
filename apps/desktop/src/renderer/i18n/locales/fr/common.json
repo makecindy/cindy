@@ -8329,6 +8329,8 @@
         "hostTools_terminalDetail": "Lancer des commandes et des terminaux interactifs avec vos droits sur cet ordinateur, lire la sortie, saisir du texte et arrêter les processus de ce plugin. Les commandes peuvent accéder à vos fichiers et applications.",
         "agentHiddenTasks": "Peut créer des tâches en arrière-plan masquées de la liste des tâches",
         "agentHiddenTasksDetail": "Les tâches créées par ce plugin peuvent ne pas apparaître dans la liste des tâches, la recherche et les notifications. Vous pouvez toujours les voir, les ouvrir ou les afficher dans la liste des tâches depuis Tâches en arrière-plan sur la page de ce plugin ; désinstaller le plugin les fait réapparaître.",
+        "agentModelPreferences": "Lire et modifier vos modèles favoris, et lire vos modèles récemment utilisés",
+        "agentModelPreferencesDetail": "Peut lire les modèles favoris et récemment utilisés sur cet ordinateur, y compris l’effort de raisonnement et Fast, et ajouter, modifier ou retirer des favoris. Les modifications apparaissent aussi dans le sélecteur de modèle de Cindy. Les modèles choisis dans le plugin ne sont pas ajoutés aux récents. Les modèles de vos autres ordinateurs ou partagés avec vous ne sont pas inclus, et aucun identifiant n’est transmis.",
         "agentErrand": "Créer des tâches, effectuer du travail et lire les résultats",
         "agentErrandDetail": "Les tâches créées apparaissent dans la liste des tâches de Cindy, où vous pouvez suivre leur progression et poursuivre la conversation.",
         "agentSchedule": "Peut vous demander de créer une automatisation",
@@ -17004,6 +17006,7 @@
         "openInFileBrowser": "Ouvrir dans le navigateur de fichiers",
         "showInFolder": "Afficher dans le dossier",
         "copyFilePath": "Copier le chemin du fichier",
+        "copyFolderPath": "Copier le chemin du dossier",
         "deleteFile": "Supprimer le fichier"
       },
       "searchPanel": {
@@ -19237,6 +19240,7 @@
       "registrationFailed": "Échec de la création, veuillez réessayer plus tard",
       "silentStopExhausted": "Une réponse vide a été détectée. La poursuite automatique est en pause.",
       "executionResultUnavailable": "Impossible de récupérer le résultat de l'exécution. La poursuite automatique s'est arrêtée. Demandez à l'assistant de vérifier le résultat d'exécution existant.",
+      "unexecutedToolMarkup": "Le modèle a écrit un appel d’outil sous forme de texte. L’exécution n’a pas pu être confirmée ; ce tour n’est donc pas terminé.",
       "outputLimit": "Le modèle a atteint sa limite de sortie ; cette réponse peut être incomplète. Envoyez un nouveau message pour continuer. Si cela se répète, réduisez l’effort de raisonnement ou compactez d’abord l’historique de la conversation.",
       "outputLimitReasoning": "Le raisonnement a consommé la majeure partie du budget de sortie de cette requête ; la réponse peut être incomplète. Réduisez l’effort de raisonnement ou compactez l’historique de la conversation avant de continuer.",
       "outputLimitUsage": "Cette requête au modèle a utilisé {{outputTokens}} jetons de sortie, dont {{reasoningTokens}} jetons de raisonnement.",

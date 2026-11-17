@@ -4,6 +4,8 @@
 > **读取时机**：新增或修改 `packages/maker-core` 中的 Agent 编排、prompt 组装、
 > tool／MCP 暴露、translator、event loop、model 映射、usage／token 计量，或任何会进入
 > 模型 system 段的提示词之前
+> **适用路径**：`packages/maker-core/**`、`apps/desktop/src/main/maker-host/*prompt*.md`、
+> `apps/desktop/src/main/maker-ipc/botSystemPrompt.ts`、`apps/cindy-headless/profiles/**`
 
 本文治理 Cindy 连接 Claude／Codex 等 Agent 的编排核心 `packages/maker-core`。它是所有
 Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户无感知的情况下影响线上行为与
