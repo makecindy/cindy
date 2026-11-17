@@ -166,3 +166,18 @@ it('restores the durable baseline when an acknowledged card write failed to pers
   expect(restored.draft?.baseValues?.body).toBe('Original');
   expect(restored.draft?.fields[4].value).toBe('Original');
 });
+
+// SDK durability verification must read the current tool's row without asking
+// to reopen that same tool; reopening consumes its in-flight authorization.
+it('current-call durable read preserves the in-flight tool authorization', async () => {
+  const f = fixture();
+  f.register('current');
+  await f.publish('current');
+  expect(f.cards.inFlightCallInfoOf('current')).not.toBeNull();
+  expect((await f.service.restore('gmail', { callId: 'current' }, () => true)).ok).toBe(true);
+  expect(f.cards.inFlightCallInfoOf('current')).not.toBeNull();
+  f.register('reopened');
+  await f.publish('reopened', snapshot({ draftId: 'another' }));
+  expect((await f.service.restore('gmail', { callId: 'reopened', sourceCallId: 'reopened' }, () => true)).ok).toBe(true);
+  expect(f.cards.inFlightCallInfoOf('reopened')).toBeNull();
+});

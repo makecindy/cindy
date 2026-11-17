@@ -119,7 +119,7 @@ function fixture({
         if (card.type === 'mail-draft-read') {
           if (hostRead) await hostRead(card);
           const stored = durableCards.findLast(c => c.draft && c.callId === card.callId);
-          if (!stored || (!allowCardRead && card.callId !== card.sourceCallId)) return { ok: false };
+          if (!stored || (!allowCardRead && card.sourceCallId && card.callId !== card.sourceCallId)) return { ok: false };
           const draft = copy(stored.draft);
           // Host persists status-only patches as part of the same card.
           for (const update of durableCards.slice(durableCards.indexOf(stored) + 1)) {
@@ -703,7 +703,7 @@ for (const conflict of [false, true]) test(`another task gets only the mailbox r
   await f.present();
   const oldKey = f.cards.at(-1).draft.key;
   await f.card('change', { ...f.values(), body: 'Saved replacement' });
-  await f.tool('update');
+  await f.tool('update', { sourceCallId: 'card-call' });
   await f.card('change', { ...f.values(), body: 'Private typing', subject: 'Private subject' });
   const oldCard = copy(f.cards.findLast(c => c.draft));
   const read = await f.tool('get');
@@ -1012,7 +1012,7 @@ for (const restart of [false, true]) for (const rejectGet of [false, true]) for 
 // best effort and cannot reclassify a confirmed save as an unknown operation.
 test('confirmed recovery save survives a rejecting Host baseline lookup', async () => {
   let f, rejecting = false, rejectRecovery = false;
-  f = fixture({ publish: card => !rejectRecovery || card.type !== 'mail-draft-update', hostRead: () => { if (rejecting) throw new Error('Synthetic IPC rejection'); }, write: request => {
+  f = fixture({ publish: card => !rejectRecovery || card.type !== 'mail-draft-update', hostRead: () => { if (rejecting && f.writes.length > 1) throw new Error('Synthetic IPC rejection'); }, write: request => {
     if (f.writes.length === 1) {
       f.externalEdit({ body: request.fields.body });
       return { ok: false, execution: 'executed', message: 'Verification failed' };
@@ -1759,4 +1759,214 @@ test('readonly or mismatched drafts are not deleted; unknown deletion is never r
   await legacy.present();
   assert.equal(legacy.cards.at(-1).draft.deleteLabel, undefined);
   assert.equal(await legacy.tool('delete'), null);
+});
+
+// Review #11002: public get must retain the only Host copy of pre-save typing
+// after attachment descriptors are lost. No upload or send is permitted (unit).
+test('lost upload inspection preserves the same-task Host editor across restart', async () => {
+  const f = fixture({ richText: true });
+  await f.present();
+  const key = f.cards.at(-1).draft.key;
+  await f.card('change', { ...f.values(), body: 'Private unsaved body', bodyHtml: '<p>Private unsaved body</p>' });
+  await f.card('attach', { ...f.values(), body: 'Private unsaved body', bodyHtml: '<p>Private unsaved body</p>' },
+    { mailAttachment: { path: 'synthetic-upload', filename: 'unsaved.txt', bytes: 3, sha256: 'a'.repeat(64) } });
+  const before = copy(f.cards.findLast(c => c.draft));
+  f.restart();
+  const read = await f.tool('get');
+  assert.equal(read.ok, true);
+  assert.equal(read.data.readBack.editor.body, 'Original');
+  assert.deepEqual(f.cards.findLast(c => c.draft?.key === key), before);
+  f.restart();
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal(f.writes.length, 0);
+});
+
+// Original card remains owned by A; B's successful or rejected provider-only
+// publication must not retire A's recovery route/private fields (unit).
+for (const rejectForeign of [false, true]) test(`foreign recovery read preserves original task route: reject=${rejectForeign}`, async () => {
+  let f;
+  f = fixture({ allowCardRead: false, publish: async card => !(rejectForeign && card.callId === 'agent-call'), write: async request => {
+    if (f.writes.length > 1 || request.send) return;
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  const key = f.cards.at(-1).draft.key;
+  await f.card('change', { ...f.values(), body: 'Saved' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.card('change', { ...f.values(), body: 'A private later input' });
+  const before = f.kv().mailDraftCards[key];
+  assert.equal((await f.tool('get')).ok, true);
+  assert.deepEqual(f.kv().mailDraftCards[key], before);
+  f.restart();
+  const a = await f.tool('get', { sourceCallId: 'card-call' });
+  assert.equal(a.ok, true);
+  assert.equal(a.data.cardEdits?.body || a.data.readBack.editor.body, 'A private later input');
+  assert.equal(f.writes.at(-1).fields.body, 'A private later input');
+  assert.equal(f.writes.some(r => r.send), false);
+});
+
+// Delete discards missing local uploads rather than replaying them; unknown
+// save/send/delete receipts remain locked by the existing draft-state gate.
+test('tool delete can discard a draft with lost upload descriptors', async () => {
+  const f = fixture({ richText: true });
+  await f.present();
+  await f.card('attach', f.values(), { mailAttachment: { path: 'synthetic-upload', filename: 'discard.txt', bytes: 3, sha256: 'a'.repeat(64) } });
+  f.restart();
+  assert.equal((await f.tool('delete')).data?.deleted, true);
+  assert.equal(f.deletes.length, 1);
+  assert.equal(f.writes.length, 0);
+  assert.equal((await f.resolve()).state, 'deleted');
+});
+
+// Distinct task cards still share one logical mailbox operation: a terminal or
+// uncertain send from B must prevent A's preserved route from replaying it.
+for (const unknown of [false, true]) test(`preserved task routes share send safety: unknown=${unknown}`, async () => {
+  let f;
+  f = fixture({ allowCardRead: false, write: async request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+    if (request.send && unknown) return { ok: false, execution: 'unknown', message: 'No receipt' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.tool('get');
+  const sent = await f.tool('send');
+  assert.equal(sent.ok, !unknown);
+  f.restart();
+  const repeated = await f.tool('send', { sourceCallId: 'card-call' });
+  if (unknown) assert.equal(repeated.execution, 'unknown');
+  else assert.equal(repeated.data.alreadySent, true);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+  if (!unknown) for (const record of Object.values(f.kv().mailDraftCards))
+    assert.equal(record.completedSaveHashes, undefined);
+});
+
+// Actual author contract says resolveDraft supplies the latest IMAP locator
+// after beforeTool; task-preserved routing must not return an older task's UID.
+test('resolveDraft follows the newest verified save across task routes', async () => {
+  let f;
+  f = fixture({ allowCardRead: false, write: async request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.card('change', { ...f.values(), body: 'Private later input' });
+  await f.tool('get');
+  await f.tool('get', { sourceCallId: 'card-call' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  assert.equal(f.current().editor.body, 'Private later input');
+  assert.equal((await f.resolve()).locator.uid, f.current().locator.uid);
+  assert.equal((await f.resolve()).fingerprint, f.current().fingerprint);
+});
+
+// Explicit updates may let the adapter resolve a stale conflict, but never
+// while another task has a real unknown send for the same mailbox draft.
+test('explicit conflict update cannot bypass another task unknown send', async () => {
+  let f;
+  f = fixture({ allowCardRead: false, write: async request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: 'Remote replacement' });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+    if (request.send) return { ok: false, execution: 'unknown', message: 'No receipt' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Private replacement' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  assert.ok((await f.tool('get', { sourceCallId: 'card-call' })).data.conflicts.includes('body'));
+  const foreign = await f.tool('get');
+  assert.equal(foreign.data.cardEdits, undefined);
+  assert.equal(f.cards.at(-1).callId, 'agent-call');
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  const before = f.writes.length;
+  assert.equal((await f.tool('update', { sourceCallId: 'card-call' }))?.execution, 'unknown');
+  assert.equal(f.writes.length, before);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+});
+
+// Real Host restore reopens its target when sourceCallId is supplied; using the
+// current call as its own source would consume that call's in-flight authority.
+test('new-card durability read does not reopen its own current tool call', async () => {
+  const requests = [];
+  const f = fixture({ hostRead: async request => { requests.push(copy(request)); } });
+  assert.equal(await f.present(), true);
+  assert.ok(requests.length);
+  await f.card('change', { ...f.values(), body: 'Updated in original call' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  for (const request of requests) assert.notEqual(request.sourceCallId, request.callId);
+  for (const card of f.cards) assert.notEqual(card.sourceCallId, card.callId);
+  assert.equal(f.cards.at(-1).draft.state, 'draft');
+});
+
+// An unavailable ownership check proves neither foreign ownership nor permission
+// to replace the only Host copy of a failed save's subsequent private typing.
+test('transient ownership read failure does not replace private recovery fields', async () => {
+  let f, rejectOnce = false;
+  f = fixture({ hostRead: () => { if (rejectOnce) { rejectOnce = false; throw new Error('Transient ownership IPC'); } }, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Private later input' });
+  const before = copy(f.cards), routes = f.kv();
+  rejectOnce = true;
+  assert.equal((await f.tool('get')).ok, true);
+  assert.deepEqual(f.cards, before);
+  assert.deepEqual(f.kv(), routes);
+  f.restart();
+  await f.tool('get');
+  assert.equal(f.current().editor.body, 'Private later input');
+  assert.equal(f.writes.some(r => r.send), false);
+});
+
+// Preserve the public resolveDraft locator under a real read/write crossing,
+// including restore and clean-card get. The delayed response is an old snapshot.
+for (const restoring of [false, true]) test(`late task observation cannot roll back another task locator: restore=${restoring}`, async () => {
+  let f, hold = false, release, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const waiting = new Promise(resolve => { release = resolve; });
+  f = fixture({ allowCardRead: false, read: async () => {
+    if (hold && f.reads.at(-1).sourceCallId === 'agent-call') {
+      hold = false;
+      const readBack = f.current(); entered(); await waiting;
+      return { ok: true, data: { readBack } };
+    }
+  }, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.card('change', { ...f.values(), body: 'Private later input' });
+  if (!restoring) await f.tool('get', { sourceCallId: 'card-call' });
+  await f.tool('get');
+  if (restoring) f.restart();
+  hold = true;
+  const b = f.tool(restoring ? 'update' : 'get');
+  await started;
+  const a = f.tool(restoring ? 'get' : 'update', { sourceCallId: 'card-call' });
+  // Allow the independent task to finish if the shared operation is not held;
+  // no real timer or provider request is used by this interleaving.
+  for (let i = 0; i < 100; i++) await new Promise(resolve => setImmediate(resolve));
+  release();
+  await Promise.all([a, b]);
+  assert.equal(f.current().editor.body, 'Private later input');
+  assert.equal((await f.resolve()).locator.uid, f.current().locator.uid);
+  assert.equal((await f.resolve()).fingerprint, f.current().fingerprint);
+  assert.equal(f.writes.some(r => r.send), false);
 });
