@@ -76,20 +76,20 @@ describe('expanded settings use the real native stores', () => {
     expect(readMemorySettings().maker).toBe(false);
     const file = path.join(context.root, 'owners', 'test-first', 'memory-settings.json');
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ maker: false });
-    await updateHostSettings(caller, await request('memory', { set: { pi: false } }));
+    await updateHostSettings(caller, await request('memory', { set: { codex: false } }));
     await updateHostSettings(caller, await request('memory', { clear: ['maker'] }));
-    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ pi: false });
-    expect(readMemorySettings()).toMatchObject({ maker: true, pi: false });
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ codex: false });
+    expect(readMemorySettings()).toMatchObject({ maker: true, codex: false });
   });
   it('rejects stale forms and cross-owner reuse without altering native values', async () => {
     const stale = await request('collaboration', { set: { workerSoftLimit: 3 } });
     await updateHostSettings(caller, await request('collaboration', { set: { workerSoftLimit: 4 } }));
     expect(await updateHostSettings(caller, stale)).toMatchObject({ saved: false, code: 'CONFLICT' });
     expect(readCollaborationSettings().workerSoftLimit).toBe(4);
-    const cross = await request('memory', { set: { pi: false } });
+    const cross = await request('memory', { set: { codex: false } });
     context.owner = 'second'; context.generation++;
     await expect(updateHostSettings(caller, cross)).rejects.toThrow();
-    expect(readMemorySettings().pi).toBe(true);
+    expect(readMemorySettings().codex).toBe(true);
   });
   it('preserves consent records and never exposes them as editable fields', async () => {
     const file = path.join(context.root, 'analytics-settings.json');
@@ -110,12 +110,12 @@ describe('expanded settings use the real native stores', () => {
   it('lets only one of two controllers saving a section from the same revision succeed', async () => {
     // Both read the same revision before either write lands.
     const first = await request('memory', { set: { maker: false } });
-    const second = await request('memory', { set: { pi: false } });
+    const second = await request('memory', { set: { codex: false } });
     expect(second.expectedRevision).toBe(first.expectedRevision);
     const receipts = await Promise.all([updateHostSettings(caller, first), updateHostSettings(caller, second)]);
     expect(receipts.filter(receipt => receipt.saved)).toHaveLength(1);
     expect(receipts.find(receipt => !receipt.saved)).toMatchObject({ status: 'rejected', code: 'CONFLICT' });
-    expect(readMemorySettings()).toMatchObject({ maker: false, pi: true });
+    expect(readMemorySettings()).toMatchObject({ maker: false, codex: true });
   });
   it('terminal writes are seen by existing native consumers and reset clears the override', async () => {
     // Only a shell present on this host is accepted (`sh` does not exist on Windows).

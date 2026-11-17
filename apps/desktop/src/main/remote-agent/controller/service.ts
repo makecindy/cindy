@@ -299,9 +299,9 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         try {
           const manager = deps.makerMemory();
           opts.makerMemoryProjectDir = manager?.getProjectMemoryDirectory(scopeKey);
-          const store = opts.makerMemoryProjectDir ? undefined : await manager?.getStore(scopeKey);
+          const index = opts.makerMemoryProjectDir ? undefined : await manager?.getPromptIndex(scopeKey);
           requireCurrent();
-          opts.makerMemoryIndexSnapshot = await store?.getIndex() ?? '';
+          opts.makerMemoryIndexSnapshot = index ?? '';
         } catch (error) {
           requireCurrent();
           log.warn('remote agent: memory index unavailable; starting without it', { error: String(error) });

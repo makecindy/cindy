@@ -45,7 +45,7 @@ import { pluginAppResult } from '../mcp-apps/pluginCards.js';
 import { restorePluginPageSession } from '../mcp-apps/pluginPageCall.js';
 import { getSchedulerIfInitialized, getScheduleStorageIfInitialized, resumeInterruptedScheduleRun } from '../scheduler-host/index.desktop.js';
 import { setVoiceTaskDispatch, setVoiceCallMemoryReader } from '../voice-conversation/taskBridge.js';
-import { buildBotMemoryScopeKey, SessionCreationCleanupPendingError } from '@cindy/maker-core';
+import { buildBotMemoryScopeKey, resolveMemoryScopeKey, SessionCreationCleanupPendingError } from '@cindy/maker-core';
 import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
 import { getTeamByWorkerSession } from '../localDb/orcaTeamStore';
 import { readWorkerProjectContext, createWorkerWorktree, rememberWorkerProject, probeWorkerProject, resolveWorkerWorktreeSourceSelection, getWorkerOwnedWorktree } from './orcaWorkerProject';
@@ -356,6 +356,7 @@ import { accessChatDisplayCache } from './chatDisplayCache.js';
 import { accessBotGroupOutbox, commandBotGroupOutbox, sendCoordinatedBotGroupMessage, setBotGroupOutboxPublisher } from './botGroupOutboxStorage.js';
 import { createBotReadStateIpc, createBotWindowAccess } from './botReadStateLocalIpc.js';
 import { createBotReadStateStorage } from './botReadStateStorage.js';
+import { createMakerMemoryEntriesService, registerMakerMemoryEntriesIpc } from './makerMemoryEntriesService.js';
 import { isSecondaryAppWindow } from '../secondary-windows.js';
 import { createBotGroupOutboxIpc } from './botGroupOutboxIpc.js';
 import {
@@ -23899,20 +23900,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // setMemory 后按 result.effective ('immediate' | 'next-session') 决定是否提示
   // "新会话生效"; reset 前必走 confirm dialog (UI 层负责)。
   ipcMain.handle(MAKER_INVOKE.MEMORY_GET, async (_e, agentKind: unknown) => {
-    if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi') {
+    if (agentKind !== 'claude-code' && agentKind !== 'codex') {
       throwIpcError(
         'INVALID_PARAMS',
-        `agentKind required (claude-code | codex | pi), got ${String(agentKind)}`,
+        `agentKind required (claude-code | codex), got ${String(agentKind)}`,
       );
     }
     return maker.getAgentMemoryStatus(agentKind);
   });
 
   const updateNativeMemorySetting = async (agentKind: unknown, enabled: unknown, guard?: AppSettingsWriteGuard) => {
-    if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi') {
+    if (agentKind !== 'claude-code' && agentKind !== 'codex') {
       throwIpcError(
         'INVALID_PARAMS',
-        `agentKind required (claude-code | codex | pi), got ${String(agentKind)}`,
+        `agentKind required (claude-code | codex), got ${String(agentKind)}`,
       );
     }
     if (typeof enabled !== 'boolean') {
@@ -23950,10 +23951,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(MAKER_INVOKE.MEMORY_SET, async (_e, agentKind: unknown, enabled: unknown) => { return updateNativeMemorySetting(agentKind, enabled); });
 
   ipcMain.handle(MAKER_INVOKE.MEMORY_RESET, async (_e, agentKind: unknown) => {
-    if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi') {
+    if (agentKind !== 'claude-code' && agentKind !== 'codex') {
       throwIpcError(
         'INVALID_PARAMS',
-        `agentKind required (claude-code | codex | pi), got ${String(agentKind)}`,
+        `agentKind required (claude-code | codex), got ${String(agentKind)}`,
       );
     }
     log.info('memory:reset', { agentKind });
@@ -24005,11 +24006,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         } else {
           await maker.setAgentMemory('claude-code', settings.claudeCode);
         }
-        // Pi 的自动记忆以 Cindy Memory 为存储层，不参与“启用 Cindy 时关闭原生记忆”联动；
-        // reset 仍要把存活 Pi runtime 的独立开关恢复成默认值。
-        if (maker.listAvailableAgents().includes('pi')) {
-          await maker.setAgentMemory('pi', settings.pi);
-        }
         return memorySettingsWire();
       },
       applyRuntime: async () => {
@@ -24044,6 +24040,30 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     log.info('maker-memory:reset');
     return maker.makerMemory.resetAll();
+  });
+
+  // Cindy 记忆「查看记忆」页: 账号级与各项目的记忆, 看 / 搜 / 改 / 删。只给本机可信窗口。
+  registerMakerMemoryEntriesIpc(ipcMain, {
+    service: createMakerMemoryEntriesService({
+      getManager: () => {
+        if (!maker.makerMemory) throwIpcError('MAKER_MEMORY_NOT_READY', 'maker memory not initialized');
+        return maker.makerMemory;
+      },
+      // 与任务启动时取键同一入口 (子目录、worktree 归到仓库根); 一次性对话没有项目记忆。
+      resolveTaskScopeKey: async (workingDir, remoteHostId) =>
+        maker.makerMemory?.memoryScopesFor(await resolveMemoryScopeKey(workingDir, remoteHostId)).project ?? null,
+      captureOwner: () => {
+        const scope = activeOwnerScopeKey();
+        const assertCurrent = () => {
+          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scope) {
+            throwIpcError('PRECONDITION_FAILED', '账号已切换，请在当前账号重试');
+          }
+        };
+        assertCurrent();
+        return { assertCurrent };
+      },
+    }),
+    assertTrustedSender: assertTrustedAppRendererEvent,
   });
 
   // 占位：MetaAgent 入口

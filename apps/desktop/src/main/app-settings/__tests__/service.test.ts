@@ -46,15 +46,15 @@ describe('app settings service', () => {
 // Unit: production memory updater + real restart executor, in-memory settings.
 describe('combined memory settings', () => {
   it.each([false, true])('keeps the final native flags when Codex busy=%s', async busy => {
-    let value = { maker: true, claudeCode: true, codex: true, pi: true };
+    let value = { maker: true, claudeCode: true, codex: true };
     let enabled = true;
-    const live = { claudeCode: true, codex: true, pi: true };
+    const live = { claudeCode: true, codex: true };
     let pending: (() => Promise<void>) | undefined;
-    const setAgentMemory = vi.fn(async (kind: 'claude-code' | 'codex' | 'pi', next: boolean) => {
+    const setAgentMemory = vi.fn(async (kind: 'claude-code' | 'codex', next: boolean) => {
       live[kind === 'claude-code' ? 'claudeCode' : kind] = next;
     });
     const defaults = { ...value };
-    const result = await updateMakerMemorySettings(false, { codex: false, claudeCode: false, pi: false }, {
+    const result = await updateMakerMemorySettings(false, { codex: false, claudeCode: false }, {
       makerMemory: {
         isEnabled: () => enabled,
         enable: async () => { enabled = true; return { effective: 'next-session' }; },
@@ -74,15 +74,14 @@ describe('combined memory settings', () => {
       invalidateBridge: async () => {},
     });
     expect(result.codexRestartDeferred).toBe(busy);
-    expect(value).toEqual({ maker: false, claudeCode: false, codex: false, pi: false });
+    expect(value).toEqual({ maker: false, claudeCode: false, codex: false });
     expect(live.claudeCode).toBe(false);
-    expect(live.pi).toBe(false);
     if (busy) {
       expect(setAgentMemory.mock.calls.some(([kind]) => kind === 'codex')).toBe(false);
       expect(pending).toBeTypeOf('function');
       await pending!();
     }
-    expect(live).toEqual({ claudeCode: false, codex: false, pi: false });
+    expect(live).toEqual({ claudeCode: false, codex: false });
     expect(setAgentMemory.mock.calls.filter(([kind]) => kind === 'codex')).toEqual([['codex', false]]);
   });
 });
@@ -92,9 +91,9 @@ describe('combined memory settings', () => {
 // the throwing guard and wrapped result. Minimal failure: all-off then all-on.
 // In-memory persistence/restart ports; no Electron boot or user settings writes.
 function memoryEntry() {
-  let value = { maker: true, claudeCode: true, codex: true, pi: true };
+  let value = { maker: true, claudeCode: true, codex: true };
   let enabled = true;
-  const wire = () => ({ value: { ...value }, defaults: { maker: true, claudeCode: true, codex: true, pi: true },
+  const wire = () => ({ value: { ...value }, defaults: { maker: true, claudeCode: true, codex: true },
     isCustomized: true, customizedKeys: Object.keys(value) as Array<keyof typeof value> });
   const write = vi.fn((key: keyof typeof value, next: boolean) => { value = { ...value, [key]: next }; return wire(); });
   const prepare = vi.fn(async () => {});
@@ -127,20 +126,20 @@ function memoryEntry() {
 }
 
 describe('registered memory settings through Desktop service and MCP', () => {
-  it('returns the real wrapped conflict without writes or restart, preserving maker/Pi', async () => {
+  it('returns the real wrapped conflict without writes or restart, preserving maker and native settings', async () => {
     const entry = memoryEntry();
-    expect(await entry.call({ maker: false, claudeCode: false, codex: false, pi: false })).toMatchObject({ ok: true });
+    expect(await entry.call({ maker: false, claudeCode: false, codex: false })).toMatchObject({ ok: true });
     entry.write.mockClear(); entry.prepare.mockClear(); entry.setAgentMemory.mockClear();
-    expect(await entry.call({ maker: true, claudeCode: true, codex: true, pi: true })).toMatchObject({
+    expect(await entry.call({ maker: true, claudeCode: true, codex: true })).toMatchObject({
       ok: false, errorCode: 'MEMORY_SETTINGS_CONFLICT', data: {
         hint: expect.stringContaining('maker'), result: { conflictingFields: ['claudeCode', 'codex'], requires: { maker: false } },
       },
     });
-    expect(entry.wire().value).toEqual({ maker: false, claudeCode: false, codex: false, pi: false });
+    expect(entry.wire().value).toEqual({ maker: false, claudeCode: false, codex: false });
     expect(entry.write).not.toHaveBeenCalled(); expect(entry.prepare).not.toHaveBeenCalled();
     expect(entry.setAgentMemory).not.toHaveBeenCalled();
-    expect(await entry.call({ maker: true, pi: true })).toMatchObject({ ok: true,
-      state: { value: { maker: true, pi: true, claudeCode: false, codex: false } } });
+    expect(await entry.call({ maker: true })).toMatchObject({ ok: true,
+      state: { value: { maker: true, claudeCode: false, codex: false } } });
     for (const patch of [{ codex: true }, { claudeCode: false }]) {
       expect(await entry.call(patch)).toMatchObject({ ok: false, errorCode: 'MEMORY_SETTINGS_CONFLICT',
         data: { result: { conflictingFields: Object.keys(patch), requires: { maker: false } } } });
@@ -184,12 +183,12 @@ describe('memory settings saved from an earlier read', () => {
     expect(writeMemorySetting).not.toHaveBeenCalled();
   });
   it('checks only the first engine write, which the read covers', async () => {
-    const value = { maker: false, claudeCode: true, codex: true, pi: true };
-    const updateNative = vi.fn(async (kind: 'claude-code' | 'codex' | 'pi', next: unknown) => { value[kind === 'claude-code' ? 'claudeCode' : kind] = next as boolean; });
+    const value = { maker: false, claudeCode: true, codex: true };
+    const updateNative = vi.fn(async (kind: 'claude-code' | 'codex', next: unknown) => { value[kind === 'claude-code' ? 'claudeCode' : kind] = next as boolean; });
     const section = createMemorySettingsSection({ read: () => ({}), readState: () => ({ value }), isMakerEnabled: () => false,
       updateMaker: vi.fn(), updateNative, reset: vi.fn() });
     const guard = { assertUnchanged: vi.fn() };
-    await section.update({ claudeCode: false, pi: false }, guard);
-    expect(updateNative.mock.calls).toEqual([['claude-code', false, guard], ['pi', false, undefined]]);
+    await section.update({ claudeCode: false, codex: false }, guard);
+    expect(updateNative.mock.calls).toEqual([['claude-code', false, guard], ['codex', false, undefined]]);
   });
 });

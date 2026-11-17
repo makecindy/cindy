@@ -568,7 +568,6 @@ export function NativeCloudSections(props: Props) {
                   enabled: !bool(s('memory'), 'maker') && bool(s('memory'), 'codex'),
                   pending: disabled,
                 },
-                pi: { enabled: bool(s('memory'), 'pi'), pending: disabled },
               }}
               handleResetSettings={() => reset('memory')}
               handleMakerToggle={(next) => attempt('memory', { maker: next })}

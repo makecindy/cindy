@@ -62,7 +62,7 @@ export const additionalSettingsSchemas = {
   collaboration: z.strictObject({ workerSoftLimit: int(1, 20), workerHardLimit: int(1, 20), workerIdleReleaseMinutes: int(0, 120) }),
   agentResource: z.strictObject({ maxConcurrentCommands: int(0, 64), processPriority: z.enum(['normal', 'low', 'lowest']), capToolchainThreads: bool }),
   gitSafety: z.strictObject({ autoSnapshotEnabled: bool }),
-  memory: z.strictObject({ maker: bool, claudeCode: bool, codex: bool, pi: bool }),
+  memory: z.strictObject({ maker: bool, claudeCode: bool, codex: bool }),
   claudeCompaction: z.strictObject({ claudeCodeAutoCompactPct: int(50, 95) }),
   piCompaction: z.strictObject({ piAutoCompactPct: int(50, 95) }),
   contacts: z.strictObject({ enabled: bool }),

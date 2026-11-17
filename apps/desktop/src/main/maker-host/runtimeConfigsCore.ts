@@ -226,10 +226,6 @@ export function buildPiRuntimeConfig(host: PiRuntimeConfigHost): AgentRuntimeCon
     configurable: false,
   });
   Object.defineProperties(config, {
-    memoryEnabled: {
-      get: () => readMemorySettings().pi,
-      enumerable: true,
-    },
     makerMemoryEnabled: {
       get: () => readMemorySettings().maker,
       enumerable: true,

@@ -20,9 +20,9 @@ export async function loadMemoryContext(input: {
       projectDirectory,
     };
   }
-  const store = input.hosted ? undefined : await input.manager?.getStore(input.scopeKey);
   return {
     rules: input.scopeKey.startsWith('bot:') ? '' : MAKER_MEMORY_RULES,
-    index: input.snapshot ?? (store ? await store.getIndex() : ''),
+    // 账号级在前、项目在后的两份索引 (伙伴等只有一份的作用域照旧是那一份), 见 getPromptIndex。
+    index: input.snapshot ?? (input.hosted ? '' : await input.manager?.getPromptIndex(input.scopeKey) ?? ''),
   };
 }

@@ -8,7 +8,7 @@ import type { MemoryChangeParts } from '../maker-ipc/deferredCodexRestart.js';
 export type NativeMemoryPatch = Partial<Omit<MemorySettings, 'maker'>>;
 interface Deps {
   makerMemory: Pick<MakerMemoryManager, 'isEnabled' | 'enable' | 'disable' | 'syncNativeAgentsOff'>;
-  maker: { setAgentMemory(kind: 'claude-code' | 'codex' | 'pi', enabled: boolean): Promise<unknown> };
+  maker: { setAgentMemory(kind: 'claude-code' | 'codex', enabled: boolean): Promise<unknown> };
   writeMemorySetting: typeof writeMemorySetting;
   applyChange<T extends object>(parts: MemoryChangeParts<T>): Promise<T & { codexRestartDeferred: boolean }>;
   invalidateBridge(reason: string): Promise<void>;
@@ -25,7 +25,7 @@ export async function updateMakerMemorySettings(enabled: boolean, nativePatch: N
       guard?.assertUnchanged();
       // Save the native fields from this same request before capturing the
       // maker toggle's runtime callback. Never push Codex mid-turn here.
-      for (const key of ['claudeCode', 'codex', 'pi'] as const) {
+      for (const key of ['claudeCode', 'codex'] as const) {
         if (nativePatch[key] !== undefined) writeMemorySetting(key, nativePatch[key]);
       }
       // Persist before changing the manager. A failed maker:false write must reject the toggle
@@ -41,9 +41,6 @@ export async function updateMakerMemorySettings(enabled: boolean, nativePatch: N
         await makerMemory.syncNativeAgentsOff(['claude-code']);
       } else if (!settingsState.value.maker) {
         await maker.setAgentMemory('claude-code', settingsState.value.claudeCode);
-      }
-      if (nativePatch.pi !== undefined) {
-        await maker.setAgentMemory('pi', settingsState.value.pi);
       }
       return {
         ...result,
@@ -72,7 +69,7 @@ interface MemorySectionDeps {
   readState(): { value: MemorySettings };
   isMakerEnabled(): boolean | null;
   updateMaker(enabled: unknown, patch: NativeMemoryPatch, guard?: AppSettingsWriteGuard): Promise<unknown>;
-  updateNative(kind: 'claude-code' | 'codex' | 'pi', enabled: unknown, guard?: AppSettingsWriteGuard): Promise<unknown>;
+  updateNative(kind: 'claude-code' | 'codex', enabled: unknown, guard?: AppSettingsWriteGuard): Promise<unknown>;
   reset(): Promise<unknown>;
 }
 
@@ -82,7 +79,7 @@ export function createMemorySettingsSection(deps: MemorySectionDeps): AppSetting
     id: 'memory', title: '记忆开关', description: 'Cindy 记忆和各引擎记忆的开关。恢复默认只恢复开关，不删除已有记忆。',
     effective: 'immediate-or-when-idle',
     schema: z.strictObject({ maker: z.boolean().optional(), claudeCode: z.boolean().optional(),
-      codex: z.boolean().optional(), pi: z.boolean().optional() }),
+      codex: z.boolean().optional() }),
     read: () => ({ ...deps.read(), runtime: { maker: deps.isMakerEnabled() } }),
     update: async (patch, guard) => {
       const next = { ...deps.readState().value, ...patch };
@@ -99,14 +96,14 @@ export function createMemorySettingsSection(deps: MemorySectionDeps): AppSetting
       let result: unknown;
       if (patch.maker !== undefined) {
         const nativePatch: NativeMemoryPatch = {};
-        for (const key of ['claudeCode', 'codex', 'pi'] as const) {
+        for (const key of ['claudeCode', 'codex'] as const) {
           if (typeof patch[key] === 'boolean') nativePatch[key] = patch[key];
         }
         return deps.updateMaker(patch.maker, nativePatch, guard);
       }
       // Only the first write is checked against the read; the later ones follow this save's own.
       let firstWrite = guard;
-      for (const key of ['claudeCode', 'codex', 'pi'] as const) {
+      for (const key of ['claudeCode', 'codex'] as const) {
         if (patch[key] !== undefined) {
           await deps.updateNative(key === 'claudeCode' ? 'claude-code' : key, patch[key], firstWrite);
           firstWrite = undefined;

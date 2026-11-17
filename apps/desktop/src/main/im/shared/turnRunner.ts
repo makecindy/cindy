@@ -162,7 +162,12 @@ import {
   registerPendingExternal,
   rejectAllPending,
 } from './pendingInteractions';
-import { checkChannelDestructiveToolCall } from './channelToolPolicy';
+import { checkChannelDestructiveToolCall, withGuestMemoryConfirmation } from './channelToolPolicy';
+import {
+  isSharedChannelTurn,
+  noteSharedChannelSession,
+  sharedSessionCarriesAccountIndex,
+} from './channelSessionLanes';
 import { readXdGatewayApiKey } from './apiKey';
 import {
   hasAuthForImRoute,
@@ -1294,6 +1299,8 @@ export function createTurnRunner(
         return { kind: 'rejected', reason: 'companion_unavailable' };
       }
     }
+    // Register shared-channel memory scope before cold runtime preparation can wire the agent.
+    if (!target.botOwned && isSharedChannelTurn(args)) noteSharedChannelSession(target.row.id);
     // Only an actual incoming turn prepares a cold runtime. The existing lock bridge applies
     // pending choices and subscription recovery before an exhausted old source can block startup.
     const cold = deps.prepareUnhealthySession && deps.acquirePendingAgentSwitch
@@ -1672,9 +1679,16 @@ export function createTurnRunner(
       ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
       // Binding presence is insufficient: only an actually resolved companion
       // task may drop the mandatory policy; every other route retains it.
+      // 渠道自有任务用的是 Cindy 记忆 (含主人账号级的那一份): 访客轮次里对它的读写要主人确认。
+      // 伙伴任务用伙伴自己的记忆, 策略原样。
       ...(args.turnPermissionPolicy && !(args.inheritCompanionOwnerPermissions === true
         && args.requesterIsOwner === true && target.botOwned)
-        ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
+        ? {
+            turnPermissionPolicy: target.botOwned
+              ? args.turnPermissionPolicy
+              : withGuestMemoryConfirmation(args.turnPermissionPolicy),
+          }
+        : {}),
       ...(args.requesterIsOwner === true ? { requesterIsOwner: true } : {}),
       ...(args.onEarlyReject ? { onEarlyReject: args.onEarlyReject } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
@@ -2110,6 +2124,24 @@ export function createTurnRunner(
       if (driftRecycled) {
         await refreshSessionAfterPendingAgentSwitch(state, state.makerSession.id, userId);
         log.info('im send: project resources drifted, recycled runtime before dispatch');
+      }
+      // 这段对话已登记为「别人也能说话」, 但这个任务是在登记之前启动的, 提示词里还带着主人
+      // 账号级记忆的索引 (把运行中的桌面任务接管到群里; 升级前就在运行的群聊任务)。逐轮确认
+      // 管不到已经写进提示词的内容, 所以先以 runtime-refresh 回收, 再按 DB 行重建 —— 重建时
+      // 启动钩子不再带索引 (cindy-memory.md §7)。与上面的资源漂移回收同一条路。
+      if (deps.acquirePendingAgentSwitch && sharedSessionCarriesAccountIndex(state.makerSession.id)) {
+        let indexRecycled = false;
+        try {
+          indexRecycled = (await getMaker().closeSessionIfCurrent(state.makerSession, 'runtime-refresh')) === 'closed';
+        } catch (err) {
+          indexRecycled = state.makerSession.getStatus() !== 'active';
+          log.warn('im send: could not restart a shared conversation task without the account memory index',
+            err instanceof Error ? err.message : String(err));
+        }
+        if (indexRecycled) {
+          await refreshSessionAfterPendingAgentSwitch(state, state.makerSession.id, userId);
+          log.info('im send: restarted task without the account memory index before dispatch');
+        }
       }
       // 回收+重建是异步窗口:/stop 可能恰好落在其中;喊停后不得再开始执行,与上方
       // aborted 分支同口径收尾(此时尚未发送,无需补终态章)。经函数读取:上方检查

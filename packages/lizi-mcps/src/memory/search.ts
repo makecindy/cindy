@@ -21,11 +21,11 @@ export function registerMemorySearchTool(registry: MemoryToolRegistry, deps: Mem
     name: 'memory_search',
     category: 'search',
     description:
-      '关键词检索当前 workdir 的 memory (按 title/description/body)。优先短语精确匹配; ' +
+      '关键词检索当前任务账号级与项目的 memory (按 title/description/body)。优先短语精确匹配; ' +
       '短语无命中时按空格拆词召回: 只保留覆盖至少一半关键词的命中 (无满足者时退回全部; ' +
       '2 个词时再滤掉分数过低的单关键词命中), 覆盖越多排得越前, ' +
       '片段展示命中词附近的上下文并用 <mark> 标记。' +
-      '返回按相关度排序的命中列表 (filename / type / title / snippet / score)。' +
+      '返回按相关度排序的命中列表 (scope / filename / type / title / snippet / score)。' +
       ' 可选 type 限定类目, limit 默认 10 (上限 50)。' +
       ' 拿到候选后走 memory_read 拉全文。',
     inputShape: {
@@ -37,11 +37,18 @@ export function registerMemorySearchTool(registry: MemoryToolRegistry, deps: Mem
       limit: z.number().int().min(1).max(50).optional().describe('默认 10'),
     },
     handler: async ({ query, type, limit }) =>
-      withStore(deps, async (store) => {
+      withStore(deps, async (_store, ctx) => {
         const opts: { type?: typeof type; limit?: number } = {};
         if (type) opts.type = type;
         if (limit) opts.limit = limit;
-        const hits = await store.search(query, opts);
+        const all = [];
+        for (const scope of ['project', 'user'] as const) {
+          const store = await ctx.open(scope);
+          if (store) for (const hit of await store.search(query, opts)) all.push({ ...hit, scope });
+        }
+        // bm25: 越小越相关; 两份各自已排好, 合并后再取前 limit 条。
+        const max = limit ?? 10;
+        const hits = all.sort((a, b) => a.score - b.score).slice(0, max);
         let provided: MemoryProviderHit[];
         let truncated = false;
         try {
@@ -56,7 +63,6 @@ export function registerMemorySearchTool(registry: MemoryToolRegistry, deps: Mem
         // Preserve each source's own ordering; scores from different indexes are
         // not comparable. Cindy and providers alternate within the caller's limit.
         const merged: Array<(typeof hits)[number] | MemoryProviderHit> = [];
-        const max = limit ?? 10;
         for (let i = 0; merged.length < max && (i < hits.length || i < provided.length); i++) {
           if (i < hits.length) merged.push(hits[i]);
           if (i < provided.length && merged.length < max) merged.push(provided[i]);
