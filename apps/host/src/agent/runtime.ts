@@ -425,6 +425,18 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
         // The desktop's withCodexRecoveryRequirement.
         return recovery ? { ...scoped, recoveryRequiredReason: recovery.reason, credentialScope: recovery.credentialScope } : scoped;
       }
+      // The desktop's binding gate (auth-adapters.ts:1560-1567), narrowed to the one state where
+      // the two reasons would otherwise invert: the shared link just failed AND the profile still
+      // holds a readable OAuth file that is not bound to this owner. That is a binding problem —
+      // a credential left behind by another owner — so report it as one instead of blaming link
+      // privileges the user cannot fix by reconnecting. The desktop's own oauth-bearer branch
+      // returns before its binding gate, so this must sit after it; the default path below also
+      // needs it, because otherwise it would fall back to the generic gateway reason
+      // (codex-code-review P1).
+      if (opts?.credentialMode !== 'oauth-bearer' && sharedLinkReason
+        && local.authenticated && local.authSource === 'oauth' && !isNativeProviderAuthBound('openai')) {
+        return gatewayState.authenticated ? gatewayState : { authenticated: false, errorReason: 'oauth_not_bound' };
+      }
       if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer') {
         // The desktop's codexRecoveryRequiredErrorState.
         if (recovery) return { authenticated: false, errorReason: recovery.reason, credentialScope: recovery.credentialScope };
@@ -442,9 +454,10 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       // gateway credential keeps winning, exactly as readClaudeApiKey() does on the desktop, so
       // only the unauthenticated fallback changes. `getState()` with no arguments is the entry
       // BaseAgent.getAuthState() uses, so this is the branch that decides what a failing implicit
-      // session reports (codex-code-review P1).
-      if (!gatewayState.authenticated && sharedLinkReason) {
-        return { ...local, authenticated: false, errorReason: sharedLinkReason };
+      // session reports (codex-code-review P1). A readable local file (the desktop's
+      // withCodexRecoveryRequirement path above) keeps its own outcome.
+      if (!gatewayState.authenticated && !local.authenticated && sharedLinkReason) {
+        return { ...local, errorReason: sharedLinkReason };
       }
       return gatewayState;
     },
