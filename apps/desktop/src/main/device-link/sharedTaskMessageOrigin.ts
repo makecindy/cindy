@@ -1,6 +1,6 @@
 import { readMessageSourceGroup } from '@cindy/maker-shared/message-source';
 import { queueItemVisibleText } from '@cindy/maker-shared/queue';
-import { projectMcpAppContent } from '@cindy/maker-shared/mcp-apps';
+import { projectMcpAppHistory } from '../mcp-apps/history.js';
 
 const HOOK_SCHEDULE_ID_PREFIX = 'hook:';
 
@@ -58,7 +58,7 @@ export function redactMessageRowForSharedGuest<T>(message: T): T {
   if (!message || typeof message !== 'object' || Array.isArray(message)) return message;
   const record = message as Record<string, unknown>;
   let agentMeta = redactMessageOriginForSharedGuest(record.agentMeta);
-  const content = projectMcpAppContent(record.content,
+  const content = projectMcpAppHistory(record.content,
     !!record.agentMeta && typeof record.agentMeta === 'object' &&
     (record.agentMeta as Record<string, unknown>).mcpApp === true);
   // Preserve independent reply visibility without disclosing source identity

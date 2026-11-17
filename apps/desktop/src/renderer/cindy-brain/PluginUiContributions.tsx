@@ -1,3 +1,4 @@
+import { pluginSourceTooltip } from '@cindy/maker-shared/mcp-apps';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isHostUiPosition, type GhostHostUiContribution, type GhostHostUiPosition } from '@cindy/plugin-protocol';
@@ -10,13 +11,13 @@ import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Spinner } from '@/components/ui/spinner';
+import { GhostPluginIcon } from '@/features/plugin/GhostPluginIcon';
 import { toast } from '@/lib/toast';
 import { ChevronDown, ChevronRight, Puzzle } from 'lucide-react';
 import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
 import { MAIN_VIEW_ICONS } from './mainViewIcons';
-import { GhostPluginIcon } from '@/features/plugin/GhostPluginIcon';
 import { isPluginUiElementVisible, subscribePluginUiRegions } from './pluginUiVisibility';
 const PluginUiView = lazy(() => import('./PluginUiView').then(module => ({ default: module.PluginUiView })));
 const openPluginUiView = async (instanceId: string, viewId: string, sessionId: string | null, input?: Record<string, unknown>) =>
@@ -272,7 +273,8 @@ function EntryControl({ entry, sessionId, clientId, active, appearance }: { entr
   if (state?.visible === false) return null;
   const title = state?.title ?? action.title;
   const header = appearance === 'composer-header';
-  const controlTitle = header ? `${title} · ${entry.ghost.manifest.name}` : entry.ghost.manifest.name;
+  const sourceTitle = pluginSourceTooltip(entry.ghost.manifest.name, entry.ghost.installationSource, t);
+  const controlTitle = header ? `${title} · ${sourceTitle}` : sourceTitle;
   const label = <>{action.position === 'composer.toolbar' && entry.ghost.iconDataUrl &&
     <span aria-hidden="true" className="size-5 shrink-0"><GhostPluginIcon iconId={entry.ghost.manifest.id}
       iconName={entry.ghost.manifest.name} iconDataUrl={entry.ghost.iconDataUrl} size="mini" /></span>}
@@ -289,7 +291,7 @@ function EntryControl({ entry, sessionId, clientId, active, appearance }: { entr
   if (appearance === 'rail') return <SidebarIconButton icon={Icon} label={`${title} · ${entry.ghost.manifest.name}`}
     disabled={pending || state?.disabled} onClick={() => void run()} />;
   if (appearance === 'navigation') return <button type="button" disabled={pending || state?.disabled} onClick={() => void run()}
-    aria-label={`${title} · ${entry.ghost.manifest.name}`} title={entry.ghost.manifest.name}
+    aria-label={`${title} · ${entry.ghost.manifest.name}`} title={sourceTitle}
     className="flex h-8 w-full items-center gap-2.5 rounded-full px-3 text-sm font-normal text-[var(--sidebar-nav-text)] transition-colors hover:bg-sidebar-item-hover disabled:opacity-40">
     <Icon size={15} strokeWidth={1.8} className="shrink-0" /><span className="truncate">{title}</span>
   </button>;
@@ -301,7 +303,7 @@ function EntryControl({ entry, sessionId, clientId, active, appearance }: { entr
       className={header ? 'max-w-48' : undefined} title={controlTitle}>{label}</Button></PopoverTrigger>
     <PopoverContent align="start" side={action.position === 'composer.header' || action.position === 'composer.toolbar' || action.position === 'statusbar' ? 'top' : 'bottom'}
       aria-label={title} className="w-[min(26rem,calc(100vw-2rem))] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto p-2">
-      {open && active && <Suspense fallback={<Spinner size={16} />}><PluginUiView ghost={entry.ghost} viewId={action.view}
+      {open && active && <Suspense fallback={<Spinner size={16} />}><PluginUiView chrome="panel" ghost={entry.ghost} viewId={action.view}
         sessionId={sessionId} input={action.arguments} onUnavailable={() => setOpen(false)} /></Suspense>}
     </PopoverContent>
   </Popover>;
@@ -343,6 +345,7 @@ export function PluginUiSidebarSections({ entries, sessionId }: { entries: reado
   </div>;
 }
 function PluginUiSidebarSection({ entry, sessionId }: { entry: PluginUiEntry; sessionId: string | null }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [visible, setVisible] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -359,13 +362,13 @@ function PluginUiSidebarSection({ entry, sessionId }: { entry: PluginUiEntry; se
   return <div ref={root} className="min-w-0">
     {/* Ordinary action hover frame: DESIGN §5 Step 2 pill; the chevron is an intrinsic icon. */}
     <button type="button" aria-expanded={expanded} disabled={!available || state?.disabled}
-      onClick={() => setExpanded(value => !value)} title={title}
+      onClick={() => setExpanded(value => !value)} title={pluginSourceTooltip(entry.ghost.manifest.name, entry.ghost.installationSource, t)}
       className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-full px-2 text-left text-12 text-[var(--text-secondary)] hover:bg-sidebar-item-hover disabled:opacity-40">
       {expanded ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />}
       <span className="truncate">{title}</span>
     </button>
     <SectionCollapse collapsed={!expanded}>
-      {expanded && visible && available && <Suspense fallback={<Spinner size={16} />}><PluginUiView ghost={entry.ghost}
+      {expanded && visible && available && <Suspense fallback={<Spinner size={16} />}><PluginUiView chrome="panel" ghost={entry.ghost}
         viewId={view!.id} sessionId={view!.scope === 'task' ? sessionId : null} input={entry.contribution.arguments} /></Suspense>}
     </SectionCollapse>
   </div>;

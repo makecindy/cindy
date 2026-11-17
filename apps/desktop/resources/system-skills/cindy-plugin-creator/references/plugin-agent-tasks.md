@@ -314,7 +314,7 @@ await cindy.tasks.send({ taskId, requestKey, expectedRevision, text, context, re
 
 `models()` 返回统一目录可选项的完整 route、efforts 和 supportsFastMode。用户明确选择后将 route 原样传给 create，或用 `setModel({taskId, expectedRevision, route})` 修改已有自有任务。运行中按普通任务的安全边界切换，不修改应用默认。两方法使用前检查 capabilities.operations。
 
-**IM 共用项目与模型（新增，尚未发布）**：检查 `capabilities().imProjects === true`，并声明、获批
+**IM 共用项目与模型**：检查 `capabilities().imProjects === true`，并声明、获批
 `agent.tasks` 与 `agent.targets`。`imProjects()` 返回 `{projects:[{id,label,directory?}]}`，包含
 内置 `chat` 与宿主电脑侧栏项目；id 原样使用，不构造路径。项目选择与聊天绑定由插件保存。
 `create({requestKey,title,imProject:id})` 同时读取该项目的模型、来源、推理档与权限；不能再带
@@ -328,7 +328,7 @@ PROJECT_MISMATCH 表示换了项目或任务被移动，应新建任务并保留
 不能改投插件默认模型。权限收紧与项目移除会在派发时再检查，插件不能绕过。项目属于插件宿主电脑，
 远程模型来源不把项目搬到另一台电脑。
 
-**远程模型执行（新增，尚未发布）**：`capabilities().remoteRoutes === true` 时，
+**远程模型执行**：`capabilities().remoteRoutes === true` 时，
 `create` 和 `setModel` 的完整 route 可带 `agentDeviceId`（同账号其他电脑或 `share:<shareId>`）。
 省略表示插件运行电脑；它选择 Agent 执行来源，任务记录、文件、权限和结果仍归插件运行电脑。
 先读取该能力再给统一选择器传 `allowRemote:true`，将返回的整份 route 原样保存与回传。
@@ -421,7 +421,7 @@ run 的 acceptedConfig 是接收配置，execution 是观测到的原生 instanc
 实验性接口尚未提供全部恢复路径的最终对账和事件补拉，因此暂不用于无人值守正式评测。
 
 
-## 4.11.7 伙伴委派协议与回执（未发布）
+## 4.11.7 伙伴委派协议与回执
 
 此增量在插件系统实现，不创建普通任务代替伙伴，不更改伙伴身份、模型、目录或权限档。
 插件声明 `agent: { tasks: true, targets: true, delegation: true }`；`agent:delegation`
@@ -446,7 +446,7 @@ Auto 使用回执的任务范围并保留主人的限制；Ask、Full Access 沿
 `{settled:true,requestKey,clientId}`。缺少 settled 或请求不匹配时不得解除未确认的执行占位；旧 Host 的回执行为不变。
 执行能力声明及单元测试通过不代表某个业务插件已通过真实端到端验收。
 
-### 委派收据查询（未发布）
+### 委派收据查询
 
 先检查 targets.capabilities().delegation 的 execution、receiptQuery 和 settled 均为 true。
 显式 delegation 的 send 成功响应新增 executionId、requestKey、target；同键同内容仍返回原收据。
@@ -458,7 +458,7 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
 恢复尚未结束时保持 settled=false；恢复最终失败后记录原输入的 failed 终态，即使运行时已重建也保留原 instanceId/generation，不结算后来排队的请求。
 取消只撤回该插件输入，只有原队列和执行确已结束时 settled=true。不读取伙伴历史。
 
-## 4.11.8 只读查看项目任务（未发布）
+## 4.11.8 只读查看项目任务
 
 插件需要按项目展示任务列表和状态（例如看板）时，声明 `"agent": { "observe": true }`，在本机 Desktop 逻辑页使用 `cindy.observe`。
 它不依赖、也不授予 `agent.tasks` / `agent.targets`；`agent:observe` 单列为独立权限，安装/更新时已确认的不重复询问，否则首次调用复用既有宿主确认。
@@ -473,7 +473,7 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
 - `openTask({taskId})`：在主窗口打开该任务；Cindy 未在前台时不抢焦点。只接受 `projectTasks` 能列出的任务，否则返回 `TARGET_UNAVAILABLE`。返回 `{opened:true}`。
 - 只读，不能发送消息、修改、归档或停止任务；需要这些操作请改用 `cindy.tasks` / `cindy.targets` 并声明对应权限。状态变化不推送，插件自行按需刷新。
 
-## 4.11.9 查看伙伴和状态（未发布）
+## 4.11.9 查看伙伴和状态
 
 插件要把伙伴画成角色、头像墙或状态面板时，声明 `"agent": { "companions": true }`，在本机 Desktop 逻辑页使用 `cindy.companions`。
 它是一项独立权限（`agent:companions`），覆盖伙伴名单、实时状态、待处理请求（内容与对话卡片上看到的一致）、最新一条回复与最近对话；安装/更新时已确认的不重复询问，否则首次调用复用既有宿主确认。

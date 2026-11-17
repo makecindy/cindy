@@ -1,3 +1,4 @@
+import { pluginSourceTooltip } from '@cindy/maker-shared/mcp-apps';
 /**
  * plugin-view —— 右侧栏里承载插件页面的页签(全局页签,不跟对话)。
  *
@@ -40,11 +41,11 @@ function useInstalledGhostByInstance(instanceId: string): InstalledGhost | undef
 function PluginViewTabPillTitle({ state, t }: { state: PluginViewTabState; t: TFunction }) {
   const ghost = useInstalledGhostByInstance(state.instanceId);
   return (
-    <>
+    <span title={ghost ? pluginSourceTooltip(ghost.manifest.name, ghost.installationSource, t, state.resourceViewId ? getApprovedGhostHostUi(ghost)?.views?.find(view => view.id === state.resourceViewId)?.title : undefined) : undefined}>
       {ghost
         ? (state.resourceViewId ? getApprovedGhostHostUi(ghost)?.views?.find(view => view.id === state.resourceViewId)?.title ?? ghost.manifest.name : globalTabTitleForGhost(ghost, effectivePluginView(state, ghost)))
         : t('rightSidebar.tabs.kinds.pluginView')}
-    </>
+    </span>
   );
 }
 
@@ -64,7 +65,7 @@ function PluginViewBody({ state }: TabKindBodyProps<PluginViewTabState>) {
   const runtimeState = useGhostRuntimeState(state.instanceId);
   // 停用 / 卸载的瞬间投影层已把页签隐藏,这里只兜住收起前的一两帧。
   if (!ghost || ghost.enabled === false) return null;
-  if (state.resourceViewId) return <PluginUiView fillContainer ghost={ghost} viewId={state.resourceViewId} sessionId={null} input={state.resourceInput} />;
+  if (state.resourceViewId) return <PluginUiView chrome="panel" sizing="fill" ghost={ghost} viewId={state.resourceViewId} sessionId={null} input={state.resourceInput} />;
   if (runtimeState === 'crashed' || runtimeState === 'fused') {
     return <GhostPanelError ghost={ghost} state={runtimeState} />;
   }

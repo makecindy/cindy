@@ -8227,8 +8227,8 @@
         "hostTools_controlDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben und Projekte bearbeiten, archivieren, wiederherstellen und steuern sowie native Aufgabendateien auf diesem Computer importieren.",
         "hostTools_handoff": "Aufgabennachrichten",
         "hostTools_handoffDetail": "Mit Cindys Werkzeugen Nachrichten an vorhandene Aufgaben senden. Vorgänge, die eine aktuelle Aufgabe benötigen, erfordern ein ausdrücklich angegebenes Ziel.",
-        "hostTools_usage": "Abonnementnutzung lesen",
-        "hostTools_usageDetail": "Liest Kontokennungen, Tarife, Kontingentzeiträume und Aktualisierungszeiten der Claude- und Codex-Abonnements, die auf diesem Computer mit deinem aktuellen Cindy-Konto verbunden sind. Kein Zugriff auf E-Mail-Adressen, Zugangsdaten, Dateien oder andere Computer. Konten können nicht geändert werden.",
+        "hostTools_usage": "Nutzung und Anbietergruppenstatus lesen",
+        "hostTools_usageDetail": "Liest IDs, Tarife, Kontingentzeiträume und Aktualisierungszeiten lokaler Claude/Codex-Konten, die mit deinem Cindy-Konto verbunden sind. Liest erfasste Nutzung nach Tag und Modell, geschätzte Kosten, Konfiguration und Status von Anbietergruppen sowie sichtbare IDs, Namen und Avatare von Mitgliedern und Geräten auf diesem Computer oder anderen autorisierten Computern desselben Kontos. Kein Zugriff auf Anmelde-E-Mail-Adressen von Abonnements, Kontoverzeichnisse, interne Identitätsfingerabdrücke, Zugangsdaten oder Dateien; keine Änderung von Konten oder Einstellungen.",
         "hostTools_settings": "App-Einstellungen",
         "hostTools_settingsDetail": "Mit Cindys Werkzeugen die App-Konfiguration lesen und ändern. Geheimnisse werden nicht zurückgegeben; vertrauliche Eingaben machst du selbst.",
         "hostTools_scheduler": "Automatisierungsverwaltung",
@@ -10880,7 +10880,12 @@
       "summary": "Selbstvorstellung",
       "summaryPlaceholder": "Zum Beispiel: ein Romanautor, der Fortsetzungsgeschichten liebt, trockenen Humor hat und davon fasziniert ist, was Figuren antreibt.",
       "avatarSelectionFailed": "Das Bild konnte nicht gelesen werden. Wähle ein PNG-, JPEG- oder WebP-Bild bis 5 MB.",
-      "personality": "Persönlichkeit & Gesprächsstil"
+      "personality": "Persönlichkeit & Gesprächsstil",
+      "sourceLength": "{{length}} / {{limit}} UTF-16-Einheiten (ohne umgebende Leerzeichen).",
+      "sourceExcess": "Das Limit ist um {{excess}} Einheiten überschritten. Kürze den Text vor dem Speichern.",
+      "sourceTooLong": "Dieser Text ist zu lang zum Speichern. Bearbeite ihn, um fortzufahren.",
+      "sourceRecovery": "Das gespeicherte Original bleibt unverändert, der vollständige Entwurf auf dieser Seite. Füge den kopierten Text an einem sicheren Ort ein und prüfe seine Vollständigkeit, bevor du ihn kürzt oder Änderungen verwirfst.",
+      "sourceCopy": "Vollständigen Text kopieren"
     },
     "nameLabel": "Wie sollen wir den Freund nennen?",
     "close": "Schließen",
@@ -12969,7 +12974,7 @@
           "reasoningDominated": "Das Nachdenken hat den Großteil des Ausgabebudgets verbraucht, die Antwort ist daher möglicherweise unvollständig. Senke die Denkintensität oder komprimiere zuerst den Verlauf und mach dann weiter.",
           "generic": "Das Modell hat die maximale Ausgabelänge erreicht, diese Antwort ist daher möglicherweise unvollständig. Sende eine neue Nachricht, um fortzufahren. Passiert das wiederholt, senke die Denkintensität oder komprimiere zuerst den Verlauf.",
           "join": "{{usage}} {{guidance}}",
-          "silentStopExhausted": "Das Modell hat mehrmals hintereinander leere Antworten geliefert. Das automatische Fortsetzen ist pausiert."
+          "silentStopExhausted": "Eine leere Antwort wurde erkannt. Die automatische Fortsetzung ist pausiert."
         },
         "permission": {
           "autoReviewUnavailable": "Die automatische Prüfung wurde nicht abgeschlossen. Bestätige, ob diese Aktion erlaubt werden soll.",
@@ -14993,6 +14998,7 @@
       "pluginDisabledUnnamed": "Automatische Prüfungen sind blockiert: Ein benötigtes Plugin ist deaktiviert. Nach dem Aktivieren laufen sie automatisch weiter.",
       "installPlugin": "Plugin installieren",
       "openPlugin": "Plugin öffnen",
+      "enablePlugin": "Plugin aktivieren",
       "dismissTitle": "Hinweis auf früheren Fehler schließen"
     },
     "worktreeRestoreBanner": {
@@ -19042,7 +19048,7 @@
       "steerFailed": "Steuerung fehlgeschlagen: {{message}}",
       "qrExpired": "QR-Code abgelaufen, bitte starte erneut",
       "registrationFailed": "Erstellung fehlgeschlagen, bitte versuche es später erneut",
-      "silentStopExhausted": "Das Modell hat wiederholt leere Antworten zurückgegeben; die automatische Fortsetzung ist pausiert. Klicke auf „Fortsetzen“, um die Aufgabe fortzusetzen.",
+      "silentStopExhausted": "Eine leere Antwort wurde erkannt. Die automatische Fortsetzung ist pausiert.",
       "executionResultUnavailable": "Das Ausführungsergebnis konnte nicht abgerufen werden. Die automatische Fortsetzung wurde gestoppt. Bitte den Assistenten, das vorhandene Ausführungsergebnis zu prüfen.",
       "outputLimit": "Das Modell hat sein Ausgabelimit erreicht. Diese Antwort ist möglicherweise unvollständig. Sende eine neue Nachricht, um fortzufahren. Wenn dies wiederholt auftritt, reduziere die Denkintensität oder komprimiere zuerst den Gesprächsverlauf.",
       "outputLimitReasoning": "Das Denken hat den Großteil des Ausgabebudgets dieser Anfrage verbraucht. Die Antwort ist möglicherweise unvollständig. Reduziere die Denkintensität oder komprimiere den Gesprächsverlauf, bevor du fortfährst.",
@@ -19636,7 +19642,8 @@
         "expired": "Diese Geschenkkarte kann nicht mehr eingelöst werden. Die Frist ist abgelaufen.",
         "voided": "Diese Geschenkkarte wurde für ungültig erklärt.",
         "rateLimited": "Zu viele Versuche. Versuche es später erneut.",
-        "failed": "Die Geschenkkarte konnte nicht eingelöst werden. Versuche es später erneut."
+        "failed": "Die Geschenkkarte konnte nicht eingelöst werden. Versuche es später erneut.",
+        "personalRequired": "Geschenkkarten können nur mit einem persönlichen Konto eingelöst werden."
       }
     },
     "usage": {
@@ -21009,7 +21016,7 @@
     "loadFailed": "Die App konnte nicht geladen werden. Prüfe die Verbindung und lade sie neu.",
     "updateRequired": "Dieser Computer unterstützt MCP Apps noch nicht. Aktualisiere Cindy auf diesem Computer und versuch es erneut.",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "Gesendet von $t(mcpApps.appName) „{{name}}“",
     "serverId": "MCP-Server-ID: {{id}}",
     "exitFullscreen": "Vollbild beenden",
@@ -21023,7 +21030,19 @@
     "pluginCspRejected": "Die Seite hat eine nicht deklarierte Domain angefordert und wurde blockiert.",
     "filesOnExecutionComputer": "Dateiinhalt auf dem ausführenden Computer anzeigen",
     "awaitingApproval": "Wartet auf deine Genehmigung",
-    "pendingApprovals": "{{count}} ausstehende Genehmigungen"
+    "pendingApprovals": "{{count}} ausstehende Genehmigungen",
+    "source": {
+      "official": "Offiziell von Cindy",
+      "organization": "Organisation · {{namespace}}",
+      "market": "Plugin-Markt",
+      "third-party": "Drittanbieterquelle",
+      "local": "Lokal installiert",
+      "unknown": "Unbekannte Quelle"
+    },
+    "customMcp": "Benutzerdefiniertes MCP",
+    "sourceLabel": "Quelle",
+    "signatureLabel": "Signatur",
+    "fullscreen": "Vollbild"
   },
   "richAnswer": {
     "invalidImageReference": "Dieser Bildverweis ist ungültig.",

@@ -62,6 +62,7 @@ export interface GhostInstallConsentRequest {
   /** Host-selected presentation; capability confirmations do not install/update a package. */
   purpose?: 'task-capability' | 'share-replace' | 'ui-capability';
   requestId: string;
+  installationSource?: import('@cindy/maker-shared/mcp-apps').PluginInstallationSource;
   /** Host-verified trust shown on the local installation dialog. */
   trust?: GhostTrustLevel;
   initiator: GhostInstallConsentInitiator;
