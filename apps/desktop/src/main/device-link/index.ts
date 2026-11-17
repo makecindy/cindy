@@ -89,6 +89,8 @@ import { onQuit } from '../lifecycle';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
 import { createOutboundHttpAgentWithDecision, type OutboundSocketProxyDecision } from '../maker-host/outbound-fetch.desktop';
+import { createPinnedSocketProxyStore } from './pinnedSocketProxy';
+import { classifyPeerTransportRoute } from './peerTransportRoute';
 import {
   DeviceLinkOwnershipArbiter,
   createSqliteExclusiveFileLock,
@@ -238,14 +240,14 @@ const relayDnsLookup = createDnsFallbackLookup({ log });
 const WS_PATH = '/api/device-link/ws';
 
 /**
- * 每条 relay socket 在**建连那一刻**钉住的出站判定(脱敏地址 / 直连原因)。
+ * 每条 relay socket **真正建立之后**钉住的出站判定(脱敏地址 / 直连原因)。
  *
  * 诊断(#9537)必须报「活着的 socket 走没走代理」,而不是「现在这份系统 / PAC 配置解析
  * 出来是什么」:socket 建立之后改了系统代理,重新解析会得到与这条 socket 不同的结论,
  * banner 于是信心十足地指认一个根本没在用的代理,或者反过来漏报真实在用的那个
- * (Codex review P1)。判定随建连产生、重连时覆盖。
+ * (Codex review P1)。判定随建连产生、重连时覆盖;写入时机见 pinnedSocketProxy.ts。
  */
-const pinnedSocketProxyByUrl = new Map<string, OutboundSocketProxyDecision>();
+const pinnedSocketProxy = createPinnedSocketProxyStore();
 
 /** 官方中转的 WebSocket 地址:主连接走自建中转时,跨账号 peer 仍连这里。 */
 function officialWsUrl(): string {
@@ -268,14 +270,28 @@ export function deviceLinkPeerTransportUrl(deviceId: string): string | null {
   if (!client) return null;
   const conn = client.connectionFor(deviceId);
   const cross = client.crossAccountConnection();
-  if (conn === client) {
+  const legacy = client.legacyConnection();
+  const route = classifyPeerTransportRoute({
+    isPrimary: conn === client,
+    isLegacy: !!legacy && conn === legacy,
+    isCrossAccount: conn === cross,
+    isScopedPeer: isScopedPeer(deviceId),
+  });
+  if (route === 'primary') {
     // 对端在主连接上:agent-net 承载时实际 URL 由节点协商决定,静态不可知。
     return primaryUsesEncryptedTransport ? null : wsUrl();
   }
-  if (conn === cross) {
+  if (route === 'cross-account') {
     // 跨账号 / 共享任务:独立的官方连接(自建中转时);无自建中转时这条连接是 legacy
     // 连接,URL 与官方 base 相同 —— 两种情况都指向官方 base。
     return officialWsUrl();
+  }
+  if (route === 'legacy') {
+    // 旧同账号对端被路由到独立的 legacy 连接(Agent-Net 开着 legacy 兜底):那条连接用的
+    // 就是当前中转(legacyConnectionOptions.getWsUrl = wsUrl),URL 是已知的。早先把它
+    // 当成「不可知的 scoped 路由连接」一律返回 null,会让这种配置下所有 degraded 的
+    // 中继路径会话都变成「没有判定」(Codex review P2)。
+    return wsUrl();
   }
   // scoped agent-net 路由连接:URL 由 route server 决定(含 /api/agent-net/guest 变体),
   // 静态不可知 → 不给判定,宁可不报也不谎称走了代理。
@@ -316,7 +332,7 @@ export function deviceLinkPeerDataPath(deviceId: string): 'direct' | 'relay' | n
 export function deviceLinkPeerPinnedProxy(deviceId: string): OutboundSocketProxyDecision | null {
   const url = deviceLinkPeerTransportUrl(deviceId);
   if (!url) return null;
-  return pinnedSocketProxyByUrl.get(url) ?? null;
+  return pinnedSocketProxy.get(url);
 }
 
 /** relay REST base(media presign / devices 等);供 mediaTransfer / ipc 复用。 */
@@ -1059,18 +1075,20 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // lookup:DNS 失败/慢解析时回退最近成功地址(弱网 VPN 下 DNS 单段可吃掉
     // 大半个握手窗口);代理模式下由代理解析域名,本层自然旁路。
     createWebSocket: async (url, headers) => {
-      // 建连这一刻就把「这条 socket 走没走代理」钉下来:诊断要报的是**活着的 socket**
-      // 的事实,不是当前系统 / PAC 配置的重新解析结果 —— socket 建好之后改了系统代理,
-      // 再解析一次得到的结论可能与这条 socket 正好相反(Codex review P1)。重连时覆盖。
+      // 建连这一刻就把「这条 socket 走没走代理」问出来,并挂到 socket 上:判定只在这条
+      // socket **真的 open** 之后才生效 —— 客户端会按连接世代丢弃过期的建连结果
+      // (packages/device-link/src/client.ts 的 epoch 闸),过期的那次若先写,诊断就会报
+      // 一条根本没被采用的线路(Codex review P1)。
       const { agent, decision } = await createOutboundHttpAgentWithDecision(url);
-      pinnedSocketProxyByUrl.set(url, decision);
-      return new WebSocket(url, {
+      const ws = new WebSocket(url, {
         headers,
         agent,
         // ClientOptions 类型未声明 lookup,但 ws 会把额外选项透传给
         // http.request(其 RequestOptions 原生支持 lookup)→ net/tls 建连。
         lookup: relayDnsLookup,
       } as WebSocket.ClientOptions);
+      pinnedSocketProxy.track(url, decision, ws);
+      return ws;
     },
     logger: {
       debug: (...args) => log.debug(...args),

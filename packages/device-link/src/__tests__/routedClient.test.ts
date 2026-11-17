@@ -9,7 +9,7 @@
  * - tier:unit,fake WebSocket,无真实等待。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DeviceLinkClientOptions, WsLike } from '../client.js';
+import type { DeviceLinkClient, DeviceLinkClientOptions, WsLike } from '../client.js';
 import { RoutedDeviceLinkClient } from '../routedClient.js';
 import { PROTOCOL_VERSION, SHARED_TASK_RELAY_CAPABILITY, sharedTaskHostPeer, type Envelope } from '../protocol.js';
 
@@ -379,4 +379,42 @@ describe('RoutedDeviceLinkClient', () => {
     expect(presence(h.socketTo(RELAY))).toMatchObject({ remoteControlEnabled: false });
     h.client.stop();
   });
+
+  // 桌面端 #9537 的 Codex review P1:数据面路径(直连 ↔ relay)的变化必须从**承载该
+  // peer 的那条连接**汇总到路由客户端上 —— 基类只发自己那条连接上的变化,被路由到
+  // legacy / 跨账号 / scoped 连接的 peer 换路时事件留在那条连接上,host 收不到,
+  // 连接诊断会一直按旧路径的判定提示用户。
+  it('aggregates peer path changes from the routed connections', async () => {
+    const sockets: FakeWs[] = [];
+    const options = (url: string): DeviceLinkClientOptions => ({
+      getWsUrl: () => url, getToken: async () => 'unit-token',
+      getHello: () => ({ deviceName: 'unit', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (address, headers) => { const socket = new FakeWs(address, headers); sockets.push(socket); return socket; },
+    });
+    const client = new RoutedDeviceLinkClient(options(RELAY), { active: () => true, options: options(OFFICIAL) },
+      { active: () => true, useForPeer: peer => peer === 'old-device', options: options('ws://legacy') });
+    client.start();
+    await vi.advanceTimersByTimeAsync(1);
+    const changes: Array<{ deviceId: string; path: string }> = [];
+    const off = client.onPeerPathChanged(change => changes.push({ deviceId: change.deviceId, path: change.path }));
+
+    // 旧同账号对端走独立的 legacy 连接:它的换路事件在那条连接上,路由客户端要能收到。
+    const legacy = client.connectionFor('old-device');
+    expect(legacy).not.toBe(client);
+    emitPathChange(legacy, 'old-device', 'direct');
+    expect(changes).toEqual([{ deviceId: 'old-device', path: 'direct' }]);
+
+    // 退订之后不再收到(事件订阅要能释放)。
+    off();
+    emitPathChange(legacy, 'old-device', 'relay');
+    expect(changes).toHaveLength(1);
+    client.stop();
+  });
 });
+
+/** 路径变化在 client 内部是私有发射器:单测直接触发它,验证路由层有没有汇总上来。 */
+function emitPathChange(connection: DeviceLinkClient, deviceId: string, path: 'direct' | 'relay'): void {
+  (connection as unknown as {
+    emitPeerPathChanged(change: { deviceId: string; path: 'direct' | 'relay' }): void;
+  }).emitPeerPathChanged({ deviceId, path });
+}

@@ -18,7 +18,7 @@ import {
   type DeviceLinkStatus,
   type InboundFrameHandler,
 } from './client.js';
-import type { DeviceLinkPeerLinkSnapshot } from './directPath.js';
+import type { DeviceLinkPeerLinkSnapshot, DeviceLinkPeerPathChanged } from './directPath.js';
 import {
   isScopedPeer,
   parseSharedTaskPeer,
@@ -182,6 +182,16 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     return (this.crossAccountRunning ? this.crossAccount : null) ?? this;
   }
 
+  /**
+   * 旧同账号对端专用的兼容连接(没有则为 null)。
+   *
+   * host 据此区分「承载某个 peer 的连接是哪条」—— 它与跨账号的官方连接是两条不同的
+   * 连接,用的中转也不同(legacy 走当前中转,跨账号走官方中转)。
+   */
+  override legacyConnection(): DeviceLinkClient | null {
+    return this.legacy;
+  }
+
   preferPrimaryScopedConnection(check: () => boolean): () => void {
     this.primaryScopedPreference = check;
     return () => { if (this.primaryScopedPreference === check) this.primaryScopedPreference = () => false; };
@@ -327,6 +337,18 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
   override onPeerTransportReset(cb: (change: DeviceLinkPeerTransportReset) => void): () => void {
     return this.both(super.onPeerTransportReset(change => { if (this.acceptsScopedEvent(this, change.deviceId)) cb(change); }),
       connection => connection.onPeerTransportReset(change => { if (this.acceptsScopedEvent(connection, change.deviceId)) cb(change); }));
+  }
+
+  /**
+   * 数据面路径(直连 ↔ relay)的变化同样要从**承载该 peer 的那条连接**汇总上来。
+   *
+   * 基类只发自己那条连接上的路径变化;被路由到 legacy / 跨账号 / scoped 连接的 peer
+   * 换路时,事件留在那条连接上,host(桌面端的连接诊断)收不到 —— 熔断未解除时,诊断会
+   * 一直按旧路径的判定提示用户(桌面端 #9537 的 Codex review P1)。
+   */
+  override onPeerPathChanged(cb: (change: DeviceLinkPeerPathChanged) => void): () => void {
+    return this.both(super.onPeerPathChanged(change => { if (this.acceptsScopedEvent(this, change.deviceId)) cb(change); }),
+      connection => connection.onPeerPathChanged(change => { if (this.acceptsScopedEvent(connection, change.deviceId)) cb(change); }));
   }
 
   override onInboundPeerReleased(cb: (peer: string) => void): () => void {

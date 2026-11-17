@@ -1979,6 +1979,11 @@ export class DeviceLinkClient {
     return this;
   }
 
+  /** 旧同账号对端专用的兼容连接(没有则为 null);只有路由客户端才有第二条 legacy 连接。 */
+  legacyConnection(): DeviceLinkClient | null {
+    return null;
+  }
+
   /** 订阅独立跨账号连接的状态。跨账号 peer 在主连接上时不触发,onStatusChange 已覆盖。 */
   onSeparateCrossAccountStatus(_cb: (status: DeviceLinkStatus) => void): () => void {
     return () => {};
