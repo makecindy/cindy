@@ -102,6 +102,7 @@ export function createTurnExecutor(deps) {
     // with the turn's input so /api/chat ends on it.
     publishFailure: (id, turn, data) => publishAgentEvent(deps.hub, id, { type: 'error', data, source: 'claude-code' }, turnStreamFields(turn)),
     isTurnCurrent: (id, turn) => turns.get(id) === turn,
+    isAwaitingDecision: (id, turn) => turns.get(id) === turn && turn.silentStopPending === true && !turn.terminal,
     // The listener keeps only the turn's own generation (listen): the continuation's events carry the new one.
     adoptGeneration: (turn, generation) => {
       turn.preContinuationGeneration = turn.generation;
@@ -329,13 +330,13 @@ export function createTurnExecutor(deps) {
 
   // A silent stop that does not continue ends its turn as a done (silentStopSettle.ts): the turn's finish
   // hands the coordinator its done and runs the settled-turn hooks. Host-only (/api/chat, chat.mjs): a
-  // stream that followed the silent stop ends with the recorded receipt; an exhausted one already ended on
-  // its banner's error, a stopped one on its interrupted receipt.
+  // stream that followed the silent stop ends with the recorded receipt (skipped, or its decision failed);
+  // an exhausted one already ended on its banner's error, a stopped one on its interrupted receipt.
   function endSilentStopTurn(sessionId, turn, reason) {
     turn.silentStopPending = false;
     if (turn.resumeOf !== undefined) deps.resumeAnswered?.(sessionId, turn.resumeOf);
     void finish(sessionId, turn).then(() => {
-      if (reason !== 'skip' || turn.abortRequested || typeof turn.clientId !== 'string' || !deps.isCurrent()) return;
+      if (reason === 'exhausted' || turn.abortRequested || typeof turn.clientId !== 'string' || !deps.isCurrent()) return;
       deps.hub.publish({ type: 'input_receipt', sessionId, ...turnStreamFields(turn), clientId: turn.clientId, status: 'recorded' });
     }, () => {});
   }

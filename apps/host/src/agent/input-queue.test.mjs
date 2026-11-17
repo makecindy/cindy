@@ -6414,12 +6414,17 @@ test('a dismissal from another task\'s runtime leaves this task\'s card pending 
  * - Tier: unit (node:test, the queue harness with a fake runtime; mocked setTimeout and Date).
  */
 const SILENT_STOP_DONE = { type: 'done', data: { silentStop: true } };
-async function silentStopHarness(t, { disabled = false, queue = {} } = {}) {
+async function silentStopHarness(t, { disabled = false, failBanner = false, queue = {} } = {}) {
   const profile = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-silent-stop-'));
   if (disabled) writeFileSync(path.join(profile, SILENT_STOP_AUTO_RESUME_SETTINGS_FILE), JSON.stringify({ enabled: false }));
   const spy = activitySpy();
   const hub = createEventHub();
-  const h = createHarness({ hub, userDataDir: () => profile, touchSessionActivity: spy.touchSessionActivity,
+  // failBanner: publishing the exhausted banner throws (a failing subscriber of the Host's event hub).
+  const publishing = failBanner ? { publish(event) {
+    if (event.type === 'error' && event.data?.reason === 'silent-stop-exhausted') throw new Error('event hub failed');
+    hub.publish(event);
+  } } : hub;
+  const h = createHarness({ hub: publishing, userDataDir: () => profile, touchSessionActivity: spy.touchSessionActivity,
     hasAssistantProgressAfter: async () => true, ...queue });
   t.after(async () => { t.mock.timers.reset(); await h.queue.dispose(); rmSync(profile, { recursive: true, force: true }); });
   const writes = [];
@@ -6502,6 +6507,29 @@ test('silent stop: once the continuations are spent the turn pauses with the 继
   assert.ok(r.streamed().some(e => e.type === 'error' && e.data?.reason === 'silent-stop-exhausted'), 'the banner reaches the clients');
   await settleUntil(() => !r.h.queue.projection('s').turnInProgress, 'the turn ends');
   assert.deepEqual(r.turnEnds(), [doneAt], 'written once, at the stopped turn\'s end');
+});
+
+// Review item 1 (2026-11-18): a step of the shared decision that throws before its settle (here the banner's
+// broadcast) must not leave the turn open and the task's next inputs queued until a restart.
+test('silent stop: a decision that fails before its settle still ends the turn, and the next input runs', async t => {
+  const r = await silentStopHarness(t, { failBanner: true });
+  await r.turn('one');
+  await r.decide();
+  await r.sent(2);
+  t.mock.timers.tick(6_000);
+  await r.turn('two');
+  await r.decide();
+  await r.sent(3);
+  t.mock.timers.tick(6_000);
+  await r.turn('three');
+  await r.decide();
+  await settleUntil(() => !r.h.queue.projection('s').turnInProgress, 'the turn ends');
+  await r.ended();
+  assert.ok(r.streamed().some(e => e.type === 'input_receipt' && e.status === 'recorded'), 'the stream ends with the recorded receipt');
+  assert.equal(r.session.continuationClaim, null, 'the claim is released');
+  await r.h.queue.enqueue('s', { clientId: 'b', text: 'next' });
+  await r.sent(4);
+  assert.equal(r.session.sent[3], 'next');
 });
 
 test('silent stop: a message sent within the decision window takes over; the stopped turn ends once, at its done', async t => {

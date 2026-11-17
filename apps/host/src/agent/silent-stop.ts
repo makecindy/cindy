@@ -31,6 +31,8 @@ export interface HostSilentStopPorts<Turn> {
   publishFailure(sessionId: string, turn: Turn, data: object): void;
   /** The executor still runs this turn record for the task (no newer turn replaced it). */
   isTurnCurrent(sessionId: string, turn: Turn): boolean;
+  /** This turn record is the task's and still waits for its silent-stop decision (not continued, not ended). */
+  isAwaitingDecision(sessionId: string, turn: Turn): boolean;
   /** The continuation reserved a new generation for this turn: its events are this turn's from now on. */
   adoptGeneration(turn: Turn, generation: number): void;
   /** The continuation was not dispatched: the turn goes back to the generation it had. */
@@ -137,6 +139,31 @@ export function createHostSilentStop<Turn>(ports: HostSilentStopPorts<Turn>) {
     });
   }
 
+  // Host protection; the desktop has none (there the same failure only leaves its idle unsent, the release
+  // table's desktop items). A decision that fails before its settle (a step of the shared code throws) would
+  // leave the turn open, and the task's next inputs queued, until a restart. A turn still waiting for its
+  // decision ends here as the shared settle ends one whose continuation failed: each step on its own.
+  function failClosed(session: Session, turn: Turn, turnLeaseId: string, generation: number): void {
+    if (!ports.isAwaitingDecision(session.id, turn)) return;
+    gate.settle(session.id, turnLeaseId);
+    const steps = [
+      () => session.settleHostTurnContinuation(generation),
+      () => ports.finalizeChangeSet(session.id, turn),
+      () => ports.listActivity()?.commit(session.id),
+      () => noteClaudeSessionTurnState(session.id, false),
+      () => ports.endTurn(session.id, turn, 'send-failed'),
+    ];
+    for (const step of steps) {
+      try {
+        step();
+      } catch (error) {
+        ports.log.warn('silent-stop fail-closed step failed', {
+          sessionId: session.id, error: error instanceof Error ? error.name : typeof error,
+        });
+      }
+    }
+  }
+
   return {
     /**
      * At a silent-stop done of the task's current turn, before anything else handles it: 'scheduled'
@@ -160,12 +187,15 @@ export function createHostSilentStop<Turn>(ports: HostSilentStopPorts<Turn>) {
       if (!turnLeaseId || !guard) return;
       const doneAt = Date.now();
       const turnOrigin = event.turnOrigin;
+      const generation = typeof event.sessionTurnGeneration === 'number' ? event.sessionTurnGeneration : session.getTurnGeneration();
       setTimeout(() => {
-        // The desktop's main process logs an unhandled rejection; the Host's would end the process.
         void handleSilentStopTurnEndWithPorts(session, doneAt, turnLeaseId, turnOrigin, turnEndPorts(session.id, turn, guard))
-          .catch(error => ports.log.warn('silent-stop decision failed', {
-            sessionId: session.id, error: error instanceof Error ? error.name : typeof error,
-          }));
+          .catch(error => {
+            ports.log.warn('silent-stop decision failed', {
+              sessionId: session.id, error: error instanceof Error ? error.name : typeof error,
+            });
+            failClosed(session, turn, turnLeaseId, generation);
+          });
       }, SILENT_STOP_DECISION_DELAY_MS);
     },
     /** A newer provider turn of the task, or a terminal that is not a silent stop (sessionTurnObserver.ts). */
