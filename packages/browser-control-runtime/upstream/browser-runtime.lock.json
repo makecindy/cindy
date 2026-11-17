@@ -55,6 +55,10 @@
       "desc": "pass chipName into decorateOpenClawProfile instead of the disk key"
     },
     {
+      "file": "extension/src/browser/chrome.ts",
+      "desc": "contain Chrome spawn errors in bootstrap and launch, revalidate automatic executables and rediscover once after ENOENT"
+    },
+    {
       "file": "extension/src/browser/config.ts",
       "desc": "preserve narrow fake-IP SSRF allowances from the host config without enabling general private-network access"
     },
@@ -132,7 +136,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "4384650a128fa29db23ef9bfbba184090b2c3f21b7e0a028b798a5b7a0e7b239",
+  "contentHash": "dfc0c21c6a8802c49fd6e5c69a557ee518f947de2d247c8cf4177fc6f2756a0b",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

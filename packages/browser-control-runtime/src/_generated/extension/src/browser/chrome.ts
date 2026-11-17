@@ -16,6 +16,7 @@ import {
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { monitorChromeStartup } from "../../../../shim/chrome-startup.js";
 import { loadJsonFile } from "../../../../shim/json-store.js";
 import { prepareOomScoreAdjustedSpawn } from "../../../../shim/process-runtime.js";
 import { normalizeOptionalString } from "../../../../shim/string-coerce-runtime.js";
@@ -564,19 +565,17 @@ export function clearStaleChromeSingletonLocks(
 }
 
 async function waitForChromeProcessExit(proc: ChildProcess, timeoutMs: number): Promise<void> {
-  if (proc.exitCode != null || proc.signalCode != null || proc.killed) {
+  if (proc.pid == null || proc.exitCode != null || proc.signalCode != null) {
     return;
   }
   await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
+    const onExit = () => {
+      clearTimeout(timer);
       proc.off("exit", onExit);
       proc.off("close", onExit);
       resolve();
-    }, timeoutMs);
-    const onExit = () => {
-      clearTimeout(timer);
-      resolve();
     };
+    const timer = setTimeout(onExit, timeoutMs);
     proc.once("exit", onExit);
     proc.once("close", onExit);
   });
@@ -1016,12 +1015,13 @@ export async function launchOpenClawChrome(
   const userDataDir = resolveOpenClawUserDataDir(profile.name);
   await ensureManagedChromePortAvailable(resolved, profile, userDataDir);
 
-  const exe = resolveBrowserExecutable(resolved, profile);
-  if (!exe) {
+  const detectedExecutable = resolveBrowserExecutable(resolved, profile);
+  if (!detectedExecutable) {
     throw new Error(
       "No supported browser found (Chrome/Brave/Edge/Chromium on macOS, Linux, or Windows).",
     );
   }
+  let exe = detectedExecutable;
 
   fs.mkdirSync(userDataDir, { recursive: true });
   await ensureOutputDirectory(DEFAULT_DOWNLOAD_DIR);
@@ -1039,7 +1039,17 @@ export async function launchOpenClawChrome(
   );
 
   // First launch to create preference files if missing, then decorate and relaunch.
-  const spawnOnce = () => {
+  // LOCAL PATCH: every spawn owns its errors, including profile bootstrap.
+  // Discovery is not cached, but an updater can remove Chrome after discovery.
+  let rediscoveredAfterEnoent = false;
+  const spawnOnce = async () => {
+    if (!exists(exe.path)) {
+      const replacement = resolveBrowserExecutable(resolved, profile);
+      if (!replacement) {
+        throw new Error(`Browser executable no longer exists: ${exe.path}`);
+      }
+      exe = replacement;
+    }
     const args = buildOpenClawChromeLaunchArgs({
       resolved,
       profile,
@@ -1060,13 +1070,38 @@ export async function launchOpenClawChrome(
     // environments (e.g. Docker), while keeping stderr piped for diagnostics.
     // Cast to ChildProcessWithoutNullStreams so callers can use .stderr safely;
     // the tuple overload resolution varies across @types/node versions.
-    const preparedSpawn = prepareOomScoreAdjustedSpawn(exe.path, args, {
-      env,
-    });
-    return spawn(preparedSpawn.command, preparedSpawn.args, {
-      stdio: ["ignore", "ignore", "pipe"],
-      env: preparedSpawn.env,
-    }) as unknown as ChildProcessWithoutNullStreams;
+    while (true) {
+      const preparedSpawn = prepareOomScoreAdjustedSpawn(exe.path, args, { env });
+      try {
+        const startup = monitorChromeStartup(spawn(preparedSpawn.command, preparedSpawn.args, {
+          stdio: ["ignore", "ignore", "pipe"],
+          env: preparedSpawn.env,
+        }) as unknown as ChildProcessWithoutNullStreams);
+        try {
+          // ENOENT is asynchronous; do not start polling before spawn succeeds.
+          await startup.spawned();
+          return startup;
+        } catch (err) {
+          startup.dispose();
+          startup.proc.stderr?.destroy();
+          throw err;
+        }
+      } catch (err) {
+        if (
+          (err as NodeJS.ErrnoException)?.code !== "ENOENT" ||
+          (profile.executablePath ?? resolved.executablePath) ||
+          rediscoveredAfterEnoent
+        ) {
+          throw err;
+        }
+        rediscoveredAfterEnoent = true;
+        const replacement = resolveBrowserExecutable(resolved, profile);
+        if (!replacement || replacement.path === exe.path) {
+          throw err;
+        }
+        exe = replacement;
+      }
+    }
   };
 
   const startedAt = Date.now();
@@ -1078,29 +1113,33 @@ export async function launchOpenClawChrome(
   // If the profile doesn't exist yet, bootstrap it once so Chrome creates defaults.
   // Then decorate (if needed) before the "real" run.
   if (needsBootstrap) {
-    const bootstrap = spawnOnce();
-    const deadline = Date.now() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      if (exists(localStatePath) && exists(preferencesPath)) {
-        break;
-      }
-      await new Promise((r) => {
-        setTimeout(r, CHROME_BOOTSTRAP_PREFS_POLL_MS);
-      });
-    }
+    const startup = await spawnOnce();
+    const bootstrap = startup.proc;
+    // Bootstrap stderr is not diagnostic output; drain it to avoid pipe stalls.
+    bootstrap.stderr?.resume();
     try {
-      bootstrap.kill("SIGTERM");
-    } catch {
-      // ignore
-    }
-    const exitDeadline = Date.now() + CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS;
-    while (Date.now() < exitDeadline) {
-      if (bootstrap.exitCode != null) {
-        break;
+      const deadline = Date.now() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        if (exists(localStatePath) && exists(preferencesPath)) {
+          break;
+        }
+        await startup.delay(CHROME_BOOTSTRAP_PREFS_POLL_MS);
       }
-      await new Promise((r) => {
-        setTimeout(r, CHROME_BOOTSTRAP_EXIT_POLL_MS);
-      });
+    } finally {
+      startup.dispose();
+      if (bootstrap.pid != null && bootstrap.exitCode == null && bootstrap.signalCode == null) {
+        try {
+          bootstrap.kill("SIGTERM");
+          await waitForChromeProcessExit(bootstrap, CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS);
+          if (bootstrap.exitCode == null && bootstrap.signalCode == null) {
+            bootstrap.kill("SIGKILL");
+          }
+        } finally {
+          bootstrap.stderr?.destroy();
+        }
+      } else {
+        bootstrap.stderr?.destroy();
+      }
     }
   }
 
@@ -1124,7 +1163,8 @@ export async function launchOpenClawChrome(
   }
 
   const launchOnceAndWait = async (allowSingletonRecovery: boolean): Promise<RunningChrome> => {
-    const proc = spawnOnce();
+    const startup = await spawnOnce();
+    const proc = startup.proc;
 
     // Collect stderr for diagnostics in case Chrome fails to start.
     // The listener is removed on success to avoid unbounded memory growth
@@ -1142,24 +1182,22 @@ export async function launchOpenClawChrome(
       // Full CDP WebSocket readiness is handled by the caller's
       // waitForCdpReadyAfterLaunch() budget; launch only owns process discovery.
       while (Date.now() < readyDeadline) {
-        if (await isChromeReachable(profile.cdpUrl)) {
+        if (await startup.wait(isChromeReachable(profile.cdpUrl))) {
           launchHttpReachable = true;
           break;
         }
-        await new Promise((r) => {
-          setTimeout(r, CHROME_LAUNCH_READY_POLL_MS);
-        });
+        await startup.delay(CHROME_LAUNCH_READY_POLL_MS);
       }
 
       if (!launchHttpReachable) {
         let finalDiagnostic: ChromeCdpDiagnostic | null = null;
         let diagnosticErrorText: string | null = null;
         try {
-          finalDiagnostic = await diagnoseChromeCdp(
+          finalDiagnostic = await startup.wait(diagnoseChromeCdp(
             profile.cdpUrl,
             CHROME_REACHABILITY_TIMEOUT_MS,
             CHROME_WS_READY_TIMEOUT_MS,
-          );
+          ));
         } catch (err) {
           diagnosticErrorText = `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`;
         }
@@ -1175,17 +1213,6 @@ export async function launchOpenClawChrome(
           const stderrOutput =
             normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
           const redactedStderrOutput = redactToolPayloadText(stderrOutput);
-          if (
-            allowSingletonRecovery &&
-            CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput) &&
-            clearStaleChromeSingletonLocks(userDataDir)
-          ) {
-            log.warn(
-              `Removed stale Chromium Singleton* locks for profile "${profile.name}" and retrying launch.`,
-            );
-            await terminateChromeForRetry(proc, userDataDir);
-            return await launchOnceAndWait(false);
-          }
           const stderrHint = redactedStderrOutput
             ? `\nChrome stderr:\n${redactedStderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
             : "";
@@ -1216,7 +1243,34 @@ export async function launchOpenClawChrome(
         headless: headlessMode.headless,
         headlessSource: headlessMode.source,
       };
+    } catch (err) {
+      const stderrOutput = Buffer.concat(stderrChunks).toString("utf8");
+      if (
+        allowSingletonRecovery &&
+        CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput) &&
+        clearStaleChromeSingletonLocks(userDataDir)
+      ) {
+        log.warn(
+          `Removed stale Chromium Singleton* locks for profile "${profile.name}" and retrying launch.`,
+        );
+        startup.dispose();
+        proc.stderr?.off("data", onStderr);
+        stderrChunks.length = 0;
+        await terminateChromeForRetry(proc, userDataDir);
+        proc.stderr?.destroy();
+        return await launchOnceAndWait(false);
+      }
+      if (proc.pid != null && proc.exitCode == null && proc.signalCode == null) {
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          // Preserve the startup error, including failed termination.
+        }
+      }
+      proc.stderr?.destroy();
+      throw err;
     } finally {
+      startup.dispose();
       // Chrome started successfully or launch failed — detach the stderr listener
       // and release the buffer.
       proc.stderr?.off("data", onStderr);

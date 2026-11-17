@@ -1977,6 +1977,237 @@ function clearChromeSingletonArtifacts(userDataDir: string) {`,
         downloadDir: DEFAULT_DOWNLOAD_DIR,
       });`,
     },
+    {
+      desc: 'contain Chrome spawn errors in bootstrap and launch, revalidate automatic executables and rediscover once after ENOENT',
+      transform: (source) => applyExactReplacements(source, [
+        [
+          `import path from "node:path";`,
+          `import path from "node:path";
+import { monitorChromeStartup } from "../../../../shim/chrome-startup.js";`,
+        ],
+        [
+          `  if (proc.exitCode != null || proc.signalCode != null || proc.killed) {`,
+          `  if (proc.pid == null || proc.exitCode != null || proc.signalCode != null) {`,
+        ],
+        [
+          `    const timer = setTimeout(() => {
+      proc.off("exit", onExit);
+      proc.off("close", onExit);
+      resolve();
+    }, timeoutMs);
+    const onExit = () => {
+      clearTimeout(timer);
+      resolve();
+    };`,
+          `    const onExit = () => {
+      clearTimeout(timer);
+      proc.off("exit", onExit);
+      proc.off("close", onExit);
+      resolve();
+    };
+    const timer = setTimeout(onExit, timeoutMs);`,
+        ],
+        [
+          `  const exe = resolveBrowserExecutable(resolved, profile);
+  if (!exe) {
+    throw new Error(
+      "No supported browser found (Chrome/Brave/Edge/Chromium on macOS, Linux, or Windows).",
+    );
+  }`,
+          `  const detectedExecutable = resolveBrowserExecutable(resolved, profile);
+  if (!detectedExecutable) {
+    throw new Error(
+      "No supported browser found (Chrome/Brave/Edge/Chromium on macOS, Linux, or Windows).",
+    );
+  }
+  let exe = detectedExecutable;`,
+        ],
+        [
+          `  const spawnOnce = () => {`,
+          `  // LOCAL PATCH: every spawn owns its errors, including profile bootstrap.
+  // Discovery is not cached, but an updater can remove Chrome after discovery.
+  let rediscoveredAfterEnoent = false;
+  const spawnOnce = async () => {
+    if (!exists(exe.path)) {
+      const replacement = resolveBrowserExecutable(resolved, profile);
+      if (!replacement) {
+        throw new Error(\`Browser executable no longer exists: \${exe.path}\`);
+      }
+      exe = replacement;
+    }`,
+        ],
+        [
+          `    const preparedSpawn = prepareOomScoreAdjustedSpawn(exe.path, args, {
+      env,
+    });
+    return spawn(preparedSpawn.command, preparedSpawn.args, {
+      stdio: ["ignore", "ignore", "pipe"],
+      env: preparedSpawn.env,
+    }) as unknown as ChildProcessWithoutNullStreams;`,
+          `    while (true) {
+      const preparedSpawn = prepareOomScoreAdjustedSpawn(exe.path, args, { env });
+      try {
+        const startup = monitorChromeStartup(spawn(preparedSpawn.command, preparedSpawn.args, {
+          stdio: ["ignore", "ignore", "pipe"],
+          env: preparedSpawn.env,
+        }) as unknown as ChildProcessWithoutNullStreams);
+        try {
+          // ENOENT is asynchronous; do not start polling before spawn succeeds.
+          await startup.spawned();
+          return startup;
+        } catch (err) {
+          startup.dispose();
+          startup.proc.stderr?.destroy();
+          throw err;
+        }
+      } catch (err) {
+        if (
+          (err as NodeJS.ErrnoException)?.code !== "ENOENT" ||
+          (profile.executablePath ?? resolved.executablePath) ||
+          rediscoveredAfterEnoent
+        ) {
+          throw err;
+        }
+        rediscoveredAfterEnoent = true;
+        const replacement = resolveBrowserExecutable(resolved, profile);
+        if (!replacement || replacement.path === exe.path) {
+          throw err;
+        }
+        exe = replacement;
+      }
+    }`,
+        ],
+        [
+          `    const bootstrap = spawnOnce();
+    const deadline = Date.now() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (exists(localStatePath) && exists(preferencesPath)) {
+        break;
+      }
+      await new Promise((r) => {
+        setTimeout(r, CHROME_BOOTSTRAP_PREFS_POLL_MS);
+      });
+    }
+    try {
+      bootstrap.kill("SIGTERM");
+    } catch {
+      // ignore
+    }
+    const exitDeadline = Date.now() + CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS;
+    while (Date.now() < exitDeadline) {
+      if (bootstrap.exitCode != null) {
+        break;
+      }
+      await new Promise((r) => {
+        setTimeout(r, CHROME_BOOTSTRAP_EXIT_POLL_MS);
+      });
+    }`,
+          `    const startup = await spawnOnce();
+    const bootstrap = startup.proc;
+    // Bootstrap stderr is not diagnostic output; drain it to avoid pipe stalls.
+    bootstrap.stderr?.resume();
+    try {
+      const deadline = Date.now() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        if (exists(localStatePath) && exists(preferencesPath)) {
+          break;
+        }
+        await startup.delay(CHROME_BOOTSTRAP_PREFS_POLL_MS);
+      }
+    } finally {
+      startup.dispose();
+      if (bootstrap.pid != null && bootstrap.exitCode == null && bootstrap.signalCode == null) {
+        try {
+          bootstrap.kill("SIGTERM");
+          await waitForChromeProcessExit(bootstrap, CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS);
+          if (bootstrap.exitCode == null && bootstrap.signalCode == null) {
+            bootstrap.kill("SIGKILL");
+          }
+        } finally {
+          bootstrap.stderr?.destroy();
+        }
+      } else {
+        bootstrap.stderr?.destroy();
+      }
+    }`,
+        ],
+        [
+          `    const proc = spawnOnce();`,
+          `    const startup = await spawnOnce();
+    const proc = startup.proc;`,
+        ],
+        [
+          `        if (await isChromeReachable(profile.cdpUrl)) {`,
+          `        if (await startup.wait(isChromeReachable(profile.cdpUrl))) {`,
+        ],
+        [
+          `        await new Promise((r) => {
+          setTimeout(r, CHROME_LAUNCH_READY_POLL_MS);
+        });`,
+          `        await startup.delay(CHROME_LAUNCH_READY_POLL_MS);`,
+        ],
+        [
+          `          finalDiagnostic = await diagnoseChromeCdp(
+            profile.cdpUrl,
+            CHROME_REACHABILITY_TIMEOUT_MS,
+            CHROME_WS_READY_TIMEOUT_MS,
+          );`,
+          `          finalDiagnostic = await startup.wait(diagnoseChromeCdp(
+            profile.cdpUrl,
+            CHROME_REACHABILITY_TIMEOUT_MS,
+            CHROME_WS_READY_TIMEOUT_MS,
+          ));`,
+        ],
+        [
+          `          if (
+            allowSingletonRecovery &&
+            CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput) &&
+            clearStaleChromeSingletonLocks(userDataDir)
+          ) {
+            log.warn(
+              \`Removed stale Chromium Singleton* locks for profile "\${profile.name}" and retrying launch.\`,
+            );
+            await terminateChromeForRetry(proc, userDataDir);
+            return await launchOnceAndWait(false);
+          }
+`,
+          ``,
+        ],
+        [
+          `    } finally {
+      // Chrome started successfully or launch failed — detach the stderr listener`,
+          `    } catch (err) {
+      const stderrOutput = Buffer.concat(stderrChunks).toString("utf8");
+      if (
+        allowSingletonRecovery &&
+        CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput) &&
+        clearStaleChromeSingletonLocks(userDataDir)
+      ) {
+        log.warn(
+          \`Removed stale Chromium Singleton* locks for profile "\${profile.name}" and retrying launch.\`,
+        );
+        startup.dispose();
+        proc.stderr?.off("data", onStderr);
+        stderrChunks.length = 0;
+        await terminateChromeForRetry(proc, userDataDir);
+        proc.stderr?.destroy();
+        return await launchOnceAndWait(false);
+      }
+      if (proc.pid != null && proc.exitCode == null && proc.signalCode == null) {
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          // Preserve the startup error, including failed termination.
+        }
+      }
+      proc.stderr?.destroy();
+      throw err;
+    } finally {
+      startup.dispose();
+      // Chrome started successfully or launch failed — detach the stderr listener`,
+        ],
+      ]),
+    },
   ],
   'extension/src/browser/chrome.executables.ts': [
     {

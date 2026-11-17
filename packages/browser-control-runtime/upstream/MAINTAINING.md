@@ -31,6 +31,17 @@ Windows 的 SIGTERM 也会强杀进程，因此先通过 CDP `Browser.close` 请
 发现、握手、命令和后续等待共用原有宽限期，只有期限耗尽才 SIGKILL；POSIX 保留 SIGTERM。
 退出修正由 `sync.mjs` 的 LOCAL_PATCH 保留，回归见 `src/__tests__/chrome-stop.test.ts`。
 
+托管 Chrome 的启动错误只属于本次浏览器操作，不得进入主进程的未捕获异常路径。
+`sync.mjs` 的 LOCAL_PATCH 在首次资料预热与正式启动中共用 `shim/chrome-startup.ts`：
+先等待子进程的 `spawn` / `error`，再轮询资料文件或 CDP；启动期间的错误与提前退出立即
+结束等待，释放轮询计时器、启动监听与 stderr，保留进程级 error 接收器直到 close。
+每次 spawn 前重新校验路径；自动探测路径发生 ENOENT 时，在同一次启动中最多重新发现
+并尝试另一安装一次。显式 `executablePath`（包括 profile 覆盖）不得自动换浏览器；
+不存在或启动失败时原样报告失败，下一次操作可以重试。发现逻辑本身不缓存候选。
+回归在 `src/__tests__/chrome-startup.test.ts`，宿主失败回执与重试见 Desktop 的
+`browser-backend/__tests__/external-chrome-backend.test.ts`。侧边栏和「我的浏览器」不经过
+这条托管 Chrome spawn 路径，不改变它们的页面、插件或授权行为。
+
 「使用我的浏览器登录态」目前是**每次冷启动重新复制**，不是首次导入：只在 Agent 浏览器
 里新增或续期的 Cookie 会被来源覆盖，站点 Local Storage / IndexedDB 也不跨快照保留。
 这与默认专用 profile 的长期保留不同，修复退出及会话恢复不改变这项既有行为。
