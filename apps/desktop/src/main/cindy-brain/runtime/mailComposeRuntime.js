@@ -707,8 +707,12 @@ var cindyMail = (function () {
               }
             }
             edit.error = result;
-            if (result.execution === "not_executed") {
-              if (additions.length && !result.stale) {
+            if (!sending && result.execution === "executed") edit.completedSaveFields = fields;
+            // A failed completed save has never attempted delivery. Keep its
+            // error and edits, but do not persist an unknown-send lock. Legacy
+            // pending records have no operation provenance and stay untouched.
+            if (result.execution === "not_executed" || (!sending && result.execution === "executed")) {
+              if (result.execution === "not_executed" && additions.length && !result.stale) {
                 edit.additions = (edit.additions || []).filter(a => !additions.includes(a));
                 for (const file of additions) if (file.contentId) {
                   edit.fields.bodyHtml = edit.fields.bodyHtml.replace(new RegExp('<p><img src="cid:' + file.contentId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"[^>]*></p>', 'g'), '');
@@ -1104,6 +1108,48 @@ var cindyMail = (function () {
       // An explicit model update can resolve a conflict using the latest provider
       // version. Reads below expose both versions; automatic sends remain blocked.
       if (operation === 'update' && (mailEdits.get(key)?.error?.stale || mailEdits.get(key)?.error?.format)) return null;
+      // Inspect a failed completed save without replaying it. Serialize with
+      // writes, merge against the old base, and retain keystrokes arriving while
+      // read-back is in flight. Reading a real unknown operation never enters
+      // this branch: its durable state remains pending above.
+      if (operation === 'get' && mailEdits.get(key)?.error?.execution === 'executed' && records[key].state === 'draft') {
+        return navigator.locks.request('mail-compose:' + key, async function () {
+          const record = (await mailRecords())[key], edit = mailEdits.get(key);
+          if (!record || record.state !== 'draft' || edit?.error?.execution !== 'executed')
+            return { ok: false, execution: 'not_executed', message: (await mailCopy()).missing };
+          const latest = await adapter.readDraft({ record: { ...record }, sourceCallId });
+          const readBack = latest?.ok && latest.data?.readBack;
+          if (readBack?.status !== 'read_back' || readBack.draftId !== record.draftId || !readBack.editor)
+            return latest?.ok ? { ok: false, execution: 'not_executed', message: (await mailCopy()).unavailable } : latest || { ok: false, execution: 'not_executed', message: (await mailCopy()).failed };
+          const remote = draftValues(readBack);
+          // If the mailbox confirms the exact attempted save, later typing is
+          // relative to that save rather than an overlapping remote edit.
+          const base = edit.completedSaveFields && sameFields(edit.completedSaveFields, remote)
+            ? edit.completedSaveFields : draftValues(edit.readBack);
+          const merged = mergeFields(base, edit.fields, remote);
+          edit.fields = merged.fields;
+          edit.readBack = readBack;
+          edit.revision++;
+          edit.savedRevision = sameFields(merged.fields, remote) ? edit.revision : edit.revision - 1;
+          edit.conflictBase = merged.conflicts.length ? base : undefined;
+          edit.inputFields = { ...edit.fields };
+          edit.error = await conflictError(merged.conflicts);
+          edit.completedSaveFields = undefined;
+          record.fingerprint = readBack.fingerprint;
+          record.locator = readBack.locator;
+          const active = await mailRecords(records => {
+            if (mailEdits.get(key) !== edit || records[key]?.state !== 'draft' ||
+                records[key].callId !== record.callId) return false;
+            records[key] = record;
+            return true;
+          });
+          if (!active) return { ok: false, execution: 'not_executed', message: (await mailCopy()).missing };
+          const selected = await adapter.selectAccount(account);
+          if (selected.ok) await showMailDraft({ callId: record.callId, sourceCallId }, selected,
+            readBack, edit.error?.message || (edit.savedRevision !== edit.revision ? (await mailCopy()).waiting : undefined), key, edit.fields, true);
+          return { ...latest, data: { ...latest.data, cardEdits: { ...edit.fields }, conflicts: merged.conflicts } };
+        });
+      }
       var result = operation === "send" ? await requestMailSend(key, sourceCallId) :
         operation === "get" &&
         mailEdits.get(key)?.error?.execution === "not_executed"

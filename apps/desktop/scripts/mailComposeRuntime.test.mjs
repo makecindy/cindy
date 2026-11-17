@@ -647,6 +647,131 @@ test("a newer edit during IMAP save is saved to the replacement UID before send"
   assert.equal(f.writes.at(-1).fields.body, "Newest");
 });
 
+// #11002: run the public card/tool flow; a completed save is not a send attempt.
+// Existing unknown-send tests cannot catch a save-only executed failure.
+for (const restartBeforeRead of [false, true]) test(`failed completed save recovers through read/restart: ${restartBeforeRead}`, async () => {
+  let f;
+  f = fixture({ shape: 'graph', write: async request => {
+    if (request.send) return;
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Saved but verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: '第一段\n\n第二段' });
+  assert.equal((await f.tool('update')).execution, 'executed');
+  assert.equal((await f.resolve()).state, 'draft');
+  if (restartBeforeRead) f.restart();
+  const read = await f.tool('get');
+  assert.equal(read.ok, true);
+  assert.equal(read.data.readBack.editor.body, '第一段\n\n第二段');
+  f.restart();
+  const sent = await f.tool('send');
+  assert.equal(sent.ok, true);
+  assert.equal(f.writes.filter(r => !r.send).length, 1);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+});
+
+test('failed completed autosave preserves typing during recovery and uses the new locator', async () => {
+  let f, releaseRead, readStarted;
+  const started = new Promise(resolve => { readStarted = resolve; });
+  let recovering = false;
+  f = fixture({ write: async request => {
+    if (request.send || f.writes.length > 1) return;
+    f.externalEdit({ body: request.fields.body });
+    f.relocate();
+    return { ok: false, execution: 'executed', message: 'Saved but verification failed' };
+  }, read: async () => {
+    if (recovering) {
+      readStarted();
+      await new Promise(resolve => { releaseRead = resolve; });
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved' });
+  await f.flush(); // Public debounce entry, not an explicit update.
+  recovering = true;
+  const reading = f.tool('get'); await started;
+  await f.card('change', { ...f.values(), body: 'Saved plus typing' });
+  releaseRead();
+  const recovered = await reading;
+  assert.equal(recovered.data.cardEdits.body, 'Saved plus typing');
+  assert.deepEqual(copy(recovered.data.conflicts), []);
+  recovering = false;
+  const sending = f.card('send', copy(recovered.data.cardEdits));
+  await sending;
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+  assert.equal(f.writes.at(-1).fields.body, 'Saved plus typing');
+  assert.equal(f.writes[1].record.locator.uid, 52);
+});
+
+test('a late recovery read cannot resurrect a superseded draft card', async () => {
+  let f, recovering = false, release, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  f = fixture({ write: async request => {
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  }, read: async () => {
+    if (recovering) { entered(); await new Promise(resolve => { release = resolve; }); }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved' });
+  await f.tool('update');
+  recovering = true;
+  const reading = f.tool('get'); await started;
+  await f.present();
+  const newRecords = f.kv();
+  release();
+  assert.equal((await reading).ok, false);
+  assert.deepEqual(f.kv(), newRecords);
+  assert.equal(Object.keys(f.kv().mailDraftCards).length, 1);
+  assert.equal(f.writes.length, 1);
+});
+
+for (const failure of ['unavailable', 'wrong-draft', 'conflict']) test(`completed save recovery retains edits on ${failure}`, async () => {
+  let f, failing = true;
+  f = fixture({ write: async request => {
+    if (request.send) return;
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: failure === 'conflict' ? 'Remote replacement' : request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  }, read: async () => {
+    if (!failing || failure === 'conflict') return;
+    if (failure === 'unavailable') return { ok: false, message: 'Offline' };
+    return { ok: true, data: { readBack: { ...f.current(), draftId: 'other-draft' } } };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Local replacement' });
+  await f.tool('update');
+  const read = await f.tool('get');
+  assert.equal(f.writes.length, 1); // A read never replays the completed save.
+  if (failure === 'conflict') {
+    assert.ok(read.data.conflicts.includes('body'));
+    assert.equal(read.data.cardEdits.body, 'Local replacement');
+    assert.equal((await f.tool('send')).execution, 'not_executed');
+  } else {
+    assert.equal(read.ok, false);
+    assert.equal((await f.resolve()).state, 'draft');
+    failing = false;
+    assert.equal((await f.tool('get')).ok, true);
+    assert.equal((await f.tool('send')).ok, true);
+  }
+});
+
+for (const operation of ['save-unknown', 'send-executed', 'send-unknown']) test(`reads and restart retain the uncertain lock: ${operation}`, async () => {
+  const f = fixture({ write: async () => ({ ok: false,
+    execution: operation === 'send-executed' ? 'executed' : 'unknown', message: 'Uncertain result' }) });
+  await f.present();
+  if (operation === 'save-unknown') await f.card('change', { ...f.values(), body: 'Unconfirmed' });
+  await f.tool(operation === 'save-unknown' ? 'update' : 'send');
+  assert.equal((await f.resolve()).state, 'pending');
+  assert.equal((await f.tool('get')).ok, true);
+  f.restart();
+  assert.equal((await f.tool('get')).ok, true);
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal(f.writes.length, 1);
+});
+
 test("unknown/malformed send receipts never retry, including after a plugin restart", async () => {
   for (const write of [
     async () => {
