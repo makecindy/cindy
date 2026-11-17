@@ -5757,3 +5757,38 @@ test('turn seal: the Host seals the last reply of a turn as the desktop does', {
       meta, id);
   }
 });
+
+/*
+ * List preview after a done (release table 甲 13, the preview half).
+ * - Production entry and observable result: the Host executor's turn end over a real profile database; the
+ *   session_changed event with the task's list preview.
+ * - Rule: after a done the desktop's terminal stage drains the write queue and refreshes the list preview
+ *   from the latest visible message (sessionTaskSummary.ts refreshSessionListPreview), whatever the pinned
+ *   section shows; a terminal error does not.
+ * - Coverage gap: the Host never refreshed it at a turn's end; the task list kept the line it had at send.
+ * - Minimal failing input: a reply then a done publishes no preview.
+ * - Tier: unit (node:test, real profile database, the Host event path).
+ */
+test('list preview: after a done the Host publishes the latest visible message as the task\'s preview', { timeout: 30_000 }, async t => {
+  const db = await recoveryDatabase(t);
+  const { h } = assembledRuntime(t, db);
+  const { latestVisiblePreview } = await import('../../../desktop/src/main/localDb/latestMessageText.ts');
+  const previews = id => h.events.filter(event => event.type === 'session_changed' && event.sessionId === id
+    && event.patch && 'preview' in event.patch).map(event => event.patch.preview);
+  for (const [id, terminal] of [['preview-done', { type: 'done', data: {} }],
+    ['preview-error', { type: 'error', data: { message: 'provider failed', isTerminal: true } }]]) {
+    await db.createTask(id);
+    await h.queue.enqueue(id, { clientId: `${id}-input`, text: 'work' });
+    await waitFor(() => h.maker.sessions.get(id)?.sent.length === 1);
+    const session = h.maker.sessions.get(id);
+    const stamp = { sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId };
+    session.emit({ type: 'text', data: { text: `final words of ${id}` }, ...stamp });
+    session.emit({ ...terminal, ...stamp });
+    await waitFor(() => !h.queue.projection(id).turnInProgress);
+  }
+  await waitFor(() => previews('preview-done').length > 0);
+  // The same line the desktop's own reader gives for this history.
+  assert.deepEqual(previews('preview-done'), [await latestVisiblePreview('preview-done')]);
+  assert.match(previews('preview-done')[0], /final words of preview-done/);
+  assert.deepEqual(previews('preview-error'), [], 'a terminal error refreshes no preview');
+});

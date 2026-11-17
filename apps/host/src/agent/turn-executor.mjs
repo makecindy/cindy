@@ -22,6 +22,8 @@ import { peekGoalInactiveNote } from '../../../desktop/src/main/goal-host/inacti
 import { createTurnModelAttribution } from '../../../desktop/src/main/maker-ipc/turnModelAttribution.ts';
 import { patchMessageAgentMetaWithResultRow } from '../../../desktop/src/main/localDb/messageMutations.ts';
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
+import { latestVisiblePreview } from '../../../desktop/src/main/localDb/latestMessageText.ts';
+import { sessionListPreviewPatch } from '../../../desktop/src/main/sessionTaskSummary.logic.ts';
 import { sessions } from '../../../desktop/src/main/localDb/schema.ts';
 import { persistAndHydrateSessionProvider } from '../../../desktop/src/main/maker-ipc/sessionProviderBootstrap.ts';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.ts';
@@ -139,6 +141,20 @@ export function createTurnExecutor(deps) {
     return snapshot.onTurnStart(sessionId, signal);
   }
 
+  // The desktop's list preview refresh after a done (sessionTaskSummary.ts refreshSessionListPreview, called
+  // by sessionEventTerminal.ts once the write queue has drained): the latest visible message goes to the task
+  // list, whatever the pinned section shows. A failure is logged and swallowed, as there.
+  async function refreshListPreview(sessionId) {
+    const owner = deps.getOwner?.();
+    try {
+      const preview = await latestVisiblePreview(sessionId);
+      if (!deps.isCurrent() || (deps.getOwner && deps.getOwner() !== owner)) return;
+      deps.hub.publish({ type: 'session_changed', sessionId, patch: sessionListPreviewPatch(preview) });
+    } catch (error) {
+      log.warn('refresh session list preview failed (swallowed)', { sessionId, error: String(error) });
+    }
+  }
+
   // recoveryOwnsError: context recovery claimed this terminal error and writes its row if it fails.
   function finish(sessionId, turn, error, event, recoveryOwnsError = false) {
     if (turn.terminal) return turn.settlement;
@@ -191,6 +207,9 @@ export function createTurnExecutor(deps) {
         try { await deps.markEnded?.(sessionId, turn.endedAt); }
         catch (failure) { turn.persistenceError = errorText(failure); deps.onPersistenceError(sessionId, turn.persistenceError); }
       }
+      // Only after a done, as the desktop; not awaited, so the turn's end is not held by the read. The
+      // pinned card summary that follows it there is not generated on the Host (release table 甲 13).
+      if (event?.type === 'done' && deps.isCurrent()) void refreshListPreview(sessionId);
       turn.running = false;
       if (turns.get(sessionId) === turn) {
         // Some providers become idle after abort without emitting done. Publish
