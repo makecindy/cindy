@@ -5223,6 +5223,11 @@ export function NewMakerDraftRoute() {
                 // Named after navigation so the model call never holds the Send click.
                 if (namingWithModel) {
                   name = await resolveTaskWorktreeName(message, name);
+                  if (!isCurrentDataOwner()) {
+                    worktreeCreationStore.clear(newSession.id);
+                    clearSessionStarting(newSession.id);
+                    return;
+                  }
                   branchName = getBranchName(name);
                   worktreeCreationStore.set(newSession.id, {
                     status: 'creating',
@@ -6247,6 +6252,7 @@ export function NewMakerDraftRoute() {
             startedAt,
           });
           goalWorktreeName = await resolveTaskWorktreeName(objective, goalWorktreeName);
+          if (!isCurrentDataOwner()) throw new RemotePrecreatedWorktreeOwnerChangedError();
           goalWorktreeBranchName = getBranchName(goalWorktreeName);
           setWtCreatingInfo({ branch: goalWorktreeBranchName, startedAt });
         }
