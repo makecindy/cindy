@@ -142,24 +142,8 @@ export function isFolderHomeRow(
     || row.kind === 'automation');
 }
 
-/**
- * 旧伙伴例行任务专线(`source='bot'`、`companion.role='routine'`)的规则身份,与桌面
- * getAutomationSidebarGroupInfo 同口径;旧主机不带 routineId 时为 null,维持原位。
- */
-function teammateRoutineKey(item: RemoteSessionListItem): string | null {
-  const session = item.session as {
-    source?: unknown;
-    orcaRole?: unknown;
-    companion?: { id?: string | null; role?: unknown; routineId?: string | null } | null;
-  };
-  if (session.source !== 'bot' || session.orcaRole === 'worker') return null;
-  const companion = session.companion;
-  if (companion?.role !== 'routine' || !companion.id || !companion.routineId) return null;
-  return `routine:${companion.id}:${companion.routineId}`;
-}
-
 function isAutomationItem(item: RemoteSessionListItem): boolean {
-  return automationGroupKey(item) !== null || teammateRoutineKey(item) !== null;
+  return automationGroupKey(item) !== null;
 }
 
 /**
@@ -212,8 +196,7 @@ export function mergeAutomationItems(
 ): RemoteSessionListItem[] {
   const buckets = new Map<string, RemoteSessionListItem[]>();
   for (const item of items) {
-    const baseKey = item.automationGroup?.baseKey ?? automationGroupKey(item) ?? teammateRoutineKey(item)
-      ?? `session:${item.session.id}`;
+    const baseKey = item.automationGroup?.baseKey ?? automationGroupKey(item) ?? `session:${item.session.id}`;
     const key = `${automationDeviceKey(item)}|${baseKey}`;
     const bucket = buckets.get(key);
     if (bucket) bucket.push(item);

@@ -228,6 +228,22 @@ describe('自动化归组', () => {
     expect(project?.kind === 'project' && project.project.sessions.map((item) => item.session.id)).toEqual(['legacy']);
   });
 
+  it('同一伙伴同一 routineId 的旧例行运行折成一个子组', () => {
+    const routineRun = (id: string, at: string) => ({
+      session: { id, title: 'Review memory', source: 'bot', updatedAt: at, status: 'active', agentKind: 'codex', companion: { id: 'cindy', role: 'routine', routineId: 'memory' } },
+      title: 'Review memory',
+      lastActivityAt: at,
+      pendingInteractionCount: 0,
+    }) as unknown as RemoteSessionListItem;
+    const grouped = groupAutomationListItems(
+      [routineRun('m2', '2026-11-16T00:00:00Z'), routineRun('m1', '2026-11-15T00:00:00Z')],
+      Date.parse('2026-11-17T00:00:00Z'),
+    );
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0].automationGroup?.baseKey).toBe('routine:cindy:memory');
+    expect(grouped[0].automationGroup?.sessionIds).toEqual(['m2', 'm1']);
+  });
+
   it('跨项目合并后换了代表运行,旧目录里等待确认的档位仍归到合并后的组', () => {
     const nightly = (id: string, workingDir: string, at: string, pending = 0) => ({
       session: { id, title: 'Nightly', source: 'scheduler', workingDir, updatedAt: at, status: 'idle', agentKind: 'codex', deviceLinkDeviceId: 'mac' },
