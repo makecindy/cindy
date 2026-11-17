@@ -47,17 +47,32 @@ import { lifoCleanup } from '../test-support/cleanup.mjs';
 
 const authJson = (token) => JSON.stringify({ account: { email: 'fixture@example.test' }, tokens: { access_token: token, account_id: 'workspace-a' } });
 
-function sharedProfile(t, ownerId) {
+function isolatedProfile(t, ownerId) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-system-login-')));
   t.after(() => { configureHostOwner({ userDataDir: root, ownerId: null }); fs.rmSync(root, { recursive: true, force: true }); });
-  const systemAuth = path.join(root, 'fake-home', '.codex', 'auth.json');
-  fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
-  fs.writeFileSync(systemAuth, authJson('system-token-1'), { mode: 0o600 });
   const profileDir = path.join(root, 'profile');
   configureHostOwner({ userDataDir: profileDir, ownerId });
   const codexHome = path.join(profileDir, 'codex-home');
   fs.mkdirSync(codexHome, { recursive: true });
-  fs.symlinkSync(systemAuth, path.join(codexHome, 'auth.json'));
+  return { root, profileDir, codexHome };
+}
+
+function sharedProfile(t, ownerId) {
+  const { root, profileDir, codexHome } = isolatedProfile(t, ownerId);
+  const systemAuth = path.join(root, 'fake-home', '.codex', 'auth.json');
+  fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+  fs.writeFileSync(systemAuth, authJson('system-token-1'), { mode: 0o600 });
+  try {
+    fs.symlinkSync(systemAuth, path.join(codexHome, 'auth.json'), 'file');
+  } catch (error) {
+    if (process.platform !== 'win32' || !['EPERM', 'EACCES'].includes(error.code)) throw error;
+    // The same shared-directory topology covered by codex-invalidation.test.mjs.
+    // A real junction follows atomic target replacement, unlike a hard link or
+    // copied auth.json. The just-created codexHome is empty; never remove data.
+    fs.rmdirSync(codexHome);
+    fs.symlinkSync(path.dirname(systemAuth), codexHome, 'junction');
+    t.diagnostic('native file symlink unavailable; checking shared login through a real directory junction');
+  }
   bindNativeProviderAuth('openai', { sharedSystem: true });
   const accounts = { isCodexAccountLoginActive: () => false, isCodexAccountProvider: () => false };
   const systemLogin = createHostCodexSystemLogin({ codexHome, systemAuthPath: systemAuth, loginActive: () => false });
@@ -68,15 +83,28 @@ function sharedProfile(t, ownerId) {
 
 // Release table row 26: the desktop clears "recovery required" after an account request (2e);
 // before that the Host keeps the mark. The renewed login must still be usable for tasks.
-test('after a system re-login the recovered login is usable on the Host, only marked', { timeout: TEST_TIMEOUT_MS }, async t => {
+test('after a system re-login the recovered login is usable on the Host, only marked', {
+  timeout: TEST_TIMEOUT_MS,
+}, async t => {
   t = lifoCleanup(t);
   const p = sharedProfile(t, 'recovery-owner');
+  const localAuth = path.join(p.codexHome, 'auth.json');
+  const fileSymlink = fs.lstatSync(localAuth).isSymbolicLink();
+  p.relogin('system-token-before-invalidation');
+  assert.equal(fs.readFileSync(localAuth, 'utf8'), fs.readFileSync(p.systemAuth, 'utf8'),
+    'the shared path follows atomic system-login replacement while still linked');
   await invalidateHostCodexLogin({ codexHome: p.codexHome, systemAuthPath: p.systemAuth, reason: 'token_revoked', hostBound: true,
-    credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(path.join(p.codexHome, 'auth.json'))) });
+    credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(localAuth)) });
   assert.deepEqual(await p.auth.getState({ credentialMode: 'oauth-bearer' }),
     { authenticated: false, errorReason: 'token_revoked', credentialScope: 'system-shared' });
+  // #10577 CI: invalidation unlinks the local file symlink, but must preserve a
+  // directory alias of the system's own entry. Only reconciliation restores it.
+  assert.equal(fs.existsSync(localAuth), !fileSymlink,
+    'invalidation removes only the local file link, not the shared directory entry');
   p.relogin('system-token-2');
   const state = await p.auth.getState({ credentialMode: 'oauth-bearer' });
+  assert.equal(fs.readFileSync(localAuth, 'utf8'), fs.readFileSync(p.systemAuth, 'utf8'),
+    'reconciliation restores access to the renewed system login');
   assert.equal(state.authenticated, true);
   assert.equal(state.authSource, 'oauth');
   assert.equal(state.recoveryRequiredReason, 'token_revoked');
@@ -89,14 +117,17 @@ test('after a system re-login the recovered login is usable on the Host, only ma
 test('a successful Cindy login reconciles before its auth boundary; a failed one does not', { timeout: TEST_TIMEOUT_MS }, async t => {
   t = lifoCleanup(t);
   for (const ok of [true, false]) {
-    const p = sharedProfile(t, `login-owner-${ok}`);
+    // This unit verifies injected login callbacks, not shared-file topology. Like
+    // codex-auth-boundary.test.mjs, it only needs an isolated owner/profile.
+    const p = isolatedProfile(t, `login-owner-${ok}`);
     const calls = [];
-    const systemLogin = { systemAuthPath: p.systemAuth, reconcile: async () => { calls.push('reconcile'); }, reconcileAfterLogin: async () => { calls.push('after-login'); } };
-    const accounts = { ...p.accounts, loginCodexAccount: async () => (ok ? { ok: true } : { ok: false, reason: 'login_failed' }),
+    const systemLogin = { systemAuthPath: null, reconcile: async () => { calls.push('reconcile'); }, reconcileAfterLogin: async () => { calls.push('after-login'); } };
+    const accounts = { loginCodexAccount: async () => (ok ? { ok: true } : { ok: false, reason: 'login_failed' }),
       codexAccountState: () => ({ authenticated: ok }), cancelCodexAccountLogin() {} };
     const auth = createCodexLocalCliAuth(null, undefined, p.codexHome, accounts, undefined,
       { systemLogin, afterLogin: async () => { calls.push('boundary'); } });
-    await auth.triggerLogin();
+    assert.deepEqual(await auth.triggerLogin(), ok
+      ? { authenticated: true } : { authenticated: false, errorReason: 'login_failed' });
     assert.deepEqual(calls, ok ? ['after-login', 'boundary'] : [], `login ok=${ok}`);
   }
 });

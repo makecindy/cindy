@@ -1,4 +1,10 @@
+import type { MessageSourcePluginRelay } from '@cindy/maker-shared/message-source';
 import type { PluginMessageAttachment } from './pluginAttachments.js';
+/**
+ * Optional `tasks.send` relay: where the plugin says this IM message came from. Display and
+ * `[消息来源]` context only; the Host still stamps the plugin as the sender, never a grant.
+ */
+export type PluginTaskMessageRelay = MessageSourcePluginRelay;
 /** Ordinary Session API. Task data stays on the plugin host; execution may be remote. */
 export interface PluginTaskRoute {
   /** Omitted = plugin host; a paired computer or share:<id> selects remote Agent execution. */
@@ -8,6 +14,10 @@ export interface PluginTaskRoute {
   model: string;
   effort: string;
   fastMode: boolean | 'ultrafast';
+}
+/** Same location vocabulary as an explicit route: a paired computer id or share:<id>; never 'local'. */
+export function isPluginTaskAgentDeviceId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value) && value !== 'local';
 }
 export const PLUGIN_TASK_PERMISSION_MODES = ['ask', 'auto', 'bypassPermissions'] as const;
 export type PluginTaskPermissionMode = (typeof PLUGIN_TASK_PERMISSION_MODES)[number];
@@ -124,6 +134,8 @@ export type PluginTaskRequest = (
       attachments?: PluginMessageAttachment[];
       /** Optional Host-issued parent invocation; correlation only, not execution authority. */
       invocationId?: string;
+      /** Optional IM relay context (capabilities().messageRelay); rendered as an IM card. */
+      relay?: PluginTaskMessageRelay;
     }
   | { type: 'tasks-request'; kind: 'getRun'; runId: string }
   | { type: 'tasks-request'; kind: 'listRuns'; taskId: string; after?: string; limit?: number }

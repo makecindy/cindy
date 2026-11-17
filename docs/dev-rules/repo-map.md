@@ -96,5 +96,6 @@ Desktop 的 `main/local-agent/` 提供经 Cindy 主题确认授权的通用本�
 ## 校验下载与工具安装
 
 Desktop 发行资产统一走 `main/downloader/index.ts`；通用工具安装位于
-`main/managed-tools/`。接入方法和各业务保留的边界见
+`main/managed-tools/`；下载／安装进度统一为 `shared/downloadProgress.ts`，界面用
+`components/ui/download-meter.tsx`。接入方法和各业务保留的边界见
 [校验下载与受管工具安装](verified-downloads.md)。

@@ -95,6 +95,8 @@ export interface DetectCwdResp {
    * 旧 Desktop 会省略该字段；控制端必须在创建副作用前把省略视为不支持。
    */
   supportsRecoveryKeyDiscard?: boolean;
+  /** Explicit opt-in for switching the main checkout; old hosts omit this. */
+  supportsCheckout?: boolean;
 }
 
 export interface ListBranchesReq {

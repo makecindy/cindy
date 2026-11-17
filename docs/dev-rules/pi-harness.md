@@ -12,8 +12,14 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 
 - **provider/model**:`index.ts writeModelsJson` 把 host 注入的模型清单挂在单一自建
   provider `cindy` 下,写进 `<agentHome>/models.json`。`baseUrl = runtimeConfig.endpoint`
-  —— desktop 侧是本地 anthropic-compat proxy(loopback);proxy 未起时 fail-open 直连真上游
-  (`anthropic-compat-proxy-host.ts`)。凭证走 `$CINDY_PI_API_KEY` env 插值,不落盘。
+  —— Desktop 与 Host 的本地代理路由使用 anthropic-compat proxy(loopback)。实际启动和
+  live-refresh 等待在途创建；未就绪时明确失败，不把真上游写入启动快照、静默丢失选定来源。
+  失败后的下一次显式启动可重新创建，关闭期间的旧创建结果会回收，不增加后台重试。
+  原生 API/keyless BYOM 仍使用自身端点，远程端点与目录预览不依赖本机代理。
+  同步 endpoint getter 为辅助读取保留上游回退，不能代替启动就绪检查。
+  凭证走 `$CINDY_PI_API_KEY` env 插值,不落盘。共享生命周期及启动边界回归见
+  `anthropicCompatProxyInboundPort.test.ts`、`piByomNoCindyAuth.test.ts` 与
+  `hostPiNativeProvidersParity.test.ts`。
 - **system prompt**:`--append-system-prompt` 追加 host 产品段 + 用户段,**保留 pi 默认
   prompt**(不用 `--system-prompt` 整体替换 —— 那会丢掉 pi 自己调好的工具用法/工程约定)。
   追加段的文本写在会话 `configHome/append-system-prompt.md`,命令行只传该文件路径(pi 接受
@@ -462,7 +468,7 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   轮次标记仅在实际 prompt RPC 边界登记。已完成的 Host 包 mutation 不退回可重放状态。
   复用原退出确认流程退役 root Pi，不重放输入、不重跑构建、不杀后代进程树；
   退出未确认时仍保留进程登记和 runtime 文件。SSH daemon 断链保活语义不变。
-  缺 settled 但 RPC 仍通的情况仍走已有有界 watchdog，丢失工具结果不伪造。
+  缺 settled 且没有明确失败终态但 RPC 仍通的情况仍走已有有界 watchdog，丢失工具结果不伪造。
   回归见 `pi-long-tool-lifecycle.test.ts`、`transport.test.ts` 与 `rpc-client.test.ts`。
 - Pi 的 `Request was aborted` 只在无当前 generation 的 Host Stop 时归入请求断流失败；
   无错误正文的 bare abort 仍保持取消。复用既有错误收口及重试预算，不重放包命令或工具。
@@ -472,6 +478,13 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   发送续跑指令，保留已有结果；用户 Stop 取消待续跑。Pi `auto_retry_end(success=false)`
   已用尽原生预算时保持 `pi-gateway-drop` 终态，不再叠加 Host 重试。本规则不修改受管
   Pi 二进制、版本或原生重试上限；原生分类兼容需由 Pi 上游独立修正。
+  重试耗尽即释放运行标记并发布失败收尾与空闲状态，Host Stop 则保留取消结果；
+  不依赖可能缺席的 `agent_settled`，不把失败伪装成原生成功。新 `agent_start` 前
+  到达的旧终态不重复结算，也不清除下一条已准备消息的逐轮权限策略；队列中的旧
+  `done`／空闲状态仍属于旧轮次。Stop 的异步成功回执也只清理发起停止时的策略归属；
+  归属从新消息准备发送时建立，不能只比较原生 `agent_start` 代次或策略对象引用。
+  回归见 `pi-long-tool-lifecycle.test.ts`、
+  `pi-translator.test.ts` 与 `pi-auto-review-dispatch.test.ts`。
 - SDK 成功与正文入库／交付分开取证。只见 JSONL 成功但 SQLite 缺正文时，不能自动重跑
   已成功的工作；应沿 RPC → translator → Session → persistence 查丢失边界。
 

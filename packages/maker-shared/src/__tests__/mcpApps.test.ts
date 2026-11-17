@@ -14,6 +14,27 @@ beforeAll(async () => {
 });
 it('keeps the HTML parser out of the core MCP Apps import', () => { expect(coreParserLoads).toBe(0); });
 describe('MCP Apps cross-platform document contract', () => {
+  // #10433 / unit: the generated top-level document must tell mobile WebKit
+  // to use CSS pixels at the card's width. Existing RPC tests never parse its head.
+  // An inner App's viewport cannot fix this missing outer-document contract.
+  it('declares a device-width viewport for both inline and served App documents', async () => {
+    const { parse } = await import('parse5');
+    for (const resource of [undefined, 'http://127.0.0.1:5001/resource.html']) {
+      const document = parse(mcpAppSandboxDocument('native-bridge', resource));
+      const html = document.childNodes.find(node => node.nodeName === 'html');
+      const head = html && 'childNodes' in html
+        ? html.childNodes.find(node => node.nodeName === 'head') : undefined;
+      const viewports = head && 'childNodes' in head ? head.childNodes.filter(node =>
+        node.nodeName === 'meta' && 'attrs' in node &&
+        node.attrs.some(attr => attr.name === 'name' && attr.value === 'viewport')) : [];
+      expect(viewports).toHaveLength(1);
+      const meta = viewports[0];
+      const content = meta && 'attrs' in meta ? meta.attrs.find(attr => attr.name === 'content')?.value : '';
+      const directives = Object.fromEntries((content ?? '').split(',').map(value => value.trim().split('=')));
+      expect(directives.width).toBe('device-width');
+      expect(directives['initial-scale']).toBe('1');
+    }
+  });
   function proxy(resourceUrl?: string, requestedUrl = resourceUrl) {
     const attributes: Record<string, string> = {};
     const frame = {

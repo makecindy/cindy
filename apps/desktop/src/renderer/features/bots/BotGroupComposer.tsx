@@ -195,6 +195,7 @@ export function BotGroupComposer({
   dragOver = false,
   quote = null,
   onQuoteChange,
+  onQuoteAccepted,
   sendReply,
   onSendStart,
   onSendSettled,
@@ -226,6 +227,8 @@ export function BotGroupComposer({
   /** 引用回复 waiting to go with the next message, and how its original reads right now. */
   quote?: { view: BotGroupQuoteView; display: BotGroupQuoteDisplay } | null;
   onQuoteChange?: (quote: BotGroupQuoteView | null) => void;
+  /** Main saved the send: the quote belongs to that message, so the page can clear its copy. */
+  onQuoteAccepted?: (quote: BotGroupQuoteView) => void;
   /** Thread mode: posts the reply. */
   sendReply?: (input: Omit<Parameters<ChatServerApi['reply']>[0], 'groupId' | 'rootId'>) => Promise<ChatServerResult<{ messageId: string }>>;
   /** The message is on its way: show its local copy now. */
@@ -563,6 +566,12 @@ export function BotGroupComposer({
       toast.error(t('bots.groupChat.composer.sendFailed'));
       return;
     } finally { sendingRef.current = false; setSending(false); }
+    // The quote is part of the message now. Clear it by identity so a quote picked while
+    // main was saving survives, and so it leaves the saved draft even if this page is gone.
+    if (sentQuote) {
+      if (quoteRef.current === sentQuote) quoteRef.current = null;
+      onQuoteAccepted?.(sentQuote);
+    }
     if (groupAttemptRef.current === attempt) groupAttemptRef.current = null;
     // A remounted composer may already hold newer text. Consume only this edit's
     // metadata; its live subscriber also retires the restored attempt.
