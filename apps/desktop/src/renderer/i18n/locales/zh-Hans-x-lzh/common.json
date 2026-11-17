@@ -14860,7 +14860,7 @@
       "credentialSwitchBusy": "Codex 方行于他差事，暂不能依此差事所择之模型来源而易（须重启共用之 Codex 后台进程）。俟其毕，点「再试」即可。",
       "accountBoundaryPending": "Cindy 方易名籍之态，暂不能始此差事。稍候片刻，点「再试」；若屡见之，请重启 Cindy。",
       "codexThreadStale": "Codex 鉴权之式已易，此差事不能续 —— 请新开差事，方生效。",
-      "codexSharedAuthLinkUnavailable": "本机之 Codex 已登入，而此差事不能读其登入：Windows 常权之下，无法建立指向其之链接。请以管理员之身执行 {{appName}} 一次，或开启 Windows 开发人员模式，而后点「再试」。",
+      "codexSharedAuthLinkUnavailable": "本机之 Codex 已登入，而此差事不能读其登入：指向其之链接建不出来（Windows 常权之下，通常建不了）。请确认此电脑之 {{appName}} 有权建立链接（Windows 上可以管理员之身执行一次，或开启开发人员模式），而后点「再试」。",
       "codexResumeNotReady": "Codex 暂不能复此差事，请稍后再试",
       "claudeGatewayOpusPlanMismatch": "此番 Opus 请求实经 XD Gateway，非君之 Claude.ai 订阅；该闸道路由拒此模型。可易为 Claude.ai 订阅再试，或另择模型。",
       "claudeSubscriptionOpusPlanMismatch": "今所连之 Claude Pro 方案不支持 Opus。请易为方案所支持之模型；若方升级方案，请于规制中重连 Anthropic，再试。",

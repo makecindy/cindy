@@ -14869,7 +14869,7 @@
       "credentialSwitchBusy": "其他 Codex 任务仍在运行，暂时无法应用本任务选择的供应商（共享的 Codex 进程需要重启）。等这些任务结束后再点「重试」。",
       "accountBoundaryPending": "Cindy 正在切换账号状态，暂时无法开始这个任务。稍等片刻后点「重试」；如果一直出现，请重启 Cindy。",
       "codexThreadStale": "Codex 鉴权模式已切换，当前任务无法继续。新建任务后即可生效。",
-      "codexSharedAuthLinkUnavailable": "本机的 Codex 已经登录，但这个任务读不到那份登录：Windows 普通权限下无法创建指向它的链接。请用管理员身份运行一次 {{appName}}，或开启 Windows 开发者模式，然后点「重试」。",
+      "codexSharedAuthLinkUnavailable": "本机的 Codex 已经登录，但这个任务读不到那份登录：指向它的链接建不出来（Windows 上通常是普通权限建不了）。请确认这台电脑上的 {{appName}} 有权限创建链接（Windows 上可以用管理员身份运行一次，或开启开发者模式），然后点「重试」。",
       "codexResumeNotReady": "Codex 暂时无法恢复这个任务，请稍后重试",
       "claudeGatewayOpusPlanMismatch": "这次 Opus 请求实际走的是 XD Gateway，不是你的 Claude.ai 订阅；该网关路由拒绝了此模型。可切换到 Claude.ai 订阅后重试，或换一个模型。",
       "claudeSubscriptionOpusPlanMismatch": "当前连接的 Claude Pro 套餐不支持 Opus。请切换到套餐支持的模型；如果刚升级套餐，请在设置中重新连接 Anthropic 后重试。",
