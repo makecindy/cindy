@@ -9536,6 +9536,32 @@
     "preparing": "Préparation de la connexion",
     "preparingSubtitle": "Chargement des méthodes disponibles pour cette région",
     "unavailable": "Connexion indisponible pour l'instant",
+    "hostUnavailable": {
+      "title": "Le Host n’a pas démarré",
+      "checkAgain": "Vérifier à nouveau",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "Ces données appartiennent à un autre compte que la connexion enregistrée par le Host.",
+          "action": "Exécutez cindy-host login avec le compte d’origine, puis redémarrez le Host."
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "Une autre application Cindy utilise ces données.",
+          "action": "Fermez-la, puis redémarrez le Host."
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "Les données de ce compte ne peuvent pas être ouvertes.",
+          "action": "Si vous avez récemment utilisé une version plus récente de Cindy, mettez d’abord Cindy à jour vers la dernière version sur cet ordinateur, puis redémarrez le Host. Sinon, exécutez cindy-host status pour en voir la raison."
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Au démarrage, le Host n’a pas pu joindre le service de connexion.",
+          "action": "Vérifiez votre réseau, puis redémarrez le Host."
+        },
+        "HOST_START_FAILED": {
+          "body": "Le Host a rencontré une erreur au démarrage.",
+          "action": "Redémarrez le Host. Si cela se reproduit, exécutez cindy-host status pour en voir la raison."
+        }
+      }
+    },
     "retry": "Réessayer",
     "browserWaiting": "Terminez la vérification dans votre navigateur",
     "browserCallback": {

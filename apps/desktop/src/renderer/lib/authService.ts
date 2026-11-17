@@ -1,4 +1,9 @@
 import type { AuthFlowState } from '@cindy/auth-client';
+import {
+  readHostUnavailableReason,
+  type HostStartFailureReason,
+  type HostUnavailable,
+} from '../../shared/hostStartFailure';
 import type {
   DesktopAccountDeletionAvailabilityResult,
   DesktopAccountDeletionChallenge,
@@ -50,6 +55,8 @@ export interface AuthState {
   accountDeletionRestored: boolean;
   /** 持久凭证库(safeStorage)连续多个刷新周期不可用(#1687);恢复后自动回 false。 */
   credentialStoreUnavailable: boolean;
+  /** Client mode only: why the Host serving this window did not start. Absent otherwise. */
+  hostUnavailable?: HostUnavailable;
 }
 
 export type AuthStateSource = 'initialize' | 'push' | 'snapshot';
@@ -61,6 +68,11 @@ export interface AuthStateObserver {
 
 export interface AuthService extends AuthStateObserver {
   initialize(): Promise<AuthState>;
+  /**
+   * Client mode: read the Host's start-failure reason again, without asking it to renew or restart. Null when
+   * the Host reports none (or outside client mode); Main's own push stays the authoritative auth state.
+   */
+  readHostUnavailableReason(): Promise<HostStartFailureReason | null>;
   getLoginState(): Promise<DesktopLoginActionResult>;
   dispatchLoginAction(action: DesktopLoginAction): Promise<DesktopLoginActionResult>;
   logout(): Promise<void>;
@@ -97,7 +109,14 @@ function normalizeAuthState(raw: Awaited<ReturnType<typeof window.electronAPI.au
     hasAccountDeletionReceipt: raw.hasAccountDeletionReceipt === true,
     accountDeletionRestored: raw.accountDeletionRestored === true,
     credentialStoreUnavailable: raw.credentialStoreUnavailable === true,
+    ...hostUnavailableField(raw),
   };
+}
+
+/** Present only when the Host reports a start failure, so every other state keeps its exact shape. */
+function hostUnavailableField(raw: { hostUnavailable?: unknown }): { hostUnavailable?: HostUnavailable } {
+  const reason = readHostUnavailableReason(raw);
+  return reason ? { hostUnavailable: { reason } } : {};
 }
 
 /** One Main projection per renderer. Components only own their subscriptions. */
@@ -158,6 +177,11 @@ export function createAuthService(): AuthService {
 
     getSnapshot() {
       return snapshot;
+    },
+
+    async readHostUnavailableReason(): Promise<HostStartFailureReason | null> {
+      const read = window.electronAPI.authGetHostState;
+      return read ? readHostUnavailableReason(await read()) : null;
     },
 
     getLoginState(): Promise<DesktopLoginActionResult> {

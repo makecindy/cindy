@@ -11,6 +11,11 @@ import type {
   DesktopLoginActionResult,
   DesktopLoginState,
 } from '../../../../shared/authIpc';
+import {
+  HOST_START_FAILURE_REASONS,
+  hostStartFailureMessageKeys,
+  type HostStartFailureReason,
+} from '../../../../shared/hostStartFailure';
 
 const auth = vi.hoisted(() => ({
   value: {} as Record<string, unknown>,
@@ -20,6 +25,7 @@ const auth = vi.hoisted(() => ({
   enterLocalMode: vi.fn(async () => undefined),
   acceptPrivacyConsent: vi.fn(async () => undefined),
   dispatchLoginAction: vi.fn<(action: DesktopLoginAction) => Promise<DesktopLoginActionResult>>(),
+  recheckHostUnavailable: vi.fn(async () => undefined),
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => auth.value }));
@@ -45,10 +51,13 @@ let epoch: number;
 function Harness({
   addAccount = false,
   credentialStoreUnavailable = false,
+  hostUnavailableReason,
   initialState = null,
 }: {
   addAccount?: boolean;
   credentialStoreUnavailable?: boolean;
+  /** Left undefined as before this field existed: the context of a desktop that does not serve a Host. */
+  hostUnavailableReason?: HostStartFailureReason | null;
   initialState?: DesktopLoginState | null;
 }) {
   const [loginState, setLoginState] = useState<DesktopLoginState | null>(initialState);
@@ -56,6 +65,9 @@ function Harness({
   auth.value = {
     loginState,
     credentialStoreUnavailable,
+    ...(hostUnavailableReason !== undefined
+      ? { hostUnavailableReason, recheckHostUnavailable: auth.recheckHostUnavailable }
+      : {}),
     loadLoginState: auth.loadLoginState,
     beginAddAccount: auth.beginAddAccount,
     cancelAddAccount: auth.cancelAddAccount,
@@ -258,5 +270,43 @@ describe('login initialization ownership', () => {
       'login.errors.AUTH_SERVICE_UNAVAILABLE',
     );
     expect(auth.loadLoginState).not.toHaveBeenCalled();
+  });
+});
+
+/*
+ * Test value (unit, real LoginPage + useLogin): client mode, the Host serving this window did not start
+ * (release table 甲, 2026-11-17). Before this, the window showed the ordinary sign-in form, whose sign-in
+ * and Skip Sign-In run in the window itself: the testing-period limit's "do not" path (a local session,
+ * saved accounts and owner beside a Host that stays down). Minimal input: a context with or without the
+ * Host's reason. Rule: the reason shows the shared error panel and no form or Skip Sign-In; without it
+ * (every desktop that does not serve a Host) nothing changes.
+ */
+describe('login while the Host serving this window did not start', () => {
+  it('keeps the sign-in form and Skip Sign-In when the context has no Host reason', async () => {
+    render(<Harness />);
+
+    await screen.findByTestId('login-panel-identifier');
+    expect(screen.getByTestId('login-input')).toBeTruthy();
+    expect(screen.getByTestId('login-skip-entry')).toBeTruthy();
+    expect(screen.queryByTestId('login-panel-host-unavailable')).toBeNull();
+  });
+
+  it.each(HOST_START_FAILURE_REASONS)('shows why for %s, with no sign-in form or Skip Sign-In', async (reason) => {
+    render(<Harness hostUnavailableReason={reason} />);
+
+    const panel = await screen.findByTestId('login-panel-host-unavailable');
+    const { body, action } = hostStartFailureMessageKeys(reason);
+    expect(panel.textContent).toContain('login.hostUnavailable.title');
+    expect(panel.textContent).toContain(body);
+    if (action) expect(panel.textContent).toContain(action);
+    await waitFor(() => expect(auth.loadLoginState).toHaveBeenCalled());
+    expect(screen.queryByTestId('login-panel-identifier')).toBeNull();
+    expect(screen.queryByTestId('login-local-mode')).toBeNull();
+    expect(screen.queryByTestId('login-skip-entry')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('login-host-unavailable-recheck'));
+    await waitFor(() => expect(auth.recheckHostUnavailable).toHaveBeenCalledOnce());
+    expect(auth.dispatchLoginAction).not.toHaveBeenCalled();
+    expect(auth.enterLocalMode).not.toHaveBeenCalled();
   });
 });

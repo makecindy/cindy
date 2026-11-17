@@ -11,7 +11,9 @@ import {
   ColdStartAuthFallbackRegistry,
   commitColdStartRefreshIfCurrent,
 } from '../authStartupGate';
-import { loginPreparingErrorState } from '../../shared/authIpc';
+import { loginPreparingErrorState, parseDesktopLoginAction } from '../../shared/authIpc';
+import { HOST_NOT_STARTED, readHostUnavailableReason } from '../../shared/hostStartFailure';
+import { createIpcError } from '../../shared/ipc-errors';
 import { accessTokenRefreshDelayMs } from '../authTokenClaims';
 
 // Test value (unit): execute the production cold-start and login-action entrypoints with
@@ -41,6 +43,10 @@ const names = new Set([
   'waitForColdStartRetry',
   'stopColdStartRecovery',
   'runLoginAction',
+  // The two sign-in entries the window refuses while its Host did not start.
+  'hostNotStartedInClientMode',
+  'dispatchLoginAction',
+  'enterLocalMode',
 ]);
 const compiled = ts.transpileModule(
   `
@@ -82,7 +88,7 @@ ${source.statements
   .map((node) => node.getText(source).replace(/^export /, ''))
   .join('\n')}
 return {
-  fetch: apiFetch, start: initialize, runtimeRefresh: refresh, reset: () => runLoginAction({ type: 'reset' }),
+  fetch: apiFetch, start: initialize, dispatchLoginAction, enterLocalMode, runtimeRefresh: refresh, reset: () => runLoginAction({ type: 'reset' }),
   manualLogin: () => runLoginAction({ type: 'discover', identifier: 'test@example.invalid' }),
   state: snapshotAuthState,
   hostAuth: (reader) => { authRefreshOverride = reader; },
@@ -195,7 +201,13 @@ function setup(random = 0) {
     scheduleXdOrgBetaDefault: vi.fn(),
     notifyAccessTokenRefreshed: vi.fn(),
     mergeMembershipWithExisting: (membership: unknown) => membership,
-    getProviderSecretStore: () => ({ reconcileOwner: vi.fn() }),
+    getProviderSecretStore: () => ({ reconcileOwner: vi.fn(), invalidateCaches: vi.fn() }),
+    HOST_NOT_STARTED,
+    readHostUnavailableReason,
+    createIpcError,
+    parseDesktopLoginAction,
+    browserAuthorizationSlot: { cancelActive: vi.fn(() => false) },
+    withAccountFreeOwnerCommit: vi.fn(async () => {}),
     notifyRenderer: vi.fn(),
     notifyAuthListeners: vi.fn(),
   };
@@ -652,6 +664,39 @@ describe('delegated Host owner state', () => {
     h.hostAuth(async () => ({ isAuthenticated: true, user: { id: 'host-owner' } }));
     await expect(h.runtimeRefresh()).resolves.toBe(true);
     expect(h.deps.commitVolatileAppSession).toHaveBeenCalledWith('cloud', 'host-owner');
+  });
+
+  // 甲 (2026-11-17): the window's own sign-in and Skip Sign-In write a session, the saved accounts and the
+  // owner. While the Host it serves reports that it did not start, both are refused with one fixed code and
+  // touch nothing; outside client mode, and once the Host state carries no reason, they run as before.
+  it('refuses its own sign-in and Skip Sign-In while the Host reports that it did not start', async () => {
+    const h = setup();
+    h.hostAuth(async () => ({ isAuthenticated: false, user: null }));
+    h.receiveHostAuthState({ isAuthenticated: false, user: null, hostUnavailable: { reason: 'HOST_DATABASE_UNAVAILABLE' } });
+    const original = structuredClone(h.saved);
+
+    await expect(h.dispatchLoginAction({ type: 'discover', email: 'person@example.invalid' }))
+      .resolves.toEqual({ success: false, code: HOST_NOT_STARTED, state: null });
+    await expect(h.enterLocalMode()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED', message: `[PRECONDITION_FAILED] ${HOST_NOT_STARTED}` });
+    expect(h.request).not.toHaveBeenCalled();
+    expect(h.loadProviders).not.toHaveBeenCalled();
+    expect(h.transaction).not.toHaveBeenCalled();
+    expect(h.saved).toEqual(original);
+    expect(h.deps.commitCloudAppSession).not.toHaveBeenCalled();
+    expect(h.deps.withAccountFreeOwnerCommit).not.toHaveBeenCalled();
+
+    // A Host state with no reason lifts the refusal: the action reaches the ordinary parsing.
+    h.receiveHostAuthState({ isAuthenticated: false, user: null });
+    await expect(h.dispatchLoginAction({ type: 'not-an-action' }))
+      .resolves.toMatchObject({ success: false, code: 'INVALID_AUTH_ACTION' });
+  });
+
+  it('signs in and skips sign-in as before outside client mode', async () => {
+    const h = setup();
+    await expect(h.dispatchLoginAction({ type: 'not-an-action' }))
+      .resolves.toMatchObject({ success: false, code: 'INVALID_AUTH_ACTION' });
+    await h.enterLocalMode();
+    expect(h.deps.withAccountFreeOwnerCommit).toHaveBeenCalledOnce();
   });
 
   it('rejects an event without explicit Host mode', () => {

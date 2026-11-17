@@ -9421,6 +9421,32 @@
     "preparing": "ログインサービスに接続中",
     "preparingSubtitle": "この地域で利用可能な方法を読み込んでいます",
     "unavailable": "現在ログインできません",
+    "hostUnavailable": {
+      "title": "Host が起動しませんでした",
+      "checkAgain": "再確認",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "このデータは、Host に保存されているログインとは別のアカウントのものです。",
+          "action": "元のアカウントで cindy-host login を実行してから、Host を再起動してください。"
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "別の Cindy アプリがこのデータを使用しています。",
+          "action": "そのアプリを終了してから、Host を再起動してください。"
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "このアカウントのデータを開けません。",
+          "action": "最近より新しいバージョンの Cindy を使った場合は、まずこのコンピュータの Cindy を最新バージョンに更新してから、Host を再起動してください。そうでない場合は、cindy-host status を実行して原因を確認してください。"
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Host の起動時にログインサービスに接続できませんでした。",
+          "action": "ネットワークを確認してから、Host を再起動してください。"
+        },
+        "HOST_START_FAILED": {
+          "body": "Host の起動中にエラーが発生しました。",
+          "action": "Host を再起動してください。それでもエラーになる場合は、cindy-host status を実行して原因を確認してください。"
+        }
+      }
+    },
     "retry": "再試行",
     "browserWaiting": "ブラウザで認証を完了してください",
     "browserCallback": {

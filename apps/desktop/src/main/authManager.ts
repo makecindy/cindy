@@ -1,5 +1,7 @@
 import { isDefinitiveRefreshError } from './authRefreshError.js';
 import { mapMembershipToAuthUser, type User, type CurrentUser } from '../shared/authUser.js';
+import { HOST_NOT_STARTED, readHostUnavailableReason, type HostUnavailable } from '../shared/hostStartFailure.js';
+import { createIpcError } from '../shared/ipc-errors.js';
 export type { User } from '../shared/authUser.js';
 import { resolveRuntimeDeviceId } from './deviceId.js';
 /**
@@ -266,6 +268,11 @@ export interface AuthState {
    * 续期持久化,renderer 应显示可操作提示;成功读写一次后自动回 false。
    */
   credentialStoreUnavailable: boolean;
+  /**
+   * Client mode only, from the Host: why the Host serving this window did not start (shared/hostStartFailure.ts).
+   * Absent in every state this process produces itself and in an ordinary signed-out Host state.
+   */
+  hostUnavailable?: HostUnavailable | null;
 }
 
 export interface AuthInitializeOptions {
@@ -480,6 +487,15 @@ export function setAuthRefreshOverride(
 ): void {
   authRefreshOverride = fn;
   delegatedAuthState = null;
+}
+
+/**
+ * Client mode, while the Host serving this window reports that it did not start: the window does not sign in
+ * or skip sign-in on its own. Doing so would write a session, the saved accounts and the owner beside a Host
+ * that stays down. Lifted when sign-in moves to the Host (docs/host/client-mode-account-switch.md 3.5).
+ */
+function hostNotStartedInClientMode(): boolean {
+  return authRefreshOverride !== null && readHostUnavailableReason(delegatedAuthState) !== null;
 }
 
 export function receiveHostAuthState(state: AuthState): void {
@@ -4273,6 +4289,7 @@ export function hasNoPersistedAuthCredentials(): boolean {
 
 /** Enter the account-free local session through the shared projection boundary. */
 export async function enterLocalMode(): Promise<AuthState> {
+  if (hostNotStartedInClientMode()) throw createIpcError('PRECONDITION_FAILED', HOST_NOT_STARTED);
   stopColdStartRecovery();
   browserAuthorizationSlot.cancelActive();
   // Local mode has a different data owner. Drop process-local generic OAuth
@@ -5952,6 +5969,7 @@ async function runLoginAction(
 }
 
 export async function dispatchLoginAction(action: unknown): Promise<DesktopLoginActionResult> {
+  if (hostNotStartedInClientMode()) return { success: false, code: HOST_NOT_STARTED, state: loginFlowState };
   const dispatchLoginFlowEpoch = loginFlowEpoch;
   // Terminal logout clears credentials synchronously, then tears down the old
   // account boundary in the background so the rejecting request can unwind.

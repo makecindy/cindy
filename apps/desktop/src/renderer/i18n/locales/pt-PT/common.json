@@ -9536,6 +9536,32 @@
     "preparing": "A preparar o início de sessão",
     "preparingSubtitle": "A carregar os métodos disponíveis para esta região",
     "unavailable": "Início de sessão indisponível agora",
+    "hostUnavailable": {
+      "title": "O Host não arrancou",
+      "checkAgain": "Verificar novamente",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "Estes dados pertencem a uma conta diferente da sessão guardada no Host.",
+          "action": "Execute cindy-host login com a conta original e reinicie o Host."
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "Outra aplicação da Cindy está a usar estes dados.",
+          "action": "Feche-a e reinicie o Host."
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "Não é possível abrir os dados desta conta.",
+          "action": "Se usou recentemente uma versão mais recente da Cindy, atualize primeiro a Cindy neste computador para a versão mais recente e reinicie o Host. Caso contrário, execute cindy-host status para ver o motivo."
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "O Host não conseguiu aceder ao serviço de início de sessão ao arrancar.",
+          "action": "Verifique a sua rede e reinicie o Host."
+        },
+        "HOST_START_FAILED": {
+          "body": "O Host encontrou um erro ao arrancar.",
+          "action": "Reinicie o Host. Se voltar a acontecer, execute cindy-host status para ver o motivo."
+        }
+      }
+    },
     "retry": "Tentar novamente",
     "browserWaiting": "Concluir a verificação no navegador",
     "browserCallback": {

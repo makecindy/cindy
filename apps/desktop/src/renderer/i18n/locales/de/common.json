@@ -9464,6 +9464,32 @@
     "preparing": "Anmeldung wird vorbereitet",
     "preparingSubtitle": "Verfügbare Methoden für diese Region werden geladen",
     "unavailable": "Anmeldung derzeit nicht möglich",
+    "hostUnavailable": {
+      "title": "Der Host wurde nicht gestartet",
+      "checkAgain": "Erneut prüfen",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "Diese Daten gehören zu einem anderen Konto als die gespeicherte Anmeldung des Hosts.",
+          "action": "Führe cindy-host login mit dem ursprünglichen Konto aus und starte den Host dann neu."
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "Ein anderes Cindy-Programm verwendet diese Daten.",
+          "action": "Beende es und starte den Host dann neu."
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "Die Daten dieses Kontos lassen sich nicht öffnen.",
+          "action": "Wenn du kürzlich eine neuere Version von Cindy verwendet hast, aktualisiere Cindy auf diesem Computer zuerst auf die neueste Version und starte den Host dann neu. Andernfalls führe cindy-host status aus, um den Grund zu sehen."
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Der Host konnte beim Start den Anmeldedienst nicht erreichen.",
+          "action": "Prüfe deine Netzwerkverbindung und starte den Host dann neu."
+        },
+        "HOST_START_FAILED": {
+          "body": "Beim Start des Hosts ist ein Fehler aufgetreten.",
+          "action": "Starte den Host neu. Wenn es wieder passiert, führe cindy-host status aus, um den Grund zu sehen."
+        }
+      }
+    },
     "retry": "Erneut versuchen",
     "browserWaiting": "Bestätigung im Browser abschließen",
     "browserCallback": {

@@ -2342,7 +2342,11 @@ interface ElectronAPI {
     accountDeletionRestored: boolean;
     /** 持久凭证库(safeStorage)连续多个刷新周期不可用(#1687)。 */
     credentialStoreUnavailable?: boolean;
+    /** Client mode only: why the Host serving this window did not start (shared/hostStartFailure.ts). */
+    hostUnavailable?: { reason: string } | null;
   }>;
+  /** Client mode only: read the Host's auth state again (proxied `auth:get-state`). */
+  authGetHostState?: () => Promise<{ hostUnavailable?: unknown } | null>;
   authGetLoginState: () => Promise<DesktopLoginActionResult>;
   authDispatchLoginAction: (action: DesktopLoginAction) => Promise<DesktopLoginActionResult>;
   /** 登录 captcha 托管挑战页地址(不含 query);LoginCaptchaOverlay 装载 webview 用。 */
