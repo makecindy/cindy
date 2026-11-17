@@ -1317,7 +1317,6 @@ import {
   sshCodexWorkerRoutingContext,
 } from './orcaProviderRoutingContext.js';
 import {
-  clearSessionProvider,
   getSessionProvider,
   hasSessionProvider,
   hydrateSessionProvider,
@@ -1456,11 +1455,9 @@ import {
   acceptSessionRuntimeMutation,
   cancelPendingSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
-  clearSessionRuntimeControlState,
   getPendingSessionRuntimeMutation,
   applySessionRuntimeOverrideForStart,
   getSessionRuntimeControlSnapshot,
-  projectSessionRuntimeControl,
   isPendingSessionRuntimeRouteExplicit,
   mergeSessionRuntimeProfilePatch,
   recordUserSessionRuntimeMutation,
@@ -1475,7 +1472,12 @@ import {
   type ApplySessionRuntimeSelection,
   type InternalRuntimeSelectionOptions,
 } from './sessionRuntimeSelectionApply.js';
-import { createSessionRuntimeProjection, createUpdateScheduledPreference } from './sessionRuntimeProjection.js';
+import {
+  createSessionRuntimeCleanup,
+  createSessionRuntimeProjection,
+  createSessionRuntimeProjector,
+  createUpdateScheduledPreference,
+} from './sessionRuntimeProjection.js';
 import { createResolvePendingRuntimeAxisPatch } from './pendingRuntimeAxisPatch.js';
 import { assertModelRouteUsableWith } from './modelRouteAdmission.js';
 import {
@@ -6583,32 +6585,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   log.info('registering maker:* IPC handlers');
   const { broadcastSessionRuntimeProjection, projectScheduledPreferences } =
     createSessionRuntimeProjection({ broadcastSessionPatched });
-  setSessionRuntimeProjector((session) => {
-    const baseline = parseScheduledModelBaseline(session.scheduledModelBaseline);
-    const projection = baseline ? projectScheduledPreferences(session.id, baseline) : projectSessionRuntimeControl(session.id, {
-      agentKind: dbToMakerAgentKind(session.agentKind),
-      model: session.model,
-      providerId: session.providerId?.trim() || null,
-      effort: session.effort as SessionRuntimeProfile['effort'],
-      fastMode: session.fastMode,
-    });
-    return { ...projection, runtimePluginsSelected: !!readRuntimePluginSettings(session.id) };
-  });
-  setSessionRuntimeCleanup((sessionId) => {
-    // 任务在另一台电脑上还没启动完：让那台停下，不再迟到地启动、跑完这一轮。
-    cancelPendingRemoteStart(sessionId);
-    workingDirectoryRecovery.discard(sessionId);
-    clearSessionRuntimeControlState(sessionId);
-    clearSessionProvider(sessionId);
-    setSessionEffort(sessionId, null);
-    setSessionFastMode(sessionId, false);
-    void broadcastSessionRuntimeProjection(sessionId).catch((error) => {
-      log.debug('session runtime cleanup projection failed', {
-        sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-  });
+  setSessionRuntimeProjector(createSessionRuntimeProjector({
+    projectScheduledPreferences,
+    runtimePluginsSelected: (sessionId) => !!readRuntimePluginSettings(sessionId),
+  }));
+  setSessionRuntimeCleanup(createSessionRuntimeCleanup({
+    cancelPendingRemoteStart,
+    discardWorkingDirectoryRecovery: (sessionId) => workingDirectoryRecovery.discard(sessionId),
+    broadcastSessionRuntimeProjection,
+    log,
+  }));
   disposePiPackagesChangedBroadcast?.();
   disposePiPackagesChangedBroadcast = onPiPackagesChanged((origin) => {
     void invalidateLocalPiPackageRuntimesForObservedChange(maker, origin)

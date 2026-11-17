@@ -44,6 +44,13 @@ const runtimeControlSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/sessionRuntimeControl.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+// The task read projector and the archive/delete cleanup register.ts passed to
+// setSessionRuntimeProjector and setSessionRuntimeCleanup moved verbatim into sessionRuntimeProjection.ts
+// (createSessionRuntimeProjector, createSessionRuntimeCleanup); register.ts passes their results.
+const runtimeProjectionSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeProjection.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 const deviceLinkHostSource = readFileSync(
   resolve(mainRoot, 'device-link/index.ts'),
   'utf8',
@@ -1224,9 +1231,9 @@ describe('session runtime control wiring', () => {
       'export function wireSessionToIpc',
     );
     const terminalCleanup = handlerBody(
-      registerSource,
-      'setSessionRuntimeCleanup((sessionId) => {',
-      'disposePiPackagesChangedBroadcast?.();',
+      runtimeProjectionSource,
+      'export function createSessionRuntimeCleanup(',
+      '\n}\n',
     );
 
     expect(closeBoundary).not.toContain('clearSessionRuntimeControlState(session.id);');
@@ -1350,10 +1357,11 @@ describe('session runtime control wiring', () => {
   });
 
   it('projects runtime state into shared session snapshots and patch notifications', () => {
-    expect(registerSource).toContain('setSessionRuntimeProjector((session) =>');
-    expect(registerSource).toContain('setSessionRuntimeCleanup((sessionId) =>');
+    expect(registerSource).toContain('setSessionRuntimeProjector(createSessionRuntimeProjector({');
+    expect(runtimeProjectionSource).toContain('  return (session) => {');
+    expect(registerSource).toContain('setSessionRuntimeCleanup(createSessionRuntimeCleanup({');
     expect(registerSource).toContain('broadcastSessionRuntimeProjection(sessionId');
-    expect(registerSource).toContain('projectSessionRuntimeControl(session.id');
+    expect(runtimeProjectionSource).toContain('projectSessionRuntimeControl(session.id');
     expect(runtimeControlSource).toContain('runtimeEffective: effective');
     expect(runtimeControlSource).toContain('runtimePending: control.pending');
     expect(runtimeControlSource).toContain("effort: effective.effort ?? '',");
