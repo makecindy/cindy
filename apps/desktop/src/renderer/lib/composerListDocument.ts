@@ -1,7 +1,7 @@
 import type { JSONContent } from '@tiptap/core';
 
 type ListKind = 'bullet' | 'ordered';
-type OrderedMarker = '.' | ')' | '、';
+type OrderedMarker = '.' | ')';
 
 interface ListMarker {
   kind: ListKind;
@@ -17,7 +17,8 @@ interface ComposerLine {
 }
 
 const BULLET_RE = /^([-+*•])([ \t]+)/;
-const ORDERED_RE = /^([1-9]\d{0,8})([.)、])([ \t]*)/;
+// Markdown only: the CJK ordinal is not list syntax for stored or pasted text.
+const ORDERED_RE = /^([1-9]\d{0,8})([.)])([ \t]+)/;
 
 function inlineNodeText(node: JSONContent): string {
   if (node.type === 'text') return node.text ?? '';
@@ -62,7 +63,7 @@ function splitParagraphLines(paragraph: JSONContent): ComposerLine[] {
   return lines;
 }
 
-function parseListMarker(text: string, markdownOnly = false): ListMarker | null {
+function parseListMarker(text: string): ListMarker | null {
   // Only unindented rows are promoted here. Indented rows may be nested
   // Markdown, and the visual fallback remains responsible for those until
   // their parent item is also represented structurally.
@@ -80,19 +81,11 @@ function parseListMarker(text: string, markdownOnly = false): ListMarker | null 
 
   const ordered = text.match(ORDERED_RE);
   if (ordered) {
-    const marker = ordered[2] as OrderedMarker;
-    // Pasted text is only parsed as Markdown; the CJK ordinal is not Markdown
-    // syntax, so it stays literal there.
-    if (markdownOnly && marker === '、') return null;
-    if (marker !== '、' && ordered[3].length === 0) return null;
     return {
       kind: 'ordered',
-      // CJK ordered markers are valid with or without a following space.
-      // Keep that space in the item body so serialization preserves the
-      // user's original form without adding another list attribute.
-      prefixLength: marker === '、' ? ordered[1].length + marker.length : ordered[0].length,
-      marker,
-      separator: marker === '、' ? '' : ordered[3],
+      prefixLength: ordered[0].length,
+      marker: ordered[2] as OrderedMarker,
+      separator: ordered[3],
       start: Number(ordered[1]),
     };
   }
@@ -120,11 +113,10 @@ function paragraphFromLine(line: ComposerLine, attrs?: JSONContent['attrs']): JS
 function listFromLines(
   lines: ComposerLine[],
   marker: ListMarker,
-  markdownOnly: boolean,
   paragraphAttrs?: JSONContent['attrs'],
 ): JSONContent {
   const items = lines.map((line) => {
-    const lineMarker = parseListMarker(line.text, markdownOnly);
+    const lineMarker = parseListMarker(line.text);
     const content =
       stripPrefix(line.content, lineMarker?.prefixLength ?? marker.prefixLength) ?? line.content;
     return {
@@ -134,7 +126,7 @@ function listFromLines(
   });
   const attrs =
     marker.kind === 'ordered'
-      ? marker.separator === ' ' && marker.marker !== '、'
+      ? marker.separator === ' '
         ? { start: marker.start ?? 1, marker: marker.marker }
         : { start: marker.start ?? 1, marker: marker.marker, separator: marker.separator }
       : marker.marker === '-' && marker.separator === ' '
@@ -184,7 +176,6 @@ function isFenceClosing(text: string, state: FenceState): boolean {
 function paragraphToBlocks(
   paragraph: JSONContent,
   initialFence: FenceState | null,
-  markdownOnly: boolean,
 ): { blocks: JSONContent[]; fence: FenceState | null } {
   const lines = splitParagraphLines(paragraph);
   let scannedFence: FenceState | null = initialFence;
@@ -194,7 +185,7 @@ function paragraphToBlocks(
       if (isFenceClosing(line.text, scannedFence)) scannedFence = null;
       continue;
     }
-    if (parseListMarker(line.text, markdownOnly)) hasPromotableList = true;
+    if (parseListMarker(line.text)) hasPromotableList = true;
     const opening = fenceOpening(line.text);
     if (opening) scannedFence = opening;
   }
@@ -215,7 +206,7 @@ function paragraphToBlocks(
   };
   const flushList = () => {
     if (listLines.length === 0 || !listMarker) return;
-    blocks.push(listFromLines(listLines, listMarker, markdownOnly, paragraph.attrs));
+    blocks.push(listFromLines(listLines, listMarker, paragraph.attrs));
     listLines = [];
     listMarker = null;
   };
@@ -234,7 +225,7 @@ function paragraphToBlocks(
       fence = opening;
       continue;
     }
-    const marker = parseListMarker(line.text, markdownOnly);
+    const marker = parseListMarker(line.text);
     if (!marker) {
       flushList();
       plainLines.push(line);
@@ -291,19 +282,14 @@ function mergeLists(left: JSONContent, right: JSONContent): JSONContent {
  * nested rows, and paragraphs containing inline atoms that obscure the marker
  * remain plain text and can still use the compatibility renderer.
  */
-export function normalizeComposerDocumentJSON(
-  document: JSONContent,
-  markdownOnly = false,
-): JSONContent {
+export function normalizeComposerDocumentJSON(document: JSONContent): JSONContent {
   if (document.type !== 'doc' || !Array.isArray(document.content)) return document;
 
   const normalized: JSONContent[] = [];
   let fence: FenceState | null = null;
   for (const node of stripHostCapabilityChips(document).content!) {
     const result: { blocks: JSONContent[]; fence: FenceState | null } =
-      node.type === 'paragraph'
-        ? paragraphToBlocks(node, fence, markdownOnly)
-        : { blocks: [node], fence };
+      node.type === 'paragraph' ? paragraphToBlocks(node, fence) : { blocks: [node], fence };
     fence = result.fence;
     for (const block of result.blocks) {
       const previous = normalized.at(-1);
@@ -386,7 +372,7 @@ export function insertComposerDocumentForRestore(
 }
 
 /** Build a normalized composer document from plain clipboard/history text. */
-export function plainTextToComposerDocument(text: string, markdownOnly = false): JSONContent {
+export function plainTextToComposerDocument(text: string): JSONContent {
   const content = text
     .split('\n')
     .map((line) =>
@@ -394,7 +380,7 @@ export function plainTextToComposerDocument(text: string, markdownOnly = false):
         ? { type: 'paragraph', content: [{ type: 'text', text: line }] }
         : { type: 'paragraph' },
     );
-  return normalizeComposerDocumentJSON({ type: 'doc', content }, markdownOnly);
+  return normalizeComposerDocumentJSON({ type: 'doc', content });
 }
 
 export function composerDocumentContainsList(document: JSONContent): boolean {
