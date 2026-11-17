@@ -143,7 +143,7 @@ it.each([
   {pending:undefined, target:'cc', harness:'claude-code'},
   {pending:undefined, target:'codex', harness:undefined},
 ])('routes an explicit model choice through the correct runtime controller: %j', async ({pending,target,harness}) => {
-  const start = source.indexOf('      setModel: async (taskId, route, assertUnchanged) =>');
+  const start = source.indexOf('      setModel: async (');
   const property = source.slice(start, source.indexOf('      assertTeamPlanUnstarted:',start)).trim().replace(/,$/, '');
   const set = vi.fn(async () => ({ok:true,status:'applied'}));
   const apply = compile(`return ({${property}}).setModel;`, {PluginTaskError,sessionControlService:{
@@ -164,7 +164,7 @@ it.each([
   { current: 'share:provider', target: undefined },
   { current: 'share:provider', target: 'share:provider' },
 ])('stages the complete source change $current → $target without touching the active turn', async ({ current, target }) => {
-  const start = source.indexOf('      setModel: async (taskId, route, assertUnchanged) =>');
+  const start = source.indexOf('      setModel: async (');
   const property = source.slice(start, source.indexOf('      assertTeamPlanUnstarted:', start)).trim().replace(/,$/, '');
   const set = vi.fn(async () => ({ ok: true, status: 'deferred' }));
   const apply = compile(`return ({${property}}).setModel;`, { PluginTaskError, sessionControlService: {
@@ -242,7 +242,7 @@ it('keeps a verified remote provider group as the source while rejecting an unre
 });
 
 it.each(['codex', 'cc'])('rechecks preferences after runtime admission waits for %s', async agentKind => {
-  const start = source.indexOf('      setModel: async (taskId, route, assertUnchanged) =>');
+  const start = source.indexOf('      setModel: async (');
   const property = source.slice(start, source.indexOf('      assertTeamPlanUnstarted:', start)).trim().replace(/,$/, '');
   let selectedModel = 'selected';
   let release!: () => void;

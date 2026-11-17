@@ -5,8 +5,33 @@ import type { InstalledGhost } from '../../../shared/ghost.js';
 import { buildPluginMessage } from '../../../shared/pluginMessage.js';
 import { parseUserContent } from '../../../renderer/lib/imageRef.js';
 import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
+import { createGhostPageBridge } from '../../../shared/ghostPageBridge.js';
 
 describe('plugin task pipe', () => {
+  // Shared project metadata and directory access must not expand an old tasks-only grant.
+  // Existing cases only covered own-task routes. Real page API and pipe; one project request. Unit.
+  it('gates shared IM projects on existing target consent and rejects competing overrides', async () => {
+    const handler = vi.fn(async () => ({ accepted: true }));
+    const approved = { ...ghost, manifest: { ...ghost.manifest, agent: { tasks: true, targets: true } }, targetCapabilityApproved: true } as InstalledGhost;
+    let current = ghost;
+    const page = createGhostPageBridge({ ping: async () => ({ ok: true, id: 'p' }),
+      send: payload => handlePluginTaskRequest('p', payload, { getGhost: () => current, handler, isCurrent: () => true }) });
+    const requests = [
+      { type: 'tasks-request', kind: 'imProjects' },
+      { type: 'tasks-request', kind: 'create', requestKey: 'project', title: 'Group', imProject: 'chat' },
+      { type: 'tasks-request', kind: 'followImProject', taskId: 'owned', expectedRevision: 1, imProject: '/project' },
+    ];
+    for (const request of requests) {
+      const { type: _type, kind, ...args } = request;
+      current = ghost;
+      await expect(page.api.tasks[kind]!(args)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+      current = approved;
+      await expect(page.api.tasks[kind]!(args)).resolves.toEqual({ accepted: true });
+    }
+    expect(handler).toHaveBeenCalledTimes(3);
+    for (const field of [{ permissionMode: 'bypassPermissions' }, { isolatedWorkspace: true }, { callId: 'call' }])
+      expect(validPluginTaskRequest({ ...requests[1], ...field })).toBe(false);
+  });
   // User regression: the Host picker returned a valid remote selection that tasks.create/setModel
   // rejected. Exercise the actual pipe, including its capability discovery; existing cases only
   // passed local routes. Minimum input: the same route on a paired computer or share. Tier: unit.
