@@ -1203,7 +1203,12 @@ import {
   type MakerSessionAgentSwitchHandlerDeps,
   type PendingAgentSwitchIntent,
 } from './sessionAgentSwitchHandler.js';
-import { pendingHarnessRuntimeMutation, setSessionRuntimeHarness, stagedSelectionProfile } from './sessionRuntimeHarnessSelection.js';
+import {
+  pendingHarnessRuntimeMutation,
+  setSessionRuntimeHarness,
+  stagedSelectionProfile,
+  userStagedSelectionProjection,
+} from './sessionRuntimeHarnessSelection.js';
 import {
   COMPANION_SESSION_IDS_LIMIT,
   buildHandoffText,
@@ -2828,7 +2833,7 @@ interface OrcaCollabService {
         effectiveBoundary?: 'next_send';
         generation: number;
         effectiveProfile: SessionRuntimeProfile;
-        pendingMutation: ReturnType<typeof getPendingSessionRuntimeMutation>;
+        pendingMutation: import('./sessionControlService.js').SessionRuntimePendingProjection | null;
       }
     | {
         ok: false;
@@ -3106,6 +3111,23 @@ interface OrcaCollabService {
     label?: string;
   }) => Promise<
     | { ok: true; workerId: string; role: string; label: string | null }
+    | { ok: false; errorCode: string; message: string }
+  >;
+  /** Lead 给自己团队里的本机 Worker 换路线；与该 Worker 任务的 set_session_runtime 同一事务。 */
+  setWorkerRuntime: (params: {
+    callerLeadSessionId: string;
+    workerId: string;
+    expectedGeneration?: number;
+    patch: {
+      harness?: AgentKind;
+      model?: string;
+      providerId?: string | null;
+      effort?: import('@cindy/maker-core').Effort;
+      fastMode?: boolean | 'ultrafast';
+    };
+  }) => Promise<
+    | ({ workerId: string; sessionId: string } & Extract<
+        import('./sessionControlService.js').SessionRuntimeSetResult, { ok: true }>)
     | { ok: false; errorCode: string; message: string }
   >;
   listAvailableModels: (params: {
@@ -17651,7 +17673,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     moveSessionQueuedMessage: (params) => sessionControlService.moveQueuedMessage(params),
     steerSession: (params) => sessionControlService.steerSession(params),
     stopSessionTurn: (params) => sessionControlService.stopSessionTurn(params),
-    getSessionRuntime: (params) => sessionControlService.getSessionRuntime(params),
+    getSessionRuntime: async (params) => {
+      const result = await sessionControlService.getSessionRuntime(params);
+      // Agent reads also see a picker choice staged for the next send, as the task's own
+      // composer does; host callers keep reading sessionControlService directly.
+      if (!result.ok || result.runtime.pendingMutation) return result;
+      const staged = userStagedSelectionProjection(agentSwitchPending.get(params.targetSessionId),
+        result.runtime.runtimeGeneration, result.runtime.effectiveProfile.agentDeviceId);
+      return staged ? { ...result, runtime: { ...result.runtime, pendingMutation: staged } } : result;
+    },
     setSessionRuntime: (params) => sessionControlService.setSessionRuntime(params),
     sendToSession: async (params) => {
       const ownerScope = captureDataOwnerBroadcastScope();
@@ -17914,6 +17944,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       try {
         const { assertCurrent } = await captureOrcaTaskAuthority();
         return await orcaTeamService.archiveWorker({ callerLeadSessionId, workerId, beforeArchive: assertCurrent });
+      } catch (err) {
+        return {
+          ok: false,
+          errorCode: 'INTERNAL',
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
+    },
+    setWorkerRuntime: async ({ callerLeadSessionId, workerId, expectedGeneration, patch }) => {
+      try {
+        const { assertCurrent } = await captureOrcaTaskAuthority();
+        const found = await orcaTeamService.resolveWorkerSession({ callerLeadSessionId, workerId });
+        if (!found.ok) return found;
+        // A Worker on another computer only has a proxy row here; its Agent runs over there.
+        if (await orcaRemoteWorkersForHost?.isRemoteWorker(found.sessionId)) {
+          return { ok: false, errorCode: 'REMOTE_WORKER_NOT_SUPPORTED',
+            message: 'This Worker runs on another computer; change its model on that computer.' };
+        }
+        await assertCurrent();
+        // Without a generation the request still fails if the runtime changes during the call.
+        const generation = expectedGeneration ?? getSessionRuntimeControlSnapshot(found.sessionId).generation;
+        const result = await sessionControlService.setSessionRuntime({
+          targetSessionId: found.sessionId, expectedGeneration: generation, beforeMutation: assertCurrent, patch,
+        });
+        return result.ok ? { ...result, workerId: found.workerId, sessionId: found.sessionId } : result;
       } catch (err) {
         return {
           ok: false,

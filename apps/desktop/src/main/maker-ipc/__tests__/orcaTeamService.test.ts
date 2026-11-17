@@ -1262,6 +1262,28 @@ describe('OrcaTeamService', () => {
     expect(deps.broadcastOrcaWorkerChanged).not.toHaveBeenCalled();
   });
 
+  // 2026-11-17: the Lead only saw AGENT_NOT_READY with the raw account code and could not
+  // tell that another route continues the same Worker. Unit: production send entry; the code
+  // stays AGENT_NOT_READY, the original message is kept after the explanation.
+  it('explains a subscription usage limit on sendToWorker and how to continue the same worker', async () => {
+    const original = '[SUBSCRIPTION_ACCOUNT_LIMITED] The task subscription account is waiting for its usage window to reset\nresetAtMs=1794878999000';
+    const { service } = createDeps({
+      resumeWorkerSession: vi.fn(async () => { throw new Error(original); }),
+    });
+
+    const result = await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '继续',
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'AGENT_NOT_READY' });
+    const message = result.ok ? '' : result.message;
+    expect(message).toContain(`until ${new Date(1794878999000).toISOString()}`);
+    expect(message).toContain('set_worker_runtime');
+    expect(message.endsWith(original)).toBe(true);
+  });
+
   it.each([
     ['SESSION_RUNNING', 'BUSY'],
     ['SEND_FAILED', 'AGENT_NOT_READY'],
@@ -2655,7 +2677,7 @@ describe('OrcaTeamService', () => {
         expect(leadMessages[0]).toMatch(/^\[Auto-bridged: worker 异常终止\]\n\n完成了\n\n\(Host note: /);
         expect(leadMessages[0]).toContain('session_id: worker-session-1');
         expect(leadMessages[0]).toContain('send_to_worker');
-        expect(leadMessages[0]).toContain('set_session_runtime');
+        expect(leadMessages[0]).toContain('set_worker_runtime');
       }
     },
   );

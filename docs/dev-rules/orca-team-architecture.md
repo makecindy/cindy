@@ -104,7 +104,7 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 
 ### MCP 与 IPC 控制面
 
-`cindy_orca` 是独立 MCP server，直接顶层注册 21 个工具：18 个 team 控制工具 + 3 个只读诊断工具（后者从已下线的 `orca_bridge` 桥入，保裸名）。它与 renderer IPC 共用同一组 main 侧 service，因此 MCP 和 UI 操作必须有一致的权限、状态和回滚语义。
+`cindy_orca` 是独立 MCP server，直接顶层注册 22 个工具：19 个 team 控制工具 + 3 个只读诊断工具（后者从已下线的 `orca_bridge` 桥入，保裸名）。它与 renderer IPC 共用同一组 main 侧 service，因此 MCP 和 UI 操作必须有一致的权限、状态和回滚语义。
 
 1. `start_team`
 2. `end_team`
@@ -123,10 +123,11 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 15. `idle_worker`
 16. `archive_worker`
 17. `update_worker`（改 worker 的展示角色名 `role` 与 team 内唯一标识 `label`；只改身份元数据，不换 Agent/模型/权限）
-18. `list_available_models`
-19. `get_workspace_info`（只读诊断）
-20. `worker_status`（只读诊断）
-21. `read_worker`（只读诊断）
+18. `set_worker_runtime`（给已开始的本机 Worker 换引擎、模型、来源、推理强度与 Fast；与该 Worker 任务的 `set_session_runtime` 同一事务，见坑点 #13）
+19. `list_available_models`
+20. `get_workspace_info`（只读诊断）
+21. `worker_status`（只读诊断）
+22. `read_worker`（只读诊断）
 
 创建回执陈述交接事实，不让 Lead 猜（2026-11-10 现场：五个 Worker「创建成功、首条任务已排队」被说成
 「五个在跑」，随后全部因读不到 Lead 的文件受阻）。`create_worker` 与 `create_workers` 的每个成功项都带：
@@ -707,8 +708,7 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
     - **回报里写明可以原地继续**：`bridgeWorkerCompletion` 在异常终止回报正文之后附一段 Host note
       （`buildWorkerFailureRecoveryNote`）：Worker 的对话、工作目录与未提交改动都在，状态为 `error`；
       继续就向同一个 Worker `send_to_worker`，用量上限或模型不可用时先用 `cindy_helper` 的
-      `get_session_runtime` / `set_session_runtime` 给它换模型（坑点 #6 的发送边界切换，运行设备 Worker
-      不适用）；归档重建会丢上下文。它是回报正文的一部分（用户在 Lead 对话里也看得到），不进系统提示词。
+      `set_worker_runtime` 给它换路线（坑点 #6 的发送边界切换，运行设备 Worker 不适用）；归档重建会丢上下文。它是回报正文的一部分（用户在 Lead 对话里也看得到），不进系统提示词。
       Worker 的用量上限仍不走普通任务的等待续跑（`isUsageLimitAutoResumeEligible`），由 Lead 决定。
     - **换好的路线在派活时先落地（2026-11-17）**：起因是四个撞了 Claude 订阅上限的 Worker，Lead 已用
       `set_session_runtime` 登记新来源（`next_send`），`send_to_worker` 却回 `[SUBSCRIPTION_ACCOUNT_LIMITED]`：
@@ -718,7 +718,13 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
       协同身份与权限档）；切换焦点的后台预热同样跳过。随后 Lead 不带 `harness` 再调 `set_session_runtime`
       时，generation 一致也回 `CONFLICT`：发送边界的选择优先，turn 结束时生效的临时调整会被它拒绝。
       现在省略 `harness` 且已有待生效选择时，改为修改那次选择（未给的字段沿用它），与用户在面板里重选一致。
-      回归见 `orcaTeamService.test.ts` 与 `sessionRuntimeHarnessSelection.test.ts`。
+      Lead 用的是自己的 `set_worker_runtime`（按调用方自己团队里的 worker_id / session_id 定位，运行设备 Worker
+      回 `REMOTE_WORKER_NOT_SUPPORTED`，属 Orca 写操作、逐次走任务权限；`expected_generation` 可省，省略时以调用时
+      的 generation 做并发保护），背后仍是 `sessionControlService.setSessionRuntime`。`send_to_worker` 因订阅账号
+      （上限、需登录、不可用）起不来时仍回 `AGENT_NOT_READY`，正文先说明原因、重置时刻与「换路线或等待」，原错误
+      附在后面（`workerRouteFailureHint`）。Agent 侧的 `get_session_runtime` 也投影用户在面板里登记的选择
+      （`pending.source=user`），宿主内部读取不变。回归见 `orcaTeamService.test.ts`、
+      `sessionRuntimeHarnessSelection.test.ts` 与 lizi-mcps `sessionContext.test.ts`。
     - **Lead 已对该 Worker 采取行动时撤下它的旧回报**：归档（`archiveWorker`）成功后，或向状态为
       `error` 的 Worker 重新派活／打断改派成功后，把该 Worker 排在 Lead 队列里、Lead 还没读到的异常终止
       回报撤下（coordinator `remove`，与 Stop 清队列同一条结清路径）。正文不丢：`archive_worker` 回
@@ -891,7 +897,7 @@ Mobile 的入口读取和残留表单提交都检查该身份，元数据补齐�
 - 空闲 live 直发：`orcaInterAgentDispatcher` 在 `session.send()` 前必须先 `prepareUnhealthySession`，再重新 `getLiveSession`；prepare 关闭旧 handle 后不得继续向旧对象 send。并发直发必须串行化到同一把 per-session 锁。
 - Worker 创建权限偏好：覆盖无保存偏好时默认 `bypassPermissions`、已保存的 `auto` / `bypassPermissions` 继续优先、MCP 显式 `auto → bypassPermissions` 必须先经用户确认且取消／超时零副作用、复用 Team 时省略不重置／显式才更新、首个与后续 Worker 都读取共享创建偏好、已有 Worker 权限不反写、renderer localStorage 启动同步与 tool 写回，以及旧 device-link 被控端被阻止开启协同并提示升级。
 - 交接与恢复（2026-11-11）：创建回执的 `initial_task_state` / `file_access`；出错 Worker 的异常终止回报带原地恢复说明；归档或重新派活后该 Worker 的过期异常终止回报被撤下且回执带回正文，成果与其他 Worker 的回报不动；已归档 Worker 的名字可重新使用；远程 Agent 写进协同正文的虚拟路径落成本机路径。
-- MCP 工具：`cindy_orca` 21 工具（18 team + 3 只读诊断）的 role gate、ctx 缺失、worker/main 误调用、soft/hard limit、duplicate label、budget model API mode gate；`create_workers` 另覆盖默认 hard limit、配置 hard=3、部分成功、连续失败与 hard-limit 后不再调用 host；`update_worker` 覆盖归属校验（跨 lead 拒绝）、role/label 归一、idempotent 空操作、duplicate label 与生成标题同步；诊断工具的纯只读语义（无 active team 时返回空 workspace、不建 team）；排队消息控制 6 工具的归属校验（跨 lead 拒绝）、完整 consuming 投影、非 lead 条目拒绝（`NOT_LEAD_MESSAGE`）、自身队列非协同条目拒绝（`NOT_ORCA_MESSAGE`）、steering 拒绝（`MESSAGE_CONSUMING`）、撤回结清 accepted 暂存、合并的连续性、冲突零修改与移除回调结清，以及转插话的原因回执与排序落点；`send_to_worker` / `send_to_lead` 的 `delivery` 缺省不透传、显式插话与各类 fallback 原因；`interrupt_worker` 另覆盖队首预留、暂停态、graceful-stop 全部 outcome、auto-bridge 抑制和 done 互斥。
+- MCP 工具：`cindy_orca` 22 工具（19 team + 3 只读诊断）的 role gate、ctx 缺失、worker/main 误调用、soft/hard limit、duplicate label、budget model API mode gate；`create_workers` 另覆盖默认 hard limit、配置 hard=3、部分成功、连续失败与 hard-limit 后不再调用 host；`update_worker` 覆盖归属校验（跨 lead 拒绝）、role/label 归一、idempotent 空操作、duplicate label 与生成标题同步；诊断工具的纯只读语义（无 active team 时返回空 workspace、不建 team）；排队消息控制 6 工具的归属校验（跨 lead 拒绝）、完整 consuming 投影、非 lead 条目拒绝（`NOT_LEAD_MESSAGE`）、自身队列非协同条目拒绝（`NOT_ORCA_MESSAGE`）、steering 拒绝（`MESSAGE_CONSUMING`）、撤回结清 accepted 暂存、合并的连续性、冲突零修改与移除回调结清，以及转插话的原因回执与排序落点；`send_to_worker` / `send_to_lead` 的 `delivery` 缺省不透传、显式插话与各类 fallback 原因；`interrupt_worker` 另覆盖队首预留、暂停态、graceful-stop 全部 outcome、auto-bridge 抑制和 done 互斥。
 - Codex MCP context：`CodexMcpThreadContextStore` 覆盖按 threadId 查 context、unknown / missing threadId fail-closed、unregister 后清理、`vendorOptions` 引用保持；`codexHttpBridge` 覆盖从 JSON-RPC `params._meta.threadId` 注入真实 session context。
 - Host 归属校验：`send_to_worker`、`interrupt_worker`、队列控制、`idle_worker`、`archive_worker` 经共享 `resolveWorkerRef`（同时接受 worker_id / session_id 两种 id）必须以 caller 自身 Lead 身份校验，拒绝跨 workflow worker id 与 ctx 缺失；即使模型传错 id 或换用另一种 id，也不能越权操作。
 - UI route：Orca worker 不出现在 sidebar，Lead 自动进 split route，worker deep link 解析到 Lead split route；对应行为由 `apps/desktop/src/renderer/features/cc-agent/__tests__/OrcaWorkflowRoute.navigation.test.tsx` 与 `OrcaWorkflowRoute.compat.test.tsx` 覆盖。

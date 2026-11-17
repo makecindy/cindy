@@ -1,6 +1,6 @@
 import type { AgentKind, Effort } from '@cindy/maker-core';
 import type { SessionRuntimeSetResult } from './sessionControlService.js';
-import type { PendingAgentSwitchIntent } from './sessionAgentSwitchHandler.js';
+import { isUserPendingAgentSwitchIntent, type PendingAgentSwitchIntent } from './sessionAgentSwitchHandler.js';
 import type {
   PendingSessionRuntimeMutation,
   SessionRuntimeProfile,
@@ -46,6 +46,21 @@ export function stagedSelectionProfile(
     effort: (intent.effort ?? null) as Effort | null,
     fastMode: intent.fastMode === 'ultrafast' ? 'ultrafast' : intent.fastMode === true,
   };
+}
+
+/**
+ * A picker choice staged for the next send, projected for Agent runtime reads. Agent-staged
+ * selections already appear through `pendingHarnessRuntimeMutation`; system follow-ups
+ * (`configStaged`) and recovery payloads are not anyone's choice to revise.
+ */
+export function userStagedSelectionProjection(
+  intent: PendingAgentSwitchIntent | undefined,
+  generation: number,
+  currentAgentDeviceId?: string | null,
+): { generation: number; source: 'user'; profile: SessionRuntimeProfile } | null {
+  if (!isUserPendingAgentSwitchIntent(intent)) return null;
+  const profile = stagedSelectionProfile(intent, currentAgentDeviceId);
+  return profile ? { generation, source: 'user', profile } : null;
 }
 
 export interface HarnessRuntimeSelectionDeps {

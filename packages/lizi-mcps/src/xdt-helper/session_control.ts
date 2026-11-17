@@ -45,7 +45,8 @@ export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
   effectiveProfile?: SessionRuntimeProfile;
   pendingMutation?: {
     generation: number;
-    source: 'agent' | 'fallback';
+    /** user = 用户在面板里登记、下一次发送才生效的选择。 */
+    source: 'agent' | 'fallback' | 'user';
     profile: SessionRuntimeProfile;
   } | null;
   fallbackEnabled?: boolean;
@@ -368,7 +369,7 @@ export function registerGetSessionRuntimeTool(
     description:
       '只读查询本机 session 的统一状态：记录生命周期、运行/等待/正常结束/出错结束、标题工作流语义、' +
       '开始时间、最后活动时间、动作摘要、优雅停止状态，以及运行时模型组合、待生效修改和 generation；' +
-      '不返回提示词正文、工具参数或凭证。',
+      'pending.source=user 表示用户在面板里登记、下一条消息发送时才生效的选择。不返回提示词正文、工具参数或凭证。',
     inputShape: {
       session_id: z.string().min(1).optional().describe('目标 session id；省略时查询当前任务。'),
     },

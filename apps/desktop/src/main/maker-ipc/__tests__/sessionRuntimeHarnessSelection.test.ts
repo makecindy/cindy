@@ -8,6 +8,7 @@ import {
 import {
   pendingHarnessRuntimeMutation,
   setSessionRuntimeHarness,
+  userStagedSelectionProjection,
   type HarnessRuntimeSelectionDeps,
 } from '../sessionRuntimeHarnessSelection';
 import type { SessionRuntimeProfile } from '../sessionRuntimeControl';
@@ -220,6 +221,23 @@ describe('runtime harness selection', () => {
     });
     expect(h.close).not.toHaveBeenCalled();
     expect(h.persist).not.toHaveBeenCalled();
+  });
+
+  // Agent runtime reads showed pending=null for a picker choice, so a Lead could overwrite a
+  // choice it never saw. Picker choices project as source=user; system follow-ups and the
+  // agent's own staging (already projected) do not. Tier: unit (the projection Host reads use).
+  it.each([
+    [{ targetAgentKind: 'codex' as const, model: 'gpt-6-astra', providerId: 'openai', sameAgentSelection: true }, 'user'],
+    [{ targetAgentKind: 'codex' as const, model: 'gpt-6-astra', providerId: 'openai', runtimeSource: 'agent' as const }, null],
+    [{ targetAgentKind: 'codex' as const, model: 'gpt-6-astra', providerId: 'openai', configStaged: true }, null],
+  ])('projects only picker choices as user-staged: %j', (intent, source) => {
+    expect(userStagedSelectionProjection(intent, 7, null)?.source ?? null).toBe(source);
+    if (source) {
+      expect(userStagedSelectionProjection(intent, 7, null)).toEqual({
+        generation: 7, source: 'user',
+        profile: { agentDeviceId: null, agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: null, fastMode: false },
+      });
+    }
   });
 
   it('asks to re-read when the staged selection a revision targets is gone', async () => {
