@@ -115,7 +115,7 @@ import {
   isRemoteSessionActivityActive,
   useRemoteSessionActivityRevision,
 } from '@/features/device-link/remoteSessionActivityStore';
-import { absorbSessionStarting } from '@/lib/sessionStartingStore';
+import { absorbSessionStarting, useStartingSessionIds } from '@/lib/sessionStartingStore';
 import type { DialogueDeviceTarget } from '../../lib/dialogueCreateTarget';
 import { MainListScopeHeader } from '../MainListScopeHeader';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
@@ -582,27 +582,45 @@ export function ProjectsSection({
   const sortingPriorityContext = filter.sortBy === 'priority' ? priorityContext : undefined;
   // starting 只让位给真实 in-flight:本地 isRunning(见 useStartingSessionIds),
   // 远程 running / needs-interaction。终态 attention 不再吸收 —— 旧终态会误伤
-  // 新发送,新终态又要代次才能和旧的区分,两边补丁会来回打。没经过 running
-  // 的快完成靠 TTL。
+  // 新发送,新终态又要代次才能和旧的区分,两边补丁会来回打。
+  // 远程任务没经过 running 推送就结束时(快完成、或完成即已读),以被控端推来的
+  // lastTurnEndedAt 为代次:发送后首次看到时记基线,之后它前进即本轮已结束,
+  // 不再等 TTL(否则收件箱里已完成的远程任务会在「进行中」挂最多 2 分钟)。
+  // 同一台电脑的时钟前后比较,不受两端时钟差影响。
+  const startingSessionIds = useStartingSessionIds();
+  const startingTurnBaselines = useRef(new Map<string, number>());
   useEffect(() => {
     const settled = new Set<string>();
+    const baselines = startingTurnBaselines.current;
     const considerRemote = (session: Session) => {
+      if (!session.deviceLinkDeviceId) return;
       if (
         isRemoteSessionActivityActive(
           getRemoteSessionActivity(session.id, session.deviceLinkDeviceId),
         )
       ) {
         settled.add(session.id);
+        return;
       }
+      if (!startingSessionIds.has(session.id)) return;
+      const endedAt = session.lastTurnEndedAt ?? 0;
+      const baseline = baselines.get(session.id);
+      if (baseline === undefined) baselines.set(session.id, endedAt);
+      else if (endedAt > baseline) settled.add(session.id);
     };
+    for (const id of baselines.keys()) {
+      if (!startingSessionIds.has(id)) baselines.delete(id);
+    }
     for (const project of projects) {
       for (const session of project.sessions) considerRemote(session);
     }
     for (const session of dialogues) considerRemote(session);
     for (const session of unclassified) considerRemote(session);
+    // The inbox spans tasks outside the regular list's scope.
+    for (const session of inboxSessions ?? []) considerRemote(session);
     absorbSessionStarting(settled);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 getRemoteSessionActivity 读到的整表内容
-  }, [projects, dialogues, unclassified, remoteActivityRevision]);
+  }, [projects, dialogues, unclassified, inboxSessions, startingSessionIds, remoteActivityRevision]);
 
   // E 期「按设备分组」:有可选远程设备（含断线缓存）+ 开关开 → 按设备切段(本机在前,
   // 远程按设备切换栏顺序);其余情况单段直渲。切段后按当前排序重排本段。

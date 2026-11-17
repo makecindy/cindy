@@ -508,6 +508,22 @@ describe.each([false, true])('Dialogue group starting lifecycle, device grouping
     expectLamp(groupHeader(), 'completed');
   });
 
+  // Bug 2026-11-18: a remote turn that ended without a running push (fast or read on
+  // completion) stayed "starting" for the 2-minute TTL, so the inbox kept it in working.
+  it('settles when the remote turn-end time advances, without a running push or TTL', () => {
+    vi.useFakeTimers();
+    const p = groupProps(groupDevice);
+    const withEnded = (endedAt: number) =>
+      p.dialogues.map((s) => (s.id === 'lit' ? { ...s, lastTurnEndedAt: endedAt } : s));
+    markSessionStarting('lit');
+    const view = render(<StartingSidebar {...p} dialogues={withEnded(100)} />);
+    expect(getStartingSessionIds().has('lit')).toBe(true);
+    view.rerender(<StartingSidebar {...p} dialogues={withEnded(100)} />);
+    expect(getStartingSessionIds().has('lit')).toBe(true);
+    view.rerender(<StartingSidebar {...p} dialogues={withEnded(200)} />);
+    expect(getStartingSessionIds().has('lit')).toBe(false);
+  });
+
   it('keeps the existing no-in-flight terminal fallback and local running settlement', () => {
     vi.useFakeTimers();
     const p = groupProps(groupDevice);
