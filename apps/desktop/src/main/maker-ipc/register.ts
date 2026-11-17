@@ -49,6 +49,12 @@ import { createPluginTaskReviewResolver } from './pluginTaskReviewContext.js';
 import { createPluginTargetReviewLoader } from '../cindy-brain/pluginTargetReview.js';
 import { isPluginTaskPermissionAllowed, assertPluginTaskResult, createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
 import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from './pluginTaskModelRoute.js';
+import { readPluginImProjectCatalog, currentPluginImProjectWorkspaces } from '../hook-control/ipc.js';
+import { resolveSharedImProjectConfig, sharedImProjectFingerprint } from '../hook-control/session-runner.js';
+import { getSharedProjectPref } from '../hook-control/sharedProjectPrefs.js';
+import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
+import { pluginTaskMatchesImProject } from './pluginTaskService.js';
+import { GHOST_ERRAND_PERMISSION_MODES, type GhostErrandPermissionMode } from '../../shared/ghost.js';
 import { resolvePluginWorkerDirectory } from './pluginWorkerDirectory.js';
 import { PluginWriteAccessGate } from './pluginWriteAccessGate.js';
 import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
@@ -83,7 +89,7 @@ import { assertPluginObservableTask, listPluginObserveTasks } from './pluginObse
 import { createPluginCompanionHost } from './pluginCompanionHost.js';
 import { createPluginTargetStore } from './pluginTargetStore.js';
 import { collectPluginAttachmentPayloadTexts, withPluginMessageAttachments } from '../cindy-media/pluginMessageAttachments.js';
-import { isPluginTaskPermissionMode, type PluginTaskRoute, type PluginTaskRequest } from '../../shared/pluginTasks.js';
+import { isPluginTaskPermissionMode, type PluginTaskRoute, type PluginTaskRequest, type PluginTaskView } from '../../shared/pluginTasks.js';
 import { buildPluginMessage } from '../../shared/pluginMessage.js';
 import { createHash as pluginTaskConfigHash } from 'node:crypto';
 import { finishCompanionEnvironmentRemoval } from '../bot-import/runtime.js';
@@ -14233,6 +14239,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!isPluginTaskAuthorized(pluginId)) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin task capability is unavailable');
     };
     const routeUnavailable = (): never => { throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected provider, model or effort is unavailable'); };
+    const readImProject = (pluginId: string, project: string) => {
+      assertPlugin(pluginId);
+      const approval = pluginTargetAuthorizationRevision(pluginId);
+      if (!approval) throw new PluginTaskError('PERMISSION_DENIED', 'Shared IM projects require agent.targets approval');
+      const workspaces = currentPluginImProjectWorkspaces();
+      const alias = project === HOOK_CHAT_WORKSPACE_ALIAS ? project
+        : Object.entries(workspaces).find(([, directory]) => directory === project)?.[0];
+      if (!alias) throw new PluginTaskError('PROJECT_UNAVAILABLE', 'The selected project is no longer available');
+      const workingDir = project === HOOK_CHAT_WORKSPACE_ALIAS ? undefined : project;
+      const matches = (task: PluginTaskView) => pluginTaskMatchesImProject(task, workingDir,
+        Object.values(currentPluginImProjectWorkspaces()));
+      return { alias, workingDir, matches, approval };
+    };
     const resolveRoute = async (pluginId: string, requested?: PluginTaskRoute, callId?: string): Promise<PluginTaskRoute> => {
       assertPlugin(pluginId);
       const defaults = getPluginTaskDefaults(pluginId);
@@ -14280,6 +14299,35 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     pluginTaskEpoch = snapshot;
     pluginTasks = createPluginTaskService({
       store: createPluginTaskStore(snapshot.client), assertCurrent, assertAuthorized: assertPlugin, resolveRoute,
+      resolveImProject: async (pluginId, project) => {
+        assertPlugin(pluginId);
+        const catalog = await readPluginImProjectCatalog();
+        const selected = readImProject(pluginId, project);
+        const fingerprint = sharedImProjectFingerprint(selected.alias);
+        const assertProjectCurrent = () => {
+          assertPlugin(pluginId);
+          const current = readImProject(pluginId, project);
+          if (!catalog.isCurrent() || current.alias !== selected.alias || current.approval !== selected.approval ||
+            sharedImProjectFingerprint(current.alias) !== fingerprint)
+            throw new PluginTaskError('STALE_REVISION', 'Shared project settings changed');
+        };
+        const config = await resolveSharedImProjectConfig(selected.alias, log);
+        assertProjectCurrent();
+        if (!config.providerId || !(GHOST_ERRAND_PERMISSION_MODES as readonly string[]).includes(config.permissionMode))
+          throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected project configuration is unavailable');
+        return { workingDir: selected.workingDir, matches: selected.matches, assertCurrent: assertProjectCurrent,
+          permissionMode: config.permissionMode as GhostErrandPermissionMode,
+          route: { agentKind: config.agentKind === 'claude-code' ? 'cc' : config.agentKind,
+            model: config.model, providerId: config.providerId, effort: config.effort ?? '', fastMode: false,
+            ...(config.agentDeviceId ? { agentDeviceId: config.agentDeviceId } : {}) } };
+      },
+      assertImProjectDispatch: (pluginId, project, task) => {
+        const selected = readImProject(pluginId, project);
+        if (!selected.matches(task)) throw new PluginTaskError('PROJECT_MISMATCH', 'Task moved out of the selected project');
+        const permission = getSharedProjectPref(selected.alias).permissionMode ?? 'bypassPermissions';
+        if (!isPluginTaskPermissionAllowed(task.permissionMode, permission, task.planModeEnabled))
+          throw new PluginTaskError('PERMISSION_DENIED', 'Shared project permission changed');
+      },
       prepareInvocation: (id, operationId, parentId, operation, sessionId) => {
         try { return preparePluginInvocation(id, operationId, parentId, operation, sessionId); }
         catch { throw new PluginTaskError('INVALID_INVOCATION', 'Host invocation is unavailable'); }
@@ -14302,7 +14350,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return config ? clampPluginTaskPermissionMode(config.permissionMode) : undefined;
       },
       readLiveSession: taskId => maker.getSession(taskId),
-      setModel: async (taskId, route, assertUnchanged) => {
+      setModel: async (taskId, route, assertUnchanged, permissionMode) => {
         const current = await sessionControlService.getSessionRuntime({ targetSessionId: taskId });
         if (!current.ok) throw new PluginTaskError('TASK_NOT_FOUND', current.message);
         await assertUnchanged();
@@ -14313,14 +14361,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const selectLocation = location !== selectedLocation || location !== (current.runtime.effectiveProfile.agentDeviceId ?? null);
         const selectHarness = current.runtime.effectiveProfile.agentKind !== targetAgent
           || (pendingAgent !== undefined && pendingAgent !== targetAgent) || selectLocation || !!location;
+        // Project continuation can choose a mode the previous Agent cannot use.
+        // Complete its ordinary idle handoff before applying the new permission.
+        const permissionHandoff = permissionMode !== undefined && current.runtime.effectiveProfile.agentKind !== targetAgent;
         const result = await sessionControlService.setSessionRuntime({ targetSessionId: taskId,
           expectedGeneration: current.runtime.runtimeGeneration,
           beforeMutation: assertUnchanged,
           patch: { ...(selectHarness ? { harness: targetAgent } : {}),
             ...(selectLocation || location ? { agentDeviceId: location } : {}),
             model: route.model, providerId: route.providerId, effort: (route.effort || null) as Effort | null,
-            fastMode: route.fastMode } });
+            fastMode: route.fastMode, ...(permissionMode && !permissionHandoff ? { permissionMode } : {}) } });
         if (!result.ok) throw new PluginTaskError(result.errorCode, result.message);
+        if (permissionHandoff) {
+          await assertUnchanged();
+          await applyPendingAgentSwitchIfIdle(agentSwitchDeps, taskId, { bootstrapAfterSwitch: true });
+          await assertUnchanged();
+          const changed = await sessionControlService.getSessionRuntime({ targetSessionId: taskId });
+          if (!changed.ok) throw new PluginTaskError('TASK_NOT_FOUND', changed.message);
+          if (changed.runtime.effectiveProfile.agentKind !== targetAgent)
+            throw new PluginTaskError('TASK_BUSY', 'Wait for the selected Agent to become available');
+          const permission = await sessionControlService.setSessionRuntime({ targetSessionId: taskId,
+            expectedGeneration: changed.runtime.runtimeGeneration, beforeMutation: assertUnchanged,
+            patch: { permissionMode } });
+          if (!permission.ok) throw new PluginTaskError(permission.errorCode, permission.message);
+          return { status: permission.status };
+        }
         return { status: result.status };
       },
       assertTeamPlanUnstarted: async taskId => {
@@ -14357,7 +14422,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const currentRoute = await resolveRoute(pluginId, requestedRoute, callId);
         if ((Object.keys(currentRoute) as Array<keyof PluginTaskRoute>).some(key => currentRoute[key] !== route[key]))
           throw new PluginTaskError('ROUTE_UNAVAILABLE', 'Plugin task route changed');
-        const requestedWorkingDir = targetContext?.workingDir ?? (!isolatedWorkspace ? cfg?.workingDir : undefined);
+        const requestedWorkingDir = targetContext ? targetContext.workingDir : (!isolatedWorkspace ? cfg?.workingDir : undefined);
         const workingDir = requestedWorkingDir
           ? await resolvePluginWorkerDirectory({
               requested: requestedWorkingDir, configuredDirectory: requestedWorkingDir,
@@ -14446,7 +14511,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           model: resolvedConfig.model, effort: resolvedConfig.effort, fastMode: resolvedConfig.fastMode,
           ...(resolvedConfig.agentDeviceId ? { agentDeviceId: resolvedConfig.agentDeviceId } : {}) };
         const revision = Number.parseInt(pluginTaskConfigHash('sha256').update(JSON.stringify([revisionConfig, row.permissionMode, row.planModeEnabled, row.workingDir, row.status, row.orcaRole])).digest('hex').slice(0, 12), 16);
-        return { taskId, title: row.title, status: row.status, revision, resolvedConfig, workingDir: row.workingDir ?? undefined, permissionMode: row.permissionMode, planModeEnabled: !!row.planModeEnabled, hidden: row.hiddenAt != null };
+        return { taskId, title: row.title, status: row.status, revision, resolvedConfig, workingDir: row.workingDir ?? undefined,
+          workspaceKind: row.workspaceKind === 'dialogue' ? 'dialogue' : 'project',
+          permissionMode: row.permissionMode, planModeEnabled: !!row.planModeEnabled, hidden: row.hiddenAt != null };
       },
       scheduleAutoTitle: schedulePluginAutoTitle,
       dispatch: async (pluginId, taskId, clientId, text, images = [], context, relay, contextItems = []) => {
@@ -14774,6 +14841,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             effort: option.route.effort, fastMode: option.route.fastMode },
           efforts: option.efforts, supportsFastMode: option.supportsFastMode })) };
       }
+      case 'imProjects': {
+        const epoch = getCurrentDbClientSnapshot();
+        const approval = pluginTargetAuthorizationRevision(pluginId);
+        if (!approval) throw new PluginTaskError('PERMISSION_DENIED', 'Shared IM projects require agent.targets approval');
+        const catalog = await readPluginImProjectCatalog();
+        if (epoch !== getCurrentDbClientSnapshot() || !catalog.isCurrent() || pluginTargetAuthorizationRevision(pluginId) !== approval)
+          throw new PluginTaskError('PERMISSION_DENIED', 'Account or plugin authorization changed');
+        return { projects: [{ id: HOOK_CHAT_WORKSPACE_ALIAS, label: t('settings.tina.chat.title') },
+          ...Object.entries(catalog.workspaces).map(([label, id]) => ({ id, label, directory: id }))] };
+      }
+      case 'followImProject': return service.followImProject(pluginId, request);
       case 'setModel': return service.setModel(pluginId, request);
       case 'create': return service.create(pluginId, request);
       case 'get': return service.get(pluginId, request.taskId);
