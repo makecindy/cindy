@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthRefreshBackoff } from '../authRefreshBackoff';
-import { AuthApiError, retryAfterDeadline } from '@cindy/auth-client';
+import { accountVaultKey, AuthApiError, retryAfterDeadline } from '@cindy/auth-client';
 import { runRefreshWithReplacementRetry } from '../authRefreshFailure';
+import { applyRefreshedCredentialsToVault } from '../authRefreshCommit';
 import {
   awaitWithStartupTimeout,
   resolveColdStartTimeoutRecovery,
@@ -27,7 +28,6 @@ const source = ts.createSourceFile(
 const names = new Set([
   'apiFetch',
   'commitDesktopRefreshCredentials',
-  'writeResourceSessionToVault',
   'initialize',
   'receiveHostAuthState',
   'invalidateSession',
@@ -94,8 +94,8 @@ return {
   changeOwner: () => {
     authStateEpoch++; accessToken = 'test-new-login'; currentUser = { id: 'other' };
     saved.session = { version: 1, realm: 'global', refreshToken: 'other-refresh' };
-    vault.activeAccountKey = 'global:other';
-    vault.resources['global:other'] = { realm: 'global', refreshToken: 'other-refresh' };
+    vault.activeAccountKey = '["global","other"]';
+    vault.resources['["global","other"]'] = { realm: 'global', refreshToken: 'other-refresh' };
   },
   stop: stopColdStartRecovery,
   logoutForTest: () => { stopColdStartRecovery(); authStateEpoch++; saved.session = null;
@@ -104,14 +104,16 @@ return {
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
 ).outputText;
 
+const ORIGINAL_KEY = accountVaultKey('global', 'original');
+
 function setup(random = 0) {
   const saved: { session: any } = {
     session: { version: 1, realm: 'global', refreshToken: 'test-refresh' },
   };
   const membership = { id: 'original', kind: 'personal', passportId: 'passport-original' };
   const vault: any = {
-    activeAccountKey: 'global:original',
-    resources: { 'global:original': { realm: 'global', refreshToken: 'test-refresh' } },
+    activeAccountKey: ORIGINAL_KEY,
+    resources: { [ORIGINAL_KEY]: { realm: 'global', refreshToken: 'test-refresh' } },
   };
   const ok = {
     ok: true,
@@ -135,13 +137,12 @@ function setup(random = 0) {
     vault,
     onStartupFallback: vi.fn(),
     transactAuthAccountVault: transaction,
-    accountVaultKey: (realm: string, id: string) => `${realm}:${id}`,
-    loggedOutAccountKeySet: () => new Set(),
+    accountVaultKey,
+    applyRefreshedCredentialsToVault,
     readSafe: () => null,
     writePersistedAuthSessionOrThrow: (refreshToken: string, realm: string) => {
       saved.session = { version: 1, realm, refreshToken };
     },
-    metadataFromMembership: (membership: unknown) => membership,
     accessTokenRefreshDelayMs,
     AuthRefreshBackoff: class extends AuthRefreshBackoff {
       constructor() {
@@ -276,8 +277,8 @@ describe('saved login recovery after startup network failure', () => {
     resolve(h.ok);
     await expect(pending).resolves.toMatchObject({ user: { id: 'other' } });
     expect(h.saved.session.refreshToken).toBe('other-refresh');
-    expect(h.vault.resources['global:original'].refreshToken).toBe('test-rotated');
-    expect(h.vault.activeAccountKey).toBe('global:other');
+    expect(h.vault.resources[ORIGINAL_KEY].refreshToken).toBe('test-rotated');
+    expect(h.vault.activeAccountKey).toBe(accountVaultKey('global', 'other'));
     expect(h.deps.notifyAuthListeners).not.toHaveBeenCalled();
   });
 
@@ -337,12 +338,12 @@ describe('saved login recovery after startup network failure', () => {
       else {
         h.stop();
         h.saved.session.refreshToken = 'newer-refresh';
-        h.vault.resources['global:original'].refreshToken = 'newer-refresh';
+        h.vault.resources[ORIGINAL_KEY].refreshToken = 'newer-refresh';
       }
       resolve(h.ok);
       await pending;
       expect(h.saved.session?.refreshToken).toBe(change === 'logout' ? undefined : 'newer-refresh');
-      expect(h.vault.resources['global:original']?.refreshToken).toBe(
+      expect(h.vault.resources[ORIGINAL_KEY]?.refreshToken).toBe(
         change === 'logout' ? undefined : 'newer-refresh',
       );
     },
@@ -414,7 +415,7 @@ describe('saved login recovery after startup network failure', () => {
       .mockResolvedValueOnce({ ok: false, status: 503, data: {} })
       .mockImplementationOnce(async () => {
         h.saved.session.refreshToken = 'test-replacement';
-        h.vault.resources['global:original'].refreshToken = 'test-replacement';
+        h.vault.resources[ORIGINAL_KEY].refreshToken = 'test-replacement';
         return { ok: false, status: 401, data: { error: { code: 'INVALID_REFRESH_TOKEN' } } };
       })
       .mockImplementationOnce(async () => ({
