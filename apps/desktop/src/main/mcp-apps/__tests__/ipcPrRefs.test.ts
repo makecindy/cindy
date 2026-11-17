@@ -129,17 +129,26 @@ describe('MCP App result PR associations after backfill', () => {
   it('associates public completion, replaces A with B and removes links without another backfill', async () => {
     await write(pending);
     expect(await refs()).toEqual([]);
+    // DB regression: no-link status updates used to broadcast PR changes and
+    // trigger renderer reads/status requests. Existing coverage only checked refs.
+    await write(completed('Processing'));
+    expect(h.changed).not.toHaveBeenCalled();
     await write(completed(url(1)));
     expect(await refs()).toEqual([1]);
+    expect(h.changed).toHaveBeenCalledTimes(1);
     expect(h.changed).toHaveBeenLastCalledWith('task');
+    await write(completed(`Completed: ${url(1)}`));
+    expect(h.changed).toHaveBeenCalledTimes(1);
     expect(h.broadcast).toHaveBeenCalledWith('local-db:messages:created',
       expect.objectContaining({ message: expect.objectContaining({
         content: { mcpAppHistory: { version: 1, title: 'form', text: url(1) } },
       }) }));
     await write(completed(url(2)));
     expect(await refs()).toEqual([2]);
+    expect(h.changed).toHaveBeenCalledTimes(2);
     await write(completed('Saved'));
     expect(await refs()).toEqual([]);
+    expect(h.changed).toHaveBeenCalledTimes(3);
     expect(h.warn).not.toHaveBeenCalled();
     const row = db.select().from(messages).where(eq(messages.clientId, 'card')).get()!;
     expect(JSON.parse(row.content)).toEqual({ mcpApp: completed('Saved') });
