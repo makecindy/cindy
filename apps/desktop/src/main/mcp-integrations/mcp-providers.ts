@@ -797,6 +797,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             ...(request.note ? { note: request.note } : {}),
             ...(ready.requester ? { requester: ready.requester } : {}),
             target: request.target,
+            ...(request.fields ? { fields: request.fields } : {}),
             ...(request.completeWhen ? { completeWhen: request.completeWhen } : {}),
             ...(request.timeoutMinutes ? { timeoutMinutes: request.timeoutMinutes } : {}),
           });

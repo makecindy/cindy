@@ -7,7 +7,7 @@ import {
   type InputHandoffDeviceCode,
   type InputHandoffSource,
 } from '@cindy/device-link';
-import type { ControlBinding, NativeAxNode, NativeAxSnapshot, ScreenControl } from './types.js';
+import type { ControlBinding, HandoffFieldPlan, NativeAxNode, NativeAxSnapshot, ScreenControl } from './types.js';
 import { classifyOrigin, isBrowserBundle } from './originPolicy.js';
 import { findDeviceCode } from './deviceCode.js';
 
@@ -48,6 +48,13 @@ export interface ExtractedStep {
   signIn?: boolean;
 }
 
+/** Keep verified page metadata even when its controls cannot form a complete step. */
+export class IncompleteFormError extends Error {
+  constructor(readonly page: Pick<ExtractedStep, 'source' | 'url' | 'signIn'>) {
+    super('Incomplete form');
+  }
+}
+
 const SKIPPED_SUBROLES = new Set([
   'AXCloseButton',
   'AXMinimizeButton',
@@ -80,6 +87,17 @@ function visible(node: NativeAxNode, windowFrame: number[]): boolean {
   if (windowFrame.length !== 4) return true;
   const [wx, wy, ww, wh] = windowFrame;
   return x + w > wx && y + h > wy && x < wx + ww && y < wy + wh;
+}
+
+/** Chrome clips offscreen AX bounds at the viewport edge, while retaining the field's identity. */
+function laidOutInPage(node: NativeAxNode, page: NativeAxNode): boolean {
+  if (visible(node, [])) return true;
+  if (!node.frame || !page.frame) return false;
+  const [x, y, w, h] = node.frame;
+  const [px, py, pw, ph] = page.frame;
+  const edge = (value: number, start: number, size: number) => Math.abs(value - start) < 2 || Math.abs(value - start - size) < 2;
+  return (w >= 2 && h >= 0 && h < 2 && (edge(y, py, ph) || edge(y + h, py, ph))) ||
+    (h >= 2 && w >= 0 && w < 2 && (edge(x, px, pw) || edge(x + w, px, pw)));
 }
 
 const isWithin = (ref: string, scope: string) => ref === scope || ref.startsWith(`${scope}.`);
@@ -175,7 +193,10 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
     .sort((a, b) => area(b) - area(a))[0];
   // Without a page, a browser window shows only its toolbar: its address bar is never the owner's to fill.
   const pageMissing = browser && !topWeb;
-  const scoped = topWeb ? nodes.filter((node) => isWithin(node.ref, topWeb.ref)) : pageMissing ? [] : nodes;
+  // A page's accessibility tree includes laid-out fields below the viewport.
+  // Scrolling must not turn one form into unrelated partial steps. Zero-size
+  // nodes are excluded unless their bounds were clipped at the viewport edge.
+  const scoped = topWeb ? snapshot.nodes.filter((node) => isWithin(node.ref, topWeb.ref) && laidOutInPage(node, topWeb)) : pageMissing ? [] : nodes;
 
   // Modal sheets take over the window.
   const sheet = scoped.find((node) => node.role === 'AXSheet');
@@ -184,11 +205,22 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
   const origin = topWeb?.url && (browser || /^https?:/i.test(topWeb.url))
     ? classifyOrigin(topWeb.url, browser)
     : undefined;
+  // Included fields can be offscreen; keep their closest ancestor's verified
+  // origin even while they are plain inputs that a field plan may later mask.
+  const nestedAreas = topWeb ? snapshot.nodes.filter((node) =>
+    node.role === 'AXWebArea' && node !== topWeb && isWithin(node.ref, topWeb.ref)) : [];
 
   const textNodes: Array<{ node: NativeAxNode; index: number }> = [];
   inScope.forEach((node, index) => {
     if (node.role === 'AXStaticText') textNodes.push({ node, index });
   });
+  const domIds = new Map<string, number>();
+  const fingerprints = new Map<string, number>();
+  for (const node of inScope) {
+    if (!TEXT_ROLES.has(node.role) || (node.subrole && SKIPPED_SUBROLES.has(node.subrole))) continue;
+    if (node.domId) domIds.set(node.domId, (domIds.get(node.domId) ?? 0) + 1);
+    fingerprints.set(node.fp, (fingerprints.get(node.fp) ?? 0) + 1);
+  }
 
   const controls: ScreenControl[] = [];
   const bindings = new Map<string, ControlBinding>();
@@ -236,7 +268,14 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
       };
       controls.push(control);
       lastTextControl = control;
-      bindings.set(controlId, { kind: 'text', ref: node.ref, fp: node.fp, secure: !!node.secure });
+      // Static validation text can shift AX indices without changing a field.
+      // Only depend on position when neither DOM id nor fingerprint is unique.
+      const stable = (node.domId && domIds.get(node.domId) === 1) || fingerprints.get(node.fp) === 1;
+      const frameArea = nestedAreas.filter((area) => isWithin(node.ref, area.ref))
+        .sort((a, b) => b.ref.length - a.ref.length)[0];
+      const frameOrigin = frameArea?.url ? classifyOrigin(frameArea.url, browser).origin : undefined;
+      const identity = JSON.stringify([node.domId, node.fp, label, stable ? null : node.ref, frameOrigin]);
+      bindings.set(controlId, { kind: 'text', ref: node.ref, fp: node.fp, identity, secure: !!node.secure, ...(frameOrigin ? { frameOrigin } : {}) });
       refs.set(controlId, node.ref);
       return;
     }
@@ -351,25 +390,15 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
   );
   if (primary >= 0) (controls[primary] as Extract<ScreenControl, { kind: 'button' }>).primary = true;
 
-  const capped = capControls(controls, bindings);
   const source: InputHandoffSource = {
     app: clip(snapshot.app) || snapshot.bundleId || 'App',
     ...(snapshot.window.title ? { window: clip(snapshot.window.title) } : {}),
     ...(origin?.origin ? { origin: origin.origin } : {}),
     ...(origin?.warning ? { warning: origin.warning } : {}),
   };
-  if (!source.warning && topWeb && hasSecure) {
-    // A password field inside a nested page from another origin.
-    const secureNode = inScope.find((node) => node.secure);
-    const frameArea = secureNode && webAreas
-      .filter((area) => area !== topWeb && isWithin(secureNode.ref, area.ref))
-      .sort((a, b) => b.ref.length - a.ref.length)[0];
-    const nested = frameArea?.url ? classifyOrigin(frameArea.url, browser) : undefined;
-    if (nested?.origin && origin?.origin && nested.origin !== origin.origin) source.warning = 'embedded-frame';
-  }
+  warnForEmbeddedPasswords(source, controls, bindings);
   const texts = inScope.map((node) => textOf(node)).filter((text): text is string => !!text);
-  const deviceCode = findDeviceCode(inScope, capped.some((control) => control.kind === 'text'));
-  const fieldTypes = capped.flatMap((control) => (control.kind === 'text' ? [control.contentType] : []));
+  const fieldTypes = controls.flatMap((control) => (control.kind === 'text' ? [control.contentType] : []));
   const labels = inScope.filter((node) => !TEXT_ROLES.has(node.role)).map((node) => textOf(node)).filter((text): text is string => !!text);
   let addressSaysLogin = false;
   try {
@@ -381,6 +410,17 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
     (!browser || /^https?:/i.test(topWeb?.url ?? '')) &&
     (fieldTypes.some((type) => SIGN_IN_SECRETS.has(type)) ||
       (looksLikeLogin && fieldTypes.some((type) => SIGN_IN_ACCOUNTS.has(type))));
+  // Never expose a partial form, but retain its verified source for picture
+  // input and page-read protection. A truncated tree may hide the password.
+  if (snapshot.truncated || fieldTypes.length > INPUT_HANDOFF_MAX_CONTROLS) {
+    throw new IncompleteFormError({
+      source,
+      ...(topWeb?.url ? { url: topWeb.url } : {}),
+      signIn: signIn || (!!snapshot.truncated && /^https?:/i.test(topWeb?.url ?? '')),
+    });
+  }
+  const capped = capControls(controls, bindings);
+  const deviceCode = findDeviceCode(inScope, capped.some((control) => control.kind === 'text'));
   return {
     controls: capped,
     shown: deviceCode ? [] : ownerControls(capped),
@@ -430,8 +470,9 @@ function capControls(
 ): ScreenControl[] {
   if (controls.length <= INPUT_HANDOFF_MAX_CONTROLS) return controls;
   const rank = (control: ScreenControl) =>
-    control.kind === 'text' || control.kind === 'choice' ? 0
-      : control.kind === 'button' && control.primary ? 0
+    control.kind === 'text' ? 0
+      : control.kind === 'button' && control.primary ? 1
+        : control.kind === 'choice' ? 1
         : control.kind === 'note' && control.tone !== 'info' ? 1
           : control.kind === 'toggle' ? 1
             : control.kind === 'button' && !control.link ? 2
@@ -445,4 +486,56 @@ function capControls(
   );
   for (const control of controls) if (!keep.has(control.id)) bindings.delete(control.id);
   return controls.filter((control) => keep.has(control.id));
+}
+
+function warnForEmbeddedPasswords(source: InputHandoffSource, controls: ScreenControl[], bindings: Map<string, ControlBinding>): void {
+  if (source.warning || !source.origin) return;
+  if (controls.some(control => {
+    if (control.kind !== 'text' || control.contentType !== 'password') return false;
+    const binding = bindings.get(control.id);
+    return binding?.kind === 'text' && !!binding.frameOrigin && binding.frameOrigin !== source.origin;
+  })) source.warning = 'embedded-frame';
+}
+
+/** Validate the entire plan before replacing any field. Ambiguous labels never guess a target. */
+export function applyFieldPlan(step: ExtractedStep, plan: HandoffFieldPlan[]): boolean {
+  const fields = step.shown.filter((c): c is Extract<InputHandoffControl, { kind: 'text' }> => c.kind === 'text');
+  const used = new Set<string>();
+  const replacements: Array<{ control: typeof fields[number]; binding: ControlBinding }> = [];
+  for (const field of plan) {
+    const matches = field.targets.map((target) => fields.filter((c) => c.label === target.label));
+    if (!matches.length || matches.some((items) => items.length !== 1)) return false;
+    const originals = matches.map((items) => items[0]);
+    const bindings = originals.map((c) => step.bindings.get(c.id));
+    if (bindings.some((b) => b?.kind !== 'text')) return false;
+    const textBindings = bindings as Array<ControlBinding & { kind: 'text' }>;
+    for (const original of originals) {
+      if (used.has(original.id)) return false;
+      used.add(original.id);
+    }
+    const split = originals.length > 1;
+    // Splitting is meaningful only for codes; passwords must stay intact.
+    if (split && (field.contentType !== 'one-time-code' || textBindings.some((b) => b.secure) ||
+      field.targets.some((t) => !Number.isSafeInteger(t.length) || t.length! < 1 || t.length! > 64))) return false;
+    const secure = textBindings.some((b) => b.secure) || field.contentType === 'password';
+    const control = { ...originals[0], label: clip(field.label), contentType: secure ? 'password' as const : field.contentType };
+    // One field can be partially filled; don't imply the whole code is present.
+    if (!originals.every((c) => c.filled)) delete control.filled;
+    replacements.push({ control, binding: {
+      ...textBindings[0], secure, nativeSecure: textBindings[0].secure,
+      ...(split ? { segments: textBindings.map((b, i) => ({ ...b, length: field.targets[i].length! })) } : {}),
+    } });
+  }
+  if (used.size !== fields.length || !fields.length) return false;
+  const first = step.controls.findIndex((c) => used.has(c.id));
+  step.controls = step.controls.filter((c) => !used.has(c.id));
+  step.controls.splice(first, 0, ...replacements.map((r) => r.control));
+  for (const id of used) step.bindings.delete(id);
+  for (const { control, binding } of replacements) step.bindings.set(control.id, binding);
+  step.hasSecure ||= replacements.some((r) => r.control.contentType === 'password');
+  if (step.hasSecure || replacements.some((r) => r.control.contentType === 'one-time-code')) step.signIn = true;
+  step.shown = ownerControls(step.controls);
+  warnForEmbeddedPasswords(step.source, step.controls, step.bindings);
+  step.signature = signatureOf(step.source, step.controls);
+  return true;
 }
