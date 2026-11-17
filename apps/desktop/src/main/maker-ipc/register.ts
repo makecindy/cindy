@@ -444,6 +444,7 @@ import {
   createSessionControlService,
   sessionQueueOriginForDispatcher,
 } from './sessionControlService.js';
+import { runSessionExecutionAction } from './sessionExecutionActions.js';
 import {
   createQueueReorderAdapter,
   type SessionQueueMoveResult,
@@ -2712,6 +2713,7 @@ type SendToSessionResult = SendToSessionInternalResult;
 
 /** 暴露给 xdt-helper MCP provider 的协同控制面，必须复用 IPC 同源业务路径。 */
 interface OrcaCollabService {
+  controlSession: ReturnType<typeof createSessionControlService>['controlSession'];
   listSessionQueue: (
     sessionId: string,
   ) => Promise<
@@ -17464,6 +17466,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   const sessionControlService = createSessionControlService({
+    runSessionAction: params => runSessionExecutionAction(params, {
+      coordinator: inputCoordinator, persist: awaitAgentInputQueueSnapshotPersistence,
+      compact: async (id, instructions, beforeMutation) => {
+        const createOpts = await readSharedTaskTaskCreateOpts(id);
+        await beforeMutation();
+        if (createOpts.agentKind !== 'claude-code') return compactSessionFromHost(id, instructions, beforeMutation);
+        if (instructions !== undefined) throwIpcError('UNSUPPORTED_CAPABILITY', 'Claude compact control does not accept custom instructions');
+        return inputCoordinator.compact(id, createOpts);
+      },
+    }),
     getPluginCaller: () => {
       const plugin = getPluginHostToolCaller();
       const source = hostPluginInputSource();
@@ -17726,6 +17738,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
     updateSessionQueuedMessage: (params) => sessionControlService.updateQueuedMessage(params),
+    controlSession: (params) => sessionControlService.controlSession(params),
     cancelSessionQueuedMessage: (params) => sessionControlService.cancelQueuedMessage(params),
     steerSessionQueuedMessage: (params) => sessionControlService.steerQueuedMessage(params),
     moveSessionQueuedMessage: (params) => sessionControlService.moveQueuedMessage(params),
@@ -23069,19 +23082,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (instructions !== undefined && typeof instructions !== 'string') {
         throwIpcError('INVALID_PARAMS', 'instructions must be a string when provided');
       }
-      return withSendToSessionLock(sessionId, async () => {
-        try {
-          const sess = await getOrResumeSessionForHistory(sessionId, 'compact');
-          if (!sess?.capabilities.manualCompact?.supported) {
-            throwIpcError('UNSUPPORTED_CAPABILITY', 'This agent does not support manual context compaction');
-          }
-          return await sess.compactSession(instructions);
-        } finally {
-          await getOrResumeSessionForHistory.release(sessionId);
-        }
-      });
+      return compactSessionFromHost(sessionId, instructions);
     },
   );
+
+  async function compactSessionFromHost(sessionId: string, instructions?: string, beforeMutation?: () => Promise<void>) {
+    return withSendToSessionLock(sessionId, async () => {
+      try {
+        const sess = await getOrResumeSessionForHistory(sessionId, 'compact');
+        if (!sess?.capabilities.manualCompact?.supported) {
+          throwIpcError('UNSUPPORTED_CAPABILITY', 'This agent does not support manual context compaction');
+        }
+        await beforeMutation?.();
+        return await sess.compactSession(instructions);
+      } finally {
+        await getOrResumeSessionForHistory.release(sessionId);
+      }
+    });
+  }
 
   // History actions restore the persisted native session, without a model turn.
   // bootstrap's strict resume also prevents fresh-history/provider failover.

@@ -98,6 +98,12 @@ export interface SessionSteerTurnIdentity {
 export interface SessionControlServiceDeps {
   /** The gateway supplies the real plugin identity; tool arguments cannot grant this access. */
   getPluginCaller?(): { source: NonNullable<AgentInputQueuedMessage['sourcePlugin']>; assertCurrent(): void } | undefined;
+  runSessionAction?(params: {
+    targetSessionId: string;
+    action: 'pause' | 'resume' | 'retry' | 'compact';
+    instructions?: string;
+    beforeMutation: () => Promise<void>;
+  }): Promise<{ ok: true; result: unknown } | Failure<string>>;
   sessionExists(sessionId: string): Promise<boolean>;
   getLiveSession(sessionId: string): SessionControlLiveSession | null;
   getSessionActivitySnapshot(sessionId: string): Promise<SessionActivitySnapshot>;
@@ -164,6 +170,28 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
   }
 
   return {
+    async controlSession(params: {
+      targetSessionId: string;
+      action: 'pause' | 'resume' | 'retry' | 'compact';
+      instructions?: string;
+    }): Promise<{ ok: true; result: unknown } | Failure<string>> {
+      const plugin = deps.getPluginCaller?.();
+      const beforeMutation = async () => { await assertTaskActionCurrent(); plugin?.assertCurrent(); };
+      const missing = await ensureTarget(params.targetSessionId);
+      await beforeMutation();
+      if (missing) return missing;
+      if (!deps.runSessionAction) return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Session control is unavailable on this Host' };
+      await deps.assertExternalInputAllowed(params.targetSessionId);
+      await beforeMutation();
+      try {
+        return await deps.runSessionAction({ ...params, beforeMutation });
+      } catch (error) {
+        const code = (error as { code?: unknown } | null)?.code;
+        if (typeof code === 'string' && ['UNSUPPORTED_CAPABILITY', 'PRECONDITION_FAILED', 'NOT_FOUND', 'SESSION_RUNNING'].includes(code))
+          return { ok: false, errorCode: code, message: error instanceof Error ? error.message : 'Session action is unavailable' };
+        throw error;
+      }
+    },
     async updateQueuedMessage(params: {
       callerSessionId?: string;
       targetSessionId: string;
@@ -190,6 +218,9 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
             revokeTrustedDesktopQueuedOrigin(next);
             next.sourcePlugin = plugin.source;
             next.autoReviewUserText = { kind: 'agent-request' };
+            if (next.origin?.kind === 'session' || next.origin?.kind === 'orca')
+              next.origin = { ...next.origin, displayText: message };
+            if (item.origin?.kind === 'session' && !item.files?.length) next.persistedContent = message;
           }
           bindTaskActionInput(params.targetSessionId, next);
           return next;

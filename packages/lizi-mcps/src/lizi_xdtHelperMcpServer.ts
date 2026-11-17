@@ -134,6 +134,7 @@ import { registerTeammateSkillReader } from './xdt-helper/teammate_skills.js';
 import type { XdtHelperHistoryDeps } from './xdt-helper/_history_types.js';
 import type { SessionQueueDeps } from './xdt-helper/list_session_queue.js';
 import type { SessionControlDeps } from './xdt-helper/session_control.js';
+import { registerControlSessionTool } from './xdt-helper/session_control.js';
 import type { ControlResult, LiziMcpLogger } from './types.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
 import { logToolResultErrorCode } from './tool-error-telemetry.js';
@@ -788,6 +789,7 @@ export function createXdtHelperMcpServer(
     registerStopSessionTurnTool(registry, controlDeps);
     registerGetSessionRuntimeTool(registry, controlDeps);
     registerSetSessionRuntimeTool(registry, controlDeps);
+    registerControlSessionTool(registry, controlDeps);
   }
 
   if (deps.mcpSetup) registerMcpSetupTool(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.mcpSetup);

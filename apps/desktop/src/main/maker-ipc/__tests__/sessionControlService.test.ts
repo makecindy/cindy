@@ -96,6 +96,7 @@ function setup(opts?: {
     });
   const deps = {
     getPluginCaller: vi.fn<() => { source: { pluginId: string }; assertCurrent(): void } | undefined>(() => undefined),
+    runSessionAction: vi.fn(async (_params: { beforeMutation: () => Promise<void> }) => ({ ok: true as const, result: { executionPaused: true } })),
     sessionExists: vi.fn(async () => opts?.exists ?? true),
     getLiveSession,
     getSessionActivitySnapshot: vi.fn(async () => activity),
@@ -163,12 +164,19 @@ function setup(opts?: {
 }
 
 describe('session control domain service', () => {
+  it('returns the native unsupported compact error rather than an internal failure', async () => {
+    const { deps, service } = setup();
+    deps.runSessionAction.mockRejectedValue(Object.assign(new Error('Native compact is unavailable'), { code: 'UNSUPPORTED_CAPABILITY' }));
+    expect(await service.controlSession({ targetSessionId: 'target', action: 'compact' }))
+      .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Native compact is unavailable' });
+  });
+
   // Unit / all-message queue contract: drive the real queue owner through its public service.
   // Existing cases only granted a task its own handoffs, never a plugin editing a user row.
   it.each([
     undefined,
     { kind: 'session' as const, senderSessionId: 'other', displayText: 'before' },
-    { kind: 'scheduler' as const, scheduleId: 'schedule', runId: 'run' },
+    { kind: 'scheduler' as const, scheduleId: 'schedule', scheduleName: 'automation', runId: 'run' },
   ])('allows a plugin edit without borrowing the original sender authority (%j)', async origin => {
     const original = item(origin);
     original.autoReviewUserText = 'original owner request';
@@ -179,7 +187,7 @@ describe('session control domain service', () => {
     const edited = deps.replaceQueuedMessage.mock.calls[0]?.[2];
     expect(edited).toMatchObject({ clientId: 'queued-1', text: 'edited', sourcePlugin: { pluginId: 'editor' },
       autoReviewUserText: { kind: 'agent-request' } });
-    expect(edited?.origin).toEqual(origin);
+    expect(edited?.origin).toEqual(origin?.kind === 'session' ? { ...origin, displayText: 'edited' } : origin);
   });
 
   it.each(['cancelQueuedMessage', 'steerQueuedMessage', 'moveQueuedMessage'] as const)(

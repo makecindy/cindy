@@ -1008,6 +1008,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           service.listSessionQueuedCounts(sessionIds)),
       },
       sessionControl: {
+        controlSession: wrap((service, params) => service.controlSession(params)),
         updateQueuedMessage: wrap((service, params) => service.updateSessionQueuedMessage(params)),
         cancelQueuedMessage: wrap((service, params) => service.cancelSessionQueuedMessage(params)),
         steerQueuedMessage: wrap((service, params) => service.steerSessionQueuedMessage(params)),

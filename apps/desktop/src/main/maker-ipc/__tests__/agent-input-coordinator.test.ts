@@ -4,6 +4,7 @@ import type { DbClient } from '../../localDb/client/DbClient.js';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
 import { saveAgentInputQueueSnapshot, awaitAgentInputQueueSnapshotPersistence, readInputDeliveryReceipts, loadAgentInputQueueSnapshot, saveCancelledInputDelivery } from '../../localDb/agentInputQueueSnapshots.js';
 import { createInputEnqueueHarness, createInputStopHarness, createSavedQuotaRestoreHarness } from './inputEnqueueHarness.js';
+import { runSessionExecutionAction } from '../sessionExecutionActions.js';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop.js';
 import { mcpAppModelContext } from '../../mcp-apps/runtime.js';
 import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
@@ -907,6 +908,23 @@ describe('discarding the welcome an unfinished meeting queued', () => {
 });
 
 describe('AgentInputCoordinator Orca priority queue transactions', () => {
+  // Unit / shared control contract: pause an empty real queue, enqueue a user message,
+  // then resume via the new production action. Existing tests only called coordinator methods directly.
+  it('shared execution actions hold new input and resume the original queue', async () => {
+    const h = createHarness();
+    const sid = 'controlled-task';
+    const deps = { coordinator: h.coordinator, persist: async () => {}, compact: async () => ({ status: 'compacted' }) };
+    const beforeMutation = async () => {};
+    expect(await runSessionExecutionAction({ targetSessionId: sid, action: 'pause', beforeMutation }, deps))
+      .toMatchObject({ ok: true, result: { executionPaused: true } });
+    h.coordinator.enqueue(sid, makeItem('queued', 'held user input'));
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(await runSessionExecutionAction({ targetSessionId: sid, action: 'resume', beforeMutation }, deps))
+      .toMatchObject({ ok: true, result: { executionPaused: false } });
+    await flush();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toMatchObject({ content: 'held user input' });
+  });
   const orcaItem = (clientId: string, text: string) =>
     makeItem(clientId, text, {
       origin: { kind: 'orca', senderLabel: 'Lead', displayText: text },
@@ -2260,6 +2278,13 @@ describe('agent-chosen control steering', () => {
     expect(queue.map(item => item.clientId)).toEqual(['report']);
     expect(h.coordinator.isQueuePaused(sid)).toBe(true);
     expect(h.coordinator.isPausedForUncertainDelivery(sid)).toBe(true);
+    // The Agent/plugin control action must not convert an uncertain steer into a duplicate turn.
+    for (const action of ['resume', 'retry'] as const) {
+      expect(await runSessionExecutionAction({ targetSessionId: sid, action, beforeMutation: async () => {} }, {
+        coordinator: h.coordinator, persist: async () => {}, compact: async () => undefined,
+      })).toMatchObject({ ok: false, errorCode: 'CONFLICT' });
+      expect(h.coordinator.isPausedForUncertainDelivery(sid)).toBe(true);
+    }
     h.coordinator.onTurnEvent(sid, 'done');
     await flush();
     expect(h.sendToAgent).not.toHaveBeenCalled();

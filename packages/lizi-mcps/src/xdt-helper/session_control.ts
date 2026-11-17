@@ -53,6 +53,11 @@ export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
 
 export interface SessionControlDeps {
   getSessionContext: () => LiziMcpSessionContext;
+  controlSession?(params: {
+    targetSessionId: string;
+    action: 'pause' | 'resume' | 'retry' | 'compact';
+    instructions?: string;
+  }): Promise<ControlResult<{ result: unknown }, string>>;
   updateQueuedMessage(params: {
     callerSessionId?: string;
     targetSessionId: string;
@@ -143,6 +148,28 @@ function mapControlFailure(result: { ok: false; errorCode: string; message: stri
     return errorPayload('HOST_NOT_READY', `${BRAND_NAME} 主进程会话服务尚未就绪，请稍后重试。`);
   }
   return errorPayload(result.errorCode, result.message, result.data);
+}
+
+export function registerControlSessionTool(registry: XdtHelperToolRegistry, deps: SessionControlDeps): void {
+  if (!deps.controlSession) return;
+  registry.register({
+    name: 'control_session', category: 'control',
+    description: '控制本机指定任务：pause 暂停后续输入和待答交互的执行，不中止已在运行的模型或工具；' +
+      'resume 解除执行暂停并恢复原队列；retry 复用原错误重试；compact 复用引擎原生手动压缩。' +
+      'resume/retry 不重放送达未知的消息；原生能力不支持时明确报错。Agent 与声明 control 的插件共用原生产事务。',
+    inputShape: {
+      session_id: z.string().min(1),
+      action: z.enum(['pause', 'resume', 'retry', 'compact']),
+      instructions: z.string().max(32768).optional().describe('仅 compact 支持的压缩说明。'),
+    },
+    handler: async ({ session_id, action, instructions }) => {
+      if (instructions !== undefined && action !== 'compact')
+        return errorPayload('INVALID_ARGS', 'instructions is only supported for compact');
+      const result = await deps.controlSession!({ targetSessionId: session_id, action,
+        ...(instructions !== undefined ? { instructions } : {}) });
+      return result.ok ? okPayload({ session_id, action, result: result.result }) : mapControlFailure(result);
+    },
+  });
 }
 
 export function registerUpdateSessionQueuedMessageTool(

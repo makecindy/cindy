@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { XdtHelperToolRegistry, type XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
 import {
+  registerControlSessionTool,
   registerCancelSessionQueuedMessageTool,
   registerGetSessionRuntimeTool,
   registerMoveSessionQueuedMessageTool,
@@ -90,10 +91,21 @@ function setup(opts?: { sessionId?: string | undefined }) {
   registerStopSessionTurnTool(registry, deps);
   registerGetSessionRuntimeTool(registry, deps);
   registerSetSessionRuntimeTool(registry, deps);
+  registerControlSessionTool(registry, deps);
   return { deps, registry };
 }
 
 describe('cindy_helper session control tools', () => {
+  it('exposes shared execution actions only when the Host provides them', async () => {
+    const { deps, registry } = setup();
+    expect(parse(await registry.call('control_session', { session_id: 'target', action: 'pause' }))).toMatchObject({ ok: false });
+    deps.controlSession = vi.fn(async () => ({ ok: true as const, result: { executionPaused: true } }));
+    registerControlSessionTool(registry, deps);
+    expect(parse(await registry.call('control_session', { session_id: 'target', action: 'pause' })))
+      .toMatchObject({ ok: true, action: 'pause', result: { executionPaused: true } });
+    expect(parse(await registry.call('control_session', { session_id: 'target', action: 'pause', instructions: 'summary' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  });
   // Unit / queue capability contract: an attested plugin has no task identity.
   // The old entry rejected every mutation with NO_SESSION_CONTEXT before reaching the queue owner.
   it.each(['update', 'cancel', 'steer', 'move'] as const)('allows plugin %s through the existing queue tool', async action => {
