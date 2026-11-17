@@ -1234,8 +1234,10 @@ it('groups companion lanes by owner project even when execution is dialogue-only
   expect(sections[0].data[0].session.workingDir).toBe('/isolated/chat');
 });
 
-it('derives follow-up from active current targets, independently of the latest run', () => {
-  const bound = schedule('active', { targetSessionId: 's1' });
+it('derives PR follow-up from active current targets, independently of the latest run', () => {
+  const bound = schedule('active', { targetSessionId: 's1', preRunHook: { command: 'node gate.mjs https://github.com/o/r/pull/12' } });
+  // Bug 2026-11-17: routine automations bound to a task kept it in working forever.
+  expect(buildSessionScheduleIndex([schedule('routine', { targetSessionId: 's1' })], new Map()).get('s1')?.hasActiveFollowUp).toBe(false);
   const stopped = schedule('paused', { targetSessionId: 's1', status: 'paused' });
   const runs = new Map([
     ['paused', [run('latest', 'paused')]],

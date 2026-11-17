@@ -10,6 +10,7 @@ import { isDefaultDraftSessionTitle } from './sessionTitle.js';
 import { getSessionListCollapseView } from './sessionListCollapse.js';
 import { collapseWorktreeDirForGrouping, sessionTaskProjectDirectory } from './worktreePaths.js';
 import { normalizeProjectOrderPath } from './projectOrderSync.js';
+import { scheduleFollowsPr } from './liveTaskPriority.js';
 import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from './projectAliasSync.js';
 
 let sessionListCollator: Intl.Collator | undefined;
@@ -143,7 +144,7 @@ export interface RemoteSessionScheduleInfo {
   nextFireAt?: number;
   /** 同一会话的所有已知 schedule 绑定都已 paused / expired 时为 true；缺失按 false。 */
   allSchedulesStopped?: boolean;
-  /** An active automation currently targets this task, including between runs. */
+  /** An active PR follow-up currently targets this task, including between runs. */
   hasActiveFollowUp?: boolean;
   unreadRunIds: string[];
   hasUnreadFailedRun?: boolean;
@@ -746,7 +747,8 @@ export function buildSessionScheduleIndex(
     });
     const hasActiveFollowUp = Array.from(scheduleIds).some((scheduleId) => {
       const schedule = schedulesById.get(scheduleId);
-      return schedule?.status === 'active' && schedule.targetSessionId === sessionId;
+      return schedule?.status === 'active' && schedule.targetSessionId === sessionId
+        && scheduleFollowsPr(schedule);
     });
     index.set(sessionId, { ...info, allSchedulesStopped, hasActiveFollowUp });
   }

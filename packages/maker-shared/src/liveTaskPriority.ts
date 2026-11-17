@@ -63,6 +63,16 @@ export function taskInboxSection(
   return 'inbox';
 }
 
+/**
+ * Only PR follow-ups put a quiet task in working. It is the host's existing PR-follow
+ * contract (prFollowWatch): a configured pre-run check that names a PR / MR URL.
+ * Routine automations bound to a task are ordinary tasks for the inbox.
+ */
+export function scheduleFollowsPr(schedule: { preRunHook?: { command?: string } | null }): boolean {
+  const command = schedule.preRunHook?.command ?? '';
+  return /https?:\/\/[^\s'"]+\/(?:pull|-\/merge_requests)\/[1-9]\d*(?![0-9])/i.test(command);
+}
+
 /** Signals for taskInboxSection from a (possibly held) live priority rank. */
 export function taskInboxSignalsFromRank(rank: number): Pick<LiveTaskPrioritySignals, 'waiting' | 'unread' | 'running'> {
   return {

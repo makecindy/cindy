@@ -19,6 +19,7 @@
 
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { remoteProjectsStore, useRemoteSessionScheduleBindings } from '@/features/device-link/remoteProjectsStore';
+import { scheduleFollowsPr } from '@cindy/maker-shared/live-task-priority';
 import { buildBindingMap, type ScheduleBinding } from './scheduleBindingIndex';
 import { schedulesStore, useSchedulesSnapshot } from './schedulesStore';
 
@@ -54,7 +55,7 @@ export function useSessionBoundSchedules(
   return buildBindingMap(snapshot).get(sessionId) ?? EMPTY;
 }
 
-/** Bulk subscription for inbox grouping; uses current bindings, never historical runs. */
+/** Bulk subscription for inbox grouping: tasks with an active PR follow-up bound now (never historical runs). */
 export function useActiveFollowUpSessions<T extends { id: string; deviceLinkDeviceId?: string | null }>(
   sessions: readonly T[],
 ): ReadonlySet<T> {
@@ -71,7 +72,8 @@ export function useActiveFollowUpSessions<T extends { id: string; deviceLinkDevi
         const bindings = session.deviceLinkDeviceId
           ? remoteProjectsStore.getSessionScheduleBindings(session.deviceLinkDeviceId, session.id)
           : localBindings.get(session.id) ?? EMPTY;
-        return bindings.some((binding) => binding.status === 'active');
+        return bindings.some((binding) => binding.status === 'active'
+          && (binding.followsPr === true || scheduleFollowsPr(binding as { preRunHook?: { command?: string } | null })));
       }));
       if (next.size !== previous.size || [...next].some((session) => !previous.has(session))) {
         previous = next;

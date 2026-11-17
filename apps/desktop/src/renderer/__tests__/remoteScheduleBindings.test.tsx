@@ -16,6 +16,7 @@ const { navigate, ensure, localSchedules } = vi.hoisted(() => ({
       status: 'active',
       cronExpr: '* * * * *',
       manual: false,
+      preRunHook: { command: "node gate.mjs 'https://github.com/o/r/pull/7'" },
     },
   ],
 }));
@@ -56,6 +57,7 @@ const binding = (overrides: Partial<ScheduleBinding> = {}): ScheduleBinding => (
   manual: false,
   ...overrides,
 });
+const prBinding = (overrides: Partial<ScheduleBinding> = {}) => binding({ followsPr: true, ...overrides });
 const invoke = vi.fn();
 const seed = (device: string) => remoteProjectsStore.setDeviceSessions(device, device, []);
 function Badge({ deviceId }: { deviceId?: string }) {
@@ -258,15 +260,22 @@ it('updates follow-up grouping when bindings pause, resume, retarget or disappea
   }
   render(<Following />);
   expect(screen.getByTestId('following').textContent).toBe('local');
-  act(() => remoteProjectsStore.setDeviceScheduleBindings('A', [binding(), binding({ id: 'paused', status: 'paused' })]));
-  expect(screen.getByTestId('following').textContent).toBe('local,A');
-  act(() => remoteProjectsStore.setDeviceScheduleBindings('A', [binding({ status: 'paused' })]));
+  // A routine automation bound to the task is not a PR follow-up.
+  act(() => remoteProjectsStore.setDeviceScheduleBindings('A', parseScheduleBindings([binding()])));
   expect(screen.getByTestId('following').textContent).toBe('local');
-  act(() => remoteProjectsStore.setDeviceScheduleBindings('A', [binding()]));
+  act(() => remoteProjectsStore.setDeviceScheduleBindings('A', parseScheduleBindings([
+    { ...binding(), preRunHook: { command: 'node gate.mjs https://gitlab.example.com/g/r/-/merge_requests/3' } },
+  ])));
   expect(screen.getByTestId('following').textContent).toBe('local,A');
-  act(() => remoteProjectsStore.setDeviceScheduleBindings('A', [binding({ targetSessionId: 'other' })]));
+  act(() => remoteProjectsStore.setDeviceScheduleBindings('A', [prBinding(), prBinding({ id: 'paused', status: 'paused' })]));
+  expect(screen.getByTestId('following').textContent).toBe('local,A');
+  act(() => remoteProjectsStore.setDeviceScheduleBindings('A', [prBinding({ status: 'paused' })]));
   expect(screen.getByTestId('following').textContent).toBe('local');
-  act(() => remoteProjectsStore.setDeviceScheduleBindings('B', [binding()]));
+  act(() => remoteProjectsStore.setDeviceScheduleBindings('A', [prBinding()]));
+  expect(screen.getByTestId('following').textContent).toBe('local,A');
+  act(() => remoteProjectsStore.setDeviceScheduleBindings('A', [prBinding({ targetSessionId: 'other' })]));
+  expect(screen.getByTestId('following').textContent).toBe('local');
+  act(() => remoteProjectsStore.setDeviceScheduleBindings('B', [prBinding()]));
   expect(screen.getByTestId('following').textContent).toBe('local,B');
   act(() => remoteProjectsStore.removeDevice('B'));
   expect(screen.getByTestId('following').textContent).toBe('local');

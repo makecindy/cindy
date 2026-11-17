@@ -1,11 +1,15 @@
 import type { Schedule } from '@cindy/maker-scheduler';
+import { scheduleFollowsPr } from '@cindy/maker-shared/live-task-priority';
 
 /** 图标与提示需要的绑定信息；远程镜像不保留 prompt 等执行配置。 */
 export type ScheduleBinding = Pick<
   Schedule,
   'id' | 'name' | 'status' | 'targetSessionId' | 'cronExpr' | 'manual' | 'intervalMs'
 > &
-  Partial<Pick<Schedule, 'recurring' | 'persistentSession'>>;
+  Partial<Pick<Schedule, 'recurring' | 'persistentSession'>> & {
+    /** Remote mirrors keep only this projection of the pre-run check (see scheduleFollowsPr). */
+    followsPr?: boolean;
+  };
 
 let lastInput: readonly ScheduleBinding[] | null = null;
 let lastMap: ReadonlyMap<string, ScheduleBinding[]> = new Map();
@@ -63,6 +67,7 @@ export function parseScheduleBindings(raw: unknown): ScheduleBinding[] {
       intervalMs: s.intervalMs as number | undefined,
       // 保留运行模式；持续与手动绑定的自动任务都会恢复已归档的普通任务。
       ...(s.persistentSession === true ? { persistentSession: true } : {}),
+      ...(scheduleFollowsPr(s as { preRunHook?: { command?: string } | null }) ? { followsPr: true } : {}),
     });
   }
   return result;
