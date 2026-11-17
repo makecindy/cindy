@@ -254,6 +254,18 @@ describe('utility one-shot candidates', () => {
       expect(readCustomKey).not.toHaveBeenCalled();
     });
 
+    // Unit regression: the former remote pin must never dispatch to a same-name
+    // local supplier. Both public consumers need coverage; local fixtures are ready.
+    it.each(['text', 'review'] as const)('does not reinterpret remote pins for %s', async consumer => {
+      chainState.refs = ['remote-cat:other:cat:review-a:codex:small'];
+      const result = consumer === 'text'
+        ? await requestUtilityText(makerMock(true), prompt)
+        : await createCustomAutoReviewFallback()!(prompt, options);
+      expect(result.ok).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(readCustomKey).not.toHaveBeenCalled();
+    });
+
     it('validates each response and preserves exact route credentials and native system separation', async () => {
       fetchMock.mockResolvedValueOnce(response('not JSON'));
       fetchMock.mockResolvedValueOnce(response('{"verdict":"allow"}'));

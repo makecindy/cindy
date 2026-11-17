@@ -485,7 +485,7 @@ function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | undefin
   };
   const routes = chain.refs.flatMap((ref) => {
     const parsed = parseAuxiliaryModelRef(ref);
-    if (!parsed) return [];
+    if (!parsed || (parsed.kind === 'catalog' && parsed.route.agentDeviceId)) return [];
     const route = auxiliaryRefDispatchRoute(parsed);
     return [{ route, snapshot: snapshotRoute(route) }];
   });
@@ -502,7 +502,7 @@ function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | undefin
     for (const ref of chain.refs) {
       if (opts.signal?.aborted || !stillCurrent()) break;
       const parsed = parseAuxiliaryModelRef(ref);
-      if (!parsed) continue;
+      if (!parsed || (parsed.kind === 'catalog' && parsed.route.agentDeviceId)) continue;
       const route = auxiliaryRefDispatchRoute(parsed);
       const routing = getActiveCatalog().providers.find((provider) => provider.id === route.providerId)
         ?.routing[route.agentKind];
@@ -837,7 +837,7 @@ async function requestDefaultUtilityText(
   const attempts: UtilityTextAttempt[] = [];
   for (const ref of chain.refs) {
     const parsed = parseAuxiliaryModelRef(ref);
-    if (!parsed) continue;
+    if (!parsed || (parsed.kind === 'catalog' && parsed.route.agentDeviceId)) continue;
     if (
       requestOpts.beforeDispatch
       && !(await requestOpts.beforeDispatch(auxiliaryRefDispatchRoute(parsed)))

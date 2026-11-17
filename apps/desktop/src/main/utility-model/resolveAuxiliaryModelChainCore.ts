@@ -158,7 +158,7 @@ function parsedAuxiliaryModelRefs(refs: readonly string[]): ParsedAuxiliaryModel
   const parsed: ParsedAuxiliaryModelRef[] = [];
   for (const ref of refs) {
     const item = parseAuxiliaryModelRef(ref);
-    if (item) parsed.push(item);
+    if (item && !(item.kind === 'catalog' && item.route.agentDeviceId)) parsed.push(item);
   }
   return parsed;
 }
