@@ -55,7 +55,7 @@ import { probeBetaManifest } from './manifestService';
 import { isEnableBetaUserCustomized, readUpdateChannelSettings } from './updateChannelStore';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 import * as canaryFlagStore from './canaryFlagStore';
-import { decodeAccessTokenOrgSlug } from './authTokenClaims';
+import { accessTokenRefreshDelayMs, decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { AuthRefreshBackoff } from './authRefreshBackoff';
 import {
   ACCOUNT_DELETION_RECEIPT_KEY,
@@ -109,6 +109,16 @@ import {
   restoreLoggedOutVaultAccount,
   type LoggedOutAccountIdentity,
 } from './authAccountLogoutPolicy';
+import {
+  applyRefreshedCredentialsToVault,
+  AUTH_ACCOUNT_VAULT_LOCK_FILE,
+  AUTH_ACCOUNT_VAULT_VERSION,
+  writeResourceSessionToVault,
+  type ActiveRefreshCredentialCommit,
+  type AuthAccountVault,
+  type StoredPassportSession,
+  type StoredResourceSession,
+} from './authRefreshCommit';
 // dev-only 登录 scenario harness(implementation-plan Step 0 WHAT4):静态 import
 // (main 禁运行时动态 import),生产构建由 vite alias 把整模块替换为空 stub
 // (vite.main.config.ts),运行时另有 app.isPackaged guard 双保险。
@@ -218,12 +228,6 @@ const AUTH_REGION: AuthRegion =
 function authServerUrl(realm: AuthRegion = activeAuthRealm): string {
   return getClientEndpointForRealm(realm, 'authApiBaseUrl');
 }
-const AUTH_ACCOUNT_VAULT_LOCK_FILE = '.cindy-auth-accounts-v1.lock';
-// The aggregate vault stays readable by v1 clients for explicit-login
-// compatibility. Per-membership logout tombstones live in a separate key that
-// older clients never read or rewrite, so their Passport sync cannot resurrect
-// an account explicitly logged out by a newer client.
-const AUTH_ACCOUNT_VAULT_VERSION = 2 as const;
 const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION = 1 as const;
 
 
@@ -235,35 +239,6 @@ const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION = 1 as const;
 //    落 main 进程本地标记并通过 AuthState 独立投影给 renderer,不混入 User;
 //  - feishuOpenId → 退役,飞书登录已整体下线,身份锚(identityAnchor)只写 email;
 //  - role(产品级 admin)→ 退役,唯一消费是侧栏头像角标(纯装饰),一并移除。
-
-interface StoredResourceSession {
-  realm: AuthRegion;
-  refreshToken: string;
-  metadata: StoredAccountMetadata;
-  lastUsedAt: number;
-}
-
-interface StoredPassportSession {
-  realm: AuthRegion;
-  passportId: string;
-  accountRefreshToken: string;
-  memberships: StoredAccountMetadata[];
-}
-
-interface AuthAccountVault {
-  version: typeof AUTH_ACCOUNT_VAULT_VERSION;
-  activeAccountKey: string | null;
-  resources: Record<string, StoredResourceSession>;
-  passports: Record<string, StoredPassportSession>;
-  /** Memberships explicitly logged out on this device stay hidden until a fresh login restores them. */
-  loggedOutAccountKeys?: string[];
-  /**
-   * Durable signed-out owner marker. The vault is the crash-consistent owner
-   * record, so this must win over a compatibility session left behind by an
-   * interrupted logout until another account is explicitly activated.
-   */
-  signedOutAt?: number;
-}
 
 export interface AuthState {
   user: User | null;
@@ -1475,31 +1450,6 @@ async function removeRejectedResourceSession(input: {
   });
 }
 
-function writeResourceSessionToVault(
-  vault: AuthAccountVault,
-  pair: AuthTokenPair,
-  realm: AuthRegion,
-  passportId: string,
-  options: {
-    markActive?: boolean;
-    lastUsedAt?: number;
-    restoreLoggedOutAccount?: boolean;
-  } = {},
-): void {
-  const key = accountVaultKey(realm, pair.membership.id);
-  if (options.restoreLoggedOutAccount) restoreLoggedOutVaultAccount(vault, key);
-  vault.resources[key] = {
-    realm,
-    refreshToken: pair.refreshToken,
-    metadata: metadataFromMembership(pair.membership, passportId),
-    lastUsedAt: options.lastUsedAt ?? Date.now(),
-  };
-  if (options.markActive !== false) {
-    delete vault.signedOutAt;
-    vault.activeAccountKey = key;
-  }
-}
-
 async function rememberPassportSession(input: {
   realm: AuthRegion;
   passportId: string;
@@ -1681,8 +1631,6 @@ function assertPassportReplacementStored(result: PassportSessionReplacementResul
   );
 }
 
-type ActiveRefreshCredentialCommit = 'active' | 'inactive' | 'discarded';
-
 async function commitDesktopRefreshCredentials(
   pair: AuthTokenPair,
   realm: AuthRegion,
@@ -1695,37 +1643,15 @@ async function commitDesktopRefreshCredentials(
   return transactAuthAccountVault(
     (vault) => {
       options.validateBeforeWrite?.();
-      const key = accountVaultKey(realm, pair.membership.id);
-      const latestSession = readPersistedAuthSession();
-      const requestedTokenStillStored =
-        (latestSession?.realm === realm && latestSession.refreshToken === requestedRefreshToken) ||
-        (vault.activeAccountKey === key &&
-          vault.resources[key]?.realm === realm &&
-          vault.resources[key]?.refreshToken === requestedRefreshToken) ||
-        (realm === AUTH_REGION &&
-          readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY) === requestedRefreshToken);
-      const canClaimUninitializedVault =
-        options.allowUnclaimedVault === true &&
-        vault.activeAccountKey === null &&
-        typeof vault.signedOutAt !== 'number' &&
-        Object.keys(vault.resources).length === 0 &&
-        !loggedOutAccountKeySet(vault).has(key);
-      const stillOwnsActiveSession =
-        requestedTokenStillStored && (vault.activeAccountKey === key || canClaimUninitializedVault);
-      const passportId = pair.membership.passportId;
-      if (
-        passportId &&
-        (stillOwnsActiveSession || vault.resources[key]?.refreshToken === requestedRefreshToken)
-      ) {
-        // A passive stale refresh may still rotate account A's resource token
-        // after the primary has committed account B. Preserve A for a future
-        // explicit switch, but never let that late result reclaim activeAccountKey.
-        writeResourceSessionToVault(vault, pair, realm, passportId, {
-          markActive: stillOwnsActiveSession,
-        });
-      }
-      if (stillOwnsActiveSession) return 'active';
-      return vault.resources[key] ? 'inactive' : 'discarded';
+      return applyRefreshedCredentialsToVault(vault, {
+        pair,
+        realm,
+        requestedRefreshToken,
+        allowUnclaimedVault: options.allowUnclaimedVault,
+        buildRegion: AUTH_REGION,
+        readStoredSession: readPersistedAuthSession,
+        readLegacyResourceRefreshToken: () => readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY),
+      });
     },
     (commit) => {
       if (commit === 'active') {
@@ -3187,8 +3113,7 @@ function scheduleRefresh(token: string): void {
   // 轮换本身不会踢人:2026-07-27 两个实例每 55 分钟互刷一次,primary 每次都靠
   // replacement-retry 恢复,一次没掉线;把 primary 踢下线的是删除凭证。
   try {
-    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf-8'));
-    const delay = (payload.exp - 300) * 1000 - Date.now();
+    const delay = accessTokenRefreshDelayMs(token, Date.now());
     if (delay <= 0) {
       refresh();
     } else {
