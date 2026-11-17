@@ -4533,14 +4533,7 @@
         "installCancel": "Cancelar instalação",
         "installFailed": "Não foi possível instalar o Ollama",
         "installPhase": {
-          "resolving": "Buscando a versão oficial…",
-          "downloading": "Baixando…",
-          "verifying": "Verificando…",
-          "extracting": "Instalando…",
-          "starting": "Iniciando…",
-          "success": "Instalado",
-          "error": "Falha na instalação",
-          "cancelled": "Cancelado"
+          "error": "Falha na instalação"
         },
         "openWebsite": "Abrir site do Ollama",
         "recheck": "Já instalei, verificar novamente",
@@ -4575,20 +4568,6 @@
         "retryDownload": "Tentar novamente",
         "libraryName": "Nome exato na biblioteca do Ollama",
         "pullingTitle": "Baixando {{name}}",
-        "pullIndeterminate": "Preparando",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "Preparando download…",
-          "manifest": "Buscando manifesto…",
-          "downloading": "Baixando arquivos do modelo",
-          "verifying": "Verificando…",
-          "writing": "Gravando…",
-          "success": "Download concluído",
-          "error": "Falha no download",
-          "paused": "Em pausa",
-          "cancelled": "Cancelado"
-        },
         "pauseDownload": "Pausar",
         "resumeDownload": "Retomar download",
         "cancelDownload": "Excluir download incompleto",
@@ -5831,7 +5810,8 @@
             "statusFailed": "falha na verificação do status do controlador",
             "recoveryFailed": "não foi possível restabelecer a conexão de controle",
             "extensionDisconnected": "nenhuma extensão de navegador está conectada (instale e ative o plugin Cindy Chrome e sua extensão)",
-            "pluginMissing": "o plugin Cindy Chrome não está instalado ou ativado"
+            "pluginMissing": "o plugin Cindy Chrome não está instalado ou ativado",
+            "browserMissing": "o Chrome não está instalado neste computador"
           },
           "reconnect": "Reconectar navegador",
           "recover": "Recuperar navegador",
@@ -5851,7 +5831,7 @@
         },
         "userBrowser": {
           "title": "Meu navegador",
-          "description": "Funciona no Chrome ou Edge que você está usando, com seus logins existentes. Novas páginas abrem em uma janela em segundo plano, sem atrapalhar."
+          "description": "O seu próprio Chrome neste computador (o Edge também funciona). O Agent trabalha diretamente nele, com seus logins existentes. Novas páginas abrem em uma janela em segundo plano, sem atrapalhar."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Instalar o plugin Cindy Chrome",
@@ -5870,7 +5850,9 @@
           "updatePluginTitle": "Atualizar o plugin Cindy Chrome",
           "updatePluginBody": "O plugin Cindy Chrome instalado é antigo demais para Meu navegador. Atualize-o para a versão mais recente e siga a orientação para adicionar a extensão.",
           "updatePlugin": "Atualizar",
-          "storeOpened": "A página da extensão Cindy foi aberta no seu navegador. Escolha Adicionar ao Chrome e a conexão será feita automaticamente."
+          "storeOpened": "A página da extensão Cindy foi aberta no seu navegador. Escolha Adicionar ao Chrome e a conexão será feita automaticamente.",
+          "installBrowserTitle": "Instale o Chrome primeiro",
+          "installBrowserBody": "O Chrome não está instalado neste computador. “Meu navegador” precisa do Chrome (ou Edge) para a extensão Cindy. Depois de instalar, aqui avança para a próxima etapa automaticamente."
         }
       },
       "android": {
@@ -6032,8 +6014,6 @@
           "notChecked": "Ainda não verificado",
           "action": "Atualizar",
           "updating": "Atualizando…",
-          "downloadingPercent": "Baixando {{percent}}% ({{downloaded}}/{{total}} MB)…",
-          "downloadingBytes": "Baixando, {{downloaded}} MB até agora…",
           "installing": "Download concluído, instalando…",
           "toast": {
             "success": "cua-driver atualizado para a versão mais recente",
@@ -7999,7 +7979,6 @@
         "install": "Instalar",
         "details": "Detalhes",
         "detailsAria": "Ver detalhes de {{name}}",
-        "loadingDetails": "Carregando detalhes…",
         "update": "Atualizar pelo marketplace",
         "updateTo": "Atualizar para v{{version}}",
         "installed": "Instalado",
@@ -8313,6 +8292,8 @@
         "hostTools_controlDetail": "Usar as ferramentas da Cindy para editar, arquivar, restaurar e controlar tarefas e projetos existentes, e importar arquivos de tarefas em formato nativo neste computador.",
         "hostTools_handoff": "Mensagens para tarefas",
         "hostTools_handoffDetail": "Usar as ferramentas da Cindy para enviar mensagens para tarefas existentes. Operações que precisam da tarefa atual exigem um destino explícito.",
+        "hostTools_usage": "Ler o uso das assinaturas",
+        "hostTools_usageDetail": "Lê identificadores de conta, planos, períodos de cota e horários de atualização das assinaturas Claude e Codex conectadas à sua conta atual do Cindy neste computador. Não permite ler endereços de e-mail, credenciais, arquivos ou dados de outros computadores, nem alterar contas.",
         "hostTools_settings": "Configurações do aplicativo",
         "hostTools_settingsDetail": "Usar as ferramentas da Cindy para ler e alterar a configuração. Os segredos não são retornados e os dados confidenciais são preenchidos por você.",
         "hostTools_scheduler": "Gerenciamento de automações",
@@ -8600,6 +8581,7 @@
           "workdirClear": "Restaurar pasta padrão",
           "followAuxiliary": "Seguir modelo auxiliar do sistema · {{model}}",
           "followAuxiliaryUnset": "Seguir modelo auxiliar do sistema",
+          "remoteQuickAnswerHint": "Este modelo não roda neste computador. As respostas rápidas são enviadas deste computador, então usam o modelo auxiliar do sistema.",
           "restoreModel": "Redefinir modelo"
         },
         "toolsTitle": "Ferramentas",
@@ -8935,23 +8917,10 @@
         "projectReadFailed": "Não foi possível ler as configurações dos projetos. Tente novamente."
       },
       "usage": {
-        "title": "Suas chamadas",
-        "explanationLabel": "Como o uso é contabilizado",
-        "explanation": "Chamadas de ferramentas enviadas neste computador pela conta atual, incluindo falhas, tempos limite excedidos e cancelamentos. Os últimos 7 dias correspondem a uma janela móvel de 168 horas. Painéis, Skills e depuração não são contabilizados. Os registros permanecem até serem limpos.",
-        "clear": "Limpar registros",
-        "loading": "Carregando registros…",
-        "unavailable": "Registros pessoais indisponíveis",
-        "retry": "Tentar novamente",
-        "lastUsed": "Última chamada",
-        "last7Days": "Chamadas nos últimos 7 dias",
-        "never": "Nenhuma chamada ainda",
-        "clearTitle": "Limpar os registros de uso deste plugin?",
-        "clearDescription": "Remove os registros de chamadas e os links de sessões desta conta neste computador. Novas chamadas iniciam um novo histórico. Os totais compartilhados já recebidos pelo servidor não são removidos.",
         "downloadExplanation": "Total acumulado de solicitações de URLs de download. Cada URL de pacote emitida com sucesso conta uma vez, incluindo atualizações, reinstalações e novas tentativas que solicitam uma nova URL. Não é uma contagem de instalações concluídas.",
-        "clearAction": "Limpar",
         "downloadsValue": "{{value}} downloads",
         "usesValue": "{{value}} usos",
-        "usesExplanation": "Total acumulado de chamadas de ferramentas compartilhadas em todas as versões para o público autorizado. Suas chamadas abaixo contabilizam apenas esta conta neste computador."
+        "usesExplanation": "Total acumulado de chamadas de ferramentas compartilhadas em todas as versões para o público autorizado."
       },
       "contribution": {
         "unreadReview": "Novo resultado do plugin",
@@ -11013,6 +10982,7 @@
       "duplicate": "Duplicar amigo",
       "moreActions": "Mais ações para {{name}}",
       "viewIcons": "Ícones",
+      "showCollapsedTeammateAvatars": "Mostrar avatares quando recolhido",
       "sectionExpand": "Expandir amigos",
       "showLess": "Mostrar menos",
       "sectionCollapse": "Recolher amigos",
@@ -11515,6 +11485,8 @@
         "projectDirNote": "Os amigos trabalham aqui quando dividem o trabalho. Você pode deixar em branco para que usem a pasta desta conversa em grupo. Se você escolher um projeto git, cada divisão de trabalho recebe um novo worktree e uma nova branch, mantendo seu código intacto.",
         "autoContinueSaveFailed": "Não foi possível salvar as transições entre etapas. Tente novamente.",
         "projectDirSaveFailed": "Não foi possível salvar a pasta do projeto. Verifique se a pasta ainda existe e tente novamente.",
+        "allowMemberInvites": "Permitir que todos convidem amigos",
+        "allowMemberInvitesHint": "Quando ativado, todos os membros do grupo podem convidar amigos. Só o proprietário e os administradores podem alterar esta opção.",
         "allowMentionAllBots": "Permitir @todos os amigos",
         "allowMentionAllBotsHint": "Só o proprietário do grupo pode alterar. Todos os amigos podem responder; cuidado em grupos grandes. Não afeta a IA que responde em seu nome."
       },
@@ -11622,6 +11594,7 @@
         "threadRecent": "Mensagens recentes do tópico",
         "threadNew": "Mensagens novas do tópico",
         "replyingTo": "Em resposta a \"{{name}}\": {{text}}",
+        "filesOutsideWorkingDir": "Os arquivos fora do diretório de trabalho não foram anexados.",
         "earlierOmitted": "(Mensagens anteriores omitidas)",
         "actingFor": "{{name}} · por {{person}}",
         "checkout": {
@@ -11787,6 +11760,11 @@
           "transferHint": "Essa pessoa se tornará proprietária e você se tornará administrador.",
           "removeTitle": "Remover {{name}} deste grupo?",
           "removeHint": "Essa pessoa perderá o acesso às mensagens. Os amigos dela também sairão.",
+          "removeOwn": "Remover do grupo",
+          "removeOwnScope": "Isso afeta apenas este grupo. Seu parceiro permanece na sua conta.",
+          "removeOwnHint": "{{name}} deixará de receber mensagens de “{{group}}”. O histórico será mantido; outros grupos e conversas privadas não serão afetados.",
+          "removeOwnActiveHint": "As solicitações ativas neste grupo serão interrompidas. Tarefas iniciadas de forma independente continuarão em execução.",
+          "stopAndRemove": "Parar e remover",
           "leave": "Sair do grupo",
           "leaveHint": "Você e seus amigos sairão deste grupo. Você não receberá mais novas mensagens nem terá acesso ao histórico.",
           "soleOwnerHint": "Você é o único membro restante. Arquive este grupo para manter o histórico e restaurá-lo depois.",
@@ -13050,6 +13028,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "Nenhum modelo de revisão automática está disponível. No computador que executa o Agente, ative e conecte um provedor de revisão em Provedores de modelos ou personalize os modelos auxiliares nas configurações. As ações que precisam de revisão continuam exigindo sua confirmação.",
           "autoReviewUnavailable": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. Mude esta tarefa para Acesso total se preferir não ser interrompido. Esse modo apresenta maior risco.",
           "autoReviewUnavailableWechat": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. O WeChat pessoal não pode usar Acesso total. Confirme esta ação diretamente.",
           "autoReviewConfirmUndelivered": "A revisão automática não terminou e a confirmação não foi entregue ou não foi respondida. Esta recusa não foi feita por você.",
@@ -14223,7 +14202,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "Criando worktree · entrada desativada",
-      "subtitle": "Branch de destino {{branch}} · a entrada será desbloqueada automaticamente"
+      "subtitle": "Branch de destino {{branch}} · a entrada será desbloqueada automaticamente",
+      "elapsed": "Aguardando há {{duration}}"
     },
     "worktree": {
       "detecting": "Detectando ambiente…",
@@ -15799,6 +15779,7 @@
       "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente em breve.",
       "REMOTE_DAEMON_CLOSED": "A conexão remota caiu, possivelmente durante uma atualização. Este turno foi encerrado. Envie a mensagem novamente.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Anexos de arquivos/imagens locais não estão acessíveis em sessões remotas. Cole o conteúdo diretamente.",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "Nenhum modelo de revisão automática está disponível. No computador que executa o Agente, ative e conecte um provedor de revisão em Provedores de modelos ou personalize os modelos auxiliares nas configurações. As ações que precisam de revisão continuam exigindo sua confirmação.",
       "AUTO_REVIEW_UNAVAILABLE": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. Mude esta tarefa para Acesso total se preferir não ser interrompido. Esse modo apresenta maior risco.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. O WeChat pessoal não pode usar Acesso total. Confirme esta ação diretamente.",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "A revisão automática estava indisponível, e a solicitação de confirmação não foi concluída. Isso não é uma rejeição do usuário.",
@@ -15819,7 +15800,12 @@
       "REMOTE_PROVIDER_UPDATING": "As credenciais deste provedor de modelos estão sendo atualizadas. Tente novamente em instantes.",
       "REMOTE_WORKDIR_UNAVAILABLE": "O diretório de trabalho remoto está indisponível. Verifique se a pasta ainda existe nesse computador e tente novamente.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "O computador ainda não pode confirmar se esta mensagem foi enviada. Aguarde um momento e tente novamente. Não envie a mesma mensagem duas vezes.",
-      "REMOTE_AGENT_UNAVAILABLE": "A conexão com o computador que executa o Agent caiu. Tente novamente. Se continuar acontecendo, verifique se ele está online e permite controle remoto.",
+      "REMOTE_AGENT_UNAVAILABLE": "Não foi possível se comunicar com o computador que executa o Agent. Confira os detalhes do erro.",
+      "REMOTE_AGENT_TIMEOUT": "O tempo de espera pelo computador que executa o Agent expirou. O resultado é desconhecido. Confira a tarefa antes de tentar novamente.",
+      "REMOTE_AGENT_LINK_BUSY": "A comunicação com o computador que executa o Agent está congestionada. Aguarde um momento antes de tentar novamente.",
+      "REMOTE_AGENT_UNRESPONSIVE": "O computador que executa o Agent não respondeu repetidamente, por isso as chamadas foram pausadas temporariamente. Aguarde um momento antes de tentar novamente.",
+      "REMOTE_AGENT_OFFLINE": "O computador que executa o Agent está offline. Tente novamente quando ele se reconectar.",
+      "REMOTE_AGENT_ACCESS_DENIED": "O acesso remoto ao computador que executa o Agent foi negado. Confira as configurações de acesso antes de tentar novamente.",
       "REMOTE_AGENT_PEER_TOO_OLD": "A versão de Cindy no outro computador é antiga demais para esta ação. Atualize Cindy lá primeiro.",
       "REMOTE_AGENT_EXPIRED": "Esta sessão já foi encerrada no computador que executa o Agent. Envie sua mensagem novamente.",
       "REMOTE_AGENT_NOT_FOUND": "Esta sessão já foi encerrada no computador que executa o Agent. Envie sua mensagem novamente.",
@@ -22035,5 +22021,28 @@
     "archivedNotice": "Tarefas inativas arquivadas automaticamente: {{count}}",
     "undo": "Desfazer",
     "undoFailed": "Não foi possível desfazer. Restaure as tarefas arquivadas."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "Faltam {{time}}",
+    "attempt": "Tentativa {{attempt}}",
+    "phase": {
+      "preparing": "Preparando…",
+      "queued": "Na fila…",
+      "downloading": "Baixando…",
+      "retrying": "Tentando novamente…",
+      "verifying": "Verificando…",
+      "installing": "Instalando…",
+      "paused": "Pausado",
+      "completed": "Concluído",
+      "failed": "Falha no download",
+      "cancelled": "Cancelado"
+    },
+    "retry": {
+      "slow": "Conexão lenta, reconectando…",
+      "network": "Conexão perdida, tentando novamente…",
+      "timeout": "Tempo de conexão esgotado, tentando novamente…",
+      "server": "Servidor ocupado, tentando novamente…"
+    }
   }
 }

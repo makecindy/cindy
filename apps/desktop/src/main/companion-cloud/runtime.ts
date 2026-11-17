@@ -264,10 +264,12 @@ export function startCompanionCloud(input: {
         if (!block?.mediaId) throw new Error('ATTACHMENT_UNAVAILABLE');
         return block.mediaId;
       } } : {}),
-      retain: (media, gaps) => {
+      retain: (media, gaps, preserveExisting) => {
         const known = state.bot(botId);
-        if (canonicalJson([media, gaps]) === canonicalJson([known?.skillFileMedia ?? {}, known?.skillFileGaps ?? {}])) return;
-        state.update(botId, actorId, entry => { entry.skillFileMedia = media; entry.skillFileGaps = gaps; });
+        const nextMedia = preserveExisting ? { ...known?.skillFileMedia, ...media } : media;
+        const nextGaps = preserveExisting ? known?.skillFileGaps ?? {} : gaps;
+        if (canonicalJson([nextMedia, nextGaps]) === canonicalJson([known?.skillFileMedia ?? {}, known?.skillFileGaps ?? {}])) return;
+        state.update(botId, actorId, entry => { entry.skillFileMedia = nextMedia; entry.skillFileGaps = nextGaps; });
       },
       ...(input.log ? { log: input.log } : {}),
     }),

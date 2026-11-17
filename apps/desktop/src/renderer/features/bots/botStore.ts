@@ -513,6 +513,7 @@ let profileListLoaded = false;
 let profileOwner = getDataOwnerGeneration();
 let hydrationGeneration = 0;
 const hydrationPromises = new Set<Promise<void>>();
+let activeHydration: { owner: ReturnType<typeof getDataOwnerGeneration>; refreshPending: boolean } | null = null;
 /** 每个伙伴各自的写入代际 —— 见 updateBotProfile 里的 isLatestWrite。 */
 const profileWriteGenerations = new Map<string, number>();
 
@@ -528,6 +529,7 @@ function ensureProfileOwner(): void {
   modelSettingsQueue = Promise.resolve();
   profileWriteGenerations.clear();
   hydrationPromises.clear();
+  activeHydration = null;
   hydrationGeneration += 1;
   hydrated = false;
 }
@@ -537,7 +539,22 @@ function assertCurrentOwner(owner: ReturnType<typeof getDataOwnerGeneration>): v
 }
 
 function trackHydration(): void {
-  const promise = hydrateFromDatabase();
+  if (activeHydration) return;
+  const flight = { owner: getDataOwnerGeneration(), refreshPending: false };
+  activeHydration = flight;
+  const promise = (async () => {
+    try {
+      do {
+        flight.refreshPending = false;
+        await hydrateFromDatabase();
+        // Notifications during a read only retain one successor. A failed read
+        // does not retry itself, and an old owner can neither restart nor clear
+        // the new owner's flight.
+      } while (flight.refreshPending && isDataOwnerGenerationCurrent(flight.owner));
+    } finally {
+      if (activeHydration === flight) activeHydration = null;
+    }
+  })();
   hydrationPromises.add(promise);
   void promise.then(
     () => hydrationPromises.delete(promise),
@@ -791,6 +808,12 @@ export function refreshBotProfiles(): void {
   ensureProfileOwner();
   emit();
   hydrated = false;
+  if (activeHydration) {
+    activeHydration.refreshPending = true;
+    // A pre-notification snapshot must not overwrite a just-accepted edit.
+    hydrationGeneration += 1;
+    return;
+  }
   trackHydration();
 }
 

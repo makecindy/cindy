@@ -422,11 +422,11 @@ const message = (id: string, sequence: number, overrides: Partial<BotGroupRemote
 
 function group(overrides: Partial<BotGroupRemoteChatData> = {}): BotGroupRemoteChatData {
   return {
-    id: 'g1', name: '官网介绍页', replyMode: 'all', speakingMode: 'auto',
+    id: 'g1', supportsOwnedStop: true, name: '官网介绍页', replyMode: 'all', speakingMode: 'auto',
     members: [
-      { botId: 'mimi', name: '咪咪', avatar: '🐱', avatarColor: 'red', status: 'active' },
-      { botId: 'abu', name: '阿布', avatar: '🦉', avatarColor: 'blue', status: 'active' },
-      { botId: 'xiaoman', name: '小满', avatar: '', avatarColor: '', status: 'active' },
+      { botId: 'mimi', name: '咪咪', avatar: '🐱', avatarColor: 'red', status: 'active', isOwned: true },
+      { botId: 'abu', name: '阿布', avatar: '🦉', avatarColor: 'blue', status: 'active', isOwned: true },
+      { botId: 'xiaoman', name: '小满', avatar: '', avatarColor: '', status: 'active', isOwned: true },
     ],
     organizerBotId: 'mimi', projectDir: null, projectDirName: 'site', lastMessage: null, speakingBotIds: [], planningBotId: null,
     openPlan: { id: 'p1', status: 'proposed', currentStep: null, stepCount: 2, currentBotName: null, currentStepStatus: null },
@@ -444,10 +444,10 @@ function group(overrides: Partial<BotGroupRemoteChatData> = {}): BotGroupRemoteC
       message('m9', 9, { kind: 'plan-end', authorKind: 'system', planId: 'p0' }),
     ],
     plans: [
-      { id: 'p1', status: 'proposed', organizerBotId: 'mimi', organizerName: '咪咪', currentStep: null, workDir: null, branch: null, createdAt: 1, updatedAt: 1,
+      { id: 'p1', canStop: true, status: 'proposed', organizerBotId: 'mimi', organizerName: '咪咪', currentStep: null, workDir: null, branch: null, createdAt: 1, updatedAt: 1,
         steps: [
-          { position: 0, botId: 'mimi', botName: '咪咪', task: '想清楚这页讲什么', status: 'pending' },
-          { position: 1, botId: 'abu', botName: '阿布', task: '写代码', status: 'pending' },
+          { position: 0, canStop: true, botId: 'mimi', botName: '咪咪', task: '想清楚这页讲什么', status: 'pending' },
+          { position: 1, canStop: true, botId: 'abu', botName: '阿布', task: '写代码', status: 'pending' },
         ] },
       { id: 'p0', status: 'done', organizerBotId: 'mimi', organizerName: '咪咪', currentStep: 2, workDir: null, branch: null, createdAt: 1, updatedAt: 1,
         steps: [0, 1, 2].map((position) => ({ position, botId: 'abu', botName: '阿布', task: `步骤${position}`, status: 'done' as const })) },
@@ -2079,6 +2079,63 @@ describe('group settings', () => {
     expect(byId('botGroup.settings')).not.toBeNull();
   }
 
+  // Unit regression: server settings through an upgraded host previously hid My companions.
+  // Exercise real screen/sheet navigation, confirmation and action, plus the old-host fallback.
+  it.each([true, false])('withdraws own companions from their settings page (direct=%s)', async direct => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, supportsOwnBotRemoval: true, revision: 5 });
+    data.members[0] = { ...data.members[0], actorId: 'human', actorKind: 'human', isSelf: true, isOwned: true, role: 'member' };
+    data.members[1] = { ...data.members[1], actorId: 'bot', actorKind: 'bot', isOwned: true, role: 'member' };
+    data.members[2] = { ...data.members[2], actorId: 'foreign', actorKind: 'bot', isOwned: false, role: 'member' };
+    h.chat.server = direct;
+    const manage = vi.fn(async () => ({ effects: [] }));
+    if (direct) h.management = { group: data, editable: false, ready: true, loading: false, reason: 'permission', act: manage, refresh: vi.fn() };
+    await openSettings(data);
+    expect(byId('botGroup.settings.teammate.xiaoman')).toBeNull();
+    await click('botGroup.settings.teammate.abu');
+    h.confirm.mockResolvedValueOnce(false);
+    await click('botGroup.settings.removeOwn');
+    expect(manage).not.toHaveBeenCalled(); expect(h.chat.act).not.toHaveBeenCalled();
+    await click('botGroup.settings.removeOwn');
+    expect(direct ? manage : h.chat.act).toHaveBeenCalledWith('remove-member', direct ? { actorId: 'bot' } : { expectedRevision: 5, actorId: 'bot' });
+    expect(byId('botGroup.settings.myTeammates')).not.toBeNull();
+  });
+
+  it('hides own companion withdrawal on an older host', async () => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, supportsMemberRemoval: true });
+    data.members[0] = { ...data.members[0], actorId: 'human', actorKind: 'human', isSelf: true, isOwned: true, role: 'member' };
+    data.members[1] = { ...data.members[1], actorId: 'bot', actorKind: 'bot', isOwned: true, role: 'member' };
+    await openSettings(data);
+    expect(byId('botGroup.settings.myTeammates')).toBeNull();
+    await click('botGroup.settings.tab.members');
+    expect(byId('botGroup.settings.memberMenu.abu.action.remove')).toBeNull();
+  });
+
+  // Unit regression from iOS acceptance: timeline activity is topic-scoped and direct settings
+  // metadata has no executions. Group-wide exit confirmation must retain the live activity.
+  it.each([true, false])('keeps whole-group activity in settings with an idle permission snapshot (direct=%s)', async direct => {
+    const data = group({ serverBacked: true, supportsOwnBotRemoval: true, revision: 5 });
+    data.members[0] = { ...data.members[0], actorId: 'human', actorKind: 'human', isSelf: true, isOwned: true, role: 'member' };
+    data.members[1] = { ...data.members[1], actorId: 'bot', actorKind: 'bot', isOwned: true, role: 'member' };
+    h.chat.server = direct;
+    const manage = vi.fn();
+    if (direct) h.management = { group: data, editable: false, ready: true, loading: false, reason: 'permission', act: manage, refresh: vi.fn() };
+    await openSettings(data);
+    await click('botGroup.settings.teammate.abu');
+    const running = { ...data, round: { status: 'running' as const, canContinue: false,
+      speakers: [{ botId: 'abu', sessionId: null, sourceMessageId: 'thread-reply', threadRootId: 'm2', activity: 'reply' as const }] } };
+    await render(running);
+    h.confirm.mockResolvedValue(false);
+    await click('botGroup.settings.removeOwn');
+    expect(h.confirm).toHaveBeenLastCalledWith(expect.objectContaining({
+      confirmLabel: 'groupChat.groupSettings.stopAndRemove',
+      message: expect.stringContaining('groupChat.groupSettings.removeOwnActiveHint'),
+    }));
+    await render(data);
+    await click('botGroup.settings.removeOwn');
+    expect(h.confirm).toHaveBeenLastCalledWith(expect.objectContaining({ confirmLabel: 'groupChat.groupSettings.removeOwn' }));
+    expect(direct ? manage : h.chat.act).not.toHaveBeenCalled();
+  });
+
   it('allows personal removal from an archived read-only group without management rights', async () => {
     h.chat.server = true;
     await openSettings(group({ serverBacked: true, archived: true, supportsListRemoval: true, supportsSettingsManagement: false,
@@ -3501,17 +3558,12 @@ it('isolates pending stop receipts when the group changes', async () => {
   expect(byId('botGroup.work.stop')!.disabled).toBe(false);
 });
 
-it.each([false, true])('offers all stop only when this host explicitly supports it (%s)', async supportsScopedStop => {
+it.each([false, true])('never offers all stop even when a legacy host reports it (%s)', async supportsScopedStop => {
   await render(group({ supportsScopedStop, canStopAll: true,
     round: { status: 'running', canContinue: false, othersActive: true, speakers: [{ botId: 'abu', sessionId: 's', activity: 'reply' }] } }));
-  if (!supportsScopedStop) {
-    expect(byId('botGroup.work.stopMenu.action.all')).toBeNull();
-    await click('botGroup.work.stop');
-    expect(h.chat.act).toHaveBeenCalledWith('stop');
-  } else {
-    await click('botGroup.work.stopMenu.action.all');
-    expect(h.chat.act).toHaveBeenCalledWith('stop', { scope: 'all' });
-  }
+  expect(byId('botGroup.work.stopMenu.action.all')).toBeNull();
+  await click('botGroup.work.stop');
+  expect(h.chat.act).toHaveBeenCalledWith('stop');
 });
 
 // Unit: talk and work share controls but have different user meaning (§7/8.2).
@@ -3586,7 +3638,7 @@ it('shows the real step start and handoff time and keeps missing timing absent',
 
 // Request time orders live work; owning the bot does not grant control of a foreign request.
 it.each([20, 40])('interleaves concurrent work and keeps another requester read-only (request at %s)', async timelineAt => {
-  await render(group({ serverBacked: true, messages: [
+  await render(group({ serverBacked: true, members: group().members.map(member => ({ ...member, assistant: true })), messages: [
     message('early', 1, { createdAt: 10 }), message('later', 2, { createdAt: 30 }),
   ], round: { status: 'running', canContinue: false, speakers: [
     { botId: 'mimi', sessionId: null, executionId: 'my-work', activity: 'reply', timelineAt: 20, isSelfRequested: true },
@@ -3635,9 +3687,25 @@ it('resolves separated work anchors once per host on mount and notification', as
   expect(h.processUnsubscribe).toHaveBeenCalledWith(expect.stringMatching(/^group-work:g1:focus:/), 'studio', ['sessions']);
 });
 
+// Unit regression: pass the real host projection through its parser into the screen.
+// Earlier fixtures bypassed parsing and only used owned organizers, hiding both regressions.
+it.each(['public Cindy', 'planning'] as const)('can stop my remote %s with an unowned displayed companion', async kind => {
+  const raw = group({ serverBacked: true, messages: [], plans: [], openPlan: null,
+    members: [{ ...group().members[0]!, isOwned: false, ...(kind === 'public Cindy' ? { assistant: true } : {}) }],
+    round: { status: 'running', canStop: true, canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: null, isSelfRequested: true,
+        ...(kind === 'public Cindy' ? { activity: 'reply' as const, executionId: 'my-request' } : { activity: 'planning' as const }) },
+    ] },
+  });
+  await render(parseBotGroupChatData(raw));
+  expect(byId('botGroup.composer.stop')).not.toBeNull();
+  await click('botGroup.composer.stop');
+  expect(h.chat.act).toHaveBeenLastCalledWith('stop');
+});
+
 // An older host's aggregate capability must not bypass missing requester identity.
 it('keeps legacy server work read-only even when the host reports aggregate stop permission', async () => {
-  await render(group({ serverBacked: true, round: { status: 'running', canStop: true, canContinue: false, speakers: [
+  await render(group({ serverBacked: true, supportsOwnedStop: undefined, round: { status: 'running', canStop: true, canContinue: false, speakers: [
     { botId: 'mimi', sessionId: null, executionId: 'legacy', activity: 'reply' },
   ] } }));
   expect(byId('speaker.mimi.reply')).not.toBeNull();
@@ -3661,9 +3729,8 @@ it.each([undefined, 'topic-a'])('keeps group stopping when only topic work exist
   } else {
     expect(byId('speaker.abu.reply')).not.toBeNull();
     expect(byId('speaker.mimi.reply')).toBeNull();
-    await click('botGroup.work.stopMenu.action.mine');
+    await click('botGroup.work.stop');
     expect(h.chat.act).toHaveBeenLastCalledWith('stop');
-    await click('botGroup.work.stopMenu.action.all');
-    expect(h.chat.act).toHaveBeenLastCalledWith('stop', { scope: 'all' });
+    expect(byId('botGroup.work.stopMenu.action.all')).toBeNull();
   }
 });

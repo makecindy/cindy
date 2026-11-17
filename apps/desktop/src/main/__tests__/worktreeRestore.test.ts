@@ -537,6 +537,44 @@ describe('worktree restore', () => {
     );
   });
 
+  // PR #10836: Multibox automatically carries a local, nonignored config before stash
+  // apply. Native-only fixtures missed that collision with the stash's third parent.
+  // Real restore entry, minimum untracked config + pending stash; unit with external Git fake.
+  it.each([false, true])('restores a legacy Multibox config snapshot, preserving a later edit=%s', async (edited) => {
+    fsSync.writeFileSync(path.join(baseRepo, '.multibox.toml'), '[carry]\n');
+    gitExecMock.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'rev-parse' && args.includes('refs/heads/xdt/wt1')) {
+        return { stdout: 'deadbeef\n', stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && args.includes('refs/xdt/snapshots/s1')) {
+        return { stdout: `${SHA}\n`, stderr: '' };
+      }
+      if (args.includes('multibox') && args.includes('add')) {
+        fsSync.mkdirSync(wtPath, { recursive: true });
+        fsSync.copyFileSync(path.join(baseRepo, '.multibox.toml'), path.join(wtPath, '.multibox.toml'));
+        if (edited) fsSync.writeFileSync(path.join(wtPath, '.multibox.toml'), '# new user settings\n');
+      }
+      if (args[0] === 'ls-tree' && args.includes(`${SHA}^3`)) {
+        return { stdout: '.multibox.toml\0', stderr: '' };
+      }
+      if (args[0] === 'stash' && args[1] === 'apply') {
+        if (fsSync.existsSync(path.join(wtPath, '.multibox.toml'))) throw new Error('untracked config already exists');
+        fsSync.writeFileSync(path.join(wtPath, '.multibox.toml'), '[carry]\n# saved user settings\n');
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const result = await mod.restoreWorktreeForSession('s1');
+    if (edited) {
+      expect(result).toMatchObject({ ok: false, reason: 'git-error' });
+      expect(fsSync.readFileSync(path.join(wtPath, '.multibox.toml'), 'utf8')).toContain('new user settings');
+      expect(gitExecMock.mock.calls.map(argsOf)).not.toContainEqual(['update-ref', '-d', 'refs/xdt/snapshots/s1']);
+    } else {
+      expect(result).toEqual({ ok: true, snapshotApplied: true });
+      expect(fsSync.readFileSync(path.join(wtPath, '.multibox.toml'), 'utf8')).toContain('saved user settings');
+      expect(gitExecMock.mock.calls.map(argsOf)).toContainEqual(['update-ref', '-d', 'refs/xdt/snapshots/s1']);
+    }
+  });
+
   it('restore: recreates a deleted local branch from origin before worktree add', async () => {
     let localBranchCreated = false;
     gitExecMock.mockImplementation(async (args: string[]) => {

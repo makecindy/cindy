@@ -4434,14 +4434,7 @@
         "installCancel": "罷安裝",
         "installFailed": "Ollama 安裝未成",
         "installPhase": {
-          "resolving": "方尋官方版本…",
-          "downloading": "方取下…",
-          "verifying": "方校驗…",
-          "extracting": "方安裝…",
-          "starting": "方啟動…",
-          "success": "已安裝",
-          "error": "安裝未成",
-          "cancelled": "已罷"
+          "error": "安裝未成"
         },
         "openWebsite": "往 Ollama 官網",
         "recheck": "已裝，再偵之",
@@ -4476,20 +4469,6 @@
         "retryDownload": "再試",
         "libraryName": "精確之 Ollama 庫名",
         "pullingTitle": "方取下 {{name}}",
-        "pullIndeterminate": "方備",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "備取下…",
-          "manifest": "方取清單…",
-          "downloading": "方取模型卷帙",
-          "verifying": "方校驗…",
-          "writing": "方寫入…",
-          "success": "取下已畢",
-          "error": "取下未成",
-          "paused": "已暫止",
-          "cancelled": "已罷"
-        },
         "pauseDownload": "暫止",
         "resumeDownload": "續取",
         "cancelDownload": "刪未竟之取下",
@@ -5730,7 +5709,8 @@
             "statusFailed": "無從察瀏覽器連線之狀",
             "recoveryFailed": "操控之連線未能重建",
             "extensionDisconnected": "無已連之瀏覽器擴充（請納並啟 Cindy Chrome 法器及其擴充）",
-            "pluginMissing": "Cindy Chrome 法器尚未安裝或啟用"
+            "pluginMissing": "Cindy Chrome 法器尚未安裝或啟用",
+            "browserMissing": "此機尚未安裝 Chrome"
           },
           "reconnect": "重連瀏覽器",
           "recover": "復瀏覽器",
@@ -5750,7 +5730,7 @@
         },
         "userBrowser": {
           "title": "我之瀏覽器",
-          "description": "徑操君正用之 Chrome 或 Edge，沿用既有之登入。新頁開於背景視窗，不擾君。"
+          "description": "即君機上之 Chrome（亦可用 Edge）：Agent 徑操其中，沿用既有之登入。新頁開於背景視窗，不擾君。"
         },
         "userBrowserSetup": {
           "installPluginTitle": "納 Cindy Chrome 法器",
@@ -5769,7 +5749,9 @@
           "updatePluginTitle": "更新 Cindy Chrome 法器",
           "updatePluginBody": "所納 Cindy Chrome 法器版本較舊，尚不支援「我之瀏覽器」。更新至最新版後，再依提示將擴充裝入瀏覽器。",
           "updatePlugin": "往更新",
-          "storeOpened": "已於瀏覽器開 Cindy 擴充之頁，點「加到 Chrome」後自連"
+          "storeOpened": "已於瀏覽器開 Cindy 擴充之頁，點「加到 Chrome」後自連",
+          "installBrowserTitle": "先裝 Chrome",
+          "installBrowserBody": "此機尚未安裝 Chrome。「我之瀏覽器」須 Chrome（或 Edge）以裝 Cindy 擴充，裝畢此處自進下一步。"
         }
       },
       "android": {
@@ -5931,8 +5913,6 @@
           "notChecked": "尚未察更新",
           "action": "新之",
           "updating": "方更新…",
-          "downloadingPercent": "方取下 {{percent}}%（{{downloaded}}/{{total}} MB）…",
-          "downloadingBytes": "方取下，已得 {{downloaded}} MB…",
           "installing": "取下已畢，方安裝…",
           "toast": {
             "success": "cua-driver 已至最新，本姑娘辦事，君放心。",
@@ -7889,7 +7869,6 @@
         "install": "納",
         "details": "詳",
         "detailsAria": "觀 {{name}} 之詳情",
-        "loadingDetails": "方載詳情…",
         "update": "自坊更新",
         "updateTo": "更新至 v{{version}}",
         "installed": "已納",
@@ -8184,6 +8163,8 @@
         "hostTools_controlDetail": "得循 Cindy 之器改、藏、復及治既有任務與專案，並在本機匯入原生任務檔案。",
         "hostTools_handoff": "任務傳言",
         "hostTools_handoffDetail": "得循 Cindy 之器傳訊息於既有任務。需當前任務之境者，須明指任務。",
+        "hostTools_usage": "查訂閱用量",
+        "hostTools_usageDetail": "可查此機現用 Cindy 帳號所接 Claude、Codex 之帳號標識、方案、限額時段及更新時刻。不得取郵址、憑證、檔案或他機資料，亦不得改帳號",
         "hostTools_settings": "應用設定",
         "hostTools_settingsDetail": "得循 Cindy 之器閱改應用設定；不返金鑰，祕文仍由主人親填。",
         "hostTools_scheduler": "自動化治辦",
@@ -8471,6 +8452,7 @@
           "workdirClear": "復預設目錄",
           "followAuxiliary": "從系統輔助模型 · {{model}}",
           "followAuxiliaryUnset": "從系統輔助模型",
+          "remoteQuickAnswerHint": "此模型不行於本機。速問速答唯自本機發，故從系統輔助模型。",
           "restoreModel": "復預設模型"
         },
         "toolsTitle": "Tools",
@@ -8806,23 +8788,10 @@
         "projectReadFailed": "案之開關讀取未成，請再試。"
       },
       "usage": {
-        "title": "個人呼叫",
-        "explanationLabel": "計法",
-        "explanation": "僅計此機目前名籍成功派發之工具呼叫，失敗、逾時或取消亦計入。近 7 日為滾動 168 小時；面板、Skill 與除錯操作不計。記錄預設留存，清除後重計。",
-        "clear": "清其錄",
-        "loading": "方讀記錄…",
-        "unavailable": "個人記錄暫不可用",
-        "retry": "再試",
-        "lastUsed": "近次呼叫",
-        "last7Days": "近 7 日呼叫",
-        "never": "未嘗呼叫",
-        "clearTitle": "清除此法器之使用記錄乎？",
-        "clearDescription": "將清除此機目前名籍之呼叫記錄及差事關聯，此後呼叫重新記之。已共享之累計不撤回。",
         "downloadExplanation": "累計下載請求次數：每成功取得安裝包下載位址，計一次，含更新、重新安裝及重取位址之重試；非成功安裝之數。",
-        "clearAction": "清",
         "downloadsValue": "取下 {{value}}",
         "usesValue": "用 {{value}}",
-        "usesExplanation": "今共享範圍內各版本累計之工具呼叫次數。下方個人呼叫僅計此機目前名籍，計法不同。"
+        "usesExplanation": "今共享範圍內各版本累計之工具呼叫次數。"
       },
       "contribution": {
         "unreadReview": "有新處置之果",
@@ -10884,6 +10853,7 @@
       "duplicate": "複製同伴",
       "moreActions": "{{name}} 之餘事",
       "viewIcons": "圖標",
+      "showCollapsedTeammateAvatars": "收時示頭像",
       "sectionExpand": "展同伴",
       "showLess": "收",
       "sectionCollapse": "收同伴",
@@ -11381,6 +11351,8 @@
         "projectDirNote": "分工行事時，同伴於此勞作。不擇亦可，將用此群議自有之卷匣；若擇 git 專案，每次分工將新開一 worktree 與分支，不動君手中之程式碼。",
         "autoContinueSaveFailed": "分工交接未能存，請再試",
         "projectDirSaveFailed": "案之卷匣未能存，確其尚存後再試",
+        "allowMemberInvites": "許諸成員邀友",
+        "allowMemberInvitesHint": "啟之，已入群者皆可邀友。唯群主與管理員可改。",
         "allowMentionAllBots": "許 @諸同伴",
         "allowMentionAllBotsHint": "唯群主可改。諸同伴或皆回覆，大群宜慎啟之。此開關不涉 AI 代答。"
       },
@@ -11486,6 +11458,7 @@
         "threadRecent": "話題近言",
         "threadNew": "話題新言",
         "replyingTo": "答「{{name}}」：{{text}}",
+        "filesOutsideWorkingDir": "部分檔案不在工作目錄內，未附上。",
         "earlierOmitted": "（更早之言略之）",
         "actingFor": "{{name}} · 代 {{person}}",
         "checkout": {
@@ -11647,6 +11620,11 @@
           "transferHint": "彼為群主，君則為執事。",
           "removeTitle": "將 {{name}} 移出群議？",
           "removeHint": "此成員將不能再覽或遣訊；其同伴亦將退出。",
+          "removeOwn": "移出群聊",
+          "removeOwnScope": "惟此群受之，夥伴仍存於君之帳號。",
+          "removeOwnHint": "{{name}} 將不復收「{{group}}」之訊息。舊訊仍存，他群與私聊不受影響。",
+          "removeOwnActiveHint": "移出將止其於此群之請求。另啟之任務仍行。",
+          "stopAndRemove": "停止並移出",
           "leave": "退出群議",
           "leaveHint": "君與君之同伴將退出此群議，不復收新訊，亦不能覽群中舊錄。",
           "soleOwnerHint": "曲終人散，群中唯餘君一人。可封存此群，存其舊錄，他日再復用之。",
@@ -12890,6 +12868,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "無可用之自動審批模型。請於執行 Agent 之電腦，在「模型供應商」啟用並連接審批供應商，或於設定自訂「輔助模型」。待審之舉仍由君確認。",
           "autoReviewUnavailable": "自動審批暫不能斷，須審批之操作已改由君確認。欲少受擾，可將差事切至「完全存取」，然風險更高。",
           "autoReviewUnavailableWechat": "自動審批暫不能斷，須審批之操作已改由君確認。個人微信不可用「完全存取」，請徑確認此舉。",
           "autoReviewConfirmUndelivered": "自動審批未竟，確認或未送達，或無人點選。此番之拒，非君所點。",
@@ -14054,7 +14033,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "方建 worktree · 輸入已停",
-      "subtitle": "目標分支 {{branch}} · 畢則自解"
+      "subtitle": "目標分支 {{branch}} · 畢則自解",
+      "elapsed": "已候 {{duration}}"
     },
     "worktree": {
       "detecting": "方察環境…",
@@ -15621,6 +15601,7 @@
       "DEVICE_LINK_BUSY": "遠端方忙，請稍後再試。",
       "REMOTE_DAEMON_CLOSED": "遠端連線中斷，或方更新。此輪已終，請再遣。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端差事不能取此機之卷／圖附件。請徑貼其內容。",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "無可用之自動審批模型。請於執行 Agent 之電腦，在「模型供應商」啟用並連接審批供應商，或於設定自訂「輔助模型」。待審之舉仍由君確認。",
       "AUTO_REVIEW_UNAVAILABLE": "自動審批暫不能斷，須審批之操作已改由君確認。欲少受擾，可將差事切至「完全訪問」，然風險更高。",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自動審批暫不能斷，須審批之操作已改由君確認。個人微信不可用「完全訪問」，請徑確認此舉。",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自動審批未畢，確認亦未送達或未被點。此番拒絕非君所點。",
@@ -15641,7 +15622,12 @@
       "REMOTE_PROVIDER_UPDATING": "此模型供方之憑證方更新。請稍後再試。",
       "REMOTE_WORKDIR_UNAVAILABLE": "遠端工作目錄今不可用。請確認彼機上之目錄猶在，然後再試。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "機端暫不能確知此訊已遣否。請稍後再試，勿重遣同一訊。",
-      "REMOTE_AGENT_UNAVAILABLE": "與行 Agent 之機斷連。請再試；若屢見，再確認彼機在線且許遠端控制。",
+      "REMOTE_AGENT_UNAVAILABLE": "未能與行 Agent 之機通信，請閱錯誤詳情。",
+      "REMOTE_AGENT_TIMEOUT": "候行 Agent 之機回應逾時，結果未明。再試前請先察差事進展。",
+      "REMOTE_AGENT_LINK_BUSY": "與行 Agent 之機通信繁忙，請稍候再試。",
+      "REMOTE_AGENT_UNRESPONSIVE": "行 Agent 之機屢未回應，已暫停呼叫。請稍候再試。",
+      "REMOTE_AGENT_OFFLINE": "行 Agent 之機已離線，待其重連再試。",
+      "REMOTE_AGENT_ACCESS_DENIED": "未獲准遠端存取行 Agent 之機。請先察彼機存取設定。",
       "REMOTE_AGENT_PEER_TOO_OLD": "彼機之 Cindy 版本過舊，暫不支援此舉。請先於彼機更新 Cindy。",
       "REMOTE_AGENT_EXPIRED": "此差事於行 Agent 之機上已終。請再遣。",
       "REMOTE_AGENT_NOT_FOUND": "此差事於行 Agent 之機上已終。請再遣。",
@@ -21747,5 +21733,28 @@
     "archivedNotice": "已自動封存 {{count}} 件閒置差事",
     "undo": "復原",
     "undoFailed": "未能復原，請於已封存差事中恢復。"
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "餘 {{time}}",
+    "attempt": "第 {{attempt}} 試",
+    "phase": {
+      "preparing": "方備…",
+      "queued": "方候…",
+      "downloading": "方取下…",
+      "retrying": "方再試…",
+      "verifying": "方校驗…",
+      "installing": "方安裝…",
+      "paused": "已暫止",
+      "completed": "已畢",
+      "failed": "取下未成",
+      "cancelled": "已罷"
+    },
+    "retry": {
+      "slow": "網路遲滯，方重連…",
+      "network": "連線中斷，方再試…",
+      "timeout": "連線逾時，方再試…",
+      "server": "伺服器繁忙，方再試…"
+    }
   }
 }

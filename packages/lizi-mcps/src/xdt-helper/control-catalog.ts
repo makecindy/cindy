@@ -29,6 +29,8 @@ const setting = (key: string, domain: string, title: string, summary: string, se
 const helper = (key: string, domain: string, title: string, summary: string, tools: string[], aliases: string[], notes?: string): Control =>
   ({ key, domain, title, summary, tools, aliases, notes, server: 'cindy_helper' });
 export const CONTROL_CATALOG: readonly Control[] = [
+  helper('models.provider-sharing', 'models', '供应商分享成员', '查询自己分享的成员、暂停恢复与成员模型范围；默认本机，可指定同账号已授权电脑。', ['list_provider_share_members', 'set_provider_share_member_status', 'get_provider_share_model_access', 'set_provider_share_model_access'], ['供应商分享成员', '供应商组', '分享', '成员', '暂停分享', 'provider', 'sharing']),
+  helper('models.subscription-usage', 'models', '订阅用量', '只读查询执行电脑上各 Claude/Codex 账号的套餐、额度窗口与更新时间；插件需声明用量读取权限。', ['get_subscription_usage'], ['usage', 'quota', '用量', '额度', '配额', '订阅', '账号', 'Claude', 'Codex']),
   helper('application.settings-navigation', 'application', '设置跳转与连接入口', '生成绑定目标电脑的设置链接；桌面、手机和远程查看均保留归属。需要用户去设置时展示此入口，账号授权优先用连接卡片。', ['get_settings_link'], ['设置', '跳转', '卡片', '打开设置', 'settings', 'navigation', 'link', '连接']),
   setting('tasks.auto-archive', 'tasks', '存储空间与自动归档', '当前账号在本机的闲置任务自动归档开关、保留天数、可归档与保留的任务数量。', 'task-management', ['自动归档', '闲置任务', '存储空间', 'auto archive', 'idle tasks', 'retention']),
   helper('devices.remote-consent', 'devices', '远程控制授权请求', '请求同账号在线电脑弹出本机确认窗口，由用户开启持续有效的远程控制设置。', ['request_remote_control'], ['远程控制', '授权', '弹窗', 'remote control', 'consent'], '使用 list_machines 的精确设备 ID；只有目标电脑返回 enabled 才能继续原操作。拒绝、超时或旧版无响应不代表同意。'),
