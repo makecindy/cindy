@@ -544,6 +544,19 @@ describe('buildMainListEntries — 混排(recency)', () => {
 });
 
 describe('automations sidebar group', () => {
+  it('folds same-id runs from two computers into one automation subgroup per computer', async () => {
+    const { groupAutomationSidebarEntries } = await import('../features/cc-agent/lib/automationSidebarGrouping');
+    const run = (id: string, deviceLinkDeviceId: string | null, updatedAt: string) =>
+      session({ id, title: 'Nightly', source: 'scheduler', updatedAt, ...(deviceLinkDeviceId ? { deviceLinkDeviceId } : {}) });
+    const entries = groupAutomationSidebarEntries([
+      run('r1', null, '2026-11-16T00:00:00Z'),
+      run('r2', null, '2026-11-15T00:00:00Z'),
+      run('r1', 'mac-2', '2026-11-14T00:00:00Z'),
+      run('r2', 'mac-2', '2026-11-13T00:00:00Z'),
+    ], { notifications: new Set() });
+    expect(entries.map((entry) => entry.kind === 'automation-group' ? entry.group.sessions.length : entry.kind)).toEqual([2, 2]);
+  });
+
   it('keeps same-id automation runs from different computers', () => {
     const local = session({ id: 'run', title: 'local', source: 'scheduler', updatedAt: '2026-11-16T00:00:00Z' });
     const remote = session({ id: 'run', title: 'remote', source: 'scheduler', deviceLinkDeviceId: 'mac-2', updatedAt: '2026-11-15T00:00:00Z' });
