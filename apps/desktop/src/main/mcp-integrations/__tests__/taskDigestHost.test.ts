@@ -74,18 +74,20 @@ describe('desktop task digest error sources', () => {
     expect(await read({ sessionId: 'task' })).toMatchObject({ ok: true, digest: { phase: 'errored', error: null } });
   });
   // #10930 review: the path redactor's 120-character IPC limit hid later causes.
-  it.each(['runtime', 'stored', 'remote'])('preserves a later failure cause within the digest budget from %s', async (source) => {
+  it.each(['runtime', 'stored', 'remote'].flatMap(source => [false, true].map(splitFields => [source, splitFields] as const)))('preserves a later failure cause within the digest budget from %s (split-fields=%s)', async (source, splitFields) => {
     const { read, host } = setup('error', null);
-    const message = `${'request context '.repeat(10)}HTTP 403 quota denied /Users/test/private.txt ${'tail '.repeat(80)}\nAuthorization: Bearer fake-sensitive-token`;
+    const detail = `${'request context '.repeat(10)}HTTP 403 quota denied /Users/test/private.txt ${'tail '.repeat(80)}`;
+    const message = `Authorization: Bearer fake-sensitive-token${splitFields ? '' : `\n${detail}`}`;
+    const sdkError = splitFields ? detail : undefined;
     if (source === 'runtime') {
-      vi.mocked(host.readRuntimeFacts!).mockResolvedValue({ live: null, closed: null, terminalError: { message } });
+      vi.mocked(host.readRuntimeFacts!).mockResolvedValue({ live: null, closed: null, terminalError: { message, sdkError } });
     } else if (source === 'stored') {
-      state.stored.mockResolvedValue({ message, createdAt: 101 });
+      state.stored.mockResolvedValue({ message, sdkError, createdAt: 101 });
     } else {
       vi.mocked(host.invokeRemote).mockImplementation(async (_device, channel) => ({ ok: true, result:
         channel === 'local-db:sessions:get' ? row :
         channel === 'maker:list-active' ? { format: 'active-sessions-v2', sessions: [] } :
-        channel === DL_HISTORY_MESSAGES_CHANNEL ? { items: [{ sessionId: 'task', role: 'error', content: { message }, createdAt: 101 }], terminal: { status: 'error', createdAt: 101 } } : [],
+        channel === DL_HISTORY_MESSAGES_CHANNEL ? { items: [{ sessionId: 'task', role: 'error', content: { message, sdkError }, createdAt: 101 }], terminal: { status: 'error', createdAt: 101 } } : [],
       }));
     }
     const result = await read({ sessionId: source === 'remote' ? 'laptop::task' : 'task' });

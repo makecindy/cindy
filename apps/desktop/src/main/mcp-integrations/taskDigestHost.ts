@@ -27,7 +27,6 @@ import {
   formatPrStatuses,
   historyContentText,
   sessionFactsFromRow,
-  taskDigestErrorSummary,
   type TaskDigestActivity,
   type TaskDigestDeps,
 } from './taskDigest.js';
@@ -204,13 +203,14 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
             terminal.message,
             terminal.sdkError,
             terminal.codexErrorInfo,
-          ].filter(Boolean).join(': ');
-          if (detail) return taskDigestErrorSummary(detail);
+          ].filter(Boolean).join(':\n');
+          // Preserve line boundaries until the reader's final redaction/bounding pass.
+          if (detail.trim()) return detail;
         }
         // This reader already enforces the tail, rewind and /clear boundaries.
         const stored = await readLatestWorkerTurnError(sessionId);
         if (!stored || stored.createdAt < Math.max(facts.startedAtMs ?? 0, activity.startedAtMs ?? 0)) return null;
-        return taskDigestErrorSummary([stored.message, stored.sdkError].filter(Boolean).join(': '));
+        return [stored.message, stored.sdkError].filter(Boolean).join(':\n').trim() || null;
       },
       readLastExchange: readSessionLastExchange,
       queuedCount: async (sessionId) => {
@@ -300,8 +300,8 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         if (!content || typeof content !== 'object' || Array.isArray(content)) return null;
         const error = content as Record<string, unknown>;
         if (error.dismissed === true) return null;
-        return taskDigestErrorSummary([error.message, error.sdkError]
-          .filter((value): value is string => typeof value === 'string').join(': '));
+        return [error.message, error.sdkError]
+          .filter((value): value is string => typeof value === 'string').join(':\n').trim() || null;
       },
       readLastExchange: async (deviceId, sessionId) => {
         const result = await readRemoteMessageItems(host.invokeRemote, deviceId, sessionId, 20);
