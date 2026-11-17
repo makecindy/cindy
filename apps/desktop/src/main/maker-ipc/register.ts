@@ -13396,6 +13396,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         agentInputCoordinatorHolder?.stop(id, { keepQueue: true, pauseQueue: true, resumeOnUserInput: true });
       },
       withSessionLock: withSessionRestartLock,
+      // 「重启伙伴」按住的队列必须先把「暂停来源」落盘,再重建运行时(#7534):
+      // 否则重启报成功时快照里还没有暂停来源,进程随后退出就会把它当成崩溃恢复
+      // 暂停,下一条外部投递会重放用户已经收手的请求。
+      flushStopPersistence: (id) => awaitAgentInputQueueSnapshotPersistence(id),
       rebuild: async (id, assertCurrent, signal) => {
         await pauseGoalBeforeExplicitStop(id);
         assertCurrent();

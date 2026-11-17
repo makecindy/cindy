@@ -981,6 +981,34 @@ describe('外部已授权投递解挂崩溃恢复暂停队列', () => {
       .toEqual(['kept', 'delivery-2']);
   });
 
+  it('does not let an external delivery release a legacy snapshot that records a user stop', async () => {
+    // 旧快照没有 queue-pause-held 标记(升级前写的):「用户显式 Stop / 「重启伙伴」」
+    // 那条路径只会留下 orca-report-stop 标记。旧快照分不清「用户收手」与「崩溃恢复」,
+    // 按收手处理:外部投递不得放行,只有主人的下一条消息能放行。
+    const h = createHarness();
+    const sid = 'legacy-stopped-session';
+    h.setLoadQueueSnapshot(async () => ({
+      items: [makeItem('kept', 'kept request')],
+      orcaReportsStopped: true,
+    }));
+    await h.coordinator.ensureQueueRestored(sid);
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+
+    await externalEnqueue(h)({
+      targetSessionId: sid,
+      clientId: 'delivery-4',
+      message: 'ping',
+      persistedContent: 'ping',
+      origin: companionOrigin,
+    });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId))
+      .toEqual(['kept', 'delivery-4']);
+  });
+
   it('does not let an external delivery release a pause restored from a snapshot that records the pause cause', async () => {
     // #7534:暂停来源必须随快照落盘。「重启伙伴」按住的队列在崩溃后恢复时,若被
     // 一律当成崩溃恢复暂停,下一条外部投递就会把它放行,绕过「只有主人的下一条

@@ -1780,7 +1780,12 @@ export class AgentInputCoordinator {
     try {
       const snapshot = await this.deps.loadQueueSnapshot!(sessionId);
       savedOrcaReportsStopped = !Array.isArray(snapshot) && snapshot.orcaReportsStopped;
-      savedPauseHeld = !Array.isArray(snapshot) && snapshot.pauseHeld === true;
+      // 暂停来源随快照落盘(#7534)。新快照带 queue-pause-held 标记;旧快照没有,
+      // 但「用户显式 Stop / 「重启伙伴」」这条路径会置 orcaReportsStopped,旧格式把
+      // 它写成 orca-report-stop 标记 —— 旧快照分不清「用户收手」与「崩溃恢复」,
+      // 按收手处理:外部投递不得放行它(宁可等主人说话,也不重放用户已收手的请求)。
+      savedPauseHeld = !Array.isArray(snapshot)
+        && (snapshot.pauseHeld === true || snapshot.orcaReportsStopped === true);
       items = (Array.isArray(snapshot) ? snapshot : snapshot.items)
         .map(sanitizeQueuedMessageForPersistence)
         .map(normalizeRestoredSyntheticTrigger)
