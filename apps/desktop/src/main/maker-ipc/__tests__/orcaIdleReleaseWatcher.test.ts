@@ -55,17 +55,23 @@ afterEach(() => {
 });
 
 describe('createOrcaIdleReleaseWatcher', () => {
-  // Unit #11042: idle-only teardown must still retry its own failed close, but
-  // must not carry force-close intent into a replacement with the same id.
-  it('retries only its own failed runtime teardown', async () => {
-    const original = { getStatus: () => 'error' } as Session;
-    const replacement = { getStatus: () => 'error' } as Session;
+  // Unit #11060 review: automatic acknowledgement can fail teardown before the
+  // watcher first sees the instance. Retry its teardown, never an unrelated error.
+  it.each(['watcher', 'acknowledgement'] as const)('retries teardown failed by %s without affecting a replacement', async (origin) => {
+    let closing = origin === 'acknowledgement';
+    const original = { getStatus: () => 'error', hasStartedClosing: () => closing } as Session;
+    const replacement = { getStatus: () => 'error', hasStartedClosing: () => false } as Session;
     const getSession = vi.fn(() => original);
-    const closeSessionIfCurrent = vi.fn().mockRejectedValueOnce(new Error('exit failed'))
-      .mockResolvedValueOnce('closed').mockResolvedValue(undefined);
+    const closeSessionIfCurrent = vi.fn().mockResolvedValueOnce('closed').mockResolvedValue(undefined);
+    if (origin === 'watcher') closeSessionIfCurrent.mockReset().mockImplementationOnce(async () => {
+      closing = true;
+      throw new Error('exit failed');
+    }).mockResolvedValueOnce('closed').mockResolvedValue(undefined);
     const close = createOrcaIdleRuntimeClose({ getSession, closeSessionIfCurrent });
-    await expect(close('worker-session-1')).rejects.toThrow('exit failed');
-    expect(closeSessionIfCurrent).toHaveBeenLastCalledWith(original, 'requested', { onlyIfIdle: true });
+    if (origin === 'watcher') {
+      await expect(close('worker-session-1')).rejects.toThrow('exit failed');
+      expect(closeSessionIfCurrent).toHaveBeenLastCalledWith(original, 'requested', { onlyIfIdle: true });
+    }
     await expect(close('worker-session-1')).resolves.toBe(true);
     expect(closeSessionIfCurrent).toHaveBeenLastCalledWith(original, 'requested', undefined);
     getSession.mockReturnValue(replacement);

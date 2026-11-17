@@ -1,4 +1,4 @@
-import type { Maker, Session } from '@cindy/maker-core';
+import type { Maker } from '@cindy/maker-core';
 
 /** Worker statuses that may release their runtime after the configured idle threshold. */
 export const ORCA_IDLE_RELEASE_STATUSES = ['idle', 'running', 'done', 'error'] as const;
@@ -60,19 +60,14 @@ const DEFAULT_SCAN_INTERVAL_MS = 60_000;
 export function createOrcaIdleRuntimeClose(
   maker: Pick<Maker, 'getSession' | 'closeSessionIfCurrent'>,
 ): OrcaIdleReleaseWatcherDeps['closeSession'] {
-  const failed = new WeakSet<Session>();
   return async (sessionId) => {
     const session = maker.getSession(sessionId);
     if (!session) return false;
-    try {
-      const closed = await maker.closeSessionIfCurrent(session, 'requested',
-        failed.has(session) && session.getStatus() === 'error' ? undefined : { onlyIfIdle: true }) === 'closed';
-      if (closed) failed.delete(session);
-      return closed;
-    } catch (error) {
-      failed.add(session);
-      throw error;
-    }
+    // A done acknowledgement may have started the failed teardown before this
+    // watcher saw the runtime. The Session itself owns that fact, not the caller.
+    const retryFailedClose = session.hasStartedClosing() && session.getStatus() === 'error';
+    return await maker.closeSessionIfCurrent(session, 'requested',
+      retryFailedClose ? undefined : { onlyIfIdle: true }) === 'closed';
   };
 }
 

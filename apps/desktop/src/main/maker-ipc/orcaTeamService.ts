@@ -1664,7 +1664,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       }
       if (params.expectedStatus) {
         await assertAfterIdle();
-        const didClose = await closeWorkerSessionIfIdleBestEffort(worker.sessionId, 'idleWorker', false, opts?.assertCurrent);
+        const didClose = await closeWorkerSessionIfIdleBestEffort(worker.sessionId, 'idleWorker', false, assertAfterIdle);
         if (!didClose) {
           await rollbackDoneAcknowledgement();
           if (params.expectedStatus === 'done' && !opts?.deferredRetry) {
@@ -2188,20 +2188,30 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     sendLockHeld = false,
     beforeClose?: () => Promise<void>,
   ): Promise<boolean> {
+    let authorityRejected = false;
+    const assertCloseAuthority = async () => {
+      try { await beforeClose?.(); }
+      catch (err) { authorityRejected = true; throw err; }
+    };
     try {
       const runtime = deps.getLiveSession(sessionId);
       const generation = runtime?.getTurnGeneration?.();
       // Native work may outlive the foreground turn without appearing in the
       // task snapshot. A failed probe is caught below and leaves the runtime alive.
       if (runtime?.hasLiveBackgroundWork) {
-        if (await runtime.hasLiveBackgroundWork()) return false;
-        if (await deps.hasPendingWorkerInput(sessionId)) return false;
-        await beforeClose?.();
+        const busy = await runtime.hasLiveBackgroundWork();
+        const queued = !busy && await deps.hasPendingWorkerInput(sessionId);
+        await assertCloseAuthority();
+        if (busy || queued) return false;
         if (deps.getLiveSession(sessionId) !== runtime
           || runtime.getTurnGeneration?.() !== generation) return false;
       }
       return await (sendLockHeld ? deps.closeWorkerSessionIfIdle(sessionId, true) : deps.closeWorkerSessionIfIdle(sessionId));
     } catch (err) {
+      if (authorityRejected) throw err;
+      // A failed provider probe/close is retryable only while the caller's
+      // authority still holds; otherwise it must not acquire a new retry guard.
+      await assertCloseAuthority();
       deps.log.warn(`${owner}: close idle worker session failed`, {
         sessionId,
         err: err instanceof Error ? err.message : String(err),

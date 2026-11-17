@@ -41,6 +41,41 @@ function createWorker(overrides: Partial<OrcaWorkerRecordSnapshot> = {}): OrcaWo
 }
 
 describe('model Orca cleanup authority', () => {
+  // Unit #11060 review: a guard rejected after the native probe must preserve
+  // its error and roll back done, without acquiring fresh deferred authority.
+  it.each([
+    { action: 'idle', probe: 'idle' }, { action: 'archive', probe: 'idle' },
+    { action: 'idle', probe: 'busy' }, { action: 'idle', probe: 'failed' },
+  ] as const)('propagates $action authority revocation during the $probe background probe', async ({ action, probe }) => {
+    let allowed = true;
+    const revoked = Object.assign(new Error('authority expired'), {
+      code: action === 'idle' ? 'PERMISSION_DENIED' : 'STALE_REVISION',
+    });
+    const guard = async () => { if (!allowed) throw revoked; };
+    const runtime = {
+      isTurnRunning: () => false, getTurnGeneration: () => 1,
+      hasLiveBackgroundWork: async () => {
+        allowed = false;
+        if (probe === 'failed') throw new Error('probe failed');
+        return probe === 'busy';
+      },
+    };
+    const captureDeliveryAuthority = vi.fn(async () => async () => {});
+    const { service, deps, setWorker, getWorker } = createDeps({
+      getLiveSession: () => runtime, captureDeliveryAuthority,
+    });
+    setWorker(createWorker({ status: 'done' }));
+    const result = action === 'idle'
+      ? service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1', expectedStatus: 'done' }, { assertCurrent: guard })
+      : service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1', onlyIfIdle: true, beforeArchive: guard });
+    await expect(result).rejects.toBe(revoked);
+    expect(getWorker().status).toBe('done');
+    expect(captureDeliveryAuthority).not.toHaveBeenCalled();
+    await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: 'complete' });
+    expect(deps.closeWorkerSessionIfIdle).not.toHaveBeenCalled();
+    expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
+    expect(getWorker().status).toBe('done');
+  });
   const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
   const callbacks = source.slice(source.indexOf('    switchFocus: async ('), source.indexOf('    listAvailableModels: async ('));
   const disable = source.slice(source.indexOf('  async function clearLeadOrcaRoleState('), source.indexOf('  ipcMain.handle(MAKER_INVOKE.SESSION_DISABLE_ORCA'));
