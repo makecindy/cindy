@@ -23,6 +23,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import test, { mock } from 'node:test';
+import ts from 'typescript';
+import { createHostServer } from './server.mjs';
 
 import {
   ANSWER_WAIT_MS, FIRST_BACKOFF_MS, START_TIMEOUT_MS, WARMUP_WAIT_MS, createChromiumProxyHelper, helperEnv, helperUrl,
@@ -184,6 +186,63 @@ test('the first login reaches the PAC proxy after a three-second cold start', as
   const response = await hostAuthFetch(url, { method: 'POST' });
   assert.equal(await response.text(), 'via PAC');
   assert.deepEqual(seen, [['POST', url]]);
+});
+
+// Row 28c, integration: run main's command preparation and listen/startup callback together, as
+// startup-account.test.mjs runs the real startup functions. Substitute profile/account storage;
+// exercise the real loopback /health handler, proxy helper protocol and login transport.
+test('serve answers health before the cold PAC is ready and sends its first login through the proxy', async t => {
+  const seen = [];
+  const proxy = createServer((req, res) => { seen.push(req.url); res.end('via PAC'); });
+  await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { proxy.closeAllConnections(); proxy.close(resolve); }));
+  const { spawned, spawnImpl } = standIn({ onRequest: answer(`PROXY 127.0.0.1:${proxy.address().port}`) });
+  const helper = helperFor(spawnImpl);
+  t.after(() => helper.close());
+  const server = createHostServer({ token: 'fixture-token' });
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+
+  const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
+  const preparation = source.slice(source.indexOf('const command ='), source.indexOf("if (command === '--help'"));
+  const listener = source.slice(source.indexOf("server.on('error'"), source.indexOf('let shuttingDown ='));
+  const loginUrl = 'http://listen-first.example.test/v1/session/refresh';
+  let loginStarted = false;
+  const ports = {
+    server, PORT: 0, profileDir, instanceId: 'fixture', account: {}, runtime: {}, shuttingDown: false,
+    process: { argv: ['node', 'main.ts', 'serve'], env: {}, stdout: { write() {} } },
+    console: { log() {} }, resolveHostRegion() {}, publishHostEndpoint() {}, resolveHostDataDir: () => profileDir,
+    discoverHostOwner: () => ({}), readAdoptedSessionState: async () => ({ authenticated: true }),
+    startHostSystemProxySettings: () => startHostSystemProxySettings({ platform: 'win32', makeHelper: () => helper }),
+    resolveAccountUser: async () => {
+      loginStarted = true;
+      const response = await hostAuthFetch(loginUrl, { method: 'POST' });
+      await response.text();
+      return null;
+    },
+  };
+  const body = ts.transpileModule(`return async () => {
+    let startup, removeEndpoint;
+    ${preparation}
+    ${listener}
+    return () => startup;
+  }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const launch = new Function(...Object.keys(ports), body)(...Object.values(ports));
+  const listening = launch();
+  await settle();
+  assert.ok(server.listening, 'serve must listen while proxy warmup is still pending');
+  const startup = await listening;
+  const health = await fetch(`http://127.0.0.1:${server.address().port}/health`);
+  assert.equal(health.status, 200);
+  assert.equal((await health.json()).service, 'cindy-host');
+  mock.timers.tick(2999);
+  await settle();
+  assert.equal(loginStarted, false);
+  assert.deepEqual(spawned[0].written, [], 'no proxy resolution for login yet');
+  assert.deepEqual(seen, []);
+  mock.timers.tick(1);
+  ready(spawned[0]);
+  await startup();
+  assert.deepEqual(seen, [loginUrl]);
 });
 
 // Removing the 8 s bound leaves startup blocked until the independent 15 s watchdog.

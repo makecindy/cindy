@@ -215,10 +215,9 @@ try {
   console.error(`cindy-host: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 }
-// Only commands that can contact an upstream need the system proxy.
-if (command === undefined || command === 'serve' || command === 'login') {
-  await startHostSystemProxySettings();
-}
+// open, status, stop and remote only contact a local loopback endpoint.
+const proxyWarmup = command === undefined || command === 'serve' || command === 'login'
+  ? startHostSystemProxySettings() : undefined;
 if (command === '--help' || command === '-h') {
   console.log('Usage: cindy-host [serve|login [--region=cn|global] [--method=<id>]|open|status [--json]|remote [status|enable|disable|revoke <device-id>]|stop]');
 } else if (command === 'open') {
@@ -279,6 +278,7 @@ if (command === '--help' || command === '-h') {
   }
 } else if (command === 'login') {
   try {
+    await proxyWarmup;
     await runLoginCommand(process.argv.slice(3));
   } catch (error) {
     console.error(`cindy-host login failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -2108,6 +2108,9 @@ server.listen(PORT, '127.0.0.1', () => {
   // supervisors still need the non-secret loopback readiness address on stdout.
   process.stdout.write(`cindy-host listening on ${baseUrl}\n`);
   startup = (async () => {
+    // The loopback endpoint already answers /health while a cold PAC loads.
+    await proxyWarmup;
+    if (shuttingDown) return;
     let owner = process.env.CINDY_HOST_OWNER?.trim() || '';
     let initialUser: AccountUser | null = null;
     if (!owner) {
