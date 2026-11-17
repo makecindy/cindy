@@ -207,6 +207,7 @@ function hookDefaultInputs(
   overrides: HookDispatchOverrides,
   sourceIm: string | null | undefined,
   workspaceCtx: HookWorkspaceCtx | undefined,
+  sharedProject = false,
 ) {
   const prefsChannel: HookPrefsChannel | null =
     sourceIm === 'telegram' || sourceIm === 'x' || sourceIm === 'slack' || sourceIm === 'feishu'
@@ -215,7 +216,7 @@ function hookDefaultInputs(
   const workspaceAlias = workspaceCtx?.alias;
   // 所有官方机器人共用一套项目配置(sharedProjectPrefs.ts): 这个渠道原有的按渠道偏好并入
   // 之后, 一律读共用的那一份; 并入之前(升级后还没连上过服务端)沿用它自己的那份。
-  const shared = prefsChannel !== null && isSharedPrefsAdopted(prefsChannel);
+  const shared = sharedProject || (prefsChannel !== null && isSharedPrefsAdopted(prefsChannel));
   const localPref =
     prefsChannel !== null && workspaceAlias
       ? shared
@@ -253,6 +254,17 @@ function hookDefaultsFingerprint(inputs: ReturnType<typeof hookDefaultInputs>): 
     ...(workdirRoute?.agentDeviceId ? [workdirRoute.agentDeviceId] : [])]);
 }
 
+/** Plugin IM entrances use the same canonical project settings and resolver as official bots. */
+export function sharedImProjectFingerprint(alias: string): string {
+  return JSON.stringify(hookDefaultInputs({ agentKind: null, model: null, effort: null, permissionMode: null },
+    'slack', { alias, teamId: null }, true));
+}
+
+export function resolveSharedImProjectConfig(alias: string, log: { warn(msg: string): void }) {
+  return resolveNewSessionConfig({ agentKind: null, model: null, effort: null, permissionMode: null },
+    log, 'slack', { alias, teamId: null }, undefined, true);
+}
+
 /**
  * 新会话 agent/model/effort/permissionMode/providerId 合成: IM provider 按目录偏好
  * (dispatch options)优先, 缺省落桌面端 IM 新会话默认值(草稿, 建 session 那
@@ -266,8 +278,9 @@ async function resolveNewSessionConfig(
   sourceIm?: string | null,
   workspaceCtx?: HookWorkspaceCtx,
   providerSnapshot?: ProviderView[],
+  sharedProject = false,
 ): Promise<ResolvedHookSessionConfig & { fingerprint: string }> {
-  const inputs = hookDefaultInputs(overrides, sourceIm, workspaceCtx);
+  const inputs = hookDefaultInputs(overrides, sourceIm, workspaceCtx, sharedProject);
   const fingerprint = hookDefaultsFingerprint(inputs);
   let providers: ProviderView[] | null = null;
   try {

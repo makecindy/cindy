@@ -161,6 +161,7 @@ export function SubscriptionAccountsSection({
   providerId,
   kind = providerId as SubscriptionProvider,
   providerName,
+  locationLabel,
   defaultUsage,
   dashboard,
   expectAccounts = true,
@@ -170,6 +171,8 @@ export function SubscriptionAccountsSection({
   /** The account pool it uses (2026-11-13); defaults to the built-in provider id. */
   kind?: SubscriptionProvider;
   providerName?: string;
+  /** Clarify which computer owns these accounts when models run elsewhere. */
+  locationLabel?: string;
   defaultUsage?: ReactNode;
   dashboard?: { label: string; onOpen: () => void };
   /** Whether the first read is likely to list an account, so its row's space is held meanwhile. */
@@ -182,12 +185,14 @@ export function SubscriptionAccountsSection({
   const cache = useContext(SubscriptionPoolViewCache);
   const [view, setView] = useState<SubscriptionPoolView | null>(() => cache?.get(providerId) ?? null);
   const [failed, setFailed] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const login = useRef<string | null>(null);
   const inFlight = useRef(false);
   const epoch = useRef(0);
   const refresh = useCallback(async () => {
     const current = ++epoch.current;
+    setRefreshing(true);
     try {
       const next = await window.electronAPI.subscriptionAccounts.command({
         action: 'read',
@@ -200,6 +205,8 @@ export function SubscriptionAccountsSection({
       }
     } catch {
       if (current === epoch.current) setFailed(true);
+    } finally {
+      if (current === epoch.current) setRefreshing(false);
     }
   }, [providerId, cache]);
   useEffect(() => {
@@ -268,13 +275,14 @@ export function SubscriptionAccountsSection({
       data-testid="subscription-accounts"
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-16 font-medium text-[var(--text-primary)]">
             {t('subscriptionAccounts.title')}
           </h3>
           {accounts.length > 0 && (
             <span className="text-12 text-[var(--text-tertiary)]">{accounts.length}</span>
           )}
+          {locationLabel && <span className="text-12 text-[var(--text-secondary)]">{locationLabel}</span>}
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {/* A built-in provider holds the CLI default login and is never merged away as a whole. */}
@@ -318,9 +326,14 @@ export function SubscriptionAccountsSection({
         </div>
       </div>
       {failed && (
-        <p role="alert" className="mt-3 text-12 text-[var(--text-danger)]">
-          {t('subscriptionAccounts.failed')}
-        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <p role="alert" className="text-12 text-[var(--text-danger)]">
+            {t('subscriptionAccounts.failed')}
+          </p>
+          <Button data-settings-search-action="Retry reading local subscription accounts" variant="secondary" size="sm" disabled={refreshing || busy} onClick={() => void refresh()}>
+            {t('commonUi.retry')}
+          </Button>
+        </div>
       )}
       {!view && !failed && (
         <AccountListPlaceholder reserve={expectAccounts} label={t('ccAgent.common.loading')} />
@@ -485,9 +498,9 @@ export function SubscriptionAccountsSection({
                                 </span>
                               </Tip>
                             )}
-                            {kind === 'anthropic' && ((connected && expiring) || account.status === 'signed-out') && (
+                            {(account.status === 'signed-out' || (kind === 'anthropic' && connected && expiring)) && (
                               <Button
-                                data-settings-search-action="Sign in again to this Claude account"
+                                data-settings-search-action="Sign in again to this subscription account"
                                 variant="secondary"
                                 tone="quiet"
                                 size="sm"
@@ -496,6 +509,12 @@ export function SubscriptionAccountsSection({
                                 onClick={signIn}
                               >
                                 {t('subscriptionAccounts.loginAgain')}
+                              </Button>
+                            )}
+                            {account.status === 'unavailable' && (
+                              <Button data-settings-search-action="Retry reading this unavailable subscription account" variant="secondary" tone="quiet" size="sm"
+                                disabled={refreshing || busy} onClick={() => void refresh()}>
+                                {t('commonUi.retry')}
                               </Button>
                             )}
                           </div>

@@ -11,6 +11,7 @@ import {
 
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
+import type { DownloadProgress } from '../../shared/downloadProgress';
 
 /**
  * 由主窗派生的附属窗口(会话多开副窗 / 右侧栏子窗口 / 插件面板子窗口):
@@ -53,6 +54,8 @@ export interface DownloadInfo {
   speed?: string;
   downloaded?: string;
   total?: string;
+  /** Standard progress from Main: explains retries, verification and time left. */
+  download?: DownloadProgress;
 }
 
 export interface EnvCheckContextValue {
@@ -149,6 +152,7 @@ export function EnvCheckProvider({ children }: { children: ReactNode }) {
           speed: payload.speed,
           downloaded: payload.downloaded,
           total: payload.total,
+          download: payload.download,
         });
         setStatus('downloading');
       }
@@ -201,6 +205,7 @@ export function EnvCheckProvider({ children }: { children: ReactNode }) {
             speed: payload.speed,
             downloaded: formatBytes(payload.received),
             total: formatBytes(payload.total),
+            download: payload.download,
           });
           return 'updating';
         }

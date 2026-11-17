@@ -180,6 +180,9 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
 - 新增或修改插件持久 Library（library 槽、binding / 目录选择、随时迁移、
   回收站删除、SQLite 语句门或 `/library/` 面板投影）前，必须先读
   `docs/dev-rules/plugin-library-storage.md`。
+- 新增或修改文件下载、安装进度或它们的界面前，必须先读 `docs/dev-rules/verified-downloads.md`：
+  传输走统一下载器（必须带 SHA-256，自带重试、续传和龟速换连接），给用户看的进度统一为
+  `DownloadProgress` 并用标准 `DownloadMeter` 显示，不各自画进度条、格式化速度或处理重试提示。
 - 修改客户端自动更新链路（`cindy-updater` 或 Electron 侧更新服务）前，必须先读
   `docs/dev-rules/cindy-updater.md`。
 - 新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、客户端本地或远程数据读取／

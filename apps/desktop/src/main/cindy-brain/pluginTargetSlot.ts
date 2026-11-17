@@ -11,7 +11,7 @@ import { isPluginTaskPermissionMode, type PluginTaskPermissionMode, type PluginT
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import { validPluginMessageContext } from '../../shared/pluginMessage.js';
 import { getActiveDataOwnerPushStamp, activeOwnerScopeKey } from '../appSessionState.js';
-import { withParsedPluginMessageAttachments, type PluginMessageImage } from '../cindy-media/pluginMessageAttachments.js';
+import { withParsedPluginMessageAttachments, type PluginMessageItem } from '../cindy-media/pluginMessageAttachments.js';
 
 export interface PluginTargetTerminal {
   instanceId: string;
@@ -69,7 +69,7 @@ export interface PluginTargetAdapter {
     guard: () => void,
     validateTarget: () => Promise<void>,
     delivery: PluginTargetDelivery,
-    images?: PluginMessageImage[],
+    images?: PluginMessageItem[],
     options?: { context?: string },
   ): Promise<PluginTargetDelivery>;
   withdraw(taskId: string, clientId: string, guard: () => void): Promise<void>;

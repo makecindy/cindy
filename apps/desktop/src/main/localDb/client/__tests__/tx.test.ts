@@ -403,6 +403,7 @@ describe('db worker tx handlers', () => {
       await client.exec('CREATE TABLE session_goals (session_id TEXT, status TEXT)');
       await client.exec('CREATE TABLE agent_input_queue_snapshots (session_id TEXT, payload TEXT)');
       await seedSession(client, 'idle', { status: 'active' });
+      await client.exec("UPDATE sessions SET updated_at = 123 WHERE id = 'idle'");
       await client.exec("UPDATE sessions SET last_activity_at = 100 WHERE id = 'idle'");
       const archive = () => client.tx('sessions.setTerminalStatus', { sessionId: 'idle', status: 'archived', idleArchiveCutoff: 200 });
       await client.exec("UPDATE sessions SET last_activity_at = 300 WHERE id = 'idle'");
@@ -416,10 +417,15 @@ describe('db worker tx handlers', () => {
       expect(await client.queryOne("SELECT status FROM sessions WHERE id = 'idle'")).toEqual({ status: 'active' });
       await client.exec("UPDATE sessions SET pinned_at = NULL WHERE id = 'idle'");
       await expect(archive()).resolves.toMatchObject({ sessionId: 'idle', status: 'archived' });
+      expect(await client.queryOne("SELECT updated_at AS updatedAt FROM sessions WHERE id = 'idle'"))
+        .toEqual({ updatedAt: 123 });
       // A manual archive continues to use the existing flow, without idle guards.
       await seedSession(client, 'manual', { status: 'active', pinnedAt: 50 });
+      await client.exec("UPDATE sessions SET updated_at = 123 WHERE id = 'manual'");
       await expect(client.tx('sessions.setTerminalStatus', { sessionId: 'manual', status: 'archived' }))
         .resolves.toMatchObject({ sessionId: 'manual', status: 'archived' });
+      expect((await client.queryOne<{ updatedAt: number }>("SELECT updated_at AS updatedAt FROM sessions WHERE id = 'manual'"))!.updatedAt)
+        .toBeGreaterThan(123);
     }, { useInlineWorker });
   });
 

@@ -47,7 +47,7 @@ import {
 
 import { randomUUID } from 'node:crypto';
 
-import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
+import { isTerminalAgentErrorEvent, safeTurnContinuationCancellationReason } from '@cindy/maker-core';
 import { formatSourceRef } from '@cindy/maker-shared/message-source';
 import {
   restoreAutoReviewUserIntent,
@@ -238,6 +238,8 @@ export interface SchedulerQueueDeps {
   getLastUserActionAt?(sessionId: string): number | null;
   /** 目标会话当前是否忙(turn 运行中 / 队列有积压 / 凭证切换等待中)。 */
   isSessionBusy(sessionId: string): boolean;
+  /** Actual accepted follow-up work; admission locks/restore-pending alone do not retain a runtime. */
+  hasPendingInput?(sessionId: string): boolean;
   /**
    * 重启后内存还没有读回排队快照时，shouldQueueNewTurn 会把它当成忙。
    * 指定模型的任务会因此直接顺延，永远走不到入队时的恢复。
@@ -866,6 +868,55 @@ export class MakerScheduleRunner implements ScheduleRunner {
     throw new Error(errMsg);
   }
 
+  private closeEphemeralAfterInputs(holder: EphemeralSessionHolder): void {
+    const sessionId = holder.sessionId!;
+    const session = this.deps.maker.getSession(sessionId);
+    if (!session) return;
+    // The fire is finished, but accepted follow-ups still own this runtime.
+    // Retain cleanup ownership across preparing, pauses and recoveries; queue
+    // removal need not emit a vendor event, so an unref'ed poll also covers it.
+    const current = () => {
+      const status = session.getStatus();
+      return this.deps.maker.getSession(sessionId) === session && status !== 'closed' && status !== 'error';
+    };
+    const busy = () => session.getStatus() !== 'active'
+      || this.runtime.isSessionInTurn(sessionId)
+      || this.deps.schedulerQueue?.hasPendingInput?.(sessionId)
+      || session.listBackgroundTasks().length > 0
+      || session.countPendingWakeContinuations() > 0
+      || (session.manageAsyncUserQuestions({ action: 'list' }).questions?.length ?? 0) > 0;
+    const poll = async (): Promise<void> => {
+      try {
+        holder.assertOwner?.();
+        if (!current()) return;
+        // Aborting is transient: keep the cleanup owner until interrupt settles.
+        // Completed turns may still own questions, children, terminals or wakes.
+        if (!busy()) {
+          const generation = session.getTurnGeneration();
+          const backgroundWork = await session.hasLiveBackgroundWork();
+          // A whole new turn can finish during the provider probe. Its result
+          // cannot describe work created by that turn, even if the queue is empty.
+          holder.assertOwner?.();
+          if (!current()) return;
+          if (!backgroundWork && session.getTurnGeneration() === generation && !busy()) {
+            const result = await this.deps.maker.closeSessionIfCurrent(session, 'requested', { onlyIfIdle: true });
+            if (result === 'closed') return;
+          }
+        }
+      } catch (error) {
+        // A changed owner must never touch the next account's queue or runtime.
+        try { holder.assertOwner?.(); } catch { return; }
+        this.deps.logger.warn?.('[runner] deferred ephemeral close failed', { sessionId, error });
+      }
+      arm();
+    };
+    const arm = () => {
+      const timer = setTimeout(() => { void poll(); }, 1_000);
+      timer.unref?.();
+    };
+    arm();
+  }
+
   /**
    * fire 的收尾包装:ephemeral 会话(非 heartbeat、非持续会话)在 run 走到任何终态
    * (成功 / 失败 / 中止 / 中途异常)后关闭 in-memory 句柄。
@@ -879,8 +930,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
    * 不关的两类:
    *   - heartbeat(复用 targetSessionId):用户既有会话,生命周期不归 runner 管。
    *   - persistentSession:产品语义就是「持续会话」,跨 fire 复用同一 session。
-   * 另外收尾时会话上若有**新的** turn 在跑(用户从运行历史点开会话接管了对话),
-   * 让位不关 —— 该会话已转为用户驱动。
+   * 另外收尾时会话上若有新的 turn 或已接受的排队/派发中输入，
+   * 延后回收 —— 后续输入结束或被移除后，再关闭同一个空闲运行时。
    *
    * 用 wrapper + holder 而非在 fireInner 内部套 try/finally:fireInner 里 createSession
    * 之后仍有未捕获 throw 点(backfillSessionMeta / wireSessionToIpc 等),wrapper 的
@@ -917,10 +968,19 @@ export class MakerScheduleRunner implements ScheduleRunner {
       holder.headlessGhostSetupTurn?.close();
       holder.releaseUnattendedTurn?.();
       holder.releaseUnattendedTurn = undefined;
+      if (holder.sessionId && !holder.keepAlive && !holder.closeOnAbort
+        && this.deps.schedulerQueue?.hasPendingInput?.(holder.sessionId)) {
+        this.closeEphemeralAfterInputs(holder);
+      }
       if (
         holder.sessionId &&
         !holder.keepAlive &&
-        (holder.closeOnAbort || !this.runtime.isSessionInTurn(holder.sessionId))
+        (holder.closeOnAbort || (
+          !this.runtime.isSessionInTurn(holder.sessionId) &&
+          // A successful done can precede the coordinator's queued dispatch.
+          // Include preparing/recovery work, not just the current vendor turn.
+          !this.deps.schedulerQueue?.hasPendingInput?.(holder.sessionId)
+        ))
       ) {
         try {
           await this.deps.maker.closeSession(holder.sessionId);
@@ -3742,6 +3802,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
       let currentSession: Session | null = null;
       let settled = false;
       let quotaWaiting = false;
+      // Keep only this run's extracted terminal detail, including across Maker's
+      // same-id Session replacement. Recovery failure must not erase its cause.
+      let lastTerminalError: string | undefined;
       const clearInterruptedDoneTimer = (): void => {
         if (interruptedDoneTimer) {
           clearTimeout(interruptedDoneTimer);
@@ -3788,6 +3851,19 @@ export class MakerScheduleRunner implements ScheduleRunner {
         settled = true;
         cleanup();
         reject(err);
+      };
+
+      const failContinuation = (continuationId: number | undefined, rawReason: unknown): void => {
+        if (settled) return;
+        // Rebuild diagnostic fields from fixed codes/numbers. Never stringify a
+        // provider error or arbitrary callback data into logs or run history.
+        const reason = safeTurnContinuationCancellationReason(rawReason) ?? 'unknown';
+        const id = typeof continuationId === 'number' && Number.isSafeInteger(continuationId) && continuationId > 0
+          ? continuationId : 'unknown';
+        this.deps.logger.warn?.('[runner] turn continuation cancelled', {
+          sessionId, continuationId: id, reason,
+        });
+        fail(new Error(`Scheduled turn continuation was cancelled (reason: ${reason}, continuationId: ${id})`));
       };
 
       const onSessionStatus = (
@@ -3902,7 +3978,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
           if (continuationState === 'cancelled') {
             // Provider already observed an explicit stop/teardown. Session
             // gets a separate ordered boundary; this run did not complete.
-            fail(new Error('Scheduled turn continuation was cancelled'));
+            failContinuation(continuationId, continuationId === undefined
+              ? undefined : owner.getTurnContinuationCancellationReason?.(continuationId));
             return;
           }
           if (continuationState === 'awaiting' || continuationState === 'active') {
@@ -3910,7 +3987,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             // turn —— 不定格，等待续 turn 自己的 done。
             pendingContinuationUnsub?.();
             pendingContinuationUnsub = owner.onTurnContinuationChange?.(
-              (changedContinuationId, state) => {
+              (changedContinuationId, state, reason) => {
                 if (
                   state !== 'cancelled' ||
                   (continuationId !== undefined && changedContinuationId !== continuationId)
@@ -3919,7 +3996,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
                 }
                 pendingContinuationUnsub?.();
                 pendingContinuationUnsub = undefined;
-                fail(new Error('Scheduled turn continuation was cancelled'));
+                failContinuation(changedContinuationId, reason);
               },
             );
             this.deps.logger.info?.(
@@ -3962,6 +4039,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           finish();
         } else if (isTerminalAgentErrorEvent(ev)) {
           const error = extractErr(ev.data);
+          lastTerminalError = error;
           ignorePairedInterruptedDone = true;
           clearInterruptedDoneTimer();
           interruptedDoneTimer = setTimeout(() => {
@@ -4006,7 +4084,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
       autoResumeFailureUnsub = this.deps.schedulerQueue?.onAutoResumeFailed?.(
         sessionId,
         options.origin.runId,
-        () => fail(new Error('scheduled task auto-resume failed')),
+        () => fail(new Error(lastTerminalError
+          ? `scheduled task auto-resume failed: ${lastTerminalError}`
+          : 'scheduled task auto-resume failed')),
         {
           start: () => {
             if (settled || quotaWaiting) return;

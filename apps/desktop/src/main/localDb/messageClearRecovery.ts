@@ -11,6 +11,7 @@ export interface MessageClearRecoveryPorts<Scope> {
   collectCindyMediaHashes(content: string): string[];
   removeSessionAttachmentRefIfUnreferencedByLiveMessage(params: { sessionId: string; hash: string }, scope: Scope): Promise<unknown>;
   broadcastMessageDeleted(payload: { sessionId: string; clientId: string; clientIds: string[] }, scope: Scope): void;
+  recomputePrRefsForSession(sessionId: string, scope: Scope): Promise<void>;
   log: Pick<ReturnType<typeof createLogger>, 'warn'>;
 }
 
@@ -19,7 +20,7 @@ export interface MessageClearRecoveryPorts<Scope> {
 export function createMessageClearRecovery<Scope>(ports: MessageClearRecoveryPorts<Scope>) {
   const { captureOwnerBroadcastScope, isOwnerBroadcastScopeCurrent, getDbClient,
     removeMediaRefs, collectCindyMediaHashes, removeSessionAttachmentRefIfUnreferencedByLiveMessage,
-    broadcastMessageDeleted, log } = ports;
+    broadcastMessageDeleted, recomputePrRefsForSession, log } = ports;
   return async function rewindPersistedUserMessageAfterClear(
     sessionId: string, clientId: string, options?: { discard?: boolean },
   ): Promise<void> {
@@ -82,5 +83,6 @@ export function createMessageClearRecovery<Scope>(ports: MessageClearRecoveryPor
       });
     }
     broadcastMessageDeleted({ sessionId, clientId, clientIds: [clientId] }, ownerScope);
+    void recomputePrRefsForSession(sessionId, ownerScope).catch(() => undefined);
   };
 }

@@ -4434,14 +4434,7 @@
         "installCancel": "取消安装",
         "installFailed": "Ollama 安装失败",
         "installPhase": {
-          "resolving": "正在查找官方版本…",
-          "downloading": "正在下载…",
-          "verifying": "正在校验…",
-          "extracting": "正在安装…",
-          "starting": "正在启动…",
-          "success": "已安装",
-          "error": "安装失败",
-          "cancelled": "已取消"
+          "error": "安装失败"
         },
         "openWebsite": "前往 Ollama 官网",
         "recheck": "已安装，重新检测",
@@ -4476,20 +4469,6 @@
         "retryDownload": "重试",
         "libraryName": "精确的 Ollama 库名",
         "pullingTitle": "正在下载 {{name}}",
-        "pullIndeterminate": "准备中",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "正在准备下载…",
-          "manifest": "正在获取清单…",
-          "downloading": "正在下载模型文件",
-          "verifying": "正在校验…",
-          "writing": "正在写入…",
-          "success": "下载完成",
-          "error": "下载失败",
-          "paused": "已暂停",
-          "cancelled": "已取消"
-        },
         "pauseDownload": "暂停",
         "resumeDownload": "继续下载",
         "cancelDownload": "删除未完成下载",
@@ -5496,6 +5475,13 @@
       },
       "toggleAria": "切换提问导航条"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "用模型给 worktree 取名",
+        "description": "新建任务的 worktree 会按第一条消息起一个英文短名（如 fix-login-timeout），文件夹和分支一眼就能看出用途。由辅助模型生成，取名失败时仍用随机名；只影响之后新建的 worktree。"
+      },
+      "toggleAria": "切换用模型给 worktree 取名"
+    },
     "promptRecommendation": {
       "label": "输入建议",
       "description": "回复后建议下一句，按 Tab 填入",
@@ -5934,8 +5920,6 @@
           "notChecked": "尚未检查更新",
           "action": "更新",
           "updating": "更新中…",
-          "downloadingPercent": "正在下载 {{percent}}%（{{downloaded}}/{{total}} MB）…",
-          "downloadingBytes": "正在下载，已下载 {{downloaded}} MB…",
           "installing": "下载完成，正在安装…",
           "toast": {
             "success": "cua-driver 已更新到最新版本",
@@ -8200,8 +8184,8 @@
         "hostTools_controlDetail": "通过 Cindy 的任务工具修改、归档、恢复和控制已有任务及项目，并在本机导入原生任务文件。",
         "hostTools_handoff": "任务投递",
         "hostTools_handoffDetail": "通过 Cindy 的任务工具给已有任务发送消息。需要当前任务上下文的操作必须显式指定任务。",
-        "hostTools_usage": "读取订阅用量",
-        "hostTools_usageDetail": "读取当前 Cindy 账号在这台电脑上已连接的 Claude 和 Codex 账号标识、套餐、配额窗口及更新时间。不能读取邮箱、凭证、文件或其他电脑的数据，也不能修改账号",
+        "hostTools_usage": "读取用量与供应商组状态",
+        "hostTools_usageDetail": "读取当前 Cindy 账号在本机已连接的 Claude/Codex 账号标识、套餐、配额窗口和更新时间，以及本机或同账号已授权其他电脑上已记录的每日/型号用量、估算费用、供应商组配置与状态、可见的成员和设备标识、名称及头像。不能读取订阅登录邮箱、账号目录、内部指纹、凭证或文件，也不能修改账号或设置",
         "hostTools_settings": "应用设置",
         "hostTools_settingsDetail": "通过 Cindy 的设置工具读取和修改应用配置；不返回密钥，不代替你完成保密输入。",
         "hostTools_scheduler": "自动化管理",
@@ -8391,6 +8375,7 @@
             "contentStyle": "修改消息间距和气泡样式"
           },
           "positions": {
+            "composer_header": "输入框上方",
             "composer_toolbar": "输入框工具栏",
             "session_header": "任务标题栏",
             "statusbar": "状态栏",
@@ -12931,7 +12916,7 @@
           "reasoningDominated": "思考已消耗本次输出的大部分预算，回复可能不完整。建议降低推理强度，或先压缩对话记录，再继续。",
           "generic": "模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。",
           "join": "{{usage}}{{guidance}}",
-          "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。"
+          "silentStopExhausted": "检测到空响应，自动续跑已暂停。"
         },
         "permission": {
           "autoReviewUnavailable": "自动审批没完成，请确认要不要允许这次操作。",
@@ -13682,12 +13667,6 @@
         "TARGET_UNAVAILABLE": "插件已停用、卸载或不可用，请检查插件状态后重试。",
         "ASSESSMENT_FAILED": "暂时无法刷新配置状态，请重试。",
         "TIMEOUT": "等待设置超时，请重试。"
-      },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "AI 模型服务",
-          "description": "使用插件声明的图片或视频能力前，需要先连接可用的模型服务"
-        }
       },
       "form": {
         "placeholder": "请输入{{label}}",
@@ -15472,6 +15451,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "该文件不在当前任务工作目录内，无法在侧边栏文件浏览器中定位",
       "openInDefaultBrowser": "在浏览器中打开",
       "copyLink": "复制链接",
+      "addPrToHeader": "添加到顶栏",
+      "prAlreadyInHeader": "已在顶栏",
+      "prAddedToHeader": "已添加到顶栏，状态会跟着任务走",
+      "prAssociatedNotInHeader": "已关联，未在顶栏",
+      "prSavedNotInHeader": "已保存关联；顶栏前三条已满，可在任务顶栏的 PR 管理里固定它",
       "linkCopied": "链接已复制",
       "viewSourceFile": "查看源代码",
       "openInSidebarFailed": "在侧边栏浏览器中打开失败",
@@ -15644,6 +15628,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输失败，消息未发送。请重试。",
       "MCP_APPROVAL_AUTO_BLOCKED": "这次工具调用被自动审批拦截，未收到你手动拒绝的记录。",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "自动审批拦截了这次工具调用：缺少完整的操作信息。",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "自动审批拦截了这次工具调用：你的指令已更改或尚未同步。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "自动审批拦截了这次工具调用：目录权限已更改。",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "自动审批拦截了这次工具调用：委派授权已更改。",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "自动审批拦截了这次工具调用：插件或任务的授权已失效。",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "自动审批拦截了这次工具调用：没有用户指令授权执行该操作。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "自动审批拦截了这次工具调用：工作计划超出支持的大小。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "自动审批拦截了这次工具调用：执行的 Agent 与已登记的工作计划不符。",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "自动审批拦截了这次工具调用：任务的工作目录已更改。",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "自动审批拦截了这次工具调用：委派任务的范围缺失或无效。",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "权限确认超时，未收到有效的确认结果。仅凭超时无法判断你是否点过按钮。",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "这次权限确认未完成，未收到你手动拒绝的记录。",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "这个模型需要电脑端转发请求，当前远端连接还不能转发。请改用 Cindy AI，或在本机任务里使用这个模型。",
@@ -18973,7 +18967,7 @@
       "steerFailed": "插话失败：{{message}}",
       "qrExpired": "二维码已过期，请重新开始",
       "registrationFailed": "创建失败，请稍后重试",
-      "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。点击「继续」恢复任务。",
+      "silentStopExhausted": "检测到空响应，自动续跑已暂停。",
       "executionResultUnavailable": "未能取回执行结果，已停止自动续接。可以让助手检查已有的执行结果。",
       "unexecutedToolMarkup": "模型把工具调用写成了文本，无法确认执行结果，本轮未完成。",
       "outputLimit": "模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。",
@@ -19535,6 +19529,41 @@
       "notSupported": "当前账户暂不支持余额查询。",
       "unavailable": "暂时无法获取余额，请刷新后重试。"
     },
+    "giftCard": {
+      "action": "兑换礼品卡",
+      "title": "兑换礼品卡",
+      "inputLabel": "兑换码",
+      "inputHint": "输入 16 位兑换码，或粘贴礼品卡链接。",
+      "continue": "继续",
+      "confirmTitle": "领取这张礼品卡？",
+      "confirmAction": "确认领取",
+      "from": "来自 {{sender}}",
+      "cardLabel": "Cindy 礼品卡，{{amount}}",
+      "fields": {
+        "validity": "有效期",
+        "validityValue_other": "领取后 {{count}} 天",
+        "claimBy": "领取截止",
+        "destination": "存入"
+      },
+      "doneTitle": "{{amount}} 已到账",
+      "doneDescription": "已存入赠送余额，{{date}} 前有效。",
+      "doneDescriptionNoDate": "已存入赠送余额。",
+      "pendingTitle": "礼品卡已领取",
+      "pendingDescription": "{{amount}} 正在入账，稍后会出现在赠送余额中，无需再次领取。",
+      "alreadyYours": "你已经领取过这张礼品卡。",
+      "done": "完成",
+      "errors": {
+        "notFound": "兑换码无效，请检查后重试。",
+        "wrongRegionCn": "这张礼品卡属于 Cindy 中国大陆版，当前账号无法领取。",
+        "wrongRegionGlobal": "这张礼品卡属于 Cindy 国际版，当前账号无法领取。",
+        "alreadyClaimed": "这张礼品卡已被领取。",
+        "expired": "这张礼品卡已过领取期限。",
+        "voided": "这张礼品卡已作废。",
+        "rateLimited": "尝试次数过多，请稍后再试。",
+        "failed": "暂时无法兑换，请稍后重试。",
+        "personalRequired": "礼品卡仅限个人用户领取。"
+      }
+    },
     "usage": {
       "title": "余额用量",
       "observedAt": "余额更新于 {{date}}",
@@ -19550,6 +19579,7 @@
         "empty": "当前没有赠送记录。",
         "incomplete": "赠送记录较多，当前仅显示最近的 {{count}} 笔。",
         "unnamed": "赠送余额",
+        "giftCard": "礼品卡 · 来自 {{sender}}",
         "original": "原始金额",
         "used": "已用",
         "remaining": "剩余",
@@ -21757,5 +21787,28 @@
     "archivedNotice": "已自动归档 {{count}} 个闲置任务",
     "undo": "撤销",
     "undoFailed": "未能撤销，请在已归档任务中恢复。"
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "剩余 {{time}}",
+    "attempt": "第 {{attempt}} 次尝试",
+    "phase": {
+      "preparing": "正在准备…",
+      "queued": "正在排队…",
+      "downloading": "正在下载…",
+      "retrying": "正在重试…",
+      "verifying": "正在校验…",
+      "installing": "正在安装…",
+      "paused": "已暂停",
+      "completed": "已完成",
+      "failed": "下载失败",
+      "cancelled": "已取消"
+    },
+    "retry": {
+      "slow": "网络较慢，正在重新连接…",
+      "network": "连接中断，正在重试…",
+      "timeout": "连接超时，正在重试…",
+      "server": "服务器繁忙，正在重试…"
+    }
   }
 }

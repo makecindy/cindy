@@ -1,3 +1,5 @@
+import { botLearningTracker } from '../botLearningTracker.js';
+import { learningTurnIdentity } from '../botLearningFeedback.js';
 import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js';
 import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
@@ -3276,5 +3278,40 @@ describe('Codex generated images through the production event pipeline', () => {
       expect(seen).toEqual(['image', 'done']);
       expect(h.deps.deliverCodexGeneratedImage).not.toHaveBeenCalled();
     } finally { close(); offSeen(); offWire(); await session.close(); await h.dispose(); }
+  });
+});
+
+// #10318: exercise the real pipeline and feedback adapter, not just tracker helpers.
+// One paired Codex write must retain its path across preparation/persistence; stale,
+// child and background traffic must never feed a foreground memory receipt (unit).
+describe('native memory receipt event wiring', () => {
+  it.each(['foreground', 'failed', 'background', 'child', 'old-instance', 'old-generation'])
+  ('keeps memory feedback scoped for %s events', async mode => {
+    const h = harness();
+    const publish = vi.fn();
+    const receipt = { kind: 'memory' as const, key: 'user_tea.md', title: 'Tea', action: 'created' as const };
+    const read = vi.fn(async (paths: readonly string[]) => paths.length ? [receipt] : []);
+    const identity = learningTurnIdentity(h.session);
+    botLearningTracker.markProjectTeammate(h.session.id, read);
+    botLearningTracker.observe(h.session.id, identity, publish);
+    const extra = mode === 'background' ? { turnScope: 'background' as const }
+      : mode === 'child' ? { agentMeta: { parentUuid: 'child' } }
+        : mode === 'old-instance' ? { sessionInstanceId: 'replaced' }
+          : mode === 'old-generation' ? { sessionTurnGeneration: h.session.getTurnGeneration() - 1 } : {};
+    try {
+      h.emit({ type: 'tool_use', source: 'codex', ...extra,
+        data: { toolUseId: 'write-memory', toolName: 'file_change',
+          input: { changes: [{ path: '.cindy/memory/user_tea.md', kind: { type: 'add' } }] } } });
+      h.emit({ type: 'tool_result_full', source: 'codex', ...extra,
+        data: { toolUseId: 'write-memory', fullText: 'add memory', isError: mode === 'failed' } });
+      botLearningTracker.seal(h.session.id, identity, 'reply');
+      await read.mock.results[0].value;
+      expect(read).toHaveBeenCalledWith(mode === 'foreground' ? ['.cindy/memory/user_tea.md'] : []);
+      if (mode === 'foreground') expect(publish).toHaveBeenCalledWith('reply', [receipt]);
+      else expect(publish).not.toHaveBeenCalled();
+    } finally {
+      botLearningTracker.markProjectTeammate(h.session.id);
+      await h.session.close();
+    }
   });
 });

@@ -80,6 +80,7 @@ export function localizeAgentError(
   if (isRemoteCompactEncryptedContentError(message, reason)) return i18n.t('session.tail.remoteCompactEncryptedContent');
   if (reason === 'unexecuted-tool-markup') return i18n.t('session.tail.unexecutedToolMarkup');
   if (reason === 'yield-continuation-incomplete') return i18n.t('session.tail.executionResultUnavailable');
+  if (reason === 'silent-stop-exhausted') return i18n.t('session.tail.silentStopExhausted');
   if (reason === 'output-limit') {
     const details = parseOutputLimitDetails(outputLimit);
     const guidance = i18n.t(details && isReasoningDominatedOutputLimit(details)

@@ -148,6 +148,20 @@ describe('history task links', () => {
   });
 });
 
+describe('gift card link', () => {
+  const code = 'G0123456789ABCDE';
+  it('yields the canonical redeem code for the forms the gift page and users produce', () => {
+    for (const link of ['cindy://gift/G0123456789ABCDE', 'cindy://gift/G012-3456-789A-BCDE', 'cindy://gift/g012-3456-789a-bcde/', 'xdt-maker://gift/G0123456789ABCDE?from=web']) {
+      expect(parseDeepLink(link)).toEqual({ type: 'gift-card', code });
+    }
+  });
+  it('ignores links that do not carry a complete redeem code', () => {
+    for (const link of ['cindy://gift/', 'cindy://gift/G012-3456-789A-BCD', 'cindy://gift/G012-3456-789A-BCDU', 'cindy://gift/%E0%A4%A']) {
+      expect(parseDeepLink(link)).toBeNull();
+    }
+  });
+});
+
 describe('chat invitation handoff', () => {
   const token = 'synthetic-invitation-'.padEnd(43, 'a');
   const link = `cindy://chat-invite/${token}`;

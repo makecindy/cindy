@@ -238,9 +238,8 @@ export function parseModelsListResponse(
           ? record.reasoning_options.find((option: unknown) =>
               option && typeof option === 'object' && (option as { type?: unknown }).type === 'effort')?.values
           : undefined) ??
-        (record.reasoning === false || info.supports_reasoning === false ||
-          (Array.isArray(record.supported_parameters) && !record.supported_parameters.some(value =>
-            typeof value === 'string' && ['reasoning', 'reasoning_effort', 'reasoning_budget', 'thinking'].includes(value)))
+        // Parameter inventories can be incomplete; absence is not a denial.
+        (record.reasoning === false || info.supports_reasoning === false
           ? [] : undefined),
       supportsToolCalls: Array.isArray(record.supported_parameters)
         ? record.supported_parameters.includes("tools")

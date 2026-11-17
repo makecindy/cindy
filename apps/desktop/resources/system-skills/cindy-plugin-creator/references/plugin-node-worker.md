@@ -339,7 +339,7 @@ network setup/readiness，不能拿 CLI 的登录结果冒充宿主凭据配置�
 
 交互页面不依赖 Node，见[交互页面 MCP Apps（§4.23）](plugin-interactive-pages.md)。
 
-### 4.12.6 Node 短期鉴权票据上传（未发布）
+### 4.12.6 Node 短期鉴权票据上传
 
 逻辑页通过真实工具调用的 callId 发起 cancelWithCall:true 的 Node 请求。
 Node 在该 RPC 内捕获 globalThis.__CINDY_NODE__.bindHostServices()；旧 Host 无此入口时
