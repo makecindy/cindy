@@ -192,6 +192,7 @@ const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_TASK_SYSTEM_PROMPT_FILE',
   'CINDY_PI_FAST_MODELS',
   'CINDY_PI_TURN_TOOL_POLICY',
+  'CINDY_PI_TOOL_LIFECYCLE',
   PI_PACKAGE_MANAGEMENT_ENV,
   PI_BASH_PACKAGE_HOME_ENV,
   MANAGED_RG_PATH_ENV,
@@ -5140,6 +5141,36 @@ export default async function cindyBridge(piApi: any) {
   // 设备托管：文件、命令与搜索工具改用任务所在电脑上的执行器(替换上面的本机注册)。
   registerCindyHostedTools(pi, bashTool, applyCindyBashTimeoutParams);
 
+  // Native plugin hooks run before Cindy permissions, so transformed parameters
+  // enter the same permission/capture path. With no selected plugin no RPC runs.
+  const toolLifecycleEnabled = process.env.CINDY_PI_TOOL_LIFECYCLE === '1';
+  const pluginToolLifecycle = async (event: any, ctx: any, phase: 'call' | 'result') => {
+    const serialized = JSON.stringify({ phase, toolName: event.toolName, toolCallId: event.toolCallId,
+      input: event.input ?? {}, ...(phase === 'result' ? { result: { content: event.content, details: event.details, isError: event.isError }, isError: event.isError } : {}) });
+    if (JSON.stringify(serialized).length > ${MAX_JSONL_BUFFER_CHARS - 4096}) throw new Error('Tool hook exceeds the transport frame budget');
+    const raw = await ctx.ui.input('cindy:tool-lifecycle', serialized, { timeout: 2_000 });
+    const result = typeof raw === 'string' ? JSON.parse(raw) : null;
+    if (!result || result.error) throw new Error('Tool hook failed');
+    return result;
+  };
+  if (toolLifecycleEnabled && !guestToolGate && !currentPermissionState().reviewOnly) {
+    pi.on('tool_call', async (event: any, ctx: any) => {
+      const result = await pluginToolLifecycle(event, ctx, 'call');
+      if (result.decision === 'deny') return { block: true, reason: result.reason ?? 'Plugin denied tool call' };
+      if (result.input) {
+        for (const key of Object.keys(event.input)) delete event.input[key];
+        Object.assign(event.input, result.input);
+      }
+    });
+    pi.on('tool_result', async (event: any, ctx: any) => {
+      const result = await pluginToolLifecycle(event, ctx, 'result');
+      if (result.decision === 'deny') {
+        ctx.abort();
+        throw new Error(result.reason ?? 'Plugin blocked tool result');
+      }
+      return result.result;
+    });
+  }
   // ── 权限门 ────────────────────────────────────────────────────────────────
   pi.on('tool_call', async (event: any, ctx: any) => {
     if (guestToolGate && guestToolGate.blocks(event.toolName)) {

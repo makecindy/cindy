@@ -68,7 +68,8 @@ export function createRuntimePluginControl(deps: {
       const targets = deps.readSettings(sessionId)?.[point];
       if (!targets?.length) return undefined;
       const saved = turns.get(sessionId);
-      const turnBudget = point === 'will-search-memory' ? createWaitBudget(GHOST_CONTROL_POINTS[point].timeoutMs, now)
+      const turnBudget = point === 'will-search-memory' || point === 'will-tool-call' || point === 'did-tool-result'
+        ? createWaitBudget(GHOST_CONTROL_POINTS[point].timeoutMs, now)
         : saved?.current() ? saved.budget : beginTurn(sessionId);
       const selection = JSON.stringify(targets);
       const ownerCurrent = deps.captureOwner();

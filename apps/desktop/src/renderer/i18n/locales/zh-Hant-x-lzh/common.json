@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "存之",
     "promptUnsupported": "此 Pi 所在之處不支援系統提示詞片段。",
+    "nativeHooksUnsupported": "工具掛鉤僅支援在本機執行的引擎。",
     "title": "差事法器",
     "description": "為此差事擇法器，改動自下一訊起生效。",
     "unsupported": "逐次請求前處置僅本機 Pi 可用，此差事引擎不支援。",
@@ -8395,6 +8396,10 @@
         "subscribeStartTurnDetail": "僅在差事選用此法器時，彼可閱本條訊息，擇已連之模型、思之深淺及 Fast。出錯依差事所設處理，不得代君批准操作。",
         "subscribeModelRequest": "可處理所選差事之每次模型請求",
         "subscribeModelRequestDetail": "僅在差事選用此法器時，彼可閱並調整模型請求之內容、模型及參數。現僅支援本機 Pi；出錯依差事所設處理，不含連接憑證。",
+        "subscribeToolCall": "可處理所選任務的工具呼叫",
+        "subscribeToolCallDetail": "可讀取、修改或拒絕工具參數，實際支援隨引擎而異；不能替你批准操作。",
+        "subscribeToolResult": "可處理所選任務的工具結果",
+        "subscribeToolResultDetail": "可讀取結果，按引擎能力補充上下文或改寫結果；不會撤銷已執行的操作。",
         "subscribeStartTask": "可為新差事擇模型",
         "subscribeStartTaskDetail": "新任務擇其所供之模型時，彼閱首條訊息，於汝已連之模型中擇一。此節唯於首條訊息發出前行一次。"
       },

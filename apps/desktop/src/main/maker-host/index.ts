@@ -107,6 +107,7 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import { makerStartupGate } from './startup-gate.js';
 import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.desktop.js';
 import { resolveGhostFsSessionSnapshot } from '../maker-ipc/ghostFsSessionSnapshot.js';
+import { ghostToolLifecycleControl } from '../cindy-brain/index.js';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
 import { getActiveInteractionRoute, requestHostInteraction } from '../maker-ipc/interactionRouter.js';
 import { setAgentAppUpdateSessionHost } from '../agent-app-update/index.js';
@@ -1475,6 +1476,7 @@ export function getMaker(): Maker {
       log: desktopMakerLogger.child('command-gate'),
     });
     const claudeAgent = new ClaudeCodeAgent({
+      toolLifecycleControl: ghostToolLifecycleControl,
       resolveLocalMcpDuplicateChoices,
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
@@ -1787,6 +1789,7 @@ export function getMaker(): Maker {
       getDisabledRuntimePluginIds: (workingDir) => getPluginRegistry().getDisabledRuntimePluginIds(workingDir),
     });
     const codexAgent = new CodexAgent({
+      toolLifecycleControl: ghostToolLifecycleControl,
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       getManagedSkills: listCindyManagedSkills,
@@ -2240,6 +2243,7 @@ export function getMaker(): Maker {
     // latest-byte-edge runtime snapshot for its durable mutation.
     const pendingPiPackageRuntimeSnapshots: PiPackageRuntimeInvalidationSnapshot[] = [];
     const buildPiAgentForDesktop = () => buildPiAgent({
+      toolLifecycleControl: ghostToolLifecycleControl,
       logger: desktopMakerLogger,
       turnChangeCapture: {
         beforeKnownFileWrite: captureKnownFileBefore,

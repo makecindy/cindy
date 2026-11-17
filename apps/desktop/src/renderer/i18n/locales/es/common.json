@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "Guardar",
     "promptUnsupported": "Esta ubicación de ejecución de Pi no admite fragmentos de instrucciones del sistema.",
+    "nativeHooksUnsupported": "Los hooks de herramientas solo se admiten en motores que se ejecutan en este equipo.",
     "title": "Complementos de la tarea",
     "description": "Selecciona los complementos de esta tarea. Los cambios se aplican desde el siguiente mensaje.",
     "unsupported": "El procesamiento de cada solicitud solo está disponible con Pi local. El motor de esta tarea no lo admite.",
@@ -8378,6 +8379,10 @@
         "subscribeStartTurnDetail": "Solo las tareas en las que seleccionas este complemento comparten el mensaje actual con él. Puede elegir un modelo conectado, la intensidad de razonamiento y Fast. Los errores siguen la configuración de la tarea; no puede aprobar acciones por ti.",
         "subscribeModelRequest": "Puede procesar cada solicitud al modelo en tareas seleccionadas",
         "subscribeModelRequestDetail": "Solo las tareas en las que seleccionas este complemento comparten sus solicitudes al modelo con él. Puede ajustar modelos, parámetros y contenido. Actualmente solo se admite Pi local; los errores siguen la configuración de la tarea. No se incluyen credenciales de conexión.",
+        "subscribeToolCall": "Puede procesar llamadas a herramientas en las tareas seleccionadas",
+        "subscribeToolCallDetail": "Puede leer, cambiar o rechazar parámetros según lo permita el motor. No puede aprobar operaciones por ti.",
+        "subscribeToolResult": "Puede procesar resultados de herramientas en las tareas seleccionadas",
+        "subscribeToolResultDetail": "Puede leer resultados y añadir contexto o sustituir resultados si el motor lo permite. No deshace operaciones ya realizadas.",
         "subscribeStartTask": "Puede elegir el modelo de las tareas nuevas",
         "subscribeStartTaskDetail": "Cuando una tarea nueva usa un modelo que ofrece, lee el primer mensaje y elige uno de tus modelos conectados. Este punto solo se ejecuta antes del primer mensaje.",
         "card": "Representa tarjetas de mensajes",

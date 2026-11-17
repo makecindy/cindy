@@ -25,7 +25,7 @@ describe.skipIf(!binary)('Codex native tool hook boundary', () => {
   const cleanups: Array<() => Promise<unknown> | void> = [];
   afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
-  it.each(['trusted', 'untrusted', 'disabled', 'deny', 'error', 'cancel'] as const)('%s', async mode => {
+  it.each(['trusted', 'untrusted', 'disabled', 'deny', 'rewrite', 'error', 'cancel'] as const)('%s', async mode => {
     const root = await mkdtemp(path.join(tmpdir(), 'cindy-native-hooks-'));
     cleanups.push(() => rm(root, { recursive: true, force: true }));
     const home = path.join(root, 'home');
@@ -47,10 +47,11 @@ describe.skipIf(!binary)('Codex native tool hook boundary', () => {
         if (body.method === 'initialize') result = { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'probe', version: '1' } };
         if (body.method === 'tools/list') result = { tools: [{ name: 'hook', description: 'Hook probe', inputSchema: { type: 'object', additionalProperties: true } }] };
         if (body.method === 'tools/call') {
-          const args = body.params.arguments;
+          const args = body.params.arguments.args;
           calls.push(args); entered.resolve();
           if (mode === 'cancel') { pending = res; return; }
-          const output = mode === 'deny' ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'probe denied' } } : {};
+          const output = mode === 'deny' ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'probe denied' } }
+            : mode === 'rewrite' && args.hook_event_name === 'PreToolUse' ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', updatedInput: { command: 'printf hook-rewritten' } } } : {};
           result = { content: [{ type: 'text', text: mode === 'error' ? 'probe failure' : JSON.stringify(output) }], isError: mode === 'error' };
         }
         res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
@@ -77,7 +78,7 @@ describe.skipIf(!binary)('Codex native tool hook boundary', () => {
     client.onNotification('hook/completed', params => { hookStatuses.push((params as { run: { status: string } }).run.status); });
     client.start();
     await client.initialize({ name: 'cindy-native-hook-test', version: '1' }, { experimentalApi: true });
-    const config: Record<string, unknown> = { ...codexToolHookConfig('probe', 'hook', 2), 'features.hooks': true, 'features.code_mode': false };
+    const config: Record<string, unknown> = { ...codexToolHookConfig('probe', 'hook', 2), 'features.code_mode': false };
     if (mode === 'untrusted') delete config['hooks.state'];
     if (mode === 'disabled') for (const state of Object.values(config['hooks.state'] as Record<string, Record<string, unknown>>)) state.enabled = false;
     const thread = await client.request<{ thread: { id: string } }>('thread/start', { cwd: work, model: 'probe-model', modelProvider: 'probe', sandbox: 'read-only', approvalPolicy: 'never', config });
@@ -96,6 +97,7 @@ describe.skipIf(!binary)('Codex native tool hook boundary', () => {
     expect(calls).toHaveLength(mode === 'untrusted' || mode === 'disabled' ? 0 : mode === 'deny' || mode === 'cancel' ? 1 : 2);
     if (calls.length) expect(calls[0]).toMatchObject({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'printf probe-ok' }, tool_use_id: 'probe-call' });
     if (mode === 'trusted') expect(calls[1]).toHaveProperty('tool_response');
+    if (mode === 'rewrite') expect(JSON.stringify(modelInputs.at(-1))).toContain('hook-rewritten');
     if (mode === 'deny') {
       expect(hookStatuses).toContain('blocked');
       expect(JSON.stringify(modelInputs.at(-1))).toContain('probe denied');

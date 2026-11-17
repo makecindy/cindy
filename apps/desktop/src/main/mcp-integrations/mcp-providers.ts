@@ -16,6 +16,7 @@ import { getDesktopHostTerminalService } from '../terminal/terminalService.deskt
 import { getDefaultShellPref } from '../terminal/terminalPrefsStore.js';
 import { findGhostForInstanceId } from '../cindy-brain/index.js';
 import { searchGhostRuntimeMemories } from '../cindy-brain/index.js';
+import { ghostToolLifecycleControl } from '../cindy-brain/index.js';
 import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
 import { manageAppSettings } from '../app-settings/sections.js';
@@ -780,6 +781,15 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       appUpdate: createAgentAppUpdateCallbacks((sessionId, sessionInstanceId) =>
         deps.isCurrentLocalSessionInstance?.(sessionId, sessionInstanceId) === true),
       logger: createLogger('mcp/cindy_helper'),
+      nativeToolHook: (context, event, signal) => withAccountDataAccess(context.sessionId, async assertCurrent => {
+        if (!context.sessionId || !context.sessionInstanceId ||
+          deps.isCurrentLocalSessionInstance?.(context.sessionId, context.sessionInstanceId) !== true) throw new Error('Native tool hook instance expired');
+        await assertCurrent();
+        const result = await ghostToolLifecycleControl.run(context.sessionId, event, signal);
+        await assertCurrent();
+        if (deps.isCurrentLocalSessionInstance?.(context.sessionId, context.sessionInstanceId) !== true) throw new Error('Native tool hook instance expired');
+        return result;
+      }),
       // 代输入: Host-owned card; values never return through this tool.
       inputHandoff: {
         start: async (context, request) => {

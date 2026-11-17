@@ -14,6 +14,7 @@ import { registerGithubTools, type GithubToolCallbacks } from './xdt-helper/gith
 import { registerMcpSetupTool, type McpSetupCallback } from './xdt-helper/mcp_setup.js';
 import { registerSharedTaskTools, type SharedTaskToolCallback } from './xdt-helper/shared_task.js';
 import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/session_tags.js';
+import { registerNativeToolHook } from './xdt-helper/native_tool_hook.js';
 /**
  * lizi_xdtHelperMcpServer.ts
  * ---------------------------------------------------------------------------
@@ -480,6 +481,7 @@ export type ControlDispatchOutcome =
 // ── Factory ────────────────────────────────────────────────────────────────
 
 export interface XdtHelperMcpDeps {
+  nativeToolHook?: import('./xdt-helper/native_tool_hook.js').NativeToolHookCallback;
   terminal?: TerminalToolCallbacks;
   files?: FileToolCallbacks;
   storage?: StorageToolCallbacks;
@@ -871,6 +873,7 @@ export function createXdtHelperMcpServer(
       callbacks: deps.botProfiles,
     });
   }
+  if (deps.nativeToolHook) registerNativeToolHook(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.nativeToolHook);
   registerListToolsEntry(server, registry, allowedSurface, sessionCtx);
   const call = registerCallToolEntry(server, registry, {
     logger: deps.logger,

@@ -18168,8 +18168,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       for (const target of targets ?? []) resolveGhostControlPointPlugin(point as Parameters<typeof resolveGhostControlPointPlugin>[0], target.pluginId);
     }
     if (!isDataOwnerBroadcastScopeCurrent(owner)) throwIpcError('PRECONDITION_FAILED', 'Account changed');
+    const previousNativeHooks = readRuntimePluginSettings(sessionId);
     await writeRuntimePluginSettings(sessionId, settings);
     if (!isDataOwnerBroadcastScopeCurrent(owner)) throwIpcError('PRECONDITION_FAILED', 'Account changed');
+    if (previousNativeHooks?.['will-tool-call']?.length || previousNativeHooks?.['did-tool-result']?.length
+      || settings['will-tool-call']?.length || settings['did-tool-result']?.length) {
+      // Native hook tables are installed at engine startup. Reuse ordinary
+      // deferred retirement; never interrupt an in-flight tool or rewrite history.
+      const current = maker.getSession(sessionId);
+      if (current) await maker.closeSessionIfCurrent(current, 'runtime-refresh', { afterCurrentTurn: true });
+      if (!isDataOwnerBroadcastScopeCurrent(owner)) throwIpcError('PRECONDITION_FAILED', 'Account changed');
+    }
     broadcastSessionPatched(sessionId, { runtimePluginsSelected: !!readRuntimePluginSettings(sessionId) });
     return readRuntimePluginSettings(sessionId) ?? {};
   });

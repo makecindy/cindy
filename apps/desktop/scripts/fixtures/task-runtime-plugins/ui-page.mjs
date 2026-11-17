@@ -15,6 +15,7 @@ export default {
     default: { about: 'No relevant plugin: original task menu without a task-plugins entry' },
     'one-control': { about: 'A context provider: only its nonempty group is shown' },
     'removed-selection': { about: 'An uninstalled selected provider remains visible and clearable' },
+    'native-tools': { about: 'Native tool call and result controls in the existing task-plugins dialog; scene data only' },
   },
   async check(page, ui) {
     const entry = page.getByRole('menuitem', { name: await ui.t('runtimePlugins.title'), exact: true });
@@ -24,6 +25,11 @@ export default {
     }
     await entry.click();
     await page.getByRole('dialog').waitFor();
+    if (ui.case === 'native-tools') {
+      assert.equal(await page.getByRole('group').count(), 2);
+      assert.equal(await page.getByRole('checkbox', { name: 'Tool fixture plugin', exact: true }).count(), 2);
+      return;
+    }
     const label = ui.case === 'removed-selection'
       ? await ui.t('scheduler.editor.preRunPlugin.unavailable') : 'Context fixture plugin';
     const checkbox = page.getByRole('checkbox', { name: label, exact: true });

@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "Save",
     "promptUnsupported": "This Pi execution location does not support system prompt fragments.",
+    "nativeHooksUnsupported": "Tool hooks are supported only for engines running on this computer.",
     "title": "Task plugins",
     "description": "Select plugins for this task. Changes apply from your next message.",
     "unsupported": "Per-request processing is supported only for local Pi. This task’s engine does not support it.",
@@ -8306,6 +8307,10 @@
         "subscribeStartTurnDetail": "Only tasks where you select this plugin share the current message with it. It can choose a connected model, effort and Fast. Errors follow that task’s setting; it cannot approve actions for you.",
         "subscribeModelRequest": "Can process each model request in selected tasks",
         "subscribeModelRequestDetail": "Only tasks where you select this plugin share their model requests with it. It can adjust models, parameters and request content. Currently supported only for local Pi; errors follow the task’s setting. Connection credentials are excluded.",
+        "subscribeToolCall": "Can process tool calls in selected tasks",
+        "subscribeToolCallDetail": "Can read, change or reject tool parameters as supported by the engine. Cannot approve operations for you.",
+        "subscribeToolResult": "Can process tool results in selected tasks",
+        "subscribeToolResultDetail": "Can read results and add context or replace results where the engine supports it. Cannot undo completed operations.",
         "subscribeStartTask": "Can choose the model for new tasks",
         "subscribeStartTaskDetail": "When a new task uses a model it provides, it reads the first message and picks one of your connected models. This entry point runs only before the first message.",
         "card": "Renders message cards",

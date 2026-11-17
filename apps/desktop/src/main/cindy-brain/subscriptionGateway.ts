@@ -25,6 +25,8 @@ import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-contin
 import { eq } from 'drizzle-orm';
 import { parseGhostModelRoute, parseGhostContextBlocks, parseGhostMemoryEntries, type GhostContextBlock, type GhostMemoryEntry } from '@cindy/plugin-protocol';
 import { isRuntimePluginPoint } from '../../shared/pluginRuntime.js';
+import { parseToolLifecycleVerdict } from '../../shared/pluginToolLifecycle.js';
+import type { ToolLifecycleVerdict } from '@cindy/maker-core';
 
 import {
   GHOST_ASSISTANT_HOOK_TIMEOUT_MS,
@@ -66,7 +68,8 @@ const BLOCK_REASON_MAX_CHARS = 200;
 
 /** 单意识裁决(askOne 归一化产物;null = 本轮失败已计熔断)。 */
 type HookVerdict = {
-  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform' | 'context' | 'memories';
+  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform' | 'context' | 'memories' | 'tool';
+  tool?: ToolLifecycleVerdict;
   blocks?: GhostContextBlock[];
   entries?: GhostMemoryEntry[];
   route?: GhostModelRoute;
@@ -652,6 +655,9 @@ export class GhostSubscriptionGateway {
         reason: (verdict.reason ?? '').slice(0, BLOCK_REASON_MAX_CHARS),
       });
     }
+    if ((point === 'will-tool-call' || point === 'did-tool-result') && verdict.action === 'tool' && verdict.tool) {
+      return checked({ action: 'tool', ghostId, ghostName: ghost.manifest.name, tool: verdict.tool });
+    }
     if (point === 'will-model-request' && verdict.action === 'transform' && verdict.request
       && 'phase' in data && data.phase === 'payload') {
       return checked({ action: 'transform', ghostId, ghostName: ghost.manifest.name, request: verdict.request });
@@ -867,7 +873,7 @@ export class GhostSubscriptionGateway {
     if (p.type !== 'event-verdict' || typeof p.hookId !== 'string') return;
     const pending = this.pendingHooks.get(p.hookId);
     if (!pending || pending.ghostId !== ghostId) return;
-    if (p.action !== 'allow' && p.action !== 'block' && p.action !== 'rewrite' && p.action !== 'render' && p.action !== 'skip' && p.action !== 'route' && p.action !== 'transform' && p.action !== 'context' && p.action !== 'memories') return;
+    if (p.action !== 'allow' && p.action !== 'block' && p.action !== 'rewrite' && p.action !== 'render' && p.action !== 'skip' && p.action !== 'route' && p.action !== 'transform' && p.action !== 'context' && p.action !== 'memories' && p.action !== 'tool') return;
     const route = p.action === 'route' ? parseGhostModelRoute(p.route) : undefined;
     let request: Record<string, unknown> | undefined;
     if (p.action === 'transform' && p.request && typeof p.request === 'object' && !Array.isArray(p.request)) {
@@ -885,6 +891,7 @@ export class GhostSubscriptionGateway {
       ...(typeof p.height === 'number' ? { height: p.height } : {}),
       ...(route ? { route } : {}),
       ...(request ? { request } : {}),
+      ...(p.action === 'tool' ? { tool: parseToolLifecycleVerdict(p.tool) } : {}),
       ...(p.action === 'context' ? { blocks: parseGhostContextBlocks(p.blocks) } : {}),
       ...(p.action === 'memories' ? { entries: parseGhostMemoryEntries(p.entries) } : {}),
     });

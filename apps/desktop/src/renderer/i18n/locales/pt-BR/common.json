@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "Salvar",
     "promptUnsupported": "Este local de execução do Pi não oferece suporte a trechos de instruções de sistema.",
+    "nativeHooksUnsupported": "Os hooks de ferramentas só são compatíveis com motores executados neste computador.",
     "title": "Plugins da tarefa",
     "description": "Selecione os plugins desta tarefa. As alterações valem a partir da próxima mensagem.",
     "unsupported": "O processamento de cada solicitação só está disponível com Pi local. O mecanismo desta tarefa não oferece suporte.",
@@ -8378,6 +8379,10 @@
         "subscribeStartTurnDetail": "Somente as tarefas em que você seleciona este plugin compartilham a mensagem atual com ele. Ele pode escolher um modelo conectado, o esforço de raciocínio e Fast. Os erros seguem a configuração da tarefa; ele não pode aprovar ações por você.",
         "subscribeModelRequest": "Pode processar cada solicitação ao modelo nas tarefas selecionadas",
         "subscribeModelRequestDetail": "Somente as tarefas em que você seleciona este plugin compartilham com ele as solicitações ao modelo. Ele pode ajustar modelos, parâmetros e conteúdo. Atualmente, apenas o Pi local é compatível; os erros seguem a configuração da tarefa. As credenciais de conexão não são incluídas.",
+        "subscribeToolCall": "Pode processar chamadas de ferramentas nas tarefas selecionadas",
+        "subscribeToolCallDetail": "Pode ler, alterar ou rejeitar parâmetros conforme os recursos do motor. Não pode aprovar operações por você.",
+        "subscribeToolResult": "Pode processar resultados de ferramentas nas tarefas selecionadas",
+        "subscribeToolResultDetail": "Pode ler resultados e adicionar contexto ou substituir resultados se o motor permitir. Não desfaz operações já executadas.",
         "subscribeStartTask": "Pode escolher o modelo de novas tarefas",
         "subscribeStartTaskDetail": "Quando uma nova tarefa usa um modelo oferecido por ele, ele lê a primeira mensagem e escolhe um dos seus modelos conectados. Esta etapa é executada apenas antes da primeira mensagem.",
         "card": "Renderiza cartões de mensagens",

@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "当前 Pi 运行位置不支持系统提示词片段。",
+    "nativeHooksUnsupported": "工具钩子仅支持在本机运行的引擎。",
     "title": "任务插件",
     "description": "为这个任务选择插件。修改从下一条消息起生效。",
     "unsupported": "每次请求前处理仅支持本机 Pi，当前任务的引擎不支持。",
@@ -8263,6 +8264,10 @@
         "subscribeStartTurnDetail": "仅在你为任务选择此插件时，读取本条消息并选择已连接的模型、推理强度及 Fast。出错按该任务的设置处理，不能替你批准操作。",
         "subscribeModelRequest": "可在选定任务中处理每次模型请求",
         "subscribeModelRequestDetail": "仅在你为任务选择此插件时，读取并处理发送给模型的请求内容，调整模型和参数。目前仅支持本机 Pi；出错按任务设置处理，不包含连接凭证。",
+        "subscribeToolCall": "可处理所选任务的工具调用",
+        "subscribeToolCallDetail": "可读取、修改或拒绝工具参数，实际支持随引擎而异；不能替你批准操作。",
+        "subscribeToolResult": "可处理所选任务的工具结果",
+        "subscribeToolResultDetail": "可读取结果，按引擎能力补充上下文或改写结果；不会撤销已执行的操作。",
         "subscribeStartTask": "可为新任务选模型",
         "subscribeStartTaskDetail": "新任务选了它提供的模型时，它会看第一条消息，从你已连接的模型里选一个。这个节点只在第一条消息发出前运行一次。",
         "card": "渲染消息卡片",

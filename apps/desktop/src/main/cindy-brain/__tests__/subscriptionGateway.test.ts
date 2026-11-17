@@ -1942,6 +1942,22 @@ describe('GhostTurnOriginTracker', () => {
 // plugin; a plugin can only tighten; an unavailable or silent plugin follows the task's onFailure.
 // Message-hook cases above do not cover per-task targeting or `skip`. Unit tier, fake timers.
 describe('control points', () => {
+  // Native wire contract, unit/fake timers: production pipe verdict parsing must
+  // retain tool effects but never accept a plugin-manufactured permission allow.
+  // Controller tests inject parsed answers and cannot cover this boundary.
+  it.each([false, true])('parses a native tool verdict (invalid approval: %s)', async invalid => {
+    const provider = ghost('native', { hooks: ['will-tool-call'] });
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [provider] });
+    running.add('native');
+    const pending = gw.screenControlPoint('will-tool-call', { sessionId: 'task', engine: 'codex', phase: 'call',
+      toolName: 'Bash', toolCallId: 'call', input: { command: 'original' } }, { pluginId: 'native', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    const hookId = (sent[0].payload as { hookId: string }).hookId;
+    gw.handleVerdict('native', { type: 'event-verdict', hookId, action: 'tool',
+      tool: invalid ? { decision: 'allow' } : { input: { command: 'changed' } } });
+    expect(await pending).toMatchObject(invalid ? { action: 'block', failure: true }
+      : { action: 'tool', tool: { input: { command: 'changed' } } });
+  });
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -1959,7 +1975,7 @@ describe('control points', () => {
   // #9803 regression, unit/fake timers: a selected, declared provider with a
   // valid installation must receive the request without a per-point receipt list.
   // Existing transport tests only supplied approvedControlPoints fixtures.
-  it.each(['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory'] as const)
+  it.each(['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory', 'will-tool-call', 'did-tool-result'] as const)
     ('executes selected %s using whole-install approval', async runtimePoint => {
       const provider = ghost('runtime', { hooks: [runtimePoint] });
       const { gw, sent, running } = makeGateway({ listGhosts: () => [provider] });
@@ -1976,7 +1992,7 @@ describe('control points', () => {
 
   // Runtime latency contract, unit/fake timers: silence reaches the selected
   // failure policy at each new point's own deadline, not the legacy 8s limit.
-  it.each([['will-start-turn', 1000], ['will-compose-context', 2000], ['will-search-memory', 1500], ['will-model-request', 1000]] as const)
+  it.each([['will-start-turn', 1000], ['will-compose-context', 2000], ['will-search-memory', 1500], ['will-model-request', 1000], ['will-tool-call', 1000], ['did-tool-result', 1000]] as const)
     ('bounds unanswered %s at %dms', async (runtimePoint, timeoutMs) => {
       const provider = { ...ghost('runtime', { hooks: [runtimePoint] }), approvedControlPoints: [runtimePoint] };
       const { gw, running, sent } = makeGateway({ listGhosts: () => [provider] });

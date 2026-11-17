@@ -4,6 +4,7 @@ import { createRuntimePluginControl } from './runtimeControl.js';
 import { createRuntimeContextProviders } from './runtimeContext.js';
 import { createStaticPromptProvider } from './staticPrompt.js';
 import { readRuntimePluginSettings, warmRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
+import { createPluginToolLifecycle } from './toolLifecycleControl.js';
 import { createGhostExecutionPipe } from './executionPipe.js';
 import { createPluginFileAccess } from '../mcp-apps/pluginFileAccess.js';
 import { ownsPersonalBuildMonitor } from '../personalBuildMonitor.js';
@@ -3284,6 +3285,7 @@ export function getGhostRuntimePluginControl(): ReturnType<typeof createRuntimeP
   });
 }
 let ghostRuntimeControl: ReturnType<typeof createRuntimePluginControl> | undefined;
+export const ghostToolLifecycleControl = createPluginToolLifecycle({ readSettings: readRuntimePluginSettings, control: getGhostRuntimePluginControl });
 let ghostRuntimeContexts: ReturnType<typeof createRuntimeContextProviders> | undefined;
 function runtimeContextProviders() {
   return ghostRuntimeContexts ??= createRuntimeContextProviders(getGhostRuntimePluginControl());
@@ -3302,13 +3304,13 @@ export function searchGhostRuntimeMemories(query: string,
 }
 
 export function screenGhostControlPoint(
-  point: 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory',
+  point: 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory' | 'will-tool-call' | 'did-tool-result',
   data: GhostControlPointData,
   target: { pluginId: string; onFailure: GhostControlPointFailureAction },
   timeoutMs?: number,
 ): Promise<GhostRuntimeControlPointResult>;
 export function screenGhostControlPoint(
-  point: Exclude<GhostControlPointId, 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory'>,
+  point: Exclude<GhostControlPointId, 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory' | 'will-tool-call' | 'did-tool-result'>,
   data: GhostControlPointData,
   target: { pluginId: string; onFailure: GhostControlPointFailureAction },
 ): Promise<GhostControlPointResult>;

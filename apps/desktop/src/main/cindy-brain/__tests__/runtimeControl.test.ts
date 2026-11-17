@@ -6,6 +6,8 @@ import { MODEL_REQUEST_CONTROL } from '@cindy/maker-core';
 import { createTaskRuntimePlugins } from '../../maker-ipc/runtimePlugins.js';
 import { createRuntimeContextProviders } from '../runtimeContext.js';
 import { createStaticPromptProvider } from '../staticPrompt.js';
+import { createPluginToolLifecycle } from '../toolLifecycleControl.js';
+import { parseToolLifecycleVerdict } from '../../../shared/pluginToolLifecycle.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { assembleSystemPromptSections } from '@cindy/maker-core';
 import fs from 'node:fs';
@@ -20,6 +22,60 @@ import * as runtimePreferences from '../../maker-host/runtime-plugin-settings.js
 // host effects. Minimum failure: an empty selection or revocation during an ask.
 // Tier: unit, injected transport, no processes/network/waits.
 describe('task runtime plugin control', () => {
+  // Native control, unit: the existing controller previously shared a per-turn
+  // budget. Tool calls require independent deadlines and supported native effects.
+  // Minimal regression: two >500ms tool hooks in one turn, or a Codex ask/result
+  // replacement. No clocks/processes or real waits are needed.
+  it('gives successive tool calls independent budgets and forwards transformed input in order', async () => {
+    const settings: RuntimePluginSettings = { 'will-tool-call': [{ pluginId: 'first', onFailure: 'block' }, { pluginId: 'second', onFailure: 'block' }] };
+    let now = 0;
+    const screen = vi.fn(async (_point: RuntimePluginPoint, data: GhostControlPointData) => {
+      if (!('input' in data)) throw new Error('Tool fixture required');
+      now += 400;
+      return { action: 'tool', ghostId: 'first', ghostName: 'first', tool: { input: { command: String(data.input.command) + '-edited' } } } as const;
+    });
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true, screen, now: () => now });
+    control.beginTurn('task');
+    const lifecycle = createPluginToolLifecycle({ readSettings: () => settings, control: () => control });
+    const event = { engine: 'codex' as const, phase: 'call' as const, toolName: 'Bash', toolCallId: 'call', input: { command: 'test' } };
+    for (let i = 0; i < 8; i++) expect(await lifecycle.run('task', event)).toEqual({ input: { command: 'test-edited-edited' } });
+    expect(screen.mock.calls[1][1]).toMatchObject({ input: { command: 'test-edited' } });
+    const read = vi.fn(() => control);
+    const unselected = createPluginToolLifecycle({ readSettings: () => undefined, control: read });
+    expect(unselected.enabled('task')).toBe(false);
+    expect(await unselected.run('task', event)).toEqual({});
+    expect(read).not.toHaveBeenCalled();
+  });
+  it('bounds combined native context without discarding an earlier valid answer on allow-on-failure', async () => {
+    const settings: RuntimePluginSettings = { 'did-tool-result': [{ pluginId: 'first', onFailure: 'allow' }, { pluginId: 'second', onFailure: 'allow' }] };
+    const text = 'x'.repeat(600_000);
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: async () => ({ action: 'tool', ghostId: 'plugin', ghostName: 'plugin', tool: { additionalContext: text } }) });
+    const lifecycle = createPluginToolLifecycle({ readSettings: () => settings, control: () => control });
+    const answer = await lifecycle.run('task', { engine: 'codex', phase: 'result', toolName: 'Bash', toolCallId: 'call', input: {}, result: 'ok' });
+    expect(answer.additionalContext?.length).toBe(text.length);
+  });
+  it('preserves Pi native partial-result merging across multiple selected plugins', async () => {
+    const settings: RuntimePluginSettings = { 'did-tool-result': [{ pluginId: 'content', onFailure: 'block' }, { pluginId: 'details', onFailure: 'block' }] };
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: async (_point, _data, target) => ({ action: 'tool', ghostId: target.pluginId, ghostName: target.pluginId,
+        tool: { result: target.pluginId === 'content' ? { content: [{ type: 'text', text: 'edited' }] } : { details: { edited: true } } } }) });
+    const lifecycle = createPluginToolLifecycle({ readSettings: () => settings, control: () => control });
+    expect(await lifecycle.run('task', { engine: 'pi', phase: 'result', toolName: 'read', toolCallId: 'call', input: {},
+      result: { content: [{ type: 'text', text: 'original' }], details: { original: true }, isError: false } })).toEqual({
+      result: { content: [{ type: 'text', text: 'edited' }], details: { edited: true }, isError: false },
+    });
+  });
+  it.each(['allow', 'block'] as const)('applies %s-on-failure to unsupported native hook effects', async onFailure => {
+    const settings: RuntimePluginSettings = { 'will-tool-call': [{ pluginId: 'plugin', onFailure }] };
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: async () => ({ action: 'tool', ghostId: 'plugin', ghostName: 'plugin', tool: { decision: 'ask' } }) });
+    const lifecycle = createPluginToolLifecycle({ readSettings: () => settings, control: () => control });
+    const result = await lifecycle.run('task', { engine: 'codex', phase: 'call', toolName: 'Bash', toolCallId: 'call', input: {} });
+    expect(result).toEqual(onFailure === 'allow' ? {} : { decision: 'deny', reason: 'Plugin tool hook blocked this operation' });
+    expect(parseToolLifecycleVerdict({ decision: 'allow' })).toBeUndefined();
+    expect(parseToolLifecycleVerdict({ input: [] })).toBeUndefined();
+  });
   // System prompt contract, unit: task opt-in and package scope filter before
   // registration; order/name are stable, and the fixed prefix is untouched.
   it('assembles selected static sections in stable order after the fixed prefix', () => {

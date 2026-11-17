@@ -12,7 +12,7 @@ export function codexToolHookConfig(server: string, tool: string, timeoutSeconds
       tool_use_id: '${tool_use_id}',
       ...(event === 'PostToolUse' ? { tool_response: '${tool_response}' } : {}),
     };
-    const handler = { type: 'mcp_tool', server, tool, input, timeout: timeoutSeconds };
+    const handler = { type: 'mcp_tool', server, tool, input: { name: 'native_tool_hook', args: input }, timeout: timeoutSeconds };
     const group = { hooks: [handler] };
     config[`hooks.${event}`] = [group];
     // Native discovery hashes the normalized identity as recursively sorted JSON
@@ -21,7 +21,9 @@ export function codexToolHookConfig(server: string, tool: string, timeoutSeconds
       : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
         .map(([name, item]) => [name, sort(item)])) : value;
     const hash = createHash('sha256').update(JSON.stringify(sort({ event_name: key, ...group }))).digest('hex');
-    state[`/<session-flags>/config.toml:${key}:0:0`] = { trusted_hash: `sha256:${hash}` };
+    // Native synthetic_layer_path resolves against C:\ on Windows, not cwd.
+    const source = process.platform === 'win32' ? 'C:\\<session-flags>\\config.toml' : '/<session-flags>/config.toml';
+    state[`${source}:${key}:0:0`] = { trusted_hash: `sha256:${hash}` };
   }
   config['hooks.state'] = state;
   return config;

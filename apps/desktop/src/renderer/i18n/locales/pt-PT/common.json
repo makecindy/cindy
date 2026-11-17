@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "Guardar",
     "promptUnsupported": "Este local de execução do Pi não suporta fragmentos de instruções de sistema.",
+    "nativeHooksUnsupported": "Os hooks de ferramentas só são suportados em motores executados neste computador.",
     "title": "Plugins da tarefa",
     "description": "Selecione os plugins desta tarefa. As alterações aplicam-se a partir da próxima mensagem.",
     "unsupported": "O processamento de cada pedido só está disponível com Pi local. O motor desta tarefa não o suporta.",
@@ -8378,6 +8379,10 @@
         "subscribeStartTurnDetail": "Só as tarefas em que seleciona este plugin partilham com ele a mensagem atual. Pode escolher um modelo ligado, o esforço de raciocínio e Fast. Os erros seguem a definição da tarefa; não pode aprovar ações por si.",
         "subscribeModelRequest": "Pode processar cada pedido ao modelo nas tarefas selecionadas",
         "subscribeModelRequestDetail": "Só as tarefas em que seleciona este plugin partilham com ele os pedidos ao modelo. Pode ajustar modelos, parâmetros e conteúdo. Atualmente, só é suportado no Pi local; os erros seguem a definição da tarefa. As credenciais de ligação não são incluídas.",
+        "subscribeToolCall": "Pode processar chamadas de ferramentas nas tarefas selecionadas",
+        "subscribeToolCallDetail": "Pode ler, alterar ou rejeitar parâmetros conforme as capacidades do motor. Não pode aprovar operações por si.",
+        "subscribeToolResult": "Pode processar resultados de ferramentas nas tarefas selecionadas",
+        "subscribeToolResultDetail": "Pode ler resultados e adicionar contexto ou substituir resultados se o motor o permitir. Não anula operações já executadas.",
         "subscribeStartTask": "Pode escolher o modelo de novas tarefas",
         "subscribeStartTaskDetail": "Quando uma nova tarefa usa um modelo fornecido por ele, lê a primeira mensagem e escolhe um dos seus modelos ligados. Esta etapa é executada apenas antes da primeira mensagem.",
         "card": "Apresenta cartões de mensagens",

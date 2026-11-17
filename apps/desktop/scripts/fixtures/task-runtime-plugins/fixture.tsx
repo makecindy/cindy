@@ -30,7 +30,7 @@ void mountPage({
   route: '/',
   host: ctx => ({
     ghosts: {
-      listSync: () => ({ ghosts: ctx.case === 'one-control' ? [{ manifest: {
+      listSync: () => ({ ghosts: ctx.case === 'native-tools' ? [{ manifest: { id: 'fixture-tools', subscribe: { hooks: ['will-tool-call', 'did-tool-result'] } } }] : ctx.case === 'one-control' ? [{ manifest: {
         id: 'fixture-context', subscribe: { hooks: ['will-compose-context'] },
       } }] : [] }),
       onChanged: subscription('installedGhosts'),
@@ -39,7 +39,8 @@ void mountPage({
         return ctx.case === 'removed-selection'
           ? { 'will-compose-context': [{ pluginId: 'removed', onFailure: 'block' }] } : {};
       },
-      listControlPointCandidates: async (point: string) => ctx.case === 'one-control' && point === 'will-compose-context'
+      listControlPointCandidates: async (point: string) => ctx.case === 'native-tools' && ['will-tool-call', 'did-tool-result'].includes(point)
+        ? [{ pluginId: 'fixture-tools', name: 'Tool fixture plugin' }] : ctx.case === 'one-control' && point === 'will-compose-context'
         ? [{ pluginId: 'fixture-context', name: 'Context fixture plugin' }] : [],
     },
     sharedTask: { host: async () => ({ available: false, detail: null }) },
