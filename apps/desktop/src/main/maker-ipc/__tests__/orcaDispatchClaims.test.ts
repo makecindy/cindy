@@ -59,6 +59,18 @@ describe('lead dispatch claim reading', () => {
     expect(reading.quote).not.toContain('#');
   });
 
+  it('keeps a labelled id on the next line inside the claim sentence for verification', () => {
+    const fake = '99999999-8888-7777-6666-555555555555';
+    const reading = readDispatchClaim('已派给研究员，\nqueued_message_id: ' + fake + '。', ROSTER);
+    expect(reading.claimed).toBe(true);
+    expect(reading.messageIds).toContain(fake);
+  });
+
+  it('does not treat quoted speech spanning a newline as the lead own claim', () => {
+    const reading = readDispatchClaim('原文是「已派给研究员，\n等待回报」。', ROSTER);
+    expect(reading.claimed).toBe(false);
+  });
+
   it('does not treat plans, negations, or quoted text as a claim', () => {
     for (const text of [
       '我准备派给研究员，先确认一下。',
