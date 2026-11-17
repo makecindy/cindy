@@ -4323,6 +4323,7 @@ function CCAgentSessionContent({
         (opts.providerId ?? null) === (session.runtimeEffective.providerId ?? null);
       const authVendor = displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
       const passesVendorAuthGate = async () => (await vendorAuthGate.checkAndConfirm(authVendor, {
+        ...(catalogDeviceId ? { deviceId: catalogDeviceId } : {}),
         // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
         // PR #744 review 第十七轮)。
         existingSessionRoute: true,
@@ -4542,6 +4543,7 @@ function CCAgentSessionContent({
       agentSwitchIntent,
       confirmRebalance,
       remoteDeviceId,
+      catalogDeviceId,
       sessionHandoffPreparing,
       cindyMakeInputLocked,
       botChatIdentity,
