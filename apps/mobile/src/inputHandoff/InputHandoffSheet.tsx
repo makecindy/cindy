@@ -124,7 +124,6 @@ function InputHandoffSheetHeader({ snapshot }: { snapshot: InputHandoffSnapshot 
         <Icon color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
       </View>
       <View style={styles.sheetHeadingText}>
-        <Text style={styles.sheetTitle}>{snapshot.purpose}</Text>
         <View style={styles.place}>
         {place.secure ? <Lock color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} /> : null}
           <Text style={styles.placeText}>{place.label}</Text>
@@ -137,9 +136,9 @@ function InputHandoffSheetHeader({ snapshot }: { snapshot: InputHandoffSnapshot 
 function InputHandoffSheetContext({ snapshot }: { snapshot: InputHandoffSnapshot }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeInputHandoffStyles);
-  if (!snapshot.note && !snapshot.command && !inputHandoffWarnings(snapshot, t).length) return null;
   return (
     <View style={styles.sheetHeader}>
+      <Text style={styles.sheetTitle}>{snapshot.purpose}</Text>
       {snapshot.note ? (
         <Text style={styles.sheetNote}>{t("interaction.inputHandoff.agentNote", { note: snapshot.note })}</Text>
       ) : null}
