@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "存之",
     "promptUnsupported": "此 Pi 所在之处不支持系统提示词片段。",
+    "nativeHooksUnsupported": "工具钩子惟本机 Claude Code、Pi 可用。",
     "title": "差事法器",
     "description": "为此差事择法器，改动自下一讯起生效。",
     "unsupported": "逐次请求前处置仅本机 Pi 可用，此差事引擎不支持。",
@@ -8397,6 +8398,10 @@
         "subscribeStartTurnDetail": "仅在差事选用此法器时，彼可阅本条消息，择已连之模型、思之深浅及 Fast。出错依差事所设处理，不得代君批准操作。",
         "subscribeModelRequest": "可处理所选差事之每次模型请求",
         "subscribeModelRequestDetail": "仅在差事选用此法器时，彼可阅并调整模型请求之内容、模型及参数。现仅支持本机 Pi；出错依差事所设处理，不含连接凭证。",
+        "subscribeToolCall": "可处理所选任务的工具调用",
+        "subscribeToolCallDetail": "可读取、修改或拒绝工具参数，实际支持随引擎而异；不能替你批准操作。",
+        "subscribeToolResult": "可处理所选任务的工具结果",
+        "subscribeToolResultDetail": "可读取结果，按引擎能力补充上下文或改写结果；不会撤销已执行的操作。",
         "subscribeStartTask": "可为新差事择模型",
         "subscribeStartTaskDetail": "新任务择其所供之模型时，彼阅首条消息，于汝已连之模型中择一。此节唯于首条消息发出前行一次。"
       },

@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "儲存",
     "promptUnsupported": "目前 Pi 執行位置不支援系統提示詞片段。",
+    "nativeHooksUnsupported": "工具掛鉤僅支援本機 Claude Code 與 Pi。",
     "title": "任務插件",
     "description": "為這個任務選擇插件。修改從下一則訊息起生效。",
     "unsupported": "每次請求前處理僅支援本機 Pi，目前任務的引擎不支援。",
@@ -8265,6 +8266,10 @@
         "subscribeStartTurnDetail": "僅在你為任務選擇此插件時，讀取本則訊息並選擇已連接的模型、推理強度及 Fast。出錯按該任務的設定處理，不能替你批准操作。",
         "subscribeModelRequest": "可在選定任務中處理每次模型請求",
         "subscribeModelRequestDetail": "僅在你為任務選擇此插件時，讀取並處理傳送給模型的請求內容，調整模型和參數。目前僅支援本機 Pi；出錯按任務設定處理，不包含連接憑證。",
+        "subscribeToolCall": "可處理所選任務的工具呼叫",
+        "subscribeToolCallDetail": "可讀取、修改或拒絕工具參數，實際支援隨引擎而異；不能替你批准操作。",
+        "subscribeToolResult": "可處理所選任務的工具結果",
+        "subscribeToolResultDetail": "可讀取結果，按引擎能力補充上下文或改寫結果；不會撤銷已執行的操作。",
         "subscribeStartTask": "可為新任務選模型",
         "subscribeStartTaskDetail": "新任務選了它提供的模型時，它會看第一則訊息，從你已連接的模型裡選一個。這個節點只在第一則訊息送出前執行一次。",
         "card": "渲染訊息卡片",

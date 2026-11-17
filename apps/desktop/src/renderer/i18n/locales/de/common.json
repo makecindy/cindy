@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "Speichern",
     "promptUnsupported": "Dieser Pi-Ausführungsort unterstützt keine Systemanweisungsfragmente.",
+    "nativeHooksUnsupported": "Werkzeug-Hooks unterstützen nur lokales Claude Code und Pi.",
     "title": "Aufgaben-Plugins",
     "description": "Plugins für diese Aufgabe auswählen. Änderungen gelten ab der nächsten Nachricht.",
     "unsupported": "Die Verarbeitung jeder Anfrage wird nur mit lokalem Pi unterstützt. Die Engine dieser Aufgabe unterstützt sie nicht.",
@@ -8308,6 +8309,10 @@
         "subscribeStartTurnDetail": "Nur Aufgaben, in denen du dieses Plugin auswählst, geben die aktuelle Nachricht an das Plugin weiter. Es kann ein verbundenes Modell, Denkintensität und Fast wählen. Fehler folgen der Aufgabeneinstellung; es kann keine Aktionen für dich genehmigen.",
         "subscribeModelRequest": "Kann jede Modellanfrage in ausgewählten Aufgaben verarbeiten",
         "subscribeModelRequestDetail": "Nur Aufgaben, in denen du dieses Plugin auswählst, geben ihre Modellanfragen an das Plugin weiter. Es kann Modelle, Parameter und Inhalte anpassen. Derzeit nur mit lokalem Pi unterstützt; Fehler folgen der Aufgabeneinstellung. Verbindungsdaten werden nicht weitergegeben.",
+        "subscribeToolCall": "Kann Werkzeugaufrufe in ausgewählten Aufgaben verarbeiten",
+        "subscribeToolCallDetail": "Kann Parameter lesen, ändern oder ablehnen, soweit die Engine dies unterstützt. Kann keine Vorgänge für dich genehmigen.",
+        "subscribeToolResult": "Kann Werkzeugergebnisse in ausgewählten Aufgaben verarbeiten",
+        "subscribeToolResultDetail": "Kann Ergebnisse lesen und je nach Engine Kontext hinzufügen oder Ergebnisse ersetzen. Bereits ausgeführte Vorgänge werden nicht rückgängig gemacht.",
         "subscribeStartTask": "Kann das Modell für neue Aufgaben wählen",
         "subscribeStartTaskDetail": "Wenn eine neue Aufgabe ein Modell dieses Plugins nutzt, liest es die erste Nachricht und wählt eines deiner verbundenen Modelle. Dieser Einstieg wird nur einmal vor der ersten Nachricht ausgeführt.",
         "card": "Stellt Nachrichtenkarten dar",
