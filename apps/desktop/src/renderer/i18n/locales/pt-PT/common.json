@@ -21625,15 +21625,15 @@
       "lead": "As tarefas organizam-se sozinhas em Pendentes, Em curso, Adiadas e Tratadas. O melhor hábito é manter a caixa de entrada vazia: clique em Concluído quando terminar uma tarefa e adie o que pode esperar.",
       "pending": {
         "title": "Pendentes",
-        "body": "Tarefas com resultados novos ou à espera da sua resposta aparecem aqui sozinhas."
+        "body": "As tarefas aparecem aqui quando têm um resultado ou aguardam a sua resposta."
       },
       "done": {
         "title": "Concluído",
-        "body": "Terminou uma tarefa? Um clique em Concluído move-a para Tratadas e as restantes sobem."
+        "body": "Resolveu? Um clique em Concluído move-a para Tratadas. Volta sozinha se houver novidades."
       },
       "snooze": {
         "title": "Adiadas",
-        "body": "Não é boa altura? Escolha uma hora e a tarefa volta para Pendentes."
+        "body": "Sem tempo agora? Escolha uma hora e ela volta para Pendentes."
       },
       "start": "Começar",
       "note": "Volte à lista de tarefas a qualquer momento com o botão no topo da barra lateral."

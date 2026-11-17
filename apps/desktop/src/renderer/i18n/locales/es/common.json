@@ -21625,15 +21625,15 @@
       "lead": "Las tareas se ordenan solas en Pendientes, En curso, Pospuestas y Procesadas. El mejor hábito es mantener la bandeja vacía: haz clic en Hecho cuando termines una tarea y pospón lo que pueda esperar.",
       "pending": {
         "title": "Pendientes",
-        "body": "Las tareas con resultados nuevos o que esperan tu respuesta aparecen aquí solas."
+        "body": "Las tareas aparecen aquí cuando tienen un resultado o esperan tu respuesta."
       },
       "done": {
         "title": "Hecho",
-        "body": "¿Terminaste una tarea? Un clic en Hecho la pasa a Procesadas y las demás suben."
+        "body": "¿Listo? Un clic en Hecho la pasa a Procesadas. Vuelve sola si hay novedades."
       },
       "snooze": {
         "title": "Pospuestas",
-        "body": "¿No es buen momento? Elige una hora y la tarea volverá a Pendientes."
+        "body": "¿Ahora no puedes? Elige una hora y volverá a Pendientes."
       },
       "start": "Empezar",
       "note": "Vuelve a la lista de tareas cuando quieras con el botón de la parte superior de la barra lateral."
