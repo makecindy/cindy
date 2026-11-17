@@ -567,6 +567,31 @@ describe('wake-from-sleep recovery', () => {
     expect(healthyCalls().subscribe).toBe(before.subscribe);
   });
 
+  // PR #11051 review: two dropped devices whose links come back seconds apart must
+  // share the directory read already in flight; Main only coalesces calls within 300ms.
+  it('recoveries of several dropped devices share one in-flight directory read', async () => {
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    for (const deviceId of ['slow', 'healthy']) {
+      act(() => listeners.onPresenceChanged({ deviceId, deviceName: deviceId, online: false, remoteControlEnabled: false }));
+    }
+    await settle();
+    expect(connected()).toEqual([]);
+
+    const directory = deferred<{ devices: typeof peers }>();
+    listDevices().mockClear();
+    listDevices().mockReturnValue(directory.promise);
+    act(() => listeners.onPeerLinkReopened({ deviceId: 'slow' }));
+    await advance(2_000);
+    act(() => listeners.onPeerLinkReopened({ deviceId: 'healthy' }));
+    await advance(2_000);
+    expect(listDevices()).toHaveBeenCalledTimes(1);
+
+    directory.resolve({ devices: peers });
+    await settle();
+    expect(connected()).toEqual(expect.arrayContaining(['slow', 'healthy']));
+  });
+
   it('a failed bootstrap is completed without user activity, with bounded retries', async () => {
     let slowAvailable = false;
     invoke.mockImplementation(async (peer, channel) => {

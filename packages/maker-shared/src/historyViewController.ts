@@ -57,10 +57,15 @@ export interface HistoryViewDiagnostic {
   failure?: { read: 'latest' | 'older'; code: string };
 }
 
-/** 诊断只取 `[CODE] …` 前缀里的错误码;其它形状一律记 UNKNOWN。 */
+/**
+ * 诊断只取 `[CODE] …` 前缀里的错误码;其它形状一律记 UNKNOWN。
+ * Desktop 的读取经 `ipcRenderer.invoke`,失败消息带 Electron 包装:
+ * `Error invoking remote method '<channel>': Error: [CODE] …`,同样只取其中的错误码。
+ */
 export function historyViewErrorCode(error: unknown): string {
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
-  return /^\[([A-Z][A-Z0-9_]{0,63})\]/.exec(message)?.[1] ?? 'UNKNOWN';
+  return /^(?:Error invoking remote method '[^']*': (?:[A-Za-z]*Error: )?)?\[([A-Z][A-Z0-9_]{0,63})\]/
+    .exec(message)?.[1] ?? 'UNKNOWN';
 }
 
 /** Display-only artifact paths and live tool inputs are not read-request inputs. */

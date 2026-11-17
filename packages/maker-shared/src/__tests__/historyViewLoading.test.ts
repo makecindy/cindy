@@ -135,12 +135,17 @@ describe('history pagination feedback', () => {
     };
     const view = new HistoryViewController(transport);
     await view.refresh();
-    transport.page.mockRejectedValueOnce(new Error('connection reset by peer'));
+    // Desktop reads go through ipcRenderer.invoke, which wraps the main-side error.
+    transport.page.mockRejectedValueOnce(new Error(
+      "Error invoking remote method 'device-link:invoke': Error: [DEVICE_LINK_NOT_CONNECTED] secret detail"));
+    await view.refresh();
+    transport.page.mockRejectedValueOnce(new Error('connection reset by peer [DEVICE_LINK_TIMEOUT]'));
     await view.refresh();
 
     const failures = diagnostic.mock.calls.map(([event]) => event).filter((event) => event.source === 'failed');
     expect(failures.map((event) => event.failure)).toEqual([
       { read: 'latest', code: 'DEVICE_LINK_TIMEOUT' },
+      { read: 'latest', code: 'DEVICE_LINK_NOT_CONNECTED' },
       { read: 'latest', code: 'UNKNOWN' },
     ]);
     expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('secret');
