@@ -17,8 +17,11 @@
 Mobile 现有 watcher 对工作目录事件去抖后刷新当前目录，无需消费此字段。
 
 本地 IPC、SSH file-service 和 `file-browser:remote-op` 透传同一条目。旧控制端忽略
-新增字段；新控制端连接旧执行端时字段缺省，保留原刷新行为及手动刷新入口。不新增
-channel、能力位、schema 版本或服务端校验。Device Link 的加密业务 payload 与自建中转
+新增字段；Device Link 新控制端连接旧执行端时字段缺省，保留原刷新行为及手动刷新入口。
+SSH file-service 按既有严格版本策略将 schema 升至 4、bundle 升至 0.2.8；Desktop 首次
+连接探测到旧版本后自动重推 bundle，再完成握手，避免已安装 0.2.7 的主机沿用旧行为。
+daemon 随 SSH channel 退出，无持久数据迁移。不新增 channel、能力位或服务端校验。
+Device Link 的加密业务 payload 与自建中转
 保持原样透明传输，无需中转升级；不改变握手、签名、路由或恢复行为。
 
 回归入口：`completeDirectory.test.ts`、`scanner.test.ts`、remote-file-service 的
@@ -29,6 +32,9 @@ channel、能力位、schema 版本或服务端校验。Device Link 的加密业
 通知当前正文和后代 LRU 失效。手动刷新发现目标变化也走同一通知，不依赖 watcher
 一定送达；旧的在途正文读取不能覆盖新代次的结果。正文事件按微任务合并，单个预览
 同一时刻最多一个事件重读，期间的新变化只保留一次补读。
+当前正文已打开时，后台重读遇到远程截断文本仍保留原编辑器及草稿，不切入大文件
+下载占位；用户复制草稿并重新打开后才取回完整文件。初次加载、已有下载与占位预览
+仍可重新取回，保存沿用原正文目标校验。
 
 编辑防误覆盖：`readFile` 增量返回可选 `resolvedPath`（相对真实工作目录的 POSIX
 文件目标），编辑器把它随正文基线保存，脏草稿不采用后台重读的新目标。`writeFile`

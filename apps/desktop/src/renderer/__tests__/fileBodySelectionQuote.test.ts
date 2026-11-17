@@ -8,6 +8,7 @@ import { EditorView } from '@codemirror/view';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FileBodyView } from '@/features/cc-agent/workdir-browse/FileBodyView';
+import { useFileContent } from '@/features/cc-agent/workdir-browse/hooks/useFileContent';
 import { clearDraft, getDraft } from '@/lib/composerDraftStore';
 import { SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL } from '../../shared/selectionContextMenu';
 import '../../preload/sidebarWindowPreload';
@@ -15,6 +16,8 @@ import '../../preload/sidebarWindowPreload';
 const preloadMocks = vi.hoisted(() => ({
   expose: vi.fn(),
   writeFile: vi.fn(),
+  readFile: vi.fn(),
+  fileEvents: new Set<(event: { workdir: string; relPath: string }) => void>(),
   listeners: new Map<string, Set<(event: unknown, ...payload: unknown[]) => void>>(),
 }));
 vi.mock('electron', () => ({
@@ -48,7 +51,13 @@ vi.mock('@/components/markdown/MarkdownImageLightboxHost', () => ({ MarkdownImag
 vi.mock('@/features/cc-agent/workdir-browse/ImagePreview', () => ({ ImagePreview: ({ src, relPath }: { src: string; relPath: string }) => createElement('img', { src, alt: relPath }) }));
 vi.mock('@/features/cc-agent/workdir-browse/PdfPreview', () => ({ PdfPreview: () => null }));
 vi.mock('@/features/cc-agent/workdir-browse/DrawioPreview', () => ({ DrawioPreview: () => null }));
-vi.mock('@/lib/fileBrowserTransport', () => ({ fileBrowserApiFor: () => ({ writeFile: preloadMocks.writeFile }) }));
+vi.mock('@/lib/fileBrowserTransport', () => ({
+  fileBrowserApiFor: () => ({ writeFile: preloadMocks.writeFile, readFile: preloadMocks.readFile }),
+  onFileTreeEventFor: (_deviceId: unknown, listener: (event: { workdir: string; relPath: string }) => void) => {
+    preloadMocks.fileEvents.add(listener);
+    return () => preloadMocks.fileEvents.delete(listener);
+  },
+}));
 
 const sessionId = 'file-body-selection-quote';
 const workdir = resolve(tmpdir(), 'cindy-file-body-selection-quote');
@@ -239,4 +248,55 @@ it.each([
   expect(ref.current!.isDirty()).toBe(true);
   expect(screen.getByRole('alert').textContent).toContain('ccAgent.workdirBrowse.fileBody.saveFailed');
   expect(screen.getByRole('alert').textContent).toContain(`ccAgent.workdirBrowse.fileBody.${reason}`);
+});
+
+// #10882 discussion_r4599374914: a truncated watcher reload unmounted the dirty
+// editor to fetch the large file. Existing prop-only tests miss the hook's
+// loading transition. Unit through useFileContent + real FileBodyView/CodeMirror:
+// edit small A, receive an alias event pointing to large B, then save and reopen.
+it.each(['ssh', 'device'])('preserves the dirty editor when %s retargets to a large file', async (transport) => {
+  const remoteHostId = transport === 'ssh' ? 'test-host' : null;
+  const deviceId = transport === 'device' ? 'test-device' : null;
+  const relPath = 'alias/large.md';
+  const small = { relPath, content: 'A', size: 1, mtimeMs: 1, truncated: false, resolvedPath: 'a/large.md' };
+  const large = { ...small, content: 'B', size: 3 * 1024 * 1024, truncated: true, resolvedPath: 'b/large.md' };
+  preloadMocks.readFile.mockReset().mockResolvedValueOnce({ ok: true, data: small })
+    .mockResolvedValue({ ok: true, data: large });
+  preloadMocks.writeFile.mockReset().mockResolvedValue({ ok: false, message: 'FILE_TARGET_CHANGED' });
+  const fetchRemote = vi.fn().mockResolvedValue({ ok: true, cachePath: resolve(workdir, 'large-cache.md') });
+  vi.stubGlobal('electronAPI', {
+    ...window.electronAPI,
+    fileBrowser: {
+      ...window.electronAPI.fileBrowser, cachePut: vi.fn(), fetchRemote,
+      readCached: vi.fn().mockResolvedValue({ ok: true, content: 'B', truncated: true }),
+    },
+  });
+  const ref = createRef<import('@/features/cc-agent/workdir-browse/FileBodyView').FileBodyHandle>();
+  function Preview() {
+    const { content } = useFileContent(workdir, relPath, remoteHostId, deviceId);
+    return createElement(FileBodyView, { workdir, relPath, remoteHostId, deviceId, ref, content });
+  }
+  const mounted = render(createElement(Preview));
+  await act(async () => {});
+  const editorNode = mounted.container.querySelector<HTMLElement>('.cm-editor')!;
+  const editor = EditorView.findFromDOM(editorNode)!;
+  act(() => { editor.dispatch({ changes: { from: 1, insert: ' edited' } }); });
+  await act(async () => {
+    for (const listener of preloadMocks.fileEvents) listener({ workdir, relPath: 'alias' });
+  });
+  expect(mounted.container.querySelector('.cm-editor')).toBe(editorNode);
+  expect(editor.state.doc.toString()).toBe('A edited');
+  expect(ref.current!.isDirty()).toBe(true);
+  expect(fetchRemote).not.toHaveBeenCalled();
+  await act(async () => { expect(await ref.current!.save()).toBe(false); });
+  expect(preloadMocks.writeFile).toHaveBeenLastCalledWith(expect.objectContaining({
+    remoteHostId, content: 'A edited', expectedResolvedPath: 'a/large.md',
+  }));
+  expect(screen.getByRole('alert').textContent).toContain('ccAgent.workdirBrowse.fileBody.targetChanged');
+  expect(editor.state.doc.toString()).toBe('A edited');
+  mounted.unmount();
+  render(createElement(Preview));
+  await act(async () => {});
+  expect(fetchRemote).toHaveBeenCalledTimes(1);
+  expect(fetchRemote).toHaveBeenCalledWith(expect.objectContaining({ relPath, size: large.size, remoteHostId, deviceId }));
 });

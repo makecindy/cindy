@@ -8,13 +8,13 @@ export default {
   name: 'file-body-error',
   entry: './fixture.tsx',
   viewport: { width: 180, height: 160 },
-  real: 'FileBodyView load/save error branches, product typography, themes and translations',
+  real: 'useFileContent reloads, FileBodyView load/save error branches, product typography, themes and translations',
   notCovered: 'Filesystem/IPC, full sidebar interaction and OS clipboard; these require full mock-client acceptance',
   cases: {
     // #10882: the save error used to suggest an overwrite that the host rejects.
     // Real editor/save flow; verify localized advice wraps in a narrow pane.
     'target-changed': {
-      about: 'A rejected retargeted save retains the draft and explains how to reopen safely',
+      about: 'Retargeting to a large remote file retains the dirty editor; rejected save explains how to reopen safely',
       viewport: { width: 360, height: 320 },
     },
     default: {
@@ -35,6 +35,8 @@ export default {
     if (ui.case === 'target-changed') {
       const editor = page.locator('.cm-content');
       await editor.fill('Unsaved draft');
+      await ui.emit('file-event', { workdir: '/fixture', relPath: 'alias', type: 'change' });
+      assert.equal(await editor.textContent(), 'Unsaved draft');
       await editor.press(ui.platform === 'darwin' ? 'Meta+s' : 'Control+s');
       const alert = page.getByRole('alert');
       await alert.waitFor({ state: 'visible' });

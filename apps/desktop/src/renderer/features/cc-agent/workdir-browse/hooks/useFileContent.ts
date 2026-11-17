@@ -395,10 +395,13 @@ export function useFileContent(
                 || contentCacheScopeRef.current !== contentCacheScope) continue;
             if (!result.ok || (result.data.truncated && (remoteHostId || deviceId))) {
               // The event may have superseded the initial read/large-file fetch.
-              // Re-enter its full stat/fetch/error path instead of leaving the
-              // preview loading forever. Existing text/drafts remain visible.
+              // Restart an unfinished/placeholder preview, but never replace
+              // an existing text editor with loading/fetching: that unmounts it
+              // and discards its draft. Fetch large content on explicit reopen;
+              // saves still validate the original resolved target.
               const kind = stateRef.current.content.kind;
-              if (kind === 'loading' || kind === 'fetching' || (result.ok && result.data.truncated)) {
+              if (kind === 'loading' || kind === 'fetching'
+                  || (kind !== 'text' && result.ok && result.data.truncated)) {
                 setRefreshTick(t => t + 1);
               }
               continue;
