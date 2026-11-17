@@ -87,6 +87,10 @@ import { createHostGeneratedImages } from './generated-images.ts';
 import { hostBlobStore } from '../media-store.ts';
 import { bindHostUiText } from '../ui-text.ts';
 import { configureUiText } from '../../../desktop/src/main/uiText.ts';
+import { createInteractionBroker } from './interactions.mjs';
+import { consumeClaudeOpusPlanMismatch, createClaudeGatewayErrorObserver } from '../../../desktop/src/main/maker-host/claude-gateway-error-observer.ts';
+import { recordClaudeRequestRoute } from '../../../desktop/src/main/maker-host/claude-session-route-registry.ts';
+import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../desktop/src/shared/claudeGatewayError.ts';
 
 function assertOwnerChangedDisposal(disposal) {
   return assert.rejects(disposal, error =>
@@ -5956,4 +5960,89 @@ test('a Codex generated image that cannot be stored is saved and published as a 
   assert.deepEqual(f.refs(), []);
   assert.equal(JSON.stringify(f.published).includes(notAnImage), false, 'no published event carries the bytes');
   assert.equal(f.published.some(event => event.type === 'image'), false);
+});
+
+// Unit, over a migrated profile database: three steps of the desktop's event preparation
+// (sessionEventPreparationSteps.ts) in the Host listener (甲 12, 甲 14, 甲 15). Rules, as the desktop:
+// a card the runtime closes itself leaves the pending cards and its question's decision is saved with
+// the withdrawal reason, also once the turn has ended; a standalone notice is its own row and not a
+// client text event, in or out of a turn; a Claude Opus plan-mode terminal error carries the
+// normalized reason and consumes its observation. Gaps: the Host left the card pending and unsaved
+// (and dropped a dismissal outside a turn), kept a notice as reply text, and stored the raw error.
+// Minimal input: one question then its withdrawal after done; two notices around a reply; one
+// observed Opus 400 then the terminal error.
+async function preparationFixture(t, id) {
+  t = lifoCleanup(t);
+  const db = await recoveryDatabase(t);
+  const published = [];
+  const hub = { publish: event => published.push(event) };
+  const interactions = createInteractionBroker({ hub });
+  const persistMessage = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) });
+  const h = createHarness({ hub, persistMessage, getOwner: getCurrentDbClientSnapshot, interactions,
+    readSession: async sid => ({ id: sid, status: 'active', agentKind: 'claude-code', model: 'm', workingDir: db.root,
+      providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }) });
+  // As a runtime: the shared interaction router installs its listener on the session.
+  const create = h.maker.createSession.bind(h.maker);
+  h.maker.createSession = async opts => {
+    const session = await create(opts);
+    session.setInteractionListener = listener => { session.interactionListener = listener; };
+    return session;
+  };
+  t.after(() => { interactions.dispose(); return h.queue.dispose(); });
+  await db.createTask(id);
+  await enqueue(h, id, { clientId: `${id}-input`, text: 'go' });
+  const session = h.maker.getSession(id);
+  const turnEvent = event => session.emit({ ...event, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+  const endTurn = async () => {
+    turnEvent({ type: 'done', data: {} });
+    await waitFor(() => published.some(event => event.type === 'done'));
+  };
+  const rows = role => db.db.prepare('SELECT content FROM messages WHERE session_id = ? AND role = ?').all(id, role)
+    .map(row => { try { return JSON.parse(row.content); } catch { return row.content; } });
+  return { db, published, interactions, session, turnEvent, endTurn, rows };
+}
+
+test('a question the runtime withdraws after its turn ended leaves the pending cards, and its withdrawal is saved', { timeout: 30_000 }, async t => {
+  const f = await preparationFixture(t, 'withdrawn');
+  const answer = f.session.interactionListener({ requestId: 'question-1', kind: 'ask_user_question',
+    questions: [{ question: 'Which one?', options: [] }] }, new AbortController().signal);
+  await waitFor(() => f.interactions.pending('withdrawn').length === 1 && f.rows('ask_user').length === 1);
+  await f.endTurn();
+  f.session.emit({ type: 'interaction_dismissed', data: { requestId: 'question-1', reason: 'question_withdrawn',
+    withdrawalReason: 'answered in the conversation' } });
+  // Before awaiting the answer: a card left pending fails here instead of never settling.
+  await waitFor(() => f.interactions.pending('withdrawn').length === 0);
+  assert.deepEqual(await answer, { kind: 'ask_user_question', answers: {}, dismissed: true });
+  await waitFor(() => f.rows('ask_user')[0]?.status === 'cancelled');
+  assert.equal(f.rows('ask_user')[0].withdrawalReason, 'answered in the conversation');
+  assert.deepEqual(f.published.filter(event => event.type === 'interaction_dismissed'), [{ type: 'interaction_dismissed',
+    sessionId: 'withdrawn', requestId: 'question-1', reason: 'question_withdrawn', withdrawalReason: 'answered in the conversation' }]);
+});
+
+test('a standalone notice is its own row in and out of a turn, never reply text or a client text event', { timeout: 30_000 }, async t => {
+  const f = await preparationFixture(t, 'notices');
+  f.turnEvent({ type: 'text', standaloneText: true, data: { text: 'Extension ready' } });
+  f.turnEvent({ type: 'text', data: { text: 'The reply', isFinal: true }, agentMeta: { uuid: 'reply-1' } });
+  await f.endTurn();
+  f.session.emit({ type: 'text', standaloneText: true, data: { text: 'Extension stopped' } });
+  await waitFor(() => f.rows('assistant').length === 3);
+  assert.deepEqual(f.rows('assistant').sort(), ['Extension ready', 'Extension stopped', 'The reply']);
+  assert.equal(f.published.some(event => event.type === 'text' && /Extension/.test(event.data?.text ?? '')), false);
+});
+
+test('a Claude Opus plan-mode terminal error carries its normalized reason and consumes the observation', { timeout: 30_000 }, async t => {
+  const f = await preparationFixture(t, 'opus-plan');
+  // The observer the Host's Claude proxy installs (anthropicCompatProxyHostCore.ts), on the task's latest request.
+  recordClaudeRequestRoute(91, 'opus-plan', 'gateway');
+  const sink = createClaudeGatewayErrorObserver()({ reqId: 91, method: 'POST', url: '/v1/messages',
+    upstreamBase: 'https://gateway.example.com', status: 400, requestHeaders: {}, responseHeaders: {},
+    requestBody: Buffer.from(JSON.stringify({ model: 'claude-opus-5' })) });
+  sink.onData(Buffer.from(JSON.stringify({ type: 'error', error: { type: 'invalid_request',
+    message: 'Claude Opus is not available with the Claude Pro plan.' } })));
+  sink.onEnd();
+  f.turnEvent({ type: 'error', data: { message: 'Claude Opus is not available with the Claude Pro plan.' } });
+  await waitFor(() => f.published.some(event => event.type === 'error'));
+  assert.equal(f.published.find(event => event.type === 'error').data.reason, CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON);
+  assert.equal(consumeClaudeOpusPlanMismatch('opus-plan'), null, 'the observation was consumed');
+  await waitFor(() => f.db.errorRows('opus-plan').length === 1);
 });

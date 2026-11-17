@@ -711,17 +711,17 @@ describe('event types the desktop pipeline acts on, classified for the Host', ()
       gaps: ['A9 turn-end seal', 'A10 last activity', 'A13 list preview and pinned summary', 'checkpoint 4 and 5 (auto-resume)'],
     },
     error: {
-      host: 'turn-executor.mjs finish: error row, Codex plan failure, change record partial, Git abort; context recovery claim',
-      gaps: ['A15 Opus plan error reason', 'checkpoint 4 (terminal to the coordinator first, auto-resume)'],
+      host: 'turn-executor.mjs finish: error row, Codex plan failure, change record partial, Git abort; context recovery claim; claudeOpusPlanTerminalErrorData (sessionEventPreparationSteps.ts, shared)',
+      gaps: ['checkpoint 4 (terminal to the coordinator first, auto-resume)'],
     },
     image: { host: 'turn-executor.mjs deliverCodexGeneratedImage (agent/generated-images.ts over the shared generatedImageDelivery.ts)' },
-    interaction_dismissed: { gaps: ['A12 runtime interaction_dismissed'] },
+    interaction_dismissed: { host: 'turn-executor.mjs handleInteractionDismissedEvent (sessionEventPreparationSteps.ts, shared), in or out of a turn' },
     plan_mode_changed: { host: 'turn-executor.mjs persistAgentPlanModeChange (shared persistAgentPlanModeChangeWith)' },
     status: {
       host: 'turn-executor.mjs context snapshot (shared), background activity',
       gaps: ['smaller difference: running=false alone does not write the turn end time'],
     },
-    text: { host: 'history.event (sessionEventStreamCore, shared)', gaps: ['A14 standaloneText notices'] },
+    text: { host: 'history.event (sessionEventStreamCore, shared); turn-executor.mjs routeStandaloneTextEvent (sessionEventPreparationSteps.ts, shared)' },
     turn_diff: { host: 'turn-executor.mjs noteTurnDiffEvent, not published' },
   };
 

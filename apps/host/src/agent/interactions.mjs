@@ -122,6 +122,15 @@ export function createInteractionBroker(deps) {
       return settle(entry, { ...decision, kind }, 'resolved');
     },
 
+    /** As the desktop's clearPendingInteraction (register.ts): the card leaves the pending ones, unsettled;
+     * the caller resolves it and saves its decision (sessionEventPreparationSteps.ts). */
+    clearPending(requestId) {
+      const entry = pending.get(requestId);
+      if (!entry) return null;
+      pending.delete(requestId);
+      return { kind: entry.request.kind, request: entry.request, persistId: entry.persistId, resolve: entry.resolve };
+    },
+
     detach,
     dispose() { for (const id of bindings.keys()) detach(id); },
   };

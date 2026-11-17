@@ -41,6 +41,8 @@ import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './sessi
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { redactEventForRenderer } from '../../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
 import { isQuietScheduledOutput } from '../../../desktop/src/main/scheduler-host/silent-output.ts';
+import { claudeOpusPlanTerminalErrorData, defaultDecisionForPending, handleInteractionDismissedEvent, routeStandaloneTextEvent } from '../../../desktop/src/main/maker-ipc/sessionEventPreparationSteps.ts';
+import { MAKER_PUSH } from '../../../desktop/src/main/maker-ipc/channels.ts';
 import { isGatewayProxyTokenRecoveryErrorEventForProvider } from '../../../desktop/src/main/maker-ipc/gatewayProxyTokenRecovery.ts';
 import { contextSnapshotForStatus, isContextCompactionSnapshot } from '../../../desktop/src/main/maker-ipc/sessionContextSnapshot.ts';
 import { recordHostContextSnapshot } from './context-usage.ts';
@@ -314,11 +316,44 @@ export function createTurnExecutor(deps) {
     if (isTerminalTurnErrorEvent(event)) settleAutoResumeAttemptOnTerminalError(steps, session, event);
   }
 
+  // The desktop's ports of these steps (register.ts), as the Host has them. The accepted input of the
+  // notice is this turn's; its provenance only tells a bot's private reply, and the Host refuses bot
+  // inputs at admission.
+  function standaloneTextPorts(session) {
+    return { redactEventForRenderer, agentInputCoordinatorHolder: {
+      getActiveInputClientId(id, generation) {
+        const turn = turns.get(id);
+        if (!turn || turn.session !== session || turn.terminal || !turn.clientId) return null;
+        return typeof generation === 'number' && typeof turn.generation === 'number' && generation !== turn.generation
+          ? null : turn.clientId;
+      },
+      getAcceptedInputProvenance: () => null,
+    } };
+  }
+  // The pending card leaves the Host's broker (interactions.mjs) as the desktop's clearPendingInteraction;
+  // the decision of a question or plan is saved, as the desktop's persistInteractionDecision; the
+  // floating island is a desktop window.
+  function interactionDismissedPorts(history) {
+    return {
+      handleAgentIslandInteractionDismissed: () => {},
+      clearPendingInteraction: requestId => deps.interactions?.clearPending(requestId) ?? null,
+      defaultDecisionForPending,
+      persistInteractionDecision: (id, persistId, kind, request, decision) => {
+        if (kind === 'ask_user_question' || kind === 'plan_review') history.onInteractionResolved(id, persistId, kind, request, decision);
+      },
+      broadcastToAllWindows: (channel, payload) => {
+        if (channel === MAKER_PUSH.INTERACTION_DISMISSED) deps.hub.publish({ type: 'interaction_dismissed', ...payload });
+      },
+    };
+  }
+
   function listen(sessionId, session) {
     if (bindings.get(sessionId)?.session === session) return;
     if (bindings.has(sessionId)) clearPendingTurnChangeSets(sessionId);
     bindings.get(sessionId)?.unsubscribe();
     const history = historyFor(sessionId);
+    const standalonePorts = standaloneTextPorts(session);
+    const dismissedPorts = interactionDismissedPorts(history);
     history.noteSessionAgentKind(sessionId, dbKind(session.agentKind ?? turns.get(sessionId)?.dbKind));
     deps.interactions?.attach(session, sessionId, { history, isCurrent: deps.isCurrent,
       isPaused: () => deps.isExecutionPaused?.(sessionId) === true });
@@ -337,6 +372,16 @@ export function createTurnExecutor(deps) {
       // Host's records, publishing and rows: a follow-up of Session.holdEventStream was handled by the
       // host that held it (as the desktop), and an owner that is not current has its coordinator closing.
       const prepared = !event.hostProjection && deps.isCurrent();
+      // As the desktop's preparation (sessionEventPreparationSteps.ts), in or out of a turn: a standalone
+      // notice is its own row, not a reply nor a client event; a card the runtime closed itself leaves
+      // the pending cards with its decision saved; a Claude Opus plan-mode terminal error carries its
+      // normalized reason, before the coordinator and the records see it, as on the desktop.
+      if (prepared) {
+        if (routeStandaloneTextEvent(standalonePorts, session, event, history.onStandaloneTextEvent)) return;
+        if (handleInteractionDismissedEvent(dismissedPorts, session, event)) return;
+        const opusPlanErrorData = claudeOpusPlanTerminalErrorData({ log }, session, event);
+        if (opusPlanErrorData) event = { ...event, data: opusPlanErrorData };
+      }
       if (prepared) noteAutoResumeEventBeforeTerminal(session, event);
       const handedOver = prepared && handTerminalToCoordinator(sessionId, event);
       const turn = turns.get(sessionId);
