@@ -960,6 +960,23 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       ? { status: 'requested', tokensBefore: 200, estimatedTokensAfter: 100, noop: false } : { status: 'requested' } });
   });
 
+  // Unit / compact-result regression: the real coordinator returns errors in its
+  // projection. Prior coverage only checked successful result redaction.
+  it.each(['queue-head', 'dispatch'] as const)('reports unaccepted %s compact as a tool failure without queue content', async failure => {
+    const h = createHarness(), sid = 'compact-not-accepted';
+    h.sendToAgent.mockRejectedValueOnce(new Error('compact dispatch failed'));
+    if (failure === 'queue-head') {
+      h.coordinator.enqueue(sid, makeItem('private', 'private queued text')); await flush();
+      h.sendToAgent.mockClear();
+    }
+    const result = await runSessionExecutionAction({ targetSessionId: sid, action: 'compact', beforeMutation: async () => {} }, {
+      coordinator: h.coordinator, persist: async () => {}, compact: () => h.coordinator.compact(sid, makeItem('compact', '').createOpts),
+    });
+    expect(result).toEqual({ ok: false, errorCode: 'COMPACT_FAILED', message: failure === 'queue-head'
+      ? 'Cannot compact while the session is busy' : 'compact dispatch failed' });
+    expect(JSON.stringify(result)).not.toContain('private queued text');
+  });
+
   // Unit / #11043: real shared retry and coordinator compact must retain the
   // initiating call's revocation guard across history reads and queued dispatch.
   // Prior coverage exercised owner retries only; a revoked plugin is the minimal failure.
@@ -2384,18 +2401,38 @@ describe('agent-chosen control steering', () => {
     expect(queue.map(item => item.clientId)).toEqual(['report']);
     expect(h.coordinator.isQueuePaused(sid)).toBe(true);
     expect(h.coordinator.isPausedForUncertainDelivery(sid)).toBe(true);
-    // The Agent/plugin control action must not convert an uncertain steer into a duplicate turn.
-    for (const action of ['resume', 'retry'] as const) {
-      expect(await runSessionExecutionAction({ targetSessionId: sid, action, beforeMutation: async () => {} }, {
-        coordinator: h.coordinator, persist: async () => {}, compact: async () => undefined,
-      })).toMatchObject({ ok: false, errorCode: 'CONFLICT' });
-      expect(h.coordinator.isPausedForUncertainDelivery(sid)).toBe(true);
-    }
     h.coordinator.onTurnEvent(sid, 'done');
     await flush();
     expect(h.sendToAgent).not.toHaveBeenCalled();
     h.coordinator.resume(sid);
     expect(h.coordinator.isPausedForUncertainDelivery(sid)).toBe(false);
+  });
+  // Unit / shared action parity: an uncertain ACK must not add an Agent/plugin-only
+  // refusal. Existing coverage checked automatic replay, not explicit user actions.
+  it.each(['resume', 'retry'] as const)('matches the explicit user %s transaction after an uncertain ACK', async action => {
+    const harnesses = [createHarness(), createHarness()];
+    for (const h of harnesses) {
+      h.setAgentKind('codex'); h.setRunning(true);
+      h.steerToAgent.mockImplementationOnce(async () => {
+        h.setRunning(false);
+        throw new Error('Codex turn/steer did not acknowledge within 10000ms');
+      });
+      await h.coordinator.steerControlInput(sid, { item: makeItem('report', 'result') }, expected(h));
+      h.coordinator.onTurnEvent(sid, 'done'); await flush();
+      expect(h.coordinator.isPausedForUncertainDelivery(sid)).toBe(true);
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+    }
+    const [user, control] = harnesses;
+    if (action === 'resume') user.coordinator.resume(sid);
+    else await user.coordinator.retryLastError(sid);
+    const result = await runSessionExecutionAction({ targetSessionId: sid, action, beforeMutation: async () => {} }, {
+      coordinator: control.coordinator, persist: async () => {}, compact: async () => {},
+    });
+    await flush();
+    expect(result).toMatchObject({ ok: true });
+    expect(control.coordinator.isPausedForUncertainDelivery(sid)).toBe(user.coordinator.isPausedForUncertainDelivery(sid));
+    expect(control.coordinator.isQueuePaused(sid)).toBe(user.coordinator.isQueuePaused(sid));
+    expect(control.sendToAgent.mock.calls.map(call => call[1])).toEqual(user.sendToAgent.mock.calls.map(call => call[1]));
   });
   it('reports screened rejection without reviving blocked content as ordinary input', async () => {
     const h = createHarness();

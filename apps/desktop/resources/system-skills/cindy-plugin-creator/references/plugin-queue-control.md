@@ -60,7 +60,8 @@ const result = await cindy.host.call('cindy_helper', 'control_session', {
 暂停和恢复结果含 `executionPaused`、`queuePaused`。压缩结果含 `status:'requested'`，
 Codex/Pi 另保留原生提供的 `tokensBefore`、`estimatedTokensAfter`、`noop`；不返回队列正文或附件信息。
 Claude 可能仍在排队，不能把请求已接受写成已完成压缩。
-送达未知的队列不能通过 `resume` / `retry` 自动重放，返回 `CONFLICT`；先在原任务核实实际投递状态。
+送达未知时队列保持暂停，不会自动重放。显式调用 `resume` / `retry` 与原任务中点击继续／重试共用事务；调用前应先核实实际投递状态。
+压缩未被原事务受理时返回 `COMPACT_FAILED` 和原错误，不返回队列内容。
 
 只支持执行插件电脑上的本机任务，不支持 `deviceId::sessionId` 控制另一台电脑的队列。
 旧 Host 未注册 `control_session` 或未提供对应服务时明确提示不支持；先查工具目录，不读写宿主数据库替代。

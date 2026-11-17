@@ -10,7 +10,6 @@ export async function runSessionExecutionAction(params: {
 }, deps: {
   coordinator: {
     ensureQueueRestored(id: string): Promise<void>;
-    isPausedForUncertainDelivery(id: string): boolean;
     setExecutionPaused(id: string, paused: boolean): void;
     isExecutionPaused(id: string): boolean;
     isQueuePaused(id: string): boolean;
@@ -30,13 +29,13 @@ export async function runSessionExecutionAction(params: {
   const { coordinator } = deps;
   await coordinator.ensureQueueRestored(id);
   await beforeMutation();
-  if ((action === 'resume' || action === 'retry') && coordinator.isPausedForUncertainDelivery(id)) {
-    return { ok: false as const, errorCode: 'CONFLICT', message: 'A queued message may already have been delivered. Resolve it in the task before resuming or retrying.' };
-  }
   const beforeDelivery = params.beforeDelivery ?? beforeMutation;
   if (action === 'compact') {
     const native = await deps.compact(id, params.instructions, beforeMutation, beforeDelivery) as {
-      tokensBefore?: unknown; estimatedTokensAfter?: unknown; noop?: unknown } | null;
+      error?: unknown; tokensBefore?: unknown; estimatedTokensAfter?: unknown; noop?: unknown } | null;
+    if (typeof native?.error === 'string' && native.error) {
+      return { ok: false as const, errorCode: 'COMPACT_FAILED', message: native.error };
+    }
     return { ok: true as const, result: { status: 'requested' as const,
       ...(typeof native?.tokensBefore === 'number' ? { tokensBefore: native.tokensBefore } : {}),
       ...(typeof native?.estimatedTokensAfter === 'number' ? { estimatedTokensAfter: native.estimatedTokensAfter } : {}),
