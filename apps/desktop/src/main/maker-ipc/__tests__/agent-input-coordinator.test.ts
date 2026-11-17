@@ -12,7 +12,7 @@ import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolA
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ScriptTarget, transpileModule } from 'typescript';
-import { ASYNC_QUESTION_ANSWER, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
+import { AgentStartupStoppedError, ASYNC_QUESTION_ANSWER, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
 import { REPLY_QUOTE_SOURCE_CONTENT } from '../chatReplyQuoteNote';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -13499,6 +13499,148 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
 // Unit regressions for lost Worker reports: production enqueue/restore/retry
 // entries, with an in-memory persistence boundary. Existing auto-bridge tests
 // manually replayed terminal events and never exercised a cold Lead's queue.
+// #10559, unit: real transaction + coordinator + recovery hooks/guard/bookkeeping.
+// Only bootstrap/native execution and route application are injected. Existing
+// turn-error tests never enter the cold, unpersisted queue-head failure boundary.
+describe('Bot subscription startup admission', () => {
+  function startupHarness(bot = true, opaque = false, rehydrate = false) {
+    const h = createHarness();
+    const attemptCurrent = vi.spyOn(h.coordinator, 'isAutoResumeAttemptCurrent');
+    const sid = 'startup-admission';
+    let backup = false;
+    const session: MakerSendTransactionSession = {
+      id: sid, instanceId: 'backup-runtime', agentKind: 'codex', workDir: '/repo', remoteHostId: null,
+      isTurnRunning: () => false,
+      send: vi.fn(async (_message, opts) => {
+        await opts?.beforeProviderStart?.();
+        await opts?.onAccepted?.();
+        opts?.onDispatching?.();
+        h.setRunning(true);
+        return { accepted: true as const };
+      }),
+    };
+    const failure = new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] waiting for reset\nresetAtMs=9000000');
+    const bootstrap = vi.fn(async () => {
+      if (!backup) throw opaque ? failure : new AgentStartupStoppedError(failure);
+      return { session, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+    });
+    const transaction = createMakerSendTransaction({
+      getMainClassicalStyle, getResolvedMainLocale, readMcpAppModelContext: id => mcpAppModelContext(id),
+      getSession: () => rehydrate && !backup ? session : undefined,
+      closeSession: async () => {}, closeSessionIfCurrent: async () => {}, preflightBotRuntimeResources: async () => {},
+      getSessionMeta: async () => ({}), ensureRemoteReadyForSessionStart: async () => {},
+      checkWorkDirExists: async () => true, isOrcaMcpHydrated: () => !rehydrate,
+      buildCreateOptsWithStderr: x => x, synthesizeOrcaVendorOptionsFromDb: async () => rehydrate,
+      statDirectory: async () => ({ isDirectory: () => true }),
+      readSessionExtraDirsFromDb: async () => [], readSessionWorkingDirFromDb: async () => '/repo',
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({ agentKind: 'claude-code', workingDir: '/repo', model: 'claude-opus-5-5' }),
+      withRehydrateCloseSuppressed: async (_id, fn) => fn(), bootstrapSession: bootstrap,
+      markOrcaRoleIfNeeded: async () => {}, broadcastSessionCreated: () => {},
+      prepareSendUserMessage: async (_id, message) => message as string,
+      createDbMessage: async (id, row) => { await mocks.createMessage(id, row); },
+      isSessionRunningError: () => false, log: mocks.logger,
+    });
+    h.sendToAgent.mockImplementation(async (...args) => (await transaction.sendToAgentAccepted(...args)).outcome);
+    const botFallbackInputs = new WeakSet<object>();
+    const fallback = vi.fn(async (_sid: string, _episode: number, _token: number, _required: boolean, current: () => boolean) => {
+      if (!current()) return { session: null, outcome: 'superseded' as const };
+      backup = true;
+      h.setAgentKind('codex');
+      return { session: null, outcome: 'switched' as const };
+    });
+    const guard = new InterruptedTurnAutoResumeGuard({ isEnabled: () => true, log: mocks.logger, random: () => 0.5 });
+    const book = new AutoResumeBookkeeping({
+      persistSuppressedError: vi.fn(), markOutcome: vi.fn(),
+      rollbackGuardPendingResume: (id, token) => { if (token !== undefined) guard.noteResumeSendFailed(id, token); },
+      abandonTakeover: (id, message, token) => h.coordinator.abandonAutoResume(id, message, token),
+    });
+    const hooks = createInterruptedTurnAutoResumeHooks<Session>({
+      // Match the late-bound Desktop facade; its ports are required so the
+      // production assembly cannot silently omit the startup authority check.
+      inputCoordinator: {
+        isExecutionPaused: id => h.coordinator.isExecutionPaused(id),
+        isAutoResumeAttemptCurrent: (id, token) => h.coordinator.isAutoResumeAttemptCurrent(id, token),
+        autoRetryLastError: (id, token) => h.coordinator.autoRetryLastError(id, token),
+      }, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
+      botFallbackInputs, saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
+      getStableSessionForTurnBoundary: () => null,
+      pendingContinuationOnlyAutoResumeRebuilds: new Map<Session, number>(),
+      maybeApplySessionRuntimeFallback: fallback, pendingSessionRuntimeFallbackRebuilds: new Set<Session>(),
+      providerGroupHeldErrors: { stash: vi.fn() }, providerGroupHeldTerminals: { stash: vi.fn() },
+      pendingSchedulerAutoResumeRunBySession: new Map(), notifySchedulerAutoResumeFailed: vi.fn(),
+      autoResumeAttemptToken: () => null, log: mocks.logger,
+    });
+    h.isResumableTurnErrorCandidate.mockImplementation(hooks.canRecoverTurn);
+    h.onResumableTurnError.mockImplementation(hooks.onResumableTurnError);
+    const item = makeItem('original', 'original task', { createOpts: {
+      agentKind: 'claude-code', model: 'claude-opus-5-5', workingDir: '/repo', planMode: true,
+    } });
+    if (bot) botFallbackInputs.add(item.createOpts);
+    return { ...h, sid, item, bootstrap, session, fallback, book, failure, attemptCurrent };
+  }
+
+  it.each([false, true])('switches before sending the same original input (rehydrate=%s)', async rehydrate => {
+    vi.useFakeTimers();
+    try {
+      const h = startupHarness(true, false, rehydrate);
+      h.coordinator.enqueue(h.sid, h.item);
+      await flush();
+      await h.sendToAgent.mock.results[0].value;
+      await flush();
+      expect(h.session.send).not.toHaveBeenCalled();
+      expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
+      expect(h.coordinator.getProjection(h.sid)).toMatchObject({ error: null, autoResumePending: { attempt: 1 } });
+      expect(h.attemptCurrent).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await flush();
+      expect(h.fallback).toHaveBeenCalledWith(h.sid, 1, expect.any(Number), true, expect.any(Function));
+      expect(h.attemptCurrent).toHaveBeenCalledWith(h.sid, 1);
+      expect(h.session.send).toHaveBeenCalledOnce();
+      expect(h.onUserMessagePersisted).toHaveBeenCalledOnce();
+      expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
+      expect(h.sendToAgent.mock.calls[1][3].persistUserMessage).toMatchObject({ clientId: 'original' });
+      expect(h.sendToAgent.mock.calls[1][2]).toMatchObject({ planMode: true });
+      expect(h.sendToAgent.mock.calls[1][1]).toMatchObject({ content: 'original task' });
+      expect(h.coordinator.getProjection(h.sid)).toMatchObject({ error: null, pendingQueue: [] });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['ordinary', 'opaque', 'stop', 'closed', 'remove', 'clear', 'exhausted', 'superseded', 'failed'] as const)(
+    'retains the safe boundary when %s', async mode => {
+      vi.useFakeTimers();
+      try {
+        const h = startupHarness(mode !== 'ordinary', mode === 'opaque');
+        if (['exhausted', 'superseded', 'failed'].includes(mode)) {
+          h.fallback.mockResolvedValue({ session: null, outcome: mode } as never);
+        }
+        h.coordinator.enqueue(h.sid, h.item);
+        await flush();
+        await h.sendToAgent.mock.results[0].value;
+        await flush();
+        expect(h.onRejectedUserTurn).toHaveBeenCalledTimes(mode === 'ordinary' || mode === 'opaque' ? 1 : 0);
+        if (mode === 'stop') h.coordinator.stop(h.sid);
+        if (mode === 'closed') h.coordinator.onSessionClosed(h.sid);
+        if (mode === 'remove') h.coordinator.remove(h.sid, 'original');
+        if (mode === 'clear') h.coordinator.clearError(h.sid);
+        await vi.advanceTimersByTimeAsync(120_000);
+        await flush();
+        expect(h.session.send).not.toHaveBeenCalled();
+        expect(h.onUserMessagePersisted).not.toHaveBeenCalled();
+        expect(h.bootstrap).toHaveBeenCalledOnce();
+        if (['ordinary', 'opaque', 'stop', 'closed', 'remove', 'clear'].includes(mode)) expect(h.fallback).not.toHaveBeenCalled();
+        if (['stop', 'closed', 'remove', 'clear'].includes(mode)) {
+          expect(h.coordinator.getProjection(h.sid).autoResumePending).toBeUndefined();
+        }
+        if (['exhausted', 'superseded', 'failed'].includes(mode)) expect(h.onRejectedUserTurn).toHaveBeenCalledOnce();
+        if (mode === 'exhausted' || mode === 'failed' || mode === 'ordinary' || mode === 'opaque') {
+          expect(h.coordinator.getProjection(h.sid)).toMatchObject({ error: expect.stringContaining('SUBSCRIPTION_ACCOUNT_LIMITED'),
+            recovery: { kind: 'queue-head', clientId: 'original' } });
+        }
+      } finally { vi.useRealTimers(); }
+    },
+  );
+});
+
 describe('Orca report durable recovery', () => {
   const report = (clientId = 'report-1') => makeItem(clientId, 'Review complete', {
     origin: { kind: 'orca', senderLabel: 'reviewer', senderSessionId: 'worker-session' },
