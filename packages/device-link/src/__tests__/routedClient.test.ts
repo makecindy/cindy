@@ -274,6 +274,41 @@ describe('RoutedDeviceLinkClient', () => {
     client.stop();
   });
 
+  // PR #11052 review: the compatibility relay can report a peer online before the
+  // route to it is known (the Agent-Net roster arrives later). That presence must be
+  // handed over once the route is decided, and again after the primary reconnects,
+  // because the host clears its presence view on every primary disconnect.
+  it('hands over presence that arrived before the peer\'s route was known', async () => {
+    const sockets: FakeWs[] = [];
+    const options = (url: string): DeviceLinkClientOptions => ({
+      getWsUrl: () => url, getToken: async () => 'unit-test-token',
+      getHello: () => ({ deviceName: 'unit', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (address, headers) => { const socket = new FakeWs(address, headers); sockets.push(socket); return socket; },
+    });
+    let rosterKnown = false;
+    const client = new RoutedDeviceLinkClient(options('ws://v2-node'), undefined, {
+      active: () => true, useForPeer: (peer) => rosterKnown && peer === 'old-device', options: options('ws://v1-relay'),
+    });
+    const seen: string[] = [];
+    client.onPresenceChanged((snap) => seen.push(`${snap.deviceId}:${snap.online}`));
+    client.start(); await vi.advanceTimersByTimeAsync(1);
+    const legacy = sockets.find((s) => s.url === 'ws://v1-relay')!;
+    legacy.ack(); await vi.advanceTimersByTimeAsync(1);
+    legacy.push({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: { deviceId: 'old-device', deviceName: 'old',
+      online: true, remoteControlEnabled: true, platform: 'darwin', appVersion: '1', busy: false, lastSeenAt: 1 } });
+    expect(seen).toEqual([]);
+
+    rosterKnown = true;
+    const primary = sockets.find((s) => s.url === 'ws://v2-node')!;
+    primary.ack(); await vi.advanceTimersByTimeAsync(1);
+    expect(seen).toEqual(['old-device:true']);
+
+    primary.close(1006); await vi.advanceTimersByTimeAsync(5_000);
+    sockets.filter((s) => s.url === 'ws://v2-node').at(-1)!.ack(); await vi.advanceTimersByTimeAsync(1);
+    expect(seen).toEqual(['old-device:true', 'old-device:true']);
+    client.stop();
+  });
+
   it('opens no second connection on the official route, so scoped peers stay on the only socket', async () => {
     const h = harness({ value: false });
     h.client.start();
