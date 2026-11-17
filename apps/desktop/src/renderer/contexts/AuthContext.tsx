@@ -28,6 +28,7 @@ import {
   type DesktopAccountSwitcherSnapshot,
   type User,
 } from '@/lib/authService';
+import type { HostStartFailureReason } from '../../shared/hostStartFailure';
 import {
   cancelRemoteOptimisticSendsForDataOwnerBoundary,
   reconcileSessionsAfterDataOwnerRollback,
@@ -121,6 +122,8 @@ export interface AuthContextValue {
   accountDeletionRestored: boolean;
   /** 持久凭证库(safeStorage)连续多个刷新周期不可用(#1687);全局警示条据此显隐。 */
   credentialStoreUnavailable: boolean;
+  /** Client mode only: why the Host serving this window did not start; null otherwise. */
+  hostUnavailableReason: HostStartFailureReason | null;
   getAccountDeletionAvailability: ReturnType<
     typeof createAuthService
   >['getAccountDeletionAvailability'];
@@ -185,6 +188,7 @@ export function AuthProvider({
   const [hasAccountDeletionReceipt, setHasAccountDeletionReceipt] = useState(false);
   const [accountDeletionRestored, setAccountDeletionRestored] = useState(false);
   const [credentialStoreUnavailable, setCredentialStoreUnavailable] = useState(false);
+  const [hostUnavailableReason, setHostUnavailableReason] = useState<HostStartFailureReason | null>(null);
   const [loginState, setLoginState] = useState<DesktopLoginState | null>(null);
   // Main rejects superseded credentials; this also prevents late IPC responses
   // from repainting a login page the user has already left.
@@ -393,6 +397,7 @@ export function AuthProvider({
       setHasAccountDeletionReceipt(state.hasAccountDeletionReceipt);
       setAccountDeletionRestored(state.accountDeletionRestored);
       setCredentialStoreUnavailable(state.credentialStoreUnavailable);
+      setHostUnavailableReason(state.hostUnavailable?.reason ?? null);
       setOwnerBoundaryPending(state.ownerBoundaryPending === true);
       // An IPC completion is not a stable auth decision while Main is changing owners.
       // Once resolved, runtime boundaries keep their own flag without replaying startup.
@@ -714,6 +719,7 @@ export function AuthProvider({
       hasAccountDeletionReceipt,
       accountDeletionRestored,
       credentialStoreUnavailable,
+      hostUnavailableReason,
       getAccountDeletionAvailability,
       requestAccountDeletionChallenge,
       confirmAccountDeletion,
@@ -747,6 +753,7 @@ export function AuthProvider({
       hasAccountDeletionReceipt,
       accountDeletionRestored,
       credentialStoreUnavailable,
+      hostUnavailableReason,
       getAccountDeletionAvailability,
       requestAccountDeletionChallenge,
       confirmAccountDeletion,

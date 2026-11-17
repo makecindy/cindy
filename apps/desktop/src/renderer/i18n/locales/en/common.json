@@ -9464,6 +9464,31 @@
     "preparing": "Connecting to sign-in",
     "preparingSubtitle": "Loading the methods available for this region",
     "unavailable": "Sign-in is temporarily unavailable",
+    "hostUnavailable": {
+      "title": "Cindy background service didn't start",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "This data belongs to a different account than the sign-in the Cindy background service saved.",
+          "action": "Run cindy-host login with the original account, then restart the Cindy background service and reopen Cindy."
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "Another Cindy app is using this data.",
+          "action": "Close it, then restart the Cindy background service and reopen Cindy."
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "This account's data can't be opened.",
+          "action": "If you recently used a newer version of Cindy, first update Cindy on this computer to the latest version, then restart the Cindy background service and reopen Cindy. Otherwise, run cindy-host status to see why."
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "The Cindy background service couldn't reach the sign-in service while starting.",
+          "action": "Check your network, then restart the Cindy background service and reopen Cindy."
+        },
+        "HOST_START_FAILED": {
+          "body": "The Cindy background service ran into an error while starting.",
+          "action": "Restart the Cindy background service and reopen Cindy. If it happens again, run cindy-host status to see why."
+        }
+      }
+    },
     "retry": "Retry",
     "browserWaiting": "Complete verification in your browser",
     "browserCallback": {
@@ -19030,7 +19055,7 @@
     "errors": {
       "piStartupCloudFile": "A cloud-only instruction file may be delaying Pi startup: {{path}}. Download this file in Finder, wait until it is available locally, then retry. The timeout may have another cause.",
       "hostProfileInUseByDesktop": "This data is in use by the Cindy desktop app running on its own. Quit it, then send again.",
-      "hostProfileInUseByDesktopAtStart": "This data is in use by the Cindy desktop app running on its own, so the Host did not start. Quit that app, then restart the Host.",
+      "hostProfileInUseByDesktopAtStart": "This data is in use by the Cindy desktop app running on its own, so the Cindy background service did not start. Quit that app, restart the Cindy background service, then reopen this Cindy window.",
       "hostProfileInUseByDesktopRetry": "This data is in use by the Cindy desktop app running on its own, so this can’t be changed right now. Quit that app, then try again.",
       "openFileFailed": "Cannot open file in system",
       "emptyResponse": "The model returned no content. Try again. If the context is very long, switch models.",
@@ -21649,14 +21674,14 @@
     "openFailed": "Could not open GitHub."
   },
   "hostConnection": {
-    "connecting": "Connecting to Cindy…",
+    "connecting": "Connecting to the Cindy background service…",
     "restoring": "Restoring task state…",
     "retrying": "Task state is not yet synced. Retrying…",
     "pairing": "Connection authorization required",
-    "pairingHelp": "Keep this page open. In the terminal used to start Cindy Host, run the command to open the web client again. Pair the new page, then return here.",
+    "pairingHelp": "Keep this page open. In the terminal used to start the Cindy background service, run the command to open the web client again. Pair the new page, then return here.",
     "keepDraft": "Your draft stays here. Task state will sync when the connection recovers.",
     "retry": "Retry connection",
-    "desktopAuthHelp": "Update the Host connection settings in your launch terminal, then reopen this experimental client."
+    "desktopAuthHelp": "Update the connection settings for the Cindy background service in your launch terminal, then reopen this experimental client."
   },
   "remoteControlConsent": {
     "title": "Allow remote control of this computer?",
