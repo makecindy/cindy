@@ -5152,22 +5152,70 @@ test('runtime override: with no runtime change a task read is its row, in the de
 // bindHostSessionRuntimeHooks): an archived task's runtime override does not outlive the archive. Gap: the
 // Host's archive only wrote the column, so a task archived after an automatic fallback and restored
 // started on the fallback route again. Minimal failing input: a fallback, an archive, a restore, a send.
-test('runtime override: a task archived after a fallback and restored starts on its saved route', { timeout: 30_000 }, async t => {
-  const r = await fallenBackTask(t, 'shelved');
-  t.after(bindHostSessionRuntimeHooks(r.selection));
-  // The task list's archive and restore, as main.ts builds the update entry (under the task's route lock).
+// The task list's archive and restore, as main.ts builds the update entry (under the task's route lock).
+const taskListUpdate = r => {
   const taskRestore = createHostTaskRestore({ getOwner: () => getDbClient(), publish: event => r.h.events.push(event) });
-  const update = lockSessionRoute(createHostSessionUpdate({
+  return lockSessionRoute(createHostSessionUpdate({
     restoreTaskToActive: taskRestore.restoreTaskToActive,
     persistSessionFields: (...args) => r.selection.persistSessionFields(...args),
     publish: event => r.h.events.push(event),
     setModel: (...args) => r.selection.setModel(...args),
     move: async () => { throw new Error('Unexpected move'); },
   }));
+};
+
+test('runtime override: a task archived after a fallback and restored starts on its saved route', { timeout: 30_000 }, async t => {
+  const r = await fallenBackTask(t, 'shelved');
+  t.after(bindHostSessionRuntimeHooks(r.selection));
+  const update = taskListUpdate(r);
   await update('shelved', { status: 'archived' });
   await update('shelved', { status: 'active' });
   assert.equal(r.row('shelved').status, 'active');
   assert.deepEqual(await startedOn(r, 'shelved', 'shelved-1'), { model: 'big', providerId: 'prov-a' });
+});
+
+// Rule (the cleanup createSessionRuntimeCleanup runs at an archive or delete discards the task's
+// working-directory recovery, register.ts workingDirectoryRecovery.discard; the Host reaches it through the
+// input queue and the executor): a recovery note the Agent never received does not outlive the archive. The
+// send transaction consumes the note only once the engine accepts the send (makerSendTransaction.ts), so a
+// refused send leaves it pending. Gap: no test failed when the discard was not wired. Minimal failing input:
+// a send to a task whose directory is gone, refused; an archive and a restore; another send.
+test('runtime cleanup: a task archived with an unsent recovery note does not carry it after the restore', { timeout: 30_000 }, async t => {
+  const gone = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-archived-gone-dir-'));
+  rmSync(gone, { recursive: true, force: true });
+  t.after(() => rmSync(gone, { recursive: true, force: true }));
+  let r;
+  r = await modelChangeRuntime(t, { queue: { statDirectory: undefined, readSession: async id => {
+    const stored = r.row(id);
+    return { id, status: stored.status, agentKind: 'claude-code', model: stored.model, workingDir: gone,
+      providerId: stored.provider_id, permissionMode: 'ask', planModeEnabled: false };
+  } } });
+  t.after(bindHostSessionRuntimeHooks(r.selection));
+  await r.createTask('noted');
+  // The engine refuses the first send, after the recovery recreated the directory and wrote the note.
+  const refused = [];
+  const create = r.h.maker.createSession;
+  r.h.maker.createSession = async opts => {
+    const session = await create(opts);
+    const send = session.send;
+    session.send = async (text, sendOpts = {}) => {
+      if (refused.length > 0) return send(text, sendOpts);
+      refused.push(typeof text === 'string' ? text : text.content);
+      return { accepted: false };
+    };
+    return session;
+  };
+  await r.h.queue.enqueue('noted', { clientId: 'noted-1', text: 'first' });
+  await waitFor(() => refused.length === 1);
+  assert.match(refused[0], /^\[Working directory recovery\]/, 'the refused send carried the note');
+  assert.equal(existsSync(gone), true, 'the directory was recreated');
+  const update = taskListUpdate(r);
+  await update('noted', { status: 'archived' });
+  await update('noted', { status: 'active' });
+  await r.h.queue.enqueue('noted', { clientId: 'noted-2', text: 'second' });
+  await waitFor(() => (r.h.maker.sessions.get('noted')?.sent ?? []).some(text => /second$/.test(text)));
+  const sent = r.h.maker.sessions.get('noted').sent;
+  assert.ok(sent.every(text => !text.includes('[Working directory recovery]')), `no send after the restore carries the old note: ${JSON.stringify(sent)}`);
 });
 
 // Working-directory move (A5, session-move.ts with the executor's own close):
