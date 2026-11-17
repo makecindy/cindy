@@ -1,15 +1,12 @@
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { remoteProviderDisableKey } from '@cindy/model-providers';
 import { withoutProviderHeaderCredentials } from '../maker-host/provider-public-view.js';
-import { withAvailabilityPolicyMutation } from '../device-link/providerShareAvailabilityPolicy.js';
 import { bindModelSourceSnapshot, acceptsModelSourceSnapshot, modelSourceRequestSignature, issueModelSourceSnapshot } from '../maker-host/model-source-snapshots.js';
 import { buildModelsFetchRequest } from '../maker-host/provider-model-fetch.js';
 import { getProviderRouteCredentialRevision } from '../maker-host/provider-route.js';
 import { appendSpeechModels, missingSpeechReference } from '../../shared/speechProviderSetup.js';
 import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
 import type { DeploymentDetectionResult } from '../../shared/providerDetection.js';
-import { pruneProviderGroupBindings } from '../provider-group/bindings.desktop.js';
-import { writeProviderGroup } from '../provider-group/store.js';
 /**
  * provider:* IPC handlers。
  *
@@ -50,8 +47,6 @@ import type {
   CustomProviderUpdateOptions,
   CustomProviderUpdateResult,
 } from '../../shared/customProviderUpdate.js';
-import { notifyManagedOllamaRemoved } from '../local-model-runtime/ipc.js';
-import { stopManagedLlamaCppService } from '../local-model-runtime/llamaCppService.js';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../shared/llamaCpp.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type {
@@ -92,7 +87,7 @@ import {
   CUSTOM_PROVIDER_RUNTIME_AGENTS,
   splitCustomProviderHeaders,
   type CustomProviderHeaderSecrets,
-} from '../maker-host/custom-provider-header-secrets.js';
+} from '../maker-host/customProviderHeaderService.js';
 import type {
   ProviderProbeSpec,
   ProviderTestInput,
@@ -287,7 +282,15 @@ function oauthRuntimeEndpointSignature(config: CustomProviderConfig | null): str
 }
 
 
-export interface ProviderHandlerDeps {
+export interface ProviderPlatformPorts {
+  withAvailabilityPolicyMutation<T>(providerId: string | undefined, work: () => Promise<T>): Promise<T>;
+  writeProviderGroup(providerId: string, config: null): Promise<unknown>;
+  pruneProviderGroupBindings(providerId: string, keepMemberKeys: null): Promise<void>;
+  notifyManagedOllamaRemoved(): void;
+  stopManagedLlamaCppService(deleteConnection: () => Promise<void>): Promise<void>;
+}
+
+export interface ProviderHandlerDeps extends ProviderPlatformPorts {
   /** Test seam: production reads known locations on this desktop, never renderer paths. */
   localProviderSourceContext?: () => LocalSourceContext;
   /**
@@ -877,7 +880,7 @@ export function registerProviderHandlers(
     beginProviderConfigMutation(providerId);
     try {
       await previous.catch(() => undefined);
-      return await withAvailabilityPolicyMutation(providerId, () => operation(commitRouteMutation));
+      return await deps.withAvailabilityPolicyMutation(providerId, () => operation(commitRouteMutation));
     } finally {
       release();
       if (providerConfigMutationTails.get(providerId) === tail) {
@@ -1937,7 +1940,7 @@ export function registerProviderHandlers(
       deps.broadcastChanged();
       return { ok: true };
     };
-    return withAvailabilityPolicyMutation(disableKey, () => enqueueDisableWrite(run));
+    return deps.withAvailabilityPolicyMutation(disableKey, () => enqueueDisableWrite(run));
   };
   registry.handle(MAKER_INVOKE.MODEL_DISABLE_SET, async (event, input: unknown) => {
     assertTrustedProviderMutationSender(event);
@@ -2732,7 +2735,7 @@ export function registerProviderHandlers(
                 throwIpcError('INTERNAL', 'failed to remove existing OAuth credentials');
               }
               await deleteCustomProvider(providerId);
-              if (providerId === MANAGED_OLLAMA_PROVIDER_ID) notifyManagedOllamaRemoved();
+              if (providerId === MANAGED_OLLAMA_PROVIDER_ID) deps.notifyManagedOllamaRemoved();
               assertProviderMutationOwner(ownerAtIngress);
             } catch (err) {
               assertProviderMutationOwner(ownerAtIngress);
@@ -2757,10 +2760,10 @@ export function registerProviderHandlers(
             assertProviderMutationOwner(ownerAtIngress);
             deps.broadcastPricingChanged();
             // 删除连接即删除它的供应商组(provider-groups.md §3)：同名重建会得到同一个 id，不能让旧组复活。
-            await writeProviderGroup(providerId, null)
+            await deps.writeProviderGroup(providerId, null)
               .then(() => {
                 deps.kickProviderGroupReshare?.('provider-delete');
-                return pruneProviderGroupBindings(providerId, null);
+                return deps.pruneProviderGroupBindings(providerId, null);
               })
               .catch((error) => {
                 log.warn('provider group cleanup after provider deletion failed', {
@@ -2772,7 +2775,7 @@ export function registerProviderHandlers(
         };
         if (providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
           try {
-            await stopManagedLlamaCppService(deleteConnection);
+            await deps.stopManagedLlamaCppService(deleteConnection);
           } catch {
             throwIpcError('PRECONDITION_FAILED', 'LLAMACPP_STOP_FAILED');
           }

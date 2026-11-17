@@ -16,7 +16,7 @@ import { providerPresetOAuth } from '@cindy/model-providers';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import type { OAuthProviderDescriptor, ProviderView } from '@cindy/model-providers';
-import { fetchSavedOAuthProviderModels } from '../provider-model-fetch.js';
+import { fetchSavedOAuthProviderModels } from '../provider-model-fetch.desktop.js';
 
 import {
   parseModelsListResponse,

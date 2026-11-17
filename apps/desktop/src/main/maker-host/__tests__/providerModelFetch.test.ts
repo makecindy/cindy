@@ -11,7 +11,7 @@ import {
   buildModelsFetchRequest,
   fetchProviderModels,
   type ProviderModelsFetchSpec,
-} from '../provider-model-fetch.js';
+} from '../provider-model-fetch.desktop.js';
 
 function spec(over: Partial<ProviderModelsFetchSpec> = {}): ProviderModelsFetchSpec {
   return {
