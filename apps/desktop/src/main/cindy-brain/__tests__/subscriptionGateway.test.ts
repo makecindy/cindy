@@ -324,6 +324,60 @@ describe('indexed task content and state events', () => {
   const subscriber = (): InstalledGhost => ({ ...ghost('reader', { topics: ['message', 'task-state'] }),
     approval: { state: 'approved', revision: 'r1' } });
 
+  // Unit / tool observation contract: the existing event index and queue must not
+  // inspect payloads at zero subscribers or synchronously deliver tool content.
+  it('does no tool payload work at zero subscribers, then delivers asynchronously in order', async () => {
+    const index = new GhostTaskEventIndex();
+    const read = vi.fn(() => ({ toolUseId: 'call', toolName: 'Read', input: { path: 'notes.txt' } }));
+    const event = { type: 'tool_use', get data() { return read(); }, source: 'pi' };
+    const gateway = vi.fn();
+    index.replace([], owner);
+    index.publishTool('task', event, owner, gateway);
+    expect(read).not.toHaveBeenCalled(); expect(gateway).not.toHaveBeenCalled();
+    const g = ghost('reader', { topics: ['tool-execution'] });
+    const { gw, sent, running, deps } = makeGateway({ findGhostForDelivery: () => g });
+    running.add('reader');
+    index.replace([g], owner);
+    index.publishTool('task', event, owner, () => gw);
+    index.publishTool('task', { type: 'tool_result', data: { toolUseIds: ['call'], content: 'done' } }, owner, () => gw);
+    expect(sent).toHaveLength(0);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent.map(item => (item.payload as any).data.eventType)).toEqual(['tool_use', 'tool_result']);
+    expect(sent[0]!.payload).toMatchObject({ topic: 'tool-execution', name: 'did-tool-execution', seq: 1,
+      data: { sessionId: 'task', source: 'pi', payload: { toolUseId: 'call' } } });
+    expect(deps.wake).not.toHaveBeenCalled();
+  });
+
+  it('bounds tool payloads and drops stale-install content before asynchronous delivery', async () => {
+    const g = ghost('reader', { topics: ['tool-execution'] });
+    let live = g;
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => live });
+    running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    index.publishTool('task', { type: 'tool_result_full', data: { toolUseId: 'call', content: 'x'.repeat(1_000_000) } }, owner, () => gw);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(Buffer.byteLength(JSON.stringify(sent[0]!.payload))).toBeLessThan(65536);
+    expect(sent[0]!.payload).toMatchObject({ data: { truncated: true } });
+    sent.length = 0;
+    index.publishTool('task', { type: 'tool_result', data: { content: 'old install' } }, owner, () => gw);
+    live = { ...g, approval: { state: 'approved', revision: 'r2' } };
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent).toHaveLength(0);
+  });
+
+  it('uses the same 100-event queue and dropped count for a hot tool observer', async () => {
+    const g = ghost('reader', { topics: ['tool-execution'] });
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
+    running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    for (let n = 0; n < 103; n++) index.publishTool('task', { type: 'tool_use', data: { toolUseId: `${n}` } }, owner, () => gw);
+    expect(sent).toHaveLength(0);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent).toHaveLength(100);
+    expect(sent[0]!.payload).toMatchObject({ seq: 4, dropped: 3 });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   // Unit, #9801 scope reduction: lifecycle events reuse immediate delivery and
   // the existing cold queue; they add no timer and must not fold a finished turn.
   it('delivers running, completed and running immediately in order without a timer', () => {

@@ -8241,6 +8241,8 @@
         "subscribeTopics": "세션 활동을 수신(턴 및 세션 이벤트, 메시지 내용 제외)",
         "subscribeMessage": "메시지 내용 이벤트",
         "subscribeMessageDetail": "저장된 사용자 메시지와 AI 답변을 수신합니다. 첨부 파일은 별도의 읽기와 전달로 가져옵니다.",
+        "subscribeToolExecution": "도구 실행 이벤트",
+        "subscribeToolExecutionDetail": "도구 이름, 입력, 결과 및 오류를 수신합니다. 실행을 변경하지 않고 관찰만 합니다.",
         "subscribeTaskState": "작업 상태 이벤트",
         "subscribeTaskStateDetail": "작업의 실행, 대기, 완료, 보관 및 숨김 상태 변경을 수신합니다.",
         "subscribeActivity": "AI가 언제 생각하고 언제 사용자를 기다리는지 수신",

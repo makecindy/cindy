@@ -324,11 +324,11 @@ export class GhostSubscriptionGateway {
       ts: this.deps.now(),
       data,
     };
-    if (topic === 'message' || topic === 'task-state') this.contentRecipients.set(evt, ghost);
+    if (topic === 'message' || topic === 'task-state' || topic === 'tool-execution') this.contentRecipients.set(evt, ghost);
 
     // 直投条件:在跑 + 缓冲已清 + 无唤醒在途——三者缺一都排队,否则新事件
     // 会插到缓冲里旧事件前面(seq 乱序)。投递失败(刚崩窗口期)同样回落缓冲。
-    if (this.deps.isRunning(ghostId) && e.buffer.length === 0 && !e.waking) {
+    if (topic !== 'tool-execution' && this.deps.isRunning(ghostId) && e.buffer.length === 0 && !e.waking) {
       if (this.sendOne(ghostId, e, evt, ownerScope)) return;
     }
     this.buffer(ghost, e, evt, ownerScope);
@@ -374,19 +374,20 @@ export class GhostSubscriptionGateway {
       e.pendingDropped += 1;
     }
     e.buffer.push(evt);
-    this.kickWake(ghost, e, ownerScope);
+    this.kickWake(ghost, e, ownerScope, 'topic' in evt && evt.topic === 'tool-execution');
   }
 
   /** 事件到达即按需拉起(去重:唤醒在途不重复 spawn),醒后顺序补投。 */
-  private kickWake(ghost: InstalledGhost, e: SubEntry, ownerScope: unknown): void {
+  private kickWake(ghost: InstalledGhost, e: SubEntry, ownerScope: unknown, deferRunning = false): void {
     if (e.waking) return;
     if (!this.ownerScopeUsable(ownerScope)) {
       this.invalidateOwner(installedGhostStoragePart(ghost), e);
       return;
     }
     e.waking = true;
-    void this.deps
-      .wake(ghost)
+    const ready = deferRunning && this.deps.isRunning(installedGhostStoragePart(ghost))
+      ? Promise.resolve() : this.deps.wake(ghost);
+    void ready
       .then(() => {
         if (this.entries.get(installedGhostStoragePart(ghost)) !== e) return;
         if (!this.ownerScopeUsable(ownerScope)) {

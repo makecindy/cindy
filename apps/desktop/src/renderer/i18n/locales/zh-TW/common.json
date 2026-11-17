@@ -8241,6 +8241,8 @@
         "subscribeTopics": "旁聽你的任務動態（每輪往來與任務事件，不含訊息內容）",
         "subscribeMessage": "訊息內容事件",
         "subscribeMessageDetail": "接收已儲存的使用者訊息與 AI 回覆；附件透過個別讀取與交接取得。",
+        "subscribeToolExecution": "工具執行過程",
+        "subscribeToolExecutionDetail": "接收工具名稱、輸入、結果與錯誤；僅旁聽，不改變執行。",
         "subscribeTaskState": "任務狀態事件",
         "subscribeTaskStateDetail": "接收任務的執行、等待、完成、封存與隱藏狀態變更。",
         "subscribeActivity": "旁聽 AI 何時在思考、何時在等你",

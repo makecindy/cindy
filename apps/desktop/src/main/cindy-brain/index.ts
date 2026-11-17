@@ -3150,6 +3150,12 @@ export function createGhostSessionTap(sessionId: string): {
   return {
     handleEvent(ev) {
       if (disposed) return;
+      // Tool observers cover all tasks, independently of the legacy primary-task metadata filter.
+      if (taskEventIndex.wantsToolEvent(ev.type)) {
+        const owner = getGhostOwnerPushStamp();
+        try { if (owner) taskEventIndex.publishTool(sessionId, ev, owner, getGhostSubscriptionGateway); }
+        catch { log.warn('tool observation projection failed'); }
+      }
       // 记来源要在过滤**之前**:自动化轮次的事件正是"当前轮次不是用户发起"的唯一线索。
       origin.noteEvent(ev);
       if (ev.turnOrigin?.kind && ev.turnOrigin.kind !== 'user') return;

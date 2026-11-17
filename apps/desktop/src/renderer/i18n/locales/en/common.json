@@ -8284,6 +8284,8 @@
         "subscribeTopics": "Observes your session activity (turn and session events, no message content)",
         "subscribeMessage": "Message content events",
         "subscribeMessageDetail": "Receives saved user messages and AI replies. Attachments use separate reading and handoff.",
+        "subscribeToolExecution": "Tool execution events",
+        "subscribeToolExecutionDetail": "Receives tool names, inputs, results and errors. Observes without changing execution.",
         "subscribeTaskState": "Task state events",
         "subscribeTaskStateDetail": "Receives changes to running, waiting, completion, archive and hidden task states.",
         "subscribeActivity": "Observes when the AI is thinking and when it is waiting on you",

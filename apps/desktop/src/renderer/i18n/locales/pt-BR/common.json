@@ -8356,6 +8356,8 @@
         "subscribeTopics": "Observa a atividade da sua sessão (eventos de turnos e sessões, sem conteúdo das mensagens)",
         "subscribeMessage": "Eventos de conteúdo de mensagens",
         "subscribeMessageDetail": "Recebe mensagens salvas do usuário e respostas da IA. Os anexos são lidos e transferidos separadamente.",
+        "subscribeToolExecution": "Eventos de execução de ferramentas",
+        "subscribeToolExecutionDetail": "Recebe nomes, entradas, resultados e erros das ferramentas. Observa sem alterar a execução.",
         "subscribeTaskState": "Eventos de estado de tarefas",
         "subscribeTaskStateDetail": "Recebe alterações de execução, espera, conclusão, arquivamento e ocultação de tarefas.",
         "subscribeActivity": "Observa quando a IA está pensando e quando está esperando por você",
