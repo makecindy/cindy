@@ -9477,7 +9477,7 @@
         },
         "HOST_DATABASE_UNAVAILABLE": {
           "body": "Die Daten dieses Kontos lassen sich nicht öffnen.",
-          "action": "Wenn du kürzlich eine neuere Version von Cindy verwendet hast, aktualisiere Cindy auf diesem Computer zuerst auf die neueste Version, starte dann den Cindy-Hintergrunddienst neu und öffne Cindy erneut. Andernfalls führe cindy-host status aus, um den Grund zu sehen."
+          "action": "Falls du zuletzt eine neuere Cindy-Version genutzt hast, aktualisiere Cindy auf diesem Computer, starte den Cindy-Hintergrunddienst neu und öffne Cindy erneut. Sonst zeigt cindy-host status den Grund."
         },
         "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
           "body": "Der Cindy-Hintergrunddienst konnte beim Start den Anmeldedienst nicht erreichen.",
