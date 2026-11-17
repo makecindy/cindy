@@ -10,14 +10,20 @@ export default {
   cases: {
     default: { about: 'Remote supplier before its first response', data: { remote: true } },
     preparing: { about: 'Remote startup does not display the previous turn metrics', data: { remote: true, preparing: true } },
+    background: { about: 'Background tasks can still be stopped during remote preparation', data: { remote: true, preparing: true, background: true } },
     local: { about: 'Local supplier retains the original thinking label' },
     responding: { about: 'Remote thinking content restores the original label', data: { remote: true, response: true } },
   },
   async check(page, ui) {
-    await page.getByText(await ui.t(ui.data.remote && !ui.data.response
+    if (!ui.data.background) await page.getByText(await ui.t(ui.data.remote && !ui.data.response
       ? 'ccAgent.agentStatus.waitingRemoteResponse' : 'ccAgent.agentStatus.thinking'), { exact: true }).waitFor();
-    if (ui.data.preparing && await page.locator('[data-running-status-meta]').count()) {
+    if (ui.data.preparing && !ui.data.background && await page.locator('[data-running-status-meta]').count()) {
       throw new Error('Preparation must not display stale runtime metrics');
+    }
+    if (ui.data.background) {
+      await page.getByRole('button', { name: await ui.t('chat.backgroundActivity.stopAll'), exact: true }).click();
+      await page.locator('[data-background-stopped="true"]').waitFor();
+      if (await page.getByText('1,234', { exact: true }).count()) throw new Error('Preparation displayed stale tokens');
     }
   },
 };

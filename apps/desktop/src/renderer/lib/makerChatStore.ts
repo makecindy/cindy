@@ -189,7 +189,7 @@ import { setMirrorEffort, setMirrorFast } from '@/state/deviceLinkModelMirror';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
 import { emitAutoTitlePreview, emitAutoTitlePreviewCleared, emitPatch } from '@/lib/sessionsBus';
-import { clearSessionStarting, markSessionStarting } from '@/lib/sessionStartingStore';
+import { clearSessionStarting, markSessionStarting, noteStartingTerminal } from '@/lib/sessionStartingStore';
 import { createLogger } from '@/lib/logger';
 import {
   traceRemoteSendAccepted,
@@ -8606,6 +8606,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         { deferNotification: isLiveStatusRefreshFrame },
       );
       scheduleWakeBridgeReconciliation(sessionId);
+      if (!isTurnContinuationBoundaryEvent(event) && !update.skipTurnReset
+        && !update.isRunning && update.status === 'Done') noteStartingTerminal(sessionId);
       return;
     }
 
@@ -8843,6 +8845,9 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     }
 
     if ((isProductTurnDoneEvent(event) || event.type === 'error') && event.turnScope !== 'background') {
+      if ((event.data as { silentStop?: boolean } | null)?.silentStop !== true) {
+        noteStartingTerminal(sessionId);
+      }
       const state = sessions.get(sessionId);
       const successful = isProductTurnDoneEvent(event) && event.turnOrigin?.kind === 'user'
         && event.turnOrigin.surface !== 'im' && state

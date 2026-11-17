@@ -386,8 +386,8 @@ import {
   type DeferredUiAssignment,
 } from './deferredUiAssignment';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
-import { localizeAgentStatus, remoteResponsePendingStatus } from './lib/localizeAgentStatus';
-import { useStartingSessionIds } from '@/lib/sessionStartingStore';
+import { hasTurnResponse, localizeAgentStatus, remoteResponsePendingStatus, statusAgentLocation } from './lib/localizeAgentStatus';
+import { hasStartingTerminal, useStartingSessionIds } from '@/lib/sessionStartingStore';
 import { findActiveReconnect } from '@/lib/autoResumePresentation';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
 import { hasInlineOverloadRetry } from './lib/inlineRetryError';
@@ -2524,21 +2524,28 @@ function CCAgentSessionContent({
         })
       : t('chat.systemCard.autoResumePending.label')
     : null;
+  const taskLocation = statusAgentLocation(session?.agentDeviceId, pendingAgentDeviceId, false);
+  // A pending switch belongs to the next send, never to an already running turn.
+  const statusAgentDeviceId = statusAgentLocation(session?.agentDeviceId, pendingAgentDeviceId, agentStatus.isRunning);
+  const receivedRemoteResponse = useMemo(() => hasTurnResponse(messages), [messages]);
+  const receivedTerminalStatus = Boolean(sessionId && hasStartingTerminal(sessionId));
   const settledStartingSessions = useMemo(() => new Set(
-    session?.agentDeviceId && sessionId && (agentStatus.isRunning || error || queuePaused || credentialSwitchWait
+    statusAgentDeviceId && sessionId && (agentStatus.isRunning || receivedRemoteResponse || receivedTerminalStatus
+      || error || queuePaused || credentialSwitchWait
       || pendingPermission || pendingAskUser || pendingPluginSetup || pendingPlanReview)
       ? [sessionId] : [],
-  ), [session?.agentDeviceId, sessionId, agentStatus.isRunning, error, queuePaused, credentialSwitchWait,
+  ), [statusAgentDeviceId, sessionId, agentStatus.isRunning, receivedRemoteResponse, receivedTerminalStatus,
+    error, queuePaused, credentialSwitchWait,
     pendingPermission, pendingAskUser, pendingPluginSetup, pendingPlanReview]);
   const startingSessions = useStartingSessionIds(settledStartingSessions);
-  const waitingRemoteStart = Boolean(session?.agentDeviceId && sessionId
+  const waitingRemoteStart = Boolean(statusAgentDeviceId && sessionId
     && startingSessions.has(sessionId) && !settledStartingSessions.has(sessionId));
   const composerStatus = runningWorkflow
     ? runningWorkflow.total > 0
       ? t('ccAgent.agentStatus.waitingWorkflowProgress', runningWorkflow)
       : t('ccAgent.agentStatus.waitingWorkflow')
     : waitingRemoteStart ? 'Waiting for remote response' : remoteResponsePendingStatus(
-        agentStatus.status, session?.agentDeviceId, agentStatus.isRunning,
+        agentStatus.status, statusAgentDeviceId, agentStatus.isRunning,
         messages,
       );
 
@@ -2642,9 +2649,6 @@ function CCAgentSessionContent({
   // 任务视图挂着但看不见(聊天栏收起)时不读配置，重新看得见时再读。
   const { config: modelGroupsConfig } = useModelGroups(modelGroupsInTask && viewVisible);
   // 已挂着「下一条消息换到另一台电脑」时，按那个即将生效的位置挑：换模型时会沿用它，两边必须是同一台。
-  const taskLocation = agentSwitchIntent && agentSwitchIntent.agentDeviceId !== undefined
-    ? agentSwitchIntent.agentDeviceId ?? null
-    : session?.agentDeviceId ?? null;
   const switchTaskByModelGroup = useCallback(async (selection: ModelGroupSelection) => {
     if (!sessionId) return;
     // 和在选择器里点一行同一个顺序保证：已经点了发送就不再换；选路期间占住这个任务的切换门，
@@ -7135,14 +7139,14 @@ export function RunningStatusBar({
           走 LLM, 显示残留 token 计数会误导用户以为也耗了 token。 */}
       <div className="flex min-w-0 items-center justify-self-end gap-2">
         {rightLeadingSlot}
-        {(!preparing && !suppressContent && (!isHidden || ratePanelPinned)) && (
+        {(!suppressContent && (!preparing || backgroundTasksRunning) && (!isHidden || ratePanelPinned)) && (
           <div
             data-running-status-meta="true"
             className="flex min-w-0 items-center gap-[6px]"
             style={ratePanelPinned ? undefined : fadeStyle}
             aria-hidden={isHidden && !ratePanelPinned}
           >
-            {showRatePanel && (
+            {!preparing && showRatePanel && (
               <RunningTokenRatePopover
                 elapsedText={elapsedText}
                 // 工具执行期间(host 已 pause)没有"当前"速度:latestRate 缓存着生成
@@ -7191,7 +7195,7 @@ export function RunningStatusBar({
                   ? t('chat.backgroundActivity.stopping')
                   : t('chat.backgroundActivity.stopAll')}
               </button>
-            ) : workflowWaiting || showRatePanel ? null : (
+            ) : preparing || workflowWaiting || showRatePanel ? null : (
               <>
                 <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                   {elapsedText}

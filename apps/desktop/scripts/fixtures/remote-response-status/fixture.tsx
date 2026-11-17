@@ -6,11 +6,13 @@ import type { UiPageContext } from '../../ui-page/harness/types';
 import type { ChatMessage } from '../../../src/renderer/lib/makerChatStore';
 
 function Subject({ context }: { context: UiPageContext }) {
+  const [stopped, setStopped] = React.useState(false);
   const messages: ChatMessage[] = context.data.response
     ? [{ clientId: 'thinking', role: 'thinking', content: 'Considering the request' } as ChatMessage] : [];
-  return <div className="flex h-screen items-center bg-[var(--surface)] px-6" data-ui-page-subject>
+  return <div className="flex h-screen items-center bg-[var(--surface)] px-6" data-ui-page-subject data-background-stopped={stopped}>
     <RunningStatusBar status={remoteResponsePendingStatus('Thinking...', context.data.remote ? 'remote-device' : null, true, messages)}
       visible preparing={context.data.preparing === true} tokenUsage={context.data.preparing ? 1234 : 0}
+      backgroundTasksRunning={context.data.background === true} onStopBackgroundTasks={() => setStopped(true)}
       startedAt={null} generationReliable={false} inputWidth="100%" />
   </div>;
 }

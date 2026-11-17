@@ -11,6 +11,7 @@ import type { AgentInputProjection, AgentInputQueuedMessage } from '../../shared
 import type { Message, Session } from '@/lib/ccAgent.types';
 import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import { findErrorTailMessage } from '@/lib/errorTailMessage';
+import { clearSessionStarting, hasStartingTerminal, markSessionStarting } from '@/lib/sessionStartingStore';
 
 vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => []),
@@ -702,6 +703,29 @@ describe('makerChatStore text delta batching', () => {
     for (const sessionId of MULTI_SESSION_IDS) makerChatStore.purgeSession(sessionId);
     for (const sessionId of LRU_SESSION_IDS) makerChatStore.purgeSession(sessionId);
     vi.useRealTimers();
+  });
+
+  // #11113 / unit: terminal events can arrive without a running render or text.
+  // Exercise the actual event subscription; retained Done and background/SDK tails do not count.
+  it.each(['done', 'status'])('records a fresh %s terminal for remote preparation across view absence', (type) => {
+    const event = { type, source: 'claude-code', data: type === 'status'
+      ? { isRunning: false, status: 'Done', tokenUsage: 0 } : {} };
+    try {
+      onEvent?.({ sessionId: SESSION_ID, event });
+      markSessionStarting(SESSION_ID);
+      expect(hasStartingTerminal(SESSION_ID)).toBe(false);
+      onEvent?.({ sessionId: SESSION_ID, event: { ...event, turnScope: 'background' } });
+      onEvent?.({ sessionId: SESSION_ID, event: { ...event, turnContinuationId: 1 } });
+      expect(hasStartingTerminal(SESSION_ID)).toBe(false);
+      if (type === 'done') {
+        onEvent?.({ sessionId: SESSION_ID, event: { ...event, data: { silentStop: true } } });
+        expect(hasStartingTerminal(SESSION_ID)).toBe(false);
+      }
+      onEvent?.({ sessionId: SESSION_ID, event });
+      expect(hasStartingTerminal(SESSION_ID)).toBe(true);
+    } finally {
+      clearSessionStarting(SESSION_ID);
+    }
   });
 
   it.each([false, true])('updates the SDK id mirror but persists only in the primary window (sidebar=%s)', async (sidebar) => {

@@ -16,7 +16,9 @@ import {
   absorbSessionStarting,
   clearSessionStarting,
   getStartingSessionIds,
+  hasStartingTerminal,
   markSessionStarting,
+  noteStartingTerminal,
   resetSessionStartingStoreForTests,
   SESSION_STARTING_TTL_MS,
 } from '@/lib/sessionStartingStore';
@@ -47,6 +49,25 @@ describe('sessionStartingStore', () => {
     const first = getStartingSessionIds();
     markSessionStarting('s1');
     expect(getStartingSessionIds()).toBe(first);
+  });
+
+  // Regression: a fast remote Done can precede the view's running render (or remount).
+  // Only events after the starting mark count; old Done labels do not.
+  it('retains a received terminal across view lifetimes and forgets it for the next send', () => {
+    noteStartingTerminal('remote');
+    markSessionStarting('remote');
+    expect(hasStartingTerminal('remote')).toBe(false);
+    noteStartingTerminal('remote');
+    expect(hasStartingTerminal('remote')).toBe(true);
+    markSessionStarting('remote');
+    expect(hasStartingTerminal('remote')).toBe(true);
+    absorbSessionStarting(['remote']);
+    expect(hasStartingTerminal('remote')).toBe(false);
+    markSessionStarting('remote');
+    expect(hasStartingTerminal('remote')).toBe(false);
+    noteStartingTerminal('remote');
+    vi.advanceTimersByTime(SESSION_STARTING_TTL_MS);
+    expect(hasStartingTerminal('remote')).toBe(false);
   });
 
   it('does not absorb unknown ids and can clear a leftover mark', () => {

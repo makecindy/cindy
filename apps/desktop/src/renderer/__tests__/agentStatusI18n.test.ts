@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import '@/i18n';
 import i18n from '@/i18n';
-import { localizeAgentStatus, remoteResponsePendingStatus } from '@/features/cc-agent/lib/localizeAgentStatus';
+import { hasTurnResponse, localizeAgentStatus, remoteResponsePendingStatus, statusAgentLocation } from '@/features/cc-agent/lib/localizeAgentStatus';
 import type { ChatMessage } from '@/lib/makerChatStore';
 
 beforeEach(async () => {
@@ -14,6 +14,13 @@ afterEach(async () => {
 });
 
 describe('localizeAgentStatus', () => {
+  it('uses the pending location only for the next send, with null meaning local', () => {
+    expect(statusAgentLocation(null, 'remote', false)).toBe('remote');
+    expect(statusAgentLocation('remote', null, false)).toBeNull();
+    expect(statusAgentLocation('remote', undefined, false)).toBe('remote');
+    expect(statusAgentLocation(null, 'remote', true)).toBeNull();
+    expect(statusAgentLocation('remote', null, true)).toBe('remote');
+  });
   // Regression: a remote turn with no response looked identical to local thinking.
   // Production status selector + localizer; unit tier, no transport or timer changes.
   it('distinguishes remote response waiting without changing local or terminal states', () => {
@@ -21,6 +28,7 @@ describe('localizeAgentStatus', () => {
       localizeAgentStatus(remoteResponsePendingStatus(raw, device, running, []), i18n.t);
     expect(status('remote-device')).toBe('正在等待远端响应…');
     expect(status('provider-share:share')).toBe('正在等待远端响应…');
+    expect(status('remote-device', true, 'Alice,试试 /issue 给我们提反馈或建议')).toBe('正在等待远端响应…');
     expect(status(null)).toBe('正在思考…');
     expect(status('remote-device', false, 'Done')).toBe('已完成');
     expect(status('remote-device', true, 'Compacting...')).toBe('正在压缩上下文…');
@@ -32,8 +40,10 @@ describe('localizeAgentStatus', () => {
       const message = { clientId: 'activity', role, content: 'response', createdAt: new Date(1100).toISOString() } as ChatMessage;
       const steer = { clientId: 'steer', role: 'user', delivery: 'steer', content: 'more', createdAt: new Date(1200).toISOString() } as ChatMessage;
       expect(remoteResponsePendingStatus('Thinking...', 'remote', true, [message, steer])).toBe('Thinking...');
+      expect(hasTurnResponse([message, steer])).toBe(true);
       const nextInput = { ...steer, clientId: 'next', delivery: undefined };
       expect(remoteResponsePendingStatus('Thinking...', 'remote', true, [message, nextInput])).toBe('Waiting for remote response');
+      expect(hasTurnResponse([message, nextInput])).toBe(false);
     },
   );
 

@@ -22,6 +22,9 @@ export const SESSION_STARTING_TTL_MS = 120_000;
 
 const listeners = new Set<() => void>();
 const startingIds = new Set<string>();
+// Only a terminal event received after mark counts, never a retained Done label.
+// Kept with the starting lifetime so switching away and back cannot lose it.
+const terminalReceived = new Set<string>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 /** 不可变快照,只在 emit 时重建 —— 无变化时返回同一引用。 */
 let snapshot: ReadonlySet<string> = new Set();
@@ -36,6 +39,16 @@ function clearTimer(sessionId: string): void {
   if (timer === undefined) return;
   clearTimeout(timer);
   timers.delete(sessionId);
+}
+
+export function hasStartingTerminal(sessionId: string): boolean {
+  return terminalReceived.has(sessionId);
+}
+
+export function noteStartingTerminal(sessionId: string): void {
+  if (!startingIds.has(sessionId) || terminalReceived.has(sessionId)) return;
+  terminalReceived.add(sessionId);
+  emit();
 }
 
 function subscribe(listener: () => void): () => void {
@@ -64,6 +77,7 @@ export function markSessionStarting(sessionId: string): void {
     sessionId,
     setTimeout(() => {
       timers.delete(sessionId);
+      terminalReceived.delete(sessionId);
       if (!startingIds.delete(sessionId)) return;
       emit();
     }, SESSION_STARTING_TTL_MS),
@@ -74,6 +88,7 @@ export function markSessionStarting(sessionId: string): void {
 export function clearSessionStarting(sessionId: string): void {
   if (!sessionId) return;
   clearTimer(sessionId);
+  terminalReceived.delete(sessionId);
   if (!startingIds.delete(sessionId)) return;
   emit();
 }
@@ -84,6 +99,7 @@ export function absorbSessionStarting(settledSessionIds: Iterable<string>): void
   for (const sessionId of settledSessionIds) {
     if (!startingIds.has(sessionId)) continue;
     clearTimer(sessionId);
+    terminalReceived.delete(sessionId);
     startingIds.delete(sessionId);
     changed = true;
   }
@@ -111,6 +127,7 @@ export function resetSessionStartingStoreForTests(): void {
   for (const timer of timers.values()) clearTimeout(timer);
   timers.clear();
   startingIds.clear();
+  terminalReceived.clear();
   snapshot = new Set();
   listeners.clear();
 }
