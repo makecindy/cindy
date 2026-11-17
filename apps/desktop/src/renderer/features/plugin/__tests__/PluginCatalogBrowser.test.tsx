@@ -107,7 +107,8 @@ it('keeps loaded cards and offset visible while refreshing installation or foreg
   const { cache, view } = fixture(load);
   const mounted = render(view());
   await screen.findByText('Tool 0');
-  // The first card can render before the pagination observer effect mounts.
+  // Cards can commit before the continuation observer subscribes. Trigger the
+  // same viewport event only after the real subscription is ready (#10917 CI).
   await waitFor(() => expect(intersections.size).toBe(1));
   await act(async () => intersections.forEach(callback => callback()));
   await waitFor(() => expect(cache.current.last).toBe(1));

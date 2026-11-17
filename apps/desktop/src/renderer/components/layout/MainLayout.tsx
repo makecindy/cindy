@@ -13,6 +13,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { buildSharedTaskInvitationLink, isSharedTaskPeer } from '@cindy/device-link';
 import { JoinSharedTaskDialog } from '@/features/device-link/JoinSharedTaskDialog';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { setPendingGiftCardCode } from '@/features/billing/giftCardIntent';
 import { useRememberMainEntry } from './MainEntryRedirect';
 import { useTranslation } from 'react-i18next';
 
@@ -764,6 +765,7 @@ export function MainLayout() {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
+        | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => {
@@ -796,6 +798,12 @@ export function MainLayout() {
       }
       if (payload.type === 'plugin') {
         navigate(`/plugins?market=${encodeURIComponent(payload.pluginId)}`);
+        return;
+      }
+      if (payload.type === 'gift-card') {
+        // 兑换码不进路由 URL：暂存在内存，计费页消费意图时取走。
+        setPendingGiftCardCode(payload.code);
+        navigate('/settings?tab=billing&intent=redeem-gift-card');
         return;
       }
       if (payload.type === 'installed-plugin') {
@@ -874,6 +882,11 @@ export function MainLayout() {
   useEffect(() => {
     const unsubscribe = window.electronAPI.onDeepLinkNavigate((payload) => {
       if (payload.type === 'chat-invite' || payload.type === 'chat-invite-malformed') {
+        void pullChatInvitations();
+        return;
+      }
+      // 礼品卡意图同样由 Main 保留到登录之后，和下面几类一样从暂存槽原子取出。
+      if (payload.type === 'gift-card') {
         void pullChatInvitations();
         return;
       }

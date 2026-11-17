@@ -1177,10 +1177,13 @@ describe('auth login-flow reset', () => {
       'reserveLegacyNativeProviderAuthOwnerDetailed(authoritativeOwnerId)',
     );
     expect(reserveBody).toContain(
-      "throw new Error('local profile and native provider ownership reservations disagree')",
+      "if (nativeOwner.status !== 'owned')",
     );
     expect(reserveBody).toContain(
-      'finalize: () => recoverCloudOwnerDataReservations(authoritativeOwnerId)',
+      'nativeOwnerId = nativeOwner.ownerId;',
+    );
+    expect(reserveBody).toContain(
+      'finalize: () => recoverCloudOwnerDataReservations(authoritativeOwnerId, nativeOwnerId)',
     );
 
     const migrationStart = source.indexOf(

@@ -1,7 +1,7 @@
 import { ghostDeclaresHiddenTasks, type InstalledGhost } from '../../shared/ghost.js';
 import type { PluginTaskRequest, PluginTaskResult } from '../../shared/pluginTasks.js';
 import { isPluginTaskPermissionMode, isPluginTeamPlanWithinBudget } from '../../shared/pluginTasks.js';
-import { hasPluginTaskApproval } from './taskCapability.js';
+import { hasPluginTaskApproval, hasPluginTargetApproval } from './taskCapability.js';
 import {
   PLUGIN_ATTACHMENT_KINDS,
   PLUGIN_ATTACHMENT_MAX_BYTES,
@@ -16,6 +16,8 @@ import { MESSAGE_SOURCE_RELAY_LIMITS } from '@cindy/maker-shared/message-source'
 export const PLUGIN_TASK_OPERATIONS = [
   'capabilities',
   'models',
+  'imProjects',
+  'followImProject',
   'setModel',
   'requestWriteAccess',
   'startTeam',
@@ -59,8 +61,10 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
   const allowed: Record<string, string[]> = {
     capabilities: [],
     models: [],
+    imProjects: [],
+    followImProject: ['taskId', 'expectedRevision', 'imProject'],
     setModel: ['taskId', 'expectedRevision', 'route'],
-    create: ['requestKey', 'title', 'autoTitle', 'route', 'permissionMode', 'isolatedWorkspace', 'callId', 'hidden'],
+    create: ['requestKey', 'title', 'autoTitle', 'route', 'permissionMode', 'isolatedWorkspace', 'callId', 'hidden', 'imProject'],
     list: ['after', 'limit'],
     get: ['taskId'],
     requestWriteAccess: ['taskId', 'mode'],
@@ -83,6 +87,11 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
     return false;
   if (kind === 'requestWriteAccess' && value.mode !== undefined && !['acceptEdits', 'auto'].includes(String(value.mode))) return false;
   const requires = (key: string) => text(value[key], 128);
+  if (value.imProject !== undefined && (!text(value.imProject, 4096) || (value.imProject as string).includes('\0'))) return false;
+  if (kind === 'create' && value.imProject !== undefined &&
+    ['route', 'permissionMode', 'callId', 'isolatedWorkspace'].some(key => value[key] !== undefined)) return false;
+  if (kind === 'followImProject' && (!requires('taskId') || !text(value.imProject, 4096) ||
+    !Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0)) return false;
   if (['create', 'send', 'cancel'].includes(value.kind) && !requires('requestKey')) return false;
   if (['get', 'setModel', 'send', 'listRuns', 'readMessages', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'setHidden', 'archive'].includes(value.kind) && !requires('taskId'))
     return false;
@@ -166,6 +175,7 @@ export async function handlePluginTaskRequest(
     handler: PluginTaskHandler | null;
     isCurrent: () => boolean;
     ensureAuthorized?: () => Promise<boolean>;
+    ensureTargetsAuthorized?: () => Promise<boolean>;
   },
 ): Promise<PluginTaskResult> {
   const permitted = () =>
@@ -180,6 +190,14 @@ export async function handlePluginTaskRequest(
     try { await deps.ensureAuthorized(); } catch { /* No UI or persistence failure grants nothing. */ }
   }
   if (!permitted()) return error('PERMISSION_DENIED', 'Plugin task capability is unavailable');
+  const needsTargets = value.kind === 'imProjects' || value.kind === 'followImProject' ||
+    (value.kind === 'create' && value.imProject !== undefined);
+  if (needsTargets && !hasPluginTargetApproval(deps.getGhost(pluginId)) &&
+    deps.getGhost(pluginId)?.manifest.agent?.targets === true && deps.ensureTargetsAuthorized) {
+    try { await deps.ensureTargetsAuthorized(); } catch { /* The existing Host consent flow alone grants access. */ }
+  }
+  if (needsTargets && (!permitted() || !hasPluginTargetApproval(deps.getGhost(pluginId))))
+    return error('PERMISSION_DENIED', 'Shared IM projects require agent.targets approval');
   // Background tasks need their own manifest declaration (agent.hiddenTasks with tasks);
   // hidden:false on create is the default and stays available to every tasks plugin.
   const declaresHiddenTasks = () => ghostDeclaresHiddenTasks(deps.getGhost(pluginId)?.manifest);
@@ -203,6 +221,7 @@ export async function handlePluginTaskRequest(
         messageRelay: true,
         autoTitle: true,
         createPermissionMode: true,
+        imProjects: true,
         messageAttachments: {
           kinds: PLUGIN_ATTACHMENT_KINDS, maxCount: PLUGIN_ATTACHMENT_MAX_COUNT, maxBytes: PLUGIN_ATTACHMENT_MAX_BYTES,
           maxItemBytes: PLUGIN_ATTACHMENT_MAX_ITEM_BYTES, attachmentOnly: true,
@@ -215,7 +234,8 @@ export async function handlePluginTaskRequest(
   if (!deps.handler) return error('HOST_NOT_READY', 'Task service is not ready', true);
   try {
     const data = await deps.handler(pluginId, value);
-    if (!permitted()) return error('PERMISSION_DENIED', 'Plugin task capability is unavailable');
+    if (!permitted() || (needsTargets && !hasPluginTargetApproval(deps.getGhost(pluginId))))
+      return error('PERMISSION_DENIED', 'Plugin task capability is unavailable');
     return { ok: true, data };
   } catch (err) {
     // Only explicit public errors cross the sandbox boundary, never internal DB/path errors.

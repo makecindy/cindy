@@ -5042,6 +5042,98 @@ describe('native account assignment on the executing computer', () => {
   });
 });
 
+// #10692: existing disabled-account cases persist task/native bindings first. These unit
+// cases enter real pre-send recovery with only host-owned history metadata, then start
+// through the production account wrapper; no credentials, disk history or native CLI are used.
+describe('unbound Codex history account recovery', () => {
+  function fixture() {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')],
+      legacyCodexAccounts: { 'openai-old': 'imported' } };
+    const row = { status: 'active', providerId: 'openai', agentKind: 'codex',
+      model: 'gpt-6.1-sol', sdkSessionId: 'legacy' } as SessionRowSnapshot;
+    const deps = {
+      readSession: vi.fn(async () => row),
+      isRunning: vi.fn(() => false),
+      resolveCodexHistoryHome: vi.fn(async (): Promise<string | undefined> => 'openai/imported'),
+      rebuild: vi.fn(async (_id: string, assertCurrent: () => void) => {
+        assertCurrent();
+        row.sdkSessionId = null;
+      }),
+    };
+    return { row, deps };
+  }
+  it.each(['removed', 'paused'] as const)('hands off %s history before starting a fresh native session', async cause => {
+    const { row, deps } = fixture();
+    if (cause === 'paused') h.pools.openai!.accounts.push({ ...account('imported'), paused: true });
+    const start = vi.fn(async (_options: StartSessionOptions) => ({ id: 'replacement-native', close: async () => {} }));
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: start } as unknown as BaseAgent,
+      { getState: h.legacyRead, resolveCodexHistoryHome: deps.resolveCodexHistoryHome });
+    // Original failure is produced by the actual allocator, not an injected startup error.
+    await expect(agent.startSession({ providerId: 'openai', sessionId: 'old-task',
+      resumeSessionId: 'legacy', model: row.model! } as StartSessionOptions)).rejects.toThrow('SUBSCRIPTION_ACCOUNT_UNAVAILABLE');
+    expect(start).not.toHaveBeenCalled();
+    expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(true);
+    expect(row.sdkSessionId).toBeNull();
+    expect(deps.rebuild).toHaveBeenCalledOnce();
+    expect(h.bindings.get('task:old-task')?.accountId).toBe('second');
+    expect(h.bindings.has('native:legacy')).toBe(false);
+    expect(h.pools.openai!.legacyCodexAccounts).toEqual({ 'openai-old': 'imported' });
+    const handle = await agent.startSession({ providerId: row.providerId, sessionId: 'old-task',
+      resumeSessionId: row.sdkSessionId ?? undefined, model: row.model! } as StartSessionOptions);
+    expect(start).toHaveBeenCalledOnce();
+    expect(start.mock.calls[0][0].resumeSessionId).toBeUndefined();
+    expect(start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/second');
+    await handle.close();
+    expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(false);
+    expect(deps.rebuild).toHaveBeenCalledOnce();
+  });
+  it.each(['healthy', 'unknown', 'new-task', 'bound', 'ssh', 'remote-agent', 'other-provider', 'other-engine'] as const)(
+    'preserves existing routing when %s', async condition => {
+      const { row, deps } = fixture();
+      if (condition === 'healthy') h.pools.openai!.accounts.push(account('imported'));
+      if (condition === 'unknown') deps.resolveCodexHistoryHome.mockResolvedValue('/unregistered-private-home');
+      if (condition === 'new-task') row.sdkSessionId = null;
+      if (condition === 'bound') h.bindings.set('task:old-task', { providerId: 'openai', accountId: 'second' });
+      if (condition === 'ssh') row.remoteHostId = 'ssh-host';
+      if (condition === 'remote-agent') row.agentDeviceId = 'other-computer';
+      if (condition === 'other-provider') row.providerId = 'custom';
+      if (condition === 'other-engine') row.agentKind = 'pi';
+      const before = new Map(h.bindings);
+      expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(false);
+      expect(deps.rebuild).not.toHaveBeenCalled();
+      expect(h.bindings).toEqual(before);
+      if (!['healthy', 'unknown'].includes(condition)) expect(deps.resolveCodexHistoryHome).not.toHaveBeenCalled();
+    });
+  it('does not overwrite a task rebound within the same provider while preparing the handoff', async () => {
+    const { row, deps } = fixture();
+    deps.rebuild.mockImplementation(async (_id, assertCurrent) => {
+      h.bindings.set('task:old-task', { providerId: 'openai', accountId: 'second' });
+      assertCurrent();
+    });
+    await expect(prepareSubscriptionAccountForSend('old-task', deps)).rejects.toThrow('account changed');
+    expect(row.sdkSessionId).toBe('legacy');
+    expect(h.bindings.get('task:old-task')?.accountId).toBe('second');
+    expect(h.bindings.has('native:legacy')).toBe(false);
+  });
+  it.each(['lookup-failed', 'owner-changed', 'route-changed', 'busy', 'no-replacement', 'rebuild-failed'] as const)(
+    'keeps old history and task ownership on %s', async failure => {
+      const { row, deps } = fixture();
+      if (failure === 'lookup-failed') deps.resolveCodexHistoryHome.mockRejectedValue(new Error('history unavailable'));
+      if (failure === 'owner-changed' || failure === 'route-changed') deps.resolveCodexHistoryHome.mockImplementation(async () => {
+        if (failure === 'owner-changed') h.owner = 'other-owner';
+        else row.providerId = 'custom';
+        return 'openai/imported';
+      });
+      if (failure === 'busy') deps.isRunning.mockReturnValue(true);
+      if (failure === 'no-replacement') h.pools.openai!.accounts[0].paused = true;
+      if (failure === 'rebuild-failed') deps.rebuild.mockRejectedValue(new Error('handoff failed'));
+      await expect(prepareSubscriptionAccountForSend('old-task', deps)).rejects.toThrow();
+      expect(row.sdkSessionId).toBe('legacy');
+      expect(h.bindings.size).toBe(0);
+      if (failure !== 'rebuild-failed') expect(deps.rebuild).not.toHaveBeenCalled();
+    });
+});
+
 // Unit regression (2026-11-11): retry reused a disabled account despite another account
 // having quota. Existing lease tests did not exercise pre-send context transfer.
 // The production entry must change only task ownership after durable history recovery.
