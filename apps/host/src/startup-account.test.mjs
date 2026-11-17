@@ -451,6 +451,69 @@ for (const [name, start] of [
   });
 }
 
+/**
+ * The environment of a test's `cindy-host serve` child, so that it reaches no real profile, sign-in or setting
+ * whatever terminal runs the test (a Cindy task terminal carries XDT_* and CINDY_* variables such as
+ * XDT_OFFICIAL_SHARED_PROFILE). Drops every XDT_ / CINDY_ variable and NODE_OPTIONS / NODE_PATH (any case: Windows
+ * keys are case-insensitive), points every home, application-data and temporary directory into `root`, then sets
+ * back only what the test passes. `bin` goes first on PATH (stand-in programs).
+ */
+function isolatedServeEnv(root, bin, set) {
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (/^(XDT_|CINDY_)/i.test(key) || /^NODE_(OPTIONS|PATH)$/i.test(key)) continue;
+    env[key] = value;
+  }
+  const put = (key, value) => {
+    for (const existing of Object.keys(env)) if (existing.toUpperCase() === key.toUpperCase()) delete env[existing];
+    env[key] = value;
+  };
+  const dir = (name) => { const full = path.join(root, name); mkdirSync(full, { recursive: true }); return full; };
+  const pathKey = Object.keys(process.env).find(key => key.toUpperCase() === 'PATH') ?? 'PATH';
+  put('PATH', `${bin}${path.delimiter}${process.env[pathKey] ?? ''}`);
+  const home = dir('home');
+  for (const key of ['HOME', 'USERPROFILE']) put(key, home);
+  const temp = dir('temp');
+  for (const key of ['TMPDIR', 'TEMP', 'TMP']) put(key, temp);
+  put('APPDATA', dir('app-data'));
+  put('LOCALAPPDATA', dir('local-app-data'));
+  for (const [key, name] of [['XDG_CONFIG_HOME', 'xdg-config'], ['XDG_DATA_HOME', 'xdg-data'], ['XDG_CACHE_HOME', 'xdg-cache'],
+    ['XDG_STATE_HOME', 'xdg-state']]) put(key, dir(name));
+  for (const [key, value] of Object.entries(set)) put(key, value);
+  return env;
+}
+
+/*
+ * Test value (reviewer 2026-11-18): the serve child of the next test cannot reach real data from any terminal.
+ * Production entry: the environment isolatedServeEnv builds, as a real child process reads it. Minimal input:
+ * variables a Cindy task terminal carries. Tier: unit (one short child process).
+ */
+test('the serve child environment carries no XDT_ or CINDY_ variable of the terminal and no real directory', async t => {
+  const planted = { XDT_OFFICIAL_SHARED_PROFILE: '/should/not/leak', CINDY_SOMETHING: 'leak', CINDY_HOST_DATA_DIR: '/should/not/leak' };
+  const before = Object.fromEntries(Object.keys(planted).map(key => [key, process.env[key]]));
+  Object.assign(process.env, planted);
+  const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-serve-env-'));
+  t.after(() => {
+    for (const [key, value] of Object.entries(before)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    rmSync(root, { recursive: true, force: true });
+  });
+  const env = isolatedServeEnv(root, path.join(root, 'bin'), { CINDY_HOST_DATA_DIR: path.join(root, 'profile') });
+  const child = spawn(process.execPath, ['-e', 'process.stdout.write(JSON.stringify(process.env))'], { env, stdio: ['ignore', 'pipe', 'inherit'] });
+  let out = '';
+  child.stdout.on('data', chunk => { out += chunk; });
+  await once(child, 'exit');
+  const seen = JSON.parse(out);
+  const upper = Object.fromEntries(Object.entries(seen).map(([key, value]) => [key.toUpperCase(), value]));
+  assert.deepEqual(Object.keys(upper).filter(key => /^(XDT_|CINDY_)/.test(key)), ['CINDY_HOST_DATA_DIR']);
+  assert.equal(upper.CINDY_HOST_DATA_DIR, path.join(root, 'profile'));
+  assert.ok(!out.includes('/should/not/leak'), 'no planted value reaches the child');
+  for (const key of ['HOME', 'USERPROFILE', 'TMPDIR', 'TEMP', 'TMP', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+    'XDG_CACHE_HOME', 'XDG_STATE_HOME']) {
+    assert.ok(upper[key]?.startsWith(root), `${key} is inside the temporary directory`);
+  }
+  assert.ok(upper.PATH.startsWith(path.join(root, 'bin') + path.delimiter));
+});
+
 /*
  * Test value (甲, reviewer 2026-11-18): the reason of a failed start survives a refresh.
  * - Bug: a window in client mode calls /api/auth/refresh as it starts (authManager initialize). With no
@@ -467,31 +530,26 @@ for (const [name, start] of [
  *   that a record file exists (credentials/store.mjs read; the native codec runs only to decrypt). On Linux
  *   building the store looks up the keyring at once (store.mjs createCredentialStore, secret-tool); a stand-in
  *   `secret-tool` first on PATH answers instead, so no real keyring is read and the session ends as elsewhere.
+ * - Environment: isolatedServeEnv (asserted by the test above).
  * - Tier: unit (loopback HTTP and one child process; no network, nothing outside the temporary directory).
  */
 test('a refresh after a failed start keeps the start-failure reason (no saved session)', async t => {
   const { acquireHostRuntimeLease } = await import('./runtime-lock.ts');
   const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-reason-'));
   const profile = path.join(root, 'profile');
-  const home = path.join(root, 'home');
   mkdirSync(profile, { recursive: true, mode: 0o700 });
-  mkdirSync(home, { recursive: true });
   const bin = path.join(root, 'bin');
   mkdirSync(bin);
   writeFileSync(path.join(bin, 'secret-tool'), `#!${['', 'bin', 'sh'].join('/')}\necho cindy-host-start-reason-test-secret\n`, { mode: 0o755 });
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) if (key.startsWith('CINDY_HOST_') || key === 'XDT_USER_DATA_DIR') delete env[key];
-  delete env.NODE_OPTIONS;
-  delete env.NODE_PATH;
   const lease = acquireHostRuntimeLease(profile, 'owner-locked');
   assert.equal(lease.held, true);
   const hostDir = path.resolve(new URL('..', import.meta.url).pathname);
   const child = spawn(process.execPath, ['--import', 'tsx', '--import', './src/loaders/register-raw.mjs', 'src/main.ts', 'serve'], {
     cwd: hostDir, stdio: ['ignore', 'ignore', 'pipe'],
-    env: { ...env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, HOME: home, USERPROFILE: home, TMPDIR: root, CINDY_HOST_DATA_DIR: profile,
+    env: isolatedServeEnv(root, bin, { CINDY_HOST_DATA_DIR: profile, CINDY_HOST_APP_DATA_DIR: path.join(root, 'app-data'),
       CINDY_HOST_OWNER: 'owner-locked', CINDY_HOST_PORT: '0', CINDY_HOST_KEYRING_APPLICATION: 'cindy-host-start-reason-test',
       // Anything that leaves the machine fails at once.
-      HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost', NODE_USE_ENV_PROXY: '1' },
+      HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost', NODE_USE_ENV_PROXY: '1' }),
   });
   let stderr = '';
   child.stderr.on('data', chunk => { stderr += chunk; });
