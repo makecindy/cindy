@@ -635,6 +635,7 @@
     "dismissNotice": "Tutup pemberitahuan",
     "ignore": "Abaikan",
     "executionResultUnavailable": "Hasil eksekusi tidak bisa diambil, jadi penyambungan otomatis dihentikan. Minta asisten memeriksa hasil eksekusi yang sudah ada.",
+    "unexecutedToolMarkup": "Model menulis panggilan tool sebagai teks; hasil eksekusinya tidak dapat dipastikan dan ronde ini belum selesai.",
     "silentStopExhausted": "Respons kosong terdeteksi; pelanjutan otomatis dijeda.",
     "outputLimit": "Model sudah mencapai batas panjang output, jadi balasan giliran ini mungkin tidak lengkap. Kirim pesan baru untuk melanjutkan; kalau terus terjadi, turunkan tingkat penalaran atau padatkan dulu riwayat obrolan.",
     "outputLimitReasoning": "Proses berpikir menghabiskan sebagian besar anggaran output, jadi balasannya mungkin tidak lengkap. Sebaiknya turunkan tingkat penalaran, atau padatkan dulu riwayat obrolan, lalu lanjutkan.",
