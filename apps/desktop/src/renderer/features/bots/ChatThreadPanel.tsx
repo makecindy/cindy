@@ -716,7 +716,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
               { key: 'root', messageId: root?.id },
               ...(hasMore ? [{ key: 'earlier' }] : []),
               ...liveEntries.map(entry => entry.kind === 'work'
-                ? { key: `work:${entry.value.executionId ?? entry.value.member.botId}` }
+                ? { key: `work:${entry.value.executionId ?? entry.value.member.botId}`, keepMounted: true }
                 : { key: adoptedKeysRef.current.get(entry.value.id) ?? entry.value.id, messageId: entry.value.id }),
             ]} scrollRef={scrollRef} following={stickToBottomRef} sharing={sharing} focus={focus} onLocated={onLocated}
               renderItem={itemIndex => {

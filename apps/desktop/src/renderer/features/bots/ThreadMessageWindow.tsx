@@ -1,8 +1,8 @@
 import { defaultRangeExtractor, useVirtualizer, type Range } from '@tanstack/react-virtual';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MutableRefObject, type ReactNode, type RefObject } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode, type RefObject } from 'react';
 import { findThreadMessageElement } from './BotGroupThreadViews';
 
-interface ThreadWindowItem { key: string; messageId?: string }
+interface ThreadWindowItem { key: string; messageId?: string; keepMounted?: boolean }
 // Keep a single server page in the ordinary flow; window accumulated history.
 const WINDOW_THRESHOLD = 64;
 const ESTIMATED_ROW_HEIGHT = 160;
@@ -21,9 +21,12 @@ export function ThreadMessageWindow({ items, renderItem, scrollRef, following, s
   const [selecting, setSelecting] = useState(false);
   const [scrollMargin, setScrollMargin] = useState<number>();
   const virtualized = items.length > WINDOW_THRESHOLD;
+  // Live work owns pending interaction forms; scrolling must not discard their local drafts.
+  const retained = useMemo(() => items.flatMap((item, index) => item.keepMounted ? [index] : []), [items]);
   // Sharing/export and native multi-message selection must retain all selected DOM.
   const rangeExtractor = useCallback((range: Range) => sharing || selecting
-    ? Array.from({ length: range.count }, (_, index) => index) : defaultRangeExtractor(range), [sharing, selecting]);
+    ? Array.from({ length: range.count }, (_, index) => index)
+    : [...new Set([...defaultRangeExtractor(range), ...retained])].sort((a, b) => a - b), [sharing, selecting, retained]);
   const getItemKey = useCallback((index: number) => items[index]!.key, [items]);
   const virtualizer = useVirtualizer({
     count: items.length,
@@ -70,17 +73,18 @@ export function ThreadMessageWindow({ items, renderItem, scrollRef, following, s
     }
   }, [focus, focusIndex, following, onLocated, virtualized, virtualizer, visible, scrollMargin]);
 
-  const first = visible[0];
   const last = visible[visible.length - 1];
   const full = !virtualized || sharing || selecting;
   const indices = full ? items.map((_, index) => index) : visible.map(item => item.index);
   return <div ref={containerRef} className="flex min-w-0 flex-col" data-thread-window={virtualized ? 'virtual' : 'full'}>
     {/* Flow spacers preserve native selection and existing message geometry; rows are not transformed. */}
-    <div aria-hidden style={{ height: !full && first ? Math.max(0, first.start - (scrollMargin ?? 0)) : 0, flexShrink: 0 }} />
-    {indices.map(index => <div key={items[index]!.key} data-index={index} data-thread-window-row={items[index]!.key}
+    {indices.map((index, position) => <Fragment key={items[index]!.key}>
+      <div aria-hidden style={{ height: !full ? Math.max(0, visible[position]!.start - (visible[position - 1]?.end ?? scrollMargin ?? 0)) : 0, flexShrink: 0 }} />
+      <div data-index={index} data-thread-window-row={items[index]!.key}
       ref={virtualized ? virtualizer.measureElement : undefined} className="flex min-w-0 flex-col">
       {renderItem(index)}
-    </div>)}
+      </div>
+    </Fragment>)}
     <div aria-hidden style={{ height: !full && last ? Math.max(0, virtualizer.getTotalSize() - last.end + (scrollMargin ?? 0)) : 0, flexShrink: 0 }} />
   </div>;
 }
