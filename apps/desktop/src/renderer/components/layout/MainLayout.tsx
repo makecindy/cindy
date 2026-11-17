@@ -885,7 +885,12 @@ export function MainLayout() {
         void pullChatInvitations();
         return;
       }
-      if (payload.type !== 'provider-import' && payload.type !== 'shared-task-join' && payload.type !== 'provider-share-join' && payload.type !== 'plugin' && payload.type !== 'local-plugin-share' && payload.type !== 'gift-card') {
+      // 礼品卡意图同样由 Main 保留到登录之后，和下面几类一样从暂存槽原子取出。
+      if (payload.type === 'gift-card') {
+        void pullChatInvitations();
+        return;
+      }
+      if (payload.type !== 'provider-import' && payload.type !== 'shared-task-join' && payload.type !== 'provider-share-join' && payload.type !== 'plugin' && payload.type !== 'local-plugin-share') {
         handleDeepLinkPayload(payload);
         return;
       }
