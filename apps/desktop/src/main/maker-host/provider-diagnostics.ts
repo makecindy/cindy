@@ -152,13 +152,19 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
       headers['x-api-key'] = spec.apiKey;
       headers['authorization'] = `Bearer ${spec.apiKey}`;
     }
+    // [1m] 是 cc 侧 wire 约定(toSdkModelString 按目录 ≥1M 窗口追加),cc 内核出站前
+    // 一律剥掉,上游只见裸 ID。探测直发 HTTP 不经 cc,须同口径归一,否则裸 ID 上游
+    // (如智谱 /api/anthropic)按「模型不存在」拒绝,把可用连接误报为失败(#7792 同类)。
+    const wireModel = spec.modelId.endsWith('[1m]')
+      ? spec.modelId.slice(0, -'[1m]'.length)
+      : spec.modelId;
     return {
       url: joinAnthropicMessagesUrl(spec.baseUrl, spec.requestPath ?? '/v1/messages'),
       init: {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          model: spec.modelId,
+          model: wireModel,
           max_tokens: 1,
           messages: [{ role: 'user', content: 'ping' }],
         }),
