@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   taskInboxSection,
+  taskInboxSignalsFromRank,
   taskSnoozeUntil,
   type TaskInboxSection,
 } from '@cindy/maker-shared/live-task-priority';
@@ -11,7 +12,11 @@ import type { Session } from '@/lib/ccAgent.types';
 import { SessionEntryRows, type SessionEntryRowsProps } from './SessionEntryList';
 import { SectionCollapse } from './SectionCollapse';
 import { sessionRowKey } from './sessionRowKey';
-import { sortSessionsForMainList, type MainListPriorityContext } from '../lib/mainListModel';
+import {
+  sessionPriorityRank,
+  sortSessionsForMainList,
+  type MainListPriorityContext,
+} from '../lib/mainListModel';
 
 type Props = Omit<SessionEntryRowsProps, 'entries'> & {
   sessions: readonly Session[];
@@ -48,8 +53,7 @@ export function TaskInbox({ sessions, priorityContext, ...rows }: Props) {
           taskInboxSection(
             session,
             {
-              waiting: priorityContext.waitingSessionIds?.has(session.id) ?? false,
-              running: priorityContext.runningSessionIds.has(session.id),
+              ...taskInboxSignalsFromRank(sessionPriorityRank(session, priorityContext)),
               following: followingSessions.has(session),
             },
             now,

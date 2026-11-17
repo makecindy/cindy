@@ -43,12 +43,15 @@ describe('task inbox lifecycle', () => {
   });
 });
 
-it('keeps active follow-up in working between runs, behind user attention, snooze and archive', () => {
+it('keeps a quiet follow-up in working; results, waiting, snooze and archive take precedence', () => {
   const now = Date.parse('2026-11-13T08:00:00Z');
   const signals = { running: false, waiting: false, following: true };
   expect(taskInboxSection({}, signals, now)).toBe('working');
   expect(taskInboxSection({}, { ...signals, following: false }, now)).toBe('inbox');
   expect(taskInboxSection({}, { ...signals, waiting: true }, now)).toBe('inbox');
+  // Bug 2026-11-17: a followed task stayed in working after a round left a result.
+  expect(taskInboxSection({}, { ...signals, unread: true }, now)).toBe('inbox');
+  expect(taskInboxSection({}, { ...signals, unread: true, running: true }, now)).toBe('working');
   expect(taskInboxSection({ snoozedUntil: new Date(now + 1000).toISOString() }, signals, now)).toBe('snoozed');
   expect(taskInboxSection({ status: 'archived' }, signals, now)).toBe('archived');
 });

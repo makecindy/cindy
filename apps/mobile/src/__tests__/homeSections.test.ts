@@ -336,7 +336,7 @@ it('builds inbox sections and recomputes snooze expiry without losing collapsed 
   expect(buildInboxHomeSections(home, new Set(), signals, now + 3600000).find(s => s.key === 'inbox-inbox')?.count).toBe(4);
 });
 
-it('puts a followed task in working between runs and returns it to inbox when paused or waiting', () => {
+it('puts a quiet followed task in working and returns it to inbox for results, waiting or pause', () => {
   const item = listItem('followed', '2026-11-13T08:00:00Z');
   item.scheduleInfo = { scheduleId: 'schedule', scheduleName: 'Follow', hasActiveFollowUp: true,
     running: false, latestRunAt: 0, unreadRunIds: [], unreadCount: 0 };
@@ -347,6 +347,18 @@ it('puts a followed task in working between runs and returns it to inbox when pa
   signals.waitingSessionIds.add('followed');
   expect(workingCount()).toBe(0);
   signals.waitingSessionIds.clear();
+  // A finished round with a result for the user goes back to inbox even while followed.
+  item.scheduleInfo.unreadRunIds = ['run-1'];
+  item.scheduleInfo.unreadCount = 1;
+  signals.unreadSessionIds.add('followed');
+  expect(workingCount()).toBe(0);
+  // Opening it clears unread, but the viewed task keeps its section until the user leaves.
+  signals.unreadSessionIds.clear();
+  item.scheduleInfo.unreadRunIds = [];
+  item.scheduleInfo.unreadCount = 0;
+  expect(buildInboxHomeSections(home, new Set(), { ...signals, heldPriorityRanks: new Map([['followed', 1]]) },
+    Date.now()).find(s => s.key === 'inbox-working')?.count).toBe(0);
+  expect(workingCount()).toBe(1);
   item.scheduleInfo.hasActiveFollowUp = false;
   expect(workingCount()).toBe(0);
 });

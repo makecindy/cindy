@@ -1,9 +1,10 @@
-import { taskInboxSection, taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
+import { taskInboxSection, taskInboxSignalsFromRank, taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
 import { i18n } from '@/i18n';
 import { compareSessionListStrings } from '@cindy/maker-shared/session-list';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from './mobileHome';
 import {
   activityMsFromIso,
+  collectHomePriorityContext,
   EMPTY_HOME_PRIORITY_CONTEXT,
   sessionPriorityRank,
   sessionPriorityRecencyMs,
@@ -390,6 +391,17 @@ export function buildInboxHomeSections(
   });
   const sections: HomeSection[] = [];
   const groups = new Map<string, HomeRow[]>(['inbox', 'working', 'snoozed', 'archived'].map(key => [key, []]));
+  // Folded automation runs are listed one by one here, so their own unread/waiting signals count.
+  const members = original.flatMap(section => section.data)
+    .flatMap(row => row.kind === 'session' ? row.item.automationGroup?.items ?? [] : []);
+  const memberContext = collectHomePriorityContext(members, priorityContext.runningSessionIds, {
+    heldPriorityRanks: new Map(), recentlyViewedAtMs: new Map(),
+  });
+  const ctx: HomeListPriorityContext = {
+    ...priorityContext,
+    unreadSessionIds: new Set([...priorityContext.unreadSessionIds, ...memberContext.unreadSessionIds]),
+    waitingSessionIds: new Set([...priorityContext.waitingSessionIds, ...memberContext.waitingSessionIds]),
+  };
   for (const section of original) {
     if (section.key === 'pinned') continue;
     for (const row of section.data) {
@@ -397,9 +409,8 @@ export function buildInboxHomeSections(
       for (const item of row.item.automationGroup?.items ?? [row.item]) {
         const task = item.session;
         const group = taskInboxSection(task, {
-          running: priorityContext.runningSessionIds.has(task.id),
+          ...taskInboxSignalsFromRank(sessionPriorityRank(task.id, ctx)),
           following: item.scheduleInfo?.hasActiveFollowUp === true,
-          waiting: priorityContext.waitingSessionIds.has(task.id),
         }, nowMs);
         const until = taskSnoozeUntil(task);
         groups.get(group)!.push({ ...row, key: `inbox:${task.deviceLinkDeviceId ?? ''}:${task.id}`, item,
@@ -411,7 +422,7 @@ export function buildInboxHomeSections(
     data.sort((a, b) => a.kind === 'session' && b.kind === 'session'
       ? group === 'snoozed'
         ? taskSnoozeUntil(a.item.session) - taskSnoozeUntil(b.item.session)
-        : compareSessionItemsByPriority(a.item, b.item, priorityContext)
+        : compareSessionItemsByPriority(a.item, b.item, ctx)
       : 0);
     const key = `inbox-${group}`;
     sections.push({ key, title: i18n.t(`devices.list.menu.inbox.${group}`), count: data.length,
