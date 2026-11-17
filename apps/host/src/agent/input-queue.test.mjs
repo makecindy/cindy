@@ -116,8 +116,11 @@ ensureUnitOwner();
 
 function createFakeMaker() {
   const sessions = new Map();
+  // Told of every message a runtime of this fake receives (the enqueue helper waits on it).
+  const sendListeners = new Set();
   return {
     sessions,
+    onSent(listener) { sendListeners.add(listener); return () => sendListeners.delete(listener); },
     getSession(id) {
       return sessions.get(id) ?? null;
     },
@@ -174,6 +177,7 @@ function createFakeMaker() {
           session.running = true;
           session.sent.push(typeof text === 'string' ? text : text.content);
           session.sendOptions.push(opts);
+          for (const listener of [...sendListeners]) listener(session.id);
           return { accepted: true };
         },
         async abort() {
@@ -198,9 +202,11 @@ function createHarness(overrides = {}) {
   const maker = createFakeMaker();
   const events = [];
   const persisted = [];
+  // Every event the queue publishes reaches the hub a test passes (or `events`) and these listeners.
+  const hubListeners = new Set();
+  const hub = overrides.hub ?? { publish: (event) => events.push(event) };
   const queue = createInputQueue({
     getMaker: () => maker,
-    hub: { publish: (event) => events.push(event) },
     // Unit fixture: all bound working directories exist; filesystem-specific
     // regressions below override this port with the directory state they need.
     statDirectory: async () => ({ isDirectory: () => true }),
@@ -222,8 +228,10 @@ function createHarness(overrides = {}) {
     // Fixture does not test admission (夹具不测准入): the runtime start admission lets every start through.
     admitLocalRoute: async () => {},
     ...overrides,
+    hub: { publish(event) { hub.publish(event); for (const listener of [...hubListeners]) listener(event); } },
   });
-  return { maker, events, persisted, queue };
+  const onHubEvent = listener => { hubListeners.add(listener); return () => hubListeners.delete(listener); };
+  return { maker, events, persisted, queue, onHubEvent };
 }
 
 const waitFor = async (check) => {
@@ -564,13 +572,48 @@ test('stopping a task cancels the real file-confirmation bridge before awaiting 
   await h.queue.dispose();
 });
 
-// Durable enqueue acknowledges acceptance, not vendor startup. Observe the
-// actual send boundary before asserting agent side effects.
+// Durable enqueue acknowledges acceptance, not vendor startup. Observe the actual send boundary before
+// asserting agent side effects: this waits for the event that ends the send's start, not for a number of
+// polls. A message reaches the engine only after the send's working-directory check, whose filesystem
+// probes (workdir-probe-host, bounded by their own 5 s deadline) take as long as the machine needs, so a
+// poll budget (waitFor) ran out under load while the send was still on its way. The events:
+// - the fake engine received a message for the task (createFakeMaker onSent): resolves;
+// - the queue settled the input without one (its projection carries an error, or a recovery point names
+//   the input): fails at once, with the projection;
+// - neither within ENQUEUE_EVENT_LIMIT_MS (real time; past the probes' own deadline): fails, naming the
+//   event that did not come, with the projection.
+const ENQUEUE_EVENT_LIMIT_MS = 30_000;
+// The real timer, taken before any test mocks setTimeout: ticking a mocked clock must not fire this limit.
+const setRealTimeout = globalThis.setTimeout;
+const clearRealTimeout = globalThis.clearTimeout;
 async function enqueue(h, id, item) {
-  await h.queue.enqueue(id, item);
-  await waitFor(() => h.maker.getSession(id)?.sent.length > 0).catch(error => {
-    throw new Error(`${error.message}: ${JSON.stringify(h.queue.projection(id))}`);
+  const reached = () => (h.maker.getSession(id)?.sent.length ?? 0) > 0;
+  const settledWithout = projection => Boolean(projection?.error)
+    || (projection?.recovery?.clientId ?? projection?.recovery?.item?.clientId) === item?.clientId;
+  let offSent = () => {};
+  let offHub = () => {};
+  let limit;
+  const started = new Promise((resolve, reject) => {
+    const fail = what => reject(new Error(`${what}: ${JSON.stringify(h.queue.projection(id))}`));
+    offSent = h.maker.onSent(sessionId => { if (sessionId === id) resolve(); });
+    offHub = h.onHubEvent(event => {
+      if (event.type === 'input_projection' && event.sessionId === id && !reached() && settledWithout(event.projection)) {
+        fail(`the input ${item?.clientId} settled without reaching the engine`);
+      }
+    });
+    limit = setRealTimeout(() => fail(`no send reached the engine for ${id} and the input did not settle within ${ENQUEUE_EVENT_LIMIT_MS} ms`), ENQUEUE_EVENT_LIMIT_MS);
   });
+  // Awaited only while the send is still on its way; a rejection before that is reported below instead.
+  started.catch(() => {});
+  try {
+    await h.queue.enqueue(id, item);
+    if (!reached()) {
+      if (settledWithout(h.queue.projection(id))) throw new Error(`the input ${item?.clientId} settled without reaching the engine: ${JSON.stringify(h.queue.projection(id))}`);
+      await started;
+    }
+  } finally {
+    offSent(); offHub(); clearRealTimeout(limit);
+  }
   return h.queue.projection(id);
 }
 
