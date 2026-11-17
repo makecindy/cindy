@@ -10208,7 +10208,9 @@
         "maximizeAria": "Agrandir la barre latérale",
         "restoreAria": "Restaurer la barre latérale",
         "closeAria": "Fermer la barre latérale",
-        "detachAria": "Ouvrir l'onglet actuel dans une nouvelle fenêtre"
+        "detachAria": "Ouvrir l'onglet actuel dans une nouvelle fenêtre",
+        "persistentHint": "Cliquez pour ouvrir ou fermer ; maintenez 2 secondes pour garder le panneau ouvert",
+        "persistentHintActive": "Cliquez pour ouvrir ou fermer ; le panneau reste ouvert — maintenez 2 secondes pour désactiver"
       },
       "contextMenu": {
         "close": "Fermer",

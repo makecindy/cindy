@@ -10092,7 +10092,9 @@
         "maximizeAria": "侧栏极展",
         "restoreAria": "复其原状",
         "closeAria": "阖侧栏",
-        "detachAria": "以独窗启此分页"
+        "detachAria": "以独窗启此分页",
+        "persistentHint": "點則啟闔；按二秒則常展",
+        "persistentHintActive": "點則啟闔；已常展，再按二秒則罷"
       },
       "contextMenu": {
         "close": "阖",

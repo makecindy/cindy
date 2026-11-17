@@ -10092,7 +10092,9 @@
         "maximizeAria": "サイドバーを最大化",
         "restoreAria": "最大化を解除",
         "closeAria": "サイドバーを閉じる",
-        "detachAria": "現在のタブを新しいウィンドウで開く"
+        "detachAria": "現在のタブを新しいウィンドウで開く",
+        "persistentHint": "クリックで開閉、2 秒長押しで常に表示",
+        "persistentHintActive": "クリックで開閉、常に表示中。2 秒長押しで解除"
       },
       "contextMenu": {
         "close": "閉じる",

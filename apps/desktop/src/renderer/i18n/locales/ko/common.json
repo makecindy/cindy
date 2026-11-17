@@ -10092,7 +10092,9 @@
         "maximizeAria": "사이드바 최대화",
         "restoreAria": "최대화 해제",
         "closeAria": "사이드바 닫기",
-        "detachAria": "현재 탭을 새 창에서 열기"
+        "detachAria": "현재 탭을 새 창에서 열기",
+        "persistentHint": "클릭하여 열거나 닫기, 2초 길게 눌러 항상 표시",
+        "persistentHintActive": "클릭하여 열거나 닫기, 항상 표시 중 — 2초 길게 눌러 해제"
       },
       "contextMenu": {
         "close": "닫기",

@@ -10135,7 +10135,9 @@
         "maximizeAria": "Maximize sidebar",
         "restoreAria": "Restore sidebar",
         "closeAria": "Close sidebar",
-        "detachAria": "Open the current tab in a new window"
+        "detachAria": "Open the current tab in a new window",
+        "persistentHint": "Click to open or close; hold for 2 seconds to keep the panel open",
+        "persistentHintActive": "Click to open or close; panel stays open — hold for 2 seconds to turn off"
       },
       "contextMenu": {
         "close": "Close",
