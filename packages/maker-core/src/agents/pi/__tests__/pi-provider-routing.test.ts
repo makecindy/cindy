@@ -6494,6 +6494,10 @@ describe("Pi provider-aware model routing", () => {
         expect.objectContaining({ id: "gateway-unknown", input: ["text", "image"] }),
       ]),
     );
+    // 纯文本模型不该带图片输入限制：字段与 input 同一条件（review #10954 的非阻断观察）。
+    const textModel = modelsJson.providers.cindy?.models.find((model) => model.id === "gateway-text");
+    expect(textModel).toBeDefined();
+    expect(textModel && "inputLimits" in textModel).toBe(false);
 
     captured.requests.length = 0;
     await expect(handle.send(imageMessage)).rejects.toMatchObject({
