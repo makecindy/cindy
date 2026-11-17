@@ -28,6 +28,7 @@ import {
   type LinkAcceptPayload,
   type LinkClosePayload,
   type PresenceSetPayload,
+  type PresenceSnapshot,
   type PushOwnerStamp,
   type Envelope,
 } from './protocol.js';
@@ -277,6 +278,23 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
       offLegacy?.();
       if (observer) { this.scopedObservers.delete(observer); for (const dispose of observer.off.values()) dispose(); observer.off.clear(); }
     };
+  }
+
+  /**
+   * 同账号设备的在线状态只取承载它的那条连接:走兼容连接的设备用兼容连接上的 presence,
+   * 主连接对它的看法(例如新协议连接重建时对尚未建立通道的设备报的离线)不作数;反之亦然。
+   * 2026-11-17:兼容连接设备的真实 presence 被丢弃,host 只能靠一次唤醒时恰好失败的目录读取
+   * 判断它在线,界面因此误报离线 40 多分钟。
+   * 共享任务 / 供应商分享等范围化 peer 维持原语义,只看主连接。兼容连接未运行时一切照旧。
+   */
+  override onPresenceChanged(cb: (snap: PresenceSnapshot) => void): () => void {
+    const offPrimary = super.onPresenceChanged((snap) => {
+      if (isScopedPeer(snap.deviceId) || this.connectionFor(snap.deviceId) === this) cb(snap);
+    });
+    const offLegacy = this.legacy?.onPresenceChanged((snap) => {
+      if (!isScopedPeer(snap.deviceId) && this.legacyRunning && this.connectionFor(snap.deviceId) === this.legacy) cb(snap);
+    });
+    return () => { offPrimary(); offLegacy?.(); };
   }
 
   override onFrame(cb: InboundFrameHandler): () => void {

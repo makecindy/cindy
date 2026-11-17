@@ -236,6 +236,44 @@ describe('RoutedDeviceLinkClient', () => {
     client.stop();
   });
 
+  // 2026-11-17: a Desktop slept overnight; after wake a peer carried by the
+  // compatibility connection stayed "offline" in the UI for 40+ minutes while its
+  // invokes succeeded. Only the primary's presence reached the host, so the
+  // compatibility relay's real online presence for that peer was dropped and the
+  // host had to rely on a directory REST read that failed at wake. Presence must
+  // come from the connection that actually carries the peer; the primary's view of
+  // such a peer is not authoritative, and peers on the primary are unaffected.
+  it('reports each peer\'s presence from the connection that carries it', async () => {
+    const sockets: FakeWs[] = [];
+    const options = (url: string): DeviceLinkClientOptions => ({
+      getWsUrl: () => url, getToken: async () => 'unit-test-token',
+      getHello: () => ({ deviceName: 'unit', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (address, headers) => { const socket = new FakeWs(address, headers); sockets.push(socket); return socket; },
+    });
+    const client = new RoutedDeviceLinkClient(options('ws://v2-node'), undefined, {
+      active: () => true, useForPeer: (peer) => peer === 'old-device', options: options('ws://v1-relay'),
+    });
+    const seen: string[] = [];
+    const off = client.onPresenceChanged((snap) => seen.push(`${snap.deviceId}:${snap.online}`));
+    client.start(); await vi.advanceTimersByTimeAsync(1);
+    const primary = sockets.find((s) => s.url === 'ws://v2-node')!, legacy = sockets.find((s) => s.url === 'ws://v1-relay')!;
+    primary.ack(); legacy.ack(); await vi.advanceTimersByTimeAsync(1);
+    const presence = (socket: FakeWs, deviceId: string, online: boolean) => socket.push({ v: PROTOCOL_VERSION,
+      kind: 'presence-changed', payload: { deviceId, deviceName: deviceId, online, remoteControlEnabled: online,
+        platform: 'darwin', appVersion: '1', busy: false, lastSeenAt: 1 } });
+
+    presence(primary, 'old-device', false); // the primary has no route to it: not authoritative
+    presence(legacy, 'old-device', true);
+    presence(primary, 'new-device', true);
+    presence(legacy, 'new-device', false); // carried by the primary: the compatibility view is ignored
+    expect(seen).toEqual(['old-device:true', 'new-device:true']);
+
+    off();
+    presence(legacy, 'old-device', false);
+    expect(seen).toHaveLength(2);
+    client.stop();
+  });
+
   it('opens no second connection on the official route, so scoped peers stay on the only socket', async () => {
     const h = harness({ value: false });
     h.client.start();
