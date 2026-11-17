@@ -1801,7 +1801,20 @@ function ModelSelectorContentView({
   const runLocationFold = useMemo(() => {
     const hiddenRemote = new Set<string>();
     const hiddenLocal = new Set<string>();
-    if (!homeDeviceId) for (const [id] of duplicateSubscriptionProviders(localProviders.providers.filter(provider => !localProviderGroups[provider.id]), unifiedIsVisible)) {
+    // Deduplicate the task computer's catalog even when another computer is viewing it.
+    // Never use the viewer's catalog, visibility preferences or provider groups for that decision.
+    // Without location choices ChatInput supplies only deviceId, not remoteAgent.
+    const taskDeviceId = homeDeviceId ?? (!remoteAgent ? deviceId : undefined);
+    const taskCatalog = homeDeviceId ? homeDeviceProviders : remoteProviders;
+    const taskProviders = taskDeviceId ? taskCatalog.providers : localProviders.providers;
+    const taskVisible = taskDeviceId
+      ? (providerId: string, model: { id: string; defaultEnabled?: boolean }, agent: AgentKind) =>
+        isDeviceModelVisible(taskCatalog.modelVisibilityOverrides, agent, providerId, model)
+      : unifiedIsVisible;
+    const ungroupedTaskProviders = taskProviders.filter(provider => taskDeviceId
+      ? !remoteProviderGroups.groups.has(remoteProviderEntryKey(taskDeviceId, provider.id))
+      : !localProviderGroups[provider.id]);
+    for (const [id] of duplicateSubscriptionProviders(ungroupedTaskProviders, taskVisible)) {
       if (remoteAgentDeviceId || currentProviderId !== id) hiddenLocal.add(id);
     }
     if (!remoteAgentDevices || homeDeviceId) return { hiddenRemote, hiddenLocal };
@@ -1838,8 +1851,10 @@ function ModelSelectorContentView({
       if (location !== RUN_LOCATION_LOCAL && !localInUse && subscriptionModelsCoveredBy(provider, representative, visibleAt(), visibleAt(preferred?.deviceId))) hiddenLocal.add(provider.id);
     }
     return { hiddenRemote, hiddenLocal };
-  }, [remoteAgentDevices, homeDeviceId, localProviders.providers, localProviderGroups, remoteDeviceCatalogs,
-    remoteAgentDeviceId, currentProviderId, remoteDisable, remoteProviderGroups.hidden, unifiedIsVisible]);
+  }, [remoteAgent, deviceId, remoteProviders.providers, remoteProviders.modelVisibilityOverrides,
+    remoteAgentDevices, homeDeviceId, homeDeviceProviders.providers, homeDeviceProviders.modelVisibilityOverrides,
+    localProviders.providers, localProviderGroups, remoteDeviceCatalogs,
+    remoteAgentDeviceId, currentProviderId, remoteDisable, remoteProviderGroups.hidden, remoteProviderGroups.groups, unifiedIsVisible]);
   const remoteAgentGroups = useMemo(() => {
     if (!remoteAgentDevices) return [];
     return remoteAgentDevices.flatMap((device) => {
@@ -3773,8 +3788,8 @@ function ModelSelectorContentView({
             providerUsage={providerUsageScope}
             providerGroupUsage={providerGroupUsage}
             providers={providers}
-            // 「运行于」另一台的本机供应商只从模型分组收起；本机收藏仍按完整目录解析。
-            {...(!deviceId && runLocationFold.hiddenLocal.size > 0
+            // 等价来源从来源栏与模型分组收起；收藏和最近仍按完整目录解析。
+            {...((!remoteAgent || !deviceId || (homeDeviceId && !remoteBrowse)) && runLocationFold.hiddenLocal.size > 0
               ? { listHiddenProviderIds: runLocationFold.hiddenLocal }
               : {})}
             providerOrder={deviceId ? undefined : localProviders.providerOrder}

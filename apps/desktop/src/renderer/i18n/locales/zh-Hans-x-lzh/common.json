@@ -5476,6 +5476,13 @@
       },
       "toggleAria": "启闭问目条"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "以模型为 worktree 命名",
+        "description": "新差事之 worktree，依首则讯取一英文短名（如 fix-login-timeout），卷匣与分支一望可知其用。由辅佐模型拟之，不成则仍用随机之名；唯及此后新立之 worktree。"
+      },
+      "toggleAria": "启闭以模型命名 worktree"
+    },
     "promptRecommendation": {
       "label": "输入之议",
       "description": "应答后荐下一句，按 Tab 填入",

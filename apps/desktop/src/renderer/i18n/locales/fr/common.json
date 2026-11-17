@@ -5577,6 +5577,13 @@
       },
       "toggleAria": "Afficher ou masquer le rail de navigation des questions"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Nommer les worktrees avec un modèle",
+        "description": "Donne au worktree d’une nouvelle tâche un nom court en anglais tiré de son premier message (par ex. fix-login-timeout), pour que le dossier et la branche indiquent leur rôle. Généré par les modèles auxiliaires ; en cas d’échec, un nom aléatoire est utilisé. Ne concerne que les worktrees créés à partir de maintenant."
+      },
+      "toggleAria": "Activer ou désactiver le nommage des worktrees par un modèle"
+    },
     "promptRecommendation": {
       "label": "Suggestions de saisie",
       "description": "Après une réponse, la zone de saisie propose une suggestion pour votre prochain message. Appuyez sur Tab pour l'insérer.",
