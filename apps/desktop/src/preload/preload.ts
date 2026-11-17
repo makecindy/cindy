@@ -3239,6 +3239,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openSubscriptionPortal: () => ipcRenderer.invoke(BILLING_INVOKE.OPEN_SUBSCRIPTION_PORTAL),
     openPaymentRedirect: (payload) =>
       ipcRenderer.invoke(BILLING_INVOKE.OPEN_PAYMENT_REDIRECT, payload),
+    previewGiftCard: (payload) => ipcRenderer.invoke(BILLING_INVOKE.PREVIEW_GIFT_CARD, payload),
+    redeemGiftCard: (payload) => ipcRenderer.invoke(BILLING_INVOKE.REDEEM_GIFT_CARD, payload),
   } satisfies BillingRendererApi,
 
   // ── Workdir File Browser (vscode-style file tree + content viewer) ──
@@ -4348,6 +4350,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
+        | { type: 'gift-card'; code: string }
         | { type: 'shared-task-join'; invitation: string; server: string }
         | { type: 'provider-share-join'; link: string }
         | { type: 'chat-invite'; token: string }
@@ -4368,6 +4371,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         pluginId?: unknown;
         snapshotId?: unknown;
         ghostId?: unknown;
+        code?: unknown;
         invitation?: unknown;
         token?: unknown;
         server?: unknown;
@@ -4401,6 +4405,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
         callback({ type: 'plugin', pluginId: p.pluginId });
       } else if (p.type === 'local-plugin-share' && isLocalPluginSnapshotId(p.snapshotId)) {
         callback({ type: 'local-plugin-share', snapshotId: p.snapshotId });
+      } else if (p.type === 'gift-card' && typeof p.code === 'string' && /^[0-9A-HJKMNP-TV-Z]{16}$/.test(p.code)) {
+        // Main already normalized the redeem code; anything else is dropped here.
+        callback({ type: 'gift-card', code: p.code });
       } else if (p.type === 'installed-plugin' && (p.ghostId === undefined || (typeof p.ghostId === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(p.ghostId)))) {
         // A plugin's own id (same rule as isValidGhostId in shared/ghost), not a market resource id.
         // The bare list link carries none. Main validated it already; a malformed id drops the payload.
@@ -4481,6 +4488,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     | { type: 'plugin'; pluginId: string }
     | { type: 'local-plugin-share'; snapshotId: string }
     | { type: 'installed-plugin'; ghostId?: string }
+    | { type: 'gift-card'; code: string }
     | { type: 'shared-task-join'; invitation: string; server: string }
     | { type: 'provider-share-join'; link: string }
     | { type: 'chat-invite'; token: string }
