@@ -115,6 +115,7 @@ worktree 建成空目录或自动切到项目根继续修改代码。
   `DESIGN.md`、`login-flow.md` 含 DS-8 生成区块，轻量路径还运行
   `@cindy/design-tokens` 的 `check:generated`，验证生成内容与边界标记；普通代码路径
   继续由完整 unit 中的生产生成回归覆盖。
+  非生成正文的品牌加载动效例外及延迟阈值合同由现有必跑 guard 保留。
 - 纯 locale JSON（可混合上述文档）保留 Linux 完整 unit、文案及静态契约检查，跳过
   Windows 重跑、类型检查和运行时集成。没有只挑几个翻译测试代替既有覆盖。
   根级 `glossary-rules.test.mjs` 还会读取真实语言包验证计费文案等内容合同，纯翻译
