@@ -41,6 +41,42 @@ function createWorker(overrides: Partial<OrcaWorkerRecordSnapshot> = {}): OrcaWo
 }
 
 describe('model Orca cleanup authority', () => {
+  // #11060: unit, real idleWorker -> terminal retry. Probe rejection coverage
+  // misses a normal false close and the asynchronous rollback/capture afterward.
+  // Revoking the original guard at any boundary must not install a fresh retry.
+  it.each(['close', 'rollback', 'capture'] as const)(
+    'does not renew a refused close after authority expires during %s', async (phase) => {
+      let allowed = true;
+      const revoked = Object.assign(new Error('authority expired'), { code: 'STALE_REVISION' });
+      const guard = async () => { if (!allowed) throw revoked; };
+      const captureDeliveryAuthority = vi.fn(async () => {
+        if (phase === 'capture') allowed = false;
+        return async () => {};
+      });
+      const close = vi.fn(async () => {
+        if (phase === 'close') allowed = false;
+        return false;
+      });
+      const { service, deps, setWorker, getWorker } = createDeps({
+        getLiveSession: () => null, closeWorkerSessionIfIdle: close, captureDeliveryAuthority,
+      });
+      const restore = deps.restoreWorkerDoneIfIdle;
+      deps.restoreWorkerDoneIfIdle = async (id) => {
+        const restored = await restore(id);
+        if (phase === 'rollback') allowed = false;
+        return restored;
+      };
+      setWorker(createWorker({ status: 'done' }));
+      await expect(service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1', expectedStatus: 'done' },
+        { assertCurrent: guard })).rejects.toBe(revoked);
+      expect(getWorker().status).toBe('done');
+      expect(captureDeliveryAuthority).toHaveBeenCalledTimes(phase === 'capture' ? 1 : 0);
+      close.mockResolvedValue(true);
+      await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: 'complete' });
+      expect(close).toHaveBeenCalledOnce();
+      expect(getWorker().status).toBe('done');
+    },
+  );
   // Unit #11060 review: a guard rejected after the native probe must preserve
   // its error and roll back done, without acquiring fresh deferred authority.
   it.each([

@@ -1666,9 +1666,15 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         await assertAfterIdle();
         const didClose = await closeWorkerSessionIfIdleBestEffort(worker.sessionId, 'idleWorker', false, assertAfterIdle);
         if (!didClose) {
+          // A normal refusal also crosses an asynchronous boundary (including
+          // remote lookup). Do not renew an expired request into a deferred retry.
+          await assertAfterIdle();
           await rollbackDoneAcknowledgement();
           if (params.expectedStatus === 'done' && !opts?.deferredRetry) {
-            deferDoneAcknowledgement(worker.id, await captureDeferredAuthority(params.callerLeadSessionId, opts));
+            await opts?.assertCurrent?.();
+            const authority = await captureDeferredAuthority(params.callerLeadSessionId, opts);
+            await opts?.assertCurrent?.();
+            deferDoneAcknowledgement(worker.id, authority);
           }
           return {
             ok: false,

@@ -746,6 +746,8 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
    `hasLiveBackgroundWork`，保护不在任务快照中的原生工作，读取失败则保留运行时。
    异步查询之后复核运行时身份、轮次和排队输入，最终关闭仍与发送预留同步互斥。
    完成确认被拒后沿既有终态边界重试；watcher 只有关闭成功才写释放标记。
+   条件关闭正常返回 false 时也须复核原请求授权；回滚之后、捕获延迟授权前后继续复核，
+   原授权失效则原样报错，不得把失效请求转成持有新授权的终态重试。
    跨电脑 Worker 当前只提供前台运行状态，不能据此证明后台任务或 continuation 已结束；
    `orcaRemoteWorkers.wrapTeamDeps` 对自动空闲关闭返回 false，保留 done 和回报状态。
    在通道提供可靠后台证据前，无后台工作的远程 Worker 也不会自动确认到 idle，仍可显式 idle。
