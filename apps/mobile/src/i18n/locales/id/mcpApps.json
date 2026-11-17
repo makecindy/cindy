@@ -9,5 +9,17 @@
   "serverId": "ID Server MCP: {{id}}",
   "exitFullscreen": "Keluar dari layar penuh",
   "mobileUpdateRequired": "Perbarui Cindy di ponsel ini dulu untuk membuka kartu ini.",
-  "filesOnExecutionComputer": "Lihat isi berkas di komputer eksekutor"
+  "filesOnExecutionComputer": "Lihat isi berkas di komputer eksekutor",
+  "source": {
+    "official": "Cindy resmi",
+    "organization": "Organisasi · {{namespace}}",
+    "market": "Marketplace Plugin",
+    "third-party": "Sumber pihak ketiga",
+    "local": "Terpasang lokal",
+    "unknown": "Sumber tidak diketahui"
+  },
+  "customMcp": "MCP kustom",
+  "sourceLabel": "Sumber",
+  "signatureLabel": "Tanda tangan",
+  "fullscreen": "Layar penuh"
 }
