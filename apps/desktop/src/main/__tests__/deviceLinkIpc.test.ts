@@ -549,6 +549,30 @@ describe('device-link IPC handlers', () => {
     await Promise.all([before, after]);
   });
 
+  // #10671: V2 may commit before V1 rejects. A failed mutation must also
+  // invalidate a pre-write list, without claiming deletion or closing a link.
+  it.each(['rename', 'delete'] as const)('listDevices:%s 失败后补拉不复用旧在途目录', async op => {
+    let resolveOld!: (value: { devices: unknown[] }) => void;
+    const fresh = { deviceId: 'dev-1', name: 'New', online: true, remoteControlEnabled: true };
+    const apiFetch = vi.fn()
+      .mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 503, 'legacy write failed'))
+      .mockResolvedValue({ devices: [fresh] });
+    const closeLink = vi.fn();
+    const deps = makeDeps({ apiFetch, closeLink });
+    const old = handleListDevices(deps);
+    const mutation = op === 'rename' ? handleRenameDevice(deps, 'dev-1', 'New') : handleDeleteDevice(deps, 'dev-1');
+    await expect(mutation).rejects.toThrow();
+    const after = handleListDevices(deps);
+    expect(apiFetch).toHaveBeenCalledTimes(3);
+    resolveOld({ devices: [{ ...fresh, name: 'Old' }] });
+    await expect(after).resolves.toMatchObject({ devices: [{ name: 'New' }] });
+    await expect(old).resolves.toMatchObject({ devices: [{ name: 'New' }] });
+    expect(closeLink).not.toHaveBeenCalled();
+    expect(deps.applyControllerDisplayNameListSnapshot).not.toHaveBeenCalledWith(
+      [expect.objectContaining({ name: 'Old' })], expect.anything());
+  });
+
   it.each(['rename', 'delete'] as const)('listDevices:%s 会使变更前发出的在途响应失效且不安装旧目录', async (op) => {
     let resolveOld: ((value: { devices: unknown[] }) => void) | undefined;
     const fresh = { deviceId: 'dev-1', name: 'New', online: true, remoteControlEnabled: true };
