@@ -74,6 +74,17 @@ describe('DictationRefiner', () => {
     expect(captured.system).toContain('默认保留用户的自然口语');
     expect(captured.system).toContain('较早到较新的语音输入历史');
     expect(captured.system).toContain('不要明显改写');
+    // v18 structure contract: these phrases are part of the system prompt actually
+    // sent. Dropping them lets enumerated dictation stay one paragraph, and a
+    // version bump without them would still miss the formatting the cache key
+    // is supposed to invalidate.
+    expect(captured.system).toContain('用户明确说出「换行」时，必须在该处换行');
+    expect(captured.system).toContain('包括这几项');
+    expect(captured.system).toContain('还有几点');
+    expect(captured.system).toContain('连续点出的「一二三」');
+    expect(captured.system).toContain('1. ');
+    expect(captured.system).toContain('不要发明用户没说的标题、勾选框或 Markdown 清单');
+    expect(captured.system).toContain('差在这几项');
     expect(captured.system).toContain('AI Gateway');
     expect(captured.system).toContain('删除无语义的填充词和换气词');
     expect(captured.system).toContain('压缩口吃和无意义重复');
@@ -84,7 +95,7 @@ describe('DictationRefiner', () => {
     expect(captured.schemaName).toBe('dictation_refinement');
     expect(captured.promptCacheScope).toBe('session-test');
     expect(captured.user).toEqual({
-      promptVersion: 'dictation-refinement.zh.v17',
+      promptVersion: 'dictation-refinement.zh.v18',
       context: {
         uiLanguage: 'zh-CN',
         sourceLanguage: 'zh-CN',
