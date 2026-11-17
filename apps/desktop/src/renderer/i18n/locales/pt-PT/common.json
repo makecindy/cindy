@@ -8299,8 +8299,8 @@
         "hostTools_controlDetail": "Usar as ferramentas da Cindy para editar, arquivar, restaurar e controlar tarefas e projetos existentes, e importar ficheiros de tarefas em formato nativo neste computador.",
         "hostTools_handoff": "Mensagens para tarefas",
         "hostTools_handoffDetail": "Usar as ferramentas da Cindy para enviar mensagens para tarefas existentes. As operações que precisam da tarefa atual exigem um destino explícito.",
-        "hostTools_usage": "Ler a utilização das subscrições",
-        "hostTools_usageDetail": "Lê identificadores de conta, planos, períodos de quota e horas de atualização das subscrições Claude e Codex ligadas à tua conta Cindy atual neste computador. Não permite ler endereços de e-mail, credenciais, ficheiros ou dados de outros computadores, nem alterar contas.",
+        "hostTools_usage": "Ler a utilização e o estado dos grupos de fornecedores",
+        "hostTools_usageDetail": "Lê os identificadores, planos, períodos de quota e horas de atualização das contas locais de Claude/Codex ligadas à tua conta Cindy. Lê a utilização registada por dia e modelo, os custos estimados, a configuração e o estado dos grupos de fornecedores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou noutros computadores autorizados da mesma conta. Não permite ler e-mails de início de sessão das subscrições, diretórios de contas, impressões de identidade internas, credenciais ou ficheiros, nem alterar contas ou definições.",
         "hostTools_settings": "Definições da aplicação",
         "hostTools_settingsDetail": "Usar as ferramentas da Cindy para ler e alterar a configuração. Os segredos não são devolvidos e os dados confidenciais são introduzidos por si.",
         "hostTools_scheduler": "Gestão de automatizações",
@@ -10964,7 +10964,12 @@
       "summary": "Apresentação pessoal",
       "summaryPlaceholder": "Por exemplo: um romancista que adora histórias em série, tem um humor seco e é fascinado pelo que motiva as personagens.",
       "avatarSelectionFailed": "Não foi possível ler a imagem. Escolha uma imagem PNG, JPEG ou WebP até 5 MB.",
-      "personality": "Personalidade e conversa"
+      "personality": "Personalidade e conversa",
+      "sourceLength": "{{length}} / {{limit}} unidades UTF-16 (sem espaços no início e no fim).",
+      "sourceExcess": "O limite foi excedido em {{excess}} unidades. Encurta o texto antes de guardar.",
+      "sourceTooLong": "Este texto é demasiado longo para guardar. Edita-o para continuar.",
+      "sourceRecovery": "O original guardado não muda e o rascunho completo permanece nesta página. Após copiar, cole num local seguro e confirme que o texto está completo antes de o encurtar ou descartar as alterações.",
+      "sourceCopy": "Copiar texto completo"
     },
     "nameLabel": "Como se deve chamar?",
     "close": "Fechar",
@@ -13076,7 +13081,7 @@
           "reasoningDominated": "O raciocínio consumiu a maior parte do orçamento de saída, pelo que a resposta pode estar incompleta. Reduza o esforço de raciocínio ou compacte primeiro a conversa e, depois, continue.",
           "generic": "O modelo atingiu o limite de comprimento de saída, pelo que esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se voltar a acontecer, reduza o esforço de raciocínio ou compacte primeiro a conversa.",
           "join": "{{usage}} {{guidance}}",
-          "silentStopExhausted": "O modelo devolveu respostas vazias várias vezes seguidas, pelo que a continuação automática está em pausa."
+          "silentStopExhausted": "Foi detetada uma resposta vazia. A continuação automática está em pausa."
         },
         "permission": {
           "autoReviewUnavailable": "A revisão automática não terminou. Confirme se pretende permitir esta ação.",
@@ -15131,6 +15136,7 @@
       "pluginDisabledUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário está desativado. Elas serão retomadas após a ativação.",
       "installPlugin": "Instalar plugin",
       "openPlugin": "Abrir plugin",
+      "enablePlugin": "Ativar plugin",
       "dismissTitle": "Fechar aviso de falha anterior"
     },
     "worktreeRestoreBanner": {
@@ -19224,7 +19230,7 @@
       "steerFailed": "Falha na orientação: {{message}}",
       "qrExpired": "O código QR expirou, recomece",
       "registrationFailed": "Falha na criação, tente novamente mais tarde",
-      "silentStopExhausted": "O modelo devolveu repetidamente respostas vazias; a retoma automática está em pausa. Clique em \"Continuar\" para retomar a tarefa.",
+      "silentStopExhausted": "Foi detetada uma resposta vazia. A continuação automática está em pausa.",
       "executionResultUnavailable": "Não foi possível obter o resultado da execução. A continuação automática foi interrompida. Peça ao assistente para verificar o resultado da execução existente.",
       "outputLimit": "O modelo atingiu o limite de saída, pelo que esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se isto se repetir, reduza o esforço de raciocínio ou compacte primeiro o histórico da conversa.",
       "outputLimitReasoning": "O raciocínio consumiu a maior parte do orçamento de saída deste pedido, pelo que a resposta pode estar incompleta. Reduza o esforço de raciocínio ou compacte o histórico da conversa antes de continuar.",
@@ -19820,7 +19826,8 @@
         "expired": "Este cartão de oferta já não pode ser utilizado porque o prazo terminou.",
         "voided": "Este cartão de oferta foi anulado.",
         "rateLimited": "Demasiadas tentativas. Tente novamente mais tarde.",
-        "failed": "Não foi possível utilizar o cartão de oferta. Tente novamente mais tarde."
+        "failed": "Não foi possível utilizar o cartão de oferta. Tente novamente mais tarde.",
+        "personalRequired": "Os cartões de oferta só podem ser utilizados com uma conta pessoal."
       }
     },
     "usage": {
@@ -21200,7 +21207,7 @@
     "loadFailed": "Não foi possível carregar a aplicação. Verifique a ligação e recarregue.",
     "updateRequired": "Este computador ainda não suporta MCP Apps. Atualize o Cindy nesse computador e tente novamente.",
     "appName": "Aplicação MCP",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "Enviado por $t(mcpApps.appName) «{{name}}»",
     "serverId": "ID do servidor MCP: {{id}}",
     "exitFullscreen": "Sair do ecrã inteiro",
@@ -21214,7 +21221,19 @@
     "pluginCspRejected": "A página solicitou um domínio não declarado e foi bloqueada.",
     "filesOnExecutionComputer": "Ver o conteúdo do ficheiro no computador de execução",
     "awaitingApproval": "A aguardar a sua aprovação",
-    "pendingApprovals": "{{count}} aprovações pendentes"
+    "pendingApprovals": "{{count}} aprovações pendentes",
+    "source": {
+      "official": "Cindy oficial",
+      "organization": "Organização · {{namespace}}",
+      "market": "Mercado de plugins",
+      "third-party": "Origem de terceiros",
+      "local": "Instalação local",
+      "unknown": "Origem desconhecida"
+    },
+    "customMcp": "MCP personalizado",
+    "sourceLabel": "Origem",
+    "signatureLabel": "Assinatura",
+    "fullscreen": "Ecrã inteiro"
   },
   "richAnswer": {
     "invalidImageReference": "A referência desta imagem é inválida.",

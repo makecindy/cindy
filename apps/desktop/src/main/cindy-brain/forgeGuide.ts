@@ -27,6 +27,7 @@ import filesAndLibrary from '../../../resources/system-skills/cindy-plugin-creat
 import agentTasks from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-agent-tasks.md?raw';
 import hostTools from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md?raw';
 import queueControl from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-queue-control.md?raw';
+import historyAndHttp from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-history-and-http.md?raw';
 import interactivePages from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-interactive-pages.md?raw';
 import hostUi from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-host-ui.md?raw';
 import nodeWorker from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-node-worker.md?raw';
@@ -75,6 +76,7 @@ export const FORGE_GUIDE = [
   agentTasks,
   hostTools,
   queueControl,
+  historyAndHttp,
   nodeWorker,
   sessionContext,
   directoryPicker,

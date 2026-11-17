@@ -1320,17 +1320,17 @@
       "install": {
         "title": "需要安裝「{{plugin}}」插件",
         "body": "這個任務在另一台電腦上開著 {{device}}。在這台電腦上安裝「{{plugin}}」插件後，就能在右側欄查看和操作它。",
-        "action": "前往安裝"
+        "action": "安裝"
       },
       "enable": {
         "title": "需要開啟「{{plugin}}」插件",
         "body": "這個任務在另一台電腦上開著 {{device}}。在這台電腦上開啟「{{plugin}}」插件後，就能在右側欄查看和操作它。",
-        "action": "前往開啟"
+        "action": "開啟"
       },
       "update": {
         "title": "需要更新「{{plugin}}」插件",
         "body": "這個任務在另一台電腦上開著 {{device}}。把這台電腦上的「{{plugin}}」插件更新到新版本後，就能在右側欄查看和操作它。",
-        "action": "前往更新"
+        "action": "更新"
       }
     },
     "lockOnExitHintPrivacy": "退出遠端桌面後蓋上隱私畫面，AI 可以繼續工作；有人碰電腦就會鎖定。",
@@ -8184,8 +8184,8 @@
         "hostTools_controlDetail": "透過 Cindy 的任務工具修改、封存、還原及控制現有任務與專案，並在本機匯入原生任務檔案。",
         "hostTools_handoff": "任務投遞",
         "hostTools_handoffDetail": "透過 Cindy 的任務工具向現有任務傳送訊息。需要目前任務情境的操作須明確指定任務。",
-        "hostTools_usage": "讀取訂閱用量",
-        "hostTools_usageDetail": "讀取目前 Cindy 帳號在這台電腦上已連接的 Claude 和 Codex 帳號識別碼、方案、配額時段及更新時間。無法讀取電子郵件地址、憑證、檔案或其他電腦的資料，也無法修改帳號",
+        "hostTools_usage": "讀取用量與供應商組狀態",
+        "hostTools_usageDetail": "讀取目前 Cindy 帳號在本機已連接的 Claude/Codex 帳號識別碼、方案、配額時段及更新時間，以及本機或同帳號已授權其他電腦上已記錄的每日/型號用量、估算費用、供應商組設定與狀態、可見的成員和裝置識別碼、名稱及頭像。無法讀取訂閱登入電子郵件、帳號目錄、內部指紋、憑證或檔案，也無法修改帳號或設定",
         "hostTools_settings": "應用程式設定",
         "hostTools_settingsDetail": "透過 Cindy 的設定工具讀取及修改應用程式設定；不傳回金鑰，也不代你完成機密輸入。",
         "hostTools_scheduler": "自動化管理",
@@ -10835,7 +10835,12 @@
       "summary": "自我介紹",
       "summaryPlaceholder": "例如：一位熱愛寫小說的作家，有點幽默，喜歡琢磨人物的小心思。",
       "avatarSelectionFailed": "無法讀取頭像，請選擇 5 MB 以內的 PNG、JPEG 或 WebP 圖片",
-      "personality": "個性與說話習慣"
+      "personality": "個性與說話習慣",
+      "sourceLength": "{{length}} / {{limit}} 個 UTF-16 單元（不計首尾空白）。",
+      "sourceExcess": "超出 {{excess}} 個單元，縮短後才能儲存。",
+      "sourceTooLong": "資料過長，修改後才能儲存。",
+      "sourceRecovery": "已儲存的原文不變，完整草稿仍保留在此頁。複製後，請先貼到安全的地方並確認內容完整，再縮短內容或放棄本次變更。",
+      "sourceCopy": "複製完整內容"
     },
     "nameLabel": "怎麼稱呼",
     "close": "關閉",
@@ -12916,7 +12921,7 @@
           "reasoningDominated": "思考已消耗本次輸出的大部分預算，回覆可能不完整。建議降低推理強度，或先壓縮對話記錄，再繼續。",
           "generic": "模型已達到輸出長度上限，本輪回覆可能不完整。可以傳送新訊息繼續；若反覆觸發，請降低推理強度或先壓縮對話記錄。",
           "join": "{{usage}}{{guidance}}",
-          "silentStopExhausted": "模型連續多次回傳空回應，自動續跑已暫停。"
+          "silentStopExhausted": "偵測到空回應，自動續跑已暫停。"
         },
         "permission": {
           "autoReviewUnavailable": "自動審批沒完成，請確認要不要允許這次操作。",
@@ -14964,6 +14969,7 @@
       "pluginDisabledUnnamed": "自動檢查暫時受阻：需要的插件未啟用，啟用後自動恢復。",
       "installPlugin": "安裝插件",
       "openPlugin": "查看插件",
+      "enablePlugin": "啟用插件",
       "dismissTitle": "關閉歷史失敗提示"
     },
     "worktreeRestoreBanner": {
@@ -18967,7 +18973,7 @@
       "steerFailed": "插話失敗：{{message}}",
       "qrExpired": "QR 碼已過期，請重新開始",
       "registrationFailed": "建立失敗，請稍後重試",
-      "silentStopExhausted": "模型連續多次返回空響應，自動續跑已暫停。點選「繼續」恢復任務。",
+      "silentStopExhausted": "偵測到空回應，自動續跑已暫停。",
       "executionResultUnavailable": "未能取得執行結果，已停止自動接續。可以請助手檢查既有的執行結果。",
       "outputLimit": "模型已達到輸出長度上限，本輪回覆可能不完整。可以傳送新訊息繼續；若反覆觸發，請降低推理強度或先壓縮對話記錄。",
       "outputLimitReasoning": "思考已消耗本次輸出的大部分預算，回覆可能不完整。建議降低推理強度，或先壓縮對話記錄，再繼續。",
@@ -19559,7 +19565,8 @@
         "expired": "這張禮品卡已過領取期限。",
         "voided": "這張禮品卡已作廢。",
         "rateLimited": "嘗試次數過多，請稍後再試。",
-        "failed": "暫時無法兌換，請稍後重試。"
+        "failed": "暫時無法兌換，請稍後重試。",
+        "personalRequired": "禮品卡僅限個人使用者領取。"
       }
     },
     "usage": {
@@ -20928,7 +20935,7 @@
     "loadFailed": "應用程式載入失敗。請檢查連線後重新載入。",
     "updateRequired": "這台電腦尚不支援 MCP Apps，請更新電腦上的 Cindy 後再試。",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "由 $t(mcpApps.appName)「{{name}}」傳送",
     "serverId": "MCP 伺服器 ID：{{id}}",
     "exitFullscreen": "離開全螢幕",
@@ -20942,7 +20949,19 @@
     "pluginCspRejected": "頁面要求未宣告的網域，已拒絕載入",
     "filesOnExecutionComputer": "檔案內容請在執行電腦查看",
     "awaitingApproval": "等待你確認",
-    "pendingApprovals": "{{count}} 個待確認"
+    "pendingApprovals": "{{count}} 個待確認",
+    "source": {
+      "official": "Cindy 官方",
+      "organization": "組織 · {{namespace}}",
+      "market": "插件市場",
+      "third-party": "第三方來源",
+      "local": "本機安裝",
+      "unknown": "來源未知"
+    },
+    "customMcp": "自訂 MCP",
+    "sourceLabel": "來源",
+    "signatureLabel": "簽章",
+    "fullscreen": "全螢幕"
   },
   "richAnswer": {
     "invalidImageReference": "圖片引用無效，無法顯示。",

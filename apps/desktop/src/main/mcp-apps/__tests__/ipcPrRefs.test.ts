@@ -141,7 +141,7 @@ describe('MCP App result PR associations after backfill', () => {
     expect(h.changed).toHaveBeenCalledTimes(1);
     expect(h.broadcast).toHaveBeenCalledWith('local-db:messages:created',
       expect.objectContaining({ message: expect.objectContaining({
-        content: { mcpAppHistory: { version: 1, title: 'form', text: url(1) } },
+        content: { mcpAppHistory: { version: 1, customMcp: true, title: 'form', text: url(1) } },
       }) }));
     await write(completed(url(2)));
     expect(await refs()).toEqual([2]);

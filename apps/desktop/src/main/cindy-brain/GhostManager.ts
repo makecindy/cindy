@@ -314,7 +314,7 @@ function cloneParsedGhostPackage(parsed: ParsedGhostPackage): ParsedGhostPackage
 export interface GhostManagerOptions {
   /** Read-only source projections. Does not affect running, installation, or publishing ACL. */
   sourcesForInstance?: (record: PluginInstanceRecord, receipt: PluginInstanceReceiptFact | null | undefined) =>
-    Pick<InstalledGhost, 'publishingSource'>;
+    Pick<InstalledGhost, 'publishingSource' | 'installationSource'>;
   /** One listing's source facts, discarded after the scan; never runtime authorization. */
   prepareListingSources?: () => {
     project: NonNullable<GhostManagerOptions['sourcesForInstance']>;
@@ -1028,6 +1028,7 @@ export class GhostManager {
     sources = this.options.sourcesForInstance): {
     instanceKey?: string;
     publishingSource?: InstalledGhost['publishingSource'];
+    installationSource?: InstalledGhost['installationSource'];
     namespace?: string | null;
     namespaceState?: PluginInstanceRecord['namespaceState'];
   } {
@@ -1035,9 +1036,15 @@ export class GhostManager {
     if (this.instanceRegistryService.isBlocked() || !registry) return {};
     const record = findInstanceByContentRelId(registry, relId);
     if (!record || record.ghostId !== ghostId) return {};
+    const fact = this.receiptFact(relId, approval);
+    const projected = sources?.(record, fact && approval.state === 'approved'
+      ? { ...fact, installOrigin: approval.receipt.installOrigin } : fact);
+    const source = projected?.installationSource;
     return {
       instanceKey: record.instanceKey,
-      ...sources?.(record, this.receiptFact(relId, approval)),
+      ...projected,
+      ...(source?.kind === 'market' && approval.state === 'approved' && approval.receipt.trust?.level === 'cindy-official'
+        ? { installationSource: { kind: 'official' as const } } : {}),
       namespaceState: record.namespaceState,
       ...(record.namespaceState === 'confirmed' || record.namespaceState === 'unconfirmed'
         ? { namespace: record.namespace } : {}),

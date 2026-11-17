@@ -9,8 +9,8 @@ import {
 
 /**
  * 手机端的礼品卡接口（model-access-server `/api/gift-cards/*`，个人身份）。
- * 兑换码只放在请求体里。服务端明确给出的卡片状态作为结果返回；网络、鉴权和
- * 服务故障照常抛出，由界面按「暂时无法兑换」处理。
+ * 兑换码只放在请求体里。服务端明确给出的卡片状态、以及「当前是组织身份不能领取」
+ * 作为结果返回；网络、登录失效和服务故障照常抛出，由界面按「暂时无法兑换」处理。
  */
 export type GiftCardPost = (path: string, body: { code: string }, signal?: AbortSignal) => Promise<unknown>;
 

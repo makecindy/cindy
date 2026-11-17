@@ -6,6 +6,7 @@ import { registerStorageTools, type StorageToolCallbacks } from './xdt-helper/st
 import { registerHostServiceTools, type HostServicesToolCallbacks } from './xdt-helper/host_services.js';
 import { createControlReader } from './xdt-helper/control-catalog.js';
 import { registerAppModelsTools, type AppModelsCallbacks } from './xdt-helper/app_models.js';
+import { registerProviderReadTools, type ProviderReadCallbacks } from './xdt-helper/provider_reads.js';
 import { registerProviderSharingTools, type ProviderSharingCallbacks } from './xdt-helper/provider_sharing.js';
 import { registerSubscriptionUsageTools, type SubscriptionUsageCallbacks } from './xdt-helper/subscription_usage.js';
 import { registerAppSettingsTools, type AppSettingsCallbacks } from './xdt-helper/app_settings.js';
@@ -196,7 +197,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   ].join(''),
   settings: [
     '管理 Cindy 的全局设置、默认模型与 API 供应商连接（添加、安全填写密钥、发现型号、测试连接），普通任务和伙伴共用。',
-    '作用于运行任务的本机；',
+    '供应商分享成员管理可用 device 指定同账号已授权电脑；其它操作按工具说明作用于运行任务的本机。',
     '先查询当前值和可选项，再修改或恢复默认。',
     '密钥通过电脑或手机的加密代输入卡交给宿主。',
     'SSH 主机编辑使用 cindy_ssh。',
@@ -234,7 +235,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   files: '通过同一宿主文件服务访问真实任务工作目录或用户亲选的插件目录；读、写、列举、删除与有界监听。',
   storage: '插件自身 KV、私有文件、作品库、媒体与交接文件的统一调用接口；跨插件快照分享每次经宿主确认，仅同账号本机和同一组织范围。',
   discovery: '只读发现执行宿主实际提供的服务与本插件的批准事实；仅本机，不安装、启停或撤销其他插件。',
-  usage: '只读查询执行电脑上当前 Cindy 账号的 Claude/Codex 订阅用量，按账号返回套餐、额度窗口与更新时间。',
+  usage: '只读查询订阅额度、已记录供应商用量与供应组状态。get_subscription_usage 仅查询执行电脑当前 Cindy 账号的本机订阅，返回套餐、额度窗口与更新时间；供应商历史与组状态可用 device 指定同账号已授权电脑，缺省本机。插件需声明 usage 组。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
   handoff: [
     '给已有任务发消息或新建任务。',
@@ -561,6 +562,7 @@ export interface XdtHelperMcpDeps {
   themePackages?: ThemePackageCallbacks;
   piRuntime?: PiRuntimeCallbacks;
   modelSettings?: AppModelsCallbacks;
+  providerReads?: ProviderReadCallbacks;
   providerSharing?: ProviderSharingCallbacks;
   appModels?: Pick<BotCapabilityCallbacks, 'models' | 'setDefaultModel'>;
   botCapabilities?: BotCapabilityCallbacks;
@@ -850,6 +852,7 @@ export function createXdtHelperMcpServer(
     });
   }
   if (deps.modelSettings) registerAppModelsTools(registry, deps.modelSettings, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.providerReads) registerProviderReadTools(registry, deps.providerReads, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.providerSharing) registerProviderSharingTools(registry, deps.providerSharing, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.piRuntime) registerPiRuntimeTools(registry, deps.piRuntime, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.appSettings) registerAppSettingsTools(registry, deps.appSettings, () => resolveLiziMcpSessionContext(sessionCtx));
