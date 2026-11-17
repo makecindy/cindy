@@ -6,7 +6,7 @@
  *               --relay-id <UUID> --owner-public-key <公钥> --owner-cert <证书 JSON 的 base64url>
  *   relay serve --data <目录> [--host 127.0.0.1] [--port 47820]
  *               [--tls-cert <PEM> --tls-key <PEM>] [--public-url <https://...>] [--trust-proxy]
- *               [--acme-identifier <域名或IP> [--acme-http-host 0.0.0.0] [--acme-http-port 80] [--acme-directory <URL>]]
+ *               [--acme-identifier <域名或IP> [--acme-http-host <地址>] [--acme-http-port 80] [--acme-directory <URL>]]
  *
  * `--acme-identifier`:自动向 Let's Encrypt 申请并续期证书(http-01 验证走 `--acme-http-port`),
  * 拿到证书后才开始提供 HTTPS;申请失败按退避重试,状态写进数据目录的 status.json。
@@ -51,7 +51,16 @@ async function prepareAcme(flags: Map<string, string>, dataDir: string) {
     directoryUrl: flags.get('acme-directory'),
     logger: stderrLogger,
   });
-  await startChallengeServer({ host: flags.get('acme-http-host') ?? '0.0.0.0', port: parsePort(flags.get('acme-http-port'), 80, 'acme-http-port'), challenges: manager.challenges });
+  // Keep legacy IPv6 CLI listeners reachable without inheriting a loopback API
+  // address. Explicit deployment/Nginx binds still take precedence.
+  let challengeHost = flags.get('acme-http-host');
+  if (challengeHost === undefined) {
+    const apiHost = flags.get('host') ?? '127.0.0.1';
+    // Node's API listener also resolves hostnames; preserve its selected family.
+    const family = isIP(apiHost) || (apiHost ? (await lookup(apiHost)).family : 4);
+    challengeHost = family === 6 || isIP(identifier.value) === 6 ? '::' : '0.0.0.0';
+  }
+  await startChallengeServer({ host: challengeHost, port: parsePort(flags.get('acme-http-port'), 80, 'acme-http-port'), challenges: manager.challenges });
   let material: TlsMaterial | null = await manager.load();
   if (material && manager.needsRenewal(material)) material = null;
   let failures = 0;
