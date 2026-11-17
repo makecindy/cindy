@@ -4345,7 +4345,6 @@
           "label": "Run on",
           "optionLocal": "This computer",
           "notSignedIn": "Not signed in",
-          "autoBorrowing": "This computer isn't signed in, so new tasks run on {{device}}. No sign-in needed.",
           "local": "New tasks run on this computer. You can pick another of your signed-in computers instead.",
           "pinned": "New tasks run on {{device}} with its sign-in. Running tasks stay where they are.",
           "inline": "Runs on",
@@ -14028,6 +14027,14 @@
         "standard": "Standard",
         "fast": "Fast",
         "ultrafast": "Ultrafast"
+      },
+      "discoveredCopy": {
+        "title": "Use {{provider}} on “{{device}}”?",
+        "description": "{{unavailable}} If you continue, it runs on “{{device}}”. You can switch back here anytime.",
+        "unavailableHere": "{{provider}} on this computer isn’t available right now.",
+        "unavailableOn": "{{provider}} on “{{device}}” isn’t available right now.",
+        "confirm": "Use it",
+        "cancel": "Keep as is"
       }
     },
     "permissionSelector": {
@@ -14318,7 +14325,8 @@
         "description": "The conversation record on the other computer can’t be moved over, so it continues from a handoff summary. Thinking and similar details may not carry over completely. Takes effect when you send the next message.",
         "descriptionNativeHistory": "The full conversation record is copied over and continues from where it left off. If it can’t be restored, it continues from a handoff summary instead, and thinking and similar details may not carry over completely. Takes effect when you send the next message.",
         "confirm": "Switch computer",
-        "cancel": "Keep as is"
+        "cancel": "Keep as is",
+        "discoveredDescription": "{{reason}} {{description}}"
       }
     },
     "agentSelect": {

@@ -4302,7 +4302,6 @@
           "label": "실행할 컴퓨터",
           "optionLocal": "이 컴퓨터",
           "notSignedIn": "로그인 안 됨",
-          "autoBorrowing": "이 컴퓨터는 로그인되지 않아 새 작업은 {{device}}에서 실행됩니다. 로그인할 필요가 없습니다.",
           "local": "새 작업은 이 컴퓨터에서 실행됩니다. 로그인된 다른 컴퓨터를 골라도 됩니다.",
           "pinned": "새 작업은 {{device}}에서 그 컴퓨터의 로그인으로 실행됩니다. 실행 중인 작업은 그대로입니다.",
           "inline": "실행 위치",
@@ -13974,6 +13973,14 @@
         "standard": "표준",
         "fast": "빠름",
         "ultrafast": "초고속"
+      },
+      "discoveredCopy": {
+        "title": "“{{device}}”의 {{provider}}을(를) 사용할까요?",
+        "description": "{{unavailable}} 계속하면 “{{device}}”에서 실행됩니다. 언제든 여기에서 되돌릴 수 있습니다.",
+        "unavailableHere": "이 컴퓨터의 {{provider}}을(를) 지금 사용할 수 없습니다.",
+        "unavailableOn": "“{{device}}”의 {{provider}}을(를) 지금 사용할 수 없습니다.",
+        "confirm": "사용",
+        "cancel": "그대로 두기"
       }
     },
     "permissionSelector": {
@@ -14264,7 +14271,8 @@
         "description": "원래 컴퓨터에 있는 대화 기록은 옮길 수 없어 인수인계 요약으로 이어집니다. 사고 내용 등은 완전히 이어지지 않을 수 있습니다. 다음 메시지를 보낼 때 적용됩니다.",
         "descriptionNativeHistory": "전체 대화 기록을 복사해 이어서 진행합니다. 복원할 수 없으면 인수인계 요약으로 이어지며, 사고 내용 등은 완전히 이어지지 않을 수 있습니다. 다음 메시지를 보낼 때 적용됩니다.",
         "confirm": "컴퓨터 전환",
-        "cancel": "그대로 두기"
+        "cancel": "그대로 두기",
+        "discoveredDescription": "{{reason}} {{description}}"
       }
     },
     "agentSelect": {

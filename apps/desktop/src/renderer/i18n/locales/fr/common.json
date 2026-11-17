@@ -4401,7 +4401,6 @@
           "label": "Exécuter sur",
           "optionLocal": "Cet ordinateur",
           "notSignedIn": "Non connecté",
-          "autoBorrowing": "Cet ordinateur n’est pas connecté : les nouvelles tâches s’exécutent sur {{device}}. Aucune connexion nécessaire.",
           "local": "Les nouvelles tâches s’exécutent sur cet ordinateur. Vous pouvez choisir un autre de vos ordinateurs connectés.",
           "pinned": "Les nouvelles tâches s’exécutent sur {{device}} avec sa connexion. Les tâches en cours restent où elles sont.",
           "inline": "S’exécute sur",
@@ -14143,6 +14142,14 @@
         "standard": "Standard",
         "fast": "Rapide",
         "ultrafast": "Ultra-rapide"
+      },
+      "discoveredCopy": {
+        "title": "Utiliser {{provider}} sur « {{device}} » ?",
+        "description": "{{unavailable}} Si vous continuez, il s’exécute sur « {{device}} ». Vous pouvez revenir ici à tout moment.",
+        "unavailableHere": "{{provider}} sur cet ordinateur est indisponible pour le moment.",
+        "unavailableOn": "{{provider}} sur « {{device}} » est indisponible pour le moment.",
+        "confirm": "Utiliser",
+        "cancel": "Ne rien changer"
       }
     },
     "permissionSelector": {
@@ -14434,7 +14441,8 @@
         "description": "L'historique de la conversation sur l'autre ordinateur ne peut pas être transféré : elle reprend donc à partir d'un résumé de transfert. La réflexion et les détails similaires peuvent ne pas être entièrement conservés. Prend effet à l'envoi du prochain message.",
         "descriptionNativeHistory": "L'historique complet de la conversation est copié et elle reprend là où elle en était. S'il ne peut pas être restauré, elle reprend à partir d'un résumé de transfert, et la réflexion et les détails similaires peuvent ne pas être entièrement conservés. Prend effet à l'envoi du prochain message.",
         "confirm": "Changer d'ordinateur",
-        "cancel": "Ne rien changer"
+        "cancel": "Ne rien changer",
+        "discoveredDescription": "{{reason}} {{description}}"
       }
     },
     "agentSelect": {

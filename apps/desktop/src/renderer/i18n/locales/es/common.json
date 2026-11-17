@@ -4401,7 +4401,6 @@
           "label": "Ejecutar en",
           "optionLocal": "Esta computadora",
           "notSignedIn": "Sin sesión",
-          "autoBorrowing": "Esta computadora no tiene sesión iniciada, así que las tareas nuevas se ejecutan en {{device}}. No hace falta iniciar sesión.",
           "local": "Las tareas nuevas se ejecutan en esta computadora. Puedes elegir otra de tus computadoras con sesión iniciada.",
           "pinned": "Las tareas nuevas se ejecutan en {{device}} con su sesión. Las tareas en curso siguen donde están.",
           "inline": "Se ejecuta en",
@@ -14143,6 +14142,14 @@
         "standard": "Estándar",
         "fast": "Rápido",
         "ultrafast": "Ultrarrápido"
+      },
+      "discoveredCopy": {
+        "title": "¿Usar {{provider}} en “{{device}}”?",
+        "description": "{{unavailable}} Si continúas, se ejecutará en “{{device}}”. Puedes volver aquí cuando quieras.",
+        "unavailableHere": "{{provider}} en esta computadora no está disponible ahora.",
+        "unavailableOn": "{{provider}} en “{{device}}” no está disponible ahora.",
+        "confirm": "Usar",
+        "cancel": "Dejar como está"
       }
     },
     "permissionSelector": {
@@ -14434,7 +14441,8 @@
         "description": "El registro de conversación en la otra computadora no se puede mover, por lo que continúa desde un resumen de transferencia. Es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envíes el siguiente mensaje.",
         "descriptionNativeHistory": "El registro completo de la conversación se copia y continúa desde donde estaba. Si no se puede restaurar, continúa desde un resumen de transferencia y es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envíes el siguiente mensaje.",
         "confirm": "Cambiar de computadora",
-        "cancel": "Dejar como está"
+        "cancel": "Dejar como está",
+        "discoveredDescription": "{{reason}} {{description}}"
       }
     },
     "agentSelect": {
