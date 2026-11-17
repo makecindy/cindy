@@ -7249,11 +7249,12 @@ assertRouteCurrent();
         ? 'Could not verify cindy_helper for this task. Task result reporting may be unavailable.'
         : 'cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable.';
       log.warn('Codex expected helper readiness check failed', { threadId: checkedThreadId, state });
-      eventQueue.push({ type: 'error', data: { message, isTerminal: false }, source: 'codex' });
+      const code = state === 'unverified' ? 'CINDY_EXPECTED_HELPER_UNVERIFIED' : 'CINDY_EXPECTED_HELPER_UNAVAILABLE';
+      eventQueue.push({ type: 'error', data: { code, message, isTerminal: false }, source: 'codex' });
       // Recoverable error banners disappear on the next event. The existing
       // independent notice channel keeps this diagnostic in task history without
       // replacing the model's streamed reply or settling its turn.
-      eventQueue.push({ type: 'text', data: { text: message, isFinal: true }, standaloneText: true, source: 'codex' });
+      eventQueue.push({ type: 'text', data: { code, text: message, isFinal: true }, standaloneText: true, source: 'codex' });
     };
 
     /**

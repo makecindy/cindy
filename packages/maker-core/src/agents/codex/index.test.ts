@@ -36994,13 +36994,13 @@ describe('expected Cindy helper readiness', () => {
     const events = [];
     for await (const event of handle.events()) events.push(event);
     expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'error', data: expect.objectContaining({
-      message: expect.stringContaining('cindy_helper'), isTerminal: false,
+      code: 'CINDY_EXPECTED_HELPER_UNAVAILABLE', message: expect.stringContaining('cindy_helper'), isTerminal: false,
     }) })]));
     expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList).map(call => call.slice(0, 2))).toEqual([
       [Method.McpServerStatusList, expect.objectContaining({ threadId: resume ? 'resume-thread-id' : 'start-thread-id' })],
     ]);
     expect(events).toEqual(expect.arrayContaining([expect.objectContaining({
-      type: 'text', standaloneText: true, data: expect.objectContaining({ text: expect.stringContaining('cindy_helper') }),
+      type: 'text', standaloneText: true, data: expect.objectContaining({ code: 'CINDY_EXPECTED_HELPER_UNAVAILABLE', text: expect.stringContaining('cindy_helper') }),
     })]));
     expect(host.request.mock.calls.some(([method]) => method === Method.TurnStart)).toBe(false);
     await agent.dispose();
@@ -37031,7 +37031,7 @@ describe('expected helper normal and failure boundaries', () => {
       const errors = events.filter(event => event.type === 'error');
       expect(errors).toHaveLength(['partial', 'no-tools', 'probe-error'].includes(mode) ? 1 : 0);
       if (mode === 'probe-error') {
-        expect(errors[0].data).toMatchObject({ message: expect.stringContaining('Could not verify') });
+        expect(errors[0].data).toMatchObject({ code: 'CINDY_EXPECTED_HELPER_UNVERIFIED', message: expect.stringContaining('Could not verify') });
         expect(JSON.stringify(errors)).not.toContain('sensitive transport details');
         expect(JSON.stringify(warn.mock.calls)).not.toContain('sensitive transport details');
       }

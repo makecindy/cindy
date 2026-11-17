@@ -14864,6 +14864,8 @@
       "failed": "画像を生成できませんでした。もう一度お試しください"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "このタスクでは cindy_helper が有効ですが、利用できません。タスクの結果を報告できない可能性があります。",
+      "codexHelperUnverified": "このタスクの cindy_helper が利用可能か確認できませんでした。タスクの結果を報告できない可能性があります。",
       "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
       "replyFailed": "返信を完了できませんでした",
       "retryTitle": "最後のメッセージを再送信",

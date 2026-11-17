@@ -763,6 +763,70 @@ describe('production Session event pipeline', () => {
     } finally { close(); await h.dispose(); }
   });
 
+  // #10499: host-authored notices must be localized before both banner and durable-row delivery.
+  it.each([
+    ["en", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable."],
+    ["en", "CINDY_EXPECTED_HELPER_UNVERIFIED", "Could not verify cindy_helper for this task. Task result reporting may be unavailable."],
+    ["zh-CN", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "此任务已启用 cindy_helper，但目前不可用，任务结果可能无法回传。"],
+    ["zh-CN", "CINDY_EXPECTED_HELPER_UNVERIFIED", "未能核实此任务的 cindy_helper 是否可用，任务结果可能无法回传。"],
+    ["zh-TW", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "此任務已啟用 cindy_helper，但目前無法使用，任務結果可能無法回傳。"],
+    ["zh-TW", "CINDY_EXPECTED_HELPER_UNVERIFIED", "未能確認此任務的 cindy_helper 是否可用，任務結果可能無法回傳。"],
+    ["ja", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "このタスクでは cindy_helper が有効ですが、利用できません。タスクの結果を報告できない可能性があります。"],
+    ["ja", "CINDY_EXPECTED_HELPER_UNVERIFIED", "このタスクの cindy_helper が利用可能か確認できませんでした。タスクの結果を報告できない可能性があります。"],
+    ["ko", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "이 작업에서 cindy_helper가 활성화되어 있지만 사용할 수 없습니다. 작업 결과를 보고하지 못할 수 있습니다."],
+    ["ko", "CINDY_EXPECTED_HELPER_UNVERIFIED", "이 작업에서 cindy_helper를 사용할 수 있는지 확인하지 못했습니다. 작업 결과를 보고하지 못할 수 있습니다."],
+    ["es", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper está habilitado, pero no está disponible en esta tarea. Es posible que no se pueda comunicar el resultado de la tarea."],
+    ["es", "CINDY_EXPECTED_HELPER_UNVERIFIED", "No se pudo comprobar si cindy_helper está disponible en esta tarea. Es posible que no se pueda comunicar el resultado de la tarea."],
+    ["fr", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper est activé, mais indisponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis."],
+    ["fr", "CINDY_EXPECTED_HELPER_UNVERIFIED", "Impossible de vérifier si cindy_helper est disponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis."],
+    ["de", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper ist für diese Aufgabe aktiviert, aber nicht verfügbar. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden."],
+    ["de", "CINDY_EXPECTED_HELPER_UNVERIFIED", "Es konnte nicht geprüft werden, ob cindy_helper für diese Aufgabe verfügbar ist. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden."],
+    ["pt-PT", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper está ativado, mas não está disponível nesta tarefa. Pode não ser possível comunicar o resultado da tarefa."],
+    ["pt-PT", "CINDY_EXPECTED_HELPER_UNVERIFIED", "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Pode não ser possível comunicar o resultado da tarefa."],
+    ["pt-BR", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper está ativado, mas não está disponível nesta tarefa. Talvez não seja possível comunicar o resultado da tarefa."],
+    ["pt-BR", "CINDY_EXPECTED_HELPER_UNVERIFIED", "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Talvez não seja possível comunicar o resultado da tarefa."],
+    ["zh-Hant-x-lzh", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "此差事已啟用 cindy_helper，然今不可用；差事結果或無法回傳。"],
+    ["zh-Hant-x-lzh", "CINDY_EXPECTED_HELPER_UNVERIFIED", "未能核實此差事之 cindy_helper 是否可用；差事結果或無法回傳。"],
+    ["zh-Hans-x-lzh", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "此差事已启用 cindy_helper，然今不可用；差事结果或无法回传。"],
+    ["zh-Hans-x-lzh", "CINDY_EXPECTED_HELPER_UNVERIFIED", "未能核实此差事之 cindy_helper 是否可用；差事结果或无法回传。"],
+  ] as const)('localizes Codex helper diagnostics in %s (%s)', async (locale, code, text) => {
+    setMainLocale(locale);
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation((value: AgentEvent) => value);
+    try {
+      const errorData = { code, message: 'technical fallback', isTerminal: false };
+      const error = event('error', errorData, { source: 'codex' });
+      h.emit(error);
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).toContain(text);
+      expect(error.data).toEqual(errorData);
+      const noticeData = { code, text: 'technical fallback', isFinal: true };
+      const notice = event('text', noticeData, { source: 'codex', standaloneText: true });
+      h.emit(notice);
+      expect(effects.fn('onStandaloneTextEvent')).toHaveBeenCalledExactlyOnceWith('task', text, null);
+      expect(effects.fn('onAssistantTextEvent')).not.toHaveBeenCalled();
+      expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
+      expect(notice.data).toEqual(noticeData);
+      h.emit(event('text', { text: 'Actual reply', isFinal: true }, { source: 'codex' }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', expect.objectContaining({ text: 'Actual reply' }), null, undefined);
+      expect(h.handle.send).not.toHaveBeenCalled();
+    } finally { await h.dispose(); }
+  });
+
+  it.each([
+    { source: 'codex' as const, standalone: false },
+    { source: 'pi' as const, standalone: true },
+  ])('does not reinterpret model prose or another harness notice ($source, $standalone)', async ({ source, standalone }) => {
+    setMainLocale('zh-CN');
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation((value: AgentEvent) => value);
+    try {
+      const data = { code: 'CINDY_EXPECTED_HELPER_UNAVAILABLE', text: 'Original prose', isFinal: true };
+      h.emit(event('text', data, { source, ...(standalone ? { standaloneText: true as const } : {}) }));
+      if (standalone) expect(effects.fn('onStandaloneTextEvent')).toHaveBeenCalledWith('task', 'Original prose', null);
+      else expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', data, null, undefined);
+    } finally { await h.dispose(); }
+  });
+
   it('delivers Pi notices as durable rows without entering model streaming or turn bookkeeping', async () => {
     const h = harness();
     h.deps.redactEventForRenderer.mockImplementation((value) => value);
