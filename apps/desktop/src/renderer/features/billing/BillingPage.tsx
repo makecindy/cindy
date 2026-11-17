@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   Check,
@@ -62,6 +62,8 @@ import {
   type SupportedPurchaseOption,
 } from './purchaseSupport';
 import { BillingCheckoutDialog } from './BillingCheckoutDialog';
+import { GiftCardRedeemDialog } from './GiftCardRedeemDialog';
+import { takePendingGiftCardCode } from './giftCardIntent';
 import { BILLING_CURRENCY, formatBillingAmount as formatMoney } from './money';
 import {
   PlanChangeStatusDialog,
@@ -308,6 +310,10 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const ordersRequestRef = useRef<{ cursor?: string; previousCursors: (string | undefined)[] }>({ previousCursors: [] });
   const [subscriptionDialogOpen, setSubscriptionDialogOpen] = useState(false);
   const [topupDialogOpen, setTopupDialogOpen] = useState(false);
+  const [giftCardDialog, setGiftCardDialog] = useState<{ open: boolean; code: string | null }>({
+    open: false,
+    code: null,
+  });
   const [planChangeTargetOpen, setPlanChangeTargetOpen] = useState(false);
   const [selectedProductCode, setSelectedProductCode] = useState<string | null>(null);
   const [selectedOfferCode, setSelectedOfferCode] = useState<string | null>(null);
@@ -365,6 +371,15 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     resetSelection();
     setTopupDialogOpen(true);
   }, [resetSelection, searchParams, setSearchParams]);
+
+  // 礼品卡唤起链接：兑换码不进 URL，由 MainLayout 暂存在内存，这里取走一次。
+  useEffect(() => {
+    if (searchParams.get('intent') !== 'redeem-gift-card') return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('intent');
+    setSearchParams(next, { replace: true });
+    setGiftCardDialog({ open: true, code: takePendingGiftCardCode() });
+  }, [searchParams, setSearchParams]);
 
   const loadBalance = useCallback(async () => {
     setLoadingBalance(true);
@@ -1147,6 +1162,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               issue={balanceError}
               loading={loadingBalance}
               onPurchase={() => openPurchaseDialog('CREDIT_TOPUP')}
+              onRedeemGiftCard={() => setGiftCardDialog({ open: true, code: null })}
             />
           </BillingGroup>
 
@@ -1264,6 +1280,13 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         onSelectPurchaseOption={setSelectedPurchaseOptionId}
         onCustomAmountChange={setCustomAmount}
         onSubmit={submit}
+      />
+
+      <GiftCardRedeemDialog
+        open={giftCardDialog.open}
+        initialCode={giftCardDialog.code}
+        onClose={() => setGiftCardDialog({ open: false, code: null })}
+        onRedeemed={() => void loadBalance()}
       />
 
       <BillingCheckoutDialog
@@ -1600,12 +1623,14 @@ function BalanceOverviewCard({
   issue,
   loading,
   onPurchase,
+  onRedeemGiftCard,
 }: {
   usage: ModelAccessCreditUsage | null;
   balance: ModelAccessBalance | null;
   issue: BalanceIssue;
   loading: boolean;
   onPurchase: () => void;
+  onRedeemGiftCard: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
@@ -1647,16 +1672,28 @@ function BalanceOverviewCard({
             </p>
           )}
         </div>
-        <Button
-          variant="secondary"
-          size="md"
-          compact
-          type="button"
-          onClick={onPurchase}
-          className="shrink-0 select-none"
-        >
-          {t('billing.settings.topupCard.action')}
-        </Button>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button
+            variant="secondary"
+            size="md"
+            compact
+            type="button"
+            onClick={onRedeemGiftCard}
+            className="shrink-0 select-none"
+          >
+            {t('billing.giftCard.action')}
+          </Button>
+          <Button
+            variant="secondary"
+            size="md"
+            compact
+            type="button"
+            onClick={onPurchase}
+            className="shrink-0 select-none"
+          >
+            {t('billing.settings.topupCard.action')}
+          </Button>
+        </div>
       </div>
     </section>
   );
@@ -1773,6 +1810,21 @@ function PromotionalGrantsCard({ usage }: { usage: ModelAccessCreditUsage }) {
     page * PROMOTIONAL_GRANTS_PAGE_SIZE,
   );
 
+  // 保留主干的滚动条宽度补偿；翻页会重新挂载列表，因此同时按页码重新测量。
+  const listRef = useRef<HTMLDivElement>(null);
+  const [scrolls, setScrolls] = useState(false);
+  const grantCount = usage.promotionalGrants.length;
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const measure = () => setScrolls(list.scrollHeight > list.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [grantCount, page]);
+
   return (
     <BillingGroup
       title={t('billing.usage.promotionalDetails.title')}
@@ -1822,21 +1874,29 @@ function PromotionalGrantsCard({ usage }: { usage: ModelAccessCreditUsage }) {
         ) : (
           <div
             key={page}
-            className="max-h-[360px] divide-y divide-[var(--border-default)] overflow-y-auto [scrollbar-gutter:stable]"
+            ref={listRef}
+            className="max-h-[360px] divide-y divide-[var(--border-default)] overflow-y-auto"
             role="list"
           >
             {pageGrants.map((grant) => (
               <div
                 key={grant.grantId}
                 role="listitem"
-                className="grid grid-cols-3 gap-x-3 gap-y-2 px-5 py-3 lg:grid-cols-[minmax(0,1.5fr)_repeat(3,minmax(80px,0.7fr))] lg:items-center"
+                className={cn(
+                  'grid grid-cols-3 gap-x-3 gap-y-2 py-3 pl-5 lg:grid-cols-[minmax(0,1.5fr)_repeat(3,minmax(80px,0.7fr))] lg:items-center',
+                  scrolls ? 'pr-2' : 'pr-5',
+                )}
               >
                 <div className="col-span-3 min-w-0 lg:col-span-1">
                   <div className="flex min-w-0 items-center gap-2">
                     <p className="truncate text-12 font-medium text-[var(--text-primary)]">
                       {grant.source === 'subscription_rollover'
                         ? t('billing.usage.promotionalDetails.rolloverName')
-                        : grant.displayName ?? t('billing.usage.promotionalDetails.unnamed')}
+                        : typeof grant.source === 'object' && grant.source?.type === 'gift_card'
+                          ? t('billing.usage.promotionalDetails.giftCard', {
+                              sender: grant.source.senderName,
+                            })
+                          : grant.displayName ?? t('billing.usage.promotionalDetails.unnamed')}
                     </p>
                     <PromotionalGrantStatus state={grant.state} />
                   </div>
@@ -2257,7 +2317,8 @@ function GrantAmount({ label, amount }: { label: string; amount: string }) {
   const { i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
   return (
-    <div className="min-w-0 text-right">
+    // 窄窗口下三项排在名称下面，和名称一起靠左；宽窗口下与名称同一行，按数字靠右对齐。
+    <div className="min-w-0 text-left lg:text-right">
       <p className="truncate text-10 text-[var(--text-tertiary)]">{label}</p>
       <p className="mt-0.5 truncate text-11 font-medium tabular-nums text-[var(--text-primary)]">
         {formatMoney(amount, BILLING_CURRENCY, billingLocale)}

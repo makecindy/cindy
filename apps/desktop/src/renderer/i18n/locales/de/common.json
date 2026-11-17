@@ -19599,6 +19599,41 @@
       "notSupported": "Die Guthabenabfrage wird für dieses Konto nicht unterstützt.",
       "unavailable": "Das Guthaben ist vorübergehend nicht verfügbar. Lade die Seite neu, um es erneut zu versuchen."
     },
+    "giftCard": {
+      "action": "Geschenkkarte einlösen",
+      "title": "Geschenkkarte einlösen",
+      "inputLabel": "Einlösecode",
+      "inputHint": "Gib den 16-stelligen Code ein oder füge den Link einer Geschenkkarte ein.",
+      "continue": "Weiter",
+      "confirmTitle": "Diese Geschenkkarte einlösen?",
+      "confirmAction": "Einlösen",
+      "from": "Von {{sender}}",
+      "cardLabel": "Cindy-Geschenkkarte über {{amount}}",
+      "fields": {
+        "validity": "Gültigkeit",
+        "validityValue_one": "{{count}} Tag nach dem Einlösen",
+        "validityValue_other": "{{count}} Tage nach dem Einlösen",
+        "claimBy": "Einlösen bis",
+        "destination": "Gutgeschrieben auf"
+      },
+      "doneTitle": "{{amount}} gutgeschrieben",
+      "doneDescription": "Deinem Aktionsguthaben gutgeschrieben. Gültig bis {{date}}.",
+      "doneDescriptionNoDate": "Deinem Aktionsguthaben gutgeschrieben.",
+      "pendingTitle": "Geschenkkarte eingelöst",
+      "pendingDescription": "{{amount}} werden gerade gutgeschrieben und erscheinen in Kürze in deinem Aktionsguthaben. Du musst die Karte nicht erneut einlösen.",
+      "alreadyYours": "Du hast diese Geschenkkarte bereits eingelöst.",
+      "done": "Fertig",
+      "errors": {
+        "notFound": "Dieser Code ist ungültig. Prüfe ihn und versuche es erneut.",
+        "wrongRegionCn": "Diese Geschenkkarte gilt für die Festlandchina-Edition von Cindy und kann mit diesem Konto nicht eingelöst werden.",
+        "wrongRegionGlobal": "Diese Geschenkkarte gilt für die internationale Edition von Cindy und kann mit diesem Konto nicht eingelöst werden.",
+        "alreadyClaimed": "Diese Geschenkkarte wurde bereits eingelöst.",
+        "expired": "Diese Geschenkkarte kann nicht mehr eingelöst werden. Die Frist ist abgelaufen.",
+        "voided": "Diese Geschenkkarte wurde für ungültig erklärt.",
+        "rateLimited": "Zu viele Versuche. Versuche es später erneut.",
+        "failed": "Die Geschenkkarte konnte nicht eingelöst werden. Versuche es später erneut."
+      }
+    },
     "usage": {
       "title": "Guthabenverbrauch",
       "observedAt": "Guthaben aktualisiert: {{date}}",
@@ -19615,6 +19650,7 @@
         "incomplete": "Es gibt viele Gutschriften. Nur die neuesten {{count}} werden angezeigt.",
         "unnamed": "Aktionsgutschrift",
         "rolloverName": "Übertrag",
+        "giftCard": "Geschenkkarte · von {{sender}}",
         "original": "Ursprünglich",
         "used": "Verwendet",
         "remaining": "Verbleibend",

@@ -24,6 +24,8 @@
     "./chat-read-receipts": "./src/chatReadReceipts.ts",
     "./chat-reply-quote": "./src/chatReplyQuote.ts",
     "./command-display": "./src/commandDisplay.ts",
+    "./gift-card": "./src/giftCard.ts",
+    "./gift-card-amount": "./src/giftCardAmount.ts",
     "./client-endpoints": "./src/clientEndpoints.ts",
     "./cindy-make-feature": "./src/cindyMakeFeature.ts",
     "./companion-import": "./src/companionImport.ts",

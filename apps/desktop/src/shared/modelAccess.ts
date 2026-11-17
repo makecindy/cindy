@@ -59,11 +59,18 @@ export interface ModelAccessCreditPoolUsage {
 
 export type ModelAccessPromotionalGrantState = 'active' | 'depleted' | 'expired' | 'voided';
 
+/** 礼品卡赠送的结构化来源，稳定来源标签仍可使用字符串。 */
+export type ModelAccessPromotionalGrantSource = {
+  type: 'gift_card';
+  /** 礼品卡的赠送方，由发卡时填写。 */
+  senderName: string;
+};
+
 export interface ModelAccessPromotionalGrantUsage {
   grantId: string;
   displayName: string | null;
-  /** Stable server origin tag; older responses may omit it. */
-  source?: string | null;
+  /** 稳定来源标签或礼品卡来源；旧版服务端可缺省。 */
+  source?: string | ModelAccessPromotionalGrantSource | null;
   originalAmount: string;
   usedAmount: string;
   remainingAmount: string;

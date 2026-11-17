@@ -19782,6 +19782,42 @@
       "notSupported": "A consulta de saldo não é compatível com esta conta.",
       "unavailable": "O saldo está temporariamente indisponível. Atualize para tentar novamente."
     },
+    "giftCard": {
+      "action": "Resgatar cartão-presente",
+      "title": "Resgatar cartão-presente",
+      "inputLabel": "Código de resgate",
+      "inputHint": "Digite o código de 16 caracteres ou cole o link de um cartão-presente.",
+      "continue": "Continuar",
+      "confirmTitle": "Resgatar este cartão-presente?",
+      "confirmAction": "Resgatar",
+      "from": "De {{sender}}",
+      "cardLabel": "Cartão-presente Cindy, {{amount}}",
+      "fields": {
+        "validity": "Validade",
+        "validityValue_one": "{{count}} dia após o resgate",
+        "validityValue_many": "{{count}} de dias após o resgate",
+        "validityValue_other": "{{count}} dias após o resgate",
+        "claimBy": "Resgatar até",
+        "destination": "Adicionado a"
+      },
+      "doneTitle": "{{amount}} adicionados",
+      "doneDescription": "Adicionado ao seu Saldo promocional. Válido até {{date}}.",
+      "doneDescriptionNoDate": "Adicionado ao seu Saldo promocional.",
+      "pendingTitle": "Cartão-presente resgatado",
+      "pendingDescription": "{{amount}} estão sendo adicionados e vão aparecer em breve no seu Saldo promocional. Você não precisa resgatar de novo.",
+      "alreadyYours": "Você já resgatou este cartão-presente.",
+      "done": "Concluído",
+      "errors": {
+        "notFound": "Este código não é válido. Confira e tente novamente.",
+        "wrongRegionCn": "Este cartão-presente é para a edição da China continental do Cindy e não pode ser resgatado com esta conta.",
+        "wrongRegionGlobal": "Este cartão-presente é para a edição internacional do Cindy e não pode ser resgatado com esta conta.",
+        "alreadyClaimed": "Este cartão-presente já foi resgatado.",
+        "expired": "Este cartão-presente não pode mais ser resgatado porque o prazo terminou.",
+        "voided": "Este cartão-presente foi anulado.",
+        "rateLimited": "Muitas tentativas. Tente novamente mais tarde.",
+        "failed": "Não foi possível resgatar o cartão-presente. Tente novamente mais tarde."
+      }
+    },
     "usage": {
       "title": "Uso do saldo",
       "observedAt": "Saldo atualizado em {{date}}",
@@ -19798,6 +19834,7 @@
         "incomplete": "Há muitos registros de concessões. Apenas os {{count}} mais recentes são exibidos.",
         "unnamed": "Concessão promocional",
         "rolloverName": "Saldo acumulado",
+        "giftCard": "Cartão-presente · de {{sender}}",
         "original": "Original",
         "used": "Usado",
         "remaining": "Restante",

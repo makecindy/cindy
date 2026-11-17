@@ -19523,6 +19523,40 @@
       "notSupported": "このアカウントでは残高照会を利用できません。",
       "unavailable": "残高を取得できません。更新してもう一度お試しください。"
     },
+    "giftCard": {
+      "action": "ギフトカードを使う",
+      "title": "ギフトカードを使う",
+      "inputLabel": "引き換えコード",
+      "inputHint": "16 文字のコードを入力するか、ギフトカードのリンクを貼り付けてください。",
+      "continue": "続ける",
+      "confirmTitle": "このギフトカードを受け取りますか？",
+      "confirmAction": "受け取る",
+      "from": "{{sender}} より",
+      "cardLabel": "Cindy ギフトカード、{{amount}}",
+      "fields": {
+        "validity": "有効期間",
+        "validityValue_other": "受け取りから {{count}} 日間",
+        "claimBy": "受け取り期限",
+        "destination": "追加先"
+      },
+      "doneTitle": "{{amount}} を追加しました",
+      "doneDescription": "特典残高に追加しました。{{date}} まで有効です。",
+      "doneDescriptionNoDate": "特典残高に追加しました。",
+      "pendingTitle": "ギフトカードを受け取りました",
+      "pendingDescription": "{{amount}} を追加中です。まもなく特典残高に反映されます。もう一度受け取る必要はありません。",
+      "alreadyYours": "このギフトカードはすでに受け取り済みです。",
+      "done": "完了",
+      "errors": {
+        "notFound": "コードが無効です。確認してもう一度お試しください。",
+        "wrongRegionCn": "このギフトカードは Cindy 中国本土版用のため、このアカウントでは受け取れません。",
+        "wrongRegionGlobal": "このギフトカードは Cindy 国際版用のため、このアカウントでは受け取れません。",
+        "alreadyClaimed": "このギフトカードはすでに受け取られています。",
+        "expired": "このギフトカードは受け取り期限を過ぎています。",
+        "voided": "このギフトカードは無効になりました。",
+        "rateLimited": "試行回数が多すぎます。しばらくしてからもう一度お試しください。",
+        "failed": "ギフトカードを受け取れませんでした。しばらくしてからもう一度お試しください。"
+      }
+    },
     "usage": {
       "title": "残高使用量",
       "observedAt": "残高更新: {{date}}",
@@ -19539,6 +19573,7 @@
         "incomplete": "付与履歴が多いため、最新の{{count}}件のみ表示しています。",
         "unnamed": "特典残高",
         "rolloverName": "繰り越し分",
+        "giftCard": "ギフトカード · {{sender}} より",
         "original": "付与額",
         "used": "使用済み",
         "remaining": "残り",

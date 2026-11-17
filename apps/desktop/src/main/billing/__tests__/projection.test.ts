@@ -215,6 +215,50 @@ describe('billing response projection', () => {
     });
   });
 
+  // 契约：稳定标签/string|null 与礼品卡对象共存；对象仍只保留类型和合法赠送方。
+  // 字符串/null 属于滚存的既有来源格式，不能套用礼品卡对象校验而丢弃。
+  it('keeps string and gift card sources while dropping malformed structured metadata', () => {
+    const grant = (grantId: string, source: unknown) => ({
+      grantId,
+      displayName: null,
+      originalAmount: '1',
+      usedAmount: '0',
+      remainingAmount: '1',
+      expiresAt: '2026-08-01T00:00:00Z',
+      state: 'active',
+      ...(source === undefined ? {} : { source }),
+    });
+    const sources: unknown[] = [
+      { type: 'gift_card', senderName: 'Cindy Team', cardId: 'internal' },
+      undefined,
+      null,
+      { type: 'coupon', senderName: 'Someone' },
+      { type: 'gift_card', senderName: '' },
+      { type: 'gift_card', senderName: 'x'.repeat(81) },
+      { type: 'gift_card' },
+      'gift_card',
+    ];
+    const usage = projectModelAccessCreditUsage({
+      available: String(sources.length),
+      plan: { remaining: '0', used: '0', total: '0' },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: String(sources.length), used: '0', total: String(sources.length) },
+      promotionalGrants: sources.map((source, index) => grant(`grant-${index}`, source)),
+      promotionalGrantsComplete: true,
+      promotionalGrantConsistency: 'OBSERVED',
+      ledgerUpdatedAt: null,
+      scale: 9,
+      observedAt: '2026-07-23T12:00:00Z',
+    });
+
+    expect(usage.promotionalGrants[0].source).toEqual({ type: 'gift_card', senderName: 'Cindy Team' });
+    expect(usage.promotionalGrants[2].source).toBeNull();
+    expect(usage.promotionalGrants[7].source).toBe('gift_card');
+    for (const projected of [usage.promotionalGrants[1], ...usage.promotionalGrants.slice(3, 7)]) {
+      expect(projected).not.toHaveProperty('source');
+    }
+  });
+
   it('rejects inconsistent pool identities and dishonest promotional histories', () => {
     const valid = {
       available: '6',
