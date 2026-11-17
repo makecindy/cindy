@@ -3,11 +3,7 @@ import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole } from '@cindy/maker-
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import type { OrcaHostNoticeKind } from '../../shared/orcaHostNotice.js';
-import {
-  buildOrcaDispatchReceiptSummary,
-  type OrcaDispatchClaimNotice,
-  type OrcaDispatchReceipt,
-} from '../../shared/orcaDispatchReceipt.js';
+import type { OrcaDispatchClaimNotice } from '../../shared/orcaDispatchReceipt.js';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
 import type {
   CollabDispatchFailureOutcome,
@@ -499,8 +495,6 @@ export interface OrcaTeamServiceDeps {
   escalateDispatchClaim?(leadSessionId: string, notice: OrcaDispatchClaimNotice): void;
   /** 能力开关，缺省开启；关闭后完全不判定也不修改结果。 */
   readDispatchClaimVerificationEnabled?(): boolean;
-  /** 宿主接受一条派单后落库回执卡；渲染层只读这份宿主记录。 */
-  appendDispatchReceipt?(leadSessionId: string, receipt: OrcaDispatchReceipt): void;
   /**
    * 读取目标 session 输入队列的当前快照(pendingQueue + steering 中的 clientId)。
    * 实现方(register.ts)须先 ensureQueueRestored 再读,保证崩溃恢复条目可见。
@@ -1459,17 +1453,6 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         workerLabel,
         delivery,
         ...(delivery === 'queued' ? { queuedMessageId: result.clientId } : {}),
-        at: Date.now(),
-      });
-      deps.appendDispatchReceipt?.(link.leadSessionId, {
-        version: 1,
-        state: 'sent',
-        dispatchId: result.clientId,
-        workerId: target.id,
-        workerLabel,
-        delivery,
-        ...(delivery === 'queued' ? { queuedMessageId: result.clientId } : {}),
-        summary: buildOrcaDispatchReceiptSummary(params.message),
         at: Date.now(),
       });
       if (result.mode === 'dispatched') {

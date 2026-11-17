@@ -15251,8 +15251,6 @@
     },
     "systemCard": {
       "orcaDispatch": {
-        "sent": "{{worker}} に派遣しました",
-        "queued": "{{worker}} のキューに追加しました",
         "unverified": "派遣を確認できません",
         "notice": {
           "claim": "Lead は派遣済みと述べました",

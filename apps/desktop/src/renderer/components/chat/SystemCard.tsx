@@ -41,7 +41,6 @@ import {
 } from '@/lib/autoResumePresentation';
 import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
-import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
   ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
@@ -1396,31 +1395,11 @@ function SessionImportCard({ data }: { data?: Record<string, unknown> }) {
 
 function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
   const { t, i18n } = useTranslation();
-  const unverified = data?.state === 'unverified';
-  const worker =
-    typeof data?.workerLabel === 'string' && data.workerLabel
-      ? data.workerLabel
-      : typeof data?.workerId === 'string'
-        ? data.workerId.slice(0, 8)
-        : '';
-  const queued = data?.delivery === 'queued';
-  const summary = typeof data?.summary === 'string' ? data.summary : '';
-  // 展开态与工具行一致：按块记忆，重渲不丢；回执没有 dispatchId 时退化为
-  // 内容锚，避免所有老回执共用同一个 key。
-  const blockKey =
-    typeof data?.dispatchId === 'string' && data.dispatchId
-      ? `orca-dispatch:${data.dispatchId}`
-      : `orca-dispatch:${String(data?.at ?? '')}:${queued ? 'queued' : 'sent'}:${labelFallback(data)}`;
-  const { expanded, setExpanded } = useExpandedBlockMemory(blockKey);
-  const label = unverified
-    ? t('chat.systemCard.orcaDispatch.unverified')
-    : queued
-      ? t('chat.systemCard.orcaDispatch.queued', { worker })
-      : t('chat.systemCard.orcaDispatch.sent', { worker });
-  // 升级卡是要人行动的结论，保持常显；普通回执是一行事实，点开看全文。
-  if (unverified) {
-    // 正文按查看者当前语言拼：同一行记录会在手机、英文桌面上重读。
-    const labels = Array.isArray(data?.targets)
+  // 正常派单不落卡：Lead 的正文就是记录，宿主只在主张对不上凭据时落这张升级卡。
+  if (data?.state !== 'unverified') return null;
+  const label = t('chat.systemCard.orcaDispatch.unverified');
+  // 正文按查看者当前语言拼：同一行记录会在手机、英文桌面上重读。
+  const labels = Array.isArray(data?.targets)
       ? data.targets.filter((target): target is string => typeof target === 'string' && target !== '')
       : [];
     const detail = typeof data?.detail === 'string' ? data.detail : '';
@@ -1461,57 +1440,6 @@ function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
       </div>
     );
   }
-  return (
-    <div className="flex w-full flex-col" role="note" aria-label={label}>
-      {summary ? (
-        <button
-          type="button"
-          onClick={() => setExpanded(prev => !prev)}
-          aria-expanded={expanded}
-          title={expanded ? undefined : summary}
-          className={cn(
-            'group flex w-full items-center gap-1.5 text-left',
-            ACTIVITY_ROW_RADIUS_CLASS,
-            'px-2 py-[3px]',
-            ACTIVITY_ROW_HOVER_SURFACE_CLASS,
-            ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
-            'cursor-pointer select-none outline-none',
-            'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-          )}
-        >
-          <span className="shrink-0 text-12 leading-[1.5] text-[var(--text-secondary)]">{label}</span>
-          {!expanded && (
-            <>
-              <span aria-hidden className="shrink-0 text-12 text-[var(--text-tertiary)]">
-                ·
-              </span>
-              <span className="min-w-0 truncate text-12 leading-[1.5] text-[var(--text-tertiary)]">
-                {summary}
-              </span>
-            </>
-          )}
-          <span aria-hidden="true" className={ACTIVITY_ROW_CHEVRON_SLOT_CLASS}>
-            {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          </span>
-        </button>
-      ) : (
-        <span className="px-2 py-[3px] text-12 leading-[1.5] text-[var(--text-secondary)]">
-          {label}
-        </span>
-      )}
-      <Collapse open={expanded}>
-        <p className="whitespace-pre-line px-2 pb-1 text-12 leading-[1.5] text-[var(--text-secondary)]">
-          {summary}
-        </p>
-      </Collapse>
-    </div>
-  );
-}
-
-function labelFallback(data?: Record<string, unknown>): string {
-  const summary = typeof data?.summary === 'string' ? data.summary : '';
-  return summary.slice(0, 24);
-}
 
 const REVIEW_FAILURE_I18N_KEY: Record<ReviewFailureCode, string> = {
   'no-visible-result': 'chat.systemCard.review.noResult',

@@ -350,7 +350,7 @@ describe('lead dispatch claim verification', () => {
     );
   });
 
-  it('stays silent when the same turn really dispatched, and records a receipt', async () => {
+  it('stays silent when the same turn really dispatched', async () => {
     resetDispatchClaimState();
     const { deps, service } = createDeps();
     await service.sendToWorker({
@@ -366,10 +366,6 @@ describe('lead dispatch claim verification', () => {
     });
     expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
     expect(deps.escalateDispatchClaim).not.toHaveBeenCalled();
-    expect(deps.appendDispatchReceipt).toHaveBeenCalledWith(
-      'lead-1',
-      expect.objectContaining({ version: 1, delivery: 'direct' }),
-    );
   });
 
   it('keeps the escalation quiet when a later reply claims nothing', async () => {
@@ -481,7 +477,6 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
     ),
 
     escalateDispatchClaim: vi.fn(),
-    appendDispatchReceipt: vi.fn(),
     getLiveSession: vi.fn(() => null),
     resumeWorkerSession: vi.fn(async () => {}),
     updateWorkerStatus: vi.fn(async (workerId, status) => {

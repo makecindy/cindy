@@ -15316,8 +15316,6 @@
     },
     "systemCard": {
       "orcaDispatch": {
-        "sent": "Dispatched to {{worker}}",
-        "queued": "Queued for {{worker}}",
         "unverified": "Dispatch not verified",
         "notice": {
           "claim": "Lead said it dispatched",

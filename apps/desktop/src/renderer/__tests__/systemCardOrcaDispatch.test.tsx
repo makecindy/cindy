@@ -1,17 +1,15 @@
 // @vitest-environment jsdom
 
 /**
- * 派发回执行：普通回执压成**一行事实**，升级卡保持**多行可读**。
+ * 派单升级卡：宿主只在 Lead 的主张补派一轮后仍无凭据时落卡，正常派单不落卡。
  *
- * Bug 依据：回执曾把 240 字摘要整段铺开，还同时挂 `truncate` 与 `whitespace-pre-line`
- * （两个类抢同一个属性，结果折了五行）。这里锁三件事：
- *  1. 折叠态是一行，摘要不折行；
- *  2. 点一下展开、再点收起（手机没有 hover，点击是主入口），展开体走共享
- *     Collapse —— 与工具行同一套展开语言；
- *  3. 升级卡不参与压缩 —— 它是需要主人决策的信息，压成一行等于埋掉。
+ * 这里锁三件事：
+ *  1. 正常派单（state !== 'unverified'）渲染为空 —— 异常才有可见性；
+ *  2. 升级卡多行、不可折叠，正文按查看者当前语言拼装；
+ *  3. 过长引文截断，队列编号进判定。
  */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -40,43 +38,25 @@ afterEach(() => {
   cleanup();
 });
 
-const sentReceipt = {
-  version: 1,
-  state: 'sent',
-  dispatchId: 'd-1',
-  workerId: 'worker-1',
-  workerLabel: 'developer',
-  delivery: 'direct',
-  summary: '三个症状一个根：改判值写进了总分',
-  at: 1,
-};
-
 describe('SystemCard orca-dispatch 行', () => {
-  it('折叠态是一行事实：按钮带 aria-expanded=false，摘要不折行', () => {
-    render(<SystemCard cardType="orca-dispatch" data={sentReceipt} />);
+  it('正常派单不落卡：state 为 sent 的历史行渲染为空', () => {
+    const { container } = render(
+      <SystemCard
+        cardType="orca-dispatch"
+        data={{
+          version: 1,
+          state: 'sent',
+          dispatchId: 'd-1',
+          workerId: 'worker-1',
+          workerLabel: 'developer',
+          delivery: 'direct',
+          summary: '三个症状一个根：改判值写进了总分',
+          at: 1,
+        }}
+      />,
+    );
 
-    const row = screen.getByRole('button');
-    expect(row.getAttribute('aria-expanded')).toBe('false');
-    expect(screen.getByText('chat.systemCard.orcaDispatch.sent({"worker":"developer"})')).toBeTruthy();
-
-    const summary = screen.getByText(sentReceipt.summary);
-    expect(summary.className).toContain('truncate');
-    // 两个类抢同一个属性就会出现「该截断却折行」，这条断言挡住复发。
-    expect(summary.className).not.toContain('whitespace-pre-line');
-  });
-
-  it('点一下展开成三行，再点收起', () => {
-    render(<SystemCard cardType="orca-dispatch" data={sentReceipt} />);
-
-    fireEvent.click(screen.getByRole('button'));
-    expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('true');
-    // 展开后摘要移进 Collapse 正文：整段可读，不再依赖行数截断。
-    const expandedSummary = screen.getByText(sentReceipt.summary);
-    expect(expandedSummary.className).toContain('whitespace-pre-line');
-    expect(expandedSummary.className).not.toContain('truncate');
-
-    fireEvent.click(screen.getByRole('button'));
-    expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
+    expect(container.querySelector('[role="note"]')).toBeNull();
   });
 
   it('升级卡保持多行、不可折叠，正文按当前语言拼装', () => {
@@ -101,7 +81,7 @@ describe('SystemCard orca-dispatch 行', () => {
     expect(body.textContent).toContain('orcaDispatch.notice.claimTarget');
     expect(body.textContent).toContain('orcaDispatch.notice.noDispatch');
     expect(body.textContent).toContain('已派给 developer，接着做行值修复');
-    // 升级卡与普通回执同一套行内节奏，只差颜色；区别是它不折叠、不截断。
+    // 升级卡不参与压缩 —— 它是需要主人决策的信息，压成一行等于埋掉。
     expect(body.className).toContain('whitespace-normal');
     expect(body.className).not.toContain('truncate');
     expect(screen.getByRole('note').className).toContain('px-2 py-[3px]');

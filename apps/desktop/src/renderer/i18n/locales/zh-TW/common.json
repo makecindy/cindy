@@ -15250,8 +15250,6 @@
     },
     "systemCard": {
       "orcaDispatch": {
-        "sent": "已派給 {{worker}}",
-        "queued": "已排隊給 {{worker}}",
         "unverified": "派單未經核實",
         "notice": {
           "claim": "Lead 稱已派單",

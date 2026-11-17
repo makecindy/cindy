@@ -38,7 +38,7 @@ import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
 import { getTeamByWorkerSession } from '../localDb/orcaTeamStore';
 import { readWorkerProjectContext, createWorkerWorktree, rememberWorkerProject, probeWorkerProject, resolveWorkerWorktreeSourceSelection, getWorkerOwnedWorktree } from './orcaWorkerProject';
 import type { WorkerWorktreeRequest } from '../../shared/orca-worker-project';
-import type { OrcaDispatchSystemRecord } from '../../shared/orcaDispatchReceipt.js';
+import type { OrcaDispatchClaimNotice } from '../../shared/orcaDispatchReceipt.js';
 import { captureAgentRequest as captureRequest, ownerChannelInputEvidence, type CapturedAgentRequest, type DelegationTarget } from './forwardedRequest.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
@@ -16122,11 +16122,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       inputCoordinator.mergeQueuedMessagesAtomically(sessionId, clientIds, buildReplacement).merged,
   };
 
-  /** 协同系统行：回执与升级卡共用同一条落库路径（role=assistant + agentMeta 标记，正文为空）。 */
+  /** 协同系统行：升级卡落库路径（role=assistant + agentMeta 标记，正文为空）。 */
   const appendOrcaDispatchSystemRow = (
     leadSessionId: string,
     clientId: string,
-    record: OrcaDispatchSystemRecord,
+    record: OrcaDispatchClaimNotice,
   ): void => {
     void createDbMessage(leadSessionId, {
       clientId,
@@ -16363,10 +16363,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       })();
     },
     readDispatchClaimVerificationEnabled: () => readCollaborationSettings().dispatchClaimVerification,
-    appendDispatchReceipt: (leadSessionId, receipt) => {
-      // 回执卡落库为宿主系统行：role=assistant + agentMeta 标记，正文为空，不进模型上下文。
-      appendOrcaDispatchSystemRow(leadSessionId, `orca-dispatch-${receipt.dispatchId}`, receipt);
-    },
     log,
   }));
   orcaTeamServiceForEvents = orcaTeamService;

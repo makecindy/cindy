@@ -15420,8 +15420,6 @@
     },
     "systemCard": {
       "orcaDispatch": {
-        "sent": "Envoyé à {{worker}}",
-        "queued": "En file pour {{worker}}",
         "unverified": "Envoi non vérifié",
         "notice": {
           "claim": "Le Lead affirme avoir envoyé",

@@ -431,9 +431,9 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
    否定句（「没有派」「尚未派」）、引用他处原文、代码块与将来时的语法都不算主张。不一致时
    先向该 Lead 注入一条纠正消息（附上一轮原文引用与 turn 指针，至多一次）；补派轮仍不一致
    才升级：在会话里落一条不可撤回的宿主卡片 + 红点 + 既有通知通道提醒，卡片是系统行、不开
-   新 turn，所以升级不会自激；真派发出现前该 Lead 不再唤醒。回执卡与升级卡共用同一条落库
-   路径（`agentMeta.orcaDispatch`，`role=assistant` + 空正文，`state` 区分 sent / unverified），
-   只给渲染层，不进模型上下文。
+   新 turn，所以升级不会自激；真派发出现前该 Lead 不再唤醒。正常派单不落卡（异常才有可见
+   性）；只有升级卡落库（`agentMeta.orcaDispatch`，`role=assistant` + 空正文，
+   `state=unverified`），只给渲染层，不进模型上下文。
    实现指针：`apps/desktop/src/main/maker-ipc/orcaDispatchClaims.ts`、`orcaTeamService.ts`
    的 `handleLeadTurnSettled`、`sessionEventTerminal.ts` 的 lead 收口钩子、
    `localDb/agentHandoffHistory.ts` 的卡片行过滤；能力开关是协同设置里的
