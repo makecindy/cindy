@@ -31,6 +31,7 @@ export const personalizationDetailsSettings = defineSettings({
     titleKey: 'settings.composer.followUp.label',
     sectionKey: 'settings.sections.composer',
     descriptionKey: 'settings.composer.followUp.hintQueue',
+    keywordKeys: ['settings.composer.followUp.ariaLabel'],
     options: [
       { value: 'queue', labelKey: 'settings.composer.followUp.options.queue' },
       { value: 'steer', labelKey: 'settings.composer.followUp.options.steer' },
