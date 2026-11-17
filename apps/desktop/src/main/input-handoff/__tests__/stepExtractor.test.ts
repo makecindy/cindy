@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { contentTypeFor, extractStep } from '../stepExtractor.js';
+import { applyFieldPlan, contentTypeFor, extractStep } from '../stepExtractor.js';
 import { classifyOrigin } from '../originPolicy.js';
 import type { NativeAxNode, NativeAxSnapshot } from '../types.js';
 
@@ -24,6 +24,27 @@ const snapshot = (nodes: NativeAxNode[], extra: Partial<NativeAxSnapshot> = {}):
 });
 
 describe('extractStep', () => {
+  // Long-form regression: extractStep must retain fields below the viewport (unit).
+  // Existing crowded-screen coverage only used links, never an offscreen input or >40 inputs.
+  it('keeps the complete scrollable web form and its submit action', () => {
+    const step = extractStep(snapshot([
+      node('0', 'AXWebArea', { url: 'https://example.test/keys', frame: [0, 60, 1200, 840] }),
+      node('0.1', 'AXTextField', { title: 'First key' }),
+      // Chrome clips offscreen AX rectangles to zero height at the page edge.
+      node('0.2', 'AXTextField', { title: 'Last key', frame: [100, 900, 200, 0] }),
+      node('0.3', 'AXButton', { title: 'Continue', frame: [100, 900, 200, 0] }),
+    ]));
+    expect(step.shown.map(c => c.kind === 'text' && c.label)).toEqual(['First key', 'Last key']);
+    expect(step.controls.find(c => c.kind === 'button')).toMatchObject({ primary: true });
+  });
+
+  it('never exposes a silently truncated form as a complete step', () => {
+    const nodes = Array.from({ length: 41 }, (_, i) => node(String(i), 'AXTextField', { title: `Key ${i}` }));
+    for (const input of [snapshot(nodes, { bundleId: 'x' }), snapshot(nodes.slice(0, 2), { bundleId: 'x', truncated: true })]) {
+      expect(() => extractStep(input)).toThrow('Incomplete form');
+    }
+  });
+
   it('never asks for a browser\'s address bar when its page cannot be read', () => {
     for (const [desc, placeholder] of [['地址和搜索栏', '问问 Google 或输入网址'], ['Address and search bar', 'Search Google or type a URL']]) {
       const step = extractStep(snapshot([node('0', 'AXTextField', { desc, placeholder, hasValue: true, frame: [40, 10, 600, 20] })]));
@@ -203,5 +224,41 @@ describe('classifyOrigin', () => {
     ['app://index.html', false, {}],
   ])('%s', (url, browser, expected) => {
     expect(classifyOrigin(url, browser)).toEqual(expected);
+  });
+});
+
+// Unit regression: GitHub-like split code labels previously became eight owner fields.
+// Existing extraction tests cover individual inputs, not logical grouping or ambiguous plans.
+describe('logical field plans', () => {
+  const codeStep = () => extractStep(snapshot([
+    node('0', 'AXWebArea', { url: 'https://example.com/device' }),
+    ...[0, 1, 2, 3, 5, 6, 7, 8].map((n) => node(`0.${n}`, 'AXTextField', { title: `User code ${n}` })),
+  ]));
+  const plan = [{ label: '授权码', contentType: 'one-time-code' as const,
+    targets: [0, 1, 2, 3, 5, 6, 7, 8].map((n) => ({ label: `User code ${n}`, length: 1 })) }];
+  it('shows one code and keeps all eight host bindings in the declared order', () => {
+    const step = codeStep();
+    expect(applyFieldPlan(step, plan)).toBe(true);
+    expect(step.shown).toMatchObject([{ label: '授权码', contentType: 'one-time-code' }]);
+    const binding = step.bindings.get(step.shown[0].id);
+    expect(binding?.kind === 'text' && binding.segments?.map((s) => s.ref)).toEqual(['0.0','0.1','0.2','0.3','0.5','0.6','0.7','0.8']);
+  });
+  it('rejects incomplete, duplicate and ambiguous matches without changing the form', () => {
+    for (const targets of [plan[0].targets.slice(1), [...plan[0].targets, plan[0].targets[0]], [{ label: 'missing', length: 8 }], plan[0].targets.map(({ label }) => ({ label }))]) {
+      const step = codeStep();
+      const before = JSON.stringify(step.shown);
+      expect(applyFieldPlan(step, [{ ...plan[0], targets }])).toBe(false);
+      expect(JSON.stringify(step.shown)).toBe(before);
+    }
+    const ambiguous = extractStep(snapshot([
+      node('0', 'AXTextField', { title: 'Code' }), node('1', 'AXTextField', { title: 'Code' }),
+    ], { bundleId: 'com.example.native' }));
+    expect(applyFieldPlan(ambiguous, [{ label: 'Code', contentType: 'one-time-code', targets: [{ label: 'Code' }] }])).toBe(false);
+    expect(ambiguous.shown).toHaveLength(2);
+  });
+  it('never downgrades a native password field to ordinary text', () => {
+    const step = extractStep(snapshot([node('0', 'AXTextField', { title: 'Password', secure: true })], { bundleId: 'com.example.native' }));
+    expect(applyFieldPlan(step, [{ label: '系统密码', contentType: 'text', targets: [{ label: 'Password' }] }])).toBe(true);
+    expect(step.shown[0]).toMatchObject({ contentType: 'password' });
   });
 });

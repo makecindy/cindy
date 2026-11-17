@@ -7,7 +7,7 @@ import {
   type InputHandoffDeviceCode,
   type InputHandoffSource,
 } from '@cindy/device-link';
-import type { ControlBinding, NativeAxNode, NativeAxSnapshot, ScreenControl } from './types.js';
+import type { ControlBinding, HandoffFieldPlan, NativeAxNode, NativeAxSnapshot, ScreenControl } from './types.js';
 import { classifyOrigin, isBrowserBundle } from './originPolicy.js';
 import { findDeviceCode } from './deviceCode.js';
 
@@ -80,6 +80,17 @@ function visible(node: NativeAxNode, windowFrame: number[]): boolean {
   if (windowFrame.length !== 4) return true;
   const [wx, wy, ww, wh] = windowFrame;
   return x + w > wx && y + h > wy && x < wx + ww && y < wy + wh;
+}
+
+/** Chrome clips offscreen AX bounds at the viewport edge, while retaining the field's identity. */
+function laidOutInPage(node: NativeAxNode, page: NativeAxNode): boolean {
+  if (visible(node, [])) return true;
+  if (!node.frame || !page.frame) return false;
+  const [x, y, w, h] = node.frame;
+  const [px, py, pw, ph] = page.frame;
+  const edge = (value: number, start: number, size: number) => Math.abs(value - start) < 2 || Math.abs(value - start - size) < 2;
+  return (w >= 2 && h >= 0 && h < 2 && (edge(y, py, ph) || edge(y + h, py, ph))) ||
+    (h >= 2 && w >= 0 && w < 2 && (edge(x, px, pw) || edge(x + w, px, pw)));
 }
 
 const isWithin = (ref: string, scope: string) => ref === scope || ref.startsWith(`${scope}.`);
@@ -164,6 +175,8 @@ function signatureOf(source: InputHandoffSource, controls: ScreenControl[]): str
 }
 
 export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
+  // Never ask the owner to submit a subset just because the AX walk hit its budget.
+  if (snapshot.truncated) throw new Error('Incomplete form');
   const windowFrame = snapshot.window.frame ?? [];
   const browser = isBrowserBundle(snapshot.bundleId);
   const nodes = snapshot.nodes.filter((node) => visible(node, windowFrame));
@@ -175,7 +188,10 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
     .sort((a, b) => area(b) - area(a))[0];
   // Without a page, a browser window shows only its toolbar: its address bar is never the owner's to fill.
   const pageMissing = browser && !topWeb;
-  const scoped = topWeb ? nodes.filter((node) => isWithin(node.ref, topWeb.ref)) : pageMissing ? [] : nodes;
+  // A page's accessibility tree includes laid-out fields below the viewport.
+  // Scrolling must not turn one form into unrelated partial steps. Zero-size
+  // nodes are excluded unless their bounds were clipped at the viewport edge.
+  const scoped = topWeb ? snapshot.nodes.filter((node) => isWithin(node.ref, topWeb.ref) && laidOutInPage(node, topWeb)) : pageMissing ? [] : nodes;
 
   // Modal sheets take over the window.
   const sheet = scoped.find((node) => node.role === 'AXSheet');
@@ -351,6 +367,9 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
   );
   if (primary >= 0) (controls[primary] as Extract<ScreenControl, { kind: 'button' }>).primary = true;
 
+  if (controls.filter((control) => control.kind === 'text').length > INPUT_HANDOFF_MAX_CONTROLS) {
+    throw new Error('Incomplete form');
+  }
   const capped = capControls(controls, bindings);
   const source: InputHandoffSource = {
     app: clip(snapshot.app) || snapshot.bundleId || 'App',
@@ -430,8 +449,9 @@ function capControls(
 ): ScreenControl[] {
   if (controls.length <= INPUT_HANDOFF_MAX_CONTROLS) return controls;
   const rank = (control: ScreenControl) =>
-    control.kind === 'text' || control.kind === 'choice' ? 0
-      : control.kind === 'button' && control.primary ? 0
+    control.kind === 'text' ? 0
+      : control.kind === 'button' && control.primary ? 1
+        : control.kind === 'choice' ? 1
         : control.kind === 'note' && control.tone !== 'info' ? 1
           : control.kind === 'toggle' ? 1
             : control.kind === 'button' && !control.link ? 2
@@ -445,4 +465,46 @@ function capControls(
   );
   for (const control of controls) if (!keep.has(control.id)) bindings.delete(control.id);
   return controls.filter((control) => keep.has(control.id));
+}
+
+/** Validate the entire plan before replacing any field. Ambiguous labels never guess a target. */
+export function applyFieldPlan(step: ExtractedStep, plan: HandoffFieldPlan[]): boolean {
+  const fields = step.shown.filter((c): c is Extract<InputHandoffControl, { kind: 'text' }> => c.kind === 'text');
+  const used = new Set<string>();
+  const replacements: Array<{ control: typeof fields[number]; binding: ControlBinding }> = [];
+  for (const field of plan) {
+    const matches = field.targets.map((target) => fields.filter((c) => c.label === target.label));
+    if (!matches.length || matches.some((items) => items.length !== 1)) return false;
+    const originals = matches.map((items) => items[0]);
+    const bindings = originals.map((c) => step.bindings.get(c.id));
+    if (bindings.some((b) => b?.kind !== 'text')) return false;
+    const textBindings = bindings as Array<ControlBinding & { kind: 'text' }>;
+    for (const original of originals) {
+      if (used.has(original.id)) return false;
+      used.add(original.id);
+    }
+    const split = originals.length > 1;
+    // Splitting is meaningful only for codes; passwords must stay intact.
+    if (split && (field.contentType !== 'one-time-code' || textBindings.some((b) => b.secure) ||
+      field.targets.some((t) => !Number.isSafeInteger(t.length) || t.length! < 1 || t.length! > 64))) return false;
+    const secure = textBindings.some((b) => b.secure) || field.contentType === 'password';
+    const control = { ...originals[0], label: clip(field.label), contentType: secure ? 'password' as const : field.contentType };
+    // One field can be partially filled; don't imply the whole code is present.
+    if (!originals.every((c) => c.filled)) delete control.filled;
+    replacements.push({ control, binding: {
+      ...textBindings[0], secure, nativeSecure: textBindings[0].secure,
+      ...(split ? { segments: textBindings.map((b, i) => ({ ...b, length: field.targets[i].length! })) } : {}),
+    } });
+  }
+  if (used.size !== fields.length || !fields.length) return false;
+  const first = step.controls.findIndex((c) => used.has(c.id));
+  step.controls = step.controls.filter((c) => !used.has(c.id));
+  step.controls.splice(first, 0, ...replacements.map((r) => r.control));
+  for (const id of used) step.bindings.delete(id);
+  for (const { control, binding } of replacements) step.bindings.set(control.id, binding);
+  step.hasSecure ||= replacements.some((r) => r.control.contentType === 'password');
+  if (step.hasSecure || replacements.some((r) => r.control.contentType === 'one-time-code')) step.signIn = true;
+  step.shown = ownerControls(step.controls);
+  step.signature = signatureOf(step.source, step.controls);
+  return true;
 }

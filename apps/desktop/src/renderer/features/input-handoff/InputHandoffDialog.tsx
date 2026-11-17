@@ -49,18 +49,18 @@ export function InputHandoffDialog({
           onEscapeKeyDown={(event) => {
             if (event.isComposing || event.keyCode === 229) event.preventDefault();
           }}
-          className="modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(440px,calc(100vw-32px))] flex-col gap-4 overflow-y-auto p-6 outline-none"
+          className="modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(440px,calc(100vw-32px))] flex-col gap-4 overflow-hidden p-6 outline-none"
           data-testid="input-handoff-dialog"
         >
-          <InputHandoffDialogHeader snapshot={snapshot} inputBlocked={inputBlocked} />
-          {children}
+          <div className="shrink-0"><InputHandoffDialogHeader snapshot={snapshot} inputBlocked={inputBlocked} /></div>
+          <div className="min-h-0 overflow-y-auto">{children}</div>
           {error && (
             <p role="alert" className="text-center text-12 text-[var(--error-fg)]">
               {error}
             </p>
           )}
-          {footer}
-          {links && <div className="-mt-1 flex flex-wrap justify-center gap-x-4">{links}</div>}
+          {footer && <div className="shrink-0">{footer}</div>}
+          {links && <div className="-mt-1 flex shrink-0 flex-wrap justify-center gap-x-4">{links}</div>}
           {!footer && (
             <Dialog.Close className="mx-auto min-h-8 px-3 text-13 font-medium text-[var(--text-primary)] hover:text-[var(--text-secondary)]">
               {t('inputHandoff.action.close')}

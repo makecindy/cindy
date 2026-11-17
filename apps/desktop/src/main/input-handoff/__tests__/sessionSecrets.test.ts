@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { InputHandoffSnapshot } from '@cindy/device-link';
 import { isHumanDesktopInputActive } from '../../remote-desktop/inputOwnership.js';
 import type { HandoffDriver } from '../macDriver.js';
-import { InputHandoffSession, type HandoffResult } from '../session.js';
+import { InputHandoffSession, type HandoffResult, type HandoffSessionOptions } from '../session.js';
 import type { NativeActRequest, NativeAxNode } from '../types.js';
 
 const node = (ref: string, role: string, extra: Partial<NativeAxNode> = {}): NativeAxNode => ({
@@ -79,6 +79,7 @@ function loginPage(commandLine = '') {
 function start(
   driver: HandoffDriver,
   onSecretEntered?: (target: { pid: number; url?: string }) => void,
+  fields?: HandoffSessionOptions["fields"],
 ) {
   const published: InputHandoffSnapshot[] = [];
   const finished: HandoffResult[] = [];
@@ -86,6 +87,7 @@ function start(
   const session = new InputHandoffSession({
     requestId: 'req1',
     purpose: 'Sign in',
+    fields,
     target: { app: 'Google Chrome' },
     timeoutMs: 600_000,
     hostPid: 1,
@@ -114,6 +116,58 @@ function answer(step: InputHandoffSnapshot) {
 }
 
 describe('代输入 secrets', () => {
+  // Unit regression: a logical password plan can upgrade a custom text field.
+  // Existing tests only use native secure fields; submit must still fill and shield this field.
+  it('submits a planned password in a native plain field', async () => {
+    const page = loginPage('--remote-debugging-port=9222');
+    const read = page.driver.snapshot;
+    page.driver.snapshot = async (...args) => {
+      const raw = await read(...args);
+      if (!('error' in raw)) for (const field of raw.nodes) {
+        if (field.title === 'Password') { delete field.subrole; delete field.secure; }
+      }
+      return raw;
+    };
+    const entered: unknown[] = [];
+    const { session, latest } = start(page.driver, target => entered.push(target), [
+      { label: 'Account', contentType: 'username', targets: [{ label: 'Email' }] },
+      { label: 'Password', contentType: 'password', targets: [{ label: 'Password' }] },
+    ]);
+    await session.start();
+    expect(latest().controls).toEqual(expect.arrayContaining([expect.objectContaining({ contentType: 'password' })]));
+    await session.submit(answer(latest()));
+    expect(page.acts.filter(a => a.kind === 'text').map(a => a.value)).toEqual(['someone@example.test', 'synthetic-pass']);
+    expect(entered.length).toBeGreaterThan(0);
+    session.cancel();
+  });
+
+  // Unit regression: old structure must not receive values after dynamic fields appear.
+  // Existing origin-change tests keep the same fields; this changes them on the same page.
+  it.each(['before', 'during'])('does not submit a form changed %s filling', async (when) => {
+    const page = loginPage();
+    const read = page.driver.snapshot;
+    let changed = false;
+    page.driver.snapshot = async (...args) => {
+      const raw = await read(...args);
+      if (!('error' in raw) && changed) raw.nodes.push(node('0.4', 'AXTextField', { title: 'New required key', required: true }));
+      return raw;
+    };
+    const act = page.driver.act;
+    page.driver.act = async (request) => {
+      const result = await act(request);
+      changed = true;
+      return result;
+    };
+    const { session, latest } = start(page.driver);
+    await session.start();
+    const submission = answer(latest());
+    changed = when === 'before';
+    await session.submit(submission);
+    expect(page.acts.map(a => a.kind)).toEqual(when === 'before' ? [] : ['text']);
+    expect(submission.values).toEqual({});
+    session.cancel();
+  });
+
   it('types while holding the desktop, so the agent cannot act in between', async () => {
     const page = loginPage();
     const { session, latest } = start(page.driver);
@@ -150,6 +204,23 @@ describe('代输入 secrets', () => {
     expect(finished[0]).toMatchObject({ status: 'failed', failure: 'origin_changed' });
   });
 
+  // Unit: a page may navigate after the username input; the password must not follow it.
+  it('checks the destination again between account and password', async () => {
+    const page = loginPage();
+    const act = page.driver.act;
+    page.driver.act = async (request) => {
+      const result = await act(request);
+      if (request.kind === 'text') page.navigate('https://other.example/signin');
+      return result;
+    };
+    const { session, latest } = start(page.driver);
+    await session.start();
+    await session.submit(answer(latest()));
+    expect(page.acts.filter((a) => a.kind === 'text').map((a) => a.value)).toEqual(['someone@example.test']);
+    expect(latest().failure).toBe('origin_changed');
+    session.cancel();
+  });
+
   it('reports a sign-in page as soon as it shows a password, in any browser, and a secret typed into a browser the agent drives', async () => {
     const page = 'https://login.example.com/signin';
     const entered: Array<{ pid: number; url?: string }> = [];
@@ -170,5 +241,51 @@ describe('代输入 secrets', () => {
     const second = start(loginPage().driver, (target) => own.push(target));
     await second.session.start();
     expect(new Set(own.map((target) => target.url))).toEqual(new Set([page]));
+  });
+});
+
+// Unit: submission must distribute one owner code, never submit a partial code,
+// and abort if origin changes between segments. Existing tests only fill whole fields.
+describe('split code submission', () => {
+  const plan: HandoffSessionOptions['fields'] = [{ label: 'Code', contentType: 'one-time-code', targets: [
+    { label: 'User code 0', length: 1 }, { label: 'User code 2', length: 1 },
+  ] }];
+  function setup(changeOrigin = false) {
+    const page = loginPage();
+    const original = page.driver.snapshot;
+    page.driver.snapshot = async (...args) => {
+      const raw = await original(...args);
+      if ('error' in raw) return raw;
+      raw.nodes = [raw.nodes[0], node('0.0', 'AXTextField', { title: 'User code 0' }),
+        node('0.2', 'AXTextField', { title: 'User code 2' }), node('0.3', 'AXButton', { title: 'Continue' })];
+      return raw;
+    };
+    const act = page.driver.act;
+    page.driver.act = async (request) => {
+      const result = await act(request);
+      if (changeOrigin && request.kind === 'text') page.navigate('https://other.example/');
+      return result;
+    };
+    return { ...page, ...start(page.driver, undefined, plan) };
+  }
+  it.each([['AB', ['A', 'B']], ['A', []]])('fills only complete codes: %s', async (value, expected) => {
+    const run = setup();
+    await run.session.start();
+    const step = run.latest();
+    expect(step.controls).toHaveLength(1);
+    const values = { [step.controls[0].id]: value };
+    await run.session.submit({ expectedRevision: step.revision, values, action: { kind: 'submit' } });
+    expect(run.acts.filter((a) => a.kind === 'text').map((a) => a.value)).toEqual(expected);
+    expect(values).toEqual({});
+    if (!expected.length) expect(run.acts).toHaveLength(0);
+    run.session.cancel();
+  });
+  it('stops before the second character when the page changes origin', async () => {
+    const run = setup(true);
+    await run.session.start();
+    const step = run.latest();
+    await run.session.submit({ expectedRevision: step.revision, values: { [step.controls[0].id]: 'AB' }, action: { kind: 'submit' } });
+    expect(run.acts.map((a) => a.value)).toEqual(['A']);
+    run.session.cancel();
   });
 });

@@ -306,7 +306,7 @@ Webhook 跨电脑配置（2026-11-06）：`schedule_create` / `schedule_update` 
 
 Claude Code／Pi 的非阻塞澄清恢复独立的 `ask_user_question_async`；Pi 同步展示为直接工具，
 无需先检索 MCP。Codex 保持原生提问入口。独立的 `request_input_handoff` 处理窗口与截图二维码，
-三个 Harness 直接可发现；Grok 登录恢复 auth 类目的 `start_grok_device_login`。移除 `ask_owner`，
+三个 Harness 直接可发现。可选 `fields` 描述经过界面与截图确认的逻辑字段，由宿主核对并将分段验证码组织为一个输入框（见 [代输入](input-handoff.md#11-ai-组织当前表单2026-11-16)）；Grok 登录恢复 auth 类目的 `start_grok_device_login`。移除 `ask_owner`，
 既有同步提问、卡片和回答生命周期保持不变。
 
 三种 Harness 都直接列出 `manage_user_questions`，无需先猜能力名称；只管理当前任务的

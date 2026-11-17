@@ -49,6 +49,7 @@ vi.mock("react-native", async () => {
     useWindowDimensions: () => ({ width: 390, height: 844 }),
     ScrollView: box,
     KeyboardAvoidingView: box,
+    Keyboard: { addListener: () => ({ remove() {} }) },
     // The sheet exists in the tree only while presented.
     Modal: ({ visible, children }: { visible: boolean; children?: ReactNode }) => (visible ? box({ children }) : null),
     Pressable: ({ children, onPress, onLayout, testID, accessibilityLabel }: { children?: ReactNode; onPress(e: unknown): void; onLayout?(e: unknown): void; testID?: string; accessibilityLabel?: string }) => {
@@ -218,6 +219,21 @@ it("closes the sheet without cancelling, and comes back by itself for the next s
   expect((container.querySelector("input") as HTMLInputElement).value).toBe("");
 });
 
+// Production card regression: the encrypted receipt may beat the Host push.
+// An accepted step must not reopen empty or submit twice; the next step still opens. Tier: unit.
+it("keeps an accepted form closed until the next step arrives", async () => {
+  const { container, render } = mount(step());
+  await press(container, "interaction.inputHandoff.action.fill");
+  type(container.querySelector("input")!, "synthetic-account");
+  await press(container, "interaction.inputHandoff.action.continue");
+  expect(sheet(container)).toBeNull();
+  render(step({ revision: 3 }));
+  expect(sheet(container)).toBeNull();
+  render(step({ revision: 4, stepNumber: 2, controls: [{ id: "code", kind: "text", label: "Code", contentType: "one-time-code" }] }));
+  expect(sheet(container)).not.toBeNull();
+  expect((container.querySelector("input") as HTMLInputElement).value).toBe("");
+});
+
 it("offers handing back when nothing is left to type, and a countdown when it looks done", async () => {
   const { container, onDecision, render } = mount(step({ controls: [] }));
   expect(container.textContent).toContain("interaction.inputHandoff.nothingLeft");
@@ -255,6 +271,17 @@ it("sends a sign-in to the live view, and keeps the form when there is none", as
   expect(buttons(container)).toContain("interaction.inputHandoff.action.fill");
   const noLive = mount(step({ directSignIn: true }));
   expect(buttons(noLive.container)).toContain("interaction.inputHandoff.action.fill");
+});
+
+it("prefers the planned sign-in form on the phone and keeps access to the window", async () => {
+  const { container } = mount(step({ directSignIn: true, liveView: true, preferRemoteForm: true }));
+  expect(buttons(container)).not.toContain("interaction.inputHandoff.action.openRemoteDesktop");
+  await press(container, "interaction.inputHandoff.action.fill");
+  await press(container, "interaction.inputHandoff.action.liveView");
+  expect(push).toHaveBeenCalledWith({
+    pathname: "/devices/desktop/[deviceId]",
+    params: { deviceId: "mac", deviceName: "Studio", handoff: "req1" },
+  });
 });
 
 it("offers a sign-in code to copy and its link to open on this phone", async () => {
