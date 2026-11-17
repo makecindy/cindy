@@ -13668,12 +13668,6 @@
         "ASSESSMENT_FAILED": "暂时无法刷新配置状态，请重试。",
         "TIMEOUT": "等待设置超时，请重试。"
       },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "AI 模型服务",
-          "description": "使用插件声明的图片或视频能力前，需要先连接可用的模型服务"
-        }
-      },
       "form": {
         "placeholder": "请输入{{label}}",
         "required": "请输入{{label}}",
@@ -15634,6 +15628,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输失败，消息未发送。请重试。",
       "MCP_APPROVAL_AUTO_BLOCKED": "这次工具调用被自动审批拦截，未收到你手动拒绝的记录。",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "自动审批拦截了这次工具调用：缺少完整的操作信息。",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "自动审批拦截了这次工具调用：你的指令已更改或尚未同步。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "自动审批拦截了这次工具调用：目录权限已更改。",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "自动审批拦截了这次工具调用：委派授权已更改。",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "自动审批拦截了这次工具调用：插件或任务的授权已失效。",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "自动审批拦截了这次工具调用：没有用户指令授权执行该操作。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "自动审批拦截了这次工具调用：工作计划超出支持的大小。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "自动审批拦截了这次工具调用：执行的 Agent 与已登记的工作计划不符。",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "自动审批拦截了这次工具调用：任务的工作目录已更改。",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "自动审批拦截了这次工具调用：委派任务的范围缺失或无效。",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "权限确认超时，未收到有效的确认结果。仅凭超时无法判断你是否点过按钮。",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "这次权限确认未完成，未收到你手动拒绝的记录。",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "这个模型需要电脑端转发请求，当前远端连接还不能转发。请改用 Cindy AI，或在本机任务里使用这个模型。",
