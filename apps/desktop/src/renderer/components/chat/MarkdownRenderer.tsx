@@ -1337,7 +1337,7 @@ function useResolvedMarkdownTarget(
   // 任何一条边都只有 resolveFromCache 一个地方需要改对(PR #1144 第 10 轮止损重构)。
   const remoteAbsPath = useMemo(() => {
     if (isStreaming || target.kind !== 'local-candidate' || !remoteOrigin) return '';
-    if (isHomePath(target.href)) return remoteHomePath ?? '';
+    if (isHomePath(target.href)) return remoteHomePath?.absPath ?? '';
     return resolveLocalPath(target.href, workingDir) || '';
   }, [isStreaming, target, workingDir, remoteOrigin, remoteHomePath]);
 
@@ -1361,7 +1361,12 @@ function useResolvedMarkdownTarget(
       // ForRender 版会把 TTL 未过期的负缓存回成 'unknown',于是「断链期间的乐观点亮」
       // 也是缓存的派生,不需要组件自己记住(见 remoteFileOpen 里两个 peek 的分工)。
       const verdict = peekRemotePathVerdictForRender(remoteOrigin, workingDir, remoteAbsPath);
-      const decision = decideRemoteLit(verdict, candidate.href, candidate.originalHref);
+      // chatStat can be unknown outside the workdir. Keep the owner's known
+      // kind there, but a newer definitive stat (including nonfile) still wins.
+      const decision = decideRemoteLit(
+        verdict === 'unknown' ? remoteHomePath?.kind ?? verdict : verdict,
+        candidate.href, candidate.originalHref,
+      );
       if (!decision.lit) return null;
       return resolvedLocalFromResult(candidate, {
         status: 'unique',
@@ -1371,7 +1376,7 @@ function useResolvedMarkdownTarget(
     }
     const cached = peekResolveLocalPathSmart(candidate.href, workingDir);
     return cached ? resolvedLocalFromResult(candidate, cached) : null;
-  }, [isStreaming, target, workingDir, remoteOrigin, remoteAbsPath]);
+  }, [isStreaming, target, workingDir, remoteOrigin, remoteAbsPath, remoteHomePath]);
 
   useEffect(() => {
     if (isStreaming || target.kind !== 'local-candidate') return;
@@ -1577,10 +1582,11 @@ function MarkdownTargetLink({
       try {
         let result: SmartResolveResult;
         if (isRemoteFileOrigin(fileCtx.origin)) {
+          const homeResult = isHomePath(target.href) && fileCtx.origin.kind === 'device'
+            ? await resolveRemoteHomePath(fileCtx.origin.deviceId, workingDir, target.href)
+            : null;
           const absPath = isHomePath(target.href)
-            ? fileCtx.origin.kind === 'device'
-              ? await resolveRemoteHomePath(fileCtx.origin.deviceId, workingDir, target.href)
-              : null
+            ? homeResult?.absPath
             : resolveLocalPath(target.href, workingDir);
           if (!absPath) {
             toast.error(t('chat.markdownRenderer.fileUnavailable'));
@@ -1597,7 +1603,10 @@ function MarkdownTargetLink({
           }
           // Unknown may mean offline: the existing preview can still serve a
           // cached copy or explain the connection failure. Never open locally.
-          result = { status: 'unique', absPath, kind: verdict === 'directory' ? 'directory' : 'file' };
+          result = {
+            status: 'unique', absPath,
+            kind: verdict === 'unknown' ? homeResult?.kind ?? 'file' : verdict === 'directory' ? 'directory' : 'file',
+          };
         } else {
           result = await resolveLocalPathSmart(target.href, workingDir, { refresh: true });
         }

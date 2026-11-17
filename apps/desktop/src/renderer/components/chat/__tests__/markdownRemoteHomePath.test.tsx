@@ -10,6 +10,9 @@ import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { openHtmlFileByPreference } from '../messageLinkActions';
 import type { SessionFileOrigin } from '@/lib/sessionFileOrigin';
 import { resolveRemoteHomePath } from '@/hooks/useRemoteHomePath';
+import { openDirInSidebarFileBrowser } from '@/features/right-sidebar/lib/openInSidebarFileBrowser';
+import { toast } from '@/lib/toast';
+import { i18n } from '@/i18n';
 
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'home-path-test' } }) }));
 vi.mock('react-i18next', async (original) => ({
@@ -20,6 +23,8 @@ vi.mock('../messageLinkActions', async (original) => ({
   ...(await original<typeof import('../messageLinkActions')>()),
   openHtmlFileByPreference: vi.fn(),
 }));
+vi.mock('@/features/right-sidebar/lib/openInSidebarFileBrowser', () => ({ openDirInSidebarFileBrowser: vi.fn() }));
+vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
 
 // #11145: real MarkdownRenderer entry, unlike the pure stat-cache tests, must
 // turn an inline ~/ reference into an actionable file on its owning device.
@@ -47,6 +52,8 @@ beforeEach(() => {
   setDataOwnerGeneration('home-path-test');
   events.clear();
   vi.mocked(openHtmlFileByPreference).mockClear();
+  vi.mocked(openDirInSidebarFileBrowser).mockClear();
+  vi.mocked(toast.error).mockClear();
   localResolve.mockReset().mockResolvedValue({});
   invoke.mockReset().mockResolvedValue({ status: 'unique', candidates: [resolved], kind: 'file' });
   chatStat.mockReset().mockImplementation(async ({ absPath }) => ({ verdict: absPath === resolved ? 'file' : 'nonfile' }));
@@ -212,6 +219,46 @@ describe('remote home references', () => {
     expect(localResolve).not.toHaveBeenCalled();
   });
 
+  it.each(['~/.config', '~/report.html'])('preserves resolved directory kind outside the workdir for %s', async directoryHref => {
+    // PR #11154: the owner knows this is a directory, but chatStat cannot inspect
+    // paths outside the workdir. Existing file-only fixtures lose this boundary.
+    // Unit/DOM: actual renderer click must explain the boundary, not fetch a file.
+    invoke.mockResolvedValue({ status: 'unique', candidates: ['/Users/remote/' + directoryHref.slice(2)], kind: 'directory' });
+    chatStat.mockResolvedValue({ verdict: 'unknown' });
+    const view = render(reply('`' + directoryHref + '`'));
+    await act(async () => {});
+    await act(async () => fireEvent.click(view.container.querySelector('code[role="button"]')!));
+    expect(toast.error).toHaveBeenCalledWith(i18n.t('chat.remoteFile.outsideWorkdir'));
+    expect(openHtmlFileByPreference).not.toHaveBeenCalled();
+    expect(openDirInSidebarFileBrowser).not.toHaveBeenCalled();
+    expect(localResolve).not.toHaveBeenCalled();
+  });
+
+  it('keeps directory navigation on authored-link retry when stat is unknown', async () => {
+    invoke.mockRejectedValueOnce(new Error('offline')).mockResolvedValue({
+      status: 'unique', candidates: ['/remote/project/archive.zip'], kind: 'directory',
+    });
+    chatStat.mockResolvedValue({ verdict: 'unknown' });
+    const view = render(reply('[Open directory](~/archive.zip)'));
+    await act(async () => {});
+    await act(async () => fireEvent.click(view.getByText('Open directory')));
+    expect(openDirInSidebarFileBrowser).toHaveBeenCalledWith('session', 'archive.zip');
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(openHtmlFileByPreference).not.toHaveBeenCalled();
+  });
+
+  it('does not override a definitive missing-file stat with an older resolved directory', async () => {
+    invoke.mockResolvedValue({ status: 'unique', candidates: [resolved], kind: 'directory' });
+    chatStat.mockResolvedValue({ verdict: 'nonfile' });
+    const view = render(reply('`' + href + '` and [Open directory](' + href + ')'));
+    await act(async () => {});
+    expect(view.container.querySelector('code[role="button"]')).toBeNull();
+    await act(async () => fireEvent.click(view.getByText('Open directory')));
+    expect(toast.error).toHaveBeenCalledWith('chat.markdownRenderer.fileUnavailable');
+    expect(openDirInSidebarFileBrowser).not.toHaveBeenCalled();
+    expect(openHtmlFileByPreference).not.toHaveBeenCalled();
+  });
+
   it('keeps hidden references idle and retries only when visible again', async () => {
     document.documentElement.setAttribute('data-app-hidden', '');
     const view = render(reply());
@@ -223,7 +270,9 @@ describe('remote home references', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps a failed stat bounded after resolving home, without losing its owner', async () => {
+  it.each(['file', undefined] as const)('keeps a failed stat bounded after resolving home with kind %s', async kind => {
+    // Older resolver replies omit the optional kind; retain their file fallback.
+    invoke.mockResolvedValue({ status: 'unique', candidates: [resolved], kind });
     chatStat.mockRejectedValue(new Error('disconnected after home lookup'));
     const view = render(reply());
     await act(async () => {});

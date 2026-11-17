@@ -2,17 +2,19 @@ import { useCallback, useSyncExternalStore } from 'react';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 import type { SessionFileOrigin } from '@/lib/sessionFileOrigin';
+import type { SmartResolveResult } from '@/lib/localPathResolver';
 
 const CACHE_CAP = 500;
 const RETRY_AFTER_MS = 30_000;
+type ResolvedHomePath = Extract<SmartResolveResult, { status: 'unique' }>;
 type Entry = {
   owner: ReturnType<typeof getDataOwnerGeneration>;
   deviceId: string;
   workingDir: string;
   href: string;
-  path: string | null;
+  result: ResolvedHomePath | null;
   checkedAt: number;
-  pending?: Promise<string | null>;
+  pending?: Promise<ResolvedHomePath | null>;
   refreshQueued: boolean;
   listeners: Set<() => void>;
 };
@@ -41,7 +43,7 @@ function entryFor(deviceId: string, workingDir: string, href: string): Entry {
   const key = JSON.stringify([deviceId, workingDir, href]);
   let entry = entries.get(key);
   if (!entry) {
-    entry = { owner, deviceId, workingDir, href, path: null, checkedAt: 0, refreshQueued: false, listeners: new Set() };
+    entry = { owner, deviceId, workingDir, href, result: null, checkedAt: 0, refreshQueued: false, listeners: new Set() };
     entries.set(key, entry);
     // Render creates entries before React subscribes. Trim only after requests
     // settle or subscriptions leave, so new mounted entries cannot be evicted
@@ -55,7 +57,7 @@ function visible(): boolean {
 }
 
 /** Only the owning device can expand ~. No viewer-home or cwd/~ fallback. */
-function request(entry: Entry, refresh = false): Promise<string | null> {
+function request(entry: Entry, refresh = false): Promise<ResolvedHomePath | null> {
   if (!isDataOwnerGenerationCurrent(entry.owner)) return Promise.resolve(null);
   if (entry.pending) {
     // A recovery while an old call is pending must not be lost. Keep one
@@ -63,14 +65,14 @@ function request(entry: Entry, refresh = false): Promise<string | null> {
     if (refresh) entry.refreshQueued = true;
     return entry.pending;
   }
-  if (!refresh && (entry.path || Date.now() - entry.checkedAt < RETRY_AFTER_MS)) {
-    return Promise.resolve(entry.path);
+  if (!refresh && (entry.result || Date.now() - entry.checkedAt < RETRY_AFTER_MS)) {
+    return Promise.resolve(entry.result);
   }
   entry.pending = (async () => {
     let force = refresh;
     do {
       entry.refreshQueued = false;
-      let path: string | null = null;
+      let resolved: ResolvedHomePath | null = null;
       try {
         const result = await window.electronAPI.deviceLink.invoke(entry.deviceId, 'fs:resolve-path', [{
           href: entry.href,
@@ -78,17 +80,19 @@ function request(entry: Entry, refresh = false): Promise<string | null> {
           ...(force ? { refresh: true } : {}),
         }]) as Awaited<ReturnType<typeof window.electronAPI.resolvePath>>;
         const candidate = result?.status === 'unique' ? result.candidates?.[0] : undefined;
-        if (typeof candidate === 'string' && /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(candidate)) path = candidate;
+        if (typeof candidate === 'string' && /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(candidate)) {
+          resolved = { status: 'unique', absPath: candidate, kind: result.kind };
+        }
       } catch { /* Offline or unsupported: remain unresolved until a natural retry boundary. */ }
       if (!isDataOwnerGenerationCurrent(entry.owner)) return null;
       if (!entry.refreshQueued) {
-        entry.path = path;
+        entry.result = resolved;
         entry.checkedAt = Date.now();
         for (const notify of entry.listeners) notify();
       }
       force = true;
     } while (entry.refreshQueued && entry.listeners.size > 0 && visible());
-    return entry.path;
+    return entry.result;
   })().finally(() => { entry.pending = undefined; trimCache(); });
   return entry.pending;
 }
@@ -100,7 +104,7 @@ function observe(): void {
   const recover = (deviceId?: string) => {
     if (!visible()) return;
     for (const entry of entries.values()) {
-      if (entry.listeners.size && !entry.path && (!deviceId || entry.deviceId === deviceId)) void request(entry, true);
+      if (entry.listeners.size && !entry.result && (!deviceId || entry.deviceId === deviceId)) void request(entry, true);
     }
   };
   const focus = () => recover();
@@ -135,11 +139,11 @@ function observe(): void {
 }
 
 /** Explicit authored-link retry uses the very same owner-scoped lookup. */
-export function resolveRemoteHomePath(deviceId: string, workingDir: string, href: string): Promise<string | null> {
+export function resolveRemoteHomePath(deviceId: string, workingDir: string, href: string): Promise<ResolvedHomePath | null> {
   return isHomePath(href) ? request(entryFor(deviceId, workingDir, href), true) : Promise.resolve(null);
 }
 
-export function useRemoteHomePath(origin: SessionFileOrigin, workingDir: string, href: string | null): string | null {
+export function useRemoteHomePath(origin: SessionFileOrigin, workingDir: string, href: string | null): ResolvedHomePath | null {
   const entry = origin.kind === 'device' && href && isHomePath(href)
     ? entryFor(origin.deviceId, workingDir, href) : null;
   const subscribe = useCallback((notify: () => void) => {
@@ -156,6 +160,6 @@ export function useRemoteHomePath(origin: SessionFileOrigin, workingDir: string,
       trimCache();
     };
   }, [entry]);
-  const snapshot = useCallback(() => entry && isDataOwnerGenerationCurrent(entry.owner) ? entry.path : null, [entry]);
+  const snapshot = useCallback(() => entry && isDataOwnerGenerationCurrent(entry.owner) ? entry.result : null, [entry]);
   return useSyncExternalStore(subscribe, snapshot, () => null);
 }
