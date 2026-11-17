@@ -186,6 +186,11 @@ export function createTurnExecutor(deps) {
     sealLastReply(sessionId, history, event.type !== 'done', event);
     history.preserveTurnPersistStateForBackground(sessionId);
     history.resetTurnPersistState(sessionId);
+    // The desktop refreshes the list preview after every done that is not a continuation boundary
+    // (sessionEventTerminal.ts), a background turn's done included, once the writes have drained.
+    if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) {
+      void history.drain().then(() => { if (deps.isCurrent()) return refreshListPreview(sessionId); }, () => {});
+    }
   }
 
   // recoveryOwnsError: context recovery claimed this terminal error and writes its row if it fails.

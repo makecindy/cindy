@@ -5869,4 +5869,11 @@ test('list preview: after a done the Host publishes the latest visible message a
   assert.deepEqual(previews('preview-done'), [await latestVisiblePreview('preview-done')]);
   assert.match(previews('preview-done')[0], /final words of preview-done/);
   assert.deepEqual(previews('preview-error'), [], 'a terminal error refreshes no preview');
+  // A background turn's done refreshes it too (the desktop excludes only continuation boundaries).
+  const session = h.maker.sessions.get('preview-done');
+  session.emit({ type: 'text', data: { text: 'background words' }, turnScope: 'background' });
+  session.emit({ type: 'done', data: {}, turnScope: 'background' });
+  await waitFor(() => previews('preview-done').length === 2);
+  assert.match(previews('preview-done')[1], /background words/);
+  assert.deepEqual(previews('preview-done')[1], await latestVisiblePreview('preview-done'));
 });
