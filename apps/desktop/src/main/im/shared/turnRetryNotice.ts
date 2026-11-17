@@ -31,6 +31,7 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import {
   isAutoReviewConfirmUndeliveredNotice,
   isAutoReviewUnavailableNotice,
+  isAutoReviewNoAvailableModelNotice,
   parseOverloadError,
   parseOverloadRetryProgress,
   parseTerminalRateLimitRetryProgress,
@@ -54,6 +55,9 @@ import { imText } from './imText';
  * 同名提示同句, 跟随界面语言。
  */
 function autoReviewUnavailableNotice(message: string, channel?: string): string | null {
+  if (isAutoReviewNoAvailableModelNotice(message)) {
+    return imText('imBot.text.shared.retry.autoReviewNoAvailableModel');
+  }
   if (isAutoReviewUnavailableNotice(message)) {
     return channel === 'wechat'
       ? imText('imBot.text.shared.retry.autoReviewUnavailableWechat')

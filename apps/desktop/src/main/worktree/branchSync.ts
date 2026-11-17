@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { realpath } from 'node:fs/promises';
 import { gitExec, GitExecError } from './gitExec';
 import type {
   BranchSyncRequest,
@@ -146,18 +147,29 @@ export async function readBranchSyncStatus(req: BranchSyncRequest): Promise<Bran
 }
 
 // Serialize this UI's mutations per repository; no coupling to task creation or sends.
-const syncing = new Map<string, Promise<BranchSyncResult>>();
-export async function syncBranch(req: BranchSyncRequest): Promise<BranchSyncResult> {
-  await validate(req);
-  const key = await git(req.baseRepo, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+const syncing = new Set<string>();
+/** Shared by checkout and branch refresh so neither can move HEAD under the other's preflight. */
+export async function withBranchMutation<T>(baseRepo: string, run: () => Promise<T>): Promise<T> {
+  const key = await realpath(
+    await git(baseRepo, 'rev-parse', '--path-format=absolute', '--git-common-dir'),
+  );
   if (syncing.has(key)) throw new Error('A branch update is already running');
-  const operation = syncBranchOnce(req);
-  syncing.set(key, operation);
+  syncing.add(key);
   try {
-    return await operation;
+    return await run();
   } finally {
     syncing.delete(key);
   }
+}
+export async function syncBranch(req: BranchSyncRequest): Promise<BranchSyncResult> {
+  await validate(req);
+  return withBranchMutation(req.baseRepo, () => syncBranchOnce(req));
+}
+/** Fetch-only preparation inside the checkout's shared mutation lock. Never moves a local branch. */
+export async function fetchCheckoutSource(req: BranchSyncRequest): Promise<BranchSyncResult> {
+  await validate(req);
+  if (!req.branch.startsWith('refs/remotes/origin/')) throw new Error('Expected an origin ref');
+  return syncBranchOnce(req);
 }
 async function syncBranchOnce(req: BranchSyncRequest): Promise<BranchSyncResult> {
   let status = await readBranchSyncStatus(req);

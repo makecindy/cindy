@@ -612,7 +612,7 @@ export async function buildShareImageBlob({
   if (sourceNodes.length === 0) throw new ShareImageNoContentError();
 
   // 实底色取自真实聊天流(天然跟随当前主题)。起点用消息的**父容器**而不是消息自身:
-  // 搜索命中态的消息带高亮底色(--search-match-bg),从它起找会让整张图变成高亮色。
+  // 跳转定位中的消息带临时底色(CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS),从它起找会让整张图变成高亮色。
   const background = resolveExportBackground(sourceNodes[0].parentElement ?? sourceNodes[0]);
 
   // 离屏定位必须挂在**外层 host** 上,不能放到被光栅化的 stage 自己身上:

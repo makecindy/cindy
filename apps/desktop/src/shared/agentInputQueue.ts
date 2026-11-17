@@ -1,4 +1,5 @@
 import type { AgentRequestReceipt } from './forwardedRequest.js';
+import type { OrcaHostNoticeKind } from './orcaHostNotice.js';
 import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoordination.js';
 /**
  * Agent input queue wire contract.
@@ -311,6 +312,17 @@ export interface AgentInputQueuedMessage {
   clientId: string;
   /** Opt-in: a cancelled delivery ID must never become a fresh enqueue on reconnect. */
   durableDelivery?: true;
+  /** Host-owned merged delivery identities survive edits without granting recovery. */
+  mergedDeliveryClientIds?: string[];
+  /** Main-only persistence fence retained by edits; never grants automatic recovery. */
+  orcaReportDeliveryFence?: true;
+  /** Main-authored Worker report receipt. Kept in snapshots, never accepted from input IPC. */
+  orcaReportDelivery?: {
+    workerId: string;
+    recoveryBlocked?: true;
+    /** Host-coalesced reports retain every delivery and relationship identity. */
+    members?: Array<{ clientId: string; workerId: string; senderSessionId: string }>;
+  };
   text: string;
   /**
    * Host-owned receipt for the first acceptance boundary.  The controlled
@@ -351,6 +363,8 @@ export interface AgentInputQueuedMessage {
         senderSessionId?: string;
         autoBridge?: true;
         autoBridgeBatchCount?: number;
+        /** 宿主自己的通知（不是 Worker 发言）；卡片据此换来源标题并挂本地化摘要。 */
+        hostNotice?: OrcaHostNoticeKind;
       }
     | {
         /**

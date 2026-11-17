@@ -26,8 +26,13 @@ const TEST_TIMEOUT_MS = 120_000;
 
 function recorder({ retireFails = false } = {}) {
   const steps = [];
+  const preservedSubscriptions = [];
   const boundary = createCodexAuthBoundary({
-    retireLocalHosts: async reason => { steps.push(`retire local hosts: ${reason}`); if (retireFails) throw new Error('fixture retirement failure'); },
+    retireLocalHosts: async (reason, preserveSubscriptionAccounts) => {
+      preservedSubscriptions.push(preserveSubscriptionAccounts === true);
+      steps.push(`retire local hosts: ${reason}`);
+      if (retireFails) throw new Error('fixture retirement failure');
+    },
     clearProxyAuthInjection: () => steps.push('clear proxy auth injection'),
     publishRuntimeRoute: () => steps.push('publish runtime route'),
     clearBridgeCredentialCache: () => steps.push('clear bridge credential cache'),
@@ -35,19 +40,21 @@ function recorder({ retireFails = false } = {}) {
     publish: (channel, payload) => steps.push([channel, payload]),
     warn: message => steps.push(`warn: ${message}`),
   });
-  return { steps, boundary };
+  return { steps, boundary, preservedSubscriptions };
 }
 
 test('logout follows the desktop onLogoutSuccess step for step', { timeout: TEST_TIMEOUT_MS }, async () => {
-  const { steps, boundary } = recorder();
+  const { steps, boundary, preservedSubscriptions } = recorder();
   await boundary.afterLogout();
+  assert.deepEqual(preservedSubscriptions, [false]);
   // desktop: forceDisposeLocalHostForAuthChange → clearCodexProxyAuthInjection → broadcastCodexRuntimeRoute → invalidatePiEnvironment
   assert.deepEqual(steps, ['retire local hosts: Codex auth logout', 'clear proxy auth injection', 'publish runtime route', 'invalidate Pi environment']);
 });
 
 test('a successful login follows the desktop onLoginSuccess step for step', { timeout: TEST_TIMEOUT_MS }, async () => {
-  const { steps, boundary } = recorder();
+  const { steps, boundary, preservedSubscriptions } = recorder();
   await boundary.afterLogin();
+  assert.deepEqual(preservedSubscriptions, [false]);
   // desktop: clearChatgptBridgeCredentialCache → forceDisposeLocalHostForAuthChange → broadcastCodexRuntimeRoute → invalidatePiEnvironment
   assert.deepEqual(steps, ['clear bridge credential cache', 'retire local hosts: Codex auth login', 'publish runtime route', 'invalidate Pi environment']);
 });
@@ -56,6 +63,8 @@ test('an invalidation follows the desktop onInvalidatedBroadcast, and still anno
   const payload = { agentKind: 'codex', authenticated: false, errorReason: 'token_revoked', credentialScope: 'instance-isolated' };
   const ok = recorder();
   await ok.boundary.afterInvalidation('token_revoked', 'instance-isolated');
+  // Default control rejection is not evidence against another account's native host.
+  assert.deepEqual(ok.preservedSubscriptions, [true]);
   // desktop: forceDispose → clearChatgptBridgeCredentialCache → (catalog refresh) → AUTH_STATE_CHANGED → invalidatePiEnvironment
   assert.deepEqual(ok.steps, ['retire local hosts: Codex credential invalidated: token_revoked', 'clear bridge credential cache',
     [MAKER_PUSH.AUTH_STATE_CHANGED, payload], 'invalidate Pi environment']);

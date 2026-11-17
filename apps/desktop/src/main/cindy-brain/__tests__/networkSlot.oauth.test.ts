@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { GhostNetworkSlot, type NetworkSlotDeps } from '../networkSlot';
+import { GhostOauthAccountManager } from '../ghostOauthAccounts';
 import type { GhostNetworkNeeds, InstalledGhost } from '../../../shared/ghost';
 
 const HOSTS = ['api.example.com', 'accounts.example.com'];
@@ -55,6 +56,7 @@ function fakeResponse(status = 200, body = '{"ok":1}'): Response {
 function makeSlot(params: {
   fetchImpl?: ReturnType<typeof vi.fn>;
   oauthTokens?: NetworkSlotDeps['oauthTokens'];
+  deps?: Partial<NetworkSlotDeps>;
 }): { slot: GhostNetworkSlot; fetchImpl: ReturnType<typeof vi.fn> } {
   const fetchImpl = params.fetchImpl ?? vi.fn(async () => fakeResponse());
   const deps: NetworkSlotDeps = {
@@ -69,6 +71,7 @@ function makeSlot(params: {
     takeDirDeposit: () => null,
     writeSaveDeposit: async () => null,
     oauthTokens: params.oauthTokens,
+    ...params.deps,
   };
   return { slot: new GhostNetworkSlot(deps), fetchImpl };
 }
@@ -76,6 +79,72 @@ function makeSlot(params: {
 const API_URL = 'https://api.example.com/v1/data';
 
 describe('networkSlot · oauth 凭证注入', () => {
+  // #10130 / 4577903614, unit: the reference double below cannot detect an
+  // own account missing a guard. Exercise real refresh/cache and disconnect.
+  it.each(['refreshed', 'cached'] as const)('closes a stream after its directly owned %s OAuth account disconnects', async mode => {
+    const values = new Map([
+      ['acct-client-id', 'synthetic-client'], ['acct-client-secret', 'synthetic-client-secret'],
+      ['acct-accounts', JSON.stringify({ defaultAccountId: 'own', accounts: [{ id: 'own', label: 'Synthetic', status: 'connected', createdAt: 1 }] })],
+      ['acct-rt-own', 'synthetic-refresh'],
+    ]);
+    const manager = new GhostOauthAccountManager({
+      vault: { read: (_id, key) => values.get(key) ?? null,
+        store: (_id, key, value) => { values.set(key, value); return true; }, remove: (_id, key) => { values.delete(key); } },
+      fetchImpl: vi.fn(async () => Response.json({ access_token: 'synthetic-access', expires_in: 3600 })),
+      openExternal: vi.fn(),
+    });
+    if (mode === 'cached') await manager.getFreshAccessToken('g-oauth', 'acct', oauthGhost().manifest.network!.secrets![0]!.oauth!);
+    const cancel = vi.fn();
+    const { slot } = makeSlot({ oauthTokens: manager,
+      fetchImpl: vi.fn(async () => new Response(new ReadableStream({ cancel }), { headers: { 'content-type': 'text/event-stream' } })),
+    });
+    try {
+      const opened = await slot.handleFetchRequest('g-oauth', { url: API_URL, as: 'stream' });
+      expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+      if (!opened.ok || !('connectionId' in opened)) return;
+      expect(manager.disconnectAccount('g-oauth', 'acct', 'own')).toBe(true);
+      expect(await slot.handleNetworkRequest('g-oauth', { op: 'read', connectionId: opened.connectionId }))
+        .toMatchObject({ ok: false, errorCode: 'NETWORK_CONNECTION_UNAVAILABLE' });
+      expect(slot.hasInFlightRequests('g-oauth')).toBe(false);
+    } finally {
+      await slot.disposeAll();
+    }
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  // Tier 1: multipart preparation and open streams outlive token resolution.
+  // A revoked reference must be rechecked at dispatch and at each stream read.
+  it('does not dispatch after a referenced account is revoked during upload preparation', async () => {
+    let current = true;
+    let start!: () => void;
+    const started = new Promise<void>(resolve => { start = resolve; });
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const { slot, fetchImpl } = makeSlot({
+      oauthTokens: { getFreshAccessToken: async () => ({ ok: true, accessToken: 'at-host-only', accountId: 'ref', reused: true, assertCurrent: () => { if (!current) throw new Error('OAUTH_REFERENCE_CHANGED'); } }), invalidateAccessToken: vi.fn() },
+      deps: { readGhostMedia: async () => { start(); await gate; return { buffer: new Uint8Array([1]), mimeType: 'image/png', ext: '.png' }; } },
+    });
+    const pending = slot.handleFetchRequest('g-oauth', { url: API_URL, method: 'POST', upload: { hashes: ['a'.repeat(64)] } });
+    await started; current = false; finish();
+    expect(await pending).toMatchObject({ ok: false });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('closes an active stream when its referenced account is revoked', async () => {
+    let current = true;
+    const cancel = vi.fn();
+    const { slot } = makeSlot({
+      fetchImpl: vi.fn(async () => new Response(new ReadableStream({ cancel }), { headers: { 'content-type': 'text/event-stream' } })),
+      oauthTokens: { getFreshAccessToken: async () => ({ ok: true, accessToken: 'at-host-only', accountId: 'ref', reused: true, assertCurrent: () => { if (!current) throw new Error('OAUTH_REFERENCE_CHANGED'); } }), invalidateAccessToken: vi.fn() },
+    });
+    const opened = await slot.handleFetchRequest('g-oauth', { url: API_URL, as: 'stream' });
+    expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+    if (!opened.ok || !('connectionId' in opened)) return;
+    current = false;
+    expect(await slot.handleNetworkRequest('g-oauth', { op: 'read', connectionId: opened.connectionId })).toMatchObject({ ok: false });
+    await slot.disposeAll();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
   it('现取 access token 注入 Authorization;accountId 缺省不传', async () => {
     const getFreshAccessToken = vi.fn(async () => ({ ok: true as const, accessToken: 'at-live', accountId: 'acc-1' }));
     const { slot, fetchImpl } = makeSlot({

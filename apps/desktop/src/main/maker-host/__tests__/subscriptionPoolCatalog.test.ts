@@ -11,6 +11,12 @@ import { describe, expect, it } from 'vitest';
 import type { Catalog } from '@cindy/model-providers';
 
 import { projectSubscriptionPoolCatalog, type SubscriptionPoolCatalogPorts } from '../subscriptionPoolCatalog.js';
+import { BUNDLED_CATALOG } from '@cindy/model-providers';
+import { getActiveCatalogWithClaudeModels, getActiveCatalogWithCodexModels } from '../active-catalog.js';
+import { createProviderService } from '../provider-service.js';
+import { resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection.js';
+import { resolveGuestProviderId } from '../../remote-agent/host/providerAccess.js';
+import { isSelectedSourceDisconnected } from '../../../renderer/components/new-chat/sourceSwitch.js';
 
 const model = (id: string, contextWindow = 100_000) => ({ id, name: id, contextWindow, efforts: [], defaultEffort: null });
 
@@ -26,6 +32,8 @@ function catalog(): Catalog {
 
 const basePorts = {
   readSubscriptionPoolCodexModels: () => null,
+  readSubscriptionPoolClaudeModels: () => null,
+  getActiveCatalogWithClaudeModels,
   getActiveCatalogWithCodexModels: () => { throw Error('no discovery in this fixture'); },
   readMergedProviderAccount: () => undefined,
   accountProviderId: () => 'openai',
@@ -39,6 +47,68 @@ const pool = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe('projectSubscriptionPoolCatalog', () => {
+  // Unit: local send, remote guest recovery and scheduling all consume provider views.
+  // Discovery must retain the native metadata those existing tasks used before the upgrade.
+  it.each([{ discovered: null }, { discovered: [] }, { discovered: [model('claude-current')] }])('retains historical Claude routing metadata with discovery $discovered', async ({ discovered }) => {
+    const base = BUNDLED_CATALOG.providers.find(provider => provider.id === 'anthropic')!;
+    const historical = model('claude-historical', 123_456);
+    const input = { ...BUNDLED_CATALOG, providers: [{ ...base, models: { 'claude-code': [historical] } }] };
+    const ports: SubscriptionPoolCatalogPorts = { ...basePorts, readPool: () => null,
+      codexAccountState: () => ({ authenticated: true }), readSubscriptionPoolClaudeModels: () => discovered };
+    const selectable = projectSubscriptionPoolCatalog(input, ports);
+    expect(selectable.providers[0]!.models['claude-code']?.map(m => m.id)).toEqual([historical, ...discovered ?? []].map(m => m.id));
+    const routing = projectSubscriptionPoolCatalog(input, ports, true);
+    expect(routing.providers[0]!.models['claude-code']).toContainEqual(historical);
+    let connected = true;
+    let disabledModels: Record<string, true> = {};
+    const service = createProviderService({ getCatalog: () => input,
+      projectCatalog: (source, full) => projectSubscriptionPoolCatalog(source, ports, full),
+      connection: { xd: () => false, anthropic: () => connected, openai: () => false, xai: () => false },
+      getModelAccess: () => ({ disabledModels, disabledProviders: {} }),
+    });
+    const selection = { agentKind: 'claude-code' as const, providerId: 'anthropic', model: historical.id, effort: null, fastMode: false };
+    const views = () => service.listProviders({ catalog: input, snapshotOnly: true });
+    expect(resolveScheduledModelSelection(selection, await views())).toMatchObject({ providerId: 'anthropic', model: historical.id });
+    const remote = await service.listProviders({ snapshotOnly: true });
+    expect(isSelectedSourceDisconnected({ providers: remote, agent: 'claude-code', modelId: historical.id,
+      selectedProviderId: 'anthropic', providersLoading: false })).toBe(false);
+    expect(resolveGuestProviderId(remote, 'anthropic', () => true, 'claude-code', historical.id, 'anthropic')).toBe('anthropic');
+    expect(resolveGuestProviderId(remote, 'anthropic', () => false, 'claude-code', historical.id, 'anthropic')).toBeNull();
+    expect(resolveGuestProviderId(remote, 'anthropic', () => true, 'claude-code', historical.id, 'another-provider')).toBeNull();
+    disabledModels = { [`anthropic:${historical.id}`]: true };
+    const disabled = await views();
+    expect(() => resolveScheduledModelSelection(selection, disabled)).toThrow('MODEL_SELECTION_UNAVAILABLE');
+    disabledModels = {};
+    connected = false;
+    const disconnected = await views();
+    expect(() => resolveScheduledModelSelection(selection, disconnected)).toThrow('MODEL_SELECTION_UNAVAILABLE');
+    expect(isSelectedSourceDisconnected({ providers: await service.listProviders({ snapshotOnly: true }), agent: 'claude-code',
+      modelId: historical.id, selectedProviderId: 'anthropic', providersLoading: false })).toBe(true);
+  });
+  // Unit: real catalog metadata and shared projection, with renamed/same-name sources.
+  // New account discoveries stay with their provider; existing native metadata stays available.
+  it.each(['anthropic', 'openai'] as const)('isolates %s membership by id even when display names are swapped', (kind) => {
+    const base = BUNDLED_CATALOG.providers.find(provider => provider.id === kind)!;
+    const agent = kind === 'anthropic' ? 'claude-code' : 'codex';
+    const independent = `${kind}-sub-12345678`;
+    const input = { ...BUNDLED_CATALOG, providers: [
+      { ...base, name: 'Renamed' },
+      { ...base, id: independent, name: kind === 'anthropic' ? 'OpenAI' : 'Claude', subscriptionPool: kind },
+    ] };
+    const discoveredId = kind === 'anthropic' ? 'claude-opus-99-9' : 'gpt-6';
+    const read = (id: string = kind) => id === independent ? [model(discoveredId)] : [];
+    const output = projectSubscriptionPoolCatalog(input, { ...basePorts,
+      readPool: () => null, codexAccountState: () => ({ authenticated: true }),
+      readSubscriptionPoolCodexModels: kind === 'openai' ? read : () => null,
+      readSubscriptionPoolClaudeModels: kind === 'anthropic' ? read : () => null,
+      getActiveCatalogWithCodexModels, getActiveCatalogWithClaudeModels,
+    });
+    expect(output.providers[0]!.models[agent]).toEqual(kind === 'anthropic' ? input.providers[0]!.models[agent] : []);
+    expect(output.providers[0]!.models[agent]?.some(entry => entry.id === discoveredId)).toBe(false);
+    expect(output.providers[1]!.models[agent]?.map(entry => entry.id)).toContain(discoveredId);
+    expect(output.providers[1]!.name).toBe(input.providers[1]!.name);
+  });
+
   it('adds models of active, signed-in pool accounts to openai without replacing its own', () => {
     const projected = projectSubscriptionPoolCatalog(catalog(), {
       ...basePorts,

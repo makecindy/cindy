@@ -66,6 +66,8 @@ export interface DetectCwdResp {
   repoRoot?: string;
   /** 被控端是否支持 recoveryKey 预创建回收；旧端省略该字段。 */
   supportsRecoveryKeyDiscard?: boolean;
+  /** Explicit opt-in for switching the main checkout; old hosts omit this. */
+  supportsCheckout?: boolean;
 }
 
 export interface ListBranchesResp {

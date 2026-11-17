@@ -84,6 +84,7 @@
   "taskPermission": "任務權限",
   "followDefault": "跟隨預設",
   "taskSettingsHint": "只影響插件之後建立的任務；現有任務保留原來的模型和權限。",
+  "remoteQuickAnswerHint": "這個模型在其他電腦上執行。快問快答只能從插件所在的電腦發出，會改用系統輔助模型。",
   "permissionHint": "選擇插件新建任務的權限，不會自動繼承目前任務的權限。",
   "autoPermissionHint": "自動審批會允許 Cindy 根據請求自動判斷權限。確認用於之後的插件任務？",
   "settingsReload": "重新讀取設定，確認原操作是否已儲存",

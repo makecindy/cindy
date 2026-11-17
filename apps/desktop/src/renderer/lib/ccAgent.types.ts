@@ -8,6 +8,7 @@ import type { RegionalMoney } from '../../shared/regionalMoney';
 import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
 import type { ReviewRunMeta } from '../../shared/reviewRun';
 import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker';
+import type { OrcaHostNoticeKind } from '../../shared/orcaHostNotice';
 import type { AgentTaskTerminalStatus } from '@cindy/maker-shared/agent-task';
 import type {
   MessageSourceDevice,
@@ -85,6 +86,8 @@ export interface MessageSessionOrigin {
    * 「来自 Worker「role」的消息」；来源标签仍只在有 senderSessionId 时出现。
    */
   orcaSenderLabel?: string;
+  /** 宿主自己的通知（不是 Worker 发言）：标题换成本地化的宿主来源，并挂一行摘要。 */
+  orcaHostNotice?: OrcaHostNoticeKind;
   /** 系统合批总条数；不把整批归到首个 Worker。 */
   orcaAutoBridgeBatchCount?: number;
   /** true = 由 Orca 落库来源（kind:'orca'）投影而来。 */

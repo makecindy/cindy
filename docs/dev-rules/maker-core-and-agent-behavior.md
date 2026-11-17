@@ -53,6 +53,11 @@ Claude Code 在原有 per-sidechain 回调里检测所有模型；Pi / Codex 在
 失败、混合执行、重定向或源文件读取不套用该例外。等待调用不清空普通调用的循环轨迹。
 这仍是有界启发式，不是任意长度循环的证明，也不以没有文件改动作为失败依据。
 
+工具结果正文因超限被省略时，`tool_result_full.data.outputOmitted: 'oversized'` 只表示正文未知。
+Session 仍配对收口工具、移除循环检测器的在途调用，但占位文案不参与输出相等指纹；未知结果
+打断完全相同结果与长只读窗口，不算作进展证据。工具名和参数仍参与已有疑似复核。
+回归见 `session.tool-loop.test.ts` 的真实 Codex translator 链路与 `loop-guard.test.ts`。
+
 Codex code mode 下脚本在后台运行，模型同时继续回应；app-server 只逐个上报脚本内部的工具调用，
 不标注调用属于哪段脚本，用量通知与思考 item 也会落在同一段脚本的调用之间，后台脚本与模型采样
 还会交叠，所以不能按“模型回应”分组，也不能凭全局最近一次结果推断调用归属。Codex 的 Guard 只用
@@ -393,9 +398,11 @@ Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断
 普通重连规则。重连中断结算前的成功完成优先，不得提前发错误触发重建。
 收到 Codex 的 `warning`「Falling back from WebSockets to HTTPS transport」后同样清除重连
 计时：HTTPS 要先上传完整历史才有事件，交给 Codex 自身 HTTP 超时与 upstream-idle 兜底。
-ChatGPT 订阅 WebSocket 单条消息上限约 16 MiB（超限回 1009），codex-proxy 在出站消息超过
-15 MiB 时按 #5103 的附件外置把最旧的内联附件转为本地文件；这是按实际出站字节判定，不是
-按历史体积推断断连原因。
+ChatGPT 订阅 WebSocket 单条消息上限约 16 MiB（超限回 1009）。Codex 的附件外置已从旧的
+15 MiB 触发改为对缺少 `previous_response_id` 的整段重发帧按 12 MiB→8 MiB 重放，增量帧不挪图；
+成功恢复保持在 15 MiB 安全边界内。不可恢复帧仍沿原有 1009／HTTPS 回退路径处理，具体规则见
+[模型请求超限时的附件恢复](media-storage-and-protocols.md#模型请求超限时的附件恢复)。
+这仍按实际出站字节判定，不是按历史体积推断断连原因。
 普通 timeout、纯文本大历史和网络失败
 不得进入这套压缩，也不得进入自动续跑死循环。`status` / `account_usage` 是传输层或用量
 心跳，不得刷新 Session 零事件看门狗或 Codex upstream-idle 计时。`text` / `thinking`

@@ -479,7 +479,7 @@ describe('SessionCard review regressions', () => {
     expect(sessionItemSource).toContain('{sourceLabel ? (');
     expect(sessionItemSource).toContain('title={sourceLabel}');
     expect(sessionCardSource).toContain('title={sourceLabel}');
-    expect(sessionItemSource).toContain("'min-w-0 truncate text-xs font-normal'");
+    expect(sessionItemSource).toContain("'inline-flex min-w-0 items-center gap-1 text-xs font-normal'");
     expect(sessionItemSource).not.toContain('sourceLabel={sourceLabel}');
   });
 

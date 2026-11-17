@@ -73,7 +73,7 @@ export class GhostTaskEventIndex {
   }
 }
 
-/** Select state facts from the canonical projection; content needs separate message approval. */
+/** Select state facts from the canonical projection; content requires the message topic declaration. */
 function taskState(raw: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const key of ['status', 'changedAtMs']) if (key in raw) result[key] = raw[key];

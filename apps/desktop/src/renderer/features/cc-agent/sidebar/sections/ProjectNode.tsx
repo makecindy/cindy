@@ -1,3 +1,4 @@
+import { ProjectSettingsDialog } from '../ProjectSettingsDialog';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { MountedMenuContent } from '../MountedMenuContent';
 /**
@@ -282,6 +283,8 @@ const ProjectHeader = memo(function ProjectHeader({
   onBrowseFiles,
   onArchiveAll,
 }: ProjectHeaderProps) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const FolderIcon = isCollapsed ? Folder : FolderOpen;
   const { t } = useTranslation();
   // remote 项目复用本地专属入口（在文件管理器打开 / 复制深链 / 同步 Codex）会按本机
   // 路径误操作或丢失 host 身份，故这些入口对 remote 一律隐藏；host-aware 版本后续单独迭代。
@@ -292,9 +295,6 @@ const ProjectHeader = memo(function ProjectHeader({
   const remoteIdentity = getRemoteProjectMachineIdentity(project);
   const projectWritesBlocked = isDeviceLinkWriteBlocked(project);
   const bulkArchiveAction = projectBulkArchiveActionForStatus(statusFilter);
-  // 项目图标两态(2026-07 用户定稿,参考 MivoCanvas):收起 Folder / 展开 FolderOpen,
-  // 常驻在标题左侧;展开/收起指示箭头移到标题右侧、hover 才渐显(见下方 Chevron)。
-  const FolderIcon = isCollapsed ? Folder : FolderOpen;
   const Chevron = isCollapsed ? ChevronRight : ChevronDown;
   // 红绿汇总保留既有判据;收起文件夹还需承接机器展开后下放的待回复提示。
   const collapsedStatusTone =
@@ -440,7 +440,7 @@ const ProjectHeader = memo(function ProjectHeader({
               : 'text-[var(--sidebar-list-muted)]',
           )}
         >
-          <FolderIcon size={15} strokeWidth={1.8} aria-hidden />
+          <FolderIcon size={15} strokeWidth={1.8} aria-hidden="true" />
         </span>
         {/* 名字 + remote identity 同组占据 flex-1。远程项目常态展示机器身份,
             避免相同 workingDir 的项目只能靠 hover 才能区分。 */}
@@ -580,6 +580,7 @@ const ProjectHeader = memo(function ProjectHeader({
         )}
       </div>
 
+      {settingsOpen && <ProjectSettingsDialog project={project} onClose={() => setSettingsOpen(false)} />}
       {/* 右键菜单：与消息流图片右键菜单（ChatImageView）同款 DropdownMenu。 */}
       <DropdownMenu
         open={menuPos !== null}
@@ -609,13 +610,8 @@ const ProjectHeader = memo(function ProjectHeader({
           <MountedMenuContent>
             {() => (
               <>
-                <DropdownMenuItem
-                  onClick={() => {
-                    beginRename();
-                  }}
-                  className={MENU_ITEM_CLASS}
-                >
-                  {t('ccAgent.sidebar.projectAction.rename')}
+                <DropdownMenuItem className={MENU_ITEM_CLASS} onClick={() => {setMenuPos(null); setSettingsOpen(true);}}>
+                  {t('projectSettings.title')}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => {

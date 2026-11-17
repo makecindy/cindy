@@ -1,3 +1,4 @@
+import type { OrcaHostNoticeKind } from '../../../shared/orcaHostNotice';
 import type {
   MessageAutomationOrigin,
   MessageSchedulerOrigin,
@@ -26,12 +27,14 @@ export function toMessageAutomationOrigin(origin: unknown): MessageAutomationOri
   const senderSessionId = readNonEmptyString(value.senderSessionId);
   if (value.kind === 'orca') {
     const orcaSenderLabel = readNonEmptyString(value.senderLabel);
-    if (!senderSessionId && !orcaSenderLabel) return undefined;
+    const orcaHostNotice = readNonEmptyString(value.hostNotice) as OrcaHostNoticeKind | undefined;
+    if (!senderSessionId && !orcaSenderLabel && !orcaHostNotice) return undefined;
     return {
       kind: 'session',
       orca: true,
       ...(senderSessionId ? { senderSessionId } : {}),
       ...(orcaSenderLabel ? { orcaSenderLabel } : {}),
+      ...(orcaHostNotice ? { orcaHostNotice } : {}),
     };
   }
   const senderBotId = readNonEmptyString(value.senderBotId);

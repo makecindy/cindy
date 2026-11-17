@@ -35,6 +35,8 @@ function find(element: Element, type: string): Element | undefined {
 // Unit: execute the production JSX branch and inspect delivered native props.
 // iOS 26 double safe-area and Android Fabric clipping are separate regressions;
 // source strings could pass even when later spreads overrode the effective props.
+// PR #10674: a 72pt side rail must also reach the absolute connection anchor.
+// Existing coverage omitted safe-edge inputs; single-file validation: 0.568s.
 function renderProject(searchOpen: boolean) {
   const inset = { contentInsetAdjustmentBehavior: 'automatic' };
   const scope: Record<string, unknown> = {
@@ -42,6 +44,7 @@ function renderProject(searchOpen: boolean) {
     showConnectionBanner: false, loading: false, status: 'connected', styles: {}, effectiveError: null,
     simpleScrollScreenSafeAreaEdges: () => ['left', 'right', 'bottom'],
     simpleScrollInsetProps: inset, usesNativeStackHeader: () => true, headerHeight: 88,
+    insets: { left: 0, right: 72 },
     t: (key: string) => key, projectName: 'Project', deviceName: 'Computer', deviceId: 'device',
     goBackGuarded: vi.fn(), guardedPush: vi.fn(), router: {}, loadSessions: vi.fn(),
     colors: { textSecondary: 'secondary' }, spacing: { xxl: 24 }, disclosure: { controller: {} },
@@ -63,6 +66,7 @@ describe('device detail project list native layout', () => {
     const { tree, inset } = renderProject(searchOpen);
     expect(tree.props.edges).toEqual(['left', 'right', 'bottom']);
     expect(find(tree, 'SimpleStackHeader')?.props.scrollEdge).toBe(true);
+    expect(find(tree, 'View')?.props.style[1]).toMatchObject({ left: 0, right: 72 });
     const list = find(tree, 'SectionList')!;
     expect(list.props).toMatchObject({ ...inset, removeClippedSubviews: false });
     const search = find(list.props.ListHeaderComponent, searchOpen ? 'HomeSearchBar' : 'MainWindowActionGroup');

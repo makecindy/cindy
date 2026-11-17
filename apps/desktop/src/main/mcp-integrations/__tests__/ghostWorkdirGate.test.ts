@@ -115,6 +115,9 @@ const ledgerAddRefMock = vi.fn(async (params: TestLedgerRef) => {
   return `ref-${ledgerRefs.length}`;
 });
 const callCindyMediaMock = vi.fn();
+const callEvaluateMock = vi.fn();
+const readEvaluationImageFileMock = vi.fn();
+vi.mock('../../cindy-evaluate/runtime.js', () => ({ callEvaluate: callEvaluateMock, readEvaluationImageFile: readEvaluationImageFileMock }));
 const dirDepositMock = vi.fn(() => ({ ok: true, receipt: { token: 'dir-ticket' } }));
 const saveDepositMock = vi.fn(() => ({ ok: true, receipt: { token: 'save-ticket' } }));
 const liveGrantStateMock = vi.fn();
@@ -152,10 +155,14 @@ vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: logInfoMock, warn: logWarnMock, error: () => {}, debug: () => {} }),
 }));
 // Claude 走建线闭包 ctx；Codex / Pi 用此 mock 模拟 HTTP bridge 的 ALS 恢复。
-vi.mock('@cindy/mcps', async (importOriginal) => ({
-  resolveLiziMcpSessionContext: (await importOriginal<typeof import('@cindy/mcps')>()).resolveLiziMcpSessionContext,
-  getLiziMcpSessionContext: () => alsSessionContextMock(),
-}));
+vi.mock('@cindy/mcps', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cindy/mcps')>();
+  return {
+    resolveLiziMcpSessionContext: actual.resolveLiziMcpSessionContext,
+    authorizedSessionPathStillBound: actual.authorizedSessionPathStillBound,
+    getLiziMcpSessionContext: () => alsSessionContextMock(),
+  };
+});
 
 const isAuthorizationSessionMock = vi.fn(async () => false);
 vi.mock('../../maker-ipc/botAuthorizationHost.js', () => ({ isBotAuthorizationSession: isAuthorizationSessionMock }));
@@ -487,6 +494,8 @@ beforeEach(() => {
   liveGrantStateMock.mockReset();
   liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null, isCurrent: () => true });
   callCindyMediaMock.mockReset();
+  callEvaluateMock.mockReset();
+  readEvaluationImageFileMock.mockReset();
   alsSessionContextMock.mockReset();
   cardRegisterMock.mockClear();
   logWarnMock.mockClear();
@@ -3975,7 +3984,9 @@ describe('plugin page audience and shared tool execution', () => {
     expect(await callPage(ghost)).toMatchObject({ ok: false, errorCode });
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(listInstalledAsyncMock).not.toHaveBeenCalled();
-    expect(listInstalledMock).toHaveBeenCalledTimes(change === 'missing' ? 1 : 0);
+    // The initial page binding and the post-session-context recheck are two
+    // separate exact checks; each cold check may fall back once.
+    expect(listInstalledMock).toHaveBeenCalledTimes(change === 'missing' ? 2 : 0);
   });
   // C14/X01: a cold page call used to bootstrap with no business id, then leak
   // its ALS grant into long-lived MCP callbacks. Existing tests only used live
@@ -4477,4 +4488,56 @@ it('does not couple ordinary desktop setup cards to a tool abort signal', async 
   await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, signal: controller.signal });
   expect(ensureReadyMock).toHaveBeenCalled();
   expect(ensureReadyMock.mock.calls[0][0].signal).toBeUndefined();
+});
+
+// Unit regression: the image grant must survive file reading and subsequent quote/codec work.
+// Existing media-path tests only authorize path disclosure, not this later paid dispatch.
+it.each(['read', 'submit'])('retains evaluate image grants through %s and rejects revocation', async phase => {
+  const actual = await vi.importActual<typeof import('../../cindy-brain/ghostLocalPathGrant')>('../../cindy-brain/ghostLocalPathGrant');
+  classifyLocalAttachmentPathMock.mockImplementation(actual.classifyLocalAttachmentPath);
+  const file = path.join(outsideDir, 'evaluation.png');
+  fs.writeFileSync(file, 'fixture');
+  let generation = 0;
+  liveGrantStateMock.mockImplementation(() => {
+    const captured = generation;
+    return { permissionMode: 'bypassPermissions', remoteHostId: null, isCurrent: () => captured === generation };
+  });
+  readEvaluationImageFileMock.mockImplementation(async () => { if (phase === 'read') generation++; return Buffer.alloc(0); });
+  const dispatch = vi.fn();
+  callEvaluateMock.mockImplementation(async (_request, context) => {
+    await context.readImage(file);
+    if (phase === 'submit') generation++;
+    context.assertCurrent();
+    dispatch();
+    return { ok: true };
+  });
+  await expect(makeDeps('codex', 'evaluation-grant').callEvaluate?.({ action: 'decisions', questions: { q: { type: 'noul', instructions: 'check' } }, state: [] }))
+    .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(readEvaluationImageFileMock).toHaveBeenCalledWith(fs.realpathSync.native(file));
+});
+
+// Unit: use the canonical target for approval/read, and reject a symlink substituted
+// during the read. The earlier revocation test covered permission state, not path binding.
+it('binds evaluate image reads to the canonical file and rejects link substitution', async ({ skip }) => {
+  const actual = await vi.importActual<typeof import('../../cindy-brain/ghostLocalPathGrant')>('../../cindy-brain/ghostLocalPathGrant');
+  classifyLocalAttachmentPathMock.mockImplementation(actual.classifyLocalAttachmentPath);
+  const file = path.join(outsideDir, 'bound-evaluation.png');
+  const alias = path.join(outsideDir, 'evaluation-alias.png');
+  const replacement = path.join(outsideDir, 'replacement-evaluation.png');
+  fs.writeFileSync(file, 'fixture'); fs.writeFileSync(replacement, 'replacement');
+  try { fs.symlinkSync(file, alias); }
+  catch (error) { if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) { skip(); return; } throw error; }
+  liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null, isCurrent: () => true });
+  callEvaluateMock.mockImplementation(async (_request, context) => { await context.readImage(alias); return { ok: true }; });
+  readEvaluationImageFileMock.mockResolvedValue(Buffer.alloc(0));
+  expect(await makeDeps('codex', 'evaluation-link').callEvaluate?.({ action: 'decisions', state: [] })).toEqual({ ok: true });
+  const canonical = fs.realpathSync.native(file);
+  expect(readEvaluationImageFileMock).toHaveBeenCalledWith(canonical);
+  readEvaluationImageFileMock.mockImplementation(async () => {
+    fs.unlinkSync(file); fs.symlinkSync(replacement, file);
+    return Buffer.alloc(0);
+  });
+  await expect(makeDeps('codex', 'evaluation-link-race').callEvaluate?.({ action: 'decisions', state: [] }))
+    .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
 });

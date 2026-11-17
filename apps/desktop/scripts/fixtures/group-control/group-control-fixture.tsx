@@ -4,7 +4,7 @@ import answerAudio from '../../../native/agent-island/sounds/startup-chime.mp3?u
 import { makerChatStore } from '../../../src/renderer/lib/makerChatStore';
 import { useEffect, useRef } from 'react';
 import { Route, Routes, useSearchParams } from 'react-router-dom';
-import { AppFrame, forbid, mountPage, subscription } from '../../ui-page/harness';
+import { AppFrame, ctx, forbid, mountPage, subscription } from '../../ui-page/harness';
 import type { BotGroupSummary } from '../../../src/shared/botGroupChat';
 import { BotGroupSidebarRow } from '../../../src/renderer/features/bots/BotGroupSidebarRow';
 import { BotGroupChatView } from '../../../src/renderer/features/bots/BotGroupChatView';
@@ -38,6 +38,9 @@ interface GroupData {
   workRemote?: boolean;
   canStop?: boolean;
   workParallel?: boolean;
+  workRequesterNames?: string[];
+  workReadonly?: boolean;
+  planningForeign?: boolean;
   workQueuedStep?: boolean;
   workLastStopping?: boolean;
   workNoStart?: boolean;
@@ -266,8 +269,8 @@ function arrangementPlan(state: Queue) {
     id: 'p1', status: state === 'done' ? 'done' : state === 'long' ? 'waiting' : 'running', organizerBotId: 'a', organizerName: 'Aster',
     currentStep: state === 'long' ? answered - 1 : state === 'done' ? 1 : answered,
     // A running turn is timed from the plan's last change: keep it recent so the clock reads sensibly.
-    kind: 'talk', canManage: true, workDir: null, branch: null, createdAt: T0, updatedAt: state === 'running' ? Date.now() - 30_000 : T0 + answered * MINUTE,
-    steps: members.map((member, position) => ({
+    kind: 'talk', canManage: true, canStop: true, workDir: null, branch: null, createdAt: T0, updatedAt: state === 'running' ? Date.now() - 30_000 : T0 + answered * MINUTE,
+    steps: members.map((member, position) => ({ canStop: true,
       position, botId: member.botId, botName: member.name, task: '',
       status: position < answered ? 'done' : position === answered && state === 'running' ? 'running' : 'pending',
       resultMessageId: position < answered ? `${member.botId}1` : null,
@@ -289,7 +292,7 @@ function divisionPlan(state: Division) {
   const auto = state === 'auto';
   return {
     id: 'p2', status: auto ? 'running' : 'waiting', organizerBotId: 'a', organizerName: 'Aster', currentStep: auto ? 1 : 0,
-    kind: 'work', canManage: true, canAdd: true, autoContinue: auto, workDir: null, branch: null,
+    kind: 'work', canManage: true, canStop: true, canAdd: true, autoContinue: auto, workDir: null, branch: null,
     createdAt: T0, updatedAt: auto ? Date.now() - 40_000 : T0 + 4 * MINUTE,
     steps: [
       { position: 0, botId: 'a', botName: 'Aster', task: '列出这周合进去的改动', status: 'done', resultMessageId: 'a1' },
@@ -322,13 +325,13 @@ function groupFrom(data: GroupData) {
   const receipts = data.readReceipts ? (data.readReceiptsTeammates ? teammateReadMessages() : data.readReceiptsMask ? maskReceiptMessages() : readReceiptMessages(data.readReceiptsFill)) : null;
   const planKind = data.workMentioned ? 'work' : 'talk';
   return {
-    id: 'fixture-group',
+    id: 'fixture-group', supportsOwnedStop: true,
     name: data.name,
     replyMode: data.workMentioned ? 'mentioned' : 'all',
     speakingMode: 'auto',
     members: [...(data.settings ? [{ botId: '', actorId: 'me', actorKind: 'user', name: 'You', isSelf: true, isOwned: true, role: 'owner', avatar: '', avatarColor: 'gray', status: 'active' }] : []),
       ...data.members.map((member) => ({
-      ...member,
+      isOwned: !data.planningForeign && !(data.workReadonly && member.botId === 'b'), ...member,
       ...(data.settings ? { actorId: `bot-${member.botId}`, actorKind: 'bot', isOwned: true, role: 'member' } : {}),
       avatar: '',
       avatarColor: 'gray',
@@ -339,7 +342,7 @@ function groupFrom(data: GroupData) {
     projectDir: null,
     lastMessage: null,
     speakingBotIds: data.workState ? data.workParallel ? ['a', 'b'] : ['a'] : [],
-    planningBotId: null,
+    planningBotId: data.planningForeign ? 'a' : null,
     openPlan: data.workQueuedStep ? { id: 'queued-plan', kind: 'work', status: 'running', currentStep: 0, stepCount: 2, currentBotName: 'Aster', currentStepStatus: 'running' } : null,
     createdAt: 1,
     updatedAt: 1,
@@ -351,7 +354,7 @@ function groupFrom(data: GroupData) {
       ? { id: 'p1', status: 'waiting', currentStep: 4, stepCount: 7, currentBotName: 'Pax', currentStepStatus: 'done', kind: planKind }
       : data.arrangement === 'running' ? { id: 'p1', status: 'running', currentStep: 1, stepCount: 2, currentBotName: 'Nova', currentStepStatus: 'running', kind: planKind } : null,
       singleSpeaker: true } : {}),
-    ...(data.bubbles || data.arrangement || data.division || data.readReceipts ? { serverBacked: true } : {}),
+    ...(data.bubbles || data.arrangement || data.division || data.readReceipts || data.planningForeign ? { serverBacked: true } : {}),
     ...(data.readReceipts ? { supportsMessageReaders: true } : {}),
     ...(data.settings ? { autoContinue: false } : {}),
     ...(data.threadUnread ? { threads: threadSummaries() } : {}),
@@ -376,14 +379,16 @@ function groupFrom(data: GroupData) {
       createdAt: data.workState ? Date.now() - 90_000 + i * 60_000 : 1700000000000 + i,
     })),
     hasMoreBefore: false,
-    round: data.workState ? { canStop: data.canStop, status: 'running', speakers: [{ botId: 'a', executionId: 'fixture-execution', sessionId: data.workRemote || data.workState === 'unknown' || data.workState === 'queued' ? null : 'fixture-work', activity: data.workQueuedStep ? 'step' : 'reply', executionStatus: data.workState === 'queued' ? 'queued' : data.workState === 'waiting' ? 'needs_input' : 'running', startedAt: data.workNoStart ? undefined : Date.now() - 83_000, stopping: data.workState === 'stopping' },
-      ...(data.workParallel ? [{ botId: 'b', executionId: 'fixture-second', sessionId: 'fixture-second-work', activity: 'reply', startedAt: Date.now() - 41_000, stopping: !!data.workLastStopping, executionStatus: data.workLastStopping ? 'stopping' : 'running' }] : [])], canContinue: false }
+    round: data.planningForeign ? { canStop: true, status: 'running', canContinue: false,
+      speakers: [{ botId: 'a', sessionId: null, activity: 'planning', isSelfRequested: true }] }
+      : data.workState ? { canStop: data.canStop, status: 'running', speakers: [{ botId: 'a', executionId: 'fixture-execution', requesterName: data.workRequesterNames?.[0], isSelfRequested: true, timelineAt: Date.now() - 83_000, sessionId: data.workRemote || data.workState === 'unknown' || data.workState === 'queued' ? null : 'fixture-work', activity: data.workQueuedStep ? 'step' : 'reply', executionStatus: data.workState === 'queued' ? 'queued' : data.workState === 'waiting' ? 'needs_input' : 'running', startedAt: data.workNoStart ? undefined : Date.now() - 83_000, stopping: data.workState === 'stopping' },
+      ...(data.workParallel ? [{ botId: 'b', executionId: 'fixture-second', requesterName: data.workRequesterNames?.[1], isSelfRequested: !data.workReadonly, timelineAt: Date.now() - 20_000, sessionId: 'fixture-second-work', activity: 'reply', startedAt: Date.now() - 20_000, stopping: !!data.workLastStopping, executionStatus: data.workLastStopping ? 'stopping' : 'running' }] : [])], canContinue: false }
       : { status: 'idle', speakers: [], canContinue: false },
   };
 }
 
 void mountPage({
-  route: '/bots/groups/fixture-group',
+  route: '/bots/groups/fixture-group' + (ctx.data.direct ? '?conversationKind=direct' : ''),
   host: (ctx) => {
     const data = ctx.data as unknown as GroupData;
     let group = { ...groupFrom(data), ...(data.planRead ? { serverBacked: true, historyRevision: 'fixture-live', organizerBotId: 'b' } : {}) };

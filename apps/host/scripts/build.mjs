@@ -14,6 +14,7 @@ import { build } from 'esbuild';
 import { chromium } from 'playwright-core';
 import { clientMigrationContract } from '../src/client-migration-contract.mjs';
 import { selectReleaseHarnesses } from '../src/release-harnesses.mjs';
+import { redundantCopies } from '../src/release-dependency-copies.mjs';
 
 const repo = fileURLToPath(new URL('../../..', import.meta.url));
 const host = path.join(repo, 'apps/host');
@@ -243,10 +244,20 @@ try {
   packages.set('node-pty', packageRoot('node-pty', desktopRequire));
   packages.set('sharp', packageRoot('sharp', desktopRequire));
   packages.set('playwright-core', packageRoot('playwright-core', hostRequire));
+  // The shared Pi package modules load these through createRequire, which the
+  // bundler cannot see, so they would otherwise be missing from the release.
+  packages.set('semver', packageRoot('semver', desktopRequire));
+  packages.set('picomatch', packageRoot('picomatch', desktopRequire));
   for (const [name, source] of packages) {
     const ancestors = new Map(packages);
     ancestors.delete(name);
     await copyPackage(source, staging, ancestors);
+  }
+  // With the complete layout in place, drop nested copies Node would never load
+  // because an identical copy is the nearest one above them.
+  for (const destination of redundantCopies(copying, staging)) await fs.rm(destination, { recursive: true, force: true });
+  for (const relative of dependencyRecords.keys()) {
+    if (!syncFs.existsSync(path.join(staging, relative))) dependencyRecords.delete(relative);
   }
   await fs.copyFile(process.execPath, path.join(bin, process.platform === 'win32' ? 'node.exe' : 'node'));
   await fs.copyFile(path.join(repo, 'LICENSE'), path.join(staging, 'LICENSE'));

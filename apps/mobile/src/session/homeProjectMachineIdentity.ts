@@ -8,7 +8,7 @@ export interface HomeProjectMachineIdentity {
   hideLabel: boolean;
 }
 
-type HomeProjectConnection = Pick<DeviceLinkContextValue, 'status' | 'getPresenceAvailability'> & {
+type HomeProjectConnection = Pick<DeviceLinkContextValue, 'getPresenceAvailability'> & {
   unresponsiveDevices: ReadonlySet<string>;
   revokedDevices: ReadonlySet<string>;
 };
@@ -31,8 +31,10 @@ export function buildHomeProjectMachineIdentities(
       displayLabel: deviceDisplayName(project.deviceId, name, devices),
       // A remounted list paints cached projects before its device roster arrives.
       // Missing/stale roster rows and failed list reads are not connection evidence.
-      disconnected: connection.status !== 'online'
-        || connection.getPresenceAvailability(project.deviceId) === false
+      // Neither is the phone's own relay connection: while it reconnects (every
+      // return to the app) the computer is unknown, not disconnected. The
+      // connection banner reports the phone's side.
+      disconnected: connection.getPresenceAvailability(project.deviceId) === false
         || connection.unresponsiveDevices.has(project.deviceId)
         || connection.revokedDevices.has(project.deviceId),
       // As on Desktop, an explicit device heading makes the inline label redundant.

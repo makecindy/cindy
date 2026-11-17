@@ -1562,7 +1562,6 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         'bot-thread': botThreadNote,
         'client-environment': mobileClientNote,
         'cindy-make': cindyMakeNote,
-        'ui-language': uiLanguageNote,
       };
       const wireNotePlan = allowsEnvironmentNotes
         ? (deps.planRepeatableWireNotes?.(sessionId, repeatableNotes, { force: pendingHandoff !== null }) ?? null)
@@ -1574,8 +1573,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const withCindyMakeNote = plannedNotes['cindy-make']
         ? prependNoteToWireUserMessage(withMobileNote as HandoffWireMessage, plannedNotes['cindy-make'])
         : withMobileNote;
-      let outgoing = plannedNotes['ui-language']
-        ? prependNoteToWireUserMessage(withCindyMakeNote as HandoffWireMessage, plannedNotes['ui-language'])
+      // Literary styles apply to this input only; do not deduplicate them across turns.
+      let outgoing = uiLanguageNote
+        ? prependNoteToWireUserMessage(withCindyMakeNote as HandoffWireMessage, uiLanguageNote)
         : withCindyMakeNote;
       if (plannedNotes['side-chat']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['side-chat']);

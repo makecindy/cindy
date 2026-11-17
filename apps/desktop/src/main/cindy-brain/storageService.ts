@@ -18,21 +18,12 @@ export interface HostStorageProvider {
   snapshot?(instance: string, source: StorageSource, assertCurrent: () => void): Promise<StorageSnapshot>;
 }
 
-export interface StorageShareFacts {
-  sourceId: string; sourceName: string; targetId: string; targetName: string; fileName: string; bytes: number;
-}
-export function storageShareMessage(t: (key: string) => string, facts: StorageShareFacts): string {
-  const fields: Record<string, string> = { name: facts.sourceName, target: facts.targetName,
-    file: facts.fileName, size: `${facts.bytes} B` };
-  return t('settings.ghosts.perm.storageShareMessage').replace(/\{\{(name|target|file|size)\}\}/g, (_match, key: string) => fields[key]!);
-}
 interface Ports {
   ownerKey(): string;
   getGhost(id: string): InstalledGhost | null;
   listGhosts(): InstalledGhost[];
   providers: readonly HostStorageProvider[];
   handoff: Pick<GhostHandoffStore, 'hold' | 'assertQuota' | 'currentRoot' | 'import' | 'delete'>;
-  confirmShare(facts: StorageShareFacts, current: () => boolean): Promise<boolean>;
 }
 const fail = (errorCode: string) => ({ ok: false as const, errorCode });
 
@@ -111,9 +102,6 @@ export class HostStorageService {
         if (snapshot.bytes.byteLength > GHOST_HANDOFF_MAX_BYTES_PER_FILE) return fail('FILE_TOO_LARGE');
         const digest = createHash('sha256').update(snapshot.bytes).digest('hex');
         await this.ports.handoff.assertQuota(targetId, [snapshot.bytes.byteLength]);
-        checkShare();
-        if (!await this.ports.confirmShare({ sourceId: id, sourceName: ghost.manifest.name,
-          targetId, targetName: target.manifest.name, fileName: snapshot.name, bytes: snapshot.bytes.byteLength }, sharedCurrent)) return fail('PERMISSION_DENIED');
         checkShare();
         const fresh = await provider.snapshot(id, source, checkShare);
         checkShare();

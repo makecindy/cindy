@@ -307,6 +307,7 @@ export interface WorkerTerminalTurnParams {
   /** Provider/session diagnostic used when an error turn has no assistant output. */
   diagnostic?: string;
   capture?: WorkerTerminalTurnCapture;
+  remoteReport?: { proxySessionId: string; inputClientIds: string[]; messageId?: string };
 }
 
 /** INPUT_STOP / ABORT_SESSION 记录的手动中断快照，用来让 terminal handler 静默收尾。 */
@@ -488,8 +489,11 @@ export interface OrcaTeamServiceDeps {
   sendAutoBridgeToLead(
     leadSessionId: string,
     message: string,
-    workerId?: string,
-  ): Promise<{ accepted: boolean }>;
+    workerId: string,
+    report?: WorkerTerminalTurnParams['remoteReport'],
+    reportClientId?: string,
+    hostNotice?: OrcaHostNoticeKind,
+  ): Promise<{ accepted: boolean; reportRejected?: true }>;
   /** 补派一轮仍无凭据时的升级：落一张会话内纠正卡（不进模型）+ 红点 + 既有通知通道。 */
   escalateDispatchClaim?(leadSessionId: string, notice: OrcaDispatchClaimNotice): void;
   /** 能力开关，缺省开启；关闭后完全不判定也不修改结果。 */
@@ -673,6 +677,7 @@ interface AutoBridgeState {
     status: 'done' | 'error';
     finalText: string;
     diagnostic?: string;
+    remoteReport?: WorkerTerminalTurnParams['remoteReport'];
   };
 }
 
@@ -885,7 +890,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
   async function bridgeWorkerCompletion(
     sessionId: string,
-    turn: { status: 'done' | 'error'; finalText: string; diagnostic?: string },
+    turn: { status: 'done' | 'error'; finalText: string; diagnostic?: string; remoteReport?: WorkerTerminalTurnParams['remoteReport'] },
     state: AutoBridgeState | undefined,
   ): Promise<'accepted' | 'deferred' | 'rejected' | 'skipped'> {
     if (!state) return 'skipped';
@@ -919,6 +924,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     try {
       accepted = (await deps.sendAutoBridgeToLead(
         state.leadSessionId, report, state.workerId,
+        ...(turn.remoteReport ? [turn.remoteReport] as const : []),
       )).accepted;
     } catch (err) {
       deps.log.warn('orca auto-bridge failed', {
@@ -2390,6 +2396,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       const delivered = await deps.sendAutoBridgeToLead(
         params.leadSessionId,
         lines("[Orca host] Your dispatch claim is not backed by this turn's dispatch records."),
+        '',
+        undefined,
+        undefined,
+        'dispatch-claim',
       );
       const accepted = delivered.accepted;
       deps.log.info('orca lead dispatch claim wake', {

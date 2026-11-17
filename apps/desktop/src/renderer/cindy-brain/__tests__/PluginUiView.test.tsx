@@ -2,7 +2,7 @@
 import { useEffect } from 'react';
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../shared/ghost';
+import { type InstalledGhost } from '../../../shared/ghost';
 
 const presenter = vi.hoisted(() => ({ active: true, updates: [] as Array<Record<string, unknown>> }));
 vi.mock('@/components/chat/McpAppCard', () => ({ McpAppCard: ({ contextSource }: {
@@ -18,13 +18,13 @@ import { PluginUiView } from '../PluginUiView';
 // Opus F3：显式展示流式正文时，每个 token 都触发全文传输；旧覆盖只测试卡片自身。
 // 真实 View 的上下文订阅边界，替换 iframe presenter；分散 token 和同值重渲染。tier: unit。
 afterEach(() => { cleanup(); vi.useRealTimers(); presenter.active = true; presenter.updates = []; });
-const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+const ghost: InstalledGhost = { enabled: true, dir: '/fixture',
   approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
     kind: 'chip', entry: 'main.js', version: '1', tools: [], mcpApps: {
       ui: { resources: [{ uri: 'ui://view', file: 'view.html' }], tools: {} },
       host: { views: [{ id: 'view', title: 'View', resourceUri: 'ui://view', scope: 'task' }], capabilities: ['context'] },
     } } };
-ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest);
+
 
 it('coalesces streaming content, flushes completion, and skips unchanged message values', () => {
   vi.useFakeTimers();
