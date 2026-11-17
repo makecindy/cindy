@@ -10,7 +10,13 @@ import {
   serializeAuthSessionRecord,
 } from '@cindy/auth-client';
 import { runRefreshWithReplacementRetry } from '../authRefreshFailure';
-import { applyRefreshedCredentialsToVault, writeResourceSessionToVault } from '../authRefreshCommit';
+import {
+  applyRefreshedCredentialsToVault,
+  AUTH_ACCOUNT_VAULT_VERSION,
+  writeResourceSessionToVault,
+} from '../authRefreshCommit';
+import { loggedOutAccountKeySet } from '../authAccountLogoutPolicy';
+import { reconcileSavedAccountMetadata } from '../authAccountMetadata';
 import { isDefinitiveRefreshError } from '../authRefreshError';
 import {
   awaitWithStartupTimeout,
@@ -18,9 +24,13 @@ import {
   ColdStartAuthFallbackRegistry,
   commitColdStartRefreshIfCurrent,
 } from '../authStartupGate';
-import { loginPreparingErrorState } from '../../shared/authIpc';
+import { loginPreparingErrorState, parseDesktopAccountKey } from '../../shared/authIpc';
 import { accessTokenRefreshDelayMs } from '../authTokenClaims';
-import { AUTH_ACCOUNT_VAULT_KEY, AUTH_SESSION_KEY } from '../authCredentialKeys';
+import {
+  AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY,
+  AUTH_ACCOUNT_VAULT_KEY,
+  AUTH_SESSION_KEY,
+} from '../authCredentialKeys';
 
 // Test value (unit): execute the production cold-start and login-action entrypoints with
 // in-memory credentials/network. On 2026-10-29 three DNS failures stranded a valid login;
@@ -799,5 +809,117 @@ describe('a login the Host renewed, then used by the desktop', () => {
     await expect(h.start()).resolves.toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
     expect(h.vault.activeAccountKey).toBe(ORIGINAL_KEY);
     expect([h.saved.session.refreshToken, h.vault.resources[ORIGINAL_KEY].refreshToken]).toEqual(['rotated-3', 'rotated-3']);
+  });
+});
+
+/*
+ * C (reviewer, 2026-11-17): the saved-account vault after a Host renewal. The vault holds every
+ * saved account's credentials and the Host writes it with its own read and write (auth/refresh.mjs),
+ * so this is the riskiest write of the line. The vault and the logout tombstones are made and read
+ * back by the desktop's production functions (writePassportSessionToVault, writeAuthAccountVault,
+ * readAuthAccountVault, listSavedAccounts, compiled from authManager.ts); only the encrypted record
+ * store under them is an in-memory map, shared with the Host's store as the profile's
+ * safe-storage files are. Rule: apart from the renewed account's refreshToken, metadata and
+ * lastUsedAt, the vault stays byte for byte, and the tombstones are untouched. Gap: the Host tests
+ * use hand-written vaults. Minimal failure: writing back the normalized view drops a field the Host
+ * does not know. Unit; no real account or store.
+ */
+describe('the saved-account vault after a Host renewal', () => {
+  const hostRefreshModule = '../../../../host/src/auth/refresh.mjs';
+  const vaultNames = new Set([
+    'readAuthAccountVault', 'readAuthAccountLogoutTombstones', 'writeAuthAccountVault',
+    'writeAuthAccountLogoutTombstones', 'emptyAuthAccountVault', 'writePassportSessionToVault',
+    'isStoredAccountMetadata', 'savedAccountSummaries', 'accountSummaryFromMetadata', 'listSavedAccounts',
+    'metadataFromMembership', 'accountVaultKey', 'passportVaultKey',
+  ]);
+  const vaultParts = source.statements
+    .filter((node) => (ts.isFunctionDeclaration(node) && vaultNames.has(node.name?.text ?? ''))
+      || (ts.isVariableStatement(node) && node.declarationList.declarations
+        .some((d) => d.name.getText(source) === 'AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION')))
+    .map((node) => node.getText(source).replace(/^export /, ''));
+  const vaultCompiled = ts.transpileModule(`
+let currentUser = { id: 'member-a' };
+const activeAuthRealm = 'global';
+const isPassiveSharedUserDataInstance = () => false;
+${vaultParts.join('\n')}
+return { readAuthAccountVault, writeAuthAccountVault, emptyAuthAccountVault, writePassportSessionToVault, listSavedAccounts };
+`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+
+  const records = new Map<string, string>();
+  const desktop = new Function(
+    'readAtomicSafe', 'isAtomicPersistedSecretAbsent', 'writeAtomicSafe', 'removeAtomicSafeOrThrow',
+    'readAtomicSafeCiphertext', 'writeAtomicSafeCiphertext', 'logUnreadableEncryptedRecord', 'log', 'AuthApiError',
+    'AUTH_ACCOUNT_VAULT_KEY', 'AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY', 'AUTH_ACCOUNT_VAULT_VERSION',
+    'parseDesktopAccountKey', 'reconcileSavedAccountMetadata', 'loggedOutAccountKeySet', 'writeResourceSessionToVault',
+    vaultCompiled,
+  )(
+    (key: string) => records.get(key) ?? null, (key: string) => !records.has(key),
+    (key: string, value: string) => { records.set(key, value); return true; }, (key: string) => { records.delete(key); },
+    () => null, () => false, () => undefined, { warn: () => undefined }, AuthApiError,
+    AUTH_ACCOUNT_VAULT_KEY, AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY, AUTH_ACCOUNT_VAULT_VERSION,
+    parseDesktopAccountKey, reconcileSavedAccountMetadata, loggedOutAccountKeySet, writeResourceSessionToVault,
+  );
+
+  const member = (id: string, displayName: string) => ({ id, passportId: 'passport-1', kind: 'personal', role: 'owner',
+    displayName, email: `${id}@example.invalid`, avatarUrl: null, orgId: null, orgName: null, orgLogoUrl: null });
+  const keyOf = (id: string) => accountVaultKey('global', id);
+
+  it('keeps every other account, the passport, unknown fields and the tombstones byte for byte', async () => {
+    const { refreshHostSession } = (await import(/* @vite-ignore */ hostRefreshModule)) as {
+      refreshHostSession: (deps: Record<string, unknown>) => Promise<unknown> };
+    records.clear();
+    // Three accounts on one passport: A current, B saved, C logged out on this device.
+    const vault = desktop.emptyAuthAccountVault();
+    vault.loggedOutAccountKeys = [keyOf('member-c')];
+    writeResourceSessionToVault(vault, { accessToken: 'a', refreshToken: 'a-token', membership: member('member-a', 'A') },
+      'global', 'passport-1', { lastUsedAt: 200 });
+    writeResourceSessionToVault(vault, { accessToken: 'b', refreshToken: 'b-token', membership: member('member-b', 'B') },
+      'global', 'passport-1', { markActive: false, lastUsedAt: 100 });
+    desktop.writePassportSessionToVault(vault, { realm: 'global', passportId: 'passport-1', accountRefreshToken: 'passport-token',
+      memberships: [member('member-a', 'A'), member('member-b', 'B'), member('member-c', 'C')] });
+    expect(desktop.writeAuthAccountVault(vault)).toBe(true);
+    // Fields a later desktop may add: one at the top level, one in a saved account.
+    const written = JSON.parse(records.get(AUTH_ACCOUNT_VAULT_KEY)!);
+    written.laterTopLevelField = { kept: true };
+    written.resources[keyOf('member-b')].laterResourceField = 'kept';
+    records.set(AUTH_ACCOUNT_VAULT_KEY, JSON.stringify(written));
+    records.set(AUTH_SESSION_KEY, serializeAuthSessionRecord('global', 'a-token'));
+    const vaultBefore = records.get(AUTH_ACCOUNT_VAULT_KEY)!;
+    const tombstonesBefore = records.get(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
+    expect(JSON.parse(tombstonesBefore!).accountKeys).toEqual([keyOf('member-c')]);
+    const accountsBefore = desktop.listSavedAccounts().accounts;
+    expect(accountsBefore.map((account: { accountKey: string }) => account.accountKey)).toEqual([keyOf('member-a'), keyOf('member-b')]);
+
+    await refreshHostSession({
+      store: { read: (key: string) => records.get(key) ?? null, write: (key: string, value: string) => records.set(key, value) },
+      refresh: async (token: string) => {
+        expect(token).toBe('a-token');
+        return { accessToken: 'access', refreshToken: 'a-rotated', membership: { ...member('member-a', 'A renamed') } };
+      },
+      withVaultLock: (task: () => unknown) => task(), buildRegion: 'global',
+    });
+
+    const after = JSON.parse(records.get(AUTH_ACCOUNT_VAULT_KEY)!);
+    const renewed = after.resources[keyOf('member-a')];
+    expect(renewed.refreshToken).toBe('a-rotated');
+    expect(renewed.metadata.displayName).toBe('A renamed');
+    // Everything else, byte for byte: the vault before with only those three fields replaced.
+    const expected = JSON.parse(vaultBefore);
+    Object.assign(expected.resources[keyOf('member-a')],
+      { refreshToken: renewed.refreshToken, metadata: renewed.metadata, lastUsedAt: renewed.lastUsedAt });
+    expect(records.get(AUTH_ACCOUNT_VAULT_KEY)).toBe(JSON.stringify(expected));
+    expect(after.laterTopLevelField).toEqual({ kept: true });
+    expect(after.resources[keyOf('member-b')]).toMatchObject({ refreshToken: 'b-token', laterResourceField: 'kept' });
+    expect(Object.values(after.passports)).toMatchObject([{ accountRefreshToken: 'passport-token' }]);
+    expect(records.get(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY)).toBe(tombstonesBefore);
+
+    // Read back by the desktop: the same accounts, the current one with the new token.
+    const readBack = desktop.readAuthAccountVault();
+    expect(readBack.activeAccountKey).toBe(keyOf('member-a'));
+    expect(readBack.resources[keyOf('member-a')].refreshToken).toBe('a-rotated');
+    expect(readBack.loggedOutAccountKeys).toEqual([keyOf('member-c')]);
+    expect(desktop.listSavedAccounts().accounts.map((account: { accountKey: string; isCurrent: boolean }) =>
+      [account.accountKey, account.isCurrent])).toEqual(accountsBefore.map((account: { accountKey: string; isCurrent: boolean }) =>
+      [account.accountKey, account.isCurrent]));
   });
 });
