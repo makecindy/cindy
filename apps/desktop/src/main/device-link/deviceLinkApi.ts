@@ -105,15 +105,22 @@ async function deviceLinkApiFetch<T>(
       };
       const api = runtime.currentAgentNetClient();
       if (!api && runtime.agentNetRequiresEncryption()) throw new Error('AGENT_NET_ENCRYPTED_IDENTITY_REQUIRED');
+      const target = decodeURIComponent(device[1]);
+      let deleteEncryptedMember = false;
       if (api) {
-        const target = decodeURIComponent(device[1]);
         const directory = await api.directory();
         assertCurrent();
         // V1 and V2 keep independent management records. Update even an offline
         // V2 row so it cannot restore stale metadata when it comes online again.
         if (directory.some(d => d.certificate.deviceId === target)) {
-          await api.request(opts.method, '/devices/' + encodeURIComponent(target), opts.method === 'PATCH' ? opts.body : undefined);
-          assertCurrent();
+          if (opts.method === 'DELETE') {
+            // V2 removal revokes identity and disconnects the peer. Do not do
+            // that before the legacy service has accepted the deletion.
+            deleteEncryptedMember = true;
+          } else {
+            await api.request('PATCH', '/devices/' + encodeURIComponent(target), opts.body);
+            assertCurrent();
+          }
         }
       }
       assertCurrent();
@@ -124,6 +131,11 @@ async function deviceLinkApiFetch<T>(
         baseUrl: () => { assertCurrent(); return base; },
       });
       assertCurrent();
+      const deletion = result as { deviceId?: unknown; deleted?: unknown } | null;
+      if (api && deleteEncryptedMember && deletion?.deleted === true && deletion.deviceId === target) {
+        await api.request('DELETE', '/devices/' + encodeURIComponent(target), undefined);
+        assertCurrent();
+      }
       return result;
     }
     return officialDeviceLinkApiFetch<T>(apiPath, opts);

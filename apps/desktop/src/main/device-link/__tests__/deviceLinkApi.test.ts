@@ -302,14 +302,15 @@ describe('deviceLinkApiFetch', () => {
     expect(mocks.v2Request).toHaveBeenCalledExactlyOnceWith('PATCH', '/devices/pc', { name });
   });
 
-  it.each(['PATCH', 'DELETE'] as const)('updates an official V2 member before the legacy %s', async method => {
+  it.each(['PATCH', 'DELETE'] as const)('syncs an official %s without revoking V2 before legacy deletion succeeds', async method => {
     mocks.v2Active = true;
     mocks.v2Directory.mockResolvedValue([v2Peer('peer/space')]);
-    mocks.netFetch.mockResolvedValue(new Response('{}', { status: 200 }));
+    mocks.netFetch.mockResolvedValue(new Response(JSON.stringify({ deviceId: 'peer/space', deleted: true }), { status: 200 }));
     const body = method === 'PATCH' ? { name: 'Updated' } : undefined;
     await deviceLinkApiFetch('/api/device-link/devices/peer%2Fspace', { method, body });
     expect(mocks.v2Request).toHaveBeenCalledExactlyOnceWith(method, '/devices/peer%2Fspace', body);
-    expect(mocks.v2Request.mock.invocationCallOrder[0]).toBeLessThan(mocks.netFetch.mock.invocationCallOrder[0]);
+    if (method === 'PATCH') expect(mocks.v2Request.mock.invocationCallOrder[0]).toBeLessThan(mocks.netFetch.mock.invocationCallOrder[0]);
+    else expect(mocks.v2Request.mock.invocationCallOrder[0]).toBeGreaterThan(mocks.netFetch.mock.invocationCallOrder[0]);
     expect(lastRequest().authorization).toBe('Bearer account-access-token');
   });
 
@@ -331,6 +332,91 @@ describe('deviceLinkApiFetch', () => {
     expect(mocks.netFetch).not.toHaveBeenCalled();
   });
 
+  // Independent remote stores have no transaction: verify the observable
+  // partial state and rejected operation rather than mistaking an error for rollback.
+  it.each(['PATCH', 'DELETE'] as const)('reports the actual V2 state when a legacy %s fails', async method => {
+    let v2Name = 'before', revoked = false;
+    mocks.v2Active = true;
+    mocks.v2Directory.mockImplementation(async () => revoked ? [] : [{ ...v2Peer('peer', true), name: v2Name }]);
+    mocks.v2Request.mockImplementation(async () => {
+      if (method === 'DELETE') revoked = true;
+      else v2Name = 'after';
+      return {};
+    });
+    mocks.netFetch.mockImplementation(async (_url, init) => init.method === method
+      ? new Response(JSON.stringify({ error: { code: 'SERVICE_UNAVAILABLE' } }), { status: 503 })
+      : new Response(JSON.stringify({ devices: [{ ...legacyPeer('peer', true), name: 'before' }] })));
+    await expect(deviceLinkApiFetch('/api/device-link/devices/peer', { method, body: method === 'PATCH' ? { name: 'after' } : undefined }))
+      .rejects.toMatchObject({ statusCode: 503 });
+    expect(mocks.v2Request).toHaveBeenCalledTimes(method === 'PATCH' ? 1 : 0);
+    const result = await deviceLinkApiFetch<{ devices: { deviceId: string; name: string }[] }>('/api/device-link/devices');
+    expect(result.devices).toMatchObject([{ deviceId: 'peer', name: method === 'PATCH' ? 'after' : 'before' }]);
+    expect(revoked).toBe(false);
+  });
+
+  // #10917 review: DELETE revokes the V2 certificate and disconnects the peer.
+  // V1's ordinary online rejection must happen before that irreversible action.
+  it('does not revoke V2 when the legacy service rejects an online deletion', async () => {
+    let revoked = false;
+    mocks.v2Active = true;
+    mocks.v2Directory.mockResolvedValue([v2Peer('peer')]);
+    mocks.v2Request.mockImplementation(async () => { revoked = true; return {}; });
+    mocks.netFetch.mockResolvedValue(new Response(JSON.stringify({ error: { code: 'ALREADY_EXISTS' } }), { status: 409 }));
+    await expect(deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'DELETE' }))
+      .rejects.toMatchObject({ statusCode: 409 });
+    expect(revoked).toBe(false);
+    expect(mocks.v2Request).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { deviceId: 'peer', deleted: false }, { deviceId: 'other', deleted: true },
+  ])('does not revoke V2 without confirmation for the requested legacy target: %j', async reply => {
+    mocks.v2Active = true;
+    mocks.v2Directory.mockResolvedValue([v2Peer('peer')]);
+    mocks.netFetch.mockResolvedValue(new Response(JSON.stringify(reply)));
+    await expect(deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'DELETE' })).resolves.toEqual(reply);
+    expect(mocks.v2Request).not.toHaveBeenCalled();
+  });
+
+  it('reports a V2 deletion failure after legacy deletion without hiding the remaining encrypted row', async () => {
+    let legacyDeleted = false;
+    mocks.v2Active = true;
+    mocks.v2Directory.mockResolvedValue([v2Peer('peer')]);
+    mocks.v2Request.mockRejectedValue(Object.assign(new Error('unavailable'), { status: 503 }));
+    mocks.netFetch.mockImplementation(async (_url, init) => {
+      if (init.method === 'DELETE') {
+        legacyDeleted = true;
+        return new Response(JSON.stringify({ deviceId: 'peer', deleted: true }));
+      }
+      return new Response(JSON.stringify({ devices: [] }));
+    });
+    await expect(deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'DELETE' })).rejects.toMatchObject({ status: 503 });
+    expect(legacyDeleted).toBe(true);
+    const listed = await deviceLinkApiFetch<{ devices: { deviceId: string }[] }>('/api/device-link/devices');
+    expect(listed.devices).toMatchObject([{ deviceId: 'peer' }]);
+  });
+
+  it('does not revoke V2 after the owner changes during legacy deletion', async () => {
+    mocks.v2Active = true;
+    mocks.v2Directory.mockResolvedValue([v2Peer('peer')]);
+    mocks.netFetch.mockImplementation(async () => {
+      mocks.scope = 'owner-b';
+      return new Response(JSON.stringify({ deviceId: 'peer', deleted: true }));
+    });
+    await expect(deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'DELETE' })).rejects.toThrow('DEVICE_LINK_SCOPE_CHANGED');
+    expect(mocks.v2Request).not.toHaveBeenCalled();
+  });
+
+  it.each(['PATCH', 'DELETE'] as const)('does not claim V1-only %s succeeded when V2 membership is unknown', async method => {
+    mocks.v2Active = true;
+    mocks.v2Directory.mockRejectedValue(Object.assign(new Error('unavailable'), { status: 503 }));
+    mocks.netFetch.mockResolvedValue(new Response('{}'));
+    await expect(deviceLinkApiFetch('/api/device-link/devices/legacy-peer', { method, body: { name: 'after' } }))
+      .rejects.toMatchObject({ status: 503 });
+    expect(mocks.netFetch).not.toHaveBeenCalled();
+    expect(mocks.v2Request).not.toHaveBeenCalled();
+  });
+
   it.each(['owner', 'endpoint', 'route', 'selection'] as const)('stops official management after %s changes during directory load', async change => {
     mocks.v2Active = true;
     mocks.v2Directory.mockImplementation(async () => {
@@ -349,7 +435,7 @@ describe('deviceLinkApiFetch', () => {
     mocks.v2Active = true;
     mocks.v2Directory.mockResolvedValue([v2Peer('peer')]);
     mocks.v2Request.mockImplementation(async () => { mocks.scope = 'owner-b'; return {}; });
-    await expect(deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'DELETE' })).rejects.toThrow('DEVICE_LINK_SCOPE_CHANGED');
+    await expect(deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'PATCH', body: { name: 'Updated' } })).rejects.toThrow('DEVICE_LINK_SCOPE_CHANGED');
     expect(mocks.v2Request).toHaveBeenCalledTimes(1);
     expect(mocks.netFetch).not.toHaveBeenCalled();
   });

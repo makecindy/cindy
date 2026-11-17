@@ -659,10 +659,13 @@ export async function handleRenameDevice(
       `/api/device-link/devices/${encodeURIComponent(deviceId)}`,
       { method: 'PATCH', body: { name: nextName } },
     );
-    invalidateDeviceListCoalescing();
     return renamed;
   } catch (err) {
     rethrowServerError(err);
+  } finally {
+    // A failed dual write may already have changed one directory. Never reuse
+    // a list sent before this attempt when the caller reconciles the result.
+    invalidateDeviceListCoalescing();
   }
 }
 
@@ -678,11 +681,14 @@ export async function handleDeleteDevice(
       `/api/device-link/devices/${encodeURIComponent(deviceId)}`,
       { method: 'DELETE' },
     );
-    invalidateDeviceListCoalescing();
     if (deleted.deleted) { forgetPeerControlState(deviceId); handleCloseLink(deps, deviceId); }
     return deleted;
   } catch (err) {
     rethrowServerError(err);
+  } finally {
+    // A failed dual write may already have changed one directory. Never reuse
+    // a list sent before this attempt when the caller reconciles the result.
+    invalidateDeviceListCoalescing();
   }
 }
 
