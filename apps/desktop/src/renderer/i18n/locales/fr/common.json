@@ -15129,6 +15129,7 @@
       "pluginDisabledUnnamed": "Les vérifications automatiques sont bloquées : un plugin requis est désactivé. Elles reprendront une fois le plugin activé.",
       "installPlugin": "Installer le plugin",
       "openPlugin": "Ouvrir le plugin",
+      "enablePlugin": "Activer le plugin",
       "dismissTitle": "Fermer l'avis d'échec passé"
     },
     "worktreeRestoreBanner": {

@@ -1320,17 +1320,17 @@
       "install": {
         "title": "需要安装「{{plugin}}」插件",
         "body": "这个任务在另一台电脑上开着 {{device}}。在这台电脑上安装「{{plugin}}」插件后，就能在右侧栏查看和操作它。",
-        "action": "去安装"
+        "action": "安装"
       },
       "enable": {
         "title": "需要开启「{{plugin}}」插件",
         "body": "这个任务在另一台电脑上开着 {{device}}。在这台电脑上开启「{{plugin}}」插件后，就能在右侧栏查看和操作它。",
-        "action": "去开启"
+        "action": "开启"
       },
       "update": {
         "title": "需要更新「{{plugin}}」插件",
         "body": "这个任务在另一台电脑上开着 {{device}}。把这台电脑上的「{{plugin}}」插件更新到新版本后，就能在右侧栏查看和操作它。",
-        "action": "去更新"
+        "action": "更新"
       }
     },
     "lockOnExitHintPrivacy": "退出远程桌面后盖上隐私屏，AI 可以继续工作；有人碰电脑就会锁屏。",
@@ -14963,6 +14963,7 @@
       "pluginDisabledUnnamed": "自动检查暂时受阻：需要的插件未启用，启用后自动恢复。",
       "installPlugin": "安装插件",
       "openPlugin": "查看插件",
+      "enablePlugin": "启用插件",
       "dismissTitle": "关闭历史失败提示"
     },
     "worktreeRestoreBanner": {

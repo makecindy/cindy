@@ -235,14 +235,15 @@ import {
   type HomeTaskSuggestion,
 } from './pluginHomeSuggestions';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
-import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
+import { installedGhostLogicalIdentity, installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
+import { usePluginInPlace } from '@/features/plugin/lib/pluginInPlace';
 import {
   getPendingPluginSuggestion,
   startPendingPluginSuggestion,
   takePendingPluginSuggestion,
   type PluginSuggestionRequest,
 } from './pendingPluginSuggestion';
-import { pluginSetupRoute, usePluginSkillSetup } from './pluginSkillSetup';
+import { usePluginSkillSetup } from './pluginSkillSetup';
 import { filterGhostsForWorkdir, useWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import {
@@ -6493,6 +6494,7 @@ export function NewMakerDraftRoute() {
     [fillComposerWithSuggestion, t],
   );
 
+  const { run: runPluginInPlace } = usePluginInPlace();
   const pluginSuggestionFlight = useRef(false);
   const pluginSuggestionMounted = useRef(true);
   useEffect(() => {
@@ -6551,31 +6553,47 @@ export function NewMakerDraftRoute() {
           toast.info(t('newChat.pluginSuggestions.changed'));
           return;
         }
-        const installedGhosts = window.electronAPI.ghosts.listSync().ghosts;
-        const ghost = installedGhosts.find((g) => installedGhostStoragePart(g) === suggestion.pluginId);
-        const usableGhosts = filterGhostsForWorkdir(installedGhosts, request.workingDir)
-          .filter((g) => g.enabled);
-        const usable =
-          ghost && usableGhosts.includes(ghost);
-        if (!usable) {
-          const route = await pluginSetupRoute(ghost, suggestion.pluginId ?? '');
-          if (!stillCurrent() || readPluginRecommendationSnapshot().ownerId !== request.ownerId)
-            return;
-          // Do not silently choose between competing publishers/sources with the same id.
-          if (!route) {
-            toast.info(t('newChat.pluginSuggestions.unavailable'));
-            return;
-          }
-          const nonce = startPendingPluginSuggestion(request);
-          navigate(`${route}&recommendation=${encodeURIComponent(nonce)}`);
-          return;
-        }
+        const readUsable = () => {
+          const installedGhosts = window.electronAPI.ghosts.listSync().ghosts;
+          const ghost = installedGhosts.find((g) => installedGhostStoragePart(g) === suggestion.pluginId);
+          const usableGhosts = filterGhostsForWorkdir(installedGhosts, request.workingDir)
+            .filter((g) => g.enabled);
+          return { installedGhosts, ghost, usable: ghost && usableGhosts.includes(ghost) ? ghost : null };
+        };
         // 填进输入框而不是直接发送;ChatInput 发送时会自己展开 $command。无指令插件发送时
         // 识别不出所用插件,所以选中插件建议并成功填入即记一次最近使用(有指令的插件发送时
         // 还会再记一次,只刷新时间,不影响排序语义)。
-        if (fillComposerWithSuggestion(pluginSuggestionComposerText(suggestion.prompt, ghost, t, installedGhosts))) {
-          void window.electronAPI.ghosts.markUsed(installedGhostStoragePart(ghost)).catch(() => undefined);
+        const fill = () => {
+          const { installedGhosts, usable } = readUsable();
+          if (!usable) return;
+          if (fillComposerWithSuggestion(pluginSuggestionComposerText(suggestion.prompt, usable, t, installedGhosts))) {
+            void window.electronAPI.ghosts.markUsed(installedGhostStoragePart(usable)).catch(() => undefined);
+          }
+        };
+        const { ghost, usable } = readUsable();
+        if (!usable) {
+          // Install or turn it on right here, then fill the suggestion. Only what cannot be settled
+          // here (several sources, recovery) goes to the plugin page and comes back afterwards.
+          const identity = ghost ? installedGhostLogicalIdentity(ghost) : null;
+          await runPluginInPlace(
+            {
+              ghostId: identity?.ghostId ?? suggestion.pluginId ?? '',
+              ...(identity ? { namespace: identity.namespace } : {}),
+              workingDir: request.workingDir,
+            },
+            {
+              isCurrent: () =>
+                stillCurrent() && readPluginRecommendationSnapshot().ownerId === request.ownerId,
+              onReady: fill,
+              onPage: (route) => {
+                const nonce = startPendingPluginSuggestion(request);
+                navigate(`${route}${route.includes('?') ? '&' : '?'}recommendation=${encodeURIComponent(nonce)}`);
+              },
+            },
+          );
+          return;
         }
+        fill();
       } catch {
         if (pluginSuggestionMounted.current)
           toast.error(t('newChat.pluginSuggestions.unavailable'));
@@ -6590,6 +6608,7 @@ export function NewMakerDraftRoute() {
       isDeviceLinkDraft,
       isRemoteProjectDraft,
       navigate,
+      runPluginInPlace,
       t,
     ],
   );

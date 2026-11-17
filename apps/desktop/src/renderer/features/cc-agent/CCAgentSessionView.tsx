@@ -157,6 +157,7 @@ import {
   InterruptedTurnBanner,
 } from '@/components/chat/InterruptedTurnBanner';
 import { UnreadFailedScheduleBanner } from '@/components/chat/UnreadFailedScheduleBanner';
+import { TaskLiveScreenNotices } from '@/features/remote-desktop/TaskLiveScreenButtons';
 import { useReadFailedScheduleRuns } from '@/features/scheduler/hooks/useReadFailedScheduleRuns';
 import { useAutomationScheduleSessionInfo } from './hooks/useAutomationScheduleSessionIndex';
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
@@ -5559,6 +5560,10 @@ function CCAgentSessionContent({
                   style={{ width: '100%' }}
                 />
               )}
+
+            {!readOnly && sessionId && (
+              <TaskLiveScreenNotices sessionId={sessionId} style={{ width: '100%' }} className="py-1" />
+            )}
 
             {sessionId && scheduleSessionInfo?.latestFailedRun && shouldShowFailedScheduleNotice({
               latestFailedRun: scheduleSessionInfo.hasFailedRun ? scheduleSessionInfo.latestFailedRun : null,
