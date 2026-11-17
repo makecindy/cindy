@@ -246,19 +246,24 @@ Claude Code、Codex、Pi 都复用同一个检索入口；多插件仅调用任�
 
 ```js
 if (msg.type === 'event' && msg.name === 'will-tool-call') {
-  cindy.send({ type: 'event-verdict', hookId: msg.hookId, action: 'tool',
-    tool: { input: { ...msg.data.input, /* 引擎原生工具参数 */ } } });
+  if (msg.data.engine === 'pi') {
+    cindy.send({ type: 'event-verdict', hookId: msg.hookId, action: 'tool',
+      tool: { input: { ...msg.data.input, /* Pi 原生工具参数 */ } } });
+  } else {
+    cindy.send({ type: 'event-verdict', hookId: msg.hookId, action: 'allow' });
+  }
 }
 ```
 
 `allow` 只是不反对，不授予权限。`block` 拒绝调用或停止原生后续处理；结果节点发生前的副作用不回滚。
 `tool` 的字段为 `{decision?:'deny'|'ask',reason?,input?,result?,additionalContext?}`；不能返回
-`decision:'allow'`。`input` 只用于调用前，`result` 只用于结果后。多个插件串行处理，后一个收到前一个
-改过的输入／结果，补充上下文按顺序连接；拒绝短路。实际执行与权限审核使用同一份变换后的参数。
+`decision:'allow'`。`input` 仅 Pi 调用前支持，Claude 不支持改参；`result` 只用于结果后。
+多个插件沿既有控制节点串行处理，后一个收到前一个改过的输入／结果，补充上下文按顺序连接；
+拒绝短路。Pi 实际执行与权限审核使用同一份变换后的参数。
 
 | 能力 | Claude Code / SDK | Codex 0.167.2 | Pi 1.5.2 |
 | --- | --- | --- | --- |
-| 调用前 | 原生 PreToolUse：改参、deny、ask、additionalContext | 不接入：见下方原生信任边界 | cindy-bridge 的 tool_call：改参、block；仍走原有权限门 |
+| 调用前 | 原生 PreToolUse：deny、ask、additionalContext；不支持改参，不接管 SDK 的钩子执行顺序 | 不接入：见下方原生信任边界 | cindy-bridge 的 tool_call：改参、block；仍走原有权限门 |
 | 结果后 | PostToolUse 可替换结果、补上下文；PostToolUseFailure 只补上下文／停止，不能替换结果 | 不接入 | tool_result 可返回 `{content?,details?,isError?}`；停止使用原生 `ctx.abort()`，不会撤销工具 |
 | 结果格式 | `tool.result` 为原生 updatedToolOutput | 不接入 | `tool.result` 为原生 tool_result 返回对象 |
 
@@ -272,7 +277,11 @@ Codex 原生具备 PreToolUse／PostToolUse，且 `hooks/list` 可读取原生�
 不会改用户 config、信任记录或启用全局 trust bypass，不能把原生能力表等同于本通道已支持。
 Review 的 hooks 禁用与共享访客隔离保留。Pi 仅在既有 cindy-bridge 上接线，不装配插件包内的 Pi 原生扩展，
 用户自行安装的原生扩展保持原顺序与能力。
-引擎实例保留启动时的节点选择，保存新选择在下次消息生效；账号、插件启停与安装代次仍在交付效果前复核。
+原生实例启动时只为当时选中的点安装钩子；未选中的点不注册、不序列化、不发 IPC。
+已装的点每次触发都实时读取当前选择与账号；在途选择或账号变化时，旧答复按原生默认处理，不额外拒绝。
+各插件答复的安装校验沿用主干 apply 前后检查，不另做整段处理结束后的贡献者终检。
+新加入此前未注册的点需要下个原生实例，保存设置不额外重建运行实例；已有点的新选择按下次触发读取。
+这不承诺下一条消息会重新装配钩子，也不提供通用热更新机制。
 
 这些节点不是全局 `aroundExecute`。插件自己提供的工具可在自己的 Node / JS handler 中包装执行、
 计时和可安全重试的业务调用；通用取消沿用 `ghost_call` / Node 通道。不要重放任意 Bash、Edit 或网络写入，

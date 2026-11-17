@@ -75,25 +75,29 @@ afterEach(() => vi.useRealTimers());
 // listeners and cannot serialize tool data or send an extension UI request.
 describe('Pi native plugin hook opt-in', () => {
   it.each([
-    { selected: false, guest: false, review: false, count: 0 },
-    { selected: true, guest: true, review: false, count: 0 },
-    { selected: true, guest: false, review: true, count: 0 },
-    { selected: true, guest: false, review: false, count: 2 },
-  ])('registers exactly $count native listeners: $selected/$guest/$review', async ({ selected, guest, review, count }) => {
+    { points: '', guest: false, review: false, events: [] },
+    { points: 'call', guest: false, review: false, events: ['tool_call'] },
+    { points: 'result', guest: false, review: false, events: ['tool_result'] },
+    { points: 'call,result', guest: true, review: false, events: [] },
+    { points: 'call,result', guest: false, review: true, events: [] },
+    { points: 'call,result', guest: false, review: false, events: ['tool_call', 'tool_result'] },
+  ])('registers only the selected native points: $points/$guest/$review', async ({ points, guest, review, events }) => {
     const start = source.indexOf('  // Native plugin hooks run before');
     const end = source.indexOf('  // ── 权限门', start);
     const on = vi.fn();
     const stringify = vi.fn(JSON.stringify);
     const input = vi.fn(async () => '{}');
+    const permission = vi.fn(() => ({ reviewOnly: review }));
     runInNewContext(ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
-      process: { env: { CINDY_PI_TOOL_LIFECYCLE: selected ? '1' : '' } },
-      pi: { on }, guestToolGate: guest, currentPermissionState: () => ({ reviewOnly: review }),
+      process: { env: { CINDY_PI_TOOL_LIFECYCLE: points } },
+      pi: { on }, guestToolGate: guest, currentPermissionState: permission,
       JSON: { stringify, parse: JSON.parse },
     });
-    expect(on).toHaveBeenCalledTimes(count);
+    expect(on.mock.calls.map(([event]) => event)).toEqual(events);
     expect(stringify).not.toHaveBeenCalled();
     expect(input).not.toHaveBeenCalled();
-    if (count) {
+    if (!points) expect(permission).not.toHaveBeenCalled();
+    if (events.includes('tool_call')) {
       const callback = on.mock.calls.find(([event]) => event === 'tool_call')![1];
       await callback({ toolName: 'read', toolCallId: 'call', input: { path: 'fixture.txt' } }, { ui: { input } });
       expect(input).toHaveBeenCalledOnce();

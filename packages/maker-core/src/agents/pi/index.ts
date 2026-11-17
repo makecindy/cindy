@@ -5679,8 +5679,6 @@ export class PiAgent extends BaseAgent {
       return operation;
     };
 
-    const toolLifecycleControl = opts.sessionId && this.deps.toolLifecycleControl?.bind
-      ? this.deps.toolLifecycleControl.bind(opts.sessionId) : this.deps.toolLifecycleControl;
     let piSpawnStartedAt: number | undefined;
     let piSpawnLogged = false;
     try {
@@ -5788,7 +5786,8 @@ export class PiAgent extends BaseAgent {
         ...(hosted ? { [DEVICE_HOSTED_PI_ENV]: deviceHostedPiEnvValue(hosted) } : {}),
         ...(fastModels.length > 0 ? { CINDY_PI_FAST_MODELS: JSON.stringify(fastModels) } : {}),
         CINDY_PI_TURN_TOOL_POLICY: remote ? '' : runtimeInstanceId,
-        CINDY_PI_TOOL_LIFECYCLE: !remote && !hosted && !reviewMode && opts.sessionId && toolLifecycleControl?.enabled(opts.sessionId) ? '1' : '',
+        CINDY_PI_TOOL_LIFECYCLE: !remote && !hosted && !reviewMode && opts.sessionId
+          ? (['call', 'result'] as const).filter(phase => this.deps.toolLifecycleControl?.enabled(opts.sessionId!, phase)).join(',') : '',
         ...(allowPiPackageManagement ? { [PI_PACKAGE_MANAGEMENT_ENV]: piPackageManagementToken } : {}),
         // 轮 40-w4-t12 HIGH-1:review-only 启动标记 —— 独立于权限文件(文件损坏/
         // 缺失时 bridge 仍保留 reviewOnly 语义, 不降级成普通 ask;见
@@ -5989,7 +5988,7 @@ export class PiAgent extends BaseAgent {
                 fastModels.some(candidate => candidate.provider === provider && candidate.id === model),
               controlToolLifecycle: async input => {
                 if (remote || hosted || reviewMode || closed || accountBoundaryTeardown || !opts.sessionId) throw new Error('Tool hook control unavailable');
-                const result = await toolLifecycleControl?.run(opts.sessionId, { ...input, engine: 'pi' });
+                const result = await this.deps.toolLifecycleControl?.run(opts.sessionId, { ...input, engine: 'pi' });
                 if (closed || accountBoundaryTeardown) throw new Error('Tool hook control expired');
                 return result ?? {};
               },

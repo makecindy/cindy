@@ -18,35 +18,35 @@ export interface ToolLifecycleVerdict {
 }
 
 export interface ToolLifecycleControl {
-  /** Capture the selection for this engine instance; undefined installs no hooks. */
-  bind?(sessionId: string): ToolLifecycleControl | undefined;
-  enabled(sessionId: string): boolean;
+  enabled(sessionId: string, phase?: ToolLifecycleEvent['phase']): boolean;
   run(sessionId: string, event: ToolLifecycleEvent, signal?: AbortSignal): Promise<ToolLifecycleVerdict>;
 }
 
-/** Stop before serializing oversized native results; traversal is depth/size bounded. */
+/** Stop before copying oversized native JSON; use JSON's own scalar encoding. */
 export function assertToolLifecycleBudget(value: unknown, limit = 1_048_576): void {
   let remaining = limit;
-  const visit = (item: unknown, depth: number): void => {
-    if (remaining < 0 || depth > 64) throw new Error('Tool hook exceeds the transport budget');
+  const visit = (item: unknown): void => {
+    if (remaining < 0) throw new Error('Tool hook exceeds the transport budget');
     if (typeof item === 'string') {
-      remaining -= item.length + 2;
-      if (remaining < 0) throw new Error('Tool hook exceeds the transport budget');
-      for (let i = 0; i < item.length; i++) {
-        const code = item.charCodeAt(i);
-        remaining -= code < 32 ? 5 : code === 34 || code === 92 ? 1 : 0;
-      }
+      if (item.length > remaining) throw new Error('Tool hook exceeds the transport budget');
+      remaining -= JSON.stringify(item).length;
+    } else if (Array.isArray(item)) {
+      remaining -= 2 + Math.max(0, item.length - 1);
+      for (const child of item) visit(child ?? null);
     } else if (item && typeof item === 'object') {
       remaining -= 2;
+      let first = true;
       for (const key in item) if (Object.prototype.hasOwnProperty.call(item, key)) {
-        remaining -= 2;
-        if (!Array.isArray(item)) visit(key, depth + 1);
-        visit((item as Record<string, unknown>)[key], depth + 1);
+        const child = (item as Record<string, unknown>)[key];
+        if (child === undefined || typeof child === 'function' || typeof child === 'symbol') continue;
+        remaining -= (first ? 0 : 1) + JSON.stringify(key).length + 1;
+        first = false;
+        visit(child);
       }
-    } else remaining -= 32;
+    } else remaining -= JSON.stringify(item)?.length ?? 4;
     if (remaining < 0) throw new Error('Tool hook exceeds the transport budget');
   };
-  visit(value, 0);
+  visit(value);
 }
 
 /** Reject unsupported transformations instead of silently claiming they applied. */
@@ -54,9 +54,7 @@ export function assertToolLifecycleVerdict(event: ToolLifecycleEvent, verdict: T
   if (event.phase === 'call' && 'result' in verdict || event.phase === 'result' && ('input' in verdict || verdict.decision === 'ask')) {
     throw new Error('Tool hook action is unavailable in this phase');
   }
-  if (event.engine === 'codex' && (verdict.decision === 'ask' || 'result' in verdict)) {
-    throw new Error('Codex native hooks do not support ask or result replacement');
-  }
+  if (event.engine === 'claude-code' && 'input' in verdict) throw new Error('Claude plugin hooks do not rewrite tool input');
   if (event.engine === 'pi' && (verdict.decision === 'ask' || verdict.additionalContext !== undefined)) {
     throw new Error('Pi tool hooks do not support ask or additionalContext');
   }

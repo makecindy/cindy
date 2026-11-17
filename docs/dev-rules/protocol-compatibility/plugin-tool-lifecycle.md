@@ -9,3 +9,5 @@ receipt 与节点批准不重写。旧宿主保留未知声明并报告不支持
 运行期主入口为 `toolLifecycleControl.ts`，Pi 复用 cindy-bridge，Claude 复用 SDK callbacks。
 Codex 不自动接入，不复制内部信任格式；协议保留其引擎枚举，不据此宣称已接线。
 验证见 Claude 钩子测试、Pi 原生集成用例与 `ghostInstallReceipt.test.ts` 的旧 receipt 读回用例。
+仅 Pi 支持 `tool.input`；Claude 沿用 SDK 钩子执行，不重排宿主 callbacks。节点按原生实例启动时的
+订阅分别安装；调用时实时读取选择，在途选择／owner 变更 no-op，不引入实例级选择快照或热更新。

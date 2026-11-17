@@ -8,21 +8,15 @@ export function createPluginToolLifecycle(deps: {
   control(): ReturnType<typeof createRuntimePluginControl>;
 }): ToolLifecycleControl {
   return {
-    bind: sessionId => {
+    enabled: (sessionId, phase) => {
       const settings = deps.readSettings(sessionId);
-      if (!settings?.['will-tool-call']?.length && !settings?.['did-tool-result']?.length) return;
-      const control = deps.control().withSettings(sessionId, settings);
-      return createPluginToolLifecycle({ readSettings: () => settings, control: () => control });
-    },
-    enabled: sessionId => {
-      const settings = deps.readSettings(sessionId);
+      if (phase) return !!settings?.[phase === 'call' ? 'will-tool-call' : 'did-tool-result']?.length;
       return !!(settings?.['will-tool-call']?.length || settings?.['did-tool-result']?.length);
     },
     async run(sessionId, event, signal) {
       const point = event.phase === 'call' ? 'will-tool-call' : 'did-tool-result';
       if (!deps.readSettings(sessionId)?.[point]?.length) return {};
       const verdict: ToolLifecycleVerdict = {};
-      const contributors: Array<() => void> = [];
       let inputError: Error | undefined;
       try { assertToolLifecycleBudget(event); } catch (error) { inputError = error as Error; }
       const pending = deps.control().run<GhostToolPointData>(point, sessionId, async () => ({ ...event, sessionId }),
@@ -38,19 +32,13 @@ export function createPluginToolLifecycle(deps: {
           };
           assertToolLifecycleBudget(next);
           Object.assign(verdict, next);
-          contributors.push(assertCurrent);
           return { ...data, ...(result.tool.input ? { input: result.tool.input } : {}),
             ...('result' in result.tool ? { result: verdict.result } : {}) };
         }, signal, inputError);
       if (!pending) return {};
-      try {
-        await pending;
-        // A prior contributor may have stopped while another plugin answered.
-        try { for (const current of contributors) current(); }
-        catch { return {}; }
-        return verdict;
-      }
+      try { await pending; return verdict; }
       catch (error) {
+        if (error instanceof RuntimePluginControlError && error.failure && error.reason === 'selection-changed') return {};
         if (error instanceof RuntimePluginControlError && error.action === 'block') return { decision: 'deny', reason: error.reason || 'Plugin tool hook blocked this operation' };
         throw error;
       }

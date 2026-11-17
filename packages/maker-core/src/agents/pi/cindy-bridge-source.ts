@@ -5144,19 +5144,21 @@ export default async function cindyBridge(piApi: any) {
 
   // Native plugin hooks run before Cindy permissions, so transformed parameters
   // enter the same permission/capture path. With no selected plugin no RPC runs.
-  const toolLifecycleEnabled = process.env.CINDY_PI_TOOL_LIFECYCLE === '1';
+  const toolLifecyclePoints = (process.env.CINDY_PI_TOOL_LIFECYCLE ?? '').split(',');
   const assertToolHookBudget = ${assertToolLifecycleBudget.toString()};
   const pluginToolLifecycle = async (event: any, ctx: any, phase: 'call' | 'result') => {
     const data = { phase, toolName: event.toolName, toolCallId: event.toolCallId,
       input: event.input ?? {}, ...(phase === 'result' ? { result: { content: event.content, details: event.details, isError: event.isError }, isError: event.isError } : {}) };
-    assertToolHookBudget(data, Math.min(1_048_576, ${MAX_JSONL_BUFFER_CHARS - 4096} / 6));
+    assertToolHookBudget(data);
     const serialized = JSON.stringify(data);
+    const frameBudget = ${MAX_JSONL_BUFFER_CHARS - 4096};
+    if (serialized.length > frameBudget / 2 && JSON.stringify(serialized).length > frameBudget) throw new Error('Tool hook exceeds the transport frame budget');
     const raw = await ctx.ui.input('cindy:tool-lifecycle', serialized, { timeout: 2_000 });
     const result = typeof raw === 'string' ? JSON.parse(raw) : null;
     if (!result || result.error) throw new Error('Tool hook failed');
     return result;
   };
-  if (toolLifecycleEnabled && !guestToolGate && !currentPermissionState().reviewOnly) {
+  if ((toolLifecyclePoints.includes('call') || toolLifecyclePoints.includes('result')) && !guestToolGate && !currentPermissionState().reviewOnly) {
     const pluginToolCall = async (event: any, ctx: any) => {
       const result = await pluginToolLifecycle(event, ctx, 'call');
       if (result.decision === 'deny') return { block: true, reason: result.reason ?? 'Plugin denied tool call' };
@@ -5165,8 +5167,8 @@ export default async function cindyBridge(piApi: any) {
         Object.assign(event.input, result.input);
       }
     };
-    pi.on('tool_call', pluginToolCall);
-    pi.on('tool_result', async (event: any, ctx: any) => {
+    if (toolLifecyclePoints.includes('call')) pi.on('tool_call', pluginToolCall);
+    if (toolLifecyclePoints.includes('result')) pi.on('tool_result', async (event: any, ctx: any) => {
       const result = await pluginToolLifecycle(event, ctx, 'result');
       if (result.decision === 'deny') {
         ctx.abort();

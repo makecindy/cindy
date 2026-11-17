@@ -48,12 +48,6 @@ export function createRuntimePluginControl(deps: {
     return turn.budget;
   };
   return {
-    withSettings: (sessionId: string, settings: RuntimePluginSettings) => {
-      const current = deps.captureOwner();
-      return createRuntimePluginControl({ ...deps, captureOwner: () => current,
-        readSettings: id => id === sessionId ? settings : deps.readSettings(id),
-      });
-    },
     beginTurn,
     forgetSession: (sessionId: string) => { turns.delete(sessionId); },
     requestBudget: () => createWaitBudget(1_000, now),

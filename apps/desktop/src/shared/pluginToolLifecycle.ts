@@ -4,7 +4,6 @@ import type { ToolLifecycleVerdict } from '@cindy/maker-core';
 export function parseToolLifecycleVerdict(value: unknown): ToolLifecycleVerdict | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return;
   const raw = value as Record<string, unknown>;
-  if (Object.keys(raw).some(key => !['decision', 'reason', 'input', 'result', 'additionalContext'].includes(key))) return;
   if (raw.decision !== undefined && raw.decision !== 'deny' && raw.decision !== 'ask') return;
   if (raw.reason !== undefined && typeof raw.reason !== 'string') return;
   if (raw.additionalContext !== undefined && typeof raw.additionalContext !== 'string') return;

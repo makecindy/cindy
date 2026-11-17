@@ -25,7 +25,7 @@
 import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/library-native-read.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import { claudeProfileSessionStore } from './profile-session-store.js';
-import { withClaudeToolLifecycleHooks } from './tool-lifecycle-hooks.js';
+import { claudeToolLifecycleHooks } from './tool-lifecycle-hooks.js';
 import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
@@ -2287,7 +2287,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           { PreToolUse: [{ hooks: [reviewReadOnlyHook] }] },
           nativeCliAuth ? workspaceSettingsConfigChangeHooks : undefined,
         )
-      : withClaudeToolLifecycleHooks(!hosted?.guest && !opts.remoteHostId ? this.deps.toolLifecycleControl : undefined, opts.sessionId, mergeClaudeHookSets(
+      : mergeClaudeHookSets(
+          !hosted?.guest && !opts.remoteHostId ? claudeToolLifecycleHooks(this.deps.toolLifecycleControl, opts.sessionId) : undefined,
           buildClaudeLocalToolGuardHooks(
             capabilityRouting,
             () => activeCapabilitySelectionText,
@@ -2324,7 +2325,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           this.deps.claudeHooks,
           // Last: earlier guards may deny; this only routes what remains.
           { PreToolUse: [{ hooks: [nativeAutoPolicyHook] }] },
-        ));
+        );
     const deniedCapabilityRoute = (toolName: string) => {
       const route = findClaudeMcpCapabilityRoute(
         capabilityRouting,
