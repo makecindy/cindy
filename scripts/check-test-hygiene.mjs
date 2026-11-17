@@ -4,7 +4,7 @@
 // 跑：node scripts/check-test-hygiene.mjs            检查（CI 阻断）
 //     node scripts/check-test-hygiene.mjs --update   把基线收紧到当前计数（只降不升）
 //
-// 三条规则都只看源码文本，结果与机器快慢无关：
+// 以下三条单测规则按基线计数，结果与机器快慢无关：
 //   reset-modules  每次 vi.resetModules() 都会让后续 import 重新求值整条模块链。
 //                  codexProxyHost.test.ts 逐用例重置时 285 条用例耗时 105s，不重置只要 7s。
 //                  新增调用必须在上一行写 `// reset-modules: <被隔离的模块状态>`。
@@ -18,6 +18,7 @@
 // 存量计数记在 scripts/test-hygiene-baseline.json，只允许减少：某文件的计数超过基线、
 // 或基线外的文件出现未豁免的命中，都会失败。门禁对照可信 Git 基准拒绝基线上调，
 // 手改 JSON 与 `--update` 均不能绕过；只有确认基准提交还没有基线文件时才首次登记。
+// 另查 apps/host 下的测试、脚本和夹具：按名称或路径结束进程直接报错，不可加入基线。
 
 import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -1305,6 +1306,64 @@ function walk(dir, out) {
   }
 }
 
+// Host test cleanup must target processes the fixture started. Include scripts and
+// integration fixtures omitted from the unit-test ratchet, with no baseline allowance.
+const PROCESS_TOOL = /(?:^|[/\\])(?:pkill|killall)(?:\.exe)?$/i;
+const NAME_KILL_COMMANDS = [
+  // Executable following a shell control operator or wrapper.
+  /(?:^|[;&|(\n]|\b(?:then|do|if|sudo|command|exec|xargs)\s+)\s*['"]?(?:[^\s'"`]+\/)?(?:pkill|killall)\b/i,
+  /\bkill\s+(?:-[\w-]+\s+)*["']?(?:\$\(|`)[^\n)]*\b(?:pgrep|pidof)\b/i,
+  /\b(?:pgrep|pidof)\b[^\n|]*\|\s*xargs\b[^\n|]*\bkill\b/i,
+  /\btaskkill(?:\.exe)?\b[^\n;&|]*(?:\/im\b|\/fi\s+["\x27]?(?:imagename|windowtitle|services|modules)\b)/i,
+  /\bstop-process\b[^\n;|]*-(?:process)?name\b|\bget-process\b(?![^\n|]*-id\b)[^\n|]*\|\s*stop-process\b/i,
+  /\b(?:system|Popen|check_call|check_output|run|call)\s*\(\s*\[?\s*['"](?:[^'"]*[/\\])?(?:pkill|killall)\b/i,
+];
+
+function terminatesByName(text) {
+  return NAME_KILL_COMMANDS.some(pattern => pattern.test(text));
+}
+
+function hostProcessCleanupViolations() {
+  const files = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--',
+    'apps/host/'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }).split('\0');
+  const violations = [];
+  for (const file of files) {
+    if (!/\.(?:[cm]?[jt]sx?|sh|bash|zsh|py|ps1|bat|cmd)$/i.test(file)) continue;
+    if (!/(?:^|\/)(?:scripts|__tests__|__fixtures__|fixtures?|tests?|test-support|e2e)\//.test(file)
+        && !/(?:\.(?:test|spec|selftest|e2e)\.|[.-]fixture\.|(?:^|\/)(?:break(?:s|-it)?|mutation)[.-])/.test(file)) continue;
+    const fullPath = path.join(ROOT, file);
+    if (!existsSync(fullPath)) continue;
+    const source = readFileSync(fullPath, 'utf8');
+    if (!/\b(?:pkill|killall|pgrep|pidof|taskkill(?:\.exe)?|Stop-Process|Get-Process)\b/i.test(source)) continue;
+    const hit = index => violations.push(file + ':' + (1 + lineOf(source, index)));
+    if (!/\.[cm]?[jt]sx?$/.test(file)) {
+      for (const match of source.matchAll(/^.*$/gm)) {
+        if (!/^\s*#/.test(match[0]) && terminatesByName(match[0])) hit(match.index);
+      }
+      continue;
+    }
+    const ts = typescript ??= requireDesktop('typescript');
+    const ast = parseTestSource(ts, source);
+    const visit = node => {
+      if (ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
+        // Reading a generated command, checking a command name in a fake, and
+        // naming a test do not execute commands against the machine.
+        const parent = node.parent;
+        const callee = ts.isCallExpression(parent) ? parent.expression.getText(ast) : '';
+        if (/^(?:it|test|describe)(?:\.|$)|\.(?:includes|toContain|toBe|endsWith|startsWith)$/.test(callee)
+            || ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken) return;
+        const command = node.text.trim();
+        const taskkillByName = /(?:^|[/\\])taskkill(?:\.exe)?$/i.test(command) && ts.isCallExpression(parent)
+          && parent.arguments[0] === node && /['"]\/{1,2}im['"]|['"]\/{1,2}fi['"]\s*,\s*['"](?:imagename|windowtitle|services|modules)\b/i.test(parent.arguments[1]?.getText(ast) ?? '');
+        if (PROCESS_TOOL.test(command) || terminatesByName(command) || taskkillByName) hit(node.getStart(ast));
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(ast);
+  }
+  return violations;
+}
+
 async function loadGuardFiles(root) {
   const configUrl = pathToFileURL(path.join(root, 'scripts', 'test-workspaces.config.mjs'));
   const { default: manifest } = await import(configUrl.href);
@@ -1423,6 +1482,11 @@ export async function main(args = process.argv.slice(2)) {
       for (const item of raised) console.error('[test-hygiene] baseline cannot increase ' + item.file + ' ' + item.rule + ': ' + item.limit + ' -> ' + item.current);
       return 1;
     }
+  }
+  const unsafeCleanup = hostProcessCleanupViolations();
+  if (unsafeCleanup.length) {
+    for (const location of unsafeCleanup) console.error('[test-hygiene] ' + location + ' — 只能结束本次启动并记录了 PID 的进程');
+    return 1;
   }
   const counts = await scanRepository();
   const { violations, tightenable } = compareWithBaseline(counts, baseline);
