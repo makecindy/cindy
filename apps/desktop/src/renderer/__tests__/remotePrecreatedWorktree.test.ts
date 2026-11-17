@@ -325,9 +325,11 @@ describe('createRemoteSessionWithPrecreatedWorktree', () => {
   // 下次新建前的恢复看到任务存在就销账,空的「未命名任务」永久滞留。晚到且原样未动的
   // 任务要删掉;一旦有人用过(有消息)就只销账,绝不删除。
   it.each([
-    { label: 'deletes an untouched late session', messages: 0, deleted: true },
-    { label: 'keeps a late session that already has messages', messages: 1, deleted: false },
-  ])('$label when a timed-out create arrives later', async ({ messages, deleted }) => {
+    { label: 'deletes an untouched late session', messages: 0, deleted: true, missing: '', unsupported: false },
+    ...['userSendAt', 'activeTurnStartedAt', 'pinnedAt'].map(missing => ({ label: `keeps a session missing ${missing}`, messages: 0, deleted: false, missing, unsupported: false })),
+    { label: 'keeps a session on an old host', messages: 0, deleted: true, missing: '', unsupported: true },
+    { label: 'keeps a late session that already has messages', messages: 1, deleted: false, missing: '', unsupported: false },
+  ])('$label when a timed-out create arrives later', async ({ messages, deleted, missing, unsupported }) => {
     let created = false;
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'maker:create-session') {
@@ -342,13 +344,16 @@ describe('createRemoteSessionWithPrecreatedWorktree', () => {
         return {
           id: SESSION_ID,
           status: 'active',
-          userSendAt: null,
-          activeTurnStartedAt: null,
-          pinnedAt: null,
+          ...(missing === 'userSendAt' ? {} : { userSendAt: null }),
+          ...(missing === 'activeTurnStartedAt' ? {} : { activeTurnStartedAt: null }),
+          ...(missing === 'pinnedAt' ? {} : { pinnedAt: null }),
           _count: { messages },
         };
       }
-      if (channel === 'local-db:sessions:patch-meta') return { id: SESSION_ID, status: 'deleted' };
+      if (channel === 'local-db:sessions:discard-unused') {
+        if (unsupported) throw new Error('[NOT_FOUND] Unknown channel');
+        return { id: SESSION_ID, status: 'deleted' };
+      }
       throw new Error(`unexpected ${channel}`);
     });
 
@@ -359,9 +364,9 @@ describe('createRemoteSessionWithPrecreatedWorktree', () => {
     await expect(
       recoverPendingRemotePrecreatedWorktrees({ deviceId: DEVICE_ID, invoke }),
     ).resolves.toEqual({ attempted: 1, recovered: 1, retained: 0, storageReadable: true });
-    const deleteCalls = invoke.mock.calls.filter(([c]) => c === 'local-db:sessions:patch-meta');
+    const deleteCalls = invoke.mock.calls.filter(([c]) => c === 'local-db:sessions:discard-unused');
     expect(deleteCalls).toEqual(
-      deleted ? [['local-db:sessions:patch-meta', [SESSION_ID, { status: 'deleted' }]]] : [],
+      deleted ? [['local-db:sessions:discard-unused', [SESSION_ID]]] : [],
     );
     await expect(listPendingRemotePrecreatedWorktrees()).resolves.toEqual([]);
   });

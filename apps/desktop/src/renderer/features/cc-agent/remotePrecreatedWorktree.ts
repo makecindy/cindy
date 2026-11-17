@@ -433,9 +433,9 @@ function isUntouchedRemoteSession(session: Record<string, unknown>): boolean {
   return session.status === 'active'
     && isRecord(count)
     && count.messages === 0
-    && session.userSendAt == null
-    && session.activeTurnStartedAt == null
-    && session.pinnedAt == null;
+    && session.userSendAt === null
+    && session.activeTurnStartedAt === null
+    && session.pinnedAt === null;
 }
 
 /**
@@ -453,7 +453,7 @@ async function settleClaimedRecord(
   if (abandonedSessionCreates.has(key) && isUntouchedRemoteSession(session)) {
     try {
       assertCurrent(isCurrent);
-      await invoke('local-db:sessions:patch-meta', [record.sessionId, { status: 'deleted' }]);
+      await invoke('local-db:sessions:discard-unused', [record.sessionId]);
     } catch (error) {
       if (isRemotePrecreatedWorktreeOwnerChangedError(error)) throw error;
     }
