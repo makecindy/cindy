@@ -84,6 +84,8 @@ const REFUSED = {
     '/api/settings/layout/reset', '/api/settings/sidebar/set', '/api/settings/shortcuts/set', '/api/project-info/set',
     '/api/project-info/auto-icon', '/api/project-aliases/set', '/api/project-aliases/delete', '/api/right-sidebar-tabs/upsert',
     '/api/browser-backend/set-kind', '/api/task-tags/execute'],
+  // Reads that change something: a failed embedded-browser probe recovers the backend (health-service.ts).
+  'reads that write': ['/api/browser-backend/get-health'],
   'plugins and accounts': ['/api/ghosts/set-enabled', '/api/agents/logout', '/api/model-visibility/claim',
     '/api/model-access/retry', '/api/auth/refresh'],
   'a path added later': ['/api/some-later-write'],

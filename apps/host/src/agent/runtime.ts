@@ -16,6 +16,8 @@ import { Maker, PiAgent } from '@cindy/maker-core';
 import type { AgentDeps, AgentKind, AuthAdapter, AuthAdapterOptions, AuthLoginOptions, AuthState, MakerDeps, MakerMemoryManager } from '@cindy/maker-core';
 
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.ts';
+import { peekClaudeCliLoginStatus } from '../../../desktop/src/main/maker-host/claude-native-cli-status.js';
+import { HOST_PROFILE_IN_USE_BY_DESKTOP } from './profile-coexistence.js';
 import { createMakerLogger } from '../../../desktop/src/main/maker-host/logger-adapter.js';
 import { getHostOutboundPathSnapshotFor } from '../outbound-proxy.ts';
 import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/codex-local-auth-state.js';
@@ -116,11 +118,18 @@ export interface HostAgentGraphOptions {
   reportGatewayKeyRejected?: (key: string) => void;
   /** The account realm (main.ts), as the desktop's getActiveAuthRealm for the Codex token reader. */
   readAuthRealm?: () => string | null;
+  /** Coexistence plan A: whether a desktop uses this profile. While it does, reading a login state
+   * writes nothing the desktop shares and starts no CLI: Codex skips its reconciliation with the
+   * system login, Claude answers from the CLI status already read. */
+  isProfileHeld?: () => boolean;
 }
 
 export const LOGGER = createMakerLogger('maker');
 
 const missingRouteResolver: HostProviderRouteResolver = async () => { throw new Error('Provider credential resolver is unavailable'); };
+const notHeld = () => false;
+/** A login state that cannot be read while a desktop uses this profile: unknown, not "not signed in". */
+const LOGIN_STATE_UNKNOWN_WHILE_HELD: AuthState = Object.freeze({ authenticated: false, errorReason: HOST_PROFILE_IN_USE_BY_DESKTOP });
 
 /** A credential adapter retained by an outgoing task cannot authenticate a new owner. */
 function bindAuthOwner<T extends AuthAdapter>(adapter: T): T {
@@ -147,7 +156,8 @@ function bindAuthOwner<T extends AuthAdapter>(adapter: T): T {
  * Subscription-only view: state comes from the shared verdict, and the lane
  * injects no credentials because the CLI authenticates itself.
  */
-export function createClaudeSubscriptionAuth(gateway: HostGateway | null | undefined, resolveRoute: HostProviderRouteResolver = missingRouteResolver, cli?: HostProviderConfig['claudeNative']) {
+export function createClaudeSubscriptionAuth(gateway: HostGateway | null | undefined, resolveRoute: HostProviderRouteResolver = missingRouteResolver, cli?: HostProviderConfig['claudeNative'],
+  isProfileHeld: () => boolean = notHeld) {
   const owner = activeOwnerScopeKey();
   const current = () => owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
   return bindAuthOwner({
@@ -156,7 +166,13 @@ export function createClaudeSubscriptionAuth(gateway: HostGateway | null | undef
         try { await resolveRoute(opts.providerId, 'claude-code'); return { authenticated: true, authSource: 'api-key', identity: opts.providerId }; }
         catch { return { authenticated: false, errorReason: 'not_connected' }; }
       }
-      if (cli && isNativeProviderAuthBound('anthropic')) await cli.readClaudeCliLoginStatus({ maxAgeMs: 30_000 });
+      if (cli && isNativeProviderAuthBound('anthropic')) {
+        // While a desktop uses this profile no `claude auth status` runs: whether that CLI call
+        // refreshes and writes back its own login cannot be read from this repository, so it is
+        // treated as a write. The status read before answers; with none, the state is unknown.
+        if (!isProfileHeld()) await cli.readClaudeCliLoginStatus({ maxAgeMs: 30_000 });
+        else if (!peekClaudeCliLoginStatus()) return { ...LOGIN_STATE_UNKNOWN_WHILE_HELD };
+      }
       return hasClaudeNativeLogin()
         ? { authenticated: true, authSource: 'oauth', identity: 'Claude subscription' }
         : { authenticated: false, errorReason: 'not_connected' };
@@ -205,7 +221,7 @@ type GrokLoginView = Pick<HostProviderConfig['grok'], 'hasGrokOAuthLogin' | 'gro
  * legacy config migration.
  */
 function createClaudeProxyAuth(gateway: HostGateway | null | undefined, native: ReturnType<typeof createClaudeSubscriptionAuth>,
-  proxy: ClaudeProxyAuthView, cli?: HostProviderConfig['claudeNative'], grok?: GrokLoginView) {
+  proxy: ClaudeProxyAuthView, cli?: HostProviderConfig['claudeNative'], grok?: GrokLoginView, isProfileHeld: () => boolean = notHeld) {
   const gatewayKey = () => gateway?.credential || null;
   // A proxy secret travels only with the loopback address it was read with, so it can never be
   // sent to the upstream. While the proxy is not ready (getClaudeEndpoint falls back to the
@@ -217,8 +233,11 @@ function createClaudeProxyAuth(gateway: HostGateway | null | undefined, native: 
   // Explicit sources: the proxy routes the secret as the desktop routes the provider placeholder.
   const providerEnv = () => viaProxy(proxy.inboundSecret()) ?? { ANTHROPIC_API_KEY: CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY };
   // The desktop's claudeNativeLoginState (CLAUDE_CLI_STATUS_MAX_AGE_MS = 60 s).
+  // While a desktop uses this profile, the status read before (as the subscription adapter above).
   const nativeLoginState = async (): Promise<AuthState> => {
-    const login = cli && isNativeProviderAuthBound('anthropic') ? await cli.readClaudeCliLoginStatus({ maxAgeMs: 60_000 }) : null;
+    const bound = Boolean(cli) && isNativeProviderAuthBound('anthropic');
+    if (bound && isProfileHeld() && !peekClaudeCliLoginStatus()) return { ...LOGIN_STATE_UNKNOWN_WHILE_HELD };
+    const login = !bound ? null : isProfileHeld() ? peekClaudeCliLoginStatus() : await cli!.readClaudeCliLoginStatus({ maxAgeMs: 60_000 });
     return login?.loggedIn
       ? { authenticated: true, identity: 'Claude.ai · OAuth', authSource: 'oauth' }
       : { authenticated: false, errorReason: 'no_oauth' };
@@ -250,6 +269,7 @@ function createClaudeProxyAuth(gateway: HostGateway | null | undefined, native: 
       if (opts?.credentialMode === 'oauth-bearer') return nativeLoginState();
       if (gatewayKey()) return { authenticated: true };
       const login = await nativeLoginState();
+      if (login.errorReason === HOST_PROFILE_IN_USE_BY_DESKTOP) return login;
       if (!login.authenticated) return { authenticated: false, errorReason: 'no_key' };
       return servesModel(opts?.model) ? login : { authenticated: true };
     },
@@ -298,9 +318,9 @@ function createClaudeProxyAuth(gateway: HostGateway | null | undefined, native: 
 
 /** Gateway-key lane: the key is injected as ANTHROPIC_API_KEY for the CLI spawn. */
 export function createClaudeGatewayAuth(gateway: HostGateway | null | undefined, resolveRoute: HostProviderRouteResolver = missingRouteResolver, cli?: HostProviderConfig['claudeNative'], proxy?: ClaudeProxyAuthView | null,
-  grok?: GrokLoginView) {
-  const native = createClaudeSubscriptionAuth(null, resolveRoute, cli);
-  if (proxy) return createClaudeProxyAuth(gateway, native, proxy, cli, grok);
+  grok?: GrokLoginView, isProfileHeld: () => boolean = notHeld) {
+  const native = createClaudeSubscriptionAuth(null, resolveRoute, cli, isProfileHeld);
+  if (proxy) return createClaudeProxyAuth(gateway, native, proxy, cli, grok, isProfileHeld);
   return bindAuthOwner({
     async getState(opts?: AuthAdapterOptions) {
       if (opts?.providerId === 'anthropic' || opts?.credentialMode === 'oauth-bearer') return native.getState(opts);
@@ -345,8 +365,11 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
     afterLogout?: () => Promise<void>;
     /** The runtime's reconciliation with the system Codex login (codex-system-login.ts). */
     systemLogin?: ReturnType<typeof createHostCodexSystemLogin>;
+    /** Coexistence plan A: while a desktop uses this profile, reading the state does not reconcile. */
+    isProfileHeld?: () => boolean;
   }) {
   const invalidate = native?.invalidate;
+  const isProfileHeld = native?.isProfileHeld ?? notHeld;
   if (!codexHome || !path.isAbsolute(codexHome)) throw new Error('Codex requires an explicit isolated profile');
   const owner = activeOwnerScopeKey();
   const current = () => owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
@@ -412,12 +435,16 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       const invalidated = readHostCodexInvalidation(codexHome, systemAuthPath);
       if (invalidated) return { authenticated: false, errorReason: invalidated.reason, credentialScope: invalidated.credentialScope };
       // Then the reconciliation with the system login, as readState does before reading auth.json.
-      await systemLogin.reconcile();
+      // Not while a desktop uses this profile: it can relink codex-home/auth.json and bind the login
+      // to the account (codex-system-login.ts), both shared with that desktop. The state then comes
+      // from the files as they are.
+      const held = isProfileHeld();
+      if (!held) await systemLogin.reconcile();
       const recovery = readHostCodexRecoveryRequirement(codexHome, systemAuthPath);
       const local = await readCodexLocalAuthState(codexHome);
       // The desktop reads the token through getAccessToken, which reconciles again before its
       // binding check, so a claim the first pass abandoned is made for the current session.
-      if (local.authenticated && local.authSource === 'oauth') await systemLogin.reconcile();
+      if (!held && local.authenticated && local.authSource === 'oauth') await systemLogin.reconcile();
       const native = isNativeProviderAuthBound('openai') ? local : null;
       if (native?.authenticated && native.authSource === 'oauth') {
         const scoped = { ...native, credentialScope: detectHostCodexCredentialScope(codexHome, systemAuthPath) };
@@ -511,7 +538,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
       afterLogin: () => options.codexRuntime!.authBoundary.afterLogin(),
       afterLogout: () => options.codexRuntime!.authBoundary.afterLogout(),
       systemLogin: options.codexRuntime!.systemLogin,
-    } : undefined);
+      isProfileHeld: options.isProfileHeld,
+    } : { isProfileHeld: options.isProfileHeld });
   // Match Desktop: default-auth invalidation preserves separately selected subscription accounts.
   options.codexRuntime?.setLocalHostRetirement(async (reason, preserveSubscriptionAccounts) => {
     await codex?.forceDisposeLocalHostForAuthChange(reason, { preserveExternalAuth: true, preserveSubscriptionAccounts });
@@ -612,7 +640,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     ...PORTS_ONLY_PI_READS,
     resolveLocalMcpDuplicateChoices: options.resolveLocalMcpDuplicateChoices,
     claudeHooks,
-    auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative, options.claudeProxy, config.grok),
+    auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative, options.claudeProxy, config.grok,
+      options.isProfileHeld),
     runtimeConfig: runtimeConfigs.buildClaudeRuntimeConfig(engineEndpoint, claudeProxy ? () => claudeProxy.resolveAgentEndpoint() : undefined),
     binaryPath: options.binaryPath,
     logger: LOGGER,

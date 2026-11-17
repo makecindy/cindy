@@ -41,7 +41,7 @@ import { createHostCodexSystemLogin } from './codex-system-login.ts';
 import { invalidateHostCodexLogin } from './codex-invalidation.ts';
 import { createHostCodexCredentials } from './codex-credentials.ts';
 import { createBridgeTokenReader } from './codex-runtime.ts';
-import { bindNativeProviderAuth } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.ts';
+import { bindNativeProviderAuth, isNativeProviderAuthBound } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.ts';
 import { currentCodexCredentialGeneration } from '../../../desktop/src/main/maker-host/codexCredentialRead.ts';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
 
@@ -143,4 +143,54 @@ test('the subscription bridge reconciles before it reads the native token', { ti
   // An independent account has its own home; the native login is not reconciled for it.
   await read('codex-account-2');
   assert.deepEqual(calls.splice(0), ['check', 'check', 'read:codex-account-2']);
+});
+
+/*
+ * 测试价值
+ * - 生产入口：createCodexLocalCliAuth 的 getState（/api/agents/auth-state 与 /api/agents/status 都不带参数调用它，
+ *   maker.ts getAgentAuthState / getAgentStatus），对账用真实的 createHostCodexSystemLogin 和真实的 profile 文件。
+ * - 规则：并存方案 A（审核方 2026-11-17 定）。闸门关着时读 Codex 登录状态不对账：对账会改写 codex-home/auth.json
+ *   并把登录绑到账号，这两样都和占用 profile 的桌面共用；只按现有的 auth.json 和作废标记作答。
+ * - 现有覆盖缺口：之前读状态一律对账，闸门不管读取路径。
+ * - 最小失败输入：系统 Codex 已登录、profile 里还没有链接也没有绑定，闸门关着时读一次状态。
+ * - tier：unit（临时目录里的真实文件；系统登录是临时目录下的路径，不读 HOME）。
+ */
+test('while a desktop uses the profile, reading the Codex state does not reconcile, write or bind', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
+  const { root, profileDir, codexHome } = isolatedProfile(t, 'held-owner');
+  const systemAuth = path.join(root, 'fake-home', '.codex', 'auth.json');
+  fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+  fs.writeFileSync(systemAuth, authJson('system-token-held'), { mode: 0o600 });
+  const real = createHostCodexSystemLogin({ codexHome, systemAuthPath: systemAuth, loginActive: () => false });
+  let reconciles = 0;
+  const systemLogin = { ...real, reconcile: (...args) => { reconciles++; return real.reconcile(...args); } };
+  let held = true;
+  const auth = createCodexLocalCliAuth(null, undefined, codexHome, { isCodexAccountLoginActive: () => false, isCodexAccountProvider: () => false },
+    undefined, { systemLogin, isProfileHeld: () => held });
+  // Every entry under the profile: kind, link target and bytes.
+  const snapshot = () => {
+    const out = {};
+    const walk = dir => { for (const name of fs.readdirSync(dir).sort()) {
+      const file = path.join(dir, name); const stat = fs.lstatSync(file); const key = path.relative(profileDir, file);
+      if (stat.isSymbolicLink()) out[key] = `link:${fs.readlinkSync(file)}`;
+      else if (stat.isDirectory()) { out[key] = 'dir'; walk(file); }
+      else out[key] = fs.readFileSync(file).toString('base64');
+    } };
+    walk(profileDir);
+    return out;
+  };
+  const before = snapshot();
+  // auth-state, then status: both read the state without options.
+  await auth.getState();
+  await auth.getState();
+  assert.equal(reconciles, 0, 'no reconciliation while held');
+  assert.deepEqual(snapshot(), before, 'nothing under the profile changed');
+  assert.equal(isNativeProviderAuthBound('openai'), false, 'the login was not bound to the account');
+  // Released, the same read reconciles: it links the system login and binds it, the writes skipped above.
+  held = false;
+  const state = await auth.getState();
+  assert.ok(reconciles > 0);
+  assert.notDeepEqual(snapshot(), before);
+  assert.equal(isNativeProviderAuthBound('openai'), true);
+  assert.equal(state.authenticated, true);
 });

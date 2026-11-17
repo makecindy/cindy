@@ -11,7 +11,7 @@ import { getTableColumns, getTableName } from 'drizzle-orm';
 import { DeviceLinkClient, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
   PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL } from '@cindy/device-link';
 import { readDeviceLinkInvokeSourceDevice } from '../../desktop/src/main/device-link/invoke-context.ts';
-import { createHostDeviceLink } from './device-link.ts';
+import { createHostDeviceLink, HOST_DISPATCH_PORTS_WHILE_HELD } from './device-link.ts';
 import { createHostService } from './service.mjs';
 import { MCP_APPS_INVOKE } from '../../desktop/src/shared/mcpApps.ts';
 import { createEventHub } from './events.mjs';
@@ -57,6 +57,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   // Coexistence plan A: the refusal while a desktop uses the profile (null: not held).
   let held = null;
   let created = 0, appCalls = 0, oauthCalls = 0;
+  const oauthCancelled = [];
   t.after(async () => {
     clients.forEach(client => client.stop());
     await host?.stop();
@@ -118,6 +119,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     profileHold: () => held,
     mcpApps: { invoke: async () => { appCalls++; return {}; }, releaseCaller: async () => {} },
     requestPluginOauth: async () => { oauthCalls++; return { ok: true }; },
+    invalidatePluginOauth: peer => { oauthCancelled.push(peer ?? 'all'); },
   });
   assert.equal(host.state().enabled, false);
   assert.equal(sockets.has('host'), false);
@@ -196,6 +198,11 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   }
   assert.deepEqual([writes, created, appCalls, oauthCalls], [2, 0, 0, 0], 'nothing reached a handler');
   assert.equal((await clients[0].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] })).ok, true, 'reads still answer');
+  // A controller closing its link still cancels its pending plugin authorizations while held: that
+  // cancel only drops in-memory requests (plugin-oauth/runtime.ts invalidatePluginOauth), no stored sign-in.
+  clients[2].closeLink('host', 'user');
+  await waitFor(() => oauthCancelled.includes('desktop'));
+  await clients[2].openLink('host', { controllerName: 'desktop', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
   held = null;
   // Released, a remote plugin authorization reaches the plugin OAuth entry again.
   assert.equal((await clients[0].invoke('host', { channel: PLUGIN_OAUTH_CHANNEL, args: [{}] })).ok, true);
@@ -322,4 +329,43 @@ test('Host device-link refuses provider-share guests and the platform features i
     assert.equal(reply.error.code, 'ACCESS_REVOKED', `${channel}: ${JSON.stringify(reply)}`);
   }
   assert.deepEqual(reached, [], 'neither refusal may reach the Host service');
+});
+
+/*
+ * Test value (engineering-conventions §3.2)
+ * - Production entry: createHostDeviceLink checks, before it creates the shared inbound dispatch, that
+ *   every port it passes has a class in HOST_DISPATCH_PORTS_WHILE_HELD and that `unbound` ports are
+ *   the ones left undefined (the tests above construct it through that path; a mismatch throws there).
+ * - Rule: coexistence plan A (reviewer, 2026-11-17). While a desktop uses this profile each port the
+ *   Host hands the dispatcher is read-only, behind the service gate, refused at its entry, or unbound;
+ *   the list is pinned here so a port is only added, or moved between classes, by changing this table.
+ * - Coverage gap: the service gate test covers /api/* paths only; the dispatcher's own ports
+ *   (plugin OAuth, the invoke registry) were not listed anywhere.
+ * - Minimal failing input: an extra port in the Host's dispatch ports without a class, or a class
+ *   changed in device-link.ts and not here.
+ * - Tier: guard (the table compared with the production list; no IO).
+ */
+const PINNED_DISPATCH_PORTS = {
+  read: ['sameAccountCapabilities', 'TASK_TAG_CHANNEL', 'app', 'readDeviceLinkSettings', 'noteControllerAccessAllowed',
+    'noteControllerAccessDenied', 'syncRemoteControlAccessGeneration', 'invalidatePluginOauth',
+    'assertRemoteBotInvocationAllowed', 'projectRemoteSessionResult', 'projectRemoteBotPush', 'hasRemoteBotSessionLookup',
+    'setRemoteBotSessionLookup', 'captureSharedTaskPeer', 'captureSharedTaskPush', 'assertSharedTaskInvoke',
+    'sharedTaskMetadataTopic', 'sharedTaskAccessFailure', 'MAX_SHARED_TASK_TOPICS', 'refreshSharedTaskPeer',
+    'releaseSharedTaskWatchesOnWorkdirChange', 'admitSharedTaskFsWatchTopics', 'setBroadcastTapListener', 'broadcastTap',
+    'RECOVERY_CHECKPOINT_MARKER', 'sanitizeBotAuthorizationMetaForRemote', 'projectInteractionDismissedForRemote',
+    'projectInteractionRequestForRemote', 'remoteWorkingDirRejectionToIpcError'],
+  'service-gate': ['executeTaskTags', 'dispatchLocalInvoke'],
+  'refused-at-entry': ['requestPluginOauth'],
+  unbound: ['readUsageWidgetSnapshot', 'configureStandbyGuestCleanup', 'prepareShareAvailability',
+    'readKimiCodingAccountUsage', 'readOpenCodeGoAccountUsage', 'requestFilePeer', 'stopFilePeers', 'requestTaskMigration',
+    'delegatedProviderShareGuestAccess', 'delegatedProviderShareLeases', 'invalidateProviderShareDelegation',
+    'remoteDesktop', 'requestRemoteDesktop', 'remoteCredentialHost', 'fetchLocalMediaToOss', 'transcribeRemoteVoiceInput',
+    'readTelegramRemoteStatus', 'setTelegramRemoteOnline', 'adviseAndRecordVoiceInputDictionaryLearning',
+    'buildMobileDictionarySnapshot'],
+};
+
+test('every port the Host passes the inbound dispatch has the class pinned here', () => {
+  const pinned = Object.fromEntries(Object.entries(PINNED_DISPATCH_PORTS).flatMap(([kind, names]) => names.map(name => [name, kind])));
+  const sorted = value => Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)));
+  assert.deepEqual(sorted(HOST_DISPATCH_PORTS_WHILE_HELD), sorted(pinned));
 });

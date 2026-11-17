@@ -861,6 +861,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       mcpRuntime,
       isSessionInTurn: (id: string) => inputQueue.isTurnRunning(id),
       wakeSession: (id: string, reason: string) => inputQueue.wakeSession(id, reason),
+      // Coexistence plan A: reading a login state writes nothing the desktop shares (agent/runtime.ts).
+      isProfileHeld: () => inputQueue.isHeldForDesktop(),
       // A task restored at startup waits for the account's models, as on the desktop.
       ensureProviderCatalog: () => listProviders({ gateway: currentGateway(), ownerId: runtime.owner }),
       getGhostRosterPrompt: pluginGateway.rosterPrompt,

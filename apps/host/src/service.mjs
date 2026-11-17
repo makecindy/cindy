@@ -10,7 +10,9 @@ import { throwIpcError } from '../../desktop/src/main/utils/ipcValidate.ts';
  * Without those the turn would not end and the profile could never be released.
  */
 export const HOST_PATHS_ALLOWED_WHILE_HELD = Object.freeze({
-  // Reads: they answer from what this process holds or read the shared files; none writes.
+  // Reads: they answer from what this process holds or read the shared files; none writes. Not
+  // /api/browser-backend/get-health: a failed embedded-browser probe recovers the backend
+  // (health-service.ts getHealth), so it is refused like other writes.
   read: Object.freeze([
     '/api/me', '/api/auth/state', '/api/profile', '/api/runtime/sessions', '/api/conversations/search',
     '/api/sessions/list', '/api/sessions/get', '/api/sessions/messages', '/api/sessions/agent-switch-intent',
@@ -21,7 +23,7 @@ export const HOST_PATHS_ALLOWED_WHILE_HELD = Object.freeze({
     '/api/plugins/list', '/api/providers', '/api/agents', '/api/agents/auth-state', '/api/agents/status',
     '/api/agents/codex-runtime-route', '/api/model-access', '/api/usage/model-pricing', '/api/usage/reference-model-pricing',
     '/api/interactions/pending', '/api/input/projection', '/api/agent-commands', '/api/agent-skills', '/api/capabilities',
-    '/api/right-sidebar-tabs/list', '/api/browser-backend/get-state', '/api/browser-backend/get-health',
+    '/api/right-sidebar-tabs/list', '/api/browser-backend/get-state',
   ]),
   // Stopping or interrupting the running turn.
   stop: Object.freeze(['/api/input/stop']),
