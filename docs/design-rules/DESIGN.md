@@ -1,5 +1,10 @@
 # Cindy Design System
 
+> **读取时机**：新增或修改任何界面、组件、布局、样式、动效或 UI 文案之前。先读下面的「阅读路由」，
+> 再按路由读相关章节与专题，不需要通读全文；设计文档索引见 `cindy-design-system.md`。
+> **适用路径**：`apps/desktop/src/renderer/**`、`apps/mobile/app/**`、`apps/mobile/src/**/*.tsx`、
+> `apps/mobile/src/theme/**`、`packages/design-tokens/**`
+
 ## 阅读路由
 
 本文件是 Cindy 视觉规则的入口，不需要通读。本节只指路，不写参数；每个参数只在对应章节保留一份。
@@ -32,7 +37,8 @@
 | 圆角与点击区域 | 上述组件的默认值 | §5 Border Radius Scale、[治理合同](./design-governance.md) §13 |
 | 字号、字重、行高 | Tailwind 字号档位 | §3 |
 | 动效 | Motion Token | §14.4 |
-| 界面文案 | i18n 键 | §11、[术语表](../../i18n/GLOSSARY.md) |
+| 界面文案 | i18n 键 | §11、[术语表](../../i18n/GLOSSARY.md)（规则见[工程约定](../dev-rules/engineering-conventions.md) §5.1） |
+| 文案里出现「任务／对话／消息」 | 已裁决的叫法 | [任务与对话命名](../product-rules/task-and-conversation-naming.md) |
 | 修改 Token、主题或标准组件 | 现有生成链路 | [治理合同](./design-governance.md)、[Token README](../../packages/design-tokens/README.md) |
 
 只在改动对应功能时才读下面的专题：

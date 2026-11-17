@@ -3,6 +3,20 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改图片、视频、音频、3D 模型的生成、导入、附件、缓存、
 > 持久化、协议解析、远程传递或回收逻辑之前
+> **适用路径**：`apps/desktop/src/main/cindy-media/**`、
+> `apps/desktop/src/main/cindy-proxy-media/**`、
+> `apps/desktop/src/main/{image,video,model,audioFile,localFile}Protocol.ts`、
+> `apps/desktop/src/main/cindy-brain/ghostMedia*.ts`、
+> `apps/desktop/src/main/device-link/*{M,m}edia*.ts`、
+> `apps/desktop/src/main/im/**/*{M,m}edia*.ts`、
+> `apps/desktop/src/main/maker-ipc/chatServerMedia.ts`、
+> `apps/desktop/src/main/mcp-integrations/{cindyProxyMedia,mediaToolResultFallback}.ts`、
+> `apps/desktop/src/main/{lightboxMediaActions,projectIconMedia}.ts`、
+> `apps/desktop/src/main/bot-import/memoryMedia.ts`、
+> `apps/desktop/src/main/session-share/mediaUrlRewrite.pure.ts`、
+> `apps/desktop/src/shared/{remoteMediaUrl,mediaInvocation}.ts`、
+> `apps/desktop/src/main/maker-host/{attachmentPreservation,oversized-attachment-recovery,oversizedAttachmentRecoveryCore}.ts`、
+> `apps/desktop/src/main/remote-agent/attachmentPreservation.ts`
 
 本文治理 Desktop 中由 Cindy 管理副本的媒体字节。Electron 协议与进程安全另见
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，

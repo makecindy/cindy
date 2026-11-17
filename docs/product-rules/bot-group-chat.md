@@ -1,7 +1,15 @@
 # 伙伴群聊
 
 > **状态**：权威产品规则（authoritative）。本文保留早期本地群的分期说明；当前正式群已接入 Chat Server，手机包含直连和经电脑两条路径（第 8、10 节）。代码核对日期：2026-10-26；具体环境发布情况需单独验证。
-> **读取时机**：新增或修改伙伴群聊的数据、发言编排、群专线 Session、分工（负责人、安排、分工 Session、群工作目录）、群聊界面、手机端群聊或相关 IPC／远程资源前。
+> **读取时机**：新增或修改伙伴群聊的数据、发言编排、群专线 Session、分工（负责人、安排、分工 Session、群工作目录）、群聊界面、手机端群聊（`bot-groups` 远程资源、群推送深链）或相关 IPC／远程资源前。
+> **适用路径**：`apps/desktop/src/main/maker-ipc/**/{botGroup,group,chat}*`、`apps/desktop/src/shared/**/botGroup*`、
+> `packages/maker-shared/src/**/{botGroup,chatReadReceipts}*`、`apps/desktop/src/main/localDb/**/botGroup*`、
+> `apps/desktop/src/renderer/features/bots/**/{BotGroup,botGroup,useBotGroup,ChatGroup,ChatInvite,ChatMessage,GroupMask,groupMask,useGroup,useChat}*`、
+> `apps/mobile/src/session/**/{BotGroup,botGroup,useBotGroup}*`、`apps/mobile/src/chat/**`、
+> `apps/mobile/src/__tests__/{BotGroup,botGroup,chatServer}*`、`apps/mobile/app/companions/groups/**`、
+> `apps/mobile/app/group-execution-preview.tsx`、
+> `apps/desktop/src/renderer/features/bots/**/*Thread*`
+
 > 伙伴身份、Profile、主任务与后台任务的通用契约仍以 [`cindy-bots-runtime.md`](cindy-bots-runtime.md) 为准。
 > 当前数据链路与后续优化提案见第 11 节；本地表结构见 [多账号数据库架构](../dev-rules/multi-account-database-architecture.md) 第 11 节，私聊衔接见 [云端伙伴](cloud-companions.md) 第 4.1 节。首批分支实现与后续目标在第 11.0 节分开登记，尚未发布；现行产品规则按该节注明的边界衔接。
 
