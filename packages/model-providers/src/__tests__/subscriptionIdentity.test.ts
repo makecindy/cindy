@@ -79,6 +79,12 @@ describe('listedSourceFolds', () => {
     const others = [{ deviceId: 'rog', providers: [source('openai')] }, { deviceId: 'mini', providers: [source('openai-2')] }];
     expect(hidden(listedSourceFolds({ base: [], others }))).toEqual(['mini:openai-2']);
   });
+  // Review #11044: entries not covered by this computer's source still fold with each other.
+  it('folds two other computers offering more than this computer, keeping one of them', () => {
+    const more = (id: string) => source(id, { models: { codex: [model, { ...model, id: 'extra', name: 'Extra' }] } });
+    const others = [{ deviceId: 'rog', providers: [more('openai')] }, { deviceId: 'mini', providers: [more('openai')] }];
+    expect(hidden(listedSourceFolds({ base: [source('openai')], others }))).toEqual(['mini:openai']);
+  });
   it('keeps the current source listed and lets its equal step aside', () => {
     const others = [{ deviceId: 'rog', providers: [source('openai')] }];
     expect(hidden(listedSourceFolds({ base: [source('openai')], others, current: { deviceId: 'rog', providerId: 'openai' } })))

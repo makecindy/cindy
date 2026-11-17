@@ -86,7 +86,7 @@ export interface ListedSourceRef {
 export interface ListedSourcesInput {
   /** The computer the list is about: this computer in Settings, the task's computer in pickers. */
   base: readonly ProviderView[];
-  /** Base sources that always keep their own entry (provider groups, providers this user shares). */
+  /** Base sources that always keep their own entry (provider groups). Settings lists own shares separately. */
   baseExempt?: (providerId: string) => boolean;
   /** Other own computers, in display order. Provider groups keep their entry. */
   others?: readonly ListedSourceComputer[];
@@ -170,7 +170,6 @@ export function listedSourceFolds(input: ListedSourcesInput): ListedSourceFolds 
       .filter(entry => offered(computer, entry) && sameRunLocationProvider(provider, entry))
       .map(entry => ({ deviceId: computer.deviceId, provider: entry })));
     if (!candidates.length) continue;
-    for (const candidate of candidates) matched.add(`${candidate.deviceId}\n${candidate.provider.id}`);
     // An explicit run-location choice decides; otherwise the entry the task uses; otherwise the default.
     const pinned = honorRunLocation ? (provider as { runLocation?: string }).runLocation : undefined;
     const pinnedListed = pinned === RUN_LOCATION_LOCAL || candidates.some(candidate => candidate.deviceId === pinned);
@@ -183,7 +182,12 @@ export function listedSourceFolds(input: ListedSourcesInput): ListedSourceFolds 
     // The entry the task uses never disappears, even while it is not the chosen location.
     for (const candidate of candidates) {
       const ref = { deviceId: candidate.deviceId, providerId: candidate.provider.id };
-      if (candidate !== preferred && !isCurrent(ref) && subscriptionModelsCoveredBy(candidate.provider, representative)) hide(ref);
+      if (candidate === preferred) matched.add(`${ref.deviceId}\n${ref.providerId}`);
+      else if (!isCurrent(ref) && subscriptionModelsCoveredBy(candidate.provider, representative)) {
+        hide(ref);
+        matched.add(`${ref.deviceId}\n${ref.providerId}`);
+      }
+      // Entries with more than the representative stay listed and still fold among other computers.
     }
     if (preferred && !isCurrent({ deviceId: null, providerId: provider.id }) && subscriptionModelsCoveredBy(provider, representative))
       hiddenBase.add(provider.id);
