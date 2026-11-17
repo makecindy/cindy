@@ -718,13 +718,16 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
       协同身份与权限档）；切换焦点的后台预热同样跳过。随后 Lead 不带 `harness` 再调 `set_session_runtime`
       时，generation 一致也回 `CONFLICT`：发送边界的选择优先，turn 结束时生效的临时调整会被它拒绝。
       现在省略 `harness` 且已有待生效选择时，改为修改那次选择（未给的字段沿用它），与用户在面板里重选一致。
+      修改用户登记的选择须保留用户来源，发送落地后继续记录 IM 手动路线覆盖。本机与运行在另一台电脑上的
+      Agent 同样保留同一路线已确认的具体上下文窗口；改 effort / Fast 不丢确认，换引擎、模型、供应商或显式
+      执行目标不沿用旧确认。发送前仍从执行电脑重读窗口，只有确认数值匹配才允许对应的窗口保护交接。
       Lead 用的是自己的 `set_worker_runtime`（按调用方自己团队里的 worker_id / session_id 定位，运行设备 Worker
       回 `REMOTE_WORKER_NOT_SUPPORTED`，属 Orca 写操作、逐次走任务权限；`expected_generation` 可省，省略时以调用时
       的 generation 做并发保护），背后仍是 `sessionControlService.setSessionRuntime`。`send_to_worker` 因订阅账号
       （上限、需登录、不可用）起不来时仍回 `AGENT_NOT_READY`，正文先说明原因、重置时刻与「换路线或等待」，原错误
       附在后面（`workerRouteFailureHint`）。Agent 侧的 `get_session_runtime` 也投影用户在面板里登记的选择
       （`pending.source=user`），宿主内部读取不变。回归见 `orcaTeamService.test.ts`、
-      `sessionRuntimeHarnessSelection.test.ts` 与 lizi-mcps `sessionContext.test.ts`。
+      `sessionRuntimeHarnessSelection.test.ts`、`orcaModelSelectionIntent.test.ts` 与 lizi-mcps `sessionContext.test.ts`。
     - **Lead 已对该 Worker 采取行动时撤下它的旧回报**：归档（`archiveWorker`）成功后，或向状态为
       `error` 的 Worker 重新派活／打断改派成功后，把该 Worker 排在 Lead 队列里、Lead 还没读到的异常终止
       回报撤下（coordinator `remove`，与 Stop 清队列同一条结清路径）。正文不丢：`archive_worker` 回
