@@ -734,10 +734,21 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     allowProbe = false,
     refreshSettled = false,
     pendingReplyRecovery = false,
+    presendRecovery = false,
   ) => {
     const connectionEpoch = connectionEpochFor(deviceId);
     const releaseGeneration = backgroundReleaseGenerationRef.current;
+    let recoveryRequest: unknown;
     const checkAvailability = () => {
+      // A pre-send recovery may wait for the relay first. openLink clears a user
+      // close, so recheck right before the handshake that this recovery is current.
+      if (presendRecovery && (
+        clientRef.current !== client
+        || client.isOutboundExplicitlyClosed(deviceId)
+        || (recoveryRequest !== undefined && openLinkInFlightRef.current.get(deviceId) !== recoveryRequest)
+      )) {
+        throw new DeviceLinkError('LINK_NOT_OPEN', 'pre-send recovery is no longer current');
+      }
       if (pendingReplyRecovery && (
         clientRef.current !== client
         || connectionEpochFor(deviceId) !== connectionEpoch
@@ -757,7 +768,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         throw new DeviceLinkError(disabled ? 'REMOTE_DISABLED' : 'DEVICE_OFFLINE', 'remote device is unavailable');
       }
     };
-    return getOrCreatePresenceTrackedRequest(
+    const tracked = getOrCreatePresenceTrackedRequest(
       openLinkInFlightRef.current,
       presenceAvailabilityEpochsRef.current,
       remoteResponseEvidenceEpochs,
@@ -765,6 +776,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       () => sendOpenLinkWithAccessHandling(client, deviceId, allowProbe, checkAvailability, pendingReplyRecovery),
       { retainSuccessful: true, refreshSettled },
     );
+    if (presendRecovery) recoveryRequest = tracked;
+    return tracked;
   }, [connectionEpochFor]);
 
   const recoverLinkBeforeSend = useCallback(async (
@@ -775,7 +788,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     if (!client.needsLinkRecovery(deviceId)) return;
     // Reuse the peer's handshake single flight, but not a settled pre-fault ACK.
     // This sends no business request and does not restart the shared relay.
-    const tracked = sendOpenLinkOnce(client, deviceId, false, true);
+    const tracked = sendOpenLinkOnce(client, deviceId, false, true, false, true);
     await tracked.request;
     preSend();
     if (clientRef.current !== client || openLinkInFlightRef.current.get(deviceId) !== tracked

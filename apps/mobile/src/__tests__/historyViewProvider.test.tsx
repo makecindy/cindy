@@ -913,6 +913,30 @@ describe('Provider pre-send link recovery', () => {
     expect(await result).toMatchObject({ code: 'LINK_NOT_OPEN' });
     expect(client.invoke).not.toHaveBeenCalled();
   });
+
+  it('does not reopen the link when the user closes it while the relay is still reconnecting', async () => {
+    const client = transport.clients[0];
+    client.needsLinkRecovery = deviceId => deviceId === 'host';
+    let online!: () => void;
+    client.waitUntilOnline.mockImplementation(() => new Promise<never>(resolve => {
+      online = () => resolve(undefined as never);
+    }));
+    client.status = 'connecting';
+    let result!: Promise<unknown>;
+    await act(async () => { result = context.invoke('host', 'maker:send', []).catch(error => error); });
+    expect(client.waitUntilOnline).toHaveBeenCalledTimes(1);
+    expect(client.openLink).not.toHaveBeenCalled();
+    await act(async () => {
+      context.closeLink('host');
+      client.isOutboundExplicitlyClosed.mockImplementation(deviceId => deviceId === 'host');
+      client.status = 'online';
+      online();
+    });
+    expect(await result).toMatchObject({ code: 'LINK_NOT_OPEN' });
+    // openLink would clear the user's close and send a fresh link-open.
+    expect(client.openLink).not.toHaveBeenCalled();
+    expect(client.invoke).not.toHaveBeenCalled();
+  });
 });
 
 describe('pending catalog recovery', () => {
