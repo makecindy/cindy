@@ -133,7 +133,7 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
 
     // 「会话正在准备」只允许有一个下游判据:handleSend 拦截读合并值,ChatInput 也禁用。
     expect(sessionViewSource).toContain(
-      'const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing;',
+      'const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing || !!creationPreview;',
     );
     expect(sessionViewSource).toContain('if (sessionHandoffPreparing) return false;');
     expect(sessionViewSource).not.toContain('if (worktreePreparing) return false;');
@@ -331,7 +331,7 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       // 两条 device-link 分支都要落,且必须排在各自的 setPending / setPendingGoal 之后、
       // navigate 之前 —— 登记完就有副本,后面无论多久没被消费都捞得回来。
       const sendRemember = source.indexOf(
-        "rememberRecoverableHandoff(remoteSessionId, 'message', message, currentBuiltInSkillIntent())",
+        "rememberRecoverableHandoff(presetSessionId, 'message', message, currentBuiltInSkillIntent())",
       );
       const goalRemember = source.indexOf(
         "rememberRecoverableHandoff(remoteSessionId, 'goal', objective)",
@@ -342,7 +342,7 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       // await 之前 —— 提交点之后每多一次 await,「对端会话已建好、正文却还没有第二份」
       // 的窗口就长一分(codex P2 第五轮)。
       const sendCommit = source.lastIndexOf("logTag: 'draft send',", sendRemember);
-      const rehome = source.indexOf('await rehomeDraftAttachments(', sendCommit);
+      const rehome = source.indexOf('rehomeDraftAttachments(files, presetSessionId', sendCommit);
       expect(sendCommit).toBeGreaterThan(-1);
       expect(sendCommit).toBeLessThan(sendRemember);
       expect(sendRemember).toBeLessThan(rehome);
@@ -350,10 +350,10 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
         -1,
       );
       expect(sendRemember).toBeLessThan(
-        source.indexOf('navigate(`/cc-agent/${remoteSessionId}`', sendRemember),
+        source.indexOf('navigate(`/cc-agent/${presetSessionId}`', sendRemember),
       );
       // 只落一次,别两处都落。
-      expect(source.match(/rememberRecoverableHandoff\(remoteSessionId, 'message'/g)).toHaveLength(
+      expect(source.match(/rememberRecoverableHandoff\(presetSessionId, 'message'/g)).toHaveLength(
         1,
       );
       // 会话视图不再自己落副本(落在那里要等 historyLoaded,等于没落)。

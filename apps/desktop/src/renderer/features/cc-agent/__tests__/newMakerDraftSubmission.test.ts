@@ -22,6 +22,7 @@ import { isSharedTaskPeer } from '@cindy/device-link';
 import { controlledComputerSupportsRemoteAgent, selectControlledTaskAgentDevices } from '@/lib/controlledTaskAgentLocation';
 import { modelCatalogKey } from '../../../../shared/controlledModelCatalog';
 import { DraftDirectoryRecovery, type DraftDirectoryRecoveryContext } from '../draftDirectoryRecovery';
+import { extractIpcError } from '@/utils/ipcError';
 import { createIpcError } from '../../../../shared/ipc-errors';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion';
 import { askPluginModelRoute, writePluginModelRouteNote } from '../pluginModelRoute';
@@ -30,10 +31,17 @@ import { filterHealthyDraftProviders, resolveDraftProviderForModel } from '../..
 import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
 import { sshModel, sshNativeCodexProvider } from './sshModelFixtures';
 import type { ModelGroupResolveResult } from '../../../../shared/modelGroups';
+import { createRemoteSessionForPreview, previewRemoteCreation } from '../remoteSessionHandoff';
 import { checkDraftBranchBeforeStart } from '../newMakerDraftBranchCheck';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
-vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceId: vi.fn() }));
+const remoteProjectsStore = vi.hoisted(() => ({
+  pinSessionOrigin: vi.fn(), setPendingFirstSend: vi.fn(), setPendingTitlePreview: vi.fn(),
+  clearPendingTitlePreview: vi.fn(), clearPendingFirstSend: vi.fn(), setCreationPreview: vi.fn(),
+  getCreationPreview: vi.fn(() => ({})), clearCreationPreview: vi.fn(),
+}));
+vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceId: vi.fn(), remoteProjectsStore }));
+vi.mock('@/lib/sessionStartingStore', () => ({ markSessionStarting: vi.fn() }));
 
 // Execute the route's actual effort derivation and complete submission callbacks,
 // without mounting unrelated home panels. External services and initial React state
@@ -155,6 +163,12 @@ async function submit(options: {
   skills?: AgentSkillCommand[];
   worktreeSkills?: AgentSkillCommand[];
   deviceId?: string;
+  navigate?: (path: string, options: unknown) => void;
+  onPreview?: (params: { remoteSessionId: string }, title: unknown, message: { clientId: string; createdAt: string; content: string }) => void;
+  createRemote?: (id: string) => Promise<{ sessionId: string; workDir: string }>;
+  probeRemote?: (id: string) => unknown;
+  copyAttachments?: () => Promise<never[]>;
+  leaveDuringPreflight?: boolean;
   worktreeSkillsAfterCollab?: AgentSkillCommand[];
   collab?: CollabDraft;
   slashCommandRanges?: Array<{ start: number; end: number }>;
@@ -236,6 +250,8 @@ async function submit(options: {
     if (channel === 'maker:list-agent-commands') return { success: true, commands: [] };
     if (channel === 'worktree:create') return { ok: true,
       meta: { ...args[0], path: worktreePath, branch: 'cindy/creator', createdAt: new Date().toISOString() } };
+    if (channel === 'local-db:sessions:get' && options.probeRemote) return options.probeRemote(args[0]);
+    if (channel === 'maker:create-session' && options.createRemote) return options.createRemote(args[0].id);
     if (channel === 'maker:create-session') {
       if (options.remoteCreateEmpty) return null;
       return { sessionId: args[0].id ?? 'remote-created', workDir: args[0].workingDir };
@@ -272,9 +288,8 @@ async function submit(options: {
   let finishWorktree!: () => void;
   const worktreeFinished = new Promise<void>(resolve => { finishWorktree = resolve; });
   const noop = () => {};
-  const remoteProjectsStore = {
-    setPendingTitlePreview: vi.fn(), clearPendingTitlePreview: vi.fn(), clearPendingFirstSend: noop,
-  };
+  let nextId = 0;
+  Object.values(remoteProjectsStore).forEach(spy => spy.mockClear());
   const setPending = vi.fn();
   const setPendingGoal = vi.fn();
   const toastError = vi.fn();
@@ -282,11 +297,13 @@ async function submit(options: {
   const clearDraft = vi.fn();
   const refreshDisplayedBranch = vi.fn();
   let started = false;
-  const checkAndConfirm = vi.fn(async (_vendor, params) => ({
-    proceed: options.authCatalogKey === undefined || params.deviceId === options.authCatalogKey,
-  }));
+  const activeDraftPage = { current: {} as object | null };
+  const checkAndConfirm = vi.fn(async (_vendor, params) => {
+    if (options.leaveDuringPreflight) activeDraftPage.current = null;
+    return { proceed: options.authCatalogKey === undefined || params.deviceId === options.authCatalogKey };
+  });
   const environment = {
-    checkDraftBranchBeforeStart,
+    checkDraftBranchBeforeStart, activeDraftPage, extractIpcError,
     resolveTaskWorktreeName, getWorktreeModelNamingEnabled: () => options.modelNaming ?? false,
     prepareLocalGoalWorktree, RemotePrecreatedWorktreeOwnerChangedError,
     deviceDisplayName, dbToMakerAgentKind, chatEligibleSourcesForModel, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
@@ -344,19 +361,24 @@ async function submit(options: {
     createSession, toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
     makerChatStore: { setSessionRuntime: noop, sendMessage, autoNameSession: noop }, sessionsStore: { patchLocal: noop },
     markSessionStarting: noop, clearSessionStarting: noop,
-    rehomeDraftAttachments: async () => [], getComposerDraft: () => options.builtInSkillIntent
+    rehomeDraftAttachments: options.copyAttachments ?? (async () => []), getComposerDraft: () => options.builtInSkillIntent
       ? { builtInSkillIntent: options.builtInSkillIntent } : null,
     NEW_MAKER_DRAFT_KEY: 'fixture', rewriteBrowserCommentsFromRehomedFiles: () => [],
     leadingSlashInvocation, rebaseInlineRangesAfterSlashCommandRewrite, rewriteBuiltInSkillDraftForSend, setPending, setPendingGoal,
     rewritePiSkillMessageForSend: async ({ message }: { message: string }) => message,
     clearComposerDraftAndNotify: clearDraft, attachmentState: { clearFiles: vi.fn() },
-    resetDraftWorkspaceAfterSend: noop, navigate: vi.fn(), setWtCreatingInfo: vi.fn(),
-    makeDraftSessionId: () => 'remote-created', resolveDeviceLinkSubmission, parseRemoteWorktreeCreateResult,
+    resetDraftWorkspaceAfterSend: noop, navigate: options.navigate ?? vi.fn(), setWtCreatingInfo: vi.fn(),
+    makeDraftSessionId: () => nextId++ === 0 ? 'remote-created' : `submission-${nextId}`, resolveDeviceLinkSubmission, parseRemoteWorktreeCreateResult,
     recoverPendingRemotePrecreatedWorktrees: vi.fn(async () => ({ storageReadable: true, retained: 0 })),
     registerPendingRemotePrecreatedWorktree: async () => true,
     createRemoteSessionWithPrecreatedWorktree: async ({ invoke, createArgs }: {
       invoke: (channel: string, args: unknown[]) => Promise<{ sessionId: string }>; createArgs: unknown;
     }) => (await invoke('maker:create-session', [createArgs])).sessionId,
+    getDraft: () => ({}), flushDraft: noop, patchDraft: vi.fn(), remoteCreationRetryId: () => undefined, rememberRemoteCreationRetry: noop, updateRemoteCreationAttachments: noop, createRemoteSessionForPreview,
+    previewRemoteCreation: (...args: Parameters<typeof previewRemoteCreation>) => {
+      previewRemoteCreation(...args);
+      options.onPreview?.(args[0], args[1], { ...args[2], createdAt: args[0].nowIso });
+    },
     commitRemoteSessionHandoff: () => {}, rememberRecoverableHandoff: () => {},
     deliverRecoverableHandoff: (_id: string, deliver: () => Promise<boolean>) => deliver(),
     getBranchName: (name: string) => `cindy/${name}`,
@@ -373,7 +395,7 @@ async function submit(options: {
     isRemotePrecreatedWorktreeOwnerChangedError,
     isRemotePrecreatedWorktreeCleanupPendingError: () => false,
     getRemoteWorkingDirErrorMessage: () => null,
-    emitAutoTitlePreviewCleared: noop, restoreRemoteOptimisticDraft: noop,
+    emitAutoTitlePreviewCleared: noop, restoreRemoteOptimisticDraft: vi.fn(),
     normalizeAutoTitle: () => options.titlePreview ?? null,
     isLocalGoalWorktreeCleanupPendingError: () => false,
     plainTextToTiptapDoc, excludeCommentScreenshots: () => [],
@@ -431,6 +453,69 @@ async function submit(options: {
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
+  // Unit regression: hold both real submission boundaries open. The previous
+  // route only opened after both resolved and navigated even after the user left.
+  it('opens one task while create and attachments are pending, then sends the displayed message into it', async () => {
+    let finishCreate!: (result: { sessionId: string; workDir: string }) => void;
+    let finishCopy!: (files: never[]) => void;
+    let started!: (id: string) => void;
+    const arrived = new Promise<string>(resolve => { started = resolve; });
+    const navigate = vi.fn();
+    const preview = vi.fn();
+    const submission = submit({ deviceId: 'host', providers: [provider(providerId, ['medium'])], navigate, onPreview: preview,
+      copyAttachments: () => new Promise(resolve => { finishCopy = resolve; }),
+      createRemote: id => new Promise(resolve => { finishCreate = resolve; started(id); }),
+    });
+    const id = await arrived;
+    expect(navigate).toHaveBeenCalledExactlyOnceWith(`/cc-agent/${id}`, { replace: true });
+    const bubble = preview.mock.calls[0][2];
+    expect(bubble.content).toBe('hello');
+    finishCreate({ sessionId: id, workDir: '/remote' });
+    finishCopy([]);
+    const result = await submission;
+    expect(result.errors).toEqual([]);
+    expect(result.sendMessage.mock.calls).toEqual([[id, 'hello', expect.anything(), expect.anything(),
+      'default', '/remote', [], [], expect.objectContaining({
+        firstMessageIdentity: { clientId: bubble.clientId, createdAt: bubble.createdAt },
+      })]]);
+    expect(navigate).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends once to the confirmed host task after losing the create acknowledgement', async () => {
+    const createRemote = vi.fn(async () => { throw new Error('[DEVICE_LINK_TIMEOUT]'); });
+    const result = await submit({ deviceId: 'host', providers: [provider(providerId, ['medium'])], createRemote,
+      probeRemote: id => ({ id, workingDir: '/recovered', status: 'active' }),
+    });
+    expect(result.errors).toEqual([]);
+    expect(createRemote).toHaveBeenCalledTimes(1);
+    expect(result.sendMessage).toHaveBeenCalledTimes(1);
+    expect(result.sendMessage.mock.calls[0][0]).toBe('remote-created');
+  });
+
+  it('returns a rejected first message to editing without sending it or opening another task', async () => {
+    const navigate = vi.fn();
+    const result = await submit({ deviceId: 'host', navigate,
+      createRemote: async () => { throw new Error('[INVALID_ARGS]'); },
+    });
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(result.sendMessage).not.toHaveBeenCalled();
+    const [failure] = result.environment.remoteProjectsStore.setCreationPreview.mock.calls.at(-1)!;
+    await failure.editAfterFailure();
+    expect(result.environment.restoreRemoteOptimisticDraft).toHaveBeenCalledWith('remote-create-draft-remote-created',
+      expect.objectContaining({ text: plainTextToTiptapDoc('hello') }));
+    expect(navigate).toHaveBeenLastCalledWith('/cc-agent/new',
+      { replace: true, state: { remoteCreationRecoveryId: 'remote-created' } });
+  });
+
+  it('keeps the current page when the user leaves during the remote readiness check', async () => {
+    const navigate = vi.fn();
+    const result = await submit({ deviceId: 'host', providers: [provider(providerId, ['medium'])],
+      leaveDuringPreflight: true, navigate, createRemote: async id => ({ sessionId: id, workDir: '/remote' }),
+    });
+    expect(result.sendMessage).toHaveBeenCalledTimes(1);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
   // PR #10972 / unit: execute the real submit callbacks with a model reply that
   // arrives after the owner generation changes. Previous cases held the owner
   // fixed, missing old task content creating worktrees/goals in a new account.

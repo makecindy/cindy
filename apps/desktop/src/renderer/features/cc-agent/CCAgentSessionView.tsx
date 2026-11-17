@@ -88,6 +88,8 @@ import {
 } from 'lucide-react';
 
 import { cn, basename } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { createRemoteSessionSubscription } from '@/lib/remoteSessionSubscription';
 import { Spinner } from '@/components/ui/spinner';
 import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
@@ -882,6 +884,10 @@ function CCAgentSessionContent({
   const hasPluginStatusbar = usePluginUiHas('statusbar');
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
+  const creationPreview = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
+    remoteProjectsStore.getCreationPreview(sessionId));
+  const awaitingCreation = !!creationPreview && !creationPreview.handedOff;
+  const confirmedSessionId = awaitingCreation ? undefined : sessionId;
   const navigate = useNavigate();
   const ownsWindowRoute = navigationMode === 'route-owner';
   const canNavigateSession = ownsWindowRoute || navigationMode === 'split-pane';
@@ -1126,7 +1132,7 @@ function CCAgentSessionContent({
       deviceLinkDeviceId: undefined,
       remoteHostId: undefined,
     },
-    Boolean(session),
+    Boolean(session) && !awaitingCreation,
     { observeTelemetry: true },
   );
   const isRemoteWorktreeSession = Boolean(session?.deviceLinkDeviceId || session?.remoteHostId);
@@ -1233,7 +1239,7 @@ function CCAgentSessionContent({
   // unregistered forever even though the panel itself already reads remotely.
   // This effect sits below `remoteDeviceId` because it depends on it.
   useEffect(() => {
-    if (!ownsWindowRoute || !viewVisible || !sessionId) return;
+    if (awaitingCreation || !ownsWindowRoute || !viewVisible || !sessionId) return;
     const requestOwner = getDataOwnerGeneration();
     return startSubagentTabDiscovery({
       sessionId,
@@ -1268,17 +1274,25 @@ function CCAgentSessionContent({
       isRequestOwnerCurrent: () => isDataOwnerGenerationCurrent(requestOwner),
       onPresenceChange: (present) => setSessionOwningDurablePiRuns(present ? sessionId : null),
     });
-  }, [ownsWindowRoute, remoteDeviceId, sessionId, viewVisible]);
+  }, [awaitingCreation, ownsWindowRoute, remoteDeviceId, sessionId, viewVisible]);
 
   // device-link 远程会话:重 topic 订阅(含 WS 重连 / 被控端回在线时重建)+ 消息对账触发
   // (重连 / presence / turn 结束 / 窗口聚焦 / 手动)。修「控制端丢消息」—— 以被控端为准重新同步。
   // 本机会话(remoteDeviceId 为 undefined)整体 no-op。resync 供连接 banner 的「重新同步」按钮用。
-  const remoteSync = useRemoteSessionSync(sessionId, remoteDeviceId);
+  useEffect(() => {
+    if (!viewVisible || !remoteDeviceId || !sessionId || !remoteProjectsStore.getCreationPreview(sessionId)) return;
+    // Hold the early topic until this view leaves. The regular sync engine can
+    // acquire the same ACK when creation completes without an unsubscribe gap.
+    const subscription = createRemoteSessionSubscription(remoteDeviceId, sessionId);
+    void subscription.subscribe().catch(() => undefined);
+    return subscription.release;
+  }, [viewVisible, remoteDeviceId, sessionId]);
+  const remoteSync = useRemoteSessionSync(confirmedSessionId, remoteDeviceId);
   // 远程会话连接健康(本机断链重连中 / 被控端离线)→ 顶部 banner 提示 + 手动重新同步。
   const remoteConn = useRemoteSessionConnection(remoteDeviceId);
   const remoteLinkIssue = useDeviceLinkConnectionIssue(!!remoteDeviceId, remoteDeviceId);
   const remoteSessionUnavailable = remoteConn === 'reconnecting' || remoteConn === 'host-offline';
-  const remoteWritesBlocked = remoteSessionUnavailable || isRemoteSessionWriteBlocked(session);
+  const remoteWritesBlocked = awaitingCreation || remoteSessionUnavailable || isRemoteSessionWriteBlocked(session);
   const showRemoteWriteBlockedToast = useCallback(() => {
     toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
   }, [t]);
@@ -1805,6 +1819,7 @@ function CCAgentSessionContent({
     // (与 ChatInput palette 同源)。否则此 cache 取的是控制端命令,maybeDispatchDesktopSlashCommand
     // 会把被控端 skill/builtin 影子掉的 /clear、/help 等误判成 desktop 命令、在控制端执行。
     // 本机会话 remoteDeviceId=undefined → 行为不变。desktop 命令始终本地(见 loadAllCommands)。
+    if (awaitingCreation) return;
     loadAllCommands(
       agentKind,
       wd,
@@ -1824,7 +1839,7 @@ function CCAgentSessionContent({
     return () => {
       cancelled = true;
     };
-  }, [session?.id, session?.agentKind, session?.workingDir, isRemoteSession, remoteDeviceId]);
+  }, [awaitingCreation, session?.id, session?.agentKind, session?.workingDir, isRemoteSession, remoteDeviceId]);
 
   // Keep lastWorkingDir in sync so Settings can distinguish a real project
   // scope from「新对话默认值」. Standalone dialogues have an internal runtime
@@ -1967,7 +1982,7 @@ function CCAgentSessionContent({
     removeFromQueue,
     updateQueueItemContent,
     chatDisplaySnapshot,
-  } = useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime });
+  } = useCCAgentChat(confirmedSessionId, handleTitleUpdate, { chatRealtime });
   useBotIslandVisibleSession(
     viewVisible && session?.id === sessionId && historyLoaded ? sessionId ?? null : null,
     ownsWindowRoute && !isCompactRail && !isOrcaMode,
@@ -2240,7 +2255,7 @@ function CCAgentSessionContent({
   const isRunningRef = useRef(agentStatus.isRunning);
   isRunningRef.current = agentStatus.isRunning;
   // 任务空闲时预先问好要不要换号，发送时不再多等一次往返(provider-groups.md §6.2「任务进行中换号」)。
-  useSessionRebalancePrefetch(sessionId, remoteDeviceId, !agentStatus.isRunning && !readOnly);
+  useSessionRebalancePrefetch(sessionId, remoteDeviceId, !awaitingCreation && !agentStatus.isRunning && !readOnly);
   // live 供应商目录(含内置 + 自定义,按 agent 挂模型)—— vendor↔model 一致性校验的真源,
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
@@ -2491,7 +2506,7 @@ function CCAgentSessionContent({
   // device-link 远程会话:上面两路本机信号都不覆盖(镜像事件可能丢终态),改为定时
   // 读被控端的权威快照;停止同样隧道到被控端执行。
   const remoteBackground = useRemoteSessionBackgroundTasks(
-    sessionId,
+    confirmedSessionId,
     remoteDeviceId,
     agentStatus.isRunning || isStreaming,
   );
@@ -2938,9 +2953,9 @@ function CCAgentSessionContent({
   const remoteLoading = useRemoteSessionLoading({
     sessionId,
     remoteDeviceId,
-    historyLoaded,
-    contentSyncing: remoteSync.contentState === 'syncing',
-    hasMessages: messages.length > 0,
+    historyLoaded: historyLoaded || !!creationPreview,
+    contentSyncing: !creationPreview && remoteSync.contentState === 'syncing',
+    hasMessages: !!creationPreview || messages.length > 0 || pendingQueue.length > 0,
     connectionNotice: showRemoteConnectionNotice,
     hasTaskHeader: ownsRoute && !!session && !botChatIdentity,
   });
@@ -3022,7 +3037,7 @@ function CCAgentSessionContent({
   // 与 worktreePreparing 合成一个 sessionHandoffPreparing,下游只读这一个值,避免两个
   // "会话正在准备"的判据各自接一半闸门。
   const [remoteHandoffPreparing, setRemoteHandoffPreparing] = useState(false);
-  const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing;
+  const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing || !!creationPreview;
 
   // ---------------------------------------------------------------------------
   // Preserve each task's question editor state when switching tasks.
@@ -5033,7 +5048,7 @@ function CCAgentSessionContent({
   // StrictMode 双 mount / 重渲染时重复发送。
   const pendingConsumedRef = useRef(false);
   useEffect(() => {
-    if (!sessionId || !historyLoaded || !session) return;
+    if (awaitingCreation || creationPreview?.dispatching || !sessionId || !historyLoaded || !session) return;
     const workingDir = session.workingDir;
     if (!workingDir) return;
     if (pendingConsumedRef.current) return;
@@ -5041,11 +5056,18 @@ function CCAgentSessionContent({
     if (!pending) {
       // 内存里没有 pending:可能本来就没有,也可能上次协同等待期间 app 被关掉了。
       restoreRecoverableHandoff('message');
+      if (creationPreview?.handedOff) {
+        remoteProjectsStore.clearPendingFirstSend(sessionId);
+        remoteProjectsStore.clearPendingTitlePreview(sessionId);
+        remoteProjectsStore.clearCreationPreview(sessionId);
+      }
       return;
     }
     pendingConsumedRef.current = true;
+    if (creationPreview) remoteProjectsStore.setCreationPreview({ ...creationPreview, dispatching: true });
     const handoffOwner = getDataOwnerGeneration();
     void (async () => {
+      let sentFirstMessage = false;
       let deferredUiAssignment = pending.deferredUiAssignment;
       // device-link 草稿开了协同:先把协同开起来,再发首轮 —— 否则 Lead 的第一个 turn
       // 拿不到 cindy_orca 工具。等待放在这里而不是 draft route,是为了不让「对端会话已
@@ -5167,12 +5189,13 @@ function CCAgentSessionContent({
             workingDir,
             pending.files,
             pending.mentions,
-            pending.vendorOptions ||
+            creationPreview || pending.vendorOptions ||
               pending.quotesEncoded ||
               pendingAgentReferences?.length ||
               pendingPastedTextRanges?.length ||
               pendingSlashCommandRanges !== undefined
               ? {
+                  ...(creationPreview ? { firstMessageIdentity: { clientId: creationPreview.message.clientId, createdAt: creationPreview.row.createdAt } } : {}),
                   ...(pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : {}),
                   ...(pending.quotesEncoded ? { quotesEncoded: true } : {}),
                   ...(pendingAgentReferences?.length
@@ -5189,6 +5212,7 @@ function CCAgentSessionContent({
           ),
         );
         if (!isDataOwnerGenerationCurrent(handoffOwner)) return;
+        sentFirstMessage = delivered;
         if (delivered) {
           void dispatchDeferredUiAssignment(sessionId, deferredUiAssignment).catch((err) => {
             log.error('deferred Worker assignment after first message failed', err);
@@ -5203,10 +5227,17 @@ function CCAgentSessionContent({
         throw err;
       } finally {
         if (holdComposer) setRemoteHandoffPreparing(false);
+        if (creationPreview?.handedOff && isDataOwnerGenerationCurrent(handoffOwner)) {
+          if (!sentFirstMessage) {
+            remoteProjectsStore.clearPendingTitlePreview(sessionId);
+            remoteProjectsStore.clearPendingFirstSend(sessionId);
+          }
+          remoteProjectsStore.clearCreationPreview(sessionId);
+        }
       }
     })();
   }, [
-    historyLoaded,
+    awaitingCreation, creationPreview, historyLoaded,
     maybeDispatchDesktopSlashCommand,
     restoreRecoverableHandoff,
     requestFollowLatest,
@@ -5436,7 +5467,9 @@ function CCAgentSessionContent({
   // 包裹(见下方渲染处),生产直接渲染此 el,不引入多余 Profiler fiber。
   const sideChatMessages = useMemo(() => session?.source === 'side-chat'
     ? messages.filter(message => new Date(message.createdAt ?? session.createdAt).getTime() >= new Date(session.createdAt).getTime())
-    : messages, [messages, session?.source, session?.createdAt]);
+    : creationPreview && !messages.some(m => m.role === 'user') && pendingQueue.length === 0
+      ? [creationPreview.message, ...messages] : messages,
+    [creationPreview, messages, pendingQueue.length, session?.source, session?.createdAt]);
   const timelineMessages = useMemo(
     () => visibleVoiceCallMessages(sideChatMessages, activeVoiceCallId),
     [sideChatMessages, activeVoiceCallId],
@@ -5695,7 +5728,7 @@ function CCAgentSessionContent({
         ? (quote) => openSideChatTab(sessionId, { quote }) : undefined}
       cindyMakeSessionId={session?.source === 'cindy-make' ? sessionId : undefined}
       cindyMakeCompletionInComposer={session?.source === 'cindy-make' && (remoteMakeCards.supported || (!remoteDeviceId && !readOnly && typeof window.electronAPI.cindyMakeTest === 'function'))}
-      historyLoaded={historyLoaded}
+      historyLoaded={historyLoaded || !!creationPreview}
       historyCleared={Boolean(session?.clearedAt)}
       taskUpdates={taskUpdates}
       subagentRunStatuses={subagentRunStatuses}
@@ -5925,6 +5958,10 @@ function CCAgentSessionContent({
         ) : null}
 
         {/* 远程会话首屏:等被控端经隧道返回历史/元数据期间的 loading(仅远程、延迟防闪)。 */}
+        {creationPreview?.editAfterFailure && <div role="alert" className="flex items-center justify-center gap-2 text-13 text-muted-foreground">
+          {t('ccAgent.draft.createSessionFailed')}
+          <Button variant="secondary" onClick={creationPreview.editAfterFailure}>{t('ccAgent.draft.directoryRecovery.edit')}</Button>
+        </div>}
         {remoteLoading === 'loading' && <RemoteSessionLoading />}
         {remoteLoading === 'inline-syncing' && <RemoteSessionLoading compact />}
 
@@ -6378,9 +6415,10 @@ function CCAgentSessionContent({
                   isAgentBusy={isAgentBusy}
                   onStop={handleStopSession}
                   pendingQueue={pendingQueue}
+                  sendBlocked={!!creationPreview}
                   disabled={readOnly || remoteHandoffPreparing || session?.source === 'review'}
                   settingsLocked={
-                    readOnly || session?.source === 'review' || Boolean(activeQueueComposerEdit)
+                    readOnly || !!creationPreview || session?.source === 'review' || Boolean(activeQueueComposerEdit)
                   }
                   queueEditingClientId={activeQueueComposerEdit?.clientId ?? null}
                   onQueueEditSubmit={submitQueueComposerEdit}
@@ -6502,12 +6540,16 @@ function CCAgentSessionContent({
                 <div
                   className={cn(
                     'mt-1.5 flex w-full items-center justify-between gap-3 px-1',
-                    !session?.workingDir && !worktreeCreation && !hasPluginStatusbar && 'invisible',
+                    !creationPreview && !session?.workingDir && !worktreeCreation && !hasPluginStatusbar && 'invisible',
                   )}
                 >
                   {/* Left: workingDir — 点击在系统文件管理器中打开;
                   click 区域宽度与文本一致(不拉伸到整行) */}
-                  {worktreeCreation?.status === 'creating' ? (
+                  {creationPreview && !creationPreview.editAfterFailure ? (
+                    <span role="status" className="inline-flex items-center gap-1.5 text-12 text-muted-foreground">
+                      <Spinner size={12} />{t('goal.newGoalDialog.starting')}
+                    </span>
+                  ) : worktreeCreation?.status === 'creating' ? (
                     <div className="flex min-w-0 items-center gap-1.5">
                       <Spinner size={12} className="text-[var(--workingdir-icon)]" />
                       <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--workingdir-text)]">
