@@ -46,6 +46,11 @@ export function createChatHistory(input: {
   /** Commit once when a room operation finishes instead of after each of its steps. Whole-file
    * stores (the phone) rewrite the room on every commit; the operation still resolves only after it. */
   coalesceWrites?: boolean;
+  /** For a history that outlives the screens using it: how many messages rooms with no
+   * operation in flight may keep in memory. Beyond it the least recently used rooms are
+   * dropped and restored from the store on their next use; nothing durable is lost. Leave
+   * unset where callers read the in-memory state directly (cursor, committedSnapshot). */
+  maxIdleMessages?: number;
 }) {
   const chains = new Map<string, Promise<unknown>>();
   // coalesceWrites: the room state awaiting its single commit, and what may run only after it.
@@ -75,7 +80,8 @@ export function createChatHistory(input: {
             for (const done of afterCommit.get(room) ?? []) done();
           }
           afterCommit.delete(room);
-          assertCurrent(); return result;
+          assertCurrent(); release(room);
+          return result;
         }
         catch (error) {
           unsaved.delete(room); afterCommit.delete(room);
@@ -97,6 +103,20 @@ export function createChatHistory(input: {
     chains.set(room, pending);
     void pending.finally(() => { if (chains.get(room) === pending) chains.delete(room); }).catch(() => undefined);
     return pending;
+  }
+  /** Keep the room just used, then let go of the longest-idle ones over the budget. */
+  function release(used: string) {
+    if (input.maxIdleMessages === undefined) return;
+    const current = states.get(used);
+    if (current) { states.delete(used); states.set(used, current); }
+    let held = 0;
+    for (const state of states.values()) held += Object.keys(state.messages).length;
+    for (const [room, state] of [...states]) {
+      if (held <= input.maxIdleMessages) break;
+      // Every commit happens before its operation ends, so an idle room equals its stored copy.
+      if (room === used || chains.has(room)) continue;
+      states.delete(room); held -= Object.keys(state.messages).length;
+    }
   }
   async function restore(room: string) {
     const state = await input.store.read(room);

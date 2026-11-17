@@ -79,6 +79,30 @@ describe('one commit per room operation (coalesceWrites)', () => {
     await expect(cache.lookup('room', ['5', 'denied'])).rejects.toMatchObject({ code: 'NOT_MEMBER' });
     expect(f.disk.has('room')).toBe(false);
   });
+  // Review finding: one history per account kept every room it had ever read in memory.
+  it('lets go of idle rooms over the memory budget and restores them from the store unchanged', async () => {
+    const f = fixture();
+    const read = vi.spyOn(f.store, 'read');
+    f.api.mockImplementation(async route => {
+      const room = /conversations\/([^/]+)/.exec(route)?.[1] ?? '';
+      if (route.endsWith('/snapshot')) return { room: { id: room, kind: 'group' }, messages: [f.message('9')], cursor: '10' };
+      if (route.startsWith('/changes?')) return { cursor: '10', changes: [] };
+      return [f.message('2'), f.message('1')];
+    });
+    const cache = createChatHistory({ api: f.api as <T>(route: string) => Promise<T>, store: f.store, current: () => true,
+      newGeneration: () => 'generation', coalesceWrites: true, maxIdleMessages: 4 });
+    const page = new URLSearchParams('limit=100');
+    for (const room of ['a', 'b']) { await cache.snapshot(room); await cache.page(room, page); }
+    // Three messages each: the room used last stays, the older one is only on disk now.
+    expect(cache.cursor('a')).toBeUndefined();
+    expect(cache.cursor('b')).toBe('10');
+    const requests = f.api.mock.calls.length, restores = read.mock.calls.length;
+    expect((await cache.page('a', page)).map(message => message.id)).toEqual(['2', '1']);
+    expect(read.mock.calls.length).toBe(restores + 1);
+    // Still within its verified window: restoring it asks the server nothing.
+    expect(f.api.mock.calls.length).toBe(requests);
+    expect(cache.cursor('b')).toBeUndefined();
+  });
 });
 
 describe('durable chat history', () => {

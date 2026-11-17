@@ -35,6 +35,10 @@ function listFor(owner: string) {
 }
 
 type ChatAuth = ReturnType<typeof useAuth>;
+/** Messages the shared history keeps in memory for rooms with nothing in flight. The list
+ * holds at most the newest 100 of each room, so dozens of rooms fit; a room scrolled far
+ * back is the first to be released once it is idle. */
+const IDLE_ROOM_MESSAGES = 4000;
 /**
  * One Chat Server session per signed-in account. Who the account is, what its server supports
  * and the local history projection belong to the account, not to a screen: the group a person
@@ -89,9 +93,11 @@ function chatAccountSession(owner: string, auth: ChatAuth): ChatAccountSession {
         opened = (async () => {
           const url = await endpoint(); check();
           const { randomUUID } = await import('expo-crypto');
-          // The phone stores each room as one file: commit once per room operation.
+          // The phone stores each room as one file: commit once per room operation. This
+          // history lives as long as the account session, so rooms nobody is using are held
+          // in memory only up to a budget and come back from their file when opened again.
           return createChatHistory({ api: request, current, newGeneration: randomUUID, coalesceWrites: true,
-            store: createMobileChatHistoryStore(userId, realm, url, human, current) });
+            maxIdleMessages: IDLE_ROOM_MESSAGES, store: createMobileChatHistoryStore(userId, realm, url, human, current) });
         })();
         histories.set(human, opened);
         const pending = opened;
