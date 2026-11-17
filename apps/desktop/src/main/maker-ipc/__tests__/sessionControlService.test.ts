@@ -169,7 +169,7 @@ describe('session control domain service', () => {
   it('retains control admission authority after the action scope has ended', async () => {
     const { deps, service } = setup();
     let current = true, delayed: (() => Promise<void>) | undefined;
-    deps.runSessionAction.mockImplementationOnce(async params => { delayed = params.beforeMutation; return { ok: true as const, result: {} }; });
+    deps.runSessionAction.mockImplementationOnce(async params => { delayed = params.beforeMutation; return { ok: true as const, result: { executionPaused: true } }; });
     const decision = await admitTaskAction(
       { server: 'cindy_helper', sessionId: 'caller', tool: 'control_session', args: {} },
       { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {
@@ -180,6 +180,25 @@ describe('session control domain service', () => {
     await decision.run(() => service.controlSession({ targetSessionId: 'target', action: 'retry' }));
     current = false;
     await expect(delayed!()).rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+  });
+
+  // Unit / A1: the previous patch used the weaker delivery grant before commit.
+  it.each(['target-read', 'action-commit'] as const)('rechecks full admission at %s before accepting control', async boundary => {
+    const { deps, service } = setup({ live: false });
+    let current = true;
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', sessionId: 'caller', tool: 'control_session', args: {} },
+      { key: 'input', ownerInput: true, delegated: false,
+        assertCurrent: async () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); },
+        assertDeliveryCurrent: async () => {}, },
+    );
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    if (boundary === 'target-read') deps.sessionExists.mockImplementationOnce(async () => { current = false; return true; });
+    else deps.runSessionAction.mockImplementationOnce(async params => {
+      current = false; await params.beforeMutation(); return { ok: true as const, result: { executionPaused: true } };
+    });
+    await expect(decision.run(() => service.controlSession({ targetSessionId: 'target', action: 'pause' })))
+      .rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
   });
 
   it('returns the native unsupported compact error rather than an internal failure', async () => {

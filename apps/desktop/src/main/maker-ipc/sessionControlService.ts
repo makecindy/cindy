@@ -7,7 +7,7 @@ import type {
   SessionGracefulStopResult,
   SessionTurnControlSnapshot,
 } from '@cindy/maker-core';
-import { assertTaskActionCurrent, bindTaskActionInput, captureTaskActionDeliveryGuard, combineInputGuards, hasTaskActionAuthorization } from './taskActionAuthorization.js';
+import { assertTaskActionCurrent, bindTaskActionInput, captureTaskActionGuard, captureTaskActionDeliveryGuard, combineInputGuards, hasTaskActionAuthorization } from './taskActionAuthorization.js';
 import { revokeTrustedDesktopQueuedOrigin } from './queuedInputOrigin.js';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
@@ -103,6 +103,7 @@ export interface SessionControlServiceDeps {
     action: 'pause' | 'resume' | 'retry' | 'compact';
     instructions?: string;
     beforeMutation: () => Promise<void>;
+    beforeDelivery?: () => Promise<void>;
   }): Promise<{ ok: true; result: unknown } | Failure<string>>;
   sessionExists(sessionId: string): Promise<boolean>;
   getLiveSession(sessionId: string): SessionControlLiveSession | null;
@@ -177,8 +178,10 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
     }): Promise<{ ok: true; result: unknown } | Failure<string>> {
       const plugin = deps.getPluginCaller?.();
       await assertTaskActionCurrent();
+      const actionGuard = captureTaskActionGuard();
       const deliveryGuard = captureTaskActionDeliveryGuard();
-      const beforeMutation = async () => { await deliveryGuard?.(); plugin?.assertCurrent(); };
+      const beforeMutation = async () => { await actionGuard?.(); plugin?.assertCurrent(); };
+      const beforeDelivery = deliveryGuard ?? beforeMutation;
       const missing = await ensureTarget(params.targetSessionId);
       await beforeMutation();
       if (missing) return missing;
@@ -186,7 +189,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       await deps.assertExternalInputAllowed(params.targetSessionId);
       await beforeMutation();
       try {
-        return await deps.runSessionAction({ ...params, beforeMutation });
+        return await deps.runSessionAction({ ...params, beforeMutation, beforeDelivery });
       } catch (error) {
         const code = (error as { code?: unknown } | null)?.code;
         if (typeof code === 'string' && ['UNSUPPORTED_CAPABILITY', 'PRECONDITION_FAILED', 'NOT_FOUND', 'SESSION_RUNNING'].includes(code))

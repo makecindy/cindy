@@ -3468,8 +3468,8 @@ export class AgentInputCoordinator {
   }
 
   /** 用户点「重试 / 继续任务」。行为见 performRetryLastError。 */
-  async retryLastError(sessionId: string, beforeMutation?: () => Promise<void>): Promise<AgentInputProjection> {
-    const { projection } = await this.performRetryLastError(sessionId, { beforeMutation });
+  async retryLastError(sessionId: string, beforeMutation?: () => Promise<void>, beforeDelivery = beforeMutation): Promise<AgentInputProjection> {
+    const { projection } = await this.performRetryLastError(sessionId, { beforeMutation, beforeDelivery });
     return projection;
   }
 
@@ -3511,6 +3511,7 @@ export class AgentInputCoordinator {
       auto?: boolean;
       attemptToken?: number;
       beforeMutation?: () => Promise<void>;
+      beforeDelivery?: () => Promise<void>;
       /** Quota/group continuation shares the wait token, but retains its actual recovery owner. */
       usageLimitWait?: { token: number; info: AutoResumeInfo; recoveryOwner: 'quota-reset' | 'provider-group' };
     },
@@ -3812,7 +3813,7 @@ export class AgentInputCoordinator {
       // Manual retry is a user takeover. The old scheduler waiter settles as
       // failed; its FireContext must not be inherited by the user's new turn.
       if (!automatic && isSchedulerOriginItem(item)) item.origin = undefined;
-      if (opts?.beforeMutation) bindTaskActionInput(sessionId, item, opts.beforeMutation);
+      if (opts?.beforeDelivery) bindTaskActionInput(sessionId, item, opts.beforeDelivery);
       if (usageWait && state.queuePausedByRestore) this.restoredUsageLimitRetryItems.add(item);
       state.pendingQueue.unshift(item);
       this.prependPendingCompactWaitClientId(state, item.clientId);

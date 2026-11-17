@@ -52,13 +52,14 @@ const result = await cindy.host.call('cindy_helper', 'control_session', {
 
 - `pause`：使用原执行暂停锁，阻止后续输入和待答交互继续执行；不终止已经在跑的模型或工具。
   与只暂停自动化、请求优雅停止不同。任务空队列时也生效，后来入队的消息仍保留。
-- `resume`：解除该执行暂停并恢复原队列；不是新发一条“继续”消息。
+- `resume`：解除该执行暂停，发布暂停期间暂存的交互回答并恢复原队列；不是新发一条“继续”消息。
 - `retry`：调用原错误恢复事务，按已有失败阶段重试；不会凭正文创建第二份消息，也不会解除执行暂停锁。
 - `compact`：Claude Code 复用原 `/compact` 队列，不接受 `instructions`；Codex/Pi 复用原生手动压缩，
   可选 `instructions` 传压缩说明。忙碌、原生历史不可用、远程执行恢复或引擎不支持时，保留原生产入口的错误。
 
-暂停和恢复结果含 `executionPaused`、`queuePaused`。压缩结果沿用对应生产入口：
-Claude 返回队列投影，可能仍在排队；Codex/Pi 返回原生压缩结果。不能把接受排队写成已完成压缩。
+暂停和恢复结果含 `executionPaused`、`queuePaused`。压缩结果含 `status:'requested'`，
+Codex/Pi 另保留原生提供的 `tokensBefore`、`estimatedTokensAfter`、`noop`；不返回队列正文或附件信息。
+Claude 可能仍在排队，不能把请求已接受写成已完成压缩。
 送达未知的队列不能通过 `resume` / `retry` 自动重放，返回 `CONFLICT`；先在原任务核实实际投递状态。
 
 只支持执行插件电脑上的本机任务，不支持 `deviceId::sessionId` 控制另一台电脑的队列。

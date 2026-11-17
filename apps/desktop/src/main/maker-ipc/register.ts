@@ -17468,12 +17468,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const sessionControlService = createSessionControlService({
     runSessionAction: params => runSessionExecutionAction(params, {
       coordinator: inputCoordinator, persist: awaitAgentInputQueueSnapshotPersistence,
-      compact: async (id, instructions, beforeMutation) => {
+      interactions: {
+        pending: pendingInteractionResolvers,
+        resolve: (requestId, decision) => { resolvePendingInteraction(requestId, decision, true); },
+        resumeTimeout: requestId => {
+          const entry = pendingInteractionResolvers.get(requestId);
+          if (entry) schedulePendingPermissionTimeout(requestId, entry);
+        },
+      },
+      compact: async (id, instructions, beforeMutation, beforeDelivery) => {
         const createOpts = await readSharedTaskTaskCreateOpts(id);
         await beforeMutation();
         if (createOpts.agentKind !== 'claude-code') return compactSessionFromHost(id, instructions, beforeMutation);
         if (instructions !== undefined) throwIpcError('UNSUPPORTED_CAPABILITY', 'Claude compact control does not accept custom instructions');
-        return inputCoordinator.compact(id, createOpts, { beforeMutation });
+        return inputCoordinator.compact(id, createOpts, { beforeMutation: beforeDelivery });
       },
     }),
     getPluginCaller: () => {

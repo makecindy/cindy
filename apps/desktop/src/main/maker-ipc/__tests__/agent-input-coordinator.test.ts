@@ -5,6 +5,8 @@ import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/c
 import { saveAgentInputQueueSnapshot, awaitAgentInputQueueSnapshotPersistence, readInputDeliveryReceipts, loadAgentInputQueueSnapshot, saveCancelledInputDelivery } from '../../localDb/agentInputQueueSnapshots.js';
 import { createInputEnqueueHarness, createInputStopHarness, createSavedQuotaRestoreHarness } from './inputEnqueueHarness.js';
 import { runSessionExecutionAction } from '../sessionExecutionActions.js';
+import { createSharedPermission } from '../sharedPermission.js';
+import type { InteractionDecision } from '@cindy/maker-core';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop.js';
 import { mcpAppModelContext } from '../../mcp-apps/runtime.js';
 import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
@@ -908,6 +910,56 @@ describe('discarding the welcome an unfinished meeting queued', () => {
 });
 
 describe('AgentInputCoordinator Orca priority queue transactions', () => {
+  // Unit / second-round control findings: exercise the real action transaction,
+  // coordinator and SharedPermission. Prior tests resumed only queued messages.
+  it('releases a held permission on resume and excludes paused time from its timeout', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(1000);
+    const h = createHarness(), sid = 'resume-held-permission', shared = createSharedPermission();
+    const expired = vi.fn();
+    const entry = { sessionId: sid, timeoutId: setTimeout(expired, 1000), timeoutDeadlineAt: 2000 as number | undefined,
+      timeoutRemainingMs: undefined as number | undefined, deferredDecision: undefined as InteractionDecision | undefined };
+    const pending = new Map([['held', entry]]);
+    const deps = { coordinator: h.coordinator, persist: async () => {}, compact: async () => {},
+      interactions: { pending, resolve: (id: string, decision: InteractionDecision) => { pending.delete(id); shared.settle(decision); },
+        resumeTimeout: vi.fn() } };
+    vi.advanceTimersByTime(250);
+    const beforeMutation = async () => {};
+    await runSessionExecutionAction({ targetSessionId: sid, action: 'pause', beforeMutation }, deps);
+    vi.advanceTimersByTime(5000);
+    expect(expired).not.toHaveBeenCalled(); expect(entry.timeoutRemainingMs).toBe(750);
+    entry.deferredDecision = { kind: 'permission', behavior: 'allow' };
+    expect(shared.decision).toBeUndefined();
+    await runSessionExecutionAction({ targetSessionId: sid, action: 'resume', beforeMutation }, deps);
+    await expect(shared.result).resolves.toMatchObject({ behavior: 'allow' });
+    expect(pending.size).toBe(0); expect(entry.deferredDecision).toBeUndefined();
+    expect(deps.interactions.resumeTimeout).not.toHaveBeenCalled();
+  });
+
+  it('uses only the delivery grant after a control retry has already been accepted', async () => {
+    const h = createHarness(), sid = 'retry-admitted-then-plan';
+    h.coordinator.enqueue(sid, makeItem('original', 'original')); await flush();
+    h.setRunning(false); h.coordinator.onTurnEvent(sid, 'error', 'failed'); await flush();
+    h.setHasAssistantProgressAfter(async () => false); h.setRunning(true);
+    let maySubmit = true;
+    const beforeMutation = async () => { if (!maySubmit) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); };
+    await runSessionExecutionAction({ targetSessionId: sid, action: 'retry', beforeMutation, beforeDelivery: async () => {} }, {
+      coordinator: h.coordinator, persist: async () => {}, compact: async () => {},
+    });
+    maySubmit = false; h.setRunning(false); h.coordinator.wakeSession(sid, 'idle'); await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])('returns compact status and native counts without queued content (native=%s)', async native => {
+    const h = createHarness();
+    const result = await runSessionExecutionAction({ targetSessionId: 'compact-result', action: 'compact', beforeMutation: async () => {} }, {
+      coordinator: h.coordinator, persist: async () => {}, compact: async () => native
+        ? { tokensBefore: 200, estimatedTokensAfter: 100, noop: false }
+        : { pendingQueue: [makeItem('private', 'private queued text')], workingDir: '/private' },
+    });
+    expect(result).toEqual({ ok: true, result: native
+      ? { status: 'requested', tokensBefore: 200, estimatedTokensAfter: 100, noop: false } : { status: 'requested' } });
+  });
+
   // Unit / #11043: real shared retry and coordinator compact must retain the
   // initiating call's revocation guard across history reads and queued dispatch.
   // Prior coverage exercised owner retries only; a revoked plugin is the minimal failure.
