@@ -64,12 +64,12 @@ describe('Claude Code translator tool output normalization', () => {
     const results = (await drain(queue)).filter((event) => event.type === 'tool_result_full');
     expect(results).toHaveLength(1);
     expect(results[0].data).toEqual({
-      toolUseId: 'image-tool', fullText: 'xdt-image://fixture/generated.png',
+      toolUseId: 'image-tool', fullText: 'xdt-image://fixture/generated.png', isError: false,
     });
     expect(results[0].agentMeta).toEqual(parent ? { parentUuid: parent } : undefined);
   });
 
-  it.each([true, false])('propagates tool_result.is_error=%s to the loop-guard callback', (isError) => {
+  it.each([true, false])('propagates tool_result.is_error=%s to host feedback and loop-guard', async (isError) => {
     const queue = createAsyncQueue<AgentEvent>();
     const onToolResultDone = vi.fn();
     const ctx = { ...createCtx(), onToolResultDone };
@@ -102,6 +102,9 @@ describe('Claude Code translator tool output normalization', () => {
       ctx,
     );
 
+    expect((await drain(queue)).find(event => event.type === 'tool_result_full')?.data).toMatchObject({
+      toolUseId: 'toolu_error_flag', isError,
+    });
     expect(onToolResultDone).toHaveBeenCalledWith(
       'toolu_error_flag',
       'The pages must be numbered',
