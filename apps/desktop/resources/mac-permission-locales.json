@@ -98,5 +98,15 @@
     "NSAppleEventsUsageDescription": "O Cindy usa Apple Events para ler os contatos que você importa e adicionar ou atualizar os contatos que exporta explicitamente.",
     "NSContactsUsageDescription": "O Cindy só acessa os Contatos quando você os importa ou exporta explicitamente adições ou atualizações.",
     "NSLocalNetworkUsageDescription": "O Cindy usa a rede local para se conectar diretamente, com criptografia, aos seus outros dispositivos com a mesma conta."
+  },
+  "id": {
+    "NSMicrophoneUsageDescription": "Cindy menggunakan mikrofon untuk input suara dan rekaman layar.",
+    "NSAudioCaptureUsageDescription": "Cindy merekam audio komputer untuk rekaman layar dan desktop jarak jauh yang terhubung dengan kamu.",
+    "NSDesktopFolderUsageDescription": "Agen AI Cindy memerlukan akses untuk membaca dan menulis file di Desktop kamu.",
+    "NSDocumentsFolderUsageDescription": "Agen AI Cindy memerlukan akses untuk membaca dan menulis file di folder Documents kamu.",
+    "NSDownloadsFolderUsageDescription": "Agen AI Cindy memerlukan akses untuk membaca dan menulis file di folder Downloads kamu.",
+    "NSAppleEventsUsageDescription": "Cindy menggunakan Apple Events untuk membaca Kontak yang kamu impor serta menambahkan atau memperbarui Kontak yang kamu ekspor secara eksplisit.",
+    "NSContactsUsageDescription": "Cindy mengakses Kontak hanya saat kamu mengimpornya atau secara eksplisit mengekspor penambahan atau pembaruan.",
+    "NSLocalNetworkUsageDescription": "Cindy menggunakan jaringan lokal kamu untuk terhubung secara langsung dan terenkripsi ke perangkat kamu yang lain yang masuk dengan akun yang sama."
   }
 }
