@@ -94,7 +94,7 @@ function logAppFailure(error: unknown, phase: 'open' | 'sandbox' | 'initialize' 
   })();
 }
 
-function hostContext(locale: string, element: HTMLElement): Record<string, unknown> {
+function hostContext(locale: string, element: HTMLElement, fillContainer = false): Record<string, unknown> {
   const style = getComputedStyle(document.documentElement);
   const variable = (name: string) => style.getPropertyValue(name).trim();
   return {
@@ -107,7 +107,7 @@ function hostContext(locale: string, element: HTMLElement): Record<string, unkno
       touch: navigator.maxTouchPoints > 0,
       hover: matchMedia('(hover: hover)').matches,
     },
-    containerDimensions: { width: Math.round(element.clientWidth), maxHeight: MCP_APP_MAX_HEIGHT },
+    containerDimensions: { width: Math.round(element.clientWidth), ...(fillContainer ? { height: Math.max(1, Math.round(element.clientHeight)) } : { maxHeight: MCP_APP_MAX_HEIGHT }) },
     styles: {
       variables: {
         '--color-background-primary': variable('--surface'),
@@ -129,6 +129,7 @@ function hostContext(locale: string, element: HTMLElement): Record<string, unkno
 }
 
 interface McpAppCardProps {
+  fillContainer?: boolean;
   sessionId: string | null;
   clientId: string;
   title: string;
@@ -165,7 +166,7 @@ export function McpAppCard(props: McpAppCardProps) {
 }
 
 /** Untrusted HTML always sits across an origin boundary, without Cindy's preload. */
-function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, contextSource, onUnavailable }: McpAppCardProps & { deviceId?: string }) {
+function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, contextSource, onUnavailable, fillContainer = false }: McpAppCardProps & { deviceId?: string }) {
   const { t, i18n } = useTranslation();
   const pluginTrust = plugin && typeof plugin === 'object' && 'trust' in plugin ? String(plugin.trust) : undefined;
   const appTitle = title || t('mcpApps.appName');
@@ -347,7 +348,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       setLoading(false);
     };
     window.addEventListener('message', receive);
-    const readContext = () => ({ ...hostContext(localeRef.current, element),
+    const readContext = () => ({ ...hostContext(localeRef.current, element, fillContainer),
       ...(contextSourceRef.current ? { cindy: contextSourceRef.current.read() } : {}) });
     let lastContext = '';
     let queued = false;
@@ -464,7 +465,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         });
     }
     return dispose;
-  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId]);
+  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, fillContainer]);
 
   useLayoutEffect(() => {
     const controller = controllerRef.current;
@@ -480,8 +481,8 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
 
   useEffect(() => {
     if (root.current && visibleRef.current)
-      void controllerRef.current?.context(hostContext(locale, root.current)).catch(() => {});
-  }, [locale]);
+      void controllerRef.current?.context(hostContext(locale, root.current, fillContainer)).catch(() => {});
+  }, [locale, fillContainer]);
   useLayoutEffect(() => {
     if (mode !== 'fullscreen') return;
     const dialog = card.current;
@@ -496,10 +497,10 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     return () => {
       dialog.close();
       dialog.setAttribute('open', '');
-      if (root.current && visibleRef.current) void controllerRef.current?.context(hostContext(localeRef.current, root.current)).catch(() => {});
+      if (root.current && visibleRef.current) void controllerRef.current?.context(hostContext(localeRef.current, root.current, fillContainer)).catch(() => {});
       if (previousFocus?.isConnected) previousFocus.focus();
     };
-  }, [mode]);
+  }, [mode, fillContainer]);
   // Exit locally; the modal blocks the window.
   const exitFullscreen = () => {
     setMode('inline');
@@ -512,6 +513,8 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       className={
         mode === 'fullscreen'
           ? 'fixed inset-4 z-50 m-0 flex h-auto max-h-none w-auto max-w-none flex-col rounded-xl border border-border bg-[var(--surface-elevated)] p-3 text-inherit backdrop:bg-transparent'
+          : fillContainer
+          ? `static m-0 flex h-full min-h-0 w-full max-h-none flex-col overflow-hidden rounded-xl bg-transparent p-0 text-inherit ${border ? 'border border-border' : 'border-0'}`
           : `static mx-0 my-3 w-full max-w-none overflow-hidden rounded-xl bg-transparent p-0 text-inherit ${border ? 'border border-border' : 'border-0'}`
       }
       role={mode === 'fullscreen' ? 'dialog' : 'region'}
@@ -522,8 +525,9 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         exitFullscreen();
       }}
     >
+      {(!fillContainer || mode === 'fullscreen' || error) && (
       <div className="flex min-h-9 items-center justify-between gap-3 px-3 text-13 text-[var(--text-secondary)]">
-        <span className="min-w-0 break-words">{title ? t('mcpApps.cardTitle', { title }) : appTitle}</span>
+        <span className={fillContainer ? 'sr-only' : 'min-w-0 break-words'}>{fillContainer ? appTitle : title ? t('mcpApps.cardTitle', { title }) : appTitle}</span>
         {pluginTrust && <span className="shrink-0 text-12 font-medium">{t(`mcpApps.pluginTrust.${['cindy-official', 'reviewed', 'verified-publisher'].includes(pluginTrust) ? pluginTrust : 'unverified'}`)}</span>}
         {loading && visible && !revealed && <Spinner size={16} />}
         {mode === 'fullscreen' && (
@@ -542,6 +546,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           </Button>
         )}
       </div>
+      )}
       {sessionId !== null && <McpAppPermissionPrompt sessionId={sessionId} clientId={clientId} />}
       {error && (
         <p role="alert" className="px-3 pb-3 text-13 text-[var(--text-secondary)]">
@@ -557,8 +562,9 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         ref={root}
         aria-busy={visible && !revealed ? true : undefined}
         style={{
-          height: error ? 0 : mode === 'fullscreen' ? undefined : height,
-          flex: mode === 'fullscreen' ? 1 : undefined,
+          height: error ? 0 : mode === 'fullscreen' || fillContainer ? undefined : height,
+          flex: mode === 'fullscreen' || fillContainer ? 1 : undefined,
+          minHeight: 0,
         }}
       />
     </dialog>

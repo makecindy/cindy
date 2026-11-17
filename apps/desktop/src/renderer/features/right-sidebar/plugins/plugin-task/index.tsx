@@ -97,7 +97,7 @@ function PluginTaskBody({ state, ctx }: TabKindBodyProps<PluginTaskTabState>) {
   if (!ghost || ghost.enabled === false) return null;
   const remoteDevice = ctx.deviceLinkDeviceId;
   if (state.resourceViewId) return remoteDevice === null
-    ? <PluginUiView ghost={ghost} viewId={state.resourceViewId} sessionId={ctx.sessionId} input={state.resourceInput} />
+    ? <PluginUiView fillContainer ghost={ghost} viewId={state.resourceViewId} sessionId={ctx.sessionId} input={state.resourceInput} />
     : null;
   if (!ghost.manifest.taskView) return null;
   if (remoteDevice !== null && ghost.manifest.taskView.remote !== true) return null;

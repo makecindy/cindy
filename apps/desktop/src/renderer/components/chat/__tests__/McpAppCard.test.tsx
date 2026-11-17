@@ -915,3 +915,39 @@ it.each([
     await act(async () => root.unmount()); container.remove();
   }
 });
+
+// User-reported canvas gap: sidebar resources must fill their pane, while chat
+// cards keep content-driven sizing. Existing tests exercise only chat sizing.
+// Real presenter entry + simulated pane geometry; renderer unit tier.
+it.each([false, true])('keeps pane geometry separate from App content height (fill=%s)', async fillContainer => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(700);
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800);
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); }
+    disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="pane-task" clientId="pane-card" title="Canvas" fillContainer={fillContainer} />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0];
+    const dimensions = controller.open.mock.calls[0][0].containerDimensions;
+    const heading = container.querySelector('dialog')!.firstElementChild;
+    if (fillContainer) expect(heading?.className).not.toContain('min-h-9');
+    else expect(heading?.className).toContain('min-h-9');
+    if (fillContainer) expect(dimensions).toEqual({ width: 800, height: 700 });
+    else { expect(dimensions.width).toBe(800); expect(dimensions.height).toBeUndefined(); expect(dimensions.maxHeight).toBeGreaterThan(0); }
+    const viewport = container.querySelector('iframe')!.parentElement!;
+    await act(async () => controller.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => controller.message({ method: 'ui/notifications/sandbox-result-delivered' }));
+    await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 640 } }));
+    expect(viewport.style.height).toBe(fillContainer ? '' : '640px');
+    expect(viewport.style.flex).toBe(fillContainer ? '1 1 0%' : '');
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});

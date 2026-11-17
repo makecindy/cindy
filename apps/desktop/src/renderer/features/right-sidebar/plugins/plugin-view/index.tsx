@@ -64,7 +64,7 @@ function PluginViewBody({ state }: TabKindBodyProps<PluginViewTabState>) {
   const runtimeState = useGhostRuntimeState(state.instanceId);
   // 停用 / 卸载的瞬间投影层已把页签隐藏,这里只兜住收起前的一两帧。
   if (!ghost || ghost.enabled === false) return null;
-  if (state.resourceViewId) return <PluginUiView ghost={ghost} viewId={state.resourceViewId} sessionId={null} input={state.resourceInput} />;
+  if (state.resourceViewId) return <PluginUiView fillContainer ghost={ghost} viewId={state.resourceViewId} sessionId={null} input={state.resourceInput} />;
   if (runtimeState === 'crashed' || runtimeState === 'fused') {
     return <GhostPanelError ghost={ghost} state={runtimeState} />;
   }

@@ -16,9 +16,10 @@ function sameContext(left: unknown, right: unknown, depth = 1): boolean {
 }
 
 /** All placements share the standard presenter and its visible-View lifetime. */
-export function PluginUiView({ ghost, viewId, sessionId: requestedSessionId, input, context, onUnavailable }: {
+export function PluginUiView({ ghost, viewId, sessionId: requestedSessionId, input, context, onUnavailable, fillContainer = false }: {
   ghost: InstalledGhost; viewId: string; sessionId: string | null; context?: Record<string, unknown> | (() => Record<string, unknown>);
   input?: Record<string, unknown>;
+  fillContainer?: boolean;
   onUnavailable?(): void;
 }) {
   const host = getApprovedGhostHostUi(ghost);
@@ -66,7 +67,7 @@ export function PluginUiView({ ghost, viewId, sessionId: requestedSessionId, inp
   }), [sessionId, hasContext]);
   if (!view) return null;
   return <McpAppCard key={`${instanceId}:${viewId}:${ghost.approval.state === 'approved' ? ghost.approval.revision : ''}`}
-    source={{ instanceId, viewId }} contextSource={contextSource} onUnavailable={onUnavailable}
+    fillContainer={fillContainer} source={{ instanceId, viewId }} contextSource={contextSource} onUnavailable={onUnavailable}
     sessionId={view.scope === 'task' ? sessionId : null} clientId={`${instanceId}:${viewId}`}
     title={view.title} plugin={{ trust: ghost.trust?.level }} />;
 }
