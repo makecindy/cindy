@@ -255,6 +255,28 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     expect(fixture.handle.mock.calls.filter(([route]) => route.endsWith('/executions'))).toHaveLength(status === 404 ? 1 : 0);
   });
 
+  // #11097 / unit: a remote stop/revocation during a slow status read must
+  // still be caught by the final lease check, even without a pushed change.
+  it.each([409, 403])('rechecks the lease after a delayed failure snapshot (HTTP %s)', async status => {
+    let release: ((value: { body: unknown[] }) => void) | undefined;
+    let stopped = false;
+    fixture.handle.mockImplementation((route, method, body, actor) => {
+      if (route.includes('/execution-failures?')) return new Promise(resolve => { release = resolve; });
+      if (route.includes('/executions/') && body?.action === 'heartbeat' && stopped) {
+        return { status, body: { error: { code: status === 409 ? 'STALE_EXECUTION' : 'FORBIDDEN' } } };
+      }
+      return handle(route, method, body, actor);
+    });
+    trigger(post('status?', { mentions: [bots[0].id] }));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(release).toBeDefined();
+    expect(inputs()).toHaveLength(0);
+    stopped = true;
+    release!({ body: [] });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(inputs()).toHaveLength(0);
+  });
+
   it('projects stamped imported failures as historical categories, never raw diagnostics', async () => {
     const legacy = post('private diagnostic', { by: 1 });
     legacy.origin = 'import';
