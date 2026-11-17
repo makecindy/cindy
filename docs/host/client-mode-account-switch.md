@@ -112,10 +112,12 @@ serve 要在这几处提交 owner：
 
 `discoverHostOwner`（`apps/host/src/profile-path.mjs:45`）只看 profile 里 `cindy-*.db` 的个数：
 
-- 一个库：认它的账号；
-- 两个库：不设 `CINDY_HOST_OWNER` 就拒绝启动。用在启动时 `main.ts:2074`，状态命令 `main.ts:202`。
+- 一个库：启动时直接认它的账号（`main.ts:2074` 起），再拿会话去对；会话是另一个账号时，`resolveAccountUser` 判为不一致而启动失败（`main.ts:444`）。
+- 零个或两个以上的库：读会话记录，会话有效就按会话的账号起（`main.ts:2082–2086`），没有有效会话才停下并报原因（:2085）。
+- 状态命令（`main.ts:202`）只数库文件，两个以上的库时读不出边界状态。
 
-运行中切换过一次，profile 里就有两个库，下次重启必然撞上。改成按已提交的会话认 owner，与切换同一单元做。
+所以运行中切换过一次、两个库都在时，今天的启动已经会按会话认 owner。会撞上的是“只有一个库、会话却是另一个账号”，例如新账号的库还没建成就崩溃（8.3 的 (ii)）。改成任何时候都按已提交的会话认 owner，状态命令同样按会话读，与切换同一单元做。
+
 **会话与技能投影的 owner 不一致时谁说了算：照桌面，以会话为准。** 桌面冷启动先续期持久化的会话，再把技能投影的 owner 提交成会话的账号：
 
 - `runColdStartRefreshFlow` 里的 `withCloudOwnerCommit`，`authManager.ts:5117` 起，经 :2354 进 `withGhostSkillProjectionOwnerCommit`（`apps/desktop/src/main/authBoundaryQuarantine.ts:381`）；
@@ -377,8 +379,29 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
 - **第三层：B 失败，再用 A 重开也失败**：
   - 会话记录仍是 A，不能停在 B；
   - 运行时进入与启动失败相同的 error 状态：同 `main.ts:2103–2110`，dispose、`commitVolatileAppSession('signed-out')`、`runtime.state = 'error'`；`runtime.detail` 只放固定错误码（S5）；
-  - 发 `auth_changed`，窗口看到错误；
+  - 发 `auth_changed`；
   - 重启 Host 可以恢复：会话是 A，按 3.3 认 A；如果 owner 停在 B 或 pending，启动时按会话补提交成 A。
+  - **窗口看到什么**（按现在的代码核实）：启动失败的收尾经 `disposeOwnerRuntime` 把账号清成未登录（`main.ts:1982`、:1986），`projectHostAuthState` 因此投影出未登录。窗口看到的是登录页，看不到 error 和原因。原因只在 `/api/probe` 的 `runtime`（`state: 'error'` 与 `detail`，`main.ts:1442`）里，即 `cindy-host status --json` 能看到。这一步今天走不通，见第九节“error 状态下的恢复”。
+
+**从 error 状态恢复**（以 8.3 的“会话还没写回 A”一行为例：重启后按会话起 B，开库仍失败，Host 停在 error）。按集成分支现在的代码逐步核实：
+
+1. **窗口能连上 Host**：
+   - Host 先开始监听、再启动运行时（`main.ts:2069` 在 :2070 之前），`/api/auth/*` 不算 owner 请求（`server.mjs:166`）；
+   - 窗口的事件流连上时读 `/api/auth/state`（`bootstrap-electron.ts:1464`）。
+   - 能连上，但看到的是未登录，看不到错误（见上一条）。
+2. **退出登录能执行，回到未登录**：
+   - `/api/auth/logout` 不受 owner 请求闸门挡（`server.mjs:257`）；
+   - `main.ts` 的 logout 先 `await startup`（:1487），启动失败已被 catch 收住，不会卡住；
+   - `disposeOwnerRuntime` 对已拆掉的运行时再跑一次，末尾把运行时置回 `uninitialized`（:1989）；
+   - `logoutHostSession` 删掉会话记录 B，并尽力吊销（`apps/host/src/auth/logout.mjs:70`）。
+   - 一处不干净：启动失败时 `accountUser` 已被清空（`main.ts:1982`），logout 取到的 `outgoingUser`（:1493）为空，所以不给 B 写退出墓碑，也不把 B 从保管库移走（`logout.mjs:35` 只在有 ownerId 时做）。B 的凭据仍留在保管库里，没有被标为已退出。
+   - 另外，窗口此时显示的是登录页，界面上本来没有“退出登录”入口。所以这一步能执行，但恢复不需要它。
+3. **登回 A，A 的数据还在**：
+   - `cindy-host login`（今天就能用）：error 状态下 serve 的运行时 owner 为空，`serveLoginAdmission`（`login-cli.mjs` 的准入）和 :139 的检查都放行。它写会话 A，并把 owner 提交回 A（:144）。serve 不中途采用新会话（乙 10），要重启 Host；重启后两个库都在，按会话认 A（`main.ts:2074–2086`），起 A。
+   - 窗口登录（3.5）：今天客户端模式下窗口的登录在本地执行（第十节的测试期限制），不可用。按方案改成 Host 的登录事务以后，登录页直接登 A，Host 提交会话与 owner 到 A 并起 A，不必重启。前提是登录事务在 error 状态下也能开始，列为第九节的必做项。
+   - A 的库 `cindy-<A>.db` 在切换、回滚、退出登录、重新登录这几步里都不被删除或改写，数据在。
+
+结论：今天的恢复办法是用 `cindy-host login` 登回 A，再重启 Host；窗口里还走不通。方案实现后，在窗口的登录页直接登回 A 即可，数据不丢。
 - **失败提示**：
   - 要告诉用户两件事：仍在原账号；刚才在跑的任务已被中断。
   - 现有的 `sidebar.accountSwitcher.switchFailed`（“切换失败，请重新登录该账号”）不含后一句。
@@ -395,7 +418,7 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
 | (i) B 的会话已写、owner 还没提交（或边界停在 pending） | 会话 B，边界 stable(A) 或 pending | 照桌面冷启动：以会话为准，serve 启动时经 3.1 的入口把 owner 补提交成 B（过渡里撤销 A 的投影），再开 B 的库。补不成就进入启动失败的 error 状态（8.2 第三层的形态），会话不改回 A |
 | (ii) owner 已提交、B 的库还没开 | 会话 B，边界 stable(B)，B 的库可能还不存在 | 正常起 B；库不存在就新建，同首次登录 |
 | 第二层 (b) 回滚途中：会话已写回 A、owner 还没提交回 A（或边界停在 pending） | 会话 A，边界 stable(B) 或 pending | 以会话为准：serve 启动时经 3.1 的入口把 owner 补提交成 A（过渡里撤销 B 的投影），再开 A 的库。补不成就进入启动失败的 error 状态，会话仍是 A |
-| 第二层 (b) 回滚途中：会话还没写回 A | 会话 B，边界 stable(B) | 同 (ii)：按会话起 B。如果开 B 的库仍失败，就进入启动失败的 error 状态，窗口看到错误。回滚先写会话，就是为了让这个窗口尽量短 |
+| 第二层 (b) 回滚途中：会话还没写回 A | 会话 B，边界 stable(B) | 同 (ii)：按会话起 B。如果开 B 的库仍失败，就进入启动失败的 error 状态。恢复办法见 8.2 末尾“从 error 状态恢复”：方案实现后在窗口登录页登回 A；今天用 `cindy-host login` 登回 A 并重启 Host。A 的数据不丢。回滚先写会话，就是为了让这个窗口尽量短 |
 
 (i) 和第二层 (b) 的“会话已写回 A、owner 还没提交回 A”要有测试。
 
@@ -457,6 +480,10 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
 4. 启动时以会话为准认 owner：`discoverHostOwner` 不再只数库文件；投影边界不是会话账号的 stable 时，经 3.1 补提交（3.3、8.3）。
 5. `cindy-host login` 写出与桌面登录相同的存储状态（3.4）；之后去掉 C 的差别 a。
 6. 账号同步 `sync` 的主体搬成共用核心，桌面与 Host 共用；网络请求在锁外，锁内重读比对后写（8.4）。
+7. error 状态下的恢复（8.2 末尾）：
+   - Host 处在启动失败的 error 状态时，投影给窗口的状态带固定原因码，窗口在登录页说明原因（文案待用户定，不带 `runtime.detail` 原文）；
+   - 登录事务在 error 状态下也能开始，登回 A 后起 A，不必重启；
+   - error 状态下退出登录按会话记录里的账号写退出墓碑、从保管库移走，不依赖已经清空的 `accountUser`。
 
 **桌面侧改动**
 
@@ -484,7 +511,8 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
   - 闸门关着时拒绝切换；
   - 闸门关着时拒绝添加账号（`add/begin`）和没有当前账号时的登录，提示与切换相同，且不发任何会签发或轮换令牌的请求、不写保管库与会话；
   - 有任务在跑而请求未确认时，以固定码拒绝；
-  - 两个库时重启认对 owner（3.3）。
+  - 两个库时重启认对 owner（3.3）；只有一个库、会话是另一个账号时也认对；
+  - error 状态下的恢复：Host 停在启动失败的 error 时，窗口看到原因码；在窗口登录 A 后起 A，A 的库与数据不变；error 状态下退出登录给会话里的账号写退出墓碑，并回到未登录。
 - 桌面侧：
   - 窗口直接收到另一个账号的 `auth_changed` 时（不经本窗口的 `runDataOwnerBoundary`），渲染层结束旧账号的会话缓存、清 `sessionsStore` 与 workers 缓存、按账号分区的存储换到 B，界面上不残留 A 的数据；
   - 窗口主进程按 8.6 列出的按账号状态被清掉；
