@@ -1161,7 +1161,9 @@ it.each([false, true])('negotiates App user authorization without changing the o
     await remote.sync([]);
     await remote.connectGithub();
     const { redirectUri, state } = server.githubConnect!;
-    const callback = await fetch(`${redirectUri}?state=${state}&code=synthetic`, { redirect: 'manual' });
+    // Only the ephemeral port comes from the captured request; the test request stays on loopback.
+    const port = Number(new URL(redirectUri).port);
+    const callback = await fetch(`http://127.0.0.1:${port}/github/callback?state=${encodeURIComponent(state)}&code=synthetic`, { redirect: 'manual' });
     expect(callback.status).toBe(303);
     expect(server.githubCompleteBody?.includeUserToken).toBe(userAuthorization ? true : undefined);
     expect(authorized).toHaveBeenCalledTimes(userAuthorization ? 1 : 0);
