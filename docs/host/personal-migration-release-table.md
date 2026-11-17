@@ -267,7 +267,7 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | 项 | 移到 | 原因 |
 |---|---|---|
 | 供应商分组执行 | M3 | 任务会派到组内其它电脑执行，依赖 Device Link 的准入与转发（`docs/product-rules/provider-groups.md`） |
-| 伙伴的会话环境（`resolveSessionEnvironment`）与伙伴工具集 | M3 | 伙伴任务在 M1 继续拒绝。随它一起接：桌面启动钩子在取工作树租约之前补 `createOpts.id ??= sessionId`，只给伙伴工作区运行时（`prepareBotWorkspaceRuntime`）用 |
+| 伙伴的会话环境（`resolveSessionEnvironment`）与伙伴工具集 | M3 | 伙伴任务在 M1 继续拒绝。随它一起接：桌面启动钩子在取工作树租约之前补 `createOpts.id ??= sessionId`，只给伙伴工作区运行时（`prepareBotWorkspaceRuntime`）用。放开伙伴任务时要重看 `apps/host/src/desktop-module-setters.ts` 里以此为由的 not-applicable 项（现在是 `initBotAuthorizationService`） |
 | SkillHub 发现隔离（`scanLocalCustomizations`） | M2 | 只影响 Skill 列表界面，不影响任务运行 |
 | Pi 包的安装与卸载 | M2 | 界面发起的写操作；运行只需读已安装的包 |
 | 本地模式下运行任务 | M2 | 要先定本机登录或 API key 的认领方式与模型隔离规则 |
@@ -327,7 +327,7 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | 预算：取消待切意图时的清理 | 桌面取消待切意图（`cancelPendingAgentSwitchHolder`）时删 `appliedContextWindowBudgets` 里这个任务，不删重放意图。Host 没有取消意图的入口（`clearIntent` 只用在删除、丢弃任务，那时运行时关闭，已由关闭清理覆盖），这一处绑定在“Host 有取消意图的入口时”再对齐 |
 | 乙 1：定时任务的模型范围 | 发送钩子第 1 步 `scheduledModelScope.restore`，随定时任务上 Host。Host 今天在定时任务上有什么（2026-11-17 核对）：只有队列这一侧——`agent/input-queue.mjs` 用共用的 `createSchedulerQueueBridge` 与 `runSchedulerQueuedPreparation` 组出 `schedulerQueue` 接口（排队、准备、撤回与通知执行器的那一套，有测试）；没有定时任务的执行器（桌面 `scheduler-host` 的 runner），生产代码里没有谁调 `schedulerQueue`，Host 自己不会产生定时任务来源的输入。但 Host 启动时会从共用库恢复排队快照（`loadAgentInputQueueSnapshot`），桌面写下的快照里可能有定时任务来源的排队项；迁移来的任务行也可能带 `scheduledModelBaseline`。所以必须在迁移前接上，不能因为 Host 不跑定时任务就算不适用。Host 的定时任务验收脚本 `apps/host/scripts/scheduler-runtime.e2e.mjs`（`pnpm --filter @cindy/host test:scheduler`）自 main `41ed3b9f40`（2026-11-12，IM 文案随界面语言）起加载即失败：“electron does not provide an export named app”。导入链：桌面 `scheduler-host/runner.ts` → `im/shared/turnRetryNotice.ts` → `im/shared/imText.ts` → `i18n.desktop.ts`（顶层 import electron）。Host 生产代码不加载 runner，只影响这个脚本；审核方定不现在修（2026-11-17），见下面“后续阶段的桌面事项” |
 | 乙 2：待切凭据的登记入口 | 服务已接（检查点 3）；Host 现有入口登记不到：判断“忙”只看回合是否在跑（`codex-credential-switch.ts` `isLocalSessionBusy`，不看后台任务），用户的选择只在空闲时落定（`applyPendingAgentSwitchIfIdle` 开头 `if (live?.isTurnRunning()) return;`），桌面上用户这条路同样登记不到。登记入口是 Agent / 系统 / IM 卡片 / 定时任务的换模型，随它们上 Host；届时用测试钉住登记、回合结束生效、关闭时清除三条路径。原先要的“后台任务在跑时换供应商”测试作废（理由同上） |
-| 乙 3：Orca 与供应商组的发送前检查 | 发送钩子第 5 步：Orca 有意图未落定时拒发、`providerGroupService.beforeSend`，随 Orca、供应商组上 Host |
+| 乙 3：Orca 与供应商组的发送前检查 | 发送钩子第 5 步：Orca 有意图未落定时拒发、`providerGroupService.beforeSend`，随 Orca、供应商组上 Host。放开 Orca 时要重看 `apps/host/src/desktop-module-setters.ts` 里以此为由的 not-applicable 项（现在是 `setWorkerCreationPrefsCache`） |
 | 乙 4：伙伴路由对账 | `reconcileBotModelRoute.acceptTaskChoice`（Host 空操作，调用处本就吞错），只对伙伴任务有效；Host 不执行伙伴任务（`send-preflight.ts`）。随伙伴上 Host |
 | 乙 5：换电脑、组内换机 | 换引擎的五个端口（`confirmNativeHistoryFallback`、`relocateNativeHistory`、`resolveProviderGroupTarget`、`assertAgentDeviceRouteUsable`、`describeAgentDevice`）。Host 入口拒绝非空 `agentDeviceId`，走不到。随远程执行上 Host |
 | 乙 7：迁移器只拉同区域的 Host 包 | 迁移前提（甲 20 登记，2026-11-17）：国内版桌面只拉国内版 Host 包，国际版只拉国际版；包的区域读 `release.json` 的 `region` 或运行中 Host 的 `status --json`。交接分支实现，本分支不做 |
@@ -489,7 +489,7 @@ withAccountDataAccess（2026-11-17）：新增第 26 项，减少 0 项。
 | 15 | `agent/claude-proxy-runtime.ts`、`agent/runtime.ts` 的凭据路由 | 桌面代理的凭据路由规则 | 待定（第二批） |
 | 16 | `main.ts` 的模型清单刷新、`agent/providers.mjs` | 桌面 `runModelsSync` 与目录变更点的刷新 | 待定（第二批） |
 | 17 | `agent/auxiliary-model-chain.ts` | 辅助模型链（两处答案故意不同） | 平台差别（第二节） |
-| 18 | `agent/send-preflight.ts` | 桌面 `prepareUserMessageForAgent` 的附件归一化；远程任务的拦截 | 待定（附件随第 12 行）；拦截是平台差别 |
+| 18 | `agent/send-preflight.ts` | 桌面 `prepareUserMessageForAgent` 的附件归一化；远程任务的拦截 | 待定（附件随第 12 行）；拦截是平台差别。放开远程执行时要重看 `apps/host/src/desktop-module-setters.ts` 里以此为由的 not-applicable 项（现在是 `bindHostedSessionProvider`） |
 | 19 | `agent/turn-executor.mjs` `replay` 用被认领那一轮的 clientId 给重放的事件和回执打标（`agent/context-recovery.ts` `replayClientId`） | 桌面没有对应：桌面重放不带 clientId（只有 Pi 缓存兼容带 `retryUserClientId`） | 平台差别：Host 的 `/api/chat` 靠终态事件的 clientId 结束一条消息的流，桌面渲染层不靠 clientId 判断结束。只打标，不写用户行，事务仍不带 `persistUserMessage`；只在这次恢复进行中有效。新发现（2026-11-15，#10613 评审） |
 | 20 | `agent/turn-executor.mjs` 原来的 `checkWorkDirExists`（只做 stat）。新发现（2026-11-16，第一批检查点 2） | `createWorkingDirectoryPreflight` 与 `createWorkingDirectoryRecovery` | 已改为共用（`agent/working-directory.ts`，Host 的那份已删）。两个端口不同，见第二节“工作目录检查” |
 | 21 | `chat.mjs` 一条消息的流何时结束；`agent/turn-executor.mjs` 在“已落库但派发失败”的错误行落库后发 `interrupted` 回执（第一批检查点 2）；`agent/input-queue.mjs` `inputStatus` 认出派发失败留下的恢复点 | 桌面没有这个入口 | 平台差别（Host 自己的入口）。结束条件与依据：1）账号退出、不能再进入应用；2）投影的恢复点是派发前的本条（`queue-head`），补 `interrupted` 回执后结束；3）本条的 `interrupted` 回执：停止后没有终态事件时（`finish`），以及本条已落库但派发失败、错误行落库之后（协调器的 `persistTerminalSendError`，只在这条路上发）；4）本条的 `done` 或终态错误，不算后台与续接边界；5）连上时查到本条已记录或已中断，直接回执后结束（重连）。被上下文恢复认领的错误不写错误行、不发回执，流等到重放的 `done`。检查点 4 接自动续跑时要重新回答这个入口在续跑路径上的表现 |

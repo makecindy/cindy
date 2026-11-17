@@ -8,6 +8,12 @@
  * (hostDesktopSourceContracts.guard.test.ts, "module-level port setters the Host loads") collects
  * these setters from the Host's import graph and compares them with this table both ways: a new
  * setter missing here, or an entry whose setter is gone, fails it.
+ * Not covered here: the ports the Host hands the shared device-link dispatch. HOST_DISPATCH_PORTS_WHILE_HELD
+ * (apps/host/src/device-link.ts) lists each of them with what it does while the profile gate is held,
+ * pinned as `Record<keyof InboundDispatchPorts, …>`; this table only answers whether a module-level setter
+ * the Host loads is bound. The two do not overlap.
+ * A not-applicable entry whose reason is a task kind the Host refuses at admission (Orca, remote
+ * hosting, teammates) is revisited when that kind opens; the release table rows of those kinds say so.
  *
  * Key: `<file>#<name>`, sorted, one entry per line. Status:
  * - bound: the Host binds it; `where` is the Host file that does, or `<file>#<function>` (the guard checks
@@ -85,7 +91,7 @@ export const DESKTOP_MODULE_SETTERS: Readonly<Record<string, DesktopModuleSetter
   'apps/desktop/src/main/maker-host/newMakerDefaultsCache.ts#setNewMakerDraftCache': { status: 'internal', reason: 'No production caller (only its own module and tests)' },
   'apps/desktop/src/main/maker-host/newMakerDefaultsCache.ts#setProviderModelMemoryCache': { status: 'pending', reason: 'Renderer mirror; the Host copy stays empty until the M2 push channel (release table row 6d)' },
   'apps/desktop/src/main/maker-host/newMakerDefaultsCache.ts#setThinkingEnabledInMemory': { status: 'internal', reason: 'Called by maker-ipc/agentSwitchDepsCore.ts, shared with the Host' },
-  'apps/desktop/src/main/maker-host/newMakerDefaultsCache.ts#setWorkerCreationPrefsCache': { status: 'not-applicable', reason: 'Orca worker defaults; the Host refuses Orca tasks (send-preflight.ts)' },
+  'apps/desktop/src/main/maker-host/newMakerDefaultsCache.ts#setWorkerCreationPrefsCache': { status: 'not-applicable', reason: 'Orca worker defaults; the Host refuses Orca tasks (send-preflight.ts); revisit when Orca opens (release table 乙 3)' },
   'apps/desktop/src/main/maker-host/pi-proxy-session-auth.ts#registerPiProxySession': { status: 'bound', where: 'apps/host/src/agent/claude-proxy-runtime.ts' },
   'apps/desktop/src/main/maker-host/provider-route.ts#setCustomProviderHeaderReader': { status: 'bound', where: 'apps/host/src/agent/provider-config.ts' },
   'apps/desktop/src/main/maker-host/provider-route.ts#setCustomProviderKeyReader': { status: 'bound', where: 'apps/host/src/agent/provider-config.ts' },
@@ -98,9 +104,9 @@ export const DESKTOP_MODULE_SETTERS: Readonly<Record<string, DesktopModuleSetter
   'apps/desktop/src/main/maker-host/session-effort-store.ts#setSessionEffort': { status: 'bound', where: 'apps/host/src/agent/runtime-selection.ts' },
   'apps/desktop/src/main/maker-host/session-effort-store.ts#setSessionFastMode': { status: 'bound', where: 'apps/host/src/agent/runtime-selection.ts' },
   'apps/desktop/src/main/maker-host/session-model-interface.ts#configureSessionModelInterfaceStorage': { status: 'bound', where: 'apps/host/src/agent/start-options.ts' },
-  'apps/desktop/src/main/maker-host/session-provider-store.ts#bindHostedSessionProvider': { status: 'not-applicable', reason: 'Remote agent hosting; the Host refuses remote execution (send-preflight.ts)' },
+  'apps/desktop/src/main/maker-host/session-provider-store.ts#bindHostedSessionProvider': { status: 'not-applicable', reason: 'Remote agent hosting; the Host refuses remote execution (send-preflight.ts); revisit when it opens (release table section 七, item 18)' },
   'apps/desktop/src/main/maker-host/session-provider-store.ts#setSessionProvider': { status: 'bound', where: 'apps/host/src/agent/turn-executor.mjs' },
-  'apps/desktop/src/main/maker-ipc/botAuthorizationService.ts#initBotAuthorizationService': { status: 'not-applicable', reason: 'Teammates; the Host refuses teammate tasks (send-preflight.ts)' },
+  'apps/desktop/src/main/maker-ipc/botAuthorizationService.ts#initBotAuthorizationService': { status: 'not-applicable', reason: 'Teammates; the Host refuses teammate tasks (send-preflight.ts); revisit when they open (release table section 四, item 伙伴的会话环境（`resolveSessionEnvironment`）与伙伴工具集)' },
   'apps/desktop/src/main/maker-ipc/sessionContextWindowBudgetState.ts#appliedContextWindowBudgets': { status: 'bound', where: 'apps/host/src/agent/runtime-selection.ts' },
   'apps/desktop/src/main/maker-ipc/sessionContextWindowBudgetState.ts#pendingSessionContextWindowBudgetReconciles': { status: 'bound', where: 'apps/host/src/agent/runtime-selection.ts' },
   'apps/desktop/src/main/mcp-integrations/hostToolCaller.ts#setHostToolProviders': { status: 'not-applicable', reason: 'The Host builds plugin host tool runtimes from its own providers (host-tools.ts createProviderHostToolRuntime)' },
