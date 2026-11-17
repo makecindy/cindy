@@ -436,3 +436,26 @@ test('Host web usage statistics leave only for the signed-in account region', as
     assert.deepEqual(page.sent.at(-1), ['beacon', 'https://example.invalid/collect'], label);
   }
 });
+
+// 并存方案 A 的 W（审核方 2026-11-17 定）：网页端把 Host 的 typed 错误体还原成 `[CODE] message`（带 code），
+// 让 renderer 共用的解码（公共映射、发送失败横幅）按窗口那样认出“桌面版占用数据”的拒绝；之前用户看到的是
+// 一段 JSON。启动被拒的 409 带原因码时与窗口的 host-ipc-proxy 同样加标记。其余错误体与之前完全相同。
+test('typed Host errors reach the renderer as [CODE] message; other failures as before', async () => {
+  let reply;
+  const b = browser(() => reply());
+  const answer = (status, body) => () => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status });
+  const running = '[PRECONDITION_FAILED] HOST_PROFILE_IN_USE_BY_DESKTOP: In use by the desktop app.';
+  reply = answer(409, { error: 'PRECONDITION_FAILED', message: running });
+  await assert.rejects(b.api.localDb.sessions.list(), { code: 'PRECONDITION_FAILED', message: running });
+  reply = answer(409, { error: 'NOT_FOUND', message: 'Source task is unavailable' });
+  await assert.rejects(b.api.localDb.sessions.list(), { code: 'NOT_FOUND', message: '[NOT_FOUND] Source task is unavailable' });
+  reply = answer(409, { error: 'owner_runtime_unavailable', reason: 'HOST_PROFILE_IN_USE_BY_DESKTOP', message: 'Quit that app, then restart the Host.' });
+  await assert.rejects(b.api.localDb.sessions.list(), { code: 'PRECONDITION_FAILED',
+    message: '[PRECONDITION_FAILED] HOST_PROFILE_IN_USE_BY_DESKTOP_AT_START: Quit that app, then restart the Host.' });
+  for (const [status, body] of [[409, { error: 'owner_runtime_unavailable' }], [500, { error: 'internal_error', message: 'Unexpected error' }],
+    [502, 'Bad gateway'], [409, { error: 'PRECONDITION_FAILED' }]]) {
+    reply = answer(status, body);
+    const text = typeof body === 'string' ? body : JSON.stringify(body);
+    await assert.rejects(b.api.localDb.sessions.list(), { code: `HTTP_${status}`, message: text });
+  }
+});

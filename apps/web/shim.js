@@ -115,6 +115,27 @@ import { installAnalyticsRegionGuard } from './analytics-region-guard.js';
     if (!ownerStamp().dataOwnerId) throw new Error('sidebar settings require an active account');
   }
 
+  /**
+   * A typed Host error body as the desktop window receives it: `[CODE] message`, with `code` set, so
+   * the renderer's shared decoders (ipcError.ts, the send-failure banner) read it the same way.
+   * `{ error: 'CODE', message }` is a typed handler error (server.mjs); a start refused because a
+   * Cindy desktop app running on its own uses this data answers `owner_runtime_unavailable` with a
+   * reason (host-ipc-proxy.ts does the same for the window). Any other body stays as before.
+   */
+  function typedHostError(detail) {
+    let body;
+    try { body = JSON.parse(detail); } catch { return null; }
+    if (!body || typeof body !== 'object') return null;
+    const message = typeof body.message === 'string' ? body.message.trim() : '';
+    if (body.error === 'owner_runtime_unavailable' && body.reason === 'HOST_PROFILE_IN_USE_BY_DESKTOP') {
+      return Object.assign(new Error(`[PRECONDITION_FAILED] HOST_PROFILE_IN_USE_BY_DESKTOP_AT_START: ${message || 'a Cindy desktop app uses this data'}`),
+        { code: 'PRECONDITION_FAILED' });
+    }
+    if (typeof body.error !== 'string' || !/^[A-Z][A-Z0-9_]*$/.test(body.error) || !message) return null;
+    const prefix = `[${body.error}]`;
+    return Object.assign(new Error(message.startsWith(prefix) ? message : `${prefix} ${message}`), { code: body.error });
+  }
+
   async function requestHost(path, args, method = 'POST', signal) {
     const headers = { 'content-type': 'application/json' };
     const response = await fetch(path, {
@@ -127,6 +148,8 @@ import { installAnalyticsRegionGuard } from './analytics-region-guard.js';
     if (!response.ok) {
       if (response.status === 401) eventConnection?.authorizationRequired();
       const detail = await response.text().catch(() => '');
+      const typed = typedHostError(detail);
+      if (typed) throw typed;
       throw Object.assign(new Error(detail || `host ${path} failed`), { code: `HTTP_${response.status}` });
     }
     const text = await response.text();
