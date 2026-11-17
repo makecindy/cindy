@@ -686,7 +686,7 @@ var cindyMail = (function () {
                 edit.conflictBase = merged.conflicts.length ? base : undefined;
                 edit.readBack = latest;
                 edit.revision++;
-                edit.savedRevision = sameFields(merged.fields, remote) ? edit.revision : edit.revision - 1;
+                edit.savedRevision = !edit.additions?.length && sameFields(merged.fields, remote) ? edit.revision : edit.revision - 1;
                 record.fingerprint = latest.fingerprint;
                 record.locator = latest.locator;
                 record.state = 'draft';
@@ -1080,6 +1080,12 @@ var cindyMail = (function () {
         return latest || { ok: false, execution: "not_executed", message: "无法读取当前草稿，请稍后再试。" };
       }
       if (readOnly !== false) {
+        // Inspect the mailbox without synchronizing another task's failed save
+        // or exposing its private card edits. Keep the recovery state intact.
+        if (operation === "get" && records[key].state === "draft" &&
+            mailEdits.get(key)?.error?.execution === "executed")
+          return await adapter.readDraft({ record: { ...records[key] }, sourceCallId }) ||
+            { ok: false, execution: "not_executed", message: "无法读取当前草稿，请稍后再试。" };
         if (
           operation !== "get" ||
           mailEdits.get(key)?.revision !== mailEdits.get(key)?.savedRevision
@@ -1143,7 +1149,7 @@ var cindyMail = (function () {
           edit.fields = merged.fields;
           edit.readBack = readBack;
           edit.revision++;
-          edit.savedRevision = sameFields(merged.fields, remote) ? edit.revision : edit.revision - 1;
+          edit.savedRevision = !edit.additions?.length && sameFields(merged.fields, remote) ? edit.revision : edit.revision - 1;
           edit.conflictBase = merged.conflicts.length ? base : undefined;
           edit.inputFields = { ...edit.fields };
           edit.error = await conflictError(merged.conflicts);

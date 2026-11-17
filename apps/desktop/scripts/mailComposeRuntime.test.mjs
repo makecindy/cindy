@@ -708,6 +708,82 @@ for (const conflict of [false, true]) test(`another task gets only the mailbox r
   assert.equal(f.writes.at(-1).fields.subject, 'Meeting');
 });
 
+// A failed save must not prevent provider-only inspection by a read-only task.
+// The dirty-card guard otherwise masks this path; no card/private state may change.
+test('read-only get inspects a completed failed save without recovering its private card', async () => {
+  let f;
+  f = fixture({ write: async request => {
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Private unsaved typing' });
+  const cards = copy(f.cards), records = f.kv();
+  const read = await f.tool('get', { readOnly: true, sourceCallId: 'readonly-call' });
+  assert.equal(read.ok, true);
+  assert.equal(read.data.readBack.editor.body, 'Saved');
+  assert.equal(read.data.cardEdits, undefined);
+  assert.deepEqual(f.cards, cards);
+  assert.deepEqual(f.kv(), records);
+  assert.equal(f.writes.length, 1);
+  assert.equal((await f.tool('send', { readOnly: true })).execution, 'not_executed');
+  const recovered = await f.tool('get');
+  assert.equal(recovered.data.cardEdits.body, 'Private unsaved typing');
+});
+
+// Ordinary attachments do not change editor fields. Test both event orderings
+// against the public get/send flow so field equality cannot conceal dirty uploads.
+for (const stale of [false, true]) for (const duringRead of [false, true]) test(`recovery saves newly added attachments before sending: duringRead=${duringRead}, stale=${stale}`, async () => {
+  let f, recovering = false, entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const upload = { path: 'synthetic-upload', filename: 'example.png', bytes: 12, sha256: 'a'.repeat(64) };
+  f = fixture({ richText: true, write: async request => {
+    if (request.send) return;
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+    assert.equal(request.attachments.length, 1);
+    if (stale && f.writes.length === 2) {
+      f.externalEdit(); // Metadata-only concurrent mailbox update.
+      return { ok: false, execution: 'not_executed', stale: f.current(), message: 'Changed' };
+    }
+    f.externalEdit({ attachments: [{ key: 'provider-part', filename: upload.filename,
+      bytes: upload.bytes, mimeType: 'image/png', contentId: '' }] });
+    return { ok: true, data: { readBack: f.current() } };
+  }, read: async () => {
+    if (recovering && duringRead) { entered(); await new Promise(resolve => { release = resolve; }); }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved', bodyHtml: '<p>Saved</p>' });
+  await f.tool('update');
+  if (!duringRead) await f.card('attach', f.values(), { mailAttachment: upload });
+  recovering = true;
+  const reading = f.tool('get');
+  if (duringRead) {
+    await started;
+    await f.card('attach', f.values(), { mailAttachment: upload });
+    release();
+  }
+  assert.equal((await reading).ok, true);
+  recovering = false;
+  assert.equal(f.writes.length, 1);
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.length, stale ? 4 : 3); // failed save, optional stale, verified save, send
+  for (const saving of f.writes.slice(1, -1)) {
+    assert.equal(saving.send, false);
+    assert.equal(saving.attachments.length, 1);
+  }
+  assert.equal(f.writes.at(-1).send, true);
+  assert.equal(f.writes.at(-1).attachments.length, 0);
+  assert.equal(JSON.parse(f.writes.at(-1).fields.attachmentItems)[0].key, 'provider-part');
+  const countdown = f.cards.findIndex(c => c.statusOnly?.pendingSend);
+  assert.ok(countdown > 0);
+  assert.equal(f.cards.slice(0, countdown).findLast(c => c.draft).draft.attachments[0], upload.filename);
+});
+
 test('failed completed autosave preserves typing during recovery and uses the new locator', async () => {
   let f, releaseRead, readStarted;
   const started = new Promise(resolve => { readStarted = resolve; });
