@@ -171,6 +171,9 @@ export type AutoReviewAuxiliaryFallback = (
 
 /** The Desktop-only reads, resolved by each launcher. */
 export interface OneShotCandidatesPorts {
+  /** Local subscription membership, including account-discovered models. */
+  getCatalog?: typeof getActiveCatalog;
+  acquireSubscriptionAccount?: typeof import('../subscription-accounts/runtime.js').acquireSubscriptionAccount;
   readClaudeApiKey: typeof import('../maker-host/auth-adapters.js').readClaudeApiKey;
   getChatgptBridgeAuth: typeof import('../maker-host/anthropic-responses-bridge-host.js').getChatgptBridgeAuth;
   getChatgptBridgeAuthForDispatch: typeof import('../maker-host/anthropic-responses-bridge-host.js').getChatgptBridgeAuthForDispatch;
@@ -190,6 +193,7 @@ export interface OneShotCandidatesPorts {
 
 /** One instance per launcher. */
 export function createOneShotCandidates(ports: OneShotCandidatesPorts) {
+const getCatalog = ports.getCatalog ?? getActiveCatalog;
 const { readClaudeApiKey, getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch, getGrokAccessToken, getGrokOAuthCredentialGeneration, readCachedGenericOAuthAccessToken, readGenericOAuthAccessToken, getGenericOAuthLoginGeneration, undiciFetch, claudeUpstreamEndpoint, reportCindyGatewayKeyRejected, readCustomProviderKey, ensureManagedOllamaReadyForSession, getUtilityModelChainProfiles, getEffectiveAuxiliaryModelChain } = ports;
 
 
@@ -473,7 +477,7 @@ function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | undefin
   const ownerScopeKey = activeOwnerScopeKey();
   const chainSnapshot = stableSnapshot(chain);
   const snapshotRoute = (route: UtilityTextDispatchRoute): string => {
-    const provider = getActiveCatalog().providers.find((item) => item.id === route.providerId);
+    const provider = getCatalog().providers.find((item) => item.id === route.providerId);
     return stableSnapshot({
       source: provider?.source,
       auth: provider?.auth,
@@ -504,7 +508,7 @@ function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | undefin
       const parsed = parseAuxiliaryModelRef(ref);
       if (!parsed || (parsed.kind === 'catalog' && parsed.route.agentDeviceId)) continue;
       const route = auxiliaryRefDispatchRoute(parsed);
-      const routing = getActiveCatalog().providers.find((provider) => provider.id === route.providerId)
+      const routing = getCatalog().providers.find((provider) => provider.id === route.providerId)
         ?.routing[route.agentKind];
       const failure = (reason: 'timeout' | 'request_failed'): UtilityTextResult => ({
         ok: false,
@@ -621,7 +625,7 @@ async function requestDedicatedAutoReviewCandidateText(
     });
   }
 
-  const provider = getActiveCatalog().providers.find((item) => item.id === candidate.providerId);
+  const provider = getCatalog().providers.find((item) => item.id === candidate.providerId);
   const configured = provider?.models[candidate.agentKind] ?? [];
   if (
     !provider
@@ -658,7 +662,7 @@ function inferUniqueProviderId(agentKind: AgentKind | undefined, model: string |
   // 停用的 (来源, 模型) 不参与推断:被推断出来也会在派发前被 fail closed,
   // 提前剔除让「另一家启用的来源」仍能保住所选路由。
   const disableOverrides = readModelDisableOverrides();
-  const matches = getActiveCatalog().providers.filter((provider) =>
+  const matches = getCatalog().providers.filter((provider) =>
     provider.agents.includes(agentKind)
     && !isProviderDisabled(disableOverrides, provider.id)
     && !isModelDisabled(disableOverrides, provider.id, normalizedModel)
@@ -895,7 +899,7 @@ async function requestExplicitProviderText(
   prompt: string,
   opts: UtilityTextRequestOptions & { providerId: string },
 ): Promise<UtilityTextResult> {
-  const provider = getActiveCatalog().providers.find((item) => item.id === opts.providerId);
+  const provider = getCatalog().providers.find((item) => item.id === opts.providerId);
   const agentKind = opts.agentKind ?? inferProviderAgent(provider);
   const configuredModels = agentKind ? provider?.models[agentKind] ?? [] : [];
   const requestedModel = opts.model?.trim();
@@ -988,7 +992,7 @@ async function requestExplicitProviderText(
     if (isProviderRouteMutationInProgress(provider.id)) return false;
     if (isProviderModelRouteDisabled(provider.id, model)) return false;
     if (provider.id === 'xd' && isXdGatewayPaymentRequiredRoute(model, agentKind)) return false;
-    const currentProvider = getActiveCatalog().providers.find((item) => item.id === provider.id);
+    const currentProvider = getCatalog().providers.find((item) => item.id === provider.id);
     if (!currentProvider || !currentProvider.agents.includes(agentKind)) return false;
     const currentModel = currentProvider.models[agentKind]?.find((item) => item.id === model);
     if (
@@ -1342,79 +1346,101 @@ async function requestBuiltinProviderText(
   }
 
   if (isOpenAiSubscriptionProvider(input.provider)) {
-    let creds: Awaited<ReturnType<typeof getChatgptBridgeAuth>>;
-    let credentialStillCurrent: (() => boolean) | undefined;
+    let lease: Awaited<ReturnType<NonNullable<OneShotCandidatesPorts['acquireSubscriptionAccount']>>> = null;
     try {
-      if (input.beforeDispatch) {
-        const auth = await getChatgptBridgeAuthForDispatch(input.provider.id);
-        creds = auth;
-        credentialStillCurrent = auth.canDispatch;
-      } else {
-        creds = await (input.provider.id === 'openai' ? getChatgptBridgeAuth() : getChatgptBridgeAuth(input.provider.id));
+      let creds: Awaited<ReturnType<typeof getChatgptBridgeAuth>>;
+      let credentialStillCurrent: (() => boolean) | undefined;
+      try {
+        lease = await ports.acquireSubscriptionAccount?.(
+          input.provider.id, catalogModel ? input.model.replace(/^chatgpt\//, '').replace(/\[1m\]$/, '') : undefined,
+          [], false, { resuming: false },
+        ) ?? null;
+        if (input.signal?.aborted) return cancelledUtilityTextResult(profile);
+        if (lease) {
+          lease.assertDispatchable();
+          lease.running(true);
+        }
+        if (input.beforeDispatch || lease) {
+          // Created pools keep their source id in selection/results. The bridge's
+          // native provider is OpenAI; the lease supplies this pool's exact account.
+          const auth = await getChatgptBridgeAuthForDispatch(
+            lease && input.provider.subscriptionPool === 'openai' ? 'openai' : input.provider.id,
+            lease?.account,
+          );
+          creds = auth;
+          credentialStillCurrent = () => {
+            try { lease?.assertDispatchable(); return auth.canDispatch(); }
+            catch { return false; }
+          };
+        } else {
+          creds = await (input.provider.id === 'openai' ? getChatgptBridgeAuth() : getChatgptBridgeAuth(input.provider.id));
+        }
+      } catch {
+        return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
       }
-    } catch {
-      return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
-    }
-    if (input.signal?.aborted) return cancelledUtilityTextResult(profile);
-    if (!creds.accountId) {
-      return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
-    }
-    const accountId = creds.accountId;
-    return executeCandidates([{
-      providerId: input.provider.id,
-      model: input.model,
-      transport: 'codex-responses',
-      profile,
-      execute: (text, requestOpts) => requestProviderHttpText({
-        targets: {
-          responses: {
-            endpoint: joinProxyPath(routing.upstream, '/responses'),
-            headers: {
-              Authorization: `Bearer ${creds.accessToken}`,
-              'chatgpt-account-id': accountId,
-              'OpenAI-Beta': 'responses=experimental',
-              originator: 'codex_cli_rs',
-              session_id: randomUUID(),
-              accept: 'text/event-stream',
+      if (input.signal?.aborted) return cancelledUtilityTextResult(profile);
+      if (!creds.accountId) {
+        return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
+      }
+      const accountId = creds.accountId;
+      return await executeCandidates([{
+        providerId: input.provider.id,
+        model: input.model,
+        transport: 'codex-responses',
+        profile,
+        execute: (text, requestOpts) => requestProviderHttpText({
+          targets: {
+            responses: {
+              endpoint: joinProxyPath(routing.upstream, '/responses'),
+              headers: {
+                Authorization: `Bearer ${creds.accessToken}`,
+                'chatgpt-account-id': accountId,
+                'OpenAI-Beta': 'responses=experimental',
+                originator: 'codex_cli_rs',
+                session_id: randomUUID(),
+                accept: 'text/event-stream',
+              },
+              // ChatGPT only accepts the bare official model id: drop the bridge prefix
+              // and the `[1m]` context-profile suffix, matching the conversation path
+              // (maker-host/anthropic-responses-bridge-host.ts withOpenaiContextProfileModel).
+              model: input.model.replace(/^chatgpt\//, '').replace(/\[1m\]$/, ''),
             },
-            // ChatGPT only accepts the bare official model id: drop the bridge prefix
-            // and the `[1m]` context-profile suffix, matching the conversation path
-            // (maker-host/anthropic-responses-bridge-host.ts withOpenaiContextProfileModel).
-            model: input.model.replace(/^chatgpt\//, '').replace(/\[1m\]$/, ''),
           },
-        },
-        ...utilityRequestPlan({
-          providerId: input.provider.id,
-          agentKind: input.agentKind,
-          model: input.model.replace(/^chatgpt\//, ''),
-          catalogModel,
-          wire: 'responses',
-          upstreamBase: routing.upstream,
-          disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
-          reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+          ...utilityRequestPlan({
+            providerId: input.provider.id,
+            agentKind: input.agentKind,
+            model: input.model.replace(/^chatgpt\//, ''),
+            catalogModel,
+            wire: 'responses',
+            upstreamBase: routing.upstream,
+            disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
+            reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+          }),
+          prompt: text,
+          maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
+          timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+          // ChatGPT's private Codex Responses endpoint rejects this public API
+          // parameter with HTTP 400. The Auto reviewer enforces its own compact
+          // output ceiling after the response instead.
+          supportsMaxOutputTokens: false,
+          signal: requestOpts?.signal ?? input.signal,
+          systemPrompt: requestOpts?.systemPrompt,
+          onText: requestOpts?.onText,
+          responseInstructions: requestOpts?.responseInstructions,
+          beforeDispatch: requestOpts?.beforeDispatch
+            ? () => requestOpts.beforeDispatch!({
+                providerId: input.provider.id,
+                agentKind: input.agentKind,
+                model: input.model,
+              })
+            : undefined,
+          credentialStillCurrent,
+          routeStillCurrent: requestOpts?.beforeDispatch ? input.routeStillCurrent : undefined,
         }),
-        prompt: text,
-        maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
-        timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
-        // ChatGPT's private Codex Responses endpoint rejects this public API
-        // parameter with HTTP 400. The Auto reviewer enforces its own compact
-        // output ceiling after the response instead.
-        supportsMaxOutputTokens: false,
-        signal: requestOpts?.signal ?? input.signal,
-        systemPrompt: requestOpts?.systemPrompt,
-        onText: requestOpts?.onText,
-        responseInstructions: requestOpts?.responseInstructions,
-        beforeDispatch: requestOpts?.beforeDispatch
-          ? () => requestOpts.beforeDispatch!({
-              providerId: input.provider.id,
-              agentKind: input.agentKind,
-              model: input.model,
-            })
-          : undefined,
-        credentialStillCurrent: requestOpts?.beforeDispatch ? credentialStillCurrent : undefined,
-        routeStillCurrent: requestOpts?.beforeDispatch ? input.routeStillCurrent : undefined,
-      }),
-    }], prompt, [], input);
+      }], prompt, [], input);
+    } finally {
+      lease?.release();
+    }
   }
 
   if (providerCatalogId(input.provider) === 'xai') {

@@ -16,6 +16,9 @@ import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
 import { getEffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChain.js';
 // After the Desktop modules, so module evaluation keeps the former order.
 import { createOneShotCandidates } from './oneShotCandidatesCore.js';
+import { getDesktopSelectableCatalog } from '../maker-host/createDesktopProviderService.js';
+import { acquireSubscriptionAccount } from '../subscription-accounts/runtime.js';
+import { accountProviderId } from '../subscription-accounts/placement.js';
 
 export { DEDICATED_AUTO_REVIEW_CANDIDATES } from './oneShotCandidatesCore.js';
 export type {
@@ -28,6 +31,18 @@ export type {
 } from './oneShotCandidatesCore.js';
 
 const desktopOneShot = createOneShotCandidates({
+  getCatalog: () => getDesktopSelectableCatalog(),
+  acquireSubscriptionAccount: async (...args) => {
+    const lease = await acquireSubscriptionAccount(...args);
+    if (!lease) return null;
+    // Tasks may follow a moved account; a new one-shot must keep its selected source.
+    const membership = accountProviderId('openai', lease.accountId);
+    return { ...lease, assertDispatchable: () => {
+      lease.assertDispatchable();
+      if (accountProviderId('openai', lease.accountId) !== membership)
+        throw new Error('The selected subscription account changed providers');
+    } };
+  },
   readClaudeApiKey: (...args) => readClaudeApiKey(...args),
   getChatgptBridgeAuth: (...args) => getChatgptBridgeAuth(...args),
   getChatgptBridgeAuthForDispatch: (...args) => getChatgptBridgeAuthForDispatch(...args),

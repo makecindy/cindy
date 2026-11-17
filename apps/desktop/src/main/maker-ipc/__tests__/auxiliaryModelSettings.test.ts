@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
+  getDesktopSelectableCatalog: () => ({ providers: [] }),
+}));
 
 vi.mock('../../cindyAiProviderName.js', () => ({ getCindyAiProviderName: () => 'Cindy AI · 心动' }));
 
