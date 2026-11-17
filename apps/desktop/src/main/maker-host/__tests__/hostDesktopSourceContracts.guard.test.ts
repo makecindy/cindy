@@ -996,7 +996,9 @@ function hostImportGraph(): Promise<string[]> {
  * `mainSlot.dir = …`), a container mutation (`.set`, `.push`, …) or `Object.assign(binding, …)` (projectAutomaticIcon.ts),
  * anywhere in the setter including its callbacks, or in a module function it calls, followed transitively
  * (active-catalog.ts setters through markChanged, codex-process-registry.ts registerCodexProcessRole through
- * registerAgentProcess). This reaches some setters that are not ports in practice (read_sheet.ts: the tool's worker pool); the table records them as internal with why.
+ * registerAgentProcess); a result reached by skipping a function already on the call path (mutual recursion) is
+ * not remembered, so a setter that enters the cycle elsewhere is judged afresh. This reaches some setters that are
+ * not ports in practice (read_sheet.ts: the tool's worker pool); the table records them as internal with why.
  * Failure: a new setter (or a newly loaded module with one) that the table does not classify, or a table
  * entry whose setter is gone, turns this red until the table is updated. A `bound` entry must bind it in
  * the Host file it names (bindsIn: a call, a container mutation, or the setter handed over as a value);
@@ -1087,10 +1089,13 @@ describe('module-level port setters the Host loads, classified for the Host', ()
     }
     /** Writes in a function body: assignment (`=`, `??=`, `||=`, `&&=`), a container mutation or `Object.assign(slot, …)`
      * on a module binding, anywhere in the body including callbacks; or a call to a module function that writes (a
-     * private `apply(impl)` helper), followed transitively. */
+     * private `apply(impl)` helper), followed transitively. A result reached while skipping a function already on the
+     * path (mutual recursion) is partial: it is passed up but not remembered, so a later setter that enters the cycle
+     * elsewhere is judged afresh. */
     const writesMemo = new Map<string, boolean>();
-    const writesSlot = (node: ts.Node, path: Set<string>): { writes: boolean } => {
+    const writesSlot = (node: ts.Node, path: Set<string>): { writes: boolean; partial: boolean } => {
       let writes = false;
+      let partial = false;
       const visit = (n: ts.Node): void => {
         if (writes) return;
         if (ts.isBinaryExpression(n) && ASSIGN.has(n.operatorToken.kind) && isSlotTarget(n.left)) writes = true;
@@ -1104,15 +1109,19 @@ describe('module-level port setters the Host loads, classified for the Host', ()
         }
         if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && moduleFunctions.has(n.expression.text)) {
           const helper = n.expression.text;
-          if (!path.has(helper)) {
-            if (!writesMemo.has(helper)) writesMemo.set(helper, writesSlot(moduleFunctions.get(helper)!, new Set([...path, helper])).writes);
-            writes ||= writesMemo.get(helper)!;
+          if (path.has(helper)) partial = true;
+          else if (writesMemo.has(helper)) writes ||= writesMemo.get(helper)!;
+          else {
+            const result = writesSlot(moduleFunctions.get(helper)!, new Set([...path, helper]));
+            if (result.writes || !result.partial) writesMemo.set(helper, result.writes);
+            else partial = true;
+            writes ||= result.writes;
           }
         }
         ts.forEachChild(n, visit);
       };
       visit(node);
-      return { writes };
+      return { writes, partial };
     };
     const setters = functions
       .filter(({ name, node }) => SETTER.test(name) && !/ForTest|ForTesting|^__/.test(name) && writesSlot(node, new Set([name])).writes)
