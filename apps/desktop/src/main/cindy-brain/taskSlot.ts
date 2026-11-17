@@ -2,7 +2,14 @@ import { ghostDeclaresHiddenTasks, type InstalledGhost } from '../../shared/ghos
 import type { PluginTaskRequest, PluginTaskResult } from '../../shared/pluginTasks.js';
 import { isPluginTaskPermissionMode, isPluginTeamPlanWithinBudget } from '../../shared/pluginTasks.js';
 import { hasPluginTaskApproval } from './taskCapability.js';
-import { PLUGIN_ATTACHMENT_MAX_BYTES, validPluginMessageAttachments } from '../../shared/pluginAttachments.js';
+import {
+  PLUGIN_ATTACHMENT_KINDS,
+  PLUGIN_ATTACHMENT_MAX_BYTES,
+  PLUGIN_ATTACHMENT_MAX_COUNT,
+  PLUGIN_ATTACHMENT_MAX_ITEM_BYTES,
+  PLUGIN_CONTEXT_ATTACHMENT_MAX_COUNT,
+  validPluginMessageAttachmentSet,
+} from '../../shared/pluginAttachments.js';
 import { validPluginMessageContext } from '../../shared/pluginMessage.js';
 import { MESSAGE_SOURCE_RELAY_LIMITS } from '@cindy/maker-shared/message-source';
 
@@ -61,7 +68,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
     getTeam: ['taskId'],
     setTeamPlan: ['taskId', 'plan'],
     releaseWorker: ['taskId', 'workerId', 'completedAt'],
-    send: ['taskId', 'requestKey', 'expectedRevision', 'text', 'context', 'attachments', 'invocationId', 'relay'],
+    send: ['taskId', 'requestKey', 'expectedRevision', 'text', 'context', 'attachments', 'contextAttachments', 'invocationId', 'relay'],
     getRun: ['runId'],
     listRuns: ['taskId', 'after', 'limit'],
     readMessages: ['taskId', 'after', 'limit'],
@@ -92,9 +99,13 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
     (value.autoTitle !== undefined && typeof value.autoTitle !== 'boolean') ||
     (value.autoTitle === true ? value.title !== undefined : !text(value.title, 100))
   )) return false;
+  // A relayed photo, video or file may arrive without words, like an IM message: empty text
+  // is allowed only alongside the message's own attachments.
+  const attachmentOnly = value.text === '' && Array.isArray(value.attachments) && value.attachments.length > 0;
   if (
     value.kind === 'send' &&
-    (!text(value.text, 32768) || !validPluginMessageContext(value.text as string, value.context) || !validPluginMessageAttachments(value.attachments) ||
+    ((!text(value.text, 32768) && !attachmentOnly) || !validPluginMessageContext(value.text as string, value.context) ||
+      !validPluginMessageAttachmentSet(value.attachments, value.contextAttachments) ||
       !Number.isSafeInteger(value.expectedRevision) ||
       (value.expectedRevision as number) < 0)
   )
@@ -192,7 +203,12 @@ export async function handlePluginTaskRequest(
         messageRelay: true,
         autoTitle: true,
         createPermissionMode: true,
-        messageAttachments: { kinds: ['image'], maxCount: 4, maxBytes: PLUGIN_ATTACHMENT_MAX_BYTES },
+        messageAttachments: {
+          kinds: PLUGIN_ATTACHMENT_KINDS, maxCount: PLUGIN_ATTACHMENT_MAX_COUNT, maxBytes: PLUGIN_ATTACHMENT_MAX_BYTES,
+          maxItemBytes: PLUGIN_ATTACHMENT_MAX_ITEM_BYTES, attachmentOnly: true,
+          // tasks.send `contextAttachments`: model-only references sharing the maxBytes budget.
+          contextMaxCount: PLUGIN_CONTEXT_ATTACHMENT_MAX_COUNT,
+        },
         hiddenTasks: declaresHiddenTasks(),
       },
     };

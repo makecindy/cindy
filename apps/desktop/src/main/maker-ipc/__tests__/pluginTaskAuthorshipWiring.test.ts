@@ -214,9 +214,54 @@ it('uses accepted plugin task text for Auto review and preserves it through queu
   expect(dispatch.match(/agentMeta: inputAgentMeta/g)).toHaveLength(2);
 });
 
+// PR #10952 regression: the service accepted an attachment-only send, but the real internal
+// dispatcher rejected it before enqueue. Execute the production dispatcher and queue builder;
+// the prior adapter test mocked the dispatcher. Minimal input: empty text + one image. Tier: unit.
+it('queues attachment-only internal sends while rejecting empty and context-only sends', async () => {
+  const queueStart = source.indexOf('  async function buildSessionControlInputItem(params: {');
+  const queueEnd = source.indexOf('  const orcaInterAgentDispatcher:', queueStart);
+  const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX', 'HOST_ONLY_AGENT_PREFIX', 'bindTaskActionInput',
+    compile(source.slice(queueStart, queueEnd) + '\nreturn buildSessionControlInputItem;'))(
+    async () => ({ agentKind: 'codex', model: 'm', permissionMode: 'auto', workingDir: '/answer' }),
+    (mode: string) => mode, '[UI_ACTION_TRIGGER]', HOST_ONLY_AGENT_PREFIX, bindTaskActionInput,
+  );
+  const enqueue = vi.fn(async (params) => build(params));
+  const bindings = {
+    assertTaskActionCurrent: async () => {}, hasTaskActionAuthorization: () => false,
+    sessionQueueOriginForDispatcher: () => undefined, readSenderIdentity: async () => ({}),
+    extractPlainText: (text: string) => text,
+    getDbClient: () => ({ drizzle: { select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }) } }),
+    botSessionLinks: {}, eq: () => undefined, isShadowedCompanionSession: () => false,
+    isCompanionShadowed: () => false, assertReviewExternalInputAllowed: async () => {},
+    syncBotLanePermission: async () => {}, reconcileBotModelRoute: async () => {},
+    maker: { getSession: () => undefined, getSessionMeta: async () => ({ agentKind: 'codex' }) },
+    assertSessionNotRestarting: () => {}, sendToSessionLocks: new Map(),
+    waitForSendToSessionLock: async () => {}, scheduledModelScope: { restore: async () => {} },
+    getSessionRowSnapshot: async () => ({ status: 'active', title: 'task', userSendAt: null }),
+    inputCoordinator: { ensureQueueRestored: async () => {} },
+    enqueueSendToSessionMessage: enqueue,
+    trackSendToSessionLockRun: (_id: string, run: Promise<unknown>) => run,
+  };
+  const start = source.indexOf('  async function sendToSessionInternal(params: {');
+  const end = source.indexOf('  const welcomeDispatchReceipts', start);
+  const send = new Function(...Object.keys(bindings), compile(source.slice(start, end) + '\nreturn sendToSessionInternal;'))(...Object.values(bindings));
+  const image = { id: 'image', name: 'photo.png', path: '', ext: '.png', size: 4,
+    category: 'image', mimeType: 'image/png', url: 'cindy-media://blobs/photo.png' };
+  const base = { targetSessionId: 'task', clientId: 'plugin-task:image', message: '', forceQueue: true };
+  await expect(send({ ...base, files: [image] })).resolves.toMatchObject({ ok: true, wakeKind: 'queued' });
+  const queued = await enqueue.mock.results[0]!.value;
+  expect(queued.text).toBe('');
+  expect(buildMakerUserMessage(queued)).toMatchObject({ type: 'user', content: [
+    { type: 'image', path: image.url },
+  ] });
+  await expect(send(base)).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  await expect(send({ ...base, contextFiles: [image] })).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  expect(enqueue).toHaveBeenCalledOnce();
+});
+
 it('keeps empty receipts distinct from missing authorship on direct persistence', () => {
   const start = source.indexOf('const inputAgentMeta: AgentMeta');
-  const end = source.indexOf('    if (!message)', start);
+  const end = source.indexOf('    if (!message', start);
   expect(start).toBeGreaterThan(0);
   const build = new Function('params', 'queuedOrigin', compile(source.slice(start, end) + '\nreturn inputAgentMeta;'));
   expect(build({ autoReviewUserText: { kind: 'delegated-continuation' } }, undefined)).toEqual({ autoReviewUserText: { kind: 'delegated-continuation' }, delivery: 'turn' });
