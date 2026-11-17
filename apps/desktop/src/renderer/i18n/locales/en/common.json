@@ -4477,14 +4477,7 @@
         "installCancel": "Cancel install",
         "installFailed": "Couldn’t install Ollama",
         "installPhase": {
-          "resolving": "Looking up the official release…",
-          "downloading": "Downloading…",
-          "verifying": "Verifying…",
-          "extracting": "Installing…",
-          "starting": "Starting…",
-          "success": "Installed",
-          "error": "Install failed",
-          "cancelled": "Cancelled"
+          "error": "Install failed"
         },
         "openWebsite": "Open Ollama website",
         "recheck": "I installed it, check again",
@@ -4519,20 +4512,6 @@
         "retryDownload": "Retry",
         "libraryName": "Exact Ollama library name",
         "pullingTitle": "Downloading {{name}}",
-        "pullIndeterminate": "Preparing",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "Preparing download…",
-          "manifest": "Fetching manifest…",
-          "downloading": "Downloading model files",
-          "verifying": "Verifying…",
-          "writing": "Writing…",
-          "success": "Download complete",
-          "error": "Download failed",
-          "paused": "Paused",
-          "cancelled": "Cancelled"
-        },
         "pauseDownload": "Pause",
         "resumeDownload": "Resume Download",
         "cancelDownload": "Delete Incomplete Download",
@@ -5773,7 +5752,8 @@
             "statusFailed": "the controller status check failed",
             "recoveryFailed": "the control connection could not be rebuilt",
             "extensionDisconnected": "no browser extension is connected (install and enable the Cindy Chrome plugin and its extension)",
-            "pluginMissing": "the Cindy Chrome plugin is not installed or enabled"
+            "pluginMissing": "the Cindy Chrome plugin is not installed or enabled",
+            "browserMissing": "Chrome is not installed on this computer"
           },
           "reconnect": "Reconnect Browser",
           "recover": "Recover Browser",
@@ -5793,7 +5773,7 @@
         },
         "userBrowser": {
           "title": "My browser",
-          "description": "Works in the Chrome or Edge you are using, with your existing sign-ins. New pages open in a background window and stay out of your way."
+          "description": "Your own Chrome on this computer (Edge also works). The Agent works in it directly, with your existing sign-ins. New pages open in a background window and stay out of your way."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Install the Cindy Chrome plugin",
@@ -5812,7 +5792,9 @@
           "updatePluginTitle": "Update the Cindy Chrome plugin",
           "updatePluginBody": "The installed Cindy Chrome plugin is too old for “My browser”. Update it to the latest version, then follow its prompt to add the extension.",
           "updatePlugin": "Update",
-          "storeOpened": "Opened the Cindy extension page in your browser. Choose Add to Chrome and it connects on its own."
+          "storeOpened": "Opened the Cindy extension page in your browser. Choose Add to Chrome and it connects on its own.",
+          "installBrowserTitle": "Install Chrome first",
+          "installBrowserBody": "Chrome is not installed on this computer. My browser needs Chrome (or Edge) for the Cindy extension. Once it is installed, this moves on to the next step automatically."
         }
       },
       "android": {
@@ -5974,8 +5956,6 @@
           "notChecked": "Not checked yet",
           "action": "Update",
           "updating": "Updating…",
-          "downloadingPercent": "Downloading {{percent}}% ({{downloaded}}/{{total}} MB)…",
-          "downloadingBytes": "Downloading, {{downloaded}} MB so far…",
           "installing": "Download complete, installing…",
           "toast": {
             "success": "cua-driver updated to the latest version",
@@ -7932,7 +7912,6 @@
         "install": "Install",
         "details": "Details",
         "detailsAria": "View details for {{name}}",
-        "loadingDetails": "Loading details…",
         "update": "Update from market",
         "updateTo": "Update to v{{version}}",
         "installed": "Installed",
@@ -8530,6 +8509,7 @@
           "workdirClear": "Reset to default folder",
           "followAuxiliary": "Follow system auxiliary model · {{model}}",
           "followAuxiliaryUnset": "Follow system auxiliary model",
+          "remoteQuickAnswerHint": "This model doesn’t run on this computer. Quick answers are sent from this computer, so they use the system auxiliary model.",
           "restoreModel": "Reset model"
         },
         "toolsTitle": "Tools",
@@ -8865,23 +8845,10 @@
         "projectReadFailed": "Could not read project settings. Try again."
       },
       "usage": {
-        "title": "Your calls",
-        "explanationLabel": "How usage is counted",
-        "explanation": "Tool calls dispatched on this computer by the current account, including failures, timeouts and cancellations. The last 7 days is a rolling 168 hours. Panels, Skills and debugging are excluded. Records remain until cleared.",
-        "clear": "Clear records",
-        "loading": "Loading records…",
-        "unavailable": "Personal records unavailable",
-        "retry": "Retry",
-        "lastUsed": "Last call",
-        "last7Days": "Calls in last 7 days",
-        "never": "No calls yet",
-        "clearTitle": "Clear this Plugin’s usage records?",
-        "clearDescription": "Remove call records and Session links for this account on this computer. New calls start a fresh history. Shared totals already received by the server are not withdrawn.",
         "downloadExplanation": "Cumulative download URL requests. Each successfully issued package URL counts once, including updates, reinstalls and retries that request a new URL. This is not a count of completed installations.",
-        "clearAction": "Clear",
         "downloadsValue": "{{value}} downloads",
         "usesValue": "{{value}} uses",
-        "usesExplanation": "Cumulative shared tool calls across all releases in the authorized audience. Your calls below count only this account on this computer."
+        "usesExplanation": "Cumulative shared tool calls across all releases in the authorized audience."
       },
       "contribution": {
         "unreadReview": "New plugin result",
@@ -10931,6 +10898,7 @@
       "duplicate": "Duplicate buddy",
       "moreActions": "More actions for {{name}}",
       "viewIcons": "Icons",
+      "showCollapsedTeammateAvatars": "Show avatars when collapsed",
       "sectionExpand": "Expand buddies",
       "showLess": "Show less",
       "sectionCollapse": "Collapse buddies",
@@ -11428,6 +11396,8 @@
         "projectDirNote": "Buddies work here when they split the work. You can leave it empty and they’ll use this group chat’s own folder. If you choose a git project, each work split gets a new worktree and branch, so your own code stays untouched.",
         "autoContinueSaveFailed": "Couldn’t save step handoffs. Try again.",
         "projectDirSaveFailed": "Couldn’t save the project folder. Make sure the folder still exists, then try again.",
+        "allowMemberInvites": "Let all members invite friends",
+        "allowMemberInvitesHint": "When on, all joined members can invite friends. Only the group owner and admins can change this.",
         "allowMentionAllBots": "Allow @all buddies",
         "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent."
       },
@@ -11533,6 +11503,7 @@
         "threadRecent": "Recent messages in the thread",
         "threadNew": "New messages in the thread",
         "replyingTo": "Replying to “{{name}}”: {{text}}",
+        "filesOutsideWorkingDir": "Files outside the working directory were not attached.",
         "earlierOmitted": "(Earlier messages omitted)",
         "actingFor": "{{name}} · for {{person}}",
         "checkout": {
@@ -11705,6 +11676,11 @@
           "transferHint": "They will become the owner and you will become an admin.",
           "removeTitle": "Remove {{name}} from this group?",
           "removeHint": "They will lose access to messages. Their companions will also leave.",
+          "removeOwn": "Remove from group",
+          "removeOwnScope": "This only affects this group. Your companion stays in your account.",
+          "removeOwnHint": "{{name}} will no longer receive messages from “{{group}}”. Message history stays; other groups and private chats are unaffected.",
+          "removeOwnActiveHint": "Removing this companion stops its active requests in this group. Tasks opened independently keep running.",
+          "stopAndRemove": "Stop and remove",
           "leave": "Leave group",
           "leaveHint": "You and your companions will leave this group. You will no longer receive new messages or have access to its history.",
           "soleOwnerHint": "You’re the only member left. Archive this group to keep its history and restore it later.",
@@ -12945,6 +12921,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "No automatic review model is available. On the computer running the Agent, enable and connect a review provider in Model providers, or customize Auxiliary models in Settings. Actions that need review still require your confirmation.",
           "autoReviewUnavailable": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Switch this task to Full access if you would rather not be interrupted. That mode is higher risk.",
           "autoReviewUnavailableWechat": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Personal WeChat cannot use Full access. Confirm this action directly.",
           "autoReviewConfirmUndelivered": "Auto-review didn't finish, and the confirmation either wasn't delivered or wasn't answered. This denial didn't come from you.",
@@ -14110,7 +14087,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "Creating worktree · input disabled",
-      "subtitle": "Target branch {{branch}} · will unlock automatically"
+      "subtitle": "Target branch {{branch}} · will unlock automatically",
+      "elapsed": "Waiting for {{duration}}"
     },
     "worktree": {
       "detecting": "Detecting environment…",
@@ -15697,6 +15675,7 @@
       "DEVICE_LINK_BUSY": "The remote computer is busy. Try again shortly.",
       "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "No automatic review model is available. On the computer running the Agent, enable and connect a review provider in Model providers, or customize Auxiliary models in Settings. Actions that need review still require your confirmation.",
       "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Switch this task to Full access if you would rather not be interrupted. That mode is higher risk.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Personal WeChat cannot use Full access. Confirm this action directly.",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "Automatic review was unavailable, and the confirmation request was not completed. This is not a user rejection.",
@@ -15717,7 +15696,12 @@
       "REMOTE_PROVIDER_UPDATING": "This model provider’s credentials are updating. Try again in a moment.",
       "REMOTE_WORKDIR_UNAVAILABLE": "The remote working directory is unavailable. Check that the folder still exists on that computer, then try again.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "The computer cannot yet confirm whether this message was sent. Wait a moment and try again. Do not send the same message twice.",
-      "REMOTE_AGENT_UNAVAILABLE": "The connection to the computer running the Agent dropped. Try again. If it keeps happening, make sure that computer is online and allows remote control.",
+      "REMOTE_AGENT_UNAVAILABLE": "Could not communicate with the computer running the Agent. Check the error details.",
+      "REMOTE_AGENT_TIMEOUT": "Timed out waiting for the computer running the Agent. The result is unknown. Check the task before retrying.",
+      "REMOTE_AGENT_LINK_BUSY": "Communication with the computer running the Agent is busy. Wait a moment before retrying.",
+      "REMOTE_AGENT_UNRESPONSIVE": "The computer running the Agent repeatedly failed to respond, so calls were temporarily paused. Wait a moment before retrying.",
+      "REMOTE_AGENT_OFFLINE": "The computer running the Agent is offline. Retry after it reconnects.",
+      "REMOTE_AGENT_ACCESS_DENIED": "Remote access to the computer running the Agent was denied. Check its access settings before retrying.",
       "REMOTE_AGENT_PEER_TOO_OLD": "Cindy on the other computer is too old for this action. Update Cindy there first.",
       "REMOTE_AGENT_EXPIRED": "This session already ended on the computer running the Agent. Send your message again.",
       "REMOTE_AGENT_NOT_FOUND": "This session already ended on the computer running the Agent. Send your message again.",
@@ -21831,5 +21815,28 @@
     "archivedNotice": "Automatically archived idle tasks: {{count}}",
     "undo": "Undo",
     "undoFailed": "Could not undo. Restore the tasks from Archived."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "{{time}} left",
+    "attempt": "Attempt {{attempt}}",
+    "phase": {
+      "preparing": "Preparing…",
+      "queued": "Queued…",
+      "downloading": "Downloading…",
+      "retrying": "Retrying…",
+      "verifying": "Verifying…",
+      "installing": "Installing…",
+      "paused": "Paused",
+      "completed": "Done",
+      "failed": "Download failed",
+      "cancelled": "Cancelled"
+    },
+    "retry": {
+      "slow": "Slow connection, reconnecting…",
+      "network": "Connection lost, retrying…",
+      "timeout": "Connection timed out, retrying…",
+      "server": "Server busy, retrying…"
+    }
   }
 }

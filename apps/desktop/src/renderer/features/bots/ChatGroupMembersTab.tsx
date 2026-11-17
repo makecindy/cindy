@@ -55,7 +55,7 @@ function MemberRow({ member, group, owner, manager, busy, actions }: {
   const name = botGroupMemberDisplayName(member);
   const bot = member.actorKind === 'bot';
   const paused = bot && member.status === 'paused';
-  const mine = bot && member.isOwned === true;
+  const mine = bot && member.isOwned === true && member.assistant !== true;
   // The group's own Cindy is turned on and off in group management, never managed as a member.
   const assistant = member.assistant === true;
   // Owners manage everyone but themselves; admins manage everyone but the owner.
@@ -81,7 +81,7 @@ function MemberRow({ member, group, owner, manager, busy, actions }: {
           {mine && <DropdownMenuItem onSelect={() => actions.access(member)}>{t(key('accessMenu'))}</DropdownMenuItem>}
           {manageable && <DropdownMenuItem onSelect={() => actions.role(member)}>{t(key(member.role === 'admin' ? 'removeAdmin' : 'makeAdmin'))}</DropdownMenuItem>}
           {transferable && <DropdownMenuItem onSelect={() => actions.transfer(member)}>{t(key('transfer'))}</DropdownMenuItem>}
-          {manageable && <>
+          {(manageable || (mine && !!member.actorId)) && <>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="danger" onSelect={() => actions.remove(member)}>{t(shared('remove'))}</DropdownMenuItem>
           </>}

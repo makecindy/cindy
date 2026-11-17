@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { selectExecutableCoreMediaModels } from '../../cindy-brain/cindyMediaCatalog.js';
 
 const serverApiFetchMock = vi.hoisted(() => vi.fn());
 const readModelDisableOverridesMock = vi.hoisted(() => vi.fn());
@@ -95,6 +96,29 @@ describe('listAvailableMediaModels', () => {
     readModelDisableOverridesMock.mockReset().mockReturnValue({});
     listProviderMediaModelsMock.mockReset().mockReturnValue([]);
     isCatalogMediaModelVisibleMock.mockReset().mockReturnValue(true);
+  });
+
+  // #10147, standard: earlier cases only shared IDs across providers. Exercise
+  // the production listing -> plugin projection with both media kinds enabled,
+  // including Gateway merging and the account-free early return.
+  it.each([false, true])('keeps same-ID image/video through listing and plugin selection (skipGateway=%s)', async skipGateway => {
+    const image = { id: 'shared', name: 'Image', providerId: 'relay', mode: 'image_generation',
+      guideDriven: true, sourceAgent: 'pi', sourceAgents: ['pi'],
+      modalities: { input: ['text'], output: ['image'] } };
+    const video = { ...image, name: 'Video', mode: 'video_generation',
+      sourceAgent: 'claude-code', sourceAgents: ['claude-code'],
+      modalities: { input: ['text'], output: ['video'] } };
+    listProviderMediaModelsMock.mockReturnValue([image, video]);
+    serverApiFetchMock.mockResolvedValue({ ...payload, models: [] });
+
+    const available = await listAvailableMediaModels();
+    expect(available.filter(model => model.providerId === 'relay')).toMatchObject([image, video]);
+    const executable = await listExecutableMediaModels([], { skipGateway });
+    expect(executable.models).toMatchObject([image, video]);
+    // The plugin also adds its local video projection. It must not remove the
+    // video because an image won a provider/id-only deduplication first.
+    expect(selectExecutableCoreMediaModels([...executable.models, video], 'video')).toMatchObject([video]);
+    expect(selectExecutableCoreMediaModels(executable.models, 'image')).toMatchObject([image]);
   });
 
   // Unit: declarations remain discoverable without eager Guide lookup or a

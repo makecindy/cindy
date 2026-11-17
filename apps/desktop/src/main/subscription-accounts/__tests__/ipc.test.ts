@@ -5,13 +5,15 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { providerShareGuestPeer } from '@cindy/device-link';
 import type { SubscriptionPoolConfig } from '../../../shared/subscriptionAccounts.js';
 const h = vi.hoisted(() => ({
-  handlers: new Map<string, (event: unknown, arg: unknown, model?: unknown) => Promise<unknown>>(),
+  handlers: new Map<string, (event: unknown, arg: unknown, model?: unknown, scope?: unknown) => Promise<unknown>>(),
   context: null as null | { sharedTask?: object; controllerDeviceId?: string },
   trusted: true,
   execute: vi.fn(),
   availability: vi.fn(),
+  scheduling: vi.fn(),
   sessionRead: vi.fn(),
   owner: 'owner-a',
   generation: 1,
@@ -98,6 +100,7 @@ vi.mock('../runtime.js', () => ({
   onSubscriptionAccountsChanged: vi.fn(),
   readSubscriptionPoolUsage: vi.fn(async () => undefined),
   readSubscriptionPoolModelAvailability: h.availability,
+  readSubscriptionPoolScheduling: h.scheduling,
   readLegacySubscriptionPoolUsage: vi.fn(async () => undefined),
   readSubscriptionSessionUsage: vi.fn(async () => undefined),
   readSubscriptionSessionAccount: h.sessionRead,
@@ -145,6 +148,10 @@ it('forwards scoped reset invalidation without marking ordinary pool changes', (
   expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai', resetAccountId: 'second' });
   listener('openai');
   expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai' });
+  listener('openai', undefined, 'usage');
+  expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai', change: 'usage' });
+  listener('anthropic', undefined, 'load');
+  expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'anthropic', change: 'load' });
 });
 beforeEach(() => {
   h.context = null;
@@ -476,6 +483,28 @@ describe('old automatically pooled account restoration', () => {
 });
 
 describe('subscription management boundary', () => {
+  // Unit: the optional query is additive and owner-only, including named pools;
+  // old quota and availability replies were covered, anonymous scheduling was not.
+  it('scopes anonymous scheduling to the owner and never accepts a path as a pool', async () => {
+    const quota = h.handlers.get('maker:subscription-pool:quota')!;
+    const summary = { version: 1, accounts: 2, running: 0, totalRunning: 4, full: false, urgency: null, fiveHourTight: false };
+    h.scheduling.mockResolvedValue(summary);
+    h.context = { controllerDeviceId: 'own-mac' };
+    expect(await quota({}, 'openai-sub-pool', 'gpt-model', { scheduling: 1, ownComputer: false }))
+      .toEqual({ providerId: 'openai-sub-pool', model: 'gpt-model', scheduling: summary });
+    expect(h.scheduling).toHaveBeenLastCalledWith('openai-sub-pool', 'gpt-model', { remote: true, ownComputer: false });
+    await quota({}, 'openai', 'gpt-model', { scheduling: 1, ownComputer: true });
+    expect(h.scheduling).toHaveBeenLastCalledWith('openai', 'gpt-model', { remote: true, ownComputer: true });
+    for (const provider of ['../openai', '/private/home', 'x'.repeat(41)])
+      await expect(quota({}, provider, 'gpt-model', { scheduling: 1, ownComputer: true })).rejects.toThrow('INVALID_PARAMS');
+    for (const model of ['', ' ', {}, 'x'.repeat(513)])
+      await expect(quota({}, 'openai', model, { scheduling: 1, ownComputer: true })).rejects.toThrow('INVALID_PARAMS');
+    h.context = { sharedTask: {} };
+    await expect(quota({}, 'openai', 'gpt-model', { scheduling: 1, ownComputer: true })).rejects.toThrow('PERMISSION_DENIED');
+    h.context = { controllerDeviceId: providerShareGuestPeer('share', 'member', 'device') };
+    await expect(quota({}, 'openai', 'gpt-model', { scheduling: 1, ownComputer: true })).rejects.toThrow('PERMISSION_DENIED');
+    expect(h.scheduling).toHaveBeenCalledTimes(2);
+  });
   // #9833, unit: new optional model query keeps old caller shape and the
   // owner-only boundary. An aggregate/guest reply cannot authorize recovery.
   // PR #9837 review: local grants cannot authorize a remote cooldown recovery.

@@ -19,12 +19,10 @@ import {
 import { currentCodexCredentialGeneration } from '../../../desktop/src/main/maker-host/codexCredentialRead.ts';
 import { createHostCodexCredentials } from './codex-credentials.ts';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
-import { fileSymlinkSkipReason } from '../test-support/file-symlink.mjs';
 
 // node:test has no default timeout. These tests start subprocesses or use real temporary
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
 const TEST_TIMEOUT_MS = 120_000;
-const fileSymlinkUnavailable = fileSymlinkSkipReason();
 
 const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-invalidation-home-'));
 const originalHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
@@ -207,7 +205,6 @@ test('an unwritable marker falls back to revoking the native authorization', { t
 for (const link of ['hard', 'symbolic']) {
   test(`a login linked to a file outside the profile (${link}): neither invalidation changes that file`, {
     timeout: TEST_TIMEOUT_MS,
-    skip: link === 'symbolic' ? fileSymlinkUnavailable : false,
   }, async t => {
     t = lifoCleanup(t);
     for (const attribution of ['attributed', 'unattributed']) {
@@ -218,7 +215,21 @@ for (const link of ['hard', 'symbolic']) {
       const target = path.join(outside, 'auth.json');
       fs.writeFileSync(target, JSON.stringify({ tokens: { access_token: 'linked-token', account_id: 'fixture-workspace' } }), { mode: 0o600 });
       fs.rmSync(p.authPath);
-      if (link === 'hard') fs.linkSync(target, p.authPath); else fs.symlinkSync(target, p.authPath);
+      if (link === 'hard') {
+        fs.linkSync(target, p.authPath);
+      } else {
+        try {
+          fs.symlinkSync(target, p.authPath, 'file');
+        } catch (error) {
+          if (process.platform !== 'win32' || !['EPERM', 'EACCES'].includes(error.code)) throw error;
+          // Same real external-file alias fallback as cindy-media's fileSymlinkFixture.
+          // This entry checks unlink/write-through safety, not target replacement or
+          // lstat type bits: keep every content/identity/removal assertion on real IO.
+          // Native file-symlink semantics still run wherever the OS permits them.
+          fs.linkSync(target, p.authPath);
+          t.diagnostic(`symbolic/${attribution}: native file symlink unavailable; checking a real hard-link alias`);
+        }
+      }
       const before = { bytes: fs.readFileSync(target, 'utf8'), stat: fs.statSync(target) };
       const result = await invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'token_revoked',
         ...(attribution === 'attributed' ? {} : { credentialAttribution: 'unproven', loginInProgress: () => false }) });

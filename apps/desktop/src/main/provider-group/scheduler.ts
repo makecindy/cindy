@@ -9,6 +9,10 @@ export interface SchedulableMember {
   usable: boolean;
   paused: boolean;
   running: number;
+  /** Account-level comparison only. `running` still enforces the physical member limit. */
+  selectionRunning?: number;
+  /** One turn per currently eligible account. Omitted on single-account/old peers. */
+  roundSlots?: number;
   /** 实际并发上限(effectiveConcurrencyLimit)；不限制为 Infinity。 */
   limit: number;
   weight: number;
@@ -25,6 +29,8 @@ export interface PickOptions {
   exclude?: ReadonlySet<string>;
   /** 轮询游标：上一次选中的键。 */
   lastPicked?: string | null;
+  /** Number of consecutive round picks already given to lastPicked. */
+  roundPicks?: number;
   /** [0, 1) 随机数，按权重时使用。 */
   random?: () => number;
 }
@@ -42,14 +48,15 @@ export function pickProviderGroupMember(
   strategy: ProviderGroupStrategy,
   options: PickOptions = {},
 ): string | null {
-  const open = eligibleMembers(members, options).filter((m) => m.running < m.limit);
-  if (open.length === 0) return null;
-  const candidates = byQuota(open);
+  const candidates = providerGroupSchedulingCandidates(members, options);
+  if (candidates.length === 0) return null;
   switch (strategy) {
     case 'order':
       return candidates[0].key;
     case 'round': {
       const lastIndex = options.lastPicked ? members.findIndex((m) => m.key === options.lastPicked) : -1;
+      const last = candidates.find(m => m.key === options.lastPicked);
+      if (last && (options.roundPicks ?? 1) < (last.roundSlots ?? 1)) return last.key;
       const next = candidates.find((m) => members.indexOf(m) > lastIndex) ?? candidates[0];
       return next.key;
     }
@@ -68,6 +75,11 @@ export function pickProviderGroupMember(
     default:
       return leastBusy(candidates).key;
   }
+}
+
+/** The same admission/quota band used by actual selection and anonymous pool summaries. */
+export function providerGroupSchedulingCandidates(members: readonly SchedulableMember[], options: PickOptions = {}) {
+  return byQuota(eligibleMembers(members, options).filter(m => m.running < m.limit));
 }
 
 /**
@@ -99,5 +111,5 @@ export function providerGroupMembersFull(
 
 /** 正在运行最少的一台；相同时按组里的顺序。 */
 function leastBusy(members: readonly SchedulableMember[]): SchedulableMember {
-  return members.reduce((best, m) => (m.running < best.running ? m : best));
+  return members.reduce((best, m) => ((m.selectionRunning ?? m.running) < (best.selectionRunning ?? best.running) ? m : best));
 }

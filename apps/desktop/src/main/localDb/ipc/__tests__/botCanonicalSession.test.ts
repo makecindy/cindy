@@ -5520,7 +5520,7 @@ describe('Teammate model selection shares profile persistence and route reconcil
 
 
 /** Delay real SQL replies to expose fan-out hidden by the synchronous fixture. */
-function observeBotReadConcurrency() {
+function observeBotReadConcurrency(onRead?: (sql: string, rows: unknown[][]) => void) {
   let active = 0;
   let peak = 0;
   const transport: DbTransport = {
@@ -5529,7 +5529,8 @@ function observeBotReadConcurrency() {
       const { sql, params } = args as { sql: string; params: unknown[] };
       peak = Math.max(peak, ++active);
       try {
-        const rows = h.sqlite!.prepare(sql).raw().all(...params);
+        const rows = h.sqlite!.prepare(sql).raw().all(...params) as unknown[][];
+        onRead?.(sql, rows);
         await new Promise<void>((resolve) => setImmediate(resolve));
         return rows as R;
       } finally { active--; }
@@ -5578,4 +5579,60 @@ it('reads long companion history snapshots sequentially and keeps every latest s
   expect(profile.sessions.filter((row: { runtimeSnapshot?: unknown }) => row.runtimeSnapshot)).toHaveLength(40);
   expect(profile.sessions.some((row: { id: string }) => row.id === created.session.id)).toBe(true);
   expect(peak()).toBe(1);
+});
+
+// DB-tier regression (P04): the real bots:get projection used one Worker RPC per
+// linked session. Existing concurrency coverage only bounded simultaneous reads,
+// not round trips or latest-row semantics. At 10+ links the old path fails.
+it.each([10, 100, 250])('batches latest runtime snapshots for %i linked tasks without returning old JSON', async (count) => {
+  await invoke('local-db:bots:create-canonical-session', {
+    botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+  });
+  const [session] = await h.db!.select().from(sessions);
+  const insert = h.sqlite!.prepare(`INSERT INTO bot_runtime_snapshots
+    (id, bot_id, session_id, profile_version, agent_kind, working_dir, status, prepared_at, applied_at, configured_json)
+    VALUES (?, 'bot-1', ?, 1, 'pi', '/workspace', 'prepared', ?, ?, ?)`);
+  for (let i = 0; i < count; i++) {
+    const id = `batched-${i}`;
+    await h.db!.insert(sessions).values({ ...session, id });
+    await h.db!.insert(botSessionLinks).values({ id, botId: 'bot-1', sessionId: id, role: 'history', profileVersion: 1, createdAt: i });
+    insert.run(`${id}-old`, id, 100, 999, JSON.stringify({ marker: 'old' }));
+    insert.run(`${id}-pending`, id, 200, null, JSON.stringify({ marker: 'pending' }));
+    insert.run(`${id}-a`, id, 200, 201, JSON.stringify({ marker: 'tie-a' }));
+    insert.run(`${id}-z`, id, 200, 201, JSON.stringify({ marker: 'winner' }));
+  }
+  let queries = 0;
+  let returnedSnapshots = 0;
+  const peak = observeBotReadConcurrency((sql, rows) => {
+    if (sql.includes('bot_runtime_snapshots')) { queries++; returnedSnapshots += rows.length; }
+  });
+  const profile = await invoke('local-db:bots:get', 'bot-1');
+  expect(queries).toBe(Math.ceil((count + 1) / 100));
+  expect(profile.sessions).toHaveLength(count + 1);
+  expect(profile.sessions.find((row: { id: string }) => row.id === session.id).runtimeSnapshot).toBeUndefined();
+  expect(profile.sessions.filter((row: { runtimeSnapshot?: unknown }) => row.runtimeSnapshot)).toHaveLength(count);
+  expect(profile.sessions.filter((row: { id: string }) => row.id !== session.id)
+    .every((row: { runtimeSnapshot: { configured: { marker: string } } }) => row.runtimeSnapshot.configured.marker === 'winner')).toBe(true);
+  expect(returnedSnapshots).toBe(count);
+  expect(peak()).toBe(1);
+});
+
+// DB tier: account switches while the first batch is in flight must stop later
+// batches and reject the old projection, not publish another owner's results.
+it('rejects an owner switch during batched runtime snapshot reads', async () => {
+  await invoke('local-db:bots:create-canonical-session', {
+    botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+  });
+  const [session] = await h.db!.select().from(sessions);
+  for (let i = 0; i < 101; i++) {
+    const id = `owner-switch-${i}`;
+    await h.db!.insert(sessions).values({ ...session, id });
+    await h.db!.insert(botSessionLinks).values({ id, botId: 'bot-1', sessionId: id, role: 'history', profileVersion: 1, createdAt: i });
+  }
+  let queries = 0;
+  observeBotReadConcurrency((sql) => {
+    if (sql.includes('bot_runtime_snapshots')) { queries++; h.ownerScopeKey = 'owner-b:2'; }
+  });
+  await expect(invoke('local-db:bots:get', 'bot-1')).rejects.toThrow('PRECONDITION_FAILED');
+  expect(queries).toBe(1);
 });

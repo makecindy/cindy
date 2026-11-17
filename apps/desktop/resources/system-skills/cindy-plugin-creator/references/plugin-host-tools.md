@@ -180,6 +180,31 @@ appVersion、state、running、冷却及已知 quota。分享来的电脑仍沿�
 
 ## 定时任务与应用设置
 
+`settings` 组也提供供应商分享成员工具。先用 `list_provider_share_members({providerId?,device?})`
+查询精确的 `providerId` 与 `memberId`；只返回自己分享的成员 id、名字和状态，不包含分享给我的供应商。
+`device` 默认本机，另一台电脑必须属于同账号并已授权远控；沿用现有 Device Link 管理入口，旧端明确不支持。
+名单复用原 `owned` 的 `includeUsage:false` 读取，不计算历史用量或激活管理页快速轮询；缺少明确回执的旧电脑返回
+`UNSUPPORTED_CAPABILITY`，不会反复退回完整读取。暂停/恢复仅需 memberId，模型范围需要 providerId 与 memberId。
+
+```js
+await cindy.host.call('cindy_helper', 'set_provider_share_member_status', {
+  memberId: selectedMemberId, status: 'pause' // 或 resume
+});
+const access = await cindy.host.call('cindy_helper', 'get_provider_share_model_access', {
+  providerId: 'anthropic', memberId: selectedMemberId
+});
+// 从 access 的工具结果读取准确型号 id，再提交完整名单。
+await cindy.host.call('cindy_helper', 'set_provider_share_model_access', {
+  providerId: 'anthropic', memberId: selectedMemberId, models: selectedModelIds
+});
+```
+
+关闭分享会立即打断该成员在跑的任务，成功回执不等全部关停完成；恢复只允许后续消息，不自动续跑。
+模型名单 `null` 跟随供应商范围，`[]` 禁止所有模型；不改成员预算等其它设置。调用超时或失败可能已产生
+副作用，先查询，不自动重发。插件不借用任务身份，也不新增逐次审批或分项补批；受邀者不能通过该入口
+获得分享者的管理权限。未装配供应商分享服务的 Host 不提供这些工具。
+共享任务中的 Agent 按任务权限可管理主人的分享成员。
+
 ### 读取订阅用量
 
 声明 `"agent": { "hostTools": ["usage"] }`，安装或扩权更新获准后调用：

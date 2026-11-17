@@ -493,7 +493,15 @@ export function buildPiNativeProvidersFromConfigs(
           ...(m.supportsImageInput !== undefined
             ? { input: (m.supportsImageInput ? ['text', 'image'] : ['text']) as Array<'text' | 'image'> }
             : bundledModel?.input ? { input: [...bundledModel.input] } : {}),
-          ...(m.reasoning !== undefined || m.reasoningEfforts !== undefined
+          ...(resolved?.thinkingToggle && resolved.efforts.length === 0 && bundledModel?.reasoning
+            ? {
+                // A switch has no UI intensity ladder. Preserve Pi's native
+                // enabled level and off mapping instead of disabling reasoning.
+                reasoning: true,
+                ...(bundledModel.thinkingLevelMap
+                  ? { thinkingLevelMap: { ...bundledModel.thinkingLevelMap } } : {}),
+              }
+            : m.reasoning !== undefined || m.reasoningEfforts !== undefined
             ? {
                 reasoning: m.reasoning ?? (m.reasoningEfforts?.length ?? 0) > 0,
                 ...(m.reasoningEfforts !== undefined
