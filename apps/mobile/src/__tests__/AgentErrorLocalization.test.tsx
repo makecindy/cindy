@@ -403,6 +403,19 @@ describe.each(SUPPORTED_LOCALES)('WeChat auto-review guidance in %s', locale => 
       onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />));
     expect(host.textContent).toContain(localized);
     expect(host.textContent).not.toContain(reason);
+    // 电脑上把链接权限修好就能重试：这条不是「登录失效」，历史错误提示条必须留着「重试」
+    // 按钮，用户修好权限后才有地方再试一次（#10301 review P2）。
+    const state = resolveSessionTailBanner({
+      messages: [row(error)], session: null, projection: { error: null, credentialSwitchWait: null },
+      isSessionStreaming: false, continuationInFlight: false, sessionMetadataSyncedForConnection: true,
+      interruptAcked: false, hiddenErrorClientIds: new Set(),
+    });
+    expect(state?.kind === 'error-tail' && state.retryable).toBe(true);
+    expect(state?.kind === 'error-tail' && state.text).toBe(localized);
+    await act(async () => root.render(<SessionTailBanner
+      state={state!} onContinue={vi.fn()} onDismiss={vi.fn()} />));
+    expect(host.textContent).toContain(localized);
+    expect(host.querySelector('[data-testid="session.tailBanner.continue"]')).not.toBeNull();
   });
 });
 

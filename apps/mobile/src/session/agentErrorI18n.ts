@@ -2,7 +2,7 @@ import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy
 import { isRemoteAgentResumeRejectedError, isResponsesLiteParallelToolCallsError, localizeSubscriptionAccountError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
 import { requiresAgentErrorConfigurationChange as requiresConfigurationChange } from '@cindy/maker-shared/error-redaction';
 import { i18n } from '@/i18n';
-import { describeAgentAuthError } from '@/device-link/remoteStatus';
+import { describeAgentAuthError, isCodexSharedAuthLinkUnavailableError } from '@/device-link/remoteStatus';
 
 export function requiresAgentErrorConfigurationChange(message: string): boolean {
   return message.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]') || requiresConfigurationChange(message);
@@ -15,6 +15,9 @@ export function requiresAgentErrorConfigurationChange(message: string): boolean 
  */
 export function describeNonRetryableAgentError(text: string, reason?: unknown): string | null {
   if (text.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]')) return i18n.t('session.remoteError.REMOTE_AGENT_MEMBER_BUDGET_PAUSED');
+  // 「共享凭证连不上」是可恢复的：电脑上把链接权限修好就能重试。归到「不可重试」会把
+  // 历史错误提示条里的「重试」按钮藏掉 —— 用户修好了权限，却没地方再试一次（#10301 review P2）。
+  if (isCodexSharedAuthLinkUnavailableError(text)) return null;
   const authGuidance = describeAgentAuthError(text);
   if (authGuidance) return authGuidance;
   if (/thread not found/i.test(text)) return i18n.t('session.tail.codexThreadLost');
@@ -75,6 +78,11 @@ export function localizeAgentError(
   message = '',
   outputLimit?: unknown,
 ): string | null {
+  // 「共享凭证连不上」的引导文案走这里：它可恢复，不能占用「不可重试」那条路
+  // （见 describeNonRetryableAgentError），但提示条仍要显示这段可执行的说明。
+  if (isCodexSharedAuthLinkUnavailableError(message)) {
+    return describeAgentAuthError(message);
+  }
   const subscriptionGuidance = localizeSubscriptionAccountError(message, i18n.t, i18n.resolvedLanguage ?? i18n.language);
   if (subscriptionGuidance) return subscriptionGuidance;
   if (isRemoteCompactEncryptedContentError(message, reason)) return i18n.t('session.tail.remoteCompactEncryptedContent');
