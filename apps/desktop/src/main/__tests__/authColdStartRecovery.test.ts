@@ -860,7 +860,7 @@ return { readAuthAccountVault, writeAuthAccountVault, emptyAuthAccountVault, wri
     parseDesktopAccountKey, reconcileSavedAccountMetadata, loggedOutAccountKeySet, writeResourceSessionToVault,
   );
 
-  const member = (id: string, displayName: string) => ({ id, passportId: 'passport-1', kind: 'personal', role: 'owner',
+  const member = (id: string, displayName: string) => ({ id, passportId: 'passport-1', kind: 'personal' as const, role: 'owner' as const,
     displayName, email: `${id}@example.invalid`, avatarUrl: null, orgId: null, orgName: null, orgLogoUrl: null });
   const keyOf = (id: string) => accountVaultKey('global', id);
 
