@@ -338,6 +338,9 @@ function collectOnlyBuilder(out: DocSearchHiddenRange[]): RangeSetBuilder<Decora
   return { add: (from: number, to: number) => void out.push({ from, to }) } as unknown as RangeSetBuilder<Decoration>;
 }
 
+/** 超过这个字符数的单行视为压缩/生成文件，不做色块扫描。 */
+const HEX_SWATCH_MAX_LINE_CHARS = 2_000;
+
 class HexColorWidget extends WidgetType {
   constructor(private readonly color: string) {
     super();
@@ -377,15 +380,19 @@ const hexColorPreviewPlugin = ViewPlugin.fromClass(
       for (const range of view.visibleRanges) {
         let line = view.state.doc.lineAt(range.from);
         while (line.from <= range.to) {
-          for (const match of findHexColors(line.text)) {
-            builder.add(
-              line.from + match.from,
-              line.from + match.from,
-              Decoration.widget({
-                widget: new HexColorWidget(match.color),
-                side: -1,
-              }),
-            );
+          // 压缩成单行的 CSS / JSON 会把整行交给正则：这类行不做色块（扫了也没人看），
+          // 避免成本脱离可视范围。
+          if (line.length <= HEX_SWATCH_MAX_LINE_CHARS) {
+            for (const match of findHexColors(line.text)) {
+              builder.add(
+                line.from + match.from,
+                line.from + match.from,
+                Decoration.widget({
+                  widget: new HexColorWidget(match.color),
+                  side: -1,
+                }),
+              );
+            }
           }
           if (line.to >= view.state.doc.length) break;
           line = view.state.doc.line(line.number + 1);
