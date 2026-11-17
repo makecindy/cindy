@@ -48,6 +48,7 @@ import type {
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
 import { spawnObservedClaudeProcess } from './local-process-spawn.js';
 import { claudeMcpServerToolsReport, type ClaudeMcpServerStatusEntry } from './mcp-server-tools.js';
+import { callClaudeToolCatalog } from './native-tool-catalog.js';
 import {
   reportSubagentModelDiagnostics,
   resolveSubagentModelDefault,
@@ -7710,6 +7711,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         }).mcpServerStatus;
         if (typeof readStatus !== 'function') return null;
         return claudeMcpServerToolsReport(await readStatus.call(q), serverName);
+      },
+
+      async callNativeToolCatalog(method: string, args: unknown[]) {
+        if (opts.remoteHostId || hosted?.guest || reviewMode) throw new Error('UNSUPPORTED_CAPABILITY');
+        return callClaudeToolCatalog(q, method, args);
       },
 
       setInteractionResolver(resolver: InteractionResolver) {

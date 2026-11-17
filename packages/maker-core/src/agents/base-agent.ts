@@ -2526,6 +2526,8 @@ export interface AgentSessionHandle {
    * the engine has no per-session MCP status entry.
    */
   readMcpServerTools?(serverName: string): Promise<AgentMcpServerToolsReport | null>;
+  /** On-demand public harness tool-catalog calls; unsupported methods must fail explicitly. */
+  callNativeToolCatalog?(method: string, args: unknown[]): Promise<unknown>;
   /** Native session identity safe for resume; may retain an unaccepted fork's source. */
   readonly id: string;
   /** Transient native request identity; hosts must not persist it as a resume id. */

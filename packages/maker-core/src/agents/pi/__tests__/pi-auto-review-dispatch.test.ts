@@ -167,8 +167,9 @@ vi.mock('../rpc-client.js', () => ({
         const snapshot = JSON.parse(String(response?.value ?? '{}'));
         this.onEvent({ type: 'extension_ui_request', method: 'input',
           title: 'cindy:provider-refresh-ack', id: `${nonce}-ack`, placeholder: JSON.stringify({
-            nonce, ok: snapshot.nonce === nonce && snapshot.operation === 'inspect',
-            runtimeSettings: { version: '1.0.0', compaction: this.nativeSettings.compaction ?? {} },
+            nonce, ok: snapshot.nonce === nonce && ['inspect', 'tool-catalog'].includes(snapshot.operation),
+            runtimeSettings: snapshot.operation === 'tool-catalog' ? snapshot.toolRequest
+              : { version: '1.0.0', compaction: this.nativeSettings.compaction ?? {} },
           }) });
         return { command: 'prompt', success: true };
       }
@@ -1814,6 +1815,33 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     } finally {
       await handle.close();
     }
+  });
+
+  // Native catalog requests reuse the production nonce/ack bridge. No catalog
+  // RPC is sent during startup, and unknown commands must never become prompts.
+  it('queries the native tool catalog only on demand through the existing bridge', async () => {
+    const handle = await start();
+    try {
+      expect(captured.sent.some(message => typeof message.value === 'string' && message.value.includes('tool-catalog'))).toBe(false);
+      captured.requests = [];
+      expect(captured.requests).toHaveLength(0);
+      expect(await handle.callNativeToolCatalog!('setActiveTools', [['read']]))
+        .toEqual({ method: 'setActiveTools', args: [['read']] });
+      expect(captured.requests.map(request => request.type)).toEqual(['get_commands', 'prompt']);
+      const payload = captured.sent.findLast(message => typeof message.value === 'string' && message.value.includes('tool-catalog'));
+      expect(JSON.parse(String(payload?.value))).toMatchObject({ operation: 'tool-catalog',
+        toolRequest: { method: 'setActiveTools', args: [['read']] } });
+    } finally { await handle.close(); }
+  });
+
+  it('rejects a missing native catalog command without sending it to the model', async () => {
+    const handle = await start();
+    try {
+      captured.commandCatalog = [];
+      captured.requests = [];
+      await expect(handle.callNativeToolCatalog!('getAllTools', [])).rejects.toThrow('unavailable');
+      expect(captured.requests.map(request => request.type)).toEqual(['get_commands']);
+    } finally { await handle.close(); }
   });
 
   it('closes a synchronous managed extension command after its visible notification', async () => {
