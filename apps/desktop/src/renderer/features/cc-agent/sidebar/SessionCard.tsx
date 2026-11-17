@@ -67,7 +67,7 @@ import { useTaskInfoWorktree, type SessionWorktreeInfo } from './sessionWorktree
 import type { SessionPrRef } from '@/lib/gitContext.types';
 import { useTaskInfoFields } from '../hooks/useTaskInfoFields';
 import { highlightSegments } from '../lib/highlightSegments';
-import { scrollIntoNearestView } from '../lib/scrollIntoNearestView';
+import { useScrollActiveRowIntoView } from '../lib/scrollIntoNearestView';
 import { isAutomationGeneratedSession } from '../lib/scheduledSessionGrouping';
 import {
   canHighlightSessionDisplayTitle,
@@ -442,9 +442,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     [displayTitle, isEditing, navigationOnly, remoteWritesBlocked, t],
   );
 
-  useEffect(() => {
-    if (isActive && !navigationOnly) scrollIntoNearestView(cardRef.current);
-  }, [isActive, navigationOnly]);
+  useScrollActiveRowIntoView(cardRef, isActive, { navigationOnly, inboxMode });
 
   // archive 两步确认生命周期（redesign 稿：3s 超时 + 点外面撤回）
   useEffect(() => {

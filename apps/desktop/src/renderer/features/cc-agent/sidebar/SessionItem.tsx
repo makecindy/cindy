@@ -64,7 +64,7 @@ import { buildSessionInfoPieces, SessionInfoMeta } from './SessionInfoMeta';
 import { useTaskInfoWorktree } from './sessionWorktreeInfo';
 import { useTaskInfoFields } from '../hooks/useTaskInfoFields';
 import { highlightSegments } from '../lib/highlightSegments';
-import { scrollIntoNearestView } from '../lib/scrollIntoNearestView';
+import { useScrollActiveRowIntoView } from '../lib/scrollIntoNearestView';
 import { isAutomationGeneratedSession } from '../lib/scheduledSessionGrouping';
 import {
   canHighlightSessionDisplayTitle,
@@ -685,12 +685,9 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
 
   // isActive 由 false → true(或初次 mount 时即为 true)→ 把行滚进 viewport。
   // 同 active 重渲染 / 其它字段更新不触发(useEffect deps 只有 isActive)。
-  useEffect(() => {
-    if (isActive && !navigationOnly) scrollIntoNearestView(rowRef.current);
   // navigationOnly is fixed for the lifetime of a mounted row; shared role switches
   // unmount the old list, so the active-session scroll contract stays isActive-only.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive]);
+  useScrollActiveRowIntoView(rowRef, isActive, { navigationOnly, inboxMode });
 
   // archivePending 生命周期：进入 pending → 起 4s 自动撤回 timer + document mousedown
   // 监听（点击不在 confirm 胶囊上就立刻撤回）。退出 pending → 全部清理。这两条退路确保

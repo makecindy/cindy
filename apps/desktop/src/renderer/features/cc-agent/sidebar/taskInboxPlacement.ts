@@ -1,45 +1,5 @@
 import type { TaskInboxSection } from '@cindy/maker-shared/live-task-priority';
 
-/** Where the open task sat when the user started looking at it. */
-export interface ViewedInboxPlacement {
-  key: string;
-  section: TaskInboxSection;
-  index: number;
-}
-
-/**
- * The open task keeps its section and slot when the user sends a message (inbox → working), so the
- * sidebar focus does not jump. A round finishing (working → inbox) moves it at once (2026-11-18
- * user decision): the user is usually waiting for that result. Explicit snooze / archive / restore
- * also apply at once. The task is re-sorted after the user leaves.
- * Returns the placement to remember for the next render (null when nothing is open).
- */
-export function holdViewedInboxPlacement<T>(
-  groups: Map<TaskInboxSection, T[]>,
-  keyOf: (item: T) => string,
-  viewedKey: string | undefined,
-  previous: ViewedInboxPlacement | null,
-): ViewedInboxPlacement | null {
-  if (!viewedKey) return null;
-  let current: { section: TaskInboxSection; index: number } | null = null;
-  for (const [section, items] of groups) {
-    const index = items.findIndex((item) => keyOf(item) === viewedKey);
-    if (index >= 0) {
-      current = { section, index };
-      break;
-    }
-  }
-  if (!current) return previous?.key === viewedKey ? previous : null;
-  if (previous?.key !== viewedKey || previous.section !== 'inbox' || current.section !== 'working') {
-    return { key: viewedKey, ...current };
-  }
-  const source = groups.get(current.section)!;
-  const [item] = source.splice(current.index, 1);
-  const target = groups.get(previous.section)!;
-  target.splice(Math.min(previous.index, target.length), 0, item);
-  return previous;
-}
-
 /** Section → row keys, as shown when the pointer entered the inbox list. */
 export type FrozenInboxLayout = ReadonlyMap<TaskInboxSection, readonly string[]>;
 

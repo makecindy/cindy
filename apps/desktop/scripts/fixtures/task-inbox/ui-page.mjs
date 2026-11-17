@@ -18,12 +18,30 @@ export default {
     default: {
       about: 'Read task stays in inbox, waiting task above running, snoozed and processed sections',
     },
+    reply: {
+      about: 'Replying to the open task moves it to Working at once without scrolling the sidebar',
+    },
     intro: {
       about: 'The first switch into the inbox on this computer introduces it once; later switches do not',
       viewport: { width: 1040, height: 760 },
     },
   },
   async check(page, ui) {
+    if (ui.case === 'reply') {
+      const scroller = page.locator('[data-inbox-scroller]');
+      const working = page.locator('section').filter({ has: page.locator('button', { hasText: await ui.t('ccAgent.sidebar.inbox.working') }) });
+      await working.locator('> button').click();
+      await page.locator('[data-session-id="ready"]').click();
+      await scroller.evaluate((node) => { node.scrollTop = 0; });
+      // Move the pointer off the list so the hover freeze does not hold the row.
+      await page.mouse.move(310, 630);
+      await page.evaluate(() => window.__replyToReady());
+      await working.locator('[data-session-id="ready"]').waitFor();
+      await page.waitForTimeout(400);
+      assert.equal(await scroller.evaluate((node) => node.scrollTop), 0, 'The sidebar does not scroll after the moved row');
+      await ui.capture('replied');
+      return;
+    }
     if (ui.case === 'intro') {
       const toggle = page.locator('[data-task-list-mode-toggle]');
       await toggle.click();

@@ -51,18 +51,36 @@ const priorityContext = {
   waitingSessionIds: new Set(['waiting']),
   attentionSessionIds: new Set(['ready', 'waiting']),
 };
+declare global {
+  interface Window { __replyToReady?: () => void }
+}
+// The reply case has more pending tasks, so Working starts below the fold.
+const replySessions = ctx.case === 'reply'
+  ? [...sessions, ...[1, 2, 3, 4, 5].map((n) => ({ ...sessions[0], id: `note-${n}`, title: `待看的结果 ${n}` }))]
+  : sessions;
 function Specimen() {
-  const [items, setItems] = useState(sessions);
+  const [items, setItems] = useState(replySessions);
   const [selected, setSelected] = useState<string>();
+  // The open task gets a reply: it starts running and its result is read.
+  const [replied, setReplied] = useState(false);
+  window.__replyToReady = () => setReplied(true);
+  const running = replied ? new Set([...runningSessionIds, 'ready']) : runningSessionIds;
+  const context = replied
+    ? { ...priorityContext, runningSessionIds: running, attentionSessionIds: new Set(['waiting']) }
+    : priorityContext;
   return (
-    <div className="min-h-screen bg-sidebar text-foreground p-2">
+    // The reply case scrolls inside a short sidebar, so a scroll after the moved row would show.
+    <div
+      data-inbox-scroller=""
+      className={ctx.case === 'reply' ? 'h-[260px] overflow-y-auto bg-sidebar text-foreground p-2' : 'min-h-screen bg-sidebar text-foreground p-2'}
+    >
       <TaskInbox
         sessionVariant={ctx.case === 'list' ? 'list' : 'text'}
         sessions={items}
-        priorityContext={priorityContext}
-        runningSessionIds={runningSessionIds}
+        priorityContext={context}
+        runningSessionIds={running}
         attachedSessionIds={new Set()}
-        notifications={new Set(['ready'])}
+        notifications={replied ? new Set<string>() : new Set(['ready'])}
         activeSessionId={selected}
         onSessionClick={setSelected}
         onRename={noop}

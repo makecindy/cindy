@@ -16,13 +16,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { SessionEntryRows, type SessionEntryRowsProps } from './SessionEntryList';
 import { SectionCollapse } from './SectionCollapse';
 import { sessionRowKey } from './sessionRowKey';
-import {
-  freezeInboxLayout,
-  holdViewedInboxPlacement,
-  snapshotInboxLayout,
-  type FrozenInboxLayout,
-  type ViewedInboxPlacement,
-} from './taskInboxPlacement';
+import { freezeInboxLayout, snapshotInboxLayout, type FrozenInboxLayout } from './taskInboxPlacement';
 import {
   sessionNaturalPriorityRank,
   sessionPriorityRank,
@@ -48,8 +42,6 @@ export function TaskInbox({ sessions, priorityContext, ...rows }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表整表远程活动
     [priorityContext, sessions, remoteActivityRevision],
   );
-  const { activeSessionId } = rows;
-  const viewedPlacement = useRef<ViewedInboxPlacement | null>(null);
   const [now, setNow] = useState(Date.now);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(
     () => new Set(['working', 'snoozed', 'archived']),
@@ -89,12 +81,10 @@ export function TaskInbox({ sessions, priorityContext, ...rows }: Props) {
         .push(session);
     }
     result.get('snoozed')!.sort((a, b) => taskSnoozeUntil(a) - taskSnoozeUntil(b));
-    const viewed = sessions.find((session) => session.id === activeSessionId);
-    viewedPlacement.current = holdViewedInboxPlacement(
-      result, sessionRowKey, viewed ? sessionRowKey(viewed) : undefined, viewedPlacement.current,
-    );
+    // The open task moves like any other (a reply sends it to Working at once); its row does not
+    // scroll the sidebar after it (useScrollActiveRowIntoView).
     return result;
-  }, [sessions, inboxContext, now, followingSessions, activeSessionId]);
+  }, [sessions, inboxContext, now, followingSessions]);
   // While the pointer is over the list (or a row menu / snooze popover it opened is still open),
   // rows keep their arrangement so a one-click Done never lands on a row that just moved.
   const rootRef = useRef<HTMLDivElement>(null);
