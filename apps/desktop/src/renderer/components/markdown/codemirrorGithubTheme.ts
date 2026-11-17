@@ -145,7 +145,8 @@ function makeEditorTheme(c: typeof githubLightColors, isDark: boolean) {
   return EditorView.theme(
     {
       '&': {
-        fontSize: CODE_FONT_SIZE,
+        // 编辑器字号有自己的覆盖变量（Cmd +/- 调这个），缺省跟随代码字号。
+        fontSize: 'var(--app-editor-font-size, ' + CODE_FONT_SIZE + ')',
         backgroundColor: c.bg,
         height: '100%',
         color: c.text,

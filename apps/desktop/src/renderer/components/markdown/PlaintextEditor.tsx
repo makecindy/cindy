@@ -102,6 +102,10 @@ import {
 } from './docSearchRanges';
 import { computeFenceLineRoles, type FenceLineRole } from './markdownFenceLines';
 import { getPlaintextEditorChrome } from './plaintextEditorChrome';
+import {
+  clampAppearanceCodeSize,
+  DEFAULT_APPEARANCE_SETTINGS,
+} from '@/../shared/appearanceSettings';
 import { useIsDarkMode } from './useIsDarkMode';
 
 export interface PlaintextEditorSearchHandle {
@@ -204,6 +208,8 @@ export interface PlaintextEditorProps {
 // "大文件预览模式", 保留 CodeMirror 的滚动 + 编辑能力, 但不再做格式化。
 const LARGE_DOC_BYTES = 256 * 1024;       // 文档总字节阈值 (utf-16 char 近似)
 const LONG_LINE_CHARS = 5_000;            // 任一行超过这个字符数 → 关 wrap
+let pendingEditorFontSizeWrite: number | null = null;
+let editorFontSizeWriteRunning = false;
 
 function detectLargeDoc(doc: string): { largeDoc: boolean; longLine: boolean } {
   const largeDoc = doc.length > LARGE_DOC_BYTES;
@@ -1068,6 +1074,58 @@ function getSelectionText(view: EditorView): string | null {
   return view.state.doc.sliceString(from, to);
 }
 
+function adjustEditorFontSize(view: EditorView, delta: -1 | 1): boolean {
+  const root = document.documentElement;
+  const rootOverride = Number.parseFloat(
+    root.style.getPropertyValue('--app-editor-font-size'),
+  );
+  const savedOverride = Number.parseFloat(
+    String(window.electronAPI?.appearanceSettings?.getSync?.()?.editorFontSize ?? ''),
+  );
+  const computed = Number.parseFloat(getComputedStyle(view.contentDOM).fontSize);
+  const current = [rootOverride, savedOverride, computed].find(Number.isFinite);
+  const next = clampAppearanceCodeSize(
+    (current ?? DEFAULT_APPEARANCE_SETTINGS.codeSize) + delta,
+  );
+  const previous = root.style.getPropertyValue('--app-editor-font-size');
+  const apply = (value: string | null) => {
+    for (const target of [root, document.body]) {
+      if (value === null) target.style.removeProperty('--app-editor-font-size');
+      else target.style.setProperty('--app-editor-font-size', value);
+    }
+  };
+  apply(`${next}px`);
+  persistEditorFontSize(next, () => apply(previous || null));
+  return true;
+}
+
+function persistEditorFontSize(next: number, rollback: () => void): void {
+  pendingEditorFontSizeWrite = next;
+  if (editorFontSizeWriteRunning) return;
+  editorFontSizeWriteRunning = true;
+  queueMicrotask(() => {
+    void (async () => {
+      while (pendingEditorFontSizeWrite !== null) {
+        const value = pendingEditorFontSizeWrite;
+        pendingEditorFontSizeWrite = null;
+        const persist = window.electronAPI?.appearanceSettings?.setPatch;
+        if (!persist) continue;
+        try {
+          await persist({ editorFontSize: value });
+        } catch (error: unknown) {
+          if (pendingEditorFontSizeWrite === null) rollback();
+          window.electronAPI?.logToMain?.(
+            'error',
+            'renderer/plaintext-editor',
+            `editor font size persist failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      editorFontSizeWriteRunning = false;
+    })();
+  });
+}
+
 export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditorProps>(
   function PlaintextEditor(
     {
@@ -1117,7 +1175,7 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
         // largeDoc 命中时强制关 highlighting (避免 Lezer 全文 lex);
         // longLine 命中时同时关 wrap (避免 wrap measure 卡死)。
         skipHighlight: docFlags.largeDoc,
-        skipWrap: docFlags.longLine,
+        skipWrap: initialEditorChrome === 'code' || docFlags.longLine,
       };
     }
 
@@ -1313,6 +1371,14 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
       //   - code chrome → 始终挂 lineNumbers gutter,即使 parser 缺失。
       const extensions = [
         history(),
+        // 编辑器聚焦时 Cmd/Ctrl +/- 调的是编辑器自己的字号,不缩整个窗口。
+        Prec.highest(keymap.of([
+          { key: 'Mod-=', run: (view) => adjustEditorFontSize(view, 1) },
+          { key: 'Mod-+', run: (view) => adjustEditorFontSize(view, 1) },
+          { key: 'Mod-Shift-+', run: (view) => adjustEditorFontSize(view, 1) },
+          { key: 'Mod--', run: (view) => adjustEditorFontSize(view, -1) },
+          { key: 'Mod-Subtract', run: (view) => adjustEditorFontSize(view, -1) },
+        ])),
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
         wrapCompartment.of(initialConfig.skipWrap || wordWrap === false ? [] : EditorView.lineWrapping,
         ),

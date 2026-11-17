@@ -254,6 +254,7 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     'codeFamily',
     'uiSize',
     'codeSize',
+    'editorFontSize',
     'terminalFamily',
     'terminalSize',
     'windowZoom',
@@ -291,6 +292,13 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     patch.codeSize = parseNumber(
       raw.codeSize,
       'codeSize',
+      clampAppearanceCodeSize,
+      APPEARANCE_LIMITS.codeSize,
+    );
+  if ('editorFontSize' in raw)
+    patch.editorFontSize = parseNumber(
+      raw.editorFontSize,
+      'editorFontSize',
       clampAppearanceCodeSize,
       APPEARANCE_LIMITS.codeSize,
     );

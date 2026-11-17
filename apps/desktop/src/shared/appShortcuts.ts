@@ -294,20 +294,19 @@ export const APP_SHORTCUT_DEFINITIONS: ReadonlyArray<AppShortcutDefinition> = [
     hiddenInSettings: true,
     getDefaultCombos: (platform) => [modCombo('KeyS', platform)],
   },
-  // 缩放三键: macOS 由系统菜单 role (resetZoom/zoomIn/zoomOut) 承担, 仅
-  // win/linux 走 renderer 监听。多默认覆盖主键区与数字键盘 (与迁移前
-  // MainLayout 按 e.key 匹配的行为对齐)。
+  // 缩放键的原始菜单标签由 macOS 菜单保留；zoomIn/zoomOut 组合改走
+  // renderer，以便代码编辑器聚焦时接管快捷键而不触发整窗缩放。
   {
     id: 'zoom-in',
     scope: 'app',
     labelKey: 'settings.shortcuts.items.zoom-in.label',
     descriptionKey: 'settings.shortcuts.items.zoom-in.description',
     rebindable: true,
-    platforms: ['win32', 'linux'],
-    getDefaultCombos: () => [
-      combo('Equal', { ctrl: true }),
-      combo('Equal', { ctrl: true, shift: true }),
-      combo('NumpadAdd', { ctrl: true }),
+    platforms: ['darwin', 'win32', 'linux'],
+    getDefaultCombos: (platform) => [
+      modCombo('Equal', platform),
+      modCombo('Equal', platform, { shift: true }),
+      modCombo('NumpadAdd', platform),
     ],
   },
   {
@@ -316,10 +315,10 @@ export const APP_SHORTCUT_DEFINITIONS: ReadonlyArray<AppShortcutDefinition> = [
     labelKey: 'settings.shortcuts.items.zoom-out.label',
     descriptionKey: 'settings.shortcuts.items.zoom-out.description',
     rebindable: true,
-    platforms: ['win32', 'linux'],
-    getDefaultCombos: () => [
-      combo('Minus', { ctrl: true }),
-      combo('NumpadSubtract', { ctrl: true }),
+    platforms: ['darwin', 'win32', 'linux'],
+    getDefaultCombos: (platform) => [
+      modCombo('Minus', platform),
+      modCombo('NumpadSubtract', platform),
     ],
   },
   {

@@ -19,6 +19,8 @@ export interface AppearanceOverrides extends PluginAppearanceSettingsFields {
   codeFamily?: string;
   uiSize?: number;
   codeSize?: number;
+  /** Editor-only font size override; omitted follows codeSize. */
+  editorFontSize?: number;
   terminalFamily?: string;
   terminalSize?: number;
   windowZoom?: number;
@@ -63,6 +65,8 @@ export interface AppearanceSettings extends PluginAppearanceSettingsFields {
   codeFamily: string;
   uiSize: number;
   codeSize: number;
+  /** Editor-only font size override; omitted follows codeSize. */
+  editorFontSize?: number;
   terminalFamily: string;
   terminalSize: number;
   windowZoom: number;
@@ -274,6 +278,9 @@ export function normalizeAppearanceSettings(raw: unknown): AppearanceSettings {
       typeof value.codeSize === 'number'
         ? clampAppearanceCodeSize(value.codeSize)
         : DEFAULT_APPEARANCE_SETTINGS.codeSize,
+    ...(typeof value.editorFontSize === 'number' && Number.isFinite(value.editorFontSize)
+      ? { editorFontSize: clampAppearanceCodeSize(value.editorFontSize) }
+      : {}),
     terminalSize:
       typeof value.terminalSize === 'number'
         ? clampAppearanceTerminalSize(value.terminalSize)

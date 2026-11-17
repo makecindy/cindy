@@ -153,7 +153,7 @@ describe('overrides normalization and effective merge', () => {
       },
       'darwin',
     );
-    expect(Object.keys(normalized)).toEqual(['toggle-sidebar']);
+    expect(Object.keys(normalized)).toEqual(['toggle-sidebar', 'zoom-in']);
   });
 
   it('keeps platform-specific ids on their platform', () => {
@@ -208,7 +208,9 @@ describe('overrides normalization and effective merge', () => {
 
   it('excludes ids not available on the platform', () => {
     const mac = getEffectiveAppShortcuts({}, 'darwin');
-    expect(mac.has('zoom-in')).toBe(false);
+    expect(mac.has('zoom-in')).toBe(true);
+    expect(mac.get('zoom-in')?.[0]).toEqual(combo('Equal', { meta: true }));
+    expect(mac.get('zoom-out')?.[0]).toEqual(combo('Minus', { meta: true }));
     expect(mac.has('open-settings')).toBe(true);
     const win = getEffectiveAppShortcuts({}, 'win32');
     expect(win.has('zoom-in')).toBe(true);
@@ -287,14 +289,18 @@ describe('shared reserved-shortcut tables (extracted from voice-input)', () => {
   });
 
   it('reserves mac native menu role accelerators (they fire before renderer keydown)', () => {
-    // ⌘Q 退出 / ⌘H 隐藏 / ⌘M 最小化 / ⌘W 关窗 / ⌘0 与 ⌘= 与 ⌘- 缩放
-    for (const code of ['KeyQ', 'KeyH', 'KeyM', 'KeyW', 'Digit0', 'Equal', 'Minus']) {
+    // ⌘Q 退出 / ⌘H 隐藏 / ⌘M 最小化 / ⌘W 关窗 / ⌘0 重置缩放
+    for (const code of ['KeyQ', 'KeyH', 'KeyM', 'KeyW', 'Digit0']) {
       expect(isMacReservedShortcut({ code, meta: true, ctrl: false, alt: false, shift: false })).toBe(true);
     }
-    // ⇧⌘= 即 ⌘+ (zoomIn) / ⌥⌘H 隐藏其他 / ⌃⌘F 全屏
-    expect(isMacReservedShortcut({ code: 'Equal', meta: true, ctrl: false, alt: false, shift: true })).toBe(true);
+    // ⇧⌘Z 重做 / ⌥⌘H 隐藏其他 / ⌃⌘F 全屏
+    expect(isMacReservedShortcut({ code: 'KeyZ', meta: true, ctrl: false, alt: false, shift: true })).toBe(true);
     expect(isMacReservedShortcut({ code: 'KeyH', meta: true, ctrl: false, alt: true, shift: false })).toBe(true);
     expect(isMacReservedShortcut({ code: 'KeyF', meta: true, ctrl: true, alt: false, shift: false })).toBe(true);
+    // ⌘=/⌘- 缩放由 renderer 分发，代码编辑器可以局部消费。
+    expect(isMacReservedShortcut({ code: 'Equal', meta: true, ctrl: false, alt: false, shift: false })).toBe(false);
+    expect(isMacReservedShortcut({ code: 'Minus', meta: true, ctrl: false, alt: false, shift: false })).toBe(false);
+    expect(isMacReservedShortcut({ code: 'Equal', meta: true, ctrl: false, alt: false, shift: true })).toBe(false);
     // ⌘F / ⌘J 等应用可自用的组合不受影响
     expect(isMacReservedShortcut({ code: 'KeyF', meta: true, ctrl: false, alt: false, shift: false })).toBe(false);
     expect(isMacReservedShortcut({ code: 'KeyJ', meta: true, ctrl: false, alt: false, shift: false })).toBe(false);
