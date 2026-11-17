@@ -10,11 +10,11 @@
  * - 其它错误只去掉 Electron 的包装前缀，保留调用方原有的说明与错误码，不丢诊断信息。
  */
 import { i18n } from '@/i18n';
+import { extractIpcError, mapIpcErrorToI18nKey } from '../utils/ipcError';
 
 import { setToastAlertTextFormatter } from './toast';
 
 const ELECTRON_IPC_WRAPPER = /Error invoking remote method '[^']*': (?:[A-Za-z]*Error: )?/;
-const IPC_CODE = /^\[([A-Z0-9_]+)\]/;
 
 export function formatIpcErrorToastText(
   message: string,
@@ -24,8 +24,11 @@ export function formatIpcErrorToastText(
   if (!wrapper) return message;
   const before = message.slice(0, wrapper.index);
   const rest = message.slice(wrapper.index + wrapper[0].length);
-  const code = IPC_CODE.exec(rest)?.[1];
-  const translated = code?.startsWith('DEVICE_LINK_') ? translate(`ipcError.${code}`) : null;
+  const error = new Error(rest);
+  const ipcError = extractIpcError(error);
+  const translated = ipcError?.code.startsWith('DEVICE_LINK_')
+    ? translate(mapIpcErrorToI18nKey(error))
+    : null;
   return before + (translated ?? rest);
 }
 

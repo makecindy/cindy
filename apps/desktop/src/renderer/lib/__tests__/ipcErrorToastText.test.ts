@@ -49,3 +49,13 @@ describe('alert toasts for raw IPC errors', () => {
     expect(formatIpcErrorToastText('Plain message', translate)).toBe('Plain message');
   });
 });
+
+// Shared decoder contract: unknown codes must keep their original diagnostic text.
+// Existing tests only exercised registered codes; the minimal failure is a wrapped
+// unknown DEVICE_LINK_* code with a matching translation. Unit tier, no extra I/O.
+it('preserves unknown codes even when a translation happens to exist', () => {
+  const raw = "Context: Error invoking remote method 'x:y': Error: [DEVICE_LINK_FUTURE_ERROR] details";
+  const translator = vi.fn(() => 'should not replace diagnostics');
+  expect(formatIpcErrorToastText(raw, translator)).toBe('Context: [DEVICE_LINK_FUTURE_ERROR] details');
+  expect(translator).not.toHaveBeenCalled();
+});
