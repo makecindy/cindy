@@ -8813,6 +8813,7 @@ assertRouteCurrent();
     let reconnectStallTimer: ReturnType<typeof setTimeout> | null = null;
     let reconnectStallTurnId: string | null = null;
     let reconnectStallTurnGeneration = 0;
+    let reconnectStallErrorStatus: number | undefined;
     // Keep the reconnect status visible and the provider turn busy until the
     // bounded interrupt handshake settles; otherwise the Desktop
     // auto-resume backoff can admit a new turn while the old server turn is
@@ -8857,6 +8858,7 @@ assertRouteCurrent();
       }
       reconnectStallTurnId = null;
       reconnectStallTurnGeneration = 0;
+      reconnectStallErrorStatus = undefined;
       reconnectStallRemainingMs = 0;
       reconnectStallSliceStartedAt = 0;
     }
@@ -9077,7 +9079,9 @@ assertRouteCurrent();
             ignorePendingTools: true,
             allowPendingTurnStart,
             logLabel: 'codex reconnect watchdog tripped — interrupting stalled turn',
-            message,
+            message: reconnectStallErrorStatus === undefined
+              ? message : `${message} (HTTP ${reconnectStallErrorStatus})`,
+            errorStatus: reconnectStallErrorStatus,
           });
         };
         // History size does not establish why the connection stalled.
@@ -9151,7 +9155,7 @@ assertRouteCurrent();
     }
 
     function observeReconnectStallEvent(event: AgentEvent): void {
-      const data = event.data as { message?: unknown; isTerminal?: unknown; willRetry?: unknown } | null | undefined;
+      const data = event.data as { message?: unknown; isTerminal?: unknown; willRetry?: unknown; errorStatus?: unknown } | null | undefined;
       const message = typeof data?.message === 'string' ? data.message : null;
       const isReconnectNotice =
         event.type === 'error' &&
@@ -9161,6 +9165,11 @@ assertRouteCurrent();
         parseReconnectAttemptMessage(message) !== null;
       if (isReconnectNotice) {
         armReconnectStall();
+        // The queue probe sees only accepted root-turn events. Keep the latest
+        // known gateway status within this retry episode; progress clears it.
+        if (reconnectStallTurnId && (data?.errorStatus === 502 || data?.errorStatus === 503 || data?.errorStatus === 504)) {
+          reconnectStallErrorStatus = data.errorStatus;
+        }
         return;
       }
       if (isReconnectRecoveryEvent(event)) {
@@ -9182,6 +9191,7 @@ assertRouteCurrent();
       ignorePendingTools?: boolean;
       allowPendingTurnStart?: boolean;
       modelRejectionError?: Parameters<typeof finishCodexSamplingTurn>[4];
+      errorStatus?: number;
     }): void {
       if (closed) return;
       const pendingTurnId =
@@ -9220,6 +9230,7 @@ assertRouteCurrent();
         // reason 与 claude-code 侧共用同一稳定 key(renderer i18n 映射,规则 18);
         // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
         reason: timeoutReason,
+        ...(opts?.errorStatus !== undefined ? { errorStatus: opts.errorStatus } : {}),
         message: opts?.message ??
           (`The upstream response has been silent for ${Math.round(idleMs / 1000)}s; ` +
             'the turn was interrupted automatically to avoid hanging forever. ' +
@@ -14655,6 +14666,7 @@ assertRouteCurrent();
             )
           : null;
         const reconnectGenerationAtStop = reconnectStallTurnGeneration;
+        const reconnectErrorStatusAtStop = reconnectStallErrorStatus;
         let watchdogActivityVersionAtStop = 0;
         let watchdogsRestored = false;
         const restoreWatchdogsIfStillRunning = (): void => {
@@ -14680,6 +14692,7 @@ assertRouteCurrent();
               reconnectGenerationAtStop,
               reconnectRemainingAtStop,
             );
+            if (reconnectStallTurnId === turnId) reconnectStallErrorStatus = reconnectErrorStatusAtStop;
           }
         };
         turnInterruptOrigins.set(turnId, { source: 'user-stop' });

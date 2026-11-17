@@ -1032,6 +1032,37 @@ describe('translateErrorNotification', () => {
     expect(classifyCodexError({ message: `unexpected status code 502: ${modelCode}` }).reason).toBeUndefined();
   });
 
+  // #11032: native gateway status must survive the real notification translator;
+  // details may contain credentials/user content and are never forwarded (unit).
+  it.each(['httpConnectionFailed', 'responseStreamConnectionFailed', 'responseStreamDisconnected', 'responseTooManyFailedAttempts'] as const)(
+    'preserves only the safe gateway status from %s', async tag => {
+      const q = createAsyncQueue<AgentEvent>();
+      translateErrorNotification({
+        threadId: 'thread-1', turnId: 'turn-1', willRetry: true,
+        error: { message: 'Reconnecting... 1/5',
+          codexErrorInfo: { [tag]: { httpStatusCode: 502 } } as never,
+          additionalDetails: 'https://private.invalid/?token=secret PRIVATE_RESPONSE EOF',
+        },
+      }, q, makeCtx(newCodexRuntimeState()));
+      const events = await collect(q);
+      expect(events).toEqual([expect.objectContaining({ type: 'error', data: {
+        message: 'Reconnecting... 1/5 (HTTP 502)', errorStatus: 502,
+        codexErrorInfo: tag, isTerminal: false, willRetry: true,
+      } })]);
+      expect(JSON.stringify(events)).not.toMatch(/private|secret|PRIVATE_RESPONSE|EOF/);
+    },
+  );
+
+  it.each([undefined, null, 200, 401, 403, 429, 529, 502.5, '502', NaN])(
+    'does not invent gateway diagnostics for an absent or other status: %s', status => {
+      const result = classifyCodexError({ message: 'Reconnecting... 1/5',
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: status } } as never,
+        additionalDetails: 'HTTP 502 secret body',
+      });
+      expect(result.data).toEqual({ message: 'Reconnecting... 1/5', codexErrorInfo: 'responseStreamDisconnected' });
+    },
+  );
+
   it('classifyCodexError 把 contextWindowExceeded 与 overload 映射成稳定 reason', () => {
     expect(classifyCodexError({
       message: 'window full',

@@ -806,10 +806,25 @@ export function classifyCodexError(error: CodexErrorInput | null | undefined): C
     /\bauthentication_(?:error|failed)\b|\binvalid[\s_-]*api[\s_-]*key\b|\bapi key not valid\b/i.test(
       rawMessage,
     );
-  const message = redactSensitiveText(rawMessage);
+  // Preserve gateway diagnostics from native's typed transport errors. Do not
+  // forward additionalDetails (URLs, response bodies or credentials), or promote
+  // structured auth/quota/capacity signals into new retry/control decisions.
+  const info = error?.codexErrorInfo;
+  const httpInfo = info && typeof info === 'object' &&
+    (errorInfoTag === 'httpConnectionFailed' || errorInfoTag === 'responseStreamConnectionFailed' ||
+      errorInfoTag === 'responseStreamDisconnected' || errorInfoTag === 'responseTooManyFailedAttempts')
+    ? Object.values(info)[0] as { httpStatusCode?: unknown } | undefined : undefined;
+  const gatewayStatus = httpInfo?.httpStatusCode;
+  const upstreamStatus = gatewayStatus === 502 || gatewayStatus === 503 || gatewayStatus === 504
+    ? gatewayStatus : undefined;
+  const safeMessage = redactSensitiveText(rawMessage);
+  // message is also the existing persistence/older-consumer fallback; keep the
+  // bounded status there, without changing reason or terminal/retry semantics.
+  const message = upstreamStatus !== undefined && !new RegExp(`\\b${upstreamStatus}\\b`).test(safeMessage)
+    ? `${safeMessage} (HTTP ${upstreamStatus})` : safeMessage;
   const signals = extractNonSecretErrorSignals(rawMessage);
   const errorStatus =
-    signals.errorStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
+    signals.errorStatus ?? upstreamStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
   const overload = parseOverloadError(message, signals.errorStatus, errorInfoTag);
   const isCapacityError = overload?.kind === 'capacity';
   // 过载文案常顺带一句 rate limit exceeded（如 Kimi 的 `rate limit exceeded: The
