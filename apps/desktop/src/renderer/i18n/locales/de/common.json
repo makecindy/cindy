@@ -19040,6 +19040,7 @@
     "errors": {
       "piStartupCloudFile": "Eine nur in der Cloud verfügbare Anweisungsdatei verzögert möglicherweise den Start von Pi: {{path}}. Lade diese Datei im Finder herunter, warte, bis sie lokal verfügbar ist, und versuche es erneut. Die Zeitüberschreitung kann eine andere Ursache haben.",
       "hostProfileInUseByDesktop": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet. Beende sie und sende dann erneut.",
+      "hostProfileInUseByDesktopAtStart": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet, daher wurde der Host nicht gestartet. Beende sie und starte den Host dann neu.",
       "openFileFailed": "Datei kann nicht mit dem System geöffnet werden",
       "emptyResponse": "Das Modell hat keinen Inhalt zurückgegeben. Versuche es erneut. Wechsle bei sehr langem Kontext das Modell.",
       "turnFailed": "Die Aufgabe ist fehlgeschlagen (das Modell hat keine Fehlerdetails zurückgegeben) — versuche es erneut.",
