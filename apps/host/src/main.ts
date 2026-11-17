@@ -155,6 +155,7 @@ import { createHostTouchUserSend } from './agent/touch-user-send.ts';
 import { setLiveCcSessionBridge } from '../../desktop/src/main/maker-host/claude-transcript-relocation.ts';
 import { bindTaskRestoreRetention, createHostTaskRestore } from './agent/task-restore.ts';
 import { bindHostUiText } from './ui-text.ts';
+import { bindHostProjectIconRuntime } from './project-icon.ts';
 import { createUserInputEnqueue } from './agent/user-input.ts';
 import { resolveSessionReferencesWithPorts } from '../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
 import { readSwitchOptionsAgentDeviceId, readSwitchOptionsConfirmedContextWindow } from '../../desktop/src/main/maker-ipc/sessionAgentSwitchHandler.ts';
@@ -293,6 +294,7 @@ refuseSkillProjectionOwnerCommit();
 // Background copy in the locale before the owner database opens (its startup failure is one), as
 // bootstrap-electron.ts configureUiText.
 bindHostUiText();
+bindHostProjectIconRuntime();
 configureWindowsAtomicRename({
   packagedBinary: hostRuntimeLayout().atomicRenameBinary ?? undefined,
   sourceFile: hostRuntimeLayout().atomicRenameSource ?? undefined,
