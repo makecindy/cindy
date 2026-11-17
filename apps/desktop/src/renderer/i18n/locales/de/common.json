@@ -5518,6 +5518,13 @@
       },
       "toggleAria": "Fragen-Navigationsleiste umschalten"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Worktrees per Modell benennen",
+        "description": "Gibt dem Worktree einer neuen Aufgabe einen kurzen englischen Namen auf Basis der ersten Nachricht (z. B. fix-login-timeout), damit Ordner und Branch zeigen, wofür sie da sind. Erzeugt von den Hilfsmodellen; schlägt das fehl, wird ein zufälliger Name verwendet. Gilt nur für ab jetzt erstellte Worktrees."
+      },
+      "toggleAria": "Benennung von Worktrees per Modell umschalten"
+    },
     "promptRecommendation": {
       "label": "Eingabevorschläge",
       "description": "Nach einer Antwort zeigt das Eingabefeld einen Vorschlag für deine nächste Nachricht. Drücke die Tab-Taste, um ihn einzufügen.",
@@ -8411,6 +8418,7 @@
             "contentStyle": "Nachrichtenabstand und Sprechblasen ändern"
           },
           "positions": {
+            "composer_header": "der Leiste über dem Eingabefeld",
             "composer_toolbar": "Eingabe-Werkzeugleiste",
             "session_header": "Aufgabenkopf",
             "statusbar": "Statusleiste",
@@ -15478,6 +15486,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "Diese Datei liegt außerhalb des Arbeitsverzeichnisses der aktuellen Sitzung und kann im Dateibrowser der Seitenleiste nicht gefunden werden",
       "openInDefaultBrowser": "Im Browser öffnen",
       "copyLink": "Link kopieren",
+      "addPrToHeader": "Zur Kopfzeile hinzufügen",
+      "prAlreadyInHeader": "Bereits in der Kopfzeile",
+      "prAddedToHeader": "Zur Kopfzeile hinzugefügt – der Status begleitet diese Aufgabe.",
+      "prAssociatedNotInHeader": "Verknüpft, nicht in der Kopfzeile",
+      "prSavedNotInHeader": "Verknüpfung gespeichert. Die drei Plätze in der Kopfzeile sind belegt. Du kannst diesen PR in der PR-Verwaltung der Aufgabe anheften.",
       "linkCopied": "Link kopiert",
       "viewSourceFile": "Quelltext anzeigen",
       "openInSidebarFailed": "Öffnen im Browser der Seitenleiste fehlgeschlagen",
@@ -19588,6 +19601,41 @@
       "notSupported": "Die Guthabenabfrage wird für dieses Konto nicht unterstützt.",
       "unavailable": "Das Guthaben ist vorübergehend nicht verfügbar. Lade die Seite neu, um es erneut zu versuchen."
     },
+    "giftCard": {
+      "action": "Geschenkkarte einlösen",
+      "title": "Geschenkkarte einlösen",
+      "inputLabel": "Einlösecode",
+      "inputHint": "Gib den 16-stelligen Code ein oder füge den Link einer Geschenkkarte ein.",
+      "continue": "Weiter",
+      "confirmTitle": "Diese Geschenkkarte einlösen?",
+      "confirmAction": "Einlösen",
+      "from": "Von {{sender}}",
+      "cardLabel": "Cindy-Geschenkkarte über {{amount}}",
+      "fields": {
+        "validity": "Gültigkeit",
+        "validityValue_one": "{{count}} Tag nach dem Einlösen",
+        "validityValue_other": "{{count}} Tage nach dem Einlösen",
+        "claimBy": "Einlösen bis",
+        "destination": "Gutgeschrieben auf"
+      },
+      "doneTitle": "{{amount}} gutgeschrieben",
+      "doneDescription": "Deinem Aktionsguthaben gutgeschrieben. Gültig bis {{date}}.",
+      "doneDescriptionNoDate": "Deinem Aktionsguthaben gutgeschrieben.",
+      "pendingTitle": "Geschenkkarte eingelöst",
+      "pendingDescription": "{{amount}} werden gerade gutgeschrieben und erscheinen in Kürze in deinem Aktionsguthaben. Du musst die Karte nicht erneut einlösen.",
+      "alreadyYours": "Du hast diese Geschenkkarte bereits eingelöst.",
+      "done": "Fertig",
+      "errors": {
+        "notFound": "Dieser Code ist ungültig. Prüfe ihn und versuche es erneut.",
+        "wrongRegionCn": "Diese Geschenkkarte gilt für die Festlandchina-Edition von Cindy und kann mit diesem Konto nicht eingelöst werden.",
+        "wrongRegionGlobal": "Diese Geschenkkarte gilt für die internationale Edition von Cindy und kann mit diesem Konto nicht eingelöst werden.",
+        "alreadyClaimed": "Diese Geschenkkarte wurde bereits eingelöst.",
+        "expired": "Diese Geschenkkarte kann nicht mehr eingelöst werden. Die Frist ist abgelaufen.",
+        "voided": "Diese Geschenkkarte wurde für ungültig erklärt.",
+        "rateLimited": "Zu viele Versuche. Versuche es später erneut.",
+        "failed": "Die Geschenkkarte konnte nicht eingelöst werden. Versuche es später erneut."
+      }
+    },
     "usage": {
       "title": "Guthabenverbrauch",
       "observedAt": "Guthaben aktualisiert: {{date}}",
@@ -19603,6 +19651,7 @@
         "empty": "Keine Aktionsgutschriften verfügbar.",
         "incomplete": "Es gibt viele Gutschriften. Nur die neuesten {{count}} werden angezeigt.",
         "unnamed": "Aktionsgutschrift",
+        "giftCard": "Geschenkkarte · von {{sender}}",
         "original": "Ursprünglich",
         "used": "Verwendet",
         "remaining": "Verbleibend",

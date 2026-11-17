@@ -25,6 +25,8 @@ let receive: ((update: { epoch: string; updates: PluginUiStateChange[] }) => voi
 let host: NativePluginUiState;
 let invoke: ReturnType<typeof vi.fn>;
 beforeEach(() => {
+  // jsdom has no scrolling implementation; Radix Select focuses options with it.
+  Element.prototype.scrollIntoView ??= () => {};
   translation.read.mockClear();
   page.mounted.mockClear(); page.released.mockClear();
   installed.ghosts = [];
@@ -38,16 +40,17 @@ beforeEach(() => {
   } } } as unknown as typeof window.electronAPI;
 });
 
-it('opens a page beside its trigger only on demand and releases it on close', async () => {
+// Unit: composer.header must enter the same on-demand view lifecycle as the toolbar.
+it.each(['composer.toolbar', 'composer.header'] as const)('opens a %s page only on demand and releases it on close', async position => {
   const ghost: InstalledGhost = { enabled: true, dir: '/fixture',
     approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
       kind: 'chip', entry: 'main.js', version: '1', tools: [], mcpApps: {
         ui: { resources: [{ uri: 'ui://view', file: 'view.html' }], tools: {} },
         host: { views: [{ id: 'view', title: 'View', resourceUri: 'ui://view', scope: 'task' }],
-          contributions: [{ id: 'open', title: 'Open here', position: 'composer.toolbar', view: 'view', presentation: 'popover' }] },
+          contributions: [{ id: 'open', title: 'Open here', position, view: 'view', presentation: 'popover' }] },
       } } };
   installed.ghosts = [ghost];
-  render(<PluginUiProvider><PluginUiSlot position="composer.toolbar" sessionId="task-a" /></PluginUiProvider>);
+  render(<PluginUiProvider><PluginUiSlot position={position} sessionId="task-a" /></PluginUiProvider>);
   expect(page.mounted).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Open here' }));
   expect(await screen.findByText('Local page')).toBeTruthy();
@@ -55,6 +58,40 @@ it('opens a page beside its trigger only on demand and releases it on close', as
   fireEvent.click(screen.getByRole('button', { name: 'Open here' }));
   await waitFor(() => expect(screen.queryByText('Local page')).toBeNull());
   expect(page.released).toHaveBeenCalledTimes(1);
+});
+
+// Unit: the new header slot must leave no wrapper or IPC when empty,
+// and approved native controls must disappear on disable/revocation. The toolbar
+// popover regression does not exercise header tool/select dispatch.
+it('exposes header controls through the existing actions and removes the empty header', async () => {
+  const scene = <PluginUiProvider><PluginUiSlot position="composer.header" sessionId="task-a" /></PluginUiProvider>;
+  const view = render(scene);
+  const original = view.container.innerHTML;
+  expect(invoke).not.toHaveBeenCalled();
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture',
+    approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
+      kind: 'chip', entry: 'main.js', version: '1', tools: [{ name: 'refresh', description: 'Refresh' }], mcpApps: {
+        ui: { resources: [], tools: { refresh: { visibility: ['app'] } } }, host: { contributions: [
+          { id: 'refresh', title: 'Refresh', position: 'composer.header', tool: 'refresh' },
+          { id: 'scope', title: 'Scope', position: 'composer.header', kind: 'select', tool: 'refresh', options: [{ label: 'All', value: 'all' }] },
+          { id: 'progress', title: 'Ready', position: 'composer.header', kind: 'status' },
+        ] },
+      } } };
+  installed.ghosts = [ghost];
+  view.rerender(<PluginUiProvider><PluginUiSlot position="composer.header" sessionId="task-a" /></PluginUiProvider>);
+  expect(screen.getByText('Ready')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('task-a',
+    { op: 'plugin-action', instanceId: 'planner', id: 'refresh', value: undefined }));
+  fireEvent.click(screen.getByRole('combobox', { name: 'Scope' }));
+  fireEvent.click(await screen.findByRole('option', { name: 'All' }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('task-a',
+    { op: 'plugin-action', instanceId: 'planner', id: 'scope', value: 'all' }));
+  for (const inactive of [{ ...ghost, enabled: false }, { ...ghost, approval: { state: 'invalid' as const } }]) {
+    installed.ghosts = [inactive];
+    view.rerender(<PluginUiProvider><PluginUiSlot position="composer.header" sessionId="task-a" /></PluginUiProvider>);
+    expect(view.container.innerHTML).toBe(original);
+  }
 });
 
 // Unit, sidebar lifecycle: no page before expansion; close/revoke releases the View.

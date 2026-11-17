@@ -3264,6 +3264,7 @@ interface ElectronAPI {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
+        | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => void,
@@ -3289,6 +3290,7 @@ interface ElectronAPI {
     | { type: 'plugin'; pluginId: string }
     | { type: 'local-plugin-share'; snapshotId: string }
     | { type: 'installed-plugin'; ghostId?: string }
+    | { type: 'gift-card'; code: string }
     | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
     | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' }
     | null
@@ -4663,6 +4665,8 @@ interface ElectronAPI {
   worktreeSuggestName: (req: {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').SuggestNameResp>;
+  /** Opt-in model-written name for a new task's worktree; `name: null` keeps the generated one. */
+  worktreeGenerateName: (req: { taskText: string }) => Promise<{ name: string | null }>;
   worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest) => Promise<import('../shared/worktreeCheckout').CheckoutReply>;
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncStatus>;
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncReply>;

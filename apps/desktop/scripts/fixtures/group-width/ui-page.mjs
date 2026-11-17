@@ -2,19 +2,19 @@ import assert from 'node:assert/strict';
 import group from '../group-control/ui-page.mjs';
 import { checkSplit } from './split-check.mjs';
 
-// UI regression (2026-11-16): the 914/720px caps wasted wide group panes, while
-// a fixed 120px action gutter squeezed medium panes. Measure the production view
-// at both sizes; the previous fixture only enforced those old caps.
-const data = { name: '群聊自适应宽度检查', members: [{ botId: 'a', name: 'Aster' }], messages: 2, sidebar: false };
+// Regression for #10810: the production group view must keep the same 914px
+// content column, 720px bubble cap and responsive padding as tasks/private chats.
+// Exercise real DOM geometry, including narrow panes and topic splits.
+const data = { name: '群聊统一宽度检查', members: [{ botId: 'a', name: 'Aster' }], messages: 2, sidebar: false };
 export default {
   ...group,
   name: 'group-width',
   entry: '../group-control/group-control-fixture.tsx',
-  cases: { ...Object.fromEntries([1200, 800, 600, 559, 558, 520, 400].map(width => [width === 1200 ? 'default' : String(width), {
-    about: 'Group content grows with the pane; medium and narrow panes recover the action gutter',
+  cases: { ...Object.fromEntries([1200, 800, 700, 699, 600, 559, 558, 520, 400].map(width => [width === 1200 ? 'default' : String(width), {
+    about: 'Group messages and composer share task/private-chat width and responsive padding',
     viewport: { width, height: 900 }, data,
   }])), ...Object.fromEntries([1568, 1920, 2560].map(width => [`wide-${width}`, {
-    about: 'Long messages from another human use wide desktop space with the sidebar expanded',
+    about: 'Long messages from another human retain the shared reading cap with the sidebar expanded',
     viewport: { width, height: 900 }, data: { ...data, sidebar: true },
   }])), ...Object.fromEntries([1568, 960, 800, 660, 400].map(width => [`split-${width}`, {
     about: 'Sidebar and real topic splitter at both limits, with long content and independent drafts',
@@ -23,7 +23,7 @@ export default {
     about: 'The shared group renderer keeps private conversations at their existing reading width',
     viewport: { width: 1920, height: 900 }, data: { ...data, direct: true },
   }, 'self-thread-share': {
-    about: 'A self-shared thread reply with a long quote keeps its 560px column while ordinary group bubbles expand',
+    about: 'A self-shared thread reply with a long quote keeps its 560px column alongside the shared 720px bubble cap',
     viewport: { width: 1920, height: 900 }, data: { ...data, sidebar: true },
   } },
   async ready(page) {
@@ -34,7 +34,7 @@ export default {
         ...message, authorKind: i ? 'bot' : 'user', authorBotId: i ? 'a' : null,
         id: i ? 'width-bot' : 'width-user', quote: undefined, threadPreview: undefined, replyCount: 0,
         authorName: i ? 'Aster' : '',
-        content: (i ? '群聊长消息应随可用空间变宽，小窗口里也要方便阅读。' : '请检查群聊在宽屏、中小窗口和话题分栏中的阅读效果。').repeat(18),
+        content: (i ? '群聊长消息与私聊共用阅读宽度，小窗口里也要方便阅读。' : '请检查群聊在宽屏、中小窗口和话题分栏中的阅读效果。').repeat(18),
       }));
       window.__uiPage.emit('botGroupChanged', { groupId: group.id, change: 'messages' });
     });
@@ -65,8 +65,7 @@ export default {
     });
     const check = async () => {
       const m = await measure();
-      const privateChat = ui.case === 'private';
-      const column = privateChat ? Math.min(914, m.main.width - (m.main.width < 700 ? 40 : 100)) : Math.min(1440, m.main.width - 40);
+      const column = Math.min(914, m.main.width - (m.main.width < 700 ? 40 : 100));
       const close = (actual, expected, label) => assert.ok(Math.abs(actual - expected) <= 1,
         `${label}: expected ${expected}px, got ${actual}px`);
       close(m.column.width, column, 'message column');
@@ -74,14 +73,7 @@ export default {
       close(m.composer.width, column + 20, 'composer outset');
       close(m.composer.x, m.main.x + (m.main.width - column - 20) / 2, 'centered composer');
       for (const [name, bubble, available] of [['user', m.user, column], ['reply', m.bot, column - 38]]) {
-        if (privateChat) {
-          close(bubble.width, Math.min(720, available - (available <= 480 ? 0 : 120)), `${name}: private width unchanged`);
-          continue;
-        }
-        assert.ok(bubble.width <= 1201 && bubble.width <= available + 1, `${name}: bubble stays inside column`);
-        if (available <= 600) close(bubble.width, available, `${name}: narrow bubble uses full width`);
-        else if (available >= 1320) close(bubble.width, 1200, `${name}: wide bubble expands to reading cap`);
-        else assert.ok(bubble.width >= available * 0.88, `${name}: medium bubble uses at least 88% of its column`);
+        close(bubble.width, Math.min(720, available - (available <= 480 ? 0 : 120)), `${name}: shared bubble width`);
       }
       assert.ok(await page.locator('.chat-bubble-toolbar').evaluateAll(elements => elements.every(el => {
         const r = el.getBoundingClientRect(), pane = el.closest('main').getBoundingClientRect();
@@ -97,7 +89,7 @@ export default {
     });
     await page.waitForFunction(() => {
       const main = document.querySelector('[data-testid="bot-group-timeline"]').closest('main');
-      const expected = Math.min(1440, main.getBoundingClientRect().width - 40);
+      const expected = Math.min(914, main.getBoundingClientRect().width - (main.getBoundingClientRect().width < 700 ? 40 : 100));
       return Math.abs(parseFloat(main.style.getPropertyValue('--cindy-message-width')) - expected) < 1;
     });
     await check();
@@ -161,8 +153,8 @@ async function checkSelfThreadShare(page, ui) {
   await row.scrollIntoViewIfNeeded();
   await ui.capture('wide-share');
   await check();
-  assert.ok((await page.getByTestId('bot-group-bubble').boundingBox()).width > 1000,
-    'ordinary long group messages still use the wide reading cap');
+  assert.ok(Math.abs((await page.getByTestId('bot-group-bubble').boundingBox()).width - 720) <= 1,
+    'ordinary long group messages retain the shared 720px reading cap');
   await page.locator('[data-ui-page-subject]').evaluate(el => {
     el.style.height = `${el.getBoundingClientRect().height}px`;
     el.style.width = '400px'; el.style.maxWidth = '100%'; el.style.flex = 'none';

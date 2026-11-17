@@ -5475,6 +5475,13 @@
       },
       "toggleAria": "質問ナビゲーションレールを切り替え"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "モデルで worktree に名前を付ける",
+        "description": "新しいタスクの worktree に、最初のメッセージをもとに短い英語名（例：fix-login-timeout）を付け、フォルダとブランチの用途がひと目でわかるようにします。補助モデルで生成し、失敗した場合はランダムな名前を使います。今後作成する worktree にのみ適用されます。"
+      },
+      "toggleAria": "モデルによる worktree の命名を切り替え"
+    },
     "promptRecommendation": {
       "label": "次の入力候補",
       "description": "返信後、入力欄に次のメッセージの候補を表示します。Tab キーで入力できます。",
@@ -8368,6 +8375,7 @@
             "contentStyle": "メッセージの間隔と吹き出しを変更する"
           },
           "positions": {
+            "composer_header": "入力欄の上部",
             "composer_toolbar": "入力欄のツールバー",
             "session_header": "タスクのヘッダー",
             "statusbar": "ステータスバー",
@@ -15450,6 +15458,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "このファイルは現在のセッション作業ディレクトリ外にあるため、サイドバーのファイルブラウザで特定できません",
       "openInDefaultBrowser": "ブラウザで開く",
       "copyLink": "リンクをコピー",
+      "addPrToHeader": "上部に追加",
+      "prAlreadyInHeader": "上部に追加済み",
+      "prAddedToHeader": "上部に追加しました。ステータスはこのタスクに紐づきます。",
+      "prAssociatedNotInHeader": "関連付け済み・上部には非表示",
+      "prSavedNotInHeader": "関連付けを保存しました。上部の3件は埋まっています。タスク上部の PR 管理からこの PR を固定できます。",
       "linkCopied": "リンクをコピーしました",
       "viewSourceFile": "ソースを表示",
       "openInSidebarFailed": "サイドバーのブラウザで開けませんでした",
@@ -19512,6 +19525,40 @@
       "notSupported": "このアカウントでは残高照会を利用できません。",
       "unavailable": "残高を取得できません。更新してもう一度お試しください。"
     },
+    "giftCard": {
+      "action": "ギフトカードを使う",
+      "title": "ギフトカードを使う",
+      "inputLabel": "引き換えコード",
+      "inputHint": "16 文字のコードを入力するか、ギフトカードのリンクを貼り付けてください。",
+      "continue": "続ける",
+      "confirmTitle": "このギフトカードを受け取りますか？",
+      "confirmAction": "受け取る",
+      "from": "{{sender}} より",
+      "cardLabel": "Cindy ギフトカード、{{amount}}",
+      "fields": {
+        "validity": "有効期間",
+        "validityValue_other": "受け取りから {{count}} 日間",
+        "claimBy": "受け取り期限",
+        "destination": "追加先"
+      },
+      "doneTitle": "{{amount}} を追加しました",
+      "doneDescription": "特典残高に追加しました。{{date}} まで有効です。",
+      "doneDescriptionNoDate": "特典残高に追加しました。",
+      "pendingTitle": "ギフトカードを受け取りました",
+      "pendingDescription": "{{amount}} を追加中です。まもなく特典残高に反映されます。もう一度受け取る必要はありません。",
+      "alreadyYours": "このギフトカードはすでに受け取り済みです。",
+      "done": "完了",
+      "errors": {
+        "notFound": "コードが無効です。確認してもう一度お試しください。",
+        "wrongRegionCn": "このギフトカードは Cindy 中国本土版用のため、このアカウントでは受け取れません。",
+        "wrongRegionGlobal": "このギフトカードは Cindy 国際版用のため、このアカウントでは受け取れません。",
+        "alreadyClaimed": "このギフトカードはすでに受け取られています。",
+        "expired": "このギフトカードは受け取り期限を過ぎています。",
+        "voided": "このギフトカードは無効になりました。",
+        "rateLimited": "試行回数が多すぎます。しばらくしてからもう一度お試しください。",
+        "failed": "ギフトカードを受け取れませんでした。しばらくしてからもう一度お試しください。"
+      }
+    },
     "usage": {
       "title": "残高使用量",
       "observedAt": "残高更新: {{date}}",
@@ -19527,6 +19574,7 @@
         "empty": "特典の付与履歴はありません。",
         "incomplete": "付与履歴が多いため、最新の{{count}}件のみ表示しています。",
         "unnamed": "特典残高",
+        "giftCard": "ギフトカード · {{sender}} より",
         "original": "付与額",
         "used": "使用済み",
         "remaining": "残り",

@@ -5475,6 +5475,13 @@
       },
       "toggleAria": "切換提問導覽列"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "用模型為 worktree 命名",
+        "description": "新任務的 worktree 會依第一則訊息取一個英文短名（如 fix-login-timeout），資料夾和分支一看就知道用途。由輔助模型產生，命名失敗時仍使用隨機名稱；只影響之後新建的 worktree。"
+      },
+      "toggleAria": "切換用模型為 worktree 命名"
+    },
     "promptRecommendation": {
       "label": "輸入建議",
       "description": "回覆後建議下一句，按 Tab 填入",
@@ -8368,6 +8375,7 @@
             "contentStyle": "修改訊息間距與氣泡樣式"
           },
           "positions": {
+            "composer_header": "輸入框上方",
             "composer_toolbar": "輸入框工具列",
             "session_header": "任務標題列",
             "statusbar": "狀態列",
@@ -15449,6 +15457,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "該檔案不在當前任務工作目錄內，無法在側邊欄檔案瀏覽器中定位",
       "openInDefaultBrowser": "在瀏覽器開啟",
       "copyLink": "複製連結",
+      "addPrToHeader": "加入頂欄",
+      "prAlreadyInHeader": "已在頂欄",
+      "prAddedToHeader": "已加入頂欄，狀態會跟著任務走",
+      "prAssociatedNotInHeader": "已關聯，未在頂欄",
+      "prSavedNotInHeader": "已儲存關聯；頂欄前三項已滿，可在任務頂欄的 PR 管理中固定它",
       "linkCopied": "連結已複製",
       "viewSourceFile": "檢視原始碼",
       "openInSidebarFailed": "在側邊欄瀏覽器中開啟失敗",
@@ -19512,6 +19525,40 @@
       "notSupported": "當前帳戶暫不支援餘額查詢。",
       "unavailable": "暫時無法取得餘額，請重新整理後重試。"
     },
+    "giftCard": {
+      "action": "兌換禮品卡",
+      "title": "兌換禮品卡",
+      "inputLabel": "兌換碼",
+      "inputHint": "輸入 16 位兌換碼，或貼上禮品卡連結。",
+      "continue": "繼續",
+      "confirmTitle": "領取這張禮品卡？",
+      "confirmAction": "確認領取",
+      "from": "來自 {{sender}}",
+      "cardLabel": "Cindy 禮品卡，{{amount}}",
+      "fields": {
+        "validity": "有效期",
+        "validityValue_other": "領取後 {{count}} 天",
+        "claimBy": "領取截止",
+        "destination": "存入"
+      },
+      "doneTitle": "{{amount}} 已到帳",
+      "doneDescription": "已存入贈送餘額，{{date}} 前有效。",
+      "doneDescriptionNoDate": "已存入贈送餘額。",
+      "pendingTitle": "禮品卡已領取",
+      "pendingDescription": "{{amount}} 正在入帳，稍後會出現在贈送餘額中，無需再次領取。",
+      "alreadyYours": "你已經領取過這張禮品卡。",
+      "done": "完成",
+      "errors": {
+        "notFound": "兌換碼無效，請檢查後重試。",
+        "wrongRegionCn": "這張禮品卡屬於 Cindy 中國大陸版，目前帳號無法領取。",
+        "wrongRegionGlobal": "這張禮品卡屬於 Cindy 國際版，目前帳號無法領取。",
+        "alreadyClaimed": "這張禮品卡已被領取。",
+        "expired": "這張禮品卡已過領取期限。",
+        "voided": "這張禮品卡已作廢。",
+        "rateLimited": "嘗試次數過多，請稍後再試。",
+        "failed": "暫時無法兌換，請稍後重試。"
+      }
+    },
     "usage": {
       "title": "餘額用量",
       "observedAt": "餘額更新於 {{date}}",
@@ -19527,6 +19574,7 @@
         "empty": "當前沒有贈送記錄。",
         "incomplete": "贈送記錄較多，當前僅顯示最近的 {{count}} 筆。",
         "unnamed": "贈送餘額",
+        "giftCard": "禮品卡 · 來自 {{sender}}",
         "original": "原始金額",
         "used": "已用",
         "remaining": "剩餘",

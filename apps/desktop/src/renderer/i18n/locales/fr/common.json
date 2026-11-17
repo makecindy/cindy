@@ -5576,6 +5576,13 @@
       },
       "toggleAria": "Afficher ou masquer le rail de navigation des questions"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Nommer les worktrees avec un modèle",
+        "description": "Donne au worktree d’une nouvelle tâche un nom court en anglais tiré de son premier message (par ex. fix-login-timeout), pour que le dossier et la branche indiquent leur rôle. Généré par les modèles auxiliaires ; en cas d’échec, un nom aléatoire est utilisé. Ne concerne que les worktrees créés à partir de maintenant."
+      },
+      "toggleAria": "Activer ou désactiver le nommage des worktrees par un modèle"
+    },
     "promptRecommendation": {
       "label": "Suggestions de saisie",
       "description": "Après une réponse, la zone de saisie propose une suggestion pour votre prochain message. Appuyez sur Tab pour l'insérer.",
@@ -8483,6 +8490,7 @@
             "contentStyle": "Modifier l’espacement des messages et les bulles"
           },
           "positions": {
+            "composer_header": "au-dessus de la zone de saisie",
             "composer_toolbar": "barre d’outils de saisie",
             "session_header": "en-tête de la tâche",
             "statusbar": "barre d’état",
@@ -15619,6 +15627,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "Ce fichier se trouve en dehors du répertoire de travail de la session actuelle et ne peut pas être localisé dans le navigateur de fichiers de la barre latérale",
       "openInDefaultBrowser": "Ouvrir dans le navigateur",
       "copyLink": "Copier le lien",
+      "addPrToHeader": "Ajouter à l’en-tête",
+      "prAlreadyInHeader": "Déjà dans l’en-tête",
+      "prAddedToHeader": "Ajouté à l’en-tête — le statut accompagne cette tâche.",
+      "prAssociatedNotInHeader": "Liée, absente de l’en-tête",
+      "prSavedNotInHeader": "Lien enregistré. Les trois places de l’en-tête sont prises ; épinglez cette PR dans la gestion des PR de l’en-tête de la tâche.",
       "linkCopied": "Lien copié",
       "viewSourceFile": "Voir la source",
       "openInSidebarFailed": "Impossible d'ouvrir dans le navigateur de la barre latérale",
@@ -19771,6 +19784,42 @@
       "notSupported": "La consultation du solde n'est pas prise en charge pour ce compte.",
       "unavailable": "Le solde est temporairement indisponible. Actualisez pour réessayer."
     },
+    "giftCard": {
+      "action": "Utiliser une carte cadeau",
+      "title": "Utiliser une carte cadeau",
+      "inputLabel": "Code de la carte",
+      "inputHint": "Saisissez le code à 16 caractères ou collez le lien d’une carte cadeau.",
+      "continue": "Continuer",
+      "confirmTitle": "Utiliser cette carte cadeau ?",
+      "confirmAction": "Utiliser",
+      "from": "De la part de {{sender}}",
+      "cardLabel": "Carte cadeau Cindy, {{amount}}",
+      "fields": {
+        "validity": "Validité",
+        "validityValue_one": "{{count}} jour après utilisation",
+        "validityValue_many": "{{count}} de jours après utilisation",
+        "validityValue_other": "{{count}} jours après utilisation",
+        "claimBy": "À utiliser avant le",
+        "destination": "Ajouté à"
+      },
+      "doneTitle": "{{amount}} ajoutés",
+      "doneDescription": "Ajouté à votre Solde promotionnel. Valable jusqu’au {{date}}.",
+      "doneDescriptionNoDate": "Ajouté à votre Solde promotionnel.",
+      "pendingTitle": "Carte cadeau utilisée",
+      "pendingDescription": "{{amount}} sont en cours d’ajout et apparaîtront bientôt dans votre Solde promotionnel. Inutile de l’utiliser à nouveau.",
+      "alreadyYours": "Vous avez déjà utilisé cette carte cadeau.",
+      "done": "Terminé",
+      "errors": {
+        "notFound": "Ce code n’est pas valide. Vérifiez-le et réessayez.",
+        "wrongRegionCn": "Cette carte cadeau est destinée à l’édition Chine continentale de Cindy et ne peut pas être utilisée avec ce compte.",
+        "wrongRegionGlobal": "Cette carte cadeau est destinée à l’édition internationale de Cindy et ne peut pas être utilisée avec ce compte.",
+        "alreadyClaimed": "Cette carte cadeau a déjà été utilisée.",
+        "expired": "Cette carte cadeau ne peut plus être utilisée : sa date limite est dépassée.",
+        "voided": "Cette carte cadeau a été annulée.",
+        "rateLimited": "Trop de tentatives. Réessayez plus tard.",
+        "failed": "Impossible d’utiliser la carte cadeau. Réessayez plus tard."
+      }
+    },
     "usage": {
       "title": "Consommation du solde",
       "observedAt": "Solde mis à jour le {{date}}",
@@ -19786,6 +19835,7 @@
         "empty": "Aucune attribution promotionnelle disponible.",
         "incomplete": "Il existe de nombreuses attributions. Seules les {{count}} plus récentes sont affichées.",
         "unnamed": "Attribution promotionnelle",
+        "giftCard": "Carte cadeau · de la part de {{sender}}",
         "original": "Initial",
         "used": "Utilisé",
         "remaining": "Restant",

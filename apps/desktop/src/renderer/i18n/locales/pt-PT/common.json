@@ -5576,6 +5576,13 @@
       },
       "toggleAria": "Ativar/desativar barra de navegação de perguntas"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Nomear worktrees com um modelo",
+        "description": "Dá ao worktree de uma nova tarefa um nome curto em inglês com base na primeira mensagem (p. ex., fix-login-timeout), para que a pasta e a branch mostrem para que servem. Gerado pelos modelos auxiliares; se falhar, é usado um nome aleatório. Afeta apenas os worktrees criados a partir de agora."
+      },
+      "toggleAria": "Ativar ou desativar a nomeação de worktrees com um modelo"
+    },
     "promptRecommendation": {
       "label": "Sugestões de escrita",
       "description": "Após uma resposta, o campo de escrita mostra uma sugestão para a próxima mensagem. Prima Tab para a inserir.",
@@ -8483,6 +8490,7 @@
             "contentStyle": "Alterar o espaçamento das mensagens e os balões"
           },
           "positions": {
+            "composer_header": "uma área acima da caixa de entrada",
             "composer_toolbar": "barra de ferramentas de entrada",
             "session_header": "cabeçalho da tarefa",
             "statusbar": "barra de estado",
@@ -15619,6 +15627,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "Este ficheiro está fora do diretório de trabalho da sessão atual e não pode ser localizado no explorador de ficheiros da barra lateral",
       "openInDefaultBrowser": "Abrir no navegador",
       "copyLink": "Copiar ligação",
+      "addPrToHeader": "Adicionar ao cabeçalho",
+      "prAlreadyInHeader": "Já está no cabeçalho",
+      "prAddedToHeader": "Adicionado ao cabeçalho — o estado acompanha esta tarefa.",
+      "prAssociatedNotInHeader": "Associado, fora do cabeçalho",
+      "prSavedNotInHeader": "Associação guardada. Os três lugares do cabeçalho estão ocupados; fixe este PR na gestão de PRs no cabeçalho da tarefa.",
       "linkCopied": "Ligação copiada",
       "viewSourceFile": "Ver código-fonte",
       "openInSidebarFailed": "Não foi possível abrir no navegador da barra lateral",
@@ -19771,6 +19784,42 @@
       "notSupported": "A consulta de saldo não é suportada para esta conta.",
       "unavailable": "O saldo está temporariamente indisponível. Atualize para tentar novamente."
     },
+    "giftCard": {
+      "action": "Utilizar cartão de oferta",
+      "title": "Utilizar cartão de oferta",
+      "inputLabel": "Código do cartão",
+      "inputHint": "Introduza o código de 16 caracteres ou cole a ligação de um cartão de oferta.",
+      "continue": "Continuar",
+      "confirmTitle": "Utilizar este cartão de oferta?",
+      "confirmAction": "Utilizar",
+      "from": "De {{sender}}",
+      "cardLabel": "Cartão de oferta Cindy, {{amount}}",
+      "fields": {
+        "validity": "Validade",
+        "validityValue_one": "{{count}} dia após a utilização",
+        "validityValue_many": "{{count}} de dias após a utilização",
+        "validityValue_other": "{{count}} dias após a utilização",
+        "claimBy": "Utilizar até",
+        "destination": "Adicionado a"
+      },
+      "doneTitle": "{{amount}} adicionados",
+      "doneDescription": "Adicionado ao seu Saldo promocional. Válido até {{date}}.",
+      "doneDescriptionNoDate": "Adicionado ao seu Saldo promocional.",
+      "pendingTitle": "Cartão de oferta utilizado",
+      "pendingDescription": "{{amount}} estão a ser adicionados e vão aparecer em breve no seu Saldo promocional. Não precisa de o utilizar novamente.",
+      "alreadyYours": "Já utilizou este cartão de oferta.",
+      "done": "Concluído",
+      "errors": {
+        "notFound": "Este código não é válido. Verifique-o e tente novamente.",
+        "wrongRegionCn": "Este cartão de oferta destina-se à edição da China continental do Cindy e não pode ser utilizado com esta conta.",
+        "wrongRegionGlobal": "Este cartão de oferta destina-se à edição internacional do Cindy e não pode ser utilizado com esta conta.",
+        "alreadyClaimed": "Este cartão de oferta já foi utilizado.",
+        "expired": "Este cartão de oferta já não pode ser utilizado porque o prazo terminou.",
+        "voided": "Este cartão de oferta foi anulado.",
+        "rateLimited": "Demasiadas tentativas. Tente novamente mais tarde.",
+        "failed": "Não foi possível utilizar o cartão de oferta. Tente novamente mais tarde."
+      }
+    },
     "usage": {
       "title": "Utilização do saldo",
       "observedAt": "Saldo atualizado em {{date}}",
@@ -19786,6 +19835,7 @@
         "empty": "Não existem atribuições promocionais disponíveis.",
         "incomplete": "Existem muitos registos de atribuições. Apenas são apresentados os {{count}} mais recentes.",
         "unnamed": "Atribuição promocional",
+        "giftCard": "Cartão de oferta · de {{sender}}",
         "original": "Original",
         "used": "Utilizado",
         "remaining": "Restante",
