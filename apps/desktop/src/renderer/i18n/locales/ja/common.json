@@ -16222,7 +16222,8 @@
         "project": "プロジェクト",
         "flat": "フラット表示",
         "device": "デバイス",
-        "dialogue": "チャット"
+        "dialogue": "チャット",
+        "automation": "自動化"
       },
       "filterGroupByDeviceManualTip": "手動並び替え中はデバイス別のグループ化を使用できません",
       "deviceGroup": {
@@ -16570,6 +16571,7 @@
       "groupSummary": {
         "project": "プロジェクト",
         "dialogue": "チャット",
+        "automation": "自動化",
         "device": "デバイス"
       },
       "taskStatusHeading": "セッションの状態",
