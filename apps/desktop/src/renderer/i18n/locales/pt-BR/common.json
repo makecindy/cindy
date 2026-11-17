@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "Salvar",
     "promptUnsupported": "Este local de execução do Pi não oferece suporte a trechos de instruções de sistema.",
+    "nativeHooksUnsupported": "Os hooks de ferramentas são compatíveis apenas com Claude Code e Pi locais.",
     "title": "Plugins da tarefa",
     "description": "Selecione os plugins desta tarefa. As alterações valem a partir da próxima mensagem.",
     "unsupported": "O processamento de cada solicitação só está disponível com Pi local. O mecanismo desta tarefa não oferece suporte.",
@@ -1396,7 +1397,7 @@
     "REMOTE_PROVIDER_UPDATING": "As credenciais do provedor estão sendo atualizadas — tente novamente em instantes",
     "REMOTE_PROVIDER_UNSUPPORTED": "Este provedor não é compatível com sessões remotas SSH — escolha outra fonte",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Tarefas remotas não podem usar uma assinatura do Claude — escolha um modelo via gateway ou chave de API",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "O dispositivo de destino não está respondendo. Verifique o dispositivo remoto e tente novamente.",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "O dispositivo de destino não está respondendo no momento. A rede pode estar lenta ou o dispositivo ocupado. O Cindy verifica automaticamente; tente novamente quando a conexão se recuperar.",
     "INTERNAL": "A operação falhou. Tente novamente mais tarde.",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "A configuração SSH foi alterada no disco. Recarregue-a e tente novamente.",
     "SSH_CONFIG_RELOAD_REQUIRED": "A configuração SSH foi salva, mas Cindy não conseguiu atualizá-la. Recarregue a configuração SSH.",
@@ -4401,7 +4402,6 @@
           "label": "Executar em",
           "optionLocal": "Este computador",
           "notSignedIn": "Sem login",
-          "autoBorrowing": "Este computador não está conectado, então as novas tarefas rodam em {{device}}. Não é preciso fazer login.",
           "local": "As novas tarefas rodam neste computador. Você pode escolher outro dos seus computadores conectados.",
           "pinned": "As novas tarefas rodam em {{device}} com o login dele. As tarefas em andamento continuam onde estão.",
           "inline": "Executa em",
@@ -8358,6 +8358,8 @@
         "subscribeTopics": "Observa a atividade da sua sessão (eventos de turnos e sessões, sem conteúdo das mensagens)",
         "subscribeMessage": "Eventos de conteúdo de mensagens",
         "subscribeMessageDetail": "Recebe mensagens salvas do usuário e respostas da IA. Os anexos são lidos e transferidos separadamente.",
+        "subscribeToolExecution": "Eventos de execução de ferramentas",
+        "subscribeToolExecutionDetail": "Recebe nomes, entradas, resultados e erros das ferramentas. Observa sem alterar a execução.",
         "subscribeTaskState": "Eventos de estado de tarefas",
         "subscribeTaskStateDetail": "Recebe alterações de execução, espera, conclusão, arquivamento e ocultação de tarefas.",
         "subscribeActivity": "Observa quando a IA está pensando e quando está esperando por você",
@@ -8380,6 +8382,10 @@
         "subscribeStartTurnDetail": "Somente as tarefas em que você seleciona este plugin compartilham a mensagem atual com ele. Ele pode escolher um modelo conectado, o esforço de raciocínio e Fast. Os erros seguem a configuração da tarefa; ele não pode aprovar ações por você.",
         "subscribeModelRequest": "Pode processar cada solicitação ao modelo nas tarefas selecionadas",
         "subscribeModelRequestDetail": "Somente as tarefas em que você seleciona este plugin compartilham com ele as solicitações ao modelo. Ele pode ajustar modelos, parâmetros e conteúdo. Atualmente, apenas o Pi local é compatível; os erros seguem a configuração da tarefa. As credenciais de conexão não são incluídas.",
+        "subscribeToolCall": "Pode processar chamadas de ferramentas nas tarefas selecionadas",
+        "subscribeToolCallDetail": "Pode ler, alterar ou rejeitar parâmetros conforme os recursos do motor. Não pode aprovar operações por você.",
+        "subscribeToolResult": "Pode processar resultados de ferramentas nas tarefas selecionadas",
+        "subscribeToolResultDetail": "Pode ler resultados e adicionar contexto ou substituir resultados se o motor permitir. Não desfaz operações já executadas.",
         "subscribeStartTask": "Pode escolher o modelo de novas tarefas",
         "subscribeStartTaskDetail": "Quando uma nova tarefa usa um modelo oferecido por ele, ele lê a primeira mensagem e escolhe um dos seus modelos conectados. Esta etapa é executada apenas antes da primeira mensagem.",
         "card": "Renderiza cartões de mensagens",
@@ -12688,6 +12694,7 @@
       "createOwnApp": "Criar meu App ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ Entrega de anexos incompleta: {{count}} não enviados ({{names}}).",
+    "outboundAttachmentOverLimit": "{{name}} (acima do limite de {{limit}} MB)",
     "unnamedAttachment": "Anexo sem título",
     "text": {
       "discord": {
@@ -13649,9 +13656,17 @@
         "submitLabel": "Enviar respostas",
         "multiSelectHint": " (pode escolher mais de uma)",
         "resolved": "✅ Selecionado: {{option}}",
+        "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "Este cartão expirou",
         "textHint": "Só quem fez a consulta pode responder. Envie {{code}} seguido da resposta. Para várias perguntas: {{code}} 2: resposta; depois {{code}} OK para enviar.",
-        "replyHint": "Só quem fez o pedido pode responder. Toque em uma opção; para várias perguntas ou seleções, envie ao terminar.\nEnvie {{code}} seguido da resposta. Para várias perguntas: {{code}} 2: resposta; depois {{code}} OK para enviar."
+        "replyHint": "Só quem fez o pedido pode responder. Toque em uma opção; para várias perguntas ou seleções, envie ao terminar.\nEnvie {{code}} seguido da resposta. Para várias perguntas: {{code}} 2: resposta; depois {{code}} OK para enviar.",
+        "nextLabel": "Próxima pergunta",
+        "stepHint": "Só quem fez o pedido pode responder. Toque em uma opção ou envie {{code}} seguido da resposta.",
+        "stepSubmitHint": "Só quem fez o pedido pode responder. Escolha e toque em “{{action}}”; ou envie {{code}} seguido da resposta e depois {{code}} OK.",
+        "stepTextHint": "Só quem fez o pedido pode responder. Envie {{code}} seguido da resposta.",
+        "unanswered": "⚠️ Ainda sem resposta: pergunta {{numbers}}. Responda a todas as perguntas e depois envie.",
+        "unansweredSingle": "⚠️ Ainda sem resposta. Escolha uma opção ou digite uma resposta primeiro.",
+        "numberSeparator": ", "
       }
     }
   },
@@ -14143,6 +14158,14 @@
         "standard": "Padrão",
         "fast": "Rápido",
         "ultrafast": "Ultrarrápido"
+      },
+      "discoveredCopy": {
+        "title": "Usar {{provider}} em “{{device}}”?",
+        "description": "{{unavailable}} Se continuar, ele será executado em “{{device}}”. Você pode voltar aqui quando quiser.",
+        "unavailableHere": "{{provider}} neste computador não está disponível agora.",
+        "unavailableOn": "{{provider}} em “{{device}}” não está disponível agora.",
+        "confirm": "Usar",
+        "cancel": "Manter como está"
       }
     },
     "permissionSelector": {
@@ -14434,7 +14457,8 @@
         "description": "O registro da conversa no outro computador não pode ser transferido, então ela continua a partir de um resumo de transferência. O raciocínio e detalhes semelhantes podem não ser transferidos completamente. Entra em vigor quando você enviar a próxima mensagem.",
         "descriptionNativeHistory": "O registro completo da conversa é copiado e continua de onde parou. Se não puder ser restaurado, ela continua a partir de um resumo de transferência, e o raciocínio e detalhes semelhantes podem não ser transferidos completamente. Entra em vigor quando você enviar a próxima mensagem.",
         "confirm": "Trocar de computador",
-        "cancel": "Manter como está"
+        "cancel": "Manter como está",
+        "discoveredDescription": "{{reason}} {{description}}"
       }
     },
     "agentSelect": {
@@ -15011,6 +15035,8 @@
       "subtitle_many": "{{count}} mensagens selecionadas"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "cindy_helper está ativado, mas não está disponível nesta tarefa. Talvez não seja possível comunicar o resultado da tarefa.",
+      "codexHelperUnverified": "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Talvez não seja possível comunicar o resultado da tarefa.",
       "requestFormatError": "O aplicativo enviou uma solicitação inválida, por isso não foi possível concluir esta resposta.",
       "replyFailed": "Não foi possível concluir a resposta",
       "retryTitle": "Reenviar a última mensagem",
@@ -16150,6 +16176,7 @@
       "saveFailed": "Falha ao salvar a faixa da janela de contexto"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "Aguardando a resposta remota…",
       "readingMemory": "Lendo a memória…",
       "savingMemory": "Salvando memória…",
       "deletingMemory": "Excluindo memória…",
@@ -16425,7 +16452,8 @@
         "project": "Projeto",
         "flat": "Lista simples",
         "device": "Dispositivo",
-        "dialogue": "Conversa"
+        "dialogue": "Conversa",
+        "automation": "Automação"
       },
       "filterGroupByDeviceManualTip": "Agrupar por dispositivo não está disponível durante a ordenação manual",
       "deviceGroup": {
@@ -16779,6 +16807,7 @@
       "groupSummary": {
         "project": "Projeto",
         "dialogue": "Conversa",
+        "automation": "Automação",
         "device": "Dispositivo"
       },
       "taskStatusHeading": "Status da sessão",
@@ -17478,7 +17507,9 @@
           "jira_read": "Ler Jira",
           "jira_comment": "Comentar no Jira",
           "sessions_dispatch": "Despachar sessões",
-          "feishu_read": "Ler mensagens do Feishu"
+          "feishu_read": "Ler mensagens do Feishu",
+          "settings_read": "Ler membros dos compartilhamentos",
+          "usage_read": "Ler o uso e o status dos grupos de fornecedores"
         },
         "project": "Diretório do projeto",
         "capabilitiesLabel": "Recursos permitidos",
@@ -17490,7 +17521,9 @@
           "jira_read": "Ler issues do Jira (obter por chave / busca JQL)",
           "jira_comment": "Adicionar comentários a issues do Jira",
           "sessions_dispatch": "Criar ou reativar sessões do {{appName}} e entregar mensagens",
-          "feishu_read": "Listar conversas ativas recentemente; buscar mensagens recentes de uma conversa (grupo ou mensagem direta)"
+          "feishu_read": "Listar conversas ativas recentemente; buscar mensagens recentes de uma conversa (grupo ou mensagem direta)",
+          "settings_read": "Lê os membros dos seus compartilhamentos e os modelos permitidos neste computador ou em outros computadores autorizados da mesma conta; não faz alterações",
+          "usage_read": "Lê os identificadores, planos, períodos de cota e horários de atualização das contas locais de Claude/Codex conectadas à sua conta Cindy. Lê o uso registrado por dia e modelo, os custos estimados, a configuração e o status dos grupos de fornecedores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou em outros computadores autorizados da mesma conta. Não permite ler e-mails de login das assinaturas, diretórios de contas, impressões de identidade internas, credenciais ou arquivos, nem alterar contas ou configurações."
         },
         "capabilityWarn": {
           "ghostMissing": "Requer o plugin \"{{name}}\", que não está instalado — este recurso falhará durante a execução",

@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import type { JSONContent } from '@tiptap/core';
+import { clearDraft, getDraft, saveDraft } from '@/lib/composerDraftStore';
 
 import type { Effort, ProviderView } from '@cindy/model-providers';
 import { chatEligibleSourcesForModel, effectiveSourceIdForModel, getModel, isModelSelectableForNewRoute, reconcileInvocationEffort } from '@cindy/model-providers';
@@ -129,6 +131,8 @@ function selection(effort: Effort | null): DeviceLinkDraftSelection {
 
 function harness(options: {
   sameDevice?: boolean;
+  sourceDeviceId?: string | null;
+  initialWorkingDir?: string;
   separateAgent?: boolean;
   previous?: DeviceLinkDraftSelection | null;
   targetEfforts?: Effort[];
@@ -160,8 +164,9 @@ function harness(options: {
   const dlSeedKeyRef = { current: null as string | null };
   const bindings = {
     // These are target-machine POSIX paths, not local filesystem paths.
-    draft: { vendor: 'pi', workingDir: '/remote/project' },
-    effectiveDeviceLinkDeviceId: options.sameDevice ? 'target-device' : 'old-device',
+    draft: { vendor: 'pi', workingDir: options.initialWorkingDir ?? '/remote/project' },
+    effectiveDeviceLinkDeviceId: 'sourceDeviceId' in options
+      ? options.sourceDeviceId ?? undefined : options.sameDevice ? 'target-device' : 'old-device',
     effectiveRemoteHostId: null,
     effectiveAgentDeviceId: options.separateAgent ? 'agent-device' : undefined,
     capabilityAgentKind: 'pi',
@@ -180,7 +185,12 @@ function harness(options: {
     wtBranchPreferenceSavingRef: { current: false }, wtBranchTargetRef: { current: null },
     wtBranchSyncRef: { current: null }, wtBranchPreferenceErrorRef: { current: false },
     wtPreferenceWriteSeqRef: { current: 0 }, wtPreferenceSavingRef: { current: false },
-    stripProjectRelativeMentions: vi.fn(),
+    stripProjectRelativeMentions: callback<(deviceChanged?: boolean) => void>('stripProjectRelativeMentions', {
+      getComposerDraft: getDraft, saveComposerDraft: saveDraft, NEW_MAKER_DRAFT_KEY: 'target-roster-regression',
+      stripLocalMentionChips: compile<(node: JSONContent | null, deviceChanged?: boolean) => JSONContent | null>(
+        'stripLocalMentionChips', node => ts.isFunctionDeclaration(node)
+          && node.name?.text === 'stripLocalMentionChips' ? node : undefined, {}),
+    }),
     evictDeviceCapabilities: vi.fn(), evictDeviceProviders: vi.fn(), evictDeviceGitSafetySettings: vi.fn(),
     prefetchDeviceCapabilities: vi.fn(), prefetchDeviceProviders: vi.fn(), prefetchDeviceGitSafetySettings: vi.fn(),
     setWtBranchPreferenceSaving: vi.fn(), setWtBranchSync: vi.fn(), setWtBranchPreferenceError: vi.fn(),
@@ -240,6 +250,31 @@ describe('remote project draft catalog ownership', () => {
     expect(h.patchDraft).not.toHaveBeenCalled();
     expect(h.setRemoteDraftState).not.toHaveBeenCalled();
   });
+});
+
+// #8941: execute the real target-change callback and persisted document cleanup.
+// A selected local buddy is device-scoped, while changing only the project must
+// preserve it. Existing editor tests cover selecting/serializing the bot chip.
+it.each([
+  { deviceChanged: true, sourceDeviceId: null, initialWorkingDir: '/remote/project' },
+  { deviceChanged: true, sourceDeviceId: 'other-device', initialWorkingDir: '/remote/project' },
+  { deviceChanged: false, sourceDeviceId: 'target-device', initialWorkingDir: '/old-project' },
+])('invalidates selected buddy only on device change: $deviceChanged/$sourceDeviceId', async (options) => {
+  const key = 'target-roster-regression';
+  saveDraft(key, { text: { type: 'doc', content: [{ type: 'paragraph', content: [
+    { type: 'text', text: 'Ask ' },
+    { type: 'mentionChip', attrs: { kind: 'bot', path: 'local-buddy', label: 'Local buddy' } },
+    { type: 'mentionChip', attrs: { kind: 'session', path: 'cindy://sessions/same-name-task', label: 'Local buddy' } },
+    { type: 'mentionChip', attrs: { kind: 'file', path: 'src/main.ts', label: 'main.ts' } },
+  ] }] }, attachments: [] });
+  try {
+    await harness(options).add();
+    const content = getDraft(key)?.text?.content?.[0]?.content;
+    expect(content?.some(node => node.type === 'mentionChip' && node.attrs?.kind === 'bot')).toBe(!options.deviceChanged);
+    expect(content?.some(node => node.type === 'mentionChip' && node.attrs?.kind === 'session')).toBe(true);
+    expect(content?.some(node => node.type === 'mentionChip' && node.attrs?.kind === 'file')).toBe(false);
+    expect(content?.[0]).toEqual({ type: 'text', text: 'Ask ' });
+  } finally { clearDraft(key); }
 });
 
 // A task computer's source list can offer the controller itself, which the

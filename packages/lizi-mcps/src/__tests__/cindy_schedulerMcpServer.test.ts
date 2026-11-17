@@ -834,6 +834,28 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     await h.cleanup();
   });
 
+  // Unit / #10840 parity: the real MCP create/update schemas must accept the
+  // same grants as the UI. Existing script cases only used the older grants;
+  // settings.read + usage.read previously failed before reaching Scheduler.
+  it.each(['schedule_create', 'schedule_update'] as const)('%s persists the shared host-read capabilities', async tool => {
+    try {
+      const scriptConfig = { command: 'node read.mjs', capabilities: ['settings.read', 'usage.read'] };
+      const seed = tool === 'schedule_update' ? await h.scheduler.create({
+        ...baseCreate, executionMode: 'script', scriptConfig: { command: 'node old.mjs', capabilities: [] },
+      }) : undefined;
+      const { envelope, isError } = parseToolResult(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: tool, args: tool === 'schedule_create' ? { ...scriptCreate, scriptConfig } : { id: seed!.id, scriptConfig },
+      } }) as { content: unknown[]; isError?: boolean });
+      expect(isError).toBe(false);
+      expect(envelope).toMatchObject({ ok: true, data: { scriptConfig } });
+      if (!envelope.ok) throw new Error('unexpected validation failure');
+      const saved = await h.storage.get((envelope.data as Schedule).id);
+      expect(saved?.scriptConfig).toEqual(scriptConfig);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
   it('call_tool(schedule_create, script without scriptConfig) returns INVALID_PARAMS', async () => {
     const { scriptConfig: _omit, ...rest } = scriptCreate;
     const result = await h.client.callTool({

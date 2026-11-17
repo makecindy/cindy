@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "Speichern",
     "promptUnsupported": "Dieser Pi-Ausführungsort unterstützt keine Systemanweisungsfragmente.",
+    "nativeHooksUnsupported": "Werkzeug-Hooks unterstützen nur lokales Claude Code und Pi.",
     "title": "Aufgaben-Plugins",
     "description": "Plugins für diese Aufgabe auswählen. Änderungen gelten ab der nächsten Nachricht.",
     "unsupported": "Die Verarbeitung jeder Anfrage wird nur mit lokalem Pi unterstützt. Die Engine dieser Aufgabe unterstützt sie nicht.",
@@ -1378,7 +1379,7 @@
     "REMOTE_PROVIDER_UPDATING": "Die Zugangsdaten des Anbieters werden aktualisiert – versuch es gleich erneut",
     "REMOTE_PROVIDER_UNSUPPORTED": "Dieser Anbieter wird in SSH-Remote-Sitzungen nicht unterstützt – wähle eine andere Quelle",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Remote-Aufgaben können kein Claude-Abonnement nutzen – wähle ein Gateway- oder API-Schlüssel-Modell",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "Das Zielgerät antwortet nicht. Überprüfe das entfernte Gerät und versuch es erneut.",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "Das Zielgerät antwortet gerade nicht. Das Netzwerk ist möglicherweise langsam oder das Gerät ausgelastet. Cindy prüft die Verbindung automatisch; versuch es erneut, sobald sie wieder steht.",
     "INTERNAL": "Vorgang fehlgeschlagen. Versuch es später erneut.",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "Die SSH-Konfiguration auf dem Datenträger wurde geändert. Lade sie neu und versuch es erneut.",
     "SSH_CONFIG_RELOAD_REQUIRED": "Die SSH-Konfiguration wurde gespeichert, aber Cindy konnte sie nicht aktualisieren. Lade die SSH-Konfiguration neu.",
@@ -4345,7 +4346,6 @@
           "label": "Ausführen auf",
           "optionLocal": "Dieser Computer",
           "notSignedIn": "Nicht angemeldet",
-          "autoBorrowing": "Dieser Computer ist nicht angemeldet, daher laufen neue Aufgaben auf {{device}}. Keine Anmeldung nötig.",
           "local": "Neue Aufgaben laufen auf diesem Computer. Du kannst stattdessen einen deiner anderen angemeldeten Computer wählen.",
           "pinned": "Neue Aufgaben laufen auf {{device}} mit dessen Anmeldung. Laufende Aufgaben bleiben, wo sie sind.",
           "inline": "Läuft auf",
@@ -8286,6 +8286,8 @@
         "subscribeTopics": "Beobachtet deine Sitzungsaktivität (Runden- und Sitzungsereignisse, keine Nachrichteninhalte)",
         "subscribeMessage": "Ereignisse mit Nachrichteninhalt",
         "subscribeMessageDetail": "Empfängt gespeicherte Nutzernachrichten und KI-Antworten. Anhänge werden separat gelesen und übergeben.",
+        "subscribeToolExecution": "Ereignisse zur Werkzeugausführung",
+        "subscribeToolExecutionDetail": "Empfängt Werkzeugnamen, Eingaben, Ergebnisse und Fehler. Beobachtet, ohne die Ausführung zu ändern.",
         "subscribeTaskState": "Ereignisse zum Aufgabenstatus",
         "subscribeTaskStateDetail": "Empfängt Änderungen bei Ausführung, Warten, Abschluss, Archivierung und ausgeblendeten Aufgaben.",
         "subscribeActivity": "Erkennt, wann die KI nachdenkt und wann sie auf dich wartet",
@@ -8308,6 +8310,10 @@
         "subscribeStartTurnDetail": "Nur Aufgaben, in denen du dieses Plugin auswählst, geben die aktuelle Nachricht an das Plugin weiter. Es kann ein verbundenes Modell, Denkintensität und Fast wählen. Fehler folgen der Aufgabeneinstellung; es kann keine Aktionen für dich genehmigen.",
         "subscribeModelRequest": "Kann jede Modellanfrage in ausgewählten Aufgaben verarbeiten",
         "subscribeModelRequestDetail": "Nur Aufgaben, in denen du dieses Plugin auswählst, geben ihre Modellanfragen an das Plugin weiter. Es kann Modelle, Parameter und Inhalte anpassen. Derzeit nur mit lokalem Pi unterstützt; Fehler folgen der Aufgabeneinstellung. Verbindungsdaten werden nicht weitergegeben.",
+        "subscribeToolCall": "Kann Werkzeugaufrufe in ausgewählten Aufgaben verarbeiten",
+        "subscribeToolCallDetail": "Kann Parameter lesen, ändern oder ablehnen, soweit die Engine dies unterstützt. Kann keine Vorgänge für dich genehmigen.",
+        "subscribeToolResult": "Kann Werkzeugergebnisse in ausgewählten Aufgaben verarbeiten",
+        "subscribeToolResultDetail": "Kann Ergebnisse lesen und je nach Engine Kontext hinzufügen oder Ergebnisse ersetzen. Bereits ausgeführte Vorgänge werden nicht rückgängig gemacht.",
         "subscribeStartTask": "Kann das Modell für neue Aufgaben wählen",
         "subscribeStartTaskDetail": "Wenn eine neue Aufgabe ein Modell dieses Plugins nutzt, liest es die erste Nachricht und wählt eines deiner verbundenen Modelle. Dieser Einstieg wird nur einmal vor der ersten Nachricht ausgeführt.",
         "card": "Stellt Nachrichtenkarten dar",
@@ -12588,6 +12594,7 @@
       "createOwnApp": "Meine App erstellen ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ Anhänge nicht vollständig zugestellt: {{count}} nicht gesendet ({{names}}).",
+    "outboundAttachmentOverLimit": "{{name}} (über dem Limit von {{limit}} MB)",
     "unnamedAttachment": "Unbenannter Anhang",
     "text": {
       "discord": {
@@ -13534,9 +13541,17 @@
         "submitLabel": "Antworten senden",
         "multiSelectHint": " (Mehrfachauswahl möglich)",
         "resolved": "✅ Gewählt: {{option}}",
+        "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "Diese Karte ist abgelaufen",
         "textHint": "Nur die fragende Person kann antworten. Sende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden.",
-        "replyHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option; bei mehreren Fragen oder Mehrfachauswahl anschließend absenden.\nSende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden."
+        "replyHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option; bei mehreren Fragen oder Mehrfachauswahl anschließend absenden.\nSende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden.",
+        "nextLabel": "Nächste Frage",
+        "stepHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option oder sende {{code}} gefolgt von deiner Antwort.",
+        "stepSubmitHint": "Nur die anfragende Person kann antworten. Wähle aus und tippe dann auf „{{action}}“ – oder sende {{code}} gefolgt von deiner Antwort und danach {{code}} OK.",
+        "stepTextHint": "Nur die anfragende Person kann antworten. Sende {{code}} gefolgt von deiner Antwort.",
+        "unanswered": "⚠️ Noch nicht beantwortet: Frage {{numbers}}. Beantworte alle Fragen und sende dann ab.",
+        "unansweredSingle": "⚠️ Noch keine Antwort. Wähle zuerst eine Option oder gib eine Antwort ein.",
+        "numberSeparator": ", "
       }
     }
   },
@@ -14028,6 +14043,14 @@
         "standard": "Standard",
         "fast": "Schnell",
         "ultrafast": "Ultraschnell"
+      },
+      "discoveredCopy": {
+        "title": "{{provider}} auf „{{device}}“ verwenden?",
+        "description": "{{unavailable}} Wenn du fortfährst, läuft es auf „{{device}}“. Du kannst hier jederzeit zurückwechseln.",
+        "unavailableHere": "{{provider}} auf diesem Computer ist gerade nicht verfügbar.",
+        "unavailableOn": "{{provider}} auf „{{device}}“ ist gerade nicht verfügbar.",
+        "confirm": "Verwenden",
+        "cancel": "So beibehalten"
       }
     },
     "permissionSelector": {
@@ -14318,7 +14341,8 @@
         "description": "Der Unterhaltungsverlauf auf dem anderen Computer kann nicht übertragen werden. Die Fortsetzung erfolgt daher anhand einer Übergabezusammenfassung. Denkprozesse und ähnliche Details werden möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
         "descriptionNativeHistory": "Der vollständige Unterhaltungsverlauf wird mitkopiert und nahtlos fortgesetzt. Kann er nicht wiederhergestellt werden, erfolgt die Fortsetzung anhand einer Übergabezusammenfassung; Denkprozesse und ähnliche Details werden dann möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
         "confirm": "Computer wechseln",
-        "cancel": "So beibehalten"
+        "cancel": "So beibehalten",
+        "discoveredDescription": "{{reason}} {{description}}"
       }
     },
     "agentSelect": {
@@ -14878,6 +14902,8 @@
       "failed": "Bild konnte nicht generiert werden – versuch es erneut"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "cindy_helper ist für diese Aufgabe aktiviert, aber nicht verfügbar. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden.",
+      "codexHelperUnverified": "Es konnte nicht geprüft werden, ob cindy_helper für diese Aufgabe verfügbar ist. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden.",
       "requestFormatError": "Die App hat eine ungültige Anfrage gesendet. Daher konnte diese Antwort nicht abgeschlossen werden.",
       "replyFailed": "Antwort konnte nicht abgeschlossen werden",
       "retryTitle": "Letzte Nachricht erneut senden",
@@ -15999,6 +16025,7 @@
       "saveFailed": "Die Kontextfensterstufe konnte nicht gespeichert werden"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "Warten auf die Antwort des entfernten Geräts…",
       "readingMemory": "Erinnerungen werden gelesen…",
       "savingMemory": "Erinnerungen werden gespeichert…",
       "deletingMemory": "Erinnerungen werden gelöscht…",
@@ -16269,7 +16296,8 @@
         "project": "Projekt",
         "flat": "Flache Liste",
         "device": "Gerät",
-        "dialogue": "Chat"
+        "dialogue": "Chat",
+        "automation": "Automatisierung"
       },
       "filterGroupByDeviceManualTip": "Bei manueller Sortierung ist die Gruppierung nach Gerät nicht verfügbar",
       "deviceGroup": {
@@ -16617,6 +16645,7 @@
       "groupSummary": {
         "project": "Projekt",
         "dialogue": "Chat",
+        "automation": "Automatisierung",
         "device": "Gerät"
       },
       "taskStatusHeading": "Sitzungsstatus",
@@ -17313,7 +17342,9 @@
           "jira_read": "Jira lesen",
           "jira_comment": "In Jira kommentieren",
           "sessions_dispatch": "Sitzungen zuweisen",
-          "feishu_read": "Feishu-Nachrichten lesen"
+          "feishu_read": "Feishu-Nachrichten lesen",
+          "settings_read": "Freigabemitglieder lesen",
+          "usage_read": "Nutzung und Anbietergruppenstatus lesen"
         },
         "project": "Projektverzeichnis",
         "capabilitiesLabel": "Erlaubte Funktionen",
@@ -17325,7 +17356,9 @@
           "jira_read": "Jira-Vorgänge lesen (per Schlüssel / JQL-Suche)",
           "jira_comment": "Kommentare zu Jira-Vorgängen hinzufügen",
           "sessions_dispatch": "{{appName}}-Sitzungen erstellen oder aktivieren und Nachrichten zustellen",
-          "feishu_read": "Zuletzt aktive Chats auflisten; aktuelle Nachrichten aus einem Chat abrufen (Gruppe oder Direktnachricht)"
+          "feishu_read": "Zuletzt aktive Chats auflisten; aktuelle Nachrichten aus einem Chat abrufen (Gruppe oder Direktnachricht)",
+          "settings_read": "Liest Mitglieder deiner Freigaben und deren erlaubte Modelle auf diesem Computer oder anderen autorisierten Computern desselben Kontos; keine Änderungen",
+          "usage_read": "Liest IDs, Tarife, Kontingentzeiträume und Aktualisierungszeiten lokaler Claude/Codex-Konten, die mit deinem Cindy-Konto verbunden sind. Liest erfasste Nutzung nach Tag und Modell, geschätzte Kosten, Konfiguration und Status von Anbietergruppen sowie sichtbare IDs, Namen und Avatare von Mitgliedern und Geräten auf diesem Computer oder anderen autorisierten Computern desselben Kontos. Kein Zugriff auf Anmelde-E-Mail-Adressen von Abonnements, Kontoverzeichnisse, interne Identitätsfingerabdrücke, Zugangsdaten oder Dateien; keine Änderung von Konten oder Einstellungen."
         },
         "capabilityWarn": {
           "ghostMissing": "Erfordert das Plugin „{{name}}“, das nicht installiert ist — diese Funktion wird zur Laufzeit fehlschlagen",

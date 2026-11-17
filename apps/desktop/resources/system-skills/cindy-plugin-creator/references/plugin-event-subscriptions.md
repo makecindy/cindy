@@ -1,5 +1,8 @@
 ## 4.6 订阅:旁听事件 + 钩子处理消息(subscribe 能力)
 
+工具输入、结果与错误使用独立的 [`tool-execution` 主题](plugin-tool-observation.md)，
+不改变以下消息、状态或旧元数据主题的内容边界。
+
 新增内容与状态订阅：`subscribe.topics` 可单独声明 `message` / `task-state`，在安装或更新确认中展示。
 接受即整体授予该版本的全部已知能力。已启用且整体安装批准有效的插件按 manifest 声明接收事件，不另存 topic 批准，也没有详情补批或调用时确认。旧 receipt 的分项批准字段读取时忽略。
 

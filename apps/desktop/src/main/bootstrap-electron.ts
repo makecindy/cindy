@@ -4765,7 +4765,7 @@ const createWindow = () => {
   // work-area fill, so that fill cannot become the next restore size (#9461).
   // The keeper keeps this filtered view for its whole lifetime; the window itself
   // is untouched, so drag / sidebar reads still see the live rectangle.
-  manageWindowStatePreservingNormalBounds(mainWindowState, sidebarWindowExpansion.persistenceView(mainWindow), screen);
+  manageWindowStatePreservingNormalBounds(mainWindowState, sidebarWindowExpansion.persistenceView(mainWindow, screen), screen);
   // The constructor size is not the rectangle the keeper will save. `saveState`
   // copies the live normal bounds into its closure; `maximize()` after that only
   // flips the flag, so quit no longer writes the old work-area rectangle back.
