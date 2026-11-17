@@ -118,6 +118,7 @@ export default {
       // Orca bodies render through the chat Markdown renderer, so mixed-direction
       // paragraphs keep their own alignment and Markdown structure is not shown raw.
       // Existing messageLinkActions tests cover content, not browser geometry.
+      assert.ok(['before', 'after'].includes(ui.role), 'ui.role missing from the check context');
       for (const role of ['Lead', 'Worker']) {
         const toggle = page.getByRole('button', { name: await ui.t(`chat.userMessage.orcaFrom${role}`), exact: true });
         await toggle.click();
