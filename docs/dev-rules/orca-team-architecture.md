@@ -707,7 +707,7 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
     剩下四条「异常终止」回报又逐条唤醒 Lead，各跑一轮只为确认「旧通知，忽略」。宿主做两件事：
     - **回报里写明可以原地继续**：`bridgeWorkerCompletion` 在异常终止回报正文之后附一段 Host note
       （`buildWorkerFailureRecoveryNote`）：Worker 的对话、工作目录与未提交改动都在，状态为 `error`；
-      继续就向同一个 Worker `send_to_worker`，用量上限或模型不可用时先用 `cindy_helper` 的
+      继续就向同一个 Worker `send_to_worker`，用量上限或模型不可用时先用 `cindy_orca` 的
       `set_worker_runtime` 给它换路线（坑点 #6 的发送边界切换，运行设备 Worker 不适用）；归档重建会丢上下文。它是回报正文的一部分（用户在 Lead 对话里也看得到），不进系统提示词。
       Worker 的用量上限仍不走普通任务的等待续跑（`isUsageLimitAutoResumeEligible`），由 Lead 决定。
     - **换好的路线在派活时先落地（2026-11-17）**：起因是四个撞了 Claude 订阅上限的 Worker，Lead 已用
@@ -728,6 +728,7 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
       附在后面（`workerRouteFailureHint`）。Agent 侧的 `get_session_runtime` 也投影用户在面板里登记的选择
       （`pending.source=user`），宿主内部读取不变。回归见 `orcaTeamService.test.ts`、
       `sessionRuntimeHarnessSelection.test.ts`、`orcaModelSelectionIntent.test.ts` 与 lizi-mcps `sessionContext.test.ts`。
+      工具前缀与上下文实测见 [2026-11-18 测量](../benchmarks/orca-runtime-tool-2026-11-18/README.md)。
     - **Lead 已对该 Worker 采取行动时撤下它的旧回报**：归档（`archiveWorker`）成功后，或向状态为
       `error` 的 Worker 重新派活／打断改派成功后，把该 Worker 排在 Lead 队列里、Lead 还没读到的异常终止
       回报撤下（coordinator `remove`，与 Stop 清队列同一条结清路径）。正文不丢：`archive_worker` 回
