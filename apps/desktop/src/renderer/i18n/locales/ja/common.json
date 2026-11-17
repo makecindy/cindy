@@ -12548,6 +12548,7 @@
       "createOwnApp": "自分の App を作成 ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ {{count}} 件の添付ファイルを送信できませんでした：{{names}}",
+    "outboundAttachmentOverLimit": "{{name}}（上限 {{limit}} MB を超過）",
     "unnamedAttachment": "名前のない添付ファイル",
     "text": {
       "discord": {
@@ -13486,9 +13487,17 @@
         "submitLabel": "回答を送信",
         "multiSelectHint": "（複数選択可）",
         "resolved": "✅ 選択: {{option}}",
+        "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "このカードは期限切れです",
         "textHint": "質問者のみ回答できます。{{code}} の後に回答を入力してください。複数の質問には「{{code}} 2: 回答」で答え、最後に「{{code}} OK」で送信します。",
-        "replyHint": "質問者のみ回答できます。選択肢をタップし、複数の質問・複数選択の場合は選択後に送信してください。\n{{code}} の後に回答を入力してください。複数の質問には「{{code}} 2: 回答」で答え、最後に「{{code}} OK」で送信します。"
+        "replyHint": "質問者のみ回答できます。選択肢をタップし、複数の質問・複数選択の場合は選択後に送信してください。\n{{code}} の後に回答を入力してください。複数の質問には「{{code}} 2: 回答」で答え、最後に「{{code}} OK」で送信します。",
+        "nextLabel": "次の質問",
+        "stepHint": "質問者のみ回答できます。選択肢をタップするか、{{code}} の後に回答を入力してください。",
+        "stepSubmitHint": "質問者のみ回答できます。選んでから「{{action}}」をタップするか、{{code}} の後に回答を入力し、最後に「{{code}} OK」を送ってください。",
+        "stepTextHint": "質問者のみ回答できます。{{code}} の後に回答を入力してください。",
+        "unanswered": "⚠️ 未回答の質問があります：{{numbers}}。すべて回答してから送信してください。",
+        "unansweredSingle": "⚠️ まだ回答がありません。先に選択肢を選ぶか、回答を入力してください。",
+        "numberSeparator": "、"
       }
     }
   },

@@ -12694,6 +12694,7 @@
       "createOwnApp": "Crear mi App ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ Entrega de adjuntos incompleta: {{count}} sin enviar ({{names}}).",
+    "outboundAttachmentOverLimit": "{{name}} (supera el límite de {{limit}} MB)",
     "unnamedAttachment": "Adjunto sin título",
     "text": {
       "discord": {
@@ -13655,9 +13656,17 @@
         "submitLabel": "Enviar respuestas",
         "multiSelectHint": " (puedes elegir varias)",
         "resolved": "✅ Elegido: {{option}}",
+        "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "Esta tarjeta ha caducado",
         "textHint": "Solo puede responder quien hizo la consulta. Escribe {{code}} seguido de tu respuesta. Para varias preguntas: {{code}} 2: respuesta; después {{code}} OK para enviar.",
-        "replyHint": "Solo quien hizo la solicitud puede responder. Toca una opción; para varias preguntas o selecciones, envía al terminar.\nEscribe {{code}} seguido de tu respuesta. Para varias preguntas: {{code}} 2: respuesta; después {{code}} OK para enviar."
+        "replyHint": "Solo quien hizo la solicitud puede responder. Toca una opción; para varias preguntas o selecciones, envía al terminar.\nEscribe {{code}} seguido de tu respuesta. Para varias preguntas: {{code}} 2: respuesta; después {{code}} OK para enviar.",
+        "nextLabel": "Siguiente pregunta",
+        "stepHint": "Solo quien hizo la solicitud puede responder. Toca una opción o escribe {{code}} seguido de tu respuesta.",
+        "stepSubmitHint": "Solo quien hizo la solicitud puede responder. Elige y toca «{{action}}»; o escribe {{code}} seguido de tu respuesta y después {{code}} OK.",
+        "stepTextHint": "Solo quien hizo la solicitud puede responder. Escribe {{code}} seguido de tu respuesta.",
+        "unanswered": "⚠️ Aún sin responder: pregunta {{numbers}}. Responde todas las preguntas y luego envía.",
+        "unansweredSingle": "⚠️ Aún no hay respuesta. Elige una opción o escribe una respuesta primero.",
+        "numberSeparator": ", "
       }
     }
   },

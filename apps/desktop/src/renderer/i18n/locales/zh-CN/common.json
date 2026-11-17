@@ -12548,6 +12548,7 @@
       "createOwnApp": "创建我的 App ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ 有 {{count}} 个附件未能发送：{{names}}",
+    "outboundAttachmentOverLimit": "{{name}}（超过 {{limit}} MB 上限）",
     "unnamedAttachment": "未命名附件",
     "text": {
       "discord": {
@@ -13486,9 +13487,17 @@
         "submitLabel": "提交答案",
         "multiSelectHint": "（可多选）",
         "resolved": "✅ 已选：{{option}}",
+        "resolvedLabeled": "✅ {{label}}：{{option}}",
         "expired": "卡片已过期",
         "textHint": "仅提问者可作答。回复 {{code}} 加答案；多题用“{{code}} 2：答案”，填好后回复 {{code}} OK 提交。",
-        "replyHint": "仅提问者可作答。点击选项；多题或多选选好后提交。\n回复 {{code}} 加答案；多题用“{{code}} 2：答案”，填好后回复 {{code}} OK 提交。"
+        "replyHint": "仅提问者可作答。点击选项；多题或多选选好后提交。\n回复 {{code}} 加答案；多题用“{{code}} 2：答案”，填好后回复 {{code}} OK 提交。",
+        "nextLabel": "下一题",
+        "stepHint": "仅提问者可作答。点击选项即可作答，也可回复 {{code}} 加文字答案。",
+        "stepSubmitHint": "仅提问者可作答。选好后点“{{action}}”；也可回复 {{code}} 加文字答案，再回复 {{code}} OK。",
+        "stepTextHint": "仅提问者可作答。回复 {{code}} 加你的答案。",
+        "unanswered": "⚠️ 第 {{numbers}} 题还没有作答，全部答完后再提交。",
+        "unansweredSingle": "⚠️ 还没有作答，请先选择或填写答案。",
+        "numberSeparator": "、"
       }
     }
   },

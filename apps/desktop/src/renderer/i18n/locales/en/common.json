@@ -12594,6 +12594,7 @@
       "createOwnApp": "Create my App ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ Attachment delivery incomplete: {{count}} not sent ({{names}}).",
+    "outboundAttachmentOverLimit": "{{name}} (over the {{limit}} MB limit)",
     "unnamedAttachment": "Untitled attachment",
     "text": {
       "discord": {
@@ -13540,9 +13541,17 @@
         "submitLabel": "Submit answers",
         "multiSelectHint": " (select all that apply)",
         "resolved": "✅ Selected: {{option}}",
+        "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "This card has expired",
         "textHint": "Only the original requester can answer. Reply with {{code}} followed by your answer. For multiple questions use {{code}} 2: answer, then {{code}} OK to submit all.",
-        "replyHint": "Only the requester can answer. Tap an option; submit after choosing for multiple questions or multiple selections.\nReply with {{code}} followed by your answer. For multiple questions use {{code}} 2: answer, then {{code}} OK to submit all."
+        "replyHint": "Only the requester can answer. Tap an option; submit after choosing for multiple questions or multiple selections.\nReply with {{code}} followed by your answer. For multiple questions use {{code}} 2: answer, then {{code}} OK to submit all.",
+        "nextLabel": "Next question",
+        "stepHint": "Only the requester can answer. Tap an option to answer, or reply with {{code}} followed by your answer.",
+        "stepSubmitHint": "Only the requester can answer. Choose, then tap “{{action}}”; or reply with {{code}} followed by your answer, then {{code}} OK.",
+        "stepTextHint": "Only the requester can answer. Reply with {{code}} followed by your answer.",
+        "unanswered": "⚠️ Not answered yet: question {{numbers}}. Answer every question, then submit.",
+        "unansweredSingle": "⚠️ No answer yet. Choose an option or type an answer first.",
+        "numberSeparator": ", "
       }
     }
   },

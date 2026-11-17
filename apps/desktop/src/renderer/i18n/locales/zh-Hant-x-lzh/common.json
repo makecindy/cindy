@@ -12548,6 +12548,7 @@
       "createOwnApp": "建吾之 App ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ 有 {{count}} 件附件未能遣：{{names}}",
+    "outboundAttachmentOverLimit": "{{name}}（逾 {{limit}} MB 之限）",
     "unnamedAttachment": "無名附件",
     "text": {
       "discord": {
@@ -13486,9 +13487,17 @@
         "submitLabel": "呈答",
         "multiSelectHint": "（可多擇）",
         "resolved": "✅ 已擇：{{option}}",
+        "resolvedLabeled": "✅ {{label}}：{{option}}",
         "expired": "此卡已逾期",
         "textHint": "唯提問者可答。以 {{code}} 接所答；多問用「{{code}} 2：所答」，畢則回 {{code}} OK 呈之。",
-        "replyHint": "唯提問者可答。點選所答，多問多擇畢而呈之。\n以 {{code}} 接所答；多問用「{{code}} 2：所答」，畢則回 {{code}} OK 呈之。"
+        "replyHint": "唯提問者可答。點選所答，多問多擇畢而呈之。\n以 {{code}} 接所答；多問用「{{code}} 2：所答」，畢則回 {{code}} OK 呈之。",
+        "nextLabel": "次問",
+        "stepHint": "唯提問者可答。點選即答，亦可以 {{code}} 接所答。",
+        "stepSubmitHint": "唯提問者可答。擇畢點「{{action}}」；亦可以 {{code}} 接所答，再回 {{code}} OK。",
+        "stepTextHint": "唯提問者可答。以 {{code}} 接所答。",
+        "unanswered": "⚠️ 第 {{numbers}} 問未答，盡答而後呈。",
+        "unansweredSingle": "⚠️ 尚未作答，請先擇之或書之。",
+        "numberSeparator": "、"
       }
     }
   },
