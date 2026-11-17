@@ -25,7 +25,6 @@ vi.mock('../../appSessionState.js', () => ({
 const {
   __testing, setGhostDisabledForWorkdir, listDisabledGhostIdsForWorkdir,
   relocateGhostWorkdirPrefs,
-  warmGhostWorkdirPrefs, isGhostDisabledForWorkdirFromSnapshot,
 } = await import('../ghostWorkdirPrefs');
 
 describe('relocateGhostWorkdirPrefs', () => {
@@ -36,19 +35,6 @@ describe('relocateGhostWorkdirPrefs', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     fs.rmSync(scope.dir, { recursive: true, force: true });
-  });
-
-  // Unit / tool observation performance: live per-frame policy reads used statSync.
-  // Reuse the production store snapshot and observe Host writes without hot-path I/O.
-  it('reads the warmed notification policy without disk access and follows Host writes', () => {
-    warmGhostWorkdirPrefs();
-    const stat = vi.spyOn(fs, 'statSync'), read = vi.spyOn(fs, 'readFileSync');
-    for (let n = 0; n < 1000; n++) expect(isGhostDisabledForWorkdirFromSnapshot('reader', '/project')).toBe(false);
-    expect(stat).not.toHaveBeenCalled(); expect(read).not.toHaveBeenCalled();
-    setGhostDisabledForWorkdir('/project', 'reader', true);
-    stat.mockClear(); read.mockClear();
-    expect(isGhostDisabledForWorkdirFromSnapshot('reader', '/project')).toBe(true);
-    expect(stat).not.toHaveBeenCalled(); expect(read).not.toHaveBeenCalled();
   });
 
   it('moves disabled projects to the namespaced identity without disabling a new root plugin', async () => {

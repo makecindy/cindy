@@ -751,8 +751,6 @@ import { createGhostDisplayListHandler } from './ghostDisplayListIpc.js';
 import { GHOST_COMPOSER_LIST_CHANNEL } from '../../shared/ghostComposer.js';
 import {
   isGhostDisabledForWorkdir,
-  isGhostDisabledForWorkdirFromSnapshot,
-  warmGhostWorkdirPrefs,
   listDisabledGhostIdsForWorkdir,
   normalizeWorkdirKey,
   relocateGhostWorkdirPrefs,
@@ -3049,7 +3047,7 @@ type PendingActivityRequest = {
  * 拆线必须调 `dispose()`:register.ts 的 disposer 一跑,事件源就没了,turn 在场时
  * 只有这里能给插件补上缺失的 did-turn-end(见 GhostTurnTranslator.dispose)。
  */
-export function createGhostSessionTap(sessionId: string, session?: { readonly workDir: string }): {
+export function createGhostSessionTap(sessionId: string): {
   handleEvent(ev: MinimalAgentEvent & { turnOrigin?: { kind?: string } }): void;
   interactionObserver: {
     onStart(request: PendingActivityRequest, route?: { origin?: { kind?: string } }): void;
@@ -3155,9 +3153,7 @@ export function createGhostSessionTap(sessionId: string, session?: { readonly wo
       // Tool observers cover all tasks, independently of the legacy primary-task metadata filter.
       if (taskEventIndex.wantsToolEvent(ev.type)) {
         const owner = getGhostOwnerPushStamp();
-        const workdir = session?.workDir;
-        try { if (owner) taskEventIndex.publishTool(sessionId, ev, owner, getGhostSubscriptionGateway,
-          ghost => !isGhostDisabledForWorkdirFromSnapshot(installedGhostStoragePart(ghost), workdir)); }
+        try { if (owner) taskEventIndex.publishTool(sessionId, ev, owner, getGhostSubscriptionGateway); }
         catch { log.warn('tool observation projection failed'); }
       }
       // 记来源要在过滤**之前**:自动化轮次的事件正是"当前轮次不是用户发起"的唯一线索。
@@ -11852,7 +11848,6 @@ function broadcastGhostsChanged(
     if (hasPluginHostTools()) reconcilePluginHostTools(new Map(ghosts.filter(ghost => hasPluginHostToolGroupApproval(ghost, 'computer'))
       .map(ghost => [installedGhostStoragePart(ghost), ghostInstallApprovalToken(ghost.approval)])));
     taskEventIndex.replace(ghosts, getGhostOwnerPushStamp());
-    if (taskEventIndex.wantsToolEvent('tool_use')) warmGhostWorkdirPrefs();
     setTaskChangeListener((event, owner) => {
       if (isGhostOwnerStampCurrent(owner)) taskEventIndex.publish(event, owner, getGhostSubscriptionGateway);
     }, taskEventIndex.subscribedKinds());

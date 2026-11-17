@@ -410,24 +410,6 @@ describe('indexed task content and state events', () => {
     expect(sent[0]!.payload).toMatchObject({ data: { truncated: true, payload: { fullText: 'preview ready', content: [null, { resource: null }, { type: 'text', text: 'kept' }] } } });
   });
 
-  // Project disablement must be checked before copying and again after the
-  // asynchronous boundary. Existing install/owner tests did not cover this policy.
-  it('does not project or deliver tool events when their project visibility is revoked', async () => {
-    const g = ghost('reader', { topics: ['tool-execution'] });
-    const { gw, sent, running, deps } = makeGateway({ findGhostForDelivery: () => g }); running.add('reader');
-    const index = new GhostTaskEventIndex(); index.replace([g], owner);
-    let visible = false;
-    const read = vi.fn(() => ({ input: 'project content' }));
-    const event = { type: 'tool_use', get data() { return read(); } };
-    const allowed = () => visible;
-    index.publishTool('task', event, owner, () => gw, allowed);
-    expect(read).not.toHaveBeenCalled(); expect(deps.wake).not.toHaveBeenCalled();
-    visible = true; index.publishTool('task', event, owner, () => gw, allowed);
-    visible = false;
-    await new Promise<void>(resolve => setImmediate(resolve));
-    expect(sent).toHaveLength(0);
-  });
-
   // Unit, #9801 scope reduction: lifecycle events reuse immediate delivery and
   // the existing cold queue; they add no timer and must not fold a finished turn.
   it('delivers running, completed and running immediately in order without a timer', () => {

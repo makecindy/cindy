@@ -90,15 +90,6 @@ function readPrefs(): GhostWorkdirPrefs {
   return store.read();
 }
 
-/** Load the existing store at subscription lifecycle boundaries, never per tool frame. */
-export function warmGhostWorkdirPrefs(): void { readPrefs(); }
-
-/** Hot notification projection reuses the store's current snapshot, including Host writes. */
-export function isGhostDisabledForWorkdirFromSnapshot(ghostId: string, workdir: string | null | undefined): boolean {
-  if (!workdir?.trim()) return false;
-  return (store.read().disabledByWorkdir[normalizeWorkdirKey(workdir)] ?? []).includes(ghostId);
-}
-
 /** 该目录下被禁用的 ghostId 列表;workdir 空/缺省(无会话语境)= 无例外。 */
 export function listDisabledGhostIdsForWorkdir(workdir: string | null | undefined): string[] {
   if (!workdir || workdir.trim().length === 0) return [];
