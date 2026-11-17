@@ -157,9 +157,14 @@ export class PiKernelManager {
             return current;
           }
         }
-        const installed = await this.deps.install(this.deps.root, release, undefined, process.platform, signal, phase => {
-          this.operation = { source: request.source, phase };
-        });
+        const installed = await this.deps.install(
+          this.deps.root, release, undefined, process.platform, signal,
+          phase => { this.operation = { source: request.source, phase }; },
+          // Polled every few seconds by Settings; keep the latest snapshot on the operation.
+          download => {
+            if (this.operation?.phase === 'download') this.operation = { ...this.operation, download };
+          },
+        );
         let activated = false;
         try {
           signal.throwIfAborted();

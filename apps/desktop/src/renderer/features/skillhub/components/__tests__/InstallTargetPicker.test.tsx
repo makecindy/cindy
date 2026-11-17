@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -172,4 +172,37 @@ it('holds the busy lock across the other-directory flow, from selection to insta
   await waitFor(() => expect(onInstallComplete).toHaveBeenCalledOnce());
   expect(run).toHaveBeenCalledOnce();
   expect(run).toHaveBeenCalledWith({ name: 'demo', installPath: '/tmp/skills/.agents/skills/demo', catalogScope: undefined });
+});
+
+// Shared download progress (verified-downloads.md 「下载进度与界面」): a local install shows
+// the standard meter, ignores other skills' events and moves to verifying without a frozen bar.
+it('shows the shared download meter for this skill while installing', async () => {
+  let push: (event: Record<string, unknown>) => void = () => {};
+  window.electronAPI = {
+    skillhub: {
+      registry: { getByName: vi.fn().mockResolvedValue({ success: false }) },
+      onInstallProgress: vi.fn((callback: typeof push) => {
+        push = callback;
+        return () => {};
+      }),
+    },
+  } as never;
+  const run = vi.fn(() => new Promise<{ success: false }>(() => {}));
+  render(<Harness runAction={run} />);
+  await userEvent.click(screen.getByText('Open picker'));
+  fireEvent.click(screen.getByRole('button', { name: /skillhub.installPicker.global/ }));
+  const download = {
+    phase: 'downloading',
+    loaded: 30,
+    total: 100,
+    percent: 30,
+    speedBps: 0,
+    etaSeconds: null,
+  };
+  act(() => push({ phase: 'downloading', name: 'other', download: { ...download, percent: 90 } }));
+  expect(screen.queryByRole('progressbar')).toBeNull();
+  act(() => push({ phase: 'downloading', name: 'demo', download }));
+  expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('30');
+  act(() => push({ phase: 'verifying', name: 'demo' }));
+  expect(screen.getByText('downloadProgress.phase.verifying')).not.toBeNull();
 });

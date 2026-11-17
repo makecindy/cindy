@@ -1,9 +1,13 @@
-import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, rename, rm, stat } from 'node:fs/promises';
-import { Readable, Transform } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
+import {
+  cleanup as cleanupDownload,
+  createDownloader,
+  DownloadError,
+  type DownloadOptions,
+  type ProgressEvent,
+} from '../downloader/index.js';
+import { createLogger } from '../logger.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { validLlamaCppFile, validLlamaCppRepo, type LlamaCppFile } from '../../shared/llamaCpp.js';
 
@@ -99,131 +103,95 @@ export class LlamaCppResumeReadError extends Error {
   }
 }
 
-/** Stream to a staging file; no unverified or partial bytes become an installed asset. */
+// Own queue: a multi-GB model must never hold up app updates or other installs.
+const transfer = createDownloader();
+const log = createLogger('llamacpp-download');
+
+/** Keep the error names the service and its callers already handle. */
+function downloadFailure(error: unknown): unknown {
+  if (!(error instanceof DownloadError)) return error;
+  const name =
+    error.code === 'URL_POLICY'
+      ? 'DOWNLOAD_BLOCKED'
+      : error.code === 'CHECKSUM'
+        ? 'DOWNLOAD_CHECKSUM'
+        : error.code === 'SIZE'
+          ? 'DOWNLOAD_SIZE'
+          : error.code === 'TIMEOUT'
+            ? 'DOWNLOAD_TIMEOUT'
+            : 'DOWNLOAD_FAILED';
+  return new Error(name, { cause: error });
+}
+
+export type LlamaCppTransferEvents = Pick<DownloadOptions, 'onRetry' | 'onVerifying' | 'retry'>;
+
+/**
+ * Verified transfer through the shared downloader (verified-downloads.md): size, SHA-256,
+ * per-hop host allow-list, retries with resume, slow-link reconnects. Bytes stay in
+ * `${destination}.part` until verified; nothing partial becomes an installed asset.
+ *
+ * `resume`: a pause (signal reason `DOWNLOAD_PAUSED`) keeps the prefix and its resume
+ * record so the next call continues; any other failure or cancellation removes them.
+ */
 export async function downloadLlamaCppAsset(
   asset: DownloadAsset,
   destination: string,
   source: 'github' | 'hf',
   signal: AbortSignal,
-  progress: (bytes: number) => void,
+  progress: (bytes: number, event?: ProgressEvent) => void,
   resume = false,
+  events: LlamaCppTransferEvents = {},
 ): Promise<void> {
   await mkdir(path.dirname(destination), { recursive: true });
-  const partial = `${destination}.partial`;
-  const stalled = new AbortController();
-  const parentSignal = signal;
-  signal = AbortSignal.any([parentSignal, stalled.signal]);
-  let idleTimer: ReturnType<typeof setTimeout> | undefined;
-  const resetIdle = () => {
-    clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => stalled.abort(new Error('DOWNLOAD_TIMEOUT')), 120_000);
-  };
-  let preservePrefix = false;
-  try {
-    let offset = resume
-      ? await stat(partial).then(
-          (s) => s.size,
-          (error: NodeJS.ErrnoException) => {
-            if (error.code === 'ENOENT') return 0;
-            throw new LlamaCppResumeReadError(error);
-          },
-        )
-      : 0;
-    if (offset > asset.size) {
-      await rm(partial, { force: true });
-      offset = 0;
-    }
-    const hash = createHash('sha256');
-    if (offset) {
-      try {
-        for await (const chunk of createReadStream(partial)) {
-          signal.throwIfAborted();
-          hash.update(chunk);
-        }
-      } catch (error) {
-        if (signal.aborted) throw error;
+  let savedPrefix = false;
+  if (resume) {
+    try {
+      savedPrefix = (await stat(`${destination}.part`)).isFile();
+    } catch (error) {
+      // An unreadable saved prefix waits for an explicit resume; it is never discarded.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
         throw new LlamaCppResumeReadError(error);
-      }
-      progress(offset);
     }
-    if (offset === asset.size) {
-      if (hash.digest('hex') !== asset.sha256) throw new Error('DOWNLOAD_CHECKSUM');
-      signal.throwIfAborted();
-      await rename(partial, destination);
-      return;
-    }
-    let url = asset.url;
-    let response: Response | undefined;
-    // Only network inactivity expires. Local prefix stat/hash may take longer
-    // on slow disks and must not discard already downloaded data.
-    resetIdle();
-    for (let hop = 0; hop < 6; hop++) {
-      signal.throwIfAborted();
-      if (!allowedDownloadUrl(url, source)) throw new Error('DOWNLOAD_BLOCKED');
-      const next = await outboundFetch(url, {
-        signal,
-        redirect: 'manual',
-        headers: offset ? { Range: `bytes=${offset}-` } : undefined,
-      });
-      if (next.status >= 300 && next.status < 400) {
-        const location = next.headers.get('location');
-        await next.body?.cancel();
-        if (!location) throw new Error('DOWNLOAD_FAILED');
-        url = new URL(location, url).href;
-      } else {
-        response = next;
-        break;
-      }
-    }
-    if (!response?.ok || !response.body) throw new Error('DOWNLOAD_FAILED');
-    // A server may ignore Range. Replace, never append a complete response to a prefix.
-    let activeHash = hash;
-    if (offset && response.status === 200) {
-      offset = 0;
-      activeHash = createHash('sha256');
-    }
-    if (
-      response.status === 206 &&
-      response.headers.get('content-range') !== `bytes ${offset}-${asset.size - 1}/${asset.size}`
-    ) {
-      await response.body.cancel();
-      throw new Error('DOWNLOAD_FAILED');
-    }
-    let completed = offset;
-    const meter = new Transform({
-      transform(chunk: Buffer, _encoding, callback) {
-        resetIdle();
-        completed += chunk.length;
-        if (completed > asset.size) {
-          callback(new Error('DOWNLOAD_SIZE'));
-          return;
-        }
-        activeHash.update(chunk);
-        progress(completed);
-        callback(null, chunk);
-      },
+  }
+  let keep = false;
+  try {
+    await transfer({
+      url: asset.url,
+      targetPath: destination,
+      sha256: asset.sha256,
+      expectedSize: asset.size,
+      maxBytes: asset.size,
+      isUrlAllowed: (url) => allowedDownloadUrl(url, source),
+      // Same network stack as before (env proxy + Chromium/system PAC), one checked hop at a time.
+      request: async (url, init) => ({
+        response: await outboundFetch(url, { ...init, redirect: 'manual' }),
+      }),
+      resume,
+      signal,
+      logger: log,
+      timeout: { connectMs: 30_000 },
+      onProgress: (event) => progress(event.loaded, event),
+      ...events,
     });
-    await pipeline(
-      Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]),
-      meter,
-      createWriteStream(partial, { flags: offset ? 'a' : resume ? 'w' : 'wx' }),
-      { signal },
-    );
-    if (completed !== asset.size || activeHash.digest('hex') !== asset.sha256)
-      throw new Error('DOWNLOAD_CHECKSUM');
-    signal.throwIfAborted();
-    await rename(partial, destination);
   } catch (error) {
-    preservePrefix = error instanceof LlamaCppResumeReadError;
-    // Node pipeline wraps any abort as AbortError. Keep the winning timeout
-    // reason so callers do not mistake a stalled transfer for user cancellation.
-    if (stalled.signal.aborted && signal.reason === stalled.signal.reason)
-      throw stalled.signal.reason;
-    throw error;
+    if (signal.aborted) {
+      keep = resume && signal.reason === 'DOWNLOAD_PAUSED';
+      throw new DOMException('Download aborted', 'AbortError');
+    }
+    // A prefix that cannot be read back pauses so the bytes survive; a full disk still fails
+    // and frees the partial file, as before the shared downloader.
+    const diskFull = ['ENOSPC', 'EDQUOT'].includes(
+      (error instanceof DownloadError &&
+        (error.cause as NodeJS.ErrnoException | undefined)?.code) ||
+        '',
+    );
+    if (savedPrefix && error instanceof DownloadError && error.code === 'DISK' && !diskFull) {
+      keep = true;
+      throw new LlamaCppResumeReadError(error);
+    }
+    throw downloadFailure(error);
   } finally {
-    clearTimeout(idleTimer);
-    if (!preservePrefix && parentSignal.reason !== 'DOWNLOAD_PAUSED')
-      await rm(partial, { force: true });
+    if (!keep) await cleanupDownload(destination).catch(() => {});
   }
 }
 
