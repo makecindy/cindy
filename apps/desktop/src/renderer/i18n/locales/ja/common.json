@@ -15932,6 +15932,7 @@
       "saveFailed": "コンテキストウィンドウの段階を保存できませんでした"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "リモートからの応答を待っています…",
       "readingMemory": "記憶を読んでいます…",
       "savingMemory": "記憶を保存しています…",
       "deletingMemory": "記憶を削除しています…",

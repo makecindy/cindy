@@ -16006,6 +16006,7 @@
       "saveFailed": "Failed to save the context window tier"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "Waiting for the remote response…",
       "readingMemory": "Reading memory…",
       "savingMemory": "Saving memory…",
       "deletingMemory": "Deleting memory…",

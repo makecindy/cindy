@@ -190,7 +190,7 @@ import { setMirrorEffort, setMirrorFast } from '@/state/deviceLinkModelMirror';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
 import { emitAutoTitlePreview, emitAutoTitlePreviewCleared, emitPatch } from '@/lib/sessionsBus';
-import { clearSessionStarting, markSessionStarting } from '@/lib/sessionStartingStore';
+import { clearSessionStarting, markSessionStarting, noteStartingTerminal } from '@/lib/sessionStartingStore';
 import { createLogger } from '@/lib/logger';
 import {
   traceRemoteSendAccepted,
@@ -8607,6 +8607,9 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         { deferNotification: isLiveStatusRefreshFrame },
       );
       scheduleWakeBridgeReconciliation(sessionId);
+      // Status labels are not turn completion: Claude emits Done before a
+      // silent-stop done, Pi after it. Only the stream done/error below settles
+      // remote preparation, using the same rule for every agent source.
       return;
     }
 
@@ -8844,6 +8847,10 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     }
 
     if ((isProductTurnDoneEvent(event) || event.type === 'error') && event.turnScope !== 'background') {
+      if ((event.data as { silentStop?: boolean } | null)?.silentStop !== true
+        && (event.type !== 'error' || isTerminalErrorData(event.data))) {
+        noteStartingTerminal(sessionId, event.agentMeta?.replyToClientId);
+      }
       const state = sessions.get(sessionId);
       const successful = isProductTurnDoneEvent(event) && event.turnOrigin?.kind === 'user'
         && event.turnOrigin.surface !== 'im' && state
@@ -15090,7 +15097,7 @@ function prewarmSession(
   void prewarmSessionFor(sessionId, createOpts).catch(() => undefined);
 }
 
-function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: boolean): void {
+function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: boolean, clientId: string): void {
   const sendAt = new Date();
   const userSendAtIso = sendAt.toISOString();
   // 真人发送保留旧时间字段的乐观投影；换手时间由 main 的 sessions:patched 下发。
@@ -15101,7 +15108,7 @@ function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: b
       : { userSendAt: userSendAtIso, updatedAt: userSendAtIso },
   );
   // 侧栏优先级在真实 isRunning 之前先把刚发送的任务当成 running,避免先沉底再跳顶。
-  markSessionStarting(sessionId);
+  markSessionStarting(sessionId, clientId);
 }
 
 /**
@@ -16194,7 +16201,7 @@ async function sendMessageCore(
 
   // Renderer 只做 UI 乐观排序；DB user_send_at 和队列事务都由 main coordinator
   // 在 enqueue intent 内处理。这里不再本地 mutate pendingQueue，也不再触发 drain。
-  touchSessionUserSend(sessionId, workingDir, wasFirst);
+  touchSessionUserSend(sessionId, workingDir, wasFirst, queued.clientId);
 
   // Auto-naming (F-CHAT-2) — only fires for the first message in the session,
   // and that is by definition not busy (queue would have been dispatched on a
@@ -16593,7 +16600,7 @@ async function steerMessageCore(
   // 插话被受理(远程 outbox 收下 / 主进程受理或物化进队列)才作废关闭错误的待补标意图:之后
   // 落库的错误属于这次插话,不再代关掉的那次错误补标。被拒的插话不作废,否则关掉的错误随后
   // 落库时补标不了。
-  touchSessionUserSend(sessionId, workingDir, false);
+  touchSessionUserSend(sessionId, workingDir, false, queued.clientId);
   // 补起名同样要覆盖 steer:首条是纯附件的会话标题此时是合成占位,而用户完全
   // 可能趁这一轮还在跑就用「插话」写下第一句话。只走普通发送的话,这句话不会
   // 改名,标题会一直停在附件名直到他再排队发一条(PR #510 review P1)。

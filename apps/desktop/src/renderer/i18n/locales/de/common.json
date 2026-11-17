@@ -16006,6 +16006,7 @@
       "saveFailed": "Die Kontextfensterstufe konnte nicht gespeichert werden"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "Warten auf die Antwort des entfernten Geräts…",
       "readingMemory": "Erinnerungen werden gelesen…",
       "savingMemory": "Erinnerungen werden gespeichert…",
       "deletingMemory": "Erinnerungen werden gelöscht…",
