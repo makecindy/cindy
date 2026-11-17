@@ -169,6 +169,10 @@ async function submit(options: {
   detectFailure?: boolean;
   modelNaming?: boolean;
   switchOwnerDuringNaming?: boolean;
+  /** 首条 / 目标文案推导出的标题预览；默认算不出预览。 */
+  titlePreview?: string;
+  /** 被控端 create-session 回包里没有会话 id。 */
+  remoteCreateEmpty?: boolean;
 } = {}) {
   const providers = options.providers ?? [provider()];
   const backend = options.backendProviders ?? providers;
@@ -231,7 +235,10 @@ async function submit(options: {
     if (channel === 'maker:list-agent-commands') return { success: true, commands: [] };
     if (channel === 'worktree:create') return { ok: true,
       meta: { ...args[0], path: worktreePath, branch: 'cindy/creator', createdAt: new Date().toISOString() } };
-    if (channel === 'maker:create-session') return { sessionId: args[0].id ?? 'remote-created', workDir: args[0].workingDir };
+    if (channel === 'maker:create-session') {
+      if (options.remoteCreateEmpty) return null;
+      return { sessionId: args[0].id ?? 'remote-created', workDir: args[0].workingDir };
+    }
     throw new Error(`Unexpected remote invoke: ${channel}`);
   });
   const enableOrca = vi.fn(async () => {
@@ -264,6 +271,9 @@ async function submit(options: {
   let finishWorktree!: () => void;
   const worktreeFinished = new Promise<void>(resolve => { finishWorktree = resolve; });
   const noop = () => {};
+  const remoteProjectsStore = {
+    setPendingTitlePreview: vi.fn(), clearPendingTitlePreview: vi.fn(), clearPendingFirstSend: noop,
+  };
   const setPending = vi.fn();
   const setPendingGoal = vi.fn();
   const toastError = vi.fn();
@@ -327,8 +337,9 @@ async function submit(options: {
     markSendInFlight: (value: boolean) => { if (value) started = true; else done(); },
     t: (key: string) => key, authVendor: agentKind,
     vendorAuthGate: { checkAndConfirm },
-    localDraftSessionIdRef: { current: 'draft-id' }, optimisticFirstMessageTitle: () => null, autoTitleLabels: {},
-    remoteProjectsStore: { setPendingTitlePreview: noop, clearPendingTitlePreview: noop, clearPendingFirstSend: noop },
+    localDraftSessionIdRef: { current: 'draft-id' },
+    optimisticFirstMessageTitle: () => options.titlePreview ?? null, autoTitleLabels: {},
+    remoteProjectsStore,
     createSession, toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
     makerChatStore: { setSessionRuntime: noop, sendMessage, autoNameSession: noop }, sessionsStore: { patchLocal: noop },
     markSessionStarting: noop, clearSessionStarting: noop,
@@ -362,7 +373,7 @@ async function submit(options: {
     isRemotePrecreatedWorktreeCleanupPendingError: () => false,
     getRemoteWorkingDirErrorMessage: () => null,
     emitAutoTitlePreviewCleared: noop, restoreRemoteOptimisticDraft: noop,
-    normalizeAutoTitle: () => null,
+    normalizeAutoTitle: () => options.titlePreview ?? null,
     isLocalGoalWorktreeCleanupPendingError: () => false,
     plainTextToTiptapDoc, excludeCommentScreenshots: () => [],
     log: { warn: (...args: unknown[]) => errors.push(args), error: (...args: unknown[]) => errors.push(args) },
@@ -414,7 +425,7 @@ async function submit(options: {
     }
     if (started) await finished;
     if (hasWorktree && createSession.mock.calls.length) await worktreeFinished;
-    return { createSession, ipcCreate, createWorktree, sendMessage, setGoal, errors, environment, setPending, setPendingGoal, toastError, toastWarning, clearDraft, refreshDisplayedBranch, detectCwd, listAgentSkills, invokeRemote, enableOrca, createNote, checkAndConfirm };
+    return { createSession, ipcCreate, createWorktree, sendMessage, setGoal, errors, environment, setPending, setPendingGoal, toastError, toastWarning, clearDraft, refreshDisplayedBranch, detectCwd, listAgentSkills, invokeRemote, enableOrca, createNote, checkAndConfirm, remoteProjectsStore };
   } finally { vi.unstubAllGlobals(); }
 }
 
@@ -434,6 +445,31 @@ describe('homepage submission to Main admission and first-message handoff', () =
       expect(result.setGoal).not.toHaveBeenCalled();
       if (entry === 'goal') expect(result.createSession).not.toHaveBeenCalled();
     }
+  });
+
+  // Remote new tasks briefly showed "Untitled session": the controlled computer
+  // broadcasts the new row before answering create-session, and the title preview
+  // was registered only after that answer. Unit tier on the real Send/Goal callbacks;
+  // earlier cases stubbed the preview store, so its id and timing went unobserved.
+  it.each(['send', 'goal'] as const)('registers the %s title preview under the sent id before remote creation', async entry => {
+    const result = await submit({ entry, deviceId: 'task-computer', titlePreview: 'hello' });
+    const createIndex = result.invokeRemote.mock.calls.findIndex(([, channel]) => channel === 'maker:create-session');
+    expect(createIndex).toBeGreaterThanOrEqual(0);
+    const sentId = result.invokeRemote.mock.calls[createIndex][2][0].id;
+    expect(sentId).toBeTruthy();
+    const preview = result.remoteProjectsStore.setPendingTitlePreview;
+    expect(preview).toHaveBeenCalledWith(sentId, 'hello', true);
+    expect(preview.mock.invocationCallOrder[0])
+      .toBeLessThan(result.invokeRemote.mock.invocationCallOrder[createIndex]);
+    expect(result.remoteProjectsStore.clearPendingTitlePreview).not.toHaveBeenCalled();
+  });
+
+  // Registering before creation adds a failure path the old order never had: when
+  // the controlled computer returns no task, the preview must not outlive the attempt.
+  it.each(['send', 'goal'] as const)('withdraws the %s title preview when remote creation returns no task', async entry => {
+    const result = await submit({ entry, deviceId: 'task-computer', titlePreview: 'hello', remoteCreateEmpty: true });
+    const [[previewId]] = result.remoteProjectsStore.setPendingTitlePreview.mock.calls;
+    expect(result.remoteProjectsStore.clearPendingTitlePreview).toHaveBeenCalledWith(previewId);
   });
 
   // PR #10696 / unit: real detached and unborn probes both omit currentBranch.

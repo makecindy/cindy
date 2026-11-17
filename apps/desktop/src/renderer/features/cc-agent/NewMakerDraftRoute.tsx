@@ -4808,13 +4808,32 @@ export function NewMakerDraftRoute() {
               }
               return;
             }
+            // 标题预览必须在 create-session **之前**按最终 id 登记:被控端先广播新会话、
+            // 后返回 RPC,回包前侧边栏就会收到仍带哨兵的新行,预览晚一步用户就先看到
+            // 「未命名任务」。非 worktree 流程也预生成 id(手机端同口径)。
+            presetSessionId ??= makeDraftSessionId();
+            const firstMessageTitle = optimisticFirstMessageTitle(
+              message,
+              files,
+              mentions,
+              opts,
+              autoTitleLabels,
+            );
+            const firstMessageTitleIsUserText = Boolean(normalizeAutoTitle(message));
+            if (firstMessageTitle) {
+              remoteProjectsStore.setPendingTitlePreview(
+                presetSessionId,
+                firstMessageTitle,
+                firstMessageTitleIsUserText,
+              );
+              remoteOptimisticTitleSessionId = presetSessionId;
+            }
             // 提出来存一份:交接收尾要按**实际提交的** model / effort / permission / workspaceKind
             // 组装临时会话行(见 commitRemoteSessionHandoff),不能再各自推一遍。
             const createArgs = resolveDeviceLinkSubmission({
               agentKind: persistedAgentKind,
               // 远程 worktree:workingDir 换成刚建好的 worktree 路径(真实存在,被控端
               // remote-workdir-guard 按"存在的目录"放行);id 与 worktree 绑定同值。
-              // 非 worktree 流程两者保持原值 / 缺省。
               id: presetSessionId,
               workingDir: remoteWorkingDir,
               extraDirs: effectiveExtraDirs,
@@ -4857,30 +4876,31 @@ export function NewMakerDraftRoute() {
               created = { sessionId: remoteSessionId, workDir: remoteWorkingDir };
             }
             if (!remoteSessionId) {
+              if (remoteOptimisticTitleSessionId) {
+                remoteProjectsStore.clearPendingTitlePreview(remoteOptimisticTitleSessionId);
+                remoteOptimisticTitleSessionId = null;
+              }
               // device-link 创建失败:错误来自被控端 RPC,与 useCCSessions().error 无关,
               // 不应读 state 里的 REMOTE_* code(copilot review #1035)。
               toast.error(t('ccAgent.draft.createSessionFailed'));
               return;
             }
+            if (
+              firstMessageTitle
+              && remoteOptimisticTitleSessionId
+              && remoteOptimisticTitleSessionId !== remoteSessionId
+            ) {
+              // 被控端没采用预设 id 时,把预览挪到回包里的真实 id 上。
+              remoteProjectsStore.clearPendingTitlePreview(remoteOptimisticTitleSessionId);
+              remoteProjectsStore.setPendingTitlePreview(
+                remoteSessionId,
+                firstMessageTitle,
+                firstMessageTitleIsUserText,
+              );
+              remoteOptimisticTitleSessionId = remoteSessionId;
+            }
             if (!isCurrentDataOwner()) {
               throw new RemotePrecreatedWorktreeOwnerChangedError();
-            }
-            {
-              const optimisticTitle = optimisticFirstMessageTitle(
-                message,
-                files,
-                mentions,
-                opts,
-                autoTitleLabels,
-              );
-              if (optimisticTitle) {
-                remoteProjectsStore.setPendingTitlePreview(
-                  remoteSessionId,
-                  optimisticTitle,
-                  Boolean(normalizeAutoTitle(message)),
-                );
-                remoteOptimisticTitleSessionId = remoteSessionId;
-              }
             }
             // remoteSessionId 到手就是**提交点**:对端会话已经建出来了。此后任何一步都不许再把它
             // 退化成「创建失败」—— 用户会照着提示重试,于是对端多出第二个会话,第一个空着永久滞留。
@@ -5764,6 +5784,8 @@ export function NewMakerDraftRoute() {
       markSendInFlight(true);
       let goalSessionId: string | null = null;
       let optimisticGoalTitle: string | null = null;
+      // 远程目标在 create-session 之前登记的标题预览;对端建成前失败要在 catch 里撤回。
+      let remoteGoalTitlePreviewId: string | null = null;
       try {
         const selectedWorkingDir = effectiveWorkingDir?.trim() || undefined;
         const selectedWorktree = { ...wtRef.current };
@@ -6023,6 +6045,14 @@ export function NewMakerDraftRoute() {
               setWtCreatingInfo(null);
             }
           }
+          // 与发送路径同口径:预生成 id,并在 create-session 之前登记标题预览,
+          // 被控端先广播的新行才不会露出「未命名任务」。
+          presetSessionId ??= makeDraftSessionId();
+          const remoteGoalTitle = normalizeAutoTitle(objective);
+          if (remoteGoalTitle) {
+            remoteProjectsStore.setPendingTitlePreview(presetSessionId, remoteGoalTitle, true);
+            remoteGoalTitlePreviewId = presetSessionId;
+          }
           // 与 handleSend 同口径先存一份 args:临时行要按实际提交的值组装(见 commitRemoteSessionHandoff)。
           const createArgs = resolveDeviceLinkSubmission({
             agentKind: persistedAgentKind,
@@ -6075,16 +6105,15 @@ export function NewMakerDraftRoute() {
             throw new Error(t('ccAgent.draft.createSessionFailed'));
           }
           goalSessionId = remoteSessionId;
-          {
-            const optimisticGoalTitle = normalizeAutoTitle(objective);
-            if (optimisticGoalTitle) {
-              remoteProjectsStore.setPendingTitlePreview(
-                remoteSessionId,
-                optimisticGoalTitle,
-                true,
-              );
+          if (remoteGoalTitle && remoteGoalTitlePreviewId !== remoteSessionId) {
+            // 被控端没采用预设 id 时,把预览挪到回包里的真实 id 上。
+            if (remoteGoalTitlePreviewId) {
+              remoteProjectsStore.clearPendingTitlePreview(remoteGoalTitlePreviewId);
             }
+            remoteProjectsStore.setPendingTitlePreview(remoteSessionId, remoteGoalTitle, true);
           }
+          // 会话已在对端建成:此后预览交给权威标题回流收口,catch 不再撤回。
+          remoteGoalTitlePreviewId = null;
           // 与发送路径共用同一段交接收尾(钉归属 → 补临时行 → 触发回流)。三条不变量对目标路径
           // 同样成立,只是后果换了个形状:goalApiFor 也按归属路由,漏了钉子它就把 setGoal 发给本机
           // maker、对端刚建好的会话永远拿不到目标;而它不抛这条在这里更要紧 —— 抛出去 NewGoalDialog
@@ -6382,6 +6411,9 @@ export function NewMakerDraftRoute() {
         // 预览在 createSession 之前登记。worktree 建议名 / 建树 / 回滚失败都走这里,
         // 不撤回会让空会话或未建成的 goalSessionId 一直顶着目标原文。
         if (goalSessionId && optimisticGoalTitle) emitAutoTitlePreviewCleared(goalSessionId);
+        if (remoteGoalTitlePreviewId) {
+          remoteProjectsStore.clearPendingTitlePreview(remoteGoalTitlePreviewId);
+        }
         if (goalSessionId) clearSessionStarting(goalSessionId);
         if (isLocalGoalWorktreeCleanupPendingError(error)) {
           log.error('[draft goal] incomplete local worktree session cleanup failed', {
