@@ -221,6 +221,8 @@ export async function handlePluginTaskRequest(
         messageRelay: true,
         autoTitle: true,
         createPermissionMode: true,
+        // getRun returns optional preview.text while the run's own execution is streaming.
+        runPreview: true,
         imProjects: true,
         messageAttachments: {
           kinds: PLUGIN_ATTACHMENT_KINDS, maxCount: PLUGIN_ATTACHMENT_MAX_COUNT, maxBytes: PLUGIN_ATTACHMENT_MAX_BYTES,
