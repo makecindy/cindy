@@ -4,6 +4,7 @@ import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } f
 import { createTurnExecutor } from './turn-executor.mjs';
 import { hostCoordinatorDeps } from './coordinator-deps.ts';
 import { createHostAutoResume } from './auto-resume.ts';
+import { createHostProductTurn } from './product-turn.ts';
 import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { createHostIdleRelease } from './idle-release.ts';
 import { createAppMessageSender } from '../../../desktop/src/main/mcp-apps/messageSender.ts';
@@ -193,8 +194,14 @@ export function createInputQueue(deps) {
     // Context recovery (context-recovery-assembly.ts): one rollover per runtime, so its memory of
     // continued inputs lasts as long as this owner's runtime; a new owner's runtime gets a new one.
     let rollover = null;
+    // The desktop's product-turn failure gate, finalizer and task list activity (product-turn.ts), one per
+    // owner runtime: the executor ends a turn's activity (held while a resume or recovery owns it), the
+    // auto-resume and the context recovery settle a held one when they give up.
+    const productTurn = createHostProductTurn({ getBoundSession: id => executor.boundSession(id),
+      touchActivity: deps.touchSessionActivity, log });
     // The desktop's auto-resume (auto-resume.ts), one per owner runtime with its coordinator.
     const autoResume = createHostAutoResume({
+      productTurn: () => productTurn,
       userDataDir: deps.userDataDir ?? getUserDataDir,
       coordinator: () => coordinator,
       history: id => executor.autoResumeHistory(id),
@@ -224,6 +231,9 @@ export function createInputQueue(deps) {
     }
     const executor = createTurnExecutor({ ...deps,
       getAutoResume: () => autoResume,
+      productTurn,
+      // A terminal ends its activity held while the coordinator's automatic resume owns it (sessionEventTerminal.ts).
+      isAutoResumeHeld: id => coordinator.isAutoResumePending(id) || coordinator.isAutoResumeDeferred(id),
       resumeOriginOf: id => resumeOrigins.get(id),
       resumeAnswered: (id, origin) => { if (resumeOrigins.get(id) === origin) resumeOrigins.delete(id); },
       autoResumePendingOf: (id, origin) => {

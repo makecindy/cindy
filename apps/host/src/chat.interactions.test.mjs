@@ -59,6 +59,8 @@ test('chat uses the durable queue and approvals reach the client once', async (t
     id: 'session-1',
     instanceId: 'runtime-1', agentKind: 'claude-code', workDir: os.tmpdir(),
     isTurnRunning: () => false,
+    // The Session's turn generation (maker-core session.ts), read at a terminal for its product-turn owner.
+    getTurnGeneration: () => 1,
     onEvent(callback) {
       emitEvent = callback;
       return () => {};

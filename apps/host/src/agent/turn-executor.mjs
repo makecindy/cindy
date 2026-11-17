@@ -50,6 +50,7 @@ import { readTerminalTurnErrorSignals } from '../../../desktop/src/main/maker-ip
 import { isForegroundRunningStatus, noteAutoResumeProgress, noteForegroundTurnStarted, settleAutoResumeAttemptOnDone,
   settleAutoResumeAttemptOnTerminalError } from '../../../desktop/src/main/maker-ipc/sessionEventAutoResumeSteps.ts';
 import { applySessionRuntimeOverrideForStart } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
+import { isSuccessfulAssistantReplyDoneData } from '../../../desktop/src/main/cindy-brain/assistantReplyHook.ts';
 
 const makerKind = kind => kind === 'cc' ? 'claude-code' : kind;
 const dbKind = kind => kind === 'claude-code' ? 'cc' : kind;
@@ -259,7 +260,20 @@ export function createTurnExecutor(deps) {
     if (!bindings.has(sessionId)) return;
     deps.getGitSnapshot?.()?.onSessionClosed(sessionId);
     clearPendingTurnChangeSets(sessionId);
+    // As the desktop's close (sessionBindingLifecycle.ts teardown, finalizeClosedSession): the closed
+    // runtime's deferred failures and the task's list activity record go.
+    deps.productTurn?.closed(sessionId, bindings.get(sessionId).session);
+    listActivityInTurn.delete(sessionId);
   }
+
+  // The task list activity of the desktop (SessionListActivityTracker, product-turn.ts), at the desktop's
+  // points: a foreground running status starts it (sessionEventPreparation.ts), a foreground not-running
+  // status ends it once the event batch is over (sessionEventDelivery.ts, statusOnly), a turn's done or
+  // terminal error ends it (sessionEventTerminal.ts), held while an automatic resume or a context recovery
+  // owns the turn, which commits it later through the product-turn failure gate. Goal turns write none.
+  const listActivityInTurn = new Set();
+  const activityIdentity = (session, event) => event.sessionTurnGeneration === undefined ? undefined
+    : `${event.sessionInstanceId ?? session.instanceId}:${event.sessionTurnGeneration}`;
 
   // Claude's background-activity detection (claude-session-background-activity.ts) reads the logical
   // turn's start and end at the desktop's points: a running status of the foreground turn starts it
@@ -347,6 +361,30 @@ export function createTurnExecutor(deps) {
     };
   }
 
+  // The desktop's terminal stage for the product turn (sessionEventTerminal.ts), in its order. A
+  // terminal an automatic resume holds (its error row suppressed) defers its owner, as the shared
+  // deferContextRecoveryTerminal does; a context recovery that claimed it deferred it already (its
+  // claim). The turn's list activity then ends, held while either owns it or a resume is pending or
+  // deferred. A successful reply's done clears the owner; an unsuccessful terminal that nothing holds
+  // goes through the finalizer at once. The Host writes the error row of a gateway key recovery and of
+  // a planned close at once (it has no deferred persist to settle them later), so those are not held.
+  function settleProductTurn(session, event, owner, claim) {
+    const sessionId = session.id;
+    const productTurn = deps.productTurn;
+    const suppressed = deps.isSessionErrorSuppressed?.(sessionId, event) === true;
+    const recoveryOwns = claim !== 'idle';
+    if (suppressed) productTurn.defer(owner);
+    listActivityInTurn.delete(sessionId);
+    const resumeHeld = deps.isAutoResumeHeld?.(sessionId) === true;
+    if (event.turnOrigin?.kind !== 'goal') {
+      productTurn.listActivity.end(sessionId, { identity: activityIdentity(session, event), hold: suppressed || recoveryOwns || resumeHeld });
+    }
+    const successfulReply = event.type === 'done' && isSuccessfulAssistantReplyDoneData(event.data);
+    if (successfulReply && !recoveryOwns && !resumeHeld
+      && deps.getAutoResume?.()?.autoResumeBookkeeping.hasSuppressedError(sessionId) !== true) productTurn.finish(owner);
+    if (!successfulReply && !recoveryOwns && !suppressed) productTurn.interrupt(sessionId, owner);
+  }
+
   function listen(sessionId, session) {
     if (bindings.get(sessionId)?.session === session) return;
     if (bindings.has(sessionId)) clearPendingTurnChangeSets(sessionId);
@@ -411,6 +449,12 @@ export function createTurnExecutor(deps) {
         if (typeof event.sessionTurnGeneration === 'number' && (typeof turn.generation === 'number'
           ? event.sessionTurnGeneration !== turn.generation : event.sessionTurnGeneration === turn.previousGeneration)) return;
         noteBackgroundActivity(session, event);
+        if (deps.productTurn && event.type === 'status' && event.data && isForegroundRunningStatus(event.data, event)) {
+          if (!listActivityInTurn.has(sessionId) || event.sessionTurnGeneration !== undefined) {
+            deps.productTurn.listActivity.start(sessionId, activityIdentity(session, event));
+          }
+          listActivityInTurn.add(sessionId);
+        }
         if (turn.terminal) {
           recordContextSnapshot();
           // The turn has ended for the Host; only its Git baseline still listens.
@@ -454,13 +498,26 @@ export function createTurnExecutor(deps) {
       }
       // Recovery claims a turn's terminal error synchronously, after the coordinator has it (above), as on
       // the desktop: its preparation hands it over first, its delivery and terminal stages claim it.
+      // The product turn's owner (task, runtime instance, turn generation) at its terminal, captured before
+      // anything can start the next turn (sessionEventTerminal.ts terminalOwner).
+      const productOwner = deps.productTurn && (event.type === 'done' || isTerminalTurnErrorEvent(event))
+        && event.turnScope !== 'background' && !isTurnContinuationBoundaryEvent(event)
+        ? deps.productTurn.capture(session, event) : null;
       const recoveryTerminal = recovery && event.type === 'error' && isTerminalTurnErrorEvent(event)
         && event.turnScope !== 'background'
-        ? { session, event, history, fields, isStopping: deps.isStoppingRuntime(), isGatewayProxyTokenRecovery: gatewayKeyRejected }
+        ? { session, event, history, fields, isStopping: deps.isStoppingRuntime(), isGatewayProxyTokenRecovery: gatewayKeyRejected,
+          // A recovery that claims the terminal holds its failure; its final failure settles it.
+          deferProductTurn: () => { if (productOwner) deps.productTurn.defer(productOwner); },
+          notifyProductTurn: () => { if (productOwner) deps.productTurn.interrupt(sessionId, productOwner); } }
         : null;
       const claim = recoveryTerminal ? recovery.claim(recoveryTerminal) : 'idle';
       if (claim === 'idle') publishAgentEvent(deps.hub, sessionId, event, fields);
       recordContextSnapshot();
+      if (deps.productTurn && event.type === 'status' && event.data?.isRunning === false && event.turnScope !== 'background'
+        && !isTurnContinuationBoundaryEvent(event) && listActivityInTurn.delete(sessionId) && event.turnOrigin?.kind !== 'goal') {
+        deps.productTurn.listActivity.end(sessionId, { identity: activityIdentity(session, event), statusOnly: true,
+          hold: deps.isAutoResumeHeld?.(sessionId) === true });
+      }
       // Desktop takes the after-edit savepoint once the event is delivered (sessionEventDelivery.ts).
       if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) settleGitBaseline(sessionId, turn, 'end');
       if (isTerminalTurnErrorEvent(event)) settleGitBaseline(sessionId, turn, 'abort');
@@ -477,6 +534,7 @@ export function createTurnExecutor(deps) {
           : undefined;
         // The coordinator has this terminal already; finish then only wakes it once the rows settle.
         if (handedOver) turn.terminalHandedOver = true;
+        if (productOwner) settleProductTurn(session, event, productOwner, claim);
         void finish(sessionId, turn, error, event, claim !== 'idle');
         if (claim !== 'idle') recovery.settle(recoveryTerminal, claim, () => turn.settlement);
       }
@@ -485,6 +543,8 @@ export function createTurnExecutor(deps) {
       if (status === 'closed' && bindings.get(sessionId)?.session === session) releaseBinding(sessionId);
     });
     bindings.set(sessionId, { session, unsubscribe: () => { unsubscribe(); unsubscribeStatus?.(); } });
+    // A runtime that replaces this task's runtime takes over its held failures (register.ts onBind).
+    deps.productTurn?.rebind(sessionId, session);
   }
 
   async function readExecutionSession(id) {
@@ -1024,6 +1084,8 @@ export function createTurnExecutor(deps) {
      * move closes an idle runtime this way (session-move.ts).
      */
     closeRuntime: id => closeRuntime(id),
+    /** The runtime the Host binds for a task (the product-turn failure gate's current-owner check). */
+    boundSession: id => bindings.get(id)?.session,
     async beforeDispatchUserTurn(id, item, signal) {
       const turn = turns.get(id);
       const live = deps.getMaker()?.getSession(id);

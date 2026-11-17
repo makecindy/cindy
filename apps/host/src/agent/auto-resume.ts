@@ -15,6 +15,7 @@ import { readInterruptedTurnAutoResumeSettingsFrom } from '../../../desktop/src/
 import { readSilentStopAutoResumeSettingsFrom } from '../../../desktop/src/main/maker-host/silentStopAutoResumeSettingsCore.ts';
 import { createSessionRuntimeFallbackSettingsFile } from '../../../desktop/src/main/maker-host/sessionRuntimeFallbackSettingsCore.ts';
 import { explicitPorts } from './explicit-ports.ts';
+import type { HostProductTurn } from './product-turn.ts';
 
 type CreateDbMessage = UserMessageDurableWritePorts['createDbMessage'];
 
@@ -41,6 +42,8 @@ export interface HostAutoResumePorts {
   getSession(sessionId: string): Session | null | undefined;
   /** Writes a user row (the Host's message store). */
   createDbMessage: CreateDbMessage;
+  /** The product-turn failure gate and finalizer of this runtime (product-turn.ts); read when used. */
+  productTurn?(): HostProductTurn | null;
   /**
    * The automatic route change an auto-resume tries first (sessionRuntimeFallback.ts). Without it the
    * resume stays on the task's route, as the desktop does when there is no other route.
@@ -93,11 +96,11 @@ export function createHostAutoResume(ports: HostAutoResumePorts) {
         ports.history(sessionId).onTurnErrorEvent(sessionId, detail, null);
         ports.onTakeoverReleased?.(sessionId);
       },
-      // The desktop shows the held error in the Agent Island and settles the deferred product-turn
-      // failure (the plugin-task receipt and the upstream merge turn). The Host has no Agent Island and
-      // runs no product-turn finalizer (a gap of its own, in the release table); the error row and the coordinator's
-      // banner are what its clients see.
-      surfaceSuppressedError: undefined,
+      // As register.ts: once the held error row is written (persistSuppressedError, just before this,
+      // exactly once), the deferred product-turn failure is settled (settleDeferredProductTurnFailure):
+      // the held activity of the turn that failed is committed if that turn is still the current one
+      // (product-turn.ts). The desktop also shows the error in its Agent Island, which the Host has not.
+      surfaceSuppressedError: (sessionId) => { ports.productTurn?.()?.settleDeferred(sessionId); },
       // Orca and Teammate tasks are refused at Host admission: nothing is held for them.
       finalizeOrcaSuppressedTerminal: undefined,
       finalizeBotGroupSuppressedTerminal: undefined,
@@ -180,14 +183,15 @@ export function createHostAutoResume(ports: HostAutoResumePorts) {
     ...hooks,
     createUserMessage,
     /**
-     * An explicit stop withdraws both automatic resumes and their backoff (register.ts
-     * resetAutomaticRecoveryForExplicitStop). The desktop also clears its MCP setup bridge and the
-     * deferred product-turn failure gate, which the Host does not have.
+     * An explicit stop withdraws both automatic resumes and their backoff, and the deferred product-turn
+     * failures of the task (register.ts resetAutomaticRecoveryForExplicitStop). The desktop also clears
+     * its MCP setup bridge, which the Host does not have.
      */
     resetForExplicitStop(sessionId: string) {
       silentStopAutoResumeGuard.noteSessionReset(sessionId);
       interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
       autoResumeBookkeeping.teardown(sessionId);
+      ports.productTurn?.()?.stopped(sessionId);
     },
   };
 }

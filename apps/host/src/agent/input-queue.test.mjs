@@ -6056,3 +6056,109 @@ test('a Claude Opus plan-mode terminal error carries its normalized reason and c
   assert.equal(consumeClaudeOpusPlanMismatch('opus-plan'), null, 'the observation was consumed');
   await waitFor(() => f.db.errorRows('opus-plan').length === 1);
 });
+/*
+ * Task list activity at a turn's end, and the held turns (release table 甲 10).
+ * - Production entries and observable results: the Host executor and coordinator (the queue harness, the
+ *   auto-resume runtime, a stub context-recovery factory), the activity writes the tracker hands to the
+ *   task list write (`touchSessionActivity` with skipActiveGoal true; the coordinator's dispatch and steer
+ *   writes pass none), and the error rows.
+ * - Rule: the desktop (sessionEventTerminal.ts, register.ts, productTurnFailureOwner.ts) ends a turn's list
+ *   activity at its done or terminal error. A terminal that an automatic resume or a context recovery holds
+ *   ends it held and leaves its owner in the deferred failure gate; the holder's final failure commits it,
+ *   once, at the time the turn ended, but only if that owner is still the current turn: a newer turn keeps
+ *   its own activity and writes it at its own end. The held error row is written once either way.
+ * - Coverage gap: the Host wrote no activity at a turn's end, and had neither the gate nor the finalizer.
+ * - Minimal failing inputs: a done writes nothing; a resume that gives up writes nothing; a recovery that
+ *   fails after a newer turn started marks that turn settled, which then writes nothing at its end.
+ * - Tier: unit (node:test, the queue harness with fake runtimes; no database, account or engine).
+ */
+const turnEndWrites = calls => calls.filter(call => call.skipActiveGoal === true);
+const activitySpy = () => {
+  const calls = [];
+  return { calls, touchSessionActivity: async (id, atMs, skipActiveGoal) => { calls.push({ id, atMs, skipActiveGoal }); } };
+};
+
+test('list activity: a turn\'s done writes the task\'s activity time at its end, once', async t => {
+  const spy = activitySpy();
+  const h = createHarness({ touchSessionActivity: spy.touchSessionActivity });
+  t.after(() => h.queue.dispose());
+  await enqueue(h, 'turn-end', { clientId: 'turn-end-input', text: 'work' });
+  const session = h.maker.getSession('turn-end');
+  session.emit({ type: 'status', data: { isRunning: true } });
+  session.emit({ type: 'text', data: { text: 'answer', isFinal: true } });
+  const before = Date.now();
+  session.emit({ type: 'done', data: {} });
+  const after = Date.now();
+  await waitFor(() => !h.queue.projection('turn-end').turnInProgress);
+  session.emit({ type: 'status', data: { isRunning: false } });
+  await settle();
+  assert.equal(turnEndWrites(spy.calls).length, 1, 'a done and its idle status write once');
+  assert.ok(turnEndWrites(spy.calls)[0].atMs >= before && turnEndWrites(spy.calls)[0].atMs <= after);
+});
+
+test('list activity: a turn an automatic resume holds writes its end time only when the resume gives up, with one error row', async t => {
+  const spy = activitySpy();
+  const r = await resumeHarness(t, { touchSessionActivity: spy.touchSessionActivity });
+  r.session.emit({ type: 'status', data: { isRunning: true } });
+  const before = Date.now();
+  await r.interrupt();
+  const after = Date.now();
+  assert.deepEqual(turnEndWrites(spy.calls), [], 'held while the resume owns the turn');
+  assert.deepEqual(r.errorRows(), []);
+  // The resume's own send fails: it gives up (the held error row is written, the banner shown).
+  r.session.send = async () => { throw new Error('vendor failed'); };
+  for (let i = 0; i < 100 && !r.response.writableEnded; i += 1) { t.mock.timers.tick(500); await settle(); }
+  assert.equal(r.response.writableEnded, true);
+  await settle();
+  assert.equal(turnEndWrites(spy.calls).length, 1, 'committed once by the give-up');
+  assert.ok(turnEndWrites(spy.calls)[0].atMs >= before && turnEndWrites(spy.calls)[0].atMs <= after, 'at the turn\'s own end');
+  assert.equal(r.errorRows().length, 1, 'the held error row exactly once');
+  t.mock.timers.reset();
+  await r.h.queue.dispose();
+  assert.equal(r.errorRows().length, 1);
+  assert.equal(turnEndWrites(spy.calls).length, 1);
+});
+
+for (const newerTurn of [false, true]) {
+  test(`list activity: a context recovery that finally fails ${newerTurn ? 'after a newer turn started leaves that turn its own write' : 'commits the held end time'}`, { timeout: 10_000 }, async t => {
+    const spy = activitySpy();
+    let fail;
+    const failed = new Promise(resolve => { fail = resolve; });
+    let started;
+    const recovering = new Promise(resolve => { started = resolve; });
+    const r = recoveryHarness(t, { claim: (_id, _turn, recoverable) => (recoverable ? 'claimed' : 'idle'),
+      tryRecover: async () => { started(); await failed; return false; } }, { touchSessionActivity: spy.touchSessionActivity });
+    const id = newerTurn ? 'recovery-newer' : 'recovery-failed';
+    await r.h.queue.enqueue(id, { clientId: `${id}-input`, text: 'long task' });
+    await waitFor(() => r.h.maker.sessions.get(id)?.sent.length === 1);
+    const session = r.h.maker.sessions.get(id);
+    session.emit({ type: 'status', data: { isRunning: true }, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+    const before = Date.now();
+    session.emit({ type: 'error', data: OVERFLOW, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+    const after = Date.now();
+    await recovering;
+    assert.deepEqual(turnEndWrites(spy.calls), [], 'held while the recovery owns the turn');
+    if (newerTurn) {
+      // A newer turn starts while the recovery still runs.
+      await r.h.queue.enqueue(id, { clientId: `${id}-next`, text: 'next' });
+      await waitFor(() => session.sent.length === 2);
+      session.emit({ type: 'status', data: { isRunning: true }, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+    }
+    fail();
+    await waitFor(() => r.errorRows(id).length === 1);
+    await settle();
+    if (!newerTurn) {
+      assert.equal(turnEndWrites(spy.calls).length, 1, 'committed once by the final failure');
+      assert.ok(turnEndWrites(spy.calls)[0].atMs >= before && turnEndWrites(spy.calls)[0].atMs <= after);
+      return;
+    }
+    assert.deepEqual(turnEndWrites(spy.calls), [], 'the old owner is not the current turn: nothing is committed');
+    const beforeDone = Date.now();
+    session.emit({ type: 'text', data: { text: 'next answer', isFinal: true }, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+    session.emit({ type: 'done', data: {}, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+    await settle();
+    assert.equal(turnEndWrites(spy.calls).length, 1, 'the newer turn writes at its own end');
+    assert.ok(turnEndWrites(spy.calls)[0].atMs >= beforeDone);
+    assert.equal(r.errorRows(id).length, 1);
+  });
+}

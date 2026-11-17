@@ -60,6 +60,10 @@ export interface RecoveryTerminal {
   /** The Host is stopping: as the desktop's planned upgrade close, recovery does not claim. */
   isStopping: boolean;
   isGatewayProxyTokenRecovery: boolean;
+  /** Holds the turn's product failure for this recovery (product-turn.ts defer of its owner). */
+  deferProductTurn?: () => void;
+  /** The recovery's final failure: the turn's product failure goes through the finalizer. */
+  notifyProductTurn?: () => void;
 }
 
 export type HostContextRecovery = ReturnType<typeof createHostContextRecovery>;
@@ -167,8 +171,14 @@ export function createHostContextRecovery(deps: {
       if (holds && deps.isRecoverable && !deps.isRecoverable(event.data)) return 'idle';
       if (holds) held.set(session.id, { sessionId: session.id, event, fields: terminal.fields });
       const result = claimContextRecoveryTerminal(ports(terminal.history, deps.getRollover), input(terminal));
-      // The Host has no product-turn follow-up to defer (release table).
-      deferContextRecoveryTerminal(ports(terminal.history, deps.getRollover), input(terminal), result, () => {});
+      // As the desktop: the terminal a recovery claims holds its product failure until the recovery ends.
+      // The shared rule also holds a gateway key recovery and a planned close, whose rows the desktop
+      // writes later; the Host writes them at once and has no later exit for them, so only a claim
+      // ('claimed', 'in-flight') holds here. A terminal an automatic resume holds is deferred by the
+      // executor (turn-executor.mjs settleProductTurn), with the same owner.
+      deferContextRecoveryTerminal(ports(terminal.history, deps.getRollover), input(terminal), result, () => {
+        if (result === 'claimed' || result === 'in-flight') terminal.deferProductTurn?.();
+      });
       if (holds && result === 'idle' && held.get(session.id)?.event === event) held.delete(session.id);
       return result;
     },
@@ -195,7 +205,8 @@ export function createHostContextRecovery(deps: {
           return recovery;
         },
       };
-      settleContextRecoveryTerminal(ports(terminal.history, () => waiting), input(terminal), result, () => {});
+      // The recovery's final failure settles the held product failure, as the desktop's notify does.
+      settleContextRecoveryTerminal(ports(terminal.history, () => waiting), input(terminal), result, () => terminal.notifyProductTurn?.());
     },
 
     /**
