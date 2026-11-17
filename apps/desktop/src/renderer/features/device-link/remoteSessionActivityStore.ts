@@ -11,7 +11,7 @@
  *   - completed / error 且 attention=true → 写入(未读终态;被控端真实展示后 relay
  *     会重发 attention=false 的收尾包)
  *   - 其余(已读收尾包)→ 删除条目,行回落时间显示
- *   - 共享访客本地已读完成 → 保留 attention=false 快照，防止房主重复推送恢复绿点
+ *   - 共享访客本地已读完成 → 内部保留 attention=false 快照用于去重，不向活动消费者暴露
  *
  * 不喂 dock 角标——未读归被控端。灵动岛与桌面通知由 agentIslandRemoteSessions 按侧栏
  * 「任务范围」裁剪后另行同步给 main。
@@ -91,7 +91,10 @@ export function getRemoteSessionActivity(
   sessionId: string,
   deviceId: string | null | undefined,
 ): RemoteSessionActivity | undefined {
-  return deviceId ? activityByDevice.get(deviceId)?.get(sessionId) : undefined;
+  const activity = deviceId ? activityByDevice.get(deviceId)?.get(sessionId) : undefined;
+  // Terminal activity is visible only while unread. The retained guest replay
+  // tombstone must not revive aggregate lamps, fold exemptions or island cards.
+  return activity?.phase === 'completed' && !activity.attention ? undefined : activity;
 }
 
 /** Guests consume their own completion, never the host's notification. Keep the
@@ -205,7 +208,8 @@ export function dropStaleRemoteTerminalActivity(
   sessionId: string,
   deviceId: string | null | undefined,
 ): void {
-  const activity = getRemoteSessionActivity(sessionId, deviceId);
+  // Sending starts a new turn and must discard even an invisible read snapshot.
+  const activity = deviceId ? activityByDevice.get(deviceId)?.get(sessionId) : undefined;
   if (!activity) return;
   if (activity.phase !== 'completed' && activity.phase !== 'error') return;
   removeRemoteSessionActivityEntry(sessionId, deviceId);
